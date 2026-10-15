@@ -340,7 +340,6 @@ R_CREDENTIAL = (
 R_UNKNOWN = (
     "unknown agent_type '{agent}', fail closed. Next: add the agent to the jail before using it."
 )
-_CREDENTIAL_SPLIT = re.compile(r"[\s;&|()<>`]+")
 _CREDENTIAL_PART = re.compile(r"[=:,]")
 _GLOB_START = re.compile(r"[*?\[{]")
 _BRACE = re.compile(r"\{[^}]*\}")
@@ -349,18 +348,45 @@ R_CREDENTIAL_TREE = (
     "Next: Daedalus never reads credentials; point the read at a directory without them"
 )
 R_CREDENTIAL_PARAM = (
-    "{path} could be a credential path; the jail cannot resolve its ${{...}} expansion. "
+    "{path} could be a credential path; the jail cannot resolve its variable. "
     "Next: spell the path out"
 )
-_SEGMENT_SPLIT = re.compile(r"[;&|()\n`]+")
-_PARAM = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*|[0-9]+)[^}]*\}|\$([A-Za-z_][A-Za-z0-9_]*|[0-9])")
 _UNQUOTE = re.compile(r"[\"'\\]")
 _DURATION = re.compile(r"[\d.]+[smhd]?")
-# F2: wrappers that run the next word as the command.
+# Item 1: lexer marks for a literal $, a quote edge that ends a name, and a redirect target.
+_LIT, _CUT, _REDIRECT = "\x00", "\x01", "\x02"
+_EXPANSION_CAP = 16
+_CONTROL_WORDS = frozenset({"!", "do", "then", "else", "elif", "while", "until", "if", "time"})
+_BINDERS = frozenset({"read", "mapfile", "readarray", "getopts", "select"})
+# F2: wrappers that run the next word as the command, with their value-taking options.
 _RUN_WRAPPERS = frozenset(
     {"sudo", "env", "nice", "nohup", "time", "command", "exec", "builtin", "timeout", "stdbuf"}
 )
+_WRAPPER_VALUES: dict[str, frozenset[str]] = {
+    "sudo": frozenset({"-u", "-g"}),
+    "nice": frozenset({"-n"}),
+    "env": frozenset({"-u"}),
+    "timeout": frozenset({"-s", "-k"}),
+}
 _GREPS = frozenset({"grep", "egrep", "fgrep"})
+# Item 3: short options whose value is the next word (or the rest of the cluster).
+_SEARCH_VALUES: dict[str, frozenset[str]] = {
+    "grep": frozenset("efmABCdD"),
+    "rg": frozenset("efmABCgtTjMrE"),
+}
+_SEARCH_LONGS = frozenset(
+    {"--regexp", "--file", "--max-count", "--context", "--after-context", "--before-context"}
+    | {"--glob", "--type", "--type-not", "--threads", "--replace", "--encoding"}
+)
+_PATH_CMDS = (
+    READ_ONLY_CMDS
+    | CODER_WRITE_CMDS
+    | {"cd", "pushd", "source", ".", "less", "more", "base64", "xxd", "od", "strings"}
+    | {"tar", "zip", "unzip", "scp", "gzip", "gunzip", "zcat", "openssl", "ssh-keygen", "gpg"}
+    | {"egrep", "fgrep", "nl", "tac", "diff", "cmp"}
+)
+_PATH_OPTION = re.compile(r"--?[\w-]*(?:dir|file|path|target|output|input|config|key|root)", re.I)
 _DATA_DIR_DEFAULT = "/.claude/plugins/data/daedalus"
 _PROJECT_DATA = ".claude/daedalus"
 UNIT_WORKTREES = ".claude/worktrees"
@@ -1822,44 +1848,141 @@ def _credential_roots() -> list[str]:
     return [os.path.realpath(home / rel) for rel in CREDENTIAL_DENY]
 
 
-def _shell_env(command: str) -> dict[str, str]:
-    # F3: same-command assignments resolve later ${VAR} and $VAR; HOME stays the real home.
-    env = dict(os.environ)
-    env["HOME"] = str(Path.home())
-    # F3: the plugin's own variables resolve even when the hook process lacks them.
-    env.setdefault("CLAUDE_PLUGIN_ROOT", os.path.dirname(_REPO_SCRIPTS))
-    env.setdefault("CLAUDE_PLUGIN_DATA", env["HOME"] + _DATA_DIR_DEFAULT)
-    for token in _CREDENTIAL_SPLIT.split(command):
-        if _ASSIGN.match(token):
-            name, _, value = token.partition("=")
-            if name != "HOME":
-                env[name] = _shell_text(value, env)
-    return env
+def _clean(word: str) -> str:
+    return word.replace(_CUT, "").replace(_REDIRECT, "").replace(_LIT, "$")
 
 
-def _shell_text(token: str, env: dict[str, str]) -> str:
-    text = _PARAM.sub(lambda m: env.get(m.group(1) or m.group(2), m.group(0)), token)
-    text = _UNQUOTE.sub("", text)
+def _shell_words(command: str) -> list[list[str]]:
+    # Item 1: single-quoted or escaped $ is literal; quote edges end a variable name.
+    segments: list[list[str]] = []
+    words: list[str] = []
+    cur: list[str] = []
+    started, redirect, quote = False, False, ""
+    i, n = 0, len(command)
+
+    def end_word() -> None:
+        nonlocal cur, started, redirect
+        if cur or started:
+            words.append((_REDIRECT if redirect else "") + "".join(cur))
+            redirect = False
+        cur, started = [], False
+
+    while i < n:
+        c = command[i]
+        if quote == "'":
+            if c == "'":
+                quote = ""
+                cur.append(_CUT)
+            else:
+                cur.append(_LIT if c == "$" else c)
+        elif quote == '"':
+            if c == '"':
+                quote = ""
+                cur.append(_CUT)
+            elif c == "\\" and i + 1 < n:
+                i += 1
+                cur.append(_LIT if command[i] == "$" else command[i])
+            else:
+                cur.append(c)
+        elif c in "'\"":
+            quote, started = c, True
+            cur.append(_CUT)
+        elif c == "\\" and i + 1 < n:
+            i += 1
+            cur.append(_LIT if command[i] == "$" else command[i])
+            started = True
+        elif c in "<>":
+            end_word()
+            redirect = True
+            while i + 1 < n and command[i + 1] in "&>":
+                i += 1
+        elif c.isspace() or c in ";&|()`":
+            end_word()
+            if c not in " \t" and words:
+                segments.append(list(words))
+                words.clear()
+        else:
+            cur.append(c)
+            started = True
+        i += 1
+    end_word()
+    if words:
+        segments.append(words)
+    return segments
+
+
+def _expand_word(word: str, env: dict[str, list[str]]) -> list[tuple[str, bool]]:
+    # Item 1: $name and ${name...} alike; each expansion carries whether a name was unknown.
+    results: list[tuple[str, bool]] = [("", False)]
+    pos = 0
+    for match in _VAR.finditer(word):
+        values = env.get(match.group(1) or match.group(2))
+        alts = [(v, False) for v in values] if values else [("", True)]
+        lit = word[pos : match.start()]
+        results = [(t + lit + v, u or w) for t, u in results for v, w in alts]
+        results = results[:_EXPANSION_CAP]
+        pos = match.end()
+    home = env["HOME"][0]
+    out: list[tuple[str, bool]] = []
+    for text, unresolved in results:
+        text += word[pos:]
+        unresolved = unresolved or "${" in text
+        text = _clean(text)
+        out.append((_tilde(text, home), unresolved))
+    return out
+
+
+def _tilde(text: str, home: str) -> str:
     if text == "~" or text.startswith("~/"):
-        return env["HOME"] + text[1:]
+        return home + text[1:]
     return os.path.expanduser(text) if text.startswith("~") else text
 
 
-def _expand_home(token: str, cwd: str, env: dict[str, str] | None = None) -> str | None:
-    # spec 8, F3: quotes and backslashes are dropped; ~, $HOME and ${HOME...} expand to home.
-    token = _shell_text(token, env or {"HOME": str(Path.home())})
-    if not token:
+def _bash_env(segments: list[list[str]]) -> dict[str, list[str]]:
+    # F3, item 1: assignments and for-loops bind, read and friends unbind, HOME stays real.
+    env = {k: [v] for k, v in os.environ.items()}
+    env["HOME"] = [str(Path.home())]
+    env.setdefault("CLAUDE_PLUGIN_ROOT", [os.path.dirname(_REPO_SCRIPTS)])
+    env.setdefault("CLAUDE_PLUGIN_DATA", [env["HOME"][0] + _DATA_DIR_DEFAULT])
+    for words in segments:
+        clean = [_clean(w) for w in words]
+        for i, word in enumerate(words):
+            name, eq, value = word.partition("=")
+            if eq and _ASSIGN.match(word) and name != "HOME":
+                bound = _expand_word(value, env)
+                if any(u for _, u in bound):
+                    env.pop(name, None)
+                else:
+                    env[name] = [t for t, _ in bound]
+            if clean[i] == "for" and i + 1 < len(words):
+                loop = [x for w in words[i + 3 :] for x in _expand_word(w, env)]
+                if i + 2 < len(words) and clean[i + 2] == "in" and not any(u for _, u in loop):
+                    env[clean[i + 1]] = [t for t, _ in loop]
+                else:
+                    env.pop(clean[i + 1], None)
+            if clean[i] in _BINDERS:
+                for later in clean[i + 1 :]:
+                    if not later.startswith("-"):
+                        env.pop(later, None)
+    return env
+
+
+def _anchor(text: str, base: str) -> str | None:
+    if not text:
         return None
-    if os.path.isabs(token):
-        return os.path.normpath(token)
-    return os.path.normpath(os.path.join(cwd, token)) if os.path.isabs(cwd) else None
+    if os.path.isabs(text):
+        return os.path.normpath(text)
+    return os.path.normpath(os.path.join(base, text)) if os.path.isabs(base) else None
+
+
+def _expand_home(token: str, cwd: str) -> str | None:
+    # spec 8, F3: quotes and backslashes are dropped; ~, $HOME and ${HOME...} expand to home.
+    text = _expand_word(_UNQUOTE.sub("", token), {"HOME": [str(Path.home())]})[0][0]
+    return _anchor(text, cwd)
 
 
 def _credential_candidates(tool: str, tool_input: dict[str, Any], cwd: str) -> list[str]:
-    if tool == "Bash":
-        command = str(tool_input.get("command") or "")
-        tokens = [t for t in _CREDENTIAL_SPLIT.split(command) if t]
-        return tokens + [p for t in tokens for p in _CREDENTIAL_PART.split(t)[1:] if p]
+    # Bash goes through _bash_credential_reason; this covers the path-argument tools.
     if tool not in CREDENTIAL_TOOLS and tool not in WRITE_TOOLS:
         return []
     values = [str(tool_input.get(k) or "") for k in ("file_path", "notebook_path", "path")]
@@ -1874,38 +1997,19 @@ def _credential_candidates(tool: str, tool_input: dict[str, Any], cwd: str) -> l
     return [v for v in values if v]
 
 
-def _glob_reaches(parts: list[str], root: list[str], dotglob: bool, ancestor: bool) -> bool:
+def _glob_rest(parts: list[str], root: list[str], dotglob: bool) -> list[str] | None:
     for i, name in enumerate(root):
         if i >= len(parts):
-            return ancestor
+            return root[i:]
         pat = _BRACE.sub("*", parts[i])
         if "**" in pat:
-            return True
+            return []
         # spec 8: a shell wildcard skips a leading dot unless dotglob is set.
         if not dotglob and name.startswith(".") and not pat.startswith("."):
-            return False
+            return None
         if not fnmatch.fnmatchcase(name, pat):
-            return False
-    return True
-
-
-def _credential_hit(
-    target: str, roots: list[str], glob: bool, dotglob: bool = True, ancestor: bool = False
-) -> bool:
-    if not glob or not _GLOB_START.search(target):
-        if ancestor and any(_contains(target, root) for root in roots):
-            return True
-        return any(_under(target, root) for root in roots)
-    # spec 8: realpath the literal prefix, then match each glob component against each store.
-    parts = os.path.normpath(target).split(os.sep)
-    first = next(i for i, part in enumerate(parts) if _GLOB_START.search(part))
-    base = os.path.realpath(os.sep.join(parts[:first]) or os.sep)
-    if any(_under(base, root) for root in roots):
-        return True
-    pattern = [p for p in base.split(os.sep) if p] + parts[first:]
-    return any(
-        _glob_reaches(pattern, [p for p in r.split(os.sep) if p], dotglob, ancestor) for r in roots
-    )
+            return None
+    return []
 
 
 def _contains(parent: str, child: str) -> bool:
@@ -1914,109 +2018,212 @@ def _contains(parent: str, child: str) -> bool:
     return real_child == real_parent or real_child.startswith(real_parent.rstrip(os.sep) + os.sep)
 
 
-def _segments(command: str) -> list[list[str]]:
-    return [seg.split() for seg in _SEGMENT_SPLIT.split(command) if seg.split()]
+def _store_rest(target: str, root: str, glob: bool, dotglob: bool) -> list[str] | None:
+    # Item 2: [] means target is in the store; a list is the store's components below target.
+    if glob and _GLOB_START.search(target):
+        parts = os.path.normpath(target).split(os.sep)
+        first = next(i for i, part in enumerate(parts) if _GLOB_START.search(part))
+        base = os.path.realpath(os.sep.join(parts[:first]) or os.sep)
+        if _contains(root, base):
+            return []
+        pattern = [p for p in base.split(os.sep) if p] + parts[first:]
+        return _glob_rest(pattern, [p for p in root.split(os.sep) if p], dotglob)
+    real = os.path.realpath(target)
+    if _contains(root, real):
+        return []
+    if _contains(real, root):
+        return [p for p in root[len(real) :].split(os.sep) if p]
+    return None
 
 
-def _bash_bases(command: str, cwd: str, env: dict[str, str]) -> list[str]:
-    # spec 8, F4: relative tokens are also checked against each cd target; options are skipped.
-    bases = [cwd] if os.path.isabs(cwd) else []
-    for tokens in _segments(command):
-        if _base(tokens[0]) not in {"cd", "pushd"}:
-            continue
-        target, options = None, True
-        for arg in tokens[1:]:
-            if options and arg == "--":
-                options = False
-            elif not (options and arg.startswith("-")):
-                target = arg
-                break
-        expanded = _expand_home(target, cwd, env) if target else env["HOME"]
-        if expanded:
-            bases.append(expanded)
-    return bases
+def _credential_hit(target: str, roots: list[str], glob: bool, dotglob: bool = True) -> bool:
+    return any(_store_rest(target, root, glob, dotglob) == [] for root in roots)
 
 
-def _recursive_reader(tokens: list[str], command: str) -> tuple[list[str], bool] | None:
-    # F2: a recursive read rooted above a store reads the store; returns operands, implicit cwd.
+def _command_at(clean: list[str], skip: set[int]) -> int | None:
+    # F2, item 4: skip control words, assignments and wrappers with their option values.
     i = 0
-    while i < len(tokens) - 1 and (
-        _ASSIGN.match(tokens[i])
-        or _base(tokens[i]) in _RUN_WRAPPERS
-        or tokens[i].startswith("-")
-        or _DURATION.fullmatch(tokens[i])
-    ):
+    while i < len(clean):
+        word = clean[i]
+        if i in skip or not word or word in _CONTROL_WORDS or _ASSIGN.match(word):
+            i += 1
+            continue
+        name = _base(word)
+        if name not in _RUN_WRAPPERS:
+            return i
         i += 1
-    name, args = _base(tokens[i]), tokens[i + 1 :]
-    opts = {a for a in args if a.startswith("--")}
+        while i < len(clean) and (clean[i].startswith("-") or _DURATION.fullmatch(clean[i])):
+            i += 2 if clean[i] in _WRAPPER_VALUES.get(name, ()) else 1
+    return None
+
+
+def _search_paths(name: str, clean: list[str], args: list[int]) -> set[int]:
+    # Item 3: grep and rg take the first operand as the pattern unless -e or -f names it.
+    letters = _SEARCH_VALUES["rg" if name == "rg" else "grep"] if name != "jq" else frozenset()
+    paths: set[int] = set()
+    operands: list[int] = []
+    explicit, pending = False, ""
+    for i in args:
+        word = clean[i]
+        if pending:
+            if pending in {"f", "--file"}:
+                paths.add(i)
+            pending = ""
+        elif word.startswith("--"):
+            opt = word.split("=", 1)[0]
+            explicit = explicit or opt in {"--regexp", "--file"}
+            if opt == "--file" and "=" in word:
+                paths.add(i)
+            elif "=" not in word and opt in _SEARCH_LONGS:
+                pending = opt
+        elif word.startswith("-") and len(word) > 1:
+            for j, ch in enumerate(word[1:]):
+                if ch in letters:
+                    explicit = explicit or ch in "ef"
+                    if j == len(word) - 2:
+                        pending = ch
+                    elif ch == "f":
+                        paths.add(i)
+                    break
+        else:
+            operands.append(i)
+    return paths | set(operands if explicit else operands[1:])
+
+
+def _path_positions(words: list[str]) -> tuple[str, int, set[int]]:
+    # Item 1: where an unresolved variable could name a file for a modeled reader or writer.
+    clean = [_clean(w) for w in words]
+    paths = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
+    at = _command_at(clean, paths)
+    if at is None:
+        return "", -1, paths
+    name = _base(clean[at])
+    args = [i for i in range(at + 1, len(clean)) if i not in paths]
+    if name in _GREPS or name in {"rg", "jq"}:
+        return name, at, paths | _search_paths(name, clean, args)
+    if name == "find":
+        for i in args:
+            if clean[i].startswith(("-", "(", "!")):
+                break
+            paths.add(i)
+        return name, at, paths
+    if name in _PATH_CMDS:
+        paths |= {i for i in args if not clean[i].startswith("-") or _PATH_OPTION.match(clean[i])}
+    return name, at, paths
+
+
+def _tree_reader(
+    name: str, clean: list[str], at: int, ops: list[int], command: str
+) -> tuple[bool, list[int], bool] | None:
+    # F2, item 2: (sees hidden dirs, operand indices, reads the cwd when no operand is given).
+    args = clean[at + 1 :]
+    longs = {a.split("=", 1)[0] for a in args if a.startswith("--")}
     short = {c for a in args if a.startswith("-") and not a.startswith("--") for c in a[1:]}
-    operands = [a for a in args if not a.startswith("-")]
     if name in _GREPS:
-        on = bool({"r", "R"} & short or {"--recursive", "--dereference-recursive"} & opts)
-        on = on or any(a.startswith("--directories=recurse") for a in opts)
-        return (operands, len(operands) <= 1) if on else None
+        on = bool({"r", "R"} & short or {"--recursive", "--dereference-recursive"} & longs)
+        on = on or any(a.startswith("--directories=recurse") for a in args)
+        return (True, ops, not ops) if on else None
     if name == "rg":
-        on = bool({"u", "."} & short or {"--hidden", "--no-ignore"} & opts)
-        return (operands, len(operands) <= 1) if on else None
+        hidden = bool({"u", "."} & short or {"--hidden", "--no-ignore", "--unrestricted"} & longs)
+        return hidden, ops, not ops
     if name == "find":
         on = bool({"-exec", "-execdir", "-ok", "-okdir"} & set(args)) or "xargs" in command
-        implicit = not args or args[0].startswith(("-", "(", "!"))
-        return (operands, implicit) if on else None
+        return (True, ops, not ops) if on else None
     if name in {"tar", "rsync"}:
-        return operands, False
-    if name == "cp" and ({"r", "R", "a"} & short or {"--recursive", "--archive"} & opts):
-        return operands, False
-    if name == "zip" and ({"r", "R"} & short or "--recurse-paths" in opts):
-        return operands, False
+        return True, ops, False
+    if name == "cp" and ({"r", "R", "a"} & short or {"--recursive", "--archive"} & longs):
+        return True, ops, False
+    if name == "zip" and ({"r", "R"} & short or "--recurse-paths" in longs):
+        return True, ops, False
     return None
 
 
 def _tree_reason(
-    command: str, bases: list[str], env: dict[str, str], roots: list[str]
+    parsed: list[tuple[list[str], tuple[str, int, set[int]]]],
+    env: dict[str, list[str]],
+    bases: list[str],
+    roots: list[str],
+    command: str,
 ) -> str | None:
-    for tokens in _segments(command):
-        found = _recursive_reader(tokens, command)
+    dotglob = "dotglob" in command or "GLOBIGNORE" in command
+    for words, (name, at, paths) in parsed:
+        if at < 0:
+            continue
+        ops = [i for i in sorted(paths) if not words[i].startswith(_REDIRECT)]
+        found = _tree_reader(name, [_clean(w) for w in words], at, ops, command)
         if found is None:
             continue
-        operands, implicit = found
+        hidden, ops, implicit = found
         targets = list(bases) if implicit else []
-        for raw in operands:
-            for base in bases or [""]:
-                target = _expand_home(raw, base, env)
-                if target:
-                    targets.append(target)
+        for i in ops:
+            for text, _ in _expand_word(words[i], env):
+                targets += [t for t in (_anchor(text, b) for b in bases or [""]) if t]
         for target in targets:
-            if _credential_hit(target, roots, True, True, ancestor=True):
-                return R_CREDENTIAL_TREE.format(path=target)
+            for root in roots:
+                rest = _store_rest(target, root, True, dotglob)
+                # Item 2: rg skips hidden dirs by default, so a hidden component shields a store.
+                if rest is not None and (hidden or not any(p.startswith(".") for p in rest)):
+                    return R_CREDENTIAL_TREE.format(path=target)
     return None
+
+
+def _bash_credential_reason(command: str, cwd: str, roots: list[str]) -> str | None:
+    segments = _shell_words(command)
+    env = _bash_env(segments)
+    dotglob = "dotglob" in command or "GLOBIGNORE" in command
+    parsed = [(words, _path_positions(words)) for words in segments]
+    bases = [cwd] if os.path.isabs(cwd) else []
+    for words, (name, at, _) in parsed:
+        if name not in {"cd", "pushd"}:
+            continue
+        # F4: the first non-option argument is the target; a bare cd goes home.
+        target, options = None, True
+        for word in words[at + 1 :]:
+            if options and _clean(word) == "--":
+                options = False
+            elif not (options and _clean(word).startswith("-")):
+                target = word
+                break
+        texts = [t for t, _ in _expand_word(target, env)] if target else env["HOME"]
+        bases += [b for b in (_anchor(t, cwd) for t in texts) if b]
+    absolute: list[str] = []
+    relative: list[str] = []
+    unresolved = ""
+    for words, (_, _, paths) in parsed:
+        for i, word in enumerate(words):
+            for text, unknown in _expand_word(word, env):
+                if unknown and i in paths and not unresolved:
+                    unresolved = _clean(word)
+                parts = [_tilde(p, env["HOME"][0]) for p in _CREDENTIAL_PART.split(text)[1:] if p]
+                for cand in [text, *parts]:
+                    (absolute if os.path.isabs(cand) else relative).append(cand)
+    # F6: spelled-out paths first, so the message names the path the command wrote.
+    for cand in absolute:
+        if _credential_hit(os.path.normpath(cand), roots, True, dotglob):
+            return R_CREDENTIAL.format(path=os.path.normpath(cand))
+    if unresolved:
+        return R_CREDENTIAL_PARAM.format(path=unresolved)
+    for cand in relative:
+        for base in bases:
+            target = os.path.normpath(os.path.join(base, cand))
+            if _credential_hit(target, roots, True, dotglob):
+                return R_CREDENTIAL.format(path=target)
+    return _tree_reason(parsed, env, bases, roots, command)
 
 
 def _credential_reason(tool: str, tool_input: dict[str, Any], cwd: str) -> str | None:
     roots = _credential_roots()
-    glob = tool in {"Bash", "Glob"}
-    command = str(tool_input.get("command") or "") if tool == "Bash" else ""
-    env = _shell_env(command) if command else {"HOME": str(Path.home())}
-    bases, dotglob = [cwd], True
     if tool == "Bash":
-        bases = _bash_bases(command, cwd, env)
-        dotglob = "dotglob" in command or "GLOBIGNORE" in command
-    candidates = _credential_candidates(tool, tool_input, cwd)
-    # F6: base-independent tokens first, so the message names the path the command spelled.
-    absolute = [raw for raw in candidates if _expand_home(raw, "", env)]
-    for raw in absolute + [raw for raw in candidates if raw not in absolute]:
-        if tool == "Bash" and "${" in _shell_text(raw, env):
-            return R_CREDENTIAL_PARAM.format(path=raw)
-        for base in bases or [cwd]:
-            target = _expand_home(raw, base, env)
-            if target is not None and _credential_hit(target, roots, glob, dotglob):
-                return R_CREDENTIAL.format(path=target)
+        return _bash_credential_reason(str(tool_input.get("command") or ""), cwd, roots)
+    for raw in _credential_candidates(tool, tool_input, cwd):
+        target = _expand_home(raw, cwd)
+        if target is not None and _credential_hit(target, roots, tool == "Glob"):
+            return R_CREDENTIAL.format(path=target)
     if tool == "Grep":
         # F1: the Grep tool searches hidden dirs, so a root above a store reads it.
         target = _expand_home(str(tool_input.get("path") or cwd), cwd)
-        if target and any(_contains(target, root) for root in roots):
+        if target and any(_store_rest(target, root, False, True) is not None for root in roots):
             return R_CREDENTIAL_TREE.format(path=target)
-    if command:
-        return _tree_reason(command, bases, env, roots)
     return None
 
 

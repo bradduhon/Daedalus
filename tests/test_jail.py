@@ -2985,3 +2985,96 @@ def test_unknown_agent_dotgit_write_is_refused_only_during_a_train(train_cwd: Pa
     assert decide(payload, CFG).allow
     _mark(train_cwd)
     assert not decide(payload, CFG).allow
+
+
+@pytest.fixture
+def plain_repo(tmp_path: Path) -> Path:
+    root = tmp_path.resolve() / "repo"
+    (root / "src").mkdir(parents=True)
+    (root / ".github").mkdir()
+    (root / "src" / "a.py").write_text("x\n")
+    return root
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "for d in ~; do cat $d/.ssh/id; done",
+        "read d; cat $d/.ssh/id",
+        "while read d; do cat ${d}/.aws/config; done",
+        "cat $DAEDALUS_UNSET_PROBE/.ssh/id",
+        "read d; echo x > $d/.ssh/authorized_keys",
+        "read d; cd $d && cat .ssh/id",
+    ],
+)
+def test_unresolved_variable_in_a_path_position_is_refused(
+    cred_home: Path, plain_repo: Path, agent: str | None, command: str
+) -> None:
+    # Round 2 item 1: $name and ${name} alike; read binds nothing the jail can resolve.
+    d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
+    assert not d.allow and "credential path" in str(d.reason), command
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "for f in *; do echo ${f}; done",
+        "for f in *; do cat ${f}; done",
+        "awk '{print ${1}}' f",
+        "git log --format=${x}",
+        "grep -rn '${{ secrets' {repo}/.github",
+        "echo $DAEDALUS_UNSET_PROBE",
+    ],
+)
+def test_variables_outside_path_positions_are_allowed(
+    cred_home: Path, plain_repo: Path, agent: str | None, command: str
+) -> None:
+    text = command.replace("{repo}", str(plain_repo))
+    d = decide(_cred(agent, "Bash", str(plain_repo), command=text), CFG)
+    assert d.allow, (text, d.reason)
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_rg_refusal_follows_hidden_components(
+    cred_home: Path, plain_repo: Path, agent: str | None
+) -> None:
+    # Round 2 item 2: rg skips hidden dirs by default, so only a non-hidden path reaches a store.
+    cwd = str(plain_repo)
+    for command in ("rg BEGIN ~/.config", "rg -uu BEGIN ~", "rg -. BEGIN ~", "rg --hidden x ~"):
+        d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
+        assert not d.allow and "credential path" in str(d.reason), command
+    for command in ("rg BEGIN ~", f"rg BEGIN {plain_repo}", "rg BEGIN"):
+        assert decide(_cred(agent, "Bash", cwd, command=command), CFG).allow, command
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_patterns_and_find_predicates_are_not_paths(
+    cred_home: Path, plain_repo: Path, agent: str | None
+) -> None:
+    cwd = str(plain_repo)
+    for command in (
+        "grep -rn / src",
+        "grep -r ~ src",
+        r"grep -rn '\.\./\.\.' src",
+        "rg -n / src",
+        "grep -r -e / src",
+        f"find {cwd}/src -path ~ -prune -o -name x -exec ls {{}} +",
+    ):
+        d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
+        assert d.allow, (command, d.reason)
+    for command in ("grep -r '' ~", "grep -r -e x ~", "grep -rf pats ~"):
+        d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
+        assert not d.allow and "credential path" in str(d.reason), command
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_wrapper_option_values_are_consumed(
+    cred_home: Path, plain_repo: Path, agent: str | None
+) -> None:
+    cwd = str(plain_repo)
+    for command in ("sudo -u root tar cf - ~", "nice -n 5 tar cf - ~", "env -u X tar cf - ~"):
+        d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
+        assert not d.allow and "credential path" in str(d.reason), command
+    assert decide(_cred(agent, "Bash", cwd, command=f"sudo tar cf - {cwd}/src"), CFG).allow
