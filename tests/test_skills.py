@@ -652,9 +652,32 @@ def test_build_train_checks_each_unit_descends_from_the_lock() -> None:
     assert "Phase 2 creates every coder worktree from it" in phase1
     assert "baseRef" not in text
     complete = next(line for line in text.splitlines() if line.startswith("| `[STATUS: COMPLETE]"))
-    check = "Run `git merge-base --is-ancestor <lock sha> <b>` with the State Block `lock:` sha."
+    check = (
+        "Then run `git merge-base --is-ancestor <lock sha> <b>` with the State Block `lock:` sha."
+    )
     assert check in complete
-    assert f"A non-zero exit: stop with {DESCENT_STOP} Otherwise record branch" in complete
+    assert f"A non-zero exit: stop with {DESCENT_STOP} Otherwise record packet_version" in complete
+    assert "Otherwise record branch" not in complete
+
+
+BRANCH_STOP = (
+    '"Unit <unit> reported branch <b>; the train created daedalus-unit/<train-id>-<unit-slug>. '
+    'Next: rerun the train; if it repeats, file an issue with the train summary."'
+)
+
+
+def test_build_train_requires_the_reported_branch_to_be_the_created_one() -> None:
+    # Fix round 1, finding 2: daedalus/<train-id> is its own ancestor and would merge as a no-op.
+    complete = next(
+        line for line in _build_train().splitlines() if line.startswith("| `[STATUS: COMPLETE]")
+    )
+    compare = (
+        "First compare `<b>` with the branch the State Block recorded for that unit in Phase 2. "
+        f"A mismatch: stop with {BRANCH_STOP}"
+    )
+    assert compare in complete
+    assert complete.index(compare) < complete.index("git merge-base --is-ancestor")
+    assert "the unit's branch stays the one Phase 2 recorded" in complete
 
 
 def test_build_train_creates_each_coder_worktree() -> None:
@@ -722,7 +745,11 @@ def test_build_train_never_respawns_a_coder() -> None:
         '"Coder for unit <b> cannot be resumed. Next: rerun the train; the unit branch <b> is '
         'kept for reference."'
     ) in text
-    assert "If SendMessage to a coder fails, never start a replacement coder" in text
+    assert (
+        "If SendMessage to a coder fails, never start a replacement coder; a replacement coder "
+        "would start without the first coder's context and the unit's half-done state."
+    ) in text
+    assert "cannot move to <b>" not in text
 
 
 def test_build_train_liveness_uses_no_bash() -> None:

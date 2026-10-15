@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 # 0022: pipeline-neutral; every caller names its own base ref.
@@ -141,9 +143,21 @@ def mark_train(repo: Path, train_id: str) -> Path:
             f"{marker.parent} is missing, so the audit hooks have not run here. "
             "Next: run /daedalus:doctor."
         )
+    if marker.is_symlink():
+        raise WorkspaceError(
+            f"{marker} is a symlink. Next: delete it from your own shell, then rerun."
+        )
+    # 0023: temp file plus os.replace, so a reader never sees a partial id.
+    tmp: Path | None = None
     try:
-        marker.write_text(f"{train_id}\n", encoding="utf-8")
+        fd, name = tempfile.mkstemp(prefix=f".{marker.name}.", dir=marker.parent)
+        tmp = Path(name)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(f"{train_id}\n")
+        os.replace(tmp, marker)
     except OSError as exc:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
         raise WorkspaceError(f"cannot write {marker} ({exc}). Next: run /daedalus:doctor.") from exc
     return marker
 

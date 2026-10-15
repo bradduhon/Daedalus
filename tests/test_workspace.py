@@ -207,6 +207,22 @@ def test_mark_train_rejects_a_bad_train_id(data_repo: Path, train: str) -> None:
     assert not train_marker(data_repo).exists()
 
 
+def test_mark_train_leaves_no_temp_file(data_repo: Path) -> None:
+    mark_train(data_repo, TRAIN)
+    assert sorted(p.name for p in train_marker(data_repo).parent.iterdir()) == ["train.active"]
+
+
+def test_mark_train_refuses_a_symlinked_marker(data_repo: Path, tmp_path: Path) -> None:
+    # Fix round 1, finding 1: never write through a link planted at the marker path.
+    target = tmp_path / "elsewhere"
+    target.write_text("keep\n", encoding="utf-8")
+    train_marker(data_repo).symlink_to(target)
+    with pytest.raises(WorkspaceError, match="is a symlink"):
+        mark_train(data_repo, TRAIN)
+    assert target.read_text(encoding="utf-8") == "keep\n"
+    assert train_marker(data_repo).is_symlink()
+
+
 def test_mark_train_needs_the_data_dir(repo: Path) -> None:
     with pytest.raises(WorkspaceError, match="Next: run /daedalus:doctor"):
         mark_train(repo, TRAIN)
