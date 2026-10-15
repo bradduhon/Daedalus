@@ -8,7 +8,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests.conftest import SCRIPTS_DIR
+import pytest
+from lib.sandbox_state import required_binaries
+
+from tests.conftest import SCRIPTS_DIR, fake_bin
+
+# 0020: macOS needs no sandbox binaries, so binary-specific cases run only where they apply.
+NEEDS_BINARIES = pytest.mark.skipif(not required_binaries(), reason="no sandbox binaries here")
 
 
 def _run(
@@ -76,8 +82,7 @@ def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: P
         "standards_sources",
         "policy",
         "gitleaks",
-        "bwrap",
-        "socat",
+        *required_binaries(),
         "git repository",
         "service-manifest.json",
         "contracts/",
@@ -96,52 +101,122 @@ def _settings(path: Path, body: object) -> None:
     path.write_text(json.dumps(body) if not isinstance(body, str) else body)
 
 
-def _base_ref_line(result: subprocess.CompletedProcess[str]) -> str:
-    return next(line for line in result.stdout.splitlines() if "worktree.baseRef" in line)
+def _sandbox_line(result: subprocess.CompletedProcess[str]) -> str:
+    return next(line for line in result.stdout.splitlines() if line[5:].startswith("sandbox:"))
 
 
-BASE_REF_MISS_NEXT = (
-    'Next: set "worktree": {"baseRef": "head"} in ~/.claude/settings.json or '
-    ".claude/settings.json (settings.recommended.json); otherwise coder worktrees branch "
-    "from the remote default branch, not the integration branch"
-)
+def _bins(tmp_path: Path, *names: str) -> str:
+    return str(fake_bin(tmp_path, names))
 
 
-def test_base_ref_unset_is_a_miss_naming_the_key(tmp_path: Path) -> None:
+def test_sandbox_off_is_a_miss_naming_setup(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
-    result = _run(None, tmp_path, home=home)
-    line = _base_ref_line(result)
-    assert line == ("MISS worktree.baseRef is head: not set (default fresh). " + BASE_REF_MISS_NEXT)
+    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
+    assert _sandbox_line(result) == "MISS sandbox: off. Next: run /daedalus:setup"
     assert result.returncode == 1
 
 
-def test_base_ref_head_in_user_settings_is_ok(tmp_path: Path) -> None:
+def test_sandbox_on_in_user_settings_is_ok(tmp_path: Path) -> None:
     home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"worktree": {"baseRef": "head"}})
-    assert _base_ref_line(_run(None, tmp_path, home=home)) == "OK   worktree.baseRef is head"
+    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
+    assert _sandbox_line(result) == "OK   sandbox: on"
 
 
-def test_base_ref_head_in_project_settings_is_ok(tmp_path: Path) -> None:
+@NEEDS_BINARIES
+def test_sandbox_without_binaries_is_configured_unavailable(tmp_path: Path) -> None:
     home = tmp_path / "home"
-    home.mkdir()
-    _settings(tmp_path / ".claude" / "settings.json", {"worktree": {"baseRef": "head"}})
-    assert _base_ref_line(_run(None, tmp_path, home=home)) == "OK   worktree.baseRef is head"
+    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
+    assert _sandbox_line(result) == (
+        "MISS sandbox: configured-unavailable. Next: run /daedalus:setup"
+    )
 
 
-def test_base_ref_fresh_overrides_user_head(tmp_path: Path) -> None:
+def test_sandbox_local_settings_override_user(tmp_path: Path) -> None:
     home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"worktree": {"baseRef": "head"}})
-    _settings(tmp_path / ".claude" / "settings.local.json", {"worktree": {"baseRef": "fresh"}})
-    line = _base_ref_line(_run(None, tmp_path, home=home))
-    assert line.startswith("MISS worktree.baseRef is head: set to 'fresh'. Next:")
+    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    _settings(tmp_path / ".claude" / "settings.local.json", {"sandbox": {"enabled": False}})
+    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
+    assert _sandbox_line(result) == "MISS sandbox: off. Next: run /daedalus:setup"
 
 
-def test_base_ref_malformed_settings_is_a_miss(tmp_path: Path) -> None:
+def test_sandbox_malformed_settings_is_a_miss(tmp_path: Path) -> None:
     home = tmp_path / "home"
     _settings(home / ".claude" / "settings.json", "{not json")
-    line = _base_ref_line(_run(None, tmp_path, home=home))
-    assert line.startswith("MISS worktree.baseRef: ") and "is not valid JSON. Next: fix" in line
+    line = _sandbox_line(_run(None, tmp_path, path_env=_bins(tmp_path), home=home))
+    assert line.startswith("MISS sandbox: ") and "is not valid JSON" in line and "Next: fix" in line
+
+
+def test_doctor_no_longer_checks_base_ref(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
+    assert "worktree.baseRef" not in result.stdout
+
+
+@NEEDS_BINARIES
+def test_bwrap_miss_names_setup(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
+    assert (
+        "MISS bwrap on PATH: not found. Next: install bubblewrap and socat, then run "
+        "/daedalus:setup to turn the sandbox on"
+    ) in result.stdout.splitlines()
+
+
+def test_binary_lines_follow_required_binaries(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
+    named = [line[5:].split(" on PATH")[0] for line in lines if " on PATH" in line]
+    assert named == ["gitleaks", *required_binaries()]
+
+
+def _state(repo: Path, home: Path, path_env: str) -> subprocess.CompletedProcess[str]:
+    env = dict(os.environ)
+    env["HOME"] = str(home)
+    env["PATH"] = path_env
+    return subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "daedalus_doctor.py"), "--sandbox-state"]
+        + ["--repo", str(repo)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+
+def test_sandbox_state_flag_prints_one_word(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    result = _state(tmp_path, home, _bins(tmp_path))
+    assert result.returncode == 0
+    assert result.stdout == "off\n"
+
+
+def test_sandbox_state_flag_on(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    assert _state(tmp_path, home, _bins(tmp_path, "bwrap", "socat")).stdout == "on\n"
+
+
+@NEEDS_BINARIES
+def test_sandbox_state_flag_configured_unavailable(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    result = _state(tmp_path, home, _bins(tmp_path))
+    assert (result.returncode, result.stdout) == (0, "configured-unavailable\n")
+
+
+def test_sandbox_state_flag_malformed_exits_one(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _settings(home / ".claude" / "settings.json", "{not json")
+    result = _state(tmp_path, home, _bins(tmp_path))
+    assert result.returncode == 1 and result.stdout == ""
+    assert "Next: fix" in result.stderr
 
 
 def _data(repo: Path, marker: bool = True) -> Path:
@@ -180,7 +255,7 @@ def test_complete_setup_is_all_ok(plugin_data: Path, tmp_path: Path) -> None:
     for name in ("gitleaks", "bwrap", "socat"):
         _fake_tool(fake_bin, name)
     home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"worktree": {"baseRef": "head"}})
+    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
     result = _run(plugin_data, repo, path_env=f"{fake_bin}:{os.environ['PATH']}", home=home)
     assert result.returncode == 0, result.stdout
     assert not any(line.startswith("MISS") for line in result.stdout.splitlines())

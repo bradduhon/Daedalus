@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import shutil
 import subprocess
@@ -22,22 +21,20 @@ from lib.audit import (  # noqa: E402
     project_root,
 )
 from lib.config import Config, ConfigError, load_config  # noqa: E402
+from lib.sandbox_state import (  # noqa: E402
+    SettingsError,
+    required_binaries,
+    sandbox_line,
+    sandbox_state,
+)
 
 REQ_DOC = "docs/project-requirements.md"
-SANDBOX_NEXT = (
-    "install bubblewrap and socat; with sandbox.failIfUnavailable set, Bash cannot run without them"
-)
+SANDBOX_NEXT = "install bubblewrap and socat, then run /daedalus:setup to turn the sandbox on"
 PROJECT_DATA_NEXT = "write a single line * to {marker}"
 IGNORE_NEXT = (
     "from your own shell, untrack it with git rm -r --cached .claude/daedalus, "
     "then restore the * marker"
 )
-BASE_REF_NEXT = (
-    'set "worktree": {"baseRef": "head"} in ~/.claude/settings.json or .claude/settings.json '
-    "(settings.recommended.json); otherwise coder worktrees branch from the remote default "
-    "branch, not the integration branch"
-)
-PROJECT_SETTINGS = (".claude/settings.json", ".claude/settings.local.json")
 CACHE_NAMING = (
     "a --plugin-dir session uses daedalus-inline; a marketplace install uses daedalus-<marketplace>"
 )
@@ -73,22 +70,12 @@ def _cache_check() -> tuple[bool, str]:
     return True, f"OK   cache dir: {found}"
 
 
-def _base_ref_check(repo: Path) -> tuple[bool, str]:
-    # C1: subagent worktrees branch from the remote default branch unless baseRef is head
-    # (code.claude.com/docs/en/worktrees); later sources override earlier ones.
-    value: object = None
-    for path in (Path.home() / ".claude" / "settings.json", *(repo / p for p in PROJECT_SETTINGS)):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            continue
-        except (OSError, UnicodeDecodeError, ValueError, RecursionError):
-            return _check(False, "worktree.baseRef", f"{path} is not valid JSON", f"fix {path}")
-        block = data.get("worktree") if isinstance(data, dict) else None
-        if isinstance(block, dict) and "baseRef" in block:
-            value = block["baseRef"]
-    found = "not set (default fresh)" if value is None else f"set to {value!r}"
-    return _check(value == "head", "worktree.baseRef is head", found, BASE_REF_NEXT)
+def _sandbox_check(repo: Path) -> tuple[bool, str]:
+    # 0020: the sandbox is optional; the line names /daedalus:setup when it is not on.
+    try:
+        return sandbox_line(sandbox_state(repo))
+    except SettingsError as exc:
+        return False, f"MISS sandbox: {exc}"
 
 
 def _trust_error(repo: Path) -> DataDirError | None:
@@ -227,14 +214,15 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     is_repo = _is_repo(repo)
     yield from _data_checks(repo, is_repo)
     yield _cache_check()
-    yield _base_ref_check(repo)
+    yield _sandbox_check(repo)
     yield _check(
         shutil.which("gitleaks") is not None,
         "gitleaks on PATH",
         "not found",
         "the Push Train scans commits with gitleaks; install it so the scan can run",
     )
-    for tool in ("bwrap", "socat"):
+    # 0020: macOS sandboxes without bwrap and socat, so it gets no binary lines.
+    for tool in required_binaries():
         yield _check(shutil.which(tool) is not None, f"{tool} on PATH", "not found", SANDBOX_NEXT)
     yield from _repo_checks(repo, is_repo)
 
@@ -244,6 +232,16 @@ def print_cache_dir() -> int:
     try:
         print(cache_dir_or_probe())
     except RuntimeError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    return 0
+
+
+def print_sandbox_state(repo: Path) -> int:
+    # 0020: the trains read this one word to pick their sandbox gate.
+    try:
+        print(sandbox_state(repo))
+    except SettingsError as exc:
         print(exc, file=sys.stderr)
         return 1
     return 0
@@ -259,9 +257,16 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="print the plugin cache directory as one absolute path and exit",
     )
+    parser.add_argument(
+        "--sandbox-state",
+        action="store_true",
+        help="print the sandbox state (on, off or configured-unavailable) and exit",
+    )
     args = parser.parse_args(argv)
     if args.print_cache_dir:
         return print_cache_dir()
+    if args.sandbox_state:
+        return print_sandbox_state(Path(args.repo).resolve())
     all_ok = True
     for ok, line in checks(Path(args.repo).resolve()):
         print(line)
