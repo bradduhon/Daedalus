@@ -77,8 +77,12 @@ def test_known_agents_match_spec_matrix() -> None:
     )
 
 
-def test_unknown_agent_fails_closed() -> None:
-    d = decide(_b("mystery", "ls"), CFG)
+def test_unknown_agent_fails_closed(tmp_path: Path) -> None:
+    # 0023: a foreign agent is refused only while a train is active.
+    (tmp_path / ".claude" / "daedalus").mkdir(parents=True)
+    (tmp_path / ".claude" / "daedalus" / "train.active").write_text("20261015-120000\n")
+    payload = {**_b("mystery", "ls"), "cwd": str(tmp_path)}
+    d = decide(payload, CFG)
     assert not d.allow and "fail closed" in d.reason and d.reason.endswith(".")
 
 
@@ -86,7 +90,7 @@ def test_every_block_reason_has_next() -> None:
     cases = [
         _w("security-auditor", f"{CWD}/src/a.py"),
         _b("web-researcher", "ls"),
-        _b("x", "ls"),
+        _b("daedalus:x", "ls"),
         _w("repo-coder", f"{CWD}/infra/a.tf"),
         _b("repo-coder", "git push origin x"),
     ]
@@ -174,12 +178,19 @@ def test_bare_main_still_allows() -> None:
     assert decide(_b(None, "git status"), CFG).allow
 
 
-@pytest.mark.parametrize(
-    "agent",
-    ["otherplugin:repo-coder", "daedalus-x:repo-coder", "daedalus:", "daedalus:mystery"],
-)
-def test_foreign_or_empty_namespace_fails_closed(agent: str) -> None:
+@pytest.mark.parametrize("agent", ["daedalus:", "daedalus:mystery"])
+def test_empty_or_unknown_daedalus_name_fails_closed(agent: str) -> None:
     d = decide(_b(agent, "pytest -q"), CFG)
+    assert not d.allow and "fail closed" in d.reason
+
+
+@pytest.mark.parametrize("agent", ["otherplugin:repo-coder", "daedalus-x:repo-coder"])
+def test_foreign_namespace_fails_closed_only_during_a_train(agent: str, tmp_path: Path) -> None:
+    payload = {**_b(agent, "pytest -q"), "cwd": str(tmp_path)}
+    assert decide(payload, CFG).allow
+    (tmp_path / ".claude" / "daedalus").mkdir(parents=True)
+    (tmp_path / ".claude" / "daedalus" / "train.active").write_text("20261015-120000\n")
+    d = decide(payload, CFG)
     assert not d.allow and "fail closed" in d.reason
 
 
@@ -2629,3 +2640,230 @@ def test_coder_rsync_remote_refused_from_unit_worktree_cwd(tmp_path: Path) -> No
 )
 def test_coder_value_options_skipped_as_non_paths(command: str) -> None:
     assert decide(_b("repo-coder", command), CFG).allow, command
+
+
+CREDENTIAL_PATHS = [
+    ".ssh/id_ed25519",
+    ".aws/credentials",
+    ".aws/config",
+    ".gnupg/pubring.kbx",
+    ".config/gh/hosts.yml",
+    ".claude/.credentials.json",
+]
+CREDENTIAL_AGENTS = [None, "repo-coder", "security-auditor", "Explore"]
+
+
+@pytest.fixture
+def cred_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    root = tmp_path.resolve() / "home"
+    root.mkdir()
+    monkeypatch.setenv("HOME", str(root))
+    return root
+
+
+@pytest.fixture
+def train_cwd(tmp_path: Path) -> Path:
+    root = tmp_path.resolve() / "trainrepo"
+    (root / ".claude" / "daedalus").mkdir(parents=True)
+    return root
+
+
+def _mark(cwd: Path) -> None:
+    (cwd / ".claude" / "daedalus" / "train.active").write_text("20261015-120000\n")
+
+
+def _cred(agent: str | None, tool: str, cwd: str = CWD, **tool_input: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {"tool_name": tool, "tool_input": tool_input, "cwd": cwd}
+    if agent:
+        payload["agent_type"] = agent
+    return payload
+
+
+def _refusal(path: str) -> str:
+    return (
+        f"{path} is a credential path. "
+        "Next: Daedalus never reads credentials; use the tool that needs them from your own shell"
+    )
+
+
+@pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
+@pytest.mark.parametrize("rel", CREDENTIAL_PATHS)
+def test_read_of_a_credential_path_is_refused(cred_home: Path, agent: str | None, rel: str) -> None:
+    # spec 8: every agent, main included.
+    path = str(cred_home / rel)
+    d = decide(_cred(agent, "Read", file_path=path), CFG)
+    assert not d.allow and d.reason == _refusal(path)
+    tilde = f"~/{rel}"
+    d = decide(_cred(agent, "Read", file_path=tilde), CFG)
+    assert not d.allow and d.reason == _refusal(tilde)
+
+
+@pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
+def test_glob_and_grep_into_credentials_are_refused(cred_home: Path, agent: str | None) -> None:
+    for payload in (
+        _cred(agent, "Glob", pattern="*", path=str(cred_home / ".ssh")),
+        _cred(agent, "Glob", pattern=f"{cred_home}/.gnupg/*"),
+        _cred(agent, "Glob", pattern="~/.aws/*"),
+        _cred(agent, "Glob", pattern="**/id_ed25519", path=str(cred_home)),
+        _cred(agent, "Glob", pattern=".ss?/*", path=str(cred_home)),
+        _cred(agent, "Glob", pattern=".ssh/*", cwd=str(cred_home)),
+        _cred(agent, "Grep", pattern="aws_secret", path=str(cred_home / ".aws")),
+        _cred(agent, "Grep", pattern="token", path="~/.config/gh"),
+        _cred(agent, "Grep", pattern="~/.ssh/id_ed25519"),
+    ):
+        d = decide(payload, CFG)
+        assert not d.allow and "is a credential path" in str(d.reason), payload
+
+
+@pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
+def test_grep_regex_and_project_globs_are_allowed(cred_home: Path, agent: str | None) -> None:
+    for payload in (
+        _cred(agent, "Grep", pattern="[a-z]+ssh", path=CWD),
+        _cred(agent, "Grep", pattern=".*aws.*"),
+        _cred(agent, "Glob", pattern="**/*.py", path=CWD),
+        _cred(agent, "Glob", pattern="*.md", path=str(cred_home / ".claude")),
+    ):
+        assert decide(payload, CFG).allow, payload
+
+
+@pytest.mark.parametrize("agent", [None, "repo-coder", "Explore"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat ~/.ssh/id_ed25519",
+        "cat $HOME/.aws/credentials",
+        "cat ${HOME}/.gnupg/pubring.kbx",
+        'cat "$HOME"/.ssh/id_ed25519',
+        "cat '~/.aws/config'",
+        "ls ~/.config/gh",
+        "head -c 10 ~/.claude/.credentials.json",
+        "cp --target-directory=~/.ssh/x a",
+        "cat ~/.ss*/id_ed25519",
+        "cat ~/.{ssh,aws}/x",
+        "cd ~ && cat .ssh/id_ed25519",
+        "cd && cat .aws/credentials",
+        "cat ~/keys/id_ed25519",
+    ],
+)
+def test_bash_naming_a_credential_path_is_refused(
+    cred_home: Path, agent: str | None, command: str
+) -> None:
+    (cred_home / ".ssh").mkdir()
+    (cred_home / "keys").symlink_to(cred_home / ".ssh")
+    d = decide(_b(agent, command), CFG)
+    assert not d.allow
+    assert "is a credential path. Next: Daedalus never reads credentials" in str(d.reason)
+
+
+def test_bash_absolute_and_parent_glob_credential_paths_are_refused(cred_home: Path) -> None:
+    for command in (
+        f"cat {cred_home}/.ssh/id_ed25519",
+        f"cat {cred_home.parent}/*/.ssh/id_ed25519",
+        f"cat {cred_home}/x/../.aws/config",
+    ):
+        d = decide(_b(None, command), CFG)
+        assert not d.allow and "is a credential path" in str(d.reason), command
+
+
+@pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
+def test_sibling_paths_outside_the_deny_are_allowed(cred_home: Path, agent: str | None) -> None:
+    for path in (
+        cred_home / ".ssh_notes.txt",
+        cred_home / ".sshx" / "id",
+        cred_home / ".config" / "ghx",
+        cred_home / ".config" / "ghostty" / "config",
+        cred_home / ".claude" / "settings.json",
+    ):
+        assert decide(_cred(agent, "Read", file_path=str(path)), CFG).allow, path
+    for path_text in ("~/.sshx/id", "~/.config/ghx"):
+        assert decide(_cred(agent, "Read", file_path=path_text), CFG).allow, path_text
+
+
+def test_main_bash_siblings_are_allowed(cred_home: Path) -> None:
+    for command in (
+        "cat ~/.config/git/config",
+        "cat ~/.sshx/id",
+        "ls $HOME/.config/ghx",
+        "ls ~/*",
+        "cat ~/*/id_ed25519",
+    ):
+        assert decide(_b(None, command), CFG).allow, command
+
+
+def test_main_bash_dotglob_wildcard_into_credentials_is_refused(cred_home: Path) -> None:
+    d = decide(_b(None, "shopt -s dotglob; cat ~/*/id_ed25519"), CFG)
+    assert not d.allow and "is a credential path" in str(d.reason)
+
+
+def test_symlink_into_a_credential_store_is_refused(cred_home: Path) -> None:
+    (cred_home / ".ssh").mkdir()
+    (cred_home / "keys").symlink_to(cred_home / ".ssh")
+    path = str(cred_home / "keys" / "id_ed25519")
+    assert decide(_cred(None, "Read", file_path=path), CFG).reason == _refusal(path)
+    assert decide(_cred("repo-coder", "Read", file_path=path), CFG).reason == _refusal(path)
+
+
+@pytest.mark.parametrize("agent", [None, "repo-coder", "Explore"])
+@pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
+def test_write_into_a_credential_store_is_refused(
+    cred_home: Path, agent: str | None, tool: str
+) -> None:
+    for path in (str(cred_home / ".ssh" / "authorized_keys"), "~/.aws/credentials"):
+        d = decide(_w(agent, path, tool), CFG)
+        assert not d.allow and d.reason == _refusal(path), (tool, path)
+
+
+def test_notebook_edit_into_a_credential_store_is_refused(cred_home: Path) -> None:
+    path = str(cred_home / ".gnupg" / "x.ipynb")
+    d = decide(_cred(None, "NotebookEdit", notebook_path=path), CFG)
+    assert not d.allow and d.reason == _refusal(path)
+
+
+def test_unknown_agent_reads_freely_outside_credentials(cred_home: Path, train_cwd: Path) -> None:
+    # 0023: Read, Glob and Grep carry only the credential deny, train or not.
+    for marked in (False, True):
+        if marked:
+            _mark(train_cwd)
+        cwd = str(train_cwd)
+        assert decide(_cred("Explore", "Read", cwd, file_path=f"{cwd}/src/a.py"), CFG).allow
+        assert decide(_cred("Explore", "Glob", cwd, pattern="**/*.py"), CFG).allow
+        assert decide(_cred("Explore", "Grep", cwd, pattern="def ", path=cwd), CFG).allow
+        key = str(cred_home / ".ssh" / "id_ed25519")
+        d = decide(_cred("Explore", "Read", cwd, file_path=key), CFG)
+        assert not d.allow and d.reason == _refusal(key)
+
+
+def test_unknown_agent_passes_through_without_a_train(train_cwd: Path) -> None:
+    cwd = str(train_cwd)
+    assert decide(_cred("Explore", "Bash", cwd, command="ls"), CFG).allow
+    assert decide(_cred("Explore", "Write", cwd, file_path=f"{cwd}/notes.md"), CFG).allow
+    assert decide(_cred("Explore", "WebFetch", cwd, url="https://example.com"), CFG).allow
+
+
+def test_unknown_agent_fails_closed_during_a_train(train_cwd: Path) -> None:
+    _mark(train_cwd)
+    cwd = str(train_cwd)
+    for payload in (
+        _cred("Explore", "Bash", cwd, command="ls"),
+        _cred("Explore", "Write", cwd, file_path=f"{cwd}/notes.md"),
+        _cred("otherplugin:repo-coder", "Bash", cwd, command="ls"),
+    ):
+        d = decide(payload, CFG)
+        assert not d.allow and "fail closed" in str(d.reason), payload
+
+
+def test_unknown_agent_without_an_absolute_cwd_fails_closed() -> None:
+    d = decide(_cred("Explore", "Bash", "", command="ls"), CFG)
+    assert not d.allow and "no absolute cwd" in str(d.reason)
+
+
+@pytest.mark.parametrize("marked", [False, True])
+def test_daedalus_agents_are_policed_with_or_without_a_train(train_cwd: Path, marked: bool) -> None:
+    if marked:
+        _mark(train_cwd)
+    cwd = str(train_cwd)
+    assert decide(_cred("daedalus:repo-coder", "Bash", cwd, command="pytest -q"), CFG).allow
+    d = decide(_cred("daedalus:repo-coder", "Bash", cwd, command="git push origin x"), CFG)
+    assert not d.allow
+    d = decide(_cred("daedalus:mystery", "Bash", cwd, command="ls"), CFG)
+    assert not d.allow and "fail closed" in str(d.reason)

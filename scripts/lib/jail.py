@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import fnmatch
 import itertools
 import os
 import re
@@ -16,6 +17,7 @@ from typing import Any
 from lib.audit import _git_env, project_data_dir, project_root
 from lib.config import Config
 from lib.ledger import LedgerError, resolve_ledger
+from lib.workspace import train_marker
 
 KNOWN_AGENTS = frozenset(
     {
@@ -36,6 +38,10 @@ WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 WEB_TOOLS = frozenset({"WebFetch", "WebSearch"})
 # 5.5: all routing is through Fable; workers never message each other.
 WORKER_DENIED_TOOLS = frozenset({"Task", "Agent", "SendMessage"})
+# spec 8, 0020: credential stores refused to every agent, main included; denyRead is layer two.
+CREDENTIAL_DENY = (".ssh", ".aws", ".gnupg", ".config/gh", ".claude/.credentials.json")
+# 0023: these tools carry only the credential deny, for every agent known or not.
+CREDENTIAL_TOOLS = frozenset({"Read", "Glob", "Grep"})
 
 READ_ONLY_CMDS = frozenset(
     {
@@ -327,6 +333,18 @@ R_DOCS_BASH = (
     "charter-docs Bash is limited to append_ledger.py, git add <path>, git commit -m, "
     "git status, git log and git diff. Next: use those only; the main session runs the rest."
 )
+R_CREDENTIAL = (
+    "{path} is a credential path. "
+    "Next: Daedalus never reads credentials; use the tool that needs them from your own shell"
+)
+R_UNKNOWN = (
+    "unknown agent_type '{agent}', fail closed. Next: add the agent to the jail before using it."
+)
+_CREDENTIAL_SPLIT = re.compile(r"[\s;&|()<>`]+")
+_CREDENTIAL_PART = re.compile(r"[=:,]")
+_GLOB_START = re.compile(r"[*?\[{]")
+_BRACE = re.compile(r"\{[^}]*\}")
+_BARE_CD = re.compile(r"(?:^|[;&|(\s])(?:cd|pushd)\s*(?:$|[;&|)])")
 _DATA_DIR_DEFAULT = "/.claude/plugins/data/daedalus"
 _PROJECT_DATA = ".claude/daedalus"
 UNIT_WORKTREES = ".claude/worktrees"
@@ -1783,6 +1801,124 @@ def _worker_hygiene(tokens: list[str], agent: str) -> str | None:
     return None
 
 
+def _credential_roots() -> list[str]:
+    home = Path.home()
+    return [os.path.realpath(home / rel) for rel in CREDENTIAL_DENY]
+
+
+def _expand_home(token: str, cwd: str) -> str | None:
+    # spec 8: quotes are dropped, so "$HOME"/.ssh and '~'/.ssh are checked as expanded.
+    token = token.replace('"', "").replace("'", "")
+    home = str(Path.home())
+    if token == "~" or token.startswith("~/"):
+        token = home + token[1:]
+    elif token.startswith("~"):
+        token = os.path.expanduser(token)
+    for var in ("${HOME}", "$HOME"):
+        if token.startswith(var):
+            token = home + token[len(var) :]
+            break
+    if not token:
+        return None
+    if os.path.isabs(token):
+        return token
+    return os.path.join(cwd, token) if os.path.isabs(cwd) else None
+
+
+def _credential_candidates(tool: str, tool_input: dict[str, Any], cwd: str) -> list[str]:
+    if tool == "Bash":
+        command = str(tool_input.get("command") or "")
+        tokens = [t for t in _CREDENTIAL_SPLIT.split(command) if t]
+        return tokens + [p for t in tokens for p in _CREDENTIAL_PART.split(t)[1:] if p]
+    if tool not in CREDENTIAL_TOOLS and tool not in WRITE_TOOLS:
+        return []
+    values = [str(tool_input.get(k) or "") for k in ("file_path", "notebook_path", "path")]
+    pattern = str(tool_input.get("pattern") or "")
+    if tool == "Glob" and pattern:
+        values.append(pattern if pattern.startswith(("/", "~", "$HOME", "${HOME}")) else "")
+        base = str(tool_input.get("path") or cwd)
+        values.append(os.path.join(base, pattern))
+    elif tool == "Grep" and pattern.startswith(("/", "~", "$HOME", "${HOME}")):
+        # spec 8: a Grep pattern is a regex; only an absolute or home-rooted one names a path.
+        values.append(pattern)
+    return [v for v in values if v]
+
+
+def _glob_reaches(parts: list[str], root: list[str], dotglob: bool) -> bool:
+    for i, name in enumerate(root):
+        if i >= len(parts):
+            return False
+        pat = _BRACE.sub("*", parts[i])
+        if "**" in pat:
+            return True
+        # spec 8: a shell wildcard skips a leading dot unless dotglob is set.
+        if not dotglob and name.startswith(".") and not pat.startswith("."):
+            return False
+        if not fnmatch.fnmatchcase(name, pat):
+            return False
+    return True
+
+
+def _credential_hit(target: str, roots: list[str], glob: bool, dotglob: bool = True) -> bool:
+    if not glob or not _GLOB_START.search(target):
+        return any(_under(target, root) for root in roots)
+    # spec 8: realpath the literal prefix, then match each glob component against each store.
+    parts = os.path.normpath(target).split(os.sep)
+    first = next(i for i, part in enumerate(parts) if _GLOB_START.search(part))
+    base = os.path.realpath(os.sep.join(parts[:first]) or os.sep)
+    if any(_under(base, root) for root in roots):
+        return True
+    pattern = [p for p in base.split(os.sep) if p] + parts[first:]
+    return any(_glob_reaches(pattern, [p for p in r.split(os.sep) if p], dotglob) for r in roots)
+
+
+def _bash_bases(command: str, cwd: str) -> list[str]:
+    # spec 8: a relative token is also checked against every cd target, so cd ~ is modeled.
+    bases = [cwd] if os.path.isabs(cwd) else []
+    for target in _CD_TARGET.findall(command):
+        expanded = _expand_home(target, cwd)
+        if expanded:
+            bases.append(expanded)
+    if _BARE_CD.search(command):
+        bases.append(str(Path.home()))
+    return bases
+
+
+def _credential_reason(tool: str, tool_input: dict[str, Any], cwd: str) -> str | None:
+    roots = _credential_roots()
+    glob = tool in {"Bash", "Glob"}
+    bases, dotglob = [cwd], True
+    if tool == "Bash":
+        command = str(tool_input.get("command") or "")
+        bases = _bash_bases(command, cwd)
+        dotglob = "dotglob" in command or "GLOBIGNORE" in command
+    for raw in _credential_candidates(tool, tool_input, cwd):
+        for base in bases or [cwd]:
+            target = _expand_home(raw, base)
+            if target is not None and _credential_hit(target, roots, glob, dotglob):
+                return R_CREDENTIAL.format(path=raw)
+    return None
+
+
+def _train_active(cwd: str) -> bool:
+    # 0023: existence only; a symlinked or unreadable marker still counts as an active train.
+    return os.path.lexists(train_marker(project_root(cwd)))
+
+
+def _ours(raw_agent: str) -> bool:
+    prefix, sep, _ = raw_agent.partition(":")
+    return bool(sep) and prefix in (*AGENT_NAMESPACES, TEST_NAMESPACE)
+
+
+def _unknown_decision(raw_agent: str, agent: str, cwd: str) -> Decision:
+    # 0023: a foreign agent is refused only while a train is active; a daedalus name always is.
+    if _ours(raw_agent):
+        return _block(R_UNKNOWN.format(agent=agent))
+    if not os.path.isabs(cwd):
+        return _block(R_NO_CWD)
+    return _block(R_UNKNOWN.format(agent=agent)) if _train_active(cwd) else _allow()
+
+
 def normalize_agent(agent_type: str) -> str:
     prefix, sep, name = agent_type.partition(":")
     test_ns = prefix == TEST_NAMESPACE and os.environ.get("DAEDALUS_LIVE_TEST") == "1"
@@ -1794,12 +1930,23 @@ def normalize_agent(agent_type: str) -> str:
 def decide(hook_input: dict[str, Any], config: Config) -> Decision:
     raw_agent = str(hook_input.get("agent_type") or "main")
     agent = normalize_agent(raw_agent)
+    tool = str(hook_input.get("tool_name") or "")
+    cwd = str(hook_input.get("cwd") or "")
+    tool_input = hook_input.get("tool_input")
+    credential = _credential_reason(tool, tool_input if isinstance(tool_input, dict) else {}, cwd)
+    if credential:
+        return Decision(False, credential, agent)
+    if tool in CREDENTIAL_TOOLS:
+        return Decision(True, None, agent)
     if agent == "main" and raw_agent != "main":
         return Decision(False, R_NAMESPACED_MAIN, agent)
     # m4: only the orchestrator thread arrives without an agent_id.
     if agent == "main" and hook_input.get("agent_id"):
         return Decision(False, R_SUBAGENT_MAIN, agent)
-    decision = _decide(hook_input, config, agent)
+    if agent in KNOWN_AGENTS:
+        decision = _decide(hook_input, config, agent)
+    else:
+        decision = _unknown_decision(raw_agent, agent, cwd)
     return Decision(decision.allow, decision.reason, agent)
 
 
@@ -1822,11 +1969,6 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
     if is_write and _data_dir_path(path, cwd):
         return _block(R_DATA_DIR)
     charter = str(config.charter_root) if config.charter_root else None
-    if agent not in KNOWN_AGENTS:
-        return _block(
-            f"unknown agent_type '{agent}', fail closed. "
-            "Next: add the agent to the jail before using it."
-        )
 
     if tool == "Bash" and agent == "main":
         # 8.5: main is bound only by the tripwires; regex fallback when tokenize refuses.

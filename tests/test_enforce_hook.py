@@ -70,9 +70,19 @@ def test_closed_stderr_still_exits_two(monkeypatch: pytest.MonkeyPatch) -> None:
     assert enforce_agent_jail._block("repo-coder", "x. Next: y.") == 2
 
 
-def test_unknown_agent_blocks(run_script: Any, hook_input: Any) -> None:
+def test_unknown_agent_blocks_during_a_train(
+    run_script: Any, project_data: Path, hook_input: Any
+) -> None:
+    (project_data / "train.active").write_text("20261015-120000\n")
     result = run_script("enforce_agent_jail.py", hook_input(agent_type="ghost"))
     assert result.returncode == 2 and "fail closed" in result.stderr
+
+
+def test_unknown_agent_passes_without_a_train(
+    run_script: Any, project_data: Path, hook_input: Any
+) -> None:
+    result = run_script("enforce_agent_jail.py", hook_input(agent_type="ghost"))
+    assert result.returncode == 0, result.stderr
 
 
 def test_unwritable_audit_dir_fails_closed(
