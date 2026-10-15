@@ -51,7 +51,7 @@ Each `OK` line is a check that passed. Each `MISS` line names what is missing an
 | Thing | Path | Who writes it |
 |---|---|---|
 | Audit logs, one per session | `<repo>/.claude/daedalus/audit/<session_id>.jsonl` | hooks only, and the jail refuses tool writes there |
-| Plugin config | `<repo>/.claude/daedalus/config.json` | you, from your own shell |
+| Plugin config, optional | `<repo>/.claude/daedalus/config.json` | you, from your own shell, when you need it |
 | Machine caches (NIST, CIS) | `${CLAUDE_PLUGIN_DATA}`, under `~/.claude/plugins/data/` | the plugin's refresh scripts |
 | Build Train scratch files and summary | `<repo>/docs/.tmp/daedalus/` | the Build Train; a `*` marker inside keeps it out of git |
 | Recommended settings | `settings.recommended.json` in this repo | you merge it into `~/.claude/settings.json` |
@@ -107,7 +107,7 @@ It prints `OK: <n> records, chain intact, head=<hash>` for an intact log, or the
 
 ### Saving the report
 
-When `<repo>/.claude/daedalus/config.json` sets `charter_root`, the skill asks whether to render the report again and save it to `<charter_root>/audit/<session>.md`. A live session gains a few records between the two runs, so the saved file can hold more than the screen showed. If `<charter_root>/audit` does not exist yet, the skill offers to create it. Say yes and the file is written there for the charter-docs agent to commit in a later Build Train. Say no, or leave `charter_root` unset, and the digest stays on screen only.
+When the optional `<repo>/.claude/daedalus/config.json` sets `charter_root`, the skill asks whether to render the report again and save it to `<charter_root>/audit/<session>.md`. A live session gains a few records between the two runs, so the saved file can hold more than the screen showed. If `<charter_root>/audit` does not exist yet, the skill offers to create it. Say yes and the file is written there for the charter-docs agent to commit in a later Build Train. Say no, or leave `charter_root` unset, and the digest stays on screen only.
 
 You can also write it yourself, from the repo directory. Create the folder first:
 
@@ -130,14 +130,14 @@ Start from a clean working tree on the branch you want to build from. Inside the
 
     /daedalus:build-train Add a /healthz endpoint that returns the build version
 
-Where it runs: a Claude Code session started inside the target repository, with `<repo>/.claude/daedalus/config.json` in place (see `docs/project-requirements.md`). Run `/daedalus:doctor` first if you have not.
+Where it runs: a Claude Code session started inside the target repository. `<repo>/.claude/daedalus/config.json` is optional (see `docs/project-requirements.md`). Run `/daedalus:doctor` first if you have not.
 
 ### Before anything is built
 
 The train runs these checks and stops with a `Next:` line when one fails:
 
 - The working tree must be clean. Commit or stash first.
-- `config.json` must exist and be valid JSON.
+- `config.json` is optional. When it exists it must be valid JSON.
 - A decision ledger must exist. The train runs `append_ledger.py --probe`. If no ledger is declared and none is found, it asks: "This repo has no decision ledger. Options: name an existing file, or let Daedalus create docs/decisions.md as a table. Which?" Naming a file means you add a `ledger` block for it to config.json from your own shell. Choosing create writes `docs/decisions.md` holding only the table header and separator, which the probe reads as `seq=0`; you review and commit it, then start the train again.
 - The hooks must be writing this session's audit log. The train reads the newest log in `<repo>/.claude/daedalus/audit/` and looks for its own probe command as the last Bash record. If it is not there, the jail is not enforcing and the train stops. Run `/daedalus:doctor`.
 - Before the first NIST or CIS question, the plugin cache must exist. If `daedalus_doctor.py --print-cache-dir` finds none, run `/daedalus:doctor` once and start again.

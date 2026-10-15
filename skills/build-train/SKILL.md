@@ -28,7 +28,7 @@ Rules for the whole train:
 
 1. Run `git rev-parse --is-inside-work-tree` and `git status --porcelain`. Not a repo, or any output from status: stop. Next: commit or stash your changes from your own shell, then run `/daedalus:build-train` again.
 2. Set `<repo>` to the parent of the directory `git rev-parse --path-format=absolute --git-common-dir` prints (the main working tree; every worktree shares it). Record the base branch (`git rev-parse --abbrev-ref HEAD`) and base commit (`git rev-parse HEAD`).
-3. Read `<repo>/.claude/daedalus/config.json` (0010). Missing or not valid JSON: stop. Next: run `/daedalus:doctor` and create config.json from docs/project-requirements.md in the plugin repo. Note `charter_root` (or none), `standards_sources`, and `policy` (or none).
+3. Read `<repo>/.claude/daedalus/config.json` (0010). Missing: defaults are in use (0020); note `charter_root` as none, `standards_sources` as empty and `policy` as none. Not valid JSON: stop. Next: run `/daedalus:doctor` and fix config.json per docs/project-requirements.md in the plugin repo. Otherwise note `charter_root` (or none), `standards_sources`, and `policy` (or none).
 4. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_ledger.py --probe` (0004). It prints one line:
    - `ledger: <path> (<origin>, <format>, seq=<n>)`: record path, origin, format and sequence.
    - `ledger: none declared and none found. ...`: stop and ask the operator this question, exactly: "This repo has no decision ledger. Options: name an existing file, or let Daedalus create docs/decisions.md as a table. Which?"

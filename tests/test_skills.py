@@ -839,3 +839,10 @@ def test_push_train_checks_gh_beside_gitleaks() -> None:
     assert "Then run `gh auth status`. A non-zero exit: stop." in step
     assert "Next: gh auth login" in step
     assert "or `gh` yourself" not in _push_train()
+
+
+def test_build_train_runs_without_config_json() -> None:
+    step = _build_train().split("\n3. ", 1)[1].split("\n4. ", 1)[0]
+    assert "Missing: defaults are in use" in step
+    assert "Not valid JSON: stop." in step
+    assert "Missing or not valid JSON" not in step

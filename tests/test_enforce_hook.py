@@ -327,3 +327,14 @@ def test_main_glob_over_the_repo_is_allowed(
     payload = hook_input(tool_name="Glob", tool_input={"pattern": "*", "path": str(repo_cwd)})
     result = _run_home(payload, temp_home, plugin_data)
     assert result.returncode == 0, result.stderr
+
+
+def test_absent_config_allows_main_bash_and_writes_the_log(
+    run_script: Any, repo_cwd: Path, hook_input: Any
+) -> None:
+    # 0020: config.json is optional; absence is the empty config, never a block.
+    result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "git status"}))
+    assert result.returncode == 0, result.stderr
+    data = repo_cwd / ".claude" / "daedalus"
+    assert not (data / "config.json").exists()
+    assert list((data / "audit").glob("*.jsonl"))

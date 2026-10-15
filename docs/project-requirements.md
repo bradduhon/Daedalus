@@ -5,9 +5,9 @@ Every file and setting daedalus reads, with the smallest example that works. `/d
 
 ## In the repo's `.claude/daedalus/` directory
 
-`<repo>` is the main working tree of the git repository you run Claude Code in; every worktree shares it (0010-DAE-PLT). The first hook creates `<repo>/.claude/daedalus/` (mode 0700) and a `.gitignore` inside it holding `*`. Create `config.json` there from your own shell.
+`<repo>` is the main working tree of the git repository you run Claude Code in; every worktree shares it (0010-DAE-PLT). The first hook creates `<repo>/.claude/daedalus/` (mode 0700) and a `.gitignore` inside it holding `*`. `config.json` is optional. Without it the defaults apply: no `charter_root`, no `standards_sources`, no `policy`, and the ledger probe below finds the ledger. Create it there from your own shell when you need any of those.
 
-### config.json **(checked)**
+### config.json, optional **(checked)**
 
 ```json
 {
