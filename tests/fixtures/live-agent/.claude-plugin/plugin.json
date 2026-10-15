@@ -1,0 +1,1 @@
+{ "name": "daedalus-probe", "version": "0.0.1", "description": "Probe agent for hook payload verification.", "author": { "name": "Brad Duhon" } }

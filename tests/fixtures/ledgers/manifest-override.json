@@ -1,0 +1,1 @@
+{ "manifest_version": 1, "service_name": "x", "ledger": { "path": "<repo_root>/docs/decisions.md", "format": "markdown-table-row", "id_scheme": "{seq:04d}-X-{type}", "sequence_source": "last-row-id" } }

@@ -1,0 +1,159 @@
+# Copyright (c) 2026 Brad Duhon.
+# SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+from lib.jail import KNOWN_AGENTS, WORKER_DENIED_TOOLS
+
+from tests.conftest import REPO_ROOT
+
+AGENTS = REPO_ROOT / "agents"
+EXPECTED_MODEL = {
+    "repo-coder": "opus",
+    "security-auditor": "opus",
+    "pr-train-conductor": "opus",
+    "contract-spec": "sonnet",
+    "charter-docs": "sonnet",
+    "nist-specialist": "sonnet",
+    "cis-specialist": "sonnet",
+    "standards-rules-specialist": "sonnet",
+    "web-researcher": "haiku",
+}
+
+
+def _frontmatter(path: Path) -> dict[str, str]:
+    text = path.read_text()
+    assert text.startswith("---\n"), path
+    block = text.split("---\n", 2)[1]
+    out: dict[str, str] = {}
+    for line in block.splitlines():
+        key, _, value = line.partition(":")
+        out[key.strip()] = value.strip()
+    return out
+
+
+def _list(value: str, path: Path) -> set[str]:
+    assert not set("[]\"'") & set(value), f"{path}: flow list or quoted value in frontmatter"
+    return {item.strip() for item in value.split(",") if item.strip()}
+
+
+def test_every_known_worker_has_a_persona_and_no_extras() -> None:
+    names = {p.stem for p in AGENTS.glob("*.md")}
+    assert names == (KNOWN_AGENTS - {"main", "boundary-tester"})
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_MODEL))
+def test_frontmatter_matches_rulings(name: str) -> None:
+    path = AGENTS / f"{name}.md"
+    fm = _frontmatter(path)
+    assert fm["name"] == name
+    assert fm["model"] == EXPECTED_MODEL[name]
+    assert fm["description"]
+    tools = _list(fm["tools"], path)
+    assert tools, "tools must be explicit (spec 4.1)"
+    assert not (tools & WORKER_DENIED_TOOLS)
+    assert "memory" not in fm
+    disallowed = _list(fm.get("disallowedTools", ""), path)
+    assert {"Agent", "Task", "SendMessage"} <= disallowed
+
+
+def test_repo_coder_is_worktree_isolated() -> None:
+    assert _frontmatter(AGENTS / "repo-coder.md")["isolation"] == "worktree"
+
+
+def test_tools_agree_with_the_jail() -> None:
+    no_shell = {"web-researcher", "standards-rules-specialist", "contract-spec"}
+    read_only = {
+        "security-auditor",
+        "nist-specialist",
+        "cis-specialist",
+        "pr-train-conductor",
+        "web-researcher",
+        "standards-rules-specialist",
+    }
+    for name in EXPECTED_MODEL:
+        path = AGENTS / f"{name}.md"
+        tools = _list(_frontmatter(path)["tools"], path)
+        if name in no_shell:
+            assert "Bash" not in tools, name
+        if name in read_only:
+            assert not ({"Write", "Edit", "MultiEdit", "NotebookEdit"} & tools), name
+        if name != "web-researcher":
+            assert not ({"WebFetch", "WebSearch"} & tools), name
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_MODEL))
+def test_body_has_header_status_contract_and_no_dashes(name: str) -> None:
+    text = (AGENTS / f"{name}.md").read_text()
+    after = text.split("---\n", 2)[2]
+    assert after.lstrip().startswith(
+        "<!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->"
+    )
+    assert "## Status contract" in after
+    assert not re.search("[\\u2013\\u2014]", text)
+    assert "${CLAUDE_PLUGIN_DATA}/config.json" not in text
+    assert "${CLAUDE_PLUGIN_DATA}" not in text
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_MODEL))
+def test_bash_personas_forbid_redirects(name: str) -> None:
+    # F3a: the jail refuses redirects for workers; the Bash tool returns stderr.
+    path = AGENTS / f"{name}.md"
+    if "Bash" in _list(_frontmatter(path)["tools"], path):
+        assert "No shell redirects" in path.read_text(), name
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_MODEL))
+def test_every_persona_forbids_dashes(name: str) -> None:
+    # Dash ruling: replies land in audit logs and summaries.
+    text = (AGENTS / f"{name}.md").read_text()
+    assert (
+        "Never write U+2013 or U+2014 (en or em dash) in a reply, a file, or a ledger entry" in text
+    )
+    assert "U+2014" in text
+
+
+@pytest.mark.parametrize("name", ["repo-coder", "charter-docs", "pr-train-conductor"])
+def test_committing_personas_forbid_attribution_trailers(name: str) -> None:
+    text = (AGENTS / f"{name}.md").read_text()
+    assert "Commit messages carry no Co-Authored-By or other attribution trailer." in text
+
+
+def test_contract_spec_writes_only_when_asked_to_save() -> None:
+    text = (AGENTS / "contract-spec.md").read_text()
+    assert "only when the task asks to save the packet" in text
+    assert "A packet-only task ends with the" in text
+
+
+def test_charter_docs_probe_status_and_dash_rule() -> None:
+    text = (AGENTS / "charter-docs.md").read_text()
+    contract = text.split("## Status contract", 1)[1]
+    assert "- `[STATUS: LEDGER_PROBED] <probe line>`" in contract
+    assert "A probe-only task ends with `[STATUS: LEDGER_PROBED] <probe line>`" in text
+    assert "never claims an append" in text
+    assert "Never write U+2013 or U+2014 (en or em dash)" in text
+    # F1: agent bodies are substituted at load (quote probe), so the variable stays here.
+    assert "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_ledger.py --probe`" in text
+
+
+@pytest.mark.parametrize("name,sub", [("nist-specialist", "nist"), ("cis-specialist", "cis")])
+def test_specialists_anchor_the_manifest_to_the_cache_dir(name: str, sub: str) -> None:
+    # F6: one absolute anchor; no relative manifest path, no $ or { in the body.
+    text = (AGENTS / f"{name}.md").read_text()
+    assert "`<cache dir>` is the absolute frameworks cache directory named in your prompt" in text
+    assert f"Read `<cache dir>/{sub}/manifest.json`" in text
+    assert f"Read `{sub}/manifest.json`" not in text
+    body = text.split("---\n", 2)[2]
+    assert "$" not in body and "{" not in body
+
+
+def test_conductor_lists_the_git_reads_the_jail_allows() -> None:
+    # N9: matches TestLiveRunGrammar in tests/test_jail.py.
+    text = (AGENTS / "pr-train-conductor.md").read_text()
+    for read in ("`git status`", "`git log`", "`git diff`", "`git branch`"):
+        assert read in text, read
+    assert "`git rev-parse --abbrev-ref HEAD`" in text
+    assert "refuses `git remote`, `git branch -vv`, and `@{u}`" in text
