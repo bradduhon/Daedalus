@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -61,16 +62,10 @@ def _commit_all_empty(path: Path) -> None:
     )
 
 
-def _fake_tool(bin_dir: Path, name: str) -> None:
-    tool = bin_dir / name
-    tool.write_text("#!/bin/sh\nexit 0\n")
-    tool.chmod(0o755)
-
-
 def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    result = _run(plugin_data, repo, path_env="/nonexistent")
+    result = _run(plugin_data, repo, path_env=_bins(tmp_path), home=tmp_path / "home")
     assert result.returncode == 1
     lines = result.stdout.splitlines()
     misses = [line for line in lines if line.startswith("MISS")]
@@ -107,6 +102,17 @@ def _sandbox_line(result: subprocess.CompletedProcess[str]) -> str:
 
 def _bins(tmp_path: Path, *names: str) -> str:
     return str(fake_bin(tmp_path, names))
+
+
+def _bins_with_git(tmp_path: Path, *names: str) -> str:
+    # P11: fake tools plus a link to the real git only; git's own dir also holds bwrap, socat, gh.
+    git = shutil.which("git")
+    assert git is not None, "git is required to build the test repos"
+    bins = _bins(tmp_path, *names)
+    link = Path(bins) / "git"
+    if not link.exists():
+        link.symlink_to(git)
+    return bins
 
 
 def test_sandbox_off_is_a_miss_naming_setup(tmp_path: Path) -> None:
@@ -250,13 +256,10 @@ def test_complete_setup_is_all_ok(plugin_data: Path, tmp_path: Path) -> None:
         )
     )
     _commit_all(repo)
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    for name in ("gitleaks", "bwrap", "socat"):
-        _fake_tool(fake_bin, name)
+    bins = _bins_with_git(tmp_path, "gitleaks", "bwrap", "socat")
     home = tmp_path / "home"
     _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
-    result = _run(plugin_data, repo, path_env=f"{fake_bin}:{os.environ['PATH']}", home=home)
+    result = _run(plugin_data, repo, path_env=bins, home=home)
     assert result.returncode == 0, result.stdout
     assert not any(line.startswith("MISS") for line in result.stdout.splitlines())
     assert f"OK   project data dir: {data} (exists)" in result.stdout.splitlines()
@@ -266,14 +269,14 @@ def test_dirty_tree_is_a_miss(plugin_data: Path, tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _git_repo(repo)
     (repo / "x.txt").write_text("dirty")
-    result = _run(plugin_data, repo)
+    result = _run(plugin_data, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     assert "MISS clean working tree" in result.stdout
 
 
 def test_absent_project_data_dir_is_ok_and_names_the_path(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _git_repo(repo)
-    result = _run(None, repo, home=tmp_path / "home")
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     data = repo.resolve() / ".claude" / "daedalus"
     assert f"OK   project data dir: {data} (will be created by the first hook)" in (
         result.stdout.splitlines()
@@ -287,7 +290,7 @@ def test_worktree_resolves_to_main_repo_data_dir(tmp_path: Path) -> None:
     _commit_all_empty(repo)
     worktree = tmp_path / "wt"
     subprocess.run(["git", "worktree", "add", "-q", str(worktree)], cwd=repo, check=True)
-    result = _run(None, worktree, home=tmp_path / "home")
+    result = _run(None, worktree, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     data = repo.resolve() / ".claude" / "daedalus"
     assert f"OK   project data dir: {data} (will be created by the first hook)" in (
         result.stdout.splitlines()
@@ -298,7 +301,7 @@ def test_missing_gitignore_marker_is_a_miss(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _git_repo(repo)
     data = _data(repo, marker=False)
-    result = _run(None, repo, home=tmp_path / "home")
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     miss = [line for line in result.stdout.splitlines() if "gitignore marker" in line]
     assert len(miss) == 1 and miss[0].startswith("MISS") and "Next:" in miss[0]
     assert str(data / ".gitignore") in miss[0]
@@ -309,7 +312,7 @@ def test_marker_without_star_is_a_miss(tmp_path: Path) -> None:
     _git_repo(repo)
     data = _data(repo, marker=False)
     (data / ".gitignore").write_text("audit/\n")
-    result = _run(None, repo, home=tmp_path / "home")
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     assert any(
         line.startswith("MISS data dir .gitignore marker") for line in result.stdout.splitlines()
     )
@@ -322,7 +325,7 @@ def test_tracked_data_dir_is_a_miss(tmp_path: Path) -> None:
     (data / "config.json").write_text("{}")
     _commit_all(repo)
     (data / ".gitignore").write_text("*\n")
-    result = _run(None, repo, home=tmp_path / "home")
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     lines = result.stdout.splitlines()
     assert "OK   data dir .gitignore marker" in lines
     miss = [line for line in lines if line.startswith("MISS data dir ignored by git")]
@@ -333,7 +336,7 @@ def test_ignored_data_dir_is_ok(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _git_repo(repo)
     _data(repo)
-    result = _run(None, repo, home=tmp_path / "home")
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     assert "OK   data dir ignored by git" in result.stdout.splitlines()
 
 
@@ -345,7 +348,7 @@ def test_symlinked_data_dir_is_a_miss_and_config_is_not_read(tmp_path: Path) -> 
     (elsewhere / "config.json").write_text("{}")
     (repo / ".claude").mkdir()
     (repo / ".claude" / "daedalus").symlink_to(elsewhere)
-    result = _run(None, repo, home=tmp_path / "home")
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     lines = result.stdout.splitlines()
     assert result.returncode == 1
     assert any(
@@ -362,7 +365,9 @@ def test_tracked_file_outside_config_is_a_miss(tmp_path: Path) -> None:
     (data / "audit" / "old.jsonl").write_text("{}")
     _commit_all(repo)
     (data / ".gitignore").write_text("*\n")
-    lines = _run(None, repo, home=tmp_path / "home").stdout.splitlines()
+    lines = _run(
+        None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home"
+    ).stdout.splitlines()
     assert any(line.startswith("MISS data dir ignored by git") for line in lines)
     assert any(line.startswith("MISS config.json: not read") for line in lines)
 
@@ -370,14 +375,14 @@ def test_tracked_file_outside_config_is_a_miss(tmp_path: Path) -> None:
 def test_cache_dir_env_is_informational(plugin_data: Path, tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
-    result = _run(plugin_data, tmp_path, home=home)
+    result = _run(plugin_data, tmp_path, path_env=_bins(tmp_path), home=home)
     assert f"OK   cache dir: CLAUDE_PLUGIN_DATA={plugin_data}" in result.stdout.splitlines()
 
 
 def test_cache_dir_absent_is_ok(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
-    result = _run(None, tmp_path, home=home)
+    result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
     lines = result.stdout.splitlines()
     assert (
         "OK   cache dir: none yet (create it with scripts/refresh_nist_oscal.py "
@@ -394,7 +399,7 @@ def test_cache_dir_lists_globbed_matches(tmp_path: Path) -> None:
     inline = base / "daedalus-inline"
     market.mkdir(parents=True)
     inline.mkdir()
-    result = _run(None, tmp_path, home=home)
+    result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
     ok = [line for line in result.stdout.splitlines() if line.startswith("OK   cache dir")]
     assert ok == [
         f"OK   cache dir: {market}, {inline} (a --plugin-dir session uses daedalus-inline; "
@@ -406,7 +411,7 @@ def test_malformed_config_is_a_miss_with_next(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _git_repo(repo)
     (_data(repo) / "config.json").write_text("{not json")
-    result = _run(None, repo, home=tmp_path / "home")
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     assert result.returncode == 1
     miss = [line for line in result.stdout.splitlines() if line.startswith("MISS config.json")]
     assert len(miss) == 1
