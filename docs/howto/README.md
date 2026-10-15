@@ -66,7 +66,7 @@ Uninstalling the plugin leaves the audit logs and config in the repo. A copy of 
 
 When daedalus refuses an action you see a line like:
 
-    daedalus-jail[repo-coder]: write outside src/ or tests/ of your worktree: /work/repo/infra/x.tf. Next: ask Fable to route this to contract-spec or charter-docs.
+    daedalus-jail[repo-coder]: write outside src/ or tests/ of your unit worktree: /work/repo/infra/x.tf. Next: ask Fable to route this to contract-spec or charter-docs.
 
 The name in brackets is the agent that was blocked. The part before `Next:` is what was refused and why. The part after is what to do instead. Fable is the orchestrating session you are talking to, not the plugin.
 

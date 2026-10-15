@@ -184,8 +184,9 @@ def test_main_cannot_write_application_code() -> None:
 
 class TestRepoCoder:
     def test_writes_inside_src_and_tests_only(self) -> None:
-        assert decide(_w("repo-coder", f"{CWD}/src/a.py"), CFG).allow
-        assert decide(_w("repo-coder", f"{CWD}/tests/test_a.py", "Edit"), CFG).allow
+        # 0022: the main checkout's src/ and tests/ are refused; see TestUnitWorktree.
+        assert not decide(_w("repo-coder", f"{CWD}/src/a.py"), CFG).allow
+        assert not decide(_w("repo-coder", f"{CWD}/tests/test_a.py", "Edit"), CFG).allow
         assert not decide(_w("repo-coder", f"{CWD}/service-manifest.json"), CFG).allow
         assert not decide(_w("repo-coder", f"{CWD}/src/../infra/a.tf"), CFG).allow
         assert not decide(_w("repo-coder", "/other/repo/src/a.py"), CFG).allow
@@ -573,7 +574,8 @@ class TestRegressionRepoCoder:
         assert not decide(_b("repo-coder", command), CFG).allow, command
 
     def test_relative_paths_resolve_against_cwd(self) -> None:
-        assert decide(_w("repo-coder", "src/a.py"), CFG).allow
+        assert not decide(_w("repo-coder", "src/a.py"), CFG).allow
+        assert decide(_w("repo-coder", ".claude/worktrees/u1/src/a.py"), CFG).allow
         assert not decide(_w("repo-coder", "infra/a.tf"), CFG).allow
         assert not decide(_w(None, "src/app.py"), CFG).allow
 
@@ -586,7 +588,8 @@ class TestRegressionRepoCoder:
                 "agent_type": "repo-coder",
             }
 
-        assert decide(nb(f"{CWD}/src/n.ipynb"), CFG).allow
+        assert decide(nb(f"{CWD}/.claude/worktrees/u1/src/n.ipynb"), CFG).allow
+        assert not decide(nb(f"{CWD}/src/n.ipynb"), CFG).allow
         assert not decide(nb(f"{CWD}/docs/n.ipynb"), CFG).allow
 
 
@@ -1478,6 +1481,9 @@ class TestFinalCoderGitAllowlist:
             "git checkout -- docs/x.md",
             "git restore docs/x.md",
             "git restore -- ../other/a.py",
+            "git restore -- src/a.py",
+            "git checkout -- tests/test_a.py src/b.py",
+            "git checkout -- .claude/worktrees/u1/src/a.py src/b.py",
             "git stash drop",
             "git stash",
             "git merge x",
@@ -1495,8 +1501,9 @@ class TestFinalCoderGitAllowlist:
             "git stash list",
             "git stash push -m wip",
             "git stash pop",
-            "git restore -- src/a.py",
-            "git checkout -- tests/test_a.py src/b.py",
+            "git restore -- .claude/worktrees/u1/src/a.py",
+            "git checkout -- .claude/worktrees/u1/tests/test_a.py .claude/worktrees/u1/src/b.py",
+            "git -C .claude/worktrees/u1 restore -- src/a.py",
             "git branch",
             "git branch --show-current",
             "git worktree list",
@@ -1632,18 +1639,35 @@ class TestFinalCoderWriteTargets:
     @pytest.mark.parametrize(
         "command",
         [
-            "cp src/a.py src/b.py",
-            "sed -i s/a/b/ src/a.py",
-            "tee tests/out.txt",
-            "mv src/a.py tests/a.py",
-            "install -m 644 src/a.py src/b.py",
-            "truncate -s 0 tests/out.txt",
+            "cp .claude/worktrees/u1/src/a.py .claude/worktrees/u1/src/b.py",
+            "sed -i s/a/b/ .claude/worktrees/u1/src/a.py",
+            "tee .claude/worktrees/u1/tests/out.txt",
+            "mv .claude/worktrees/u1/src/a.py .claude/worktrees/u1/tests/a.py",
+            "install -m 644 .claude/worktrees/u1/src/a.py .claude/worktrees/u1/src/b.py",
+            "truncate -s 0 .claude/worktrees/u1/tests/out.txt",
             "sed -n 1p docs/x.md",
-            "sed --in-place=.bak s/a/b/ src/a.py",
+            "sed --in-place=.bak s/a/b/ .claude/worktrees/u1/src/a.py",
         ],
     )
     def test_allowed(self, command: str) -> None:
         assert decide(_b("repo-coder", command), CFG).allow, command
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cp src/a.py src/b.py",
+            "sed -i s/a/b/ src/a.py",
+            "tee tests/out.txt",
+            "mv .claude/worktrees/u1/src/a.py tests/a.py",
+            "install -m 644 src/a.py src/b.py",
+            "truncate -s 0 tests/out.txt",
+            "sed --in-place=.bak s/a/b/ src/a.py",
+        ],
+    )
+    def test_main_checkout_blocked(self, command: str) -> None:
+        # 0022: the same grammar aimed at the main checkout is refused.
+        d = decide(_b("repo-coder", command), CFG)
+        assert not d.allow and d.reason.startswith("Bash write outside src/ or tests/"), command
 
 
 class TestFinalDataDir:
@@ -2213,3 +2237,68 @@ class TestFixWaveCharterDocsBash:
     )
     def test_allowed(self, command: str) -> None:
         assert decide(_b("charter-docs", command), CFG).allow, command
+
+
+WT = f"{CWD}/.claude/worktrees/20261015-120000-u1"
+
+
+def test_coder_writes_inside_a_unit_worktree() -> None:
+    # 0022: the coder's cwd is the main checkout; its code dirs live in the unit worktree.
+    assert decide(_w("repo-coder", f"{WT}/src/a.py"), CFG).allow
+    assert decide(_w("repo-coder", f"{WT}/tests/test_a.py", "Edit"), CFG).allow
+    assert decide(_b("repo-coder", f"cp a {WT}/src/b.py"), CFG).allow
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        f"{WT}/infra/a.tf",
+        f"{WT}/README.md",
+        f"{CWD}/.claude/worktrees/src/a.py",
+        f"{CWD}/.claude/worktrees/x/../../daedalus/src/a.py",
+        "/other/repo/.claude/worktrees/u1/src/a.py",
+    ],
+)
+def test_coder_unit_worktree_outside_code_dirs_is_refused(path: str) -> None:
+    assert not decide(_w("repo-coder", path), CFG).allow, path
+
+
+def test_main_never_writes_unit_worktree_code() -> None:
+    d = decide(_w(None, f"{WT}/src/a.py"), CFG)
+    assert not d.allow and "Fable does not write application code" in str(d.reason)
+
+
+def test_coder_restores_paths_inside_its_unit_worktree() -> None:
+    assert decide(_b("repo-coder", f"git restore -- {WT}/src/a.py"), CFG).allow
+
+
+def test_coder_cannot_write_the_main_checkout() -> None:
+    # 0022: coders own a unit worktree; the main checkout is never their write target.
+    assert not decide(_w("repo-coder", f"{CWD}/src/a.py"), CFG).allow
+    assert not decide(_w("repo-coder", f"{CWD}/tests/test_a.py", "Edit"), CFG).allow
+    assert not decide(_b("repo-coder", f"cp a {CWD}/src/b.py"), CFG).allow
+    assert not decide(_b("repo-coder", f"git restore -- {CWD}/src/a.py"), CFG).allow
+
+
+def test_coder_pathspec_resolves_against_git_dash_c() -> None:
+    # 0022 P3: a relative pathspec names a path under the -C directory, else under cwd.
+    assert decide(_b("repo-coder", f"git -C {WT} restore -- src/a.py"), CFG).allow
+    assert decide(_b("repo-coder", f"git -C {WT} checkout -- tests/test_a.py"), CFG).allow
+    assert not decide(_b("repo-coder", f"git -C {CWD} restore -- src/a.py"), CFG).allow
+    assert not decide(_b("repo-coder", f"git -C {WT} restore -- ../../../src/a.py"), CFG).allow
+    assert not decide(_b("repo-coder", f"git -C {WT} restore -- README.md"), CFG).allow
+    assert decide(_b("repo-coder", f"git restore -- {WT}/src/a.py"), CFG).allow
+
+
+def test_coder_unit_worktree_through_a_symlinked_root(tmp_path: Path) -> None:
+    # 0022: a symlinked path to the repo and the real path resolve to one worktree base.
+    repo = _git_init(tmp_path / "real")
+    link = tmp_path / "link"
+    link.symlink_to(repo)
+    for cwd, root in ((link, repo), (repo, link), (link, link)):
+        payload = _w("repo-coder", f"{root}/.claude/worktrees/u1/src/a.py")
+        payload["cwd"] = str(cwd)
+        assert decide(payload, CFG).allow, (cwd, root)
+        payload = _w("repo-coder", f"{root}/src/a.py")
+        payload["cwd"] = str(cwd)
+        assert not decide(payload, CFG).allow, (cwd, root)

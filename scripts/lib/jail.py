@@ -225,7 +225,8 @@ R_GIT_PLUMBING = (
 )
 R_CODER_GIT = (
     "repo-coder git is limited to add, commit, status, diff, log, show, rev-parse, ls-files, "
-    "branch listing, stash list/push/pop/show, restore/checkout -- <src|tests paths>, "
+    "branch listing, stash list/push/pop/show, "
+    "restore/checkout -- <unit worktree src|tests paths>, "
     "worktree list. Next: use those only; the trains handle the rest."
 )
 R_DATA_DIR = (
@@ -263,6 +264,7 @@ R_DOCS_BASH = (
 )
 _DATA_DIR_DEFAULT = "/.claude/plugins/data/daedalus"
 _PROJECT_DATA = ".claude/daedalus"
+UNIT_WORKTREES = ".claude/worktrees"
 _GLOB_CHARS = frozenset("*?[")
 _DATA_DIR_WRITE = re.compile(
     r">|(?:^|[\s;&|(/])(?:tee|rm|mv|cp|truncate|touch|ln|mkdir|chmod|chown|install|rmdir)"
@@ -989,14 +991,31 @@ def _commit_ok(args: list[str], cwd: str) -> bool:
     return True
 
 
+def _in_unit_worktree_code(target: str, cwd: str) -> bool:
+    # 0022: train-made unit worktrees sit at <repo>/.claude/worktrees/<name>.
+    base = os.path.realpath(os.path.join(str(project_root(cwd)), UNIT_WORKTREES))
+    parts = os.path.relpath(os.path.realpath(target), base).split(os.sep)
+    inside = len(parts) >= 2 and parts[0] not in {os.curdir, os.pardir}
+    return inside and parts[1] in {"src", "tests"}
+
+
 def _in_code_dirs(arg: str, cwd: str) -> bool:
     target = _abs(arg, cwd)
-    return _under(target, f"{cwd}/src") or _under(target, f"{cwd}/tests")
+    return (
+        _under(target, f"{cwd}/src")
+        or _under(target, f"{cwd}/tests")
+        or _in_unit_worktree_code(target, cwd)
+    )
 
 
-def _pathspec_ok(args: list[str], cwd: str) -> bool:
-    # I3a: restore/checkout only as `-- <paths under src/ or tests/>`.
-    return len(args) > 1 and args[0] == "--" and all(_in_code_dirs(a, cwd) for a in args[1:])
+def _pathspec_ok(args: list[str], cwd: str, base: str | None = None) -> bool:
+    # I3a, 0022 P3: `-- <unit worktree src|tests paths>`; relative ones resolve against -C (base).
+    root = cwd if base is None else base
+    return (
+        len(args) > 1
+        and args[0] == "--"
+        and all(_in_unit_worktree_code(_abs(a, root), cwd) for a in args[1:])
+    )
 
 
 def _stash_ok(args: list[str]) -> bool:
@@ -1068,6 +1087,7 @@ def _git_grammar_ok(
     sub, args, globals_ = _git_split(tokens)
     if sub not in subs or sub not in grammar:
         return False
+    base = cwd
     i = 0
     while i < len(globals_):
         flag = globals_[i]
@@ -1077,9 +1097,13 @@ def _git_grammar_ok(
         if flag == "-C" and i + 1 < len(globals_):
             target = _abs(globals_[i + 1], cwd)
             if _under(target, cwd) or (charter is not None and _under(target, charter)):
+                # 0022 P3: git chains each -C onto the previous one.
+                base = _abs(globals_[i + 1], base)
                 i += 2
                 continue
         return False
+    if grammar[sub] is _pathspec_ok:
+        return _pathspec_ok(args, cwd, base)
     return grammar[sub](args, cwd)
 
 
@@ -1343,7 +1367,11 @@ def _coder_write_target(segment: list[str], cwd: str) -> str | None:
     if name not in CODER_WRITE_CMDS and not (name in {"sed", "perl"} and _in_place(name, args)):
         return None
     for arg in _write_operands(name, args):
-        if arg != "-" and _looks_like_path(arg, cwd) and not _in_code_dirs(arg, cwd):
+        if (
+            arg != "-"
+            and _looks_like_path(arg, cwd)
+            and not _in_unit_worktree_code(_abs(arg, cwd), cwd)
+        ):
             return arg
     return None
 
@@ -1667,7 +1695,7 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
                 return _block(reason)
 
     if agent == "main":
-        if is_write and (_under(path, f"{cwd}/src") or _under(path, f"{cwd}/tests")):
+        if is_write and _in_code_dirs(path, cwd):
             return _block(
                 "Fable does not write application code. "
                 "Next: dispatch a repo-coder for this change."
@@ -1675,9 +1703,9 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
         return _allow()
 
     if agent == "repo-coder":
-        if is_write and not (_under(path, f"{cwd}/src") or _under(path, f"{cwd}/tests")):
+        if is_write and not _in_unit_worktree_code(_abs(path, cwd), cwd):
             return _block(
-                f"write outside src/ or tests/ of your worktree: {path}. "
+                f"write outside src/ or tests/ of your unit worktree: {path}. "
                 "Next: ask Fable to route this to contract-spec or charter-docs."
             )
         if tool == "Bash":
@@ -1710,7 +1738,8 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
                 if target is not None:
                     return _block(
                         f"Bash write outside src/ or tests/: {target}. "
-                        "Next: write under src/ or tests/, or ask Fable to route the change."
+                        "Next: write under your unit worktree src/ or tests/, "
+                        "or ask Fable to route the change."
                     )
         if tool in WEB_TOOLS:
             return _block(
