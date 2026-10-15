@@ -3078,3 +3078,31 @@ def test_wrapper_option_values_are_consumed(
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
         assert not d.allow and "credential path" in str(d.reason), command
     assert decide(_cred(agent, "Bash", cwd, command=f"sudo tar cf - {cwd}/src"), CFG).allow
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "for d in ~; do cat $d/.ssh/id_ed25519; done; for d in /tmp; do :; done",
+        "D=~; cat $D/.ssh/id_ed25519; D=/tmp",
+        "D=/tmp; for i in 1 2; do cat $D/.ssh/id_ed25519; D=~; done",
+        "while true; do cat $D/.aws/config; D=~; done",
+    ],
+)
+def test_a_later_binding_does_not_hide_an_earlier_read(
+    cred_home: Path, plain_repo: Path, agent: str | None, command: str
+) -> None:
+    # Round 3: bindings apply in segment order; a loop body sees every binding inside the loop.
+    d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
+    assert not d.allow and "credential path" in str(d.reason), command
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_a_later_binding_does_not_taint_an_earlier_read(
+    cred_home: Path, plain_repo: Path, agent: str | None
+) -> None:
+    cwd = str(plain_repo)
+    for command in ("D=/tmp; cat $D/x; D=~", "for f in *; do cat ${f}; done"):
+        d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
+        assert d.allow, (command, d.reason)

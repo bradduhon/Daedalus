@@ -1938,33 +1938,72 @@ def _tilde(text: str, home: str) -> str:
     return os.path.expanduser(text) if text.startswith("~") else text
 
 
-def _bash_env(segments: list[list[str]]) -> dict[str, list[str]]:
+def _bash_env(segments: list[list[str]]) -> list[dict[str, list[str]]]:
     # F3, item 1: assignments and for-loops bind, read and friends unbind, HOME stays real.
     env = {k: [v] for k, v in os.environ.items()}
     env["HOME"] = [str(Path.home())]
     env.setdefault("CLAUDE_PLUGIN_ROOT", [os.path.dirname(_REPO_SCRIPTS)])
     env.setdefault("CLAUDE_PLUGIN_DATA", [env["HOME"][0] + _DATA_DIR_DEFAULT])
+    envs: list[dict[str, list[str]]] = []
+    changes: list[dict[str, list[str] | None]] = []
     for words in segments:
         clean = [_clean(w) for w in words]
+        changed: dict[str, list[str] | None] = {}
         for i, word in enumerate(words):
             name, eq, value = word.partition("=")
             if eq and _ASSIGN.match(word) and name != "HOME":
                 bound = _expand_word(value, env)
-                if any(u for _, u in bound):
-                    env.pop(name, None)
-                else:
-                    env[name] = [t for t, _ in bound]
+                unknown = any(u for _, u in bound)
+                changed[name] = None if unknown else [t for t, _ in bound]
             if clean[i] == "for" and i + 1 < len(words):
                 loop = [x for w in words[i + 3 :] for x in _expand_word(w, env)]
-                if i + 2 < len(words) and clean[i + 2] == "in" and not any(u for _, u in loop):
-                    env[clean[i + 1]] = [t for t, _ in loop]
-                else:
-                    env.pop(clean[i + 1], None)
+                listed = i + 2 < len(words) and clean[i + 2] == "in"
+                ok = listed and not any(u for _, u in loop)
+                changed[clean[i + 1]] = [t for t, _ in loop] if ok else None
             if clean[i] in _BINDERS:
                 for later in clean[i + 1 :]:
                     if not later.startswith("-"):
-                        env.pop(later, None)
-    return env
+                        changed[later] = None
+            for key, values in changed.items():
+                if values is None:
+                    env.pop(key, None)
+                else:
+                    env[key] = values
+        # Round 3: a binding applies from its own segment onward, never to earlier segments.
+        envs.append(dict(env))
+        changes.append(changed)
+    _loop_union(segments, envs, changes)
+    return envs
+
+
+def _loop_union(
+    segments: list[list[str]],
+    envs: list[dict[str, list[str]]],
+    changes: list[dict[str, list[str] | None]],
+) -> None:
+    # Round 3: a later iteration sees every binding in its loop, header included.
+    opened: list[int] = []
+    for k, words in enumerate(segments):
+        first = _clean(words[0])
+        if first == "do":
+            head = k - 1 if k and _clean(segments[k - 1][0]) in {"for", "while", "until"} else k
+            opened.append(head)
+        if first != "done" or not opened:
+            continue
+        span = range(opened.pop(), k + 1)
+        merged: dict[str, list[str] | None] = {}
+        for j in span:
+            for key, values in changes[j].items():
+                if values is None or merged.get(key, []) is None:
+                    merged[key] = None
+                else:
+                    merged[key] = [*merged.get(key, []), *values]
+        for j in span:
+            for key, values in merged.items():
+                if values is None:
+                    envs[j].pop(key, None)
+                else:
+                    envs[j][key] = list(dict.fromkeys([*envs[j].get(key, []), *values]))
 
 
 def _anchor(text: str, base: str) -> str | None:
@@ -2140,13 +2179,13 @@ def _tree_reader(
 
 def _tree_reason(
     parsed: list[tuple[list[str], tuple[str, int, set[int]]]],
-    env: dict[str, list[str]],
+    envs: list[dict[str, list[str]]],
     bases: list[str],
     roots: list[str],
     command: str,
 ) -> str | None:
     dotglob = "dotglob" in command or "GLOBIGNORE" in command
-    for words, (name, at, paths) in parsed:
+    for k, (words, (name, at, paths)) in enumerate(parsed):
         if at < 0:
             continue
         ops = [i for i in sorted(paths) if not words[i].startswith(_REDIRECT)]
@@ -2156,7 +2195,7 @@ def _tree_reason(
         hidden, ops, implicit = found
         targets = list(bases) if implicit else []
         for i in ops:
-            for text, _ in _expand_word(words[i], env):
+            for text, _ in _expand_word(words[i], envs[k]):
                 targets += [t for t in (_anchor(text, b) for b in bases or [""]) if t]
         for target in targets:
             for root in roots:
@@ -2169,11 +2208,11 @@ def _tree_reason(
 
 def _bash_credential_reason(command: str, cwd: str, roots: list[str]) -> str | None:
     segments = _shell_words(command)
-    env = _bash_env(segments)
+    envs = _bash_env(segments)
     dotglob = "dotglob" in command or "GLOBIGNORE" in command
     parsed = [(words, _path_positions(words)) for words in segments]
     bases = [cwd] if os.path.isabs(cwd) else []
-    for words, (name, at, _) in parsed:
+    for k, (words, (name, at, _)) in enumerate(parsed):
         if name not in {"cd", "pushd"}:
             continue
         # F4: the first non-option argument is the target; a bare cd goes home.
@@ -2184,12 +2223,13 @@ def _bash_credential_reason(command: str, cwd: str, roots: list[str]) -> str | N
             elif not (options and _clean(word).startswith("-")):
                 target = word
                 break
-        texts = [t for t, _ in _expand_word(target, env)] if target else env["HOME"]
+        texts = [t for t, _ in _expand_word(target, envs[k])] if target else envs[k]["HOME"]
         bases += [b for b in (_anchor(t, cwd) for t in texts) if b]
     absolute: list[str] = []
     relative: list[str] = []
     unresolved = ""
-    for words, (_, _, paths) in parsed:
+    for k, (words, (_, _, paths)) in enumerate(parsed):
+        env = envs[k]
         for i, word in enumerate(words):
             for text, unknown in _expand_word(word, env):
                 if unknown and i in paths and not unresolved:
@@ -2208,7 +2248,7 @@ def _bash_credential_reason(command: str, cwd: str, roots: list[str]) -> str | N
             target = os.path.normpath(os.path.join(base, cand))
             if _credential_hit(target, roots, True, dotglob):
                 return R_CREDENTIAL.format(path=target)
-    return _tree_reason(parsed, env, bases, roots, command)
+    return _tree_reason(parsed, envs, bases, roots, command)
 
 
 def _credential_reason(tool: str, tool_input: dict[str, Any], cwd: str) -> str | None:
