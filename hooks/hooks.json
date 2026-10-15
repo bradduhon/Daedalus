@@ -1,16 +1,15 @@
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py", "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py", "timeout": 10 } ] },
+      { "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/sandbox_notice.py", "timeout": 10 } ] }
     ],
     "UserPromptSubmit": [
       { "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py", "timeout": 10 } ] }
     ],
     "PreToolUse": [
-      { "matcher": "^(Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|WebSearch|Agent|Task|SendMessage|mcp__.+)$",
-        "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/enforce_agent_jail.py", "timeout": 10 } ] },
-      { "matcher": "Read|Glob|Grep",
-        "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py", "timeout": 10 } ] }
+      { "matcher": "^(Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|WebSearch|Agent|Task|SendMessage|Read|Glob|Grep|mcp__.+)$",
+        "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/enforce_agent_jail.py", "timeout": 10 } ] }
     ],
     "PostToolUse": [
       { "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py", "async": true } ] }

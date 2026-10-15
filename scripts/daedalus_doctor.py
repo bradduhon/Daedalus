@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import shutil
 import subprocess
@@ -22,22 +21,24 @@ from lib.audit import (  # noqa: E402
     project_root,
 )
 from lib.config import Config, ConfigError, load_config  # noqa: E402
+from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
+from lib.sandbox_state import (  # noqa: E402
+    SettingsError,
+    required_binaries,
+    sandbox_check,
+    sandbox_state,
+)
+from lib.workspace import UNMARK_NEXT, train_marker  # noqa: E402
 
 REQ_DOC = "docs/project-requirements.md"
-SANDBOX_NEXT = (
-    "install bubblewrap and socat; with sandbox.failIfUnavailable set, Bash cannot run without them"
-)
+SANDBOX_NEXT = "install bubblewrap and socat, then run /daedalus:setup to turn the sandbox on"
+GH_NEXT = "install gh (https://cli.github.com); the Push Train opens pull requests with it"
+NO_LEDGER = "OK   ledger: none found (the Build Train asks before creating docs/decisions.md)"
 PROJECT_DATA_NEXT = "write a single line * to {marker}"
 IGNORE_NEXT = (
     "from your own shell, untrack it with git rm -r --cached .claude/daedalus, "
     "then restore the * marker"
 )
-BASE_REF_NEXT = (
-    'set "worktree": {"baseRef": "head"} in ~/.claude/settings.json or .claude/settings.json '
-    "(settings.recommended.json); otherwise coder worktrees branch from the remote default "
-    "branch, not the integration branch"
-)
-PROJECT_SETTINGS = (".claude/settings.json", ".claude/settings.local.json")
 CACHE_NAMING = (
     "a --plugin-dir session uses daedalus-inline; a marketplace install uses daedalus-<marketplace>"
 )
@@ -73,22 +74,30 @@ def _cache_check() -> tuple[bool, str]:
     return True, f"OK   cache dir: {found}"
 
 
-def _base_ref_check(repo: Path) -> tuple[bool, str]:
-    # C1: subagent worktrees branch from the remote default branch unless baseRef is head
-    # (code.claude.com/docs/en/worktrees); later sources override earlier ones.
-    value: object = None
-    for path in (Path.home() / ".claude" / "settings.json", *(repo / p for p in PROJECT_SETTINGS)):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            continue
-        except (OSError, UnicodeDecodeError, ValueError, RecursionError):
-            return _check(False, "worktree.baseRef", f"{path} is not valid JSON", f"fix {path}")
-        block = data.get("worktree") if isinstance(data, dict) else None
-        if isinstance(block, dict) and "baseRef" in block:
-            value = block["baseRef"]
-    found = "not set (default fresh)" if value is None else f"set to {value!r}"
-    return _check(value == "head", "worktree.baseRef is head", found, BASE_REF_NEXT)
+def _plugin_root_check() -> tuple[bool, str]:
+    # spec 5: informational; README readers copy the plugin root from this line.
+    return True, f"OK   plugin root: {Path(__file__).resolve().parent.parent}"
+
+
+def _gh_checks() -> Iterator[tuple[bool, str]]:
+    # spec 5: the Push Train needs gh on PATH and signed in; no auth probe without gh.
+    on_path = shutil.which("gh") is not None
+    yield _check(on_path, "gh on PATH", "not found", GH_NEXT)
+    if not on_path:
+        yield _check(
+            False, "gh authenticated", "gh not on PATH", "install gh, then run gh auth login"
+        )
+        return
+    try:
+        status = subprocess.run(
+            ["gh", "auth", "status"], capture_output=True, text=True, timeout=10, check=False
+        )
+        code = status.returncode
+    except (OSError, subprocess.SubprocessError):
+        code = -1
+    yield _check(
+        code == 0, "gh authenticated", f"gh auth status exited {code}", "run gh auth login"
+    )
 
 
 def _trust_error(repo: Path) -> DataDirError | None:
@@ -143,6 +152,33 @@ def _data_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
     yield from _config_checks(data)
 
 
+def _marker_check(repo: Path) -> tuple[bool, str]:
+    # 0023: informational; a live train holds the marker, a dead one leaves it behind.
+    root = project_root(str(repo))
+    marker = train_marker(root)
+    if not os.path.lexists(marker):
+        return True, "OK   train marker: none"
+    try:
+        # 0023: a symlinked marker is never followed; its target could be anything.
+        text = "symlink" if marker.is_symlink() else marker.read_text(encoding="utf-8")
+        train_id = text.strip()[:32] or "empty"
+    except (OSError, UnicodeDecodeError):
+        train_id = "unreadable"
+    line = f"OK   train marker: present ({train_id}) at {marker}. "
+    return True, line + UNMARK_NEXT.format(repo=root)
+
+
+def _ledger_probe(root: Path, config: Config) -> tuple[bool, str]:
+    # 0004: resolves manifest, config or convention ledger alike; LedgerError is a MISS.
+    try:
+        found = resolve_ledger(str(root), config)
+    except LedgerError as exc:
+        return False, f"MISS ledger: {exc}"
+    if found is None:
+        return True, NO_LEDGER
+    return True, f"OK   ledger: {found.path} ({found.origin}, {found.format})"
+
+
 def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
     cfg_path = data / "config.json"
     try:
@@ -150,31 +186,21 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
     except ConfigError as exc:
         yield False, f"MISS config.json: {exc}"
         return
-    yield _check(
-        cfg_path.exists(),
-        "config.json",
-        f"{cfg_path} not found",
-        f"create it from the example in {REQ_DOC}",
-    )
-    yield _check(
-        config.ledger is not None,
-        "ledger declared",
-        "no ledger block in config.json",
-        f"declare path, format, id_scheme, sequence_source (see {REQ_DOC}); "
-        "the train asks before creating one (0004)",
-    )
-    yield _check(
-        bool(config.standards_sources),
-        "standards_sources declared",
-        "empty",
-        f"list the directories holding this project's rules (see {REQ_DOC})",
-    )
-    yield _check(
-        config.policy is not None,
-        "policy declared",
-        "no policy block",
-        f"declare engine and path, or an empty pack directory (see {REQ_DOC})",
-    )
+    if cfg_path.exists():
+        yield True, "OK   config.json"
+    else:
+        # spec 9: config.json is optional; absence means the defaults.
+        yield True, "OK   config.json: not present, defaults in use"
+    yield _ledger_probe(data.parent.parent, config)
+    # spec 5: standards_sources and policy are optional; undeclared is not a miss.
+    if config.standards_sources:
+        yield True, "OK   standards_sources declared"
+    else:
+        yield True, "OK   standards_sources: not declared (optional)"
+    if config.policy is not None:
+        yield True, "OK   policy declared"
+    else:
+        yield True, "OK   policy: not declared (optional)"
 
 
 def _is_repo(repo: Path) -> bool:
@@ -226,15 +252,19 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     )
     is_repo = _is_repo(repo)
     yield from _data_checks(repo, is_repo)
+    yield _marker_check(repo)
     yield _cache_check()
-    yield _base_ref_check(repo)
+    yield _plugin_root_check()
+    yield sandbox_check(repo)
     yield _check(
         shutil.which("gitleaks") is not None,
         "gitleaks on PATH",
         "not found",
         "the Push Train scans commits with gitleaks; install it so the scan can run",
     )
-    for tool in ("bwrap", "socat"):
+    yield from _gh_checks()
+    # 0020: macOS sandboxes without bwrap and socat, so it gets no binary lines.
+    for tool in required_binaries():
         yield _check(shutil.which(tool) is not None, f"{tool} on PATH", "not found", SANDBOX_NEXT)
     yield from _repo_checks(repo, is_repo)
 
@@ -244,6 +274,16 @@ def print_cache_dir() -> int:
     try:
         print(cache_dir_or_probe())
     except RuntimeError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    return 0
+
+
+def print_sandbox_state(repo: Path) -> int:
+    # 0020: the trains read this one word to pick their sandbox gate.
+    try:
+        print(sandbox_state(repo))
+    except SettingsError as exc:
         print(exc, file=sys.stderr)
         return 1
     return 0
@@ -259,9 +299,16 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="print the plugin cache directory as one absolute path and exit",
     )
+    parser.add_argument(
+        "--sandbox-state",
+        action="store_true",
+        help="print the sandbox state (on, off or configured-unavailable) and exit",
+    )
     args = parser.parse_args(argv)
     if args.print_cache_dir:
         return print_cache_dir()
+    if args.sandbox_state:
+        return print_sandbox_state(Path(args.repo).resolve())
     all_ok = True
     for ok, line in checks(Path(args.repo).resolve()):
         print(line)

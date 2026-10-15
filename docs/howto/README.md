@@ -5,19 +5,23 @@ This guide assumes you have never seen this plugin. Each section says what to ty
 
 ## What Daedalus does
 
-Daedalus is a Claude Code plugin. Today it does seven things. It writes a hash-chained audit log of every tool call the hook matcher routes (Bash, file edits, web fetches, agent spawns, messages, MCP tools). Each record carries the hash of the one before it, so an edited record, or one removed from the middle, breaks the chain. It confines each agent to a jail: a PreToolUse hook checks every tool call against the rules for that agent and blocks anything outside them. It ships recommended sandbox settings for you to merge into your own settings. It has a first-run doctor that checks your setup. It renders an audit report, a readable digest of one session's log, with `/daedalus:audit-report`. It runs a Build Train with `/daedalus:build-train`. The train splits a task into units and gives each unit to a coding agent in its own git worktree. Agents raise questions to specialists, and an adversarial security audit runs before the units are merged locally. It runs a Push Train with `/daedalus:push-train`, which commits, pushes, and opens the pull request for a finished Build Train. You review and merge.
+Daedalus is a Claude Code plugin. Today it does seven things. It writes a hash-chained audit log of every tool call the hook matcher routes (Bash, file reads, searches and edits, web fetches, agent spawns, messages, MCP tools). Each record carries the hash of the one before it, so an edited record, or one removed from the middle, breaks the chain. It confines each agent to a jail: a PreToolUse hook checks every tool call against the rules for that agent and blocks anything outside them. It turns on the OS sandbox with `/daedalus:setup` when you ask it to, and refuses reads of your credential stores through file tools and the Bash forms it models. It has a first-run doctor that checks your setup. It renders an audit report, a readable digest of one session's log, with `/daedalus:audit-report`. It runs a Build Train with `/daedalus:build-train`. The train splits a task into units and gives each unit to a coding agent in its own git worktree. Agents raise questions to specialists, and an adversarial security audit runs before the units are merged locally. It runs a Push Train with `/daedalus:push-train`, which commits, pushes, and opens the pull request for a finished Build Train. You review and merge.
 
-## Install for one session
+## Install
 
-From inside your own project, pass the path where you cloned Daedalus:
+Inside any Claude Code session, type:
 
-    claude --plugin-dir /path/to/Daedalus
+    /plugin install daedalus --marketplace bradduhon/Daedalus
 
 Every Daedalus command acts on the repository you started Claude Code in.
 
-Where it runs: any shell with the claude CLI on PATH. Daedalus is verified on Claude Code 2.1.280 (`claude --version`); older versions are untested.
-What you will see: a normal Claude Code session. The audit log starts recording immediately.
-If it fails: `unknown option --plugin-dir` means the CLI is too old. Run `claude --version`.
+Where it runs: any Claude Code session, version 2.1.275 or later (`claude --version`). Daedalus is verified on Claude Code 2.1.280.
+What you will see: Claude Code asks you to confirm the marketplace, then to pick a scope. Pick "Install for you". The audit log starts recording once the plugin is active.
+If it fails: when your Claude Code does not accept `--marketplace`, run these two commands from a shell instead, then start Claude Code:
+
+    claude plugin marketplace add bradduhon/Daedalus
+
+    claude plugin install daedalus@daedalus
 
 ## First run
 
@@ -27,18 +31,36 @@ Inside the session type:
 
 It lists every file and tool daedalus needs and whether each is present, with a `Next:` line for each missing one. Nothing is changed by running it. Every file it checks is described, with a minimal example, in `docs/project-requirements.md`.
 
-Example output (abridged; a real run prints one line per check):
+Example output from a real run in a new repository with one empty commit, on a machine with no Daedalus settings, gitleaks missing and gh not signed in. Your paths differ, and the doctor prints your home directory in full where this shows `~`:
 
     OK   python >= 3.12
     OK   project data dir: /work/my-service/.claude/daedalus (will be created by the first hook)
-    MISS config.json: /work/my-service/.claude/daedalus/config.json not found. Next: create it from the example in docs/project-requirements.md
+    OK   config.json: not present, defaults in use
+    OK   ledger: none found (the Build Train asks before creating docs/decisions.md)
+    OK   standards_sources: not declared (optional)
+    OK   policy: not declared (optional)
     OK   cache dir: none yet (create it with scripts/refresh_nist_oscal.py or by hand per docs/project-requirements.md)
-    OK   worktree.baseRef is head
-    OK   gitleaks on PATH
+    OK   plugin root: ~/.claude/plugins/cache/daedalus/daedalus/2.0.0
+    MISS sandbox: off. Next: run /daedalus:setup
+    MISS gitleaks on PATH: not found. Next: the Push Train scans commits with gitleaks; install it so the scan can run
+    OK   gh on PATH
+    MISS gh authenticated: gh auth status exited 1. Next: run gh auth login
+    OK   bwrap on PATH
+    OK   socat on PATH
+    OK   git repository
+    OK   clean working tree
     MISS service-manifest.json: not found at repo root. Next: create it from the example in docs/project-requirements.md
+    MISS contracts/: directory missing. Next: mkdir contracts and add openapi.yaml or events/*.schema.json
+    MISS .gitleaks.toml: not found at repo root. Next: copy the baseline from docs/project-requirements.md
     daedalus doctor: fix each MISS line, then rerun
 
-Once the directory exists the doctor also checks that `.claude/daedalus/.gitignore` holds a `*` line and that git ignores the directory. The cache dir line is informational and never a MISS. The `worktree.baseRef` line reads `~/.claude/settings.json`, then `.claude/settings.json` and `.claude/settings.local.json` in the repo, and passes only when the last one that sets it says `head`; coder worktrees then branch from the Build Train's integration branch. When more than one `~/.claude/plugins/data/daedalus*` directory exists, it names each one.
+In a new repository the last three lines stay `MISS` until you add those files; `docs/project-requirements.md` has an example of each. Once the directory exists the doctor also checks that `.claude/daedalus/.gitignore` holds a `*` line and that git ignores the directory. The cache dir and plugin root lines are informational and never a MISS. When more than one `~/.claude/plugins/data/daedalus*` directory exists, the cache dir line names each one. The plugin root is the directory the commands in this guide call `<plugin>`. On macOS the `bwrap` and `socat` lines do not appear.
+
+The `sandbox` line reads `~/.claude/settings.json`, then `.claude/settings.json` and `.claude/settings.local.json` in the repo; the last one that sets `sandbox.enabled` wins. It reads `on` when that value is true and `bwrap` and `socat` are on PATH, `configured-unavailable` when the value is true and a tool is missing, and `off` otherwise. When one of those files is not valid JSON, the line reads `MISS sandbox: <path> is not valid JSON (...). Next: fix <path>` instead. While it is not `on`, each new session starts with the same line. To turn the sandbox on, type:
+
+    /daedalus:setup
+
+Setup checks for `bwrap` and `socat` first. When one is missing it writes nothing and prints what to install: the apt line on Debian and Ubuntu, the package names elsewhere. On Ubuntu it reads `daedalus setup: bwrap, socat not on PATH; nothing written. Next: run sudo apt-get install -y bubblewrap socat, then rerun /daedalus:setup`. Otherwise it merges the sandbox, the credential deny rules and the two prompt cache settings into `~/.claude/settings.json`. It adds keys you lack and deny entries you lack, never overwrites a value you set, prints the change, and ends with `Restart Claude Code to apply`. It rewrites the file as JSON with a 2-space indent. Restart Claude Code after it writes. Without the sandbox the Build Train still runs and says `Sandbox: off` in its summary; the Push Train refuses.
 
 Each `OK` line is a check that passed. Each `MISS` line names what is missing and, after `Next:`, what to do about it. The doctor exits 0 when every check passes and 1 otherwise. Fix the `MISS` lines and run it again.
 
@@ -47,10 +69,12 @@ Each `OK` line is a check that passed. Each `MISS` line names what is missing an
 | Thing | Path | Who writes it |
 |---|---|---|
 | Audit logs, one per session | `<repo>/.claude/daedalus/audit/<session_id>.jsonl` | hooks only, and the jail refuses tool writes there |
-| Plugin config | `<repo>/.claude/daedalus/config.json` | you, from your own shell |
+| Plugin config, optional | `<repo>/.claude/daedalus/config.json` | you, from your own shell, when you need it |
 | Machine caches (NIST, CIS) | `${CLAUDE_PLUGIN_DATA}`, under `~/.claude/plugins/data/` | the plugin's refresh scripts |
 | Build Train scratch files and summary | `<repo>/docs/.tmp/daedalus/` | the Build Train; a `*` marker inside keeps it out of git |
-| Recommended settings | `settings.recommended.json` in this repo | you merge it into `~/.claude/settings.json` |
+| Recommended settings | `settings.recommended.json` in the plugin | `/daedalus:setup` merges it into `~/.claude/settings.json` |
+| Running-train marker | `<repo>/.claude/daedalus/train.active` | each train, removed when it ends or stops |
+| Coder worktrees | `<repo>/.claude/worktrees/<train-id>-<unit-slug>` | the Build Train, removed when it ends or stops |
 
 `<repo>` is the main working tree of the git repository you started Claude Code in. Every worktree of that repository shares the one `.claude/daedalus/` directory. Outside a git repository, `<repo>` is the starting directory itself. The first hook writes `.claude/daedalus/.gitignore` with a single `*` line, so git ignores the directory and your own `.gitignore` is untouched. The jail also refuses any `git add` or `git commit` that names `.claude/daedalus`.
 
@@ -62,7 +86,7 @@ Uninstalling the plugin leaves the audit logs and config in the repo. A copy of 
 
 When daedalus refuses an action you see a line like:
 
-    daedalus-jail[repo-coder]: write outside src/ or tests/ of your worktree: /work/repo/infra/x.tf. Next: ask Fable to route this to contract-spec or charter-docs.
+    daedalus-jail[repo-coder]: write outside src/ or tests/ of your unit worktree: /work/repo/infra/x.tf. Next: ask Fable to route this to contract-spec or charter-docs.
 
 The name in brackets is the agent that was blocked. The part before `Next:` is what was refused and why. The part after is what to do instead. Fable is the orchestrating session you are talking to, not the plugin.
 
@@ -103,7 +127,7 @@ It prints `OK: <n> records, chain intact, head=<hash>` for an intact log, or the
 
 ### Saving the report
 
-When `<repo>/.claude/daedalus/config.json` sets `charter_root`, the skill asks whether to render the report again and save it to `<charter_root>/audit/<session>.md`. A live session gains a few records between the two runs, so the saved file can hold more than the screen showed. If `<charter_root>/audit` does not exist yet, the skill offers to create it. Say yes and the file is written there for the charter-docs agent to commit in a later Build Train. Say no, or leave `charter_root` unset, and the digest stays on screen only.
+When the optional `<repo>/.claude/daedalus/config.json` sets `charter_root`, the skill asks whether to render the report again and save it to `<charter_root>/audit/<session>.md`. A live session gains a few records between the two runs, so the saved file can hold more than the screen showed. If `<charter_root>/audit` does not exist yet, the skill offers to create it. Say yes and the file is written there for the charter-docs agent to commit in a later Build Train. Say no, or leave `charter_root` unset, and the digest stays on screen only.
 
 You can also write it yourself, from the repo directory. Create the folder first:
 
@@ -126,19 +150,21 @@ Start from a clean working tree on the branch you want to build from. Inside the
 
     /daedalus:build-train Add a /healthz endpoint that returns the build version
 
-Where it runs: a Claude Code session started inside the target repository, with `<repo>/.claude/daedalus/config.json` in place (see `docs/project-requirements.md`). Run `/daedalus:doctor` first if you have not.
+Where it runs: a Claude Code session started inside the target repository. `<repo>/.claude/daedalus/config.json` is optional (see `docs/project-requirements.md`). Run `/daedalus:doctor` first if you have not.
 
 ### Before anything is built
 
 The train runs these checks and stops with a `Next:` line when one fails:
 
 - The working tree must be clean. Commit or stash first.
-- `config.json` must exist and be valid JSON.
+- `config.json` is optional. When it exists it must be valid JSON.
 - A decision ledger must exist. The train runs `append_ledger.py --probe`. If no ledger is declared and none is found, it asks: "This repo has no decision ledger. Options: name an existing file, or let Daedalus create docs/decisions.md as a table. Which?" Naming a file means you add a `ledger` block for it to config.json from your own shell. Choosing create writes `docs/decisions.md` holding only the table header and separator, which the probe reads as `seq=0`; you review and commit it, then start the train again.
 - The hooks must be writing this session's audit log. The train reads the newest log in `<repo>/.claude/daedalus/audit/` and looks for its own probe command as the last Bash record. If it is not there, the jail is not enforcing and the train stops. Run `/daedalus:doctor`.
 - Before the first NIST or CIS question, the plugin cache must exist. If `daedalus_doctor.py --print-cache-dir` finds none, run `/daedalus:doctor` once and start again.
 
-The train creates `docs/.tmp/daedalus/` with a `*` marker so git ignores its scratch files and summary.
+The train also records the sandbox state. With the sandbox not `on` it still runs and puts `Sandbox: off` (or `Sandbox: configured-unavailable`) in its summary. It stops before the security audit and the merge when a unit touched IAM, KMS, mTLS, key custody or infrastructure config. Run `/daedalus:setup`, restart Claude Code, and run the train again.
+
+The train creates `docs/.tmp/daedalus/` with a `*` marker so git ignores its scratch files and summary. It writes `<repo>/.claude/daedalus/train.active` while it runs and removes it when it ends or stops. While that file exists, agents from Claude Code itself or from other plugins are refused every checked tool except reads and searches.
 
 ### The State Block
 
@@ -159,7 +185,7 @@ The Build Train saves the Locked Contract Packet to a file, and the train's main
 
 The standards specialist reads the sources you declared in `standards_sources` and your ledger. It writes a Standards Packet: the rules that apply to this task. If your task contradicts one of your own standards, the train stops and shows both sides: your words, and the rule with its file and line. Reword the task or change the standard, then start again. The train never picks a side.
 
-The contract agent then writes a Locked Contract Packet with a `packet_version`. Every coding agent gets both packets at the top of its prompt. Each coding agent works in its own worktree under `.claude/worktrees/`, where the train writes a `.gitignore` holding `*`. The train removes every worktree after the merge and before any stop once coding has begun, so worktrees never outlive the train. Changes a coding agent left uncommitted were never audited: the train lists them, then discards them.
+The contract agent then writes a Locked Contract Packet with a `packet_version`. Every coding agent gets both packets at the top of its prompt. The train creates each coding agent's worktree at `<repo>/.claude/worktrees/<train-id>-<unit-slug>`, on the branch `daedalus-unit/<train-id>-<unit-slug>` cut from the integration branch, and writes a `.gitignore` holding `*` in `.claude/worktrees/`. No setting is needed for this. A coding agent may write only inside the `src/` and `tests/` directories of its own worktree. The train removes every worktree after the merge and before any stop once coding has begun, so worktrees never outlive the train. Changes a coding agent left uncommitted were never audited: the train lists them, then discards them.
 
 ### What each yield means
 
@@ -219,8 +245,10 @@ With no argument it pushes the newest Build Train in `docs/.tmp/daedalus/`. To p
 
 The train stops, with a `Next:` line, when any of these fails:
 
+- The sandbox is not `on`. The Push Train needs it. Run `/daedalus:setup`, restart Claude Code, and run the train again.
 - You are not on the `daedalus/<train-id>` branch the summary names.
 - `gitleaks` is not installed. Install it (https://github.com/gitleaks/gitleaks#installing) and rerun; the train never pushes without the secret scan.
+- `gh auth status` fails. Run `gh auth login` and rerun; the conductor opens the pull request with gh.
 - The working tree has unstaged or untracked changes. Staged changes are fine; the conductor commits them.
 - This session's hooks are not writing the audit log. Run `/daedalus:doctor`.
 - An audit log fails its hash chain check. Keep the file, report it, and do not edit it, as in "When the chain is BROKEN" above.
@@ -251,6 +279,15 @@ With a Charter branch, items 6 to 8 push it, open its pull request, and merge it
 ### What BLOCKED means
 
 `[STATUS: BLOCKED] <detail>` from the conductor means a check it runs failed before anything changed on GitHub, or a command it needed was refused. The most common detail is `gitleaks findings`: the scan found something that looks like a secret in the branch's commits. The findings are shown with the secret redacted. Rotate the credential, remove it from the branch history from your own shell, and run `/daedalus:push-train` again. For any other detail, do what the detail names and rerun.
+
+## Developing Daedalus
+
+To try a local checkout of Daedalus for one session instead of the installed plugin, start Claude Code inside your own project with the path to the checkout:
+
+    claude --plugin-dir /path/to/Daedalus
+
+Where it runs: any shell with the claude CLI on PATH. A `--plugin-dir` session uses the cache directory `daedalus-inline`; the marketplace install uses `daedalus-daedalus`.
+If it fails: `unknown option --plugin-dir` means the CLI is too old. Run `claude --version`.
 
 ## Sections added by later plans
 

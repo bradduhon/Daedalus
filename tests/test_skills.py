@@ -466,10 +466,8 @@ def test_build_train_keeps_dirty_trees_on_the_train_branch() -> None:
 def test_build_train_keeps_worktrees_out_of_git_and_the_train() -> None:
     # R3-O1, R4-I3, R4-M1: worktrees are ignored, listed, force-removed on every exit.
     text = _build_train()
-    assert (
-        "if `<repo>/.claude/worktrees/.gitignore` is absent write it with the single line `*`"
-        in (text)
-    )
+    # 0022: daedalus_workspace.py create writes the worktrees ignore marker itself.
+    assert "<repo>/.claude/worktrees/.gitignore" not in text
     rules = text.split("## Preconditions", 1)[0]
     teardown = rules.split("- Worktree teardown: ", 1)[1].split("\n", 1)[0]
     assert teardown.startswith(
@@ -478,11 +476,16 @@ def test_build_train_keeps_worktrees_out_of_git_and_the_train() -> None:
     )
     order = [
         "show `git -C <path> status --porcelain` (the changes being discarded)",
-        "run `git worktree remove --force <path>`",
-        "then `git worktree prune` once at the end",
+        "run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py remove --repo <repo> "
+        "--name <train-id>-<unit-slug>`",
+        "it removes the worktree, keeps its branch, and prunes",
     ]
     assert [teardown.index(s) for s in order] == sorted(teardown.index(s) for s in order)
     assert "they are discarded, never committed." in teardown
+    assert teardown.rstrip().endswith(
+        "Next: run `git worktree remove --force <path>` and `git worktree prune` from your own "
+        "shell."
+    )
     # R5-C1: only the State Block's unit branches are torn down.
     assert (
         "the scope is only the unit branches recorded in the State Block, each matched by its "
@@ -634,11 +637,10 @@ def test_push_train_hands_the_charter_to_the_operator() -> None:
     assert "The train does not stop here; go on to the hand-off." in _push_train()
 
 
-# Fix wave after the whole-branch review (C1, I2, M4).
-BASE_REF_STOP = (
-    '"Unit <b> does not descend from the integration branch; worktrees are branching from the '
-    "default branch. Next: set worktree.baseRef to head in your settings (run /daedalus:doctor) "
-    'and rerun the train."'
+# 0022: the train makes the worktrees; the merge-base check stays as a defence.
+DESCENT_STOP = (
+    '"Unit <b> does not descend from the integration branch. Next: rerun the train; if it '
+    'repeats, file an issue with the train summary."'
 )
 
 
@@ -647,11 +649,93 @@ def test_build_train_checks_each_unit_descends_from_the_lock() -> None:
     assert "packet_version: <n>  contract: <contract path>  lock: <sha>" in text
     phase1 = text.split("## Phase 1", 1)[1].split("## Phase 2", 1)[0]
     assert "Run `git rev-parse daedalus/<train-id>` and record it as `lock: <sha>`" in phase1
-    assert "coders branch from it when `worktree.baseRef` is `head`" in phase1
+    assert "Phase 2 creates every coder worktree from it" in phase1
+    assert "baseRef" not in text
     complete = next(line for line in text.splitlines() if line.startswith("| `[STATUS: COMPLETE]"))
-    check = "Run `git merge-base --is-ancestor <lock sha> <b>` with the State Block `lock:` sha."
+    check = (
+        "Then run `git merge-base --is-ancestor <lock sha> <b>` with the State Block `lock:` sha."
+    )
     assert check in complete
-    assert f"A non-zero exit: stop with {BASE_REF_STOP} Otherwise record branch" in complete
+    assert f"A non-zero exit: stop with {DESCENT_STOP} Otherwise record packet_version" in complete
+    assert "Otherwise record branch" not in complete
+
+
+BRANCH_STOP = (
+    '"Unit <unit> reported branch <b>; the train created daedalus-unit/<train-id>-<unit-slug>. '
+    'Next: rerun the train; if it repeats, file an issue with the train summary."'
+)
+
+
+def test_build_train_requires_the_reported_branch_to_be_the_created_one() -> None:
+    # 0022: daedalus/<train-id> is its own ancestor and would merge as a no-op.
+    complete = next(
+        line for line in _build_train().splitlines() if line.startswith("| `[STATUS: COMPLETE]")
+    )
+    compare = (
+        "First compare `<b>` with the branch the State Block recorded for that unit in Phase 2. "
+        f"A mismatch: stop with {BRANCH_STOP}"
+    )
+    assert compare in complete
+    assert complete.index(compare) < complete.index("git merge-base --is-ancestor")
+    assert "the unit's branch stays the one Phase 2 recorded" in complete
+
+
+def test_build_train_creates_each_coder_worktree() -> None:
+    phase2 = _section(_build_train(), "## Phase 2", "## Phase 3")
+    assert (
+        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py create --repo <repo> "
+        "--name <train-id>-<unit-slug> --base daedalus/<train-id>`"
+    ) in phase2
+    assert (
+        "`git worktree add -q -b daedalus-unit/<train-id>-<unit-slug> "
+        "<repo>/.claude/worktrees/<train-id>-<unit-slug> daedalus/<train-id>`"
+    ) in phase2
+    assert "the line `Worktree: <path>` naming its working directory" in phase2
+    # 0022: the coder prompt binds file paths and git pathspecs to the worktree.
+    assert (
+        "every file path and every git pathspec you use is absolute or goes through `git -C <path>`"
+    ) in phase2
+    assert phase2.index("daedalus_workspace.py create") < phase2.index("Agent(`repo-coder`)")
+
+
+def test_build_train_guards_the_main_checkout_before_merging() -> None:
+    phase3 = _section(_build_train(), "## Phase 3", "\n5. The summary")
+    merge = phase3.split("\n4. ", 1)[1]
+    assert merge.index("Run `git status --porcelain`.") < merge.index("git merge --no-ff")
+    assert "a coder changed the main checkout instead of its worktree" in merge
+
+
+MARK = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py mark --repo <repo> --train "
+UNMARK = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py unmark --repo <repo>`"
+
+
+def test_build_train_marks_the_train_active_and_clears_it() -> None:
+    # 0023: written once Preconditions pass, removed at the end and on every stop after it.
+    text = _build_train()
+    pre = _section(text, "## Preconditions", "**State Block**")
+    step9 = pre.split("\n9. ", 1)[1]
+    assert MARK + "<train-id>`" in step9
+    assert "<repo>/.claude/daedalus/train.active" in step9
+    rules = text.split("## Preconditions", 1)[0]
+    marker = rules.split("- Train marker: ", 1)[1].split("\n", 1)[0]
+    assert "every stop that follows" in marker
+    assert UNMARK in marker
+    assert "writes the marker again with the Preconditions step 9 command" in marker
+    assert UNMARK in text.split("\n6. Print the State Block", 1)[1]
+
+
+def test_push_train_marks_the_train_active_and_clears_it() -> None:
+    # 0023: the Push Train writes the marker after its preconditions and removes it at its end.
+    text = _push_train()
+    pre = _section(text, "## Preconditions", "## Push")
+    step11 = pre.split("\n11. ", 1)[1]
+    assert MARK + "<train-id>`" in step11
+    rules = text.split("## Preconditions", 1)[0]
+    marker = rules.split("- Train marker: ", 1)[1].split("\n", 1)[0]
+    assert "every stop that follows" in marker
+    assert UNMARK in marker
+    hand_off = text.split("## Hand-off", 1)[1]
+    assert hand_off.index(UNMARK) < hand_off.index("1. Review the pull request")
 
 
 def test_build_train_never_respawns_a_coder() -> None:
@@ -661,7 +745,11 @@ def test_build_train_never_respawns_a_coder() -> None:
         '"Coder for unit <b> cannot be resumed. Next: rerun the train; the unit branch <b> is '
         'kept for reference."'
     ) in text
-    assert "If SendMessage to a coder fails, never start a replacement coder" in text
+    assert (
+        "If SendMessage to a coder fails, never start a replacement coder; a replacement coder "
+        "would start without the first coder's context and the unit's half-done state."
+    ) in text
+    assert "cannot move to <b>" not in text
 
 
 def test_build_train_liveness_uses_no_bash() -> None:
@@ -689,3 +777,72 @@ def test_skill_script_commands_are_allowed_for_main() -> None:
         payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": root}
         d = decide(payload, Config())
         assert d.allow, (command, d.reason)
+
+
+SETUP = REPO_ROOT / "skills" / "setup" / "SKILL.md"
+
+
+def test_setup_skill_runs_the_setup_script_only_when_asked() -> None:
+    # 0020: setup is never automatic; the operator types it.
+    fields, body = _split(SETUP)
+    assert fields["disable-model-invocation"] == "true"
+    assert "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_setup.py`" in body
+    assert "never run it on your own" in body
+    assert "Restart Claude Code to apply" in body
+
+
+TRAIN_SKILLS = [p for p in SKILLS if p.parent.name.endswith("-train")]
+SANDBOX_NEXT_LINE = "Next: run /daedalus:setup, restart, rerun the train."
+SANDBOX_STATE_CMD = "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_doctor.py --sandbox-state"
+
+
+@pytest.mark.parametrize("path", TRAIN_SKILLS, ids=lambda p: p.parent.name)
+def test_every_train_declares_a_sandbox_class(path: Path) -> None:
+    # 0020: per train class, never hard-wired to one train (0022).
+    assert _split(path)[0].get("sandbox") in {"optional", "required"}
+
+
+def test_train_sandbox_classes() -> None:
+    classes = {p.parent.name: _split(p)[0].get("sandbox") for p in TRAIN_SKILLS}
+    assert classes == {"build-train": "optional", "push-train": "required"}
+
+
+def test_build_train_records_the_sandbox_state() -> None:
+    text = _build_train()
+    step = _section(text, "## Preconditions", "## Phase 1").split("\n8. ", 1)[1]
+    assert f"`{SANDBOX_STATE_CMD} --repo <repo>`" in step
+    assert "The Build Train runs in every state." in step
+    assert "    sandbox: <on, off or configured-unavailable>" in text
+    assert "       Sandbox: <on, off or configured-unavailable>" in text
+
+
+def test_build_train_stops_infrastructure_units_without_the_sandbox() -> None:
+    phase3 = _section(_build_train(), "## Phase 3", "\n5. The summary")
+    gate = phase3.split("\n1. ", 1)[1].split("\n2. ", 1)[0]
+    assert (
+        "When the State Block `sandbox:` is not `on` and any unit touched IAM, KMS, mTLS, "
+        "key custody or infrastructure config, stop before the security audit and before any "
+        "merge, naming those units. " + SANDBOX_NEXT_LINE
+    ) in gate
+    assert gate.index("`sandbox:` is not `on`") < gate.index("Agent(`nist-specialist`)")
+
+
+def test_push_train_requires_the_sandbox_first() -> None:
+    pre = _section(_push_train(), "## Preconditions", "\n1. ")
+    assert f"`{SANDBOX_STATE_CMD} --repo .`" in pre
+    refusal = "Any word but `on`: stop. The Push Train needs the OS sandbox. "
+    assert refusal + SANDBOX_NEXT_LINE in pre
+
+
+def test_push_train_checks_gh_beside_gitleaks() -> None:
+    step = _push_train().split("\n5. ", 1)[1].split("\n6. ", 1)[0]
+    assert "Then run `gh auth status`. A non-zero exit: stop." in step
+    assert "Next: gh auth login" in step
+    assert "or `gh` yourself" not in _push_train()
+
+
+def test_build_train_runs_without_config_json() -> None:
+    step = _build_train().split("\n3. ", 1)[1].split("\n4. ", 1)[0]
+    assert "Missing: defaults are in use" in step
+    assert "Not valid JSON: stop." in step
+    assert "Missing or not valid JSON" not in step

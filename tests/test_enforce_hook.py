@@ -70,9 +70,19 @@ def test_closed_stderr_still_exits_two(monkeypatch: pytest.MonkeyPatch) -> None:
     assert enforce_agent_jail._block("repo-coder", "x. Next: y.") == 2
 
 
-def test_unknown_agent_blocks(run_script: Any, hook_input: Any) -> None:
+def test_unknown_agent_blocks_during_a_train(
+    run_script: Any, project_data: Path, hook_input: Any
+) -> None:
+    (project_data / "train.active").write_text("20261015-120000\n")
     result = run_script("enforce_agent_jail.py", hook_input(agent_type="ghost"))
     assert result.returncode == 2 and "fail closed" in result.stderr
+
+
+def test_unknown_agent_passes_without_a_train(
+    run_script: Any, project_data: Path, hook_input: Any
+) -> None:
+    result = run_script("enforce_agent_jail.py", hook_input(agent_type="ghost"))
+    assert result.returncode == 0, result.stderr
 
 
 def test_unwritable_audit_dir_fails_closed(
@@ -254,3 +264,121 @@ def test_cwd_fallback_warns_on_stderr_and_allows(
     result = run_script("enforce_agent_jail.py", hook_input(cwd=str(plain)))
     assert result.returncode == 0, result.stderr
     assert result.stderr.startswith("daedalus-audit: project root fell back to cwd (")
+
+
+def _run_home(payload: dict[str, Any], home: Path, plugin_data: Path) -> Any:
+    # spec 8, 0023: HOME points at a temp dir so the credential deny never sees the real home.
+    env = dict(os.environ, HOME=str(home), CLAUDE_PLUGIN_DATA=str(plugin_data))
+    return subprocess.run(
+        [sys.executable, str(_SCRIPT)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+
+@pytest.fixture
+def temp_home(tmp_path: Path) -> Path:
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "id_ed25519").write_text("key\n")
+    return home
+
+
+def test_explore_read_of_a_normal_file_is_allowed_and_audited(
+    temp_home: Path, plugin_data: Path, project_data: Path, repo_cwd: Path, hook_input: Any
+) -> None:
+    # spec 8, 0023: an allowed Read through the jail still lands an audit record.
+    target = repo_cwd / "notes.txt"
+    target.write_text("x\n")
+    payload = hook_input(
+        agent_type="Explore", tool_name="Read", tool_input={"file_path": str(target)}
+    )
+    result = _run_home(payload, temp_home, plugin_data)
+    assert result.returncode == 0, result.stderr
+    rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
+    assert rec["decision"] == "allow" and rec["tool_name"] == "Read"
+
+
+def test_explore_read_of_an_ssh_key_is_refused(
+    temp_home: Path, plugin_data: Path, project_data: Path, hook_input: Any
+) -> None:
+    key = temp_home / ".ssh" / "id_ed25519"
+    payload = hook_input(agent_type="Explore", tool_name="Read", tool_input={"file_path": str(key)})
+    result = _run_home(payload, temp_home, plugin_data)
+    assert result.returncode == 2
+    assert result.stderr.startswith("daedalus-jail[Explore]:"), result.stderr
+
+
+def test_main_grep_rooted_at_home_is_refused(
+    temp_home: Path, plugin_data: Path, project_data: Path, hook_input: Any
+) -> None:
+    payload = hook_input(tool_name="Grep", tool_input={"pattern": "x", "path": str(temp_home)})
+    result = _run_home(payload, temp_home, plugin_data)
+    assert result.returncode == 2
+    assert result.stderr.startswith("daedalus-jail[main]:"), result.stderr
+
+
+def test_main_glob_over_the_repo_is_allowed(
+    temp_home: Path, plugin_data: Path, project_data: Path, repo_cwd: Path, hook_input: Any
+) -> None:
+    payload = hook_input(tool_name="Glob", tool_input={"pattern": "*", "path": str(repo_cwd)})
+    result = _run_home(payload, temp_home, plugin_data)
+    assert result.returncode == 0, result.stderr
+
+
+def test_absent_config_allows_main_bash_and_writes_the_log(
+    run_script: Any, repo_cwd: Path, hook_input: Any
+) -> None:
+    # 0020: config.json is optional; absence is the empty config, never a block.
+    result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "git status"}))
+    assert result.returncode == 0, result.stderr
+    data = repo_cwd / ".claude" / "daedalus"
+    assert not (data / "config.json").exists()
+    assert list((data / "audit").glob("*.jsonl"))
+
+
+def test_bad_config_still_allows_a_normal_read(
+    temp_home: Path, plugin_data: Path, project_data: Path, repo_cwd: Path, hook_input: Any
+) -> None:
+    # 0023: a broken config.json leaves the credential deny as the only gate on reads.
+    (project_data / "config.json").write_text("{bad")
+    target = repo_cwd / "notes.txt"
+    target.write_text("x\n")
+    payload = hook_input(tool_name="Read", tool_input={"file_path": str(target)})
+    result = _run_home(payload, temp_home, plugin_data)
+    assert result.returncode == 0, result.stderr
+
+
+def test_bad_config_still_refuses_an_ssh_key_read(
+    temp_home: Path, plugin_data: Path, project_data: Path, hook_input: Any
+) -> None:
+    (project_data / "config.json").write_text("{bad")
+    key = temp_home / ".ssh" / "id_ed25519"
+    payload = hook_input(tool_name="Read", tool_input={"file_path": str(key)})
+    result = _run_home(payload, temp_home, plugin_data)
+    assert result.returncode == 2
+    assert "credential path" in result.stderr, result.stderr
+
+
+def test_bad_config_still_blocks_bash(
+    temp_home: Path, plugin_data: Path, project_data: Path, hook_input: Any
+) -> None:
+    (project_data / "config.json").write_text("{bad")
+    result = _run_home(hook_input(tool_input={"command": "ls"}), temp_home, plugin_data)
+    assert result.returncode == 2 and "config.json" in result.stderr
+
+
+def test_unwritable_audit_dir_still_allows_a_read(
+    temp_home: Path, plugin_data: Path, project_data: Path, repo_cwd: Path, hook_input: Any
+) -> None:
+    # spec 8: an allowed read never waits on the audit record; the stderr line names the failure.
+    (project_data / "audit").write_text("not a directory")
+    target = repo_cwd / "notes.txt"
+    target.write_text("x\n")
+    payload = hook_input(tool_name="Read", tool_input={"file_path": str(target)})
+    result = _run_home(payload, temp_home, plugin_data)
+    assert result.returncode == 0, result.stderr
+    assert "audit log unavailable" in result.stderr

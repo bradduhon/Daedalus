@@ -12,8 +12,8 @@ from typing import Any
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from lib.audit import audit_append, root_info
-    from lib.config import load_config
-    from lib.jail import Decision, decide
+    from lib.config import Config, load_config
+    from lib.jail import CREDENTIAL_TOOLS, Decision, decide
 except Exception as _exc:  # noqa: BLE001
     print(
         f"daedalus-jail[?]: hook could not load its libraries ({_exc}). "
@@ -34,6 +34,13 @@ def _block(agent: str, message: str, next_step: str = _REPORT_NEXT) -> int:
     except OSError:
         pass  # m5: a closed stderr must not turn the block into exit 1.
     return 2
+
+
+def _note(agent: str, message: str) -> None:
+    try:
+        print(f"daedalus-jail[{agent}]: {message}", file=sys.stderr)
+    except OSError:
+        pass  # m5: a closed stderr must not turn an allow into exit 1.
 
 
 def _warn_fallback(cwd: str) -> None:
@@ -58,15 +65,25 @@ def _record_and_block(
 
 
 def _judge(payload: dict[str, Any], agent: str) -> int:
+    cwd = payload.get("cwd")
+    # 0023: reads carry only the credential deny, so a broken data dir never closes them.
+    read = payload.get("tool_name") in CREDENTIAL_TOOLS and isinstance(cwd, str)
+    read = read and Path(cwd).is_absolute()
     try:
-        config = load_config(payload.get("cwd"))
+        config = load_config(cwd)
     except Exception as exc:  # noqa: BLE001
-        return _record_and_block(payload, agent, str(exc), _CONFIG_NEXT)
+        if not read:
+            return _record_and_block(payload, agent, str(exc), _CONFIG_NEXT)
+        config = Config()
     decision: Decision = decide(payload, config)
     agent = decision.agent or agent
     try:
         record = audit_append(payload, "allow" if decision.allow else "block", decision.reason)
     except Exception as exc:  # noqa: BLE001
+        if read and decision.allow:
+            # spec 8: an allowed read is non-blocking on a failed record, as audit_log.py is.
+            _note(agent, f"audit log unavailable ({exc}); the read proceeds unrecorded.")
+            return 0
         # 8.5: no record, no action. The jail fails closed when the chain cannot be written.
         detail = f"audit log unavailable ({exc})."
         if "Next:" not in detail:

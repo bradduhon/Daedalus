@@ -2,18 +2,22 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import fnmatch
 import itertools
 import os
 import re
 import shlex
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from lib.audit import project_data_dir, project_root
+from lib.audit import _git_env, project_data_dir, project_root
 from lib.config import Config
 from lib.ledger import LedgerError, resolve_ledger
+from lib.workspace import UNMARK_NEXT, train_marker
 
 KNOWN_AGENTS = frozenset(
     {
@@ -34,6 +38,10 @@ WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 WEB_TOOLS = frozenset({"WebFetch", "WebSearch"})
 # 5.5: all routing is through Fable; workers never message each other.
 WORKER_DENIED_TOOLS = frozenset({"Task", "Agent", "SendMessage"})
+# spec 8, 0020: credential stores refused to every agent, main included; denyRead is layer two.
+CREDENTIAL_DENY = (".ssh", ".aws", ".gnupg", ".config/gh", ".claude/.credentials.json")
+# 0023: these tools carry only the credential deny, for every agent known or not.
+CREDENTIAL_TOOLS = frozenset({"Read", "Glob", "Grep"})
 
 READ_ONLY_CMDS = frozenset(
     {
@@ -74,7 +82,45 @@ CODER_GIT = frozenset(
     | {"stash", "restore", "checkout", "worktree", "config"}
 )
 # Final review I3b: commands whose operands are write targets for repo-coder.
-CODER_WRITE_CMDS = frozenset({"cp", "mv", "tee", "install", "ln", "truncate", "rsync", "dd"})
+CODER_WRITE_CMDS = frozenset(
+    {"cp", "mv", "tee", "install", "ln", "truncate", "rsync", "dd"}
+    | {"mkdir", "touch", "rm", "rmdir", "unlink", "chmod", "chown", "chgrp"}
+)
+# 0022: options whose value is not a path; every other non-option operand is a path.
+_VALUE_OPTS: dict[str, frozenset[str]] = {
+    "install": frozenset({"-m", "-o", "-g", "-S"}),
+    "mkdir": frozenset({"-m"}),
+    "truncate": frozenset({"-s"}),
+    "touch": frozenset({"-d", "-t"}),
+    "cp": frozenset({"-S"}),
+    "mv": frozenset({"-S"}),
+    "ln": frozenset({"-S"}),
+    "rsync": frozenset({"-f"}),
+}
+# 0022: short options whose attached or following value is a path operand (-t<dir>).
+_PATH_OPTS: dict[str, frozenset[str]] = {
+    "cp": frozenset({"-t"}),
+    "mv": frozenset({"-t"}),
+    "install": frozenset({"-t"}),
+    "ln": frozenset({"-t"}),
+    "touch": frozenset({"-r"}),
+    "truncate": frozenset({"-r"}),
+}
+# 0022: long options whose =x or next-token value is not a path; --preserve takes =x only.
+_VALUE_LONG_NEXT = frozenset(
+    {"--mode", "--owner", "--group", "--suffix", "--size", "--date", "--from", "--chmod"}
+    | {"--exclude", "--include", "--filter", "--exclude-from", "--include-from"}
+)
+_VALUE_LONG = _VALUE_LONG_NEXT | {"--preserve"}
+_MODE = re.compile(r"(?:[0-7]{3,4}|[ugoa]*[-+=][rwxXstugo]*)(?:,[ugoa]*[-+=][rwxXstugo]*)*")
+# 0022: shell state a worker could carry into a later segment (GIT_WORK_TREE and kin).
+SHELL_VAR_CMDS = frozenset({"export", "declare", "typeset", "readonly", "local"})
+# 0022: builtins that rebind what a later segment runs (hash pytest=/bin/rm).
+SHELL_STATE_CMDS = frozenset(
+    {"hash", "alias", "unalias", "unset", "shopt", "enable", "setopt", "unsetopt"}
+    | {"trap", "getopts"}
+)
+DIR_CHANGE_CMDS = frozenset({"cd", "pushd", "popd"})
 NETWORK_TOOLS = frozenset({"curl", "wget", "ssh", "scp", "nc", "ncat", "telnet", "aws", "gh"})
 GH_ALLOWED = {
     "pr": frozenset({"create", "edit", "view", "checks", "status", "list", "comment", "diff"}),
@@ -183,6 +229,31 @@ R_GIT_CONFIG = (
 R_ENV = (
     "environment assignments in front of a command are not permitted for workers. Next: drop them."
 )
+R_SHELL_VARS = (
+    "setting or exporting shell variables is not permitted for workers. "
+    "Next: drop it; only CI, NODE_ENV, TZ, LANG, LC_ALL, PYTHONDONTWRITEBYTECODE "
+    "may prefix a command."
+)
+R_SHELL_STATE = (
+    "shell builtins that rebind commands or shell options are not permitted for workers. "
+    "Next: run the command directly."
+)
+R_RSYNC_REMOTE = (
+    "rsync may not reach a remote host or choose a remote shell for workers. "
+    "Next: copy between local absolute paths only."
+)
+R_FIND_WRITE = (
+    "find may not delete, exec, or write files for workers. "
+    "Next: list with find, then act on the paths with an allowed command."
+)
+R_CODER_UNIT_GIT = (
+    "repo-coder git add and commit run only inside your unit worktree. "
+    "Next: use git -C <your unit worktree> add/commit."
+)
+R_CD_RELATIVE = (
+    "a chain that changes directory may not use relative write paths or pathspecs: {}. "
+    "Next: use absolute paths (or an absolute git -C) after cd."
+)
 R_HYGIENE = (
     "a token contains $, {, }, a backslash, or a leading ~; workers spell arguments literally. "
     "Next: pass the literal value."
@@ -225,7 +296,8 @@ R_GIT_PLUMBING = (
 )
 R_CODER_GIT = (
     "repo-coder git is limited to add, commit, status, diff, log, show, rev-parse, ls-files, "
-    "branch listing, stash list/push/pop/show, restore/checkout -- <src|tests paths>, "
+    "branch listing, stash list/push/pop/show, "
+    "restore/checkout -- <unit worktree src|tests paths>, "
     "worktree list. Next: use those only; the trains handle the rest."
 )
 R_DATA_DIR = (
@@ -261,8 +333,64 @@ R_DOCS_BASH = (
     "charter-docs Bash is limited to append_ledger.py, git add <path>, git commit -m, "
     "git status, git log and git diff. Next: use those only; the main session runs the rest."
 )
+R_CREDENTIAL = (
+    "{path} is a credential path. "
+    "Next: Daedalus never reads credentials; use the tool that needs them from your own shell"
+)
+R_UNKNOWN = (
+    "unknown agent_type '{agent}', fail closed. Next: add the agent to the jail before using it."
+)
+R_UNKNOWN_TRAIN = "unknown agent_type '{agent}', fail closed while {marker} exists.\n" + UNMARK_NEXT
+_CREDENTIAL_PART = re.compile(r"[=:,]")
+_GLOB_START = re.compile(r"[*?\[{]")
+_BRACE = re.compile(r"\{[^}]*\}")
+R_CREDENTIAL_TREE = (
+    "{path} contains a credential path. "
+    "Next: Daedalus never reads credentials; point the read at a directory without them"
+)
+R_CREDENTIAL_PARAM = (
+    "{path} could be a credential path; the jail cannot resolve its variable. "
+    "Next: spell the path out"
+)
+_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*|[0-9]+)[^}]*\}|\$([A-Za-z_][A-Za-z0-9_]*|[0-9])")
+_UNQUOTE = re.compile(r"[\"'\\]")
+_DURATION = re.compile(r"[\d.]+[smhd]?")
+# spec 8: lexer marks for a literal $, a quote edge that ends a name, and a redirect target.
+_LIT, _CUT, _REDIRECT = "\x00", "\x01", "\x02"
+_EXPANSION_CAP = 16
+_CONTROL_WORDS = frozenset({"!", "do", "then", "else", "elif", "while", "until", "if", "time"})
+_BINDERS = frozenset({"read", "mapfile", "readarray", "getopts", "select"})
+# spec 8: wrappers that run the next word as the command, with their value-taking options.
+_RUN_WRAPPERS = frozenset(
+    {"sudo", "env", "nice", "nohup", "time", "command", "exec", "builtin", "timeout", "stdbuf"}
+)
+_WRAPPER_VALUES: dict[str, frozenset[str]] = {
+    "sudo": frozenset({"-u", "-g"}),
+    "nice": frozenset({"-n"}),
+    "env": frozenset({"-u"}),
+    "timeout": frozenset({"-s", "-k"}),
+}
+_GREPS = frozenset({"grep", "egrep", "fgrep"})
+# spec 8: short options whose value is the next word (or the rest of the cluster).
+_SEARCH_VALUES: dict[str, frozenset[str]] = {
+    "grep": frozenset("efmABCdD"),
+    "rg": frozenset("efmABCgtTjMrE"),
+}
+_SEARCH_LONGS = frozenset(
+    {"--regexp", "--file", "--max-count", "--context", "--after-context", "--before-context"}
+    | {"--glob", "--type", "--type-not", "--threads", "--replace", "--encoding"}
+)
+_PATH_CMDS = (
+    READ_ONLY_CMDS
+    | CODER_WRITE_CMDS
+    | {"cd", "pushd", "source", ".", "less", "more", "base64", "xxd", "od", "strings"}
+    | {"tar", "zip", "unzip", "scp", "gzip", "gunzip", "zcat", "openssl", "ssh-keygen", "gpg"}
+    | {"egrep", "fgrep", "nl", "tac", "diff", "cmp"}
+)
+_PATH_OPTION = re.compile(r"--?[\w-]*(?:dir|file|path|target|output|input|config|key|root)", re.I)
 _DATA_DIR_DEFAULT = "/.claude/plugins/data/daedalus"
 _PROJECT_DATA = ".claude/daedalus"
+UNIT_WORKTREES = ".claude/worktrees"
 _GLOB_CHARS = frozenset("*?[")
 _DATA_DIR_WRITE = re.compile(
     r">|(?:^|[\s;&|(/])(?:tee|rm|mv|cp|truncate|touch|ln|mkdir|chmod|chown|install|rmdir)"
@@ -977,7 +1105,7 @@ def _commit_ok(args: list[str], cwd: str) -> bool:
         if arg in {"-q", "--quiet", "-a"}:
             i += 1
         elif arg == "--":
-            return True
+            return not _has_magic(args[i + 1 :])
         elif arg in {"-m", "-am"} and i + 1 < len(args):
             i += 2
         elif (
@@ -989,14 +1117,59 @@ def _commit_ok(args: list[str], cwd: str) -> bool:
     return True
 
 
+@lru_cache(maxsize=32)
+def _registered_worktrees(repo: str) -> frozenset[str]:
+    cmd = ["git", "-C", repo, "worktree", "list", "--porcelain"]
+    try:
+        out = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=2, env=_git_env(), check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return frozenset()
+    if out.returncode != 0:
+        return frozenset()
+    lines = out.stdout.splitlines()
+    return frozenset(os.path.realpath(x[9:]) for x in lines if x.startswith("worktree "))
+
+
+def _unit_parts(target: str, cwd: str) -> list[str] | None:
+    # 0022: train-made unit worktrees sit at <repo>/.claude/worktrees/<name>, git-registered.
+    repo = os.path.realpath(str(project_root(cwd)))
+    base = os.path.join(repo, UNIT_WORKTREES)
+    parts = os.path.relpath(os.path.realpath(target), base).split(os.sep)
+    if parts[0] in {os.curdir, os.pardir}:
+        return None
+    return parts if os.path.join(base, parts[0]) in _registered_worktrees(repo) else None
+
+
+def _in_unit_worktree_code(target: str, cwd: str) -> bool:
+    parts = _unit_parts(target, cwd)
+    return parts is not None and len(parts) >= 2 and parts[1] in {"src", "tests"}
+
+
 def _in_code_dirs(arg: str, cwd: str) -> bool:
     target = _abs(arg, cwd)
-    return _under(target, f"{cwd}/src") or _under(target, f"{cwd}/tests")
+    return (
+        _under(target, f"{cwd}/src")
+        or _under(target, f"{cwd}/tests")
+        or _in_unit_worktree_code(target, cwd)
+    )
 
 
-def _pathspec_ok(args: list[str], cwd: str) -> bool:
-    # I3a: restore/checkout only as `-- <paths under src/ or tests/>`.
-    return len(args) > 1 and args[0] == "--" and all(_in_code_dirs(a, cwd) for a in args[1:])
+def _pathspec_ok(args: list[str], cwd: str, base: str | None = None) -> bool:
+    # I3a, 0022: `-- <unit worktree src|tests paths>`; relative ones resolve against -C (base).
+    root = cwd if base is None else base
+    return (
+        len(args) > 1
+        and args[0] == "--"
+        and not _has_magic(args[1:])
+        and all(_in_unit_worktree_code(_abs(a, root), cwd) for a in args[1:])
+    )
+
+
+def _has_magic(pathspecs: list[str]) -> bool:
+    # 0022: :/ and :(top) are worktree-top relative, so the jail refuses every magic form.
+    return any(p.startswith(":") for p in pathspecs)
 
 
 def _stash_ok(args: list[str]) -> bool:
@@ -1046,7 +1219,7 @@ _GIT_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
     "branch": lambda a, _: _flags_ok(
         a, frozenset({"-a", "-r", "-v", "--list", "--show-current"}), positional=False
     ),
-    "add": lambda a, _: _flags_ok(a, frozenset({"-A", "-u", "--all"})),
+    "add": lambda a, _: _flags_ok(a, frozenset({"-A", "-u", "--all"})) and not _has_magic(a),
     "commit": lambda a, cwd: _commit_ok(a, cwd),
     "merge": lambda a, _: _flags_ok(a, frozenset({"--no-ff"}), with_arg=frozenset({"-m"})),
     "worktree": lambda a, _: a[:1] == ["list"] and all(x == "--porcelain" for x in a[1:]),
@@ -1080,7 +1253,18 @@ def _git_grammar_ok(
                 i += 2
                 continue
         return False
+    if grammar[sub] is _pathspec_ok:
+        return _pathspec_ok(args, cwd, _git_dir(globals_, cwd))
     return grammar[sub](args, cwd)
+
+
+def _git_dir(globals_: list[str], cwd: str) -> str:
+    # 0022: git chains each -C onto the previous one.
+    base = cwd
+    for i in range(len(globals_) - 1):
+        if globals_[i] == "-C":
+            base = _abs(globals_[i + 1], base)
+    return base
 
 
 def _docs_add_ok(args: list[str], _: str) -> bool:
@@ -1293,14 +1477,6 @@ def _same_path(target: str, protected: str) -> bool:
     return os.path.realpath(target).casefold() == os.path.realpath(protected).casefold()
 
 
-def _looks_like_path(arg: str, cwd: str) -> bool:
-    return (
-        "/" in arg
-        or bool(os.path.splitext(os.path.basename(arg))[1])
-        or os.path.lexists(_abs(arg, cwd))
-    )
-
-
 def _in_place(name: str, args: list[str]) -> bool:
     for arg in args:
         if name == "sed" and (arg == "--in-place" or arg.startswith("--in-place=")):
@@ -1314,26 +1490,60 @@ def _in_place(name: str, args: list[str]) -> bool:
     return False
 
 
+def _short_taker(arg: str, opts: frozenset[str]) -> tuple[str, str] | None:
+    # 0022: in a short group (-pm, -rt<dir>) the first value-taking letter consumes the rest.
+    if len(arg) < 2 or arg[0] != "-" or arg[1] == "-":
+        return None
+    for idx, char in enumerate(arg[1:], start=2):
+        if f"-{char}" in opts:
+            return f"-{char}", arg[idx:]
+    return None
+
+
 def _write_operands(name: str, args: list[str]) -> list[str]:
     if name == "dd":
         return [a.split("=", 1)[1] for a in args if a.startswith("of=")]
+    values = _VALUE_OPTS.get(name, frozenset())
+    paths = _PATH_OPTS.get(name, frozenset())
     operands: list[str] = []
     script_given = False
     i = 0
     while i < len(args):
         arg = args[i]
+        if arg == "--":
+            operands += args[i + 1 :]
+            break
         if name in {"sed", "perl"} and arg in {"-e", "-E", "-f"}:
             script_given = True
             i += 2
             continue
+        taker = _short_taker(arg, values | paths)
+        if taker is not None:
+            flag, attached = taker
+            value = attached or (args[i + 1] if i + 1 < len(args) else "")
+            if flag in paths and value:
+                operands.append(value)
+            i += 1 if attached else 2
+            continue
+        if arg in _VALUE_LONG_NEXT:
+            i += 2
+            continue
         if arg.startswith("--") and "=" in arg:
-            if name not in {"sed", "perl"}:
-                operands.append(arg.split("=", 1)[1])
+            key, value = arg.split("=", 1)
+            if name not in {"sed", "perl"} and key not in _VALUE_LONG:
+                operands.append(value)
         elif not arg.startswith("-") or arg == "-":
             operands.append(arg)
         i += 1
-    if name in {"sed", "perl"} and not script_given and operands:
-        operands = operands[1:]
+    if not operands:
+        return operands
+    if name in {"sed", "perl"} and not script_given:
+        return operands[1:]
+    # 0022: the leading mode or owner is not a path; --reference replaces it.
+    if any(a.startswith("--reference") for a in args):
+        return operands
+    if (name == "chmod" and _MODE.fullmatch(operands[0])) or name in {"chown", "chgrp"}:
+        return operands[1:]
     return operands
 
 
@@ -1343,9 +1553,27 @@ def _coder_write_target(segment: list[str], cwd: str) -> str | None:
     if name not in CODER_WRITE_CMDS and not (name in {"sed", "perl"} and _in_place(name, args)):
         return None
     for arg in _write_operands(name, args):
-        if arg != "-" and _looks_like_path(arg, cwd) and not _in_code_dirs(arg, cwd):
+        if arg != "-" and not _in_unit_worktree_code(_abs(arg, cwd), cwd):
             return arg
     return None
+
+
+def _cd_relative_target(segment: list[str], cwd: str) -> str | None:
+    # 0022: after cd, relative operands resolve against the hook cwd, not the shell's.
+    name = _base(segment[0])
+    args = segment[1:]
+    if name == "git":
+        sub, git_args, globals_ = _git_split(segment)
+        dirs = [globals_[i + 1] for i in range(len(globals_) - 1) if globals_[i] == "-C"]
+        if sub in {"add", "commit"} and not dirs:
+            return f"git {sub} without -C"
+        if sub in {"restore", "checkout"} and not dirs:
+            dirs = [a for a in git_args if a != "--"]
+        return next((d for d in dirs if not os.path.isabs(d)), None)
+    if name not in CODER_WRITE_CMDS and not (name in {"sed", "perl"} and _in_place(name, args)):
+        return None
+    operands = [a for a in _write_operands(name, args) if a != "-"]
+    return next((a for a in operands if not os.path.isabs(a)), None)
 
 
 def _data_dir_markers() -> list[str]:
@@ -1555,14 +1783,45 @@ def _exempt_indices(tokens: list[str]) -> set[int]:
     return exempt
 
 
+def _rsync_remote(args: list[str]) -> bool:
+    # 0022: host:path and rsync:// are remote operands; -e/--rsh picks the program that runs.
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            return any(re.match(r"[^/]*:", a) for a in args[i + 1 :])
+        if arg in _VALUE_LONG_NEXT or arg == "-f":
+            i += 2
+            continue
+        if arg.startswith("--"):
+            if arg.split("=", 1)[0] in {"--rsh", "--rsync-path"}:
+                return True
+        elif arg.startswith("-"):
+            if "e" in arg.split("f", 1)[0]:
+                return True
+        elif re.match(r"[^/]*:", arg):
+            return True
+        i += 1
+    return False
+
+
 def _worker_hygiene(tokens: list[str], agent: str) -> str | None:
     if _ASSIGN.match(tokens[0]):
         return R_ENV
+    name = _base(tokens[0])
+    allexport = any(re.fullmatch(r"-[a-zA-Z]*a[a-zA-Z]*|allexport", t) for t in tokens[1:])
+    if name in SHELL_VAR_CMDS or (name == "set" and allexport):
+        return R_SHELL_VARS
+    if name in SHELL_STATE_CMDS or (name == "printf" and any(t.startswith("-v") for t in tokens)):
+        return R_SHELL_STATE
+    if name == "rsync" and _rsync_remote(tokens[1:]):
+        return R_RSYNC_REMOTE
+    if name == "find" and any(a in _FIND_DENY or a.startswith("-fprint") for a in tokens[1:]):
+        return R_FIND_WRITE
     exempt = _exempt_indices(tokens)
     ledger = agent == "charter-docs" and _is_append_ledger(tokens)
     if ledger:
         exempt.add(1)
-    name = _base(tokens[0])
     is_wrapper = name in WORKER_WRAPPERS or name.startswith("python")
     if (
         agent == "charter-docs"
@@ -1585,6 +1844,461 @@ def _worker_hygiene(tokens: list[str], agent: str) -> str | None:
     return None
 
 
+def _credential_roots() -> list[str]:
+    home = Path.home()
+    return [os.path.realpath(home / rel) for rel in CREDENTIAL_DENY]
+
+
+def _clean(word: str) -> str:
+    return word.replace(_CUT, "").replace(_REDIRECT, "").replace(_LIT, "$")
+
+
+def _shell_words(command: str) -> list[list[str]]:
+    # spec 8: single-quoted or escaped $ is literal; quote edges end a variable name.
+    segments: list[list[str]] = []
+    words: list[str] = []
+    cur: list[str] = []
+    started, redirect, quote = False, False, ""
+    i, n = 0, len(command)
+
+    def end_word() -> None:
+        nonlocal cur, started, redirect
+        if cur or started:
+            words.append((_REDIRECT if redirect else "") + "".join(cur))
+            redirect = False
+        cur, started = [], False
+
+    while i < n:
+        c = command[i]
+        if quote == "'":
+            if c == "'":
+                quote = ""
+                cur.append(_CUT)
+            else:
+                cur.append(_LIT if c == "$" else c)
+        elif quote == '"':
+            if c == '"':
+                quote = ""
+                cur.append(_CUT)
+            elif c == "\\" and i + 1 < n:
+                i += 1
+                cur.append(_LIT if command[i] == "$" else command[i])
+            else:
+                cur.append(c)
+        elif c in "'\"":
+            quote, started = c, True
+            cur.append(_CUT)
+        elif c == "\\" and i + 1 < n:
+            i += 1
+            cur.append(_LIT if command[i] == "$" else command[i])
+            started = True
+        elif c in "<>":
+            end_word()
+            redirect = True
+            while i + 1 < n and command[i + 1] in "&>":
+                i += 1
+        elif c.isspace() or c in ";&|()`":
+            end_word()
+            if c not in " \t" and words:
+                segments.append(list(words))
+                words.clear()
+        else:
+            cur.append(c)
+            started = True
+        i += 1
+    end_word()
+    if words:
+        segments.append(words)
+    return segments
+
+
+def _expand_word(word: str, env: dict[str, list[str]]) -> list[tuple[str, bool]]:
+    # spec 8: $name and ${name...} alike; each expansion carries whether a name was unknown.
+    results: list[tuple[str, bool]] = [("", False)]
+    pos = 0
+    for match in _VAR.finditer(word):
+        values = env.get(match.group(1) or match.group(2))
+        alts = [(v, False) for v in values] if values else [("", True)]
+        lit = word[pos : match.start()]
+        results = [(t + lit + v, u or w) for t, u in results for v, w in alts]
+        results = results[:_EXPANSION_CAP]
+        pos = match.end()
+    home = env["HOME"][0]
+    out: list[tuple[str, bool]] = []
+    for text, unresolved in results:
+        text += word[pos:]
+        unresolved = unresolved or "${" in text
+        text = _clean(text)
+        out.append((_tilde(text, home), unresolved))
+    return out
+
+
+def _tilde(text: str, home: str) -> str:
+    if text == "~" or text.startswith("~/"):
+        return home + text[1:]
+    return os.path.expanduser(text) if text.startswith("~") else text
+
+
+def _bash_env(segments: list[list[str]]) -> list[dict[str, list[str]]]:
+    # spec 8: assignments and for-loops bind, read and friends unbind, HOME stays real.
+    env = {k: [v] for k, v in os.environ.items()}
+    env["HOME"] = [str(Path.home())]
+    env.setdefault("CLAUDE_PLUGIN_ROOT", [os.path.dirname(_REPO_SCRIPTS)])
+    env.setdefault("CLAUDE_PLUGIN_DATA", [env["HOME"][0] + _DATA_DIR_DEFAULT])
+    envs: list[dict[str, list[str]]] = []
+    changes: list[dict[str, list[str] | None]] = []
+    for words in segments:
+        clean = [_clean(w) for w in words]
+        changed: dict[str, list[str] | None] = {}
+        for i, word in enumerate(words):
+            name, eq, value = word.partition("=")
+            if eq and _ASSIGN.match(word) and name != "HOME":
+                bound = _expand_word(value, env)
+                unknown = any(u for _, u in bound)
+                changed[name] = None if unknown else [t for t, _ in bound]
+            if clean[i] == "for" and i + 1 < len(words):
+                loop = [x for w in words[i + 3 :] for x in _expand_word(w, env)]
+                listed = i + 2 < len(words) and clean[i + 2] == "in"
+                ok = listed and not any(u for _, u in loop)
+                changed[clean[i + 1]] = [t for t, _ in loop] if ok else None
+            if clean[i] in _BINDERS:
+                for later in clean[i + 1 :]:
+                    if not later.startswith("-"):
+                        changed[later] = None
+            for key, values in changed.items():
+                if values is None:
+                    env.pop(key, None)
+                else:
+                    env[key] = values
+        # spec 8: a binding applies from its own segment onward, never to earlier segments.
+        envs.append(dict(env))
+        changes.append(changed)
+    _loop_union(segments, envs, changes)
+    return envs
+
+
+def _loop_union(
+    segments: list[list[str]],
+    envs: list[dict[str, list[str]]],
+    changes: list[dict[str, list[str] | None]],
+) -> None:
+    # spec 8: a later iteration sees every binding in its loop, header included.
+    opened: list[int] = []
+    for k, words in enumerate(segments):
+        first = _clean(words[0])
+        if first == "do":
+            head = k - 1 if k and _clean(segments[k - 1][0]) in {"for", "while", "until"} else k
+            opened.append(head)
+        if first != "done" or not opened:
+            continue
+        span = range(opened.pop(), k + 1)
+        merged: dict[str, list[str] | None] = {}
+        for j in span:
+            for key, values in changes[j].items():
+                if values is None or merged.get(key, []) is None:
+                    merged[key] = None
+                else:
+                    merged[key] = [*merged.get(key, []), *values]
+        for j in span:
+            for key, values in merged.items():
+                if values is None:
+                    envs[j].pop(key, None)
+                else:
+                    envs[j][key] = list(dict.fromkeys([*envs[j].get(key, []), *values]))
+
+
+def _anchor(text: str, base: str) -> str | None:
+    if not text:
+        return None
+    if os.path.isabs(text):
+        return os.path.normpath(text)
+    return os.path.normpath(os.path.join(base, text)) if os.path.isabs(base) else None
+
+
+def _expand_home(token: str, cwd: str) -> str | None:
+    # spec 8: quotes and backslashes are dropped; ~, $HOME and ${HOME...} expand to home.
+    text = _expand_word(_UNQUOTE.sub("", token), {"HOME": [str(Path.home())]})[0][0]
+    return _anchor(text, cwd)
+
+
+def _credential_candidates(tool: str, tool_input: dict[str, Any], cwd: str) -> list[str]:
+    # Bash goes through _bash_credential_reason; this covers the path-argument tools.
+    if tool not in CREDENTIAL_TOOLS and tool not in WRITE_TOOLS:
+        return []
+    values = [str(tool_input.get(k) or "") for k in ("file_path", "notebook_path", "path")]
+    pattern = str(tool_input.get("pattern") or "")
+    if tool == "Glob" and pattern:
+        values.append(pattern if pattern.startswith(("/", "~", "$HOME", "${HOME")) else "")
+        base = str(tool_input.get("path") or cwd)
+        values.append(os.path.join(base, pattern))
+    elif tool == "Grep" and pattern.startswith(("/", "~", "$HOME", "${HOME")):
+        # spec 8: a Grep pattern is a regex; only an absolute or home-rooted one names a path.
+        values.append(pattern)
+    return [v for v in values if v]
+
+
+def _glob_rest(parts: list[str], root: list[str], dotglob: bool) -> list[str] | None:
+    for i, name in enumerate(root):
+        if i >= len(parts):
+            return root[i:]
+        pat = _BRACE.sub("*", parts[i])
+        if "**" in pat:
+            return []
+        # spec 8: a shell wildcard skips a leading dot unless dotglob is set.
+        if not dotglob and name.startswith(".") and not pat.startswith("."):
+            return None
+        if not fnmatch.fnmatchcase(name, pat):
+            return None
+    return []
+
+
+def _contains(parent: str, child: str) -> bool:
+    # spec 8: _under misses the filesystem root, so ancestry is checked here.
+    real_parent, real_child = os.path.realpath(parent), os.path.realpath(child)
+    return real_child == real_parent or real_child.startswith(real_parent.rstrip(os.sep) + os.sep)
+
+
+def _store_rest(target: str, root: str, glob: bool, dotglob: bool) -> list[str] | None:
+    # spec 8: [] means target is in the store; a list is the store's components below target.
+    if glob and _GLOB_START.search(target):
+        parts = os.path.normpath(target).split(os.sep)
+        first = next(i for i, part in enumerate(parts) if _GLOB_START.search(part))
+        base = os.path.realpath(os.sep.join(parts[:first]) or os.sep)
+        if _contains(root, base):
+            return []
+        pattern = [p for p in base.split(os.sep) if p] + parts[first:]
+        return _glob_rest(pattern, [p for p in root.split(os.sep) if p], dotglob)
+    real = os.path.realpath(target)
+    if _contains(root, real):
+        return []
+    if _contains(real, root):
+        return [p for p in root[len(real) :].split(os.sep) if p]
+    return None
+
+
+def _credential_hit(target: str, roots: list[str], glob: bool, dotglob: bool = True) -> bool:
+    return any(_store_rest(target, root, glob, dotglob) == [] for root in roots)
+
+
+def _command_at(clean: list[str], skip: set[int]) -> int | None:
+    # spec 8: skip control words, assignments and wrappers with their option values.
+    i = 0
+    while i < len(clean):
+        word = clean[i]
+        if i in skip or not word or word in _CONTROL_WORDS or _ASSIGN.match(word):
+            i += 1
+            continue
+        name = _base(word)
+        if name not in _RUN_WRAPPERS:
+            return i
+        i += 1
+        while i < len(clean) and (clean[i].startswith("-") or _DURATION.fullmatch(clean[i])):
+            i += 2 if clean[i] in _WRAPPER_VALUES.get(name, ()) else 1
+    return None
+
+
+def _search_paths(name: str, clean: list[str], args: list[int]) -> set[int]:
+    # spec 8: grep and rg take the first operand as the pattern unless -e or -f names it.
+    letters = _SEARCH_VALUES["rg" if name == "rg" else "grep"] if name != "jq" else frozenset()
+    paths: set[int] = set()
+    operands: list[int] = []
+    explicit, pending = False, ""
+    for i in args:
+        word = clean[i]
+        if pending:
+            if pending in {"f", "--file"}:
+                paths.add(i)
+            pending = ""
+        elif word.startswith("--"):
+            opt = word.split("=", 1)[0]
+            explicit = explicit or opt in {"--regexp", "--file"}
+            if opt == "--file" and "=" in word:
+                paths.add(i)
+            elif "=" not in word and opt in _SEARCH_LONGS:
+                pending = opt
+        elif word.startswith("-") and len(word) > 1:
+            for j, ch in enumerate(word[1:]):
+                if ch in letters:
+                    explicit = explicit or ch in "ef"
+                    if j == len(word) - 2:
+                        pending = ch
+                    elif ch == "f":
+                        paths.add(i)
+                    break
+        else:
+            operands.append(i)
+    return paths | set(operands if explicit else operands[1:])
+
+
+def _path_positions(words: list[str]) -> tuple[str, int, set[int]]:
+    # spec 8: where an unresolved variable could name a file for a modeled reader or writer.
+    clean = [_clean(w) for w in words]
+    paths = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
+    at = _command_at(clean, paths)
+    if at is None:
+        return "", -1, paths
+    name = _base(clean[at])
+    args = [i for i in range(at + 1, len(clean)) if i not in paths]
+    if name in _GREPS or name in {"rg", "jq"}:
+        return name, at, paths | _search_paths(name, clean, args)
+    if name == "find":
+        for i in args:
+            if clean[i].startswith(("-", "(", "!")):
+                break
+            paths.add(i)
+        return name, at, paths
+    if name in _PATH_CMDS:
+        paths |= {i for i in args if not clean[i].startswith("-") or _PATH_OPTION.match(clean[i])}
+    return name, at, paths
+
+
+def _tree_reader(
+    name: str, clean: list[str], at: int, ops: list[int], command: str
+) -> tuple[bool, list[int], bool] | None:
+    # spec 8: (sees hidden dirs, operand indices, reads the cwd when no operand is given).
+    args = clean[at + 1 :]
+    longs = {a.split("=", 1)[0] for a in args if a.startswith("--")}
+    short = {c for a in args if a.startswith("-") and not a.startswith("--") for c in a[1:]}
+    if name in _GREPS:
+        on = bool({"r", "R"} & short or {"--recursive", "--dereference-recursive"} & longs)
+        on = on or any(a.startswith("--directories=recurse") for a in args)
+        return (True, ops, not ops) if on else None
+    if name == "rg":
+        hidden = bool({"u", "."} & short or {"--hidden", "--no-ignore", "--unrestricted"} & longs)
+        return hidden, ops, not ops
+    if name == "find":
+        on = bool({"-exec", "-execdir", "-ok", "-okdir"} & set(args)) or "xargs" in command
+        return (True, ops, not ops) if on else None
+    if name in {"tar", "rsync"}:
+        return True, ops, False
+    if name == "cp" and ({"r", "R", "a"} & short or {"--recursive", "--archive"} & longs):
+        return True, ops, False
+    if name == "zip" and ({"r", "R"} & short or "--recurse-paths" in longs):
+        return True, ops, False
+    return None
+
+
+def _tree_reason(
+    parsed: list[tuple[list[str], tuple[str, int, set[int]]]],
+    envs: list[dict[str, list[str]]],
+    bases: list[str],
+    roots: list[str],
+    command: str,
+) -> str | None:
+    dotglob = "dotglob" in command or "GLOBIGNORE" in command
+    for k, (words, (name, at, paths)) in enumerate(parsed):
+        if at < 0:
+            continue
+        ops = [i for i in sorted(paths) if not words[i].startswith(_REDIRECT)]
+        found = _tree_reader(name, [_clean(w) for w in words], at, ops, command)
+        if found is None:
+            continue
+        hidden, ops, implicit = found
+        targets = list(bases) if implicit else []
+        for i in ops:
+            for text, _ in _expand_word(words[i], envs[k]):
+                targets += [t for t in (_anchor(text, b) for b in bases or [""]) if t]
+        for target in targets:
+            for root in roots:
+                rest = _store_rest(target, root, True, dotglob)
+                # spec 8: rg skips hidden dirs by default, so a hidden component shields a store.
+                if rest is not None and (hidden or not any(p.startswith(".") for p in rest)):
+                    return R_CREDENTIAL_TREE.format(path=target)
+    return None
+
+
+def _bash_credential_reason(command: str, cwd: str, roots: list[str]) -> str | None:
+    segments = _shell_words(command)
+    envs = _bash_env(segments)
+    dotglob = "dotglob" in command or "GLOBIGNORE" in command
+    parsed = [(words, _path_positions(words)) for words in segments]
+    bases = [cwd] if os.path.isabs(cwd) else []
+    for k, (words, (name, at, _)) in enumerate(parsed):
+        if name not in {"cd", "pushd"}:
+            continue
+        # spec 8: the first non-option argument is the target; a bare cd goes home.
+        target, options = None, True
+        for word in words[at + 1 :]:
+            if options and _clean(word) == "--":
+                options = False
+            elif not (options and _clean(word).startswith("-")):
+                target = word
+                break
+        texts = [t for t, _ in _expand_word(target, envs[k])] if target else envs[k]["HOME"]
+        bases += [b for b in (_anchor(t, cwd) for t in texts) if b]
+    absolute: list[str] = []
+    relative: list[str] = []
+    unresolved = ""
+    for k, (words, (_, _, paths)) in enumerate(parsed):
+        env = envs[k]
+        for i, word in enumerate(words):
+            for text, unknown in _expand_word(word, env):
+                if unknown and i in paths and not unresolved:
+                    unresolved = _clean(word)
+                parts = [_tilde(p, env["HOME"][0]) for p in _CREDENTIAL_PART.split(text)[1:] if p]
+                for cand in [text, *parts]:
+                    (absolute if os.path.isabs(cand) else relative).append(cand)
+    # spec 8: spelled-out paths first, so the message names the path the command wrote.
+    for cand in absolute:
+        if _credential_hit(os.path.normpath(cand), roots, True, dotglob):
+            return R_CREDENTIAL.format(path=os.path.normpath(cand))
+    if unresolved:
+        return R_CREDENTIAL_PARAM.format(path=unresolved)
+    for cand in relative:
+        for base in bases:
+            target = os.path.normpath(os.path.join(base, cand))
+            if _credential_hit(target, roots, True, dotglob):
+                return R_CREDENTIAL.format(path=target)
+    return _tree_reason(parsed, envs, bases, roots, command)
+
+
+def _credential_reason(tool: str, tool_input: dict[str, Any], cwd: str) -> str | None:
+    roots = _credential_roots()
+    if tool == "Bash":
+        return _bash_credential_reason(str(tool_input.get("command") or ""), cwd, roots)
+    for raw in _credential_candidates(tool, tool_input, cwd):
+        target = _expand_home(raw, cwd)
+        if target is not None and _credential_hit(target, roots, tool == "Glob"):
+            return R_CREDENTIAL.format(path=target)
+    if tool == "Grep":
+        # spec 8: the Grep tool searches hidden dirs, so a root above a store reads it.
+        target = _expand_home(str(tool_input.get("path") or cwd), cwd)
+        if target and any(_store_rest(target, root, False, True) is not None for root in roots):
+            return R_CREDENTIAL_TREE.format(path=target)
+    return None
+
+
+def _train_active(cwd: str) -> bool:
+    # 0023: existence only; a symlinked or unreadable marker still counts as an active train.
+    return os.path.lexists(train_marker(project_root(cwd)))
+
+
+def _ours(raw_agent: str) -> bool:
+    prefix, sep, _ = raw_agent.partition(":")
+    return bool(sep) and prefix in (*AGENT_NAMESPACES, TEST_NAMESPACE)
+
+
+def _unknown_decision(
+    raw_agent: str, agent: str, cwd: str, tool: str, tool_input: dict[str, Any]
+) -> Decision:
+    # 0023: a foreign agent is refused only while a train is active; a daedalus name always is.
+    if _ours(raw_agent):
+        return _block(R_UNKNOWN.format(agent=agent))
+    if not os.path.isabs(cwd):
+        return _block(R_NO_CWD)
+    # 0010: the data dir is Daedalus's own integrity, refused to every agent train or not.
+    raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+    if tool in WRITE_TOOLS and _data_dir_path(_abs(raw_path, cwd), cwd):
+        return _block(R_DATA_DIR)
+    command = str(tool_input.get("command") or "") if tool == "Bash" else ""
+    if command and (_data_dir_write(command) or _cd_data_dir_git(command)):
+        return _block(R_DATA_DIR)
+    if not _train_active(cwd):
+        return _allow()
+    repo = project_root(cwd)
+    return _block(R_UNKNOWN_TRAIN.format(agent=agent, marker=train_marker(repo), repo=repo))
+
+
 def normalize_agent(agent_type: str) -> str:
     prefix, sep, name = agent_type.partition(":")
     test_ns = prefix == TEST_NAMESPACE and os.environ.get("DAEDALUS_LIVE_TEST") == "1"
@@ -1596,12 +2310,25 @@ def normalize_agent(agent_type: str) -> str:
 def decide(hook_input: dict[str, Any], config: Config) -> Decision:
     raw_agent = str(hook_input.get("agent_type") or "main")
     agent = normalize_agent(raw_agent)
+    tool = str(hook_input.get("tool_name") or "")
+    cwd = str(hook_input.get("cwd") or "")
+    tool_input = hook_input.get("tool_input")
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+    credential = _credential_reason(tool, tool_input, cwd)
+    if credential:
+        return Decision(False, credential, agent)
+    if tool in CREDENTIAL_TOOLS:
+        return Decision(True, None, agent)
     if agent == "main" and raw_agent != "main":
         return Decision(False, R_NAMESPACED_MAIN, agent)
     # m4: only the orchestrator thread arrives without an agent_id.
     if agent == "main" and hook_input.get("agent_id"):
         return Decision(False, R_SUBAGENT_MAIN, agent)
-    decision = _decide(hook_input, config, agent)
+    if agent in KNOWN_AGENTS:
+        decision = _decide(hook_input, config, agent)
+    else:
+        decision = _unknown_decision(raw_agent, agent, cwd, tool, tool_input)
     return Decision(decision.allow, decision.reason, agent)
 
 
@@ -1624,11 +2351,6 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
     if is_write and _data_dir_path(path, cwd):
         return _block(R_DATA_DIR)
     charter = str(config.charter_root) if config.charter_root else None
-    if agent not in KNOWN_AGENTS:
-        return _block(
-            f"unknown agent_type '{agent}', fail closed. "
-            "Next: add the agent to the jail before using it."
-        )
 
     if tool == "Bash" and agent == "main":
         # 8.5: main is bound only by the tripwires; regex fallback when tokenize refuses.
@@ -1667,7 +2389,7 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
                 return _block(reason)
 
     if agent == "main":
-        if is_write and (_under(path, f"{cwd}/src") or _under(path, f"{cwd}/tests")):
+        if is_write and _in_code_dirs(path, cwd):
             return _block(
                 "Fable does not write application code. "
                 "Next: dispatch a repo-coder for this change."
@@ -1675,15 +2397,19 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
         return _allow()
 
     if agent == "repo-coder":
-        if is_write and not (_under(path, f"{cwd}/src") or _under(path, f"{cwd}/tests")):
+        if is_write and not _in_unit_worktree_code(_abs(path, cwd), cwd):
             return _block(
-                f"write outside src/ or tests/ of your worktree: {path}. "
+                f"write outside src/ or tests/ of your unit worktree: {path}. "
                 "Next: ask Fable to route this to contract-spec or charter-docs."
             )
         if tool == "Bash":
             if piped:
                 return _block(R_PIPE)
+            moved = any(_base(s[0]) in DIR_CHANGE_CMDS for s in segments)
             for segment in segments:
+                relative = _cd_relative_target(segment, cwd) if moved else None
+                if relative is not None:
+                    return _block(R_CD_RELATIVE.format(relative))
                 exempt = _exempt_indices(segment)
                 words = [_base(t) for i, t in enumerate(segment) if i not in exempt]
                 sub = _git_subcommand(segment) if _base(segment[0]) == "git" else None
@@ -1706,11 +2432,16 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
                     segment, CODER_GIT, cwd, None
                 ):
                     return _block(R_CODER_GIT)
+                if sub in {"add", "commit"}:
+                    git_dir = _git_dir(_git_split(segment)[2], cwd)
+                    if _unit_parts(git_dir, cwd) is None:
+                        return _block(R_CODER_UNIT_GIT)
                 target = _coder_write_target(segment, cwd)
                 if target is not None:
                     return _block(
                         f"Bash write outside src/ or tests/: {target}. "
-                        "Next: write under src/ or tests/, or ask Fable to route the change."
+                        "Next: write under your unit worktree src/ or tests/, "
+                        "or ask Fable to route the change."
                     )
         if tool in WEB_TOOLS:
             return _block(

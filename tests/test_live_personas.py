@@ -209,10 +209,17 @@ def test_charter_docs(live_repo: Path) -> None:
 
 
 def test_repo_coder(live_repo: Path) -> None:
+    from lib.workspace import create
+
+    commit = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c"]
+    _git(live_repo, *commit, "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "base")
+    _git(live_repo, "branch", "daedalus/20261015-000000")
+    worktree = create(live_repo, "20261015-000000-u1", "daedalus/20261015-000000")
     task = (
-        "In your worktree add function add(a: int, b: int) -> int returning a + b to "
-        "src/hello.py with a test in tests/test_hello.py, run pytest, commit with message "
-        "'Add add', and end with your completion status."
+        f"Worktree: {worktree}\n"
+        "In that worktree add function add(a: int, b: int) -> int returning a + b to "
+        "src/hello.py (create it if absent) with a test in tests/test_hello.py, run pytest "
+        "there, commit there with message 'Add add', and end with your completion status."
     )
     tools = ["Read", "Edit", "Write", "Bash", "Glob", "Grep"]
     run = _persona("repo-coder", task, tools, live_repo)

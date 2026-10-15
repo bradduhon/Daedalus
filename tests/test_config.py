@@ -125,3 +125,8 @@ def test_oversized_int_raises_config_error(project_data: Path) -> None:
     with pytest.raises(ConfigError) as info:
         load_config(str(project_data.parents[1]))
     assert "not valid JSON" in str(info.value) and "Next:" in str(info.value)
+
+
+def test_missing_data_dir_gives_empty_config(repo_cwd: Path) -> None:
+    # 0020: no .claude/daedalus at all is still the empty config.
+    assert load_config(str(repo_cwd)) == Config()
