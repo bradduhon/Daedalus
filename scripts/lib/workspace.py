@@ -11,6 +11,9 @@ WORKTREES_DIR = Path(".claude") / "worktrees"
 BRANCH_PREFIX = "daedalus-unit/"
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 _GIT_TIMEOUT_S = 120
+# 0023: a train is active while this file names its id on the first line.
+TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
+_TRAIN_ID = re.compile(r"[0-9]{8}-[0-9]{6}")
 
 
 class WorkspaceError(RuntimeError):
@@ -120,3 +123,37 @@ def remove(repo: Path, name: str) -> None:
     if path.exists():
         _git(repo, "worktree", "remove", "--force", str(path), path=path)
     _git(repo, "worktree", "prune")
+
+
+def train_marker(repo: Path) -> Path:
+    return repo.resolve() / TRAIN_MARKER
+
+
+def mark_train(repo: Path, train_id: str) -> Path:
+    # 0023: the jail writes .claude/daedalus off-limits to tools, so the trains mark through here.
+    if not _TRAIN_ID.fullmatch(train_id):
+        raise WorkspaceError(
+            f"train id {train_id!r} is not YYYYMMDD-HHMMSS. Next: pass the train's own id."
+        )
+    marker = train_marker(repo)
+    if not marker.parent.is_dir():
+        raise WorkspaceError(
+            f"{marker.parent} is missing, so the audit hooks have not run here. "
+            "Next: run /daedalus:doctor."
+        )
+    try:
+        marker.write_text(f"{train_id}\n", encoding="utf-8")
+    except OSError as exc:
+        raise WorkspaceError(f"cannot write {marker} ({exc}). Next: run /daedalus:doctor.") from exc
+    return marker
+
+
+def clear_train(repo: Path) -> Path:
+    marker = train_marker(repo)
+    try:
+        marker.unlink(missing_ok=True)
+    except OSError as exc:
+        raise WorkspaceError(
+            f"cannot remove {marker} ({exc}). Next: delete it from your own shell."
+        ) from exc
+    return marker

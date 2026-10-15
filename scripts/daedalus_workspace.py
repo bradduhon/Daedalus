@@ -8,11 +8,20 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib.workspace import WorkspaceError, create, remove, worktree_path  # noqa: E402
+from lib.workspace import (  # noqa: E402
+    WorkspaceError,
+    clear_train,
+    create,
+    mark_train,
+    remove,
+    worktree_path,
+)
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="Create or remove a Daedalus worktree.")
+    parser = argparse.ArgumentParser(
+        description="Create or remove a Daedalus worktree; mark or unmark the active train."
+    )
     sub = parser.add_subparsers(dest="action", required=True)
     make = sub.add_parser("create")
     make.add_argument("--repo", type=Path, required=True)
@@ -21,14 +30,23 @@ def main(argv: list[str]) -> int:
     drop = sub.add_parser("remove")
     drop.add_argument("--repo", type=Path, required=True)
     drop.add_argument("--name", required=True)
+    mark = sub.add_parser("mark")
+    mark.add_argument("--repo", type=Path, required=True)
+    mark.add_argument("--train", required=True)
+    unmark = sub.add_parser("unmark")
+    unmark.add_argument("--repo", type=Path, required=True)
     args = parser.parse_args(argv)
     repo = args.repo.resolve()
     try:
         if args.action == "create":
             print(create(repo, args.name, args.base))
-        else:
+        elif args.action == "remove":
             remove(repo, args.name)
             print(f"removed {worktree_path(repo, args.name)}")
+        elif args.action == "mark":
+            print(mark_train(repo, args.train))
+        else:
+            print(f"cleared {clear_train(repo)}")
     except WorkspaceError as exc:
         print(f"daedalus-workspace: {exc}", file=sys.stderr)
         return 1

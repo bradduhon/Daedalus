@@ -16,6 +16,7 @@ Rules for the whole train:
 - Every stop shows the operator what happened and names the next action as a `Next:` line.
 - If the conductor's reply does not end with one of its three status lines, stop and show the operator the reply's last 10 lines. Next: rerun `/daedalus:push-train` or report the persona.
 - Every path you give the conductor is absolute, built from `<repo>`.
+- Train marker: Preconditions step 11 writes `<repo>/.claude/daedalus/train.active` (0023). Before every stop that follows, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py unmark --repo <repo>`; the hand-off runs it at the end of the train.
 
 ## Preconditions
 
@@ -31,6 +32,7 @@ Before step 1, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_doctor.py --s
 8. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_audit_chain.py <repo>/.claude/daedalus/audit/<session>.jsonl` on this session's log, and again on the Build Train session's log when its id differs. A `BROKEN` line: stop and show that line only. The log changed after it was written. Next: keep the file, report it, and do not edit it.
 9. Confirm the security auditor approved, from its own records in the Build Train session's log. Grep patterns are regular expressions, so square brackets are escaped. First Grep that log with line numbers for `<train-id>-summary\.md.*"tool_name":"Write"` and take the first match's line number: the Build Train's summary Write for this train. Then Grep it with line numbers for `"agent_type":"daedalus:security-auditor".*"event":"SubagentStop"`, the exact namespaced agent type the log stores, and take the last match before that summary line: the auditor's final round for this train. Grep it again with line numbers for `\[VERDICT: APPROVED\]`; that line number must be among the matches. Read the log at that line with a limit of 1 and confirm the record's `last_message_head` starts with `[VERDICT: APPROVED]`; the auditor writes its verdict as its first line. No summary Write record, no auditor SubagentStop record before it, or any other verdict: stop. Next: run /daedalus:build-train; this train has no approved audit in its log.
 10. Confirm the ledger commit is on the branch the summary names: `git merge-base --is-ancestor <ledger sha> daedalus/<train-id>` for a repo-local ledger, or `git -C <charter_root> merge-base --is-ancestor <ledger sha> daedalus/<train-id>` when the `charter:` line ends in `(ledger under charter_root)`. A non-zero exit: stop. Next: run /daedalus:build-train again; the ledger entry is not on the branch.
+11. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py mark --repo <repo> --train <train-id>` (0023). It writes `<repo>/.claude/daedalus/train.active` with the train id as its first line and prints that path. Exit 1: stop and show its message. Next: the action the message names.
 
 ## Push
 
@@ -67,7 +69,7 @@ The conductor pushes and opens pull requests only in this session's repo, so the
 
 ## Hand-off
 
-Print the pull request URL, then this checklist as a numbered list for the operator to tick. When the CI step reported no CI, the list starts with one more item, `CI not observed; check the PR's checks before merging`, and the numbers below shift by one.
+Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py unmark --repo <repo>` to end the train. Then print the pull request URL, then this checklist as a numbered list for the operator to tick. When the CI step reported no CI, the list starts with one more item, `CI not observed; check the PR's checks before merging`, and the numbers below shift by one.
 
 1. Review the pull request at <url>. When the `Contract:` line names `contracts/<name>.md`, its `Lock contract` and `Revise contract` commits are part of the diff.
 2. Check CI on the pull request. When the CI step reported `skipped` or `neutral`, this item names every such conclusion.

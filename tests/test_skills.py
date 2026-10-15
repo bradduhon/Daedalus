@@ -466,10 +466,8 @@ def test_build_train_keeps_dirty_trees_on_the_train_branch() -> None:
 def test_build_train_keeps_worktrees_out_of_git_and_the_train() -> None:
     # R3-O1, R4-I3, R4-M1: worktrees are ignored, listed, force-removed on every exit.
     text = _build_train()
-    assert (
-        "if `<repo>/.claude/worktrees/.gitignore` is absent write it with the single line `*`"
-        in (text)
-    )
+    # 0022: daedalus_workspace.py create writes the worktrees ignore marker itself.
+    assert "<repo>/.claude/worktrees/.gitignore" not in text
     rules = text.split("## Preconditions", 1)[0]
     teardown = rules.split("- Worktree teardown: ", 1)[1].split("\n", 1)[0]
     assert teardown.startswith(
@@ -478,11 +476,16 @@ def test_build_train_keeps_worktrees_out_of_git_and_the_train() -> None:
     )
     order = [
         "show `git -C <path> status --porcelain` (the changes being discarded)",
-        "run `git worktree remove --force <path>`",
-        "then `git worktree prune` once at the end",
+        "run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py remove --repo <repo> "
+        "--name <train-id>-<unit-slug>`",
+        "it removes the worktree, keeps its branch, and prunes",
     ]
     assert [teardown.index(s) for s in order] == sorted(teardown.index(s) for s in order)
     assert "they are discarded, never committed." in teardown
+    assert teardown.rstrip().endswith(
+        "Next: run `git worktree remove --force <path>` and `git worktree prune` from your own "
+        "shell."
+    )
     # R5-C1: only the State Block's unit branches are torn down.
     assert (
         "the scope is only the unit branches recorded in the State Block, each matched by its "
@@ -634,11 +637,10 @@ def test_push_train_hands_the_charter_to_the_operator() -> None:
     assert "The train does not stop here; go on to the hand-off." in _push_train()
 
 
-# Fix wave after the whole-branch review (C1, I2, M4).
-BASE_REF_STOP = (
-    '"Unit <b> does not descend from the integration branch; worktrees are branching from the '
-    "default branch. Next: set worktree.baseRef to head in your settings (run /daedalus:doctor) "
-    'and rerun the train."'
+# 0022: the train makes the worktrees; the merge-base check stays as a defence.
+DESCENT_STOP = (
+    '"Unit <b> does not descend from the integration branch. Next: rerun the train; if it '
+    'repeats, file an issue with the train summary."'
 )
 
 
@@ -647,11 +649,70 @@ def test_build_train_checks_each_unit_descends_from_the_lock() -> None:
     assert "packet_version: <n>  contract: <contract path>  lock: <sha>" in text
     phase1 = text.split("## Phase 1", 1)[1].split("## Phase 2", 1)[0]
     assert "Run `git rev-parse daedalus/<train-id>` and record it as `lock: <sha>`" in phase1
-    assert "coders branch from it when `worktree.baseRef` is `head`" in phase1
+    assert "Phase 2 creates every coder worktree from it" in phase1
+    assert "baseRef" not in text
     complete = next(line for line in text.splitlines() if line.startswith("| `[STATUS: COMPLETE]"))
     check = "Run `git merge-base --is-ancestor <lock sha> <b>` with the State Block `lock:` sha."
     assert check in complete
-    assert f"A non-zero exit: stop with {BASE_REF_STOP} Otherwise record branch" in complete
+    assert f"A non-zero exit: stop with {DESCENT_STOP} Otherwise record branch" in complete
+
+
+def test_build_train_creates_each_coder_worktree() -> None:
+    phase2 = _section(_build_train(), "## Phase 2", "## Phase 3")
+    assert (
+        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py create --repo <repo> "
+        "--name <train-id>-<unit-slug> --base daedalus/<train-id>`"
+    ) in phase2
+    assert (
+        "`git worktree add -q -b daedalus-unit/<train-id>-<unit-slug> "
+        "<repo>/.claude/worktrees/<train-id>-<unit-slug> daedalus/<train-id>`"
+    ) in phase2
+    assert "the line `Worktree: <path>` naming its working directory" in phase2
+    # P3: the coder prompt binds file paths and git pathspecs to the worktree.
+    assert (
+        "every file path and every git pathspec you use is absolute or goes through `git -C <path>`"
+    ) in phase2
+    assert phase2.index("daedalus_workspace.py create") < phase2.index("Agent(`repo-coder`)")
+
+
+def test_build_train_guards_the_main_checkout_before_merging() -> None:
+    phase3 = _section(_build_train(), "## Phase 3", "\n5. The summary")
+    merge = phase3.split("\n4. ", 1)[1]
+    assert merge.index("Run `git status --porcelain`.") < merge.index("git merge --no-ff")
+    assert "a coder changed the main checkout instead of its worktree" in merge
+
+
+MARK = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py mark --repo <repo> --train "
+UNMARK = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py unmark --repo <repo>`"
+
+
+def test_build_train_marks_the_train_active_and_clears_it() -> None:
+    # 0023: written once Preconditions pass, removed at the end and on every stop after it.
+    text = _build_train()
+    pre = _section(text, "## Preconditions", "**State Block**")
+    step9 = pre.split("\n9. ", 1)[1]
+    assert MARK + "<train-id>`" in step9
+    assert "<repo>/.claude/daedalus/train.active" in step9
+    rules = text.split("## Preconditions", 1)[0]
+    marker = rules.split("- Train marker: ", 1)[1].split("\n", 1)[0]
+    assert "every stop that follows" in marker
+    assert UNMARK in marker
+    assert "writes the marker again with the Preconditions step 9 command" in marker
+    assert UNMARK in text.split("\n6. Print the State Block", 1)[1]
+
+
+def test_push_train_marks_the_train_active_and_clears_it() -> None:
+    # 0023: the Push Train writes the marker after its preconditions and removes it at its end.
+    text = _push_train()
+    pre = _section(text, "## Preconditions", "## Push")
+    step11 = pre.split("\n11. ", 1)[1]
+    assert MARK + "<train-id>`" in step11
+    rules = text.split("## Preconditions", 1)[0]
+    marker = rules.split("- Train marker: ", 1)[1].split("\n", 1)[0]
+    assert "every stop that follows" in marker
+    assert UNMARK in marker
+    hand_off = text.split("## Hand-off", 1)[1]
+    assert hand_off.index(UNMARK) < hand_off.index("1. Review the pull request")
 
 
 def test_build_train_never_respawns_a_coder() -> None:

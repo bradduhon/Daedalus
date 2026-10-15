@@ -9,7 +9,16 @@ from pathlib import Path
 
 import pytest
 from lib import workspace
-from lib.workspace import WorkspaceError, branch_name, create, remove, worktree_path
+from lib.workspace import (
+    WorkspaceError,
+    branch_name,
+    clear_train,
+    create,
+    mark_train,
+    remove,
+    train_marker,
+    worktree_path,
+)
 
 from tests.conftest import SCRIPTS_DIR
 
@@ -173,3 +182,49 @@ def test_cli_error_exits_one_with_next(repo: Path) -> None:
     result = _cli("create", "--repo", str(repo), "--name", NAME, "--base", "daedalus/nope")
     assert result.returncode == 1
     assert result.stderr.startswith("daedalus-workspace: ") and "Next:" in result.stderr
+
+
+TRAIN = "20261015-120000"
+
+
+@pytest.fixture
+def data_repo(repo: Path) -> Path:
+    (repo / ".claude" / "daedalus").mkdir(parents=True)
+    return repo
+
+
+def test_mark_train_writes_the_train_id_first(data_repo: Path) -> None:
+    # 0023: the jail reads the train id from the first line.
+    path = mark_train(data_repo, TRAIN)
+    assert path == data_repo / ".claude" / "daedalus" / "train.active" == train_marker(data_repo)
+    assert path.read_text(encoding="utf-8") == f"{TRAIN}\n"
+
+
+@pytest.mark.parametrize("train", ["", "2026-10-15", "20261015-1200001", "../x", "x\ny"])
+def test_mark_train_rejects_a_bad_train_id(data_repo: Path, train: str) -> None:
+    with pytest.raises(WorkspaceError, match="Next:"):
+        mark_train(data_repo, train)
+    assert not train_marker(data_repo).exists()
+
+
+def test_mark_train_needs_the_data_dir(repo: Path) -> None:
+    with pytest.raises(WorkspaceError, match="Next: run /daedalus:doctor"):
+        mark_train(repo, TRAIN)
+    assert not (repo / ".claude" / "daedalus").exists()
+
+
+def test_clear_train_removes_the_marker_and_tolerates_its_absence(data_repo: Path) -> None:
+    mark_train(data_repo, TRAIN)
+    assert clear_train(data_repo) == train_marker(data_repo)
+    assert not train_marker(data_repo).exists()
+    clear_train(data_repo)
+
+
+def test_cli_mark_prints_the_marker_and_unmark_names_it(data_repo: Path) -> None:
+    made = _cli("mark", "--repo", str(data_repo), "--train", TRAIN)
+    assert made.returncode == 0, made.stderr
+    assert made.stdout == f"{train_marker(data_repo)}\n"
+    gone = _cli("unmark", "--repo", str(data_repo))
+    assert gone.returncode == 0, gone.stderr
+    assert gone.stdout == f"cleared {train_marker(data_repo)}\n"
+    assert not train_marker(data_repo).exists()

@@ -60,8 +60,15 @@ def test_frontmatter_matches_rulings(name: str) -> None:
     assert {"Agent", "Task", "SendMessage"} <= disallowed
 
 
-def test_repo_coder_is_worktree_isolated() -> None:
-    assert _frontmatter(AGENTS / "repo-coder.md")["isolation"] == "worktree"
+def test_repo_coder_works_in_the_train_made_worktree() -> None:
+    # 0022: the Build Train makes the worktree; Claude Code isolation is off.
+    assert "isolation" not in _frontmatter(AGENTS / "repo-coder.md")
+    text = (AGENTS / "repo-coder.md").read_text()
+    assert "`Worktree: <path>`" in text
+    assert '`git -C <path> add -A && git -C <path> commit -m "WIP: yield"`' in text
+    assert "`git add -A && git commit" not in text
+    # P3: file paths and git pathspecs are absolute or go through git -C.
+    assert "Every file path and every git pathspec you use is absolute" in text
 
 
 def test_tools_agree_with_the_jail() -> None:
