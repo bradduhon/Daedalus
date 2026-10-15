@@ -89,14 +89,30 @@ _VALUE_OPTS: dict[str, frozenset[str]] = {
     "cp": frozenset({"-S"}),
     "mv": frozenset({"-S"}),
     "ln": frozenset({"-S"}),
+    "rsync": frozenset({"-f"}),
 }
-_VALUE_LONG = frozenset({"--mode", "--owner", "--group", "--suffix", "--size", "--date", "--from"})
+# 0022: short options whose attached or following value is a path operand (-t<dir>).
+_PATH_OPTS: dict[str, frozenset[str]] = {
+    "cp": frozenset({"-t"}),
+    "mv": frozenset({"-t"}),
+    "install": frozenset({"-t"}),
+    "ln": frozenset({"-t"}),
+    "touch": frozenset({"-r"}),
+    "truncate": frozenset({"-r"}),
+}
+# 0022: long options whose =x or next-token value is not a path; --preserve takes =x only.
+_VALUE_LONG_NEXT = frozenset(
+    {"--mode", "--owner", "--group", "--suffix", "--size", "--date", "--from", "--chmod"}
+    | {"--exclude", "--include", "--filter", "--exclude-from", "--include-from"}
+)
+_VALUE_LONG = _VALUE_LONG_NEXT | {"--preserve"}
 _MODE = re.compile(r"(?:[0-7]{3,4}|[ugoa]*[-+=][rwxXstugo]*)(?:,[ugoa]*[-+=][rwxXstugo]*)*")
 # 0022: shell state a worker could carry into a later segment (GIT_WORK_TREE and kin).
 SHELL_VAR_CMDS = frozenset({"export", "declare", "typeset", "readonly", "local"})
 # 0022: builtins that rebind what a later segment runs (hash pytest=/bin/rm).
 SHELL_STATE_CMDS = frozenset(
     {"hash", "alias", "unalias", "unset", "shopt", "enable", "setopt", "unsetopt"}
+    | {"trap", "getopts"}
 )
 DIR_CHANGE_CMDS = frozenset({"cd", "pushd", "popd"})
 NETWORK_TOOLS = frozenset({"curl", "wget", "ssh", "scp", "nc", "ncat", "telnet", "aws", "gh"})
@@ -215,6 +231,10 @@ R_SHELL_VARS = (
 R_SHELL_STATE = (
     "shell builtins that rebind commands or shell options are not permitted for workers. "
     "Next: run the command directly."
+)
+R_RSYNC_REMOTE = (
+    "rsync may not reach a remote host or choose a remote shell for workers. "
+    "Next: copy between local absolute paths only."
 )
 R_FIND_WRITE = (
     "find may not delete, exec, or write files for workers. "
@@ -1409,10 +1429,21 @@ def _in_place(name: str, args: list[str]) -> bool:
     return False
 
 
+def _short_taker(arg: str, opts: frozenset[str]) -> tuple[str, str] | None:
+    # 0022: in a short group (-pm, -rt<dir>) the first value-taking letter consumes the rest.
+    if len(arg) < 2 or arg[0] != "-" or arg[1] == "-":
+        return None
+    for idx, char in enumerate(arg[1:], start=2):
+        if f"-{char}" in opts:
+            return f"-{char}", arg[idx:]
+    return None
+
+
 def _write_operands(name: str, args: list[str]) -> list[str]:
     if name == "dd":
         return [a.split("=", 1)[1] for a in args if a.startswith("of=")]
     values = _VALUE_OPTS.get(name, frozenset())
+    paths = _PATH_OPTS.get(name, frozenset())
     operands: list[str] = []
     script_given = False
     i = 0
@@ -1425,7 +1456,15 @@ def _write_operands(name: str, args: list[str]) -> list[str]:
             script_given = True
             i += 2
             continue
-        if arg in values:
+        taker = _short_taker(arg, values | paths)
+        if taker is not None:
+            flag, attached = taker
+            value = attached or (args[i + 1] if i + 1 < len(args) else "")
+            if flag in paths and value:
+                operands.append(value)
+            i += 1 if attached else 2
+            continue
+        if arg in _VALUE_LONG_NEXT:
             i += 2
             continue
         if arg.startswith("--") and "=" in arg:
@@ -1683,6 +1722,28 @@ def _exempt_indices(tokens: list[str]) -> set[int]:
     return exempt
 
 
+def _rsync_remote(args: list[str]) -> bool:
+    # 0022: host:path and rsync:// are remote operands; -e/--rsh picks the program that runs.
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            return any(re.match(r"[^/]*:", a) for a in args[i + 1 :])
+        if arg in _VALUE_LONG_NEXT or arg == "-f":
+            i += 2
+            continue
+        if arg.startswith("--"):
+            if arg.split("=", 1)[0] in {"--rsh", "--rsync-path"}:
+                return True
+        elif arg.startswith("-"):
+            if "e" in arg.split("f", 1)[0]:
+                return True
+        elif re.match(r"[^/]*:", arg):
+            return True
+        i += 1
+    return False
+
+
 def _worker_hygiene(tokens: list[str], agent: str) -> str | None:
     if _ASSIGN.match(tokens[0]):
         return R_ENV
@@ -1690,8 +1751,10 @@ def _worker_hygiene(tokens: list[str], agent: str) -> str | None:
     allexport = any(re.fullmatch(r"-[a-zA-Z]*a[a-zA-Z]*|allexport", t) for t in tokens[1:])
     if name in SHELL_VAR_CMDS or (name == "set" and allexport):
         return R_SHELL_VARS
-    if name in SHELL_STATE_CMDS:
+    if name in SHELL_STATE_CMDS or (name == "printf" and any(t.startswith("-v") for t in tokens)):
         return R_SHELL_STATE
+    if name == "rsync" and _rsync_remote(tokens[1:]):
+        return R_RSYNC_REMOTE
     if name == "find" and any(a in _FIND_DENY or a.startswith("-fprint") for a in tokens[1:]):
         return R_FIND_WRITE
     exempt = _exempt_indices(tokens)
