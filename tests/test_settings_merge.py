@@ -28,7 +28,39 @@ def _recommended() -> dict[str, Any]:
 
 def test_empty_file_gets_every_merged_key() -> None:
     rec = _recommended()
-    assert merge({}, rec) == {k: rec[k] for k in MERGED_KEYS}
+    assert MERGED_KEYS == (
+        "sandbox",
+        "permissions.deny",
+        "promptCacheTtl",
+        "subagentPromptCacheTtl",
+    )
+    assert merge({}, rec) == {
+        "sandbox": rec["sandbox"],
+        "permissions": {"deny": rec["permissions"]["deny"]},
+        "promptCacheTtl": rec["promptCacheTtl"],
+        "subagentPromptCacheTtl": rec["subagentPromptCacheTtl"],
+    }
+
+
+def test_only_permissions_deny_leaves_the_recommended_file() -> None:
+    rec = {"permissions": {"allow": ["Bash(*)"], "defaultMode": "auto", "deny": ["Read(x)"]}}
+    assert merge({}, rec) == {"permissions": {"deny": ["Read(x)"]}}
+    assert merge({}, {"permissions": {"allow": ["Bash(*)"]}}) == {}
+
+
+@pytest.mark.parametrize(
+    ("existing", "dotted"),
+    [
+        ({"sandbox": True}, "sandbox"),
+        ({"permissions": {"deny": "Read(x)"}}, "permissions.deny"),
+        ({"sandbox": {"filesystem": {"denyRead": "~/.ssh"}}}, "sandbox.filesystem.denyRead"),
+    ],
+)
+def test_type_conflict_is_refused_naming_the_key(existing: dict[str, Any], dotted: str) -> None:
+    snapshot = copy.deepcopy(existing)
+    with pytest.raises(SettingsMergeError, match=f"key {dotted} is not .*Next:"):
+        merge(existing, _recommended())
+    assert existing == snapshot
 
 
 def test_existing_deny_entries_are_kept_and_missing_ones_appended() -> None:

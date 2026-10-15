@@ -10,8 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-# 0020: the keys /daedalus:setup merges from settings.recommended.json.
-MERGED_KEYS = ("sandbox", "permissions", "promptCacheTtl", "subagentPromptCacheTtl")
+# spec 4: the dotted paths /daedalus:setup merges from settings.recommended.json.
+MERGED_KEYS = ("sandbox", "permissions.deny", "promptCacheTtl", "subagentPromptCacheTtl")
 # spec 4: deny lists gain missing entries; every other existing value stays as the user set it.
 APPEND_KEYS = frozenset({"deny", "denyRead", "denyWrite"})
 
@@ -42,13 +42,42 @@ def read_settings(path: Path) -> dict[str, Any]:
     return data
 
 
-def _merge_into(target: dict[str, Any], source: dict[str, Any]) -> None:
+def _pick(recommended: dict[str, Any]) -> dict[str, Any]:
+    picked: dict[str, Any] = {}
+    for dotted in MERGED_KEYS:
+        *parents, leaf = dotted.split(".")
+        node: Any = recommended
+        for part in [*parents, leaf]:
+            node = node.get(part) if isinstance(node, dict) else None
+        if node is None:
+            continue
+        slot = picked
+        for part in parents:
+            slot = slot.setdefault(part, {})
+        slot[leaf] = node
+    return picked
+
+
+def _conflict(dotted: str, want: str) -> SettingsMergeError:
+    return SettingsMergeError(
+        f"settings key {dotted} is not {want}, so setup cannot merge into it."
+        f" Next: make {dotted} {want} or remove it, then rerun /daedalus:setup."
+    )
+
+
+def _merge_into(target: dict[str, Any], source: dict[str, Any], prefix: str = "") -> None:
     for key, value in source.items():
+        dotted = f"{prefix}{key}"
         if key not in target:
             target[key] = copy.deepcopy(value)
-        elif isinstance(target[key], dict) and isinstance(value, dict):
-            _merge_into(target[key], value)
-        elif key in APPEND_KEYS and isinstance(target[key], list) and isinstance(value, list):
+        elif isinstance(value, dict):
+            # spec 4 never-overwrite: a type conflict raises rather than replacing the value.
+            if not isinstance(target[key], dict):
+                raise _conflict(dotted, "a JSON object")
+            _merge_into(target[key], value, f"{dotted}.")
+        elif key in APPEND_KEYS and isinstance(value, list):
+            if not isinstance(target[key], list):
+                raise _conflict(dotted, "a JSON list")
             for item in value:
                 if item not in target[key]:
                     target[key].append(copy.deepcopy(item))
@@ -56,7 +85,7 @@ def _merge_into(target: dict[str, Any], source: dict[str, Any]) -> None:
 
 def merge(existing: dict[str, Any], recommended: dict[str, Any]) -> dict[str, Any]:
     merged = copy.deepcopy(existing)
-    _merge_into(merged, {k: recommended[k] for k in MERGED_KEYS if k in recommended})
+    _merge_into(merged, _pick(recommended))
     return merged
 
 
