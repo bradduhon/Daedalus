@@ -78,10 +78,26 @@ CODER_GIT = frozenset(
 # Final review I3b: commands whose operands are write targets for repo-coder.
 CODER_WRITE_CMDS = frozenset(
     {"cp", "mv", "tee", "install", "ln", "truncate", "rsync", "dd"}
-    | {"mkdir", "touch", "rm", "rmdir", "unlink", "chmod"}
+    | {"mkdir", "touch", "rm", "rmdir", "unlink", "chmod", "chown", "chgrp"}
 )
+# 0022: options whose value is not a path; every other non-option operand is a path.
+_VALUE_OPTS: dict[str, frozenset[str]] = {
+    "install": frozenset({"-m", "-o", "-g", "-S"}),
+    "mkdir": frozenset({"-m"}),
+    "truncate": frozenset({"-s"}),
+    "touch": frozenset({"-d", "-t"}),
+    "cp": frozenset({"-S"}),
+    "mv": frozenset({"-S"}),
+    "ln": frozenset({"-S"}),
+}
+_VALUE_LONG = frozenset({"--mode", "--owner", "--group", "--suffix", "--size", "--date", "--from"})
+_MODE = re.compile(r"(?:[0-7]{3,4}|[ugoa]*[-+=][rwxXstugo]*)(?:,[ugoa]*[-+=][rwxXstugo]*)*")
 # 0022: shell state a worker could carry into a later segment (GIT_WORK_TREE and kin).
 SHELL_VAR_CMDS = frozenset({"export", "declare", "typeset", "readonly", "local"})
+# 0022: builtins that rebind what a later segment runs (hash pytest=/bin/rm).
+SHELL_STATE_CMDS = frozenset(
+    {"hash", "alias", "unalias", "unset", "shopt", "enable", "setopt", "unsetopt"}
+)
 DIR_CHANGE_CMDS = frozenset({"cd", "pushd", "popd"})
 NETWORK_TOOLS = frozenset({"curl", "wget", "ssh", "scp", "nc", "ncat", "telnet", "aws", "gh"})
 GH_ALLOWED = {
@@ -195,6 +211,18 @@ R_SHELL_VARS = (
     "setting or exporting shell variables is not permitted for workers. "
     "Next: drop it; only CI, NODE_ENV, TZ, LANG, LC_ALL, PYTHONDONTWRITEBYTECODE "
     "may prefix a command."
+)
+R_SHELL_STATE = (
+    "shell builtins that rebind commands or shell options are not permitted for workers. "
+    "Next: run the command directly."
+)
+R_FIND_WRITE = (
+    "find may not delete, exec, or write files for workers. "
+    "Next: list with find, then act on the paths with an allowed command."
+)
+R_CODER_UNIT_GIT = (
+    "repo-coder git add and commit run only inside your unit worktree. "
+    "Next: use git -C <your unit worktree> add/commit."
 )
 R_CD_RELATIVE = (
     "a chain that changes directory may not use relative write paths or pathspecs: {}. "
@@ -1023,15 +1051,19 @@ def _registered_worktrees(repo: str) -> frozenset[str]:
     return frozenset(os.path.realpath(x[9:]) for x in lines if x.startswith("worktree "))
 
 
-def _in_unit_worktree_code(target: str, cwd: str) -> bool:
+def _unit_parts(target: str, cwd: str) -> list[str] | None:
     # 0022: train-made unit worktrees sit at <repo>/.claude/worktrees/<name>, git-registered.
     repo = os.path.realpath(str(project_root(cwd)))
     base = os.path.join(repo, UNIT_WORKTREES)
     parts = os.path.relpath(os.path.realpath(target), base).split(os.sep)
-    inside = len(parts) >= 2 and parts[0] not in {os.curdir, os.pardir}
-    if not inside or parts[1] not in {"src", "tests"}:
-        return False
-    return os.path.join(base, parts[0]) in _registered_worktrees(repo)
+    if parts[0] in {os.curdir, os.pardir}:
+        return None
+    return parts if os.path.join(base, parts[0]) in _registered_worktrees(repo) else None
+
+
+def _in_unit_worktree_code(target: str, cwd: str) -> bool:
+    parts = _unit_parts(target, cwd)
+    return parts is not None and len(parts) >= 2 and parts[1] in {"src", "tests"}
 
 
 def _in_code_dirs(arg: str, cwd: str) -> bool:
@@ -1128,7 +1160,6 @@ def _git_grammar_ok(
     sub, args, globals_ = _git_split(tokens)
     if sub not in subs or sub not in grammar:
         return False
-    base = cwd
     i = 0
     while i < len(globals_):
         flag = globals_[i]
@@ -1138,14 +1169,21 @@ def _git_grammar_ok(
         if flag == "-C" and i + 1 < len(globals_):
             target = _abs(globals_[i + 1], cwd)
             if _under(target, cwd) or (charter is not None and _under(target, charter)):
-                # 0022 P3: git chains each -C onto the previous one.
-                base = _abs(globals_[i + 1], base)
                 i += 2
                 continue
         return False
     if grammar[sub] is _pathspec_ok:
-        return _pathspec_ok(args, cwd, base)
+        return _pathspec_ok(args, cwd, _git_dir(globals_, cwd))
     return grammar[sub](args, cwd)
+
+
+def _git_dir(globals_: list[str], cwd: str) -> str:
+    # 0022 P3: git chains each -C onto the previous one.
+    base = cwd
+    for i in range(len(globals_) - 1):
+        if globals_[i] == "-C":
+            base = _abs(globals_[i + 1], base)
+    return base
 
 
 def _docs_add_ok(args: list[str], _: str) -> bool:
@@ -1358,14 +1396,6 @@ def _same_path(target: str, protected: str) -> bool:
     return os.path.realpath(target).casefold() == os.path.realpath(protected).casefold()
 
 
-def _looks_like_path(arg: str, cwd: str) -> bool:
-    return (
-        "/" in arg
-        or bool(os.path.splitext(os.path.basename(arg))[1])
-        or os.path.lexists(_abs(arg, cwd))
-    )
-
-
 def _in_place(name: str, args: list[str]) -> bool:
     for arg in args:
         if name == "sed" and (arg == "--in-place" or arg.startswith("--in-place=")):
@@ -1382,23 +1412,38 @@ def _in_place(name: str, args: list[str]) -> bool:
 def _write_operands(name: str, args: list[str]) -> list[str]:
     if name == "dd":
         return [a.split("=", 1)[1] for a in args if a.startswith("of=")]
+    values = _VALUE_OPTS.get(name, frozenset())
     operands: list[str] = []
     script_given = False
     i = 0
     while i < len(args):
         arg = args[i]
+        if arg == "--":
+            operands += args[i + 1 :]
+            break
         if name in {"sed", "perl"} and arg in {"-e", "-E", "-f"}:
             script_given = True
             i += 2
             continue
+        if arg in values:
+            i += 2
+            continue
         if arg.startswith("--") and "=" in arg:
-            if name not in {"sed", "perl"}:
-                operands.append(arg.split("=", 1)[1])
+            key, value = arg.split("=", 1)
+            if name not in {"sed", "perl"} and key not in _VALUE_LONG:
+                operands.append(value)
         elif not arg.startswith("-") or arg == "-":
             operands.append(arg)
         i += 1
-    if name in {"sed", "perl"} and not script_given and operands:
-        operands = operands[1:]
+    if not operands:
+        return operands
+    if name in {"sed", "perl"} and not script_given:
+        return operands[1:]
+    # 0022: the leading mode or owner is not a path; --reference replaces it.
+    if any(a.startswith("--reference") for a in args):
+        return operands
+    if (name == "chmod" and _MODE.fullmatch(operands[0])) or name in {"chown", "chgrp"}:
+        return operands[1:]
     return operands
 
 
@@ -1408,16 +1453,9 @@ def _coder_write_target(segment: list[str], cwd: str) -> str | None:
     if name not in CODER_WRITE_CMDS and not (name in {"sed", "perl"} and _in_place(name, args)):
         return None
     for arg in _write_operands(name, args):
-        if (
-            arg != "-"
-            and _looks_like_path(arg, cwd)
-            and not _in_unit_worktree_code(_abs(arg, cwd), cwd)
-        ):
+        if arg != "-" and not _in_unit_worktree_code(_abs(arg, cwd), cwd):
             return arg
     return None
-
-
-_MODE = re.compile(r"[0-7]{3,4}|[ugoa]*[-+=][rwxXst]*")
 
 
 def _cd_relative_target(segment: list[str], cwd: str) -> str | None:
@@ -1427,12 +1465,14 @@ def _cd_relative_target(segment: list[str], cwd: str) -> str | None:
     if name == "git":
         sub, git_args, globals_ = _git_split(segment)
         dirs = [globals_[i + 1] for i in range(len(globals_) - 1) if globals_[i] == "-C"]
+        if sub in {"add", "commit"} and not dirs:
+            return f"git {sub} without -C"
         if sub in {"restore", "checkout"} and not dirs:
             dirs = [a for a in git_args if a != "--"]
         return next((d for d in dirs if not os.path.isabs(d)), None)
     if name not in CODER_WRITE_CMDS and not (name in {"sed", "perl"} and _in_place(name, args)):
         return None
-    operands = [a for a in _write_operands(name, args) if a != "-" and not _MODE.fullmatch(a)]
+    operands = [a for a in _write_operands(name, args) if a != "-"]
     return next((a for a in operands if not os.path.isabs(a)), None)
 
 
@@ -1650,6 +1690,10 @@ def _worker_hygiene(tokens: list[str], agent: str) -> str | None:
     allexport = any(re.fullmatch(r"-[a-zA-Z]*a[a-zA-Z]*|allexport", t) for t in tokens[1:])
     if name in SHELL_VAR_CMDS or (name == "set" and allexport):
         return R_SHELL_VARS
+    if name in SHELL_STATE_CMDS:
+        return R_SHELL_STATE
+    if name == "find" and any(a in _FIND_DENY or a.startswith("-fprint") for a in tokens[1:]):
+        return R_FIND_WRITE
     exempt = _exempt_indices(tokens)
     ledger = agent == "charter-docs" and _is_append_ledger(tokens)
     if ledger:
@@ -1801,6 +1845,10 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
                     segment, CODER_GIT, cwd, None
                 ):
                     return _block(R_CODER_GIT)
+                if sub in {"add", "commit"}:
+                    git_dir = _git_dir(_git_split(segment)[2], cwd)
+                    if _unit_parts(git_dir, cwd) is None:
+                        return _block(R_CODER_UNIT_GIT)
                 target = _coder_write_target(segment, cwd)
                 if target is not None:
                     return _block(

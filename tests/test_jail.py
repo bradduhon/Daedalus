@@ -233,7 +233,7 @@ class TestRepoCoder:
         for command in (
             "pytest -q",
             "npm run test:unit",
-            "git add -A && git commit -m 'WIP: yield'",
+            f"git -C {WT} add -A && git -C {WT} commit -m 'WIP: yield'",
             "git diff",
         ):
             assert decide(_b("repo-coder", command), CFG).allow, command
@@ -888,11 +888,11 @@ class TestRound3Breakage:
 
     def test_quoted_separators_in_commit_message(self) -> None:
         for command in (
-            "git commit -m 'fix: a; b'",
-            "git commit -m 'a > b'",
-            "git commit -m 'a | b && c'",
-            "git commit -m 'cost: $5'",
-            "git commit -m 'fix curl handling'",
+            f"git -C {WT} commit -m 'fix: a; b'",
+            f"git -C {WT} commit -m 'a > b'",
+            f"git -C {WT} commit -m 'a | b && c'",
+            f"git -C {WT} commit -m 'cost: $5'",
+            f"git -C {WT} commit -m 'fix curl handling'",
         ):
             assert decide(_b("repo-coder", command), CFG).allow, command
 
@@ -1846,7 +1846,8 @@ class TestProjectDataDir:
     )
     def test_ordinary_git_add_commit_allowed(self, command: str) -> None:
         assert decide(_b(None, command), CFG).allow, command
-        assert decide(_b("repo-coder", command), CFG).allow, command
+        # 0022: the coder runs the same command inside its unit worktree.
+        assert decide(_b("repo-coder", f"git -C {WT} {command[4:]}"), CFG).allow, command
 
     @pytest.mark.parametrize(
         "command",
@@ -2261,7 +2262,7 @@ def test_coder_writes_inside_a_unit_worktree() -> None:
     # 0022: the coder's cwd is the main checkout; its code dirs live in the unit worktree.
     assert decide(_w("repo-coder", f"{WT}/src/a.py"), CFG).allow
     assert decide(_w("repo-coder", f"{WT}/tests/test_a.py", "Edit"), CFG).allow
-    assert decide(_b("repo-coder", f"cp a {WT}/src/b.py"), CFG).allow
+    assert decide(_b("repo-coder", f"cp {WT}/src/a.py {WT}/src/b.py"), CFG).allow
 
 
 @pytest.mark.parametrize(
@@ -2454,3 +2455,109 @@ def test_coder_cwd_inside_a_real_unit_worktree(tmp_path: Path) -> None:
         assert not decide(_cwd(_w("repo-coder", f"{repo}/src/a.py"), cwd), CFG).allow, cwd
         assert not decide(_cwd(_w("repo-coder", f"{wt}/README.md"), cwd), CFG).allow, cwd
     assert decide(_cwd(_w("repo-coder", "src/a.py"), wt), CFG).allow
+
+
+@pytest.mark.parametrize("agent", ["repo-coder", "contract-spec", "charter-docs"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"hash pytest=/bin/rm; pytest {CWD}/infra/a.tf",
+        "hash -p /bin/rm pytest; pytest x",
+        f"alias git=tee; git -C {WT} status",
+        "unalias ls",
+        "unset PATH; git status",
+        "shopt -s expand_aliases",
+        "enable -n test",
+        "setopt aliases",
+        "unsetopt hashcmds",
+        "builtin cd /tmp",
+        "command rm x",
+        "eval ls",
+        "exec ls",
+        "source x.sh",
+        ". x.sh",
+    ],
+)
+def test_worker_shell_state_builtins_are_refused(agent: str, command: str) -> None:
+    # 0022: a builtin that rebinds what a later segment runs voids every later check.
+    assert not decide(_b(agent, command), CFG).allow, (agent, command)
+
+
+def test_coder_plain_git_status_in_unit_worktree_allowed() -> None:
+    assert decide(_b("repo-coder", f"git -C {WT} status"), CFG).allow
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "mkdir newdir",
+        "touch NEWFILE",
+        "mkdir -m 700 infra2",
+        f"chown x {CWD}/infra/a.tf",
+        f"chgrp x {CWD}/infra/a.tf",
+        f"chown x:y {WT}/src/a.py {CWD}/infra/a.tf",
+        f"install --mode=644 {WT}/src/a.py {CWD}/bin/a",
+        f"find {CWD}/infra -delete",
+        f"find {WT}/src -exec rm {{}} +",
+        f"find {WT}/src -fprint {CWD}/x",
+    ],
+)
+def test_coder_bare_and_owner_operands_are_paths(command: str) -> None:
+    # 0022: every non-option operand of a coder write command is a path, no heuristic.
+    assert not decide(_b("repo-coder", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"mkdir {WT}/src/pkg",
+        f"mkdir -m 700 {WT}/src/pkg",
+        f"touch {WT}/tests/__init__.py",
+        f"chown x {WT}/src/a.py",
+        f"chmod 755 {WT}/src/a.py",
+        f"install -m 644 -o x {WT}/src/a.py {WT}/src/b.py",
+        f"install --mode=644 {WT}/src/a.py {WT}/src/b.py",
+        f"truncate -s 0 {WT}/tests/out.txt",
+        f"find {WT}/src -name '*.py'",
+    ],
+)
+def test_coder_unit_worktree_operands_allowed(command: str) -> None:
+    assert decide(_b("repo-coder", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git add -A",
+        "git add .",
+        "git add -- src/a.py",
+        "git commit -m x",
+        "git commit -a -m x",
+        f"git -C {CWD} add -A",
+        f"git -C {CWD}/.claude/worktrees/evil commit -m x",
+        f"cd {CWD}/.claude/worktrees/u1 && git commit -a -m x",
+    ],
+)
+def test_coder_add_and_commit_outside_unit_worktree_refused(command: str) -> None:
+    # 0022: staging or committing in the main checkout lands on the main branch.
+    assert not decide(_b("repo-coder", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"git -C {WT} add -A",
+        f"git -C {WT} add -- {WT}/src/a.py",
+        f"git -C {WT} commit -m 'WIP: yield'",
+        f"git -C {WT}/src commit -m x",
+    ],
+)
+def test_coder_add_and_commit_in_unit_worktree_allowed(command: str) -> None:
+    assert decide(_b("repo-coder", command), CFG).allow, command
+
+
+def test_coder_add_and_commit_with_cwd_in_real_unit_worktree(tmp_path: Path) -> None:
+    repo, wt = _unit_repo(tmp_path / "repo")
+    assert decide(_cwd(_b("repo-coder", "git add -A"), wt), CFG).allow
+    assert decide(_cwd(_b("repo-coder", "git commit -m x"), wt), CFG).allow
+    assert not decide(_cwd(_b("repo-coder", "git add -A"), repo), CFG).allow
