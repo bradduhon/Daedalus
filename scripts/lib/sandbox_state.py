@@ -57,3 +57,11 @@ def sandbox_line(state: str) -> tuple[bool, str]:
     if state == ON:
         return True, "OK   sandbox: on"
     return False, f"MISS sandbox: {state}. Next: {SETUP_NEXT}"
+
+
+def sandbox_check(repo: Path, home: Path | None = None) -> tuple[bool, str]:
+    # 0020: one line for the doctor and the SessionStart notice; bad settings name the file.
+    try:
+        return sandbox_line(sandbox_state(repo, home))
+    except SettingsError as exc:
+        return False, f"MISS sandbox: {exc}"

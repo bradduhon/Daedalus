@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import io
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,11 +18,12 @@ from lib.sandbox_state import (
     SettingsError,
     missing_binaries,
     required_binaries,
+    sandbox_check,
     sandbox_line,
     sandbox_state,
 )
 
-from tests.conftest import fake_bin
+from tests.conftest import SCRIPTS_DIR, fake_bin
 
 
 @pytest.fixture
@@ -109,3 +114,85 @@ def test_one_line_per_state() -> None:
         False,
         "MISS sandbox: configured-unavailable. Next: run /daedalus:setup",
     )
+
+
+def test_sandbox_check_names_malformed_settings(tmp_path: Path, bins: Path) -> None:
+    _settings(tmp_path / "home" / ".claude" / "settings.json", "{not json")
+    ok, line = sandbox_check(tmp_path / "repo", tmp_path / "home")
+    assert not ok and line.startswith("MISS sandbox: ") and "is not valid JSON" in line
+
+
+def _notice(stdin: str, home: Path, path_env: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    env = dict(os.environ)
+    env["HOME"] = str(home)
+    env["PATH"] = path_env
+    return subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "sandbox_notice.py")],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=cwd,
+        check=False,
+    )
+
+
+def _start(cwd: Path) -> str:
+    return json.dumps({"hook_event_name": "SessionStart", "cwd": str(cwd)})
+
+
+OFF_LINE = "MISS sandbox: off. Next: run /daedalus:setup"
+
+
+def test_notice_prints_the_doctor_line_when_off(tmp_path: Path, bins: Path) -> None:
+    result = _notice(_start(tmp_path), tmp_path / "home", str(bins), tmp_path)
+    assert result.returncode == 0
+    assert json.loads(result.stdout) == {
+        "systemMessage": OFF_LINE,
+        "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": OFF_LINE},
+    }
+
+
+def test_notice_is_silent_when_on(tmp_path: Path, bins: Path) -> None:
+    fake_bin(tmp_path, ("bwrap", "socat"))
+    _settings(tmp_path / "home" / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    result = _notice(_start(tmp_path), tmp_path / "home", str(bins), tmp_path)
+    assert result.returncode == 0 and result.stdout == ""
+
+
+@pytest.mark.parametrize("stdin", ["not json", "", "[1, 2]"])
+def test_notice_falls_back_to_cwd_on_bad_input(tmp_path: Path, bins: Path, stdin: str) -> None:
+    # spec 5: unreadable hook input means the current directory is the repo.
+    result = _notice(stdin, tmp_path / "home", str(bins), tmp_path)
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["systemMessage"] == OFF_LINE
+
+
+def test_notice_reads_project_settings_from_the_payload_cwd(tmp_path: Path, bins: Path) -> None:
+    fake_bin(tmp_path, ("bwrap", "socat"))
+    repo = tmp_path / "repo"
+    _settings(repo / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    result = _notice(_start(repo), tmp_path / "home", str(bins), tmp_path)
+    assert result.returncode == 0 and result.stdout == ""
+
+
+def test_notice_reports_malformed_settings(tmp_path: Path, bins: Path) -> None:
+    _settings(tmp_path / "home" / ".claude" / "settings.json", "{not json")
+    result = _notice(_start(tmp_path), tmp_path / "home", str(bins), tmp_path)
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["systemMessage"].startswith("MISS sandbox: ")
+
+
+def test_notice_failure_prints_nothing_and_exits_zero(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import sandbox_notice
+
+    def boom(_payload: object) -> str | None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(sandbox_notice, "notice", boom)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("{}"))
+    assert sandbox_notice.main() == 0
+    out = capsys.readouterr()
+    assert out.out == "" and "daedalus-sandbox: boom" in out.err

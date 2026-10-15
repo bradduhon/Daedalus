@@ -25,7 +25,7 @@ from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
 from lib.sandbox_state import (  # noqa: E402
     SettingsError,
     required_binaries,
-    sandbox_line,
+    sandbox_check,
     sandbox_state,
 )
 
@@ -76,14 +76,6 @@ def _cache_check() -> tuple[bool, str]:
 def _plugin_root_check() -> tuple[bool, str]:
     # P8: informational; README readers copy the plugin root from this line.
     return True, f"OK   plugin root: {Path(__file__).resolve().parent.parent}"
-
-
-def _sandbox_check(repo: Path) -> tuple[bool, str]:
-    # 0020: the sandbox is optional; the line names /daedalus:setup when it is not on.
-    try:
-        return sandbox_line(sandbox_state(repo))
-    except SettingsError as exc:
-        return False, f"MISS sandbox: {exc}"
 
 
 def _gh_checks() -> Iterator[tuple[bool, str]]:
@@ -245,7 +237,7 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     yield from _data_checks(repo, is_repo)
     yield _cache_check()
     yield _plugin_root_check()
-    yield _sandbox_check(repo)
+    yield sandbox_check(repo)
     yield _check(
         shutil.which("gitleaks") is not None,
         "gitleaks on PATH",
