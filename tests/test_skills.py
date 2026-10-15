@@ -701,3 +701,53 @@ def test_setup_skill_runs_the_setup_script_only_when_asked() -> None:
     assert "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_setup.py`" in body
     assert "never run it on your own" in body
     assert "Restart Claude Code to apply" in body
+
+
+TRAIN_SKILLS = [p for p in SKILLS if p.parent.name.endswith("-train")]
+SANDBOX_NEXT_LINE = "Next: run /daedalus:setup, restart, rerun the train."
+SANDBOX_STATE_CMD = "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_doctor.py --sandbox-state"
+
+
+@pytest.mark.parametrize("path", TRAIN_SKILLS, ids=lambda p: p.parent.name)
+def test_every_train_declares_a_sandbox_class(path: Path) -> None:
+    # 0020: per train class, never hard-wired to one train (0022).
+    assert _split(path)[0].get("sandbox") in {"optional", "required"}
+
+
+def test_train_sandbox_classes() -> None:
+    classes = {p.parent.name: _split(p)[0].get("sandbox") for p in TRAIN_SKILLS}
+    assert classes == {"build-train": "optional", "push-train": "required"}
+
+
+def test_build_train_records_the_sandbox_state() -> None:
+    text = _build_train()
+    step = _section(text, "## Preconditions", "## Phase 1").split("\n8. ", 1)[1]
+    assert f"`{SANDBOX_STATE_CMD} --repo <repo>`" in step
+    assert "The Build Train runs in every state." in step
+    assert "    sandbox: <on, off or configured-unavailable>" in text
+    assert "       Sandbox: <on, off or configured-unavailable>" in text
+
+
+def test_build_train_stops_infrastructure_units_without_the_sandbox() -> None:
+    phase3 = _section(_build_train(), "## Phase 3", "\n5. The summary")
+    gate = phase3.split("\n1. ", 1)[1].split("\n2. ", 1)[0]
+    assert (
+        "When the State Block `sandbox:` is not `on` and any unit touched IAM, KMS, mTLS, "
+        "key custody or infrastructure config, stop before the security audit and before any "
+        "merge, naming those units. " + SANDBOX_NEXT_LINE
+    ) in gate
+    assert gate.index("`sandbox:` is not `on`") < gate.index("Agent(`nist-specialist`)")
+
+
+def test_push_train_requires_the_sandbox_first() -> None:
+    pre = _section(_push_train(), "## Preconditions", "\n1. ")
+    assert f"`{SANDBOX_STATE_CMD} --repo .`" in pre
+    refusal = "Any word but `on`: stop. The Push Train needs the OS sandbox. "
+    assert refusal + SANDBOX_NEXT_LINE in pre
+
+
+def test_push_train_checks_gh_beside_gitleaks() -> None:
+    step = _push_train().split("\n5. ", 1)[1].split("\n6. ", 1)[0]
+    assert "Then run `gh auth status`. A non-zero exit: stop." in step
+    assert "Next: gh auth login" in step
+    assert "or `gh` yourself" not in _push_train()

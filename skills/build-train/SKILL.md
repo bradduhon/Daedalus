@@ -2,6 +2,7 @@
 name: build-train
 description: Runs a Build Train on this repository. Locks the contract and the project standards first, gives each work unit to a repo-coder in its own worktree, answers their questions through specialists, and runs compliance and an adversarial security audit before merging the units locally. Never pushes.
 argument-hint: Describe the feature, bugfix, or change to build in this repository.
+sandbox: optional
 ---
 <!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
 
@@ -36,12 +37,14 @@ Rules for the whole train:
 5. Check that this session's hooks are writing the audit log. Use only the Glob, Grep and Read tools here, no Bash: they write non-Bash records, so the probe stays the newest Bash record and the check stays valid. Glob `<repo>/.claude/daedalus/audit/*.jsonl` and take the newest file. The log is compact JSON with sorted keys, no space after `:`. Grep that file with line numbers for `"event":"PreToolUse".*"tool_name":"Bash"` and take the last match's line number. Grep it again with line numbers for `append_ledger.py --probe`; that line number must be among the matches. Read the log with that line as the offset and a limit of 1, and confirm the record holds `"event":"PreToolUse"`, `"tool_name":"Bash"` and a `tool_input.command` containing `append_ledger.py --probe`. Never Read the whole log. No file, or any other command: stop. This session's hooks are not writing the audit log, so the jail is not enforcing. Next: run /daedalus:doctor. Otherwise the file name without `.jsonl` is the audit session id.
 6. Set `<train-id>` to the UTC time as `YYYYMMDD-HHMMSS`. Create `<repo>/docs/.tmp/daedalus/` with `mkdir -p` if absent, and if `<repo>/docs/.tmp/daedalus/.gitignore` is absent write it with the single line `*`. The train's scratch files and summary live there and git ignores them. Create `<repo>/.claude/worktrees/` the same way, and if `<repo>/.claude/worktrees/.gitignore` is absent write it with the single line `*`; the coder worktrees live there and git ignores them.
 7. When `charter_root` is declared, run `git -C <charter_root> status --porcelain`. Any output: stop. Next: commit or stash the changes in <charter_root> from your own shell, then run `/daedalus:build-train` again. Otherwise record the Charter's current branch with `git -C <charter_root> rev-parse --abbrev-ref HEAD` (the summary names it as the charter base), then run `git -C <charter_root> switch -c daedalus/<train-id>` so every Charter commit of this train, the contract and the ledger entry, lands on its own branch; the Push Train names the commands that push it.
+8. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_doctor.py --sandbox-state --repo <repo>` (0020). It prints one word, `on`, `off` or `configured-unavailable`; record it as `sandbox:` in the State Block. The Build Train runs in every state. Exit 1: stop and show its message. Next: the action the message names.
 
 Keep this **State Block** in your context and print it after Preconditions and after each phase:
 
     train: <train-id>  base: <branch> @ <sha>  audit session: <id>
     ledger: <path> (<origin>, <format>, seq=<n>)  codes: --repo <R> --type <T> (or pending)
     charter_root: <path or none>  policy: <engine and path, or none declared>  cache: <path or unresolved>
+    sandbox: <on, off or configured-unavailable>
     packet_version: <n>  contract: <contract path>  lock: <sha>
     units: <id> | <branch> | <status> | built against packet <n>
     open yields: <unit>: <kind> <question>
@@ -82,7 +85,7 @@ Cache path, resolved once before the first nist-specialist or cis-specialist dis
 
 ## Phase 3: Compliance and adversarial security gate
 
-1. Policy gate: a later Daedalus release adds the deterministic policy gate; record `[POLICY: none declared]` or `[POLICY: declared, gate not yet shipped]` in the summary. Then, if any unit touched IAM, KMS, mTLS, key custody or infrastructure config, run Agent(`nist-specialist`) and Agent(`cis-specialist`) on those units' diffs (`git diff daedalus/<train-id>...<branch>`), with the cache path. Keep each `[STATUS: COMPLIANCE]` report.
+1. Sandbox gate (0020): When the State Block `sandbox:` is not `on` and any unit touched IAM, KMS, mTLS, key custody or infrastructure config, stop before the security audit and before any merge, naming those units. Next: run /daedalus:setup, restart, rerun the train. Otherwise, policy gate: a later Daedalus release adds the deterministic policy gate; record `[POLICY: none declared]` or `[POLICY: declared, gate not yet shipped]` in the summary. Then, if any unit touched IAM, KMS, mTLS, key custody or infrastructure config, run Agent(`nist-specialist`) and Agent(`cis-specialist`) on those units' diffs (`git diff daedalus/<train-id>...<branch>`), with the cache path. Keep each `[STATUS: COMPLIANCE]` report.
 2. Agent(`standards-rules-specialist`) for an auditor brief, with the config path, the ledger line, the unit ids and their changed files; it returns the rules each unit is judged against. Then Agent(`security-auditor`) with: the diff base `daedalus/<train-id>`, so each diff leaves out the contract commits on the integration branch, every unit branch, the Locked Contract Packet with its packet_version, the Standards Packet, the auditor brief, and the compliance reports. Read the verdict from the first line of the auditor's reply.
 3. `[VERDICT: REJECTED] <findings>`: SendMessage(each responsible coder, its itemized file:line findings). A coder's reply during a fix round routes exactly like a Phase 2 reply, yields included, until it returns `[STATUS: COMPLETE]`. Then repeat step 2. After 3 rejected rounds, stop and show the last findings. Next: fix the findings by hand on the named branches, or rerun the train with a narrower task. The unit branches stay as they are.
 4. `[VERDICT: APPROVED] <paragraph>`: you merge, then charter-docs records.
@@ -107,6 +110,7 @@ Cache path, resolved once before the first nist-specialist or cis-specialist dis
        Ledger ids: <ids> in commit <sha>.
          or, until charter-docs commits: Ledger ids: pending. Codes: --repo <R> --type <T>.
        [POLICY: none declared] or [POLICY: declared, gate not yet shipped]
+       Sandbox: <on, off or configured-unavailable>
        ## Units
        | Unit | Branch | Packet | Files | Tests |
        ## Yields
