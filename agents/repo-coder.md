@@ -33,6 +33,13 @@ between Bash calls.
 6. Finish with `[STATUS: COMPLETE]` listing branch name, packet_version, modified files,
    test results, and proposed ledger notes.
 
+## Shell rules (0022, spec 7)
+- Use absolute paths for every file and git pathspec, or `git -C <your worktree path>`.
+- Never assign shell variables or use `VAR=value` prefixes. Never use `||`, subshells `( )`, `$( )`, backticks, `eval`, `export`, `trap` or `alias`.
+- Send one command per Bash call; `&&` is allowed.
+- Run tests with `cd <worktree> && python3 -m pytest -q` and types with `cd <worktree> && python3 -m mypy src tests`. Pyright and other interpreters are not available.
+- If a command is refused, the refusal names the rule. Follow its Next line; do not retry a variant.
+
 Never write U+2013 or U+2014 (en or em dash) in a reply, a file, or a ledger entry; use a hyphen.
 
 ## Status contract
