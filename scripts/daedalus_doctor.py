@@ -160,7 +160,7 @@ def _data_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
 
 
 def _ledger_probe(root: Path, config: Config) -> tuple[bool, str]:
-    # 0004: without config.json the convention probe is the ledger source.
+    # 0004: resolves manifest, config or convention ledger alike; LedgerError is a MISS.
     try:
         found = resolve_ledger(str(root), config)
     except LedgerError as exc:
@@ -182,11 +182,7 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
     else:
         # spec 9: config.json is optional; absence means the defaults.
         yield True, "OK   config.json: not present, defaults in use"
-    if config.ledger is not None:
-        yield True, "OK   ledger declared"
-    else:
-        # spec 5, 9: no declared ledger means the convention probe, config.json or not.
-        yield _ledger_probe(data.parent.parent, config)
+    yield _ledger_probe(data.parent.parent, config)
     # spec 5 (P9): standards_sources and policy are optional; undeclared is not a miss.
     if config.standards_sources:
         yield True, "OK   standards_sources declared"

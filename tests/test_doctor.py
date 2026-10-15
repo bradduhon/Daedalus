@@ -595,3 +595,35 @@ def test_config_without_ledger_runs_the_probe_none_found(tmp_path: Path) -> None
         "OK   ledger: none found (the Build Train asks before creating docs/decisions.md)"
     )
     assert not any(line.startswith("MISS ledger") for line in lines)
+
+
+def _declared_ledger(repo: Path, sequence_source: str) -> Path:
+    path = repo / "docs" / "decisions.md"
+    ledger = {
+        "path": str(path),
+        "format": "markdown-table-row",
+        "id_scheme": "{seq:04d}-DAE-PLT",
+        "sequence_source": sequence_source,
+    }
+    (_data(repo) / "config.json").write_text(json.dumps({"ledger": ledger}))
+    return path
+
+
+def test_config_ledger_with_bad_sequence_source_is_a_miss(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    _declared_ledger(repo, "row-count")
+    bins = _bins_with_git(tmp_path)
+    lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
+    miss = [line for line in lines if line.startswith("MISS ledger: ")]
+    assert len(miss) == 1 and "sequence_source" in miss[0] and "Next:" in miss[0]
+
+
+def test_config_ledger_valid_is_ok_with_config_origin(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    path = _declared_ledger(repo, "last-row-id")
+    bins = _bins_with_git(tmp_path)
+    lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
+    assert f"OK   ledger: {path} (config, markdown-table-row)" in lines
+    assert not any(line.startswith("MISS ledger") for line in lines)
