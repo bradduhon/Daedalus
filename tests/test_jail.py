@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from lib import jail
 from lib.config import Config, LedgerDecl
 from lib.jail import CONDUCTOR_GIT, KNOWN_AGENTS, decide, split_pipeline, tokenize
 
@@ -21,6 +22,23 @@ CFG = Config(
         Path("/work/Charter/decision-log.md"), "markdown-table-row", "{seq:04d}", "last-row-id"
     ),
 )
+
+
+WT = f"{CWD}/.claude/worktrees/20261015-120000-u1"
+FAKE_UNITS = frozenset({f"{CWD}/.claude/worktrees/u1", WT})
+
+
+@pytest.fixture(autouse=True)
+def _fake_unit_worktrees(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 0022: CWD is not a real repo; register its fake unit worktrees, real repos query git.
+    real = getattr(jail, "_registered_worktrees", None)
+
+    def fake(repo: str) -> frozenset[str]:
+        if repo == CWD:
+            return FAKE_UNITS
+        return real(repo) if real is not None else frozenset()
+
+    monkeypatch.setattr(jail, "_registered_worktrees", fake, raising=False)
 
 
 def _w(agent: str | None, path: str, tool: str = "Write") -> dict[str, Any]:
@@ -2239,9 +2257,6 @@ class TestFixWaveCharterDocsBash:
         assert decide(_b("charter-docs", command), CFG).allow, command
 
 
-WT = f"{CWD}/.claude/worktrees/20261015-120000-u1"
-
-
 def test_coder_writes_inside_a_unit_worktree() -> None:
     # 0022: the coder's cwd is the main checkout; its code dirs live in the unit worktree.
     assert decide(_w("repo-coder", f"{WT}/src/a.py"), CFG).allow
@@ -2290,9 +2305,24 @@ def test_coder_pathspec_resolves_against_git_dash_c() -> None:
     assert decide(_b("repo-coder", f"git restore -- {WT}/src/a.py"), CFG).allow
 
 
+def _unit_repo(path: Path) -> tuple[Path, Path]:
+    repo = _git_init(path)
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+    git += ["-c", "commit.gpgsign=false"]
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    wt = repo / ".claude" / "worktrees" / "u1"
+    subprocess.run([*git, "worktree", "add", "-q", "-b", "daedalus-unit/u1", str(wt)], check=True)
+    return repo, wt.resolve()
+
+
+def _cwd(payload: dict[str, Any], cwd: Path) -> dict[str, Any]:
+    payload["cwd"] = str(cwd)
+    return payload
+
+
 def test_coder_unit_worktree_through_a_symlinked_root(tmp_path: Path) -> None:
     # 0022: a symlinked path to the repo and the real path resolve to one worktree base.
-    repo = _git_init(tmp_path / "real")
+    repo, _ = _unit_repo(tmp_path / "real")
     link = tmp_path / "link"
     link.symlink_to(repo)
     for cwd, root in ((link, repo), (repo, link), (link, link)):
@@ -2302,3 +2332,125 @@ def test_coder_unit_worktree_through_a_symlinked_root(tmp_path: Path) -> None:
         payload = _w("repo-coder", f"{root}/src/a.py")
         payload["cwd"] = str(cwd)
         assert not decide(payload, CFG).allow, (cwd, root)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"git -C {WT}/src restore -- :/README.md",
+        f"git -C {WT}/src checkout -- :/",
+        f"git -C {WT}/src restore -- ':(top)src/a.py'",
+        f"git -C {WT} restore -- ':!src/a.py'",
+        f"git -C {WT} add :/",
+        f"git -C {WT} commit -m x -- :/",
+    ],
+)
+def test_coder_pathspec_magic_is_refused(command: str) -> None:
+    # 0022: :/ and :(top) are worktree-top relative; the jail cannot resolve them lexically.
+    assert not decide(_b("repo-coder", command), CFG).allow, command
+
+
+@pytest.mark.parametrize("agent", ["repo-coder", "contract-spec", "charter-docs"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"export GIT_WORK_TREE={CWD}; git -C {WT} restore -- src/a.py",
+        f"export GIT_DIR={CWD}/.git; git -C {WT} restore -- src/a.py",
+        f"export GIT_WORK_TREE={CWD}; git -C {WT}/src restore -- :/src/a.py",
+        f"declare -x FOO=1; tee {WT}/src/a.py",
+        "typeset -x FOO=1",
+        "readonly FOO=1",
+        "export FOO",
+        "set -a",
+        "set -ea",
+        "set -o allexport",
+    ],
+)
+def test_worker_shell_variable_export_is_refused(agent: str, command: str) -> None:
+    d = decide(_b(agent, command), CFG)
+    assert not d.allow and "shell variables" in str(d.reason), (agent, command)
+
+
+def test_coder_plain_unit_worktree_bash_write_still_allowed() -> None:
+    assert decide(_b("repo-coder", f"tee {WT}/src/a.py"), CFG).allow
+    assert decide(_b("repo-coder", "set -e"), CFG).allow
+
+
+def test_coder_unregistered_worktree_dir_is_refused(tmp_path: Path) -> None:
+    # 0022: only a git-registered worktree under .claude/worktrees is a unit worktree.
+    repo, wt = _unit_repo(tmp_path / "repo")
+    evil = repo / ".claude" / "worktrees" / "evil"
+    (evil / "src").mkdir(parents=True)
+    assert decide(_cwd(_w("repo-coder", f"{wt}/src/a.py"), repo), CFG).allow
+    assert not decide(_cwd(_w("repo-coder", f"{evil}/src/a.py"), repo), CFG).allow
+    assert not decide(_cwd(_b("repo-coder", f"tee {evil}/src/a.py"), repo), CFG).allow
+    assert not decide(_w("repo-coder", f"{CWD}/.claude/worktrees/u2/src/a.py"), CFG).allow
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"mkdir -p {CWD}/.claude/worktrees/evil/src",
+        "mkdir -p .claude/worktrees/evil/src",
+        "touch infra/a.tf",
+        f"rm {CWD}/infra/a.tf",
+        f"rmdir {CWD}/infra/x",
+        f"unlink {CWD}/src/a.py",
+        f"chmod 755 {CWD}/scripts/a.sh",
+    ],
+)
+def test_coder_file_mutators_outside_unit_worktree_are_refused(command: str) -> None:
+    assert not decide(_b("repo-coder", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"mkdir -p {WT}/src/pkg",
+        f"touch {WT}/tests/__init__.py",
+        f"rm {WT}/src/old.py",
+        f"chmod 755 {WT}/src/run.py",
+    ],
+)
+def test_coder_file_mutators_inside_unit_worktree_are_allowed(command: str) -> None:
+    assert decide(_b("repo-coder", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"cd {CWD}/infra && tee .claude/worktrees/u1/src/a.py",
+        "pushd /tmp && tee .claude/worktrees/u1/src/a.py",
+        "cd /tmp && git restore -- .claude/worktrees/u1/src/a.py",
+        "cd /tmp && git -C .claude/worktrees/u1 restore -- src/a.py",
+        "cd /tmp; cp .claude/worktrees/u1/src/a.py .claude/worktrees/u1/src/b.py",
+    ],
+)
+def test_coder_relative_write_after_cd_is_refused(command: str) -> None:
+    # 0022: relative operands after cd resolve against the hook cwd, not the cd target.
+    d = decide(_b("repo-coder", command), CFG)
+    assert not d.allow and "absolute" in str(d.reason), command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"cd {WT} && tee {WT}/src/a.py",
+        f"cd /tmp && git -C {WT} restore -- src/a.py",
+        f"cd {WT} && python3 -m pytest -q",
+    ],
+)
+def test_coder_absolute_write_after_cd_is_allowed(command: str) -> None:
+    assert decide(_b("repo-coder", command), CFG).allow, command
+
+
+def test_coder_cwd_inside_a_real_unit_worktree(tmp_path: Path) -> None:
+    # 0022: a hook cwd of the worktree or its src/ still binds writes to that worktree.
+    repo, wt = _unit_repo(tmp_path / "repo")
+    (wt / "src").mkdir()
+    for cwd in (wt, wt / "src"):
+        assert decide(_cwd(_w("repo-coder", f"{wt}/src/a.py"), cwd), CFG).allow, cwd
+        assert decide(_cwd(_w("repo-coder", f"{wt}/tests/t.py"), cwd), CFG).allow, cwd
+        assert not decide(_cwd(_w("repo-coder", f"{repo}/src/a.py"), cwd), CFG).allow, cwd
+        assert not decide(_cwd(_w("repo-coder", f"{wt}/README.md"), cwd), CFG).allow, cwd
+    assert decide(_cwd(_w("repo-coder", "src/a.py"), wt), CFG).allow

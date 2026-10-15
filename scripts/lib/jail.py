@@ -6,12 +6,14 @@ import itertools
 import os
 import re
 import shlex
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from lib.audit import project_data_dir, project_root
+from lib.audit import _git_env, project_data_dir, project_root
 from lib.config import Config
 from lib.ledger import LedgerError, resolve_ledger
 
@@ -74,7 +76,13 @@ CODER_GIT = frozenset(
     | {"stash", "restore", "checkout", "worktree", "config"}
 )
 # Final review I3b: commands whose operands are write targets for repo-coder.
-CODER_WRITE_CMDS = frozenset({"cp", "mv", "tee", "install", "ln", "truncate", "rsync", "dd"})
+CODER_WRITE_CMDS = frozenset(
+    {"cp", "mv", "tee", "install", "ln", "truncate", "rsync", "dd"}
+    | {"mkdir", "touch", "rm", "rmdir", "unlink", "chmod"}
+)
+# 0022: shell state a worker could carry into a later segment (GIT_WORK_TREE and kin).
+SHELL_VAR_CMDS = frozenset({"export", "declare", "typeset", "readonly", "local"})
+DIR_CHANGE_CMDS = frozenset({"cd", "pushd", "popd"})
 NETWORK_TOOLS = frozenset({"curl", "wget", "ssh", "scp", "nc", "ncat", "telnet", "aws", "gh"})
 GH_ALLOWED = {
     "pr": frozenset({"create", "edit", "view", "checks", "status", "list", "comment", "diff"}),
@@ -182,6 +190,15 @@ R_GIT_CONFIG = (
 )
 R_ENV = (
     "environment assignments in front of a command are not permitted for workers. Next: drop them."
+)
+R_SHELL_VARS = (
+    "setting or exporting shell variables is not permitted for workers. "
+    "Next: drop it; only CI, NODE_ENV, TZ, LANG, LC_ALL, PYTHONDONTWRITEBYTECODE "
+    "may prefix a command."
+)
+R_CD_RELATIVE = (
+    "a chain that changes directory may not use relative write paths or pathspecs: {}. "
+    "Next: use absolute paths (or an absolute git -C) after cd."
 )
 R_HYGIENE = (
     "a token contains $, {, }, a backslash, or a leading ~; workers spell arguments literally. "
@@ -979,7 +996,7 @@ def _commit_ok(args: list[str], cwd: str) -> bool:
         if arg in {"-q", "--quiet", "-a"}:
             i += 1
         elif arg == "--":
-            return True
+            return not _has_magic(args[i + 1 :])
         elif arg in {"-m", "-am"} and i + 1 < len(args):
             i += 2
         elif (
@@ -991,12 +1008,30 @@ def _commit_ok(args: list[str], cwd: str) -> bool:
     return True
 
 
+@lru_cache(maxsize=32)
+def _registered_worktrees(repo: str) -> frozenset[str]:
+    cmd = ["git", "-C", repo, "worktree", "list", "--porcelain"]
+    try:
+        out = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=2, env=_git_env(), check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return frozenset()
+    if out.returncode != 0:
+        return frozenset()
+    lines = out.stdout.splitlines()
+    return frozenset(os.path.realpath(x[9:]) for x in lines if x.startswith("worktree "))
+
+
 def _in_unit_worktree_code(target: str, cwd: str) -> bool:
-    # 0022: train-made unit worktrees sit at <repo>/.claude/worktrees/<name>.
-    base = os.path.realpath(os.path.join(str(project_root(cwd)), UNIT_WORKTREES))
+    # 0022: train-made unit worktrees sit at <repo>/.claude/worktrees/<name>, git-registered.
+    repo = os.path.realpath(str(project_root(cwd)))
+    base = os.path.join(repo, UNIT_WORKTREES)
     parts = os.path.relpath(os.path.realpath(target), base).split(os.sep)
     inside = len(parts) >= 2 and parts[0] not in {os.curdir, os.pardir}
-    return inside and parts[1] in {"src", "tests"}
+    if not inside or parts[1] not in {"src", "tests"}:
+        return False
+    return os.path.join(base, parts[0]) in _registered_worktrees(repo)
 
 
 def _in_code_dirs(arg: str, cwd: str) -> bool:
@@ -1014,8 +1049,14 @@ def _pathspec_ok(args: list[str], cwd: str, base: str | None = None) -> bool:
     return (
         len(args) > 1
         and args[0] == "--"
+        and not _has_magic(args[1:])
         and all(_in_unit_worktree_code(_abs(a, root), cwd) for a in args[1:])
     )
+
+
+def _has_magic(pathspecs: list[str]) -> bool:
+    # 0022: :/ and :(top) are worktree-top relative, so the jail refuses every magic form.
+    return any(p.startswith(":") for p in pathspecs)
 
 
 def _stash_ok(args: list[str]) -> bool:
@@ -1065,7 +1106,7 @@ _GIT_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
     "branch": lambda a, _: _flags_ok(
         a, frozenset({"-a", "-r", "-v", "--list", "--show-current"}), positional=False
     ),
-    "add": lambda a, _: _flags_ok(a, frozenset({"-A", "-u", "--all"})),
+    "add": lambda a, _: _flags_ok(a, frozenset({"-A", "-u", "--all"})) and not _has_magic(a),
     "commit": lambda a, cwd: _commit_ok(a, cwd),
     "merge": lambda a, _: _flags_ok(a, frozenset({"--no-ff"}), with_arg=frozenset({"-m"})),
     "worktree": lambda a, _: a[:1] == ["list"] and all(x == "--porcelain" for x in a[1:]),
@@ -1376,6 +1417,25 @@ def _coder_write_target(segment: list[str], cwd: str) -> str | None:
     return None
 
 
+_MODE = re.compile(r"[0-7]{3,4}|[ugoa]*[-+=][rwxXst]*")
+
+
+def _cd_relative_target(segment: list[str], cwd: str) -> str | None:
+    # 0022: after cd, relative operands resolve against the hook cwd, not the shell's.
+    name = _base(segment[0])
+    args = segment[1:]
+    if name == "git":
+        sub, git_args, globals_ = _git_split(segment)
+        dirs = [globals_[i + 1] for i in range(len(globals_) - 1) if globals_[i] == "-C"]
+        if sub in {"restore", "checkout"} and not dirs:
+            dirs = [a for a in git_args if a != "--"]
+        return next((d for d in dirs if not os.path.isabs(d)), None)
+    if name not in CODER_WRITE_CMDS and not (name in {"sed", "perl"} and _in_place(name, args)):
+        return None
+    operands = [a for a in _write_operands(name, args) if a != "-" and not _MODE.fullmatch(a)]
+    return next((a for a in operands if not os.path.isabs(a)), None)
+
+
 def _data_dir_markers() -> list[str]:
     markers = [f"~{_DATA_DIR_DEFAULT}", f"{_HOME}{_DATA_DIR_DEFAULT}"]
     markers += [f"$HOME{_DATA_DIR_DEFAULT}", f"${{HOME}}{_DATA_DIR_DEFAULT}"]
@@ -1586,11 +1646,14 @@ def _exempt_indices(tokens: list[str]) -> set[int]:
 def _worker_hygiene(tokens: list[str], agent: str) -> str | None:
     if _ASSIGN.match(tokens[0]):
         return R_ENV
+    name = _base(tokens[0])
+    allexport = any(re.fullmatch(r"-[a-zA-Z]*a[a-zA-Z]*|allexport", t) for t in tokens[1:])
+    if name in SHELL_VAR_CMDS or (name == "set" and allexport):
+        return R_SHELL_VARS
     exempt = _exempt_indices(tokens)
     ledger = agent == "charter-docs" and _is_append_ledger(tokens)
     if ledger:
         exempt.add(1)
-    name = _base(tokens[0])
     is_wrapper = name in WORKER_WRAPPERS or name.startswith("python")
     if (
         agent == "charter-docs"
@@ -1711,7 +1774,11 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
         if tool == "Bash":
             if piped:
                 return _block(R_PIPE)
+            moved = any(_base(s[0]) in DIR_CHANGE_CMDS for s in segments)
             for segment in segments:
+                relative = _cd_relative_target(segment, cwd) if moved else None
+                if relative is not None:
+                    return _block(R_CD_RELATIVE.format(relative))
                 exempt = _exempt_indices(segment)
                 words = [_base(t) for i, t in enumerate(segment) if i not in exempt]
                 sub = _git_subcommand(segment) if _base(segment[0]) == "git" else None
