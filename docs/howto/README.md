@@ -31,16 +31,16 @@ Inside the session type:
 
 It lists every file and tool daedalus needs and whether each is present, with a `Next:` line for each missing one. Nothing is changed by running it. Every file it checks is described, with a minimal example, in `docs/project-requirements.md`.
 
-Example output from a real run in a new repository with one empty commit, on a machine with no Daedalus settings, gitleaks missing and gh not signed in. Your paths differ:
+Example output from a real run in a new repository with one empty commit, on a machine with no Daedalus settings, gitleaks missing and gh not signed in. Your paths differ, and the doctor prints your home directory in full where this shows `~`:
 
     OK   python >= 3.12
-    OK   project data dir: /tmp/dd.O6nb/work/my-service/.claude/daedalus (will be created by the first hook)
+    OK   project data dir: /work/my-service/.claude/daedalus (will be created by the first hook)
     OK   config.json: not present, defaults in use
     OK   ledger: none found (the Build Train asks before creating docs/decisions.md)
     OK   standards_sources: not declared (optional)
     OK   policy: not declared (optional)
     OK   cache dir: none yet (create it with scripts/refresh_nist_oscal.py or by hand per docs/project-requirements.md)
-    OK   plugin root: /tmp/dd.O6nb/u/.claude/plugins/cache/daedalus/daedalus/2.0.0
+    OK   plugin root: ~/.claude/plugins/cache/daedalus/daedalus/2.0.0
     MISS sandbox: off. Next: run /daedalus:setup
     MISS gitleaks on PATH: not found. Next: the Push Train scans commits with gitleaks; install it so the scan can run
     OK   gh on PATH
@@ -56,11 +56,11 @@ Example output from a real run in a new repository with one empty commit, on a m
 
 In a new repository the last three lines stay `MISS` until you add those files; `docs/project-requirements.md` has an example of each. Once the directory exists the doctor also checks that `.claude/daedalus/.gitignore` holds a `*` line and that git ignores the directory. The cache dir and plugin root lines are informational and never a MISS. When more than one `~/.claude/plugins/data/daedalus*` directory exists, the cache dir line names each one. The plugin root is the directory the commands in this guide call `<plugin>`. On macOS the `bwrap` and `socat` lines do not appear.
 
-The `sandbox` line reads `~/.claude/settings.json`, then `.claude/settings.json` and `.claude/settings.local.json` in the repo; the last one that sets `sandbox.enabled` wins. It reads `on` when that value is true and `bwrap` and `socat` are on PATH, `configured-unavailable` when the value is true and a tool is missing, and `off` otherwise. While it is not `on`, each new session starts with the same line. To turn the sandbox on, type:
+The `sandbox` line reads `~/.claude/settings.json`, then `.claude/settings.json` and `.claude/settings.local.json` in the repo; the last one that sets `sandbox.enabled` wins. It reads `on` when that value is true and `bwrap` and `socat` are on PATH, `configured-unavailable` when the value is true and a tool is missing, and `off` otherwise. When one of those files is not valid JSON, the line reads `MISS sandbox: <path> is not valid JSON (...). Next: fix <path>` instead. While it is not `on`, each new session starts with the same line. To turn the sandbox on, type:
 
     /daedalus:setup
 
-Setup checks for `bwrap` and `socat` first. When one is missing it writes nothing and prints the install command, for example `daedalus setup: bwrap, socat not on PATH; nothing written. Next: run sudo apt-get install -y bubblewrap socat, then rerun /daedalus:setup`. Otherwise it merges the sandbox, the credential deny rules and the two prompt cache settings into `~/.claude/settings.json`. It adds keys you lack and deny entries you lack, never overwrites a value you set, prints the change, and ends with `Restart Claude Code to apply`. It rewrites the file as JSON with a 2-space indent. Restart Claude Code after it writes. Without the sandbox the Build Train still runs and says `Sandbox: off` in its summary; the Push Train refuses.
+Setup checks for `bwrap` and `socat` first. When one is missing it writes nothing and prints what to install: the apt line on Debian and Ubuntu, the package names elsewhere. On Ubuntu it reads `daedalus setup: bwrap, socat not on PATH; nothing written. Next: run sudo apt-get install -y bubblewrap socat, then rerun /daedalus:setup`. Otherwise it merges the sandbox, the credential deny rules and the two prompt cache settings into `~/.claude/settings.json`. It adds keys you lack and deny entries you lack, never overwrites a value you set, prints the change, and ends with `Restart Claude Code to apply`. It rewrites the file as JSON with a 2-space indent. Restart Claude Code after it writes. Without the sandbox the Build Train still runs and says `Sandbox: off` in its summary; the Push Train refuses.
 
 Each `OK` line is a check that passed. Each `MISS` line names what is missing and, after `Next:`, what to do about it. The doctor exits 0 when every check passes and 1 otherwise. Fix the `MISS` lines and run it again.
 

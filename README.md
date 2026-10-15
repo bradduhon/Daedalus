@@ -16,18 +16,18 @@ Daedalus is developed on Linux. macOS is untested.
 | Python | 3.12 or newer | Your system's package manager |
 | Claude Code | Developed against 2.1.280 | Claude Code's own install instructions |
 | git | any | Your system's package manager |
-| bubblewrap (binary `bwrap`), for the sandbox, which the Push Train needs | any | Package `bubblewrap` |
-| socat, for the sandbox, which the Push Train needs | any | Package `socat` |
+| bubblewrap (binary `bwrap`), for the sandbox, optional; the Push Train needs it | any | Package `bubblewrap` |
+| socat, for the sandbox, optional; the Push Train needs it | any | Package `socat` |
 | gitleaks, for the Push Train | any | https://github.com/gitleaks/gitleaks#installing |
 | gh, the GitHub CLI, for the Push Train | any | Install it, then run `gh auth login` |
 
 ## Install
 
-Inside any Claude Code session, type:
+This one-command form needs Claude Code 2.1.275 or later. Start Claude Code in your project, then type:
 
     /plugin install daedalus --marketplace bradduhon/Daedalus
 
-Claude Code asks you to confirm the marketplace, then to pick a scope. Choose "Install for you". This one-command form needs Claude Code 2.1.275 or later. To install from a shell instead, run these two commands, then start Claude Code:
+Claude Code asks you to confirm the marketplace, then to pick a scope. Choose "Install for you". To install from a shell instead, run these two commands, then start Claude Code:
 
     claude plugin marketplace add bradduhon/Daedalus
 
@@ -37,17 +37,17 @@ Every Daedalus command acts on the repository you started Claude Code in.
 
 ## First run
 
-Inside the session, type:
+If `/daedalus:doctor` is not offered yet after you install, run `/reload-plugins` or restart Claude Code. Then, inside the session, type:
 
     /daedalus:doctor
 
 The doctor lists every file and tool Daedalus needs. Each `OK` line is a check that passed. Each `MISS` line names what is missing. Running the doctor changes nothing. Fix the `MISS` lines and run it again.
 
-Every `MISS` line ends with a `Next:` instruction that says what to do. In a new repository, three lines stay `MISS` until you add the files they name: `service-manifest.json`, `contracts/` and `.gitleaks.toml`. [docs/project-requirements.md](docs/project-requirements.md) lists every file Daedalus expects, with a small example of each.
+Every `MISS` line ends with a `Next:` instruction that says what to do. In a new repository, three lines stay `MISS` until you add the files they name: `service-manifest.json`, `contracts/` and `.gitleaks.toml`. The doctor reports them as files your project declares about itself. Neither the Build Train nor the Push Train stops when they are absent today. [docs/project-requirements.md](docs/project-requirements.md) lists every file Daedalus expects, says what each is for, and gives a small example of each.
 
 ### Turning on the sandbox
 
-The doctor's `sandbox` line reads `on`, `off` or `configured-unavailable`. The last means your settings turn the sandbox on but `bwrap` or `socat` is missing. While the sandbox is not on, each new session starts with that same line.
+The doctor's `sandbox` line reads `on`, `off` or `configured-unavailable`. The last means your settings turn the sandbox on but `bwrap` or `socat` is missing. When a settings file it reads is not valid JSON, the line reads `MISS sandbox: <path> is not valid JSON (...). Next: fix <path>` instead. While the sandbox is not on, each new session starts with that same line.
 
 Daedalus runs without the sandbox. The Build Train records the sandbox state in its summary. It stops before its security audit when the sandbox is not on and a unit touched IAM, KMS, mTLS, key custody or infrastructure config. The Push Train refuses to run until the sandbox is on.
 
@@ -55,7 +55,7 @@ To turn it on, install bubblewrap and socat, then type:
 
     /daedalus:setup
 
-Setup refuses while either tool is missing, writes nothing, and prints the install command. Otherwise it adds the sandbox settings, the credential deny rules and two prompt cache settings to `~/.claude/settings.json`. It adds keys you lack and deny entries you lack, and never changes a value you already set. It prints the change, then `Restart Claude Code to apply`. It rewrites the file as JSON with a 2-space indent. Setup runs only when you type the command; Claude never starts it on its own.
+Setup refuses while either tool is missing, writes nothing, and prints what to install: the apt line on Debian and Ubuntu, the package names elsewhere. Otherwise it adds the sandbox settings, the credential deny rules and two prompt cache settings to `~/.claude/settings.json`. It adds keys you lack and deny entries you lack, and never changes a value you already set. It prints the change, then `Restart Claude Code to apply`. It rewrites the file as JSON with a 2-space indent. Setup runs only when you type the command; Claude never starts it on its own.
 
 ## The three trains
 
