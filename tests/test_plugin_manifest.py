@@ -35,3 +35,15 @@ def test_howto_keeps_plugin_dir_in_the_developer_section() -> None:
     assert "--plugin-dir" in rest.split("\n## ", 1)[0]
     assert "--plugin-dir" not in head
     assert "/plugin install daedalus --marketplace bradduhon/Daedalus" in head
+
+
+def test_readme_installs_from_the_marketplace() -> None:
+    # 0020: one command from the self-hosted marketplace; receipts in plan Task 1.
+    text = (REPO_ROOT / "README.md").read_text()
+    assert "/plugin install daedalus --marketplace bradduhon/Daedalus" in text
+    assert "claude plugin marketplace add bradduhon/Daedalus" in text
+    assert "claude plugin install daedalus@daedalus" in text
+    assert "/daedalus:setup" in text
+    assert "--plugin-dir" not in text
+    assert "worktree.baseRef" not in text
+    assert "spawn depth" not in text

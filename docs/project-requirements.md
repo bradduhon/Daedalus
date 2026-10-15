@@ -1,7 +1,7 @@
 <!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
 # What your project needs for daedalus
 
-Every file and setting daedalus reads, with the smallest example that works. `/daedalus:doctor` checks the required ones (marked below). Each marked heading or key carries **(checked)**.
+Every file and setting daedalus reads, with the smallest example that works. `/daedalus:doctor` checks the ones marked below, optional ones included; an optional one that is absent passes. Each marked heading or key carries **(checked)**.
 
 ## In the repo's `.claude/daedalus/` directory
 
@@ -151,18 +151,19 @@ The Push Train runs `gitleaks detect` over every commit on the train branch befo
 
 ### src/ and tests/
 
-The only directories a coder may write. A later Daedalus release reserves `tests/adversarial/` for the boundary tester; today repo-coder may write anywhere under `tests/`.
+The only directories a coder may write, and only inside its own unit worktree, which the Build Train creates at `<repo>/.claude/worktrees/<train-id>-<unit-slug>`. A later Daedalus release reserves `tests/adversarial/` for the boundary tester; today repo-coder may write anywhere under `tests/`.
 
 ## In your user settings
 
-Merge `settings.recommended.json` from the plugin repo into `~/.claude/settings.json`. It enables the sandbox, denies writes to the plugin cache directory, and pins subagent spawn depth to 1. It also sets `worktree.baseRef` to `head`, so each coder worktree branches from the Build Train's integration branch instead of the remote default branch; `/daedalus:doctor` reports a MISS without it, and the Build Train stops when a unit branch does not descend from the contract lock.
+`/daedalus:setup` merges `settings.recommended.json` from the plugin into `~/.claude/settings.json` once `bwrap` and `socat` are on PATH; while either is missing it writes nothing. It adds missing keys, appends missing deny entries, and never overwrites a value you set. The merge enables the sandbox, denies the credential stores to the sandbox and to the Read tool, denies writes to the plugin cache directory, and sets two prompt cache settings. All of it is optional: without it the doctor reports `sandbox: off`, the Build Train runs and says so in its summary, and the Push Train refuses. The Build Train creates its own coder worktrees from the integration branch, and the jail keeps every Daedalus agent from starting agents, so neither needs a setting.
 
 User-level sandbox settings cannot name `<repo>/.claude/daedalus/`, since it differs per repo. Instead, the jail refuses tool writes and the known Bash write routes there; the OS sandbox does not cover the repo-local directory. The `*` gitignore marker keeps it out of git, and the hooks refuse to run when the directory is a symlink, is tracked by git, or holds a marker other than `*`.
 
 ### Settings
 
-- `sandbox.failIfUnavailable` is `true`. If the sandbox cannot start (no `bwrap` or `socat` on PATH), Bash commands do not run at all. The doctor checks for both tools.
-- `permissions.deny` holds Read rules for `~/.ssh/**`, `~/.aws/credentials` and `~/.gnupg/**`, so no agent can read those files through the Read tool.
+- `sandbox.enabled` **(checked)** is `true`. The doctor reads `~/.claude/settings.json`, then the repo's `.claude/settings.json` and `.claude/settings.local.json`; the last one that sets it wins. Its `sandbox` line reads `on`, `off` or `configured-unavailable` (enabled, but `bwrap` or `socat` missing).
+- `sandbox.failIfUnavailable` is `true`. If the sandbox cannot start (no `bwrap` or `socat` on PATH), Bash commands do not run at all. The doctor checks for both tools, and `/daedalus:setup` writes nothing while either is missing.
+- `permissions.deny` holds Read rules for `~/.ssh/**`, `~/.aws/credentials`, `~/.gnupg/**`, `~/.config/gh/**` and `~/.claude/.credentials.json`. The jail refuses the same stores, all of `~/.aws` included, whether or not you merge these settings.
 
 ### Test-only
 
