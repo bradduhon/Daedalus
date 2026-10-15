@@ -38,11 +38,5 @@
     ]
   },
   "promptCacheTtl": "1h",
-  "subagentPromptCacheTtl": "1h",
-  "worktree": {
-    "baseRef": "head"
-  },
-  "env": {
-    "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1"
-  }
+  "subagentPromptCacheTtl": "1h"
 }

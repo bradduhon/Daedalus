@@ -176,3 +176,93 @@ def test_write_atomic_leaves_no_temp_file_on_failure(
     with pytest.raises(OSError):
         write_atomic(tmp_path / "settings.json", "{}\n")
     assert list(tmp_path.iterdir()) == []
+
+
+def _setup(tmp_path: Path, names: tuple[str, ...], os_release: str = "ID=fedora\n") -> Any:
+    import subprocess
+    import sys
+
+    from tests.conftest import SCRIPTS_DIR, fake_bin
+
+    release = tmp_path / "os-release"
+    release.write_text(os_release)
+    return subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS_DIR / "daedalus_setup.py"),
+            "--settings",
+            str(tmp_path / "home" / ".claude" / "settings.json"),
+            "--os-release",
+            str(release),
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": str(fake_bin(tmp_path, names))},
+        check=False,
+    )
+
+
+def test_setup_without_binaries_prints_the_apt_line_and_writes_nothing(tmp_path: Path) -> None:
+    result = _setup(tmp_path, (), "ID=ubuntu\nID_LIKE=debian\n")
+    assert result.returncode == 1
+    assert result.stdout == (
+        "daedalus setup: bwrap, socat not on PATH; nothing written. "
+        "Next: run sudo apt-get install -y bubblewrap socat, then rerun /daedalus:setup\n"
+    )
+    assert not (tmp_path / "home").exists()
+
+
+def test_setup_without_one_binary_names_its_package_elsewhere(tmp_path: Path) -> None:
+    result = _setup(tmp_path, ("bwrap",))
+    assert result.returncode == 1
+    assert result.stdout == (
+        "daedalus setup: socat not on PATH; nothing written. Next: install the packages "
+        "socat with your distribution's package manager, then rerun /daedalus:setup\n"
+    )
+
+
+def test_setup_merges_prints_the_diff_and_the_restart_line(tmp_path: Path) -> None:
+    settings = tmp_path / "home" / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{"model": "opus"}\n')
+    result = _setup(tmp_path, ("bwrap", "socat"))
+    assert result.returncode == 0, result.stdout
+    assert f"+++ {settings} (after)" in result.stdout
+    assert result.stdout.endswith("Restart Claude Code to apply\n")
+    data = json.loads(settings.read_text())
+    assert data["model"] == "opus"
+    assert data["sandbox"]["enabled"] is True
+    assert "worktree" not in data and "env" not in data
+
+
+def test_setup_second_run_writes_nothing(tmp_path: Path) -> None:
+    _setup(tmp_path, ("bwrap", "socat"))
+    settings = tmp_path / "home" / ".claude" / "settings.json"
+    before = settings.stat().st_mtime_ns
+    result = _setup(tmp_path, ("bwrap", "socat"))
+    assert result.returncode == 0
+    assert result.stdout == (
+        f"daedalus setup: {settings} already holds the recommended settings; nothing written.\n"
+    )
+    assert settings.stat().st_mtime_ns == before
+
+
+def test_setup_refuses_malformed_settings(tmp_path: Path) -> None:
+    settings = tmp_path / "home" / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("{bad")
+    result = _setup(tmp_path, ("bwrap", "socat"))
+    assert result.returncode == 1
+    assert "is not valid JSON" in result.stderr and "Next:" in result.stderr
+    assert settings.read_text() == "{bad"
+
+
+def test_setup_refuses_a_type_conflict_and_writes_nothing(tmp_path: Path) -> None:
+    settings = tmp_path / "home" / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{"sandbox": true}\n')
+    result = _setup(tmp_path, ("bwrap", "socat"))
+    assert result.returncode == 1
+    assert "settings key sandbox is not a JSON object" in result.stderr
+    assert "Next:" in result.stderr
+    assert settings.read_text() == '{"sandbox": true}\n'

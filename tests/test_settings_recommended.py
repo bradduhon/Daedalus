@@ -5,15 +5,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from lib.settings_merge import MERGED_KEYS
+
 from tests.conftest import REPO_ROOT
 
 
 def _load() -> dict[str, Any]:
     return json.loads((REPO_ROOT / "settings.recommended.json").read_text())
-
-
-def test_spawn_depth_is_one() -> None:
-    assert _load()["env"]["CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"] == "1"
 
 
 def test_sandbox_enabled_with_no_escape_hatches() -> None:
@@ -54,6 +52,8 @@ def test_deny_read_covers_credential_stores() -> None:
     ]
 
 
-def test_worktrees_branch_from_head() -> None:
-    # C1: coders must branch from the integration branch the main session sits on.
-    assert _load()["worktree"] == {"baseRef": "head"}
+def test_holds_only_the_keys_setup_merges() -> None:
+    # 0020: worktree base and spawn depth moved into the plugin; setup merges the rest.
+    assert set(_load()) == {"sandbox", "permissions", "promptCacheTtl", "subagentPromptCacheTtl"}
+    assert set(_load()["permissions"]) == {"deny"}
+    assert {key.split(".")[0] for key in MERGED_KEYS} == set(_load())

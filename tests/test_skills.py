@@ -689,3 +689,15 @@ def test_skill_script_commands_are_allowed_for_main() -> None:
         payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": root}
         d = decide(payload, Config())
         assert d.allow, (command, d.reason)
+
+
+SETUP = REPO_ROOT / "skills" / "setup" / "SKILL.md"
+
+
+def test_setup_skill_runs_the_setup_script_only_when_asked() -> None:
+    # 0020: setup is never automatic; the operator types it.
+    fields, body = _split(SETUP)
+    assert fields["disable-model-invocation"] == "true"
+    assert "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_setup.py`" in body
+    assert "never run it on your own" in body
+    assert "Restart Claude Code to apply" in body
