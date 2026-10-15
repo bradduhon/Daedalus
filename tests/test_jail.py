@@ -2693,9 +2693,8 @@ def test_read_of_a_credential_path_is_refused(cred_home: Path, agent: str | None
     path = str(cred_home / rel)
     d = decide(_cred(agent, "Read", file_path=path), CFG)
     assert not d.allow and d.reason == _refusal(path)
-    tilde = f"~/{rel}"
-    d = decide(_cred(agent, "Read", file_path=tilde), CFG)
-    assert not d.allow and d.reason == _refusal(tilde)
+    d = decide(_cred(agent, "Read", file_path=f"~/{rel}"), CFG)
+    assert not d.allow and d.reason == _refusal(path)
 
 
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
@@ -2808,9 +2807,12 @@ def test_symlink_into_a_credential_store_is_refused(cred_home: Path) -> None:
 def test_write_into_a_credential_store_is_refused(
     cred_home: Path, agent: str | None, tool: str
 ) -> None:
-    for path in (str(cred_home / ".ssh" / "authorized_keys"), "~/.aws/credentials"):
+    for path, shown in (
+        (str(cred_home / ".ssh" / "authorized_keys"), cred_home / ".ssh" / "authorized_keys"),
+        ("~/.aws/credentials", cred_home / ".aws" / "credentials"),
+    ):
         d = decide(_w(agent, path, tool), CFG)
-        assert not d.allow and d.reason == _refusal(path), (tool, path)
+        assert not d.allow and d.reason == _refusal(str(shown)), (tool, path)
 
 
 def test_notebook_edit_into_a_credential_store_is_refused(cred_home: Path) -> None:
@@ -2867,3 +2869,119 @@ def test_daedalus_agents_are_policed_with_or_without_a_train(train_cwd: Path, ma
     assert not d.allow
     d = decide(_cred("daedalus:mystery", "Bash", cwd, command="ls"), CFG)
     assert not d.allow and "fail closed" in str(d.reason)
+
+
+@pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
+def test_grep_rooted_at_home_or_an_ancestor_is_refused(cred_home: Path, agent: str | None) -> None:
+    # F1: the Grep tool passes --hidden, so a search rooted above a store reads it.
+    for payload in (
+        _cred(agent, "Grep", pattern="BEGIN", path=str(cred_home)),
+        _cred(agent, "Grep", str(cred_home), pattern="BEGIN"),
+        _cred(agent, "Grep", str(cred_home / ".ssh"), pattern="BEGIN"),
+        _cred(agent, "Grep", pattern="BEGIN", path="/"),
+        _cred(agent, "Grep", pattern="BEGIN", path="~", glob="*.pub", type="py"),
+    ):
+        d = decide(payload, CFG)
+        assert not d.allow and "credential path" in str(d.reason), payload
+    ok = _cred(agent, "Grep", pattern="BEGIN", path=str(cred_home / "project"))
+    assert decide(ok, CFG).allow
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -r '' {home}",
+        "rg -uu BEGIN {parent}",
+        "rg --hidden BEGIN ~",
+        "tar cf - {home}",
+        "cp -r ~ /tmp/x",
+        "find ~ -name id_ed25519 -exec cat {{}} +",
+        "zip -r /tmp/x.zip ~",
+        "rsync -a ~ /tmp/x",
+        "grep -R BEGIN ~/.config",
+        "cd ~ && grep -r BEGIN .",
+    ],
+)
+def test_recursive_reader_over_a_store_ancestor_is_refused(
+    cred_home: Path, agent: str | None, command: str
+) -> None:
+    text = command.format(home=cred_home, parent=cred_home.parent)
+    d = decide(_cred(agent, "Bash", str(cred_home / "project"), command=text), CFG)
+    assert not d.allow and "credential path" in str(d.reason), text
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_recursive_reader_away_from_stores_is_allowed(cred_home: Path, agent: str | None) -> None:
+    cwd = str(cred_home / "project")
+    for command in (
+        f"grep -r '' {cred_home}/project",
+        f"tar cf - {cred_home}/project/src",
+        "du -sh ~",
+        f"cp {cred_home}/a.txt /tmp/x",
+    ):
+        assert decide(_cred(agent, "Bash", cwd, command=command), CFG).allow, command
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        r"cat ~/.s\sh/id",
+        r"cat ~/.ssh\/id",
+        r"cat $HOME/.s\sh/id",
+        "cat ${HOME:-x}/.ssh/id",
+        "cat ${HOME%/}/.ssh/id",
+        "D=~/.ss; cat ${D}h/id",
+        "D=~/.ss; cat $D''h/id",
+        "cat ${UNSET_THING}/id",
+    ],
+)
+def test_escape_and_parameter_forms_are_refused(
+    cred_home: Path, agent: str | None, command: str
+) -> None:
+    d = decide(_b(agent, command), CFG)
+    assert not d.allow and "credential path" in str(d.reason), command
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_quoted_home_project_path_is_allowed(cred_home: Path, agent: str | None) -> None:
+    assert decide(_b(agent, 'cat "$HOME/project/x"'), CFG).allow
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["cd -P ~ && cat .ssh/id", "cd -L ~ && cat .ssh/id", "cd -- ~ && cat .ssh/id"],
+)
+def test_cd_options_do_not_hide_the_target(cred_home: Path, command: str) -> None:
+    d = decide(_b(None, command), CFG)
+    assert not d.allow and "credential path" in str(d.reason), command
+
+
+def test_refusal_names_the_resolved_target(cred_home: Path) -> None:
+    d = decide(_b(None, "cd ~/.ssh && cat id_ed25519"), CFG)
+    assert d.reason == _refusal(str(cred_home / ".ssh"))
+    d = decide(_b(None, "cd ~/.aws; cat credentials"), CFG)
+    assert d.reason == _refusal(str(cred_home / ".aws"))
+
+
+def test_unknown_agent_never_writes_the_data_dir(train_cwd: Path) -> None:
+    # F5: the data dir is Daedalus's own integrity, refused train or not.
+    cwd = str(train_cwd)
+    data = f"{cwd}/.claude/daedalus"
+    for payload in (
+        _cred("Explore", "Write", cwd, file_path=f"{data}/x"),
+        _cred("Explore", "Edit", cwd, file_path=f"{data}/config.json"),
+        _cred("Explore", "Bash", cwd, command=f"tee {data}/train.active"),
+        _cred("Explore", "Bash", cwd, command=f"rm {data}/train.active"),
+    ):
+        d = decide(payload, CFG)
+        assert not d.allow and "data" in str(d.reason), payload
+
+
+def test_unknown_agent_dotgit_write_is_refused_only_during_a_train(train_cwd: Path) -> None:
+    cwd = str(train_cwd)
+    payload = _cred("Explore", "Write", cwd, file_path=f"{cwd}/.git/hooks/pre-commit")
+    assert decide(payload, CFG).allow
+    _mark(train_cwd)
+    assert not decide(payload, CFG).allow

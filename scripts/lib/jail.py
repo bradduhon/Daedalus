@@ -344,7 +344,23 @@ _CREDENTIAL_SPLIT = re.compile(r"[\s;&|()<>`]+")
 _CREDENTIAL_PART = re.compile(r"[=:,]")
 _GLOB_START = re.compile(r"[*?\[{]")
 _BRACE = re.compile(r"\{[^}]*\}")
-_BARE_CD = re.compile(r"(?:^|[;&|(\s])(?:cd|pushd)\s*(?:$|[;&|)])")
+R_CREDENTIAL_TREE = (
+    "{path} contains a credential path. "
+    "Next: Daedalus never reads credentials; point the read at a directory without them"
+)
+R_CREDENTIAL_PARAM = (
+    "{path} could be a credential path; the jail cannot resolve its ${{...}} expansion. "
+    "Next: spell the path out"
+)
+_SEGMENT_SPLIT = re.compile(r"[;&|()\n`]+")
+_PARAM = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+_UNQUOTE = re.compile(r"[\"'\\]")
+_DURATION = re.compile(r"[\d.]+[smhd]?")
+# F2: wrappers that run the next word as the command.
+_RUN_WRAPPERS = frozenset(
+    {"sudo", "env", "nice", "nohup", "time", "command", "exec", "builtin", "timeout", "stdbuf"}
+)
+_GREPS = frozenset({"grep", "egrep", "fgrep"})
 _DATA_DIR_DEFAULT = "/.claude/plugins/data/daedalus"
 _PROJECT_DATA = ".claude/daedalus"
 UNIT_WORKTREES = ".claude/worktrees"
@@ -1806,23 +1822,37 @@ def _credential_roots() -> list[str]:
     return [os.path.realpath(home / rel) for rel in CREDENTIAL_DENY]
 
 
-def _expand_home(token: str, cwd: str) -> str | None:
-    # spec 8: quotes are dropped, so "$HOME"/.ssh and '~'/.ssh are checked as expanded.
-    token = token.replace('"', "").replace("'", "")
-    home = str(Path.home())
-    if token == "~" or token.startswith("~/"):
-        token = home + token[1:]
-    elif token.startswith("~"):
-        token = os.path.expanduser(token)
-    for var in ("${HOME}", "$HOME"):
-        if token.startswith(var):
-            token = home + token[len(var) :]
-            break
+def _shell_env(command: str) -> dict[str, str]:
+    # F3: same-command assignments resolve later ${VAR} and $VAR; HOME stays the real home.
+    env = dict(os.environ)
+    env["HOME"] = str(Path.home())
+    # F3: the plugin's own variables resolve even when the hook process lacks them.
+    env.setdefault("CLAUDE_PLUGIN_ROOT", os.path.dirname(_REPO_SCRIPTS))
+    env.setdefault("CLAUDE_PLUGIN_DATA", env["HOME"] + _DATA_DIR_DEFAULT)
+    for token in _CREDENTIAL_SPLIT.split(command):
+        if _ASSIGN.match(token):
+            name, _, value = token.partition("=")
+            if name != "HOME":
+                env[name] = _shell_text(value, env)
+    return env
+
+
+def _shell_text(token: str, env: dict[str, str]) -> str:
+    text = _PARAM.sub(lambda m: env.get(m.group(1) or m.group(2), m.group(0)), token)
+    text = _UNQUOTE.sub("", text)
+    if text == "~" or text.startswith("~/"):
+        return env["HOME"] + text[1:]
+    return os.path.expanduser(text) if text.startswith("~") else text
+
+
+def _expand_home(token: str, cwd: str, env: dict[str, str] | None = None) -> str | None:
+    # spec 8, F3: quotes and backslashes are dropped; ~, $HOME and ${HOME...} expand to home.
+    token = _shell_text(token, env or {"HOME": str(Path.home())})
     if not token:
         return None
     if os.path.isabs(token):
-        return token
-    return os.path.join(cwd, token) if os.path.isabs(cwd) else None
+        return os.path.normpath(token)
+    return os.path.normpath(os.path.join(cwd, token)) if os.path.isabs(cwd) else None
 
 
 def _credential_candidates(tool: str, tool_input: dict[str, Any], cwd: str) -> list[str]:
@@ -1835,19 +1865,19 @@ def _credential_candidates(tool: str, tool_input: dict[str, Any], cwd: str) -> l
     values = [str(tool_input.get(k) or "") for k in ("file_path", "notebook_path", "path")]
     pattern = str(tool_input.get("pattern") or "")
     if tool == "Glob" and pattern:
-        values.append(pattern if pattern.startswith(("/", "~", "$HOME", "${HOME}")) else "")
+        values.append(pattern if pattern.startswith(("/", "~", "$HOME", "${HOME")) else "")
         base = str(tool_input.get("path") or cwd)
         values.append(os.path.join(base, pattern))
-    elif tool == "Grep" and pattern.startswith(("/", "~", "$HOME", "${HOME}")):
+    elif tool == "Grep" and pattern.startswith(("/", "~", "$HOME", "${HOME")):
         # spec 8: a Grep pattern is a regex; only an absolute or home-rooted one names a path.
         values.append(pattern)
     return [v for v in values if v]
 
 
-def _glob_reaches(parts: list[str], root: list[str], dotglob: bool) -> bool:
+def _glob_reaches(parts: list[str], root: list[str], dotglob: bool, ancestor: bool) -> bool:
     for i, name in enumerate(root):
         if i >= len(parts):
-            return False
+            return ancestor
         pat = _BRACE.sub("*", parts[i])
         if "**" in pat:
             return True
@@ -1859,8 +1889,12 @@ def _glob_reaches(parts: list[str], root: list[str], dotglob: bool) -> bool:
     return True
 
 
-def _credential_hit(target: str, roots: list[str], glob: bool, dotglob: bool = True) -> bool:
+def _credential_hit(
+    target: str, roots: list[str], glob: bool, dotglob: bool = True, ancestor: bool = False
+) -> bool:
     if not glob or not _GLOB_START.search(target):
+        if ancestor and any(_contains(target, root) for root in roots):
+            return True
         return any(_under(target, root) for root in roots)
     # spec 8: realpath the literal prefix, then match each glob component against each store.
     parts = os.path.normpath(target).split(os.sep)
@@ -1869,34 +1903,120 @@ def _credential_hit(target: str, roots: list[str], glob: bool, dotglob: bool = T
     if any(_under(base, root) for root in roots):
         return True
     pattern = [p for p in base.split(os.sep) if p] + parts[first:]
-    return any(_glob_reaches(pattern, [p for p in r.split(os.sep) if p], dotglob) for r in roots)
+    return any(
+        _glob_reaches(pattern, [p for p in r.split(os.sep) if p], dotglob, ancestor) for r in roots
+    )
 
 
-def _bash_bases(command: str, cwd: str) -> list[str]:
-    # spec 8: a relative token is also checked against every cd target, so cd ~ is modeled.
+def _contains(parent: str, child: str) -> bool:
+    # F1: _under misses the filesystem root, so ancestry is checked here.
+    real_parent, real_child = os.path.realpath(parent), os.path.realpath(child)
+    return real_child == real_parent or real_child.startswith(real_parent.rstrip(os.sep) + os.sep)
+
+
+def _segments(command: str) -> list[list[str]]:
+    return [seg.split() for seg in _SEGMENT_SPLIT.split(command) if seg.split()]
+
+
+def _bash_bases(command: str, cwd: str, env: dict[str, str]) -> list[str]:
+    # spec 8, F4: relative tokens are also checked against each cd target; options are skipped.
     bases = [cwd] if os.path.isabs(cwd) else []
-    for target in _CD_TARGET.findall(command):
-        expanded = _expand_home(target, cwd)
+    for tokens in _segments(command):
+        if _base(tokens[0]) not in {"cd", "pushd"}:
+            continue
+        target, options = None, True
+        for arg in tokens[1:]:
+            if options and arg == "--":
+                options = False
+            elif not (options and arg.startswith("-")):
+                target = arg
+                break
+        expanded = _expand_home(target, cwd, env) if target else env["HOME"]
         if expanded:
             bases.append(expanded)
-    if _BARE_CD.search(command):
-        bases.append(str(Path.home()))
     return bases
+
+
+def _recursive_reader(tokens: list[str], command: str) -> tuple[list[str], bool] | None:
+    # F2: a recursive read rooted above a store reads the store; returns operands, implicit cwd.
+    i = 0
+    while i < len(tokens) - 1 and (
+        _ASSIGN.match(tokens[i])
+        or _base(tokens[i]) in _RUN_WRAPPERS
+        or tokens[i].startswith("-")
+        or _DURATION.fullmatch(tokens[i])
+    ):
+        i += 1
+    name, args = _base(tokens[i]), tokens[i + 1 :]
+    opts = {a for a in args if a.startswith("--")}
+    short = {c for a in args if a.startswith("-") and not a.startswith("--") for c in a[1:]}
+    operands = [a for a in args if not a.startswith("-")]
+    if name in _GREPS:
+        on = bool({"r", "R"} & short or {"--recursive", "--dereference-recursive"} & opts)
+        on = on or any(a.startswith("--directories=recurse") for a in opts)
+        return (operands, len(operands) <= 1) if on else None
+    if name == "rg":
+        on = bool({"u", "."} & short or {"--hidden", "--no-ignore"} & opts)
+        return (operands, len(operands) <= 1) if on else None
+    if name == "find":
+        on = bool({"-exec", "-execdir", "-ok", "-okdir"} & set(args)) or "xargs" in command
+        implicit = not args or args[0].startswith(("-", "(", "!"))
+        return (operands, implicit) if on else None
+    if name in {"tar", "rsync"}:
+        return operands, False
+    if name == "cp" and ({"r", "R", "a"} & short or {"--recursive", "--archive"} & opts):
+        return operands, False
+    if name == "zip" and ({"r", "R"} & short or "--recurse-paths" in opts):
+        return operands, False
+    return None
+
+
+def _tree_reason(
+    command: str, bases: list[str], env: dict[str, str], roots: list[str]
+) -> str | None:
+    for tokens in _segments(command):
+        found = _recursive_reader(tokens, command)
+        if found is None:
+            continue
+        operands, implicit = found
+        targets = list(bases) if implicit else []
+        for raw in operands:
+            for base in bases or [""]:
+                target = _expand_home(raw, base, env)
+                if target:
+                    targets.append(target)
+        for target in targets:
+            if _credential_hit(target, roots, True, True, ancestor=True):
+                return R_CREDENTIAL_TREE.format(path=target)
+    return None
 
 
 def _credential_reason(tool: str, tool_input: dict[str, Any], cwd: str) -> str | None:
     roots = _credential_roots()
     glob = tool in {"Bash", "Glob"}
+    command = str(tool_input.get("command") or "") if tool == "Bash" else ""
+    env = _shell_env(command) if command else {"HOME": str(Path.home())}
     bases, dotglob = [cwd], True
     if tool == "Bash":
-        command = str(tool_input.get("command") or "")
-        bases = _bash_bases(command, cwd)
+        bases = _bash_bases(command, cwd, env)
         dotglob = "dotglob" in command or "GLOBIGNORE" in command
-    for raw in _credential_candidates(tool, tool_input, cwd):
+    candidates = _credential_candidates(tool, tool_input, cwd)
+    # F6: base-independent tokens first, so the message names the path the command spelled.
+    absolute = [raw for raw in candidates if _expand_home(raw, "", env)]
+    for raw in absolute + [raw for raw in candidates if raw not in absolute]:
+        if tool == "Bash" and "${" in _shell_text(raw, env):
+            return R_CREDENTIAL_PARAM.format(path=raw)
         for base in bases or [cwd]:
-            target = _expand_home(raw, base)
+            target = _expand_home(raw, base, env)
             if target is not None and _credential_hit(target, roots, glob, dotglob):
-                return R_CREDENTIAL.format(path=raw)
+                return R_CREDENTIAL.format(path=target)
+    if tool == "Grep":
+        # F1: the Grep tool searches hidden dirs, so a root above a store reads it.
+        target = _expand_home(str(tool_input.get("path") or cwd), cwd)
+        if target and any(_contains(target, root) for root in roots):
+            return R_CREDENTIAL_TREE.format(path=target)
+    if command:
+        return _tree_reason(command, bases, env, roots)
     return None
 
 
@@ -1910,12 +2030,21 @@ def _ours(raw_agent: str) -> bool:
     return bool(sep) and prefix in (*AGENT_NAMESPACES, TEST_NAMESPACE)
 
 
-def _unknown_decision(raw_agent: str, agent: str, cwd: str) -> Decision:
+def _unknown_decision(
+    raw_agent: str, agent: str, cwd: str, tool: str, tool_input: dict[str, Any]
+) -> Decision:
     # 0023: a foreign agent is refused only while a train is active; a daedalus name always is.
     if _ours(raw_agent):
         return _block(R_UNKNOWN.format(agent=agent))
     if not os.path.isabs(cwd):
         return _block(R_NO_CWD)
+    # F5: the data dir is Daedalus's own integrity, refused to every agent train or not.
+    raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+    if tool in WRITE_TOOLS and _data_dir_path(_abs(raw_path, cwd), cwd):
+        return _block(R_DATA_DIR)
+    command = str(tool_input.get("command") or "") if tool == "Bash" else ""
+    if command and (_data_dir_write(command) or _cd_data_dir_git(command)):
+        return _block(R_DATA_DIR)
     return _block(R_UNKNOWN.format(agent=agent)) if _train_active(cwd) else _allow()
 
 
@@ -1933,7 +2062,9 @@ def decide(hook_input: dict[str, Any], config: Config) -> Decision:
     tool = str(hook_input.get("tool_name") or "")
     cwd = str(hook_input.get("cwd") or "")
     tool_input = hook_input.get("tool_input")
-    credential = _credential_reason(tool, tool_input if isinstance(tool_input, dict) else {}, cwd)
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+    credential = _credential_reason(tool, tool_input, cwd)
     if credential:
         return Decision(False, credential, agent)
     if tool in CREDENTIAL_TOOLS:
@@ -1946,7 +2077,7 @@ def decide(hook_input: dict[str, Any], config: Config) -> Decision:
     if agent in KNOWN_AGENTS:
         decision = _decide(hook_input, config, agent)
     else:
-        decision = _unknown_decision(raw_agent, agent, cwd)
+        decision = _unknown_decision(raw_agent, agent, cwd, tool, tool_input)
     return Decision(decision.allow, decision.reason, agent)
 
 
