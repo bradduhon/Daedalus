@@ -47,7 +47,7 @@ def _confined(repo: Path, name: str) -> Path:
     return path
 
 
-def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def _run(repo: Path, *args: str, path: Path | None = None) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
             ["git", "-C", str(repo), *args],
@@ -56,14 +56,22 @@ def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
             timeout=_GIT_TIMEOUT_S,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except subprocess.TimeoutExpired as exc:
+        # spec 7: a killed worktree add can leave a lock that a single --force will not clear.
+        target = path or repo / WORKTREES_DIR / "<name>"
+        raise WorkspaceError(
+            f"git {args[0]} {args[1]} timed out after {_GIT_TIMEOUT_S} s. "
+            f"Next: run git -C {repo} worktree unlock {target} (or worktree remove -f -f "
+            f"{target}), then run daedalus_workspace.py remove and rerun."
+        ) from exc
+    except OSError as exc:
         raise WorkspaceError(
             f"git {args[0]} {args[1]} did not run ({exc}). Next: check git is on PATH, then rerun."
         ) from exc
 
 
-def _git(repo: Path, *args: str) -> None:
-    result = _run(repo, *args)
+def _git(repo: Path, *args: str, path: Path | None = None) -> None:
+    result = _run(repo, *args, path=path)
     if result.returncode != 0:
         detail = " ".join(result.stderr.split()) or "no stderr"
         raise WorkspaceError(
@@ -74,12 +82,20 @@ def _git(repo: Path, *args: str) -> None:
 def _ensure_marker(repo: Path) -> None:
     # 0022: a single * keeps every worktree here out of the main checkout's status.
     marker = repo / WORKTREES_DIR / ".gitignore"
-    if not marker.exists():
+    if marker.exists():
+        return
+    try:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("*\n", encoding="utf-8")
+    except OSError as exc:
+        raise WorkspaceError(
+            f"cannot write {marker} ({exc}). Next: make {marker.parent} a writable directory."
+        ) from exc
 
 
 def create(repo: Path, name: str, base_ref: str) -> Path:
+    # spec 7: git reads paths relative to -C <repo>, so work from the absolute repo.
+    repo = repo.resolve()
     path = _confined(repo, name)
     branch = branch_name(name)
     remedy = (
@@ -93,13 +109,14 @@ def create(repo: Path, name: str, base_ref: str) -> Path:
         raise WorkspaceError(f"branch {branch} already exists. {remedy}")
     _ensure_marker(repo)
     # A13: documented option order, branch before path before base.
-    _git(repo, "worktree", "add", "-q", "-b", branch, str(path), base_ref)
+    _git(repo, "worktree", "add", "-q", "-b", branch, str(path), base_ref, path=path)
     return path
 
 
 def remove(repo: Path, name: str) -> None:
+    repo = repo.resolve()
     path = _confined(repo, name)
     # spec 7: an already-gone worktree only needs its admin entry pruned.
     if path.exists():
-        _git(repo, "worktree", "remove", "--force", str(path))
+        _git(repo, "worktree", "remove", "--force", str(path), path=path)
     _git(repo, "worktree", "prune")

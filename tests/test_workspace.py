@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from lib import workspace
 from lib.workspace import WorkspaceError, branch_name, create, remove, worktree_path
 
 from tests.conftest import SCRIPTS_DIR
@@ -116,6 +117,38 @@ def test_remove_refuses_a_symlinked_worktrees_dir(repo: Path, tmp_path: Path) ->
         remove(repo, NAME)
     assert "Next:" in str(info.value)
     assert outside.is_dir()
+
+
+def test_create_and_remove_resolve_a_relative_repo(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(repo.parent)
+    path = create(Path(repo.name), NAME, BASE)
+    assert path == worktree_path(repo, NAME) and path.is_absolute() and path.is_dir()
+    assert not (repo / repo.name).exists()
+    remove(Path(repo.name), NAME)
+    assert not path.exists()
+
+
+def test_create_timeout_names_unlock(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def hang(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if "add" in cmd:
+            raise subprocess.TimeoutExpired(cmd, 1)
+        return subprocess.CompletedProcess(cmd, 1, "", "")
+
+    monkeypatch.setattr(workspace.subprocess, "run", hang)
+    with pytest.raises(WorkspaceError) as info:
+        create(repo, NAME, BASE)
+    message = str(info.value)
+    assert "timed out" in message and "Next:" in message
+    assert f"worktree unlock {worktree_path(repo, NAME)}" in message
+
+
+def test_create_reports_an_unwritable_marker(repo: Path) -> None:
+    (repo / ".claude").write_text("not a directory")
+    with pytest.raises(WorkspaceError) as info:
+        create(repo, NAME, BASE)
+    assert "cannot write" in str(info.value) and "Next:" in str(info.value)
 
 
 def _cli(*args: str) -> subprocess.CompletedProcess[str]:
