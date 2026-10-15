@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -77,6 +78,8 @@ def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: P
         "standards_sources",
         "policy",
         "gitleaks",
+        "gh on PATH",
+        "gh authenticated",
         *required_binaries(),
         "git repository",
         "service-manifest.json",
@@ -100,15 +103,15 @@ def _sandbox_line(result: subprocess.CompletedProcess[str]) -> str:
     return next(line for line in result.stdout.splitlines() if line[5:].startswith("sandbox:"))
 
 
-def _bins(tmp_path: Path, *names: str) -> str:
-    return str(fake_bin(tmp_path, names))
+def _bins(tmp_path: Path, *names: str, exit_codes: dict[str, int] | None = None) -> str:
+    return str(fake_bin(tmp_path, names, exit_codes))
 
 
-def _bins_with_git(tmp_path: Path, *names: str) -> str:
+def _bins_with_git(tmp_path: Path, *names: str, exit_codes: dict[str, int] | None = None) -> str:
     # P11: fake tools plus a link to the real git only; git's own dir also holds bwrap, socat, gh.
     git = shutil.which("git")
     assert git is not None, "git is required to build the test repos"
-    bins = _bins(tmp_path, *names)
+    bins = _bins(tmp_path, *names, exit_codes=exit_codes)
     link = Path(bins) / "git"
     if not link.exists():
         link.symlink_to(git)
@@ -177,8 +180,8 @@ def test_binary_lines_follow_required_binaries(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
-    named = [line[5:].split(" on PATH")[0] for line in lines if " on PATH" in line]
-    assert named == ["gitleaks", *required_binaries()]
+    named = [m[1] for line in lines if (m := re.match(r"(?:OK  |MISS) (\S+) on PATH", line))]
+    assert named == ["gitleaks", "gh", *required_binaries()]
 
 
 def _state(repo: Path, home: Path, path_env: str) -> subprocess.CompletedProcess[str]:
@@ -256,7 +259,7 @@ def test_complete_setup_is_all_ok(plugin_data: Path, tmp_path: Path) -> None:
         )
     )
     _commit_all(repo)
-    bins = _bins_with_git(tmp_path, "gitleaks", "bwrap", "socat")
+    bins = _bins_with_git(tmp_path, "gitleaks", "bwrap", "socat", "gh")
     home = tmp_path / "home"
     _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
     result = _run(plugin_data, repo, path_env=bins, home=home)
@@ -462,3 +465,33 @@ def test_print_cache_dir_none_exits_one_with_next(tmp_path: Path) -> None:
         "no plugin cache dir found. Next: run /daedalus:doctor inside Claude Code once so the "
         "plugin data directory exists.\n"
     )
+
+
+def test_gh_absent_is_two_misses_with_next(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
+    assert (
+        "MISS gh on PATH: not found. Next: install gh (https://cli.github.com); "
+        "the Push Train opens pull requests with it"
+    ) in lines
+    assert (
+        "MISS gh authenticated: gh not on PATH. Next: install gh, then run gh auth login"
+    ) in lines
+
+
+def test_gh_signed_in_is_ok(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    lines = _run(None, tmp_path, path_env=_bins(tmp_path, "gh"), home=home).stdout.splitlines()
+    assert "OK   gh on PATH" in lines
+    assert "OK   gh authenticated" in lines
+
+
+def test_gh_signed_out_is_a_miss(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    bins = _bins(tmp_path, "gh", exit_codes={"gh": 1})
+    lines = _run(None, tmp_path, path_env=bins, home=home).stdout.splitlines()
+    assert "OK   gh on PATH" in lines
+    assert ("MISS gh authenticated: gh auth status exited 1. Next: run gh auth login") in lines

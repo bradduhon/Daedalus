@@ -30,6 +30,7 @@ from lib.sandbox_state import (  # noqa: E402
 
 REQ_DOC = "docs/project-requirements.md"
 SANDBOX_NEXT = "install bubblewrap and socat, then run /daedalus:setup to turn the sandbox on"
+GH_NEXT = "install gh (https://cli.github.com); the Push Train opens pull requests with it"
 PROJECT_DATA_NEXT = "write a single line * to {marker}"
 IGNORE_NEXT = (
     "from your own shell, untrack it with git rm -r --cached .claude/daedalus, "
@@ -76,6 +77,27 @@ def _sandbox_check(repo: Path) -> tuple[bool, str]:
         return sandbox_line(sandbox_state(repo))
     except SettingsError as exc:
         return False, f"MISS sandbox: {exc}"
+
+
+def _gh_checks() -> Iterator[tuple[bool, str]]:
+    # spec 5: the Push Train needs gh on PATH and signed in; no auth probe without gh (P11).
+    on_path = shutil.which("gh") is not None
+    yield _check(on_path, "gh on PATH", "not found", GH_NEXT)
+    if not on_path:
+        yield _check(
+            False, "gh authenticated", "gh not on PATH", "install gh, then run gh auth login"
+        )
+        return
+    try:
+        status = subprocess.run(
+            ["gh", "auth", "status"], capture_output=True, text=True, timeout=10, check=False
+        )
+        code = status.returncode
+    except (OSError, subprocess.SubprocessError):
+        code = -1
+    yield _check(
+        code == 0, "gh authenticated", f"gh auth status exited {code}", "run gh auth login"
+    )
 
 
 def _trust_error(repo: Path) -> DataDirError | None:
@@ -221,6 +243,7 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
         "not found",
         "the Push Train scans commits with gitleaks; install it so the scan can run",
     )
+    yield from _gh_checks()
     # 0020: macOS sandboxes without bwrap and socat, so it gets no binary lines.
     for tool in required_binaries():
         yield _check(shutil.which(tool) is not None, f"{tool} on PATH", "not found", SANDBOX_NEXT)
