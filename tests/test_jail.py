@@ -86,6 +86,19 @@ def test_unknown_agent_fails_closed(tmp_path: Path) -> None:
     assert not d.allow and "fail closed" in d.reason and d.reason.endswith(".")
 
 
+def test_unknown_agent_refusal_names_the_marker_and_unmark(tmp_path: Path) -> None:
+    # 0023: a marker left by a dead train must be recoverable from the refusal text alone.
+    marker = tmp_path / ".claude" / "daedalus" / "train.active"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("20261015-120000\n")
+    payload = {**_b("Explore", "ls"), "cwd": str(tmp_path)}
+    reason = str(decide(payload, CFG).reason)
+    assert str(marker) in reason and len(reason.splitlines()) == 2
+    unmark = "scripts/daedalus_workspace.py unmark --repo " + str(tmp_path) + " "
+    assert "Next: if no Daedalus train is running, run python3 ${CLAUDE_PLUGIN_ROOT}/" in reason
+    assert unmark in reason
+
+
 def test_every_block_reason_has_next() -> None:
     cases = [
         _w("security-auditor", f"{CWD}/src/a.py"),
@@ -2308,7 +2321,7 @@ def test_coder_cannot_write_the_main_checkout() -> None:
 
 
 def test_coder_pathspec_resolves_against_git_dash_c() -> None:
-    # 0022 P3: a relative pathspec names a path under the -C directory, else under cwd.
+    # 0022: a relative pathspec names a path under the -C directory, else under cwd.
     assert decide(_b("repo-coder", f"git -C {WT} restore -- src/a.py"), CFG).allow
     assert decide(_b("repo-coder", f"git -C {WT} checkout -- tests/test_a.py"), CFG).allow
     assert not decide(_b("repo-coder", f"git -C {CWD} restore -- src/a.py"), CFG).allow
@@ -2873,7 +2886,7 @@ def test_daedalus_agents_are_policed_with_or_without_a_train(train_cwd: Path, ma
 
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
 def test_grep_rooted_at_home_or_an_ancestor_is_refused(cred_home: Path, agent: str | None) -> None:
-    # F1: the Grep tool passes --hidden, so a search rooted above a store reads it.
+    # spec 8: the Grep tool passes --hidden, so a search rooted above a store reads it.
     for payload in (
         _cred(agent, "Grep", pattern="BEGIN", path=str(cred_home)),
         _cred(agent, "Grep", str(cred_home), pattern="BEGIN"),
@@ -2966,7 +2979,7 @@ def test_refusal_names_the_resolved_target(cred_home: Path) -> None:
 
 
 def test_unknown_agent_never_writes_the_data_dir(train_cwd: Path) -> None:
-    # F5: the data dir is Daedalus's own integrity, refused train or not.
+    # 0010: the data dir is Daedalus's own integrity, refused train or not.
     cwd = str(train_cwd)
     data = f"{cwd}/.claude/daedalus"
     for payload in (
@@ -3011,7 +3024,7 @@ def plain_repo(tmp_path: Path) -> Path:
 def test_unresolved_variable_in_a_path_position_is_refused(
     cred_home: Path, plain_repo: Path, agent: str | None, command: str
 ) -> None:
-    # Round 2 item 1: $name and ${name} alike; read binds nothing the jail can resolve.
+    # spec 8: $name and ${name} alike; read binds nothing the jail can resolve.
     d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
     assert not d.allow and "credential path" in str(d.reason), command
 
@@ -3040,7 +3053,7 @@ def test_variables_outside_path_positions_are_allowed(
 def test_rg_refusal_follows_hidden_components(
     cred_home: Path, plain_repo: Path, agent: str | None
 ) -> None:
-    # Round 2 item 2: rg skips hidden dirs by default, so only a non-hidden path reaches a store.
+    # spec 8: rg skips hidden dirs by default, so only a non-hidden path reaches a store.
     cwd = str(plain_repo)
     for command in ("rg BEGIN ~/.config", "rg -uu BEGIN ~", "rg -. BEGIN ~", "rg --hidden x ~"):
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
@@ -3093,7 +3106,7 @@ def test_wrapper_option_values_are_consumed(
 def test_a_later_binding_does_not_hide_an_earlier_read(
     cred_home: Path, plain_repo: Path, agent: str | None, command: str
 ) -> None:
-    # Round 3: bindings apply in segment order; a loop body sees every binding inside the loop.
+    # spec 8: bindings apply in segment order; a loop body sees every binding inside the loop.
     d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
     assert not d.allow and "credential path" in str(d.reason), command
 

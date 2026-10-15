@@ -113,7 +113,7 @@ def create(repo: Path, name: str, base_ref: str) -> Path:
     if _run(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}").returncode == 0:
         raise WorkspaceError(f"branch {branch} already exists. {remedy}")
     _ensure_marker(repo)
-    # A13: documented option order, branch before path before base.
+    # spec 7: documented option order, branch before path before base.
     _git(repo, "worktree", "add", "-q", "-b", branch, str(path), base_ref, path=path)
     return path
 
@@ -125,6 +125,12 @@ def remove(repo: Path, name: str) -> None:
     if path.exists():
         _git(repo, "worktree", "remove", "--force", str(path), path=path)
     _git(repo, "worktree", "prune")
+
+
+UNMARK_NEXT = (
+    "Next: if no Daedalus train is running, run python3 ${{CLAUDE_PLUGIN_ROOT}}"
+    "/scripts/daedalus_workspace.py unmark --repo {repo} and retry."
+)
 
 
 def train_marker(repo: Path) -> Path:

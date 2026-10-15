@@ -38,7 +38,7 @@ def test_howto_keeps_plugin_dir_in_the_developer_section() -> None:
 
 
 def test_readme_installs_from_the_marketplace() -> None:
-    # 0020: one command from the self-hosted marketplace; receipts in plan Task 1.
+    # 0020: one command from the self-hosted marketplace.
     text = (REPO_ROOT / "README.md").read_text()
     assert "/plugin install daedalus --marketplace bradduhon/Daedalus" in text
     assert "claude plugin marketplace add bradduhon/Daedalus" in text

@@ -108,7 +108,7 @@ def _bins(tmp_path: Path, *names: str, exit_codes: dict[str, int] | None = None)
 
 
 def _bins_with_git(tmp_path: Path, *names: str, exit_codes: dict[str, int] | None = None) -> str:
-    # P11: fake tools plus a link to the real git only; git's own dir also holds bwrap, socat, gh.
+    # spec 5: fake tools plus a link to the real git; git's own dir also holds bwrap, socat, gh.
     git = shutil.which("git")
     assert git is not None, "git is required to build the test repos"
     bins = _bins(tmp_path, *names, exit_codes=exit_codes)
@@ -527,7 +527,7 @@ def test_absent_config_runs_the_ledger_probe_found(tmp_path: Path) -> None:
 
 
 def test_undeclared_standards_and_policy_are_optional(tmp_path: Path) -> None:
-    # P9: spec 5; absent standards_sources and policy are OK with or without config.json.
+    # spec 5: absent standards_sources and policy are OK with or without config.json.
     repo = tmp_path / "repo"
     _git_repo(repo)
     bins = _bins_with_git(tmp_path)
@@ -551,7 +551,7 @@ def test_plugin_root_follows_the_cache_dir_line(tmp_path: Path) -> None:
 
 
 def test_first_run_without_config_is_all_ok(tmp_path: Path) -> None:
-    # 0020: a first doctor on a clean committed repo with no config.json exits 0 (P9).
+    # 0020: a first doctor on a clean committed repo with no config.json exits 0.
     repo = tmp_path / "repo"
     _git_repo(repo)
     (repo / "service-manifest.json").write_text("{}")
@@ -627,3 +627,24 @@ def test_config_ledger_valid_is_ok_with_config_origin(tmp_path: Path) -> None:
     lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
     assert f"OK   ledger: {path} (config, markdown-table-row)" in lines
     assert not any(line.startswith("MISS ledger") for line in lines)
+
+
+def test_train_marker_absent_is_ok_none(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    _data(repo)
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
+    assert "OK   train marker: none" in result.stdout.splitlines()
+
+
+def test_train_marker_present_is_ok_with_unmark_next(tmp_path: Path) -> None:
+    # 0023: a running train is legitimate, so the marker is never a MISS.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (_data(repo) / "train.active").write_text("20261015-120000\n")
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
+    line = next(x for x in result.stdout.splitlines() if "train marker" in x)
+    assert line.startswith("OK   train marker: present (20261015-120000)")
+    root = repo.resolve()
+    assert "Next: if no Daedalus train is running, run python3 ${CLAUDE_PLUGIN_ROOT}/" in line
+    assert f"daedalus_workspace.py unmark --repo {root}" in line

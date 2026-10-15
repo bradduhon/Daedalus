@@ -213,7 +213,7 @@ def test_mark_train_leaves_no_temp_file(data_repo: Path) -> None:
 
 
 def test_mark_train_refuses_a_symlinked_marker(data_repo: Path, tmp_path: Path) -> None:
-    # Fix round 1, finding 1: never write through a link planted at the marker path.
+    # 0023: never write through a link planted at the marker path.
     target = tmp_path / "elsewhere"
     target.write_text("keep\n", encoding="utf-8")
     train_marker(data_repo).symlink_to(target)

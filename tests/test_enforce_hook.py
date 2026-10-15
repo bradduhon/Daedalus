@@ -338,3 +338,47 @@ def test_absent_config_allows_main_bash_and_writes_the_log(
     data = repo_cwd / ".claude" / "daedalus"
     assert not (data / "config.json").exists()
     assert list((data / "audit").glob("*.jsonl"))
+
+
+def test_bad_config_still_allows_a_normal_read(
+    temp_home: Path, plugin_data: Path, project_data: Path, repo_cwd: Path, hook_input: Any
+) -> None:
+    # 0023: a broken config.json leaves the credential deny as the only gate on reads.
+    (project_data / "config.json").write_text("{bad")
+    target = repo_cwd / "notes.txt"
+    target.write_text("x\n")
+    payload = hook_input(tool_name="Read", tool_input={"file_path": str(target)})
+    result = _run_home(payload, temp_home, plugin_data)
+    assert result.returncode == 0, result.stderr
+
+
+def test_bad_config_still_refuses_an_ssh_key_read(
+    temp_home: Path, plugin_data: Path, project_data: Path, hook_input: Any
+) -> None:
+    (project_data / "config.json").write_text("{bad")
+    key = temp_home / ".ssh" / "id_ed25519"
+    payload = hook_input(tool_name="Read", tool_input={"file_path": str(key)})
+    result = _run_home(payload, temp_home, plugin_data)
+    assert result.returncode == 2
+    assert "credential path" in result.stderr, result.stderr
+
+
+def test_bad_config_still_blocks_bash(
+    temp_home: Path, plugin_data: Path, project_data: Path, hook_input: Any
+) -> None:
+    (project_data / "config.json").write_text("{bad")
+    result = _run_home(hook_input(tool_input={"command": "ls"}), temp_home, plugin_data)
+    assert result.returncode == 2 and "config.json" in result.stderr
+
+
+def test_unwritable_audit_dir_still_allows_a_read(
+    temp_home: Path, plugin_data: Path, project_data: Path, repo_cwd: Path, hook_input: Any
+) -> None:
+    # spec 8: an allowed read never waits on the audit record; the stderr line names the failure.
+    (project_data / "audit").write_text("not a directory")
+    target = repo_cwd / "notes.txt"
+    target.write_text("x\n")
+    payload = hook_input(tool_name="Read", tool_input={"file_path": str(target)})
+    result = _run_home(payload, temp_home, plugin_data)
+    assert result.returncode == 0, result.stderr
+    assert "audit log unavailable" in result.stderr

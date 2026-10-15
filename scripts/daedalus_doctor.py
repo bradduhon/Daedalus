@@ -28,6 +28,7 @@ from lib.sandbox_state import (  # noqa: E402
     sandbox_check,
     sandbox_state,
 )
+from lib.workspace import UNMARK_NEXT, train_marker  # noqa: E402
 
 REQ_DOC = "docs/project-requirements.md"
 SANDBOX_NEXT = "install bubblewrap and socat, then run /daedalus:setup to turn the sandbox on"
@@ -74,12 +75,12 @@ def _cache_check() -> tuple[bool, str]:
 
 
 def _plugin_root_check() -> tuple[bool, str]:
-    # P8: informational; README readers copy the plugin root from this line.
+    # spec 5: informational; README readers copy the plugin root from this line.
     return True, f"OK   plugin root: {Path(__file__).resolve().parent.parent}"
 
 
 def _gh_checks() -> Iterator[tuple[bool, str]]:
-    # spec 5: the Push Train needs gh on PATH and signed in; no auth probe without gh (P11).
+    # spec 5: the Push Train needs gh on PATH and signed in; no auth probe without gh.
     on_path = shutil.which("gh") is not None
     yield _check(on_path, "gh on PATH", "not found", GH_NEXT)
     if not on_path:
@@ -151,6 +152,22 @@ def _data_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
     yield from _config_checks(data)
 
 
+def _marker_check(repo: Path) -> tuple[bool, str]:
+    # 0023: informational; a live train holds the marker, a dead one leaves it behind.
+    root = project_root(str(repo))
+    marker = train_marker(root)
+    if not os.path.lexists(marker):
+        return True, "OK   train marker: none"
+    try:
+        # 0023: a symlinked marker is never followed; its target could be anything.
+        text = "symlink" if marker.is_symlink() else marker.read_text(encoding="utf-8")
+        train_id = text.strip()[:32] or "empty"
+    except (OSError, UnicodeDecodeError):
+        train_id = "unreadable"
+    line = f"OK   train marker: present ({train_id}) at {marker}. "
+    return True, line + UNMARK_NEXT.format(repo=root)
+
+
 def _ledger_probe(root: Path, config: Config) -> tuple[bool, str]:
     # 0004: resolves manifest, config or convention ledger alike; LedgerError is a MISS.
     try:
@@ -175,7 +192,7 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
         # spec 9: config.json is optional; absence means the defaults.
         yield True, "OK   config.json: not present, defaults in use"
     yield _ledger_probe(data.parent.parent, config)
-    # spec 5 (P9): standards_sources and policy are optional; undeclared is not a miss.
+    # spec 5: standards_sources and policy are optional; undeclared is not a miss.
     if config.standards_sources:
         yield True, "OK   standards_sources declared"
     else:
@@ -235,6 +252,7 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     )
     is_repo = _is_repo(repo)
     yield from _data_checks(repo, is_repo)
+    yield _marker_check(repo)
     yield _cache_check()
     yield _plugin_root_check()
     yield sandbox_check(repo)

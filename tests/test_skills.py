@@ -667,7 +667,7 @@ BRANCH_STOP = (
 
 
 def test_build_train_requires_the_reported_branch_to_be_the_created_one() -> None:
-    # Fix round 1, finding 2: daedalus/<train-id> is its own ancestor and would merge as a no-op.
+    # 0022: daedalus/<train-id> is its own ancestor and would merge as a no-op.
     complete = next(
         line for line in _build_train().splitlines() if line.startswith("| `[STATUS: COMPLETE]")
     )
@@ -691,7 +691,7 @@ def test_build_train_creates_each_coder_worktree() -> None:
         "<repo>/.claude/worktrees/<train-id>-<unit-slug> daedalus/<train-id>`"
     ) in phase2
     assert "the line `Worktree: <path>` naming its working directory" in phase2
-    # P3: the coder prompt binds file paths and git pathspecs to the worktree.
+    # 0022: the coder prompt binds file paths and git pathspecs to the worktree.
     assert (
         "every file path and every git pathspec you use is absolute or goes through `git -C <path>`"
     ) in phase2

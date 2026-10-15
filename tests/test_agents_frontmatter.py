@@ -67,7 +67,7 @@ def test_repo_coder_works_in_the_train_made_worktree() -> None:
     assert "`Worktree: <path>`" in text
     assert '`git -C <path> add -A && git -C <path> commit -m "WIP: yield"`' in text
     assert "`git add -A && git commit" not in text
-    # P3: file paths and git pathspecs are absolute or go through git -C.
+    # 0022: file paths and git pathspecs are absolute or go through git -C.
     assert "Every file path and every git pathspec you use is absolute" in text
 
 

@@ -20,7 +20,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 def fake_bin(
     tmp_path: Path, names: Iterable[str], exit_codes: dict[str, int] | None = None
 ) -> Path:
-    # P7: shared stub-tool directory for PATH; each stub exits with its mapped code or 0.
+    # 0020: shared stub-tool directory for PATH; each stub exits with its mapped code or 0.
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     codes = exit_codes or {}
