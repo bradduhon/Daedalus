@@ -170,3 +170,75 @@ def test_sendmessage_resume_keeps_context(live_repo: Path) -> None:
         and "PELICAN" in (r["last_message_head"] or "")
     ]
     assert resumed, "no SubagentStop after SendMessage whose reply holds PELICAN"
+
+
+def _jail_hook(payload: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+    env = dict(os.environ, DAEDALUS_LIVE_TEST="1")
+    return subprocess.run(
+        ["python3", str(REPO_ROOT / "scripts" / "enforce_agent_jail.py")],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+        timeout=30,
+    )
+
+
+def test_train_made_worktree_keeps_root_log_and_jail(live_repo: Path) -> None:
+    # 0022, spec 7: a coder in a train-made worktree logs to the main root and keeps its jail.
+    from lib.workspace import create
+
+    commit = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c"]
+    commit += ["commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"]
+    subprocess.run(["git", "-C", str(live_repo), *commit], check=True)
+    subprocess.run(["git", "-C", str(live_repo), "branch", "daedalus/20261015-000000"], check=True)
+    wt = create(live_repo, "20261015-000000-u1", "daedalus/20261015-000000")
+    good, bad = wt / "src" / "a.py", live_repo / "src" / "a.py"
+    # The real hook process, with the coder's cwd in the worktree and then in the main checkout.
+    for cwd in (wt, live_repo):
+        session = str(uuid.uuid4())
+        results = {}
+        for target in (good, bad):
+            payload = {
+                "session_id": session,
+                "hook_event_name": "PreToolUse",
+                "cwd": str(cwd),
+                "agent_type": PROBE,
+                "agent_id": "a-1",
+                "tool_name": "Write",
+                "tool_input": {"file_path": str(target), "content": "ok\n"},
+            }
+            results[target] = _jail_hook(payload)
+        assert results[good].returncode == 0, results[good].stderr
+        assert results[bad].returncode == 2, results[bad].stderr
+        assert results[bad].stderr.startswith("daedalus-jail[repo-coder]:"), results[bad].stderr
+        log = live_repo / ".claude" / "daedalus" / "audit" / f"{session}.jsonl"
+        assert log.is_file() and not (wt / ".claude" / "daedalus").exists()
+        recs = [json.loads(line) for line in log.read_text().splitlines()]
+        for r in recs:
+            print(json.dumps({k: r.get(k) for k in (*RECORD_KEYS, "tool_input", "project_root")}))
+        got = [(r["tool_input"]["file_path"], r["decision"]) for r in recs]
+        assert got == [(str(good), "allow"), (str(bad), "block")], got
+        assert all(Path(r["project_root"]) == live_repo for r in recs), recs
+    # The same rule through Claude Code itself; the coder's cwd is the main checkout.
+    prompt = (
+        f"Use the {PROBE} agent once with this prompt: 'Write the file {good} containing ok. "
+        f"Write the file {bad} containing x.' Then say done."
+    )
+    run = _claude([prompt, *WORKER_TOOLS, "Write"], live_repo)
+    pre = [r for r in _records(run) if r["event"] == "PreToolUse" and r["agent_type"] == PROBE]
+    assert pre, "no PreToolUse record from the coder"
+    assert all(Path(r["cwd"]).resolve() == live_repo for r in pre), [r["cwd"] for r in pre]
+    assert all(Path(r["project_root"]) == live_repo for r in pre), pre
+    writes = {
+        (r.get("tool_input") or {}).get("file_path"): r["decision"]
+        for r in pre
+        if r["tool_name"] == "Write"
+    }
+    assert writes.get(str(good)) == "allow", writes
+    assert writes.get(str(bad)) == "block", writes
+    assert good.is_file() and not bad.exists()
+    _append_result(
+        f"- session {run.session}: train-made worktree coder cwd {pre[0]['cwd']}, writes {writes}"
+    )
