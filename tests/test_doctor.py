@@ -265,7 +265,9 @@ def test_complete_setup_is_all_ok(plugin_data: Path, tmp_path: Path) -> None:
     result = _run(plugin_data, repo, path_env=bins, home=home)
     assert result.returncode == 0, result.stdout
     assert not any(line.startswith("MISS") for line in result.stdout.splitlines())
-    assert f"OK   project data dir: {data} (exists)" in result.stdout.splitlines()
+    lines = result.stdout.splitlines()
+    assert f"OK   project data dir: {data} (exists)" in lines
+    assert "OK   standards_sources declared" in lines and "OK   policy declared" in lines
 
 
 def test_dirty_tree_is_a_miss(plugin_data: Path, tmp_path: Path) -> None:
@@ -284,7 +286,7 @@ def test_absent_project_data_dir_is_ok_and_names_the_path(tmp_path: Path) -> Non
     assert f"OK   project data dir: {data} (will be created by the first hook)" in (
         result.stdout.splitlines()
     )
-    assert any(line.startswith("MISS config.json") for line in result.stdout.splitlines())
+    assert "OK   config.json: not present, defaults in use" in result.stdout.splitlines()
 
 
 def test_worktree_resolves_to_main_repo_data_dir(tmp_path: Path) -> None:
@@ -495,3 +497,71 @@ def test_gh_signed_out_is_a_miss(tmp_path: Path) -> None:
     lines = _run(None, tmp_path, path_env=bins, home=home).stdout.splitlines()
     assert "OK   gh on PATH" in lines
     assert ("MISS gh authenticated: gh auth status exited 1. Next: run gh auth login") in lines
+
+
+def test_absent_config_runs_the_ledger_probe_none_found(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    bins = _bins_with_git(tmp_path)
+    lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
+    i = lines.index("OK   config.json: not present, defaults in use")
+    assert lines[i + 1] == (
+        "OK   ledger: none found (the Build Train asks before creating docs/decisions.md)"
+    )
+    assert not any(line.startswith("MISS config.json") for line in lines)
+    assert not any("ledger declared" in line for line in lines)
+
+
+def test_absent_config_runs_the_ledger_probe_found(tmp_path: Path) -> None:
+    from tests.conftest import REPO_ROOT
+
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (repo / "docs").mkdir()
+    fixture = REPO_ROOT / "tests" / "fixtures" / "ledgers" / "table.md"
+    (repo / "docs" / "decisions.md").write_text(fixture.read_text())
+    bins = _bins_with_git(tmp_path)
+    lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
+    ledger = repo.resolve() / "docs" / "decisions.md"
+    assert f"OK   ledger: {ledger} (probe, markdown-table-row)" in lines
+
+
+def test_undeclared_standards_and_policy_are_optional(tmp_path: Path) -> None:
+    # P9: spec 5; absent standards_sources and policy are OK with or without config.json.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    bins = _bins_with_git(tmp_path)
+    for with_config in (False, True):
+        if with_config:
+            (_data(repo) / "config.json").write_text("{}")
+        lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
+        assert "OK   standards_sources: not declared (optional)" in lines
+        assert "OK   policy: not declared (optional)" in lines
+        assert not any(line.startswith(("MISS standards", "MISS policy")) for line in lines)
+
+
+def test_plugin_root_follows_the_cache_dir_line(tmp_path: Path) -> None:
+    from tests.conftest import REPO_ROOT
+
+    home = tmp_path / "home"
+    home.mkdir()
+    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
+    i = next(n for n, line in enumerate(lines) if line.startswith("OK   cache dir"))
+    assert lines[i + 1] == f"OK   plugin root: {REPO_ROOT}"
+
+
+def test_first_run_without_config_is_all_ok(tmp_path: Path) -> None:
+    # 0020: a first doctor on a clean committed repo with no config.json exits 0 (P9).
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (repo / "service-manifest.json").write_text("{}")
+    (repo / "contracts").mkdir()
+    (repo / "contracts" / "openapi.yaml").write_text("")
+    (repo / ".gitleaks.toml").write_text("")
+    _commit_all(repo)
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh", "bwrap", "socat")
+    home = tmp_path / "home"
+    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    result = _run(None, repo, path_env=bins, home=home)
+    assert result.returncode == 0, result.stdout
+    assert not any(line.startswith("MISS") for line in result.stdout.splitlines())
