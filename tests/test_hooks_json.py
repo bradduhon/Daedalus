@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any
 
-from lib.jail import WEB_TOOLS, WORKER_DENIED_TOOLS, WRITE_TOOLS
+from lib.jail import CREDENTIAL_TOOLS, WEB_TOOLS, WORKER_DENIED_TOOLS, WRITE_TOOLS
 
 from tests.conftest import REPO_ROOT
 
@@ -67,12 +67,8 @@ def test_pretooluse_mutating_matcher_runs_the_jail_synchronously() -> None:
     hook = jail[0]["hooks"][0]
     assert not hook.get("async", False)
     assert hook["timeout"] == 10
-    reads = [e for e in _load()["hooks"]["PreToolUse"] if e.get("matcher") == "Read|Glob|Grep"]
-    assert len(reads) == 1
-    read_hook = reads[0]["hooks"][0]
-    assert read_hook["command"].endswith("scripts/audit_log.py")
-    assert read_hook["timeout"] == 10
-    assert not read_hook.get("async", False)
+    # spec 8, 0023: Read, Glob and Grep left the audit-only binding; the jail audits them.
+    assert _load()["hooks"]["PreToolUse"] == jail
 
 
 def test_jail_matcher_covers_every_jail_policed_tool() -> None:
@@ -81,11 +77,12 @@ def test_jail_matcher_covers_every_jail_policed_tool() -> None:
         WRITE_TOOLS
         | WEB_TOOLS
         | WORKER_DENIED_TOOLS
+        | CREDENTIAL_TOOLS
         | {"Bash", "mcp__drive__create_file", "mcp__x__y"}
     )
     for name in policed:
         assert re.fullmatch(matcher, name), name
-    for name in ("TaskCreate", "Read"):
+    for name in ("TaskCreate", "ReadX", "LS"):
         assert not re.fullmatch(matcher, name), name
 
 
