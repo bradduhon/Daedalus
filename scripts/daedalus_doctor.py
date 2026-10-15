@@ -179,16 +179,13 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
         return
     if cfg_path.exists():
         yield True, "OK   config.json"
-        yield _check(
-            config.ledger is not None,
-            "ledger declared",
-            "no ledger block in config.json",
-            f"declare path, format, id_scheme, sequence_source (see {REQ_DOC}); "
-            "the train asks before creating one (0004)",
-        )
     else:
         # spec 9: config.json is optional; absence means the defaults.
         yield True, "OK   config.json: not present, defaults in use"
+    if config.ledger is not None:
+        yield True, "OK   ledger declared"
+    else:
+        # spec 5, 9: no declared ledger means the convention probe, config.json or not.
         yield _ledger_probe(data.parent.parent, config)
     # spec 5 (P9): standards_sources and policy are optional; undeclared is not a miss.
     if config.standards_sources:

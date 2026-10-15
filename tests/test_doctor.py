@@ -565,3 +565,33 @@ def test_first_run_without_config_is_all_ok(tmp_path: Path) -> None:
     result = _run(None, repo, path_env=bins, home=home)
     assert result.returncode == 0, result.stdout
     assert not any(line.startswith("MISS") for line in result.stdout.splitlines())
+
+
+def test_config_without_ledger_runs_the_probe_found(tmp_path: Path) -> None:
+    from tests.conftest import REPO_ROOT
+
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (_data(repo) / "config.json").write_text("{}")
+    (repo / "docs").mkdir()
+    fixture = REPO_ROOT / "tests" / "fixtures" / "ledgers" / "table.md"
+    (repo / "docs" / "decisions.md").write_text(fixture.read_text())
+    bins = _bins_with_git(tmp_path)
+    lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
+    i = lines.index("OK   config.json")
+    ledger = repo.resolve() / "docs" / "decisions.md"
+    assert lines[i + 1] == f"OK   ledger: {ledger} (probe, markdown-table-row)"
+    assert not any(line.startswith("MISS ledger") for line in lines)
+
+
+def test_config_without_ledger_runs_the_probe_none_found(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (_data(repo) / "config.json").write_text("{}")
+    bins = _bins_with_git(tmp_path)
+    lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
+    i = lines.index("OK   config.json")
+    assert lines[i + 1] == (
+        "OK   ledger: none found (the Build Train asks before creating docs/decisions.md)"
+    )
+    assert not any(line.startswith("MISS ledger") for line in lines)
