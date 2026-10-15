@@ -7,17 +7,21 @@ This guide assumes you have never seen this plugin. Each section says what to ty
 
 Daedalus is a Claude Code plugin. Today it does seven things. It writes a hash-chained audit log of every tool call the hook matcher routes (Bash, file edits, web fetches, agent spawns, messages, MCP tools). Each record carries the hash of the one before it, so an edited record, or one removed from the middle, breaks the chain. It confines each agent to a jail: a PreToolUse hook checks every tool call against the rules for that agent and blocks anything outside them. It ships recommended sandbox settings for you to merge into your own settings. It has a first-run doctor that checks your setup. It renders an audit report, a readable digest of one session's log, with `/daedalus:audit-report`. It runs a Build Train with `/daedalus:build-train`. The train splits a task into units and gives each unit to a coding agent in its own git worktree. Agents raise questions to specialists, and an adversarial security audit runs before the units are merged locally. It runs a Push Train with `/daedalus:push-train`, which commits, pushes, and opens the pull request for a finished Build Train. You review and merge.
 
-## Install for one session
+## Install
 
-From inside your own project, pass the path where you cloned Daedalus:
+Inside any Claude Code session, type:
 
-    claude --plugin-dir /path/to/Daedalus
+    /plugin install daedalus --marketplace bradduhon/Daedalus
 
 Every Daedalus command acts on the repository you started Claude Code in.
 
-Where it runs: any shell with the claude CLI on PATH. Daedalus is verified on Claude Code 2.1.280 (`claude --version`); older versions are untested.
-What you will see: a normal Claude Code session. The audit log starts recording immediately.
-If it fails: `unknown option --plugin-dir` means the CLI is too old. Run `claude --version`.
+Where it runs: any Claude Code session, version 2.1.275 or later (`claude --version`). Daedalus is verified on Claude Code 2.1.280.
+What you will see: Claude Code asks you to confirm the marketplace, then to pick a scope. Pick "Install for you". The audit log starts recording once the plugin is active.
+If it fails: when your Claude Code does not accept `--marketplace`, run these two commands from a shell instead, then start Claude Code:
+
+    claude plugin marketplace add bradduhon/Daedalus
+
+    claude plugin install daedalus@daedalus
 
 ## First run
 
@@ -251,6 +255,15 @@ With a Charter branch, items 6 to 8 push it, open its pull request, and merge it
 ### What BLOCKED means
 
 `[STATUS: BLOCKED] <detail>` from the conductor means a check it runs failed before anything changed on GitHub, or a command it needed was refused. The most common detail is `gitleaks findings`: the scan found something that looks like a secret in the branch's commits. The findings are shown with the secret redacted. Rotate the credential, remove it from the branch history from your own shell, and run `/daedalus:push-train` again. For any other detail, do what the detail names and rerun.
+
+## Developing Daedalus
+
+To try a local checkout of Daedalus for one session instead of the installed plugin, start Claude Code inside your own project with the path to the checkout:
+
+    claude --plugin-dir /path/to/Daedalus
+
+Where it runs: any shell with the claude CLI on PATH. A `--plugin-dir` session uses the cache directory `daedalus-inline`; the marketplace install uses `daedalus-daedalus`.
+If it fails: `unknown option --plugin-dir` means the CLI is too old. Run `claude --version`.
 
 ## Sections added by later plans
 

@@ -14,6 +14,7 @@ from tests.conftest import REPO_ROOT
 # The public allowlist, as normalized by _entry().
 ALLOWLIST = frozenset(
     {
+        ".claude-plugin/marketplace.json",
         ".claude-plugin/plugin.json",
         ".gitignore",
         "LICENSE",
