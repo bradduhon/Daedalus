@@ -596,7 +596,6 @@ def test_main_and_foreign_agents_carry_only_the_read_deny_outside_a_train(
         _cred(agent, "Write", cwd, file_path=f"{cwd}/.claude/daedalus/config.json"),
         _cred(agent, "Bash", cwd, command="git clean -fdx"),
         _cred(agent, "Bash", cwd, command="cat ~/.ssh/id_ed25519"),
-        _cred(agent, "Bash", cwd, command="echo $(date)"),
     ]
     for payload in payloads:
         assert decide(payload, CFG).allow, payload
@@ -3261,18 +3260,7 @@ SHELL_FORMS = [
 
 
 @pytest.mark.parametrize("command", SHELL_FORMS)
-def test_issue30_main_refuses_residual_shell_forms_during_a_train(
-    marked_repo: Path, command: str
-) -> None:
-    d = decide(_cred(None, "Bash", str(marked_repo), command=command), CFG)
-    assert not d.allow, command
-    reason = str(d.reason)
-    assert reason.startswith("while a Daedalus train runs, the main session sends plain commands")
-    assert f"unmark --repo {marked_repo} and retry." in reason
-
-
-@pytest.mark.parametrize("command", SHELL_FORMS)
-def test_issue30_main_shell_forms_pass_outside_a_train(other_repo: Path, command: str) -> None:
+def test_issue30_main_shell_syntax_passes_outside_a_train(other_repo: Path, command: str) -> None:
     # 0023, 0035: outside a train the main session keeps its shell.
     d = decide(_cred(None, "Bash", str(other_repo), command=command), CFG)
     assert d.allow, (command, d.reason)
@@ -3294,14 +3282,6 @@ def test_issue30_main_shell_forms_pass_outside_a_train(other_repo: Path, command
 def test_issue30_main_plain_commands_pass_during_a_train(marked_repo: Path, command: str) -> None:
     d = decide(_cred(None, "Bash", str(marked_repo), command=command), CFG)
     assert d.allow, (command, d.reason)
-
-
-def test_issue30_main_shell_form_into_a_marked_repo_from_elsewhere(
-    marked_repo: Path, other_repo: Path
-) -> None:
-    command = f"echo $(date) > {marked_repo}/notes.txt"
-    d = decide(_cred(None, "Bash", str(other_repo), command=command), CFG)
-    assert not d.allow and f"unmark --repo {marked_repo} " in str(d.reason)
 
 
 @pytest.mark.parametrize(

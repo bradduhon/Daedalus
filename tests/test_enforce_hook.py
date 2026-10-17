@@ -531,7 +531,6 @@ def test_main_outside_a_train_meets_no_jail_rule(
     [
         ("Write", {"file_path": "src/app.py", "content": "x"}, "application code"),
         ("Bash", {"command": "git clean -fdx"}, "git clean"),
-        ("Bash", {"command": "echo $(date) > notes.txt"}, "plain commands only"),
     ],
 )
 def test_main_inside_a_train_meets_the_jail(
@@ -582,10 +581,10 @@ def test_main_writing_into_another_repos_train_is_judged(
     subprocess.run(["git", "init", "-q", str(marked)], check=True)
     (marked / ".claude" / "daedalus").mkdir(parents=True)
     _in_train(marked / ".claude" / "daedalus")
-    command = f"echo $(date) > {marked}/notes.txt"
+    command = f"git -C {marked} clean -fdx"
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": command}))
     assert result.returncode == 2
-    assert "plain commands only" in result.stderr
+    assert "git clean" in result.stderr
 
 
 def test_fast_path_imports_only_the_standard_library_modules(repo_cwd: Path) -> None:

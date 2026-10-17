@@ -374,8 +374,6 @@ _PATH_CMDS = (
     | {"egrep", "fgrep", "nl", "tac", "diff", "cmp"}
     | {"bsdtar", "7z", "7za", "7zr", "7zz", "pax"}
 )
-# issue 30: archive and copy tools whose reads the jail does not follow; refused to main in a train.
-UNMODELLED_COPIERS = frozenset({"bsdtar", "7z", "7za", "7zr", "7zz", "cpio", "pax", "scp", "sftp"})
 _PATH_OPTION = re.compile(r"--?[\w-]*(?:dir|file|path|target|output|input|config|key|root)", re.I)
 _DATA_DIR_DEFAULT = "/.claude/plugins/data/daedalus"
 _PROJECT_DATA = ".claude/daedalus"
@@ -2270,77 +2268,6 @@ def _train_scoped(cwd: str, tool: str, tool_input: dict[str, Any]) -> bool:
     return not os.path.isabs(cwd) or _marked_repo(cwd, tool, tool_input) is not None
 
 
-R_SHELL_FORM = (
-    "while a Daedalus train runs, the main session sends plain commands only, and {form} "
-    "hides what the command reads or runs. Next: spell the command out with literal paths "
-    "and values.\n" + UNMARK_NEXT
-)
-_FUNCTION_DEF = re.compile(
-    r"(?:^|[;&|(){}\s])(?:function\s+[^\s;&|()]+|[A-Za-z_][\w.:-]*\s*\(\s*\))"
-)
-
-
-def _substitution(command: str) -> str | None:
-    quote = ""
-    i = 0
-    while i < len(command):
-        char = command[i]
-        if quote == "'":
-            quote = "" if char == "'" else quote
-        elif char == "\\":
-            i += 2
-            continue
-        elif char == "`":
-            return "a backtick command substitution"
-        elif command.startswith("$(", i):
-            return "a command substitution"
-        elif not quote and command.startswith(("<(", ">("), i):
-            return "a process substitution"
-        elif not quote and command.startswith("$'", i):
-            return "ANSI-C quoting"
-        elif char == '"':
-            quote = "" if quote else '"'
-        elif char == "'" and not quote:
-            quote = "'"
-        i += 1
-    return None
-
-
-def _shell_form(command: str, depth: int = 0) -> str | None:
-    # issue 30: forms the token model cannot follow, refused for main while a train runs.
-    if depth > 3:
-        return "a nested shell"
-    form = _substitution(command)
-    if form:
-        return form
-    if _FUNCTION_DEF.search(_quote_spans(command)):
-        return "a shell function definition"
-    segments = _shell_words(command)
-    envs = _bash_env(segments)
-    for k, words in enumerate(segments):
-        clean = [_clean(w) for w in words]
-        at = _command_at(clean, {i for i, w in enumerate(words) if w.startswith(_REDIRECT)})
-        if at is not None:
-            name = _base(clean[at])
-            if "builtin" in {_base(w) for w in clean[:at]}:
-                return "the builtin keyword"
-            if name == "eval":
-                return "eval"
-            if name in UNMODELLED_COPIERS:
-                return f"{name}, an archive or copy tool the jail does not model,"
-            if name in _SHELLS:
-                code = _shell_code(clean[at:])
-                if code == _FALLBACK:
-                    return "a shell option the jail does not read"
-                inner = _shell_form(code, depth + 1) if code else None
-                if inner:
-                    return inner
-        for word in words:
-            if any(unknown for _, unknown in _expand_word(word, envs[k])):
-                return f"the unresolved variable in {_clean(word)}"
-    return None
-
-
 R_NO_TRAIN = (
     "a repo-coder writes only inside a Daedalus train (issue 29). "
     "Next: start coders from /daedalus:build-train."
@@ -2524,11 +2451,7 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
         if _cd_data_dir_git(command):
             return _block(R_DATA_DIR_GIT)
         reason = _command_reason(command) or _gh_gate(agent, cwd, command)
-        if reason:
-            return _block(reason)
-        repo = _marked_repo(cwd, tool, tool_input)
-        form = _shell_form(command) if repo is not None else None
-        return _block(R_SHELL_FORM.format(form=form, repo=repo)) if form else _allow()
+        return _block(reason) if reason else _allow()
     segments: list[list[str]] = []
     piped = False
     if tool == "Bash":

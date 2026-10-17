@@ -692,7 +692,7 @@ def test_skill_script_commands_are_allowed_for_main() -> None:
 def test_issue30_skill_script_commands_pass_for_main_during_a_train(
     repo_cwd: Path, project_data: Path
 ) -> None:
-    # issue 30: a train holds main to plain commands; every skill script command is one.
+    # issue 30: every skill script command passes the jail for the main session in a train.
     from lib.config import Config
     from lib.jail import decide
 
