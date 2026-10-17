@@ -8,14 +8,15 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from lib import train_state
+from lib.train_state import TRAIN_ID as _TRAIN_ID
+from lib.train_state import TRAIN_MARKER
+
 # 0022: pipeline-neutral; every caller names its own base ref.
 WORKTREES_DIR = Path(".claude") / "worktrees"
 BRANCH_PREFIX = "daedalus-unit/"
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 _GIT_TIMEOUT_S = 120
-# 0023: a train is active while this file names its id on the first line.
-TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
-_TRAIN_ID = re.compile(r"[0-9]{8}-[0-9]{6}")
 
 
 class WorkspaceError(RuntimeError):
@@ -115,6 +116,13 @@ def create(repo: Path, name: str, base_ref: str) -> Path:
     _ensure_marker(repo)
     # spec 7: documented option order, branch before path before base.
     _git(repo, "worktree", "add", "-q", "-b", branch, str(path), base_ref, path=path)
+    # 0024: inside a train, record the unit so stop and finish tear down only train worktrees.
+    train = train_state.active_train(repo)
+    if train is not None and train_state.state_path(repo, train).is_file():
+        try:
+            train_state.add_unit(repo, train, name, branch, path)
+        except train_state.TrainStateError as exc:
+            raise WorkspaceError(str(exc)) from exc
     return path
 
 

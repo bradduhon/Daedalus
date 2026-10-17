@@ -244,3 +244,19 @@ def test_cli_mark_prints_the_marker_and_unmark_names_it(data_repo: Path) -> None
     assert gone.returncode == 0, gone.stderr
     assert gone.stdout == f"cleared {train_marker(data_repo)}\n"
     assert not train_marker(data_repo).exists()
+
+
+def test_create_records_the_unit_in_the_active_train(data_repo: Path) -> None:
+    from lib import train_state
+
+    train_state.save(data_repo, TRAIN, {"train_id": TRAIN})
+    mark_train(data_repo, TRAIN)
+    path = create(data_repo, NAME, BASE)
+    assert train_state.load(data_repo, TRAIN)["units"] == [
+        {"name": NAME, "branch": branch_name(NAME), "path": str(path)}
+    ]
+
+
+def test_create_without_a_train_records_nothing(data_repo: Path) -> None:
+    create(data_repo, NAME, BASE)
+    assert not (data_repo / ".claude" / "daedalus" / "trains").exists()
