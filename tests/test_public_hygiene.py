@@ -16,6 +16,7 @@ ALLOWLIST = frozenset(
     {
         ".claude-plugin/marketplace.json",
         ".claude-plugin/plugin.json",
+        ".claude/settings.json",
         ".gitignore",
         "LICENSE",
         "README.md",
@@ -25,6 +26,7 @@ ALLOWLIST = frozenset(
         "pyproject.toml",
         "references/",
         "scripts/",
+        "service-manifest.json",
         "skills/",
         "tests/",
         "docs/howto/README.md",
@@ -59,7 +61,7 @@ def _entry(path: str) -> str:
     parts = path.split("/")
     if parts[0] == "docs" and len(parts) > 2 and parts[1] != "howto":
         return f"docs/{parts[1]}/"
-    if parts[0] in {"docs", ".claude-plugin"}:
+    if parts[0] in {"docs", ".claude-plugin", ".claude"}:
         return path
     return parts[0] + ("/" if len(parts) > 1 else "")
 

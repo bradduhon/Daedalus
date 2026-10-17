@@ -1,0 +1,32 @@
+{
+  "manifest_version": 1,
+  "service_name": "daedalus",
+  "purpose": "A Claude Code plugin that runs Build Trains of scoped agents under a hook-enforced jail and a hash-chained audit log.",
+  "stack": {
+    "language": "python",
+    "runtime": "python3.12",
+    "package_registries": ["pypi.org"],
+    "unit_test_cmd": ".venv/bin/pytest -q",
+    "typecheck_cmd": null,
+    "lint_cmd": ".venv/bin/ruff check scripts tests",
+    "build_cmd": null
+  },
+  "entrypoints": {
+    "scripts": "scripts/",
+    "lib": "scripts/lib/",
+    "agents": "agents/",
+    "hooks": "hooks/",
+    "skills": "skills/"
+  },
+  "exposure_and_traits": {
+    "is_public": false,
+    "has_website": false,
+    "operator_panel_integrated": false,
+    "contains_customer_data": false,
+    "touches_key_material": false,
+    "data_classification": "INTERNAL"
+  },
+  "jail_narrowing": { "forbidden_extensions": [], "forbidden_paths": [] },
+  "upstream_dependencies": [],
+  "downstream_dependencies": []
+}

@@ -144,7 +144,9 @@ Minimal:
   "jail_narrowing": { "forbidden_extensions": [], "forbidden_paths": [] },
   "upstream_dependencies": [], "downstream_dependencies": [] }
 ```
-A later Daedalus release reads missing flags as the stricter value. Coders cannot edit this file (enforced for file tools and the common copy/edit commands; a script the coder writes and runs is not blocked yet). In that release, a change goes through contract-spec and the ledger.
+`jail_narrowing` adds paths a coder may not write (0054-DAE-PLT). Each `forbidden_paths` entry is relative to the repository root, uses forward slashes, and holds no leading slash, `..` or glob characters. An entry ending in a slash covers that folder and everything under it; an entry without one names one file. Each `forbidden_extensions` entry starts with a dot and covers every file name ending in it. Matching ignores case. The jail reads this file from the main checkout, never from a coder's worktree. A manifest that is not valid JSON, or whose `jail_narrowing` has the wrong shape, refuses every coder write until it is fixed, and the doctor reports it as a `MISS`. When the file is present, the doctor's line counts the entries: `OK   service-manifest.json: jail_narrowing <n> paths, <m> extensions`.
+
+A later Daedalus release reads missing exposure flags as the stricter value. Coders cannot edit this file (enforced for file tools and the common copy/edit commands; a script the coder writes and runs is not blocked yet). In that later release, a change to it goes through contract-spec and the ledger.
 
 ### contracts/ (directory), optional **(checked)**
 
@@ -159,9 +161,9 @@ useDefault = true
 ```
 The Push Train runs `gitleaks detect` over every commit on the train branch before it pushes, and stops without the binary.
 
-### src/ and tests/
+### Coder write boundary
 
-The only directories a coder may write, and only inside its own unit worktree, which the Build Train creates at `<repo>/.claude/worktrees/<train-id>-<unit-slug>`. A later Daedalus release reserves `tests/adversarial/` for the boundary tester; today repo-coder may write anywhere under `tests/`.
+A coder writes only inside its own unit worktree, which the Build Train creates at `<repo>/.claude/worktrees/<train-id>-<unit-slug>`. Inside it, every path is writable except the protected ones (0054-DAE-PLT): `contracts/`, `.github/` (workflows, CODEOWNERS, dependabot and templates), `.claude/`, `service-manifest.json`, the repository's own decision ledger when it lives inside the repository, and every `jail_narrowing` entry in `service-manifest.json`. A write to a folder that holds a protected path, such as `rm -r docs` when the ledger is `docs/decisions.md`, is refused too. A refused write names the path and says whether the rule is built in or comes from `jail_narrowing`. A later Daedalus release reserves `tests/adversarial/` for the boundary tester; today repo-coder may write anywhere under `tests/`.
 
 ## Claude Code settings
 

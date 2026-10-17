@@ -24,6 +24,8 @@ from lib.audit import (  # noqa: E402
 )
 from lib.config import Config, ConfigError, load_config  # noqa: E402
 from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
+from lib.manifest import ManifestError  # noqa: E402
+from lib.manifest import load as load_manifest  # noqa: E402
 from lib.workspace import UNMARK_NEXT, train_marker  # noqa: E402
 
 REQ_DOC = "docs/project-requirements.md"
@@ -307,6 +309,25 @@ def _clean_tree_check(repo: Path) -> tuple[bool, str]:
     return _check(False, "clean working tree", f"uncommitted changes present: {shown}", nxt)
 
 
+def _manifest_check(repo: Path) -> tuple[bool, str]:
+    # 0054: the jail reads jail_narrowing from this file; a ManifestError is a MISS.
+    try:
+        manifest = load_manifest(repo)
+    except ManifestError as exc:
+        return False, f"MISS service-manifest.json: {exc}"
+    if manifest is None:
+        return _opt(
+            False,
+            "service-manifest.json",
+            "not found at repo root",
+            f"create it from the example in {REQ_DOC}",
+        )
+    paths, extensions = len(manifest.forbidden_paths), len(manifest.forbidden_extensions)
+    return True, (
+        f"OK   service-manifest.json: jail_narrowing {paths} paths, {extensions} extensions"
+    )
+
+
 def _repo_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
     yield _check(
         is_repo,
@@ -316,12 +337,7 @@ def _repo_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
     )
     if is_repo:
         yield _clean_tree_check(repo)
-    yield _opt(
-        (repo / "service-manifest.json").exists(),
-        "service-manifest.json",
-        "not found at repo root",
-        f"create it from the example in {REQ_DOC}",
-    )
+    yield _manifest_check(repo)
     yield _opt(
         (repo / "contracts").is_dir(),
         "contracts/",
