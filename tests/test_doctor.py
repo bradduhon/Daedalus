@@ -774,3 +774,107 @@ def test_train_marker_present_is_ok_with_unmark_next(tmp_path: Path) -> None:
     root = repo.resolve()
     assert "Next: if no Daedalus train is running, run python3 ${CLAUDE_PLUGIN_ROOT}/" in line
     assert f"daedalus_workspace.py unmark --repo {root}" in line
+
+
+def _framework_manifest(cache: Path, family: str, *dates: str) -> None:
+    folder = cache / "frameworks" / family
+    folder.mkdir(parents=True, exist_ok=True)
+    entries = [{"file": f"f{n}.json", "pinned_on": d} for n, d in enumerate(dates)]
+    (folder / "manifest.json").write_text(json.dumps(entries), encoding="utf-8")
+
+
+def _framework_lines(stdout: str) -> list[str]:
+    return [line for line in stdout.splitlines() if line[5:].startswith("frameworks ")]
+
+
+def test_framework_line_ok_when_fresh(plugin_data: Path, tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    today = datetime.now(UTC).date().isoformat()
+    _framework_manifest(plugin_data, "nist", today)
+    _framework_manifest(plugin_data, "owasp", today, today)
+    result = _run(plugin_data, tmp_path, path_env=_bins(tmp_path), home=tmp_path / "home")
+    assert _framework_lines(result.stdout) == [
+        f"OK   frameworks nist: pinned {today}",
+        f"OK   frameworks owasp: pinned {today}",
+    ]
+
+
+def test_framework_line_old_after_90_days(tmp_path: Path) -> None:
+    from datetime import date
+
+    import daedalus_doctor
+
+    _framework_manifest(tmp_path, "nist", "2026-10-01", "2026-06-01")
+    lines = list(daedalus_doctor._framework_checks(tmp_path, date(2026, 10, 16)))
+    assert lines == [
+        (
+            True,
+            "OLD  frameworks nist: pinned 2026-06-01 (137 days). "
+            "Next: run python3 <plugin>/scripts/refresh_frameworks.py",
+        )
+    ]
+    _framework_manifest(tmp_path, "nist", "2026-07-18")
+    assert list(daedalus_doctor._framework_checks(tmp_path, date(2026, 10, 16))) == [
+        (True, "OK   frameworks nist: pinned 2026-07-18")
+    ]
+
+
+def test_old_framework_line_does_not_fail_the_doctor(plugin_data: Path, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (repo / "service-manifest.json").write_text("{}")
+    (repo / "contracts").mkdir()
+    (repo / "contracts" / "openapi.yaml").write_text("")
+    (repo / ".gitleaks.toml").write_text("")
+    _commit_all(repo)
+    _framework_manifest(plugin_data, "nist", "2020-01-01")
+    home = tmp_path / "home"
+    _settings(home / ".claude" / "settings.json", SANDBOX_WITH_GH)
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh", "bwrap", "socat")
+    result = _run(plugin_data, repo, path_env=bins, home=home)
+    assert result.returncode == 0, result.stdout
+    assert _framework_lines(result.stdout)[0].startswith("OLD  frameworks nist: pinned 2020-01-01")
+
+
+def test_cis_manual_manifest_reported_the_same_way(tmp_path: Path) -> None:
+    from datetime import date
+
+    import daedalus_doctor
+
+    _framework_manifest(tmp_path, "cis", "2026-06-01")
+    assert list(daedalus_doctor._framework_checks(tmp_path, date(2026, 10, 16))) == [
+        (
+            True,
+            "OLD  frameworks cis: pinned 2026-06-01 (137 days). Next: place a current benchmark "
+            "and its manifest entry per docs/project-requirements.md",
+        )
+    ]
+
+
+@pytest.mark.parametrize("body", ["{not json", '{"pinned_on": "2026-10-01"}', "[]", '[{"x": 1}]'])
+def test_unreadable_framework_manifest_is_old_with_next(tmp_path: Path, body: str) -> None:
+    from datetime import date
+
+    import daedalus_doctor
+
+    folder = tmp_path / "frameworks" / "owasp"
+    folder.mkdir(parents=True)
+    (folder / "manifest.json").write_text(body, encoding="utf-8")
+    assert list(daedalus_doctor._framework_checks(tmp_path, date(2026, 10, 16))) == [
+        (
+            True,
+            "OLD  frameworks owasp: manifest.json has no list of pinned_on dates. "
+            "Next: run python3 <plugin>/scripts/refresh_frameworks.py",
+        )
+    ]
+
+
+def test_no_manifest_no_line(plugin_data: Path, tmp_path: Path) -> None:
+    (plugin_data / "frameworks" / "nist").mkdir(parents=True)
+    result = _run(plugin_data, tmp_path, path_env=_bins(tmp_path), home=tmp_path / "home")
+    assert _framework_lines(result.stdout) == []
+    home = tmp_path / "home2"
+    home.mkdir()
+    result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
+    assert _framework_lines(result.stdout) == []

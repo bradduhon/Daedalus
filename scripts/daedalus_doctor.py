@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import sys
 from collections.abc import Iterator
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -125,6 +127,48 @@ def _gh_sandbox_check(repo: Path) -> tuple[bool, str]:
     lacks = f"sandbox.excludedCommands lacks {', '.join(missing)}, so the Push Train "
     lacks += "cannot reach GitHub"
     return _check(not missing, name, lacks, SETUP_NEXT)
+
+
+FRAMEWORK_FAMILIES = ("nist", "owasp", "cis")
+FRAMEWORK_MAX_DAYS = 90
+REFRESH_NEXT = "run python3 <plugin>/scripts/refresh_frameworks.py"
+CIS_NEXT = f"place a current benchmark and its manifest entry per {REQ_DOC}"
+
+
+def _oldest_pin(manifest: Path) -> date | None:
+    try:
+        entries = json.loads(manifest.read_text(encoding="utf-8"))
+        pins = [date.fromisoformat(e["pinned_on"]) for e in entries]
+    except (OSError, ValueError, TypeError, KeyError, UnicodeDecodeError):
+        return None
+    return min(pins) if isinstance(entries, list) and pins else None
+
+
+def _framework_checks(cache: Path, today: date) -> Iterator[tuple[bool, str]]:
+    # 0026: one line per family manifest; OLD past 90 days never fails the doctor.
+    for family in FRAMEWORK_FAMILIES:
+        manifest = cache / "frameworks" / family / "manifest.json"
+        if not manifest.is_file():
+            continue
+        nxt = CIS_NEXT if family == "cis" else REFRESH_NEXT
+        name = f"frameworks {family}"
+        pinned = _oldest_pin(manifest)
+        if pinned is None:
+            yield True, f"OLD  {name}: manifest.json has no list of pinned_on dates. Next: {nxt}"
+            continue
+        days = (today - pinned).days
+        if days > FRAMEWORK_MAX_DAYS:
+            yield True, f"OLD  {name}: pinned {pinned} ({days} days). Next: {nxt}"
+        else:
+            yield True, f"OK   {name}: pinned {pinned}"
+
+
+def _framework_lines() -> Iterator[tuple[bool, str]]:
+    try:
+        cache = cache_dir_or_probe()
+    except RuntimeError:
+        return
+    yield from _framework_checks(cache, datetime.now(UTC).date())
 
 
 def _plugin_root_check() -> tuple[bool, str]:
@@ -321,6 +365,7 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     yield _marker_check(repo)
     yield _cache_check()
     yield _plugin_root_check()
+    yield from _framework_lines()
     yield _sandbox_check(repo)
     yield _gh_sandbox_check(repo)
     yield _check(
