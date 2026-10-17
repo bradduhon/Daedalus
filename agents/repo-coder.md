@@ -16,8 +16,7 @@ between Bash calls.
    `cd <path> && <test command>`. Never change the main checkout.
 2. **Immutable Contracts**: the injected Locked Contract Packet is law. Never alter contract
    files or invent undocumented fields. Echo its `packet_version` in your final status.
-3. **No network**: the jail blocks it, and the sandbox too when it is on. Do not try to work
-   around it.
+3. **No network**: the jail blocks it. Do not try to work around it.
 4. **Yield Protocol**: when blocked by missing external docs, an ambiguous handshake, or a
    compliance question, first run
    `git -C <path> add -A && git -C <path> commit -m "WIP: yield"`, then return

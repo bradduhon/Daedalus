@@ -2,7 +2,6 @@
 name: build-train
 description: Runs a Build Train on this repository. Locks the contract and the project standards first, gives each work unit to a repo-coder in its own worktree, answers their questions through specialists, and runs compliance and an adversarial security audit before merging the units locally. Never pushes.
 argument-hint: Describe the feature, bugfix, or change to build in this repository.
-sandbox: optional
 ---
 <!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
 
@@ -24,21 +23,20 @@ Rules for the whole train:
 ## Preconditions
 
 1. Set `<repo>` to the parent of the directory `git rev-parse --path-format=absolute --git-common-dir` prints (the main working tree; every worktree shares it). Not a repo: stop. Next: start the session inside the target repository, then run `/daedalus:build-train` again.
-2. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py begin --repo <repo>` (0024). It refuses a dirty tree, reads `<repo>/.claude/daedalus/config.json` (0010; an absent config.json means the defaults: no `charter_root`, no `standards_sources`, no `policy`), probes the decision ledger (0004), proves this session's hooks are writing the audit log, sets `<train-id>` to the UTC time as `YYYYMMDD-HHMMSS`, creates `<repo>/docs/.tmp/daedalus/` with its `docs/.tmp/daedalus/.gitignore` so git ignores the train's scratch files and summary, branches a declared Charter to `daedalus/<train-id>`, reads the sandbox state (0020) and marks the train active (0023). The Build Train runs in every state.
-   - Exit 0: it prints the first seven State Block lines; copy them unchanged.
+2. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py begin --repo <repo>` (0024). It refuses a dirty tree, reads `<repo>/.claude/daedalus/config.json` (0010; an absent config.json means the defaults: no `charter_root`, no `standards_sources`, no `policy`), probes the decision ledger (0004), proves this session's hooks are writing the audit log, sets `<train-id>` to the UTC time as `YYYYMMDD-HHMMSS`, creates `<repo>/docs/.tmp/daedalus/` with its `docs/.tmp/daedalus/.gitignore` so git ignores the train's scratch files and summary, branches a declared Charter to `daedalus/<train-id>` and marks the train active (0023).
+   - Exit 0: it prints the first six State Block lines; copy them unchanged.
    - Exit 3: begin found no decision ledger and wrote nothing; ask the operator the question it prints, exactly.
      - An existing file: Next: add a `ledger` block naming it to `<repo>/.claude/daedalus/config.json` from your own shell (docs/project-requirements.md), then run `/daedalus:build-train` again.
      - Create: write `<repo>/docs/decisions.md` holding only the two table lines it prints, the header and its separator. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_ledger.py --probe` and show its line; it reads `seq=0`. Next: review and commit docs/decisions.md from your own shell, then run `/daedalus:build-train` again.
    - Exit 1: show its output unchanged and stop; begin left no train behind, so the stop command does not run. Its `Next:` line is the next action.
 
-Keep this **State Block** in your context and print it after Preconditions and after each phase. The first seven lines are begin's output:
+Keep this **State Block** in your context and print it after Preconditions and after each phase. The first six lines are begin's output:
 
     train: <train-id>  base: <branch> @ <sha>  audit session: <id>
     ledger: <path> (<origin>, <format>, seq=<n>)
     charter_root: <path or none>  charter base: <recorded branch or none>
     policy: <engine and path, or none declared>  standards: <n> sources
     cache: <path>/frameworks (or: cache: unresolved)
-    sandbox: <on, off or configured-unavailable>
     standards packs: <name> at <path>, or none declared
     codes: --repo <R> --type <T> (or pending)
     packet_version: <n>  contract: <contract path>  lock: <sha>
@@ -77,7 +75,7 @@ Cache path, resolved once before the first nist-specialist or cis-specialist dis
 
 ## Phase 3: Compliance and adversarial security gate
 
-1. Sandbox gate (0020): When the State Block `sandbox:` is not `on` and any unit touched IAM, KMS, mTLS, key custody or infrastructure config, stop before the security audit and before any merge, naming those units. Next: run /daedalus:setup, restart, rerun the train. Otherwise, policy gate: a later Daedalus release adds the deterministic policy gate; record `[POLICY: none declared]` or `[POLICY: declared, gate not yet shipped]` in the summary. Then, if any unit touched IAM, KMS, mTLS, key custody or infrastructure config, run Agent(`nist-specialist`) and Agent(`cis-specialist`) on those units' diffs (`git diff daedalus/<train-id>...<branch>`), with the cache path. Keep each `[STATUS: COMPLIANCE]` report.
+1. Policy gate: a later Daedalus release adds the deterministic policy gate; record `[POLICY: none declared]` or `[POLICY: declared, gate not yet shipped]` in the summary. Then, if any unit touched IAM, KMS, mTLS, key custody or infrastructure config, run Agent(`nist-specialist`) and Agent(`cis-specialist`) on those units' diffs (`git diff daedalus/<train-id>...<branch>`), with the cache path. Keep each `[STATUS: COMPLIANCE]` report.
 2. Agent(`standards-rules-specialist`) for an auditor brief, with the config path, the ledger line, the `standards packs:` line, the unit ids and their changed files; it returns the rules each unit is judged against. Then Agent(`security-auditor`) with: the diff base `daedalus/<train-id>`, so each diff leaves out the contract commits on the integration branch, every unit branch, the Locked Contract Packet with its packet_version, the Standards Packet, the auditor brief, and the compliance reports. Read the verdict from the first line of the auditor's reply.
 3. `[VERDICT: REJECTED] <findings>`: SendMessage(each responsible coder, its itemized file:line findings). A coder's reply during a fix round routes exactly like a Phase 2 reply, yields included, until it returns `[STATUS: COMPLETE]`. Then repeat step 2. After 3 rejected rounds, stop and show the last findings. Next: fix the findings by hand on the named branches, or rerun the train with a narrower task. The unit branches stay as they are.
 4. `[VERDICT: APPROVED] <paragraph>`: you merge, then charter-docs records.
@@ -101,7 +99,6 @@ Cache path, resolved once before the first nist-specialist or cis-specialist dis
        Ledger ids: <ids> in commit <sha>.
          or, until charter-docs commits: Ledger ids: pending. Codes: --repo <R> --type <T>.
        [POLICY: none declared] or [POLICY: declared, gate not yet shipped]
-       Sandbox: <on, off or configured-unavailable>
        ## Units
        | Unit | Branch | Packet | Files | Tests |
        ## Yields

@@ -12,7 +12,6 @@ from typing import Any
 import pytest
 from lib import audit, train_state, workspace
 from lib.config import PACKS_DIR
-from lib.sandbox_state import SettingsError
 from lib.workspace import (
     WorkspaceError,
     begin,
@@ -63,7 +62,7 @@ def _cli(*args: str) -> subprocess.CompletedProcess[str]:
 
 @pytest.fixture(autouse=True)
 def _isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # 0020: a temp HOME keeps the operator's sandbox and plugin cache out of these tests.
+    # 0020: a temp HOME keeps the operator's settings and plugin cache out of these tests.
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
@@ -110,7 +109,7 @@ def _nothing_written(repo: Path) -> None:
 
 def test_begin_prints_the_state_block_seed(repo: Path, live: None) -> None:
     lines = begin(repo)
-    prefixes = ["train: ", "ledger: ", "charter_root: ", "policy: ", "cache: ", "sandbox: "]
+    prefixes = ["train: ", "ledger: ", "charter_root: ", "policy: ", "cache: "]
     prefixes.append("standards ")
     assert [line.split(" ")[0] + " " for line in lines] == prefixes
     train = lines[0].split()[1]
@@ -122,8 +121,7 @@ def test_begin_prints_the_state_block_seed(repo: Path, live: None) -> None:
     assert lines[2] == "charter_root: none  charter base: none"
     assert lines[3] == "policy: none declared  standards: 0 sources"
     assert lines[4] == "cache: unresolved"
-    assert lines[5] == "sandbox: off"
-    assert lines[6] == "standards packs: none declared"
+    assert lines[5] == "standards packs: none declared"
     state = train_state.load(repo, train)
     assert state["base_branch"] == "main" and state["base_sha"] == sha
     assert state["audit_session"] == "sess-test" and state["units"] == []
@@ -132,10 +130,10 @@ def test_begin_prints_the_state_block_seed(repo: Path, live: None) -> None:
     assert _git(repo, "status", "--porcelain").stdout == ""
 
 
-def test_begin_cli_prints_seven_lines(repo: Path, live: None) -> None:
+def test_begin_cli_prints_six_lines(repo: Path, live: None) -> None:
     result = _cli("begin", "--repo", str(repo))
     assert result.returncode == 0, result.stderr
-    assert len(result.stdout.splitlines()) == 7
+    assert len(result.stdout.splitlines()) == 6
 
 
 def test_begin_stops_on_a_dirty_tree(repo: Path, live: None) -> None:
@@ -198,11 +196,11 @@ def test_begin_stops_on_a_dirty_charter(repo: Path, charter: Path, live: None) -
 def test_begin_switches_the_charter_back_when_a_later_step_fails(
     repo: Path, charter: Path, live: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def _bad(repo: Path) -> str:
-        raise SettingsError("settings.json is not valid JSON. Next: fix settings.json")
+    def _bad(repo: Path, train_id: str, state: dict[str, Any]) -> None:
+        raise train_state.TrainStateError("state file not written. Next: fix the state dir")
 
-    monkeypatch.setattr(workspace, "sandbox_state", _bad)
-    with pytest.raises(WorkspaceError, match="Next: fix settings.json"):
+    monkeypatch.setattr(workspace.train_state, "save", _bad)
+    with pytest.raises(WorkspaceError, match="Next: fix the state dir"):
         begin(repo)
     assert _head(charter) == "main"
     _nothing_written(repo)
@@ -240,7 +238,7 @@ def test_begin_prints_the_declared_pack_path(repo: Path, live: None) -> None:
     lines = begin(repo)
     assert lines[3] == "policy: none declared  standards: 1 sources"
     pack = PACKS_DIR / "baseline"
-    assert lines[6] == f"standards packs: baseline at {pack}"
+    assert lines[5] == f"standards packs: baseline at {pack}"
     assert pack.is_absolute() and (pack / "rules.md").is_file()
 
 

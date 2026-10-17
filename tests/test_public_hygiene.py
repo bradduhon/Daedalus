@@ -25,7 +25,6 @@ ALLOWLIST = frozenset(
         "pyproject.toml",
         "references/",
         "scripts/",
-        "settings.recommended.json",
         "skills/",
         "tests/",
         "docs/howto/README.md",

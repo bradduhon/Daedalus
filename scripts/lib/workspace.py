@@ -15,7 +15,6 @@ from lib.audit import cache_dir_or_probe
 from lib.audit_proof import SUMMARY_DIR, ProofError, live_log
 from lib.config import Config, ConfigError, load_config
 from lib.ledger import LedgerError, read_sequence, resolve_ledger
-from lib.sandbox_state import SettingsError, sandbox_state
 from lib.train_state import TRAIN_ID as _TRAIN_ID
 from lib.train_state import TRAIN_MARKER
 
@@ -333,7 +332,6 @@ def begin(cwd: Path, needle: str = BEGIN_NEEDLE) -> list[str]:
     charter = (repo / config.charter_root).resolve() if config.charter_root else None
     charter_base = _charter_branch(charter, train_id) if charter else None
     try:
-        sandbox = sandbox_state(repo)
         try:
             cache: str | None = str(cache_dir_or_probe() / "frameworks")
         except RuntimeError:
@@ -347,7 +345,6 @@ def begin(cwd: Path, needle: str = BEGIN_NEEDLE) -> list[str]:
             "charter_base": charter_base,
             "charter_branch_created": charter is not None,
             "audit_session": log.stem,
-            "sandbox": sandbox,
             "ledger_line": ledger_line,
             "cache_dir": cache,
             "units": [],
@@ -359,7 +356,7 @@ def begin(cwd: Path, needle: str = BEGIN_NEEDLE) -> list[str]:
         except WorkspaceError:
             train_state.state_path(repo, train_id).unlink(missing_ok=True)
             raise
-    except (SettingsError, train_state.TrainStateError, WorkspaceError) as exc:
+    except (train_state.TrainStateError, WorkspaceError) as exc:
         if charter is not None and charter_base is not None:
             raise _undo_charter(charter, charter_base, exc) from exc
         raise WorkspaceError(str(exc)) from exc
@@ -372,7 +369,6 @@ def begin(cwd: Path, needle: str = BEGIN_NEEDLE) -> list[str]:
         f"charter_root: {charter or 'none'}  charter base: {charter_base or 'none'}",
         f"policy: {policy}  standards: {len(config.standards_sources)} sources",
         f"cache: {cache}" if cache else "cache: unresolved",
-        f"sandbox: {sandbox}",
         f"standards packs: {', '.join(packs) or 'none declared'}",
     ]
 

@@ -24,20 +24,9 @@ from lib.audit import (  # noqa: E402
 )
 from lib.config import Config, ConfigError, load_config  # noqa: E402
 from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
-from lib.sandbox_state import (  # noqa: E402
-    SETUP_NEXT,
-    SettingsError,
-    excluded_commands,
-    required_binaries,
-    sandbox_check,
-    sandbox_enabled,
-    sandbox_source,
-    sandbox_state,
-)
 from lib.workspace import UNMARK_NEXT, train_marker  # noqa: E402
 
 REQ_DOC = "docs/project-requirements.md"
-SANDBOX_NEXT = f"install bubblewrap and socat, then {SETUP_NEXT}"
 GH_NEXT = "install gh (https://cli.github.com); the Push Train opens pull requests with it"
 GH_TIMEOUT_S = 10
 GH_STUCK_NEXT = "run gh auth status from your own shell, then gh auth login if it asks"
@@ -94,45 +83,6 @@ def _cache_check() -> tuple[bool, str]:
     if not env and len(matches) > 1:
         found += f" ({CACHE_NAMING})"
     return True, f"OK   cache dir: {found}"
-
-
-USER_SETTINGS = "~/.claude/settings.json"
-USER_MOVE_NEXT = (
-    "Daedalus now writes .claude/settings.local.json per repo; remove the sandbox block from "
-    f"{USER_SETTINGS} from your own shell if you did not set it yourself"
-)
-
-
-def _sandbox_check(repo: Path) -> tuple[bool, str]:
-    # 0027, 0029: name the file that turned the sandbox on; the user file is read, never written.
-    ok, line = sandbox_check(repo)
-    if not ok:
-        return ok, line
-    home = Path.home()
-    source = sandbox_source(repo, home)
-    if source is None:
-        return ok, line
-    if source == home / ".claude" / "settings.json":
-        return ok, f"{line} ({USER_SETTINGS}). Next: {USER_MOVE_NEXT}"
-    return ok, f"{line} ({source.relative_to(repo)})"
-
-
-GH_EXCLUSIONS = ("gh *", "git push *")
-
-
-def _gh_sandbox_check(repo: Path) -> tuple[bool, str]:
-    # 0028, 0030: with the sandbox on, gh and git push need the exclusions to read gh's login.
-    name = "gh outside sandbox"
-    try:
-        home = Path.home()
-        if not sandbox_enabled(repo, home):
-            return True, f"OK   {name}: sandbox off"
-        missing = [e for e in GH_EXCLUSIONS if e not in excluded_commands(repo, home)]
-    except SettingsError as exc:
-        return False, f"MISS {name}: {exc}"
-    lacks = f"sandbox.excludedCommands lacks {', '.join(missing)}, so the Push Train "
-    lacks += "cannot reach GitHub"
-    return _check(not missing, name, lacks, SETUP_NEXT)
 
 
 FRAMEWORK_FAMILIES = ("nist", "owasp", "cis")
@@ -397,8 +347,6 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     yield _cache_check()
     yield _plugin_root_check()
     yield from _framework_lines()
-    yield _sandbox_check(repo)
-    yield _gh_sandbox_check(repo)
     yield _check(
         shutil.which("gitleaks") is not None,
         "gitleaks on PATH",
@@ -406,9 +354,6 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
         "the Push Train scans commits with gitleaks; install it so the scan can run",
     )
     yield from _gh_checks()
-    # 0020: macOS sandboxes without bwrap and socat, so it gets no binary lines.
-    for tool in required_binaries():
-        yield _check(shutil.which(tool) is not None, f"{tool} on PATH", "not found", SANDBOX_NEXT)
     yield from _repo_checks(repo, is_repo)
 
 
@@ -417,16 +362,6 @@ def print_cache_dir() -> int:
     try:
         print(cache_dir_or_probe())
     except RuntimeError as exc:
-        print(exc, file=sys.stderr)
-        return 1
-    return 0
-
-
-def print_sandbox_state(repo: Path) -> int:
-    # 0020: the trains read this one word to pick their sandbox gate.
-    try:
-        print(sandbox_state(repo))
-    except SettingsError as exc:
         print(exc, file=sys.stderr)
         return 1
     return 0
@@ -442,16 +377,9 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="print the plugin cache directory as one absolute path and exit",
     )
-    parser.add_argument(
-        "--sandbox-state",
-        action="store_true",
-        help="print the sandbox state (on, off or configured-unavailable) and exit",
-    )
     args = parser.parse_args(argv)
     if args.print_cache_dir:
         return print_cache_dir()
-    if args.sandbox_state:
-        return print_sandbox_state(Path(args.repo).resolve())
     all_ok = True
     for ok, line in checks(Path(args.repo).resolve()):
         print(line)

@@ -3193,7 +3193,7 @@ def test_issue30_main_refuses_residual_shell_forms_during_a_train(
 
 @pytest.mark.parametrize("command", SHELL_FORMS)
 def test_issue30_main_shell_forms_pass_outside_a_train(other_repo: Path, command: str) -> None:
-    # 0023: outside a train the main session keeps its shell; the OS sandbox is layer two.
+    # 0023, 0035: outside a train the main session keeps its shell.
     d = decide(_cred(None, "Bash", str(other_repo), command=command), CFG)
     assert d.allow, (command, d.reason)
 
@@ -3206,7 +3206,7 @@ def test_issue30_main_shell_forms_pass_outside_a_train(other_repo: Path, command
         "echo $HOME and ${HOME}",
         "for f in a b; do echo $f; done",
         "echo '$(date)' and '`x`' stay quoted",
-        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_doctor.py --sandbox-state --repo /x",
+        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_doctor.py --print-cache-dir --repo /x",
         "tar -cf /tmp/a.tar src",
         "git log --format='%h %s()' -1",
     ],

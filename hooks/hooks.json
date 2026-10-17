@@ -1,8 +1,7 @@
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py", "timeout": 10 } ] },
-      { "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/sandbox_notice.py", "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py", "timeout": 10 } ] }
     ],
     "UserPromptSubmit": [
       { "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py", "timeout": 10 } ] }

@@ -109,7 +109,7 @@ def test_build_train_hands_the_pack_path_to_the_standards_specialist() -> None:
     # 0019: a declared pack has no path in config.json; begin prints it, every dispatch carries it.
     text = _build_train()
     assert "    standards packs: <name> at <path>, or none declared\n" in text
-    assert "The first seven lines are begin's output" in text
+    assert "The first six lines are begin's output" in text
     rules = text.split("## Preconditions", 1)[0]
     dispatch = next(ln for ln in rules.splitlines() if "standards-rules-specialist dispatch" in ln)
     assert "the `standards packs:` line" in dispatch
@@ -524,14 +524,6 @@ def test_push_train_reads_the_ledger_sha_from_the_ledger_ids_line() -> None:
     assert "the ledger commit sha from the `Ledger ids:` line," in step
 
 
-def test_push_train_sandbox_check_uses_the_repo() -> None:
-    # 0020: the sandbox check runs against <repo>, never the session's working directory.
-    text = _push_train()
-    assert "--repo ." not in text
-    step = text.split("\n1. ", 1)[1].split("\n2. ", 1)[0]
-    assert f"`{SANDBOX_STATE_CMD} --repo <repo>`" in step
-
-
 def test_push_train_hands_the_charter_to_the_operator() -> None:
     hand_off = _push_train().split("## Hand-off", 1)[1]
     assert "`git -C <charter_root> push -u origin daedalus/<train-id>`" in hand_off
@@ -671,11 +663,10 @@ def test_skill_script_commands_are_allowed_for_main() -> None:
     root = str(REPO_ROOT)
     commands = [
         re.sub(r"<[^>]+>", "x", m.replace("${CLAUDE_PLUGIN_ROOT}", root).replace("<repo>", root))
-        for path in (REPO_ROOT / "skills" / n for n in ("build-train", "push-train", "setup"))
+        for path in (REPO_ROOT / "skills" / n for n in ("build-train", "push-train"))
         for m in _SKILL_SCRIPT.findall((path / "SKILL.md").read_text(encoding="utf-8"))
     ]
     assert len(commands) >= 4
-    assert any("daedalus_setup.py" in c for c in commands)
     for command in commands:
         payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": root}
         d = decide(payload, Config())
@@ -693,7 +684,7 @@ def test_issue30_skill_script_commands_pass_for_main_during_a_train(
     root, repo = str(REPO_ROOT), str(repo_cwd)
     commands = [
         re.sub(r"<[^>]+>", "x", m.replace("${CLAUDE_PLUGIN_ROOT}", root).replace("<repo>", repo))
-        for path in (REPO_ROOT / "skills" / n for n in ("build-train", "push-train", "setup"))
+        for path in (REPO_ROOT / "skills" / n for n in ("build-train", "push-train"))
         for m in _SKILL_SCRIPT.findall((path / "SKILL.md").read_text(encoding="utf-8"))
     ]
     assert len(commands) >= 4
@@ -747,28 +738,6 @@ def test_push_train_names_conductor_commands() -> None:
     assert any(c.startswith("gh pr edit daedalus/<train-id> --body-file") for c in commands)
 
 
-SETUP = REPO_ROOT / "skills" / "setup" / "SKILL.md"
-
-
-def test_setup_skill_runs_the_setup_script_only_when_asked() -> None:
-    # 0020: setup is never automatic; the operator types it.
-    fields, body = _split(SETUP)
-    assert fields["disable-model-invocation"] == "true"
-    assert "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_setup.py`" in body
-    assert "never run it on your own" in body
-    assert "Restart Claude Code to apply" in body
-
-
-def test_setup_skill_names_the_repo_local_file() -> None:
-    # 0027, 0029: setup writes the repo's .claude/settings.local.json and no user-level file.
-    fields, body = _split(SETUP)
-    for text in (fields["description"], body):
-        assert ".claude/settings.local.json" in text
-        assert "~/.claude/settings.json" not in text
-    assert "`OK   sandbox: on (.claude/settings.local.json)`" in body
-    assert "from their own shell" in body
-
-
 DOCTOR = REPO_ROOT / "skills" / "doctor" / "SKILL.md"
 DOCTOR_CMD = "python3 ${CLAUDE_SKILL_DIR}/../../scripts/daedalus_doctor.py"
 
@@ -781,67 +750,10 @@ def test_doctor_preapproves_only_its_own_script() -> None:
     assert (DOCTOR.parent / "../../scripts/daedalus_doctor.py").resolve().is_file()
 
 
-def test_doctor_asks_once_and_hands_setup_to_the_operator() -> None:
+def test_doctor_asks_once() -> None:
     _, body = _split(DOCTOR)
     assert "Ask once, in a single message" in body and "Never ask per line." in body
     assert "Do not run any other command to investigate" in body
-    assert "tell the operator to type `/daedalus:setup` themselves" in body
-
-
-def test_minor_5_setup_skill_names_the_two_space_rewrite() -> None:
-    text = (REPO_ROOT / "skills" / "setup" / "SKILL.md").read_text(encoding="utf-8")
-    assert "rewritten as JSON indented by two spaces" in text
-
-
-TRAIN_SKILLS = [p for p in SKILLS if p.parent.name.endswith("-train")]
-SANDBOX_NEXT_LINE = "Next: run /daedalus:setup, restart, rerun the train."
-SANDBOX_STATE_CMD = "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_doctor.py --sandbox-state"
-
-
-@pytest.mark.parametrize("path", TRAIN_SKILLS, ids=lambda p: p.parent.name)
-def test_every_train_declares_a_sandbox_class(path: Path) -> None:
-    # 0020: per train class, never hard-wired to one train (0022).
-    assert _split(path)[0].get("sandbox") in {"optional", "required"}
-
-
-def test_train_sandbox_classes() -> None:
-    classes = {p.parent.name: _split(p)[0].get("sandbox") for p in TRAIN_SKILLS}
-    assert classes == {"build-train": "optional", "push-train": "required"}
-
-
-def test_build_train_records_the_sandbox_state() -> None:
-    # 0020: begin reads the sandbox state (test_begin_prints_the_state_block_seed).
-    text = _build_train()
-    assert "The Build Train runs in every state." in _section(
-        text, "## Preconditions", "## Phase 1"
-    )
-    assert "    sandbox: <on, off or configured-unavailable>" in text
-    assert "       Sandbox: <on, off or configured-unavailable>" in text
-
-
-def test_build_train_stops_infrastructure_units_without_the_sandbox() -> None:
-    phase3 = _section(_build_train(), "## Phase 3", "\n5. The summary")
-    gate = phase3.split("\n1. ", 1)[1].split("\n2. ", 1)[0]
-    assert (
-        "When the State Block `sandbox:` is not `on` and any unit touched IAM, KMS, mTLS, "
-        "key custody or infrastructure config, stop before the security audit and before any "
-        "merge, naming those units. " + SANDBOX_NEXT_LINE
-    ) in gate
-    assert gate.index("`sandbox:` is not `on`") < gate.index("Agent(`nist-specialist`)")
-
-
-def test_push_train_requires_the_sandbox_first() -> None:
-    step = _section(_push_train(), "\n1. ", "\n2. ")
-    assert step.index("`<repo>` is the parent") < step.index(SANDBOX_STATE_CMD)
-    refusal = "Any word but `on`: stop. The Push Train needs the OS sandbox. "
-    assert refusal + SANDBOX_NEXT_LINE in step
-
-
-def test_minor_10_push_train_sandbox_state_exit_one_shows_its_message() -> None:
-    step = _section(_push_train(), "\n1. ", "\n2. ")
-    exit_one = "Exit 1: stop and show its message. Next: the action the message names."
-    assert exit_one in step
-    assert step.index(SANDBOX_STATE_CMD + " --repo <repo>") < step.index(exit_one)
 
 
 def test_push_train_checks_gh_beside_gitleaks() -> None:

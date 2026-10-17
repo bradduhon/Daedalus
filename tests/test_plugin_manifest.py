@@ -43,7 +43,6 @@ def test_readme_installs_from_the_marketplace() -> None:
     assert "/plugin install daedalus --marketplace bradduhon/Daedalus" in text
     assert "claude plugin marketplace add bradduhon/Daedalus" in text
     assert "claude plugin install daedalus@daedalus" in text
-    assert "/daedalus:setup" in text
     assert "--plugin-dir" not in text
     assert "worktree.baseRef" not in text
     assert "spawn depth" not in text

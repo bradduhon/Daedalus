@@ -42,7 +42,7 @@ WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 WEB_TOOLS = frozenset({"WebFetch", "WebSearch"})
 # 5.5: all routing is through Fable; workers never message each other.
 WORKER_DENIED_TOOLS = frozenset({"Task", "Agent", "SendMessage"})
-# spec 8, 0020: credential stores refused to every agent, main included; denyRead is layer two.
+# spec 8, 0023: credential stores refused to every agent, main included.
 CREDENTIAL_DENY = (".ssh", ".aws", ".gnupg", ".config/gh", ".claude/.credentials.json")
 # 0023: these tools carry only the credential deny, for every agent known or not.
 CREDENTIAL_TOOLS = frozenset({"Read", "Glob", "Grep"})

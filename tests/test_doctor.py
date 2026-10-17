@@ -11,15 +11,9 @@ import sys
 from pathlib import Path
 
 import pytest
-from lib.sandbox_state import required_binaries
 
 from tests.conftest import SCRIPTS_DIR, fake_bin
 
-# 0020: macOS needs no sandbox binaries, so binary-specific cases run only where they apply.
-NEEDS_BINARIES = pytest.mark.skipif(not required_binaries(), reason="no sandbox binaries here")
-SETUP = "type /daedalus:setup yourself; the model cannot run it"
-SETUP_OFF = "MISS sandbox: off. Next: " + SETUP
-SANDBOX_WITH_GH = {"sandbox": {"enabled": True, "excludedCommands": ["gh *", "git push *"]}}
 SCAFFOLDS = ("service-manifest.json", "contracts/", ".gitleaks.toml")
 
 
@@ -84,7 +78,6 @@ def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: P
         "gitleaks",
         "gh on PATH",
         "gh authenticated",
-        *required_binaries(),
         "git repository",
         "service-manifest.json",
         "contracts/",
@@ -108,16 +101,12 @@ def _settings(path: Path, body: object) -> None:
     path.write_text(json.dumps(body) if not isinstance(body, str) else body)
 
 
-def _sandbox_line(result: subprocess.CompletedProcess[str]) -> str:
-    return next(line for line in result.stdout.splitlines() if line[5:].startswith("sandbox:"))
-
-
 def _bins(tmp_path: Path, *names: str, exit_codes: dict[str, int] | None = None) -> str:
     return str(fake_bin(tmp_path, names, exit_codes))
 
 
 def _bins_with_git(tmp_path: Path, *names: str, exit_codes: dict[str, int] | None = None) -> str:
-    # spec 5: fake tools plus a link to the real git; git's own dir also holds bwrap, socat, gh.
+    # spec 5: fake tools plus a link to the real git; git's own dir also holds gh.
     git = shutil.which("git")
     assert git is not None, "git is required to build the test repos"
     bins = _bins(tmp_path, *names, exit_codes=exit_codes)
@@ -127,115 +116,6 @@ def _bins_with_git(tmp_path: Path, *names: str, exit_codes: dict[str, int] | Non
     return bins
 
 
-def test_sandbox_off_is_a_miss_naming_setup(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
-    assert _sandbox_line(result) == SETUP_OFF
-    assert result.returncode == 1
-
-
-USER_MOVE_NEXT = (
-    "Next: Daedalus now writes .claude/settings.local.json per repo; remove the sandbox "
-    "block from ~/.claude/settings.json from your own shell if you did not set it yourself"
-)
-
-
-def test_user_level_sandbox_gets_the_move_next(tmp_path: Path) -> None:
-    # 0027, 0029: the doctor reads the user file for reporting and never writes it.
-    home = tmp_path / "home"
-    user = home / ".claude" / "settings.json"
-    _settings(user, {"sandbox": {"enabled": True}})
-    before = user.read_text()
-    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
-    line = _sandbox_line(result)
-    assert line == f"OK   sandbox: on (~/.claude/settings.json). {USER_MOVE_NEXT}"
-    assert user.read_text() == before
-
-
-def _gh_line(result: subprocess.CompletedProcess[str]) -> str:
-    return next(line for line in result.stdout.splitlines() if "gh outside sandbox" in line)
-
-
-def test_gh_outside_sandbox_ok_when_sandbox_off(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
-    assert _gh_line(result) == "OK   gh outside sandbox: sandbox off"
-
-
-def test_gh_outside_sandbox_ok_when_both_excluded(tmp_path: Path) -> None:
-    # 0028: the exclusions may come from any settings file Claude Code reads.
-    home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"excludedCommands": ["gh *"]}})
-    local = {"sandbox": {"enabled": True, "excludedCommands": ["git push *"]}}
-    _settings(tmp_path / ".claude" / "settings.local.json", local)
-    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
-    assert _gh_line(result) == "OK   gh outside sandbox"
-
-
-def test_gh_outside_sandbox_miss_names_setup(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    local = {"sandbox": {"enabled": True, "excludedCommands": ["gh *"]}}
-    _settings(tmp_path / ".claude" / "settings.local.json", local)
-    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
-    assert _gh_line(result) == (
-        "MISS gh outside sandbox: sandbox.excludedCommands lacks git push *, so the Push Train "
-        f"cannot reach GitHub. Next: {SETUP}"
-    )
-    assert result.returncode == 1
-
-
-@pytest.mark.parametrize("name", ["settings.json", "settings.local.json"])
-def test_sandbox_line_names_its_source_file(tmp_path: Path, name: str) -> None:
-    home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": False}})
-    _settings(tmp_path / ".claude" / name, {"sandbox": {"enabled": True}})
-    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
-    assert _sandbox_line(result) == f"OK   sandbox: on (.claude/{name})"
-
-
-@NEEDS_BINARIES
-def test_sandbox_without_binaries_is_configured_unavailable(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
-    result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
-    assert _sandbox_line(result) == ("MISS sandbox: configured-unavailable. Next: " + SETUP)
-
-
-def test_sandbox_local_settings_override_user(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
-    _settings(tmp_path / ".claude" / "settings.local.json", {"sandbox": {"enabled": False}})
-    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
-    assert _sandbox_line(result) == SETUP_OFF
-
-
-def test_sandbox_malformed_settings_is_a_miss(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", "{not json")
-    line = _sandbox_line(_run(None, tmp_path, path_env=_bins(tmp_path), home=home))
-    assert line.startswith("MISS sandbox: ") and "is not valid JSON" in line and "Next: fix" in line
-
-
-def test_minor_6_sandbox_alone_missing_exits_one(plugin_data: Path, tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    _git_repo(repo)
-    (repo / "service-manifest.json").write_text("{}")
-    (repo / "contracts").mkdir()
-    (repo / "contracts" / "openapi.yaml").write_text("")
-    (repo / ".gitleaks.toml").write_text("")
-    _commit_all(repo)
-    home = tmp_path / "home"
-    home.mkdir()
-    bins = _bins_with_git(tmp_path, "gitleaks", "gh", "bwrap", "socat")
-    result = _run(plugin_data, repo, path_env=bins, home=home)
-    misses = [line for line in result.stdout.splitlines() if line.startswith("MISS")]
-    assert misses == [SETUP_OFF]
-    assert result.returncode == 1
-
-
 def test_doctor_no_longer_checks_base_ref(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
@@ -243,66 +123,12 @@ def test_doctor_no_longer_checks_base_ref(tmp_path: Path) -> None:
     assert "worktree.baseRef" not in result.stdout
 
 
-@NEEDS_BINARIES
-def test_bwrap_miss_names_setup(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
-    assert (
-        "MISS bwrap on PATH: not found. Next: install bubblewrap and socat, then " + SETUP
-    ) in result.stdout.splitlines()
-
-
-def test_binary_lines_follow_required_binaries(tmp_path: Path) -> None:
+def test_binary_lines_name_gitleaks_and_gh_only(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
     named = [m[1] for line in lines if (m := re.match(r"(?:OK  |MISS) (\S+) on PATH", line))]
-    assert named == ["gitleaks", "gh", *required_binaries()]
-
-
-def _state(repo: Path, home: Path, path_env: str) -> subprocess.CompletedProcess[str]:
-    env = dict(os.environ)
-    env["HOME"] = str(home)
-    env["PATH"] = path_env
-    return subprocess.run(
-        [sys.executable, str(SCRIPTS_DIR / "daedalus_doctor.py"), "--sandbox-state"]
-        + ["--repo", str(repo)],
-        capture_output=True,
-        text=True,
-        env=env,
-        check=False,
-    )
-
-
-def test_sandbox_state_flag_prints_one_word(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    result = _state(tmp_path, home, _bins(tmp_path))
-    assert result.returncode == 0
-    assert result.stdout == "off\n"
-
-
-def test_sandbox_state_flag_on(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
-    assert _state(tmp_path, home, _bins(tmp_path, "bwrap", "socat")).stdout == "on\n"
-
-
-@NEEDS_BINARIES
-def test_sandbox_state_flag_configured_unavailable(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
-    result = _state(tmp_path, home, _bins(tmp_path))
-    assert (result.returncode, result.stdout) == (0, "configured-unavailable\n")
-
-
-def test_sandbox_state_flag_malformed_exits_one(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", "{not json")
-    result = _state(tmp_path, home, _bins(tmp_path))
-    assert result.returncode == 1 and result.stdout == ""
-    assert "Next: fix" in result.stderr
+    assert named == ["gitleaks", "gh"]
 
 
 def _data(repo: Path, marker: bool = True) -> Path:
@@ -336,9 +162,9 @@ def test_complete_setup_is_all_ok(plugin_data: Path, tmp_path: Path) -> None:
         )
     )
     _commit_all(repo)
-    bins = _bins_with_git(tmp_path, "gitleaks", "bwrap", "socat", "gh")
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh")
     home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", SANDBOX_WITH_GH)
+    home.mkdir()
     result = _run(plugin_data, repo, path_env=bins, home=home)
     assert result.returncode == 0, result.stdout
     assert not any(line.startswith("MISS") for line in result.stdout.splitlines())
@@ -407,9 +233,9 @@ def test_absent_scaffolds_are_opt_and_pass(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _git_repo(repo)
     _commit_all_empty(repo)
-    bins = _bins_with_git(tmp_path, "gitleaks", "gh", "bwrap", "socat")
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh")
     home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", SANDBOX_WITH_GH)
+    home.mkdir()
     result = _run(None, repo, path_env=bins, home=home)
     lines = result.stdout.splitlines()
     assert result.returncode == 0, result.stdout
@@ -756,9 +582,9 @@ def test_first_run_without_config_is_all_ok(tmp_path: Path) -> None:
     (repo / "contracts" / "openapi.yaml").write_text("")
     (repo / ".gitleaks.toml").write_text("")
     _commit_all(repo)
-    bins = _bins_with_git(tmp_path, "gitleaks", "gh", "bwrap", "socat")
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh")
     home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", SANDBOX_WITH_GH)
+    home.mkdir()
     result = _run(None, repo, path_env=bins, home=home)
     assert result.returncode == 0, result.stdout
     assert not any(line.startswith("MISS") for line in result.stdout.splitlines())
@@ -912,8 +738,8 @@ def test_old_framework_line_does_not_fail_the_doctor(plugin_data: Path, tmp_path
     _commit_all(repo)
     _framework_manifest(plugin_data, "nist", "2020-01-01")
     home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", SANDBOX_WITH_GH)
-    bins = _bins_with_git(tmp_path, "gitleaks", "gh", "bwrap", "socat")
+    home.mkdir()
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh")
     result = _run(plugin_data, repo, path_env=bins, home=home)
     assert result.returncode == 0, result.stdout
     assert _framework_lines(result.stdout)[0].startswith("OLD  frameworks nist: pinned 2020-01-01")
@@ -980,8 +806,8 @@ def test_doctor_offers_the_baseline_pack(tmp_path: Path) -> None:
     (repo / ".gitleaks.toml").write_text("")
     _commit_all(repo)
     home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", SANDBOX_WITH_GH)
-    bins = _bins_with_git(tmp_path, "gitleaks", "gh", "bwrap", "socat")
+    home.mkdir()
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh")
     result = _run(None, repo, path_env=bins, home=home)
     assert PACK_OFFER in result.stdout.splitlines()
     assert result.returncode == 0, result.stdout
