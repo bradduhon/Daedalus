@@ -41,7 +41,7 @@ Example output from a real run in a new repository with one empty commit, on a m
     OPT  standards_sources: no standards file or pack is declared. Next: to adopt the shipped baseline pack, add {"kind": "pack", "name": "baseline"} to standards_sources in .claude/daedalus/config.json
     OK   policy: not declared (optional)
     OK   cache dir: none yet (create it with scripts/refresh_frameworks.py or by hand per docs/project-requirements.md)
-    OK   plugin root: ~/.claude/plugins/cache/daedalus/daedalus/3.0.0
+    OK   plugin root: ~/.claude/plugins/cache/daedalus/daedalus/3.1.0
     MISS gitleaks on PATH: not found. Next: the Push Train scans commits with gitleaks; install it so the scan can run
     OK   gh on PATH
     MISS gh authenticated: gh auth status exited 1. Next: run gh auth login
