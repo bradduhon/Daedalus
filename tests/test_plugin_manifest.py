@@ -10,7 +10,7 @@ from tests.conftest import REPO_ROOT
 def test_manifest_has_required_keys() -> None:
     data = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
     assert data["name"] == "daedalus"
-    assert data["version"] == "2.0.0"
+    assert data["version"] == "3.0.0"
     assert data["description"]
     assert data["author"]["name"] == "Brad Duhon"
 
@@ -43,7 +43,17 @@ def test_readme_installs_from_the_marketplace() -> None:
     assert "/plugin install daedalus --marketplace bradduhon/Daedalus" in text
     assert "claude plugin marketplace add bradduhon/Daedalus" in text
     assert "claude plugin install daedalus@daedalus" in text
-    assert "/daedalus:setup" in text
     assert "--plugin-dir" not in text
     assert "worktree.baseRef" not in text
     assert "spawn depth" not in text
+
+
+def test_requirements_carry_the_reviewer_rule() -> None:
+    # 0024: git and file state findings close in scripts, not skill prose.
+    text = (REPO_ROOT / "docs" / "project-requirements.md").read_text()
+    section = text.split("\n## Reviewing changes to Daedalus\n", 1)[1]
+    assert "\n## " not in section
+    assert (
+        "A finding about git or file state is closed by a script change and a script test, "
+        "never by a skill sentence."
+    ) in section

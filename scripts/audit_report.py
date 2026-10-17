@@ -205,7 +205,9 @@ def render(path: Path) -> str:
         raise ReportError(message)
     match = _OK.fullmatch(message)
     if match is None:
-        raise ReportError(f"unexpected verifier output {message!r}. Next: report this.")
+        raise ReportError(
+            f"unexpected verifier output {message!r}. Next: report this line as a Daedalus bug."
+        )
     count, head = int(match.group(1)), match.group(2)
     records = [json.loads(raw) for raw in lines if raw.strip()]
     header = ["# Daedalus audit report", "", f"session: {md_escape(path.stem)}"]
@@ -295,7 +297,9 @@ def main(argv: list[str]) -> int:
         return 1
     except OSError as exc:
         print(
-            f"audit_report: could not read or write ({exc}). Next: check the path.", file=sys.stderr
+            f"audit_report: could not read or write ({exc}). "
+            "Next: check that the session log is readable and the --out path is writable.",
+            file=sys.stderr,
         )
         return 1
 

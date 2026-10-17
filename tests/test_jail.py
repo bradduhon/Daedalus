@@ -9,9 +9,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import jail
+from lib import jail, train_state
 from lib.config import Config, LedgerDecl
 from lib.jail import CONDUCTOR_GIT, KNOWN_AGENTS, decide, split_pipeline, tokenize
+from lib.unit_binding import record_dispatch
+from lib.workspace import mark_train, train_marker
 
 from tests.conftest import REPO_ROOT
 
@@ -25,6 +27,7 @@ CFG = Config(
 
 
 WT = f"{CWD}/.claude/worktrees/20261015-120000-u1"
+UNIT_TRAIN = "20261015-120000"
 FAKE_UNITS = frozenset({f"{CWD}/.claude/worktrees/u1", WT})
 
 
@@ -39,6 +42,20 @@ def _fake_unit_worktrees(monkeypatch: pytest.MonkeyPatch) -> None:
         return real(repo) if real is not None else frozenset()
 
     monkeypatch.setattr(jail, "_registered_worktrees", fake, raising=False)
+    # issue 29: CWD has no train state; binding is proven in tests/test_unit_binding.py.
+    real_binding = jail._binding_reason
+
+    def no_binding(hook_input: dict[str, Any], cwd: str, units: set[str]) -> str | None:
+        return None if cwd == CWD else real_binding(hook_input, cwd, units)
+
+    monkeypatch.setattr(jail, "_binding_reason", no_binding)
+    # 0035: CWD stands for a repo a train runs in; real repos below resolve their own marker.
+    real_scoped = jail._train_scoped
+
+    def scoped(cwd: str, tool: str, tool_input: dict[str, Any]) -> bool:
+        return cwd.startswith(CWD) or real_scoped(cwd, tool, tool_input)
+
+    monkeypatch.setattr(jail, "_train_scoped", scoped)
 
 
 def _w(agent: str | None, path: str, tool: str = "Write") -> dict[str, Any]:
@@ -354,7 +371,6 @@ class TestConductor:
             "git add -A",
             "git commit -m x",
             "gh pr create --title t --body-file docs/.tmp/pr.md",
-            "gh pr edit 3 --body-file /tmp/pr.md",
             "gh run watch 123",
             "gh run list",
             "gitleaks detect --redact --log-opts=main..b",
@@ -525,8 +541,6 @@ def test_universal_tripwire_regressions(command: str) -> None:
 
 def test_main_ordinary_commands_still_allowed() -> None:
     for command in (
-        "git push origin feature/x",
-        "git push -u origin feature/x",
         "rm -rf build",
         "git commit -m 'fix -S flag doc'",
         "git -c commit.gpgsign=false commit -m x",
@@ -534,6 +548,62 @@ def test_main_ordinary_commands_still_allowed() -> None:
         "bash -c 'git status'",
     ):
         assert decide(_b(None, command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push origin feature/x",
+        "git push -u origin feature/x",
+        "git push -u origin feature/x 2>/dev/null",
+        "git push origin $REF",
+        "git push origin feature/main-fix",
+        "git push origin feat > log",
+    ],
+)
+def test_main_git_push_refused_during_a_train(marked_repo: Path, command: str) -> None:
+    # 0028, 0035: while a train runs only the conductor pushes.
+    d = decide(_cred(None, "Bash", str(marked_repo), command=command), CFG)
+    assert not d.allow and "(0028, 0030)" in str(d.reason), command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push origin feature/x",
+        "git push -u origin feature/x 2>/dev/null",
+        "git push origin feature/main-fix",
+        "gh pr merge 5",
+        "gh repo delete o/r --yes",
+        "gh pr view 3",
+    ],
+)
+def test_main_git_push_and_gh_pass_outside_a_train(other_repo: Path, command: str) -> None:
+    # 0035: outside a train the main session's gh and git push are untouched.
+    d = decide(_cred(None, "Bash", str(other_repo), command=command), CFG)
+    assert d.allow, (command, d.reason)
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_main_and_foreign_agents_carry_only_the_read_deny_outside_a_train(
+    cred_home: Path, other_repo: Path, agent: str | None
+) -> None:
+    # 0023, 0035: outside a train the credential read deny is the one rule left.
+    (cred_home / ".ssh").mkdir()
+    cwd = str(other_repo)
+    payloads = [
+        _cred(agent, "Write", cwd, file_path=f"{cwd}/src/app.py"),
+        _cred(agent, "Write", cwd, file_path=f"{cwd}/.claude/daedalus/config.json"),
+        _cred(agent, "Bash", cwd, command="git clean -fdx"),
+        _cred(agent, "Bash", cwd, command="cat ~/.ssh/id_ed25519"),
+    ]
+    for payload in payloads:
+        assert decide(payload, CFG).allow, payload
+    read = decide(_cred(agent, "Read", cwd, file_path=f"{cred_home}/.ssh/id_ed25519"), CFG)
+    assert not read.allow and "credential path" in str(read.reason)
+    _train(other_repo)
+    for payload in payloads:
+        assert not decide(payload, CFG).allow, payload
 
 
 @pytest.mark.parametrize("command", ["$GIT push origin x", "git $SUB origin x"])
@@ -555,7 +625,6 @@ def test_workers_blocked_on_variable_commands(command: str) -> None:
         "git status & wait",
         "echo `date`",
         "$EDITOR notes.md",
-        "git push -u origin feature/x 2>/dev/null",
         "rm -rf /tmp/build > /dev/null",
     ],
 )
@@ -824,8 +893,6 @@ class TestRegressionConductor:
         for command in (
             "gh -R o/r pr view 3",
             "gh pr checks 3",
-            "gh pr comment 3 --body-file docs/.tmp/c.md",
-            "gh pr diff 3",
             "gh run view 1",
             "gh pr list --repo o/r",
         ):
@@ -882,7 +949,8 @@ class TestRegressionToolsAndCwd:
             d = decide(_t(agent, tool), CFG)
             assert (
                 not d.allow
-                and d.reason == "workers use only their allowlisted tools. Next: ask Fable."
+                and d.reason
+                == "workers use only their allowlisted tools. Next: ask the orchestrating session."
             )
 
     def test_main_may_use_mcp(self) -> None:
@@ -1252,8 +1320,6 @@ class TestRound3MainHardened:
     @pytest.mark.parametrize(
         "command",
         [
-            "git push origin feature/x",
-            "git push origin $REF",
             "GIT_PAGER=cat git log",
             "bash -o pipefail -c 'git status'",
             "python3 -c 'print(1)'",
@@ -1335,12 +1401,9 @@ class TestRound4MainFallback:
         "command",
         [
             "git -c color.ui=false log",
-            "git push origin $REF",
-            "git push origin feature/main-fix",
             "$EDITOR notes.md",
             "rm -rf ~/scratch/build/..",
             "rm -rf /tmp/x/..",
-            "git push origin feat > log",
         ],
     )
     def test_allowed(self, command: str) -> None:
@@ -1984,7 +2047,6 @@ class TestFinalConductorGh:
         [
             "gh pr create --title x --body-file docs/.tmp/pr.md",
             "gh pr create --title x -F /tmp/pr.md",
-            "gh pr comment 3 --body-file docs/.tmp/c.md",
             "gh -R o/r pr view 3",
         ],
     )
@@ -2140,16 +2202,7 @@ class TestFixWaveConductorGh:
             "gh pr create --title x --body-file docs/.tmp/pr.md --body b",
             "gh pr create --title x --body-file docs/.tmp/pr.md --body=b",
             "gh pr create --title x --body-file docs/.tmp/pr.md -bb",
-            "gh pr edit 3 --body-file docs/.tmp/pr.md -db b",
             "gh pr create --title x",
-            "gh pr edit 3 --body b",
-            "gh pr edit 3 -b b",
-            "gh pr edit 3 --body=b",
-            "gh pr edit 3 --title t",
-            "gh pr comment 3 --body b",
-            "gh pr comment 3 -b b",
-            "gh pr comment 3 --body=b",
-            "gh pr comment 3",
         ],
     )
     def test_inline_body_blocked(self, command: str) -> None:
@@ -2161,33 +2214,58 @@ class TestFixWaveConductorGh:
     @pytest.mark.parametrize(
         "command",
         [
-            "gh pr edit daedalus/T --base dev --body-file docs/.tmp/pr.md",
-            "gh pr edit daedalus/T --base=dev --body-file docs/.tmp/pr.md",
-            "gh pr edit daedalus/T -B dev --body-file docs/.tmp/pr.md",
-            "gh pr edit daedalus/T -Bdev --body-file docs/.tmp/pr.md",
-        ],
-    )
-    def test_edit_base_blocked(self, command: str) -> None:
-        d = decide(_b(self.C, command), CFG)
-        assert not d.allow and d.reason is not None, command
-        assert d.reason.startswith("gh pr edit may not change the base branch.")
-        assert "Next:" in d.reason
-
-    @pytest.mark.parametrize(
-        "command",
-        [
             "gh pr create --base main --head daedalus/T --title x --body-file docs/.tmp/pr.md",
             "gh pr create --title x -F /tmp/pr.md",
             "gh pr create --title x --body-file=/tmp/pr.md",
-            "gh pr edit daedalus/T --body-file docs/.tmp/pr.md",
-            "gh pr comment 3 --body-file docs/.tmp/c.md",
-            "gh pr comment 3 -F/tmp/c.md",
-            "gh pr edit daedalus/T -F/tmp/Build-body.md",
             "gh pr view daedalus/T --json url",
         ],
     )
     def test_allowed(self, command: str) -> None:
         assert decide(_b(self.C, command), CFG).allow, command
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "gh pr edit 3 --body-file docs/.tmp/pr.md -db b",
+            "gh pr edit 3 --title t",
+            "gh pr comment 3 --body b",
+            "gh pr comment 3 -b b",
+            "gh pr comment 3 --body=b",
+            "gh pr comment 3",
+            "gh pr edit daedalus/T --base dev --body-file docs/.tmp/pr.md",
+            "gh pr edit daedalus/T --base=dev --body-file docs/.tmp/pr.md",
+            "gh pr edit daedalus/T -B dev --body-file docs/.tmp/pr.md",
+            "gh pr edit daedalus/T -Bdev --body-file docs/.tmp/pr.md",
+            "gh pr comment 3 --body-file docs/.tmp/c.md",
+            "gh pr comment 3 -F/tmp/c.md",
+            "gh pr diff 3",
+        ],
+    )
+    def test_edit_comment_diff_refused_by_0028(self, command: str) -> None:
+        # K1, 0028: comment, diff and any pr edit beyond the body are off the 0028 list.
+        d = decide(_b(self.C, command), CFG)
+        assert not d.allow and "is a default-deny command" in str(d.reason), command
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "gh pr edit daedalus/T --body-file docs/.tmp/pr.md",
+            "gh pr edit daedalus/T -F/tmp/Build-body.md",
+            "gh pr edit 3 --body-file /tmp/pr.md",
+        ],
+    )
+    def test_pr_edit_body_file_allowed(self, command: str) -> None:
+        # K1: the conductor may replace its PR body from a file.
+        d = decide(_b(self.C, command), CFG)
+        assert d.allow, (command, d.reason)
+
+    @pytest.mark.parametrize(
+        "command", ["gh pr edit 3 --body b", "gh pr edit 3 -b b", "gh pr edit 3 --body=b"]
+    )
+    def test_pr_edit_inline_body_refused(self, command: str) -> None:
+        # K1: the body comes only from --body-file.
+        d = decide(_b(self.C, command), CFG)
+        assert not d.allow and "only from --body-file" in str(d.reason), command
 
 
 class TestFixWaveGitleaksRedact:
@@ -2305,7 +2383,8 @@ def test_coder_unit_worktree_outside_code_dirs_is_refused(path: str) -> None:
 
 def test_main_never_writes_unit_worktree_code() -> None:
     d = decide(_w(None, f"{WT}/src/a.py"), CFG)
-    assert not d.allow and "Fable does not write application code" in str(d.reason)
+    reason = "the orchestrating session does not write application code during a train"
+    assert not d.allow and reason in str(d.reason)
 
 
 def test_coder_restores_paths_inside_its_unit_worktree() -> None:
@@ -2337,11 +2416,18 @@ def _unit_repo(path: Path) -> tuple[Path, Path]:
     subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "init"], check=True)
     wt = repo / ".claude" / "worktrees" / "u1"
     subprocess.run([*git, "worktree", "add", "-q", "-b", "daedalus-unit/u1", str(wt)], check=True)
+    # issue 29: coder writes need a train with the unit recorded and dispatched.
+    (repo / ".claude" / "daedalus").mkdir(exist_ok=True)
+    unit = {"name": "u1", "branch": "daedalus-unit/u1", "path": str(wt)}
+    train_state.save(repo, UNIT_TRAIN, {"train_id": UNIT_TRAIN, "units": [unit]})
+    mark_train(repo, UNIT_TRAIN)
+    assert record_dispatch(repo, UNIT_TRAIN, "u1") is None
     return repo, wt.resolve()
 
 
 def _cwd(payload: dict[str, Any], cwd: Path) -> dict[str, Any]:
     payload["cwd"] = str(cwd)
+    payload.setdefault("session_id", "s")
     return payload
 
 
@@ -2353,6 +2439,7 @@ def test_coder_unit_worktree_through_a_symlinked_root(tmp_path: Path) -> None:
     for cwd, root in ((link, repo), (repo, link), (link, link)):
         payload = _w("repo-coder", f"{root}/.claude/worktrees/u1/src/a.py")
         payload["cwd"] = str(cwd)
+        payload["session_id"] = "s"
         assert decide(payload, CFG).allow, (cwd, root)
         payload = _w("repo-coder", f"{root}/src/a.py")
         payload["cwd"] = str(cwd)
@@ -2920,6 +3007,7 @@ def test_recursive_reader_over_a_store_ancestor_is_refused(
     cred_home: Path, agent: str | None, command: str
 ) -> None:
     text = command.format(home=cred_home, parent=cred_home.parent)
+    _train(cred_home / "project")
     d = decide(_cred(agent, "Bash", str(cred_home / "project"), command=text), CFG)
     assert not d.allow and "credential path" in str(d.reason), text
 
@@ -2978,16 +3066,20 @@ def test_refusal_names_the_resolved_target(cred_home: Path) -> None:
     assert d.reason == _refusal(str(cred_home / ".aws"))
 
 
-def test_unknown_agent_never_writes_the_data_dir(train_cwd: Path) -> None:
-    # 0010: the data dir is Daedalus's own integrity, refused train or not.
+def test_unknown_agent_writes_the_data_dir_only_outside_a_train(train_cwd: Path) -> None:
+    # 0010, 0035: the data dir is refused to foreign agents while a train runs, never outside.
     cwd = str(train_cwd)
     data = f"{cwd}/.claude/daedalus"
-    for payload in (
+    payloads = (
         _cred("Explore", "Write", cwd, file_path=f"{data}/x"),
         _cred("Explore", "Edit", cwd, file_path=f"{data}/config.json"),
         _cred("Explore", "Bash", cwd, command=f"tee {data}/train.active"),
         _cred("Explore", "Bash", cwd, command=f"rm {data}/train.active"),
-    ):
+    )
+    for payload in payloads:
+        assert decide(payload, CFG).allow, payload
+    _mark(train_cwd)
+    for payload in payloads:
         d = decide(payload, CFG)
         assert not d.allow and "data" in str(d.reason), payload
 
@@ -3009,6 +3101,12 @@ def plain_repo(tmp_path: Path) -> Path:
     return root
 
 
+def _train(root: Path) -> None:
+    # 0035: main and foreign agents meet the Bash credential model only while a train runs.
+    (root / ".claude" / "daedalus").mkdir(parents=True, exist_ok=True)
+    _mark(root)
+
+
 @pytest.mark.parametrize("agent", [None, "Explore"])
 @pytest.mark.parametrize(
     "command",
@@ -3025,6 +3123,7 @@ def test_unresolved_variable_in_a_path_position_is_refused(
     cred_home: Path, plain_repo: Path, agent: str | None, command: str
 ) -> None:
     # spec 8: $name and ${name} alike; read binds nothing the jail can resolve.
+    _train(plain_repo)
     d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
     assert not d.allow and "credential path" in str(d.reason), command
 
@@ -3055,11 +3154,12 @@ def test_rg_refusal_follows_hidden_components(
 ) -> None:
     # spec 8: rg skips hidden dirs by default, so only a non-hidden path reaches a store.
     cwd = str(plain_repo)
+    for command in ("rg BEGIN ~", f"rg BEGIN {plain_repo}", "rg BEGIN"):
+        assert decide(_cred(agent, "Bash", cwd, command=command), CFG).allow, command
+    _train(plain_repo)
     for command in ("rg BEGIN ~/.config", "rg -uu BEGIN ~", "rg -. BEGIN ~", "rg --hidden x ~"):
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
         assert not d.allow and "credential path" in str(d.reason), command
-    for command in ("rg BEGIN ~", f"rg BEGIN {plain_repo}", "rg BEGIN"):
-        assert decide(_cred(agent, "Bash", cwd, command=command), CFG).allow, command
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -3077,6 +3177,7 @@ def test_patterns_and_find_predicates_are_not_paths(
     ):
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
         assert d.allow, (command, d.reason)
+    _train(plain_repo)
     for command in ("grep -r '' ~", "grep -r -e x ~", "grep -rf pats ~"):
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
         assert not d.allow and "credential path" in str(d.reason), command
@@ -3087,10 +3188,11 @@ def test_wrapper_option_values_are_consumed(
     cred_home: Path, plain_repo: Path, agent: str | None
 ) -> None:
     cwd = str(plain_repo)
+    assert decide(_cred(agent, "Bash", cwd, command=f"sudo tar cf - {cwd}/src"), CFG).allow
+    _train(plain_repo)
     for command in ("sudo -u root tar cf - ~", "nice -n 5 tar cf - ~", "env -u X tar cf - ~"):
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
         assert not d.allow and "credential path" in str(d.reason), command
-    assert decide(_cred(agent, "Bash", cwd, command=f"sudo tar cf - {cwd}/src"), CFG).allow
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -3107,6 +3209,7 @@ def test_a_later_binding_does_not_hide_an_earlier_read(
     cred_home: Path, plain_repo: Path, agent: str | None, command: str
 ) -> None:
     # spec 8: bindings apply in segment order; a loop body sees every binding inside the loop.
+    _train(plain_repo)
     d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
     assert not d.allow and "credential path" in str(d.reason), command
 
@@ -3119,3 +3222,151 @@ def test_a_later_binding_does_not_taint_an_earlier_read(
     for command in ("D=/tmp; cat $D/x; D=~", "for f in *; do cat ${f}; done"):
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
         assert d.allow, (command, d.reason)
+
+
+# issue 30: residual shell forms, the write-target train marker and unmodelled copiers.
+@pytest.fixture
+def marked_repo(tmp_path: Path) -> Path:
+    repo = _git_init(tmp_path / "marked")
+    (repo / ".claude" / "daedalus").mkdir(parents=True)
+    _mark(repo)
+    return repo
+
+
+@pytest.fixture
+def other_repo(tmp_path: Path) -> Path:
+    return _git_init(tmp_path / "other")
+
+
+SHELL_FORMS = [
+    "echo $(date)",
+    "echo `date`",
+    'echo "$(date)"',
+    "echo $'\\x7e'",
+    "diff <(ls) x",
+    "f() { ls; }; f",
+    "function f { ls; }",
+    "eval ls",
+    "builtin cd /tmp",
+    "command builtin cd /tmp",
+    "python3 x.py $d/.ssh/id",
+    "read d; echo $d",
+    "bsdtar -cf /tmp/a.tar /tmp/x",
+    "7z a /tmp/a.7z /tmp/x",
+    "scp -r /tmp/x /tmp/y",
+    "cpio -o",
+    "bash -c 'echo $(date)'",
+]
+
+
+@pytest.mark.parametrize("command", SHELL_FORMS)
+def test_issue30_main_shell_syntax_passes_outside_a_train(other_repo: Path, command: str) -> None:
+    # 0023, 0035: outside a train the main session keeps its shell.
+    d = decide(_cred(None, "Bash", str(other_repo), command=command), CFG)
+    assert d.allow, (command, d.reason)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ls -la",
+        "git status --short",
+        "echo $HOME and ${HOME}",
+        "for f in a b; do echo $f; done",
+        "echo '$(date)' and '`x`' stay quoted",
+        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_doctor.py --print-cache-dir --repo /x",
+        "tar -cf /tmp/a.tar src",
+        "git log --format='%h %s()' -1",
+    ],
+)
+def test_issue30_main_plain_commands_pass_during_a_train(marked_repo: Path, command: str) -> None:
+    d = decide(_cred(None, "Bash", str(marked_repo), command=command), CFG)
+    assert d.allow, (command, d.reason)
+
+
+@pytest.mark.parametrize(
+    "tool_input",
+    [
+        {"file_path": "{repo}/notes.md"},
+        {"file_path": "{repo}/new/dir/notes.md"},
+        {"command": "touch {repo}/x"},
+        {"command": "echo hi > {repo}/x"},
+        {"command": "git -C {repo} commit -m x"},
+        {"command": "cd {repo} && ls"},
+        {"command": "sed -i s/a/b/ {repo}/x"},
+    ],
+)
+def test_issue30_unknown_agent_refused_writing_into_a_marked_repo(
+    marked_repo: Path, other_repo: Path, tool_input: dict[str, str]
+) -> None:
+    # 0023: the marker is read from the repository the call writes into, not only the cwd.
+    filled = {k: v.format(repo=marked_repo) for k, v in tool_input.items()}
+    tool = "Bash" if "command" in filled else "Write"
+    d = decide(_cred("Explore", tool, str(other_repo), **filled), CFG)
+    assert not d.allow and "fail closed while" in str(d.reason), filled
+    assert str(train_marker(marked_repo)) in str(d.reason)
+
+
+def test_issue30_unknown_agent_reads_a_marked_repo_from_elsewhere(
+    marked_repo: Path, other_repo: Path
+) -> None:
+    reads = (f"ls {marked_repo}", f"cat {marked_repo}/README.md", f"git -C {marked_repo} log")
+    for command in reads:
+        d = decide(_cred("Explore", "Bash", str(other_repo), command=command), CFG)
+        assert d.allow, (command, d.reason)
+    d = decide(_cred("Explore", "Write", str(other_repo), file_path=f"{other_repo}/x"), CFG)
+    assert d.allow
+
+
+@pytest.mark.parametrize("agent", [None, "Explore", "security-auditor"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bsdtar -cf /tmp/a.tar ~",
+        "7z a /tmp/a.7z ~",
+        "7za a /tmp/a.7z ~",
+        "scp -r ~ host:x",
+        "pax -w -f /tmp/a.pax ~",
+    ],
+)
+def test_issue30_unmodelled_copiers_reading_home_are_refused(
+    cred_home: Path, plain_repo: Path, agent: str | None, command: str
+) -> None:
+    _train(plain_repo)
+    d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
+    assert not d.allow and "credential" in str(d.reason), (command, d.reason)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"rsync -aT/opt/x {WT}/src/a.py {WT}/src/b.py",
+        f"rsync -a -T {CWD}/infra {WT}/src/a.py {WT}/src/b.py",
+        f"cp -b --suffix=/../../../infra/x {WT}/src/a.py {WT}/src/b.py",
+        f"cp -b -S /../../infra/x {WT}/src/a.py {WT}/src/b.py",
+        f"mv --backup --suffix ../x {WT}/src/a.py {WT}/src/b.py",
+    ],
+)
+def test_issue30_coder_temp_dir_and_backup_suffix_are_write_targets(command: str) -> None:
+    assert not decide(_b("repo-coder", command), CFG).allow, command
+
+
+def test_issue30_coder_plain_backup_suffix_passes() -> None:
+    command = f"cp -b --suffix=.orig {WT}/src/a.py {WT}/src/b.py"
+    assert decide(_b("repo-coder", command), CFG).allow
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd .claude/daedalus && git init",
+        "git -C .claude/daedalus init",
+        "git init .claude/daedalus",
+    ],
+)
+def test_issue30_git_init_in_the_data_dir_is_refused(
+    marked_repo: Path, agent: str | None, command: str
+) -> None:
+    d = decide(_cred(agent, "Bash", str(marked_repo), command=command), CFG)
+    assert not d.allow and "plugin data directory" in str(d.reason), (command, d.reason)

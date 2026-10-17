@@ -109,9 +109,8 @@ def test_blocking_events_are_not_async() -> None:
         assert all(not hook.get("async", False) for hook in _commands(event))
 
 
-def test_session_start_runs_audit_and_the_sandbox_notice() -> None:
-    # 0020: the notice is its own command so audit stays non-blocking.
+def test_session_start_runs_only_the_audit() -> None:
+    # 0037: no session start notice; the audit hook is the only SessionStart command.
     assert [hook["command"] for hook in _commands("SessionStart")] == [
         "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py",
-        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/sandbox_notice.py",
     ]

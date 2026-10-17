@@ -6,16 +6,23 @@ import os
 import re
 import subprocess
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
+
+from lib import train_state
+from lib.audit import DataDirError, cache_dir_or_probe, ensure_project_data_dir
+from lib.audit_proof import SUMMARY_DIR
+from lib.config import Config, ConfigError, load_config
+from lib.ledger import LedgerError, read_sequence, resolve_ledger
+from lib.train_state import TRAIN_ID as _TRAIN_ID
+from lib.train_state import TRAIN_MARKER
 
 # 0022: pipeline-neutral; every caller names its own base ref.
 WORKTREES_DIR = Path(".claude") / "worktrees"
 BRANCH_PREFIX = "daedalus-unit/"
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 _GIT_TIMEOUT_S = 120
-# 0023: a train is active while this file names its id on the first line.
-TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
-_TRAIN_ID = re.compile(r"[0-9]{8}-[0-9]{6}")
 
 
 class WorkspaceError(RuntimeError):
@@ -62,12 +69,16 @@ def _run(repo: Path, *args: str, path: Path | None = None) -> subprocess.Complet
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
+        took = f"git {args[0]} {args[1]} timed out after {_GIT_TIMEOUT_S} s."
+        if path is None:
+            raise WorkspaceError(
+                f"{took} Next: run git -C {repo} {' '.join(args)} from your own shell "
+                "to see why it hangs, then rerun."
+            ) from exc
         # spec 7: a killed worktree add can leave a lock that a single --force will not clear.
-        target = path or repo / WORKTREES_DIR / "<name>"
         raise WorkspaceError(
-            f"git {args[0]} {args[1]} timed out after {_GIT_TIMEOUT_S} s. "
-            f"Next: run git -C {repo} worktree unlock {target} (or worktree remove -f -f "
-            f"{target}), then run daedalus_workspace.py remove and rerun."
+            f"{took} Next: run git -C {repo} worktree unlock {path} (or worktree remove -f -f "
+            f"{path}), then run daedalus_workspace.py remove and rerun."
         ) from exc
     except OSError as exc:
         raise WorkspaceError(
@@ -115,6 +126,13 @@ def create(repo: Path, name: str, base_ref: str) -> Path:
     _ensure_marker(repo)
     # spec 7: documented option order, branch before path before base.
     _git(repo, "worktree", "add", "-q", "-b", branch, str(path), base_ref, path=path)
+    # 0024: inside a train, record the unit so stop and finish tear down only train worktrees.
+    train = train_state.active_train(repo)
+    if train is not None and train_state.state_path(repo, train).is_file():
+        try:
+            train_state.add_unit(repo, train, name, branch, path)
+        except train_state.TrainStateError as exc:
+            raise WorkspaceError(str(exc)) from exc
     return path
 
 
@@ -147,7 +165,7 @@ def mark_train(repo: Path, train_id: str) -> Path:
     if not marker.parent.is_dir():
         raise WorkspaceError(
             f"{marker.parent} is missing, so the audit hooks have not run here. "
-            "Next: run /daedalus:doctor."
+            "Next: run the Daedalus health check (/daedalus:doctor)."
         )
     if marker.is_symlink():
         raise WorkspaceError(
@@ -164,7 +182,10 @@ def mark_train(repo: Path, train_id: str) -> Path:
     except OSError as exc:
         if tmp is not None:
             tmp.unlink(missing_ok=True)
-        raise WorkspaceError(f"cannot write {marker} ({exc}). Next: run /daedalus:doctor.") from exc
+        # 0023: a directory or an unwritable file at the marker is the operator's to remove.
+        raise WorkspaceError(
+            f"cannot write {marker} ({exc}). Next: remove {marker} from your own shell, then rerun."
+        ) from exc
     return marker
 
 
@@ -177,3 +198,514 @@ def clear_train(repo: Path) -> Path:
             f"cannot remove {marker} ({exc}). Next: delete it from your own shell."
         ) from exc
     return marker
+
+
+DIRTY_LIMIT = 10
+RERUN = "start the Build Train again (/daedalus:build-train)."
+CLEAN_NEXT = f"Next: commit or stash your changes from your own shell, then {RERUN}"
+LEDGER_NONE = "ledger: none declared and none found."
+LEDGER_QUESTION = (
+    "This repo has no decision ledger. Options: name an existing file, or let Daedalus "
+    "create docs/decisions.md as a table. Which?"
+)
+LEDGER_TABLE = "| Id | Date | Ruling | Supersedes | Follow-ups |\n|---|---|---|---|---|"
+
+
+class LedgerQuestion(WorkspaceError):
+    pass
+
+
+def _out(repo: Path, *args: str) -> str:
+    result = _run(repo, *args)
+    if result.returncode != 0:
+        detail = " ".join(result.stderr.split()) or "no stderr"
+        raise WorkspaceError(
+            f"git {args[0]} {args[1]} failed in {repo} ({detail}). "
+            "Next: fix the cause git names, then rerun."
+        )
+    return result.stdout
+
+
+def _dirty(repo: Path, *pathspec: str) -> list[str]:
+    # 0007: name the dirty paths so nobody reruns git status to find them.
+    out = _out(repo, "status", "--porcelain", "--untracked-files=all", *pathspec)
+    return [line[3:].split(" -> ")[-1] for line in out.splitlines() if line.strip()]
+
+
+def _shown(paths: list[str]) -> str:
+    shown = ", ".join(paths[:DIRTY_LIMIT])
+    if len(paths) > DIRTY_LIMIT:
+        shown += f" +{len(paths) - DIRTY_LIMIT} more"
+    return shown
+
+
+def _branch(repo: Path) -> str:
+    head = _out(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    if head == "HEAD":
+        raise WorkspaceError(
+            f"{repo} is on a detached HEAD, so a stop has no branch to return to. "
+            f"Next: switch to a branch from your own shell, then {RERUN}"
+        )
+    return head
+
+
+def repo_root(cwd: Path) -> Path:
+    inside = _run(cwd, "rev-parse", "--is-inside-work-tree")
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        raise WorkspaceError(
+            f"{cwd} is not inside a git work tree. "
+            f"Next: start the session inside the target repository, then {RERUN}"
+        )
+    # 0010: the common dir's parent is the main working tree every worktree shares.
+    common = _out(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+    return Path(common).parent
+
+
+def _ledger_line(repo: Path, config: Config) -> str:
+    try:
+        ledger = resolve_ledger(str(repo), config)
+        if ledger is None:
+            raise LedgerQuestion(f"{LEDGER_NONE}\n{LEDGER_QUESTION}\n{LEDGER_TABLE}")
+        seq = read_sequence(ledger)
+    except LedgerError as exc:
+        raise WorkspaceError(str(exc)) from exc
+    return f"ledger: {ledger.path} ({ledger.origin}, {ledger.format}, seq={seq})"
+
+
+def _scratch(repo: Path) -> None:
+    scratch = repo / SUMMARY_DIR
+    marker = scratch / ".gitignore"
+    try:
+        scratch.mkdir(parents=True, exist_ok=True)
+        if not marker.exists():
+            marker.write_text("*\n", encoding="utf-8")
+    except OSError as exc:
+        raise WorkspaceError(
+            f"cannot write {marker} ({exc}). Next: make {scratch} a writable directory."
+        ) from exc
+
+
+def _charter_branch(charter: Path, train_id: str) -> str:
+    dirty = _dirty(charter)
+    if dirty:
+        raise WorkspaceError(
+            f"uncommitted changes in {charter}: {_shown(dirty)}. Next: commit or stash the "
+            f"changes in {charter} from your own shell, then {RERUN}"
+        )
+    base = _branch(charter)
+    _git(charter, "switch", "-q", "-c", f"daedalus/{train_id}")
+    return base
+
+
+def _undo_charter(charter: Path, base: str, exc: Exception) -> WorkspaceError:
+    switched = _run(charter, "switch", "-q", base)
+    if switched.returncode == 0:
+        return WorkspaceError(str(exc))
+    return WorkspaceError(
+        f"{exc} The Charter switch-back failed too. "
+        f"Next: run git -C {charter} switch {base} from your own shell, then {RERUN}"
+    )
+
+
+def begin(cwd: Path) -> list[str]:
+    # 0024: build-train Preconditions 1 to 9, ordered so a failure leaves no train state behind.
+    repo = repo_root(cwd.resolve())
+    dirty = _dirty(repo)
+    if dirty:
+        raise WorkspaceError(f"uncommitted changes in {repo}: {_shown(dirty)}. {CLEAN_NEXT}")
+    base = _branch(repo)
+    base_sha = _out(repo, "rev-parse", "HEAD").strip()
+    try:
+        config = load_config(path=repo / ".claude" / "daedalus" / "config.json")
+    except ConfigError as exc:
+        raise WorkspaceError(str(exc)) from exc
+    ledger_line = _ledger_line(repo, config)
+    try:
+        # 0035: the first write of a train; outside one the audit layer never creates this folder.
+        ensure_project_data_dir(str(repo))
+    except DataDirError as exc:
+        raise WorkspaceError(str(exc)) from exc
+    train_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    if train_state.state_path(repo, train_id).exists():
+        raise WorkspaceError(f"train {train_id} already exists. Next: wait a second, then {RERUN}")
+    _scratch(repo)
+    charter = (repo / config.charter_root).resolve() if config.charter_root else None
+    charter_base = _charter_branch(charter, train_id) if charter else None
+    try:
+        try:
+            cache: str | None = str(cache_dir_or_probe() / "frameworks")
+        except RuntimeError:
+            cache = None
+        state = {
+            "train_id": train_id,
+            "repo": str(repo),
+            "base_branch": base,
+            "base_sha": base_sha,
+            "charter_root": str(charter) if charter else None,
+            "charter_base": charter_base,
+            "charter_branch_created": charter is not None,
+            "ledger_line": ledger_line,
+            "cache_dir": cache,
+            "units": [],
+            "merged": False,
+        }
+        train_state.save(repo, train_id, state)
+        try:
+            mark_train(repo, train_id)
+        except WorkspaceError:
+            train_state.state_path(repo, train_id).unlink(missing_ok=True)
+            raise
+    except (train_state.TrainStateError, WorkspaceError) as exc:
+        if charter is not None and charter_base is not None:
+            raise _undo_charter(charter, charter_base, exc) from exc
+        raise WorkspaceError(str(exc)) from exc
+    policy = f"{config.policy.engine} {config.policy.path}" if config.policy else "none declared"
+    # 0019: a pack has no path in config.json; the standards specialist reads it from this line.
+    packs = [f"{s.name} at {s.path}" for s in config.standards_sources if s.kind == "pack"]
+    return [
+        f"train: {train_id}  base: {base} @ {base_sha}  audit session: pending",
+        ledger_line,
+        f"charter_root: {charter or 'none'}  charter base: {charter_base or 'none'}",
+        f"policy: {policy}  standards: {len(config.standards_sources)} sources",
+        f"cache: {cache}" if cache else "cache: unresolved",
+        f"standards packs: {', '.join(packs) or 'none declared'}",
+    ]
+
+
+def _active(repo: Path) -> tuple[str, dict[str, Any]]:
+    train_id = train_state.active_train(repo)
+    if train_id is None:
+        raise WorkspaceError(
+            f"no Daedalus train is active in {repo}. "
+            "Next: start a Build Train first (/daedalus:build-train)."
+        )
+    try:
+        return train_id, train_state.load(repo, train_id)
+    except train_state.TrainStateError as exc:
+        raise WorkspaceError(str(exc)) from exc
+
+
+def _record(repo: Path, train_id: str, **fields: Any) -> None:
+    try:
+        train_state.update(repo, train_id, **fields)
+    except train_state.TrainStateError as exc:
+        raise WorkspaceError(str(exc)) from exc
+
+
+def _on_branch(repo: Path, branch: str, start: str | None = None) -> None:
+    if _out(repo, "rev-parse", "--abbrev-ref", "HEAD").strip() == branch:
+        return
+    exists = _run(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")
+    if exists.returncode == 0:
+        _git(repo, "switch", "-q", branch)
+    elif start is not None:
+        _git(repo, "switch", "-q", "-c", branch, start)
+    else:
+        raise WorkspaceError(f"branch {branch} is missing in {repo}. Next: {RERUN}")
+
+
+def _contract_target(repo: Path, state: dict[str, Any], contract: str) -> tuple[Path, Path]:
+    # 0011: contracts/<name>.md in this repo, or specs/<name>.md under the declared charter_root.
+    path = (repo / contract).resolve()
+    charter = Path(state["charter_root"]) if state.get("charter_root") else None
+    root, folder = (
+        (charter, "specs") if charter and path.is_relative_to(charter) else (repo, "contracts")
+    )
+    rel = path.relative_to(root) if path.is_relative_to(root) else None
+    if (
+        rel is None
+        or len(rel.parts) != 2
+        or rel.parts[0] != folder
+        or rel.suffix != ".md"
+        or not _NAME.fullmatch(rel.stem)
+    ):
+        raise WorkspaceError(
+            f"contract path {contract} is not {folder}/<name>.md in {root}. "
+            "Next: ask contract-spec to save the packet there, then rerun the lock."
+        )
+    return root, path
+
+
+def lock(repo: Path, contract: str, version: int) -> list[str]:
+    repo = repo.resolve()
+    train_id, state = _active(repo)
+    root, path = _contract_target(repo, state, contract)
+    recorded = state.get("packet_version")
+    if isinstance(recorded, int) and version <= recorded:
+        raise WorkspaceError(
+            f"packet_version {version} does not exceed {recorded}. "
+            "Next: ask contract-spec for a higher packet_version."
+        )
+    if not path.is_file():
+        raise WorkspaceError(f"contract-spec did not save the packet at {path}. Next: {RERUN}")
+    integration = f"daedalus/{train_id}"
+    _on_branch(repo, integration, state["base_sha"])
+    if root != repo:
+        _on_branch(root, integration)
+    rel = str(path.relative_to(root))
+    _git(root, "add", "--", rel)
+    unchanged = _run(root, "diff", "--cached", "--quiet", "--", rel)
+    if unchanged.returncode not in (0, 1):
+        raise WorkspaceError(
+            f"git diff --cached failed in {root}. Next: fix the cause, then rerun."
+        )
+    verb = "Revise" if isinstance(recorded, int) else "Lock"
+    if unchanged.returncode == 1:
+        _git(root, "commit", "-q", "-m", f"{verb} contract {path.stem} v{version}", "--", rel)
+    sha = _out(repo, "rev-parse", integration).strip()
+    _record(
+        repo,
+        train_id,
+        contract_path=str(path),
+        contract_repo=str(root),
+        packet_version=version,
+        lock_sha=sha,
+    )
+    detail = (
+        f"contract: {path} v{version}"
+        if unchanged.returncode == 1
+        else "contract unchanged, no commit"
+    )
+    return [f"lock: {sha}", detail]
+
+
+STOP_NEXT = "start the Build Train again (/daedalus:build-train)"
+
+
+def _unit_worktrees(repo: Path) -> dict[str, Path]:
+    listing = _out(repo, "worktree", "list", "--porcelain")
+    found: dict[str, Path] = {}
+    path: Path | None = None
+    for line in listing.splitlines():
+        if line.startswith("worktree "):
+            path = Path(line.removeprefix("worktree "))
+        elif line.startswith("branch refs/heads/") and path is not None:
+            found[line.removeprefix("branch refs/heads/")] = path
+    return found
+
+
+def _teardown(repo: Path, units: list[dict[str, Any]], lines: list[str], nexts: list[str]) -> bool:
+    # 0024: only the units this train recorded, never another worktree under .claude/worktrees/.
+    listed = _unit_worktrees(repo)
+    ok = True
+    for unit in units:
+        path = listed.get(str(unit.get("branch")))
+        if path is None:
+            continue
+        lines.append(f"discarding {path}:")
+        status = _run(path, "status", "--porcelain")
+        lines.extend(f"  {entry}" for entry in status.stdout.splitlines() if entry.strip())
+        try:
+            remove(repo, str(unit["name"]))
+        except WorkspaceError as exc:
+            ok = False
+            lines.append(f"remove failed for {path}: {exc}")
+            nexts.append(
+                f"run git worktree remove --force {path} and git worktree prune from your own shell"
+            )
+            continue
+        lines.append(f"removed {path}")
+    return ok
+
+
+def _switch(repo: Path, branch: str, lines: list[str], nexts: list[str]) -> bool:
+    result = _run(repo, "switch", "-q", branch)
+    if result.returncode == 0:
+        lines.append(f"switched {repo} to {branch}")
+        return True
+    detail = " ".join(result.stderr.split()) or "no stderr"
+    lines.append(f"switch to {branch} failed in {repo} ({detail})")
+    nexts.append(f"run git -C {repo} switch {branch} from your own shell")
+    return False
+
+
+def _integration_back(
+    repo: Path, state: dict[str, Any], integration: str, lines: list[str], nexts: list[str]
+) -> bool:
+    if (
+        state.get("merged")
+        or _out(repo, "rev-parse", "--abbrev-ref", "HEAD").strip() != integration
+    ):
+        return True
+    # 0024: a dirty main checkout or uncommitted contract stays on the integration branch.
+    dirty = _dirty(repo)
+    if state.get("charter_root"):
+        charter = Path(state["charter_root"])
+        dirty += [f"{charter.name}/{p}" for p in _dirty(charter, "--", "specs/")]
+    if dirty:
+        lines.append(f"kept on {integration}: {_shown(dirty)}")
+        nexts.append(
+            f"commit or discard those files on {integration} from your own shell, "
+            f"then run git switch {state['base_branch']}"
+        )
+        return True
+    return _switch(repo, str(state["base_branch"]), lines, nexts)
+
+
+def _charter_back(
+    state: dict[str, Any], integration: str, lines: list[str], nexts: list[str]
+) -> bool:
+    if not state.get("charter_branch_created") or not state.get("charter_root"):
+        return True
+    charter, base = Path(state["charter_root"]), str(state["charter_base"])
+    dirty = _dirty(charter)
+    if dirty:
+        lines.append(f"kept on {integration} in {charter.name}: {_shown(dirty)}")
+        nexts.append(
+            f"commit or discard those files on {integration} in {charter.name} from your own "
+            f"shell, then run git -C {charter} switch {base}"
+        )
+        return True
+    if _out(charter, "rev-parse", "--abbrev-ref", "HEAD").strip() == base:
+        return True
+    return _switch(charter, base, lines, nexts)
+
+
+def stop(repo: Path, reason: str, next_action: str | None) -> tuple[list[str], bool]:
+    # 0024: every train stop runs these steps in order; the last line is always one Next.
+    repo = repo.resolve()
+    marker = train_marker(repo)
+    train_id = train_state.active_train(repo)
+    lines: list[str] = []
+    nexts: list[str] = []
+    ok = True
+    if train_id is None and not marker.exists() and not marker.is_symlink():
+        lines.append("nothing to stop")
+    else:
+        lines.append(f"Stopped train {train_id or 'unknown'}: {reason}")
+        state_file = train_state.state_path(repo, train_id) if train_id else None
+        if state_file is None or not state_file.is_file():
+            lines.append("no train state recorded; unmarking only")
+        else:
+            try:
+                state = train_state.load(repo, train_id or "")
+                integration = f"daedalus/{train_id}"
+                ok = _teardown(repo, list(state.get("units") or []), lines, nexts) and ok
+                ok = _integration_back(repo, state, integration, lines, nexts) and ok
+                ok = _charter_back(state, integration, lines, nexts) and ok
+            except (WorkspaceError, train_state.TrainStateError) as exc:
+                ok = False
+                lines.append(f"stop could not finish: {exc}")
+                nexts.append("finish the step it names from your own shell")
+        try:
+            lines.append(f"cleared {clear_train(repo)}")
+        except WorkspaceError as exc:
+            ok = False
+            lines.append(str(exc))
+            nexts.append(f"remove {marker} from your own shell")
+    if nexts:
+        final = "; ".join(nexts)
+    else:
+        final = next_action or STOP_NEXT
+    lines.append(final if final.startswith("Next:") else f"Next: {final}")
+    return lines, ok
+
+
+def _unit_label(train_id: str, name: str) -> str:
+    return name.removeprefix(f"{train_id}-")
+
+
+def _merge(repo: Path, state: dict[str, Any], train_id: str, unit: dict[str, Any]) -> None:
+    branch = str(unit["branch"])
+    message = f"Merge {_unit_label(train_id, str(unit['name']))} for train {train_id}"
+    merged = _run(repo, "merge", "-q", "--no-ff", branch, "-m", message)
+    if merged.returncode == 0:
+        return
+    conflicts = _out(repo, "diff", "--name-only", "--diff-filter=U").split()
+    _run(repo, "merge", "--abort")
+    _run(repo, "switch", "-q", str(state["base_branch"]))
+    detail = _shown(conflicts) if conflicts else " ".join(merged.stderr.split()) or "no stderr"
+    raise WorkspaceError(
+        f"merging {branch} into daedalus/{train_id} failed: {detail}. "
+        f"Next: inspect or delete the leftover daedalus/{train_id} branch, resolve the overlap "
+        "in the conflicting files named above, or rerun the train with units that do not "
+        "share files."
+    )
+
+
+def finish(repo: Path) -> list[str]:
+    # 0024: Phase 3 step 4 merges, with the merge-base check moved here from the skill.
+    repo = repo.resolve()
+    train_id, state = _active(repo)
+    integration = f"daedalus/{train_id}"
+    dirty = _dirty(repo)
+    if dirty:
+        raise WorkspaceError(
+            f"a coder changed the main checkout instead of its worktree: {_shown(dirty)}. "
+            "Next: inspect and discard those changes from your own shell, run git switch "
+            f"{state['base_branch']}, then rerun the train."
+        )
+    units = list(state.get("units") or [])
+    lock_sha = state.get("lock_sha")
+    if not units or not lock_sha:
+        raise WorkspaceError(
+            f"train {train_id} has no locked contract or no recorded units. Next: {RERUN}"
+        )
+    for unit in units:
+        if _run(repo, "merge-base", "--is-ancestor", str(lock_sha), str(unit["branch"])).returncode:
+            raise WorkspaceError(
+                f"Unit {unit['branch']} does not descend from the integration branch. "
+                "Next: rerun the train; if it repeats, file an issue with the train summary."
+            )
+    _git(repo, "switch", "-q", integration)
+    for unit in units:
+        _merge(repo, state, train_id, unit)
+    _record(repo, train_id, merged=True)
+    lines = [f"merged {len(units)} units into {integration}"]
+    nexts: list[str] = []
+    if not _teardown(repo, units, lines, nexts):
+        raise WorkspaceError("\n".join([*lines, f"Next: {'; '.join(nexts)}"]))
+    return lines
+
+
+def _resume_train(repo: Path) -> str:
+    train_id = train_state.active_train(repo)
+    if train_id is not None:
+        return train_id
+    # 0024: every stop clears the marker, so resume takes the newest recorded train.
+    folder = repo / train_state.STATE_DIR
+    ids = (
+        sorted(p.stem for p in folder.glob("*.json") if train_state.TRAIN_ID.fullmatch(p.stem))
+        if folder.is_dir()
+        else []
+    )
+    if not ids:
+        raise WorkspaceError(f"no Daedalus train is recorded in {repo}. Next: {RERUN}")
+    return ids[-1]
+
+
+def _resume_target(repo: Path, branch: str) -> bool:
+    head = _out(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    if head == branch:
+        return False
+    if _run(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}").returncode != 0:
+        return False
+    dirty = _dirty(repo)
+    if dirty:
+        raise WorkspaceError(
+            f"cannot switch {repo} to {branch}: uncommitted changes {_shown(dirty)}. "
+            "Next: commit or stash them from your own shell, then say continue."
+        )
+    return True
+
+
+def resume(repo: Path) -> list[str]:
+    repo = repo.resolve()
+    train_id = _resume_train(repo)
+    try:
+        state = train_state.load(repo, train_id)
+    except train_state.TrainStateError as exc:
+        raise WorkspaceError(str(exc)) from exc
+    integration = f"daedalus/{train_id}"
+    charter = Path(state["charter_root"]) if state.get("charter_branch_created") else None
+    switch_charter = charter is not None and _resume_target(charter, integration)
+    switch_repo = not state.get("merged") and _resume_target(repo, integration)
+    mark_train(repo, train_id)
+    lines = [f"resumed train {train_id}"]
+    if switch_charter and charter is not None:
+        _git(charter, "switch", "-q", integration)
+        lines.append(f"switched {charter} to {integration}")
+    if switch_repo:
+        _git(repo, "switch", "-q", integration)
+        lines.append(f"switched {repo} to {integration}")
+    return lines

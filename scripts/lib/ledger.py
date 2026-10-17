@@ -40,7 +40,7 @@ def _resolve_path(raw: str, repo_root: Path, charter_root: Path | None) -> Path:
         if charter_root is None:
             raise LedgerError(
                 f"ledger path {raw} uses <charter_root> but no charter_root is set. "
-                "Next: set charter_root in .claude/daedalus/config.json."
+                "Next: set the Charter repo path (charter_root) in .claude/daedalus/config.json."
             )
         raw = raw.replace("<charter_root>", str(charter_root))
     path = Path(raw.replace("<repo_root>", str(repo_root)))
@@ -208,7 +208,10 @@ def _last_table_id(lines: list[str], ledger: ResolvedLedger) -> int:
                 f"{ledger.path}: the first Id table has a header but no rows and another Id "
                 "table follows it. Next: keep one ledger table."
             )
-        raise LedgerError(f"{ledger.path} has two or more empty Id tables. Next: keep one.")
+        raise LedgerError(
+            f"{ledger.path} has two or more empty Id tables. "
+            "Next: keep one ledger table and delete the others."
+        )
     if table is None or not table[1]:
         raise LedgerError(
             f"{ledger.path} has no table rows. Next: add a header, separator and first row."

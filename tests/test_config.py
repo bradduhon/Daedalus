@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 from lib.config import Config, ConfigError, load_config
+
+from tests.conftest import REPO_ROOT
 
 
 def test_missing_file_gives_empty_config(project_data: Path) -> None:
@@ -130,3 +133,53 @@ def test_oversized_int_raises_config_error(project_data: Path) -> None:
 def test_missing_data_dir_gives_empty_config(repo_cwd: Path) -> None:
     # 0020: no .claude/daedalus at all is still the empty config.
     assert load_config(str(repo_cwd)) == Config()
+
+
+PACK_LINE = re.compile(r"^- D[BC]-[0-9]+: ")
+CONTROL = r"[A-Z]{2}-[0-9]+(\([0-9]+\))?"
+MAPS = re.compile(rf" Maps: NIST {CONTROL}(, {CONTROL})*(; ASVS V[0-9.]+[0-9](, V[0-9.]+[0-9])*)?$")
+
+
+def test_pack_source_resolves_under_the_plugin(project_data: Path) -> None:
+    doc = {"standards_sources": [{"kind": "pack", "name": "baseline"}]}
+    (project_data / "config.json").write_text(json.dumps(doc))
+    (source,) = load_config(str(project_data.parents[1])).standards_sources
+    assert source.kind == "pack" and source.name == "baseline"
+    assert source.path == REPO_ROOT / "packs" / "baseline"
+    assert (source.path / "rules.md").is_file()
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"kind": "pack", "name": "nope"},
+        {"kind": "pack", "name": "../packs/baseline"},
+        {"kind": "pack", "name": ""},
+        {"kind": "pack", "name": 3},
+        {"kind": "pack", "path": "/work/packs/baseline"},
+    ],
+)
+def test_unknown_pack_name_refused(project_data: Path, entry: dict[str, object]) -> None:
+    (project_data / "config.json").write_text(json.dumps({"standards_sources": [entry]}))
+    with pytest.raises(ConfigError) as info:
+        load_config(str(project_data.parents[1]))
+    assert str(info.value).endswith('Next: name the shipped baseline pack, "baseline".')
+
+
+def test_pack_rules_are_one_line_with_ids() -> None:
+    lines = (REPO_ROOT / "packs" / "baseline" / "rules.md").read_text(encoding="utf-8").splitlines()
+    assert lines[0].startswith("<!-- Copyright")
+    baseline = lines.index("## Baseline")
+    cloud = lines.index("## Cloud security standards")
+    assert 0 < baseline < cloud
+    rules = [(n, line) for n, line in enumerate(lines) if line.startswith("- ")]
+    assert all(PACK_LINE.match(line) for _, line in rules), rules
+    ids = [line.split(":", 1)[0][2:] for _, line in rules]
+    assert ids[:5] == [f"DB-{n}" for n in range(1, 6)]
+    assert ids[5:] == [f"DC-{n}" for n in range(1, len(ids) - 4)]
+    assert len(ids) >= 11
+    for n, line in rules:
+        assert n > (cloud if line.startswith("- DC-") else baseline), line
+        assert "CIS" not in line, line
+        if " Maps: " in line:
+            assert MAPS.search(line), line

@@ -16,8 +16,7 @@ between Bash calls.
    `cd <path> && <test command>`. Never change the main checkout.
 2. **Immutable Contracts**: the injected Locked Contract Packet is law. Never alter contract
    files or invent undocumented fields. Echo its `packet_version` in your final status.
-3. **No network**: the jail blocks it, and the sandbox too when it is on. Do not try to work
-   around it.
+3. **No network**: the jail blocks it. Do not try to work around it.
 4. **Yield Protocol**: when blocked by missing external docs, an ambiguous handshake, or a
    compliance question, first run
    `git -C <path> add -A && git -C <path> commit -m "WIP: yield"`, then return
@@ -27,6 +26,11 @@ between Bash calls.
    - `[STATUS: YIELD_COMPLIANCE] <exact question>`
    - `[STATUS: YIELD_STANDARDS] <exact question about a project standard>`
    You will be resumed with the answer. Continue from where you stopped.
+
+   Before writing code that touches authentication, IAM policy, key material or logging of
+   request data, return `[STATUS: YIELD_COMPLIANCE] <what you are about to write and the question>`
+   even when you are not blocked; the requirement comes back with control ids.
+
 5. **Verification**: run unit tests and typecheckers before completing. Never `git push`.
    Commit messages carry no Co-Authored-By or other attribution trailer.
    No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already returns stderr.
@@ -41,6 +45,8 @@ between Bash calls.
 - If a command is refused, the refusal names the rule. Follow its Next line; do not retry a variant.
 
 Never write U+2013 or U+2014 (en or em dash) in a reply, a file, or a ledger entry; use a hyphen.
+
+Human-facing text (0031): Text a human reads names each item in words: a short label or one line on what it is and what it does. Ids (ruling ids, issue numbers, task codes, agent names, snake_case keys) may trail in parentheses, never replace the description. Logs, status lines and messages to other agents may use ids alone. Documents carry both.
 
 ## Status contract
 Your reply ends with exactly one of these, nothing after it.

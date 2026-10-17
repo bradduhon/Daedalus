@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import sys
 from collections.abc import Iterator
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -22,23 +24,25 @@ from lib.audit import (  # noqa: E402
 )
 from lib.config import Config, ConfigError, load_config  # noqa: E402
 from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
-from lib.sandbox_state import (  # noqa: E402
-    SettingsError,
-    required_binaries,
-    sandbox_check,
-    sandbox_state,
-)
 from lib.workspace import UNMARK_NEXT, train_marker  # noqa: E402
 
 REQ_DOC = "docs/project-requirements.md"
-SANDBOX_NEXT = "install bubblewrap and socat, then run /daedalus:setup to turn the sandbox on"
 GH_NEXT = "install gh (https://cli.github.com); the Push Train opens pull requests with it"
+GH_TIMEOUT_S = 10
+GH_STUCK_NEXT = "run gh auth status from your own shell, then gh auth login if it asks"
 NO_LEDGER = "OK   ledger: none found (the Build Train asks before creating docs/decisions.md)"
 PROJECT_DATA_NEXT = "write a single line * to {marker}"
 IGNORE_NEXT = (
     "from your own shell, untrack it with git rm -r --cached .claude/daedalus, "
     "then restore the * marker"
 )
+DIRTY_LIMIT = 10
+PACK_OFFER = (
+    'to adopt the shipped baseline pack, add {"kind": "pack", "name": "baseline"} '
+    "to standards_sources in .claude/daedalus/config.json"
+)
+ENABLEMENT = ".claude/settings.json"
+ENABLEMENT_NEXT = f"commit {ENABLEMENT}; it holds the enabledPlugins entry /plugin install wrote"
 CACHE_NAMING = (
     "a --plugin-dir session uses daedalus-inline; a marketplace install uses daedalus-<marketplace>"
 )
@@ -48,6 +52,13 @@ def _check(ok: bool, name: str, missing: str, nxt: str) -> tuple[bool, str]:
     if ok:
         return True, f"OK   {name}"
     return False, f"MISS {name}: {missing}. Next: {nxt}"
+
+
+def _opt(ok: bool, name: str, missing: str, nxt: str) -> tuple[bool, str]:
+    # 0007: optional scaffold; no train reads it, so absence never fails the doctor.
+    if ok:
+        return True, f"OK   {name}"
+    return True, f"OPT  {name}: {missing}. Next: {nxt}"
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -68,10 +79,52 @@ def _cache_check() -> tuple[bool, str]:
     elif matches:
         found = ", ".join(matches)
     else:
-        found = f"none yet (create it with scripts/refresh_nist_oscal.py or by hand per {REQ_DOC})"
+        found = f"none yet (create it with scripts/refresh_frameworks.py or by hand per {REQ_DOC})"
     if not env and len(matches) > 1:
         found += f" ({CACHE_NAMING})"
     return True, f"OK   cache dir: {found}"
+
+
+FRAMEWORK_FAMILIES = ("nist", "owasp", "cis")
+FRAMEWORK_MAX_DAYS = 90
+REFRESH_NEXT = "refresh the framework caches with python3 <plugin>/scripts/refresh_frameworks.py"
+CIS_NEXT = f"place a current benchmark and its manifest entry per {REQ_DOC}"
+
+
+def _oldest_pin(manifest: Path) -> date | None:
+    try:
+        entries = json.loads(manifest.read_text(encoding="utf-8"))
+        pins = [date.fromisoformat(e["pinned_on"]) for e in entries]
+    except (OSError, ValueError, TypeError, KeyError, UnicodeDecodeError):
+        return None
+    return min(pins) if isinstance(entries, list) and pins else None
+
+
+def _framework_checks(cache: Path, today: date) -> Iterator[tuple[bool, str]]:
+    # 0026: one line per family manifest; OLD past 90 days never fails the doctor.
+    for family in FRAMEWORK_FAMILIES:
+        manifest = cache / "frameworks" / family / "manifest.json"
+        if not manifest.is_file():
+            continue
+        nxt = CIS_NEXT if family == "cis" else REFRESH_NEXT
+        name = f"frameworks {family}"
+        pinned = _oldest_pin(manifest)
+        if pinned is None:
+            yield True, f"OLD  {name}: manifest.json has no list of pinned_on dates. Next: {nxt}"
+            continue
+        days = (today - pinned).days
+        if days > FRAMEWORK_MAX_DAYS:
+            yield True, f"OLD  {name}: pinned {pinned} ({days} days). Next: {nxt}"
+        else:
+            yield True, f"OK   {name}: pinned {pinned}"
+
+
+def _framework_lines() -> Iterator[tuple[bool, str]]:
+    try:
+        cache = cache_dir_or_probe()
+    except RuntimeError:
+        return
+    yield from _framework_checks(cache, datetime.now(UTC).date())
 
 
 def _plugin_root_check() -> tuple[bool, str]:
@@ -90,11 +143,22 @@ def _gh_checks() -> Iterator[tuple[bool, str]]:
         return
     try:
         status = subprocess.run(
-            ["gh", "auth", "status"], capture_output=True, text=True, timeout=10, check=False
+            ["gh", "auth", "status"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=GH_TIMEOUT_S,
+            check=False,
         )
-        code = status.returncode
-    except (OSError, subprocess.SubprocessError):
-        code = -1
+    except subprocess.TimeoutExpired:
+        detail = f"gh auth status did not finish within {GH_TIMEOUT_S} s"
+        yield _check(False, "gh authenticated", detail, GH_STUCK_NEXT)
+        return
+    except (OSError, subprocess.SubprocessError) as exc:
+        detail = f"gh auth status could not run ({exc})"
+        yield _check(False, "gh authenticated", detail, GH_STUCK_NEXT)
+        return
+    code = status.returncode
     yield _check(
         code == 0, "gh authenticated", f"gh auth status exited {code}", "run gh auth login"
     )
@@ -113,10 +177,16 @@ def _data_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
     err = _trust_error(repo)
     if err is not None and err.kind == "symlink":
         yield False, f"MISS project data dir: {err}"
-        yield False, "MISS config.json: not read; the data dir failed a check. Next: fix it first"
+        yield (
+            False,
+            "MISS config.json: not read; the data dir failed a check. "
+            "Next: fix the data dir line above first",
+        )
         return
     if not data.exists():
-        yield True, f"OK   project data dir: {data} (will be created by the first hook)"
+        # 0035, 0031: nothing writes the data dir until a train starts in this repo.
+        yield True, f"OK   project data dir: {data} (not created yet; a train's start creates it)"
+        yield True, "OK   audit log: off until a train runs here"
         yield from _config_checks(data)
         return
     if not (data.is_dir() and os.access(data, os.R_OK | os.X_OK)):
@@ -147,7 +217,11 @@ def _data_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
             IGNORE_NEXT,
         )
     if err is not None:
-        yield False, "MISS config.json: not read; the data dir failed a check. Next: fix it first"
+        yield (
+            False,
+            "MISS config.json: not read; the data dir failed a check. "
+            "Next: fix the data dir line above first",
+        )
         return
     yield from _config_checks(data)
 
@@ -161,7 +235,9 @@ def _marker_check(repo: Path) -> tuple[bool, str]:
     try:
         # 0023: a symlinked marker is never followed; its target could be anything.
         text = "symlink" if marker.is_symlink() else marker.read_text(encoding="utf-8")
-        train_id = text.strip()[:32] or "empty"
+        # 0023: the first line only, printable characters only; a hand-written id is untrusted.
+        first = "".join(c for c in text.split("\n", 1)[0] if c.isprintable())
+        train_id = first.strip()[:32] or "empty"
     except (OSError, UnicodeDecodeError):
         train_id = "unreadable"
     line = f"OK   train marker: present ({train_id}) at {marker}. "
@@ -196,7 +272,11 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
     if config.standards_sources:
         yield True, "OK   standards_sources declared"
     else:
-        yield True, "OK   standards_sources: not declared (optional)"
+        # 0019: the baseline pack offer; optional, so it never fails the doctor.
+        yield (
+            True,
+            f"OPT  standards_sources: no standards file or pack is declared. Next: {PACK_OFFER}",
+        )
     if config.policy is not None:
         yield True, "OK   policy declared"
     else:
@@ -208,6 +288,25 @@ def _is_repo(repo: Path) -> bool:
     return inside.returncode == 0 and inside.stdout.strip() == "true"
 
 
+def _clean_tree_check(repo: Path) -> tuple[bool, str]:
+    # 0007: the line names the dirty paths so nobody reruns git status to find them.
+    status = _git(repo, "status", "--porcelain", "--untracked-files=all")
+    if status.returncode != 0:
+        code = status.returncode
+        return _check(
+            False, "clean working tree", f"git status exited {code}", "fix the repository"
+        )
+    paths = [line[3:].split(" -> ")[-1] for line in status.stdout.splitlines() if line.strip()]
+    if not paths:
+        return True, "OK   clean working tree"
+    shown = ", ".join(paths[:DIRTY_LIMIT])
+    if len(paths) > DIRTY_LIMIT:
+        shown += f" +{len(paths) - DIRTY_LIMIT} more"
+    only_enablement = all(path == ENABLEMENT for path in paths)
+    nxt = ENABLEMENT_NEXT if only_enablement else "commit or stash before starting a train"
+    return _check(False, "clean working tree", f"uncommitted changes present: {shown}", nxt)
+
+
 def _repo_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
     yield _check(
         is_repo,
@@ -216,26 +315,20 @@ def _repo_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
         "run git init or point --repo at a clone",
     )
     if is_repo:
-        status = _git(repo, "status", "--porcelain")
-        yield _check(
-            status.returncode == 0 and status.stdout.strip() == "",
-            "clean working tree",
-            "uncommitted changes present",
-            "commit or stash before starting a train",
-        )
-    yield _check(
+        yield _clean_tree_check(repo)
+    yield _opt(
         (repo / "service-manifest.json").exists(),
         "service-manifest.json",
         "not found at repo root",
         f"create it from the example in {REQ_DOC}",
     )
-    yield _check(
+    yield _opt(
         (repo / "contracts").is_dir(),
         "contracts/",
         "directory missing",
         "mkdir contracts and add openapi.yaml or events/*.schema.json",
     )
-    yield _check(
+    yield _opt(
         (repo / ".gitleaks.toml").exists(),
         ".gitleaks.toml",
         "not found at repo root",
@@ -255,7 +348,7 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     yield _marker_check(repo)
     yield _cache_check()
     yield _plugin_root_check()
-    yield sandbox_check(repo)
+    yield from _framework_lines()
     yield _check(
         shutil.which("gitleaks") is not None,
         "gitleaks on PATH",
@@ -263,9 +356,6 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
         "the Push Train scans commits with gitleaks; install it so the scan can run",
     )
     yield from _gh_checks()
-    # 0020: macOS sandboxes without bwrap and socat, so it gets no binary lines.
-    for tool in required_binaries():
-        yield _check(shutil.which(tool) is not None, f"{tool} on PATH", "not found", SANDBOX_NEXT)
     yield from _repo_checks(repo, is_repo)
 
 
@@ -274,16 +364,6 @@ def print_cache_dir() -> int:
     try:
         print(cache_dir_or_probe())
     except RuntimeError as exc:
-        print(exc, file=sys.stderr)
-        return 1
-    return 0
-
-
-def print_sandbox_state(repo: Path) -> int:
-    # 0020: the trains read this one word to pick their sandbox gate.
-    try:
-        print(sandbox_state(repo))
-    except SettingsError as exc:
         print(exc, file=sys.stderr)
         return 1
     return 0
@@ -299,16 +379,9 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="print the plugin cache directory as one absolute path and exit",
     )
-    parser.add_argument(
-        "--sandbox-state",
-        action="store_true",
-        help="print the sandbox state (on, off or configured-unavailable) and exit",
-    )
     args = parser.parse_args(argv)
     if args.print_cache_dir:
         return print_cache_dir()
-    if args.sandbox_state:
-        return print_sandbox_state(Path(args.repo).resolve())
     all_ok = True
     for ok, line in checks(Path(args.repo).resolve()):
         print(line)

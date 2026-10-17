@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-from tests.conftest import SCRIPTS_DIR
+import pytest
+
+from tests.conftest import SCRIPTS_DIR, write_train_marker
+
+_PYCACHE = shutil.ignore_patterns("__pycache__")
 
 
 def test_logs_every_event_shape(run_script: Any, project_data: Path, hook_input: Any) -> None:
+    write_train_marker(project_data.parent.parent)
     events = [
         hook_input(
             hook_event_name="SessionStart", tool_name=None, tool_input=None, source="startup"
@@ -68,8 +74,64 @@ def test_missing_cwd_reports_to_stderr_and_exits_zero(run_script: Any, hook_inpu
 
 def test_cwd_fallback_warns_on_stderr(run_script: Any, hook_input: Any, tmp_path: Path) -> None:
     plain = tmp_path / "plain"
-    plain.mkdir()
+    write_train_marker(plain)
     result = run_script("audit_log.py", hook_input(hook_event_name="Stop", cwd=str(plain)))
     assert result.returncode == 0
     assert result.stderr.startswith("daedalus-audit: project root fell back to cwd (")
     assert (plain / ".claude" / "daedalus" / "audit" / "sess-test.jsonl").exists()
+
+
+@pytest.mark.parametrize("event", ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"])
+def test_no_data_dir_exits_zero_and_creates_nothing(
+    run_script: Any, repo_cwd: Path, hook_input: Any, event: str
+) -> None:
+    # 0035: a repo where no train ever started keeps no Daedalus footprint.
+    result = run_script("audit_log.py", hook_input(hook_event_name=event))
+    assert result.returncode == 0 and result.stderr == ""
+    assert not (repo_cwd / ".claude").exists()
+
+
+@pytest.mark.parametrize("event", ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"])
+def test_data_dir_without_train_marker_writes_nothing(
+    run_script: Any, project_data: Path, hook_input: Any, event: str
+) -> None:
+    # 0035: a repo that once ran a train is not logged again until a train marks it.
+    result = run_script("audit_log.py", hook_input(hook_event_name=event))
+    assert result.returncode == 0 and result.stderr == ""
+    assert list(project_data.iterdir()) == []
+
+
+def test_no_marker_imports_only_the_standard_library(project_data: Path, hook_input: Any) -> None:
+    # 0035: outside a train the event logger never loads the audit modules.
+    result = subprocess.run(
+        [sys.executable, "-X", "importtime", str(SCRIPTS_DIR / "audit_log.py")],
+        input=json.dumps(hook_input(hook_event_name="SessionStart", source="startup")),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    loaded = {line.rsplit("|", 1)[-1].strip() for line in result.stderr.splitlines()}
+    assert "lib.repo_root" in loaded
+    assert not {n for n in loaded if n.startswith("lib.")} - {"lib.repo_root"}
+    assert "subprocess" not in loaded
+
+
+def test_broken_install_is_silent_outside_a_train(
+    tmp_path: Path, repo_cwd: Path, hook_input: Any
+) -> None:
+    # 0035: a library that fails to import costs a repo without a train nothing.
+    scripts = shutil.copytree(SCRIPTS_DIR, tmp_path / "scripts", ignore=_PYCACHE)
+    (scripts / "lib" / "audit.py").write_text("raise ImportError('broken install')\n")
+    payload = json.dumps(hook_input(hook_event_name="SessionStart", source="startup"))
+
+    def _run() -> subprocess.CompletedProcess[str]:
+        cmd = [sys.executable, str(scripts / "audit_log.py")]
+        return subprocess.run(cmd, input=payload, capture_output=True, text=True, check=False)
+
+    quiet = _run()
+    assert quiet.returncode == 0 and quiet.stderr == ""
+    write_train_marker(repo_cwd)
+    loud = _run()
+    assert loud.returncode == 0
+    assert loud.stderr == "daedalus-audit: broken install\n"

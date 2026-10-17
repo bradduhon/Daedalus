@@ -14,6 +14,7 @@ from typing import Any
 
 from lib.locks import bounded_flock
 from lib.redact import redact
+from lib.train_state import TRAIN_MARKER
 
 GENESIS = "0" * 64
 # 8.2: character count of the stored head, not bytes; non-ASCII heads may exceed 4096 bytes.
@@ -35,7 +36,8 @@ def cache_dir() -> Path:
     root = os.environ.get("CLAUDE_PLUGIN_DATA")
     if not root:
         raise RuntimeError(
-            "CLAUDE_PLUGIN_DATA not set. Next: run inside Claude Code with the plugin loaded."
+            "the plugin data directory variable is not set (CLAUDE_PLUGIN_DATA). "
+            "Next: run inside Claude Code with the plugin loaded."
         )
     return Path(root)
 
@@ -305,7 +307,10 @@ def _tail_record(path: Path) -> dict[str, Any] | None:
 
 def audit_append(
     hook_input: dict[str, Any], decision: str | None = None, reason: str | None = None
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
+    # 0035: no train marker means no train runs here; lexists, as the jail judges a train.
+    if not os.path.lexists(project_root(_require_cwd(hook_input.get("cwd"))) / TRAIN_MARKER):
+        return None
     path, lock = _session_file(hook_input.get("session_id"), hook_input.get("cwd"))
     ensure_project_data_dir(hook_input["cwd"])
     audit_dir = path.parent

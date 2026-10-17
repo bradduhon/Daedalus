@@ -31,6 +31,14 @@ def fake_bin(
     return bin_dir
 
 
+def write_train_marker(repo: Path) -> Path:
+    # 0035: the audit log records only while this marker exists.
+    marker = repo / ".claude" / "daedalus" / "train.active"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("20261017-120000\n", encoding="utf-8")
+    return marker
+
+
 @pytest.fixture
 def plugin_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "plugin-data"

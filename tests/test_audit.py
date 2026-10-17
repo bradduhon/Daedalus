@@ -14,7 +14,13 @@ from typing import Any
 import pytest
 from lib import audit
 
-from tests.conftest import SCRIPTS_DIR
+from tests.conftest import SCRIPTS_DIR, write_train_marker
+
+
+@pytest.fixture
+def project_data(project_data: Path, repo_cwd: Path) -> Path:
+    write_train_marker(repo_cwd)
+    return project_data
 
 
 def test_cache_dir_requires_env(monkeypatch: pytest.MonkeyPatch) -> None:

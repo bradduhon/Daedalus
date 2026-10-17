@@ -7,6 +7,8 @@ argument-hint: Optional session id (default is the newest session log for this r
 
 # daedalus audit report
 
+Human-facing text (0031): Text a human reads names each item in words: a short label or one line on what it is and what it does. Ids (ruling ids, issue numbers, task codes, agent names, snake_case keys) may trail in parentheses, never replace the description. Logs, status lines and messages to other agents may use ids alone. Documents carry both.
+
 1. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_report.py --session "<id>"` with Bash, where `<id>` is `$ARGUMENTS` when the operator gave one; otherwise omit `--session` and tell the operator it reports the newest session log for this repo. The script checks the hash chain before it renders anything.
 2. If the script exits 0, show the digest to the operator unchanged. Take `<session>` from the digest's `session:` line, with any backslashes removed; steps 5 to 7 use it.
 3. If the script exits 1 with a `BROKEN` line, show that line and nothing else from the log. Tell the operator the audit log failed its chain check, so a record was changed, removed, or reordered after it was written. The operator can rerun the check by hand with `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_audit_chain.py <repo>/.claude/daedalus/audit/<session>.jsonl`, where `<session>` is the id given or, with none given, the newest `.jsonl` in that directory. Then give the three next actions: keep the file, report it, do not edit it.

@@ -9,18 +9,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.workspace import (  # noqa: E402
+    LedgerQuestion,
     WorkspaceError,
+    begin,
     clear_train,
     create,
+    finish,
+    lock,
     mark_train,
     remove,
+    resume,
+    stop,
     worktree_path,
 )
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Create or remove a Daedalus worktree; mark or unmark the active train."
+        description="Daedalus worktrees and train state: create, remove, mark, unmark, begin, "
+        "lock, stop, finish, resume. Exit 0 done, 1 stopped with a Next line, 3 ledger question."
     )
     sub = parser.add_subparsers(dest="action", required=True)
     make = sub.add_parser("create")
@@ -35,6 +42,18 @@ def main(argv: list[str]) -> int:
     mark.add_argument("--train", required=True)
     unmark = sub.add_parser("unmark")
     unmark.add_argument("--repo", type=Path, required=True)
+    start = sub.add_parser("begin")
+    start.add_argument("--repo", type=Path, required=True)
+    locking = sub.add_parser("lock")
+    locking.add_argument("--repo", type=Path, required=True)
+    locking.add_argument("--contract", required=True)
+    locking.add_argument("--version", type=int, required=True)
+    halt = sub.add_parser("stop")
+    halt.add_argument("--repo", type=Path, required=True)
+    halt.add_argument("--reason", required=True)
+    halt.add_argument("--next", dest="next_action")
+    for action in ("finish", "resume"):
+        sub.add_parser(action).add_argument("--repo", type=Path, required=True)
     args = parser.parse_args(argv)
     repo = args.repo.resolve()
     try:
@@ -45,8 +64,24 @@ def main(argv: list[str]) -> int:
             print(f"removed {worktree_path(repo, args.name)}")
         elif args.action == "mark":
             print(mark_train(repo, args.train))
-        else:
+        elif args.action == "unmark":
             print(f"cleared {clear_train(repo)}")
+        elif args.action == "begin":
+            print("\n".join(begin(repo)))
+        elif args.action == "lock":
+            print("\n".join(lock(repo, args.contract, args.version)))
+        elif args.action == "stop":
+            lines, ok = stop(repo, args.reason, args.next_action)
+            print("\n".join(lines))
+            return 0 if ok else 1
+        elif args.action == "finish":
+            print("\n".join(finish(repo)))
+        elif args.action == "resume":
+            print("\n".join(resume(repo)))
+    except LedgerQuestion as exc:
+        # 0004: exit 3 hands the ledger question to the operator; nothing was written.
+        print(exc)
+        return 3
     except WorkspaceError as exc:
         print(f"daedalus-workspace: {exc}", file=sys.stderr)
         return 1

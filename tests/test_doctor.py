@@ -11,23 +11,21 @@ import sys
 from pathlib import Path
 
 import pytest
-from lib.sandbox_state import required_binaries
 
 from tests.conftest import SCRIPTS_DIR, fake_bin
 
-# 0020: macOS needs no sandbox binaries, so binary-specific cases run only where they apply.
-NEEDS_BINARIES = pytest.mark.skipif(not required_binaries(), reason="no sandbox binaries here")
+SCAFFOLDS = ("service-manifest.json", "contracts/", ".gitleaks.toml")
 
 
 def _run(
-    data_dir: Path | None, repo: Path, path_env: str | None = None, home: Path | None = None
+    data_dir: Path | None, repo: Path, path_env: str, home: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
+    # PATH is always the test's own; the real PATH never leaks in.
     env = dict(os.environ)
     env.pop("CLAUDE_PLUGIN_DATA", None)
     if data_dir is not None:
         env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
-    if path_env is not None:
-        env["PATH"] = path_env
+    env["PATH"] = path_env
     if home is not None:
         env["HOME"] = str(home)
     return subprocess.run(
@@ -80,7 +78,6 @@ def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: P
         "gitleaks",
         "gh on PATH",
         "gh authenticated",
-        *required_binaries(),
         "git repository",
         "service-manifest.json",
         "contracts/",
@@ -88,6 +85,11 @@ def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: P
     ):
         assert expected in names, expected
     assert any(line.startswith("OK   python") for line in lines)
+    assert not any(line.startswith(("MISS " + n, "OK   " + n)) for n in SCAFFOLDS for line in lines)
+    assert (
+        sum(line.startswith(f"OPT  {n}: ") and "Next:" in line for n in SCAFFOLDS for line in lines)
+        == 3
+    )
     gitleaks = next(line for line in misses if "gitleaks on PATH" in line)
     assert gitleaks.endswith(
         "Next: the Push Train scans commits with gitleaks; install it so the scan can run"
@@ -99,16 +101,12 @@ def _settings(path: Path, body: object) -> None:
     path.write_text(json.dumps(body) if not isinstance(body, str) else body)
 
 
-def _sandbox_line(result: subprocess.CompletedProcess[str]) -> str:
-    return next(line for line in result.stdout.splitlines() if line[5:].startswith("sandbox:"))
-
-
 def _bins(tmp_path: Path, *names: str, exit_codes: dict[str, int] | None = None) -> str:
     return str(fake_bin(tmp_path, names, exit_codes))
 
 
 def _bins_with_git(tmp_path: Path, *names: str, exit_codes: dict[str, int] | None = None) -> str:
-    # spec 5: fake tools plus a link to the real git; git's own dir also holds bwrap, socat, gh.
+    # spec 5: fake tools plus a link to the real git; git's own dir also holds gh.
     git = shutil.which("git")
     assert git is not None, "git is required to build the test repos"
     bins = _bins(tmp_path, *names, exit_codes=exit_codes)
@@ -118,46 +116,6 @@ def _bins_with_git(tmp_path: Path, *names: str, exit_codes: dict[str, int] | Non
     return bins
 
 
-def test_sandbox_off_is_a_miss_naming_setup(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
-    assert _sandbox_line(result) == "MISS sandbox: off. Next: run /daedalus:setup"
-    assert result.returncode == 1
-
-
-def test_sandbox_on_in_user_settings_is_ok(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
-    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
-    assert _sandbox_line(result) == "OK   sandbox: on"
-
-
-@NEEDS_BINARIES
-def test_sandbox_without_binaries_is_configured_unavailable(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
-    result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
-    assert _sandbox_line(result) == (
-        "MISS sandbox: configured-unavailable. Next: run /daedalus:setup"
-    )
-
-
-def test_sandbox_local_settings_override_user(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
-    _settings(tmp_path / ".claude" / "settings.local.json", {"sandbox": {"enabled": False}})
-    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
-    assert _sandbox_line(result) == "MISS sandbox: off. Next: run /daedalus:setup"
-
-
-def test_sandbox_malformed_settings_is_a_miss(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", "{not json")
-    line = _sandbox_line(_run(None, tmp_path, path_env=_bins(tmp_path), home=home))
-    assert line.startswith("MISS sandbox: ") and "is not valid JSON" in line and "Next: fix" in line
-
-
 def test_doctor_no_longer_checks_base_ref(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
@@ -165,67 +123,12 @@ def test_doctor_no_longer_checks_base_ref(tmp_path: Path) -> None:
     assert "worktree.baseRef" not in result.stdout
 
 
-@NEEDS_BINARIES
-def test_bwrap_miss_names_setup(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
-    assert (
-        "MISS bwrap on PATH: not found. Next: install bubblewrap and socat, then run "
-        "/daedalus:setup to turn the sandbox on"
-    ) in result.stdout.splitlines()
-
-
-def test_binary_lines_follow_required_binaries(tmp_path: Path) -> None:
+def test_binary_lines_name_gitleaks_and_gh_only(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
     named = [m[1] for line in lines if (m := re.match(r"(?:OK  |MISS) (\S+) on PATH", line))]
-    assert named == ["gitleaks", "gh", *required_binaries()]
-
-
-def _state(repo: Path, home: Path, path_env: str) -> subprocess.CompletedProcess[str]:
-    env = dict(os.environ)
-    env["HOME"] = str(home)
-    env["PATH"] = path_env
-    return subprocess.run(
-        [sys.executable, str(SCRIPTS_DIR / "daedalus_doctor.py"), "--sandbox-state"]
-        + ["--repo", str(repo)],
-        capture_output=True,
-        text=True,
-        env=env,
-        check=False,
-    )
-
-
-def test_sandbox_state_flag_prints_one_word(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    result = _state(tmp_path, home, _bins(tmp_path))
-    assert result.returncode == 0
-    assert result.stdout == "off\n"
-
-
-def test_sandbox_state_flag_on(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
-    assert _state(tmp_path, home, _bins(tmp_path, "bwrap", "socat")).stdout == "on\n"
-
-
-@NEEDS_BINARIES
-def test_sandbox_state_flag_configured_unavailable(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
-    result = _state(tmp_path, home, _bins(tmp_path))
-    assert (result.returncode, result.stdout) == (0, "configured-unavailable\n")
-
-
-def test_sandbox_state_flag_malformed_exits_one(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", "{not json")
-    result = _state(tmp_path, home, _bins(tmp_path))
-    assert result.returncode == 1 and result.stdout == ""
-    assert "Next: fix" in result.stderr
+    assert named == ["gitleaks", "gh"]
 
 
 def _data(repo: Path, marker: bool = True) -> Path:
@@ -259,9 +162,9 @@ def test_complete_setup_is_all_ok(plugin_data: Path, tmp_path: Path) -> None:
         )
     )
     _commit_all(repo)
-    bins = _bins_with_git(tmp_path, "gitleaks", "bwrap", "socat", "gh")
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh")
     home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    home.mkdir()
     result = _run(plugin_data, repo, path_env=bins, home=home)
     assert result.returncode == 0, result.stdout
     assert not any(line.startswith("MISS") for line in result.stdout.splitlines())
@@ -270,12 +173,79 @@ def test_complete_setup_is_all_ok(plugin_data: Path, tmp_path: Path) -> None:
     assert "OK   standards_sources declared" in lines and "OK   policy declared" in lines
 
 
-def test_dirty_tree_is_a_miss(plugin_data: Path, tmp_path: Path) -> None:
+def _tree_line(repo: Path, tmp_path: Path) -> str:
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
+    return next(line for line in result.stdout.splitlines() if "clean working tree" in line)
+
+
+def test_dirty_tree_is_a_miss_naming_the_paths(plugin_data: Path, tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _git_repo(repo)
     (repo / "x.txt").write_text("dirty")
-    result = _run(plugin_data, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
-    assert "MISS clean working tree" in result.stdout
+    (repo / "sub").mkdir()
+    (repo / "sub" / "y.txt").write_text("dirty")
+    assert _tree_line(repo, tmp_path) == (
+        "MISS clean working tree: uncommitted changes present: sub/y.txt, x.txt. "
+        "Next: commit or stash before starting a train"
+    )
+
+
+def test_dirty_tree_caps_the_path_list(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    for n in range(12):
+        (repo / f"f{n:02d}.txt").write_text("dirty")
+    line = _tree_line(repo, tmp_path)
+    shown = ", ".join(f"f{n:02d}.txt" for n in range(10))
+    assert f"uncommitted changes present: {shown} +2 more. Next:" in line
+
+
+def test_plugin_enablement_only_says_commit_settings(tmp_path: Path) -> None:
+    # 0007: /plugin install leaves .claude/settings.json untracked in a fresh repo.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    _commit_all_empty(repo)
+    _settings(repo / ".claude" / "settings.json", {"enabledPlugins": {"daedalus@x": True}})
+    assert _tree_line(repo, tmp_path) == (
+        "MISS clean working tree: uncommitted changes present: .claude/settings.json. "
+        "Next: commit .claude/settings.json; "
+        "it holds the enabledPlugins entry /plugin install wrote"
+    )
+
+
+def test_enablement_plus_other_paths_gets_generic_next(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    _settings(repo / ".claude" / "settings.json", {"enabledPlugins": {}})
+    (repo / "x.txt").write_text("dirty")
+    assert _tree_line(repo, tmp_path).endswith("Next: commit or stash before starting a train")
+
+
+def test_clean_tree_is_ok(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    _commit_all_empty(repo)
+    assert _tree_line(repo, tmp_path) == "OK   clean working tree"
+
+
+def test_absent_scaffolds_are_opt_and_pass(tmp_path: Path) -> None:
+    # 0007: no train reads the three scaffolds; absence is OPT and the doctor still exits 0.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    _commit_all_empty(repo)
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh")
+    home = tmp_path / "home"
+    home.mkdir()
+    result = _run(None, repo, path_env=bins, home=home)
+    lines = result.stdout.splitlines()
+    assert result.returncode == 0, result.stdout
+    assert [line.split(":")[0][5:] for line in lines if line.startswith("OPT  ")] == [
+        "standards_sources",
+        "service-manifest.json",
+        "contracts/",
+        ".gitleaks.toml",
+    ]
+    assert lines[-1] == "daedalus doctor: all checks passed"
 
 
 def test_absent_project_data_dir_is_ok_and_names_the_path(tmp_path: Path) -> None:
@@ -283,10 +253,11 @@ def test_absent_project_data_dir_is_ok_and_names_the_path(tmp_path: Path) -> Non
     _git_repo(repo)
     result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     data = repo.resolve() / ".claude" / "daedalus"
-    assert f"OK   project data dir: {data} (will be created by the first hook)" in (
-        result.stdout.splitlines()
-    )
-    assert "OK   config.json: not present, defaults in use" in result.stdout.splitlines()
+    lines = result.stdout.splitlines()
+    assert f"OK   project data dir: {data} (not created yet; a train's start creates it)" in lines
+    assert "OK   audit log: off until a train runs here" in lines
+    assert "OK   config.json: not present, defaults in use" in lines
+    assert not (repo / ".claude").exists()
 
 
 def test_worktree_resolves_to_main_repo_data_dir(tmp_path: Path) -> None:
@@ -297,7 +268,7 @@ def test_worktree_resolves_to_main_repo_data_dir(tmp_path: Path) -> None:
     subprocess.run(["git", "worktree", "add", "-q", str(worktree)], cwd=repo, check=True)
     result = _run(None, worktree, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     data = repo.resolve() / ".claude" / "daedalus"
-    assert f"OK   project data dir: {data} (will be created by the first hook)" in (
+    assert f"OK   project data dir: {data} (not created yet; a train's start creates it)" in (
         result.stdout.splitlines()
     )
 
@@ -390,7 +361,7 @@ def test_cache_dir_absent_is_ok(tmp_path: Path) -> None:
     result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
     lines = result.stdout.splitlines()
     assert (
-        "OK   cache dir: none yet (create it with scripts/refresh_nist_oscal.py "
+        "OK   cache dir: none yet (create it with scripts/refresh_frameworks.py "
         "or by hand per docs/project-requirements.md)"
     ) in lines
     assert not any(line.startswith("MISS cache") for line in lines)
@@ -490,6 +461,42 @@ def test_gh_signed_in_is_ok(tmp_path: Path) -> None:
     assert "OK   gh authenticated" in lines
 
 
+def test_minor_7_gh_auth_timeout_names_the_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import daedalus_doctor
+
+    seen: dict[str, object] = {}
+
+    def hang(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen.update(kwargs)
+        raise subprocess.TimeoutExpired(cmd, 10)
+
+    monkeypatch.setenv("PATH", _bins(tmp_path, "gh"))
+    monkeypatch.setattr(daedalus_doctor.subprocess, "run", hang)
+    lines = [line for _, line in daedalus_doctor._gh_checks()]
+    assert lines[1] == (
+        "MISS gh authenticated: gh auth status did not finish within 10 s. "
+        "Next: run gh auth status from your own shell, then gh auth login if it asks"
+    )
+    assert seen.get("stdin") is subprocess.DEVNULL
+
+
+def test_minor_7_gh_auth_oserror_names_the_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import daedalus_doctor
+
+    def broken(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setenv("PATH", _bins(tmp_path, "gh"))
+    monkeypatch.setattr(daedalus_doctor.subprocess, "run", broken)
+    line = [line for _, line in daedalus_doctor._gh_checks()][1]
+    assert line.startswith("MISS gh authenticated: gh auth status could not run (")
+    assert "Permission denied" in line and "exited" not in line and "Next:" in line
+
+
 def test_gh_signed_out_is_a_miss(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
@@ -523,7 +530,23 @@ def test_absent_config_runs_the_ledger_probe_found(tmp_path: Path) -> None:
     bins = _bins_with_git(tmp_path)
     lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
     ledger = repo.resolve() / "docs" / "decisions.md"
-    assert f"OK   ledger: {ledger} (probe, markdown-table-row)" in lines
+    i = lines.index("OK   config.json: not present, defaults in use")
+    assert lines[i + 1] == f"OK   ledger: {ledger} (probe, markdown-table-row)"
+
+
+def test_minor_8_manifest_ledger_block_reports_manifest_origin(tmp_path: Path) -> None:
+    from tests.conftest import REPO_ROOT
+
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    fixture = REPO_ROOT / "tests" / "fixtures" / "ledgers" / "manifest-override.json"
+    (repo / "service-manifest.json").write_text(fixture.read_text())
+    (_data(repo) / "config.json").write_text("{}")
+    bins = _bins_with_git(tmp_path)
+    lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
+    i = lines.index("OK   config.json")
+    ledger = repo.resolve() / "docs" / "decisions.md"
+    assert lines[i + 1] == f"OK   ledger: {ledger} (manifest, markdown-table-row)"
 
 
 def test_undeclared_standards_and_policy_are_optional(tmp_path: Path) -> None:
@@ -535,7 +558,7 @@ def test_undeclared_standards_and_policy_are_optional(tmp_path: Path) -> None:
         if with_config:
             (_data(repo) / "config.json").write_text("{}")
         lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
-        assert "OK   standards_sources: not declared (optional)" in lines
+        assert PACK_OFFER in lines
         assert "OK   policy: not declared (optional)" in lines
         assert not any(line.startswith(("MISS standards", "MISS policy")) for line in lines)
 
@@ -551,7 +574,8 @@ def test_plugin_root_follows_the_cache_dir_line(tmp_path: Path) -> None:
 
 
 def test_first_run_without_config_is_all_ok(tmp_path: Path) -> None:
-    # 0020: a first doctor on a clean committed repo with no config.json exits 0.
+    # 0020: exit 0 on a clean repo with no config.json once three files are committed:
+    # service-manifest.json, contracts/openapi.yaml and .gitleaks.toml.
     repo = tmp_path / "repo"
     _git_repo(repo)
     (repo / "service-manifest.json").write_text("{}")
@@ -559,9 +583,9 @@ def test_first_run_without_config_is_all_ok(tmp_path: Path) -> None:
     (repo / "contracts" / "openapi.yaml").write_text("")
     (repo / ".gitleaks.toml").write_text("")
     _commit_all(repo)
-    bins = _bins_with_git(tmp_path, "gitleaks", "gh", "bwrap", "socat")
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh")
     home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    home.mkdir()
     result = _run(None, repo, path_env=bins, home=home)
     assert result.returncode == 0, result.stdout
     assert not any(line.startswith("MISS") for line in result.stdout.splitlines())
@@ -648,3 +672,148 @@ def test_train_marker_present_is_ok_with_unmark_next(tmp_path: Path) -> None:
     root = repo.resolve()
     assert "Next: if no Daedalus train is running, run python3 ${CLAUDE_PLUGIN_ROOT}/" in line
     assert f"daedalus_workspace.py unmark --repo {root}" in line
+
+
+def test_minor_final_review_marker_id_drops_control_characters(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (_data(repo) / "train.active").write_text("2026\x1b[31m1015\x07-12\x7f0000\nsecond\n")
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
+    line = next(x for x in result.stdout.splitlines() if "train marker" in x)
+    assert line.startswith("OK   train marker: present (2026[31m1015-120000) at ")
+    assert not any(ord(c) < 32 or ord(c) == 127 for c in line)
+
+
+def _framework_manifest(cache: Path, family: str, *dates: str) -> None:
+    folder = cache / "frameworks" / family
+    folder.mkdir(parents=True, exist_ok=True)
+    entries = [{"file": f"f{n}.json", "pinned_on": d} for n, d in enumerate(dates)]
+    (folder / "manifest.json").write_text(json.dumps(entries), encoding="utf-8")
+
+
+def _framework_lines(stdout: str) -> list[str]:
+    return [line for line in stdout.splitlines() if line[5:].startswith("frameworks ")]
+
+
+def test_framework_line_ok_when_fresh(plugin_data: Path, tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    today = datetime.now(UTC).date().isoformat()
+    _framework_manifest(plugin_data, "nist", today)
+    _framework_manifest(plugin_data, "owasp", today, today)
+    result = _run(plugin_data, tmp_path, path_env=_bins(tmp_path), home=tmp_path / "home")
+    assert _framework_lines(result.stdout) == [
+        f"OK   frameworks nist: pinned {today}",
+        f"OK   frameworks owasp: pinned {today}",
+    ]
+
+
+def test_framework_line_old_after_90_days(tmp_path: Path) -> None:
+    from datetime import date
+
+    import daedalus_doctor
+
+    _framework_manifest(tmp_path, "nist", "2026-10-01", "2026-06-01")
+    lines = list(daedalus_doctor._framework_checks(tmp_path, date(2026, 10, 16)))
+    assert lines == [
+        (
+            True,
+            "OLD  frameworks nist: pinned 2026-06-01 (137 days). "
+            "Next: refresh the framework caches with "
+            "python3 <plugin>/scripts/refresh_frameworks.py",
+        )
+    ]
+    _framework_manifest(tmp_path, "nist", "2026-07-18")
+    assert list(daedalus_doctor._framework_checks(tmp_path, date(2026, 10, 16))) == [
+        (True, "OK   frameworks nist: pinned 2026-07-18")
+    ]
+
+
+def test_old_framework_line_does_not_fail_the_doctor(plugin_data: Path, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (repo / "service-manifest.json").write_text("{}")
+    (repo / "contracts").mkdir()
+    (repo / "contracts" / "openapi.yaml").write_text("")
+    (repo / ".gitleaks.toml").write_text("")
+    _commit_all(repo)
+    _framework_manifest(plugin_data, "nist", "2020-01-01")
+    home = tmp_path / "home"
+    home.mkdir()
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh")
+    result = _run(plugin_data, repo, path_env=bins, home=home)
+    assert result.returncode == 0, result.stdout
+    assert _framework_lines(result.stdout)[0].startswith("OLD  frameworks nist: pinned 2020-01-01")
+
+
+def test_cis_manual_manifest_reported_the_same_way(tmp_path: Path) -> None:
+    from datetime import date
+
+    import daedalus_doctor
+
+    _framework_manifest(tmp_path, "cis", "2026-06-01")
+    assert list(daedalus_doctor._framework_checks(tmp_path, date(2026, 10, 16))) == [
+        (
+            True,
+            "OLD  frameworks cis: pinned 2026-06-01 (137 days). Next: place a current benchmark "
+            "and its manifest entry per docs/project-requirements.md",
+        )
+    ]
+
+
+@pytest.mark.parametrize("body", ["{not json", '{"pinned_on": "2026-10-01"}', "[]", '[{"x": 1}]'])
+def test_unreadable_framework_manifest_is_old_with_next(tmp_path: Path, body: str) -> None:
+    from datetime import date
+
+    import daedalus_doctor
+
+    folder = tmp_path / "frameworks" / "owasp"
+    folder.mkdir(parents=True)
+    (folder / "manifest.json").write_text(body, encoding="utf-8")
+    assert list(daedalus_doctor._framework_checks(tmp_path, date(2026, 10, 16))) == [
+        (
+            True,
+            "OLD  frameworks owasp: manifest.json has no list of pinned_on dates. "
+            "Next: refresh the framework caches with "
+            "python3 <plugin>/scripts/refresh_frameworks.py",
+        )
+    ]
+
+
+def test_no_manifest_no_line(plugin_data: Path, tmp_path: Path) -> None:
+    (plugin_data / "frameworks" / "nist").mkdir(parents=True)
+    result = _run(plugin_data, tmp_path, path_env=_bins(tmp_path), home=tmp_path / "home")
+    assert _framework_lines(result.stdout) == []
+    home = tmp_path / "home2"
+    home.mkdir()
+    result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
+    assert _framework_lines(result.stdout) == []
+
+
+PACK_OFFER = (
+    "OPT  standards_sources: no standards file or pack is declared. "
+    "Next: to adopt the shipped baseline pack, add "
+    '{"kind": "pack", "name": "baseline"} to standards_sources in .claude/daedalus/config.json'
+)
+
+
+def test_doctor_offers_the_baseline_pack(tmp_path: Path) -> None:
+    # 0019: the offer is optional; a repo without standards still passes the doctor.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (repo / "service-manifest.json").write_text("{}")
+    (repo / "contracts").mkdir()
+    (repo / "contracts" / "openapi.yaml").write_text("")
+    (repo / ".gitleaks.toml").write_text("")
+    _commit_all(repo)
+    home = tmp_path / "home"
+    home.mkdir()
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh")
+    result = _run(None, repo, path_env=bins, home=home)
+    assert PACK_OFFER in result.stdout.splitlines()
+    assert result.returncode == 0, result.stdout
+    (_data(repo) / "config.json").write_text(
+        json.dumps({"standards_sources": [{"kind": "pack", "name": "baseline"}]})
+    )
+    lines = _run(None, repo, path_env=bins, home=home).stdout.splitlines()
+    assert "OK   standards_sources declared" in lines

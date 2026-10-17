@@ -1,0 +1,258 @@
+# Copyright (c) 2026 Brad Duhon.
+# SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+import os
+import re
+
+CONDUCTOR = "pr-train-conductor"
+# 0028: the allowed list intersected with the conductor's set; K1: pr edit changes the body only.
+CONDUCTOR_GH = frozenset(
+    {("pr", "create"), ("pr", "edit"), ("pr", "view"), ("pr", "list"), ("pr", "checks")}
+    | {("run", "list"), ("run", "view"), ("run", "watch")}
+)
+MAIN_GH = frozenset({("auth", "status")})
+ALLOWED_0028 = CONDUCTOR_GH | MAIN_GH | {("issue", "view"), ("issue", "list")}
+CLASS_NEXT = {
+    "merge": "the operator merges in the GitHub UI",
+    "delete": "delete from your own shell if you mean it",
+    "admin": "change repository settings from your own shell",
+    "default-deny": "only the Push Train's conductor runs gh",
+}
+PUSH_NEXT = "push from your own shell, or through /daedalus:push-train"
+EDIT_NEXT = "edit only the body with --body-file; the operator changes anything else on the PR"
+_EDIT_BODY_LONG = frozenset({"--body", "--body-file"})
+ADMIN_COMMANDS = frozenset({"secret", "variable", "ruleset"})
+ADMIN_REPO = frozenset({"edit", "rename", "archive", "unarchive", "deploy-key"})
+_GH_VALUE_FLAGS = frozenset({"-R", "--repo"})
+# gh api: short flags that take a value, and their long forms.
+_API_SHORT_VALUE = frozenset("XfFHqtp")
+_API_LONG_VALUE = frozenset(
+    {"--method", "--raw-field", "--field", "--header", "--input", "--jq", "--template"}
+    | {"--preview", "--hostname", "--cache"}
+)
+_API_LONG = {"--method": "X", "--raw-field": "f", "--field": "F", "--input": "input"}
+_MERGE_PATH = re.compile(r"(?:^|/)(?:pulls/[^/]+/merge|merges|merge-upstream)/?$")
+_ADMIN_PATH = re.compile(
+    r"^repos/[^/]+/[^/]+/?$|^orgs/|^user(?:/|$)|/branches/[^/]+/protection|/rulesets?(?:/|$)"
+    r"|/collaborators|/hooks|/keys|/actions/(?:secrets|variables|permissions)|/environments"
+    r"|/teams|/transfer|/topics|/pages|/vulnerability-alerts|/automated-security-fixes"
+    r"|/invitations|/autolinks|/properties"
+)
+_MERGE_MUTATION = re.compile(r"\b(?:mergePullRequest|enqueuePullRequest|mergeBranch)\b")
+_DELETE_MUTATION = re.compile(r"\bdelete[A-Z]\w*")
+_ADMIN_MUTATION = re.compile(
+    r"\b(?:update|create|archive|unarchive)Repository\w*|\b\w*BranchProtectionRule\b"
+    r"|\b\w*Ruleset\b|\b\w*Collaborator\w*|\b\w*DeployKey\b"
+)
+# 0028: tokenizer refusal for main; a gh word or a git push anywhere is refused.
+_GH_WORD = re.compile(r"(?<![\w.-])(?:[\w./-]*/)?gh(?![\w.-])")
+_GIT_PUSH = re.compile(
+    r"(?<![\w.-])(?:[\w./-]*/)?git(?:\s+(?:-[Cc]\s+\S+|-\S+))*\s+[\"']?push(?![\w-])"
+)
+
+
+def _positional(args: list[str]) -> list[str]:
+    words: list[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            return words + args[i + 1 :]
+        if arg in _GH_VALUE_FLAGS:
+            i += 2
+            continue
+        if not arg.startswith("-") or arg == "-":
+            words.append(arg)
+        i += 1
+    return words
+
+
+def _api_parts(args: list[str]) -> tuple[str | None, list[str], bool, str]:
+    # Returns (explicit method, -f/-F values, --input given, endpoint).
+    method: str | None = None
+    fields: list[str] = []
+    body = False
+    endpoint = ""
+
+    def take(key: str, value: str) -> None:
+        nonlocal method, body
+        if key == "X":
+            method = value.upper()
+        elif key in {"f", "F"}:
+            fields.append(value)
+        elif key == "input":
+            body = True
+
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        nxt = args[i + 1] if i + 1 < len(args) else ""
+        if arg.startswith("--"):
+            name, eq, value = arg.partition("=")
+            if name in _API_LONG_VALUE:
+                take(_API_LONG.get(name, ""), value if eq else nxt)
+                i += 1 if eq else 2
+                continue
+        elif arg.startswith("-") and len(arg) > 1:
+            # pflag bundles booleans (-i) with one trailing value flag (-XDELETE, -X=DELETE).
+            for idx, letter in enumerate(arg[1:], start=2):
+                if letter in _API_SHORT_VALUE:
+                    rest = arg[idx:].removeprefix("=")
+                    take(letter, rest or nxt)
+                    i += 1 if rest else 2
+                    break
+            else:
+                i += 1
+            continue
+        elif not endpoint:
+            endpoint = arg
+        i += 1
+    return method, fields, body, endpoint
+
+
+def _endpoint(raw: str) -> str:
+    path = re.sub(r"^https?://[^/]+", "", raw).split("?", 1)[0]
+    return path.lstrip("/")
+
+
+def _classify_api(args: list[str]) -> tuple[str, str]:
+    explicit, fields, body, raw = _api_parts(args)
+    method = explicit or ("POST" if fields or body else "GET")
+    path = _endpoint(raw)
+    detail = f"api {method} {path or '(no endpoint)'}"
+    if method == "DELETE":
+        return "delete", detail
+    if path == "graphql":
+        query = " ".join(f.partition("=")[2] for f in fields if f.partition("=")[0] == "query")
+        if body or query.startswith("@"):
+            return "default-deny", detail
+        if _MERGE_MUTATION.search(query):
+            return "merge", detail
+        if _DELETE_MUTATION.search(query):
+            return "delete", detail
+        if "mutation" in query and _ADMIN_MUTATION.search(query):
+            return "admin", detail
+        return "default-deny", detail
+    if method == "GET":
+        return "default-deny", detail
+    if _MERGE_PATH.search(path):
+        return "merge", detail
+    if _ADMIN_PATH.search(path):
+        return "admin", detail
+    return "default-deny", detail
+
+
+def _body_only_edit(args: list[str]) -> bool:
+    # K1: pr edit passes only with body flags and at most one PR selector.
+    if args[:2] != ["pr", "edit"]:
+        return False
+    selectors = 0
+    i = 2
+    while i < len(args):
+        arg = args[i]
+        if arg.startswith("--"):
+            name, eq, _ = arg.partition("=")
+            if name not in _EDIT_BODY_LONG:
+                return False
+            i += 1 if eq else 2
+        elif arg[:2] in {"-b", "-F"}:
+            i += 1 if len(arg) > 2 else 2
+        elif arg.startswith("-"):
+            return False
+        else:
+            selectors += 1
+            i += 1
+    return selectors <= 1
+
+
+def classify(tokens: list[str]) -> tuple[str, str]:
+    # 0028: merge, delete and admin are refused for everyone; everything off the list is denied.
+    args = tokens[1:]
+    words = _positional(args)
+    if words[:1] == ["api"]:
+        return _classify_api(args[args.index("api") + 1 :])
+    cmd, sub = (words + ["", ""])[:2]
+    detail = " ".join(w for w in (cmd, sub) if w) or "(no subcommand)"
+    if "merge" in cmd or "merge" in sub:
+        return "merge", detail
+    deleting = any(
+        a.split("=", 1)[0] in {"--delete-branch", "--delete-last", "--cleanup-tag"} for a in args
+    ) or ((cmd, sub) == ("pr", "close") and any(re.fullmatch(r"-[a-zA-Z]*d", a) for a in args))
+    if sub.startswith("delete") or deleting:
+        return "delete", detail
+    if cmd in ADMIN_COMMANDS or (cmd == "repo" and sub in ADMIN_REPO):
+        return "admin", detail
+    if (cmd, sub) == ("pr", "edit") and not _body_only_edit(args):
+        return "default-deny", detail
+    if (cmd, sub) in ALLOWED_0028:
+        return "allow", detail
+    return "default-deny", detail
+
+
+def allowlist_applies(agent: str, cwd: str, command: str = "") -> bool:
+    # 0035: main and unknown agents meet the gh gate only while a train marks the repo.
+    from lib.jail import KNOWN_AGENTS, _marked_repo  # jail imports this module.
+
+    if agent in KNOWN_AGENTS and agent != "main":
+        return True
+    return os.path.isabs(cwd) and _marked_repo(cwd, "Bash", {"command": command}) is not None
+
+
+def _allowed(agent: str) -> frozenset[tuple[str, str]]:
+    if agent == CONDUCTOR:
+        return CONDUCTOR_GH
+    return MAIN_GH if agent == "main" else frozenset()
+
+
+def _gh_reason(agent: str, tokens: list[str]) -> str | None:
+    klass, detail = classify(tokens)
+    if klass == "allow" and tuple(detail.split()) in _allowed(agent):
+        return None
+    if klass == "allow":
+        return (
+            f"gh {detail} is not on the {agent} gh list (0028). Next: {CLASS_NEXT['default-deny']}."
+        )
+    nxt = EDIT_NEXT if agent == CONDUCTOR and detail == "pr edit" else CLASS_NEXT[klass]
+    return (
+        f"gh {detail} is a {klass} command, refused while a train runs and to every "
+        f"Daedalus agent (0028, 0035). Next: {nxt}."
+    )
+
+
+def _push_reason(agent: str) -> str | None:
+    if agent == CONDUCTOR:
+        return None
+    return f"git push runs only in the Push Train's conductor (0028, 0030). Next: {PUSH_NEXT}."
+
+
+def _fallback_reason(agent: str, command: str) -> str | None:
+    if agent == "main" and command.strip() == "gh auth status":
+        return None
+    if _GH_WORD.search(command):
+        return (
+            "this command could not be parsed and names gh, so it is refused (0028). "
+            f"Next: run one plain gh command; {CLASS_NEXT['default-deny']}."
+        )
+    if _GIT_PUSH.search(command):
+        return _push_reason(agent)
+    return None
+
+
+def gh_reason(agent: str, command: str, segments: list[list[str]] | None) -> str | None:
+    # 0028: every gh and git push segment; None segments means the regex fallback.
+    if segments is None:
+        return _fallback_reason(agent, command)
+    from lib.jail import _git_subcommand  # jail imports this module, so import at call time.
+
+    for tokens in segments:
+        name = os.path.basename(tokens[0]) if tokens else ""
+        if name == "gh":
+            reason = _gh_reason(agent, tokens)
+        elif name == "git" and _git_subcommand(tokens) == "push":
+            reason = _push_reason(agent)
+        else:
+            reason = None
+        if reason:
+            return reason
+    return None

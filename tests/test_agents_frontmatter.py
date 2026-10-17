@@ -6,7 +6,8 @@ import re
 from pathlib import Path
 
 import pytest
-from lib.jail import KNOWN_AGENTS, WORKER_DENIED_TOOLS
+from lib.config import Config
+from lib.jail import KNOWN_AGENTS, WORKER_DENIED_TOOLS, decide
 
 from tests.conftest import REPO_ROOT
 
@@ -69,6 +70,19 @@ def test_repo_coder_works_in_the_train_made_worktree() -> None:
     assert "`git add -A && git commit" not in text
     # 0022: file paths and git pathspecs are absolute or go through git -C.
     assert "Every file path and every git pathspec you use is absolute" in text
+
+
+def test_repo_coder_yields_compliance_before_sensitive_code() -> None:
+    # 0024: the compliance yield is expected before sensitive code, not only when blocked.
+    text = (AGENTS / "repo-coder.md").read_text()
+    raw = text.split("Before writing code that touches", 1)[1].split("\n\n", 1)[0]
+    paragraph = " ".join(raw.split())
+    for topic in ("authentication", "IAM policy", "key material", "logging of request data"):
+        assert topic in paragraph, topic
+    assert "`[STATUS: YIELD_COMPLIANCE] <what you are about to write and the question>`" in (
+        paragraph
+    )
+    assert "even when you are not blocked" in paragraph
 
 
 def test_tools_agree_with_the_jail() -> None:
@@ -153,8 +167,53 @@ def test_specialists_anchor_the_manifest_to_the_cache_dir(name: str, sub: str) -
     assert "`<cache dir>` is the absolute frameworks cache directory named in your prompt" in text
     assert f"Read `<cache dir>/{sub}/manifest.json`" in text
     assert f"Read `{sub}/manifest.json`" not in text
-    body = text.split("---\n", 2)[2]
+    # 0024: the plugin root variable is substituted at load; nothing else may carry $ or {.
+    body = text.split("---\n", 2)[2].replace("${CLAUDE_PLUGIN_ROOT}/references/", "")
     assert "$" not in body and "{" not in body
+
+
+JUDGES = ("nist-specialist", "cis-specialist")
+JUDGE_REFERENCES = {
+    "nist-specialist": "references/nist-800-53-distilled.md",
+    "cis-specialist": "references/hardening-rubric.md",
+}
+JUDGE_CONTRACT = (
+    "Your reply ends with exactly one of these, nothing after it.\n"
+    "- `[STATUS: CACHE_INVALID] <detail>`\n"
+    "- `[STATUS: COMPLIANCE] <PASS/FAIL list with control ids and file:line>`\n"
+)
+
+
+@pytest.mark.parametrize("name", JUDGES)
+def test_judges_name_their_reference_files(name: str) -> None:
+    # 0024: the judge's method maps the diff to an existing own-words reference file.
+    text = (AGENTS / f"{name}.md").read_text()
+    named = re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}/(references/[A-Za-z0-9.-]+\.md)", text)
+    assert JUDGE_REFERENCES[name] in named
+    assert [ref for ref in named if not (REPO_ROOT / ref).is_file()] == []
+    method = text.split("\n## Method\n", 1)[1].split("\n## ", 1)[0]
+    assert "PASS, FAIL or N/A" in method
+    rubric = text.split("\n## Rubric\n", 1)[1].split("\n## ", 1)[0]
+    assert "never PASS on absence of evidence" in rubric
+
+
+@pytest.mark.parametrize("name", JUDGES)
+def test_judges_read_the_list_manifest(name: str) -> None:
+    # 0026: the manifest is a list of entries; each file is hashed and its age noted.
+    text = (AGENTS / f"{name}.md").read_text()
+    phase0 = text.split("## Phase 0", 1)[1].split("\n## ", 1)[0]
+    for key in ("`file`", "`sha256`", "`pinned_on`"):
+        assert key in phase0, key
+    assert "JSON list" in phase0
+    assert "sha256sum" in phase0
+    assert "90 days" in phase0
+    assert "catalog_sha256" not in text
+
+
+@pytest.mark.parametrize("name", JUDGES)
+def test_judges_keep_their_status_contract(name: str) -> None:
+    text = (AGENTS / f"{name}.md").read_text()
+    assert text.split("## Status contract\n", 1)[1] == JUDGE_CONTRACT
 
 
 def test_conductor_lists_the_git_reads_the_jail_allows() -> None:
@@ -164,3 +223,97 @@ def test_conductor_lists_the_git_reads_the_jail_allows() -> None:
         assert read in text, read
     assert "`git rev-parse --abbrev-ref HEAD`" in text
     assert "refuses `git remote`, `git branch -vv`, and `@{u}`" in text
+
+
+NIST_DISTILLED = REPO_ROOT / "references" / "nist-800-53-distilled.md"
+NIST_IDS = REPO_ROOT / "tests" / "fixtures" / "nist-control-ids.txt"
+
+
+def test_nist_distillation_ids_exist_in_the_catalog() -> None:
+    # 0024: every distilled row names a base control of the pinned catalog (oscal-content v1.5.0).
+    catalog = set(NIST_IDS.read_text().split())
+    rows = re.findall(r"^\| ([A-Z]{2}-[0-9]+) \|", NIST_DISTILLED.read_text(), re.MULTILINE)
+    assert rows
+    assert len(rows) == len(set(rows))
+    assert [row for row in rows if row not in catalog] == []
+
+
+RUBRIC = REPO_ROOT / "references" / "hardening-rubric.md"
+RUBRIC_ITEM = re.compile(r"^- HR-[0-9]+: .+ CIS: (unmapped|[A-Za-z0-9 .]+ [0-9]+(\.[0-9]+)*)$")
+
+
+def test_rubric_items_have_ids_and_cis_cites() -> None:
+    # 0024: own-words items cite a CIS section number or unmapped, never CIS text.
+    items = [line for line in RUBRIC.read_text().splitlines() if line.startswith("- ")]
+    assert items
+    assert [line for line in items if not RUBRIC_ITEM.match(line)] == []
+    ids = [line.split(":", 1)[0] for line in items]
+    assert len(ids) == len(set(ids))
+
+
+def test_rubric_has_no_long_quotes() -> None:
+    # 0024: a tripwire for pasted benchmark text, not a license proof.
+    spans = re.findall('"([^"]*)"|\u201c([^\u201d]*)\u201d', RUBRIC.read_text())
+    assert [s for pair in spans for s in pair if len(s) > 40] == []
+
+
+AUDITOR = AGENTS / "security-auditor.md"
+AUDITOR_CLASSES = (
+    "secrets",
+    "auth weakening",
+    "broad IAM",
+    "sensitive logging",
+    "unsafe deserialization",
+    "injection",
+    "dependency manifests",
+)
+
+
+def test_auditor_has_a_procedure_and_severity_scale() -> None:
+    # 0024: the auditor is a judge, so it carries method and rubric.
+    text = AUDITOR.read_text()
+    for heading in ("## Procedure", "## Severity", "## Finding format"):
+        assert f"\n{heading}\n" in text, heading
+    procedure = text.split("## Procedure", 1)[1].split("\n## ", 1)[0]
+    for cls in AUDITOR_CLASSES:
+        assert f"- {cls}: " in procedure, cls
+    severity = text.split("## Severity", 1)[1].split("\n## ", 1)[0]
+    for level in ("critical", "high", "medium", "low"):
+        assert f"- {level}: " in severity, level
+    assert "Any critical or high finding is REJECTED." in severity
+    assert "`<branch> <file>:<line> <severity> <class>: <precise fix>`" in text
+
+
+def test_auditor_grep_commands_pass_the_jail() -> None:
+    # 0024: every fixed pattern the procedure names must survive the auditor's jail.
+    commands = re.findall(r"`(git log -p -G '[^']+' <diff base>\.\.<branch>)`", AUDITOR.read_text())
+    assert len(commands) == len(AUDITOR_CLASSES) - 1
+    for command in commands:
+        concrete = command.replace("<diff base>", "daedalus/t1").replace("<branch>", "unit-a")
+        payload = {
+            "agent_type": "security-auditor",
+            "tool_name": "Bash",
+            "tool_input": {"command": concrete},
+            "cwd": "/work/repo",
+        }
+        assert decide(payload, Config()).allow, command
+
+
+def test_auditor_verdict_first_line_contract_unchanged() -> None:
+    contract = AUDITOR.read_text().split("## Status contract\n", 1)[1]
+    assert contract == (
+        "Your reply starts with exactly one of these verdict lines as its first line, followed by"
+        " the\nparagraph or the itemized findings.\n"
+        "- `[VERDICT: APPROVED]` then `<paragraph>`\n"
+        "- `[VERDICT: REJECTED]` then `<itemized findings>`\n"
+    )
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_MODEL))
+def test_every_agent_carries_the_human_text_rule(name: str) -> None:
+    # 0031: verbatim in every agent file; the status contract stays the last section.
+    from tests.test_skills import HUMAN_TEXT_RULE
+
+    text = (AGENTS / f"{name}.md").read_text()
+    assert HUMAN_TEXT_RULE in text
+    assert text.index(HUMAN_TEXT_RULE) < text.index("## Status contract")

@@ -387,4 +387,6 @@ def test_two_empty_id_tables_exit_1(repo_cwd: Path) -> None:
     project_data_dir(str(repo_cwd)).mkdir(parents=True)
     out = _run(repo_cwd, "--probe")
     assert out.returncode == 1
-    assert "has two or more empty Id tables. Next: keep one." in out.stderr
+    assert (
+        "has two or more empty Id tables. Next: keep one ledger table and delete the others."
+    ) in out.stderr

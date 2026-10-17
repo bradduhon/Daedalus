@@ -9,7 +9,17 @@ from typing import Any
 import pytest
 from lib import audit
 
+from tests.conftest import write_train_marker
+
 _GIT_ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
+# 0035: a record that only names the begin command creates nothing.
+BEGIN = {"command": "python3 /p/scripts/daedalus_workspace.py begin --repo /r"}
+
+
+@pytest.fixture
+def project_data(project_data: Path, repo_cwd: Path) -> Path:
+    write_train_marker(repo_cwd)
+    return project_data
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -60,9 +70,9 @@ def test_git_dir_env_does_not_redirect(
     assert audit.project_root(str(repo_cwd)) == repo_cwd
 
 
-def test_first_append_writes_star_marker_and_repo_stays_clean(
-    repo_cwd: Path, hook_input: Any
-) -> None:
+def test_data_dir_writes_star_marker_and_repo_stays_clean(repo_cwd: Path, hook_input: Any) -> None:
+    audit.ensure_project_data_dir(str(repo_cwd))
+    write_train_marker(repo_cwd)
     audit.audit_append(hook_input())
     data = repo_cwd / ".claude" / "daedalus"
     assert (data / ".gitignore").read_text() == "*\n"
@@ -73,11 +83,55 @@ def test_first_append_writes_star_marker_and_repo_stays_clean(
     assert _git(repo_cwd, "check-ignore", "-q", str(probe)).returncode == 0
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {},
+        {"tool_name": "Read", "tool_input": {"file_path": "/etc/hosts"}},
+        {"hook_event_name": "SessionStart"},
+        {"tool_input": BEGIN},
+        {"hook_event_name": "PostToolUse", "tool_input": BEGIN},
+    ],
+)
+def test_no_data_dir_writes_nothing(
+    repo_cwd: Path, hook_input: Any, overrides: dict[str, Any]
+) -> None:
+    # 0035: outside a train's repo every hook record is skipped and nothing is created.
+    assert audit.audit_append(hook_input(**overrides)) is None
+    assert not (repo_cwd / ".claude").exists()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{}, {"tool_name": "Read", "tool_input": {"file_path": "/etc/hosts"}}, {"tool_input": BEGIN}],
+)
+def test_data_dir_without_train_marker_writes_nothing(
+    repo_cwd: Path, hook_input: Any, overrides: dict[str, Any]
+) -> None:
+    # 0035: a repo that once ran a train is not logged again until a train marks it.
+    data = audit.ensure_project_data_dir(str(repo_cwd))
+    before = sorted(data.rglob("*"))
+    assert audit.audit_append(hook_input(hook_event_name="SessionStart", **overrides)) is None
+    assert audit.audit_append(hook_input(**overrides)) is None
+    assert sorted(data.rglob("*")) == before
+
+
+def test_train_marker_turns_the_log_on_and_its_removal_off(repo_cwd: Path, hook_input: Any) -> None:
+    audit.ensure_project_data_dir(str(repo_cwd))
+    marker = write_train_marker(repo_cwd)
+    assert audit.audit_append(hook_input())["seq"] == 1
+    marker.unlink()
+    assert audit.audit_append(hook_input()) is None
+    log = repo_cwd / ".claude" / "daedalus" / "audit" / "sess-test.jsonl"
+    assert len(log.read_text().splitlines()) == 1
+
+
 def test_existing_marker_is_left_alone(repo_cwd: Path, hook_input: Any) -> None:
     data = repo_cwd / ".claude" / "daedalus"
     data.mkdir(parents=True)
     (data / ".gitignore").write_text("*\n")
-    audit.audit_append(hook_input())
+    write_train_marker(repo_cwd)
+    assert audit.audit_append(hook_input()) is not None
     assert (data / ".gitignore").read_text() == "*\n"
 
 
@@ -87,6 +141,8 @@ def test_worktree_append_lands_in_main_repo(
     assert _git(repo_cwd, "commit", "-q", "--allow-empty", "-m", "init").returncode == 0
     worktree = tmp_path.resolve() / "wt"
     assert _git(repo_cwd, "worktree", "add", "-q", str(worktree)).returncode == 0
+    audit.ensure_project_data_dir(str(repo_cwd))
+    write_train_marker(repo_cwd)
     audit.audit_append(hook_input(cwd=str(worktree)))
     assert (repo_cwd / ".claude" / "daedalus" / "audit" / "sess-test.jsonl").exists()
     assert not (worktree / ".claude").exists()
@@ -139,22 +195,26 @@ def test_symlinked_data_dir_refuses_before_writing(
     repo_cwd: Path, tmp_path: Path, hook_input: Any
 ) -> None:
     elsewhere = _symlinked_data_dir(repo_cwd, tmp_path)
+    marker = write_train_marker(repo_cwd)
     with pytest.raises(audit.DataDirError, match="must be a real directory inside the repo"):
         audit.audit_append(hook_input())
-    assert list(elsewhere.iterdir()) == []
+    assert list(elsewhere.iterdir()) == [elsewhere / marker.name]
 
 
 def test_symlinked_claude_dir_refuses(repo_cwd: Path, tmp_path: Path, hook_input: Any) -> None:
     elsewhere = tmp_path.resolve() / "elsewhere"
     elsewhere.mkdir()
     (repo_cwd / ".claude").symlink_to(elsewhere)
+    assert audit.audit_append(hook_input()) is None
+    assert audit.audit_append(hook_input(tool_input=BEGIN)) is None
     with pytest.raises(audit.DataDirError, match="is a symlink"):
-        audit.audit_append(hook_input())
+        audit.ensure_project_data_dir(str(repo_cwd))
     assert list(elsewhere.iterdir()) == []
 
 
 def test_committed_empty_marker_refuses(repo_cwd: Path, hook_input: Any) -> None:
     _empty_marker(repo_cwd)
+    write_train_marker(repo_cwd)
     with pytest.raises(audit.DataDirError):
         audit.audit_append(hook_input())
 
@@ -166,6 +226,7 @@ def test_untracked_marker_with_other_content_refuses(
     data = repo_cwd / ".claude" / "daedalus"
     data.mkdir(parents=True)
     (data / ".gitignore").write_text(content)
+    write_train_marker(repo_cwd)
     with pytest.raises(audit.DataDirError, match="restore the `\\*` marker"):
         audit.audit_append(hook_input())
 
@@ -175,11 +236,12 @@ def test_exact_marker_is_accepted(repo_cwd: Path, hook_input: Any, content: str)
     data = repo_cwd / ".claude" / "daedalus"
     data.mkdir(parents=True)
     (data / ".gitignore").write_text(content)
+    write_train_marker(repo_cwd)
     assert audit.audit_append(hook_input())["seq"] == 1
 
 
 def test_tracked_check_runs_once_per_process(
-    repo_cwd: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
+    project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[list[str]] = []
     real = subprocess.run
@@ -194,28 +256,35 @@ def test_tracked_check_runs_once_per_process(
     assert sum("ls-files" in c for c in calls) == 1
 
 
-def test_record_carries_project_root_and_git_source(repo_cwd: Path, hook_input: Any) -> None:
+def test_record_carries_project_root_and_git_source(
+    repo_cwd: Path, project_data: Path, hook_input: Any
+) -> None:
     rec = audit.audit_append(hook_input())
+    assert rec is not None
     assert rec["project_root"] == str(repo_cwd) and rec["root_source"] == "git"
 
 
 def test_record_marks_cwd_fallback(tmp_path: Path, hook_input: Any) -> None:
     plain = tmp_path.resolve() / "plain"
     plain.mkdir()
+    audit.ensure_project_data_dir(str(plain))
+    write_train_marker(plain)
     rec = audit.audit_append(hook_input(cwd=str(plain)))
+    assert rec is not None
     assert rec["project_root"] == str(plain) and rec["root_source"] == "cwd-fallback"
     assert (plain / ".claude" / "daedalus" / "audit" / "sess-test.jsonl").exists()
 
 
-def test_root_fields_are_hashed(repo_cwd: Path, hook_input: Any) -> None:
+def test_root_fields_are_hashed(project_data: Path, hook_input: Any) -> None:
     rec = audit.audit_append(hook_input())
+    assert rec is not None
     assert audit.record_hash(rec) == rec["hash"]
     assert audit.record_hash({**rec, "project_root": "/elsewhere"}) != rec["hash"]
     assert audit.record_hash({**rec, "root_source": "cwd-fallback"}) != rec["hash"]
 
 
 def test_ls_files_failure_names_the_layout_not_history(
-    repo_cwd: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
+    repo_cwd: Path, project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     real = subprocess.run
 
@@ -235,5 +304,6 @@ def test_ls_files_failure_names_the_layout_not_history(
 
 def test_tracked_file_message_keeps_history_next(repo_cwd: Path, hook_input: Any) -> None:
     _tracked_config(repo_cwd)
+    write_train_marker(repo_cwd)
     with pytest.raises(audit.DataDirError, match="remove .claude/daedalus from git history"):
         audit.audit_append(hook_input())

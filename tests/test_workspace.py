@@ -128,6 +128,35 @@ def test_remove_refuses_a_symlinked_worktrees_dir(repo: Path, tmp_path: Path) ->
     assert outside.is_dir()
 
 
+def test_minor_11_create_refuses_a_symlinked_worktrees_dir(repo: Path, tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "worktrees").symlink_to(outside)
+    with pytest.raises(WorkspaceError) as info:
+        create(repo, NAME, BASE)
+    assert "resolves outside" in str(info.value) and "Next:" in str(info.value)
+    assert list(outside.iterdir()) == []
+    assert _git(repo, "rev-parse", "--verify", "--quiet", branch_name(NAME)).returncode != 0
+
+
+@pytest.mark.parametrize("hung", ["rev-parse", "prune"])
+def test_minor_11_timeout_without_a_worktree_names_no_placeholder(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, hung: str
+) -> None:
+    def hang(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if hung in cmd:
+            raise subprocess.TimeoutExpired(cmd, 1)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(workspace.subprocess, "run", hang)
+    with pytest.raises(WorkspaceError) as info:
+        create(repo, NAME, BASE) if hung == "rev-parse" else remove(repo, NAME)
+    message = str(info.value)
+    assert "timed out" in message and "<name>" not in message and "unlock" not in message
+    assert f"Next: run git -C {repo} " in message
+
+
 def test_create_and_remove_resolve_a_relative_repo(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -224,7 +253,8 @@ def test_mark_train_refuses_a_symlinked_marker(data_repo: Path, tmp_path: Path) 
 
 
 def test_mark_train_needs_the_data_dir(repo: Path) -> None:
-    with pytest.raises(WorkspaceError, match="Next: run /daedalus:doctor"):
+    health = r"Next: run the Daedalus health check \(/daedalus:doctor\)"
+    with pytest.raises(WorkspaceError, match=health):
         mark_train(repo, TRAIN)
     assert not (repo / ".claude" / "daedalus").exists()
 
@@ -244,3 +274,19 @@ def test_cli_mark_prints_the_marker_and_unmark_names_it(data_repo: Path) -> None
     assert gone.returncode == 0, gone.stderr
     assert gone.stdout == f"cleared {train_marker(data_repo)}\n"
     assert not train_marker(data_repo).exists()
+
+
+def test_create_records_the_unit_in_the_active_train(data_repo: Path) -> None:
+    from lib import train_state
+
+    train_state.save(data_repo, TRAIN, {"train_id": TRAIN})
+    mark_train(data_repo, TRAIN)
+    path = create(data_repo, NAME, BASE)
+    assert train_state.load(data_repo, TRAIN)["units"] == [
+        {"name": NAME, "branch": branch_name(NAME), "path": str(path)}
+    ]
+
+
+def test_create_without_a_train_records_nothing(data_repo: Path) -> None:
+    create(data_repo, NAME, BASE)
+    assert not (data_repo / ".claude" / "daedalus" / "trains").exists()

@@ -24,7 +24,7 @@ No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already retu
 4. `gh pr create` (or `gh pr edit`) with the Build Train summary as the body: pass the summary
    file path given in your prompt with `--body-file`; it must be under `docs/.tmp/` or `/tmp`.
    The hook refuses `gh pr create`, `gh pr edit` and `gh pr comment` without `--body-file`
-   and with `--body` or `-b`, and refuses `gh pr edit --base`.
+   and with `--body` or `-b`, and refuses `gh pr edit` with any flag but `--body-file`.
 5. `gh run watch` each triggered workflow. Report each run's conclusion verbatim.
 6. Never retry a failed workflow, never modify files, never merge. The operator reviews and
    merges the PR. Report and stop.
@@ -35,6 +35,8 @@ No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already retu
    that the remote `origin` exists.
 
 Never write U+2013 or U+2014 (en or em dash) in a reply, a file, or a ledger entry; use a hyphen.
+
+Human-facing text (0031): Text a human reads names each item in words: a short label or one line on what it is and what it does. Ids (ruling ids, issue numbers, task codes, agent names, snake_case keys) may trail in parentheses, never replace the description. Logs, status lines and messages to other agents may use ids alone. Documents carry both.
 
 ## Status contract
 Your reply ends with exactly one of these, nothing after it.

@@ -214,7 +214,10 @@ def _bump_frontmatter(lines: list[str], key: str, seq: int, ledger: ResolvedLedg
         line = lines[hit].rstrip("\r\n")
         lines[hit] = f"{line.partition(':')[0]}: {seq}" + lines[hit][len(line) :]
         return
-    raise AppendError(f"{ledger.path} frontmatter has no {key!r}. Next: add '{key}: <n>'.")
+    raise AppendError(
+        f"{ledger.path} frontmatter has no {key!r}. "
+        f"Next: add the sequence line '{key}: <n>' to the ledger frontmatter."
+    )
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -292,7 +295,8 @@ def _append(args: argparse.Namespace, ledger: ResolvedLedger) -> str:
                 raw = fh.read()
         except (OSError, UnicodeDecodeError) as exc:
             raise AppendError(
-                f"ledger {ledger.path} could not be read ({exc}). Next: make it readable UTF-8."
+                f"ledger {ledger.path} could not be read ({exc}). "
+                "Next: make the ledger file readable UTF-8 text."
             ) from exc
         bom = "\ufeff" if raw.startswith("\ufeff") else ""
         lines = raw.removeprefix(bom).splitlines(keepends=True)
