@@ -164,3 +164,22 @@ def test_conductor_lists_the_git_reads_the_jail_allows() -> None:
         assert read in text, read
     assert "`git rev-parse --abbrev-ref HEAD`" in text
     assert "refuses `git remote`, `git branch -vv`, and `@{u}`" in text
+
+
+RUBRIC = REPO_ROOT / "references" / "hardening-rubric.md"
+RUBRIC_ITEM = re.compile(r"^- HR-[0-9]+: .+ CIS: (unmapped|[A-Za-z0-9 .]+ [0-9]+(\.[0-9]+)*)$")
+
+
+def test_rubric_items_have_ids_and_cis_cites() -> None:
+    # 0024: own-words items cite a CIS section number or unmapped, never CIS text.
+    items = [line for line in RUBRIC.read_text().splitlines() if line.startswith("- ")]
+    assert items
+    assert [line for line in items if not RUBRIC_ITEM.match(line)] == []
+    ids = [line.split(":", 1)[0] for line in items]
+    assert len(ids) == len(set(ids))
+
+
+def test_rubric_has_no_long_quotes() -> None:
+    # 0024: a tripwire for pasted benchmark text, not a license proof.
+    spans = re.findall('"([^"]*)"|\u201c([^\u201d]*)\u201d', RUBRIC.read_text())
+    assert [s for pair in spans for s in pair if len(s) > 40] == []

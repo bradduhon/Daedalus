@@ -22,6 +22,7 @@ ALLOWLIST = frozenset(
         "agents/",
         "hooks/",
         "pyproject.toml",
+        "references/",
         "scripts/",
         "settings.recommended.json",
         "skills/",
