@@ -72,6 +72,19 @@ def test_repo_coder_works_in_the_train_made_worktree() -> None:
     assert "Every file path and every git pathspec you use is absolute" in text
 
 
+def test_repo_coder_yields_compliance_before_sensitive_code() -> None:
+    # 0024: the compliance yield is expected before sensitive code, not only when blocked.
+    text = (AGENTS / "repo-coder.md").read_text()
+    raw = text.split("Before writing code that touches", 1)[1].split("\n\n", 1)[0]
+    paragraph = " ".join(raw.split())
+    for topic in ("authentication", "IAM policy", "key material", "logging of request data"):
+        assert topic in paragraph, topic
+    assert "`[STATUS: YIELD_COMPLIANCE] <what you are about to write and the question>`" in (
+        paragraph
+    )
+    assert "even when you are not blocked" in paragraph
+
+
 def test_tools_agree_with_the_jail() -> None:
     no_shell = {"web-researcher", "standards-rules-specialist", "contract-spec"}
     read_only = {

@@ -27,6 +27,11 @@ between Bash calls.
    - `[STATUS: YIELD_COMPLIANCE] <exact question>`
    - `[STATUS: YIELD_STANDARDS] <exact question about a project standard>`
    You will be resumed with the answer. Continue from where you stopped.
+
+   Before writing code that touches authentication, IAM policy, key material or logging of
+   request data, return `[STATUS: YIELD_COMPLIANCE] <what you are about to write and the question>`
+   even when you are not blocked; the requirement comes back with control ids.
+
 5. **Verification**: run unit tests and typecheckers before completing. Never `git push`.
    Commit messages carry no Co-Authored-By or other attribution trailer.
    No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already returns stderr.
