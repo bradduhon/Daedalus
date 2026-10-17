@@ -257,3 +257,81 @@ def test_train_made_worktree_keeps_root_log_and_jail(live_repo: Path) -> None:
     _append_result(
         f"- session {run.session}: train-made worktree coder cwd {pre[0]['cwd']}, writes {writes}"
     )
+
+
+def _bash_hook(repo: Path, command: str) -> None:
+    # 0024: begin proves live hooks from its own PreToolUse record; the real jail writes it.
+    payload = {
+        "session_id": str(uuid.uuid4()),
+        "hook_event_name": "PreToolUse",
+        "cwd": str(repo),
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    }
+    result = _jail_hook(payload)
+    assert result.returncode == 0, result.stderr
+
+
+def _span(recs: list[dict[str, Any]], agent_id: str) -> tuple[str, str]:
+    mine = [r for r in recs if r["agent_id"] == agent_id]
+    start = next(r["ts"] for r in mine if r["event"] == "SubagentStart")
+    stop = next(r["ts"] for r in mine if r["event"] == "SubagentStop")
+    return start, stop
+
+
+def test_parallel_coders_stay_in_their_units(live_repo: Path) -> None:
+    # issue 29, spec 4.1: two coders dispatched in one turn each write only their own unit.
+    from lib.workspace import begin, create
+    from verify_audit_chain import verify
+
+    ledger = live_repo / "docs" / "decisions.md"
+    ledger.parent.mkdir()
+    shutil.copy(REPO_ROOT / "tests" / "fixtures" / "ledgers" / "table.md", ledger)
+    commit = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c"]
+    commit += ["commit.gpgsign=false", "commit", "-q", "-m", "init"]
+    subprocess.run(["git", "-C", str(live_repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(live_repo), *commit], check=True)
+    _bash_hook(live_repo, f"python3 x/daedalus_workspace.py begin --repo {live_repo}")
+    seed = begin(live_repo)
+    train = seed[0].split()[1]
+    # 0011: lock creates the integration branch in a real train; this test has no contract.
+    subprocess.run(["git", "-C", str(live_repo), "branch", f"daedalus/{train}"], check=True)
+    w1, w2 = (create(live_repo, f"{train}-{n}", f"daedalus/{train}") for n in ("u1", "u2"))
+    own = {w1: w1 / "src" / "one.py", w2: w2 / "src" / "two.py"}
+    stray = {w1: w2 / "src" / "stray1.py", w2: w1 / "src" / "stray2.py"}
+    prompts = [
+        f"Worktree: {w}\nWrite the file {own[w]} containing ok.\n"
+        f"Write the file {stray[w]} containing x.\n"
+        for w in (w1, w2)
+    ]
+    prompt = (
+        f"In one single message, make two {PROBE} Agent tool calls at once, in parallel.\n"
+        f"The first agent's prompt is exactly these three lines:\n{prompts[0]}"
+        f"The second agent's prompt is exactly these three lines:\n{prompts[1]}"
+        "When both return, say done."
+    )
+    # Operator user-level hooks stay out of the result.
+    sources = ["--setting-sources", "project,local"]
+    run = _claude([prompt, *WORKER_TOOLS, "Write", *sources], live_repo)
+    recs = _records(run)
+    ok, detail = verify(live_repo / ".claude" / "daedalus" / "audit" / f"{run.session}.jsonl")
+    assert ok, detail
+    pre = [r for r in recs if r["event"] == "PreToolUse" and r["agent_type"] == PROBE]
+    writes = {
+        (r.get("tool_input") or {}).get("file_path"): (r["decision"], r.get("reason"))
+        for r in pre
+        if r["tool_name"] == "Write"
+    }
+    for w in (w1, w2):
+        assert writes.get(str(own[w]), ("missing",))[0] == "allow", writes
+        decision, reason = writes.get(str(stray[w]), ("missing", None))
+        assert decision == "block" and "issue 29" in str(reason), writes
+        assert own[w].is_file() and not stray[w].exists()
+    coders = sorted({r["agent_id"] for r in pre})
+    assert len(coders) == 2, coders
+    (s1, e1), (s2, e2) = (_span(recs, c) for c in coders)
+    overlap = s1 < e2 and s2 < e1
+    _append_result(
+        f"- session {run.session}: parallel coders {coders} spans {s1}..{e1} and {s2}..{e2}, "
+        f"overlap {overlap}; writes {writes}"
+    )
