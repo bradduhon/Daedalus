@@ -85,6 +85,17 @@ def test_repo_coder_yields_compliance_before_sensitive_code() -> None:
     assert "even when you are not blocked" in paragraph
 
 
+def test_repo_coder_carries_the_code_hygiene_rule() -> None:
+    # 0036: reuse before writing is the coder's standing method, with the security exception.
+    text = " ".join((AGENTS / "repo-coder.md").read_text().split())
+    assert "Reuse before writing." in text
+    assert (
+        "The one exception is security: never share or reuse code when doing so widens a"
+        " permission, crosses a tenant or trust boundary, or couples a sensitive path to a"
+        " general one, and name that exception in the commit message."
+    ) in text
+
+
 def test_tools_agree_with_the_jail() -> None:
     no_shell = {"web-researcher", "standards-rules-specialist", "contract-spec"}
     read_only = {
