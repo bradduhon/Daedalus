@@ -682,6 +682,27 @@ def test_skill_script_commands_are_allowed_for_main() -> None:
         assert d.allow, (command, d.reason)
 
 
+def test_issue30_skill_script_commands_pass_for_main_during_a_train(
+    repo_cwd: Path, project_data: Path
+) -> None:
+    # issue 30: a train holds main to plain commands; every skill script command is one.
+    from lib.config import Config
+    from lib.jail import decide
+
+    (project_data / "train.active").write_text("20261015-120000\n")
+    root, repo = str(REPO_ROOT), str(repo_cwd)
+    commands = [
+        re.sub(r"<[^>]+>", "x", m.replace("${CLAUDE_PLUGIN_ROOT}", root).replace("<repo>", repo))
+        for path in (REPO_ROOT / "skills" / n for n in ("build-train", "push-train", "setup"))
+        for m in _SKILL_SCRIPT.findall((path / "SKILL.md").read_text(encoding="utf-8"))
+    ]
+    assert len(commands) >= 4
+    for command in commands:
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": repo}
+        d = decide(payload, Config())
+        assert d.allow, (command, d.reason)
+
+
 _CONDUCTOR_CMD = re.compile(r"(?:[Rr]un|then) `((?:git|gh|gitleaks) [^`]+)`")
 
 

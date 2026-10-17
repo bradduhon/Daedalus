@@ -109,6 +109,7 @@ _PATH_OPTS: dict[str, frozenset[str]] = {
     "ln": frozenset({"-t"}),
     "touch": frozenset({"-r"}),
     "truncate": frozenset({"-r"}),
+    "rsync": frozenset({"-T"}),
 }
 # 0022: long options whose =x or next-token value is not a path; --preserve takes =x only.
 _VALUE_LONG_NEXT = frozenset(
@@ -388,7 +389,10 @@ _PATH_CMDS = (
     | {"cd", "pushd", "source", ".", "less", "more", "base64", "xxd", "od", "strings"}
     | {"tar", "zip", "unzip", "scp", "gzip", "gunzip", "zcat", "openssl", "ssh-keygen", "gpg"}
     | {"egrep", "fgrep", "nl", "tac", "diff", "cmp"}
+    | {"bsdtar", "7z", "7za", "7zr", "7zz", "pax"}
 )
+# issue 30: archive and copy tools whose reads the jail does not follow; refused to main in a train.
+UNMODELLED_COPIERS = frozenset({"bsdtar", "7z", "7za", "7zr", "7zz", "cpio", "pax", "scp", "sftp"})
 _PATH_OPTION = re.compile(r"--?[\w-]*(?:dir|file|path|target|output|input|config|key|root)", re.I)
 _DATA_DIR_DEFAULT = "/.claude/plugins/data/daedalus"
 _PROJECT_DATA = ".claude/daedalus"
@@ -398,6 +402,7 @@ _DATA_DIR_WRITE = re.compile(
     r">|(?:^|[\s;&|(/])(?:tee|rm|mv|cp|truncate|touch|ln|mkdir|chmod|chown|install|rmdir)"
     r"(?=[\s;&|)]|$)"
     r"|\bsed\b[^;&|\n]*\s(?:-[a-zA-Z]*i|--in-place)|\bpython[\d.]*\b[^;&|\n]*\s-[a-zA-Z]*c"
+    r"|\bgit\b[^;&|\n]*\s(?:init|clone)\b"
 )
 _DEVNULL = re.compile(r"\d?>&\d|&?\d?>>?\s*/dev/null")
 _CD_TARGET = re.compile(r"(?:^|[;&|(\s])(?:cd|pushd)\s+([^\s;&|)]+)")
@@ -1549,11 +1554,31 @@ def _write_operands(name: str, args: list[str]) -> list[str]:
     return operands
 
 
+def _backup_suffix(name: str, args: list[str]) -> str | None:
+    # issue 30: a backup suffix with a slash places the backup outside the target's directory.
+    if name not in {"cp", "mv", "install", "ln"}:
+        return None
+    for i, arg in enumerate(args):
+        value = None
+        if arg.startswith("--suffix="):
+            value = arg.split("=", 1)[1]
+        elif arg in {"--suffix", "-S"}:
+            value = args[i + 1] if i + 1 < len(args) else ""
+        elif arg.startswith("-S") and not arg.startswith("--"):
+            value = arg[2:]
+        if value is not None and "/" in value:
+            return f"backup suffix {value}"
+    return None
+
+
 def _coder_write_target(segment: list[str], cwd: str) -> str | None:
     name = _base(segment[0])
     args = segment[1:]
     if name not in CODER_WRITE_CMDS and not (name in {"sed", "perl"} and _in_place(name, args)):
         return None
+    suffix = _backup_suffix(name, args)
+    if suffix is not None:
+        return suffix
     for arg in _write_operands(name, args):
         if arg != "-" and not _in_unit_worktree_code(_abs(arg, cwd), cwd):
             return arg
@@ -2171,7 +2196,9 @@ def _tree_reader(
     if name == "find":
         on = bool({"-exec", "-execdir", "-ok", "-okdir"} & set(args)) or "xargs" in command
         return (True, ops, not ops) if on else None
-    if name in {"tar", "rsync"}:
+    if name in {"tar", "rsync", "bsdtar", "7z", "7za", "7zr", "7zz", "pax"}:
+        return True, ops, False
+    if name == "scp" and "r" in short:
         return True, ops, False
     if name == "cp" and ({"r", "R", "a"} & short or {"--recursive", "--archive"} & longs):
         return True, ops, False
@@ -2311,6 +2338,135 @@ def _train_active(cwd: str) -> bool:
     return os.path.lexists(train_marker(project_root(cwd)))
 
 
+_TARGET_CAP = 8
+_GIT_DIR_OPTS = ("--git-dir=", "--work-tree=")
+
+
+def _bash_write_dirs(command: str, cwd: str) -> list[str]:
+    # issue 30: redirects, write operands, cd targets and git -C name the repos a command acts on.
+    segments = _shell_words(command)
+    envs = _bash_env(segments)
+    found: list[str] = []
+    for k, words in enumerate(segments):
+        clean = [_clean(w) for w in words]
+        texts = [(_expand_word(w, envs[k]) or [("", False)])[0][0] for w in words]
+        redirects = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
+        picks = [texts[i] for i in sorted(redirects)]
+        at = _command_at(clean, redirects)
+        if at is not None:
+            name = _base(clean[at])
+            args = [texts[i] for i in range(at + 1, len(words)) if i not in redirects]
+            if name in {"cd", "pushd"}:
+                picks += [a for a in args if not a.startswith("-")][:1]
+            elif name == "git":
+                sub, _, globals_ = _git_split(["git", *args])
+                if sub not in READ_ONLY_GIT:
+                    pairs = zip(globals_, globals_[1:], strict=False)
+                    picks += [value for flag, value in pairs if flag == "-C"]
+                    picks += [g.split("=", 1)[1] for g in globals_ if g.startswith(_GIT_DIR_OPTS)]
+            elif name in CODER_WRITE_CMDS or (name in {"sed", "perl"} and _in_place(name, args)):
+                picks += [a for a in _write_operands(name, args) if a != "-"]
+        found += [t for t in (_anchor(p, cwd) for p in picks) if t]
+    return found
+
+
+def _write_dirs(tool: str, tool_input: dict[str, Any], cwd: str) -> list[str]:
+    if tool in WRITE_TOOLS:
+        raw = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+        return [_abs(raw, cwd)] if raw else []
+    if tool == "Bash":
+        return _bash_write_dirs(str(tool_input.get("command") or ""), cwd)
+    return []
+
+
+def _marked_repo(cwd: str, tool: str, tool_input: dict[str, Any]) -> Path | None:
+    # 0023, issue 30: a train in the cwd repo or in any repo the call writes into counts.
+    seen: set[str] = set()
+    for path in [cwd, *_write_dirs(tool, tool_input, cwd)]:
+        while path and not os.path.isdir(path) and os.path.dirname(path) != path:
+            path = os.path.dirname(path)
+        if not os.path.isabs(path) or path in seen:
+            continue
+        seen.add(path)
+        if len(seen) > _TARGET_CAP:
+            break
+        root = project_root(path)
+        if os.path.lexists(train_marker(root)):
+            return root
+    return None
+
+
+R_SHELL_FORM = (
+    "while a Daedalus train runs, the main session sends plain commands only, and {form} "
+    "hides what the command reads or runs. Next: spell the command out with literal paths "
+    "and values.\n" + UNMARK_NEXT
+)
+_FUNCTION_DEF = re.compile(
+    r"(?:^|[;&|(){}\s])(?:function\s+[^\s;&|()]+|[A-Za-z_][\w.:-]*\s*\(\s*\))"
+)
+
+
+def _substitution(command: str) -> str | None:
+    quote = ""
+    i = 0
+    while i < len(command):
+        char = command[i]
+        if quote == "'":
+            quote = "" if char == "'" else quote
+        elif char == "\\":
+            i += 2
+            continue
+        elif char == "`":
+            return "a backtick command substitution"
+        elif command.startswith("$(", i):
+            return "a command substitution"
+        elif not quote and command.startswith(("<(", ">("), i):
+            return "a process substitution"
+        elif not quote and command.startswith("$'", i):
+            return "ANSI-C quoting"
+        elif char == '"':
+            quote = "" if quote else '"'
+        elif char == "'" and not quote:
+            quote = "'"
+        i += 1
+    return None
+
+
+def _shell_form(command: str, depth: int = 0) -> str | None:
+    # issue 30: forms the token model cannot follow, refused for main while a train runs.
+    if depth > 3:
+        return "a nested shell"
+    form = _substitution(command)
+    if form:
+        return form
+    if _FUNCTION_DEF.search(_quote_spans(command)):
+        return "a shell function definition"
+    segments = _shell_words(command)
+    envs = _bash_env(segments)
+    for k, words in enumerate(segments):
+        clean = [_clean(w) for w in words]
+        at = _command_at(clean, {i for i, w in enumerate(words) if w.startswith(_REDIRECT)})
+        if at is not None:
+            name = _base(clean[at])
+            if "builtin" in {_base(w) for w in clean[:at]}:
+                return "the builtin keyword"
+            if name == "eval":
+                return "eval"
+            if name in UNMODELLED_COPIERS:
+                return f"{name}, an archive or copy tool the jail does not model,"
+            if name in _SHELLS:
+                code = _shell_code(clean[at:])
+                if code == _FALLBACK:
+                    return "a shell option the jail does not read"
+                inner = _shell_form(code, depth + 1) if code else None
+                if inner:
+                    return inner
+        for word in words:
+            if any(unknown for _, unknown in _expand_word(word, envs[k])):
+                return f"the unresolved variable in {_clean(word)}"
+    return None
+
+
 R_NO_TRAIN = (
     "a repo-coder writes only inside a Daedalus train (issue 29). "
     "Next: start coders from /daedalus:build-train."
@@ -2422,9 +2578,9 @@ def _unknown_decision(
     command = str(tool_input.get("command") or "") if tool == "Bash" else ""
     if command and (_data_dir_write(command) or _cd_data_dir_git(command)):
         return _block(R_DATA_DIR)
-    if not _train_active(cwd):
+    repo = _marked_repo(cwd, tool, tool_input)
+    if repo is None:
         return _allow()
-    repo = project_root(cwd)
     return _block(R_UNKNOWN_TRAIN.format(agent=agent, marker=train_marker(repo), repo=repo))
 
 
@@ -2490,7 +2646,11 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
         if _cd_data_dir_git(command):
             return _block(R_DATA_DIR_GIT)
         reason = _command_reason(command) or _gh_gate(agent, cwd, command)
-        return _block(reason) if reason else _allow()
+        if reason:
+            return _block(reason)
+        repo = _marked_repo(cwd, tool, tool_input)
+        form = _shell_form(command) if repo is not None else None
+        return _block(R_SHELL_FORM.format(form=form, repo=repo)) if form else _allow()
     segments: list[list[str]] = []
     piped = False
     if tool == "Bash":
