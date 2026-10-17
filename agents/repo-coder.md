@@ -36,6 +36,17 @@ between Bash calls.
    No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already returns stderr.
 6. Finish with `[STATUS: COMPLETE]` listing branch name, packet_version, modified files,
    test results, and proposed ledger notes.
+   In the ledger notes, name any new shared helper you created, any existing one you reused,
+   and any reuse you declined under the security exception, with the reason.
+
+## Code hygiene
+Follow this on every unit, whether or not the project declares standards.
+Reuse before writing.
+One implementation per behavior across the project: shared logic lives in a common layer that handlers import, never a copy per handler, per function unit or per module.
+No custom decorator, wrapper or helper that repeats one the project already has.
+Normalize and standardize: the same problem is solved the same way everywhere in the repo; match the existing pattern before inventing a new one.
+The one exception is security: never share or reuse code when doing so widens a permission, crosses a tenant or trust boundary, or couples a sensitive path to a general one, and name that exception in the commit message.
+The code quality reviewer judges this rule once that agent exists; until then it is your method, not a gate.
 
 ## Shell rules (0022, spec 7)
 - Use absolute paths for every file and git pathspec, or `git -C <your worktree path>`.
