@@ -255,7 +255,7 @@ def test_push_train_uses_the_conductor_push_grammar_and_scan() -> None:
 def test_push_train_proves_live_hooks_with_the_script() -> None:
     # 0024: the log reading moved to verify_audit_chain.py; test_audit_proof.py holds it.
     text = _push_train()
-    step = text.split("\n7. ", 1)[1].split("\n8. ", 1)[0]
+    step = text.split("\n8. ", 1)[1].split("\n9. ", 1)[0]
     assert (
         "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_audit_chain.py --hooks-live --repo <repo>`"
     ) in step
@@ -289,7 +289,7 @@ def test_build_train_names_the_push_train_in_present_tense() -> None:
 
 def test_push_train_proves_the_approved_audit_with_the_script() -> None:
     # 0024: the auditor record checks moved to verify_audit_chain.py --approved.
-    step = _push_train().split("\n8. ", 1)[1].split("\n9. ", 1)[0]
+    step = _push_train().split("\n9. ", 1)[1].split("\n10. ", 1)[0]
     assert (
         "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_audit_chain.py --approved <train-id> "
         "--repo <repo>`"
@@ -638,11 +638,14 @@ def test_build_train_marks_the_train_active_and_clears_it() -> None:
 
 
 def test_push_train_marks_the_train_active_and_clears_it() -> None:
-    # 0023: the Push Train writes the marker after its preconditions and removes it at its end.
+    # 0023, 0035: the Push Train marks before the hooks check, since only a marked repo records.
     text = _push_train()
     pre = _section(text, "## Preconditions", "## Push")
-    step10 = pre.split("\n10. ", 1)[1]
-    assert MARK + "<train-id>`" in step10
+    step7 = pre.split("\n7. ", 1)[1].split("\n8. ", 1)[0]
+    assert MARK + "<train-id>`" in step7
+    assert pre.index(MARK) < pre.index("--hooks-live") < pre.index("--approved")
+    assert pre.index("--approved") < pre.index("merge-base --is-ancestor")
+    assert "Preconditions step 7 writes" in text
     rules = text.split("## Preconditions", 1)[0]
     marker = rules.split("- Train marker: ", 1)[1].split("\n", 1)[0]
     assert "every stop that follows" in marker

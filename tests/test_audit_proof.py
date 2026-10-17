@@ -11,9 +11,17 @@ import pytest
 from lib import audit
 from lib.audit_proof import ProofError, approved, hooks_live, newest_log, read_chain
 
+from tests.conftest import write_train_marker
+
 NEEDLE = "daedalus_workspace.py begin"
 TRAIN = "20261016-120000"
 AUDITOR = "daedalus:security-auditor"
+
+
+@pytest.fixture
+def project_data(project_data: Path, repo_cwd: Path) -> Path:
+    write_train_marker(repo_cwd)
+    return project_data
 
 
 def _bash(hook_input: Any, command: str, **kw: Any) -> None:

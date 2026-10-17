@@ -107,23 +107,7 @@ def _fast_path(payload: dict[str, Any], agent: str, cwd: str) -> int:
     tool = str(payload.get("tool_name"))
     tool_input = payload.get("tool_input") or {}
     reason = path_reason(tool, tool_input, cwd) if tool in CREDENTIAL_TOOLS else None
-    data = _repo_root(cwd) / ".claude" / "daedalus"
-    if os.path.lexists(data):
-        _fast_record(payload, agent, reason)
     return _block(agent, reason) if reason else 0
-
-
-def _fast_record(payload: dict[str, Any], agent: str, reason: str | None) -> None:
-    # 0035: best effort; outside a train a failed record never blocks the call.
-    try:
-        from lib.audit import audit_append
-
-        record = audit_append(payload, "block" if reason else "allow", reason)
-    except Exception as exc:  # noqa: BLE001
-        _note(agent, f"audit log unavailable ({exc}); this call is not recorded.")
-        return
-    if record is not None and record.get("root_source") == "cwd-fallback":
-        _warn_fallback(str(payload.get("cwd")))
 
 
 def _block(agent: str, message: str, next_step: str = _REPORT_NEXT) -> int:

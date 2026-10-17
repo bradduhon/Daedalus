@@ -16,6 +16,8 @@ import enforce_agent_jail
 import pytest
 from lib import jail
 
+from tests.conftest import write_train_marker
+
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "enforce_agent_jail.py"
 
 
@@ -39,6 +41,7 @@ def _in_train(project_data: Path) -> None:
 def test_allow_exits_zero_and_logs_allow(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
+    _in_train(project_data)
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "git status"}))
     assert result.returncode == 0, result.stderr
     rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
@@ -48,6 +51,7 @@ def test_allow_exits_zero_and_logs_allow(
 def test_block_exits_two_with_message_and_logs_block(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
+    _in_train(project_data)
     payload = hook_input(agent_type="repo-coder", tool_input={"command": "git push origin x"})
     result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2
@@ -105,11 +109,24 @@ def test_unwritable_audit_dir_fails_closed(
 def test_unwritable_audit_dir_outside_a_train_lets_main_proceed(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
-    # 0035: outside a train a failed record is one stderr line, never a block.
+    # 0035: outside a train the hook records nothing, so a broken audit dir is never touched.
     (project_data / "audit").write_text("not a directory")
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
-    assert result.returncode == 0
-    assert "audit log unavailable" in result.stderr and "not recorded" in result.stderr
+    assert result.returncode == 0 and result.stderr == ""
+
+
+@pytest.mark.parametrize("agent", [None, "ghost", "daedalus:security-auditor"])
+def test_data_dir_without_a_train_marker_gets_no_record(
+    run_script: Any, project_data: Path, hook_input: Any, agent: str | None
+) -> None:
+    # 0035: a repo that once ran a train is not logged again until a train marks it.
+    for payload in (
+        hook_input(agent_type=agent, tool_input={"command": "ls"}),
+        hook_input(agent_type=agent, tool_name="Read", tool_input={"file_path": "/etc/hosts"}),
+    ):
+        result = run_script("enforce_agent_jail.py", payload)
+        assert result.returncode == 0, result.stderr
+    assert sorted(p.name for p in project_data.iterdir()) == []
 
 
 def test_malformed_config_blocks(run_script: Any, project_data: Path, hook_input: Any) -> None:
@@ -320,6 +337,7 @@ def test_cwd_fallback_warns_on_stderr_and_allows(
 ) -> None:
     plain = tmp_path / "plain"
     (plain / ".claude" / "daedalus").mkdir(parents=True)
+    write_train_marker(plain)
     result = run_script("enforce_agent_jail.py", hook_input(cwd=str(plain)))
     assert result.returncode == 0, result.stderr
     assert result.stderr.startswith("daedalus-audit: project root fell back to cwd (")
@@ -349,7 +367,8 @@ def temp_home(tmp_path: Path) -> Path:
 def test_explore_read_of_a_normal_file_is_allowed_and_audited(
     temp_home: Path, plugin_data: Path, project_data: Path, repo_cwd: Path, hook_input: Any
 ) -> None:
-    # spec 8, 0023: an allowed Read through the jail still lands an audit record.
+    # spec 8, 0023: during a train an allowed Read through the jail still lands an audit record.
+    _in_train(project_data)
     target = repo_cwd / "notes.txt"
     target.write_text("x\n")
     payload = hook_input(
@@ -401,6 +420,7 @@ def test_absent_config_allows_main_bash_and_writes_the_log(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
     # 0020: config.json is optional; absence is the empty config, never a block.
+    _in_train(project_data)
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "git status"}))
     assert result.returncode == 0, result.stderr
     assert not (project_data / "config.json").exists()
@@ -453,6 +473,7 @@ def test_unwritable_audit_dir_still_allows_a_read(
     temp_home: Path, plugin_data: Path, project_data: Path, repo_cwd: Path, hook_input: Any
 ) -> None:
     # spec 8: an allowed read never waits on the audit record; the stderr line names the failure.
+    _in_train(project_data)
     (project_data / "audit").write_text("not a directory")
     target = repo_cwd / "notes.txt"
     target.write_text("x\n")
