@@ -23,14 +23,15 @@ Rules for the whole train:
 ## Preconditions
 
 1. Set `<repo>` to the parent of the directory `git rev-parse --path-format=absolute --git-common-dir` prints (the main working tree; every worktree shares it). Not a repo: stop. Next: start the session inside the target repository, then run `/daedalus:build-train` again.
-2. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py begin --repo <repo>` (0024). It refuses a dirty tree, reads `<repo>/.claude/daedalus/config.json` (0010; an absent config.json means the defaults: no `charter_root`, no `standards_sources`, no `policy`), probes the decision ledger (0004), proves this session's hooks are writing the audit log, sets `<train-id>` to the UTC time as `YYYYMMDD-HHMMSS`, creates `<repo>/docs/.tmp/daedalus/` with its `docs/.tmp/daedalus/.gitignore` so git ignores the train's scratch files and summary, branches a declared Charter to `daedalus/<train-id>` and marks the train active (0023).
-   - Exit 0: it prints the first six State Block lines; copy them unchanged.
+2. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py begin --repo <repo>` (0024). It refuses a dirty tree, reads `<repo>/.claude/daedalus/config.json` (0010; an absent config.json means the defaults: no `charter_root`, no `standards_sources`, no `policy`), probes the decision ledger (0004), creates `<repo>/.claude/daedalus/`, the folder for train state and the audit log (0035), sets `<train-id>` to the UTC time as `YYYYMMDD-HHMMSS`, creates `<repo>/docs/.tmp/daedalus/` with its `docs/.tmp/daedalus/.gitignore` so git ignores the train's scratch files and summary, branches a declared Charter to `daedalus/<train-id>` and marks the train active (0023).
+   - Exit 0: it prints the first six State Block lines; copy them unchanged. The first line ends in `audit session: pending`; step 3 fills it in.
    - Exit 3: begin found no decision ledger and wrote nothing; ask the operator the question it prints, exactly.
      - An existing file: Next: add a `ledger` block naming it to `<repo>/.claude/daedalus/config.json` from your own shell (docs/project-requirements.md), then run `/daedalus:build-train` again.
      - Create: write `<repo>/docs/decisions.md` holding only the two table lines it prints, the header and its separator. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_ledger.py --probe` and show its line; it reads `seq=0`. Next: review and commit docs/decisions.md from your own shell, then run `/daedalus:build-train` again.
    - Exit 1: show its output unchanged and stop; begin left no train behind, so the stop command does not run. Its `Next:` line is the next action.
+3. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_audit_chain.py --hooks-live --repo <repo>`. It checks that this session's hooks are writing the audit log. Exit 0 prints `OK hooks live: session <id>, ...`; record `<id>` in the State Block as `audit session: <id>`. Exit 1: stop and show its output; its `Next:` line is the next action.
 
-Keep this **State Block** in your context and print it after Preconditions and after each phase. The first six lines are begin's output:
+Keep this **State Block** in your context and print it after Preconditions and after each phase. The first six lines are begin's output, with the audit session id from step 3:
 
     train: <train-id>  base: <branch> @ <sha>  audit session: <id>
     ledger: <path> (<origin>, <format>, seq=<n>)

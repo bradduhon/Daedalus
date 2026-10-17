@@ -11,11 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from lib import train_state
-from lib.audit import cache_dir_or_probe
-from lib.audit_proof import SUMMARY_DIR, ProofError, live_log
+from lib.audit import DataDirError, cache_dir_or_probe, ensure_project_data_dir
+from lib.audit_proof import SUMMARY_DIR
 from lib.config import Config, ConfigError, load_config
 from lib.ledger import LedgerError, read_sequence, resolve_ledger
-from lib.train_scope import BEGIN_NEEDLE
 from lib.train_state import TRAIN_ID as _TRAIN_ID
 from lib.train_state import TRAIN_MARKER
 
@@ -308,7 +307,7 @@ def _undo_charter(charter: Path, base: str, exc: Exception) -> WorkspaceError:
     )
 
 
-def begin(cwd: Path, needle: str = BEGIN_NEEDLE) -> list[str]:
+def begin(cwd: Path) -> list[str]:
     # 0024: build-train Preconditions 1 to 9, ordered so a failure leaves no train state behind.
     repo = repo_root(cwd.resolve())
     dirty = _dirty(repo)
@@ -322,8 +321,9 @@ def begin(cwd: Path, needle: str = BEGIN_NEEDLE) -> list[str]:
         raise WorkspaceError(str(exc)) from exc
     ledger_line = _ledger_line(repo, config)
     try:
-        log, _ = live_log(repo, needle)
-    except ProofError as exc:
+        # 0035: the first write of a train; outside one the audit layer never creates this folder.
+        ensure_project_data_dir(str(repo))
+    except DataDirError as exc:
         raise WorkspaceError(str(exc)) from exc
     train_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     if train_state.state_path(repo, train_id).exists():
@@ -344,7 +344,6 @@ def begin(cwd: Path, needle: str = BEGIN_NEEDLE) -> list[str]:
             "charter_root": str(charter) if charter else None,
             "charter_base": charter_base,
             "charter_branch_created": charter is not None,
-            "audit_session": log.stem,
             "ledger_line": ledger_line,
             "cache_dir": cache,
             "units": [],
@@ -364,7 +363,7 @@ def begin(cwd: Path, needle: str = BEGIN_NEEDLE) -> list[str]:
     # 0019: a pack has no path in config.json; the standards specialist reads it from this line.
     packs = [f"{s.name} at {s.path}" for s in config.standards_sources if s.kind == "pack"]
     return [
-        f"train: {train_id}  base: {base} @ {base_sha}  audit session: {log.stem}",
+        f"train: {train_id}  base: {base} @ {base_sha}  audit session: pending",
         ledger_line,
         f"charter_root: {charter or 'none'}  charter base: {charter_base or 'none'}",
         f"policy: {policy}  standards: {len(config.standards_sources)} sources",

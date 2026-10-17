@@ -14,7 +14,6 @@ from typing import Any
 
 from lib.locks import bounded_flock
 from lib.redact import redact
-from lib.train_scope import BEGIN_NEEDLE
 
 GENESIS = "0" * 64
 # 8.2: character count of the stored head, not bytes; non-ASCII heads may exceed 4096 bytes.
@@ -305,23 +304,12 @@ def _tail_record(path: Path) -> dict[str, Any] | None:
         ) from exc
 
 
-def begins_train(hook_input: dict[str, Any]) -> bool:
-    tool_input = hook_input.get("tool_input")
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    return (
-        hook_input.get("hook_event_name") == "PreToolUse"
-        and hook_input.get("tool_name") == "Bash"
-        and isinstance(command, str)
-        and BEGIN_NEEDLE in command
-    )
-
-
 def audit_append(
     hook_input: dict[str, Any], decision: str | None = None, reason: str | None = None
 ) -> dict[str, Any] | None:
     data = project_data_dir(_require_cwd(hook_input.get("cwd")))
-    # 0035: no data dir means no train ever ran here; only the begin command's record creates it.
-    if not os.path.lexists(data) and not begins_train(hook_input):
+    # 0035: no data dir means no train started here; only the workspace begin command creates it.
+    if not os.path.lexists(data):
         return None
     path, lock = _session_file(hook_input.get("session_id"), hook_input.get("cwd"))
     ensure_project_data_dir(hook_input["cwd"])

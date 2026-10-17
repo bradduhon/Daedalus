@@ -407,17 +407,14 @@ def test_absent_config_allows_main_bash_and_writes_the_log(
     assert list((project_data / "audit").glob("*.jsonl"))
 
 
-def test_begin_command_creates_the_data_dir_and_its_record(
+def test_bash_naming_the_begin_command_creates_nothing(
     run_script: Any, repo_cwd: Path, hook_input: Any
 ) -> None:
-    # 0035: the begin command's own record is the one write that creates the data dir.
-    command = f"python3 /p/scripts/daedalus_workspace.py begin --repo {repo_cwd}"
+    # 0035: only the begin command itself creates the data dir; a record naming it does not.
+    command = f"grep -n 'daedalus_workspace.py begin --repo {repo_cwd}' README.md"
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": command}))
     assert result.returncode == 0, result.stderr
-    data = repo_cwd / ".claude" / "daedalus"
-    assert (data / ".gitignore").read_text() == "*\n"
-    rec = json.loads((data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
-    assert rec["tool_input"]["command"] == command
+    assert not (repo_cwd / ".claude").exists()
 
 
 def test_bad_config_still_allows_a_normal_read(

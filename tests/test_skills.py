@@ -378,6 +378,19 @@ def test_build_train_branches_the_charter_in_preconditions() -> None:
     ) in howto
 
 
+def test_build_train_proves_live_hooks_after_begin() -> None:
+    # 0035: begin creates the data dir; the next command proves hooks live, as in the Push Train.
+    pre = _section(_build_train(), "## Preconditions", "## Phase 1")
+    step = pre.split("\n3. ", 1)[1]
+    hooks = (
+        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_audit_chain.py --hooks-live --repo <repo>`"
+    )
+    assert step.startswith(f"Run {hooks}.")
+    assert pre.index(BEGIN) < pre.index(hooks)
+    assert "record `<id>` in the State Block as `audit session: <id>`" in step
+    assert "ends in `audit session: pending`" in pre
+
+
 def test_build_train_audits_from_the_integration_branch() -> None:
     # R4-C1: the contract commits sit on daedalus/<train-id>, outside every unit diff.
     phase3 = _section(_build_train(), "## Phase 3", "\n3. ")

@@ -260,19 +260,6 @@ def test_train_made_worktree_keeps_root_log_and_jail(live_repo: Path) -> None:
     )
 
 
-def _bash_hook(repo: Path, command: str) -> None:
-    # 0024: begin proves live hooks from its own PreToolUse record; the real jail writes it.
-    payload = {
-        "session_id": str(uuid.uuid4()),
-        "hook_event_name": "PreToolUse",
-        "cwd": str(repo),
-        "tool_name": "Bash",
-        "tool_input": {"command": command},
-    }
-    result = _jail_hook(payload)
-    assert result.returncode == 0, result.stderr
-
-
 def _span(recs: list[dict[str, Any]], agent_id: str) -> tuple[str, str]:
     mine = [r for r in recs if r["agent_id"] == agent_id]
     start = next(r["ts"] for r in mine if r["event"] == "SubagentStart")
@@ -292,7 +279,6 @@ def test_parallel_coders_stay_in_their_units(live_repo: Path) -> None:
     commit += ["commit.gpgsign=false", "commit", "-q", "-m", "init"]
     subprocess.run(["git", "-C", str(live_repo), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(live_repo), *commit], check=True)
-    _bash_hook(live_repo, f"python3 x/daedalus_workspace.py begin --repo {live_repo}")
     seed = begin(live_repo)
     train = seed[0].split()[1]
     # 0011: lock creates the integration branch in a real train; this test has no contract.

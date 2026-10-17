@@ -103,14 +103,12 @@ def _names_marked_repo(tool: str, tool_input: dict[str, Any], cwd: str) -> bool:
 def _fast_path(payload: dict[str, Any], agent: str, cwd: str) -> int:
     # 0023, 0035: outside a train, main and foreign agents meet only the credential read deny.
     from lib.credential_paths import CREDENTIAL_TOOLS, path_reason
-    from lib.train_scope import BEGIN_NEEDLE
 
     tool = str(payload.get("tool_name"))
     tool_input = payload.get("tool_input") or {}
     reason = path_reason(tool, tool_input, cwd) if tool in CREDENTIAL_TOOLS else None
-    command = str(tool_input.get("command") or "") if tool == "Bash" else ""
     data = _repo_root(cwd) / ".claude" / "daedalus"
-    if os.path.lexists(data) or BEGIN_NEEDLE in command:
+    if os.path.lexists(data):
         _fast_record(payload, agent, reason)
     return _block(agent, reason) if reason else 0
 

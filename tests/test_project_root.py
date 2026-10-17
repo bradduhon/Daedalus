@@ -10,7 +10,7 @@ import pytest
 from lib import audit
 
 _GIT_ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
-# 0035: the begin command's record is the only append that creates the data dir.
+# 0035: a record that only names the begin command creates nothing.
 BEGIN = {"command": "python3 /p/scripts/daedalus_workspace.py begin --repo /r"}
 
 
@@ -62,10 +62,9 @@ def test_git_dir_env_does_not_redirect(
     assert audit.project_root(str(repo_cwd)) == repo_cwd
 
 
-def test_begin_record_writes_star_marker_and_repo_stays_clean(
-    repo_cwd: Path, hook_input: Any
-) -> None:
-    audit.audit_append(hook_input(tool_input=BEGIN))
+def test_data_dir_writes_star_marker_and_repo_stays_clean(repo_cwd: Path, hook_input: Any) -> None:
+    audit.ensure_project_data_dir(str(repo_cwd))
+    audit.audit_append(hook_input())
     data = repo_cwd / ".claude" / "daedalus"
     assert (data / ".gitignore").read_text() == "*\n"
     assert (data.stat().st_mode & 0o777) == 0o700
@@ -81,6 +80,7 @@ def test_begin_record_writes_star_marker_and_repo_stays_clean(
         {},
         {"tool_name": "Read", "tool_input": {"file_path": "/etc/hosts"}},
         {"hook_event_name": "SessionStart"},
+        {"tool_input": BEGIN},
         {"hook_event_name": "PostToolUse", "tool_input": BEGIN},
     ],
 )
@@ -106,7 +106,8 @@ def test_worktree_append_lands_in_main_repo(
     assert _git(repo_cwd, "commit", "-q", "--allow-empty", "-m", "init").returncode == 0
     worktree = tmp_path.resolve() / "wt"
     assert _git(repo_cwd, "worktree", "add", "-q", str(worktree)).returncode == 0
-    audit.audit_append(hook_input(cwd=str(worktree), tool_input=BEGIN))
+    audit.ensure_project_data_dir(str(repo_cwd))
+    audit.audit_append(hook_input(cwd=str(worktree)))
     assert (repo_cwd / ".claude" / "daedalus" / "audit" / "sess-test.jsonl").exists()
     assert not (worktree / ".claude").exists()
     assert _git(worktree, "status", "--porcelain").stdout == ""
@@ -168,8 +169,9 @@ def test_symlinked_claude_dir_refuses(repo_cwd: Path, tmp_path: Path, hook_input
     elsewhere.mkdir()
     (repo_cwd / ".claude").symlink_to(elsewhere)
     assert audit.audit_append(hook_input()) is None
+    assert audit.audit_append(hook_input(tool_input=BEGIN)) is None
     with pytest.raises(audit.DataDirError, match="is a symlink"):
-        audit.audit_append(hook_input(tool_input=BEGIN))
+        audit.ensure_project_data_dir(str(repo_cwd))
     assert list(elsewhere.iterdir()) == []
 
 
@@ -225,7 +227,8 @@ def test_record_carries_project_root_and_git_source(
 def test_record_marks_cwd_fallback(tmp_path: Path, hook_input: Any) -> None:
     plain = tmp_path.resolve() / "plain"
     plain.mkdir()
-    rec = audit.audit_append(hook_input(cwd=str(plain), tool_input=BEGIN))
+    audit.ensure_project_data_dir(str(plain))
+    rec = audit.audit_append(hook_input(cwd=str(plain)))
     assert rec is not None
     assert rec["project_root"] == str(plain) and rec["root_source"] == "cwd-fallback"
     assert (plain / ".claude" / "daedalus" / "audit" / "sess-test.jsonl").exists()
