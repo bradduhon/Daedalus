@@ -32,9 +32,10 @@ def settings_paths(repo: Path, home: Path) -> tuple[Path, ...]:
     return (home / ".claude" / "settings.json", *(repo / p for p in PROJECT_SETTINGS))
 
 
-def sandbox_enabled(repo: Path, home: Path) -> bool:
-    # 0020: later files override earlier ones, the order the doctor always used.
+def _winner(repo: Path, home: Path) -> tuple[object, Path | None]:
+    # Plan 4 spec 5: later files override earlier ones; home is read only, never written (0029).
     value: object = None
+    source: Path | None = None
     for path in settings_paths(repo, home):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -44,8 +45,16 @@ def sandbox_enabled(repo: Path, home: Path) -> bool:
             raise SettingsError(f"{path} is not valid JSON ({exc}). Next: fix {path}") from exc
         block = data.get("sandbox") if isinstance(data, dict) else None
         if isinstance(block, dict) and "enabled" in block:
-            value = block["enabled"]
-    return value is True
+            value, source = block["enabled"], path
+    return value, source
+
+
+def sandbox_enabled(repo: Path, home: Path) -> bool:
+    return _winner(repo, home)[0] is True
+
+
+def sandbox_source(repo: Path, home: Path) -> Path | None:
+    return _winner(repo, home)[1]
 
 
 def sandbox_state(repo: Path, home: Path | None = None) -> str:

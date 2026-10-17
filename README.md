@@ -55,7 +55,7 @@ To turn it on, install bubblewrap and socat, then type:
 
     /daedalus:setup
 
-Setup refuses while either tool is missing, writes nothing, and prints what to install: the apt line on Debian and Ubuntu, the package names elsewhere. Otherwise it adds the sandbox settings, the credential deny rules and two prompt cache settings to `~/.claude/settings.json`. It adds keys you lack and deny entries you lack, and never changes a value you already set. It prints the change, then `Restart Claude Code to apply`. It rewrites the file as JSON with a 2-space indent. Setup runs only when you type the command; Claude never starts it on its own.
+Setup refuses while either tool is missing, writes nothing, and prints what to install: the apt line on Debian and Ubuntu, the package names elsewhere. Otherwise it adds the sandbox settings, the credential deny rules and two prompt cache settings to this repository's `.claude/settings.local.json`, and to no other file; run it once in each repository you use Daedalus in. It first checks that git ignores that file, and writes nothing until it does. It adds keys you lack and deny entries you lack, and never changes a value you already set. It prints the change, then `Restart Claude Code to apply`. It rewrites the file as JSON with a 2-space indent. Setup runs only when you type the command; Claude never starts it on its own.
 
 ## The three trains
 
@@ -123,7 +123,7 @@ Each agent's file lists the only tools it may use.
 | `contracts/<name>.md` | The contract is locked | The contract every coding agent works from, committed on the train's branch |
 | Rows in your decision ledger | An approved Build Train ends | One entry per ruling, appended through `append_ledger.py` |
 | `<cache>/frameworks/nist/` | You run `refresh_nist_oscal.py` | The pinned NIST catalog and its manifest |
-| `~/.claude/settings.json` | You type `/daedalus:setup` | The sandbox, credential deny and cache settings, merged into your own |
+| `<repo>/.claude/settings.local.json` | You type `/daedalus:setup` | The sandbox, credential deny and cache settings, merged into the repo's own; Daedalus never writes user-level settings |
 
 You write `<repo>/.claude/daedalus/config.json` yourself when you need it. It is optional and Daedalus never writes it (see Configuration below for the fields).
 

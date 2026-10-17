@@ -27,6 +27,7 @@ from lib.sandbox_state import (  # noqa: E402
     SettingsError,
     required_binaries,
     sandbox_check,
+    sandbox_source,
     sandbox_state,
 )
 from lib.workspace import UNMARK_NEXT, train_marker  # noqa: E402
@@ -83,6 +84,27 @@ def _cache_check() -> tuple[bool, str]:
     if not env and len(matches) > 1:
         found += f" ({CACHE_NAMING})"
     return True, f"OK   cache dir: {found}"
+
+
+USER_SETTINGS = "~/.claude/settings.json"
+USER_MOVE_NEXT = (
+    "Daedalus now writes .claude/settings.local.json per repo; remove the sandbox block from "
+    f"{USER_SETTINGS} from your own shell if you did not set it yourself"
+)
+
+
+def _sandbox_check(repo: Path) -> tuple[bool, str]:
+    # 0027, 0029: name the file that turned the sandbox on; the user file is read, never written.
+    ok, line = sandbox_check(repo)
+    if not ok:
+        return ok, line
+    home = Path.home()
+    source = sandbox_source(repo, home)
+    if source is None:
+        return ok, line
+    if source == home / ".claude" / "settings.json":
+        return ok, f"{line} ({USER_SETTINGS}). Next: {USER_MOVE_NEXT}"
+    return ok, f"{line} ({source.relative_to(repo)})"
 
 
 def _plugin_root_check() -> tuple[bool, str]:
@@ -279,7 +301,7 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     yield _marker_check(repo)
     yield _cache_check()
     yield _plugin_root_check()
-    yield sandbox_check(repo)
+    yield _sandbox_check(repo)
     yield _check(
         shutil.which("gitleaks") is not None,
         "gitleaks on PATH",

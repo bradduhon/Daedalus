@@ -134,11 +134,31 @@ def test_sandbox_off_is_a_miss_naming_setup(tmp_path: Path) -> None:
     assert result.returncode == 1
 
 
-def test_sandbox_on_in_user_settings_is_ok(tmp_path: Path) -> None:
+USER_MOVE_NEXT = (
+    "Next: Daedalus now writes .claude/settings.local.json per repo; remove the sandbox "
+    "block from ~/.claude/settings.json from your own shell if you did not set it yourself"
+)
+
+
+def test_user_level_sandbox_gets_the_move_next(tmp_path: Path) -> None:
+    # 0027, 0029: the doctor reads the user file for reporting and never writes it.
     home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    user = home / ".claude" / "settings.json"
+    _settings(user, {"sandbox": {"enabled": True}})
+    before = user.read_text()
     result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
-    assert _sandbox_line(result) == "OK   sandbox: on"
+    line = _sandbox_line(result)
+    assert line == f"OK   sandbox: on (~/.claude/settings.json). {USER_MOVE_NEXT}"
+    assert user.read_text() == before
+
+
+@pytest.mark.parametrize("name", ["settings.json", "settings.local.json"])
+def test_sandbox_line_names_its_source_file(tmp_path: Path, name: str) -> None:
+    home = tmp_path / "home"
+    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": False}})
+    _settings(tmp_path / ".claude" / name, {"sandbox": {"enabled": True}})
+    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
+    assert _sandbox_line(result) == f"OK   sandbox: on (.claude/{name})"
 
 
 @NEEDS_BINARIES

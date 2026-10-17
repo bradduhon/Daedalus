@@ -791,6 +791,16 @@ def test_setup_skill_runs_the_setup_script_only_when_asked() -> None:
     assert "Restart Claude Code to apply" in body
 
 
+def test_setup_skill_names_the_repo_local_file() -> None:
+    # 0027, 0029: setup writes the repo's .claude/settings.local.json and no user-level file.
+    fields, body = _split(SETUP)
+    for text in (fields["description"], body):
+        assert ".claude/settings.local.json" in text
+        assert "~/.claude/settings.json" not in text
+    assert "`OK   sandbox: on (.claude/settings.local.json)`" in body
+    assert "from their own shell" in body
+
+
 DOCTOR = REPO_ROOT / "skills" / "doctor" / "SKILL.md"
 DOCTOR_CMD = "python3 ${CLAUDE_SKILL_DIR}/../../scripts/daedalus_doctor.py"
 
