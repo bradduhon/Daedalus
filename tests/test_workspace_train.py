@@ -411,6 +411,19 @@ def test_stop_keeps_an_uncommitted_contract(repo: Path, live: None) -> None:
     assert f"kept on daedalus/{train}: contracts/api.md" in lines
 
 
+def test_stop_keeps_the_integration_branch_for_an_uncommitted_charter_contract(
+    repo: Path, charter: Path, live: None
+) -> None:
+    train = _train(repo)
+    path = _contract(charter, "specs/api.md")
+    lock(repo, str(path), 1)
+    path.write_text("packet v2\n")
+    lines, ok = stop(repo, "contract revision refused", None)
+    assert ok and _head(repo) == f"daedalus/{train}" and _head(charter) == f"daedalus/{train}"
+    assert f"kept on daedalus/{train}: charter/specs/api.md" in lines
+    assert lines[-1].startswith(f"Next: commit or discard those files on daedalus/{train}")
+
+
 def test_stop_keeps_a_dirty_charter(repo: Path, charter: Path, live: None) -> None:
     train = _train(repo)
     (charter / "specs").mkdir()

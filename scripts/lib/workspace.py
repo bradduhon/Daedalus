@@ -528,6 +528,9 @@ def _integration_back(
         return True
     # 0024: a dirty main checkout or uncommitted contract stays on the integration branch.
     dirty = _dirty(repo)
+    if state.get("charter_root"):
+        charter = Path(state["charter_root"])
+        dirty += [f"{charter.name}/{p}" for p in _dirty(charter, "--", "specs/")]
     if dirty:
         lines.append(f"kept on {integration}: {_shown(dirty)}")
         nexts.append(
