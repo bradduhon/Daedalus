@@ -2197,9 +2197,6 @@ class TestFixWaveConductorGh:
         "command",
         [
             "gh pr edit 3 --body-file docs/.tmp/pr.md -db b",
-            "gh pr edit 3 --body b",
-            "gh pr edit 3 -b b",
-            "gh pr edit 3 --body=b",
             "gh pr edit 3 --title t",
             "gh pr comment 3 --body b",
             "gh pr comment 3 -b b",
@@ -2209,18 +2206,36 @@ class TestFixWaveConductorGh:
             "gh pr edit daedalus/T --base=dev --body-file docs/.tmp/pr.md",
             "gh pr edit daedalus/T -B dev --body-file docs/.tmp/pr.md",
             "gh pr edit daedalus/T -Bdev --body-file docs/.tmp/pr.md",
-            "gh pr edit daedalus/T --body-file docs/.tmp/pr.md",
             "gh pr comment 3 --body-file docs/.tmp/c.md",
             "gh pr comment 3 -F/tmp/c.md",
-            "gh pr edit daedalus/T -F/tmp/Build-body.md",
-            "gh pr edit 3 --body-file /tmp/pr.md",
             "gh pr diff 3",
         ],
     )
     def test_edit_comment_diff_refused_by_0028(self, command: str) -> None:
-        # K1, 0028: pr edit, comment and diff are off the 0028 list; the body rules bind create.
+        # K1, 0028: comment, diff and any pr edit beyond the body are off the 0028 list.
         d = decide(_b(self.C, command), CFG)
         assert not d.allow and "is a default-deny command" in str(d.reason), command
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "gh pr edit daedalus/T --body-file docs/.tmp/pr.md",
+            "gh pr edit daedalus/T -F/tmp/Build-body.md",
+            "gh pr edit 3 --body-file /tmp/pr.md",
+        ],
+    )
+    def test_pr_edit_body_file_allowed(self, command: str) -> None:
+        # K1: the conductor may replace its PR body from a file.
+        d = decide(_b(self.C, command), CFG)
+        assert d.allow, (command, d.reason)
+
+    @pytest.mark.parametrize(
+        "command", ["gh pr edit 3 --body b", "gh pr edit 3 -b b", "gh pr edit 3 --body=b"]
+    )
+    def test_pr_edit_inline_body_refused(self, command: str) -> None:
+        # K1: the body comes only from --body-file.
+        d = decide(_b(self.C, command), CFG)
+        assert not d.allow and "only from --body-file" in str(d.reason), command
 
 
 class TestFixWaveGitleaksRedact:

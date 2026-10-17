@@ -38,7 +38,7 @@ Rules for the whole train:
    - "Run `gitleaks detect --redact --log-opts=<base sha>..daedalus/<train-id>`. Any finding: paste the gitleaks output unchanged and end with `[STATUS: BLOCKED] gitleaks findings`."
    - "Run `git push -u origin daedalus/<train-id>`."
    - "Run `gh pr view daedalus/<train-id> --json url`. With no pull request, or only a closed one, run `gh pr create --base <base branch> --head daedalus/<train-id> --title "Build Train <train-id>" --body-file <repo>/docs/.tmp/daedalus/<train-id>-summary.md`. With an open one, run `gh pr edit daedalus/<train-id> --body-file <repo>/docs/.tmp/daedalus/<train-id>-summary.md`."
-   - "Use only the commands above. Never run `git commit -a` or `git commit -am`, never `gh pr edit --base`, and never `gh pr create --body`; the body comes only from `--body-file`."
+   - "Use only the commands above. Never run `git commit -a` or `git commit -am`, never `gh pr edit` with any flag but `--body-file`, and never `gh pr create --body`; the body comes only from `--body-file`."
    - "End with `[STATUS: PUSHED] branch=daedalus/<train-id> pr=<url>`. Never merge."
 2. Route the reply:
    - `[STATUS: PUSHED] branch=<b> pr=<url>`: record the URL.

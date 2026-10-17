@@ -6,10 +6,9 @@ import os
 import re
 
 CONDUCTOR = "pr-train-conductor"
-# 0028: the 0028 allowed list intersected with the conductor's Plan 2 set.
-# K1: pr edit waits on a ruling; until then it is default-deny like any other form.
+# 0028: the allowed list intersected with the conductor's set; K1: pr edit changes the body only.
 CONDUCTOR_GH = frozenset(
-    {("pr", "create"), ("pr", "view"), ("pr", "list"), ("pr", "checks")}
+    {("pr", "create"), ("pr", "edit"), ("pr", "view"), ("pr", "list"), ("pr", "checks")}
     | {("run", "list"), ("run", "view"), ("run", "watch")}
 )
 MAIN_GH = frozenset({("auth", "status")})
@@ -21,6 +20,8 @@ CLASS_NEXT = {
     "default-deny": "only the Push Train's conductor runs gh",
 }
 PUSH_NEXT = "push from your own shell, or through /daedalus:push-train"
+EDIT_NEXT = "edit only the body with --body-file; the operator changes anything else on the PR"
+_EDIT_BODY_LONG = frozenset({"--body", "--body-file"})
 ADMIN_COMMANDS = frozenset({"secret", "variable", "ruleset"})
 ADMIN_REPO = frozenset({"edit", "rename", "archive", "unarchive", "deploy-key"})
 _GH_VALUE_FLAGS = frozenset({"-R", "--repo"})
@@ -142,6 +143,29 @@ def _classify_api(args: list[str]) -> tuple[str, str]:
     return "default-deny", detail
 
 
+def _body_only_edit(args: list[str]) -> bool:
+    # K1: pr edit passes only with body flags and at most one PR selector.
+    if args[:2] != ["pr", "edit"]:
+        return False
+    selectors = 0
+    i = 2
+    while i < len(args):
+        arg = args[i]
+        if arg.startswith("--"):
+            name, eq, _ = arg.partition("=")
+            if name not in _EDIT_BODY_LONG:
+                return False
+            i += 1 if eq else 2
+        elif arg[:2] in {"-b", "-F"}:
+            i += 1 if len(arg) > 2 else 2
+        elif arg.startswith("-"):
+            return False
+        else:
+            selectors += 1
+            i += 1
+    return selectors <= 1
+
+
 def classify(tokens: list[str]) -> tuple[str, str]:
     # 0028: merge, delete and admin are refused for everyone; everything off the list is denied.
     args = tokens[1:]
@@ -159,6 +183,8 @@ def classify(tokens: list[str]) -> tuple[str, str]:
         return "delete", detail
     if cmd in ADMIN_COMMANDS or (cmd == "repo" and sub in ADMIN_REPO):
         return "admin", detail
+    if (cmd, sub) == ("pr", "edit") and not _body_only_edit(args):
+        return "default-deny", detail
     if (cmd, sub) in ALLOWED_0028:
         return "allow", detail
     return "default-deny", detail
@@ -187,10 +213,10 @@ def _gh_reason(agent: str, tokens: list[str]) -> str | None:
         return (
             f"gh {detail} is not on the {agent} gh list (0028). Next: {CLASS_NEXT['default-deny']}."
         )
+    nxt = EDIT_NEXT if agent == CONDUCTOR and detail == "pr edit" else CLASS_NEXT[klass]
     return (
         f"gh {detail} is a {klass} command, refused while a train runs and to every "
-        f"Daedalus agent (0028, 0035). "
-        f"Next: {CLASS_NEXT[klass]}."
+        f"Daedalus agent (0028, 0035). Next: {nxt}."
     )
 
 

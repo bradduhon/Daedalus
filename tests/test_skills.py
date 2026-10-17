@@ -463,7 +463,7 @@ def test_push_train_dispatch_pins_flags_and_paths() -> None:
     for forbidden in (
         "Never run `git commit -a`",
         "`git commit -am`",
-        "never `gh pr edit --base`",
+        "never `gh pr edit` with any flag but `--body-file`",
         "never `gh pr create --body`",
     ):
         assert forbidden in text, forbidden
@@ -697,24 +697,23 @@ def test_issue30_skill_script_commands_pass_for_main_during_a_train(
 _CONDUCTOR_CMD = re.compile(r"(?:[Rr]un|then) `((?:git|gh|gitleaks) [^`]+)`")
 
 
-def _conductor_commands() -> list[Any]:
+def _conductor_commands() -> list[str]:
     # 0028: every command the Push section hands the conductor, minus its never-run list.
     push = _section(PUSH_TRAIN.read_text(encoding="utf-8"), "## Push", "## Charter branch")
     allowed = "\n".join(ln for ln in push.splitlines() if "Use only the commands above" not in ln)
-    commands = sorted(set(_CONDUCTOR_CMD.findall(allowed)))
-    return [
-        pytest.param(c, marks=pytest.mark.xfail(reason="waits on K1", strict=True))
-        if c.startswith("gh pr edit")
-        else c
-        for c in commands
-    ]
+    return sorted(set(_CONDUCTOR_CMD.findall(allowed)))
 
 
 @pytest.mark.parametrize("command", _conductor_commands())
 def test_push_train_conductor_commands_pass_the_jail(
     repo_cwd: Path, project_data: Path, command: str
 ) -> None:
-    # K1: gh pr edit is refused until ruled; strict xfail turns green-on-ruling into a failure.
+    # K1: gh pr edit with --body-file is on the conductor's list.
+    d = _conductor_decide(repo_cwd, project_data, command)
+    assert d.allow, (command, d.reason)
+
+
+def _conductor_decide(repo_cwd: Path, project_data: Path, command: str) -> Any:
     from lib.config import Config
     from lib.jail import decide
 
@@ -728,12 +727,18 @@ def test_push_train_conductor_commands_pass_the_jail(
         "agent_type": "pr-train-conductor",
         "agent_id": "a-1",
     }
-    d = decide(payload, Config())
-    assert d.allow, (concrete, d.reason)
+    return decide(payload, Config())
+
+
+def test_push_train_conductor_pr_edit_title_refused(repo_cwd: Path, project_data: Path) -> None:
+    # K1: the conductor's pr edit changes the body only.
+    command = "gh pr edit daedalus/<train-id> --title t --body-file <repo>/docs/.tmp/pr.md"
+    d = _conductor_decide(repo_cwd, project_data, command)
+    assert not d.allow and "Next: edit only the body with --body-file" in str(d.reason)
 
 
 def test_push_train_names_conductor_commands() -> None:
-    commands = [p if isinstance(p, str) else p.values[0] for p in _conductor_commands()]
+    commands = _conductor_commands()
     assert "git push -u origin daedalus/<train-id>" in commands
     assert any(c.startswith("gh pr edit daedalus/<train-id> --body-file") for c in commands)
 

@@ -127,7 +127,7 @@ SHELL_STATE_CMDS = frozenset(
 )
 DIR_CHANGE_CMDS = frozenset({"cd", "pushd", "popd"})
 NETWORK_TOOLS = frozenset({"curl", "wget", "ssh", "scp", "nc", "ncat", "telnet", "aws", "gh"})
-# 0028: the conductor's gh set lives in lib.gh_policy; K1 keeps pr edit off it.
+# 0028: the conductor's gh set lives in lib.gh_policy.
 GH_ALLOWED = {cmd: frozenset(sub for c, sub in CONDUCTOR_GH if c == cmd) for cmd, _ in CONDUCTOR_GH}
 # 8.5 ruling A: first tokens a worker may never run, bar the allowlisted test runner forms.
 WORKER_WRAPPERS = frozenset(

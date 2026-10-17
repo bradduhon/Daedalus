@@ -24,7 +24,7 @@ No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already retu
 4. `gh pr create` (or `gh pr edit`) with the Build Train summary as the body: pass the summary
    file path given in your prompt with `--body-file`; it must be under `docs/.tmp/` or `/tmp`.
    The hook refuses `gh pr create`, `gh pr edit` and `gh pr comment` without `--body-file`
-   and with `--body` or `-b`, and refuses `gh pr edit --base`.
+   and with `--body` or `-b`, and refuses `gh pr edit` with any flag but `--body-file`.
 5. `gh run watch` each triggered workflow. Report each run's conclusion verbatim.
 6. Never retry a failed workflow, never modify files, never merge. The operator reviews and
    merges the PR. Report and stop.

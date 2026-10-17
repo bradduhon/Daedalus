@@ -129,16 +129,53 @@ def test_conductor_allowlist(train_repo: Path, command: str) -> None:
         assert "(0028)" in reason and "Next: only the Push Train's conductor runs gh." in reason
 
 
-def test_conductor_pr_edit_waits_on_k1(train_repo: Path) -> None:
-    # K1: pr edit is off the 0028 list until ruled; the Push Train's edit step waits on it.
-    command = "gh pr edit 3 --body-file docs/.tmp/pr.md"
-    _class_refused(
-        train_repo,
-        "pr-train-conductor",
-        command,
-        "default-deny",
-        "only the Push Train's conductor runs gh",
-    )
+EDIT_NEXT = "edit only the body with --body-file; the operator changes anything else on the PR"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr edit 3 --body-file docs/.tmp/pr.md",
+        "gh pr edit https://github.com/o/r/pull/3 -F docs/.tmp/pr.md",
+        "gh pr edit daedalus/x --body-file=docs/.tmp/pr.md",
+        "gh pr edit -Fdocs/.tmp/pr.md",
+    ],
+)
+def test_conductor_may_edit_its_pr_body(train_repo: Path, command: str) -> None:
+    # K1: body-only pr edit is on the conductor's list.
+    assert classify(shlex.split(command)) == ("allow", "pr edit")
+    d = decide(_bash(train_repo, "pr-train-conductor", command), Config())
+    assert d.allow, d.reason
+
+
+@pytest.mark.parametrize("command", ["gh pr edit 3 --body x", "gh pr edit 3 -b x"])
+def test_pr_edit_inline_body_passes_policy_then_the_file_rule(
+    train_repo: Path, command: str
+) -> None:
+    # K1: the policy allows the body flags; the conductor's file-only body rule still refuses.
+    assert classify(shlex.split(command)) == ("allow", "pr edit")
+    assert "only from --body-file" in _reason(train_repo, "pr-train-conductor", command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr edit 3 --title t --body-file docs/.tmp/pr.md",
+        "gh pr edit 3 -t t",
+        "gh pr edit 3 --add-label x",
+        "gh pr edit 3 --remove-reviewer u",
+        "gh pr edit 3 --base main",
+        "gh pr edit 3 -B main",
+        "gh pr edit 3 --milestone m",
+        "gh pr edit 3 4 --body-file docs/.tmp/pr.md",
+        "gh -R o/r pr edit 3 --body-file docs/.tmp/pr.md",
+        "gh pr edit 3 -R o/r --body-file docs/.tmp/pr.md",
+    ],
+)
+def test_conductor_pr_edit_other_flags_refused(train_repo: Path, command: str) -> None:
+    # K1: anything beyond the body is default-deny with its own Next line.
+    assert classify(shlex.split(command)) == ("default-deny", "pr edit")
+    _class_refused(train_repo, "pr-train-conductor", command, "default-deny", EDIT_NEXT)
 
 
 def test_main_may_run_only_gh_auth_status(train_repo: Path) -> None:
