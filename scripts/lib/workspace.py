@@ -360,6 +360,8 @@ def begin(cwd: Path, needle: str = BEGIN_NEEDLE) -> list[str]:
             raise _undo_charter(charter, charter_base, exc) from exc
         raise WorkspaceError(str(exc)) from exc
     policy = f"{config.policy.engine} {config.policy.path}" if config.policy else "none declared"
+    # 0019: a pack has no path in config.json; the standards specialist reads it from this line.
+    packs = [f"{s.name} at {s.path}" for s in config.standards_sources if s.kind == "pack"]
     return [
         f"train: {train_id}  base: {base} @ {base_sha}  audit session: {log.stem}",
         ledger_line,
@@ -367,6 +369,7 @@ def begin(cwd: Path, needle: str = BEGIN_NEEDLE) -> list[str]:
         f"policy: {policy}  standards: {len(config.standards_sources)} sources",
         f"cache: {cache}" if cache else "cache: unresolved",
         f"sandbox: {sandbox}",
+        f"standards packs: {', '.join(packs) or 'none declared'}",
     ]
 
 

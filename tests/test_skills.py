@@ -105,6 +105,20 @@ def test_build_train_probes_the_ledger_and_asks() -> None:
     assert "append_ledger.py --probe" in pre
 
 
+def test_build_train_hands_the_pack_path_to_the_standards_specialist() -> None:
+    # 0019: a declared pack has no path in config.json; begin prints it, every dispatch carries it.
+    text = _build_train()
+    assert "    standards packs: <name> at <path>, or none declared\n" in text
+    assert "The first seven lines are begin's output" in text
+    rules = text.split("## Preconditions", 1)[0]
+    dispatch = next(ln for ln in rules.splitlines() if "standards-rules-specialist dispatch" in ln)
+    assert "the `standards packs:` line" in dispatch
+    phase1 = _section(text, "## Phase 1", "## Phase 2")
+    assert "the `standards packs:` line" in phase1.split("\n2. ", 1)[0]
+    agent = (REPO_ROOT / "agents" / "standards-rules-specialist.md").read_text(encoding="utf-8")
+    assert "`standards packs:` line" in agent
+
+
 def test_build_train_routes_every_yield_and_the_contradiction_stop() -> None:
     text = _build_train()
     for route in ("YIELD_WEB", "YIELD_CONTRACT", "YIELD_COMPLIANCE", "YIELD_STANDARDS"):

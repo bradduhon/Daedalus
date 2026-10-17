@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 from lib import audit, train_state, workspace
+from lib.config import PACKS_DIR
 from lib.sandbox_state import SettingsError
 from lib.workspace import (
     WorkspaceError,
@@ -110,6 +111,7 @@ def _nothing_written(repo: Path) -> None:
 def test_begin_prints_the_state_block_seed(repo: Path, live: None) -> None:
     lines = begin(repo)
     prefixes = ["train: ", "ledger: ", "charter_root: ", "policy: ", "cache: ", "sandbox: "]
+    prefixes.append("standards ")
     assert [line.split(" ")[0] + " " for line in lines] == prefixes
     train = lines[0].split()[1]
     sha = _ok(repo, "rev-parse", "HEAD")
@@ -121,6 +123,7 @@ def test_begin_prints_the_state_block_seed(repo: Path, live: None) -> None:
     assert lines[3] == "policy: none declared  standards: 0 sources"
     assert lines[4] == "cache: unresolved"
     assert lines[5] == "sandbox: off"
+    assert lines[6] == "standards packs: none declared"
     state = train_state.load(repo, train)
     assert state["base_branch"] == "main" and state["base_sha"] == sha
     assert state["audit_session"] == "sess-test" and state["units"] == []
@@ -129,10 +132,10 @@ def test_begin_prints_the_state_block_seed(repo: Path, live: None) -> None:
     assert _git(repo, "status", "--porcelain").stdout == ""
 
 
-def test_begin_cli_prints_six_lines(repo: Path, live: None) -> None:
+def test_begin_cli_prints_seven_lines(repo: Path, live: None) -> None:
     result = _cli("begin", "--repo", str(repo))
     assert result.returncode == 0, result.stderr
-    assert len(result.stdout.splitlines()) == 6
+    assert len(result.stdout.splitlines()) == 7
 
 
 def test_begin_stops_on_a_dirty_tree(repo: Path, live: None) -> None:
@@ -228,6 +231,17 @@ def test_begin_reports_policy_and_cache(
     assert lines[3] == "policy: conftest policy  standards: 1 sources"
     assert lines[4] == f"cache: {cache.resolve()}/frameworks"
     assert os.path.isabs(lines[4].split()[1])
+
+
+def test_begin_prints_the_declared_pack_path(repo: Path, live: None) -> None:
+    # 0019, 0026: the standards specialist reads a pack at the path begin resolves.
+    config = {"standards_sources": [{"kind": "pack", "name": "baseline"}]}
+    (repo / ".claude" / "daedalus" / "config.json").write_text(json.dumps(config))
+    lines = begin(repo)
+    assert lines[3] == "policy: none declared  standards: 1 sources"
+    pack = PACKS_DIR / "baseline"
+    assert lines[6] == f"standards packs: baseline at {pack}"
+    assert pack.is_absolute() and (pack / "rules.md").is_file()
 
 
 def _train(repo: Path) -> str:
