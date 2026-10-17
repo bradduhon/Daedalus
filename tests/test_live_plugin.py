@@ -241,7 +241,8 @@ def test_train_made_worktree_keeps_root_log_and_jail(live_repo: Path) -> None:
         f"Worktree: {wt2}\nWrite the file {good} containing ok.\n"
         f"Write the file {bad} containing x.\nThen say done."
     )
-    run = _claude([prompt, *WORKER_TOOLS, "Write"], live_repo)
+    # Operator user-level hooks stay out of the result.
+    run = _claude([prompt, *WORKER_TOOLS, "Write", "--setting-sources", "project,local"], live_repo)
     pre = [r for r in _records(run) if r["event"] == "PreToolUse" and r["agent_type"] == PROBE]
     assert pre, "no PreToolUse record from the coder"
     assert all(Path(r["cwd"]).resolve() == live_repo for r in pre), [r["cwd"] for r in pre]
