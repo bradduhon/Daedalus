@@ -82,7 +82,7 @@ def _cache_check() -> tuple[bool, str]:
     elif matches:
         found = ", ".join(matches)
     else:
-        found = f"none yet (create it with scripts/refresh_nist_oscal.py or by hand per {REQ_DOC})"
+        found = f"none yet (create it with scripts/refresh_frameworks.py or by hand per {REQ_DOC})"
     if not env and len(matches) > 1:
         found += f" ({CACHE_NAMING})"
     return True, f"OK   cache dir: {found}"

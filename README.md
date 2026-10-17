@@ -122,7 +122,7 @@ Each agent's file lists the only tools it may use.
 | `<repo>/docs/decisions.md` | You answer "create" to the Build Train's ledger question | A new ledger holding only a table header |
 | `contracts/<name>.md` | The contract is locked | The contract every coding agent works from, committed on the train's branch |
 | Rows in your decision ledger | An approved Build Train ends | One entry per ruling, appended through `append_ledger.py` |
-| `<cache>/frameworks/nist/` | You run `refresh_nist_oscal.py` | The pinned NIST catalog and its manifest |
+| `<cache>/frameworks/<family>/` | You run `refresh_frameworks.py` | The pinned framework files and their manifest |
 | `<repo>/.claude/settings.local.json` | You type `/daedalus:setup` | The sandbox, credential deny and cache settings, merged into the repo's own; Daedalus never writes user-level settings |
 
 You write `<repo>/.claude/daedalus/config.json` yourself when you need it. It is optional and Daedalus never writes it (see Configuration below for the fields).
@@ -137,9 +137,9 @@ The commands below run from your own shell. `<plugin>` is the path the doctor pr
 
 Exit 1 means no cache exists yet; run `/daedalus:doctor` inside Claude Code once.
 
-The nist-specialist needs the NIST catalog, in NIST's OSCAL JSON format. Without it, the specialist stops the train with `CACHE_INVALID`. Fetch it with:
+The nist-specialist needs the NIST catalog, in NIST's OSCAL JSON format. Without it, the specialist stops the train with `CACHE_INVALID`. Fetch every pinned framework with:
 
-    python3 <plugin>/scripts/refresh_nist_oscal.py
+    python3 <plugin>/scripts/refresh_frameworks.py
 
 CIS Benchmark files are licensed, so you place them by hand in `<cache>/frameworks/cis/`. Next to them you write a `manifest.json` with one entry per file, holding its name and its `sha256sum` hash. The exact format is in [docs/project-requirements.md](docs/project-requirements.md), under "CIS benchmarks".
 
@@ -184,6 +184,7 @@ Daedalus/
 │   ├── lib/__init__.py
 │   ├── lib/audit.py                 # hash-chained append, redaction
 │   ├── lib/config.py                # config.json loading and validation
+│   ├── lib/fetch.py                 # GitHub-only download, size cap and cache lock for refreshes
 │   ├── lib/jail.py                  # per-agent tool policy
 │   ├── lib/ledger.py                # ledger resolution, sequence read, entry format
 │   ├── lib/locks.py                 # bounded flock shared by audit and ledger writers
@@ -198,7 +199,7 @@ Daedalus/
 │   ├── daedalus_setup.py            # sandbox settings merge behind /daedalus:setup
 │   ├── daedalus_workspace.py        # create and remove unit worktrees; mark the running train
 │   ├── enforce_agent_jail.py        # PreToolUse policy
-│   ├── refresh_nist_oscal.py        # operator-run: pull and pin the NIST OSCAL catalog
+│   ├── refresh_frameworks.py        # operator-run: compile the pinned framework caches
 │   ├── sandbox_notice.py            # SessionStart sandbox line
 │   └── verify_audit_chain.py        # recompute and verify a session's hash chain
 ├── skills/

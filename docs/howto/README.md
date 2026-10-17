@@ -39,7 +39,7 @@ Example output from a real run in a new repository with one empty commit, on a m
     OK   ledger: none found (the Build Train asks before creating docs/decisions.md)
     OK   standards_sources: not declared (optional)
     OK   policy: not declared (optional)
-    OK   cache dir: none yet (create it with scripts/refresh_nist_oscal.py or by hand per docs/project-requirements.md)
+    OK   cache dir: none yet (create it with scripts/refresh_frameworks.py or by hand per docs/project-requirements.md)
     OK   plugin root: ~/.claude/plugins/cache/daedalus/daedalus/2.0.0
     MISS sandbox: off. Next: type /daedalus:setup yourself; the model cannot run it
     MISS gitleaks on PATH: not found. Next: the Push Train scans commits with gitleaks; install it so the scan can run

@@ -516,7 +516,7 @@ def test_cache_dir_absent_is_ok(tmp_path: Path) -> None:
     result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
     lines = result.stdout.splitlines()
     assert (
-        "OK   cache dir: none yet (create it with scripts/refresh_nist_oscal.py "
+        "OK   cache dir: none yet (create it with scripts/refresh_frameworks.py "
         "or by hand per docs/project-requirements.md)"
     ) in lines
     assert not any(line.startswith("MISS cache") for line in lines)

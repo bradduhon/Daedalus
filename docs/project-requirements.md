@@ -83,25 +83,27 @@ It prints one absolute path, called `<cache>` below. Exit 1 means no cache exist
 
 The specialists verify every hash before they answer. A mismatch or a missing file stops the train with `CACHE_INVALID`.
 
-### NIST catalog (`<cache>/frameworks/nist/`)
+### NIST catalogs (`<cache>/frameworks/nist/`)
 
 Run the refresh script from your own shell. It uses the network:
 
-    python3 <plugin>/scripts/refresh_nist_oscal.py
+    python3 <plugin>/scripts/refresh_frameworks.py
 
-It downloads the NIST SP 800-53 rev5 OSCAL catalog from `usnistgov/oscal-content` on GitHub and writes two files:
+Each adapter downloads one framework from a pinned upstream release on GitHub and writes it under `<cache>/frameworks/<family>/`. The NIST adapters pin `usnistgov/oscal-content` tag `v1.5.0`:
 
-- `catalog.json`: the catalog itself.
-- `manifest.json`: `catalog_file` (`catalog.json`), `catalog_sha256`, `revision` (the catalog's own version), `pinned_on` (UTC date), `upstream_commit` (the oscal-content commit that last changed the file, or `null` when the GitHub API lookup fails or the source is not oscal-content `main`) and `source_url`.
+- `nist-800-53` writes `catalog.json`, the NIST SP 800-53 rev5 OSCAL catalog.
+- `nist-csf-2.0` writes `csf-2.0.json`, the NIST Cybersecurity Framework 2.0 OSCAL catalog.
 
-With no `--dest`, the files go to `<cache>/frameworks/nist/`, using the same lookup as `--print-cache-dir`. `--dest <dir>` writes elsewhere. `--source-url <url>` takes another `https` URL on `github.com`, `raw.githubusercontent.com` or `api.github.com`, with no user name, query, fragment, `.` or `..` segment, space or control character. The script refuses:
+Next to them it writes `manifest.json`, a JSON list with one entry per file: `file`, `sha256`, `version` (the catalog's own `metadata.version`), `pinned_on` (UTC date), `source_url`, `upstream_ref` (the pinned tag) and `license` (`public domain (17 U.S.C. 105)`). A run replaces only the entries of the adapters it ran.
 
-- a redirect that breaks the same URL rules;
+`--only nist-800-53,nist-csf-2.0` runs the named adapters; with no `--only` every adapter runs. `--cache-root <dir>` writes under `<dir>/frameworks/` instead of the cache found by `--print-cache-dir`. The pinned URLs are `https` on `raw.githubusercontent.com`. The script refuses:
+
+- a redirect off `github.com`, `raw.githubusercontent.com` or `api.github.com`, or one with a user name, query, fragment, `.` or `..` segment, backslash or encoded slash;
 - a response over 64 MiB;
-- a download that is not a JSON object with a printable `catalog.metadata.version` of 64 characters or fewer (or a top-level `metadata.version` when the file has no `catalog` key);
-- a symlink anywhere from the cache directory down to the target directory (with `--dest`, from its first existing parent down), or at `catalog.json`, `manifest.json` or `.refresh.lock`.
+- a NIST download that is not a JSON object with a printable `catalog.metadata.version` of 64 characters or fewer (or a top-level `metadata.version` when the file has no `catalog` key);
+- a symlink anywhere from the cache directory down to the family directory (with `--cache-root`, from its first existing parent down), or at a cache file, `manifest.json` or `.refresh.lock`.
 
-Every failure exits 1 with a `Next:` line. A run holds `.refresh.lock` in the target directory, so a second run waits up to 60 s for it and exits 1 if it is still held. A failure before the files are replaced leaves the previous pair in place. A run killed between the two replaces leaves a new catalog with the old manifest, and the specialist reports `CACHE_INVALID` until you run the script again. Run it again whenever you want a newer catalog; the nist specialist notes a `pinned_on` older than 90 days.
+Each line `pinned <adapter> <version> sha256=<hash> at <path>` names a written file. Every failure prints the adapter name and a `Next:` line, and the script exits 1 after the other adapters run. A run holds `.refresh.lock` in the family directory, so a second run waits up to 60 s for it and fails that adapter if it is still held. An adapter that fails before its files are replaced leaves its previous files and manifest entries in place. Run the script again whenever you want to re-pin; the doctor marks a family older than 90 days.
 
 ### CIS benchmarks (`<cache>/frameworks/cis/`)
 
