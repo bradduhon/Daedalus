@@ -3,37 +3,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-import json
+import argparse
 import sys
-from collections.abc import Iterable
 from pathlib import Path
+from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib.audit import GENESIS, record_hash  # noqa: E402
+from lib.audit_proof import NOT_UTF8, ProofError, approved, hooks_live, verify_lines  # noqa: E402
 
-NOT_UTF8 = "BROKEN: {path} is not valid UTF-8. Next: keep the file, report it, do not edit it."
-
-
-def verify_lines(lines: Iterable[str]) -> tuple[bool, str]:
-    prev, expect_seq, count = GENESIS, 1, 0
-    for lineno, raw in enumerate(lines, start=1):
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            rec = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            return False, f"BROKEN line {lineno}: not JSON ({exc.msg})"
-        if not isinstance(rec, dict):
-            return False, f"BROKEN line {lineno}: not a JSON object"
-        if rec.get("seq") != expect_seq:
-            return False, f"BROKEN line {lineno}: seq {rec.get('seq')} != {expect_seq}"
-        if rec.get("prev_hash") != prev:
-            return False, f"BROKEN line {lineno}: prev_hash mismatch"
-        if record_hash(rec) != rec.get("hash"):
-            return False, f"BROKEN line {lineno}: hash mismatch"
-        prev, expect_seq, count = rec["hash"], expect_seq + 1, count + 1
-    return True, f"OK: {count} records, chain intact, head={prev}"
+__all__ = ["NOT_UTF8", "verify", "verify_lines"]
+HOOKS_LIVE_NEEDLE = "verify_audit_chain.py --hooks-live"
 
 
 def verify(path: Path) -> tuple[bool, str]:
@@ -51,9 +30,41 @@ NOT_FILE = (
     "BROKEN: {path} is not a regular file. Next: pass a session log (.jsonl) under "
     ".claude/daedalus/audit/."
 )
+MODE_USAGE = "usage: verify_audit_chain.py (--hooks-live | --approved <train-id>) --repo <repo>"
+MODE_NEXT = (
+    "Next: pass --hooks-live or --approved <train-id>, and --repo with the repository's path."
+)
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        # 3.3: usage errors keep exit 1, as the legacy mode does.
+        print(f"{MODE_USAGE}\nverify_audit_chain.py: {message}\n{MODE_NEXT}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _mode(argv: list[str]) -> int:
+    parser = _Parser(prog="verify_audit_chain.py", usage=MODE_USAGE)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--hooks-live", action="store_true")
+    mode.add_argument("--approved", metavar="TRAIN_ID")
+    parser.add_argument("--repo", type=Path, required=True)
+    args = parser.parse_args(argv)
+    repo = args.repo.resolve()
+    try:
+        if args.approved is None:
+            print(hooks_live(repo, HOOKS_LIVE_NEEDLE))
+        else:
+            print(approved(repo, args.approved))
+    except ProofError as exc:
+        print(exc)
+        return 1
+    return 0
 
 
 def main(argv: list[str]) -> int:
+    if {"--hooks-live", "--approved"} & set(argv[1:]):
+        return _mode(argv[1:])
     if len(argv) == 2 and argv[1] in ("-h", "--help"):
         print(f"{USAGE}\n{USAGE_NEXT}")
         return 0

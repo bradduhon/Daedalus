@@ -44,10 +44,10 @@ def test_block_exits_two_with_message_and_logs_block(
     payload = hook_input(agent_type="repo-coder", tool_input={"command": "git push origin x"})
     result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2
-    assert result.stderr.startswith("daedalus-jail[repo-coder]: no remote git operations")
+    assert result.stderr.startswith("daedalus-jail[repo-coder]: git push runs only in")
     assert "Next:" in result.stderr
     rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
-    assert rec["decision"] == "block" and rec["reason"].startswith("no remote git operations")
+    assert rec["decision"] == "block" and rec["reason"].startswith("git push runs only in")
 
 
 def test_namespaced_block_label_uses_normalized_name(run_script: Any, hook_input: Any) -> None:

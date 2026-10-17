@@ -791,6 +791,35 @@ def test_setup_skill_runs_the_setup_script_only_when_asked() -> None:
     assert "Restart Claude Code to apply" in body
 
 
+def test_setup_skill_names_the_repo_local_file() -> None:
+    # 0027, 0029: setup writes the repo's .claude/settings.local.json and no user-level file.
+    fields, body = _split(SETUP)
+    for text in (fields["description"], body):
+        assert ".claude/settings.local.json" in text
+        assert "~/.claude/settings.json" not in text
+    assert "`OK   sandbox: on (.claude/settings.local.json)`" in body
+    assert "from their own shell" in body
+
+
+DOCTOR = REPO_ROOT / "skills" / "doctor" / "SKILL.md"
+DOCTOR_CMD = "python3 ${CLAUDE_SKILL_DIR}/../../scripts/daedalus_doctor.py"
+
+
+def test_doctor_preapproves_only_its_own_script() -> None:
+    # 0007: allowed-tools expands CLAUDE_SKILL_DIR, not CLAUDE_PLUGIN_ROOT; rule and step match.
+    fields, body = _split(DOCTOR)
+    assert fields["allowed-tools"] == f"Bash({DOCTOR_CMD} *)"
+    assert f'`{DOCTOR_CMD} --repo "<path>"`' in body
+    assert (DOCTOR.parent / "../../scripts/daedalus_doctor.py").resolve().is_file()
+
+
+def test_doctor_asks_once_and_hands_setup_to_the_operator() -> None:
+    _, body = _split(DOCTOR)
+    assert "Ask once, in a single message" in body and "Never ask per line." in body
+    assert "Do not run any other command to investigate" in body
+    assert "tell the operator to type `/daedalus:setup` themselves" in body
+
+
 TRAIN_SKILLS = [p for p in SKILLS if p.parent.name.endswith("-train")]
 SANDBOX_NEXT_LINE = "Next: run /daedalus:setup, restart, rerun the train."
 SANDBOX_STATE_CMD = "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_doctor.py --sandbox-state"

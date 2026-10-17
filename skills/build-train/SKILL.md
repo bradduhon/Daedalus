@@ -82,7 +82,7 @@ Read the last line of every coder reply and route it:
 If SendMessage to a coder fails, never start a replacement coder; a replacement coder would start without the first coder's context and the unit's half-done state. The worktree teardown removes that unit's worktree with the rest, and the train stops: "Coder for unit <b> cannot be resumed. Next: rerun the train; the unit branch <b> is kept for reference."
 
 Cache path, resolved once before the first nist-specialist or cis-specialist dispatch: run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_doctor.py --print-cache-dir`. Exit 0 prints one absolute path; put `<that path>/frameworks` into every nist and cis prompt as written, an absolute path with no `~` and no `$`. Exit 1: stop and show its message. Next: run `/daedalus:doctor` first, then run `/daedalus:build-train` again. A specialist's `[STATUS: CACHE_INVALID] <detail>` also stops the train and shows the detail:
-- From nist-specialist. Next: from your own shell, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/refresh_nist_oscal.py --dest <that path>/frameworks/nist` with both paths written out in full, then run `/daedalus:build-train` again.
+- From nist-specialist. Next: from your own shell, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/refresh_frameworks.py --only nist-800-53 --cache-root <that path>` with both paths written out in full, then run `/daedalus:build-train` again.
 - From cis-specialist. Next: place the benchmark files and their manifest under `<that path>/frameworks/cis/` per docs/project-requirements.md "Machine caches", then run `/daedalus:build-train` again.
 
 ## Phase 3: Compliance and adversarial security gate

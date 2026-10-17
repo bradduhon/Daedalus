@@ -12,10 +12,13 @@ Reference cache: `<cache dir>` is the absolute frameworks cache directory named 
 The catalog sits under `<cache dir>/nist/` (for example `<cache dir>/nist/catalog.json`).
 
 ## Phase 0: Cache integrity (mandatory)
-1. Read `<cache dir>/nist/manifest.json`. It contains `catalog_file`, `catalog_sha256`,
-   `revision`, `pinned_on`.
-2. Run `sha256sum <cache dir>/nist/<catalog_file>` and compare. On mismatch or missing file,
-   STOP and return `[STATUS: CACHE_INVALID] run scripts/refresh_nist_oscal.py`. You never fetch or write.
+1. Read `<cache dir>/nist/manifest.json`. It is a JSON list, one entry per file, each with
+   `file`, `sha256`, `version`, `pinned_on`, `source_url`, `upstream_ref` and `license`.
+   The SP 800-53 catalog is the entry whose `file` is `catalog.json`.
+2. Run `sha256sum <cache dir>/nist/<file>` for each entry and compare. On mismatch, a missing
+   file or a manifest that is not a list, STOP and return
+   `[STATUS: CACHE_INVALID] run scripts/refresh_frameworks.py --only nist-800-53,nist-csf-2.0`.
+   You never fetch or write.
 3. If `pinned_on` is older than 90 days, note it in your report; do not block.
 4. No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already returns stderr.
 

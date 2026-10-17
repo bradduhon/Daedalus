@@ -121,3 +121,61 @@ def test_directory_path_is_broken_with_next(tmp_path: Path) -> None:
         ".claude/daedalus/audit/.\n"
     )
     assert "Traceback" not in result.stderr
+
+
+def test_cli_hooks_live_fails_outside_a_hooked_session(project_data: Path, repo_cwd: Path) -> None:
+    result = _verify("--hooks-live", "--repo", repo_cwd)
+    assert result.returncode == 1
+    assert result.stdout.startswith("NOT LIVE:") and "Next:" in result.stdout
+
+
+def test_cli_hooks_live_passes_on_its_own_record(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    command = f"python3 x/verify_audit_chain.py --hooks-live --repo {repo_cwd}"
+    audit.audit_append(hook_input(tool_input={"command": command}))
+    result = _verify("--hooks-live", "--repo", repo_cwd)
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.startswith("OK hooks live: session sess-test")
+
+
+def _approved_train(hook_input: Any, repo_cwd: Path, verdict: str) -> None:
+    train = "20261016-120000"
+    audit.audit_append(
+        hook_input(
+            hook_event_name="SubagentStop",
+            tool_name=None,
+            tool_input=None,
+            agent_type="daedalus:security-auditor",
+            last_assistant_message=verdict,
+        )
+    )
+    summary = repo_cwd / "docs" / ".tmp" / "daedalus" / f"{train}-summary.md"
+    audit.audit_append(hook_input(tool_name="Write", tool_input={"file_path": str(summary)}))
+    summary.parent.mkdir(parents=True)
+    summary.write_text("Session sess-test: .claude/daedalus/audit/sess-test.jsonl\n")
+
+
+def test_cli_approved_round_trip(project_data: Path, hook_input: Any, repo_cwd: Path) -> None:
+    _approved_train(hook_input, repo_cwd, "[VERDICT: APPROVED] ok")
+    result = _verify("--approved", "20261016-120000", "--repo", repo_cwd)
+    assert result.returncode == 0, result.stdout
+    assert result.stdout == (
+        "OK approved: train 20261016-120000, session sess-test, auditor record seq 1\n"
+    )
+
+
+def test_cli_approved_failure_exits_one_with_next(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    _approved_train(hook_input, repo_cwd, "[VERDICT: REJECTED] a.py:1 high")
+    result = _verify("--approved", "20261016-120000", "--repo", repo_cwd)
+    assert result.returncode == 1
+    assert result.stdout.startswith("NOT APPROVED:")
+    assert "Next: run /daedalus:build-train" in result.stdout
+
+
+def test_cli_mode_usage_error_exits_one(repo_cwd: Path) -> None:
+    result = _verify("--approved", "20261016-120000")
+    assert result.returncode == 1
+    assert "Next:" in result.stderr

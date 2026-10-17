@@ -12,8 +12,8 @@ from typing import Any
 
 # spec 4: the dotted paths /daedalus:setup merges from settings.recommended.json.
 MERGED_KEYS = ("sandbox", "permissions.deny", "promptCacheTtl", "subagentPromptCacheTtl")
-# spec 4: deny lists gain missing entries; every other existing value stays as the user set it.
-APPEND_KEYS = frozenset({"deny", "denyRead", "denyWrite"})
+# spec 4, 0028: deny lists and excludedCommands gain missing entries; other values stay put.
+APPEND_KEYS = frozenset({"deny", "denyRead", "denyWrite", "excludedCommands"})
 
 
 class SettingsMergeError(ValueError):
@@ -104,9 +104,17 @@ def unified_diff(old: str, new: str, path: Path) -> str:
     )
 
 
-def write_atomic(path: Path, text: str) -> None:
-    # spec 4: temp file and rename; write through a dotfiles symlink, never replace the link.
+def write_atomic(path: Path, text: str, root: Path) -> None:
+    # spec 4: temp file and rename; write through a symlink, never replace the link.
     real = path.resolve() if path.is_symlink() else path
+    # 0029: the resolved parent must sit under <root>/.claude; nothing outside the repo.
+    allowed = root.resolve() / ".claude"
+    parent = real.parent.resolve()
+    if parent != allowed and allowed not in parent.parents:
+        raise SettingsMergeError(
+            f"{path} resolves outside {allowed}, so setup will not write it. "
+            f"Next: replace any symlink at {path} or {allowed} with a plain file or directory."
+        )
     real.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".settings-", suffix=".json", dir=real.parent)
     try:

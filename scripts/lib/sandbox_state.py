@@ -10,7 +10,8 @@ from pathlib import Path
 ON = "on"
 OFF = "off"
 CONFIGURED_UNAVAILABLE = "configured-unavailable"
-SETUP_NEXT = "run /daedalus:setup"
+# 0020: setup is disable-model-invocation; only the operator can start it.
+SETUP_NEXT = "type /daedalus:setup yourself; the model cannot run it"
 PROJECT_SETTINGS = (".claude/settings.json", ".claude/settings.local.json")
 
 
@@ -31,9 +32,9 @@ def settings_paths(repo: Path, home: Path) -> tuple[Path, ...]:
     return (home / ".claude" / "settings.json", *(repo / p for p in PROJECT_SETTINGS))
 
 
-def sandbox_enabled(repo: Path, home: Path) -> bool:
-    # 0020: later files override earlier ones, the order the doctor always used.
-    value: object = None
+def _sandbox_blocks(repo: Path, home: Path) -> list[tuple[Path, dict[str, object]]]:
+    # Plan 4 spec 5: home, then project, then local; home is read only, never written (0029).
+    blocks: list[tuple[Path, dict[str, object]]] = []
     for path in settings_paths(repo, home):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -42,9 +43,37 @@ def sandbox_enabled(repo: Path, home: Path) -> bool:
         except (OSError, UnicodeDecodeError, ValueError, RecursionError) as exc:
             raise SettingsError(f"{path} is not valid JSON ({exc}). Next: fix {path}") from exc
         block = data.get("sandbox") if isinstance(data, dict) else None
-        if isinstance(block, dict) and "enabled" in block:
-            value = block["enabled"]
-    return value is True
+        if isinstance(block, dict):
+            blocks.append((path, block))
+    return blocks
+
+
+def _winner(repo: Path, home: Path) -> tuple[object, Path | None]:
+    # Plan 4 spec 5: later files override earlier ones.
+    value: object = None
+    source: Path | None = None
+    for path, block in _sandbox_blocks(repo, home):
+        if "enabled" in block:
+            value, source = block["enabled"], path
+    return value, source
+
+
+def excluded_commands(repo: Path, home: Path) -> list[str]:
+    # 0028: the union across files, since array settings merge across scopes (ASSUMED).
+    found: list[str] = []
+    for _, block in _sandbox_blocks(repo, home):
+        entries = block.get("excludedCommands")
+        if isinstance(entries, list):
+            found += [e for e in entries if isinstance(e, str) and e not in found]
+    return found
+
+
+def sandbox_enabled(repo: Path, home: Path) -> bool:
+    return _winner(repo, home)[0] is True
+
+
+def sandbox_source(repo: Path, home: Path) -> Path | None:
+    return _winner(repo, home)[1]
 
 
 def sandbox_state(repo: Path, home: Path | None = None) -> str:

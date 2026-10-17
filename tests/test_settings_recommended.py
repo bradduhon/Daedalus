@@ -17,7 +17,13 @@ def _load() -> dict[str, Any]:
 def test_sandbox_enabled_with_no_escape_hatches() -> None:
     sandbox = _load()["sandbox"]
     assert sandbox["enabled"] is True
-    assert sandbox.get("excludedCommands", []) == []
+    assert sandbox["allowUnsandboxedCommands"] is False
+
+
+def test_recommended_excludes_gh_and_git_push() -> None:
+    # 0028, 0030: gh and git push (its credential helper is gh) run outside; the jail bounds both.
+    assert _load()["sandbox"]["excludedCommands"] == ["gh *", "git push *"]
+    assert "~/.config/gh" in _load()["sandbox"]["filesystem"]["denyRead"]
 
 
 def test_plugin_data_is_write_denied() -> None:

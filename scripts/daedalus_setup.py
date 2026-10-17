@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import errno
+import subprocess
 import sys
 from pathlib import Path
 
@@ -40,9 +42,46 @@ def install_line(missing: list[str], os_release: Path) -> str:
     return f"install the packages {packages} with your distribution's package manager"
 
 
+LOCAL = Path(".claude") / "settings.local.json"
+DENIED = frozenset({errno.EACCES, errno.EPERM, errno.EROFS})
+
+
+def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=30, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return subprocess.CompletedProcess(["git"], 127, "", str(exc))
+
+
+def _default_repo() -> Path | None:
+    out = _git(Path.cwd(), "rev-parse", "--path-format=absolute", "--git-common-dir")
+    common = out.stdout.strip()
+    return Path(common).parent if out.returncode == 0 and common else None
+
+
+def _ignore_refusal(repo: Path) -> str | None:
+    # 0027: a settings file git would track must never be written.
+    code = _git(repo, "check-ignore", "-q", str(LOCAL)).returncode
+    if code == 0:
+        return None
+    if code == 1:
+        return (
+            f"daedalus setup: {LOCAL} is not git-ignored in {repo}; nothing written. "
+            f"Next: add {LOCAL} to .gitignore, then rerun /daedalus:setup"
+        )
+    return (
+        f"daedalus setup: {repo} is not a git repository; nothing written. "
+        "Next: pass --repo with the repository root, then rerun /daedalus:setup"
+    )
+
+
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="Merge the Daedalus sandbox settings.")
-    parser.add_argument("--settings", type=Path, default=Path.home() / ".claude" / "settings.json")
+    parser = argparse.ArgumentParser(
+        description="Merge the Daedalus settings into <repo>/.claude/settings.local.json."
+    )
+    parser.add_argument("--repo", type=Path, default=None)
     parser.add_argument(
         "--recommended", type=Path, default=PLUGIN_ROOT / "settings.recommended.json"
     )
@@ -56,22 +95,45 @@ def main(argv: list[str]) -> int:
             f"Next: {install_line(missing, args.os_release)}, then rerun /daedalus:setup"
         )
         return 1
+    repo = args.repo.resolve() if args.repo is not None else _default_repo()
+    if repo is None:
+        print(
+            "daedalus setup: the current directory is not inside a git repository; nothing "
+            "written. Next: cd into the repository, then rerun /daedalus:setup"
+        )
+        return 1
+    refusal = _ignore_refusal(repo)
+    if refusal:
+        print(refusal)
+        return 1
+    # 0027, 0029: the repo's own settings.local.json is the only file setup writes.
+    target = repo / LOCAL
     try:
-        existing = read_settings(args.settings)
+        existing = read_settings(target)
         merged = merge(existing, read_settings(args.recommended))
     except (SettingsMergeError, SettingsError) as exc:
         print(f"daedalus setup: {exc}", file=sys.stderr)
         return 1
     if merged == existing:
-        print(
-            f"daedalus setup: {args.settings} already holds the recommended settings; "
-            "nothing written."
-        )
+        print(f"daedalus setup: {target} already holds the recommended settings; nothing written.")
         return 0
-    old = args.settings.read_text(encoding="utf-8") if args.settings.exists() else ""
+    old = target.read_text(encoding="utf-8") if target.exists() else ""
     new = render(merged)
-    write_atomic(args.settings, new)
-    print(unified_diff(old, new, args.settings), end="")
+    try:
+        write_atomic(target, new, repo)
+    except SettingsMergeError as exc:
+        print(f"daedalus setup: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        if exc.errno not in DENIED:
+            raise
+        print(
+            f"daedalus setup: cannot write {target} ({errno.errorcode[exc.errno]}); the sandbox "
+            f"protects settings files. Next: run python3 {PLUGIN_ROOT}/scripts/daedalus_setup.py "
+            f"--repo {repo} from your own shell"
+        )
+        return 1
+    print(unified_diff(old, new, target), end="")
     print("Restart Claude Code to apply")
     return 0
 

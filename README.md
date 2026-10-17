@@ -43,7 +43,7 @@ If `/daedalus:doctor` is not offered yet after you install, run `/reload-plugins
 
 The doctor lists every file and tool Daedalus needs. Each `OK` line is a check that passed. Each `MISS` line names what is missing. Running the doctor changes nothing. Fix the `MISS` lines and run it again.
 
-Every `MISS` line ends with a `Next:` instruction that says what to do. In a new repository, three lines stay `MISS` until you add the files they name: `service-manifest.json`, `contracts/` and `.gitleaks.toml`. The doctor reports them as files your project declares about itself. Neither the Build Train nor the Push Train stops when they are absent today. [docs/project-requirements.md](docs/project-requirements.md) lists every file Daedalus expects, says what each is for, and gives a small example of each.
+Every `MISS` line ends with a `Next:` instruction that says what to do. In a new repository, three lines read `OPT` until you add the files they name: `service-manifest.json`, `contracts/` and `.gitleaks.toml`. `OPT` marks an optional scaffold your project declares about itself. Neither the Build Train nor the Push Train stops when they are absent, and they never fail the doctor. [docs/project-requirements.md](docs/project-requirements.md) lists every file Daedalus expects, says what each is for, and gives a small example of each.
 
 ### Turning on the sandbox
 
@@ -55,7 +55,7 @@ To turn it on, install bubblewrap and socat, then type:
 
     /daedalus:setup
 
-Setup refuses while either tool is missing, writes nothing, and prints what to install: the apt line on Debian and Ubuntu, the package names elsewhere. Otherwise it adds the sandbox settings, the credential deny rules and two prompt cache settings to `~/.claude/settings.json`. It adds keys you lack and deny entries you lack, and never changes a value you already set. It prints the change, then `Restart Claude Code to apply`. It rewrites the file as JSON with a 2-space indent. Setup runs only when you type the command; Claude never starts it on its own.
+Setup refuses while either tool is missing, writes nothing, and prints what to install: the apt line on Debian and Ubuntu, the package names elsewhere. Otherwise it adds the sandbox settings, the credential deny rules and two prompt cache settings to this repository's `.claude/settings.local.json`, and to no other file; run it once in each repository you use Daedalus in. It first checks that git ignores that file, and writes nothing until it does. It adds keys you lack and deny entries you lack, and never changes a value you already set. It prints the change, then `Restart Claude Code to apply`. It rewrites the file as JSON with a 2-space indent. Setup runs only when you type the command; Claude never starts it on its own.
 
 ## The three trains
 
@@ -122,8 +122,8 @@ Each agent's file lists the only tools it may use.
 | `<repo>/docs/decisions.md` | You answer "create" to the Build Train's ledger question | A new ledger holding only a table header |
 | `contracts/<name>.md` | The contract is locked | The contract every coding agent works from, committed on the train's branch |
 | Rows in your decision ledger | An approved Build Train ends | One entry per ruling, appended through `append_ledger.py` |
-| `<cache>/frameworks/nist/` | You run `refresh_nist_oscal.py` | The pinned NIST catalog and its manifest |
-| `~/.claude/settings.json` | You type `/daedalus:setup` | The sandbox, credential deny and cache settings, merged into your own |
+| `<cache>/frameworks/<family>/` | You run `refresh_frameworks.py` | The pinned framework files and their manifest |
+| `<repo>/.claude/settings.local.json` | You type `/daedalus:setup` | The sandbox, credential deny and cache settings, merged into the repo's own; Daedalus never writes user-level settings |
 
 You write `<repo>/.claude/daedalus/config.json` yourself when you need it. It is optional and Daedalus never writes it (see Configuration below for the fields).
 
@@ -137,9 +137,9 @@ The commands below run from your own shell. `<plugin>` is the path the doctor pr
 
 Exit 1 means no cache exists yet; run `/daedalus:doctor` inside Claude Code once.
 
-The nist-specialist needs the NIST catalog, in NIST's OSCAL JSON format. Without it, the specialist stops the train with `CACHE_INVALID`. Fetch it with:
+The nist-specialist needs the NIST catalog, in NIST's OSCAL JSON format. Without it, the specialist stops the train with `CACHE_INVALID`. Fetch every pinned framework with:
 
-    python3 <plugin>/scripts/refresh_nist_oscal.py
+    python3 <plugin>/scripts/refresh_frameworks.py
 
 CIS Benchmark files are licensed, so you place them by hand in `<cache>/frameworks/cis/`. Next to them you write a `manifest.json` with one entry per file, holding its name and its `sha256sum` hash. The exact format is in [docs/project-requirements.md](docs/project-requirements.md), under "CIS benchmarks".
 
@@ -151,7 +151,7 @@ Every file and setting Daedalus reads is described, with a small working example
 
 Each agent gets a short list of allowed tools, and a tool not on the list is never offered to it. The OS sandbox, once `/daedalus:setup` turns it on, limits what Bash can write and which hosts it can reach. A PreToolUse hook is a check Claude Code runs before each tool call. Daedalus uses one, the jail, to compare every call against that agent's rules and block anything outside them. A coding agent may write only inside the `src/` and `tests/` directories of its own unit worktree. Every agent, and the main session, is refused `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh` and `~/.claude/.credentials.json`, whether it reads, searches or writes them with a file tool or names them in Bash. While a train runs, agents from Claude Code itself or from other plugins are refused every checked tool except reads and searches. The jail judges a Bash command by its text, so the OS sandbox is the boundary against shell forms the jail does not model. A blocked agent sees a line starting with `daedalus-jail[<agent>]:` that says what was refused and what to do next. Hooks, not agents, write each step to the hash-chained audit log. No agent pushes except the conductor inside the Push Train, and no agent merges. You merge.
 
-With no declared standards, the Standards Packet is empty and the auditor judges each unit against its contract only. The NIST and CIS specialists review only units that touched IAM, KMS, mTLS, key custody or infrastructure configuration. To declare your standards, see [docs/project-requirements.md](docs/project-requirements.md).
+With no declared standards, the Standards Packet is empty and the auditor judges each unit against its contract only. The NIST and CIS specialists review only units that touched IAM, KMS, mTLS, key custody or infrastructure configuration. To declare your standards, see [docs/project-requirements.md](docs/project-requirements.md). To start from a shipped set instead, declare the opt-in baseline pack, `{"kind": "pack", "name": "baseline"}`: five baseline checks plus the Daedalus cloud security standards, written in Daedalus's own words. The doctor offers it while `standards_sources` is empty.
 
 ## What is in this repo
 
@@ -180,10 +180,13 @@ Daedalus/
 │   └── project-requirements.md      # every file Daedalus reads, with examples
 ├── hooks/
 │   └── hooks.json                   # enforcement and audit bindings
+├── packs/
+│   └── baseline/rules.md            # opt-in baseline and cloud security standards pack
 ├── scripts/                         # Python 3.12, stdlib only
 │   ├── lib/__init__.py
 │   ├── lib/audit.py                 # hash-chained append, redaction
 │   ├── lib/config.py                # config.json loading and validation
+│   ├── lib/fetch.py                 # GitHub-only download, size cap and cache lock for refreshes
 │   ├── lib/jail.py                  # per-agent tool policy
 │   ├── lib/ledger.py                # ledger resolution, sequence read, entry format
 │   ├── lib/locks.py                 # bounded flock shared by audit and ledger writers
@@ -198,7 +201,7 @@ Daedalus/
 │   ├── daedalus_setup.py            # sandbox settings merge behind /daedalus:setup
 │   ├── daedalus_workspace.py        # create and remove unit worktrees; mark the running train
 │   ├── enforce_agent_jail.py        # PreToolUse policy
-│   ├── refresh_nist_oscal.py        # operator-run: pull and pin the NIST OSCAL catalog
+│   ├── refresh_frameworks.py        # operator-run: compile the pinned framework caches
 │   ├── sandbox_notice.py            # SessionStart sandbox line
 │   └── verify_audit_chain.py        # recompute and verify a session's hash chain
 ├── skills/

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,8 @@ from lib.audit import check_project_data_dir
 POLICY_ENGINES = ("cfn-guard", "conftest")
 LEDGER_FORMATS = ("markdown-table-row", "heading-entry")
 LEDGER_FIELDS = ("path", "format", "id_scheme", "sequence_source")
+PACKS_DIR = Path(__file__).resolve().parents[2] / "packs"
+_PACK_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 
 class ConfigError(ValueError):
@@ -37,6 +40,7 @@ class PolicyDecl:
 class StandardsSource:
     kind: str
     path: Path
+    name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +116,9 @@ def _sources(raw: Any) -> tuple[StandardsSource, ...]:
         )
     out: list[StandardsSource] = []
     for item in raw:
+        if isinstance(item, dict) and item.get("kind") == "pack":
+            out.append(_pack(item.get("name")))
+            continue
         if not isinstance(item, dict) or "kind" not in item or "path" not in item:
             raise ConfigError(
                 "each standards_sources entry needs kind and path. Next: add both keys."
@@ -119,6 +126,18 @@ def _sources(raw: Any) -> tuple[StandardsSource, ...]:
         kind = _require_str(item, "kind", "standards_sources[]")
         out.append(StandardsSource(kind, Path(_require_str(item, "path", "standards_sources[]"))))
     return tuple(out)
+
+
+def _pack(name: Any) -> StandardsSource:
+    # 0019, 0026: a shipped pack resolves under the plugin root; the name never walks out of it.
+    if isinstance(name, str) and _PACK_NAME.fullmatch(name):
+        path = PACKS_DIR / name
+        if (path / "rules.md").is_file():
+            return StandardsSource("pack", path, name)
+    raise ConfigError(
+        f"config.json standards_sources[] pack {name!r} is not a pack Daedalus ships. "
+        'Next: use "baseline".'
+    )
 
 
 def load_config(cwd: str | None = None, path: Path | None = None) -> Config:

@@ -31,7 +31,7 @@ Every file and setting daedalus reads, with the smallest example that works. `/d
 |---|---|---|
 | `charter_root` | Repo where decisions and specs live. Agents may write there. | contract-spec and charter-docs can write only inside the target repo |
 | `ledger` **(checked)** | Where rulings are appended. `format` is `markdown-table-row` (one table row per ruling) or `heading-entry` (one `## Entry N` section per ruling). `sequence_source` is `last-row-id` or `frontmatter:<key>`. | The Build Train stops and asks before creating one |
-| `standards_sources` **(checked)** | Directories or files holding your rules. `kind` is `rules-dir` or `file`. | The Standards Packet is empty and the auditor judges against the spec only |
+| `standards_sources` **(checked)** | Directories or files holding your rules. `kind` is `rules-dir`, `file` or `pack`. | The Standards Packet is empty and the auditor judges against the spec only; the doctor offers the baseline pack on an `OPT` line |
 | `policy` **(checked)** | Deterministic policy pack. `engine` is `cfn-guard` or `conftest`. daedalus ships no rules; the directory is yours. | No effect today; a later Daedalus release adds the deterministic gate for infrastructure diffs |
 | `operator_signing_keys` | Fingerprints allowed to sign merges. | No effect today; a later Daedalus release adds the merge-gate check that reads it |
 
@@ -56,10 +56,11 @@ To keep the sequence in frontmatter instead, start the file with a `---` block h
 
 ### standards_sources kinds
 
-Each entry has a `kind` and a `path`. The standards specialist reads only these entries, and cites each rule as `source:line`.
+Each entry has a `kind` and a `path`, except `pack`, which has a `name`. The standards specialist reads only these entries, and cites each rule as `source:line`.
 
 - `rules-dir`: a directory of rule files. Example: `{ "kind": "rules-dir", "path": "/absolute/path/to/rules" }`
 - `file`: one file. Example: `{ "kind": "file", "path": "/work/my-service/CLAUDE.md" }`
+- `pack`: a rules pack shipped inside the plugin, resolved to `<plugin>/packs/<name>/`. Daedalus ships one, `baseline`: five baseline checks (no hardcoded secrets, no wildcard access grants, TLS 1.2 or newer, encryption at rest, no personal data or key material in logs) and the Daedalus cloud security standards (a role per workload, no public object storage, logging on every data store, scheduled rotation of customer-data keys, private networking for data stores, multi-factor sign-in for people). Each rule is one line in `packs/baseline/rules.md`, in Daedalus's own words, citing NIST SP 800-53 control ids and OWASP ASVS requirement ids. It applies only when you declare it: `{ "kind": "pack", "name": "baseline" }`. Any other name is refused with `Next: use "baseline".`
 
 ### What the ledger probe detects
 
@@ -83,25 +84,34 @@ It prints one absolute path, called `<cache>` below. Exit 1 means no cache exist
 
 The specialists verify every hash before they answer. A mismatch or a missing file stops the train with `CACHE_INVALID`.
 
-### NIST catalog (`<cache>/frameworks/nist/`)
+### NIST catalogs (`<cache>/frameworks/nist/`)
 
 Run the refresh script from your own shell. It uses the network:
 
-    python3 <plugin>/scripts/refresh_nist_oscal.py
+    python3 <plugin>/scripts/refresh_frameworks.py
 
-It downloads the NIST SP 800-53 rev5 OSCAL catalog from `usnistgov/oscal-content` on GitHub and writes two files:
+Each adapter downloads one framework from a pinned upstream release on GitHub and writes it under `<cache>/frameworks/<family>/`. The NIST adapters pin `usnistgov/oscal-content` tag `v1.5.0`:
 
-- `catalog.json`: the catalog itself.
-- `manifest.json`: `catalog_file` (`catalog.json`), `catalog_sha256`, `revision` (the catalog's own version), `pinned_on` (UTC date), `upstream_commit` (the oscal-content commit that last changed the file, or `null` when the GitHub API lookup fails or the source is not oscal-content `main`) and `source_url`.
+- `nist-800-53` writes `catalog.json`, the NIST SP 800-53 rev5 OSCAL catalog.
+- `nist-csf-2.0` writes `csf-2.0.json`, the NIST Cybersecurity Framework 2.0 OSCAL catalog.
 
-With no `--dest`, the files go to `<cache>/frameworks/nist/`, using the same lookup as `--print-cache-dir`. `--dest <dir>` writes elsewhere. `--source-url <url>` takes another `https` URL on `github.com`, `raw.githubusercontent.com` or `api.github.com`, with no user name, query, fragment, `.` or `..` segment, space or control character. The script refuses:
+Next to them it writes `manifest.json`, a JSON list with one entry per file: `file`, `sha256`, `version` (the catalog's own `metadata.version`), `pinned_on` (UTC date), `source_url`, `upstream_ref` (the pinned tag) and `license` (`public domain (17 U.S.C. 105)`). A run replaces only the entries of the adapters it ran.
 
-- a redirect that breaks the same URL rules;
+`--only nist-800-53,nist-csf-2.0` runs the named adapters; with no `--only` every adapter runs. `--cache-root <dir>` writes under `<dir>/frameworks/` instead of the cache found by `--print-cache-dir`. The pinned URLs are `https` on `raw.githubusercontent.com`. The script refuses:
+
+- a redirect off `github.com`, `raw.githubusercontent.com` or `api.github.com`, or one with a user name, query, fragment, `.` or `..` segment, backslash or encoded slash;
 - a response over 64 MiB;
-- a download that is not a JSON object with a printable `catalog.metadata.version` of 64 characters or fewer (or a top-level `metadata.version` when the file has no `catalog` key);
-- a symlink anywhere from the cache directory down to the target directory (with `--dest`, from its first existing parent down), or at `catalog.json`, `manifest.json` or `.refresh.lock`.
+- a NIST download that is not a JSON object with a printable `catalog.metadata.version` of 64 characters or fewer (or a top-level `metadata.version` when the file has no `catalog` key);
+- a symlink anywhere from the cache directory down to the family directory (with `--cache-root`, from its first existing parent down), or at a cache file, `manifest.json` or `.refresh.lock`.
 
-Every failure exits 1 with a `Next:` line. A run holds `.refresh.lock` in the target directory, so a second run waits up to 60 s for it and exits 1 if it is still held. A failure before the files are replaced leaves the previous pair in place. A run killed between the two replaces leaves a new catalog with the old manifest, and the specialist reports `CACHE_INVALID` until you run the script again. Run it again whenever you want a newer catalog; the nist specialist notes a `pinned_on` older than 90 days.
+Each line `pinned <adapter> <version> sha256=<hash> at <path>` names a written file. Every failure prints the adapter name and a `Next:` line, and the script exits 1 after the other adapters run. A run holds `.refresh.lock` in the family directory, so a second run waits up to 60 s for it and fails that adapter if it is still held. An adapter that fails before its files are replaced leaves its previous files and manifest entries in place. Run the script again whenever you want to re-pin; the doctor marks a family older than 90 days.
+
+### OWASP references (`<cache>/frameworks/owasp/`)
+
+The same script holds two OWASP adapters. OWASP publishes both under the Creative Commons Attribution-ShareAlike 4.0 license (CC BY-SA 4.0), so each manifest entry carries `license` (`CC BY-SA 4.0`) and an `attribution` line naming the OWASP Foundation, the project and the source URL. Keep that attribution with any copy you make.
+
+- `owasp-asvs` writes `asvs-5.0.0.json`, the Application Security Verification Standard 5.0.0 JSON export from `OWASP/ASVS` tag `v5.0.0_release`. The script refuses a file without the keys `Name`, `ShortName`, `Version`, `Description` and a non-empty `Requirements` list. `version` is its `Version` key.
+- `owasp-top10` reads the ten 2025 English pages from `OWASP/Top10` commit `3a31f35` (the project has no release tag for 2025) and writes `top10-2025.json`: a list of `{"id": "A01:2025", "title": "...", "source_file": "..."}`, with each title taken from the page's first level-one heading. A page without one fails the adapter. `version` is `2025@3a31f35`, and `source_url` is the directory the ten pages came from.
 
 ### CIS benchmarks (`<cache>/frameworks/cis/`)
 
@@ -120,7 +130,7 @@ Repeat steps 2 to 4 when you replace a benchmark.
 
 ## In each target repository
 
-### service-manifest.json (repo root) **(checked)**
+### service-manifest.json (repo root), optional **(checked)**
 
 Minimal:
 ```json
@@ -136,11 +146,11 @@ Minimal:
 ```
 A later Daedalus release reads missing flags as the stricter value. Coders cannot edit this file (enforced for file tools and the common copy/edit commands; a script the coder writes and runs is not blocked yet). In that release, a change goes through contract-spec and the ledger.
 
-### contracts/ (directory) **(checked)**
+### contracts/ (directory), optional **(checked)**
 
 Holds `openapi.yaml`, `events/*.schema.json`, `errors.yaml`. May be empty to start. Coders cannot write here (enforced for file tools and the common copy/edit commands; a script the coder writes and runs is not blocked yet).
 
-### .gitleaks.toml (repo root) **(checked)**
+### .gitleaks.toml (repo root), optional **(checked)**
 
 Minimal:
 ```toml
@@ -153,16 +163,17 @@ The Push Train runs `gitleaks detect` over every commit on the train branch befo
 
 The only directories a coder may write, and only inside its own unit worktree, which the Build Train creates at `<repo>/.claude/worktrees/<train-id>-<unit-slug>`. A later Daedalus release reserves `tests/adversarial/` for the boundary tester; today repo-coder may write anywhere under `tests/`.
 
-## In your user settings
+## In the repo's .claude/settings.local.json
 
-`/daedalus:setup` merges `settings.recommended.json` from the plugin into `~/.claude/settings.json` once `bwrap` and `socat` are on PATH; while either is missing it writes nothing. It adds missing keys, appends missing deny entries, and never overwrites a value you set. The merge enables the sandbox, denies the credential stores to the sandbox and to the Read tool, denies writes to the plugin cache directory, and sets two prompt cache settings. All of it is optional: without it the doctor reports `sandbox: off`, the Build Train runs and says so in its summary, and the Push Train refuses. The Build Train creates its own coder worktrees from the integration branch, and the jail keeps every Daedalus agent from starting agents, so neither needs a setting.
+`/daedalus:setup` merges `settings.recommended.json` from the plugin into the repository's `.claude/settings.local.json` once `bwrap` and `socat` are on PATH; while either is missing it writes nothing. That file must be git-ignored, or setup writes nothing. Setup never writes `~/.claude/settings.json` or any other file outside the repository, so each repository is set up by its own run. It adds missing keys, appends missing deny entries, and never overwrites a value you set. The merge enables the sandbox, denies the credential stores to the sandbox and to the Read tool, denies writes to the plugin cache directory, and sets two prompt cache settings. All of it is optional: without it the doctor reports `sandbox: off`, the Build Train runs and says so in its summary, and the Push Train refuses. The Build Train creates its own coder worktrees from the integration branch, and the jail keeps every Daedalus agent from starting agents, so neither needs a setting.
 
-User-level sandbox settings cannot name `<repo>/.claude/daedalus/`, since it differs per repo. Instead, the jail refuses tool writes and the known Bash write routes there; the OS sandbox does not cover the repo-local directory. The `*` gitignore marker keeps it out of git, and the hooks refuse to run when the directory is a symlink, is tracked by git, or holds a marker other than `*`.
+The sandbox settings do not name `<repo>/.claude/daedalus/`. Instead, the jail refuses tool writes and the known Bash write routes there; the OS sandbox does not cover the repo-local directory. The `*` gitignore marker keeps it out of git, and the hooks refuse to run when the directory is a symlink, is tracked by git, or holds a marker other than `*`.
 
 ### Settings
 
-- `sandbox.enabled` **(checked)** is `true`. The doctor reads `~/.claude/settings.json`, then the repo's `.claude/settings.json` and `.claude/settings.local.json`; the last one that sets it wins. Its `sandbox` line reads `on`, `off` or `configured-unavailable` (enabled, but `bwrap` or `socat` missing).
+- `sandbox.enabled` **(checked)** is `true`. The doctor reads `~/.claude/settings.json`, then the repo's `.claude/settings.json` and `.claude/settings.local.json`; the last one that sets it wins. Its `sandbox` line reads `on`, `off` or `configured-unavailable` (enabled, but `bwrap` or `socat` missing), and an `on` line names the file that set it.
 - `sandbox.failIfUnavailable` is `true`. If the sandbox cannot start (no `bwrap` or `socat` on PATH), Bash commands do not run at all. The doctor checks for both tools, and `/daedalus:setup` writes nothing while either is missing.
+- `sandbox.excludedCommands` **(checked)** holds `gh *` and `git push *`. Those two run outside the sandbox, so the Push Train can use the gh login, which git also uses to push. `denyRead` still keeps `~/.config/gh` away from every other command. The jail refuses gh merges, deletions and repository settings changes for every session, and lets only the Push Train's conductor run gh and git push. With the sandbox on, the doctor's `gh outside sandbox` line is a MISS until both entries are present in a settings file it reads. Claude Code matches an entry only when the whole Bash call is that command: a `cd`, a redirect to a file or a `$(...)` keeps the call sandboxed.
 - `permissions.deny` holds Read rules for `~/.ssh/**`, `~/.aws/credentials`, `~/.gnupg/**`, `~/.config/gh/**` and `~/.claude/.credentials.json`. The jail refuses the same stores, all of `~/.aws` included, whether or not you merge these settings.
 
 ### Test-only

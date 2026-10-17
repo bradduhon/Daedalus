@@ -9,9 +9,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import jail
+from lib import jail, train_state
 from lib.config import Config, LedgerDecl
 from lib.jail import CONDUCTOR_GIT, KNOWN_AGENTS, decide, split_pipeline, tokenize
+from lib.unit_binding import record_dispatch
+from lib.workspace import mark_train
 
 from tests.conftest import REPO_ROOT
 
@@ -25,6 +27,7 @@ CFG = Config(
 
 
 WT = f"{CWD}/.claude/worktrees/20261015-120000-u1"
+UNIT_TRAIN = "20261015-120000"
 FAKE_UNITS = frozenset({f"{CWD}/.claude/worktrees/u1", WT})
 
 
@@ -39,6 +42,13 @@ def _fake_unit_worktrees(monkeypatch: pytest.MonkeyPatch) -> None:
         return real(repo) if real is not None else frozenset()
 
     monkeypatch.setattr(jail, "_registered_worktrees", fake, raising=False)
+    # issue 29: CWD has no train state; binding is proven in tests/test_unit_binding.py.
+    real_binding = jail._binding_reason
+
+    def no_binding(hook_input: dict[str, Any], cwd: str, units: set[str]) -> str | None:
+        return None if cwd == CWD else real_binding(hook_input, cwd, units)
+
+    monkeypatch.setattr(jail, "_binding_reason", no_binding)
 
 
 def _w(agent: str | None, path: str, tool: str = "Write") -> dict[str, Any]:
@@ -354,7 +364,6 @@ class TestConductor:
             "git add -A",
             "git commit -m x",
             "gh pr create --title t --body-file docs/.tmp/pr.md",
-            "gh pr edit 3 --body-file /tmp/pr.md",
             "gh run watch 123",
             "gh run list",
             "gitleaks detect --redact --log-opts=main..b",
@@ -525,8 +534,6 @@ def test_universal_tripwire_regressions(command: str) -> None:
 
 def test_main_ordinary_commands_still_allowed() -> None:
     for command in (
-        "git push origin feature/x",
-        "git push -u origin feature/x",
         "rm -rf build",
         "git commit -m 'fix -S flag doc'",
         "git -c commit.gpgsign=false commit -m x",
@@ -534,6 +541,23 @@ def test_main_ordinary_commands_still_allowed() -> None:
         "bash -c 'git status'",
     ):
         assert decide(_b(None, command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push origin feature/x",
+        "git push -u origin feature/x",
+        "git push -u origin feature/x 2>/dev/null",
+        "git push origin $REF",
+        "git push origin feature/main-fix",
+        "git push origin feat > log",
+    ],
+)
+def test_main_git_push_refused_by_0028(command: str) -> None:
+    # 0028, 0030: only the conductor pushes; K2 may narrow this to active trains.
+    d = decide(_b(None, command), CFG)
+    assert not d.allow and "(0028, 0030)" in str(d.reason), command
 
 
 @pytest.mark.parametrize("command", ["$GIT push origin x", "git $SUB origin x"])
@@ -555,7 +579,6 @@ def test_workers_blocked_on_variable_commands(command: str) -> None:
         "git status & wait",
         "echo `date`",
         "$EDITOR notes.md",
-        "git push -u origin feature/x 2>/dev/null",
         "rm -rf /tmp/build > /dev/null",
     ],
 )
@@ -824,8 +847,6 @@ class TestRegressionConductor:
         for command in (
             "gh -R o/r pr view 3",
             "gh pr checks 3",
-            "gh pr comment 3 --body-file docs/.tmp/c.md",
-            "gh pr diff 3",
             "gh run view 1",
             "gh pr list --repo o/r",
         ):
@@ -1252,8 +1273,6 @@ class TestRound3MainHardened:
     @pytest.mark.parametrize(
         "command",
         [
-            "git push origin feature/x",
-            "git push origin $REF",
             "GIT_PAGER=cat git log",
             "bash -o pipefail -c 'git status'",
             "python3 -c 'print(1)'",
@@ -1335,12 +1354,9 @@ class TestRound4MainFallback:
         "command",
         [
             "git -c color.ui=false log",
-            "git push origin $REF",
-            "git push origin feature/main-fix",
             "$EDITOR notes.md",
             "rm -rf ~/scratch/build/..",
             "rm -rf /tmp/x/..",
-            "git push origin feat > log",
         ],
     )
     def test_allowed(self, command: str) -> None:
@@ -1984,7 +2000,6 @@ class TestFinalConductorGh:
         [
             "gh pr create --title x --body-file docs/.tmp/pr.md",
             "gh pr create --title x -F /tmp/pr.md",
-            "gh pr comment 3 --body-file docs/.tmp/c.md",
             "gh -R o/r pr view 3",
         ],
     )
@@ -2140,16 +2155,7 @@ class TestFixWaveConductorGh:
             "gh pr create --title x --body-file docs/.tmp/pr.md --body b",
             "gh pr create --title x --body-file docs/.tmp/pr.md --body=b",
             "gh pr create --title x --body-file docs/.tmp/pr.md -bb",
-            "gh pr edit 3 --body-file docs/.tmp/pr.md -db b",
             "gh pr create --title x",
-            "gh pr edit 3 --body b",
-            "gh pr edit 3 -b b",
-            "gh pr edit 3 --body=b",
-            "gh pr edit 3 --title t",
-            "gh pr comment 3 --body b",
-            "gh pr comment 3 -b b",
-            "gh pr comment 3 --body=b",
-            "gh pr comment 3",
         ],
     )
     def test_inline_body_blocked(self, command: str) -> None:
@@ -2161,33 +2167,43 @@ class TestFixWaveConductorGh:
     @pytest.mark.parametrize(
         "command",
         [
-            "gh pr edit daedalus/T --base dev --body-file docs/.tmp/pr.md",
-            "gh pr edit daedalus/T --base=dev --body-file docs/.tmp/pr.md",
-            "gh pr edit daedalus/T -B dev --body-file docs/.tmp/pr.md",
-            "gh pr edit daedalus/T -Bdev --body-file docs/.tmp/pr.md",
-        ],
-    )
-    def test_edit_base_blocked(self, command: str) -> None:
-        d = decide(_b(self.C, command), CFG)
-        assert not d.allow and d.reason is not None, command
-        assert d.reason.startswith("gh pr edit may not change the base branch.")
-        assert "Next:" in d.reason
-
-    @pytest.mark.parametrize(
-        "command",
-        [
             "gh pr create --base main --head daedalus/T --title x --body-file docs/.tmp/pr.md",
             "gh pr create --title x -F /tmp/pr.md",
             "gh pr create --title x --body-file=/tmp/pr.md",
-            "gh pr edit daedalus/T --body-file docs/.tmp/pr.md",
-            "gh pr comment 3 --body-file docs/.tmp/c.md",
-            "gh pr comment 3 -F/tmp/c.md",
-            "gh pr edit daedalus/T -F/tmp/Build-body.md",
             "gh pr view daedalus/T --json url",
         ],
     )
     def test_allowed(self, command: str) -> None:
         assert decide(_b(self.C, command), CFG).allow, command
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "gh pr edit 3 --body-file docs/.tmp/pr.md -db b",
+            "gh pr edit 3 --body b",
+            "gh pr edit 3 -b b",
+            "gh pr edit 3 --body=b",
+            "gh pr edit 3 --title t",
+            "gh pr comment 3 --body b",
+            "gh pr comment 3 -b b",
+            "gh pr comment 3 --body=b",
+            "gh pr comment 3",
+            "gh pr edit daedalus/T --base dev --body-file docs/.tmp/pr.md",
+            "gh pr edit daedalus/T --base=dev --body-file docs/.tmp/pr.md",
+            "gh pr edit daedalus/T -B dev --body-file docs/.tmp/pr.md",
+            "gh pr edit daedalus/T -Bdev --body-file docs/.tmp/pr.md",
+            "gh pr edit daedalus/T --body-file docs/.tmp/pr.md",
+            "gh pr comment 3 --body-file docs/.tmp/c.md",
+            "gh pr comment 3 -F/tmp/c.md",
+            "gh pr edit daedalus/T -F/tmp/Build-body.md",
+            "gh pr edit 3 --body-file /tmp/pr.md",
+            "gh pr diff 3",
+        ],
+    )
+    def test_edit_comment_diff_refused_by_0028(self, command: str) -> None:
+        # K1, 0028: pr edit, comment and diff are off the 0028 list; the body rules bind create.
+        d = decide(_b(self.C, command), CFG)
+        assert not d.allow and "is a default-deny command" in str(d.reason), command
 
 
 class TestFixWaveGitleaksRedact:
@@ -2337,11 +2353,18 @@ def _unit_repo(path: Path) -> tuple[Path, Path]:
     subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "init"], check=True)
     wt = repo / ".claude" / "worktrees" / "u1"
     subprocess.run([*git, "worktree", "add", "-q", "-b", "daedalus-unit/u1", str(wt)], check=True)
+    # issue 29: coder writes need a train with the unit recorded and dispatched.
+    (repo / ".claude" / "daedalus").mkdir(exist_ok=True)
+    unit = {"name": "u1", "branch": "daedalus-unit/u1", "path": str(wt)}
+    train_state.save(repo, UNIT_TRAIN, {"train_id": UNIT_TRAIN, "units": [unit]})
+    mark_train(repo, UNIT_TRAIN)
+    assert record_dispatch(repo, UNIT_TRAIN, "u1") is None
     return repo, wt.resolve()
 
 
 def _cwd(payload: dict[str, Any], cwd: Path) -> dict[str, Any]:
     payload["cwd"] = str(cwd)
+    payload.setdefault("session_id", "s")
     return payload
 
 
@@ -2353,6 +2376,7 @@ def test_coder_unit_worktree_through_a_symlinked_root(tmp_path: Path) -> None:
     for cwd, root in ((link, repo), (repo, link), (link, link)):
         payload = _w("repo-coder", f"{root}/.claude/worktrees/u1/src/a.py")
         payload["cwd"] = str(cwd)
+        payload["session_id"] = "s"
         assert decide(payload, CFG).allow, (cwd, root)
         payload = _w("repo-coder", f"{root}/src/a.py")
         payload["cwd"] = str(cwd)

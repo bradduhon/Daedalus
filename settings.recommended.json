@@ -4,7 +4,7 @@
     "failIfUnavailable": true,
     "autoAllowBashIfSandboxed": false,
     "allowUnsandboxedCommands": false,
-    "excludedCommands": [],
+    "excludedCommands": ["gh *", "git push *"],
     "filesystem": {
       "allowWrite": [],
       "denyWrite": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.claude/plugins/data"],
