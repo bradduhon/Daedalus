@@ -81,6 +81,13 @@ def _build_train() -> str:
     return BUILD_TRAIN.read_text(encoding="utf-8")
 
 
+BEGIN = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py begin --repo <repo>`"
+STOP_CMD = (
+    "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py stop "
+    '--repo <repo> --reason "<what happened>" --next "<next action>"`'
+)
+
+
 def test_build_train_dispatches_existing_agents() -> None:
     names = set(_AGENT_REF.findall(_build_train()))
     for name in names:
@@ -91,17 +98,11 @@ def test_build_train_dispatches_existing_agents() -> None:
 
 
 def test_build_train_probes_the_ledger_and_asks() -> None:
-    text = _build_train()
-    pre = text.split("## Preconditions", 1)[1].split("## Phase 1", 1)[0]
+    # 0004: begin probes; test_begin_asks_the_ledger_question_with_exit_three holds the rest.
+    pre = _section(_build_train(), "## Preconditions", "## Phase 1")
+    exit3 = next(line for line in pre.splitlines() if "Exit 3" in line)
+    assert "ask the operator the question it prints, exactly" in exit3
     assert "append_ledger.py --probe" in pre
-    ledger_step = pre.split("\n4. ", 1)[1].split("\n5. ", 1)[0]
-    assert "append_ledger.py --probe" in ledger_step
-    none_found = next(line for line in ledger_step.splitlines() if "none declared" in line)
-    assert "ask the operator" in none_found
-    assert (
-        '"This repo has no decision ledger. Options: name an existing file, or let Daedalus '
-        'create docs/decisions.md as a table. Which?"'
-    ) in none_found
 
 
 def test_build_train_routes_every_yield_and_the_contradiction_stop() -> None:
@@ -132,12 +133,10 @@ def test_build_train_resolves_the_cache_for_specialists() -> None:
 
 
 def test_build_train_stops_on_off_contract_replies_and_dead_hooks() -> None:
+    # 0024: the dead-hooks stop is begin's; test_begin_refuses_dead_hooks holds it.
     text = _build_train()
     assert "does not end with one of its contract lines or contract sections, stop" in text
     assert "ends with its rule list and has no status line" in text
-    assert (
-        "the jail is not enforcing. Next: run the Daedalus health check (`/daedalus:doctor`)."
-    ) in text
     assert "charter: none (repo-local ledger)" in text
     assert "ids=<id>[,<id>]" in text
     assert "Session <id>: .claude/daedalus/audit/<id>.jsonl" in text
@@ -149,54 +148,28 @@ def test_no_plan_or_task_numbers(path: Path) -> None:
     assert not re.search(r"(Task|Plan) [0-9]", path.read_text(encoding="utf-8"))
 
 
-def test_build_train_switches_back_after_merge_abort() -> None:
-    assert re.search(r"`git merge --abort`, then `git switch <base branch>`", _build_train())
-
-
 def test_build_train_branches_a_clean_charter_and_switches_back() -> None:
+    # 0024: test_begin_branches_a_clean_charter and test_stop_switches_the_charter_back.
     text = _build_train()
-    assert "`git -C <charter_root> status --porcelain`" in text
-    assert "`git -C <charter_root> switch -c daedalus/<train-id>`" in text
+    assert "charter_root: <path or none>  charter base: <recorded branch or none>" in text
     assert "`git -C <charter_root> switch <recorded branch>`" in text
 
 
-def test_build_train_checks_the_probe_record_in_the_audit_log() -> None:
-    step = _build_train().split("\n5. ", 1)[1].split("\n6. ", 1)[0]
-    assert "audit log" in step
-    assert '"event":"PreToolUse".*"tool_name":"Bash"' in step
-    assert "Grep it again with line numbers for `append_ledger.py --probe`" in step
-    assert "a `tool_input.command` containing `append_ledger.py --probe`" in step
-    assert "Never Read the whole log." in step
-
-
-def test_build_train_records_the_charter_branch_and_switches_back_on_every_stop() -> None:
-    # R2-M2, R2-M3: record before switch -c; switch back before every later stop.
+def test_build_train_runs_every_stop_through_the_script() -> None:
+    # 0024: the five stop rules are the test_stop_* set in test_workspace_train.py.
     text = _build_train()
-    record = re.search(r"record the Charter's current branch with `([^`]+)`", text)
-    assert record and record.group(1) == "git -C <charter_root> rev-parse --abbrev-ref HEAD"
-    assert "Charter switch-back: once Preconditions step 7 has created the Charter branch" in text
+    rules = text.split("## Preconditions", 1)[0]
+    stop = rules.split("- Every stop: ", 1)[1].split("\n", 1)[0]
+    assert stop.startswith("run " + STOP_CMD)
+    assert "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py resume --repo <repo>`" in (
+        stop
+    )
+    for gone in ("Charter switch-back", "Integration switch-back", "Uncommitted contract:"):
+        assert gone not in text, gone
+    assert "- Worktree teardown:" not in rules and "- Train marker:" not in rules
+    assert "unmark" not in text
     step = text.split("`[STATUS: COMMITTED] <sha>", 1)[1].split("\n5. ", 1)[0]
-    for stop in (
-        "LEDGER_MISMATCH] expected=<n> ledger=<m>`: Charter switch-back",
-        "Any other reply: Charter switch-back",
-    ):
-        assert stop in step, stop
-    assert "Otherwise Charter switch-back, then stop and show the detail." in step
-    # M7: the rule's command and the MISMATCH switch-on.
-    assert (
-        "run `git -C <charter_root> switch <recorded branch>` before every stop that follows"
-        in text
-    )
-    assert "the train runs `git -C <charter_root> switch daedalus/<train-id>`" in step
-
-
-def test_build_train_keeps_a_dirty_charter_ledger_on_the_train_branch() -> None:
-    # Ruling M8: a modified ledger after BLOCKED stays on daedalus/<train-id>.
-    step = _build_train().split("`[STATUS: BLOCKED] <detail>`:", 1)[1].split("\n5. ", 1)[0]
-    assert step.lstrip().startswith(
-        "when you created a Charter branch, run `git -C <charter_root> status --porcelain` first."
-    )
-    assert "If it lists the ledger file, stop without the switch-back" in step
+    assert "after `resume`" in step
 
 
 def test_build_train_summary_names_every_charter_form() -> None:
@@ -326,21 +299,22 @@ def _section(text: str, head: str, nxt: str) -> str:
 
 
 def test_build_train_saves_and_commits_the_contract() -> None:
-    # 0011: the packet is saved and committed; the summary records path and version.
+    # 0011: lock commits the packet (test_lock_* set); the summary records path and version.
     text = _build_train()
     phase1 = _section(text, "## Phase 1", "## Phase 2")
     assert '"Save the packet to <contract path>, then end the reply with the packet."' in phase1
-    assert "Run `git switch -c daedalus/<train-id>`: the integration branch" in phase1
-    assert phase1.index("git switch -c daedalus/<train-id>") < phase1.index(
-        "Agent(`contract-spec`)"
-    )
     assert "The main session owns this commit; contract-spec never commits." in phase1
-    assert '`git commit -m "Lock contract <name> v<packet_version>"`' in phase1
-    assert '`git -C <charter_root> commit -m "Lock contract <name> v<packet_version>"`' in phase1
-    assert "Glob the contract path. No file: stop. Next: rerun `/daedalus:build-train`" in phase1
+    lock = (
+        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py lock --repo <repo> "
+        "--contract <contract path> --version <packet_version>`"
+    )
+    assert lock in phase1
+    assert phase1.index("Agent(`contract-spec`)") < phase1.index(lock)
+    assert "`contract unchanged, no commit`" in phase1
+    assert "git commit" not in phase1 and "git switch -c" not in phase1
     phase2 = _section(text, "## Phase 2", "## Phase 3")
     assert '"Save the revised packet to <contract path>, overwriting it,' in phase2
-    assert "with the message `Revise contract <name> v<N>`" in phase2
+    assert "it commits `Revise contract <name> v<N>`" in phase2
     assert "       Contract: contracts/<name>.md v<packet_version>\n" in text
     assert "Contract: <charter name>/specs/<name>.md v<packet_version>\n" in text
     rule = (
@@ -360,55 +334,28 @@ def test_build_train_saves_and_commits_the_contract() -> None:
     assert "a Build Train keeps the packet in the reply" not in howto
 
 
-def test_build_train_skips_the_commit_for_an_unchanged_contract() -> None:
-    # Ruling 2: file exists, add, then diff --cached --quiet; rc 0 skips the commit.
-    phase1 = _section(_build_train(), "## Phase 1", "## Phase 2")
-    repo = phase1.split("   - In this repo:", 1)[1].split("\n", 1)[0]
-    order = [
-        "Glob the contract path",
-        "`git add contracts/<name>.md`",
-        "`git diff --cached --quiet -- contracts/<name>.md`",
-        "Exit 0: the file is unchanged; skip the commit and note `contract unchanged, no commit`.",
-        '`git commit -m "Lock contract <name> v<packet_version>"`',
-    ]
-    assert [repo.index(s) for s in order] == sorted(repo.index(s) for s in order)
-    charter = phase1.split("   - In the Charter:", 1)[1].split("\n", 1)[0]
-    order = [
-        "`git -C <charter_root> add specs/<name>.md`",
-        "`git -C <charter_root> diff --cached --quiet -- specs/<name>.md`",
-        "Exit 0: skip the commit with the same note.",
-        '`git -C <charter_root> commit -m "Lock contract <name> v<packet_version>"`',
-    ]
-    assert [charter.index(s) for s in order] == sorted(charter.index(s) for s in order)
-    assert "git status --porcelain -- contracts/<name>.md`. No output" not in phase1
-
-
 def test_build_train_refuses_a_revision_that_does_not_raise_the_version() -> None:
-    # R4-M2: N must exceed the recorded packet_version before the Revise commit.
+    # R4-M2: N must exceed the recorded packet_version; lock refuses it too.
     phase2 = _section(_build_train(), "## Phase 2", "## Phase 3")
     # R5-I2: one retry, then the second non-increasing version stops.
     stop = (
         "When <N> is not greater than the State Block packet_version <n>, "
         'SendMessage(contract-spec, "packet_version must exceed <n>; revise and save again") '
-        "once. A second reply whose <N> is still not greater stops the train: the worktree "
-        "teardown listing first, then the uncommitted-contract Next:."
+        "once. A second reply whose <N> is still not greater stops the train."
     )
     assert stop in phase2
     assert phase2.index(stop) < phase2.index("`Revise contract <name> v<N>`")
 
 
 def test_build_train_branches_the_charter_in_preconditions() -> None:
-    # 0011: every Charter write of the train lands on the train branch.
+    # 0011: begin branches the Charter (test_begin_branches_a_clean_charter).
     text = _build_train()
     pre = _section(text, "## Preconditions", "## Phase 1")
-    step7 = pre.split("\n7. ", 1)[1]
-    assert step7.startswith("When `charter_root` is declared, run `git -C <charter_root> status")
-    assert "`git -C <charter_root> switch -c daedalus/<train-id>`" in step7
-    assert step7.index("rev-parse --abbrev-ref HEAD") < step7.index("switch -c")
+    assert BEGIN in pre
+    assert "branches a declared Charter" in pre
     phase3 = _section(text, "## Phase 3", "\n5. The summary")
     assert "switch -c" not in phase3
     assert "it is empty when the contract commit landed" in phase3
-    assert "Integration switch-back: once Phase 1 step 2 has created" in text
     # R4-M3: the howto says where the Charter branch comes from.
     howto = (REPO_ROOT / "docs" / "howto" / "README.md").read_text(encoding="utf-8")
     assert (
@@ -432,72 +379,20 @@ def test_build_train_audits_from_the_integration_branch() -> None:
 
 
 def test_build_train_keeps_dirty_trees_on_the_train_branch() -> None:
-    # Ruling 1, R4-I1: a dirty Charter or an uncommitted contract takes no switch-back.
-    text = _build_train()
-    rules = text.split("## Preconditions", 1)[0]
-    assert (
-        "The exception: any stop while the Charter tree is dirty (`git -C <charter_root> status "
-        "--porcelain` prints anything) takes no Charter switch-back"
-    ) in rules
-    assert "The one exception is a charter-docs BLOCKED" not in rules
-    assert (
-        "- Uncommitted contract: any stop while the contract file is uncommitted "
-        "(`git status --porcelain -- contracts/<name>.md`, or `git -C <charter_root> status "
-        "--porcelain -- specs/<name>.md`, prints its path) takes neither switch-back."
-    ) in rules
-    assert "The stop names the file and says it sits on `daedalus/<train-id>` in its repo." in rules
-    phase3 = _section(text, "## Phase 3", "\n5. The summary")
-    assert (
-        "Any output: stop without the Charter switch-back, because the Charter tree is dirty"
-        in (phase3)
-    )
-    assert "Any output: Charter switch-back" not in phase3
-    # R5-I1: the dirty-Charter stop overrides the global Next: and resumes on the train branch.
-    dirty = phase3.split("Any output: stop without the Charter switch-back", 1)[1].split("\n", 1)[0]
-    assert "This Next: overrides the dirty-Charter Next: in the rules above." in dirty
-    assert (
-        "leave the Charter on that branch, then say continue; the train runs "
-        "`git -C <charter_root> switch daedalus/<train-id>` and resumes at this step."
-    ) in dirty
-    assert (
-        "Any other reply: Charter switch-back, none while the Charter tree is dirty, then the "
-        "off-contract stop."
-    ) in phase3
+    # Ruling 1, R4-I1: test_stop_keeps_a_dirty_charter and test_stop_keeps_an_uncommitted_contract.
+    phase3 = _section(_build_train(), "## Phase 3", "\n5. The summary")
+    dirty = phase3.split("   - Charter ledger:", 1)[1].split("\n", 1)[0]
+    assert "the stop keeps the Charter on `daedalus/<train-id>` while it is dirty" in dirty
+    assert "resume at this step" in dirty
+    assert "Any other reply: the off-contract stop." in phase3
 
 
 def test_build_train_keeps_worktrees_out_of_git_and_the_train() -> None:
-    # R3-O1, R4-I3, R4-M1: worktrees are ignored, listed, force-removed on every exit.
+    # 0024: teardown is the scripts' (test_stop_tears_down_only_recorded_units, test_finish_*).
     text = _build_train()
     # 0022: daedalus_workspace.py create writes the worktrees ignore marker itself.
     assert "<repo>/.claude/worktrees/.gitignore" not in text
-    rules = text.split("## Preconditions", 1)[0]
-    teardown = rules.split("- Worktree teardown: ", 1)[1].split("\n", 1)[0]
-    assert teardown.startswith(
-        "worktrees never outlive the train. Before every stop once Phase 2 has begun, and after "
-        "the merges in Phase 3 step 4,"
-    )
-    order = [
-        "show `git -C <path> status --porcelain` (the changes being discarded)",
-        "run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py remove --repo <repo> "
-        "--name <train-id>-<unit-slug>`",
-        "it removes the worktree, keeps its branch, and prunes",
-    ]
-    assert [teardown.index(s) for s in order] == sorted(teardown.index(s) for s in order)
-    assert "they are discarded, never committed." in teardown
-    assert teardown.rstrip().endswith(
-        "Next: run `git worktree remove --force <path>` and `git worktree prune` from your own "
-        "shell."
-    )
-    # R5-C1: only the State Block's unit branches are torn down.
-    assert (
-        "the scope is only the unit branches recorded in the State Block, each matched by its "
-        "branch name in `git worktree list --porcelain`. Any other worktree under "
-        "`<repo>/.claude/worktrees/` is left untouched and never listed for discard."
-    ) in teardown
-    phase3 = _section(text, "## Phase 3", "\n5. The summary")
-    assert "After the merges succeed, run the worktree teardown." in phase3
-    assert phase3.index("worktree teardown") < phase3.index("Agent(`charter-docs`)")
-    assert "A remove failure: Charter switch-back, then stop" in phase3
+    assert "daedalus_workspace.py remove" not in text
     assert "commit or discard the changes in the worktree" not in text
 
 
@@ -648,7 +543,7 @@ def test_build_train_checks_each_unit_descends_from_the_lock() -> None:
     text = _build_train()
     assert "packet_version: <n>  contract: <contract path>  lock: <sha>" in text
     phase1 = text.split("## Phase 1", 1)[1].split("## Phase 2", 1)[0]
-    assert "Run `git rev-parse daedalus/<train-id>` and record it as `lock: <sha>`" in phase1
+    assert "record its `lock:` line as `lock: <sha>` in the State Block" in phase1
     assert "Phase 2 creates every coder worktree from it" in phase1
     assert "baseRef" not in text
     complete = next(line for line in text.splitlines() if line.startswith("| `[STATUS: COMPLETE]"))
@@ -698,11 +593,14 @@ def test_build_train_creates_each_coder_worktree() -> None:
     assert phase2.index("daedalus_workspace.py create") < phase2.index("Agent(`repo-coder`)")
 
 
-def test_build_train_guards_the_main_checkout_before_merging() -> None:
+def test_build_train_merges_through_the_script() -> None:
+    # 0024: test_finish_* holds the dirty-checkout guard, the merges and the conflict abort.
     phase3 = _section(_build_train(), "## Phase 3", "\n5. The summary")
     merge = phase3.split("\n4. ", 1)[1]
-    assert merge.index("Run `git status --porcelain`.") < merge.index("git merge --no-ff")
-    assert "a coder changed the main checkout instead of its worktree" in merge
+    finish = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py finish --repo <repo>`"
+    assert finish in merge
+    assert merge.index(finish) < merge.index("Agent(`charter-docs`)")
+    assert "git merge --no-ff" not in _build_train()
 
 
 MARK = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py mark --repo <repo> --train "
@@ -710,18 +608,14 @@ UNMARK = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py unmark --
 
 
 def test_build_train_marks_the_train_active_and_clears_it() -> None:
-    # 0023: written once Preconditions pass, removed at the end and on every stop after it.
+    # 0023: begin marks (test_begin_prints_the_state_block_seed); stop clears.
     text = _build_train()
-    pre = _section(text, "## Preconditions", "**State Block**")
-    step9 = pre.split("\n9. ", 1)[1]
-    assert MARK + "<train-id>`" in step9
-    assert "<repo>/.claude/daedalus/train.active" in step9
-    rules = text.split("## Preconditions", 1)[0]
-    marker = rules.split("- Train marker: ", 1)[1].split("\n", 1)[0]
-    assert "every stop that follows" in marker
-    assert UNMARK in marker
-    assert "writes the marker again with the Preconditions step 9 command" in marker
-    assert UNMARK in text.split("\n6. Print the State Block", 1)[1]
+    end = text.split("\n6. Print the State Block", 1)[1]
+    assert (
+        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py stop --repo <repo> "
+        '--reason "train complete"'
+    ) in end
+    assert "marks the train active" in _section(text, "## Preconditions", "## Phase 1")
 
 
 def test_push_train_marks_the_train_active_and_clears_it() -> None:
@@ -750,12 +644,6 @@ def test_build_train_never_respawns_a_coder() -> None:
         "would start without the first coder's context and the unit's half-done state."
     ) in text
     assert "cannot move to <b>" not in text
-
-
-def test_build_train_liveness_uses_no_bash() -> None:
-    # M4: a Bash call here would become the newest Bash record and void the check.
-    step = _build_train().split("\n5. ", 1)[1].split("\n6. ", 1)[0]
-    assert "Use only the Glob, Grep and Read tools here, no Bash" in step
 
 
 _SKILL_SCRIPT = re.compile(r"`(python3 \$\{CLAUDE_PLUGIN_ROOT\}/scripts/[^`]+)`")
@@ -881,10 +769,11 @@ def test_train_sandbox_classes() -> None:
 
 
 def test_build_train_records_the_sandbox_state() -> None:
+    # 0020: begin reads the sandbox state (test_begin_prints_the_state_block_seed).
     text = _build_train()
-    step = _section(text, "## Preconditions", "## Phase 1").split("\n8. ", 1)[1]
-    assert f"`{SANDBOX_STATE_CMD} --repo <repo>`" in step
-    assert "The Build Train runs in every state." in step
+    assert "The Build Train runs in every state." in _section(
+        text, "## Preconditions", "## Phase 1"
+    )
     assert "    sandbox: <on, off or configured-unavailable>" in text
     assert "       Sandbox: <on, off or configured-unavailable>" in text
 
@@ -915,10 +804,9 @@ def test_push_train_checks_gh_beside_gitleaks() -> None:
 
 
 def test_build_train_runs_without_config_json() -> None:
-    step = _build_train().split("\n3. ", 1)[1].split("\n4. ", 1)[0]
-    assert "Missing: defaults are in use" in step
-    assert "Not valid JSON: stop." in step
-    assert "Missing or not valid JSON" not in step
+    # 0020: test_begin_invalid_config_stops_with_its_next; absent config is the empty config.
+    pre = _section(_build_train(), "## Preconditions", "## Phase 1")
+    assert "an absent config.json means the defaults" in pre
 
 
 # 0031: operator lines name things in words; ids, paths and code trail and are not counted.
