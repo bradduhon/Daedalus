@@ -15,7 +15,6 @@ KNOWN_AGENTS = frozenset(
         "pr-train-conductor",
         "web-researcher",
         "standards-rules-specialist",
-        "boundary-tester",
     }
 )
 # Plugin agents arrive as <plugin>:<agent>; only these prefixes unwrap.

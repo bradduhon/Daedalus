@@ -43,7 +43,7 @@ def _list(value: str, path: Path) -> set[str]:
 
 def test_every_known_worker_has_a_persona_and_no_extras() -> None:
     names = {p.stem for p in AGENTS.glob("*.md")}
-    assert names == (KNOWN_AGENTS - {"main", "boundary-tester"})
+    assert names == KNOWN_AGENTS - {"main"}
 
 
 @pytest.mark.parametrize("name", sorted(EXPECTED_MODEL))

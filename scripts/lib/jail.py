@@ -74,7 +74,6 @@ SPECIALIST_GIT = frozenset({"diff", "show", "log"})
 # M1: charter-docs git is add/commit/status/log/diff only (4.2); no merge, no worktree.
 CHARTER_DOCS_GIT = frozenset({"add", "commit", "status", "log", "diff"})
 CONDUCTOR_GIT = frozenset({"push", "status", "log", "rev-parse", "branch", "diff", "add", "commit"})
-TESTER_GIT = frozenset({"add", "commit", "status", "diff"})
 # Final review I1: transport plumbing and credential helpers reach remotes without push.
 GIT_PLUMBING_REMOTE = frozenset(
     {"send-pack", "http-push", "receive-pack", "upload-pack", "fetch-pack"}
@@ -2786,36 +2785,6 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
                 "only web-researcher may fetch. "
                 "Next: ask the orchestrating session to dispatch web-researcher."
             )
-        return _allow()
-
-    if agent == "boundary-tester":
-        if is_write and not _under(path, f"{cwd}/tests/adversarial"):
-            return _block(
-                f"boundary-tester writes only under tests/adversarial/: {path}. "
-                "Next: put the test there."
-            )
-        if tool == "Bash":
-            if piped:
-                return _block(R_PIPE)
-            for segment in segments:
-                name = _cmd_name(segment)
-                if name == "git" and _git_grammar_ok(segment, TESTER_GIT, cwd, None):
-                    continue
-                if _tester_runner_ok(name, segment):
-                    continue
-                if name in READ_ONLY_CMDS and _read_only_segment(segment, frozenset(), cwd, None):
-                    continue
-                if {"install", "i", "add", "ci", "get"} & set(segment[1:3]):
-                    return _block(
-                        "boundary-tester may not install packages. "
-                        "Next: return [STATUS: YIELD_DEPENDENCY]."
-                    )
-                return _block(
-                    "boundary-tester Bash is limited to the test runner, local git, "
-                    "and inspection. Next: use those only."
-                )
-        if tool in WEB_TOOLS:
-            return _block("boundary-tester has no web access. Next: return [STATUS: YIELD_WEB].")
         return _allow()
 
     return _block(
