@@ -5,7 +5,7 @@ This guide assumes you have never seen this plugin. Each section says what to ty
 
 ## What Daedalus does
 
-Daedalus is a Claude Code plugin. Today it does seven things. It writes a hash-chained audit log of every tool call the hook matcher routes (Bash, file reads, searches and edits, web fetches, agent spawns, messages, MCP tools). Each record carries the hash of the one before it, so an edited record, or one removed from the middle, breaks the chain. It confines each agent to a jail: a PreToolUse hook checks every tool call against the rules for that agent and blocks anything outside them. It refuses reads of your credential stores through file tools and the Bash forms it models. It has a first-run doctor that checks your setup. It renders an audit report, a readable digest of one session's log, with `/daedalus:audit-report`. It runs a Build Train with `/daedalus:build-train`. The train splits a task into units and gives each unit to a coding agent in its own git worktree. Agents raise questions to specialists, and an adversarial security audit runs before the units are merged locally. It runs a Push Train with `/daedalus:push-train`, which commits, pushes, and opens the pull request for a finished Build Train. You review and merge.
+Daedalus is a Claude Code plugin. Today it does seven things. While a train runs, it writes a hash-chained audit log of every tool call the hook matcher routes (Bash, file reads, searches and edits, web fetches, agent spawns, messages, MCP tools). Each record carries the hash of the one before it, so an edited record, or one removed from the middle, breaks the chain. It confines each agent to a jail: a PreToolUse hook checks every tool call against the rules for that agent and blocks anything outside them. It refuses reads of your credential stores through file tools and the Bash forms it models. It has a first-run doctor that checks your setup. It renders an audit report, a readable digest of one session's log, with `/daedalus:audit-report`. It runs a Build Train with `/daedalus:build-train`. The train splits a task into units and gives each unit to a coding agent in its own git worktree. Agents raise questions to specialists, and an adversarial security audit runs before the units are merged locally. It runs a Push Train with `/daedalus:push-train`, which commits, pushes, and opens the pull request for a finished Build Train. You review and merge.
 
 ## Install
 
@@ -16,7 +16,7 @@ Inside any Claude Code session, type:
 Every Daedalus command acts on the repository you started Claude Code in.
 
 Where it runs: any Claude Code session, version 2.1.275 or later (`claude --version`). Daedalus is verified on Claude Code 2.1.280.
-What you will see: Claude Code asks you to confirm the marketplace, then to pick a scope. Pick "Install for you". The audit log starts recording once the plugin is active.
+What you will see: Claude Code asks you to confirm the marketplace, then to pick a scope. Pick "Install for you". The audit log records only while a train runs in a repository.
 If it fails: when your Claude Code does not accept `--marketplace`, run these two commands from a shell instead, then start Claude Code:
 
     claude plugin marketplace add bradduhon/Daedalus
@@ -67,7 +67,7 @@ Each `OK` line is a check that passed. Each `MISS` line names what is missing an
 | Running-train marker | `<repo>/.claude/daedalus/train.active` | each train, removed when it ends or stops |
 | Coder worktrees | `<repo>/.claude/worktrees/<train-id>-<unit-slug>` | the Build Train, removed when it ends or stops |
 
-`<repo>` is the main working tree of the git repository you started Claude Code in. Every worktree of that repository shares the one `.claude/daedalus/` directory. Outside a git repository, `<repo>` is the starting directory itself. The Build Train's start writes `.claude/daedalus/.gitignore` with a single `*` line, so git ignores the directory and your own `.gitignore` is untouched; until a train starts, no hook writes anything into the repository. While a train runs, the jail also refuses any `git add` or `git commit` that names `.claude/daedalus`.
+`<repo>` is the main working tree of the git repository you started Claude Code in. Every worktree of that repository shares the one `.claude/daedalus/` directory. Outside a git repository, `<repo>` is the starting directory itself. The Build Train's start writes `.claude/daedalus/.gitignore` with a single `*` line, so git ignores the directory and your own `.gitignore` is untouched; outside a train, no hook writes anything into the repository. While a train runs, the jail also refuses any `git add` or `git commit` that names `.claude/daedalus`.
 
 Each audit record holds a `result_head` field with the start of the tool's output. It is capped at 4096 characters, not bytes.
 
@@ -238,7 +238,7 @@ The train stops, with a `Next:` line, when any of these fails:
 - `gitleaks` is not installed. Install it (https://github.com/gitleaks/gitleaks#installing) and rerun; the train never pushes without the secret scan.
 - `gh auth status` fails. Run `gh auth login` and rerun; the conductor opens the pull request with gh.
 - The working tree has unstaged or untracked changes. Staged changes are fine; the conductor commits them.
-- This session's hooks are not writing the audit log. Run `/daedalus:doctor`.
+- This session's hooks are not writing the audit log. The train marks itself running before this check, since the log records only during a train. Run `/daedalus:doctor`.
 - An audit log fails its hash chain check. Keep the file, report it, and do not edit it, as in "When the chain is BROKEN" above.
 - The security auditor's last reply before this train's summary, in the Build Train's audit log, is not `[VERDICT: APPROVED]`, or the ledger commit is not on the branch.
 

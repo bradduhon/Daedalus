@@ -5,7 +5,7 @@
 
 Daedalus is a Claude Code plugin that runs a team of AI agents through trains, which are fixed sequences of steps. Every coding agent works from the same locked contract, a written spec of the interfaces its code must follow, fixed before coding starts. Each agent also works inside a jail, a set of rules that blocks anything outside its job.
 
-In a repository where a train has started, tool calls land in a hash-chained audit log. Each record carries the hash of the one before it, so an edited or removed record breaks the chain.
+While a train runs in a repository, tool calls there land in a hash-chained audit log. Each record carries the hash of the one before it, so an edited or removed record breaks the chain.
 
 ## What you need
 
@@ -98,7 +98,7 @@ Each agent's file lists the only tools it may use.
 | Path | When | Why |
 |---|---|---|
 | `<repo>/.claude/daedalus/.gitignore` | A Build Train starts in the repository for the first time | Holds `*` so git ignores the whole directory |
-| `<repo>/.claude/daedalus/audit/<session_id>.jsonl` | Every session in a repository where a train has started | The hash-chained audit log for that session |
+| `<repo>/.claude/daedalus/audit/<session_id>.jsonl` | Every session, while a train runs in that repository | The hash-chained audit log for that session |
 | `.claude/daedalus/ledger-locks/` in the repo that holds the ledger | A ledger entry is appended | Locks so two writers never change the ledger at once |
 | `<repo>/docs/.tmp/daedalus/` | A Build Train starts | Scratch files and the train summary, ignored by git |
 | `<repo>/.claude/daedalus/train.active` | A Build Train or Push Train starts | Marks a running train; removed when the train ends or stops |
@@ -133,7 +133,7 @@ Every file and setting Daedalus reads is described, with a small working example
 
 ## Safety model
 
-Outside a train, Daedalus leaves your session and your repository alone, with one exception: it refuses reads and searches of credential files for every agent and the main session. In a repository where no train has started, it writes no files and keeps no audit log. Inside a train, the jail judges every tool call and the audit log records each step. A train works in three folders: the repository's `.claude/worktrees/` folder holds the unit worktrees, its `.claude/daedalus/` folder holds train state and the audit log, and the git-ignored `docs/.tmp/daedalus/` folder holds scratch files and summaries. To have the plugin's hooks in some repositories only, enable the plugin at project scope in each of those repositories' `.claude/settings.json` (Claude Code's `enabledPlugins`) instead of for your user.
+Outside a train, Daedalus leaves your session and your repository alone, with one exception: it refuses reads and searches of credential files for every agent and the main session. Outside a train, Daedalus writes no files and keeps no audit log in any repository, including one where a train ran before. Inside a train, the jail judges every tool call and the audit log records each step. A train works in three folders: the repository's `.claude/worktrees/` folder holds the unit worktrees, its `.claude/daedalus/` folder holds train state and the audit log, and the git-ignored `docs/.tmp/daedalus/` folder holds scratch files and summaries. To have the plugin's hooks in some repositories only, enable the plugin at project scope in each of those repositories' `.claude/settings.json` (Claude Code's `enabledPlugins`) instead of for your user.
 
 Each agent gets a short list of allowed tools, and a tool not on the list is never offered to it. A PreToolUse hook is a check Claude Code runs before each tool call. Daedalus uses one, the jail, to compare every call against that agent's rules and block anything outside them. A coding agent may write only inside the `src/` and `tests/` directories of its own unit worktree. Every agent, and the main session, is refused reads and searches of `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh` and `~/.claude/.credentials.json` at all times. Daedalus's own agents always, and the main session while a train runs, are also refused writing those paths with a file tool or naming them in Bash. While a train runs, agents from Claude Code itself or from other plugins are refused every checked tool except reads and searches, in the train's repository and when they write into it from another one. The jail hooks are the enforced boundary and judge each tool call before it runs. Code an agent runs inside a tool call, such as its tests, is the same exposure any developer accepts when using a model in their environment, so Daedalus asks every agent never to circumvent its boundaries and does not try to control the environment. A blocked agent sees a line starting with `daedalus-jail[<agent>]:` that says what was refused and what to do next. Hooks, not agents, write each step to the hash-chained audit log. No agent pushes except the conductor inside the Push Train, and no agent merges. You merge.
 
