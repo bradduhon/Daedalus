@@ -49,6 +49,13 @@ def _fake_unit_worktrees(monkeypatch: pytest.MonkeyPatch) -> None:
         return None if cwd == CWD else real_binding(hook_input, cwd, units)
 
     monkeypatch.setattr(jail, "_binding_reason", no_binding)
+    # 0035: CWD stands for a repo a train runs in; real repos below resolve their own marker.
+    real_scoped = jail._train_scoped
+
+    def scoped(cwd: str, tool: str, tool_input: dict[str, Any]) -> bool:
+        return cwd.startswith(CWD) or real_scoped(cwd, tool, tool_input)
+
+    monkeypatch.setattr(jail, "_train_scoped", scoped)
 
 
 def _w(agent: str | None, path: str, tool: str = "Write") -> dict[str, Any]:
@@ -575,6 +582,29 @@ def test_main_git_push_and_gh_pass_outside_a_train(other_repo: Path, command: st
     # 0035: outside a train the main session's gh and git push are untouched.
     d = decide(_cred(None, "Bash", str(other_repo), command=command), CFG)
     assert d.allow, (command, d.reason)
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_main_and_foreign_agents_carry_only_the_read_deny_outside_a_train(
+    cred_home: Path, other_repo: Path, agent: str | None
+) -> None:
+    # 0023, 0035: outside a train the credential read deny is the one rule left.
+    (cred_home / ".ssh").mkdir()
+    cwd = str(other_repo)
+    payloads = [
+        _cred(agent, "Write", cwd, file_path=f"{cwd}/src/app.py"),
+        _cred(agent, "Write", cwd, file_path=f"{cwd}/.claude/daedalus/config.json"),
+        _cred(agent, "Bash", cwd, command="git clean -fdx"),
+        _cred(agent, "Bash", cwd, command="cat ~/.ssh/id_ed25519"),
+        _cred(agent, "Bash", cwd, command="echo $(date)"),
+    ]
+    for payload in payloads:
+        assert decide(payload, CFG).allow, payload
+    read = decide(_cred(agent, "Read", cwd, file_path=f"{cred_home}/.ssh/id_ed25519"), CFG)
+    assert not read.allow and "credential path" in str(read.reason)
+    _train(other_repo)
+    for payload in payloads:
+        assert not decide(payload, CFG).allow, payload
 
 
 @pytest.mark.parametrize("command", ["$GIT push origin x", "git $SUB origin x"])
@@ -2976,6 +3006,7 @@ def test_recursive_reader_over_a_store_ancestor_is_refused(
     cred_home: Path, agent: str | None, command: str
 ) -> None:
     text = command.format(home=cred_home, parent=cred_home.parent)
+    _train(cred_home / "project")
     d = decide(_cred(agent, "Bash", str(cred_home / "project"), command=text), CFG)
     assert not d.allow and "credential path" in str(d.reason), text
 
@@ -3034,16 +3065,20 @@ def test_refusal_names_the_resolved_target(cred_home: Path) -> None:
     assert d.reason == _refusal(str(cred_home / ".aws"))
 
 
-def test_unknown_agent_never_writes_the_data_dir(train_cwd: Path) -> None:
-    # 0010: the data dir is Daedalus's own integrity, refused train or not.
+def test_unknown_agent_writes_the_data_dir_only_outside_a_train(train_cwd: Path) -> None:
+    # 0010, 0035: the data dir is refused to foreign agents while a train runs, never outside.
     cwd = str(train_cwd)
     data = f"{cwd}/.claude/daedalus"
-    for payload in (
+    payloads = (
         _cred("Explore", "Write", cwd, file_path=f"{data}/x"),
         _cred("Explore", "Edit", cwd, file_path=f"{data}/config.json"),
         _cred("Explore", "Bash", cwd, command=f"tee {data}/train.active"),
         _cred("Explore", "Bash", cwd, command=f"rm {data}/train.active"),
-    ):
+    )
+    for payload in payloads:
+        assert decide(payload, CFG).allow, payload
+    _mark(train_cwd)
+    for payload in payloads:
         d = decide(payload, CFG)
         assert not d.allow and "data" in str(d.reason), payload
 
@@ -3065,6 +3100,12 @@ def plain_repo(tmp_path: Path) -> Path:
     return root
 
 
+def _train(root: Path) -> None:
+    # 0035: main and foreign agents meet the Bash credential model only while a train runs.
+    (root / ".claude" / "daedalus").mkdir(parents=True, exist_ok=True)
+    _mark(root)
+
+
 @pytest.mark.parametrize("agent", [None, "Explore"])
 @pytest.mark.parametrize(
     "command",
@@ -3081,6 +3122,7 @@ def test_unresolved_variable_in_a_path_position_is_refused(
     cred_home: Path, plain_repo: Path, agent: str | None, command: str
 ) -> None:
     # spec 8: $name and ${name} alike; read binds nothing the jail can resolve.
+    _train(plain_repo)
     d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
     assert not d.allow and "credential path" in str(d.reason), command
 
@@ -3111,11 +3153,12 @@ def test_rg_refusal_follows_hidden_components(
 ) -> None:
     # spec 8: rg skips hidden dirs by default, so only a non-hidden path reaches a store.
     cwd = str(plain_repo)
+    for command in ("rg BEGIN ~", f"rg BEGIN {plain_repo}", "rg BEGIN"):
+        assert decide(_cred(agent, "Bash", cwd, command=command), CFG).allow, command
+    _train(plain_repo)
     for command in ("rg BEGIN ~/.config", "rg -uu BEGIN ~", "rg -. BEGIN ~", "rg --hidden x ~"):
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
         assert not d.allow and "credential path" in str(d.reason), command
-    for command in ("rg BEGIN ~", f"rg BEGIN {plain_repo}", "rg BEGIN"):
-        assert decide(_cred(agent, "Bash", cwd, command=command), CFG).allow, command
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -3133,6 +3176,7 @@ def test_patterns_and_find_predicates_are_not_paths(
     ):
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
         assert d.allow, (command, d.reason)
+    _train(plain_repo)
     for command in ("grep -r '' ~", "grep -r -e x ~", "grep -rf pats ~"):
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
         assert not d.allow and "credential path" in str(d.reason), command
@@ -3143,10 +3187,11 @@ def test_wrapper_option_values_are_consumed(
     cred_home: Path, plain_repo: Path, agent: str | None
 ) -> None:
     cwd = str(plain_repo)
+    assert decide(_cred(agent, "Bash", cwd, command=f"sudo tar cf - {cwd}/src"), CFG).allow
+    _train(plain_repo)
     for command in ("sudo -u root tar cf - ~", "nice -n 5 tar cf - ~", "env -u X tar cf - ~"):
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
         assert not d.allow and "credential path" in str(d.reason), command
-    assert decide(_cred(agent, "Bash", cwd, command=f"sudo tar cf - {cwd}/src"), CFG).allow
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -3163,6 +3208,7 @@ def test_a_later_binding_does_not_hide_an_earlier_read(
     cred_home: Path, plain_repo: Path, agent: str | None, command: str
 ) -> None:
     # spec 8: bindings apply in segment order; a loop body sees every binding inside the loop.
+    _train(plain_repo)
     d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
     assert not d.allow and "credential path" in str(d.reason), command
 
@@ -3304,6 +3350,7 @@ def test_issue30_unknown_agent_reads_a_marked_repo_from_elsewhere(
 def test_issue30_unmodelled_copiers_reading_home_are_refused(
     cred_home: Path, plain_repo: Path, agent: str | None, command: str
 ) -> None:
+    _train(plain_repo)
     d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
     assert not d.allow and "credential" in str(d.reason), (command, d.reason)
 
@@ -3337,7 +3384,7 @@ def test_issue30_coder_plain_backup_suffix_passes() -> None:
     ],
 )
 def test_issue30_git_init_in_the_data_dir_is_refused(
-    other_repo: Path, agent: str | None, command: str
+    marked_repo: Path, agent: str | None, command: str
 ) -> None:
-    d = decide(_cred(agent, "Bash", str(other_repo), command=command), CFG)
+    d = decide(_cred(agent, "Bash", str(marked_repo), command=command), CFG)
     assert not d.allow and "plugin data directory" in str(d.reason), (command, d.reason)

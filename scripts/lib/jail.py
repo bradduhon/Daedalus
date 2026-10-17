@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-import fnmatch
 import itertools
 import os
 import re
@@ -16,36 +15,39 @@ from typing import Any
 
 from lib.audit import _git_env, project_data_dir, project_root
 from lib.config import Config
+from lib.credential_paths import (
+    CREDENTIAL_TOOLS,
+    R_CREDENTIAL,
+    R_CREDENTIAL_TREE,
+    path_reason,
+)
+from lib.credential_paths import CUT as _CUT
+from lib.credential_paths import LIT as _LIT
+from lib.credential_paths import REDIRECT as _REDIRECT
+from lib.credential_paths import anchor as _anchor
+from lib.credential_paths import clean as _clean
+from lib.credential_paths import credential_hit as _credential_hit
+from lib.credential_paths import credential_roots as _credential_roots
+from lib.credential_paths import expand_word as _expand_word
+from lib.credential_paths import store_rest as _store_rest
+from lib.credential_paths import tilde as _tilde
 from lib.gh_policy import CONDUCTOR_GH, allowlist_applies, gh_reason
 from lib.ledger import LedgerError, resolve_ledger
+from lib.train_scope import (
+    AGENT_NAMESPACES,
+    KNOWN_AGENTS,
+    TEST_NAMESPACE,
+    policed_outside_train,
+)
 from lib.train_state import TrainStateError, active_train
 from lib.train_state import load as load_train
 from lib.unit_binding import claim, record_dispatch
 from lib.workspace import UNMARK_NEXT, train_marker
 
-KNOWN_AGENTS = frozenset(
-    {
-        "main",
-        "repo-coder",
-        "contract-spec",
-        "charter-docs",
-        "security-auditor",
-        "nist-specialist",
-        "cis-specialist",
-        "pr-train-conductor",
-        "web-researcher",
-        "standards-rules-specialist",
-        "boundary-tester",
-    }
-)
 WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 WEB_TOOLS = frozenset({"WebFetch", "WebSearch"})
 # 5.5: all routing is through Fable; workers never message each other.
 WORKER_DENIED_TOOLS = frozenset({"Task", "Agent", "SendMessage"})
-# spec 8, 0023: credential stores refused to every agent, main included.
-CREDENTIAL_DENY = (".ssh", ".aws", ".gnupg", ".config/gh", ".claude/.credentials.json")
-# 0023: these tools carry only the credential deny, for every agent known or not.
-CREDENTIAL_TOOLS = frozenset({"Read", "Glob", "Grep"})
 
 READ_ONLY_CMDS = frozenset(
     {
@@ -207,10 +209,6 @@ R_LEDGER_LITERAL = (
     "${CLAUDE_PLUGIN_ROOT} is empty in agent Bash. "
     f"Next: run python3 {os.path.join(_REPO_SCRIPTS, 'append_ledger.py')} with the same arguments."
 )
-# Plugin agents arrive as <plugin>:<agent>; only these prefixes unwrap.
-AGENT_NAMESPACES = ("daedalus",)
-# tests/fixtures/live-agent namespace; accepted only when DAEDALUS_LIVE_TEST=1.
-TEST_NAMESPACE = "daedalus-probe"
 R_NAMESPACED_MAIN = "a namespaced agent may not claim the orchestrator role. Next: name the agent."
 
 R_UNSUPPORTED = (
@@ -336,31 +334,16 @@ R_DOCS_BASH = (
     "charter-docs Bash is limited to append_ledger.py, git add <path>, git commit -m, "
     "git status, git log and git diff. Next: use those only; the main session runs the rest."
 )
-R_CREDENTIAL = (
-    "{path} is a credential path. "
-    "Next: Daedalus never reads credentials; use the tool that needs them from your own shell"
-)
 R_UNKNOWN = (
     "unknown agent_type '{agent}', fail closed. Next: add the agent to the jail before using it."
 )
 R_UNKNOWN_TRAIN = "unknown agent_type '{agent}', fail closed while {marker} exists.\n" + UNMARK_NEXT
 _CREDENTIAL_PART = re.compile(r"[=:,]")
-_GLOB_START = re.compile(r"[*?\[{]")
-_BRACE = re.compile(r"\{[^}]*\}")
-R_CREDENTIAL_TREE = (
-    "{path} contains a credential path. "
-    "Next: Daedalus never reads credentials; point the read at a directory without them"
-)
 R_CREDENTIAL_PARAM = (
     "{path} could be a credential path; the jail cannot resolve its variable. "
     "Next: spell the path out"
 )
-_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*|[0-9]+)[^}]*\}|\$([A-Za-z_][A-Za-z0-9_]*|[0-9])")
-_UNQUOTE = re.compile(r"[\"'\\]")
 _DURATION = re.compile(r"[\d.]+[smhd]?")
-# spec 8: lexer marks for a literal $, a quote edge that ends a name, and a redirect target.
-_LIT, _CUT, _REDIRECT = "\x00", "\x01", "\x02"
-_EXPANSION_CAP = 16
 _CONTROL_WORDS = frozenset({"!", "do", "then", "else", "elif", "while", "until", "if", "time"})
 _BINDERS = frozenset({"read", "mapfile", "readarray", "getopts", "select"})
 # spec 8: wrappers that run the next word as the command, with their value-taking options.
@@ -1871,15 +1854,6 @@ def _worker_hygiene(tokens: list[str], agent: str) -> str | None:
     return None
 
 
-def _credential_roots() -> list[str]:
-    home = Path.home()
-    return [os.path.realpath(home / rel) for rel in CREDENTIAL_DENY]
-
-
-def _clean(word: str) -> str:
-    return word.replace(_CUT, "").replace(_REDIRECT, "").replace(_LIT, "$")
-
-
 def _shell_words(command: str) -> list[list[str]]:
     # spec 8: single-quoted or escaped $ is literal; quote edges end a variable name.
     segments: list[list[str]] = []
@@ -1937,33 +1911,6 @@ def _shell_words(command: str) -> list[list[str]]:
     if words:
         segments.append(words)
     return segments
-
-
-def _expand_word(word: str, env: dict[str, list[str]]) -> list[tuple[str, bool]]:
-    # spec 8: $name and ${name...} alike; each expansion carries whether a name was unknown.
-    results: list[tuple[str, bool]] = [("", False)]
-    pos = 0
-    for match in _VAR.finditer(word):
-        values = env.get(match.group(1) or match.group(2))
-        alts = [(v, False) for v in values] if values else [("", True)]
-        lit = word[pos : match.start()]
-        results = [(t + lit + v, u or w) for t, u in results for v, w in alts]
-        results = results[:_EXPANSION_CAP]
-        pos = match.end()
-    home = env["HOME"][0]
-    out: list[tuple[str, bool]] = []
-    for text, unresolved in results:
-        text += word[pos:]
-        unresolved = unresolved or "${" in text
-        text = _clean(text)
-        out.append((_tilde(text, home), unresolved))
-    return out
-
-
-def _tilde(text: str, home: str) -> str:
-    if text == "~" or text.startswith("~/"):
-        return home + text[1:]
-    return os.path.expanduser(text) if text.startswith("~") else text
 
 
 def _bash_env(segments: list[list[str]]) -> list[dict[str, list[str]]]:
@@ -2032,79 +1979,6 @@ def _loop_union(
                     envs[j].pop(key, None)
                 else:
                     envs[j][key] = list(dict.fromkeys([*envs[j].get(key, []), *values]))
-
-
-def _anchor(text: str, base: str) -> str | None:
-    if not text:
-        return None
-    if os.path.isabs(text):
-        return os.path.normpath(text)
-    return os.path.normpath(os.path.join(base, text)) if os.path.isabs(base) else None
-
-
-def _expand_home(token: str, cwd: str) -> str | None:
-    # spec 8: quotes and backslashes are dropped; ~, $HOME and ${HOME...} expand to home.
-    text = _expand_word(_UNQUOTE.sub("", token), {"HOME": [str(Path.home())]})[0][0]
-    return _anchor(text, cwd)
-
-
-def _credential_candidates(tool: str, tool_input: dict[str, Any], cwd: str) -> list[str]:
-    # Bash goes through _bash_credential_reason; this covers the path-argument tools.
-    if tool not in CREDENTIAL_TOOLS and tool not in WRITE_TOOLS:
-        return []
-    values = [str(tool_input.get(k) or "") for k in ("file_path", "notebook_path", "path")]
-    pattern = str(tool_input.get("pattern") or "")
-    if tool == "Glob" and pattern:
-        values.append(pattern if pattern.startswith(("/", "~", "$HOME", "${HOME")) else "")
-        base = str(tool_input.get("path") or cwd)
-        values.append(os.path.join(base, pattern))
-    elif tool == "Grep" and pattern.startswith(("/", "~", "$HOME", "${HOME")):
-        # spec 8: a Grep pattern is a regex; only an absolute or home-rooted one names a path.
-        values.append(pattern)
-    return [v for v in values if v]
-
-
-def _glob_rest(parts: list[str], root: list[str], dotglob: bool) -> list[str] | None:
-    for i, name in enumerate(root):
-        if i >= len(parts):
-            return root[i:]
-        pat = _BRACE.sub("*", parts[i])
-        if "**" in pat:
-            return []
-        # spec 8: a shell wildcard skips a leading dot unless dotglob is set.
-        if not dotglob and name.startswith(".") and not pat.startswith("."):
-            return None
-        if not fnmatch.fnmatchcase(name, pat):
-            return None
-    return []
-
-
-def _contains(parent: str, child: str) -> bool:
-    # spec 8: _under misses the filesystem root, so ancestry is checked here.
-    real_parent, real_child = os.path.realpath(parent), os.path.realpath(child)
-    return real_child == real_parent or real_child.startswith(real_parent.rstrip(os.sep) + os.sep)
-
-
-def _store_rest(target: str, root: str, glob: bool, dotglob: bool) -> list[str] | None:
-    # spec 8: [] means target is in the store; a list is the store's components below target.
-    if glob and _GLOB_START.search(target):
-        parts = os.path.normpath(target).split(os.sep)
-        first = next(i for i, part in enumerate(parts) if _GLOB_START.search(part))
-        base = os.path.realpath(os.sep.join(parts[:first]) or os.sep)
-        if _contains(root, base):
-            return []
-        pattern = [p for p in base.split(os.sep) if p] + parts[first:]
-        return _glob_rest(pattern, [p for p in root.split(os.sep) if p], dotglob)
-    real = os.path.realpath(target)
-    if _contains(root, real):
-        return []
-    if _contains(real, root):
-        return [p for p in root[len(real) :].split(os.sep) if p]
-    return None
-
-
-def _credential_hit(target: str, roots: list[str], glob: bool, dotglob: bool = True) -> bool:
-    return any(_store_rest(target, root, glob, dotglob) == [] for root in roots)
 
 
 def _command_at(clean: list[str], skip: set[int]) -> int | None:
@@ -2282,19 +2156,12 @@ def _bash_credential_reason(command: str, cwd: str, roots: list[str]) -> str | N
 
 
 def _credential_reason(tool: str, tool_input: dict[str, Any], cwd: str) -> str | None:
-    roots = _credential_roots()
     if tool == "Bash":
-        return _bash_credential_reason(str(tool_input.get("command") or ""), cwd, roots)
-    for raw in _credential_candidates(tool, tool_input, cwd):
-        target = _expand_home(raw, cwd)
-        if target is not None and _credential_hit(target, roots, tool == "Glob"):
-            return R_CREDENTIAL.format(path=target)
-    if tool == "Grep":
-        # spec 8: the Grep tool searches hidden dirs, so a root above a store reads it.
-        target = _expand_home(str(tool_input.get("path") or cwd), cwd)
-        if target and any(_store_rest(target, root, False, True) is not None for root in roots):
-            return R_CREDENTIAL_TREE.format(path=target)
-    return None
+        command = str(tool_input.get("command") or "")
+        return _bash_credential_reason(command, cwd, _credential_roots())
+    if tool not in CREDENTIAL_TOOLS and tool not in WRITE_TOOLS:
+        return None
+    return path_reason(tool, tool_input, cwd)
 
 
 def _policy_segments(command: str, depth: int = 0) -> list[list[str]] | None:
@@ -2396,6 +2263,11 @@ def _marked_repo(cwd: str, tool: str, tool_input: dict[str, Any]) -> Path | None
         if os.path.lexists(train_marker(root)):
             return root
     return None
+
+
+def _train_scoped(cwd: str, tool: str, tool_input: dict[str, Any]) -> bool:
+    # 0035: an unknown repo (no absolute cwd) is judged as if a train runs there.
+    return not os.path.isabs(cwd) or _marked_repo(cwd, tool, tool_input) is not None
 
 
 R_SHELL_FORM = (
@@ -2602,11 +2474,15 @@ def decide(hook_input: dict[str, Any], config: Config) -> Decision:
     tool_input = hook_input.get("tool_input")
     if not isinstance(tool_input, dict):
         tool_input = {}
+    if tool in CREDENTIAL_TOOLS:
+        reason = path_reason(tool, tool_input, cwd)
+        return Decision(reason is None, reason, agent)
+    # 0035: outside a train, main and foreign agents carry only the read deny above.
+    if not policed_outside_train(raw_agent) and not _train_scoped(cwd, tool, tool_input):
+        return Decision(True, None, agent)
     credential = _credential_reason(tool, tool_input, cwd)
     if credential:
         return Decision(False, credential, agent)
-    if tool in CREDENTIAL_TOOLS:
-        return Decision(True, None, agent)
     if agent == "main" and raw_agent != "main":
         return Decision(False, R_NAMESPACED_MAIN, agent)
     # m4: only the orchestrator thread arrives without an agent_id.

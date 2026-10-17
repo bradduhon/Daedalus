@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import ast
 import io
 import json
 import os
@@ -28,6 +29,11 @@ def _run_raw(text: str, script: Path = _SCRIPT) -> subprocess.CompletedProcess[s
         env=env,
         check=False,
     )
+
+
+def _in_train(project_data: Path) -> None:
+    # 0035: the main session meets config and audit failures only while a train runs.
+    (project_data / "train.active").write_text("20261015-120000\n")
 
 
 def test_allow_exits_zero_and_logs_allow(
@@ -89,13 +95,25 @@ def test_unknown_agent_passes_without_a_train(
 def test_unwritable_audit_dir_fails_closed(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
+    _in_train(project_data)
     (project_data / "audit").write_text("not a directory")
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
     assert result.returncode == 2
     assert "audit log unavailable" in result.stderr
 
 
+def test_unwritable_audit_dir_outside_a_train_lets_main_proceed(
+    run_script: Any, project_data: Path, hook_input: Any
+) -> None:
+    # 0035: outside a train a failed record is one stderr line, never a block.
+    (project_data / "audit").write_text("not a directory")
+    result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
+    assert result.returncode == 0
+    assert "audit log unavailable" in result.stderr and "not recorded" in result.stderr
+
+
 def test_malformed_config_blocks(run_script: Any, project_data: Path, hook_input: Any) -> None:
+    _in_train(project_data)
     (project_data / "config.json").write_text("{bad")
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
     assert result.returncode == 2 and "config.json" in result.stderr
@@ -104,6 +122,7 @@ def test_malformed_config_blocks(run_script: Any, project_data: Path, hook_input
 def test_oversized_int_config_blocks_and_records(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
+    _in_train(project_data)
     (project_data / "config.json").write_text('{"x": ' + "1" * 5000 + "}")
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
     assert result.returncode == 2
@@ -116,6 +135,7 @@ def test_oversized_int_config_blocks_and_records(
 def test_malformed_config_records_block(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
+    _in_train(project_data)
     (project_data / "config.json").write_text("{bad")
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
     assert result.returncode == 2
@@ -237,6 +257,7 @@ def test_decide_exception_blocks_and_records(
     def _boom(*_args: Any) -> Any:
         raise RuntimeError("decide exploded")
 
+    _in_train(project_data)
     monkeypatch.setattr(jail, "decide", _boom)
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(hook_input())))
     assert enforce_agent_jail.main() == 2
@@ -258,6 +279,7 @@ def test_missing_cwd_blocks_even_for_read(run_script: Any, hook_input: Any, cwd:
 def test_config_in_project_data_dir_is_loaded(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
+    _in_train(project_data)
     (project_data / "config.json").write_text('{"ledger": {"path": "/x"}}')
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
     assert result.returncode == 2
@@ -285,7 +307,9 @@ def test_untrusted_data_dir_blocks_the_hook(
         data.mkdir(parents=True)
         (data / ("config.json" if case == "tracked" else ".gitignore")).write_text("{}")
     _git_commit_all(repo_cwd)
-    result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
+    # 0035: a Daedalus agent meets the data dir checks with or without a train.
+    payload = hook_input(agent_type="daedalus:security-auditor", tool_input={"command": "ls"})
+    result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2, result.stderr
     assert "Next:" in result.stderr
     assert list(elsewhere.iterdir()) == []
@@ -422,6 +446,7 @@ def test_bad_config_still_refuses_an_ssh_key_read(
 def test_bad_config_still_blocks_bash(
     temp_home: Path, plugin_data: Path, project_data: Path, hook_input: Any
 ) -> None:
+    _in_train(project_data)
     (project_data / "config.json").write_text("{bad")
     result = _run_home(hook_input(tool_input={"command": "ls"}), temp_home, plugin_data)
     assert result.returncode == 2 and "config.json" in result.stderr
@@ -438,3 +463,124 @@ def test_unwritable_audit_dir_still_allows_a_read(
     result = _run_home(payload, temp_home, plugin_data)
     assert result.returncode == 0, result.stderr
     assert "audit log unavailable" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("tool", "tool_input"),
+    [
+        ("Write", {"file_path": "src/app.py", "content": "x"}),
+        ("Edit", {"file_path": "tests/test_x.py", "old_string": "a", "new_string": "b"}),
+        ("Write", {"file_path": ".claude/daedalus/config.json", "content": "{}"}),
+        ("Bash", {"command": "git clean -fdx"}),
+        ("Bash", {"command": "gh pr merge 1 --admin"}),
+        ("Bash", {"command": "git push -f origin main"}),
+        ("Bash", {"command": "echo $(date) > notes.txt"}),
+        ("Bash", {"command": "cat ~/.ssh/id_ed25519"}),
+    ],
+)
+def test_main_outside_a_train_meets_no_jail_rule(
+    temp_home: Path,
+    plugin_data: Path,
+    repo_cwd: Path,
+    hook_input: Any,
+    tool: str,
+    tool_input: dict[str, str],
+) -> None:
+    # 0035: outside a train only Read, Glob and Grep carry a check (the credential deny, 0023).
+    payload = hook_input(tool_name=tool, tool_input=tool_input)
+    result = _run_home(payload, temp_home, plugin_data)
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert not (repo_cwd / ".claude").exists()
+
+
+@pytest.mark.parametrize(
+    ("tool", "tool_input", "reason"),
+    [
+        ("Write", {"file_path": "src/app.py", "content": "x"}, "application code"),
+        ("Bash", {"command": "git clean -fdx"}, "git clean"),
+        ("Bash", {"command": "echo $(date) > notes.txt"}, "plain commands only"),
+    ],
+)
+def test_main_inside_a_train_meets_the_jail(
+    temp_home: Path,
+    plugin_data: Path,
+    project_data: Path,
+    hook_input: Any,
+    tool: str,
+    tool_input: dict[str, str],
+    reason: str,
+) -> None:
+    _in_train(project_data)
+    payload = hook_input(tool_name=tool, tool_input=tool_input)
+    result = _run_home(payload, temp_home, plugin_data)
+    assert result.returncode == 2
+    assert reason in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_credential_read_is_refused_outside_a_train_without_a_data_dir(
+    temp_home: Path, plugin_data: Path, repo_cwd: Path, hook_input: Any, agent: str | None
+) -> None:
+    # 0023: the one standing check; it writes nothing into the repo either.
+    key = temp_home / ".ssh" / "id_ed25519"
+    payload = hook_input(tool_name="Read", tool_input={"file_path": str(key)})
+    if agent:
+        payload["agent_type"] = agent
+    result = _run_home(payload, temp_home, plugin_data)
+    assert result.returncode == 2
+    assert "is a credential path" in result.stderr
+    assert not (repo_cwd / ".claude").exists()
+
+
+def test_daedalus_agent_outside_a_train_is_still_judged(
+    run_script: Any, repo_cwd: Path, hook_input: Any
+) -> None:
+    payload = hook_input(agent_type="daedalus:repo-coder", tool_input={"command": "git push o x"})
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 2
+    assert not (repo_cwd / ".claude").exists()
+
+
+def test_main_writing_into_another_repos_train_is_judged(
+    run_script: Any, tmp_path: Path, repo_cwd: Path, hook_input: Any
+) -> None:
+    # issue 30: the fast path hands a call naming a marked repo to the full jail.
+    marked = tmp_path.resolve() / "marked"
+    subprocess.run(["git", "init", "-q", str(marked)], check=True)
+    (marked / ".claude" / "daedalus").mkdir(parents=True)
+    _in_train(marked / ".claude" / "daedalus")
+    command = f"echo $(date) > {marked}/notes.txt"
+    result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": command}))
+    assert result.returncode == 2
+    assert "plain commands only" in result.stderr
+
+
+def test_fast_path_imports_only_the_standard_library_modules(repo_cwd: Path) -> None:
+    # 0035: outside a train a main-session call never loads the jail or the audit modules.
+    payload = {
+        "session_id": "s",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Read",
+        "tool_input": {"file_path": str(repo_cwd / "x")},
+        "cwd": str(repo_cwd),
+    }
+    result = subprocess.run(
+        [sys.executable, "-X", "importtime", str(_SCRIPT)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    loaded = {line.rsplit("|", 1)[-1].strip() for line in result.stderr.splitlines()}
+    assert {"lib.credential_paths", "lib.train_scope"} <= loaded
+    assert not loaded & {"lib.jail", "lib.audit", "lib.config", "subprocess"}
+
+
+@pytest.mark.parametrize("module", ["credential_paths.py", "train_scope.py"])
+def test_fast_path_modules_use_the_standard_library_only(module: str) -> None:
+    tree = ast.parse((_SCRIPT.parent / "lib" / module).read_text())
+    names = [a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names]
+    names += [n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)]
+    assert not [n for n in names if n == "lib" or n.startswith("lib.")]

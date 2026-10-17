@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -19,11 +20,15 @@ _CONFIG_NEXT = (
 )
 _REPORT_NEXT = " Next: report this hook failure to the operator."
 _MARKER = Path(".claude") / "daedalus" / "train.active"
+_WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+# issue 30: past these caps the fast path hands the call to the full jail.
+_WORD_CAP = 256
+_ROOT_CAP = 16
 
 
-def _repo_root(cwd: str) -> Path:
-    # 0035: stdlib mirror of lib.audit.root_info; the main working tree, else cwd itself.
-    start = Path(cwd)
+def _repo_root(path: str) -> Path:
+    # 0035: stdlib mirror of lib.audit.root_info; the main working tree, else the nearest dir.
+    start = Path(path)
     for folder in (start, *start.parents):
         dot = folder / ".git"
         if dot.is_dir():
@@ -42,7 +47,7 @@ def _repo_root(cwd: str) -> Path:
         except (OSError, UnicodeDecodeError):
             common = gitdir
         return Path(os.path.normpath(common)).parent
-    return start
+    return next((p for p in (start, *start.parents) if p.is_dir()), start)
 
 
 def _train_marked(cwd: Any) -> bool:
@@ -50,6 +55,77 @@ def _train_marked(cwd: Any) -> bool:
     if not isinstance(cwd, str) or not os.path.isabs(cwd):
         return True
     return os.path.lexists(_repo_root(cwd) / _MARKER)
+
+
+def _named_paths(tool: str, tool_input: dict[str, Any]) -> list[str] | None:
+    # issue 30: every word that could name a path; None when the command cannot be split.
+    if tool in _WRITE_TOOLS:
+        return [str(tool_input.get(k) or "") for k in ("file_path", "notebook_path")]
+    if tool != "Bash":
+        return []
+    lexer = shlex.shlex(str(tool_input.get("command") or ""), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        words = list(lexer)
+    except ValueError:
+        return None
+    if len(words) > _WORD_CAP:
+        return None
+    found: list[str] = []
+    for word in words:
+        word = word.replace("${HOME}", "~").replace("$HOME", "~")
+        found += [word, word.rpartition("=")[2]]
+        cut = min((i for i in (word.find("/"), word.find("~")) if i > 0), default=-1)
+        if cut > 0:
+            found.append(word[cut:])
+    return found
+
+
+def _names_marked_repo(tool: str, tool_input: dict[str, Any], cwd: str) -> bool:
+    # issue 30: a train in any repo the call names counts; the full jail then judges precisely.
+    words = _named_paths(tool, tool_input)
+    if words is None:
+        return True
+    home = _repo_root(cwd)
+    roots: set[Path] = {home}
+    for word in words:
+        if not word or word.startswith("-"):
+            continue
+        root = _repo_root(os.path.normpath(os.path.join(cwd, os.path.expanduser(word))))
+        if root in roots:
+            continue
+        roots.add(root)
+        if len(roots) > _ROOT_CAP or os.path.lexists(root / _MARKER):
+            return True
+    return False
+
+
+def _fast_path(payload: dict[str, Any], agent: str, cwd: str) -> int:
+    # 0023, 0035: outside a train, main and foreign agents meet only the credential read deny.
+    from lib.credential_paths import CREDENTIAL_TOOLS, path_reason
+    from lib.train_scope import BEGIN_NEEDLE
+
+    tool = str(payload.get("tool_name"))
+    tool_input = payload.get("tool_input") or {}
+    reason = path_reason(tool, tool_input, cwd) if tool in CREDENTIAL_TOOLS else None
+    command = str(tool_input.get("command") or "") if tool == "Bash" else ""
+    data = _repo_root(cwd) / ".claude" / "daedalus"
+    if os.path.lexists(data) or BEGIN_NEEDLE in command:
+        _fast_record(payload, agent, reason)
+    return _block(agent, reason) if reason else 0
+
+
+def _fast_record(payload: dict[str, Any], agent: str, reason: str | None) -> None:
+    # 0035: best effort; outside a train a failed record never blocks the call.
+    try:
+        from lib.audit import audit_append
+
+        record = audit_append(payload, "block" if reason else "allow", reason)
+    except Exception as exc:  # noqa: BLE001
+        _note(agent, f"audit log unavailable ({exc}); this call is not recorded.")
+        return
+    if record is not None and record.get("root_source") == "cwd-fallback":
+        _warn_fallback(str(payload.get("cwd")))
 
 
 def _block(agent: str, message: str, next_step: str = _REPORT_NEXT) -> int:
@@ -159,7 +235,26 @@ def main() -> int:
         return _block(agent, "hook input has no tool_name string.")
     if "tool_input" in payload and not isinstance(payload["tool_input"], dict):
         return _block(agent, "hook input tool_input is not an object.")
-    in_train = _train_marked(payload.get("cwd"))
+    cwd = payload.get("cwd")
+    in_train = _train_marked(cwd)
+    if not in_train and isinstance(cwd, str):
+        try:
+            from lib.credential_paths import CREDENTIAL_TOOLS
+            from lib.train_scope import policed_outside_train
+        except Exception as exc:  # noqa: BLE001
+            return _load_failed(exc, in_train)
+        try:
+            named = _names_marked_repo(tool_name, payload.get("tool_input") or {}, cwd)
+        except Exception:  # noqa: BLE001
+            named = True  # issue 30: unsure means the full jail judges the call.
+        if not policed_outside_train(agent) and not named:
+            try:
+                return _fast_path(payload, agent, cwd)
+            except Exception as exc:  # noqa: BLE001
+                if tool_name in CREDENTIAL_TOOLS:
+                    return _block(agent, f"the credential check failed ({exc}).")
+                _note(agent, f"hook error ({exc}); no train runs here, so the call proceeds.")
+                return 0
     try:
         for name in _LIBS:
             importlib.import_module(name)
