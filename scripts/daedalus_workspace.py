@@ -17,6 +17,7 @@ from lib.workspace import (  # noqa: E402
     lock,
     mark_train,
     remove,
+    stop,
     worktree_path,
 )
 
@@ -44,6 +45,10 @@ def main(argv: list[str]) -> int:
     locking.add_argument("--repo", type=Path, required=True)
     locking.add_argument("--contract", required=True)
     locking.add_argument("--version", type=int, required=True)
+    halt = sub.add_parser("stop")
+    halt.add_argument("--repo", type=Path, required=True)
+    halt.add_argument("--reason", required=True)
+    halt.add_argument("--next", dest="next_action")
     args = parser.parse_args(argv)
     repo = args.repo.resolve()
     try:
@@ -60,6 +65,10 @@ def main(argv: list[str]) -> int:
             print("\n".join(begin(repo)))
         elif args.action == "lock":
             print("\n".join(lock(repo, args.contract, args.version)))
+        elif args.action == "stop":
+            lines, ok = stop(repo, args.reason, args.next_action)
+            print("\n".join(lines))
+            return 0 if ok else 1
     except LedgerQuestion as exc:
         # 0004: exit 3 hands the ledger question to the operator; nothing was written.
         print(exc)

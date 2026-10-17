@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from lib import audit, train_state, workspace
 from lib.sandbox_state import SettingsError
-from lib.workspace import WorkspaceError, begin, lock, train_marker
+from lib.workspace import WorkspaceError, begin, create, lock, mark_train, stop, train_marker
 
 from tests.conftest import SCRIPTS_DIR
 
@@ -330,3 +330,153 @@ def test_lock_cli_exit_codes(repo: Path, live: None) -> None:
     done = _cli("lock", "--repo", str(repo), "--contract", "contracts/api.md", "--version", "1")
     assert done.returncode == 0, done.stderr
     assert done.stdout.startswith("lock: ")
+
+
+DEFAULT_NEXT = "Next: rerun /daedalus:build-train"
+
+
+def _locked_train(repo: Path) -> str:
+    train = _train(repo)
+    _contract(repo)
+    lock(repo, "contracts/api.md", 1)
+    return train
+
+
+def _unit(repo: Path, train: str, slug: str) -> Path:
+    return create(repo, f"{train}-{slug}", f"daedalus/{train}")
+
+
+def test_stop_without_a_train_says_nothing_to_stop(repo: Path) -> None:
+    lines, ok = stop(repo, "operator", None)
+    assert ok and lines == ["nothing to stop", DEFAULT_NEXT]
+
+
+def test_stop_with_a_marker_and_no_state_only_unmarks(repo: Path) -> None:
+    mark_train(repo, "20261016-120000")
+    lines, ok = stop(repo, "crash", None)
+    assert ok and lines[0] == "Stopped train 20261016-120000: crash"
+    assert lines[-1] == DEFAULT_NEXT
+    assert not train_marker(repo).exists()
+
+
+def test_stop_tears_down_only_recorded_units(repo: Path, live: None) -> None:
+    train = _locked_train(repo)
+    unit = _unit(repo, train, "u1")
+    (unit / "new.txt").write_text("x\n")
+    extra = repo / ".claude" / "worktrees" / "extra"
+    _ok(repo, "worktree", "add", "-q", "-b", "other", str(extra), "main")
+    lines, ok = stop(repo, "operator", None)
+    assert ok, lines
+    assert f"discarding {unit}:" in lines and "  ?? new.txt" in lines
+    assert not unit.exists() and extra.is_dir()
+    assert not any(str(extra) in line for line in lines)
+    assert _ok(repo, "rev-parse", "--verify", f"daedalus-unit/{train}-u1")
+
+
+def test_stop_switches_back_to_base(repo: Path, live: None) -> None:
+    train = _locked_train(repo)
+    lines, ok = stop(repo, "operator", None)
+    assert ok and _head(repo) == "main"
+    assert lines[0] == f"Stopped train {train}: operator"
+    assert f"switched {repo} to main" in lines and lines[-1] == DEFAULT_NEXT
+
+
+def test_stop_keeps_a_dirty_main_checkout_on_the_train_branch(repo: Path, live: None) -> None:
+    train = _locked_train(repo)
+    (repo / "stray.txt").write_text("x\n")
+    lines, ok = stop(repo, "operator", "ignored")
+    assert ok and _head(repo) == f"daedalus/{train}"
+    assert f"kept on daedalus/{train}: stray.txt" in lines
+    assert lines[-1] == (
+        f"Next: commit or discard those files on daedalus/{train} from your own shell, "
+        "then run git switch main"
+    )
+
+
+def test_stop_keeps_an_uncommitted_contract(repo: Path, live: None) -> None:
+    train = _locked_train(repo)
+    _contract(repo, text="packet v2\n")
+    lines, ok = stop(repo, "contract revision refused", None)
+    assert ok and _head(repo) == f"daedalus/{train}"
+    assert f"kept on daedalus/{train}: contracts/api.md" in lines
+
+
+def test_stop_keeps_a_dirty_charter(repo: Path, charter: Path, live: None) -> None:
+    train = _train(repo)
+    (charter / "specs").mkdir()
+    (charter / "specs" / "api.md").write_text("draft\n")
+    lines, ok = stop(repo, "operator", None)
+    assert ok and _head(charter) == f"daedalus/{train}"
+    assert f"kept on daedalus/{train} in charter: specs/api.md" in lines
+    assert lines[-1] == (
+        f"Next: commit or discard those files on daedalus/{train} in charter from your own "
+        f"shell, then run git -C {charter} switch main"
+    )
+
+
+def test_stop_switches_the_charter_back(repo: Path, charter: Path, live: None) -> None:
+    _train(repo)
+    lines, ok = stop(repo, "operator", None)
+    assert ok and _head(charter) == "main"
+    assert f"switched {charter} to main" in lines
+
+
+def test_stop_after_merge_stays_on_the_integration_branch(repo: Path, live: None) -> None:
+    train = _locked_train(repo)
+    train_state.update(repo, train, merged=True)
+    lines, ok = stop(repo, "train complete", "review the integration branch")
+    assert ok and _head(repo) == f"daedalus/{train}"
+    assert lines[-1] == "Next: review the integration branch"
+
+
+def test_stop_next_precedence(repo: Path, live: None) -> None:
+    train = _locked_train(repo)
+    assert stop(repo, "a", None)[0][-1] == DEFAULT_NEXT
+    mark_train(repo, train)
+    assert stop(repo, "b", "fix the spec")[0][-1] == "Next: fix the spec"
+    mark_train(repo, train)
+    _ok(repo, "switch", "-q", f"daedalus/{train}")
+    (repo / "stray.txt").write_text("x\n")
+    assert stop(repo, "c", "fix the spec")[0][-1].startswith("Next: commit or discard")
+
+
+def test_stop_remove_failure_exits_one_with_the_manual_command(
+    repo: Path, live: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    train = _locked_train(repo)
+    unit = _unit(repo, train, "u1")
+
+    def _fail(repo: Path, name: str) -> None:
+        raise WorkspaceError("git worktree remove failed (locked). Next: fix the cause.")
+
+    monkeypatch.setattr(workspace, "remove", _fail)
+    lines, ok = stop(repo, "operator", "ignored")
+    assert not ok
+    assert lines[-1] == (
+        f"Next: run git worktree remove --force {unit} and git worktree prune from your own shell"
+    )
+    assert not train_marker(repo).exists()
+
+
+def test_stop_always_unmarks(repo: Path, live: None) -> None:
+    _locked_train(repo)
+    (repo / "stray.txt").write_text("x\n")
+    lines, _ = stop(repo, "operator", None)
+    assert f"cleared {train_marker(repo)}" in lines
+    assert not train_marker(repo).exists()
+
+
+def test_stop_cli_prints_the_lines(repo: Path, live: None) -> None:
+    train = _locked_train(repo)
+    result = _cli("stop", "--repo", str(repo), "--reason", "operator", "--next", "say hi")
+    assert result.returncode == 0, result.stderr
+    out = result.stdout.splitlines()
+    assert out[0] == f"Stopped train {train}: operator" and out[-1] == "Next: say hi"
+
+
+def test_mark_train_names_the_marker_when_it_cannot_write(repo: Path) -> None:
+    # 0023: a directory at the marker path is the operator's to remove, not a doctor case.
+    train_marker(repo).mkdir()
+    with pytest.raises(WorkspaceError) as info:
+        mark_train(repo, "20261016-120000")
+    assert f"Next: remove {train_marker(repo)} from your own shell" in str(info.value)

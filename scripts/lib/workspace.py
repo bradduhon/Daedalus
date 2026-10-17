@@ -179,7 +179,10 @@ def mark_train(repo: Path, train_id: str) -> Path:
     except OSError as exc:
         if tmp is not None:
             tmp.unlink(missing_ok=True)
-        raise WorkspaceError(f"cannot write {marker} ({exc}). Next: run /daedalus:doctor.") from exc
+        # 0023: a directory or an unwritable file at the marker is the operator's to remove.
+        raise WorkspaceError(
+            f"cannot write {marker} ({exc}). Next: remove {marker} from your own shell, then rerun."
+        ) from exc
     return marker
 
 
@@ -463,3 +466,132 @@ def lock(repo: Path, contract: str, version: int) -> list[str]:
         else "contract unchanged, no commit"
     )
     return [f"lock: {sha}", detail]
+
+
+STOP_NEXT = "rerun /daedalus:build-train"
+
+
+def _unit_worktrees(repo: Path) -> dict[str, Path]:
+    listing = _out(repo, "worktree", "list", "--porcelain")
+    found: dict[str, Path] = {}
+    path: Path | None = None
+    for line in listing.splitlines():
+        if line.startswith("worktree "):
+            path = Path(line.removeprefix("worktree "))
+        elif line.startswith("branch refs/heads/") and path is not None:
+            found[line.removeprefix("branch refs/heads/")] = path
+    return found
+
+
+def _teardown(repo: Path, units: list[dict[str, Any]], lines: list[str], nexts: list[str]) -> bool:
+    # 0024: only the units this train recorded, never another worktree under .claude/worktrees/.
+    listed = _unit_worktrees(repo)
+    ok = True
+    for unit in units:
+        path = listed.get(str(unit.get("branch")))
+        if path is None:
+            continue
+        lines.append(f"discarding {path}:")
+        status = _run(path, "status", "--porcelain")
+        lines.extend(f"  {entry}" for entry in status.stdout.splitlines() if entry.strip())
+        try:
+            remove(repo, str(unit["name"]))
+        except WorkspaceError as exc:
+            ok = False
+            lines.append(f"remove failed for {path}: {exc}")
+            nexts.append(
+                f"run git worktree remove --force {path} and git worktree prune from your own shell"
+            )
+            continue
+        lines.append(f"removed {path}")
+    return ok
+
+
+def _switch(repo: Path, branch: str, lines: list[str], nexts: list[str]) -> bool:
+    result = _run(repo, "switch", "-q", branch)
+    if result.returncode == 0:
+        lines.append(f"switched {repo} to {branch}")
+        return True
+    detail = " ".join(result.stderr.split()) or "no stderr"
+    lines.append(f"switch to {branch} failed in {repo} ({detail})")
+    nexts.append(f"run git -C {repo} switch {branch} from your own shell")
+    return False
+
+
+def _integration_back(
+    repo: Path, state: dict[str, Any], integration: str, lines: list[str], nexts: list[str]
+) -> bool:
+    if (
+        state.get("merged")
+        or _out(repo, "rev-parse", "--abbrev-ref", "HEAD").strip() != integration
+    ):
+        return True
+    # 0024: a dirty main checkout or uncommitted contract stays on the integration branch.
+    dirty = _dirty(repo)
+    if dirty:
+        lines.append(f"kept on {integration}: {_shown(dirty)}")
+        nexts.append(
+            f"commit or discard those files on {integration} from your own shell, "
+            f"then run git switch {state['base_branch']}"
+        )
+        return True
+    return _switch(repo, str(state["base_branch"]), lines, nexts)
+
+
+def _charter_back(
+    state: dict[str, Any], integration: str, lines: list[str], nexts: list[str]
+) -> bool:
+    if not state.get("charter_branch_created") or not state.get("charter_root"):
+        return True
+    charter, base = Path(state["charter_root"]), str(state["charter_base"])
+    dirty = _dirty(charter)
+    if dirty:
+        lines.append(f"kept on {integration} in {charter.name}: {_shown(dirty)}")
+        nexts.append(
+            f"commit or discard those files on {integration} in {charter.name} from your own "
+            f"shell, then run git -C {charter} switch {base}"
+        )
+        return True
+    if _out(charter, "rev-parse", "--abbrev-ref", "HEAD").strip() == base:
+        return True
+    return _switch(charter, base, lines, nexts)
+
+
+def stop(repo: Path, reason: str, next_action: str | None) -> tuple[list[str], bool]:
+    # 0024: every train stop runs these steps in order; the last line is always one Next.
+    repo = repo.resolve()
+    marker = train_marker(repo)
+    train_id = train_state.active_train(repo)
+    lines: list[str] = []
+    nexts: list[str] = []
+    ok = True
+    if train_id is None and not marker.exists() and not marker.is_symlink():
+        lines.append("nothing to stop")
+    else:
+        lines.append(f"Stopped train {train_id or 'unknown'}: {reason}")
+        state_file = train_state.state_path(repo, train_id) if train_id else None
+        if state_file is None or not state_file.is_file():
+            lines.append("no train state recorded; unmarking only")
+        else:
+            try:
+                state = train_state.load(repo, train_id or "")
+                integration = f"daedalus/{train_id}"
+                ok = _teardown(repo, list(state.get("units") or []), lines, nexts) and ok
+                ok = _integration_back(repo, state, integration, lines, nexts) and ok
+                ok = _charter_back(state, integration, lines, nexts) and ok
+            except (WorkspaceError, train_state.TrainStateError) as exc:
+                ok = False
+                lines.append(f"stop could not finish: {exc}")
+                nexts.append("finish the step it names from your own shell")
+        try:
+            lines.append(f"cleared {clear_train(repo)}")
+        except WorkspaceError as exc:
+            ok = False
+            lines.append(str(exc))
+            nexts.append(f"remove {marker} from your own shell")
+    if nexts:
+        final = "; ".join(nexts)
+    else:
+        final = next_action or STOP_NEXT
+    lines.append(final if final.startswith("Next:") else f"Next: {final}")
+    return lines, ok
