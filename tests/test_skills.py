@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -264,13 +265,16 @@ def test_push_train_uses_the_conductor_push_grammar_and_scan() -> None:
     assert "--body-file <repo>/docs/.tmp/daedalus/<train-id>-summary.md" in text
 
 
-def test_push_train_checks_the_audit_chain_and_the_summary() -> None:
+def test_push_train_proves_live_hooks_with_the_script() -> None:
+    # 0024: the log reading moved to verify_audit_chain.py; test_audit_proof.py holds it.
     text = _push_train()
-    assert "verify_audit_chain.py" in set(_SCRIPT_REF.findall(text))
+    step = text.split("\n7. ", 1)[1].split("\n8. ", 1)[0]
+    assert (
+        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_audit_chain.py --hooks-live --repo <repo>`"
+    ) in step
+    assert "Grep" not in text
     assert "docs/.tmp/daedalus/" in text
     assert "Next: run a Build Train first (`/daedalus:build-train`)." in text
-    assert "a `tool_input.command` of `git status --porcelain`" in text
-    assert "[VERDICT: APPROVED]" in text
 
 
 def test_push_train_ends_with_the_operator_checklist() -> None:
@@ -296,18 +300,14 @@ def test_build_train_names_the_push_train_in_present_tense() -> None:
     assert "A later Daedalus release adds `/daedalus:push-train`" not in text
 
 
-def test_push_train_reads_the_auditor_record_with_an_escaped_pattern() -> None:
-    # I1: a bare [VERDICT: APPROVED] is a regex character class.
-    step = _push_train().split("\n9. ", 1)[1].split("\n10. ", 1)[0]
-    assert r"`\[VERDICT: APPROVED\]`" in step
-    # Ruling N1: the exact namespaced value the log stores; no bare form, no wildcard.
-    assert '`"agent_type":"daedalus:security-auditor".*"event":"SubagentStop"`' in step
-    assert '"agent_type":"security-auditor"' not in step
-    # Ruling N4: the last auditor record before this train's summary Write.
-    assert r'`<train-id>-summary\.md.*"tool_name":"Write"`' in step
-    assert "take the last match before that summary line" in step
-    assert "square brackets are escaped" in step
-    assert "`last_message_head` starts with `[VERDICT: APPROVED]`" in step
+def test_push_train_proves_the_approved_audit_with_the_script() -> None:
+    # 0024: the auditor record checks moved to verify_audit_chain.py --approved.
+    step = _push_train().split("\n8. ", 1)[1].split("\n9. ", 1)[0]
+    assert (
+        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_audit_chain.py --approved <train-id> "
+        "--repo <repo>`"
+    ) in step
+    assert "its `Next:` line is the next action" in step
 
 
 def test_push_train_stops_on_each_precondition() -> None:
@@ -316,7 +316,6 @@ def test_push_train_stops_on_each_precondition() -> None:
         "No file: stop. Next: run a Build Train first (`/daedalus:build-train`).",
         "Anything but `daedalus/<train-id>`: stop.",
         "Any `??` line or any change in column two: stop.",
-        "A `BROKEN` line: stop and show that line only.",
         "the second an empty line, because the conductor's body files must sit under",
     ):
         assert stop in pre, stop
@@ -616,14 +615,12 @@ def test_push_train_reads_the_ledger_sha_from_the_ledger_ids_line() -> None:
     assert "the ledger commit sha from the `Ledger ids:` line," in step
 
 
-def test_push_train_stops_without_an_approved_audit() -> None:
-    # N5-M1: precondition 9 names each missing record and its stop.
-    step = _push_train().split("\n9. ", 1)[1].split("\n10. ", 1)[0]
-    assert step.rstrip().endswith(
-        "No summary Write record, no auditor SubagentStop record before it, or any other "
-        "verdict: stop. Next: run /daedalus:build-train; this train has no approved audit "
-        "in its log."
-    )
+def test_push_train_sandbox_check_uses_the_repo() -> None:
+    # 0020: the sandbox check runs against <repo>, never the session's working directory.
+    text = _push_train()
+    assert "--repo ." not in text
+    step = text.split("\n1. ", 1)[1].split("\n2. ", 1)[0]
+    assert f"`{SANDBOX_STATE_CMD} --repo <repo>`" in step
 
 
 def test_push_train_hands_the_charter_to_the_operator() -> None:
@@ -731,8 +728,8 @@ def test_push_train_marks_the_train_active_and_clears_it() -> None:
     # 0023: the Push Train writes the marker after its preconditions and removes it at its end.
     text = _push_train()
     pre = _section(text, "## Preconditions", "## Push")
-    step11 = pre.split("\n11. ", 1)[1]
-    assert MARK + "<train-id>`" in step11
+    step10 = pre.split("\n10. ", 1)[1]
+    assert MARK + "<train-id>`" in step10
     rules = text.split("## Preconditions", 1)[0]
     marker = rules.split("- Train marker: ", 1)[1].split("\n", 1)[0]
     assert "every stop that follows" in marker
@@ -780,6 +777,50 @@ def test_skill_script_commands_are_allowed_for_main() -> None:
         payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": root}
         d = decide(payload, Config())
         assert d.allow, (command, d.reason)
+
+
+_CONDUCTOR_CMD = re.compile(r"(?:[Rr]un|then) `((?:git|gh|gitleaks) [^`]+)`")
+
+
+def _conductor_commands() -> list[Any]:
+    # 0028: every command the Push section hands the conductor, minus its never-run list.
+    push = _section(PUSH_TRAIN.read_text(encoding="utf-8"), "## Push", "## Charter branch")
+    allowed = "\n".join(ln for ln in push.splitlines() if "Use only the commands above" not in ln)
+    commands = sorted(set(_CONDUCTOR_CMD.findall(allowed)))
+    return [
+        pytest.param(c, marks=pytest.mark.xfail(reason="waits on K1", strict=True))
+        if c.startswith("gh pr edit")
+        else c
+        for c in commands
+    ]
+
+
+@pytest.mark.parametrize("command", _conductor_commands())
+def test_push_train_conductor_commands_pass_the_jail(
+    repo_cwd: Path, project_data: Path, command: str
+) -> None:
+    # K1: gh pr edit is refused until ruled; strict xfail turns green-on-ruling into a failure.
+    from lib.config import Config
+    from lib.jail import decide
+
+    (project_data / "train.active").write_text("20261016-120000\n", encoding="utf-8")
+    concrete = re.sub(r"<[^>]+>", "x", command.replace("<repo>", str(repo_cwd)))
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": concrete},
+        "cwd": str(repo_cwd),
+        "session_id": "s",
+        "agent_type": "pr-train-conductor",
+        "agent_id": "a-1",
+    }
+    d = decide(payload, Config())
+    assert d.allow, (concrete, d.reason)
+
+
+def test_push_train_names_conductor_commands() -> None:
+    commands = [p if isinstance(p, str) else p.values[0] for p in _conductor_commands()]
+    assert "git push -u origin daedalus/<train-id>" in commands
+    assert any(c.startswith("gh pr edit daedalus/<train-id> --body-file") for c in commands)
 
 
 SETUP = REPO_ROOT / "skills" / "setup" / "SKILL.md"
@@ -860,10 +901,10 @@ def test_build_train_stops_infrastructure_units_without_the_sandbox() -> None:
 
 
 def test_push_train_requires_the_sandbox_first() -> None:
-    pre = _section(_push_train(), "## Preconditions", "\n1. ")
-    assert f"`{SANDBOX_STATE_CMD} --repo .`" in pre
+    step = _section(_push_train(), "\n1. ", "\n2. ")
+    assert step.index("`<repo>` is the parent") < step.index(SANDBOX_STATE_CMD)
     refusal = "Any word but `on`: stop. The Push Train needs the OS sandbox. "
-    assert refusal + SANDBOX_NEXT_LINE in pre
+    assert refusal + SANDBOX_NEXT_LINE in step
 
 
 def test_push_train_checks_gh_beside_gitleaks() -> None:
