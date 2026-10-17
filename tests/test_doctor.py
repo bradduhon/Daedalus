@@ -19,6 +19,7 @@ from tests.conftest import SCRIPTS_DIR, fake_bin
 NEEDS_BINARIES = pytest.mark.skipif(not required_binaries(), reason="no sandbox binaries here")
 SETUP = "type /daedalus:setup yourself; the model cannot run it"
 SETUP_OFF = "MISS sandbox: off. Next: " + SETUP
+SANDBOX_WITH_GH = {"sandbox": {"enabled": True, "excludedCommands": ["gh *", "git push *"]}}
 SCAFFOLDS = ("service-manifest.json", "contracts/", ".gitleaks.toml")
 
 
@@ -150,6 +151,40 @@ def test_user_level_sandbox_gets_the_move_next(tmp_path: Path) -> None:
     line = _sandbox_line(result)
     assert line == f"OK   sandbox: on (~/.claude/settings.json). {USER_MOVE_NEXT}"
     assert user.read_text() == before
+
+
+def _gh_line(result: subprocess.CompletedProcess[str]) -> str:
+    return next(line for line in result.stdout.splitlines() if "gh outside sandbox" in line)
+
+
+def test_gh_outside_sandbox_ok_when_sandbox_off(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
+    assert _gh_line(result) == "OK   gh outside sandbox: sandbox off"
+
+
+def test_gh_outside_sandbox_ok_when_both_excluded(tmp_path: Path) -> None:
+    # 0028: the exclusions may come from any settings file Claude Code reads.
+    home = tmp_path / "home"
+    _settings(home / ".claude" / "settings.json", {"sandbox": {"excludedCommands": ["gh *"]}})
+    local = {"sandbox": {"enabled": True, "excludedCommands": ["git push *"]}}
+    _settings(tmp_path / ".claude" / "settings.local.json", local)
+    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
+    assert _gh_line(result) == "OK   gh outside sandbox"
+
+
+def test_gh_outside_sandbox_miss_names_setup(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    local = {"sandbox": {"enabled": True, "excludedCommands": ["gh *"]}}
+    _settings(tmp_path / ".claude" / "settings.local.json", local)
+    result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
+    assert _gh_line(result) == (
+        "MISS gh outside sandbox: sandbox.excludedCommands lacks git push *, so the Push Train "
+        f"cannot reach GitHub. Next: {SETUP}"
+    )
+    assert result.returncode == 1
 
 
 @pytest.mark.parametrize("name", ["settings.json", "settings.local.json"])
@@ -286,7 +321,7 @@ def test_complete_setup_is_all_ok(plugin_data: Path, tmp_path: Path) -> None:
     _commit_all(repo)
     bins = _bins_with_git(tmp_path, "gitleaks", "bwrap", "socat", "gh")
     home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    _settings(home / ".claude" / "settings.json", SANDBOX_WITH_GH)
     result = _run(plugin_data, repo, path_env=bins, home=home)
     assert result.returncode == 0, result.stdout
     assert not any(line.startswith("MISS") for line in result.stdout.splitlines())
@@ -357,7 +392,7 @@ def test_absent_scaffolds_are_opt_and_pass(tmp_path: Path) -> None:
     _commit_all_empty(repo)
     bins = _bins_with_git(tmp_path, "gitleaks", "gh", "bwrap", "socat")
     home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    _settings(home / ".claude" / "settings.json", SANDBOX_WITH_GH)
     result = _run(None, repo, path_env=bins, home=home)
     lines = result.stdout.splitlines()
     assert result.returncode == 0, result.stdout
@@ -652,7 +687,7 @@ def test_first_run_without_config_is_all_ok(tmp_path: Path) -> None:
     _commit_all(repo)
     bins = _bins_with_git(tmp_path, "gitleaks", "gh", "bwrap", "socat")
     home = tmp_path / "home"
-    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    _settings(home / ".claude" / "settings.json", SANDBOX_WITH_GH)
     result = _run(None, repo, path_env=bins, home=home)
     assert result.returncode == 0, result.stdout
     assert not any(line.startswith("MISS") for line in result.stdout.splitlines())

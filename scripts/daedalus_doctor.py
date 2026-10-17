@@ -25,8 +25,10 @@ from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
 from lib.sandbox_state import (  # noqa: E402
     SETUP_NEXT,
     SettingsError,
+    excluded_commands,
     required_binaries,
     sandbox_check,
+    sandbox_enabled,
     sandbox_source,
     sandbox_state,
 )
@@ -105,6 +107,24 @@ def _sandbox_check(repo: Path) -> tuple[bool, str]:
     if source == home / ".claude" / "settings.json":
         return ok, f"{line} ({USER_SETTINGS}). Next: {USER_MOVE_NEXT}"
     return ok, f"{line} ({source.relative_to(repo)})"
+
+
+GH_EXCLUSIONS = ("gh *", "git push *")
+
+
+def _gh_sandbox_check(repo: Path) -> tuple[bool, str]:
+    # 0028, 0030: with the sandbox on, gh and git push need the exclusions to read gh's login.
+    name = "gh outside sandbox"
+    try:
+        home = Path.home()
+        if not sandbox_enabled(repo, home):
+            return True, f"OK   {name}: sandbox off"
+        missing = [e for e in GH_EXCLUSIONS if e not in excluded_commands(repo, home)]
+    except SettingsError as exc:
+        return False, f"MISS {name}: {exc}"
+    lacks = f"sandbox.excludedCommands lacks {', '.join(missing)}, so the Push Train "
+    lacks += "cannot reach GitHub"
+    return _check(not missing, name, lacks, SETUP_NEXT)
 
 
 def _plugin_root_check() -> tuple[bool, str]:
@@ -302,6 +322,7 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     yield _cache_check()
     yield _plugin_root_check()
     yield _sandbox_check(repo)
+    yield _gh_sandbox_check(repo)
     yield _check(
         shutil.which("gitleaks") is not None,
         "gitleaks on PATH",

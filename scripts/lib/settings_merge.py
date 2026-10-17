@@ -12,8 +12,8 @@ from typing import Any
 
 # spec 4: the dotted paths /daedalus:setup merges from settings.recommended.json.
 MERGED_KEYS = ("sandbox", "permissions.deny", "promptCacheTtl", "subagentPromptCacheTtl")
-# spec 4: deny lists gain missing entries; every other existing value stays as the user set it.
-APPEND_KEYS = frozenset({"deny", "denyRead", "denyWrite"})
+# spec 4, 0028: deny lists and excludedCommands gain missing entries; other values stay put.
+APPEND_KEYS = frozenset({"deny", "denyRead", "denyWrite", "excludedCommands"})
 
 
 class SettingsMergeError(ValueError):

@@ -67,6 +67,14 @@ def test_type_conflict_is_refused_naming_the_key(existing: dict[str, Any], dotte
     assert existing == snapshot
 
 
+def test_merge_appends_excluded_commands() -> None:
+    # 0028: a repo's own exclusions stay; the gh and git push entries are added once.
+    existing = {"sandbox": {"excludedCommands": ["docker compose *", "gh *"]}}
+    merged = merge(existing, _recommended())
+    assert merged["sandbox"]["excludedCommands"] == ["docker compose *", "gh *", "git push *"]
+    assert merge(merged, _recommended()) == merged
+
+
 def test_existing_deny_entries_are_kept_and_missing_ones_appended() -> None:
     existing = {"permissions": {"deny": ["Read(./.env)", "Read(~/.ssh/**)"]}}
     assert merge(existing, _recommended())["permissions"]["deny"] == [
