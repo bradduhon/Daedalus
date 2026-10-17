@@ -2329,8 +2329,10 @@ def _policy_segments(command: str, depth: int = 0) -> list[list[str]] | None:
 
 
 def _gh_gate(agent: str, cwd: str, command: str) -> str | None:
-    # 0028: merge, delete and admin are refused for everyone; the allowlist scope is K2's seam.
-    return gh_reason(agent, command, _policy_segments(command), allowlist_applies(agent, cwd))
+    # 0035: outside a train, main and unknown agents skip the whole gate, deny classes included.
+    if not allowlist_applies(agent, cwd, command):
+        return None
+    return gh_reason(agent, command, _policy_segments(command))
 
 
 def _train_active(cwd: str) -> bool:

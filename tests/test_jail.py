@@ -554,10 +554,27 @@ def test_main_ordinary_commands_still_allowed() -> None:
         "git push origin feat > log",
     ],
 )
-def test_main_git_push_refused_by_0028(command: str) -> None:
-    # 0028, 0030: only the conductor pushes; K2 may narrow this to active trains.
-    d = decide(_b(None, command), CFG)
+def test_main_git_push_refused_during_a_train(marked_repo: Path, command: str) -> None:
+    # 0028, 0035: while a train runs only the conductor pushes.
+    d = decide(_cred(None, "Bash", str(marked_repo), command=command), CFG)
     assert not d.allow and "(0028, 0030)" in str(d.reason), command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push origin feature/x",
+        "git push -u origin feature/x 2>/dev/null",
+        "git push origin feature/main-fix",
+        "gh pr merge 5",
+        "gh repo delete o/r --yes",
+        "gh pr view 3",
+    ],
+)
+def test_main_git_push_and_gh_pass_outside_a_train(other_repo: Path, command: str) -> None:
+    # 0035: outside a train the main session's gh and git push are untouched.
+    d = decide(_cred(None, "Bash", str(other_repo), command=command), CFG)
+    assert d.allow, (command, d.reason)
 
 
 @pytest.mark.parametrize("command", ["$GIT push origin x", "git $SUB origin x"])

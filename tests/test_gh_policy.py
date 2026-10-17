@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from lib.config import Config
-from lib.gh_policy import classify, gh_reason
+from lib.gh_policy import allowlist_applies, classify, gh_reason
 from lib.jail import decide
 
 AGENTS = ("main", "pr-train-conductor", "repo-coder", "general-purpose")
@@ -49,6 +49,7 @@ DEFAULT_DENY = [
     "gh api --input body.json repos/o/r/issues",
     "gh api graphql -F query=@q.graphql",
 ]
+MERGE_NEXT = "the operator merges in the GitHub UI"
 CONDUCTOR_OK = [
     "gh pr create --title t --body-file docs/.tmp/pr.md",
     "gh pr view 3",
@@ -88,14 +89,14 @@ def _reason(repo: Path, agent: str, command: str) -> str:
 
 def _class_refused(repo: Path, agent: str, command: str, klass: str, nxt: str) -> None:
     reason = _reason(repo, agent, command)
-    assert f"is a {klass} command, refused for every session (0028)" in reason, reason
+    assert f"is a {klass} command, refused while a train runs and to every Daedalus" in reason
     assert reason.endswith(f"Next: {nxt}."), reason
 
 
 @pytest.mark.parametrize("agent", AGENTS)
 @pytest.mark.parametrize("command", MERGE)
 def test_merge_class_refused(train_repo: Path, agent: str, command: str) -> None:
-    _class_refused(train_repo, agent, command, "merge", "the operator merges in the GitHub UI")
+    _class_refused(train_repo, agent, command, "merge", MERGE_NEXT)
 
 
 @pytest.mark.parametrize("agent", AGENTS)
@@ -181,7 +182,7 @@ def test_git_push_only_for_the_conductor(train_repo: Path) -> None:
 )
 def test_main_regex_fallback_refuses_hidden_gh(train_repo: Path, command: str) -> None:
     reason = _reason(train_repo, "main", command)
-    assert "(0028)" in reason and "Next:" in reason, reason
+    assert "(0028" in reason and "Next:" in reason, reason
 
 
 def test_regex_fallback_without_segments() -> None:
@@ -191,6 +192,67 @@ def test_regex_fallback_without_segments() -> None:
         assert reason is not None and "Next:" in reason, command
     assert gh_reason("main", "echo `date`", None) is None
     assert gh_reason("pr-train-conductor", "git push origin x", None) is None
+
+
+@pytest.fixture
+def plain_repo(repo_cwd: Path, project_data: Path) -> Path:
+    # 0035: no train marker, so the main session and unknown agents are untouched.
+    return repo_cwd
+
+
+OUTSIDE_A_TRAIN = [
+    *MERGE,
+    *DELETE,
+    *ADMIN,
+    *DEFAULT_DENY,
+    "gh pr view 3",
+    "gh pr edit 3 --title t",
+    "git push origin feat/x",
+    'bash -c "gh pr merge 5"',
+    "echo `date`; gh pr merge 5",
+]
+
+
+@pytest.mark.parametrize("agent", ("main", "general-purpose"))
+@pytest.mark.parametrize("command", OUTSIDE_A_TRAIN)
+def test_main_and_unknown_agents_untouched_outside_a_train(
+    plain_repo: Path, agent: str, command: str
+) -> None:
+    d = decide(_bash(plain_repo, agent, command), Config())
+    assert d.allow, (agent, command, d.reason)
+
+
+@pytest.mark.parametrize("agent", ("main", "general-purpose"))
+def test_marker_brings_back_the_gate(plain_repo: Path, agent: str) -> None:
+    # 0035: the same command flips from allow to refuse when a train marks the repo.
+    assert decide(_bash(plain_repo, agent, "gh pr merge 5"), Config()).allow
+    (plain_repo / ".claude" / "daedalus" / "train.active").write_text("20261016-120000\n")
+    _class_refused(plain_repo, agent, "gh pr merge 5", "merge", MERGE_NEXT)
+    assert "(0028, 0030)" in _reason(plain_repo, agent, "git push origin feat/x")
+
+
+@pytest.mark.parametrize("agent", ("pr-train-conductor", "repo-coder"))
+def test_daedalus_agents_gated_outside_a_train(plain_repo: Path, agent: str) -> None:
+    # 0035: a Daedalus agent meets the gh gate with or without a train.
+    _class_refused(plain_repo, agent, "gh pr merge 5", "merge", MERGE_NEXT)
+    assert "(0028" in _reason(plain_repo, "repo-coder", "git push origin feat/x")
+
+
+def test_main_push_into_a_train_repo_from_elsewhere(train_repo: Path, tmp_path: Path) -> None:
+    # 0035: git -C naming a marked repo counts as acting in that train.
+    other = tmp_path / "other"
+    other.mkdir()
+    reason = _reason(other, "main", f"git -C {train_repo} push origin feat/x")
+    assert "(0028, 0030)" in reason
+
+
+def test_allowlist_applies(plain_repo: Path) -> None:
+    cwd = str(plain_repo)
+    assert allowlist_applies("pr-train-conductor", cwd) and allowlist_applies("repo-coder", "")
+    assert not allowlist_applies("main", cwd) and not allowlist_applies("general-purpose", cwd)
+    assert not allowlist_applies("main", "relative/path")
+    (plain_repo / ".claude" / "daedalus" / "train.active").write_text("20261016-120000\n")
+    assert allowlist_applies("main", cwd) and allowlist_applies("general-purpose", cwd)
 
 
 @pytest.mark.parametrize(

@@ -164,10 +164,13 @@ def classify(tokens: list[str]) -> tuple[str, str]:
     return "default-deny", detail
 
 
-def allowlist_applies(agent: str, cwd: str) -> bool:
-    # K2: pending ruling; 0028 as written binds every session. Option B returns False here
-    # outside a train (and outside repos carrying the gh exclusion); deny classes still apply.
-    return True
+def allowlist_applies(agent: str, cwd: str, command: str = "") -> bool:
+    # 0035: main and unknown agents meet the gh gate only while a train marks the repo.
+    from lib.jail import KNOWN_AGENTS, _marked_repo  # jail imports this module.
+
+    if agent in KNOWN_AGENTS and agent != "main":
+        return True
+    return os.path.isabs(cwd) and _marked_repo(cwd, "Bash", {"command": command}) is not None
 
 
 def _allowed(agent: str) -> frozenset[tuple[str, str]]:
@@ -176,29 +179,28 @@ def _allowed(agent: str) -> frozenset[tuple[str, str]]:
     return MAIN_GH if agent == "main" else frozenset()
 
 
-def _gh_reason(agent: str, tokens: list[str], allowlist: bool) -> str | None:
+def _gh_reason(agent: str, tokens: list[str]) -> str | None:
     klass, detail = classify(tokens)
     if klass == "allow" and tuple(detail.split()) in _allowed(agent):
-        return None
-    if not allowlist and klass in {"allow", "default-deny"}:
         return None
     if klass == "allow":
         return (
             f"gh {detail} is not on the {agent} gh list (0028). Next: {CLASS_NEXT['default-deny']}."
         )
     return (
-        f"gh {detail} is a {klass} command, refused for every session (0028). "
+        f"gh {detail} is a {klass} command, refused while a train runs and to every "
+        f"Daedalus agent (0028, 0035). "
         f"Next: {CLASS_NEXT[klass]}."
     )
 
 
-def _push_reason(agent: str, allowlist: bool) -> str | None:
-    if agent == CONDUCTOR or not allowlist:
+def _push_reason(agent: str) -> str | None:
+    if agent == CONDUCTOR:
         return None
     return f"git push runs only in the Push Train's conductor (0028, 0030). Next: {PUSH_NEXT}."
 
 
-def _fallback_reason(agent: str, command: str, allowlist: bool) -> str | None:
+def _fallback_reason(agent: str, command: str) -> str | None:
     if agent == "main" and command.strip() == "gh auth status":
         return None
     if _GH_WORD.search(command):
@@ -207,24 +209,22 @@ def _fallback_reason(agent: str, command: str, allowlist: bool) -> str | None:
             f"Next: run one plain gh command; {CLASS_NEXT['default-deny']}."
         )
     if _GIT_PUSH.search(command):
-        return _push_reason(agent, allowlist)
+        return _push_reason(agent)
     return None
 
 
-def gh_reason(
-    agent: str, command: str, segments: list[list[str]] | None, allowlist: bool = True
-) -> str | None:
-    # 0028: every gh and git push segment, every agent; None segments means the regex fallback.
+def gh_reason(agent: str, command: str, segments: list[list[str]] | None) -> str | None:
+    # 0028: every gh and git push segment; None segments means the regex fallback.
     if segments is None:
-        return _fallback_reason(agent, command, allowlist)
+        return _fallback_reason(agent, command)
     from lib.jail import _git_subcommand  # jail imports this module, so import at call time.
 
     for tokens in segments:
         name = os.path.basename(tokens[0]) if tokens else ""
         if name == "gh":
-            reason = _gh_reason(agent, tokens, allowlist)
+            reason = _gh_reason(agent, tokens)
         elif name == "git" and _git_subcommand(tokens) == "push":
-            reason = _push_reason(agent, allowlist)
+            reason = _push_reason(agent)
         else:
             reason = None
         if reason:
