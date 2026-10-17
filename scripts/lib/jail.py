@@ -46,7 +46,7 @@ from lib.workspace import UNMARK_NEXT, train_marker
 
 WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 WEB_TOOLS = frozenset({"WebFetch", "WebSearch"})
-# 5.5: all routing is through Fable; workers never message each other.
+# 5.5: all routing is through the orchestrating session; workers never message each other.
 WORKER_DENIED_TOOLS = frozenset({"Task", "Agent", "SendMessage"})
 
 READ_ONLY_CMDS = frozenset(
@@ -217,7 +217,7 @@ R_UNSUPPORTED = (
 )
 R_PIPE = "pipes are not permitted for this agent. Next: send one plain command."
 R_NO_CWD = "hook received no absolute cwd; failing closed. Next: report to the operator."
-R_TOOL = "workers use only their allowlisted tools. Next: ask Fable."
+R_TOOL = "workers use only their allowlisted tools. Next: ask the orchestrating session."
 R_DOTGIT = "writes into .git/ are never permitted. Next: change the repository through git."
 R_INLINE = (
     "wrappers, shells, and interpreters are not permitted for workers. "
@@ -264,7 +264,7 @@ R_VARIABLE = (
     "Next: spell the command out."
 )
 R_FORCE_PUSH = "force, delete, or mirror push is never permitted. Next: push a new branch instead."
-R_CLEAN = "git clean is never run by any Fable component. Next: remove files by name."
+R_CLEAN = "git clean is never run by any Daedalus component. Next: remove files by name."
 R_STASH_UNTRACKED = (
     "stash of untracked or ignored files removes the plugin data dir. "
     "Next: stash tracked changes only."
@@ -2563,7 +2563,7 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
     if agent == "main":
         if is_write and _in_code_dirs(path, cwd):
             return _block(
-                "Fable does not write application code. "
+                "the orchestrating session does not write application code during a train. "
                 "Next: dispatch a repo-coder for this change."
             )
         if tool in DISPATCH_TOOLS:
@@ -2576,7 +2576,8 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
         if is_write and not _in_unit_worktree_code(_abs(path, cwd), cwd):
             return _block(
                 f"write outside src/ or tests/ of your unit worktree: {path}. "
-                "Next: ask Fable to route this to contract-spec or charter-docs."
+                "Next: ask the orchestrating session to route this to contract-spec or "
+                "charter-docs."
             )
         if is_write:
             unit = (_unit_parts(_abs(path, cwd), cwd) or [""])[0]
@@ -2623,7 +2624,7 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
                     return _block(
                         f"Bash write outside src/ or tests/: {target}. "
                         "Next: write under your unit worktree src/ or tests/, "
-                        "or ask Fable to route the change."
+                        "or ask the orchestrating session to route the change."
                     )
                 touched |= _segment_units(segment, cwd)
             reason = _binding_reason(hook_input, cwd, touched)
@@ -2649,7 +2650,8 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
             return _block("contract-spec has no shell. Next: use Read, Grep, Glob, Write, Edit.")
         if tool in WEB_TOOLS:
             return _block(
-                "contract-spec has no web access. Next: ask Fable to dispatch web-researcher."
+                "contract-spec has no web access. "
+                "Next: ask the orchestrating session to dispatch web-researcher."
             )
         return _allow()
 
@@ -2680,7 +2682,8 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
                 return _block(R_DOCS_BASH)
         if tool in WEB_TOOLS:
             return _block(
-                "charter-docs has no web access. Next: ask Fable to dispatch web-researcher."
+                "charter-docs has no web access. "
+                "Next: ask the orchestrating session to dispatch web-researcher."
             )
         return _allow()
 
@@ -2775,7 +2778,8 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
             return _block(f"{agent} has no shell. Next: use Read, Grep, Glob.")
         if tool in WEB_TOOLS and agent != "web-researcher":
             return _block(
-                "only web-researcher may fetch. Next: ask Fable to dispatch web-researcher."
+                "only web-researcher may fetch. "
+                "Next: ask the orchestrating session to dispatch web-researcher."
             )
         return _allow()
 

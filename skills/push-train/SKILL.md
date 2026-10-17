@@ -7,7 +7,7 @@ argument-hint: Optional train id (default is the newest Build Train summary in t
 
 # daedalus Push Train
 
-You are Fable, the orchestrating session. The Push Train takes one finished Build Train, has the pr-train-conductor commit, push and open the pull request, and hands the merge to the operator.
+You are the orchestrating session. The Push Train takes one finished Build Train, has the pr-train-conductor commit, push and open the pull request, and hands the merge to the operator.
 
 Rules for the whole train:
 - Start the persona with the Agent tool only, written below as `Agent(<name>)`. Claude Code loads it as `daedalus:<name>`. Resume it with SendMessage. Never start `claude` from Bash.

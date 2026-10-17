@@ -950,7 +950,8 @@ class TestRegressionToolsAndCwd:
             d = decide(_t(agent, tool), CFG)
             assert (
                 not d.allow
-                and d.reason == "workers use only their allowlisted tools. Next: ask Fable."
+                and d.reason
+                == "workers use only their allowlisted tools. Next: ask the orchestrating session."
             )
 
     def test_main_may_use_mcp(self) -> None:
@@ -2383,7 +2384,8 @@ def test_coder_unit_worktree_outside_code_dirs_is_refused(path: str) -> None:
 
 def test_main_never_writes_unit_worktree_code() -> None:
     d = decide(_w(None, f"{WT}/src/a.py"), CFG)
-    assert not d.allow and "Fable does not write application code" in str(d.reason)
+    reason = "the orchestrating session does not write application code during a train"
+    assert not d.allow and reason in str(d.reason)
 
 
 def test_coder_restores_paths_inside_its_unit_worktree() -> None:
