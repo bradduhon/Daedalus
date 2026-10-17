@@ -397,6 +397,7 @@ def test_absent_scaffolds_are_opt_and_pass(tmp_path: Path) -> None:
     lines = result.stdout.splitlines()
     assert result.returncode == 0, result.stdout
     assert [line.split(":")[0][5:] for line in lines if line.startswith("OPT  ")] == [
+        "standards_sources",
         "service-manifest.json",
         "contracts/",
         ".gitleaks.toml",
@@ -661,7 +662,7 @@ def test_undeclared_standards_and_policy_are_optional(tmp_path: Path) -> None:
         if with_config:
             (_data(repo) / "config.json").write_text("{}")
         lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
-        assert "OK   standards_sources: not declared (optional)" in lines
+        assert PACK_OFFER in lines
         assert "OK   policy: not declared (optional)" in lines
         assert not any(line.startswith(("MISS standards", "MISS policy")) for line in lines)
 
@@ -878,3 +879,31 @@ def test_no_manifest_no_line(plugin_data: Path, tmp_path: Path) -> None:
     home.mkdir()
     result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
     assert _framework_lines(result.stdout) == []
+
+
+PACK_OFFER = (
+    "OPT  standards_sources: not declared. Next: to adopt the shipped baseline pack, add "
+    '{"kind": "pack", "name": "baseline"} to standards_sources in .claude/daedalus/config.json'
+)
+
+
+def test_doctor_offers_the_baseline_pack(tmp_path: Path) -> None:
+    # 0019: the offer is optional; a repo without standards still passes the doctor.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (repo / "service-manifest.json").write_text("{}")
+    (repo / "contracts").mkdir()
+    (repo / "contracts" / "openapi.yaml").write_text("")
+    (repo / ".gitleaks.toml").write_text("")
+    _commit_all(repo)
+    home = tmp_path / "home"
+    _settings(home / ".claude" / "settings.json", SANDBOX_WITH_GH)
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh", "bwrap", "socat")
+    result = _run(None, repo, path_env=bins, home=home)
+    assert PACK_OFFER in result.stdout.splitlines()
+    assert result.returncode == 0, result.stdout
+    (_data(repo) / "config.json").write_text(
+        json.dumps({"standards_sources": [{"kind": "pack", "name": "baseline"}]})
+    )
+    lines = _run(None, repo, path_env=bins, home=home).stdout.splitlines()
+    assert "OK   standards_sources declared" in lines

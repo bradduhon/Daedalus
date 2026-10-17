@@ -31,7 +31,7 @@ Every file and setting daedalus reads, with the smallest example that works. `/d
 |---|---|---|
 | `charter_root` | Repo where decisions and specs live. Agents may write there. | contract-spec and charter-docs can write only inside the target repo |
 | `ledger` **(checked)** | Where rulings are appended. `format` is `markdown-table-row` (one table row per ruling) or `heading-entry` (one `## Entry N` section per ruling). `sequence_source` is `last-row-id` or `frontmatter:<key>`. | The Build Train stops and asks before creating one |
-| `standards_sources` **(checked)** | Directories or files holding your rules. `kind` is `rules-dir` or `file`. | The Standards Packet is empty and the auditor judges against the spec only |
+| `standards_sources` **(checked)** | Directories or files holding your rules. `kind` is `rules-dir`, `file` or `pack`. | The Standards Packet is empty and the auditor judges against the spec only; the doctor offers the baseline pack on an `OPT` line |
 | `policy` **(checked)** | Deterministic policy pack. `engine` is `cfn-guard` or `conftest`. daedalus ships no rules; the directory is yours. | No effect today; a later Daedalus release adds the deterministic gate for infrastructure diffs |
 | `operator_signing_keys` | Fingerprints allowed to sign merges. | No effect today; a later Daedalus release adds the merge-gate check that reads it |
 
@@ -56,10 +56,11 @@ To keep the sequence in frontmatter instead, start the file with a `---` block h
 
 ### standards_sources kinds
 
-Each entry has a `kind` and a `path`. The standards specialist reads only these entries, and cites each rule as `source:line`.
+Each entry has a `kind` and a `path`, except `pack`, which has a `name`. The standards specialist reads only these entries, and cites each rule as `source:line`.
 
 - `rules-dir`: a directory of rule files. Example: `{ "kind": "rules-dir", "path": "/absolute/path/to/rules" }`
 - `file`: one file. Example: `{ "kind": "file", "path": "/work/my-service/CLAUDE.md" }`
+- `pack`: a rules pack shipped inside the plugin, resolved to `<plugin>/packs/<name>/`. Daedalus ships one, `baseline`: five baseline checks (no hardcoded secrets, no wildcard access grants, TLS 1.2 or newer, encryption at rest, no personal data or key material in logs) and the Daedalus cloud security standards (a role per workload, no public object storage, logging on every data store, scheduled rotation of customer-data keys, private networking for data stores, multi-factor sign-in for people). Each rule is one line in `packs/baseline/rules.md`, in Daedalus's own words, citing NIST SP 800-53 control ids and OWASP ASVS requirement ids. It applies only when you declare it: `{ "kind": "pack", "name": "baseline" }`. Any other name is refused with `Next: use "baseline".`
 
 ### What the ledger probe detects
 

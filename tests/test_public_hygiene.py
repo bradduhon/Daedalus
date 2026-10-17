@@ -21,6 +21,7 @@ ALLOWLIST = frozenset(
         "README.md",
         "agents/",
         "hooks/",
+        "packs/",
         "pyproject.toml",
         "scripts/",
         "settings.recommended.json",
@@ -162,3 +163,9 @@ def test_docs_private_is_ignored() -> None:
     # Probe a child path; a dir-only pattern does not match an absent dir.
     probe = subprocess.run(["git", "check-ignore", "-q", "docs/private/probe"], cwd=REPO_ROOT)
     assert probe.returncode == 0
+
+
+def test_hygiene_allows_packs() -> None:
+    # 0019, 0026: the opt-in baseline pack ships under packs/.
+    assert "packs/" in ALLOWLIST
+    assert "packs/" in {_entry(p) for p in _tracked()}

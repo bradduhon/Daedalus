@@ -46,6 +46,10 @@ IGNORE_NEXT = (
     "then restore the * marker"
 )
 DIRTY_LIMIT = 10
+PACK_OFFER = (
+    'to adopt the shipped baseline pack, add {"kind": "pack", "name": "baseline"} '
+    "to standards_sources in .claude/daedalus/config.json"
+)
 ENABLEMENT = ".claude/settings.json"
 ENABLEMENT_NEXT = f"commit {ENABLEMENT}; it holds the enabledPlugins entry /plugin install wrote"
 CACHE_NAMING = (
@@ -293,7 +297,8 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
     if config.standards_sources:
         yield True, "OK   standards_sources declared"
     else:
-        yield True, "OK   standards_sources: not declared (optional)"
+        # 0019: the baseline pack offer; optional, so it never fails the doctor.
+        yield True, f"OPT  standards_sources: not declared. Next: {PACK_OFFER}"
     if config.policy is not None:
         yield True, "OK   policy declared"
     else:
