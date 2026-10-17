@@ -34,7 +34,8 @@ It lists every file and tool daedalus needs and whether each is present, with a 
 Example output from a real run in a new repository with one empty commit, on a machine with no Daedalus settings, gitleaks missing and gh not signed in. Your paths differ, and the doctor prints your home directory in full where this shows `~`:
 
     OK   python >= 3.12
-    OK   project data dir: /work/my-service/.claude/daedalus (will be created by the first hook)
+    OK   project data dir: /work/my-service/.claude/daedalus (not created yet; a train's start creates it)
+    OK   audit log: off until a train runs here
     OK   config.json: not present, defaults in use
     OK   ledger: none found (the Build Train asks before creating docs/decisions.md)
     OPT  standards_sources: no standards file or pack is declared. Next: to adopt the shipped baseline pack, add {"kind": "pack", "name": "baseline"} to standards_sources in .claude/daedalus/config.json
@@ -66,7 +67,7 @@ Each `OK` line is a check that passed. Each `MISS` line names what is missing an
 | Running-train marker | `<repo>/.claude/daedalus/train.active` | each train, removed when it ends or stops |
 | Coder worktrees | `<repo>/.claude/worktrees/<train-id>-<unit-slug>` | the Build Train, removed when it ends or stops |
 
-`<repo>` is the main working tree of the git repository you started Claude Code in. Every worktree of that repository shares the one `.claude/daedalus/` directory. Outside a git repository, `<repo>` is the starting directory itself. The first hook writes `.claude/daedalus/.gitignore` with a single `*` line, so git ignores the directory and your own `.gitignore` is untouched. The jail also refuses any `git add` or `git commit` that names `.claude/daedalus`.
+`<repo>` is the main working tree of the git repository you started Claude Code in. Every worktree of that repository shares the one `.claude/daedalus/` directory. Outside a git repository, `<repo>` is the starting directory itself. The Build Train's start writes `.claude/daedalus/.gitignore` with a single `*` line, so git ignores the directory and your own `.gitignore` is untouched; until a train starts, no hook writes anything into the repository. While a train runs, the jail also refuses any `git add` or `git commit` that names `.claude/daedalus`.
 
 Each audit record holds a `result_head` field with the start of the tool's output. It is capped at 4096 characters, not bytes.
 

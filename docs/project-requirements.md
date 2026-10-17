@@ -5,7 +5,7 @@ Every file and setting daedalus reads, with the smallest example that works. `/d
 
 ## In the repo's `.claude/daedalus/` directory
 
-`<repo>` is the main working tree of the git repository you run Claude Code in; every worktree shares it (0010-DAE-PLT). The first hook creates `<repo>/.claude/daedalus/` (mode 0700) and a `.gitignore` inside it holding `*`. `config.json` is optional. Without it the defaults apply: no `charter_root`, no `standards_sources`, no `policy`, and the ledger probe below finds the ledger. Create it there from your own shell when you need any of those.
+`<repo>` is the main working tree of the git repository you run Claude Code in; every worktree shares it (0010-DAE-PLT). The Build Train's start creates `<repo>/.claude/daedalus/` (mode 0700) and a `.gitignore` inside it holding `*`; until then no hook writes anything into the repository (0035-DAE-PLT). `config.json` is optional. Without it the defaults apply: no `charter_root`, no `standards_sources`, no `policy`, and the ledger probe below finds the ledger. Create it there from your own shell when you need any of those.
 
 ### config.json, optional **(checked)**
 
@@ -167,7 +167,9 @@ The only directories a coder may write, and only inside its own unit worktree, w
 
 Daedalus writes no Claude Code settings file, in the repository or in your home directory. The Build Train creates its own coder worktrees from the integration branch, and the jail keeps every Daedalus agent from starting agents, so neither needs a setting.
 
-The jail refuses tool writes and the known Bash write routes into `<repo>/.claude/daedalus/`. The `*` gitignore marker keeps it out of git, and the hooks refuse to run when the directory is a symlink, is tracked by git, or holds a marker other than `*`. The jail also refuses `~/.ssh`, all of `~/.aws`, `~/.gnupg`, `~/.config/gh` and `~/.claude/.credentials.json` to every agent and the main session, through file tools and the Bash forms it models.
+Outside a train, Daedalus leaves your session and your repository alone, with one exception: it refuses reads and searches of credential files (`~/.ssh`, all of `~/.aws`, `~/.gnupg`, `~/.config/gh` and `~/.claude/.credentials.json`) for every agent and the main session. In a repository where no train has started, it writes no files and keeps no audit log. Inside a train, the jail judges every tool call and the audit log records each step. A train works in three folders: `<repo>/.claude/worktrees/` for the unit worktrees, `<repo>/.claude/daedalus/` for train state and the audit log, and the git-ignored `<repo>/docs/.tmp/daedalus/` for scratch files and summaries. To have the plugin's hooks in some repositories only, enable the plugin at project scope in each of those repositories' `.claude/settings.json` (Claude Code's `enabledPlugins`) instead of for your user (0035-DAE-PLT).
+
+While a train runs, the jail refuses tool writes and the known Bash write routes into `<repo>/.claude/daedalus/`; Daedalus's own agents meet that refusal at all times. The `*` gitignore marker keeps it out of git, and the hooks refuse to run when the directory is a symlink, is tracked by git, or holds a marker other than `*`. Daedalus's own agents always, and the main session while a train runs, are also refused writing the credential files above or naming them in the Bash forms the jail models.
 
 ### Test-only
 
