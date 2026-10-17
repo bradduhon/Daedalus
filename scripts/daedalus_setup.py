@@ -23,6 +23,8 @@ from lib.settings_merge import (  # noqa: E402
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 OS_RELEASE = Path("/etc/os-release")
 PACKAGES = {"bwrap": "bubblewrap", "socat": "socat"}
+# spec 4: os-release values may sit in double or single quotes.
+_QUOTES = str.maketrans("\"'", "  ")
 
 
 def _debian_family(os_release: Path) -> bool:
@@ -31,8 +33,8 @@ def _debian_family(os_release: Path) -> bool:
     except (OSError, UnicodeDecodeError):
         return False
     fields = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
-    ids = f"{fields.get('ID', '')} {fields.get('ID_LIKE', '')}".replace('"', "").split()
-    return bool({"debian", "ubuntu"} & set(ids))
+    ids = f"{fields.get('ID', '')} {fields.get('ID_LIKE', '')}".translate(_QUOTES)
+    return bool({"debian", "ubuntu"} & set(ids.split()))
 
 
 def install_line(missing: list[str], os_release: Path) -> str:

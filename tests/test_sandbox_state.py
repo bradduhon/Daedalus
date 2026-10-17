@@ -28,6 +28,8 @@ from tests.conftest import SCRIPTS_DIR, fake_bin
 
 @pytest.fixture
 def bins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    # Plan 4 minor: pin Linux so the bwrap and socat cases hold on macOS too.
+    monkeypatch.setattr(module.sys, "platform", "linux")
     fake = fake_bin(tmp_path, ())
     monkeypatch.setenv("PATH", str(fake))
     return fake
@@ -59,8 +61,9 @@ def test_enabled_false_is_off(tmp_path: Path, bins: Path) -> None:
     assert sandbox_state(tmp_path / "repo", tmp_path / "home") == OFF
 
 
-def test_non_boolean_enabled_is_off(tmp_path: Path, bins: Path) -> None:
-    _settings(tmp_path / "home" / ".claude" / "settings.json", {"sandbox": {"enabled": "true"}})
+@pytest.mark.parametrize("value", ["true", 1, "yes", None, [True], {"on": True}])
+def test_non_boolean_enabled_is_off(tmp_path: Path, bins: Path, value: object) -> None:
+    _settings(tmp_path / "home" / ".claude" / "settings.json", {"sandbox": {"enabled": value}})
     assert sandbox_state(tmp_path / "repo", tmp_path / "home") == OFF
 
 
@@ -83,6 +86,20 @@ def test_malformed_settings_raise_with_next(tmp_path: Path, bins: Path) -> None:
     with pytest.raises(SettingsError) as info:
         sandbox_state(tmp_path / "repo", tmp_path / "home")
     assert "is not valid JSON" in str(info.value) and "Next: fix" in str(info.value)
+
+
+def test_minor_3_unreadable_settings_are_not_called_invalid_json(
+    tmp_path: Path, bins: Path
+) -> None:
+    (tmp_path / "home" / ".claude" / "settings.json").mkdir(parents=True)
+    with pytest.raises(SettingsError) as info:
+        sandbox_state(tmp_path / "repo", tmp_path / "home")
+    assert "cannot be read" in str(info.value) and "not valid JSON" not in str(info.value)
+    assert "Next:" in str(info.value)
+
+
+def test_minor_3_bins_fixture_pins_linux(bins: Path) -> None:
+    assert required_binaries() == ("bwrap", "socat")
 
 
 def test_macos_needs_no_binaries(
@@ -162,6 +179,22 @@ def test_notice_is_silent_when_on(tmp_path: Path, bins: Path) -> None:
     _settings(tmp_path / "home" / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
     result = _notice(_start(tmp_path), tmp_path / "home", str(bins), tmp_path)
     assert result.returncode == 0 and result.stdout == ""
+
+
+@pytest.mark.skipif(sys.platform == "darwin", reason="macOS needs no sandbox binaries")
+def test_minor_9_notice_prints_configured_unavailable(tmp_path: Path, bins: Path) -> None:
+    fake_bin(tmp_path, ("bwrap",))
+    _settings(tmp_path / "home" / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    result = _notice(_start(tmp_path), tmp_path / "home", str(bins), tmp_path)
+    line = (
+        "MISS sandbox: configured-unavailable. Next: type /daedalus:setup yourself; "
+        "the model cannot run it"
+    )
+    assert result.returncode == 0
+    assert json.loads(result.stdout) == {
+        "systemMessage": line,
+        "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": line},
+    }
 
 
 @pytest.mark.parametrize("stdin", ["not json", "", "[1, 2]"])

@@ -13,7 +13,10 @@ from typing import Any
 # spec 4: the dotted paths /daedalus:setup merges from settings.recommended.json.
 MERGED_KEYS = ("sandbox", "permissions.deny", "promptCacheTtl", "subagentPromptCacheTtl")
 # spec 4, 0028: deny lists and excludedCommands gain missing entries; other values stay put.
-APPEND_KEYS = frozenset({"deny", "denyRead", "denyWrite", "excludedCommands"})
+APPEND_KEYS = frozenset(
+    {"permissions.deny", "sandbox.excludedCommands", "sandbox.network.deniedDomains"}
+    | {"sandbox.filesystem.denyRead", "sandbox.filesystem.denyWrite"}
+)
 
 
 class SettingsMergeError(ValueError):
@@ -75,7 +78,7 @@ def _merge_into(target: dict[str, Any], source: dict[str, Any], prefix: str = ""
             if not isinstance(target[key], dict):
                 raise _conflict(dotted, "a JSON object")
             _merge_into(target[key], value, f"{dotted}.")
-        elif key in APPEND_KEYS and isinstance(value, list):
+        elif dotted in APPEND_KEYS and isinstance(value, list):
             if not isinstance(target[key], list):
                 raise _conflict(dotted, "a JSON list")
             for item in value:
@@ -90,7 +93,7 @@ def merge(existing: dict[str, Any], recommended: dict[str, Any]) -> dict[str, An
 
 
 def render(data: dict[str, Any]) -> str:
-    return json.dumps(data, indent=2) + "\n"
+    return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
 
 def unified_diff(old: str, new: str, path: Path) -> str:
@@ -105,7 +108,7 @@ def unified_diff(old: str, new: str, path: Path) -> str:
 
 
 def write_atomic(path: Path, text: str, root: Path) -> None:
-    # spec 4: temp file and rename; write through a symlink, never replace the link.
+    # spec 4: temp file and rename. 0029: a link inside the repo is written through, never replaced.
     real = path.resolve() if path.is_symlink() else path
     # 0029: the resolved parent must sit under <root>/.claude; nothing outside the repo.
     allowed = root.resolve() / ".claude"
@@ -120,6 +123,8 @@ def write_atomic(path: Path, text: str, root: Path) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
         if real.exists():
             os.chmod(tmp, real.stat().st_mode & 0o777)
         os.replace(tmp, real)

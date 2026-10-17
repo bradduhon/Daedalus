@@ -128,6 +128,35 @@ def test_remove_refuses_a_symlinked_worktrees_dir(repo: Path, tmp_path: Path) ->
     assert outside.is_dir()
 
 
+def test_minor_11_create_refuses_a_symlinked_worktrees_dir(repo: Path, tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "worktrees").symlink_to(outside)
+    with pytest.raises(WorkspaceError) as info:
+        create(repo, NAME, BASE)
+    assert "resolves outside" in str(info.value) and "Next:" in str(info.value)
+    assert list(outside.iterdir()) == []
+    assert _git(repo, "rev-parse", "--verify", "--quiet", branch_name(NAME)).returncode != 0
+
+
+@pytest.mark.parametrize("hung", ["rev-parse", "prune"])
+def test_minor_11_timeout_without_a_worktree_names_no_placeholder(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, hung: str
+) -> None:
+    def hang(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if hung in cmd:
+            raise subprocess.TimeoutExpired(cmd, 1)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(workspace.subprocess, "run", hang)
+    with pytest.raises(WorkspaceError) as info:
+        create(repo, NAME, BASE) if hung == "rev-parse" else remove(repo, NAME)
+    message = str(info.value)
+    assert "timed out" in message and "<name>" not in message and "unlock" not in message
+    assert f"Next: run git -C {repo} " in message
+
+
 def test_create_and_remove_resolve_a_relative_repo(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -70,12 +70,16 @@ def _run(repo: Path, *args: str, path: Path | None = None) -> subprocess.Complet
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
+        took = f"git {args[0]} {args[1]} timed out after {_GIT_TIMEOUT_S} s."
+        if path is None:
+            raise WorkspaceError(
+                f"{took} Next: run git -C {repo} {' '.join(args)} from your own shell "
+                "to see why it hangs, then rerun."
+            ) from exc
         # spec 7: a killed worktree add can leave a lock that a single --force will not clear.
-        target = path or repo / WORKTREES_DIR / "<name>"
         raise WorkspaceError(
-            f"git {args[0]} {args[1]} timed out after {_GIT_TIMEOUT_S} s. "
-            f"Next: run git -C {repo} worktree unlock {target} (or worktree remove -f -f "
-            f"{target}), then run daedalus_workspace.py remove and rerun."
+            f"{took} Next: run git -C {repo} worktree unlock {path} (or worktree remove -f -f "
+            f"{path}), then run daedalus_workspace.py remove and rerun."
         ) from exc
     except OSError as exc:
         raise WorkspaceError(

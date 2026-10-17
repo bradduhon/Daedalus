@@ -40,7 +40,11 @@ def _sandbox_blocks(repo: Path, home: Path) -> list[tuple[Path, dict[str, object
             data = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             continue
-        except (OSError, UnicodeDecodeError, ValueError, RecursionError) as exc:
+        except (OSError, UnicodeDecodeError) as exc:
+            raise SettingsError(
+                f"{path} cannot be read ({exc}). Next: make {path} a readable UTF-8 file"
+            ) from exc
+        except (ValueError, RecursionError) as exc:
             raise SettingsError(
                 f"{path} is not valid JSON ({exc}). Next: fix the JSON syntax in {path}"
             ) from exc

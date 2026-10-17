@@ -24,14 +24,14 @@ SCAFFOLDS = ("service-manifest.json", "contracts/", ".gitleaks.toml")
 
 
 def _run(
-    data_dir: Path | None, repo: Path, path_env: str | None = None, home: Path | None = None
+    data_dir: Path | None, repo: Path, path_env: str, home: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
+    # Plan 4 minor: PATH is always the test's own; the real PATH never leaks in.
     env = dict(os.environ)
     env.pop("CLAUDE_PLUGIN_DATA", None)
     if data_dir is not None:
         env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
-    if path_env is not None:
-        env["PATH"] = path_env
+    env["PATH"] = path_env
     if home is not None:
         env["HOME"] = str(home)
     return subprocess.run(
@@ -217,6 +217,23 @@ def test_sandbox_malformed_settings_is_a_miss(tmp_path: Path) -> None:
     _settings(home / ".claude" / "settings.json", "{not json")
     line = _sandbox_line(_run(None, tmp_path, path_env=_bins(tmp_path), home=home))
     assert line.startswith("MISS sandbox: ") and "is not valid JSON" in line and "Next: fix" in line
+
+
+def test_minor_6_sandbox_alone_missing_exits_one(plugin_data: Path, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (repo / "service-manifest.json").write_text("{}")
+    (repo / "contracts").mkdir()
+    (repo / "contracts" / "openapi.yaml").write_text("")
+    (repo / ".gitleaks.toml").write_text("")
+    _commit_all(repo)
+    home = tmp_path / "home"
+    home.mkdir()
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh", "bwrap", "socat")
+    result = _run(plugin_data, repo, path_env=bins, home=home)
+    misses = [line for line in result.stdout.splitlines() if line.startswith("MISS")]
+    assert misses == [SETUP_OFF]
+    assert result.returncode == 1
 
 
 def test_doctor_no_longer_checks_base_ref(tmp_path: Path) -> None:
@@ -617,6 +634,42 @@ def test_gh_signed_in_is_ok(tmp_path: Path) -> None:
     assert "OK   gh authenticated" in lines
 
 
+def test_minor_7_gh_auth_timeout_names_the_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import daedalus_doctor
+
+    seen: dict[str, object] = {}
+
+    def hang(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen.update(kwargs)
+        raise subprocess.TimeoutExpired(cmd, 10)
+
+    monkeypatch.setenv("PATH", _bins(tmp_path, "gh"))
+    monkeypatch.setattr(daedalus_doctor.subprocess, "run", hang)
+    lines = [line for _, line in daedalus_doctor._gh_checks()]
+    assert lines[1] == (
+        "MISS gh authenticated: gh auth status did not finish within 10 s. "
+        "Next: run gh auth status from your own shell, then gh auth login if it asks"
+    )
+    assert seen.get("stdin") is subprocess.DEVNULL
+
+
+def test_minor_7_gh_auth_oserror_names_the_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import daedalus_doctor
+
+    def broken(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setenv("PATH", _bins(tmp_path, "gh"))
+    monkeypatch.setattr(daedalus_doctor.subprocess, "run", broken)
+    line = [line for _, line in daedalus_doctor._gh_checks()][1]
+    assert line.startswith("MISS gh authenticated: gh auth status could not run (")
+    assert "Permission denied" in line and "exited" not in line and "Next:" in line
+
+
 def test_gh_signed_out_is_a_miss(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
@@ -650,7 +703,23 @@ def test_absent_config_runs_the_ledger_probe_found(tmp_path: Path) -> None:
     bins = _bins_with_git(tmp_path)
     lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
     ledger = repo.resolve() / "docs" / "decisions.md"
-    assert f"OK   ledger: {ledger} (probe, markdown-table-row)" in lines
+    i = lines.index("OK   config.json: not present, defaults in use")
+    assert lines[i + 1] == f"OK   ledger: {ledger} (probe, markdown-table-row)"
+
+
+def test_minor_8_manifest_ledger_block_reports_manifest_origin(tmp_path: Path) -> None:
+    from tests.conftest import REPO_ROOT
+
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    fixture = REPO_ROOT / "tests" / "fixtures" / "ledgers" / "manifest-override.json"
+    (repo / "service-manifest.json").write_text(fixture.read_text())
+    (_data(repo) / "config.json").write_text("{}")
+    bins = _bins_with_git(tmp_path)
+    lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
+    i = lines.index("OK   config.json")
+    ledger = repo.resolve() / "docs" / "decisions.md"
+    assert lines[i + 1] == f"OK   ledger: {ledger} (manifest, markdown-table-row)"
 
 
 def test_undeclared_standards_and_policy_are_optional(tmp_path: Path) -> None:
@@ -678,7 +747,8 @@ def test_plugin_root_follows_the_cache_dir_line(tmp_path: Path) -> None:
 
 
 def test_first_run_without_config_is_all_ok(tmp_path: Path) -> None:
-    # 0020: a first doctor on a clean committed repo with no config.json exits 0.
+    # 0020: exit 0 on a clean repo with no config.json once three files are committed:
+    # service-manifest.json, contracts/openapi.yaml and .gitleaks.toml.
     repo = tmp_path / "repo"
     _git_repo(repo)
     (repo / "service-manifest.json").write_text("{}")
@@ -775,6 +845,16 @@ def test_train_marker_present_is_ok_with_unmark_next(tmp_path: Path) -> None:
     root = repo.resolve()
     assert "Next: if no Daedalus train is running, run python3 ${CLAUDE_PLUGIN_ROOT}/" in line
     assert f"daedalus_workspace.py unmark --repo {root}" in line
+
+
+def test_minor_final_review_marker_id_drops_control_characters(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (_data(repo) / "train.active").write_text("2026\x1b[31m1015\x07-12\x7f0000\nsecond\n")
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
+    line = next(x for x in result.stdout.splitlines() if "train marker" in x)
+    assert line.startswith("OK   train marker: present (2026[31m1015-120000) at ")
+    assert not any(ord(c) < 32 or ord(c) == 127 for c in line)
 
 
 def _framework_manifest(cache: Path, family: str, *dates: str) -> None:

@@ -7,6 +7,7 @@ import copy
 import errno
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -15,7 +16,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from lib import settings_merge
+from lib.sandbox_state import required_binaries
 from lib.settings_merge import (
+    APPEND_KEYS,
     MERGED_KEYS,
     SettingsMergeError,
     merge,
@@ -62,7 +66,7 @@ def test_only_permissions_deny_leaves_the_recommended_file() -> None:
 )
 def test_type_conflict_is_refused_naming_the_key(existing: dict[str, Any], dotted: str) -> None:
     snapshot = copy.deepcopy(existing)
-    with pytest.raises(SettingsMergeError, match=f"key {dotted} is not .*Next:"):
+    with pytest.raises(SettingsMergeError, match=f"key {re.escape(dotted)} is not .*Next:"):
         merge(existing, _recommended())
     assert existing == snapshot
 
@@ -85,6 +89,46 @@ def test_existing_deny_entries_are_kept_and_missing_ones_appended() -> None:
         "Read(~/.config/gh/**)",
         "Read(~/.claude/.credentials.json)",
     ]
+
+
+def test_minor_4_existing_deny_read_and_write_gain_missing_entries() -> None:
+    rec = _recommended()["sandbox"]["filesystem"]
+    existing = {"sandbox": {"filesystem": {"denyRead": ["~/.ssh", "~/x"], "denyWrite": ["~/y"]}}}
+    merged = merge(existing, _recommended())["sandbox"]["filesystem"]
+    assert merged["denyRead"] == ["~/.ssh", "~/x", *(e for e in rec["denyRead"] if e != "~/.ssh")]
+    assert merged["denyWrite"] == ["~/y", *rec["denyWrite"]]
+
+
+def test_minor_4_denied_domains_gain_missing_entries() -> None:
+    rec = {"sandbox": {"network": {"deniedDomains": ["evil.example", "bad.example"]}}}
+    existing = {"sandbox": {"network": {"deniedDomains": ["bad.example", "mine.example"]}}}
+    merged = merge(existing, rec)["sandbox"]["network"]["deniedDomains"]
+    assert merged == ["bad.example", "mine.example", "evil.example"]
+
+
+def test_minor_4_append_keys_match_dotted_paths_only() -> None:
+    assert "sandbox.network.deniedDomains" in APPEND_KEYS
+    rec = {"sandbox": {"other": {"deny": ["a", "b"]}}}
+    existing = {"sandbox": {"other": {"deny": ["c"]}}}
+    assert merge(existing, rec)["sandbox"]["other"]["deny"] == ["c"]
+
+
+def test_minor_4_render_keeps_non_ascii_text() -> None:
+    assert settings_merge.render({"note": "caf\u00e9"}) == '{\n  "note": "caf\u00e9"\n}\n'
+
+
+def test_minor_4_write_atomic_syncs_before_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    real_fsync, real_replace = os.fsync, os.replace
+    monkeypatch.setattr(os, "fsync", lambda fd: (calls.append("fsync"), real_fsync(fd))[1])
+    monkeypatch.setattr(
+        os, "replace", lambda a, b: (calls.append("replace"), real_replace(a, b))[1]
+    )
+    (tmp_path / ".claude").mkdir()
+    write_atomic(tmp_path / ".claude" / "settings.local.json", "{}\n", tmp_path)
+    assert calls == ["fsync", "replace"]
 
 
 def test_existing_sandbox_value_is_never_overwritten() -> None:
@@ -259,6 +303,33 @@ def _home_untouched(tmp_path: Path) -> None:
     assert list((tmp_path / "home").iterdir()) == []
 
 
+# Plan 4 minor: macOS needs neither binary, so the missing-binary cases run only on Linux.
+NEEDS_BINARIES = pytest.mark.skipif(not required_binaries(), reason="no sandbox binaries here")
+
+
+@pytest.mark.parametrize(
+    ("body", "apt"),
+    [
+        (None, False),
+        ('ID="ubuntu"\n', True),
+        ("ID='debian'\n", True),
+        ('ID=pop\nID_LIKE="ubuntu debian"\n', True),
+        ('ID="fedora"\nID_LIKE="rhel centos"\n', False),
+    ],
+)
+def test_minor_5_install_line_reads_quoted_and_missing_os_release(
+    tmp_path: Path, body: str | None, apt: bool
+) -> None:
+    import daedalus_setup
+
+    release = tmp_path / "os-release"
+    if body is not None:
+        release.write_text(body)
+    line = daedalus_setup.install_line(["bwrap"], release)
+    assert line.startswith("run sudo apt-get install -y bubblewrap") is apt, line
+
+
+@NEEDS_BINARIES
 def test_setup_without_binaries_prints_the_apt_line_and_writes_nothing(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     result = _setup(tmp_path, (), "ID=ubuntu\nID_LIKE=debian\n", repo)
@@ -272,6 +343,7 @@ def test_setup_without_binaries_prints_the_apt_line_and_writes_nothing(tmp_path:
     _home_untouched(tmp_path)
 
 
+@NEEDS_BINARIES
 def test_setup_without_one_binary_names_its_package_elsewhere(tmp_path: Path) -> None:
     result = _setup(tmp_path, ("bwrap",), repo=_repo(tmp_path))
     assert result.returncode == 1

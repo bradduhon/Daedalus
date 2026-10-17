@@ -39,6 +39,8 @@ from lib.workspace import UNMARK_NEXT, train_marker  # noqa: E402
 REQ_DOC = "docs/project-requirements.md"
 SANDBOX_NEXT = f"install bubblewrap and socat, then {SETUP_NEXT}"
 GH_NEXT = "install gh (https://cli.github.com); the Push Train opens pull requests with it"
+GH_TIMEOUT_S = 10
+GH_STUCK_NEXT = "run gh auth status from your own shell, then gh auth login if it asks"
 NO_LEDGER = "OK   ledger: none found (the Build Train asks before creating docs/decisions.md)"
 PROJECT_DATA_NEXT = "write a single line * to {marker}"
 IGNORE_NEXT = (
@@ -191,11 +193,22 @@ def _gh_checks() -> Iterator[tuple[bool, str]]:
         return
     try:
         status = subprocess.run(
-            ["gh", "auth", "status"], capture_output=True, text=True, timeout=10, check=False
+            ["gh", "auth", "status"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=GH_TIMEOUT_S,
+            check=False,
         )
-        code = status.returncode
-    except (OSError, subprocess.SubprocessError):
-        code = -1
+    except subprocess.TimeoutExpired:
+        detail = f"gh auth status did not finish within {GH_TIMEOUT_S} s"
+        yield _check(False, "gh authenticated", detail, GH_STUCK_NEXT)
+        return
+    except (OSError, subprocess.SubprocessError) as exc:
+        detail = f"gh auth status could not run ({exc})"
+        yield _check(False, "gh authenticated", detail, GH_STUCK_NEXT)
+        return
+    code = status.returncode
     yield _check(
         code == 0, "gh authenticated", f"gh auth status exited {code}", "run gh auth login"
     )
@@ -270,7 +283,9 @@ def _marker_check(repo: Path) -> tuple[bool, str]:
     try:
         # 0023: a symlinked marker is never followed; its target could be anything.
         text = "symlink" if marker.is_symlink() else marker.read_text(encoding="utf-8")
-        train_id = text.strip()[:32] or "empty"
+        # 0023: the first line only, printable characters only; a hand-written id is untrusted.
+        first = "".join(c for c in text.split("\n", 1)[0] if c.isprintable())
+        train_id = first.strip()[:32] or "empty"
     except (OSError, UnicodeDecodeError):
         train_id = "unreadable"
     line = f"OK   train marker: present ({train_id}) at {marker}. "

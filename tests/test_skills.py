@@ -671,10 +671,11 @@ def test_skill_script_commands_are_allowed_for_main() -> None:
     root = str(REPO_ROOT)
     commands = [
         re.sub(r"<[^>]+>", "x", m.replace("${CLAUDE_PLUGIN_ROOT}", root).replace("<repo>", root))
-        for path in (REPO_ROOT / "skills" / "build-train", REPO_ROOT / "skills" / "push-train")
+        for path in (REPO_ROOT / "skills" / n for n in ("build-train", "push-train", "setup"))
         for m in _SKILL_SCRIPT.findall((path / "SKILL.md").read_text(encoding="utf-8"))
     ]
     assert len(commands) >= 4
+    assert any("daedalus_setup.py" in c for c in commands)
     for command in commands:
         payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": root}
         d = decide(payload, Config())
@@ -766,6 +767,11 @@ def test_doctor_asks_once_and_hands_setup_to_the_operator() -> None:
     assert "tell the operator to type `/daedalus:setup` themselves" in body
 
 
+def test_minor_5_setup_skill_names_the_two_space_rewrite() -> None:
+    text = (REPO_ROOT / "skills" / "setup" / "SKILL.md").read_text(encoding="utf-8")
+    assert "rewritten as JSON indented by two spaces" in text
+
+
 TRAIN_SKILLS = [p for p in SKILLS if p.parent.name.endswith("-train")]
 SANDBOX_NEXT_LINE = "Next: run /daedalus:setup, restart, rerun the train."
 SANDBOX_STATE_CMD = "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_doctor.py --sandbox-state"
@@ -808,6 +814,13 @@ def test_push_train_requires_the_sandbox_first() -> None:
     assert step.index("`<repo>` is the parent") < step.index(SANDBOX_STATE_CMD)
     refusal = "Any word but `on`: stop. The Push Train needs the OS sandbox. "
     assert refusal + SANDBOX_NEXT_LINE in step
+
+
+def test_minor_10_push_train_sandbox_state_exit_one_shows_its_message() -> None:
+    step = _section(_push_train(), "\n1. ", "\n2. ")
+    exit_one = "Exit 1: stop and show its message. Next: the action the message names."
+    assert exit_one in step
+    assert step.index(SANDBOX_STATE_CMD + " --repo <repo>") < step.index(exit_one)
 
 
 def test_push_train_checks_gh_beside_gitleaks() -> None:
