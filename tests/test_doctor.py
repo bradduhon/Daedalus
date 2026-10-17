@@ -20,7 +20,7 @@ SCAFFOLDS = ("service-manifest.json", "contracts/", ".gitleaks.toml")
 def _run(
     data_dir: Path | None, repo: Path, path_env: str, home: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
-    # Plan 4 minor: PATH is always the test's own; the real PATH never leaks in.
+    # PATH is always the test's own; the real PATH never leaks in.
     env = dict(os.environ)
     env.pop("CLAUDE_PLUGIN_DATA", None)
     if data_dir is not None:
