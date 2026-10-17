@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from lib import train_state
 from lib.audit import cache_dir_or_probe
@@ -364,3 +365,101 @@ def begin(cwd: Path, needle: str = BEGIN_NEEDLE) -> list[str]:
         f"cache: {cache}" if cache else "cache: unresolved",
         f"sandbox: {sandbox}",
     ]
+
+
+def _active(repo: Path) -> tuple[str, dict[str, Any]]:
+    train_id = train_state.active_train(repo)
+    if train_id is None:
+        raise WorkspaceError(
+            f"no Daedalus train is active in {repo}. Next: run /daedalus:build-train."
+        )
+    try:
+        return train_id, train_state.load(repo, train_id)
+    except train_state.TrainStateError as exc:
+        raise WorkspaceError(str(exc)) from exc
+
+
+def _record(repo: Path, train_id: str, **fields: Any) -> None:
+    try:
+        train_state.update(repo, train_id, **fields)
+    except train_state.TrainStateError as exc:
+        raise WorkspaceError(str(exc)) from exc
+
+
+def _on_branch(repo: Path, branch: str, start: str | None = None) -> None:
+    if _out(repo, "rev-parse", "--abbrev-ref", "HEAD").strip() == branch:
+        return
+    exists = _run(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")
+    if exists.returncode == 0:
+        _git(repo, "switch", "-q", branch)
+    elif start is not None:
+        _git(repo, "switch", "-q", "-c", branch, start)
+    else:
+        raise WorkspaceError(f"branch {branch} is missing in {repo}. Next: {RERUN}")
+
+
+def _contract_target(repo: Path, state: dict[str, Any], contract: str) -> tuple[Path, Path]:
+    # 0011: contracts/<name>.md in this repo, or specs/<name>.md under the declared charter_root.
+    path = (repo / contract).resolve()
+    charter = Path(state["charter_root"]) if state.get("charter_root") else None
+    root, folder = (
+        (charter, "specs") if charter and path.is_relative_to(charter) else (repo, "contracts")
+    )
+    rel = path.relative_to(root) if path.is_relative_to(root) else None
+    if (
+        rel is None
+        or len(rel.parts) != 2
+        or rel.parts[0] != folder
+        or rel.suffix != ".md"
+        or not _NAME.fullmatch(rel.stem)
+    ):
+        raise WorkspaceError(
+            f"contract path {contract} is not {folder}/<name>.md in {root}. "
+            "Next: ask contract-spec to save the packet there, then rerun the lock."
+        )
+    return root, path
+
+
+def lock(repo: Path, contract: str, version: int) -> list[str]:
+    repo = repo.resolve()
+    train_id, state = _active(repo)
+    root, path = _contract_target(repo, state, contract)
+    recorded = state.get("packet_version")
+    if isinstance(recorded, int) and version <= recorded:
+        raise WorkspaceError(
+            f"packet_version {version} does not exceed {recorded}. "
+            "Next: ask contract-spec for a higher packet_version."
+        )
+    if not path.is_file():
+        raise WorkspaceError(
+            f"contract-spec did not save the packet at {path}. Next: rerun /daedalus:build-train."
+        )
+    integration = f"daedalus/{train_id}"
+    _on_branch(repo, integration, state["base_sha"])
+    if root != repo:
+        _on_branch(root, integration)
+    rel = str(path.relative_to(root))
+    _git(root, "add", "--", rel)
+    unchanged = _run(root, "diff", "--cached", "--quiet", "--", rel)
+    if unchanged.returncode not in (0, 1):
+        raise WorkspaceError(
+            f"git diff --cached failed in {root}. Next: fix the cause, then rerun."
+        )
+    verb = "Revise" if isinstance(recorded, int) else "Lock"
+    if unchanged.returncode == 1:
+        _git(root, "commit", "-q", "-m", f"{verb} contract {path.stem} v{version}", "--", rel)
+    sha = _out(repo, "rev-parse", integration).strip()
+    _record(
+        repo,
+        train_id,
+        contract_path=str(path),
+        contract_repo=str(root),
+        packet_version=version,
+        lock_sha=sha,
+    )
+    detail = (
+        f"contract: {path} v{version}"
+        if unchanged.returncode == 1
+        else "contract unchanged, no commit"
+    )
+    return [f"lock: {sha}", detail]

@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from lib import audit, train_state, workspace
 from lib.sandbox_state import SettingsError
-from lib.workspace import WorkspaceError, begin, train_marker
+from lib.workspace import WorkspaceError, begin, lock, train_marker
 
 from tests.conftest import SCRIPTS_DIR
 
@@ -218,3 +218,115 @@ def test_begin_reports_policy_and_cache(
     assert lines[3] == "policy: conftest policy  standards: 1 sources"
     assert lines[4] == f"cache: {cache.resolve()}/frameworks"
     assert os.path.isabs(lines[4].split()[1])
+
+
+def _train(repo: Path) -> str:
+    return begin(repo)[0].split()[1]
+
+
+def _subject(repo: Path, ref: str = "HEAD") -> str:
+    return _ok(repo, "log", "-1", "--format=%s", ref)
+
+
+def _contract(root: Path, rel: str = "contracts/api.md", text: str = "packet v1\n") -> Path:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+def test_lock_commits_the_contract_on_the_integration_branch(repo: Path, live: None) -> None:
+    train = _train(repo)
+    base = _ok(repo, "rev-parse", "HEAD")
+    path = _contract(repo)
+    lines = lock(repo, "contracts/api.md", 1)
+    sha = _ok(repo, "rev-parse", f"daedalus/{train}")
+    assert lines == [f"lock: {sha}", f"contract: {path} v1"]
+    assert _head(repo) == f"daedalus/{train}" and sha != base
+    assert _subject(repo) == "Lock contract api v1"
+    assert _ok(repo, "rev-parse", "HEAD~1") == base
+    state = train_state.load(repo, train)
+    assert state["lock_sha"] == sha and state["packet_version"] == 1
+    assert state["contract_path"] == str(path) and state["contract_repo"] == str(repo)
+    assert _git(repo, "status", "--porcelain").stdout == ""
+
+
+def test_lock_skips_an_unchanged_contract(repo: Path, live: None) -> None:
+    train = _train(repo)
+    _contract(repo)
+    first = lock(repo, "contracts/api.md", 1)
+    again = lock(repo, "contracts/api.md", 2)
+    assert again == [first[0], "contract unchanged, no commit"]
+    assert train_state.load(repo, train)["packet_version"] == 2
+
+
+def test_lock_refuses_a_missing_file(repo: Path, live: None) -> None:
+    _train(repo)
+    with pytest.raises(WorkspaceError) as info:
+        lock(repo, "contracts/api.md", 1)
+    assert str(info.value) == (
+        f"contract-spec did not save the packet at {repo / 'contracts' / 'api.md'}. "
+        "Next: rerun /daedalus:build-train."
+    )
+
+
+def test_lock_refuses_a_version_not_raised(repo: Path, live: None) -> None:
+    train = _train(repo)
+    _contract(repo)
+    lock(repo, "contracts/api.md", 2)
+    _contract(repo, text="packet v2\n")
+    with pytest.raises(WorkspaceError) as info:
+        lock(repo, "contracts/api.md", 2)
+    assert str(info.value) == (
+        "packet_version 2 does not exceed 2. Next: ask contract-spec for a higher packet_version."
+    )
+    assert _subject(repo) == "Lock contract api v2"
+    assert train_state.load(repo, train)["packet_version"] == 2
+
+
+def test_lock_revises_with_the_revise_message(repo: Path, live: None) -> None:
+    train = _train(repo)
+    _contract(repo)
+    lock(repo, "contracts/api.md", 1)
+    _contract(repo, text="packet v2\n")
+    lines = lock(repo, "contracts/api.md", 2)
+    assert _subject(repo) == "Revise contract api v2"
+    assert lines[0] == f"lock: {_ok(repo, 'rev-parse', f'daedalus/{train}')}"
+
+
+def test_lock_commits_a_charter_contract_in_the_charter(
+    repo: Path, charter: Path, live: None
+) -> None:
+    train = _train(repo)
+    base = _ok(repo, "rev-parse", "HEAD")
+    path = _contract(charter, "specs/api.md")
+    lines = lock(repo, str(path), 1)
+    assert lines == [f"lock: {base}", f"contract: {path} v1"]
+    assert _head(charter) == f"daedalus/{train}"
+    assert _subject(charter) == "Lock contract api v1"
+    assert _head(repo) == f"daedalus/{train}"
+    assert train_state.load(repo, train)["contract_repo"] == str(charter)
+
+
+@pytest.mark.parametrize("rel", ["src/api.md", "contracts/sub/api.md", "contracts/API.md"])
+def test_lock_refuses_a_path_outside_contracts(repo: Path, live: None, rel: str) -> None:
+    _train(repo)
+    _contract(repo, rel)
+    with pytest.raises(WorkspaceError, match="Next:"):
+        lock(repo, rel, 1)
+
+
+def test_lock_without_a_train_refuses(repo: Path) -> None:
+    _contract(repo)
+    with pytest.raises(WorkspaceError, match="Next:"):
+        lock(repo, "contracts/api.md", 1)
+
+
+def test_lock_cli_exit_codes(repo: Path, live: None) -> None:
+    _train(repo)
+    missing = _cli("lock", "--repo", str(repo), "--contract", "contracts/api.md", "--version", "1")
+    assert missing.returncode == 1 and "Next:" in missing.stderr
+    _contract(repo)
+    done = _cli("lock", "--repo", str(repo), "--contract", "contracts/api.md", "--version", "1")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.startswith("lock: ")
