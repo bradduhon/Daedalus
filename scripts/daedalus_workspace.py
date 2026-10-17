@@ -9,7 +9,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.workspace import (  # noqa: E402
+    LedgerQuestion,
     WorkspaceError,
+    begin,
     clear_train,
     create,
     mark_train,
@@ -35,6 +37,8 @@ def main(argv: list[str]) -> int:
     mark.add_argument("--train", required=True)
     unmark = sub.add_parser("unmark")
     unmark.add_argument("--repo", type=Path, required=True)
+    start = sub.add_parser("begin")
+    start.add_argument("--repo", type=Path, required=True)
     args = parser.parse_args(argv)
     repo = args.repo.resolve()
     try:
@@ -45,8 +49,14 @@ def main(argv: list[str]) -> int:
             print(f"removed {worktree_path(repo, args.name)}")
         elif args.action == "mark":
             print(mark_train(repo, args.train))
-        else:
+        elif args.action == "unmark":
             print(f"cleared {clear_train(repo)}")
+        elif args.action == "begin":
+            print("\n".join(begin(repo)))
+    except LedgerQuestion as exc:
+        # 0004: exit 3 hands the ledger question to the operator; nothing was written.
+        print(exc)
+        return 3
     except WorkspaceError as exc:
         print(f"daedalus-workspace: {exc}", file=sys.stderr)
         return 1

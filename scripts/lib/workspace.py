@@ -6,9 +6,15 @@ import os
 import re
 import subprocess
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 from lib import train_state
+from lib.audit import cache_dir_or_probe
+from lib.audit_proof import SUMMARY_DIR, ProofError, live_log
+from lib.config import Config, ConfigError, load_config
+from lib.ledger import LedgerError, read_sequence, resolve_ledger
+from lib.sandbox_state import SettingsError, sandbox_state
 from lib.train_state import TRAIN_ID as _TRAIN_ID
 from lib.train_state import TRAIN_MARKER
 
@@ -185,3 +191,176 @@ def clear_train(repo: Path) -> Path:
             f"cannot remove {marker} ({exc}). Next: delete it from your own shell."
         ) from exc
     return marker
+
+
+BEGIN_NEEDLE = "daedalus_workspace.py begin"
+DIRTY_LIMIT = 10
+RERUN = "run /daedalus:build-train again."
+CLEAN_NEXT = f"Next: commit or stash your changes from your own shell, then {RERUN}"
+LEDGER_NONE = "ledger: none declared and none found."
+LEDGER_QUESTION = (
+    "This repo has no decision ledger. Options: name an existing file, or let Daedalus "
+    "create docs/decisions.md as a table. Which?"
+)
+LEDGER_TABLE = "| Id | Date | Ruling | Supersedes | Follow-ups |\n|---|---|---|---|---|"
+
+
+class LedgerQuestion(WorkspaceError):
+    pass
+
+
+def _out(repo: Path, *args: str) -> str:
+    result = _run(repo, *args)
+    if result.returncode != 0:
+        detail = " ".join(result.stderr.split()) or "no stderr"
+        raise WorkspaceError(
+            f"git {args[0]} {args[1]} failed in {repo} ({detail}). "
+            "Next: fix the cause git names, then rerun."
+        )
+    return result.stdout
+
+
+def _dirty(repo: Path, *pathspec: str) -> list[str]:
+    # 0007: name the dirty paths so nobody reruns git status to find them.
+    out = _out(repo, "status", "--porcelain", "--untracked-files=all", *pathspec)
+    return [line[3:].split(" -> ")[-1] for line in out.splitlines() if line.strip()]
+
+
+def _shown(paths: list[str]) -> str:
+    shown = ", ".join(paths[:DIRTY_LIMIT])
+    if len(paths) > DIRTY_LIMIT:
+        shown += f" +{len(paths) - DIRTY_LIMIT} more"
+    return shown
+
+
+def _branch(repo: Path) -> str:
+    head = _out(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    if head == "HEAD":
+        raise WorkspaceError(
+            f"{repo} is on a detached HEAD, so a stop has no branch to return to. "
+            f"Next: switch to a branch from your own shell, then {RERUN}"
+        )
+    return head
+
+
+def repo_root(cwd: Path) -> Path:
+    inside = _run(cwd, "rev-parse", "--is-inside-work-tree")
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        raise WorkspaceError(
+            f"{cwd} is not inside a git work tree. "
+            f"Next: start the session inside the target repository, then {RERUN}"
+        )
+    # 0010: the common dir's parent is the main working tree every worktree shares.
+    common = _out(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+    return Path(common).parent
+
+
+def _ledger_line(repo: Path, config: Config) -> str:
+    try:
+        ledger = resolve_ledger(str(repo), config)
+        if ledger is None:
+            raise LedgerQuestion(f"{LEDGER_NONE}\n{LEDGER_QUESTION}\n{LEDGER_TABLE}")
+        seq = read_sequence(ledger)
+    except LedgerError as exc:
+        raise WorkspaceError(str(exc)) from exc
+    return f"ledger: {ledger.path} ({ledger.origin}, {ledger.format}, seq={seq})"
+
+
+def _scratch(repo: Path) -> None:
+    scratch = repo / SUMMARY_DIR
+    marker = scratch / ".gitignore"
+    try:
+        scratch.mkdir(parents=True, exist_ok=True)
+        if not marker.exists():
+            marker.write_text("*\n", encoding="utf-8")
+    except OSError as exc:
+        raise WorkspaceError(
+            f"cannot write {marker} ({exc}). Next: make {scratch} a writable directory."
+        ) from exc
+
+
+def _charter_branch(charter: Path, train_id: str) -> str:
+    dirty = _dirty(charter)
+    if dirty:
+        raise WorkspaceError(
+            f"uncommitted changes in {charter}: {_shown(dirty)}. Next: commit or stash the "
+            f"changes in {charter} from your own shell, then {RERUN}"
+        )
+    base = _branch(charter)
+    _git(charter, "switch", "-q", "-c", f"daedalus/{train_id}")
+    return base
+
+
+def _undo_charter(charter: Path, base: str, exc: Exception) -> WorkspaceError:
+    switched = _run(charter, "switch", "-q", base)
+    if switched.returncode == 0:
+        return WorkspaceError(str(exc))
+    return WorkspaceError(
+        f"{exc} The Charter switch-back failed too. "
+        f"Next: run git -C {charter} switch {base} from your own shell, then {RERUN}"
+    )
+
+
+def begin(cwd: Path, needle: str = BEGIN_NEEDLE) -> list[str]:
+    # 0024: build-train Preconditions 1 to 9, ordered so a failure leaves no train state behind.
+    repo = repo_root(cwd.resolve())
+    dirty = _dirty(repo)
+    if dirty:
+        raise WorkspaceError(f"uncommitted changes in {repo}: {_shown(dirty)}. {CLEAN_NEXT}")
+    base = _branch(repo)
+    base_sha = _out(repo, "rev-parse", "HEAD").strip()
+    try:
+        config = load_config(path=repo / ".claude" / "daedalus" / "config.json")
+    except ConfigError as exc:
+        raise WorkspaceError(str(exc)) from exc
+    ledger_line = _ledger_line(repo, config)
+    try:
+        log, _ = live_log(repo, needle)
+    except ProofError as exc:
+        raise WorkspaceError(str(exc)) from exc
+    train_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    if train_state.state_path(repo, train_id).exists():
+        raise WorkspaceError(f"train {train_id} already exists. Next: wait a second, then {RERUN}")
+    _scratch(repo)
+    charter = (repo / config.charter_root).resolve() if config.charter_root else None
+    charter_base = _charter_branch(charter, train_id) if charter else None
+    try:
+        sandbox = sandbox_state(repo)
+        try:
+            cache: str | None = str(cache_dir_or_probe() / "frameworks")
+        except RuntimeError:
+            cache = None
+        state = {
+            "train_id": train_id,
+            "repo": str(repo),
+            "base_branch": base,
+            "base_sha": base_sha,
+            "charter_root": str(charter) if charter else None,
+            "charter_base": charter_base,
+            "charter_branch_created": charter is not None,
+            "audit_session": log.stem,
+            "sandbox": sandbox,
+            "ledger_line": ledger_line,
+            "cache_dir": cache,
+            "units": [],
+            "merged": False,
+        }
+        train_state.save(repo, train_id, state)
+        try:
+            mark_train(repo, train_id)
+        except WorkspaceError:
+            train_state.state_path(repo, train_id).unlink(missing_ok=True)
+            raise
+    except (SettingsError, train_state.TrainStateError, WorkspaceError) as exc:
+        if charter is not None and charter_base is not None:
+            raise _undo_charter(charter, charter_base, exc) from exc
+        raise WorkspaceError(str(exc)) from exc
+    policy = f"{config.policy.engine} {config.policy.path}" if config.policy else "none declared"
+    return [
+        f"train: {train_id}  base: {base} @ {base_sha}  audit session: {log.stem}",
+        ledger_line,
+        f"charter_root: {charter or 'none'}  charter base: {charter_base or 'none'}",
+        f"policy: {policy}  standards: {len(config.standards_sources)} sources",
+        f"cache: {cache}" if cache else "cache: unresolved",
+        f"sandbox: {sandbox}",
+    ]

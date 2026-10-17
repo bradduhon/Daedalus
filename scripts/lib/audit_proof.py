@@ -69,7 +69,7 @@ def newest_log(repo: Path) -> Path:
     return logs[-1]
 
 
-def hooks_live(repo: Path, needle: str) -> str:
+def live_log(repo: Path, needle: str) -> tuple[Path, int]:
     # 0024: the jail appends PreToolUse before the command runs, so this call is the newest
     # Bash record.
     log = newest_log(repo)
@@ -82,7 +82,12 @@ def hooks_live(repo: Path, needle: str) -> str:
             f"NOT LIVE: the newest Bash record in {log.name} is not this command, so this "
             f"session's hooks are not writing the audit log. {DOCTOR_NEXT}"
         )
-    return f"OK hooks live: session {log.stem}, chain intact ({len(records)} records)"
+    return log, len(records)
+
+
+def hooks_live(repo: Path, needle: str) -> str:
+    log, count = live_log(repo, needle)
+    return f"OK hooks live: session {log.stem}, chain intact ({count} records)"
 
 
 def _not_approved(check: str) -> ProofError:
