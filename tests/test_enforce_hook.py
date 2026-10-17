@@ -220,24 +220,60 @@ def test_missing_tool_name_blocks_without_record(
 
 
 def _lone_script(tmp_path: Path, gate: bool = True) -> Path:
-    # 0035: the stdlib marker finder ships beside the script; every other lib module is missing.
+    # 0035: gate copies the stdlib marker finder beside the script; else no lib exists at all.
     lone = tmp_path / "lone"
-    (lone / "lib").mkdir(parents=True)
+    lone.mkdir()
     shutil.copy(_SCRIPT, lone / "enforce_agent_jail.py")
     if gate:
+        (lone / "lib").mkdir()
         for name in ("__init__.py", "repo_root.py"):
             shutil.copy(_SCRIPT.parent / "lib" / name, lone / "lib" / name)
     return lone / "enforce_agent_jail.py"
 
 
-def test_missing_marker_finder_fails_closed(
+def test_missing_marker_finder_fails_open_outside_a_train(
     tmp_path: Path, repo_cwd: Path, hook_input: Any
 ) -> None:
-    # 0035: without the finder no repo is known, so the hook acts as if a train runs.
+    # 0035: the inline finder sees no marker, so a gutted install never blocks the call.
+    result = _run_raw(json.dumps(hook_input()), _lone_script(tmp_path, gate=False))
+    assert result.returncode == 0, result.stderr
+    lines = result.stderr.splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("daedalus-jail[?]: hook could not load its libraries (")
+    assert "No module named 'lib'" in lines[0]
+    assert "no train runs in this repository, so the call proceeds." in lines[0]
+    assert not (repo_cwd / ".claude").exists()
+
+
+def test_missing_marker_finder_fails_closed_inside_a_train(
+    tmp_path: Path, project_data: Path, hook_input: Any
+) -> None:
+    # 0035: the inline finder sees the marker, so a gutted install blocks the train's call.
+    _in_train(project_data)
     result = _run_raw(json.dumps(hook_input()), _lone_script(tmp_path, gate=False))
     assert result.returncode == 2
     assert result.stderr.startswith("daedalus-jail[?]: hook could not load its libraries (")
-    assert not (repo_cwd / ".claude").exists()
+
+
+def test_inline_marker_finder_agrees_with_the_library(repo_cwd: Path) -> None:
+    # 0035: the jail's fallback finder and lib.repo_root resolve every path the same way.
+    from lib import repo_root
+
+    (repo_cwd / "README").write_text("r\n")
+    _git_commit_all(repo_cwd)
+    worktree = repo_cwd / ".claude" / "worktrees" / "u1"
+    subprocess.run(["git", "-C", str(repo_cwd), "worktree", "add", "-q", str(worktree)], check=True)
+    (worktree / "sub").mkdir()
+    paths = [repo_cwd, repo_cwd / "missing" / "file", worktree, worktree / "sub"]
+    for marked in (False, True):
+        if marked:
+            write_train_marker(repo_cwd)
+        for path in paths:
+            got = enforce_agent_jail._inline_repo_root(str(path))
+            assert got == repo_root.repo_root(str(path)) == repo_cwd
+            inline = enforce_agent_jail._inline_train_marked(str(path))
+            assert inline == repo_root.train_marked(str(path)) == marked
+    assert enforce_agent_jail._TRAIN_MARKER == repo_root.TRAIN_MARKER
 
 
 def test_missing_libraries_fail_closed_during_a_train(

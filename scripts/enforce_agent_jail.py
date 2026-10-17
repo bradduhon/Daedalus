@@ -8,6 +8,7 @@ import json
 import os
 import shlex
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,49 @@ _WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 # issue 30: past these caps the fast path hands the call to the full jail.
 _WORD_CAP = 256
 _ROOT_CAP = 16
+
+
+_TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
+
+
+def _inline_repo_root(path: str) -> Path:
+    # 0035: private copy of lib.repo_root.repo_root for an install whose lib cannot import.
+    start = Path(path)
+    for folder in (start, *start.parents):
+        dot = folder / ".git"
+        if dot.is_dir():
+            return folder
+        if not dot.is_file():
+            continue
+        try:
+            text = dot.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return folder
+        if not text.startswith("gitdir:"):
+            return folder
+        gitdir = folder / text[len("gitdir:") :].strip()
+        try:
+            common = gitdir / (gitdir / "commondir").read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            common = gitdir
+        return Path(os.path.normpath(common)).parent
+    return next((p for p in (start, *start.parents) if p.is_dir()), start)
+
+
+def _inline_train_marked(cwd: Any) -> bool:
+    # 0035: no absolute cwd means the repo is unknown, so the hook acts as if a train runs.
+    if not isinstance(cwd, str) or not os.path.isabs(cwd):
+        return True
+    return os.path.lexists(_inline_repo_root(cwd) / _TRAIN_MARKER)
+
+
+def _marker_finder() -> tuple[Callable[[Any], bool], Exception | None]:
+    # 0035: a broken lib must not block a repo without a train, so the inline finder decides.
+    try:
+        from lib.repo_root import train_marked
+    except Exception as exc:  # noqa: BLE001
+        return _inline_train_marked, exc
+    return train_marked, None
 
 
 def _named_paths(tool: str, tool_input: dict[str, Any]) -> list[str] | None:
@@ -188,12 +232,10 @@ def main() -> int:
     if "tool_input" in payload and not isinstance(payload["tool_input"], dict):
         return _block(agent, "hook input tool_input is not an object.")
     cwd = payload.get("cwd")
-    try:
-        from lib.repo_root import train_marked
-    except Exception as exc:  # noqa: BLE001
-        # 0035: without the marker finder no repo is known, so the hook acts as if a train runs.
-        return _load_failed(exc, True)
+    train_marked, lib_error = _marker_finder()
     in_train = train_marked(cwd)
+    if lib_error is not None:
+        return _load_failed(lib_error, in_train)
     if not in_train and isinstance(cwd, str):
         try:
             from lib.credential_paths import CREDENTIAL_TOOLS
