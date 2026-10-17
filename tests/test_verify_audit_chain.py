@@ -121,3 +121,19 @@ def test_directory_path_is_broken_with_next(tmp_path: Path) -> None:
         ".claude/daedalus/audit/.\n"
     )
     assert "Traceback" not in result.stderr
+
+
+def test_cli_hooks_live_fails_outside_a_hooked_session(project_data: Path, repo_cwd: Path) -> None:
+    result = _verify("--hooks-live", "--repo", repo_cwd)
+    assert result.returncode == 1
+    assert result.stdout.startswith("NOT LIVE:") and "Next:" in result.stdout
+
+
+def test_cli_hooks_live_passes_on_its_own_record(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    command = f"python3 x/verify_audit_chain.py --hooks-live --repo {repo_cwd}"
+    audit.audit_append(hook_input(tool_input={"command": command}))
+    result = _verify("--hooks-live", "--repo", repo_cwd)
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.startswith("OK hooks live: session sess-test")
