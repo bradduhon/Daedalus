@@ -6,7 +6,8 @@ import re
 from pathlib import Path
 
 import pytest
-from lib.jail import KNOWN_AGENTS, WORKER_DENIED_TOOLS
+from lib.config import Config
+from lib.jail import KNOWN_AGENTS, WORKER_DENIED_TOOLS, decide
 
 from tests.conftest import REPO_ROOT
 
@@ -183,3 +184,55 @@ def test_rubric_has_no_long_quotes() -> None:
     # 0024: a tripwire for pasted benchmark text, not a license proof.
     spans = re.findall('"([^"]*)"|\u201c([^\u201d]*)\u201d', RUBRIC.read_text())
     assert [s for pair in spans for s in pair if len(s) > 40] == []
+
+
+AUDITOR = AGENTS / "security-auditor.md"
+AUDITOR_CLASSES = (
+    "secrets",
+    "auth weakening",
+    "broad IAM",
+    "sensitive logging",
+    "unsafe deserialization",
+    "injection",
+    "dependency manifests",
+)
+
+
+def test_auditor_has_a_procedure_and_severity_scale() -> None:
+    # 0024: the auditor is a judge, so it carries method and rubric.
+    text = AUDITOR.read_text()
+    for heading in ("## Procedure", "## Severity", "## Finding format"):
+        assert f"\n{heading}\n" in text, heading
+    procedure = text.split("## Procedure", 1)[1].split("\n## ", 1)[0]
+    for cls in AUDITOR_CLASSES:
+        assert f"- {cls}: " in procedure, cls
+    severity = text.split("## Severity", 1)[1].split("\n## ", 1)[0]
+    for level in ("critical", "high", "medium", "low"):
+        assert f"- {level}: " in severity, level
+    assert "Any critical or high finding is REJECTED." in severity
+    assert "`<branch> <file>:<line> <severity> <class>: <precise fix>`" in text
+
+
+def test_auditor_grep_commands_pass_the_jail() -> None:
+    # 0024: every fixed pattern the procedure names must survive the auditor's jail.
+    commands = re.findall(r"`(git log -p -G '[^']+' <diff base>\.\.<branch>)`", AUDITOR.read_text())
+    assert len(commands) == len(AUDITOR_CLASSES) - 1
+    for command in commands:
+        concrete = command.replace("<diff base>", "daedalus/t1").replace("<branch>", "unit-a")
+        payload = {
+            "agent_type": "security-auditor",
+            "tool_name": "Bash",
+            "tool_input": {"command": concrete},
+            "cwd": "/work/repo",
+        }
+        assert decide(payload, Config()).allow, command
+
+
+def test_auditor_verdict_first_line_contract_unchanged() -> None:
+    contract = AUDITOR.read_text().split("## Status contract\n", 1)[1]
+    assert contract == (
+        "Your reply starts with exactly one of these verdict lines as its first line, followed by"
+        " the\nparagraph or the itemized findings.\n"
+        "- `[VERDICT: APPROVED]` then `<paragraph>`\n"
+        "- `[VERDICT: REJECTED]` then `<itemized findings>`\n"
+    )
