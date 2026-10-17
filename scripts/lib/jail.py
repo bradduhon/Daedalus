@@ -16,6 +16,7 @@ from typing import Any
 
 from lib.audit import _git_env, project_data_dir, project_root
 from lib.config import Config
+from lib.gh_policy import CONDUCTOR_GH, allowlist_applies, gh_reason
 from lib.ledger import LedgerError, resolve_ledger
 from lib.train_state import TrainStateError, active_train
 from lib.train_state import load as load_train
@@ -125,10 +126,8 @@ SHELL_STATE_CMDS = frozenset(
 )
 DIR_CHANGE_CMDS = frozenset({"cd", "pushd", "popd"})
 NETWORK_TOOLS = frozenset({"curl", "wget", "ssh", "scp", "nc", "ncat", "telnet", "aws", "gh"})
-GH_ALLOWED = {
-    "pr": frozenset({"create", "edit", "view", "checks", "status", "list", "comment", "diff"}),
-    "run": frozenset({"list", "view", "watch"}),
-}
+# 0028: the conductor's gh set lives in lib.gh_policy; K1 keeps pr edit off it.
+GH_ALLOWED = {cmd: frozenset(sub for c, sub in CONDUCTOR_GH if c == cmd) for cmd, _ in CONDUCTOR_GH}
 # 8.5 ruling A: first tokens a worker may never run, bar the allowlisted test runner forms.
 WORKER_WRAPPERS = frozenset(
     {"env", "nice", "nohup", "stdbuf", "timeout", "exec", "eval", "xargs", "command"}
@@ -2271,6 +2270,42 @@ def _credential_reason(tool: str, tool_input: dict[str, Any], cwd: str) -> str |
     return None
 
 
+def _policy_segments(command: str, depth: int = 0) -> list[list[str]] | None:
+    # 0028: see gh and git push through wrappers and shell -c bodies; None means regex fallback.
+    if depth > 3:
+        return None
+    parsed = tokenize(command)
+    if parsed is None:
+        return None
+    flat: list[list[str]] = []
+    for segment in parsed:
+        tokens = _strip_wrappers(segment, [])
+        if tokens is None:
+            return None
+        if not tokens:
+            continue
+        name = _base(tokens[0])
+        if name in _SHELLS or name == "eval":
+            code = " ".join(tokens[1:]) if name == "eval" else _shell_code(tokens)
+            if code == _FALLBACK:
+                return None
+            inner = _policy_segments(code, depth + 1) if code else []
+            if inner is None:
+                return None
+            flat += inner
+            continue
+        inline = name.startswith("python") or name in {"perl", "ruby", "node"}
+        if name not in {"gh", "git"} and (inline or {"gh", "git"} & {_base(t) for t in tokens}):
+            return None
+        flat.append(tokens)
+    return flat
+
+
+def _gh_gate(agent: str, cwd: str, command: str) -> str | None:
+    # 0028: merge, delete and admin are refused for everyone; the allowlist scope is K2's seam.
+    return gh_reason(agent, command, _policy_segments(command), allowlist_applies(agent, cwd))
+
+
 def _train_active(cwd: str) -> bool:
     # 0023: existence only; a symlinked or unreadable marker still counts as an active train.
     return os.path.lexists(train_marker(project_root(cwd)))
@@ -2421,6 +2456,8 @@ def decide(hook_input: dict[str, Any], config: Config) -> Decision:
         return Decision(False, R_SUBAGENT_MAIN, agent)
     if agent in KNOWN_AGENTS:
         decision = _decide(hook_input, config, agent)
+    elif tool == "Bash" and (gh := _gh_gate(agent, cwd, str(tool_input.get("command") or ""))):
+        decision = _block(gh)
     else:
         decision = _unknown_decision(raw_agent, agent, cwd, tool, tool_input)
     return Decision(decision.allow, decision.reason, agent)
@@ -2452,7 +2489,7 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
             return _block(R_DATA_DIR)
         if _cd_data_dir_git(command):
             return _block(R_DATA_DIR_GIT)
-        reason = _command_reason(command)
+        reason = _command_reason(command) or _gh_gate(agent, cwd, command)
         return _block(reason) if reason else _allow()
     segments: list[list[str]] = []
     piped = False
@@ -2470,6 +2507,9 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
                 reason = _regex_tripwire(command)
             if reason:
                 return _block(reason)
+        reason = _gh_gate(agent, cwd, command)
+        if reason:
+            return _block(reason)
     if agent != "main" and (tool in WORKER_DENIED_TOOLS or tool.startswith("mcp__")):
         return _block(R_TOOL)
     if tool == "Bash" and agent != "main":

@@ -364,7 +364,6 @@ class TestConductor:
             "git add -A",
             "git commit -m x",
             "gh pr create --title t --body-file docs/.tmp/pr.md",
-            "gh pr edit 3 --body-file /tmp/pr.md",
             "gh run watch 123",
             "gh run list",
             "gitleaks detect --redact --log-opts=main..b",
@@ -535,8 +534,6 @@ def test_universal_tripwire_regressions(command: str) -> None:
 
 def test_main_ordinary_commands_still_allowed() -> None:
     for command in (
-        "git push origin feature/x",
-        "git push -u origin feature/x",
         "rm -rf build",
         "git commit -m 'fix -S flag doc'",
         "git -c commit.gpgsign=false commit -m x",
@@ -544,6 +541,23 @@ def test_main_ordinary_commands_still_allowed() -> None:
         "bash -c 'git status'",
     ):
         assert decide(_b(None, command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push origin feature/x",
+        "git push -u origin feature/x",
+        "git push -u origin feature/x 2>/dev/null",
+        "git push origin $REF",
+        "git push origin feature/main-fix",
+        "git push origin feat > log",
+    ],
+)
+def test_main_git_push_refused_by_0028(command: str) -> None:
+    # 0028, 0030: only the conductor pushes; K2 may narrow this to active trains.
+    d = decide(_b(None, command), CFG)
+    assert not d.allow and "(0028, 0030)" in str(d.reason), command
 
 
 @pytest.mark.parametrize("command", ["$GIT push origin x", "git $SUB origin x"])
@@ -565,7 +579,6 @@ def test_workers_blocked_on_variable_commands(command: str) -> None:
         "git status & wait",
         "echo `date`",
         "$EDITOR notes.md",
-        "git push -u origin feature/x 2>/dev/null",
         "rm -rf /tmp/build > /dev/null",
     ],
 )
@@ -834,8 +847,6 @@ class TestRegressionConductor:
         for command in (
             "gh -R o/r pr view 3",
             "gh pr checks 3",
-            "gh pr comment 3 --body-file docs/.tmp/c.md",
-            "gh pr diff 3",
             "gh run view 1",
             "gh pr list --repo o/r",
         ):
@@ -1262,8 +1273,6 @@ class TestRound3MainHardened:
     @pytest.mark.parametrize(
         "command",
         [
-            "git push origin feature/x",
-            "git push origin $REF",
             "GIT_PAGER=cat git log",
             "bash -o pipefail -c 'git status'",
             "python3 -c 'print(1)'",
@@ -1345,12 +1354,9 @@ class TestRound4MainFallback:
         "command",
         [
             "git -c color.ui=false log",
-            "git push origin $REF",
-            "git push origin feature/main-fix",
             "$EDITOR notes.md",
             "rm -rf ~/scratch/build/..",
             "rm -rf /tmp/x/..",
-            "git push origin feat > log",
         ],
     )
     def test_allowed(self, command: str) -> None:
@@ -1994,7 +2000,6 @@ class TestFinalConductorGh:
         [
             "gh pr create --title x --body-file docs/.tmp/pr.md",
             "gh pr create --title x -F /tmp/pr.md",
-            "gh pr comment 3 --body-file docs/.tmp/c.md",
             "gh -R o/r pr view 3",
         ],
     )
@@ -2150,16 +2155,7 @@ class TestFixWaveConductorGh:
             "gh pr create --title x --body-file docs/.tmp/pr.md --body b",
             "gh pr create --title x --body-file docs/.tmp/pr.md --body=b",
             "gh pr create --title x --body-file docs/.tmp/pr.md -bb",
-            "gh pr edit 3 --body-file docs/.tmp/pr.md -db b",
             "gh pr create --title x",
-            "gh pr edit 3 --body b",
-            "gh pr edit 3 -b b",
-            "gh pr edit 3 --body=b",
-            "gh pr edit 3 --title t",
-            "gh pr comment 3 --body b",
-            "gh pr comment 3 -b b",
-            "gh pr comment 3 --body=b",
-            "gh pr comment 3",
         ],
     )
     def test_inline_body_blocked(self, command: str) -> None:
@@ -2171,33 +2167,43 @@ class TestFixWaveConductorGh:
     @pytest.mark.parametrize(
         "command",
         [
-            "gh pr edit daedalus/T --base dev --body-file docs/.tmp/pr.md",
-            "gh pr edit daedalus/T --base=dev --body-file docs/.tmp/pr.md",
-            "gh pr edit daedalus/T -B dev --body-file docs/.tmp/pr.md",
-            "gh pr edit daedalus/T -Bdev --body-file docs/.tmp/pr.md",
-        ],
-    )
-    def test_edit_base_blocked(self, command: str) -> None:
-        d = decide(_b(self.C, command), CFG)
-        assert not d.allow and d.reason is not None, command
-        assert d.reason.startswith("gh pr edit may not change the base branch.")
-        assert "Next:" in d.reason
-
-    @pytest.mark.parametrize(
-        "command",
-        [
             "gh pr create --base main --head daedalus/T --title x --body-file docs/.tmp/pr.md",
             "gh pr create --title x -F /tmp/pr.md",
             "gh pr create --title x --body-file=/tmp/pr.md",
-            "gh pr edit daedalus/T --body-file docs/.tmp/pr.md",
-            "gh pr comment 3 --body-file docs/.tmp/c.md",
-            "gh pr comment 3 -F/tmp/c.md",
-            "gh pr edit daedalus/T -F/tmp/Build-body.md",
             "gh pr view daedalus/T --json url",
         ],
     )
     def test_allowed(self, command: str) -> None:
         assert decide(_b(self.C, command), CFG).allow, command
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "gh pr edit 3 --body-file docs/.tmp/pr.md -db b",
+            "gh pr edit 3 --body b",
+            "gh pr edit 3 -b b",
+            "gh pr edit 3 --body=b",
+            "gh pr edit 3 --title t",
+            "gh pr comment 3 --body b",
+            "gh pr comment 3 -b b",
+            "gh pr comment 3 --body=b",
+            "gh pr comment 3",
+            "gh pr edit daedalus/T --base dev --body-file docs/.tmp/pr.md",
+            "gh pr edit daedalus/T --base=dev --body-file docs/.tmp/pr.md",
+            "gh pr edit daedalus/T -B dev --body-file docs/.tmp/pr.md",
+            "gh pr edit daedalus/T -Bdev --body-file docs/.tmp/pr.md",
+            "gh pr edit daedalus/T --body-file docs/.tmp/pr.md",
+            "gh pr comment 3 --body-file docs/.tmp/c.md",
+            "gh pr comment 3 -F/tmp/c.md",
+            "gh pr edit daedalus/T -F/tmp/Build-body.md",
+            "gh pr edit 3 --body-file /tmp/pr.md",
+            "gh pr diff 3",
+        ],
+    )
+    def test_edit_comment_diff_refused_by_0028(self, command: str) -> None:
+        # K1, 0028: pr edit, comment and diff are off the 0028 list; the body rules bind create.
+        d = decide(_b(self.C, command), CFG)
+        assert not d.allow and "is a default-deny command" in str(d.reason), command
 
 
 class TestFixWaveGitleaksRedact:
