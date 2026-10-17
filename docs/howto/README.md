@@ -41,7 +41,7 @@ Example output from a real run in a new repository with one empty commit, on a m
     OK   policy: not declared (optional)
     OK   cache dir: none yet (create it with scripts/refresh_nist_oscal.py or by hand per docs/project-requirements.md)
     OK   plugin root: ~/.claude/plugins/cache/daedalus/daedalus/2.0.0
-    MISS sandbox: off. Next: run /daedalus:setup
+    MISS sandbox: off. Next: type /daedalus:setup yourself; the model cannot run it
     MISS gitleaks on PATH: not found. Next: the Push Train scans commits with gitleaks; install it so the scan can run
     OK   gh on PATH
     MISS gh authenticated: gh auth status exited 1. Next: run gh auth login
@@ -49,12 +49,12 @@ Example output from a real run in a new repository with one empty commit, on a m
     OK   socat on PATH
     OK   git repository
     OK   clean working tree
-    MISS service-manifest.json: not found at repo root. Next: create it from the example in docs/project-requirements.md
-    MISS contracts/: directory missing. Next: mkdir contracts and add openapi.yaml or events/*.schema.json
-    MISS .gitleaks.toml: not found at repo root. Next: copy the baseline from docs/project-requirements.md
+    OPT  service-manifest.json: not found at repo root. Next: create it from the example in docs/project-requirements.md
+    OPT  contracts/: directory missing. Next: mkdir contracts and add openapi.yaml or events/*.schema.json
+    OPT  .gitleaks.toml: not found at repo root. Next: copy the baseline from docs/project-requirements.md
     daedalus doctor: fix each MISS line, then rerun
 
-In a new repository the last three lines stay `MISS` until you add those files; `docs/project-requirements.md` has an example of each. Once the directory exists the doctor also checks that `.claude/daedalus/.gitignore` holds a `*` line and that git ignores the directory. The cache dir and plugin root lines are informational and never a MISS. When more than one `~/.claude/plugins/data/daedalus*` directory exists, the cache dir line names each one. The plugin root is the directory the commands in this guide call `<plugin>`. On macOS the `bwrap` and `socat` lines do not appear.
+In a new repository the last three lines read `OPT` until you add those files. `OPT` marks an optional scaffold: no train reads it, and it never fails the doctor. `docs/project-requirements.md` has an example of each. When the working tree is not clean, the line names up to ten changed paths, then `+N more`. When the only change is the `.claude/settings.json` that `/plugin install` wrote, its `Next:` says to commit that file. The doctor skill asks you once which `Next:` actions to take: all, the numbers you pick, or none. It never runs `/daedalus:setup` for you; you type it yourself. Once the directory exists the doctor also checks that `.claude/daedalus/.gitignore` holds a `*` line and that git ignores the directory. The cache dir and plugin root lines are informational and never a MISS. When more than one `~/.claude/plugins/data/daedalus*` directory exists, the cache dir line names each one. The plugin root is the directory the commands in this guide call `<plugin>`. On macOS the `bwrap` and `socat` lines do not appear.
 
 The `sandbox` line reads `~/.claude/settings.json`, then `.claude/settings.json` and `.claude/settings.local.json` in the repo; the last one that sets `sandbox.enabled` wins. It reads `on` when that value is true and `bwrap` and `socat` are on PATH, `configured-unavailable` when the value is true and a tool is missing, and `off` otherwise. When one of those files is not valid JSON, the line reads `MISS sandbox: <path> is not valid JSON (...). Next: fix <path>` instead. While it is not `on`, each new session starts with the same line. To turn the sandbox on, type:
 

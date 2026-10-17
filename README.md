@@ -43,7 +43,7 @@ If `/daedalus:doctor` is not offered yet after you install, run `/reload-plugins
 
 The doctor lists every file and tool Daedalus needs. Each `OK` line is a check that passed. Each `MISS` line names what is missing. Running the doctor changes nothing. Fix the `MISS` lines and run it again.
 
-Every `MISS` line ends with a `Next:` instruction that says what to do. In a new repository, three lines stay `MISS` until you add the files they name: `service-manifest.json`, `contracts/` and `.gitleaks.toml`. The doctor reports them as files your project declares about itself. Neither the Build Train nor the Push Train stops when they are absent today. [docs/project-requirements.md](docs/project-requirements.md) lists every file Daedalus expects, says what each is for, and gives a small example of each.
+Every `MISS` line ends with a `Next:` instruction that says what to do. In a new repository, three lines read `OPT` until you add the files they name: `service-manifest.json`, `contracts/` and `.gitleaks.toml`. `OPT` marks an optional scaffold your project declares about itself. Neither the Build Train nor the Push Train stops when they are absent, and they never fail the doctor. [docs/project-requirements.md](docs/project-requirements.md) lists every file Daedalus expects, says what each is for, and gives a small example of each.
 
 ### Turning on the sandbox
 

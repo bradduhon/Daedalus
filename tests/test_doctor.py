@@ -17,6 +17,9 @@ from tests.conftest import SCRIPTS_DIR, fake_bin
 
 # 0020: macOS needs no sandbox binaries, so binary-specific cases run only where they apply.
 NEEDS_BINARIES = pytest.mark.skipif(not required_binaries(), reason="no sandbox binaries here")
+SETUP = "type /daedalus:setup yourself; the model cannot run it"
+SETUP_OFF = "MISS sandbox: off. Next: " + SETUP
+SCAFFOLDS = ("service-manifest.json", "contracts/", ".gitleaks.toml")
 
 
 def _run(
@@ -88,6 +91,11 @@ def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: P
     ):
         assert expected in names, expected
     assert any(line.startswith("OK   python") for line in lines)
+    assert not any(line.startswith(("MISS " + n, "OK   " + n)) for n in SCAFFOLDS for line in lines)
+    assert (
+        sum(line.startswith(f"OPT  {n}: ") and "Next:" in line for n in SCAFFOLDS for line in lines)
+        == 3
+    )
     gitleaks = next(line for line in misses if "gitleaks on PATH" in line)
     assert gitleaks.endswith(
         "Next: the Push Train scans commits with gitleaks; install it so the scan can run"
@@ -122,7 +130,7 @@ def test_sandbox_off_is_a_miss_naming_setup(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
-    assert _sandbox_line(result) == "MISS sandbox: off. Next: run /daedalus:setup"
+    assert _sandbox_line(result) == SETUP_OFF
     assert result.returncode == 1
 
 
@@ -138,9 +146,7 @@ def test_sandbox_without_binaries_is_configured_unavailable(tmp_path: Path) -> N
     home = tmp_path / "home"
     _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
     result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
-    assert _sandbox_line(result) == (
-        "MISS sandbox: configured-unavailable. Next: run /daedalus:setup"
-    )
+    assert _sandbox_line(result) == ("MISS sandbox: configured-unavailable. Next: " + SETUP)
 
 
 def test_sandbox_local_settings_override_user(tmp_path: Path) -> None:
@@ -148,7 +154,7 @@ def test_sandbox_local_settings_override_user(tmp_path: Path) -> None:
     _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
     _settings(tmp_path / ".claude" / "settings.local.json", {"sandbox": {"enabled": False}})
     result = _run(None, tmp_path, path_env=_bins(tmp_path, "bwrap", "socat"), home=home)
-    assert _sandbox_line(result) == "MISS sandbox: off. Next: run /daedalus:setup"
+    assert _sandbox_line(result) == SETUP_OFF
 
 
 def test_sandbox_malformed_settings_is_a_miss(tmp_path: Path) -> None:
@@ -171,8 +177,7 @@ def test_bwrap_miss_names_setup(tmp_path: Path) -> None:
     home.mkdir()
     result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
     assert (
-        "MISS bwrap on PATH: not found. Next: install bubblewrap and socat, then run "
-        "/daedalus:setup to turn the sandbox on"
+        "MISS bwrap on PATH: not found. Next: install bubblewrap and socat, then " + SETUP
     ) in result.stdout.splitlines()
 
 
@@ -270,12 +275,78 @@ def test_complete_setup_is_all_ok(plugin_data: Path, tmp_path: Path) -> None:
     assert "OK   standards_sources declared" in lines and "OK   policy declared" in lines
 
 
-def test_dirty_tree_is_a_miss(plugin_data: Path, tmp_path: Path) -> None:
+def _tree_line(repo: Path, tmp_path: Path) -> str:
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
+    return next(line for line in result.stdout.splitlines() if "clean working tree" in line)
+
+
+def test_dirty_tree_is_a_miss_naming_the_paths(plugin_data: Path, tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _git_repo(repo)
     (repo / "x.txt").write_text("dirty")
-    result = _run(plugin_data, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
-    assert "MISS clean working tree" in result.stdout
+    (repo / "sub").mkdir()
+    (repo / "sub" / "y.txt").write_text("dirty")
+    assert _tree_line(repo, tmp_path) == (
+        "MISS clean working tree: uncommitted changes present: sub/y.txt, x.txt. "
+        "Next: commit or stash before starting a train"
+    )
+
+
+def test_dirty_tree_caps_the_path_list(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    for n in range(12):
+        (repo / f"f{n:02d}.txt").write_text("dirty")
+    line = _tree_line(repo, tmp_path)
+    shown = ", ".join(f"f{n:02d}.txt" for n in range(10))
+    assert f"uncommitted changes present: {shown} +2 more. Next:" in line
+
+
+def test_plugin_enablement_only_says_commit_settings(tmp_path: Path) -> None:
+    # 0007: /plugin install leaves .claude/settings.json untracked in a fresh repo.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    _commit_all_empty(repo)
+    _settings(repo / ".claude" / "settings.json", {"enabledPlugins": {"daedalus@x": True}})
+    assert _tree_line(repo, tmp_path) == (
+        "MISS clean working tree: uncommitted changes present: .claude/settings.json. "
+        "Next: commit .claude/settings.json; "
+        "it holds the enabledPlugins entry /plugin install wrote"
+    )
+
+
+def test_enablement_plus_other_paths_gets_generic_next(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    _settings(repo / ".claude" / "settings.json", {"enabledPlugins": {}})
+    (repo / "x.txt").write_text("dirty")
+    assert _tree_line(repo, tmp_path).endswith("Next: commit or stash before starting a train")
+
+
+def test_clean_tree_is_ok(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    _commit_all_empty(repo)
+    assert _tree_line(repo, tmp_path) == "OK   clean working tree"
+
+
+def test_absent_scaffolds_are_opt_and_pass(tmp_path: Path) -> None:
+    # 0007: no train reads the three scaffolds; absence is OPT and the doctor still exits 0.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    _commit_all_empty(repo)
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh", "bwrap", "socat")
+    home = tmp_path / "home"
+    _settings(home / ".claude" / "settings.json", {"sandbox": {"enabled": True}})
+    result = _run(None, repo, path_env=bins, home=home)
+    lines = result.stdout.splitlines()
+    assert result.returncode == 0, result.stdout
+    assert [line.split(":")[0][5:] for line in lines if line.startswith("OPT  ")] == [
+        "service-manifest.json",
+        "contracts/",
+        ".gitleaks.toml",
+    ]
+    assert lines[-1] == "daedalus doctor: all checks passed"
 
 
 def test_absent_project_data_dir_is_ok_and_names_the_path(tmp_path: Path) -> None:
