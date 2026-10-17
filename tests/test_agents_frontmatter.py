@@ -180,6 +180,19 @@ def test_conductor_lists_the_git_reads_the_jail_allows() -> None:
     assert "refuses `git remote`, `git branch -vv`, and `@{u}`" in text
 
 
+NIST_DISTILLED = REPO_ROOT / "references" / "nist-800-53-distilled.md"
+NIST_IDS = REPO_ROOT / "tests" / "fixtures" / "nist-control-ids.txt"
+
+
+def test_nist_distillation_ids_exist_in_the_catalog() -> None:
+    # 0024: every distilled row names a base control of the pinned catalog (oscal-content v1.5.0).
+    catalog = set(NIST_IDS.read_text().split())
+    rows = re.findall(r"^\| ([A-Z]{2}-[0-9]+) \|", NIST_DISTILLED.read_text(), re.MULTILINE)
+    assert rows
+    assert len(rows) == len(set(rows))
+    assert [row for row in rows if row not in catalog] == []
+
+
 RUBRIC = REPO_ROOT / "references" / "hardening-rubric.md"
 RUBRIC_ITEM = re.compile(r"^- HR-[0-9]+: .+ CIS: (unmapped|[A-Za-z0-9 .]+ [0-9]+(\.[0-9]+)*)$")
 
