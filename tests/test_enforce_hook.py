@@ -260,7 +260,7 @@ def test_cwd_fallback_warns_on_stderr_and_allows(
     run_script: Any, hook_input: Any, tmp_path: Path
 ) -> None:
     plain = tmp_path / "plain"
-    plain.mkdir()
+    (plain / ".claude" / "daedalus").mkdir(parents=True)
     result = run_script("enforce_agent_jail.py", hook_input(cwd=str(plain)))
     assert result.returncode == 0, result.stderr
     assert result.stderr.startswith("daedalus-audit: project root fell back to cwd (")
@@ -329,15 +329,36 @@ def test_main_glob_over_the_repo_is_allowed(
     assert result.returncode == 0, result.stderr
 
 
-def test_absent_config_allows_main_bash_and_writes_the_log(
+def test_absent_data_dir_allows_main_bash_and_writes_nothing(
     run_script: Any, repo_cwd: Path, hook_input: Any
+) -> None:
+    # 0035: no train ever ran here, so the hook leaves the repository untouched.
+    result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "git status"}))
+    assert result.returncode == 0, result.stderr
+    assert not (repo_cwd / ".claude").exists()
+
+
+def test_absent_config_allows_main_bash_and_writes_the_log(
+    run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
     # 0020: config.json is optional; absence is the empty config, never a block.
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "git status"}))
     assert result.returncode == 0, result.stderr
+    assert not (project_data / "config.json").exists()
+    assert list((project_data / "audit").glob("*.jsonl"))
+
+
+def test_begin_command_creates_the_data_dir_and_its_record(
+    run_script: Any, repo_cwd: Path, hook_input: Any
+) -> None:
+    # 0035: the begin command's own record is the one write that creates the data dir.
+    command = f"python3 /p/scripts/daedalus_workspace.py begin --repo {repo_cwd}"
+    result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": command}))
+    assert result.returncode == 0, result.stderr
     data = repo_cwd / ".claude" / "daedalus"
-    assert not (data / "config.json").exists()
-    assert list((data / "audit").glob("*.jsonl"))
+    assert (data / ".gitignore").read_text() == "*\n"
+    rec = json.loads((data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
+    assert rec["tool_input"]["command"] == command
 
 
 def test_bad_config_still_allows_a_normal_read(

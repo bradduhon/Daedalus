@@ -184,7 +184,9 @@ def _data_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
         )
         return
     if not data.exists():
-        yield True, f"OK   project data dir: {data} (will be created by the first hook)"
+        # 0035, 0031: nothing writes the data dir until a train starts in this repo.
+        yield True, f"OK   project data dir: {data} (not created yet; a train's start creates it)"
+        yield True, "OK   audit log: off until a train runs here"
         yield from _config_checks(data)
         return
     if not (data.is_dir() and os.access(data, os.R_OK | os.X_OK)):

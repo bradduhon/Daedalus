@@ -91,7 +91,7 @@ def _judge(payload: dict[str, Any], agent: str) -> int:
         if "Next:" not in detail:
             detail += " Next: fix the project data dir (<repo>/.claude/daedalus) and retry."
         return _block(agent, detail)
-    if record.get("root_source") == "cwd-fallback":
+    if record is not None and record.get("root_source") == "cwd-fallback":
         _warn_fallback(str(payload.get("cwd")))
     if decision.allow:
         return 0

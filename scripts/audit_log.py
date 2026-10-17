@@ -15,7 +15,7 @@ def main() -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
         record = audit_append(payload)
-        if record.get("root_source") == "cwd-fallback":
+        if record is not None and record.get("root_source") == "cwd-fallback":
             reason = root_info(payload["cwd"])[2]
             print(f"daedalus-audit: project root fell back to cwd ({reason})", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001

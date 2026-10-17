@@ -15,6 +15,7 @@ from lib.audit import cache_dir_or_probe
 from lib.audit_proof import SUMMARY_DIR, ProofError, live_log
 from lib.config import Config, ConfigError, load_config
 from lib.ledger import LedgerError, read_sequence, resolve_ledger
+from lib.train_scope import BEGIN_NEEDLE
 from lib.train_state import TRAIN_ID as _TRAIN_ID
 from lib.train_state import TRAIN_MARKER
 
@@ -200,7 +201,6 @@ def clear_train(repo: Path) -> Path:
     return marker
 
 
-BEGIN_NEEDLE = "daedalus_workspace.py begin"
 DIRTY_LIMIT = 10
 RERUN = "start the Build Train again (/daedalus:build-train)."
 CLEAN_NEXT = f"Next: commit or stash your changes from your own shell, then {RERUN}"

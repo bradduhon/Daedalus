@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from tests.conftest import SCRIPTS_DIR
 
 
@@ -68,8 +70,18 @@ def test_missing_cwd_reports_to_stderr_and_exits_zero(run_script: Any, hook_inpu
 
 def test_cwd_fallback_warns_on_stderr(run_script: Any, hook_input: Any, tmp_path: Path) -> None:
     plain = tmp_path / "plain"
-    plain.mkdir()
+    (plain / ".claude" / "daedalus").mkdir(parents=True)
     result = run_script("audit_log.py", hook_input(hook_event_name="Stop", cwd=str(plain)))
     assert result.returncode == 0
     assert result.stderr.startswith("daedalus-audit: project root fell back to cwd (")
     assert (plain / ".claude" / "daedalus" / "audit" / "sess-test.jsonl").exists()
+
+
+@pytest.mark.parametrize("event", ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"])
+def test_no_data_dir_exits_zero_and_creates_nothing(
+    run_script: Any, repo_cwd: Path, hook_input: Any, event: str
+) -> None:
+    # 0035: a repo where no train ever started keeps no Daedalus footprint.
+    result = run_script("audit_log.py", hook_input(hook_event_name=event))
+    assert result.returncode == 0 and result.stderr == ""
+    assert not (repo_cwd / ".claude").exists()

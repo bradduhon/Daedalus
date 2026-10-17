@@ -253,10 +253,11 @@ def test_absent_project_data_dir_is_ok_and_names_the_path(tmp_path: Path) -> Non
     _git_repo(repo)
     result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     data = repo.resolve() / ".claude" / "daedalus"
-    assert f"OK   project data dir: {data} (will be created by the first hook)" in (
-        result.stdout.splitlines()
-    )
-    assert "OK   config.json: not present, defaults in use" in result.stdout.splitlines()
+    lines = result.stdout.splitlines()
+    assert f"OK   project data dir: {data} (not created yet; a train's start creates it)" in lines
+    assert "OK   audit log: off until a train runs here" in lines
+    assert "OK   config.json: not present, defaults in use" in lines
+    assert not (repo / ".claude").exists()
 
 
 def test_worktree_resolves_to_main_repo_data_dir(tmp_path: Path) -> None:
@@ -267,7 +268,7 @@ def test_worktree_resolves_to_main_repo_data_dir(tmp_path: Path) -> None:
     subprocess.run(["git", "worktree", "add", "-q", str(worktree)], cwd=repo, check=True)
     result = _run(None, worktree, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     data = repo.resolve() / ".claude" / "daedalus"
-    assert f"OK   project data dir: {data} (will be created by the first hook)" in (
+    assert f"OK   project data dir: {data} (not created yet; a train's start creates it)" in (
         result.stdout.splitlines()
     )
 

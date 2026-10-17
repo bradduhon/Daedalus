@@ -136,6 +136,54 @@ def test_begin_cli_prints_six_lines(repo: Path, live: None) -> None:
     assert len(result.stdout.splitlines()) == 6
 
 
+def _hook(payload: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "enforce_agent_jail.py")],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_begin_in_a_fresh_repo_starts_the_log_and_proves_hooks_live(
+    repo_cwd: Path, hook_input: Any
+) -> None:
+    # 0035: no data dir before begin; the begin command's hook record creates it.
+    (repo_cwd / "docs").mkdir()
+    (repo_cwd / "docs" / "decisions.md").write_text(LEDGER)
+    _commit_all(repo_cwd, "init")
+    assert not (repo_cwd / ".claude").exists()
+    command = f"python3 /p/scripts/daedalus_workspace.py begin --repo {repo_cwd}"
+    jail = _hook(hook_input(tool_input={"command": command}))
+    assert jail.returncode == 0, jail.stderr
+    lines = begin(repo_cwd)
+    assert lines[0].endswith("audit session: sess-test")
+    assert train_marker(repo_cwd).is_file()
+    verify = f"python3 /p/scripts/verify_audit_chain.py --hooks-live --repo {repo_cwd}"
+    jail = _hook(hook_input(tool_input={"command": verify}, tool_use_id="toolu_2"))
+    assert jail.returncode == 0, jail.stderr
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "verify_audit_chain.py"), "--hooks-live"]
+        + ["--repo", str(repo_cwd)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.startswith("OK hooks live: session sess-test, chain intact (2 records)")
+
+
+def test_begin_in_a_fresh_repo_without_a_hook_record_is_not_live(repo_cwd: Path) -> None:
+    (repo_cwd / "docs").mkdir()
+    (repo_cwd / "docs" / "decisions.md").write_text(LEDGER)
+    _commit_all(repo_cwd, "init")
+    with pytest.raises(WorkspaceError) as info:
+        begin(repo_cwd)
+    assert str(info.value).startswith("NOT LIVE:")
+    assert not (repo_cwd / ".claude").exists()
+
+
 def test_begin_stops_on_a_dirty_tree(repo: Path, live: None) -> None:
     (repo / "stray.txt").write_text("x\n")
     with pytest.raises(WorkspaceError) as info:
