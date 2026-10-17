@@ -13,7 +13,7 @@ from lib.audit import GENESIS, record_hash
 AUDIT_DIR = Path(".claude") / "daedalus" / "audit"
 SUMMARY_DIR = Path("docs") / ".tmp" / "daedalus"
 NOT_UTF8 = "BROKEN: {path} is not valid UTF-8. Next: keep the file, report it, do not edit it."
-DOCTOR_NEXT = "Next: run /daedalus:doctor."
+DOCTOR_NEXT = "Next: run the Daedalus health check (/daedalus:doctor)."
 APPROVED_NEXT = "Next: run /daedalus:build-train; this train has no approved audit in its log."
 AUDITOR = "daedalus:security-auditor"
 VERDICT_APPROVED = "[VERDICT: APPROVED]"

@@ -8,6 +8,8 @@ allowed-tools: Bash(python3 ${CLAUDE_SKILL_DIR}/../../scripts/daedalus_doctor.py
 
 # daedalus doctor
 
+Human-facing text (0031): Text a human reads names each item in words: a short label or one line on what it is and what it does. Ids (ruling ids, issue numbers, task codes, agent names, snake_case keys) may trail in parentheses, never replace the description. Logs, status lines and messages to other agents may use ids alone. Documents carry both.
+
 1. Run `python3 ${CLAUDE_SKILL_DIR}/../../scripts/daedalus_doctor.py --repo "<path>"` with Bash, exactly as written, where `<path>` is `$ARGUMENTS` when the operator gave one and `.` otherwise.
 2. Show the output to the operator unchanged. Do not run any other command to investigate a `MISS` or `OPT` line; each line carries its own detail.
 3. Ask once, in a single message, about every `MISS` line, then every `OPT` line marked optional: number them and ask whether to do all, the numbers the operator picks, or none. Never ask per line. Perform only the `Next:` actions the operator picked. A `Next:` that says to type `/daedalus:setup` is the operator's own step: tell the operator to type `/daedalus:setup` themselves, because the model cannot invoke it, and never count it as an action you can perform. Scaffolding offers point at docs/project-requirements.md in the plugin repo for the exact file contents.

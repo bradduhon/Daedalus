@@ -276,7 +276,7 @@ def test_lock_refuses_a_missing_file(repo: Path, live: None) -> None:
         lock(repo, "contracts/api.md", 1)
     assert str(info.value) == (
         f"contract-spec did not save the packet at {repo / 'contracts' / 'api.md'}. "
-        "Next: rerun /daedalus:build-train."
+        "Next: start the Build Train again (/daedalus:build-train)."
     )
 
 
@@ -342,7 +342,7 @@ def test_lock_cli_exit_codes(repo: Path, live: None) -> None:
     assert done.stdout.startswith("lock: ")
 
 
-DEFAULT_NEXT = "Next: rerun /daedalus:build-train"
+DEFAULT_NEXT = "Next: start the Build Train again (/daedalus:build-train)"
 
 
 def _locked_train(repo: Path) -> str:

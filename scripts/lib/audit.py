@@ -35,7 +35,8 @@ def cache_dir() -> Path:
     root = os.environ.get("CLAUDE_PLUGIN_DATA")
     if not root:
         raise RuntimeError(
-            "CLAUDE_PLUGIN_DATA not set. Next: run inside Claude Code with the plugin loaded."
+            "the plugin data directory variable is not set (CLAUDE_PLUGIN_DATA). "
+            "Next: run inside Claude Code with the plugin loaded."
         )
     return Path(root)
 

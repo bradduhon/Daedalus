@@ -46,7 +46,8 @@ def _state_dir(repo: Path, path: Path) -> Path:
     data = path.parent.parent
     if not data.is_dir():
         raise TrainStateError(
-            f"{data} is missing, so the audit hooks have not run here. Next: run /daedalus:doctor."
+            f"{data} is missing, so the audit hooks have not run here. "
+            "Next: run the Daedalus health check (/daedalus:doctor)."
         )
     try:
         path.parent.mkdir(mode=0o700, exist_ok=True)

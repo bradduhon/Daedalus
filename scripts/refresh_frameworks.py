@@ -299,7 +299,8 @@ def _selected(only: str | None) -> list[Adapter]:
     for name in names:
         if name not in ADAPTERS:
             raise RefreshError(
-                f"unknown adapter {_safe(name)}. Next: pick from {', '.join(ADAPTERS)}."
+                f"unknown adapter {_safe(name)}. "
+                f"Next: pick an adapter name from {', '.join(ADAPTERS)}."
             )
     return [ADAPTERS[n] for n in dict.fromkeys(names)]
 

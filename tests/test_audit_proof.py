@@ -45,9 +45,8 @@ def test_hooks_live_refuses_when_another_command_is_newest(
     _bash(hook_input, "ls")
     with pytest.raises(ProofError) as info:
         hooks_live(repo_cwd, NEEDLE)
-    assert str(info.value).startswith("NOT LIVE:") and "Next: run /daedalus:doctor." in str(
-        info.value
-    )
+    assert str(info.value).startswith("NOT LIVE:")
+    assert "Next: run the Daedalus health check (/daedalus:doctor)." in str(info.value)
 
 
 def test_hooks_live_refuses_without_a_log(project_data: Path, repo_cwd: Path) -> None:

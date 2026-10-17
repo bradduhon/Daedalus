@@ -77,7 +77,8 @@ def _signing_keys(raw: dict[str, Any]) -> tuple[str, ...]:
 def _ledger(raw: Any) -> LedgerDecl:
     if not isinstance(raw, dict):
         raise ConfigError(
-            "config.json ledger must be an object. Next: see docs/project-requirements.md."
+            "config.json ledger must be an object. "
+            "Next: write the ledger block as an object, as docs/project-requirements.md shows."
         )
     missing = [key for key in LEDGER_FIELDS if key not in raw]
     if missing:
@@ -95,7 +96,8 @@ def _ledger(raw: Any) -> LedgerDecl:
 def _policy(raw: Any) -> PolicyDecl:
     if not isinstance(raw, dict) or "engine" not in raw or "path" not in raw:
         raise ConfigError(
-            "config.json policy needs engine and path. Next: see docs/project-requirements.md."
+            "config.json policy needs engine and path. "
+            "Next: add the engine and path keys, as docs/project-requirements.md shows."
         )
     engine = _require_str(raw, "engine", "policy")
     path = _require_str(raw, "path", "policy")
@@ -121,7 +123,8 @@ def _sources(raw: Any) -> tuple[StandardsSource, ...]:
             continue
         if not isinstance(item, dict) or "kind" not in item or "path" not in item:
             raise ConfigError(
-                "each standards_sources entry needs kind and path. Next: add both keys."
+                "each standards_sources entry needs kind and path. "
+                "Next: add both the kind and path keys."
             )
         kind = _require_str(item, "kind", "standards_sources[]")
         out.append(StandardsSource(kind, Path(_require_str(item, "path", "standards_sources[]"))))
@@ -136,7 +139,7 @@ def _pack(name: Any) -> StandardsSource:
             return StandardsSource("pack", path, name)
     raise ConfigError(
         f"config.json standards_sources[] pack {name!r} is not a pack Daedalus ships. "
-        'Next: use "baseline".'
+        'Next: name the shipped baseline pack, "baseline".'
     )
 
 
@@ -166,7 +169,8 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
         ) from exc
     if not isinstance(raw, dict):
         raise ConfigError(
-            f"{target} must contain a JSON object. Next: see docs/project-requirements.md."
+            f"{target} must contain a JSON object. "
+            "Next: make the file one JSON object, as docs/project-requirements.md shows."
         )
     charter = _require_str(raw, "charter_root", "") if "charter_root" in raw else None
     return Config(

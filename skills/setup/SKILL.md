@@ -8,6 +8,8 @@ disable-model-invocation: true
 
 # daedalus setup
 
+Human-facing text (0031): Text a human reads names each item in words: a short label or one line on what it is and what it does. Ids (ruling ids, issue numbers, task codes, agent names, snake_case keys) may trail in parentheses, never replace the description. Logs, status lines and messages to other agents may use ids alone. Documents carry both.
+
 1. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_setup.py` with Bash, from the main session, only because the operator typed `/daedalus:setup`; never run it on your own, and never from an agent. It targets the repository that holds the current directory.
 2. Show the output to the operator unchanged.
 3. Exit 1: nothing was written. Its `Next:` part is the next action: the package install line, adding `.claude/settings.local.json` to `.gitignore`, or, when the sandbox already protects the settings file, the setup command to run. The operator does that from their own shell, then types `/daedalus:setup` again where the line says so.

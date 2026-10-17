@@ -224,7 +224,8 @@ def test_mark_train_refuses_a_symlinked_marker(data_repo: Path, tmp_path: Path) 
 
 
 def test_mark_train_needs_the_data_dir(repo: Path) -> None:
-    with pytest.raises(WorkspaceError, match="Next: run /daedalus:doctor"):
+    health = r"Next: run the Daedalus health check \(/daedalus:doctor\)"
+    with pytest.raises(WorkspaceError, match=health):
         mark_train(repo, TRAIN)
     assert not (repo / ".claude" / "daedalus").exists()
 

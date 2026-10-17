@@ -163,7 +163,7 @@ def test_unknown_pack_name_refused(project_data: Path, entry: dict[str, object])
     (project_data / "config.json").write_text(json.dumps({"standards_sources": [entry]}))
     with pytest.raises(ConfigError) as info:
         load_config(str(project_data.parents[1]))
-    assert str(info.value).endswith('Next: use "baseline".')
+    assert str(info.value).endswith('Next: name the shipped baseline pack, "baseline".')
 
 
 def test_pack_rules_are_one_line_with_ids() -> None:

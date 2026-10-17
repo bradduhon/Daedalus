@@ -265,7 +265,8 @@ def test_setup_without_binaries_prints_the_apt_line_and_writes_nothing(tmp_path:
     assert result.returncode == 1
     assert result.stdout == (
         "daedalus setup: bwrap, socat not on PATH; nothing written. "
-        "Next: run sudo apt-get install -y bubblewrap socat, then rerun /daedalus:setup\n"
+        "Next: run sudo apt-get install -y bubblewrap socat, "
+        "then run the Daedalus setup again (/daedalus:setup)\n"
     )
     assert not (repo / ".claude").exists()
     _home_untouched(tmp_path)
@@ -276,7 +277,8 @@ def test_setup_without_one_binary_names_its_package_elsewhere(tmp_path: Path) ->
     assert result.returncode == 1
     assert result.stdout == (
         "daedalus setup: socat not on PATH; nothing written. Next: install the packages "
-        "socat with your distribution's package manager, then rerun /daedalus:setup\n"
+        "socat with your distribution's package manager, "
+        "then run the Daedalus setup again (/daedalus:setup)\n"
     )
 
 

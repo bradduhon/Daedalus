@@ -41,7 +41,9 @@ def _sandbox_blocks(repo: Path, home: Path) -> list[tuple[Path, dict[str, object
         except FileNotFoundError:
             continue
         except (OSError, UnicodeDecodeError, ValueError, RecursionError) as exc:
-            raise SettingsError(f"{path} is not valid JSON ({exc}). Next: fix {path}") from exc
+            raise SettingsError(
+                f"{path} is not valid JSON ({exc}). Next: fix the JSON syntax in {path}"
+            ) from exc
         block = data.get("sandbox") if isinstance(data, dict) else None
         if isinstance(block, dict):
             blocks.append((path, block))

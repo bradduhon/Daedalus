@@ -307,3 +307,13 @@ def test_auditor_verdict_first_line_contract_unchanged() -> None:
         "- `[VERDICT: APPROVED]` then `<paragraph>`\n"
         "- `[VERDICT: REJECTED]` then `<itemized findings>`\n"
     )
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_MODEL))
+def test_every_agent_carries_the_human_text_rule(name: str) -> None:
+    # 0031: verbatim in every agent file; the status contract stays the last section.
+    from tests.test_skills import HUMAN_TEXT_RULE
+
+    text = (AGENTS / f"{name}.md").read_text()
+    assert HUMAN_TEXT_RULE in text
+    assert text.index(HUMAN_TEXT_RULE) < text.index("## Status contract")

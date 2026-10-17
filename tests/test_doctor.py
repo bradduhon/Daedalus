@@ -812,7 +812,8 @@ def test_framework_line_old_after_90_days(tmp_path: Path) -> None:
         (
             True,
             "OLD  frameworks nist: pinned 2026-06-01 (137 days). "
-            "Next: run python3 <plugin>/scripts/refresh_frameworks.py",
+            "Next: refresh the framework caches with "
+            "python3 <plugin>/scripts/refresh_frameworks.py",
         )
     ]
     _framework_manifest(tmp_path, "nist", "2026-07-18")
@@ -866,7 +867,8 @@ def test_unreadable_framework_manifest_is_old_with_next(tmp_path: Path, body: st
         (
             True,
             "OLD  frameworks owasp: manifest.json has no list of pinned_on dates. "
-            "Next: run python3 <plugin>/scripts/refresh_frameworks.py",
+            "Next: refresh the framework caches with "
+            "python3 <plugin>/scripts/refresh_frameworks.py",
         )
     ]
 
@@ -882,7 +884,8 @@ def test_no_manifest_no_line(plugin_data: Path, tmp_path: Path) -> None:
 
 
 PACK_OFFER = (
-    "OPT  standards_sources: not declared. Next: to adopt the shipped baseline pack, add "
+    "OPT  standards_sources: no standards file or pack is declared. "
+    "Next: to adopt the shipped baseline pack, add "
     '{"kind": "pack", "name": "baseline"} to standards_sources in .claude/daedalus/config.json'
 )
 

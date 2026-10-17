@@ -135,7 +135,7 @@ def _gh_sandbox_check(repo: Path) -> tuple[bool, str]:
 
 FRAMEWORK_FAMILIES = ("nist", "owasp", "cis")
 FRAMEWORK_MAX_DAYS = 90
-REFRESH_NEXT = "run python3 <plugin>/scripts/refresh_frameworks.py"
+REFRESH_NEXT = "refresh the framework caches with python3 <plugin>/scripts/refresh_frameworks.py"
 CIS_NEXT = f"place a current benchmark and its manifest entry per {REQ_DOC}"
 
 
@@ -214,7 +214,11 @@ def _data_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
     err = _trust_error(repo)
     if err is not None and err.kind == "symlink":
         yield False, f"MISS project data dir: {err}"
-        yield False, "MISS config.json: not read; the data dir failed a check. Next: fix it first"
+        yield (
+            False,
+            "MISS config.json: not read; the data dir failed a check. "
+            "Next: fix the data dir line above first",
+        )
         return
     if not data.exists():
         yield True, f"OK   project data dir: {data} (will be created by the first hook)"
@@ -248,7 +252,11 @@ def _data_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
             IGNORE_NEXT,
         )
     if err is not None:
-        yield False, "MISS config.json: not read; the data dir failed a check. Next: fix it first"
+        yield (
+            False,
+            "MISS config.json: not read; the data dir failed a check. "
+            "Next: fix the data dir line above first",
+        )
         return
     yield from _config_checks(data)
 
@@ -298,7 +306,10 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
         yield True, "OK   standards_sources declared"
     else:
         # 0019: the baseline pack offer; optional, so it never fails the doctor.
-        yield True, f"OPT  standards_sources: not declared. Next: {PACK_OFFER}"
+        yield (
+            True,
+            f"OPT  standards_sources: no standards file or pack is declared. Next: {PACK_OFFER}",
+        )
     if config.policy is not None:
         yield True, "OK   policy declared"
     else:

@@ -60,7 +60,7 @@ Each entry has a `kind` and a `path`, except `pack`, which has a `name`. The sta
 
 - `rules-dir`: a directory of rule files. Example: `{ "kind": "rules-dir", "path": "/absolute/path/to/rules" }`
 - `file`: one file. Example: `{ "kind": "file", "path": "/work/my-service/CLAUDE.md" }`
-- `pack`: a rules pack shipped inside the plugin, resolved to `<plugin>/packs/<name>/`. Daedalus ships one, `baseline`: five baseline checks (no hardcoded secrets, no wildcard access grants, TLS 1.2 or newer, encryption at rest, no personal data or key material in logs) and the Daedalus cloud security standards (a role per workload, no public object storage, logging on every data store, scheduled rotation of customer-data keys, private networking for data stores, multi-factor sign-in for people). Each rule is one line in `packs/baseline/rules.md`, in Daedalus's own words, citing NIST SP 800-53 control ids and OWASP ASVS requirement ids. It applies only when you declare it: `{ "kind": "pack", "name": "baseline" }`. Any other name is refused with `Next: use "baseline".`
+- `pack`: a rules pack shipped inside the plugin, resolved to `<plugin>/packs/<name>/`. Daedalus ships one, `baseline`: five baseline checks (no hardcoded secrets, no wildcard access grants, TLS 1.2 or newer, encryption at rest, no personal data or key material in logs) and the Daedalus cloud security standards (a role per workload, no public object storage, logging on every data store, scheduled rotation of customer-data keys, private networking for data stores, multi-factor sign-in for people). Each rule is one line in `packs/baseline/rules.md`, in Daedalus's own words, citing NIST SP 800-53 control ids and OWASP ASVS requirement ids. It applies only when you declare it: `{ "kind": "pack", "name": "baseline" }`. Any other name is refused with `Next: name the shipped baseline pack, "baseline".`
 
 ### What the ledger probe detects
 
@@ -179,6 +179,12 @@ The sandbox settings do not name `<repo>/.claude/daedalus/`. Instead, the jail r
 ### Test-only
 
 `DAEDALUS_LIVE_TEST=1` enables the `daedalus-probe` agent namespace that this repo's live tests use. Do not set it in normal use.
+
+## Text a person reads
+
+Text a human reads names each item in words: a short label or one line on what it is and what it does. Ids (ruling ids, issue numbers, task codes, agent names, snake_case keys) may trail in parentheses, never replace the description. Logs, status lines and messages to other agents may use ids alone. Documents carry both.
+
+Every agent file and every skill carries that rule. A test reads each `Next:` line and stop message in the scripts and skills, and fails on one that has fewer than four plain words once ids and paths are set aside.
 
 ## Reviewing changes to Daedalus
 

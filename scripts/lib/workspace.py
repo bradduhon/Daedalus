@@ -162,7 +162,7 @@ def mark_train(repo: Path, train_id: str) -> Path:
     if not marker.parent.is_dir():
         raise WorkspaceError(
             f"{marker.parent} is missing, so the audit hooks have not run here. "
-            "Next: run /daedalus:doctor."
+            "Next: run the Daedalus health check (/daedalus:doctor)."
         )
     if marker.is_symlink():
         raise WorkspaceError(
@@ -199,7 +199,7 @@ def clear_train(repo: Path) -> Path:
 
 BEGIN_NEEDLE = "daedalus_workspace.py begin"
 DIRTY_LIMIT = 10
-RERUN = "run /daedalus:build-train again."
+RERUN = "start the Build Train again (/daedalus:build-train)."
 CLEAN_NEXT = f"Next: commit or stash your changes from your own shell, then {RERUN}"
 LEDGER_NONE = "ledger: none declared and none found."
 LEDGER_QUESTION = (
@@ -374,7 +374,8 @@ def _active(repo: Path) -> tuple[str, dict[str, Any]]:
     train_id = train_state.active_train(repo)
     if train_id is None:
         raise WorkspaceError(
-            f"no Daedalus train is active in {repo}. Next: run /daedalus:build-train."
+            f"no Daedalus train is active in {repo}. "
+            "Next: start a Build Train first (/daedalus:build-train)."
         )
     try:
         return train_id, train_state.load(repo, train_id)
@@ -434,9 +435,7 @@ def lock(repo: Path, contract: str, version: int) -> list[str]:
             "Next: ask contract-spec for a higher packet_version."
         )
     if not path.is_file():
-        raise WorkspaceError(
-            f"contract-spec did not save the packet at {path}. Next: rerun /daedalus:build-train."
-        )
+        raise WorkspaceError(f"contract-spec did not save the packet at {path}. Next: {RERUN}")
     integration = f"daedalus/{train_id}"
     _on_branch(repo, integration, state["base_sha"])
     if root != repo:
@@ -468,7 +467,7 @@ def lock(repo: Path, contract: str, version: int) -> list[str]:
     return [f"lock: {sha}", detail]
 
 
-STOP_NEXT = "rerun /daedalus:build-train"
+STOP_NEXT = "start the Build Train again (/daedalus:build-train)"
 
 
 def _unit_worktrees(repo: Path) -> dict[str, Path]:

@@ -92,7 +92,8 @@ def main(argv: list[str]) -> int:
     if missing:
         print(
             f"daedalus setup: {', '.join(missing)} not on PATH; nothing written. "
-            f"Next: {install_line(missing, args.os_release)}, then rerun /daedalus:setup"
+            f"Next: {install_line(missing, args.os_release)}, "
+            "then run the Daedalus setup again (/daedalus:setup)"
         )
         return 1
     repo = args.repo.resolve() if args.repo is not None else _default_repo()

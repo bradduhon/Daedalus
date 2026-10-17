@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -133,7 +134,9 @@ def test_build_train_stops_on_off_contract_replies_and_dead_hooks() -> None:
     text = _build_train()
     assert "does not end with one of its contract lines or contract sections, stop" in text
     assert "ends with its rule list and has no status line" in text
-    assert "the jail is not enforcing. Next: run /daedalus:doctor." in text
+    assert (
+        "the jail is not enforcing. Next: run the Daedalus health check (`/daedalus:doctor`)."
+    ) in text
     assert "charter: none (repo-local ledger)" in text
     assert "ids=<id>[,<id>]" in text
     assert "Session <id>: .claude/daedalus/audit/<id>.jsonl" in text
@@ -265,7 +268,7 @@ def test_push_train_checks_the_audit_chain_and_the_summary() -> None:
     text = _push_train()
     assert "verify_audit_chain.py" in set(_SCRIPT_REF.findall(text))
     assert "docs/.tmp/daedalus/" in text
-    assert "Next: run /daedalus:build-train first." in text
+    assert "Next: run a Build Train first (`/daedalus:build-train`)." in text
     assert "a `tool_input.command` of `git status --porcelain`" in text
     assert "[VERDICT: APPROVED]" in text
 
@@ -310,7 +313,7 @@ def test_push_train_reads_the_auditor_record_with_an_escaped_pattern() -> None:
 def test_push_train_stops_on_each_precondition() -> None:
     pre = _push_train().split("## Preconditions", 1)[1].split("## Push", 1)[0]
     for stop in (
-        "No file: stop. Next: run /daedalus:build-train first.",
+        "No file: stop. Next: run a Build Train first (`/daedalus:build-train`).",
         "Anything but `daedalus/<train-id>`: stop.",
         "Any `??` line or any change in column two: stop.",
         "A `BROKEN` line: stop and show that line only.",
@@ -875,3 +878,137 @@ def test_build_train_runs_without_config_json() -> None:
     assert "Missing: defaults are in use" in step
     assert "Not valid JSON: stop." in step
     assert "Missing or not valid JSON" not in step
+
+
+# 0031: operator lines name things in words; ids, paths and code trail and are not counted.
+_DROP_SPANS = re.compile(r"`[^`]*`|<[^<>]*>|\{[^{}]*\}|\([^()]*\)|https?://\S+")
+_WORD = re.compile(r"[A-Za-z][A-Za-z'-]*")
+_EDGE = ".,;:!?\"'[]"
+_NEXT_CONST = re.compile(r"_?[A-Z_]*NEXT")
+_SENTENCE_END = re.compile(r"\.\s+(?=[A-Z])")
+_SKILL_NEXT = re.compile(r"(?:^|(?<=[.:;]\s))Next:")
+# 0031: jail refusals are messages to the refused agent, which may use ids alone.
+AGENT_FACING = {"scripts/lib/jail.py"}
+MIN_WORDS = 4
+
+
+def _words(text: str) -> list[str]:
+    from lib.jail import KNOWN_AGENTS
+
+    out = []
+    for raw in _DROP_SPANS.sub(" ", text).split():
+        token = raw.strip(_EDGE)
+        if token in KNOWN_AGENTS or any(c in token for c in "/\\~$_:.*=@#"):
+            continue
+        if _WORD.fullmatch(token):
+            out.append(token)
+    return out
+
+
+def _forward_only(text: str) -> bool:
+    return not _DROP_SPANS.sub("", text).strip(" " + _EDGE)
+
+
+def _render(node: ast.AST, consts: dict[str, str]) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        parts = []
+        for value in node.values:
+            if isinstance(value, ast.Constant):
+                parts.append(str(value.value))
+            elif isinstance(value, ast.FormattedValue):
+                name = value.value.id if isinstance(value.value, ast.Name) else ""
+                parts.append(consts.get(name, "{x}"))
+        return "".join(parts)
+    return None
+
+
+def _script_lines(path: Path) -> list[tuple[int, str, str]]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    consts: dict[str, str] = {}
+    found: list[tuple[int, str, str]] = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+            name = node.targets[0].id
+            text = _render(node.value, consts)
+            if text is not None:
+                consts[name] = text
+            if _NEXT_CONST.fullmatch(name):
+                values = node.value.values if isinstance(node.value, ast.Dict) else [node.value]
+                for value in values:
+                    rendered = _render(value, consts)
+                    if rendered is not None and "Next:" not in rendered:
+                        found.append((node.lineno, "next", rendered))
+    inner = {id(v) for n in ast.walk(tree) if isinstance(n, ast.JoinedStr) for v in n.values}
+    for node in ast.walk(tree):
+        text = None if id(node) in inner else _render(node, consts)
+        if text is None or "Next:" not in text:
+            continue
+        message, *nexts = text.split("Next:")
+        if "{x}" not in message and not message.startswith("usage:"):
+            found.append((node.lineno, "stop", message))
+        found.extend((node.lineno, "next", part) for part in nexts)
+    return found
+
+
+def _skill_lines(path: Path) -> list[tuple[int, str, str]]:
+    found: list[tuple[int, str, str]] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        flat = re.sub(r"`[^`]*`", "`x`", line)
+        for part in _SKILL_NEXT.split(flat)[1:]:
+            found.append((number, "next", _SENTENCE_END.split(part, 1)[0]))
+        for quoted in re.findall(r'stop with "([^"]+)"', line):
+            found.append((number, "stop", quoted.split("Next:", 1)[0]))
+    return found
+
+
+def _operator_lines() -> list[tuple[str, int, str, str]]:
+    out = []
+    for path in sorted((REPO_ROOT / "scripts").rglob("*.py")):
+        if str(path.relative_to(REPO_ROOT)) in AGENT_FACING:
+            continue
+        for number, kind, text in _script_lines(path):
+            out.append((str(path.relative_to(REPO_ROOT)), number, kind, text))
+    for path in SKILLS:
+        for number, kind, text in _skill_lines(path):
+            out.append((str(path.relative_to(REPO_ROOT)), number, kind, text))
+    return out
+
+
+def test_operator_lines_are_not_bare_ids() -> None:
+    bare = [
+        f"{name}:{number} {kind}: {' '.join(text.split())}"
+        for name, number, kind, text in _operator_lines()
+        if text.strip() and not _forward_only(text) and len(_words(text)) < MIN_WORDS
+    ]
+    assert bare == []
+
+
+HUMAN_TEXT_RULE = (
+    "Text a human reads names each item in words: a short label or one line on what it is and "
+    "what it does. Ids (ruling ids, issue numbers, task codes, agent names, snake_case keys) may "
+    "trail in parentheses, never replace the description. Logs, status lines and messages to "
+    "other agents may use ids alone. Documents carry both."
+)
+
+
+@pytest.mark.parametrize("path", SKILLS, ids=lambda p: p.parent.name)
+def test_operator_skills_carry_the_human_text_rule(path: Path) -> None:
+    # 0031: every skill speaks to the operator, so each carries the rule verbatim.
+    assert HUMAN_TEXT_RULE in path.read_text(encoding="utf-8")
+
+
+def test_requirements_carry_the_human_text_rule() -> None:
+    text = (REPO_ROOT / "docs" / "project-requirements.md").read_text(encoding="utf-8")
+    section = text.split("\n## Text a person reads\n", 1)[1].split("\n## ", 1)[0]
+    assert HUMAN_TEXT_RULE in section
+
+
+def test_operator_line_scanner_flags_bare_ids() -> None:
+    # 0031: the scanner itself; a command or id alone is not a description.
+    assert len(_words("run /daedalus:doctor.")) < MIN_WORDS
+    assert len(_words("rerun `/daedalus:build-train` (0024)")) < MIN_WORDS
+    assert len(_words("run the Daedalus health check (/daedalus:doctor).")) >= MIN_WORDS
+    lines = _skill_lines(SKILLS[0])
+    assert all(kind in {"next", "stop"} for _, kind, _ in lines)

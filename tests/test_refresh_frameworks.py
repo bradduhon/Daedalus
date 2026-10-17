@@ -726,7 +726,7 @@ def test_unknown_adapter_name_exits_one_with_next(
 ) -> None:
     assert refresh.main(["--only", "nist-800-53,iso", "--cache-root", str(tmp_path)]) == 1
     err = capsys.readouterr().err
-    assert err.startswith("unknown adapter iso. Next: pick from ")
+    assert err.startswith("unknown adapter iso. Next: pick an adapter name from ")
     assert "nist-800-53" in err
     assert web.requests == []
 

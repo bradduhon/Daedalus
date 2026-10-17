@@ -22,7 +22,9 @@ except Exception as _exc:  # noqa: BLE001
     )
     sys.exit(2)
 
-_CONFIG_NEXT = " Next: fix <repo>/.claude/daedalus/config.json and retry."
+_CONFIG_NEXT = (
+    " Next: fix the Daedalus project config <repo>/.claude/daedalus/config.json and retry."
+)
 _REPORT_NEXT = " Next: report this hook failure to the operator."
 
 
