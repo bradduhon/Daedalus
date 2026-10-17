@@ -167,8 +167,53 @@ def test_specialists_anchor_the_manifest_to_the_cache_dir(name: str, sub: str) -
     assert "`<cache dir>` is the absolute frameworks cache directory named in your prompt" in text
     assert f"Read `<cache dir>/{sub}/manifest.json`" in text
     assert f"Read `{sub}/manifest.json`" not in text
-    body = text.split("---\n", 2)[2]
+    # 0024: the plugin root variable is substituted at load; nothing else may carry $ or {.
+    body = text.split("---\n", 2)[2].replace("${CLAUDE_PLUGIN_ROOT}/references/", "")
     assert "$" not in body and "{" not in body
+
+
+JUDGES = ("nist-specialist", "cis-specialist")
+JUDGE_REFERENCES = {
+    "nist-specialist": "references/nist-800-53-distilled.md",
+    "cis-specialist": "references/hardening-rubric.md",
+}
+JUDGE_CONTRACT = (
+    "Your reply ends with exactly one of these, nothing after it.\n"
+    "- `[STATUS: CACHE_INVALID] <detail>`\n"
+    "- `[STATUS: COMPLIANCE] <PASS/FAIL list with control ids and file:line>`\n"
+)
+
+
+@pytest.mark.parametrize("name", JUDGES)
+def test_judges_name_their_reference_files(name: str) -> None:
+    # 0024: the judge's method maps the diff to an existing own-words reference file.
+    text = (AGENTS / f"{name}.md").read_text()
+    named = re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}/(references/[A-Za-z0-9.-]+\.md)", text)
+    assert JUDGE_REFERENCES[name] in named
+    assert [ref for ref in named if not (REPO_ROOT / ref).is_file()] == []
+    method = text.split("\n## Method\n", 1)[1].split("\n## ", 1)[0]
+    assert "PASS, FAIL or N/A" in method
+    rubric = text.split("\n## Rubric\n", 1)[1].split("\n## ", 1)[0]
+    assert "never PASS on absence of evidence" in rubric
+
+
+@pytest.mark.parametrize("name", JUDGES)
+def test_judges_read_the_list_manifest(name: str) -> None:
+    # 0026: the manifest is a list of entries; each file is hashed and its age noted.
+    text = (AGENTS / f"{name}.md").read_text()
+    phase0 = text.split("## Phase 0", 1)[1].split("\n## ", 1)[0]
+    for key in ("`file`", "`sha256`", "`pinned_on`"):
+        assert key in phase0, key
+    assert "JSON list" in phase0
+    assert "sha256sum" in phase0
+    assert "90 days" in phase0
+    assert "catalog_sha256" not in text
+
+
+@pytest.mark.parametrize("name", JUDGES)
+def test_judges_keep_their_status_contract(name: str) -> None:
+    text = (AGENTS / f"{name}.md").read_text()
+    assert text.split("## Status contract\n", 1)[1] == JUDGE_CONTRACT
 
 
 def test_conductor_lists_the_git_reads_the_jail_allows() -> None:

@@ -22,10 +22,21 @@ The catalog sits under `<cache dir>/nist/` (for example `<cache dir>/nist/catalo
 3. If `pinned_on` is older than 90 days, note it in your report; do not block.
 4. No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already returns stderr.
 
-## Phase 1: Evaluation
-Evaluate the diff/spec against the catalog, focusing on tenant key isolation, key-management boundary
-controls, mTLS, and audit logging. Output explicit control IDs (SC-12, SC-13, AC-3, AU-2, etc.)
-with PASS/FAIL and the exact file:line for each FAIL.
+## Method
+1. Read the diff given (`git diff <base>...<branch>`), or the spec when no diff is given.
+2. List each changed resource or code path.
+3. Map each to rubric rows: `${CLAUDE_PLUGIN_ROOT}/references/nist-800-53-distilled.md`, plus
+   ASVS requirement ids from `<cache dir>/owasp/asvs-5.0.0.json` when that file is present.
+   Focus on tenant key isolation, key-management boundaries, mTLS and audit logging.
+4. Give PASS, FAIL or N/A per row, with file:line for every FAIL and the evidence line for every
+   PASS. Cite the control id (SC-12, AC-3) or the ASVS id with each verdict.
+
+## Rubric
+- FAIL means the diff contradicts the row.
+- N/A needs a one-line reason.
+- PASS needs an evidence line; never PASS on absence of evidence.
+- The catalog in the cache is the authority for control text; the distillation is the checklist.
+
 Never write U+2013 or U+2014 (en or em dash) in a reply, a file, or a ledger entry; use a hyphen.
 
 ## Status contract
