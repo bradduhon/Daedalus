@@ -120,7 +120,7 @@ Repeat steps 2 to 4 when you replace a benchmark.
 
 ## In each target repository
 
-### service-manifest.json (repo root) **(checked)**
+### service-manifest.json (repo root), optional **(checked)**
 
 Minimal:
 ```json
@@ -136,11 +136,11 @@ Minimal:
 ```
 A later Daedalus release reads missing flags as the stricter value. Coders cannot edit this file (enforced for file tools and the common copy/edit commands; a script the coder writes and runs is not blocked yet). In that release, a change goes through contract-spec and the ledger.
 
-### contracts/ (directory) **(checked)**
+### contracts/ (directory), optional **(checked)**
 
 Holds `openapi.yaml`, `events/*.schema.json`, `errors.yaml`. May be empty to start. Coders cannot write here (enforced for file tools and the common copy/edit commands; a script the coder writes and runs is not blocked yet).
 
-### .gitleaks.toml (repo root) **(checked)**
+### .gitleaks.toml (repo root), optional **(checked)**
 
 Minimal:
 ```toml

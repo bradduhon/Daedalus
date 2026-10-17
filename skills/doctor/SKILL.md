@@ -2,12 +2,13 @@
 name: doctor
 description: First-run check for the daedalus plugin. Lists every file, setting, and tool daedalus needs, says which are missing, and gives the next step for each. Changes nothing.
 argument-hint: Optional path to the target repository (default is the current directory).
+allowed-tools: Bash(python3 ${CLAUDE_SKILL_DIR}/../../scripts/daedalus_doctor.py *)
 ---
 <!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
 
 # daedalus doctor
 
-1. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_doctor.py --repo "<path>"` with Bash, where `<path>` is `$ARGUMENTS` when the operator gave one and `.` otherwise.
-2. Show the output to the operator unchanged.
-3. For each `MISS` line, offer to perform the `Next:` action. Do not perform any of them without the operator saying yes. Scaffolding offers point at docs/project-requirements.md in the plugin repo for the exact file contents.
-4. If every line is `OK`, say so and name the next command: `/daedalus:build-train <task>`.
+1. Run `python3 ${CLAUDE_SKILL_DIR}/../../scripts/daedalus_doctor.py --repo "<path>"` with Bash, exactly as written, where `<path>` is `$ARGUMENTS` when the operator gave one and `.` otherwise.
+2. Show the output to the operator unchanged. Do not run any other command to investigate a `MISS` or `OPT` line; each line carries its own detail.
+3. Ask once, in a single message, about every `MISS` line, then every `OPT` line marked optional: number them and ask whether to do all, the numbers the operator picks, or none. Never ask per line. Perform only the `Next:` actions the operator picked. A `Next:` that says to type `/daedalus:setup` is the operator's own step: tell the operator to type `/daedalus:setup` themselves, because the model cannot invoke it, and never count it as an action you can perform. Scaffolding offers point at docs/project-requirements.md in the plugin repo for the exact file contents.
+4. If no line is `MISS`, say so and name the next command: `/daedalus:build-train <task>`.

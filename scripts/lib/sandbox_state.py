@@ -10,7 +10,8 @@ from pathlib import Path
 ON = "on"
 OFF = "off"
 CONFIGURED_UNAVAILABLE = "configured-unavailable"
-SETUP_NEXT = "run /daedalus:setup"
+# 0020: setup is disable-model-invocation; only the operator can start it.
+SETUP_NEXT = "type /daedalus:setup yourself; the model cannot run it"
 PROJECT_SETTINGS = (".claude/settings.json", ".claude/settings.local.json")
 
 

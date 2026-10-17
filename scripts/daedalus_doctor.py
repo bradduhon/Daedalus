@@ -23,6 +23,7 @@ from lib.audit import (  # noqa: E402
 from lib.config import Config, ConfigError, load_config  # noqa: E402
 from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
 from lib.sandbox_state import (  # noqa: E402
+    SETUP_NEXT,
     SettingsError,
     required_binaries,
     sandbox_check,
@@ -31,7 +32,7 @@ from lib.sandbox_state import (  # noqa: E402
 from lib.workspace import UNMARK_NEXT, train_marker  # noqa: E402
 
 REQ_DOC = "docs/project-requirements.md"
-SANDBOX_NEXT = "install bubblewrap and socat, then run /daedalus:setup to turn the sandbox on"
+SANDBOX_NEXT = f"install bubblewrap and socat, then {SETUP_NEXT}"
 GH_NEXT = "install gh (https://cli.github.com); the Push Train opens pull requests with it"
 NO_LEDGER = "OK   ledger: none found (the Build Train asks before creating docs/decisions.md)"
 PROJECT_DATA_NEXT = "write a single line * to {marker}"
@@ -39,6 +40,9 @@ IGNORE_NEXT = (
     "from your own shell, untrack it with git rm -r --cached .claude/daedalus, "
     "then restore the * marker"
 )
+DIRTY_LIMIT = 10
+ENABLEMENT = ".claude/settings.json"
+ENABLEMENT_NEXT = f"commit {ENABLEMENT}; it holds the enabledPlugins entry /plugin install wrote"
 CACHE_NAMING = (
     "a --plugin-dir session uses daedalus-inline; a marketplace install uses daedalus-<marketplace>"
 )
@@ -48,6 +52,13 @@ def _check(ok: bool, name: str, missing: str, nxt: str) -> tuple[bool, str]:
     if ok:
         return True, f"OK   {name}"
     return False, f"MISS {name}: {missing}. Next: {nxt}"
+
+
+def _opt(ok: bool, name: str, missing: str, nxt: str) -> tuple[bool, str]:
+    # 0007: optional scaffold; no train reads it, so absence never fails the doctor.
+    if ok:
+        return True, f"OK   {name}"
+    return True, f"OPT  {name}: {missing}. Next: {nxt}"
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -208,6 +219,25 @@ def _is_repo(repo: Path) -> bool:
     return inside.returncode == 0 and inside.stdout.strip() == "true"
 
 
+def _clean_tree_check(repo: Path) -> tuple[bool, str]:
+    # 0007: the line names the dirty paths so nobody reruns git status to find them.
+    status = _git(repo, "status", "--porcelain", "--untracked-files=all")
+    if status.returncode != 0:
+        code = status.returncode
+        return _check(
+            False, "clean working tree", f"git status exited {code}", "fix the repository"
+        )
+    paths = [line[3:].split(" -> ")[-1] for line in status.stdout.splitlines() if line.strip()]
+    if not paths:
+        return True, "OK   clean working tree"
+    shown = ", ".join(paths[:DIRTY_LIMIT])
+    if len(paths) > DIRTY_LIMIT:
+        shown += f" +{len(paths) - DIRTY_LIMIT} more"
+    only_enablement = all(path == ENABLEMENT for path in paths)
+    nxt = ENABLEMENT_NEXT if only_enablement else "commit or stash before starting a train"
+    return _check(False, "clean working tree", f"uncommitted changes present: {shown}", nxt)
+
+
 def _repo_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
     yield _check(
         is_repo,
@@ -216,26 +246,20 @@ def _repo_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
         "run git init or point --repo at a clone",
     )
     if is_repo:
-        status = _git(repo, "status", "--porcelain")
-        yield _check(
-            status.returncode == 0 and status.stdout.strip() == "",
-            "clean working tree",
-            "uncommitted changes present",
-            "commit or stash before starting a train",
-        )
-    yield _check(
+        yield _clean_tree_check(repo)
+    yield _opt(
         (repo / "service-manifest.json").exists(),
         "service-manifest.json",
         "not found at repo root",
         f"create it from the example in {REQ_DOC}",
     )
-    yield _check(
+    yield _opt(
         (repo / "contracts").is_dir(),
         "contracts/",
         "directory missing",
         "mkdir contracts and add openapi.yaml or events/*.schema.json",
     )
-    yield _check(
+    yield _opt(
         (repo / ".gitleaks.toml").exists(),
         ".gitleaks.toml",
         "not found at repo root",

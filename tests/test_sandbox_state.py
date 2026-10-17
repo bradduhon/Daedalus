@@ -109,10 +109,14 @@ def test_missing_binaries_names_the_absent_one(
 
 def test_one_line_per_state() -> None:
     assert sandbox_line(ON) == (True, "OK   sandbox: on")
-    assert sandbox_line(OFF) == (False, "MISS sandbox: off. Next: run /daedalus:setup")
+    assert sandbox_line(OFF) == (
+        False,
+        "MISS sandbox: off. Next: type /daedalus:setup yourself; the model cannot run it",
+    )
     assert sandbox_line(CONFIGURED_UNAVAILABLE) == (
         False,
-        "MISS sandbox: configured-unavailable. Next: run /daedalus:setup",
+        "MISS sandbox: configured-unavailable. Next: type /daedalus:setup yourself; "
+        "the model cannot run it",
     )
 
 
@@ -141,7 +145,7 @@ def _start(cwd: Path) -> str:
     return json.dumps({"hook_event_name": "SessionStart", "cwd": str(cwd)})
 
 
-OFF_LINE = "MISS sandbox: off. Next: run /daedalus:setup"
+OFF_LINE = "MISS sandbox: off. Next: type /daedalus:setup yourself; the model cannot run it"
 
 
 def test_notice_prints_the_doctor_line_when_off(tmp_path: Path, bins: Path) -> None:
