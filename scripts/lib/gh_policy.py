@@ -199,6 +199,18 @@ def allowlist_applies(agent: str, cwd: str, command: str = "") -> bool:
     return os.path.isabs(cwd) and _marked_repo(cwd, "Bash", {"command": command}) is not None
 
 
+def conductor_gh_refusal() -> str:
+    # 0001, 0028: built from CONDUCTOR_GH, so the refusal names exactly the built set.
+    groups = [
+        f"gh {cmd} " + ", ".join(sorted(sub for c, sub in CONDUCTOR_GH if c == cmd))
+        for cmd in sorted({c for c, _ in CONDUCTOR_GH})
+    ]
+    return (
+        f"conductor gh is limited to {' and '.join(groups)}; the operator is the merge gate "
+        "(0001). Next: report the PR URL."
+    )
+
+
 def _allowed(agent: str) -> frozenset[tuple[str, str]]:
     if agent == CONDUCTOR:
         return CONDUCTOR_GH

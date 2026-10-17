@@ -15,47 +15,11 @@ from lib.jail import CONDUCTOR_GIT, KNOWN_AGENTS, decide, split_pipeline, tokeni
 from lib.unit_binding import record_dispatch
 from lib.workspace import mark_train, train_marker
 
-from tests.conftest import REPO_ROOT
+from tests.conftest import CFG, CWD, REPO_ROOT, WT
 
-CWD = "/work/repo"
-CFG = Config(
-    charter_root=Path("/work/Charter"),
-    ledger=LedgerDecl(
-        Path("/work/Charter/decision-log.md"), "markdown-table-row", "{seq:04d}", "last-row-id"
-    ),
-)
-
-
-WT = f"{CWD}/.claude/worktrees/20261015-120000-u1"
 UNIT_TRAIN = "20261015-120000"
-FAKE_UNITS = frozenset({f"{CWD}/.claude/worktrees/u1", WT})
-
-
-@pytest.fixture(autouse=True)
-def _fake_unit_worktrees(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 0022: CWD is not a real repo; register its fake unit worktrees, real repos query git.
-    real = getattr(jail, "_registered_worktrees", None)
-
-    def fake(repo: str) -> frozenset[str]:
-        if repo == CWD:
-            return FAKE_UNITS
-        return real(repo) if real is not None else frozenset()
-
-    monkeypatch.setattr(jail, "_registered_worktrees", fake, raising=False)
-    # issue 29: CWD has no train state; binding is proven in tests/test_unit_binding.py.
-    real_binding = jail._binding_reason
-
-    def no_binding(hook_input: dict[str, Any], cwd: str, units: set[str]) -> str | None:
-        return None if cwd == CWD else real_binding(hook_input, cwd, units)
-
-    monkeypatch.setattr(jail, "_binding_reason", no_binding)
-    # 0035: CWD stands for a repo a train runs in; real repos below resolve their own marker.
-    real_scoped = jail._train_scoped
-
-    def scoped(cwd: str, tool: str, tool_input: dict[str, Any]) -> bool:
-        return cwd.startswith(CWD) or real_scoped(cwd, tool, tool_input)
-
-    monkeypatch.setattr(jail, "_train_scoped", scoped)
+# 0044: the fake unit worktrees live in tests/conftest.py as the jail_fakes fixture.
+pytestmark = pytest.mark.usefixtures("jail_fakes")
 
 
 def _w(agent: str | None, path: str, tool: str = "Write") -> dict[str, Any]:

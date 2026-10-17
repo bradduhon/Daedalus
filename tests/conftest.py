@@ -16,6 +16,50 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+from lib.config import Config, LedgerDecl  # noqa: E402
+
+# 0044: the fake repo the jail and hook-script cases share; it is not a real git repo.
+CWD = "/work/repo"
+CFG = Config(
+    charter_root=Path("/work/Charter"),
+    ledger=LedgerDecl(
+        Path("/work/Charter/decision-log.md"), "markdown-table-row", "{seq:04d}", "last-row-id"
+    ),
+)
+WT = f"{CWD}/.claude/worktrees/20261015-120000-u1"
+FAKE_UNITS = frozenset({f"{CWD}/.claude/worktrees/u1", WT})
+
+
+@pytest.fixture
+def jail_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 0022: CWD is not a real repo; register its fake unit worktrees, real repos query git.
+    from lib import hook_io, jail
+
+    real = getattr(jail, "_registered_worktrees", None)
+
+    def fake(repo: str) -> frozenset[str]:
+        if repo == CWD:
+            return FAKE_UNITS
+        return real(repo) if real is not None else frozenset()
+
+    monkeypatch.setattr(jail, "_registered_worktrees", fake, raising=False)
+    # issue 29: CWD has no train state; binding is proven in tests/test_unit_binding.py.
+    real_binding = jail._binding_reason
+
+    def no_binding(hook_input: dict[str, Any], cwd: str, units: set[str]) -> str | None:
+        return None if cwd == CWD else real_binding(hook_input, cwd, units)
+
+    monkeypatch.setattr(jail, "_binding_reason", no_binding)
+    # 0035: CWD stands for a repo a train runs in; real repos below resolve their own marker.
+    real_scoped = jail._train_scoped
+
+    def scoped(cwd: str, tool: str, tool_input: dict[str, Any]) -> bool:
+        return cwd.startswith(CWD) or real_scoped(cwd, tool, tool_input)
+
+    monkeypatch.setattr(jail, "_train_scoped", scoped)
+    # 0044: hook scripts read the project config through this one name.
+    monkeypatch.setattr(hook_io, "hook_config", lambda cwd: CFG)
+
 
 def fake_bin(
     tmp_path: Path, names: Iterable[str], exit_codes: dict[str, int] | None = None

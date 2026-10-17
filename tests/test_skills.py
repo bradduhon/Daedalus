@@ -798,7 +798,9 @@ _NEXT_CONST = re.compile(r"_?[A-Z_]*NEXT")
 _SENTENCE_END = re.compile(r"\.\s+(?=[A-Z])")
 _SKILL_NEXT = re.compile(r"(?:^|(?<=[.:;]\s))Next:")
 # 0031: jail refusals are messages to the refused agent, which may use ids alone.
-AGENT_FACING = {"scripts/lib/jail.py"}
+AGENT_FACING = {"scripts/lib/jail.py", "scripts/lib/shell.py"} | {
+    str(p.relative_to(REPO_ROOT)) for p in (REPO_ROOT / "scripts" / "checks").glob("*.py")
+}
 MIN_WORDS = 4
 
 

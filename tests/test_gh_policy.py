@@ -8,7 +8,13 @@ from typing import Any
 
 import pytest
 from lib.config import Config
-from lib.gh_policy import allowlist_applies, classify, gh_reason
+from lib.gh_policy import (
+    CONDUCTOR_GH,
+    allowlist_applies,
+    classify,
+    conductor_gh_refusal,
+    gh_reason,
+)
 from lib.jail import decide
 
 AGENTS = ("main", "pr-train-conductor", "repo-coder", "general-purpose")
@@ -318,3 +324,20 @@ def test_allowlist_applies(plain_repo: Path) -> None:
 )
 def test_classify(command: str, klass: str) -> None:
     assert classify(shlex.split(command))[0] == klass
+
+
+def test_conductor_gh_refusal_names_only_the_built_set() -> None:
+    # 0001, 0028: the refusal lists CONDUCTOR_GH and nothing it does not build.
+    text = conductor_gh_refusal()
+    assert text == (
+        "conductor gh is limited to gh pr checks, create, edit, list, view and "
+        "gh run list, view, watch; the operator is the merge gate (0001). Next: report the PR URL."
+    )
+    named = {
+        (group.split()[1], sub.strip())
+        for group in text.split("limited to ", 1)[1].split(";", 1)[0].split(" and ")
+        for sub in group.split(" ", 2)[2].split(",")
+    }
+    assert named == CONDUCTOR_GH
+    for drift in ("status", "comment", "diff"):
+        assert drift not in text
