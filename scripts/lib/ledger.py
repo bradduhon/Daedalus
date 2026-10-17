@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +9,7 @@ from typing import Any
 
 from lib.audit import project_root
 from lib.config import LEDGER_FIELDS, LEDGER_FORMATS, Config, LedgerDecl
+from lib.manifest import MANIFEST_NAME, ManifestError, read_raw
 
 # 0004: convention probe order, tried under repo_root then charter_root.
 PROBE_NAMES = ("decision-log.md", "docs/decisions.md", "LEDGER.md")
@@ -49,15 +49,11 @@ def _resolve_path(raw: str, repo_root: Path, charter_root: Path | None) -> Path:
 
 
 def _manifest_decl(repo_root: Path) -> LedgerDecl | None:
-    target = repo_root / "service-manifest.json"
-    if not target.is_file():
-        return None
+    target = repo_root / MANIFEST_NAME
     try:
-        raw: Any = json.loads(target.read_text(encoding="utf-8-sig"))
-    except (OSError, UnicodeDecodeError, ValueError, RecursionError) as exc:
-        raise LedgerError(
-            f"{target} could not be read as JSON ({exc}). Next: fix the manifest syntax."
-        ) from exc
+        raw: Any = read_raw(repo_root)
+    except ManifestError as exc:
+        raise LedgerError(str(exc)) from exc
     if not isinstance(raw, dict) or "ledger" not in raw:
         return None
     block = raw["ledger"]

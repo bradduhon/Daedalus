@@ -549,6 +549,29 @@ def test_minor_8_manifest_ledger_block_reports_manifest_origin(tmp_path: Path) -
     assert lines[i + 1] == f"OK   ledger: {ledger} (manifest, markdown-table-row)"
 
 
+def test_manifest_line_reports_jail_narrowing_counts(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    narrowing = {"forbidden_paths": ["infra/", "Makefile"], "forbidden_extensions": [".pem"]}
+    (repo / "service-manifest.json").write_text(json.dumps({"jail_narrowing": narrowing}))
+    bins = _bins_with_git(tmp_path)
+    lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
+    want = "OK   service-manifest.json: jail_narrowing 2 paths, 1 extensions"
+    assert want in lines
+
+
+@pytest.mark.parametrize("body", ["{ not json", '{"jail_narrowing": {"forbidden_paths": "x"}}'])
+def test_unusable_manifest_is_a_miss_with_next(tmp_path: Path, body: str) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (repo / "service-manifest.json").write_text(body)
+    bins = _bins_with_git(tmp_path)
+    result = _run(None, repo, path_env=bins, home=tmp_path / "home")
+    line = next(x for x in result.stdout.splitlines() if x.startswith("MISS service-manifest"))
+    assert "Next: " in line
+    assert result.returncode != 0
+
+
 def test_undeclared_standards_and_policy_are_optional(tmp_path: Path) -> None:
     # spec 5: absent standards_sources and policy are OK with or without config.json.
     repo = tmp_path / "repo"

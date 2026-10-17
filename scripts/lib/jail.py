@@ -33,6 +33,8 @@ from lib.credential_paths import store_rest as _store_rest
 from lib.credential_paths import tilde as _tilde
 from lib.gh_policy import CONDUCTOR_GH, allowlist_applies, gh_reason
 from lib.ledger import LedgerError, resolve_ledger
+from lib.manifest import Manifest, ManifestError, extension_hit, path_hit
+from lib.manifest import load as load_manifest
 from lib.train_scope import (
     AGENT_NAMESPACES,
     KNOWN_AGENTS,
@@ -251,6 +253,18 @@ R_CODER_UNIT_GIT = (
     "repo-coder git add and commit run only inside your unit worktree. "
     "Next: use git -C <your unit worktree> add/commit."
 )
+# 0054: a coder's protected paths, relative to its unit worktree root.
+BUILTIN_PROTECTED = Manifest(("contracts/", ".github/", ".claude/", "service-manifest.json"))
+R_BASH_OUTSIDE = (
+    "Bash write outside your unit worktree: {}. "
+    "Next: write inside your unit worktree, or ask the orchestrating session to route the change."
+)
+R_ROUTE_NEXT = (
+    "Next: ask the orchestrating session to route this change to contract-spec or charter-docs."
+)
+R_PROTECTED_BUILTIN = "protected path (built in): {}. " + R_ROUTE_NEXT
+R_PROTECTED_PATH = "protected path (service-manifest.json jail_narrowing): {}. " + R_ROUTE_NEXT
+R_PROTECTED_EXT = "protected extension (service-manifest.json jail_narrowing): {}. " + R_ROUTE_NEXT
 R_CD_RELATIVE = (
     "a chain that changes directory may not use relative write paths or pathspecs: {}. "
     "Next: use absolute paths (or an absolute git -C) after cd."
@@ -1130,28 +1144,77 @@ def _unit_parts(target: str, cwd: str) -> list[str] | None:
     return parts if os.path.join(base, parts[0]) in _registered_worktrees(repo) else None
 
 
-def _in_unit_worktree_code(target: str, cwd: str) -> bool:
+def _in_unit_worktree(target: str, cwd: str) -> bool:
     parts = _unit_parts(target, cwd)
-    return parts is not None and len(parts) >= 2 and parts[1] in {"src", "tests"}
+    return parts is not None and len(parts) >= 2
 
 
-def _in_code_dirs(arg: str, cwd: str) -> bool:
+def _orchestrator_code(arg: str, cwd: str) -> bool:
+    # 0054 narrows the coder only; the orchestrator's src/ and tests/ refusal is unchanged.
     target = _abs(arg, cwd)
-    return (
-        _under(target, f"{cwd}/src")
-        or _under(target, f"{cwd}/tests")
-        or _in_unit_worktree_code(target, cwd)
-    )
+    parts = _unit_parts(target, cwd)
+    unit_code = parts is not None and len(parts) >= 2 and parts[1] in {"src", "tests"}
+    return _under(target, f"{cwd}/src") or _under(target, f"{cwd}/tests") or unit_code
+
+
+@dataclass(frozen=True)
+class CoderBoundary:
+    manifest: Manifest
+    ledger_rel: str | None
+
+
+@lru_cache(maxsize=8)
+def _manifest_at(repo: str) -> Manifest | str:
+    # 0054: read once per process from the main checkout; an error string fails closed.
+    try:
+        return load_manifest(Path(repo)) or Manifest()
+    except ManifestError as exc:
+        return f"service-manifest.json is unusable, so coder writes fail closed: {exc}"
+
+
+def _coder_boundary(cwd: str, config: Config) -> CoderBoundary | str:
+    repo = os.path.realpath(str(project_root(cwd)))
+    manifest = _manifest_at(repo)
+    if isinstance(manifest, str):
+        return manifest
+    try:
+        resolved = resolve_ledger(cwd, config)
+    except LedgerError as exc:
+        return f"the ledger could not be resolved, so coder writes fail closed: {exc}"
+    ledger_rel = None
+    if resolved is not None:
+        rel = os.path.relpath(os.path.realpath(resolved.path), repo)
+        if rel.split(os.sep)[0] != os.pardir:
+            ledger_rel = rel.replace(os.sep, "/")
+    return CoderBoundary(manifest, ledger_rel)
+
+
+def _coder_write_reason(target: str, cwd: str, boundary: CoderBoundary | str) -> str | None:
+    # 0054: inside the unit worktree a write is refused only on a protected path.
+    if isinstance(boundary, str):
+        return boundary
+    rel = "/".join((_unit_parts(target, cwd) or [])[1:])
+    folded = rel.casefold()
+    ledger = boundary.ledger_rel
+    if ".git" in folded.split("/") or path_hit(BUILTIN_PROTECTED, rel):
+        return R_PROTECTED_BUILTIN.format(target)
+    if ledger is not None and path_hit(Manifest((ledger,)), rel):
+        return R_PROTECTED_BUILTIN.format(target)
+    if path_hit(boundary.manifest, rel):
+        return R_PROTECTED_PATH.format(target)
+    if extension_hit(boundary.manifest, rel):
+        return R_PROTECTED_EXT.format(target)
+    return None
 
 
 def _pathspec_ok(args: list[str], cwd: str, base: str | None = None) -> bool:
-    # I3a, 0022: `-- <unit worktree src|tests paths>`; relative ones resolve against -C (base).
+    # I3a, 0022: `-- <unit worktree paths>`; relative ones resolve against -C (base).
     root = cwd if base is None else base
     return (
         len(args) > 1
         and args[0] == "--"
         and not _has_magic(args[1:])
-        and all(_in_unit_worktree_code(_abs(a, root), cwd) for a in args[1:])
+        and all(_in_unit_worktree(_abs(a, root), cwd) for a in args[1:])
     )
 
 
@@ -1552,17 +1615,36 @@ def _backup_suffix(name: str, args: list[str]) -> str | None:
     return None
 
 
-def _coder_write_target(segment: list[str], cwd: str) -> str | None:
+def _coder_write_targets(segment: list[str], cwd: str) -> list[str]:
+    # 0054: file operands of a write command, and git restore or checkout pathspecs.
     name = _base(segment[0])
     args = segment[1:]
+    if name == "git":
+        sub, git_args, globals_ = _git_split(segment)
+        if sub not in {"restore", "checkout"} or git_args[:1] != ["--"]:
+            return []
+        base = _git_dir(globals_, cwd)
+        return [_abs(a, base) for a in git_args[1:]]
     if name not in CODER_WRITE_CMDS and not (name in {"sed", "perl"} and _in_place(name, args)):
-        return None
-    suffix = _backup_suffix(name, args)
-    if suffix is not None:
-        return suffix
-    for arg in _write_operands(name, args):
-        if arg != "-" and not _in_unit_worktree_code(_abs(arg, cwd), cwd):
-            return arg
+        return []
+    return [_abs(a, cwd) for a in _write_operands(name, args) if a != "-"]
+
+
+def _coder_bash_reason(
+    segment: list[str], cwd: str, boundary: Callable[[], CoderBoundary | str]
+) -> str | None:
+    name = _base(segment[0])
+    args = segment[1:]
+    if name in CODER_WRITE_CMDS or (name in {"sed", "perl"} and _in_place(name, args)):
+        suffix = _backup_suffix(name, args)
+        if suffix is not None:
+            return R_BASH_OUTSIDE.format(suffix)
+    for target in _coder_write_targets(segment, cwd):
+        if not _in_unit_worktree(target, cwd):
+            return R_BASH_OUTSIDE.format(target)
+        reason = _coder_write_reason(target, cwd, boundary())
+        if reason:
+            return reason
     return None
 
 
@@ -2484,7 +2566,7 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
                 return _block(reason)
 
     if agent == "main":
-        if is_write and _in_code_dirs(path, cwd):
+        if is_write and _orchestrator_code(path, cwd):
             return _block(
                 "the orchestrating session does not write application code during a train. "
                 "Next: dispatch a repo-coder for this change."
@@ -2496,13 +2578,17 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
         return _allow()
 
     if agent == "repo-coder":
-        if is_write and not _in_unit_worktree_code(_abs(path, cwd), cwd):
+        boundary = lru_cache(maxsize=1)(lambda: _coder_boundary(cwd, config))
+        if is_write and not _in_unit_worktree(path, cwd):
             return _block(
-                f"write outside src/ or tests/ of your unit worktree: {path}. "
+                f"write outside your unit worktree: {path}. "
                 "Next: ask the orchestrating session to route this to contract-spec or "
                 "charter-docs."
             )
         if is_write:
+            reason = _coder_write_reason(path, cwd, boundary())
+            if reason:
+                return _block(reason)
             unit = (_unit_parts(_abs(path, cwd), cwd) or [""])[0]
             reason = _binding_reason(hook_input, cwd, {unit})
             if reason:
@@ -2542,13 +2628,9 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
                     git_dir = _git_dir(_git_split(segment)[2], cwd)
                     if _unit_parts(git_dir, cwd) is None:
                         return _block(R_CODER_UNIT_GIT)
-                target = _coder_write_target(segment, cwd)
-                if target is not None:
-                    return _block(
-                        f"Bash write outside src/ or tests/: {target}. "
-                        "Next: write under your unit worktree src/ or tests/, "
-                        "or ask the orchestrating session to route the change."
-                    )
+                reason = _coder_bash_reason(segment, cwd, boundary)
+                if reason:
+                    return _block(reason)
                 touched |= _segment_units(segment, cwd)
             reason = _binding_reason(hook_input, cwd, touched)
             if reason:

@@ -41,7 +41,7 @@ Example output from a real run in a new repository with one empty commit, on a m
     OPT  standards_sources: no standards file or pack is declared. Next: to adopt the shipped baseline pack, add {"kind": "pack", "name": "baseline"} to standards_sources in .claude/daedalus/config.json
     OK   policy: not declared (optional)
     OK   cache dir: none yet (create it with scripts/refresh_frameworks.py or by hand per docs/project-requirements.md)
-    OK   plugin root: ~/.claude/plugins/cache/daedalus/daedalus/3.0.0
+    OK   plugin root: ~/.claude/plugins/cache/daedalus/daedalus/3.1.0
     MISS gitleaks on PATH: not found. Next: the Push Train scans commits with gitleaks; install it so the scan can run
     OK   gh on PATH
     MISS gh authenticated: gh auth status exited 1. Next: run gh auth login
@@ -77,7 +77,7 @@ Uninstalling the plugin leaves the audit logs and config in the repo. A copy of 
 
 When daedalus refuses an action you see a line like:
 
-    daedalus-jail[repo-coder]: write outside src/ or tests/ of your unit worktree: /work/repo/infra/x.tf. Next: ask the orchestrating session to route this to contract-spec or charter-docs.
+    daedalus-jail[repo-coder]: write outside your unit worktree: /work/repo/infra/x.tf. Next: ask the orchestrating session to route this to contract-spec or charter-docs.
 
 The name in brackets is the agent that was blocked. The part before `Next:` is what was refused and why. The part after is what to do instead. The orchestrating session is the Claude Code session you are talking to, not the plugin.
 
@@ -174,7 +174,7 @@ The Build Train saves the Locked Contract Packet to a file, and the train's main
 
 The standards specialist reads the sources you declared in `standards_sources` and your ledger. It writes a Standards Packet: the rules that apply to this task. If your task contradicts one of your own standards, the train stops and shows both sides: your words, and the rule with its file and line. Reword the task or change the standard, then start again. The train never picks a side.
 
-The contract agent then writes a Locked Contract Packet with a `packet_version`. Every coding agent gets both packets at the top of its prompt. The train creates each coding agent's worktree at `<repo>/.claude/worktrees/<train-id>-<unit-slug>`, on the branch `daedalus-unit/<train-id>-<unit-slug>` cut from the integration branch, and writes a `.gitignore` holding `*` in `.claude/worktrees/`. No setting is needed for this. A coding agent may write only inside the `src/` and `tests/` directories of its own worktree. The train removes every worktree after the merge and before any stop once coding has begun, so worktrees never outlive the train. Changes a coding agent left uncommitted were never audited: the train lists them, then discards them.
+The contract agent then writes a Locked Contract Packet with a `packet_version`. Every coding agent gets both packets at the top of its prompt. The train creates each coding agent's worktree at `<repo>/.claude/worktrees/<train-id>-<unit-slug>`, on the branch `daedalus-unit/<train-id>-<unit-slug>` cut from the integration branch, and writes a `.gitignore` holding `*` in `.claude/worktrees/`. No setting is needed for this. A coding agent may write anywhere inside its own worktree except the protected paths [docs/project-requirements.md](../project-requirements.md) lists under "Coder write boundary". The train removes every worktree after the merge and before any stop once coding has begun, so worktrees never outlive the train. Changes a coding agent left uncommitted were never audited: the train lists them, then discards them.
 
 ### What each yield means
 

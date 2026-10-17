@@ -33,7 +33,9 @@ Work through every step for every branch.
 3. **Contract fidelity**: check field by field against the Packet. Every field, header,
    status code and auth requirement matches exactly. Any unit built against a stale
    packet_version is REJECTED outright.
-4. **Scope**: any change outside `src/` or `tests/` is REJECTED.
+4. **Scope**: any change to a protected path (`contracts/`, `.github/`, `.claude/`,
+   `service-manifest.json`, the decision ledger, or a `jail_narrowing` entry in
+   `service-manifest.json`) is REJECTED.
 5. **Compliance**: every FAIL in the specialist reports is remediated in the diff; any FAIL
    that is not remediated is REJECTED.
 

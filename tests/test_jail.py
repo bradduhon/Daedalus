@@ -242,8 +242,8 @@ def test_main_cannot_write_application_code() -> None:
 
 
 class TestRepoCoder:
-    def test_writes_inside_src_and_tests_only(self) -> None:
-        # 0022: the main checkout's src/ and tests/ are refused; see TestUnitWorktree.
+    def test_main_checkout_writes_refused(self) -> None:
+        # 0022, 0054: the main checkout is never a coder write target; see the unit worktree tests.
         assert not decide(_w("repo-coder", f"{CWD}/src/a.py"), CFG).allow
         assert not decide(_w("repo-coder", f"{CWD}/tests/test_a.py", "Edit"), CFG).allow
         assert not decide(_w("repo-coder", f"{CWD}/service-manifest.json"), CFG).allow
@@ -1738,7 +1738,9 @@ class TestFinalCoderWriteTargets:
     )
     def test_blocked(self, command: str) -> None:
         d = decide(_b("repo-coder", command), CFG)
-        assert not d.allow and d.reason.startswith("Bash write outside src/ or tests/:"), command
+        assert not d.allow and d.reason.startswith("Bash write outside your unit worktree:"), (
+            command
+        )
         assert "Next:" in d.reason
 
     @pytest.mark.parametrize(
@@ -1772,7 +1774,9 @@ class TestFinalCoderWriteTargets:
     def test_main_checkout_blocked(self, command: str) -> None:
         # 0022: the same grammar aimed at the main checkout is refused.
         d = decide(_b("repo-coder", command), CFG)
-        assert not d.allow and d.reason.startswith("Bash write outside src/ or tests/"), command
+        assert not d.allow and d.reason.startswith("Bash write outside your unit worktree:"), (
+            command
+        )
 
 
 class TestFinalDataDir:
@@ -2370,15 +2374,90 @@ def test_coder_writes_inside_a_unit_worktree() -> None:
 @pytest.mark.parametrize(
     "path",
     [
-        f"{WT}/infra/a.tf",
-        f"{WT}/README.md",
         f"{CWD}/.claude/worktrees/src/a.py",
         f"{CWD}/.claude/worktrees/x/../../daedalus/src/a.py",
         "/other/repo/.claude/worktrees/u1/src/a.py",
     ],
 )
-def test_coder_unit_worktree_outside_code_dirs_is_refused(path: str) -> None:
-    assert not decide(_w("repo-coder", path), CFG).allow, path
+def test_coder_write_outside_a_unit_worktree_is_refused(path: str) -> None:
+    d = decide(_w("repo-coder", path), CFG)
+    assert not d.allow and "Next:" in str(d.reason), path
+
+
+def test_coder_write_outside_reason() -> None:
+    d = decide(_w("repo-coder", f"{CWD}/infra/a.tf"), CFG)
+    want = f"write outside your unit worktree: {CWD}/infra/a.tf. Next: ask the orchestrating"
+    assert not d.allow and str(d.reason).startswith(want)
+
+
+@pytest.mark.parametrize(
+    "rel", ["scripts/x.py", "scripts/lib/y.py", "infra/a.tf", "README.md", "docs/x.md"]
+)
+def test_coder_writes_anywhere_unprotected_in_its_worktree(rel: str) -> None:
+    # 0054: the boundary is the unit worktree minus protected paths.
+    assert decide(_w("repo-coder", f"{WT}/{rel}"), CFG).allow, rel
+    assert decide(_w("repo-coder", f"{WT}/{rel}", "Edit"), CFG).allow, rel
+    assert decide(_b("repo-coder", f"tee {WT}/{rel}"), CFG).allow, rel
+
+
+BUILTIN_REL = [
+    "contracts/openapi.yaml",
+    "contracts/events/x.schema.json",
+    "contracts",
+    ".github/workflows/ci.yml",
+    ".github/CODEOWNERS",
+    ".github",
+    ".claude/settings.json",
+    ".claude/agents/x.md",
+    "service-manifest.json",
+    "Service-Manifest.JSON",
+    "CONTRACTS/openapi.yaml",
+]
+
+
+@pytest.mark.parametrize("rel", BUILTIN_REL)
+def test_coder_builtin_protected_paths_are_refused(rel: str) -> None:
+    target = f"{WT}/{rel}"
+    want = f"protected path (built in): {target}. Next: ask the orchestrating session"
+    for payload in (_w("repo-coder", target), _w("repo-coder", target, "Edit")):
+        d = decide(payload, CFG)
+        assert not d.allow and str(d.reason).startswith(want), (rel, d.reason)
+        assert "contract-spec or charter-docs" in str(d.reason)
+    d = decide(_b("repo-coder", f"tee {target}"), CFG)
+    assert not d.allow and str(d.reason).startswith(want), (rel, d.reason)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"cp {WT}/src/a.py {WT}/contracts/openapi.yaml",
+        f"sed -i s/a/b/ {WT}/.github/workflows/ci.yml",
+        f"rm -r {WT}/.github",
+        f"cp {WT}/src/a {WT}/.github/CODEOWNERS",
+        f"mv {WT}/contracts {WT}/c2",
+        f"truncate -s 0 {WT}/service-manifest.json",
+        f"tee {WT}/.git",
+        f"git -C {WT} restore -- contracts/openapi.yaml",
+        f"git restore -- {WT}/.claude/settings.json",
+    ],
+)
+def test_coder_bash_writes_to_builtin_protected_paths_are_refused(command: str) -> None:
+    d = decide(_b("repo-coder", command), CFG)
+    assert not d.allow and str(d.reason).startswith("protected path (built in):"), command
+
+
+def test_coder_repo_local_ledger_in_worktree_is_refused() -> None:
+    # 0054: the ledger begin resolves, mapped into the worktree, is a built-in protected path.
+    decl = LedgerDecl(Path("docs/decisions.md"), "markdown-table-row", "{seq:04d}", "last-row-id")
+    cfg = Config(ledger=decl)
+    target = f"{WT}/docs/decisions.md"
+    d = decide(_w("repo-coder", target), cfg)
+    assert not d.allow and str(d.reason).startswith(f"protected path (built in): {target}.")
+    d = decide(_b("repo-coder", f"rm -r {WT}/docs"), cfg)
+    assert not d.allow and str(d.reason).startswith("protected path (built in):")
+    assert decide(_w("repo-coder", f"{WT}/docs/other.md"), cfg).allow
+    # 0054: a ledger outside the repo has no worktree copy to protect.
+    assert decide(_w("repo-coder", f"{WT}/docs/decisions.md"), CFG).allow
 
 
 def test_main_never_writes_unit_worktree_code() -> None:
@@ -2405,7 +2484,7 @@ def test_coder_pathspec_resolves_against_git_dash_c() -> None:
     assert decide(_b("repo-coder", f"git -C {WT} checkout -- tests/test_a.py"), CFG).allow
     assert not decide(_b("repo-coder", f"git -C {CWD} restore -- src/a.py"), CFG).allow
     assert not decide(_b("repo-coder", f"git -C {WT} restore -- ../../../src/a.py"), CFG).allow
-    assert not decide(_b("repo-coder", f"git -C {WT} restore -- README.md"), CFG).allow
+    assert decide(_b("repo-coder", f"git -C {WT} restore -- README.md"), CFG).allow
     assert decide(_b("repo-coder", f"git restore -- {WT}/src/a.py"), CFG).allow
 
 
@@ -2564,8 +2643,64 @@ def test_coder_cwd_inside_a_real_unit_worktree(tmp_path: Path) -> None:
         assert decide(_cwd(_w("repo-coder", f"{wt}/src/a.py"), cwd), CFG).allow, cwd
         assert decide(_cwd(_w("repo-coder", f"{wt}/tests/t.py"), cwd), CFG).allow, cwd
         assert not decide(_cwd(_w("repo-coder", f"{repo}/src/a.py"), cwd), CFG).allow, cwd
-        assert not decide(_cwd(_w("repo-coder", f"{wt}/README.md"), cwd), CFG).allow, cwd
+        assert decide(_cwd(_w("repo-coder", f"{wt}/README.md"), cwd), CFG).allow, cwd
+        payload = _cwd(_w("repo-coder", f"{wt}/.claude/settings.json"), cwd)
+        assert not decide(payload, CFG).allow, cwd
     assert decide(_cwd(_w("repo-coder", "src/a.py"), wt), CFG).allow
+
+
+def _narrowed_repo(tmp_path: Path, manifest: str) -> tuple[Path, Path]:
+    repo, wt = _unit_repo(tmp_path / "repo")
+    (repo / "service-manifest.json").write_text(manifest, encoding="utf-8")
+    return repo, wt
+
+
+NARROWING = {
+    "jail_narrowing": {"forbidden_paths": ["infra/", "Makefile"], "forbidden_extensions": [".pem"]}
+}
+
+
+@pytest.mark.parametrize("rel", ["infra/main.tf", "infra", "Makefile", "INFRA/x.tf"])
+def test_coder_manifest_forbidden_path_is_refused(tmp_path: Path, rel: str) -> None:
+    repo, wt = _narrowed_repo(tmp_path, json.dumps(NARROWING))
+    target = f"{wt}/{rel}"
+    want = f"protected path (service-manifest.json jail_narrowing): {target}. Next:"
+    d = decide(_cwd(_w("repo-coder", target), repo), CFG)
+    assert not d.allow and str(d.reason).startswith(want), d.reason
+    d = decide(_cwd(_b("repo-coder", f"tee {target}"), repo), CFG)
+    assert not d.allow and str(d.reason).startswith(want), d.reason
+    assert decide(_cwd(_w("repo-coder", f"{wt}/infra2/x.tf"), repo), CFG).allow
+    assert decide(_cwd(_w("repo-coder", f"{wt}/Makefile.d/x"), repo), CFG).allow
+
+
+def test_coder_manifest_forbidden_extension_is_refused(tmp_path: Path) -> None:
+    repo, wt = _narrowed_repo(tmp_path, json.dumps(NARROWING))
+    for rel in ("keys/server.pem", "a.PEM"):
+        target = f"{wt}/{rel}"
+        want = f"protected extension (service-manifest.json jail_narrowing): {target}. Next:"
+        d = decide(_cwd(_w("repo-coder", target), repo), CFG)
+        assert not d.allow and str(d.reason).startswith(want), d.reason
+        d = decide(_cwd(_b("repo-coder", f"cp {wt}/src/a {target}"), repo), CFG)
+        assert not d.allow and str(d.reason).startswith(want), d.reason
+    assert decide(_cwd(_w("repo-coder", f"{wt}/src/pem.py"), repo), CFG).allow
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        "{ not json",
+        "[]",
+        '{"jail_narrowing": []}',
+        '{"jail_narrowing": {"forbidden_paths": ["../x"]}}',
+    ],
+)
+def test_coder_manifest_error_fails_closed(tmp_path: Path, manifest: str) -> None:
+    repo, wt = _narrowed_repo(tmp_path, manifest)
+    for payload in (_w("repo-coder", f"{wt}/src/a.py"), _b("repo-coder", f"tee {wt}/src/a.py")):
+        d = decide(_cwd(payload, repo), CFG)
+        reason = str(d.reason)
+        assert not d.allow and "coder writes fail closed" in reason and "Next:" in reason
+    assert decide(_cwd(_b("repo-coder", "pytest -q"), repo), CFG).allow
 
 
 @pytest.mark.parametrize("agent", ["repo-coder", "contract-spec", "charter-docs"])
