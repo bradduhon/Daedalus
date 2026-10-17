@@ -3,29 +3,53 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import importlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
-# Exit 1 is non-blocking for a PreToolUse hook, so an import failure must exit 2.
-try:
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from lib.audit import audit_append, root_info
-    from lib.config import Config, load_config
-    from lib.jail import CREDENTIAL_TOOLS, Decision, decide
-except Exception as _exc:  # noqa: BLE001
-    print(
-        f"daedalus-jail[?]: hook could not load its libraries ({_exc}). "
-        "Next: run the plugin with Python 3.12 and an intact scripts/lib directory.",
-        file=sys.stderr,
-    )
-    sys.exit(2)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+_LIBS = ("lib.audit", "lib.config", "lib.jail")
+_LOAD_NEXT = "Next: run the plugin with Python 3.12 and an intact scripts/lib directory."
 _CONFIG_NEXT = (
     " Next: fix the Daedalus project config <repo>/.claude/daedalus/config.json and retry."
 )
 _REPORT_NEXT = " Next: report this hook failure to the operator."
+_MARKER = Path(".claude") / "daedalus" / "train.active"
+
+
+def _repo_root(cwd: str) -> Path:
+    # 0035: stdlib mirror of lib.audit.root_info; the main working tree, else cwd itself.
+    start = Path(cwd)
+    for folder in (start, *start.parents):
+        dot = folder / ".git"
+        if dot.is_dir():
+            return folder
+        if not dot.is_file():
+            continue
+        try:
+            text = dot.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return folder
+        if not text.startswith("gitdir:"):
+            return folder
+        gitdir = folder / text[len("gitdir:") :].strip()
+        try:
+            common = gitdir / (gitdir / "commondir").read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            common = gitdir
+        return Path(os.path.normpath(common)).parent
+    return start
+
+
+def _train_marked(cwd: Any) -> bool:
+    # 0035: no absolute cwd means the repo is unknown, so the hook judges as if a train runs.
+    if not isinstance(cwd, str) or not os.path.isabs(cwd):
+        return True
+    return os.path.lexists(_repo_root(cwd) / _MARKER)
 
 
 def _block(agent: str, message: str, next_step: str = _REPORT_NEXT) -> int:
@@ -45,7 +69,21 @@ def _note(agent: str, message: str) -> None:
         pass  # m5: a closed stderr must not turn an allow into exit 1.
 
 
+def _load_failed(exc: Exception, in_train: bool) -> int:
+    # 0035: exit 1 does not block a PreToolUse hook, so a train's broken jail must exit 2.
+    if in_train:
+        return _block("?", f"hook could not load its libraries ({exc}). {_LOAD_NEXT}")
+    _note(
+        "?",
+        f"hook could not load its libraries ({exc}); no train runs in this repository, "
+        f"so the call proceeds. {_LOAD_NEXT}",
+    )
+    return 0
+
+
 def _warn_fallback(cwd: str) -> None:
+    from lib.audit import root_info
+
     try:
         print(
             f"daedalus-audit: project root fell back to cwd ({root_info(cwd)[2]})", file=sys.stderr
@@ -57,6 +95,8 @@ def _warn_fallback(cwd: str) -> None:
 def _record_and_block(
     payload: dict[str, Any], agent: str, message: str, next_step: str = _REPORT_NEXT
 ) -> int:
+    from lib.audit import audit_append
+
     if "Next:" not in message:
         message += next_step
     try:
@@ -67,6 +107,10 @@ def _record_and_block(
 
 
 def _judge(payload: dict[str, Any], agent: str) -> int:
+    from lib.audit import audit_append
+    from lib.config import Config, load_config
+    from lib.jail import CREDENTIAL_TOOLS, Decision, decide
+
     cwd = payload.get("cwd")
     # 0023: reads carry only the credential deny, so a broken data dir never closes them.
     read = payload.get("tool_name") in CREDENTIAL_TOOLS and isinstance(cwd, str)
@@ -99,7 +143,7 @@ def _judge(payload: dict[str, Any], agent: str) -> int:
 
 
 def main() -> int:
-    # Every path but a clean allow exits 2.
+    # Every path but a clean allow exits 2, except a library failure outside a train.
     try:
         text = sys.stdin.read()
         if not text.strip():
@@ -115,6 +159,12 @@ def main() -> int:
         return _block(agent, "hook input has no tool_name string.")
     if "tool_input" in payload and not isinstance(payload["tool_input"], dict):
         return _block(agent, "hook input tool_input is not an object.")
+    in_train = _train_marked(payload.get("cwd"))
+    try:
+        for name in _LIBS:
+            importlib.import_module(name)
+    except Exception as exc:  # noqa: BLE001
+        return _load_failed(exc, in_train)
     try:
         return _judge(payload, agent)
     except Exception as exc:  # noqa: BLE001

@@ -13,6 +13,7 @@ from typing import Any
 
 import enforce_agent_jail
 import pytest
+from lib import jail
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "enforce_agent_jail.py"
 
@@ -181,16 +182,50 @@ def test_missing_tool_name_blocks_without_record(
     assert not (project_data / "audit").exists()
 
 
-def test_missing_libraries_fail_closed(tmp_path: Path, project_data: Path, hook_input: Any) -> None:
+def _lone_script(tmp_path: Path) -> Path:
     lone = tmp_path / "lone"
     lone.mkdir()
     shutil.copy(_SCRIPT, lone / "enforce_agent_jail.py")
-    result = _run_raw(json.dumps(hook_input()), lone / "enforce_agent_jail.py")
+    return lone / "enforce_agent_jail.py"
+
+
+def test_missing_libraries_fail_closed_during_a_train(
+    tmp_path: Path, project_data: Path, hook_input: Any
+) -> None:
+    # 0035: a running train depends on the jail, so a broken install blocks the call.
+    (project_data / "train.active").write_text("20261015-120000\n")
+    result = _run_raw(json.dumps(hook_input()), _lone_script(tmp_path))
     assert result.returncode == 2
     assert result.stderr.startswith("daedalus-jail[?]: hook could not load its libraries (")
     assert "Next: run the plugin with Python 3.12 and an intact scripts/lib directory." in (
         result.stderr
     )
+
+
+@pytest.mark.parametrize("tool", ["Bash", "Write", "Read"])
+def test_missing_libraries_fail_open_outside_a_train(
+    tmp_path: Path, repo_cwd: Path, hook_input: Any, tool: str
+) -> None:
+    # 0035: outside a train a broken install never blocks the session; one stderr line says so.
+    result = _run_raw(json.dumps(hook_input(tool_name=tool)), _lone_script(tmp_path))
+    assert result.returncode == 0
+    lines = result.stderr.splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("daedalus-jail[?]: hook could not load its libraries (")
+    assert "no train runs in this repository, so the call proceeds." in lines[0]
+    assert not (repo_cwd / ".claude").exists()
+
+
+def test_missing_libraries_in_a_linked_worktree_of_a_train_fail_closed(
+    tmp_path: Path, project_data: Path, repo_cwd: Path, hook_input: Any
+) -> None:
+    # 0035: a unit worktree resolves to the main working tree, where the marker lives.
+    (project_data / "train.active").write_text("20261015-120000\n")
+    _git_commit_all(repo_cwd)
+    worktree = repo_cwd / ".claude" / "worktrees" / "u1"
+    subprocess.run(["git", "-C", str(repo_cwd), "worktree", "add", "-q", str(worktree)], check=True)
+    result = _run_raw(json.dumps(hook_input(cwd=str(worktree))), _lone_script(tmp_path))
+    assert result.returncode == 2, result.stderr
 
 
 def test_decide_exception_blocks_and_records(
@@ -202,7 +237,7 @@ def test_decide_exception_blocks_and_records(
     def _boom(*_args: Any) -> Any:
         raise RuntimeError("decide exploded")
 
-    monkeypatch.setattr(enforce_agent_jail, "decide", _boom)
+    monkeypatch.setattr(jail, "decide", _boom)
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(hook_input())))
     assert enforce_agent_jail.main() == 2
     err = capsys.readouterr().err
