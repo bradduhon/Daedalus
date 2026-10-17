@@ -105,6 +105,13 @@ Next to them it writes `manifest.json`, a JSON list with one entry per file: `fi
 
 Each line `pinned <adapter> <version> sha256=<hash> at <path>` names a written file. Every failure prints the adapter name and a `Next:` line, and the script exits 1 after the other adapters run. A run holds `.refresh.lock` in the family directory, so a second run waits up to 60 s for it and fails that adapter if it is still held. An adapter that fails before its files are replaced leaves its previous files and manifest entries in place. Run the script again whenever you want to re-pin; the doctor marks a family older than 90 days.
 
+### OWASP references (`<cache>/frameworks/owasp/`)
+
+The same script holds two OWASP adapters. OWASP publishes both under the Creative Commons Attribution-ShareAlike 4.0 license (CC BY-SA 4.0), so each manifest entry carries `license` (`CC BY-SA 4.0`) and an `attribution` line naming the OWASP Foundation, the project and the source URL. Keep that attribution with any copy you make.
+
+- `owasp-asvs` writes `asvs-5.0.0.json`, the Application Security Verification Standard 5.0.0 JSON export from `OWASP/ASVS` tag `v5.0.0_release`. The script refuses a file without the keys `Name`, `ShortName`, `Version`, `Description` and a non-empty `Requirements` list. `version` is its `Version` key.
+- `owasp-top10` reads the ten 2025 English pages from `OWASP/Top10` commit `3a31f35` (the project has no release tag for 2025) and writes `top10-2025.json`: a list of `{"id": "A01:2025", "title": "...", "source_file": "..."}`, with each title taken from the page's first level-one heading. A page without one fails the adapter. `version` is `2025@3a31f35`, and `source_url` is the directory the ten pages came from.
+
 ### CIS benchmarks (`<cache>/frameworks/cis/`)
 
 CIS benchmarks are licensed, so you place them by hand:

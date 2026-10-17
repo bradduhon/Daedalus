@@ -10,8 +10,10 @@ replaces its own entries in that family's manifest.json. The specialists only re
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -30,6 +32,33 @@ NIST_RAW = f"https://raw.githubusercontent.com/usnistgov/oscal-content/{NIST_REF
 NIST_LICENSE = "public domain (17 U.S.C. 105)"
 NOT_CATALOG_NEXT = "Next: check the source URL points at the OSCAL catalog JSON."
 URL_NEXT = "Next: report this line; the adapter URLs are pinned in refresh_frameworks.py."
+OWASP_LICENSE = "CC BY-SA 4.0"
+ASVS_REF = "v5.0.0_release"
+ASVS_URL = (
+    f"https://raw.githubusercontent.com/OWASP/ASVS/{ASVS_REF}/5.0/docs_en/"
+    "OWASP_Application_Security_Verification_Standard_5.0.0_en.json"
+)
+ASVS_KEYS = ("Name", "ShortName", "Version", "Description", "Requirements")
+ASVS_NEXT = "Next: check the source URL points at the ASVS JSON export."
+TOP10_REF = "3a31f35346c3f4e90f350395124382fa53af2afe"
+TOP10_RAW = f"https://raw.githubusercontent.com/OWASP/Top10/{TOP10_REF}/2025/docs/en/"
+TOP10_FILES = (
+    "A01_2025-Broken_Access_Control.md",
+    "A02_2025-Security_Misconfiguration.md",
+    "A03_2025-Software_Supply_Chain_Failures.md",
+    "A04_2025-Cryptographic_Failures.md",
+    "A05_2025-Injection.md",
+    "A06_2025-Insecure_Design.md",
+    "A07_2025-Authentication_Failures.md",
+    "A08_2025-Software_or_Data_Integrity_Failures.md",
+    "A09_2025-Security_Logging_and_Alerting_Failures.md",
+    "A10_2025-Mishandling_of_Exceptional_Conditions.md",
+)
+TOP10_NEXT = "Next: check the pinned Top 10 commit still holds the 2025 English pages."
+_H1 = re.compile(r"^# (.+)$", re.M)
+_MD_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_ATTRS = re.compile(r"\{:[^}]*\}")
+_TITLE_LEAD = re.compile(r"^A[0-9]{2}:2025[\s:\-\u2013\u2014]*")
 
 
 @dataclass(frozen=True)
@@ -41,6 +70,8 @@ class Adapter:
     license: str
     version: Callable[[bytes], str]
     compile: Callable[[list[bytes]], bytes | None]
+    output: str | None = None
+    attribution: str | None = None
 
 
 def _revision(raw: bytes) -> str:
@@ -72,6 +103,46 @@ def _as_is(raws: list[bytes]) -> bytes | None:
     return None
 
 
+def _asvs_version(raw: bytes) -> str:
+    try:
+        data = json.loads(raw)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise RefreshError(f"ASVS file is not valid JSON. {ASVS_NEXT}") from exc
+    if not isinstance(data, dict):
+        raise RefreshError(f"ASVS file is not a JSON object. {ASVS_NEXT}")
+    missing = [k for k in ASVS_KEYS if k not in data]
+    if "Requirements" in missing or not (
+        isinstance(data.get("Requirements"), list) and data["Requirements"]
+    ):
+        raise RefreshError(f"ASVS file has no Requirements list. {ASVS_NEXT}")
+    if missing:
+        raise RefreshError(f"ASVS file lacks {', '.join(missing)}. {ASVS_NEXT}")
+    return _printable(data["Version"], "Version", ASVS_NEXT)
+
+
+def _top10_version(raw: bytes) -> str:
+    return f"2025@{TOP10_REF[:7]}"
+
+
+def _top10_title(raw: bytes, name: str) -> str:
+    # 0026: id from the file name; title from the first H1, markup and id prefix stripped.
+    text = raw.decode("utf-8", errors="replace")
+    match = _H1.search(text)
+    bare = " ".join(_MD_ATTRS.sub("", _MD_IMAGE.sub("", match[1])).split()) if match else ""
+    title = _TITLE_LEAD.sub("", bare).strip()
+    if not title:
+        raise RefreshError(f"{name} has no level-one heading with a title. {TOP10_NEXT}")
+    return _printable(title, f"{name} heading", TOP10_NEXT)
+
+
+def _top10_compile(raws: list[bytes]) -> bytes | None:
+    entries = [
+        {"id": f"{name[:3]}:2025", "title": _top10_title(raw, name), "source_file": name}
+        for name, raw in zip(TOP10_FILES, raws, strict=True)
+    ]
+    return (json.dumps(entries, indent=2) + "\n").encode("utf-8")
+
+
 ADAPTERS: dict[str, Adapter] = {
     "nist-800-53": Adapter(
         name="nist-800-53",
@@ -90,6 +161,27 @@ ADAPTERS: dict[str, Adapter] = {
         license=NIST_LICENSE,
         version=_revision,
         compile=_as_is,
+    ),
+    "owasp-asvs": Adapter(
+        name="owasp-asvs",
+        family="owasp",
+        ref=ASVS_REF,
+        files=((ASVS_URL, "asvs-5.0.0.json"),),
+        license=OWASP_LICENSE,
+        version=_asvs_version,
+        compile=_as_is,
+        attribution="OWASP Foundation, OWASP Application Security Verification Standard",
+    ),
+    "owasp-top10": Adapter(
+        name="owasp-top10",
+        family="owasp",
+        ref=TOP10_REF,
+        files=tuple((TOP10_RAW + name, name) for name in TOP10_FILES),
+        license=OWASP_LICENSE,
+        version=_top10_version,
+        compile=_top10_compile,
+        output="top10-2025.json",
+        attribution="OWASP Foundation, OWASP Top 10",
     ),
 }
 
@@ -126,7 +218,7 @@ def run_adapter(adapter: Adapter, root: Path) -> list[tuple[str, str, Path]]:
                 f"encoded slash. {URL_NEXT}"
             )
     dest = root / "frameworks" / adapter.family
-    names = tuple(local for _, local in adapter.files)
+    names = (adapter.output,) if adapter.output else tuple(local for _, local in adapter.files)
     fetch._prepare_dest(root, dest, (*names, MANIFEST))
     pinned_on = datetime.now(UTC).date().isoformat()
     temps: list[str] = []
@@ -142,19 +234,30 @@ def run_adapter(adapter: Adapter, root: Path) -> list[tuple[str, str, Path]]:
                 raws.append(Path(tmp.name).read_bytes())
                 outputs.append((local, tmp.name, sha256, url))
             version = adapter.version(raws[0])
+            compiled = adapter.compile(raws)
+            if compiled is not None and adapter.output:
+                # 0026: a compiled adapter keeps only its output; the downloads are discarded.
+                urls = [url for url, _ in adapter.files]
+                source = os.path.commonprefix(urls).rpartition("/")[0] + "/"
+                name = _write_bytes(dest, f".{adapter.output}-", compiled)
+                temps.append(name)
+                digest = hashlib.sha256(compiled).hexdigest()
+                outputs = [(adapter.output, name, digest, source)]
             entries = _old_entries(dest / MANIFEST, {o[0] for o in outputs})
             for local, _, sha256, url in outputs:
-                entries.append(
-                    {
-                        "file": local,
-                        "license": adapter.license,
-                        "pinned_on": pinned_on,
-                        "sha256": sha256,
-                        "source_url": url,
-                        "upstream_ref": adapter.ref,
-                        "version": version,
-                    }
-                )
+                entry = {
+                    "file": local,
+                    "license": adapter.license,
+                    "pinned_on": pinned_on,
+                    "sha256": sha256,
+                    "source_url": url,
+                    "upstream_ref": adapter.ref,
+                    "version": version,
+                }
+                if adapter.attribution:
+                    # 0026: CC BY-SA 4.0 attribution rides in the manifest entry.
+                    entry["attribution"] = f"{adapter.attribution}, {url}"
+                entries.append(entry)
             entries.sort(key=lambda e: str(e.get("file")))
             body = json.dumps(entries, indent=2, sort_keys=True) + "\n"
             temps.append(_write_bytes(dest, ".manifest-", body.encode("utf-8")))

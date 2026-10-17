@@ -751,3 +751,158 @@ def test_a_failed_adapter_keeps_its_old_files(
     captured = capsys.readouterr()
     assert "nist-800-53: catalog is not valid JSON. Next:" in captured.err
     assert "pinned nist-csf-2.0 2.1" in captured.out
+
+
+ASVS = refresh.ADAPTERS["owasp-asvs"]
+ASVS_URL = ASVS.files[0][0]
+TOP10 = refresh.ADAPTERS["owasp-top10"]
+ASVS_DOC = {
+    "Name": "Application Security Verification Standard Project",
+    "ShortName": "ASVS",
+    "Version": "5.0.0",
+    "Description": "fixture",
+    "Requirements": [{"Shortcode": "V1", "Name": "Encoding and Sanitization"}],
+}
+OWASP_LICENSE = "CC BY-SA 4.0"
+
+
+def _top10_body(url: str, heading: str | None = None) -> bytes:
+    code = url.rsplit("/", 1)[1][:3]
+    title = url.rsplit("-", 1)[1].removesuffix(".md").replace("_", " ")
+    line = heading if heading is not None else f"# {code}:2025 \u2013 {title}"
+    return f"---\nicon: x\n---\n\n{line}\n\n## Background\n\ntext\n".encode()
+
+
+def _owasp_routes(web: FakeWeb) -> None:
+    web.routes[ASVS_URL] = (200, json.dumps(ASVS_DOC).encode(), {})
+    for url, _ in TOP10.files:
+        web.routes[url] = (200, _top10_body(url), {})
+
+
+def _owasp(root: Path) -> Path:
+    return root / "frameworks" / "owasp"
+
+
+def test_owasp_adapters_pin_their_refs() -> None:
+    assert ASVS.ref == "v5.0.0_release"
+    assert ASVS.files == (
+        (
+            "https://raw.githubusercontent.com/OWASP/ASVS/v5.0.0_release/5.0/docs_en/"
+            "OWASP_Application_Security_Verification_Standard_5.0.0_en.json",
+            "asvs-5.0.0.json",
+        ),
+    )
+    sha = "3a31f35346c3f4e90f350395124382fa53af2afe"
+    assert TOP10.ref == sha
+    assert len(TOP10.files) == 10
+    base = f"https://raw.githubusercontent.com/OWASP/Top10/{sha}/2025/docs/en/"
+    for n, (url, local) in enumerate(TOP10.files, 1):
+        assert url == base + local
+        assert local.startswith(f"A{n:02d}_2025-") and local.endswith(".md")
+    assert TOP10.output == "top10-2025.json"
+    assert ASVS.family == TOP10.family == "owasp"
+
+
+def test_asvs_adapter_shape_check(
+    web: FakeWeb, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _owasp_routes(web)
+    assert refresh.main(["--only", "owasp-asvs", "--cache-root", str(tmp_path)]) == 0
+    raw = json.dumps(ASVS_DOC).encode()
+    assert (_owasp(tmp_path) / "asvs-5.0.0.json").read_bytes() == raw
+    entry = _entry(_owasp(tmp_path), "asvs-5.0.0.json")
+    assert entry["version"] == "5.0.0"
+    assert entry["upstream_ref"] == "v5.0.0_release"
+    assert entry["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert capsys.readouterr().out.startswith("pinned owasp-asvs 5.0.0 sha256=")
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"Requirements": None}, "ASVS file has no Requirements list."),
+        ({"Requirements": []}, "ASVS file has no Requirements list."),
+        ({"Name": None}, "ASVS file lacks Name."),
+        ({"Version": "5\x1b"}, "Version is not a printable string"),
+    ],
+)
+def test_asvs_refuses_a_file_without_requirements(
+    web: FakeWeb,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    change: dict[str, Any],
+    message: str,
+) -> None:
+    doc = {k: v for k, v in {**ASVS_DOC, **change}.items() if v is not None}
+    web.routes[ASVS_URL] = (200, json.dumps(doc).encode(), {})
+    assert refresh.main(["--only", "owasp-asvs", "--cache-root", str(tmp_path)]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith(f"owasp-asvs: {message}")
+    assert "Next:" in err
+    assert _files(_owasp(tmp_path)) == []
+
+
+def test_top10_compiles_ten_entries(web: FakeWeb, tmp_path: Path) -> None:
+    _owasp_routes(web)
+    first, second = TOP10.files[0][0], TOP10.files[1][0]
+    web.routes[first] = (
+        200,
+        _top10_body(first, '# ![icon](a.png){: style="h"}  A01:2025 Broken Access Control'),
+        {},
+    )
+    heading = '# A02:2025 Security Misconfiguration ![icon](b.png){: style="h"}'
+    web.routes[second] = (200, _top10_body(second, heading), {})
+    assert refresh.main(["--only", "owasp-top10", "--cache-root", str(tmp_path)]) == 0
+    raw = (_owasp(tmp_path) / "top10-2025.json").read_bytes()
+    compiled = json.loads(raw)
+    assert [e["id"] for e in compiled] == [f"A{n:02d}:2025" for n in range(1, 11)]
+    assert compiled[0] == {
+        "id": "A01:2025",
+        "title": "Broken Access Control",
+        "source_file": "A01_2025-Broken_Access_Control.md",
+    }
+    assert compiled[1]["title"] == "Security Misconfiguration"
+    assert compiled[9]["title"] == "Mishandling of Exceptional Conditions"
+    assert _files(_owasp(tmp_path)) == ["manifest.json", "top10-2025.json"]
+    entry = _entry(_owasp(tmp_path), "top10-2025.json")
+    assert entry["version"] == "2025@3a31f35"
+    assert entry["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert entry["source_url"].endswith("/OWASP/Top10/" + TOP10.ref + "/2025/docs/en/")
+
+
+@pytest.mark.parametrize("heading", ["## A01:2025 Broken Access Control", "# A01:2025", "text"])
+def test_top10_refuses_a_missing_heading(
+    web: FakeWeb, tmp_path: Path, capsys: pytest.CaptureFixture[str], heading: str
+) -> None:
+    _owasp_routes(web)
+    first = TOP10.files[0][0]
+    web.routes[first] = (200, _top10_body(first, heading), {})
+    assert refresh.main(["--only", "owasp-top10", "--cache-root", str(tmp_path)]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("owasp-top10: A01_2025-Broken_Access_Control.md has no level-one ")
+    assert "Next:" in err
+    assert not _owasp(tmp_path).exists() or _files(_owasp(tmp_path)) == []
+
+
+def test_owasp_manifest_carries_attribution(web: FakeWeb, tmp_path: Path) -> None:
+    _owasp_routes(web)
+    assert refresh.main(["--only", "owasp-asvs,owasp-top10", "--cache-root", str(tmp_path)]) == 0
+    manifest = _manifest(_owasp(tmp_path))
+    assert [e["file"] for e in manifest] == ["asvs-5.0.0.json", "top10-2025.json"]
+    projects = {
+        "asvs-5.0.0.json": "OWASP Application Security Verification Standard",
+        "top10-2025.json": "OWASP Top 10",
+    }
+    for entry in manifest:
+        assert set(entry) == MANIFEST_KEYS | {"attribution"}
+        assert entry["license"] == OWASP_LICENSE
+        project = projects[entry["file"]]
+        assert entry["attribution"] == f"OWASP Foundation, {project}, {entry['source_url']}"
+
+
+def test_no_only_runs_every_adapter(web: FakeWeb, tmp_path: Path) -> None:
+    _owasp_routes(web)
+    assert refresh.main(["--cache-root", str(tmp_path)]) == 0
+    assert len(web.requests) == 13
+    assert [e["file"] for e in _manifest(_nist(tmp_path))] == ["catalog.json", "csf-2.0.json"]
+    assert len(_manifest(_owasp(tmp_path))) == 2
