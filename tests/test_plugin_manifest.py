@@ -47,3 +47,14 @@ def test_readme_installs_from_the_marketplace() -> None:
     assert "--plugin-dir" not in text
     assert "worktree.baseRef" not in text
     assert "spawn depth" not in text
+
+
+def test_requirements_carry_the_reviewer_rule() -> None:
+    # 0024: git and file state findings close in scripts, not skill prose.
+    text = (REPO_ROOT / "docs" / "project-requirements.md").read_text()
+    section = text.split("\n## Reviewing changes to Daedalus\n", 1)[1]
+    assert "\n## " not in section
+    assert (
+        "A finding about git or file state is closed by a script change and a script test, "
+        "never by a skill sentence."
+    ) in section

@@ -168,3 +168,9 @@ User-level sandbox settings cannot name `<repo>/.claude/daedalus/`, since it dif
 ### Test-only
 
 `DAEDALUS_LIVE_TEST=1` enables the `daedalus-probe` agent namespace that this repo's live tests use. Do not set it in normal use.
+
+## Reviewing changes to Daedalus
+
+A finding about git or file state is closed by a script change and a script test, never by a skill sentence.
+
+An agent file for a judge (the nist and cis specialists and the security auditor) must carry a method and a rubric. An agent file for an actor stays thin, because its tools and the hooks bound what it can do.
