@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +12,8 @@ from typing import Any
 import pytest
 
 from tests.conftest import SCRIPTS_DIR, write_train_marker
+
+_PYCACHE = shutil.ignore_patterns("__pycache__")
 
 
 def test_logs_every_event_shape(run_script: Any, project_data: Path, hook_input: Any) -> None:
@@ -96,3 +99,39 @@ def test_data_dir_without_train_marker_writes_nothing(
     result = run_script("audit_log.py", hook_input(hook_event_name=event))
     assert result.returncode == 0 and result.stderr == ""
     assert list(project_data.iterdir()) == []
+
+
+def test_no_marker_imports_only_the_standard_library(project_data: Path, hook_input: Any) -> None:
+    # 0035: outside a train the event logger never loads the audit modules.
+    result = subprocess.run(
+        [sys.executable, "-X", "importtime", str(SCRIPTS_DIR / "audit_log.py")],
+        input=json.dumps(hook_input(hook_event_name="SessionStart", source="startup")),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    loaded = {line.rsplit("|", 1)[-1].strip() for line in result.stderr.splitlines()}
+    assert "lib.repo_root" in loaded
+    assert not {n for n in loaded if n.startswith("lib.")} - {"lib.repo_root"}
+    assert "subprocess" not in loaded
+
+
+def test_broken_install_is_silent_outside_a_train(
+    tmp_path: Path, repo_cwd: Path, hook_input: Any
+) -> None:
+    # 0035: a library that fails to import costs a repo without a train nothing.
+    scripts = shutil.copytree(SCRIPTS_DIR, tmp_path / "scripts", ignore=_PYCACHE)
+    (scripts / "lib" / "audit.py").write_text("raise ImportError('broken install')\n")
+    payload = json.dumps(hook_input(hook_event_name="SessionStart", source="startup"))
+
+    def _run() -> subprocess.CompletedProcess[str]:
+        cmd = [sys.executable, str(scripts / "audit_log.py")]
+        return subprocess.run(cmd, input=payload, capture_output=True, text=True, check=False)
+
+    quiet = _run()
+    assert quiet.returncode == 0 and quiet.stderr == ""
+    write_train_marker(repo_cwd)
+    loud = _run()
+    assert loud.returncode == 0
+    assert loud.stderr == "daedalus-audit: broken install\n"

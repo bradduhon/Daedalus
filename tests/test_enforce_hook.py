@@ -219,11 +219,25 @@ def test_missing_tool_name_blocks_without_record(
     assert not (project_data / "audit").exists()
 
 
-def _lone_script(tmp_path: Path) -> Path:
+def _lone_script(tmp_path: Path, gate: bool = True) -> Path:
+    # 0035: the stdlib marker finder ships beside the script; every other lib module is missing.
     lone = tmp_path / "lone"
-    lone.mkdir()
+    (lone / "lib").mkdir(parents=True)
     shutil.copy(_SCRIPT, lone / "enforce_agent_jail.py")
+    if gate:
+        for name in ("__init__.py", "repo_root.py"):
+            shutil.copy(_SCRIPT.parent / "lib" / name, lone / "lib" / name)
     return lone / "enforce_agent_jail.py"
+
+
+def test_missing_marker_finder_fails_closed(
+    tmp_path: Path, repo_cwd: Path, hook_input: Any
+) -> None:
+    # 0035: without the finder no repo is known, so the hook acts as if a train runs.
+    result = _run_raw(json.dumps(hook_input()), _lone_script(tmp_path, gate=False))
+    assert result.returncode == 2
+    assert result.stderr.startswith("daedalus-jail[?]: hook could not load its libraries (")
+    assert not (repo_cwd / ".claude").exists()
 
 
 def test_missing_libraries_fail_closed_during_a_train(
@@ -596,7 +610,7 @@ def test_fast_path_imports_only_the_standard_library_modules(repo_cwd: Path) -> 
     assert not loaded & {"lib.jail", "lib.audit", "lib.config", "subprocess"}
 
 
-@pytest.mark.parametrize("module", ["credential_paths.py", "train_scope.py"])
+@pytest.mark.parametrize("module", ["credential_paths.py", "train_scope.py", "repo_root.py"])
 def test_fast_path_modules_use_the_standard_library_only(module: str) -> None:
     tree = ast.parse((_SCRIPT.parent / "lib" / module).read_text())
     names = [a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names]

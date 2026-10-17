@@ -19,42 +19,10 @@ _CONFIG_NEXT = (
     " Next: fix the Daedalus project config <repo>/.claude/daedalus/config.json and retry."
 )
 _REPORT_NEXT = " Next: report this hook failure to the operator."
-_MARKER = Path(".claude") / "daedalus" / "train.active"
 _WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 # issue 30: past these caps the fast path hands the call to the full jail.
 _WORD_CAP = 256
 _ROOT_CAP = 16
-
-
-def _repo_root(path: str) -> Path:
-    # 0035: stdlib mirror of lib.audit.root_info; the main working tree, else the nearest dir.
-    start = Path(path)
-    for folder in (start, *start.parents):
-        dot = folder / ".git"
-        if dot.is_dir():
-            return folder
-        if not dot.is_file():
-            continue
-        try:
-            text = dot.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            return folder
-        if not text.startswith("gitdir:"):
-            return folder
-        gitdir = folder / text[len("gitdir:") :].strip()
-        try:
-            common = gitdir / (gitdir / "commondir").read_text(encoding="utf-8").strip()
-        except (OSError, UnicodeDecodeError):
-            common = gitdir
-        return Path(os.path.normpath(common)).parent
-    return next((p for p in (start, *start.parents) if p.is_dir()), start)
-
-
-def _train_marked(cwd: Any) -> bool:
-    # 0035: no absolute cwd means the repo is unknown, so the hook judges as if a train runs.
-    if not isinstance(cwd, str) or not os.path.isabs(cwd):
-        return True
-    return os.path.lexists(_repo_root(cwd) / _MARKER)
 
 
 def _named_paths(tool: str, tool_input: dict[str, Any]) -> list[str] | None:
@@ -83,19 +51,21 @@ def _named_paths(tool: str, tool_input: dict[str, Any]) -> list[str] | None:
 
 def _names_marked_repo(tool: str, tool_input: dict[str, Any], cwd: str) -> bool:
     # issue 30: a train in any repo the call names counts; the full jail then judges precisely.
+    from lib.repo_root import TRAIN_MARKER, repo_root
+
     words = _named_paths(tool, tool_input)
     if words is None:
         return True
-    home = _repo_root(cwd)
+    home = repo_root(cwd)
     roots: set[Path] = {home}
     for word in words:
         if not word or word.startswith("-"):
             continue
-        root = _repo_root(os.path.normpath(os.path.join(cwd, os.path.expanduser(word))))
+        root = repo_root(os.path.normpath(os.path.join(cwd, os.path.expanduser(word))))
         if root in roots:
             continue
         roots.add(root)
-        if len(roots) > _ROOT_CAP or os.path.lexists(root / _MARKER):
+        if len(roots) > _ROOT_CAP or os.path.lexists(root / TRAIN_MARKER):
             return True
     return False
 
@@ -218,7 +188,12 @@ def main() -> int:
     if "tool_input" in payload and not isinstance(payload["tool_input"], dict):
         return _block(agent, "hook input tool_input is not an object.")
     cwd = payload.get("cwd")
-    in_train = _train_marked(cwd)
+    try:
+        from lib.repo_root import train_marked
+    except Exception as exc:  # noqa: BLE001
+        # 0035: without the marker finder no repo is known, so the hook acts as if a train runs.
+        return _load_failed(exc, True)
+    in_train = train_marked(cwd)
     if not in_train and isinstance(cwd, str):
         try:
             from lib.credential_paths import CREDENTIAL_TOOLS
