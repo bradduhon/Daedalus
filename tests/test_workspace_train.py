@@ -12,7 +12,17 @@ from typing import Any
 import pytest
 from lib import audit, train_state, workspace
 from lib.sandbox_state import SettingsError
-from lib.workspace import WorkspaceError, begin, create, lock, mark_train, stop, train_marker
+from lib.workspace import (
+    WorkspaceError,
+    begin,
+    create,
+    finish,
+    lock,
+    mark_train,
+    resume,
+    stop,
+    train_marker,
+)
 
 from tests.conftest import SCRIPTS_DIR
 
@@ -480,3 +490,128 @@ def test_mark_train_names_the_marker_when_it_cannot_write(repo: Path) -> None:
     with pytest.raises(WorkspaceError) as info:
         mark_train(repo, "20261016-120000")
     assert f"Next: remove {train_marker(repo)} from your own shell" in str(info.value)
+
+
+def _built(repo: Path, train: str, slug: str, name: str = "", text: str = "x\n") -> Path:
+    unit = _unit(repo, train, slug)
+    (unit / (name or f"{slug}.txt")).write_text(text)
+    _commit_all(unit, f"build {slug}")
+    return unit
+
+
+def _merges(repo: Path, ref: str) -> list[str]:
+    return _ok(repo, "log", "--merges", "--reverse", "--format=%s", ref).splitlines()
+
+
+def test_finish_merges_every_unit_in_order(repo: Path, live: None) -> None:
+    train = _locked_train(repo)
+    _built(repo, train, "u1")
+    _built(repo, train, "u2")
+    lines = finish(repo)
+    assert lines[0] == f"merged 2 units into daedalus/{train}"
+    assert _merges(repo, f"daedalus/{train}") == [
+        f"Merge u1 for train {train}",
+        f"Merge u2 for train {train}",
+    ]
+    assert (repo / "u1.txt").is_file() and (repo / "u2.txt").is_file()
+
+
+def test_finish_refuses_a_dirty_main_checkout(repo: Path, live: None) -> None:
+    train = _locked_train(repo)
+    _built(repo, train, "u1")
+    (repo / "stray.txt").write_text("x\n")
+    with pytest.raises(WorkspaceError) as info:
+        finish(repo)
+    assert "stray.txt" in str(info.value)
+    assert "Next: inspect and discard those changes from your own shell" in str(info.value)
+    assert _merges(repo, f"daedalus/{train}") == []
+
+
+def test_finish_refuses_a_unit_not_descending_from_the_lock(repo: Path, live: None) -> None:
+    train = _locked_train(repo)
+    unit = create(repo, f"{train}-u1", "main")
+    (unit / "u1.txt").write_text("x\n")
+    _commit_all(unit, "build u1")
+    with pytest.raises(WorkspaceError) as info:
+        finish(repo)
+    assert str(info.value) == (
+        f"Unit daedalus-unit/{train}-u1 does not descend from the integration branch. "
+        "Next: rerun the train; if it repeats, file an issue with the train summary."
+    )
+    assert _merges(repo, f"daedalus/{train}") == []
+
+
+def test_finish_aborts_and_names_conflicts(repo: Path, live: None) -> None:
+    train = _locked_train(repo)
+    _built(repo, train, "u1", "shared.txt", "one\n")
+    _built(repo, train, "u2", "shared.txt", "two\n")
+    with pytest.raises(WorkspaceError) as info:
+        finish(repo)
+    message = str(info.value)
+    assert (
+        "shared.txt" in message
+        and f"Next: inspect or delete the leftover daedalus/{train}" in message
+    )
+    assert _head(repo) == "main"
+    assert _git(repo, "rev-parse", "--verify", "--quiet", "MERGE_HEAD").returncode != 0
+    assert _git(repo, "status", "--porcelain").stdout == ""
+
+
+def test_finish_tears_down_and_marks_merged(repo: Path, live: None) -> None:
+    train = _locked_train(repo)
+    unit = _built(repo, train, "u1")
+    lines = finish(repo)
+    assert not unit.exists() and f"removed {unit}" in lines
+    assert train_state.load(repo, train)["merged"] is True
+    assert _head(repo) == f"daedalus/{train}"
+    stopped, ok = stop(repo, "train complete", None)
+    assert ok and _head(repo) == f"daedalus/{train}"
+
+
+def test_resume_remarks_and_switches_back(repo: Path, charter: Path, live: None) -> None:
+    train = _locked_train(repo)
+    stop(repo, "operator", None)
+    assert _head(repo) == "main" and _head(charter) == "main"
+    lines = resume(repo)
+    assert lines[0] == f"resumed train {train}"
+    assert train_marker(repo).read_text() == f"{train}\n"
+    assert _head(repo) == f"daedalus/{train}" and _head(charter) == f"daedalus/{train}"
+
+
+def test_resume_refuses_a_dirty_checkout_it_would_switch(repo: Path, live: None) -> None:
+    _locked_train(repo)
+    stop(repo, "operator", None)
+    (repo / "stray.txt").write_text("x\n")
+    with pytest.raises(WorkspaceError, match="stray.txt"):
+        resume(repo)
+    assert not train_marker(repo).exists() and _head(repo) == "main"
+
+
+def test_resume_after_merge_stays_put(repo: Path, live: None) -> None:
+    train = _locked_train(repo)
+    train_state.update(repo, train, merged=True)
+    stop(repo, "ledger mismatch", None)
+    _ok(repo, "switch", "-q", "main")
+    assert resume(repo) == [f"resumed train {train}"]
+    assert _head(repo) == "main"
+
+
+def test_resume_without_any_train_refuses(repo: Path) -> None:
+    with pytest.raises(WorkspaceError, match="Next:"):
+        resume(repo)
+
+
+def test_finish_and_resume_cli_exit_codes(repo: Path, live: None) -> None:
+    train = _locked_train(repo)
+    (repo / "stray.txt").write_text("x\n")
+    refused = _cli("finish", "--repo", str(repo))
+    assert refused.returncode == 1 and "Next:" in refused.stderr
+    (repo / "stray.txt").unlink()
+    _built(repo, train, "u1")
+    done = _cli("finish", "--repo", str(repo))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines()[0] == f"merged 1 units into daedalus/{train}"
+    stop(repo, "operator", None)
+    again = _cli("resume", "--repo", str(repo))
+    assert again.returncode == 0, again.stderr
+    assert again.stdout.splitlines()[0] == f"resumed train {train}"

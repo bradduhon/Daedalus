@@ -595,3 +595,113 @@ def stop(repo: Path, reason: str, next_action: str | None) -> tuple[list[str], b
         final = next_action or STOP_NEXT
     lines.append(final if final.startswith("Next:") else f"Next: {final}")
     return lines, ok
+
+
+def _unit_label(train_id: str, name: str) -> str:
+    return name.removeprefix(f"{train_id}-")
+
+
+def _merge(repo: Path, state: dict[str, Any], train_id: str, unit: dict[str, Any]) -> None:
+    branch = str(unit["branch"])
+    message = f"Merge {_unit_label(train_id, str(unit['name']))} for train {train_id}"
+    merged = _run(repo, "merge", "-q", "--no-ff", branch, "-m", message)
+    if merged.returncode == 0:
+        return
+    conflicts = _out(repo, "diff", "--name-only", "--diff-filter=U").split()
+    _run(repo, "merge", "--abort")
+    _run(repo, "switch", "-q", str(state["base_branch"]))
+    detail = _shown(conflicts) if conflicts else " ".join(merged.stderr.split()) or "no stderr"
+    raise WorkspaceError(
+        f"merging {branch} into daedalus/{train_id} failed: {detail}. "
+        f"Next: inspect or delete the leftover daedalus/{train_id} branch, resolve the overlap "
+        "in the conflicting files named above, or rerun the train with units that do not "
+        "share files."
+    )
+
+
+def finish(repo: Path) -> list[str]:
+    # 0024: Phase 3 step 4 merges, with the merge-base check moved here from the skill.
+    repo = repo.resolve()
+    train_id, state = _active(repo)
+    integration = f"daedalus/{train_id}"
+    dirty = _dirty(repo)
+    if dirty:
+        raise WorkspaceError(
+            f"a coder changed the main checkout instead of its worktree: {_shown(dirty)}. "
+            "Next: inspect and discard those changes from your own shell, run git switch "
+            f"{state['base_branch']}, then rerun the train."
+        )
+    units = list(state.get("units") or [])
+    lock_sha = state.get("lock_sha")
+    if not units or not lock_sha:
+        raise WorkspaceError(
+            f"train {train_id} has no locked contract or no recorded units. Next: {RERUN}"
+        )
+    for unit in units:
+        if _run(repo, "merge-base", "--is-ancestor", str(lock_sha), str(unit["branch"])).returncode:
+            raise WorkspaceError(
+                f"Unit {unit['branch']} does not descend from the integration branch. "
+                "Next: rerun the train; if it repeats, file an issue with the train summary."
+            )
+    _git(repo, "switch", "-q", integration)
+    for unit in units:
+        _merge(repo, state, train_id, unit)
+    _record(repo, train_id, merged=True)
+    lines = [f"merged {len(units)} units into {integration}"]
+    nexts: list[str] = []
+    if not _teardown(repo, units, lines, nexts):
+        raise WorkspaceError("\n".join([*lines, f"Next: {'; '.join(nexts)}"]))
+    return lines
+
+
+def _resume_train(repo: Path) -> str:
+    train_id = train_state.active_train(repo)
+    if train_id is not None:
+        return train_id
+    # 0024: every stop clears the marker, so resume takes the newest recorded train.
+    folder = repo / train_state.STATE_DIR
+    ids = (
+        sorted(p.stem for p in folder.glob("*.json") if train_state.TRAIN_ID.fullmatch(p.stem))
+        if folder.is_dir()
+        else []
+    )
+    if not ids:
+        raise WorkspaceError(f"no Daedalus train is recorded in {repo}. Next: {RERUN}")
+    return ids[-1]
+
+
+def _resume_target(repo: Path, branch: str) -> bool:
+    head = _out(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    if head == branch:
+        return False
+    if _run(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}").returncode != 0:
+        return False
+    dirty = _dirty(repo)
+    if dirty:
+        raise WorkspaceError(
+            f"cannot switch {repo} to {branch}: uncommitted changes {_shown(dirty)}. "
+            "Next: commit or stash them from your own shell, then say continue."
+        )
+    return True
+
+
+def resume(repo: Path) -> list[str]:
+    repo = repo.resolve()
+    train_id = _resume_train(repo)
+    try:
+        state = train_state.load(repo, train_id)
+    except train_state.TrainStateError as exc:
+        raise WorkspaceError(str(exc)) from exc
+    integration = f"daedalus/{train_id}"
+    charter = Path(state["charter_root"]) if state.get("charter_branch_created") else None
+    switch_charter = charter is not None and _resume_target(charter, integration)
+    switch_repo = not state.get("merged") and _resume_target(repo, integration)
+    mark_train(repo, train_id)
+    lines = [f"resumed train {train_id}"]
+    if switch_charter and charter is not None:
+        _git(charter, "switch", "-q", integration)
+        lines.append(f"switched {charter} to {integration}")
+    if switch_repo:
+        _git(repo, "switch", "-q", integration)
+        lines.append(f"switched {repo} to {integration}")
+    return lines
