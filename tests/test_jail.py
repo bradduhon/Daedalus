@@ -9,9 +9,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import jail
+from lib import jail, train_state
 from lib.config import Config, LedgerDecl
 from lib.jail import CONDUCTOR_GIT, KNOWN_AGENTS, decide, split_pipeline, tokenize
+from lib.unit_binding import record_dispatch
+from lib.workspace import mark_train
 
 from tests.conftest import REPO_ROOT
 
@@ -25,6 +27,7 @@ CFG = Config(
 
 
 WT = f"{CWD}/.claude/worktrees/20261015-120000-u1"
+UNIT_TRAIN = "20261015-120000"
 FAKE_UNITS = frozenset({f"{CWD}/.claude/worktrees/u1", WT})
 
 
@@ -39,6 +42,13 @@ def _fake_unit_worktrees(monkeypatch: pytest.MonkeyPatch) -> None:
         return real(repo) if real is not None else frozenset()
 
     monkeypatch.setattr(jail, "_registered_worktrees", fake, raising=False)
+    # issue 29: CWD has no train state; binding is proven in tests/test_unit_binding.py.
+    real_binding = jail._binding_reason
+
+    def no_binding(hook_input: dict[str, Any], cwd: str, units: set[str]) -> str | None:
+        return None if cwd == CWD else real_binding(hook_input, cwd, units)
+
+    monkeypatch.setattr(jail, "_binding_reason", no_binding)
 
 
 def _w(agent: str | None, path: str, tool: str = "Write") -> dict[str, Any]:
@@ -2337,11 +2347,18 @@ def _unit_repo(path: Path) -> tuple[Path, Path]:
     subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "init"], check=True)
     wt = repo / ".claude" / "worktrees" / "u1"
     subprocess.run([*git, "worktree", "add", "-q", "-b", "daedalus-unit/u1", str(wt)], check=True)
+    # issue 29: coder writes need a train with the unit recorded and dispatched.
+    (repo / ".claude" / "daedalus").mkdir(exist_ok=True)
+    unit = {"name": "u1", "branch": "daedalus-unit/u1", "path": str(wt)}
+    train_state.save(repo, UNIT_TRAIN, {"train_id": UNIT_TRAIN, "units": [unit]})
+    mark_train(repo, UNIT_TRAIN)
+    assert record_dispatch(repo, UNIT_TRAIN, "u1") is None
     return repo, wt.resolve()
 
 
 def _cwd(payload: dict[str, Any], cwd: Path) -> dict[str, Any]:
     payload["cwd"] = str(cwd)
+    payload.setdefault("session_id", "s")
     return payload
 
 
@@ -2353,6 +2370,7 @@ def test_coder_unit_worktree_through_a_symlinked_root(tmp_path: Path) -> None:
     for cwd, root in ((link, repo), (repo, link), (link, link)):
         payload = _w("repo-coder", f"{root}/.claude/worktrees/u1/src/a.py")
         payload["cwd"] = str(cwd)
+        payload["session_id"] = "s"
         assert decide(payload, CFG).allow, (cwd, root)
         payload = _w("repo-coder", f"{root}/src/a.py")
         payload["cwd"] = str(cwd)

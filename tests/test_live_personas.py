@@ -209,12 +209,18 @@ def test_charter_docs(live_repo: Path) -> None:
 
 
 def test_repo_coder(live_repo: Path) -> None:
-    from lib.workspace import create
+    from lib import train_state
+    from lib.unit_binding import record_dispatch
+    from lib.workspace import create, mark_train
 
     commit = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c"]
     _git(live_repo, *commit, "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "base")
     _git(live_repo, "branch", "daedalus/20261015-000000")
+    # issue 29: coders write only inside a train, in the unit their dispatch named.
+    train_state.save(live_repo, "20261015-000000", {"train_id": "20261015-000000"})
+    mark_train(live_repo, "20261015-000000")
     worktree = create(live_repo, "20261015-000000-u1", "daedalus/20261015-000000")
+    assert record_dispatch(live_repo, "20261015-000000", "20261015-000000-u1") is None
     task = (
         f"Worktree: {worktree}\n"
         "In that worktree add function add(a: int, b: int) -> int returning a + b to "
