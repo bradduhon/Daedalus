@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,11 @@ AUDIT_DIR = Path(".claude") / "daedalus" / "audit"
 SUMMARY_DIR = Path("docs") / ".tmp" / "daedalus"
 NOT_UTF8 = "BROKEN: {path} is not valid UTF-8. Next: keep the file, report it, do not edit it."
 DOCTOR_NEXT = "Next: run /daedalus:doctor."
+APPROVED_NEXT = "Next: run /daedalus:build-train; this train has no approved audit in its log."
+AUDITOR = "daedalus:security-auditor"
+VERDICT_APPROVED = "[VERDICT: APPROVED]"
+_TRAIN_ID = re.compile(r"[0-9]{8}-[0-9]{6}")
+_SESSION_LINE = re.compile(r"^Session ([A-Za-z0-9_-]+):", re.MULTILINE)
 
 
 class ProofError(RuntimeError):
@@ -77,3 +83,61 @@ def hooks_live(repo: Path, needle: str) -> str:
             f"session's hooks are not writing the audit log. {DOCTOR_NEXT}"
         )
     return f"OK hooks live: session {log.stem}, chain intact ({len(records)} records)"
+
+
+def _not_approved(check: str) -> ProofError:
+    return ProofError(f"NOT APPROVED: {check}. {APPROVED_NEXT}")
+
+
+def _summary_session(repo: Path, train_id: str) -> str:
+    summary = repo / SUMMARY_DIR / f"{train_id}-summary.md"
+    try:
+        text = summary.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise _not_approved(f"cannot read the summary {summary} ({exc})") from exc
+    match = _SESSION_LINE.search(text)
+    if match is None:
+        raise _not_approved(f"{summary.name} has no Session <id>: line")
+    return match.group(1)
+
+
+def _file_name(record: dict[str, Any]) -> str:
+    tool_input = record.get("tool_input")
+    raw = tool_input.get("file_path") if isinstance(tool_input, dict) else None
+    return Path(raw).name if isinstance(raw, str) else ""
+
+
+def approved(repo: Path, train_id: str) -> str:
+    if not _TRAIN_ID.fullmatch(train_id):
+        raise ProofError(
+            f"NOT APPROVED: train id {train_id} is not YYYYMMDD-HHMMSS. "
+            "Next: pass the id from a summary file name in docs/.tmp/daedalus/."
+        )
+    session = _summary_session(repo, train_id)
+    log = repo / AUDIT_DIR / f"{session}.jsonl"
+    if not log.is_file():
+        raise _not_approved(f"no audit log {log.name} for session {session}")
+    records = read_chain(log)
+    name = f"{train_id}-summary.md"
+    writes = [
+        i for i, r in enumerate(records) if r.get("tool_name") == "Write" and _file_name(r) == name
+    ]
+    if not writes:
+        raise _not_approved(f"session {session} has no Write record of {name}")
+    # 0024: the auditor's final round for this train is its last stop before the summary Write.
+    stops = [
+        r
+        for r in records[: writes[0]]
+        if r.get("event") == "SubagentStop" and r.get("agent_type") == AUDITOR
+    ]
+    if not stops:
+        raise _not_approved(f"no {AUDITOR} SubagentStop record before the summary Write")
+    head = stops[-1].get("last_message_head")
+    if not isinstance(head, str) or not head.startswith(VERDICT_APPROVED):
+        raise _not_approved(
+            f"the {AUDITOR} final round (record seq {stops[-1].get('seq')}) is not "
+            f"{VERDICT_APPROVED}"
+        )
+    return (
+        f"OK approved: train {train_id}, session {session}, auditor record seq {stops[-1]['seq']}"
+    )

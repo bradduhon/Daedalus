@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib.audit_proof import NOT_UTF8, ProofError, hooks_live, verify_lines  # noqa: E402
+from lib.audit_proof import NOT_UTF8, ProofError, approved, hooks_live, verify_lines  # noqa: E402
 
 __all__ = ["NOT_UTF8", "verify", "verify_lines"]
 HOOKS_LIVE_NEEDLE = "verify_audit_chain.py --hooks-live"
@@ -30,8 +30,10 @@ NOT_FILE = (
     "BROKEN: {path} is not a regular file. Next: pass a session log (.jsonl) under "
     ".claude/daedalus/audit/."
 )
-MODE_USAGE = "usage: verify_audit_chain.py --hooks-live --repo <repo>"
-MODE_NEXT = "Next: pass --repo with the repository's absolute path."
+MODE_USAGE = "usage: verify_audit_chain.py (--hooks-live | --approved <train-id>) --repo <repo>"
+MODE_NEXT = (
+    "Next: pass --hooks-live or --approved <train-id>, and --repo with the repository's path."
+)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -43,11 +45,17 @@ class _Parser(argparse.ArgumentParser):
 
 def _mode(argv: list[str]) -> int:
     parser = _Parser(prog="verify_audit_chain.py", usage=MODE_USAGE)
-    parser.add_argument("--hooks-live", action="store_true", required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--hooks-live", action="store_true")
+    mode.add_argument("--approved", metavar="TRAIN_ID")
     parser.add_argument("--repo", type=Path, required=True)
     args = parser.parse_args(argv)
+    repo = args.repo.resolve()
     try:
-        print(hooks_live(args.repo.resolve(), HOOKS_LIVE_NEEDLE))
+        if args.approved is None:
+            print(hooks_live(repo, HOOKS_LIVE_NEEDLE))
+        else:
+            print(approved(repo, args.approved))
     except ProofError as exc:
         print(exc)
         return 1
@@ -55,7 +63,7 @@ def _mode(argv: list[str]) -> int:
 
 
 def main(argv: list[str]) -> int:
-    if "--hooks-live" in argv[1:]:
+    if {"--hooks-live", "--approved"} & set(argv[1:]):
         return _mode(argv[1:])
     if len(argv) == 2 and argv[1] in ("-h", "--help"):
         print(f"{USAGE}\n{USAGE_NEXT}")
