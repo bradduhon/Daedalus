@@ -202,3 +202,83 @@ def test_approved_reports_a_broken_build_log(
     lines = log.read_text().splitlines()
     log.write_text(lines[1] + "\n")
     assert _refused(repo_cwd).startswith("BROKEN")
+
+
+def test_approved_passes_on_a_closing_verdict_line(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # 41: B1, a hand-back sentence first and the verdict as the last line.
+    _train(hook_input, repo_cwd, "The audit found no defect in the two units.\n[VERDICT: APPROVED]")
+    assert approved(repo_cwd, TRAIN).startswith("OK approved:")
+
+
+def test_approved_refuses_a_reply_with_no_verdict_line(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    _train(hook_input, repo_cwd, "The audit is finished.")
+    assert "is not [VERDICT: APPROVED]" in _refused(repo_cwd)
+
+
+def test_approved_reads_the_tail_of_a_long_reply(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # 41: B3, the head holds no verdict, so the pass comes from the tail.
+    _train(hook_input, repo_cwd, "x" * 3000 + "\n[VERDICT: APPROVED]")
+    assert approved(repo_cwd, TRAIN).startswith("OK approved:")
+
+
+def test_approved_refuses_any_rejected_line(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    _train(hook_input, repo_cwd, "[VERDICT: REJECTED] a.py:1 high\nnotes\n[VERDICT: APPROVED]")
+    assert "carries a [VERDICT: REJECTED] line" in _refused(repo_cwd)
+
+
+def test_approved_refuses_a_rejected_line_in_the_tail(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # 41: B-2, the tail is scanned for rejected lines, not only the head.
+    _train(
+        hook_input,
+        repo_cwd,
+        "[VERDICT: APPROVED]\n" + "x" * 3000 + "\n[VERDICT: REJECTED] a.py:1 high\nend",
+    )
+    assert "carries a [VERDICT: REJECTED] line" in _refused(repo_cwd)
+
+
+def _hand_chain(repo_cwd: Path, stop: dict[str, object]) -> None:
+    # 41: B5/B6, chain-valid records written without build_record.
+    path = f"{repo_cwd}/docs/.tmp/daedalus/{TRAIN}-summary.md"
+    write: dict[str, object] = {"tool_name": "Write", "tool_input": {"file_path": path}}
+    first: dict[str, object] = {"event": "SubagentStop", "agent_type": AUDITOR, **stop}
+    prev, lines = audit.GENESIS, []
+    for seq, rec in enumerate((first, write), start=1):
+        rec.update(seq=seq, prev_hash=prev)
+        rec["hash"] = prev = audit.record_hash(rec)
+        lines.append(json.dumps(rec))
+    log = audit.log_path("sess-test", str(repo_cwd))
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("\n".join(lines) + "\n")
+    _summary(repo_cwd)
+
+
+def test_approved_refuses_a_tail_that_is_not_text(project_data: Path, repo_cwd: Path) -> None:
+    _hand_chain(
+        repo_cwd,
+        {
+            "last_message_head": "[VERDICT: APPROVED] ok",
+            "last_message_tail": ["[VERDICT: APPROVED]"],
+        },
+    )
+    message = _refused(repo_cwd)
+    assert message.startswith("NOT APPROVED:")
+    assert "(record seq 1) has a last_message_tail that is not text" in message
+
+
+def test_approved_passes_a_record_from_before_the_tail_field(
+    project_data: Path, repo_cwd: Path
+) -> None:
+    _hand_chain(repo_cwd, {"last_message_head": "[VERDICT: APPROVED] ok"})
+    assert approved(repo_cwd, TRAIN) == (
+        f"OK approved: train {TRAIN}, session sess-test, auditor record seq 1"
+    )

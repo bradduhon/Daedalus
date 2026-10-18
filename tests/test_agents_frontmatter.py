@@ -285,10 +285,11 @@ def test_auditor_grep_commands_pass_the_jail(monkeypatch: pytest.MonkeyPatch) ->
 def test_auditor_verdict_first_line_contract_unchanged() -> None:
     contract = AUDITOR.read_text().split("## Status contract\n", 1)[1]
     assert contract == (
-        "Your reply starts with exactly one of these verdict lines as its first line, followed by"
-        " the\nparagraph or the itemized findings.\n"
-        "- `[VERDICT: APPROVED]` then `<paragraph>`\n"
-        "- `[VERDICT: REJECTED]` then `<itemized findings>`\n"
+        "Your reply starts with exactly one of these verdict lines as its first line and ends with"
+        " the\nsame verdict line, alone, as its last line. This holds for every reply, fix rounds"
+        " included.\n"
+        "- `[VERDICT: APPROVED]` then `<paragraph>` then `[VERDICT: APPROVED]`\n"
+        "- `[VERDICT: REJECTED]` then `<itemized findings>` then `[VERDICT: REJECTED]`\n"
     )
 
 

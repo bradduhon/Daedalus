@@ -87,6 +87,61 @@ def test_message_head_masks_a_url_crossing_the_cut(project_data: Path, hook_inpu
     assert len(rec["last_message_head"]) <= audit.MESSAGE_HEAD_CHARS
 
 
+def test_message_tail_keeps_the_last_2048_chars(project_data: Path, hook_input: Any) -> None:
+    # 41: B8, the tail holds the closing verdict line of a long reply.
+    message = "word " * 600
+    rec = audit.audit_append(
+        hook_input(hook_event_name="SubagentStop", agent_id="a1", last_assistant_message=message)
+    )
+    assert rec["last_message_tail"] == message[-2048:]
+    assert len(rec["last_message_tail"]) == 2048
+
+
+def test_message_tail_masks_a_url_crossing_the_cut(project_data: Path, hook_input: Any) -> None:
+    # 41: B9, a credential URL straddling the tail cut leaves no password behind.
+    message = "https://u:" + "P" * 600 + "@h/x" + "m" * (audit.MESSAGE_HEAD_CHARS - 20)
+    rec = audit.audit_append(
+        hook_input(hook_event_name="SubagentStop", agent_id="a1", last_assistant_message=message)
+    )
+    assert "P" not in rec["last_message_tail"]
+    assert rec["last_message_tail"].startswith("***@h/x")
+    assert len(rec["last_message_tail"]) <= audit.MESSAGE_HEAD_CHARS
+
+
+def test_message_tail_masks_a_key_body_that_opens_the_window(
+    project_data: Path, hook_input: Any
+) -> None:
+    # 41: B-1, a bare key body and its END marker past the window start never reach the tail.
+    message = (
+        ("Q" * 64 + "\n") * 30
+        + "-----END PRIVATE KEY-----\n"
+        + "m" * 1200
+    )
+    rec = audit.audit_append(
+        hook_input(hook_event_name="SubagentStop", agent_id="a1", last_assistant_message=message)
+    )
+    assert "Q" not in rec["last_message_tail"]
+
+
+def test_message_tail_masks_a_token_cut_before_its_prefix(
+    project_data: Path, hook_input: Any
+) -> None:
+    # 41: B-1, a bearer JWT cut inside its header leaves no payload or signature.
+    message = "Bearer eyJ" + "A" * 600 + ".eyJ" + "B" * 400 + "." + "C" * 400 + "\n" + "m" * 1400
+    rec = audit.audit_append(
+        hook_input(hook_event_name="SubagentStop", agent_id="a1", last_assistant_message=message)
+    )
+    assert "B" not in rec["last_message_tail"]
+    assert "C" not in rec["last_message_tail"]
+
+
+def test_message_tail_is_null_with_the_head(project_data: Path, hook_input: Any) -> None:
+    rec = audit.audit_append(
+        hook_input(hook_event_name="SubagentStop", agent_id="a1", last_assistant_message="")
+    )
+    assert rec["last_message_head"] is None and rec["last_message_tail"] is None
+
+
 def test_read_tool_input_is_reduced_to_path(project_data: Path, hook_input: Any) -> None:
     rec = audit.audit_append(
         hook_input(tool_name="Read", tool_input={"file_path": "/a/b.py", "offset": 10})
