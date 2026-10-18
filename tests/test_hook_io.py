@@ -145,6 +145,33 @@ def test_tool_input_must_be_an_object() -> None:
     assert str(_call({"tool_name": "Bash", "tool_input": {}})).startswith("judged")
 
 
+def _exits(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
+    raise SystemExit(0)
+
+
+def test_hook_system_exit_denies(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 0044: an exit 0 with no output reads as allow, so SystemExit denies on both paths.
+    assert _call({"tool_name": "Bash"}, judge=_exits) == _closed("SystemExit: 0")
+    monkeypatch.setattr("sys.argv", ["probe"])
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"tool_name": "Bash"}'))
+    assert hook_io.run(_exits, BASH, PARSER) == 0
+
+    def leave() -> dict[str, object]:
+        raise SystemExit(0)
+
+    monkeypatch.setattr(hook_io, "read_input", leave)
+    assert hook_io.run(_seen, BASH, PARSER) == 0
+    lines = [
+        json.loads(line)["hookSpecificOutput"] for line in capsys.readouterr().out.splitlines()
+    ]
+    assert [(o["permissionDecision"], o["permissionDecisionReason"]) for o in lines] == [
+        ("deny", _closed("SystemExit: 0")),
+        ("deny", _closed("SystemExit: 0")),
+    ]
+
+
 def test_a_raising_judge_denies_with_its_exception() -> None:
     assert _call({"tool_name": "Bash"}, judge=_boom) == _closed("KeyError: 'missing field'")
 

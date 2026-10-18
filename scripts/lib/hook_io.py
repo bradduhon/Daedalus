@@ -171,7 +171,7 @@ def evaluate(
         return _decision(failed_closed(name, "hook input has no tool_name"))
     try:
         flags = _parse(argv, parser)
-    except Exception as exc:  # noqa: BLE001
+    except (Exception, SystemExit) as exc:  # noqa: BLE001
         return _decision(failed_closed(name, exc))
     if isinstance(flags, str):
         return _decision(failed_closed(name, flags))
@@ -181,7 +181,8 @@ def evaluate(
         return _decision(failed_closed(name, "tool_input is not an object"))
     try:
         reason = judge(hook_input, flags)
-    except Exception as exc:  # noqa: BLE001
+    except (Exception, SystemExit) as exc:  # noqa: BLE001
+        # 0044: an exit from a judge would end a standalone hook with no output, an allow.
         return _decision(failed_closed(name, exc))
     if reason is not None and not (isinstance(reason, str) and reason):
         return _decision(failed_closed(name, f"judge returned {type(reason).__name__} {reason!r}"))
@@ -191,7 +192,7 @@ def evaluate(
 def run(judge: Judge, tools: frozenset[str], parser: argparse.ArgumentParser) -> int:
     try:
         return emit(evaluate(read_input(), sys.argv[1:], judge, tools, parser).reason)
-    except Exception as exc:  # noqa: BLE001
+    except (Exception, SystemExit) as exc:  # noqa: BLE001
         return emit(failed_closed(parser.prog, exc))
 
 
