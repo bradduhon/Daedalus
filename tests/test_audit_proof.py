@@ -234,6 +234,18 @@ def test_approved_refuses_any_rejected_line(
     assert "carries a [VERDICT: REJECTED] line" in _refused(repo_cwd)
 
 
+def test_approved_refuses_a_rejected_line_in_the_tail(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # 41: B-2, the tail is scanned for rejected lines, not only the head.
+    _train(
+        hook_input,
+        repo_cwd,
+        "[VERDICT: APPROVED]\n" + "x" * 3000 + "\n[VERDICT: REJECTED] a.py:1 high\nend",
+    )
+    assert "carries a [VERDICT: REJECTED] line" in _refused(repo_cwd)
+
+
 def _hand_chain(repo_cwd: Path, stop: dict[str, object]) -> None:
     # 41: B5/B6, chain-valid records written without build_record.
     path = f"{repo_cwd}/docs/.tmp/daedalus/{TRAIN}-summary.md"

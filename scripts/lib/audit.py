@@ -24,6 +24,8 @@ MESSAGE_HEAD_CHARS = 2048
 _REDACT_SLACK = 512
 _OPEN_URL = re.compile(r"://[^\s\"']*$")
 _OPEN_USERINFO = re.compile(r"^[:/]*[^/\s\"']*@")
+_OPEN_PEM_TAIL = re.compile(r"\A.*?-----END [A-Z ]*PRIVATE KEY-----", re.S)
+_OPEN_TOKEN = re.compile(r"^[A-Za-z0-9._~+/=-]{16,}")
 LOCK_TIMEOUT_S = 5.0
 LOCK_POLL_S = 0.05
 _SESSION_ID = re.compile(r"[A-Za-z0-9_-]+")
@@ -243,8 +245,10 @@ def _head(text: str, limit: int = HEAD_BYTES) -> str:
 def _tail(text: str, limit: int) -> str:
     window = str(redact(text[-(limit + _REDACT_SLACK) :]))
     if len(text) > limit + _REDACT_SLACK:
-        # 41: userinfo cut before its :// may still hold a password; mask the lead.
+        # 41: the window may open inside a secret; mask a leading key body, userinfo or token run.
+        window = _OPEN_PEM_TAIL.sub("[REDACTED_PRIVATE_KEY]", window)
         window = _OPEN_USERINFO.sub("***@", window)
+        window = _OPEN_TOKEN.sub("***", window)
     return window[-limit:]
 
 
