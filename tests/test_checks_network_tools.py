@@ -1,0 +1,100 @@
+# Copyright (c) 2026 Brad Duhon.
+# SPDX-License-Identifier: GPL-3.0-or-later
+# 0044: the network_tools hook; cases copied from tests/test_jail.py run each agent's chain.
+from __future__ import annotations
+
+import pytest
+from lib import jail
+
+from tests.conftest import CFG
+from tests.hook_chain import (
+    decide,
+    evaluate,
+    internal_error_denies,
+    malformed_input_denies,
+    outside_tools_allow,
+    payload,
+    run_script,
+    unknown_flag_denies,
+)
+from tests.test_jail import _b, _t
+
+pytestmark = pytest.mark.usefixtures("jail_fakes")
+HOOK = "network_tools"
+
+
+class TestRepoCoder:
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git push origin x",
+            "git remote add o u",
+            "git fetch",
+            "git pull",
+            "curl https://x",
+            "wget x",
+            "ssh host",
+            "scp a b",
+            "nc -l 1",
+            "aws s3 ls",
+            "gh pr list",
+            "npm test && curl x",
+        ],
+    )
+    def test_remote_and_network_blocked(self, command: str) -> None:
+        assert not decide(_b("repo-coder", command), CFG).allow
+
+    def test_no_web_tools(self) -> None:
+        assert not decide(_t("repo-coder", "WebFetch"), CFG).allow
+        assert not decide(_t("repo-coder", "WebSearch"), CFG).allow
+
+
+class TestNoShellAgents:
+    def test_only_researcher_may_fetch(self) -> None:
+        assert decide(_t("web-researcher", "WebFetch"), CFG).allow
+        assert decide(_t("web-researcher", "WebSearch"), CFG).allow
+        assert not decide(_t("standards-rules-specialist", "WebFetch"), CFG).allow
+        assert not decide(_t("nist-specialist", "WebFetch"), CFG).allow
+
+
+class TestRound3WorkerHygiene:
+    def test_repo_coder_hidden_network_and_remote(self) -> None:
+        for command in ("find . -exec curl x {} +", "find . -exec git push origin x {} +"):
+            assert not decide(_b("repo-coder", command), CFG).allow, command
+
+
+def test_network_tools_judges_the_hook_alone() -> None:
+    assert evaluate(HOOK, _t("repo-coder", "WebFetch")) == jail.R_WEB_RESEARCHER_ONLY
+    assert evaluate(HOOK, _t("repo-coder", "WebFetch"), "--web") is None
+    assert evaluate(HOOK, _t("repo-coder", "WebSearch"), "--gh") == jail.R_CONDUCTOR_WEB
+    assert evaluate(HOOK, _b("repo-coder", "curl x")) == jail.R_NETWORK
+    assert evaluate(HOOK, _b("repo-coder", "gh pr list")) == jail.R_NETWORK
+    assert evaluate(HOOK, _b("repo-coder", "gh pr list"), "--gh") is None
+    assert evaluate(HOOK, _b("repo-coder", "curl x"), "--gh") == jail.R_NETWORK
+    # spec 8: rg, grep and jq arguments and commit messages are exempt words.
+    assert evaluate(HOOK, _b("repo-coder", "rg curl src")) is None
+    assert evaluate(HOOK, _b("repo-coder", "git commit -m 'fix curl'")) is None
+
+
+def test_network_tools_fixture_decisions() -> None:
+    web = payload("WebFetch", url="https://example.com")
+    assert run_script(HOOK, web) == {"decision": "deny", "reason": jail.R_WEB_RESEARCHER_ONLY}
+    assert run_script(HOOK, web, "--web") == {"decision": "allow", "reason": ""}
+    curl = payload("Bash", command="curl https://x")
+    assert run_script(HOOK, curl) == {"decision": "deny", "reason": jail.R_NETWORK}
+
+
+def test_network_tools_allows_tools_outside_its_tools() -> None:
+    outside_tools_allow(HOOK, "Read")
+
+
+def test_network_tools_unknown_flag_denies() -> None:
+    unknown_flag_denies(HOOK, payload("Bash", command="ls"))
+
+
+def test_network_tools_malformed_input_denies() -> None:
+    malformed_input_denies(HOOK, "--web")
+
+
+def test_network_tools_internal_error_denies_and_names_the_hook() -> None:
+    internal_error_denies(HOOK, payload("Bash", command="ls"))
