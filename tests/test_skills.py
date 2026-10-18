@@ -214,16 +214,115 @@ def test_build_train_summary_carries_no_absolute_path() -> None:
 
 
 def test_build_train_reads_the_auditor_verdict_first() -> None:
+    # 41, C7: the verdict line opens and closes every auditor reply.
     text = _build_train()
-    assert "Read the verdict from the first line of the auditor's reply." in text
-    # N2: the off-contract rule names the first-line exception.
     assert (
-        "The security-auditor's verdict line is the first line of its reply, not the last; "
-        "read it there."
+        "Read the verdict from the last line of the auditor's reply; "
+        "its first line carries the same verdict."
+    ) in text
+    assert "Read the verdict from the first line of the auditor's reply." not in text
+    assert (
+        "The security-auditor's verdict line is both the first line and the last line of every "
+        "reply, fix rounds included; read it from the last line, and a reply whose first line is "
+        "not the same verdict is off-contract."
     ) in text
     auditor = (REPO_ROOT / "agents" / "security-auditor.md").read_text(encoding="utf-8")
     contract = auditor.split("## Status contract", 1)[1]
     assert "starts with exactly one of these verdict lines as its first line" in contract
+
+
+def _phase1_step(text: str, number: int) -> str:
+    phase1 = _section(text, "## Phase 1", "## Phase 2")
+    return phase1.split(f"\n{number}. ", 1)[1].split(f"\n{number + 1}. ", 1)[0]
+
+
+def test_build_train_keeps_personas_warm() -> None:
+    # 0059, C1: the roster rule sits in the whole-train rules.
+    rules = _build_train().split("## Preconditions", 1)[0]
+    roster = rules.split("- Warm roster (0059): ", 1)[1].split("\n", 1)[0]
+    assert "a persona stays warm after its first use" in roster
+    assert "The security-auditor stays warm only after its first verdict" in roster
+    cold = next(ln for ln in rules.splitlines() if "standards-rules-specialist dispatch" in ln)
+    assert cold.startswith("- The first standards-rules-specialist dispatch of a train carries")
+    assert "Every later standards question resumes that same specialist by SendMessage" in cold
+
+
+def test_build_train_dispatches_the_standards_specialist_once() -> None:
+    # 0059, C2, C3: one first dispatch; the State Block records its handle.
+    text = _build_train()
+    assert text.count("Agent(`standards-rules-specialist`)") == 1
+    assert "    standards specialist: <agent handle>  last read: <UTC time>" in text
+    seed = text.split("**State Block**", 1)[1].split("\n\n", 2)[1].splitlines()
+    assert seed[6].startswith("    standards specialist: ")
+
+
+def test_build_train_asks_each_contradiction_as_a_brief() -> None:
+    # 0057, C4: the stop is replaced by the prompt, the pick record and the re-check.
+    text = _build_train()
+    step1 = _phase1_step(text, 1)
+    for item in (
+        "AskUserQuestion",
+        "at most four questions per call",
+        "`Follow Global`",
+        "`Follow Plugin`",
+        "`Follow Plugin + amend global`",
+        "(Recommended)",
+        '"RECHECK. Picks:',
+        "a plain question ending in `?`",
+        "No tracked-risk issue is filed.",
+        "A plugin agent never makes this edit.",
+        'The word "Global" appears in a label only when one side is the operator\'s global',
+    ):
+        assert item in step1, item
+    assert "Agent(`charter-docs`)" in step1
+    phase1 = _section(text, "## Phase 1", "## Phase 2")
+    assert phase1.index("Agent(`charter-docs`)") < phase1.index("\n2. ")
+    assert "stops the train. Show the operator both sides" not in text
+    assert "Next: reword the task, or change the standard in its source" not in text
+
+
+def test_build_train_resumes_the_specialist_with_changed_rule_files() -> None:
+    # 0059, C5: the coder yield route and the auditor brief resume the warm specialist.
+    text = _build_train()
+    route = next(ln for ln in text.splitlines() if ln.startswith("| `[STATUS: YIELD_STANDARDS]"))
+    assert "SendMessage(standards specialist," in route
+    assert "Rule files changed since your last read" in route
+    step2 = _section(text, "## Phase 3", "\n3. ").split("\n2. ", 1)[1]
+    assert step2.startswith("SendMessage(standards specialist,")
+    assert "Rule files changed since your last read" in step2
+    assert "resumes the same auditor by SendMessage" in step2
+
+
+def test_build_train_summary_carries_rulings_and_deviations() -> None:
+    # 0057, C6: one line per pick, a deviation line per keep-the-plugin pick.
+    shape = _build_train().split("Shape:", 1)[1].split("\n6. ", 1)[0]
+    assert "       ## Rulings\n" in shape
+    assert "       Deviation: " in shape
+    assert shape.index("[POLICY: none declared]") < shape.index("## Rulings")
+
+
+def test_build_train_records_picks_before_any_coder() -> None:
+    # 0057, C9: both ledger locations record picks before a coder starts.
+    text = _build_train()
+    step1 = _phase1_step(text, 1)
+    assert "Ledger under `charter_root`: record the picks right after the last pick" in step1
+    assert "Repo-local ledger: record the picks right after the step 3 `lock`" in step1
+    assert "No coder starts before `[STATUS: COMMITTED]`." in step1
+    step3 = _phase1_step(text, 3)
+    assert "With a repo-local ledger and picks from step 1, record the picks now" in step3
+
+
+def test_build_train_hands_coders_the_pick_ledger_ids() -> None:
+    # 0057, C10: the ids line follows the two packets and precedes the worktree line.
+    phase2 = _section(_build_train(), "## Phase 2", "## Phase 3")
+    dispatch = phase2.split("Then Agent(`repo-coder`) with: both packets", 1)[1]
+    assert dispatch.index("`Pick ledger ids:`") < dispatch.index("`Worktree: <path>`")
+
+
+def test_build_train_phase1_has_no_branch_switch() -> None:
+    # 0024, C11: the lock script owns every branch move in Phase 1.
+    phase1 = _section(_build_train(), "## Phase 1", "## Phase 2")
+    assert "git switch" not in phase1 and "git checkout" not in phase1
 
 
 PUSH_TRAIN = REPO_ROOT / "skills" / "push-train" / "SKILL.md"
@@ -518,7 +617,9 @@ def test_both_trains_carry_the_pending_ledger_line() -> None:
     bt = _build_train()
     assert "with the line `Ledger ids: pending. Codes: --repo <R> --type <T>.`" in bt
     assert "replace the summary's `Ledger ids: pending` line with" in bt
-    assert bt.index("Write the summary now") < bt.index("Agent(`charter-docs`)")
+    # 0057: Phase 1 records picks first, so compare against the Phase 3 dispatch.
+    phase3 = bt.index("## Phase 3")
+    assert bt.index("Write the summary now") < bt.index("Agent(`charter-docs`)", phase3)
     pt = _push_train()
     assert "A `Ledger ids: pending` line means the Build Train stopped before" in pt
     assert "run `git -C <charter_root> switch daedalus/<train-id>` first." in pt
