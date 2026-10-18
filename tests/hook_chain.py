@@ -16,7 +16,7 @@ from lib.jail import Decision, normalize_agent
 from tests.conftest import REPO_ROOT
 
 CHECKS = REPO_ROOT / "scripts" / "checks"
-# 0044: the spec 5.4 table (packet section 8), one (script, flags) entry per hook, in order.
+# 0044: the packet section 8 table at v2, one (script, flags) entry per hook, in order.
 CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
     "repo-coder": (
         ("credential_paths", ()),
@@ -27,6 +27,7 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("git_push", ()),
         ("git_grammar", ("--allow", "coder")),
         ("unit_writes", ()),
+        ("gh_classes", ()),
     ),
     "contract-spec": (
         ("credential_paths", ()),
@@ -52,6 +53,7 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("shell_tripwires", ()),
         ("network_tools", ()),
         ("read_only_bash", ("--git", "read-only")),
+        ("gh_classes", ()),
     ),
     "nist-specialist": (
         ("credential_paths", ()),
@@ -60,6 +62,7 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("shell_tripwires", ()),
         ("network_tools", ()),
         ("read_only_bash", ("--git", "specialist")),
+        ("gh_classes", ()),
     ),
     "cis-specialist": (
         ("credential_paths", ()),
@@ -68,6 +71,7 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("shell_tripwires", ()),
         ("network_tools", ()),
         ("read_only_bash", ("--git", "specialist")),
+        ("gh_classes", ()),
     ),
     "web-researcher": (
         ("credential_paths", ()),

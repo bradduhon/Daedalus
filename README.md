@@ -91,6 +91,22 @@ Each agent's file lists the only tools it may use.
 | security-auditor | opus | Read, Grep, Glob, Bash | Reviews each unit's code for security flaws before the local commits are final. |
 | pr-train-conductor | opus | Bash, Read, Glob, Grep | Commits, pushes, opens pull requests, and watches CI. Never merges. |
 
+Each agent file also declares a shape and the hook scripts listed in its hooks block, with their flags. The table below is generated from the agent files by `python3 scripts/catalog.py matrix`; a test fails when it goes stale.
+
+<!-- generated: catalog.py matrix -->
+| Agent | Shape | Hooks |
+|---|---|---|
+| charter-docs | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires --no-pipes, network_tools, git_push, git_grammar --allow docs, root_writes --touch charter,docs --ledger-guard, command_allowlist --allow append_ledger,git |
+| cis-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
+| contract-spec | producer | credential_paths, workspace_integrity, tool_bound, root_writes --touch contracts,charter-specs |
+| nist-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
+| pr-train-conductor | mover | credential_paths, workspace_integrity, tool_bound, shell_tripwires --no-pipes, network_tools --gh, command_allowlist --allow git,gh,gitleaks, git_grammar --allow conductor, git_push --conductor, gh_classes --conductor |
+| repo-coder | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires --no-pipes, network_tools, git_push, git_grammar --allow coder, unit_writes, gh_classes |
+| security-auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only, gh_classes |
+| standards-rules-specialist | finder | credential_paths, tool_bound |
+| web-researcher | finder | credential_paths, tool_bound, network_tools --web |
+<!-- end generated -->
+
 ## Files Daedalus creates
 
 `<repo>` is the main working tree of the git repository you started Claude Code in.

@@ -18,6 +18,7 @@ TOOLS += ("WebFetch", "WebSearch", "Agent", "Task", "SendMessage", "mcp__x__y", 
 PROBES = ["cat gh", "ls /usr/bin/git", "echo gh", "ls git", "rg 'gh pr' src"]
 PROBES += ["git log -S aws", "cat aws", "git add docs/aws", "git add docs/push", "git log push"]
 PROBES += ["timeout 5 gh pr merge 1", "find . -name gh", "jq .gh x", "git commit -m gh"]
+PROBES += ["rg gh src", "grep -rn gh src"]
 
 
 def _harvest(argname: str) -> list[str]:
