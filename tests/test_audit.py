@@ -87,6 +87,34 @@ def test_message_head_masks_a_url_crossing_the_cut(project_data: Path, hook_inpu
     assert len(rec["last_message_head"]) <= audit.MESSAGE_HEAD_CHARS
 
 
+def test_message_tail_keeps_the_last_2048_chars(project_data: Path, hook_input: Any) -> None:
+    # 41: B8, the tail holds the closing verdict line of a long reply.
+    message = "a" * 1000 + "b" * 2000
+    rec = audit.audit_append(
+        hook_input(hook_event_name="SubagentStop", agent_id="a1", last_assistant_message=message)
+    )
+    assert rec["last_message_tail"] == message[-2048:]
+    assert len(rec["last_message_tail"]) == 2048
+
+
+def test_message_tail_masks_a_url_crossing_the_cut(project_data: Path, hook_input: Any) -> None:
+    # 41: B9, a credential URL straddling the tail cut leaves no password behind.
+    message = "https://u:" + "P" * 600 + "@h/x" + "m" * (audit.MESSAGE_HEAD_CHARS - 20)
+    rec = audit.audit_append(
+        hook_input(hook_event_name="SubagentStop", agent_id="a1", last_assistant_message=message)
+    )
+    assert "P" not in rec["last_message_tail"]
+    assert rec["last_message_tail"].startswith("***@h/x")
+    assert len(rec["last_message_tail"]) <= audit.MESSAGE_HEAD_CHARS
+
+
+def test_message_tail_is_null_with_the_head(project_data: Path, hook_input: Any) -> None:
+    rec = audit.audit_append(
+        hook_input(hook_event_name="SubagentStop", agent_id="a1", last_assistant_message="")
+    )
+    assert rec["last_message_head"] is None and rec["last_message_tail"] is None
+
+
 def test_read_tool_input_is_reduced_to_path(project_data: Path, hook_input: Any) -> None:
     rec = audit.audit_append(
         hook_input(tool_name="Read", tool_input={"file_path": "/a/b.py", "offset": 10})

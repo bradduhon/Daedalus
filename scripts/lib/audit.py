@@ -23,6 +23,7 @@ MESSAGE_HEAD_CHARS = 2048
 # m1: redaction window past the cut so a secret straddling HEAD_BYTES is masked before slicing.
 _REDACT_SLACK = 512
 _OPEN_URL = re.compile(r"://[^\s\"']*$")
+_OPEN_USERINFO = re.compile(r"^[:/]*[^/\s\"']*@")
 LOCK_TIMEOUT_S = 5.0
 LOCK_POLL_S = 0.05
 _SESSION_ID = re.compile(r"[A-Za-z0-9_-]+")
@@ -239,6 +240,14 @@ def _head(text: str, limit: int = HEAD_BYTES) -> str:
     return window[:limit]
 
 
+def _tail(text: str, limit: int) -> str:
+    window = str(redact(text[-(limit + _REDACT_SLACK) :]))
+    if len(text) > limit + _REDACT_SLACK:
+        # 41: userinfo cut before its :// may still hold a password; mask the lead.
+        window = _OPEN_USERINFO.sub("***@", window)
+    return window[-limit:]
+
+
 def _error_field(error: Any) -> Any:
     return _head(error) if isinstance(error, str) else redact(error)
 
@@ -258,6 +267,8 @@ def build_record(
     last = hook_input.get("last_assistant_message")
     # R2-M3: same slack window and tail mask as result_head.
     last_head = _head(last, MESSAGE_HEAD_CHARS) if isinstance(last, str) and last else None
+    # 41: the tail carries the closing verdict line; null exactly when the head is.
+    last_tail = _tail(last, MESSAGE_HEAD_CHARS) if isinstance(last, str) and last else None
     # 8.2: error, source and stop_reason are event-specific; null when absent.
     return {
         "ts": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
@@ -271,6 +282,7 @@ def build_record(
         "tool_input": redact(tool_input),
         "prompt": redact(hook_input.get("prompt")),
         "last_message_head": last_head,
+        "last_message_tail": last_tail,
         "decision": decision,
         "reason": redact(reason),
         "result_sha256": result_sha,
