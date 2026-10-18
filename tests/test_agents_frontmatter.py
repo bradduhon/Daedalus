@@ -6,9 +6,11 @@ import re
 from pathlib import Path
 
 import pytest
+from lib import hook_io, router
 from lib.agent_files import frontmatter
 from lib.config import Config
-from lib.jail import KNOWN_AGENTS, WORKER_DENIED_TOOLS, decide
+from lib.jail import WORKER_DENIED_TOOLS
+from lib.train_scope import KNOWN_AGENTS
 
 from tests.conftest import REPO_ROOT
 
@@ -197,7 +199,7 @@ def test_judges_keep_their_status_contract(name: str) -> None:
 
 
 def test_conductor_lists_the_git_reads_the_jail_allows() -> None:
-    # N9: matches TestLiveRunGrammar in tests/test_jail.py.
+    # N9: matches TestLiveRunGrammar in tests/test_checks_git_grammar.py.
     text = (AGENTS / "pr-train-conductor.md").read_text()
     for read in ("`git status`", "`git log`", "`git diff`", "`git branch`"):
         assert read in text, read
@@ -264,19 +266,20 @@ def test_auditor_has_a_procedure_and_severity_scale() -> None:
     assert "`<branch> <file>:<line> <severity> <class>: <precise fix>`" in text
 
 
-def test_auditor_grep_commands_pass_the_jail() -> None:
-    # 0024: every fixed pattern the procedure names must survive the auditor's jail.
+def test_auditor_grep_commands_pass_the_jail(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 0024, 0044: every fixed pattern the procedure names must survive the auditor's hooks.
+    monkeypatch.setattr(hook_io, "hook_config", lambda cwd: Config())
     commands = re.findall(r"`(git log -p -G '[^']+' <diff base>\.\.<branch>)`", AUDITOR.read_text())
     assert len(commands) == len(AUDITOR_CLASSES) - 1
     for command in commands:
         concrete = command.replace("<diff base>", "daedalus/t1").replace("<branch>", "unit-a")
-        payload = {
+        payload: dict[str, object] = {
             "agent_type": "security-auditor",
             "tool_name": "Bash",
             "tool_input": {"command": concrete},
             "cwd": "/work/repo",
         }
-        assert decide(payload, Config()).allow, command
+        assert router.route(payload, REPO_ROOT) == (True, None, ""), command
 
 
 def test_auditor_verdict_first_line_contract_unchanged() -> None:

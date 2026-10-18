@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -16,8 +15,6 @@ TOOLS: frozenset[str] = hook_io.EVERY_TOOL
 FLAGS: dict[str, hook_io.Flag] = {}
 PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
-# 0044: a name outside this form reads as a missing agent file.
-_AGENT_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 R_NO_AGENT_FILE = (
     "agents/{agent}.md is missing, so its tools are unknown (0044). "
     "Next: add the agent file with its tools line, or start a catalog agent."
@@ -30,10 +27,14 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
         return jail.R_TOOL
     agent = jail.normalize_agent(str(hook_input.get("agent_type") or "main"))
     path = PLUGIN_ROOT / "agents" / f"{agent}.md"
-    if not _AGENT_NAME.fullmatch(agent) or not path.is_file():
+    if not agent_files.AGENT_NAME.fullmatch(agent) or not path.is_file():
         return R_NO_AGENT_FILE.format(agent=agent)
     listed = agent_files.frontmatter(path).get("tools", "")
     return None if tool in {t.strip() for t in listed.split(",")} else jail.R_TOOL
+
+
+def decide(hook_input: dict[str, object], flags: list[str]) -> hook_io.HookDecision:
+    return hook_io.evaluate(hook_input, flags, judge, TOOLS, PARSER)
 
 
 def main() -> int:

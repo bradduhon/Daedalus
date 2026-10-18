@@ -5,6 +5,7 @@ tools: Read, Grep, Glob, Write, Edit, Bash
 disallowedTools: Agent, Task, SendMessage
 model: sonnet
 shape: producer
+# 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).
 hooks:
   PreToolUse:
     - hooks:
@@ -17,6 +18,7 @@ hooks:
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/git_grammar.py --allow docs"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --touch charter,docs --ledger-guard"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/command_allowlist.py --allow append_ledger,git"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/gh_classes.py"}
 ---
 <!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
 

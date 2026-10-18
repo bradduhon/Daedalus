@@ -36,7 +36,7 @@ def _boom(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
 
 
 def _call(hook_input: dict[str, object], *argv: str, judge: hook_io.Judge = _seen) -> str | None:
-    return hook_io.evaluate(hook_input, list(argv), judge, BASH, PARSER)
+    return hook_io.evaluate(hook_input, list(argv), judge, BASH, PARSER).reason
 
 
 def _closed(cause: str) -> str:
@@ -135,14 +135,41 @@ def test_good_flags_reach_the_judge() -> None:
 
 
 def test_every_tool_judges_every_tool() -> None:
-    reason = hook_io.evaluate({"tool_name": "Anything"}, [], _seen, EVERY_TOOL, PARSER)
-    assert str(reason).startswith("judged Anything")
+    decision = hook_io.evaluate({"tool_name": "Anything"}, [], _seen, EVERY_TOOL, PARSER)
+    assert not decision.allow and str(decision.reason).startswith("judged Anything")
 
 
 def test_tool_input_must_be_an_object() -> None:
     hook_input: dict[str, object] = {"tool_name": "Bash", "tool_input": ["ls"]}
     assert _call(hook_input) == _closed("tool_input is not an object")
     assert str(_call({"tool_name": "Bash", "tool_input": {}})).startswith("judged")
+
+
+def _exits(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
+    raise SystemExit(0)
+
+
+def test_hook_system_exit_denies(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 0044: an exit 0 with no output reads as allow, so SystemExit denies on both paths.
+    assert _call({"tool_name": "Bash"}, judge=_exits) == _closed("SystemExit: 0")
+    monkeypatch.setattr("sys.argv", ["probe"])
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"tool_name": "Bash"}'))
+    assert hook_io.run(_exits, BASH, PARSER) == 0
+
+    def leave() -> dict[str, object]:
+        raise SystemExit(0)
+
+    monkeypatch.setattr(hook_io, "read_input", leave)
+    assert hook_io.run(_seen, BASH, PARSER) == 0
+    lines = [
+        json.loads(line)["hookSpecificOutput"] for line in capsys.readouterr().out.splitlines()
+    ]
+    assert [(o["permissionDecision"], o["permissionDecisionReason"]) for o in lines] == [
+        ("deny", _closed("SystemExit: 0")),
+        ("deny", _closed("SystemExit: 0")),
+    ]
 
 
 def test_a_raising_judge_denies_with_its_exception() -> None:

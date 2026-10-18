@@ -96,7 +96,7 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 <!-- generated: catalog.py matrix -->
 | Agent | Shape | Hooks |
 |---|---|---|
-| charter-docs | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires --no-pipes, network_tools, git_push, git_grammar --allow docs, root_writes --touch charter,docs --ledger-guard, command_allowlist --allow append_ledger,git |
+| charter-docs | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires --no-pipes, network_tools, git_push, git_grammar --allow docs, root_writes --touch charter,docs --ledger-guard, command_allowlist --allow append_ledger,git, gh_classes |
 | cis-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
 | contract-spec | producer | credential_paths, workspace_integrity, tool_bound, root_writes --touch contracts,charter-specs |
 | nist-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |

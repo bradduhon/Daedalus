@@ -37,6 +37,10 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     return None
 
 
+def decide(hook_input: dict[str, object], flags: list[str]) -> hook_io.HookDecision:
+    return hook_io.evaluate(hook_input, flags, judge, TOOLS, PARSER)
+
+
 def main() -> int:
     return hook_io.run(judge, TOOLS, PARSER)
 

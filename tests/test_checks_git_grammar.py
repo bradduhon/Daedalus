@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 from lib import jail
-from lib.jail import CONDUCTOR_GIT
+from lib.shell import CONDUCTOR_GIT
 
 from tests.conftest import CFG, CWD, WT
 from tests.hook_chain import (

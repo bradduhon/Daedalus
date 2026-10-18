@@ -28,6 +28,21 @@ class Flag:
 Judge = Callable[[dict[str, object], argparse.Namespace], str | None]
 
 
+@dataclass(frozen=True)
+class HookDecision:
+    allow: bool
+    reason: str | None
+
+    def __post_init__(self) -> None:
+        # 0044: an allow carries no reason; a deny always carries one.
+        if not ((self.allow and self.reason is None) or (not self.allow and self.reason)):
+            raise ValueError(f"HookDecision({self.allow!r}, {self.reason!r}) is not a decision")
+
+
+def _decision(reason: str | None) -> HookDecision:
+    return HookDecision(reason is None, reason)
+
+
 class _FlagError(ValueError):
     pass
 
@@ -148,32 +163,36 @@ def evaluate(
     judge: Judge,
     tools: frozenset[str],
     parser: argparse.ArgumentParser,
-) -> str | None:
+) -> HookDecision:
     # 0044: tool_name, then flags, then the tool filter, then tool_input, then the judge.
     name = parser.prog
     tool = hook_input.get("tool_name")
     if not isinstance(tool, str) or not tool:
-        return failed_closed(name, "hook input has no tool_name")
+        return _decision(failed_closed(name, "hook input has no tool_name"))
     try:
         flags = _parse(argv, parser)
-    except Exception as exc:  # noqa: BLE001
-        return failed_closed(name, exc)
+    except (Exception, SystemExit) as exc:  # noqa: BLE001
+        return _decision(failed_closed(name, exc))
     if isinstance(flags, str):
-        return failed_closed(name, flags)
+        return _decision(failed_closed(name, flags))
     if tools != EVERY_TOOL and tool not in tools:
-        return None
+        return _decision(None)
     if "tool_input" in hook_input and not isinstance(hook_input["tool_input"], dict):
-        return failed_closed(name, "tool_input is not an object")
+        return _decision(failed_closed(name, "tool_input is not an object"))
     try:
-        return judge(hook_input, flags)
-    except Exception as exc:  # noqa: BLE001
-        return failed_closed(name, exc)
+        reason = judge(hook_input, flags)
+    except (Exception, SystemExit) as exc:  # noqa: BLE001
+        # 0044: an exit from a judge would end a standalone hook with no output, an allow.
+        return _decision(failed_closed(name, exc))
+    if reason is not None and not (isinstance(reason, str) and reason):
+        return _decision(failed_closed(name, f"judge returned {type(reason).__name__} {reason!r}"))
+    return _decision(reason)
 
 
 def run(judge: Judge, tools: frozenset[str], parser: argparse.ArgumentParser) -> int:
     try:
-        return emit(evaluate(read_input(), sys.argv[1:], judge, tools, parser))
-    except Exception as exc:  # noqa: BLE001
+        return emit(evaluate(read_input(), sys.argv[1:], judge, tools, parser).reason)
+    except (Exception, SystemExit) as exc:  # noqa: BLE001
         return emit(failed_closed(parser.prog, exc))
 
 

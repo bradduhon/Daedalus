@@ -260,6 +260,39 @@ def test_train_made_worktree_keeps_root_log_and_jail(live_repo: Path) -> None:
     )
 
 
+def test_coder_write_outside_its_worktree_is_refused_through_the_router(live_repo: Path) -> None:
+    # 0044: the real hook process routes the coder's write to unit_writes, which refuses it.
+    from lib.unit_binding import record_dispatch
+
+    (wt,) = _train(live_repo, "u1")
+    assert record_dispatch(live_repo, TRAIN, f"{TRAIN}-u1") is None
+    session = str(uuid.uuid4())
+    results = {}
+    for target in (wt / "src" / "a.py", live_repo / "src" / "a.py"):
+        payload = {
+            "session_id": session,
+            "hook_event_name": "PreToolUse",
+            "cwd": str(live_repo),
+            "agent_type": PROBE,
+            "agent_id": "a-1",
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(target), "content": "ok\n"},
+        }
+        results[target] = _jail_hook(payload)
+    good, bad = results.values()
+    assert good.returncode == 0, good.stderr
+    assert bad.returncode == 2, bad.stderr
+    assert bad.stderr.startswith("daedalus-jail[repo-coder]: unit_writes: "), bad.stderr
+    log = live_repo / ".claude" / "daedalus" / "audit" / f"{session}.jsonl"
+    recs = [json.loads(line) for line in log.read_text().splitlines()]
+    for r in recs:
+        print(json.dumps({k: r.get(k) for k in RECORD_KEYS}))
+    assert [r["decision"] for r in recs] == ["allow", "block"], recs
+    assert recs[0]["reason"] is None
+    assert str(recs[1]["reason"]).startswith("unit_writes: "), recs[1]["reason"]
+    _append_result(f"- session {session}: router refusal reason {recs[1]['reason']}")
+
+
 def _span(recs: list[dict[str, Any]], agent_id: str) -> tuple[str, str]:
     mine = [r for r in recs if r["agent_id"] == agent_id]
     start = next(r["ts"] for r in mine if r["event"] == "SubagentStart")

@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lib import hook_io, jail, shell  # noqa: E402
+from lib import dispatch_binding, hook_io, jail, shell  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset(jail.WRITE_TOOLS | {"Bash"})
 FLAGS: dict[str, hook_io.Flag] = {}
@@ -28,7 +28,7 @@ def _write_reason(hook_input: dict[str, object], cwd: str, boundary: Boundary) -
     if reason:
         return reason
     unit = (jail._unit_parts(shell._abs(path, cwd), cwd) or [""])[0]
-    return jail._binding_reason(hook_input, cwd, {unit})
+    return dispatch_binding._binding_reason(hook_input, cwd, {unit})
 
 
 def _bash_reason(hook_input: dict[str, object], cwd: str, boundary: Boundary) -> str | None:
@@ -52,8 +52,8 @@ def _bash_reason(hook_input: dict[str, object], cwd: str, boundary: Boundary) ->
         reason = jail._coder_bash_reason(segment, cwd, boundary)
         if reason:
             return reason
-        touched |= jail._segment_units(segment, cwd)
-    return jail._binding_reason(hook_input, cwd, touched)
+        touched |= dispatch_binding._segment_units(segment, cwd)
+    return dispatch_binding._binding_reason(hook_input, cwd, touched)
 
 
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
@@ -63,6 +63,10 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     if hook_io.text(hook_input, "tool_name") in jail.WRITE_TOOLS:
         return _write_reason(hook_input, cwd, boundary)
     return _bash_reason(hook_input, cwd, boundary)
+
+
+def decide(hook_input: dict[str, object], flags: list[str]) -> hook_io.HookDecision:
+    return hook_io.evaluate(hook_input, flags, judge, TOOLS, PARSER)
 
 
 def main() -> int:

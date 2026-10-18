@@ -6,10 +6,11 @@ from __future__ import annotations
 import pytest
 from lib import gh_policy, jail
 
-from tests.conftest import CFG
+from tests.conftest import CFG, REPO_ROOT
 from tests.hook_chain import (
     decide,
     evaluate,
+    first_deny,
     internal_error_denies,
     malformed_input_denies,
     outside_tools_allow,
@@ -190,6 +191,14 @@ def test_gh_classes_judges_the_hook_alone() -> None:
     assert evaluate(HOOK, _b(C, "gh pr create --title x"), "--conductor") == jail.R_BODY_INLINE
     assert evaluate(HOOK, _b(C, "gh pr create --title x")) is None
     assert "not on the repo-coder gh list" in str(evaluate(HOOK, _b("repo-coder", "gh pr view 1")))
+
+
+def test_charter_docs_ledger_value_naming_git_push_is_refused_by_gh_classes() -> None:
+    # 0044 parity: the gh gate's text fallback refuses `git push` inside an argument value.
+    args = '--expected-seq 2 --entry-file docs/.tmp/e.md --repo DAE --type "git push"'
+    hook_input = _b("charter-docs", f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}")
+    assert first_deny(hook_input, CFG) == (HOOK, str(evaluate(HOOK, hook_input)))
+    assert "git push runs only in the Push Train's conductor" in str(evaluate(HOOK, hook_input))
 
 
 def test_gh_classes_fixture_decisions() -> None:

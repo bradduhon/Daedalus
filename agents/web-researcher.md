@@ -5,6 +5,7 @@ tools: WebSearch, WebFetch, Read
 disallowedTools: Agent, Task, SendMessage
 model: haiku
 shape: finder
+# 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).
 hooks:
   PreToolUse:
     - hooks:

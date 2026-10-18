@@ -255,7 +255,7 @@ def gh_reason(agent: str, command: str, segments: list[list[str]] | None) -> str
     # 0028: every gh and git push segment; None segments means the regex fallback.
     if segments is None:
         return _fallback_reason(agent, command)
-    from lib.jail import _git_subcommand  # jail imports this module, so import at call time.
+    from lib.shell import _git_subcommand
 
     for tokens in segments:
         name = os.path.basename(tokens[0]) if tokens else ""
