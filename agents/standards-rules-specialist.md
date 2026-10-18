@@ -4,6 +4,12 @@ description: Adopts the project's declared standards. Emits the Standards Packet
 tools: Read, Grep, Glob
 disallowedTools: Write, Edit, MultiEdit, NotebookEdit, Bash, WebFetch, WebSearch, Agent, Task, SendMessage
 model: sonnet
+shape: finder
+hooks:
+  PreToolUse:
+    - hooks:
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/credential_paths.py"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/tool_bound.py"}
 ---
 <!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
 

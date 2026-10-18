@@ -4,6 +4,19 @@ description: Single-writer custodian of the Charter repository, the architectura
 tools: Read, Grep, Glob, Write, Edit, Bash
 disallowedTools: Agent, Task, SendMessage
 model: sonnet
+shape: producer
+hooks:
+  PreToolUse:
+    - hooks:
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/credential_paths.py"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/workspace_integrity.py"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/tool_bound.py"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/shell_tripwires.py --no-pipes"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/network_tools.py"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/git_push.py"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/git_grammar.py --allow docs"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --touch charter,docs --ledger-guard"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/command_allowlist.py --allow append_ledger,git"}
 ---
 <!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
 
