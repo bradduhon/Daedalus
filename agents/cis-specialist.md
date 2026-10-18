@@ -5,6 +5,7 @@ tools: Read, Grep, Bash
 disallowedTools: Agent, Task, SendMessage
 model: sonnet
 shape: judge
+# 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).
 hooks:
   PreToolUse:
     - hooks:

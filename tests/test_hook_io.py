@@ -36,7 +36,7 @@ def _boom(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
 
 
 def _call(hook_input: dict[str, object], *argv: str, judge: hook_io.Judge = _seen) -> str | None:
-    return hook_io.evaluate(hook_input, list(argv), judge, BASH, PARSER)
+    return hook_io.evaluate(hook_input, list(argv), judge, BASH, PARSER).reason
 
 
 def _closed(cause: str) -> str:
@@ -135,8 +135,8 @@ def test_good_flags_reach_the_judge() -> None:
 
 
 def test_every_tool_judges_every_tool() -> None:
-    reason = hook_io.evaluate({"tool_name": "Anything"}, [], _seen, EVERY_TOOL, PARSER)
-    assert str(reason).startswith("judged Anything")
+    decision = hook_io.evaluate({"tool_name": "Anything"}, [], _seen, EVERY_TOOL, PARSER)
+    assert not decision.allow and str(decision.reason).startswith("judged Anything")
 
 
 def test_tool_input_must_be_an_object() -> None:

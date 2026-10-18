@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-import itertools
 import os
 import re
 import subprocess
@@ -10,8 +9,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
 
+from lib import dispatch_binding
 from lib.audit import _git_env, project_data_dir, project_root
 from lib.config import Config
 from lib.credential_paths import (
@@ -30,7 +29,7 @@ from lib.credential_paths import credential_roots as _credential_roots
 from lib.credential_paths import expand_word as _expand_word
 from lib.credential_paths import store_rest as _store_rest
 from lib.credential_paths import tilde as _tilde
-from lib.gh_policy import CONDUCTOR_GH, allowlist_applies, conductor_gh_refusal, gh_reason
+from lib.gh_policy import CONDUCTOR_GH, allowlist_applies, gh_reason
 from lib.ledger import LedgerError, resolve_ledger
 from lib.manifest import Manifest, ManifestError, extension_hit, path_hit
 from lib.manifest import load as load_manifest
@@ -43,39 +42,24 @@ from lib.shell import (
     _HOME,
     _PROJECT_DATA,
     _REPO_SCRIPTS,
-    _SAFE_ENV,
     _SHELLS,
     _VALUE_LONG_NEXT,
-    CHARTER_DOCS_GIT,
-    CODER_GIT,
-    CONDUCTOR_GIT,
     GIT_PLUMBING_REMOTE,
     R_DATA_DIR_GIT,
-    R_ENV,
-    R_UNSUPPORTED,
     READ_ONLY_CMDS,
     READ_ONLY_GIT,
-    SPECIALIST_GIT,
     _abs,
     _base,
     _cmd_name,
     _command_reason,
-    _exempt_indices,
     _git_split,
-    _git_subcommand,
-    _is_append_ledger,
     _long_matches,
     _names_project_data,
     _quote_spans,
-    _regex_tripwire,
-    _scan,
-    _segment_reason,
     _shell_code,
     _short_flags,
     _strip_wrappers,
     _under,
-    _worker_hygiene,
-    split_pipeline,  # noqa: F401  0044: tests/test_jail.py imports it from here until unit 1.4.
     tokenize,
 )
 from lib.train_scope import (
@@ -84,9 +68,6 @@ from lib.train_scope import (
     TEST_NAMESPACE,
     policed_outside_train,
 )
-from lib.train_state import TrainStateError, active_train
-from lib.train_state import load as load_train
-from lib.unit_binding import claim, record_dispatch
 from lib.workspace import UNMARK_NEXT, train_marker
 
 WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
@@ -197,7 +178,7 @@ R_DOCS_BASH = (
     "charter-docs Bash is limited to append_ledger.py, git add <path>, git commit -m, "
     "git status, git log and git diff. Next: use those only; the main session runs the rest."
 )
-# 0044: reason literals the hook scripts share with the per-agent branches below.
+# 0044: reason literals the hook scripts under scripts/checks return.
 R_UNIT_OUTSIDE = (
     "write outside your unit worktree: {}. "
     "Next: ask the orchestrating session to route this to contract-spec or "
@@ -239,6 +220,10 @@ R_UNKNOWN = (
     "unknown agent_type '{agent}', fail closed. Next: add the agent to the jail before using it."
 )
 R_UNKNOWN_TRAIN = "unknown agent_type '{agent}', fail closed while {marker} exists.\n" + UNMARK_NEXT
+R_ROUTED = (
+    "{agent} is judged by the router, not lib.jail.decide. "
+    "Next: route the call through scripts/enforce_agent_jail.py."
+)
 _CREDENTIAL_PART = re.compile(r"[=:,]")
 R_CREDENTIAL_PARAM = (
     "{path} could be a credential path; the jail cannot resolve its variable. "
@@ -1276,7 +1261,7 @@ def _bash_credential_reason(command: str, cwd: str, roots: list[str]) -> str | N
     return _tree_reason(parsed, envs, bases, roots, command)
 
 
-def _credential_reason(tool: str, tool_input: dict[str, Any], cwd: str) -> str | None:
+def _credential_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | None:
     if tool == "Bash":
         command = str(tool_input.get("command") or "")
         return _bash_credential_reason(command, cwd, _credential_roots())
@@ -1360,7 +1345,7 @@ def _bash_write_dirs(command: str, cwd: str) -> list[str]:
     return found
 
 
-def _write_dirs(tool: str, tool_input: dict[str, Any], cwd: str) -> list[str]:
+def _write_dirs(tool: str, tool_input: dict[str, object], cwd: str) -> list[str]:
     if tool in WRITE_TOOLS:
         raw = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
         return [_abs(raw, cwd)] if raw else []
@@ -1369,7 +1354,7 @@ def _write_dirs(tool: str, tool_input: dict[str, Any], cwd: str) -> list[str]:
     return []
 
 
-def _marked_repo(cwd: str, tool: str, tool_input: dict[str, Any]) -> Path | None:
+def _marked_repo(cwd: str, tool: str, tool_input: dict[str, object]) -> Path | None:
     # 0023, issue 30: a train in the cwd repo or in any repo the call writes into counts.
     seen: set[str] = set()
     for path in [cwd, *_write_dirs(tool, tool_input, cwd)]:
@@ -1386,100 +1371,9 @@ def _marked_repo(cwd: str, tool: str, tool_input: dict[str, Any]) -> Path | None
     return None
 
 
-def _train_scoped(cwd: str, tool: str, tool_input: dict[str, Any]) -> bool:
+def _train_scoped(cwd: str, tool: str, tool_input: dict[str, object]) -> bool:
     # 0035: an unknown repo (no absolute cwd) is judged as if a train runs there.
     return not os.path.isabs(cwd) or _marked_repo(cwd, tool, tool_input) is not None
-
-
-R_NO_TRAIN = (
-    "a repo-coder writes only inside a Daedalus train (issue 29). "
-    "Next: start coders from /daedalus:build-train."
-)
-R_WORKTREE_LINE = (
-    "a repo-coder dispatched during a train names its unit on exactly one line "
-    "'Worktree: <absolute path>' (issue 29). Next: name the unit worktree on one Worktree: line."
-)
-R_TWO_UNITS = (
-    "one command may write into one unit worktree only (issue 29). "
-    "Next: write only in the unit worktree you were dispatched to."
-)
-R_NO_CODER_ID = (
-    "the hook input has neither agent_id nor session_id, so the coder cannot be bound "
-    "(issue 29). Next: report this hook payload to the operator."
-)
-DISPATCH_TOOLS = frozenset({"Agent", "Task"})
-_WORKTREE_LINE = re.compile(r"Worktree: (/\S+)")
-# issue 29: git forms that change a unit's index, history or files; -C names the unit.
-_UNIT_GIT_WRITES = frozenset({"add", "stage", "commit", "stash", "restore", "checkout"})
-
-
-def _dispatch_reason(tool_input: dict[str, Any], cwd: str) -> str | None:
-    # issue 29: during a train a coder dispatch names exactly one recorded unit, once.
-    subagent = str(tool_input.get("subagent_type") or "")
-    if subagent.rpartition(":")[2] != "repo-coder" or not os.path.isabs(cwd):
-        return None
-    if not _train_active(cwd):
-        return None
-    repo = project_root(cwd)
-    train = active_train(repo)
-    if train is None:
-        marker = train_marker(repo)
-        return f"{marker} names no train id. " + UNMARK_NEXT.format(repo=repo)
-    prompt = str(tool_input.get("prompt") or "")
-    lines = [line for line in prompt.splitlines() if line.startswith("Worktree:")]
-    match = _WORKTREE_LINE.fullmatch(lines[0]) if len(lines) == 1 else None
-    if match is None:
-        return R_WORKTREE_LINE
-    try:
-        units = load_train(repo, train).get("units") or []
-    except TrainStateError as exc:
-        return str(exc)
-    named = os.path.realpath(match.group(1))
-    for unit in units:
-        if isinstance(unit, dict) and unit.get("path") and unit.get("name"):
-            if os.path.realpath(str(unit["path"])) == named:
-                return record_dispatch(repo, train, str(unit["name"]))
-    return (
-        f"{match.group(1)} is not a unit worktree of train {train}. "
-        "Next: name the unit worktree on one Worktree: line, as daedalus_workspace.py create "
-        "printed it."
-    )
-
-
-def _segment_units(segment: list[str], cwd: str) -> set[str]:
-    name = _base(segment[0])
-    targets: list[str] = []
-    if name == "git":
-        sub, args, globals_ = _git_split(segment)
-        if sub in _UNIT_GIT_WRITES:
-            base = _git_dir(globals_, cwd)
-            targets = [base, *(_abs(a, base) for a in args[1:] if args[:1] == ["--"])]
-    elif name in CODER_WRITE_CMDS or (name in {"sed", "perl"} and _in_place(name, segment[1:])):
-        targets = [_abs(a, cwd) for a in _write_operands(name, segment[1:]) if a != "-"]
-    units: set[str] = set()
-    for target in targets:
-        parts = _unit_parts(target, cwd)
-        if parts is not None:
-            units.add(parts[0])
-    return units
-
-
-def _binding_reason(hook_input: dict[str, Any], cwd: str, units: set[str]) -> str | None:
-    # issue 29: the first write claims the dispatched unit; every later write stays in it.
-    if not units:
-        return None
-    repo = project_root(cwd)
-    train = active_train(repo)
-    if train is None:
-        return R_NO_TRAIN
-    if len(units) > 1:
-        return R_TWO_UNITS
-    # B1: a coder run as the session agent (--agent) has no agent_id; its session binds.
-    session = str(hook_input.get("session_id") or "")
-    coder = str(hook_input.get("agent_id") or "") or (f"session:{session}" if session else "")
-    if not coder:
-        return R_NO_CODER_ID
-    return claim(repo, train, coder, next(iter(units)))
 
 
 def _ours(raw_agent: str) -> bool:
@@ -1488,7 +1382,7 @@ def _ours(raw_agent: str) -> bool:
 
 
 def _unknown_decision(
-    raw_agent: str, agent: str, cwd: str, tool: str, tool_input: dict[str, Any]
+    raw_agent: str, agent: str, cwd: str, tool: str, tool_input: dict[str, object]
 ) -> Decision:
     # 0023: a foreign agent is refused only while a train is active; a daedalus name always is.
     if _ours(raw_agent):
@@ -1516,14 +1410,13 @@ def normalize_agent(agent_type: str) -> str:
     return agent_type
 
 
-def decide(hook_input: dict[str, Any], config: Config) -> Decision:
+def decide(hook_input: dict[str, object], config: Config) -> Decision:
     raw_agent = str(hook_input.get("agent_type") or "main")
     agent = normalize_agent(raw_agent)
     tool = str(hook_input.get("tool_name") or "")
     cwd = str(hook_input.get("cwd") or "")
-    tool_input = hook_input.get("tool_input")
-    if not isinstance(tool_input, dict):
-        tool_input = {}
+    raw_input = hook_input.get("tool_input")
+    tool_input: dict[str, object] = raw_input if isinstance(raw_input, dict) else {}
     if tool in CREDENTIAL_TOOLS:
         reason = path_reason(tool, tool_input, cwd)
         return Decision(reason is None, reason, agent)
@@ -1538,8 +1431,11 @@ def decide(hook_input: dict[str, Any], config: Config) -> Decision:
     # m4: only the orchestrator thread arrives without an agent_id.
     if agent == "main" and hook_input.get("agent_id"):
         return Decision(False, R_SUBAGENT_MAIN, agent)
-    if agent in KNOWN_AGENTS:
-        decision = _decide(hook_input, config, agent)
+    if agent == "main":
+        decision = _decide_main(tool, cwd, tool_input)
+    elif agent in KNOWN_AGENTS:
+        # 0044: a Daedalus agent's calls run its agent file's hooks, never this function.
+        decision = _block(R_ROUTED.format(agent=agent))
     elif tool == "Bash" and (gh := _gh_gate(agent, cwd, str(tool_input.get("command") or ""))):
         decision = _block(gh)
     else:
@@ -1547,12 +1443,7 @@ def decide(hook_input: dict[str, Any], config: Config) -> Decision:
     return Decision(decision.allow, decision.reason, agent)
 
 
-def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
-    tool = str(hook_input.get("tool_name") or "")
-    cwd = str(hook_input.get("cwd") or "")
-    tool_input = hook_input.get("tool_input")
-    if not isinstance(tool_input, dict):
-        tool_input = {}
+def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision:
     command = str(tool_input.get("command") or "")
     raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
     is_write = tool in WRITE_TOOLS
@@ -1565,237 +1456,21 @@ def _decide(hook_input: dict[str, Any], config: Config, agent: str) -> Decision:
         return _block(R_DOTGIT)
     if is_write and _data_dir_path(path, cwd):
         return _block(R_DATA_DIR)
-    charter = str(config.charter_root) if config.charter_root else None
-
-    if tool == "Bash" and agent == "main":
+    if tool == "Bash":
         # 8.5: main is bound only by the tripwires; regex fallback when tokenize refuses.
         if _data_dir_write(command):
             return _block(R_DATA_DIR)
         if _cd_data_dir_git(command):
             return _block(R_DATA_DIR_GIT)
-        reason = _command_reason(command) or _gh_gate(agent, cwd, command)
+        reason = _command_reason(command) or _gh_gate("main", cwd, command)
         return _block(reason) if reason else _allow()
-    segments: list[list[str]] = []
-    piped = False
-    if tool == "Bash":
-        scanned = _scan(command)
-        parsed = tokenize(command)
-        # 8.5: || is a fallback chain the jail does not reason about, blocked for workers.
-        if parsed is None or scanned is None or "||" in scanned[1]:
-            return _block(R_UNSUPPORTED)
-        segments = parsed
-        piped = "|" in scanned[1]
-        for segment in segments:
-            reason = _segment_reason(segment, 0, main=False)
-            if reason == _FALLBACK:
-                reason = _regex_tripwire(command)
-            if reason:
-                return _block(reason)
-        reason = _gh_gate(agent, cwd, command)
+    if is_write and _orchestrator_code(path, cwd):
+        return _block(
+            "the orchestrating session does not write application code during a train. "
+            "Next: dispatch a repo-coder for this change."
+        )
+    if tool in dispatch_binding.DISPATCH_TOOLS:
+        reason = dispatch_binding._dispatch_reason(tool_input, cwd)
         if reason:
             return _block(reason)
-    if agent != "main" and (tool in WORKER_DENIED_TOOLS or tool.startswith("mcp__")):
-        return _block(R_TOOL)
-    if tool == "Bash" and agent != "main":
-        # Env prefix ruling: only the fixed _SAFE_ENV names may precede a worker command.
-        segments = [list(itertools.dropwhile(_SAFE_ENV.match, s)) for s in segments]
-        if not all(segments):
-            return _block(R_ENV)
-        for segment in segments:
-            reason = _worker_hygiene(segment, agent)
-            if reason:
-                return _block(reason)
-
-    if agent == "main":
-        if is_write and _orchestrator_code(path, cwd):
-            return _block(
-                "the orchestrating session does not write application code during a train. "
-                "Next: dispatch a repo-coder for this change."
-            )
-        if tool in DISPATCH_TOOLS:
-            reason = _dispatch_reason(tool_input, cwd)
-            if reason:
-                return _block(reason)
-        return _allow()
-
-    if agent == "repo-coder":
-        boundary = lru_cache(maxsize=1)(lambda: _coder_boundary(cwd, config))
-        if is_write and not _in_unit_worktree(path, cwd):
-            return _block(R_UNIT_OUTSIDE.format(path))
-        if is_write:
-            reason = _coder_write_reason(path, cwd, boundary())
-            if reason:
-                return _block(reason)
-            unit = (_unit_parts(_abs(path, cwd), cwd) or [""])[0]
-            reason = _binding_reason(hook_input, cwd, {unit})
-            if reason:
-                return _block(reason)
-        if tool == "Bash":
-            if piped:
-                return _block(R_PIPE)
-            moved = any(_base(s[0]) in DIR_CHANGE_CMDS for s in segments)
-            touched: set[str] = set()
-            for segment in segments:
-                relative = _cd_relative_target(segment, cwd) if moved else None
-                if relative is not None:
-                    return _block(R_CD_RELATIVE.format(relative))
-                exempt = _exempt_indices(segment)
-                words = [_base(t) for i, t in enumerate(segment) if i not in exempt]
-                sub = _git_subcommand(segment) if _base(segment[0]) == "git" else None
-                # I3a: a local subcommand's operands (stash push) go to the git allowlist below.
-                if sub in REMOTE_GIT or (
-                    sub not in CODER_GIT and "git" in words and REMOTE_GIT & set(words)
-                ):
-                    return _block(R_REMOTE_GIT)
-                if NETWORK_TOOLS & set(words):
-                    return _block(R_NETWORK)
-                if any(t.startswith("--basetemp") for t in segment):
-                    return _block(R_BASETEMP)
-                if _base(segment[0]) == "git" and not _git_grammar_ok(
-                    segment, CODER_GIT, cwd, None
-                ):
-                    return _block(R_CODER_GIT)
-                if sub in {"add", "commit"}:
-                    git_dir = _git_dir(_git_split(segment)[2], cwd)
-                    if _unit_parts(git_dir, cwd) is None:
-                        return _block(R_CODER_UNIT_GIT)
-                reason = _coder_bash_reason(segment, cwd, boundary)
-                if reason:
-                    return _block(reason)
-                touched |= _segment_units(segment, cwd)
-            reason = _binding_reason(hook_input, cwd, touched)
-            if reason:
-                return _block(reason)
-        if tool in WEB_TOOLS:
-            return _block(
-                "no web access for coders. Next: return [STATUS: YIELD_WEB] with your question."
-            )
-        return _allow()
-
-    if agent == "contract-spec":
-        if is_write:
-            ok = _under(path, f"{cwd}/contracts") or (
-                charter is not None and _under(path, f"{charter}/specs")
-            )
-            if not ok:
-                return _block(R_CONTRACT_SPEC_WRITE)
-        if tool == "Bash":
-            return _block("contract-spec has no shell. Next: use Read, Grep, Glob, Write, Edit.")
-        if tool in WEB_TOOLS:
-            return _block(
-                "contract-spec has no web access. "
-                "Next: ask the orchestrating session to dispatch web-researcher."
-            )
-        return _allow()
-
-    if agent == "charter-docs":
-        if is_write:
-            reason = _ledger_write_reason(path, cwd, config)
-            if reason:
-                return _block(reason)
-            ok = (charter is not None and _under(path, charter)) or _under(path, f"{cwd}/docs")
-            if not ok:
-                return _block(R_CHARTER_DOCS_WRITE)
-        if tool == "Bash":
-            if piped:
-                return _block(R_PIPE)
-            for segment in segments:
-                if _is_append_ledger(segment):
-                    if not _ledger_args_ok(segment):
-                        return _block(R_LEDGER_ARGS)
-                    continue
-                name = _cmd_name(segment)
-                if name == "git" and _git_grammar_ok(
-                    segment, CHARTER_DOCS_GIT, cwd, charter, _DOCS_GRAMMAR
-                ):
-                    continue
-                return _block(R_DOCS_BASH)
-        if tool in WEB_TOOLS:
-            return _block(
-                "charter-docs has no web access. "
-                "Next: ask the orchestrating session to dispatch web-researcher."
-            )
-        return _allow()
-
-    if agent == "security-auditor":
-        if is_write:
-            return _block(
-                "the auditor is read-only. "
-                "Next: return findings in [VERDICT: REJECTED]; the coder fixes them."
-            )
-        if tool == "Bash" and not all(
-            _read_only_segment(s, READ_ONLY_GIT, cwd, charter) for s in segments
-        ):
-            return _block(R_AUDITOR_BASH)
-        if tool in WEB_TOOLS:
-            return _block(
-                "the auditor has no web access. Next: judge from the diff and the packets."
-            )
-        return _allow()
-
-    if agent in {"nist-specialist", "cis-specialist"}:
-        if is_write:
-            return _block(
-                "specialist caches are operator-pinned; no writes. "
-                "Next: report [STATUS: CACHE_INVALID] if the cache is wrong."
-            )
-        if tool == "Bash" and not all(
-            _read_only_segment(s, SPECIALIST_GIT, cwd, charter) for s in segments
-        ):
-            return _block(R_SPECIALIST_BASH)
-        if tool in WEB_TOOLS:
-            return _block(
-                "specialists never fetch; the cache is operator-pinned. "
-                "Next: use the pinned catalog."
-            )
-        return _allow()
-
-    if agent == "pr-train-conductor":
-        if is_write:
-            return _block(
-                "the conductor is read-only for source. "
-                "Next: report and stop; the Build Train edits."
-            )
-        if tool == "Bash":
-            if piped:
-                return _block(R_PIPE)
-            for segment in segments:
-                name = _cmd_name(segment)
-                if name == "git" and _git_subcommand(segment) == "push":
-                    if not _conductor_push_ok(segment):
-                        return _block(R_CONDUCTOR_PUSH)
-                    continue
-                if name == "git" and _git_grammar_ok(segment, CONDUCTOR_GIT, cwd, None):
-                    continue
-                if name == "gh":
-                    if _gh_repo_flag(segment):
-                        return _block(R_CONDUCTOR_REPO)
-                    if not _gh_body_file_ok(segment, cwd):
-                        return _block(R_BODY_FILE)
-                    reason = _gh_write_reason(segment)
-                    if reason:
-                        return _block(reason)
-                    if not _gh_allowed(segment):
-                        return _block(conductor_gh_refusal())
-                    continue
-                if name == "gitleaks":
-                    if not _gitleaks_ok(segment):
-                        return _block(R_GITLEAKS)
-                    continue
-                return _block(R_CONDUCTOR_BASH)
-        if tool in WEB_TOOLS:
-            return _block(R_CONDUCTOR_WEB)
-        return _allow()
-
-    if agent in {"web-researcher", "standards-rules-specialist"}:
-        if is_write:
-            return _block(f"{agent} is read-only. Next: return your findings as text.")
-        if tool == "Bash":
-            return _block(f"{agent} has no shell. Next: use Read, Grep, Glob.")
-        if tool in WEB_TOOLS and agent != "web-researcher":
-            return _block(R_WEB_RESEARCHER_ONLY)
-        return _allow()
-
-    return _block(
-        f"no policy for agent_type '{agent}', fail closed. Next: add a case to lib/jail.py."
-    )
+    return _allow()

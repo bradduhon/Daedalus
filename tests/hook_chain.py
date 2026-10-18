@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 0044: in-process and subprocess runners for scripts/checks, and each agent's hook chain.
+# 0044: in-process and subprocess runners for scripts/checks, each agent's chain, the split.
 from __future__ import annotations
 
 import importlib.util
@@ -9,7 +9,7 @@ import subprocess
 import sys
 from types import ModuleType
 
-from lib import hook_io
+from lib import hook_io, jail, router
 from lib.config import Config
 from lib.jail import Decision, normalize_agent
 
@@ -110,7 +110,8 @@ def load(script: str) -> ModuleType:
 
 def evaluate(script: str, hook_input: dict[str, object], *flags: str) -> str | None:
     module = load(script)
-    return hook_io.evaluate(hook_input, list(flags), module.judge, module.TOOLS, module.PARSER)
+    decision = hook_io.evaluate(hook_input, list(flags), module.judge, module.TOOLS, module.PARSER)
+    return decision.reason
 
 
 def first_deny(hook_input: dict[str, object], config: Config) -> tuple[str, str] | None:
@@ -131,6 +132,15 @@ def first_deny(hook_input: dict[str, object], config: Config) -> tuple[str, str]
 def decide(hook_input: dict[str, object], config: Config) -> Decision:
     denied = first_deny(hook_input, config)
     return Decision(denied is None, denied[1] if denied else None)
+
+
+def judge(hook_input: dict[str, object], config: Config) -> Decision:
+    # 0044: as scripts/enforce_agent_jail.py splits: Daedalus agents by the router, else lib.jail.
+    raw = str(hook_input.get("agent_type") or "main")
+    if router.routed(raw):
+        allow, reason, _ = router.route(hook_input, REPO_ROOT)
+        return Decision(allow, reason, normalize_agent(raw))
+    return jail.decide(hook_input, config)
 
 
 def run_script(

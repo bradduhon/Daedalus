@@ -33,7 +33,7 @@ FAKE_UNITS = frozenset({f"{CWD}/.claude/worktrees/u1", WT})
 @pytest.fixture
 def jail_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     # 0022: CWD is not a real repo; register its fake unit worktrees, real repos query git.
-    from lib import hook_io, jail
+    from lib import dispatch_binding, hook_io, jail
 
     real = getattr(jail, "_registered_worktrees", None)
 
@@ -44,16 +44,16 @@ def jail_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(jail, "_registered_worktrees", fake, raising=False)
     # issue 29: CWD has no train state; binding is proven in tests/test_unit_binding.py.
-    real_binding = jail._binding_reason
+    real_binding = dispatch_binding._binding_reason
 
-    def no_binding(hook_input: dict[str, Any], cwd: str, units: set[str]) -> str | None:
+    def no_binding(hook_input: dict[str, object], cwd: str, units: set[str]) -> str | None:
         return None if cwd == CWD else real_binding(hook_input, cwd, units)
 
-    monkeypatch.setattr(jail, "_binding_reason", no_binding)
+    monkeypatch.setattr(dispatch_binding, "_binding_reason", no_binding)
     # 0035: CWD stands for a repo a train runs in; real repos below resolve their own marker.
     real_scoped = jail._train_scoped
 
-    def scoped(cwd: str, tool: str, tool_input: dict[str, Any]) -> bool:
+    def scoped(cwd: str, tool: str, tool_input: dict[str, object]) -> bool:
         return cwd.startswith(CWD) or real_scoped(cwd, tool, tool_input)
 
     monkeypatch.setattr(jail, "_train_scoped", scoped)

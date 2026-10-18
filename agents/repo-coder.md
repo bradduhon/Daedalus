@@ -5,6 +5,7 @@ tools: Read, Write, Edit, Bash, Glob, Grep
 disallowedTools: WebSearch, WebFetch, Agent, Task, SendMessage
 model: opus
 shape: producer
+# 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).
 hooks:
   PreToolUse:
     - hooks:

@@ -70,6 +70,21 @@ def test_every_agent_has_shape_and_hooks() -> None:
         assert len({hook.script for hook in agent.hooks}) == len(agent.hooks), name
 
 
+ROUTER_COMMENT = (
+    "# 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents "
+    "(sub-agents.md:239)."
+)
+
+
+def test_every_hooks_block_carries_the_router_comment() -> None:
+    paths = sorted(AGENTS.glob("*.md"))
+    assert {p.stem for p in paths} == set(LOADED)
+    for path in paths:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert lines.count("hooks:") == 1, path.name
+        assert lines[lines.index("hooks:") - 1] == ROUTER_COMMENT, path.name
+
+
 def test_every_named_hook_is_a_shipped_script() -> None:
     for name, agent in LOADED.items():
         for hook in agent.hooks:

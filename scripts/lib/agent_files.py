@@ -8,6 +8,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+# 0044: an agent name outside this form reads as a missing agent file.
+AGENT_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 _KEY = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 _TOP_KEYS = ("name", "description", "tools", "disallowedTools", "model", "shape", "hooks")
 _REQUIRED = ("name", "description", "tools", "model")
