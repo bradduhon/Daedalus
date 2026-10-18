@@ -89,9 +89,20 @@ def test_known_agents_match_spec_matrix() -> None:
             "pr-train-conductor",
             "web-researcher",
             "standards-rules-specialist",
-            "boundary-tester",
         }
     )
+
+
+def test_boundary_tester_is_not_a_known_agent() -> None:
+    # 0052: no boundary-tester agent file exists, so it has no jail rules.
+    assert "boundary-tester" not in KNOWN_AGENTS
+
+
+def test_namespaced_boundary_tester_is_refused() -> None:
+    # 0052: refused inside a train like any unknown agent.
+    d = decide(_w("daedalus:boundary-tester", f"{CWD}/tests/adversarial/t.py"), CFG)
+    assert not d.allow
+    assert d.reason == jail.R_UNKNOWN.format(agent="boundary-tester")
 
 
 def test_unknown_agent_fails_closed(tmp_path: Path) -> None:
@@ -407,26 +418,6 @@ class TestNoShellAgents:
         assert not decide(_t("nist-specialist", "WebFetch"), CFG).allow
 
 
-class TestBoundaryTester:
-    def test_writes_only_tests_adversarial(self) -> None:
-        assert decide(_w("boundary-tester", f"{CWD}/tests/adversarial/t.py"), CFG).allow
-        assert not decide(_w("boundary-tester", f"{CWD}/tests/unit/t.py"), CFG).allow
-        assert not decide(_w("boundary-tester", f"{CWD}/src/a.py"), CFG).allow
-
-    def test_bash_tests_and_local_git_only(self) -> None:
-        for command in (
-            "pytest tests/adversarial -q",
-            "npm run test:unit",
-            "git add -A",
-            "git commit -m x",
-            "git diff",
-            "cat x",
-        ):
-            assert decide(_b("boundary-tester", command), CFG).allow, command
-        for command in ("git push", "curl x", "rm -rf tests", "pip install requests"):
-            assert not decide(_b("boundary-tester", command), CFG).allow, command
-
-
 def test_split_pipeline() -> None:
     assert split_pipeline("a | b | c") == ["a", "b", "c"]
     assert split_pipeline("a; b") is None
@@ -446,7 +437,6 @@ BASH_AGENTS = [
     "nist-specialist",
     "cis-specialist",
     "pr-train-conductor",
-    "boundary-tester",
 ]
 PIPE_ALLOWED = {"security-auditor", "nist-specialist", "cis-specialist"}
 SEPARATORS = [
@@ -899,49 +889,6 @@ class TestRegressionConductor:
             assert decide(_b("pr-train-conductor", command), CFG).allow, command
 
 
-class TestRegressionBoundaryTester:
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "npm install x",
-            "npm i x",
-            "npm add x",
-            "npm ci",
-            "npm link",
-            "npm exec x",
-            "npm x y",
-            "npx x",
-            "uv add x",
-            "uv pip install x",
-            "uv tool run x",
-            "uv run --with x pytest",
-            "pip install x",
-            "go get x",
-            "go install x",
-            "cargo install x",
-            "cargo add x",
-            "make",
-            "make test",
-            "node -e 1",
-            "python3 -c 1",
-            "python3 evil.py",
-        ],
-    )
-    def test_blocked(self, command: str) -> None:
-        assert not decide(_b("boundary-tester", command), CFG).allow, command
-
-    def test_allowed(self) -> None:
-        for command in (
-            "npm test",
-            "uv run pytest -q",
-            "python -m pytest tests/adversarial",
-            "go test ./...",
-            "cargo test",
-            "node t.js",
-        ):
-            assert decide(_b("boundary-tester", command), CFG).allow, command
-
-
 class TestRegressionToolsAndCwd:
     @pytest.mark.parametrize("tool", ["Task", "Agent", "mcp__claude_ai_Gmail__create_draft"])
     def test_workers_blocked_from_meta_tools(self, tool: str) -> None:
@@ -1055,8 +1002,6 @@ class TestRound3WorkerGitGrammar:
             ("charter-docs", "git add --force x"),
             ("charter-docs", "git -C /other/repo status"),
             ("charter-docs", "git --git-dir=/x status"),
-            ("boundary-tester", "git commit --no-verify -m x"),
-            ("boundary-tester", "git stash"),
             ("pr-train-conductor", "git commit --amend"),
             ("pr-train-conductor", "git branch -D x"),
             ("pr-train-conductor", "git rebase main"),
@@ -1171,9 +1116,8 @@ class TestRound3WorkerHygiene:
             assert not decide(_b("repo-coder", command), CFG).allow, command
 
     def test_runner_forms_still_allowed(self) -> None:
-        for agent in ("repo-coder", "boundary-tester"):
-            for command in ("python3 -m pytest -q", "node t.js", "uv run pytest"):
-                assert decide(_b(agent, command), CFG).allow, (agent, command)
+        for command in ("python3 -m pytest -q", "node t.js", "uv run pytest"):
+            assert decide(_b("repo-coder", command), CFG).allow, command
 
 
 class TestRound3SortPytestGitleaks:
@@ -1201,8 +1145,7 @@ class TestRound3SortPytestGitleaks:
         ],
     )
     def test_basetemp_denied(self, command: str) -> None:
-        for agent in ("repo-coder", "boundary-tester"):
-            assert not decide(_b(agent, command), CFG).allow, (agent, command)
+        assert not decide(_b("repo-coder", command), CFG).allow, command
 
     def test_gitleaks_report_path(self) -> None:
         conductor = "pr-train-conductor"
@@ -1227,7 +1170,6 @@ class TestRound3DotGitWrites:
             ("repo-coder", f"{CWD}/src/.git/config"),
             ("charter-docs", "/work/Charter/.git/config"),
             ("contract-spec", f"{CWD}/contracts/.git/x"),
-            ("boundary-tester", f"{CWD}/tests/adversarial/.git/x"),
         ],
     )
     def test_blocked(self, agent: str | None, path: str) -> None:
@@ -1500,14 +1442,7 @@ class TestRound4Breakage:
             ("charter-docs", "git diff --cached"),
             ("charter-docs", "git log --oneline -3"),
             ("charter-docs", "git status --porcelain"),
-            ("boundary-tester", "git add --all"),
-            ("boundary-tester", "git commit -m x -- tests/adversarial/t.py"),
-            ("boundary-tester", "git commit -am x"),
             ("repo-coder", "CI=1 npm test"),
-            ("boundary-tester", "CI=1 pytest"),
-            ("boundary-tester", "CI=1 TZ=UTC LANG=C LC_ALL=C pytest"),
-            ("boundary-tester", "NODE_ENV=test npm test"),
-            ("boundary-tester", "PYTHONDONTWRITEBYTECODE=1 python3 -m pytest"),
         ],
     )
     def test_allowed(self, agent: str, command: str) -> None:
@@ -1516,10 +1451,6 @@ class TestRound4Breakage:
     @pytest.mark.parametrize(
         ("agent", "command"),
         [
-            ("boundary-tester", "LD_PRELOAD=x pytest"),
-            ("boundary-tester", "PATH=/tmp pytest"),
-            ("boundary-tester", "CI=1 LD_PRELOAD=x pytest"),
-            ("boundary-tester", "CI=1"),
             ("repo-coder", "PATH=/tmp npm test"),
             ("security-auditor", "GIT_CONFIG_PARAMETERS=x git log"),
             ("security-auditor", "git log --output=x"),
@@ -1668,7 +1599,6 @@ class TestLiveRunGrammar:
     def test_mypy_with_paths_allowed(self, command: str) -> None:
         # F3c: the test-runner rule admits mypy with path operands.
         assert decide(_b("repo-coder", command), CFG).allow, command
-        assert decide(_b("boundary-tester", command), CFG).allow, command
 
     @pytest.mark.parametrize(
         "command",
@@ -1897,7 +1827,7 @@ class TestProjectDataDir:
     def test_main_bash_reads_allowed(self, command: str) -> None:
         assert decide(_b(None, command), CFG).allow, command
 
-    @pytest.mark.parametrize("agent", [None, "repo-coder", "boundary-tester", "pr-train-conductor"])
+    @pytest.mark.parametrize("agent", [None, "repo-coder", "pr-train-conductor"])
     @pytest.mark.parametrize(
         "command",
         [
