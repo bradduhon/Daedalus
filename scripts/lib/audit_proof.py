@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,8 @@ DOCTOR_NEXT = "Next: run the Daedalus health check (/daedalus:doctor)."
 APPROVED_NEXT = "Next: run /daedalus:build-train; this train has no approved audit in its log."
 AUDITOR = "daedalus:security-auditor"
 VERDICT_APPROVED = "[VERDICT: APPROVED]"
+VERDICT_REJECTED = "[VERDICT: REJECTED]"
+_VERDICT_FIELDS = ("last_message_head", "last_message_tail")
 _TRAIN_ID = re.compile(r"[0-9]{8}-[0-9]{6}")
 _SESSION_LINE = re.compile(r"^Session ([A-Za-z0-9_-]+):", re.MULTILINE)
 
@@ -106,10 +108,31 @@ def _summary_session(repo: Path, train_id: str) -> str:
     return match.group(1)
 
 
-def _file_name(record: dict[str, Any]) -> str:
+def _file_name(record: Mapping[str, object]) -> str:
     tool_input = record.get("tool_input")
     raw = tool_input.get("file_path") if isinstance(tool_input, dict) else None
     return Path(raw).name if isinstance(raw, str) else ""
+
+
+def _verdict_refusal(stop: Mapping[str, object]) -> str | None:
+    # 41: every field is untrusted; head first line or tail last line approves, any reject refuses.
+    seq = stop.get("seq")
+    shown = seq if isinstance(seq, int) and not isinstance(seq, bool) else "?"
+    where = f"the {AUDITOR} final round (record seq {shown})"
+    lines: dict[str, list[str]] = {}
+    for field in _VERDICT_FIELDS:
+        value = stop.get(field)
+        if value is not None and not isinstance(value, str):
+            return f"{where} has a {field} that is not text"
+        lines[field] = [ln.strip() for ln in (value or "").splitlines() if ln.strip()]
+    head, tail = lines["last_message_head"], lines["last_message_tail"]
+    if any(ln.startswith(VERDICT_REJECTED) for ln in head + tail):
+        return f"{where} carries a {VERDICT_REJECTED} line"
+    if (head and head[0].startswith(VERDICT_APPROVED)) or (
+        tail and tail[-1].startswith(VERDICT_APPROVED)
+    ):
+        return None
+    return f"{where} is not {VERDICT_APPROVED}"
 
 
 def approved(repo: Path, train_id: str) -> str:
@@ -137,12 +160,9 @@ def approved(repo: Path, train_id: str) -> str:
     ]
     if not stops:
         raise _not_approved(f"no {AUDITOR} SubagentStop record before the summary Write")
-    head = stops[-1].get("last_message_head")
-    if not isinstance(head, str) or not head.startswith(VERDICT_APPROVED):
-        raise _not_approved(
-            f"the {AUDITOR} final round (record seq {stops[-1].get('seq')}) is not "
-            f"{VERDICT_APPROVED}"
-        )
+    refusal = _verdict_refusal(stops[-1])
+    if refusal is not None:
+        raise _not_approved(refusal)
     return (
         f"OK approved: train {train_id}, session {session}, auditor record seq {stops[-1]['seq']}"
     )
