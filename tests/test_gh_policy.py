@@ -7,11 +7,21 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from lib import router
 from lib.config import Config
-from lib.gh_policy import allowlist_applies, classify, gh_reason
-from lib.jail import decide
+from lib.gh_policy import (
+    CONDUCTOR_GH,
+    allowlist_applies,
+    classify,
+    conductor_gh_refusal,
+    gh_reason,
+)
 
-AGENTS = ("main", "pr-train-conductor", "repo-coder", "general-purpose")
+from tests.conftest import REPO_ROOT
+from tests.hook_chain import judge as decide
+
+# 0044: repo-coder's chain refuses gh and git push in network_tools and git_push first.
+AGENTS = ("main", "pr-train-conductor", "general-purpose")
 MERGE = [
     "gh pr merge 5",
     "gh pr merge --auto 5",
@@ -87,6 +97,12 @@ def _reason(repo: Path, agent: str, command: str) -> str:
     return str(d.reason)
 
 
+def _denying_hook(repo: Path, agent: str, command: str) -> str:
+    allow, reason, hook = router.route(_bash(repo, agent, command), REPO_ROOT)
+    assert not allow and reason, (agent, command)
+    return hook
+
+
 def _class_refused(repo: Path, agent: str, command: str, klass: str, nxt: str) -> None:
     reason = _reason(repo, agent, command)
     assert f"is a {klass} command, refused while a train runs and to every Daedalus" in reason
@@ -96,6 +112,10 @@ def _class_refused(repo: Path, agent: str, command: str, klass: str, nxt: str) -
 @pytest.mark.parametrize("agent", AGENTS)
 @pytest.mark.parametrize("command", MERGE)
 def test_merge_class_refused(train_repo: Path, agent: str, command: str) -> None:
+    if agent == "pr-train-conductor" and "{" in command:
+        # 0044: the conductor's shell_tripwires hook refuses a brace token before gh_classes.
+        assert _denying_hook(train_repo, agent, command) == "shell_tripwires"
+        return
     _class_refused(train_repo, agent, command, "merge", MERGE_NEXT)
 
 
@@ -124,9 +144,9 @@ def test_default_deny(train_repo: Path, agent: str, command: str) -> None:
 def test_conductor_allowlist(train_repo: Path, command: str) -> None:
     d = decide(_bash(train_repo, "pr-train-conductor", command), Config())
     assert d.allow, d.reason
-    for agent in ("repo-coder", "general-purpose"):
-        reason = _reason(train_repo, agent, command)
-        assert "(0028)" in reason and "Next: only the Push Train's conductor runs gh." in reason
+    reason = _reason(train_repo, "general-purpose", command)
+    assert "(0028)" in reason and "Next: only the Push Train's conductor runs gh." in reason
+    assert _denying_hook(train_repo, "repo-coder", command) == "network_tools"
 
 
 EDIT_NEXT = "edit only the body with --body-file; the operator changes anything else on the PR"
@@ -186,12 +206,13 @@ def test_main_may_run_only_gh_auth_status(train_repo: Path) -> None:
 
 
 def test_repo_coder_gh_and_git_push_refused(train_repo: Path) -> None:
-    for command in ("gh pr view 3", "gh auth status", "git push origin feat/x"):
-        assert "(0028" in _reason(train_repo, "repo-coder", command), command
+    for command in ("gh pr view 3", "gh auth status"):
+        assert _denying_hook(train_repo, "repo-coder", command) == "network_tools", command
+    assert _denying_hook(train_repo, "repo-coder", "git push origin feat/x") == "git_push"
 
 
 def test_git_push_only_for_the_conductor(train_repo: Path) -> None:
-    for agent in ("main", "repo-coder", "general-purpose"):
+    for agent in ("main", "general-purpose"):
         for command in ("git push origin feat/x", "git -C . push -u origin feat/x"):
             reason = _reason(train_repo, agent, command)
             assert "git push runs only in the Push Train's conductor (0028, 0030)" in reason
@@ -268,11 +289,11 @@ def test_marker_brings_back_the_gate(plain_repo: Path, agent: str) -> None:
     assert "(0028, 0030)" in _reason(plain_repo, agent, "git push origin feat/x")
 
 
-@pytest.mark.parametrize("agent", ("pr-train-conductor", "repo-coder"))
-def test_daedalus_agents_gated_outside_a_train(plain_repo: Path, agent: str) -> None:
+def test_daedalus_agents_gated_outside_a_train(plain_repo: Path) -> None:
     # 0035: a Daedalus agent meets the gh gate with or without a train.
-    _class_refused(plain_repo, agent, "gh pr merge 5", "merge", MERGE_NEXT)
-    assert "(0028" in _reason(plain_repo, "repo-coder", "git push origin feat/x")
+    _class_refused(plain_repo, "pr-train-conductor", "gh pr merge 5", "merge", MERGE_NEXT)
+    assert _denying_hook(plain_repo, "repo-coder", "gh pr merge 5") == "network_tools"
+    assert _denying_hook(plain_repo, "repo-coder", "git push origin feat/x") == "git_push"
 
 
 def test_main_push_into_a_train_repo_from_elsewhere(train_repo: Path, tmp_path: Path) -> None:
@@ -318,3 +339,20 @@ def test_allowlist_applies(plain_repo: Path) -> None:
 )
 def test_classify(command: str, klass: str) -> None:
     assert classify(shlex.split(command))[0] == klass
+
+
+def test_conductor_gh_refusal_names_only_the_built_set() -> None:
+    # 0001, 0028: the refusal lists CONDUCTOR_GH and nothing it does not build.
+    text = conductor_gh_refusal()
+    assert text == (
+        "conductor gh is limited to gh pr checks, create, edit, list, view and "
+        "gh run list, view, watch; the operator is the merge gate (0001). Next: report the PR URL."
+    )
+    named = {
+        (group.split()[1], sub.strip())
+        for group in text.split("limited to ", 1)[1].split(";", 1)[0].split(" and ")
+        for sub in group.split(" ", 2)[2].split(",")
+    }
+    assert named == CONDUCTOR_GH
+    for drift in ("status", "comment", "diff"):
+        assert drift not in text

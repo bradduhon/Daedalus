@@ -10,11 +10,17 @@ import shlex
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-_LIBS = ("lib.audit", "lib.config", "lib.jail")
+_LIBS = (
+    "lib.audit",
+    "lib.config",
+    "lib.jail",
+    "lib.router",
+    "lib.agent_files",
+    "lib.dispatch_binding",
+)
 _LOAD_NEXT = "Next: run the plugin with Python 3.12 and an intact scripts/lib directory."
 _CONFIG_NEXT = (
     " Next: fix the Daedalus project config <repo>/.claude/daedalus/config.json and retry."
@@ -53,14 +59,14 @@ def _inline_repo_root(path: str) -> Path:
     return next((p for p in (start, *start.parents) if p.is_dir()), start)
 
 
-def _inline_train_marked(cwd: Any) -> bool:
+def _inline_train_marked(cwd: object) -> bool:
     # 0035: no absolute cwd means the repo is unknown, so the hook acts as if a train runs.
     if not isinstance(cwd, str) or not os.path.isabs(cwd):
         return True
     return os.path.lexists(_inline_repo_root(cwd) / _TRAIN_MARKER)
 
 
-def _marker_finder() -> tuple[Callable[[Any], bool], Exception | None]:
+def _marker_finder() -> tuple[Callable[[object], bool], Exception | None]:
     # 0035: a broken lib must not block a repo without a train, so the inline finder decides.
     try:
         from lib.repo_root import train_marked
@@ -69,7 +75,7 @@ def _marker_finder() -> tuple[Callable[[Any], bool], Exception | None]:
     return train_marked, None
 
 
-def _named_paths(tool: str, tool_input: dict[str, Any]) -> list[str] | None:
+def _named_paths(tool: str, tool_input: dict[str, object]) -> list[str] | None:
     # issue 30: every word that could name a path; None when the command cannot be split.
     if tool in _WRITE_TOOLS:
         return [str(tool_input.get(k) or "") for k in ("file_path", "notebook_path")]
@@ -93,7 +99,7 @@ def _named_paths(tool: str, tool_input: dict[str, Any]) -> list[str] | None:
     return found
 
 
-def _names_marked_repo(tool: str, tool_input: dict[str, Any], cwd: str) -> bool:
+def _names_marked_repo(tool: str, tool_input: dict[str, object], cwd: str) -> bool:
     # issue 30: a train in any repo the call names counts; the full jail then judges precisely.
     from lib.repo_root import TRAIN_MARKER, repo_root
 
@@ -114,12 +120,13 @@ def _names_marked_repo(tool: str, tool_input: dict[str, Any], cwd: str) -> bool:
     return False
 
 
-def _fast_path(payload: dict[str, Any], agent: str, cwd: str) -> int:
+def _fast_path(payload: dict[str, object], agent: str, cwd: str) -> int:
     # 0023, 0035: outside a train, main and foreign agents meet only the credential read deny.
     from lib.credential_paths import CREDENTIAL_TOOLS, path_reason
 
     tool = str(payload.get("tool_name"))
-    tool_input = payload.get("tool_input") or {}
+    raw_input = payload.get("tool_input")
+    tool_input: dict[str, object] = raw_input if isinstance(raw_input, dict) else {}
     reason = path_reason(tool, tool_input, cwd) if tool in CREDENTIAL_TOOLS else None
     return _block(agent, reason) if reason else 0
 
@@ -165,7 +172,7 @@ def _warn_fallback(cwd: str) -> None:
 
 
 def _record_and_block(
-    payload: dict[str, Any], agent: str, message: str, next_step: str = _REPORT_NEXT
+    payload: dict[str, object], agent: str, message: str, next_step: str = _REPORT_NEXT
 ) -> int:
     from lib.audit import audit_append
 
@@ -178,27 +185,35 @@ def _record_and_block(
     return _block(agent, message)
 
 
-def _judge(payload: dict[str, Any], agent: str) -> int:
+def _judge(payload: dict[str, object], agent: str) -> int:
     from lib.audit import audit_append
     from lib.config import Config, load_config
-    from lib.jail import CREDENTIAL_TOOLS, Decision, decide
+    from lib.jail import CREDENTIAL_TOOLS, decide, normalize_agent
+    from lib.router import route, routed
 
     cwd = payload.get("cwd")
     # 0023: reads carry only the credential deny, so a broken data dir never closes them.
     read = payload.get("tool_name") in CREDENTIAL_TOOLS and isinstance(cwd, str)
-    read = read and Path(cwd).is_absolute()
+    read = read and Path(str(cwd)).is_absolute()
     try:
-        config = load_config(cwd)
+        config = load_config(cwd if isinstance(cwd, str) else None)
     except Exception as exc:  # noqa: BLE001
         if not read:
             return _record_and_block(payload, agent, str(exc), _CONFIG_NEXT)
         config = Config()
-    decision: Decision = decide(payload, config)
-    agent = decision.agent or agent
+    if routed(agent):
+        # 0044: a Daedalus agent's call runs the hooks its agent file names.
+        allow, reason, hook = route(payload, Path(__file__).resolve().parents[1])
+        reason = f"{hook}: {reason}" if reason else None
+        agent = normalize_agent(agent)
+    else:
+        decision = decide(payload, config)
+        allow, reason = decision.allow, decision.reason
+        agent = decision.agent or agent
     try:
-        record = audit_append(payload, "allow" if decision.allow else "block", decision.reason)
+        record = audit_append(payload, "allow" if allow else "block", reason)
     except Exception as exc:  # noqa: BLE001
-        if read and decision.allow:
+        if read and allow:
             # spec 8: an allowed read is non-blocking on a failed record, as audit_log.py is.
             _note(agent, f"audit log unavailable ({exc}); the read proceeds unrecorded.")
             return 0
@@ -209,9 +224,9 @@ def _judge(payload: dict[str, Any], agent: str) -> int:
         return _block(agent, detail)
     if record is not None and record.get("root_source") == "cwd-fallback":
         _warn_fallback(str(payload.get("cwd")))
-    if decision.allow:
+    if allow:
         return 0
-    return _block(agent, str(decision.reason))
+    return _block(agent, str(reason))
 
 
 def main() -> int:

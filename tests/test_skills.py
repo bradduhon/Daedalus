@@ -731,7 +731,8 @@ def test_push_train_conductor_commands_pass_the_jail(
 
 def _conductor_decide(repo_cwd: Path, project_data: Path, command: str) -> Any:
     from lib.config import Config
-    from lib.jail import decide
+
+    from tests.hook_chain import judge as decide
 
     (project_data / "train.active").write_text("20261016-120000\n", encoding="utf-8")
     concrete = re.sub(r"<[^>]+>", "x", command.replace("<repo>", str(repo_cwd)))
@@ -798,7 +799,10 @@ _NEXT_CONST = re.compile(r"_?[A-Z_]*NEXT")
 _SENTENCE_END = re.compile(r"\.\s+(?=[A-Z])")
 _SKILL_NEXT = re.compile(r"(?:^|(?<=[.:;]\s))Next:")
 # 0031: jail refusals are messages to the refused agent, which may use ids alone.
-AGENT_FACING = {"scripts/lib/jail.py"}
+AGENT_FACING = {"scripts/lib/jail.py", "scripts/lib/shell.py", "scripts/lib/dispatch_binding.py"}
+AGENT_FACING |= {"scripts/lib/router.py"} | {
+    str(p.relative_to(REPO_ROOT)) for p in (REPO_ROOT / "scripts" / "checks").glob("*.py")
+}
 MIN_WORDS = 4
 
 

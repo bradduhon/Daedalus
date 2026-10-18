@@ -10,9 +10,10 @@ from typing import Any
 import pytest
 from lib import jail, train_state
 from lib.config import Config
-from lib.jail import decide
 from lib.unit_binding import bindings_path, claim, record_dispatch
 from lib.workspace import create, mark_train
+
+from tests.hook_chain import judge as decide
 
 TRAIN = "20261016-120000"
 CODER = "daedalus:repo-coder"

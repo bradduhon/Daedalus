@@ -8,7 +8,6 @@ import fnmatch
 import os
 import re
 from pathlib import Path
-from typing import Any
 
 # spec 8, 0023: credential stores refused to every agent, main included.
 CREDENTIAL_DENY = (".ssh", ".aws", ".gnupg", ".config/gh", ".claude/.credentials.json")
@@ -82,7 +81,7 @@ def _expand_home(token: str, cwd: str) -> str | None:
     return anchor(text, cwd)
 
 
-def _candidates(tool: str, tool_input: dict[str, Any], cwd: str) -> list[str]:
+def _candidates(tool: str, tool_input: dict[str, object], cwd: str) -> list[str]:
     values = [str(tool_input.get(k) or "") for k in ("file_path", "notebook_path", "path")]
     pattern = str(tool_input.get("pattern") or "")
     if tool == "Glob" and pattern:
@@ -138,7 +137,7 @@ def credential_hit(target: str, roots: list[str], glob: bool, dotglob: bool = Tr
     return any(store_rest(target, root, glob, dotglob) == [] for root in roots)
 
 
-def path_reason(tool: str, tool_input: dict[str, Any], cwd: str) -> str | None:
+def path_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | None:
     # 0023: path-argument tools; the jail judges Bash commands with its own shell model.
     roots = credential_roots()
     for raw in _candidates(tool, tool_input, cwd):

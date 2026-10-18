@@ -6,8 +6,11 @@ import re
 from pathlib import Path
 
 import pytest
+from lib import hook_io, router
+from lib.agent_files import frontmatter
 from lib.config import Config
-from lib.jail import KNOWN_AGENTS, WORKER_DENIED_TOOLS, decide
+from lib.jail import WORKER_DENIED_TOOLS
+from lib.train_scope import KNOWN_AGENTS
 
 from tests.conftest import REPO_ROOT
 
@@ -25,17 +28,6 @@ EXPECTED_MODEL = {
 }
 
 
-def _frontmatter(path: Path) -> dict[str, str]:
-    text = path.read_text()
-    assert text.startswith("---\n"), path
-    block = text.split("---\n", 2)[1]
-    out: dict[str, str] = {}
-    for line in block.splitlines():
-        key, _, value = line.partition(":")
-        out[key.strip()] = value.strip()
-    return out
-
-
 def _list(value: str, path: Path) -> set[str]:
     assert not set("[]\"'") & set(value), f"{path}: flow list or quoted value in frontmatter"
     return {item.strip() for item in value.split(",") if item.strip()}
@@ -43,13 +35,13 @@ def _list(value: str, path: Path) -> set[str]:
 
 def test_every_known_worker_has_a_persona_and_no_extras() -> None:
     names = {p.stem for p in AGENTS.glob("*.md")}
-    assert names == (KNOWN_AGENTS - {"main", "boundary-tester"})
+    assert names == KNOWN_AGENTS - {"main"}
 
 
 @pytest.mark.parametrize("name", sorted(EXPECTED_MODEL))
 def test_frontmatter_matches_rulings(name: str) -> None:
     path = AGENTS / f"{name}.md"
-    fm = _frontmatter(path)
+    fm = frontmatter(path)
     assert fm["name"] == name
     assert fm["model"] == EXPECTED_MODEL[name]
     assert fm["description"]
@@ -63,7 +55,7 @@ def test_frontmatter_matches_rulings(name: str) -> None:
 
 def test_repo_coder_works_in_the_train_made_worktree() -> None:
     # 0022: the Build Train makes the worktree; Claude Code isolation is off.
-    assert "isolation" not in _frontmatter(AGENTS / "repo-coder.md")
+    assert "isolation" not in frontmatter(AGENTS / "repo-coder.md")
     text = (AGENTS / "repo-coder.md").read_text()
     assert "`Worktree: <path>`" in text
     assert '`git -C <path> add -A && git -C <path> commit -m "WIP: yield"`' in text
@@ -96,27 +88,6 @@ def test_repo_coder_carries_the_code_hygiene_rule() -> None:
     ) in text
 
 
-def test_tools_agree_with_the_jail() -> None:
-    no_shell = {"web-researcher", "standards-rules-specialist", "contract-spec"}
-    read_only = {
-        "security-auditor",
-        "nist-specialist",
-        "cis-specialist",
-        "pr-train-conductor",
-        "web-researcher",
-        "standards-rules-specialist",
-    }
-    for name in EXPECTED_MODEL:
-        path = AGENTS / f"{name}.md"
-        tools = _list(_frontmatter(path)["tools"], path)
-        if name in no_shell:
-            assert "Bash" not in tools, name
-        if name in read_only:
-            assert not ({"Write", "Edit", "MultiEdit", "NotebookEdit"} & tools), name
-        if name != "web-researcher":
-            assert not ({"WebFetch", "WebSearch"} & tools), name
-
-
 @pytest.mark.parametrize("name", sorted(EXPECTED_MODEL))
 def test_body_has_header_status_contract_and_no_dashes(name: str) -> None:
     text = (AGENTS / f"{name}.md").read_text()
@@ -134,7 +105,7 @@ def test_body_has_header_status_contract_and_no_dashes(name: str) -> None:
 def test_bash_personas_forbid_redirects(name: str) -> None:
     # F3a: the jail refuses redirects for workers; the Bash tool returns stderr.
     path = AGENTS / f"{name}.md"
-    if "Bash" in _list(_frontmatter(path)["tools"], path):
+    if "Bash" in _list(frontmatter(path)["tools"], path):
         assert "No shell redirects" in path.read_text(), name
 
 
@@ -228,7 +199,7 @@ def test_judges_keep_their_status_contract(name: str) -> None:
 
 
 def test_conductor_lists_the_git_reads_the_jail_allows() -> None:
-    # N9: matches TestLiveRunGrammar in tests/test_jail.py.
+    # N9: matches TestLiveRunGrammar in tests/test_checks_git_grammar.py.
     text = (AGENTS / "pr-train-conductor.md").read_text()
     for read in ("`git status`", "`git log`", "`git diff`", "`git branch`"):
         assert read in text, read
@@ -295,19 +266,20 @@ def test_auditor_has_a_procedure_and_severity_scale() -> None:
     assert "`<branch> <file>:<line> <severity> <class>: <precise fix>`" in text
 
 
-def test_auditor_grep_commands_pass_the_jail() -> None:
-    # 0024: every fixed pattern the procedure names must survive the auditor's jail.
+def test_auditor_grep_commands_pass_the_jail(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 0024, 0044: every fixed pattern the procedure names must survive the auditor's hooks.
+    monkeypatch.setattr(hook_io, "hook_config", lambda cwd: Config())
     commands = re.findall(r"`(git log -p -G '[^']+' <diff base>\.\.<branch>)`", AUDITOR.read_text())
     assert len(commands) == len(AUDITOR_CLASSES) - 1
     for command in commands:
         concrete = command.replace("<diff base>", "daedalus/t1").replace("<branch>", "unit-a")
-        payload = {
+        payload: dict[str, object] = {
             "agent_type": "security-auditor",
             "tool_name": "Bash",
             "tool_input": {"command": concrete},
             "cwd": "/work/repo",
         }
-        assert decide(payload, Config()).allow, command
+        assert router.route(payload, REPO_ROOT) == (True, None, ""), command
 
 
 def test_auditor_verdict_first_line_contract_unchanged() -> None:

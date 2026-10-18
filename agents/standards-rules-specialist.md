@@ -4,6 +4,13 @@ description: Adopts the project's declared standards. Emits the Standards Packet
 tools: Read, Grep, Glob
 disallowedTools: Write, Edit, MultiEdit, NotebookEdit, Bash, WebFetch, WebSearch, Agent, Task, SendMessage
 model: sonnet
+shape: finder
+# 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).
+hooks:
+  PreToolUse:
+    - hooks:
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/credential_paths.py"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/tool_bound.py"}
 ---
 <!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
 

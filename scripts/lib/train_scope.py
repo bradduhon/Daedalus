@@ -3,20 +3,11 @@
 # Standard library only: the jail's entry script imports this before the rest of lib.
 from __future__ import annotations
 
+from pathlib import Path
+
+# 0044: every shipped agent file is a known agent; computed once at import.
 KNOWN_AGENTS = frozenset(
-    {
-        "main",
-        "repo-coder",
-        "contract-spec",
-        "charter-docs",
-        "security-auditor",
-        "nist-specialist",
-        "cis-specialist",
-        "pr-train-conductor",
-        "web-researcher",
-        "standards-rules-specialist",
-        "boundary-tester",
-    }
+    {"main"} | {p.stem for p in (Path(__file__).resolve().parents[2] / "agents").glob("*.md")}
 )
 # Plugin agents arrive as <plugin>:<agent>; only these prefixes unwrap.
 AGENT_NAMESPACES = ("daedalus",)

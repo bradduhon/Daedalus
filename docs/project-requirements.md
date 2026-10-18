@@ -163,7 +163,7 @@ The Push Train runs `gitleaks detect` over every commit on the train branch befo
 
 ### Coder write boundary
 
-A coder writes only inside its own unit worktree, which the Build Train creates at `<repo>/.claude/worktrees/<train-id>-<unit-slug>`. Inside it, every path is writable except the protected ones (0054-DAE-PLT): `contracts/`, `.github/` (workflows, CODEOWNERS, dependabot and templates), `.claude/`, `service-manifest.json`, the repository's own decision ledger when it lives inside the repository, and every `jail_narrowing` entry in `service-manifest.json`. A write to a folder that holds a protected path, such as `rm -r docs` when the ledger is `docs/decisions.md`, is refused too. A refused write names the path and says whether the rule is built in or comes from `jail_narrowing`. A later Daedalus release reserves `tests/adversarial/` for the boundary tester; today repo-coder may write anywhere under `tests/`.
+A coder writes only inside its own unit worktree, which the Build Train creates at `<repo>/.claude/worktrees/<train-id>-<unit-slug>`. Inside it, every path is writable except the protected ones (0054-DAE-PLT): `contracts/`, `.github/` (workflows, CODEOWNERS, dependabot and templates), `.claude/`, `service-manifest.json`, the repository's own decision ledger when it lives inside the repository, and every `jail_narrowing` entry in `service-manifest.json`. A write to a folder that holds a protected path, such as `rm -r docs` when the ledger is `docs/decisions.md`, is refused too. A refused write names the path and says whether the rule is built in or comes from `jail_narrowing`.
 
 ## Claude Code settings
 
