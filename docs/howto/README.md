@@ -41,7 +41,7 @@ Example output from a real run in a new repository with one empty commit, on a m
     OPT  standards_sources: no standards file or pack is declared. Next: to adopt the shipped baseline pack, add {"kind": "pack", "name": "baseline"} to standards_sources in .claude/daedalus/config.json
     OK   policy: not declared (optional)
     OK   cache dir: none yet (create it with scripts/refresh_frameworks.py or by hand per docs/project-requirements.md)
-    OK   plugin root: ~/.claude/plugins/cache/daedalus/daedalus/3.1.0
+    OK   plugin root: ~/.claude/plugins/cache/daedalus/daedalus/<version>
     MISS gitleaks on PATH: not found. Next: the Push Train scans commits with gitleaks; install it so the scan can run
     OK   gh on PATH
     MISS gh authenticated: gh auth status exited 1. Next: run gh auth login
@@ -199,7 +199,7 @@ A `[VERDICT: APPROVED]` merges each unit into the local integration branch `daed
 
 The charter-docs agent then appends the ledger entries through `append_ledger.py` and commits them. When the ledger lives in your Charter repo, the Charter working tree must be clean first. The train creates the Charter's `daedalus/<train-id>` branch in its checks, for the contract and ledger commits, then switches the Charter back to the branch it was on. Nothing is pushed.
 
-Any agent reply that does not end in one of its contract lines or contract sections stops the train and shows you the reply's last 10 lines. The auditor brief from standards-rules-specialist is the one exception: it ends with its rule list and has no status line. Once the train has created a Charter branch, it switches the Charter back to the branch it was on before any stop. Before any stop ahead of the merge, it also switches this repo back to your base branch. The exceptions: a stop while the Charter tree is dirty leaves the Charter on its `daedalus/<train-id>` branch, and a stop while the contract file is uncommitted leaves both repos on `daedalus/<train-id>`. Either way the stop names the uncommitted files and the branch they sit on. The security auditor is read from the first line of its reply, where it writes its verdict.
+Any agent reply that does not end in one of its contract lines or contract sections stops the train and shows you the reply's last 10 lines. The auditor brief from standards-rules-specialist is the one exception: it ends with its rule list and has no status line. Once the train has created a Charter branch, it switches the Charter back to the branch it was on before any stop. Before any stop ahead of the merge, it also switches this repo back to your base branch. The exceptions: a stop while the Charter tree is dirty leaves the Charter on its `daedalus/<train-id>` branch, and a stop while the contract file is uncommitted leaves both repos on `daedalus/<train-id>`. Either way the stop names the uncommitted files and the branch they sit on. The security auditor writes its verdict line as both the first line and the last line of every reply it sends.
 
 ### The summary
 
