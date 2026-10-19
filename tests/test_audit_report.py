@@ -554,6 +554,17 @@ def test_controls_seconds_to_first_write_per_agent(
     assert "| a2 | auditor | none |" in out
 
 
+def test_controls_shows_ask_as_its_own_row(project_data: Path, hook_input: Any) -> None:
+    # 0105: an ask decision is counted beside, not inside, the same hook's blocks.
+    for i, decision in enumerate(("ask", "block", "ask")):
+        audit.audit_append(
+            hook_input(tool_use_id=f"k{i}"), decision, "jail: needs the operator. Next: x"
+        )
+    out = _report("--repo", hook_input()["cwd"]).stdout
+    assert "| jail \\(ask\\) | main | 2 |" in out and "| jail | main | 1 |" in out
+    assert "- seq 1 main Bash (ask): jail: needs the operator. Next: x" in out
+
+
 def test_summary_carries_the_controls_table(
     project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:

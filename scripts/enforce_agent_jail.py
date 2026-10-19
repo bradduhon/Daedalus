@@ -157,6 +157,14 @@ def _block(agent: str, message: str, next_step: str = _REPORT_NEXT) -> int:
     return 2
 
 
+def _ask(message: str) -> int:
+    # 0105: exit 0 with the PreToolUse ask decision; the operator approves or denies the call.
+    out = {"hookEventName": "PreToolUse", "permissionDecision": "ask"}
+    out["permissionDecisionReason"] = message
+    print(json.dumps({"hookSpecificOutput": out}))
+    return 0
+
+
 def _note(agent: str, message: str) -> None:
     try:
         print(f"daedalus-jail[{agent}]: {message}", file=sys.stderr)
@@ -228,17 +236,20 @@ def _judge(payload: dict[str, object], agent: str, started: float | None = None)
                 payload, agent, f"{_CONFIG_HOOK}: {exc}", started, _CONFIG_NEXT
             )
         config = Config()
+    ask = False
     if routed(agent):
         # 0044: a Daedalus agent's call runs the hooks its agent file names.
         allow, reason, hook = route(payload, Path(__file__).resolve().parents[1])
+        reason = f"{hook}: {reason}" if reason else None
         agent = normalize_agent(agent)
     else:
         decision = decide(payload, config)
-        allow, reason, hook = decision.allow, decision.reason, _JAIL_HOOK
+        allow, reason, ask = decision.allow, decision.reason, decision.ask
         agent = decision.agent or agent
-    reason = f"{hook}: {reason}" if reason else None
+        reason = f"{_JAIL_HOOK}: {reason}" if reason else None
     try:
-        record = audit_append(payload, "allow" if allow else "block", reason, _elapsed_ms(started))
+        verdict = "ask" if ask else "allow" if allow else "block"
+        record = audit_append(payload, verdict, reason, _elapsed_ms(started))
     except Exception as exc:  # noqa: BLE001
         if read and allow:
             # spec 8: an allowed read is non-blocking on a failed record, as audit_log.py is.
@@ -253,6 +264,8 @@ def _judge(payload: dict[str, object], agent: str, started: float | None = None)
         _warn_fallback(str(payload.get("cwd")))
     if allow:
         return 0
+    if ask:
+        return _ask(str(reason))
     return _block(agent, str(reason))
 
 

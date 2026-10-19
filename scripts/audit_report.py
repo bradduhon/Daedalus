@@ -34,6 +34,7 @@ _STATUS = (
 )
 _TOOLS = ("Write", "Edit", "Bash")
 _EDIT_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+_REFUSALS = ("block", "ask")
 _HOOK_PREFIX = re.compile(r"([A-Za-z][A-Za-z0-9_.-]{0,63}): ")
 _MD_SPECIAL = re.compile(r"([\\`*_\[\]()!#|~])")
 TIMELINE_CHARS = 120
@@ -169,10 +170,11 @@ def _tool_table(records: list[dict[str, Any]]) -> list[str]:
 def _blocks(records: list[dict[str, Any]]) -> list[str]:
     lines = ["## Blocks", ""]
     for rec in records:
-        if rec.get("decision") == "block":
+        if rec.get("decision") in _REFUSALS:
+            ask = " (ask)" if rec.get("decision") == "ask" else ""
             lines.append(
                 f"- seq {rec.get('seq')} {md_escape(rec.get('agent_type'))} "
-                f"{md_escape(rec.get('tool_name'))}: {md_escape(rec.get('reason'))}"
+                f"{md_escape(rec.get('tool_name'))}{ask}: {md_escape(rec.get('reason'))}"
             )
     if len(lines) == 2:
         lines.append("none")
@@ -204,9 +206,12 @@ def _totals(records: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _hook_of(reason: Any) -> str:
+def _hook_of(rec: dict[str, Any]) -> str:
+    # 0105: an ask is its own row beside the same hook's blocks.
+    reason = rec.get("reason")
     match = _HOOK_PREFIX.match(reason) if isinstance(reason, str) else None
-    return match.group(1) if match else "unprefixed"
+    hook = match.group(1) if match else "unprefixed"
+    return f"{hook} (ask)" if rec.get("decision") == "ask" else hook
 
 
 def _seconds(start: Any, end: Any) -> float | None:
@@ -238,15 +243,15 @@ def _until_allowed(
 def _controls(records: list[dict[str, Any]]) -> list[str]:
     # 6.2: hook names, agent types, tools and timings only; no reason body or reply text.
     pre = [r for r in records if r.get("event") == "PreToolUse"]
-    blocks = [r for r in pre if r.get("decision") == "block"]
-    tally = Counter((_hook_of(r.get("reason")), str(r.get("agent_type"))) for r in blocks)
+    blocks = [r for r in pre if r.get("decision") in _REFUSALS]
+    tally = Counter((_hook_of(r), str(r.get("agent_type"))) for r in blocks)
     lines = ["## Control cost", "", "### Blocks per hook", ""]
     lines += ["| hook | agent_type | blocks |", "|---|---|---|"]
     lines += [f"| {md_escape(h)} | {md_escape(a)} | {n} |" for (h, a), n in sorted(tally.items())]
     lines += ["", "### Seconds from each block to that agent's next allowed call", ""]
     lines += ["| seq | agent_type | hook | tool | seconds |", "|---|---|---|---|---|"]
     for rec in blocks:
-        cells = [rec.get("agent_type"), _hook_of(rec.get("reason")), rec.get("tool_name")]
+        cells = [rec.get("agent_type"), _hook_of(rec), rec.get("tool_name")]
         named = " | ".join(md_escape(c) for c in cells)
         lines.append(f"| {rec.get('seq')} | {named} | {_until_allowed(pre, rec)} |")
     lines += ["", "### Seconds from agent start to its first allowed Write or Edit", ""]
