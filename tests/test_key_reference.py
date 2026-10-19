@@ -1,0 +1,70 @@
+# Copyright (c) 2026 Brad Duhon.
+# SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+import re
+
+from lib.project_keys import CONFIG_FILE, MANIFEST_FILE, config_keys, manifest_keys
+
+from tests.conftest import REPO_ROOT
+
+BEGIN = "<!-- key reference -->"
+END = "<!-- end key reference -->"
+_ROW = re.compile(r"^\| `([^`]+)` \| `([^`]+)` \|(.*)\|\s*$")
+# 0065: a row never carries a version literal; VERSION and the manifests own it.
+_VERSION = re.compile(r"\bv?\d+\.\d+\.\d+\b")
+
+
+def _block() -> str:
+    text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert text.count(BEGIN) == 1 and text.count(END) == 1
+    return text.split(BEGIN, 1)[1].split(END, 1)[0]
+
+
+def _rows() -> list[tuple[str, str, list[str]]]:
+    rows = []
+    for line in _block().splitlines():
+        match = _ROW.match(line)
+        if match:
+            cells = [cell.strip() for cell in match.group(3).split(" | ")]
+            rows.append((match.group(1), match.group(2), cells))
+    return rows
+
+
+def _reader_pairs() -> set[tuple[str, str]]:
+    return {(MANIFEST_FILE, k) for k in manifest_keys()} | {(CONFIG_FILE, k) for k in config_keys()}
+
+
+def test_every_reader_key_has_a_reference_row() -> None:
+    documented = {(file, key) for key, file, _ in _rows()}
+    assert sorted(_reader_pairs() - documented) == []
+
+
+def test_every_reference_row_names_a_reader_key() -> None:
+    rows = [(file, key) for key, file, _ in _rows()]
+    assert len(rows) == len(set(rows)), "a key has two rows"
+    assert sorted(set(rows) - _reader_pairs()) == []
+
+
+def test_reference_rows_name_their_file() -> None:
+    rows = _rows()
+    assert rows, "no key reference rows between the markers"
+    for key, file, cells in rows:
+        assert file in (MANIFEST_FILE, CONFIG_FILE), key
+        # 0031: what it does, its values and its default, each in words.
+        assert len(cells) == 3 and all(cells), key
+        assert not _VERSION.search(" ".join(cells)), key
+
+
+def test_reader_keys_follow_the_reader_dataclasses() -> None:
+    # 0076: a field added to a reader adds a key, so the reference test sees it.
+    from dataclasses import fields
+
+    from lib.config import Config
+    from lib.manifest import FEATURE_KEYS, Manifest
+
+    tops = {key.split(".", 1)[0].removesuffix("[]") for key in config_keys()}
+    assert tops == {f.name for f in fields(Config)}
+    assert {f"features.{k}" for k in FEATURE_KEYS} <= set(manifest_keys())
+    leaves = {key.rsplit(".", 1)[-1] for key in manifest_keys()}
+    assert {f.name for f in fields(Manifest)} - {"features"} <= leaves

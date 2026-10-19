@@ -45,6 +45,8 @@ PACK_OFFER = (
 )
 ENABLEMENT = ".claude/settings.json"
 ENABLEMENT_NEXT = f"commit {ENABLEMENT}; it holds the enabledPlugins entry /plugin install wrote"
+# 0076: the setup skill writes whichever starter file is missing; the doctor never writes one.
+SETUP_NEXT = "run the Daedalus setup skill (/daedalus:setup) to write a starter {name}"
 CACHE_NAMING = (
     "a --plugin-dir session uses daedalus-inline; a marketplace install uses daedalus-<marketplace>"
 )
@@ -267,8 +269,13 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
     if cfg_path.exists():
         yield True, "OK   config.json"
     else:
-        # spec 9: config.json is optional; absence means the defaults.
-        yield True, "OK   config.json: not present, defaults in use"
+        # spec 9, 0076: config.json is optional; absence means the defaults.
+        yield _opt(
+            False,
+            "config.json",
+            "not present, defaults in use",
+            SETUP_NEXT.format(name="config.json"),
+        )
     yield _ledger_probe(data.parent.parent, config)
     # spec 5: standards_sources and policy are optional; undeclared is not a miss.
     if config.standards_sources:
@@ -320,7 +327,7 @@ def _manifest_check(repo: Path) -> tuple[bool, str]:
             False,
             "service-manifest.json",
             "not found at repo root",
-            f"create it from the example in {REQ_DOC}",
+            SETUP_NEXT.format(name="service-manifest.json"),
         )
     paths, extensions = len(manifest.forbidden_paths), len(manifest.forbidden_extensions)
     return True, (
