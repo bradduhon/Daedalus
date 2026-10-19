@@ -4,13 +4,17 @@
 # lib.jail imports this module, so lib.jail names are imported at call time.
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from pathlib import Path
 
+from lib import plan_record
+from lib.audit_proof import SUMMARY_DIR
+from lib.config import DEFAULT_MAX_CONCURRENT_BUILDERS
 from lib.project_root import project_root
 from lib.shell import _abs, _base, _git_split
-from lib.train_state import TrainStateError, active_train
+from lib.train_state import TRAIN_ID, TrainStateError, active_train
 from lib.train_state import load as load_train
 from lib.unit_binding import claim, record_dispatch
 from lib.workspace import UNMARK_NEXT, train_marker
@@ -36,8 +40,14 @@ R_NOT_PRINTED = (
     "consult agent of gate {gate} (0024). Next: run daedalus_train.py step and dispatch only "
     "the agent it prints, or a consult agent of the current gate."
 )
+R_NO_PLAN = (
+    "a repo-coder starts during a train only after the train's recorded plan validates "
+    "(spec 4.1, 0088): {why} Next: run /daedalus:plan to write and record this train's plan, "
+    "then dispatch the coder again."
+)
 DISPATCH_TOOLS = frozenset({"Agent", "Task"})
 _WORKTREE_LINE = re.compile(r"Worktree: (/\S+)")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 # issue 29: git forms that change a unit's index, history or files; -C names the unit.
 _UNIT_GIT_WRITES = frozenset({"add", "stage", "commit", "stash", "restore", "checkout"})
 
@@ -67,6 +77,54 @@ def _step_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     return R_NOT_PRINTED.format(agent=agent or "an unnamed agent", stage=stage, gate=gate)
 
 
+def _other_train(repo: Path, path: Path, train: str) -> str | None:
+    # spec 4.1: a plan under another train's scratch folder never opens this train's gate.
+    roots = (repo / SUMMARY_DIR, Path(os.path.realpath(repo / SUMMARY_DIR)))
+    for candidate in (Path(os.path.normpath(path)), Path(os.path.realpath(path))):
+        for root in roots:
+            parts = candidate.relative_to(root).parts if candidate.is_relative_to(root) else ()
+            if parts and TRAIN_ID.fullmatch(parts[0]) and parts[0] != train:
+                return parts[0]
+    return None
+
+
+def _digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _plan_defect(repo: Path, train: str, state: dict[str, object]) -> str | None:
+    # spec 4.1, 0086: the hash covers the raw file bytes; validate runs at the train's builder cap.
+    from lib.train_runner import _int
+
+    record = state.get("plan")
+    if not isinstance(record, dict):
+        return f"the state of train {train} records no plan."
+    raw, sha = record.get("path"), record.get("sha256")
+    if not isinstance(raw, str) or not raw or not isinstance(sha, str):
+        return f"the plan record of train {train} needs a path and a sha256, both strings."
+    if not _SHA256.fullmatch(sha):
+        return f"the plan record of train {train} has a sha256 that is not 64 lowercase hex."
+    path = repo / raw
+    other = _other_train(repo, path, train)
+    if other is not None:
+        return f"the plan {raw} sits under train {other}, not train {train}."
+    try:
+        before = _digest(path)
+        plan = plan_record.load(path)
+        after = _digest(path)
+    except (OSError, plan_record.PlanError) as exc:
+        return f"the plan file {raw} could not be read ({exc})."
+    if before != sha or after != sha:
+        return (
+            f"the plan file {raw} hashes to {after}, not {sha}; it changed after it was recorded."
+        )
+    cap = _int(state, "max_concurrent_builders", DEFAULT_MAX_CONCURRENT_BUILDERS)
+    defects = plan_record.validate(plan, cap)
+    if defects:
+        return f"the plan {raw} has {len(defects)} defect(s): {' '.join(defects)}"
+    return None
+
+
 def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     # issue 29: during a train a coder dispatch names exactly one recorded unit, once.
     from lib.jail import _train_active
@@ -90,9 +148,14 @@ def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     if match is None:
         return R_WORKTREE_LINE
     try:
-        units = load_train(repo, train).get("units") or []
+        state = load_train(repo, train)
     except TrainStateError as exc:
         return str(exc)
+    # spec 4.1: checked before record_dispatch, so a refused coder is never recorded.
+    why = _plan_defect(repo, train, state)
+    if why is not None:
+        return R_NO_PLAN.format(why=why)
+    units = state.get("units") or []
     named = os.path.realpath(match.group(1))
     for unit in units:
         if isinstance(unit, dict) and unit.get("path") and unit.get("name"):

@@ -1,0 +1,215 @@
+# Copyright (c) 2026 Brad Duhon.
+# SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+import hashlib
+import shutil
+import subprocess
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import pytest
+from lib import jail, train_state
+from lib.config import Config
+from lib.unit_binding import bindings_path
+from lib.workspace import create, mark_train
+
+from tests.hook_chain import judge as decide
+
+TRAIN = "20261016-120000"
+OTHER = "20261015-090000"
+CODER = "daedalus:repo-coder"
+PLANS = Path(__file__).resolve().parent / "fixtures" / "plans"
+VALID = PLANS / "valid.md"
+NEXT = "Next: run /daedalus:plan"
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def plan_file(repo: Path, folder: str, source: Path = VALID) -> Path:
+    path = repo / "docs" / ".tmp" / "daedalus" / folder / "plan.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, path)
+    return path
+
+
+def record_plan(repo: Path, train: str, path: str, sha256: object) -> None:
+    train_state.update(repo, train, plan={"path": path, "sha256": sha256})
+
+
+def seed_plan(repo: Path, train: str, source: Path = VALID) -> Path:
+    # spec 4.1: a coder dispatch during a train needs this record; A4 writes it in a live train.
+    path = plan_file(repo, train, source)
+    record_plan(repo, train, str(path), _sha(path))
+    return path
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+@pytest.fixture
+def unit(repo_cwd: Path, project_data: Path) -> Path:
+    ident = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+    _git(repo_cwd, *ident, "commit", "-q", "--allow-empty", "-m", "base")
+    _git(repo_cwd, "branch", f"daedalus/{TRAIN}")
+    train_state.save(repo_cwd, TRAIN, {"train_id": TRAIN})
+    mark_train(repo_cwd, TRAIN)
+    made = create(repo_cwd, "u1", f"daedalus/{TRAIN}")
+    jail._registered_worktrees.cache_clear()
+    return made
+
+
+def _dispatch(repo: Path, worktree: Path, subagent: str = CODER) -> dict[str, Any]:
+    prompt = f"Build the unit.\nWorktree: {worktree}\n"
+    tool_input = {"description": "unit", "prompt": prompt, "subagent_type": subagent}
+    return {"tool_name": "Agent", "tool_input": tool_input, "cwd": str(repo), "session_id": "s"}
+
+
+def _ok(repo: Path, worktree: Path) -> None:
+    d = decide(_dispatch(repo, worktree), Config())
+    assert d.allow, d.reason
+
+
+def _refused(repo: Path, worktree: Path, *needles: str) -> str:
+    d = decide(_dispatch(repo, worktree), Config())
+    assert not d.allow
+    reason = str(d.reason)
+    assert NEXT in reason and all(n in reason for n in needles), reason
+    assert not bindings_path(repo, TRAIN).exists(), "a refused dispatch is never recorded"
+    return reason
+
+
+def test_coder_dispatch_without_a_plan_record_is_refused(repo_cwd: Path, unit: Path) -> None:
+    _refused(repo_cwd, unit, "records no plan")
+    seed_plan(repo_cwd, TRAIN)
+    _ok(repo_cwd, unit)
+
+
+def test_coder_dispatch_with_a_stale_plan_hash_is_refused(repo_cwd: Path, unit: Path) -> None:
+    path = seed_plan(repo_cwd, TRAIN)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("\nA late edit.\n")
+    _refused(repo_cwd, unit, "changed after it was recorded")
+
+
+def test_plan_hash_is_over_the_file_bytes(repo_cwd: Path, unit: Path) -> None:
+    # spec 4.1: prose outside the fenced block still moves the hash.
+    path = seed_plan(repo_cwd, TRAIN)
+    path.write_text(path.read_text(encoding="utf-8").replace("for the reader", "for anyone"))
+    _refused(repo_cwd, unit, "changed after it was recorded")
+    text = path.read_text(encoding="utf-8")
+    block = text[text.index("```plan") : text.rindex("```") + 3]
+    record_plan(repo_cwd, TRAIN, str(path), hashlib.sha256(block.encode()).hexdigest())
+    _refused(repo_cwd, unit, "changed after it was recorded")
+    record_plan(repo_cwd, TRAIN, str(path), _sha(path))
+    _ok(repo_cwd, unit)
+
+
+@pytest.mark.parametrize(
+    ("source", "needle"),
+    [
+        ("graph_mismatch.md", "the graph line says"),
+        ("serial_cycle.md", "cycle"),
+        ("unit_without_files.md", "lists no files"),
+    ],
+)
+def test_coder_dispatch_with_an_invalid_plan_is_refused(
+    repo_cwd: Path, unit: Path, source: str, needle: str
+) -> None:
+    seed_plan(repo_cwd, TRAIN, PLANS / source)
+    _refused(repo_cwd, unit, "defect", needle)
+
+
+def test_plan_validates_against_the_trains_builder_limit(repo_cwd: Path, unit: Path) -> None:
+    # spec 4.1: valid.md declares width=3, which a two-builder train computes as 2.
+    seed_plan(repo_cwd, TRAIN)
+    train_state.update(repo_cwd, TRAIN, max_concurrent_builders=2)
+    _refused(repo_cwd, unit, "width=2")
+
+
+def test_coder_dispatch_with_a_valid_plan_is_allowed(repo_cwd: Path, unit: Path) -> None:
+    seed_plan(repo_cwd, TRAIN)
+    _ok(repo_cwd, unit)
+    assert bindings_path(repo_cwd, TRAIN).exists(), "the allowed dispatch is recorded"
+
+
+def test_non_coder_dispatch_needs_no_plan(repo_cwd: Path, unit: Path) -> None:
+    for agent in ("daedalus:security-auditor", "daedalus:charter-docs", "Explore"):
+        d = decide(_dispatch(repo_cwd, unit, agent), Config())
+        assert d.allow, (agent, d.reason)
+
+
+def test_gate_is_off_outside_a_train(repo_cwd: Path, unit: Path) -> None:
+    (repo_cwd / ".claude" / "daedalus" / "train.active").unlink()
+    _ok(repo_cwd, unit)
+
+
+def test_a_plan_recorded_in_another_trains_state_is_refused(repo_cwd: Path, unit: Path) -> None:
+    train_state.save(repo_cwd, OTHER, {"train_id": OTHER})
+    seed_plan(repo_cwd, OTHER)
+    _refused(repo_cwd, unit, "records no plan")
+
+
+def test_a_plan_file_under_another_train_id_is_refused(repo_cwd: Path, unit: Path) -> None:
+    other = plan_file(repo_cwd, OTHER)
+    record_plan(repo_cwd, TRAIN, str(other), _sha(other))
+    _refused(repo_cwd, unit, f"train {OTHER}")
+    relative = f"docs/.tmp/daedalus/{OTHER}/plan.md"
+    record_plan(repo_cwd, TRAIN, relative, _sha(other))
+    _refused(repo_cwd, unit, f"train {OTHER}")
+    dotted = repo_cwd / "docs" / ".tmp" / "daedalus" / TRAIN / ".." / OTHER / "plan.md"
+    record_plan(repo_cwd, TRAIN, str(dotted), _sha(other))
+    _refused(repo_cwd, unit, f"train {OTHER}")
+
+
+def test_a_link_to_another_trains_plan_is_refused(repo_cwd: Path, unit: Path) -> None:
+    other = plan_file(repo_cwd, OTHER)
+    link = repo_cwd / "docs" / ".tmp" / "daedalus" / TRAIN / "plan.md"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(other)
+    record_plan(repo_cwd, TRAIN, str(link), _sha(other))
+    _refused(repo_cwd, unit, f"train {OTHER}")
+
+
+def test_a_missing_plan_file_is_refused(repo_cwd: Path, unit: Path) -> None:
+    gone = repo_cwd / "docs" / ".tmp" / "daedalus" / TRAIN / "plan.md"
+    record_plan(repo_cwd, TRAIN, str(gone), "0" * 64)
+    _refused(repo_cwd, unit, "could not be read")
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        "docs/.tmp/daedalus/plan.md",
+        {"path": "docs/plan.md"},
+        {"sha256": "0" * 64},
+        {"path": 7, "sha256": "0" * 64},
+        {"path": "", "sha256": "0" * 64},
+        {"path": "docs/plan.md", "sha256": "abc"},
+        {"path": "docs/plan.md", "sha256": "A" * 64},
+        {"path": "docs/plan.md", "sha256": 0},
+    ],
+)
+def test_a_malformed_plan_record_is_refused(repo_cwd: Path, unit: Path, record: object) -> None:
+    train_state.update(repo_cwd, TRAIN, plan=record)
+    _refused(repo_cwd, unit, "plan")
+
+
+def test_a_relative_plan_path_resolves_from_the_repo(repo_cwd: Path, unit: Path) -> None:
+    path = plan_file(repo_cwd, TRAIN)
+    record_plan(repo_cwd, TRAIN, f"docs/.tmp/daedalus/{TRAIN}/plan.md", _sha(path))
+    _ok(repo_cwd, unit)
+
+
+def test_the_hook_chain_enforces_the_plan_gate(
+    repo_cwd: Path, unit: Path, run_script: Callable[[str, dict[str, Any]], Any]
+) -> None:
+    refused = run_script("enforce_agent_jail.py", _dispatch(repo_cwd, unit))
+    assert refused.returncode == 2 and NEXT in refused.stderr, refused.stderr
+    seed_plan(repo_cwd, TRAIN)
+    allowed = run_script("enforce_agent_jail.py", _dispatch(repo_cwd, unit))
+    assert allowed.returncode == 0, allowed.stderr
