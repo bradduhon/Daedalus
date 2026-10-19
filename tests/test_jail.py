@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import jail, train_state
+from lib import dispatch_binding, jail, train_state
 from lib.config import Config
 from lib.jail import KNOWN_AGENTS, decide
 from lib.shell import split_pipeline, tokenize
@@ -1828,6 +1828,49 @@ def test_main_ask_warnings_name_the_consequence() -> None:
     assert jail.ASK_CREDENTIAL == (
         "This path holds credentials; reading it puts the secret into the session transcript."
     )
+
+
+# audit A7-1: a nested claude session would reach the jail as the operator.
+@pytest.mark.parametrize("command", ["claude -p hi", "env claude -p hi", "/usr/bin/claude"])
+def test_coder_claude_is_refused(command: str) -> None:
+    d = hook_chain.decide(_b("repo-coder", command), CFG)
+    assert not d.allow and not d.ask, (command, d.reason)
+
+
+def test_foreign_agent_claude_is_refused_during_a_train(marked_repo: Path) -> None:
+    d = decide(_cred("Explore", "Bash", str(marked_repo), command="claude -p hi"), CFG)
+    assert not d.allow and not d.ask and "read-only while" in str(d.reason), d
+
+
+@pytest.mark.parametrize(
+    "command", ["claude -p hi", "bash -c 'claude -p hi'", "nohup claude -p hi", "echo `x`; claude"]
+)
+def test_main_claude_is_asked(command: str) -> None:
+    d = decide(_b(None, command), CFG)
+    assert _main_asks(d, jail.ASK_NESTED_CLAUDE), (command, d.reason)
+
+
+def test_main_mentions_of_claude_pass() -> None:
+    for command in ("ls .claude", "cat ~/.claude/CLAUDE.md", "echo claude-code", "git log"):
+        assert decide(_b(None, command), CFG).allow, command
+
+
+# 0106: the operator's dispatch that skips a train invariant is asked, never blocked.
+def test_main_coder_dispatch_without_worktree_line_asks(tmp_path: Path) -> None:
+    repo, _ = _unit_repo(tmp_path / "repo")
+    tool_input = {"subagent_type": "daedalus:repo-coder", "prompt": "build it"}
+    payload: dict[str, Any] = {"tool_name": "Agent", "tool_input": tool_input, "cwd": str(repo)}
+    d = decide(payload, CFG)
+    want = jail.ASK_DISPATCH.format(reason=dispatch_binding.R_WORKTREE_LINE)
+    assert d.ask and not d.allow and d.reason == want, d
+    assert d.reason.startswith("This dispatch skips a train invariant (a repo-coder dispatched")
+    assert d.reason.endswith(
+        "Approving starts the agent without it; the audit log records the ask."
+    )
+    d = decide({**payload, "agent_id": "sub-1"}, CFG)
+    assert not d.allow and not d.ask and d.reason == jail.R_SUBAGENT_MAIN, d
+    d = decide({**payload, "agent_type": "daedalus:main"}, CFG)
+    assert not d.allow and not d.ask and d.reason == jail.R_NAMESPACED_MAIN, d
 
 
 # 0100: foreign agents read during a train.

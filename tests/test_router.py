@@ -221,7 +221,9 @@ def test_main_session_duties_unchanged(monkeypatch: pytest.MonkeyPatch, jail_fak
     monkeypatch.setattr(dispatch_binding, "_dispatch_reason", dispatch)
     agent_call = {"tool_name": "Agent", "tool_input": {"prompt": "x"}, "cwd": CWD}
     d = jail.decide(agent_call, CFG)
-    assert (d.allow, d.reason) == (False, "dispatch refused. Next: name one unit.")
+    # 0106: the operator's dispatch is asked with the skipped invariant, never blocked.
+    want = jail.ASK_DISPATCH.format(reason="dispatch refused. Next: name one unit.")
+    assert (d.allow, d.ask, d.reason) == (False, True, want)
     assert seen == [{"prompt": "x"}]
 
 

@@ -118,7 +118,15 @@ _PATH_OPTS: dict[str, frozenset[str]] = {
 _VALUE_LONG = _VALUE_LONG_NEXT | {"--preserve"}
 _MODE = re.compile(r"(?:[0-7]{3,4}|[ugoa]*[-+=][rwxXstugo]*)(?:,[ugoa]*[-+=][rwxXstugo]*)*")
 DIR_CHANGE_CMDS = frozenset({"cd", "pushd", "popd"})
-NETWORK_TOOLS = frozenset({"curl", "wget", "ssh", "scp", "nc", "ncat", "telnet", "aws", "gh"})
+# audit A7-1: claude starts a nested session with no agent_id, which the jail would judge as main.
+NETWORK_TOOLS = frozenset(
+    {"curl", "wget", "ssh", "scp", "nc", "ncat", "telnet", "aws", "gh", "claude"}
+)
+R_NESTED_CLAUDE = (
+    "claude starts a nested session the jail cannot attribute to an agent (audit A7-1). "
+    "Next: run it from your own shell."
+)
+_CLAUDE_WORD = re.compile(r"(?:^|[\s;&|(/'\"`])claude(?=[\s;&|)'\"`]|$)")
 # 0028: the conductor's gh set lives in lib.gh_policy.
 GH_ALLOWED = {cmd: frozenset(sub for c, sub in CONDUCTOR_GH if c == cmd) for cmd, _ in CONDUCTOR_GH}
 _BRANCH_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
@@ -286,6 +294,14 @@ ASK_CLEAN = (
 )
 ASK_TRAIN_PUSH = "Pushing during a train publishes a branch before the audit approves its tip."
 ASK_COMMAND = "This command matches a pattern the plugin guards against."
+ASK_NESTED_CLAUDE = (
+    "This starts a nested Claude session; the jail judges its calls as yours, with no agent's "
+    "limits."
+)
+ASK_DISPATCH = (
+    "This dispatch skips a train invariant ({reason}). Approving starts the agent without it; "
+    "the audit log records the ask."
+)
 ASK_NO_CWD = (
     "The hook received no working folder, so the plugin cannot tell which repository this "
     "call touches."
@@ -298,6 +314,7 @@ _TRIPWIRE_ASKS = {
     R_CLEAN: ASK_CLEAN,
     R_DATA_DIR_GIT: ASK_DATA_DIR,
     R_STASH_UNTRACKED: ASK_DATA_DIR,
+    R_NESTED_CLAUDE: ASK_NESTED_CLAUDE,
 }
 # 0105, 0106: the operator approves or denies the one call; main is never blocked.
 R_MAIN_TRAIN_ASK = (
@@ -1734,6 +1751,7 @@ def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision
         if _cd_data_dir_git(command):
             return _main_ask(ASK_DATA_DIR, R_DATA_DIR_GIT)
         reason = _command_reason(command) or _gh_gate("main", cwd, command)
+        reason = reason or (R_NESTED_CLAUDE if _nested_claude(command) else None)
         return _tripwire_ask(reason) if reason else _allow()
     train = _main_write_train(path, cwd) if is_write else None
     if train is not None:
@@ -1741,5 +1759,14 @@ def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision
     if tool in dispatch_binding.DISPATCH_TOOLS:
         reason = dispatch_binding._dispatch_reason(tool_input, cwd)
         if reason:
-            return _block(reason)
+            # 0106: the operator's dispatch is asked with the invariant it skips, never blocked.
+            return _ask(ASK_DISPATCH.format(reason=reason))
     return _allow()
+
+
+def _nested_claude(command: str) -> bool:
+    # audit A7-1: through wrappers and shell -c bodies; the regex when the parser gives up.
+    segments = _policy_segments(command)
+    if segments is None:
+        return bool(_CLAUDE_WORD.search(command))
+    return any(seg and _base(seg[0]) == "claude" for seg in segments)
