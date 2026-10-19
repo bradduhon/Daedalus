@@ -1,0 +1,77 @@
+{
+  "name": "valid",
+  "version": 1,
+  "description": "A small sample train that the validator accepts as sound",
+  "scopes": ["repository", "folder"],
+  "gates": ["contract-lock", "build", "merge"],
+  "consults": {"contract-lock": ["standards-rules-specialist"], "build": ["web-researcher"], "merge": []},
+  "stages": [
+    {
+      "id": "contract",
+      "gate": "contract-lock",
+      "agent": "contract-spec",
+      "scope": {
+        "told": "tests/fixtures/trains/valid/contract.md",
+        "touch": ["contracts", "charter-specs"],
+        "reply": ["## Locked Contract Packet"]
+      },
+      "proof": {
+        "script": "daedalus_train.py check-reply --stage contract",
+        "exit": {"0": "pass", "1": "off-contract"},
+        "records": ["packet_version", "contract_path", "reply_file"]
+      },
+      "on_fail": {"off-contract": "stop: Next: rerun the build train, or report the contract agent"}
+    },
+    {
+      "id": "lock",
+      "gate": "contract-lock",
+      "agent": "main",
+      "scope": {"told": "none", "touch": ["contracts", "charter-specs"], "reply": ["exit 0"]},
+      "proof": {
+        "script": "daedalus_workspace.py lock --repo {repo} --contract {contract_path} --version {packet_version}",
+        "exit": {"0": "pass", "1": "stopped"},
+        "records": ["lock_sha"]
+      },
+      "on_fail": {"stopped": "stop: Next: follow the line the lock step printed"}
+    },
+    {
+      "id": "code",
+      "gate": "build",
+      "agent": "repo-coder",
+      "repeat": "per-unit",
+      "parallel": true,
+      "scope": {
+        "told": "tests/fixtures/trains/valid/code.md",
+        "touch": ["unit-src-tests"],
+        "reply": ["[STATUS: COMPLETE]", "[STATUS: YIELD_CONTRACT]", "[STATUS: YIELD_WEB]"]
+      },
+      "proof": {
+        "script": "daedalus_train.py check-reply --stage code",
+        "exit": {"0": "pass", "1": "off-contract"},
+        "records": ["unit_reply"]
+      },
+      "on_fail": {
+        "[STATUS: YIELD_CONTRACT]": "back:contract rounds=2",
+        "[STATUS: YIELD_WEB]": "consult:web-researcher"
+      }
+    },
+    {
+      "id": "ledger",
+      "gate": "merge",
+      "agent": "charter-docs",
+      "when": "features.ledger",
+      "scope": {
+        "told": "tests/fixtures/trains/valid/ledger.md",
+        "touch": ["charter", "docs"],
+        "reply": ["[STATUS: COMMITTED]", "[STATUS: BLOCKED]"]
+      },
+      "proof": {
+        "script": "daedalus_train.py check-reply --stage ledger",
+        "exit": {"0": "pass", "2": "blocked", "1": "off-contract"},
+        "records": ["ledger_ids"]
+      },
+      "on_fail": {"blocked": "ask: Should the train stop without writing the ledger row?"}
+    }
+  ],
+  "off_contract": "stop: Next: rerun the train after reading the agent reply"
+}
