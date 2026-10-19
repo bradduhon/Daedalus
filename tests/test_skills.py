@@ -395,7 +395,17 @@ def test_push_skill_hand_off_names_the_release_step() -> None:
     assert "`Migration: <what an operator edits>`" in hand_off
     assert "`release: skipped`" in hand_off
     assert "It runs none of them." in hand_off
-    assert "except the release commands the release step prints" in _push_train()
+    # 0093: the main session runs them only in the plugin's own repository; 0089 elsewhere.
+    assert (
+        "When `<repo>` is the Daedalus plugin repository itself, show them to the operator, "
+        "then run them in the printed order yourself. In any other project, show them to the "
+        "operator to run from their own shell, and run none of them yourself."
+    ) in hand_off
+    assert (
+        "you run the three commands the release step prints only when `<repo>` is the Daedalus "
+        "plugin repository itself; in any other project you show them to the operator to run "
+        "from their own shell (0068, 0093)."
+    ) in _push_train().split("## Preconditions", 1)[0]
 
 
 def test_build_train_names_the_push_train_in_present_tense() -> None:
