@@ -117,25 +117,35 @@ def _file_name(record: Mapping[str, object]) -> str:
     return Path(raw).name if isinstance(raw, str) else ""
 
 
-def _verdict_refusal(stop: Mapping[str, object]) -> str | None:
+def stop_verdict(stop: Mapping[str, object]) -> str | None:
     # 41: every field is untrusted; head first line or tail last line approves, any reject refuses.
-    seq = stop.get("seq")
-    shown = seq if isinstance(seq, int) and not isinstance(seq, bool) else "?"
-    where = f"the {AUDITOR} final round (record seq {shown})"
     lines: dict[str, list[str]] = {}
     for field in _VERDICT_FIELDS:
         value = stop.get(field)
         if value is not None and not isinstance(value, str):
-            return f"{where} has a {field} that is not text"
+            return None
         lines[field] = [ln.strip() for ln in (value or "").splitlines() if ln.strip()]
     head, tail = lines["last_message_head"], lines["last_message_tail"]
     if any(ln.startswith(VERDICT_REJECTED) for ln in head + tail):
-        return f"{where} carries a {VERDICT_REJECTED} line"
+        return VERDICT_REJECTED
     if (head and head[0].startswith(VERDICT_APPROVED)) or (
         tail and tail[-1].startswith(VERDICT_APPROVED)
     ):
-        return None
-    return f"{where} is not {VERDICT_APPROVED}"
+        return VERDICT_APPROVED
+    return None
+
+
+def _verdict_refusal(stop: Mapping[str, object]) -> str | None:
+    seq = stop.get("seq")
+    shown = seq if isinstance(seq, int) and not isinstance(seq, bool) else "?"
+    where = f"the {AUDITOR} final round (record seq {shown})"
+    bad = [f for f in _VERDICT_FIELDS if not isinstance(stop.get(f), str | None)]
+    if bad:
+        return f"{where} has a {bad[0]} that is not text"
+    verdict = stop_verdict(stop)
+    if verdict == VERDICT_REJECTED:
+        return f"{where} carries a {VERDICT_REJECTED} line"
+    return None if verdict == VERDICT_APPROVED else f"{where} is not {VERDICT_APPROVED}"
 
 
 def approved(repo: Path, train_id: str) -> str:

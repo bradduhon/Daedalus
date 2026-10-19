@@ -1075,35 +1075,82 @@ def test_complete_with_wrong_packet_hash_is_refused(repo: Path, plugin: Path, ca
     assert entry["status"] == "failed"
 
 
+NEVER_TYPED = "Next: run the security audit; the verdict is recorded from the auditor's reply"
+
+
+def _verdict_call(repo: Path, status: str, round_: int, seq: int | None = None) -> Any:
+    # 0024: the jail appends this call's PreToolUse record before the command runs.
+    _record(repo, tool_input={"command": f"python3 /p/scripts/daedalus_train.py verdict {repo}"})
+    return train_runner.record_verdict(repo, status, round_, seq)
+
+
 @pytest.mark.parametrize("status", ["approved", "rejected"])
-def test_verdict_records_the_shape_on_the_current_tip(
+def test_verdict_records_the_newest_matching_auditor_stop(
     repo: Path, plugin: Path, status: str
 ) -> None:
-    # 0089: the skill-run verdict binds the integration tip at call time, like check-reply.
+    # 0089: the verdict comes from the auditor's stop record, bound to the tip at call time.
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
     tip = _integration(repo)
-    outcome = train_runner.record_verdict(repo, status, 2, 17)
+    _agent_stop(repo, "security-auditor", _verdict(status.upper()), "aud-1")
+    newest = _agent_stop(repo, "security-auditor", _verdict(status.upper()), "aud-1")
+    _agent_stop(repo, "repo-coder", COMPLETE, "coder-1")
+    outcome = _verdict_call(repo, status, 2)
     assert outcome.code == 0, outcome.lines
     assert outcome.lines == [f"Verdict {status} recorded on tip {tip[:12]} (round 2)"]
-    assert _state(repo)["verdict"] == {"status": status, "tip": tip, "round": 2, "seq": 17}
+    record = {"status": status, "tip": tip, "round": 2, "seq": newest["seq"]}
+    assert _state(repo)["verdict"] == record
     assert tip == _tip(repo)
 
 
-def test_verdict_cli_records_without_a_seq(repo: Path, plugin: Path) -> None:
+def test_verdict_with_no_auditor_stop_refuses(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    _integration(repo)
+    _agent_stop(repo, "repo-coder", _verdict("APPROVED"), "coder-1")
+    refused = _verdict_call(repo, "approved", 1)
+    assert refused.code == 1 and NEVER_TYPED in refused.lines[0]
+    assert "verdict" not in _state(repo)
+
+
+def test_verdict_with_the_other_verdict_refuses(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    _integration(repo)
+    _agent_stop(repo, "security-auditor", _verdict("REJECTED"), "aud-1")
+    refused = _verdict_call(repo, "approved", 1)
+    assert refused.code == 1 and NEVER_TYPED in refused.lines[0]
+    assert "verdict" not in _state(repo)
+
+
+def test_verdict_seq_must_name_the_matching_auditor_stop(repo: Path, plugin: Path) -> None:
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
     tip = _integration(repo)
+    auditor = _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
+    coder = _agent_stop(repo, "repo-coder", _verdict("APPROVED"), "coder-1")
+    refused = _verdict_call(repo, "approved", 1, int(coder["seq"]))
+    assert refused.code == 1 and NEVER_TYPED in refused.lines[0]
+    assert "verdict" not in _state(repo)
+    passed = _verdict_call(repo, "approved", 1, int(auditor["seq"]))
+    assert passed.code == 0, passed.lines
+    record = {"status": "approved", "tip": tip, "round": 1, "seq": auditor["seq"]}
+    assert _state(repo)["verdict"] == record
+
+
+def test_verdict_cli_finds_the_seq_itself(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    tip = _integration(repo)
+    stop = _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
     argv = [sys.executable, str(SCRIPTS_DIR / "daedalus_train.py"), "verdict", "--repo"]
-    result = subprocess.run(
-        [*argv, str(repo), "--status", "approved", "--round", "1"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    argv += [str(repo), "--status", "approved", "--round", "1"]
+    _record(repo, tool_input={"command": " ".join(argv)})
+    result = subprocess.run(argv, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == f"Verdict approved recorded on tip {tip[:12]} (round 1)\n"
-    assert _state(repo)["verdict"] == {"status": "approved", "tip": tip, "round": 1, "seq": None}
+    record = {"status": "approved", "tip": tip, "round": 1, "seq": stop["seq"]}
+    assert _state(repo)["verdict"] == record
 
 
 def test_verdict_refuses_an_unknown_status_a_bad_round_and_no_branch(
@@ -1111,11 +1158,12 @@ def test_verdict_refuses_an_unknown_status_a_bad_round_and_no_branch(
 ) -> None:
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
-    no_branch = train_runner.record_verdict(repo, "approved", 1)
+    _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
+    no_branch = _verdict_call(repo, "approved", 1)
     assert no_branch.code == 1 and "integration branch" in no_branch.lines[0]
     _integration(repo)
     for status, round_ in (("passed", 1), ("approved", 0)):
-        refused = train_runner.record_verdict(repo, status, round_)
+        refused = _verdict_call(repo, status, round_)
         assert refused.code == 1 and "Next:" in refused.lines[0]
     assert "verdict" not in _state(repo)
 

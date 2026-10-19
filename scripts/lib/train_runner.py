@@ -19,7 +19,18 @@ from pathlib import Path
 
 from lib import manifest, train_definition, train_state, workspace
 from lib.audit import ReplyKeyError, message_hmac, reply_key
-from lib.audit_proof import SUMMARY_DIR, ProofError, hooks_live, newest_log, read_chain
+from lib.audit_proof import (
+    AUDITOR,
+    SUMMARY_DIR,
+    VERDICT_APPROVED,
+    VERDICT_REJECTED,
+    ProofError,
+    hooks_live,
+    live_log,
+    newest_log,
+    read_chain,
+    stop_verdict,
+)
 from lib.config import ConfigError, load_config
 from lib.jail import normalize_agent
 from lib.project_root import in_git_work_tree, project_root
@@ -55,9 +66,10 @@ EXIT_OK, EXIT_STOP, EXIT_ROUTED, EXIT_ASK, EXIT_WAIT = 0, 1, 2, 3, 4
 COMPLETE_LINE = "[STATUS: COMPLETE]"
 YIELD_PREFIX = "[STATUS: YIELD"
 VERDICTS = {
-    "[VERDICT: APPROVED]": train_state.APPROVED,
-    "[VERDICT: REJECTED]": train_state.REJECTED,
+    VERDICT_APPROVED: train_state.APPROVED,
+    VERDICT_REJECTED: train_state.REJECTED,
 }
+VERDICT_NEEDLE = "daedalus_train.py verdict"
 # 0083: the Standards Packet is written once to the train's scratch folder after the pick commit.
 STANDARDS_FILE = "standards-packet.md"
 PACKETS = ("contract", "standards")
@@ -1244,6 +1256,33 @@ def record_exception(cwd: Path, ledger_id: str) -> Outcome:
     return _recorded(cwd, edit)
 
 
+def _auditor_seq(repo: Path, status: str, seq: int | None) -> int:
+    # 0089: the verdict is read from this session's auditor stop record, never from the caller.
+    try:
+        log, _ = live_log(repo, VERDICT_NEEDLE)
+        records = read_chain(log)
+    except ProofError as exc:
+        raise RunnerError(str(exc)) from exc
+    want = VERDICT_APPROVED if status == train_state.APPROVED else VERDICT_REJECTED
+    stops = [
+        r
+        for r in records
+        if r.get("event") == "SubagentStop"
+        and r.get("agent_type") == AUDITOR
+        and stop_verdict(r) == want
+        and (seq is None or r.get("seq") == seq)
+    ]
+    found = stops[-1].get("seq") if stops else None
+    if not isinstance(found, int) or isinstance(found, bool):
+        at = f" at seq {seq}" if seq is not None else ""
+        raise RunnerError(
+            f"no {AUDITOR} stop record{at} in audit log {log.name} carries {want}. "
+            "Next: run the security audit; the verdict is recorded from the auditor's reply, "
+            "never typed."
+        )
+    return found
+
+
 def record_verdict(cwd: Path, status: str, round_: int, seq: int | None = None) -> Outcome:
     # 0089: a skill-driven train records the auditor's verdict on the tip as it stands now.
     def edit(repo: Path, train_id: str) -> list[str]:
@@ -1257,8 +1296,9 @@ def record_verdict(cwd: Path, status: str, round_: int, seq: int | None = None) 
                 f"round {round_} or audit seq {seq} is out of range. "
                 "Next: rerun verdict with a round of 1 or more and the auditor's stop record seq."
             )
+        found = _auditor_seq(repo, status, seq)
         tip = _integration_tip(repo, train_id)
-        record = _verdict_record(status, tip, round_, seq)
+        record = _verdict_record(status, tip, round_, found)
         train_state.update(repo, train_id, **{train_state.VERDICT: record})
         return [f"Verdict {status} recorded on tip {tip[:12]} (round {round_})"]
 
