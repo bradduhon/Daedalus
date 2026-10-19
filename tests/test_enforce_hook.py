@@ -701,5 +701,5 @@ def test_fast_path_modules_use_the_standard_library_only(module: str) -> None:
     tree = ast.parse((_SCRIPT.parent / "lib" / module).read_text())
     names = [a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names]
     names += [n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)]
-    fast = {"lib.repo_root"} if module == "project_root.py" else set()
+    fast = {"lib.repo_root", "lib.project_root"} - {f"lib.{module.removesuffix('.py')}"}
     assert not [n for n in names if (n == "lib" or n.startswith("lib.")) and n not in fast]

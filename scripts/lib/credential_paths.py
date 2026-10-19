@@ -1,13 +1,16 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0023: the credential-path deny, the one rule every agent meets in or out of a train.
-# Standard library only: the jail's entry script imports this before the rest of lib.
+# Standard library and the fast-path lib.project_root only: the jail's entry script imports
+# this before the rest of lib.
 from __future__ import annotations
 
 import fnmatch
 import os
 import re
 from pathlib import Path
+
+from lib.project_root import project_root
 
 # spec 8, 0023: credential stores refused to every agent, main included.
 CREDENTIAL_DENY = (".ssh", ".aws", ".gnupg", ".config/gh", ".claude/.credentials.json")
@@ -26,6 +29,10 @@ REPLY_KEY_NAME = "reply-hmac.key"
 R_REPLY_KEY = (
     "{path} is the train's reply key. "
     "Next: no agent reads the reply key; check-reply reads it for the train"
+)
+R_REPLY_KEY_TREE = (
+    "{path} contains the train's reply key. "
+    "Next: search a folder outside .claude/daedalus, or name the files you need"
 )
 _GLOB_START = re.compile(r"[*?\[{]")
 _BRACE = re.compile(r"\{[^}]*\}")
@@ -105,11 +112,11 @@ def _glob_rest(parts: list[str], root: list[str], dotglob: bool) -> list[str] | 
         if i >= len(parts):
             return root[i:]
         pat = _BRACE.sub("*", parts[i])
-        if "**" in pat:
-            return []
-        # spec 8: a shell wildcard skips a leading dot unless dotglob is set.
+        # spec 8: a shell wildcard skips a leading dot unless dotglob is set; ** included.
         if not dotglob and name.startswith(".") and not pat.startswith("."):
             return None
+        if "**" in pat:
+            return []
         if not fnmatch.fnmatchcase(name, pat):
             return None
     return []
@@ -153,18 +160,38 @@ def reply_key_hit(target: str) -> bool:
     )
 
 
+def key_roots(*paths: str) -> list[str]:
+    # SC-12: the existing reply key of each named path's project, as one more store root.
+    keys = {project_root(Path(p)) / ".claude" / "daedalus" / REPLY_KEY_NAME for p in paths if p}
+    return sorted(os.path.realpath(k) for k in keys if k.is_absolute() and os.path.lexists(k))
+
+
+def _grep_key_reason(target: str, keys: list[str]) -> str | None:
+    # SC-12: the Grep tool honors the data folder's `*` marker from above, so only a search
+    # rooted inside .claude can read the key; that search is refused.
+    for key in keys:
+        if _contains(os.path.dirname(os.path.dirname(key)), target):
+            return R_REPLY_KEY_TREE.format(path=target)
+    return None
+
+
 def path_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | None:
     # 0023: path-argument tools; the jail judges Bash commands with its own shell model.
     roots = credential_roots()
     for raw in _candidates(tool, tool_input, cwd):
         target = _expand_home(raw, cwd)
-        if target is not None and reply_key_hit(target):
+        if target is None:
+            continue
+        # SC-12: Read names one file and Glob lists names only, so the key's own path is enough.
+        if reply_key_hit(target):
             return R_REPLY_KEY.format(path=target)
-        if target is not None and credential_hit(target, roots, tool == "Glob"):
+        if credential_hit(target, roots, tool == "Glob"):
             return R_CREDENTIAL.format(path=target)
     if tool == "Grep":
         # spec 8: the Grep tool searches hidden dirs, so a root above a store reads it.
         target = _expand_home(str(tool_input.get("path") or cwd), cwd)
         if target and any(store_rest(target, root, False, True) is not None for root in roots):
             return R_CREDENTIAL_TREE.format(path=target)
+        if target:
+            return _grep_key_reason(target, key_roots(cwd, target))
     return None

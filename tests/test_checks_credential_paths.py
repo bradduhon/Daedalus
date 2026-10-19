@@ -84,6 +84,76 @@ def test_reply_key_is_refused_to_every_agent(tmp_path: Path, agent: str | None) 
     assert judge(_cred(agent, "Read", cwd=str(repo), file_path=str(other)), CFG).allow
 
 
+def _key_repo(tmp_path: Path) -> Path:
+    repo = tmp_path.resolve() / "repo"
+    data = repo / ".claude" / "daedalus"
+    data.mkdir(parents=True)
+    (data / "reply-hmac.key").write_bytes(b"k" * 32)
+    (data / "config.json").write_text("{}")
+    (repo / "src").mkdir()
+    _train(repo)
+    return repo
+
+
+def _bash_in(repo: Path, agent: str, command: str) -> dict[str, object]:
+    return {
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "cwd": str(repo),
+        "agent_type": agent,
+    }
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat .claude/daedalus/reply-hmac.ke*",
+        "cat .claude/daedalus/*",
+        "grep -ra . .claude/daedalus",
+        "grep -r token .claude",
+    ],
+)
+def test_reply_key_wildcards_and_folder_reads_are_refused(tmp_path: Path, command: str) -> None:
+    # SC-12: a read-only agent cannot reach the reply key by a wildcard or a folder read.
+    repo = _key_repo(tmp_path)
+    reason = evaluate(HOOK, _bash_in(repo, "security-auditor", command))
+    assert reason is not None and "Next:" in reason, command
+    d = decide(_bash_in(repo, "security-auditor", command), CFG)
+    assert not d.allow, command
+
+
+def test_grep_tool_on_the_data_folder_is_refused(tmp_path: Path) -> None:
+    # SC-12: the Grep tool rooted at or inside .claude reads the key, so it is refused.
+    repo = _key_repo(tmp_path)
+    for path in (repo / ".claude" / "daedalus", repo / ".claude"):
+        hook_input = _cred("security-auditor", "Grep", cwd=str(repo), pattern=".", path=str(path))
+        d = decide(hook_input, CFG)
+        assert not d.allow and "contains the train's reply key. Next:" in str(d.reason)
+    config = repo / ".claude" / "daedalus" / "config.json"
+    read = _cred("security-auditor", "Read", cwd=str(repo), file_path=str(config))
+    assert decide(read, CFG).allow
+
+
+@pytest.mark.parametrize(
+    "hook_input",
+    [
+        {"tool_name": "Grep", "tool_input": {"pattern": "def "}},
+        {"tool_name": "Grep", "tool_input": {"pattern": "def ", "path": "src"}},
+        {"tool_name": "Bash", "tool_input": {"command": "ls src/**/*.py"}},
+        {"tool_name": "Bash", "tool_input": {"command": "ls **/*.py"}},
+        {"tool_name": "Bash", "tool_input": {"command": "cat src/*.py"}},
+        {"tool_name": "Bash", "tool_input": {"command": "grep -r token src"}},
+    ],
+)
+def test_project_reads_beside_the_reply_key_are_allowed(
+    tmp_path: Path, hook_input: dict[str, object]
+) -> None:
+    # SC-12: the refusal stays on the key; ordinary searches of the project still run.
+    repo = _key_repo(tmp_path)
+    case = {**hook_input, "cwd": str(repo), "agent_type": "security-auditor"}
+    assert evaluate(HOOK, case) is None, hook_input
+
+
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
 def test_glob_and_grep_into_credentials_are_refused(cred_home: Path, agent: str | None) -> None:
     for hook_input in (

@@ -18,6 +18,7 @@ from lib.credential_paths import (
     R_CREDENTIAL,
     R_CREDENTIAL_TREE,
     R_REPLY_KEY,
+    key_roots,
     path_reason,
     reply_key_hit,
 )
@@ -1270,7 +1271,8 @@ def _bash_credential_reason(command: str, cwd: str, roots: list[str]) -> str | N
 def _credential_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | None:
     if tool == "Bash":
         command = str(tool_input.get("command") or "")
-        return _bash_credential_reason(command, cwd, _credential_roots())
+        # SC-12: the reply key joins the store roots, so globs and folder reads of it refuse.
+        return _bash_credential_reason(command, cwd, _credential_roots() + key_roots(cwd))
     if tool not in CREDENTIAL_TOOLS and tool not in WRITE_TOOLS:
         return None
     return path_reason(tool, tool_input, cwd)
