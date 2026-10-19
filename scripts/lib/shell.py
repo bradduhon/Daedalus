@@ -32,6 +32,17 @@ READ_ONLY_GIT = frozenset({"diff", "log", "show", "status", "rev-parse", "ls-fil
 SPECIALIST_GIT = frozenset({"diff", "show", "log"})
 # M1: charter-docs git is add/commit/status/log/diff only (4.2); no merge, no worktree.
 CHARTER_DOCS_GIT = frozenset({"add", "commit", "status", "log", "diff"})
+# 0084: charter-docs reads as (flag letters, value-taking letters); long options refuse.
+DOCS_READS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "cat": (frozenset("AbeEnstTuv"), frozenset()),
+    "grep": (frozenset("cEFhHiIlLnoqrsvwx"), frozenset("eABCm")),
+    "head": (frozenset("qv"), frozenset("nc")),
+    "tail": (frozenset("qv"), frozenset("nc")),
+    "wc": (frozenset("clmwL"), frozenset()),
+    "ls": (frozenset("1aAdFhlrRSt"), frozenset()),
+    "diff": (frozenset("abBiNqsuwy"), frozenset("U")),
+    "sed": (frozenset("nErsu"), frozenset("e")),
+}
 CONDUCTOR_GIT = frozenset({"push", "status", "log", "rev-parse", "branch", "diff", "add", "commit"})
 # Final review I1: transport plumbing and credential helpers reach remotes without push.
 GIT_PLUMBING_REMOTE = frozenset(
@@ -962,6 +973,92 @@ def _is_append_ledger(tokens: list[str]) -> bool:
     if not script.startswith("/") or ".." in script.split("/"):
         return False
     return os.path.realpath(script) == os.path.join(_REPO_SCRIPTS, "append_ledger.py")
+
+
+_SED_ADDR = r"(?:\d+|\$|/[^/\\]*/)"
+_SED_PRINT = re.compile(
+    rf"(?:{_SED_ADDR}(?:,{_SED_ADDR})?)?p(?:;(?:{_SED_ADDR}(?:,{_SED_ADDR})?)?p)*"
+)
+_READ_PATH_DENY = frozenset("*?[]{}$~\\")
+
+
+def _unquoted_expansion(raw: str) -> bool:
+    # 0084: an unquoted glob, brace, tilde or $ can split into operands the jail never saw.
+    quote = ""
+    i = 0
+    while i < len(raw):
+        char = raw[i]
+        if quote:
+            quote = "" if char == quote else quote
+        elif char == "\\":
+            i += 1
+        elif char in "'\"":
+            quote = char
+        elif char in "*?[{~$":
+            return True
+        i += 1
+    return False
+
+
+def _docs_read_split(name: str, args: list[str]) -> tuple[set[str], list[str], list[str]] | None:
+    plain, valued = DOCS_READS[name]
+    seen: set[str] = set()
+    scripts: list[str] = []
+    operands: list[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            operands += args[i + 1 :]
+            break
+        if not arg.startswith("-") or arg == "-":
+            operands.append(arg)
+            i += 1
+            continue
+        if arg.startswith("--"):
+            return None
+        for j, char in enumerate(arg[1:], start=2):
+            if char in valued:
+                if not arg[j:] and i + 1 >= len(args):
+                    return None
+                value = arg[j:] or args[i + 1]
+                i += 0 if arg[j:] else 1
+                if char == "e":
+                    scripts.append(value)
+                break
+            if char not in plain:
+                return None
+            seen.add(char)
+        i += 1
+    return seen, scripts, operands
+
+
+def docs_read_ok(tokens: list[str], raw: str, roots: list[str], cwd: str, base: str) -> bool:
+    # 0084: a relative operand must land under a root from the project root and from cwd.
+    name = _cmd_name(tokens)
+    if name not in DOCS_READS or _unquoted_expansion(raw):
+        return False
+    split = _docs_read_split(name, tokens[1:])
+    if split is None:
+        return False
+    seen, scripts, paths = split
+    if name in {"grep", "sed"} and not scripts:
+        scripts, paths = paths[:1], paths[1:]
+    if name == "sed" and ("n" not in seen or not all(_SED_PRINT.fullmatch(s) for s in scripts)):
+        return False
+    if name == "ls" and not paths:
+        paths = [cwd]
+    if not paths or (name in {"grep", "sed"} and not scripts):
+        return False
+    if name == "diff" and len(paths) != 2:
+        return False
+    for path in paths:
+        if _READ_PATH_DENY & set(path):
+            return False
+        places = [path] if os.path.isabs(path) else [_abs(path, base), _abs(path, cwd)]
+        if not all(any(_under(p, root) for root in roots) for p in places):
+            return False
+    return True
 
 
 def _tester_runner_ok(name: str, tokens: list[str]) -> bool:
