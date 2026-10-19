@@ -41,7 +41,7 @@ If `/daedalus:doctor` is not offered yet after you install, run `/reload-plugins
 
 The doctor lists every file and tool Daedalus needs. Each `OK` line is a check that passed. Each `MISS` line names what is missing. Running the doctor changes nothing. Fix the `MISS` lines and run it again.
 
-Every `MISS` line ends with a `Next:` instruction that says what to do. In a new repository, three lines read `OPT` until you add the files they name: `service-manifest.json`, `contracts/` and `.gitleaks.toml`. `OPT` marks an optional scaffold your project declares about itself. Neither the Build Train nor the Push Train stops when they are absent, and their absence never fails the doctor. [docs/project-requirements.md](docs/project-requirements.md) lists every file Daedalus expects, says what each is for, and gives a small example of each.
+Every `MISS` line ends with a `Next:` instruction that says what to do. In a new repository, four lines read `OPT` until you add the files they name: `config.json`, `service-manifest.json`, `contracts/` and `.gitleaks.toml`. `/daedalus:setup` writes starter copies of the first two. `OPT` marks an optional scaffold your project declares about itself. Neither the Build Train nor the Push Train stops when they are absent, and their absence never fails the doctor. [docs/project-requirements.md](docs/project-requirements.md) lists every file Daedalus expects, says what each is for, and gives a small example of each.
 
 ## The three trains
 
@@ -96,7 +96,7 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 <!-- generated: catalog.py matrix -->
 | Agent | Shape | Hooks |
 |---|---|---|
-| charter-docs | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires --no-pipes, network_tools, git_push, git_grammar --allow docs, root_writes --touch charter,docs --ledger-guard, command_allowlist --allow append_ledger,git, gh_classes |
+| charter-docs | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires --no-pipes, network_tools, git_push, git_grammar --allow docs, root_writes --touch charter,docs --ledger-guard, command_allowlist --allow append_ledger,git,read, gh_classes |
 | cis-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
 | contract-spec | producer | credential_paths, workspace_integrity, tool_bound, root_writes --touch contracts,charter-specs |
 | nist-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
@@ -113,7 +113,9 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 
 | Path | When | Why |
 |---|---|---|
-| `<repo>/.claude/daedalus/.gitignore` | A Build Train starts in the repository for the first time | Holds `*` so git ignores the whole directory |
+| `<repo>/service-manifest.json` | You run `/daedalus:setup` and the file is missing | The starter manifest, with every feature off |
+| `<repo>/.claude/daedalus/config.json` | You run `/daedalus:setup` and the file is missing | The starter config, with every setting at its default |
+| `<repo>/.claude/daedalus/.gitignore` | A Build Train starts in the repository for the first time, or `/daedalus:setup` writes the config | Holds `*` so git ignores the whole directory |
 | `<repo>/.claude/daedalus/audit/<session_id>.jsonl` | Every session, while a train runs in that repository | The hash-chained audit log for that session |
 | `.claude/daedalus/ledger-locks/` in the repo that holds the ledger | A ledger entry is appended | Locks so two writers never change the ledger at once |
 | `<repo>/docs/.tmp/daedalus/` | A Build Train starts | Scratch files and the train summary, ignored by git |
@@ -125,7 +127,7 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 | Rows in your decision ledger | An approved Build Train ends | One entry per ruling, appended through `append_ledger.py` |
 | `<cache>/frameworks/<family>/` | You run `refresh_frameworks.py` | The pinned framework files and their manifest |
 
-You write `<repo>/.claude/daedalus/config.json` yourself when you need it. It is optional and Daedalus never writes it (see Configuration below for the fields).
+`<repo>/.claude/daedalus/config.json` is optional. `/daedalus:setup` writes a starter copy when it is missing, and nothing else in Daedalus writes it (see Configuration below for the fields).
 
 ### The NIST and CIS cache
 
@@ -147,9 +149,44 @@ CIS Benchmark files are licensed, so you place them by hand in `<cache>/framewor
 
 Every file and setting Daedalus reads is described, with a small working example, in [docs/project-requirements.md](docs/project-requirements.md). The full operator guide is [docs/howto/README.md](docs/howto/README.md). It covers each train step by step, how to read a block message, and how to read an audit report.
 
+To start both project files, type `/daedalus:setup`. It writes a starter `service-manifest.json` at the project root, with every feature off, and a starter `.claude/daedalus/config.json`, with every setting at its default. It writes only a file that is missing and never overwrites one. It prints one line per file: `written:` when it created the file, `kept:` when the file already existed (0076).
+
+### Key reference
+
+One row per key the two readers accept. The service manifest is committed and shared by everyone who works on the project; the config never leaves your machine (0070). A dotted key is a key inside an object, and `[]` marks a key inside each entry of a list.
+
+<!-- key reference -->
+| Key | File | What it does | Values | Default |
+|---|---|---|---|---|
+| `jail_narrowing.forbidden_paths` | `service-manifest.json` | Paths in your project no coding agent may write, on top of the paths the jail always protects (0054) | A list of project-relative paths with forward slashes and no leading slash, `..` or glob characters; a trailing slash covers the whole folder | `[]` |
+| `jail_narrowing.forbidden_extensions` | `service-manifest.json` | File endings no coding agent may write (0054) | A list of endings that each start with a dot, such as `.pem` | `[]` |
+| `features.scope` | `service-manifest.json` | Whether a train treats the project as a git repository or as a plain folder (0074) | `"repository"`, `"folder"` or `null` | `null`: a git work tree is a repository, anything else is a plain folder |
+| `features.secrets_scan` | `service-manifest.json` | Reserved for a gitleaks scan of the commits a push sends; the reader checks the value, and no train step acts on it yet (0069) | `true` or `false` | `false` |
+| `features.scrub_file` | `service-manifest.json` | Reserved for a file of terms that every commit and pull request body a train makes is checked against; the reader checks the path, and no train step reads the file yet (0069) | A project-relative path, or `null` | `null`: nothing is checked |
+| `features.ledger` | `service-manifest.json` | Turns the decision ledger steps on or off (0069) | `true`: the ledger is used, and a train asks before creating one; `false`: no ledger step and no ledger question; `null` | `null`: a ledger the config declares or the probe finds is used, and none is created |
+| `trains_dir` | `service-manifest.json` | Reserved for the project folder that holds its own train definitions; the reader checks the path, and no train reads the folder yet (0073) | A project-relative folder path, or `null` | `null` |
+| `stack.unit_test_cmd` | `service-manifest.json` | The command that runs the project's unit tests; the reader checks it, and no train step runs it yet (0073) | A non-empty command string, or `null` | `null` |
+| `ledger.path` | `service-manifest.json` | Where rulings are appended, declared for everyone who works on the project; it wins over the config's ledger block (0004) | A path; `<repo_root>` and `<charter_root>` are filled in, and a relative path is read from the project root | No block: the config's ledger block or the ledger probe is used |
+| `ledger.format` | `service-manifest.json` | How each ruling is written to the manifest's ledger (0004) | `"markdown-table-row"` or `"heading-entry"` | Required once the block exists |
+| `ledger.id_scheme` | `service-manifest.json` | The pattern each new ruling id follows (0004) | A pattern such as `{seq:04d}-{repo}-{type}` | Required once the block exists |
+| `ledger.sequence_source` | `service-manifest.json` | Where the next ruling number comes from (0004) | `"last-row-id"` or `"frontmatter:<key>"` | Required once the block exists |
+| `charter_root` | `.claude/daedalus/config.json` | The repository where your decisions and specs live; the contract and ledger agents may write there | An absolute path | None declared: those agents write only inside the project |
+| `ledger.path` | `.claude/daedalus/config.json` | Where rulings are appended on this machine, used when the manifest declares no ledger (0004) | A path; `<repo_root>` and `<charter_root>` are filled in, and a relative path is read from the project root | None declared: the ledger probe looks for one |
+| `ledger.format` | `.claude/daedalus/config.json` | How each ruling is written to the config's ledger (0004) | `"markdown-table-row"` or `"heading-entry"` | Required once the block exists |
+| `ledger.id_scheme` | `.claude/daedalus/config.json` | The pattern each new ruling id follows (0004) | A pattern such as `{seq:04d}-{repo}-{type}` | Required once the block exists |
+| `ledger.sequence_source` | `.claude/daedalus/config.json` | Where the next ruling number comes from (0004) | `"last-row-id"` or `"frontmatter:<key>"` | Required once the block exists |
+| `policy.engine` | `.claude/daedalus/config.json` | The tool for a deterministic policy check on infrastructure changes; no train runs it yet | `"cfn-guard"` or `"conftest"` | None declared |
+| `policy.path` | `.claude/daedalus/config.json` | The folder that holds your policy rules; no train reads it yet | A path | None declared |
+| `standards_sources[].kind` | `.claude/daedalus/config.json` | What one source of your standards is; the standards specialist reads only these entries (0019) | `"rules-dir"`, `"file"` or `"pack"` | An empty list: the Standards Packet is empty |
+| `standards_sources[].path` | `.claude/daedalus/config.json` | Where a rules folder or rules file lives | An absolute path; a pack has none | Required for a folder or file entry |
+| `standards_sources[].name` | `.claude/daedalus/config.json` | Which pack shipped with Daedalus to use (0019) | `"baseline"`, the one pack Daedalus ships | Required for a pack entry |
+| `operator_signing_keys` | `.claude/daedalus/config.json` | Reserved for the key fingerprints allowed to sign merges; no check reads it yet | A list of non-empty strings | `[]` |
+| `max_concurrent_builders` | `.claude/daedalus/config.json` | How many coding agents a parallel stage runs at once (0072) | A whole number of at least 1 | `5` |
+<!-- end key reference -->
+
 ## Safety model
 
-Outside a train, Daedalus leaves your session and your repository alone, with one exception: it refuses reads and searches of credential files for every agent and the main session. Outside a train, Daedalus writes no files and keeps no audit log in any repository, including one where a train ran before. Inside a train, the jail judges every tool call and the audit log records each step. A train works in three folders: the repository's `.claude/worktrees/` folder holds the unit worktrees, its `.claude/daedalus/` folder holds train state and the audit log, and the git-ignored `docs/.tmp/daedalus/` folder holds scratch files and summaries. To have the plugin's hooks in some repositories only, enable the plugin at project scope in each of those repositories' `.claude/settings.json` (Claude Code's `enabledPlugins`) instead of for your user.
+Outside a train, Daedalus leaves your session and your repository alone, with one exception: it refuses reads and searches of credential files for every agent and the main session. Outside a train, Daedalus writes no files and keeps no audit log in any repository, including one where a train ran before; the one exception is `/daedalus:setup`, which writes its two starter files when you run it. Inside a train, the jail judges every tool call and the audit log records each step. A train works in three folders: the repository's `.claude/worktrees/` folder holds the unit worktrees, its `.claude/daedalus/` folder holds train state and the audit log, and the git-ignored `docs/.tmp/daedalus/` folder holds scratch files and summaries. To have the plugin's hooks in some repositories only, enable the plugin at project scope in each of those repositories' `.claude/settings.json` (Claude Code's `enabledPlugins`) instead of for your user.
 
 Each agent gets a short list of allowed tools, and a tool not on the list is never offered to it. A PreToolUse hook is a check Claude Code runs before each tool call. Daedalus uses one, the jail, to compare every call against that agent's rules and block anything outside them. A coding agent may write only inside its own unit worktree, and there never to `contracts/`, `.github/`, `.claude/`, `service-manifest.json`, the decision ledger, or the paths and file extensions the repository lists under `jail_narrowing` in `service-manifest.json`. Every agent, and the main session, is refused reads and searches of `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh` and `~/.claude/.credentials.json` at all times. Daedalus's own agents always, and the main session while a train runs, are also refused writing those paths with a file tool or naming them in Bash. While a train runs, agents from Claude Code itself or from other plugins are refused every checked tool except reads and searches, in the train's repository and when they write into it from another one. The jail hooks are the enforced boundary and judge each tool call before it runs. Code an agent runs inside a tool call, such as its tests, is the same exposure any developer accepts when using a model in their environment, so Daedalus asks every agent never to circumvent its boundaries and does not try to control the environment. A blocked agent sees a line starting with `daedalus-jail[<agent>]:` that says what was refused and what to do next. Hooks, not agents, write each step to the hash-chained audit log. No agent pushes except the conductor inside the Push Train, and no agent merges. You merge.
 
@@ -191,12 +228,14 @@ Daedalus/
 │   ├── lib/jail.py                  # per-agent tool policy
 │   ├── lib/ledger.py                # ledger resolution, sequence read, entry format
 │   ├── lib/locks.py                 # bounded flock shared by audit and ledger writers
+│   ├── lib/project_keys.py          # every manifest and config key, and the starter files
 │   ├── lib/redact.py                # secret masking for audit records
 │   ├── lib/workspace.py             # unit worktrees and the train marker
 │   ├── append_ledger.py             # locked, sequence-checked ledger writer
 │   ├── audit_log.py                 # all other hook events to the audit log
 │   ├── audit_report.py              # digest of a verified session log
 │   ├── daedalus_doctor.py           # first-run check behind /daedalus:doctor
+│   ├── daedalus_setup.py            # writes the missing starter files behind /daedalus:setup
 │   ├── daedalus_workspace.py        # create and remove unit worktrees; mark the running train
 │   ├── enforce_agent_jail.py        # PreToolUse policy
 │   ├── refresh_frameworks.py        # operator-run: compile the pinned framework caches
@@ -205,7 +244,8 @@ Daedalus/
 │   ├── audit-report/SKILL.md        # /daedalus:audit-report
 │   ├── build-train/SKILL.md         # /daedalus:build-train
 │   ├── doctor/SKILL.md              # /daedalus:doctor
-│   └── push-train/SKILL.md          # /daedalus:push-train
+│   ├── push-train/SKILL.md          # /daedalus:push-train
+│   └── setup/SKILL.md               # /daedalus:setup
 └── tests/                           # the pytest suite
 ```
 

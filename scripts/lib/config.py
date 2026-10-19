@@ -7,11 +7,12 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from lib.audit import check_project_data_dir
 
 POLICY_ENGINES = ("cfn-guard", "conftest")
+# 0072: how many coders a parallel stage runs at once when the config names no number.
+DEFAULT_MAX_CONCURRENT_BUILDERS = 5
 LEDGER_FORMATS = ("markdown-table-row", "heading-entry")
 LEDGER_FIELDS = ("path", "format", "id_scheme", "sequence_source")
 PACKS_DIR = Path(__file__).resolve().parents[2] / "packs"
@@ -50,9 +51,10 @@ class Config:
     policy: PolicyDecl | None = None
     standards_sources: tuple[StandardsSource, ...] = field(default_factory=tuple)
     operator_signing_keys: tuple[str, ...] = field(default_factory=tuple)
+    max_concurrent_builders: int = DEFAULT_MAX_CONCURRENT_BUILDERS
 
 
-def _require_str(raw: dict[str, Any], key: str, where: str) -> str:
+def _require_str(raw: dict[str, object], key: str, where: str) -> str:
     name = f"{where}.{key}" if where else key
     value = raw.get(key)
     if not isinstance(value, str) or not value:
@@ -62,7 +64,7 @@ def _require_str(raw: dict[str, Any], key: str, where: str) -> str:
     return value
 
 
-def _signing_keys(raw: dict[str, Any]) -> tuple[str, ...]:
+def _signing_keys(raw: dict[str, object]) -> tuple[str, ...]:
     if "operator_signing_keys" not in raw:
         return ()
     keys = raw["operator_signing_keys"]
@@ -71,10 +73,22 @@ def _signing_keys(raw: dict[str, Any]) -> tuple[str, ...]:
             "config.json operator_signing_keys must be a list of non-empty strings. "
             'Next: write it as ["KEYID", ...].'
         )
-    return tuple(keys)
+    return tuple(str(k) for k in keys)
 
 
-def _ledger(raw: Any) -> LedgerDecl:
+def _max_builders(raw: dict[str, object]) -> int:
+    # 0072: a whole number of at least 1; bool is refused, though Python counts it an int.
+    value = raw.get("max_concurrent_builders", DEFAULT_MAX_CONCURRENT_BUILDERS)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ConfigError(
+            f"config.json max_concurrent_builders must be a whole number of at least 1 "
+            f"(got {value!r}). Next: set max_concurrent_builders to 1 or more, or remove it "
+            "to run five coders at once."
+        )
+    return value
+
+
+def _ledger(raw: object) -> LedgerDecl:
     if not isinstance(raw, dict):
         raise ConfigError(
             "config.json ledger must be an object. "
@@ -93,7 +107,7 @@ def _ledger(raw: Any) -> LedgerDecl:
     return LedgerDecl(Path(path), fmt, id_scheme, sequence_source)
 
 
-def _policy(raw: Any) -> PolicyDecl:
+def _policy(raw: object) -> PolicyDecl:
     if not isinstance(raw, dict) or "engine" not in raw or "path" not in raw:
         raise ConfigError(
             "config.json policy needs engine and path. "
@@ -109,7 +123,7 @@ def _policy(raw: Any) -> PolicyDecl:
     return PolicyDecl(engine, Path(path))
 
 
-def _sources(raw: Any) -> tuple[StandardsSource, ...]:
+def _sources(raw: object) -> tuple[StandardsSource, ...]:
     if raw is None:
         return ()
     if not isinstance(raw, list):
@@ -131,7 +145,7 @@ def _sources(raw: Any) -> tuple[StandardsSource, ...]:
     return tuple(out)
 
 
-def _pack(name: Any) -> StandardsSource:
+def _pack(name: object) -> StandardsSource:
     # 0019, 0026: a shipped pack resolves under the plugin root; the name never walks out of it.
     if isinstance(name, str) and _PACK_NAME.fullmatch(name):
         path = PACKS_DIR / name
@@ -161,7 +175,7 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
             f"{target} could not be read ({exc}). Next: make it a readable UTF-8 file."
         ) from exc
     try:
-        raw = json.loads(text)
+        raw: object = json.loads(text)
     except (ValueError, RecursionError) as exc:
         detail = getattr(exc, "msg", str(exc))
         raise ConfigError(
@@ -172,11 +186,13 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
             f"{target} must contain a JSON object. "
             "Next: make the file one JSON object, as docs/project-requirements.md shows."
         )
-    charter = _require_str(raw, "charter_root", "") if "charter_root" in raw else None
+    # 0076: null is not declared, the same as an absent key; the setup starter writes null.
+    charter = _require_str(raw, "charter_root", "") if raw.get("charter_root") is not None else None
     return Config(
         charter_root=Path(charter) if charter is not None else None,
-        ledger=_ledger(raw["ledger"]) if "ledger" in raw else None,
-        policy=_policy(raw["policy"]) if "policy" in raw else None,
+        ledger=_ledger(raw["ledger"]) if raw.get("ledger") is not None else None,
+        policy=_policy(raw["policy"]) if raw.get("policy") is not None else None,
         standards_sources=_sources(raw.get("standards_sources")),
         operator_signing_keys=_signing_keys(raw),
+        max_concurrent_builders=_max_builders(raw),
     )

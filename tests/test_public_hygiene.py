@@ -20,6 +20,7 @@ ALLOWLIST = frozenset(
         ".gitignore",
         "LICENSE",
         "README.md",
+        "VERSION",
         "agents/",
         "hooks/",
         "packs/",
@@ -43,7 +44,10 @@ GENERIC_TERMS = (
     r"#[0-9]+",
     r"test_issue_[0-9]",
 )
-SECTIONS = ("[terms]", "[pre-split]")
+# 0017, issue 26: only [terms] is read; no section widens the allowlist.
+SECTIONS = ("[terms]",)
+SECTION_HEADER = re.compile(r"\[[a-z][a-z0-9-]*\]")
+PUBLIC_REMOTE = re.compile(r"github\.com[:/]bradduhon/Daedalus(?:\.git)?/?$", re.IGNORECASE)
 PY_HEADER = ["# Copyright (c) 2026 Brad Duhon.", "# SPDX-License-Identifier: GPL-3.0-or-later"]
 MD_HEADER = "<!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->"
 # sha256 of https://www.gnu.org/licenses/gpl-3.0.txt.
@@ -77,14 +81,15 @@ def _term_file() -> Path | None:
 
 
 def _read_sections(path: Path) -> dict[str, list[str]]:
-    sections: dict[str, list[str]] = {name: [] for name in SECTIONS}
+    sections: dict[str, list[str]] = {}
     current: str | None = None
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        if line in SECTIONS:
+        if SECTION_HEADER.fullmatch(line):
             current = line
+            sections.setdefault(line, [])
         elif current is None:
             raise ValueError(f"{path}: entry before any section header: {line}")
         else:
@@ -92,9 +97,27 @@ def _read_sections(path: Path) -> dict[str, list[str]]:
     return sections
 
 
-def _pre_split_entries() -> frozenset[str]:
-    path = _term_file()
-    return frozenset(_read_sections(path)["[pre-split]"]) if path else frozenset()
+def _read_terms(path: Path) -> list[str]:
+    return _read_sections(path).get("[terms]", [])
+
+
+def _origin_url(root: Path) -> str:
+    proc = subprocess.run(
+        ["git", "remote", "get-url", "origin"], cwd=root, capture_output=True, text=True
+    )
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def _term_file_refusals(path: Path, origin: str) -> list[str]:
+    if not PUBLIC_REMOTE.search(origin):
+        return []
+    return [
+        f"{path}: section {name} is not read on the public remote; only [terms] is. "
+        f"Next: delete the {name} section; a top-level path it listed goes on ALLOWLIST "
+        "or out of the public tree."
+        for name in _read_sections(path)
+        if name not in SECTIONS
+    ]
 
 
 def _public_files() -> list[str]:
@@ -121,7 +144,7 @@ def _md_header_line(text: str) -> str:
 
 
 def test_top_level_equals_allowlist() -> None:
-    assert {_entry(p) for p in _tracked()} == ALLOWLIST | _pre_split_entries()
+    assert {_entry(p) for p in _tracked()} == ALLOWLIST
 
 
 def test_no_private_terms() -> None:
@@ -134,7 +157,8 @@ def test_no_private_names() -> None:
         pytest.skip(
             "private term file not mounted at docs/private/hygiene-terms.txt; names check skipped"
         )
-    terms = _read_sections(path)["[terms]"]
+    assert _term_file_refusals(path, _origin_url(REPO_ROOT)) == []
+    terms = _read_terms(path)
     assert terms, f"{path} has an empty [terms] section"
     assert _hits(terms) == []
 
@@ -171,3 +195,45 @@ def test_hygiene_allows_packs() -> None:
     # 0019, 0026: the opt-in baseline pack ships under packs/.
     assert "packs/" in ALLOWLIST
     assert "packs/" in {_entry(p) for p in _tracked()}
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=True)
+
+
+def test_pre_split_mode_is_gone(tmp_path: Path) -> None:
+    term_file = tmp_path / "hygiene-terms.txt"
+    term_file.write_text("[terms]\nalpha\n[pre-split]\nlegacy/\n", encoding="utf-8")
+    assert SECTIONS == ("[terms]",)
+    assert "_pre_split_entries" not in globals()
+    assert _read_terms(term_file) == ["alpha"]
+
+
+def test_hygiene_refuses_a_pre_split_section_on_the_public_remote(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "remote", "add", "origin", "https://github.com/bradduhon/Daedalus.git")
+    term_file = tmp_path / "hygiene-terms.txt"
+    term_file.write_text("[terms]\nalpha\n[pre-split]\nlegacy/\n", encoding="utf-8")
+    refusals = _term_file_refusals(term_file, _origin_url(tmp_path))
+    assert len(refusals) == 1
+    assert "[pre-split]" in refusals[0] and "Next:" in refusals[0]
+    term_file.write_text("[terms]\nalpha\n", encoding="utf-8")
+    assert _term_file_refusals(term_file, _origin_url(tmp_path)) == []
+
+
+def test_extra_section_off_the_public_remote_is_inert(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "remote", "add", "origin", "https://example.invalid/private.git")
+    term_file = tmp_path / "hygiene-terms.txt"
+    term_file.write_text("[terms]\nalpha\n[pre-split]\nlegacy/\n", encoding="utf-8")
+    assert _term_file_refusals(term_file, _origin_url(tmp_path)) == []
+
+
+def test_public_remote_matches_https_and_ssh_forms() -> None:
+    for url in (
+        "https://github.com/bradduhon/Daedalus",
+        "https://github.com/bradduhon/Daedalus.git",
+        "git@github.com:bradduhon/Daedalus.git",
+    ):
+        assert PUBLIC_REMOTE.search(url), url
+    assert not PUBLIC_REMOTE.search("https://github.com/bradduhon/Daedalus-private.git")

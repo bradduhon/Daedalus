@@ -293,6 +293,48 @@ def test_coder_write_outside_its_worktree_is_refused_through_the_router(live_rep
     _append_result(f"- session {session}: router refusal reason {recs[1]['reason']}")
 
 
+def _saved_reply_run(repo: Path) -> tuple[LiveRun, list[dict[str, Any]], Path]:
+    # spec 3.5 ASSUMED: the session saves the agent's reply with Write, as the runner asks.
+    _train(repo)
+    saved = repo / "docs" / ".tmp" / "daedalus" / TRAIN / "replies" / "probe-1.md"
+    prompt = (
+        f"Use the {PROBE} agent once with the prompt 'Reply now.'. When it returns, use the "
+        f"Write tool to save its reply text exactly as returned, with nothing added, to {saved}. "
+        "Then say done."
+    )
+    run = _claude([prompt, *WORKER_TOOLS, "Write"], repo)
+    return run, _records(run), saved
+
+
+def test_last_assistant_message_equals_the_agent_reply(live_repo: Path) -> None:
+    from lib.audit import message_hmac, reply_key
+
+    run, recs, saved = _saved_reply_run(live_repo)
+    stops = [r for r in recs if r["event"] == "SubagentStop" and r["agent_type"] == PROBE]
+    assert stops and saved.is_file(), "no probe stop record or no saved reply"
+    mac = message_hmac(reply_key(str(live_repo), create=False), saved.read_bytes())
+    equal = stops[-1]["last_message_hmac"] == mac
+    _append_result(f"- session {run.session}: saved reply keyed digest equals the record: {equal}")
+    assert equal
+
+
+def test_subagent_stop_lands_before_the_next_tool_call(live_repo: Path) -> None:
+    run, recs, _ = _saved_reply_run(live_repo)
+    agent = next(
+        i for i, r in enumerate(recs) if r["event"] == "PreToolUse" and r["tool_name"] == "Agent"
+    )
+    after = next(
+        i
+        for i, r in enumerate(recs)
+        if i > agent and r["event"] == "PreToolUse" and r["agent_id"] is None
+    )
+    stop = [i for i, r in enumerate(recs) if r["event"] == "SubagentStop" and agent < i < after]
+    _append_result(
+        f"- session {run.session}: SubagentStop seq before next main PreToolUse: {bool(stop)}"
+    )
+    assert stop and recs[stop[0]]["seq"] < recs[after]["seq"]
+
+
 def _span(recs: list[dict[str, Any]], agent_id: str) -> tuple[str, str]:
     mine = [r for r in recs if r["agent_id"] == agent_id]
     start = next(r["ts"] for r in mine if r["event"] == "SubagentStart")

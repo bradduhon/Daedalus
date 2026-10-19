@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
+from lib.human_text import DROP_SPANS, EDGE, MIN_WORDS, plain_words
 
 from tests.conftest import REPO_ROOT
 
@@ -379,6 +382,34 @@ def test_push_train_ends_with_the_operator_checklist() -> None:
     assert "5. Run `/daedalus:audit-report <session>`" in hand_off
 
 
+RELEASE_CMD = (
+    "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py release --repo <repo> "
+    "--merge-sha <merge sha>`"
+)
+
+
+def test_push_skill_hand_off_names_the_release_step() -> None:
+    # 0068, 0071, 0075: the hand-off names the release step; the main session alone publishes.
+    hand_off = _push_train().split("## Hand-off", 1)[1]
+    assert RELEASE_CMD in hand_off
+    assert "after the operator reports the merge" in hand_off
+    assert "`Version class: <version> <X, Y or Z>: <one-line reason>`" in hand_off
+    assert "`Migration: <what an operator edits>`" in hand_off
+    assert "`release: skipped`" in hand_off
+    assert "It runs none of them." in hand_off
+    # 0093: the main session runs them only in the plugin's own repository; 0089 elsewhere.
+    assert (
+        "When `<repo>` is the Daedalus plugin repository itself, show them to the operator, "
+        "then run them in the printed order yourself. In any other project, show them to the "
+        "operator to run from their own shell, and run none of them yourself."
+    ) in hand_off
+    assert (
+        "you run the three commands the release step prints only when `<repo>` is the Daedalus "
+        "plugin repository itself; in any other project you show them to the operator to run "
+        "from their own shell (0068, 0093)."
+    ) in _push_train().split("## Preconditions", 1)[0]
+
+
 def test_build_train_names_the_push_train_in_present_tense() -> None:
     text = _build_train()
     assert "/daedalus:push-train" in text
@@ -541,12 +572,11 @@ def test_push_train_names_the_charter_pull_request_by_its_content() -> None:
     assert "    Contract and ledger entries for Build Train <train-id>.\n" in ledger
     other = body.split("Otherwise:", 1)[1]
     assert "    Contract for Build Train <train-id>.\n" in other
-    assert "ledger" not in other.split("The conductor", 1)[0]
-    hand_off = pt.split("## Hand-off", 1)[1]
+    assert "ledger" not in other.split("The code pull request", 1)[0]
     assert (
         "where `<title>` is `Build Train <train-id>: contract and ledger` when the `charter:` line "
         "ends in `(ledger under charter_root)`, else `Build Train <train-id>: contract`."
-    ) in hand_off
+    ) in body
 
 
 def test_push_train_checks_the_remote_before_the_conductor() -> None:
@@ -638,14 +668,25 @@ def test_push_train_reads_the_ledger_sha_from_the_ledger_ids_line() -> None:
     assert "the ledger commit sha from the `Ledger ids:` line," in step
 
 
-def test_push_train_hands_the_charter_to_the_operator() -> None:
-    hand_off = _push_train().split("## Hand-off", 1)[1]
-    assert "`git -C <charter_root> push -u origin daedalus/<train-id>`" in hand_off
+def test_push_train_hands_the_charter_push_to_the_conductor() -> None:
+    # 0078: the conductor pushes the Charter branch and opens its pull request; no operator step.
+    text = _push_train()
+    hand_off = text.split("## Hand-off", 1)[1]
+    assert "push" not in hand_off.split("With a Charter branch", 1)[1].split("\n6. ", 1)[0]
+    assert "Push the Charter branch from your own shell" not in text
+    assert "open its pull request: `gh pr create" not in text
+    assert "gh pr create" not in hand_off and "push -u origin" not in hand_off
+    charter = _section(text, "## Charter branch", "## Hand-off")
+    push = "When charter_root is declared, run `git -C <charter_root> push -u origin "
+    assert push + "daedalus/<train-id>`." in charter
     assert (
-        "`gh pr create --base <charter base> --head daedalus/<train-id> --title "
-        '"<title>" --body-file '
-        "<repo>/docs/.tmp/daedalus/<train-id>-charter-pr.md`"
-    ) in hand_off
+        "When charter_root is declared, run `gh pr create --repo <charter slug> "
+        "--base <charter base> --head daedalus/<train-id> --title "
+        '"<title>" --body-file <repo>/docs/.tmp/daedalus/<train-id>-charter-pr.md`.'
+    ) in charter
+    assert charter.index("SendMessage(conductor") < charter.index(push)
+    pre = _section(text, "## Preconditions", "## Push")
+    assert "`git -C <charter_root> remote get-url origin`" in pre
     assert hand_off.rstrip().endswith(
         "Execution Train readiness: a later Daedalus release adds the readiness checklist."
     )
@@ -815,8 +856,9 @@ _CONDUCTOR_CMD = re.compile(r"(?:[Rr]un|then) `((?:git|gh|gitleaks) [^`]+)`")
 
 
 def _conductor_commands() -> list[str]:
-    # 0028: every command the Push section hands the conductor, minus its never-run list.
-    push = _section(PUSH_TRAIN.read_text(encoding="utf-8"), "## Push", "## Charter branch")
+    # 0028, 0078: every command Push and Charter branch hand the conductor, minus never-run lines.
+    text = PUSH_TRAIN.read_text(encoding="utf-8")
+    push = _section(text, "## Push", "## Hand-off")
     allowed = "\n".join(ln for ln in push.splitlines() if "Use only the commands above" not in ln)
     return sorted(set(_CONDUCTOR_CMD.findall(allowed)))
 
@@ -836,7 +878,22 @@ def _conductor_decide(repo_cwd: Path, project_data: Path, command: str) -> Any:
     from tests.hook_chain import judge as decide
 
     (project_data / "train.active").write_text("20261016-120000\n", encoding="utf-8")
-    concrete = re.sub(r"<[^>]+>", "x", command.replace("<repo>", str(repo_cwd)))
+    # 0078: a declared charter root whose origin names the <charter slug> the skill records.
+    charter = repo_cwd.parent / "Charter"
+    if not charter.exists():
+        subprocess.run(["git", "init", "-q", str(charter)], check=True)
+        url = "https://github.com/acme/charter.git"
+        subprocess.run(["git", "-C", str(charter), "remote", "add", "origin", url], check=True)
+    config = json.dumps({"charter_root": str(charter)})
+    (project_data / "config.json").write_text(config, encoding="utf-8")
+    for name, value in (
+        ("<repo>", str(repo_cwd)),
+        ("<train-id>", "20261016-120000"),
+        ("<charter_root>", str(charter)),
+        ("<charter slug>", "acme/charter"),
+    ):
+        command = command.replace(name, value)
+    concrete = re.sub(r"<[^>]+>", "x", command)
     payload = {
         "tool_name": "Bash",
         "tool_input": {"command": concrete},
@@ -859,6 +916,8 @@ def test_push_train_names_conductor_commands() -> None:
     commands = _conductor_commands()
     assert "git push -u origin daedalus/<train-id>" in commands
     assert any(c.startswith("gh pr edit daedalus/<train-id> --body-file") for c in commands)
+    assert "git -C <charter_root> push -u origin daedalus/<train-id>" in commands
+    assert any(c.startswith("gh pr create --repo <charter slug> ") for c in commands)
 
 
 DOCTOR = REPO_ROOT / "skills" / "doctor" / "SKILL.md"
@@ -892,10 +951,7 @@ def test_build_train_runs_without_config_json() -> None:
     assert "an absent config.json means the defaults" in pre
 
 
-# 0031: operator lines name things in words; ids, paths and code trail and are not counted.
-_DROP_SPANS = re.compile(r"`[^`]*`|<[^<>]*>|\{[^{}]*\}|\([^()]*\)|https?://\S+")
-_WORD = re.compile(r"[A-Za-z][A-Za-z'-]*")
-_EDGE = ".,;:!?\"'[]"
+# 0031: operator lines name things in words; lib.human_text holds the one word counter.
 _NEXT_CONST = re.compile(r"_?[A-Z_]*NEXT")
 _SENTENCE_END = re.compile(r"\.\s+(?=[A-Z])")
 _SKILL_NEXT = re.compile(r"(?:^|(?<=[.:;]\s))Next:")
@@ -904,24 +960,11 @@ AGENT_FACING = {"scripts/lib/jail.py", "scripts/lib/shell.py", "scripts/lib/disp
 AGENT_FACING |= {"scripts/lib/router.py"} | {
     str(p.relative_to(REPO_ROOT)) for p in (REPO_ROOT / "scripts" / "checks").glob("*.py")
 }
-MIN_WORDS = 4
-
-
-def _words(text: str) -> list[str]:
-    from lib.jail import KNOWN_AGENTS
-
-    out = []
-    for raw in _DROP_SPANS.sub(" ", text).split():
-        token = raw.strip(_EDGE)
-        if token in KNOWN_AGENTS or any(c in token for c in "/\\~$_:.*=@#"):
-            continue
-        if _WORD.fullmatch(token):
-            out.append(token)
-    return out
+_words = plain_words
 
 
 def _forward_only(text: str) -> bool:
-    return not _DROP_SPANS.sub("", text).strip(" " + _EDGE)
+    return not DROP_SPANS.sub("", text).strip(" " + EDGE)
 
 
 def _render(node: ast.AST, consts: dict[str, str]) -> str | None:

@@ -680,3 +680,290 @@ def test_finish_and_resume_cli_exit_codes(repo: Path) -> None:
     again = _cli("resume", "--repo", str(repo))
     assert again.returncode == 0, again.stderr
     assert again.stdout.splitlines()[0] == f"resumed train {train}"
+
+
+# 0068, 0071, 0075: the release step reads VERSION at the merge sha and runs no command.
+TRAIN = "20261018-120000"
+HASH = "#"
+CLASS_Y = "Version class: 1.1.0 Y: adds the release step to the push hand-off"
+
+
+def _release_repo(
+    repo: Path, base_version: str = "1.0.0", merged_version: str | None = "1.1.0", **state: Any
+) -> str:
+    (repo / "VERSION").write_text(f"{base_version}\n")
+    _commit_all(repo, "base")
+    base = _ok(repo, "rev-parse", "HEAD")
+    record: dict[str, object] = {"train_id": TRAIN, "repo": str(repo), "base_branch": "main"}
+    record.update(base_sha=base, units=[], merged=True, **state)
+    train_state.save(repo, TRAIN, record)
+    (repo / "src.txt").write_text("change\n")
+    if merged_version is None:
+        _ok(repo, "rm", "-q", "VERSION")
+    else:
+        (repo / "VERSION").write_text(f"{merged_version}\n")
+    _commit_all(repo, f"Build Train {TRAIN}")
+    return _ok(repo, "rev-parse", "HEAD")
+
+
+def _summary(repo: Path, *extra: str, class_line: str | None = CLASS_Y) -> None:
+    lines = [
+        f"{HASH} Build Train {TRAIN}",
+        "Task: add the release step to the push hand-off",
+        f"Base: main @ abc1234. Integration branch: daedalus/{TRAIN}.",
+        "Ledger ids: 0001-TST-PLT in commit abc1234.",
+        *([class_line] if class_line else []),
+        *extra,
+        "[POLICY: none declared]",
+        "## Rulings",
+        "Should the release step run its commands? It prints them only (0001-TST-PLT).",
+        "## Units",
+        "| Unit | Branch | Packet | Files | Tests |",
+        "|---|---|---|---|---|",
+        "| u1 | daedalus-unit/x-u1 | 1 | VERSION | 12 passed |",
+        "## Yields",
+        "none",
+        "## Audit log",
+        "Session s1: .claude/daedalus/audit/s1.jsonl",
+        f"Closes {HASH}12. Fixes {HASH}13.",
+    ]
+    folder = repo / "docs" / ".tmp" / "daedalus"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{TRAIN}-summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _release(repo: Path, sha: str) -> subprocess.CompletedProcess[str]:
+    return _cli("release", "--repo", str(repo), "--merge-sha", sha)
+
+
+def _notes(repo: Path) -> Path:
+    return repo / "docs" / ".tmp" / "daedalus" / TRAIN / "release-notes.md"
+
+
+def _files(repo: Path) -> set[str]:
+    return {
+        str(p.relative_to(repo))
+        for p in repo.rglob("*")
+        if p.is_file() and ".git" not in p.relative_to(repo).parts[:1]
+    }
+
+
+def test_release_reads_the_version_from_the_version_file(repo: Path) -> None:
+    sha = _release_repo(repo)
+    _summary(repo)
+    # 0075: the working tree's VERSION is not the source; only VERSION at the merge sha is.
+    (repo / "VERSION").write_text("9.9.9\n")
+    done = _release(repo, sha)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines()[0] == f"release: v1.1.0, class Y, merge {sha}"
+    assert "9.9.9" not in done.stdout
+
+
+def test_release_refuses_a_missing_version_file(repo: Path) -> None:
+    sha = _release_repo(repo, merged_version=None)
+    _summary(repo)
+    refused = _release(repo, sha)
+    assert refused.returncode == 1
+    assert "VERSION" in refused.stderr and "bare version" in refused.stderr
+    assert "Next:" in refused.stderr
+    assert not _notes(repo).exists()
+
+
+def test_release_refuses_a_version_file_not_in_bare_form(repo: Path) -> None:
+    sha = _release_repo(repo, merged_version="v1.1.0")
+    _summary(repo)
+    refused = _release(repo, sha)
+    assert refused.returncode == 1
+    assert "bare version" in refused.stderr and "Next:" in refused.stderr
+
+
+def test_release_refuses_a_summary_without_a_class_line(repo: Path) -> None:
+    sha = _release_repo(repo)
+    _summary(repo, class_line=None)
+    refused = _release(repo, sha)
+    assert refused.returncode == 1
+    assert "class line" in refused.stderr and "Next:" in refused.stderr
+    assert "Version class: <version> <X, Y or Z>: <one-line reason>" in refused.stderr
+    assert not _notes(repo).exists()
+
+
+def test_release_refuses_an_x_without_a_migration_line(repo: Path) -> None:
+    sha = _release_repo(repo, merged_version="2.0.0")
+    _summary(repo, class_line="Version class: 2.0.0 X: renames a manifest key")
+    refused = _release(repo, sha)
+    assert refused.returncode == 1
+    assert "migration line" in refused.stderr and "Next:" in refused.stderr
+    assert not _notes(repo).exists()
+    migration = "Migration: rename the old key to the new key in service-manifest.json"
+    _summary(repo, migration, class_line="Version class: 2.0.0 X: renames a manifest key")
+    done = _release(repo, sha)
+    assert done.returncode == 0, done.stderr
+    assert migration in _notes(repo).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(("version", "letter"), [("1.1.0", "Y"), ("1.0.1", "Z")])
+def test_release_accepts_a_y_or_z_without_a_migration_line(
+    repo: Path, version: str, letter: str
+) -> None:
+    sha = _release_repo(repo, merged_version=version)
+    _summary(repo, class_line=f"Version class: {version} {letter}: a change an operator may skip")
+    done = _release(repo, sha)
+    assert done.returncode == 0, done.stderr
+    assert "Migration:" not in _notes(repo).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["Version class: 1.2.0 Y: names another version", "Version class: 1.1.0 Z: names Z for a Y"],
+)
+def test_release_refuses_a_class_line_that_disagrees_with_version(repo: Path, line: str) -> None:
+    sha = _release_repo(repo)
+    _summary(repo, class_line=line)
+    refused = _release(repo, sha)
+    assert refused.returncode == 1 and "Next:" in refused.stderr
+    assert not _notes(repo).exists()
+
+
+def test_release_is_skipped_when_the_version_did_not_change(repo: Path) -> None:
+    sha = _release_repo(repo, merged_version="1.0.0")
+    # issue 47: an unchanged VERSION is a skip, so no class line is needed and none is refused.
+    _summary(repo, class_line=None)
+    done = _release(repo, sha)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines()[0].startswith("release: skipped")
+    assert not _notes(repo).exists()
+    recorded = train_state.load(repo, TRAIN)["release"]
+    assert recorded == {"merge_sha": sha, "outcome": "skipped", "version": "1.0.0"}
+
+
+def test_release_notes_carry_task_rulings_units_and_closed_issues(repo: Path) -> None:
+    sha = _release_repo(repo)
+    _summary(repo)
+    done = _release(repo, sha)
+    assert done.returncode == 0, done.stderr
+    notes = _notes(repo).read_text(encoding="utf-8")
+    assert "Task: add the release step to the push hand-off" in notes
+    assert "Class: Y, adds the release step to the push hand-off" in notes
+    rulings = notes.split("## Rulings\n", 1)[1].split("\n## ", 1)[0]
+    assert "It prints them only (0001-TST-PLT)." in rulings
+    units = notes.split("## Units\n", 1)[1].split("\n## ", 1)[0]
+    assert "| u1 | daedalus-unit/x-u1 | 1 | VERSION | 12 passed |" in units
+    closed = notes.split("## Closed issues\n", 1)[1]
+    assert closed.strip() == f"{HASH}12, {HASH}13"
+    for absent in ("## Yields", "Session s1", "Ledger ids:", "1.1.0"):
+        assert absent not in notes, absent
+    recorded = train_state.load(repo, TRAIN)["release"]
+    assert recorded == {
+        "merge_sha": sha,
+        "outcome": "ready",
+        "version": "1.1.0",
+        "notes": str(_notes(repo)),
+    }
+
+
+def test_release_prints_tag_and_release_commands_and_runs_neither(repo: Path) -> None:
+    sha = _release_repo(repo)
+    _summary(repo)
+    done = _release(repo, sha)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines()[-3:] == [
+        f"git -C {repo} tag -a v1.1.0 -m v1.1.0 {sha}",
+        f"git -C {repo} push origin v1.1.0",
+        f"gh release create v1.1.0 --verify-tag --title v1.1.0 --notes-file {_notes(repo)}",
+    ]
+    assert _ok(repo, "tag", "--list") == ""
+
+
+def test_release_refuses_a_sha_off_main(repo: Path) -> None:
+    _release_repo(repo)
+    _summary(repo)
+    _ok(repo, "switch", "-q", "-c", "side")
+    (repo / "VERSION").write_text("1.2.0\n")
+    _commit_all(repo, "side")
+    side = _ok(repo, "rev-parse", "HEAD")
+    _ok(repo, "switch", "-q", "main")
+    for sha in (side, "0" * 40):
+        refused = _release(repo, sha)
+        assert refused.returncode == 1, sha
+        assert "main" in refused.stderr and "Next:" in refused.stderr
+    assert not _notes(repo).exists()
+
+
+def test_release_refuses_folder_scope(repo: Path) -> None:
+    sha = _release_repo(repo, scope_kind="folder")
+    _summary(repo)
+    refused = _release(repo, sha)
+    assert refused.returncode == 1
+    assert "repository scope" in refused.stderr and "Next:" in refused.stderr
+
+
+def test_release_writes_no_changelog_file(repo: Path) -> None:
+    sha = _release_repo(repo)
+    _summary(repo)
+    before = _files(repo)
+    done = _release(repo, sha)
+    assert done.returncode == 0, done.stderr
+    added = _files(repo) - before
+    notes = str(_notes(repo).relative_to(repo))
+    assert notes in added
+    assert all(path.startswith("docs/.tmp/daedalus/") for path in added), added
+    assert not [p for p in _files(repo) if "changelog" in p.lower()]
+
+
+def _scrub(repo: Path, *terms: str) -> None:
+    (repo / "service-manifest.json").write_text(
+        json.dumps({"features": {"scrub_file": "scrub-terms.txt"}}), encoding="utf-8"
+    )
+    body = "\n".join(["# private names, one per line", "", *terms]) + "\n"
+    (repo / "scrub-terms.txt").write_text(body, encoding="utf-8")
+
+
+def test_release_refuses_notes_carrying_a_scrub_term(repo: Path) -> None:
+    sha = _release_repo(repo)
+    _summary(repo)
+    summary = repo / "docs" / ".tmp" / "daedalus" / f"{TRAIN}-summary.md"
+    text = summary.read_text(encoding="utf-8")
+    text = text.replace("## Units\n", "## Units\n| ZEPHYRCORP | widgetville |\n")
+    summary.write_text(text, encoding="utf-8")
+    _scrub(repo, "zephyrcorp", "WidgetVille", "absentterm")
+    refused = _release(repo, sha)
+    assert refused.returncode == 1
+    assert "carry 2 term(s) from the declared scrub file" in refused.stderr
+    assert "Next:" in refused.stderr
+    for term in ("zephyrcorp", "widgetville", "absentterm"):
+        assert term not in refused.stderr.lower() and term not in refused.stdout.lower()
+    assert not _notes(repo).exists()
+    _scrub(repo, "absentterm")
+    done = _release(repo, sha)
+    assert done.returncode == 0, done.stderr
+
+
+def test_release_refuses_a_declared_scrub_file_it_cannot_read(repo: Path) -> None:
+    sha = _release_repo(repo)
+    _summary(repo)
+    _scrub(repo)
+    (repo / "scrub-terms.txt").unlink()
+    refused = _release(repo, sha)
+    assert refused.returncode == 1
+    assert "scrub file" in refused.stderr and "Next:" in refused.stderr
+    assert not _notes(repo).exists()
+
+
+def test_release_compares_against_the_merge_parent_when_main_moved(repo: Path) -> None:
+    # issue 47: main bumped VERSION after the train's base; the pull request itself did not.
+    _release_repo(repo, merged_version="1.1.0")
+    (repo / "other.txt").write_text("squash\n")
+    _commit_all(repo, f"Build Train {TRAIN} squash")
+    sha = _ok(repo, "rev-parse", "HEAD")
+    _summary(repo, class_line=None)
+    done = _release(repo, sha)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines()[0].startswith("release: skipped")
+    # A Z bump over the moved main is a Z, though the train's base sha held an older Y.
+    (repo / "VERSION").write_text("1.1.1\n")
+    _commit_all(repo, f"Build Train {TRAIN} bump")
+    bumped = _ok(repo, "rev-parse", "HEAD")
+    _summary(repo, class_line="Version class: 1.1.1 Z: fixes wording")
+    done = _release(repo, bumped)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines()[0] == f"release: v1.1.1, class Z, merge {bumped}"

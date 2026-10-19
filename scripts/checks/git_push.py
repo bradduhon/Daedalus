@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 0044, 0001: refuses remote git; with --conductor, only one named branch pushed to origin.
+# 0044, 0001: refuses remote git; with --conductor, only the train's branch pushed to origin.
 from __future__ import annotations
 
 import argparse
@@ -18,13 +18,18 @@ PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
 
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
     conductor: bool = flags.conductor
+    cwd = hook_io.text(hook_input, "cwd")
     segments = shell.worker_segments(hook_io.text(hook_io.tool_input(hook_input), "command"))
     if segments is None:
         return shell.R_UNSUPPORTED
     for segment in filter(None, segments):
         if conductor:
-            if shell._git_subcommand(segment) == "push" and not jail._conductor_push_ok(segment):
-                return jail.R_CONDUCTOR_PUSH
+            if shell._git_subcommand(segment) != "push":
+                continue
+            # issue 11, 0078: the train's branch, to origin of this repo or the charter root.
+            reason = jail._conductor_push_reason(segment, cwd, hook_io.hook_charter(cwd))
+            if reason:
+                return reason
             continue
         exempt = shell._exempt_indices(segment)
         words = [shell._base(t) for i, t in enumerate(segment) if i not in exempt]

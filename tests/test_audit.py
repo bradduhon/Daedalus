@@ -112,11 +112,7 @@ def test_message_tail_masks_a_key_body_that_opens_the_window(
     project_data: Path, hook_input: Any
 ) -> None:
     # 41: B-1, a bare key body and its END marker past the window start never reach the tail.
-    message = (
-        ("Q" * 64 + "\n") * 30
-        + "-----END PRIVATE KEY-----\n"
-        + "m" * 1200
-    )
+    message = ("Q" * 64 + "\n") * 30 + "-----END PRIVATE KEY-----\n" + "m" * 1200
     rec = audit.audit_append(
         hook_input(hook_event_name="SubagentStop", agent_id="a1", last_assistant_message=message)
     )
@@ -225,6 +221,61 @@ def test_subagent_stop_keeps_bounded_message_head(project_data: Path, hook_input
     )
     assert rec["last_message_head"].startswith("[STATUS: COMPLETE]")
     assert len(rec["last_message_head"]) == 2048
+
+
+def test_subagent_stop_record_carries_sha_and_tail(
+    project_data: Path, repo_cwd: Path, hook_input: Any
+) -> None:
+    # AU-3, SC-13: a keyed digest beside the redacted head and tail; the key never leaves 0600.
+    import hashlib
+    import hmac
+
+    message = "[STATUS: COMPLETE] " + "word " * 600 + "\nlast line"
+    rec = audit.audit_append(
+        hook_input(
+            hook_event_name="SubagentStop",
+            agent_id="a1",
+            agent_type="daedalus:repo-coder",
+            last_assistant_message=message,
+        )
+    )
+    key_file = project_data / audit.REPLY_KEY
+    key = key_file.read_bytes()
+    assert len(key) == 32 and (key_file.stat().st_mode & 0o777) == 0o600
+    want = hmac.new(key, message.encode("utf-8"), hashlib.sha256).hexdigest()
+    assert rec["last_message_hmac"] == want
+    assert want != hashlib.sha256(message.encode("utf-8")).hexdigest()
+    assert rec["last_message_tail"] == message[-2048:]
+    assert rec["last_message_head"].startswith("[STATUS: COMPLETE]")
+    assert key.hex() not in json.dumps(rec) and "last_message_sha256" not in rec
+    again = audit.audit_append(
+        hook_input(hook_event_name="SubagentStop", agent_id="a2", last_assistant_message=message)
+    )
+    assert again["last_message_hmac"] == want and key_file.read_bytes() == key
+    plain = audit.audit_append(hook_input())
+    assert plain["last_message_hmac"] is None
+
+
+@pytest.mark.parametrize("damage", ["symlink", "short", "wide"])
+def test_damaged_reply_key_refuses_the_record(
+    project_data: Path, hook_input: Any, tmp_path: Path, damage: str
+) -> None:
+    # SI-7: a key that is a link, the wrong size or readable by others writes no record.
+    key_file = project_data / audit.REPLY_KEY
+    if damage == "symlink":
+        target = tmp_path / "elsewhere.key"
+        target.write_bytes(b"k" * 32)
+        target.chmod(0o600)
+        key_file.symlink_to(target)
+    else:
+        key_file.write_bytes(b"k" * (8 if damage == "short" else 32))
+        key_file.chmod(0o644 if damage == "wide" else 0o600)
+    with pytest.raises(audit.ReplyKeyError, match="Next: delete"):
+        audit.audit_append(
+            hook_input(hook_event_name="SubagentStop", last_assistant_message="[STATUS: X]")
+        )
+    with pytest.raises(audit.ReplyKeyError):
+        audit.reply_key(str(project_data.parents[1]), create=False)
 
 
 def test_concurrent_appends_keep_chain_linear(project_data: Path, repo_cwd: Path) -> None:

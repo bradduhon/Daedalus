@@ -41,6 +41,29 @@ def _report(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[
     )
 
 
+def test_audit_report_takes_the_audit_lock(
+    project_data: Path,
+    hook_input: Any,
+    repo_cwd: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: Any,
+) -> None:
+    # issue 10: the report waits on the writer's lock and refuses at a bounded deadline.
+    import fcntl
+
+    import audit_report
+
+    audit.audit_append(hook_input())
+    log = audit.log_path("sess-test", str(repo_cwd))
+    monkeypatch.setattr(audit, "LOCK_TIMEOUT_S", 0.2)
+    with open(log.with_suffix(".lock"), "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        assert audit_report.main(["--cwd", str(repo_cwd)]) == 1
+    err = capsys.readouterr().err
+    assert "audit lock held for 0.2 s" in err and "Next:" in err
+    assert audit_report.main(["--cwd", str(repo_cwd)]) == 0
+
+
 def _agent_calls(hook_input: Any, agent_id: str, agent_type: str) -> None:
     for i, tool in enumerate(_TOOLS):
         base = {"agent_id": agent_id, "agent_type": agent_type, "tool_name": tool}

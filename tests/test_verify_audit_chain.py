@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import fcntl
 import json
+import re
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +37,97 @@ def _write_chain(project_data: Path, hook_input: Any, n: int) -> Path:
     for i in range(n):
         audit.audit_append(hook_input(tool_use_id=f"t{i}"))
     return audit.log_path("sess-test", hook_input()["cwd"])
+
+
+def _held(path: Path) -> Any:
+    handle = open(path.with_suffix(".lock"), "w")  # noqa: SIM115
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    return handle
+
+
+def test_verify_chain_takes_the_audit_lock(
+    project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    # issue 10: a held lock is waited for, then refused at a bounded deadline with a Next line.
+    import verify_audit_chain
+
+    path = _write_chain(project_data, hook_input, 2)
+    monkeypatch.setattr(audit, "LOCK_TIMEOUT_S", 0.2)
+    handle = _held(path)
+    try:
+        assert verify_audit_chain.main(["verify_audit_chain.py", str(path)]) == 1
+    finally:
+        handle.close()
+    out = capsys.readouterr().out
+    assert "audit lock held for 0.2 s" in out and "Next:" in out
+    assert verify_audit_chain.main(["verify_audit_chain.py", str(path)]) == 0
+
+
+def _read_with(reader: str, path: Path) -> int:
+    import audit_report
+    import verify_audit_chain
+    from lib.audit_proof import read_chain
+
+    if reader == "verify":
+        ok, message = verify_audit_chain.verify(path)
+        assert ok, message
+        return int(message.split()[1])
+    if reader == "report":
+        found = re.search(r"^records: (\d+)$", audit_report.render(path), re.MULTILINE)
+        assert found is not None
+        return int(found.group(1))
+    return len(read_chain(path))
+
+
+@pytest.mark.parametrize("reader", ["verify", "report", "proof"])
+def test_readers_wait_for_a_held_lock_and_do_not_read_a_partial_line(
+    project_data: Path, hook_input: Any, reader: str
+) -> None:
+    # issue 10: a reader that meets an append in flight waits for it, never for half a line.
+    path = _write_chain(project_data, hook_input, 3)
+    text = path.read_text(encoding="utf-8")
+    cut = len(text) - 40
+    handle = _held(path)
+    path.write_text(text[:cut], encoding="utf-8")
+
+    def finish() -> None:
+        time.sleep(0.3)
+        with open(path, "a", encoding="utf-8") as out:
+            out.write(text[cut:])
+        handle.close()
+
+    writer = threading.Thread(target=finish)
+    writer.start()
+    try:
+        assert _read_with(reader, path) == 3
+    finally:
+        writer.join()
+
+
+def test_hooks_live_read_and_hook_appends_do_not_deadlock(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # issue 10: the runner's hooks-live read and hook appends serialize; neither waits forever.
+    from lib.audit_proof import hooks_live, read_chain
+    from lib.train_runner import STEP_NEEDLE
+
+    path = _write_chain(project_data, hook_input, 1)
+
+    def appends() -> None:
+        for i in range(30):
+            audit.audit_append(hook_input(tool_use_id=f"w{i}"))
+
+    writer = threading.Thread(target=appends)
+    writer.start()
+    for _ in range(30):
+        assert read_chain(path)
+    writer.join(timeout=30)
+    assert not writer.is_alive()
+    step = f"python3 /p/scripts/daedalus_train.py step --repo {repo_cwd}"
+    audit.audit_append(hook_input(tool_input={"command": step}))
+    assert hooks_live(repo_cwd, STEP_NEEDLE).endswith("chain intact (32 records)")
+    with open(path.with_suffix(".lock"), "w") as free:
+        fcntl.flock(free, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
 def test_intact_chain_verifies(project_data: Path, hook_input: Any) -> None:

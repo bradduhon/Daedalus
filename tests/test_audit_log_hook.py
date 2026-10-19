@@ -112,8 +112,9 @@ def test_no_marker_imports_only_the_standard_library(project_data: Path, hook_in
     )
     assert result.returncode == 0
     loaded = {line.rsplit("|", 1)[-1].strip() for line in result.stderr.splitlines()}
-    assert "lib.repo_root" in loaded
-    assert not {n for n in loaded if n.startswith("lib.")} - {"lib.repo_root"}
+    fast = {"lib.repo_root", "lib.project_root"}
+    assert fast <= loaded
+    assert not {n for n in loaded if n.startswith("lib.")} - fast
     assert "subprocess" not in loaded
 
 

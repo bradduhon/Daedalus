@@ -88,7 +88,7 @@ class TestFinalConductorGh:
 
     def test_repo_flag_reason(self) -> None:
         d = decide(_b(self.C, "gh -R o/r pr create --title x --body b"), CFG)
-        assert d.reason is not None and d.reason.startswith("the conductor works in the current")
+        assert d.reason == jail.R_CONDUCTOR_REPO
 
     @pytest.mark.parametrize(
         "command",

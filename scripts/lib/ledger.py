@@ -54,7 +54,8 @@ def _manifest_decl(repo_root: Path) -> LedgerDecl | None:
         raw: Any = read_raw(repo_root)
     except ManifestError as exc:
         raise LedgerError(str(exc)) from exc
-    if not isinstance(raw, dict) or "ledger" not in raw:
+    # 0076: a null ledger block is not declared, the same as an absent one.
+    if not isinstance(raw, dict) or raw.get("ledger") is None:
         return None
     block = raw["ledger"]
     if not isinstance(block, dict) or not all(

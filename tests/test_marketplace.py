@@ -32,3 +32,11 @@ def test_plugin_entry_points_at_the_repo_root() -> None:
 def test_entry_version_mirrors_plugin_json() -> None:
     entry = _load("marketplace.json")["plugins"][0]
     assert entry["version"] == _load("plugin.json")["version"] == "3.2.0"
+
+
+def test_pinned_version_sites_agree() -> None:
+    # 0075: VERSION is the fifth pinned site; it carries no literal of its own here.
+    version = (REPO_ROOT / "VERSION").read_text(encoding="utf-8")
+    assert version.endswith("\n") and version.count("\n") == 1
+    entry = _load("marketplace.json")["plugins"][0]
+    assert version.strip() == entry["version"] == _load("plugin.json")["version"]

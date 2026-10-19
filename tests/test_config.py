@@ -18,6 +18,17 @@ def test_missing_file_gives_empty_config(project_data: Path) -> None:
     assert cfg.ledger is None and cfg.standards_sources == ()
 
 
+def test_config_null_means_not_declared(project_data: Path) -> None:
+    # 0076: null is the same as an absent key, so the setup starter loads as the defaults.
+    nulls = {"charter_root": None, "ledger": None, "policy": None}
+    (project_data / "config.json").write_text(json.dumps(nulls))
+    assert load_config(str(project_data.parents[1])) == Config()
+    for key in nulls:
+        (project_data / "config.json").write_text(json.dumps({key: ""}))
+        with pytest.raises(ConfigError):
+            load_config(str(project_data.parents[1]))
+
+
 def test_full_config_parses(project_data: Path) -> None:
     (project_data / "config.json").write_text(
         json.dumps(
@@ -128,6 +139,30 @@ def test_oversized_int_raises_config_error(project_data: Path) -> None:
     with pytest.raises(ConfigError) as info:
         load_config(str(project_data.parents[1]))
     assert "not valid JSON" in str(info.value) and "Next:" in str(info.value)
+
+
+def test_max_concurrent_builders_defaults_to_five(project_data: Path) -> None:
+    # 0072: absent key and absent file both run five coders at once.
+    assert Config().max_concurrent_builders == 5
+    (project_data / "config.json").write_text("{}")
+    assert load_config(str(project_data.parents[1])).max_concurrent_builders == 5
+
+
+def test_max_concurrent_builders_reads_a_whole_number(project_data: Path) -> None:
+    (project_data / "config.json").write_text(json.dumps({"max_concurrent_builders": 2}))
+    assert load_config(str(project_data.parents[1])).max_concurrent_builders == 2
+
+
+@pytest.mark.parametrize("value", [0, -1, "3", 2.5, True, None, [3]])
+def test_max_concurrent_builders_refuses_anything_but_one_or_more(
+    project_data: Path, value: object
+) -> None:
+    (project_data / "config.json").write_text(json.dumps({"max_concurrent_builders": value}))
+    with pytest.raises(ConfigError) as info:
+        load_config(str(project_data.parents[1]))
+    text = str(info.value)
+    assert "max_concurrent_builders must be a whole number of at least 1" in text
+    assert "Next: set max_concurrent_builders to 1 or more" in text
 
 
 def test_missing_data_dir_gives_empty_config(repo_cwd: Path) -> None:

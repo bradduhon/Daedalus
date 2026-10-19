@@ -34,7 +34,8 @@ def test_absent_jail_narrowing_is_empty(tmp_path: Path) -> None:
 
 
 def test_this_repos_manifest_loads() -> None:
-    assert load(REPO_ROOT) == Manifest()
+    # 0073: this repo's stack.unit_test_cmd is read now; every feature stays at its default.
+    assert load(REPO_ROOT) == Manifest(unit_test_cmd=".venv/bin/pytest -q")
 
 
 def test_missing_manifest_is_none(tmp_path: Path) -> None:

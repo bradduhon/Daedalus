@@ -10,10 +10,11 @@ import pytest
 from lib import jail
 from lib.config import Config
 
-from tests.conftest import CFG, CWD, REPO_ROOT
+from tests.conftest import CFG, CWD, REPO_ROOT, TRAIN_BRANCH
 from tests.hook_chain import (
     decide,
     evaluate,
+    first_deny,
     internal_error_denies,
     malformed_input_denies,
     outside_tools_allow,
@@ -47,7 +48,7 @@ class TestCharterDocs:
 class TestConductor:
     def test_push_without_force_and_pr_ops(self) -> None:
         ok = [
-            "git push -u origin daedalus/t1",
+            f"git push -u origin {TRAIN_BRANCH}",
             "git status",
             "git log --oneline -3",
             "git add -A",
@@ -195,7 +196,7 @@ class TestRound4Conductor:
             "gitleaks detect --redact -r=/tmp/x.json",
             "gitleaks detect --redact -r/tmp/x.json",
             "gitleaks detect --redact --report-path /tmp/x.json",
-            "git push origin feature/main-fix",
+            f"git push origin {TRAIN_BRANCH}",
         ],
     )
     def test_allowed(self, command: str) -> None:
@@ -268,8 +269,8 @@ class TestFixWaveCharterDocsBash:
             "git branch",
             "git rev-parse HEAD",
             "mkdir -p docs/.tmp",
-            "cat docs/a.md",
-            "ls docs",
+            "cat src/a.md",
+            "ls src",
             "sha256sum x",
         ],
     )
@@ -299,7 +300,7 @@ class TestFixWaveCharterDocsBash:
 
 
 def test_command_allowlist_judges_the_hook_alone() -> None:
-    docs = ("--allow", "append_ledger,git")
+    docs = ("--allow", "append_ledger,git,read")
     assert evaluate(HOOK, _b("x", "git push"), *docs) is None
     assert evaluate(HOOK, _b("x", "ls"), *docs) == jail.R_DOCS_BASH
     ledger = f"python3 {REPO_ROOT}/scripts/append_ledger.py --cwd /x"
@@ -337,3 +338,166 @@ def test_command_allowlist_malformed_input_denies() -> None:
 
 def test_command_allowlist_internal_error_denies_and_names_the_hook() -> None:
     internal_error_denies(HOOK, payload("Bash", command="git status"), "--allow", "git")
+
+
+# 0084: charter-docs reads under the charter root and the project's docs/, never wider.
+ENTRY = f"{CWD}/docs/.tmp/daedalus/20261018-234006/entry.md"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"cat {ENTRY}",
+        "cat docs/.tmp/daedalus/20261018-234006/entry.md",
+        "cat -n docs/.tmp/daedalus/20261018-234006/entry.md",
+        "head -n 20 docs/.tmp/daedalus/20261018-234006/entry.md",
+        "tail -n5 docs/decisions.md",
+        "wc -l docs/decisions.md",
+        "ls docs/.tmp/daedalus",
+        "ls -la /work/Charter",
+        "diff docs/a.md /work/Charter/a.md",
+        "sed -n 1,20p docs/decisions.md",
+        "sed -n -e 3p -e /0084/p docs/decisions.md",
+        "cat docs/a.md && git status",
+    ],
+)
+def test_charter_docs_may_cat_its_entry_file(command: str) -> None:
+    assert decide(_b("charter-docs", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'grep -n "0084-DAE" /work/Charter/decision-log.md',
+        "grep -F 'row [x] *' /work/Charter/decision-log.md",
+        "grep -c -e 0084 -e 0083 docs/decisions.md",
+        "grep -rn 0084 docs/.tmp/daedalus",
+        "grep -A2 -m1 0084 -- /work/Charter/decision-log.md",
+    ],
+)
+def test_charter_docs_may_grep_the_ledger(command: str) -> None:
+    assert decide(_b("charter-docs", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat /etc/passwd",
+        "cat src/a.py",
+        "cat docs/../src/a.py",
+        f"cat {CWD}/docs/../src/a.py",
+        "cat /work/Charterx/a.md",
+        "cat docs/*.md",
+        "cat 'docs/*.md'",
+        "ls",
+        "ls /work",
+        "grep -r 0084",
+        "grep 0084 src/a.py",
+        "grep -e 0084 docs/a.md /etc/passwd",
+        "grep -R 0084 docs",
+        "grep -f /etc/passwd docs/a.md",
+        "grep 0084 docs/*",
+        "grep /etc/pass* docs/a.md",
+        "grep --include=x 0084 docs",
+        "grep 0084 docs/a.md && cat /etc/passwd",
+        "head -n 5 /work/repo/src/a.py",
+        "tail -f docs/a.md",
+        "wc --files0-from=/etc/x",
+        "wc -l",
+        "diff docs/a.md src/a.py",
+        "diff -r docs /work/Charter",
+        "sed -n 1p /etc/passwd",
+        "sha256sum docs/a.md",
+        "find docs",
+    ],
+)
+def test_charter_docs_read_outside_the_charter_docs_or_scratch_is_refused(command: str) -> None:
+    d = decide(_b("charter-docs", command), CFG)
+    assert not d.allow and d.reason is not None, command
+    assert "Next:" in d.reason
+
+
+def test_charter_docs_relative_path_resolves_against_the_project_root(tmp_path: Path) -> None:
+    repo = _git_init(tmp_path / "repo")
+    scratch = repo / "docs" / ".tmp" / "daedalus" / "t1"
+    scratch.mkdir(parents=True)
+
+    def at(cwd: Path, command: str) -> bool:
+        hook_input = _b("charter-docs", command)
+        hook_input["cwd"] = str(cwd)
+        return decide(hook_input, CFG).allow
+
+    assert at(repo, "cat docs/decisions.md")
+    assert at(scratch, "cat docs/decisions.md")
+    # 0084: from the scratch dir src/ would sit under docs/, but the project root decides.
+    assert not at(scratch, "cat src/a.py")
+    assert not at(repo, "cat src/a.py")
+    assert not at(scratch, "cat ../../../../src/a.py")
+    assert at(scratch, f"cat {repo}/docs/decisions.md")
+
+
+@pytest.mark.parametrize(
+    ("command", "allow"),
+    [
+        (f"python3 {REPO_ROOT}/scripts/append_ledger.py --probe", True),
+        ("git add docs/decisions.md", True),
+        ("git commit -m x", True),
+        ("git status", True),
+        ("git log --oneline -3", True),
+        ("git diff --cached", True),
+        ("git add -A", False),
+        ("git merge --no-ff x", False),
+        ("cp docs/a.md docs/b.md", False),
+        ("tee docs/a.md", False),
+        ("touch docs/a.md", False),
+        ("mkdir -p docs/.tmp", False),
+        ("rm docs/a.md", False),
+        ("sed -i -n 1p docs/a.md", False),
+        ("sed -ni 1p docs/a.md", False),
+        ("sed -n --in-place 1p docs/a.md", False),
+        ("sed -n 1w/tmp/x docs/a.md", False),
+        ("sed -n '1p;w/tmp/x' docs/a.md", False),
+        ("sed -n 1e docs/a.md", False),
+        ("sed -n s/a/b/w docs/a.md", False),
+        ("python3 /abs/scripts/other.py", False),
+    ],
+)
+def test_charter_docs_writes_are_unchanged(command: str, allow: bool) -> None:
+    assert decide(_b("charter-docs", command), CFG).allow is allow, command
+
+
+def test_charter_docs_quoted_sed_write_is_refused_by_the_script_grammar() -> None:
+    # 0084: one quoted segment, so the p-only sed grammar refuses it, not segment splitting.
+    flags = ("--allow", "append_ledger,git,read")
+    assert first_deny(_b("charter-docs", "sed -n '1p;w/tmp/x' docs/a.md"), CFG) == (
+        HOOK,
+        jail.R_DOCS_BASH,
+    )
+    assert "sed -n" in jail.R_DOCS_BASH
+    assert evaluate(HOOK, _b("charter-docs", "sed -n '1p;2p' docs/a.md"), *flags) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sed 1,20p docs/decisions.md",
+        "sed -e 1p docs/decisions.md",
+        "sed -E 1p docs/decisions.md",
+        "sed --quiet 1p docs/decisions.md",
+        "sed -n docs/decisions.md",
+        "sed -n 1,20p",
+        "sed -n 1d docs/decisions.md",
+        "sed -f docs/a.sed -n docs/decisions.md",
+    ],
+)
+def test_charter_docs_sed_without_dash_n_is_refused(command: str) -> None:
+    assert not decide(_b("charter-docs", command), CFG).allow, command
+
+
+def test_charter_docs_read_refusal_names_the_reads() -> None:
+    reason = evaluate(
+        HOOK, _b("charter-docs", "cat /etc/hosts"), "--allow", "append_ledger,git,read"
+    )
+    assert reason == jail.R_DOCS_BASH
+    for word in ("cat", "grep", "head", "tail", "wc", "ls", "diff", "sed -n", "docs/"):
+        assert word in reason, word

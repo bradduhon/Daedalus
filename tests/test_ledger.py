@@ -79,6 +79,16 @@ def test_nothing_declared_nothing_found_is_none(repo: Path) -> None:
     assert resolve_ledger(str(repo), Config()) is None
 
 
+def test_manifest_null_ledger_block_means_not_declared(repo: Path) -> None:
+    # 0076: the setup starter writes "ledger": null; the probe still runs after it.
+    (repo / "service-manifest.json").write_text(json.dumps({"ledger": None}))
+    assert resolve_ledger(str(repo), Config()) is None
+    (repo / "docs").mkdir()
+    shutil.copy(FIX / "table.md", repo / "docs" / "decisions.md")
+    led = resolve_ledger(str(repo), Config())
+    assert led is not None and led.origin == "probe"
+
+
 def test_read_sequence_table_and_heading(repo: Path) -> None:
     (repo / "docs").mkdir()
     shutil.copy(FIX / "table.md", repo / "docs" / "decisions.md")

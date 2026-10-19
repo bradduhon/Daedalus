@@ -33,10 +33,12 @@ _ROOT_CAP = 16
 
 
 _TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
+_MANIFEST = "service-manifest.json"
+_DATA_DIR = Path(".claude") / "daedalus"
 
 
-def _inline_repo_root(path: str) -> Path:
-    # 0035: private copy of lib.repo_root.repo_root for an install whose lib cannot import.
+def _inline_git_root(path: str) -> Path | None:
+    # 0035, 0043 exception: private copy of lib.repo_root.git_root for a lib that cannot import.
     start = Path(path)
     for folder in (start, *start.parents):
         dot = folder / ".git"
@@ -56,20 +58,30 @@ def _inline_repo_root(path: str) -> Path:
         except (OSError, UnicodeDecodeError):
             common = gitdir
         return Path(os.path.normpath(common)).parent
-    return next((p for p in (start, *start.parents) if p.is_dir()), start)
+    return None
+
+
+def _inline_project_root(cwd: Path) -> Path:
+    # 0077, 0035, 0043 exception, CM-5: copy of lib.project_root.project_root; change together.
+    start = Path(cwd)
+    for folder in (start, *start.parents):
+        if (folder / _MANIFEST).is_file() or (folder / _DATA_DIR).is_dir():
+            main = _inline_git_root(str(folder)) if (folder / ".git").is_file() else None
+            return main if main is not None and (main / ".git").is_dir() else folder
+    return _inline_git_root(str(start)) or start
 
 
 def _inline_train_marked(cwd: object) -> bool:
     # 0035: no absolute cwd means the repo is unknown, so the hook acts as if a train runs.
     if not isinstance(cwd, str) or not os.path.isabs(cwd):
         return True
-    return os.path.lexists(_inline_repo_root(cwd) / _TRAIN_MARKER)
+    return os.path.lexists(_inline_project_root(Path(cwd)) / _TRAIN_MARKER)
 
 
 def _marker_finder() -> tuple[Callable[[object], bool], Exception | None]:
     # 0035: a broken lib must not block a repo without a train, so the inline finder decides.
     try:
-        from lib.repo_root import train_marked
+        from lib.project_root import train_marked
     except Exception as exc:  # noqa: BLE001
         return _inline_train_marked, exc
     return train_marked, None
@@ -101,17 +113,17 @@ def _named_paths(tool: str, tool_input: dict[str, object]) -> list[str] | None:
 
 def _names_marked_repo(tool: str, tool_input: dict[str, object], cwd: str) -> bool:
     # issue 30: a train in any repo the call names counts; the full jail then judges precisely.
-    from lib.repo_root import TRAIN_MARKER, repo_root
+    from lib.project_root import TRAIN_MARKER, project_root
 
     words = _named_paths(tool, tool_input)
     if words is None:
         return True
-    home = repo_root(cwd)
+    home = project_root(Path(cwd))
     roots: set[Path] = {home}
     for word in words:
         if not word or word.startswith("-"):
             continue
-        root = repo_root(os.path.normpath(os.path.join(cwd, os.path.expanduser(word))))
+        root = project_root(Path(os.path.normpath(os.path.join(cwd, os.path.expanduser(word)))))
         if root in roots:
             continue
         roots.add(root)

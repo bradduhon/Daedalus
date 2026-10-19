@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib.audit import project_data_dir, root_info  # noqa: E402
+from lib.audit import AuditLockError, project_data_dir, read_log, root_info  # noqa: E402
 from verify_audit_chain import NOT_UTF8, verify_lines  # noqa: E402
 
 _SESSION_ID = re.compile(r"[A-Za-z0-9_-]+")
@@ -96,11 +96,13 @@ def _session_path(cwd: str, session: str | None) -> Path:
 
 
 def _read_lines(path: Path) -> list[str]:
+    # issue 10: the read waits on the writer's lock, so an append in flight reads whole.
     try:
-        with open(path, encoding="utf-8") as fh:
-            return fh.readlines()
+        return read_log(path).splitlines(keepends=True)
     except UnicodeDecodeError as exc:
         raise ReportError(NOT_UTF8.format(path=path)) from exc
+    except AuditLockError as exc:
+        raise ReportError(str(exc)) from exc
 
 
 def md_escape(value: Any, limit: int | None = None) -> str:

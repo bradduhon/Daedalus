@@ -240,6 +240,7 @@ def test_absent_scaffolds_are_opt_and_pass(tmp_path: Path) -> None:
     lines = result.stdout.splitlines()
     assert result.returncode == 0, result.stdout
     assert [line.split(":")[0][5:] for line in lines if line.startswith("OPT  ")] == [
+        "config.json",
         "standards_sources",
         "service-manifest.json",
         "contracts/",
@@ -256,7 +257,7 @@ def test_absent_project_data_dir_is_ok_and_names_the_path(tmp_path: Path) -> Non
     lines = result.stdout.splitlines()
     assert f"OK   project data dir: {data} (not created yet; a train's start creates it)" in lines
     assert "OK   audit log: off until a train runs here" in lines
-    assert "OK   config.json: not present, defaults in use" in lines
+    assert NO_CONFIG in lines
     assert not (repo / ".claude").exists()
 
 
@@ -511,7 +512,7 @@ def test_absent_config_runs_the_ledger_probe_none_found(tmp_path: Path) -> None:
     _git_repo(repo)
     bins = _bins_with_git(tmp_path)
     lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
-    i = lines.index("OK   config.json: not present, defaults in use")
+    i = lines.index(NO_CONFIG)
     assert lines[i + 1] == (
         "OK   ledger: none found (the Build Train asks before creating docs/decisions.md)"
     )
@@ -530,7 +531,7 @@ def test_absent_config_runs_the_ledger_probe_found(tmp_path: Path) -> None:
     bins = _bins_with_git(tmp_path)
     lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
     ledger = repo.resolve() / "docs" / "decisions.md"
-    i = lines.index("OK   config.json: not present, defaults in use")
+    i = lines.index(NO_CONFIG)
     assert lines[i + 1] == f"OK   ledger: {ledger} (probe, markdown-table-row)"
 
 
@@ -840,3 +841,23 @@ def test_doctor_offers_the_baseline_pack(tmp_path: Path) -> None:
     )
     lines = _run(None, repo, path_env=bins, home=home).stdout.splitlines()
     assert "OK   standards_sources declared" in lines
+
+
+SETUP_NEXT = "Next: run the Daedalus setup skill (/daedalus:setup) to write a starter "
+NO_CONFIG = f"OPT  config.json: not present, defaults in use. {SETUP_NEXT}config.json"
+
+
+def test_doctor_opt_lines_name_the_setup_skill(tmp_path: Path) -> None:
+    # 0076: a missing manifest or config is optional; the next step is the setup skill.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    _commit_all_empty(repo)
+    home = tmp_path / "home"
+    home.mkdir()
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path, "gitleaks", "gh"), home=home)
+    lines = result.stdout.splitlines()
+    assert NO_CONFIG in lines
+    assert (
+        f"OPT  service-manifest.json: not found at repo root. {SETUP_NEXT}service-manifest.json"
+    ) in lines
+    assert result.returncode == 0, result.stdout
