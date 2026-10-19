@@ -436,6 +436,25 @@ def test_dispatch_the_runner_did_not_print_is_refused(repo: Path, plugin: Path) 
     assert not decide(_agent_call(repo, "general-purpose"), Config()).allow
 
 
+def test_stage_printed_agent_is_allowed_through_the_gate(repo: Path, plugin: Path) -> None:
+    # 4.8, AC-3: the gate passes the agent the current stage printed, and only while it is current.
+    from lib.dispatch_binding import _step_reason
+
+    _write_train(plugin, [_probe_stage(), _code_stage()], ("repository",))
+    _started(repo, plugin)
+    call = _agent_call(repo, "daedalus:repo-coder")
+    tool_input = call["tool_input"]
+    assert isinstance(tool_input, dict)
+    before = _step_reason(tool_input, str(repo))
+    assert before is not None and "did not print a dispatch of repo-coder for stage probe" in before
+    assert not decide(call, Config()).allow
+    _step(repo, plugin)
+    printed = _step(repo, plugin)
+    assert "Dispatch: repo-coder" in printed.lines
+    assert _step_reason(tool_input, str(repo)) is None
+    assert _step_reason({**tool_input, "subagent_type": "repo-coder"}, str(repo)) is not None
+
+
 def test_consult_agent_of_the_current_gate_is_allowed(repo: Path, plugin: Path) -> None:
     _write_train(plugin, [_code_stage()], ("repository",))
     _started(repo, plugin)
