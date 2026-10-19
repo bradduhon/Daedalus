@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
+
+from lib import train_state, workspace
+from lib.audit import project_root
 
 CONDUCTOR = "pr-train-conductor"
 # 0028: the allowed list intersected with the conductor's set; K1: pr edit changes the body only.
@@ -11,8 +15,29 @@ CONDUCTOR_GH = frozenset(
     {("pr", "create"), ("pr", "edit"), ("pr", "view"), ("pr", "list"), ("pr", "checks")}
     | {("run", "list"), ("run", "view"), ("run", "watch")}
 )
-MAIN_GH = frozenset({("auth", "status")})
-ALLOWED_0028 = CONDUCTOR_GH | MAIN_GH | {("issue", "view"), ("issue", "list")}
+ALLOWED_0028 = CONDUCTOR_GH | {("auth", "status"), ("issue", "view"), ("issue", "list")}
+# B7: main reads during a train; pull request writes stay with the conductor.
+MAIN_GH = ALLOWED_0028 - {("pr", "create"), ("pr", "edit")}
+R_VERDICT = (
+    "{what} needs an approved audit verdict on the exact tip of {branch}; {detail} (spec 4.2). "
+    "Next: audit the exact tip, or record the operator's exception."
+)
+R_PR_HEAD = (
+    "gh pr create may open a pull request only from the train branch {branch}, the tip the "
+    "audit verdict covers (spec 4.2). Next: drop --head so the pull request opens from the "
+    "current branch, or pass --head {branch}."
+)
+R_PR_CURRENT = (
+    "gh pr create without --head opens the pull request from the checked-out branch, which "
+    "is not the train branch {branch} the audit verdict covers (spec 4.2). "
+    "Next: pass --head {branch} so the pull request opens from the audited branch."
+)
+# gh pr create flags that take a value; every other flag is boolean.
+_PR_CREATE_SHORT_VALUE = frozenset("aBbFHlmprRTt")
+_PR_CREATE_LONG_VALUE = frozenset(
+    {"--assignee", "--base", "--body", "--body-file", "--head", "--label", "--milestone"}
+    | {"--project", "--reviewer", "--repo", "--recover", "--template", "--title"}
+)
 CLASS_NEXT = {
     "merge": "the operator merges in the GitHub UI",
     "delete": "delete from your own shell if you mean it",
@@ -268,3 +293,112 @@ def gh_reason(agent: str, command: str, segments: list[list[str]] | None) -> str
         if reason:
             return reason
     return None
+
+
+def _branch_tip(cwd: str, branch: str) -> str | None:
+    try:
+        found = workspace._run(
+            Path(cwd), "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}"
+        )
+    except (OSError, workspace.WorkspaceError):
+        return None
+    tip = found.stdout.strip()
+    return tip if found.returncode == 0 and tip else None
+
+
+def _record(state: dict[str, object], key: str) -> dict[str, object]:
+    raw = state.get(key)
+    return {str(k): v for k, v in raw.items()} if isinstance(raw, dict) else {}
+
+
+def _verdict_detail(cwd: str, train: str, branch: str) -> str | None:
+    # spec 4.2: state through train_state.load, never a reply file; the marker names the branch.
+    try:
+        state = train_state.load(project_root(cwd), train)
+    except train_state.TrainStateError:
+        return "no train state is readable"
+    tip = _branch_tip(cwd, branch)
+    if tip is None:
+        return f"{branch} does not resolve to a commit in {cwd}"
+    exception = _record(state, "exception")
+    ledger_id = exception.get("ledger_id")
+    if isinstance(ledger_id, str) and ledger_id and exception.get("tip") == tip:
+        return None
+    verdict = _record(state, "verdict")
+    status = verdict.get("status")
+    if not verdict:
+        return "no verdict is recorded"
+    if status != "approved":
+        return f"the recorded verdict is {status if isinstance(status, str) else 'unreadable'}"
+    covered = verdict.get("tip")
+    if covered != tip:
+        shown = covered[:12] if isinstance(covered, str) else "no tip"
+        return f"the verdict covers {shown} but the tip is {tip[:12]}"
+    return None
+
+
+def _active_train(cwd: str) -> str | None:
+    return train_state.active_train(project_root(cwd)) if os.path.isabs(cwd) else None
+
+
+def verdict_reason(cwd: str, what: str) -> str | None:
+    # spec 4.2: a push or pr create passes on the approved tip or an exception for that tip.
+    # The charter push and the -R charter pr create are gated on this project's integration tip.
+    train = _active_train(cwd)
+    if train is None:
+        detail = "no train is active here"
+        return R_VERDICT.format(what=what, branch="the train branch", detail=detail)
+    branch = f"daedalus/{train}"
+    detail = _verdict_detail(cwd, train, branch)
+    return None if detail is None else R_VERDICT.format(what=what, branch=branch, detail=detail)
+
+
+def _pr_create_heads(args: list[str]) -> list[str]:
+    # pflag: value flags take the next word or the bundle's rest (-Hx, -H=x, -dH x).
+    heads: list[str] = []
+    i = 0
+    while i < len(args):
+        arg, nxt = args[i], args[i + 1] if i + 1 < len(args) else ""
+        if arg == "--":
+            break
+        if arg.startswith("--"):
+            name, eq, value = arg.partition("=")
+            if name == "--head":
+                heads.append(value if eq else nxt)
+            i += 2 if name in _PR_CREATE_LONG_VALUE and not eq else 1
+            continue
+        if arg.startswith("-") and len(arg) > 1:
+            step = 1
+            for idx, letter in enumerate(arg[1:], start=2):
+                if letter in _PR_CREATE_SHORT_VALUE:
+                    rest = arg[idx:].removeprefix("=")
+                    if letter == "H":
+                        heads.append(rest or nxt)
+                    step = 1 if rest else 2
+                    break
+            i += step
+            continue
+        i += 1
+    return heads
+
+
+def pr_create_reason(tokens: list[str], cwd: str) -> str | None:
+    # spec 4.2: --head names only the marker's train branch, the tip the verdict covers.
+    train = _active_train(cwd)
+    if train is not None:
+        branch = f"daedalus/{train}"
+        heads = _pr_create_heads(tokens[1:])
+        if any(head != branch for head in heads):
+            return R_PR_HEAD.format(branch=branch)
+        if not heads and _current_branch(cwd) != branch:
+            return R_PR_CURRENT.format(branch=branch)
+    return verdict_reason(cwd, "gh pr create")
+
+
+def _current_branch(cwd: str) -> str | None:
+    # spec 4.2: with no --head, gh opens the pull request from the checked-out branch.
+    try:
+        found = workspace._run(Path(cwd), "symbolic-ref", "--quiet", "--short", "HEAD")
+    except (OSError, workspace.WorkspaceError):
+        return None
+    return found.stdout.strip() if found.returncode == 0 else None

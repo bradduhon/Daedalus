@@ -35,7 +35,7 @@ TRAIN_BRANCH = "daedalus/20261015-120000"
 @pytest.fixture
 def jail_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     # 0022: CWD is not a real repo; register its fake unit worktrees, real repos query git.
-    from lib import dispatch_binding, hook_io, jail
+    from lib import dispatch_binding, gh_policy, hook_io, jail
 
     real = getattr(jail, "_registered_worktrees", None)
 
@@ -66,6 +66,13 @@ def jail_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
         return TRAIN_BRANCH if cwd.startswith(CWD) else real_branch(cwd)
 
     monkeypatch.setattr(jail, "_train_branch", branch)
+    # spec 4.2: CWD has no train state; the verdict gate is proven in tests/test_checks_git_push.py.
+    real_verdict = gh_policy.verdict_reason
+
+    def verdict(cwd: str, what: str) -> str | None:
+        return None if cwd.startswith(CWD) else real_verdict(cwd, what)
+
+    monkeypatch.setattr(gh_policy, "verdict_reason", verdict)
     # 0044: hook scripts read the project config through this one name.
     monkeypatch.setattr(hook_io, "hook_config", lambda cwd: CFG)
 
