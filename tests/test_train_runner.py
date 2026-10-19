@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -217,9 +218,9 @@ def _prompt(outcome: train_runner.Outcome) -> list[Path]:
 
 def _reply(
     repo: Path, brief: Path, text: str, agent: str = "repo-coder", agent_id: str = "a1"
-) -> None:
+) -> dict[str, Any]:
     train_runner.reply_path(brief).write_text(text, encoding="utf-8")
-    _agent_stop(repo, agent, text, agent_id)
+    return _agent_stop(repo, agent, text, agent_id)
 
 
 def _nothing_written(root: Path) -> None:
@@ -745,3 +746,452 @@ def test_definition_changed_mid_train_stops(repo: Path, plugin: Path) -> None:
     path.write_text(json.dumps(doc))
     outcome = _step(repo, plugin)
     assert outcome.code == 1 and "changed after the train started" in outcome.lines[0]
+
+
+PLAN = (
+    "# Plan\n\n"
+    "### Unit A1: first piece\n\n"
+    "Files: a.py\n\n"
+    "```python\n# a comment line, not a heading\n```\n"
+    "- [ ] Step 1\n\n"
+    "### Unit A2: second piece\n\n"
+    "Files: b.py\n\n"
+    "## After the units\n"
+)
+A1_SECTION = (
+    "### Unit A1: first piece\n\n"
+    "Files: a.py\n\n"
+    "```python\n# a comment line, not a heading\n```\n"
+    "- [ ] Step 1"
+)
+CONTRACT = "## Locked Contract Packet\npacket_version=1\n"
+STANDARDS = "## Standards Packet\n- a rule\n\nPick ledger ids: pick 1 = 0101-DAE-PLT\n"
+
+
+def _plan(repo: Path) -> Path:
+    path = repo / "plan.md"
+    path.write_text(PLAN, encoding="utf-8")
+    assert train_runner.record_plan(repo, path).code == 0
+    return path
+
+
+def _packets(repo: Path) -> tuple[Path, Path]:
+    # 0083: the contract lives where lock records it; the Standards Packet sits in the scratch dir.
+    train = str(_state(repo)["train_id"])
+    contract = repo / "contracts" / "c.md"
+    contract.parent.mkdir(exist_ok=True)
+    contract.write_text(CONTRACT, encoding="utf-8")
+    standards = repo / "docs" / ".tmp" / "daedalus" / train / "standards-packet.md"
+    standards.parent.mkdir(parents=True, exist_ok=True)
+    standards.write_text(STANDARDS, encoding="utf-8")
+    train_state.update(repo, train, contract_path=str(contract))
+    return contract, standards
+
+
+def _hex(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _integration(repo: Path) -> str:
+    _git(repo, "branch", "-f", f"daedalus/{_state(repo)['train_id']}", "HEAD")
+    return _tip(repo)
+
+
+def _tip(repo: Path) -> str:
+    # 0089: the auditor's check, the verdict tip equals git rev-parse daedalus/<train-id>.
+    train = str(_state(repo)["train_id"])
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", f"daedalus/{train}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def _audit_stage() -> dict[str, Any]:
+    return {
+        "id": "audit",
+        "gate": "merge",
+        "agent": "security-auditor",
+        "scope": {
+            "told": "trains/t/solo.md",
+            "touch": ["none"],
+            "reply": ["[VERDICT: APPROVED]", "[VERDICT: REJECTED]"],
+        },
+        "proof": {
+            "script": "daedalus_train.py check-reply --stage audit",
+            "exit": {"0": "pass", "1": "off-contract"},
+            "records": [],
+        },
+        "on_fail": {"[VERDICT: REJECTED]": "back:probe rounds=2"},
+    }
+
+
+def _verdict(word: str) -> str:
+    return f"[VERDICT: {word}]\nThe findings or the rationale.\n[VERDICT: {word}]"
+
+
+def test_progress_prints_phase_weight_units_choices_open_and_next(repo: Path, plugin: Path) -> None:
+    # 0085: the operator view reads state only and carries no sha, handle or absolute path.
+    _write_train(
+        plugin, [_code_stage(per_unit=True, yield_route="ask: which field?")], ("repository",)
+    )
+    _started(repo, plugin)
+    _units(repo, ["a1", "a2"])
+    _plan(repo)
+    briefs = _prompt(_step(repo, plugin))
+    _reply(repo, briefs[0], COMPLETE, agent_id="coder-1")
+    assert _check(repo, plugin, "code").code == 0
+    _reply(repo, briefs[1], "Blocked.\n[STATUS: YIELD_CONTRACT] which field?", agent_id="coder-2")
+    assert _check(repo, plugin, "code").code == 2
+    chose = train_runner.choice(
+        repo, "contract packet", "one-line plan", "two minutes", phase="implementation"
+    )
+    assert chose.code == 0, chose.lines
+    outcome = train_runner.progress(repo)
+    assert outcome.code == 0, outcome.lines
+    assert outcome.lines == [
+        "Phase: implementation (weight: contract packet)",
+        "A1 first piece: done",
+        "A2 second piece: waiting on an answer",
+        "Choices:",
+        "Chose contract packet over one-line plan: two minutes",
+        "Open:",
+        "A2: [STATUS: YIELD_CONTRACT]",
+        "Next: answer the open item above, then run step to retry the stage.",
+    ]
+    text = "\n".join(outcome.lines)
+    assert str(repo) not in text and "coder-" not in text and "/" not in text
+    assert re.search(r"\b[0-9a-f]{12,}\b", text) is None
+
+
+def test_progress_names_the_unit_a_waiting_unit_waits_on(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_code_stage(per_unit=True)], ("repository",))
+    _started(repo, plugin)
+    _units(repo, ["a1", "a2"], stacked={"a2": "a1"})
+    _plan(repo)
+    _step(repo, plugin)
+    outcome = train_runner.progress(repo)
+    assert outcome.lines == [
+        "Phase: build (weight: not chosen)",
+        "A1 first piece: running (repo-coder)",
+        "A2 second piece: waiting on A1",
+        "Choices: none",
+        "Open: none",
+        train_runner.NEXT_NONE,
+    ]
+    assert train_runner.NEXT_NONE.startswith("Next: none")
+
+
+def test_choice_appends_and_prints_the_line(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    first = train_runner.choice(repo, "warm resume", "cold dispatch", "about 40k tokens")
+    assert first.code == 0 and first.lines == [
+        "Chose warm resume over cold dispatch: about 40k tokens"
+    ]
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS_DIR / "daedalus_train.py"),
+            "choice",
+            "--repo",
+            str(repo),
+            "--chose",
+            "a one-line plan",
+            "--over",
+            "a contract packet",
+            "--cost",
+            "five minutes",
+            "--phase",
+            "plan",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "Chose a one-line plan over a contract packet: five minutes\n"
+    state = _state(repo)
+    assert state["choices"] == [
+        {"chose": "warm resume", "over": "cold dispatch", "cost": "about 40k tokens"},
+        {
+            "chose": "a one-line plan",
+            "over": "a contract packet",
+            "cost": "five minutes",
+            "phase": "plan",
+        },
+    ]
+    assert state["phase"] == "plan" and state["weight"] == "a one-line plan"
+    refused = train_runner.choice(repo, "two\nlines", "x", "y")
+    assert refused.code == 1 and "Next:" in refused.lines[0]
+    assert len(_state(repo)["choices"]) == 2  # type: ignore[arg-type]
+
+
+def test_plan_records_path_and_sha256(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_code_stage(per_unit=True)], ("repository",))
+    _started(repo, plugin)
+    _units(repo, ["a1"])
+    missing = train_runner.record_plan(repo, repo / "nope.md")
+    assert missing.code == 1 and "Next:" in missing.lines[0]
+    path = _plan(repo)
+    assert _state(repo)["plan"] == {"path": str(path.resolve()), "sha256": _hex(path)}
+    path.write_text(PLAN + "\nedited\n", encoding="utf-8")
+    refused = _step(repo, plugin)
+    assert refused.code == 1 and "changed after it was recorded" in refused.lines[-1]
+
+
+def test_check_reply_records_an_approved_verdict_with_the_tip(repo: Path, plugin: Path) -> None:
+    # 0089: the verdict binds the integration branch tip at check-reply time.
+    _write_train(plugin, [_probe_stage(), _audit_stage()], ("repository",))
+    _started(repo, plugin)
+    tip = _integration(repo)
+    _step(repo, plugin)
+    (brief,) = _prompt(_step(repo, plugin))
+    record = _reply(repo, brief, _verdict("APPROVED"), agent="security-auditor")
+    outcome = _check(repo, plugin, "audit")
+    assert outcome.code == 0, outcome.lines
+    assert _state(repo)["verdict"] == {
+        "status": "approved",
+        "tip": tip,
+        "round": 1,
+        "seq": record["seq"],
+    }
+
+
+def test_check_reply_records_a_rejected_verdict(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_probe_stage(), _audit_stage()], ("repository",))
+    _started(repo, plugin)
+    first_tip = _integration(repo)
+    _step(repo, plugin)
+    (brief,) = _prompt(_step(repo, plugin))
+    record = _reply(repo, brief, _verdict("REJECTED"), agent="security-auditor")
+    routed = _check(repo, plugin, "audit")
+    assert routed.code == 2, routed.lines
+    assert _state(repo)["verdict"] == {
+        "status": "rejected",
+        "tip": first_tip,
+        "round": 1,
+        "seq": record["seq"],
+    }
+    train = str(_state(repo)["train_id"])
+    (repo / "fix.txt").write_text("fix\n")
+    _git(repo, "switch", "-q", f"daedalus/{train}")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "fix")
+    moved = _tip(repo)
+    assert moved != first_tip
+    _step(repo, plugin)
+    (again,) = _prompt(_step(repo, plugin))
+    second = _reply(repo, again, _verdict("APPROVED"), agent="security-auditor")
+    assert _check(repo, plugin, "audit").code == 0
+    assert _state(repo)["verdict"] == {
+        "status": "approved",
+        "tip": moved,
+        "round": 2,
+        "seq": second["seq"],
+    }
+
+
+def test_exception_records_ledger_id_and_tip(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    tip = _integration(repo)
+    refused = train_runner.record_exception(repo, "--force")
+    assert refused.code == 1 and "Next:" in refused.lines[0]
+    outcome = train_runner.record_exception(repo, "0101-DAE-PLT")
+    assert outcome.code == 0, outcome.lines
+    assert _state(repo)["exception"] == {"ledger_id": "0101-DAE-PLT", "tip": tip}
+
+
+def test_brief_carries_the_plan_section_and_both_packet_hashes(repo: Path, plugin: Path) -> None:
+    # 0083: the brief names each packet by path and hash; nothing is pasted.
+    _write_train(plugin, [_code_stage(per_unit=True)], ("repository",))
+    _started(repo, plugin)
+    _units(repo, ["a1"])
+    _plan(repo)
+    contract, standards = _packets(repo)
+    (brief,) = _prompt(_step(repo, plugin))
+    train = str(_state(repo)["train_id"])
+    unit_path = repo / ".claude" / "worktrees" / f"{train}-a1"
+    text = brief.read_text()
+    head = f"Worktree: {unit_path}\nBuild unit {train}-a1 for train {train}.\n"
+    assert text.startswith(head)
+    lines = text.splitlines()
+    assert f"Contract: {contract} sha256={_hex(contract)}" in lines
+    assert f"Standards: {standards} sha256={_hex(standards)}" in lines
+    assert "Pick ledger ids: pick 1 = 0101-DAE-PLT" in lines
+    assert A1_SECTION in text and "### Unit A2" not in text
+    assert CONTRACT not in text and "- a rule" not in text
+    (reminder,) = [line for line in lines if line.startswith("Reminder: ")]
+    assert f"Work only in {unit_path}:" in reminder
+    assert "contract=<first 12 hex> standards=<first 12 hex>" in reminder
+    order = [
+        lines.index(line)
+        for line in lines
+        if line.startswith(("Contract:", "Standards:", "Pick ", "### Unit A1", "Reminder:"))
+    ]
+    assert order == sorted(order) and len(order) == 5
+    (entry,) = _state(repo)["dispatches"]  # type: ignore[misc]
+    assert entry["contract_sha256"] == _hex(contract)
+    assert entry["standards_sha256"] == _hex(standards)
+
+
+def test_dispatch_prompt_is_three_lines(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_code_stage()], ("repository",))
+    _started(repo, plugin)
+    _packets(repo)
+    outcome = _step(repo, plugin)
+    assert outcome.code == 0, outcome.lines
+    (brief,) = _prompt(outcome)
+    assert outcome.lines[1:] == [
+        "Dispatch: repo-coder",
+        f"Prompt file: {brief}",
+        "Expect: [STATUS: COMPLETE] or [STATUS: YIELD_CONTRACT]",
+    ]
+
+
+@pytest.mark.parametrize("case", ["contract", "standards", "missing", "match"])
+def test_complete_with_wrong_packet_hash_is_refused(repo: Path, plugin: Path, case: str) -> None:
+    _write_train(plugin, [_code_stage()], ("repository",))
+    _started(repo, plugin)
+    contract, standards = _packets(repo)
+    (brief,) = _prompt(_step(repo, plugin))
+    c, s = _hex(contract)[:12], _hex(standards)[:12]
+    tail = {
+        "contract": f" contract={'0' * 12} standards={s}",
+        "standards": f" contract={c} standards={'f' * 12}",
+        "missing": "",
+        "match": f" contract={c} standards={s}",
+    }[case]
+    _reply(repo, brief, COMPLETE + tail)
+    outcome = _check(repo, plugin, "code")
+    if case == "match":
+        assert outcome.code == 0, outcome.lines
+        return
+    assert outcome.code == 1, outcome.lines
+    assert "do not match the packets its brief named" in outcome.lines[0]
+    (entry,) = _state(repo)["dispatches"]  # type: ignore[misc]
+    assert entry["status"] == "failed"
+
+
+NEVER_TYPED = "Next: run the security audit; the verdict is recorded from the auditor's reply"
+
+
+def _verdict_call(repo: Path, status: str, round_: int, seq: int | None = None) -> Any:
+    # 0024: the jail appends this call's PreToolUse record before the command runs.
+    _record(repo, tool_input={"command": f"python3 /p/scripts/daedalus_train.py verdict {repo}"})
+    return train_runner.record_verdict(repo, status, round_, seq)
+
+
+@pytest.mark.parametrize("status", ["approved", "rejected"])
+def test_verdict_records_the_newest_matching_auditor_stop(
+    repo: Path, plugin: Path, status: str
+) -> None:
+    # 0089: the verdict comes from the auditor's stop record, bound to the tip at call time.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    tip = _integration(repo)
+    _agent_stop(repo, "security-auditor", _verdict(status.upper()), "aud-1")
+    newest = _agent_stop(repo, "security-auditor", _verdict(status.upper()), "aud-1")
+    _agent_stop(repo, "repo-coder", COMPLETE, "coder-1")
+    outcome = _verdict_call(repo, status, 2)
+    assert outcome.code == 0, outcome.lines
+    assert outcome.lines == [f"Verdict {status} recorded on tip {tip[:12]} (round 2)"]
+    record = {"status": status, "tip": tip, "round": 2, "seq": newest["seq"]}
+    assert _state(repo)["verdict"] == record
+    assert tip == _tip(repo)
+
+
+def test_verdict_with_no_auditor_stop_refuses(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    _integration(repo)
+    _agent_stop(repo, "repo-coder", _verdict("APPROVED"), "coder-1")
+    refused = _verdict_call(repo, "approved", 1)
+    assert refused.code == 1 and NEVER_TYPED in refused.lines[0]
+    assert "verdict" not in _state(repo)
+
+
+def test_verdict_with_the_other_verdict_refuses(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    _integration(repo)
+    _agent_stop(repo, "security-auditor", _verdict("REJECTED"), "aud-1")
+    refused = _verdict_call(repo, "approved", 1)
+    assert refused.code == 1 and NEVER_TYPED in refused.lines[0]
+    assert "verdict" not in _state(repo)
+
+
+def test_verdict_seq_must_name_the_matching_auditor_stop(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    tip = _integration(repo)
+    auditor = _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
+    coder = _agent_stop(repo, "repo-coder", _verdict("APPROVED"), "coder-1")
+    refused = _verdict_call(repo, "approved", 1, int(coder["seq"]))
+    assert refused.code == 1 and NEVER_TYPED in refused.lines[0]
+    assert "verdict" not in _state(repo)
+    passed = _verdict_call(repo, "approved", 1, int(auditor["seq"]))
+    assert passed.code == 0, passed.lines
+    record = {"status": "approved", "tip": tip, "round": 1, "seq": auditor["seq"]}
+    assert _state(repo)["verdict"] == record
+
+
+def test_verdict_reads_only_the_newest_auditor_stop(repo: Path, plugin: Path) -> None:
+    # 0089: a rejection after an approval is never skipped for the older approval.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    tip = _integration(repo)
+    older = _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
+    _agent_stop(repo, "security-auditor", _verdict("REJECTED"), "aud-1")
+    refused = _verdict_call(repo, "approved", 1)
+    assert refused.code == 1 and NEVER_TYPED in refused.lines[0]
+    assert "carries [VERDICT: REJECTED], not [VERDICT: APPROVED]" in refused.lines[0]
+    stale = _verdict_call(repo, "approved", 1, int(older["seq"]))
+    assert stale.code == 1 and f"seq {older['seq']} is not the newest" in stale.lines[0]
+    assert "verdict" not in _state(repo)
+    first = _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
+    again = _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
+    older_approved = _verdict_call(repo, "approved", 2, int(first["seq"]))
+    assert older_approved.code == 1 and "is not the newest" in older_approved.lines[0]
+    passed = _verdict_call(repo, "approved", 2)
+    assert passed.code == 0, passed.lines
+    record = {"status": "approved", "tip": tip, "round": 2, "seq": again["seq"]}
+    assert _state(repo)["verdict"] == record
+
+
+def test_verdict_cli_finds_the_seq_itself(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    tip = _integration(repo)
+    stop = _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
+    argv = [sys.executable, str(SCRIPTS_DIR / "daedalus_train.py"), "verdict", "--repo"]
+    argv += [str(repo), "--status", "approved", "--round", "1"]
+    _record(repo, tool_input={"command": " ".join(argv)})
+    result = subprocess.run(argv, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == f"Verdict approved recorded on tip {tip[:12]} (round 1)\n"
+    record = {"status": "approved", "tip": tip, "round": 1, "seq": stop["seq"]}
+    assert _state(repo)["verdict"] == record
+
+
+def test_verdict_refuses_an_unknown_status_a_bad_round_and_no_branch(
+    repo: Path, plugin: Path
+) -> None:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
+    no_branch = _verdict_call(repo, "approved", 1)
+    assert no_branch.code == 1 and "integration branch" in no_branch.lines[0]
+    _integration(repo)
+    for status, round_ in (("passed", 1), ("approved", 0)):
+        refused = _verdict_call(repo, status, round_)
+        assert refused.code == 1 and "Next:" in refused.lines[0]
+    assert "verdict" not in _state(repo)
+
+
+def test_verdict_with_no_train_refuses(plain: Path) -> None:
+    outcome = train_runner.record_verdict(plain, "approved", 1)
+    assert outcome.code == 1
+    assert outcome.lines[0].startswith("no Daedalus train is active in ")
