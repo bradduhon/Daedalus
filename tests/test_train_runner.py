@@ -1073,3 +1073,54 @@ def test_complete_with_wrong_packet_hash_is_refused(repo: Path, plugin: Path, ca
     assert "do not match the packets its brief named" in outcome.lines[0]
     (entry,) = _state(repo)["dispatches"]  # type: ignore[misc]
     assert entry["status"] == "failed"
+
+
+@pytest.mark.parametrize("status", ["approved", "rejected"])
+def test_verdict_records_the_shape_on_the_current_tip(
+    repo: Path, plugin: Path, status: str
+) -> None:
+    # 0089: the skill-run verdict binds the integration tip at call time, like check-reply.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    tip = _integration(repo)
+    outcome = train_runner.record_verdict(repo, status, 2, 17)
+    assert outcome.code == 0, outcome.lines
+    assert outcome.lines == [f"Verdict {status} recorded on tip {tip[:12]} (round 2)"]
+    assert _state(repo)["verdict"] == {"status": status, "tip": tip, "round": 2, "seq": 17}
+    assert tip == _tip(repo)
+
+
+def test_verdict_cli_records_without_a_seq(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    tip = _integration(repo)
+    argv = [sys.executable, str(SCRIPTS_DIR / "daedalus_train.py"), "verdict", "--repo"]
+    result = subprocess.run(
+        [*argv, str(repo), "--status", "approved", "--round", "1"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == f"Verdict approved recorded on tip {tip[:12]} (round 1)\n"
+    assert _state(repo)["verdict"] == {"status": "approved", "tip": tip, "round": 1, "seq": None}
+
+
+def test_verdict_refuses_an_unknown_status_a_bad_round_and_no_branch(
+    repo: Path, plugin: Path
+) -> None:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    no_branch = train_runner.record_verdict(repo, "approved", 1)
+    assert no_branch.code == 1 and "integration branch" in no_branch.lines[0]
+    _integration(repo)
+    for status, round_ in (("passed", 1), ("approved", 0)):
+        refused = train_runner.record_verdict(repo, status, round_)
+        assert refused.code == 1 and "Next:" in refused.lines[0]
+    assert "verdict" not in _state(repo)
+
+
+def test_verdict_with_no_train_refuses(plain: Path) -> None:
+    outcome = train_runner.record_verdict(plain, "approved", 1)
+    assert outcome.code == 1
+    assert outcome.lines[0].startswith("no Daedalus train is active in ")

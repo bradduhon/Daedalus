@@ -939,6 +939,11 @@ def _integration_tip(repo: Path, train_id: str) -> str:
         raise RunnerError(f"the integration branch {branch} has no readable tip: {exc}") from exc
 
 
+def _verdict_record(status: str, tip: str, round_: int, seq: object) -> dict[str, object]:
+    # 0089: the one verdict shape A2's push gate reads, from check-reply and the verdict command.
+    return {"status": status, "tip": tip, "round": round_, "seq": seq}
+
+
 def _packet_refusal(item: dict[str, object], text: str, line: str) -> str | None:
     # 0083, 0091: on the keyed reply, a COMPLETE line echoes the packet hashes its brief named.
     want = {name: _text(item, f"{name}_sha256") for name in PACKETS}
@@ -994,11 +999,7 @@ def _checked_in(
         return Outcome(EXIT_STOP, session.lines)
     if verdict is not None:
         prior = _int(_obj(session.state, train_state.VERDICT), "round", 0)
-        _set(
-            session,
-            train_state.VERDICT,
-            {"status": verdict, "tip": tip, "round": prior + 1, "seq": seq},
-        )
+        _set(session, train_state.VERDICT, _verdict_record(verdict, tip, prior + 1, seq))
     key = train_definition.reply_route_key(stage, line)
     if key is not None:
         route = _text(_obj(stage, "on_fail"), key)
@@ -1239,6 +1240,27 @@ def record_exception(cwd: Path, ledger_id: str) -> Outcome:
         exception = {"ledger_id": ledger_id, "tip": tip}
         train_state.update(repo, train_id, **{train_state.EXCEPTION: exception})
         return [f"exception: {ledger_id} accepted for the integration tip {tip}"]
+
+    return _recorded(cwd, edit)
+
+
+def record_verdict(cwd: Path, status: str, round_: int, seq: int | None = None) -> Outcome:
+    # 0089: a skill-driven train records the auditor's verdict on the tip as it stands now.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        if status not in (train_state.APPROVED, train_state.REJECTED):
+            raise RunnerError(
+                f"verdict status {status!r} is neither approved nor rejected. "
+                "Next: rerun verdict with the status the auditor's verdict line names."
+            )
+        if round_ < 1 or (seq is not None and seq < 0):
+            raise RunnerError(
+                f"round {round_} or audit seq {seq} is out of range. "
+                "Next: rerun verdict with a round of 1 or more and the auditor's stop record seq."
+            )
+        tip = _integration_tip(repo, train_id)
+        record = _verdict_record(status, tip, round_, seq)
+        train_state.update(repo, train_id, **{train_state.VERDICT: record})
+        return [f"Verdict {status} recorded on tip {tip[:12]} (round {round_})"]
 
     return _recorded(cwd, edit)
 
