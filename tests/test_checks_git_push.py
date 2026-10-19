@@ -122,7 +122,7 @@ def _git(repo: Path, *args: str) -> str:
 def seed_train(repo: Path, state: bool = True, train: str = GATE_TRAIN) -> str:
     # spec 4.2: a real repo with the train branch, its marker and its state; returns the tip.
     _git(repo, "commit", "-q", "--allow-empty", "-m", "base")
-    _git(repo, "branch", f"daedalus/{train}")
+    _git(repo, "switch", "-q", "-c", f"daedalus/{train}")
     marker = repo / ".claude" / "daedalus" / "train.active"
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(f"{train}\n", encoding="utf-8")
@@ -133,7 +133,6 @@ def seed_train(repo: Path, state: bool = True, train: str = GATE_TRAIN) -> str:
 
 def move_tip(repo: Path) -> str:
     _git(repo, "commit", "-q", "--allow-empty", "-m", "after the verdict")
-    _git(repo, "branch", "-f", GATE_BRANCH, "HEAD")
     return _git(repo, "rev-parse", GATE_BRANCH).strip()
 
 

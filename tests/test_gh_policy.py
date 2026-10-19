@@ -257,6 +257,57 @@ def test_pr_create_follows_the_same_gate(repo_cwd: Path) -> None:
     assert _denying_hook(repo_cwd, "repo-coder", command) == "network_tools"
 
 
+HEAD_NEXT = (
+    "Next: drop --head so the pull request opens from the current branch, "
+    f"or pass --head {GATE_BRANCH}."
+)
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        "--head feat/x",
+        "-H feat/x",
+        "--head=feat/x",
+        "-Hfeat/x",
+        "-H=feat/x",
+        "-dH feat/x",
+        f"--head o:{GATE_BRANCH}",
+        f"--head {GATE_BRANCH} --head feat/x",
+    ],
+)
+def test_pr_create_head_naming_another_branch_is_refused(repo_cwd: Path, head: str) -> None:
+    # spec 4.2: the verdict covers the train branch only, so --head names nothing else.
+    approve(repo_cwd, seed_train(repo_cwd))
+    command = f"gh pr create {head} --title t --body-file docs/.tmp/pr.md"
+    assert _reason(repo_cwd, "pr-train-conductor", command).endswith(HEAD_NEXT), head
+
+
+@pytest.mark.parametrize(
+    "head",
+    ["", f"--head {GATE_BRANCH}", f"-H {GATE_BRANCH}", f"--head={GATE_BRANCH}", "--title -H"],
+)
+def test_pr_create_head_on_the_train_branch_passes(repo_cwd: Path, head: str) -> None:
+    approve(repo_cwd, seed_train(repo_cwd))
+    command = f"gh pr create {head} --title t --body-file docs/.tmp/pr.md"
+    d = decide(_bash(repo_cwd, "pr-train-conductor", command), Config())
+    assert d.allow, (head, d.reason)
+
+
+def test_pr_create_without_head_off_the_train_branch_is_refused(repo_cwd: Path) -> None:
+    # spec 4.2: with no --head, gh opens from the checked-out branch; it must be the train's.
+    approve(repo_cwd, seed_train(repo_cwd))
+    _git(repo_cwd, "switch", "-q", "-c", "feat/x")
+    command = "gh pr create --title t --body-file docs/.tmp/pr.md"
+    reason = _reason(repo_cwd, "pr-train-conductor", command)
+    assert reason.endswith(
+        f"Next: pass --head {GATE_BRANCH} so the pull request opens from the audited branch."
+    )
+    with_head = f"gh pr create --head {GATE_BRANCH} --title t --body-file docs/.tmp/pr.md"
+    d = decide(_bash(repo_cwd, "pr-train-conductor", with_head), Config())
+    assert d.allow, d.reason
+
+
 def test_repo_coder_gh_and_git_push_refused(train_repo: Path) -> None:
     for command in ("gh pr view 3", "gh auth status"):
         assert _denying_hook(train_repo, "repo-coder", command) == "network_tools", command
