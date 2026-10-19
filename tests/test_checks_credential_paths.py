@@ -54,6 +54,36 @@ def test_read_of_a_credential_path_is_refused(cred_home: Path, agent: str | None
     assert not d.allow and d.reason == _refusal(path)
 
 
+@pytest.mark.parametrize("agent", [None, "Explore", *CREDENTIAL_AGENTS])
+def test_reply_key_is_refused_to_every_agent(tmp_path: Path, agent: str | None) -> None:
+    # SC-12: a Read or a cat of the train's reply key is refused, by any path that reaches it.
+    from lib.jail import decide as jail_decide
+
+    judge = decide if agent in CREDENTIAL_AGENTS else jail_decide
+    repo = tmp_path.resolve() / "repo"
+    data = repo / ".claude" / "daedalus"
+    data.mkdir(parents=True)
+    key = data / "reply-hmac.key"
+    key.write_bytes(b"k" * 32)
+    alias = tmp_path.resolve() / "alias.txt"
+    alias.symlink_to(key)
+    _train(repo)
+    cat = {"tool_name": "Bash", "tool_input": {"command": "cat .claude/daedalus/reply-hmac.key"}}
+    cat["cwd"] = str(repo)
+    if agent:
+        cat["agent_type"] = agent
+    for hook_input in (
+        _cred(agent, "Read", cwd=str(repo), file_path=str(key)),
+        _cred(agent, "Read", cwd=str(repo), file_path=str(alias)),
+        cat,
+    ):
+        d = judge(hook_input, CFG)
+        assert not d.allow and "is the train's reply key. Next:" in str(d.reason), hook_input
+    other = data / "config.json"
+    other.write_text("{}")
+    assert judge(_cred(agent, "Read", cwd=str(repo), file_path=str(other)), CFG).allow
+
+
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
 def test_glob_and_grep_into_credentials_are_refused(cred_home: Path, agent: str | None) -> None:
     for hook_input in (

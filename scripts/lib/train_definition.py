@@ -77,6 +77,7 @@ _BACK = re.compile(r"back:(\S+)(?: rounds=(\S+))?")
 _ASK = re.compile(r"ask: \S.*")
 _CONSULT = re.compile(r"consult:(\S+)")
 _FEATURE = "features."
+_STATUS_WORD = re.compile(r"\[[A-Z]+: ([A-Z_]+)\]")
 
 Origin = Literal["plugin", "project"]
 
@@ -153,6 +154,17 @@ def _routes(stage: dict[str, object]) -> dict[str, str]:
 def _outcomes(stage: dict[str, object]) -> set[str]:
     exits = _obj(_obj(stage, "proof"), "exit")
     return {value for value in exits.values() if isinstance(value, str)}
+
+
+def reply_route_key(stage: dict[str, object], line: str) -> str | None:
+    # 0024: a reply line routes by itself, or by its status word when the exit map names it.
+    routes = _routes(stage)
+    if line in routes:
+        return line
+    word = _STATUS_WORD.match(line)
+    key = word.group(1).lower() if word else ""
+    failing = _outcomes(stage) - {PASS, OFF_CONTRACT}
+    return key if key and key in routes and key in failing else None
 
 
 def _replies(stage: dict[str, object]) -> list[str]:
@@ -385,13 +397,19 @@ def _check6(stages: list[dict[str, object]]) -> list[str]:
         )
         for outcome in sorted(outcomes - {PASS, OFF_CONTRACT} - set(routes)):
             out.append(f"check 6: stage {sid} exit outcome {outcome} has no route in on_fail")
+        unrouted = [reply for reply in replies if reply_route_key(stage, reply) is None]
         if PASS not in outcomes:
-            for reply in replies:
-                if reply not in routes:
-                    out.append(
-                        f"check 6: stage {sid} reply line {reply!r} has no route: no exit "
-                        "outcome passes and on_fail does not name it"
-                    )
+            for reply in unrouted:
+                out.append(
+                    f"check 6: stage {sid} reply line {reply!r} has no route: no exit "
+                    "outcome passes and on_fail does not name it"
+                )
+        elif len(unrouted) > 1:
+            # 0024: only one reply line may pass unrouted, so a rejecting line cannot pass.
+            out.append(
+                f"check 6: stage {sid} reply lines {unrouted} all pass with no route; route "
+                "every reply line but the one passing line in on_fail"
+            )
         for key in sorted(set(routes) - outcomes - set(replies)):
             out.append(
                 f"check 6: stage {sid} routes {key!r}, which is neither an exit outcome nor a "

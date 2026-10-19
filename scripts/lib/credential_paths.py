@@ -21,6 +21,12 @@ R_CREDENTIAL_TREE = (
     "{path} contains a credential path. "
     "Next: Daedalus never reads credentials; point the read at a directory without them"
 )
+# SC-12: the one name of the reply key file; lib.audit imports it.
+REPLY_KEY_NAME = "reply-hmac.key"
+R_REPLY_KEY = (
+    "{path} is the train's reply key. "
+    "Next: no agent reads the reply key; check-reply reads it for the train"
+)
 _GLOB_START = re.compile(r"[*?\[{]")
 _BRACE = re.compile(r"\{[^}]*\}")
 VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*|[0-9]+)[^}]*\}|\$([A-Za-z_][A-Za-z0-9_]*|[0-9])")
@@ -137,11 +143,23 @@ def credential_hit(target: str, roots: list[str], glob: bool, dotglob: bool = Tr
     return any(store_rest(target, root, glob, dotglob) == [] for root in roots)
 
 
+def reply_key_hit(target: str) -> bool:
+    # SC-12: the train's reply key, found by its real path, is unreadable to every agent.
+    real = Path(os.path.realpath(target))
+    return (
+        real.name == REPLY_KEY_NAME
+        and real.parent.name == "daedalus"
+        and real.parent.parent.name == ".claude"
+    )
+
+
 def path_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | None:
     # 0023: path-argument tools; the jail judges Bash commands with its own shell model.
     roots = credential_roots()
     for raw in _candidates(tool, tool_input, cwd):
         target = _expand_home(raw, cwd)
+        if target is not None and reply_key_hit(target):
+            return R_REPLY_KEY.format(path=target)
         if target is not None and credential_hit(target, roots, tool == "Glob"):
             return R_CREDENTIAL.format(path=target)
     if tool == "Grep":

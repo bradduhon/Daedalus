@@ -53,7 +53,6 @@ QUEUED, DISPATCHED, RETURNED, FAILED, SUPERSEDED = (
 )
 EXIT_OK, EXIT_STOP, EXIT_ROUTED, EXIT_ASK, EXIT_WAIT = 0, 1, 2, 3, 4
 _SCRIPT = re.compile(r"[a-z0-9_]+\.py")
-_STATUS_WORD = re.compile(r"\[[A-Z]+: ([A-Z_]+)\]")
 _SCRIPT_TIMEOUT_S = 900
 OUTPUT_QUESTION = (
     "output: this folder is not a git repository, so the train needs a folder for its outputs.",
@@ -64,6 +63,10 @@ OUTPUT_QUESTION = (
 
 
 class RunnerError(RuntimeError):
+    pass
+
+
+class NoTrainError(RunnerError):
     pass
 
 
@@ -190,6 +193,12 @@ def _fill(text: str, state: dict[str, object], unit: dict[str, object] | None) -
                 f"the placeholder {match.group(0)} has no recorded value. "
                 "Next: rerun the stage that records it, or stop the train."
             )
+        if value.startswith("-"):
+            # 0024: a value parsed from an agent reply never becomes a script option.
+            raise RunnerError(
+                f"the placeholder {match.group(0)} holds {value!r}, which reads as an option. "
+                "Next: stop the train and report the reply that recorded this value."
+            )
         return value
 
     return _PLACEHOLDER.sub(swap, text)
@@ -242,17 +251,6 @@ def _contract_line(text: str, accepted: list[str]) -> str | None:
     return None
 
 
-def _routed_key(stage: dict[str, object], line: str) -> str | None:
-    # 0024: a reply line routes by itself, or by its status word when the exit map names it.
-    routes = _obj(stage, "on_fail")
-    if line in routes:
-        return line
-    word = _STATUS_WORD.match(line)
-    outcomes = {v for v in _obj(_obj(stage, "proof"), "exit").values() if isinstance(v, str)}
-    key = word.group(1).lower() if word else ""
-    return key if key and key in routes and key in outcomes - {PASS, OFF_CONTRACT} else None
-
-
 @dataclass
 class Session:
     repo: Path
@@ -289,7 +287,7 @@ def _session(cwd: Path, plugin_root: Path) -> Session:
     repo = project_root(cwd.resolve())
     train_id = train_state.active_train(repo)
     if train_id is None:
-        raise RunnerError(
+        raise NoTrainError(
             f"no Daedalus train is active in {repo}. "
             "Next: start one with daedalus_train.py start and the train's name."
         )
@@ -762,12 +760,21 @@ def _check_reply(session: Session, sid: str) -> Outcome:
         paths = ", ".join(_text(d, "reply") for d in open_)
         return _mismatch(session, sid, agent, f"no reply was saved at {paths}")
     stops = _stops_for(records, agent, set(_seqs(session.state)))
-    for record in reversed(stops):
+    newest = stops[-1].get("seq") if stops else "none"
+    for position, record in reversed(list(enumerate(stops))):
         digest = record.get("last_message_hmac")
         for item, path, mac, text in saved:
-            if isinstance(digest, str) and hmac.compare_digest(digest, mac):
-                return _checked_in(session, index, stage, item, path, text, record)
-    newest = stops[-1].get("seq") if stops else "none"
+            if not (isinstance(digest, str) and hmac.compare_digest(digest, mac)):
+                continue
+            # 4.6: one open dispatch checks in only the agent's newest reply, never an older one.
+            if not stage.get("parallel") and position != len(stops) - 1:
+                why = f"a newer unread {agent} stop record, seq {newest}, follows the saved reply"
+                return _mismatch(session, sid, agent, why)
+            # 4.6: more unread replies than open dispatches means one was dispatched off-train.
+            if len(stops) > len(open_):
+                why = f"{len(stops)} unread {agent} stop records for {len(open_)} open dispatch(es)"
+                return _mismatch(session, sid, agent, why)
+            return _checked_in(session, index, stage, item, path, text, record)
     return _mismatch(session, sid, agent, f"newest unread {agent} stop record: seq {newest}")
 
 
@@ -799,7 +806,7 @@ def _checked_in(
         )
         _route(session, stage, f"the reply{who} ends with none of its contract lines", route)
         return Outcome(EXIT_STOP, session.lines)
-    key = _routed_key(stage, line)
+    key = train_definition.reply_route_key(stage, line)
     if key is not None:
         route = _text(_obj(stage, "on_fail"), key)
         keep = _CONSULT.fullmatch(route) is not None
@@ -960,6 +967,9 @@ def allowed_dispatch(state: dict[str, object]) -> tuple[set[str], str, str]:
 def state_lines(cwd: Path, plugin_root: Path = PLUGIN_ROOT) -> Outcome:
     try:
         session = _session(cwd, plugin_root)
+    except NoTrainError as exc:
+        # 4.1: state always exits 0; no train is an answer, not a stop.
+        return Outcome(EXIT_OK, [str(exc)])
     except RunnerError as exc:
         return Outcome(EXIT_STOP, [str(exc)])
     stages = session.stages

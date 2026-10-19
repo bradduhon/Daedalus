@@ -17,7 +17,9 @@ from lib.credential_paths import (
     CREDENTIAL_TOOLS,
     R_CREDENTIAL,
     R_CREDENTIAL_TREE,
+    R_REPLY_KEY,
     path_reason,
+    reply_key_hit,
 )
 from lib.credential_paths import CUT as _CUT
 from lib.credential_paths import LIT as _LIT
@@ -1249,6 +1251,8 @@ def _bash_credential_reason(command: str, cwd: str, roots: list[str]) -> str | N
                     (absolute if os.path.isabs(cand) else relative).append(cand)
     # spec 8: spelled-out paths first, so the message names the path the command wrote.
     for cand in absolute:
+        if reply_key_hit(os.path.normpath(cand)):
+            return R_REPLY_KEY.format(path=os.path.normpath(cand))
         if _credential_hit(os.path.normpath(cand), roots, True, dotglob):
             return R_CREDENTIAL.format(path=os.path.normpath(cand))
     if unresolved:
@@ -1256,6 +1260,8 @@ def _bash_credential_reason(command: str, cwd: str, roots: list[str]) -> str | N
     for cand in relative:
         for base in bases:
             target = os.path.normpath(os.path.join(base, cand))
+            if reply_key_hit(target):
+                return R_REPLY_KEY.format(path=target)
             if _credential_hit(target, roots, True, dotglob):
                 return R_CREDENTIAL.format(path=target)
     return _tree_reason(parsed, envs, bases, roots, command)

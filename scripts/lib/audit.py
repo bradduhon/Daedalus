@@ -17,6 +17,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from lib.credential_paths import REPLY_KEY_NAME
 from lib.locks import bounded_flock
 from lib.project_root import in_git_work_tree
 from lib.project_root import project_root as _project_root
@@ -204,7 +205,7 @@ def ensure_project_data_dir(cwd: str) -> Path:
     return data
 
 
-REPLY_KEY = "reply-hmac.key"
+REPLY_KEY = REPLY_KEY_NAME
 _KEY_BYTES = 32
 _KEY_NEXT = (
     "Next: delete .claude/daedalus/reply-hmac.key from your own shell; the next agent reply "

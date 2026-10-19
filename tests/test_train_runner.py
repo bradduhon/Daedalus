@@ -671,8 +671,70 @@ def test_cli_prints_lines_and_returns_the_exit(plain: Path, plugin: Path) -> Non
         text=True,
         check=False,
     )
-    assert result.returncode == 1
+    # 4.1: state exits 0 even with no train; step still stops with exit 1.
+    assert result.returncode == 0
     assert result.stdout.startswith(f"no Daedalus train is active in {plain}. Next: ")
+    assert train_runner.step(plain, plugin).code == 1
+
+
+def test_check_reply_refuses_an_older_reply_when_a_newer_one_waits(
+    repo: Path, plugin: Path
+) -> None:
+    # 4.6: a session cannot check in an earlier passing reply over the agent's newest one.
+    _write_train(plugin, [_code_stage()], ("repository",))
+    _started(repo, plugin)
+    (brief,) = _prompt(_step(repo, plugin))
+    _reply(repo, brief, COMPLETE)
+    _agent_stop(repo, "repo-coder", "Second thoughts.\n[STATUS: YIELD_CONTRACT] which field?")
+    outcome = _check(repo, plugin, "code")
+    assert outcome.code == 1, outcome.lines
+    assert "a newer unread repo-coder stop record" in outcome.lines[0]
+    assert _state(repo)["halted"]
+
+
+def test_check_reply_refuses_more_replies_than_open_dispatches(repo: Path, plugin: Path) -> None:
+    # 4.6: an extra reply of the stage's agent means one ran outside the train; the train halts.
+    _write_train(plugin, [_code_stage(per_unit=True)], ("repository",))
+    _started(repo, plugin)
+    _units(repo, ["u1", "u2"])
+    briefs = _prompt(_step(repo, plugin))
+    assert len(briefs) == 2
+    _agent_stop(repo, "repo-coder", "A stray coder.\n[STATUS: COMPLETE] branch=x")
+    _reply(repo, briefs[0], COMPLETE, agent_id="coder-1")
+    _agent_stop(repo, "repo-coder", COMPLETE + " u2", agent_id="coder-2")
+    outcome = _check(repo, plugin, "code")
+    assert outcome.code == 1, outcome.lines
+    assert "3 unread repo-coder stop records for 2 open dispatch(es)" in outcome.lines[0]
+
+
+def test_reply_value_that_reads_as_an_option_is_refused(repo: Path, plugin: Path) -> None:
+    # 0024: a value parsed from a reply never reaches a script's argv as an option.
+    stages = [
+        _code_stage(),
+        _probe_stage()
+        | {
+            "id": "after",
+            "proof": {
+                "script": "probe.py 0 {packet_version}",
+                "exit": {"0": "pass", "1": "stopped"},
+                "records": [],
+            },
+        },
+    ]
+    _write_train(plugin, stages, ("repository",))
+    _started(repo, plugin)
+    (brief,) = _prompt(_step(repo, plugin))
+    _reply(repo, brief, "Done.\n[STATUS: COMPLETE] packet_version=--repo=/elsewhere")
+    assert _check(repo, plugin, "code").code == 0
+    assert _state(repo)["records"] == {
+        "reply_file": str(train_runner.reply_path(brief)),
+        "packet_version": "--repo=/elsewhere",
+    }
+    refused = _step(repo, plugin)
+    assert refused.code == 1
+    assert "holds '--repo=/elsewhere', which reads as an option. Next:" in refused.lines[-1]
+    log = _state(repo)["stage_log"]
+    assert isinstance(log, list) and not [e for e in log if e.get("stage") == "after"]
 
 
 def test_definition_changed_mid_train_stops(repo: Path, plugin: Path) -> None:
