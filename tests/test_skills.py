@@ -382,6 +382,34 @@ def test_push_train_ends_with_the_operator_checklist() -> None:
     assert "5. Run `/daedalus:audit-report <session>`" in hand_off
 
 
+RELEASE_CMD = (
+    "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py release --repo <repo> "
+    "--merge-sha <merge sha>`"
+)
+
+
+def test_push_skill_hand_off_names_the_release_step() -> None:
+    # 0068, 0071, 0075: the hand-off names the release step; the main session alone publishes.
+    hand_off = _push_train().split("## Hand-off", 1)[1]
+    assert RELEASE_CMD in hand_off
+    assert "after the operator reports the merge" in hand_off
+    assert "`Version class: <version> <X, Y or Z>: <one-line reason>`" in hand_off
+    assert "`Migration: <what an operator edits>`" in hand_off
+    assert "`release: skipped`" in hand_off
+    assert "It runs none of them." in hand_off
+    # 0093: the main session runs them only in the plugin's own repository; 0089 elsewhere.
+    assert (
+        "When `<repo>` is the Daedalus plugin repository itself, show them to the operator, "
+        "then run them in the printed order yourself. In any other project, show them to the "
+        "operator to run from their own shell, and run none of them yourself."
+    ) in hand_off
+    assert (
+        "you run the three commands the release step prints only when `<repo>` is the Daedalus "
+        "plugin repository itself; in any other project you show them to the operator to run "
+        "from their own shell (0068, 0093)."
+    ) in _push_train().split("## Preconditions", 1)[0]
+
+
 def test_build_train_names_the_push_train_in_present_tense() -> None:
     text = _build_train()
     assert "/daedalus:push-train" in text

@@ -20,6 +20,7 @@ ALLOWLIST = frozenset(
         ".gitignore",
         "LICENSE",
         "README.md",
+        "VERSION",
         "agents/",
         "hooks/",
         "packs/",
