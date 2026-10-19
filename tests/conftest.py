@@ -28,6 +28,8 @@ CFG = Config(
 )
 WT = f"{CWD}/.claude/worktrees/20261015-120000-u1"
 FAKE_UNITS = frozenset({f"{CWD}/.claude/worktrees/u1", WT})
+# issue 11: the integration branch of the train CWD stands in for.
+TRAIN_BRANCH = "daedalus/20261015-120000"
 
 
 @pytest.fixture
@@ -57,6 +59,13 @@ def jail_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
         return cwd.startswith(CWD) or real_scoped(cwd, tool, tool_input)
 
     monkeypatch.setattr(jail, "_train_scoped", scoped)
+    # issue 11: CWD has no marker; real repos read the branch from their own marker.
+    real_branch = jail._train_branch
+
+    def branch(cwd: str) -> str | None:
+        return TRAIN_BRANCH if cwd.startswith(CWD) else real_branch(cwd)
+
+    monkeypatch.setattr(jail, "_train_branch", branch)
     # 0044: hook scripts read the project config through this one name.
     monkeypatch.setattr(hook_io, "hook_config", lambda cwd: CFG)
 

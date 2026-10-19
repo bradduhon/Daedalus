@@ -34,7 +34,11 @@ No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already retu
 2. `gitleaks detect --redact --log-opts="<base>..<branch>"`; the hook refuses it without `--redact`. Any finding or a missing binary: stop.
 3. `git push -u origin <branch>`; the jail enforces this exact grammar: only `-u` or
    `--set-upstream` plus `origin <branch>`, no refspecs, no other flags, and never a push to
-   `main` or `master`.
+   `main` or `master`. `<branch>` is this train's `daedalus/<train-id>`, never `HEAD` (issue 11).
+   When charter_root is declared, the session may also hand you
+   `git -C <charter_root> push -u origin daedalus/<train-id>` and one
+   `gh pr create --repo <charter slug> --head daedalus/<train-id>`; no other command takes
+   `-C <charter_root>` or `--repo` (0078).
 4. `gh pr create` (or `gh pr edit`) with the Build Train summary as the body: pass the summary
    file path given in your prompt with `--body-file`; it must be under `docs/.tmp/` or `/tmp`.
    The hook refuses `gh pr create` and `gh pr edit` without `--body-file`

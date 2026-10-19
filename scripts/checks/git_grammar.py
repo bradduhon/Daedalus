@@ -43,14 +43,18 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     if grant is None:
         return R_NO_GIT
     charter: str | None = None
-    if grant in {"docs", "specialist", "read-only"}:
-        config = hook_io.hook_config(cwd)
-        charter = str(config.charter_root) if config.charter_root else None
+    if grant in {"docs", "specialist", "read-only", "conductor"}:
+        charter = hook_io.hook_charter(cwd)
     grammar = jail._DOCS_GRAMMAR if grant == "docs" else None
     for segment in git_segments:
-        if grant == "conductor" and shell._git_subcommand(segment) == "push":
-            continue  # 0001: git_push judges the conductor's push.
-        if not jail._git_grammar_ok(segment, shell.GIT_SETS[grant], cwd, charter, grammar):
+        if grant == "conductor":
+            if shell._git_subcommand(segment) == "push":
+                continue  # 0001: git_push judges the conductor's push.
+            # 0078: no other conductor git reaches the charter root, nested or not.
+            if jail._reaches_charter(segment, cwd, charter):
+                return jail.R_CONDUCTOR_CHARTER
+        granted = None if grant == "conductor" else charter
+        if not jail._git_grammar_ok(segment, shell.GIT_SETS[grant], cwd, granted, grammar):
             return _TEXTS[grant]
     return None
 

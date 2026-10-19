@@ -219,7 +219,8 @@ def test_git_push_only_for_the_conductor(train_repo: Path) -> None:
             assert reason.endswith(
                 "Next: push from your own shell, or through /daedalus:push-train."
             )
-    ok = decide(_bash(train_repo, "pr-train-conductor", "git push origin feat/x"), Config())
+    push = "git push origin daedalus/20261016-120000"
+    ok = decide(_bash(train_repo, "pr-train-conductor", push), Config())
     assert ok.allow, ok.reason
     gated = decide(_bash(train_repo, "pr-train-conductor", "git push origin feat/x y"), Config())
     assert not gated.allow and "0028" not in str(gated.reason)

@@ -105,6 +105,12 @@ def hook_config(cwd: str) -> Config:
     return load_config(cwd)
 
 
+def hook_charter(cwd: str) -> str | None:
+    # 0044, 0078: the declared charter_root as the checks compare it, or None.
+    config = hook_config(cwd)
+    return str(config.charter_root) if config.charter_root else None
+
+
 def _value_error(option: str, flag: Flag, value: str) -> str | None:
     items = value.split(",") if flag.many else [value]
     for item in items:

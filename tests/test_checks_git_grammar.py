@@ -3,11 +3,15 @@
 # 0044: the git_grammar hook; cases copied from tests/test_jail.py run each agent's chain.
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
 import pytest
 from lib import jail
+from lib.config import Config
 from lib.shell import CONDUCTOR_GIT
 
-from tests.conftest import CFG, CWD, WT
+from tests.conftest import CFG, CWD, TRAIN_BRANCH, WT
 from tests.hook_chain import (
     decide,
     evaluate,
@@ -333,3 +337,167 @@ def test_git_grammar_malformed_input_denies() -> None:
 
 def test_git_grammar_internal_error_denies_and_names_the_hook() -> None:
     internal_error_denies(HOOK, payload("Bash", command="git status"), "--allow", "coder")
+
+
+C = "pr-train-conductor"
+SLUG = "acme/charter"
+CHARTER_BODY = f"--body-file {CWD}/docs/.tmp/daedalus/20261015-120000-charter-pr.md"
+
+
+def _charter(tmp_path: Path, url: str = f"https://github.com/{SLUG}.git") -> Path:
+    charter = tmp_path / "Charter"
+    subprocess.run(["git", "init", "-q", str(charter)], check=True)
+    subprocess.run(["git", "-C", str(charter), "remote", "add", "origin", url], check=True)
+    return charter
+
+
+def _pr_create(repo: str, head: str = TRAIN_BRANCH) -> str:
+    return f"gh pr create {repo} --base main --head {head} --title t {CHARTER_BODY}"
+
+
+@pytest.mark.parametrize("command", ["git push origin HEAD", "git push -u origin HEAD"])
+def test_push_refuses_head_as_the_refspec(command: str) -> None:
+    # issue 11: HEAD is refused by name, whatever it resolves to.
+    d = decide(_b(C, command), CFG)
+    assert not d.allow and d.reason == jail.R_CONDUCTOR_PUSH_HEAD, command
+    assert "Next:" in d.reason
+    assert decide(_b(C, "git push origin head"), CFG).reason == jail.R_CONDUCTOR_PUSH_HEAD
+
+
+@pytest.mark.parametrize(
+    "branch", ["feat/x", "daedalus/20261015-120001", "daedalus/20261015-120000/x", "DAEDALUS/x"]
+)
+def test_push_refuses_a_refspec_other_than_the_train_branch(branch: str) -> None:
+    # issue 11: the one branch the conductor pushes is the active train's integration branch.
+    d = decide(_b(C, f"git push -u origin {branch}"), CFG)
+    assert not d.allow and d.reason == jail.R_CONDUCTOR_PUSH_BRANCH.format(branch=TRAIN_BRANCH)
+    assert f"Next: `git push -u origin {TRAIN_BRANCH}`." in d.reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"git push -u origin {TRAIN_BRANCH}",
+        f"git push --set-upstream origin {TRAIN_BRANCH}",
+        f"git push origin {TRAIN_BRANCH}",
+    ],
+)
+def test_push_admits_the_train_branch(command: str) -> None:
+    d = decide(_b(C, command), CFG)
+    assert d.allow, d.reason
+
+
+def test_push_reads_the_branch_from_the_train_marker(repo_cwd: Path, project_data: Path) -> None:
+    # issue 11: the active train is the id on the first line of the train marker.
+    def push(branch: str) -> jail.Decision:
+        return decide({**_b(C, f"git push -u origin {branch}"), "cwd": str(repo_cwd)}, Config())
+
+    assert push(TRAIN_BRANCH).reason == jail.R_CONDUCTOR_NO_TRAIN
+    (project_data / "train.active").write_text("20261016-120000\n", encoding="utf-8")
+    assert push("daedalus/20261016-120000").allow
+    refused = push(TRAIN_BRANCH)
+    assert refused.reason == jail.R_CONDUCTOR_PUSH_BRANCH.format(branch="daedalus/20261016-120000")
+
+
+@pytest.mark.parametrize("flag", ["-u", "--set-upstream"])
+def test_conductor_pushes_the_charter_branch_when_a_charter_root_is_declared(
+    tmp_path: Path, flag: str
+) -> None:
+    # 0078: the charter root's train branch, pushed after the code pull request.
+    charter = _charter(tmp_path)
+    d = decide(_b(C, f"git -C {charter} push {flag} origin {TRAIN_BRANCH}"), Config(charter))
+    assert d.allow, d.reason
+
+
+def test_conductor_charter_push_refused_without_a_declared_charter_root(tmp_path: Path) -> None:
+    # 0078: without charter_root in config.json neither charter form runs.
+    charter = _charter(tmp_path)
+    push = decide(_b(C, f"git -C {charter} push -u origin {TRAIN_BRANCH}"), Config())
+    assert not push.allow and push.reason == jail.R_CONDUCTOR_CHARTER
+    assert "Next:" in push.reason
+    pr = decide(_b(C, _pr_create(f"--repo {SLUG}")), Config())
+    assert not pr.allow and pr.reason == jail.R_CONDUCTOR_REPO
+
+
+def test_conductor_grammar_admits_dash_c_only_for_the_charter_root(tmp_path: Path) -> None:
+    # 0078: -C names the declared charter root exactly, and only on the train branch push.
+    charter = _charter(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    cfg = Config(charter)
+    for command in (
+        f"git -C {other} push -u origin {TRAIN_BRANCH}",
+        f"git -C {charter}/sub push -u origin {TRAIN_BRANCH}",
+        f"git -C {charter} -C . push -u origin {TRAIN_BRANCH}",
+        f"git --no-pager -C {charter} push -u origin {TRAIN_BRANCH}",
+        f"git -C {CWD} push -u origin {TRAIN_BRANCH}",
+    ):
+        d = decide(_b(C, command), cfg)
+        assert not d.allow and d.reason == jail.R_CONDUCTOR_CHARTER, command
+    head = decide(_b(C, f"git -C {charter} push -u origin HEAD"), cfg)
+    assert head.reason == jail.R_CONDUCTOR_PUSH_HEAD
+    foreign = decide(_b(C, f"git -C {charter} push -u origin feat/x"), cfg)
+    assert foreign.reason == jail.R_CONDUCTOR_PUSH_BRANCH.format(branch=TRAIN_BRANCH)
+    for sub in ("status", "log", "diff", "branch", "add x", "commit -m x", "rev-parse HEAD"):
+        assert not decide(_b(C, f"git -C {charter} {sub}"), cfg).allow, sub
+    # 0078: a charter nested in the repo is still out of reach for every other subcommand.
+    nested = Config(Path(f"{CWD}/docs/private"))
+    for sub in ("status", "log", "add x", "commit -m x"):
+        d = decide(_b(C, f"git -C {CWD}/docs/private {sub}"), nested)
+        assert not d.allow and d.reason == jail.R_CONDUCTOR_CHARTER, sub
+    assert decide(_b(C, f"git -C {CWD}/docs status"), nested).allow
+    assert decide(_b(C, f"git -C {CWD}/docs/private push -u origin {TRAIN_BRANCH}"), nested).allow
+
+
+def test_conductor_charter_pr_create_targets_only_the_charter_remote(tmp_path: Path) -> None:
+    # 0078: --repo is admitted on gh pr create only, naming the charter root's origin.
+    cfg = Config(_charter(tmp_path))
+    for repo in (f"--repo {SLUG}", f"-R {SLUG}", f"--repo={SLUG}"):
+        d = decide(_b(C, _pr_create(repo)), cfg)
+        assert d.allow, (repo, d.reason)
+    assert decide(_b(C, _pr_create(f"--repo {SLUG}").replace("--head", "-H")), cfg).allow
+    for command in (
+        _pr_create("--repo acme/other"),
+        _pr_create(f"--repo {SLUG.upper()}"),
+        _pr_create(f"-R{SLUG}"),
+        _pr_create(f"--repo {SLUG} -R acme/other"),
+        _pr_create(f"--repo {SLUG} -dR acme/other"),
+        _pr_create(f"--repo {SLUG}", head="feat/x"),
+        _pr_create(f"--repo {SLUG}", head="HEAD"),
+        _pr_create(f"--repo {SLUG}", head=f"{TRAIN_BRANCH} --head feat/x"),
+        f"gh pr create --repo {SLUG} --base main --title t {CHARTER_BODY}",
+        f"gh pr edit {TRAIN_BRANCH} --repo {SLUG} {CHARTER_BODY}",
+        f"gh pr comment 3 --repo {SLUG} {CHARTER_BODY}",
+        f"gh pr create -dR {SLUG} --base main --head feat/x --title t {CHARTER_BODY}",
+    ):
+        d = decide(_b(C, command), cfg)
+        assert not d.allow and "Next:" in str(d.reason), command
+        if " pr create " in command:
+            assert d.reason == jail.R_CONDUCTOR_REPO, command
+    assert decide(_b(C, _pr_create("")), cfg).allow
+
+
+@pytest.mark.parametrize(
+    ("url", "slug"),
+    [
+        ("https://github.com/acme/charter.git", "acme/charter"),
+        ("https://github.com/acme/charter", "acme/charter"),
+        ("https://x-access-token:secret@github.com/acme/charter.git", "acme/charter"),
+        ("git@github.com:acme/charter.git", "acme/charter"),
+        ("ssh://git@github.com/acme/charter.git", "acme/charter"),
+        ("https://ghe.example.com/acme/charter.git", "ghe.example.com/acme/charter"),
+        ("/srv/git/charter.git", None),
+        ("https://github.com/acme/charter/extra", None),
+    ],
+)
+def test_charter_remote_slug_forms(url: str, slug: str | None) -> None:
+    # 0078: the slug gh --repo must equal, derived from the charter root's origin URL.
+    assert jail._remote_slug(url) == slug
+
+
+def test_charter_pr_create_refusal_never_prints_the_remote(tmp_path: Path) -> None:
+    url = f"https://x-access-token:secret@github.com/{SLUG}.git"
+    cfg = Config(_charter(tmp_path, url))
+    assert decide(_b(C, _pr_create(f"--repo {SLUG}")), cfg).allow
+    d = decide(_b(C, _pr_create("--repo acme/other")), cfg)
+    assert "secret" not in str(d.reason) and "github.com" not in str(d.reason)

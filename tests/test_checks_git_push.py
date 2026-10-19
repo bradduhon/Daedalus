@@ -3,10 +3,12 @@
 # 0044: the git_push hook; cases copied from tests/test_jail.py run each agent's chain.
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from lib import jail
 
-from tests.conftest import CFG
+from tests.conftest import CFG, TRAIN_BRANCH, write_train_marker
 from tests.hook_chain import (
     decide,
     evaluate,
@@ -33,9 +35,9 @@ class TestRound3ConductorPushGrammar:
     @pytest.mark.parametrize(
         "command",
         [
-            "git push -u origin feat/x",
-            "git push --set-upstream origin feat/x",
-            "git push origin a.b_c",
+            f"git push -u origin {TRAIN_BRANCH}",
+            f"git push --set-upstream origin {TRAIN_BRANCH}",
+            f"git push origin {TRAIN_BRANCH}",
         ],
     )
     def test_allowed(self, command: str) -> None:
@@ -90,13 +92,15 @@ def test_git_push_judges_the_hook_alone() -> None:
     assert evaluate(HOOK, _b("repo-coder", "git fetch")) == jail.R_REMOTE_GIT
     assert evaluate(HOOK, _b("repo-coder", "git stash push -m x")) is None
     assert evaluate(HOOK, _b("repo-coder", "find . -exec git push {} +")) == jail.R_REMOTE_GIT
-    assert evaluate(HOOK, _b(C, "git push origin feat/x"), "--conductor") is None
+    assert evaluate(HOOK, _b(C, f"git push origin {TRAIN_BRANCH}"), "--conductor") is None
     assert evaluate(HOOK, _b(C, "git push origin x y"), "--conductor") == jail.R_CONDUCTOR_PUSH
     assert evaluate(HOOK, _b(C, "git push origin feat/x")) == jail.R_REMOTE_GIT
 
 
-def test_git_push_fixture_decisions() -> None:
-    push = payload("Bash", command="git push origin feat/x")
+def test_git_push_fixture_decisions(tmp_path: Path) -> None:
+    # issue 11: the standalone script reads the branch from a real train marker.
+    write_train_marker(tmp_path)
+    push = payload("Bash", str(tmp_path), command="git push origin daedalus/20261017-120000")
     assert run_script(HOOK, push) == {"decision": "deny", "reason": jail.R_REMOTE_GIT}
     assert run_script(HOOK, push, "--conductor") == {"decision": "allow", "reason": ""}
     extra = payload("Bash", command="git push origin feat/x extra")
