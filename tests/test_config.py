@@ -18,6 +18,17 @@ def test_missing_file_gives_empty_config(project_data: Path) -> None:
     assert cfg.ledger is None and cfg.standards_sources == ()
 
 
+def test_config_null_means_not_declared(project_data: Path) -> None:
+    # 0076: null is the same as an absent key, so the setup starter loads as the defaults.
+    nulls = {"charter_root": None, "ledger": None, "policy": None}
+    (project_data / "config.json").write_text(json.dumps(nulls))
+    assert load_config(str(project_data.parents[1])) == Config()
+    for key in nulls:
+        (project_data / "config.json").write_text(json.dumps({key: ""}))
+        with pytest.raises(ConfigError):
+            load_config(str(project_data.parents[1]))
+
+
 def test_full_config_parses(project_data: Path) -> None:
     (project_data / "config.json").write_text(
         json.dumps(

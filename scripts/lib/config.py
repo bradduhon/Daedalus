@@ -186,11 +186,12 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
             f"{target} must contain a JSON object. "
             "Next: make the file one JSON object, as docs/project-requirements.md shows."
         )
-    charter = _require_str(raw, "charter_root", "") if "charter_root" in raw else None
+    # 0076: null is not declared, the same as an absent key; the setup starter writes null.
+    charter = _require_str(raw, "charter_root", "") if raw.get("charter_root") is not None else None
     return Config(
         charter_root=Path(charter) if charter is not None else None,
-        ledger=_ledger(raw["ledger"]) if "ledger" in raw else None,
-        policy=_policy(raw["policy"]) if "policy" in raw else None,
+        ledger=_ledger(raw["ledger"]) if raw.get("ledger") is not None else None,
+        policy=_policy(raw["policy"]) if raw.get("policy") is not None else None,
         standards_sources=_sources(raw.get("standards_sources")),
         operator_signing_keys=_signing_keys(raw),
         max_concurrent_builders=_max_builders(raw),

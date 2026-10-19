@@ -9,7 +9,8 @@ import sys
 from pathlib import Path
 
 from lib.config import Config, load_config
-from lib.manifest import FEATURE_KEYS
+from lib.ledger import resolve_ledger
+from lib.manifest import FEATURE_KEYS, Features, Manifest
 from lib.manifest import load as load_manifest
 from lib.project_keys import config_keys, manifest_keys
 
@@ -87,6 +88,14 @@ def test_setup_starter_files_carry_every_reader_key_at_its_default(repo_cwd: Pat
     assert loaded.forbidden_paths == () and loaded.forbidden_extensions == ()
     assert loaded.trains_dir is None and loaded.unit_test_cmd is None
     assert c_doc["max_concurrent_builders"] == 5
+
+
+def test_setup_starter_files_load_through_the_readers_at_their_defaults(repo_cwd: Path) -> None:
+    # 0076: the jail loads the config on every hook; a starter it refused would deny every call.
+    assert _setup(repo_cwd).returncode == 0
+    assert load_config(cwd=str(repo_cwd)) == Config()
+    assert load_manifest(repo_cwd) == Manifest(features=Features(ledger=False))
+    assert resolve_ledger(str(repo_cwd), Config()) is None
 
 
 def test_setup_starter_manifest_has_every_feature_off(repo_cwd: Path) -> None:
