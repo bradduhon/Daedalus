@@ -134,6 +134,31 @@ def test_grep_tool_on_the_data_folder_is_refused(tmp_path: Path) -> None:
     assert decide(read, CFG).allow
 
 
+@pytest.mark.parametrize("glob", ["**/reply-hmac.key", "*.key", ".claude/**", "*.{key,md}"])
+def test_grep_glob_that_overrides_the_marker_is_refused(tmp_path: Path, glob: str) -> None:
+    # SC-12: a Grep glob overrides the data folder's ignore marker, so one naming the key refuses.
+    repo = _key_repo(tmp_path)
+    for path in (None, str(repo)):
+        tool_input = {"pattern": ".", "glob": glob} | ({"path": path} if path else {})
+        case = {"tool_name": "Grep", "tool_input": tool_input, "cwd": str(repo)}
+        d = decide({**case, "agent_type": "security-auditor"}, CFG)
+        assert not d.allow and "contains the train's reply key. Next:" in str(d.reason), glob
+
+
+def test_grep_glob_beside_the_reply_key_is_allowed(tmp_path: Path) -> None:
+    repo = _key_repo(tmp_path)
+    case = {"tool_name": "Grep", "tool_input": {"pattern": ".", "glob": "*.py"}}
+    assert evaluate(HOOK, {**case, "cwd": str(repo), "agent_type": "security-auditor"}) is None
+
+
+def test_double_star_into_a_credential_store_refuses_without_dotglob(cred_home: Path) -> None:
+    # spec 8: ** over a home store refuses before the dot check; only the reply key relaxes it.
+    for command in (f"cat {cred_home}/**/credentials", "cat ~/**/id_ed25519"):
+        case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
+        reason = evaluate(HOOK, {**case, "agent_type": "security-auditor"})
+        assert reason is not None and "is a credential path" in reason, command
+
+
 @pytest.mark.parametrize(
     "hook_input",
     [

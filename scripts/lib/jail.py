@@ -1196,8 +1196,11 @@ def _tree_reason(
     bases: list[str],
     roots: list[str],
     command: str,
+    keys: tuple[str, ...] = (),
 ) -> str | None:
     dotglob = "dotglob" in command or "GLOBIGNORE" in command
+    # SC-12: reply key roots let a dot folder hide them from **; credential stores do not.
+    pairs = [(root, False) for root in roots] + [(key, True) for key in keys]
     for k, (words, (name, at, paths)) in enumerate(parsed):
         if at < 0:
             continue
@@ -1211,15 +1214,17 @@ def _tree_reason(
             for text, _ in _expand_word(words[i], envs[k]):
                 targets += [t for t in (_anchor(text, b) for b in bases or [""]) if t]
         for target in targets:
-            for root in roots:
-                rest = _store_rest(target, root, True, dotglob)
+            for root, dots_hide in pairs:
+                rest = _store_rest(target, root, True, dotglob, dots_hide)
                 # spec 8: rg skips hidden dirs by default, so a hidden component shields a store.
                 if rest is not None and (hidden or not any(p.startswith(".") for p in rest)):
                     return R_CREDENTIAL_TREE.format(path=target)
     return None
 
 
-def _bash_credential_reason(command: str, cwd: str, roots: list[str]) -> str | None:
+def _bash_credential_reason(
+    command: str, cwd: str, roots: list[str], keys: tuple[str, ...] = ()
+) -> str | None:
     segments = _shell_words(command)
     envs = _bash_env(segments)
     dotglob = "dotglob" in command or "GLOBIGNORE" in command
@@ -1250,29 +1255,35 @@ def _bash_credential_reason(command: str, cwd: str, roots: list[str]) -> str | N
                 parts = [_tilde(p, env["HOME"][0]) for p in _CREDENTIAL_PART.split(text)[1:] if p]
                 for cand in [text, *parts]:
                     (absolute if os.path.isabs(cand) else relative).append(cand)
+
+    def hit(target: str) -> str | None:
+        if reply_key_hit(target) or _credential_hit(target, list(keys), True, dotglob, True):
+            return R_REPLY_KEY.format(path=target)
+        if _credential_hit(target, roots, True, dotglob):
+            return R_CREDENTIAL.format(path=target)
+        return None
+
     # spec 8: spelled-out paths first, so the message names the path the command wrote.
     for cand in absolute:
-        if reply_key_hit(os.path.normpath(cand)):
-            return R_REPLY_KEY.format(path=os.path.normpath(cand))
-        if _credential_hit(os.path.normpath(cand), roots, True, dotglob):
-            return R_CREDENTIAL.format(path=os.path.normpath(cand))
+        reason = hit(os.path.normpath(cand))
+        if reason:
+            return reason
     if unresolved:
         return R_CREDENTIAL_PARAM.format(path=unresolved)
     for cand in relative:
         for base in bases:
-            target = os.path.normpath(os.path.join(base, cand))
-            if reply_key_hit(target):
-                return R_REPLY_KEY.format(path=target)
-            if _credential_hit(target, roots, True, dotglob):
-                return R_CREDENTIAL.format(path=target)
-    return _tree_reason(parsed, envs, bases, roots, command)
+            reason = hit(os.path.normpath(os.path.join(base, cand)))
+            if reason:
+                return reason
+    return _tree_reason(parsed, envs, bases, roots, command, keys)
 
 
 def _credential_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | None:
     if tool == "Bash":
         command = str(tool_input.get("command") or "")
-        # SC-12: the reply key joins the store roots, so globs and folder reads of it refuse.
-        return _bash_credential_reason(command, cwd, _credential_roots() + key_roots(cwd))
+        # SC-12: the reply key joins as its own roots, so globs and folder reads of it refuse.
+        keys = tuple(key_roots(cwd))
+        return _bash_credential_reason(command, cwd, _credential_roots(), keys)
     if tool not in CREDENTIAL_TOOLS and tool not in WRITE_TOOLS:
         return None
     return path_reason(tool, tool_input, cwd)

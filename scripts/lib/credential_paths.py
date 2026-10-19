@@ -107,16 +107,22 @@ def _candidates(tool: str, tool_input: dict[str, object], cwd: str) -> list[str]
     return [v for v in values if v]
 
 
-def _glob_rest(parts: list[str], root: list[str], dotglob: bool) -> list[str] | None:
+def _glob_rest(
+    parts: list[str], root: list[str], dotglob: bool, dots_hide: bool = False
+) -> list[str] | None:
     for i, name in enumerate(root):
         if i >= len(parts):
             return root[i:]
         pat = _BRACE.sub("*", parts[i])
-        # spec 8: a shell wildcard skips a leading dot unless dotglob is set; ** included.
-        if not dotglob and name.startswith(".") and not pat.startswith("."):
+        hidden = not dotglob and name.startswith(".") and not pat.startswith(".")
+        # SC-12: for the reply key a dot folder stops ** too; a credential store stays strict.
+        if dots_hide and hidden:
             return None
         if "**" in pat:
             return []
+        # spec 8: a shell wildcard skips a leading dot unless dotglob is set.
+        if hidden:
+            return None
         if not fnmatch.fnmatchcase(name, pat):
             return None
     return []
@@ -128,7 +134,9 @@ def _contains(parent: str, child: str) -> bool:
     return real_child == real_parent or real_child.startswith(real_parent.rstrip(os.sep) + os.sep)
 
 
-def store_rest(target: str, root: str, glob: bool, dotglob: bool) -> list[str] | None:
+def store_rest(
+    target: str, root: str, glob: bool, dotglob: bool, dots_hide: bool = False
+) -> list[str] | None:
     # spec 8: [] means target is in the store; a list is the store's components below target.
     if glob and _GLOB_START.search(target):
         parts = os.path.normpath(target).split(os.sep)
@@ -137,7 +145,8 @@ def store_rest(target: str, root: str, glob: bool, dotglob: bool) -> list[str] |
         if _contains(root, base):
             return []
         pattern = [p for p in base.split(os.sep) if p] + parts[first:]
-        return _glob_rest(pattern, [p for p in root.split(os.sep) if p], dotglob)
+        root_parts = [p for p in root.split(os.sep) if p]
+        return _glob_rest(pattern, root_parts, dotglob, dots_hide)
     real = os.path.realpath(target)
     if _contains(root, real):
         return []
@@ -146,8 +155,10 @@ def store_rest(target: str, root: str, glob: bool, dotglob: bool) -> list[str] |
     return None
 
 
-def credential_hit(target: str, roots: list[str], glob: bool, dotglob: bool = True) -> bool:
-    return any(store_rest(target, root, glob, dotglob) == [] for root in roots)
+def credential_hit(
+    target: str, roots: list[str], glob: bool, dotglob: bool = True, dots_hide: bool = False
+) -> bool:
+    return any(store_rest(target, root, glob, dotglob, dots_hide) == [] for root in roots)
 
 
 def reply_key_hit(target: str) -> bool:
@@ -166,11 +177,19 @@ def key_roots(*paths: str) -> list[str]:
     return sorted(os.path.realpath(k) for k in keys if k.is_absolute() and os.path.lexists(k))
 
 
-def _grep_key_reason(target: str, keys: list[str]) -> str | None:
+def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
     # SC-12: the Grep tool honors the data folder's `*` marker from above, so only a search
-    # rooted inside .claude can read the key; that search is refused.
+    # rooted inside .claude, or a glob that overrides the marker, can read the key.
+    pat = _BRACE.sub("*", glob) if isinstance(glob, str) and glob else ""
     for key in keys:
         if _contains(os.path.dirname(os.path.dirname(key)), target):
+            return R_REPLY_KEY_TREE.format(path=target)
+        if not pat:
+            continue
+        names = [os.path.basename(key)]
+        if _contains(target, key):
+            names.append(os.path.relpath(key, os.path.realpath(target)))
+        if any(fnmatch.fnmatchcase(name, pat) for name in names):
             return R_REPLY_KEY_TREE.format(path=target)
     return None
 
@@ -193,5 +212,5 @@ def path_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | Non
         if target and any(store_rest(target, root, False, True) is not None for root in roots):
             return R_CREDENTIAL_TREE.format(path=target)
         if target:
-            return _grep_key_reason(target, key_roots(cwd, target))
+            return _grep_key_reason(target, key_roots(cwd, target), tool_input.get("glob"))
     return None
