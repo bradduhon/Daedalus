@@ -14,6 +14,7 @@ from tests.conftest import CFG, CWD, REPO_ROOT
 from tests.hook_chain import (
     decide,
     evaluate,
+    first_deny,
     internal_error_denies,
     malformed_input_denies,
     outside_tools_allow,
@@ -455,7 +456,7 @@ def test_charter_docs_relative_path_resolves_against_the_project_root(tmp_path: 
         ("sed -ni 1p docs/a.md", False),
         ("sed -n --in-place 1p docs/a.md", False),
         ("sed -n 1w/tmp/x docs/a.md", False),
-        ("sed -n 1p;w/tmp/x docs/a.md", False),
+        ("sed -n '1p;w/tmp/x' docs/a.md", False),
         ("sed -n 1e docs/a.md", False),
         ("sed -n s/a/b/w docs/a.md", False),
         ("python3 /abs/scripts/other.py", False),
@@ -463,6 +464,17 @@ def test_charter_docs_relative_path_resolves_against_the_project_root(tmp_path: 
 )
 def test_charter_docs_writes_are_unchanged(command: str, allow: bool) -> None:
     assert decide(_b("charter-docs", command), CFG).allow is allow, command
+
+
+def test_charter_docs_quoted_sed_write_is_refused_by_the_script_grammar() -> None:
+    # 0084: one quoted segment, so the p-only sed grammar refuses it, not segment splitting.
+    flags = ("--allow", "append_ledger,git,read")
+    assert first_deny(_b("charter-docs", "sed -n '1p;w/tmp/x' docs/a.md"), CFG) == (
+        HOOK,
+        jail.R_DOCS_BASH,
+    )
+    assert "sed -n" in jail.R_DOCS_BASH
+    assert evaluate(HOOK, _b("charter-docs", "sed -n '1p;2p' docs/a.md"), *flags) is None
 
 
 @pytest.mark.parametrize(
