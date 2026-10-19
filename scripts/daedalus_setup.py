@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.audit import DataDirError, check_project_data_dir, ensure_project_data_dir  # noqa: E402
 from lib.manifest import MANIFEST_NAME  # noqa: E402
 from lib.project_keys import starter_config, starter_manifest  # noqa: E402
-from lib.project_root import project_root  # noqa: E402
+from lib.project_root import in_git_work_tree, project_root  # noqa: E402
 
 CONFIG_NAME = "config.json"
 
@@ -35,8 +35,25 @@ def _report(path: Path, written: bool) -> None:
     print(f"written: {path}" if written else f"kept: {path} (it already exists)")
 
 
+def _child_repos(root: Path) -> list[str]:
+    try:
+        children = sorted(root.iterdir())
+    except OSError:
+        return []
+    return [c.name for c in children if c.is_dir() and os.path.lexists(c / ".git")]
+
+
 def setup(repo: Path) -> int:
     root = project_root(repo)
+    # 0077: starter files above repositories would become each one's project root; refuse.
+    children = [] if in_git_work_tree(root) else _child_repos(root)
+    if children:
+        print(
+            f"setup stopped: {root} is not a git repository but holds the repositories "
+            f"{', '.join(children)}, so starter files here would become their project root. "
+            "Next: run the Daedalus setup skill from inside the one repository you want to set up."
+        )
+        return 1
     try:
         # 0010: the data folder passes its checks before either file is written.
         data = check_project_data_dir(str(root))

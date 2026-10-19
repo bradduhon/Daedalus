@@ -106,6 +106,27 @@ def test_setup_starter_manifest_has_every_feature_off(repo_cwd: Path) -> None:
     assert all(value in (False, None) for value in features.values()), features
 
 
+def test_setup_refuses_a_parent_folder_that_holds_repositories(tmp_path: Path) -> None:
+    # 0077: files here would become the project root of every child repository below.
+    parent = tmp_path / "parent"
+    for name in ("one", "two"):
+        subprocess.run(["git", "init", "-q", "-b", "main", str(parent / name)], check=True)
+    result = _setup(parent)
+    assert result.returncode == 1
+    assert "one, two" in result.stdout and "Next:" in result.stdout
+    assert sorted(p.name for p in parent.iterdir()) == ["one", "two"]
+
+
+def test_setup_writes_in_a_plain_folder_without_repositories(tmp_path: Path) -> None:
+    # 0069: a plain folder is folder scope; only a folder holding repositories is refused.
+    folder = tmp_path / "notes"
+    (folder / "drafts").mkdir(parents=True)
+    result = _setup(folder)
+    assert result.returncode == 0, result.stdout
+    manifest, config = _paths(folder)
+    assert manifest.is_file() and config.is_file()
+
+
 def test_setup_refuses_a_symlinked_data_folder(repo_cwd: Path, tmp_path: Path) -> None:
     # 0010: a symlinked data folder would send the config write out of the project.
     elsewhere = tmp_path / "elsewhere"
