@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from lib.human_text import DROP_SPANS, EDGE, MIN_WORDS, plain_words
 
 from tests.conftest import REPO_ROOT
 
@@ -892,10 +893,7 @@ def test_build_train_runs_without_config_json() -> None:
     assert "an absent config.json means the defaults" in pre
 
 
-# 0031: operator lines name things in words; ids, paths and code trail and are not counted.
-_DROP_SPANS = re.compile(r"`[^`]*`|<[^<>]*>|\{[^{}]*\}|\([^()]*\)|https?://\S+")
-_WORD = re.compile(r"[A-Za-z][A-Za-z'-]*")
-_EDGE = ".,;:!?\"'[]"
+# 0031: operator lines name things in words; lib.human_text holds the one word counter.
 _NEXT_CONST = re.compile(r"_?[A-Z_]*NEXT")
 _SENTENCE_END = re.compile(r"\.\s+(?=[A-Z])")
 _SKILL_NEXT = re.compile(r"(?:^|(?<=[.:;]\s))Next:")
@@ -904,24 +902,11 @@ AGENT_FACING = {"scripts/lib/jail.py", "scripts/lib/shell.py", "scripts/lib/disp
 AGENT_FACING |= {"scripts/lib/router.py"} | {
     str(p.relative_to(REPO_ROOT)) for p in (REPO_ROOT / "scripts" / "checks").glob("*.py")
 }
-MIN_WORDS = 4
-
-
-def _words(text: str) -> list[str]:
-    from lib.jail import KNOWN_AGENTS
-
-    out = []
-    for raw in _DROP_SPANS.sub(" ", text).split():
-        token = raw.strip(_EDGE)
-        if token in KNOWN_AGENTS or any(c in token for c in "/\\~$_:.*=@#"):
-            continue
-        if _WORD.fullmatch(token):
-            out.append(token)
-    return out
+_words = plain_words
 
 
 def _forward_only(text: str) -> bool:
-    return not _DROP_SPANS.sub("", text).strip(" " + _EDGE)
+    return not DROP_SPANS.sub("", text).strip(" " + EDGE)
 
 
 def _render(node: ast.AST, consts: dict[str, str]) -> str | None:

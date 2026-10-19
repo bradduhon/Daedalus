@@ -1,0 +1,23 @@
+{
+  "name": "check5",
+  "version": 1,
+  "description": "A sample train that carries exactly one defect",
+  "scopes": ["repository"],
+  "gates": ["contract-lock", "build"],
+  "consults": {"build": ["web-researcher"]},
+  "stages": [
+    {"id": "contract", "gate": "contract-lock", "agent": "contract-spec",
+     "scope": {"told": "tests/fixtures/trains/valid/contract.md", "touch": ["contracts"], "reply": ["## Locked Contract Packet"]},
+     "proof": {"script": "daedalus_train.py check-reply --stage contract", "exit": {"0": "pass", "1": "off-contract"}, "records": ["packet_version", "contract_path", "reply_file"]},
+     "on_fail": {}},
+    {"id": "lock", "gate": "contract-lock", "agent": "main",
+     "scope": {"told": "none", "touch": ["contracts"], "reply": ["exit 0"]},
+     "proof": {"script": "daedalus_workspace.py lock --repo {repo} --version {packet_version}", "exit": {"0": "pass", "1": "stopped"}, "records": ["lock_sha"]},
+     "on_fail": {"stopped": "stop: Next: follow the line the lock step printed"}},
+    {"id": "code", "gate": "build", "agent": "repo-coder",
+     "scope": {"told": "tests/fixtures/trains/valid/code.md", "touch": ["docs"], "reply": ["[STATUS: COMPLETE]", "[STATUS: YIELD_CONTRACT]"]},
+     "proof": {"script": "daedalus_train.py check-reply --stage code", "exit": {"0": "pass", "1": "off-contract"}, "records": ["unit_reply"]},
+     "on_fail": {"[STATUS: YIELD_CONTRACT]": "back:contract rounds=2"}}
+  ],
+  "off_contract": "stop: Next: rerun the train after reading the agent reply"
+}
