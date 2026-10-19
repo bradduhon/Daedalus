@@ -134,7 +134,17 @@ def test_grep_tool_on_the_data_folder_is_refused(tmp_path: Path) -> None:
     assert decide(read, CFG).allow
 
 
-@pytest.mark.parametrize("glob", ["**/reply-hmac.key", "*.key", ".claude/**", "*.{key,md}"])
+@pytest.mark.parametrize(
+    "glob",
+    [
+        "**/reply-hmac.key",
+        "*.key",
+        ".claude/**",
+        "*.{key,md}",
+        "/.claude/daedalus/reply-hmac.key",
+        "/.claude/**",
+    ],
+)
 def test_grep_glob_that_overrides_the_marker_is_refused(tmp_path: Path, glob: str) -> None:
     # SC-12: a Grep glob overrides the data folder's ignore marker, so one naming the key refuses.
     repo = _key_repo(tmp_path)

@@ -181,6 +181,8 @@ def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
     # SC-12: the Grep tool honors the data folder's `*` marker from above, so only a search
     # rooted inside .claude, or a glob that overrides the marker, can read the key.
     pat = _BRACE.sub("*", glob) if isinstance(glob, str) and glob else ""
+    # SC-12: a leading / anchors an rg glob to the search root; the match ignores it.
+    pat = pat.lstrip("/")
     for key in keys:
         if _contains(os.path.dirname(os.path.dirname(key)), target):
             return R_REPLY_KEY_TREE.format(path=target)
