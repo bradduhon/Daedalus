@@ -11,8 +11,21 @@ from pathlib import Path
 # 0044: an agent name outside this form reads as a missing agent file.
 AGENT_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 _KEY = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
-_TOP_KEYS = ("name", "description", "tools", "disallowedTools", "model", "shape", "hooks")
+_TOP_KEYS = (
+    "name",
+    "description",
+    "tools",
+    "disallowedTools",
+    "model",
+    "shape",
+    "phases",
+    "hooks",
+)
 _REQUIRED = ("name", "description", "tools", "model")
+# 0089, spec 9.1: phase affinities, in phase order; commit and release together are one phase.
+PHASES = ("context", "clarification", "plan", "implementation", "audit", "commit", "release")
+# 9.1: phases is the one flow list the subset accepts, one line, items split by ", ".
+_PHASE_LIST = re.compile(r"\[([a-z]+(?:, [a-z]+)*)\]")
 _TOOL = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 # 0044: YAML indicators a plain scalar may not start with (anchors, aliases, tags, blocks, flows).
 _INDICATORS = frozenset("&*!|>{}[]\"'%@`#,?:-")
@@ -21,7 +34,8 @@ _ITEM = "    - hooks:"
 _ENTRY = re.compile(r'        - \{type: command, command: "([^"\\]*)"\}')
 _COMMAND = re.compile(
     r"python3 \$\{CLAUDE_PLUGIN_ROOT\}/scripts/checks/([a-z][a-z_]*)\.py"
-    r"((?: (?:--[a-z][a-z-]*|[A-Za-z0-9][A-Za-z0-9_.,-]*))*)"
+    # spec 3.1: a flag value may carry `*` (a --name glob); the hook's own pattern judges it.
+    r"((?: (?:--[a-z][a-z-]*|[A-Za-z0-9*][A-Za-z0-9_.,*-]*))*)"
 )
 _CHECKS = Path(__file__).resolve().parents[1] / "checks"
 _STATUS_HEADING = "## Status contract"
@@ -46,6 +60,8 @@ class AgentFile:
     model: str
     hooks: tuple[Hook, ...]
     status_lines: tuple[str, ...]
+    description: str
+    phases: tuple[str, ...]
 
 
 def _lines(path: Path) -> tuple[list[str], int]:
@@ -136,6 +152,21 @@ def _tools(path: Path, key: str, value: str) -> frozenset[str]:
     return frozenset(items)
 
 
+def _phases(path: Path, value: str) -> tuple[str, ...]:
+    line = f"phases: {value}"
+    found = _PHASE_LIST.fullmatch(value)
+    if found is None:
+        raise _refuse(path, line, "is not a one-line list such as [plan, audit]")
+    items = tuple(found.group(1).split(", "))
+    unknown = [item for item in items if item not in PHASES]
+    if unknown or len(set(items)) != len(items):
+        raise AgentFileError(
+            f"{path} frontmatter line {line!r} names an unknown or repeated phase. "
+            f"Next: list each phase once, from {', '.join(PHASES)}."
+        )
+    return items
+
+
 def _status_lines(path: Path, body: list[str]) -> tuple[str, ...]:
     if _STATUS_HEADING not in body:
         return ()
@@ -171,7 +202,7 @@ def load(path: Path) -> AgentFile:
         key, value = _pair(path, line)
         if key not in _TOP_KEYS or key in fields:
             raise _refuse(path, line, "is an unknown or repeated key")
-        fields[key] = _scalar(path, line, key, value)
+        fields[key] = value if key == "phases" else _scalar(path, line, key, value)
         in_block = key == "hooks"
     missing = [key for key in _REQUIRED if key not in fields]
     if missing:
@@ -190,6 +221,8 @@ def load(path: Path) -> AgentFile:
         model=fields["model"],
         hooks=hooks,
         status_lines=_status_lines(path, lines[end + 1 :]),
+        description=fields["description"],
+        phases=_phases(path, fields["phases"]) if "phases" in fields else (),
     )
 
 

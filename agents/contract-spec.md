@@ -5,6 +5,7 @@ tools: Read, Grep, Glob, Write, Edit
 disallowedTools: Agent, Task, SendMessage
 model: sonnet
 shape: producer
+phases: [clarification, plan]
 # 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).
 hooks:
   PreToolUse:
