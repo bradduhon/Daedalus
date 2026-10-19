@@ -48,6 +48,32 @@ def test_allow_exits_zero_and_logs_allow(
     assert rec["decision"] == "allow" and rec["reason"] is None
 
 
+def test_main_write_in_a_train_exits_zero_with_ask_and_logs_ask(
+    run_script: Any, project_data: Path, repo_cwd: Path, hook_input: Any
+) -> None:
+    # 0105: the operator approves or denies the one call; main is never blocked by this rule.
+    _in_train(project_data)
+    payload = hook_input(tool_name="Write", tool_input={"file_path": "README.md", "content": "x"})
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 0 and result.stderr == "", result.stderr
+    out = json.loads(result.stdout)["hookSpecificOutput"]
+    assert out["hookEventName"] == "PreToolUse" and out["permissionDecision"] == "ask"
+    reason = out["permissionDecisionReason"]
+    assert reason.startswith("Build Train 20261015-120000 is active in this repository")
+    assert f"Writing {repo_cwd}/README.md here" in reason
+    rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
+    assert rec["decision"] == "ask" and rec["reason"] == reason
+
+
+def test_routed_agent_never_gets_ask(run_script: Any, project_data: Path, hook_input: Any) -> None:
+    # 0105: the ask decision is the main session's alone; every agent stays allow or deny.
+    _in_train(project_data)
+    write = {"file_path": "README.md", "content": "x"}
+    payload = hook_input(agent_type="repo-coder", tool_name="Write", tool_input=write)
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 2 and '"ask"' not in result.stdout
+
+
 def test_block_exits_two_with_message_and_logs_block(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
@@ -87,8 +113,11 @@ def test_unknown_agent_blocks_during_a_train(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
     (project_data / "train.active").write_text("20261015-120000\n")
-    result = run_script("enforce_agent_jail.py", hook_input(agent_type="ghost"))
-    assert result.returncode == 2 and "fail closed" in result.stderr
+    # 0100: a foreign agent reads during a train; its writes block.
+    assert run_script("enforce_agent_jail.py", hook_input(agent_type="ghost")).returncode == 0
+    payload = hook_input(agent_type="ghost", tool_input={"command": "touch x"})
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 2 and "read-only while" in result.stderr
 
 
 def test_unknown_agent_passes_without_a_train(
@@ -612,10 +641,8 @@ def test_main_outside_a_train_meets_no_jail_rule(
 
 @pytest.mark.parametrize(
     ("tool", "tool_input", "reason"),
-    [
-        ("Write", {"file_path": "src/app.py", "content": "x"}, "application code"),
-        ("Bash", {"command": "git clean -fdx"}, "git clean"),
-    ],
+    # 0105: a main Write in a train asks instead; see the ask test above.
+    [("Bash", {"command": "git clean -fdx"}, "git clean")],
 )
 def test_main_inside_a_train_meets_the_jail(
     temp_home: Path,
@@ -626,11 +653,13 @@ def test_main_inside_a_train_meets_the_jail(
     tool_input: dict[str, str],
     reason: str,
 ) -> None:
+    # 0106: main meets the jail as an ask carrying the warning and the finding.
     _in_train(project_data)
     payload = hook_input(tool_name=tool, tool_input=tool_input)
     result = _run_home(payload, temp_home, plugin_data)
-    assert result.returncode == 2
-    assert reason in result.stderr, result.stderr
+    assert result.returncode == 0 and result.stderr == "", result.stderr
+    out = json.loads(result.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "ask" and reason in out["permissionDecisionReason"]
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -667,8 +696,10 @@ def test_main_writing_into_another_repos_train_is_judged(
     _in_train(marked / ".claude" / "daedalus")
     command = f"git -C {marked} clean -fdx"
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": command}))
-    assert result.returncode == 2
-    assert "git clean" in result.stderr
+    # 0106: judged by the full jail, which asks the operator rather than blocking main.
+    assert result.returncode == 0
+    out = json.loads(result.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "ask" and "git clean" in out["permissionDecisionReason"]
 
 
 def test_fast_path_imports_only_the_standard_library_modules(repo_cwd: Path) -> None:

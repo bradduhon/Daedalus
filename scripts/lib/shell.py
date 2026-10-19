@@ -54,7 +54,7 @@ GIT_PLUMBING_REMOTE = frozenset(
 # Final review I3a: repo-coder git is an allowlist; everything else blocks.
 CODER_GIT = frozenset(
     {"add", "commit", "status", "diff", "log", "show", "rev-parse", "ls-files", "branch"}
-    | {"stash", "restore", "checkout", "worktree", "config"}
+    | {"stash", "restore", "checkout", "worktree", "config", "grep", "blame", "merge-base"}
 )
 # 0044: the named git grants a hook flag selects (git_grammar --allow, read_only_bash --git).
 GIT_SETS: dict[str, frozenset[str]] = {
