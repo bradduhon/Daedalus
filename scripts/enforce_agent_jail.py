@@ -34,6 +34,13 @@ _ROOT_CAP = 16
 # 6.1: the reason prefix for blocks this hook decides itself, main and foreign agents alike.
 _JAIL_HOOK = "jail"
 _CONFIG_HOOK = "config"
+# 0106: ask texts for the operator's own session; IA-5g and AU-5 require this wording.
+_CREDENTIAL_ASK = (
+    "This path holds credentials; reading it puts the secret into the session transcript. "
+    "Approve to proceed anyway. The jail's finding: "
+)
+_LOAD_ASK = "the jail's library failed to load; approving runs this call unjudged during a train"
+_AUDIT_ASK = "the audit log cannot be written; approving leaves this call unrecorded"
 
 
 _TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
@@ -144,7 +151,15 @@ def _fast_path(payload: dict[str, object], agent: str, cwd: str) -> int:
     raw_input = payload.get("tool_input")
     tool_input: dict[str, object] = raw_input if isinstance(raw_input, dict) else {}
     reason = path_reason(tool, tool_input, cwd) if tool in CREDENTIAL_TOOLS else None
+    if reason and _bare_main(payload):
+        # 0106, IA-5g, AC-3: the operator approves each credential read; the text stays literal.
+        return _ask(_CREDENTIAL_ASK + reason)
     return _block(agent, reason) if reason else 0
+
+
+def _bare_main(payload: dict[str, object]) -> bool:
+    # 0106: the operator's own thread, the only caller with no agent_id and no agent type.
+    return not payload.get("agent_id") and str(payload.get("agent_type") or "main") == "main"
 
 
 def _block(agent: str, message: str, next_step: str = _REPORT_NEXT) -> int:
@@ -172,8 +187,11 @@ def _note(agent: str, message: str) -> None:
         pass  # m5: a closed stderr must not turn an allow into exit 1.
 
 
-def _load_failed(exc: Exception, in_train: bool) -> int:
+def _load_failed(exc: Exception, in_train: bool, main_session: bool) -> int:
     # 0035: exit 1 does not block a PreToolUse hook, so a train's broken jail must exit 2.
+    if in_train and main_session:
+        # 0106: the operator's own session is asked, never blocked; agents keep the deny.
+        return _ask(f"{_LOAD_ASK} ({exc}). {_LOAD_NEXT}")
     if in_train:
         return _block("?", f"hook could not load its libraries ({exc}). {_LOAD_NEXT}")
     _note(
@@ -244,6 +262,11 @@ def _judge(payload: dict[str, object], agent: str) -> int:
             # spec 8: an allowed read is non-blocking on a failed record, as audit_log.py is.
             _note(agent, f"audit log unavailable ({exc}); the read proceeds unrecorded.")
             return 0
+        if (allow or ask) and _bare_main(payload):
+            # 0106, AU-5: the stderr line is the alert; the operator may run the call unrecorded.
+            _note(agent, f"audit log unavailable ({exc}).")
+            unrecorded = f"{_AUDIT_ASK} ({exc})."
+            return _ask(f"{unrecorded} The jail's finding: {reason}" if ask else unrecorded)
         # 8.5: no record, no action. The jail fails closed when the chain cannot be written.
         detail = f"audit log unavailable ({exc})."
         if "Next:" not in detail:
@@ -259,7 +282,8 @@ def _judge(payload: dict[str, object], agent: str) -> int:
 
 
 def main() -> int:
-    # Every path but a clean allow exits 2, except a library failure outside a train.
+    # Every path but a clean allow exits 2, except a library failure outside a train
+    # and 0106 asks to the operator's own session.
     try:
         text = sys.stdin.read()
         started = time.monotonic()
@@ -277,16 +301,17 @@ def main() -> int:
     if "tool_input" in payload and not isinstance(payload["tool_input"], dict):
         return _block(agent, "hook input tool_input is not an object.")
     cwd = payload.get("cwd")
+    main_session = _bare_main(payload)
     train_marked, lib_error = _marker_finder()
     in_train = train_marked(cwd)
     if lib_error is not None:
-        return _load_failed(lib_error, in_train)
+        return _load_failed(lib_error, in_train, main_session)
     if not in_train and isinstance(cwd, str):
         try:
             from lib.credential_paths import CREDENTIAL_TOOLS
             from lib.train_scope import policed_outside_train
         except Exception as exc:  # noqa: BLE001
-            return _load_failed(exc, in_train)
+            return _load_failed(exc, in_train, main_session)
         try:
             named = _names_marked_repo(tool_name, payload.get("tool_input") or {}, cwd)
         except Exception:  # noqa: BLE001
@@ -303,7 +328,7 @@ def main() -> int:
         for name in _LIBS:
             importlib.import_module(name)
     except Exception as exc:  # noqa: BLE001
-        return _load_failed(exc, in_train)
+        return _load_failed(exc, in_train, main_session)
     from lib.audit import mark_judge_start
 
     # 6.1: the fast path loads no lib, so the read-time clock is handed over once lib.audit loads.
