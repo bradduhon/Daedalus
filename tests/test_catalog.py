@@ -100,6 +100,10 @@ def test_catalog_skill_states_the_musts() -> None:
         "These are musts, not suggestions.",
     ):
         assert must in musts, must
+    # audit round 1: the skill names the four hook-checked exit conditions and the 0106 ask.
+    assert "Hooks check four exit conditions today:" in text
+    assert "no hook checks them" in text
+    assert "ask the operator before the main session's own (0106)" in musts
     phases = text.split("## The six phases", 1)[1].split(" ## ", 1)[0]
     for phase in ("Context", "Clarification", "Plan", "Implementation", "Audit"):
         assert f"| {phase} |" in phases, phase

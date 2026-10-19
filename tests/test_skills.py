@@ -375,9 +375,16 @@ def test_build_train_records_each_verdict_for_the_push_gate() -> None:
     assert step3.index(rejected) < step3.index("SendMessage(each responsible coder")
     step4 = _section(text, "## Phase 3", "\n5. The summary").split("\n4. ", 1)[1]
     approved = VERDICT_CMD.replace("{status}", "approved")
+    # audit round 1: a repo-local ledger commit moves the tip, so the record comes last.
     finish = "daedalus_workspace.py finish --repo <repo>"
-    assert step4.index(finish) < step4.index(approved) < step4.index("Agent(`charter-docs`)")
-    assert "The push gate reads this record and refuses any tip that moved after it." in step4
+    committed = "   - `[STATUS: COMMITTED] <sha> ids=<id>[,<id>]`: record the sha"
+    assert step4.index(finish) < step4.index("Agent(`charter-docs`)")
+    assert step4.index("Agent(`charter-docs`)") < step4.index(committed) < step4.index(approved)
+    assert "- Verdict record, last: after `[STATUS: COMMITTED]` on `[VERDICT: APPROVED]`" in step4
+    assert (
+        "The push gate reads this record: it refuses an agent's push or pull request for any tip "
+        "that moved after it, and asks the operator before the main session's own (0106)."
+    ) in step4
     assert "    verdict: <the verdict command's printed line, or pending>\n" in text
 
 

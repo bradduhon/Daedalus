@@ -8,7 +8,7 @@ description: Shows the session every Daedalus agent with what it does, its tools
 
 Human-facing text (0031): Text a human reads names each item in words: a short label or one line on what it is and what it does. Ids (ruling ids, issue numbers, task codes, agent names, snake_case keys) may trail in parentheses, never replace the description. Logs, status lines and messages to other agents may use ids alone. Documents carry both.
 
-Read this at the start of any body of work, inside a train or not. Daedalus is an open composition over the agents below (0088): you compose each body of work yourself, and the Build Train (`/daedalus:build-train`) is one saved recipe over this catalog, not the required shape. The hooks check the exit conditions below against train state; they never check the order of your steps.
+Read this at the start of any body of work, inside a train or not. Daedalus is an open composition over the agents below (0088): you compose each body of work yourself, and the Build Train (`/daedalus:build-train`) is one saved recipe over this catalog, not the required shape. Hooks check four exit conditions today: a plan record before a coder, a worktree binding for every coder, an approved verdict on the exact tip (or the operator's exception) before a push or pull request, and the conductor as the only agent that pushes. Capturing each ruling and the merge are your duty and the operator's; no hook checks them. No hook checks the order of your steps.
 
 When the operator runs `/daedalus:catalog`, print the agent table, the six phases and the musts unchanged.
 
@@ -40,11 +40,11 @@ Every body of work passes through six phases, each open inside (0089).
 | Phase | What happens | Exit condition |
 |---|---|---|
 | Context | Read the task, the code and the rulings that govern it. A yield in the middle of a build is context work. | None; it overlaps every other phase. |
-| Clarification | Put each fork to the operator the moment it appears. Standards and contract questions go to their specialists. | Every ruling the operator made is in the ledger, captured in the session it was made. |
+| Clarification | Put each fork to the operator the moment it appears. Standards and contract questions go to their specialists. | Every ruling the operator made is in the ledger, captured in the session it was made; your duty, no hook checks it. |
 | Plan | `/daedalus:plan <spec path>` has the planner cut the work into units, with edge kinds and a graph line. | A validated plan record in train state before any coder starts; the hook refuses a coder dispatch without one. |
 | Implementation | One repo-coder per unit, each in its own worktree. | Every coder has a worktree binding; the hook refuses a coder whose prompt names no worktree. |
 | Audit | The security-auditor judges every unit branch. The compliance specialists judge units that touch IAM, keys, mTLS or infrastructure settings. | An approved verdict on the exact tip being pushed, or the operator's accepted exception recorded as a ruling. |
-| Commit and release | The conductor alone pushes and opens pull requests. The operator merges. | The operator merges. |
+| Commit and release | The conductor alone pushes and opens pull requests. The operator merges. | The operator merges; no hook checks it. |
 
 The phase words on agent files are `context`, `clarification`, `plan`, `implementation`, `audit`, `commit` and `release`; the last two together make the commit and release phase.
 
@@ -54,7 +54,7 @@ Phases overlap freely. A phase's weight scales with the task: a one-file fix car
 
 These are musts, not suggestions.
 
-1. All work is audited and passes before it leaves a workspace, or the operator accepts the exception as a ruling with the findings it waives. Nothing is pushed and no pull request is opened until train state holds an approved verdict on the exact tip being pushed, or that exception. The hooks refuse the push; never argue with the refusal and never work around it.
+1. All work is audited and passes before it leaves a workspace, or the operator accepts the exception as a ruling with the findings it waives. Nothing is pushed and no pull request is opened until train state holds an approved verdict on the exact tip being pushed, or that exception. The hooks refuse such a push or pull request from an agent, and ask the operator before the main session's own (0106); never argue with a refusal and never work around it.
 2. No coder starts without a plan record and a worktree binding.
 3. Every ruling is captured in the ledger in the session it is made.
 4. Every choice is printed with its alternative and its cost before it is taken. Inside a train, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py choice --repo <repo> --chose "<what>" --over "<alternative>" --cost "<time or tokens>"` and add `--phase <name>` for a weight choice; it records the choice and prints `Chose <what> over <alternative>: <cost>`. Outside a train, print that same line in your reply.
