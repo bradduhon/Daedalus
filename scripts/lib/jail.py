@@ -179,7 +179,9 @@ R_LEDGER_DIRECT = (
 )
 R_DOCS_BASH = (
     "charter-docs Bash is limited to append_ledger.py, git add <path>, git commit -m, "
-    "git status, git log and git diff. Next: use those only; the main session runs the rest."
+    "git status, git log and git diff, plus the reads cat, grep, head, tail, wc, ls, diff and "
+    "sed -n on literal paths under the charter root or docs/. "
+    "Next: use those only; the main session runs the rest."
 )
 # 0044: reason literals the hook scripts under scripts/checks return.
 R_UNIT_OUTSIDE = (

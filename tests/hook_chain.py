@@ -44,7 +44,7 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("git_push", ()),
         ("git_grammar", ("--allow", "docs")),
         ("root_writes", ("--touch", "charter,docs", "--ledger-guard")),
-        ("command_allowlist", ("--allow", "append_ledger,git")),
+        ("command_allowlist", ("--allow", "append_ledger,git,read")),
         ("gh_classes", ()),
     ),
     "security-auditor": (
