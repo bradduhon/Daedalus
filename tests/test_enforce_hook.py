@@ -48,6 +48,32 @@ def test_allow_exits_zero_and_logs_allow(
     assert rec["decision"] == "allow" and rec["reason"] is None
 
 
+def test_main_write_in_a_train_exits_zero_with_ask_and_logs_ask(
+    run_script: Any, project_data: Path, repo_cwd: Path, hook_input: Any
+) -> None:
+    # 0105: the operator approves or denies the one call; main is never blocked by this rule.
+    _in_train(project_data)
+    payload = hook_input(tool_name="Write", tool_input={"file_path": "README.md", "content": "x"})
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 0 and result.stderr == "", result.stderr
+    out = json.loads(result.stdout)["hookSpecificOutput"]
+    assert out["hookEventName"] == "PreToolUse" and out["permissionDecision"] == "ask"
+    reason = out["permissionDecisionReason"]
+    assert reason.startswith("Build Train 20261015-120000 is active in this repository")
+    assert f"Writing {repo_cwd}/README.md here" in reason
+    rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
+    assert rec["decision"] == "ask" and rec["reason"] == reason
+
+
+def test_routed_agent_never_gets_ask(run_script: Any, project_data: Path, hook_input: Any) -> None:
+    # 0105: the ask decision is the main session's alone; every agent stays allow or deny.
+    _in_train(project_data)
+    write = {"file_path": "README.md", "content": "x"}
+    payload = hook_input(agent_type="repo-coder", tool_name="Write", tool_input=write)
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 2 and '"ask"' not in result.stdout
+
+
 def test_block_exits_two_with_message_and_logs_block(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
@@ -615,10 +641,8 @@ def test_main_outside_a_train_meets_no_jail_rule(
 
 @pytest.mark.parametrize(
     ("tool", "tool_input", "reason"),
-    [
-        ("Write", {"file_path": "src/app.py", "content": "x"}, "application code"),
-        ("Bash", {"command": "git clean -fdx"}, "git clean"),
-    ],
+    # 0105: a main Write in a train asks instead; see the ask test above.
+    [("Bash", {"command": "git clean -fdx"}, "git clean")],
 )
 def test_main_inside_a_train_meets_the_jail(
     temp_home: Path,

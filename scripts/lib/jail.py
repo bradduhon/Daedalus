@@ -256,12 +256,11 @@ R_UNKNOWN_TRAIN = (
     "inspection and git reads, pipes allowed; Write, Edit, dispatch and web tools are refused "
     "(0100).\n" + UNMARK_NEXT
 )
-# 0099, 0104: judged only inside a repository holding a train marker.
-R_MAIN_SCRATCH = (
-    "the orchestrating session does not write application code during a train; it writes only "
-    "under docs/.tmp/daedalus/, the train summary included (0099): {path}. "
-    "Next: dispatch daedalus:repo-coder for this change; it writes in its unit worktree under "
-    ".claude/worktrees/."
+# 0105: the operator approves or denies the one call; main is never blocked by this rule.
+R_MAIN_TRAIN_ASK = (
+    "Build Train {train} is active in this repository and works in unit worktrees. "
+    "Writing {path} here can leave a dirty tree that finish refuses, conflict with a unit "
+    "branch, or land on the integration branch. Approve to proceed anyway."
 )
 R_ROUTED = (
     "{agent} is judged by the router, not lib.jail.decide. "
@@ -323,6 +322,8 @@ class Decision:
     allow: bool
     reason: str | None = None
     agent: str | None = None
+    # 0105: not allowed, not refused; the operator decides this one main-session call.
+    ask: bool = False
 
 
 def _allow() -> Decision:
@@ -331,6 +332,10 @@ def _allow() -> Decision:
 
 def _block(reason: str) -> Decision:
     return Decision(False, reason)
+
+
+def _ask(reason: str) -> Decision:
+    return Decision(False, reason, ask=True)
 
 
 def _flags_ok(
@@ -411,16 +416,18 @@ def _in_unit_worktree(target: str, cwd: str) -> bool:
     return parts is not None and len(parts) >= 2
 
 
-def _orchestrator_write_allowed(path: str, cwd: str) -> bool:
-    # 0099, 0104: inside a marked repository only its scratch (summary included); outside, unjudged.
+def _main_write_train(path: str, cwd: str) -> str | None:
+    # 0105, 0104: the train id when the path is in a marked repo outside its scratch, else None.
     target = os.path.realpath(_abs(path, cwd))
-    home = project_root(Path(cwd))
-    if _under(target, str(home)) and _train_scoped(cwd, "", {}):
-        return _under(target, str(home / SUMMARY_DIR))
-    root = project_root(Path(os.path.dirname(target)))
-    if os.path.lexists(train_marker(root)):
-        return _under(target, str(root / SUMMARY_DIR))
-    return True
+    root = project_root(Path(cwd))
+    if not (_under(target, str(root)) and _train_scoped(cwd, "", {})):
+        root = project_root(Path(os.path.dirname(target)))
+        if not os.path.lexists(train_marker(root)):
+            return None
+    if _under(target, str(root / SUMMARY_DIR)):
+        return None
+    branch = _train_branch(str(root)) or ""
+    return branch.removeprefix("daedalus/") or "(id unreadable)"
 
 
 @dataclass(frozen=True)
@@ -1636,7 +1643,7 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
     else:
         charter = str(config.charter_root) if config.charter_root else None
         decision = _unknown_decision(raw_agent, agent, cwd, tool, tool_input, charter)
-    return Decision(decision.allow, decision.reason, agent)
+    return Decision(decision.allow, decision.reason, agent, decision.ask)
 
 
 def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision:
@@ -1660,8 +1667,9 @@ def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision
             return _block(R_DATA_DIR_GIT)
         reason = _command_reason(command) or _gh_gate("main", cwd, command)
         return _block(reason) if reason else _allow()
-    if is_write and not _orchestrator_write_allowed(path, cwd):
-        return _block(R_MAIN_SCRATCH.format(path=path))
+    train = _main_write_train(path, cwd) if is_write else None
+    if train is not None:
+        return _ask(R_MAIN_TRAIN_ASK.format(train=train, path=path))
     if tool in dispatch_binding.DISPATCH_TOOLS:
         reason = dispatch_binding._dispatch_reason(tool_input, cwd)
         if reason:

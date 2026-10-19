@@ -209,8 +209,9 @@ def test_main_session_duties_unchanged(monkeypatch: pytest.MonkeyPatch, jail_fak
     push = {**main, "tool_input": {"command": "git push --force origin main"}}
     assert not jail.decide(push, CFG).allow
     write = {"tool_name": "Write", "tool_input": {"file_path": f"{WT}/src/a.py"}, "cwd": CWD}
-    reason = str(jail.decide(write, CFG).reason)
-    assert "the orchestrating session does not write application code" in reason
+    # 0105: the code write asks the operator rather than refusing.
+    asked = jail.decide(write, CFG)
+    assert asked.ask and "Build Train" in str(asked.reason)
     seen: list[dict[str, object]] = []
 
     def dispatch(tool_input: dict[str, object], cwd: str) -> str:

@@ -38,6 +38,12 @@ def _b(agent: str | None, command: str) -> dict[str, Any]:
     return payload
 
 
+def _asks(d: jail.Decision, path: str) -> bool:
+    # 0105: the operator approves or denies the one call; the train id comes from the marker.
+    want = jail.R_MAIN_TRAIN_ASK.format(train=UNIT_TRAIN, path=path)
+    return d.ask and not d.allow and d.reason == want
+
+
 def _t(agent: str, tool: str) -> dict[str, Any]:
     return {"tool_name": tool, "tool_input": {}, "cwd": CWD, "agent_type": agent}
 
@@ -200,12 +206,13 @@ def test_namespaced_unknown_reason_names_normalized_agent() -> None:
 
 
 def test_main_cannot_write_application_code() -> None:
-    assert not decide(_w(None, f"{CWD}/src/app.py"), CFG).allow
-    assert not decide(_w(None, f"{CWD}/tests/test_app.py", "Edit"), CFG).allow
-    assert not decide(_w(None, "src/app.py"), CFG).allow
-    # 0099: during a train main writes only the scratch folder and the summary.
-    assert not decide(_w(None, f"{CWD}/docs/x.md"), CFG).allow
-    assert decide(_w(None, f"{CWD}/docs/.tmp/daedalus/x.md"), CFG).allow
+    # 0105: during a train a main write outside the scratch folder asks the operator.
+    assert _asks(decide(_w(None, f"{CWD}/src/app.py"), CFG), f"{CWD}/src/app.py")
+    assert _asks(decide(_w(None, f"{CWD}/tests/t.py", "Edit"), CFG), f"{CWD}/tests/t.py")
+    assert _asks(decide(_w(None, "src/app.py"), CFG), f"{CWD}/src/app.py")
+    assert _asks(decide(_w(None, f"{CWD}/docs/x.md"), CFG), f"{CWD}/docs/x.md")
+    d = decide(_w(None, f"{CWD}/docs/.tmp/daedalus/x.md"), CFG)
+    assert d.allow and not d.ask
     assert decide(_b(None, "git status"), CFG).allow
 
 
@@ -456,9 +463,9 @@ class TestRound3DotGitWrites:
         assert not d.allow and ".git/" in d.reason
 
     def test_gitignore_is_not_dotgit(self) -> None:
-        # 0099: refused as a non-scratch write during a train, never as .git/.
+        # 0105: asked as a non-scratch write during a train, never refused as .git/.
         path = f"{CWD}/.gitignore"
-        assert decide(_w(None, path), CFG).reason == jail.R_MAIN_SCRATCH.format(path=path)
+        assert _asks(decide(_w(None, path), CFG), path)
 
 
 class TestRound3MainHardened:
@@ -783,9 +790,9 @@ class TestProjectDataDir:
         assert not decide(_w(None, path), CFG).allow, path
 
     def test_sibling_claude_dir_write_allowed_for_main(self) -> None:
-        # 0099: not the data-dir refusal; the scratch rule is what refuses it during a train.
+        # 0105: not the data-dir refusal; during a train the operator is asked.
         path = f"{CWD}/.claude/settings.local.json"
-        assert decide(_w(None, path), CFG).reason == jail.R_MAIN_SCRATCH.format(path=path)
+        assert _asks(decide(_w(None, path), CFG), path)
 
     @pytest.mark.parametrize(
         "command",
@@ -995,9 +1002,8 @@ BUILTIN_REL = [
 
 
 def test_main_never_writes_unit_worktree_code() -> None:
-    d = decide(_w(None, f"{WT}/src/a.py"), CFG)
-    reason = "the orchestrating session does not write application code during a train"
-    assert not d.allow and reason in str(d.reason)
+    # 0105: a main write into a unit worktree asks the operator.
+    assert _asks(decide(_w(None, f"{WT}/src/a.py"), CFG), f"{WT}/src/a.py")
 
 
 def _unit_repo(path: Path) -> tuple[Path, Path]:
@@ -1670,7 +1676,8 @@ def test_main_write_to_the_summary_is_allowed_during_a_train(
     assert not d.allow
 
 
-def test_main_write_to_scripts_is_refused_during_a_train(marked_repo: Path) -> None:
+def test_main_write_to_scripts_asks_during_a_train(marked_repo: Path) -> None:
+    # 0105: never a block for main; the operator approves or denies the one call.
     cwd = str(marked_repo)
     for rel in (
         "scripts/lib/jail.py",
@@ -1683,13 +1690,11 @@ def test_main_write_to_scripts_is_refused_during_a_train(marked_repo: Path) -> N
     ):
         for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
             key = "notebook_path" if tool == "NotebookEdit" else "file_path"
-            d = decide(_cred(None, tool, cwd, **{key: f"{cwd}/{rel}"}), CFG)
-            reason = str(d.reason)
-            assert not d.allow, (rel, tool)
-            assert "repo-coder" in reason and "worktree" in reason and "Next:" in reason, reason
+            path = f"{cwd}/{rel}"
+            assert _asks(decide(_cred(None, tool, cwd, **{key: path}), CFG), path), (rel, tool)
 
 
-# 0104: the scratch rule judges only paths inside a repository holding a train marker.
+# 0104, 0105: only paths inside a repository holding a train marker are judged.
 def test_main_write_under_home_is_allowed_during_a_train(
     cred_home: Path, marked_repo: Path
 ) -> None:
@@ -1705,13 +1710,23 @@ def test_main_write_to_tmp_is_allowed_during_a_train(marked_repo: Path) -> None:
         assert d.allow, (tool, d.reason)
 
 
-def test_main_write_to_readme_in_the_train_repo_stays_refused(
-    marked_repo: Path, other_repo: Path
-) -> None:
+def test_main_write_to_readme_in_the_train_repo_asks(marked_repo: Path, other_repo: Path) -> None:
     path = f"{marked_repo}/README.md"
     for cwd in (marked_repo, other_repo):
         d = decide(_cred(None, "Write", str(cwd), file_path=path), CFG)
-        assert d.reason == jail.R_MAIN_SCRATCH.format(path=path), cwd
+        assert _asks(d, path), (cwd, d)
+    reason = jail.R_MAIN_TRAIN_ASK.format(train=UNIT_TRAIN, path=path)
+    assert reason == (
+        f"Build Train {UNIT_TRAIN} is active in this repository and works in unit worktrees. "
+        f"Writing {path} here can leave a dirty tree that finish refuses, conflict with a unit "
+        "branch, or land on the integration branch. Approve to proceed anyway."
+    )
+
+
+def test_main_write_to_scratch_stays_allowed_without_a_prompt(marked_repo: Path) -> None:
+    path = f"{marked_repo}/docs/.tmp/daedalus/{UNIT_TRAIN}-summary.md"
+    d = decide(_cred(None, "Edit", str(marked_repo), file_path=path), CFG)
+    assert d.allow and not d.ask and d.reason is None
 
 
 def test_main_write_anywhere_is_allowed_without_a_train(other_repo: Path) -> None:
