@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -208,8 +209,16 @@ def test_a_relative_plan_path_resolves_from_the_repo(repo_cwd: Path, unit: Path)
 def test_the_hook_chain_enforces_the_plan_gate(
     repo_cwd: Path, unit: Path, run_script: Callable[[str, dict[str, Any]], Any]
 ) -> None:
-    refused = run_script("enforce_agent_jail.py", _dispatch(repo_cwd, unit))
-    assert refused.returncode == 2 and NEXT in refused.stderr, refused.stderr
+    # 0106: the operator's own dispatch without a plan record is asked, never refused.
+    asked = run_script("enforce_agent_jail.py", _dispatch(repo_cwd, unit))
+    assert asked.returncode == 0, asked.stderr
+    out = json.loads(asked.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "ask" and NEXT in out["permissionDecisionReason"]
+    # 0106: a subagent claiming main stays refused, by the identity rule ahead of the plan gate.
+    claimed = {**_dispatch(repo_cwd, unit), "agent_id": "sub1"}
+    refused = run_script("enforce_agent_jail.py", claimed)
+    assert refused.returncode == 2 and refused.stdout == "", refused.stdout
+    assert "a subagent may not run as main. Next:" in refused.stderr, refused.stderr
     seed_plan(repo_cwd, TRAIN)
     allowed = run_script("enforce_agent_jail.py", _dispatch(repo_cwd, unit))
     assert allowed.returncode == 0, allowed.stderr

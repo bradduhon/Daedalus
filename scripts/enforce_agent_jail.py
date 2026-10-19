@@ -244,6 +244,7 @@ def _judge(payload: dict[str, object], agent: str) -> int:
             return _record_and_block(payload, agent, f"{_CONFIG_HOOK}: {exc}", _CONFIG_NEXT)
         config = Config()
     ask = False
+    finding: str | None = None
     if routed(agent):
         # 0044: a Daedalus agent's call runs the hooks its agent file names.
         allow, reason, hook = route(payload, Path(__file__).resolve().parents[1])
@@ -251,9 +252,10 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         agent = normalize_agent(agent)
     else:
         decision = decide(payload, config)
-        allow, reason, ask = decision.allow, decision.reason, decision.ask
+        allow, finding, ask = decision.allow, decision.reason, decision.ask
         agent = decision.agent or agent
-        reason = f"{_JAIL_HOOK}: {reason}" if reason else None
+        # 0105, 6.1: the record carries the hook prefix; the operator's ask text does not.
+        reason = f"{_JAIL_HOOK}: {finding}" if finding else None
     try:
         verdict = "ask" if ask else "allow" if allow else "block"
         record = audit_append(payload, verdict, reason)
@@ -266,7 +268,7 @@ def _judge(payload: dict[str, object], agent: str) -> int:
             # 0106, AU-5: the stderr line is the alert; the operator may run the call unrecorded.
             _note(agent, f"audit log unavailable ({exc}).")
             unrecorded = f"{_AUDIT_ASK} ({exc})."
-            return _ask(f"{unrecorded} The jail's finding: {reason}" if ask else unrecorded)
+            return _ask(f"{unrecorded} The jail's finding: {finding}" if ask else unrecorded)
         # 8.5: no record, no action. The jail fails closed when the chain cannot be written.
         detail = f"audit log unavailable ({exc})."
         if "Next:" not in detail:
@@ -277,7 +279,7 @@ def _judge(payload: dict[str, object], agent: str) -> int:
     if allow:
         return 0
     if ask:
-        return _ask(str(reason))
+        return _ask(str(finding))
     return _block(agent, str(reason))
 
 

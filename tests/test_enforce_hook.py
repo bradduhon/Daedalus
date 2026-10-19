@@ -63,7 +63,9 @@ def test_main_write_in_a_train_exits_zero_with_ask_and_logs_ask(
     assert reason.startswith("Build Train 20261015-120000 is active in this repository")
     assert f"Writing {repo_cwd}/README.md here" in reason
     rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
-    assert rec["decision"] == "ask" and rec["reason"] == reason
+    assert rec["decision"] == "ask" and rec["reason"] == f"jail: {reason}"
+    # 0105, 6.1: the record names the deciding hook; the operator's prompt text does not.
+    assert rec["reason"].startswith("jail: ") and not reason.startswith("jail: ")
 
 
 def test_routed_agent_never_gets_ask(run_script: Any, project_data: Path, hook_input: Any) -> None:
