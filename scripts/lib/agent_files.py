@@ -34,7 +34,8 @@ _ITEM = "    - hooks:"
 _ENTRY = re.compile(r'        - \{type: command, command: "([^"\\]*)"\}')
 _COMMAND = re.compile(
     r"python3 \$\{CLAUDE_PLUGIN_ROOT\}/scripts/checks/([a-z][a-z_]*)\.py"
-    r"((?: (?:--[a-z][a-z-]*|[A-Za-z0-9][A-Za-z0-9_.,-]*))*)"
+    # spec 3.1: a flag value may carry `*` (a --name glob); the hook's own pattern judges it.
+    r"((?: (?:--[a-z][a-z-]*|[A-Za-z0-9*][A-Za-z0-9_.,*-]*))*)"
 )
 _CHECKS = Path(__file__).resolve().parents[1] / "checks"
 _STATUS_HEADING = "## Status contract"

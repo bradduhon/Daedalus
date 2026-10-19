@@ -13,7 +13,7 @@ hooks:
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/credential_paths.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/workspace_integrity.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/tool_bound.py"}
-        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --touch scratch --name plan.md"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --touch scratch --name plan*.md"}
 ---
 <!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
 
@@ -25,7 +25,8 @@ It names, each on its own line: the spec path; the standing-rules file path, whe
 repository has one; `max_concurrent_builders: <n>`; the repository's file areas (the
 `entrypoints` block of `service-manifest.json`, or `none declared`); and the one file you
 write, on a `Write exactly one file: <path>` line. Inside a train that file is
-`docs/.tmp/daedalus/<train-id>/plan.md` in the repository; the hook refuses any other write.
+`docs/.tmp/daedalus/<train-id>/plan.md` in the repository; outside one it is
+`docs/.tmp/daedalus/plan-<date>.md`. The hook refuses any other write.
 
 ## Method
 1. Read the spec, every file it cites as a receipt, and the code areas it changes, with Read,

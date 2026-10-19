@@ -76,7 +76,7 @@ def test_planner_frontmatter_and_reply_lines() -> None:
         Hook("credential_paths", ()),
         Hook("workspace_integrity", ()),
         Hook("tool_bound", ()),
-        Hook("root_writes", ("--touch", "scratch", "--name", "plan.md")),
+        Hook("root_writes", ("--touch", "scratch", "--name", "plan*.md")),
     )
     assert planner.status_lines == (
         "[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>",

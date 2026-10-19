@@ -360,6 +360,27 @@ def test_build_train_has_no_three_round_cap() -> None:
     assert ESCALATION_END in " ".join(step3.split())
 
 
+VERDICT_CMD = (
+    "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py verdict --repo <repo> "
+    "--status {status} --round <n>`"
+)
+
+
+def test_build_train_records_each_verdict_for_the_push_gate() -> None:
+    # 0089: the push gate reads the verdict record; approved is recorded on the merged tip.
+    text = _build_train()
+    step3 = _section(text, "## Phase 3", "\n4. ").split("\n3. ", 1)[1]
+    rejected = VERDICT_CMD.replace("{status}", "rejected")
+    assert rejected in step3
+    assert step3.index(rejected) < step3.index("SendMessage(each responsible coder")
+    step4 = _section(text, "## Phase 3", "\n5. The summary").split("\n4. ", 1)[1]
+    approved = VERDICT_CMD.replace("{status}", "approved")
+    finish = "daedalus_workspace.py finish --repo <repo>"
+    assert step4.index(finish) < step4.index(approved) < step4.index("Agent(`charter-docs`)")
+    assert "The push gate reads this record and refuses any tip that moved after it." in step4
+    assert "    verdict: <the verdict command's printed line, or pending>\n" in text
+
+
 def test_build_train_carries_the_escalation_prompt() -> None:
     # 0103: the decision-brief shape, held equal between the catalog and the recipe.
     catalog = (REPO_ROOT / "skills" / "catalog" / "SKILL.md").read_text(encoding="utf-8")

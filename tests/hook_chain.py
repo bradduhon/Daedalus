@@ -87,7 +87,7 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("credential_paths", ()),
         ("workspace_integrity", ()),
         ("tool_bound", ()),
-        ("root_writes", ("--touch", "scratch", "--name", "plan.md")),
+        ("root_writes", ("--touch", "scratch", "--name", "plan*.md")),
     ),
     "pr-train-conductor": (
         ("credential_paths", ()),

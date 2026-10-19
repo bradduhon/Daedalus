@@ -157,17 +157,66 @@ def test_root_writes_name_narrows_to_one_file_in_a_class_root() -> None:
     assert bad is not None and bad.startswith("hook root_writes failed closed")
 
 
-def test_root_writes_scratch_class_needs_an_active_train(tmp_path: Path) -> None:
-    # 0053: the scratch root is in-repo, under docs/.tmp/daedalus/<train-id>/.
+def test_root_writes_scratch_class_follows_the_train(tmp_path: Path) -> None:
+    # 0053: in a train the scratch root is docs/.tmp/daedalus/<train-id>/; without one it is
+    # docs/.tmp/daedalus/ itself (spec 3.1, the planner outside a train).
     repo = _git_init(tmp_path / "repo")
     target = f"{repo}/docs/.tmp/daedalus/20261017-120000/brief.md"
     hook_input = {**_w("x", target), "cwd": str(repo)}
-    assert evaluate(HOOK, hook_input, "--touch", "scratch") is not None
+    assert evaluate(HOOK, hook_input, "--touch", "scratch") is None
+    outside = {**_w("x", f"{repo}/docs/notes.md"), "cwd": str(repo)}
+    assert evaluate(HOOK, outside, "--touch", "scratch") is not None
     (repo / ".claude" / "daedalus").mkdir(parents=True)
     (repo / ".claude" / "daedalus" / "train.active").write_text("20261017-120000\n")
     assert evaluate(HOOK, hook_input, "--touch", "scratch") is None
     other = {**_w("x", f"{repo}/docs/.tmp/daedalus/20261017-999999/b.md"), "cwd": str(repo)}
     assert evaluate(HOOK, other, "--touch", "scratch") is not None
+
+
+def test_root_writes_name_takes_a_glob() -> None:
+    flags = ("--touch", "docs", "--name", "plan*.md")
+    assert evaluate(HOOK, _w("x", f"{CWD}/docs/plan.md"), *flags) is None
+    assert evaluate(HOOK, _w("x", f"{CWD}/docs/plan-2026-10-19.md"), *flags) is None
+    assert evaluate(HOOK, _w("x", f"{CWD}/docs/other.md"), *flags) is not None
+    assert evaluate(HOOK, _w("x", f"{CWD}/docs/plan.txt"), *flags) is not None
+    assert evaluate(HOOK, _w("x", f"{CWD}/docs/sub/plan.md"), *flags) is not None
+    for bad in ("plan/*.md", "../plan*.md", "plan?.md", "[p]lan.md"):
+        reason = evaluate(HOOK, _w("x", f"{CWD}/docs/plan.md"), "--touch", "docs", "--name", bad)
+        assert reason is not None and reason.startswith("hook root_writes failed closed"), bad
+
+
+def _planner(repo: Path, path: str) -> tuple[bool, str | None, str]:
+    # spec 3.1: the planner's own agent-file hooks, run as the router runs them.
+    from lib import router
+
+    from tests.conftest import REPO_ROOT
+
+    payload = {**_w("daedalus:planner", path), "cwd": str(repo)}
+    return router.route(payload, REPO_ROOT)
+
+
+def test_planner_writes_its_plan_outside_a_train(tmp_path: Path) -> None:
+    repo = _git_init(tmp_path / "repo")
+    scratch = repo / "docs" / ".tmp" / "daedalus"
+    assert _planner(repo, f"{scratch}/plan-2026-10-19.md") == (True, None, "")
+    for path in (f"{scratch}/other.md", f"{repo}/docs/plan.md", f"{scratch}/t/plan.md"):
+        allow, _, hook = _planner(repo, path)
+        assert not allow and hook == "root_writes", path
+
+
+def test_planner_writes_its_plan_inside_a_train(tmp_path: Path) -> None:
+    repo = _git_init(tmp_path / "repo")
+    (repo / ".claude" / "daedalus").mkdir(parents=True)
+    (repo / ".claude" / "daedalus" / "train.active").write_text("20261017-120000\n")
+    scratch = repo / "docs" / ".tmp" / "daedalus"
+    assert _planner(repo, f"{scratch}/20261017-120000/plan.md") == (True, None, "")
+    for path in (
+        f"{scratch}/20261017-120000/other.md",
+        f"{scratch}/plan-2026-10-19.md",
+        f"{repo}/src/plan.md",
+    ):
+        allow, _, hook = _planner(repo, path)
+        assert not allow and hook == "root_writes", path
 
 
 def test_root_writes_repeated_flag_denies() -> None:

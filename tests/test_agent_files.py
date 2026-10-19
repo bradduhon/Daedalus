@@ -166,6 +166,14 @@ def test_parser_reads_flags_in_the_checks_form(tmp_path: Path) -> None:
     agent = agent_files.load(_write(tmp_path, [*HEAD, *BLOCK[:3], ENTRY % flags, *BODY]))
     want = Hook("root_writes", ("--touch", "contracts,charter-specs", "--ledger-guard"))
     assert agent.hooks == (want,)
+    # spec 3.1: a --name glob value is one token; quotes stay outside the accepted form.
+    glob = agent_files.load(
+        _write(tmp_path, [*HEAD, *BLOCK[:3], ENTRY % "root_writes.py --name plan*.md", *BODY])
+    )
+    assert glob.hooks == (Hook("root_writes", ("--name", "plan*.md")),)
+    quoted = [*HEAD, *BLOCK[:3], ENTRY % "root_writes.py --name 'plan*.md'", *BODY]
+    with pytest.raises(AgentFileError, match="Next: "):
+        agent_files.load(_write(tmp_path, quoted))
 
 
 @pytest.mark.parametrize("name", sorted(p.stem for p in AGENTS.glob("*.md")))
