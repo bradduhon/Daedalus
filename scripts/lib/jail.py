@@ -33,7 +33,7 @@ from lib.credential_paths import credential_roots as _credential_roots
 from lib.credential_paths import expand_word as _expand_word
 from lib.credential_paths import store_rest as _store_rest
 from lib.credential_paths import tilde as _tilde
-from lib.gh_policy import CONDUCTOR_GH, allowlist_applies, gh_reason
+from lib.gh_policy import CONDUCTOR_GH, _push_reason, allowlist_applies, gh_reason
 from lib.ledger import LedgerError, resolve_ledger
 from lib.manifest import Manifest, ManifestError, extension_hit, path_hit
 from lib.manifest import load as load_manifest
@@ -49,7 +49,12 @@ from lib.shell import (
     _SHELLS,
     _VALUE_LONG_NEXT,
     GIT_PLUMBING_REMOTE,
+    R_CLEAN,
     R_DATA_DIR_GIT,
+    R_DEFAULT_BRANCH,
+    R_DESTRUCTIVE,
+    R_FORCE_PUSH,
+    R_STASH_UNTRACKED,
     READ_ONLY_CMDS,
     READ_ONLY_GIT,
     _abs,
@@ -256,7 +261,45 @@ R_UNKNOWN_TRAIN = (
     "inspection and git reads, pipes allowed; Write, Edit, dispatch and web tools are refused "
     "(0100).\n" + UNMARK_NEXT
 )
-# 0105: the operator approves or denies the one call; main is never blocked by this rule.
+# 0106: the plain-words warnings the operator reads before approving one main-session call.
+ASK_DOTGIT = "Writing {path} edits the repository's own metadata; a wrong write corrupts the clone."
+ASK_DATA_DIR = (
+    "This touches the plugin data folder. It holds the audit log, train state and coder "
+    "bindings; a hand edit breaks the hash chain that proves the audit happened."
+)
+ASK_CREDENTIAL = (
+    "This path holds credentials; reading it puts the secret into the session transcript."
+)
+ASK_CREDENTIAL_WRITE = (
+    "This path holds credentials; writing it can replace a key or leave a secret behind."
+)
+ASK_FORCE_PUSH = (
+    "A force, delete or mirror push rewrites the remote branch; commits that exist only there "
+    "are lost."
+)
+ASK_DEFAULT_BRANCH = "Pushing to the default branch skips the pull request the operator merges."
+ASK_DELETE = (
+    "This recursive or raw-device delete removes files that neither git nor the plugin can restore."
+)
+ASK_CLEAN = (
+    "git clean deletes untracked files, the plugin data folder included; nothing restores them."
+)
+ASK_TRAIN_PUSH = "Pushing during a train publishes a branch before the audit approves its tip."
+ASK_COMMAND = "This command matches a pattern the plugin guards against."
+ASK_NO_CWD = (
+    "The hook received no working folder, so the plugin cannot tell which repository this "
+    "call touches."
+)
+# 0106: tripwire findings with their own consequence; any other finding gets ASK_COMMAND.
+_TRIPWIRE_ASKS = {
+    R_FORCE_PUSH: ASK_FORCE_PUSH,
+    R_DEFAULT_BRANCH: ASK_DEFAULT_BRANCH,
+    R_DESTRUCTIVE: ASK_DELETE,
+    R_CLEAN: ASK_CLEAN,
+    R_DATA_DIR_GIT: ASK_DATA_DIR,
+    R_STASH_UNTRACKED: ASK_DATA_DIR,
+}
+# 0105, 0106: the operator approves or denies the one call; main is never blocked.
 R_MAIN_TRAIN_ASK = (
     "Build Train {train} is active in this repository and works in unit worktrees. "
     "Writing {path} here can leave a dirty tree that finish refuses, conflict with a unit "
@@ -336,6 +379,19 @@ def _block(reason: str) -> Decision:
 
 def _ask(reason: str) -> Decision:
     return Decision(False, reason, ask=True)
+
+
+def _main_ask(warning: str, finding: str) -> Decision:
+    # 0106: the warning first, then the jail's finding verbatim so the audit log keeps it whole.
+    return _ask(f"{warning} Approve to proceed anyway. The jail's finding: {finding}")
+
+
+def _tripwire_ask(finding: str) -> Decision:
+    # 0106: git push during a train carries the gh policy's push finding.
+    warning = _TRIPWIRE_ASKS.get(finding, ASK_COMMAND)
+    if finding == _push_reason("main"):
+        warning = ASK_TRAIN_PUSH
+    return _main_ask(warning, finding)
 
 
 def _flags_ok(
@@ -1619,13 +1675,20 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
     cwd = str(hook_input.get("cwd") or "")
     raw_input = hook_input.get("tool_input")
     tool_input: dict[str, object] = raw_input if isinstance(raw_input, dict) else {}
+    # m4, 0106: the operator's own session is bare main with no agent_id; it is asked, never denied.
+    operator = raw_agent == "main" and not hook_input.get("agent_id")
     if tool in CREDENTIAL_TOOLS:
         reason = path_reason(tool, tool_input, cwd)
+        if reason and operator:
+            return _with_agent(_main_ask(ASK_CREDENTIAL, reason), agent)
         return Decision(reason is None, reason, agent)
     # 0035: outside a train, main and foreign agents carry only the read deny above.
     if not policed_outside_train(raw_agent) and not _train_scoped(cwd, tool, tool_input):
         return Decision(True, None, agent)
     credential = _credential_reason(tool, tool_input, cwd)
+    if credential and operator:
+        warning = ASK_CREDENTIAL_WRITE if tool in WRITE_TOOLS else ASK_CREDENTIAL
+        return _with_agent(_main_ask(warning, credential), agent)
     if credential:
         return Decision(False, credential, agent)
     if agent == "main" and raw_agent != "main":
@@ -1643,30 +1706,35 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
     else:
         charter = str(config.charter_root) if config.charter_root else None
         decision = _unknown_decision(raw_agent, agent, cwd, tool, tool_input, charter)
+    return _with_agent(decision, agent)
+
+
+def _with_agent(decision: Decision, agent: str) -> Decision:
     return Decision(decision.allow, decision.reason, agent, decision.ask)
 
 
 def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision:
+    # 0106: every main-session finding below asks the operator; none of them blocks.
     command = str(tool_input.get("command") or "")
     raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
     is_write = tool in WRITE_TOOLS
     if (is_write or tool == "Bash") and not os.path.isabs(cwd):
-        return _block(R_NO_CWD)
+        return _main_ask(ASK_NO_CWD, R_NO_CWD)
     path = _abs(raw_path, cwd)
     if is_write and (
         ".git" in path.split(os.sep) or ".git" in os.path.normpath(path).split(os.sep)
     ):
-        return _block(R_DOTGIT)
+        return _main_ask(ASK_DOTGIT.format(path=path), R_DOTGIT)
     if is_write and _data_dir_path(path, cwd):
-        return _block(R_DATA_DIR)
+        return _main_ask(ASK_DATA_DIR, R_DATA_DIR)
     if tool == "Bash":
-        # 8.5: main is bound only by the tripwires; regex fallback when tokenize refuses.
+        # 8.5, 0106: main meets only the tripwires, as asks; regex fallback when tokenize refuses.
         if _data_dir_write(command):
-            return _block(R_DATA_DIR)
+            return _main_ask(ASK_DATA_DIR, R_DATA_DIR)
         if _cd_data_dir_git(command):
-            return _block(R_DATA_DIR_GIT)
+            return _main_ask(ASK_DATA_DIR, R_DATA_DIR_GIT)
         reason = _command_reason(command) or _gh_gate("main", cwd, command)
-        return _block(reason) if reason else _allow()
+        return _tripwire_ask(reason) if reason else _allow()
     train = _main_write_train(path, cwd) if is_write else None
     if train is not None:
         return _ask(R_MAIN_TRAIN_ASK.format(train=train, path=path))

@@ -653,11 +653,13 @@ def test_main_inside_a_train_meets_the_jail(
     tool_input: dict[str, str],
     reason: str,
 ) -> None:
+    # 0106: main meets the jail as an ask carrying the warning and the finding.
     _in_train(project_data)
     payload = hook_input(tool_name=tool, tool_input=tool_input)
     result = _run_home(payload, temp_home, plugin_data)
-    assert result.returncode == 2
-    assert reason in result.stderr, result.stderr
+    assert result.returncode == 0 and result.stderr == "", result.stderr
+    out = json.loads(result.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "ask" and reason in out["permissionDecisionReason"]
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -694,8 +696,10 @@ def test_main_writing_into_another_repos_train_is_judged(
     _in_train(marked / ".claude" / "daedalus")
     command = f"git -C {marked} clean -fdx"
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": command}))
-    assert result.returncode == 2
-    assert "git clean" in result.stderr
+    # 0106: judged by the full jail, which asks the operator rather than blocking main.
+    assert result.returncode == 0
+    out = json.loads(result.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "ask" and "git clean" in out["permissionDecisionReason"]
 
 
 def test_fast_path_imports_only_the_standard_library_modules(repo_cwd: Path) -> None:
