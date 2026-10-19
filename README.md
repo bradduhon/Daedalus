@@ -77,19 +77,22 @@ To read what every agent did in a session, open its audit report:
 
 ## The agents
 
-Each agent's file lists the only tools it may use.
+Each agent's file lists the only tools it may use, the reply lines it ends with, and the phases of a body of work it suits: context, clarification, plan, implementation, audit, and commit and release. Phases guide which agent the session picks; they never limit it. The table below is generated from the agent files by `python3 scripts/catalog.py table`, and `/daedalus:catalog` shows the session the same table. A test fails when it goes stale.
 
-| Agent | Model | Tools | Job |
-|---|---|---|---|
-| contract-spec | sonnet | Read, Grep, Glob, Write, Edit | Writes and updates the service contracts before coding starts. |
-| charter-docs | sonnet | Read, Grep, Glob, Write, Edit, Bash | The only writer of the decision ledger; commits Build Train results. |
-| repo-coder | opus | Read, Write, Edit, Bash, Glob, Grep | Writes code and unit tests for one work unit in its own worktree. |
-| web-researcher | haiku | WebSearch, WebFetch, Read | Looks up external documentation and returns short facts. |
-| nist-specialist | sonnet | Read, Grep, Bash | Checks designs and diffs against a pinned NIST SP 800-53 catalog. |
-| cis-specialist | sonnet | Read, Grep, Bash | Checks cloud setup and server settings against the CIS Benchmark files you add. |
-| standards-rules-specialist | sonnet | Read, Grep, Glob | Reads your declared standards and answers questions about them. |
-| security-auditor | opus | Read, Grep, Glob, Bash | Reviews each unit's code for security flaws before the local commits are final. |
-| pr-train-conductor | opus | Bash, Read, Glob, Grep | Commits, pushes, opens pull requests, and watches CI. Never merges. |
+<!-- generated: catalog.py table -->
+| Agent | Shape | Model | Tools | Job | Reply lines | Phases |
+|---|---|---|---|---|---|---|
+| charter-docs | producer | sonnet | Bash, Edit, Glob, Grep, Read, Write | Single-writer custodian of the Charter repository, the architectural decision ledger, and Build Train commits. | `[STATUS: LEDGER_PROBED] <probe line>`; `[STATUS: LEDGER_APPENDED] <id>`; `[STATUS: LEDGER_MISMATCH] expected=<n> ledger=<m>`; `[STATUS: COMMITTED] <sha> ids=<id>[,<id>]`; `[STATUS: BLOCKED] <detail>` | clarification, commit, release |
+| cis-specialist | judge | sonnet | Bash, Grep, Read | Evaluates cloud infrastructure, IAM/RCP policies, and OS/container hardening against operator-supplied CIS Benchmarks. | `[STATUS: CACHE_INVALID] <detail>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with control ids and file:line>` | clarification, audit |
+| contract-spec | producer | sonnet | Edit, Glob, Grep, Read, Write | Reads and updates service handshake contracts, API schemas, and specifications. | `## Locked Contract Packet` | clarification, plan |
+| nist-specialist | judge | sonnet | Bash, Grep, Read | Evaluates architecture, IAM, and cryptographic boundaries against the pinned NIST SP 800-53 OSCAL catalog and SP 800-57 key-management guidance. | `[STATUS: CACHE_INVALID] <detail>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with control ids and file:line>` | clarification, audit |
+| planner | shaper | opus | Glob, Grep, Read, Write | Cuts a design spec into work units that coders can build in parallel. | `[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>`; `[STATUS: QUESTION] <what the task leaves open>` | plan |
+| pr-train-conductor | mover | opus | Bash, Glob, Grep, Read | GitHub specialist for the Push Train. | `[STATUS: PUSHED] branch=<b> pr=<url>`; `[STATUS: CI] run=<id> conclusion=<text>`; `[STATUS: BLOCKED] <precondition that failed>` | commit, release |
+| repo-coder | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Scoped implementation worker. | `[STATUS: YIELD_WEB] <query>`; `[STATUS: YIELD_CONTRACT] <mismatch>`; `[STATUS: YIELD_COMPLIANCE] <question>`; `[STATUS: YIELD_STANDARDS] <question>`; `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>` | implementation |
+| security-auditor | judge | opus | Bash, Glob, Grep, Read | Adversarial pre-commit security and contract verifier. | `[VERDICT: APPROVED]`; `[VERDICT: REJECTED]` | audit |
+| standards-rules-specialist | finder | sonnet | Glob, Grep, Read | Adopts the project's declared standards. | `## Standards Packet`; `[STANDARDS: CONTRADICTION] <spec ref> vs <source:line>`; `[STATUS: STANDARD] <answer>` | clarification, plan |
+| web-researcher | finder | haiku | Read, WebFetch, WebSearch | Fast external documentation lookup on Haiku. | `[STATUS: RESEARCH] <payload under 300 words with URLs>` | context |
+<!-- end generated -->
 
 Each agent file also declares a shape and the hook scripts listed in its hooks block, with their flags. The table below is generated from the agent files by `python3 scripts/catalog.py matrix`; a test fails when it goes stale.
 
@@ -100,6 +103,7 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 | cis-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
 | contract-spec | producer | credential_paths, workspace_integrity, tool_bound, root_writes --touch contracts,charter-specs |
 | nist-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
+| planner | shaper | credential_paths, workspace_integrity, tool_bound, root_writes --touch scratch --name plan.md |
 | pr-train-conductor | mover | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools --gh, command_allowlist --allow git,gh,gitleaks, git_grammar --allow conductor, git_push --conductor, gh_classes --conductor |
 | repo-coder | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes, gh_classes |
 | security-auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only, gh_classes |
@@ -210,6 +214,7 @@ Daedalus/
 │   ├── cis-specialist.md
 │   ├── contract-spec.md
 │   ├── nist-specialist.md
+│   ├── planner.md
 │   ├── pr-train-conductor.md
 │   ├── repo-coder.md
 │   ├── security-auditor.md
@@ -245,6 +250,7 @@ Daedalus/
 ├── skills/
 │   ├── audit-report/SKILL.md        # /daedalus:audit-report
 │   ├── build-train/SKILL.md         # /daedalus:build-train
+│   ├── catalog/SKILL.md             # /daedalus:catalog
 │   ├── doctor/SKILL.md              # /daedalus:doctor
 │   ├── push-train/SKILL.md          # /daedalus:push-train
 │   └── setup/SKILL.md               # /daedalus:setup

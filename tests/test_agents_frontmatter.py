@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from lib import hook_io, router
-from lib.agent_files import frontmatter
+from lib.agent_files import PHASES, Hook, frontmatter, load
 from lib.config import Config
 from lib.jail import WORKER_DENIED_TOOLS
 from lib.train_scope import KNOWN_AGENTS
@@ -25,6 +25,20 @@ EXPECTED_MODEL = {
     "cis-specialist": "sonnet",
     "standards-rules-specialist": "sonnet",
     "web-researcher": "haiku",
+    "planner": "opus",
+}
+# 0089: phase affinities guide the session's choice of agent; they never gate a phase.
+EXPECTED_PHASES = {
+    "repo-coder": ("implementation",),
+    "security-auditor": ("audit",),
+    "contract-spec": ("clarification", "plan"),
+    "standards-rules-specialist": ("clarification", "plan"),
+    "charter-docs": ("clarification", "commit", "release"),
+    "pr-train-conductor": ("commit", "release"),
+    "nist-specialist": ("clarification", "audit"),
+    "cis-specialist": ("clarification", "audit"),
+    "web-researcher": ("context",),
+    "planner": ("plan",),
 }
 
 
@@ -36,6 +50,51 @@ def _list(value: str, path: Path) -> set[str]:
 def test_every_known_worker_has_a_persona_and_no_extras() -> None:
     names = {p.stem for p in AGENTS.glob("*.md")}
     assert names == KNOWN_AGENTS - {"main"}
+    assert names == set(EXPECTED_MODEL) == set(EXPECTED_PHASES)
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_PHASES))
+def test_every_agent_has_known_phases(name: str) -> None:
+    # 9.1: the phases key lists affinities in phase order, each a known phase token.
+    path = AGENTS / f"{name}.md"
+    phases = load(path).phases
+    assert phases == EXPECTED_PHASES[name]
+    assert set(phases) <= set(PHASES)
+    assert list(phases) == sorted(phases, key=PHASES.index)
+    assert frontmatter(path)["phases"] == f"[{', '.join(phases)}]"
+
+
+PLANNER = AGENTS / "planner.md"
+
+
+def test_planner_frontmatter_and_reply_lines() -> None:
+    # spec 3.1: a shaper that reads and writes exactly one plan file under the train scratch.
+    planner = load(PLANNER)
+    assert planner.shape == "shaper" and planner.model == "opus"
+    assert planner.tools == frozenset({"Read", "Grep", "Glob", "Write"})
+    assert planner.hooks == (
+        Hook("credential_paths", ()),
+        Hook("workspace_integrity", ()),
+        Hook("tool_bound", ()),
+        Hook("root_writes", ("--touch", "scratch", "--name", "plan.md")),
+    )
+    assert planner.status_lines == (
+        "[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>",
+        "[STATUS: QUESTION] <what the task leaves open>",
+    )
+    disallowed = _list(frontmatter(PLANNER)["disallowedTools"], PLANNER)
+    assert {"Edit", "Bash", "WebFetch", "WebSearch", "Agent", "Task", "SendMessage"} <= disallowed
+    text = " ".join(PLANNER.read_text(encoding="utf-8").split())
+    for rule in (
+        "Cut into bodies that touch non-overlapping file areas",
+        "Name every edge's kind",
+        "Prefer an interface pin over a file overlap",
+        "A pin is never an edge.",
+        "`max_concurrent_builders`",
+        "`wire: none`",
+    ):
+        assert rule in text, rule
+    assert "```plan" in text
 
 
 @pytest.mark.parametrize("name", sorted(EXPECTED_MODEL))
@@ -62,6 +121,17 @@ def test_repo_coder_works_in_the_train_made_worktree() -> None:
     assert "`git add -A && git commit" not in text
     # 0022: file paths and git pathspecs are absolute or go through git -C.
     assert "Every file path and every git pathspec you use is absolute" in text
+
+
+def test_repo_coder_reads_the_packets_by_hash() -> None:
+    # 0083: the brief names both packet files with their sha256; COMPLETE echoes 12 hex of each.
+    text = " ".join((AGENTS / "repo-coder.md").read_text().split())
+    assert "`Contract: <path> sha256=<hex>`" in text
+    assert "`Standards: <path> sha256=<hex>`" in text
+    assert "refuse to start when a hash does not match" in text
+    assert "the injected Locked Contract Packet" not in text
+    complete = load(AGENTS / "repo-coder.md").status_lines[-1]
+    assert complete.endswith(" contract=<12 hex> standards=<12 hex>")
 
 
 def test_repo_coder_yields_compliance_before_sensitive_code() -> None:

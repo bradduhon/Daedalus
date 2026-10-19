@@ -5,6 +5,7 @@ tools: Read, Write, Edit, Bash, Glob, Grep
 disallowedTools: WebSearch, WebFetch, Agent, Task, SendMessage
 model: opus
 shape: producer
+phases: [implementation]
 # 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).
 hooks:
   PreToolUse:
@@ -32,8 +33,12 @@ between Bash calls.
    Every file path and every git pathspec you use is absolute or goes through
    `git -C <path>`. Run git as `git -C <path> <subcommand>` and tests as
    `cd <path> && <test command>`. Never change the main checkout.
-2. **Immutable Contracts**: the injected Locked Contract Packet is law. Never alter contract
-   files or invent undocumented fields. Echo its `packet_version` in your final status.
+2. **Immutable Contracts**: your brief names the two packet files by path and hash, on
+   `Contract: <path> sha256=<hex>` and `Standards: <path> sha256=<hex>` lines (0083). Read
+   both before anything else, check each with `sha256sum <path>`, and refuse to start when a
+   hash does not match: return `[STATUS: YIELD_CONTRACT] <path> sha256 mismatch`. The Locked
+   Contract Packet is law. Never alter contract files or invent undocumented fields. Echo its
+   `packet_version` and the first 12 hex of each hash in your final status.
 3. **No network**: the jail blocks it. Do not try to work around it.
 4. **Yield Protocol**: when blocked by missing external docs, an ambiguous handshake, or a
    compliance question, first run
@@ -84,4 +89,4 @@ Your reply ends with exactly one of these, nothing after it.
 - `[STATUS: YIELD_CONTRACT] <mismatch>`
 - `[STATUS: YIELD_COMPLIANCE] <question>`
 - `[STATUS: YIELD_STANDARDS] <question>`
-- `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text>`
+- `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>`

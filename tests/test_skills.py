@@ -96,8 +96,9 @@ def test_build_train_dispatches_existing_agents() -> None:
     for name in names:
         assert (REPO_ROOT / "agents" / f"{name}.md").is_file(), name
     personas = {p.stem for p in (REPO_ROOT / "agents").glob("*.md")}
-    # The Push Train owns pr-train-conductor; the Build Train dispatches every other persona.
-    assert names == personas - {"pr-train-conductor"}
+    # The Push Train owns pr-train-conductor and the plan skill owns the planner (spec 3.3).
+    assert names == personas - {"pr-train-conductor", "planner"}
+    assert "`/daedalus:plan " in _build_train()
 
 
 def test_build_train_probes_the_ledger_and_asks() -> None:
@@ -240,11 +241,13 @@ def _phase1_step(text: str, number: int) -> str:
 
 
 def test_build_train_keeps_personas_warm() -> None:
-    # 0059, C1: the roster rule sits in the whole-train rules.
+    # 0059, 0086, C1: the warm dispatch rule sits in the whole-train rules.
     rules = _build_train().split("## Preconditions", 1)[0]
-    roster = rules.split("- Warm roster (0059): ", 1)[1].split("\n", 1)[0]
+    roster = rules.split("- Warm dispatch (0086): ", 1)[1].split("\n", 1)[0]
     assert "a persona stays warm after its first use" in roster
     assert "The security-auditor stays warm only after its first verdict" in roster
+    assert "goes to that coder by SendMessage as a resume" in roster
+    assert "A cold coder starts only when no warm coder built a dependency of the unit." in roster
     cold = next(ln for ln in rules.splitlines() if "standards-rules-specialist dispatch" in ln)
     assert cold.startswith("- The first standards-rules-specialist dispatch of a train carries")
     assert "Every later standards question resumes that same specialist by SendMessage" in cold
@@ -316,10 +319,130 @@ def test_build_train_records_picks_before_any_coder() -> None:
 
 
 def test_build_train_hands_coders_the_pick_ledger_ids() -> None:
-    # 0057, C10: the ids line follows the two packets and precedes the worktree line.
+    # 0057, 0083, C10: the ids line follows the two packet lines and precedes the worktree line.
     phase2 = _section(_build_train(), "## Phase 2", "## Phase 3")
-    dispatch = phase2.split("Then Agent(`repo-coder`) with: both packets", 1)[1]
-    assert dispatch.index("`Pick ledger ids:`") < dispatch.index("`Worktree: <path>`")
+    brief = phase2.split("holding: the two packet lines", 1)[1]
+    assert brief.index("`Pick ledger ids:`") < brief.index("`Worktree: <path>`")
+    assert brief.index("`Worktree: <path>`") < brief.index("Agent(`repo-coder`)")
+
+
+ESCALATION_START = "Ask it with AskUserQuestion, in the decision-brief shape (0103):"
+ESCALATION_END = "Never run a third round and never stop the train on your own authority."
+
+
+def _escalation(text: str) -> str:
+    flat = " ".join(text.split())
+    assert flat.count(ESCALATION_START) == 1, "one escalation prompt"
+    return flat.split(ESCALATION_START, 1)[1].split(ESCALATION_END, 1)[0]
+
+
+def test_build_train_has_no_unit_cap_or_warm_roster_line() -> None:
+    # B5, row 17: the planner and max_concurrent_builders govern; warm dispatch replaces the roster.
+    text = _build_train()
+    for gone in (
+        "at most 5 work units",
+        "Divide the task into",
+        "Warm roster (0059)",
+        "Each repo-coder is warm for its own unit only.",
+    ):
+        assert gone not in text, gone
+    phase2 = _section(text, "## Phase 2", "## Phase 3")
+    assert "`max_concurrent_builders`" in phase2
+    assert "one per unit line of its plan block" in phase2
+
+
+def test_build_train_has_no_three_round_cap() -> None:
+    # 0096, row 17: after the second rejection the operator decides.
+    text = _build_train()
+    assert "After 3 rejected rounds" not in text and "3 rejected rounds" not in text
+    step3 = _section(text, "## Phase 3", "\n4. ").split("\n3. ", 1)[1]
+    assert "After the second rejected round, do not start a third" in step3
+    assert ESCALATION_END in " ".join(step3.split())
+
+
+def test_build_train_carries_the_escalation_prompt() -> None:
+    # 0103: the decision-brief shape, held equal between the catalog and the recipe.
+    catalog = (REPO_ROOT / "skills" / "catalog" / "SKILL.md").read_text(encoding="utf-8")
+    step3 = _section(_build_train(), "## Phase 3", "\n4. ").split("\n3. ", 1)[1]
+    prompt = _escalation(step3)
+    assert prompt == _escalation(catalog)
+    order = [
+        "a plain question ending in a question mark",
+        "Two or three context sentences in the operator's words",
+        "what it protects and why the fix fell short",
+        "One more fix-and-audit round:",
+        "Merge with each finding as a tracked-risk issue:",
+        "Stop with the branches kept:",
+        "The recommendation and its reason",
+    ]
+    places = [prompt.index(item) for item in order]
+    assert places == sorted(places)
+    assert "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py exception " in prompt
+
+
+def test_build_train_prints_progress_not_the_state_block() -> None:
+    # 0085: the operator reads the progress note; the State Block prints at stop, resume, summary.
+    text = _build_train()
+    assert "print it after Preconditions and after each phase" not in text
+    rules = text.split("## Preconditions", 1)[0]
+    note = rules.split("- Progress (0085): ", 1)[1].split("\n", 1)[0]
+    progress = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py progress --repo <repo>`"
+    assert progress in note
+    assert "after Preconditions and after each phase" in note
+    assert "Print the State Block only at a stop, at a resume, and in the summary." in note
+    block = text.split("**State Block**", 1)[1].split("\n\n", 1)[0]
+    assert "Print it only at a stop, at a resume, and in the summary" in block
+
+
+def test_build_train_records_choices_plan_packets_and_controls() -> None:
+    # 0083, 0086, 0088, 0089, spec 5.2, 5.3, 6.3: the recipe's composition steps.
+    text = _build_train()
+    flat = " ".join(text.split())
+    rules = text.split("## Preconditions", 1)[0]
+    choice = rules.split("- Choices (0088): ", 1)[1].split("\n", 1)[0]
+    assert (
+        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py choice --repo <repo> "
+        '--chose "<what>" --over "<alternative>" --cost "<time or tokens>"`'
+    ) in choice
+    for kind in ("warm or cold", "parallel or serial", "weight", "agent"):
+        assert kind in choice, kind
+    assert "`/daedalus:catalog`" in rules
+    # 0105: the jail warns and asks, never blocks, the main session's own writes.
+    assert "the jail blocks writes under `src/` and `tests/` for you" not in text
+    assert "it never blocks the main session" in rules and "unit worktrees" in rules
+    phase1 = " ".join(_section(text, "## Phase 1", "## Phase 2").split())
+    assert "`/daedalus:plan <spec path>`" in phase1
+    assert (
+        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py plan --repo <repo> --path "
+        "<repo>/docs/.tmp/daedalus/<train-id>/plan.md`"
+    ) in phase1
+    assert "`wire: none`" in phase1 and "validate-only" in phase1
+    assert "starts the moment the last pick is made" in phase1
+    assert "the lock waits on both" in phase1
+    assert "byte-identical" not in flat
+    assert "`<repo>/docs/.tmp/daedalus/<train-id>/standards-packet.md`" in phase1
+    assert "`Contract: <contract path> sha256=<hex>`" in phase1
+    assert "`Standards: <standards path> sha256=<hex>`" in phase1
+    phase2 = " ".join(_section(text, "## Phase 2", "## Phase 3").split())
+    for line in ("`Dispatch: repo-coder`", "`Prompt file: <brief path>`", "`Expect: "):
+        assert line in phase2, line
+    complete = next(ln for ln in text.splitlines() if ln.startswith("| `[STATUS: COMPLETE]"))
+    assert "contract=<12 hex> standards=<12 hex>`" in complete
+    assert "compare its `contract=` and `standards=` values" in complete
+    phase3 = " ".join(_section(text, "## Phase 3", "\n5. The summary").split())
+    controls = (
+        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_report.py --repo <repo> --session <id> "
+        "--controls`"
+    )
+    assert controls in phase3
+    assert phase3.index(controls) < phase3.index("Write the summary now")
+    for word in ("friction", "habit"):
+        assert word in phase3, word
+    assert "       ## Blocks\n" in text.split("Shape:", 1)[1]
+    # O7: every charter-docs dispatch names append_ledger.py by its absolute path.
+    for part in (phase1, phase3):
+        dispatch = part.split("Agent(`charter-docs`) with:", 1)[1].split(". ", 1)[0]
+        assert "the absolute path of append_ledger.py" in dispatch
 
 
 def test_build_train_phase1_has_no_branch_switch() -> None:
