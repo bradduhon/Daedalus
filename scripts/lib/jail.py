@@ -256,6 +256,7 @@ R_UNKNOWN_TRAIN = (
     "inspection and git reads, pipes allowed; Write, Edit, dispatch and web tools are refused "
     "(0100).\n" + UNMARK_NEXT
 )
+# 0099, 0104: judged only inside a repository holding a train marker.
 R_MAIN_SCRATCH = (
     "the orchestrating session does not write application code during a train; it writes only "
     "under docs/.tmp/daedalus/, the train summary included (0099): {path}. "
@@ -411,12 +412,15 @@ def _in_unit_worktree(target: str, cwd: str) -> bool:
 
 
 def _orchestrator_write_allowed(path: str, cwd: str) -> bool:
-    # 0099: scratch of the cwd repo or of the train repo the path sits in; the summary is inside.
-    target = _abs(path, cwd)
-    if _under(target, str(project_root(Path(cwd)) / SUMMARY_DIR)):
-        return True
-    root = project_root(Path(os.path.dirname(os.path.realpath(target))))
-    return os.path.lexists(train_marker(root)) and _under(target, str(root / SUMMARY_DIR))
+    # 0099, 0104: inside a marked repository only its scratch (summary included); outside, unjudged.
+    target = os.path.realpath(_abs(path, cwd))
+    home = project_root(Path(cwd))
+    if _under(target, str(home)) and _train_scoped(cwd, "", {}):
+        return _under(target, str(home / SUMMARY_DIR))
+    root = project_root(Path(os.path.dirname(target)))
+    if os.path.lexists(train_marker(root)):
+        return _under(target, str(root / SUMMARY_DIR))
+    return True
 
 
 @dataclass(frozen=True)

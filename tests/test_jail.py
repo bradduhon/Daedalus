@@ -731,8 +731,8 @@ class TestFinalDataDir:
 
     def test_unset_env_leaves_main_write_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("CLAUDE_PLUGIN_DATA")
-        path = f"{DATA}/config.json"
-        assert decide(_w(None, path), CFG).reason == jail.R_MAIN_SCRATCH.format(path=path)
+        # 0104: a path outside every marked repository is not judged by the scratch rule.
+        assert decide(_w(None, f"{DATA}/config.json"), CFG).allow
 
     @pytest.mark.parametrize(
         "command",
@@ -1687,6 +1687,31 @@ def test_main_write_to_scripts_is_refused_during_a_train(marked_repo: Path) -> N
             reason = str(d.reason)
             assert not d.allow, (rel, tool)
             assert "repo-coder" in reason and "worktree" in reason and "Next:" in reason, reason
+
+
+# 0104: the scratch rule judges only paths inside a repository holding a train marker.
+def test_main_write_under_home_is_allowed_during_a_train(
+    cred_home: Path, marked_repo: Path
+) -> None:
+    path = str(cred_home / "notes" / "memory.md")
+    for tool in ("Write", "Edit"):
+        d = decide(_cred(None, tool, str(marked_repo), file_path=path), CFG)
+        assert d.allow, (tool, d.reason)
+
+
+def test_main_write_to_tmp_is_allowed_during_a_train(marked_repo: Path) -> None:
+    for tool in ("Write", "Edit"):
+        d = decide(_cred(None, tool, str(marked_repo), file_path="/tmp/x"), CFG)
+        assert d.allow, (tool, d.reason)
+
+
+def test_main_write_to_readme_in_the_train_repo_stays_refused(
+    marked_repo: Path, other_repo: Path
+) -> None:
+    path = f"{marked_repo}/README.md"
+    for cwd in (marked_repo, other_repo):
+        d = decide(_cred(None, "Write", str(cwd), file_path=path), CFG)
+        assert d.reason == jail.R_MAIN_SCRATCH.format(path=path), cwd
 
 
 def test_main_write_anywhere_is_allowed_without_a_train(other_repo: Path) -> None:
