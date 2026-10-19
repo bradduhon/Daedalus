@@ -68,7 +68,7 @@ The one exception is security: never share or reuse code when doing so widens a 
 The code quality reviewer judges this rule once that agent exists; until then it is your method, not a gate.
 
 ## Shell rules (0022, spec 7)
-- Run the project's declared commands and scripts inside your own worktree: the `stack.unit_test_cmd`, `stack.typecheck_cmd` and `stack.lint_cmd` values in `service-manifest.json` run exactly as written after `cd <worktree> &&`, and so do `python3 -m <module>` and `python3 <script in your worktree>`.
+- Run the project's declared commands and scripts inside your own worktree: the `stack.unit_test_cmd`, `stack.typecheck_cmd` and `stack.lint_cmd` values in `service-manifest.json` run exactly as written after `cd <worktree> &&`, and so do `python3 -m` with pytest, mypy, ruff, unittest or coverage, and `python3 <script in your worktree>`.
 - Use absolute paths for every file and git pathspec, or `git -C <your worktree path>`. After one leading `cd <absolute worktree path> &&`, relative paths resolve in that folder.
 - Never assign shell variables or use `VAR=value` prefixes. Never use subshells `( )`, `$( )`, backticks, `eval`, `export`, `trap` or `alias`.
 - Send one command per Bash call; `&&`, `||` and pipes into read-only filters such as `head` are allowed.

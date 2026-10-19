@@ -301,15 +301,31 @@ class TestLiveRunGrammar:
     @pytest.mark.parametrize(
         "command",
         [
+            "python3 -m pytest -q",
             "python3 -m mypy --strict src",
             "python3 -m ruff check scripts tests",
-            "python3 -m pip_audit",
-            "python -m json.tool x.json",
+            "python3 -m unittest discover",
+            "python -m coverage report",
         ],
     )
     def test_python3_dash_m_module_is_allowed(self, command: str) -> None:
-        # B2: any module by name.
+        # B2 narrowed by audit finding (c) of Build Train 20261019-124612: the five runners only.
         assert decide(_b("repo-coder", command), CFG).allow, command
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "python3 -m pip install requests",
+            "python3 -m http.server 8000",
+            "python3 -m zipfile -e a.zip /tmp",
+            "python -m json.tool in.json out.json",
+            "python3 -m pytest_cov",
+            "python3 -m coverage.run",
+        ],
+    )
+    def test_python3_dash_m_other_module_is_refused(self, command: str) -> None:
+        # B2, finding (c): network_tools and unit_writes never see what another module does.
+        assert evaluate(HOOK, _b("repo-coder", command)) == shell.R_INLINE, command
 
     @pytest.mark.parametrize(
         "command",

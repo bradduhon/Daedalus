@@ -1165,7 +1165,8 @@ def docs_read_ok(tokens: list[str], raw: str, roots: list[str], cwd: str, base: 
     return True
 
 
-_MODULE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
+# B2 narrowed by audit finding (c), Build Train 20261019-124612: -m runs these modules only.
+RUNNER_MODULES = frozenset({"pytest", "mypy", "ruff", "unittest", "coverage"})
 
 
 def python_script(tokens: list[str]) -> str | None:
@@ -1191,9 +1192,9 @@ def _tester_runner_ok(
     if name == "uv":
         return args[:2] == ["run", "pytest"]
     if name in {"python", "python3"}:
-        # B2: any module by name; a script only where own_script places it in the coder's worktree.
+        # B2, finding (c): a runner module, or a script own_script places in the coder's worktree.
         if args[:1] == ["-m"]:
-            return len(args) > 1 and bool(_MODULE.fullmatch(args[1]))
+            return len(args) > 1 and args[1] in RUNNER_MODULES
         script = python_script(tokens)
         return script is not None and own_script is not None and own_script(script)
     if name == "node":
