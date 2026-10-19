@@ -285,12 +285,7 @@ def test_audit_reason_names_the_denying_hook(
     payload, hook = DENIALS[agent]
     records: list[tuple[str, str | None]] = []
 
-    def record(
-        hook_input: dict[str, object],
-        decision: str,
-        reason: str | None,
-        judge_ms: float | None = None,
-    ) -> None:
+    def record(hook_input: dict[str, object], decision: str, reason: str | None) -> None:
         records.append((decision, reason))
 
     monkeypatch.setattr(audit, "audit_append", record)
@@ -306,12 +301,7 @@ def test_audit_reason_names_the_denying_hook(
 def test_allowed_call_audits_no_reason(monkeypatch: pytest.MonkeyPatch, jail_fakes: None) -> None:
     records: list[tuple[str, str | None]] = []
 
-    def record(
-        hook_input: dict[str, object],
-        decision: str,
-        reason: str | None,
-        judge_ms: float | None = None,
-    ) -> None:
+    def record(hook_input: dict[str, object], decision: str, reason: str | None) -> None:
         records.append((decision, reason))
 
     monkeypatch.setattr(audit, "audit_append", record)

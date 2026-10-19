@@ -10,6 +10,7 @@ import re
 import stat
 import subprocess
 import tempfile
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -427,6 +428,21 @@ def _tail_record(path: Path) -> dict[str, Any] | None:
         ) from exc
 
 
+_judge_start: float | None = None
+
+
+def mark_judge_start(at: float | None = None) -> None:
+    # 6.1: the jail's monotonic start; the next PreToolUse record turns it into judge_ms.
+    global _judge_start
+    _judge_start = time.monotonic() if at is None else at
+
+
+def _take_judge_ms() -> float | None:
+    global _judge_start
+    start, _judge_start = _judge_start, None
+    return None if start is None else round((time.monotonic() - start) * 1000, 3)
+
+
 def _started_type(path: Path, agent_id: str) -> str | None:
     # 6.1: caller holds the audit lock; the newest SubagentStart for this agent_id wins.
     if not path.exists():
@@ -461,6 +477,8 @@ def audit_append(
     root, source, _ = root_info(hook_input["cwd"])
     last = hook_input.get("last_assistant_message")
     key = reply_key(hook_input["cwd"], create=True) if isinstance(last, str) and last else None
+    if judge_ms is None and hook_input.get("hook_event_name") == "PreToolUse":
+        judge_ms = _take_judge_ms()
     record = build_record(hook_input, decision, reason, key, judge_ms)
     record["project_root"] = str(root)
     record["root_source"] = source

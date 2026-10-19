@@ -394,6 +394,21 @@ def test_subagent_stop_resolves_agent_type_from_its_start(
     assert main is not None and main["agent_type"] == "main"
 
 
+def test_judge_start_is_consumed_by_the_next_pre_tool_use_record(
+    project_data: Path, hook_input: Any
+) -> None:
+    # 6.1: the mark fills one PreToolUse record, skips other events, then resets.
+    bare = {"tool_name": None, "tool_input": None, "tool_use_id": None}
+    audit.mark_judge_start(time.monotonic() - 0.05)
+    start = audit.audit_append(hook_input(hook_event_name="SubagentStart", agent_id="a", **bare))
+    assert start is not None and start["judge_ms"] is None
+    first = audit.audit_append(hook_input(), "allow", None)
+    assert first is not None and first["judge_ms"] >= 50
+    assert first["hash"] == audit.record_hash(first)
+    second = audit.audit_append(hook_input(tool_use_id="toolu_2"), "allow", None)
+    assert second is not None and second["judge_ms"] is None
+
+
 def test_pre_tool_use_record_carries_judge_ms(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:

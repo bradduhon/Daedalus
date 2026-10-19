@@ -195,35 +195,26 @@ def _warn_fallback(cwd: str) -> None:
         pass  # m5: a closed stderr must not turn an allow into exit 1.
 
 
-def _elapsed_ms(started: float) -> float:
-    return round((time.monotonic() - started) * 1000, 3)
-
-
 def _record_and_block(
-    payload: dict[str, object],
-    agent: str,
-    message: str,
-    started: float,
-    next_step: str = _REPORT_NEXT,
+    payload: dict[str, object], agent: str, message: str, next_step: str = _REPORT_NEXT
 ) -> int:
     from lib.audit import audit_append
 
     if "Next:" not in message:
         message += next_step
     try:
-        audit_append(payload, "block", message, _elapsed_ms(started))
+        audit_append(payload, "block", message)
     except Exception:  # noqa: BLE001, S110
         pass  # 8.5: best effort; the block stands whether or not the record lands.
     return _block(agent, message)
 
 
-def _judge(payload: dict[str, object], agent: str, started: float | None = None) -> int:
+def _judge(payload: dict[str, object], agent: str) -> int:
     from lib.audit import audit_append
     from lib.config import Config, load_config
     from lib.jail import CREDENTIAL_TOOLS, decide, normalize_agent
     from lib.router import route, routed
 
-    started = time.monotonic() if started is None else started
     cwd = payload.get("cwd")
     # 0023: reads carry only the credential deny, so a broken data dir never closes them.
     read = payload.get("tool_name") in CREDENTIAL_TOOLS and isinstance(cwd, str)
@@ -232,9 +223,7 @@ def _judge(payload: dict[str, object], agent: str, started: float | None = None)
         config = load_config(cwd if isinstance(cwd, str) else None)
     except Exception as exc:  # noqa: BLE001
         if not read:
-            return _record_and_block(
-                payload, agent, f"{_CONFIG_HOOK}: {exc}", started, _CONFIG_NEXT
-            )
+            return _record_and_block(payload, agent, f"{_CONFIG_HOOK}: {exc}", _CONFIG_NEXT)
         config = Config()
     ask = False
     if routed(agent):
@@ -249,7 +238,7 @@ def _judge(payload: dict[str, object], agent: str, started: float | None = None)
         reason = f"{_JAIL_HOOK}: {reason}" if reason else None
     try:
         verdict = "ask" if ask else "allow" if allow else "block"
-        record = audit_append(payload, verdict, reason, _elapsed_ms(started))
+        record = audit_append(payload, verdict, reason)
     except Exception as exc:  # noqa: BLE001
         if read and allow:
             # spec 8: an allowed read is non-blocking on a failed record, as audit_log.py is.
@@ -315,10 +304,14 @@ def main() -> int:
             importlib.import_module(name)
     except Exception as exc:  # noqa: BLE001
         return _load_failed(exc, in_train)
+    from lib.audit import mark_judge_start
+
+    # 6.1: the fast path loads no lib, so the read-time clock is handed over once lib.audit loads.
+    mark_judge_start(started)
     try:
-        return _judge(payload, agent, started)
+        return _judge(payload, agent)
     except Exception as exc:  # noqa: BLE001
-        return _record_and_block(payload, agent, f"{_JAIL_HOOK}: {exc}", started)
+        return _record_and_block(payload, agent, f"{_JAIL_HOOK}: {exc}")
 
 
 if __name__ == "__main__":
