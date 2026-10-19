@@ -71,6 +71,7 @@ from lib.train_scope import (
     TEST_NAMESPACE,
     policed_outside_train,
 )
+from lib.train_state import active_train
 from lib.workspace import UNMARK_NEXT, train_marker
 
 WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
@@ -143,7 +144,25 @@ R_CD_RELATIVE = (
 )
 R_CONDUCTOR_PUSH = (
     "the conductor pushes one named branch to origin, nothing else (0001). "
-    "Next: `git push -u origin <branch>`."
+    "Next: `git push -u origin daedalus/<train-id>`."
+)
+R_CONDUCTOR_PUSH_HEAD = (
+    "the conductor never pushes HEAD; it names this train's branch (issue 11). "
+    "Next: `git push -u origin daedalus/<train-id>`."
+)
+R_CONDUCTOR_PUSH_BRANCH = (
+    "the conductor pushes only this train's branch, {branch} (issue 11). "
+    "Next: `git push -u origin {branch}`."
+)
+R_CONDUCTOR_NO_TRAIN = (
+    "no active train names the branch to push (issue 11). "
+    "Next: run /daedalus:push-train, which marks the train before the push."
+)
+R_CONDUCTOR_CHARTER = (
+    "git -C reaches only the charter root .claude/daedalus/config.json declares, and only for "
+    "the push of this train's branch (0078). "
+    "Next: run the command in this repo without -C, or `git -C <charter_root> push -u origin "
+    "daedalus/<train-id>`."
 )
 R_CODER_GIT = (
     "repo-coder git is limited to add, commit, status, diff, log, show, rev-parse, ls-files, "
@@ -156,7 +175,11 @@ R_DATA_DIR = (
     "Next: edit <repo>/.claude/daedalus/config.json from your own shell."
 )
 R_SUBAGENT_MAIN = "a subagent may not run as main. Next: name the agent."
-R_CONDUCTOR_REPO = "the conductor works in the current repo only. Next: cd to the repo and omit -R."
+R_CONDUCTOR_REPO = (
+    "the conductor's gh pr writes target this repo; -R/--repo is admitted only on gh pr create "
+    "naming the declared charter root's origin, with --head on this train's branch (0078). "
+    "Next: omit -R, or pass --repo <charter slug> --head daedalus/<train-id>."
+)
 R_BODY_FILE = (
     "gh --body-file/-F must name a file under docs/.tmp/ or /tmp. "
     "Next: write the body to docs/.tmp/ and pass that path."
@@ -563,17 +586,48 @@ _DOCS_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
 }
 
 
-def _conductor_push_ok(tokens: list[str]) -> bool:
+def _train_branch(cwd: str) -> str | None:
+    # issue 11: the active train's integration branch, named by the train marker.
+    train = active_train(project_root(cwd))
+    return f"daedalus/{train}" if train else None
+
+
+def _conductor_push_reason(tokens: list[str], cwd: str, charter: str | None) -> str | None:
     sub, args, globals_ = _git_split(tokens)
-    if sub != "push" or globals_:
-        return False
+    if sub != "push":
+        return R_CONDUCTOR_PUSH
+    # 0078: the one global admitted is -C naming the declared charter root exactly.
+    if globals_ and not (
+        charter is not None
+        and len(globals_) == 2
+        and globals_[0] == "-C"
+        and os.path.realpath(_abs(globals_[1], cwd)) == os.path.realpath(_abs(charter, cwd))
+    ):
+        return R_CONDUCTOR_CHARTER
     if args[:1] in (["-u"], ["--set-upstream"]):
         args = args[1:]
-    return (
+    if len(args) == 2 and args[1].casefold() == "head":
+        return R_CONDUCTOR_PUSH_HEAD
+    if not (
         len(args) == 2
         and args[0] == "origin"
-        and bool(_BRANCH_NAME.fullmatch(args[1]))
+        and _BRANCH_NAME.fullmatch(args[1])
         and args[1].casefold() not in _DEFAULT_BRANCHES
+    ):
+        return R_CONDUCTOR_PUSH
+    branch = _train_branch(cwd)
+    if branch is None:
+        return R_CONDUCTOR_NO_TRAIN
+    return None if args[1] == branch else R_CONDUCTOR_PUSH_BRANCH.format(branch=branch)
+
+
+def _reaches_charter(tokens: list[str], cwd: str, charter: str | None) -> bool:
+    # 0078: a git -C into the charter root; only the train branch push may do that.
+    globals_ = _git_split(tokens)[2]
+    return (
+        charter is not None
+        and "-C" in globals_
+        and _under(_git_dir(globals_, cwd), _abs(charter, cwd))
     )
 
 
@@ -668,8 +722,71 @@ def _gh_pr_write(tokens: list[str]) -> bool:
 def _gh_repo_flag(tokens: list[str]) -> bool:
     # I7: reads may name another repo; pr writes stay in the current one.
     return _gh_pr_write(tokens) and any(
-        t in {"-R", "--repo"} or t.startswith(("--repo=", "-R")) for t in tokens[1:]
+        t in {"-R", "--repo"} or t.startswith(("--repo=", "-R")) or _gh_short_has(t, "R")
+        for t in tokens[1:]
     )
+
+
+# 0078: gh's [HOST/]OWNER/REPO from an https, ssh or scp-form origin URL.
+_REMOTE_URL = re.compile(
+    r"(?:(?:https?|ssh|git)://(?:[^@/]+@)?(?P<host>[^/:@]+)(?::\d+)?/"
+    r"|(?:[^@/:]+@)?(?P<scp>[^/:@]+):)"
+    r"(?P<path>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?"
+)
+
+
+def _remote_slug(url: str) -> str | None:
+    match = _REMOTE_URL.fullmatch(url.strip())
+    if match is None:
+        return None
+    host = (match["host"] or match["scp"]).casefold()
+    return match["path"] if host == "github.com" else f"{host}/{match['path']}"
+
+
+def _charter_slug(charter: str) -> str | None:
+    # 0078: a local read of the charter root's origin; the URL never reaches a reason.
+    cmd = ["git", "-C", charter, "remote", "get-url", "origin"]
+    try:
+        out = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=2, env=_git_env(), check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return _remote_slug(out.stdout) if out.returncode == 0 else None
+
+
+def _gh_flag_values(tokens: list[str], long: str, short: str) -> list[str] | None:
+    # 0078: `--x v`, `--x=v` and `-X v` only; an attached or bundled short form fails closed.
+    values: list[str] = []
+    i = 1
+    while i < len(tokens):
+        token = tokens[i]
+        if token in {long, f"-{short}"}:
+            if i + 1 >= len(tokens):
+                return None
+            values.append(tokens[i + 1])
+            i += 2
+            continue
+        if token.startswith(f"{long}="):
+            values.append(token.split("=", 1)[1])
+        elif _gh_short_has(token, short):
+            return None
+        i += 1
+    return values
+
+
+def _charter_pr_create_ok(tokens: list[str], cwd: str, charter: str | None) -> bool:
+    # 0078: one gh pr create on the declared charter root's origin, for this train's branch.
+    if charter is None or _gh_words(tokens) != ["pr", "create"]:
+        return False
+    repos = _gh_flag_values(tokens, "--repo", "R")
+    heads = _gh_flag_values(tokens, "--head", "H")
+    if repos is None or heads is None or len(repos) != 1 or len(heads) != 1:
+        return False
+    branch = _train_branch(cwd)
+    if branch is None or heads[0] != branch:
+        return False
+    return repos[0] == _charter_slug(_abs(charter, cwd))
 
 
 def _gh_body_file_ok(tokens: list[str], cwd: str) -> bool:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -542,12 +544,11 @@ def test_push_train_names_the_charter_pull_request_by_its_content() -> None:
     assert "    Contract and ledger entries for Build Train <train-id>.\n" in ledger
     other = body.split("Otherwise:", 1)[1]
     assert "    Contract for Build Train <train-id>.\n" in other
-    assert "ledger" not in other.split("The conductor", 1)[0]
-    hand_off = pt.split("## Hand-off", 1)[1]
+    assert "ledger" not in other.split("The code pull request", 1)[0]
     assert (
         "where `<title>` is `Build Train <train-id>: contract and ledger` when the `charter:` line "
         "ends in `(ledger under charter_root)`, else `Build Train <train-id>: contract`."
-    ) in hand_off
+    ) in body
 
 
 def test_push_train_checks_the_remote_before_the_conductor() -> None:
@@ -639,14 +640,25 @@ def test_push_train_reads_the_ledger_sha_from_the_ledger_ids_line() -> None:
     assert "the ledger commit sha from the `Ledger ids:` line," in step
 
 
-def test_push_train_hands_the_charter_to_the_operator() -> None:
-    hand_off = _push_train().split("## Hand-off", 1)[1]
-    assert "`git -C <charter_root> push -u origin daedalus/<train-id>`" in hand_off
+def test_push_train_hands_the_charter_push_to_the_conductor() -> None:
+    # 0078: the conductor pushes the Charter branch and opens its pull request; no operator step.
+    text = _push_train()
+    hand_off = text.split("## Hand-off", 1)[1]
+    assert "push" not in hand_off.split("With a Charter branch", 1)[1].split("\n6. ", 1)[0]
+    assert "Push the Charter branch from your own shell" not in text
+    assert "open its pull request: `gh pr create" not in text
+    assert "gh pr create" not in hand_off and "push -u origin" not in hand_off
+    charter = _section(text, "## Charter branch", "## Hand-off")
+    push = "When charter_root is declared, run `git -C <charter_root> push -u origin "
+    assert push + "daedalus/<train-id>`." in charter
     assert (
-        "`gh pr create --base <charter base> --head daedalus/<train-id> --title "
-        '"<title>" --body-file '
-        "<repo>/docs/.tmp/daedalus/<train-id>-charter-pr.md`"
-    ) in hand_off
+        "When charter_root is declared, run `gh pr create --repo <charter slug> "
+        "--base <charter base> --head daedalus/<train-id> --title "
+        '"<title>" --body-file <repo>/docs/.tmp/daedalus/<train-id>-charter-pr.md`.'
+    ) in charter
+    assert charter.index("SendMessage(conductor") < charter.index(push)
+    pre = _section(text, "## Preconditions", "## Push")
+    assert "`git -C <charter_root> remote get-url origin`" in pre
     assert hand_off.rstrip().endswith(
         "Execution Train readiness: a later Daedalus release adds the readiness checklist."
     )
@@ -816,8 +828,9 @@ _CONDUCTOR_CMD = re.compile(r"(?:[Rr]un|then) `((?:git|gh|gitleaks) [^`]+)`")
 
 
 def _conductor_commands() -> list[str]:
-    # 0028: every command the Push section hands the conductor, minus its never-run list.
-    push = _section(PUSH_TRAIN.read_text(encoding="utf-8"), "## Push", "## Charter branch")
+    # 0028, 0078: every command Push and Charter branch hand the conductor, minus never-run lines.
+    text = PUSH_TRAIN.read_text(encoding="utf-8")
+    push = _section(text, "## Push", "## Hand-off")
     allowed = "\n".join(ln for ln in push.splitlines() if "Use only the commands above" not in ln)
     return sorted(set(_CONDUCTOR_CMD.findall(allowed)))
 
@@ -837,7 +850,22 @@ def _conductor_decide(repo_cwd: Path, project_data: Path, command: str) -> Any:
     from tests.hook_chain import judge as decide
 
     (project_data / "train.active").write_text("20261016-120000\n", encoding="utf-8")
-    concrete = re.sub(r"<[^>]+>", "x", command.replace("<repo>", str(repo_cwd)))
+    # 0078: a declared charter root whose origin names the <charter slug> the skill records.
+    charter = repo_cwd.parent / "Charter"
+    if not charter.exists():
+        subprocess.run(["git", "init", "-q", str(charter)], check=True)
+        url = "https://github.com/acme/charter.git"
+        subprocess.run(["git", "-C", str(charter), "remote", "add", "origin", url], check=True)
+    config = json.dumps({"charter_root": str(charter)})
+    (project_data / "config.json").write_text(config, encoding="utf-8")
+    for name, value in (
+        ("<repo>", str(repo_cwd)),
+        ("<train-id>", "20261016-120000"),
+        ("<charter_root>", str(charter)),
+        ("<charter slug>", "acme/charter"),
+    ):
+        command = command.replace(name, value)
+    concrete = re.sub(r"<[^>]+>", "x", command)
     payload = {
         "tool_name": "Bash",
         "tool_input": {"command": concrete},
@@ -860,6 +888,8 @@ def test_push_train_names_conductor_commands() -> None:
     commands = _conductor_commands()
     assert "git push -u origin daedalus/<train-id>" in commands
     assert any(c.startswith("gh pr edit daedalus/<train-id> --body-file") for c in commands)
+    assert "git -C <charter_root> push -u origin daedalus/<train-id>" in commands
+    assert any(c.startswith("gh pr create --repo <charter slug> ") for c in commands)
 
 
 DOCTOR = REPO_ROOT / "skills" / "doctor" / "SKILL.md"

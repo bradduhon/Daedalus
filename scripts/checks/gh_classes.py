@@ -31,7 +31,9 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
         if shell._cmd_name(segment) != "gh":
             continue
         if jail._gh_repo_flag(segment):
-            return jail.R_CONDUCTOR_REPO
+            # 0078: the one -R form is gh pr create on the declared charter root's origin.
+            if not jail._charter_pr_create_ok(segment, cwd, hook_io.hook_charter(cwd)):
+                return jail.R_CONDUCTOR_REPO
         if not jail._gh_body_file_ok(segment, cwd):
             return jail.R_BODY_FILE
         reason = jail._gh_write_reason(segment)

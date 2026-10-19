@@ -34,8 +34,7 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     if segments is None:
         return shell.R_UNSUPPORTED
     subs = shell.GIT_SETS[grant] if grant else frozenset()
-    config = hook_io.hook_config(cwd)
-    charter = str(config.charter_root) if config.charter_root else None
+    charter = hook_io.hook_charter(cwd)
     if all(jail._read_only_segment(s, subs, cwd, charter) for s in segments):
         return None
     return _reason(grant)

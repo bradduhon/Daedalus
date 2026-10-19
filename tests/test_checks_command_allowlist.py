@@ -10,7 +10,7 @@ import pytest
 from lib import jail
 from lib.config import Config
 
-from tests.conftest import CFG, CWD, REPO_ROOT
+from tests.conftest import CFG, CWD, REPO_ROOT, TRAIN_BRANCH
 from tests.hook_chain import (
     decide,
     evaluate,
@@ -48,7 +48,7 @@ class TestCharterDocs:
 class TestConductor:
     def test_push_without_force_and_pr_ops(self) -> None:
         ok = [
-            "git push -u origin daedalus/t1",
+            f"git push -u origin {TRAIN_BRANCH}",
             "git status",
             "git log --oneline -3",
             "git add -A",
@@ -196,7 +196,7 @@ class TestRound4Conductor:
             "gitleaks detect --redact -r=/tmp/x.json",
             "gitleaks detect --redact -r/tmp/x.json",
             "gitleaks detect --redact --report-path /tmp/x.json",
-            "git push origin feature/main-fix",
+            f"git push origin {TRAIN_BRANCH}",
         ],
     )
     def test_allowed(self, command: str) -> None:
