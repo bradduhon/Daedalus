@@ -52,6 +52,23 @@ QUEUED, DISPATCHED, RETURNED, FAILED, SUPERSEDED = (
     "superseded",
 )
 EXIT_OK, EXIT_STOP, EXIT_ROUTED, EXIT_ASK, EXIT_WAIT = 0, 1, 2, 3, 4
+COMPLETE_LINE = "[STATUS: COMPLETE]"
+YIELD_PREFIX = "[STATUS: YIELD"
+VERDICTS = {
+    "[VERDICT: APPROVED]": train_state.APPROVED,
+    "[VERDICT: REJECTED]": train_state.REJECTED,
+}
+# 0083: the Standards Packet is written once to the train's scratch folder after the pick commit.
+STANDARDS_FILE = "standards-packet.md"
+PACKETS = ("contract", "standards")
+PICK_LINE = "Pick ledger ids:"
+NOT_CHOSEN = "not chosen"
+NEXT_NONE = "Next: none, the train needs nothing from the operator."
+_UNIT_HEADING = re.compile(r"### Unit ([A-Za-z0-9][A-Za-z0-9-]*): (.+)")
+_HEADING = re.compile(r"#{1,3} ")
+_PHASE = re.compile(r"[a-z][a-z-]{0,31}")
+_LEDGER_ID = re.compile(r"[0-9]{1,6}(?:-[A-Za-z0-9]{1,16}){0,2}")
+_CHOICE_MAX = 200
 _SCRIPT = re.compile(r"[a-z0-9_]+\.py")
 _SCRIPT_TIMEOUT_S = 900
 OUTPUT_QUESTION = (
@@ -283,7 +300,7 @@ class Session:
         self.state = train_state.change(self.repo, self.train_id, replay)
 
 
-def _session(cwd: Path, plugin_root: Path) -> Session:
+def _active(cwd: Path) -> tuple[Path, str]:
     repo = project_root(cwd.resolve())
     train_id = train_state.active_train(repo)
     if train_id is None:
@@ -291,6 +308,11 @@ def _session(cwd: Path, plugin_root: Path) -> Session:
             f"no Daedalus train is active in {repo}. "
             "Next: start one with daedalus_train.py start and the train's name."
         )
+    return repo, train_id
+
+
+def _session(cwd: Path, plugin_root: Path) -> Session:
+    repo, train_id = _active(cwd)
     try:
         state = train_state.load(repo, train_id)
     except train_state.TrainStateError as exc:
@@ -436,7 +458,17 @@ def _render(
             f"the brief template {template} could not be read ({exc}). "
             "Next: restore the template the definition names, or stop the train."
         ) from exc
-    body = _fill(text, session.state, unit)
+    packets, hashes = _packet_lines(session)
+    blocks = [_fill(text, session.state, unit).rstrip("\n")]
+    if packets:
+        blocks.append("\n".join(packets))
+    section = _unit_section(session, unit)
+    if section:
+        blocks.append(section)
+    reminder = _reminder(unit, hashes)
+    if reminder:
+        blocks.append(reminder)
+    body = "\n\n".join(blocks) + "\n"
     n = len(_stage_dispatches(session, sid)) + 1
     brief = _scratch(session.repo, session.train_id) / "briefs" / f"{sid}-{n}.md"
     try:
@@ -457,6 +489,7 @@ def _render(
         "brief": str(brief),
         "reply": str(reply_path(brief)),
         "coder": coder,
+        **{f"{name}_sha256": value for name, value in hashes.items()},
     }
 
     def change(state: dict[str, object]) -> None:
@@ -464,6 +497,115 @@ def _render(
 
     session.edit(change)
     return brief
+
+
+def _read_packet(path: Path, label: str) -> bytes:
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise RunnerError(
+            f"the {label} {path} could not be read ({exc}). "
+            f"Next: write the {label} to {path}, then step again."
+        ) from exc
+
+
+def _packet_lines(session: Session) -> tuple[list[str], dict[str, str]]:
+    # 0083: each packet goes to the brief by path and hash, never pasted.
+    contract = _text(session.state, "contract_path")
+    standards = _scratch(session.repo, session.train_id) / STANDARDS_FILE
+    lines: list[str] = []
+    hashes: dict[str, str] = {}
+    if contract:
+        hashes["contract"] = _sha256(_read_packet(Path(contract), "Locked Contract Packet"))
+        lines.append(f"Contract: {contract} sha256={hashes['contract']}")
+    if contract or os.path.lexists(standards):
+        data = _read_packet(standards, "Standards Packet")
+        hashes["standards"] = _sha256(data)
+        lines.append(f"Standards: {standards} sha256={hashes['standards']}")
+        picks = [
+            line.strip()
+            for line in data.decode("utf-8", errors="replace").splitlines()
+            if line.startswith(PICK_LINE)
+        ]
+        lines.append(picks[-1] if picks else f"{PICK_LINE} none")
+    return lines, hashes
+
+
+def _plan_units(text: str) -> dict[str, tuple[str, str, str]]:
+    # 0083: a unit section runs from its heading to the next heading outside a code fence.
+    lines = text.splitlines()
+    starts: list[int] = []
+    fenced = False
+    for number, line in enumerate(lines):
+        if line.startswith("```"):
+            fenced = not fenced
+        elif not fenced and _HEADING.match(line):
+            starts.append(number)
+    found: dict[str, tuple[str, str, str]] = {}
+    for position, start in enumerate(starts):
+        heading = _UNIT_HEADING.fullmatch(lines[start].rstrip())
+        if heading is None:
+            continue
+        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        section = "\n".join(lines[start:end]).rstrip()
+        found[heading.group(1).casefold()] = (heading.group(1), heading.group(2).strip(), section)
+    return found
+
+
+def _plan_text(state: dict[str, object], check: bool) -> str | None:
+    record = _obj(state, train_state.PLAN)
+    path = _text(record, "path")
+    if not path:
+        return None
+    try:
+        data = Path(path).read_bytes()
+    except OSError as exc:
+        raise RunnerError(
+            f"the plan {path} could not be read ({exc}). "
+            "Next: restore it, then rerun daedalus_train.py plan --path with it."
+        ) from exc
+    if check and not hmac.compare_digest(_sha256(data), _text(record, "sha256")):
+        raise RunnerError(
+            f"the plan {path} changed after it was recorded. "
+            f"Next: validate it, then rerun daedalus_train.py plan --path {path}."
+        )
+    return data.decode("utf-8", errors="replace")
+
+
+def _unit_key(state: dict[str, object], unit: dict[str, object]) -> str:
+    return _text(unit, "name").removeprefix(f"{_text(state, 'train_id')}-")
+
+
+def _unit_section(session: Session, unit: dict[str, object] | None) -> str | None:
+    text = _plan_text(session.state, check=True) if unit is not None else None
+    if unit is None or text is None:
+        return None
+    key = _unit_key(session.state, unit)
+    found = _plan_units(text).get(key.casefold())
+    if found is None:
+        raise RunnerError(
+            f"the plan names no section '### Unit {key}: <title>' for unit {_text(unit, 'name')}. "
+            "Next: add the unit's section, rerun daedalus_train.py plan --path, then step again."
+        )
+    return found[2]
+
+
+def _reminder(unit: dict[str, object] | None, hashes: dict[str, str]) -> str | None:
+    parts: list[str] = []
+    path = _text(unit, "path") if unit is not None else ""
+    if path:
+        parts.append(
+            f"Work only in {path}: every file path and every git pathspec you use is absolute "
+            f"or goes through `git -C {path}`. When blocked, commit WIP and return one "
+            "`[STATUS: YIELD_*]` line; you will be resumed with the answer."
+        )
+    if hashes:
+        fields = " ".join(f"{name}=<first 12 hex>" for name in hashes)
+        parts.append(
+            "Check each packet hash with sha256sum before you start; a "
+            f"`{COMPLETE_LINE}` line carries {fields}."
+        )
+    return "Reminder: " + " ".join(parts) if parts else None
 
 
 def _dispatch_lines(stage: dict[str, object], brief: Path) -> list[str]:
@@ -627,6 +769,15 @@ def _script_stage(session: Session, index: int, stage: dict[str, object]) -> Out
     return Outcome(EXIT_OK, session.lines)
 
 
+def _enter_phase(session: Session, gate: str, start_gate: str) -> None:
+    # 0085: step names the phase by the stage's gate; a choice --phase holds until the gate moves.
+    phase = _text(session.state, train_state.PHASE)
+    if phase == gate or (phase and gate == start_gate):
+        return
+    _set(session, train_state.PHASE, gate)
+    _set(session, train_state.WEIGHT, NOT_CHOSEN)
+
+
 def step(cwd: Path, plugin_root: Path = PLUGIN_ROOT) -> Outcome:
     try:
         session = _session(cwd, plugin_root)
@@ -654,6 +805,7 @@ def _step(session: Session) -> Outcome:
         session.lines.append(proof)
     stages = session.stages
     index = _int(session.state, "stage_index", 0)
+    start_gate = _text(stages[index], "gate") if index < len(stages) else ""
     while index < len(stages):
         stage = stages[index]
         when = _text(stage, "when")
@@ -663,6 +815,7 @@ def _step(session: Session) -> Outcome:
             index += 1
             _advance(session, index)
             continue
+        _enter_phase(session, _text(stage, "gate"), start_gate)
         run = _script_stage if _text(stage, "agent") == MAIN else _agent_stage
         outcome = run(session, index, stage)
         if outcome is not None:
@@ -778,6 +931,32 @@ def _check_reply(session: Session, sid: str) -> Outcome:
     return _mismatch(session, sid, agent, f"newest unread {agent} stop record: seq {newest}")
 
 
+def _integration_tip(repo: Path, train_id: str) -> str:
+    branch = f"daedalus/{train_id}"
+    try:
+        return workspace._out(repo, "rev-parse", "--verify", f"refs/heads/{branch}").strip()
+    except workspace.WorkspaceError as exc:
+        raise RunnerError(f"the integration branch {branch} has no readable tip: {exc}") from exc
+
+
+def _packet_refusal(item: dict[str, object], text: str, line: str) -> str | None:
+    # 0083, 0091: on the keyed reply, a COMPLETE line echoes the packet hashes its brief named.
+    want = {name: _text(item, f"{name}_sha256") for name in PACKETS}
+    want = {name: value for name, value in want.items() if value}
+    if not want or not line.startswith(COMPLETE_LINE):
+        return None
+    status = [row.strip() for row in text.splitlines() if row.strip().startswith(COMPLETE_LINE)]
+    got: dict[str, str] = {}
+    for name in want:
+        found = re.findall(rf"(?<![A-Za-z0-9_]){name}=([0-9a-f]{{12}})\b", status[-1])
+        if found:
+            got[name] = found[-1]
+    if all(hmac.compare_digest(got.get(name, ""), value[:12]) for name, value in want.items()):
+        return None
+    shown = " ".join(f"{name}={got.get(name, 'missing')}" for name in want)
+    return f"carries {shown}, which do not match the packets its brief named"
+
+
 def _checked_in(
     session: Session,
     index: int,
@@ -788,24 +967,38 @@ def _checked_in(
     record: dict[str, object],
 ) -> Outcome:
     sid, n_key = _text(stage, "id"), (_text(item, "stage"), _int(item, "n", 0))
+    line = _contract_line(text, _strings(_obj(stage, "scope").get("reply")))
+    verdict = next((v for k, v in VERDICTS.items() if line and line.startswith(k)), None)
+    # 0089: the tip is read before any edit, so a failed read leaves the reply unconsumed.
+    tip = _integration_tip(session.repo, session.train_id) if verdict else ""
     seq = record.get("seq")
     _set(session, "consumed_records", [*_seqs(session.state), seq])
     # 0086: the coder's binding id, so a unit stacked on this one resumes the same coder.
     coder = record.get("agent_id")
     if isinstance(coder, str) and coder:
         _set_dispatch(session, n_key, coder=coder)
-    accepted = _strings(_obj(stage, "scope").get("reply"))
-    line = _contract_line(text, accepted)
     unit = _text(item, "unit")
     who = f" for unit {unit}" if unit else ""
-    if line is None:
+    refusal = (
+        "ends with none of its contract lines"
+        if line is None
+        else _packet_refusal(item, text, line)
+    )
+    if refusal is not None or line is None:
         _set_dispatch(session, n_key, status=FAILED, outcome=OFF_CONTRACT)
         _log(session, {"stage": sid, "unit": unit or None, "outcome": OFF_CONTRACT})
         route = _text(_obj(stage, "on_fail"), OFF_CONTRACT) or _text(
             session.defn.raw, "off_contract"
         )
-        _route(session, stage, f"the reply{who} ends with none of its contract lines", route)
+        _route(session, stage, f"the reply{who} {refusal}", route)
         return Outcome(EXIT_STOP, session.lines)
+    if verdict is not None:
+        prior = _int(_obj(session.state, train_state.VERDICT), "round", 0)
+        _set(
+            session,
+            train_state.VERDICT,
+            {"status": verdict, "tip": tip, "round": prior + 1, "seq": seq},
+        )
     key = train_definition.reply_route_key(stage, line)
     if key is not None:
         route = _text(_obj(stage, "on_fail"), key)
@@ -962,6 +1155,182 @@ def allowed_dispatch(state: dict[str, object]) -> tuple[set[str], str, str]:
     allowed |= set(_strings(_obj(defn.raw, "consults").get(gate)))
     allowed |= set(_strings(state.get("consults_open")))
     return allowed, sid, gate
+
+
+def _recorded(cwd: Path, edit: Callable[[Path, str], list[str]]) -> Outcome:
+    try:
+        repo, train_id = _active(cwd)
+        return Outcome(EXIT_OK, edit(repo, train_id))
+    except (RunnerError, train_state.TrainStateError) as exc:
+        return Outcome(EXIT_STOP, [str(exc)])
+
+
+def _one_line(label: str, value: str) -> str:
+    text = value.strip()
+    if not text or len(text) > _CHOICE_MAX or not text.isprintable():
+        raise RunnerError(
+            f"--{label} must be one printable line of 1 to {_CHOICE_MAX} characters. "
+            f"Next: rerun choice with one short printable line for --{label}."
+        )
+    return text
+
+
+def choice(cwd: Path, chose: str, over: str, cost: str, phase: str | None = None) -> Outcome:
+    # 0085: every choice is printed and recorded before it is taken.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        entry: dict[str, object] = {
+            "chose": _one_line("chose", chose),
+            "over": _one_line("over", over),
+            "cost": _one_line("cost", cost),
+        }
+        if phase is not None:
+            if not _PHASE.fullmatch(phase):
+                raise RunnerError(
+                    f"--phase {phase!r} is not a lowercase phase name. "
+                    "Next: rerun choice with a phase such as plan or implementation."
+                )
+            entry["phase"] = phase
+
+        def change(state: dict[str, object]) -> None:
+            state[train_state.CHOICES] = [*_objects(state, train_state.CHOICES), entry]
+            if phase is not None:
+                state[train_state.PHASE] = phase
+                state[train_state.WEIGHT] = entry["chose"]
+
+        train_state.change(repo, train_id, change)
+        return [f"Chose {entry['chose']} over {entry['over']}: {entry['cost']}"]
+
+    return _recorded(cwd, edit)
+
+
+def record_plan(cwd: Path, path: Path) -> Outcome:
+    # 0086, 0088: the plan gate reads this record; a changed file no longer matches its hash.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        target = (path if path.is_absolute() else repo / path).resolve()
+        if not target.is_file():
+            raise RunnerError(
+                f"no plan file at {target}. "
+                "Next: write the plan with the plan skill (/daedalus:plan), then rerun plan."
+            )
+        try:
+            sha = _sha256(target.read_bytes())
+        except OSError as exc:
+            raise RunnerError(
+                f"cannot read the plan {target} ({exc}). "
+                "Next: make the plan file readable, then rerun plan."
+            ) from exc
+        train_state.update(
+            repo, train_id, **{train_state.PLAN: {"path": str(target), "sha256": sha}}
+        )
+        return [f"plan: {target} sha256={sha}"]
+
+    return _recorded(cwd, edit)
+
+
+def record_exception(cwd: Path, ledger_id: str) -> Outcome:
+    # 0089: the operator's exception ruling binds the integration tip it was ruled on.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        if not _LEDGER_ID.fullmatch(ledger_id):
+            raise RunnerError(
+                f"ledger id {ledger_id!r} is not a ledger id such as 0101-DAE-PLT. "
+                "Next: rerun exception with the id charter-docs returned."
+            )
+        tip = _integration_tip(repo, train_id)
+        exception = {"ledger_id": ledger_id, "tip": tip}
+        train_state.update(repo, train_id, **{train_state.EXCEPTION: exception})
+        return [f"exception: {ledger_id} accepted for the integration tip {tip}"]
+
+    return _recorded(cwd, edit)
+
+
+def _unit_status(
+    unit: dict[str, object],
+    latest: dict[str, dict[str, object]],
+    labels: dict[str, str],
+    by_branch: dict[str, str],
+) -> str:
+    dispatch = latest.get(_text(unit, "name"))
+    status = _text(dispatch, "status") if dispatch else ""
+    if status == RETURNED:
+        return "done"
+    if status == DISPATCHED and dispatch is not None:
+        return f"running ({_text(dispatch, 'agent')})"
+    if status == FAILED and dispatch is not None:
+        yielded = _text(dispatch, "line").startswith(YIELD_PREFIX)
+        return "waiting on an answer" if yielded else "stopped"
+    base = by_branch.get(_text(unit, "base"), "")
+    if base and _text(latest.get(base, {}), "status") != RETURNED:
+        return f"waiting on {labels.get(base, base)}"
+    return "queued"
+
+
+def _listed(header: str, rows: list[str]) -> list[str]:
+    return [f"{header}:", *rows] if rows else [f"{header}: none"]
+
+
+def progress(cwd: Path) -> Outcome:
+    # 0085, spec 5.1: the operator view; no sha, agent handle or absolute path reaches it.
+    try:
+        repo, train_id = _active(cwd)
+        state = train_state.load(repo, train_id)
+    except NoTrainError:
+        return Outcome(
+            EXIT_OK,
+            [
+                "no Daedalus train is active here. "
+                "Next: start a Build Train with /daedalus:build-train."
+            ],
+        )
+    except (RunnerError, train_state.TrainStateError):
+        return Outcome(
+            EXIT_STOP,
+            ["the train state could not be read. Next: run daedalus_train.py state for the cause."],
+        )
+    try:
+        text = _plan_text(state, check=False)
+    except RunnerError:
+        text = None
+    plan = _plan_units(text) if text else {}
+    units = train_state.units(state)
+    labels: dict[str, str] = {}
+    for unit in units:
+        key = _unit_key(state, unit)
+        found = plan.get(key.casefold())
+        labels[_text(unit, "name")] = found[0] if found else key
+    latest: dict[str, dict[str, object]] = {}
+    for dispatch in _objects(state, "dispatches"):
+        if dispatch.get("status") != SUPERSEDED and _text(dispatch, "unit"):
+            latest[_text(dispatch, "unit")] = dispatch
+    by_branch = {_text(u, "branch"): _text(u, "name") for u in units}
+    phase = _text(state, train_state.PHASE) or "not started"
+    lines = [f"Phase: {phase} (weight: {_text(state, train_state.WEIGHT) or NOT_CHOSEN})"]
+    open_: list[str] = []
+    for unit in units:
+        name = _text(unit, "name")
+        found = plan.get(_unit_key(state, unit).casefold())
+        title = f"{labels[name]} {found[1]}" if found else labels[name]
+        status = _unit_status(unit, latest, labels, by_branch)
+        lines.append(f"{title}: {status}")
+        if status == "waiting on an answer":
+            open_.append(f"{labels[name]}: {_text(latest[name], 'line')}")
+    open_ += [
+        f"consult {agent}: answering a waiting agent"
+        for agent in _strings(state.get("consults_open"))
+    ]
+    choices = [
+        f"Chose {_text(c, 'chose')} over {_text(c, 'over')}: {_text(c, 'cost')}"
+        for c in _objects(state, train_state.CHOICES)
+    ]
+    lines += _listed("Choices", choices) + _listed("Open", open_)
+    answers = [row for row in open_ if not row.startswith("consult ")]
+    if _text(state, "halted"):
+        lines.append("Next: the train is halted; tear it down with daedalus_train.py stop.")
+    elif answers:
+        noun = "item" if len(answers) == 1 else "items"
+        lines.append(f"Next: answer the open {noun} above, then run step to retry the stage.")
+    else:
+        lines.append(NEXT_NONE)
+    return Outcome(EXIT_OK, lines)
 
 
 def state_lines(cwd: Path, plugin_root: Path = PLUGIN_ROOT) -> Outcome:

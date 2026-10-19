@@ -13,6 +13,10 @@ from lib.train_runner import (  # noqa: E402
     EXIT_STOP,
     Outcome,
     check_reply,
+    choice,
+    progress,
+    record_exception,
+    record_plan,
     start,
     state_lines,
     step,
@@ -23,7 +27,8 @@ from lib.train_state import TrainStateError  # noqa: E402
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Daedalus train runner: start, step, check-reply, state, stop. Exit 0 action "
+        description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
+        "choice, plan, exception. Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
     sub = parser.add_subparsers(dest="action", required=True)
@@ -40,6 +45,20 @@ def _parser() -> argparse.ArgumentParser:
     halt.add_argument("--repo", type=Path, required=True)
     halt.add_argument("--reason", required=True)
     halt.add_argument("--next", dest="next_action")
+    # 0085, 0089: the operator view and the records the plan and verdict gates read.
+    sub.add_parser("progress").add_argument("--repo", type=Path, required=True)
+    chose = sub.add_parser("choice")
+    chose.add_argument("--repo", type=Path, required=True)
+    chose.add_argument("--chose", required=True)
+    chose.add_argument("--over", required=True)
+    chose.add_argument("--cost", required=True)
+    chose.add_argument("--phase")
+    plan = sub.add_parser("plan")
+    plan.add_argument("--repo", type=Path, required=True)
+    plan.add_argument("--path", type=Path, required=True)
+    waive = sub.add_parser("exception")
+    waive.add_argument("--repo", type=Path, required=True)
+    waive.add_argument("--ledger-id", dest="ledger_id", required=True)
     return parser
 
 
@@ -49,6 +68,14 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return start(repo, args.train, args.output)
     if args.action == "step":
         return step(repo)
+    if args.action == "progress":
+        return progress(repo)
+    if args.action == "choice":
+        return choice(repo, args.chose, args.over, args.cost, args.phase)
+    if args.action == "plan":
+        return record_plan(repo, args.path)
+    if args.action == "exception":
+        return record_exception(repo, args.ledger_id)
     if args.action == "check-reply":
         return check_reply(repo, args.stage)
     if args.action == "state":
