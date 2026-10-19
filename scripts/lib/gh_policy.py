@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
+
+from lib import train_state, workspace
+from lib.audit import project_root
 
 CONDUCTOR = "pr-train-conductor"
 # 0028: the allowed list intersected with the conductor's set; K1: pr edit changes the body only.
@@ -11,8 +15,13 @@ CONDUCTOR_GH = frozenset(
     {("pr", "create"), ("pr", "edit"), ("pr", "view"), ("pr", "list"), ("pr", "checks")}
     | {("run", "list"), ("run", "view"), ("run", "watch")}
 )
-MAIN_GH = frozenset({("auth", "status")})
-ALLOWED_0028 = CONDUCTOR_GH | MAIN_GH | {("issue", "view"), ("issue", "list")}
+ALLOWED_0028 = CONDUCTOR_GH | {("auth", "status"), ("issue", "view"), ("issue", "list")}
+# B7: main reads during a train; pull request writes stay with the conductor.
+MAIN_GH = ALLOWED_0028 - {("pr", "create"), ("pr", "edit")}
+R_VERDICT = (
+    "{what} needs an approved audit verdict on the exact tip of {branch}; {detail} (spec 4.2). "
+    "Next: audit the exact tip, or record the operator's exception."
+)
 CLASS_NEXT = {
     "merge": "the operator merges in the GitHub UI",
     "delete": "delete from your own shell if you mean it",
@@ -268,3 +277,56 @@ def gh_reason(agent: str, command: str, segments: list[list[str]] | None) -> str
         if reason:
             return reason
     return None
+
+
+def _branch_tip(cwd: str, branch: str) -> str | None:
+    try:
+        found = workspace._run(
+            Path(cwd), "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}"
+        )
+    except (OSError, workspace.WorkspaceError):
+        return None
+    tip = found.stdout.strip()
+    return tip if found.returncode == 0 and tip else None
+
+
+def _record(state: dict[str, object], key: str) -> dict[str, object]:
+    raw = state.get(key)
+    return {str(k): v for k, v in raw.items()} if isinstance(raw, dict) else {}
+
+
+def _verdict_detail(cwd: str, train: str, branch: str) -> str | None:
+    # spec 4.2: state through train_state.load, never a reply file; the marker names the branch.
+    try:
+        state = train_state.load(project_root(cwd), train)
+    except train_state.TrainStateError:
+        return "no train state is readable"
+    tip = _branch_tip(cwd, branch)
+    if tip is None:
+        return f"{branch} does not resolve to a commit in {cwd}"
+    exception = _record(state, "exception")
+    ledger_id = exception.get("ledger_id")
+    if isinstance(ledger_id, str) and ledger_id and exception.get("tip") == tip:
+        return None
+    verdict = _record(state, "verdict")
+    status = verdict.get("status")
+    if not verdict:
+        return "no verdict is recorded"
+    if status != "approved":
+        return f"the recorded verdict is {status if isinstance(status, str) else 'unreadable'}"
+    covered = verdict.get("tip")
+    if covered != tip:
+        shown = covered[:12] if isinstance(covered, str) else "no tip"
+        return f"the verdict covers {shown} but the tip is {tip[:12]}"
+    return None
+
+
+def verdict_reason(cwd: str, what: str) -> str | None:
+    # spec 4.2: a push or pr create passes on the approved tip or an exception for that tip.
+    train = train_state.active_train(project_root(cwd)) if os.path.isabs(cwd) else None
+    if train is None:
+        detail = "no train is active here"
+        return R_VERDICT.format(what=what, branch="the train branch", detail=detail)
+    branch = f"daedalus/{train}"
+    detail = _verdict_detail(cwd, train, branch)
+    return None if detail is None else R_VERDICT.format(what=what, branch=branch, detail=detail)

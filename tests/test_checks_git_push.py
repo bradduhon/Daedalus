@@ -3,12 +3,13 @@
 # 0044: the git_push hook; cases copied from tests/test_jail.py run each agent's chain.
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
-from lib import jail
+from lib import jail, train_state
 
-from tests.conftest import CFG, TRAIN_BRANCH, write_train_marker
+from tests.conftest import CFG, TRAIN_BRANCH
 from tests.hook_chain import (
     decide,
     evaluate,
@@ -97,15 +98,118 @@ def test_git_push_judges_the_hook_alone() -> None:
     assert evaluate(HOOK, _b(C, "git push origin feat/x")) == jail.R_REMOTE_GIT
 
 
-def test_git_push_fixture_decisions(tmp_path: Path) -> None:
-    # issue 11: the standalone script reads the branch from a real train marker.
-    write_train_marker(tmp_path)
-    push = payload("Bash", str(tmp_path), command="git push origin daedalus/20261017-120000")
+def test_git_push_fixture_decisions(repo_cwd: Path) -> None:
+    # issue 11, spec 4.2: the standalone script reads the branch and verdict of a real train.
+    audited_train(repo_cwd, "20261017-120000")
+    push = payload("Bash", str(repo_cwd), command="git push origin daedalus/20261017-120000")
     assert run_script(HOOK, push) == {"decision": "deny", "reason": jail.R_REMOTE_GIT}
     assert run_script(HOOK, push, "--conductor") == {"decision": "allow", "reason": ""}
     extra = payload("Bash", command="git push origin feat/x extra")
     want = {"decision": "deny", "reason": jail.R_CONDUCTOR_PUSH}
     assert run_script(HOOK, extra, "--conductor") == want
+
+
+GATE_TRAIN = "20261019-120000"
+GATE_BRANCH = f"daedalus/{GATE_TRAIN}"
+GATE_NEXT = "Next: audit the exact tip, or record the operator's exception."
+
+
+def _git(repo: Path, *args: str) -> str:
+    cmd = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com"]
+    return subprocess.run([*cmd, *args], check=True, capture_output=True, text=True).stdout
+
+
+def seed_train(repo: Path, state: bool = True, train: str = GATE_TRAIN) -> str:
+    # spec 4.2: a real repo with the train branch, its marker and its state; returns the tip.
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+    _git(repo, "branch", f"daedalus/{train}")
+    marker = repo / ".claude" / "daedalus" / "train.active"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(f"{train}\n", encoding="utf-8")
+    if state:
+        train_state.save(repo, train, {"train_id": train})
+    return _git(repo, "rev-parse", f"daedalus/{train}").strip()
+
+
+def move_tip(repo: Path) -> str:
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "after the verdict")
+    _git(repo, "branch", "-f", GATE_BRANCH, "HEAD")
+    return _git(repo, "rev-parse", GATE_BRANCH).strip()
+
+
+def approve(repo: Path, tip: str, train: str = GATE_TRAIN) -> None:
+    verdict = {"status": "approved", "tip": tip, "round": 1, "seq": 7}
+    train_state.update(repo, train, verdict=verdict)
+
+
+def audited_train(repo: Path, train: str) -> None:
+    # spec 4.2: a train whose integration tip carries an approved verdict.
+    approve(repo, seed_train(repo, train=train), train)
+
+
+def _conductor_push(repo: Path, branch: str = GATE_BRANCH) -> str | None:
+    hook_input: dict[str, object] = {
+        "tool_name": "Bash",
+        "tool_input": {"command": f"git push -u origin {branch}"},
+        "cwd": str(repo),
+        "agent_type": C,
+    }
+    return evaluate(HOOK, hook_input, "--conductor")
+
+
+def test_push_with_no_verdict_is_refused(repo_cwd: Path) -> None:
+    seed_train(repo_cwd, state=False)
+    missing = _conductor_push(repo_cwd)
+    assert missing is not None and missing.endswith(GATE_NEXT) and "no train state" in missing
+    train_state.save(repo_cwd, GATE_TRAIN, {"train_id": GATE_TRAIN})
+    none = _conductor_push(repo_cwd)
+    assert none is not None and none.endswith(GATE_NEXT) and "no verdict" in none
+    tip = _git(repo_cwd, "rev-parse", GATE_BRANCH).strip()
+    rejected = {"status": "rejected", "tip": tip, "round": 2, "seq": 9}
+    train_state.update(repo_cwd, GATE_TRAIN, verdict=rejected)
+    refused = _conductor_push(repo_cwd)
+    assert refused is not None and "rejected" in refused and refused.endswith(GATE_NEXT)
+
+
+def test_push_with_a_moved_tip_is_refused(repo_cwd: Path) -> None:
+    approve(repo_cwd, seed_train(repo_cwd))
+    moved = move_tip(repo_cwd)
+    reason = _conductor_push(repo_cwd)
+    assert reason is not None and reason.endswith(GATE_NEXT) and moved[:12] in reason
+
+
+def test_push_with_the_approved_tip_is_allowed(repo_cwd: Path) -> None:
+    approve(repo_cwd, seed_train(repo_cwd))
+    assert _conductor_push(repo_cwd) is None
+    hook_input = {
+        "tool_name": "Bash",
+        "tool_input": {"command": f"git push -u origin {GATE_BRANCH}"},
+        "cwd": str(repo_cwd),
+        "agent_type": C,
+    }
+    assert decide(hook_input, CFG).allow
+
+
+def test_push_naming_another_branch_at_the_approved_tip_is_refused(repo_cwd: Path) -> None:
+    # spec 4.2: the tip read is the marker's train branch; another branch never stands in.
+    approve(repo_cwd, seed_train(repo_cwd))
+    _git(repo_cwd, "branch", "feat/x", GATE_BRANCH)
+    reason = _conductor_push(repo_cwd, "feat/x")
+    assert reason == jail.R_CONDUCTOR_PUSH_BRANCH.format(branch=GATE_BRANCH)
+
+
+def test_push_with_an_exception_for_the_tip_is_allowed(repo_cwd: Path) -> None:
+    old = seed_train(repo_cwd)
+    rejected = {"status": "rejected", "tip": old, "round": 2, "seq": 9}
+    train_state.update(repo_cwd, GATE_TRAIN, verdict=rejected)
+    train_state.update(repo_cwd, GATE_TRAIN, exception={"ledger_id": "0104-DAE-PLT", "tip": old})
+    assert _conductor_push(repo_cwd) is None
+    moved = move_tip(repo_cwd)
+    stale = _conductor_push(repo_cwd)
+    assert stale is not None and stale.endswith(GATE_NEXT)
+    blank = {"ledger_id": "", "tip": moved}
+    train_state.update(repo_cwd, GATE_TRAIN, exception=blank)
+    assert _conductor_push(repo_cwd) is not None
 
 
 def test_git_push_allows_tools_outside_its_tools() -> None:

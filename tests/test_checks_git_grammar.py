@@ -22,6 +22,7 @@ from tests.hook_chain import (
     run_script,
     unknown_flag_denies,
 )
+from tests.test_checks_git_push import audited_train
 from tests.test_jail import BASH_AGENTS, _b
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
@@ -393,7 +394,7 @@ def test_push_reads_the_branch_from_the_train_marker(repo_cwd: Path, project_dat
         return decide({**_b(C, f"git push -u origin {branch}"), "cwd": str(repo_cwd)}, Config())
 
     assert push(TRAIN_BRANCH).reason == jail.R_CONDUCTOR_NO_TRAIN
-    (project_data / "train.active").write_text("20261016-120000\n", encoding="utf-8")
+    audited_train(repo_cwd, "20261016-120000")
     assert push("daedalus/20261016-120000").allow
     refused = push(TRAIN_BRANCH)
     assert refused.reason == jail.R_CONDUCTOR_PUSH_BRANCH.format(branch="daedalus/20261016-120000")

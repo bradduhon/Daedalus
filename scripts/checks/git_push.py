@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lib import hook_io, jail, shell  # noqa: E402
+from lib import gh_policy, hook_io, jail, shell  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset({"Bash"})
 FLAGS: dict[str, hook_io.Flag] = {"--conductor": hook_io.Flag()}
@@ -28,6 +28,8 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
                 continue
             # issue 11, 0078: the train's branch, to origin of this repo or the charter root.
             reason = jail._conductor_push_reason(segment, cwd, hook_io.hook_charter(cwd))
+            # spec 4.2: then the approved verdict, or the operator's exception, on the exact tip.
+            reason = reason or gh_policy.verdict_reason(cwd, "git push")
             if reason:
                 return reason
             continue
