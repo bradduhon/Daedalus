@@ -377,9 +377,9 @@ def test_decide_exception_blocks_and_records(
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(hook_input())))
     assert enforce_agent_jail.main() == 2
     err = capsys.readouterr().err
-    assert err.startswith("daedalus-jail[main]: decide exploded Next:")
+    assert err.startswith("daedalus-jail[main]: jail: decide exploded Next:")
     rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
-    assert rec["decision"] == "block" and rec["reason"].startswith("decide exploded")
+    assert rec["decision"] == "block" and rec["reason"].startswith("jail: decide exploded")
 
 
 @pytest.mark.parametrize("cwd", [None, "relative"])

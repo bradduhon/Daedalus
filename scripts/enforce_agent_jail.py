@@ -8,6 +8,7 @@ import json
 import os
 import shlex
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -30,6 +31,9 @@ _WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 # issue 30: past these caps the fast path hands the call to the full jail.
 _WORD_CAP = 256
 _ROOT_CAP = 16
+# 6.1: the reason prefix for blocks this hook decides itself, main and foreign agents alike.
+_JAIL_HOOK = "jail"
+_CONFIG_HOOK = "config"
 
 
 _TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
@@ -183,26 +187,35 @@ def _warn_fallback(cwd: str) -> None:
         pass  # m5: a closed stderr must not turn an allow into exit 1.
 
 
+def _elapsed_ms(started: float) -> float:
+    return round((time.monotonic() - started) * 1000, 3)
+
+
 def _record_and_block(
-    payload: dict[str, object], agent: str, message: str, next_step: str = _REPORT_NEXT
+    payload: dict[str, object],
+    agent: str,
+    message: str,
+    started: float,
+    next_step: str = _REPORT_NEXT,
 ) -> int:
     from lib.audit import audit_append
 
     if "Next:" not in message:
         message += next_step
     try:
-        audit_append(payload, "block", message)
+        audit_append(payload, "block", message, _elapsed_ms(started))
     except Exception:  # noqa: BLE001, S110
         pass  # 8.5: best effort; the block stands whether or not the record lands.
     return _block(agent, message)
 
 
-def _judge(payload: dict[str, object], agent: str) -> int:
+def _judge(payload: dict[str, object], agent: str, started: float | None = None) -> int:
     from lib.audit import audit_append
     from lib.config import Config, load_config
     from lib.jail import CREDENTIAL_TOOLS, decide, normalize_agent
     from lib.router import route, routed
 
+    started = time.monotonic() if started is None else started
     cwd = payload.get("cwd")
     # 0023: reads carry only the credential deny, so a broken data dir never closes them.
     read = payload.get("tool_name") in CREDENTIAL_TOOLS and isinstance(cwd, str)
@@ -211,19 +224,21 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         config = load_config(cwd if isinstance(cwd, str) else None)
     except Exception as exc:  # noqa: BLE001
         if not read:
-            return _record_and_block(payload, agent, str(exc), _CONFIG_NEXT)
+            return _record_and_block(
+                payload, agent, f"{_CONFIG_HOOK}: {exc}", started, _CONFIG_NEXT
+            )
         config = Config()
     if routed(agent):
         # 0044: a Daedalus agent's call runs the hooks its agent file names.
         allow, reason, hook = route(payload, Path(__file__).resolve().parents[1])
-        reason = f"{hook}: {reason}" if reason else None
         agent = normalize_agent(agent)
     else:
         decision = decide(payload, config)
-        allow, reason = decision.allow, decision.reason
+        allow, reason, hook = decision.allow, decision.reason, _JAIL_HOOK
         agent = decision.agent or agent
+    reason = f"{hook}: {reason}" if reason else None
     try:
-        record = audit_append(payload, "allow" if allow else "block", reason)
+        record = audit_append(payload, "allow" if allow else "block", reason, _elapsed_ms(started))
     except Exception as exc:  # noqa: BLE001
         if read and allow:
             # spec 8: an allowed read is non-blocking on a failed record, as audit_log.py is.
@@ -245,6 +260,7 @@ def main() -> int:
     # Every path but a clean allow exits 2, except a library failure outside a train.
     try:
         text = sys.stdin.read()
+        started = time.monotonic()
         if not text.strip():
             return _block("?", "hook input is empty.")
         payload = json.loads(text)
@@ -287,9 +303,9 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         return _load_failed(exc, in_train)
     try:
-        return _judge(payload, agent)
+        return _judge(payload, agent, started)
     except Exception as exc:  # noqa: BLE001
-        return _record_and_block(payload, agent, str(exc))
+        return _record_and_block(payload, agent, f"{_JAIL_HOOK}: {exc}", started)
 
 
 if __name__ == "__main__":

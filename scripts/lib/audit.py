@@ -324,6 +324,7 @@ def build_record(
     decision: str | None = None,
     reason: str | None = None,
     key: bytes | None = None,
+    judge_ms: float | None = None,
 ) -> dict[str, Any]:
     event = hook_input.get("hook_event_name")
     tool_name = hook_input.get("tool_name")
@@ -351,7 +352,9 @@ def build_record(
         "session_id": hook_input.get("session_id"),
         "event": event,
         "agent_id": hook_input.get("agent_id"),
-        "agent_type": hook_input.get("agent_type") or "main",
+        # 6.1: `main` only for the main session, the one thread without an agent_id.
+        "agent_type": hook_input.get("agent_type")
+        or (None if hook_input.get("agent_id") else "main"),
         "cwd": hook_input.get("cwd"),
         "tool_name": tool_name,
         "tool_use_id": hook_input.get("tool_use_id"),
@@ -367,6 +370,8 @@ def build_record(
         "error": _error_field(hook_input.get("error")),
         "source": hook_input.get("source"),
         "stop_reason": hook_input.get("stop_reason"),
+        # 6.1: the jail's own wall time; inside the hashed body, null off PreToolUse.
+        "judge_ms": judge_ms if event == "PreToolUse" else None,
     }
 
 
@@ -422,8 +427,28 @@ def _tail_record(path: Path) -> dict[str, Any] | None:
         ) from exc
 
 
+def _started_type(path: Path, agent_id: str) -> str | None:
+    # 6.1: caller holds the audit lock; the newest SubagentStart for this agent_id wins.
+    if not path.exists():
+        return None
+    for raw in reversed(path.read_bytes().splitlines()):
+        if b'"SubagentStart"' not in raw:
+            continue
+        try:
+            rec = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict) and rec.get("event") == "SubagentStart":
+            if rec.get("agent_id") == agent_id and isinstance(rec.get("agent_type"), str):
+                return str(rec["agent_type"])
+    return None
+
+
 def audit_append(
-    hook_input: dict[str, Any], decision: str | None = None, reason: str | None = None
+    hook_input: dict[str, Any],
+    decision: str | None = None,
+    reason: str | None = None,
+    judge_ms: float | None = None,
 ) -> dict[str, Any] | None:
     # 0035: no train marker means no train runs here; lexists, as the jail judges a train.
     if not os.path.lexists(project_root(_require_cwd(hook_input.get("cwd"))) / TRAIN_MARKER):
@@ -436,10 +461,14 @@ def audit_append(
     root, source, _ = root_info(hook_input["cwd"])
     last = hook_input.get("last_assistant_message")
     key = reply_key(hook_input["cwd"], create=True) if isinstance(last, str) and last else None
-    record = build_record(hook_input, decision, reason, key)
+    record = build_record(hook_input, decision, reason, key, judge_ms)
     record["project_root"] = str(root)
     record["root_source"] = source
     with audit_lock(lock):
+        agent_id = record["agent_id"]
+        if record["event"] == "SubagentStop" and record["agent_type"] is None:
+            if isinstance(agent_id, str) and agent_id:
+                record["agent_type"] = _started_type(path, agent_id)
         tail = _tail_record(path)
         record["seq"] = 1 if tail is None else int(tail["seq"]) + 1
         record["prev_hash"] = GENESIS if tail is None else tail["hash"]

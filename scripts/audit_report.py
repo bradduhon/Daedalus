@@ -17,6 +17,7 @@ import re
 import sys
 import tempfile
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -32,6 +33,8 @@ _STATUS = (
     re.compile(r"\[STANDARDS: [A-Z]+\]"),
 )
 _TOOLS = ("Write", "Edit", "Bash")
+_EDIT_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+_HOOK_PREFIX = re.compile(r"([A-Za-z][A-Za-z0-9_.-]{0,63}): ")
 _MD_SPECIAL = re.compile(r"([\\`*_\[\]()!#|~])")
 TIMELINE_CHARS = 120
 STATUS_CHARS = 200
@@ -49,8 +52,10 @@ class _Parser(argparse.ArgumentParser):
 def _parse(argv: list[str]) -> argparse.Namespace:
     parser = _Parser(prog="audit_report.py", description=__doc__, allow_abbrev=False)
     parser.add_argument("--session")
-    parser.add_argument("--cwd", default=os.getcwd())
+    parser.add_argument("--cwd", "--repo", dest="cwd", default=os.getcwd())
     parser.add_argument("--out")
+    # 6.2: the control cost table alone, after the same chain check.
+    parser.add_argument("--controls", action="store_true")
     args = parser.parse_args(argv)
     args.cwd = os.path.abspath(args.cwd)
     if not os.path.isdir(args.cwd):
@@ -199,7 +204,66 @@ def _totals(records: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def render(path: Path) -> str:
+def _hook_of(reason: Any) -> str:
+    match = _HOOK_PREFIX.match(reason) if isinstance(reason, str) else None
+    return match.group(1) if match else "unprefixed"
+
+
+def _seconds(start: Any, end: Any) -> float | None:
+    try:
+        return (
+            datetime.fromisoformat(str(end)) - datetime.fromisoformat(str(start))
+        ).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt(seconds: float | None) -> str:
+    return "none" if seconds is None else f"{seconds:.1f}"
+
+
+def _until_allowed(
+    pre: list[dict[str, Any]], origin: dict[str, Any], tools: tuple[str, ...] | None = None
+) -> str:
+    # 6.2: seconds from origin to the same agent's next allowed call, optionally of these tools.
+    seq = int(origin.get("seq") or 0)
+    for rec in pre:
+        if int(rec.get("seq") or 0) <= seq or rec.get("agent_id") != origin.get("agent_id"):
+            continue
+        if rec.get("decision") == "allow" and (tools is None or rec.get("tool_name") in tools):
+            return _fmt(_seconds(origin.get("ts"), rec.get("ts")))
+    return "none"
+
+
+def _controls(records: list[dict[str, Any]]) -> list[str]:
+    # 6.2: hook names, agent types, tools and timings only; no reason body or reply text.
+    pre = [r for r in records if r.get("event") == "PreToolUse"]
+    blocks = [r for r in pre if r.get("decision") == "block"]
+    tally = Counter((_hook_of(r.get("reason")), str(r.get("agent_type"))) for r in blocks)
+    lines = ["## Control cost", "", "### Blocks per hook", ""]
+    lines += ["| hook | agent_type | blocks |", "|---|---|---|"]
+    lines += [f"| {md_escape(h)} | {md_escape(a)} | {n} |" for (h, a), n in sorted(tally.items())]
+    lines += ["", "### Seconds from each block to that agent's next allowed call", ""]
+    lines += ["| seq | agent_type | hook | tool | seconds |", "|---|---|---|---|---|"]
+    for rec in blocks:
+        cells = [rec.get("agent_type"), _hook_of(rec.get("reason")), rec.get("tool_name")]
+        named = " | ".join(md_escape(c) for c in cells)
+        lines.append(f"| {rec.get('seq')} | {named} | {_until_allowed(pre, rec)} |")
+    lines += ["", "### Seconds from agent start to its first allowed Write or Edit", ""]
+    lines += ["| agent_id | agent_type | seconds |", "|---|---|---|"]
+    for start in (r for r in records if r.get("event") == "SubagentStart" and r.get("agent_id")):
+        named = f"{md_escape(start['agent_id'])} | {md_escape(start.get('agent_type'))}"
+        lines.append(f"| {named} | {_until_allowed(pre, start, _EDIT_TOOLS)} |")
+    timed = [float(r["judge_ms"]) for r in pre if isinstance(r.get("judge_ms"), (int, float))]
+    lines.append("")
+    if timed:
+        lines.append(f"mean judge time: {sum(timed) / len(timed):.1f} ms over {len(timed)} calls")
+    else:
+        lines.append("mean judge time: no PreToolUse record carries judge_ms")
+    return lines
+
+
+def render(path: Path, controls_only: bool = False) -> str:
     # 8.6: one read; verify and render the same lines so the header describes the rows shown.
     lines = _read_lines(path)
     ok, message = verify_lines(lines)
@@ -216,14 +280,18 @@ def render(path: Path) -> str:
     header.extend((f"records: {count}", f"head={head}"))
     if records and records[0].get("project_root"):
         header.append(f"project_root: {md_escape(records[0]['project_root'])}")
-    sections = [
-        header,
-        _timeline(records),
-        _tool_table(records),
-        _blocks(records),
-        _status_lines(records),
-        _totals(records),
-    ]
+    if controls_only:
+        sections = [header, _controls(records)]
+    else:
+        sections = [
+            header,
+            _timeline(records),
+            _tool_table(records),
+            _blocks(records),
+            _controls(records),
+            _status_lines(records),
+            _totals(records),
+        ]
     return "\n\n".join("\n".join(s) for s in sections) + "\n"
 
 
@@ -287,7 +355,7 @@ def main(argv: list[str]) -> int:
     try:
         path = _session_path(args.cwd, args.session)
         target = None if args.out is None else _out_target(args.out, args.cwd)
-        report = render(path)
+        report = render(path, args.controls)
         if target is None:
             sys.stdout.write(report)
         else:
