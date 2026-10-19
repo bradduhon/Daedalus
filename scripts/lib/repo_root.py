@@ -10,8 +10,8 @@ from typing import Any
 TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
 
 
-def repo_root(path: str) -> Path:
-    # 0035: stdlib mirror of lib.audit.root_info; the main working tree, else the nearest dir.
+def git_root(path: str) -> Path | None:
+    # 0035: stdlib mirror of lib.audit.root_info; the main working tree, None outside git.
     start = Path(path)
     for folder in (start, *start.parents):
         dot = folder / ".git"
@@ -31,7 +31,13 @@ def repo_root(path: str) -> Path:
         except (OSError, UnicodeDecodeError):
             common = gitdir
         return Path(os.path.normpath(common)).parent
-    return next((p for p in (start, *start.parents) if p.is_dir()), start)
+    return None
+
+
+def repo_root(path: str) -> Path:
+    start = Path(path)
+    found = git_root(path)
+    return found or next((p for p in (start, *start.parents) if p.is_dir()), start)
 
 
 def train_marked(cwd: Any) -> bool:

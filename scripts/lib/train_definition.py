@@ -58,6 +58,11 @@ STATE_FIELDS = frozenset(
         "scope_kind",
         "output_dir",
         "max_concurrent_builders",
+        # 0072: a per-unit stage fills these from the unit the runner dispatches.
+        "unit_name",
+        "unit_branch",
+        "unit_path",
+        "unit_base",
     }
 )
 DEFINITION_NEXT = "Next: fix each defect above in the train definition, then rerun the validator."

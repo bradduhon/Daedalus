@@ -130,7 +130,7 @@ def create(repo: Path, name: str, base_ref: str) -> Path:
     train = train_state.active_train(repo)
     if train is not None and train_state.state_path(repo, train).is_file():
         try:
-            train_state.add_unit(repo, train, name, branch, path)
+            train_state.add_unit(repo, train, name, branch, path, base_ref)
         except train_state.TrainStateError as exc:
             raise WorkspaceError(str(exc)) from exc
     return path
@@ -204,6 +204,7 @@ DIRTY_LIMIT = 10
 RERUN = "start the Build Train again (/daedalus:build-train)."
 CLEAN_NEXT = f"Next: commit or stash your changes from your own shell, then {RERUN}"
 LEDGER_NONE = "ledger: none declared and none found."
+LEDGER_OFF = "ledger: off in the service manifest."
 LEDGER_QUESTION = (
     "This repo has no decision ledger. Options: name an existing file, or let Daedalus "
     "create docs/decisions.md as a table. Which?"
@@ -261,9 +262,14 @@ def repo_root(cwd: Path) -> Path:
     return Path(common).parent
 
 
-def _ledger_line(repo: Path, config: Config) -> str:
+def _ledger_line(repo: Path, config: Config, ledger_feature: bool | None) -> str:
+    # 0069: off resolves nothing; absent uses a found ledger and never asks; on asks when none.
+    if ledger_feature is False:
+        return LEDGER_OFF
     try:
         ledger = resolve_ledger(str(repo), config)
+        if ledger is None and ledger_feature is None:
+            return LEDGER_NONE
         if ledger is None:
             raise LedgerQuestion(f"{LEDGER_NONE}\n{LEDGER_QUESTION}\n{LEDGER_TABLE}")
         seq = read_sequence(ledger)
@@ -307,19 +313,14 @@ def _undo_charter(charter: Path, base: str, exc: Exception) -> WorkspaceError:
     )
 
 
-def begin(cwd: Path) -> list[str]:
-    # 0024: build-train Preconditions 1 to 9, ordered so a failure leaves no train state behind.
-    repo = repo_root(cwd.resolve())
-    dirty = _dirty(repo)
-    if dirty:
-        raise WorkspaceError(f"uncommitted changes in {repo}: {_shown(dirty)}. {CLEAN_NEXT}")
-    base = _branch(repo)
-    base_sha = _out(repo, "rev-parse", "HEAD").strip()
+def _config(repo: Path) -> Config:
     try:
-        config = load_config(path=repo / ".claude" / "daedalus" / "config.json")
+        return load_config(path=repo / ".claude" / "daedalus" / "config.json")
     except ConfigError as exc:
         raise WorkspaceError(str(exc)) from exc
-    ledger_line = _ledger_line(repo, config)
+
+
+def _new_train(repo: Path) -> str:
     try:
         # 0035: the first write of a train; outside one the audit layer never creates this folder.
         ensure_project_data_dir(str(repo))
@@ -329,14 +330,52 @@ def begin(cwd: Path) -> list[str]:
     if train_state.state_path(repo, train_id).exists():
         raise WorkspaceError(f"train {train_id} already exists. Next: wait a second, then {RERUN}")
     _scratch(repo)
+    return train_id
+
+
+def _cache() -> str | None:
+    try:
+        return str(cache_dir_or_probe() / "frameworks")
+    except RuntimeError:
+        return None
+
+
+def _open_train(repo: Path, train_id: str, state: dict[str, object]) -> None:
+    train_state.save(repo, train_id, state)
+    try:
+        mark_train(repo, train_id)
+    except WorkspaceError:
+        train_state.state_path(repo, train_id).unlink(missing_ok=True)
+        raise
+
+
+def _config_lines(config: Config, cache: str | None) -> list[str]:
+    policy = f"{config.policy.engine} {config.policy.path}" if config.policy else "none declared"
+    # 0019: a pack has no path in config.json; the standards specialist reads it from this line.
+    packs = [f"{s.name} at {s.path}" for s in config.standards_sources if s.kind == "pack"]
+    return [
+        f"policy: {policy}  standards: {len(config.standards_sources)} sources",
+        f"cache: {cache}" if cache else "cache: unresolved",
+        f"standards packs: {', '.join(packs) or 'none declared'}",
+    ]
+
+
+def begin(cwd: Path, ledger_feature: bool | None = True) -> list[str]:
+    # 0024: build-train Preconditions 1 to 9, ordered so a failure leaves no train state behind.
+    repo = repo_root(cwd.resolve())
+    dirty = _dirty(repo)
+    if dirty:
+        raise WorkspaceError(f"uncommitted changes in {repo}: {_shown(dirty)}. {CLEAN_NEXT}")
+    base = _branch(repo)
+    base_sha = _out(repo, "rev-parse", "HEAD").strip()
+    config = _config(repo)
+    ledger_line = _ledger_line(repo, config, ledger_feature)
+    train_id = _new_train(repo)
     charter = (repo / config.charter_root).resolve() if config.charter_root else None
     charter_base = _charter_branch(charter, train_id) if charter else None
     try:
-        try:
-            cache: str | None = str(cache_dir_or_probe() / "frameworks")
-        except RuntimeError:
-            cache = None
-        state = {
+        cache = _cache()
+        state: dict[str, object] = {
             "train_id": train_id,
             "repo": str(repo),
             "base_branch": base,
@@ -349,26 +388,49 @@ def begin(cwd: Path) -> list[str]:
             "units": [],
             "merged": False,
         }
-        train_state.save(repo, train_id, state)
-        try:
-            mark_train(repo, train_id)
-        except WorkspaceError:
-            train_state.state_path(repo, train_id).unlink(missing_ok=True)
-            raise
+        _open_train(repo, train_id, state)
     except (train_state.TrainStateError, WorkspaceError) as exc:
         if charter is not None and charter_base is not None:
             raise _undo_charter(charter, charter_base, exc) from exc
         raise WorkspaceError(str(exc)) from exc
-    policy = f"{config.policy.engine} {config.policy.path}" if config.policy else "none declared"
-    # 0019: a pack has no path in config.json; the standards specialist reads it from this line.
-    packs = [f"{s.name} at {s.path}" for s in config.standards_sources if s.kind == "pack"]
     return [
         f"train: {train_id}  base: {base} @ {base_sha}  audit session: pending",
         ledger_line,
         f"charter_root: {charter or 'none'}  charter base: {charter_base or 'none'}",
-        f"policy: {policy}  standards: {len(config.standards_sources)} sources",
-        f"cache: {cache}" if cache else "cache: unresolved",
-        f"standards packs: {', '.join(packs) or 'none declared'}",
+        *_config_lines(config, cache),
+    ]
+
+
+def begin_folder(root: Path, ledger_feature: bool | None) -> list[str]:
+    # 0069: folder scope opens a train with no git command: no clean-tree, branch or charter step.
+    root = root.resolve()
+    config = _config(root)
+    ledger_line = _ledger_line(root, config, ledger_feature)
+    train_id = _new_train(root)
+    charter = (root / config.charter_root).resolve() if config.charter_root else None
+    cache = _cache()
+    state: dict[str, object] = {
+        "train_id": train_id,
+        "repo": str(root),
+        "base_branch": None,
+        "base_sha": None,
+        "charter_root": str(charter) if charter else None,
+        "charter_base": None,
+        "charter_branch_created": False,
+        "ledger_line": ledger_line,
+        "cache_dir": cache,
+        "units": [],
+        "merged": False,
+    }
+    try:
+        _open_train(root, train_id, state)
+    except train_state.TrainStateError as exc:
+        raise WorkspaceError(str(exc)) from exc
+    return [
+        f"train: {train_id}  folder: {root}  audit session: pending",
+        ledger_line,
+        f"charter_root: {charter or 'none'}  charter base: none",
+        *_config_lines(config, cache),
     ]
 
 
@@ -580,9 +642,13 @@ def stop(repo: Path, reason: str, next_action: str | None) -> tuple[list[str], b
             try:
                 state = train_state.load(repo, train_id or "")
                 integration = f"daedalus/{train_id}"
-                ok = _teardown(repo, list(state.get("units") or []), lines, nexts) and ok
-                ok = _integration_back(repo, state, integration, lines, nexts) and ok
-                ok = _charter_back(state, integration, lines, nexts) and ok
+                # 0069: a folder-scope train made no worktree or branch, so no git step runs.
+                if state.get("scope_kind") == "folder":
+                    lines.append("folder scope: no worktrees or branches to restore")
+                else:
+                    ok = _teardown(repo, list(state.get("units") or []), lines, nexts) and ok
+                    ok = _integration_back(repo, state, integration, lines, nexts) and ok
+                    ok = _charter_back(state, integration, lines, nexts) and ok
             except (WorkspaceError, train_state.TrainStateError) as exc:
                 ok = False
                 lines.append(f"stop could not finish: {exc}")
