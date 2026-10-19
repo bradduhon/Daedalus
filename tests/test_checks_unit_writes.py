@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -341,6 +342,84 @@ def test_coder_absolute_write_after_cd_is_allowed(command: str) -> None:
     assert decide(_b("repo-coder", command), CFG).allow, command
 
 
+def test_cd_absolute_then_relative_write_resolves_against_target(tmp_path: Path) -> None:
+    # O6: one absolute cd at the head of an && chain sets the dir later writes resolve in.
+    repo, wt = _unit_repo(tmp_path / "repo")
+    (wt / "src").mkdir()
+    for command in (
+        f"cd {wt} && tee src/a.py",
+        f"cd {wt} && echo x > src/b.py",
+        f"cd {wt}/src && cp a.py b.py && git diff | head",
+        f"cd {wt} && git add -A && git commit -m x",
+    ):
+        assert decide(_cwd(_b("repo-coder", command), repo), CFG).allow, command
+    d = decide(_cwd(_b("repo-coder", f"cd {wt} && tee contracts/x.yaml"), repo), CFG)
+    assert d.reason == jail.R_PROTECTED_BUILTIN.format(f"{wt}/contracts/x.yaml")
+    d = decide(_cwd(_b("repo-coder", f"cd {wt} && tee ../../../x"), repo), CFG)
+    assert not d.allow and str(d.reason).startswith("Bash write outside your unit worktree:")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd {wt} && cd src && tee a.py",
+        "cd {wt} && pushd {wt}/src && tee a.py",
+        "cd {wt}; tee src/a.py",
+        "cd {wt} || tee src/a.py",
+        "cd {wt} | tee src/a.py",
+        "cd {wt} > {wt}/log && tee src/a.py",
+        "cd src && tee a.py",
+        "cd /tmp && tee src/a.py",
+        "cd {repo}/src && tee ../.claude/worktrees/u1/src/a.py",
+        "tee {wt}/a && cd {wt} && tee src/a.py",
+        "cd {wt} && git add -A; git commit -m x",
+    ],
+)
+def test_two_cd_targets_keep_the_refusal(tmp_path: Path, command: str) -> None:
+    # O6: two targets, a relative target, a target outside a unit, or a non-&& join refuse.
+    repo, wt = _unit_repo(tmp_path / "repo")
+    hook_input = _cwd(_b("repo-coder", command.format(wt=wt, repo=repo)), repo)
+    d = decide(hook_input, CFG)
+    assert not d.allow and "absolute" in str(d.reason), (command, d.reason)
+
+
+def test_redirect_to_a_path_is_judged_as_a_write() -> None:
+    # O3: > and >> are writes to their target; 2> and &> too.
+    for command in (f"git diff > {WT}/out.txt", f"git log >> {WT}/out.txt", f"ls 2> {WT}/e"):
+        assert decide(_b("repo-coder", command), CFG).allow, command
+    for command, target in (
+        ("git diff > /tmp/out.txt", "/tmp/out.txt"),
+        ("git diff 2> err.txt", f"{CWD}/err.txt"),
+        (f"ls &> {CWD}/src/a.py", f"{CWD}/src/a.py"),
+        (f"echo x >> {CWD}/src/a.py", f"{CWD}/src/a.py"),
+        (f"ls 2>/dev/null > {CWD}/x", f"{CWD}/x"),
+    ):
+        d = decide(_b("repo-coder", command), CFG)
+        assert d.reason == jail.R_BASH_OUTSIDE.format(target), (command, d.reason)
+    d = decide(_b("repo-coder", f"echo x > {WT}/contracts/x.yaml"), CFG)
+    assert d.reason == jail.R_PROTECTED_BUILTIN.format(f"{WT}/contracts/x.yaml")
+
+
+def test_redirect_write_binds_the_unit(tmp_path: Path) -> None:
+    # issue 29: a redirect target claims the unit as any other write does.
+    repo, wt = _unit_repo(tmp_path / "repo")
+    other = repo / ".claude" / "worktrees" / "u2"
+    assert decide(_cwd(_b("repo-coder", f"echo x > {wt}/a.txt"), repo), CFG).allow
+    d = decide(_cwd(_b("repo-coder", f"echo x > {other}/a.txt"), repo), CFG)
+    assert not d.allow
+
+
+def test_python3_path_binds_the_unit(tmp_path: Path) -> None:
+    # B2, issue 29: a script in another unit's worktree is refused by the binding.
+    repo, wt = _unit_repo(tmp_path / "repo")
+    other = repo / ".claude" / "worktrees" / "u2"
+    git = ["git", "-C", str(repo), "worktree", "add", "-q", "-b", "daedalus-unit/u2", str(other)]
+    subprocess.run(git, check=True)
+    assert decide(_cwd(_b("repo-coder", f"python3 {wt}/x.py"), repo), CFG).allow
+    assert evaluate(HOOK, _cwd(_b("repo-coder", f"python3 {other}/x.py"), repo)) is not None
+    assert evaluate(HOOK, _cwd(_b("repo-coder", "python3 -m pytest"), repo)) is None
+
+
 def test_coder_cwd_inside_a_real_unit_worktree(tmp_path: Path) -> None:
     # 0022: a hook cwd of the worktree or its src/ still binds writes to that worktree.
     repo, wt = _unit_repo(tmp_path / "repo")
@@ -449,7 +528,6 @@ def test_coder_unit_worktree_operands_allowed(command: str) -> None:
         "git commit -a -m x",
         f"git -C {CWD} add -A",
         f"git -C {CWD}/.claude/worktrees/evil commit -m x",
-        f"cd {CWD}/.claude/worktrees/u1 && git commit -a -m x",
     ],
 )
 def test_coder_add_and_commit_outside_unit_worktree_refused(command: str) -> None:

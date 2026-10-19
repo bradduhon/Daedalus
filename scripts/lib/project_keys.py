@@ -7,12 +7,21 @@ from __future__ import annotations
 from dataclasses import fields
 
 from lib.config import LEDGER_FIELDS, Config, LedgerDecl, PolicyDecl, StandardsSource
-from lib.manifest import FEATURE_KEYS, MANIFEST_NAME, NARROWING_KEYS, Features, Manifest
+from lib.manifest import (
+    FEATURE_KEYS,
+    MANIFEST_NAME,
+    NARROWING_KEYS,
+    STACK_COMMANDS,
+    Features,
+    Manifest,
+)
 
 MANIFEST_FILE = MANIFEST_NAME
 CONFIG_FILE = ".claude/daedalus/config.json"
-# 0054, 0073: the JSON object each flat Manifest field is read from.
-_MANIFEST_PARENT = {key: "jail_narrowing" for key in NARROWING_KEYS} | {"unit_test_cmd": "stack"}
+# 0054, 0073, B2: the JSON object each flat Manifest field is read from.
+_MANIFEST_PARENT = {key: "jail_narrowing" for key in NARROWING_KEYS} | {
+    key: "stack" for key in STACK_COMMANDS
+}
 # 0004: lib.ledger reads a manifest ledger block with the config ledger's four fields.
 MANIFEST_LEDGER = "ledger"
 _Nested = type[LedgerDecl] | type[PolicyDecl] | type[StandardsSource]

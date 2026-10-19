@@ -8,7 +8,9 @@ import itertools
 import os
 import re
 import shlex
+from collections.abc import Callable, Iterable
 from pathlib import Path
+from typing import NamedTuple
 
 READ_ONLY_CMDS = frozenset(
     {
@@ -146,15 +148,17 @@ _DEFAULT_BRANCHES = frozenset({"main", "master"})
 # 8.5, F1: the plugin's scripts dir; append_ledger.py runs only by this absolute path.
 _REPO_SCRIPTS = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 _FALLBACK = "\x00fallback"
-# F1: the variable is empty in agent Bash, so the literal form never reaches the script.
+# F1, O7: the variable is empty in agent Bash, so the literal form never reaches the script.
 R_LEDGER_LITERAL = (
     "${CLAUDE_PLUGIN_ROOT} is empty in agent Bash. "
-    f"Next: run python3 {os.path.join(_REPO_SCRIPTS, 'append_ledger.py')} with the same arguments."
+    f"Next: run python3 {os.path.join(_REPO_SCRIPTS, 'append_ledger.py')} with the same "
+    "arguments; it is the path your brief names."
 )
 
 R_UNSUPPORTED = (
-    "command uses an unsupported shell construct (newline, background &, ||, substitution, "
-    "redirect, grouping, or |&). Next: send one plain command, or pipe read-only filters only."
+    "command uses an unsupported shell construct (newline, background &, substitution, "
+    "input redirect, a redirect other than >file, >>file, 2>&1 or >/dev/null, grouping, or |&). "
+    "Next: send plain commands joined by &&, || or |."
 )
 R_INLINE = (
     "wrappers, shells, and interpreters are not permitted for workers. "
@@ -322,10 +326,56 @@ def _abs(path: str, cwd: str) -> str:
     return path if os.path.isabs(path) else os.path.join(cwd, path)
 
 
-def _scan(command: str) -> tuple[list[str], list[str]] | None:
+_REDIRECT_END = frozenset(" \t;&|<>()\n\r")
+# O3: a write target the jail can judge as one literal path.
+_REDIRECT_DENY = frozenset("'\"\\$`*?[]{}~")
+REDIRECT_SEP = ">"
+
+
+def _fd_word(buf: list[str]) -> str | None:
+    # O3: a bare 1 or 2 word before > is the fd; any other number is refused.
+    text = "".join(buf)
+    word = "" if not text or text[-1] in " \t" else text.split()[-1]
+    if word in {"1", "2"}:
+        return word
+    return None if word.isdigit() else ""
+
+
+def _redirect(command: str, i: int, fd: str) -> tuple[int, str | None] | None:
+    # O3: i sits on >; the index past the target and a tee stand-in, or None for a no-op.
+    append = command.startswith(">>", i)
+    i += 2 if append else 1
+    if command[i : i + 1] in {"&", "|"}:
+        dup = fd == "2" and not append and command.startswith("&1", i)
+        return (i + 2, None) if dup and command[i + 2 : i + 3] in _REDIRECT_END | {""} else None
+    while command[i : i + 1] in {" ", "\t"}:
+        i += 1
+    start = i
+    while i < len(command) and command[i] not in _REDIRECT_END:
+        i += 1
+    target = command[start:i]
+    # O3: a leading - would read as a tee option and hide the target.
+    if not target or target.startswith("-") or _REDIRECT_DENY & set(target):
+        return None
+    if target == "/dev/null":
+        return i, None
+    return i, f"tee -a {target}" if append else f"tee {target}"
+
+
+def _flush(raws: list[str], seps: list[str], buf: list[str], pending: list[str]) -> None:
+    raws.append("".join(buf))
+    for stand_in in pending:
+        seps.append(REDIRECT_SEP)
+        raws.append(stand_in)
+    pending.clear()
+
+
+def _scan(command: str, redirects: bool = False) -> tuple[list[str], list[str]] | None:
+    # O3: redirects=True is the worker parse; a write redirect becomes a tee segment after its own.
     raws: list[str] = []
     seps: list[str] = []
     buf: list[str] = []
+    pending: list[str] = []
     quote = ""
     i = 0
     while i < len(command):
@@ -353,20 +403,32 @@ def _scan(command: str) -> tuple[list[str], list[str]] | None:
             buf.append(char)
             i += 1
             continue
+        if redirects and (char == ">" or command.startswith("&>", i)):
+            fd = "&" if char == "&" else _fd_word(buf)
+            if fd is None:
+                return None
+            if fd in {"1", "2"}:
+                buf.pop()
+            step = _redirect(command, i + 1 if fd == "&" else i, fd)
+            if step is None:
+                return None
+            i, stand_in = step
+            pending.extend([stand_in] if stand_in else [])
+            continue
         if char in "\n\r`<>()" or command.startswith("$(", i) or command.startswith("|&", i):
             return None
         pair = command[i : i + 2]
         if pair in {"&&", "||"}:
+            _flush(raws, seps, buf, pending)
             seps.append(pair)
-            raws.append("".join(buf))
             buf = []
             i += 2
             continue
         if char == "&":
             return None
         if char in "|;":
+            _flush(raws, seps, buf, pending)
             seps.append(char)
-            raws.append("".join(buf))
             buf = []
             i += 1
             continue
@@ -374,16 +436,13 @@ def _scan(command: str) -> tuple[list[str], list[str]] | None:
         i += 1
     if quote:
         return None
-    raws.append("".join(buf))
+    _flush(raws, seps, buf, pending)
     return raws, seps
 
 
-def tokenize(command: str) -> list[list[str]] | None:
-    scanned = _scan(command)
-    if scanned is None:
-        return None
+def _tokens(raws: list[str]) -> list[list[str]] | None:
     segments: list[list[str]] = []
-    for raw in scanned[0]:
+    for raw in raws:
         try:
             tokens = shlex.split(raw)
         except ValueError:
@@ -396,6 +455,53 @@ def tokenize(command: str) -> list[list[str]] | None:
     return segments
 
 
+def tokenize(command: str) -> list[list[str]] | None:
+    scanned = _scan(command)
+    return None if scanned is None else _tokens(scanned[0])
+
+
+class WorkerChain(NamedTuple):
+    # O3: raws, seps and tokens align; segments drop the _SAFE_ENV prefix of each.
+    raws: list[str]
+    seps: list[str]
+    tokens: list[list[str]]
+    segments: list[list[str]]
+
+
+def worker_parse(command: str) -> WorkerChain | None:
+    scanned = _scan(command, redirects=True)
+    tokens = None if scanned is None else _tokens(scanned[0])
+    if scanned is None or tokens is None:
+        return None
+    segments = [list(itertools.dropwhile(_SAFE_ENV.match, s)) for s in tokens]
+    return WorkerChain(scanned[0], scanned[1], tokens, segments)
+
+
+def chain_bases(chain: WorkerChain, cwd: str, dir_cmds: frozenset[str]) -> list[str] | None:
+    # O6: each segment's working folder; one absolute cd heading an && chain moves the rest.
+    moves = [i for i, s in enumerate(chain.segments) if s and _base(s[0]) in dir_cmds]
+    count = len(chain.segments)
+    if not moves:
+        return [cwd] * count
+    head = chain.segments[0]
+    if moves != [0] or len(head) != 2 or head[0] != "cd" or not os.path.isabs(head[1]):
+        return None
+    joins = {"&&", "|", REDIRECT_SEP}
+    if chain.seps[:1] not in ([], ["&&"]) or not set(chain.seps) <= joins:
+        return None
+    return [cwd] + [os.path.normpath(head[1])] * (count - 1)
+
+
+def declared_segments(commands: Iterable[str]) -> frozenset[tuple[str, ...]]:
+    # B2: a declared stack command that parses to one segment runs verbatim.
+    out: set[tuple[str, ...]] = set()
+    for command in commands:
+        chain = worker_parse(command)
+        if chain is not None and len(chain.segments) == 1 and chain.segments[0]:
+            out.add(tuple(chain.segments[0]))
+    return frozenset(out)
+
+
 def split_pipeline(command: str) -> list[str] | None:
     """Thin wrapper over the scanner: raw stages of a pure `|` pipeline, else None."""
     scanned = _scan(command)
@@ -405,11 +511,9 @@ def split_pipeline(command: str) -> list[str] | None:
 
 
 def worker_segments(command: str) -> list[list[str]] | None:
-    # 0044: tokenized segments with the _SAFE_ENV prefix dropped, as lib.jail's worker block does.
-    segments = tokenize(command)
-    if segments is None:
-        return None
-    return [list(itertools.dropwhile(_SAFE_ENV.match, s)) for s in segments]
+    # 0044, O3: the worker parse's segments; a write redirect is a tee segment.
+    chain = worker_parse(command)
+    return None if chain is None else chain.segments
 
 
 def _base(token: str) -> str:
@@ -1061,7 +1165,20 @@ def docs_read_ok(tokens: list[str], raw: str, roots: list[str], cwd: str, base: 
     return True
 
 
-def _tester_runner_ok(name: str, tokens: list[str]) -> bool:
+_MODULE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
+
+
+def python_script(tokens: list[str]) -> str | None:
+    # B2: the script operand of `python3 <path> ...`; None for -m, -c, flags or no operand.
+    if not tokens or _base(tokens[0]) not in {"python", "python3"}:
+        return None
+    args = tokens[1:]
+    return args[0] if args and not args[0].startswith("-") else None
+
+
+def _tester_runner_ok(
+    name: str, tokens: list[str], own_script: Callable[[str], bool] | None = None
+) -> bool:
     args = tokens[1:]
     if any(arg.startswith("--basetemp") for arg in args):
         return False
@@ -1074,9 +1191,11 @@ def _tester_runner_ok(name: str, tokens: list[str]) -> bool:
     if name == "uv":
         return args[:2] == ["run", "pytest"]
     if name in {"python", "python3"}:
-        # F3c: mypy takes path operands only; flags and @argfiles stay out.
-        mypy = args[:2] == ["-m", "mypy"] and not any(a.startswith(("-", "@")) for a in args[2:])
-        return args[:2] == ["-m", "pytest"] or mypy
+        # B2: any module by name; a script only where own_script places it in the coder's worktree.
+        if args[:1] == ["-m"]:
+            return len(args) > 1 and bool(_MODULE.fullmatch(args[1]))
+        script = python_script(tokens)
+        return script is not None and own_script is not None and own_script(script)
     if name == "node":
         return bool(args) and not args[0].startswith("-")
     if name in {"go", "cargo"}:
@@ -1126,7 +1245,71 @@ def _rsync_remote(args: list[str]) -> bool:
     return False
 
 
-def _worker_hygiene(tokens: list[str], agent: str) -> str | None:
+def _raw_words(raw: str) -> list[str]:
+    # O4: the shell words of one raw segment with their quotes kept, aligned with shlex.split.
+    words: list[str] = []
+    buf: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(raw):
+        char = raw[i]
+        if char == "\\" and quote != "'":
+            buf.append(raw[i : i + 2])
+            i += 2
+            continue
+        if quote:
+            quote = "" if char == quote else quote
+            buf.append(char)
+        elif char in "'\"":
+            quote = char
+            buf.append(char)
+        elif char in " \t":
+            if buf:
+                words.append("".join(buf))
+                buf = []
+        else:
+            buf.append(char)
+        i += 1
+    if buf:
+        words.append("".join(buf))
+    return words
+
+
+def _unsingled(word: str) -> str:
+    # O4: the characters of a raw word the shell may still expand; single-quoted spans drop out.
+    out: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(word):
+        char = word[i]
+        if quote == "'":
+            quote = "" if char == "'" else quote
+        elif char == "\\":
+            out.append(word[i : i + 2])
+            i += 1
+        elif char == '"':
+            quote = "" if quote else '"'
+        elif char == "'" and not quote:
+            quote = "'"
+        else:
+            out.append(char)
+        i += 1
+    return "".join(out)
+
+
+def _hygiene_bad(token: str, word: str | None) -> bool:
+    # O4: judge the raw span when it is known, else the shlex token as before.
+    text = token if word is None else _unsingled(word)
+    lead = token if word is None else word
+    return bool(_HYGIENE_CHARS & set(text)) or lead.startswith("~")
+
+
+def _worker_hygiene(
+    tokens: list[str],
+    agent: str,
+    words: list[str] | None = None,
+    own_script: Callable[[str], bool] | None = None,
+) -> str | None:
     if _ASSIGN.match(tokens[0]):
         return R_ENV
     name = _base(tokens[0])
@@ -1150,10 +1333,12 @@ def _worker_hygiene(tokens: list[str], agent: str) -> str | None:
         and "CLAUDE_PLUGIN_ROOT" in (tokens[1] if len(tokens) > 1 else "")
     ):
         return R_LEDGER_LITERAL
-    if is_wrapper and not ledger and not _tester_runner_ok(name, tokens):
+    if is_wrapper and not ledger and not _tester_runner_ok(name, tokens, own_script):
         return R_INLINE
+    spans: list[str | None] = list(words) if words and len(words) == len(tokens) else []
     for idx, token in enumerate(tokens):
-        if idx not in exempt and (_HYGIENE_CHARS & set(token) or token.startswith("~")):
+        word = spans[idx] if spans else None
+        if idx not in exempt and _hygiene_bad(token, word):
             return R_HYGIENE
     sub, args, globals_ = _git_split(tokens)
     if _git_config_override(globals_):

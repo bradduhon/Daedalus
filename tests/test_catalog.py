@@ -37,14 +37,23 @@ def test_matrix_changes_when_an_agent_file_changes(tmp_path: Path) -> None:
     assert catalog.matrix(scratch) == _readme_block()
     coder = scratch / "repo-coder.md"
     text = coder.read_text(encoding="utf-8")
-    assert "shell_tripwires.py --no-pipes" in text
-    coder.write_text(text.replace("shell_tripwires.py --no-pipes", "shell_tripwires.py"))
+    assert "git_grammar.py --allow coder" in text
+    coder.write_text(text.replace("git_grammar.py --allow coder", "git_grammar.py --allow docs"))
     changed = catalog.matrix(scratch)
     assert changed != _readme_block()
     assert (
         "| repo-coder | producer | credential_paths, workspace_integrity, tool_bound, " in changed
     )
-    assert ", shell_tripwires, network_tools," in changed
+    assert ", git_push, git_grammar --allow docs, unit_writes," in changed
+
+
+def test_no_agent_file_passes_no_pipes() -> None:
+    # B1: the pipe flag is deleted; the matrix shows shell_tripwires bare for every agent.
+    out = catalog.matrix(AGENTS)
+    assert "--no-pipes" not in out and "--no-pipes" not in _readme_block()
+    for name in ("repo-coder", "charter-docs", "pr-train-conductor"):
+        row = next(r for r in out.splitlines() if r.startswith(f"| {name} |"))
+        assert ", shell_tripwires, network_tools" in row, name
 
 
 def test_matrix_shape() -> None:

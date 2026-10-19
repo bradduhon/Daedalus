@@ -138,8 +138,10 @@ def test_charter_docs_probe_status_and_dash_rule() -> None:
     assert "A probe-only task ends with `[STATUS: LEDGER_PROBED] <probe line>`" in text
     assert "never claims an append" in text
     assert "Never write U+2013 or U+2014 (en or em dash)" in text
-    # F1: agent bodies are substituted at load (quote probe), so the variable stays here.
-    assert "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_ledger.py --probe`" in text
+    # O7: the brief carries the absolute script path; the body never runs the variable form.
+    assert "The brief names the absolute path of append_ledger.py" in text
+    assert "`python3 <that path> --probe`" in text
+    assert "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_ledger.py" not in text
 
 
 @pytest.mark.parametrize("name,sub", [("nist-specialist", "nist"), ("cis-specialist", "cis")])
