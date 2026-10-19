@@ -41,6 +41,17 @@ class Manifest:
     features: Features = field(default_factory=Features)
     trains_dir: str | None = None
     unit_test_cmd: str | None = None
+    typecheck_cmd: str | None = None
+    lint_cmd: str | None = None
+
+
+# 0073, B2: the stack keys that hold a command the coder may run verbatim.
+STACK_COMMANDS = ("unit_test_cmd", "typecheck_cmd", "lint_cmd")
+
+
+def declared_commands(manifest: Manifest) -> tuple[str, ...]:
+    values = (getattr(manifest, key) for key in STACK_COMMANDS)
+    return tuple(value for value in values if isinstance(value, str))
 
 
 def manifest_path(repo: Path) -> Path:
@@ -166,16 +177,17 @@ def _trains_dir(target: Path, raw: dict[str, object]) -> str | None:
     return value
 
 
-def _unit_test_cmd(target: Path, raw: dict[str, object]) -> str | None:
+def _stack_commands(target: Path, raw: dict[str, object]) -> dict[str, str | None]:
     stack = raw.get("stack", {})
     if not isinstance(stack, dict):
         raise _key_error(target, "stack", "must be an object")
-    value = stack.get("unit_test_cmd")
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
-        raise _key_error(target, "stack.unit_test_cmd", "must be null or a non-empty string")
-    return value
+    out: dict[str, str | None] = {}
+    for key in STACK_COMMANDS:
+        value = stack.get(key)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise _key_error(target, f"stack.{key}", "must be null or a non-empty string")
+        out[key] = value
+    return out
 
 
 def load(repo: Path) -> Manifest | None:
@@ -189,12 +201,15 @@ def load(repo: Path) -> Manifest | None:
             "docs/project-requirements.md."
         )
     paths, extensions = _narrowing(target, raw)
+    commands = _stack_commands(target, raw)
     return Manifest(
         paths,
         extensions,
         features=_features(target, raw),
         trains_dir=_trains_dir(target, raw),
-        unit_test_cmd=_unit_test_cmd(target, raw),
+        unit_test_cmd=commands["unit_test_cmd"],
+        typecheck_cmd=commands["typecheck_cmd"],
+        lint_cmd=commands["lint_cmd"],
     )
 
 

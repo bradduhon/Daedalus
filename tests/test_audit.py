@@ -339,3 +339,100 @@ def test_held_lock_raises_after_deadline(project_data: Path, hook_input: Any) ->
     finally:
         holder.kill()
         holder.wait()
+
+
+def _last_record(project_data: Path) -> dict[str, Any]:
+    lines = (project_data / "audit" / "sess-test.jsonl").read_text().splitlines()
+    rec: dict[str, Any] = json.loads(lines[-1])
+    return rec
+
+
+@pytest.mark.parametrize(
+    ("agent", "tool", "tool_input", "prefix"),
+    [
+        (None, "Bash", {"command": "git clean -fdx"}, "jail: "),
+        ("Explore", "Write", {"file_path": "notes.md", "content": "x"}, "jail: "),
+    ],
+)
+def test_main_block_reason_carries_a_prefix(
+    run_script: Any,
+    project_data: Path,
+    hook_input: Any,
+    agent: str | None,
+    tool: str,
+    tool_input: dict[str, str],
+    prefix: str,
+) -> None:
+    # 6.1: main asks and foreign blocks both record the deciding hook as routed blocks do.
+    payload = hook_input(tool_name=tool, tool_input=tool_input)
+    if agent is not None:
+        payload.update(agent_type=agent, agent_id="f1")
+    result = run_script("enforce_agent_jail.py", payload)
+    rec = _last_record(project_data)
+    if agent is None:
+        # 0106: the operator's own session is asked, never blocked.
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)["hookSpecificOutput"]
+        assert out["permissionDecision"] == "ask"
+        assert rec["decision"] == "ask" and rec["reason"].startswith(prefix), rec["reason"]
+        return
+    assert result.returncode == 2, result.stderr
+    assert rec["decision"] == "block" and rec["reason"].startswith(prefix), rec["reason"]
+    assert f"]: {prefix}" in result.stderr
+
+
+def test_subagent_stop_resolves_agent_type_from_its_start(
+    project_data: Path, hook_input: Any
+) -> None:
+    # 6.1: a stop payload without agent_type takes the type its start recorded, never `main`.
+    bare = {"tool_name": None, "tool_input": None, "tool_use_id": None}
+    audit.audit_append(
+        hook_input(hook_event_name="SubagentStart", agent_id="a1", agent_type="auditor", **bare)
+    )
+    audit.audit_append(
+        hook_input(hook_event_name="SubagentStart", agent_id="a2", agent_type="repo-coder", **bare)
+    )
+    stop = audit.audit_append(hook_input(hook_event_name="SubagentStop", agent_id="a1", **bare))
+    assert stop is not None and stop["agent_type"] == "auditor"
+    assert stop["hash"] == audit.record_hash(stop)
+    orphan = audit.audit_append(hook_input(hook_event_name="SubagentStop", agent_id="zz", **bare))
+    assert orphan is not None and orphan["agent_type"] is None
+    main = audit.audit_append(hook_input(hook_event_name="Stop", **bare))
+    assert main is not None and main["agent_type"] == "main"
+
+
+def test_judge_start_is_consumed_by_the_next_pre_tool_use_record(
+    project_data: Path, hook_input: Any
+) -> None:
+    # 6.1: the mark fills one PreToolUse record, skips other events, then resets.
+    bare = {"tool_name": None, "tool_input": None, "tool_use_id": None}
+    audit.mark_judge_start(time.monotonic() - 0.05)
+    start = audit.audit_append(hook_input(hook_event_name="SubagentStart", agent_id="a", **bare))
+    assert start is not None and start["judge_ms"] is None
+    first = audit.audit_append(hook_input(), "allow", None)
+    assert first is not None and first["judge_ms"] >= 50
+    assert first["hash"] == audit.record_hash(first)
+    second = audit.audit_append(hook_input(tool_use_id="toolu_2"), "allow", None)
+    assert second is not None and second["judge_ms"] is None
+
+
+def test_pre_tool_use_record_carries_judge_ms(
+    run_script: Any, project_data: Path, hook_input: Any
+) -> None:
+    # 6.1: judge_ms sits inside the hashed body, so the chain still verifies with it.
+    result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "git status"}))
+    assert result.returncode == 0, result.stderr
+    rec = _last_record(project_data)
+    assert isinstance(rec["judge_ms"], (int, float)) and rec["judge_ms"] >= 0
+    assert '"judge_ms"' in audit.canonical(rec) and rec["hash"] == audit.record_hash(rec)
+    bare = {"tool_name": None, "tool_input": None, "tool_use_id": None}
+    start = audit.audit_append(hook_input(hook_event_name="SessionStart", **bare))
+    assert start is not None and start["judge_ms"] is None
+    log = project_data / "audit" / "sess-test.jsonl"
+    verify = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "verify_audit_chain.py"), str(log)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert verify.returncode == 0 and verify.stdout.startswith("OK: 2 records"), verify

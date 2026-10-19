@@ -5,6 +5,7 @@ tools: Bash, Read, Glob, Grep
 disallowedTools: Write, Edit, MultiEdit, NotebookEdit, WebFetch, WebSearch, Agent, Task, SendMessage
 model: opus
 shape: mover
+phases: [commit, release]
 # 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).
 hooks:
   PreToolUse:
@@ -12,7 +13,7 @@ hooks:
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/credential_paths.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/workspace_integrity.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/tool_bound.py"}
-        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/shell_tripwires.py --no-pipes"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/shell_tripwires.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/network_tools.py --gh"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/command_allowlist.py --allow git,gh,gitleaks"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/git_grammar.py --allow conductor"}

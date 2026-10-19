@@ -41,6 +41,11 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
             return reason
         if not jail._gh_allowed(segment):
             return gh_policy.conductor_gh_refusal()
+        # spec 4.2: pr create meets the push's verdict gate, from the train branch only.
+        if gh_policy.classify(segment)[1] == "pr create":
+            reason = gh_policy.pr_create_reason(segment, cwd)
+            if reason:
+                return reason
     return None
 
 

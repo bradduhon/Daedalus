@@ -12,6 +12,7 @@ from pathlib import Path
 
 from lib import dispatch_binding
 from lib.audit import _git_env, project_data_dir, project_root
+from lib.audit_proof import SUMMARY_DIR
 from lib.config import Config
 from lib.credential_paths import (
     CREDENTIAL_TOOLS,
@@ -32,7 +33,7 @@ from lib.credential_paths import credential_roots as _credential_roots
 from lib.credential_paths import expand_word as _expand_word
 from lib.credential_paths import store_rest as _store_rest
 from lib.credential_paths import tilde as _tilde
-from lib.gh_policy import CONDUCTOR_GH, allowlist_applies, gh_reason
+from lib.gh_policy import CONDUCTOR_GH, _push_reason, allowlist_applies, gh_reason
 from lib.ledger import LedgerError, resolve_ledger
 from lib.manifest import Manifest, ManifestError, extension_hit, path_hit
 from lib.manifest import load as load_manifest
@@ -48,7 +49,12 @@ from lib.shell import (
     _SHELLS,
     _VALUE_LONG_NEXT,
     GIT_PLUMBING_REMOTE,
+    R_CLEAN,
     R_DATA_DIR_GIT,
+    R_DEFAULT_BRANCH,
+    R_DESTRUCTIVE,
+    R_FORCE_PUSH,
+    R_STASH_UNTRACKED,
     READ_ONLY_CMDS,
     READ_ONLY_GIT,
     _abs,
@@ -112,7 +118,15 @@ _PATH_OPTS: dict[str, frozenset[str]] = {
 _VALUE_LONG = _VALUE_LONG_NEXT | {"--preserve"}
 _MODE = re.compile(r"(?:[0-7]{3,4}|[ugoa]*[-+=][rwxXstugo]*)(?:,[ugoa]*[-+=][rwxXstugo]*)*")
 DIR_CHANGE_CMDS = frozenset({"cd", "pushd", "popd"})
-NETWORK_TOOLS = frozenset({"curl", "wget", "ssh", "scp", "nc", "ncat", "telnet", "aws", "gh"})
+# audit A7-1: claude starts a nested session with no agent_id, which the jail would judge as main.
+NETWORK_TOOLS = frozenset(
+    {"curl", "wget", "ssh", "scp", "nc", "ncat", "telnet", "aws", "gh", "claude"}
+)
+R_NESTED_CLAUDE = (
+    "claude starts a nested session the jail cannot attribute to an agent (audit A7-1). "
+    "Next: run it from your own shell."
+)
+_CLAUDE_WORD = re.compile(r"(?:^|[\s;&|(/'\"`])claude(?=[\s;&|)'\"`]|$)")
 # 0028: the conductor's gh set lives in lib.gh_policy.
 GH_ALLOWED = {cmd: frozenset(sub for c, sub in CONDUCTOR_GH if c == cmd) for cmd, _ in CONDUCTOR_GH}
 _BRANCH_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
@@ -165,10 +179,12 @@ R_CONDUCTOR_CHARTER = (
     "daedalus/<train-id>`."
 )
 R_CODER_GIT = (
-    "repo-coder git is limited to add, commit, status, diff, log, show, rev-parse, ls-files, "
+    "repo-coder git is limited to add, commit, status, diff (--check included), log (-S and -G "
+    "included), show, grep, blame, merge-base, rev-parse, ls-files, "
     "branch listing, stash list/push/pop/show, "
     "restore/checkout -- <unit worktree paths>, "
-    "worktree list. Next: use those only; the trains handle the rest."
+    "worktree list; --output is refused on every subcommand. "
+    "Next: use those only; the trains handle the rest."
 )
 R_DATA_DIR = (
     "the plugin data directory is written by hooks only. "
@@ -247,7 +263,65 @@ R_WEB_RESEARCHER_ONLY = (
 R_UNKNOWN = (
     "unknown agent_type '{agent}', fail closed. Next: add the agent to the jail before using it."
 )
-R_UNKNOWN_TRAIN = "unknown agent_type '{agent}', fail closed while {marker} exists.\n" + UNMARK_NEXT
+# 0100: one line of rule, then the unmark line for a marker a dead train left.
+R_UNKNOWN_TRAIN = (
+    "unknown agent_type '{agent}' is read-only while {marker} exists: Bash runs read-only "
+    "inspection and git reads, pipes allowed; Write, Edit, dispatch and web tools are refused "
+    "(0100).\n" + UNMARK_NEXT
+)
+# 0106: the plain-words warnings the operator reads before approving one main-session call.
+ASK_DOTGIT = "Writing {path} edits the repository's own metadata; a wrong write corrupts the clone."
+ASK_DATA_DIR = (
+    "This touches the plugin data folder. It holds the audit log, train state and coder "
+    "bindings; a hand edit breaks the hash chain that proves the audit happened."
+)
+ASK_CREDENTIAL = (
+    "This path holds credentials; reading it puts the secret into the session transcript."
+)
+ASK_CREDENTIAL_WRITE = (
+    "This path holds credentials; writing it can replace a key or leave a secret behind."
+)
+ASK_FORCE_PUSH = (
+    "A force, delete or mirror push rewrites the remote branch; commits that exist only there "
+    "are lost."
+)
+ASK_DEFAULT_BRANCH = "Pushing to the default branch skips the pull request the operator merges."
+ASK_DELETE = (
+    "This recursive or raw-device delete removes files that neither git nor the plugin can restore."
+)
+ASK_CLEAN = (
+    "git clean deletes untracked files, the plugin data folder included; nothing restores them."
+)
+ASK_TRAIN_PUSH = "Pushing during a train publishes a branch before the audit approves its tip."
+ASK_COMMAND = "This command matches a pattern the plugin guards against."
+ASK_NESTED_CLAUDE = (
+    "This starts a nested Claude session; the jail judges its calls as yours, with no agent's "
+    "limits."
+)
+ASK_DISPATCH = (
+    "This dispatch skips a train invariant ({reason}). Approving starts the agent without it; "
+    "the audit log records the ask."
+)
+ASK_NO_CWD = (
+    "The hook received no working folder, so the plugin cannot tell which repository this "
+    "call touches."
+)
+# 0106: tripwire findings with their own consequence; any other finding gets ASK_COMMAND.
+_TRIPWIRE_ASKS = {
+    R_FORCE_PUSH: ASK_FORCE_PUSH,
+    R_DEFAULT_BRANCH: ASK_DEFAULT_BRANCH,
+    R_DESTRUCTIVE: ASK_DELETE,
+    R_CLEAN: ASK_CLEAN,
+    R_DATA_DIR_GIT: ASK_DATA_DIR,
+    R_STASH_UNTRACKED: ASK_DATA_DIR,
+    R_NESTED_CLAUDE: ASK_NESTED_CLAUDE,
+}
+# 0105, 0106: the operator approves or denies the one call; main is never blocked.
+R_MAIN_TRAIN_ASK = (
+    "Build Train {train} is active in this repository and works in unit worktrees. "
+    "Writing {path} here can leave a dirty tree that finish refuses, conflict with a unit "
+    "branch, or land on the integration branch. Approve to proceed anyway."
+)
 R_ROUTED = (
     "{agent} is judged by the router, not lib.jail.decide. "
     "Next: route the call through scripts/enforce_agent_jail.py."
@@ -308,6 +382,8 @@ class Decision:
     allow: bool
     reason: str | None = None
     agent: str | None = None
+    # 0105: not allowed, not refused; the operator decides this one main-session call.
+    ask: bool = False
 
 
 def _allow() -> Decision:
@@ -316,6 +392,23 @@ def _allow() -> Decision:
 
 def _block(reason: str) -> Decision:
     return Decision(False, reason)
+
+
+def _ask(reason: str) -> Decision:
+    return Decision(False, reason, ask=True)
+
+
+def _main_ask(warning: str, finding: str) -> Decision:
+    # 0106: the warning first, then the jail's finding verbatim so the audit log keeps it whole.
+    return _ask(f"{warning} Approve to proceed anyway. The jail's finding: {finding}")
+
+
+def _tripwire_ask(finding: str) -> Decision:
+    # 0106: git push during a train carries the gh policy's push finding.
+    warning = _TRIPWIRE_ASKS.get(finding, ASK_COMMAND)
+    if finding == _push_reason("main"):
+        warning = ASK_TRAIN_PUSH
+    return _main_ask(warning, finding)
 
 
 def _flags_ok(
@@ -396,12 +489,18 @@ def _in_unit_worktree(target: str, cwd: str) -> bool:
     return parts is not None and len(parts) >= 2
 
 
-def _orchestrator_code(arg: str, cwd: str) -> bool:
-    # 0054 narrows the coder only; the orchestrator's src/ and tests/ refusal is unchanged.
-    target = _abs(arg, cwd)
-    parts = _unit_parts(target, cwd)
-    unit_code = parts is not None and len(parts) >= 2 and parts[1] in {"src", "tests"}
-    return _under(target, f"{cwd}/src") or _under(target, f"{cwd}/tests") or unit_code
+def _main_write_train(path: str, cwd: str) -> str | None:
+    # 0105, 0104: the train id when the path is in a marked repo outside its scratch, else None.
+    target = os.path.realpath(_abs(path, cwd))
+    root = project_root(Path(cwd))
+    if not (_under(target, str(root)) and _train_scoped(cwd, "", {})):
+        root = project_root(Path(os.path.dirname(target)))
+        if not os.path.lexists(train_marker(root)):
+            return None
+    if _under(target, str(root / SUMMARY_DIR)):
+        return None
+    branch = _train_branch(str(root)) or ""
+    return branch.removeprefix("daedalus/") or "(id unreadable)"
 
 
 @dataclass(frozen=True)
@@ -494,20 +593,42 @@ _GIT_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
     "status": lambda a, _: _flags_ok(a, _STATUS_FLAGS, (), (r"-[sb]+",)),
     "log": lambda a, _: _flags_ok(
         a,
-        frozenset({"--oneline", "--stat", "--name-only", "-p", "--no-merges", "--all"}),
+        frozenset({"--oneline", "--stat", "--name-only", "-p", "--no-merges", "--all"})
+        | {"--pickaxe-regex", "--pickaxe-all"},
         (*_FORMAT, "--grep=", "--author="),
-        (r"-\d+", r"-n\d+"),
+        (r"-\d+", r"-n\d+", r"-[SG].+"),
         frozenset({"-n", "-S", "-G"}),
     ),
     "diff": lambda a, _: _flags_ok(
         a,
         frozenset(
             {"--stat", "--name-only", "--name-status", "--cached", "--word-diff", "--color=never"}
+            | {"--check"}
         ),
         (),
         (r"-U\d+",),
     ),
-    "show": lambda a, _: _flags_ok(a, frozenset({"--stat", "--name-only"}), _FORMAT),
+    "show": lambda a, _: _flags_ok(
+        a, frozenset({"--stat", "--name-only", "--name-status", "--oneline", "-s"}), _FORMAT
+    ),
+    # O5: history reads; -O (pager), -f, --no-index and --contents stay out.
+    "grep": lambda a, _: _flags_ok(
+        a,
+        frozenset({"--cached", "--untracked", "--heading", "--break"}),
+        (),
+        (r"-[nilLwvcEFIhH]+", r"-[ABC]\d+"),
+        frozenset({"-e", "-A", "-B", "-C", "--max-depth"}),
+    ),
+    "blame": lambda a, _: _flags_ok(
+        a,
+        frozenset({"-w", "-s", "-e", "-l", "--porcelain", "--line-porcelain"}),
+        (),
+        (r"-[CM]\d*", r"-L.+"),
+        frozenset({"-L"}),
+    ),
+    "merge-base": lambda a, _: _flags_ok(
+        a, frozenset({"--is-ancestor", "--all", "--octopus", "--independent", "--fork-point"})
+    ),
     "rev-parse": lambda a, _: _flags_ok(
         a,
         frozenset({"--short", "--abbrev-ref", "--is-inside-work-tree", "--show-toplevel"}),
@@ -538,6 +659,9 @@ def _git_grammar_ok(
     grammar = _GIT_GRAMMAR if grammar is None else grammar
     sub, args, globals_ = _git_split(tokens)
     if sub not in subs or sub not in grammar:
+        return False
+    # O5: --output and its abbreviations, even where an option value would swallow it.
+    if any(_long_matches(arg, "--output", 1) for arg in args):
         return False
     i = 0
     while i < len(globals_):
@@ -1519,10 +1643,23 @@ def _ours(raw_agent: str) -> bool:
     return bool(sep) and prefix in (*AGENT_NAMESPACES, TEST_NAMESPACE)
 
 
+def _foreign_read_ok(command: str, cwd: str, charter: str | None) -> bool:
+    # 0100: the auditor's per-segment read-only class, pipes included; no env-prefix strip.
+    segments = tokenize(command)
+    if not segments:
+        return False
+    return all(_read_only_segment(s, READ_ONLY_GIT, cwd, charter) for s in segments)
+
+
 def _unknown_decision(
-    raw_agent: str, agent: str, cwd: str, tool: str, tool_input: dict[str, object]
+    raw_agent: str,
+    agent: str,
+    cwd: str,
+    tool: str,
+    tool_input: dict[str, object],
+    charter: str | None = None,
 ) -> Decision:
-    # 0023: a foreign agent is refused only while a train is active; a daedalus name always is.
+    # 0023, 0100: a foreign agent reads only while a train is active; a daedalus name never acts.
     if _ours(raw_agent):
         return _block(R_UNKNOWN.format(agent=agent))
     if not os.path.isabs(cwd):
@@ -1535,7 +1672,7 @@ def _unknown_decision(
     if command and (_data_dir_write(command) or _cd_data_dir_git(command)):
         return _block(R_DATA_DIR)
     repo = _marked_repo(cwd, tool, tool_input)
-    if repo is None:
+    if repo is None or (tool == "Bash" and _foreign_read_ok(command, cwd, charter)):
         return _allow()
     return _block(R_UNKNOWN_TRAIN.format(agent=agent, marker=train_marker(repo), repo=repo))
 
@@ -1555,13 +1692,20 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
     cwd = str(hook_input.get("cwd") or "")
     raw_input = hook_input.get("tool_input")
     tool_input: dict[str, object] = raw_input if isinstance(raw_input, dict) else {}
+    # m4, 0106: the operator's own session is bare main with no agent_id; it is asked, never denied.
+    operator = raw_agent == "main" and not hook_input.get("agent_id")
     if tool in CREDENTIAL_TOOLS:
         reason = path_reason(tool, tool_input, cwd)
+        if reason and operator:
+            return _with_agent(_main_ask(ASK_CREDENTIAL, reason), agent)
         return Decision(reason is None, reason, agent)
     # 0035: outside a train, main and foreign agents carry only the read deny above.
     if not policed_outside_train(raw_agent) and not _train_scoped(cwd, tool, tool_input):
         return Decision(True, None, agent)
     credential = _credential_reason(tool, tool_input, cwd)
+    if credential and operator:
+        warning = ASK_CREDENTIAL_WRITE if tool in WRITE_TOOLS else ASK_CREDENTIAL
+        return _with_agent(_main_ask(warning, credential), agent)
     if credential:
         return Decision(False, credential, agent)
     if agent == "main" and raw_agent != "main":
@@ -1577,38 +1721,52 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
     elif tool == "Bash" and (gh := _gh_gate(agent, cwd, str(tool_input.get("command") or ""))):
         decision = _block(gh)
     else:
-        decision = _unknown_decision(raw_agent, agent, cwd, tool, tool_input)
-    return Decision(decision.allow, decision.reason, agent)
+        charter = str(config.charter_root) if config.charter_root else None
+        decision = _unknown_decision(raw_agent, agent, cwd, tool, tool_input, charter)
+    return _with_agent(decision, agent)
+
+
+def _with_agent(decision: Decision, agent: str) -> Decision:
+    return Decision(decision.allow, decision.reason, agent, decision.ask)
 
 
 def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision:
+    # 0106: every main-session finding below asks the operator; none of them blocks.
     command = str(tool_input.get("command") or "")
     raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
     is_write = tool in WRITE_TOOLS
     if (is_write or tool == "Bash") and not os.path.isabs(cwd):
-        return _block(R_NO_CWD)
+        return _main_ask(ASK_NO_CWD, R_NO_CWD)
     path = _abs(raw_path, cwd)
     if is_write and (
         ".git" in path.split(os.sep) or ".git" in os.path.normpath(path).split(os.sep)
     ):
-        return _block(R_DOTGIT)
+        return _main_ask(ASK_DOTGIT.format(path=path), R_DOTGIT)
     if is_write and _data_dir_path(path, cwd):
-        return _block(R_DATA_DIR)
+        return _main_ask(ASK_DATA_DIR, R_DATA_DIR)
     if tool == "Bash":
-        # 8.5: main is bound only by the tripwires; regex fallback when tokenize refuses.
+        # 8.5, 0106: main meets only the tripwires, as asks; regex fallback when tokenize refuses.
         if _data_dir_write(command):
-            return _block(R_DATA_DIR)
+            return _main_ask(ASK_DATA_DIR, R_DATA_DIR)
         if _cd_data_dir_git(command):
-            return _block(R_DATA_DIR_GIT)
+            return _main_ask(ASK_DATA_DIR, R_DATA_DIR_GIT)
         reason = _command_reason(command) or _gh_gate("main", cwd, command)
-        return _block(reason) if reason else _allow()
-    if is_write and _orchestrator_code(path, cwd):
-        return _block(
-            "the orchestrating session does not write application code during a train. "
-            "Next: dispatch a repo-coder for this change."
-        )
+        reason = reason or (R_NESTED_CLAUDE if _nested_claude(command) else None)
+        return _tripwire_ask(reason) if reason else _allow()
+    train = _main_write_train(path, cwd) if is_write else None
+    if train is not None:
+        return _ask(R_MAIN_TRAIN_ASK.format(train=train, path=path))
     if tool in dispatch_binding.DISPATCH_TOOLS:
         reason = dispatch_binding._dispatch_reason(tool_input, cwd)
         if reason:
-            return _block(reason)
+            # 0106: the operator's dispatch is asked with the invariant it skips, never blocked.
+            return _ask(ASK_DISPATCH.format(reason=reason))
     return _allow()
+
+
+def _nested_claude(command: str) -> bool:
+    # audit A7-1: through wrappers and shell -c bodies; the regex when the parser gives up.
+    segments = _policy_segments(command)
+    if segments is None:
+        return bool(_CLAUDE_WORD.search(command))
+    return any(seg and _base(seg[0]) == "claude" for seg in segments)

@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import enforce_agent_jail
@@ -46,6 +47,34 @@ def test_allow_exits_zero_and_logs_allow(
     assert result.returncode == 0, result.stderr
     rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
     assert rec["decision"] == "allow" and rec["reason"] is None
+
+
+def test_main_write_in_a_train_exits_zero_with_ask_and_logs_ask(
+    run_script: Any, project_data: Path, repo_cwd: Path, hook_input: Any
+) -> None:
+    # 0105: the operator approves or denies the one call; main is never blocked by this rule.
+    _in_train(project_data)
+    payload = hook_input(tool_name="Write", tool_input={"file_path": "README.md", "content": "x"})
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 0 and result.stderr == "", result.stderr
+    out = json.loads(result.stdout)["hookSpecificOutput"]
+    assert out["hookEventName"] == "PreToolUse" and out["permissionDecision"] == "ask"
+    reason = out["permissionDecisionReason"]
+    assert reason.startswith("Build Train 20261015-120000 is active in this repository")
+    assert f"Writing {repo_cwd}/README.md here" in reason
+    rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
+    assert rec["decision"] == "ask" and rec["reason"] == f"jail: {reason}"
+    # 0105, 6.1: the record names the deciding hook; the operator's prompt text does not.
+    assert rec["reason"].startswith("jail: ") and not reason.startswith("jail: ")
+
+
+def test_routed_agent_never_gets_ask(run_script: Any, project_data: Path, hook_input: Any) -> None:
+    # 0105: the ask decision is the main session's alone; every agent stays allow or deny.
+    _in_train(project_data)
+    write = {"file_path": "README.md", "content": "x"}
+    payload = hook_input(agent_type="repo-coder", tool_name="Write", tool_input=write)
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 2 and '"ask"' not in result.stdout
 
 
 def test_block_exits_two_with_message_and_logs_block(
@@ -87,8 +116,11 @@ def test_unknown_agent_blocks_during_a_train(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
     (project_data / "train.active").write_text("20261015-120000\n")
-    result = run_script("enforce_agent_jail.py", hook_input(agent_type="ghost"))
-    assert result.returncode == 2 and "fail closed" in result.stderr
+    # 0100: a foreign agent reads during a train; its writes block.
+    assert run_script("enforce_agent_jail.py", hook_input(agent_type="ghost")).returncode == 0
+    payload = hook_input(agent_type="ghost", tool_input={"command": "touch x"})
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 2 and "read-only while" in result.stderr
 
 
 def test_unknown_agent_passes_without_a_train(
@@ -98,14 +130,37 @@ def test_unknown_agent_passes_without_a_train(
     assert result.returncode == 0, result.stderr
 
 
-def test_unwritable_audit_dir_fails_closed(
-    run_script: Any, project_data: Path, hook_input: Any
+def _ask_reason(stdout: str) -> str:
+    out = json.loads(stdout)["hookSpecificOutput"]
+    assert out["hookEventName"] == "PreToolUse" and out["permissionDecision"] == "ask"
+    return str(out["permissionDecisionReason"])
+
+
+@pytest.mark.parametrize("agent", [None, "ghost"])
+def test_unwritable_audit_dir_asks_main_and_fails_closed_for_an_agent(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    project_data: Path,
+    hook_input: Any,
+    agent: str | None,
 ) -> None:
+    # 0106, AU-5: main is alerted and asked; 8.5 no record, no action stays for every agent.
     _in_train(project_data)
     (project_data / "audit").write_text("not a directory")
-    result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
-    assert result.returncode == 2
-    assert "audit log unavailable" in result.stderr
+    allowed = SimpleNamespace(allow=True, reason=None, ask=False, agent=agent or "main")
+    monkeypatch.setattr(jail, "decide", lambda *_args: allowed)
+    payload = hook_input(tool_input={"command": "ls"})
+    if agent:
+        payload.update(agent_type=agent, agent_id="g1")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    code = enforce_agent_jail.main()
+    out = capsys.readouterr()
+    assert "audit log unavailable" in out.err
+    if agent:
+        assert code == 2 and out.out == ""
+    else:
+        assert code == 0
+        assert _ask_reason(out.out).startswith(enforce_agent_jail._AUDIT_ASK)
 
 
 def test_unwritable_audit_dir_outside_a_train_lets_main_proceed(
@@ -247,14 +302,20 @@ def test_missing_marker_finder_fails_open_outside_a_train(
     assert not (repo_cwd / ".claude").exists()
 
 
+@pytest.mark.parametrize("agent", [None, "daedalus:repo-coder"])
 def test_missing_marker_finder_fails_closed_inside_a_train(
-    tmp_path: Path, project_data: Path, hook_input: Any
+    tmp_path: Path, project_data: Path, hook_input: Any, agent: str | None
 ) -> None:
-    # 0035: the inline finder sees the marker, so a gutted install blocks the train's call.
+    # 0035, 0106: the inline finder sees the marker; an agent is blocked, main is asked.
     _in_train(project_data)
-    result = _run_raw(json.dumps(hook_input()), _lone_script(tmp_path, gate=False))
-    assert result.returncode == 2
-    assert result.stderr.startswith("daedalus-jail[?]: hook could not load its libraries (")
+    payload = hook_input(agent_type=agent, agent_id="a1") if agent else hook_input()
+    result = _run_raw(json.dumps(payload), _lone_script(tmp_path, gate=False))
+    if agent:
+        assert result.returncode == 2
+        assert result.stderr.startswith("daedalus-jail[?]: hook could not load its libraries (")
+    else:
+        assert result.returncode == 0, result.stderr
+        assert _ask_reason(result.stdout).startswith(enforce_agent_jail._LOAD_ASK)
 
 
 def test_inline_marker_finder_agrees_with_the_library(repo_cwd: Path) -> None:
@@ -324,17 +385,23 @@ def test_inline_project_root_matches_lib(repo_cwd: Path, tmp_path: Path) -> None
         assert enforce_agent_jail._inline_git_root(str(path)) == repo_root.git_root(str(path))
 
 
+@pytest.mark.parametrize("agent", [None, "daedalus:repo-coder"])
 def test_missing_libraries_fail_closed_during_a_train(
-    tmp_path: Path, project_data: Path, hook_input: Any
+    tmp_path: Path, project_data: Path, hook_input: Any, agent: str | None
 ) -> None:
-    # 0035: a running train depends on the jail, so a broken install blocks the call.
+    # 0035, 0106: a broken install blocks an agent's call; main is asked to run it unjudged.
     (project_data / "train.active").write_text("20261015-120000\n")
-    result = _run_raw(json.dumps(hook_input()), _lone_script(tmp_path))
-    assert result.returncode == 2
-    assert result.stderr.startswith("daedalus-jail[?]: hook could not load its libraries (")
-    assert "Next: run the plugin with Python 3.12 and an intact scripts/lib directory." in (
-        result.stderr
-    )
+    payload = hook_input(agent_type=agent, agent_id="a1") if agent else hook_input()
+    result = _run_raw(json.dumps(payload), _lone_script(tmp_path))
+    next_line = "Next: run the plugin with Python 3.12 and an intact scripts/lib directory."
+    if agent:
+        assert result.returncode == 2
+        assert result.stderr.startswith("daedalus-jail[?]: hook could not load its libraries (")
+        assert next_line in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        reason = _ask_reason(result.stdout)
+        assert reason.startswith(enforce_agent_jail._LOAD_ASK) and next_line in reason
 
 
 @pytest.mark.parametrize("tool", ["Bash", "Write", "Read"])
@@ -360,7 +427,9 @@ def test_missing_libraries_in_a_linked_worktree_of_a_train_fail_closed(
     worktree = repo_cwd / ".claude" / "worktrees" / "u1"
     subprocess.run(["git", "-C", str(repo_cwd), "worktree", "add", "-q", str(worktree)], check=True)
     result = _run_raw(json.dumps(hook_input(cwd=str(worktree))), _lone_script(tmp_path))
-    assert result.returncode == 2, result.stderr
+    # 0106: main is asked, and the ask names the train, so the marker was found.
+    assert result.returncode == 0, result.stderr
+    assert _ask_reason(result.stdout).startswith(enforce_agent_jail._LOAD_ASK)
 
 
 def test_decide_exception_blocks_and_records(
@@ -377,9 +446,9 @@ def test_decide_exception_blocks_and_records(
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(hook_input())))
     assert enforce_agent_jail.main() == 2
     err = capsys.readouterr().err
-    assert err.startswith("daedalus-jail[main]: decide exploded Next:")
+    assert err.startswith("daedalus-jail[main]: jail: decide exploded Next:")
     rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
-    assert rec["decision"] == "block" and rec["reason"].startswith("decide exploded")
+    assert rec["decision"] == "block" and rec["reason"].startswith("jail: decide exploded")
 
 
 @pytest.mark.parametrize("cwd", [None, "relative"])
@@ -488,13 +557,21 @@ def test_explore_read_of_an_ssh_key_is_refused(
     assert result.stderr.startswith("daedalus-jail[Explore]:"), result.stderr
 
 
-def test_main_grep_rooted_at_home_is_refused(
-    temp_home: Path, plugin_data: Path, project_data: Path, hook_input: Any
+@pytest.mark.parametrize("agent", [None, "Explore"])
+def test_main_grep_rooted_at_home_is_asked_and_an_agent_refused(
+    temp_home: Path, plugin_data: Path, project_data: Path, hook_input: Any, agent: str | None
 ) -> None:
+    # 0106: outside a train the operator's own session is asked; an agent stays refused.
     payload = hook_input(tool_name="Grep", tool_input={"pattern": "x", "path": str(temp_home)})
+    if agent:
+        payload.update(agent_type=agent, agent_id="e1")
     result = _run_home(payload, temp_home, plugin_data)
-    assert result.returncode == 2
-    assert result.stderr.startswith("daedalus-jail[main]:"), result.stderr
+    if agent:
+        assert result.returncode == 2
+        assert result.stderr.startswith(f"daedalus-jail[{agent}]:"), result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        assert _ask_reason(result.stdout).startswith(enforce_agent_jail._CREDENTIAL_ASK)
 
 
 def test_main_glob_over_the_repo_is_allowed(
@@ -554,8 +631,9 @@ def test_bad_config_still_refuses_an_ssh_key_read(
     key = temp_home / ".ssh" / "id_ed25519"
     payload = hook_input(tool_name="Read", tool_input={"file_path": str(key)})
     result = _run_home(payload, temp_home, plugin_data)
-    assert result.returncode == 2
-    assert "credential path" in result.stderr, result.stderr
+    # 0106: outside a train the operator's own session is asked, never blocked.
+    assert result.returncode == 0, result.stderr
+    assert "credential path" in _ask_reason(result.stdout)
 
 
 def test_bad_config_still_blocks_bash(
@@ -612,10 +690,8 @@ def test_main_outside_a_train_meets_no_jail_rule(
 
 @pytest.mark.parametrize(
     ("tool", "tool_input", "reason"),
-    [
-        ("Write", {"file_path": "src/app.py", "content": "x"}, "application code"),
-        ("Bash", {"command": "git clean -fdx"}, "git clean"),
-    ],
+    # 0105: a main Write in a train asks instead; see the ask test above.
+    [("Bash", {"command": "git clean -fdx"}, "git clean")],
 )
 def test_main_inside_a_train_meets_the_jail(
     temp_home: Path,
@@ -626,25 +702,36 @@ def test_main_inside_a_train_meets_the_jail(
     tool_input: dict[str, str],
     reason: str,
 ) -> None:
+    # 0106: main meets the jail as an ask carrying the warning and the finding.
     _in_train(project_data)
     payload = hook_input(tool_name=tool, tool_input=tool_input)
     result = _run_home(payload, temp_home, plugin_data)
-    assert result.returncode == 2
-    assert reason in result.stderr, result.stderr
+    assert result.returncode == 0 and result.stderr == "", result.stderr
+    out = json.loads(result.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "ask" and reason in out["permissionDecisionReason"]
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
-def test_credential_read_is_refused_outside_a_train_without_a_data_dir(
+def test_credential_read_asks_main_and_refuses_an_agent_outside_a_train(
     temp_home: Path, plugin_data: Path, repo_cwd: Path, hook_input: Any, agent: str | None
 ) -> None:
-    # 0023: the one standing check; it writes nothing into the repo either.
+    # 0023, 0106: main is asked per call with the literal exposure text; an agent is refused.
     key = temp_home / ".ssh" / "id_ed25519"
     payload = hook_input(tool_name="Read", tool_input={"file_path": str(key)})
     if agent:
         payload["agent_type"] = agent
     result = _run_home(payload, temp_home, plugin_data)
-    assert result.returncode == 2
-    assert "is a credential path" in result.stderr
+    if agent:
+        assert result.returncode == 2 and result.stdout == ""
+        assert "is a credential path" in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        reason = _ask_reason(result.stdout)
+        assert reason.startswith(
+            "This path holds credentials; reading it puts the secret into the session "
+            "transcript. Approve to proceed anyway. The jail's finding: "
+        )
+        assert "is a credential path" in reason
     assert not (repo_cwd / ".claude").exists()
 
 
@@ -667,8 +754,10 @@ def test_main_writing_into_another_repos_train_is_judged(
     _in_train(marked / ".claude" / "daedalus")
     command = f"git -C {marked} clean -fdx"
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": command}))
-    assert result.returncode == 2
-    assert "git clean" in result.stderr
+    # 0106: judged by the full jail, which asks the operator rather than blocking main.
+    assert result.returncode == 0
+    out = json.loads(result.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "ask" and "git clean" in out["permissionDecisionReason"]
 
 
 def test_fast_path_imports_only_the_standard_library_modules(repo_cwd: Path) -> None:

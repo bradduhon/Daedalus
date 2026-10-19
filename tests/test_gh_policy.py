@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import router
+from lib import router, train_state
 from lib.config import Config
 from lib.gh_policy import (
     CONDUCTOR_GH,
@@ -19,6 +19,15 @@ from lib.gh_policy import (
 
 from tests.conftest import REPO_ROOT
 from tests.hook_chain import judge as decide
+from tests.test_checks_git_push import (
+    GATE_BRANCH,
+    GATE_NEXT,
+    GATE_TRAIN,
+    _git,
+    approve,
+    move_tip,
+    seed_train,
+)
 
 # 0044: repo-coder's chain refuses gh and git push in network_tools and git_push first.
 AGENTS = ("main", "pr-train-conductor", "general-purpose")
@@ -60,8 +69,8 @@ DEFAULT_DENY = [
     "gh api graphql -F query=@q.graphql",
 ]
 MERGE_NEXT = "the operator merges in the GitHub UI"
+# spec 4.2: gh pr create also needs the verdict; test_pr_create_follows_the_same_gate covers it.
 CONDUCTOR_OK = [
-    "gh pr create --title t --body-file docs/.tmp/pr.md",
     "gh pr view 3",
     "gh pr list",
     "gh pr checks 3",
@@ -112,10 +121,7 @@ def _class_refused(repo: Path, agent: str, command: str, klass: str, nxt: str) -
 @pytest.mark.parametrize("agent", AGENTS)
 @pytest.mark.parametrize("command", MERGE)
 def test_merge_class_refused(train_repo: Path, agent: str, command: str) -> None:
-    if agent == "pr-train-conductor" and "{" in command:
-        # 0044: the conductor's shell_tripwires hook refuses a brace token before gh_classes.
-        assert _denying_hook(train_repo, agent, command) == "shell_tripwires"
-        return
+    # O4: a single-quoted brace passes shell hygiene, so gh_classes names the merge class.
     _class_refused(train_repo, agent, command, "merge", MERGE_NEXT)
 
 
@@ -198,11 +204,105 @@ def test_conductor_pr_edit_other_flags_refused(train_repo: Path, command: str) -
     _class_refused(train_repo, "pr-train-conductor", command, "default-deny", EDIT_NEXT)
 
 
-def test_main_may_run_only_gh_auth_status(train_repo: Path) -> None:
-    assert decide(_bash(train_repo, "main", "gh auth status"), Config()).allow
-    for command in ("gh pr view 3", "gh pr list", "gh issue list", "gh run list"):
-        reason = _reason(train_repo, "main", command)
-        assert "not on the main gh list (0028)" in reason and "Next:" in reason
+MAIN_READS = [
+    "gh auth status",
+    "gh issue view 3",
+    "gh issue list",
+    "gh pr view 3",
+    "gh pr list",
+    "gh pr checks 3",
+    "gh run list",
+    "gh run view 1",
+    "gh run watch 1",
+]
+
+
+@pytest.mark.parametrize("command", MAIN_READS)
+def test_main_may_view_issues_and_prs_during_a_train(train_repo: Path, command: str) -> None:
+    # B7: main reads the tracker and CI while a train runs.
+    d = decide(_bash(train_repo, "main", command), Config())
+    assert d.allow, d.reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["gh pr create --title t --body-file docs/.tmp/pr.md", "gh pr edit 3 --body-file x.md"],
+)
+def test_main_pr_create_is_refused(train_repo: Path, command: str) -> None:
+    # B7: pull request writes stay with the Push Train's conductor.
+    reason = _reason(train_repo, "main", command)
+    assert "not on the main gh list (0028)" in reason and "Next:" in reason
+
+
+def test_pr_create_follows_the_same_gate(repo_cwd: Path) -> None:
+    # spec 4.2: pr create passes only on an approved verdict or an exception for the exact tip.
+    command = "gh pr create --title t --body-file docs/.tmp/pr.md"
+    tip = seed_train(repo_cwd)
+    no_verdict = _reason(repo_cwd, "pr-train-conductor", command)
+    assert no_verdict.endswith(GATE_NEXT) and "no verdict" in no_verdict
+    approve(repo_cwd, tip)
+    d = decide(_bash(repo_cwd, "pr-train-conductor", command), Config())
+    assert d.allow, d.reason
+    move_tip(repo_cwd)
+    assert _reason(repo_cwd, "pr-train-conductor", command).endswith(GATE_NEXT)
+    moved = _git(repo_cwd, "rev-parse", GATE_BRANCH).strip()
+    exception = {"ledger_id": "0104-DAE-PLT", "tip": moved}
+    train_state.update(repo_cwd, GATE_TRAIN, exception=exception)
+    d = decide(_bash(repo_cwd, "pr-train-conductor", command), Config())
+    assert d.allow, d.reason
+    assert "(0028)" in _reason(repo_cwd, "general-purpose", command)
+    assert _denying_hook(repo_cwd, "repo-coder", command) == "network_tools"
+
+
+HEAD_NEXT = (
+    "Next: drop --head so the pull request opens from the current branch, "
+    f"or pass --head {GATE_BRANCH}."
+)
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        "--head feat/x",
+        "-H feat/x",
+        "--head=feat/x",
+        "-Hfeat/x",
+        "-H=feat/x",
+        "-dH feat/x",
+        f"--head o:{GATE_BRANCH}",
+        f"--head {GATE_BRANCH} --head feat/x",
+    ],
+)
+def test_pr_create_head_naming_another_branch_is_refused(repo_cwd: Path, head: str) -> None:
+    # spec 4.2: the verdict covers the train branch only, so --head names nothing else.
+    approve(repo_cwd, seed_train(repo_cwd))
+    command = f"gh pr create {head} --title t --body-file docs/.tmp/pr.md"
+    assert _reason(repo_cwd, "pr-train-conductor", command).endswith(HEAD_NEXT), head
+
+
+@pytest.mark.parametrize(
+    "head",
+    ["", f"--head {GATE_BRANCH}", f"-H {GATE_BRANCH}", f"--head={GATE_BRANCH}", "--title -H"],
+)
+def test_pr_create_head_on_the_train_branch_passes(repo_cwd: Path, head: str) -> None:
+    approve(repo_cwd, seed_train(repo_cwd))
+    command = f"gh pr create {head} --title t --body-file docs/.tmp/pr.md"
+    d = decide(_bash(repo_cwd, "pr-train-conductor", command), Config())
+    assert d.allow, (head, d.reason)
+
+
+def test_pr_create_without_head_off_the_train_branch_is_refused(repo_cwd: Path) -> None:
+    # spec 4.2: with no --head, gh opens from the checked-out branch; it must be the train's.
+    approve(repo_cwd, seed_train(repo_cwd))
+    _git(repo_cwd, "switch", "-q", "-c", "feat/x")
+    command = "gh pr create --title t --body-file docs/.tmp/pr.md"
+    reason = _reason(repo_cwd, "pr-train-conductor", command)
+    assert reason.endswith(
+        f"Next: pass --head {GATE_BRANCH} so the pull request opens from the audited branch."
+    )
+    with_head = f"gh pr create --head {GATE_BRANCH} --title t --body-file docs/.tmp/pr.md"
+    d = decide(_bash(repo_cwd, "pr-train-conductor", with_head), Config())
+    assert d.allow, d.reason
 
 
 def test_repo_coder_gh_and_git_push_refused(train_repo: Path) -> None:
@@ -219,9 +319,10 @@ def test_git_push_only_for_the_conductor(train_repo: Path) -> None:
             assert reason.endswith(
                 "Next: push from your own shell, or through /daedalus:push-train."
             )
+    # spec 4.2: past the 0028 list, a train with no state meets the verdict gate.
     push = "git push origin daedalus/20261016-120000"
-    ok = decide(_bash(train_repo, "pr-train-conductor", push), Config())
-    assert ok.allow, ok.reason
+    unaudited = _reason(train_repo, "pr-train-conductor", push)
+    assert "0028" not in unaudited and unaudited.endswith(GATE_NEXT)
     gated = decide(_bash(train_repo, "pr-train-conductor", "git push origin feat/x y"), Config())
     assert not gated.allow and "0028" not in str(gated.reason)
 

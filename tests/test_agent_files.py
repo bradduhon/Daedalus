@@ -95,7 +95,32 @@ UNSUPPORTED = {
     "quoted scalar": [*HEAD[:5], 'model: "sonnet"', *HEAD[6:], *BLOCK],
     "indented scalar continuation": [*HEAD, "  more text", *BLOCK],
     "name differs from file": [HEAD[0], "name: other", *HEAD[2:], *BLOCK],
+    # 9.1: phases is the one flow list, of known phase tokens, each once.
+    "unknown phase": [*HEAD, "phases: [plan, deploy]", *BLOCK],
+    "phases not a list": [*HEAD, "phases: plan", *BLOCK],
+    "repeated phase": [*HEAD, "phases: [plan, plan]", *BLOCK],
+    "empty phases": [*HEAD, "phases: []", *BLOCK],
+    "phases without spaces": [*HEAD, "phases: [plan,audit]", *BLOCK],
 }
+
+
+def test_parser_reads_phases(tmp_path: Path) -> None:
+    lines = [*HEAD, "phases: [clarification, commit, release]", *BLOCK, *BODY]
+    assert agent_files.load(_write(tmp_path, lines)).phases == (
+        "clarification",
+        "commit",
+        "release",
+    )
+    assert agent_files.load(_write(tmp_path, [*HEAD, *BLOCK, *BODY])).phases == ()
+    assert agent_files.PHASES == (
+        "context",
+        "clarification",
+        "plan",
+        "implementation",
+        "audit",
+        "commit",
+        "release",
+    )
 
 
 @pytest.mark.parametrize("case", sorted(UNSUPPORTED))
@@ -141,6 +166,14 @@ def test_parser_reads_flags_in_the_checks_form(tmp_path: Path) -> None:
     agent = agent_files.load(_write(tmp_path, [*HEAD, *BLOCK[:3], ENTRY % flags, *BODY]))
     want = Hook("root_writes", ("--touch", "contracts,charter-specs", "--ledger-guard"))
     assert agent.hooks == (want,)
+    # spec 3.1: a --name glob value is one token; quotes stay outside the accepted form.
+    glob = agent_files.load(
+        _write(tmp_path, [*HEAD, *BLOCK[:3], ENTRY % "root_writes.py --name plan*.md", *BODY])
+    )
+    assert glob.hooks == (Hook("root_writes", ("--name", "plan*.md")),)
+    quoted = [*HEAD, *BLOCK[:3], ENTRY % "root_writes.py --name 'plan*.md'", *BODY]
+    with pytest.raises(AgentFileError, match="Next: "):
+        agent_files.load(_write(tmp_path, quoted))
 
 
 @pytest.mark.parametrize("name", sorted(p.stem for p in AGENTS.glob("*.md")))
@@ -155,6 +188,6 @@ def test_status_lines_match_the_status_contract_section(name: str) -> None:
     if name == "repo-coder":
         assert lines[-1] == (
             "[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> "
-            "tests=<summary> ledger_notes=<text>"
+            "tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>"
         )
     assert not any(re.search("`", line) for line in lines)

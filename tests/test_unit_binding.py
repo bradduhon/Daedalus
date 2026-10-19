@@ -14,6 +14,7 @@ from lib.unit_binding import bindings_path, claim, rebind, record_dispatch
 from lib.workspace import create, mark_train
 
 from tests.hook_chain import judge as decide
+from tests.test_dispatch_binding import seed_plan
 
 TRAIN = "20261016-120000"
 CODER = "daedalus:repo-coder"
@@ -29,6 +30,7 @@ def units(repo_cwd: Path, project_data: Path) -> dict[str, Path]:
     _git(repo_cwd, *ident, "commit", "-q", "--allow-empty", "-m", "base")
     _git(repo_cwd, "branch", f"daedalus/{TRAIN}")
     train_state.save(repo_cwd, TRAIN, {"train_id": TRAIN})
+    seed_plan(repo_cwd, TRAIN)
     mark_train(repo_cwd, TRAIN)
     made = {name: create(repo_cwd, name, f"daedalus/{TRAIN}") for name in ("u1", "u2")}
     jail._registered_worktrees.cache_clear()

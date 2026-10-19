@@ -209,8 +209,9 @@ def test_main_session_duties_unchanged(monkeypatch: pytest.MonkeyPatch, jail_fak
     push = {**main, "tool_input": {"command": "git push --force origin main"}}
     assert not jail.decide(push, CFG).allow
     write = {"tool_name": "Write", "tool_input": {"file_path": f"{WT}/src/a.py"}, "cwd": CWD}
-    reason = str(jail.decide(write, CFG).reason)
-    assert "the orchestrating session does not write application code" in reason
+    # 0105: the code write asks the operator rather than refusing.
+    asked = jail.decide(write, CFG)
+    assert asked.ask and "Build Train" in str(asked.reason)
     seen: list[dict[str, object]] = []
 
     def dispatch(tool_input: dict[str, object], cwd: str) -> str:
@@ -220,7 +221,9 @@ def test_main_session_duties_unchanged(monkeypatch: pytest.MonkeyPatch, jail_fak
     monkeypatch.setattr(dispatch_binding, "_dispatch_reason", dispatch)
     agent_call = {"tool_name": "Agent", "tool_input": {"prompt": "x"}, "cwd": CWD}
     d = jail.decide(agent_call, CFG)
-    assert (d.allow, d.reason) == (False, "dispatch refused. Next: name one unit.")
+    # 0106: the operator's dispatch is asked with the skipped invariant, never blocked.
+    want = jail.ASK_DISPATCH.format(reason="dispatch refused. Next: name one unit.")
+    assert (d.allow, d.ask, d.reason) == (False, True, want)
     assert seen == [{"prompt": "x"}]
 
 
@@ -228,11 +231,12 @@ def test_unknown_agent_refused_only_in_a_train(
     run_script: Any, hook_input: Any, repo_cwd: Path
 ) -> None:
     # 0023, 0035: a foreign agent is not routed; lib.jail refuses it only while a train runs.
-    payload = hook_input(agent_type="ghost", tool_input={"command": "ls"})
+    payload = hook_input(agent_type="ghost", tool_input={"command": "touch x"})
     assert run_script("enforce_agent_jail.py", payload).returncode == 0
     write_train_marker(repo_cwd)
     result = run_script("enforce_agent_jail.py", payload)
-    assert result.returncode == 2 and "fail closed" in result.stderr
+    # 0100: a foreign agent reads during a train; a write is what blocks.
+    assert result.returncode == 2 and "read-only while" in result.stderr
     assert "no binding exists" not in result.stderr
 
 
@@ -260,6 +264,7 @@ DENIALS = {
     "nist-specialist": (_input("nist-specialist", command="curl x"), "network_tools"),
     "cis-specialist": (_input("cis-specialist", command="git checkout x"), "read_only_bash"),
     "web-researcher": (_input("web-researcher", command="ls"), "tool_bound"),
+    "planner": (_input("planner", command="ls"), "tool_bound"),
     "standards-rules-specialist": (
         _input("standards-rules-specialist", "WebFetch", url="https://x"),
         "tool_bound",

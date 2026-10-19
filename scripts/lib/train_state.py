@@ -18,6 +18,16 @@ STATE_DIR = Path(".claude") / "daedalus" / "trains"
 TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
 TRAIN_ID = re.compile(r"[0-9]{8}-[0-9]{6}")
 LOCK_TIMEOUT_S = 5.0
+# 0085, 0089: plan {path, sha256}, verdict {status, tip, round, seq}, exception {ledger_id, tip}.
+PLAN, CHOICES, VERDICT, EXCEPTION, PHASE, WEIGHT = (
+    "plan",
+    "choices",
+    "verdict",
+    "exception",
+    "phase",
+    "weight",
+)
+APPROVED, REJECTED = "approved", "rejected"
 
 
 class TrainStateError(RuntimeError):

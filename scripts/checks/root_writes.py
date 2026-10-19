@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import os
 import sys
 from pathlib import Path
@@ -21,7 +22,8 @@ CLASSES = frozenset({"contracts", "charter-specs", "charter", "docs", "scratch"}
 FLAGS: dict[str, hook_io.Flag] = {
     "--touch": hook_io.Flag(values=CLASSES, many=True),
     "--ledger-guard": hook_io.Flag(),
-    "--name": hook_io.Flag(pattern=r"[A-Za-z0-9][A-Za-z0-9._-]*"),
+    # spec 3.1: an exact file name or a `*` glob over one name; no path, no other glob syntax.
+    "--name": hook_io.Flag(pattern=r"[A-Za-z0-9*][A-Za-z0-9._*-]*"),
 }
 PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
 
@@ -40,10 +42,11 @@ def _roots(classes: tuple[str, ...], cwd: str, config: Config) -> list[str]:
         elif name == "docs":
             roots.append(f"{cwd}/docs")
         elif name == "scratch":
+            # spec 3.1: the train's own folder in a train, else docs/.tmp/daedalus/ itself.
             repo = project_root(cwd)
             train = active_train(repo)
-            if train is not None:
-                roots.append(str(repo / "docs" / ".tmp" / "daedalus" / train))
+            scratch = repo / "docs" / ".tmp" / "daedalus"
+            roots.append(str(scratch / train if train is not None else scratch))
     return roots
 
 
@@ -60,9 +63,9 @@ def _reason(classes: tuple[str, ...], path: str) -> str:
 def _allowed(path: str, roots: list[str], name: str | None) -> bool:
     if name is None:
         return any(shell._under(path, root) for root in roots)
-    # 0044: --name admits one file directly inside a class root.
+    # 0044: --name admits a file directly in a class root, named exactly or by its glob.
     parent = os.path.realpath(os.path.dirname(path))
-    return os.path.basename(path) == name and any(
+    return fnmatch.fnmatchcase(os.path.basename(path), name) and any(
         parent == os.path.realpath(root) for root in roots
     )
 

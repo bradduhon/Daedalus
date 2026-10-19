@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lib import dispatch_binding, hook_io, jail, shell  # noqa: E402
+from lib.project_root import project_root  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset(jail.WRITE_TOOLS | {"Bash"})
 FLAGS: dict[str, hook_io.Flag] = {}
@@ -31,14 +32,26 @@ def _write_reason(hook_input: dict[str, object], cwd: str, boundary: Boundary) -
     return dispatch_binding._binding_reason(hook_input, cwd, {unit})
 
 
+def _followed_bases(chain: shell.WorkerChain, cwd: str) -> list[str] | None:
+    # O6: a cd target is followed only inside a unit worktree of this same project.
+    bases = shell.chain_bases(chain, cwd, jail.DIR_CHANGE_CMDS)
+    if bases is None or bases[-1] == cwd:
+        return bases
+    target = bases[-1]
+    same = project_root(Path(target)).resolve() == project_root(Path(cwd)).resolve()
+    return bases if same and jail._unit_parts(target, cwd) is not None else None
+
+
 def _bash_reason(hook_input: dict[str, object], cwd: str, boundary: Boundary) -> str | None:
-    segments = shell.worker_segments(hook_io.text(hook_io.tool_input(hook_input), "command"))
-    if segments is None:
+    chain = shell.worker_parse(hook_io.text(hook_io.tool_input(hook_input), "command"))
+    if chain is None:
         return shell.R_UNSUPPORTED
-    segments = [s for s in segments if s]
-    moved = any(shell._base(s[0]) in jail.DIR_CHANGE_CMDS for s in segments)
+    bases = _followed_bases(chain, cwd)
+    folders = bases or [cwd] * len(chain.segments)
+    pairs = [(s, b) for s, b in zip(chain.segments, folders, strict=True) if s]
+    moved = bases is None
     touched: set[str] = set()
-    for segment in segments:
+    for segment, base in pairs:
         relative = jail._cd_relative_target(segment, cwd) if moved else None
         if relative is not None:
             return jail.R_CD_RELATIVE.format(relative)
@@ -46,14 +59,22 @@ def _bash_reason(hook_input: dict[str, object], cwd: str, boundary: Boundary) ->
             return jail.R_BASETEMP
         sub = shell._git_subcommand(segment) if shell._base(segment[0]) == "git" else None
         if sub in {"add", "commit"}:
-            git_dir = jail._git_dir(shell._git_split(segment)[2], cwd)
-            if jail._unit_parts(git_dir, cwd) is None:
+            git_dir = jail._git_dir(shell._git_split(segment)[2], base)
+            if jail._unit_parts(git_dir, base) is None:
                 return jail.R_CODER_UNIT_GIT
-        reason = jail._coder_bash_reason(segment, cwd, boundary)
+        reason = jail._coder_bash_reason(segment, base, boundary)
         if reason:
             return reason
-        touched |= dispatch_binding._segment_units(segment, cwd)
+        touched |= dispatch_binding._segment_units(segment, base)
+        touched |= _script_unit(segment, base)
     return dispatch_binding._binding_reason(hook_input, cwd, touched)
+
+
+def _script_unit(segment: list[str], base: str) -> set[str]:
+    # B2, issue 29: a worktree script binds its unit, so a coder runs only its own unit's scripts.
+    script = shell.python_script(segment)
+    parts = None if script is None else jail._unit_parts(shell._abs(script, base), base)
+    return {parts[0]} if parts else set()
 
 
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:

@@ -38,12 +38,11 @@ def _read_roots(cwd: str) -> tuple[list[str], str]:
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
     allowed: frozenset[str] = frozenset(flags.allow or ())
     command = hook_io.text(hook_io.tool_input(hook_input), "command")
-    segments = shell.worker_segments(command)
-    scanned = shell._scan(command)
-    if segments is None or scanned is None:
+    chain = shell.worker_parse(command)
+    if chain is None:
         return shell.R_UNSUPPORTED
     cwd = hook_io.text(hook_input, "cwd")
-    for segment, raw in zip(segments, scanned[0], strict=True):
+    for segment, raw in zip(chain.segments, chain.raws, strict=True):
         if "append_ledger" in allowed and shell._is_append_ledger(segment):
             if not jail._ledger_args_ok(segment):
                 return jail.R_LEDGER_ARGS

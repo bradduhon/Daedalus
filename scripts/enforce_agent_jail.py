@@ -8,6 +8,7 @@ import json
 import os
 import shlex
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -30,6 +31,16 @@ _WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 # issue 30: past these caps the fast path hands the call to the full jail.
 _WORD_CAP = 256
 _ROOT_CAP = 16
+# 6.1: the reason prefix for blocks this hook decides itself, main and foreign agents alike.
+_JAIL_HOOK = "jail"
+_CONFIG_HOOK = "config"
+# 0106: ask texts for the operator's own session; IA-5g and AU-5 require this wording.
+_CREDENTIAL_ASK = (
+    "This path holds credentials; reading it puts the secret into the session transcript. "
+    "Approve to proceed anyway. The jail's finding: "
+)
+_LOAD_ASK = "the jail's library failed to load; approving runs this call unjudged during a train"
+_AUDIT_ASK = "the audit log cannot be written; approving leaves this call unrecorded"
 
 
 _TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
@@ -140,7 +151,15 @@ def _fast_path(payload: dict[str, object], agent: str, cwd: str) -> int:
     raw_input = payload.get("tool_input")
     tool_input: dict[str, object] = raw_input if isinstance(raw_input, dict) else {}
     reason = path_reason(tool, tool_input, cwd) if tool in CREDENTIAL_TOOLS else None
+    if reason and _bare_main(payload):
+        # 0106, IA-5g, AC-3: the operator approves each credential read; the text stays literal.
+        return _ask(_CREDENTIAL_ASK + reason)
     return _block(agent, reason) if reason else 0
+
+
+def _bare_main(payload: dict[str, object]) -> bool:
+    # 0106: the operator's own thread, the only caller with no agent_id and no agent type.
+    return not payload.get("agent_id") and str(payload.get("agent_type") or "main") == "main"
 
 
 def _block(agent: str, message: str, next_step: str = _REPORT_NEXT) -> int:
@@ -153,6 +172,14 @@ def _block(agent: str, message: str, next_step: str = _REPORT_NEXT) -> int:
     return 2
 
 
+def _ask(message: str) -> int:
+    # 0105: exit 0 with the PreToolUse ask decision; the operator approves or denies the call.
+    out = {"hookEventName": "PreToolUse", "permissionDecision": "ask"}
+    out["permissionDecisionReason"] = message
+    print(json.dumps({"hookSpecificOutput": out}))
+    return 0
+
+
 def _note(agent: str, message: str) -> None:
     try:
         print(f"daedalus-jail[{agent}]: {message}", file=sys.stderr)
@@ -160,8 +187,11 @@ def _note(agent: str, message: str) -> None:
         pass  # m5: a closed stderr must not turn an allow into exit 1.
 
 
-def _load_failed(exc: Exception, in_train: bool) -> int:
+def _load_failed(exc: Exception, in_train: bool, main_session: bool) -> int:
     # 0035: exit 1 does not block a PreToolUse hook, so a train's broken jail must exit 2.
+    if in_train and main_session:
+        # 0106: the operator's own session is asked, never blocked; agents keep the deny.
+        return _ask(f"{_LOAD_ASK} ({exc}). {_LOAD_NEXT}")
     if in_train:
         return _block("?", f"hook could not load its libraries ({exc}). {_LOAD_NEXT}")
     _note(
@@ -211,8 +241,10 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         config = load_config(cwd if isinstance(cwd, str) else None)
     except Exception as exc:  # noqa: BLE001
         if not read:
-            return _record_and_block(payload, agent, str(exc), _CONFIG_NEXT)
+            return _record_and_block(payload, agent, f"{_CONFIG_HOOK}: {exc}", _CONFIG_NEXT)
         config = Config()
+    ask = False
+    finding: str | None = None
     if routed(agent):
         # 0044: a Daedalus agent's call runs the hooks its agent file names.
         allow, reason, hook = route(payload, Path(__file__).resolve().parents[1])
@@ -220,15 +252,23 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         agent = normalize_agent(agent)
     else:
         decision = decide(payload, config)
-        allow, reason = decision.allow, decision.reason
+        allow, finding, ask = decision.allow, decision.reason, decision.ask
         agent = decision.agent or agent
+        # 0105, 6.1: the record carries the hook prefix; the operator's ask text does not.
+        reason = f"{_JAIL_HOOK}: {finding}" if finding else None
     try:
-        record = audit_append(payload, "allow" if allow else "block", reason)
+        verdict = "ask" if ask else "allow" if allow else "block"
+        record = audit_append(payload, verdict, reason)
     except Exception as exc:  # noqa: BLE001
         if read and allow:
             # spec 8: an allowed read is non-blocking on a failed record, as audit_log.py is.
             _note(agent, f"audit log unavailable ({exc}); the read proceeds unrecorded.")
             return 0
+        if (allow or ask) and _bare_main(payload):
+            # 0106, AU-5: the stderr line is the alert; the operator may run the call unrecorded.
+            _note(agent, f"audit log unavailable ({exc}).")
+            unrecorded = f"{_AUDIT_ASK} ({exc})."
+            return _ask(f"{unrecorded} The jail's finding: {finding}" if ask else unrecorded)
         # 8.5: no record, no action. The jail fails closed when the chain cannot be written.
         detail = f"audit log unavailable ({exc})."
         if "Next:" not in detail:
@@ -238,13 +278,17 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         _warn_fallback(str(payload.get("cwd")))
     if allow:
         return 0
+    if ask:
+        return _ask(str(finding))
     return _block(agent, str(reason))
 
 
 def main() -> int:
-    # Every path but a clean allow exits 2, except a library failure outside a train.
+    # Every path but a clean allow exits 2, except a library failure outside a train
+    # and 0106 asks to the operator's own session.
     try:
         text = sys.stdin.read()
+        started = time.monotonic()
         if not text.strip():
             return _block("?", "hook input is empty.")
         payload = json.loads(text)
@@ -259,16 +303,17 @@ def main() -> int:
     if "tool_input" in payload and not isinstance(payload["tool_input"], dict):
         return _block(agent, "hook input tool_input is not an object.")
     cwd = payload.get("cwd")
+    main_session = _bare_main(payload)
     train_marked, lib_error = _marker_finder()
     in_train = train_marked(cwd)
     if lib_error is not None:
-        return _load_failed(lib_error, in_train)
+        return _load_failed(lib_error, in_train, main_session)
     if not in_train and isinstance(cwd, str):
         try:
             from lib.credential_paths import CREDENTIAL_TOOLS
             from lib.train_scope import policed_outside_train
         except Exception as exc:  # noqa: BLE001
-            return _load_failed(exc, in_train)
+            return _load_failed(exc, in_train, main_session)
         try:
             named = _names_marked_repo(tool_name, payload.get("tool_input") or {}, cwd)
         except Exception:  # noqa: BLE001
@@ -285,11 +330,15 @@ def main() -> int:
         for name in _LIBS:
             importlib.import_module(name)
     except Exception as exc:  # noqa: BLE001
-        return _load_failed(exc, in_train)
+        return _load_failed(exc, in_train, main_session)
+    from lib.audit import mark_judge_start
+
+    # 6.1: the fast path loads no lib, so the read-time clock is handed over once lib.audit loads.
+    mark_judge_start(started)
     try:
         return _judge(payload, agent)
     except Exception as exc:  # noqa: BLE001
-        return _record_and_block(payload, agent, str(exc))
+        return _record_and_block(payload, agent, f"{_JAIL_HOOK}: {exc}")
 
 
 if __name__ == "__main__":

@@ -95,7 +95,7 @@ def test_shell_imports_nothing_from_jail() -> None:
         ("PATH=/tmp npm test", [["PATH=/tmp", "npm", "test"]]),
         ("CI=1", [[]]),
         ("git diff | head", [["git", "diff"], ["head"]]),
-        ("ls > f", None),
+        ("ls > f", [["ls"], ["tee", "f"]]),
         ("echo $(id)", None),
     ],
 )
@@ -103,6 +103,67 @@ def test_worker_segments_drops_only_the_safe_env_prefix(
     command: str, want: list[list[str]] | None
 ) -> None:
     assert shell.worker_segments(command) == want
+
+
+@pytest.mark.parametrize(
+    ("command", "want"),
+    [
+        ("pytest -q 2>&1", [["pytest", "-q"]]),
+        ("git diff 2>/dev/null | head", [["git", "diff"], ["head"]]),
+        ("ls >/dev/null && ls &>/dev/null", [["ls"], ["ls"]]),
+        ("ls 1> /dev/null 2>&1", [["ls"]]),
+        ("echo '>' \">\" a\\>b", [["echo", ">", ">", "a>b"]]),
+    ],
+)
+def test_stderr_dup_is_a_noop(command: str, want: list[list[str]]) -> None:
+    # O3: discards and the stderr dup leave no segment behind.
+    assert shell.worker_segments(command) == want
+
+
+@pytest.mark.parametrize(
+    ("command", "want"),
+    [
+        ("ls > f", [["ls"], ["tee", "f"]]),
+        ("ls >> /x/f && git diff", [["ls"], ["tee", "-a", "/x/f"], ["git", "diff"]]),
+        ("ls 2>f", [["ls"], ["tee", "f"]]),
+        ("ls &>f", [["ls"], ["tee", "f"]]),
+        ("echo x2>f", [["echo", "x2"], ["tee", "f"]]),
+    ],
+)
+def test_redirect_to_a_path_is_judged_as_a_write(command: str, want: list[list[str]]) -> None:
+    # O3: a redirect target is a tee stand-in, so every write check judges it.
+    chain = shell.worker_parse(command)
+    assert chain is not None and chain.segments == want
+    assert ">" in chain.seps and len(chain.raws) == len(chain.segments)
+
+
+def test_strict_parse_still_refuses_redirects() -> None:
+    # O3: the main session's parse is unchanged.
+    for command in ("ls > f", "ls 2>&1", "ls >/dev/null"):
+        assert shell.tokenize(command) is None, command
+        assert shell._scan(command) is None, command
+
+
+@pytest.mark.parametrize(
+    ("command", "want"),
+    [
+        ("cd /w && tee a | head", ["/c", "/w", "/w"]),
+        ("tee a && ls", ["/c", "/c"]),
+        ("cd /w && echo x > a", ["/c", "/w", "/w"]),
+        ("cd /w", ["/c"]),
+        ("cd /w; tee a", None),
+        ("cd /w || tee a", None),
+        ("cd /w | tee a", None),
+        ("cd w && tee a", None),
+        ("cd /w && cd /v && tee a", None),
+        ("ls && cd /w && tee a", None),
+        ("cd -P /w && tee a", None),
+    ],
+)
+def test_chain_bases_follow_one_absolute_cd(command: str, want: list[str] | None) -> None:
+    chain = shell.worker_parse(command)
+    assert chain is not None
+    assert shell.chain_bases(chain, "/c", jail.DIR_CHANGE_CMDS) == want
 
 
 def test_git_sets_name_the_moved_lists() -> None:
