@@ -1264,21 +1264,27 @@ def _auditor_seq(repo: Path, status: str, seq: int | None) -> int:
     except ProofError as exc:
         raise RunnerError(str(exc)) from exc
     want = VERDICT_APPROVED if status == train_state.APPROVED else VERDICT_REJECTED
+    # 0089: only the auditor's newest stop counts, so a later rejection is never skipped.
     stops = [
-        r
-        for r in records
-        if r.get("event") == "SubagentStop"
-        and r.get("agent_type") == AUDITOR
-        and stop_verdict(r) == want
-        and (seq is None or r.get("seq") == seq)
+        r for r in records if r.get("event") == "SubagentStop" and r.get("agent_type") == AUDITOR
     ]
-    found = stops[-1].get("seq") if stops else None
+    newest = stops[-1] if stops else {}
+    found = newest.get("seq")
+    verdict = stop_verdict(newest) if stops else None
+    problem = None
     if not isinstance(found, int) or isinstance(found, bool):
-        at = f" at seq {seq}" if seq is not None else ""
+        problem = f"audit log {log.name} holds no {AUDITOR} stop record"
+    elif seq is not None and seq != found:
+        problem = f"seq {seq} is not the newest {AUDITOR} stop record, which is seq {found}"
+    elif verdict != want:
+        problem = (
+            f"the newest {AUDITOR} stop record, seq {found}, carries "
+            f"{verdict or 'no verdict line'}, not {want}"
+        )
+    if problem is not None or not isinstance(found, int):
         raise RunnerError(
-            f"no {AUDITOR} stop record{at} in audit log {log.name} carries {want}. "
-            "Next: run the security audit; the verdict is recorded from the auditor's reply, "
-            "never typed."
+            f"{problem}. Next: run the security audit; the verdict is recorded from the "
+            "auditor's reply, never typed."
         )
     return found
 

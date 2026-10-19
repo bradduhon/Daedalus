@@ -1138,6 +1138,29 @@ def test_verdict_seq_must_name_the_matching_auditor_stop(repo: Path, plugin: Pat
     assert _state(repo)["verdict"] == record
 
 
+def test_verdict_reads_only_the_newest_auditor_stop(repo: Path, plugin: Path) -> None:
+    # 0089: a rejection after an approval is never skipped for the older approval.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    tip = _integration(repo)
+    older = _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
+    _agent_stop(repo, "security-auditor", _verdict("REJECTED"), "aud-1")
+    refused = _verdict_call(repo, "approved", 1)
+    assert refused.code == 1 and NEVER_TYPED in refused.lines[0]
+    assert "carries [VERDICT: REJECTED], not [VERDICT: APPROVED]" in refused.lines[0]
+    stale = _verdict_call(repo, "approved", 1, int(older["seq"]))
+    assert stale.code == 1 and f"seq {older['seq']} is not the newest" in stale.lines[0]
+    assert "verdict" not in _state(repo)
+    first = _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
+    again = _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
+    older_approved = _verdict_call(repo, "approved", 2, int(first["seq"]))
+    assert older_approved.code == 1 and "is not the newest" in older_approved.lines[0]
+    passed = _verdict_call(repo, "approved", 2)
+    assert passed.code == 0, passed.lines
+    record = {"status": "approved", "tip": tip, "round": 2, "seq": again["seq"]}
+    assert _state(repo)["verdict"] == record
+
+
 def test_verdict_cli_finds_the_seq_itself(repo: Path, plugin: Path) -> None:
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
