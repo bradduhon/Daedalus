@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from lib import train_state
+from lib import scrub, train_state
 from lib.audit import DataDirError, cache_dir_or_probe, ensure_project_data_dir
 from lib.audit_proof import SUMMARY_DIR
 from lib.config import Config, ConfigError, load_config
@@ -874,6 +874,20 @@ def _render_notes(summary: str, letter: str, reason: str) -> str:
     return "\n".join(parts) + "\n"
 
 
+def _scrub_check(repo: Path, text: str) -> None:
+    # 0069: release notes become a public GitHub Release; the refusal names a count, never a term.
+    try:
+        terms = scrub.declared_terms(repo)
+    except scrub.ScrubError as exc:
+        raise WorkspaceError(str(exc)) from exc
+    hits = scrub.count_hits(text, terms) if terms else 0
+    if hits:
+        raise WorkspaceError(
+            f"the release notes carry {hits} term(s) from the declared scrub file. "
+            "Next: remove those terms from the train summary, then rerun."
+        )
+
+
 def _write_notes(repo: Path, train_id: str, text: str) -> Path:
     folder = repo / SUMMARY_DIR / train_id
     for part in (repo / "docs", repo / "docs" / ".tmp", repo / SUMMARY_DIR, folder):
@@ -911,7 +925,8 @@ def release(repo: Path, merge_sha: str) -> list[str]:
         )
     sha = _merge_commit(repo, merge_sha, base)
     version = _merged_version(repo, sha)
-    before = _version_at(repo, str(base_sha))
+    # issue 47: the squash commit's first parent is the pull request base, even when main moved.
+    before = _version_at(repo, f"{sha}^1")
     if before == version:
         # issue 47: an unchanged VERSION is a skip recorded in state, never a refusal.
         _record(
@@ -927,7 +942,9 @@ def release(repo: Path, merge_sha: str) -> list[str]:
             "Next: restore the summary the Build Train wrote, then rerun."
         ) from exc
     letter, reason = _class_line(summary, version, _moved(before, version))
-    notes = _write_notes(repo, train_id, _render_notes(summary, letter, reason))
+    text = _render_notes(summary, letter, reason)
+    _scrub_check(repo, text)
+    notes = _write_notes(repo, train_id, text)
     _record(
         repo,
         train_id,

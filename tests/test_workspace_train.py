@@ -908,3 +908,62 @@ def test_release_writes_no_changelog_file(repo: Path) -> None:
     assert notes in added
     assert all(path.startswith("docs/.tmp/daedalus/") for path in added), added
     assert not [p for p in _files(repo) if "changelog" in p.lower()]
+
+
+def _scrub(repo: Path, *terms: str) -> None:
+    (repo / "service-manifest.json").write_text(
+        json.dumps({"features": {"scrub_file": "scrub-terms.txt"}}), encoding="utf-8"
+    )
+    body = "\n".join(["# private names, one per line", "", *terms]) + "\n"
+    (repo / "scrub-terms.txt").write_text(body, encoding="utf-8")
+
+
+def test_release_refuses_notes_carrying_a_scrub_term(repo: Path) -> None:
+    sha = _release_repo(repo)
+    _summary(repo)
+    summary = repo / "docs" / ".tmp" / "daedalus" / f"{TRAIN}-summary.md"
+    text = summary.read_text(encoding="utf-8")
+    text = text.replace("## Units\n", "## Units\n| ZEPHYRCORP | widgetville |\n")
+    summary.write_text(text, encoding="utf-8")
+    _scrub(repo, "zephyrcorp", "WidgetVille", "absentterm")
+    refused = _release(repo, sha)
+    assert refused.returncode == 1
+    assert "carry 2 term(s) from the declared scrub file" in refused.stderr
+    assert "Next:" in refused.stderr
+    for term in ("zephyrcorp", "widgetville", "absentterm"):
+        assert term not in refused.stderr.lower() and term not in refused.stdout.lower()
+    assert not _notes(repo).exists()
+    _scrub(repo, "absentterm")
+    done = _release(repo, sha)
+    assert done.returncode == 0, done.stderr
+
+
+def test_release_refuses_a_declared_scrub_file_it_cannot_read(repo: Path) -> None:
+    sha = _release_repo(repo)
+    _summary(repo)
+    _scrub(repo)
+    (repo / "scrub-terms.txt").unlink()
+    refused = _release(repo, sha)
+    assert refused.returncode == 1
+    assert "scrub file" in refused.stderr and "Next:" in refused.stderr
+    assert not _notes(repo).exists()
+
+
+def test_release_compares_against_the_merge_parent_when_main_moved(repo: Path) -> None:
+    # issue 47: main bumped VERSION after the train's base; the pull request itself did not.
+    _release_repo(repo, merged_version="1.1.0")
+    (repo / "other.txt").write_text("squash\n")
+    _commit_all(repo, f"Build Train {TRAIN} squash")
+    sha = _ok(repo, "rev-parse", "HEAD")
+    _summary(repo, class_line=None)
+    done = _release(repo, sha)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines()[0].startswith("release: skipped")
+    # A Z bump over the moved main is a Z, though the train's base sha held an older Y.
+    (repo / "VERSION").write_text("1.1.1\n")
+    _commit_all(repo, f"Build Train {TRAIN} bump")
+    bumped = _ok(repo, "rev-parse", "HEAD")
+    _summary(repo, class_line="Version class: 1.1.1 Z: fixes wording")
+    done = _release(repo, bumped)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines()[0] == f"release: v1.1.1, class Z, merge {bumped}"
