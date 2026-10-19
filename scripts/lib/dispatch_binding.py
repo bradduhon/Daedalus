@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 
+from lib.project_root import project_root
 from lib.shell import _abs, _base, _git_split
 from lib.train_state import TrainStateError, active_train
 from lib.train_state import load as load_train
@@ -29,22 +31,55 @@ R_NO_CODER_ID = (
     "the hook input has neither agent_id nor session_id, so the coder cannot be bound "
     "(issue 29). Next: report this hook payload to the operator."
 )
+R_NOT_PRINTED = (
+    "the train runner did not print a dispatch of {agent} for stage {stage}, and {agent} is no "
+    "consult agent of gate {gate} (0024). Next: run daedalus_train.py step and dispatch only "
+    "the agent it prints, or a consult agent of the current gate."
+)
 DISPATCH_TOOLS = frozenset({"Agent", "Task"})
 _WORKTREE_LINE = re.compile(r"Worktree: (/\S+)")
 # issue 29: git forms that change a unit's index, history or files; -C names the unit.
 _UNIT_GIT_WRITES = frozenset({"add", "stage", "commit", "stash", "restore", "checkout"})
 
 
+def _step_reason(tool_input: dict[str, object], cwd: str) -> str | None:
+    # 4.8, AC-3, AC-6: in a defined train the Agent gate is default deny, scoped to one stage.
+    from lib.jail import _train_active, normalize_agent
+    from lib.train_runner import MODE_DEFINED, RunnerError, allowed_dispatch
+
+    if not os.path.isabs(cwd) or not _train_active(cwd):
+        return None
+    repo = project_root(Path(cwd))
+    train = active_train(repo)
+    if train is None:
+        return None
+    try:
+        state = load_train(repo, train)
+        if state.get("mode") != MODE_DEFINED:
+            return None
+        allowed, stage, gate = allowed_dispatch(state)
+    except (TrainStateError, RunnerError) as exc:
+        return str(exc)
+    raw = str(tool_input.get("subagent_type") or "")
+    agent = normalize_agent(raw)
+    if agent != raw and agent in allowed:
+        return None
+    return R_NOT_PRINTED.format(agent=agent or "an unnamed agent", stage=stage, gate=gate)
+
+
 def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     # issue 29: during a train a coder dispatch names exactly one recorded unit, once.
-    from lib.jail import _train_active, project_root
+    from lib.jail import _train_active
 
+    step = _step_reason(tool_input, cwd)
+    if step is not None:
+        return step
     subagent = str(tool_input.get("subagent_type") or "")
     if subagent.rpartition(":")[2] != "repo-coder" or not os.path.isabs(cwd):
         return None
     if not _train_active(cwd):
         return None
-    repo = project_root(cwd)
+    repo = project_root(Path(cwd))
     train = active_train(repo)
     if train is None:
         marker = train_marker(repo)
@@ -92,11 +127,9 @@ def _segment_units(segment: list[str], cwd: str) -> set[str]:
 
 def _binding_reason(hook_input: dict[str, object], cwd: str, units: set[str]) -> str | None:
     # issue 29: the first write claims the dispatched unit; every later write stays in it.
-    from lib.jail import project_root
-
     if not units:
         return None
-    repo = project_root(cwd)
+    repo = project_root(Path(cwd))
     train = active_train(repo)
     if train is None:
         return R_NO_TRAIN

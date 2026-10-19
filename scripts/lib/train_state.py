@@ -6,10 +6,9 @@ import json
 import os
 import re
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 
 from lib.locks import bounded_flock
 
@@ -78,11 +77,12 @@ def _locked(repo: Path, train_id: str) -> Iterator[Path]:
         yield path
 
 
-def _read(path: Path) -> dict[str, Any]:
+def _read(path: Path) -> dict[str, object]:
+    # 0080: parsed as object and narrowed; callers narrow each field they read.
     if path.is_symlink():
         raise TrainStateError(f"{path} is a symlink. Next: delete it from your own shell.")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data: object = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise TrainStateError(
             f"no train state at {path}. Next: run /daedalus:build-train to start a train."
@@ -93,10 +93,10 @@ def _read(path: Path) -> dict[str, Any]:
         ) from exc
     if not isinstance(data, dict):
         raise TrainStateError(f"{path} is not a JSON object. Next: move it aside and rerun.")
-    return data
+    return {str(key): value for key, value in data.items()}
 
 
-def _write(path: Path, state: dict[str, Any]) -> None:
+def _write(path: Path, state: dict[str, object]) -> None:
     # 0024: temp file plus os.replace, so a reader never sees a partial state.
     tmp: Path | None = None
     try:
@@ -114,18 +114,18 @@ def _write(path: Path, state: dict[str, Any]) -> None:
         ) from exc
 
 
-def load(repo: Path, train_id: str) -> dict[str, Any]:
+def load(repo: Path, train_id: str) -> dict[str, object]:
     path = state_path(repo, train_id)
     _refuse_links(repo, path)
     return _read(path)
 
 
-def save(repo: Path, train_id: str, state: dict[str, Any]) -> None:
+def save(repo: Path, train_id: str, state: dict[str, object]) -> None:
     with _locked(repo, train_id) as path:
         _write(path, state)
 
 
-def update(repo: Path, train_id: str, **fields: Any) -> dict[str, Any]:
+def update(repo: Path, train_id: str, **fields: object) -> dict[str, object]:
     with _locked(repo, train_id) as path:
         state = _read(path)
         state.update(fields)
@@ -133,16 +133,38 @@ def update(repo: Path, train_id: str, **fields: Any) -> dict[str, Any]:
     return state
 
 
-def add_unit(repo: Path, train_id: str, name: str, branch: str, path: Path) -> None:
+def change(
+    repo: Path, train_id: str, edit: Callable[[dict[str, object]], None]
+) -> dict[str, object]:
+    # 0024: one read-edit-write under the lock, so two runner calls never lose a field.
+    with _locked(repo, train_id) as path:
+        state = _read(path)
+        edit(state)
+        _write(path, state)
+    return state
+
+
+def units(state: dict[str, object]) -> list[dict[str, object]]:
+    raw = state.get("units")
+    items = raw if isinstance(raw, list) else []
+    return [{str(k): v for k, v in item.items()} for item in items if isinstance(item, dict)]
+
+
+def add_unit(
+    repo: Path, train_id: str, name: str, branch: str, path: Path, base: str | None = None
+) -> None:
+    # 0072: the base ref is kept, so a unit stacked on another unit waits for it to return.
     with _locked(repo, train_id) as target:
         state = _read(target)
-        units = list(state.get("units") or [])
-        if any(unit.get("name") == name for unit in units):
+        recorded = units(state)
+        if any(unit.get("name") == name for unit in recorded):
             raise TrainStateError(
                 f"unit {name} is already recorded for train {train_id}. Next: pick a new unit name."
             )
-        units.append({"name": name, "branch": branch, "path": str(path)})
-        state["units"] = units
+        entry: dict[str, object] = {"name": name, "branch": branch, "path": str(path)}
+        if base is not None:
+            entry["base"] = base
+        state["units"] = [*recorded, entry]
         _write(target, state)
 
 

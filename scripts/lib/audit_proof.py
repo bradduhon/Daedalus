@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from lib.audit import GENESIS, record_hash
+from lib.audit import GENESIS, AuditLockError, read_log, record_hash
 
 AUDIT_DIR = Path(".claude") / "daedalus" / "audit"
 SUMMARY_DIR = Path("docs") / ".tmp" / "daedalus"
@@ -50,10 +50,13 @@ def verify_lines(lines: Iterable[str]) -> tuple[bool, str]:
 
 
 def read_chain(path: Path) -> list[dict[str, Any]]:
+    # issue 10: the runner's hooks-live and check-reply reads wait on the writer's lock too.
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = read_log(path).splitlines()
     except UnicodeDecodeError:
         raise ProofError(NOT_UTF8.format(path=path)) from None
+    except AuditLockError as exc:
+        raise ProofError(f"BUSY: {exc}") from exc
     except OSError as exc:
         raise ProofError(f"BROKEN: cannot read {path} ({exc}). {DOCTOR_NEXT}") from exc
     ok, message = verify_lines(lines)

@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
+import stat
 import subprocess
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from lib.credential_paths import REPLY_KEY_NAME
 from lib.locks import bounded_flock
+from lib.project_root import in_git_work_tree
+from lib.project_root import project_root as _project_root
 from lib.redact import redact
 from lib.train_state import TRAIN_MARKER
 
@@ -95,25 +103,29 @@ def _git_env() -> dict[str, str]:
 
 @lru_cache(maxsize=32)
 def root_info(cwd: str) -> tuple[Path, str, str | None]:
-    cmd = ["git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"]
+    # 0077, CM-7: the root is the one filesystem resolver's; git only confirms a work tree.
+    root = _project_root(Path(cwd))
+    if not in_git_work_tree(root):
+        return root, "cwd-fallback", "no git work tree at this folder"
+    cmd = ["git", "-C", str(root), "rev-parse", "--path-format=absolute", "--git-common-dir"]
     try:
         out = subprocess.run(
             cmd, capture_output=True, text=True, timeout=2, env=_git_env(), check=False
         )
     except subprocess.TimeoutExpired:
-        return Path(cwd), "cwd-fallback", "git timed out after 2 s"
+        return root, "cwd-fallback", "git timed out after 2 s"
     except (OSError, subprocess.SubprocessError) as exc:
-        return Path(cwd), "cwd-fallback", f"git could not run: {exc}"
+        return root, "cwd-fallback", f"git could not run: {exc}"
     common = out.stdout.strip()
     if out.returncode != 0 or not common or not os.path.isabs(common):
         detail = (out.stderr.strip().splitlines() or ["no common dir"])[0]
-        return Path(cwd), "cwd-fallback", detail
-    # 0010: the common dir is shared by every worktree; its parent is the main working tree.
-    return Path(common).parent, "git", None
+        return root, "cwd-fallback", detail
+    return root, "git", None
 
 
 def project_root(cwd: str) -> Path:
-    return root_info(cwd)[0]
+    # 0077, AC-3: the jail's string-path entry to lib.project_root, never a second resolver.
+    return _project_root(Path(cwd))
 
 
 def project_data_dir(cwd: str) -> Path:
@@ -153,7 +165,8 @@ def check_project_data_dir(cwd: str) -> Path:
     for part in (root / ".claude", data, data / "audit", data / ".gitignore", data / "config.json"):
         if part.is_symlink():
             raise DataDirError(f"{part} is a symlink. " + _SYMLINK_NEXT, "symlink")
-    if source == "git":
+    # 0069, CM-7: no git call outside a work tree, so a plain folder's check runs none.
+    if in_git_work_tree(root) and source == "git":
         tracked = _tracked_files(root)
         if tracked:
             raise DataDirError(
@@ -190,6 +203,56 @@ def ensure_project_data_dir(cwd: str) -> Path:
             tmp.unlink()
         return check_project_data_dir(cwd)
     return data
+
+
+REPLY_KEY = REPLY_KEY_NAME
+_KEY_BYTES = 32
+_KEY_NEXT = (
+    "Next: delete .claude/daedalus/reply-hmac.key from your own shell; the next agent reply "
+    "creates a fresh key, and replies keyed by the old one no longer check in."
+)
+
+
+class ReplyKeyError(RuntimeError):
+    pass
+
+
+def _make_reply_key(path: Path) -> None:
+    # SC-12, AU-9: random bytes written whole at 0600, then linked in; a racing writer loses.
+    fd, name = tempfile.mkstemp(prefix=f".{REPLY_KEY}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(os.urandom(_KEY_BYTES))
+        try:
+            os.link(name, path)
+        except FileExistsError:
+            pass
+    finally:
+        os.unlink(name)
+
+
+def reply_key(cwd: str, create: bool) -> bytes:
+    # SC-12: a per-project secret in the data folder; never in source, derived or recorded.
+    path = project_data_dir(cwd) / REPLY_KEY
+    try:
+        if create and not os.path.lexists(path):
+            _make_reply_key(path)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as fh:
+            info = os.fstat(fh.fileno())
+            key = fh.read(_KEY_BYTES + 1)
+    except OSError as exc:
+        raise ReplyKeyError(f"the reply key {path} could not be read ({exc}). {_KEY_NEXT}") from exc
+    if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or len(key) != _KEY_BYTES:
+        raise ReplyKeyError(
+            f"the reply key {path} is not a {_KEY_BYTES}-byte owner-only file. {_KEY_NEXT}"
+        )
+    return key
+
+
+def message_hmac(key: bytes, data: bytes) -> str:
+    # SC-13: keyed, so the log alone cannot confirm a guessed reply.
+    return hmac.new(key, data, hashlib.sha256).hexdigest()
 
 
 def _require_cwd(cwd: Any) -> str:
@@ -257,7 +320,10 @@ def _error_field(error: Any) -> Any:
 
 
 def build_record(
-    hook_input: dict[str, Any], decision: str | None = None, reason: str | None = None
+    hook_input: dict[str, Any],
+    decision: str | None = None,
+    reason: str | None = None,
+    key: bytes | None = None,
 ) -> dict[str, Any]:
     event = hook_input.get("hook_event_name")
     tool_name = hook_input.get("tool_name")
@@ -273,6 +339,12 @@ def build_record(
     last_head = _head(last, MESSAGE_HEAD_CHARS) if isinstance(last, str) and last else None
     # 41: the tail carries the closing verdict line; null exactly when the head is.
     last_tail = _tail(last, MESSAGE_HEAD_CHARS) if isinstance(last, str) and last else None
+    # AU-3, 4.6: a keyed digest of the whole reply beside the redacted head and tail.
+    last_hmac = (
+        message_hmac(key, last.encode("utf-8", "surrogatepass"))
+        if key is not None and isinstance(last, str) and last
+        else None
+    )
     # 8.2: error, source and stop_reason are event-specific; null when absent.
     return {
         "ts": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
@@ -287,6 +359,7 @@ def build_record(
         "prompt": redact(hook_input.get("prompt")),
         "last_message_head": last_head,
         "last_message_tail": last_tail,
+        "last_message_hmac": last_hmac,
         "decision": decision,
         "reason": redact(reason),
         "result_sha256": result_sha,
@@ -295,6 +368,34 @@ def build_record(
         "source": hook_input.get("source"),
         "stop_reason": hook_input.get("stop_reason"),
     }
+
+
+class AuditLockError(RuntimeError):
+    pass
+
+
+@contextmanager
+def audit_lock(lock: Path) -> Iterator[None]:
+    # issue 10: the one bounded lock the writer and every reader of a session log take.
+    try:
+        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as exc:
+        raise AuditLockError(
+            f"cannot open the audit lock {lock} ({exc}). "
+            "Next: remove it from your own shell if it is a symlink, then retry."
+        ) from exc
+    with os.fdopen(fd, "w") as handle:
+        try:
+            bounded_flock(handle, LOCK_TIMEOUT_S, LOCK_POLL_S, label="audit lock")
+        except RuntimeError as exc:
+            raise AuditLockError(str(exc)) from exc
+        yield
+
+
+def read_log(path: Path) -> str:
+    # issue 10: read under the writer's lock, so an append in flight is never half a line.
+    with audit_lock(path.with_suffix(".lock")):
+        return path.read_bytes().decode("utf-8")
 
 
 def _tail_record(path: Path) -> dict[str, Any] | None:
@@ -333,11 +434,12 @@ def audit_append(
     audit_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(audit_dir, 0o700)
     root, source, _ = root_info(hook_input["cwd"])
-    record = build_record(hook_input, decision, reason)
+    last = hook_input.get("last_assistant_message")
+    key = reply_key(hook_input["cwd"], create=True) if isinstance(last, str) and last else None
+    record = build_record(hook_input, decision, reason, key)
     record["project_root"] = str(root)
     record["root_source"] = source
-    with open(lock, "w") as lock_fh:
-        bounded_flock(lock_fh, LOCK_TIMEOUT_S, LOCK_POLL_S, label="audit lock")
+    with audit_lock(lock):
         tail = _tail_record(path)
         record["seq"] = 1 if tail is None else int(tail["seq"]) + 1
         record["prev_hash"] = GENESIS if tail is None else tail["hash"]

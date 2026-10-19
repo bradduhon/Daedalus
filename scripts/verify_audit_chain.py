@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.audit import AuditLockError, read_log  # noqa: E402
 from lib.audit_proof import NOT_UTF8, ProofError, approved, hooks_live, verify_lines  # noqa: E402
 
 __all__ = ["NOT_UTF8", "verify", "verify_lines"]
@@ -16,8 +17,8 @@ HOOKS_LIVE_NEEDLE = "verify_audit_chain.py --hooks-live"
 
 
 def verify(path: Path) -> tuple[bool, str]:
-    with open(path, encoding="utf-8") as fh:
-        return verify_lines(fh)
+    # issue 10: the read waits on the writer's lock, so an append in flight reads whole.
+    return verify_lines(read_log(path).splitlines())
 
 
 USAGE = "usage: verify_audit_chain.py <session.jsonl>"
@@ -81,6 +82,8 @@ def main(argv: list[str]) -> int:
         ok, message = verify(Path(argv[1]))
     except UnicodeDecodeError:
         ok, message = False, NOT_UTF8.format(path=argv[1])
+    except AuditLockError as exc:
+        ok, message = False, f"BUSY: {exc}"
     print(message)
     return 0 if ok else 1
 

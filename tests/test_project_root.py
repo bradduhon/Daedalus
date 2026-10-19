@@ -48,8 +48,22 @@ def test_non_git_dir_falls_back_to_itself(tmp_path: Path) -> None:
 def test_git_missing_from_path_falls_back(
     repo_cwd: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    # 0077: the root comes from the filesystem; git only labels the source.
     monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
-    assert audit.project_root(str(repo_cwd / "nested")) == repo_cwd / "nested"
+    root, source, detail = audit.root_info(str(repo_cwd / "nested"))
+    assert (root, source) == (repo_cwd, "cwd-fallback") and detail
+    assert audit.project_root(str(repo_cwd / "nested")) == repo_cwd
+
+
+def test_plain_folder_root_info_runs_no_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # CM-7, AC-6: outside a work tree neither root_info nor the data-dir check calls git.
+    plain = tmp_path.resolve() / "plain"
+    plain.mkdir()
+    _no_subprocess(monkeypatch)
+    assert audit.root_info(str(plain)) == (plain, "cwd-fallback", "no git work tree at this folder")
+    assert audit.check_project_data_dir(str(plain)) == plain / ".claude" / "daedalus"
 
 
 def test_git_timeout_falls_back(monkeypatch: pytest.MonkeyPatch, repo_cwd: Path) -> None:
@@ -300,6 +314,75 @@ def test_ls_files_failure_names_the_layout_not_history(
     assert f"git could not list files under {repo_cwd} (fatal: not a git repository);" in text
     assert "(separate-git-dir, bare, submodule). Next: run the plugin from a standard clone" in text
     assert "git history" not in text and info.value.kind == "layout"
+
+
+def _no_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _refuse(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError(f"0077: project_root ran a subprocess {args!r}")
+
+    monkeypatch.setattr(subprocess, "run", _refuse)
+    monkeypatch.setattr(subprocess, "Popen", _refuse)
+
+
+def test_project_root_is_the_nearest_manifest_ancestor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lib.project_root import project_root
+
+    proj = tmp_path.resolve() / "proj"
+    (proj / "a" / "b").mkdir(parents=True)
+    (proj / "service-manifest.json").write_text("{}")
+    data_only = tmp_path.resolve() / "data-only"
+    (data_only / ".claude" / "daedalus").mkdir(parents=True)
+    (data_only / "x").mkdir()
+    inner = proj / "a" / "inner"
+    inner.mkdir()
+    (inner / "service-manifest.json").write_text("{}")
+    _no_subprocess(monkeypatch)
+    assert project_root(proj / "a" / "b") == proj
+    assert project_root(proj / "a" / "missing" / "file") == proj
+    assert project_root(data_only / "x") == data_only
+    assert project_root(inner) == inner
+
+
+def test_project_root_falls_back_to_the_git_root(
+    repo_cwd: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lib.project_root import in_git_work_tree, project_root
+
+    assert _git(repo_cwd, "commit", "-q", "--allow-empty", "-m", "init").returncode == 0
+    worktree = tmp_path.resolve() / "wt"
+    assert _git(repo_cwd, "worktree", "add", "-q", str(worktree)).returncode == 0
+    (repo_cwd / "sub").mkdir()
+    plain = tmp_path.resolve() / "plain"
+    plain.mkdir()
+    _no_subprocess(monkeypatch)
+    assert project_root(repo_cwd / "sub") == repo_cwd
+    assert project_root(worktree) == repo_cwd
+    assert project_root(plain) == plain
+    assert project_root(plain / "missing") == plain / "missing"
+    assert in_git_work_tree(repo_cwd / "sub") and not in_git_work_tree(plain)
+
+
+def test_nested_clone_resolves_to_the_enclosing_project(
+    repo_cwd: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lib.project_root import project_root
+
+    (repo_cwd / "service-manifest.json").write_text("{}")
+    nested = repo_cwd / "docs" / "private"
+    nested.mkdir(parents=True)
+    assert _git(nested, "init", "-q").returncode == 0
+    (nested / "specs").mkdir()
+    assert _git(repo_cwd, "add", "service-manifest.json").returncode == 0
+    assert _git(repo_cwd, "commit", "-q", "-m", "init").returncode == 0
+    linked = repo_cwd / ".claude" / "worktrees" / "u1"
+    assert _git(repo_cwd, "worktree", "add", "-q", str(linked)).returncode == 0
+    assert (linked / "service-manifest.json").is_file()
+    _no_subprocess(monkeypatch)
+    assert project_root(nested / "specs") == repo_cwd
+    assert project_root(linked) == repo_cwd
+    assert audit.project_root(str(nested)) == repo_cwd
 
 
 def test_tracked_file_message_keeps_history_next(repo_cwd: Path, hook_input: Any) -> None:

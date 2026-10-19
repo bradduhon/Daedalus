@@ -78,6 +78,30 @@ def record_dispatch(repo: Path, train_id: str, unit_name: str) -> str | None:
     return None
 
 
+def rebind(repo: Path, train_id: str, agent_id: str, from_unit: str, to_unit: str) -> str | None:
+    # 0086: a returned coder resumes on the unit stacked on its own; its old unit closes.
+    try:
+        with _locked(repo, train_id) as path:
+            units = _read(path)
+            if to_unit in units:
+                return (
+                    f"unit {to_unit} was already dispatched (0086). "
+                    "Next: wait for that coder, or stop the train."
+                )
+            holder = units.get(from_unit, {}).get("agent_id")
+            if holder not in (None, agent_id):
+                return (
+                    f"unit {from_unit} is bound to coder {holder}, not {agent_id} (0086). "
+                    "Next: resume the coder that built the base unit, or stop the train."
+                )
+            units[from_unit] = {"agent_id": None, "retired_to": to_unit}
+            units[to_unit] = {"agent_id": agent_id}
+            train_state._write(path, {"units": units})
+    except TrainStateError as exc:
+        return str(exc)
+    return None
+
+
 def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | None:
     try:
         with _locked(repo, train_id) as path:
@@ -87,6 +111,12 @@ def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | Non
                 return (
                     f"unit {unit_name} was never dispatched in train {train_id}. "
                     "Next: dispatch a repo-coder with one Worktree: line naming it."
+                )
+            moved = record.get("retired_to")
+            if moved:
+                return (
+                    f"unit {unit_name} is finished; its coder moved on to unit {moved} "
+                    f"(0086). {WRITE_NEXT}"
                 )
             holder = record.get("agent_id")
             if holder == agent_id:

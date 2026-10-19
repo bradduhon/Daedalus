@@ -9,6 +9,8 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Literal
 
+from lib.project_root import project_root
+
 MANIFEST_NAME = "service-manifest.json"
 NARROWING_KEYS = ("forbidden_paths", "forbidden_extensions")
 SCOPE_KINDS = ("repository", "folder")
@@ -41,9 +43,14 @@ class Manifest:
     unit_test_cmd: str | None = None
 
 
+def manifest_path(repo: Path) -> Path:
+    # 0077: the manifest sits at the project root found from repo, never at HOME or the plugin.
+    return project_root(repo) / MANIFEST_NAME
+
+
 def read_raw(repo: Path) -> object:
     # 0054: None when absent; unreadable or malformed JSON raises with a Next line.
-    target = repo / MANIFEST_NAME
+    target = manifest_path(repo)
     if not target.is_file():
         return None
     try:
@@ -175,7 +182,7 @@ def load(repo: Path) -> Manifest | None:
     raw = read_raw(repo)
     if raw is None:
         return None
-    target = repo / MANIFEST_NAME
+    target = manifest_path(repo)
     if not isinstance(raw, dict):
         raise ManifestError(
             f"{target} is not a JSON object. Next: start from the example in "

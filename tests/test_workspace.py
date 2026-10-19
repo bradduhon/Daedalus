@@ -282,8 +282,9 @@ def test_create_records_the_unit_in_the_active_train(data_repo: Path) -> None:
     train_state.save(data_repo, TRAIN, {"train_id": TRAIN})
     mark_train(data_repo, TRAIN)
     path = create(data_repo, NAME, BASE)
+    # 0072: the base ref is recorded, so a unit stacked on another waits for it.
     assert train_state.load(data_repo, TRAIN)["units"] == [
-        {"name": NAME, "branch": branch_name(NAME), "path": str(path)}
+        {"name": NAME, "branch": branch_name(NAME), "path": str(path), "base": BASE}
     ]
 
 

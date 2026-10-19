@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from lib import jail, train_state
 from lib.config import Config
-from lib.unit_binding import bindings_path, claim, record_dispatch
+from lib.unit_binding import bindings_path, claim, rebind, record_dispatch
 from lib.workspace import create, mark_train
 
 from tests.hook_chain import judge as decide
@@ -106,6 +106,26 @@ def test_first_write_claims_the_dispatched_unit(repo_cwd: Path, units: dict[str,
     _ok(_write(repo_cwd, "a-1", units["u1"] / "src" / "a.py"))
     data = json.loads(bindings_path(repo_cwd, TRAIN).read_text(encoding="utf-8"))
     assert data == {"units": {"u1": {"agent_id": "a-1"}}}
+
+
+def test_unit_binding_rebinds_a_warm_coder_to_the_next_worktree(
+    repo_cwd: Path, units: dict[str, Path]
+) -> None:
+    # 0086: the coder that built u1 moves to u2; u1 closes to it and to every other coder.
+    _ok(_dispatch(repo_cwd, f"Worktree: {units['u1']}"))
+    _ok(_write(repo_cwd, "a-1", units["u1"] / "src" / "a.py"))
+    assert rebind(repo_cwd, TRAIN, "a-2", "u1", "u2") is not None
+    assert rebind(repo_cwd, TRAIN, "a-1", "u1", "u2") is None
+    _ok(_write(repo_cwd, "a-1", units["u2"] / "src" / "b.py"))
+    _refused(_write(repo_cwd, "a-1", units["u1"] / "src" / "a.py"), "finished", "u2")
+    _refused(_write(repo_cwd, "a-9", units["u1"] / "src" / "a.py"), "finished")
+    _refused(_write(repo_cwd, "a-9", units["u2"] / "src" / "b.py"), "belongs to coder a-1")
+    _refused(_dispatch(repo_cwd, f"Worktree: {units['u2']}"), "bound to coder a-1")
+    assert rebind(repo_cwd, TRAIN, "a-1", "u1", "u2") is not None
+    data = json.loads(bindings_path(repo_cwd, TRAIN).read_text(encoding="utf-8"))
+    assert data == {
+        "units": {"u1": {"agent_id": None, "retired_to": "u2"}, "u2": {"agent_id": "a-1"}}
+    }
 
 
 def test_bound_agent_writes_its_unit(repo_cwd: Path, units: dict[str, Path]) -> None:

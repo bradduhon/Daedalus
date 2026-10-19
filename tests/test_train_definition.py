@@ -206,6 +206,11 @@ MUTATIONS: list[tuple[int, str, Mutation]] = [
     (5, "contract touches the unit", lambda r: _sub(r, 0, "scope").update(touch=["none"])),
     (6, "route the stage never produces", lambda r: _sub(r, 0, "on_fail").update(x="ask: Why?")),
     (6, "reply line with no pass", lambda r: _sub(r, 3, "proof").update(exit={"2": "blocked"})),
+    (
+        6,
+        "two reply lines pass unrouted",
+        lambda r: _sub(r, 2, "on_fail").pop("[STATUS: YIELD_WEB]"),
+    ),
     (8, "stage gate undeclared", lambda r: _stage(r, 0).update(gate="design")),
     (
         8,
