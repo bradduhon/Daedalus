@@ -113,8 +113,20 @@ def test_setup_refuses_a_parent_folder_that_holds_repositories(tmp_path: Path) -
         subprocess.run(["git", "init", "-q", "-b", "main", str(parent / name)], check=True)
     result = _setup(parent)
     assert result.returncode == 1
-    assert "one, two" in result.stdout and "Next:" in result.stdout
+    assert "holds the repository one," in result.stdout and "Next:" in result.stdout
     assert sorted(p.name for p in parent.iterdir()) == ["one", "two"]
+
+
+def test_setup_refuses_a_folder_with_a_repository_two_levels_down(tmp_path: Path) -> None:
+    # 0077: a home folder whose repositories sit under projects/ is refused the same way.
+    home = tmp_path / "home"
+    (home / ".cache" / "x").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(home / "projects" / "repo")], check=True)
+    result = _setup(home)
+    assert result.returncode == 1
+    assert f"holds the repository {Path('projects') / 'repo'}," in result.stdout
+    assert "Next:" in result.stdout
+    assert sorted(p.name for p in home.iterdir()) == [".cache", "projects"]
 
 
 def test_setup_writes_in_a_plain_folder_without_repositories(tmp_path: Path) -> None:

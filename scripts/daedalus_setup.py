@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import sys
+from collections import deque
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -18,6 +19,9 @@ from lib.project_keys import starter_config, starter_manifest  # noqa: E402
 from lib.project_root import in_git_work_tree, project_root  # noqa: E402
 
 CONFIG_NAME = "config.json"
+# 0077: how far below the setup folder, and through how many folders, the repository scan looks.
+SCAN_DEPTH = 3
+SCAN_LIMIT = 2000
 
 
 def _write_new(path: Path, doc: dict[str, object], mode: int) -> bool:
@@ -35,22 +39,37 @@ def _report(path: Path, written: bool) -> None:
     print(f"written: {path}" if written else f"kept: {path} (it already exists)")
 
 
-def _child_repos(root: Path) -> list[str]:
-    try:
-        children = sorted(root.iterdir())
-    except OSError:
-        return []
-    return [c.name for c in children if c.is_dir() and os.path.lexists(c / ".git")]
+def _nested_repo(root: Path) -> Path | None:
+    # 0077: breadth-first and bounded; dot folders and symlinks are skipped so the scan ends.
+    queue: deque[tuple[Path, int]] = deque([(root, 0)])
+    seen = 0
+    while queue:
+        folder, depth = queue.popleft()
+        try:
+            children = sorted(folder.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if child.name.startswith(".") or child.is_symlink() or not child.is_dir():
+                continue
+            seen += 1
+            if seen > SCAN_LIMIT:
+                return None
+            if os.path.lexists(child / ".git"):
+                return child
+            if depth + 1 < SCAN_DEPTH:
+                queue.append((child, depth + 1))
+    return None
 
 
 def setup(repo: Path) -> int:
     root = project_root(repo)
     # 0077: starter files above repositories would become each one's project root; refuse.
-    children = [] if in_git_work_tree(root) else _child_repos(root)
-    if children:
+    found = None if in_git_work_tree(root) else _nested_repo(root)
+    if found is not None:
         print(
-            f"setup stopped: {root} is not a git repository but holds the repositories "
-            f"{', '.join(children)}, so starter files here would become their project root. "
+            f"setup stopped: {root} is not a git repository but holds the repository "
+            f"{found.relative_to(root)}, so starter files here would become its project root. "
             "Next: run the Daedalus setup skill from inside the one repository you want to set up."
         )
         return 1
