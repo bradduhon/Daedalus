@@ -7,7 +7,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib.manifest import Manifest, ManifestError, extension_hit, load, path_hit
+from lib.manifest import (
+    Manifest,
+    ManifestError,
+    declared_commands,
+    extension_hit,
+    load,
+    path_hit,
+)
 
 from tests.conftest import REPO_ROOT
 
@@ -34,8 +41,34 @@ def test_absent_jail_narrowing_is_empty(tmp_path: Path) -> None:
 
 
 def test_this_repos_manifest_loads() -> None:
-    # 0073: this repo's stack.unit_test_cmd is read now; every feature stays at its default.
-    assert load(REPO_ROOT) == Manifest(unit_test_cmd=".venv/bin/pytest -q")
+    # 0073, B2: this repo's declared stack commands are read; every feature stays at its default.
+    assert load(REPO_ROOT) == Manifest(
+        unit_test_cmd=".venv/bin/pytest -q", lint_cmd=".venv/bin/ruff check scripts tests"
+    )
+
+
+def test_manifest_reads_typecheck_and_lint_cmd(tmp_path: Path) -> None:
+    # B2: the two keys sit beside unit_test_cmd; null is not declared.
+    stack = {"unit_test_cmd": "pytest -q", "typecheck_cmd": "mypy src", "lint_cmd": "ruff check ."}
+    _write(tmp_path, {"stack": stack})
+    loaded = load(tmp_path)
+    assert loaded == Manifest(
+        unit_test_cmd="pytest -q", typecheck_cmd="mypy src", lint_cmd="ruff check ."
+    )
+    assert declared_commands(loaded) == ("pytest -q", "mypy src", "ruff check .")
+    _write(tmp_path, {"stack": {"typecheck_cmd": None, "lint_cmd": None}})
+    loaded = load(tmp_path)
+    assert loaded == Manifest() and declared_commands(loaded) == ()
+    assert declared_commands(Manifest()) == ()
+
+
+@pytest.mark.parametrize("key", ["typecheck_cmd", "lint_cmd"])
+@pytest.mark.parametrize("value", ["", "  ", 5, ["mypy"]])
+def test_manifest_refuses_a_bad_stack_command(tmp_path: Path, key: str, value: object) -> None:
+    _write(tmp_path, {"stack": {key: value}})
+    with pytest.raises(ManifestError, match=f"stack.{key}") as caught:
+        load(tmp_path)
+    assert _ends_with_next(str(caught.value))
 
 
 def test_missing_manifest_is_none(tmp_path: Path) -> None:

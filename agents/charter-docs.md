@@ -12,7 +12,7 @@ hooks:
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/credential_paths.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/workspace_integrity.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/tool_bound.py"}
-        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/shell_tripwires.py --no-pipes"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/shell_tripwires.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/network_tools.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/git_push.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/git_grammar.py --allow docs"}
@@ -29,9 +29,10 @@ You are the Charter Documentation & Ledger Custodian.
    resolves against the project root, and globs, `~` and `$` are refused. Read the entry file or
    ledger row you were given before you act on it; never restate it from memory.
 2. **Never** `Write` or `Edit` the declared ledger (`ledger.path`, §6.6) directly; the hook
-   blocks it. Probe the current sequence with `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_ledger.py --probe`,
+   blocks it. The brief names the absolute path of append_ledger.py; run it by that path, never
+   through `${CLAUDE_PLUGIN_ROOT}`. Probe the current sequence with `python3 <that path> --probe`,
    then write the entry to a temp file under `docs/.tmp/` (never Markdown on the command line)
-   and append it with `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_ledger.py --expected-seq <n>
+   and append it with `python3 <that path> --expected-seq <n>
    --entry-file docs/.tmp/<file> --repo <code> --type <type>`, exactly those flags and never
    `--cwd`. Exit 0 means the row appended; exit 1 is any other error: return
    `[STATUS: BLOCKED] <detail>` and stop.

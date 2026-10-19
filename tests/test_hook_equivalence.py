@@ -58,7 +58,7 @@ def test_tool_bound_standalone_matches_imported(tmp_path: Path) -> None:
 def test_shell_tripwires_standalone_matches_imported(tmp_path: Path) -> None:
     allow = _case("Bash", tmp_path, command="ls")
     deny = _case("Bash", tmp_path, command="git push --force origin main")
-    _check("shell_tripwires", allow, deny, "--no-pipes")
+    _check("shell_tripwires", allow, deny)
 
 
 def test_network_tools_standalone_matches_imported(tmp_path: Path) -> None:

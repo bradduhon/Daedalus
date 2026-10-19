@@ -112,10 +112,7 @@ def _class_refused(repo: Path, agent: str, command: str, klass: str, nxt: str) -
 @pytest.mark.parametrize("agent", AGENTS)
 @pytest.mark.parametrize("command", MERGE)
 def test_merge_class_refused(train_repo: Path, agent: str, command: str) -> None:
-    if agent == "pr-train-conductor" and "{" in command:
-        # 0044: the conductor's shell_tripwires hook refuses a brace token before gh_classes.
-        assert _denying_hook(train_repo, agent, command) == "shell_tripwires"
-        return
+    # O4: a single-quoted brace passes shell hygiene, so gh_classes names the merge class.
     _class_refused(train_repo, agent, command, "merge", MERGE_NEXT)
 
 

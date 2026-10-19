@@ -96,12 +96,12 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 <!-- generated: catalog.py matrix -->
 | Agent | Shape | Hooks |
 |---|---|---|
-| charter-docs | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires --no-pipes, network_tools, git_push, git_grammar --allow docs, root_writes --touch charter,docs --ledger-guard, command_allowlist --allow append_ledger,git,read, gh_classes |
+| charter-docs | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow docs, root_writes --touch charter,docs --ledger-guard, command_allowlist --allow append_ledger,git,read, gh_classes |
 | cis-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
 | contract-spec | producer | credential_paths, workspace_integrity, tool_bound, root_writes --touch contracts,charter-specs |
 | nist-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
-| pr-train-conductor | mover | credential_paths, workspace_integrity, tool_bound, shell_tripwires --no-pipes, network_tools --gh, command_allowlist --allow git,gh,gitleaks, git_grammar --allow conductor, git_push --conductor, gh_classes --conductor |
-| repo-coder | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires --no-pipes, network_tools, git_push, git_grammar --allow coder, unit_writes, gh_classes |
+| pr-train-conductor | mover | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools --gh, command_allowlist --allow git,gh,gitleaks, git_grammar --allow conductor, git_push --conductor, gh_classes --conductor |
+| repo-coder | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes, gh_classes |
 | security-auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only, gh_classes |
 | standards-rules-specialist | finder | credential_paths, tool_bound |
 | web-researcher | finder | credential_paths, tool_bound, network_tools --web |
@@ -165,7 +165,9 @@ One row per key the two readers accept. The service manifest is committed and sh
 | `features.scrub_file` | `service-manifest.json` | Reserved for a file of terms that every commit and pull request body a train makes is checked against; the reader checks the path, and no train step reads the file yet (0069) | A project-relative path, or `null` | `null`: nothing is checked |
 | `features.ledger` | `service-manifest.json` | Turns the decision ledger steps on or off (0069) | `true`: the ledger is used, and a train asks before creating one; `false`: no ledger step and no ledger question; `null` | `null`: a ledger the config declares or the probe finds is used, and none is created |
 | `trains_dir` | `service-manifest.json` | Reserved for the project folder that holds its own train definitions; the reader checks the path, and no train reads the folder yet (0073) | A project-relative folder path, or `null` | `null` |
-| `stack.unit_test_cmd` | `service-manifest.json` | The command that runs the project's unit tests; the reader checks it, and no train step runs it yet (0073) | A non-empty command string, or `null` | `null` |
+| `stack.unit_test_cmd` | `service-manifest.json` | The command that runs the project's unit tests; a coding agent may run it exactly as written, as one command (0073, 0098) | A non-empty command string, or `null` | `null`: no declared command |
+| `stack.typecheck_cmd` | `service-manifest.json` | The command that type-checks the project; a coding agent may run it exactly as written, as one command (0098) | A non-empty command string, or `null` | `null`: no declared command |
+| `stack.lint_cmd` | `service-manifest.json` | The command that lints the project; a coding agent may run it exactly as written, as one command (0098) | A non-empty command string, or `null` | `null`: no declared command |
 | `ledger.path` | `service-manifest.json` | Where rulings are appended, declared for everyone who works on the project; it wins over the config's ledger block (0004) | A path; `<repo_root>` and `<charter_root>` are filled in, and a relative path is read from the project root | No block: the config's ledger block or the ledger probe is used |
 | `ledger.format` | `service-manifest.json` | How each ruling is written to the manifest's ledger (0004) | `"markdown-table-row"` or `"heading-entry"` | Required once the block exists |
 | `ledger.id_scheme` | `service-manifest.json` | The pattern each new ruling id follows (0004) | A pattern such as `{seq:04d}-{repo}-{type}` | Required once the block exists |
