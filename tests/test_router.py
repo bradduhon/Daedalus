@@ -228,11 +228,12 @@ def test_unknown_agent_refused_only_in_a_train(
     run_script: Any, hook_input: Any, repo_cwd: Path
 ) -> None:
     # 0023, 0035: a foreign agent is not routed; lib.jail refuses it only while a train runs.
-    payload = hook_input(agent_type="ghost", tool_input={"command": "ls"})
+    payload = hook_input(agent_type="ghost", tool_input={"command": "touch x"})
     assert run_script("enforce_agent_jail.py", payload).returncode == 0
     write_train_marker(repo_cwd)
     result = run_script("enforce_agent_jail.py", payload)
-    assert result.returncode == 2 and "fail closed" in result.stderr
+    # 0100: a foreign agent reads during a train; a write is what blocks.
+    assert result.returncode == 2 and "read-only while" in result.stderr
     assert "no binding exists" not in result.stderr
 
 

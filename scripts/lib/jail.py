@@ -12,6 +12,7 @@ from pathlib import Path
 
 from lib import dispatch_binding
 from lib.audit import _git_env, project_data_dir, project_root
+from lib.audit_proof import SUMMARY_DIR
 from lib.config import Config
 from lib.credential_paths import (
     CREDENTIAL_TOOLS,
@@ -165,10 +166,12 @@ R_CONDUCTOR_CHARTER = (
     "daedalus/<train-id>`."
 )
 R_CODER_GIT = (
-    "repo-coder git is limited to add, commit, status, diff, log, show, rev-parse, ls-files, "
+    "repo-coder git is limited to add, commit, status, diff (--check included), log (-S and -G "
+    "included), show, grep, blame, merge-base, rev-parse, ls-files, "
     "branch listing, stash list/push/pop/show, "
     "restore/checkout -- <unit worktree paths>, "
-    "worktree list. Next: use those only; the trains handle the rest."
+    "worktree list; --output is refused on every subcommand. "
+    "Next: use those only; the trains handle the rest."
 )
 R_DATA_DIR = (
     "the plugin data directory is written by hooks only. "
@@ -247,7 +250,18 @@ R_WEB_RESEARCHER_ONLY = (
 R_UNKNOWN = (
     "unknown agent_type '{agent}', fail closed. Next: add the agent to the jail before using it."
 )
-R_UNKNOWN_TRAIN = "unknown agent_type '{agent}', fail closed while {marker} exists.\n" + UNMARK_NEXT
+# 0100: one line of rule, then the unmark line for a marker a dead train left.
+R_UNKNOWN_TRAIN = (
+    "unknown agent_type '{agent}' is read-only while {marker} exists: Bash runs read-only "
+    "inspection and git reads, pipes allowed; Write, Edit, dispatch and web tools are refused "
+    "(0100).\n" + UNMARK_NEXT
+)
+R_MAIN_SCRATCH = (
+    "the orchestrating session does not write application code during a train; it writes only "
+    "under docs/.tmp/daedalus/, the train summary included (0099): {path}. "
+    "Next: dispatch daedalus:repo-coder for this change; it writes in its unit worktree under "
+    ".claude/worktrees/."
+)
 R_ROUTED = (
     "{agent} is judged by the router, not lib.jail.decide. "
     "Next: route the call through scripts/enforce_agent_jail.py."
@@ -396,12 +410,13 @@ def _in_unit_worktree(target: str, cwd: str) -> bool:
     return parts is not None and len(parts) >= 2
 
 
-def _orchestrator_code(arg: str, cwd: str) -> bool:
-    # 0054 narrows the coder only; the orchestrator's src/ and tests/ refusal is unchanged.
-    target = _abs(arg, cwd)
-    parts = _unit_parts(target, cwd)
-    unit_code = parts is not None and len(parts) >= 2 and parts[1] in {"src", "tests"}
-    return _under(target, f"{cwd}/src") or _under(target, f"{cwd}/tests") or unit_code
+def _orchestrator_write_allowed(path: str, cwd: str) -> bool:
+    # 0099: scratch of the cwd repo or of the train repo the path sits in; the summary is inside.
+    target = _abs(path, cwd)
+    if _under(target, str(project_root(Path(cwd)) / SUMMARY_DIR)):
+        return True
+    root = project_root(Path(os.path.dirname(os.path.realpath(target))))
+    return os.path.lexists(train_marker(root)) and _under(target, str(root / SUMMARY_DIR))
 
 
 @dataclass(frozen=True)
@@ -494,20 +509,42 @@ _GIT_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
     "status": lambda a, _: _flags_ok(a, _STATUS_FLAGS, (), (r"-[sb]+",)),
     "log": lambda a, _: _flags_ok(
         a,
-        frozenset({"--oneline", "--stat", "--name-only", "-p", "--no-merges", "--all"}),
+        frozenset({"--oneline", "--stat", "--name-only", "-p", "--no-merges", "--all"})
+        | {"--pickaxe-regex", "--pickaxe-all"},
         (*_FORMAT, "--grep=", "--author="),
-        (r"-\d+", r"-n\d+"),
+        (r"-\d+", r"-n\d+", r"-[SG].+"),
         frozenset({"-n", "-S", "-G"}),
     ),
     "diff": lambda a, _: _flags_ok(
         a,
         frozenset(
             {"--stat", "--name-only", "--name-status", "--cached", "--word-diff", "--color=never"}
+            | {"--check"}
         ),
         (),
         (r"-U\d+",),
     ),
-    "show": lambda a, _: _flags_ok(a, frozenset({"--stat", "--name-only"}), _FORMAT),
+    "show": lambda a, _: _flags_ok(
+        a, frozenset({"--stat", "--name-only", "--name-status", "--oneline", "-s"}), _FORMAT
+    ),
+    # O5: history reads; -O (pager), -f, --no-index and --contents stay out.
+    "grep": lambda a, _: _flags_ok(
+        a,
+        frozenset({"--cached", "--untracked", "--heading", "--break"}),
+        (),
+        (r"-[nilLwvcEFIhH]+", r"-[ABC]\d+"),
+        frozenset({"-e", "-A", "-B", "-C", "--max-depth"}),
+    ),
+    "blame": lambda a, _: _flags_ok(
+        a,
+        frozenset({"-w", "-s", "-e", "-l", "--porcelain", "--line-porcelain"}),
+        (),
+        (r"-[CM]\d*", r"-L.+"),
+        frozenset({"-L"}),
+    ),
+    "merge-base": lambda a, _: _flags_ok(
+        a, frozenset({"--is-ancestor", "--all", "--octopus", "--independent", "--fork-point"})
+    ),
     "rev-parse": lambda a, _: _flags_ok(
         a,
         frozenset({"--short", "--abbrev-ref", "--is-inside-work-tree", "--show-toplevel"}),
@@ -538,6 +575,9 @@ def _git_grammar_ok(
     grammar = _GIT_GRAMMAR if grammar is None else grammar
     sub, args, globals_ = _git_split(tokens)
     if sub not in subs or sub not in grammar:
+        return False
+    # O5: --output and its abbreviations, even where an option value would swallow it.
+    if any(_long_matches(arg, "--output", 1) for arg in args):
         return False
     i = 0
     while i < len(globals_):
@@ -1519,10 +1559,23 @@ def _ours(raw_agent: str) -> bool:
     return bool(sep) and prefix in (*AGENT_NAMESPACES, TEST_NAMESPACE)
 
 
+def _foreign_read_ok(command: str, cwd: str, charter: str | None) -> bool:
+    # 0100: the auditor's per-segment read-only class, pipes included; no env-prefix strip.
+    segments = tokenize(command)
+    if not segments:
+        return False
+    return all(_read_only_segment(s, READ_ONLY_GIT, cwd, charter) for s in segments)
+
+
 def _unknown_decision(
-    raw_agent: str, agent: str, cwd: str, tool: str, tool_input: dict[str, object]
+    raw_agent: str,
+    agent: str,
+    cwd: str,
+    tool: str,
+    tool_input: dict[str, object],
+    charter: str | None = None,
 ) -> Decision:
-    # 0023: a foreign agent is refused only while a train is active; a daedalus name always is.
+    # 0023, 0100: a foreign agent reads only while a train is active; a daedalus name never acts.
     if _ours(raw_agent):
         return _block(R_UNKNOWN.format(agent=agent))
     if not os.path.isabs(cwd):
@@ -1535,7 +1588,7 @@ def _unknown_decision(
     if command and (_data_dir_write(command) or _cd_data_dir_git(command)):
         return _block(R_DATA_DIR)
     repo = _marked_repo(cwd, tool, tool_input)
-    if repo is None:
+    if repo is None or (tool == "Bash" and _foreign_read_ok(command, cwd, charter)):
         return _allow()
     return _block(R_UNKNOWN_TRAIN.format(agent=agent, marker=train_marker(repo), repo=repo))
 
@@ -1577,7 +1630,8 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
     elif tool == "Bash" and (gh := _gh_gate(agent, cwd, str(tool_input.get("command") or ""))):
         decision = _block(gh)
     else:
-        decision = _unknown_decision(raw_agent, agent, cwd, tool, tool_input)
+        charter = str(config.charter_root) if config.charter_root else None
+        decision = _unknown_decision(raw_agent, agent, cwd, tool, tool_input, charter)
     return Decision(decision.allow, decision.reason, agent)
 
 
@@ -1602,11 +1656,8 @@ def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision
             return _block(R_DATA_DIR_GIT)
         reason = _command_reason(command) or _gh_gate("main", cwd, command)
         return _block(reason) if reason else _allow()
-    if is_write and _orchestrator_code(path, cwd):
-        return _block(
-            "the orchestrating session does not write application code during a train. "
-            "Next: dispatch a repo-coder for this change."
-        )
+    if is_write and not _orchestrator_write_allowed(path, cwd):
+        return _block(R_MAIN_SCRATCH.format(path=path))
     if tool in dispatch_binding.DISPATCH_TOOLS:
         reason = dispatch_binding._dispatch_reason(tool_input, cwd)
         if reason:

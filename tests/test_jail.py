@@ -16,6 +16,7 @@ from lib.shell import split_pipeline, tokenize
 from lib.unit_binding import record_dispatch
 from lib.workspace import mark_train, train_marker
 
+from tests import hook_chain
 from tests.conftest import CFG, CWD, REPO_ROOT, WT
 
 UNIT_TRAIN = "20261015-120000"
@@ -71,12 +72,12 @@ def test_namespaced_boundary_tester_is_refused() -> None:
 
 
 def test_unknown_agent_fails_closed(tmp_path: Path) -> None:
-    # 0023: a foreign agent is refused only while a train is active.
+    # 0023, 0100: a foreign agent's writes are refused only while a train is active.
     (tmp_path / ".claude" / "daedalus").mkdir(parents=True)
     (tmp_path / ".claude" / "daedalus" / "train.active").write_text("20261015-120000\n")
-    payload = {**_b("mystery", "ls"), "cwd": str(tmp_path)}
+    payload = {**_b("mystery", "touch x"), "cwd": str(tmp_path)}
     d = decide(payload, CFG)
-    assert not d.allow and "fail closed" in d.reason and d.reason.endswith(".")
+    assert not d.allow and "read-only while" in d.reason and d.reason.endswith(".")
 
 
 def test_unknown_agent_refusal_names_the_marker_and_unmark(tmp_path: Path) -> None:
@@ -84,7 +85,7 @@ def test_unknown_agent_refusal_names_the_marker_and_unmark(tmp_path: Path) -> No
     marker = tmp_path / ".claude" / "daedalus" / "train.active"
     marker.parent.mkdir(parents=True)
     marker.write_text("20261015-120000\n")
-    payload = {**_b("Explore", "ls"), "cwd": str(tmp_path)}
+    payload = {**_b("Explore", "touch x"), "cwd": str(tmp_path)}
     reason = str(decide(payload, CFG).reason)
     assert str(marker) in reason and len(reason.splitlines()) == 2
     unmark = "scripts/daedalus_workspace.py unmark --repo " + str(tmp_path) + " "
@@ -190,7 +191,7 @@ def test_foreign_namespace_fails_closed_only_during_a_train(agent: str, tmp_path
     (tmp_path / ".claude" / "daedalus").mkdir(parents=True)
     (tmp_path / ".claude" / "daedalus" / "train.active").write_text("20261015-120000\n")
     d = decide(payload, CFG)
-    assert not d.allow and "fail closed" in d.reason
+    assert not d.allow and "read-only while" in d.reason
 
 
 def test_namespaced_unknown_reason_names_normalized_agent() -> None:
@@ -202,7 +203,9 @@ def test_main_cannot_write_application_code() -> None:
     assert not decide(_w(None, f"{CWD}/src/app.py"), CFG).allow
     assert not decide(_w(None, f"{CWD}/tests/test_app.py", "Edit"), CFG).allow
     assert not decide(_w(None, "src/app.py"), CFG).allow
-    assert decide(_w(None, f"{CWD}/docs/x.md"), CFG).allow
+    # 0099: during a train main writes only the scratch folder and the summary.
+    assert not decide(_w(None, f"{CWD}/docs/x.md"), CFG).allow
+    assert decide(_w(None, f"{CWD}/docs/.tmp/daedalus/x.md"), CFG).allow
     assert decide(_b(None, "git status"), CFG).allow
 
 
@@ -453,7 +456,9 @@ class TestRound3DotGitWrites:
         assert not d.allow and ".git/" in d.reason
 
     def test_gitignore_is_not_dotgit(self) -> None:
-        assert decide(_w(None, f"{CWD}/.gitignore"), CFG).allow
+        # 0099: refused as a non-scratch write during a train, never as .git/.
+        path = f"{CWD}/.gitignore"
+        assert decide(_w(None, path), CFG).reason == jail.R_MAIN_SCRATCH.format(path=path)
 
 
 class TestRound3MainHardened:
@@ -721,11 +726,13 @@ class TestFinalDataDir:
         assert not decide(payload, CFG).allow
 
     def test_main_still_writes_elsewhere(self) -> None:
-        assert decide(_w(None, f"{CWD}/docs/x.md"), CFG).allow
+        # 0099: during a train elsewhere means the scratch folder.
+        assert decide(_w(None, f"{CWD}/docs/.tmp/daedalus/x.md"), CFG).allow
 
     def test_unset_env_leaves_main_write_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("CLAUDE_PLUGIN_DATA")
-        assert decide(_w(None, f"{DATA}/config.json"), CFG).allow
+        path = f"{DATA}/config.json"
+        assert decide(_w(None, path), CFG).reason == jail.R_MAIN_SCRATCH.format(path=path)
 
     @pytest.mark.parametrize(
         "command",
@@ -776,7 +783,9 @@ class TestProjectDataDir:
         assert not decide(_w(None, path), CFG).allow, path
 
     def test_sibling_claude_dir_write_allowed_for_main(self) -> None:
-        assert decide(_w(None, f"{CWD}/.claude/settings.local.json"), CFG).allow
+        # 0099: not the data-dir refusal; the scratch rule is what refuses it during a train.
+        path = f"{CWD}/.claude/settings.local.json"
+        assert decide(_w(None, path), CFG).reason == jail.R_MAIN_SCRATCH.format(path=path)
 
     @pytest.mark.parametrize(
         "command",
@@ -1227,13 +1236,15 @@ def test_unknown_agent_passes_through_without_a_train(train_cwd: Path) -> None:
 def test_unknown_agent_fails_closed_during_a_train(train_cwd: Path) -> None:
     _mark(train_cwd)
     cwd = str(train_cwd)
+    # 0100: reads pass; writes refuse.
+    assert decide(_cred("Explore", "Bash", cwd, command="ls"), CFG).allow
     for payload in (
-        _cred("Explore", "Bash", cwd, command="ls"),
+        _cred("Explore", "Bash", cwd, command="touch x"),
         _cred("Explore", "Write", cwd, file_path=f"{cwd}/notes.md"),
-        _cred("otherplugin:repo-coder", "Bash", cwd, command="ls"),
+        _cred("otherplugin:repo-coder", "Bash", cwd, command="touch x"),
     ):
         d = decide(payload, CFG)
-        assert not d.allow and "fail closed" in str(d.reason), payload
+        assert not d.allow and "read-only while" in str(d.reason), payload
 
 
 def test_unknown_agent_without_an_absolute_cwd_fails_closed() -> None:
@@ -1585,7 +1596,7 @@ def test_issue30_unknown_agent_refused_writing_into_a_marked_repo(
     filled = {k: v.format(repo=marked_repo) for k, v in tool_input.items()}
     tool = "Bash" if "command" in filled else "Write"
     d = decide(_cred("Explore", tool, str(other_repo), **filled), CFG)
-    assert not d.allow and "fail closed while" in str(d.reason), filled
+    assert not d.allow and "read-only while" in str(d.reason), filled
     assert str(train_marker(marked_repo)) in str(d.reason)
 
 
@@ -1633,6 +1644,184 @@ def test_issue30_git_init_in_the_data_dir_is_refused(
 ) -> None:
     d = decide(_cred(agent, "Bash", str(marked_repo), command=command), CFG)
     assert not d.allow and "plugin data directory" in str(d.reason), (command, d.reason)
+
+
+# 0099: main writes scratch only during a train.
+def test_main_write_under_scratch_is_allowed_during_a_train(marked_repo: Path) -> None:
+    cwd = str(marked_repo)
+    for rel in ("docs/.tmp/daedalus/20261015-120000/briefs/a1.md", "docs/.tmp/daedalus/x.md"):
+        for tool in ("Write", "Edit"):
+            d = decide(_cred(None, tool, cwd, file_path=f"{cwd}/{rel}"), CFG)
+            assert d.allow, (rel, tool, d.reason)
+    d = decide(_cred(None, "Write", cwd, file_path="docs/.tmp/daedalus/rel.md"), CFG)
+    assert d.allow, d.reason
+
+
+def test_main_write_to_the_summary_is_allowed_during_a_train(
+    marked_repo: Path, other_repo: Path
+) -> None:
+    cwd = str(marked_repo)
+    summary = f"{cwd}/docs/.tmp/daedalus/20261015-120000-summary.md"
+    for tool in ("Write", "Edit"):
+        assert decide(_cred(None, tool, cwd, file_path=summary), CFG).allow
+    # 0099: the train repo's summary stays writable from a cwd in another repo.
+    assert decide(_cred(None, "Write", str(other_repo), file_path=summary), CFG).allow
+    d = decide(_cred(None, "Write", str(other_repo), file_path=f"{cwd}/README.md"), CFG)
+    assert not d.allow
+
+
+def test_main_write_to_scripts_is_refused_during_a_train(marked_repo: Path) -> None:
+    cwd = str(marked_repo)
+    for rel in (
+        "scripts/lib/jail.py",
+        "README.md",
+        "docs/x.md",
+        "docs/.tmp/other.md",
+        "docs/.tmp/daedalus-x/y.md",
+        "docs/.tmp/daedalus/../../README.md",
+        ".claude/worktrees/u1/docs/.tmp/daedalus/x.md",
+    ):
+        for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+            key = "notebook_path" if tool == "NotebookEdit" else "file_path"
+            d = decide(_cred(None, tool, cwd, **{key: f"{cwd}/{rel}"}), CFG)
+            reason = str(d.reason)
+            assert not d.allow, (rel, tool)
+            assert "repo-coder" in reason and "worktree" in reason and "Next:" in reason, reason
+
+
+def test_main_write_anywhere_is_allowed_without_a_train(other_repo: Path) -> None:
+    cwd = str(other_repo)
+    for rel in ("scripts/lib/jail.py", "README.md", "src/app.py", "docs/x.md"):
+        for tool in ("Write", "Edit"):
+            d = decide(_cred(None, tool, cwd, file_path=f"{cwd}/{rel}"), CFG)
+            assert d.allow, (rel, tool, d.reason)
+
+
+# 0100: foreign agents read during a train.
+FOREIGN = ["Explore", "general-purpose", "otherplugin:reader"]
+
+
+@pytest.mark.parametrize("agent", FOREIGN)
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ls",
+        "cat README.md | head -5",
+        "rg -n decide scripts | wc -l",
+        "git log --oneline -5 | head -2",
+        "git diff --stat",
+        "git status --short && git show --stat",
+        "jq . .claude/daedalus/config.json",
+        "find . -name '*.py' | sort",
+    ],
+)
+def test_foreign_agent_read_only_bash_is_allowed_during_a_train(
+    marked_repo: Path, agent: str, command: str
+) -> None:
+    d = decide(_cred(agent, "Bash", str(marked_repo), command=command), CFG)
+    assert d.allow, (agent, command, d.reason)
+
+
+@pytest.mark.parametrize("agent", FOREIGN)
+def test_foreign_agent_write_is_refused_during_a_train(marked_repo: Path, agent: str) -> None:
+    cwd = str(marked_repo)
+    marker = str(train_marker(marked_repo))
+    payloads = [
+        _cred(agent, "Write", cwd, file_path=f"{cwd}/notes.md"),
+        _cred(agent, "Edit", cwd, file_path=f"{cwd}/docs/.tmp/daedalus/x.md"),
+        _cred(agent, "MultiEdit", cwd, file_path=f"{cwd}/README.md"),
+        _cred(agent, "NotebookEdit", cwd, notebook_path=f"{cwd}/n.ipynb"),
+        _cred(agent, "Agent", cwd, prompt="x"),
+        _cred(agent, "Task", cwd, prompt="x"),
+        _cred(agent, "SendMessage", cwd, message="x"),
+        _cred(agent, "WebFetch", cwd, url="https://example.com"),
+        _cred(agent, "WebSearch", cwd, query="x"),
+        _cred(agent, "Bash", cwd, command="touch x"),
+        _cred(agent, "Bash", cwd, command="echo x > y"),
+        _cred(agent, "Bash", cwd, command="cat a | tee b"),
+        _cred(agent, "Bash", cwd, command="sort -o out x"),
+        _cred(agent, "Bash", cwd, command="python3 x.py"),
+        _cred(agent, "Bash", cwd, command="curl https://example.com"),
+        _cred(agent, "Bash", cwd, command="ls | xargs rm"),
+        _cred(agent, "Bash", cwd, command="git log --output=x"),
+    ]
+    for payload in payloads:
+        d = decide(payload, CFG)
+        reason = str(d.reason)
+        assert not d.allow, payload
+        assert "read-only while" in reason and marker in reason, (payload, reason)
+
+
+@pytest.mark.parametrize("agent", FOREIGN)
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push origin main",
+        "git push -u origin feature/x",
+        "git fetch",
+        "git commit -m x",
+        "git add -A",
+        "git status && git push",
+        "git log | git push",
+    ],
+)
+def test_foreign_agent_git_push_is_refused(marked_repo: Path, agent: str, command: str) -> None:
+    d = decide(_cred(agent, "Bash", str(marked_repo), command=command), CFG)
+    assert not d.allow, (agent, command)
+
+
+# O5: coder git reads widen; --output is refused on every subcommand.
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git grep -n decide",
+        "git grep -n -e decide -- scripts",
+        f"git -C {WT} grep -il jail HEAD",
+        "git blame scripts/lib/jail.py",
+        "git blame -L 1,20 -w scripts/lib/jail.py",
+        "git merge-base main HEAD",
+        "git merge-base --is-ancestor main HEAD",
+        "git log -S _orchestrator_code --oneline",
+        "git log -S_orchestrator_code -p",
+        "git log -G 'def .*' --pickaxe-regex",
+        "git show --stat HEAD",
+        "git show -s --format=%H HEAD",
+    ],
+)
+def test_coder_git_grep_blame_merge_base_are_allowed(command: str) -> None:
+    d = hook_chain.decide(_b("repo-coder", command), CFG)
+    assert d.allow, (command, d.reason)
+
+
+def test_coder_git_diff_check_is_allowed() -> None:
+    for command in ("git diff --check", "git diff --check --cached", f"git -C {WT} diff --check"):
+        d = hook_chain.decide(_b("repo-coder", command), CFG)
+        assert d.allow, (command, d.reason)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git log --output=x",
+        "git log --output x",
+        "git log --out=x",
+        "git log -n --output=x",
+        "git log -S --output=x",
+        "git diff --check --output=/tmp/x",
+        "git show --output=x HEAD",
+        "git grep --output=x foo",
+        "git blame --output=x scripts/lib/jail.py",
+        "git merge-base --output=x main HEAD",
+        "git grep -O foo",
+        "git grep --open-files-in-pager=vi foo",
+        "git grep --no-index foo /etc",
+        "git blame --contents /etc/passwd x",
+    ],
+)
+def test_coder_git_output_flag_is_refused(command: str) -> None:
+    d = hook_chain.decide(_b("repo-coder", command), CFG)
+    assert not d.allow and d.reason is not None and "Next:" in d.reason, command
+    assert jail.R_CODER_GIT in d.reason, (command, d.reason)
 
 
 # 0044: every per-agent case unit 1.4 deleted here; each copy runs in a tests/test_checks_* file.
