@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -477,6 +478,100 @@ def test_out_under_a_file_says_not_a_directory(
         result.stderr
     )
     assert "does not exist" not in result.stderr
+
+
+class _Clock:
+    # 6.2: one fixed tick per record, so the controls seconds are exact.
+    def __init__(self, seconds: list[float]) -> None:
+        self._ticks = iter(seconds)
+
+    def now(self, tz: Any) -> datetime:
+        return datetime(2026, 10, 19, 10, 0, 0, tzinfo=tz) + timedelta(seconds=next(self._ticks))
+
+
+REPLY = "SECRET-REPLY-TEXT [STATUS: COMPLETE]"
+
+
+def _controls_chain(hook_input: Any, monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setattr(audit, "datetime", _Clock([0, 1, 2, 5, 9, 10, 12, 13, 14, 15]))
+    a1 = {"agent_id": "a1", "agent_type": "repo-coder"}
+    a2 = {"agent_id": "a2", "agent_type": "auditor"}
+    _subagent(hook_input, "SubagentStart", "a1", "repo-coder")
+    calls: list[tuple[dict[str, str], str, str, str | None, float]] = [
+        (a1, "Bash", "allow", None, 2.0),
+        (a1, "Bash", "block", "git_push: no remote git operations. Next: x", 4.0),
+        (a1, "Bash", "allow", None, 6.0),
+        (a1, "Write", "allow", None, 8.0),
+        ({}, "Write", "block", "jail: application code belongs to a unit. Next: x", 10.0),
+        ({}, "Bash", "allow", None, 12.0),
+    ]
+    for i, (who, tool, decision, reason, ms) in enumerate(calls):
+        payload = hook_input(tool_name=tool, tool_use_id=f"c{i}", **who)
+        audit.audit_append(payload, decision, reason, judge_ms=ms)
+    _subagent(hook_input, "SubagentStart", "a2", "auditor")
+    audit.audit_append(
+        hook_input(tool_use_id="c9", **a2),
+        "block",
+        "shell_tripwires: pipes are not permitted. Next: x",
+        judge_ms=14.0,
+    )
+    _subagent(hook_input, "SubagentStop", "a2", "auditor", last_assistant_message=REPLY)
+    return str(hook_input()["cwd"])
+
+
+def test_controls_counts_blocks_per_hook(
+    project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _controls_chain(hook_input, monkeypatch)
+    result = _report("--repo", repo, "--session", "sess-test", "--controls")
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert "## Control cost" in out and "## Subagent timeline" not in out
+    assert "| git\\_push | repo-coder | 1 |" in out
+    assert "| jail | main | 1 |" in out
+    assert "| shell\\_tripwires | auditor | 1 |" in out
+    assert "mean judge time: 8.0 ms over 7 calls" in out
+    # Auditor check: no reply text and no reason body enters the controls table.
+    assert "SECRET" not in out and "no remote" not in out and "pipes" not in out
+
+
+def test_controls_seconds_to_next_allowed_call(
+    project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _controls_chain(hook_input, monkeypatch)
+    out = _report("--repo", repo, "--controls").stdout
+    assert "| 3 | repo-coder | git\\_push | Bash | 3.0 |" in out
+    assert "| 6 | main | jail | Write | 2.0 |" in out
+    assert "| 9 | auditor | shell\\_tripwires | Bash | none |" in out
+
+
+def test_controls_seconds_to_first_write_per_agent(
+    project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _controls_chain(hook_input, monkeypatch)
+    out = _report("--repo", repo, "--controls").stdout
+    assert "| a1 | repo-coder | 9.0 |" in out
+    assert "| a2 | auditor | none |" in out
+
+
+def test_controls_shows_ask_as_its_own_row(project_data: Path, hook_input: Any) -> None:
+    # 0105: an ask decision is counted beside, not inside, the same hook's blocks.
+    for i, decision in enumerate(("ask", "block", "ask")):
+        audit.audit_append(
+            hook_input(tool_use_id=f"k{i}"), decision, "jail: needs the operator. Next: x"
+        )
+    out = _report("--repo", hook_input()["cwd"]).stdout
+    assert "| jail \\(ask\\) | main | 2 |" in out and "| jail | main | 1 |" in out
+    assert "- seq 1 main Bash (ask): jail: needs the operator. Next: x" in out
+
+
+def test_summary_carries_the_controls_table(
+    project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _controls_chain(hook_input, monkeypatch)
+    out = _report("--repo", repo).stdout
+    assert "## Subagent timeline" in out and "## Control cost" in out
+    assert "| jail | main | 1 |" in out and "| a1 | repo-coder | 9.0 |" in out
 
 
 def test_containment_error_names_the_matched_path(
