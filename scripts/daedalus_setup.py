@@ -50,7 +50,14 @@ def _nested_repo(root: Path) -> tuple[Path | None, bool]:
         except OSError:
             continue
         for child in children:
-            if child.name.startswith(".") or child.is_symlink() or not child.is_dir():
+            if child.name.startswith("."):
+                continue
+            if child.is_symlink():
+                # 0077: a linked repository is still re-rooted; a link is checked, never descended.
+                if os.path.lexists(child / ".git"):
+                    return child, False
+                continue
+            if not child.is_dir():
                 continue
             seen += 1
             if seen > SCAN_LIMIT:

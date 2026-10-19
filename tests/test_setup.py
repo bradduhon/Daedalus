@@ -130,6 +130,25 @@ def test_setup_refuses_a_folder_with_a_repository_two_levels_down(tmp_path: Path
     assert sorted(p.name for p in home.iterdir()) == [".cache", "projects"]
 
 
+def test_setup_refuses_a_symlinked_repository_and_ignores_a_symlinked_folder(
+    tmp_path: Path,
+) -> None:
+    # 0077: a project linked in from another drive is re-rooted all the same.
+    elsewhere = tmp_path / "elsewhere"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(elsewhere / "repo")], check=True)
+    (elsewhere / "plain").mkdir()
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    (folder / "plain-link").symlink_to(elsewhere / "plain")
+    assert _setup(folder).returncode == 0
+    (folder / "service-manifest.json").unlink()
+    (folder / "linked").symlink_to(elsewhere / "repo")
+    result = _setup(folder)
+    assert result.returncode == 1
+    assert "holds the repository linked," in result.stdout and "Next:" in result.stdout
+    assert not (folder / "service-manifest.json").exists()
+
+
 def test_setup_refuses_when_the_scan_cap_is_reached(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
