@@ -17,6 +17,7 @@ from lib.workspace import (  # noqa: E402
     finish,
     lock,
     mark_train,
+    release,
     remove,
     resume,
     stop,
@@ -27,7 +28,8 @@ from lib.workspace import (  # noqa: E402
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Daedalus worktrees and train state: create, remove, mark, unmark, begin, "
-        "lock, stop, finish, resume. Exit 0 done, 1 stopped with a Next line, 3 ledger question."
+        "lock, stop, finish, resume, release. Exit 0 done, 1 stopped with a Next line, "
+        "3 ledger question."
     )
     sub = parser.add_subparsers(dest="action", required=True)
     make = sub.add_parser("create")
@@ -54,6 +56,9 @@ def main(argv: list[str]) -> int:
     halt.add_argument("--next", dest="next_action")
     for action in ("finish", "resume"):
         sub.add_parser(action).add_argument("--repo", type=Path, required=True)
+    publish = sub.add_parser("release")
+    publish.add_argument("--repo", type=Path, required=True)
+    publish.add_argument("--merge-sha", dest="merge_sha", required=True)
     args = parser.parse_args(argv)
     repo = args.repo.resolve()
     try:
@@ -78,6 +83,8 @@ def main(argv: list[str]) -> int:
             print("\n".join(finish(repo)))
         elif args.action == "resume":
             print("\n".join(resume(repo)))
+        elif args.action == "release":
+            print("\n".join(release(repo, args.merge_sha)))
     except LedgerQuestion as exc:
         # 0004: exit 3 hands the ledger question to the operator; nothing was written.
         print(exc)
