@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from lib.config import Config, load_config
 from lib.ledger import resolve_ledger
 from lib.manifest import FEATURE_KEYS, Features, Manifest
@@ -127,6 +128,23 @@ def test_setup_refuses_a_folder_with_a_repository_two_levels_down(tmp_path: Path
     assert f"holds the repository {Path('projects') / 'repo'}," in result.stdout
     assert "Next:" in result.stdout
     assert sorted(p.name for p in home.iterdir()) == [".cache", "projects"]
+
+
+def test_setup_refuses_when_the_scan_cap_is_reached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 0077: fail closed; a tree wider than the cap is never confirmed free of repositories.
+    import daedalus_setup
+
+    monkeypatch.setattr(daedalus_setup, "SCAN_LIMIT", 3)
+    wide = tmp_path / "wide"
+    for name in ("a", "b", "c", "d", "e"):
+        (wide / name).mkdir(parents=True)
+    assert daedalus_setup.setup(wide) == 1
+    out = capsys.readouterr().out
+    assert "more than 3 folders, too many to confirm it holds no repository" in out
+    assert "Next: run the Daedalus setup skill from inside the one repository" in out
+    assert sorted(p.name for p in wide.iterdir()) == ["a", "b", "c", "d", "e"]
 
 
 def test_setup_writes_in_a_plain_folder_without_repositories(tmp_path: Path) -> None:

@@ -39,8 +39,8 @@ def _report(path: Path, written: bool) -> None:
     print(f"written: {path}" if written else f"kept: {path} (it already exists)")
 
 
-def _nested_repo(root: Path) -> Path | None:
-    # 0077: breadth-first and bounded; dot folders and symlinks are skipped so the scan ends.
+def _nested_repo(root: Path) -> tuple[Path | None, bool]:
+    # 0077: breadth-first and bounded; returns the first repository found and whether the cap hit.
     queue: deque[tuple[Path, int]] = deque([(root, 0)])
     seen = 0
     while queue:
@@ -54,18 +54,26 @@ def _nested_repo(root: Path) -> Path | None:
                 continue
             seen += 1
             if seen > SCAN_LIMIT:
-                return None
+                return None, True
             if os.path.lexists(child / ".git"):
-                return child
+                return child, False
             if depth + 1 < SCAN_DEPTH:
                 queue.append((child, depth + 1))
-    return None
+    return None, False
 
 
 def setup(repo: Path) -> int:
     root = project_root(repo)
     # 0077: starter files above repositories would become each one's project root; refuse.
-    found = None if in_git_work_tree(root) else _nested_repo(root)
+    found, capped = (None, False) if in_git_work_tree(root) else _nested_repo(root)
+    if capped:
+        # 0077: fail closed; a folder too large to scan may still hold a repository.
+        print(
+            f"setup stopped: {root} holds more than {SCAN_LIMIT} folders, too many to confirm "
+            "it holds no repository. Next: run the Daedalus setup skill from inside the one "
+            "repository you want to set up."
+        )
+        return 1
     if found is not None:
         print(
             f"setup stopped: {root} is not a git repository but holds the repository "
