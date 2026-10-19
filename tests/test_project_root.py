@@ -48,8 +48,22 @@ def test_non_git_dir_falls_back_to_itself(tmp_path: Path) -> None:
 def test_git_missing_from_path_falls_back(
     repo_cwd: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    # 0077: the root comes from the filesystem; git only labels the source.
     monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
-    assert audit.project_root(str(repo_cwd / "nested")) == repo_cwd / "nested"
+    root, source, detail = audit.root_info(str(repo_cwd / "nested"))
+    assert (root, source) == (repo_cwd, "cwd-fallback") and detail
+    assert audit.project_root(str(repo_cwd / "nested")) == repo_cwd
+
+
+def test_plain_folder_root_info_runs_no_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # CM-7, AC-6: outside a work tree neither root_info nor the data-dir check calls git.
+    plain = tmp_path.resolve() / "plain"
+    plain.mkdir()
+    _no_subprocess(monkeypatch)
+    assert audit.root_info(str(plain)) == (plain, "cwd-fallback", "no git work tree at this folder")
+    assert audit.check_project_data_dir(str(plain)) == plain / ".claude" / "daedalus"
 
 
 def test_git_timeout_falls_back(monkeypatch: pytest.MonkeyPatch, repo_cwd: Path) -> None:

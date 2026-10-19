@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 def main() -> int:
     try:
-        from lib.repo_root import train_marked
+        from lib.project_root import train_marked
 
         payload = json.loads(sys.stdin.read() or "{}")
         cwd = payload.get("cwd") if isinstance(payload, dict) else None

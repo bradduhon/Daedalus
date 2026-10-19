@@ -34,6 +34,7 @@ from lib.ledger import (  # noqa: E402
     resolve_ledger,
 )
 from lib.locks import bounded_flock  # noqa: E402
+from lib.project_root import project_root  # noqa: E402
 
 NONE_FOUND = (
     "ledger: none declared and none found. "
@@ -236,8 +237,8 @@ def _write_atomic(path: Path, text: str) -> None:
 
 
 def _require_git(path: str) -> None:
-    # M6: a non-git root would scatter .claude/daedalus/ into a plain directory.
-    if root_info(path)[1] != "git":
+    # M6, 0077: the owner resolves as the jail resolves it; a non-git root is refused.
+    if root_info(str(project_root(Path(path))))[1] != "git":
         raise AppendError(
             f"{path} is not inside a git repository. Next: run from the repo that declares "
             "the ledger, or initialize the charter repo."
@@ -250,9 +251,9 @@ def _lock_path(ledger: ResolvedLedger) -> Path:
         raise AppendError(
             f"ledger {ledger.path} does not exist. Next: create it or fix the declared path."
         )
-    owner = str(Path(real).parent)
+    owner = str(project_root(Path(real).parent))
     _require_git(owner)
-    # C1: the lock lives in the repo that owns the ledger, so every caller shares it.
+    # C1, 0077: the lock lives in the project that owns the ledger, so every caller shares it.
     locks = ensure_project_data_dir(owner) / "ledger-locks"
     if locks.is_symlink():
         raise AppendError(f"{locks} is a symlink. Next: remove it; the plugin recreates it.")

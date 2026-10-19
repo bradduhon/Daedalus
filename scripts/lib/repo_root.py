@@ -5,13 +5,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
 
 TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
 
 
 def git_root(path: str) -> Path | None:
-    # 0035: stdlib mirror of lib.audit.root_info; the main working tree, None outside git.
+    # 0035: filesystem mirror of git's common dir; the main working tree, None outside git.
     start = Path(path)
     for folder in (start, *start.parents):
         dot = folder / ".git"
@@ -32,16 +31,3 @@ def git_root(path: str) -> Path | None:
             common = gitdir
         return Path(os.path.normpath(common)).parent
     return None
-
-
-def repo_root(path: str) -> Path:
-    start = Path(path)
-    found = git_root(path)
-    return found or next((p for p in (start, *start.parents) if p.is_dir()), start)
-
-
-def train_marked(cwd: Any) -> bool:
-    # 0035: no absolute cwd means the repo is unknown, so the hook acts as if a train runs.
-    if not isinstance(cwd, str) or not os.path.isabs(cwd):
-        return True
-    return os.path.lexists(repo_root(cwd) / TRAIN_MARKER)

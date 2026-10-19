@@ -173,13 +173,13 @@ def _record(repo: Path, **fields: Any) -> dict[str, Any]:
     return rec
 
 
-def _agent_stop(repo: Path, agent: str, message: str) -> dict[str, Any]:
+def _agent_stop(repo: Path, agent: str, message: str, agent_id: str = "a1") -> dict[str, Any]:
     return _record(
         repo,
         hook_event_name="SubagentStop",
         tool_name=None,
         tool_input=None,
-        agent_id="a1",
+        agent_id=agent_id,
         agent_type=f"daedalus:{agent}",
         last_assistant_message=message,
     )
@@ -215,9 +215,11 @@ def _prompt(outcome: train_runner.Outcome) -> list[Path]:
     ]
 
 
-def _reply(repo: Path, brief: Path, text: str, agent: str = "repo-coder") -> None:
+def _reply(
+    repo: Path, brief: Path, text: str, agent: str = "repo-coder", agent_id: str = "a1"
+) -> None:
     train_runner.reply_path(brief).write_text(text, encoding="utf-8")
-    _agent_stop(repo, agent, text)
+    _agent_stop(repo, agent, text, agent_id)
 
 
 def _nothing_written(root: Path) -> None:
@@ -390,6 +392,29 @@ def test_check_reply_hash_mismatch_stops(repo: Path, plugin: Path) -> None:
     assert _step(repo, plugin).code == 1
 
 
+@pytest.mark.parametrize("damage", ["no-key", "no-reply", "bad-utf8", "chain"])
+def test_check_reply_fails_closed_on_any_read_error(repo: Path, plugin: Path, damage: str) -> None:
+    # SI-7: a missing key, a missing or undecodable reply, or a broken log is a mismatch.
+    _write_train(plugin, [_code_stage()], ("repository",))
+    _started(repo, plugin)
+    (brief,) = _prompt(_step(repo, plugin))
+    _reply(repo, brief, COMPLETE)
+    data = repo / ".claude" / "daedalus"
+    if damage == "no-key":
+        (data / audit.REPLY_KEY).unlink()
+    elif damage == "no-reply":
+        train_runner.reply_path(brief).unlink()
+    elif damage == "bad-utf8":
+        train_runner.reply_path(brief).write_bytes(b"\xff\xfe")
+    else:
+        log = data / "audit" / f"{SESSION}.jsonl"
+        log.write_text(log.read_text().replace('"seq":2', '"seq":9', 1))
+    outcome = train_runner.check_reply(repo, "code", plugin)
+    assert outcome.code == 1, outcome.lines
+    assert "does not match what repo-coder returned" in outcome.lines[0]
+    assert _state(repo)["halted"]
+
+
 def _agent_call(repo: Path, subagent: str) -> dict[str, object]:
     return {
         "session_id": SESSION,
@@ -558,23 +583,53 @@ def test_parallel_stage_dispatches_up_to_the_configured_concurrency(
 
 def test_next_queued_unit_starts_when_one_returns(repo: Path, plugin: Path) -> None:
     _write_train(plugin, [_code_stage(per_unit=True)], ("repository",))
+    _config(repo, {"max_concurrent_builders": 2})
     _started(repo, plugin)
-    _units(repo, ["u1", "u2", "u3"], stacked={"u3": "u1"})
-    first = _step(repo, plugin)
-    briefs = _prompt(first)
-    assert len(briefs) == 2, "u3 stacks on u1, so it waits although five slots are free"
-    _reply(repo, briefs[0], COMPLETE)
+    _units(repo, ["u1", "u2", "u3"])
+    briefs = _prompt(_step(repo, plugin))
+    assert len(briefs) == 2
+    _reply(repo, briefs[0], COMPLETE, agent_id="coder-1")
     checked = _check(repo, plugin, "code")
     assert checked.code == 0, checked.lines
     train = str(_state(repo)["train_id"])
     assert checked.lines[0] == f"stage code for unit {train}-u1: [STATUS: COMPLETE], pass."
+    assert checked.lines[1] == "Dispatch: repo-coder", "u3 builds on no unit, so it starts cold"
     (third,) = _prompt(checked)
     assert third.name == "code-3.md" and f"{train}-u3" in third.read_text()
-    for brief in (briefs[1], third):
-        _reply(repo, brief, COMPLETE + f" {brief.stem}")
+    for n, brief in enumerate((briefs[1], third), start=2):
+        _reply(repo, brief, COMPLETE + f" {brief.stem}", agent_id=f"coder-{n}")
         assert _check(repo, plugin, "code").code == 0
     done = _step(repo, plugin)
     assert done.code == 0 and "every stage of t has passed" in done.lines[-2]
+
+
+def test_stacked_unit_resumes_the_coder_that_built_its_base(repo: Path, plugin: Path) -> None:
+    # 0086: a unit stacked on a returned unit goes to that unit's coder, rebound to its worktree.
+    from lib import unit_binding
+
+    _write_train(plugin, [_code_stage(per_unit=True)], ("repository",))
+    _started(repo, plugin)
+    _units(repo, ["u1", "u2", "u3"], stacked={"u2": "u1", "u3": "u1"})
+    first = _step(repo, plugin)
+    (brief,) = _prompt(first)
+    assert "Dispatch: repo-coder" in first.lines, "no coder built a base yet, so u1 starts cold"
+    _reply(repo, brief, COMPLETE, agent_id="coder-a")
+    checked = _check(repo, plugin, "code")
+    assert checked.code == 0, checked.lines
+    train = str(_state(repo)["train_id"])
+    u2_path = repo / ".claude" / "worktrees" / f"{train}-u2"
+    assert checked.lines[1] == f"Resume: repo-coder coder-a in worktree {u2_path}"
+    assert not [line for line in checked.lines if line.startswith("Dispatch: ")]
+    (second,) = _prompt(checked)
+    assert second.read_text().startswith(f"Worktree: {u2_path}\n")
+    assert unit_binding.claim(repo, train, "coder-a", f"{train}-u2") is None
+    assert _step(repo, plugin).code == 4, "u3 waits for coder-a, which is busy on u2"
+    refused = decide(_agent_call(repo, "daedalus:repo-coder"), Config())
+    assert not refused.allow, "a resume is no fresh Agent dispatch of repo-coder"
+    _reply(repo, second, COMPLETE + " u2", agent_id="coder-a")
+    again = _check(repo, plugin, "code")
+    u3_path = repo / ".claude" / "worktrees" / f"{train}-u3"
+    assert again.lines[1] == f"Resume: repo-coder coder-a in worktree {u3_path}"
 
 
 def test_concurrency_defaults_to_five_and_refuses_zero(

@@ -228,7 +228,7 @@ def _lone_script(tmp_path: Path, gate: bool = True) -> Path:
     shutil.copy(_SCRIPT, lone / "enforce_agent_jail.py")
     if gate:
         (lone / "lib").mkdir()
-        for name in ("__init__.py", "repo_root.py"):
+        for name in ("__init__.py", "repo_root.py", "project_root.py"):
             shutil.copy(_SCRIPT.parent / "lib" / name, lone / "lib" / name)
     return lone / "enforce_agent_jail.py"
 
@@ -258,8 +258,8 @@ def test_missing_marker_finder_fails_closed_inside_a_train(
 
 
 def test_inline_marker_finder_agrees_with_the_library(repo_cwd: Path) -> None:
-    # 0035: the jail's fallback finder and lib.repo_root resolve every path the same way.
-    from lib import repo_root
+    # 0035: the jail's fallback finder and lib.project_root resolve every path the same way.
+    from lib import project_root, repo_root
 
     (repo_cwd / "README").write_text("r\n")
     _git_commit_all(repo_cwd)
@@ -271,11 +271,57 @@ def test_inline_marker_finder_agrees_with_the_library(repo_cwd: Path) -> None:
         if marked:
             write_train_marker(repo_cwd)
         for path in paths:
-            got = enforce_agent_jail._inline_repo_root(str(path))
-            assert got == repo_root.repo_root(str(path)) == repo_cwd
+            got = enforce_agent_jail._inline_project_root(path)
+            assert got == project_root.project_root(path) == repo_cwd
             inline = enforce_agent_jail._inline_train_marked(str(path))
-            assert inline == repo_root.train_marked(str(path)) == marked
+            assert inline == project_root.train_marked(str(path)) == marked
     assert enforce_agent_jail._TRAIN_MARKER == repo_root.TRAIN_MARKER
+    assert enforce_agent_jail._MANIFEST == project_root.MANIFEST
+    assert enforce_agent_jail._DATA_DIR == project_root.DATA_DIR
+
+
+def test_inline_project_root_matches_lib(repo_cwd: Path, tmp_path: Path) -> None:
+    # 0035, CM-5: the inline copy and the library give one answer over every fixture path.
+    from lib import project_root, repo_root
+
+    (repo_cwd / "service-manifest.json").write_text("{}")
+    _git_commit_all(repo_cwd)
+    linked = repo_cwd / ".claude" / "worktrees" / "u1"
+    outside = tmp_path.resolve() / "outside-wt"
+    for path in (linked, outside):
+        subprocess.run(["git", "-C", str(repo_cwd), "worktree", "add", "-q", str(path)], check=True)
+    nested = repo_cwd / "docs" / "private"
+    nested.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(nested)], check=True)
+    inner = repo_cwd / "pkg"
+    inner.mkdir()
+    (inner / "service-manifest.json").write_text("{}")
+    folder = tmp_path.resolve() / "folder"
+    (folder / ".claude" / "daedalus").mkdir(parents=True)
+    (folder / "x").mkdir()
+    plain = tmp_path.resolve() / "plain"
+    plain.mkdir()
+    lone_git = tmp_path.resolve() / "lone"
+    lone_git.mkdir()
+    (lone_git / ".git").write_text("not a gitdir line\n")
+    paths = [
+        repo_cwd,
+        repo_cwd / "missing" / "file",
+        linked,
+        outside / "sub",
+        nested,
+        nested / "deep",
+        inner / "src",
+        folder / "x",
+        plain,
+        plain / "missing",
+        lone_git / "a",
+        Path("/"),
+    ]
+    for path in paths:
+        lib = project_root.project_root(path)
+        assert enforce_agent_jail._inline_project_root(path) == lib, path
+        assert enforce_agent_jail._inline_git_root(str(path)) == repo_root.git_root(str(path))
 
 
 def test_missing_libraries_fail_closed_during_a_train(
@@ -647,9 +693,13 @@ def test_fast_path_imports_only_the_standard_library_modules(repo_cwd: Path) -> 
     assert not loaded & {"lib.jail", "lib.audit", "lib.config", "subprocess"}
 
 
-@pytest.mark.parametrize("module", ["credential_paths.py", "train_scope.py", "repo_root.py"])
+@pytest.mark.parametrize(
+    "module", ["credential_paths.py", "train_scope.py", "repo_root.py", "project_root.py"]
+)
 def test_fast_path_modules_use_the_standard_library_only(module: str) -> None:
+    # 0035: a fast-path module imports the standard library and other fast-path modules only.
     tree = ast.parse((_SCRIPT.parent / "lib" / module).read_text())
     names = [a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names]
     names += [n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)]
-    assert not [n for n in names if n == "lib" or n.startswith("lib.")]
+    fast = {"lib.repo_root"} if module == "project_root.py" else set()
+    assert not [n for n in names if (n == "lib" or n.startswith("lib.")) and n not in fast]

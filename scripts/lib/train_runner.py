@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
+import os
 import re
 import shlex
 import subprocess
@@ -16,6 +18,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from lib import manifest, train_definition, train_state, workspace
+from lib.audit import ReplyKeyError, message_hmac, reply_key
 from lib.audit_proof import SUMMARY_DIR, ProofError, hooks_live, newest_log, read_chain
 from lib.config import ConfigError, load_config
 from lib.jail import normalize_agent
@@ -419,11 +422,12 @@ def _stage_dispatches(session: Session, sid: str) -> list[dict[str, object]]:
     return [d for d in _objects(session.state, "dispatches") if d.get("stage") == sid]
 
 
-def _unit_by_name(session: Session) -> dict[str, dict[str, object]]:
-    return {_text(u, "name"): u for u in train_state.units(session.state)}
-
-
-def _render(session: Session, stage: dict[str, object], unit: dict[str, object] | None) -> Path:
+def _render(
+    session: Session,
+    stage: dict[str, object],
+    unit: dict[str, object] | None,
+    coder: str | None = None,
+) -> Path:
     sid = _text(stage, "id")
     told = _text(_obj(stage, "scope"), "told")
     template = session.plugin_root / told
@@ -454,6 +458,7 @@ def _render(session: Session, stage: dict[str, object], unit: dict[str, object] 
         "status": DISPATCHED,
         "brief": str(brief),
         "reply": str(reply_path(brief)),
+        "coder": coder,
     }
 
     def change(state: dict[str, object]) -> None:
@@ -482,21 +487,60 @@ def _waiting(session: Session, stage: dict[str, object], open_: list[dict[str, o
     return Outcome(EXIT_WAIT, session.lines)
 
 
+def _resume_lines(
+    stage: dict[str, object], coder: str, unit: dict[str, object], brief: Path
+) -> list[str]:
+    expect = " or ".join(_strings(_obj(stage, "scope").get("reply")))
+    return [
+        f"Resume: {_text(stage, 'agent')} {coder} in worktree {_text(unit, 'path')}",
+        f"Prompt file: {brief}",
+        f"Expect: {expect}",
+    ]
+
+
+def _warm(session: Session, stage: dict[str, object], unit: dict[str, object], coder: str) -> None:
+    # 0086: the coder that built the base resumes on this unit and is rebound to its worktree.
+    from lib.unit_binding import rebind
+
+    held = [
+        d
+        for d in _stage_dispatches(session, _text(stage, "id"))
+        if d.get("coder") == coder and d.get("status") == RETURNED
+    ]
+    from_unit = _text(held[-1], "unit") if held else ""
+    refused = rebind(session.repo, session.train_id, coder, from_unit, _text(unit, "name"))
+    if refused is not None:
+        raise RunnerError(refused)
+    brief = _render(session, stage, unit, coder)
+    session.lines += _resume_lines(stage, coder, unit, brief)
+
+
 def _fill_queue(session: Session, stage: dict[str, object]) -> tuple[int, int]:
     # 0072: queued units dispatch up to the concurrency; a stacked unit waits for its base unit.
     sid = _text(stage, "id")
     current = [d for d in _stage_dispatches(session, sid) if d.get("status") != SUPERSEDED]
-    done = {_text(d, "unit") for d in current if d.get("status") == RETURNED}
+    returned = {_text(d, "unit"): d for d in current if d.get("status") == RETURNED}
     active = {_text(d, "unit") for d in current if d.get("status") == DISPATCHED}
+    busy = {_text(d, "coder") for d in current if d.get("status") == DISPATCHED} - {""}
     units = train_state.units(session.state)
     branches = {_text(u, "branch"): _text(u, "name") for u in units}
-    queued = [u for u in units if _text(u, "name") not in done | active]
-    ready = [u for u in queued if branches.get(_text(u, "base"), "") in done | {""}]
-    limit = _int(session.state, "max_concurrent_builders", 5)
-    picks = ready[: max(limit - len(active), 0)]
-    for unit in picks:
-        session.lines += _dispatch_lines(stage, _render(session, stage, unit))
-    return len(picks), len(queued) - len(picks)
+    queued = [u for u in units if _text(u, "name") not in set(returned) | active]
+    room = max(_int(session.state, "max_concurrent_builders", 5) - len(active), 0)
+    started = 0
+    for unit in queued:
+        base = branches.get(_text(unit, "base"), "")
+        if started >= room or (base and base not in returned):
+            continue
+        coder = _text(returned[base], "coder") if base else ""
+        if coder in busy:
+            continue  # 0086: the warm coder is on another unit; this one waits for it.
+        if coder:
+            busy.add(coder)
+            _warm(session, stage, unit, coder)
+        else:
+            session.lines += _dispatch_lines(stage, _render(session, stage, unit))
+        started += 1
+    return started, len(queued) - started
 
 
 def _no_units(session: Session, sid: str) -> Outcome:
@@ -634,19 +678,44 @@ def _step(session: Session) -> Outcome:
     return Outcome(EXIT_OK, session.lines)
 
 
-def _stops_for(session: Session, agent: str) -> list[dict[str, object]]:
-    try:
-        records = read_chain(newest_log(session.repo))
-    except ProofError as exc:
-        raise RunnerError(str(exc)) from exc
-    used = set(_seqs(session.state))
+Saved = tuple[dict[str, object], Path, str, str]
+
+
+def _stops_for(
+    records: list[dict[str, object]], agent: str, used: set[int]
+) -> list[dict[str, object]]:
     return [
-        {str(k): v for k, v in r.items()}
+        r
         for r in records
         if r.get("event") == "SubagentStop"
         and normalize_agent(str(r.get("agent_type") or "")) == agent
         and r.get("seq") not in used
     ]
+
+
+def _saved(open_: list[dict[str, object]], key: bytes) -> list[Saved]:
+    # SI-7: an unreadable or non-UTF-8 reply raises, and the caller counts it a mismatch.
+    found: list[Saved] = []
+    for item in open_:
+        path = Path(_text(item, "reply"))
+        if not os.path.lexists(path):
+            continue
+        if path.is_symlink():
+            raise OSError(f"{path} is a symlink")
+        data = path.read_bytes()
+        found.append((item, path, message_hmac(key, data), data.decode("utf-8")))
+    return found
+
+
+def _mismatch(session: Session, sid: str, agent: str, why: str) -> Outcome:
+    session.lines.append(
+        f"stage {sid}: the saved reply does not match what {agent} returned ({why})."
+    )
+    return _halt(
+        session,
+        "Next: the saved reply differs from the agent's own reply; stop the train and report "
+        "the saved reply file to the operator.",
+    )
 
 
 def check_reply(cwd: Path, stage_id: str, plugin_root: Path = PLUGIN_ROOT) -> Outcome:
@@ -661,15 +730,6 @@ def check_reply(cwd: Path, stage_id: str, plugin_root: Path = PLUGIN_ROOT) -> Ou
         return Outcome(EXIT_STOP, session.lines)
     finally:
         session.commit()
-
-
-def _saved(open_: list[dict[str, object]]) -> list[tuple[dict[str, object], Path, str]]:
-    found = []
-    for item in open_:
-        path = Path(_text(item, "reply"))
-        if path.is_file() and not path.is_symlink():
-            found.append((item, path, _sha256(path.read_bytes())))
-    return found
 
 
 def _check_reply(session: Session, sid: str) -> Outcome:
@@ -691,28 +751,24 @@ def _check_reply(session: Session, sid: str) -> Outcome:
             f"no dispatch of stage {sid} is waiting for a reply. "
             "Next: run step to see what the train waits for."
         )
-    saved = _saved(open_)
-    if not saved:
-        raise RunnerError(
-            f"no saved reply for stage {sid}. Next: save the reply verbatim with the Write tool "
-            f"to {', '.join(_text(d, 'reply') for d in open_)}, then run check-reply again."
-        )
     agent = _text(stage, "agent")
-    stops = _stops_for(session, agent)
+    try:
+        key = reply_key(str(session.repo), create=False)
+        records = read_chain(newest_log(session.repo))
+        saved = _saved(open_, key)
+    except (ReplyKeyError, ProofError, OSError, UnicodeError) as exc:
+        return _mismatch(session, sid, agent, str(exc))
+    if not saved:
+        paths = ", ".join(_text(d, "reply") for d in open_)
+        return _mismatch(session, sid, agent, f"no reply was saved at {paths}")
+    stops = _stops_for(records, agent, set(_seqs(session.state)))
     for record in reversed(stops):
-        for item, path, digest in saved:
-            if record.get("last_message_sha256") == digest:
-                return _checked_in(session, index, stage, item, path, record)
+        digest = record.get("last_message_hmac")
+        for item, path, mac, text in saved:
+            if isinstance(digest, str) and hmac.compare_digest(digest, mac):
+                return _checked_in(session, index, stage, item, path, text, record)
     newest = stops[-1].get("seq") if stops else "none"
-    session.lines.append(
-        f"stage {sid}: the saved reply does not match what {agent} returned "
-        f"(newest unread {agent} stop record: seq {newest})."
-    )
-    return _halt(
-        session,
-        "Next: the saved reply differs from the agent's own reply; stop the train and report "
-        "the saved reply file to the operator.",
-    )
+    return _mismatch(session, sid, agent, f"newest unread {agent} stop record: seq {newest}")
 
 
 def _checked_in(
@@ -721,12 +777,16 @@ def _checked_in(
     stage: dict[str, object],
     item: dict[str, object],
     path: Path,
+    text: str,
     record: dict[str, object],
 ) -> Outcome:
     sid, n_key = _text(stage, "id"), (_text(item, "stage"), _int(item, "n", 0))
     seq = record.get("seq")
     _set(session, "consumed_records", [*_seqs(session.state), seq])
-    text = path.read_text(encoding="utf-8", errors="replace")
+    # 0086: the coder's binding id, so a unit stacked on this one resumes the same coder.
+    coder = record.get("agent_id")
+    if isinstance(coder, str) and coder:
+        _set_dispatch(session, n_key, coder=coder)
     accepted = _strings(_obj(stage, "scope").get("reply"))
     line = _contract_line(text, accepted)
     unit = _text(item, "unit")
@@ -878,18 +938,23 @@ def _record_start(
     )
 
 
-def allowed_dispatch(state: dict[str, object]) -> tuple[set[str], str]:
-    # 4.8: the agents step printed for the current stage, the gate's consults, and open consults.
+def allowed_dispatch(state: dict[str, object]) -> tuple[set[str], str, str]:
+    # 4.8, AC-3: open fresh dispatches of the current stage only, its gate's consults, and
+    # consult routes opened since the stage began; a warm resume is no Agent call.
     defn = _loaded(state)
     stages = _stages(defn)
     index = _int(state, "stage_index", 0)
-    gate = _text(stages[index], "gate") if index < len(stages) else ""
+    if index >= len(stages):
+        return set(), "none", "none"
+    sid, gate = _text(stages[index], "id"), _text(stages[index], "gate")
     allowed = {
-        _text(d, "agent") for d in _objects(state, "dispatches") if d.get("status") == DISPATCHED
+        _text(d, "agent")
+        for d in _objects(state, "dispatches")
+        if d.get("stage") == sid and d.get("status") == DISPATCHED and not d.get("coder")
     }
     allowed |= set(_strings(_obj(defn.raw, "consults").get(gate)))
     allowed |= set(_strings(state.get("consults_open")))
-    return allowed, gate
+    return allowed, sid, gate
 
 
 def state_lines(cwd: Path, plugin_root: Path = PLUGIN_ROOT) -> Outcome:
