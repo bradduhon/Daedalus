@@ -10,6 +10,8 @@ import re
 import stat
 import subprocess
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -367,6 +369,34 @@ def build_record(
     }
 
 
+class AuditLockError(RuntimeError):
+    pass
+
+
+@contextmanager
+def audit_lock(lock: Path) -> Iterator[None]:
+    # issue 10: the one bounded lock the writer and every reader of a session log take.
+    try:
+        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as exc:
+        raise AuditLockError(
+            f"cannot open the audit lock {lock} ({exc}). "
+            "Next: remove it from your own shell if it is a symlink, then retry."
+        ) from exc
+    with os.fdopen(fd, "w") as handle:
+        try:
+            bounded_flock(handle, LOCK_TIMEOUT_S, LOCK_POLL_S, label="audit lock")
+        except RuntimeError as exc:
+            raise AuditLockError(str(exc)) from exc
+        yield
+
+
+def read_log(path: Path) -> str:
+    # issue 10: read under the writer's lock, so an append in flight is never half a line.
+    with audit_lock(path.with_suffix(".lock")):
+        return path.read_bytes().decode("utf-8")
+
+
 def _tail_record(path: Path) -> dict[str, Any] | None:
     if not path.exists() or path.stat().st_size == 0:
         return None
@@ -408,8 +438,7 @@ def audit_append(
     record = build_record(hook_input, decision, reason, key)
     record["project_root"] = str(root)
     record["root_source"] = source
-    with open(lock, "w") as lock_fh:
-        bounded_flock(lock_fh, LOCK_TIMEOUT_S, LOCK_POLL_S, label="audit lock")
+    with audit_lock(lock):
         tail = _tail_record(path)
         record["seq"] = 1 if tail is None else int(tail["seq"]) + 1
         record["prev_hash"] = GENESIS if tail is None else tail["hash"]
