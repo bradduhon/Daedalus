@@ -3,7 +3,7 @@ name: orchestrator
 description: Runs one Build Train from its plan to the audited integration tip. Starts coders and specialists, routes their yields, keeps the State Block and judges every return; hands each operator decision to the main session, never pushes and never merges into main.
 tools: Agent, SendMessage, Read, Write, Edit, Bash, Glob, Grep
 disallowedTools: Task, MultiEdit, NotebookEdit, WebFetch, WebSearch
-model: opus
+model: fable
 shape: dispatcher
 phases: [context, clarification, plan, implementation, audit]
 # 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).
