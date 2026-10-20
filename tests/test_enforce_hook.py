@@ -186,10 +186,21 @@ def test_data_dir_without_a_train_marker_gets_no_record(
     assert sorted(p.name for p in project_data.iterdir()) == []
 
 
+AUDITOR = {"agent_type": "daedalus:security-auditor", "agent_id": "a1"}
+
+
+def _last_record(project_data: Path) -> dict[str, Any]:
+    return dict(
+        json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
+    )
+
+
 def test_malformed_config_blocks(run_script: Any, project_data: Path, hook_input: Any) -> None:
+    # 0106: an agent's call stays blocked on a config failure.
     _in_train(project_data)
     (project_data / "config.json").write_text("{bad")
-    result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
+    payload = hook_input(tool_input={"command": "ls"}, **AUDITOR)
+    result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2 and "config.json" in result.stderr
 
 
@@ -198,12 +209,48 @@ def test_oversized_int_config_blocks_and_records(
 ) -> None:
     _in_train(project_data)
     (project_data / "config.json").write_text('{"x": ' + "1" * 5000 + "}")
-    result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
+    payload = hook_input(tool_input={"command": "ls"}, **AUDITOR)
+    result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2
-    assert result.stderr.startswith("daedalus-jail[main]: ")
+    assert result.stderr.startswith("daedalus-jail[daedalus:security-auditor]: ")
     assert "Next:" in result.stderr
-    rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
+    rec = _last_record(project_data)
     assert rec["decision"] == "block" and "not valid JSON" in rec["reason"]
+
+
+def test_malformed_config_asks_the_operator_and_records_the_ask(
+    run_script: Any, project_data: Path, hook_input: Any
+) -> None:
+    # 0106, AC-3: the operator's own session is asked, and the ask carries the exception text.
+    _in_train(project_data)
+    (project_data / "config.json").write_text("{bad")
+    result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
+    assert result.returncode == 0 and result.stderr == "", result.stderr
+    reason = _ask_reason(result.stdout)
+    assert reason.startswith(enforce_agent_jail._CONFIG_ASK + " (")
+    assert "not valid JSON" in reason and "Next:" in reason
+    rec = _last_record(project_data)
+    assert rec["decision"] == "ask" and rec["reason"].startswith("config: ")
+    assert "not valid JSON" in rec["reason"]
+
+
+def test_config_failure_with_no_audit_record_asks_the_operator_unrecorded(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    project_data: Path,
+    hook_input: Any,
+) -> None:
+    # 0106, AU-5: the stderr line is the alert, then the ask names the unrecorded call.
+    _in_train(project_data)
+    (project_data / "config.json").write_text("{bad")
+    (project_data / "audit").write_text("not a directory")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(hook_input())))
+    assert enforce_agent_jail.main() == 0
+    out = capsys.readouterr()
+    assert "audit log unavailable" in out.err
+    reason = _ask_reason(out.out)
+    assert reason.startswith(enforce_agent_jail._AUDIT_ASK)
+    assert enforce_agent_jail._CONFIG_ASK in reason and "not valid JSON" in reason
 
 
 def test_malformed_config_records_block(
@@ -211,7 +258,8 @@ def test_malformed_config_records_block(
 ) -> None:
     _in_train(project_data)
     (project_data / "config.json").write_text("{bad")
-    result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
+    payload = hook_input(tool_input={"command": "ls"}, **AUDITOR)
+    result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2
     rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
     assert rec["decision"] == "block"
@@ -441,14 +489,60 @@ def test_decide_exception_blocks_and_records(
     def _boom(*_args: Any) -> Any:
         raise RuntimeError("decide exploded")
 
+    # 0106: a foreign agent's call stays blocked when the judge raises.
+    _in_train(project_data)
+    monkeypatch.setattr(jail, "decide", _boom)
+    payload = hook_input(agent_type="ghost", agent_id="g1")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    assert enforce_agent_jail.main() == 2
+    err = capsys.readouterr().err
+    assert err.startswith("daedalus-jail[ghost]: jail: decide exploded Next:")
+    rec = _last_record(project_data)
+    assert rec["decision"] == "block" and rec["reason"].startswith("jail: decide exploded")
+
+
+def test_routed_agent_judge_exception_blocks_and_records(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    project_data: Path,
+    hook_input: Any,
+) -> None:
+    # 0106: a Daedalus agent's call stays blocked when the router raises.
+    def _boom(*_args: Any) -> Any:
+        raise RuntimeError("router exploded")
+
+    from lib import router
+
+    _in_train(project_data)
+    monkeypatch.setattr(router, "route", _boom)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(hook_input(**AUDITOR))))
+    assert enforce_agent_jail.main() == 2
+    err = capsys.readouterr().err
+    assert err.startswith("daedalus-jail[daedalus:security-auditor]: jail: router exploded")
+    assert _last_record(project_data)["decision"] == "block"
+
+
+def test_judge_exception_asks_the_operator_and_records_the_ask(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    project_data: Path,
+    hook_input: Any,
+) -> None:
+    # 0106, AC-3: the operator's own session is asked, and the ask carries the exception text.
+    def _boom(*_args: Any) -> Any:
+        raise RuntimeError("decide exploded")
+
     _in_train(project_data)
     monkeypatch.setattr(jail, "decide", _boom)
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(hook_input())))
-    assert enforce_agent_jail.main() == 2
-    err = capsys.readouterr().err
-    assert err.startswith("daedalus-jail[main]: jail: decide exploded Next:")
-    rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
-    assert rec["decision"] == "block" and rec["reason"].startswith("jail: decide exploded")
+    assert enforce_agent_jail.main() == 0
+    out = capsys.readouterr()
+    assert out.err == ""
+    reason = _ask_reason(out.out)
+    assert reason.startswith(f"{enforce_agent_jail._JUDGE_ASK} (decide exploded).")
+    assert enforce_agent_jail._REPORT_NEXT.strip() in reason
+    rec = _last_record(project_data)
+    assert rec["decision"] == "ask" and rec["reason"].startswith("jail: decide exploded Next:")
 
 
 @pytest.mark.parametrize("cwd", [None, "relative"])
@@ -466,8 +560,8 @@ def test_config_in_project_data_dir_is_loaded(
     _in_train(project_data)
     (project_data / "config.json").write_text('{"ledger": {"path": "/x"}}')
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
-    assert result.returncode == 2
-    assert "config.json is missing ledger.format" in result.stderr
+    assert result.returncode == 0, result.stderr
+    assert "config.json is missing ledger.format" in _ask_reason(result.stdout)
 
 
 def _git_commit_all(repo: Path) -> None:
@@ -641,7 +735,8 @@ def test_bad_config_still_blocks_bash(
 ) -> None:
     _in_train(project_data)
     (project_data / "config.json").write_text("{bad")
-    result = _run_home(hook_input(tool_input={"command": "ls"}), temp_home, plugin_data)
+    payload = hook_input(tool_input={"command": "ls"}, **AUDITOR)
+    result = _run_home(payload, temp_home, plugin_data)
     assert result.returncode == 2 and "config.json" in result.stderr
 
 

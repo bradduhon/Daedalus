@@ -41,6 +41,8 @@ _CREDENTIAL_ASK = (
 )
 _LOAD_ASK = "the jail's library failed to load; approving runs this call unjudged during a train"
 _AUDIT_ASK = "the audit log cannot be written; approving leaves this call unrecorded"
+_CONFIG_ASK = "the project config failed to load; approving runs this call unjudged during a train"
+_JUDGE_ASK = "the jail failed while judging this call; approving runs it unjudged during a train"
 
 
 _TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
@@ -227,6 +229,35 @@ def _record_and_block(
     return _block(agent, message)
 
 
+def _hook_failed(
+    payload: dict[str, object],
+    agent: str,
+    hook: str,
+    exc: Exception,
+    ask_lead: str,
+    next_step: str = _REPORT_NEXT,
+) -> int:
+    # 0106: a hook failure asks the operator's own session; agents keep the recorded block.
+    # 0010: no absolute cwd names no repository to record in, so that call stays blocked.
+    cwd = payload.get("cwd")
+    if not _bare_main(payload) or not (isinstance(cwd, str) and os.path.isabs(cwd)):
+        return _record_and_block(payload, agent, f"{hook}: {exc}", next_step)
+    from lib.audit import audit_append
+
+    record = f"{hook}: {exc}"
+    text = f"{ask_lead} ({exc})."
+    if "Next:" not in record:
+        record += next_step
+        text += next_step
+    try:
+        audit_append(payload, "ask", record)
+    except Exception as audit_exc:  # noqa: BLE001
+        # 0106, AU-5: the stderr line is the alert; the operator may run the call unrecorded.
+        _note(agent, f"audit log unavailable ({audit_exc}).")
+        return _ask(f"{_AUDIT_ASK} ({audit_exc}). The jail's finding: {text}")
+    return _ask(text)
+
+
 def _judge(payload: dict[str, object], agent: str) -> int:
     from lib.audit import audit_append
     from lib.config import Config, load_config
@@ -241,7 +272,8 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         config = load_config(cwd if isinstance(cwd, str) else None)
     except Exception as exc:  # noqa: BLE001
         if not read:
-            return _record_and_block(payload, agent, f"{_CONFIG_HOOK}: {exc}", _CONFIG_NEXT)
+            # 0106: the operator's own session is asked; an agent's call stays blocked.
+            return _hook_failed(payload, agent, _CONFIG_HOOK, exc, _CONFIG_ASK, _CONFIG_NEXT)
         config = Config()
     ask = False
     finding: str | None = None
@@ -338,7 +370,8 @@ def main() -> int:
     try:
         return _judge(payload, agent)
     except Exception as exc:  # noqa: BLE001
-        return _record_and_block(payload, agent, f"{_JAIL_HOOK}: {exc}")
+        # 0106: the operator's own session is asked; an agent's call stays blocked.
+        return _hook_failed(payload, agent, _JAIL_HOOK, exc, _JUDGE_ASK)
 
 
 if __name__ == "__main__":
