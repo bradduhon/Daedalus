@@ -23,18 +23,17 @@ Every file and setting daedalus reads, with the smallest example that works. `/d
     { "kind": "file", "path": "/absolute/path/to/repo/CLAUDE.md" }
   ],
   "policy": { "engine": "conftest", "path": "/absolute/path/to/your/decisions/repo/policy" },
-  "operator_signing_keys": []
+  "operator_signing_keys": [],
+  "max_concurrent_builders": 5,
+  "audit_retention_days": null
 }
 ```
 
-| Key | What it is | If absent |
-|---|---|---|
-| `charter_root` | Repo where decisions and specs live. Agents may write there. | contract-spec and charter-docs can write only inside the target repo |
-| `ledger` **(checked)** | Where rulings are appended. `format` is `markdown-table-row` (one table row per ruling) or `heading-entry` (one `## Entry N` section per ruling). `sequence_source` is `last-row-id` or `frontmatter:<key>`. | The Build Train stops and asks before creating one |
-| `standards_sources` **(checked)** | Directories or files holding your rules. `kind` is `rules-dir`, `file` or `pack`. | The Standards Packet is empty and the auditor judges against the spec only; the doctor offers the baseline pack on an `OPT` line |
-| `policy` **(checked)** | Deterministic policy pack. `engine` is `cfn-guard` or `conftest`. daedalus ships no rules; the directory is yours. | No effect today; a later Daedalus release adds the deterministic gate for infrastructure diffs |
-| `operator_signing_keys` | Fingerprints allowed to sign merges. | No effect today; a later Daedalus release adds the merge-gate check that reads it |
-| `audit_retention_days` **(checked)** | Days a session's audit log is kept after its last record; a whole number of at least 90 (AU-11). When a new session writes its first record, each older log is deleted under its own lock, and one `AuditRotation` record in the new session's chain names every deleted session with its final seq and hash (AU-9(4)). A log named on a summary's `Session <id>:` line, a log changed since an unmerged train started, the current session's log, and a log another session holds are kept. Any read or parse error deletes nothing. | Every audit log is kept |
+Every key in this file is a row of the generated key reference in the plugin [README](../README.md#key-reference): what it governs, its type, its allowed values, its default and an example. The doctor checks `ledger`, `standards_sources`, `policy` and `audit_retention_days` **(checked)**. A key set to `null` counts as absent (0076). Three notes the table has no room for:
+
+- `ledger`: with no ledger declared and none found, the Build Train stops and asks before creating one.
+- `standards_sources`: with none declared, the Standards Packet is empty, the auditor judges against the spec only, and the doctor offers the baseline pack on an `OPT` line.
+- `audit_retention_days`: a whole number of at least 90 (AU-11). When a new session writes its first record, each older log is deleted under its own lock, and one `AuditRotation` record in the new session's chain names every deleted session with its final seq and hash (AU-9(4)). A log named on a summary's `Session <id>:` line, a log changed since an unmerged train started, the current session's log, and a log another session holds are kept. Any read or parse error deletes nothing.
 
 ### Ledger formats
 
@@ -133,7 +132,7 @@ Repeat steps 2 to 4 when you replace a benchmark.
 
 ### service-manifest.json (repo root), optional **(checked)**
 
-Minimal:
+Example:
 ```json
 { "manifest_version": 1, "service_name": "my-service", "purpose": "One sentence.",
   "stack": { "language": "python", "runtime": "python3.12", "package_registries": ["pypi.org"],
@@ -142,16 +141,43 @@ Minimal:
   "exposure_and_traits": { "is_public": false, "has_website": false, "operator_panel_integrated": false,
                             "contains_customer_data": false, "touches_key_material": false,
                             "data_classification": "INTERNAL" },
+  "features": { "scope": null, "secrets_scan": false, "scrub_file": null, "ledger": null },
+  "trains_dir": null,
   "jail_narrowing": { "forbidden_extensions": [], "forbidden_paths": [] },
   "upstream_dependencies": [], "downstream_dependencies": [] }
 ```
+The manifest reader checks `jail_narrowing`, `features`, `trains_dir`, the three stack commands and the `ledger` block; each of those keys is a row of the generated key reference in the plugin [README](../README.md#key-reference). The reader refuses an unknown key inside `jail_narrowing` or `features`. The keys below describe the project for the people and agents who read the file. No reader checks them, so a wrong value is never refused.
+
+| Key | What it governs | Type | Allowed values | Default | Example |
+|---|---|---|---|---|---|
+| `manifest_version` | The version of the manifest format; no Daedalus code reads it yet | integer | `1` | none | `1` |
+| `service_name` | The project's name, for people reading the manifest; no Daedalus code reads it yet | string | Any short name | none | `"my-service"` |
+| `purpose` | One sentence on what the project does; no Daedalus code reads it yet | string | One sentence | none | `"Serves the billing API."` |
+| `stack.language` | The project's main language; no Daedalus code reads it yet | string | Any language name | none | `"python"` |
+| `stack.runtime` | The runtime the project ships on; no Daedalus code reads it yet | string | Any runtime name | none | `"python3.12"` |
+| `stack.package_registries` | The registries the project installs packages from; no Daedalus code reads it yet | list of strings | Registry host names | none | `["pypi.org"]` |
+| `stack.build_cmd` | The command that builds the project; a coding agent never runs it, because only the test, typecheck and lint commands are run as declared | string or null | A command string, or `null` | none | `null` |
+| `entrypoints` | The project's file areas by name; `/daedalus:plan` pastes this block into the planner's prompt, and the planner cuts units along these areas | object of strings | Each key names an area, and each value is a project-relative path | Absent: the planner is told `none declared` | `{"handlers": "src/handlers/", "infra": "infra/"}` |
+| `exposure_and_traits.is_public` | Whether the project is reachable from the internet; no Daedalus code reads it yet | boolean | `true` or `false` | none | `false` |
+| `exposure_and_traits.has_website` | Whether the project serves a website; no Daedalus code reads it yet | boolean | `true` or `false` | none | `false` |
+| `exposure_and_traits.operator_panel_integrated` | Whether the project plugs into an operator panel; no Daedalus code reads it yet | boolean | `true` or `false` | none | `false` |
+| `exposure_and_traits.contains_customer_data` | Whether the project stores or handles customer data; no Daedalus code reads it yet | boolean | `true` or `false` | none | `false` |
+| `exposure_and_traits.touches_key_material` | Whether the project creates, holds or uses key material; no Daedalus code reads it yet | boolean | `true` or `false` | none | `false` |
+| `exposure_and_traits.data_classification` | The project's data classification label; no Daedalus code reads it yet | string | Your own classification labels | none | `"INTERNAL"` |
+| `upstream_dependencies` | The services this project calls; no Daedalus code reads it yet | list | Service names or objects of your choosing | none | `[]` |
+| `downstream_dependencies` | The services that call this project; no Daedalus code reads it yet | list | Service names or objects of your choosing | none | `[]` |
+
 `jail_narrowing` adds paths a coder may not write (0054-DAE-PLT). Each `forbidden_paths` entry is relative to the repository root, uses forward slashes, and holds no leading slash, `..` or glob characters. An entry ending in a slash covers that folder and everything under it; an entry without one names one file. Each `forbidden_extensions` entry starts with a dot and covers every file name ending in it. Matching ignores case. The jail reads this file from the main checkout, never from a coder's worktree. A manifest that is not valid JSON, or whose `jail_narrowing` has the wrong shape, refuses every coder write until it is fixed, and the doctor reports it as a `MISS`. When the file is present, the doctor's line counts the entries: `OK   service-manifest.json: jail_narrowing <n> paths, <m> extensions`.
 
 A later Daedalus release reads missing exposure flags as the stricter value. Coders cannot edit this file (enforced for file tools and the common copy/edit commands; a script the coder writes and runs is not blocked yet). In that later release, a change to it goes through contract-spec and the ledger.
 
 ### contracts/ (directory), optional **(checked)**
 
-Holds `openapi.yaml`, `events/*.schema.json`, `errors.yaml`. May be empty to start. Coders cannot write here (enforced for file tools and the common copy/edit commands; a script the coder writes and runs is not blocked yet).
+Holds your own interface files, such as `openapi.yaml`, `events/*.schema.json` and `errors.yaml`. May be empty to start; the doctor shows an `OPT` line while the folder is missing. Coders cannot write here (enforced for file tools and the common copy/edit commands; a script the coder writes and runs is not blocked yet).
+
+A Build Train writes its contract here only when config.json declares no `charter_root`; with `charter_root` the contract goes to `<charter_root>/specs/<name>.md` instead. The contract-spec agent saves the Locked Contract Packet to `contracts/<name>.md`, where `<name>` is a short name of lowercase letters, digits and hyphens. The lock command (`daedalus_workspace.py lock`) commits it on the integration branch `daedalus/<train-id>` as `Lock contract <name> v<packet_version>` before any coder starts. Each revision is committed as `Revise contract <name> v<N>`. The file holds the packet as contract-spec wrote it: `packet_version=<n>`, the target services, the wire contract and the ledger invariants.
+
+Read the contract during a train, but do not edit it. Every coder brief names the file with its sha256, and a coder refuses to start when the hash does not match. A coder that reports a different hash stops the train. A revision comes only from contract-spec, when a coder's contract question needs one.
 
 ### .gitleaks.toml (repo root), optional **(checked)**
 
@@ -160,11 +186,84 @@ Minimal:
 [extend]
 useDefault = true
 ```
-When `features.secrets_scan` is `true` in `service-manifest.json`, the Push Train runs `gitleaks detect` over every commit on the train branch before it pushes, and stops without the binary (0069-DAE-PLT). With the scan off, the default, the Push Train runs no scan and the doctor's gitleaks line is an `OPT` line.
+gitleaks reads this file, not Daedalus. The Push Train runs `gitleaks detect --redact --log-opts=<base sha>..daedalus/<train-id>` from the repository root, and gitleaks picks up `.gitleaks.toml` from the folder it scans. The scan runs only when `features.secrets_scan` is `true` in `service-manifest.json`; the Push Train then stops without the binary (0069-DAE-PLT). With the scan off, the default, the Push Train runs no scan and the doctor's gitleaks line is an `OPT` line. The doctor checks only that the file exists.
+
+| Key | What it governs | Type | Allowed values | Default | Example |
+|---|---|---|---|---|---|
+| `[extend]` `useDefault` | Whether gitleaks keeps its own built-in rules and adds yours on top | boolean | `true` or `false` | gitleaks's own default | `true` |
+
+Every other key, such as your own rules or an allowlist for a known false positive, is gitleaks's own format: https://github.com/gitleaks/gitleaks#configuration.
 
 ### Project train definitions
 
-When `service-manifest.json` sets `trains_dir` to a project-relative folder, a train named `<name>` is looked up first as `<trains_dir>/<name>.json`, then in the plugin's own `trains/` folder (0073-DAE-PLT). A project definition's brief templates resolve beside the definition file, and a definition whose real path leaves the project is refused.
+When `service-manifest.json` sets `trains_dir` to a project-relative folder, a train named `<name>` is looked up first as `<trains_dir>/<name>.json`, then in the plugin's own `trains/` folder (0073-DAE-PLT). A project definition's brief templates resolve beside the definition file, and a definition whose real path leaves the project is refused. Check a definition with:
+
+    python3 <plugin>/scripts/validate_train.py <trains_dir>/<name>.json
+
+Exit 0 prints `OK train <name> v<version>: <n> stages`. Exit 1 prints one defect line per failed check, each starting with its check number, and a `Next:` line. The train runner starts a definition with `python3 <plugin>/scripts/daedalus_train.py start --repo <repo> --train <name>`. The plugin repository's `tests/fixtures/trains/valid.json` is a complete example.
+
+A definition is one JSON object holding exactly these top-level keys:
+
+| Key | What it governs | Type | Allowed values | Example |
+|---|---|---|---|---|
+| `name` | The train's name | string | A slug of lowercase letters, digits and hyphens, equal to the file name without `.json` | `"release-check"` |
+| `version` | The definition's own version | integer | A whole number of at least 1 | `1` |
+| `description` | What the train does, in words | string | A line of at least four plain words, ids and paths aside | `"Checks a release before the tag"` |
+| `scopes` | Which projects the train may run in | list of strings | Distinct values from `"repository"` and `"folder"`, at least one | `["repository"]` |
+| `gates` | The train's checkpoints, in order; every stage belongs to one, and stages run in this order | list of strings | Distinct gate names, at least one | `["build", "merge"]` |
+| `consults` | The agents a stage may consult while its gate is open | object | Each key is a declared gate, and each value is a list of agent names with an agent file in the plugin | `{"build": ["web-researcher"]}` |
+| `stages` | The steps the runner takes | list of objects | At least one stage, in the shape below | see below |
+| `off_contract` | Where the train goes when a reply ends off its contract | string | A `stop:`, `ask:` or `consult:` route; never `back:`, because it belongs to no stage | `"stop: Next: rerun the train after reading the agent reply"` |
+
+Each stage object holds `id`, `gate`, `agent`, `scope`, `proof` and `on_fail`, and may add `verifies`, `when`, `repeat` and `parallel`. Any other key is refused.
+
+| Key | What it governs | Type | Allowed values | Example |
+|---|---|---|---|---|
+| `id` | The stage's name, used by routes and records | string | A slug, unique in the definition | `"code"` |
+| `gate` | The checkpoint the stage belongs to | string | A gate named in `gates` | `"build"` |
+| `agent` | Who runs the stage | string | `"main"` for a step the runner runs itself, or the name of an agent file in the plugin | `"repo-coder"` |
+| `scope` | What the agent is told, where it may write and how it may reply | object | Exactly `told`, `touch` and `reply`, below | see below |
+| `proof` | The command that proves the stage passed | object | Exactly `script`, `exit` and `records`, below | see below |
+| `on_fail` | Where each failing outcome or reply line goes | object | Each key is a failing exit outcome or a reply line of the stage; each value is a route, below | `{"[STATUS: YIELD_WEB]": "consult:web-researcher"}` |
+| `verifies` | What the stage checks, in words | string | Non-empty text | `"the merged tip passes its tests"` |
+| `when` | A condition that skips the stage when it is off | string | `features.<name>` with a feature from the key reference, or a field an earlier stage records | `"features.ledger"` |
+| `repeat` | Runs the stage once for each unit of the recorded plan | string | `"per-unit"` | `"per-unit"` |
+| `parallel` | Runs the units of a `per-unit` stage at the same time | boolean | `true` or `false`; `true` needs `repeat` | `true` |
+
+Inside `scope`:
+
+- `told`: the brief template the agent receives, as a path relative to the definition file, or `"none"` for a `main` stage. Each `{field}` placeholder in it must name a train state field or a field an earlier stage records.
+- `touch`: the folders the stage may write, as a list drawn from `none`, `unit-src-tests`, `contracts`, `charter-specs`, `charter`, `docs` and `scratch`. The agent's own hooks must grant each one.
+- `reply`: the reply lines the stage accepts, each one a line of the agent's status contract or its leading part, such as `[STATUS: COMPLETE]`.
+
+Inside `proof`:
+
+- `script`: the command the runner runs or reads, with `{field}` placeholders, such as `daedalus_train.py check-reply --stage code`.
+- `exit`: an object that maps each exit code, written as text, to an outcome name. `pass` passes the stage, `off-contract` goes to `off_contract`, and every other outcome needs a route in `on_fail`.
+- `records`: the state field names the stage writes, which later placeholders and `when` conditions may use.
+
+A route is one of four forms: `stop: Next: <at least four plain words>`, `back:<earlier stage id> rounds=<n>`, `ask: <a question for the operator>` and `consult:<agent name>`.
+
+### Standing-rules backfill file
+
+`standing_rules.py` derives a standing-rules file from a markdown-table ledger (0090, 0094). The ledger table needs `Id`, `Date`, `Ruling` and `Supersedes` columns. The output groups every ruling in force by area, adds an `Amended by` line under each amended ruling, and lists the superseded rulings at the end. Run it from your own shell:
+
+    python3 <plugin>/scripts/standing_rules.py --ledger <ledger path> --backfill <backfill path> --out <standing-rules path>
+
+`--check` writes nothing and exits 1 when the file at `--out` differs from what the script would write. `--id-scheme` overrides the ledger id pattern, by default `{seq:04d}-{repo}-{type}`.
+
+The backfill file is one JSON object holding exactly four keys; any other key is refused:
+
+| Key | What it governs | Type | Allowed values | Example |
+|---|---|---|---|---|
+| `relations_from` | The first ledger row that carries its own relations; every earlier row takes its relations from `relations` | string | A ledger id that is a row of the ledger | `"0090-DAE-PLT"` |
+| `names_from` | The first ledger row whose Ruling cell starts with its name as its first sentence; earlier rows are named by the first clause of their Ruling cell | string | A ledger id that is a row of the ledger | `"0094-DAE-PLT"` |
+| `areas` | The area each ruling in force is filed under | object | Each key is a ledger id; each value is one of the eight area names below. Every ruling in force needs one, and an id that is not in the ledger is refused | `{"0004-DAE-PLT": "the ledger and charter"}` |
+| `relations` | What each row before `relations_from` supersedes and amends | object | Each key is a ledger id before `relations_from`; each value is an object holding exactly a `supersedes` list and an `amends` list of earlier ledger ids | `{"0012-DAE-PLT": {"supersedes": ["0007-DAE-PLT"], "amends": []}}` |
+
+From `relations_from` on, a row reads its own Supersedes cell: a sentence starting `Supersedes: ` or `Amends: ` lists the ids it supersedes or amends. A row from `relations_from` on that also appears in `relations` is refused.
+
+The eight area names, exactly as written: `composition and phases`, `planning and dispatch`, `the jail and grammars`, `the audit log and proofs`, `the ledger and charter`, `GitHub and release`, `the project files`, `operator interaction`.
 
 ### Coder write boundary
 

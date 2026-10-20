@@ -5,7 +5,7 @@ This guide assumes you have never seen this plugin. Each section says what to ty
 
 ## What Daedalus does
 
-Daedalus is a Claude Code plugin. Today it does seven things. While a train runs, it writes a hash-chained audit log of every tool call the hook matcher routes (Bash, file reads, searches and edits, web fetches, agent spawns, messages, MCP tools). Each record carries the hash of the one before it, so an edited record, or one removed from the middle, breaks the chain. It confines each agent to a jail: a PreToolUse hook checks every tool call against the rules for that agent and blocks anything outside them. It refuses reads of your credential stores through file tools and the Bash forms it models. It has a first-run doctor that checks your setup. It renders an audit report, a readable digest of one session's log, with `/daedalus:audit-report`. It runs a Build Train with `/daedalus:build-train`. The train splits a task into units and gives each unit to a coding agent in its own git worktree. Agents raise questions to specialists, and an adversarial security audit runs before the units are merged locally. It runs a Push Train with `/daedalus:push-train`, which commits, pushes, and opens the pull request for a finished Build Train. You review and merge.
+Daedalus is a Claude Code plugin that gives your session a catalog of scoped agents and two saved recipes over them, the Build Train and the Push Train (0088). While a train runs, it writes a hash-chained audit log of every tool call the hook matcher routes (Bash, file reads, searches and edits, web fetches, agent spawns, messages, MCP tools). Each record carries the hash of the one before it, so an edited record, or one removed from the middle, breaks the chain. It confines each agent to a jail: a PreToolUse hook checks every tool call against the rules for that agent and blocks anything outside them. It refuses reads of your credential stores through file tools and the Bash forms it models. It has a first-run doctor that checks your setup. It renders an audit report, a readable digest of one session's log, with `/daedalus:audit-report`. It shows the agent catalog, the six phases and their exit conditions with `/daedalus:catalog`, and cuts a design spec into units with `/daedalus:plan`. It runs a Build Train with `/daedalus:build-train`. The main session starts one orchestrator agent, which gives each unit to a coding agent in its own git worktree. Agents raise questions to specialists. The units merge onto a local integration branch, and an adversarial security audit judges the merged result. It runs a Push Train with `/daedalus:push-train`, which commits, pushes, and opens the pull request for a finished Build Train. You review and merge.
 
 ## Install
 
@@ -143,6 +143,8 @@ Start from a clean working tree on the branch you want to build from. Inside the
 
 Where it runs: a Claude Code session started inside the target repository. `<repo>/.claude/daedalus/config.json` is optional (see `docs/project-requirements.md`). Run `/daedalus:doctor` first if you have not.
 
+Read the catalog first with `/daedalus:catalog`. When the work spans more than one unit, cut its spec into units with `/daedalus:plan <spec path>` and read the unit table it shows; the plugin README's "Your first body of work" walks through both. The main session checks the preconditions below, then starts one orchestrator agent and relays between it and you (0060). The orchestrator never asks you anything itself. When it needs a ruling it writes a decision brief, and the session asks you each question through Claude Code's question prompt, with the recommended option first. After each phase you see a progress note, and before each choice you see one line, `Chose <what> over <alternative>: <cost>`.
+
 ### Before anything is built
 
 The train runs these checks and stops with a `Next:` line when one fails:
@@ -150,35 +152,37 @@ The train runs these checks and stops with a `Next:` line when one fails:
 - The working tree must be clean. Commit or stash first.
 - `config.json` is optional. When it exists it must be valid JSON.
 - A decision ledger must exist. The train runs `append_ledger.py --probe`. If no ledger is declared and none is found, it asks: "This repo has no decision ledger. Options: name an existing file, or let Daedalus create docs/decisions.md as a table. Which?" Naming a file means you add a `ledger` block for it to config.json from your own shell. Choosing create writes `docs/decisions.md` holding only the table header and separator, which the probe reads as `seq=0`; you review and commit it, then start the train again.
-- The hooks must be writing this session's audit log. The train's start creates `<repo>/.claude/daedalus/`; the next check reads the newest log in `<repo>/.claude/daedalus/audit/` and looks for its own probe command as the last Bash record. If it is not there, the jail is not enforcing and the train stops. Run `/daedalus:doctor`.
+- The hooks must be writing this session's audit log. The train's start creates `<repo>/.claude/daedalus/`; the next check reads the newest log in `<repo>/.claude/daedalus/audit/` and looks for its own probe command as the last Bash record. If it is not there, the jail is not enforcing and the train stops. Run `/daedalus:doctor`. When it is there, the check prints `OK hooks live: session <id>, chain intact (<n> records)` and marks where this train's audit begins; the Push Train reads the security verdict only from records after that mark.
 - Before the first NIST or CIS question, the plugin cache must exist. If `daedalus_doctor.py --print-cache-dir` finds none, run `/daedalus:doctor` once and start again.
 
 The train creates `docs/.tmp/daedalus/` with a `*` marker so git ignores its scratch files and summary. It writes `<repo>/.claude/daedalus/train.active` while it runs and removes it when it ends or stops. While that file exists, agents from Claude Code itself or from other plugins are refused every checked tool except reads and searches.
 
 ### The State Block
 
-After the checks and after each phase, the train prints a State Block. Its shape, with illustrative values:
+After the checks the session prints the first six State Block lines. The orchestrator keeps the full block and prints it only at a stop, at a resume and in the summary; after each phase you see the progress note instead. The first lines, with illustrative values:
 
     train: 20261014-153000  base: main @ 3f329dc  audit session: <session>
-    ledger: /work/my-service/docs/decisions.md (probe, markdown-table-row, seq=12)  codes: --repo SVC --type PLT
-    charter_root: none  policy: none declared  cache: unresolved
-    packet_version: 1
-    units: u1 | <branch> | COMPLETE | built against packet 1
-    open yields: none
+    ledger: /work/my-service/docs/decisions.md (probe, markdown-table-row, seq=12)
+    charter_root: none  charter base: none
+    policy: none declared  standards: 0 sources
+    cache: unresolved
+    standards packs: none declared
 
-The train id is the UTC start time. The audit session id is the name of the newest log in `<repo>/.claude/daedalus/audit/`, without `.jsonl`; keep it for the audit report. `seq` is the last ledger entry number. `codes` are the `--repo` and `--type` parts of the next ledger id. The train takes them from the first ledger id the Standards Packet cites. If it cites none, or its ids disagree, the train asks you once. A heading-entry ledger ignores the codes.
+The full block adds the standards specialist, the ledger codes, the packet version with the contract path and lock commit, both packet hashes, the plan, the merged integration tip, the verdict, one line per unit and the open yields.
 
-The Build Train saves the Locked Contract Packet to a file, and the train's main session commits it. Without `charter_root`, the file is `contracts/<name>.md`, committed on the integration branch `daedalus/<train-id>` before any coder starts. With `charter_root`, the file is `<charter_root>/specs/<name>.md`, committed on the Charter branch `daedalus/<train-id>` that the train creates in its checks. Every contract revision is saved and committed again. Without `charter_root`, nothing is written to a Charter repo, and the ledger entry goes to this repo's own ledger.
+The train id is the UTC start time. The audit session id is the name of the newest log in `<repo>/.claude/daedalus/audit/`, without `.jsonl`; keep it for the audit report. `seq` is the last ledger entry number. The codes on the full block's `codes:` line are the `--repo` and `--type` parts of the next ledger id. The train takes them from the first ledger id the Standards Packet cites. If it cites none, or its ids disagree, the train asks you once. A heading-entry ledger ignores the codes.
+
+The Build Train saves the Locked Contract Packet to a file, and the lock command commits it. Without `charter_root`, the file is `contracts/<name>.md`, committed on the integration branch `daedalus/<train-id>` before any coder starts. With `charter_root`, the file is `<charter_root>/specs/<name>.md`, committed on the Charter branch `daedalus/<train-id>` that the train creates in its checks. Every contract revision is saved and committed again. Without `charter_root`, nothing is written to a Charter repo, and the ledger entry goes to this repo's own ledger.
 
 ### Standards and contract first
 
-The standards specialist reads the sources you declared in `standards_sources` and your ledger. It writes a Standards Packet: the rules that apply to this task. If your task contradicts one of your own standards, the train stops and shows both sides: your words, and the rule with its file and line. Reword the task or change the standard, then start again. The train never picks a side.
+The standards specialist reads the sources you declared in `standards_sources` and your ledger. It writes a Standards Packet: the rules that apply to this task. If your task contradicts one of your own standards, the train asks you about it as a decision, quoting both sides: your words, and the rule with its file and line. When the rule comes from your global Claude environment, the options are Follow Global (the plan or the plugin changes to comply), Follow Plugin (the plugin's way stands, recorded as a deviation) and Follow Plugin + amend global (the plugin's way stands and the main session edits that one global rule line by hand and shows you the diff). Your pick becomes a ruling in your ledger before any coder starts. The train never picks a side.
 
-The contract agent then writes a Locked Contract Packet with a `packet_version`. Every coding agent's brief names both packet files with their sha256 hashes, and the agent refuses to start when a hash does not match. The train creates each coding agent's worktree at `<repo>/.claude/worktrees/<train-id>-<unit-slug>`, on the branch `daedalus-unit/<train-id>-<unit-slug>` cut from the integration branch, and writes a `.gitignore` holding `*` in `.claude/worktrees/`. No setting is needed for this. A coding agent may write anywhere inside its own worktree except the protected paths [docs/project-requirements.md](../project-requirements.md) lists under "Coder write boundary". The train removes every worktree after the merge and before any stop once coding has begun, so worktrees never outlive the train. Changes a coding agent left uncommitted were never audited: the train lists them, then discards them.
+The planner cuts the task into units beside the standards step, and the train records the plan before any coder starts. The contract agent then writes a Locked Contract Packet with a `packet_version`. Every coding agent's brief names both packet files with their sha256 hashes, and the agent refuses to start when a hash does not match. The train creates each coding agent's worktree at `<repo>/.claude/worktrees/<train-id>-<unit-slug>`, on the branch `daedalus-unit/<train-id>-<unit-slug>` cut from the integration branch, and writes a `.gitignore` holding `*` in `.claude/worktrees/`. No setting is needed for this. A coding agent may write anywhere inside its own worktree except the protected paths [docs/project-requirements.md](../project-requirements.md) lists under "Coder write boundary". The train removes every worktree after the merge and before any stop once coding has begun, so worktrees never outlive the train. Changes a coding agent left uncommitted were never audited: the train lists them, then discards them.
 
 ### What each yield means
 
-A coding agent that is stuck commits its work in progress and returns a yield. The train answers it and resumes the same agent:
+A coding agent that is stuck commits its work in progress and returns a yield. The orchestrator routes it and resumes the same agent:
 
 | Yield | Meaning | Who answers |
 |---|---|---|
@@ -187,17 +191,23 @@ A coding agent that is stuck commits its work in progress and returns a yield. T
 | `YIELD_COMPLIANCE` | It has a security control question. | nist-specialist or cis-specialist, with control ids |
 | `YIELD_STANDARDS` | It has a question about one of your standards. | standards-rules-specialist, with the source and line |
 
-A later Daedalus release adds service manifests. Until then, the scope of each unit comes from your words and the contract.
+The scope of each unit comes from the recorded plan and the contract.
 
 ### The security gate
 
-The summary records the policy gate as `[POLICY: none declared]` or `[POLICY: declared, gate not yet shipped]`; a later Daedalus release adds the gate itself. If a unit touched IAM, KMS, mTLS, key custody or infrastructure config, the NIST and CIS specialists check those diffs. Then the security auditor reads every unit's diff, taken from the integration branch so the contract commits stay out of it, against the contract, your standards, and the compliance reports.
+Once every unit is complete, the train merges each unit into the local integration branch `daedalus/<train-id>` with `--no-ff`, so each unit stays visible in the history. A merge conflict stops the train: the merge is aborted and you are back on your base branch. The stop names the conflicting files and the leftover `daedalus/<train-id>` branch, which you inspect or delete.
 
-A `[VERDICT: REJECTED]` lists findings by branch, file and line. The train sends each finding to the agent that wrote the code and audits again. After three rejected rounds it stops and shows the last findings. The unit branches stay as they are; fix them by hand or start again with a narrower task.
+The summary records the policy gate as `[POLICY: none declared]` or `[POLICY: declared, gate not yet shipped]`; a later Daedalus release adds the gate itself. If a unit touched IAM, KMS, mTLS, key custody or infrastructure config, the NIST and CIS specialists check the merged diff. Then the security auditor judges the merged integration tip against the train's base, so its verdict names the tip the Push Train pushes. It judges against the contract, your standards, and the compliance reports.
 
-A `[VERDICT: APPROVED]` merges each unit into the local integration branch `daedalus/<train-id>` with `--no-ff`, so each unit stays visible in the history. A merge conflict stops the train: the merge is aborted and you are back on your base branch. The stop names the conflicting files and the leftover `daedalus/<train-id>` branch, which you inspect or delete.
+A `[VERDICT: REJECTED]` lists findings by file and line. The train sends each finding to the coding agent that wrote the code, in a fix unit cut from the integration branch, merges the fixes and audits again. After the second rejected round, the session asks you what happens to the findings that remain:
 
-The charter-docs agent then appends the ledger entries through `append_ledger.py` and commits them. When the ledger lives in your Charter repo, the Charter working tree must be clean first. The train creates the Charter's `daedalus/<train-id>` branch in its checks, for the contract and ledger commits, then switches the Charter back to the branch it was on. Nothing is pushed.
+- One more fix-and-audit round.
+- Merge with each finding as a tracked-risk issue: your exception becomes a ruling in the ledger, bound to the integration tip, and one tracked-risk issue per finding is filed before the pull request opens.
+- Stop with the branches kept, for fixes by hand or a narrower rerun.
+
+The same question follows every later rejected round; the train never runs another round or stops on its own authority.
+
+On `[VERDICT: APPROVED]`, or your merge pick, the charter-docs agent appends the ledger entries through `append_ledger.py` and commits them. When the ledger lives in your Charter repo, the Charter working tree must be clean first. The train creates the Charter's `daedalus/<train-id>` branch in its checks, for the contract and ledger commits, then switches the Charter back to the branch it was on. Nothing is pushed.
 
 Any agent reply that does not end in one of its contract lines or contract sections stops the train and shows you the reply's last 10 lines. The auditor brief from standards-rules-specialist is the one exception: it ends with its rule list and has no status line. Once the train has created a Charter branch, it switches the Charter back to the branch it was on before any stop. Before any stop ahead of the merge, it also switches this repo back to your base branch. The exceptions: a stop while the Charter tree is dirty leaves the Charter on its `daedalus/<train-id>` branch, and a stop while the contract file is uncommitted leaves both repos on `daedalus/<train-id>`. Either way the stop names the uncommitted files and the branch they sit on. The security auditor writes its verdict line as both the first line and the last line of every reply it sends.
 
@@ -210,10 +220,12 @@ The train writes `docs/.tmp/daedalus/<train-id>-summary.md`. It holds:
 - the packet version, the ledger path relative to its repo, and the contract file with its version on a `Contract:` line. The summary becomes the pull request body, so it holds no absolute path
 - the ledger entries added, on a `Ledger ids:` line. The train writes the summary before the ledger step with `Ledger ids: pending`, so a stop there still leaves a summary. The Push Train refuses a pending summary and names the steps to finish it
 - the policy line
+- every ruling you made during the train, with its ledger id, and a `Deviation:` line for each pick that keeps the plugin's way
 - one row per unit: branch, packet, files, tests
 - every yield and who answered it
 - the compliance results
-- the audit verdict and its round count
+- the audit verdict on the merged integration tip and its round count, or your exception with each waived finding
+- the blocks the hooks made, sorted into friction (work the agent's job needed) and habit (a reach outside the job)
 - the audit log path, relative to the repo (`.claude/daedalus/audit/<session>.jsonl`)
 
 The Push Train uses this file as the pull request body.
@@ -240,7 +252,7 @@ The train stops, with a `Next:` line, when any of these fails:
 - The working tree has unstaged or untracked changes. Staged changes are fine; the conductor commits them.
 - This session's hooks are not writing the audit log. The train marks itself running before this check, since the log records only during a train. Run `/daedalus:doctor`.
 - An audit log fails its hash chain check. Keep the file, report it, and do not edit it, as in "When the chain is BROKEN" above.
-- The security auditor's last reply before this train's summary, in the Build Train's audit log, is not `[VERDICT: APPROVED]`, or the ledger commit is not on the branch.
+- The security auditor's last reply before this train's summary, in the Build Train's audit log and after the mark its hooks check made, is not `[VERDICT: APPROVED]`, or the ledger commit is not on the branch.
 
 ### What the conductor does
 
@@ -250,7 +262,7 @@ Then it watches the GitHub Actions runs for the pushed commit and reports each c
 
 ### When the Charter has a branch
 
-When the Build Train put its contract, and its ledger entry when the ledger lives there, on a `daedalus/<train-id>` branch in your Charter repo, the conductor cannot push it: the jail keeps it in this repo. The train writes a two-line pull request body to `docs/.tmp/daedalus/<train-id>-charter-pr.md` naming the code pull request. Your checklist then carries two commands to run from your own shell: one pushes the Charter branch, one opens its pull request against the branch the Charter forked from.
+When the Build Train put its contract, and its ledger entry when the ledger lives there, on a `daedalus/<train-id>` branch in your Charter repo, the Push Train opens a second pull request for it once the code pull request exists (0078). The train writes a two-line pull request body to `docs/.tmp/daedalus/<train-id>-charter-pr.md` naming the code pull request. The conductor pushes the Charter branch and opens its pull request against the branch the Charter forked from.
 
 ### Your checklist
 
@@ -259,10 +271,10 @@ The train ends with the pull request URLs and a numbered list:
 1. Review the pull request.
 2. Check CI on the pull request.
 3. Merge the pull request. You merge; the train never does.
-4. Delete the branch `daedalus/<train-id>`.
+4. Switch back to your base branch, then delete the branch `daedalus/<train-id>`.
 5. Run `/daedalus:audit-report <session>` to read this session's audit log.
 
-With a Charter branch, items 6 to 8 push it, open its pull request, and merge it after the code pull request. The list ends with a note that a later Daedalus release adds the Execution Train readiness checklist: the manual drills and boundary checks before production.
+With a Charter branch, item 6 reviews and merges the Charter pull request after the code pull request, then switches the Charter back and deletes its branch. The list ends with a note that a later Daedalus release adds the Execution Train readiness checklist: the manual drills and boundary checks before production.
 
 ### What BLOCKED means
 
