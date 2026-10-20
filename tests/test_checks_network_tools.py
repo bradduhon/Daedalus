@@ -3,8 +3,10 @@
 # 0044: the network_tools hook; cases copied from tests/test_jail.py run each agent's chain.
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
-from lib import jail
+from lib import jail, shell
 
 from tests.conftest import CFG
 from tests.hook_chain import (
@@ -17,7 +19,7 @@ from tests.hook_chain import (
     run_script,
     unknown_flag_denies,
 )
-from tests.test_jail import _b, _t
+from tests.test_jail import _b, _t, fake_claude_fixture  # noqa: F401 - registers fake_claude
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "network_tools"
@@ -61,6 +63,28 @@ class TestRound3WorkerHygiene:
     def test_repo_coder_hidden_network_and_remote(self) -> None:
         for command in ("find . -exec curl x {} +", "find . -exec git push origin x {} +"):
             assert not decide(_b("repo-coder", command), CFG).allow, command
+
+
+@pytest.mark.parametrize("agent", ["repo-coder", "security-auditor", "charter-docs"])
+def test_claude_by_real_path_is_refused(fake_claude: Path, tmp_path: Path, agent: str) -> None:
+    # issue 55: the versioned file, a link to it, or node running it, whatever the word says.
+    link = tmp_path.resolve() / "c"
+    link.symlink_to(fake_claude)
+    for command in (
+        f"{fake_claude} -p hi",
+        f"{link} -p hi",
+        f"cd {tmp_path.resolve()} && ./c -p hi",
+        f"timeout 5 {link}",
+        f"node {link}",
+    ):
+        assert evaluate(HOOK, _b(agent, command)) == shell.R_CLAUDE_PATH, (agent, command)
+
+
+def test_other_paths_beside_claude_pass(fake_claude: Path, tmp_path: Path) -> None:
+    other = fake_claude.parent / "tool"
+    other.write_text("#!/bin/sh\n")
+    for command in (f"{other} -x", f"cat {fake_claude.parent}/notes", "ls /usr/bin"):
+        assert evaluate(HOOK, _b("repo-coder", command)) is None, command
 
 
 def test_network_tools_judges_the_hook_alone() -> None:

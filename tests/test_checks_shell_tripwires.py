@@ -29,6 +29,7 @@ from tests.test_jail import (
     _cwd,
     _narrowed_repo,
     _unit_repo,
+    fake_claude_fixture,  # noqa: F401 - registers fake_claude
 )
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
@@ -419,6 +420,84 @@ class TestDeclaredCommands:
         repo, _ = _unit_repo(tmp_path / "repo")
         got = evaluate(HOOK, _cwd(_b("repo-coder", "bash scripts/test.sh"), repo))
         assert got == shell.R_INLINE
+
+
+class TestNestedClaudeAndPathCommands:
+    # issue 55: the command word resolves to its real file; a coder's path command is placed.
+    @pytest.mark.parametrize("agent", WORKERS)
+    def test_claude_by_real_path_is_refused(self, fake_claude: Path, agent: str) -> None:
+        for command in (f"{fake_claude} -p hi", "claude -p hi"):
+            assert evaluate(HOOK, _b(agent, command)) == shell.R_CLAUDE_PATH, (agent, command)
+
+    def test_claude_link_inside_the_worktree_is_refused(
+        self, fake_claude: Path, tmp_path: Path
+    ) -> None:
+        repo, wt = _unit_repo(tmp_path / "repo")
+        (wt / "c").symlink_to(fake_claude)
+        for command in (f"{wt}/c -p hi", f"cd {wt} && ./c -p hi"):
+            got = evaluate(HOOK, _cwd(_b("repo-coder", command), repo))
+            assert got == shell.R_CLAUDE_PATH, command
+
+    @pytest.mark.parametrize(
+        "command",
+        ["/usr/bin/cat x", f"{WT}/scripts/run.sh", f"cd {WT} && ./scripts/run.sh", "ls x"],
+    )
+    def test_coder_path_command_in_a_trusted_place_is_allowed(self, command: str) -> None:
+        assert evaluate(HOOK, _b("repo-coder", command)) is None, command
+
+    def test_declared_executables_run_by_absolute_path(self, tmp_path: Path) -> None:
+        # issue 55: the manifest's own pytest and ruff, anchored at the project root, are trusted.
+        stack = {"unit_test_cmd": ".venv/bin/pytest -q", "lint_cmd": ".venv/bin/ruff check ."}
+        repo, wt = _narrowed_repo(tmp_path, json.dumps({"stack": stack}))
+        for command in (
+            f"cd {wt} && {repo}/.venv/bin/pytest -q tests/test_a.py",
+            f"cd {wt} && {repo}/.venv/bin/ruff check scripts",
+        ):
+            assert evaluate(HOOK, _cwd(_b("repo-coder", command), repo)) is None, command
+        for command in (f"{repo}/.venv/bin/pip install x", f"{repo}/.venv/bin/python -c 1"):
+            got = evaluate(HOOK, _cwd(_b("repo-coder", command), repo))
+            assert got == shell.R_UNTRUSTED_PATH, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "/tmp/x/tool",
+        f"{CWD}/.venv/bin/python scripts/x.py",
+        f"cd {WT} && {CWD}/.venv/bin/pytest -q",
+        "./tool",
+        f"{WT}/../tool",
+    ],
+)
+def test_coder_path_command_elsewhere_is_refused(command: str) -> None:
+    # issue 55: outside the bin folders, a unit worktree and the manifest's declared commands.
+    assert evaluate(HOOK, _b("repo-coder", command)) == shell.R_UNTRUSTED_PATH, command
+
+
+class TestCoderFrictionRows:
+    # Train A friction bin: the coder's pipes and interpreter calls that A6 allows.
+    @pytest.mark.parametrize(
+        "command",
+        [
+            f"cd {WT} && grep -rn -E 'a|b' --include=*.py scripts | grep -v '^scripts/docs/'",
+            f"cd {WT} && grep -n 'class Decision' -A 15 scripts/lib/jail.py | head -60",
+            f"cd {WT} && python3 scripts/catalog.py matrix",
+            f"python3 {WT}/scripts/verify_audit_chain.py /tmp/x.jsonl",
+            f"cat {WT}/a.md && grep -n plan {WT}/b.md | head",
+        ],
+    )
+    def test_confirmed_allowed(self, command: str) -> None:
+        assert decide(_b("repo-coder", command), CFG).allow, command
+
+    @pytest.mark.parametrize(
+        ("command", "want"),
+        [
+            ("python3 --version", shell.R_INLINE),
+            (f"cd {WT} && {CWD}/.venv/bin/python scripts/catalog.py table", shell.R_UNTRUSTED_PATH),
+        ],
+    )
+    def test_habits_stay_refused(self, command: str, want: str) -> None:
+        assert evaluate(HOOK, _b("repo-coder", command)) == want, command
 
 
 class TestProjectDataDir:

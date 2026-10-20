@@ -1,0 +1,14 @@
+{
+  "credential_paths.R_BRACE_UNJUDGED": {
+    "failure": "issue 53: a brace group the jail does not expand hides an alternative that starts its own path, and the store it names is read unjudged",
+    "premise_test": "tests/test_checks_credential_paths.py::test_unexpanded_brace_with_a_rooted_alternative_is_refused"
+  },
+  "shell.R_CLAUDE_PATH": {
+    "failure": "issue 55: a worker runs the claude binary through a link or its versioned path, and the nested session reaches the jail as the operator's own session",
+    "premise_test": "tests/test_checks_network_tools.py::test_claude_by_real_path_is_refused"
+  },
+  "shell.R_UNTRUSTED_PATH": {
+    "failure": "issue 55: a coder runs a program by a path outside the system bin folders, its unit worktree and the manifest's declared commands, which the jail cannot judge by name",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_coder_path_command_elsewhere_is_refused"
+  }
+}

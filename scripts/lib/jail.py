@@ -16,6 +16,7 @@ from lib.audit_proof import SUMMARY_DIR
 from lib.config import Config
 from lib.credential_paths import (
     CREDENTIAL_TOOLS,
+    R_BRACE_UNJUDGED,
     R_CREDENTIAL,
     R_CREDENTIAL_TREE,
     R_REPLY_KEY,
@@ -30,9 +31,11 @@ from lib.credential_paths import anchor as _anchor
 from lib.credential_paths import clean as _clean
 from lib.credential_paths import credential_hit as _credential_hit
 from lib.credential_paths import credential_roots as _credential_roots
+from lib.credential_paths import dotglob_on as _dotglob_on
 from lib.credential_paths import expand_word as _expand_word
 from lib.credential_paths import store_rest as _store_rest
 from lib.credential_paths import tilde as _tilde
+from lib.credential_paths import unjudged_root as _unjudged_root
 from lib.gh_policy import CONDUCTOR_GH, _push_reason, allowlist_applies, gh_reason
 from lib.ledger import LedgerError, resolve_ledger
 from lib.manifest import Manifest, ManifestError, extension_hit, path_hit
@@ -69,6 +72,7 @@ from lib.shell import (
     _short_flags,
     _strip_wrappers,
     _under,
+    runs_claude,
     tokenize,
 )
 from lib.train_scope import (
@@ -1441,7 +1445,7 @@ def _tree_reason(
     command: str,
     keys: tuple[str, ...] = (),
 ) -> str | None:
-    dotglob = "dotglob" in command or "GLOBIGNORE" in command
+    dotglob = _dotglob_on(command)
     # SC-12: reply key roots let a dot folder hide them from **; credential stores do not.
     pairs = [(root, False) for root in roots] + [(key, True) for key in keys]
     for k, (words, (name, at, paths)) in enumerate(parsed):
@@ -1470,7 +1474,7 @@ def _bash_credential_reason(
 ) -> str | None:
     segments = _shell_words(command)
     envs = _bash_env(segments)
-    dotglob = "dotglob" in command or "GLOBIGNORE" in command
+    dotglob = _dotglob_on(command)
     parsed = [(words, _path_positions(words)) for words in segments]
     bases = [cwd] if os.path.isabs(cwd) else []
     for k, (words, (name, at, _)) in enumerate(parsed):
@@ -1513,6 +1517,10 @@ def _bash_credential_reason(
             return reason
     if unresolved:
         return R_CREDENTIAL_PARAM.format(path=unresolved)
+    # audit B4 round 3: an unexpanded brace word whose alternative starts its own path.
+    unjudged = next((w for s in segments for w in map(_clean, s) if _unjudged_root(w)), "")
+    if unjudged:
+        return R_BRACE_UNJUDGED.format(path=unjudged)
     for cand in relative:
         for base in bases:
             reason = hit(os.path.normpath(os.path.join(base, cand)))
@@ -1751,7 +1759,7 @@ def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision
         if _cd_data_dir_git(command):
             return _main_ask(ASK_DATA_DIR, R_DATA_DIR_GIT)
         reason = _command_reason(command) or _gh_gate("main", cwd, command)
-        reason = reason or (R_NESTED_CLAUDE if _nested_claude(command) else None)
+        reason = reason or (R_NESTED_CLAUDE if _nested_claude(command, cwd) else None)
         return _tripwire_ask(reason) if reason else _allow()
     train = _main_write_train(path, cwd) if is_write else None
     if train is not None:
@@ -1764,9 +1772,9 @@ def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision
     return _allow()
 
 
-def _nested_claude(command: str) -> bool:
-    # audit A7-1: through wrappers and shell -c bodies; the regex when the parser gives up.
+def _nested_claude(command: str, cwd: str) -> bool:
+    # audit A7-1, issue 55: through wrappers, shell -c bodies and links; the regex on a parse fail.
     segments = _policy_segments(command)
     if segments is None:
         return bool(_CLAUDE_WORD.search(command))
-    return any(seg and _base(seg[0]) == "claude" for seg in segments)
+    return any(seg and runs_claude(seg, cwd) for seg in segments)
