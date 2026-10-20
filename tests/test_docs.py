@@ -11,6 +11,7 @@ from pathlib import PurePosixPath
 import standing_rules
 from lib import train_definition
 from lib.project_keys import manifest_keys
+from lib.train_scope import policed_outside_train
 
 from tests.conftest import REPO_ROOT
 
@@ -95,3 +96,26 @@ def test_every_manifest_example_key_has_a_row() -> None:
     readers = set(manifest_keys())
     assert sorted(_leaves(example) - readers - hand) == []
     assert sorted(hand & readers) == [], "a reader key belongs in the generated README table"
+
+
+def test_readme_outside_train_claim_matches_the_jail() -> None:
+    # B8: catalog agents keep their hooks outside a train; the main session is asked, not refused.
+    assert policed_outside_train("daedalus:repo-coder")
+    stale = (
+        "Outside a train, the hooks refuse only reads and searches of credential files",
+        "for every agent and the main session",
+        "Every agent, and the main session, is refused reads",
+        "and the main session while a train runs, are also refused",
+    )
+    for doc in (REPO_ROOT / "README.md", REPO_ROOT / "docs" / "project-requirements.md"):
+        text = doc.read_text(encoding="utf-8")
+        assert [claim for claim in stale if claim in text] == [], doc
+
+
+def test_howto_merge_pick_names_the_push_train_verdict_stop() -> None:
+    # B8: --approved has no exception path yet (issue 62), so a merge on an exception stops there.
+    text = (REPO_ROOT / "docs" / "howto" / "README.md").read_text(encoding="utf-8")
+    bullet = next(
+        line for line in text.splitlines() if line.startswith("- Merge with each finding")
+    )
+    assert "Push Train" in bullet and "stops" in bullet, bullet

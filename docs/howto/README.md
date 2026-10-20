@@ -202,7 +202,7 @@ The summary records the policy gate as `[POLICY: none declared]` or `[POLICY: de
 A `[VERDICT: REJECTED]` lists findings by file and line. The train sends each finding to the coding agent that wrote the code, in a fix unit cut from the integration branch, merges the fixes and audits again. After the second rejected round, the session asks you what happens to the findings that remain:
 
 - One more fix-and-audit round.
-- Merge with each finding as a tracked-risk issue: your exception becomes a ruling in the ledger, bound to the integration tip, and one tracked-risk issue per finding is filed before the pull request opens.
+- Merge with each finding as a tracked-risk issue: your exception becomes a ruling in the ledger, bound to the integration tip, and one tracked-risk issue per finding is filed. The Push Train then stops at its verdict check, which accepts only an approved verdict today, so you push the branch and open the pull request by hand from the main session after the issues are filed (issue 62 tracks teaching that check the exception record).
 - Stop with the branches kept, for fixes by hand or a narrower rerun.
 
 The same question follows every later rejected round; the train never runs another round or stops on its own authority.
