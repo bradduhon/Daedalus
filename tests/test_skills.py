@@ -359,7 +359,10 @@ def test_build_train_hands_coders_the_pick_ledger_ids() -> None:
 ESCALATION_START = (
     "Put it to the operator with AskUserQuestion, in the decision-brief shape (0103):"
 )
-ESCALATION_END = "Never run a third round and never stop the train on your own authority."
+ESCALATION_END = (
+    "Never run a round after an escalate line without the operator's pick, and never stop the "
+    "train on your own authority."
+)
 
 
 def _escalation(text: str) -> str:
@@ -383,16 +386,138 @@ def test_build_train_has_no_unit_cap_or_warm_roster_line() -> None:
     assert "one per unit line of its plan block" in phase2
 
 
-def test_build_train_has_no_three_round_cap() -> None:
-    # 0096, row 17: after the second rejection the operator decides.
+def test_build_train_escalates_on_stall_not_on_count() -> None:
+    # 0109, spec 3.4: the verdict command's printed word decides; the round count never does.
     text = _recipe()
+    catalog = (REPO_ROOT / "skills" / "catalog" / "SKILL.md").read_text(encoding="utf-8")
     assert "After 3 rejected rounds" not in text and "3 rejected rounds" not in text
+    for doc in (text, catalog, _build_train()):
+        flat = " ".join(doc.split())
+        for gone in ("second rejected", "Never run a third round", "rejected this work twice"):
+            assert gone not in flat, gone
     step4 = _section(text, "## Phase 3", "\n5. ").split("\n4. ", 1)[1]
-    assert "After the second rejected round, do not start a third" in step4
+    assert "Obey the printed word; never judge the stall yourself (0109)." in step4
+    for word in (
+        "`continue round=<n+1> budget_left=<k>`",
+        "`escalate reason=recurring key=<key>`",
+        "`escalate reason=new-high key=<key>`",
+        "`escalate reason=budget`",
+        "   - `continue`: run a fix round.",
+        "   - `escalate`: do not start another round.",
+    ):
+        assert word in step4, word
     assert ESCALATION_END in " ".join(step4.split())
+    prompt = " ".join(catalog.split("## The audit escalation prompt", 1)[1].split())
+    assert prompt.startswith("The prompt fires only on an `escalate` line from the verdict command")
+    for reason in ("`reason=recurring`", "`reason=new-high`", "`reason=budget`"):
+        assert reason in prompt, reason
+    for plain in (
+        "a finding that came back after its fix",
+        "a new high or critical finding",
+        "a round budget that ran out",
+    ):
+        assert plain in _escalation(catalog), plain
 
 
-VERDICT_CMD = PLUGIN + "daedalus_train.py verdict --repo <repo> --status {status} --round <n>`"
+def test_build_train_runs_the_audit_in_a_fast_forwarded_worktree() -> None:
+    # 0112, pin C4 -> C5: create before round one, a fast-forward refresh before each later round.
+    text = _recipe()
+    step3 = _section(text, "## Phase 3", "\n4. ").split("\n3. ", 1)[1]
+    create = PLUGIN + (
+        "daedalus_workspace.py create --repo <repo> --name <train-id>-audit "
+        "--base daedalus/<train-id>`"
+    )
+    refresh = PLUGIN + "daedalus_workspace.py refresh --repo <repo> --name <train-id>-audit`"
+    assert step3.index("before the first round") < step3.index(create) < step3.index(refresh)
+    assert step3.index(refresh) < step3.index("Then Agent(`security-auditor`)")
+    assert "The refresh is a fast-forward" in step3 and "`git merge --ff-only`" in step3
+    assert "It never discards a commit" in step3 and "`git -C <path> status`" in step3
+    assert "and the line `Worktree: <audit worktree path>`" in step3
+    assert "minus the `Worktree:` line" in step3
+    assert "`<repo>/docs/.tmp/daedalus/<train-id>/audit/round<n>/findings.txt`" in step3
+    assert "    audit worktree: <path, or pending>\n" in text
+    merge = _section(text, "## Phase 3", "\n2. ")
+    assert "It never merges the audit unit `<train-id>-audit`" in merge
+    assert "removes the audit worktree with the unit worktrees" in merge
+    for doc in (text, *(p.read_text(encoding="utf-8") for p in SKILLS)):
+        assert "reset --hard" not in doc
+    howto = (REPO_ROOT / "docs" / "howto" / "README.md").read_text(encoding="utf-8")
+    assert "refreshes it with a fast-forward" in howto and "reset --hard" not in howto
+
+
+def test_fix_briefs_carry_audit_tests_and_the_tip() -> None:
+    # 0109, spec 3.2, 3.5: fix briefs name node ids and test files; verdicts carry the judged tip.
+    text = _recipe()
+    step4 = _section(text, "## Phase 3", "\n5. ").split("\n4. ", 1)[1]
+    assert step4.startswith("`[VERDICT: REJECTED] tip=<sha>`")
+    assert "each finding's pytest node id and its test file path" in step4
+    assert "`<repo>/docs/.tmp/daedalus/<train-id>/audit/round<n>/`" in step4
+    assert "` audit_tests=pass`" in step4
+    assert "<its finding node ids and test file paths>" in step4
+    assert "The auditor's verdict line carries `tip=<40 hex>`" in _rules()
+    shape = text.split("Shape:", 1)[1].split("\n7. ", 1)[0]
+    assert "[VERDICT: APPROVED] tip=<judged tip> on the merged integration tip" in shape
+    assert "on tip <judged tip> after <n> rejected rounds" in shape
+
+
+def test_complete_check_requires_adversarial_pass_for_jail_check_units() -> None:
+    # spec 3.3: the reply check reads the unit's changed files from git diff --name-only.
+    complete = next(ln for ln in _recipe().splitlines() if ln.startswith("| `[STATUS: COMPLETE]"))
+    assert "`git diff --name-only <lock sha>...<b>`" in complete
+    for path in (
+        "`scripts/checks/`",
+        "`scripts/lib/jail.py`",
+        "`scripts/lib/shell.py`",
+        "`scripts/enforce_agent_jail.py`",
+    ):
+        assert path in complete, path
+    assert "the line must carry ` adversarial=pass`" in complete
+    assert "`python3 -m pytest tests/adversarial -q`" in complete
+    assert "a second COMPLETE on the unit without it stops the train" in complete
+
+
+def test_dispatch_sites_resolve_models_through_the_model_subcommand() -> None:
+    # spec 4, pin C3 -> C5: one resolver; every dispatch site passes its word as model:.
+    model = "`python3 {root}/scripts/daedalus_train.py model --repo <repo> --agent {agent}`"
+    plugin = "${CLAUDE_PLUGIN_ROOT}"
+    rules = _rules().split("- Models (spec 4): ", 1)[1].split("\n", 1)[0]
+    assert model.format(root="<plugin root>", agent="<name>") in rules
+    assert "pass it as `model: <word>` on that Agent call" in rules
+    relay = _section(_build_train(), "## Relay", "\n2. ")
+    assert model.format(root=plugin, agent="orchestrator") in relay
+    assert relay.index("--agent orchestrator") < relay.index("Agent(`orchestrator`) with `model:")
+    push = _section(_push_train(), "## Push", "\n2. Route")
+    assert model.format(root=plugin, agent="pr-train-conductor") in push
+    assert push.index("--agent pr-train-conductor") < push.index("Agent(`pr-train-conductor`)")
+    plan = (REPO_ROOT / "skills" / "plan" / "SKILL.md").read_text(encoding="utf-8")
+    step5 = plan.split("\n5. ", 1)[1].split("\n6. ", 1)[0]
+    assert model.format(root=plugin, agent="planner") in step5
+    assert "adding `--override <override>`" in step5 and "`model: <that word>`" in step5
+    assert "`--model <value>`" in plan.split("\n1. ", 1)[1].split("\n2. ", 1)[0]
+
+
+def test_catalog_names_the_rebind_rule_and_the_verifier_step() -> None:
+    # 0086, spec 6: only the orchestrator's SendMessage rebinds; spec 5: one FIX pass.
+    catalog = (REPO_ROOT / "skills" / "catalog" / "SKILL.md").read_text(encoding="utf-8")
+    rules = catalog.split("## Composition rules", 1)[1].split("\n## ", 1)[0]
+    assert (
+        "a warm resume onto a new unit rebinds the coder only through the orchestrator's "
+        "SendMessage"
+    ) in rules
+    assert "The main session's SendMessage does not rebind" in rules
+    assert "a recipe the main session drives by hand cold-dispatches each new unit" in rules
+    assert "`[VERDICT: REFUTED] <rows>` sends the coder one FIX pass" in rules
+    assert "fast-forwards the audit branch" in rules and "` adversarial=pass`" in rules
+
+
+def test_push_train_proof_names_the_exception_path() -> None:
+    # issue 62: --approved passes on an approved verdict or a bound exception, and says which.
+    step = _push_train().split("\n9. ", 1)[1].split("\n10. ", 1)[0]
+    assert "the operator's exception ruling bound to the current tip (issue 62)" in step
+    assert "an approved audit verdict on the current tip" in step
+
+
+VERDICT_CMD = PLUGIN + "daedalus_train.py verdict --repo <repo> --status {status} --round <n>"
 
 
 def test_build_train_records_each_verdict_for_the_push_gate() -> None:
@@ -401,10 +526,11 @@ def test_build_train_records_each_verdict_for_the_push_gate() -> None:
     phase3 = _section(text, "## Phase 3", "\n6. The summary")
     step4 = phase3.split("\n4. ", 1)[1].split("\n5. ", 1)[0]
     rejected = VERDICT_CMD.replace("{status}", "rejected")
+    rejected += " --findings <findings path> --tip <judged tip>`"
     assert rejected in step4
     assert step4.index(rejected) < step4.index("SendMessage(each responsible coder")
     step5 = phase3.split("\n5. ", 1)[1]
-    approved = VERDICT_CMD.replace("{status}", "approved")
+    approved = VERDICT_CMD.replace("{status}", "approved") + " --tip <judged tip>`"
     # spec 8: finish runs before the auditor; the ledger commit moves the tip, so record last.
     finish = "daedalus_workspace.py finish --repo <repo>"
     assert phase3.index(finish) < phase3.index("Agent(`security-auditor`)")

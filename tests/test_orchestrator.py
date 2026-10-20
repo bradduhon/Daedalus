@@ -292,3 +292,34 @@ def test_recipe_commands_pass_the_orchestrator_hooks() -> None:
     for command in [*commands, *INSPECT]:
         payload = _call("Bash", CWD, command=command)
         assert router.route(payload, REPO_ROOT) == (True, None, ""), command
+
+
+def test_recipe_runs_the_refresh_and_model_subcommands() -> None:
+    # pin C4 -> C5: the two subcommands C4 admits are recipe commands the hook test above routes.
+    names = {" ".join(cmd.split()[1:3]).rsplit("/", 1)[1] for cmd in _recipe_commands()}
+    assert {"daedalus_workspace.py refresh", "daedalus_train.py model"} <= names
+
+
+def _phase2() -> str:
+    return (
+        AGENT_FILE.read_text(encoding="utf-8").split("## Phase 2", 1)[1].split("## Phase 3", 1)[0]
+    )
+
+
+def test_recipe_names_the_verifier_step_and_the_one_pass_rule() -> None:
+    # spec 5: once per unit, after the COMPLETE checks and before finish; one FIX pass, then stop.
+    phase2 = _phase2()
+    step = " ".join(phase2.split("Verifier step (spec 5): ", 1)[1].split("\n", 1)[0].split())
+    assert step.startswith("once per unit, after its `[STATUS: COMPLETE]` passes the branch")
+    assert "and before finish merges it" in step
+    assert "Agent(`verifier`)" in step and "The verifier stays warm (0086)" in step
+    assert "`[VERDICT: VERIFIED] claims=<n>` or `[VERDICT: REFUTED] <rows>`" in step
+    # 0086: a resume's Worktree: line rebinds a coder, so the verifier gets a Unit worktree: line.
+    assert "the line `Unit worktree: <unit worktree path>`" in step
+    assert "never a `Worktree:` line" in step
+    refuted = next(ln for ln in phase2.splitlines() if ln.startswith("| `[VERDICT: REFUTED]"))
+    assert 'SendMessage(that unit\'s coder, "FIX. The verifier refuted: <rows>")' in refuted
+    assert "A second REFUTED on the same unit stops the train with the rows shown" in refuted
+    assert any(ln.startswith("| `[VERDICT: VERIFIED] claims=<n>`") for ln in phase2.splitlines())
+    merge = AGENT_FILE.read_text(encoding="utf-8").split("## Phase 3", 1)[1].split("\n2. ", 1)[0]
+    assert "its verifier verdict is `[VERDICT: VERIFIED]`" in merge
