@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import jail, train_state
+from lib import dispatch_binding, jail, train_state
 from lib.config import Config
 from lib.unit_binding import bindings_path
 from lib.workspace import create, mark_train
@@ -147,6 +147,24 @@ def test_non_coder_dispatch_needs_no_plan(repo_cwd: Path, unit: Path) -> None:
 def test_gate_is_off_outside_a_train(repo_cwd: Path, unit: Path) -> None:
     (repo_cwd / ".claude" / "daedalus" / "train.active").unlink()
     _ok(repo_cwd, unit)
+
+
+def test_resume_gate_is_off_outside_a_train(repo_cwd: Path, unit: Path) -> None:
+    # 0086: no train, no binding file; a resume naming a worktree binds nothing.
+    (repo_cwd / ".claude" / "daedalus" / "train.active").unlink()
+    message = {"to": "c1", "message": f"Worktree: {unit}"}
+    assert dispatch_binding._resume_reason(message, str(repo_cwd)) is None
+    assert not bindings_path(repo_cwd, TRAIN).exists()
+
+
+def test_resume_gate_reads_every_text_of_a_structured_message(repo_cwd: Path, unit: Path) -> None:
+    # 0086: a Worktree: line inside a structured message still meets the gate.
+    seed_plan(repo_cwd, TRAIN)
+    for message in ({"body": [f"Worktree: {unit}"]}, [f"x\nWorktree: {unit}"]):
+        reason = dispatch_binding._resume_reason({"to": "c1", "message": message}, str(repo_cwd))
+        assert reason is not None and "coder c1 holds no unit" in reason, message
+    plain = {"to": "c1", "message": {"body": "RESUME. Research payload: x"}}
+    assert dispatch_binding._resume_reason(plain, str(repo_cwd)) is None
 
 
 def test_a_plan_recorded_in_another_trains_state_is_refused(repo_cwd: Path, unit: Path) -> None:

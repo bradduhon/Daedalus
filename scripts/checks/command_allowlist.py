@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -13,9 +14,30 @@ from lib import hook_io, jail, shell  # noqa: E402
 from lib.audit import project_root  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset({"Bash"})
-NAMES = frozenset({"append_ledger", "git", "gh", "gitleaks", "read"})
+NAMES = frozenset({"append_ledger", "git", "gh", "gitleaks", "read", "train", "inspect"})
 FLAGS: dict[str, hook_io.Flag] = {"--allow": hook_io.Flag(values=NAMES, many=True)}
 PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
+_SCRIPTS = os.path.realpath(Path(__file__).resolve().parents[1])
+# 0060: the train class, script to its admitted first arguments; stop, resume and the
+# operator's exception record stay with the main session.
+TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
+    "daedalus_train.py": frozenset(
+        {"progress", "choice", "plan", "verdict", "state", "step", "check-reply"}
+    ),
+    "daedalus_workspace.py": frozenset({"create", "lock", "finish"}),
+    "daedalus_doctor.py": frozenset({"--print-cache-dir"}),
+    "audit_report.py": None,
+    "validate_plan.py": None,
+}
+# 0060: the inspect class is the auditor's read-only set plus the unit-descent check.
+INSPECT_GIT = shell.READ_ONLY_GIT | {"merge-base"}
+R_ORCHESTRATOR_BASH = (
+    "the orchestrator's Bash runs only daedalus_train.py, daedalus_workspace.py create, lock "
+    "and finish, daedalus_doctor.py --print-cache-dir, audit_report.py and validate_plan.py by "
+    "their absolute plugin path, and read-only inspection with git reads (0060). "
+    "Next: use those only; a stop, a resume, an exception record, a push and a merge into main "
+    "belong to the main session and the operator."
+)
 
 
 def _reason(allowed: frozenset[str]) -> str:
@@ -23,8 +45,25 @@ def _reason(allowed: frozenset[str]) -> str:
         return jail.R_DOCS_BASH
     if allowed == {"git", "gh", "gitleaks"}:
         return jail.R_CONDUCTOR_BASH
+    if allowed == {"train", "inspect"}:
+        return R_ORCHESTRATOR_BASH
     names = ", ".join(sorted(allowed)) or "no command"
     return f"Bash is limited to {names}. Next: use those only."
+
+
+def train_script_ok(segment: list[str]) -> bool:
+    # 0060: `python3 <absolute plugin script> <admitted first argument> ...`, nothing else.
+    if len(segment) < 2 or segment[0] != "python3":
+        return False
+    script = segment[1]
+    if not script.startswith("/") or ".." in script.split("/"):
+        return False
+    real = os.path.realpath(script)
+    name = os.path.basename(real)
+    if os.path.dirname(real) != _SCRIPTS or name not in TRAIN_SCRIPTS:
+        return False
+    first = TRAIN_SCRIPTS[name]
+    return first is None or (len(segment) > 2 and segment[2] in first)
 
 
 def _read_roots(cwd: str) -> tuple[list[str], str]:
@@ -58,6 +97,12 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
             roots, base = _read_roots(cwd)
             if shell.docs_read_ok(segment, raw, roots, cwd, base):
                 continue
+        if "train" in allowed and train_script_ok(segment):
+            continue
+        if "inspect" in allowed and jail._read_only_segment(
+            segment, INSPECT_GIT, cwd, hook_io.hook_charter(cwd)
+        ):
+            continue
         return _reason(allowed)
     return None
 

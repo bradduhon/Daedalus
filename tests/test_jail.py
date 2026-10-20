@@ -69,6 +69,7 @@ def test_known_agents_match_spec_matrix() -> None:
             "web-researcher",
             "standards-rules-specialist",
             "planner",
+            "orchestrator",
         }
     )
 
