@@ -120,8 +120,9 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
             return Outcome(
                 EXIT_STOP,
                 [
-                    "verdict --status approved requires --tip. Next: rerun verdict with --tip "
-                    "set to the tip= value of the auditor's verdict line."
+                    "verdict --status approved requires --tip, the tip the auditor judged, and "
+                    "this call passed none. Next: rerun verdict with --tip set to the tip= value "
+                    "of the auditor's verdict line."
                 ],
             )
         return record_verdict(repo, args.status, args.round_, args.seq, args.tip, args.findings)

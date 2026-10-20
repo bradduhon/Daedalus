@@ -1346,7 +1346,7 @@ def _round_findings(
         raise RunnerError(str(exc)) from exc
     if (status == train_state.REJECTED) != bool(found):
         raise RunnerError(
-            f"a {status} round with {len(found)} findings in {want} is off-contract. "
+            f"the {status} round {round_} lists {len(found)} findings in {want}, off-contract. "
             "Next: have the auditor list each blocking finding for a rejection and none for "
             "an approval."
         )

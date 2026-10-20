@@ -1199,7 +1199,7 @@ def test_verdict_cli_finds_the_seq_itself(repo: Path, plugin: Path) -> None:
     argv += [str(repo), "--status", "approved", "--round", "1"]
     # pin C3 -> C5: an approval without --tip refuses before any record is read.
     no_tip = subprocess.run(argv, capture_output=True, text=True, check=False, cwd=repo)
-    assert no_tip.returncode == 1 and "requires --tip. Next: " in no_tip.stdout
+    assert no_tip.returncode == 1 and "requires --tip, the tip the auditor" in no_tip.stdout
     argv += ["--tip", tip]
     _record(repo, tool_input={"command": " ".join(argv)})
     result = subprocess.run(argv, capture_output=True, text=True, check=False, cwd=repo)
@@ -1318,3 +1318,167 @@ def test_verdict_ignores_an_auditor_stop_before_start_seq(repo: Path, plugin: Pa
     assert refused.code == 1 and NEVER_TYPED in refused.lines[0]
     assert f"holds no daedalus:security-auditor reply after seq {start}" in refused.lines[0]
     assert "verdict" not in _state(repo)
+
+
+def _findings(repo: Path, round_: int, *lines: str) -> Path:
+    # pin C3 -> C1: the auditor's finding list at its one path for the round.
+    train = str(_state(repo)["train_id"])
+    path = repo / "docs" / ".tmp" / "daedalus" / train / "audit" / f"round{round_}" / "findings.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+    return path
+
+
+def _rejected_round(repo: Path, tip: str, round_: int, *lines: str) -> Any:
+    _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
+    return _verdict_call(
+        repo, "rejected", round_, tip=tip, findings=_findings(repo, round_, *lines)
+    )
+
+
+A = "audit/round1/test_scope_a.py::test_refused | medium | scope"
+B = "audit/round1/test_scope_b.py::test_refused | low | scope"
+C = "scripts/lib/jail.py:12 contract | low | contract"
+
+
+def test_rejected_rounds_print_the_stall_word_and_store_each_set(repo: Path, plugin: Path) -> None:
+    # 0109, spec 3.4: shrinking sets continue; a set that recurs unshrunk escalates.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    _marked(repo)
+    tip = _integration(repo)
+    first = _rejected_round(repo, tip, 1, A, B, C)
+    assert first.code == 0 and first.lines == ["continue round=2 budget_left=4"]
+    second = _rejected_round(repo, tip, 2, A, B)
+    assert second.lines == ["continue round=3 budget_left=3"]
+    third = _rejected_round(repo, tip, 3, A, B)
+    assert third.lines == [
+        "escalate reason=recurring key=audit/round1/test_scope_a.py::test_refused"
+    ]
+    rounds = _state(repo)["audit_rounds"]
+    assert sorted(rounds) == ["1", "2", "3"]
+    assert rounds["1"]["scripts/lib/jail.py:12 contract"] == {
+        "severity": "low",
+        "class": "contract",
+    }
+    assert _state(repo)["verdict"]["tip"] == tip
+
+
+def test_a_new_high_and_the_config_budget_escalate(repo: Path, plugin: Path) -> None:
+    # 0109: the budget comes from audit_round_budget; a new high escalates before it.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    _config(repo, {"audit_round_budget": 2})
+    _marked(repo)
+    tip = _integration(repo)
+    assert _rejected_round(repo, tip, 1, A, B).lines == ["continue round=2 budget_left=1"]
+    high = "audit/round2/test_new.py::test_refused | high | scope"
+    assert _rejected_round(repo, tip, 2, high).lines == [
+        "escalate reason=new-high key=audit/round2/test_new.py::test_refused"
+    ]
+    assert _rejected_round(repo, tip, 3, A).lines == ["escalate reason=budget"]
+
+
+def test_findings_must_be_the_round_file_and_match_the_status(repo: Path, plugin: Path) -> None:
+    # pin C3 -> C1: one path per round; a rejection lists findings and an approval lists none.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    _marked(repo)
+    tip = _integration(repo)
+    _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
+    elsewhere = repo / "findings.txt"
+    elsewhere.write_text(A + "\n", encoding="utf-8")
+    wrong = _verdict_call(repo, "rejected", 1, tip=tip, findings=elsewhere)
+    assert wrong.code == 1 and "is not the round 1 finding list file. Next: " in wrong.lines[0]
+    other_round = _verdict_call(repo, "rejected", 2, tip=tip, findings=_findings(repo, 1, A))
+    assert other_round.code == 1 and "round 2 finding list" in other_round.lines[0]
+    empty = _verdict_call(repo, "rejected", 1, tip=tip, findings=_findings(repo, 1))
+    assert empty.code == 1 and "the rejected round 1 lists 0 findings" in empty.lines[0]
+    bad = _verdict_call(repo, "rejected", 1, tip=tip, findings=_findings(repo, 1, "x | y"))
+    assert bad.code == 1 and "Next: " in bad.lines[0]
+    assert "verdict" not in _state(repo)
+    _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
+    listed = _verdict_call(repo, "approved", 1, tip=tip, findings=_findings(repo, 1, A))
+    assert listed.code == 1 and "the approved round 1 lists 1 findings" in listed.lines[0]
+    relative = (
+        Path("docs/.tmp/daedalus") / str(_state(repo)["train_id"]) / "audit/round1/findings.txt"
+    )
+    _findings(repo, 1)
+    passed = _verdict_call(repo, "approved", 1, tip=tip, findings=relative)
+    assert passed.lines == [f"Verdict approved recorded on tip {tip[:12]} (round 1)"]
+    assert _state(repo)["audit_rounds"] == {"1": {}}
+
+
+def test_tip_must_be_the_auditor_tip_and_the_integration_tip(repo: Path, plugin: Path) -> None:
+    # 59: --tip equals the auditor's tip=, and the integration tip has not moved past it.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    _marked(repo)
+    tip = _integration(repo)
+    _agent_stop(repo, "security-auditor", _verdict("APPROVED", "b" * 40), "aud-1")
+    other = _verdict_call(repo, "approved", 1, tip=tip)
+    assert other.code == 1 and f"names tip {'b' * 40}, not --tip {tip}" in other.lines[0]
+    _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
+    (repo / "src.py").write_text("x\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "after the audit")
+    moved = _integration(repo)
+    stale = _verdict_call(repo, "approved", 1, tip=tip)
+    assert stale.code == 1 and f"moved past the judged tip {tip[:12]}" in stale.lines[0]
+    assert f"Next: run the security audit on {moved[:12]}." in stale.lines[0]
+    assert "verdict" not in _state(repo)
+    reason = gh_policy.verdict_reason(str(repo), "git push")
+    assert reason is not None and "no verdict is recorded" in reason
+
+
+def _train_cli(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    argv = [sys.executable, str(SCRIPTS_DIR / "daedalus_train.py"), *args]
+    return subprocess.run(argv, capture_output=True, text=True, check=False, cwd=cwd)
+
+
+def test_model_prints_the_effective_model_inside_and_outside_a_train(
+    repo: Path, plugin: Path
+) -> None:
+    # spec 4, pin C3 -> C5: the model word alone, from the override, config, then agent file.
+    outside = _train_cli(repo, "model", "--repo", str(repo), "--agent", "repo-coder")
+    assert (outside.returncode, outside.stdout) == (0, "opus\n"), outside.stderr
+    _config(repo, {"agent_models": {"repo-coder": "sonnet"}})
+    configured = _train_cli(repo, "model", "--repo", str(repo), "--agent", "repo-coder")
+    assert configured.stdout == "sonnet\n"
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    inside = _train_cli(repo, "model", "--repo", str(repo), "--agent", "repo-coder")
+    assert (inside.returncode, inside.stdout) == (0, "sonnet\n")
+    argv = ("model", "--repo", str(repo), "--agent", "repo-coder", "--override", "haiku")
+    assert _train_cli(repo, *argv).stdout == "haiku\n"
+    assert _train_cli(repo, "model", "--repo", str(repo), "--agent", "planner").stdout == "opus\n"
+
+
+@pytest.mark.parametrize(
+    "extra", [("--agent", "mystery"), ("--agent", "planner", "--override", "gpt-4")], ids=str
+)
+def test_model_refuses_an_unknown_agent_or_model(repo: Path, extra: tuple[str, ...]) -> None:
+    done = _train_cli(repo, "model", "--repo", str(repo), *extra)
+    assert done.returncode == 1 and "Next: " in done.stdout
+
+
+def test_model_reports_a_bad_config(repo: Path) -> None:
+    _config(repo, {"agent_models": {"repo-coder": "gpt-4"}})
+    done = _train_cli(repo, "model", "--repo", str(repo), "--agent", "repo-coder")
+    assert done.returncode == 1 and "agent_models.repo-coder" in done.stdout
+
+
+def test_a_repo_outside_the_working_directory_root_is_refused(repo: Path, plain: Path) -> None:
+    # 63, pin C3 -> C4: --repo must realpath to the project root of the process cwd.
+    for argv in (("state", "--repo", str(plain)), ("model", "--repo", str(plain), "--agent", "x")):
+        done = _train_cli(repo, *argv)
+        assert done.returncode == 1
+        assert done.stdout == (
+            f"--repo {plain} is not the project root of the working directory ({repo}). "
+            f"Next: run the command from {plain}, or pass --repo {repo}.\n"
+        )
+    sub = repo / "docs"
+    sub.mkdir()
+    linked = repo.parent / "link"
+    linked.symlink_to(repo)
+    assert _train_cli(sub, "state", "--repo", str(linked)).returncode == 0

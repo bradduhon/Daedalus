@@ -271,14 +271,6 @@ def tip_problem(repo: Path, judged: object, current: str) -> str | None:
     return None
 
 
-def train_start(repo: Path, train_id: str) -> int | None:
-    # issue 57: None when the state is unreadable or carries no start_seq; callers refuse.
-    try:
-        return train_state.start_seq(train_state.load(repo, train_id))
-    except train_state.TrainStateError:
-        return None
-
-
 def _state(repo: Path, train_id: str) -> dict[str, object]:
     try:
         return train_state.load(repo, train_id)
