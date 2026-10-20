@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import audit
+from lib import audit, train_state
 
-from tests.conftest import SCRIPTS_DIR, write_train_marker
+from tests.conftest import SCRIPTS_DIR, replay_auditor, write_train_marker
 
 
 @pytest.fixture
@@ -241,8 +241,70 @@ def test_cli_hooks_live_passes_on_its_own_record(
     assert result.stdout.startswith("OK hooks live: session sess-test")
 
 
+APPROVED_TRAIN = "20261016-120000"
+
+
+def _hooks_live_start(hook_input: Any, repo_cwd: Path) -> subprocess.CompletedProcess[str]:
+    # issue 57: the train's marker and state, then the CLI hooks-live call that sets start_seq.
+    (repo_cwd / ".claude" / "daedalus" / "train.active").write_text(f"{APPROVED_TRAIN}\n")
+    train_state.save(repo_cwd, APPROVED_TRAIN, {"train_id": APPROVED_TRAIN})
+    command = f"python3 x/verify_audit_chain.py --hooks-live --repo {repo_cwd}"
+    audit.audit_append(hook_input(tool_input={"command": command}))
+    return _verify("--hooks-live", "--repo", repo_cwd)
+
+
+def _summary_written(hook_input: Any, repo_cwd: Path) -> None:
+    summary = repo_cwd / "docs" / ".tmp" / "daedalus" / f"{APPROVED_TRAIN}-summary.md"
+    audit.audit_append(hook_input(tool_name="Write", tool_input={"file_path": str(summary)}))
+    summary.parent.mkdir(parents=True, exist_ok=True)
+    summary.write_text("Session sess-test: .claude/daedalus/audit/sess-test.jsonl\n")
+
+
+def test_cli_hooks_live_records_start_seq_once(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    result = _hooks_live_start(hook_input, repo_cwd)
+    assert result.returncode == 0, result.stdout
+    assert train_state.load(repo_cwd, APPROVED_TRAIN)["start_seq"] == 1
+    command = f"python3 x/verify_audit_chain.py --hooks-live --repo {repo_cwd}"
+    audit.audit_append(hook_input(tool_input={"command": command}))
+    assert _verify("--hooks-live", "--repo", repo_cwd).returncode == 0
+    assert train_state.load(repo_cwd, APPROVED_TRAIN)["start_seq"] == 1
+
+
+def test_cli_approved_passes_on_train_a_and_refuses_without_its_hand_back(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # issue 57: --approved on Train A's records passes; without the hand-back records it refuses.
+    assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
+    replayed = replay_auditor(repo_cwd, "sess-test")
+    _summary_written(hook_input, repo_cwd)
+    result = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.endswith(f"auditor record seq {replayed[-2]['seq']}\n")
+    audit.log_path("sess-test", str(repo_cwd)).unlink()
+    assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
+    replay_auditor(repo_cwd, "sess-test", handbacks=False)
+    _summary_written(hook_input, repo_cwd)
+    refused = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
+    assert refused.returncode == 1 and "is not [VERDICT: APPROVED]" in refused.stdout
+
+
+def test_cli_approved_ignores_a_verdict_before_start_seq(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # issue 57: an approval logged before this train's hooks-live belongs to an earlier train.
+    replay_auditor(repo_cwd, "sess-test")
+    assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
+    _summary_written(hook_input, repo_cwd)
+    result = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
+    assert result.returncode == 1
+    assert "no daedalus:security-auditor reply after seq 7" in result.stdout
+
+
 def _approved_train(hook_input: Any, repo_cwd: Path, verdict: str) -> None:
     train = "20261016-120000"
+    assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
     audit.audit_append(
         hook_input(
             hook_event_name="SubagentStop",
@@ -263,7 +325,7 @@ def test_cli_approved_round_trip(project_data: Path, hook_input: Any, repo_cwd: 
     result = _verify("--approved", "20261016-120000", "--repo", repo_cwd)
     assert result.returncode == 0, result.stdout
     assert result.stdout == (
-        "OK approved: train 20261016-120000, session sess-test, auditor record seq 1\n"
+        "OK approved: train 20261016-120000, session sess-test, auditor record seq 2\n"
     )
 
 

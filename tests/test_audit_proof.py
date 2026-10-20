@@ -8,19 +8,21 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import audit
+from lib import audit, train_state
 from lib.audit_proof import ProofError, approved, hooks_live, newest_log, read_chain
 
-from tests.conftest import write_train_marker
+from tests.conftest import replay_auditor, write_train_marker
 
 NEEDLE = "daedalus_workspace.py begin"
 TRAIN = "20261016-120000"
+MARKED = "20261017-120000"
 AUDITOR = "daedalus:security-auditor"
 
 
 @pytest.fixture
 def project_data(project_data: Path, repo_cwd: Path) -> Path:
     write_train_marker(repo_cwd)
+    train_state.save(repo_cwd, TRAIN, {"train_id": TRAIN, "start_seq": 0})
     return project_data
 
 
@@ -74,6 +76,32 @@ def test_hooks_live_reports_a_broken_chain(
     with pytest.raises(ProofError) as info:
         hooks_live(repo_cwd, NEEDLE)
     assert str(info.value).startswith("BROKEN")
+
+
+def test_hooks_live_mark_writes_start_seq_once(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # issue 57: no state file is left alone; the first marked call sets start_seq.
+    _bash(hook_input, f"python3 /p/scripts/{NEEDLE}")
+    assert hooks_live(repo_cwd, NEEDLE, mark=True).startswith("OK hooks live:")
+    assert not train_state.state_path(repo_cwd, MARKED).exists()
+    train_state.save(repo_cwd, MARKED, {"train_id": MARKED})
+    _bash(hook_input, f"python3 /p/scripts/{NEEDLE}")
+    hooks_live(repo_cwd, NEEDLE, mark=True)
+    assert train_state.load(repo_cwd, MARKED)["start_seq"] == 2
+    _bash(hook_input, f"python3 /p/scripts/{NEEDLE}")
+    hooks_live(repo_cwd, NEEDLE, mark=True)
+    hooks_live(repo_cwd, NEEDLE)
+    assert train_state.load(repo_cwd, MARKED)["start_seq"] == 2
+
+
+def test_hooks_live_without_mark_writes_nothing(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    train_state.save(repo_cwd, MARKED, {"train_id": MARKED})
+    _bash(hook_input, f"python3 /p/scripts/{NEEDLE}")
+    hooks_live(repo_cwd, NEEDLE)
+    assert "start_seq" not in train_state.load(repo_cwd, MARKED)
 
 
 def test_newest_log_is_by_mtime(project_data: Path, hook_input: Any, repo_cwd: Path) -> None:
@@ -282,3 +310,106 @@ def test_approved_passes_a_record_from_before_the_tail_field(
     assert approved(repo_cwd, TRAIN) == (
         f"OK approved: train {TRAIN}, session sess-test, auditor record seq 1"
     )
+
+
+def _handback(hook_input: Any, message: str) -> None:
+    audit.audit_append(
+        hook_input(
+            hook_event_name="PostToolUse",
+            tool_name="SubagentHandback",
+            tool_input={"message": message},
+            tool_response={"success": True},
+            agent_type=AUDITOR,
+            agent_id="a1",
+        )
+    )
+
+
+def _start(repo_cwd: Path, seq: int) -> None:
+    train_state.update(repo_cwd, TRAIN, start_seq=seq)
+
+
+def test_approved_finds_the_verdict_in_the_auditor_hand_back(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # issue 57: Train A's stop records hold only a relay; the verdict is in the hand-back call.
+    replayed = replay_auditor(repo_cwd, "sess-test")
+    _summary_write(hook_input, repo_cwd)
+    _summary(repo_cwd)
+    assert replayed[-2]["tool_input"] == {"message": "[VERDICT: APPROVED]"}
+    assert approved(repo_cwd, TRAIN) == (
+        f"OK approved: train {TRAIN}, session sess-test, auditor record seq {replayed[-2]['seq']}"
+    )
+
+
+def test_approved_refuses_train_a_without_its_hand_back_records(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # issue 57: the bug as Train A met it; the stop records alone carry no verdict line.
+    replay_auditor(repo_cwd, "sess-test", handbacks=False)
+    _summary_write(hook_input, repo_cwd)
+    _summary(repo_cwd)
+    assert "is not [VERDICT: APPROVED]" in _refused(repo_cwd)
+
+
+def test_approved_ignores_a_verdict_before_start_seq(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # issue 57: an earlier train's approval in the same session log never counts.
+    replay_auditor(repo_cwd, "sess-test")
+    _bash(hook_input, "python3 /p/scripts/verify_audit_chain.py --hooks-live")
+    _start(repo_cwd, len(read_chain(audit.log_path("sess-test", str(repo_cwd)))))
+    _stop(hook_input, "The audit is finished.")
+    _summary_write(hook_input, repo_cwd)
+    _summary(repo_cwd)
+    assert "(record seq 8) is not [VERDICT: APPROVED]" in _refused(repo_cwd)
+    _start(repo_cwd, 8)
+    assert "no daedalus:security-auditor reply after seq 8" in _refused(repo_cwd)
+
+
+def test_approved_refuses_without_start_seq(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    train_state.save(repo_cwd, TRAIN, {"train_id": TRAIN})
+    _train(hook_input, repo_cwd, "[VERDICT: APPROVED] ok")
+    assert "records no start_seq" in _refused(repo_cwd)
+
+
+def test_approved_newer_rejection_still_wins(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # 0089: a rejection in the newest turn wins over its own approving relay and older rounds.
+    replay_auditor(repo_cwd, "sess-test")
+    _handback(hook_input, "[VERDICT: REJECTED] a.py:1 high")
+    _stop(hook_input, "[VERDICT: APPROVED] relayed")
+    _summary_write(hook_input, repo_cwd)
+    _summary(repo_cwd)
+    assert "carries a [VERDICT: REJECTED] line" in _refused(repo_cwd)
+
+
+def test_approved_reads_a_hand_back_with_no_stop_yet(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # issue 57: a hand-back after the newest stop is the newest turn; no older round stands in.
+    replay_auditor(repo_cwd, "sess-test")
+    _handback(hook_input, "[VERDICT: REJECTED] a.py:1 high")
+    _summary_write(hook_input, repo_cwd)
+    _summary(repo_cwd)
+    assert "carries a [VERDICT: REJECTED] line" in _refused(repo_cwd)
+
+
+def test_approved_refuses_a_hand_back_message_that_is_not_text(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    _handback(hook_input, "[VERDICT: APPROVED]")
+    audit.audit_append(
+        hook_input(
+            hook_event_name="PostToolUse",
+            tool_name="SubagentHandback",
+            tool_input={"message": ["[VERDICT: APPROVED]"]},
+            agent_type=AUDITOR,
+            agent_id="a1",
+        )
+    )
+    _train(hook_input, repo_cwd, "[VERDICT: APPROVED] ok")
+    assert "(record seq 2) has a tool_input.message that is not text" in _refused(repo_cwd)

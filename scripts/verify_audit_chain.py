@@ -54,7 +54,8 @@ def _mode(argv: list[str]) -> int:
     repo = args.repo.resolve()
     try:
         if args.approved is None:
-            print(hooks_live(repo, HOOKS_LIVE_NEEDLE))
+            # issue 57: the first hooks-live of a train records its start_seq.
+            print(hooks_live(repo, HOOKS_LIVE_NEEDLE, mark=True))
         else:
             print(approved(repo, args.approved))
     except ProofError as exc:

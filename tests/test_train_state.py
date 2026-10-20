@@ -110,6 +110,22 @@ def test_a_bad_train_id_is_refused(repo: Path, train: str) -> None:
         state_path(repo, train)
 
 
+def test_mark_start_writes_start_seq_once(repo: Path) -> None:
+    # issue 57: the first hooks-live sets the bound; a later one never moves it.
+    save(repo, TRAIN, {"train_id": TRAIN})
+    assert train_state.start_seq(load(repo, TRAIN)) is None
+    assert train_state.mark_start(repo, TRAIN, 0) == 0
+    assert train_state.mark_start(repo, TRAIN, 40) == 0
+    assert load(repo, TRAIN)[train_state.START_SEQ] == 0
+
+
+@pytest.mark.parametrize("value", [True, -1, "3", 2.0, None])
+def test_start_seq_reads_only_a_non_negative_int(repo: Path, value: object) -> None:
+    assert train_state.start_seq({train_state.START_SEQ: value}) is None
+    save(repo, TRAIN, {"train_id": TRAIN, train_state.START_SEQ: value})
+    assert train_state.mark_start(repo, TRAIN, 9) == 9
+
+
 def test_active_train_reads_the_marker(repo: Path) -> None:
     marker = repo / ".claude" / "daedalus" / "train.active"
     assert active_train(repo) is None

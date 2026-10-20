@@ -99,6 +99,36 @@ def write_train_marker(repo: Path) -> Path:
     return marker
 
 
+TRAIN_A_AUDITOR = REPO_ROOT / "tests" / "fixtures" / "audit" / "train-a-auditor.jsonl"
+
+
+def replay_auditor(cwd: Path, session: str, handbacks: bool = True) -> list[dict[str, Any]]:
+    # issue 57: Train A's three auditor rounds, appended through the hook writer.
+    from lib import audit
+
+    appended: list[dict[str, Any]] = []
+    for raw in TRAIN_A_AUDITOR.read_text(encoding="utf-8").splitlines():
+        rec = json.loads(raw)
+        if rec["tool_name"] == "SubagentHandback" and not handbacks:
+            continue
+        payload: dict[str, Any] = {
+            "session_id": session,
+            "hook_event_name": rec["event"],
+            "cwd": str(cwd),
+            **{key: rec[key] for key in ("agent_id", "agent_type", "tool_name", "tool_use_id")},
+            "tool_input": rec["tool_input"],
+        }
+        if rec["result_head"] is not None:
+            payload["tool_response"] = json.loads(rec["result_head"])
+        if rec["event"] == "SubagentStop":
+            reply = f"{rec['last_message_head']}\n{rec['last_message_tail']}"
+            payload["last_assistant_message"] = reply
+        record = audit.audit_append(payload)
+        assert record is not None
+        appended.append(record)
+    return appended
+
+
 @pytest.fixture
 def plugin_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "plugin-data"
