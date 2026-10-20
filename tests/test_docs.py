@@ -105,6 +105,7 @@ def test_readme_outside_train_claim_matches_the_jail() -> None:
         "Outside a train, the hooks refuse only reads and searches of credential files",
         "for every agent and the main session",
         "Every agent, and the main session, is refused reads",
+        "and the main session while a train runs, are also refused",
     )
     for doc in (REPO_ROOT / "README.md", REPO_ROOT / "docs" / "project-requirements.md"):
         text = doc.read_text(encoding="utf-8")
