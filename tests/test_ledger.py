@@ -13,9 +13,11 @@ from lib.ledger import (
     LedgerError,
     ResolvedLedger,
     format_entry,
+    id_pattern,
     next_id,
     read_sequence,
     resolve_ledger,
+    supersedes_problem,
 )
 
 from tests.conftest import REPO_ROOT
@@ -337,3 +339,11 @@ def test_table_row_rejects_line_break_in_entry_id(tmp_path: Path) -> None:
     led = _led(tmp_path / "t.md", "markdown-table-row", "{seq}-{repo}", "last-row-id")
     with pytest.raises(LedgerError, match="Next:"):
         format_entry(led, 1, "A\nB", "PLT", "2026-10-14", "body")
+
+
+def test_supersedes_ids_follow_the_declared_scheme() -> None:
+    # 0090: an id matches the ledger's own scheme, not a fixed shape.
+    assert supersedes_problem("Supersedes: 0012.", "{seq:04d}") is None
+    assert supersedes_problem("Supersedes: 0012-DAE-PLT.", "{seq:04d}") is not None
+    with pytest.raises(LedgerError, match="Next:"):
+        id_pattern("{seq}-{owner}")
