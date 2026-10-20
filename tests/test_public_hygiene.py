@@ -197,6 +197,14 @@ def test_hygiene_allows_packs() -> None:
     assert "packs/" in {_entry(p) for p in _tracked()}
 
 
+def test_hygiene_admits_the_adversarial_corpus() -> None:
+    # spec 3.3: the shared corpus ships with the public tests and runs in the normal suite.
+    corpus = [p for p in _tracked() if p.startswith("tests/adversarial/")]
+    assert corpus, "tests/adversarial/ is not tracked"
+    assert {_entry(p) for p in corpus} == {"tests/"}
+    assert set(corpus) <= set(_public_files())
+
+
 def _git(cwd: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=True)
 
