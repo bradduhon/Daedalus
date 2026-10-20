@@ -142,8 +142,9 @@ def test_only_a_finder_may_carry_web() -> None:
 def test_only_a_producer_writes_and_only_a_finder_fetches() -> None:
     # 0044: the shape, not a hand list, says which agents may write files or reach the web.
     # spec 3.1: a shaper writes too; its shape list binds it to root_writes --touch scratch.
+    # 0060: a dispatcher writes briefs and the summary; its list binds it to scratch writes.
     for name, agent in LOADED.items():
-        if agent.shape not in {"producer", "shaper"}:
+        if agent.shape not in {"producer", "shaper", "dispatcher"}:
             assert not agent.tools & {"Write", "Edit", "MultiEdit", "NotebookEdit"}, name
         if agent.shape != "finder":
             assert not agent.tools & {"WebFetch", "WebSearch"}, name

@@ -30,14 +30,23 @@ def _own_script(cwd: str, base: str | None) -> Callable[[str], bool]:
     return inside
 
 
-def _declared(cwd: str) -> frozenset[tuple[str, ...]]:
+def _declared(cwd: str, root: str | None = None) -> frozenset[tuple[str, ...]]:
     # B2: the manifest's stack commands; an unusable manifest declares nothing.
     if not os.path.isabs(cwd):
         return frozenset()
-    loaded = jail._manifest_at(os.path.realpath(str(project_root(Path(cwd)))))
+    root = root or os.path.realpath(str(project_root(Path(cwd))))
+    loaded = jail._manifest_at(root)
     if isinstance(loaded, str):
         return frozenset()
     return shell.declared_segments(manifest.declared_commands(loaded))
+
+
+def _declared_tools(cwd: str) -> frozenset[str]:
+    # issue 55: the real file of each declared command's first word, anchored at the project root.
+    if not os.path.isabs(cwd):
+        return frozenset()
+    root = os.path.realpath(str(project_root(Path(cwd))))
+    return frozenset(shell.command_path(s[0], root) for s in _declared(cwd, root))
 
 
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
@@ -56,10 +65,12 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
         return shell.R_ENV
     cwd = hook_io.text(hook_input, "cwd")
     bases = shell.chain_bases(chain, cwd, jail.DIR_CHANGE_CMDS)
+    tools = _declared_tools(cwd) if agent == CODER else frozenset()
     for i, segment in enumerate(chain.segments):
         words = shell._raw_words(chain.raws[i])[len(chain.tokens[i]) - len(segment) :]
         own = _own_script(cwd, bases[i] if bases else None) if agent == CODER else None
-        reason = shell._worker_hygiene(segment, agent, words, own)
+        base = bases[i] if bases else cwd
+        reason = shell._worker_hygiene(segment, agent, words, own, base, tools)
         if reason and agent == CODER and tuple(segment) in _declared(cwd):
             continue
         if reason:

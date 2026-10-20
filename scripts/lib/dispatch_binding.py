@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# issue 29, 0044: the main session's coder dispatch and the coder's first-write unit claim.
+# issue 29, 0044: the coder dispatch, the warm resume rebind and the coder's first-write claim.
 # lib.jail imports this module, so lib.jail names are imported at call time.
 from __future__ import annotations
 
@@ -9,14 +9,14 @@ import os
 import re
 from pathlib import Path
 
-from lib import plan_record
+from lib import plan_record, unit_binding
 from lib.audit_proof import SUMMARY_DIR
 from lib.config import DEFAULT_MAX_CONCURRENT_BUILDERS
 from lib.project_root import project_root
 from lib.shell import _abs, _base, _git_split
 from lib.train_state import TRAIN_ID, TrainStateError, active_train
 from lib.train_state import load as load_train
-from lib.unit_binding import claim, record_dispatch
+from lib.unit_binding import claim, rebind, record_dispatch
 from lib.workspace import UNMARK_NEXT, train_marker
 
 R_NO_TRAIN = (
@@ -45,7 +45,21 @@ R_NO_PLAN = (
     "(spec 4.1, 0088): {why} Next: run /daedalus:plan to write and record this train's plan, "
     "then dispatch the coder again."
 )
+R_RESUME_LINE = (
+    "a resume that hands a coder a unit names it on exactly one line "
+    "'Worktree: <absolute path>' (0086). Next: name the unit worktree on one Worktree: line."
+)
+R_RESUME_TARGET = (
+    "a resume carrying a Worktree: line names the coder in its to field (0086). "
+    "Next: address the coder by the agent id its first dispatch returned."
+)
+R_RESUME_UNBOUND = (
+    "coder {coder} holds no unit in train {train}, so a resume cannot move it to unit {unit} "
+    "(0086). Next: resume it without the Worktree: line while it is on its first unit, or "
+    "dispatch a cold coder for unit {unit}."
+)
 DISPATCH_TOOLS = frozenset({"Agent", "Task"})
+RESUME_TOOLS = frozenset({"SendMessage"})
 _WORKTREE_LINE = re.compile(r"Worktree: (/\S+)")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 # issue 29: git forms that change a unit's index, history or files; -C names the unit.
@@ -142,8 +156,7 @@ def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     if train is None:
         marker = train_marker(repo)
         return f"{marker} names no train id. " + UNMARK_NEXT.format(repo=repo)
-    prompt = str(tool_input.get("prompt") or "")
-    lines = [line for line in prompt.splitlines() if line.startswith("Worktree:")]
+    lines = _worktree_lines(str(tool_input.get("prompt") or ""))
     match = _WORKTREE_LINE.fullmatch(lines[0]) if len(lines) == 1 else None
     if match is None:
         return R_WORKTREE_LINE
@@ -155,17 +168,82 @@ def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     why = _plan_defect(repo, train, state)
     if why is not None:
         return R_NO_PLAN.format(why=why)
-    units = state.get("units") or []
-    named = os.path.realpath(match.group(1))
-    for unit in units:
+    unit = _unit_named(state, match.group(1))
+    if unit is None:
+        return _not_a_unit(match.group(1), train)
+    return record_dispatch(repo, train, unit)
+
+
+def _worktree_lines(text: str) -> list[str]:
+    return [line for line in text.splitlines() if line.startswith("Worktree:")]
+
+
+def _unit_named(state: dict[str, object], path: str) -> str | None:
+    # issue 29: the recorded unit whose worktree the line names, compared by real path.
+    named = os.path.realpath(path)
+    units = state.get("units")
+    for unit in units if isinstance(units, list) else []:
         if isinstance(unit, dict) and unit.get("path") and unit.get("name"):
             if os.path.realpath(str(unit["path"])) == named:
-                return record_dispatch(repo, train, str(unit["name"]))
+                return str(unit["name"])
+    return None
+
+
+def _not_a_unit(path: str, train: str) -> str:
     return (
-        f"{match.group(1)} is not a unit worktree of train {train}. "
+        f"{path} is not a unit worktree of train {train}. "
         "Next: name the unit worktree on one Worktree: line, as daedalus_workspace.py create "
         "printed it."
     )
+
+
+def _strings(value: object) -> list[str]:
+    # 0086: every text a structured message carries, so no Worktree: line hides in a field.
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for item in value.values() for s in _strings(item)]
+    if isinstance(value, list):
+        return [s for item in value for s in _strings(item)]
+    return []
+
+
+def _resume_reason(tool_input: dict[str, object], cwd: str) -> str | None:
+    # 0086, spec 8: a resume naming another unit's worktree rebinds the coder before it is sent.
+    from lib.jail import _train_active
+
+    # 0086: every field but the target, since the message key is ASSUMED, not verified live.
+    fields = {key: value for key, value in tool_input.items() if key != "to"}
+    lines = _worktree_lines("\n".join(_strings(fields)))
+    if not lines or not os.path.isabs(cwd) or not _train_active(cwd):
+        return None
+    repo = project_root(Path(cwd))
+    train = active_train(repo)
+    if train is None:
+        return f"{train_marker(repo)} names no train id. " + UNMARK_NEXT.format(repo=repo)
+    match = _WORKTREE_LINE.fullmatch(lines[0]) if len(lines) == 1 else None
+    if match is None:
+        return R_RESUME_LINE
+    coder = str(tool_input.get("to") or "")
+    if not coder:
+        return R_RESUME_TARGET
+    try:
+        state = load_train(repo, train)
+        bound = unit_binding._read(unit_binding.bindings_path(repo, train))
+    except TrainStateError as exc:
+        return str(exc)
+    why = _plan_defect(repo, train, state)
+    if why is not None:
+        return R_NO_PLAN.format(why=why)
+    unit = _unit_named(state, match.group(1))
+    if unit is None:
+        return _not_a_unit(match.group(1), train)
+    if bound.get(unit, {}).get("agent_id") == coder:
+        return None  # 0086: the runner's queue rebound it already, or the coder holds this unit.
+    held = [name for name, record in bound.items() if record.get("agent_id") == coder]
+    if not held:
+        return R_RESUME_UNBOUND.format(coder=coder, train=train, unit=unit)
+    return rebind(repo, train, coder, held[0], unit)
 
 
 def _segment_units(segment: list[str], cwd: str) -> set[str]:

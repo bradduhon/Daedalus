@@ -1,0 +1,19 @@
+{
+  "relations_from": "0005-TST-PLT",
+  "names_from": "0006-TST-PLT",
+  "areas": {
+    "0001-TST-PLT": "composition and phases",
+    "0002-TST-PLT": "the jail and grammars",
+    "0004-TST-PLT": "the ledger and charter",
+    "0005-TST-PLT": "GitHub and release",
+    "0006-TST-PLT": "the jail and grammars",
+    "0007-TST-PLT": "operator interaction",
+    "0008-TST-PLT": "the ledger and charter"
+  },
+  "relations": {
+    "0001-TST-PLT": {"supersedes": [], "amends": []},
+    "0002-TST-PLT": {"supersedes": [], "amends": []},
+    "0003-TST-PLT": {"supersedes": [], "amends": []},
+    "0004-TST-PLT": {"supersedes": [], "amends": ["0001-TST-PLT"]}
+  }
+}

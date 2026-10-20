@@ -1,0 +1,398 @@
+{
+  "checks/audit_log": {
+    "failure": "0010: a session's tool calls and replies go unrecorded, so a train's hash chain cannot show what ran",
+    "premise_test": "tests/test_audit_log_hook.py::test_logs_every_event_shape"
+  },
+  "checks/command_allowlist": {
+    "failure": "0084: charter-docs or the conductor runs a command outside its allowlist and writes or reaches past its role",
+    "premise_test": "tests/test_checks_command_allowlist.py::test_command_allowlist_judges_the_hook_alone"
+  },
+  "checks/credential_paths": {
+    "failure": "0023: an agent reads a credential file and the secret lands in the session transcript",
+    "premise_test": "tests/test_checks_credential_paths.py::test_bash_naming_a_credential_path_is_refused"
+  },
+  "checks/enforce_agent_jail": {
+    "failure": "0023: a call during a train runs with no jail judgment, so an unknown agent or a coder acts unchecked",
+    "premise_test": "tests/test_enforce_hook.py::test_missing_libraries_fail_closed_during_a_train"
+  },
+  "checks/gh_classes": {
+    "failure": "0028: an agent runs a gh merge, deletion or repository administration call the operator keeps for themself",
+    "premise_test": "tests/test_checks_gh_classes.py::test_gh_classes_judges_the_hook_alone"
+  },
+  "checks/git_grammar": {
+    "failure": "0042: an agent runs a git subcommand outside its shape and rewrites history, the index or a branch",
+    "premise_test": "tests/test_checks_git_grammar.py::test_git_grammar_judges_the_hook_alone"
+  },
+  "checks/git_push": {
+    "failure": "0001: a push reaches the remote without the conductor, the train branch or an approved audit verdict",
+    "premise_test": "tests/test_checks_git_push.py::test_git_push_judges_the_hook_alone"
+  },
+  "checks/network_tools": {
+    "failure": "0042: an agent that is not a finder reaches the network and brings in unvetted content or sends repository data out",
+    "premise_test": "tests/test_checks_network_tools.py::test_network_tools_judges_the_hook_alone"
+  },
+  "checks/read_only_bash": {
+    "failure": "0024: a judge changes the tree it is judging, so its verdict covers code it wrote",
+    "premise_test": "tests/test_checks_read_only_bash.py::test_read_only_bash_judges_the_hook_alone"
+  },
+  "checks/root_writes": {
+    "failure": "0042: contract-spec or charter-docs writes outside the contract or charter folders it owns",
+    "premise_test": "tests/test_checks_root_writes.py::test_root_writes_judges_the_hook_alone"
+  },
+  "checks/shell_tripwires": {
+    "failure": "0022: a worker hides a command from the jail in a wrapper, variable or shell construct, or runs a force push, recursive delete or signing step",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_shell_tripwires_judges_the_hook_alone"
+  },
+  "checks/tool_bound": {
+    "failure": "0042: an agent calls a tool its shape does not grant, such as a judge writing or a coder dispatching agents",
+    "premise_test": "tests/test_checks_tool_bound.py::test_tool_bound_judges_the_hook_alone"
+  },
+  "checks/unit_writes": {
+    "failure": "0054: a coder writes outside its unit worktree or into a protected path inside it",
+    "premise_test": "tests/test_checks_unit_writes.py::test_unit_writes_judges_the_hook_alone"
+  },
+  "checks/workspace_integrity": {
+    "failure": "0010: an agent writes into .git or the plugin data folder and breaks the repository or the audit chain",
+    "premise_test": "tests/test_checks_workspace_integrity.py::test_workspace_integrity_judges_the_hook_alone"
+  },
+  "credential_paths.R_CREDENTIAL": {
+    "failure": "0023: an agent reads a credential file and the secret lands in the session transcript",
+    "premise_test": "tests/test_checks_credential_paths.py::test_bash_naming_a_credential_path_is_refused"
+  },
+  "credential_paths.R_CREDENTIAL_TREE": {
+    "failure": "0023: a recursive read over a folder that holds a credential file pulls the secret into the transcript",
+    "premise_test": "tests/test_jail.py::test_recursive_reader_over_a_store_ancestor_is_refused"
+  },
+  "credential_paths.R_REPLY_KEY": {
+    "failure": "0091: an agent reads the reply key and forges the reply digest the push gate trusts",
+    "premise_test": "tests/test_checks_credential_paths.py::test_reply_key_is_refused_to_every_agent"
+  },
+  "credential_paths.R_REPLY_KEY_TREE": {
+    "failure": "0091: a search over the plugin data folder reads the reply key, so the reply digest can be forged",
+    "premise_test": "tests/test_checks_credential_paths.py::test_grep_tool_on_the_data_folder_is_refused"
+  },
+  "dispatch_binding.R_NO_TRAIN": {
+    "failure": "issue 29: a coder writes outside a train, with no unit binding and no audit it answers to",
+    "premise_test": "tests/test_unit_binding.py::test_coder_write_without_a_train_refused"
+  },
+  "dispatch_binding.R_WORKTREE_LINE": {
+    "failure": "issue 29: a coder starts without one named unit worktree, so its writes cannot be bound to a unit",
+    "premise_test": "tests/test_jail.py::test_main_coder_dispatch_without_worktree_line_asks"
+  },
+  "dispatch_binding.R_TWO_UNITS": {
+    "failure": "issue 29: one command writes into two unit worktrees and a coder edits a sibling unit's branch",
+    "premise_test": "tests/test_unit_binding.py::test_git_dash_c_commit_into_a_sibling_refused"
+  },
+  "dispatch_binding.R_NO_CODER_ID": {
+    "failure": "issue 29: a coder call with no agent or session id cannot be bound, so it could write any unit",
+    "premise_test": "tests/test_controls.py::test_coder_write_without_an_id_is_refused"
+  },
+  "dispatch_binding.R_NOT_PRINTED": {
+    "failure": "0024: the session dispatches an agent the train runner did not schedule and skips a gate",
+    "premise_test": "tests/test_train_runner.py::test_dispatch_the_runner_did_not_print_is_refused"
+  },
+  "dispatch_binding.R_NO_PLAN": {
+    "failure": "0088: a coder starts before the train's plan validates and builds work no plan covers",
+    "premise_test": "tests/test_dispatch_binding.py::test_a_missing_plan_file_is_refused"
+  },
+  "gh_policy.R_VERDICT": {
+    "failure": "spec 4.2: a push or pull request ships a tip the security audit never approved",
+    "premise_test": "tests/test_checks_git_push.py::test_push_with_no_verdict_is_refused"
+  },
+  "gh_policy.R_PR_HEAD": {
+    "failure": "spec 4.2: a pull request opens from a branch other than the audited train branch",
+    "premise_test": "tests/test_gh_policy.py::test_pr_create_head_naming_another_branch_is_refused"
+  },
+  "gh_policy.R_PR_CURRENT": {
+    "failure": "spec 4.2: a pull request with no head opens from the checked-out branch, which the audit did not cover",
+    "premise_test": "tests/test_gh_policy.py::test_pr_create_without_head_off_the_train_branch_is_refused"
+  },
+  "git_grammar.R_NO_GIT": {
+    "failure": "0042: an agent whose file grants no git runs git and changes the index, history or a branch",
+    "premise_test": "tests/test_controls.py::test_git_without_a_grant_is_refused"
+  },
+  "tool_bound.R_NO_AGENT_FILE": {
+    "failure": "0042: an agent with no agent file runs with tools nobody declared, so no shape bounds it",
+    "premise_test": "tests/test_checks_tool_bound.py::test_tool_bound_denies_an_agent_without_a_file"
+  },
+  "router.R_MAIN": {
+    "failure": "0106: the operator's own session is judged as an agent and refused",
+    "premise_test": "tests/test_router.py::test_main_session_duties_unchanged"
+  },
+  "router.R_NO_FILE": {
+    "failure": "0023: an agent with no agent file runs with no jail policy during a train",
+    "premise_test": "tests/test_router.py::test_agent_without_a_file_is_refused_with_no_binding"
+  },
+  "router.R_NO_HOOKS": {
+    "failure": "0023: an agent file with no hooks block runs with no jail policy during a train",
+    "premise_test": "tests/test_router.py::test_agent_without_a_hooks_block_is_refused_with_no_binding"
+  },
+  "jail.R_NESTED_CLAUDE": {
+    "failure": "audit A7-1: a nested claude session reaches the jail as the operator and escapes every agent rule",
+    "premise_test": "tests/test_jail.py::test_main_claude_is_asked"
+  },
+  "jail.R_NAMESPACED_MAIN": {
+    "failure": "0106: a namespaced agent claims the operator's role and gets the operator's asks instead of an agent's denies",
+    "premise_test": "tests/test_jail.py::test_namespaced_main_reason"
+  },
+  "jail.R_PIPE": {
+    "failure": "0058: a pipe hands one command's output to another the agent's allowlist does not cover",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_pipe_blocked_where_not_allowed"
+  },
+  "jail.R_NO_CWD": {
+    "failure": "0035: a hook payload with no absolute cwd cannot name its repository, so a train's rules would be skipped",
+    "premise_test": "tests/test_checks_workspace_integrity.py::test_workspace_integrity_judges_the_hook_alone"
+  },
+  "jail.R_TOOL": {
+    "failure": "0042: a worker calls a tool outside its shape, such as a judge writing or a coder dispatching agents",
+    "premise_test": "tests/test_checks_tool_bound.py::test_tool_bound_fixture_decisions"
+  },
+  "jail.R_DOTGIT": {
+    "failure": "0010: a direct write into .git changes refs, hooks or config behind git's back",
+    "premise_test": "tests/test_checks_workspace_integrity.py::test_workspace_integrity_fixture_decisions"
+  },
+  "jail.R_CODER_UNIT_GIT": {
+    "failure": "issue 29: a coder commits into the main checkout or a sibling worktree instead of its unit branch",
+    "premise_test": "tests/test_checks_unit_writes.py::test_unit_writes_judges_the_hook_alone"
+  },
+  "jail.R_BASH_OUTSIDE": {
+    "failure": "0054: a coder's Bash write lands outside its unit worktree",
+    "premise_test": "tests/test_checks_unit_writes.py::test_redirect_to_a_path_is_judged_as_a_write"
+  },
+  "jail.R_ROUTE_NEXT": {
+    "failure": "0054: a coder changes a protected path that only contract-spec or charter-docs may change",
+    "premise_test": "tests/test_checks_unit_writes.py::test_coder_builtin_protected_paths_are_refused"
+  },
+  "jail.R_PROTECTED_BUILTIN": {
+    "failure": "0054: a coder edits contracts/, .github/, .claude/ or the service manifest inside its worktree",
+    "premise_test": "tests/test_checks_unit_writes.py::test_coder_builtin_protected_paths_are_refused"
+  },
+  "jail.R_PROTECTED_PATH": {
+    "failure": "0054: a coder edits a path the project's manifest forbids",
+    "premise_test": "tests/test_checks_unit_writes.py::test_coder_manifest_forbidden_path_is_refused"
+  },
+  "jail.R_PROTECTED_EXT": {
+    "failure": "0054: a coder writes a file type the project's manifest forbids",
+    "premise_test": "tests/test_checks_unit_writes.py::test_coder_manifest_forbidden_extension_is_refused"
+  },
+  "jail.R_CD_RELATIVE": {
+    "failure": "0022: after a cd the jail resolves a relative write against the wrong folder and an outside write passes",
+    "premise_test": "tests/test_checks_unit_writes.py::test_coder_relative_write_after_cd_is_refused"
+  },
+  "jail.R_CONDUCTOR_PUSH": {
+    "failure": "0001: the conductor pushes to a remote or refspec other than the train branch on origin",
+    "premise_test": "tests/test_checks_git_push.py::test_git_push_fixture_decisions"
+  },
+  "jail.R_CONDUCTOR_PUSH_HEAD": {
+    "failure": "issue 11: the conductor pushes HEAD, which can be a branch other than the train's",
+    "premise_test": "tests/test_checks_git_grammar.py::test_push_refuses_head_as_the_refspec"
+  },
+  "jail.R_CONDUCTOR_PUSH_BRANCH": {
+    "failure": "issue 11: the conductor pushes a branch other than this train's",
+    "premise_test": "tests/test_checks_git_grammar.py::test_push_refuses_a_refspec_other_than_the_train_branch"
+  },
+  "jail.R_CONDUCTOR_NO_TRAIN": {
+    "failure": "issue 11: the conductor pushes with no active train to name the branch, so any branch could ship",
+    "premise_test": "tests/test_checks_git_grammar.py::test_push_reads_the_branch_from_the_train_marker"
+  },
+  "jail.R_CONDUCTOR_CHARTER": {
+    "failure": "0078: the conductor's git -C reaches the charter repository for anything but the push of the train's branch",
+    "premise_test": "tests/test_checks_git_grammar.py::test_conductor_charter_push_refused_without_a_declared_charter_root"
+  },
+  "jail.R_CODER_GIT": {
+    "failure": "0001: a coder runs a git command that rewrites history, switches branches or reaches a remote",
+    "premise_test": "tests/test_checks_git_grammar.py::test_git_grammar_fixture_decisions"
+  },
+  "jail.R_DATA_DIR": {
+    "failure": "0010: an agent edits the audit log, train state or bindings, so the hash chain no longer proves what ran",
+    "premise_test": "tests/test_checks_workspace_integrity.py::test_workspace_integrity_judges_the_hook_alone"
+  },
+  "jail.R_SUBAGENT_MAIN": {
+    "failure": "0106: a subagent claims to be main and gets the operator's asks instead of an agent's denies",
+    "premise_test": "tests/test_jail.py::TestFinalSubagentAsMain::test_agent_id_without_type_blocks"
+  },
+  "jail.R_CONDUCTOR_REPO": {
+    "failure": "0078: the conductor's gh write targets a repository other than this one or the declared charter",
+    "premise_test": "tests/test_checks_gh_classes.py::TestFinalConductorGh::test_repo_flag_reason"
+  },
+  "jail.R_BODY_FILE": {
+    "failure": "0028: a gh body file outside docs/.tmp or /tmp posts the contents of any file, a secret included, to GitHub",
+    "premise_test": "tests/test_checks_gh_classes.py::TestFinalConductorGh::test_blocked"
+  },
+  "jail.R_BODY_INLINE": {
+    "failure": "0040: a pull request body passed inline leaves no file on disk recording what was posted",
+    "premise_test": "tests/test_checks_gh_classes.py::TestFixWaveConductorGh::test_inline_body_blocked"
+  },
+  "jail.R_EDIT_BASE": {
+    "failure": "0040: the conductor retargets a pull request onto a base the audit did not cover",
+    "premise_test": "tests/test_checks_gh_classes.py::TestFixWaveConductorGh::test_edit_comment_diff_refused_by_0028"
+  },
+  "jail.R_GITLEAKS": {
+    "failure": "0001: a gitleaks run without redaction prints found secrets into the transcript or writes a report into the tree",
+    "premise_test": "tests/test_checks_command_allowlist.py::test_command_allowlist_fixture_decisions"
+  },
+  "jail.R_LEDGER_DIRECT": {
+    "failure": "0004: a direct edit of the ledger skips the sequence and lock checks append_ledger.py makes",
+    "premise_test": "tests/test_checks_root_writes.py::TestFixWaveLedgerResolution::test_default_ledger_protected_beside_a_declared_one"
+  },
+  "jail.R_DOCS_BASH": {
+    "failure": "0084: charter-docs runs a command outside its append, commit and read set",
+    "premise_test": "tests/test_checks_command_allowlist.py::test_charter_docs_read_refusal_names_the_reads"
+  },
+  "jail.R_UNIT_OUTSIDE": {
+    "failure": "0054: a coder's Write or Edit lands outside its unit worktree",
+    "premise_test": "tests/test_checks_unit_writes.py::test_unit_writes_fixture_decisions"
+  },
+  "jail.R_REMOTE_GIT": {
+    "failure": "0001: an agent in a Build Train fetches, pulls or pushes, so unreviewed remote state enters or leaves the train",
+    "premise_test": "tests/test_checks_git_push.py::test_git_push_fixture_decisions"
+  },
+  "jail.R_NETWORK": {
+    "failure": "0042: an agent that is not a finder reaches the network and brings in unvetted content or sends repository data out",
+    "premise_test": "tests/test_checks_network_tools.py::test_network_tools_fixture_decisions"
+  },
+  "jail.R_BASETEMP": {
+    "failure": "issue 56: a pytest temp root outside the worktree, where the write checks do not see what the test run writes",
+    "premise_test": "tests/test_controls.py::test_basetemp_root_is_unseen_by_the_write_checks"
+  },
+  "jail.R_CONTRACT_SPEC_WRITE": {
+    "failure": "0011: contract-spec writes outside contracts/ or the charter specs and changes files no contract governs",
+    "premise_test": "tests/test_checks_root_writes.py::test_root_writes_fixture_decisions"
+  },
+  "jail.R_CHARTER_DOCS_WRITE": {
+    "failure": "0015: charter-docs writes outside the charter repository or docs/",
+    "premise_test": "tests/test_checks_root_writes.py::test_root_writes_judges_the_hook_alone"
+  },
+  "jail.R_AUDITOR_BASH": {
+    "failure": "0024: the security auditor changes the tree it is judging, so its verdict covers code it wrote",
+    "premise_test": "tests/test_checks_read_only_bash.py::test_read_only_bash_fixture_decisions"
+  },
+  "jail.R_SPECIALIST_BASH": {
+    "failure": "0024: a NIST or CIS specialist changes the tree it is judging",
+    "premise_test": "tests/test_checks_read_only_bash.py::test_read_only_bash_judges_the_hook_alone"
+  },
+  "jail.R_CONDUCTOR_BASH": {
+    "failure": "0001: the conductor runs a command outside push, pull request and secret-scan work",
+    "premise_test": "tests/test_checks_command_allowlist.py::test_command_allowlist_fixture_decisions"
+  },
+  "jail.R_CONDUCTOR_WEB": {
+    "failure": "0001: the conductor fetches web content into the session that holds push rights",
+    "premise_test": "tests/test_checks_network_tools.py::test_network_tools_judges_the_hook_alone"
+  },
+  "jail.R_WEB_RESEARCHER_ONLY": {
+    "failure": "0042: an agent other than the web researcher fetches a page and brings unvetted text into the train",
+    "premise_test": "tests/test_checks_network_tools.py::test_network_tools_fixture_decisions"
+  },
+  "jail.R_UNKNOWN": {
+    "failure": "0023: an agent the jail does not know runs during a train with no policy",
+    "premise_test": "tests/test_jail.py::test_namespaced_boundary_tester_is_refused"
+  },
+  "jail.R_UNKNOWN_TRAIN": {
+    "failure": "0100: a foreign agent writes, dispatches or fetches while a train runs",
+    "premise_test": "tests/test_jail.py::test_unknown_agent_fails_closed"
+  },
+  "jail.R_MAIN_TRAIN_ASK": {
+    "failure": "0105: a main-session write in a repository with an active train leaves a dirty tree or lands on the integration branch",
+    "premise_test": "tests/test_jail.py::test_main_write_to_readme_in_the_train_repo_asks"
+  },
+  "jail.R_ROUTED": {
+    "failure": "0058: a Daedalus agent judged outside its own hooks gets a verdict its agent file never declared",
+    "premise_test": "tests/test_jail.py::test_known_agent_is_sent_to_the_router"
+  },
+  "jail.R_CREDENTIAL_PARAM": {
+    "failure": "0023: a variable in a path hides a credential file from the jail",
+    "premise_test": "tests/test_jail.py::test_unresolved_variable_in_a_path_position_is_refused"
+  },
+  "jail.R_LEDGER_ARGS": {
+    "failure": "0004: append_ledger runs with flags that point it at another repository's ledger or skip the sequence check",
+    "premise_test": "tests/test_checks_command_allowlist.py::test_command_allowlist_judges_the_hook_alone"
+  },
+  "shell.R_LEDGER_LITERAL": {
+    "failure": "finding F1: charter-docs runs append_ledger through an empty plugin-root variable, so the call fails or runs another script",
+    "premise_test": "tests/test_checks_shell_tripwires.py::TestRegressionCharterDocs::test_append_literal_plugin_root_blocked"
+  },
+  "shell.R_UNSUPPORTED": {
+    "failure": "0022: a shell construct such as substitution or a background job hides a command from the jail",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_unsupported_redirects_and_substitution_refused"
+  },
+  "shell.R_INLINE": {
+    "failure": "0022: a wrapper, shell or interpreter runs code the jail never sees",
+    "premise_test": "tests/test_checks_shell_tripwires.py::TestLiveRunGrammar::test_python3_dash_m_other_module_is_refused"
+  },
+  "shell.R_GIT_CONFIG": {
+    "failure": "0022: a git config override changes hooks, pager or transport and runs code behind the git grammar",
+    "premise_test": "tests/test_checks_git_grammar.py::TestRound3WorkerHygiene::test_git_config_read_only_for_repo_coder"
+  },
+  "shell.R_ENV": {
+    "failure": "0022: an environment prefix such as GIT_DIR or GIT_SSH_COMMAND redirects a command the jail approved",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_shell_tripwires_judges_the_hook_alone"
+  },
+  "shell.R_SHELL_VARS": {
+    "failure": "0022: an exported variable redirects git or a later command after the jail judged it",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_worker_shell_variable_export_is_refused"
+  },
+  "shell.R_SHELL_STATE": {
+    "failure": "0022: a builtin such as alias or hash rebinds a command name and voids every later check",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_worker_shell_state_builtins_are_refused"
+  },
+  "shell.R_RSYNC_REMOTE": {
+    "failure": "0022: rsync copies worktree files to a remote host or runs a remote-shell command",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_coder_rsync_remote_refused_from_unit_worktree_cwd"
+  },
+  "shell.R_FIND_WRITE": {
+    "failure": "0022: find deletes, runs or writes files the write checks never see",
+    "premise_test": "tests/test_controls.py::test_find_that_writes_is_refused"
+  },
+  "shell.R_HYGIENE": {
+    "failure": "0022: an expansion in a word changes the path or command after the jail judged the literal",
+    "premise_test": "tests/test_checks_shell_tripwires.py::TestQuotedHygiene::test_dollar_outside_quotes_is_refused"
+  },
+  "shell.R_VARIABLE": {
+    "failure": "0022: a command or git subcommand taken from a variable runs something the jail never judged",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_workers_blocked_on_variable_commands"
+  },
+  "shell.R_FORCE_PUSH": {
+    "failure": "0001: a force, delete or mirror push rewrites or erases remote history",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_shell_tripwires_fixture_decisions"
+  },
+  "shell.R_CLEAN": {
+    "failure": "0010: git clean deletes the untracked plugin data folder with the audit log and train state",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_universal_tripwires_block_everyone"
+  },
+  "shell.R_STASH_UNTRACKED": {
+    "failure": "0010: a stash of untracked files removes the plugin data folder with the audit log and train state",
+    "premise_test": "tests/test_jail.py::TestProjectDataDir::test_stash_of_untracked_blocks_for_main"
+  },
+  "shell.R_DESTRUCTIVE": {
+    "failure": "0035: a recursive delete or raw disk write destroys files in the operator's environment",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_universal_tripwires_block_everyone"
+  },
+  "shell.R_SIGN": {
+    "failure": "C.1: an agent signs a commit or tag, so a signature no longer proves the operator's review",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_universal_tripwires_block_everyone"
+  },
+  "shell.R_DEFAULT_BRANCH": {
+    "failure": "0001: an agent pushes to the default branch and skips the operator's merge",
+    "premise_test": "tests/test_checks_shell_tripwires.py::TestRegressionConductor::test_default_branch_reason"
+  },
+  "shell.R_BRACE_PUSH": {
+    "failure": "0001: brace expansion hides a force flag or refspec in a push from the jail",
+    "premise_test": "tests/test_jail.py::TestRound4MainFallback::test_blocked"
+  },
+  "shell.R_GIT_CONFIG_KEY": {
+    "failure": "0001: a git -c key changes push, hook or ssh behavior and runs code the grammar passed as plain git",
+    "premise_test": "tests/test_jail.py::TestRound4MainFallback::test_blocked"
+  },
+  "shell.R_XARGS": {
+    "failure": "0001: xargs feeds git push, commit or clean arguments the jail never sees",
+    "premise_test": "tests/test_jail.py::TestRound3MainHardened::test_blocked"
+  },
+  "shell.R_GIT_PLUMBING": {
+    "failure": "0001: git transport plumbing such as send-pack pushes past the push grammar",
+    "premise_test": "tests/test_checks_git_push.py::TestFinalRemotePlumbing::test_repo_coder_blocks"
+  },
+  "shell.R_DATA_DIR_GIT": {
+    "failure": "0010: the plugin data folder is committed, so the audit log and reply key leave the machine in a push",
+    "premise_test": "tests/test_checks_shell_tripwires.py::TestProjectDataDir::test_git_add_commit_of_data_dir_blocks"
+  }
+}

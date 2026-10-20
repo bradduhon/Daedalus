@@ -69,6 +69,7 @@ def test_known_agents_match_spec_matrix() -> None:
             "web-researcher",
             "standards-rules-specialist",
             "planner",
+            "orchestrator",
         }
     )
 
@@ -1853,6 +1854,75 @@ def test_main_claude_is_asked(command: str) -> None:
 
 def test_main_mentions_of_claude_pass() -> None:
     for command in ("ls .claude", "cat ~/.claude/CLAUDE.md", "echo claude-code", "git log"):
+        assert decide(_b(None, command), CFG).allow, command
+
+
+@pytest.fixture(name="fake_claude")
+def fake_claude_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    # issue 55: a versioned claude binary and the PATH link to it, as the installer lays them out.
+    versions = tmp_path.resolve() / "share" / "versions"
+    versions.mkdir(parents=True)
+    binary = versions / "2.0.0"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    bin_dir = tmp_path.resolve() / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "claude").symlink_to(binary)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    return binary
+
+
+def test_main_versioned_claude_path_is_asked(fake_claude: Path) -> None:
+    # issue 55: the versioned file the PATH link resolves to is the same nested session.
+    for command in (f"{fake_claude} -p hi", f"nohup {fake_claude} -p hi"):
+        assert _main_asks(decide(_b(None, command), CFG), jail.ASK_NESTED_CLAUDE), command
+    assert decide(_b(None, f"ls {fake_claude.parent}"), CFG).allow
+
+
+class TestForeignDocumentationAgent:
+    # 0100: a foreign documentation agent reads during a train, pipes included; it never writes.
+    AGENT = "claude-code-guide"
+
+    def test_read_only_bash_during_a_train_is_allowed(self, train_cwd: Path) -> None:
+        _mark(train_cwd)
+        cwd = str(train_cwd)
+        for command in ("cat README.md | head", "git log --oneline -3 | head", "ls docs"):
+            assert decide(_cred(self.AGENT, "Bash", cwd, command=command), CFG).allow, command
+
+    def test_writes_and_scripts_during_a_train_are_refused(self, train_cwd: Path) -> None:
+        _mark(train_cwd)
+        cwd = str(train_cwd)
+        for command in (
+            f"python3 {cwd}/scripts/daedalus_workspace.py unmark --repo {cwd}",
+            "echo $CLAUDE_PLUGIN_ROOT",
+            "cat README.md | tee notes.md",
+        ):
+            d = decide(_cred(self.AGENT, "Bash", cwd, command=command), CFG)
+            assert not d.allow and "read-only while" in str(d.reason), command
+
+
+class TestGlobDotsAndBraces:
+    # issue 53: zsh spellings of dotglob, the (D) qualifier, and brace alternatives naming a store.
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "setopt globdots; cat ~/*/id_ed25519",
+            "setopt GLOB_DOTS; cat ~/*/id_ed25519",
+            "cat ~/*/id_ed25519(D)",
+            "cat ~/{.ssh,x}/id_ed25519",
+            "cat ~/{x,{.ssh,y}}/id_ed25519",
+            "cat ~/{.ss{h,x}}/id_ed25519",
+        ],
+    )
+    def test_main_store_reads_are_refused(self, cred_home: Path, command: str) -> None:
+        d = decide(_b(None, command), CFG)
+        assert not d.allow and "is a credential path" in str(d.reason), command
+
+    @pytest.mark.parametrize(
+        "command",
+        ["setopt nomatch; cat ~/*/id_ed25519", "cat ~/{x,y}/id_ed25519", "cat ~/*/x(N)"],
+    )
+    def test_main_sibling_reads_are_allowed(self, cred_home: Path, command: str) -> None:
         assert decide(_b(None, command), CFG).allow, command
 
 

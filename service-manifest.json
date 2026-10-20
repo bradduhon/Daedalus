@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "service_name": "daedalus",
-  "purpose": "A Claude Code plugin that runs Build Trains of scoped agents under a hook-enforced jail and a hash-chained audit log.",
+  "purpose": "A Claude Code plugin: a catalog of scoped agents composed per body of work under a hook-enforced jail and a hash-chained audit log; the Build Train is one saved recipe over it.",
   "stack": {
     "language": "python",
     "runtime": "python3.12",
@@ -11,6 +11,7 @@
     "lint_cmd": ".venv/bin/ruff check scripts tests",
     "build_cmd": null
   },
+  "features": { "secrets_scan": true },
   "entrypoints": {
     "scripts": "scripts/",
     "lib": "scripts/lib/",

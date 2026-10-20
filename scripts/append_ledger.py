@@ -5,6 +5,8 @@
 
 --probe prints the resolved ledger and its sequence. An append checks --expected-seq
 against the ledger under the lock and exits 2 on a mismatch, 1 on any other error.
+A table row's Supersedes and Ruling cells are checked when the header has the column
+(0090, 0094); rows already in the ledger are never re-checked.
 """
 
 from __future__ import annotations
@@ -27,11 +29,13 @@ from lib.config import ConfigError, load_config  # noqa: E402
 from lib.ledger import (  # noqa: E402
     LedgerError,
     ResolvedLedger,
+    body_cell_problem,
     format_entry,
     id_table_span,
     next_id,
     read_sequence,
     resolve_ledger,
+    split_row,
 )
 from lib.locks import bounded_flock  # noqa: E402
 from lib.project_root import project_root  # noqa: E402
@@ -41,7 +45,6 @@ NONE_FOUND = (
     "Next: declare a ledger block or create one (docs/project-requirements.md)"
 )
 _CODE = re.compile(r"[A-Za-z0-9_-]+")
-_UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 _ENTRY_LINE = re.compile(r"^## Entry [0-9]")
 LOCK_TIMEOUT_S = 5.0
 
@@ -121,20 +124,13 @@ def _read_entry(path: Path) -> str:
         ) from exc
 
 
-def _split(line: str) -> list[str]:
-    text = line.strip()
-    text = text.removeprefix("|")
-    if text.endswith("|") and not text.endswith("\\|"):
-        text = text[:-1]
-    return [cell.strip() for cell in _UNESCAPED_PIPE.split(text)]
-
-
 def _eol(line: str) -> str:
     return "\r\n" if line.endswith("\r\n") else "\n"
 
 
-def _table_body(entry: str, header: str) -> str:
-    want = len(_split(header)) - 2
+def _table_body(entry: str, header: str, id_scheme: str) -> str:
+    columns = split_row(header)[2:]
+    want = len(columns)
     if want < 1:
         raise AppendError(
             "the ledger table has no columns after Id and Date. "
@@ -147,12 +143,15 @@ def _table_body(entry: str, header: str) -> str:
             "a table entry is one line; the entry file holds a line break. "
             "Next: join the cells onto one line."
         )
-    cells = _split(entry)
+    cells = split_row(entry)
     if len(cells) != want:
         raise AppendError(
             f"entry has {len(cells)} cell(s); the ledger table has {want} after Id and Date. "
             "Next: escape pipes as \\| inside a cell, or match the column count."
         )
+    problem = body_cell_problem(columns, cells, id_scheme)
+    if problem:
+        raise AppendError(problem)
     return " | ".join(cells)
 
 
@@ -167,7 +166,7 @@ def _table_text(lines: list[str], ledger: ResolvedLedger, entry: str, ids: _Ids)
             f"{ledger.path} Id column is not the first column. "
             "Next: move Id to the first column; rows are written as | Id | Date | ...."
         )
-    header = _split(bare[start])
+    header = split_row(bare[start])
     if len(header) < 2 or header[1].lower() != "date":
         raise AppendError(
             f"{ledger.path} header column 2 is not Date. "
@@ -175,7 +174,7 @@ def _table_text(lines: list[str], ledger: ResolvedLedger, entry: str, ids: _Ids)
             "declare a different format once one is supported."
         )
     eol = _eol(lines[start])
-    body = _table_body(entry.strip(), bare[start])
+    body = _table_body(entry.strip(), bare[start], ledger.id_scheme)
     row = format_entry(ledger, ids.seq, ids.repo, ids.type_, ids.date, body).rstrip("\n") + eol
     out = list(lines)
     if out[end - 1] == bare[end - 1]:

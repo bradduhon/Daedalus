@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import re
 
-from lib.project_keys import CONFIG_FILE, MANIFEST_FILE, config_keys, manifest_keys
+from lib.project_keys import (
+    CONFIG_FILE,
+    KEY_ROWS,
+    MANIFEST_FILE,
+    REFERENCE_HEADER,
+    config_keys,
+    manifest_keys,
+    reference_table,
+)
 
 from tests.conftest import REPO_ROOT
 
@@ -35,6 +43,17 @@ def _reader_pairs() -> set[tuple[str, str]]:
     return {(MANIFEST_FILE, k) for k in manifest_keys()} | {(CONFIG_FILE, k) for k in config_keys()}
 
 
+def test_readme_key_reference_is_the_generated_table() -> None:
+    # B7: the README carries reference_table() verbatim between its markers.
+    assert _block().strip("\n") == reference_table().strip("\n")
+
+
+def test_every_reader_key_has_a_generator_row() -> None:
+    # B7: a key a reader accepts with no KEY_ROWS entry fails here, before the README test.
+    assert sorted(_reader_pairs() - set(KEY_ROWS)) == []
+    assert sorted(set(KEY_ROWS) - _reader_pairs()) == []
+
+
 def test_every_reader_key_has_a_reference_row() -> None:
     documented = {(file, key) for key, file, _ in _rows()}
     assert sorted(_reader_pairs() - documented) == []
@@ -51,8 +70,8 @@ def test_reference_rows_name_their_file() -> None:
     assert rows, "no key reference rows between the markers"
     for key, file, cells in rows:
         assert file in (MANIFEST_FILE, CONFIG_FILE), key
-        # 0031: what it does, its values and its default, each in words.
-        assert len(cells) == 3 and all(cells), key
+        # 0031, B7: what it governs, its type, values, default and an example, each in words.
+        assert len(cells) == len(REFERENCE_HEADER) - 2 and all(cells), key
         assert not _VERSION.search(" ".join(cells)), key
 
 

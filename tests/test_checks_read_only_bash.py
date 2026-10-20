@@ -60,6 +60,32 @@ class TestReadOnlyAgents:
         assert not decide(_b("cis-specialist", "git checkout x"), CFG).allow
 
 
+READ_ONLY_AGENTS = ("security-auditor", "nist-specialist", "cis-specialist")
+
+
+class TestSpecialistPipes:
+    # Train A friction bin: read-only pipes under read-only Bash, one allow and one refuse row each.
+    @pytest.mark.parametrize("agent", READ_ONLY_AGENTS)
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "find /x -maxdepth 6 -iname frameworks -type d 2>/dev/null | head",
+            "jq -r '.controls[] | .id' c.json | sort | head",
+            "cat c.json | jq .a | wc -l",
+        ],
+    )
+    def test_read_only_pipe_is_allowed(self, agent: str, command: str) -> None:
+        assert decide(_b(agent, command), CFG).allow, (agent, command)
+
+    @pytest.mark.parametrize("agent", READ_ONLY_AGENTS)
+    @pytest.mark.parametrize(
+        "command",
+        ["jq -r .id c.json | python3 -c 1", "cat c.json | tee out.json", "ls /x | xargs cat"],
+    )
+    def test_pipe_into_a_writer_or_interpreter_is_refused(self, agent: str, command: str) -> None:
+        assert not decide(_b(agent, command), CFG).allow, (agent, command)
+
+
 class TestRegressionReadOnly:
     @pytest.mark.parametrize(
         "command",

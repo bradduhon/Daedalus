@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 from audit_report import md_escape
-from lib import audit
+from lib import audit, controls
 
 from tests.conftest import SCRIPTS_DIR, write_train_marker
 
@@ -533,6 +533,29 @@ def test_controls_counts_blocks_per_hook(
     assert "mean judge time: 8.0 ms over 7 calls" in out
     # Auditor check: no reply text and no reason body enters the controls table.
     assert "SECRET" not in out and "no remote" not in out and "pipes" not in out
+
+
+def test_controls_prints_one_failure_line_per_blocking_hook(
+    project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # pin B2 -> B6: the row's failure for a known hook, failure: none for an unprefixed reason.
+    repo = _controls_chain(hook_input, monkeypatch)
+    monkeypatch.undo()
+    audit.audit_append(hook_input(tool_use_id="u1"), "block", "no hook prefix here")
+    audit.audit_append(hook_input(tool_use_id="u2"), "ask", "jail: needs the operator. Next: x")
+    out = _report("--repo", repo, "--session", "sess-test", "--controls").stdout
+    rows = controls.load()
+    section = out.split("### Failure behind each blocking hook\n\n")[1].split("\n\n###")[0]
+    assert section.splitlines() == [
+        "- git\\_push",
+        f"  failure: {rows['checks/git_push'].failure}",
+        "- jail",
+        f"  failure: {rows['checks/enforce_agent_jail'].failure}",
+        "- shell\\_tripwires",
+        f"  failure: {rows['checks/shell_tripwires'].failure}",
+        "- unprefixed",
+        "  failure: none",
+    ]
 
 
 def test_controls_seconds_to_next_allowed_call(

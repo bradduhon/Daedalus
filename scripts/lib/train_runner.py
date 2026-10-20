@@ -25,11 +25,13 @@ from lib.audit_proof import (
     VERDICT_APPROVED,
     VERDICT_REJECTED,
     ProofError,
+    auditor_round,
     hooks_live,
     live_log,
     newest_log,
     read_chain,
-    stop_verdict,
+    round_verdict,
+    train_start,
 )
 from lib.config import ConfigError, load_config
 from lib.jail import normalize_agent
@@ -48,6 +50,7 @@ from lib.train_definition import (
     PER_UNIT,
     Definition,
     DefinitionError,
+    Origin,
 )
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -154,8 +157,27 @@ def reply_path(brief: Path) -> Path:
     return brief.parent.parent / "replies" / brief.name
 
 
-def _definition_file(plugin_root: Path, name: str) -> Path:
-    return plugin_root / "trains" / f"{name}.json"
+def _definition_file(root: Path, plugin_root: Path, name: str) -> tuple[Path, Origin]:
+    # issue 52, 0073: the manifest's trains_dir is searched before the plugin's own trains folder.
+    loaded = manifest.load(root)
+    folder = loaded.trains_dir if loaded is not None else None
+    if folder is not None:
+        path = root / folder / f"{name}.json"
+        if os.path.lexists(path):
+            if not path.resolve().is_relative_to(root.resolve()):
+                raise DefinitionError(
+                    f"the train definition {path} resolves outside the project {root}"
+                )
+            return path, "project"
+    return plugin_root / "trains" / f"{name}.json", "plugin"
+
+
+def _brief_base(session: Session) -> Path:
+    # spec 3.1: a plugin brief resolves from the plugin root, a project brief beside its definition.
+    path = session.defn.path.resolve()
+    return (
+        session.plugin_root if path.is_relative_to(session.plugin_root.resolve()) else path.parent
+    )
 
 
 def _loaded(state: dict[str, object]) -> Definition:
@@ -462,7 +484,7 @@ def _render(
 ) -> Path:
     sid = _text(stage, "id")
     told = _text(_obj(stage, "scope"), "told")
-    template = session.plugin_root / told
+    template = _brief_base(session) / told
     try:
         text = template.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
@@ -1045,15 +1067,17 @@ def start(cwd: Path, train: str, output: str | None, plugin_root: Path = PLUGIN_
                 "Next: pass a train name such as build."
             ],
         )
-    path = _definition_file(plugin_root, train)
+    root = project_root(cwd.resolve())
     try:
+        path, origin = _definition_file(root, plugin_root, train)
         defn = train_definition.load(path)
+    except manifest.ManifestError as exc:
+        return Outcome(EXIT_STOP, [str(exc)])
     except DefinitionError as exc:
         return Outcome(EXIT_STOP, [f"check 1: {exc}", DEFINITION_NEXT])
-    defects = train_definition.validate(defn, plugin_root, "plugin")
+    defects = train_definition.validate(defn, plugin_root, origin)
     if defects:
         return Outcome(EXIT_STOP, [*defects, DEFINITION_NEXT])
-    root = project_root(cwd.resolve())
     try:
         features = manifest.features(root)
         config = load_config(path=root / ".claude" / "daedalus" / "config.json")
@@ -1256,32 +1280,35 @@ def record_exception(cwd: Path, ledger_id: str) -> Outcome:
     return _recorded(cwd, edit)
 
 
-def _auditor_seq(repo: Path, status: str, seq: int | None) -> int:
-    # 0089: the verdict is read from this session's auditor stop record, never from the caller.
+def _auditor_seq(repo: Path, train_id: str, status: str, seq: int | None) -> int:
+    # 0089: the verdict is read from this session's auditor reply records, never from the caller.
     try:
         log, _ = live_log(repo, VERDICT_NEEDLE)
         records = read_chain(log)
     except ProofError as exc:
         raise RunnerError(str(exc)) from exc
+    start = train_start(repo, train_id)
+    if start is None:
+        raise RunnerError(
+            f"the state of train {train_id} records no start_seq to bound the auditor search. "
+            f"Next: run verify_audit_chain.py --hooks-live --repo {repo}, then run the security "
+            "audit again."
+        )
     want = VERDICT_APPROVED if status == train_state.APPROVED else VERDICT_REJECTED
-    # 0089: only the auditor's newest stop counts, so a later rejection is never skipped.
-    stops = [
-        r for r in records if r.get("event") == "SubagentStop" and r.get("agent_type") == AUDITOR
-    ]
-    newest = stops[-1] if stops else {}
-    found = newest.get("seq")
-    verdict = stop_verdict(newest) if stops else None
+    # 0089, issue 57: only the newest auditor turn after start_seq counts.
+    turn = auditor_round(records, start)
+    verdict, found = round_verdict(turn)
     problem = None
-    if not isinstance(found, int) or isinstance(found, bool):
-        problem = f"audit log {log.name} holds no {AUDITOR} stop record"
-    elif seq is not None and seq != found:
-        problem = f"seq {seq} is not the newest {AUDITOR} stop record, which is seq {found}"
+    if not turn:
+        problem = f"audit log {log.name} holds no {AUDITOR} reply after seq {start}"
+    elif seq is not None and seq not in {r.get("seq") for r in turn}:
+        problem = f"seq {seq} is not the newest {AUDITOR} reply, which is seq {found}"
     elif verdict != want:
         problem = (
-            f"the newest {AUDITOR} stop record, seq {found}, carries "
+            f"the newest {AUDITOR} reply, seq {found}, carries "
             f"{verdict or 'no verdict line'}, not {want}"
         )
-    if problem is not None or not isinstance(found, int):
+    if problem is not None:
         raise RunnerError(
             f"{problem}. Next: run the security audit; the verdict is recorded from the "
             "auditor's reply, never typed."
@@ -1302,7 +1329,7 @@ def record_verdict(cwd: Path, status: str, round_: int, seq: int | None = None) 
                 f"round {round_} or audit seq {seq} is out of range. "
                 "Next: rerun verdict with a round of 1 or more and the auditor's stop record seq."
             )
-        found = _auditor_seq(repo, status, seq)
+        found = _auditor_seq(repo, train_id, status, seq)
         tip = _integration_tip(repo, train_id)
         record = _verdict_record(status, tip, round_, found)
         train_state.update(repo, train_id, **{train_state.VERDICT: record})

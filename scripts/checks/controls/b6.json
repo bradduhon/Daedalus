@@ -1,0 +1,34 @@
+{
+  "checks/dispatch_gate": {
+    "failure": "0060: the orchestrator starts a coder before the train's plan is recorded or without a unit's Worktree line, starts a push agent or a foreign agent, or hands a coder a new unit that its binding never follows",
+    "premise_test": "tests/test_orchestrator.py::test_coder_dispatch_refused_without_a_recorded_plan"
+  },
+  "dispatch_gate.R_FOREIGN_AGENT": {
+    "failure": "0060: the orchestrator starts an agent outside the Daedalus catalog, whose calls no agent file binds",
+    "premise_test": "tests/test_orchestrator.py::test_orchestrator_starts_only_catalog_agents"
+  },
+  "dispatch_gate.R_NEVER_STARTED": {
+    "failure": "0060: the orchestrator starts the push agent or a second orchestrator, so a Build Train could push against 0001 or fork its state",
+    "premise_test": "tests/test_orchestrator.py::test_orchestrator_never_starts_the_conductor_or_itself"
+  },
+  "dispatch_binding.R_RESUME_LINE": {
+    "failure": "0086: a resume names two units or a malformed Worktree line, so the coder's binding cannot follow it",
+    "premise_test": "tests/test_orchestrator.py::test_resume_with_two_worktree_lines_is_refused"
+  },
+  "dispatch_binding.R_RESUME_TARGET": {
+    "failure": "0086: a resume handing over a unit names no coder, so no binding can move",
+    "premise_test": "tests/test_orchestrator.py::test_resume_without_a_target_is_refused"
+  },
+  "dispatch_binding.R_RESUME_UNBOUND": {
+    "failure": "0086: a resume moves a coder that holds no unit onto a unit another coder may already own",
+    "premise_test": "tests/test_orchestrator.py::test_resume_of_an_unbound_coder_is_refused"
+  },
+  "tool_bound.R_NO_DISPATCH_GATE": {
+    "failure": "0060: the orchestrator's agent file loses its dispatch gate, so its Agent and SendMessage calls run unjudged",
+    "premise_test": "tests/test_orchestrator.py::test_orchestrator_without_the_dispatch_gate_is_refused"
+  },
+  "command_allowlist.R_ORCHESTRATOR_BASH": {
+    "failure": "0060: the orchestrator runs a command outside its plugin scripts and read-only inspection, such as a push or a merge into main that 0001 forbids, an exception record or its own stop",
+    "premise_test": "tests/test_checks_command_allowlist.py::test_orchestrator_bash_refuses_everything_else"
+  }
+}

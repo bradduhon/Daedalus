@@ -13,6 +13,8 @@ from lib.audit import check_project_data_dir
 POLICY_ENGINES = ("cfn-guard", "conftest")
 # 0072: how many coders a parallel stage runs at once when the config names no number.
 DEFAULT_MAX_CONCURRENT_BUILDERS = 5
+# AU-11, AU-6: a declared audit retention keeps at least this many days of session logs.
+AUDIT_RETENTION_FLOOR_DAYS = 90
 LEDGER_FORMATS = ("markdown-table-row", "heading-entry")
 LEDGER_FIELDS = ("path", "format", "id_scheme", "sequence_source")
 PACKS_DIR = Path(__file__).resolve().parents[2] / "packs"
@@ -52,6 +54,7 @@ class Config:
     standards_sources: tuple[StandardsSource, ...] = field(default_factory=tuple)
     operator_signing_keys: tuple[str, ...] = field(default_factory=tuple)
     max_concurrent_builders: int = DEFAULT_MAX_CONCURRENT_BUILDERS
+    audit_retention_days: int | None = None
 
 
 def _require_str(raw: dict[str, object], key: str, where: str) -> str:
@@ -84,6 +87,20 @@ def _max_builders(raw: dict[str, object]) -> int:
             f"config.json max_concurrent_builders must be a whole number of at least 1 "
             f"(got {value!r}). Next: set max_concurrent_builders to 1 or more, or remove it "
             "to run five coders at once."
+        )
+    return value
+
+
+def _retention_days(raw: dict[str, object]) -> int | None:
+    # issue 50, AU-11: null keeps every log; a number is whole and at least the floor.
+    value = raw.get("audit_retention_days")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < AUDIT_RETENTION_FLOOR_DAYS:
+        raise ConfigError(
+            f"config.json audit_retention_days must be a whole number of at least "
+            f"{AUDIT_RETENTION_FLOOR_DAYS} (got {value!r}). Next: set it to "
+            f"{AUDIT_RETENTION_FLOOR_DAYS} or more, or to null to keep every audit log."
         )
     return value
 
@@ -195,4 +212,5 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
         standards_sources=_sources(raw.get("standards_sources")),
         operator_signing_keys=_signing_keys(raw),
         max_concurrent_builders=_max_builders(raw),
+        audit_retention_days=_retention_days(raw),
     )

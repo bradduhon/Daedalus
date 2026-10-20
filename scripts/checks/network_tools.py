@@ -23,15 +23,22 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
         if web:
             return None
         return jail.R_CONDUCTOR_WEB if gh else jail.R_WEB_RESEARCHER_ONLY
-    segments = shell.worker_segments(hook_io.text(hook_io.tool_input(hook_input), "command"))
-    if segments is None:
+    chain = shell.worker_parse(hook_io.text(hook_io.tool_input(hook_input), "command"))
+    if chain is None:
         return shell.R_UNSUPPORTED
+    cwd = hook_io.text(hook_input, "cwd")
+    bases = shell.chain_bases(chain, cwd, jail.DIR_CHANGE_CMDS) or [cwd] * len(chain.segments)
     banned = jail.NETWORK_TOOLS - {"gh"} if gh else jail.NETWORK_TOOLS
-    for segment in filter(None, segments):
+    for segment, base in zip(chain.segments, bases, strict=True):
+        if not segment:
+            continue
         exempt = shell._exempt_indices(segment)
         words = {shell._base(t) for i, t in enumerate(segment) if i not in exempt}
         if banned & words:
             return jail.R_NETWORK
+        # issue 55: a link or versioned path to the claude binary, by its real file.
+        if shell.runs_claude(segment, base):
+            return shell.R_CLAUDE_PATH
     return None
 
 

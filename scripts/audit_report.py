@@ -23,6 +23,8 @@ from typing import Any, NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.audit import AuditLockError, project_data_dir, read_log, root_info  # noqa: E402
+from lib.controls import Control, ControlsError, failure_line  # noqa: E402
+from lib.controls import load as load_controls  # noqa: E402
 from verify_audit_chain import NOT_UTF8, verify_lines  # noqa: E402
 
 _SESSION_ID = re.compile(r"[A-Za-z0-9_-]+")
@@ -240,6 +242,13 @@ def _until_allowed(
     return "none"
 
 
+def _control_rows() -> dict[str, Control]:
+    try:
+        return load_controls()
+    except ControlsError as exc:
+        raise ReportError(str(exc)) from exc
+
+
 def _controls(records: list[dict[str, Any]]) -> list[str]:
     # 6.2: hook names, agent types, tools and timings only; no reason body or reply text.
     pre = [r for r in records if r.get("event") == "PreToolUse"]
@@ -248,6 +257,11 @@ def _controls(records: list[dict[str, Any]]) -> list[str]:
     lines = ["## Control cost", "", "### Blocks per hook", ""]
     lines += ["| hook | agent_type | blocks |", "|---|---|---|"]
     lines += [f"| {md_escape(h)} | {md_escape(a)} | {n} |" for (h, a), n in sorted(tally.items())]
+    lines += ["", "### Failure behind each blocking hook", ""]
+    rows = _control_rows()
+    for hook in sorted({h.removesuffix(" (ask)") for h, _ in tally}):
+        # pin B2 -> B6: the Phase 3 contradiction item reads one failure line per hook.
+        lines += [f"- {md_escape(hook)}", f"  {failure_line(hook, rows)}"]
     lines += ["", "### Seconds from each block to that agent's next allowed call", ""]
     lines += ["| seq | agent_type | hook | tool | seconds |", "|---|---|---|---|---|"]
     for rec in blocks:

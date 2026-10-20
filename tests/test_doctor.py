@@ -90,10 +90,10 @@ def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: P
         sum(line.startswith(f"OPT  {n}: ") and "Next:" in line for n in SCAFFOLDS for line in lines)
         == 3
     )
-    gitleaks = next(line for line in misses if "gitleaks on PATH" in line)
-    assert gitleaks.endswith(
-        "Next: the Push Train scans commits with gitleaks; install it so the scan can run"
-    )
+    # 0069, issue 52: no manifest means the secret scan is off, so a missing gitleaks is optional.
+    gitleaks = next(line for line in lines if "gitleaks on PATH" in line)
+    assert gitleaks.startswith("OPT  gitleaks on PATH: not found, and the secret scan is off.")
+    assert "set secrets_scan to true in the features object" in gitleaks
 
 
 def _settings(path: Path, body: object) -> None:
@@ -127,7 +127,7 @@ def test_binary_lines_name_gitleaks_and_gh_only(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
-    named = [m[1] for line in lines if (m := re.match(r"(?:OK  |MISS) (\S+) on PATH", line))]
+    named = [m[1] for line in lines if (m := re.match(r"(?:OK  |MISS|OPT ) (\S+) on PATH", line))]
     assert named == ["gitleaks", "gh"]
 
 
@@ -380,7 +380,8 @@ def test_cache_dir_lists_globbed_matches(tmp_path: Path) -> None:
     ok = [line for line in result.stdout.splitlines() if line.startswith("OK   cache dir")]
     assert ok == [
         f"OK   cache dir: {market}, {inline} (a --plugin-dir session uses daedalus-inline; "
-        "a marketplace install uses daedalus-<marketplace>)"
+        "a marketplace install, the published one or a local clone added with claude plugin "
+        "marketplace add <clone path>, uses daedalus-<marketplace>)"
     ]
 
 

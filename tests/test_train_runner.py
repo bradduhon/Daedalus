@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import audit, train_runner, train_state, workspace
+from lib import audit, gh_policy, train_runner, train_state, workspace
 from lib.audit_proof import ProofError, live_log
 from lib.config import Config
 from lib.jail import decide
 from lib.train_runner import STEP_NEEDLE
 
-from tests.conftest import REPO_ROOT, SCRIPTS_DIR
+from tests.conftest import REPO_ROOT, SCRIPTS_DIR, replay_auditor
 
 SESSION = "sess-run"
 # 0024: the probe script prints a record line and exits with the code it is given.
@@ -1076,12 +1076,24 @@ def test_complete_with_wrong_packet_hash_is_refused(repo: Path, plugin: Path, ca
 
 
 NEVER_TYPED = "Next: run the security audit; the verdict is recorded from the auditor's reply"
+HOOKS_LIVE_CMD = "verify_audit_chain.py --hooks-live"
 
 
 def _verdict_call(repo: Path, status: str, round_: int, seq: int | None = None) -> Any:
     # 0024: the jail appends this call's PreToolUse record before the command runs.
     _record(repo, tool_input={"command": f"python3 /p/scripts/daedalus_train.py verdict {repo}"})
     return train_runner.record_verdict(repo, status, round_, seq)
+
+
+def _marked(repo: Path) -> int:
+    # issue 57: the train's hooks-live call, which records start_seq in its state.
+    from lib.audit_proof import hooks_live
+
+    _record(repo, tool_input={"command": f"python3 /p/scripts/{HOOKS_LIVE_CMD} --repo {repo}"})
+    hooks_live(repo, HOOKS_LIVE_CMD, mark=True)
+    start = train_state.start_seq(_state(repo))
+    assert start is not None
+    return start
 
 
 @pytest.mark.parametrize("status", ["approved", "rejected"])
@@ -1091,6 +1103,7 @@ def test_verdict_records_the_newest_matching_auditor_stop(
     # 0089: the verdict comes from the auditor's stop record, bound to the tip at call time.
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
+    _marked(repo)
     tip = _integration(repo)
     _agent_stop(repo, "security-auditor", _verdict(status.upper()), "aud-1")
     newest = _agent_stop(repo, "security-auditor", _verdict(status.upper()), "aud-1")
@@ -1106,6 +1119,7 @@ def test_verdict_records_the_newest_matching_auditor_stop(
 def test_verdict_with_no_auditor_stop_refuses(repo: Path, plugin: Path) -> None:
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
+    _marked(repo)
     _integration(repo)
     _agent_stop(repo, "repo-coder", _verdict("APPROVED"), "coder-1")
     refused = _verdict_call(repo, "approved", 1)
@@ -1116,6 +1130,7 @@ def test_verdict_with_no_auditor_stop_refuses(repo: Path, plugin: Path) -> None:
 def test_verdict_with_the_other_verdict_refuses(repo: Path, plugin: Path) -> None:
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
+    _marked(repo)
     _integration(repo)
     _agent_stop(repo, "security-auditor", _verdict("REJECTED"), "aud-1")
     refused = _verdict_call(repo, "approved", 1)
@@ -1126,6 +1141,7 @@ def test_verdict_with_the_other_verdict_refuses(repo: Path, plugin: Path) -> Non
 def test_verdict_seq_must_name_the_matching_auditor_stop(repo: Path, plugin: Path) -> None:
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
+    _marked(repo)
     tip = _integration(repo)
     auditor = _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
     coder = _agent_stop(repo, "repo-coder", _verdict("APPROVED"), "coder-1")
@@ -1142,6 +1158,7 @@ def test_verdict_reads_only_the_newest_auditor_stop(repo: Path, plugin: Path) ->
     # 0089: a rejection after an approval is never skipped for the older approval.
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
+    _marked(repo)
     tip = _integration(repo)
     older = _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
     _agent_stop(repo, "security-auditor", _verdict("REJECTED"), "aud-1")
@@ -1164,6 +1181,7 @@ def test_verdict_reads_only_the_newest_auditor_stop(repo: Path, plugin: Path) ->
 def test_verdict_cli_finds_the_seq_itself(repo: Path, plugin: Path) -> None:
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
+    _marked(repo)
     tip = _integration(repo)
     stop = _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
     argv = [sys.executable, str(SCRIPTS_DIR / "daedalus_train.py"), "verdict", "--repo"]
@@ -1181,6 +1199,7 @@ def test_verdict_refuses_an_unknown_status_a_bad_round_and_no_branch(
 ) -> None:
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
+    _marked(repo)
     _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-1")
     no_branch = _verdict_call(repo, "approved", 1)
     assert no_branch.code == 1 and "integration branch" in no_branch.lines[0]
@@ -1195,3 +1214,81 @@ def test_verdict_with_no_train_refuses(plain: Path) -> None:
     outcome = train_runner.record_verdict(plain, "approved", 1)
     assert outcome.code == 1
     assert outcome.lines[0].startswith("no Daedalus train is active in ")
+
+
+def _handback(repo: Path, message: str) -> dict[str, Any]:
+    return _record(
+        repo,
+        hook_event_name="PostToolUse",
+        tool_name="SubagentHandback",
+        tool_input={"message": message},
+        tool_response={"success": True},
+        agent_id="aud-1",
+        agent_type="daedalus:security-auditor",
+    )
+
+
+def test_verdict_finds_train_a_verdict_in_the_hand_back_and_the_push_gate_passes(
+    repo: Path, plugin: Path
+) -> None:
+    # issue 57: the verdict is in the auditor's hand-back record; the push gate then passes.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    _marked(repo)
+    tip = _integration(repo)
+    replayed = replay_auditor(repo, SESSION)
+    refused = gh_policy.verdict_reason(str(repo), "git push")
+    assert refused is not None and "no verdict is recorded" in refused
+    passed = _verdict_call(repo, "approved", 3)
+    assert passed.code == 0, passed.lines
+    record = {"status": "approved", "tip": tip, "round": 3, "seq": replayed[-2]["seq"]}
+    assert _state(repo)["verdict"] == record
+    assert gh_policy.verdict_reason(str(repo), "git push") is None
+    assert gh_policy.verdict_reason(str(repo), "gh pr create") is None
+
+
+def test_verdict_refuses_train_a_without_its_hand_back_records(repo: Path, plugin: Path) -> None:
+    # issue 57: the bug as Train A met it; the stop records alone carry no verdict line.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    _marked(repo)
+    _integration(repo)
+    replay_auditor(repo, SESSION, handbacks=False)
+    refused = _verdict_call(repo, "approved", 3)
+    assert refused.code == 1 and "carries no verdict line" in refused.lines[0]
+    assert "verdict" not in _state(repo)
+    reason = gh_policy.verdict_reason(str(repo), "git push")
+    assert reason is not None and "no verdict is recorded" in reason
+
+
+def test_verdict_newer_rejection_in_a_hand_back_wins(repo: Path, plugin: Path) -> None:
+    # 0089: the newest turn's rejection wins over Train A's approvals and its own relay.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    _marked(repo)
+    tip = _integration(repo)
+    replay_auditor(repo, SESSION)
+    rejection = _handback(repo, "[VERDICT: REJECTED] a.py:1 high")
+    _agent_stop(repo, "security-auditor", "Sent the round 4 verdict.", "aud-1")
+    refused = _verdict_call(repo, "approved", 4)
+    assert refused.code == 1
+    assert "carries [VERDICT: REJECTED], not [VERDICT: APPROVED]" in refused.lines[0]
+    passed = _verdict_call(repo, "rejected", 4)
+    assert passed.code == 0, passed.lines
+    record = {"status": "rejected", "tip": tip, "round": 4, "seq": rejection["seq"]}
+    assert _state(repo)["verdict"] == record
+
+
+def test_verdict_ignores_an_auditor_stop_before_start_seq(repo: Path, plugin: Path) -> None:
+    # issue 57: an earlier train's auditor stop in the same session log never counts.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    _integration(repo)
+    _agent_stop(repo, "security-auditor", _verdict("APPROVED"), "aud-0")
+    no_start = _verdict_call(repo, "approved", 1)
+    assert no_start.code == 1 and "records no start_seq" in no_start.lines[0]
+    start = _marked(repo)
+    refused = _verdict_call(repo, "approved", 1)
+    assert refused.code == 1 and NEVER_TYPED in refused.lines[0]
+    assert f"holds no daedalus:security-auditor reply after seq {start}" in refused.lines[0]
+    assert "verdict" not in _state(repo)

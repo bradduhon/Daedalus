@@ -165,6 +165,34 @@ def test_max_concurrent_builders_refuses_anything_but_one_or_more(
     assert "Next: set max_concurrent_builders to 1 or more" in text
 
 
+def test_audit_retention_defaults_to_keeping_every_log(project_data: Path) -> None:
+    # issue 50, AU-11: absent and null both keep every audit log.
+    assert Config().audit_retention_days is None
+    (project_data / "config.json").write_text(json.dumps({"audit_retention_days": None}))
+    assert load_config(str(project_data.parents[1])).audit_retention_days is None
+
+
+@pytest.mark.parametrize("value", [90, 365])
+def test_audit_retention_reads_a_number_at_the_floor_or_above(
+    project_data: Path, value: int
+) -> None:
+    (project_data / "config.json").write_text(json.dumps({"audit_retention_days": value}))
+    assert load_config(str(project_data.parents[1])).audit_retention_days == value
+
+
+@pytest.mark.parametrize("value", [89, 1, 0, -5, "90", 90.0, True, [90]])
+def test_audit_retention_refuses_below_the_floor_or_off_type(
+    project_data: Path, value: object
+) -> None:
+    # AU-11, AU-6: a declared retention keeps at least 90 days for review look-back.
+    (project_data / "config.json").write_text(json.dumps({"audit_retention_days": value}))
+    with pytest.raises(ConfigError) as info:
+        load_config(str(project_data.parents[1]))
+    text = str(info.value)
+    assert "audit_retention_days must be a whole number of at least 90" in text
+    assert "Next: set it to 90 or more, or to null to keep every audit log." in text
+
+
 def test_missing_data_dir_gives_empty_config(repo_cwd: Path) -> None:
     # 0020: no .claude/daedalus at all is still the empty config.
     assert load_config(str(repo_cwd)) == Config()

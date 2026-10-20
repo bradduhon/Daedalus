@@ -81,7 +81,19 @@ _AGENT_REF = re.compile(r"Agent\(`([a-z-]+)`\)")
 
 
 def _build_train() -> str:
+    # 0060: the skill is the main session's relay; the recipe is the orchestrator's agent file.
     return BUILD_TRAIN.read_text(encoding="utf-8")
+
+
+ORCHESTRATOR = REPO_ROOT / "agents" / "orchestrator.md"
+
+
+def _recipe() -> str:
+    return ORCHESTRATOR.read_text(encoding="utf-8")
+
+
+def _rules() -> str:
+    return _recipe().split("## Phase 1", 1)[0]
 
 
 BEGIN = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py begin --repo <repo>`"
@@ -89,16 +101,21 @@ STOP_CMD = (
     "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py stop "
     '--repo <repo> --reason "<what happened>" --next "<next action>"`'
 )
+# 0060: the orchestrator writes the plugin root out in full; the hook refuses the variable.
+PLUGIN = "`python3 <plugin root>/scripts/"
 
 
 def test_build_train_dispatches_existing_agents() -> None:
-    names = set(_AGENT_REF.findall(_build_train()))
-    for name in names:
+    relay = set(_AGENT_REF.findall(_build_train()))
+    names = set(_AGENT_REF.findall(_recipe()))
+    for name in relay | names:
         assert (REPO_ROOT / "agents" / f"{name}.md").is_file(), name
     personas = {p.stem for p in (REPO_ROOT / "agents").glob("*.md")}
-    # The Push Train owns pr-train-conductor and the plan skill owns the planner (spec 3.3).
-    assert names == personas - {"pr-train-conductor", "planner"}
-    assert "`/daedalus:plan " in _build_train()
+    # The Push Train owns pr-train-conductor; the relay starts only the orchestrator (0060).
+    assert relay == {"orchestrator"}
+    assert names == personas - {"pr-train-conductor", "orchestrator"}
+    assert "`/daedalus:plan " in _recipe()
+    assert "${CLAUDE_PLUGIN_ROOT}" not in _recipe().split("\n---\n", 1)[1]
 
 
 def test_build_train_probes_the_ledger_and_asks() -> None:
@@ -111,11 +128,14 @@ def test_build_train_probes_the_ledger_and_asks() -> None:
 
 def test_build_train_hands_the_pack_path_to_the_standards_specialist() -> None:
     # 0019: a declared pack has no path in config.json; begin prints it, every dispatch carries it.
-    text = _build_train()
-    assert "    standards packs: <name> at <path>, or none declared\n" in text
-    assert "The first six lines are begin's output" in text
-    rules = text.split("## Preconditions", 1)[0]
-    dispatch = next(ln for ln in rules.splitlines() if "standards-rules-specialist dispatch" in ln)
+    relay, text = _build_train(), _recipe()
+    for part in (relay, text):
+        assert "    standards packs: <name> at <path>, or none declared\n" in part
+    assert "The first six lines of the **State Block** are begin's output" in relay
+    assert "The first six lines come from your brief." in text
+    dispatch = next(
+        ln for ln in _rules().splitlines() if "standards-rules-specialist dispatch" in ln
+    )
     assert "the `standards packs:` line" in dispatch
     phase1 = _section(text, "## Phase 1", "## Phase 2")
     assert "the `standards packs:` line" in phase1.split("\n2. ", 1)[0]
@@ -124,35 +144,34 @@ def test_build_train_hands_the_pack_path_to_the_standards_specialist() -> None:
 
 
 def test_build_train_routes_every_yield_and_the_contradiction_stop() -> None:
-    text = _build_train()
+    text = _recipe()
     for route in ("YIELD_WEB", "YIELD_CONTRACT", "YIELD_COMPLIANCE", "YIELD_STANDARDS"):
         assert f"[STATUS: {route}]" in text, route
     assert "[STANDARDS: CONTRADICTION]" in text
 
 
 def test_build_train_never_pushes() -> None:
-    text = _build_train()
-    assert "git push" not in text
+    text = _recipe()
+    assert "git push" not in text and "git push" not in _build_train()
     assert "--no-ff" in text and "daedalus/<train-id>" in text
 
 
 def test_build_train_writes_summary_under_docs_tmp() -> None:
     # T7 ruling: the conductor's --body-file reads docs/.tmp, never the data dir.
-    text = _build_train()
-    assert "<repo>/docs/.tmp/daedalus/<train-id>-summary.md" in text
-    assert "docs/.tmp/daedalus/.gitignore" in text
-    assert "/daedalus:audit-report" in text
+    assert "<repo>/docs/.tmp/daedalus/<train-id>-summary.md" in _recipe()
+    assert "docs/.tmp/daedalus/.gitignore" in _build_train()
+    assert "/daedalus:audit-report" in _build_train()
 
 
 def test_build_train_resolves_the_cache_for_specialists() -> None:
-    text = _build_train()
+    text = _recipe()
     assert "daedalus_doctor.py --print-cache-dir" in text
     assert "<that path>/frameworks" in text
 
 
 def test_build_train_stops_on_off_contract_replies_and_dead_hooks() -> None:
     # 0024: the dead-hooks stop is begin's; test_begin_refuses_dead_hooks holds it.
-    text = _build_train()
+    text = _recipe()
     assert "does not end with one of its contract lines or contract sections, stop" in text
     assert "ends with its rule list and has no status line" in text
     assert "charter: none (repo-local ledger)" in text
@@ -168,30 +187,39 @@ def test_no_plan_or_task_numbers(path: Path) -> None:
 
 def test_build_train_branches_a_clean_charter_and_switches_back() -> None:
     # 0024: test_begin_branches_a_clean_charter and test_stop_switches_the_charter_back.
-    text = _build_train()
-    assert "charter_root: <path or none>  charter base: <recorded branch or none>" in text
-    assert "`git -C <charter_root> switch <recorded branch>`" in text
+    for text in (_build_train(), _recipe()):
+        assert "charter_root: <path or none>  charter base: <recorded branch or none>" in text
+    # 0060: the orchestrator runs no git switch; the final stop switches the Charter back.
+    assert "switches this repo and the Charter back to their base branches" in _build_train()
+    assert "The final stop switches a created Charter branch back" in _recipe()
+    assert "git -C <charter_root> switch" not in _recipe()
 
 
 def test_build_train_runs_every_stop_through_the_script() -> None:
     # 0024: the five stop rules are the test_stop_* set in test_workspace_train.py.
-    text = _build_train()
+    text, recipe = _build_train(), _recipe()
     rules = text.split("## Preconditions", 1)[0]
     stop = rules.split("- Every stop: ", 1)[1].split("\n", 1)[0]
     assert stop.startswith("run " + STOP_CMD)
     assert "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py resume --repo <repo>`" in (
         stop
     )
+    # 0060: the orchestrator returns each stop; the main session runs the stop command.
+    own = _rules().split("- Every stop: ", 1)[1].split("\n", 1)[0]
+    assert own.startswith("end your reply with `[STATUS: STOP] reason=<what happened>")
+    assert "daedalus_workspace.py stop" not in recipe and "daedalus_workspace.py resume" not in (
+        recipe
+    )
     for gone in ("Charter switch-back", "Integration switch-back", "Uncommitted contract:"):
-        assert gone not in text, gone
+        assert gone not in text + recipe, gone
     assert "- Worktree teardown:" not in rules and "- Train marker:" not in rules
-    assert "unmark" not in text
-    step = text.split("`[STATUS: COMMITTED] <sha>", 1)[1].split("\n5. ", 1)[0]
-    assert "after `resume`" in step
+    assert "unmark" not in text + recipe
+    step = recipe.split("`[STATUS: COMMITTED] <sha>", 1)[1].split("\n6. ", 1)[0]
+    assert "after the resume" in step
 
 
 def test_build_train_summary_names_every_charter_form() -> None:
-    text = _build_train()
+    text = _recipe()
     assert (
         "charter: <charter name>, branch daedalus/<train-id>, charter base: <recorded branch> "
         "(ledger under charter_root)"
@@ -208,7 +236,7 @@ def test_build_train_summary_names_every_charter_form() -> None:
 
 def test_build_train_summary_carries_no_absolute_path() -> None:
     # I2: the summary is a public PR body.
-    shape = _build_train().split("Shape:", 1)[1].split("\n6. ", 1)[0]
+    shape = _recipe().split("Shape:", 1)[1].split("\n7. ", 1)[0]
     lines = [ln for ln in shape.splitlines() if "charter:" in ln or "Ledger:" in ln]
     assert len(lines) == 4
     lines += [ln for ln in shape.splitlines() if "Contract:" in ln]
@@ -219,7 +247,7 @@ def test_build_train_summary_carries_no_absolute_path() -> None:
 
 def test_build_train_reads_the_auditor_verdict_first() -> None:
     # 41, C7: the verdict line opens and closes every auditor reply.
-    text = _build_train()
+    text = _recipe()
     assert (
         "Read the verdict from the last line of the auditor's reply; "
         "its first line carries the same verdict."
@@ -242,9 +270,11 @@ def _phase1_step(text: str, number: int) -> str:
 
 def test_build_train_keeps_personas_warm() -> None:
     # 0059, 0086, C1: the warm dispatch rule sits in the whole-train rules.
-    rules = _build_train().split("## Preconditions", 1)[0]
+    rules = _rules()
     roster = rules.split("- Warm dispatch (0086): ", 1)[1].split("\n", 1)[0]
     assert "a persona stays warm after its first use" in roster
+    # spec 8: the hook rebinds a warm coder as the resume goes out.
+    assert "the hook rebinds the coder to the new unit as the message goes out" in roster
     assert "The security-auditor stays warm only after its first verdict" in roster
     assert "goes to that coder by SendMessage as a resume" in roster
     assert "A cold coder starts only when no warm coder built a dependency of the unit." in roster
@@ -255,7 +285,7 @@ def test_build_train_keeps_personas_warm() -> None:
 
 def test_build_train_dispatches_the_standards_specialist_once() -> None:
     # 0059, C2, C3: one first dispatch; the State Block records its handle.
-    text = _build_train()
+    text = _recipe()
     assert text.count("Agent(`standards-rules-specialist`)") == 1
     assert "    standards specialist: <agent handle>  last read: <UTC time>" in text
     seed = text.split("**State Block**", 1)[1].split("\n\n", 2)[1].splitlines()
@@ -264,7 +294,7 @@ def test_build_train_dispatches_the_standards_specialist_once() -> None:
 
 def test_build_train_asks_each_contradiction_as_a_brief() -> None:
     # 0057, C4: the stop is replaced by the prompt, the pick record and the re-check.
-    text = _build_train()
+    text = _recipe()
     step1 = _phase1_step(text, 1)
     for item in (
         "AskUserQuestion",
@@ -289,19 +319,19 @@ def test_build_train_asks_each_contradiction_as_a_brief() -> None:
 
 def test_build_train_resumes_the_specialist_with_changed_rule_files() -> None:
     # 0059, C5: the coder yield route and the auditor brief resume the warm specialist.
-    text = _build_train()
+    text = _recipe()
     route = next(ln for ln in text.splitlines() if ln.startswith("| `[STATUS: YIELD_STANDARDS]"))
     assert "SendMessage(standards specialist," in route
     assert "Rule files changed since your last read" in route
-    step2 = _section(text, "## Phase 3", "\n3. ").split("\n2. ", 1)[1]
-    assert step2.startswith("SendMessage(standards specialist,")
-    assert "Rule files changed since your last read" in step2
-    assert "resumes the same auditor by SendMessage" in step2
+    step3 = _section(text, "## Phase 3", "\n4. ").split("\n3. ", 1)[1]
+    assert step3.startswith("SendMessage(standards specialist,")
+    assert "Rule files changed since your last read" in step3
+    assert "resumes the same auditor by SendMessage" in step3
 
 
 def test_build_train_summary_carries_rulings_and_deviations() -> None:
     # 0057, C6: one line per pick, a deviation line per keep-the-plugin pick.
-    shape = _build_train().split("Shape:", 1)[1].split("\n6. ", 1)[0]
+    shape = _recipe().split("Shape:", 1)[1].split("\n7. ", 1)[0]
     assert "       ## Rulings\n" in shape
     assert "       Deviation: " in shape
     assert shape.index("[POLICY: none declared]") < shape.index("## Rulings")
@@ -309,7 +339,7 @@ def test_build_train_summary_carries_rulings_and_deviations() -> None:
 
 def test_build_train_records_picks_before_any_coder() -> None:
     # 0057, C9: both ledger locations record picks before a coder starts.
-    text = _build_train()
+    text = _recipe()
     step1 = _phase1_step(text, 1)
     assert "Ledger under `charter_root`: record the picks right after the last pick" in step1
     assert "Repo-local ledger: record the picks right after the step 3 `lock`" in step1
@@ -320,13 +350,15 @@ def test_build_train_records_picks_before_any_coder() -> None:
 
 def test_build_train_hands_coders_the_pick_ledger_ids() -> None:
     # 0057, 0083, C10: the ids line follows the two packet lines and precedes the worktree line.
-    phase2 = _section(_build_train(), "## Phase 2", "## Phase 3")
+    phase2 = _section(_recipe(), "## Phase 2", "## Phase 3")
     brief = phase2.split("holding: the two packet lines", 1)[1]
     assert brief.index("`Pick ledger ids:`") < brief.index("`Worktree: <path>`")
     assert brief.index("`Worktree: <path>`") < brief.index("Agent(`repo-coder`)")
 
 
-ESCALATION_START = "Ask it with AskUserQuestion, in the decision-brief shape (0103):"
+ESCALATION_START = (
+    "Put it to the operator with AskUserQuestion, in the decision-brief shape (0103):"
+)
 ESCALATION_END = "Never run a third round and never stop the train on your own authority."
 
 
@@ -338,7 +370,7 @@ def _escalation(text: str) -> str:
 
 def test_build_train_has_no_unit_cap_or_warm_roster_line() -> None:
     # B5, row 17: the planner and max_concurrent_builders govern; warm dispatch replaces the roster.
-    text = _build_train()
+    text = _recipe()
     for gone in (
         "at most 5 work units",
         "Divide the task into",
@@ -353,47 +385,47 @@ def test_build_train_has_no_unit_cap_or_warm_roster_line() -> None:
 
 def test_build_train_has_no_three_round_cap() -> None:
     # 0096, row 17: after the second rejection the operator decides.
-    text = _build_train()
+    text = _recipe()
     assert "After 3 rejected rounds" not in text and "3 rejected rounds" not in text
-    step3 = _section(text, "## Phase 3", "\n4. ").split("\n3. ", 1)[1]
-    assert "After the second rejected round, do not start a third" in step3
-    assert ESCALATION_END in " ".join(step3.split())
+    step4 = _section(text, "## Phase 3", "\n5. ").split("\n4. ", 1)[1]
+    assert "After the second rejected round, do not start a third" in step4
+    assert ESCALATION_END in " ".join(step4.split())
 
 
-VERDICT_CMD = (
-    "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py verdict --repo <repo> "
-    "--status {status} --round <n>`"
-)
+VERDICT_CMD = PLUGIN + "daedalus_train.py verdict --repo <repo> --status {status} --round <n>`"
 
 
 def test_build_train_records_each_verdict_for_the_push_gate() -> None:
     # 0089: the push gate reads the verdict record; approved is recorded on the merged tip.
-    text = _build_train()
-    step3 = _section(text, "## Phase 3", "\n4. ").split("\n3. ", 1)[1]
+    text = _recipe()
+    phase3 = _section(text, "## Phase 3", "\n6. The summary")
+    step4 = phase3.split("\n4. ", 1)[1].split("\n5. ", 1)[0]
     rejected = VERDICT_CMD.replace("{status}", "rejected")
-    assert rejected in step3
-    assert step3.index(rejected) < step3.index("SendMessage(each responsible coder")
-    step4 = _section(text, "## Phase 3", "\n5. The summary").split("\n4. ", 1)[1]
+    assert rejected in step4
+    assert step4.index(rejected) < step4.index("SendMessage(each responsible coder")
+    step5 = phase3.split("\n5. ", 1)[1]
     approved = VERDICT_CMD.replace("{status}", "approved")
-    # audit round 1: a repo-local ledger commit moves the tip, so the record comes last.
+    # spec 8: finish runs before the auditor; the ledger commit moves the tip, so record last.
     finish = "daedalus_workspace.py finish --repo <repo>"
+    assert phase3.index(finish) < phase3.index("Agent(`security-auditor`)")
     committed = "   - `[STATUS: COMMITTED] <sha> ids=<id>[,<id>]`: record the sha"
-    assert step4.index(finish) < step4.index("Agent(`charter-docs`)")
-    assert step4.index("Agent(`charter-docs`)") < step4.index(committed) < step4.index(approved)
-    assert "- Verdict record, last: after `[STATUS: COMMITTED]` on `[VERDICT: APPROVED]`" in step4
+    assert step5.index("Agent(`charter-docs`)") < step5.index(committed) < step5.index(approved)
+    assert "- Verdict record, last: after `[STATUS: COMMITTED]` on `[VERDICT: APPROVED]`" in step5
     assert (
         "The push gate reads this record: it refuses an agent's push or pull request for any tip "
         "that moved after it, and asks the operator before the main session's own (0106)."
-    ) in step4
+    ) in step5
     assert "    verdict: <the verdict command's printed line, or pending>\n" in text
 
 
 def test_build_train_carries_the_escalation_prompt() -> None:
     # 0103: the decision-brief shape, held equal between the catalog and the recipe.
     catalog = (REPO_ROOT / "skills" / "catalog" / "SKILL.md").read_text(encoding="utf-8")
-    step3 = _section(_build_train(), "## Phase 3", "\n4. ").split("\n3. ", 1)[1]
-    prompt = _escalation(step3)
+    step4 = _section(_recipe(), "## Phase 3", "\n5. ").split("\n4. ", 1)[1]
+    prompt = _escalation(step4)
     assert prompt == _escalation(catalog)
+    # 0060: the orchestrator returns the prompt as a decision brief; the session asks it.
+    assert "into a decision brief and return `[STATUS: DECISION]`" in step4
     order = [
         "a plain question ending in a question mark",
         "Two or three context sentences in the operator's words",
@@ -405,43 +437,56 @@ def test_build_train_carries_the_escalation_prompt() -> None:
     ]
     places = [prompt.index(item) for item in order]
     assert places == sorted(places)
-    assert "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py exception " in prompt
+    assert "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/" not in prompt
+    # audit round 1: the orchestrator returns the exception id; the relay alone binds it.
+    assert "daedalus_train.py exception" not in _recipe()
+    assert "`[STATUS: EXCEPTION] ledger_id=<the exception ruling's id>`" in step4
+    route = _build_train().split("- `[STATUS: EXCEPTION] ledger_id=<id>`:", 1)[1].split("\n", 1)[0]
+    exception = (
+        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py exception --repo <repo> "
+        "--ledger-id <id>`"
+    )
+    assert exception in route and "The orchestrator never runs it." in route
 
 
 def test_build_train_prints_progress_not_the_state_block() -> None:
     # 0085: the operator reads the progress note; the State Block prints at stop, resume, summary.
-    text = _build_train()
+    text = _recipe()
     assert "print it after Preconditions and after each phase" not in text
-    rules = text.split("## Preconditions", 1)[0]
-    note = rules.split("- Progress (0085): ", 1)[1].split("\n", 1)[0]
-    progress = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py progress --repo <repo>`"
-    assert progress in note
-    assert "after Preconditions and after each phase" in note
+    note = _rules().split("- Progress (0085): ", 1)[1].split("\n", 1)[0]
+    assert PLUGIN + "daedalus_train.py progress --repo <repo>`" in note
+    assert "after each phase" in note
     assert "Print the State Block only at a stop, at a resume, and in the summary." in note
     block = text.split("**State Block**", 1)[1].split("\n\n", 1)[0]
     assert "Print it only at a stop, at a resume, and in the summary" in block
+    relay = _build_train().split("## Preconditions", 1)[0]
+    relay_note = relay.split("- Progress (0085): ", 1)[1].split("\n", 1)[0]
+    progress = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py progress --repo <repo>`"
+    assert progress in relay_note and "after Preconditions" in relay_note
+    assert "Print the State Block only at a stop, at a resume, and in the summary." in relay_note
 
 
 def test_build_train_records_choices_plan_packets_and_controls() -> None:
     # 0083, 0086, 0088, 0089, spec 5.2, 5.3, 6.3: the recipe's composition steps.
-    text = _build_train()
+    text = _recipe()
     flat = " ".join(text.split())
-    rules = text.split("## Preconditions", 1)[0]
+    rules = _rules()
     choice = rules.split("- Choices (0088): ", 1)[1].split("\n", 1)[0]
     assert (
-        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py choice --repo <repo> "
-        '--chose "<what>" --over "<alternative>" --cost "<time or tokens>"`'
+        PLUGIN + 'daedalus_train.py choice --repo <repo> --chose "<what>" --over "<alternative>" '
+        '--cost "<time or tokens>"`'
     ) in choice
     for kind in ("warm or cold", "parallel or serial", "weight", "agent"):
         assert kind in choice, kind
-    assert "`/daedalus:catalog`" in rules
+    assert "`/daedalus:catalog`" in rules and "`/daedalus:catalog`" in _build_train()
     # 0105: the jail warns and asks, never blocks, the main session's own writes.
-    assert "the jail blocks writes under `src/` and `tests/` for you" not in text
-    assert "it never blocks the main session" in rules and "unit worktrees" in rules
+    relay = _build_train().split("## Preconditions", 1)[0]
+    assert "the jail blocks writes under `src/` and `tests/` for you" not in text + relay
+    assert "it never blocks the main session" in relay and "unit worktrees" in relay
     phase1 = " ".join(_section(text, "## Phase 1", "## Phase 2").split())
     assert "`/daedalus:plan <spec path>`" in phase1
     assert (
-        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py plan --repo <repo> --path "
+        PLUGIN + "daedalus_train.py plan --repo <repo> --path "
         "<repo>/docs/.tmp/daedalus/<train-id>/plan.md`"
     ) in phase1
     assert "`wire: none`" in phase1 and "validate-only" in phase1
@@ -457,15 +502,19 @@ def test_build_train_records_choices_plan_packets_and_controls() -> None:
     complete = next(ln for ln in text.splitlines() if ln.startswith("| `[STATUS: COMPLETE]"))
     assert "contract=<12 hex> standards=<12 hex>`" in complete
     assert "compare its `contract=` and `standards=` values" in complete
-    phase3 = " ".join(_section(text, "## Phase 3", "\n5. The summary").split())
-    controls = (
-        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_report.py --repo <repo> --session <id> "
-        "--controls`"
-    )
+    phase3 = " ".join(_section(text, "## Phase 3", "\n6. The summary").split())
+    controls = PLUGIN + "audit_report.py --repo <repo> --session <id> --controls`"
     assert controls in phase3
     assert phase3.index(controls) < phase3.index("Write the summary now")
     for word in ("friction", "habit"):
         assert word in phase3, word
+    # spec 8, pin B2 -> B6: a blocking hook with `failure: none` is the contradiction item.
+    item = phase3.split("Contradiction item (spec 8):", 1)[1].split("Write the summary now", 1)[0]
+    assert "`failure: none`" in item
+    for option in ("keep it", "redesign it", "remove it"):
+        assert option in item, option
+    # pin B3 -> B6: the final audit round comes before the summary Write.
+    assert phase3.index("Agent(`security-auditor`)") < phase3.index("Write the summary now")
     assert "       ## Blocks\n" in text.split("Shape:", 1)[1]
     # O7: every charter-docs dispatch names append_ledger.py by its absolute path.
     for part in (phase1, phase3):
@@ -475,7 +524,7 @@ def test_build_train_records_choices_plan_packets_and_controls() -> None:
 
 def test_build_train_phase1_has_no_branch_switch() -> None:
     # 0024, C11: the lock script owns every branch move in Phase 1.
-    phase1 = _section(_build_train(), "## Phase 1", "## Phase 2")
+    phase1 = _section(_recipe(), "## Phase 1", "## Phase 2")
     assert "git switch" not in phase1 and "git checkout" not in phase1
 
 
@@ -593,14 +642,27 @@ def _section(text: str, head: str, nxt: str) -> str:
     return text.split(head, 1)[1].split(nxt, 1)[0]
 
 
+def test_relay_passes_a_recorded_plan_to_the_orchestrator() -> None:
+    # B7: the plan skill's Next names a plan file; the relay and the brief accept it as Plan:.
+    relay = _section(_build_train(), "## Relay", "\n2. ")
+    assert "`Plan: <path>` when the operator named a plan file `/daedalus:plan` wrote" in relay
+    brief = _section(_recipe(), "## Your brief", "Rules for the whole train:")
+    assert "a `Plan: <path>` line when the operator named a plan file" in brief
+    phase1 = " ".join(_section(_recipe(), "## Phase 1", "## Phase 2").split())
+    assert "When your brief carries `Plan: <path>`, do not dispatch the planner" in phase1
+    assert "that plan file is the spec path the standards specialist reads" in phase1
+    step10 = (REPO_ROOT / "skills" / "plan" / "SKILL.md").read_text(encoding="utf-8")
+    assert "name `<path>` as the plan to build" in step10
+
+
 def test_build_train_saves_and_commits_the_contract() -> None:
     # 0011: lock commits the packet (test_lock_* set); the summary records path and version.
-    text = _build_train()
+    text = _recipe()
     phase1 = _section(text, "## Phase 1", "## Phase 2")
     assert '"Save the packet to <contract path>, then end the reply with the packet."' in phase1
-    assert "The main session owns this commit; contract-spec never commits." in phase1
+    assert "The lock script owns this commit; contract-spec never commits." in phase1
     lock = (
-        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py lock --repo <repo> "
+        PLUGIN + "daedalus_workspace.py lock --repo <repo> "
         "--contract <contract path> --version <packet_version>`"
     )
     assert lock in phase1
@@ -612,17 +674,17 @@ def test_build_train_saves_and_commits_the_contract() -> None:
     assert "it commits `Revise contract <name> v<N>`" in phase2
     assert "       Contract: contracts/<name>.md v<packet_version>\n" in text
     assert "Contract: <charter name>/specs/<name>.md v<packet_version>\n" in text
+    # 0060: the orchestrator runs the lock script; the commit is the script's, not an agent's.
     rule = (
-        "The Build Train saves the Locked Contract Packet to a file and the main session commits it"
+        "The Build Train saves the Locked Contract Packet to a file and the train commits it "
+        "through the lock script"
     )
     assert rule in text
     assert "a Build Train keeps the packet in the reply" not in text
-    # R3-M2: the howto carries the same sentence.
+    # R3-M2, B7: the howto carries the same rule; the lock command commits, not the session.
     howto = (REPO_ROOT / "docs" / "howto" / "README.md").read_text(encoding="utf-8")
-    assert (
-        "saves the Locked Contract Packet to a file, and the train's main session commits it"
-        in (howto)
-    )
+    assert "saves the Locked Contract Packet to a file, and the lock command commits it" in howto
+    assert "the train's main session commits it" not in howto
     assert "committed on the integration branch `daedalus/<train-id>` before any coder starts" in (
         howto
     )
@@ -631,7 +693,7 @@ def test_build_train_saves_and_commits_the_contract() -> None:
 
 def test_build_train_refuses_a_revision_that_does_not_raise_the_version() -> None:
     # R4-M2: N must exceed the recorded packet_version; lock refuses it too.
-    phase2 = _section(_build_train(), "## Phase 2", "## Phase 3")
+    phase2 = _section(_recipe(), "## Phase 2", "## Phase 3")
     # R5-I2: one retry, then the second non-increasing version stops.
     stop = (
         "When <N> is not greater than the State Block packet_version <n>, "
@@ -644,11 +706,10 @@ def test_build_train_refuses_a_revision_that_does_not_raise_the_version() -> Non
 
 def test_build_train_branches_the_charter_in_preconditions() -> None:
     # 0011: begin branches the Charter (test_begin_branches_a_clean_charter).
-    text = _build_train()
-    pre = _section(text, "## Preconditions", "## Phase 1")
+    pre = _section(_build_train(), "## Preconditions", "## Relay")
     assert BEGIN in pre
     assert "branches a declared Charter" in pre
-    phase3 = _section(text, "## Phase 3", "\n5. The summary")
+    phase3 = _section(_recipe(), "## Phase 3", "\n6. The summary")
     assert "switch -c" not in phase3
     assert "it is empty when the contract commit landed" in phase3
     # R4-M3: the howto says where the Charter branch comes from.
@@ -661,7 +722,7 @@ def test_build_train_branches_the_charter_in_preconditions() -> None:
 
 def test_build_train_proves_live_hooks_after_begin() -> None:
     # 0035: begin creates the data dir; the next command proves hooks live, as in the Push Train.
-    pre = _section(_build_train(), "## Preconditions", "## Phase 1")
+    pre = _section(_build_train(), "## Preconditions", "## Relay")
     step = pre.split("\n3. ", 1)[1]
     hooks = (
         "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_audit_chain.py --hooks-live --repo <repo>`"
@@ -674,21 +735,26 @@ def test_build_train_proves_live_hooks_after_begin() -> None:
 
 def test_build_train_audits_from_the_integration_branch() -> None:
     # R4-C1: the contract commits sit on daedalus/<train-id>, outside every unit diff.
-    phase3 = _section(_build_train(), "## Phase 3", "\n3. ")
-    step2 = phase3.split("\n2. ", 1)[1]
-    dispatch = step2.split("Then Agent(`security-auditor`) with:", 1)[1].split(". Read", 1)[0]
-    assert dispatch.startswith(" the diff base `daedalus/<train-id>`, so each diff leaves out")
-    assert "base commit" not in dispatch and "base sha" not in dispatch
-    step1 = phase3.split("\n2. ", 1)[0]
-    assert "(`git diff daedalus/<train-id>...<branch>`)" in step1
-    assert "<base sha>" not in step1
+    # spec 8: audit after finish; the auditor judges the merged tip against the train's base.
+    phase3 = _section(_recipe(), "## Phase 3", "\n4. ")
+    step3 = phase3.split("\n3. ", 1)[1]
+    dispatch = step3.split("Then Agent(`security-auditor`) with:", 1)[1].split(". Read", 1)[0]
+    assert dispatch.startswith(" the diff base `<base sha>`, the State Block `base:` sha")
+    assert "the one branch `daedalus/<train-id>`" in dispatch
+    assert "the merged integration tip the Push Train pushes" in dispatch
+    assert phase3.index("daedalus_workspace.py finish") < phase3.index("\n3. ")
+    step2 = phase3.split("\n2. ", 1)[1].split("\n3. ", 1)[0]
+    assert "(`git diff <base sha>...daedalus/<train-id>`" in step2
     auditor = (REPO_ROOT / "agents" / "security-auditor.md").read_text(encoding="utf-8")
     assert "For each branch run `git diff <diff base>...<branch>`" in auditor
+    inputs = " ".join(auditor.split("Inputs:", 1)[1].split("## Procedure", 1)[0].split())
+    assert "the diff base is the commit the train started from" in inputs
+    assert "the merged integration branch `daedalus/<train-id>`" in inputs
 
 
 def test_build_train_keeps_dirty_trees_on_the_train_branch() -> None:
     # Ruling 1, R4-I1: test_stop_keeps_a_dirty_charter and test_stop_keeps_an_uncommitted_contract.
-    phase3 = _section(_build_train(), "## Phase 3", "\n5. The summary")
+    phase3 = _section(_recipe(), "## Phase 3", "\n6. The summary")
     dirty = phase3.split("   - Charter ledger:", 1)[1].split("\n", 1)[0]
     assert "the stop keeps the Charter on `daedalus/<train-id>` while it is dirty" in dirty
     assert "resume at this step" in dirty
@@ -697,7 +763,7 @@ def test_build_train_keeps_dirty_trees_on_the_train_branch() -> None:
 
 def test_build_train_keeps_worktrees_out_of_git_and_the_train() -> None:
     # 0024: teardown is the scripts' (test_stop_tears_down_only_recorded_units, test_finish_*).
-    text = _build_train()
+    text = _recipe()
     # 0022: daedalus_workspace.py create writes the worktrees ignore marker itself.
     assert "<repo>/.claude/worktrees/.gitignore" not in text
     assert "daedalus_workspace.py remove" not in text
@@ -795,7 +861,7 @@ def test_push_train_routes_ci_without_waiting() -> None:
 
 def test_both_trains_carry_the_pending_ledger_line() -> None:
     # Ruling N3: the summary exists before charter-docs; push-train refuses it pending.
-    bt = _build_train()
+    bt = _recipe()
     assert "with the line `Ledger ids: pending. Codes: --repo <R> --type <T>.`" in bt
     assert "replace the summary's `Ledger ids: pending` line with" in bt
     # 0057: Phase 1 records picks first, so compare against the Phase 3 dispatch.
@@ -852,7 +918,7 @@ DESCENT_STOP = (
 
 
 def test_build_train_checks_each_unit_descends_from_the_lock() -> None:
-    text = _build_train()
+    text = _recipe()
     assert "packet_version: <n>  contract: <contract path>  lock: <sha>" in text
     phase1 = text.split("## Phase 1", 1)[1].split("## Phase 2", 1)[0]
     assert "record its `lock:` line as `lock: <sha>` in the State Block" in phase1
@@ -876,7 +942,7 @@ BRANCH_STOP = (
 def test_build_train_requires_the_reported_branch_to_be_the_created_one() -> None:
     # 0022: daedalus/<train-id> is its own ancestor and would merge as a no-op.
     complete = next(
-        line for line in _build_train().splitlines() if line.startswith("| `[STATUS: COMPLETE]")
+        line for line in _recipe().splitlines() if line.startswith("| `[STATUS: COMPLETE]")
     )
     compare = (
         "First compare `<b>` with the branch the State Block recorded for that unit in Phase 2. "
@@ -888,9 +954,9 @@ def test_build_train_requires_the_reported_branch_to_be_the_created_one() -> Non
 
 
 def test_build_train_creates_each_coder_worktree() -> None:
-    phase2 = _section(_build_train(), "## Phase 2", "## Phase 3")
+    phase2 = _section(_recipe(), "## Phase 2", "## Phase 3")
     assert (
-        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py create --repo <repo> "
+        PLUGIN + "daedalus_workspace.py create --repo <repo> "
         "--name <train-id>-<unit-slug> --base daedalus/<train-id>`"
     ) in phase2
     assert (
@@ -907,12 +973,17 @@ def test_build_train_creates_each_coder_worktree() -> None:
 
 def test_build_train_merges_through_the_script() -> None:
     # 0024: test_finish_* holds the dirty-checkout guard, the merges and the conflict abort.
-    phase3 = _section(_build_train(), "## Phase 3", "\n5. The summary")
-    merge = phase3.split("\n4. ", 1)[1]
-    finish = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py finish --repo <repo>`"
+    phase3 = _section(_recipe(), "## Phase 3", "\n6. The summary")
+    merge = phase3.split("\n1. ", 1)[1].split("\n2. ", 1)[0]
+    finish = PLUGIN + "daedalus_workspace.py finish --repo <repo>`"
     assert finish in merge
-    assert merge.index(finish) < merge.index("Agent(`charter-docs`)")
-    assert "git merge --no-ff" not in _build_train()
+    assert phase3.index(finish) < phase3.index("Agent(`charter-docs`)")
+    assert "git merge --no-ff" not in _recipe()
+    # spec 8: a fix round is a fix unit cut from the integration branch, merged by a second finish.
+    fix = phase3.split("\n4. ", 1)[1].split("\n5. ", 1)[0]
+    assert "--name <train-id>-fix<n>-<unit-slug> --base daedalus/<train-id>" in fix
+    assert "Then run the step 1 finish again" in fix
+    assert "The hook rebinds that coder from its merged unit to the fix unit" in fix
 
 
 MARK = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py mark --repo <repo> --train "
@@ -921,13 +992,18 @@ UNMARK = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py unmark --
 
 def test_build_train_marks_the_train_active_and_clears_it() -> None:
     # 0023: begin marks (test_begin_prints_the_state_block_seed); stop clears.
+    # 0060: the orchestrator reports the train complete; the relay runs the final stop.
     text = _build_train()
-    end = text.split("\n6. Print the State Block", 1)[1]
+    end = text.split("- `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path>`", 1)[1]
     assert (
         "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py stop --repo <repo> "
         '--reason "train complete"'
     ) in end
-    assert "marks the train active" in _section(text, "## Preconditions", "## Phase 1")
+    assert "marks the train active" in _section(text, "## Preconditions", "## Relay")
+    last = _recipe().split("\n7. Print the State Block", 1)[1]
+    assert (
+        "`[STATUS: TRAIN_COMPLETE] summary=<repo>/docs/.tmp/daedalus/<train-id>-summary.md" in last
+    )
 
 
 def test_push_train_marks_the_train_active_and_clears_it() -> None:
@@ -948,7 +1024,7 @@ def test_push_train_marks_the_train_active_and_clears_it() -> None:
 
 
 def test_build_train_never_respawns_a_coder() -> None:
-    text = _build_train()
+    text = _recipe()
     assert "Continue on branch" not in text
     assert (
         '"Coder for unit <b> cannot be resumed. Next: rerun the train; the unit branch <b> is '

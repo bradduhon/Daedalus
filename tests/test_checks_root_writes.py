@@ -173,6 +173,30 @@ def test_root_writes_scratch_class_follows_the_train(tmp_path: Path) -> None:
     assert evaluate(HOOK, other, "--touch", "scratch") is not None
 
 
+def test_root_writes_scratch_class_admits_the_trains_one_summary_file(tmp_path: Path) -> None:
+    # 0060: the summary sits beside the train's folder; only the active train's file passes.
+    repo = _git_init(tmp_path / "repo")
+    scratch = f"{repo}/docs/.tmp/daedalus"
+
+    def judged(path: str, *flags: str) -> str | None:
+        return evaluate(HOOK, {**_w("x", path), "cwd": str(repo)}, "--touch", "scratch", *flags)
+
+    summary = f"{scratch}/20261017-120000-summary.md"
+    (repo / ".claude" / "daedalus").mkdir(parents=True)
+    (repo / ".claude" / "daedalus" / "train.active").write_text("20261017-120000\n")
+    assert judged(summary) is None
+    for path in (
+        f"{scratch}/20261017-999999-summary.md",
+        f"{scratch}/20261017-120000-charter-pr.md",
+        f"{scratch}/other.md",
+        f"{repo}/docs/howto/README.md",
+        f"{repo}/docs/private/specs/x.md",
+    ):
+        assert judged(path) is not None, path
+    # spec 3.1: --name keeps the planner to its own file; the summary never passes it.
+    assert judged(summary, "--name", "plan*.md") is not None
+
+
 def test_root_writes_name_takes_a_glob() -> None:
     flags = ("--touch", "docs", "--name", "plan*.md")
     assert evaluate(HOOK, _w("x", f"{CWD}/docs/plan.md"), *flags) is None
