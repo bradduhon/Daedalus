@@ -112,10 +112,22 @@ def test_readme_outside_train_claim_matches_the_jail() -> None:
         assert [claim for claim in stale if claim in text] == [], doc
 
 
-def test_howto_merge_pick_names_the_push_train_verdict_stop() -> None:
-    # B8: --approved has no exception path yet (issue 62), so a merge on an exception stops there.
+def test_howto_merge_pick_names_the_push_train_exception_path() -> None:
+    # issue 62: --approved accepts an exception bound to the tip, so a merge pick no longer stops.
     text = (REPO_ROOT / "docs" / "howto" / "README.md").read_text(encoding="utf-8")
     bullet = next(
         line for line in text.splitlines() if line.startswith("- Merge with each finding")
     )
-    assert "Push Train" in bullet and "stops" in bullet, bullet
+    assert "The Push Train's verdict check accepts that exception" in bullet, bullet
+    assert "by hand" not in bullet and "stops" not in bullet, bullet
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "stops at the Push Train's verdict check" not in readme
+
+
+def test_howto_credential_read_claim_names_the_main_session_ask() -> None:
+    # spec 6, scripts/lib/jail.py ASK_CREDENTIAL: agents are refused, the main session is asked.
+    text = (REPO_ROOT / "docs" / "howto" / "README.md").read_text(encoding="utf-8")
+    intro = text.split("## What Daedalus does", 1)[1].split("\n## ", 1)[0]
+    assert "It refuses every agent's reads of your credential stores" in intro
+    assert "when the main session itself reaches for one, it asks you first" in intro
+    assert "It refuses reads of your credential stores through file tools" not in intro
