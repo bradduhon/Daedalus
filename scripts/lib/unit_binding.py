@@ -7,7 +7,6 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 
 from lib import train_state
 from lib.locks import bounded_flock
@@ -41,19 +40,20 @@ def _locked(repo: Path, train_id: str) -> Iterator[Path]:
         yield path
 
 
-def _read(path: Path) -> dict[str, dict[str, Any]]:
+def _read(path: Path) -> dict[str, dict[str, object]]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data: object = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise TrainStateError(
             f"{path} is not readable JSON ({exc}). Next: stop the train and start a new one."
         ) from exc
-    units = data.get("units") if isinstance(data, dict) else None
+    units: object = data.get("units") if isinstance(data, dict) else None
     if not isinstance(units, dict) or not all(isinstance(v, dict) for v in units.values()):
         raise TrainStateError(f"{path} has no units object. Next: stop the train and start anew.")
-    return units
+    # issue 51: rebuilt as typed dicts so the untyped json value stops at this reader.
+    return {str(name): {str(k): v for k, v in rec.items()} for name, rec in units.items()}
 
 
 def record_dispatch(repo: Path, train_id: str, unit_name: str) -> str | None:

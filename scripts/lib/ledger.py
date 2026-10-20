@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from lib.audit import project_root
 from lib.config import LEDGER_FIELDS, LEDGER_FORMATS, Config, LedgerDecl
@@ -51,23 +50,22 @@ def _resolve_path(raw: str, repo_root: Path, charter_root: Path | None) -> Path:
 def _manifest_decl(repo_root: Path) -> LedgerDecl | None:
     target = repo_root / MANIFEST_NAME
     try:
-        raw: Any = read_raw(repo_root)
+        raw: object = read_raw(repo_root)
     except ManifestError as exc:
         raise LedgerError(str(exc)) from exc
     # 0076: a null ledger block is not declared, the same as an absent one.
     if not isinstance(raw, dict) or raw.get("ledger") is None:
         return None
-    block = raw["ledger"]
-    if not isinstance(block, dict) or not all(
-        isinstance(block.get(k), str) and block.get(k) for k in LEDGER_FIELDS
-    ):
+    block: object = raw["ledger"]
+    fields = [block.get(k) for k in LEDGER_FIELDS] if isinstance(block, dict) else [None]
+    strings = [v for v in fields if isinstance(v, str) and v]
+    if len(strings) != len(LEDGER_FIELDS):
         raise LedgerError(
             f"{target} ledger block needs non-empty string fields {', '.join(LEDGER_FIELDS)}. "
             "Next: declare all four ledger fields in the manifest."
         )
-    return LedgerDecl(
-        Path(block["path"]), block["format"], block["id_scheme"], block["sequence_source"]
-    )
+    path, format_, id_scheme, sequence_source = strings
+    return LedgerDecl(Path(path), format_, id_scheme, sequence_source)
 
 
 def _validate(decl: LedgerDecl, where: str) -> None:

@@ -208,3 +208,26 @@ def test_symlinked_bindings_file_fails_closed(
     reason = record_dispatch(repo_cwd, TRAIN, "u1")
     assert reason is not None and "symlink" in reason and "Next:" in reason
     assert target.read_text(encoding="utf-8") == "{}"
+
+
+@pytest.mark.parametrize(
+    ("text", "needle"),
+    [
+        ("{ not json", "is not readable JSON"),
+        ("[]", "has no units object"),
+        ('{"units": []}', "has no units object"),
+        ('{"units": {"u1": "a-1"}}', "has no units object"),
+    ],
+)
+def test_malformed_bindings_file_keeps_its_refusal(
+    repo_cwd: Path, project_data: Path, text: str, needle: str
+) -> None:
+    # issue 51: the retyped reader refuses the same shapes it refused before.
+    train_state.save(repo_cwd, TRAIN, {"train_id": TRAIN})
+    bindings_path(repo_cwd, TRAIN).write_text(text, encoding="utf-8")
+    for reason in (
+        record_dispatch(repo_cwd, TRAIN, "u1"),
+        rebind(repo_cwd, TRAIN, "a-1", "u1", "u2"),
+        claim(repo_cwd, TRAIN, "a-1", "u1"),
+    ):
+        assert reason is not None and needle in reason and "Next:" in reason
