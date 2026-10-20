@@ -66,7 +66,7 @@ Every `MISS` line ends with a `Next:` instruction that says what to do. In a new
 1. Read the catalog. Type `/daedalus:catalog`. It prints every agent with its tools, its reply lines and the phases it suits, then the six phases with their exit conditions and the musts.
 2. Write a spec, or point at one. A spec is a file in your repository that says what to build and how you will know it works. A one-line task needs no file; the Build Train saves the words you type as the spec.
 3. Cut the spec into units. Type `/daedalus:plan` and the spec's path, for example `/daedalus:plan docs/specs/healthz.md`. The planner agent writes a plan file, and the plan validator checks it and prints `OK plan: graph: units=<n> critical_path=<k> width=<w> overlap_only=<pairs>`. The session then shows a unit table with the columns Unit, What it builds, Starts from, Waits on and Shares files with. Each row is one coding agent's work. Waits on names the units that must finish first, and Shares files with names the units that edit the same files, with the order they merge in. Outside a train the plan lands at `docs/.tmp/daedalus/plan-<YYYYMMDD>.md`.
-4. Start the Build Train. Type `/daedalus:build-train` and your task, naming the spec and the plan file the plan step wrote. Inside the train the orchestrator cuts the train's own plan by the same steps and records it before any coder starts. The session checks the preconditions and prints the first State Block lines. The hooks check then prints `OK hooks live: session <id>, chain intact (<n> records)`. That check also marks where this train's audit begins; the Push Train later reads the security verdict only from records after that mark (issue 57).
+4. Start the Build Train. Type `/daedalus:build-train` and your task, naming the plan file the plan step wrote, as its `Next:` line says. The session hands it to the orchestrator as the train's plan; the orchestrator checks it with the plan validator and records it instead of cutting a new one. With no plan named, the orchestrator cuts and records the plan itself before any coder starts. The session checks the preconditions and prints the first State Block lines. The hooks check then prints `OK hooks live: session <id>, chain intact (<n> records)`. That check also marks where this train's audit begins; the Push Train later reads the security verdict only from records after that mark (issue 57).
 5. Watch it run. The main session starts one orchestrator agent and relays between it and you (0060). After each phase you see a progress note that names the phase, its weight and the state of each unit. Before each choice the train prints one line, `Chose <what> over <alternative>: <cost>`.
 6. Answer its questions. When the train needs a ruling, the orchestrator writes a decision brief, and the session asks you through Claude Code's question prompt. Each question has a question line ending in a question mark, two or three context sentences and its options, with the recommended option first. The orchestrator ends each reply with one of four lines, and the session routes it:
    - `[STATUS: DECISION]`: the session asks you the brief's questions and sends your picks back.
@@ -243,15 +243,19 @@ Daedalus/
 ├── .claude-plugin/
 │   ├── marketplace.json             # marketplace id: daedalus
 │   └── plugin.json                  # plugin id: daedalus
+├── .claude/settings.json            # this repository's own Claude Code settings
 ├── .gitignore
 ├── LICENSE
 ├── README.md
+├── VERSION                          # the release version
 ├── pyproject.toml                   # dev tooling; the plugin itself is stdlib only
+├── service-manifest.json            # this repository's own service manifest
 ├── agents/
 │   ├── charter-docs.md
 │   ├── cis-specialist.md
 │   ├── contract-spec.md
 │   ├── nist-specialist.md
+│   ├── orchestrator.md
 │   ├── planner.md
 │   ├── pr-train-conductor.md
 │   ├── repo-coder.md
@@ -265,31 +269,75 @@ Daedalus/
 │   └── hooks.json                   # enforcement and audit bindings
 ├── packs/
 │   └── baseline/rules.md            # opt-in baseline and cloud security standards pack
+├── references/
+│   ├── hardening-rubric.md          # the rubric the cis-specialist maps findings to
+│   └── nist-800-53-distilled.md     # the rubric the nist-specialist maps findings to
 ├── scripts/                         # Python 3.12, stdlib only
+│   ├── checks/command_allowlist.py  # every Bash segment runs a command the --allow list names
+│   ├── checks/controls/             # the failure each control prevents and its premise test
+│   ├── checks/credential_paths.py   # refuses a path or command that names a credential store
+│   ├── checks/dispatch_gate.py      # the orchestrator's coder dispatch and plan gates
+│   ├── checks/gh_classes.py         # the gh deny classes; the conductor's gh rules
+│   ├── checks/git_grammar.py        # each git segment fits the grammar of its grant
+│   ├── checks/git_push.py           # refuses remote git; the conductor pushes the train branch only
+│   ├── checks/network_tools.py      # refuses web tools and network commands without a grant
+│   ├── checks/read_only_bash.py     # every Bash segment is a read-only command or git read
+│   ├── checks/root_writes.py        # writes land only under the named path classes
+│   ├── checks/shapes.json           # the hooks each agent shape carries
+│   ├── checks/shell_tripwires.py    # the worker shell model and its tripwires
+│   ├── checks/tool_bound.py         # refuses a tool the agent file does not list
+│   ├── checks/unit_writes.py        # the coder writes only in its own unit worktree
+│   ├── checks/workspace_integrity.py # refuses writes into .git and the data folder
 │   ├── lib/__init__.py
+│   ├── lib/agent_files.py           # reads agent files and their hooks blocks
 │   ├── lib/audit.py                 # hash-chained append, redaction
+│   ├── lib/audit_proof.py           # the hooks-live and approved-verdict proofs
 │   ├── lib/config.py                # config.json loading and validation
+│   ├── lib/controls.py              # loads the controls fragments
+│   ├── lib/credential_paths.py      # the credential-path deny every agent meets
+│   ├── lib/dispatch_binding.py      # coder dispatch, warm rebind and first-write claim
 │   ├── lib/fetch.py                 # GitHub-only download, size cap and cache lock for refreshes
+│   ├── lib/gh_policy.py             # the gh commands each agent may run
+│   ├── lib/hook_io.py               # hook input and output for the check scripts
+│   ├── lib/human_text.py            # counts the plain words in operator lines
 │   ├── lib/jail.py                  # per-agent tool policy
 │   ├── lib/ledger.py                # ledger resolution, sequence read, entry format
 │   ├── lib/locks.py                 # bounded flock shared by audit and ledger writers
-│   ├── lib/project_keys.py          # every manifest and config key, and the starter files
+│   ├── lib/manifest.py              # the one reader of service-manifest.json
+│   ├── lib/plan_record.py           # loads and validates plan records
+│   ├── lib/project_keys.py          # every manifest and config key, its reference row, and the starter files
+│   ├── lib/project_root.py          # finds the project root
 │   ├── lib/redact.py                # secret masking for audit records
+│   ├── lib/repo_root.py             # finds a train marker before other lib modules load
+│   ├── lib/router.py                # runs each agent's calls through its hooks
+│   ├── lib/scrub.py                 # reads the declared scrub file's terms
+│   ├── lib/shell.py                 # the shell model the jail and checks share
+│   ├── lib/train_definition.py      # loads and validates train definitions
+│   ├── lib/train_runner.py          # the train state machine behind daedalus_train.py
+│   ├── lib/train_scope.py           # the train scope the jail's entry script reads first
+│   ├── lib/train_state.py           # one state file per train
+│   ├── lib/unit_binding.py          # one coder per unit worktree
 │   ├── lib/workspace.py             # unit worktrees and the train marker
 │   ├── append_ledger.py             # locked, sequence-checked ledger writer
 │   ├── audit_log.py                 # all other hook events to the audit log
 │   ├── audit_report.py              # digest of a verified session log
+│   ├── catalog.py                   # prints the agent table and hooks matrix
 │   ├── daedalus_doctor.py           # first-run check behind /daedalus:doctor
 │   ├── daedalus_setup.py            # writes the missing starter files behind /daedalus:setup
-│   ├── daedalus_workspace.py        # create and remove unit worktrees; mark the running train
+│   ├── daedalus_train.py            # the train runner: progress, choice, plan, verdict, exception
+│   ├── daedalus_workspace.py        # begin, lock, create, remove, finish, stop, resume, mark, unmark, release
 │   ├── enforce_agent_jail.py        # PreToolUse policy
 │   ├── refresh_frameworks.py        # operator-run: compile the pinned framework caches
+│   ├── standing_rules.py            # derives the standing-rules file from the ledger
+│   ├── validate_plan.py             # checks a plan file and prints its graph line
+│   ├── validate_train.py            # checks a train definition file
 │   └── verify_audit_chain.py        # recompute and verify a session's hash chain
 ├── skills/
 │   ├── audit-report/SKILL.md        # /daedalus:audit-report
 │   ├── build-train/SKILL.md         # /daedalus:build-train
 │   ├── catalog/SKILL.md             # /daedalus:catalog
 │   ├── doctor/SKILL.md              # /daedalus:doctor
+│   ├── plan/SKILL.md                # /daedalus:plan
 │   ├── push-train/SKILL.md          # /daedalus:push-train
 │   └── setup/SKILL.md               # /daedalus:setup
 └── tests/                           # the pytest suite
