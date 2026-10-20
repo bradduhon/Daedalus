@@ -35,7 +35,6 @@ R_REPLY_KEY_TREE = (
     "Next: search a folder outside .claude/daedalus, or name the files you need"
 )
 _GLOB_START = re.compile(r"[*?\[{]")
-_BRACE = re.compile(r"\{[^}]*\}")
 VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*|[0-9]+)[^}]*\}|\$([A-Za-z_][A-Za-z0-9_]*|[0-9])")
 _UNQUOTE = re.compile(r"[\"'\\]")
 # spec 8: lexer marks for a literal $, a quote edge that ends a name, and a redirect target.
@@ -72,6 +71,25 @@ def _brace_group(text: str) -> tuple[str, list[str], str] | None:
                 alts = [text[a + 1 : b] for a, b in zip(edges, edges[1:], strict=False)]
                 return text[:start], alts, text[i + 1 :]
     return None
+
+
+def _braces_to_star(text: str) -> str:
+    # audit B4 round 2: every top-level balanced {...} group, nested ones inside it, becomes *.
+    out: list[str] = []
+    depth, start = 0, 0
+    for i, char in enumerate(text):
+        if char == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                out.append("*")
+        elif depth == 0:
+            out.append(char)
+    # audit B4 round 2: an unclosed { stays literal, as the shell keeps it.
+    return "".join(out) + (text[start:] if depth else "")
 
 
 def expand_braces(text: str) -> list[str] | None:
@@ -198,7 +216,7 @@ def store_rest(
         alts = expand_braces(target)
         if alts is None:
             # issue 53: past the cap or on a sequence, a brace reads as a * that matches dot names.
-            return store_rest(_BRACE.sub("*", target), root, glob, True, dots_hide)
+            return store_rest(_braces_to_star(target), root, glob, True, dots_hide)
         if alts != [target]:
             return _widest([store_rest(a, root, glob, dotglob, dots_hide) for a in alts])
         parts = os.path.normpath(target).split(os.sep)
@@ -244,7 +262,7 @@ def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
     # rooted inside .claude, or a glob that overrides the marker, can read the key.
     raw = glob if isinstance(glob, str) else ""
     # issue 53: each brace alternative is its own glob; past the cap or on a sequence, a brace is *.
-    pats = (expand_braces(raw) or [_BRACE.sub("*", raw)]) if raw else []
+    pats = (expand_braces(raw) or [_braces_to_star(raw)]) if raw else []
     # SC-12: a leading / anchors an rg glob to the search root; the match ignores it.
     pats = [p.lstrip("/") for p in pats if p.lstrip("/")]
     for key in keys:

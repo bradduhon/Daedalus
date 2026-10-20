@@ -177,7 +177,14 @@ def test_brace_alternatives_beside_a_store_are_allowed(cred_home: Path, agent: s
         assert evaluate(HOOK, {**case, "agent_type": agent}) is None, command
 
 
-SEQUENCE_READS = ("cat {home}/.{{s..s}}sh/id_rsa", "cat ~/.{{a..z}}sh/config")
+SEQUENCE_READS = (
+    "cat {home}/.{{s..s}}sh/id_rsa",
+    "cat ~/.{{a..z}}sh/config",
+    # audit B4 round 2: a sequence nested in an alternation, and a nested group past the cap.
+    "cat {home}/{{x,.{{s..s}}sh}}/id_rsa",
+    "cat ~/{{x,.{{a..z}}ws}}/credentials",
+    "cat ~/{{a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,{{.ssh,r}}}}/id_rsa",
+)
 
 
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
