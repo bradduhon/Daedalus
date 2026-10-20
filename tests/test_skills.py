@@ -1120,16 +1120,21 @@ def test_build_train_marks_the_train_active_and_clears_it() -> None:
     # 0023: begin marks (test_begin_prints_the_state_block_seed); stop clears.
     # 0060: the orchestrator reports the train complete; the relay runs the final stop.
     text = _build_train()
-    end = text.split("- `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path>`", 1)[1]
+    line = "- `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path> tip=<40 hex>`"
+    end = text.split(line, 1)[1]
     assert (
         "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py stop --repo <repo> "
         '--reason "train complete"'
     ) in end
+    assert "the judged tip" in end.split("\n", 1)[0]
     assert "marks the train active" in _section(text, "## Preconditions", "## Relay")
     last = _recipe().split("\n7. Print the State Block", 1)[1]
     assert (
         "`[STATUS: TRAIN_COMPLETE] summary=<repo>/docs/.tmp/daedalus/<train-id>-summary.md" in last
     )
+    # pin C5 -> C1: the final line carries the judged tip, and the contract lists that shape.
+    assert "audit_log=<repo>/.claude/daedalus/audit/<id>.jsonl tip=<judged tip>`" in last
+    assert line in _recipe().split("## Status contract", 1)[1]
 
 
 def test_push_train_marks_the_train_active_and_clears_it() -> None:

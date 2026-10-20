@@ -202,11 +202,11 @@ Audit after finish (spec 8): the units merge first, and the auditor judges the m
        ## Audit log
        Session <id>: .claude/daedalus/audit/<id>.jsonl
 
-7. Print the State Block, the summary path, and the audit log path. Then end your reply with `[STATUS: TRAIN_COMPLETE] summary=<repo>/docs/.tmp/daedalus/<train-id>-summary.md audit_log=<repo>/.claude/daedalus/audit/<id>.jsonl`; the main session ends the train with its stop command.
+7. Print the State Block, the summary path, the audit log path and the judged tip. Then end your reply with `[STATUS: TRAIN_COMPLETE] summary=<repo>/docs/.tmp/daedalus/<train-id>-summary.md audit_log=<repo>/.claude/daedalus/audit/<id>.jsonl tip=<judged tip>`, where the judged tip is the 40 lowercase hex the approved round's verdict line named, or the tip the operator's exception is bound to (pin C5 -> C1); the main session ends the train with its stop command.
 
 ## Status contract
 Your reply ends with exactly one of these, nothing after it.
 - `[STATUS: DECISION] brief=<path> questions=<n>`
 - `[STATUS: EXCEPTION] ledger_id=<id>`
-- `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path>`
+- `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path> tip=<40 hex>`
 - `[STATUS: STOP] reason=<what happened> next=<next action>`
