@@ -25,11 +25,13 @@ from lib.audit_proof import (
     VERDICT_APPROVED,
     VERDICT_REJECTED,
     ProofError,
+    auditor_round,
     hooks_live,
     live_log,
     newest_log,
     read_chain,
-    stop_verdict,
+    round_verdict,
+    train_start,
 )
 from lib.config import ConfigError, load_config
 from lib.jail import normalize_agent
@@ -1256,32 +1258,35 @@ def record_exception(cwd: Path, ledger_id: str) -> Outcome:
     return _recorded(cwd, edit)
 
 
-def _auditor_seq(repo: Path, status: str, seq: int | None) -> int:
-    # 0089: the verdict is read from this session's auditor stop record, never from the caller.
+def _auditor_seq(repo: Path, train_id: str, status: str, seq: int | None) -> int:
+    # 0089: the verdict is read from this session's auditor reply records, never from the caller.
     try:
         log, _ = live_log(repo, VERDICT_NEEDLE)
         records = read_chain(log)
     except ProofError as exc:
         raise RunnerError(str(exc)) from exc
+    start = train_start(repo, train_id)
+    if start is None:
+        raise RunnerError(
+            f"the state of train {train_id} records no start_seq to bound the auditor search. "
+            f"Next: run verify_audit_chain.py --hooks-live --repo {repo}, then run the security "
+            "audit again."
+        )
     want = VERDICT_APPROVED if status == train_state.APPROVED else VERDICT_REJECTED
-    # 0089: only the auditor's newest stop counts, so a later rejection is never skipped.
-    stops = [
-        r for r in records if r.get("event") == "SubagentStop" and r.get("agent_type") == AUDITOR
-    ]
-    newest = stops[-1] if stops else {}
-    found = newest.get("seq")
-    verdict = stop_verdict(newest) if stops else None
+    # 0089, issue 57: only the newest auditor turn after start_seq counts.
+    turn = auditor_round(records, start)
+    verdict, found = round_verdict(turn)
     problem = None
-    if not isinstance(found, int) or isinstance(found, bool):
-        problem = f"audit log {log.name} holds no {AUDITOR} stop record"
-    elif seq is not None and seq != found:
-        problem = f"seq {seq} is not the newest {AUDITOR} stop record, which is seq {found}"
+    if not turn:
+        problem = f"audit log {log.name} holds no {AUDITOR} reply after seq {start}"
+    elif seq is not None and seq not in {r.get("seq") for r in turn}:
+        problem = f"seq {seq} is not the newest {AUDITOR} reply, which is seq {found}"
     elif verdict != want:
         problem = (
-            f"the newest {AUDITOR} stop record, seq {found}, carries "
+            f"the newest {AUDITOR} reply, seq {found}, carries "
             f"{verdict or 'no verdict line'}, not {want}"
         )
-    if problem is not None or not isinstance(found, int):
+    if problem is not None:
         raise RunnerError(
             f"{problem}. Next: run the security audit; the verdict is recorded from the "
             "auditor's reply, never typed."
@@ -1302,7 +1307,7 @@ def record_verdict(cwd: Path, status: str, round_: int, seq: int | None = None) 
                 f"round {round_} or audit seq {seq} is out of range. "
                 "Next: rerun verdict with a round of 1 or more and the auditor's stop record seq."
             )
-        found = _auditor_seq(repo, status, seq)
+        found = _auditor_seq(repo, train_id, status, seq)
         tip = _integration_tip(repo, train_id)
         record = _verdict_record(status, tip, round_, found)
         train_state.update(repo, train_id, **{train_state.VERDICT: record})

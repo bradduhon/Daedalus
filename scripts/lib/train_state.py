@@ -28,6 +28,8 @@ PLAN, CHOICES, VERDICT, EXCEPTION, PHASE, WEIGHT = (
     "weight",
 )
 APPROVED, REJECTED = "approved", "rejected"
+# issue 57: the audit-log seq hooks-live saw first; verdict searches read only records after it.
+START_SEQ = "start_seq"
 
 
 class TrainStateError(RuntimeError):
@@ -152,6 +154,23 @@ def change(
         edit(state)
         _write(path, state)
     return state
+
+
+def start_seq(state: dict[str, object]) -> int | None:
+    value = state.get(START_SEQ)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def mark_start(repo: Path, train_id: str, seq: int) -> int:
+    # issue 57: written once, so a later hooks-live (the push session's) never moves the bound.
+    def edit(state: dict[str, object]) -> None:
+        if start_seq(state) is None:
+            state[START_SEQ] = seq
+
+    found = start_seq(change(repo, train_id, edit))
+    return seq if found is None else found
 
 
 def units(state: dict[str, object]) -> list[dict[str, object]]:

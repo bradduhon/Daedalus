@@ -8,6 +8,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from lib import train_state
 from lib.audit import GENESIS, AuditLockError, read_log, record_hash
 
 AUDIT_DIR = Path(".claude") / "daedalus" / "audit"
@@ -18,7 +19,9 @@ APPROVED_NEXT = "Next: run /daedalus:build-train; this train has no approved aud
 AUDITOR = "daedalus:security-auditor"
 VERDICT_APPROVED = "[VERDICT: APPROVED]"
 VERDICT_REJECTED = "[VERDICT: REJECTED]"
+HANDBACK = "SubagentHandback"
 _VERDICT_FIELDS = ("last_message_head", "last_message_tail")
+_HANDBACK_FIELD = "tool_input.message"
 _TRAIN_ID = re.compile(r"[0-9]{8}-[0-9]{6}")
 _SESSION_LINE = re.compile(r"^Session ([A-Za-z0-9_-]+):", re.MULTILINE)
 
@@ -90,8 +93,15 @@ def live_log(repo: Path, needle: str) -> tuple[Path, int]:
     return log, len(records)
 
 
-def hooks_live(repo: Path, needle: str) -> str:
+def hooks_live(repo: Path, needle: str, mark: bool = False) -> str:
     log, count = live_log(repo, needle)
+    train = train_state.active_train(repo) if mark else None
+    # issue 57: the train's start_seq; no state file yet leaves it unset, and verdicts refuse.
+    if train is not None and train_state.state_path(repo, train).is_file():
+        try:
+            train_state.mark_start(repo, train, count)
+        except train_state.TrainStateError as exc:
+            raise ProofError(f"BROKEN: {exc}") from exc
     return f"OK hooks live: session {log.stem}, chain intact ({count} records)"
 
 
@@ -117,35 +127,87 @@ def _file_name(record: Mapping[str, object]) -> str:
     return Path(raw).name if isinstance(raw, str) else ""
 
 
+def _verdict_fields(record: Mapping[str, object]) -> dict[str, object]:
+    # issue 57: the auditor's reply lands in its hand-back call; its stop record holds a relay.
+    if record.get("tool_name") == HANDBACK:
+        tool_input = record.get("tool_input")
+        message = tool_input.get("message") if isinstance(tool_input, dict) else tool_input
+        return {_HANDBACK_FIELD: message}
+    return {field: record.get(field) for field in _VERDICT_FIELDS}
+
+
 def stop_verdict(stop: Mapping[str, object]) -> str | None:
-    # 41: every field is untrusted; head first line or tail last line approves, any reject refuses.
+    # 41: every field is untrusted; a first or closing line approves, any reject refuses.
     lines: dict[str, list[str]] = {}
-    for field in _VERDICT_FIELDS:
-        value = stop.get(field)
+    for field, value in _verdict_fields(stop).items():
         if value is not None and not isinstance(value, str):
             return None
         lines[field] = [ln.strip() for ln in (value or "").splitlines() if ln.strip()]
-    head, tail = lines["last_message_head"], lines["last_message_tail"]
-    if any(ln.startswith(VERDICT_REJECTED) for ln in head + tail):
+    if any(ln.startswith(VERDICT_REJECTED) for rows in lines.values() for ln in rows):
         return VERDICT_REJECTED
-    if (head and head[0].startswith(VERDICT_APPROVED)) or (
-        tail and tail[-1].startswith(VERDICT_APPROVED)
-    ):
+    firsts = [rows[0] for f, rows in lines.items() if rows and f != "last_message_tail"]
+    closing = [rows[-1] for f, rows in lines.items() if rows and f != "last_message_head"]
+    if any(ln.startswith(VERDICT_APPROVED) for ln in firsts + closing):
         return VERDICT_APPROVED
     return None
 
 
-def _verdict_refusal(stop: Mapping[str, object]) -> str | None:
-    seq = stop.get("seq")
-    shown = seq if isinstance(seq, int) and not isinstance(seq, bool) else "?"
-    where = f"the {AUDITOR} final round (record seq {shown})"
-    bad = [f for f in _VERDICT_FIELDS if not isinstance(stop.get(f), str | None)]
-    if bad:
-        return f"{where} has a {bad[0]} that is not text"
-    verdict = stop_verdict(stop)
+def _seq(record: Mapping[str, object]) -> int:
+    value = record.get("seq")
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _auditor_reply(record: Mapping[str, object]) -> bool:
+    if record.get("agent_type") != AUDITOR:
+        return False
+    event = record.get("event")
+    return event == "SubagentStop" or (
+        event == "PostToolUse" and record.get("tool_name") == HANDBACK
+    )
+
+
+def auditor_round(
+    records: Iterable[Mapping[str, object]], start: int
+) -> list[Mapping[str, object]]:
+    # issue 57: the newest auditor turn after start_seq, its hand-back calls and the stop ending it.
+    replies = [r for r in records if _seq(r) > start and _auditor_reply(r)]
+    end = len(replies) - 1
+    if end >= 0 and replies[end].get("event") == "SubagentStop":
+        end -= 1
+    while end >= 0 and replies[end].get("event") != "SubagentStop":
+        end -= 1
+    return replies[end + 1 :]
+
+
+def round_verdict(turn: list[Mapping[str, object]]) -> tuple[str | None, int]:
+    # 0089: a rejection anywhere in the turn wins; the seq is the record that carries the verdict.
+    found = [(stop_verdict(r), _seq(r)) for r in turn]
+    for want in (VERDICT_REJECTED, VERDICT_APPROVED):
+        hits = [seq for verdict, seq in found if verdict == want]
+        if hits:
+            return want, hits[-1]
+    return None, _seq(turn[-1]) if turn else 0
+
+
+def _verdict_refusal(turn: list[Mapping[str, object]]) -> str | None:
+    for record in turn:
+        bad = [f for f, v in _verdict_fields(record).items() if not isinstance(v, str | None)]
+        if bad:
+            where = f"the {AUDITOR} final round (record seq {_seq(record)})"
+            return f"{where} has a {bad[0]} that is not text"
+    verdict, seq = round_verdict(turn)
+    where = f"the {AUDITOR} final round (record seq {seq or '?'})"
     if verdict == VERDICT_REJECTED:
         return f"{where} carries a {VERDICT_REJECTED} line"
     return None if verdict == VERDICT_APPROVED else f"{where} is not {VERDICT_APPROVED}"
+
+
+def train_start(repo: Path, train_id: str) -> int | None:
+    # issue 57: None when the state is unreadable or carries no start_seq; callers refuse.
+    try:
+        return train_state.start_seq(train_state.load(repo, train_id))
+    except train_state.TrainStateError:
+        return None
 
 
 def approved(repo: Path, train_id: str) -> str:
@@ -158,24 +220,26 @@ def approved(repo: Path, train_id: str) -> str:
     log = repo / AUDIT_DIR / f"{session}.jsonl"
     if not log.is_file():
         raise _not_approved(f"no audit log {log.name} for session {session}")
+    start = train_start(repo, train_id)
+    if start is None:
+        raise _not_approved(
+            f"the state of train {train_id} records no start_seq to bound the search"
+        )
     records = read_chain(log)
     name = f"{train_id}-summary.md"
     writes = [
-        i for i, r in enumerate(records) if r.get("tool_name") == "Write" and _file_name(r) == name
+        i
+        for i, r in enumerate(records)
+        if _seq(r) > start and r.get("tool_name") == "Write" and _file_name(r) == name
     ]
     if not writes:
         raise _not_approved(f"session {session} has no Write record of {name}")
-    # 0024: the auditor's final round for this train is its last stop before the summary Write.
-    stops = [
-        r
-        for r in records[: writes[0]]
-        if r.get("event") == "SubagentStop" and r.get("agent_type") == AUDITOR
-    ]
-    if not stops:
-        raise _not_approved(f"no {AUDITOR} SubagentStop record before the summary Write")
-    refusal = _verdict_refusal(stops[-1])
+    # 0024: the auditor's final round for this train is its last turn before the summary Write.
+    turn = auditor_round(records[: writes[0]], start)
+    if not turn:
+        raise _not_approved(f"no {AUDITOR} reply after seq {start} before the summary Write")
+    refusal = _verdict_refusal(turn)
     if refusal is not None:
         raise _not_approved(refusal)
-    return (
-        f"OK approved: train {train_id}, session {session}, auditor record seq {stops[-1]['seq']}"
-    )
+    _, seq = round_verdict(turn)
+    return f"OK approved: train {train_id}, session {session}, auditor record seq {seq}"
