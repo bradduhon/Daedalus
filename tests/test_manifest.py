@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from lib.manifest import (
+    Features,
     Manifest,
     ManifestError,
     declared_commands,
@@ -41,9 +42,11 @@ def test_absent_jail_narrowing_is_empty(tmp_path: Path) -> None:
 
 
 def test_this_repos_manifest_loads() -> None:
-    # 0073, B2: this repo's declared stack commands are read; every feature stays at its default.
+    # 0073, B2: this repo's declared stack commands are read; only the secret scan is switched on.
     assert load(REPO_ROOT) == Manifest(
-        unit_test_cmd=".venv/bin/pytest -q", lint_cmd=".venv/bin/ruff check scripts tests"
+        unit_test_cmd=".venv/bin/pytest -q",
+        lint_cmd=".venv/bin/ruff check scripts tests",
+        features=Features(secrets_scan=True),
     )
 
 
