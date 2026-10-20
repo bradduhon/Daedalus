@@ -26,7 +26,7 @@ EXPECTED_MODEL = {
     "standards-rules-specialist": "sonnet",
     "web-researcher": "haiku",
     "planner": "opus",
-    "orchestrator": "opus",
+    "orchestrator": "fable",
 }
 # 0089: phase affinities guide the session's choice of agent; they never gate a phase.
 EXPECTED_PHASES = {
