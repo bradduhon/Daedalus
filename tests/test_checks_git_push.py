@@ -3,6 +3,7 @@
 # 0044: the git_push hook; cases copied from tests/test_jail.py run each agent's chain.
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -209,6 +210,55 @@ def test_push_with_an_exception_for_the_tip_is_allowed(repo_cwd: Path) -> None:
     blank = {"ledger_id": "", "tip": moved}
     train_state.update(repo_cwd, GATE_TRAIN, exception=blank)
     assert _conductor_push(repo_cwd) is not None
+
+
+LEDGER = "docs/decisions.md"
+
+
+def _ledger_commit(repo: Path, *paths: str) -> str:
+    # spec 3.5: a repo-local ledger declared in config, then one commit touching the paths.
+    decl = {
+        "path": LEDGER,
+        "format": "markdown-table-row",
+        "id_scheme": "{seq:04d}-{repo}-{type}",
+        "sequence_source": "last-row-id",
+    }
+    config = repo / ".claude" / "daedalus" / "config.json"
+    config.write_text(json.dumps({"ledger": decl}), encoding="utf-8")
+    for name in paths:
+        target = repo / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f"{name} row\n", encoding="utf-8")
+        _git(repo, "add", name)
+    _git(repo, "commit", "-q", "-m", "ledger")
+    return _git(repo, "rev-parse", GATE_BRANCH).strip()
+
+
+def test_push_after_the_single_ledger_commit_is_allowed(repo_cwd: Path) -> None:
+    # 59, spec 3.5: the verdict covers the judged tip; the train's ledger commit on it passes.
+    approve(repo_cwd, seed_train(repo_cwd))
+    _ledger_commit(repo_cwd, LEDGER)
+    assert _conductor_push(repo_cwd) is None
+
+
+@pytest.mark.parametrize("paths", [(LEDGER, "src/app.py"), ("src/app.py",)], ids=str)
+def test_push_after_a_commit_beyond_the_ledger_is_refused(
+    repo_cwd: Path, paths: tuple[str, ...]
+) -> None:
+    approve(repo_cwd, seed_train(repo_cwd))
+    moved = _ledger_commit(repo_cwd, *paths)
+    reason = _conductor_push(repo_cwd)
+    assert reason is not None and reason.endswith(GATE_NEXT) and moved[:12] in reason
+    assert "with a commit that changes more than the ledger" in reason
+
+
+def test_push_after_two_ledger_commits_is_refused(repo_cwd: Path) -> None:
+    approve(repo_cwd, seed_train(repo_cwd))
+    _ledger_commit(repo_cwd, LEDGER)
+    (repo_cwd / LEDGER).write_text("second row\n", encoding="utf-8")
+    _git(repo_cwd, "commit", "-q", "-am", "second ledger")
+    reason = _conductor_push(repo_cwd)
+    assert reason is not None and "is not one plain commit on top of it" in reason
 
 
 def test_git_push_allows_tools_outside_its_tools() -> None:

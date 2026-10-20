@@ -15,6 +15,7 @@ from lib.gh_policy import (
     classify,
     conductor_gh_refusal,
     gh_reason,
+    verdict_reason,
 )
 
 from tests.conftest import REPO_ROOT
@@ -23,7 +24,9 @@ from tests.test_checks_git_push import (
     GATE_BRANCH,
     GATE_NEXT,
     GATE_TRAIN,
+    LEDGER,
     _git,
+    _ledger_commit,
     approve,
     move_tip,
     seed_train,
@@ -252,6 +255,17 @@ def test_pr_create_follows_the_same_gate(repo_cwd: Path) -> None:
     assert d.allow, d.reason
     assert "(0028)" in _reason(repo_cwd, "general-purpose", command)
     assert _denying_hook(repo_cwd, "repo-coder", command) == "network_tools"
+
+
+def test_verdict_reason_reads_the_judged_tip_rule(repo_cwd: Path) -> None:
+    # 59, spec 3.5: the single ledger commit on the judged tip passes; a second commit refuses.
+    approve(repo_cwd, seed_train(repo_cwd))
+    _ledger_commit(repo_cwd, LEDGER)
+    assert verdict_reason(str(repo_cwd), "gh pr create") is None
+    moved = _ledger_commit(repo_cwd, "src/app.py")
+    reason = verdict_reason(str(repo_cwd), "gh pr create")
+    assert reason is not None and reason.endswith(GATE_NEXT) and moved[:12] in reason
+    assert "or on its parent when the tip only adds the ledger commit" in reason
 
 
 HEAD_NEXT = (

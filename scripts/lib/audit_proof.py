@@ -23,6 +23,7 @@ HANDBACK = "SubagentHandback"
 _VERDICT_FIELDS = ("last_message_head", "last_message_tail")
 _HANDBACK_FIELD = "tool_input.message"
 _TRAIN_ID = re.compile(r"[0-9]{8}-[0-9]{6}")
+TIP = re.compile(r"[0-9a-f]{40}")
 _SESSION_LINE = re.compile(r"^Session ([A-Za-z0-9_-]+):", re.MULTILINE)
 
 
@@ -99,7 +100,7 @@ def hooks_live(repo: Path, needle: str, mark: bool = False) -> str:
     # issue 57: the train's start_seq; no state file yet leaves it unset, and verdicts refuse.
     if train is not None and train_state.state_path(repo, train).is_file():
         try:
-            train_state.mark_start(repo, train, count)
+            train_state.mark_start(repo, train, count, log.stem)
         except train_state.TrainStateError as exc:
             raise ProofError(f"BROKEN: {exc}") from exc
     return f"OK hooks live: session {log.stem}, chain intact ({count} records)"
@@ -202,12 +203,99 @@ def _verdict_refusal(turn: list[Mapping[str, object]]) -> str | None:
     return None if verdict == VERDICT_APPROVED else f"{where} is not {VERDICT_APPROVED}"
 
 
-def train_start(repo: Path, train_id: str) -> int | None:
-    # issue 57: None when the state is unreadable or carries no start_seq; callers refuse.
-    try:
-        return train_state.start_seq(train_state.load(repo, train_id))
-    except train_state.TrainStateError:
+def verdict_tip(turn: list[Mapping[str, object]], seq: int) -> str | None:
+    # pin C1 -> C3: the tip= token after the marker on the verdict record; none or two is no tip.
+    record = next((r for r in turn if _seq(r) == seq), None)
+    if record is None:
         return None
+    tips: set[str] = set()
+    for value in _verdict_fields(record).values():
+        for line in value.splitlines() if isinstance(value, str) else ():
+            words = line.strip().split()
+            if " ".join(words[:2]) not in (VERDICT_APPROVED, VERDICT_REJECTED):
+                continue
+            named = [w.removeprefix("tip=") for w in words[2:] if w.startswith("tip=")]
+            tips.update(named or [""])
+    return tips.pop() if len(tips) == 1 and TIP.fullmatch(next(iter(tips))) else None
+
+
+def _git(repo: Path, *args: str) -> str | None:
+    # Lazy: lib.workspace imports this module.
+    from lib import workspace
+
+    try:
+        found = workspace._run(repo, *args)
+    except (OSError, workspace.WorkspaceError):
+        return None
+    return found.stdout if found.returncode == 0 else None
+
+
+def integration_tip(repo: Path, train_id: str) -> str | None:
+    out = _git(
+        repo, "rev-parse", "--verify", "--quiet", f"refs/heads/daedalus/{train_id}^{{commit}}"
+    )
+    tip = (out or "").strip()
+    return tip if TIP.fullmatch(tip) else None
+
+
+def _ledger_rel(repo: Path) -> str | None:
+    # spec 3.5: the train's own ledger, resolved as append_ledger resolves it; outside repo is none.
+    from lib.config import ConfigError, load_config
+    from lib.ledger import LedgerError, resolve_ledger
+
+    try:
+        ledger = resolve_ledger(str(repo), load_config(cwd=str(repo)))
+        if ledger is None:
+            return None
+        return ledger.path.resolve().relative_to(repo.resolve()).as_posix()
+    except (ConfigError, LedgerError, OSError, RuntimeError, ValueError):
+        return None
+
+
+def tip_problem(repo: Path, judged: object, current: str) -> str | None:
+    # 59, spec 3.5: the tip is the judged tip, or one non-merge child that changes only the ledger.
+    if not isinstance(judged, str) or not TIP.fullmatch(judged):
+        return "the recorded verdict names no judged tip"
+    if judged == current:
+        return None
+    moved = f"the tip {current[:12]} moved past the judged tip {judged[:12]}"
+    parents = (_git(repo, "rev-list", "--parents", "-n", "1", current) or "").split()
+    if parents[1:] != [judged]:
+        return f"{moved}, and the tip is not one plain commit on top of it"
+    changed = (
+        _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", judged, current) or ""
+    ).split("\0")
+    ledger = _ledger_rel(repo)
+    if ledger is None or [path for path in changed if path] != [ledger]:
+        return f"{moved} with a commit that changes more than the ledger"
+    return None
+
+
+def _state(repo: Path, train_id: str) -> dict[str, object]:
+    try:
+        return train_state.load(repo, train_id)
+    except train_state.TrainStateError as exc:
+        raise _not_approved(f"the state of train {train_id} is not readable ({exc})") from exc
+
+
+def _judged(repo: Path, train_id: str, state: dict[str, object], named: str | None) -> str:
+    # 59: the recorded approval, the auditor's tip= and the integration tip agree.
+    verdict = train_state.record(state, train_state.VERDICT)
+    if verdict.get("status") != train_state.APPROVED:
+        raise _not_approved(f"the state of train {train_id} records no approved verdict")
+    judged = verdict.get("tip")
+    if named is None or named != judged:
+        shown = judged[:12] if isinstance(judged, str) else "no tip"
+        raise _not_approved(
+            f"the {AUDITOR} verdict names tip {named or 'none'}, not the recorded tip {shown}"
+        )
+    current = integration_tip(repo, train_id)
+    if current is None:
+        raise _not_approved(f"daedalus/{train_id} does not resolve to a commit")
+    problem = tip_problem(repo, judged, current)
+    if problem is not None:
+        raise _not_approved(problem)
+    return named
 
 
 def approved(repo: Path, train_id: str) -> str:
@@ -220,10 +308,13 @@ def approved(repo: Path, train_id: str) -> str:
     log = repo / AUDIT_DIR / f"{session}.jsonl"
     if not log.is_file():
         raise _not_approved(f"no audit log {log.name} for session {session}")
-    start = train_start(repo, train_id)
+    state = _state(repo, train_id)
+    # issue 60: the bound hooks-live recorded for the session the summary names.
+    start = train_state.session_bound(state, session)
     if start is None:
         raise _not_approved(
-            f"the state of train {train_id} records no start_seq to bound the search"
+            f"the state of train {train_id} records no start_seq for session {session} "
+            "to bound the search"
         )
     records = read_chain(log)
     name = f"{train_id}-summary.md"
@@ -242,4 +333,24 @@ def approved(repo: Path, train_id: str) -> str:
     if refusal is not None:
         raise _not_approved(refusal)
     _, seq = round_verdict(turn)
-    return f"OK approved: train {train_id}, session {session}, auditor record seq {seq}"
+    tip = _judged(repo, train_id, state, verdict_tip(turn, seq))
+    return (
+        f"OK approved: approved verdict, train {train_id}, session {session}, "
+        f"auditor record seq {seq}, judged tip {tip[:12]}"
+    )
+
+
+def push_proof(repo: Path, train_id: str) -> str:
+    # 62: the approved verdict, else an exception ruling bound to the current integration tip.
+    try:
+        return approved(repo, train_id)
+    except ProofError as refused:
+        try:
+            exception = train_state.record(train_state.load(repo, train_id), train_state.EXCEPTION)
+        except train_state.TrainStateError:
+            raise refused from None
+        ledger_id, tip = exception.get("ledger_id"), exception.get("tip")
+        bound = isinstance(ledger_id, str) and ledger_id and isinstance(tip, str)
+        if not bound or tip != integration_tip(repo, train_id):
+            raise refused from None
+        return f"OK approved: exception {ledger_id}, train {train_id}, integration tip {tip[:12]}"

@@ -119,6 +119,43 @@ def test_mark_start_writes_start_seq_once(repo: Path) -> None:
     assert load(repo, TRAIN)[train_state.START_SEQ] == 0
 
 
+def test_mark_start_moves_the_bound_once_per_new_session(repo: Path) -> None:
+    # issue 60: a new session resets start_seq to its own bound; each session keeps its first.
+    save(repo, TRAIN, {"train_id": TRAIN})
+    assert train_state.mark_start(repo, TRAIN, 30, "build") == 30
+    assert train_state.mark_start(repo, TRAIN, 45, "build") == 30
+    assert train_state.mark_start(repo, TRAIN, 4, "resumed") == 4
+    state = load(repo, TRAIN)
+    assert state[train_state.AUDIT_SESSION] == "resumed"
+    assert state[train_state.AUDIT_BOUNDS] == {"build": 30, "resumed": 4}
+    assert train_state.session_bound(state, "build") == 30
+    assert train_state.session_bound(state, "resumed") == 4
+    assert train_state.session_bound(state, "never") is None
+    assert train_state.mark_start(repo, TRAIN, 99, "build") == 30
+    assert load(repo, TRAIN)[train_state.AUDIT_SESSION] == "build"
+
+
+def test_mark_start_keeps_a_bound_written_before_audit_session(repo: Path) -> None:
+    # issue 60: a train started before audit_session keeps its one bound for every session.
+    save(repo, TRAIN, {"train_id": TRAIN, train_state.START_SEQ: 12})
+    assert train_state.mark_start(repo, TRAIN, 3, "later") == 12
+    state = load(repo, TRAIN)
+    assert train_state.AUDIT_SESSION not in state
+    assert train_state.session_bound(state, "any") == 12
+
+
+@pytest.mark.parametrize("bounds", [None, "x", {"s": True}, {"s": -1}, {"s": "3"}], ids=str)
+def test_session_bound_narrows_the_bounds_field(bounds: object) -> None:
+    state = {train_state.AUDIT_SESSION: "s", train_state.AUDIT_BOUNDS: bounds}
+    assert train_state.session_bound(state, "s") is None
+
+
+def test_record_reads_an_object_field_or_empty() -> None:
+    assert train_state.record({"verdict": {"tip": "t"}}, "verdict") == {"tip": "t"}
+    assert train_state.record({"verdict": ["t"]}, "verdict") == {}
+    assert train_state.record({}, "verdict") == {}
+
+
 @pytest.mark.parametrize("value", [True, -1, "3", 2.0, None])
 def test_start_seq_reads_only_a_non_negative_int(repo: Path, value: object) -> None:
     assert train_state.start_seq({train_state.START_SEQ: value}) is None
