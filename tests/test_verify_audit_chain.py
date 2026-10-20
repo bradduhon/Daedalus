@@ -275,13 +275,23 @@ def test_cli_hooks_live_records_start_seq_once(
 def test_cli_approved_passes_on_train_a_and_refuses_without_its_hand_back(
     project_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
-    # issue 57: --approved on Train A's records passes; without the hand-back records it refuses.
+    # issue 57: --approved finds Train A's hand-back; 59: its line names no tip, so it refuses.
     assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
-    replayed = replay_auditor(repo_cwd, "sess-test")
+    tip = _tip(repo_cwd)
+    _judge(repo_cwd, tip)
+    replay_auditor(repo_cwd, "sess-test")
+    _summary_written(hook_input, repo_cwd)
+    result = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
+    assert result.returncode == 1 and "verdict names tip none" in result.stdout
+    audit.log_path("sess-test", str(repo_cwd)).unlink()
+    assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
+    _judge(repo_cwd, tip)
+    replay_auditor(repo_cwd, "sess-test")
+    _handback(hook_input, f"[VERDICT: APPROVED] tip={tip}")
     _summary_written(hook_input, repo_cwd)
     result = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
     assert result.returncode == 0, result.stdout
-    assert result.stdout.endswith(f"auditor record seq {replayed[-2]['seq']}\n")
+    assert result.stdout.endswith(f"judged tip {tip[:12]}\n")
     audit.log_path("sess-test", str(repo_cwd)).unlink()
     assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
     replay_auditor(repo_cwd, "sess-test", handbacks=False)
@@ -300,6 +310,33 @@ def test_cli_approved_ignores_a_verdict_before_start_seq(
     result = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
     assert result.returncode == 1
     assert "no daedalus:security-auditor reply after seq 7" in result.stdout
+
+
+def _tip(repo: Path) -> str:
+    # 59: one commit on the integration branch, the tip the auditor judges.
+    ident = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+    git = ["git", "-C", str(repo)]
+    subprocess.run([*git, *ident, "commit", "-q", "--allow-empty", "-m", "u"], check=True)
+    subprocess.run([*git, "branch", "-f", f"daedalus/{APPROVED_TRAIN}", "HEAD"], check=True)
+    out = subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
+    return out.stdout.strip()
+
+
+def _judge(repo: Path, tip: str, status: str = "approved") -> None:
+    verdict = {"status": status, "tip": tip, "round": 1, "seq": 1}
+    train_state.update(repo, APPROVED_TRAIN, verdict=verdict)
+
+
+def _handback(hook_input: Any, message: str) -> None:
+    audit.audit_append(
+        hook_input(
+            hook_event_name="PostToolUse",
+            tool_name="SubagentHandback",
+            tool_input={"message": message},
+            agent_type="daedalus:security-auditor",
+            agent_id="a1",
+        )
+    )
 
 
 def _approved_train(hook_input: Any, repo_cwd: Path, verdict: str) -> None:
@@ -321,12 +358,75 @@ def _approved_train(hook_input: Any, repo_cwd: Path, verdict: str) -> None:
 
 
 def test_cli_approved_round_trip(project_data: Path, hook_input: Any, repo_cwd: Path) -> None:
-    _approved_train(hook_input, repo_cwd, "[VERDICT: APPROVED] ok")
+    tip = _tip(repo_cwd)
+    _approved_train(hook_input, repo_cwd, f"[VERDICT: APPROVED] tip={tip} ok")
+    _judge(repo_cwd, tip)
     result = _verify("--approved", "20261016-120000", "--repo", repo_cwd)
     assert result.returncode == 0, result.stdout
     assert result.stdout == (
-        "OK approved: train 20261016-120000, session sess-test, auditor record seq 2\n"
+        "OK approved: approved verdict, train 20261016-120000, session sess-test, "
+        f"auditor record seq 2, judged tip {tip[:12]}\n"
     )
+
+
+def test_cli_approved_prints_the_exception_path(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # 62: a train merged on an exception ruling bound to the current tip passes, and says so.
+    tip = _tip(repo_cwd)
+    _approved_train(hook_input, repo_cwd, f"[VERDICT: REJECTED] tip={tip} a.py:1 high")
+    _judge(repo_cwd, tip, "rejected")
+    refused = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
+    assert refused.returncode == 1 and refused.stdout.startswith("NOT APPROVED:")
+    exception = {"ledger_id": "0113-DAE-PLT", "tip": tip}
+    train_state.update(repo_cwd, APPROVED_TRAIN, exception=exception)
+    result = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
+    assert result.returncode == 0, result.stdout
+    assert result.stdout == (
+        f"OK approved: exception 0113-DAE-PLT, train {APPROVED_TRAIN}, integration tip {tip[:12]}\n"
+    )
+    train_state.update(repo_cwd, APPROVED_TRAIN, exception={**exception, "tip": "c" * 40})
+    assert _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd).returncode == 1
+
+
+def test_second_hooks_live_in_a_new_session_moves_the_bound(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # issue 60: a train resumed in a new session bounds its verdict search in that session's log.
+    from lib import train_runner
+
+    _write_chain(project_data, hook_input, 20)
+    assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
+    first = train_state.load(repo_cwd, APPROVED_TRAIN)
+    assert (first["start_seq"], first["audit_session"]) == (21, "sess-test")
+    tip = _tip(repo_cwd)
+    audit.audit_append(hook_input(session_id="sess-new", tool_use_id="n1"))
+    command = f"python3 x/verify_audit_chain.py --hooks-live --repo {repo_cwd}"
+    audit.audit_append(hook_input(session_id="sess-new", tool_input={"command": command}))
+    assert _verify("--hooks-live", "--repo", repo_cwd).returncode == 0
+    moved = train_state.load(repo_cwd, APPROVED_TRAIN)
+    assert (moved["start_seq"], moved["audit_session"]) == (2, "sess-new")
+    assert moved["audit_bounds"] == {"sess-test": 21, "sess-new": 2}
+    audit.audit_append(
+        hook_input(
+            session_id="sess-new",
+            hook_event_name="SubagentStop",
+            tool_name=None,
+            tool_input=None,
+            agent_type="daedalus:security-auditor",
+            last_assistant_message=f"[VERDICT: APPROVED] tip={tip}",
+        )
+    )
+    verdict = f"python3 x/daedalus_train.py verdict --repo {repo_cwd}"
+    audit.audit_append(hook_input(session_id="sess-new", tool_input={"command": verdict}))
+    # The auditor reply is seq 3 of the new log, below the old session's bound of 21.
+    outcome = train_runner.record_verdict(repo_cwd, "approved", 1, tip=tip)
+    assert outcome.code == 0, outcome.lines
+    # A verdict call from the old session no longer owns the bound and refuses.
+    audit.audit_append(hook_input(tool_input={"command": verdict}))
+    stale = train_runner.record_verdict(repo_cwd, "approved", 1, tip=tip)
+    assert stale.code == 1
+    assert "belongs to session sess-new, not this session sess-test" in stale.lines[0]
 
 
 def test_cli_approved_failure_exits_one_with_next(

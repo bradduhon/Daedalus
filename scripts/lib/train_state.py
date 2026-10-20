@@ -30,6 +30,11 @@ PLAN, CHOICES, VERDICT, EXCEPTION, PHASE, WEIGHT = (
 APPROVED, REJECTED = "approved", "rejected"
 # issue 57: the audit-log seq hooks-live saw first; verdict searches read only records after it.
 START_SEQ = "start_seq"
+# issue 60: the session start_seq belongs to, and each session's first bound, so a push
+# session's hooks-live never strands the build session's bound.
+AUDIT_SESSION, AUDIT_BOUNDS = "audit_session", "audit_bounds"
+# 0109: one finding map per audit round, {"<n>": {"<key>": {"severity", "class"}}}.
+AUDIT_ROUNDS = "audit_rounds"
 
 
 class TrainStateError(RuntimeError):
@@ -163,11 +168,45 @@ def start_seq(state: dict[str, object]) -> int | None:
     return None
 
 
-def mark_start(repo: Path, train_id: str, seq: int) -> int:
-    # issue 57: written once, so a later hooks-live (the push session's) never moves the bound.
+def record(state: dict[str, object], key: str) -> dict[str, object]:
+    # 0080: one object field, narrowed; anything else reads as empty.
+    raw = state.get(key)
+    return {str(k): v for k, v in raw.items()} if isinstance(raw, dict) else {}
+
+
+def audit_session(state: dict[str, object]) -> str | None:
+    value = state.get(AUDIT_SESSION)
+    return value if isinstance(value, str) and value else None
+
+
+def _bounds(state: dict[str, object]) -> dict[str, int]:
+    raw = state.get(AUDIT_BOUNDS)
+    items = raw.items() if isinstance(raw, dict) else ()
+    return {
+        str(k): v for k, v in items if isinstance(v, int) and not isinstance(v, bool) and v >= 0
+    }
+
+
+def session_bound(state: dict[str, object], session: str) -> int | None:
+    # issue 60: a state from before audit_session keeps its one bound for every session.
+    if audit_session(state) is None:
+        return start_seq(state)
+    return _bounds(state).get(session)
+
+
+def mark_start(repo: Path, train_id: str, seq: int, session: str | None = None) -> int:
+    # issue 57: once per session; issue 60: a new session moves start_seq to its own bound.
     def edit(state: dict[str, object]) -> None:
-        if start_seq(state) is None:
-            state[START_SEQ] = seq
+        legacy = audit_session(state) is None and start_seq(state) is not None
+        if session is None or legacy:
+            if start_seq(state) is None:
+                state[START_SEQ] = seq
+            return
+        if audit_session(state) != session:
+            bounds = _bounds(state)
+            state[START_SEQ] = bounds.setdefault(session, seq)
+            state[AUDIT_SESSION] = session
+            state[AUDIT_BOUNDS] = bounds
 
     found = start_seq(change(repo, train_id, edit))
     return seq if found is None else found
