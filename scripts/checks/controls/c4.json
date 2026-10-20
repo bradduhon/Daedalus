@@ -1,0 +1,6 @@
+{
+  "command_allowlist.R_TRAIN_REPO": {
+    "failure": "issue 63: the orchestrator runs a train script with a --repo or --cwd naming another repository than the one its working directory belongs to, so the script moves that repository's train state, worktrees or branches",
+    "premise_test": "tests/test_checks_command_allowlist.py::test_train_script_repo_outside_the_project_root_is_refused"
+  }
+}

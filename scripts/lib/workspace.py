@@ -146,6 +146,67 @@ def remove(repo: Path, name: str) -> None:
     _git(repo, "worktree", "prune")
 
 
+AUDIT_SUFFIX = "-audit"
+
+
+def audit_unit(train_id: str) -> str:
+    # pin C4 -> C1: the audit worktree is the train unit named <train-id>-audit.
+    return f"{train_id}{AUDIT_SUFFIX}"
+
+
+def _audit_readd(repo: Path, train_id: str, name: str, path: Path, integration: str) -> None:
+    branch = branch_name(name)
+    _ensure_marker(repo)
+    _git(repo, "worktree", "prune")
+    if _run(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}").returncode == 0:
+        _git(repo, "worktree", "add", "-q", str(path), branch, path=path)
+    else:
+        _git(repo, "worktree", "add", "-q", "-b", branch, str(path), integration, path=path)
+    try:
+        if not any(
+            u.get("name") == name for u in train_state.units(train_state.load(repo, train_id))
+        ):
+            train_state.add_unit(repo, train_id, name, branch, path, integration)
+    except train_state.TrainStateError as exc:
+        raise WorkspaceError(str(exc)) from exc
+
+
+def refresh(repo: Path, name: str) -> Path:
+    # 0112: fast-forward only; a diverged or dirty audit worktree is refused, never discarded.
+    repo = repo.resolve()
+    train_id, _state = _active(repo)
+    if name != audit_unit(train_id):
+        raise WorkspaceError(
+            f"refresh moves only the audit worktree, {audit_unit(train_id)}, not {name}. "
+            f"Next: rerun the refresh for the audit worktree with --name {audit_unit(train_id)}."
+        )
+    path = _confined(repo, name)
+    branch = branch_name(name)
+    integration = f"daedalus/{train_id}"
+    if _run(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{integration}").returncode:
+        raise WorkspaceError(
+            f"branch {integration} is missing in {repo}. Next: lock the contract with "
+            "daedalus_workspace.py lock, which creates it, then rerun the refresh."
+        )
+    if not path.exists() and not path.is_symlink():
+        _audit_readd(repo, train_id, name, path, integration)
+    inspect = f"Next: run git -C {path} status and settle it from your own shell, then rerun."
+    if _unit_worktrees(repo).get(branch) != path:
+        raise WorkspaceError(f"{path} is not the worktree of {branch}. {inspect}")
+    dirty = _dirty(path)
+    if dirty:
+        raise WorkspaceError(f"the audit worktree {path} has changes: {_shown(dirty)}. {inspect}")
+    if _run(path, "merge-base", "--is-ancestor", "HEAD", integration).returncode:
+        raise WorkspaceError(
+            f"{branch} has commits {integration} does not, so it cannot fast-forward. {inspect}"
+        )
+    merged = _run(path, "merge", "--ff-only", integration)
+    if merged.returncode:
+        detail = " ".join(merged.stderr.split()) or "no stderr"
+        raise WorkspaceError(f"git merge --ff-only {integration} failed ({detail}). {inspect}")
+    return path
+
+
 UNMARK_NEXT = (
     "Next: if no Daedalus train is running, run python3 ${{CLAUDE_PLUGIN_ROOT}}"
     "/scripts/daedalus_workspace.py unmark --repo {repo} and retry."
@@ -703,22 +764,24 @@ def finish(repo: Path) -> list[str]:
             f"{state['base_branch']}, then rerun the train."
         )
     units = list(state.get("units") or [])
+    # pin C4 -> C5: the audit unit is never merged; _teardown still removes its worktree.
+    merging = [u for u in units if u.get("name") != audit_unit(train_id)]
     lock_sha = state.get("lock_sha")
-    if not units or not lock_sha:
+    if not merging or not lock_sha:
         raise WorkspaceError(
             f"train {train_id} has no locked contract or no recorded units. Next: {RERUN}"
         )
-    for unit in units:
+    for unit in merging:
         if _run(repo, "merge-base", "--is-ancestor", str(lock_sha), str(unit["branch"])).returncode:
             raise WorkspaceError(
                 f"Unit {unit['branch']} does not descend from the integration branch. "
                 "Next: rerun the train; if it repeats, file an issue with the train summary."
             )
     _git(repo, "switch", "-q", integration)
-    for unit in units:
+    for unit in merging:
         _merge(repo, state, train_id, unit)
     _record(repo, train_id, merged=True)
-    lines = [f"merged {len(units)} units into {integration}"]
+    lines = [f"merged {len(merging)} units into {integration}"]
     nexts: list[str] = []
     if not _teardown(repo, units, lines, nexts):
         raise WorkspaceError("\n".join([*lines, f"Next: {'; '.join(nexts)}"]))
