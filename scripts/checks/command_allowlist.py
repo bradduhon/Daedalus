@@ -18,10 +18,11 @@ NAMES = frozenset({"append_ledger", "git", "gh", "gitleaks", "read", "train", "i
 FLAGS: dict[str, hook_io.Flag] = {"--allow": hook_io.Flag(values=NAMES, many=True)}
 PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
 _SCRIPTS = os.path.realpath(Path(__file__).resolve().parents[1])
-# 0060: the train class, script to its admitted first arguments; stop and resume stay with main.
+# 0060: the train class, script to its admitted first arguments; stop, resume and the
+# operator's exception record stay with the main session.
 TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
     "daedalus_train.py": frozenset(
-        {"progress", "choice", "plan", "verdict", "exception", "state", "step", "check-reply"}
+        {"progress", "choice", "plan", "verdict", "state", "step", "check-reply"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir"}),
@@ -34,8 +35,8 @@ R_ORCHESTRATOR_BASH = (
     "the orchestrator's Bash runs only daedalus_train.py, daedalus_workspace.py create, lock "
     "and finish, daedalus_doctor.py --print-cache-dir, audit_report.py and validate_plan.py by "
     "their absolute plugin path, and read-only inspection with git reads (0060). "
-    "Next: use those only; a stop, a resume, a push and a merge into main belong to the main "
-    "session and the operator."
+    "Next: use those only; a stop, a resume, an exception record, a push and a merge into main "
+    "belong to the main session and the operator."
 )
 
 

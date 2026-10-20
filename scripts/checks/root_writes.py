@@ -50,6 +50,16 @@ def _roots(classes: tuple[str, ...], cwd: str, config: Config) -> list[str]:
     return roots
 
 
+def _files(classes: tuple[str, ...], cwd: str) -> list[str]:
+    # 0060: in a train the scratch class also admits the train's one summary file beside its root.
+    if "scratch" not in classes:
+        return []
+    repo = project_root(cwd)
+    train = active_train(repo)
+    scratch = repo / "docs" / ".tmp" / "daedalus"
+    return [str(scratch / f"{train}-summary.md")] if train is not None else []
+
+
 def _reason(classes: tuple[str, ...], path: str) -> str:
     named = frozenset(classes)
     if named == {"contracts", "charter-specs"}:
@@ -60,9 +70,11 @@ def _reason(classes: tuple[str, ...], path: str) -> str:
     return f"writes are limited to {listed}: {path}. Next: write there."
 
 
-def _allowed(path: str, roots: list[str], name: str | None) -> bool:
+def _allowed(path: str, roots: list[str], name: str | None, files: list[str]) -> bool:
     if name is None:
-        return any(shell._under(path, root) for root in roots)
+        real = os.path.realpath(path)
+        exact = any(real == os.path.realpath(f) for f in files)
+        return exact or any(shell._under(path, root) for root in roots)
     # 0044: --name admits a file directly in a class root, named exactly or by its glob.
     parent = os.path.realpath(os.path.dirname(path))
     return fnmatch.fnmatchcase(os.path.basename(path), name) and any(
@@ -77,19 +89,20 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     cwd = hook_io.text(hook_input, "cwd")
     config = hook_io.hook_config(cwd)
     roots = _roots(classes, cwd, config)
+    files = _files(classes, cwd)
     if hook_io.text(hook_input, "tool_name") in jail.WRITE_TOOLS:
         path = shell._abs(hook_io.write_path(hook_input), cwd)
         if ledger_guard:
             reason = jail._ledger_write_reason(path, cwd, config)
             if reason:
                 return reason
-        return None if _allowed(path, roots, name) else _reason(classes, path)
+        return None if _allowed(path, roots, name, files) else _reason(classes, path)
     segments = shell.worker_segments(hook_io.text(hook_io.tool_input(hook_input), "command"))
     if segments is None:
         return shell.R_UNSUPPORTED
     for segment in filter(None, segments):
         for target in jail._coder_write_targets(segment, cwd):
-            if not _allowed(target, roots, name):
+            if not _allowed(target, roots, name, files):
                 return _reason(classes, target)
     return None
 

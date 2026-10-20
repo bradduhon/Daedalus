@@ -212,7 +212,9 @@ def _resume_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     # 0086, spec 8: a resume naming another unit's worktree rebinds the coder before it is sent.
     from lib.jail import _train_active
 
-    lines = _worktree_lines("\n".join(_strings(tool_input.get("message"))))
+    # 0086: every field but the target, since the message key is ASSUMED, not verified live.
+    fields = {key: value for key, value in tool_input.items() if key != "to"}
+    lines = _worktree_lines("\n".join(_strings(fields)))
     if not lines or not os.path.isabs(cwd) or not _train_active(cwd):
         return None
     repo = project_root(Path(cwd))

@@ -195,6 +195,48 @@ def test_resume_naming_a_path_outside_the_train_is_refused(
     assert reason is not None and "is not a unit worktree of train" in reason
 
 
+@pytest.mark.parametrize("key", ["content", "summary", "body"])
+def test_resume_gate_reads_every_field_but_the_target(
+    repo_cwd: Path, units: tuple[Path, Path], key: str
+) -> None:
+    # 0086: the message key is ASSUMED, so a Worktree: line under any other key still rebinds.
+    first, second = units
+    _bound_to_u1(repo_cwd, first)
+    payload = _call("SendMessage", str(repo_cwd), to=CODER_ID, **{key: f"Worktree: {second}"})
+    assert decide(payload, Config()).allow
+    assert _bindings(repo_cwd)["u2"] == {"agent_id": CODER_ID}
+
+
+def test_resume_target_field_is_not_scanned(repo_cwd: Path, units: tuple[Path, Path]) -> None:
+    _bound_to_u1(repo_cwd, units[0])
+    payload = _call("SendMessage", str(repo_cwd), to=f"Worktree: {units[1]}", message="go")
+    assert decide(payload, Config()).allow
+    assert "u2" not in _bindings(repo_cwd)
+
+
+def test_orchestrator_writes_only_its_scratch_folder_and_summary(
+    repo_cwd: Path, units: tuple[Path, Path]
+) -> None:
+    # 0060: the summary and the train folder pass; the rest of docs/ and the ledger do not.
+    scratch = repo_cwd / "docs" / ".tmp" / "daedalus"
+    allowed = [scratch / TRAIN / "briefs" / "u1.md", scratch / f"{TRAIN}-summary.md"]
+    refused = [
+        repo_cwd / "docs" / "howto" / "README.md",
+        repo_cwd / "docs" / "private" / "specs" / "x.md",
+        repo_cwd / "docs" / "decisions.md",
+        scratch / "20261015-090000-summary.md",
+        scratch / "20261015-090000" / "plan.md",
+        repo_cwd / "src" / "a.py",
+    ]
+    for path in allowed:
+        payload = _call("Write", str(repo_cwd), file_path=str(path), content="x")
+        assert decide(payload, Config()).allow, path
+    for path in refused:
+        payload = _call("Write", str(repo_cwd), file_path=str(path), content="x")
+        d = decide(payload, Config())
+        assert not d.allow and "Next:" in str(d.reason), path
+
+
 def test_orchestrator_without_the_dispatch_gate_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -8,7 +8,7 @@
     "premise_test": "tests/test_orchestrator.py::test_orchestrator_starts_only_catalog_agents"
   },
   "dispatch_gate.R_NEVER_STARTED": {
-    "failure": "0001, 0060: the orchestrator starts the push agent or a second orchestrator, so a Build Train could push or fork its state",
+    "failure": "0060: the orchestrator starts the push agent or a second orchestrator, so a Build Train could push against 0001 or fork its state",
     "premise_test": "tests/test_orchestrator.py::test_orchestrator_never_starts_the_conductor_or_itself"
   },
   "dispatch_binding.R_RESUME_LINE": {
@@ -28,7 +28,7 @@
     "premise_test": "tests/test_orchestrator.py::test_orchestrator_without_the_dispatch_gate_is_refused"
   },
   "command_allowlist.R_ORCHESTRATOR_BASH": {
-    "failure": "0001, 0060: the orchestrator runs a command outside its plugin scripts and read-only inspection, such as a push, a merge into main or its own stop",
+    "failure": "0060: the orchestrator runs a command outside its plugin scripts and read-only inspection, such as a push or a merge into main that 0001 forbids, an exception record or its own stop",
     "premise_test": "tests/test_checks_command_allowlist.py::test_orchestrator_bash_refuses_everything_else"
   }
 }

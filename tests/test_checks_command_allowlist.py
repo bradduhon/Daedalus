@@ -543,6 +543,7 @@ def test_orchestrator_bash_runs_its_scripts_and_reads() -> None:
         f"python3 {SCRIPTS}/daedalus_workspace.py begin --repo {CWD}",
         f"python3 {SCRIPTS}/daedalus_workspace.py release --repo {CWD} --merge-sha abc",
         f"python3 {SCRIPTS}/daedalus_train.py stop --repo {CWD} --reason r",
+        f"python3 {SCRIPTS}/daedalus_train.py exception --repo {CWD} --ledger-id 0109-DAE-PLT",
         f"python3 {SCRIPTS}/daedalus_doctor.py",
         f"python3 {SCRIPTS}/append_ledger.py --probe",
         f"python3 {SCRIPTS}/verify_audit_chain.py --hooks-live --repo {CWD}",

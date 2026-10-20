@@ -438,7 +438,15 @@ def test_build_train_carries_the_escalation_prompt() -> None:
     places = [prompt.index(item) for item in order]
     assert places == sorted(places)
     assert "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/" not in prompt
-    assert PLUGIN + "daedalus_train.py exception --repo <repo> --ledger-id <id>`" in step4
+    # audit round 1: the orchestrator returns the exception id; the relay alone binds it.
+    assert "daedalus_train.py exception" not in _recipe()
+    assert "`[STATUS: EXCEPTION] ledger_id=<the exception ruling's id>`" in step4
+    route = _build_train().split("- `[STATUS: EXCEPTION] ledger_id=<id>`:", 1)[1].split("\n", 1)[0]
+    exception = (
+        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py exception --repo <repo> "
+        "--ledger-id <id>`"
+    )
+    assert exception in route and "The orchestrator never runs it." in route
 
 
 def test_build_train_prints_progress_not_the_state_block() -> None:

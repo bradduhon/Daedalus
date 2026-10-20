@@ -108,7 +108,7 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("network_tools", ()),
         ("git_push", ()),
         ("command_allowlist", ("--allow", "train,inspect")),
-        ("root_writes", ("--touch", "docs", "--ledger-guard")),
+        ("root_writes", ("--touch", "scratch", "--ledger-guard")),
         ("gh_classes", ()),
         ("dispatch_gate", ()),
     ),

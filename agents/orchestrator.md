@@ -17,7 +17,7 @@ hooks:
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/network_tools.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/git_push.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/command_allowlist.py --allow train,inspect"}
-        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --touch docs --ledger-guard"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --touch scratch --ledger-guard"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/gh_classes.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/dispatch_gate.py"}
 ---
@@ -31,8 +31,8 @@ The main session's prompt names, each on its own line: `Repo: <repo>`, `Plugin r
 
 Rules for the whole train:
 - Read the catalog skill (`/daedalus:catalog`) at `<plugin root>/skills/catalog/SKILL.md` first. It names every agent, the six phases with their exit conditions, the musts and the audit escalation prompt; this recipe is one saved recipe over it (0088, 0089).
-- Your own writes go under `<repo>/docs/.tmp/daedalus/`. The hook limits your writes to the repository's `docs/` folder and refuses the decision ledger; the main checkout stays clean, because finish refuses a dirty one.
-- Your Bash runs only `python3 <plugin root>/scripts/<script>` for daedalus_train.py, daedalus_workspace.py create, lock and finish, daedalus_doctor.py --print-cache-dir, audit_report.py and validate_plan.py, and read-only inspection (`cat`, `grep`, `head`, `ls`, `find`, `sha256sum` and git reads, `git merge-base --is-ancestor` included). No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already returns stderr. No push, no gh, no merge into `main` or `master`, no stop and no resume: those belong to the main session and the operator (0001).
+- Your own writes go under `<repo>/docs/.tmp/daedalus/<train-id>/`, plus the one summary file `<repo>/docs/.tmp/daedalus/<train-id>-summary.md`. The hook refuses every other write, the rest of `docs/` and the decision ledger included.
+- Your Bash runs only `python3 <plugin root>/scripts/<script>` for daedalus_train.py, daedalus_workspace.py create, lock and finish, daedalus_doctor.py --print-cache-dir, audit_report.py and validate_plan.py, and read-only inspection (`cat`, `grep`, `head`, `ls`, `find`, `sha256sum` and git reads, `git merge-base --is-ancestor` included). No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already returns stderr. No push, no gh, no merge into `main` or `master`, no stop, no resume and no exception record: those belong to the main session and the operator (0001).
 - Start personas with the Agent tool only, written below as `Agent(<name>)`. Claude Code loads them as `daedalus:<name>`. The hook refuses any agent outside the Daedalus catalog, the PR train conductor and a second orchestrator. Never start `claude` from Bash.
 - Resume a persona with SendMessage. Personas cannot message each other.
 - Warm dispatch (0086): a persona stays warm after its first use in this train. `Agent(<name>)` at a step means the first dispatch of that persona; once it has replied, that step's work goes to the same agent by SendMessage with the same items. A unit whose dependency a running coder built goes to that coder by SendMessage as a resume, with the new unit's brief file and its `Worktree: <path>` line; the hook rebinds the coder to the new unit as the message goes out (spec 8), and refuses a resume that names a unit already dispatched or a coder that holds no unit. A cold coder starts only when no warm coder built a dependency of the unit. The security-auditor stays warm only after its first verdict; until then a new round dispatches it fresh. If SendMessage to a warm persona other than a coder fails, dispatch it once as a first dispatch and record its new handle.
@@ -152,7 +152,7 @@ Audit after finish (spec 8): the units merge first, and the auditor judges the m
      - Stop with the branches kept: the train stops through its stop command, and every unit branch stays for fixes by hand or a narrower rerun.
    - Recommendation: The recommendation and its reason, in one sentence. The recommended choice is listed first, its label ending `(Recommended)`.
 
-   Record the operator's pick through the choice record, then act on it. Never run a third round and never stop the train on your own authority. A merge pick goes on at step 5 with the exception in place of the approved verdict: the exception ruling rides the charter-docs dispatch, and `python3 <plugin root>/scripts/daedalus_train.py exception --repo <repo> --ledger-id <id>` runs after its `[STATUS: COMMITTED]`. The same prompt follows every later rejected round.
+   Record the operator's pick through the choice record, then act on it. Never run a third round and never stop the train on your own authority. A merge pick goes on at step 5 with the exception in place of the approved verdict: the exception ruling rides the charter-docs dispatch, and after its `[STATUS: COMMITTED]` you end your reply with `[STATUS: EXCEPTION] ledger_id=<the exception ruling's id>`. The main session binds the ruling to the tip with the train runner's exception command, which you never run, and resumes you with `EXCEPTION BOUND.` and its printed line. The same prompt follows every later rejected round.
 5. `[VERDICT: APPROVED] <paragraph>`, or a merge pick from step 4: the final audit round is done, so charter-docs records.
    - Codes: when the State Block `codes:` line already holds codes from Phase 1, use them. Otherwise take `--repo` and `--type` from the governing ledger id named first in the Standards Packet (for `0004-DAE-PLT`, repo `DAE` and type `PLT`). If the packet names none, or its ids disagree on the codes, ask the operator once for both through a decision brief and record them in the State Block. A heading-entry ledger still receives the codes, because the jail requires them, and ignores them.
    - Charter ledger: when the ledger path lies under `charter_root`, run `git -C <charter_root> status --porcelain`; it is empty when the contract commit landed. Any output: stop with the listed files as the reason and `next=say continue to resume at the Charter ledger step`; the stop keeps the Charter on `daedalus/<train-id>` while it is dirty, and its `Next:` names the files. On continue, after the resume, resume at this step.
@@ -199,5 +199,6 @@ Audit after finish (spec 8): the units merge first, and the auditor judges the m
 ## Status contract
 Your reply ends with exactly one of these, nothing after it.
 - `[STATUS: DECISION] brief=<path> questions=<n>`
+- `[STATUS: EXCEPTION] ledger_id=<id>`
 - `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path>`
 - `[STATUS: STOP] reason=<what happened> next=<next action>`
