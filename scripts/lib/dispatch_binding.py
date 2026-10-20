@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 from pathlib import Path
@@ -198,12 +197,22 @@ def _not_a_unit(path: str, train: str) -> str:
     )
 
 
+def _strings(value: object) -> list[str]:
+    # 0086: every text a structured message carries, so no Worktree: line hides in a field.
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for item in value.values() for s in _strings(item)]
+    if isinstance(value, list):
+        return [s for item in value for s in _strings(item)]
+    return []
+
+
 def _resume_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     # 0086, spec 8: a resume naming another unit's worktree rebinds the coder before it is sent.
     from lib.jail import _train_active
 
-    message = tool_input.get("message")
-    lines = _worktree_lines(message if isinstance(message, str) else json.dumps(message))
+    lines = _worktree_lines("\n".join(_strings(tool_input.get("message"))))
     if not lines or not os.path.isabs(cwd) or not _train_active(cwd):
         return None
     repo = project_root(Path(cwd))

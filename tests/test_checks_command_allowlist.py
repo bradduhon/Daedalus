@@ -16,6 +16,7 @@ from tests.hook_chain import (
     evaluate,
     first_deny,
     internal_error_denies,
+    load,
     malformed_input_denies,
     outside_tools_allow,
     payload,
@@ -501,3 +502,73 @@ def test_charter_docs_read_refusal_names_the_reads() -> None:
     assert reason == jail.R_DOCS_BASH
     for word in ("cat", "grep", "head", "tail", "wc", "ls", "diff", "sed -n", "docs/"):
         assert word in reason, word
+
+
+SCRIPTS = REPO_ROOT / "scripts"
+ORCHESTRATOR_OK = [
+    f"python3 {SCRIPTS}/daedalus_train.py progress --repo {CWD}",
+    f'python3 {SCRIPTS}/daedalus_train.py choice --repo {CWD} --chose "a" --over "b" --cost "c"',
+    f"python3 {SCRIPTS}/daedalus_train.py verdict --repo {CWD} --status approved --round 1",
+    f"python3 {SCRIPTS}/daedalus_workspace.py create --repo {CWD} --name t-u1 --base daedalus/t",
+    f"python3 {SCRIPTS}/daedalus_workspace.py lock --repo {CWD} --contract c.md --version 1",
+    f"python3 {SCRIPTS}/daedalus_workspace.py finish --repo {CWD}",
+    f"python3 {SCRIPTS}/daedalus_doctor.py --print-cache-dir",
+    f"python3 {SCRIPTS}/audit_report.py --repo {CWD} --session s --controls",
+    f"python3 {SCRIPTS}/validate_plan.py {CWD}/docs/.tmp/daedalus/t/plan.md --max-concurrent 5",
+    "git merge-base --is-ancestor abc daedalus-unit/t-u1",
+    "git status",
+    f"cat {CWD}/docs/.tmp/daedalus/t/plan.md",
+    f"sha256sum {CWD}/contracts/c.md",
+]
+
+
+def test_orchestrator_bash_runs_its_scripts_and_reads() -> None:
+    # 0060, pin B6 -> B4: the train scripts pass shell_tripwires and command_allowlist together.
+    for command in ORCHESTRATOR_OK:
+        assert decide(_b("orchestrator", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push origin daedalus/t",
+        "gh pr create --title t --body-file x",
+        "git merge --no-ff daedalus-unit/t-u1",
+        "git switch main",
+        "git commit -m x",
+        "rm -rf docs",
+        "claude -p hi",
+        f"python3 {SCRIPTS}/daedalus_workspace.py stop --repo {CWD} --reason r",
+        f"python3 {SCRIPTS}/daedalus_workspace.py resume --repo {CWD}",
+        f"python3 {SCRIPTS}/daedalus_workspace.py begin --repo {CWD}",
+        f"python3 {SCRIPTS}/daedalus_workspace.py release --repo {CWD} --merge-sha abc",
+        f"python3 {SCRIPTS}/daedalus_train.py stop --repo {CWD} --reason r",
+        f"python3 {SCRIPTS}/daedalus_doctor.py",
+        f"python3 {SCRIPTS}/append_ledger.py --probe",
+        f"python3 {SCRIPTS}/verify_audit_chain.py --hooks-live --repo {CWD}",
+        f"python3 {SCRIPTS}/../scripts/daedalus_train.py progress --repo {CWD}",
+        f"python3 {CWD}/scripts/daedalus_train.py progress --repo {CWD}",
+        f"PYTHONPATH=/tmp python3 {SCRIPTS}/daedalus_train.py progress --repo {CWD}",
+        f"/usr/bin/python3 {SCRIPTS}/daedalus_train.py progress --repo {CWD}",
+        "python3 -c 'print(1)'",
+        f"python3 {SCRIPTS}/daedalus_train.py progress --repo {CWD} > {CWD}/docs/x",
+    ],
+)
+def test_orchestrator_bash_refuses_everything_else(command: str) -> None:
+    # 0001, 0060: no push, gh, merge, stop, resume or other script; nested claude stays refused.
+    assert not decide(_b("orchestrator", command), CFG).allow, command
+
+
+def test_orchestrator_bash_refusal_names_its_grant() -> None:
+    reason = evaluate(HOOK, _b("orchestrator", "rm x"), "--allow", "train,inspect")
+    assert reason == load(HOOK).R_ORCHESTRATOR_BASH
+    for word in ("daedalus_train.py", "finish", "read-only inspection", "Next:"):
+        assert word in str(reason), word
+
+
+def test_shell_exemption_is_the_orchestrators_alone() -> None:
+    # pin B6 -> B4: the R_INLINE exemption names the orchestrator; no other agent runs these.
+    command = f"python3 {SCRIPTS}/daedalus_train.py progress --repo {CWD}"
+    assert evaluate("shell_tripwires", _b("orchestrator", command)) is None
+    for agent in ("repo-coder", "security-auditor", "pr-train-conductor", "charter-docs"):
+        assert evaluate("shell_tripwires", _b(agent, command)) is not None, agent

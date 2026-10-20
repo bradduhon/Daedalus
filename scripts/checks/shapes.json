@@ -3,5 +3,6 @@
   "judge": ["credential_paths", "workspace_integrity", "tool_bound", "shell_tripwires", "network_tools", "read_only_bash"],
   "finder": ["credential_paths", "workspace_integrity", "tool_bound", "shell_tripwires", "network_tools", "read_only_bash"],
   "mover": ["credential_paths", "workspace_integrity", "tool_bound", "shell_tripwires", "network_tools", "command_allowlist", "git_grammar", "git_push", "gh_classes"],
-  "shaper": ["credential_paths", "workspace_integrity", "tool_bound", "root_writes --touch scratch"]
+  "shaper": ["credential_paths", "workspace_integrity", "tool_bound", "root_writes --touch scratch"],
+  "dispatcher": ["credential_paths", "workspace_integrity", "tool_bound", "shell_tripwires", "network_tools", "git_push", "command_allowlist --allow train,inspect", "root_writes --touch docs --ledger-guard", "gh_classes", "dispatch_gate"]
 }

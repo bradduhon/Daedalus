@@ -67,13 +67,26 @@ class TestNoShellAgents:
 class TestRegressionToolsAndCwd:
     @pytest.mark.parametrize("tool", ["Task", "Agent", "mcp__claude_ai_Gmail__create_draft"])
     def test_workers_blocked_from_meta_tools(self, tool: str) -> None:
+        # 0060: the orchestrator's Agent call passes tool_bound and meets its dispatch gate.
         for agent in sorted(KNOWN_AGENTS - {"main"}):
             d = decide(_t(agent, tool), CFG)
+            if agent == "orchestrator" and tool == "Agent":
+                assert not d.allow and evaluate(HOOK, _t(agent, tool)) is None
+                continue
             assert (
                 not d.allow
                 and d.reason
                 == "workers use only their allowlisted tools. Next: ask the orchestrating session."
             )
+
+
+@pytest.mark.parametrize("tool", ["Agent", "SendMessage"])
+def test_only_the_orchestrator_may_start_and_resume_agents(tool: str) -> None:
+    # 0060: Agent and SendMessage pass tool_bound for the orchestrator alone.
+    for agent in sorted(KNOWN_AGENTS - {"main"}):
+        want = None if agent == "orchestrator" else jail.R_TOOL
+        assert evaluate(HOOK, _t(f"daedalus:{agent}", tool)) == want, agent
+    assert evaluate(HOOK, _t("orchestrator", "Task")) == jail.R_TOOL
 
 
 def test_tool_bound_judges_the_hook_alone() -> None:

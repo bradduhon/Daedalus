@@ -273,6 +273,10 @@ DENIALS = {
         _input("daedalus:pr-train-conductor", command="gh pr merge 3"),
         "gh_classes",
     ),
+    "orchestrator": (
+        _input("daedalus:orchestrator", "Agent", subagent_type="general-purpose", prompt="x"),
+        "dispatch_gate",
+    ),
 }
 
 

@@ -27,6 +27,22 @@ def test_shape_lists_name_only_shipped_hooks() -> None:
 
 
 def test_shapes_name_the_five_shapes() -> None:
+    # 0060: the five worker shapes lead the file unchanged; the dispatcher follows them.
     data = json.loads(SHAPES.read_text(encoding="utf-8"))
-    assert list(data) == ["producer", "judge", "finder", "mover", "shaper"]
+    assert list(data)[:5] == ["producer", "judge", "finder", "mover", "shaper"]
     assert SHAPES.read_bytes().endswith(b"}\n")
+
+
+def test_shapes_add_only_the_dispatcher() -> None:
+    data = json.loads(SHAPES.read_text(encoding="utf-8"))
+    assert list(data)[5:] == ["dispatcher"]
+
+
+def test_only_the_dispatcher_carries_the_dispatch_gate() -> None:
+    # 0060: the dispatch gate judges Agent and SendMessage, which only the dispatcher is granted.
+    data = json.loads(SHAPES.read_text(encoding="utf-8"))
+    carriers = [shape for shape, entries in data.items() if "dispatch_gate" in entries]
+    assert carriers == ["dispatcher"]
+    for entry in ("shell_tripwires", "git_push", "command_allowlist --allow train,inspect"):
+        assert entry in data["dispatcher"], entry
+    assert not any(e.startswith(("git_grammar", "network_tools --")) for e in data["dispatcher"])

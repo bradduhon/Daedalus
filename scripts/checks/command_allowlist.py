@@ -50,7 +50,7 @@ def _reason(allowed: frozenset[str]) -> str:
     return f"Bash is limited to {names}. Next: use those only."
 
 
-def _train_script_ok(segment: list[str]) -> bool:
+def train_script_ok(segment: list[str]) -> bool:
     # 0060: `python3 <absolute plugin script> <admitted first argument> ...`, nothing else.
     if len(segment) < 2 or segment[0] != "python3":
         return False
@@ -96,7 +96,7 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
             roots, base = _read_roots(cwd)
             if shell.docs_read_ok(segment, raw, roots, cwd, base):
                 continue
-        if "train" in allowed and _train_script_ok(segment):
+        if "train" in allowed and train_script_ok(segment):
             continue
         if "inspect" in allowed and jail._read_only_segment(
             segment, INSPECT_GIT, cwd, hook_io.hook_charter(cwd)

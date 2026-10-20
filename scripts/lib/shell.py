@@ -1327,6 +1327,10 @@ def _worker_hygiene(
     ledger = agent == "charter-docs" and _is_append_ledger(tokens)
     if ledger:
         exempt.add(1)
+    if agent == "orchestrator" and name == "python3":  # 0060, pin B6 -> B4: security exception.
+        from checks.command_allowlist import train_script_ok
+
+        ledger = train_script_ok(tokens)
     is_wrapper = name in WORKER_WRAPPERS or name.startswith("python")
     if (
         agent == "charter-docs"

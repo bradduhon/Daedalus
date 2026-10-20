@@ -100,6 +100,18 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("git_push", ("--conductor",)),
         ("gh_classes", ("--conductor",)),
     ),
+    "orchestrator": (
+        ("credential_paths", ()),
+        ("workspace_integrity", ()),
+        ("tool_bound", ()),
+        ("shell_tripwires", ()),
+        ("network_tools", ()),
+        ("git_push", ()),
+        ("command_allowlist", ("--allow", "train,inspect")),
+        ("root_writes", ("--touch", "docs", "--ledger-guard")),
+        ("gh_classes", ()),
+        ("dispatch_gate", ()),
+    ),
 }
 _MODULES: dict[str, ModuleType] = {}
 

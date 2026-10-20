@@ -26,6 +26,7 @@ EXPECTED_MODEL = {
     "standards-rules-specialist": "sonnet",
     "web-researcher": "haiku",
     "planner": "opus",
+    "orchestrator": "opus",
 }
 # 0089: phase affinities guide the session's choice of agent; they never gate a phase.
 EXPECTED_PHASES = {
@@ -39,7 +40,10 @@ EXPECTED_PHASES = {
     "cis-specialist": ("clarification", "audit"),
     "web-researcher": ("context",),
     "planner": ("plan",),
+    "orchestrator": ("context", "clarification", "plan", "implementation", "audit"),
 }
+# 0060: the orchestrator alone starts and resumes agents; Task stays refused to it too.
+DISPATCHER_TOOLS = {"orchestrator": {"Agent", "SendMessage"}}
 
 
 def _list(value: str, path: Path) -> set[str]:
@@ -106,10 +110,11 @@ def test_frontmatter_matches_rulings(name: str) -> None:
     assert fm["description"]
     tools = _list(fm["tools"], path)
     assert tools, "tools must be explicit (spec 4.1)"
-    assert not (tools & WORKER_DENIED_TOOLS)
+    granted = DISPATCHER_TOOLS.get(name, set())
+    assert tools & WORKER_DENIED_TOOLS == granted
     assert "memory" not in fm
     disallowed = _list(fm.get("disallowedTools", ""), path)
-    assert {"Agent", "Task", "SendMessage"} <= disallowed
+    assert set(WORKER_DENIED_TOOLS) - granted <= disallowed
 
 
 def test_repo_coder_works_in_the_train_made_worktree() -> None:
