@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import string
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +20,19 @@ _ENTRY_HEADING = re.compile(r"^## Entry ([0-9]+)\b")
 _LEADING_INT = re.compile(r"[0-9]+")
 _DIGITS = re.compile(r"[0-9]+")
 _FRONTMATTER_SOURCE = re.compile(r"frontmatter:\S+")
+_UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
+_CODE_CLASS = "[A-Za-z0-9_-]+"
+_SCHEME_FIELDS = {"seq": "[0-9]+", "repo": _CODE_CLASS, "type": _CODE_CLASS}
+_FIRST_SENTENCE = re.compile(r"(.+?)\.(?=\s|$)")
+_NAME_WORD = re.compile(r"[^\s.]+")
+NAME_WORDS = (2, 5)
+SUPERSEDES_NEXT = (
+    "Next: write `None.`, or `Supersedes: <ids>.` and `Amends: <ids>.` naming ledger ids, "
+    "optionally followed by `Applies: <text>.`"
+)
+RULING_NEXT = (
+    "Next: begin the cell with the ruling's short name and a period, e.g. `Open composition.`"
+)
 
 
 class LedgerError(ValueError):
@@ -280,3 +294,84 @@ def format_entry(
             )
         return f"| {entry_id} | {date} | {body} |\n"
     return f"\n\n## Entry {entry_id} - {date}\n\n{body}\n"
+
+
+def split_row(line: str) -> list[str]:
+    # 0004: an escaped \| stays inside its cell.
+    text = line.strip().removeprefix("|")
+    if text.endswith("|") and not text.endswith("\\|"):
+        text = text[:-1]
+    return [cell.strip() for cell in _UNESCAPED_PIPE.split(text)]
+
+
+def table_cells(lines: list[str]) -> tuple[list[str], list[list[str]]] | None:
+    # 0090: the first Id table's header cells and row cells, separator rows dropped.
+    span = id_table_span(lines)
+    if span is None:
+        return None
+    start, _column, end = span
+    rows = [split_row(row) for row in lines[start + 2 : end] if not _SEPARATOR.match(row)]
+    return split_row(lines[start]), rows
+
+
+def id_pattern(scheme: str) -> str:
+    # 0090: the regex an id written by this scheme matches; the seq width is not enforced.
+    parts: list[str] = []
+    try:
+        parsed = list(string.Formatter().parse(scheme))
+    except ValueError as exc:
+        raise LedgerError(f"ledger id_scheme {scheme!r} is malformed ({exc}).") from exc
+    for literal, field, _spec, _conversion in parsed:
+        parts.append(re.escape(literal))
+        if field is None:
+            continue
+        if field not in _SCHEME_FIELDS:
+            raise LedgerError(
+                f"ledger id_scheme {scheme!r} has field {field!r}. "
+                "Next: use only {seq}, {repo} and {type} placeholders."
+            )
+        parts.append(_SCHEME_FIELDS[field])
+    return "".join(parts)
+
+
+def ruling_name(cell: str) -> str | None:
+    # 0094: the name is the cell's first sentence.
+    match = _FIRST_SENTENCE.match(cell.strip())
+    return match.group(1).strip() if match else None
+
+
+def supersedes_problem(cell: str, id_scheme: str) -> str | None:
+    ident = id_pattern(id_scheme)
+    ids = f"{ident}(?:, {ident})*"
+    relation = f"(?:Supersedes|Amends): {ids}\\."
+    grammar = f"(?:None\\.|{relation}(?: {relation})*)(?: Applies: \\S.*\\.)?"
+    if re.fullmatch(grammar, cell):
+        return None
+    return (
+        f"the Supersedes cell {cell!r} is not in the machine-readable form (0090). "
+        f"{SUPERSEDES_NEXT}"
+    )
+
+
+def ruling_problem(cell: str) -> str | None:
+    name = ruling_name(cell)
+    words = name.split() if name else []
+    low, high = NAME_WORDS
+    if low <= len(words) <= high and all(_NAME_WORD.fullmatch(word) for word in words):
+        return None
+    return (
+        f"the Ruling cell must begin with a name of {low} to {high} words and a period (0094); "
+        f"it begins {(name or cell)[:60]!r}. {RULING_NEXT}"
+    )
+
+
+def body_cell_problem(columns: list[str], cells: list[str], id_scheme: str) -> str | None:
+    # 0090, 0094: each check runs only when the ledger header carries its column.
+    named = dict(zip((column.lower() for column in columns), cells, strict=False))
+    if "supersedes" in named:
+        problem = supersedes_problem(named["supersedes"], id_scheme)
+        if problem:
+            return problem
+    if "ruling" in named:
+        return ruling_problem(named["ruling"])
+    return None
