@@ -668,12 +668,10 @@ def test_build_train_saves_and_commits_the_contract() -> None:
     )
     assert rule in text
     assert "a Build Train keeps the packet in the reply" not in text
-    # R3-M2: the howto carries the same sentence.
+    # R3-M2, B7: the howto carries the same rule; the lock command commits, not the session.
     howto = (REPO_ROOT / "docs" / "howto" / "README.md").read_text(encoding="utf-8")
-    assert (
-        "saves the Locked Contract Packet to a file, and the train's main session commits it"
-        in (howto)
-    )
+    assert "saves the Locked Contract Packet to a file, and the lock command commits it" in howto
+    assert "the train's main session commits it" not in howto
     assert "committed on the integration branch `daedalus/<train-id>` before any coder starts" in (
         howto
     )
