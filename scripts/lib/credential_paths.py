@@ -42,6 +42,52 @@ _UNQUOTE = re.compile(r"[\"'\\]")
 LIT, CUT, REDIRECT = "\x00", "\x01", "\x02"
 _EXPANSION_CAP = 16
 _HOME_ROOTED = ("/", "~", "$HOME", "${HOME")
+# issue 53: zsh's (D) qualifier; option names fold case and underscores (GLOB_DOTS, globdots).
+_DOTS_QUALIFIER = re.compile(r"\([^()\s]*D[^()\s]*\)")
+_DOTGLOB_WORDS = ("dotglob", "globignore", "globdots")
+
+
+def dotglob_on(command: str) -> bool:
+    # issue 53: bash dotglob or GLOBIGNORE, zsh globdots or (D); any one lets a wildcard match dots.
+    folded = command.replace("_", "").lower()
+    return any(w in folded for w in _DOTGLOB_WORDS) or bool(_DOTS_QUALIFIER.search(command))
+
+
+def _brace_group(text: str) -> tuple[str, list[str], str] | None:
+    # issue 53: the first {a,b} group as (prefix, alternatives, suffix); {x} opens as x, as rg
+    # and glob tools read it, so a shell's literal {x} over-refuses; {} stays literal.
+    depth, start = 0, 0
+    cuts: list[int] = []
+    for i, char in enumerate(text):
+        if char == "{":
+            if depth == 0:
+                start, cuts = i, []
+            depth += 1
+        elif char == "," and depth == 1:
+            cuts.append(i)
+        elif char == "}" and depth:
+            depth -= 1
+            if depth == 0 and (cuts or i > start + 1):
+                edges = [start, *cuts, i]
+                alts = [text[a + 1 : b] for a, b in zip(edges, edges[1:], strict=False)]
+                return text[:start], alts, text[i + 1 :]
+    return None
+
+
+def expand_braces(text: str) -> list[str] | None:
+    # issue 53: the shell's brace alternatives, nested groups included; None past the cap.
+    done: list[str] = []
+    pending = [text]
+    while pending:
+        group = _brace_group(pending[0])
+        if group is None:
+            done.append(pending.pop(0))
+        else:
+            head, alts, tail = group
+            pending = [head + alt + tail for alt in alts] + pending[1:]
+        if len(done) + len(pending) > _EXPANSION_CAP:
+            return None
+    return done
 
 
 def credential_roots() -> list[str]:
@@ -113,7 +159,7 @@ def _glob_rest(
     for i, name in enumerate(root):
         if i >= len(parts):
             return root[i:]
-        pat = _BRACE.sub("*", parts[i])
+        pat = parts[i]
         hidden = not dotglob and name.startswith(".") and not pat.startswith(".")
         # SC-12: for the reply key a dot folder stops ** too; a credential store stays strict.
         if dots_hide and hidden:
@@ -134,11 +180,24 @@ def _contains(parent: str, child: str) -> bool:
     return real_child == real_parent or real_child.startswith(real_parent.rstrip(os.sep) + os.sep)
 
 
+def _widest(rests: list[list[str] | None]) -> list[str] | None:
+    # issue 53: the alternative that exposes most: inside the store, then no dot folder between.
+    found = [r for r in rests if r is not None]
+    found.sort(key=lambda r: (bool(r), any(p.startswith(".") for p in r)))
+    return found[0] if found else None
+
+
 def store_rest(
     target: str, root: str, glob: bool, dotglob: bool, dots_hide: bool = False
 ) -> list[str] | None:
     # spec 8: [] means target is in the store; a list is the store's components below target.
     if glob and _GLOB_START.search(target):
+        alts = expand_braces(target)
+        if alts is None:
+            # issue 53: past the cap a brace reads as a * that also matches dot names.
+            return store_rest(_BRACE.sub("*", target), root, glob, True, dots_hide)
+        if alts != [target]:
+            return _widest([store_rest(a, root, glob, dotglob, dots_hide) for a in alts])
         parts = os.path.normpath(target).split(os.sep)
         first = next(i for i, part in enumerate(parts) if _GLOB_START.search(part))
         base = os.path.realpath(os.sep.join(parts[:first]) or os.sep)
@@ -180,18 +239,20 @@ def key_roots(*paths: str) -> list[str]:
 def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
     # SC-12: the Grep tool honors the data folder's `*` marker from above, so only a search
     # rooted inside .claude, or a glob that overrides the marker, can read the key.
-    pat = _BRACE.sub("*", glob) if isinstance(glob, str) and glob else ""
+    raw = glob if isinstance(glob, str) else ""
+    # issue 53: each brace alternative is its own glob; past the cap a brace reads as *.
+    pats = (expand_braces(raw) or [_BRACE.sub("*", raw)]) if raw else []
     # SC-12: a leading / anchors an rg glob to the search root; the match ignores it.
-    pat = pat.lstrip("/")
+    pats = [p.lstrip("/") for p in pats if p.lstrip("/")]
     for key in keys:
         if _contains(os.path.dirname(os.path.dirname(key)), target):
             return R_REPLY_KEY_TREE.format(path=target)
-        if not pat:
+        if not pats:
             continue
         names = [os.path.basename(key)]
         if _contains(target, key):
             names.append(os.path.relpath(key, os.path.realpath(target)))
-        if any(fnmatch.fnmatchcase(name, pat) for name in names):
+        if any(fnmatch.fnmatchcase(name, pat) for name in names for pat in pats):
             return R_REPLY_KEY_TREE.format(path=target)
     return None
 

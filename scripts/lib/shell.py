@@ -8,7 +8,9 @@ import itertools
 import os
 import re
 import shlex
+import shutil
 from collections.abc import Callable, Iterable
+from functools import lru_cache
 from pathlib import Path
 from typing import NamedTuple
 
@@ -226,6 +228,14 @@ R_GIT_PLUMBING = (
 )
 R_DATA_DIR_GIT = (
     "the plugin data directory is never committed. Next: leave .claude/daedalus out of git."
+)
+R_CLAUDE_PATH = (
+    "the command runs the claude binary, by name, link or versioned path, and starts a nested "
+    "session the jail cannot attribute to an agent (issue 55). Next: run it from your own shell."
+)
+R_UNTRUSTED_PATH = (
+    "a command given as a path runs only from the system bin folders, a unit worktree or the "
+    "manifest's declared commands (issue 55). Next: run the tool by name or from your worktree."
 )
 _PROJECT_DATA = ".claude/daedalus"
 _GLOB_CHARS = frozenset("*?[")
@@ -1305,14 +1315,57 @@ def _hygiene_bad(token: str, word: str | None) -> bool:
     return bool(_HYGIENE_CHARS & set(text)) or lead.startswith("~")
 
 
+def command_path(word: str, base: str) -> str:
+    # issue 55: the real file a command word runs; a bare name resolves through PATH.
+    if "/" in word:
+        return os.path.realpath(_abs(word, base))
+    return os.path.realpath(shutil.which(word) or word)
+
+
+@lru_cache(maxsize=4)
+def _claude_real(search_path: str) -> str | None:
+    found = shutil.which("claude", path=search_path)
+    return os.path.realpath(found) if found else None
+
+
+def runs_claude(tokens: list[str], base: str) -> bool:
+    # issue 55: the command word, the word past wrappers, or node's script is claude by name or file.
+    stripped = _strip_wrappers(tokens, []) or []
+    words = tokens[:1] + stripped[:1]
+    if stripped and _base(stripped[0]) == "node":
+        words += [a for a in stripped[1:] if not a.startswith("-")][:1]
+    real = _claude_real(os.environ.get("PATH", os.defpath))
+    return any(
+        _base(w) == "claude" or (real is not None and command_path(w, base) == real) for w in words
+    )
+
+
+def _path_trusted(
+    word: str, base: str, own_script: Callable[[str], bool], tools: frozenset[str]
+) -> bool:
+    # issue 55: a path command word sits in a system bin folder, a unit worktree or the manifest.
+    if "/" not in word:
+        return True
+    full = os.path.normpath(_abs(word, base))
+    trusted_bin = os.path.isabs(full) and os.path.dirname(full) in _TRUSTED_BIN
+    return trusted_bin or own_script(word) or os.path.realpath(full) in tools
+
+
 def _worker_hygiene(
     tokens: list[str],
     agent: str,
     words: list[str] | None = None,
     own_script: Callable[[str], bool] | None = None,
+    base: str = "",
+    tools: frozenset[str] = frozenset(),
 ) -> str | None:
     if _ASSIGN.match(tokens[0]):
         return R_ENV
+    if runs_claude(tokens, base):
+        return R_CLAUDE_PATH
+    # issue 55: own_script marks the coder, the one worker whose path commands are judged here.
+    if own_script is not None and not _path_trusted(tokens[0], base, own_script, tools):
+        return R_UNTRUSTED_PATH
     name = _base(tokens[0])
     allexport = any(re.fullmatch(r"-[a-zA-Z]*a[a-zA-Z]*|allexport", t) for t in tokens[1:])
     if name in SHELL_VAR_CMDS or (name == "set" and allexport):

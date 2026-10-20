@@ -39,6 +39,8 @@ MOVED = frozenset(
 )
 # 0044: lib.jail imports from lib.shell only the names it uses.
 JAIL_PASSTHROUGH: frozenset[str] = frozenset()
+# issue 55: helpers born in lib.shell that lib.jail shares rather than copies.
+SHARED = frozenset({"runs_claude"})
 
 
 def _tree(name: str) -> ast.Module:
@@ -71,7 +73,7 @@ def test_jail_reexports_nothing_it_moved() -> None:
     assert MOVED <= _defined(_tree("shell.py"))
     assert not MOVED & _defined(jail_tree)
     imported = _shell_imports(jail_tree)
-    assert imported <= MOVED
+    assert imported <= MOVED | SHARED
     used = {n.id for n in ast.walk(jail_tree) if isinstance(n, ast.Name)}
     assert imported - used == JAIL_PASSTHROUGH
     for name in imported:
