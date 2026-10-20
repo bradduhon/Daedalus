@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import hmac
 import json
@@ -12,7 +13,7 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -23,7 +24,7 @@ from lib.locks import bounded_flock
 from lib.project_root import in_git_work_tree
 from lib.project_root import project_root as _project_root
 from lib.redact import redact
-from lib.train_state import TRAIN_MARKER
+from lib.train_state import STATE_DIR, TRAIN_ID, TRAIN_MARKER
 
 GENESIS = "0" * 64
 # 8.2: character count of the stored head, not bytes; non-ASCII heads may exceed 4096 bytes.
@@ -487,12 +488,120 @@ def audit_append(
         if record["event"] == "SubagentStop" and record["agent_type"] is None:
             if isinstance(agent_id, str) and agent_id:
                 record["agent_type"] = _started_type(path, agent_id)
-        tail = _tail_record(path)
-        record["seq"] = 1 if tail is None else int(tail["seq"]) + 1
-        record["prev_hash"] = GENESIS if tail is None else tail["hash"]
-        record["hash"] = record_hash(record)
-        line = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-        os.chmod(path, 0o600)
+        _chain_write(path, record)
+    if record["seq"] == 1:
+        rotate_logs(hook_input["cwd"], path)
     return record
+
+
+def _chain_write(path: Path, record: dict[str, Any]) -> None:
+    # Caller holds the audit lock; the one place a record is chained and appended.
+    tail = _tail_record(path)
+    record["seq"] = 1 if tail is None else int(tail["seq"]) + 1
+    record["prev_hash"] = GENESIS if tail is None else tail["hash"]
+    record["hash"] = record_hash(record)
+    line = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+    os.chmod(path, 0o600)
+
+
+ROTATION_EVENT = "AuditRotation"
+_DAY_S = 86400
+
+
+def _kept_sessions(root: Path) -> set[str]:
+    # issue 50, AU-9: every log a train summary names stays; the push gate reads it after merge.
+    from lib.audit_proof import _SESSION_LINE, SUMMARY_DIR
+
+    kept: set[str] = set()
+    for summary in sorted((root / SUMMARY_DIR).glob("*-summary.md")):
+        kept.update(_SESSION_LINE.findall(summary.read_text(encoding="utf-8")))
+    return kept
+
+
+def _unmerged_since(root: Path) -> float:
+    # issue 50: a log changed at or after an unmerged train's start may hold that train's records.
+    folder = root / STATE_DIR
+    if folder.is_symlink():
+        raise RuntimeError(f"{folder} is a symlink")
+    since = float("inf")
+    for state in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+        if not TRAIN_ID.fullmatch(state.stem):
+            continue
+        doc = json.loads(state.read_text(encoding="utf-8"))
+        if not isinstance(doc, dict):
+            raise RuntimeError(f"{state} is not a JSON object")
+        if doc.get("merged") is not True:
+            start = datetime.strptime(state.stem, "%Y%m%d-%H%M%S").replace(tzinfo=UTC)
+            since = min(since, start.timestamp())
+    return since
+
+
+def _rotation_targets(cwd: str, current: Path, days: int) -> list[Path]:
+    root = project_root(cwd)
+    kept = _kept_sessions(root) | {current.stem}
+    before = min(time.time() - days * _DAY_S, _unmerged_since(root))
+    out = []
+    for log in sorted(current.parent.glob("*.jsonl")):
+        if log.stem in kept or log.is_symlink() or not log.is_file():
+            continue
+        if log.stat().st_mtime < before:
+            out.append(log)
+    return out
+
+
+def _try_lock(log: Path, stack: ExitStack) -> bool:
+    # issue 50: never wait on a log another session holds; a held log stays for a later rotation.
+    fd = os.open(log.with_suffix(".lock"), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    handle = stack.enter_context(os.fdopen(fd, "w"))
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
+def rotate_logs(cwd: str, current: Path) -> list[str]:
+    # issue 50, AU-11, AU-9(4): any read or parse error deletes nothing and never fails the append.
+    try:
+        from lib.config import load_config
+
+        days = load_config(cwd=cwd).audit_retention_days
+        if days is None:
+            return []
+        with ExitStack() as stack:
+            ends: list[dict[str, object]] = []
+            for log in _rotation_targets(cwd, current, days):
+                if not _try_lock(log, stack):
+                    continue
+                tail = _tail_record(log)
+                seq, digest = (0, GENESIS) if tail is None else (int(tail["seq"]), tail["hash"])
+                ends.append({"session_id": log.stem, "seq": seq, "hash": digest, "path": log})
+            if not ends:
+                return []
+            _rotation_record(cwd, current, days, ends)
+            for end in ends:
+                log = Path(str(end["path"]))
+                log.unlink()
+                log.with_suffix(".lock").unlink(missing_ok=True)
+        return [str(end["session_id"]) for end in ends]
+    except Exception:  # noqa: BLE001
+        # issue 50: silent, as the jail's stderr is its block reason; a bad config blocks there.
+        return []
+
+
+def _rotation_record(cwd: str, current: Path, days: int, ends: list[dict[str, object]]) -> None:
+    # AU-9(4): the deletion is chained into the session whose first write triggered it.
+    record = build_record({"hook_event_name": ROTATION_EVENT, "cwd": cwd})
+    root, source, _ = root_info(cwd)
+    record.update(
+        session_id=current.stem,
+        agent_type=None,
+        project_root=str(root),
+        root_source=source,
+        retention_days=days,
+        rotated=[{k: end[k] for k in ("session_id", "seq", "hash")} for end in ends],
+    )
+    with audit_lock(current.with_suffix(".lock")):
+        _chain_write(current, record)
