@@ -113,7 +113,8 @@ def test_build_train_dispatches_existing_agents() -> None:
     personas = {p.stem for p in (REPO_ROOT / "agents").glob("*.md")}
     # The Push Train owns pr-train-conductor; the relay starts only the orchestrator (0060).
     assert relay == {"orchestrator"}
-    assert names == personas - {"pr-train-conductor", "orchestrator"}
+    # spec 5: the verifier's recipe step lands with unit C5; until then it may be unnamed.
+    assert names - {"verifier"} == personas - {"pr-train-conductor", "orchestrator", "verifier"}
     assert "`/daedalus:plan " in _recipe()
     assert "${CLAUDE_PLUGIN_ROOT}" not in _recipe().split("\n---\n", 1)[1]
 

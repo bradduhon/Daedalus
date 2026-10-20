@@ -27,6 +27,7 @@ EXPECTED_MODEL = {
     "web-researcher": "haiku",
     "planner": "opus",
     "orchestrator": "fable",
+    "verifier": "opus",
 }
 # 0089: phase affinities guide the session's choice of agent; they never gate a phase.
 EXPECTED_PHASES = {
@@ -41,6 +42,7 @@ EXPECTED_PHASES = {
     "web-researcher": ("context",),
     "planner": ("plan",),
     "orchestrator": ("context", "clarification", "plan", "implementation", "audit"),
+    "verifier": ("implementation",),
 }
 # 0060: the orchestrator alone dispatches; the dispatch hook refuses a Task call by name.
 DISPATCHER_TOOLS = {"orchestrator": {"Agent", "SendMessage"}}
@@ -140,6 +142,21 @@ def test_repo_coder_reads_the_packets_by_hash() -> None:
     assert "the injected Locked Contract Packet" not in text
     complete = load(AGENTS / "repo-coder.md").status_lines[-1]
     assert complete.endswith(" contract=<12 hex> standards=<12 hex>")
+    # pin C1 -> C5: two optional fields may trail the standards hash, in this order.
+    item = text.split("## Status contract", 1)[1].split("- `[STATUS: COMPLETE]", 1)[1]
+    assert "optionally followed by ` adversarial=pass` and then ` audit_tests=pass`" in item
+
+
+def test_repo_coder_runs_the_corpus_and_the_audit_tests() -> None:
+    # spec 3.2, 3.3: the corpus rule for check changes, the audit test run on a fix branch.
+    text = " ".join((AGENTS / "repo-coder.md").read_text().split())
+    for path in ("`scripts/checks/`", "`scripts/lib/jail.py`", "`scripts/lib/shell.py`"):
+        assert path in text, path
+    assert "`scripts/enforce_agent_jail.py`" in text
+    assert "`cd <path> && python3 -m pytest tests/adversarial -q`" in text
+    assert "readable and runnable for you and never writable" in text
+    assert "only after that run passed in your worktree" in text
+    assert "`pytest --basetemp` is refused" in text
 
 
 def test_repo_coder_yields_compliance_before_sensitive_code() -> None:
@@ -343,7 +360,98 @@ def test_auditor_has_a_procedure_and_severity_scale() -> None:
     for level in ("critical", "high", "medium", "low"):
         assert f"- {level}: " in severity, level
     assert "Any critical or high finding is REJECTED." in severity
-    assert "`<branch> <file>:<line> <severity> <class>: <precise fix>`" in text
+    assert "`<branch> <file>:<line> <severity> <class>: <what the test shows>`" in text
+    assert "<precise fix>" not in text
+
+
+def test_auditor_files_findings_as_failing_tests() -> None:
+    # 0109, spec 3.2 and 3.3, pin C3 -> C1: test files, the findings list, no-test, the corpus.
+    text = " ".join(AUDITOR.read_text().split())
+    findings = text.split("## Finding format", 1)[1].split("## Status contract", 1)[0]
+    for phrase in (
+        "`<repo>/docs/.tmp/daedalus/<train-id>/audit/round<n>/test_<class>_<slug>.py`",
+        "`<repo>/docs/.tmp/daedalus/<train-id>/audit/round<n>/findings.txt`",
+        "`<key> | <severity> | <class>`",
+        "`audit/round1/test_scope_ledger_write.py::test_refused`",
+        "`<file>:<line> <class>` for a `no-test:` finding",
+        "An approved round writes an empty file.",
+        "Extend the corpus, not the prose",
+        "`python3 -m pytest <test file> -q -p no:cacheprovider --rootdir <audit worktree>`",
+        "`request.config.rootpath`",
+        "A finding whose test passes on `<tip>` is not a finding.",
+    ):
+        assert phrase in findings, phrase
+    assert "`git -C <audit worktree> rev-parse HEAD`" in text
+    assert "reset --hard" not in text
+
+
+def test_auditor_keeps_the_phrases_later_units_read() -> None:
+    # pin C1 -> C5: four phrases stay verbatim in the auditor file.
+    text = " ".join(AUDITOR.read_text().split())
+    for phrase in (
+        "starts with exactly one of these verdict lines as its first line",
+        "For each branch run `git diff <diff base>...<branch>`",
+        "the diff base is the commit the train started from",
+        "the merged integration branch `daedalus/<train-id>`",
+    ):
+        assert phrase in text, phrase
+
+
+def test_auditor_frontmatter_grants_audit_writes_and_test_runs() -> None:
+    # 0109, spec 3.1: Write and Edit, the audit write class and the audit test run.
+    auditor = load(AUDITOR)
+    assert auditor.shape == "judge" and auditor.model == "opus"
+    assert auditor.tools == frozenset({"Read", "Grep", "Glob", "Bash", "Write", "Edit"})
+    assert Hook("root_writes", ("--touch", "audit")) in auditor.hooks
+    assert Hook("read_only_bash", ("--git", "read-only", "--test-runner", "audit")) in auditor.hooks
+    disallowed = _list(frontmatter(AUDITOR)["disallowedTools"], AUDITOR)
+    assert {"MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Agent", "Task"} <= disallowed
+
+
+VERIFIER = AGENTS / "verifier.md"
+VERIFIER_VERDICTS = (
+    "MATCH",
+    "WRONG VALUE",
+    "WRONG LINE",
+    "MISSING",
+    "OVERSTATED",
+    "NARROWED",
+    "WIDENED",
+)
+
+
+def test_verifier_frontmatter_is_a_read_only_judge() -> None:
+    # spec 5: tools Read, Grep, Glob, Bash; no write class; the unit test run only.
+    verifier = load(VERIFIER)
+    assert (verifier.shape, verifier.model, verifier.phases) == (
+        "judge",
+        "opus",
+        ("implementation",),
+    )
+    assert verifier.tools == frozenset({"Read", "Grep", "Glob", "Bash"})
+    disallowed = _list(frontmatter(VERIFIER)["disallowedTools"], VERIFIER)
+    want = {"Write", "Edit", "WebFetch", "WebSearch", "Agent", "Task", "SendMessage"}
+    assert want <= disallowed
+    assert [h.script for h in verifier.hooks if h.script == "root_writes"] == []
+    rob = [h for h in verifier.hooks if h.script == "read_only_bash"]
+    assert rob == [Hook("read_only_bash", ("--git", "read-only", "--test-runner", "unit"))]
+
+
+def test_verifier_body_names_the_seven_verdicts_and_its_reply_lines() -> None:
+    # spec 5, addendum D: seven verdicts per claim; pin C1 -> C5 reply lines first and last.
+    text = " ".join(VERIFIER.read_text().split())
+    procedure = text.split("## Procedure", 1)[1].split("## Status contract", 1)[0]
+    for verdict in VERIFIER_VERDICTS:
+        assert f"- {verdict}: " in procedure, verdict
+    assert "Agreement earns nothing" in text
+    assert '"Could not find" is ASSUMED' in procedure
+    assert "`git -C <unit worktree> show <branch>:<file> | sed -n <first>,<last>p`" in procedure
+    assert load(VERIFIER).status_lines == (
+        "[VERDICT: VERIFIED] claims=<n>",
+        "[VERDICT: REFUTED] <rows>",
+    )
+    contract = text.split("## Status contract", 1)[1]
+    assert "starts with exactly one of these verdict lines as its first line" in contract
 
 
 def test_auditor_grep_commands_pass_the_jail(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -362,14 +470,21 @@ def test_auditor_grep_commands_pass_the_jail(monkeypatch: pytest.MonkeyPatch) ->
         assert router.route(payload, REPO_ROOT) == (True, None, ""), command
 
 
-def test_auditor_verdict_first_line_contract_unchanged() -> None:
+def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
+    # pin C1 -> C3: first and last line `[VERDICT: <word>] tip=<40 lowercase hex>`.
     contract = AUDITOR.read_text().split("## Status contract\n", 1)[1]
+    tip = "tip=<40 lowercase hex>"
     assert contract == (
         "Your reply starts with exactly one of these verdict lines as its first line and ends with"
         " the\nsame verdict line, alone, as its last line. This holds for every reply, fix rounds"
-        " included.\n"
-        "- `[VERDICT: APPROVED]` then `<paragraph>` then `[VERDICT: APPROVED]`\n"
-        "- `[VERDICT: REJECTED]` then `<itemized findings>` then `[VERDICT: REJECTED]`\n"
+        " included.\nThe `tip=` value is the 40 lowercase hex step 0 printed.\n"
+        f"- `[VERDICT: APPROVED] {tip}` then `<paragraph>` then `[VERDICT: APPROVED] {tip}`\n"
+        f"- `[VERDICT: REJECTED] {tip}` then `<itemized findings>`"
+        f" then `[VERDICT: REJECTED] {tip}`\n"
+    )
+    assert load(AUDITOR).status_lines == (
+        f"[VERDICT: APPROVED] {tip}",
+        f"[VERDICT: REJECTED] {tip}",
     )
 
 

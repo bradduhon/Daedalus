@@ -259,8 +259,9 @@ DENIALS = {
     "charter-docs": (_input("charter-docs", command="ls"), "command_allowlist"),
     "security-auditor": (
         _input("security-auditor", "Write", file_path=f"{CWD}/docs/x.md"),
-        "tool_bound",
+        "root_writes",
     ),
+    "verifier": (_input("verifier", "Write", file_path=f"{CWD}/docs/x.md"), "tool_bound"),
     "nist-specialist": (_input("nist-specialist", command="curl x"), "network_tools"),
     "cis-specialist": (_input("cis-specialist", command="git checkout x"), "read_only_bash"),
     "web-researcher": (_input("web-researcher", command="ls"), "tool_bound"),

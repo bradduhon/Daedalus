@@ -18,7 +18,7 @@ from lib.train_state import active_train  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset(jail.WRITE_TOOLS | {"Bash"})
 # open item 3: the unit-src-tests and none classes of spec 5.2 are not accepted in group 1.
-CLASSES = frozenset({"contracts", "charter-specs", "charter", "docs", "scratch"})
+CLASSES = frozenset({"contracts", "charter-specs", "charter", "docs", "scratch", "audit"})
 FLAGS: dict[str, hook_io.Flag] = {
     "--touch": hook_io.Flag(values=CLASSES, many=True),
     "--ledger-guard": hook_io.Flag(),
@@ -47,6 +47,12 @@ def _roots(classes: tuple[str, ...], cwd: str, config: Config) -> list[str]:
             train = active_train(repo)
             scratch = repo / "docs" / ".tmp" / "daedalus"
             roots.append(str(scratch / train if train is not None else scratch))
+        elif name == "audit":
+            # 0109, spec 3.1: the train's audit folder in a train; outside a train, no root.
+            repo = project_root(cwd)
+            train = active_train(repo)
+            if train is not None:
+                roots.append(str(repo / "docs" / ".tmp" / "daedalus" / train / "audit"))
     return roots
 
 

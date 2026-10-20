@@ -189,7 +189,8 @@ def touch_grants(agent: agent_files.AgentFile) -> frozenset[str]:
             granted.update(flags[flags.index("--touch") + 1].split(","))
     if "unit_writes" in scripts:
         granted.add("unit-src-tests")
-    if not scripts & {"root_writes", "unit_writes"}:
+    # 0109: the audit class holds findings outside the judged tree, so its holder touches none.
+    if not scripts & {"root_writes", "unit_writes"} or granted == {"audit"}:
         granted.add("none")
     return frozenset(granted)
 

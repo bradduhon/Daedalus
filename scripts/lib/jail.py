@@ -239,7 +239,12 @@ R_NETWORK = (
     "network or remote tooling is not permitted (tripwire). "
     "Next: return [STATUS: YIELD_WEB] with your question."
 )
-R_BASETEMP = "pytest --basetemp is not permitted. Next: use the default."
+# issue 56: the refusal names the flag, the agent and the next action in every grammar.
+R_BASETEMP_AGENT = (
+    "pytest --basetemp is refused for {agent}: the temp folder it names lies outside the "
+    "write checks (issue 56). Next: drop --basetemp and rerun; pytest's default temp folder works."
+)
+R_BASETEMP = R_BASETEMP_AGENT.format(agent="repo-coder")
 R_CONTRACT_SPEC_WRITE = (
     "contract-spec may write only contracts/ or the charter specs/ directory. "
     "Next: put schema changes there."
@@ -1605,7 +1610,8 @@ def _bash_write_dirs(command: str, cwd: str) -> list[str]:
                 picks += [a for a in args if not a.startswith("-")][:1]
             elif name == "git":
                 sub, _, globals_ = _git_split(["git", *args])
-                if sub not in READ_ONLY_GIT:
+                # spec 6: worktree reads by name only after its grammar; add and remove act on -C.
+                if sub not in READ_ONLY_GIT or sub == "worktree":
                     pairs = zip(globals_, globals_[1:], strict=False)
                     picks += [value for flag, value in pairs if flag == "-C"]
                     picks += [g.split("=", 1)[1] for g in globals_ if g.startswith(_GIT_DIR_OPTS)]

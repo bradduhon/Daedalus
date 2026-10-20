@@ -1,0 +1,3 @@
+Added nothing; this report exists to be checked.
+Ledger notes: src/hello.py:1 defines hello(name: str) -> str; src/hello.py:2 returns the string "goodbye".
+[STATUS: COMPLETE] branch=daedalus-unit/20261015-000000-u1 packet_version=1 files=src/hello.py tests=not-run ledger_notes=src/hello.py:1 defines hello(name: str) -> str; src/hello.py:2 returns the string "goodbye" contract=000000000000 standards=000000000000
