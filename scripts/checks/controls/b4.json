@@ -1,6 +1,6 @@
 {
   "credential_paths.R_BRACE_UNJUDGED": {
-    "failure": "audit B4 round 3: a brace group the jail does not expand hides an alternative that starts its own path, and the store it names is read unjudged",
+    "failure": "issue 53: a brace group the jail does not expand hides an alternative that starts its own path, and the store it names is read unjudged",
     "premise_test": "tests/test_checks_credential_paths.py::test_unexpanded_brace_with_a_rooted_alternative_is_refused"
   },
   "shell.R_CLAUDE_PATH": {
