@@ -512,6 +512,8 @@ ORCHESTRATOR_OK = [
     f"python3 {SCRIPTS}/daedalus_workspace.py create --repo {CWD} --name t-u1 --base daedalus/t",
     f"python3 {SCRIPTS}/daedalus_workspace.py lock --repo {CWD} --contract c.md --version 1",
     f"python3 {SCRIPTS}/daedalus_workspace.py finish --repo {CWD}",
+    f"python3 {SCRIPTS}/daedalus_workspace.py refresh --repo {CWD} --name t-audit",
+    f"python3 {SCRIPTS}/daedalus_train.py model --repo {CWD} --agent repo-coder",
     f"python3 {SCRIPTS}/daedalus_doctor.py --print-cache-dir",
     f"python3 {SCRIPTS}/audit_report.py --repo {CWD} --session s --controls",
     f"python3 {SCRIPTS}/validate_plan.py {CWD}/docs/.tmp/daedalus/t/plan.md --max-concurrent 5",
@@ -573,3 +575,80 @@ def test_shell_exemption_is_the_orchestrators_alone() -> None:
     assert evaluate("shell_tripwires", _b("orchestrator", command)) is None
     for agent in ("repo-coder", "security-auditor", "pr-train-conductor", "charter-docs"):
         assert evaluate("shell_tripwires", _b(agent, command)) is not None, agent
+
+
+# issue 63, pin C3 -> C4: a train script's --repo or --cwd is the project root of the hook cwd.
+TRAIN_FLAGS = ("--allow", "train,inspect")
+REFRESH = f"python3 {SCRIPTS}/daedalus_workspace.py refresh"
+
+
+def test_refresh_is_the_orchestrators() -> None:
+    command = f"{REFRESH} --repo {CWD} --name t-audit"
+    assert decide(_b("orchestrator", command), CFG).allow
+    assert "refresh" in load(HOOK).TRAIN_SCRIPTS["daedalus_workspace.py"]
+    assert "model" in load(HOOK).TRAIN_SCRIPTS["daedalus_train.py"]
+    assert "refresh" in load(HOOK).R_ORCHESTRATOR_BASH
+    for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+        assert not decide(_b(agent, command), CFG).allow, agent
+
+
+@pytest.mark.parametrize(
+    ("args", "flag", "given"),
+    [
+        ("--repo /work/other --name t-audit", "--repo", "/work/other"),
+        ("--repo=/work/other --name t-audit", "--repo", "/work/other"),
+        (f"--repo {CWD} --name t-audit --repo /work/other", "--repo", "/work/other"),
+        (f"--repo {CWD}/docs --name t-audit", "--repo", f"{CWD}/docs"),
+        ("--repo .. --name t-audit", "--repo", ".."),
+    ],
+)
+def test_train_script_repo_outside_the_project_root_is_refused(
+    args: str, flag: str, given: str
+) -> None:
+    reason = evaluate(HOOK, _b("orchestrator", f"{REFRESH} {args}"), *TRAIN_FLAGS)
+    assert reason == load(HOOK).R_TRAIN_REPO.format(flag=flag, given=given, root=CWD)
+    assert given in str(reason) and f"({CWD})" in str(reason)
+    assert not decide(_b("orchestrator", f"{REFRESH} {args}"), CFG).allow
+
+
+def test_train_script_cwd_flag_is_judged_the_same_way() -> None:
+    report = f"python3 {SCRIPTS}/audit_report.py --cwd /work/other --session s"
+    reason = evaluate(HOOK, _b("orchestrator", report), *TRAIN_FLAGS)
+    assert reason == load(HOOK).R_TRAIN_REPO.format(flag="--cwd", given="/work/other", root=CWD)
+    ok = f"python3 {SCRIPTS}/audit_report.py --cwd {CWD} --session s"
+    assert evaluate(HOOK, _b("orchestrator", ok), *TRAIN_FLAGS) is None
+
+
+@pytest.mark.parametrize("args", ["--rep /work/other", "--re=/work/other", "--repo", "--cw /x"])
+def test_train_script_abbreviated_or_empty_repo_is_refused(args: str) -> None:
+    command = f"python3 {SCRIPTS}/daedalus_train.py progress {args}"
+    assert evaluate(HOOK, _b("orchestrator", command), *TRAIN_FLAGS) is not None, args
+
+
+@pytest.mark.parametrize(
+    "args", [f"--repo {CWD}", f"--repo={CWD}", f"--repo {CWD}/", "--repo .", f"--repo {CWD}/x/.."]
+)
+def test_train_script_repo_equal_to_the_project_root_is_admitted(args: str) -> None:
+    command = f"{REFRESH} {args} --name t-audit"
+    assert evaluate(HOOK, _b("orchestrator", command), *TRAIN_FLAGS) is None, args
+
+
+def test_train_script_repo_resolves_from_a_subfolder_of_a_real_project(tmp_path: Path) -> None:
+    repo = _git_init(tmp_path / "repo")
+    (repo / ".claude" / "daedalus").mkdir(parents=True)
+    (repo / "docs").mkdir()
+    hook_input = _b("orchestrator", f"{REFRESH} --repo {repo} --name t-audit")
+    hook_input["cwd"] = str(repo / "docs")
+    assert evaluate(HOOK, hook_input, *TRAIN_FLAGS) is None
+    hook_input["tool_input"] = {"command": f"{REFRESH} --repo {repo}/docs --name t-audit"}
+    reason = evaluate(HOOK, hook_input, *TRAIN_FLAGS)
+    assert reason is not None and f"{repo}/docs" in reason and f"({repo})" in reason
+
+
+def test_train_script_ok_keeps_its_shape_check_without_a_cwd() -> None:
+    # pin B6 -> B4: shell_tripwires calls it with the segment alone.
+    module = load(HOOK)
+    segment = ["python3", f"{SCRIPTS}/daedalus_train.py", "progress", "--repo", "/work/other"]
+    assert module.train_script_ok(segment)
+    assert not module.train_script_ok(segment, CWD)
+    assert module.train_script_ok([*segment[:3], "--repo", CWD], CWD)

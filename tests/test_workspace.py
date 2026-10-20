@@ -189,12 +189,14 @@ def test_create_reports_an_unwritable_marker(repo: Path) -> None:
     assert "cannot write" in str(info.value) and "Next:" in str(info.value)
 
 
-def _cli(*args: str) -> subprocess.CompletedProcess[str]:
+def _cli(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    # issue 63: the script runs from its --repo unless a test names another working directory.
     return subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "daedalus_workspace.py"), *args],
         capture_output=True,
         text=True,
         check=False,
+        cwd=cwd or args[args.index("--repo") + 1],
     )
 
 
@@ -291,3 +293,33 @@ def test_create_records_the_unit_in_the_active_train(data_repo: Path) -> None:
 def test_create_without_a_train_records_nothing(data_repo: Path) -> None:
     create(data_repo, NAME, BASE)
     assert not (data_repo / ".claude" / "daedalus" / "trains").exists()
+
+
+def test_cli_refuses_a_repo_that_is_not_the_project_root_of_its_cwd(
+    repo: Path, tmp_path: Path
+) -> None:
+    # issue 63, pin C3 -> C4: nothing runs, and the reason names both paths.
+    other = tmp_path.resolve() / "other"
+    other.mkdir()
+    result = _cli("create", "--repo", str(repo), "--name", NAME, "--base", BASE, cwd=other)
+    assert result.returncode == 1 and result.stdout == ""
+    assert result.stderr == (
+        f"daedalus-workspace: --repo {repo} is not the project root of the working directory "
+        f"({other}). Next: run the command from {repo}, or pass --repo {other}.\n"
+    )
+    assert not worktree_path(repo, NAME).exists()
+
+
+def test_cli_admits_a_repo_reached_from_a_subfolder(data_repo: Path) -> None:
+    # 0077: the project root of a subfolder is the folder holding .claude/daedalus.
+    sub = data_repo / "docs"
+    sub.mkdir()
+    made = _cli("mark", "--repo", str(data_repo), "--train", TRAIN, cwd=sub)
+    assert made.returncode == 0, made.stderr
+
+
+def test_workspace_scripts_never_run_a_hard_reset() -> None:
+    # 0112, pin C4 -> C5: the audit refresh fast-forwards; no hard reset in either file.
+    for path in (SCRIPTS_DIR / "daedalus_workspace.py", SCRIPTS_DIR / "lib" / "workspace.py"):
+        text = path.read_text(encoding="utf-8")
+        assert "reset --hard" not in text and '"--hard"' not in text, path

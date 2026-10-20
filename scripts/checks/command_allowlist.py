@@ -22,9 +22,9 @@ _SCRIPTS = os.path.realpath(Path(__file__).resolve().parents[1])
 # operator's exception record stay with the main session.
 TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
     "daedalus_train.py": frozenset(
-        {"progress", "choice", "plan", "verdict", "state", "step", "check-reply"}
+        {"progress", "choice", "plan", "verdict", "state", "step", "check-reply", "model"}
     ),
-    "daedalus_workspace.py": frozenset({"create", "lock", "finish"}),
+    "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir"}),
     "audit_report.py": None,
     "validate_plan.py": None,
@@ -32,11 +32,17 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
 # 0060: the inspect class is the auditor's read-only set plus the unit-descent check.
 INSPECT_GIT = shell.READ_ONLY_GIT | {"merge-base"}
 R_ORCHESTRATOR_BASH = (
-    "the orchestrator's Bash runs only daedalus_train.py, daedalus_workspace.py create, lock "
-    "and finish, daedalus_doctor.py --print-cache-dir, audit_report.py and validate_plan.py by "
-    "their absolute plugin path, and read-only inspection with git reads (0060). "
-    "Next: use those only; a stop, a resume, an exception record, a push and a merge into main "
-    "belong to the main session and the operator."
+    "the orchestrator's Bash runs only daedalus_train.py, daedalus_workspace.py create, lock, "
+    "refresh and finish, daedalus_doctor.py --print-cache-dir, audit_report.py and "
+    "validate_plan.py by their absolute plugin path, and read-only inspection with git reads "
+    "(0060). Next: use those only; a stop, a resume, an exception record, a push and a merge "
+    "into main belong to the main session and the operator."
+)
+# issue 63, pin C3 -> C4: a train script's --repo or --cwd is the project root of the hook cwd.
+REPO_FLAGS = ("--repo", "--cwd")
+R_TRAIN_REPO = (
+    "{flag} {given} is not the project root of the working directory ({root}). "
+    "Next: run the command from {given}, or pass {flag} {root}."
 )
 
 
@@ -51,7 +57,35 @@ def _reason(allowed: frozenset[str]) -> str:
     return f"Bash is limited to {names}. Next: use those only."
 
 
-def train_script_ok(segment: list[str]) -> bool:
+def _repo_values(args: list[str]) -> list[tuple[str, str]] | None:
+    # issue 63: every --repo/--cwd value, joined or split; None for an abbreviation or no value.
+    found: list[tuple[str, str]] = []
+    for idx, arg in enumerate(args):
+        flag, eq, value = arg.partition("=")
+        if flag in REPO_FLAGS:
+            if not eq:
+                value = args[idx + 1] if idx + 1 < len(args) else ""
+            if not value:
+                return None
+            found.append((flag, value))
+        elif len(flag) > 2 and any(f.startswith(flag) for f in REPO_FLAGS):
+            return None  # argparse would expand --rep to --repo, out of this check's sight.
+    return found
+
+
+def train_repo_reason(segment: list[str], cwd: str) -> str | None:
+    # issue 63, pin C3 -> C4: names both paths; None when every value is the project root.
+    root = os.path.realpath(project_root(cwd)) if os.path.isabs(cwd) else ""
+    values = _repo_values(segment[2:])
+    if values is None:
+        return R_TRAIN_REPO.format(flag="--repo", given="(unreadable)", root=root or cwd)
+    for flag, given in values:
+        if not root or os.path.realpath(os.path.join(cwd, given)) != root:
+            return R_TRAIN_REPO.format(flag=flag, given=given, root=root or cwd)
+    return None
+
+
+def train_script_ok(segment: list[str], cwd: str | None = None) -> bool:
     # 0060: `python3 <absolute plugin script> <admitted first argument> ...`, nothing else.
     if len(segment) < 2 or segment[0] != "python3":
         return False
@@ -63,7 +97,9 @@ def train_script_ok(segment: list[str]) -> bool:
     if os.path.dirname(real) != _SCRIPTS or name not in TRAIN_SCRIPTS:
         return False
     first = TRAIN_SCRIPTS[name]
-    return first is None or (len(segment) > 2 and segment[2] in first)
+    if first is not None and (len(segment) < 3 or segment[2] not in first):
+        return False
+    return cwd is None or train_repo_reason(segment, cwd) is None
 
 
 def _read_roots(cwd: str) -> tuple[list[str], str]:
@@ -98,6 +134,9 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
             if shell.docs_read_ok(segment, raw, roots, cwd, base):
                 continue
         if "train" in allowed and train_script_ok(segment):
+            mismatch = train_repo_reason(segment, cwd)
+            if mismatch is not None:
+                return mismatch
             continue
         if "inspect" in allowed and jail._read_only_segment(
             segment, INSPECT_GIT, cwd, hook_io.hook_charter(cwd)
