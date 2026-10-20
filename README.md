@@ -228,6 +228,8 @@ One row per key the two readers accept: what the key governs, then what goes the
 | `operator_signing_keys` | `.claude/daedalus/config.json` | Reserved for the key fingerprints allowed to sign merges; no check reads it yet | list of strings | Non-empty strings | `[]` | `["ABCD1234EF567890"]` |
 | `max_concurrent_builders` | `.claude/daedalus/config.json` | How many coding agents a parallel stage runs at once, and the cap on the plan width the plan validator prints (0072) | integer | A whole number of at least 1; `true` and `false` are refused | `5` | `3` |
 | `audit_retention_days` | `.claude/daedalus/config.json` | How many days a session's audit log is kept after its last record. When a new session starts writing, older logs are deleted, each named with its final record in the new session's own log. A log named on a train summary's `Session` line, the log of a train not yet merged, and the current session's log are never deleted (issue 50) | integer or null | A whole number of at least 90, or `null` | `null`: every log is kept | `365` |
+| `audit_round_budget` | `.claude/daedalus/config.json` | How many audit rounds a Build Train runs on its own. A rejected round continues while each round's findings shrink and no new high or critical finding appears; once the rounds used reach this number, the train stops and asks the operator (0109) | integer | A whole number from 1 to 10; `true` and `false` are refused | `5` | `3` |
+| `agent_models` | `.claude/daedalus/config.json` | Which model each catalog agent runs on, in place of the `model:` line of its agent file; a model a skill is given for one run still comes first | object | Keys are agent names the catalog lists; values are `"sonnet"`, `"opus"`, `"haiku"` or `"fable"`; any other name or value is refused | `{}`: every agent runs on its agent file's model | `{"repo-coder": "sonnet"}` |
 <!-- end key reference -->
 
 ## Safety model
@@ -293,6 +295,7 @@ Daedalus/
 │   ├── checks/workspace_integrity.py # refuses writes into .git and the data folder
 │   ├── lib/__init__.py
 │   ├── lib/agent_files.py           # reads agent files and their hooks blocks
+│   ├── lib/agent_models.py          # the model each agent runs on: override, config, agent file
 │   ├── lib/audit.py                 # hash-chained append, redaction
 │   ├── lib/audit_proof.py           # the hooks-live and approved-verdict proofs
 │   ├── lib/config.py                # config.json loading and validation

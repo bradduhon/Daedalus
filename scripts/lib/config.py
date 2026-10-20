@@ -8,11 +8,16 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from lib.agent_models import MODELS
 from lib.audit import check_project_data_dir
+from lib.train_scope import KNOWN_AGENTS
 
 POLICY_ENGINES = ("cfn-guard", "conftest")
 # 0072: how many coders a parallel stage runs at once when the config names no number.
 DEFAULT_MAX_CONCURRENT_BUILDERS = 5
+# 0109: audit rounds a train runs before the verdict step escalates on budget.
+DEFAULT_AUDIT_ROUND_BUDGET = 5
+AUDIT_ROUND_BUDGET_RANGE = (1, 10)
 # AU-11, AU-6: a declared audit retention keeps at least this many days of session logs.
 AUDIT_RETENTION_FLOOR_DAYS = 90
 LEDGER_FORMATS = ("markdown-table-row", "heading-entry")
@@ -55,6 +60,8 @@ class Config:
     operator_signing_keys: tuple[str, ...] = field(default_factory=tuple)
     max_concurrent_builders: int = DEFAULT_MAX_CONCURRENT_BUILDERS
     audit_retention_days: int | None = None
+    audit_round_budget: int = DEFAULT_AUDIT_ROUND_BUDGET
+    agent_models: dict[str, str] = field(default_factory=dict)
 
 
 def _require_str(raw: dict[str, object], key: str, where: str) -> str:
@@ -103,6 +110,45 @@ def _retention_days(raw: dict[str, object]) -> int | None:
             f"{AUDIT_RETENTION_FLOOR_DAYS} or more, or to null to keep every audit log."
         )
     return value
+
+
+def _round_budget(raw: dict[str, object]) -> int:
+    # 0109: a whole number in range; bool is refused, as _max_builders refuses it.
+    low, high = AUDIT_ROUND_BUDGET_RANGE
+    value = raw.get("audit_round_budget", DEFAULT_AUDIT_ROUND_BUDGET)
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+        raise ConfigError(
+            f"config.json audit_round_budget must be a whole number from {low} to {high} "
+            f"(got {value!r}). Next: set audit_round_budget to {low} to {high}, or remove it "
+            f"to allow {DEFAULT_AUDIT_ROUND_BUDGET} rounds."
+        )
+    return value
+
+
+def _agent_models(raw: dict[str, object]) -> dict[str, str]:
+    # spec 4: names come from agents/*.md through KNOWN_AGENTS, so no name is hard-coded here.
+    value = raw.get("agent_models")
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigError(
+            "config.json agent_models must be an object. "
+            'Next: write agent_models as {"<agent>": "<model>"}, or remove it.'
+        )
+    agents = KNOWN_AGENTS - {"main"}
+    for name, model in value.items():
+        if name not in agents:
+            raise ConfigError(
+                f"config.json agent_models names {name!r}, which is not a catalog agent. "
+                "Next: key agent_models by an agent name the catalog lists, one of "
+                f"{', '.join(sorted(agents))}."
+            )
+        if model not in MODELS:
+            raise ConfigError(
+                f"config.json agent_models.{name} is {model!r}. "
+                f"Next: set agent_models.{name} to one of {', '.join(MODELS)}."
+            )
+    return {str(name): str(model) for name, model in value.items()}
 
 
 def _ledger(raw: object) -> LedgerDecl:
@@ -213,4 +259,6 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
         operator_signing_keys=_signing_keys(raw),
         max_concurrent_builders=_max_builders(raw),
         audit_retention_days=_retention_days(raw),
+        audit_round_budget=_round_budget(raw),
+        agent_models=_agent_models(raw),
     )

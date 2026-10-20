@@ -11,7 +11,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import agent_files  # noqa: E402
+from lib import agent_files, agent_models  # noqa: E402
+from lib.audit import DataDirError  # noqa: E402
+from lib.config import Config, ConfigError, load_config  # noqa: E402
 
 AGENTS_DIR = Path(__file__).resolve().parents[1] / "agents"
 
@@ -30,16 +32,20 @@ def job(description: str) -> str:
     return f"{head}." if sep else description
 
 
-def table(agents_dir: Path) -> str:
+def table(agents_dir: Path, config: Config | None = None) -> str:
+    # spec 4, pin C2 -> C1: with a config the Model cell is the effective model, else the file's.
     rows = [
         "| Agent | Shape | Model | Tools | Job | Reply lines | Phases |",
         "|---|---|---|---|---|---|---|",
     ]
     for name, agent in sorted(agent_files.load_all(agents_dir).items()):
+        model = agent.model
+        if config is not None:
+            model = agent_models.resolve(name, config, agents_dir=agents_dir)
         cells = (
             name,
             agent.shape,
-            agent.model,
+            model,
             ", ".join(sorted(agent.tools)),
             job(agent.description),
             "; ".join(f"`{line}`" for line in agent.status_lines),
@@ -49,7 +55,15 @@ def table(agents_dir: Path) -> str:
     return "\n".join(rows) + "\n"
 
 
-COMMANDS: dict[str, Callable[[Path], str]] = {"matrix": matrix, "table": table}
+def _table(args: argparse.Namespace) -> str:
+    config = load_config(cwd=str(args.repo.resolve())) if args.repo is not None else None
+    return table(args.agents_dir, config)
+
+
+COMMANDS: dict[str, Callable[[argparse.Namespace], str]] = {
+    "matrix": lambda args: matrix(args.agents_dir),
+    "table": _table,
+}
 
 
 def main(argv: list[str]) -> int:
@@ -58,10 +72,17 @@ def main(argv: list[str]) -> int:
     for name in COMMANDS:
         command = commands.add_parser(name)
         command.add_argument("--agents-dir", type=Path, default=AGENTS_DIR)
+    # spec 4: --repo reads that project's config, so the Model column shows agent_models.
+    commands.choices["table"].add_argument("--repo", type=Path)
     args = parser.parse_args(argv)
     try:
-        out = COMMANDS[args.command](args.agents_dir)
-    except agent_files.AgentFileError as exc:
+        out = COMMANDS[args.command](args)
+    except (
+        agent_files.AgentFileError,
+        agent_models.AgentModelError,
+        ConfigError,
+        DataDirError,
+    ) as exc:
         print(exc, file=sys.stderr)
         return 1
     except Exception as exc:  # noqa: BLE001

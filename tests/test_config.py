@@ -193,6 +193,65 @@ def test_audit_retention_refuses_below_the_floor_or_off_type(
     assert "Next: set it to 90 or more, or to null to keep every audit log." in text
 
 
+def _load(project_data: Path, doc: dict[str, object]) -> Config:
+    (project_data / "config.json").write_text(json.dumps(doc))
+    return load_config(str(project_data.parents[1]))
+
+
+def test_audit_round_budget_defaults_to_five(project_data: Path) -> None:
+    # 0109: an absent key allows five audit rounds.
+    assert Config().audit_round_budget == 5
+    assert _load(project_data, {}).audit_round_budget == 5
+    assert _load(project_data, {"audit_round_budget": 1}).audit_round_budget == 1
+    assert _load(project_data, {"audit_round_budget": 10}).audit_round_budget == 10
+
+
+@pytest.mark.parametrize("value", [0, 11, -1, True, False, 2.0, "3", None, [5]])
+def test_audit_round_budget_refuses_outside_one_to_ten(project_data: Path, value: object) -> None:
+    with pytest.raises(ConfigError) as info:
+        _load(project_data, {"audit_round_budget": value})
+    text = str(info.value)
+    assert "audit_round_budget must be a whole number from 1 to 10" in text
+    assert "Next: set audit_round_budget to 1 to 10, or remove it" in text
+
+
+def test_agent_models_absent_or_null_is_empty(project_data: Path) -> None:
+    # spec 4: with no map, every agent runs on its agent file's model.
+    assert Config().agent_models == {}
+    assert _load(project_data, {}).agent_models == {}
+    assert _load(project_data, {"agent_models": None}).agent_models == {}
+
+
+def test_agent_models_reads_a_valid_map(project_data: Path) -> None:
+    doc = {"agent_models": {"repo-coder": "sonnet", "planner": "fable", "web-researcher": "haiku"}}
+    assert _load(project_data, doc).agent_models == doc["agent_models"]
+
+
+@pytest.mark.parametrize("name", ["mystery", "main", "daedalus:planner", ""])
+def test_agent_models_refuses_an_unknown_agent(project_data: Path, name: str) -> None:
+    with pytest.raises(ConfigError) as info:
+        _load(project_data, {"agent_models": {name: "opus"}})
+    text = str(info.value)
+    assert f"agent_models names {name!r}, which is not a catalog agent" in text
+    assert "Next: key agent_models by an agent name the catalog lists, one of " in text
+    assert "repo-coder" in text
+
+
+@pytest.mark.parametrize("model", ["gpt-4", "Opus", "inherit", "", None, 1])
+def test_agent_models_refuses_an_unknown_model(project_data: Path, model: object) -> None:
+    with pytest.raises(ConfigError) as info:
+        _load(project_data, {"agent_models": {"repo-coder": model}})
+    assert "Next: set agent_models.repo-coder to one of sonnet, opus, haiku, fable." in str(
+        info.value
+    )
+
+
+@pytest.mark.parametrize("value", [["repo-coder"], "opus", 3])
+def test_agent_models_refuses_anything_but_an_object(project_data: Path, value: object) -> None:
+    with pytest.raises(ConfigError, match="agent_models must be an object. Next: "):
+        _load(project_data, {"agent_models": value})
+
+
 def test_missing_data_dir_gives_empty_config(repo_cwd: Path) -> None:
     # 0020: no .claude/daedalus at all is still the empty config.
     assert load_config(str(repo_cwd)) == Config()

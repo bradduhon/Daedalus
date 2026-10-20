@@ -75,6 +75,19 @@ def test_reference_rows_name_their_file() -> None:
         assert not _VERSION.search(" ".join(cells)), key
 
 
+def test_audit_round_budget_and_agent_models_rows() -> None:
+    # 0109, 0110, spec 4: both keys are generated rows in the config section, in that order.
+    keys = [key for key, file, _ in _rows() if file == CONFIG_FILE]
+    assert keys[-2:] == ["audit_round_budget", "agent_models"]
+    budget = KEY_ROWS[(CONFIG_FILE, "audit_round_budget")]
+    assert budget.kind == "integer" and budget.default == "`5`"
+    assert "from 1 to 10" in budget.values and "refused" in budget.values
+    models = KEY_ROWS[(CONFIG_FILE, "agent_models")]
+    assert models.kind == "object" and models.default.startswith("`{}`")
+    assert '`"sonnet"`, `"opus"`, `"haiku"` or `"fable"`' in models.values
+    assert models.example == '`{"repo-coder": "sonnet"}`'
+
+
 def test_reader_keys_follow_the_reader_dataclasses() -> None:
     # 0076: a field added to a reader adds a key, so the reference test sees it.
     from dataclasses import fields

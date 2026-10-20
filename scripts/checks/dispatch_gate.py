@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lib import dispatch_binding, hook_io, jail  # noqa: E402
+from lib.agent_models import MODELS  # noqa: E402
 from lib.train_scope import KNOWN_AGENTS  # noqa: E402
 
 TOOLS: frozenset[str] = dispatch_binding.DISPATCH_TOOLS | dispatch_binding.RESUME_TOOLS
@@ -26,6 +27,11 @@ R_NEVER_STARTED = (
     "the orchestrator starts no {agent}: a Build Train never pushes and runs one orchestrator "
     "(0001, 0060). Next: return the train to the main session; the operator runs the Push Train."
 )
+R_MODEL = (
+    "the orchestrator starts an agent only on " + ", ".join(MODELS) + " (spec 4). "
+    "Next: pass the model `daedalus_train.py model` prints, or leave model out so the agent "
+    "file's model applies."
+)
 
 
 def _start_reason(tool_input: dict[str, object]) -> str | None:
@@ -33,7 +39,10 @@ def _start_reason(tool_input: dict[str, object]) -> str | None:
     agent = jail.normalize_agent(raw)
     if agent == raw or agent not in KNOWN_AGENTS - {"main"}:
         return R_FOREIGN_AGENT
-    return R_NEVER_STARTED.format(agent=agent) if agent in NEVER_STARTED else None
+    if agent in NEVER_STARTED:
+        return R_NEVER_STARTED.format(agent=agent)
+    # spec 4, pin C2 -> C5: no model field is admitted; a present one is one of the four.
+    return R_MODEL if "model" in tool_input and tool_input["model"] not in MODELS else None
 
 
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:

@@ -1,0 +1,6 @@
+{
+  "dispatch_gate.R_MODEL": {
+    "failure": "spec 4: the orchestrator starts an agent on a model outside sonnet, opus, haiku and fable, so the run leaves the models the operator chose for the catalog",
+    "premise_test": "tests/test_checks_dispatch_gate.py::test_a_model_outside_the_four_is_refused"
+  }
+}

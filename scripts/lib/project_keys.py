@@ -6,8 +6,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 
+from lib.agent_models import MODELS
 from lib.config import (
     AUDIT_RETENTION_FLOOR_DAYS,
+    AUDIT_ROUND_BUDGET_RANGE,
+    DEFAULT_AUDIT_ROUND_BUDGET,
     LEDGER_FIELDS,
     Config,
     LedgerDecl,
@@ -55,6 +58,8 @@ def manifest_keys() -> tuple[str, ...]:
 def _json(value: object) -> object:
     if isinstance(value, tuple):
         return list(value)
+    if isinstance(value, dict):
+        return {str(k): _json(v) for k, v in value.items()}
     if value is None or isinstance(value, bool | int | str):
         return value
     raise TypeError(f"a reader default of type {type(value).__name__} has no JSON form")
@@ -311,6 +316,26 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"A whole number of at least {AUDIT_RETENTION_FLOOR_DAYS}, or `null`",
         "`null`: every log is kept",
         "`365`",
+    ),
+    (CONFIG_FILE, "audit_round_budget"): KeyRow(
+        "How many audit rounds a Build Train runs on its own. A rejected round continues while "
+        "each round's findings shrink and no new high or critical finding appears; once the "
+        "rounds used reach this number, the train stops and asks the operator (0109)",
+        "integer",
+        f"A whole number from {AUDIT_ROUND_BUDGET_RANGE[0]} to {AUDIT_ROUND_BUDGET_RANGE[1]}; "
+        "`true` and `false` are refused",
+        f"`{DEFAULT_AUDIT_ROUND_BUDGET}`",
+        "`3`",
+    ),
+    (CONFIG_FILE, "agent_models"): KeyRow(
+        "Which model each catalog agent runs on, in place of the `model:` line of its agent "
+        "file; a model a skill is given for one run still comes first",
+        "object",
+        "Keys are agent names the catalog lists; values are "
+        + ", ".join(f'`"{model}"`' for model in MODELS[:-1])
+        + f' or `"{MODELS[-1]}"`; any other name or value is refused',
+        "`{}`: every agent runs on its agent file's model",
+        '`{"repo-coder": "sonnet"}`',
     ),
 }
 REFERENCE_HEADER = (
