@@ -1329,7 +1329,7 @@ def _claude_real(search_path: str) -> str | None:
 
 
 def runs_claude(tokens: list[str], base: str) -> bool:
-    # issue 55: the command word, the word past wrappers, or node's script is claude by name or file.
+    # issue 55: the command word, the word past wrappers or node's script, by name or real file.
     stripped = _strip_wrappers(tokens, []) or []
     words = tokens[:1] + stripped[:1]
     if stripped and _base(stripped[0]) == "node":

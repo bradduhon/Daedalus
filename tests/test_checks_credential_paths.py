@@ -161,6 +161,47 @@ def test_grep_glob_beside_the_reply_key_is_allowed(tmp_path: Path) -> None:
     assert evaluate(HOOK, {**case, "cwd": str(repo), "agent_type": "security-auditor"}) is None
 
 
+@pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
+def test_brace_alternative_naming_a_store_is_refused(cred_home: Path, agent: str) -> None:
+    # issue 53: the shell spells out {.ssh,x}; a wildcard reading would skip the dot folder.
+    for command in (f"grep -rn key {cred_home}/{{.ssh,x}}", f"cat {cred_home}/{{x,.aws}}/config"):
+        case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
+        reason = evaluate(HOOK, {**case, "agent_type": agent})
+        assert reason is not None and "credential path" in reason, command
+
+
+@pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
+def test_brace_alternatives_beside_a_store_are_allowed(cred_home: Path, agent: str) -> None:
+    for command in (f"grep -rn key {cred_home}/{{x,y}}", f"cat {cred_home}/{{a,b}}/config"):
+        case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
+        assert evaluate(HOOK, {**case, "agent_type": agent}) is None, command
+
+
+def test_dotglob_spellings_open_a_wildcard_into_a_store(cred_home: Path) -> None:
+    # issue 53: bash and zsh spellings alike; without one, * skips the dot folder.
+    for command in ("cat ~/*/id_ed25519(D)", "setopt GLOB_DOTS && cat ~/*/id_ed25519"):
+        case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
+        reason = evaluate(HOOK, {**case, "agent_type": "security-auditor"})
+        assert reason is not None and "is a credential path" in reason, command
+    case = {"tool_name": "Bash", "tool_input": {"command": "cat ~/*/id_ed25519"}, "cwd": CWD}
+    assert evaluate(HOOK, {**case, "agent_type": "security-auditor"}) is None
+
+
+@pytest.mark.parametrize("glob", ["{reply-hmac.key,x}", "*.{md,key}", "{reply-hmac.key}"])
+def test_grep_brace_glob_naming_the_reply_key_is_refused(tmp_path: Path, glob: str) -> None:
+    # issue 53: each brace alternative is its own glob.
+    repo = _key_repo(tmp_path)
+    case = {"tool_name": "Grep", "tool_input": {"pattern": ".", "glob": glob}, "cwd": str(repo)}
+    reason = evaluate(HOOK, {**case, "agent_type": "security-auditor"})
+    assert reason is not None and "contains the train's reply key" in reason, glob
+
+
+def test_grep_brace_glob_beside_the_reply_key_is_allowed(tmp_path: Path) -> None:
+    repo = _key_repo(tmp_path)
+    case = {"tool_name": "Grep", "tool_input": {"pattern": ".", "glob": "*.{py,md}"}}
+    assert evaluate(HOOK, {**case, "cwd": str(repo), "agent_type": "security-auditor"}) is None
+
+
 def test_double_star_into_a_credential_store_refuses_without_dotglob(cred_home: Path) -> None:
     # spec 8: ** over a home store refuses before the dot check; only the reply key relaxes it.
     for command in (f"cat {cred_home}/**/credentials", "cat ~/**/id_ed25519"):
