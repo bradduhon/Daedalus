@@ -16,6 +16,7 @@ from lib.audit_proof import SUMMARY_DIR
 from lib.config import Config
 from lib.credential_paths import (
     CREDENTIAL_TOOLS,
+    R_BRACE_UNJUDGED,
     R_CREDENTIAL,
     R_CREDENTIAL_TREE,
     R_REPLY_KEY,
@@ -34,6 +35,7 @@ from lib.credential_paths import dotglob_on as _dotglob_on
 from lib.credential_paths import expand_word as _expand_word
 from lib.credential_paths import store_rest as _store_rest
 from lib.credential_paths import tilde as _tilde
+from lib.credential_paths import unjudged_root as _unjudged_root
 from lib.gh_policy import CONDUCTOR_GH, _push_reason, allowlist_applies, gh_reason
 from lib.ledger import LedgerError, resolve_ledger
 from lib.manifest import Manifest, ManifestError, extension_hit, path_hit
@@ -1515,6 +1517,10 @@ def _bash_credential_reason(
             return reason
     if unresolved:
         return R_CREDENTIAL_PARAM.format(path=unresolved)
+    # audit B4 round 3: an unexpanded brace word whose alternative starts its own path.
+    unjudged = next((w for s in segments for w in map(_clean, s) if _unjudged_root(w)), "")
+    if unjudged:
+        return R_BRACE_UNJUDGED.format(path=unjudged)
     for cand in relative:
         for base in bases:
             reason = hit(os.path.normpath(os.path.join(base, cand)))

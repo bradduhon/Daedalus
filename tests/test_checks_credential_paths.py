@@ -187,6 +187,104 @@ SEQUENCE_READS = (
 )
 
 
+RE_ROOTED_READS = (
+    "cat {{{home}/.ssh/id_rsa,x}}",
+    "cat {{$HOME/.ssh/id_rsa,x}}",
+    "cat {{~/.ssh/id_rsa,x}}",
+    "grep -rn key {{{home}/.ssh,x}}",
+)
+
+
+@pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
+@pytest.mark.parametrize("template", RE_ROOTED_READS)
+def test_re_rooted_brace_alternative_is_refused(cred_home: Path, agent: str, template: str) -> None:
+    # audit B4 round 3: bash expands braces before tilde and $HOME, so an alternative that
+    # begins with /, ~ or $HOME is its own root; the matcher joins it under cwd and misses.
+    command = template.format(home=cred_home)
+    case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
+    reason = evaluate(HOOK, {**case, "agent_type": agent})
+    assert reason is not None and "credential path" in reason, command
+
+
+@pytest.mark.parametrize("template", RE_ROOTED_READS)
+def test_main_re_rooted_brace_alternative_is_refused(cred_home: Path, template: str) -> None:
+    from lib.jail import decide as jail_decide
+
+    command = template.format(home=cred_home)
+    d = jail_decide(_b(None, command), CFG)
+    assert not d.allow and "credential path" in str(d.reason), command
+
+
+@pytest.mark.parametrize("agent", [None, *CREDENTIAL_AGENTS])
+def test_glob_tool_re_rooted_brace_alternative_is_refused(
+    cred_home: Path, agent: str | None
+) -> None:
+    from lib.jail import decide as jail_decide
+
+    judge = decide if agent else jail_decide
+    for pattern in (f"{{{cred_home}/.ssh,x}}/*", f"{{{cred_home}/.aws/credentials,x}}"):
+        d = judge(_cred(agent, "Glob", pattern=pattern), CFG)
+        assert not d.allow and "is a credential path" in str(d.reason), (agent, pattern)
+
+
+@pytest.mark.parametrize("agent", [None, *CREDENTIAL_AGENTS])
+def test_unexpanded_brace_with_a_rooted_alternative_is_refused(
+    cred_home: Path, agent: str | None
+) -> None:
+    # audit B4 round 3: past the cap or on a sequence, an alternative's own root is unjudged.
+    from lib.jail import decide as jail_decide
+
+    judge = decide if agent else jail_decide
+    many = ",".join("abcdefghijklmnopq")
+    for case in (
+        _cred(agent, "Bash", command=f"cat {{{many},{cred_home}/.ssh/id_rsa}}"),
+        _cred(agent, "Bash", command=f"cat {{x,{cred_home}/.s{{s..s}}h/id_rsa}}"),
+        _cred(agent, "Glob", pattern=f"{{{many},{cred_home}/.ssh}}/*"),
+    ):
+        d = judge(case, CFG)
+        reason = str(d.reason)
+        assert not d.allow and ("does not expand" in reason or "credential path" in reason), case
+    d = judge(_cred(agent, "Glob", pattern=f"{{x,{cred_home}/.s{{s..s}}h}}/*"), CFG)
+    assert not d.allow and "does not expand" in str(d.reason)
+
+
+# audit B4 round 3: the auditor's brace class table, each form against the store match.
+BRACE_CLASS_TABLE = [
+    ("alternation naming the store", "cat {home}/{{.ssh,x}}/id_rsa", True),
+    ("empty alternative", "cat {home}/.ssh{{,}}/id_rsa", True),
+    ("empty alternative first", "cat {home}/{{,.ssh}}/id_rsa", True),
+    ("alternation inside a component", "cat {home}/.s{{s,x}}h/id_rsa", True),
+    ("single-member group", "cat {home}/{{.ssh}}/id_rsa", True),
+    ("empty braces literal", "cat {home}/{{}}/id_rsa", False),
+    ("sequence with a step", "cat {home}/.{{s..s..1}}sh/id_rsa", True),
+    ("numeric sequence", "cat {home}/.ssh/id_rsa{{1..3}}", True),
+    ("sequence with a comma", "cat {home}/.{{s..s,x}}sh/id_rsa", False),
+    ("sequence nested in alternation", "cat {home}/{{x,.{{s..s}}sh}}/id_rsa", True),
+    ("alternation nested in alternation", "cat {home}/{{x,{{.ssh,y}}}}/id_rsa", True),
+    ("past the cap", "cat {home}/{{a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,{{.ssh,r}}}}/id_rsa", True),
+    ("brace with *", "cat {home}/{{.s*,x}}/id_rsa", True),
+    ("brace with ?", "cat {home}/{{.ss?,x}}/id_rsa", True),
+    ("brace with [...]", "cat {home}/{{.[s]sh,x}}/id_rsa", True),
+    ("brace with **", "cat {home}/{{**,x}}/id_rsa", True),
+    ("bash dotglob", "shopt -s dotglob; cat {home}/{{*,x}}/id_rsa", True),
+    ("GLOBIGNORE", "GLOBIGNORE=x; cat {home}/{{*,x}}/id_rsa", True),
+    ("zsh globdots", "setopt globdots; cat {home}/{{*,x}}/id_rsa", True),
+    ("zsh GLOB_DOTS", "setopt GLOB_DOTS; cat {home}/{{*,x}}/id_rsa", True),
+    ("zsh (D) qualifier", "cat {home}/{{*,x}}/id_rsa(D)", True),
+    ("bare * without dotglob", "cat {home}/{{*,x}}/id_rsa", False),
+    ("unclosed brace literal", "cat {home}/{{.ssh/id_rsa", False),
+    ("unclosed outer, closed inner", "cat {home}/{{x{{.ssh,y}}/id_rsa", False),
+]
+
+
+@pytest.mark.parametrize(("form", "template", "refused"), BRACE_CLASS_TABLE)
+def test_brace_class_table(cred_home: Path, form: str, template: str, refused: bool) -> None:
+    command = template.format(home=cred_home)
+    case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
+    reason = evaluate(HOOK, {**case, "agent_type": "security-auditor"})
+    assert (reason is not None) == refused, (form, command, reason)
+
+
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
 @pytest.mark.parametrize("template", SEQUENCE_READS)
 def test_sequence_brace_naming_a_store_is_refused(

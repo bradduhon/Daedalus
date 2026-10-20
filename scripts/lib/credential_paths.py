@@ -44,6 +44,11 @@ _HOME_ROOTED = ("/", "~", "$HOME", "${HOME")
 # issue 53: zsh's (D) qualifier; option names fold case and underscores (GLOB_DOTS, globdots).
 _DOTS_QUALIFIER = re.compile(r"\([^()\s]*D[^()\s]*\)")
 _DOTGLOB_WORDS = ("dotglob", "globignore", "globdots")
+_ROOTED_ALT = re.compile(r"[{,][/~$]")
+R_BRACE_UNJUDGED = (
+    "{path} has a brace group the jail does not expand (a sequence or more than 16 "
+    "alternatives) and an alternative that starts its own path. Next: name each path you need"
+)
 
 
 def dotglob_on(command: str) -> bool:
@@ -55,10 +60,15 @@ def dotglob_on(command: str) -> bool:
 def _brace_group(text: str) -> tuple[str, list[str], str] | None:
     # issue 53: the first {a,b} group as (prefix, alternatives, suffix); {x} opens as x, as rg
     # and glob tools read it, so a shell's literal {x} over-refuses; {} stays literal.
-    depth, start = 0, 0
+    depth, start, param = 0, 0, 0
     cuts: list[int] = []
     for i, char in enumerate(text):
-        if char == "{":
+        # audit B4 round 3: ${...} is a parameter, never a brace group, as in bash.
+        if param:
+            param += {"{": 1, "}": -1}.get(char, 0)
+        elif char == "{" and depth == 0 and text[i - 1 : i] == "$":
+            param = 1
+        elif char == "{":
             if depth == 0:
                 start, cuts = i, []
             depth += 1
@@ -111,6 +121,12 @@ def expand_braces(text: str) -> list[str] | None:
     return done
 
 
+def unjudged_root(text: str) -> bool:
+    # audit B4 round 3: a brace word the jail leaves unexpanded, one of whose alternatives
+    # starts its own path, so no anchor of the raw word reaches the store it names.
+    return expand_braces(text) is None and bool(_ROOTED_ALT.search(text))
+
+
 def credential_roots() -> list[str]:
     home = Path.home()
     return [os.path.realpath(home / rel) for rel in CREDENTIAL_DENY]
@@ -127,6 +143,12 @@ def tilde(text: str, home: str) -> str:
 
 
 def expand_word(word: str, env: dict[str, list[str]]) -> list[tuple[str, bool]]:
+    # audit B4 round 3: bash order, braces first, then tilde and parameters per alternative;
+    # an unexpanded brace word stays whole for the store match's * fallback.
+    return [x for alt in expand_braces(word) or [word] for x in _expand_alt(alt, env)]
+
+
+def _expand_alt(word: str, env: dict[str, list[str]]) -> list[tuple[str, bool]]:
     # spec 8: $name and ${name...} alike; each expansion carries whether a name was unknown.
     results: list[tuple[str, bool]] = [("", False)]
     pos = 0
@@ -157,7 +179,8 @@ def anchor(text: str, base: str) -> str | None:
 
 def _expand_home(token: str, cwd: str) -> str | None:
     # spec 8: quotes and backslashes are dropped; ~, $HOME and ${HOME...} expand to home.
-    text = expand_word(_UNQUOTE.sub("", token), {"HOME": [str(Path.home())]})[0][0]
+    # audit B4 round 3: a path argument is literal; only a Glob pattern's braces expand.
+    text = _expand_alt(_UNQUOTE.sub("", token), {"HOME": [str(Path.home())]})[0][0]
     return anchor(text, cwd)
 
 
@@ -165,9 +188,11 @@ def _candidates(tool: str, tool_input: dict[str, object], cwd: str) -> list[str]
     values = [str(tool_input.get(k) or "") for k in ("file_path", "notebook_path", "path")]
     pattern = str(tool_input.get("pattern") or "")
     if tool == "Glob" and pattern:
-        values.append(pattern if pattern.startswith(_HOME_ROOTED) else "")
         base = str(tool_input.get("path") or cwd)
-        values.append(os.path.join(base, pattern))
+        # audit B4 round 3: each brace alternative is rooted or joined under base on its own.
+        for alt in expand_braces(pattern) or [pattern]:
+            values.append(alt if alt.startswith(_HOME_ROOTED) else "")
+            values.append(os.path.join(base, alt))
     elif tool == "Grep" and pattern.startswith(_HOME_ROOTED):
         # spec 8: a Grep pattern is a regex; only an absolute or home-rooted one names a path.
         values.append(pattern)
@@ -281,6 +306,9 @@ def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
 def path_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | None:
     # 0023: path-argument tools; the jail judges Bash commands with its own shell model.
     roots = credential_roots()
+    pattern = str(tool_input.get("pattern") or "")
+    if tool == "Glob" and unjudged_root(pattern):
+        return R_BRACE_UNJUDGED.format(path=pattern)
     for raw in _candidates(tool, tool_input, cwd):
         target = _expand_home(raw, cwd)
         if target is None:
