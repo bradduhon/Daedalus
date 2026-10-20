@@ -195,6 +195,88 @@ def test_a_log_another_session_holds_is_kept(repo: Path) -> None:
     assert [r["session_id"] for r in rotation["rotated"]] == ["free"]
 
 
+def _unlink_fails(monkeypatch: pytest.MonkeyPatch, target: Path, error: OSError | None) -> None:
+    # issue 61: the target's unlink raises, or reports success and leaves the file in place.
+    real = Path.unlink
+
+    def unlink(self: Path, missing_ok: bool = False) -> None:
+        if self == target:
+            if error is not None:
+                raise error
+            return
+        real(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+
+
+def test_a_failed_unlink_is_recorded_with_errno_and_no_path(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _retain(repo, 90)
+    _old(repo, "stuck")
+    _old(repo, "free")
+    stuck = _log(repo, "stuck")
+    _unlink_fails(monkeypatch, stuck, PermissionError(13, "Permission denied", str(stuck)))
+    _append(repo, "new-1")
+    assert stuck.exists() and not _log(repo, "free").exists()
+    first, rotation, failed = _records(repo, "new-1")
+    assert rotation["event"] == audit.ROTATION_EVENT
+    assert failed["event"] == audit.ROTATION_FAILED_EVENT and failed["seq"] == 3
+    assert failed["prev_hash"] == rotation["hash"] and failed["session_id"] == "new-1"
+    assert failed["survivors"] == [
+        {"session_id": "stuck", "errno": 13, "strerror": "Permission denied"}
+    ]
+    assert str(repo) not in json.dumps(failed["survivors"])
+    ok, message = verify_lines(_log(repo, "new-1").read_text().splitlines())
+    assert ok, message
+
+
+def test_a_log_left_after_a_clean_unlink_is_named(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _retain(repo, 90)
+    _old(repo, "ghost")
+    _unlink_fails(monkeypatch, _log(repo, "ghost"), None)
+    _append(repo, "new-1")
+    failed = _records(repo, "new-1")[-1]
+    assert failed["event"] == audit.ROTATION_FAILED_EVENT
+    assert failed["survivors"] == [{"session_id": "ghost", "errno": None, "strerror": None}]
+
+
+def test_the_next_rotation_retries_a_survivor(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _retain(repo, 90)
+    tail = _old(repo, "stuck")
+    with monkeypatch.context() as patch:
+        _unlink_fails(patch, _log(repo, "stuck"), OSError(16, "Device or resource busy"))
+        _append(repo, "new-1")
+    assert _log(repo, "stuck").exists()
+    _append(repo, "new-2")
+    assert not _log(repo, "stuck").exists()
+    assert [r["event"] for r in _records(repo, "new-2")] == ["PreToolUse", audit.ROTATION_EVENT]
+    assert _records(repo, "new-2")[-1]["rotated"] == [
+        {"session_id": "stuck", "seq": 2, "hash": tail["hash"]}
+    ]
+
+
+def test_a_failed_record_write_reaches_the_caller(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # issue 61, AU-5: the failure record sits outside the silent catch-all.
+    _retain(repo, 90)
+    _old(repo, "stuck")
+    _unlink_fails(monkeypatch, _log(repo, "stuck"), PermissionError(13, "Permission denied"))
+    real = audit._chain_event
+
+    def chain(cwd: str, current: Path, event: str, **fields: object) -> None:
+        if event == audit.ROTATION_FAILED_EVENT:
+            raise audit.AuditLockError("lock held")
+        real(cwd, current, event, **fields)
+
+    monkeypatch.setattr(audit, "_chain_event", chain)
+    with pytest.raises(audit.AuditLockError):
+        _append(repo, "new-1")
+
+
 def test_a_refused_config_deletes_nothing_and_still_appends(repo: Path) -> None:
     _retain(repo, 30)
     _old(repo, "old-1")
