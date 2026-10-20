@@ -177,6 +177,50 @@ def test_brace_alternatives_beside_a_store_are_allowed(cred_home: Path, agent: s
         assert evaluate(HOOK, {**case, "agent_type": agent}) is None, command
 
 
+SEQUENCE_READS = ("cat {home}/.{{s..s}}sh/id_rsa", "cat ~/.{{a..z}}sh/config")
+
+
+@pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
+@pytest.mark.parametrize("template", SEQUENCE_READS)
+def test_sequence_brace_naming_a_store_is_refused(
+    cred_home: Path, agent: str, template: str
+) -> None:
+    # audit B4 round 1: bash expands {s..s} to s, so the read reaches ~/.ssh.
+    command = template.format(home=cred_home)
+    case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
+    reason = evaluate(HOOK, {**case, "agent_type": agent})
+    assert reason is not None and "is a credential path" in reason, command
+
+
+@pytest.mark.parametrize("template", SEQUENCE_READS)
+def test_main_sequence_brace_naming_a_store_is_refused(cred_home: Path, template: str) -> None:
+    from lib.jail import decide as jail_decide
+
+    command = template.format(home=cred_home)
+    d = jail_decide(_b(None, command), CFG)
+    assert not d.allow and "is a credential path" in str(d.reason), command
+
+
+@pytest.mark.parametrize("agent", [None, *CREDENTIAL_AGENTS])
+def test_glob_tool_sequence_brace_naming_a_store_is_refused(
+    cred_home: Path, agent: str | None
+) -> None:
+    from lib.jail import decide as jail_decide
+
+    judge = decide if agent else jail_decide
+    for pattern in (f"{cred_home}/.{{s..s}}sh/*", "~/.{a..z}ws/credentials"):
+        d = judge(_cred(agent, "Glob", pattern=pattern), CFG)
+        assert not d.allow and "is a credential path" in str(d.reason), (agent, pattern)
+
+
+def test_grep_sequence_glob_naming_the_reply_key_is_refused(tmp_path: Path) -> None:
+    repo = _key_repo(tmp_path)
+    tool_input = {"pattern": ".", "glob": "reply-hmac.{k..k}ey"}
+    case = {"tool_name": "Grep", "tool_input": tool_input, "cwd": str(repo)}
+    reason = evaluate(HOOK, {**case, "agent_type": "security-auditor"})
+    assert reason is not None and "contains the train's reply key" in reason
+
+
 def test_dotglob_spellings_open_a_wildcard_into_a_store(cred_home: Path) -> None:
     # issue 53: bash and zsh spellings alike; without one, * skips the dot folder.
     for command in ("cat ~/*/id_ed25519(D)", "setopt GLOB_DOTS && cat ~/*/id_ed25519"):

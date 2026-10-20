@@ -84,6 +84,9 @@ def expand_braces(text: str) -> list[str] | None:
             done.append(pending.pop(0))
         else:
             head, alts, tail = group
+            # audit B4 round 1: a {a..z} sequence is not modeled, so the caller reads it as *.
+            if len(alts) == 1 and ".." in alts[0]:
+                return None
             pending = [head + alt + tail for alt in alts] + pending[1:]
         if len(done) + len(pending) > _EXPANSION_CAP:
             return None
@@ -194,7 +197,7 @@ def store_rest(
     if glob and _GLOB_START.search(target):
         alts = expand_braces(target)
         if alts is None:
-            # issue 53: past the cap a brace reads as a * that also matches dot names.
+            # issue 53: past the cap or on a sequence, a brace reads as a * that matches dot names.
             return store_rest(_BRACE.sub("*", target), root, glob, True, dots_hide)
         if alts != [target]:
             return _widest([store_rest(a, root, glob, dotglob, dots_hide) for a in alts])
@@ -240,7 +243,7 @@ def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
     # SC-12: the Grep tool honors the data folder's `*` marker from above, so only a search
     # rooted inside .claude, or a glob that overrides the marker, can read the key.
     raw = glob if isinstance(glob, str) else ""
-    # issue 53: each brace alternative is its own glob; past the cap a brace reads as *.
+    # issue 53: each brace alternative is its own glob; past the cap or on a sequence, a brace is *.
     pats = (expand_braces(raw) or [_BRACE.sub("*", raw)]) if raw else []
     # SC-12: a leading / anchors an rg glob to the search root; the match ignores it.
     pats = [p.lstrip("/") for p in pats if p.lstrip("/")]
