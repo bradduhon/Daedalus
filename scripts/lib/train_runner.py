@@ -50,6 +50,7 @@ from lib.train_definition import (
     PER_UNIT,
     Definition,
     DefinitionError,
+    Origin,
 )
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -156,8 +157,27 @@ def reply_path(brief: Path) -> Path:
     return brief.parent.parent / "replies" / brief.name
 
 
-def _definition_file(plugin_root: Path, name: str) -> Path:
-    return plugin_root / "trains" / f"{name}.json"
+def _definition_file(root: Path, plugin_root: Path, name: str) -> tuple[Path, Origin]:
+    # issue 52, 0073: the manifest's trains_dir is searched before the plugin's own trains folder.
+    loaded = manifest.load(root)
+    folder = loaded.trains_dir if loaded is not None else None
+    if folder is not None:
+        path = root / folder / f"{name}.json"
+        if os.path.lexists(path):
+            if not path.resolve().is_relative_to(root.resolve()):
+                raise DefinitionError(
+                    f"the train definition {path} resolves outside the project {root}"
+                )
+            return path, "project"
+    return plugin_root / "trains" / f"{name}.json", "plugin"
+
+
+def _brief_base(session: Session) -> Path:
+    # spec 3.1: a plugin brief resolves from the plugin root, a project brief beside its definition.
+    path = session.defn.path.resolve()
+    return (
+        session.plugin_root if path.is_relative_to(session.plugin_root.resolve()) else path.parent
+    )
 
 
 def _loaded(state: dict[str, object]) -> Definition:
@@ -464,7 +484,7 @@ def _render(
 ) -> Path:
     sid = _text(stage, "id")
     told = _text(_obj(stage, "scope"), "told")
-    template = session.plugin_root / told
+    template = _brief_base(session) / told
     try:
         text = template.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
@@ -1047,15 +1067,17 @@ def start(cwd: Path, train: str, output: str | None, plugin_root: Path = PLUGIN_
                 "Next: pass a train name such as build."
             ],
         )
-    path = _definition_file(plugin_root, train)
+    root = project_root(cwd.resolve())
     try:
+        path, origin = _definition_file(root, plugin_root, train)
         defn = train_definition.load(path)
+    except manifest.ManifestError as exc:
+        return Outcome(EXIT_STOP, [str(exc)])
     except DefinitionError as exc:
         return Outcome(EXIT_STOP, [f"check 1: {exc}", DEFINITION_NEXT])
-    defects = train_definition.validate(defn, plugin_root, "plugin")
+    defects = train_definition.validate(defn, plugin_root, origin)
     if defects:
         return Outcome(EXIT_STOP, [*defects, DEFINITION_NEXT])
-    root = project_root(cwd.resolve())
     try:
         features = manifest.features(root)
         config = load_config(path=root / ".claude" / "daedalus" / "config.json")

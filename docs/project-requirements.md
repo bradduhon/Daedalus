@@ -34,6 +34,7 @@ Every file and setting daedalus reads, with the smallest example that works. `/d
 | `standards_sources` **(checked)** | Directories or files holding your rules. `kind` is `rules-dir`, `file` or `pack`. | The Standards Packet is empty and the auditor judges against the spec only; the doctor offers the baseline pack on an `OPT` line |
 | `policy` **(checked)** | Deterministic policy pack. `engine` is `cfn-guard` or `conftest`. daedalus ships no rules; the directory is yours. | No effect today; a later Daedalus release adds the deterministic gate for infrastructure diffs |
 | `operator_signing_keys` | Fingerprints allowed to sign merges. | No effect today; a later Daedalus release adds the merge-gate check that reads it |
+| `audit_retention_days` **(checked)** | Days a session's audit log is kept after its last record; a whole number of at least 90 (AU-11). When a new session writes its first record, each older log is deleted under its own lock, and one `AuditRotation` record in the new session's chain names every deleted session with its final seq and hash (AU-9(4)). A log named on a summary's `Session <id>:` line, a log changed since an unmerged train started, the current session's log, and a log another session holds are kept. Any read or parse error deletes nothing. | Every audit log is kept |
 
 ### Ledger formats
 
@@ -159,7 +160,11 @@ Minimal:
 [extend]
 useDefault = true
 ```
-The Push Train runs `gitleaks detect` over every commit on the train branch before it pushes, and stops without the binary.
+When `features.secrets_scan` is `true` in `service-manifest.json`, the Push Train runs `gitleaks detect` over every commit on the train branch before it pushes, and stops without the binary (0069-DAE-PLT). With the scan off, the default, the Push Train runs no scan and the doctor's gitleaks line is an `OPT` line.
+
+### Project train definitions
+
+When `service-manifest.json` sets `trains_dir` to a project-relative folder, a train named `<name>` is looked up first as `<trains_dir>/<name>.json`, then in the plugin's own `trains/` folder (0073-DAE-PLT). A project definition's brief templates resolve beside the definition file, and a definition whose real path leaves the project is refused.
 
 ### Coder write boundary
 

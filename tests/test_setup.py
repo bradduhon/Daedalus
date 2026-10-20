@@ -89,6 +89,8 @@ def test_setup_starter_files_carry_every_reader_key_at_its_default(repo_cwd: Pat
     assert loaded.forbidden_paths == () and loaded.forbidden_extensions == ()
     assert loaded.trains_dir is None and loaded.unit_test_cmd is None
     assert c_doc["max_concurrent_builders"] == 5
+    # issue 50: the starter keeps every audit log.
+    assert "audit_retention_days" in c_doc and c_doc["audit_retention_days"] is None
 
 
 def test_setup_starter_files_load_through_the_readers_at_their_defaults(repo_cwd: Path) -> None:

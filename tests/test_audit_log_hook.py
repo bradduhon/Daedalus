@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -136,3 +137,28 @@ def test_broken_install_is_silent_outside_a_train(
     loud = _run()
     assert loud.returncode == 0
     assert loud.stderr == "daedalus-audit: broken install\n"
+
+
+def test_hook_rotation_record_passes_the_chain_check(
+    run_script: Any, project_data: Path, hook_input: Any
+) -> None:
+    # issue 50, AU-9(4): the rotation record is chained, so verify_audit_chain.py passes on it.
+    write_train_marker(project_data.parent.parent)
+    old = hook_input(session_id="old-sess")
+    assert run_script("audit_log.py", old).returncode == 0
+    stamp = 1_000_000_000
+    os.utime(project_data / "audit" / "old-sess.jsonl", (stamp, stamp))
+    (project_data / "config.json").write_text(json.dumps({"audit_retention_days": 90}))
+    result = run_script("audit_log.py", hook_input(session_id="new-sess"))
+    assert result.returncode == 0 and result.stderr == ""
+    new = project_data / "audit" / "new-sess.jsonl"
+    events = [json.loads(line)["event"] for line in new.read_text().splitlines()]
+    assert events == ["PreToolUse", "AuditRotation"]
+    assert not (project_data / "audit" / "old-sess.jsonl").exists()
+    check = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "verify_audit_chain.py"), str(new)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert check.returncode == 0 and check.stdout.startswith("OK: 2 records, chain intact")

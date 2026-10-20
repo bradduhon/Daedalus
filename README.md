@@ -16,7 +16,7 @@ Daedalus is developed on Linux. macOS is untested.
 | Python | 3.12 or newer | Your system's package manager |
 | Claude Code | Developed against 2.1.280 | Claude Code's own install instructions |
 | git | any | Your system's package manager |
-| gitleaks, for the Push Train | any | https://github.com/gitleaks/gitleaks#installing |
+| gitleaks, for the Push Train's secret scan when the service manifest turns it on | any | https://github.com/gitleaks/gitleaks#installing |
 | gh, the GitHub CLI, for the Push Train | any | Install it, then run `gh auth login` |
 
 ## Install
@@ -32,6 +32,20 @@ Claude Code asks you to confirm the marketplace, then to pick a scope. Choose "I
     claude plugin install daedalus@daedalus
 
 Every Daedalus command acts on the repository you started Claude Code in.
+
+### Install from a local clone
+
+To run the code in your own clone of this repository instead of the published release (0095), add the clone as a path marketplace and install from it. The clone path is the one value to fill in:
+
+    claude plugin marketplace add /path/to/Daedalus
+
+    claude plugin install daedalus@daedalus
+
+The clone and the published marketplace both carry the marketplace name `daedalus`. If you added the published one before, remove it first with `claude plugin marketplace remove daedalus`. After the clone changes, update the marketplace and the plugin, then restart Claude Code so the new code loads:
+
+    claude plugin marketplace update daedalus
+
+    claude plugin update daedalus@daedalus
 
 ## First run
 
@@ -61,7 +75,7 @@ Then type the command and your task:
 
 ### Push Train
 
-The Push Train commits, scans for secrets with gitleaks, pushes, and opens the pull request for a finished Build Train. Your repository needs a GitHub remote named `origin`, and `gh` must be signed in to it. The conductor, the agent named pr-train-conductor, does the pushing. You review and merge.
+The Push Train commits, pushes, and opens the pull request for a finished Build Train. When `features.secrets_scan` is `true` in `service-manifest.json`, it scans the commits for secrets with gitleaks before the push. Your repository needs a GitHub remote named `origin`, and `gh` must be signed in to it. The conductor, the agent named pr-train-conductor, does the pushing. You review and merge.
 
     /daedalus:push-train
 
@@ -120,7 +134,7 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 | `<repo>/service-manifest.json` | You run `/daedalus:setup` and the file is missing | The starter manifest, with every feature off |
 | `<repo>/.claude/daedalus/config.json` | You run `/daedalus:setup` and the file is missing | The starter config, with every setting at its default |
 | `<repo>/.claude/daedalus/.gitignore` | A Build Train starts in the repository for the first time, or `/daedalus:setup` writes the config | Holds `*` so git ignores the whole directory |
-| `<repo>/.claude/daedalus/audit/<session_id>.jsonl` | Every session, while a train runs in that repository | The hash-chained audit log for that session |
+| `<repo>/.claude/daedalus/audit/<session_id>.jsonl` | Every session, while a train runs in that repository | The hash-chained audit log for that session; kept until `audit_retention_days` says otherwise |
 | `.claude/daedalus/ledger-locks/` in the repo that holds the ledger | A ledger entry is appended | Locks so two writers never change the ledger at once |
 | `<repo>/docs/.tmp/daedalus/` | A Build Train starts | Scratch files and the train summary, ignored by git |
 | `<repo>/.claude/daedalus/train.active` | A Build Train or Push Train starts | Marks a running train; removed when the train ends or stops |
@@ -165,10 +179,10 @@ One row per key the two readers accept. The service manifest is committed and sh
 | `jail_narrowing.forbidden_paths` | `service-manifest.json` | Paths in your project no coding agent may write, on top of the paths the jail always protects (0054) | A list of project-relative paths with forward slashes and no leading slash, `..` or glob characters; a trailing slash covers the whole folder | `[]` |
 | `jail_narrowing.forbidden_extensions` | `service-manifest.json` | File endings no coding agent may write (0054) | A list of endings that each start with a dot, such as `.pem` | `[]` |
 | `features.scope` | `service-manifest.json` | Whether a train treats the project as a git repository or as a plain folder (0074) | `"repository"`, `"folder"` or `null` | `null`: a git work tree is a repository, anything else is a plain folder |
-| `features.secrets_scan` | `service-manifest.json` | Reserved for a gitleaks scan of the commits a push sends; the reader checks the value, and no train step acts on it yet (0069) | `true` or `false` | `false` |
-| `features.scrub_file` | `service-manifest.json` | Reserved for a file of terms that every commit and pull request body a train makes is checked against; the reader checks the path, and no train step reads the file yet (0069) | A project-relative path, or `null` | `null`: nothing is checked |
+| `features.secrets_scan` | `service-manifest.json` | Turns on the Push Train's gitleaks scan of the commits a push sends; with the scan on, the Push Train stops when gitleaks is missing or finds a secret, and the doctor's gitleaks line is a `MISS` (0069) | `true` or `false` | `false`: no scan, and gitleaks need not be installed |
+| `features.scrub_file` | `service-manifest.json` | A file of terms, one per line, that the release step checks the release notes against; a hit stops the release and names how many terms it found, never the terms (0069) | A project-relative path, or `null` | `null`: nothing is checked |
 | `features.ledger` | `service-manifest.json` | Turns the decision ledger steps on or off (0069) | `true`: the ledger is used, and a train asks before creating one; `false`: no ledger step and no ledger question; `null` | `null`: a ledger the config declares or the probe finds is used, and none is created |
-| `trains_dir` | `service-manifest.json` | Reserved for the project folder that holds its own train definitions; the reader checks the path, and no train reads the folder yet (0073) | A project-relative folder path, or `null` | `null` |
+| `trains_dir` | `service-manifest.json` | The project folder that holds its own train definitions; a train is looked up there first, as `<trains_dir>/<name>.json`, and then in the plugin's own trains folder (0073) | A project-relative folder path, or `null` | `null`: only the plugin's trains are used |
 | `stack.unit_test_cmd` | `service-manifest.json` | The command that runs the project's unit tests; a coding agent may run it exactly as written, as one command (0073, 0098) | A non-empty command string, or `null` | `null`: no declared command |
 | `stack.typecheck_cmd` | `service-manifest.json` | The command that type-checks the project; a coding agent may run it exactly as written, as one command (0098) | A non-empty command string, or `null` | `null`: no declared command |
 | `stack.lint_cmd` | `service-manifest.json` | The command that lints the project; a coding agent may run it exactly as written, as one command (0098) | A non-empty command string, or `null` | `null`: no declared command |
@@ -188,6 +202,7 @@ One row per key the two readers accept. The service manifest is committed and sh
 | `standards_sources[].name` | `.claude/daedalus/config.json` | Which pack shipped with Daedalus to use (0019) | `"baseline"`, the one pack Daedalus ships | Required for a pack entry |
 | `operator_signing_keys` | `.claude/daedalus/config.json` | Reserved for the key fingerprints allowed to sign merges; no check reads it yet | A list of non-empty strings | `[]` |
 | `max_concurrent_builders` | `.claude/daedalus/config.json` | How many coding agents a parallel stage runs at once (0072) | A whole number of at least 1 | `5` |
+| `audit_retention_days` | `.claude/daedalus/config.json` | How many days a session's audit log is kept after its last record. When a new session starts writing, older logs are deleted, each named with its final record in the new session's own log. A log named on a train summary's `Session` line, the log of a train not yet merged, and the current session's log are never deleted (issue 50) | A whole number of at least 90, or `null` | `null`: every log is kept |
 <!-- end key reference -->
 
 ## Safety model

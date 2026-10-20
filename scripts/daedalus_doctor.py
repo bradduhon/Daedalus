@@ -47,8 +47,16 @@ ENABLEMENT = ".claude/settings.json"
 ENABLEMENT_NEXT = f"commit {ENABLEMENT}; it holds the enabledPlugins entry /plugin install wrote"
 # 0076: the setup skill writes whichever starter file is missing; the doctor never writes one.
 SETUP_NEXT = "run the Daedalus setup skill (/daedalus:setup) to write a starter {name}"
+# 0095: a local clone added as a marketplace caches under its marketplace name.
 CACHE_NAMING = (
-    "a --plugin-dir session uses daedalus-inline; a marketplace install uses daedalus-<marketplace>"
+    "a --plugin-dir session uses daedalus-inline; a marketplace install, the published one or a "
+    "local clone added with claude plugin marketplace add <clone path>, uses "
+    "daedalus-<marketplace>"
+)
+GITLEAKS_NEXT = "the Push Train scans commits with gitleaks; install it so the scan can run"
+SCAN_OFF_NEXT = (
+    "to scan pushes for secrets, set secrets_scan to true in the features object of "
+    "service-manifest.json, then install gitleaks"
 )
 
 
@@ -359,6 +367,35 @@ def _repo_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
     )
 
 
+def secrets_scan_on(repo: Path) -> bool:
+    # 0069, issue 52: the Push Train's gitleaks step runs only with this on; raises ManifestError.
+    loaded = load_manifest(repo)
+    return loaded is not None and loaded.features.secrets_scan
+
+
+def _gitleaks_check(repo: Path) -> tuple[bool, str]:
+    # 0069: a manifest the reader refuses counts as scan on, so a typo never hides a missing tool.
+    try:
+        needed = secrets_scan_on(repo)
+    except ManifestError:
+        needed = True
+    found = shutil.which("gitleaks") is not None
+    if needed or found:
+        return _check(found, "gitleaks on PATH", "not found", GITLEAKS_NEXT)
+    return _opt(False, "gitleaks on PATH", "not found, and the secret scan is off", SCAN_OFF_NEXT)
+
+
+def print_secrets_scan(repo: Path) -> int:
+    # 0069: the Push Train reads this one line instead of parsing the manifest itself.
+    try:
+        on = secrets_scan_on(repo)
+    except ManifestError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    print(f"secrets scan: {'on' if on else 'off'}")
+    return 0
+
+
 def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     yield _check(
         sys.version_info >= (3, 12),
@@ -372,12 +409,7 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     yield _cache_check()
     yield _plugin_root_check()
     yield from _framework_lines()
-    yield _check(
-        shutil.which("gitleaks") is not None,
-        "gitleaks on PATH",
-        "not found",
-        "the Push Train scans commits with gitleaks; install it so the scan can run",
-    )
+    yield _gitleaks_check(repo)
     yield from _gh_checks()
     yield from _repo_checks(repo, is_repo)
 
@@ -402,9 +434,16 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="print the plugin cache directory as one absolute path and exit",
     )
+    parser.add_argument(
+        "--print-secrets-scan",
+        action="store_true",
+        help="print whether the service manifest turns the Push Train's secret scan on, and exit",
+    )
     args = parser.parse_args(argv)
     if args.print_cache_dir:
         return print_cache_dir()
+    if args.print_secrets_scan:
+        return print_secrets_scan(Path(args.repo).resolve())
     all_ok = True
     for ok, line in checks(Path(args.repo).resolve()):
         print(line)

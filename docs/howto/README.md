@@ -235,7 +235,7 @@ With no argument it pushes the newest Build Train in `docs/.tmp/daedalus/`. To p
 The train stops, with a `Next:` line, when any of these fails:
 
 - You are not on the `daedalus/<train-id>` branch the summary names.
-- `gitleaks` is not installed. Install it (https://github.com/gitleaks/gitleaks#installing) and rerun; the train never pushes without the secret scan.
+- The service manifest turns the secret scan on (`features.secrets_scan` is `true`) and `gitleaks` is not installed. Install it (https://github.com/gitleaks/gitleaks#installing) and rerun; with the scan on, the train never pushes without it. With the scan off, the train neither runs nor needs gitleaks.
 - `gh auth status` fails. Run `gh auth login` and rerun; the conductor opens the pull request with gh.
 - The working tree has unstaged or untracked changes. Staged changes are fine; the conductor commits them.
 - This session's hooks are not writing the audit log. The train marks itself running before this check, since the log records only during a train. Run `/daedalus:doctor`.
@@ -244,7 +244,7 @@ The train stops, with a `Next:` line, when any of these fails:
 
 ### What the conductor does
 
-The pr-train-conductor agent commits any staged result, then scans the commits since the base with `gitleaks detect --redact`. It pushes the branch with `git push -u origin daedalus/<train-id>` and opens the pull request with the Build Train summary as its body. When a pull request for the branch is already open, it updates that body instead. The jail lets it push only a named branch to `origin`, never `main` or `master`, never a force push, and it cannot merge.
+The pr-train-conductor agent commits any staged result. With the secret scan on, it then scans the commits since the base with `gitleaks detect --redact`. It pushes the branch with `git push -u origin daedalus/<train-id>` and opens the pull request with the Build Train summary as its body. When a pull request for the branch is already open, it updates that body instead. The jail lets it push only a named branch to `origin`, never `main` or `master`, never a force push, and it cannot merge.
 
 Then it watches the GitHub Actions runs for the pushed commit and reports each conclusion. Only `success`, `skipped` and `neutral` let the train go on; every `skipped` or `neutral` result is named in your checklist, even when a later run succeeded. Any other conclusion, including `startup_failure` or one Daedalus does not know, stops the train: its log lines are added to the summary under `## CI` and shown to you. Fix the failure through `/daedalus:build-train`; the Push Train never fixes CI. The conductor cannot wait, so a run that has not started yet is not seen. Then the summary and the pull request body get the line `Deviation: CI not observed at push time`, and your checklist starts with `CI not observed; check the PR's checks before merging`.
 
@@ -276,6 +276,21 @@ To try a local checkout of Daedalus for one session instead of the installed plu
 
 Where it runs: any shell with the claude CLI on PATH. A `--plugin-dir` session uses the cache directory `daedalus-inline`; the marketplace install uses `daedalus-daedalus`.
 If it fails: `unknown option --plugin-dir` means the CLI is too old. Run `claude --version`.
+
+To keep a local checkout installed across sessions, with no published release involved (0095), add the checkout as a path marketplace and install from it. The checkout path is the one value to fill in. If the published marketplace is added, remove it first with `claude plugin marketplace remove daedalus`; both carry the marketplace name `daedalus`.
+
+    claude plugin marketplace add /path/to/Daedalus
+
+    claude plugin install daedalus@daedalus
+
+After the checkout changes, update the marketplace and the plugin, then restart Claude Code so the new code loads:
+
+    claude plugin marketplace update daedalus
+
+    claude plugin update daedalus@daedalus
+
+Where it runs: any shell with the claude CLI on PATH. The install uses the cache directory `daedalus-daedalus`, the same name as the published install, because the marketplace name is the same.
+If it fails: after the restart, run `/daedalus:doctor`; its `plugin root` line names the folder the running copy loads from.
 
 ## Sections added by later plans
 
