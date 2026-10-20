@@ -58,6 +58,20 @@ between Bash calls.
    Commit messages carry no Co-Authored-By or other attribution trailer.
    No shell redirects to files; write files with Write or Edit. `2>&1` and `>/dev/null` are
    accepted and unneeded, because the Bash tool already returns stderr.
+   - **Adversarial corpus** (spec 3.3): when your changed files include any path under
+     `scripts/checks/`, `scripts/lib/jail.py`, `scripts/lib/shell.py` or
+     `scripts/enforce_agent_jail.py` and your worktree holds `tests/adversarial/`, run
+     `cd <path> && python3 -m pytest tests/adversarial -q` before `[STATUS: COMPLETE]`, and end
+     the COMPLETE line with ` adversarial=pass` once it passes.
+   - **Audit tests** (0109): a fix brief names the auditor's failing tests by node id, with
+     their files under `<repo>/docs/.tmp/daedalus/<train-id>/audit/round<n>/`. Those files are
+     readable and runnable for you and never writable. Run them from your fix worktree with
+     `cd <path> && python3 -m pytest <absolute test file or node id> -q -p no:cacheprovider --rootdir <path>`;
+     the fix is done when they pass. End the COMPLETE line with ` audit_tests=pass` only after
+     that run passed in your worktree. A `Fix:` line in the brief is a suggestion you check
+     against the test. To keep a test that names a bypass class, copy it into
+     `tests/adversarial/` or the unit's own tests; the auditor's copy stays where it is.
+   - `pytest --basetemp` is refused; the default temp folder works.
 6. Finish with `[STATUS: COMPLETE]` listing branch name, packet_version, modified files,
    test results, and proposed ledger notes.
    In the ledger notes, name any new shared helper you created, any existing one you reused,
@@ -90,4 +104,4 @@ Your reply ends with exactly one of these, nothing after it.
 - `[STATUS: YIELD_CONTRACT] <mismatch>`
 - `[STATUS: YIELD_COMPLIANCE] <question>`
 - `[STATUS: YIELD_STANDARDS] <question>`
-- `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>`
+- `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>`, optionally followed by ` adversarial=pass` and then ` audit_tests=pass`

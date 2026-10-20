@@ -90,7 +90,7 @@ def test_only_the_orchestrator_may_start_and_resume_agents(tool: str) -> None:
 
 
 def test_tool_bound_judges_the_hook_alone() -> None:
-    assert evaluate(HOOK, _t("security-auditor", "Write")) == jail.R_TOOL
+    assert evaluate(HOOK, _t("verifier", "Write")) == jail.R_TOOL
     assert evaluate(HOOK, _t("nist-specialist", "Glob")) == jail.R_TOOL
     assert evaluate(HOOK, _t("web-researcher", "WebFetch")) is None
     assert evaluate(HOOK, _t("daedalus:repo-coder", "Edit")) is None
@@ -107,7 +107,7 @@ def test_tool_bound_fixture_decisions() -> None:
     deny = {"decision": "deny", "reason": jail.R_TOOL}
     assert run_script(HOOK, payload("Edit")) == allow
     assert run_script(HOOK, payload("WebFetch")) == deny
-    assert run_script(HOOK, payload("Write", agent="security-auditor")) == deny
+    assert run_script(HOOK, payload("Write", agent="verifier")) == deny
 
 
 def test_tool_bound_allows_tools_outside_its_tools() -> None:

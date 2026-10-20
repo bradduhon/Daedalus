@@ -32,7 +32,11 @@ READ_ONLY_CMDS = frozenset(
         "uniq",
     }
 )
-READ_ONLY_GIT = frozenset({"diff", "log", "show", "status", "rev-parse", "ls-files", "branch"})
+# spec 6: grep, worktree and merge-base pass only the read forms of their grammar rows.
+READ_ONLY_GIT = frozenset(
+    {"diff", "log", "show", "status", "rev-parse", "ls-files", "branch"}
+    | {"grep", "worktree", "merge-base"}
+)
 SPECIALIST_GIT = frozenset({"diff", "show", "log"})
 # M1: charter-docs git is add/commit/status/log/diff only (4.2); no merge, no worktree.
 CHARTER_DOCS_GIT = frozenset({"add", "commit", "status", "log", "diff"})

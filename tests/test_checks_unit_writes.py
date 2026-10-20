@@ -654,3 +654,38 @@ def test_unit_writes_malformed_input_denies() -> None:
 
 def test_unit_writes_internal_error_denies_and_names_the_hook() -> None:
     internal_error_denies(HOOK, payload("Bash", command="ls"))
+
+
+AUDIT_DIR = f"{CWD}/docs/.tmp/daedalus/20261015-120000/audit/round1"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"cd {WT} && python3 -m pytest {AUDIT_DIR}/test_scope_x.py -q -p no:cacheprovider"
+        f" --rootdir {WT}",
+        f"cd {WT} && python3 -m pytest {AUDIT_DIR}/test_scope_x.py::test_refused -q",
+        f"cat {AUDIT_DIR}/test_scope_x.py",
+        f"cat {AUDIT_DIR}/findings.txt",
+    ],
+)
+def test_coder_reads_and_runs_the_audit_tests(command: str) -> None:
+    # spec 3.2, 0109: a fix coder runs the auditor's tests from its worktree.
+    d = decide(_b("repo-coder", command), CFG)
+    assert d.allow, (command, d.reason)
+
+
+def test_coder_never_writes_the_audit_tests() -> None:
+    # spec 3.2: readable and runnable, never writable, by a coder.
+    target = f"{AUDIT_DIR}/test_scope_x.py"
+    for tool in ("Write", "Edit"):
+        assert evaluate(HOOK, _w("repo-coder", target, tool)) == jail.R_UNIT_OUTSIDE.format(target)
+    for command in (f"tee {target}", f"cp {WT}/a.py {target}", f"rm {target}"):
+        assert not decide(_b("repo-coder", command), CFG).allow, command
+
+
+def test_coder_basetemp_refusal_names_the_flag_the_agent_and_the_next_action() -> None:
+    # issue 56: the named reason, not a fixed one; the same text the read-only grammar gives.
+    reason = evaluate(HOOK, _b("repo-coder", f"cd {WT} && python3 -m pytest -q --basetemp=/tmp/x"))
+    assert reason == jail.R_BASETEMP == jail.R_BASETEMP_AGENT.format(agent="repo-coder")
+    assert "--basetemp" in reason and "repo-coder" in reason and "Next: drop --basetemp" in reason

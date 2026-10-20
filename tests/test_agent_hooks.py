@@ -142,12 +142,36 @@ def test_only_a_finder_may_carry_web() -> None:
 def test_only_a_producer_writes_and_only_a_finder_fetches() -> None:
     # 0044: the shape, not a hand list, says which agents may write files or reach the web.
     # spec 3.1: a shaper writes too; its shape list binds it to root_writes --touch scratch.
-    # 0060: a dispatcher writes briefs and the summary; its list binds it to scratch writes.
+    # 0060, 0109: a dispatcher writes scratch; a judge writes only through the audit class.
+    writes = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
     for name, agent in LOADED.items():
-        if agent.shape not in {"producer", "shaper", "dispatcher"}:
-            assert not agent.tools & {"Write", "Edit", "MultiEdit", "NotebookEdit"}, name
+        if agent.shape == "judge" and agent.tools & writes:
+            assert not agent.tools & {"MultiEdit", "NotebookEdit"}, name
+            hooks = [h for h in agent.hooks if h.script in {"root_writes", "unit_writes"}]
+            assert hooks == [Hook("root_writes", ("--touch", "audit"))], name
+        elif agent.shape not in {"producer", "shaper", "dispatcher"}:
+            assert not agent.tools & writes, name
         if agent.shape != "finder":
             assert not agent.tools & {"WebFetch", "WebSearch"}, name
+
+
+def test_only_the_auditor_writes_as_a_judge() -> None:
+    # 0109: the audit write class belongs to the security auditor; the verifier stays read-only.
+    judges = {n for n, a in LOADED.items() if a.shape == "judge"}
+    writers = {n for n in judges if LOADED[n].tools & {"Write", "Edit"}}
+    assert writers == {"security-auditor"}
+    assert "verifier" in judges and not _carried(LOADED["verifier"], _entry("root_writes"))
+
+
+def test_test_runner_grants_follow_the_two_judges() -> None:
+    # 0109, spec 5: the auditor runs audit tests, the verifier reruns a unit's tests.
+    runners = {
+        name: _flag_map(hook.flags).get("--test-runner")
+        for name, agent in LOADED.items()
+        for hook in agent.hooks
+        if hook.script == "read_only_bash" and "--test-runner" in _flag_map(hook.flags)
+    }
+    assert runners == {"security-auditor": {"audit"}, "verifier": {"unit"}}
 
 
 def test_agent_files_match_the_parity_chains() -> None:

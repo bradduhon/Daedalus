@@ -57,7 +57,7 @@ class TestRound3WorkerGitGrammar:
             ("security-auditor", "git status --ignored"),
             ("security-auditor", "git ls-files --others"),
             ("security-auditor", "git rev-parse --git-path x"),
-            ("security-auditor", "git grep x"),
+            ("security-auditor", "git grep --open-files-in-pager x"),
             ("nist-specialist", "git log --exec x"),
             # Round 4: `git commit -am x` flipped to allowed by ruling (see TestRound4Breakage).
             ("charter-docs", "git commit -F /etc/passwd"),
