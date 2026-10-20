@@ -42,7 +42,7 @@ EXPECTED_PHASES = {
     "planner": ("plan",),
     "orchestrator": ("context", "clarification", "plan", "implementation", "audit"),
 }
-# 0060: the orchestrator alone starts and resumes agents; Task stays refused to it too.
+# 0060: the orchestrator alone dispatches; the dispatch hook refuses a Task call by name.
 DISPATCHER_TOOLS = {"orchestrator": {"Agent", "SendMessage"}}
 
 
@@ -114,7 +114,10 @@ def test_frontmatter_matches_rulings(name: str) -> None:
     assert tools & WORKER_DENIED_TOOLS == granted
     assert "memory" not in fm
     disallowed = _list(fm.get("disallowedTools", ""), path)
-    assert set(WORKER_DENIED_TOOLS) - granted <= disallowed
+    # Task is the Agent tool internal id; disallowing it strips a granted Agent (2026-10-20).
+    alias = {"Task"} if "Agent" in granted else set()
+    assert set(WORKER_DENIED_TOOLS) - granted - alias <= disallowed
+    assert not alias & disallowed, f"{path}: Task disallowed removes the granted Agent tool"
 
 
 def test_repo_coder_works_in_the_train_made_worktree() -> None:
