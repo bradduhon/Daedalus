@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib.project_root import project_root  # noqa: E402
+from lib.project_root import repo_refusal  # noqa: E402
 from lib.workspace import (  # noqa: E402
     LedgerQuestion,
     WorkspaceError,
@@ -67,13 +67,9 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     repo = args.repo.resolve()
     # pin C3 -> C4, issue 63: --repo is the project root of the working directory, or nothing runs.
-    root = project_root(Path.cwd()).resolve()
-    if repo != root:
-        print(
-            f"daedalus-workspace: --repo {args.repo} is not the project root of the working "
-            f"directory ({root}). Next: run the command from {args.repo}, or pass --repo {root}.",
-            file=sys.stderr,
-        )
+    refusal = repo_refusal(args.repo, Path.cwd())
+    if refusal is not None:
+        print(f"daedalus-workspace: {refusal}", file=sys.stderr)
         return 1
     try:
         if args.action == "create":

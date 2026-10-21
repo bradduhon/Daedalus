@@ -1,0 +1,10 @@
+{
+  "atomic.R_LINK": {
+    "failure": "issue 21: a script writes train state, a marker, release notes or a report through a symlink planted at the target, so the write lands outside the folder the script checked",
+    "premise_test": "tests/test_atomic.py::test_write_atomic_refuses_a_link_and_leaves_its_target"
+  },
+  "locks.R_LOCK_NOT_REGULAR": {
+    "failure": "issue 75: a coder plants a FIFO at a lock path, so the train state, bindings, audit, ledger or refresh lock open hangs every later hook and script call instead of refusing",
+    "premise_test": "tests/test_lock_fifo.py::test_open_lock_refuses_a_fifo"
+  }
+}

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import hmac
 import json
@@ -19,8 +18,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from lib import atomic, git, locks
 from lib.credential_paths import REPLY_KEY_NAME
-from lib.locks import bounded_flock
 from lib.project_root import in_git_work_tree
 from lib.project_root import project_root as _project_root
 from lib.redact import redact
@@ -37,8 +36,8 @@ _OPEN_USERINFO = re.compile(r"^[:/]*[^/\s\"']*@")
 _OPEN_PEM_TAIL = re.compile(r"\A.*?-----END [A-Z ]*PRIVATE KEY-----", re.S)
 _OPEN_TOKEN = re.compile(r"^[A-Za-z0-9._~+/=-]{16,}")
 LOCK_TIMEOUT_S = 5.0
-LOCK_POLL_S = 0.05
-_SESSION_ID = re.compile(r"[A-Za-z0-9_-]+")
+# W1.1: the one session id pattern; audit_report and the skipped-round record import it.
+SESSION_ID = re.compile(r"[A-Za-z0-9_-]+")
 
 
 class AuditCorruptError(RuntimeError):
@@ -85,8 +84,6 @@ class DataDirError(RuntimeError):
         self.kind = kind
 
 
-# 0010: env vars that would redirect git away from the cwd's own repository.
-_GIT_REDIRECT_ENV = ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 _SYMLINK_NEXT = (
     "Next: remove the symlink; the plugin data directory must be a real directory inside the repo."
 )
@@ -99,8 +96,8 @@ _MARKER_NEXT = "Next: restore the `*` marker in .claude/daedalus/.gitignore."
 _TRACKED: dict[str, list[str]] = {}
 
 
-def _git_env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if k not in _GIT_REDIRECT_ENV}
+# W1.1: the jail's git calls take the one scrubbed environment through this name.
+_git_env = git.env
 
 
 @lru_cache(maxsize=32)
@@ -109,11 +106,8 @@ def root_info(cwd: str) -> tuple[Path, str, str | None]:
     root = _project_root(Path(cwd))
     if not in_git_work_tree(root):
         return root, "cwd-fallback", "no git work tree at this folder"
-    cmd = ["git", "-C", str(root), "rev-parse", "--path-format=absolute", "--git-common-dir"]
     try:
-        out = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=2, env=_git_env(), check=False
-        )
+        out = git.run(["rev-parse", "--path-format=absolute", "--git-common-dir"], root, 2)
     except subprocess.TimeoutExpired:
         return root, "cwd-fallback", "git timed out after 2 s"
     except (OSError, subprocess.SubprocessError) as exc:
@@ -137,11 +131,8 @@ def project_data_dir(cwd: str) -> Path:
 def _tracked_files(root: Path) -> list[str]:
     key = str(root)
     if key not in _TRACKED:
-        cmd = ["git", "-C", key, "ls-files", "-z", "--", ".claude/daedalus"]
         try:
-            out = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=2, env=_git_env(), check=False
-            )
+            out = git.run(["ls-files", "-z", "--", ".claude/daedalus"], key, 2)
         except (OSError, subprocess.SubprocessError) as exc:
             raise DataDirError(
                 f"could not list tracked files under {root}/.claude/daedalus ({exc}). "
@@ -165,8 +156,10 @@ def check_project_data_dir(cwd: str) -> Path:
     data = root / ".claude" / "daedalus"
     # 0010: a symlinked component would redirect hook writes or config reads out of the repo.
     for part in (root / ".claude", data, data / "audit", data / ".gitignore", data / "config.json"):
-        if part.is_symlink():
-            raise DataDirError(f"{part} is a symlink. " + _SYMLINK_NEXT, "symlink")
+        try:
+            atomic.refuse_links(part)
+        except atomic.LinkRefused as exc:
+            raise DataDirError(f"{part} is a symlink. " + _SYMLINK_NEXT, "symlink") from exc
     # 0069, CM-7: no git call outside a work tree, so a plain folder's check runs none.
     if in_git_work_tree(root) and source == "git":
         tracked = _tracked_files(root)
@@ -193,16 +186,8 @@ def ensure_project_data_dir(cwd: str) -> Path:
     marker = data / ".gitignore"
     if not marker.exists():
         # 0010: written whole then linked in, so a concurrent hook never reads a partial marker.
-        tmp = data / f".gitignore.{os.getpid()}.tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write("*\n")
-        try:
-            os.link(tmp, marker)
-        except FileExistsError:
-            pass
-        finally:
-            tmp.unlink()
+        with suppress(FileExistsError):
+            atomic.create_once(marker, "*\n", 0o600)
         return check_project_data_dir(cwd)
     return data
 
@@ -268,7 +253,7 @@ def _require_cwd(cwd: Any) -> str:
 
 def _session_file(session_id: str | None, cwd: Any) -> tuple[Path, Path]:
     session = str(session_id or "unknown")
-    if not _SESSION_ID.fullmatch(session):
+    if not SESSION_ID.fullmatch(session):
         raise ValueError(
             f"session_id must match [A-Za-z0-9_-]+ (got {session!r}). Next: report the hook input."
         )
@@ -384,18 +369,17 @@ class AuditLockError(RuntimeError):
 @contextmanager
 def audit_lock(lock: Path) -> Iterator[None]:
     # issue 10: the one bounded lock the writer and every reader of a session log take.
-    try:
-        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    except OSError as exc:
-        raise AuditLockError(
-            f"cannot open the audit lock {lock} ({exc}). "
-            "Next: remove it from your own shell if it is a symlink, then retry."
-        ) from exc
-    with os.fdopen(fd, "w") as handle:
+    with ExitStack() as stack:
         try:
-            bounded_flock(handle, LOCK_TIMEOUT_S, LOCK_POLL_S, label="audit lock")
-        except RuntimeError as exc:
+            stack.enter_context(locks.locked(lock, LOCK_TIMEOUT_S, label="audit lock"))
+        except locks.LockHeld as exc:
             raise AuditLockError(str(exc)) from exc
+        except OSError as exc:
+            raise AuditLockError(
+                f"cannot open the audit lock {lock} ({exc}). "
+                "Next: remove it from your own shell if it is a symlink or not a regular file, "
+                "then retry."
+            ) from exc
         yield
 
 
@@ -555,11 +539,9 @@ def _rotation_targets(cwd: str, current: Path, days: int) -> list[Path]:
 
 def _try_lock(log: Path, stack: ExitStack) -> bool:
     # issue 50: never wait on a log another session holds; a held log stays for a later rotation.
-    fd = os.open(log.with_suffix(".lock"), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    handle = stack.enter_context(os.fdopen(fd, "w"))
     try:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+        stack.enter_context(locks.locked(log.with_suffix(".lock"), 0.0, label="rotation lock"))
+    except locks.LockHeld:
         return False
     return True
 

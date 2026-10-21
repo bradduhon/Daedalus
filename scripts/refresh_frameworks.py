@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Operator-run: compile the pinned framework caches into the plugin's machine cache (0026).
-
-Each adapter pins an upstream ref, writes its files under <cache>/frameworks/<family>/ and
-replaces its own entries in that family's manifest.json. The specialists only read the cache.
-"""
-
+# 0026: operator-run; compiles the pinned framework caches into the plugin's machine cache.
+# Each adapter pins an upstream ref, writes its files under <cache>/frameworks/<family>/ and
+# replaces its own entries in that family's manifest.json. The specialists only read the cache.
 from __future__ import annotations
 
 import argparse

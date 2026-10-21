@@ -2,16 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-import os
 import re
 import shlex
 import subprocess
-import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from lib import scrub, train_state
+from lib import atomic, git, scrub, train_state
 from lib.audit import DataDirError, cache_dir_or_probe, ensure_project_data_dir
 from lib.audit_proof import SUMMARY_DIR
 from lib.config import Config, ConfigError, load_config
@@ -62,14 +60,8 @@ def _confined(repo: Path, name: str) -> Path:
 
 def _run(repo: Path, *args: str, path: Path | None = None) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(
-            ["git", "-C", str(repo), *args],
-            capture_output=True,
-            text=True,
-            timeout=_GIT_TIMEOUT_S,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
+        return git.run(args, repo, _GIT_TIMEOUT_S)
+    except git.GitTimeout as exc:
         took = f"git {args[0]} {args[1]} timed out after {_GIT_TIMEOUT_S} s."
         if path is None:
             raise WorkspaceError(
@@ -229,21 +221,12 @@ def mark_train(repo: Path, train_id: str) -> Path:
             f"{marker.parent} is missing, so the audit hooks have not run here. "
             "Next: run the Daedalus health check (/daedalus:doctor)."
         )
-    if marker.is_symlink():
-        raise WorkspaceError(
-            f"{marker} is a symlink. Next: delete it from your own shell, then rerun."
-        )
     # 0023: temp file plus os.replace, so a reader never sees a partial id.
-    tmp: Path | None = None
     try:
-        fd, name = tempfile.mkstemp(prefix=f".{marker.name}.", dir=marker.parent)
-        tmp = Path(name)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(f"{train_id}\n")
-        os.replace(tmp, marker)
+        atomic.write_atomic(marker, f"{train_id}\n", 0o600)
+    except atomic.LinkRefused as exc:
+        raise WorkspaceError(str(exc)) from exc
     except OSError as exc:
-        if tmp is not None:
-            tmp.unlink(missing_ok=True)
         # 0023: a directory or an unwritable file at the marker is the operator's to remove.
         raise WorkspaceError(
             f"cannot write {marker} ({exc}). Next: remove {marker} from your own shell, then rerun."
@@ -953,18 +936,16 @@ def _scrub_check(repo: Path, text: str) -> None:
 
 def _write_notes(repo: Path, train_id: str, text: str) -> Path:
     folder = repo / SUMMARY_DIR / train_id
-    for part in (repo / "docs", repo / "docs" / ".tmp", repo / SUMMARY_DIR, folder):
-        if part.is_symlink():
-            raise WorkspaceError(
-                f"{part} is a symlink. Next: delete it from your own shell, then rerun."
-            )
+    try:
+        for part in (repo / "docs", repo / "docs" / ".tmp", repo / SUMMARY_DIR, folder):
+            atomic.refuse_links(part)
+    except atomic.LinkRefused as exc:
+        raise WorkspaceError(str(exc)) from exc
     _scratch(repo)
     notes = folder / RELEASE_NOTES
     try:
         folder.mkdir(exist_ok=True)
-        fd = os.open(notes, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
+        atomic.write_atomic(notes, text, 0o644)
     except OSError as exc:
         raise WorkspaceError(
             f"cannot write {notes} ({exc}). Next: remove anything in its place, then rerun."
