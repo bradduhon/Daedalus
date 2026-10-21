@@ -168,6 +168,62 @@ def test_chain_bases_follow_one_absolute_cd(command: str, want: list[str] | None
     assert shell.chain_bases(chain, "/c", jail.DIR_CHANGE_CMDS) == want
 
 
+def test_quote_walk_marks_spans_escapes_and_quote_marks() -> None:
+    # issue 76: one quote model; a backslash pairs outside single quotes only.
+    got = [(lex.text, lex.quote, lex.kind) for lex in shell.quote_walk('a\'b\\\'"c\\""\\d')]
+    assert got == [
+        ("a", "", shell.CHAR),
+        ("'", "'", shell.OPEN),
+        ("b", "'", shell.CHAR),
+        ("\\", "'", shell.CHAR),
+        ("'", "'", shell.CLOSE),
+        ('"', '"', shell.OPEN),
+        ("c", '"', shell.CHAR),
+        ('\\"', '"', shell.ESCAPE),
+        ('"', '"', shell.CLOSE),
+        ("\\d", "", shell.ESCAPE),
+    ]
+    assert [lex.at for lex in shell.quote_walk("x\\yz")] == [0, 1, 3]
+
+
+def test_no_quote_loop_outside_the_walker() -> None:
+    # issue 76: the six old loops read quote_walk; none keeps its own quote state.
+    tree = _tree("shell.py")
+    users = {"_scan", "_quote_spans", "_raw_segments", "_unquoted_expansion", "_raw_words"}
+    users |= {"_unsingled"}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in users:
+            source = ast.unparse(node)
+            assert "quote_walk(" in source, node.name
+            assert "quote = " not in source, node.name
+
+
+@pytest.mark.parametrize(
+    ("text", "spans", "segments", "words", "unsingled", "expands"),
+    [
+        ("a 'b c' d", "a Q d", ["a 'b c' d"], ["a", "'b c'", "d"], "a  d", False),
+        ('x "a\\"b" *', "x Q *", ['x "a\\"b" *'], ["x", '"a\\"b"', "*"], 'x a\\"b *', True),
+        ('"\\"" *', "Q *", ['"\\"" *'], ['"\\""', "*"], '\\" *', True),
+        ("a;b|'c;d'", "a;b|Q", ["a", "b", "'c;d'"], ["a;b|'c;d'"], "a;b|", False),
+        ("e\\ f '$x'", "e\\ f Q", ["e\\ f '$x'"], ["e\\ f", "'$x'"], "e\\ f ", False),
+        ("'unclosed", "Q", ["'unclosed"], ["'unclosed"], "", False),
+    ],
+)
+def test_walker_consumers_share_one_quote_model(
+    text: str,
+    spans: str,
+    segments: list[str],
+    words: list[str],
+    unsingled: str,
+    expands: bool,
+) -> None:
+    assert shell._quote_spans(text) == spans
+    assert shell._raw_segments(text) == segments
+    assert shell._raw_words(text) == words
+    assert shell._unsingled(text) == unsingled
+    assert shell._unquoted_expansion(text) is expands
+
+
 def test_git_sets_name_the_moved_lists() -> None:
     assert shell.GIT_SETS == {
         "coder": shell.CODER_GIT,

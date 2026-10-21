@@ -2253,3 +2253,36 @@ def test_git_read_rows_keep_worktree_writes_train_scoped(
         )
         == marked_repo
     )
+
+
+@pytest.mark.parametrize(
+    ("command", "target"),
+    [
+        ("mkfifo /tmp/p", "/tmp/p"),
+        ("mkfifo -m 600 /tmp/p", "/tmp/p"),
+        (f"mknod {CWD}/x.lock p", f"{CWD}/x.lock"),
+        ("shred -u -n 3 /tmp/f", "/tmp/f"),
+    ],
+)
+def test_fifo_plant_commands_are_coder_writes(command: str, target: str) -> None:
+    # issue 75: mkfifo, mknod and shred write their operands like any coder write command.
+    assert {"mkfifo", "mknod", "shred"} <= jail.CODER_WRITE_CMDS
+    d = hook_chain.decide(_b("repo-coder", command), CFG)
+    assert d.reason == jail.R_BASH_OUTSIDE.format(target), (command, d.reason)
+    inside = command.replace(target, f"{WT}/p")
+    assert hook_chain.decide(_b("repo-coder", inside), CFG).allow, inside
+
+
+def test_mknod_judges_only_its_name() -> None:
+    # issue 75: mknod NAME TYPE [MAJOR MINOR]; TYPE and the numbers are not paths.
+    assert jail._write_operands("mknod", ["-m", "600", "n", "c", "1", "3"]) == ["n"]
+    assert jail._write_operands("mkfifo", ["-m", "600", "a", "b"]) == ["a", "b"]
+
+
+def test_a_foreign_agent_cannot_plant_a_fifo_in_a_marked_repo(
+    marked_repo: Path, other_repo: Path
+) -> None:
+    # issue 75: the write target names the marked repo, and the data folder is refused outright.
+    for command in (f"mkfifo {marked_repo}/x", f"mkfifo {marked_repo}/.claude/daedalus/s.lock"):
+        d = decide(_cred("Explore", "Bash", str(other_repo), command=command), CFG)
+        assert not d.allow and not d.ask, command

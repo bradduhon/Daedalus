@@ -1,0 +1,210 @@
+# Copyright (c) 2026 Brad Duhon.
+# SPDX-License-Identifier: GPL-3.0-or-later
+# issue 76: the merged wrapper table and gh parser cover every row of the tables they replaced.
+from __future__ import annotations
+
+import ast
+import shlex
+
+import pytest
+from lib import gh_policy, jail, shell
+
+from tests.conftest import SCRIPTS_DIR
+
+# issue 76: lib/jail.py's wrapper tables at a83accf, copied verbatim.
+OLD_JAIL_RUN_WRAPPERS = frozenset(
+    {"sudo", "env", "nice", "nohup", "time", "command", "exec", "builtin", "timeout", "stdbuf"}
+)
+OLD_JAIL_WRAPPER_VALUES = {
+    "sudo": frozenset({"-u", "-g"}),
+    "nice": frozenset({"-n"}),
+    "env": frozenset({"-u"}),
+    "timeout": frozenset({"-s", "-k"}),
+}
+# issue 76: lib/shell.py's _WRAPPER_OPTS at a83accf, copied verbatim.
+OLD_SHELL_WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "sudo": (
+        frozenset({"-E", "-H", "-n", "-S", "-i", "-s", "-b", "-k", "-P"}),
+        frozenset({"-u", "-g", "-h", "-p", "-C", "-U", "-D", "-r", "-t"}),
+    ),
+    "doas": (frozenset({"-n", "-s"}), frozenset({"-u", "-C"})),
+    "env": (
+        frozenset({"-i", "--ignore-environment", "-0", "--null", "-"}),
+        frozenset({"-u", "--unset", "-C", "--chdir"}),
+    ),
+    "nice": (frozenset(), frozenset({"-n", "--adjustment"})),
+    "nohup": (frozenset(), frozenset()),
+    "stdbuf": (frozenset(), frozenset({"-i", "-o", "-e"})),
+    "timeout": (
+        frozenset({"--preserve-status", "--foreground", "-v", "--verbose"}),
+        frozenset({"-s", "--signal", "-k", "--kill-after"}),
+    ),
+    "exec": (frozenset({"-c", "-l"}), frozenset({"-a"})),
+    "command": (frozenset({"-p"}), frozenset()),
+    "builtin": (frozenset(), frozenset()),
+    "time": (frozenset({"-p", "-v", "--verbose", "--portability"}), frozenset({"-f", "-o"})),
+    "xargs": (
+        frozenset({"-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose", "-p", "-x"}),
+        frozenset({"-I", "-n", "-P", "-d", "-L", "-s", "-E", "-a", "--arg-file", "--delimiter"}),
+    ),
+}
+OLD_WORKER_WRAPPERS = frozenset(
+    {"env", "nice", "nohup", "stdbuf", "timeout", "exec", "eval", "xargs", "command"}
+    | {"builtin", "source", ".", "sh", "bash", "zsh", "dash", "ksh", "python", "python3"}
+    | {"node", "perl", "ruby", "sudo", "doas", "time"}
+)
+# issue 76: the gh value flags lib/gh_policy.py and lib/jail.py parsed at a83accf.
+OLD_GH_VALUE_FLAGS = frozenset({"-R", "--repo"})
+OLD_API_SHORT_VALUE = frozenset("XfFHqtp")
+OLD_API_LONG_VALUE = frozenset(
+    {"--method", "--raw-field", "--field", "--header", "--input", "--jq", "--template"}
+    | {"--preview", "--hostname", "--cache"}
+)
+OLD_PR_CREATE_SHORT_VALUE = frozenset("aBbFHlmprRTt")
+OLD_PR_CREATE_LONG_VALUE = frozenset(
+    {"--assignee", "--base", "--body", "--body-file", "--head", "--label", "--milestone"}
+    | {"--project", "--reviewer", "--repo", "--recover", "--template", "--title"}
+)
+# jail.py: (path, long, short) pairs its pr write checks read a value from.
+OLD_JAIL_PR_VALUES = (
+    (("pr", "create"), "--repo", "R"),
+    (("pr", "create"), "--head", "H"),
+    (("pr", "create"), "--body-file", "F"),
+    (("pr", "edit"), "--body-file", "F"),
+    (("pr", "comment"), "--body-file", "F"),
+    (("pr", "create"), "--body", "b"),
+    (("pr", "edit"), "--body", "b"),
+    (("pr", "comment"), "--body", "b"),
+    (("pr", "edit"), "--base", "B"),
+)
+
+
+def test_wrapper_table_is_a_superset_of_the_jail_table() -> None:
+    assert OLD_JAIL_RUN_WRAPPERS <= shell.WRAPPER_OPTS.keys()
+    for name, values in OLD_JAIL_WRAPPER_VALUES.items():
+        assert values <= shell.WRAPPER_OPTS[name][1], name
+
+
+def test_wrapper_table_is_a_superset_of_the_shell_table() -> None:
+    for name, (plain, valued) in OLD_SHELL_WRAPPER_OPTS.items():
+        assert plain <= shell.WRAPPER_OPTS[name][0], name
+        assert valued <= shell.WRAPPER_OPTS[name][1], name
+
+
+def test_stdbuf_has_its_row_and_worker_wrappers_are_unchanged() -> None:
+    assert {"-i", "-o", "-e", "--input", "--output", "--error"} <= shell.WRAPPER_OPTS["stdbuf"][1]
+    assert shell.WORKER_WRAPPERS == OLD_WORKER_WRAPPERS
+    assert shell.WRAPPER_OPTS.keys() <= shell.WORKER_WRAPPERS
+
+
+def _assigned(module: str) -> set[str]:
+    tree = ast.parse((SCRIPTS_DIR / "lib" / module).read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in tree.body:
+        targets = node.targets if isinstance(node, ast.Assign) else []
+        targets = [node.target] if isinstance(node, ast.AnnAssign) else targets
+        names |= {t.id for t in targets if isinstance(t, ast.Name)}
+    return names
+
+
+def test_one_wrapper_table_and_one_duration_regex() -> None:
+    # pin U2 -> U4: lib.shell owns them; lib.jail keeps no second copy.
+    assert not {"_DURATION", "_RUN_WRAPPERS", "_WRAPPER_VALUES"} & _assigned("jail.py")
+    assert not {"_WRAPPER_OPTS", "_DURATION"} & _assigned("shell.py")
+    assert jail.strip_wrappers is shell.strip_wrappers
+    for good in ("5", "1.5", "2m", "10s", "1h", "3d"):
+        assert shell.DURATION.fullmatch(good), good
+    for bad in ("KILL", "-5", "5x", ""):
+        assert not shell.DURATION.fullmatch(bad), bad
+
+
+@pytest.mark.parametrize(
+    ("command", "want"),
+    [
+        ("env -C /tmp rm -rf x", ["rm", "-rf", "x"]),
+        ("env --chdir /tmp rm x", ["rm", "x"]),
+        ("env --chdir=/tmp rm x", ["rm", "x"]),
+        ("env -C/tmp FOO=1 rm x", ["rm", "x"]),
+        ("timeout --signal KILL 5 rm x", ["rm", "x"]),
+        ("timeout --kill-after 1 5 rm x", ["rm", "x"]),
+        ("timeout -s KILL 1.5s rm x", ["rm", "x"]),
+        ("sudo -h host -p pw -C 3 -U u -D /tmp -r r -t t rm x", ["rm", "x"]),
+        ("sudo -u root -g wheel rm x", ["rm", "x"]),
+        ("stdbuf -o L -i 0 -e 0 rm x", ["rm", "x"]),
+        ("stdbuf -oL --error=0 rm x", ["rm", "x"]),
+        ("nice -n 5 nohup rm x", ["rm", "x"]),
+        ("nice -5 rm x", ["rm", "x"]),
+        ("command -v rm", []),
+        ("rm x", ["rm", "x"]),
+    ],
+)
+def test_strip_wrappers_reaches_the_wrapped_command(command: str, want: list[str]) -> None:
+    assert shell.strip_wrappers(shlex.split(command)) == want
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["env --frobnicate /tmp rm x", "timeout KILL rm x", "timeout", "stdbuf -Z L rm", "sudo -Z rm"],
+)
+def test_strip_wrappers_refuses_an_option_off_the_table(command: str) -> None:
+    assert shell.strip_wrappers(shlex.split(command)) is None
+
+
+@pytest.mark.parametrize(
+    ("command", "at"),
+    [
+        ("env -C /tmp rm -rf x", 3),
+        ("timeout --signal KILL 5 rm x", 4),
+        ("sudo -h host rm x", 3),
+        ("stdbuf -o L rm x", 3),
+        ("if ! env -u X rm x", 5),
+        ("FOO=1 time rm x", 2),
+        ("command -v rm", None),
+        ("env --frobnicate /tmp rm x", -1),
+    ],
+)
+def test_jail_command_at_follows_the_shared_stripper(command: str, at: int | None) -> None:
+    # issue 76: lib.jail finds the command word through shell.strip_wrappers.
+    assert jail._command_at(command.split(), set()) == at
+
+
+def test_gh_tables_are_supersets_of_both_old_tables() -> None:
+    short, long = gh_policy._GH_PERSISTENT
+    assert {f[1:] for f in OLD_GH_VALUE_FLAGS if not f.startswith("--")} <= short
+    assert {f for f in OLD_GH_VALUE_FLAGS if f.startswith("--")} <= long
+    api_short, api_long = gh_policy._GH_VALUES[("api",)]
+    assert OLD_API_SHORT_VALUE <= api_short and OLD_API_LONG_VALUE <= api_long
+    pr_short, pr_long = gh_policy._GH_VALUES[("pr", "create")]
+    assert OLD_PR_CREATE_SHORT_VALUE <= pr_short and OLD_PR_CREATE_LONG_VALUE <= pr_long
+    for path, (short, long) in gh_policy._GH_VALUES.items():
+        if path[0] in {"pr", "run", "issue"}:
+            assert "R" in short and "--repo" in long, path
+    for path, flag_long, flag_short in OLD_JAIL_PR_VALUES:
+        short, long = gh_policy._GH_VALUES[path]
+        assert flag_short in short and flag_long in long, (path, flag_long)
+
+
+@pytest.mark.parametrize(
+    ("command", "name", "value"),
+    [
+        ("gh pr create --head x", "--head", "x"),
+        ("gh pr create --head=x", "--head", "x"),
+        ("gh pr create -H x", "-H", "x"),
+        ("gh pr create -Hx", "-H", "x"),
+        ("gh pr create -H=x", "-H", "x"),
+        ("gh -R o/r pr view 3", "-R", "o/r"),
+        ("gh pr view 3 --repo=o/r", "--repo", "o/r"),
+        ("gh pr edit 3 -Fdocs/.tmp/b.md", "-F", "docs/.tmp/b.md"),
+        ("gh pr comment 3 -F /tmp/c.md", "-F", "/tmp/c.md"),
+        ("gh pr edit 3 -B main", "-B", "main"),
+        ("gh api -XDELETE repos/o/r", "-X", "DELETE"),
+        ("gh api --method DELETE repos/o/r", "--method", "DELETE"),
+        ("gh api -f title=x repos/o/r", "-f", "title=x"),
+    ],
+)
+def test_gh_parser_pairs_every_form_the_old_parsers_paired(
+    command: str, name: str, value: str
+) -> None:
+    parsed = gh_policy.gh_args(shlex.split(command)[1:])
+    assert parsed is not None
+    assert [f.value for f in parsed.flags if f.name == name] == [value]

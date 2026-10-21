@@ -111,7 +111,7 @@ WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     ),
 }
 # issue 76: the one duration regex, timeout's first operand.
-DURATION = re.compile(r"[\d.]+[smhd]?")
+DURATION: re.Pattern[str] = re.compile(r"[\d.]+[smhd]?")
 # 8.5 ruling A: first tokens a worker may never run, bar the allowlisted test runner forms.
 WORKER_WRAPPERS = frozenset(WRAPPER_OPTS) | frozenset(
     {"eval", "source", ".", "sh", "bash", "zsh", "dash", "ksh", "python", "python3"}
@@ -390,7 +390,7 @@ CHAR, ESCAPE, OPEN, CLOSE = "char", "escape", "open", "close"
 
 
 class Lexeme(NamedTuple):
-    # issue 76: one quote_walk step; quote is the span it sits in, a mark carries the one it toggles.
+    # issue 76: one quote_walk step; quote is its span, and a quote mark carries the one it toggles.
     at: int
     text: str
     quote: str

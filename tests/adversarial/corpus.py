@@ -17,6 +17,7 @@ CLASSES = (
     "env_expansion",
     "path_traversal",
     "nested_sessions",
+    "wrapper_options",
 )
 # spec 3.3: the agents whose Bash grammar is widest; credential reads judge them all.
 READERS = ("repo-coder", "security-auditor", "nist-specialist")
