@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from lib import jail
+from lib import gh_policy, jail
 from lib.config import Config
 from lib.shell import CONDUCTOR_GIT
 
@@ -473,8 +473,10 @@ def test_conductor_charter_pr_create_targets_only_the_charter_remote(tmp_path: P
     ):
         d = decide(_b(C, command), cfg)
         assert not d.allow and "Next:" in str(d.reason), command
+        # issue 76: a -dR bundle is refused by the gh parser before the repo rule reads it.
         if " pr create " in command:
-            assert d.reason == jail.R_CONDUCTOR_REPO, command
+            want = gh_policy.R_GH_BUNDLE if " -dR " in command else jail.R_CONDUCTOR_REPO
+            assert d.reason == want, command
     assert decide(_b(C, _pr_create("")), cfg).allow
 
 

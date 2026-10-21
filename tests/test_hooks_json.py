@@ -71,6 +71,15 @@ def test_pretooluse_mutating_matcher_runs_the_jail_synchronously() -> None:
     assert _load()["hooks"]["PreToolUse"] == jail
 
 
+def test_a_failed_jail_hook_blocks_the_call() -> None:
+    # pin U2 -> D9, 0122: documented minimum 2.1.295 (code.claude.com/docs/en/hooks, Command
+    # hook fields, fetched 2026-10-20); this branch closes the FIFO plant side only (issue 75).
+    hook = _jail_entries()[0]["hooks"][0]
+    assert hook["onFailure"] == "block"
+    others = [h for e in EXPECTED_EVENTS - {"PreToolUse"} for h in _commands(e)]
+    assert all("onFailure" not in h for h in others)
+
+
 def test_jail_matcher_covers_every_jail_policed_tool() -> None:
     matcher = _jail_entries()[0]["matcher"]
     policed = (

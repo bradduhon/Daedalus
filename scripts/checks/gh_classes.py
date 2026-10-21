@@ -18,7 +18,7 @@ PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
 
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
     conductor: bool = flags.conductor
-    agent = jail.normalize_agent(str(hook_input.get("agent_type") or "main"))
+    agent = hook_io.agent(hook_input)
     cwd = hook_io.text(hook_input, "cwd")
     command = hook_io.text(hook_io.tool_input(hook_input), "command")
     reason = jail._gh_gate(agent, cwd, command)
@@ -49,13 +49,7 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     return None
 
 
-def decide(hook_input: dict[str, object], flags: list[str]) -> hook_io.HookDecision:
-    return hook_io.evaluate(hook_input, flags, judge, TOOLS, PARSER)
-
-
-def main() -> int:
-    return hook_io.run(judge, TOOLS, PARSER)
-
+decide, main = hook_io.entrypoint(judge, TOOLS, PARSER)
 
 if __name__ == "__main__":
     sys.exit(main())

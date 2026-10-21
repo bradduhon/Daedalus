@@ -11,9 +11,11 @@ from lib import router, train_state
 from lib.config import Config
 from lib.gh_policy import (
     CONDUCTOR_GH,
+    R_GH_BUNDLE,
     allowlist_applies,
     classify,
     conductor_gh_refusal,
+    gh_args,
     gh_reason,
     verdict_reason,
 )
@@ -282,7 +284,6 @@ HEAD_NEXT = (
         "--head=feat/x",
         "-Hfeat/x",
         "-H=feat/x",
-        "-dH feat/x",
         f"--head o:{GATE_BRANCH}",
         f"--head {GATE_BRANCH} --head feat/x",
     ],
@@ -435,7 +436,7 @@ def test_allowlist_applies(plain_repo: Path) -> None:
         ("gh api repos/o/r/pulls", "default-deny"),
         ("gh api -X GET search/issues -f q=x", "default-deny"),
         ("gh api -X=DELETE repos/o/r", "delete"),
-        ("gh api -iXDELETE repos/o/r", "delete"),
+        ("gh api -iXDELETE repos/o/r", "default-deny"),
         ("gh api --method=delete repos/o/r", "delete"),
         ("gh api -X POST repos/o/r/merges", "merge"),
         ("gh api -f x=1 https://api.github.com/repos/o/r/rulesets", "admin"),
@@ -472,3 +473,57 @@ def test_conductor_gh_refusal_names_only_the_built_set() -> None:
     assert named == CONDUCTOR_GH
     for drift in ("status", "comment", "diff"):
         assert drift not in text
+
+
+@pytest.mark.parametrize(
+    ("command", "words", "flags"),
+    [
+        ("gh -R o/r pr view 3", ["pr", "view", "3"], [("-R", "o/r", False)]),
+        ("gh pr -R o/r merge 3", ["pr", "merge", "3"], [("-R", "o/r", False)]),
+        (
+            "gh pr create -Hfeat/x --title -H",
+            ["pr", "create"],
+            [("-H", "feat/x", True), ("--title", "-H", False)],
+        ),
+        ("gh pr create -H=x -d", ["pr", "create"], [("-H", "x", True), ("-d", None, False)]),
+        ("gh pr edit 3 --body-file=d.md", ["pr", "edit", "3"], [("--body-file", "d.md", False)]),
+        ("gh pr edit -Fd.md", ["pr", "edit"], [("-F", "d.md", True)]),
+        ("gh api -XDELETE repos/o/r", ["api", "repos/o/r"], [("-X", "DELETE", True)]),
+        ("gh api -X=DELETE repos/o/r", ["api", "repos/o/r"], [("-X", "DELETE", True)]),
+        ("gh pr view 3 -- -x", ["pr", "view", "3", "-x"], []),
+        ("gh pr list -L5 --web", ["pr", "list"], [("-L", "5", True), ("--web", None, False)]),
+        ("gh pr list --state open", ["pr", "list"], [("--state", "open", False)]),
+    ],
+)
+def test_gh_args_pairs_each_flag_with_its_value(
+    command: str, words: list[str], flags: list[tuple[str, str | None, bool]]
+) -> None:
+    # issue 76: one pflag parse; value flags come from the command path's table.
+    parsed = gh_args(shlex.split(command)[1:])
+    assert parsed is not None
+    assert parsed.words == words
+    assert [tuple(f) for f in parsed.flags] == flags
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr create -dH feat/x",
+        "gh api -iXDELETE repos/o/r",
+        "gh pr view -cw 3",
+        "gh -dR o/r pr view 3",
+        "gh pr create --head",
+        "gh pr create -H",
+        "gh -R",
+    ],
+)
+def test_gh_args_refuses_bundles_and_missing_values(command: str) -> None:
+    assert gh_args(shlex.split(command)[1:]) is None
+
+
+@pytest.mark.parametrize("agent", AGENTS)
+def test_bundled_short_flags_are_refused_in_a_train(train_repo: Path, agent: str) -> None:
+    # issue 76: a bundle the tables cannot split fails closed for every gated agent.
+    for command in ("gh pr view -cw 3", "gh pr create -dH feat/x --title t --body-file x.md"):
+        assert R_GH_BUNDLE in _reason(train_repo, agent, command), (agent, command)
+    assert classify(shlex.split("gh pr view -cw 3"))[0] == "default-deny"

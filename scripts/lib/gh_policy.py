@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 from lib import train_state, workspace
 from lib.audit import project_root
@@ -48,17 +49,72 @@ CLASS_NEXT = {
 }
 PUSH_NEXT = "push from your own shell, or through /daedalus:push-train"
 EDIT_NEXT = "edit only the body with --body-file; the operator changes anything else on the PR"
-_EDIT_BODY_LONG = frozenset({"--body", "--body-file"})
+_EDIT_BODY = frozenset({"--body", "--body-file", "-b", "-F"})
 ADMIN_COMMANDS = frozenset({"secret", "variable", "ruleset"})
 ADMIN_REPO = frozenset({"edit", "rename", "archive", "unarchive", "deploy-key"})
-_GH_VALUE_FLAGS = frozenset({"-R", "--repo"})
 # gh api: short flags that take a value, and their long forms.
 _API_SHORT_VALUE = frozenset("XfFHqtp")
 _API_LONG_VALUE = frozenset(
     {"--method", "--raw-field", "--field", "--header", "--input", "--jq", "--template"}
     | {"--preview", "--hostname", "--cache"}
 )
-_API_LONG = {"--method": "X", "--raw-field": "f", "--field": "F", "--input": "input"}
+# issue 76: pflag value flags per gh command path; a path off the table keeps -R and --repo.
+_GH_PERSISTENT = (frozenset("R"), frozenset({"--repo"}))
+_READ_LONG = frozenset({"--jq", "--template", "--json", "--repo"})
+_GH_VALUES: dict[tuple[str, ...], tuple[frozenset[str], frozenset[str]]] = {
+    ("api",): (_API_SHORT_VALUE, _API_LONG_VALUE),
+    ("pr", "create"): (_PR_CREATE_SHORT_VALUE, _PR_CREATE_LONG_VALUE),
+    ("pr", "edit"): (
+        frozenset("BbFmtR"),
+        frozenset({"--base", "--body", "--body-file", "--milestone", "--title", "--repo"})
+        | {"--add-assignee", "--add-label", "--add-project", "--add-reviewer"}
+        | {"--remove-assignee", "--remove-label", "--remove-project", "--remove-reviewer"},
+    ),
+    ("pr", "comment"): (frozenset("bFR"), frozenset({"--body", "--body-file", "--repo"})),
+    ("pr", "view"): (frozenset("qtR"), _READ_LONG),
+    ("pr", "list"): (
+        frozenset("AaBHlLqSstR"),
+        _READ_LONG
+        | {"--author", "--assignee", "--base", "--head", "--label", "--limit"}
+        | {"--search", "--state", "--app"},
+    ),
+    ("pr", "checks"): (frozenset("iqtR"), _READ_LONG | {"--interval"}),
+    ("run", "list"): (
+        frozenset("bceLqstuwR"),
+        _READ_LONG
+        | {"--branch", "--commit", "--event", "--limit", "--status", "--user"}
+        | {"--workflow", "--created"},
+    ),
+    ("run", "view"): (frozenset("ajqtR"), _READ_LONG | {"--attempt", "--job"}),
+    ("run", "watch"): (frozenset("iR"), frozenset({"--interval", "--repo"})),
+    ("issue", "view"): (frozenset("qtR"), _READ_LONG),
+    ("issue", "list"): (
+        frozenset("aAlLmsSqtR"),
+        _READ_LONG
+        | {"--assignee", "--author", "--label", "--limit", "--milestone"}
+        | {"--search", "--state", "--mention", "--app"},
+    ),
+    ("auth", "status"): (frozenset("h"), frozenset({"--hostname"})),
+}
+R_GH_BUNDLE = (
+    "gh flags the jail cannot pair with their values are refused: a bundle of short flags in "
+    "one word (such as -dH) or a value flag given no value (issue 76). "
+    "Next: give each short flag its own word and each value flag its value."
+)
+
+
+class GhFlag(NamedTuple):
+    # issue 76: name as given (--head or -H); value None for a boolean flag.
+    name: str
+    value: str | None
+    attached: bool  # a short flag's value inside its own word (-Hx, -H=x)
+
+
+class GhArgs(NamedTuple):
+    words: list[str]
+    flags: list[GhFlag]
+
+
 _MERGE_PATH = re.compile(r"(?:^|/)(?:pulls/[^/]+/merge|merges|merge-upstream)/?$")
 _ADMIN_PATH = re.compile(
     r"^repos/[^/]+/[^/]+/?$|^orgs/|^user(?:/|$)|/branches/[^/]+/protection|/rulesets?(?:/|$)"
@@ -79,63 +135,62 @@ _GIT_PUSH = re.compile(
 )
 
 
-def _positional(args: list[str]) -> list[str]:
+def gh_args(args: list[str]) -> GhArgs | None:
+    # issue 76: the one pflag parse of the words after gh; None for a bundle or a missing value.
     words: list[str] = []
+    flags: list[GhFlag] = []
+    short, long = _GH_PERSISTENT
     i = 0
     while i < len(args):
         arg = args[i]
+        nxt = args[i + 1] if i + 1 < len(args) else None
         if arg == "--":
-            return words + args[i + 1 :]
-        if arg in _GH_VALUE_FLAGS:
-            i += 2
-            continue
-        if not arg.startswith("-") or arg == "-":
+            words += args[i + 1 :]
+            break
+        if arg.startswith("--"):
+            name, eq, value = arg.partition("=")
+            if eq or name not in long:
+                flags.append(GhFlag(name, value if eq else None, False))
+            elif nxt is None:
+                return None
+            else:
+                flags.append(GhFlag(name, nxt, False))
+                i += 1
+        elif arg.startswith("-") and len(arg) > 1:
+            letter, rest = arg[:2], arg[2:]
+            if arg[1] not in short:
+                # issue 76: a bundle (-dH x) rests on the tables naming every boolean; refuse it.
+                if rest:
+                    return None
+                flags.append(GhFlag(letter, None, False))
+            elif rest:
+                flags.append(GhFlag(letter, rest.removeprefix("="), True))
+            elif nxt is None:
+                return None
+            else:
+                flags.append(GhFlag(letter, nxt, False))
+                i += 1
+        else:
             words.append(arg)
+            if len(words) <= 2:
+                short, long = _GH_VALUES.get(tuple(words), (short, long))
         i += 1
-    return words
+    return GhArgs(words, flags)
 
 
-def _api_parts(args: list[str]) -> tuple[str | None, list[str], bool, str]:
+def _api_parts(parsed: GhArgs) -> tuple[str | None, list[str], bool, str]:
     # Returns (explicit method, -f/-F values, --input given, endpoint).
     method: str | None = None
     fields: list[str] = []
     body = False
-    endpoint = ""
-
-    def take(key: str, value: str) -> None:
-        nonlocal method, body
-        if key == "X":
-            method = value.upper()
-        elif key in {"f", "F"}:
-            fields.append(value)
-        elif key == "input":
+    for flag in parsed.flags:
+        if flag.name in {"-X", "--method"}:
+            method = (flag.value or "").upper()
+        elif flag.name in {"-f", "-F", "--raw-field", "--field"}:
+            fields.append(flag.value or "")
+        elif flag.name == "--input":
             body = True
-
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        nxt = args[i + 1] if i + 1 < len(args) else ""
-        if arg.startswith("--"):
-            name, eq, value = arg.partition("=")
-            if name in _API_LONG_VALUE:
-                take(_API_LONG.get(name, ""), value if eq else nxt)
-                i += 1 if eq else 2
-                continue
-        elif arg.startswith("-") and len(arg) > 1:
-            # pflag bundles booleans (-i) with one trailing value flag (-XDELETE, -X=DELETE).
-            for idx, letter in enumerate(arg[1:], start=2):
-                if letter in _API_SHORT_VALUE:
-                    rest = arg[idx:].removeprefix("=")
-                    take(letter, rest or nxt)
-                    i += 1 if rest else 2
-                    break
-            else:
-                i += 1
-            continue
-        elif not endpoint:
-            endpoint = arg
-        i += 1
-    return method, fields, body, endpoint
+    return method, fields, body, (parsed.words[1:2] or [""])[0]
 
 
 def _endpoint(raw: str) -> str:
@@ -143,8 +198,8 @@ def _endpoint(raw: str) -> str:
     return path.lstrip("/")
 
 
-def _classify_api(args: list[str]) -> tuple[str, str]:
-    explicit, fields, body, raw = _api_parts(args)
+def _classify_api(parsed: GhArgs) -> tuple[str, str]:
+    explicit, fields, body, raw = _api_parts(parsed)
     method = explicit or ("POST" if fields or body else "GET")
     path = _endpoint(raw)
     detail = f"api {method} {path or '(no endpoint)'}"
@@ -170,35 +225,23 @@ def _classify_api(args: list[str]) -> tuple[str, str]:
     return "default-deny", detail
 
 
-def _body_only_edit(args: list[str]) -> bool:
+def _body_only_edit(parsed: GhArgs) -> bool:
     # K1: pr edit passes only with body flags and at most one PR selector.
-    if args[:2] != ["pr", "edit"]:
-        return False
-    selectors = 0
-    i = 2
-    while i < len(args):
-        arg = args[i]
-        if arg.startswith("--"):
-            name, eq, _ = arg.partition("=")
-            if name not in _EDIT_BODY_LONG:
-                return False
-            i += 1 if eq else 2
-        elif arg[:2] in {"-b", "-F"}:
-            i += 1 if len(arg) > 2 else 2
-        elif arg.startswith("-"):
-            return False
-        else:
-            selectors += 1
-            i += 1
-    return selectors <= 1
+    words, flags = parsed
+    return (
+        words[:2] == ["pr", "edit"] and len(words) <= 3 and all(f.name in _EDIT_BODY for f in flags)
+    )
 
 
 def classify(tokens: list[str]) -> tuple[str, str]:
     # 0028: merge, delete and admin are refused for everyone; everything off the list is denied.
     args = tokens[1:]
-    words = _positional(args)
+    parsed = gh_args(args)
+    if parsed is None:
+        return "default-deny", "(flags without their values)"
+    words = parsed.words
     if words[:1] == ["api"]:
-        return _classify_api(args[args.index("api") + 1 :])
+        return _classify_api(parsed)
     cmd, sub = (words + ["", ""])[:2]
     detail = " ".join(w for w in (cmd, sub) if w) or "(no subcommand)"
     if "merge" in cmd or "merge" in sub:
@@ -210,7 +253,7 @@ def classify(tokens: list[str]) -> tuple[str, str]:
         return "delete", detail
     if cmd in ADMIN_COMMANDS or (cmd == "repo" and sub in ADMIN_REPO):
         return "admin", detail
-    if (cmd, sub) == ("pr", "edit") and not _body_only_edit(args):
+    if (cmd, sub) == ("pr", "edit") and not _body_only_edit(parsed):
         return "default-deny", detail
     if (cmd, sub) in ALLOWED_0028:
         return "allow", detail
@@ -245,6 +288,8 @@ def _allowed(agent: str) -> frozenset[tuple[str, str]]:
 
 
 def _gh_reason(agent: str, tokens: list[str]) -> str | None:
+    if gh_args(tokens[1:]) is None:
+        return R_GH_BUNDLE
     klass, detail = classify(tokens)
     if klass == "allow" and tuple(detail.split()) in _allowed(agent):
         return None
@@ -337,41 +382,15 @@ def verdict_reason(cwd: str, what: str) -> str | None:
     return None if detail is None else R_VERDICT.format(what=what, branch=branch, detail=detail)
 
 
-def _pr_create_heads(args: list[str]) -> list[str]:
-    # pflag: value flags take the next word or the bundle's rest (-Hx, -H=x, -dH x).
-    heads: list[str] = []
-    i = 0
-    while i < len(args):
-        arg, nxt = args[i], args[i + 1] if i + 1 < len(args) else ""
-        if arg == "--":
-            break
-        if arg.startswith("--"):
-            name, eq, value = arg.partition("=")
-            if name == "--head":
-                heads.append(value if eq else nxt)
-            i += 2 if name in _PR_CREATE_LONG_VALUE and not eq else 1
-            continue
-        if arg.startswith("-") and len(arg) > 1:
-            step = 1
-            for idx, letter in enumerate(arg[1:], start=2):
-                if letter in _PR_CREATE_SHORT_VALUE:
-                    rest = arg[idx:].removeprefix("=")
-                    if letter == "H":
-                        heads.append(rest or nxt)
-                    step = 1 if rest else 2
-                    break
-            i += step
-            continue
-        i += 1
-    return heads
-
-
 def pr_create_reason(tokens: list[str], cwd: str) -> str | None:
     # spec 4.2: --head names only the marker's train branch, the tip the verdict covers.
+    parsed = gh_args(tokens[1:])
+    if parsed is None:
+        return R_GH_BUNDLE
     train = _active_train(cwd)
     if train is not None:
         branch = f"daedalus/{train}"
-        heads = _pr_create_heads(tokens[1:])
+        heads = [f.value or "" for f in parsed.flags if f.name in {"--head", "-H"}]
         if any(head != branch for head in heads):
             return R_PR_HEAD.format(branch=branch)
         if not heads and _current_branch(cwd) != branch:
