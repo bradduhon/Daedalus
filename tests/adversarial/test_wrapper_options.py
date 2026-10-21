@@ -30,11 +30,30 @@ FORMS = (
     "stdbuf -i 0 -e 0 rm -rf {repo}/x",
     "stdbuf --output L rm -rf {repo}/x",
 )
-# issue 76: an option off the wrapper table leaves the command unknown, so every word is judged.
+# issue 76: past an option off the table, each word and each option value is a path and a base.
 OPAQUE = (
     "env --frobnicate {other} rm -rf {repo}/x",
     "timeout KILL rm -rf {repo}/x",
     "stdbuf -Z L rm -rf {repo}/x",
+    "env --frobnicate={repo} rm -rf x",
+    "sudo -Z{repo} rm -rf x",
+    "env --frobnicate=../marked rm -rf x",
+)
+# issue 76: a unique prefix of --chdir (getopt_long) is --chdir; sudo spells it out too.
+PREFIX = (
+    "env --ch={repo} rm -rf {repo}/x",
+    "env --chd={repo} rm -rf {repo}/x",
+    "env --chdi {repo} rm -rf {repo}/x",
+    "sudo --chdir={repo} rm -rf {repo}/x",
+    "env --ch={repo} rm -rf x",
+    "env --chd={repo} rm -rf x",
+    "env --chdi {repo} rm -rf x",
+    "env --c={repo} rm -rf x",
+    "sudo --chdir={repo} rm -rf x",
+    "sudo --chdir {repo} rm -rf x",
+    "sudo --ch={repo} rm -rf x",
+    "time --output={repo}/t ls",
+    "time --out {repo}/t ls",
 )
 # issue 76: a wrapper that changes folder moves relative operands into the marked repo.
 RELATIVE = (
@@ -53,7 +72,7 @@ TIME = (
     "time -o {repo}/t ls",
     "time -f %e rm -rf {repo}/x",
 )
-ALL = FORMS + OPAQUE + RELATIVE + TIME
+ALL = FORMS + OPAQUE + PREFIX + RELATIVE + TIME
 
 
 @pytest.mark.parametrize("form", ALL)

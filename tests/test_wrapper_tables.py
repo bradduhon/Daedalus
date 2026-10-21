@@ -184,8 +184,50 @@ def test_unwrap_reports_the_options_it_passed() -> None:
         ("sudo", "-u", "root"),
         ("time", "-o", "t"),
     ]
-    assert {("env", "-C"), ("env", "--chdir"), ("sudo", "-D")} == shell.WRAPPER_CHDIR
-    assert ("time", "-o") in shell.WRAPPER_WRITES
+    chdir = {("env", "-C"), ("env", "--chdir"), ("sudo", "-D"), ("sudo", "--chdir")}
+    assert chdir == shell.WRAPPER_CHDIR
+    assert {("time", "-o"), ("time", "--output")} == shell.WRAPPER_WRITES
+
+
+@pytest.mark.parametrize(
+    ("command", "want"),
+    [
+        ("env --ch=/m rm", ("env", "--chdir", "/m")),
+        ("env --chd /m rm", ("env", "--chdir", "/m")),
+        ("env --c=/m rm", ("env", "--chdir", "/m")),
+        ("sudo --chdir=/m rm", ("sudo", "--chdir", "/m")),
+        ("sudo --ch /m rm", ("sudo", "--chdir", "/m")),
+        ("time --out=/t rm", ("time", "--output", "/t")),
+        ("timeout --sig=KILL 5 rm", ("timeout", "--signal", "KILL")),
+    ],
+)
+def test_a_unique_long_prefix_reads_as_its_option(command: str, want: tuple[str, ...]) -> None:
+    # issue 76: getopt_long takes any unique prefix, so the table matches one the same way.
+    tokens = shlex.split(command)
+    unwrapped = shell.unwrap(tokens)
+    assert unwrapped is not None and unwrapped[0] == ["rm"]
+    found = [(o.wrapper, o.option, tokens[o.at][len(o.prefix) :]) for o in unwrapped[1]]
+    assert found == [want]
+
+
+@pytest.mark.parametrize("command", ["xargs --n rm", "sudo --user root rm", "env --zz=/m rm"])
+def test_an_ambiguous_or_unknown_long_option_is_refused(command: str) -> None:
+    assert shell.strip_wrappers(shlex.split(command)) is None
+
+
+def test_opaque_values_take_the_value_inside_an_option_word() -> None:
+    # issue 76: --x=v, -Xv and -X=v carry a value that may name a folder.
+    words = ["env", "--zz=/m", "-Q/n", "-R=o", "rm", "x"]
+    assert jail._opaque_values(words, set(range(len(words)))) == [
+        "env",
+        "/m",
+        "/n",
+        "o",
+        "=o",
+        "rm",
+        "x",
+    ]
+    assert "/m/x" in jail._opaque_targets(words, set(range(len(words))), "/c")
 
 
 @pytest.mark.parametrize(

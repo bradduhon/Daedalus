@@ -1329,8 +1329,31 @@ def _command_at(
 
 
 def _opaque_words(clean: list[str], skip: set[int]) -> set[int]:
-    # issue 76: past an unknown wrapper option every word could be a path, so all are judged.
+    # issue 76: past an unknown wrapper option the command word is unknown; these words remain.
     return {i for i, word in enumerate(clean) if word and i not in skip}
+
+
+def _opaque_values(texts: list[str], indices: set[int]) -> list[str]:
+    # issue 76: each plain word, plus an option word's value (--x=v, -Xv, -X=v), as a path.
+    values: list[str] = []
+    for i in sorted(indices):
+        word = texts[i]
+        if not word.startswith("-"):
+            values.append(word)
+            continue
+        if "=" in word:
+            values.append(word.split("=", 1)[1])
+        if not word.startswith("--") and len(word) > 2:
+            values.append(word[2:])
+    return list(dict.fromkeys(v for v in values if v))
+
+
+def _opaque_targets(texts: list[str], indices: set[int], cwd: str) -> list[str]:
+    # issue 76: any value may be a folder the command moves to, so each is also a base.
+    values = _opaque_values(texts, indices)
+    bases = [cwd, *(b for b in (_anchor(v, cwd) for v in values) if b)]
+    found = (_anchor(v, base) for v in values for base in dict.fromkeys(bases))
+    return list(dict.fromkeys(t for t in found if t))
 
 
 def _option_values(
@@ -1475,14 +1498,15 @@ def _bash_credential_reason(
     for k, (words, (name, at, _)) in enumerate(parsed):
         # issue 76: a wrapper that changes folder is a base for relative paths, like cd.
         moves: list[WrapperOption] = []
-        _command_at(
-            [_clean(w) for w in words],
-            {i for i, w in enumerate(words) if w.startswith(_REDIRECT)},
-            moves,
-        )
+        clean = [_clean(w) for w in words]
+        redirects = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
+        found_at = _command_at(clean, redirects, moves)
         texts = [(_expand_word(w, envs[k]) or [("", False)])[0][0] for w in words]
-        moved = _moved_base(texts, moves, cwd) if os.path.isabs(cwd) else None
-        bases += [moved] if moved is not None and moved not in bases else []
+        moved = [_moved_base(texts, moves, cwd)] if os.path.isabs(cwd) else []
+        if found_at == _OPAQUE and os.path.isabs(cwd):
+            values = _opaque_values(texts, _opaque_words(clean, redirects))
+            moved += [_anchor(v, cwd) for v in values]
+        bases += [b for b in dict.fromkeys(moved) if b is not None and b not in bases]
         if name not in {"cd", "pushd"}:
             continue
         # spec 8: the first non-option argument is the target; a bare cd goes home.
@@ -1610,7 +1634,7 @@ def _bash_write_dirs(command: str, cwd: str) -> list[str]:
         base = _moved_base(texts, options, cwd)
         acts = [base] if base is not None and base != cwd else []
         if at == _OPAQUE or base is None:
-            picks += [texts[i] for i in sorted(_opaque_words(clean, redirects))]
+            picks += _opaque_targets(texts, _opaque_words(clean, redirects), cwd)
         elif at is not None:
             name = _base(clean[at])
             args = [texts[i] for i in range(at + 1, len(words)) if i not in redirects]
