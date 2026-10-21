@@ -123,6 +123,37 @@ def test_parser_reads_phases(tmp_path: Path) -> None:
     )
 
 
+def test_frontmatter_reads_top_level_pairs(tmp_path: Path) -> None:
+    # W1.3: nested, comment and list lines are skipped by the shared reader.
+    lines = [*HEAD, "# note", "- item", *BLOCK, *BODY]
+    fields = agent_files.frontmatter(_write(tmp_path, lines))
+    assert fields["model"] == "sonnet" and fields["hooks"] == ""
+    assert "PreToolUse" not in fields and "- item" not in fields
+
+
+FRONTMATTER_DEFECTS = {
+    "no frontmatter": ["name: probe", "---"],
+    "never closes": ["---", "name: probe"],
+    "malformed line": ["---", "name probe", "---"],
+}
+
+
+@pytest.mark.parametrize("case", sorted(FRONTMATTER_DEFECTS))
+def test_frontmatter_is_strict_unless_lenient(case: str, tmp_path: Path) -> None:
+    # W1.3: the strict reader raises with a Next line; lenient skips the defect instead.
+    lines = FRONTMATTER_DEFECTS[case]
+    with pytest.raises(AgentFileError, match="Next: "):
+        agent_files.frontmatter(_write(tmp_path, lines))
+    with pytest.raises(AgentFileError, match="Next: "):
+        agent_files.parse_frontmatter(lines, tmp_path / "probe.md")
+    assert agent_files.parse_frontmatter(lines, tmp_path / "probe.md", lenient=True) == {}
+
+
+def test_lenient_frontmatter_keeps_the_good_pairs() -> None:
+    lines = ["---", "bad line", "sequence_id: 4", "---"]
+    assert agent_files.parse_frontmatter(lines, Path("x.md"), lenient=True) == {"sequence_id": "4"}
+
+
 @pytest.mark.parametrize("case", sorted(UNSUPPORTED))
 def test_parser_refuses_unsupported_yaml(case: str, tmp_path: Path) -> None:
     path = _write(tmp_path, [*UNSUPPORTED[case], *BODY])

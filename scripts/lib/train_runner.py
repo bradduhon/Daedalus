@@ -37,6 +37,11 @@ from lib.audit_proof import (
 )
 from lib.config import ConfigError, load_config
 from lib.jail import normalize_agent
+from lib.narrow import integer as _int
+from lib.narrow import obj as _obj
+from lib.narrow import objects as _objects
+from lib.narrow import strings as _strings
+from lib.narrow import text as _text
 from lib.project_root import in_git_work_tree, project_root
 from lib.train_definition import (
     _ASK,
@@ -108,31 +113,6 @@ class NoTrainError(RunnerError):
 class Outcome:
     code: int
     lines: list[str] = field(default_factory=list)
-
-
-def _text(block: dict[str, object], key: str) -> str:
-    value = block.get(key)
-    return value if isinstance(value, str) else ""
-
-
-def _obj(block: dict[str, object], key: str) -> dict[str, object]:
-    value = block.get(key)
-    return {str(k): v for k, v in value.items()} if isinstance(value, dict) else {}
-
-
-def _objects(block: dict[str, object], key: str) -> list[dict[str, object]]:
-    value = block.get(key)
-    items = value if isinstance(value, list) else []
-    return [{str(k): v for k, v in item.items()} for item in items if isinstance(item, dict)]
-
-
-def _strings(value: object) -> list[str]:
-    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
-
-
-def _int(block: dict[str, object], key: str, default: int) -> int:
-    value = block.get(key)
-    return value if isinstance(value, int) and not isinstance(value, bool) else default
 
 
 def _seqs(state: dict[str, object]) -> list[int]:

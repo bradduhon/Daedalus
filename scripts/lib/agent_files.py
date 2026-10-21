@@ -10,7 +10,7 @@ from pathlib import Path
 
 # 0044: an agent name outside this form reads as a missing agent file.
 AGENT_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
-_KEY = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
+FRONTMATTER_KEY = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 _TOP_KEYS = (
     "name",
     "description",
@@ -64,26 +64,34 @@ class AgentFile:
     phases: tuple[str, ...]
 
 
-def _lines(path: Path) -> tuple[list[str], int]:
-    # 0044: the file's lines and the index of the --- line that closes the frontmatter.
+def _read(path: Path) -> list[str]:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        return path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError) as exc:
         raise AgentFileError(
             f"{path} could not be read ({exc}). Next: restore the agent file from git."
         ) from exc
+
+
+def _lines(path: Path) -> tuple[list[str], int]:
+    # 0044: the file's lines and the index of the --- line that closes the frontmatter.
+    lines = _read(path)
+    return lines, _close(path, lines)
+
+
+def _close(path: Path, lines: list[str]) -> int:
     if not lines or lines[0] != "---":
         raise AgentFileError(f"{path} has no frontmatter. Next: start the file with a --- line.")
     if "---" not in lines[1:]:
         raise AgentFileError(
             f"{path} frontmatter never closes. Next: end the frontmatter with a --- line."
         )
-    return lines, lines.index("---", 1)
+    return lines.index("---", 1)
 
 
 def _pair(path: Path, line: str) -> tuple[str, str]:
     key, sep, value = line.partition(":")
-    if not sep or not _KEY.fullmatch(key):
+    if not sep or not FRONTMATTER_KEY.fullmatch(key):
         raise AgentFileError(
             f"{path} frontmatter line {line!r} is not `key: value`. "
             "Next: write each top-level field as key: value."
@@ -91,16 +99,31 @@ def _pair(path: Path, line: str) -> tuple[str, str]:
     return key, value.strip()
 
 
-def frontmatter(path: Path) -> dict[str, str]:
-    # 0044: top-level `key: value` lines only; nested, comment and list lines are skipped.
-    lines, end = _lines(path)
+def parse_frontmatter(lines: list[str], where: Path, lenient: bool = False) -> dict[str, str]:
+    # 0044, W1.3: top-level `key: value` lines only; nested, comment and list lines are skipped.
+    # lenient never raises: no closed block reads as {} and a malformed line is skipped.
+    try:
+        end = _close(where, lines)
+    except AgentFileError:
+        if lenient:
+            return {}
+        raise
     out: dict[str, str] = {}
     for line in lines[1:end]:
         if not line.strip() or line[0] in " \t#-":
             continue
-        key, value = _pair(path, line)
+        try:
+            key, value = _pair(where, line)
+        except AgentFileError:
+            if lenient:
+                continue
+            raise
         out[key] = value
     return out
+
+
+def frontmatter(path: Path) -> dict[str, str]:
+    return parse_frontmatter(_read(path), path)
 
 
 def _refuse(path: Path, line: str, why: str) -> AgentFileError:

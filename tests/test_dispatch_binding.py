@@ -144,6 +144,26 @@ def test_non_coder_dispatch_needs_no_plan(repo_cwd: Path, unit: Path) -> None:
         assert d.allow, (agent, d.reason)
 
 
+@pytest.mark.parametrize(
+    ("subagent", "gated"),
+    [
+        (CODER, True),
+        ("repo-coder", True),
+        ("daedalus-probe:repo-coder", True),
+        ("other:repo-coder", False),
+        ("daedalus:x:repo-coder", False),
+        ("daedalus:repo-coder-x", False),
+    ],
+)
+def test_coder_gate_uses_the_train_scope_namespace_check(
+    repo_cwd: Path, unit: Path, subagent: str, gated: bool
+) -> None:
+    # W1.3: only a Daedalus namespace, or the bare name, is this train's coder.
+    tool_input = _dispatch(repo_cwd, unit, subagent)["tool_input"]
+    reason = dispatch_binding._dispatch_reason(tool_input, str(repo_cwd))
+    assert (reason is not None and "records no plan" in reason) is gated, reason
+
+
 def test_gate_is_off_outside_a_train(repo_cwd: Path, unit: Path) -> None:
     (repo_cwd / ".claude" / "daedalus" / "train.active").unlink()
     _ok(repo_cwd, unit)
