@@ -1531,6 +1531,10 @@ def test_wrapper_option_values_are_consumed(
         "env --chdir={home} cat .aws/credentials",
         "sudo -D {home} cat .ssh/id_ed25519",
         "env -C{home}/.ssh cat id_ed25519",
+        "env -iC{home}/.ssh cat id_ed25519",
+        "env -i0C {home} cat .ssh/id_ed25519",
+        "sudo -nD{home}/.ssh cat id_ed25519",
+        "env -iZC{home}/.ssh cat id_ed25519",
     ],
 )
 def test_a_wrapper_folder_change_is_a_base_for_credential_reads(

@@ -835,6 +835,20 @@ def _long_option(spelled: str, row: frozenset[str]) -> str:
     return hits[0] if len(hits) == 1 else spelled
 
 
+def _cluster(
+    token: str, no_arg: frozenset[str], with_arg: frozenset[str]
+) -> tuple[str, int] | None:
+    # issue 76, audit round 1: getopt reads -iC/x as -i, then -C taking the rest of the word.
+    # Returns (one-argument letter or "", index its value starts at); None at a letter off the row.
+    for cut in range(2, len(token) + 1):
+        letter = "-" + token[cut - 1]
+        if letter in with_arg:
+            return letter, cut
+        if letter not in no_arg:
+            return None
+    return "", len(token)
+
+
 def strip_wrappers(tokens: list[str]) -> list[str] | None:
     # issue 76: the tokens from the wrapped command on; None when an option is off WRAPPER_OPTS.
     return _strip_wrappers(tokens, [])
@@ -874,12 +888,18 @@ def _strip_wrappers(
                 if i + 1 < len(tokens):
                     found.append(WrapperOption(name, key, offset + i + 1, ""))
                 i += 1
-            elif token[:2] in with_arg:
-                found.append(WrapperOption(name, token[:2], offset + i, token[:2]))
             elif name == "nice" and re.fullmatch(r"-\d+", token):
                 pass
             elif name == "command" and token in {"-v", "-V"}:
                 return []
+            elif not token.startswith("--") and (cluster := _cluster(token, no_arg, with_arg)):
+                letter, cut = cluster
+                if letter and cut < len(token):
+                    found.append(WrapperOption(name, letter, offset + i, token[:cut]))
+                elif letter:
+                    if i + 1 < len(tokens):
+                        found.append(WrapperOption(name, letter, offset + i + 1, ""))
+                    i += 1
             else:
                 return None
             i += 1

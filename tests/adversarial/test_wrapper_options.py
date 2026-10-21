@@ -72,7 +72,21 @@ TIME = (
     "time -o {repo}/t ls",
     "time -f %e rm -rf {repo}/x",
 )
-ALL = FORMS + OPAQUE + PREFIX + RELATIVE + TIME
+# audit round 1: no-argument letters bundled before a folder-changing or file-writing letter.
+CLUSTER = (
+    "env -iC{repo} rm -rf x",
+    "env -0C{repo} rm -rf x",
+    "env -i0C {repo} rm -rf x",
+    "env -iC{repo} rm -rf {repo}/x",
+    "sudo -nD{repo} rm -rf x",
+    "sudo -ED{repo} rm -rf x",
+    "sudo -nED {repo} rm -rf x",
+    "sudo -nD{repo} rm -rf {repo}/x",
+    "env -iZC{repo} rm -rf x",
+    "time -po{repo}/t ls",
+    "time -vo {repo}/t ls",
+)
+ALL = FORMS + OPAQUE + PREFIX + RELATIVE + TIME + CLUSTER
 
 
 @pytest.mark.parametrize("form", ALL)
