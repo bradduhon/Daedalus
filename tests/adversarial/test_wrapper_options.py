@@ -85,6 +85,14 @@ CLUSTER = (
     "env -iZC{repo} rm -rf x",
     "time -po{repo}/t ls",
     "time -vo {repo}/t ls",
+    # audit round 2: getopt keeps the = of a short option, so -C=/../../marked moves from cwd/=.
+    "env -C=/../../marked rm -rf x",
+    "env -C=/../../marked rm -rf {repo}/x",
+    "env -iC=/../../marked rm -rf x",
+    "sudo -D=/../../marked rm -rf x",
+    "sudo -D=/../../marked rm -rf {repo}/x",
+    "time -o=/../../marked/t ls",
+    "time -o=/../../marked/t rm -rf {repo}/x",
 )
 ALL = FORMS + OPAQUE + PREFIX + RELATIVE + TIME + CLUSTER
 

@@ -880,9 +880,11 @@ def _strip_wrappers(
                 assigns.append(token)
             elif not token.startswith("-") or token == "-" and name != "env":
                 break
-            elif key in no_arg:
+            elif key in no_arg and ("=" not in token or key.startswith("--")):
                 pass
-            elif key in with_arg and "=" in token:
+            elif key in with_arg and "=" in token and key.startswith("--"):
+                # audit round 2: only getopt_long strips = (--chdir=v); a short -C=v keeps it,
+                # so it falls through to _cluster, which reads its value as =v.
                 found.append(WrapperOption(name, key, offset + i, spelled + "="))
             elif key in with_arg and key.startswith("--") or token in with_arg:
                 if i + 1 < len(tokens):

@@ -244,6 +244,11 @@ def test_opaque_values_take_the_value_inside_an_option_word() -> None:
         ("time -po/t rm", [("time", "-o", "/t")]),
         ("time -vao /t rm", [("time", "-o", "/t")]),
         ("env -i0 rm", []),
+        ("env -C=/m rm", [("env", "-C", "=/m")]),
+        ("env -iC=/m rm", [("env", "-C", "=/m")]),
+        ("sudo -D=d rm", [("sudo", "-D", "=d")]),
+        ("time -o=t rm", [("time", "-o", "=t")]),
+        ("env --chdir=/m rm", [("env", "--chdir", "/m")]),
     ],
 )
 def test_a_short_cluster_is_read_letter_by_letter(
@@ -257,7 +262,9 @@ def test_a_short_cluster_is_read_letter_by_letter(
     assert found == want
 
 
-@pytest.mark.parametrize("command", ["env -iZ/m rm", "sudo -nQ rm", "time -pz rm"])
+@pytest.mark.parametrize(
+    "command", ["env -iZ/m rm", "sudo -nQ rm", "time -pz rm", "env -i=x rm", "sudo -n=x rm"]
+)
 def test_a_cluster_letter_off_the_row_is_refused(command: str) -> None:
     assert shell.strip_wrappers(shlex.split(command)) is None
 
@@ -270,6 +277,10 @@ def test_a_cluster_letter_off_the_row_is_refused(command: str) -> None:
         ("sudo -D m rm x > out", "/c", ["/c/out", "/c/m", "/c/m/x"]),
         ("time -o /t/log rm x", "/c", ["/t/log", "/c/x"]),
         ("time -p rm -rf /m/x", "/c", ["/m/x"]),
+        # audit round 2: a short -C=v keeps the =, so the folder is cwd/=v, never /v.
+        ("env -C=/../../m rm x", "/c/o", ["/c/m", "/c/m/x"]),
+        ("sudo -D=/m rm x", "/c/o", ["/c/o/=/m", "/c/o/=/m/x"]),
+        ("time -o=/../../t rm x", "/c/o", ["/c/t", "/c/o/x"]),
     ],
 )
 def test_write_dirs_follow_the_wrapper_folder(command: str, cwd: str, want: list[str]) -> None:
