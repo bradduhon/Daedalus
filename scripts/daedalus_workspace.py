@@ -18,6 +18,7 @@ from lib.workspace import (  # noqa: E402
     finish,
     lock,
     mark_train,
+    merge,
     refresh,
     release,
     remove,
@@ -30,7 +31,7 @@ from lib.workspace import (  # noqa: E402
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Daedalus worktrees and train state: create, remove, refresh, mark, unmark, "
-        "begin, lock, stop, finish, resume, release. Exit 0 done, 1 stopped with a Next line, "
+        "begin, lock, stop, finish, merge, resume, release. Exit 0 done, 1 stopped with a Next line, "
         "3 ledger question."
     )
     sub = parser.add_subparsers(dest="action", required=True)
@@ -58,6 +59,10 @@ def main(argv: list[str]) -> int:
     halt.add_argument("--next", dest="next_action")
     for action in ("finish", "resume"):
         sub.add_parser(action).add_argument("--repo", type=Path, required=True)
+    # 0121: one wave of units into the integration branch, the train left open.
+    wave = sub.add_parser("merge")
+    wave.add_argument("--repo", type=Path, required=True)
+    wave.add_argument("--units", required=True)
     publish = sub.add_parser("release")
     publish.add_argument("--repo", type=Path, required=True)
     publish.add_argument("--merge-sha", dest="merge_sha", required=True)
@@ -93,6 +98,9 @@ def main(argv: list[str]) -> int:
             return 0 if ok else 1
         elif args.action == "finish":
             print("\n".join(finish(repo)))
+        elif args.action == "merge":
+            ids = [part.strip() for part in args.units.split(",") if part.strip()]
+            print("\n".join(merge(repo, ids)))
         elif args.action == "resume":
             print("\n".join(resume(repo)))
         elif args.action == "release":

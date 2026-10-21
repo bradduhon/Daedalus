@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import hashlib
+import hmac
 import re
 import shlex
 import subprocess
@@ -9,8 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from lib import atomic, git, scrub, train_state
-from lib.audit import DataDirError, cache_dir_or_probe, ensure_project_data_dir
+from lib import atomic, audit_proof, git, plan_record, scrub, train_state, unit_binding
+from lib.audit import SESSION_ID, DataDirError, cache_dir_or_probe, ensure_project_data_dir
 from lib.audit_proof import SUMMARY_DIR
 from lib.config import Config, ConfigError, load_config
 from lib.ledger import LedgerError, read_sequence, resolve_ledger
@@ -761,12 +763,181 @@ def finish(repo: Path) -> list[str]:
                 "Next: rerun the train; if it repeats, file an issue with the train summary."
             )
     _git(repo, "switch", "-q", integration)
-    for unit in merging:
-        _merge(repo, state, train_id, unit)
+    lines = _merge_all(repo, state, train_id, merging)
     _record(repo, train_id, merged=True)
-    lines = [f"merged {len(merging)} units into {integration}"]
     nexts: list[str] = []
     if not _teardown(repo, units, lines, nexts):
+        raise WorkspaceError("\n".join([*lines, f"Next: {'; '.join(nexts)}"]))
+    return lines
+
+
+def _merge_all(
+    repo: Path, state: dict[str, Any], train_id: str, units: list[dict[str, Any]]
+) -> list[str]:
+    # 0121: a unit already on the integration branch is skipped, so a later wave never re-merges.
+    integration = f"daedalus/{train_id}"
+    merged, skipped = 0, []
+    for unit in units:
+        branch = str(unit["branch"])
+        if _run(repo, "merge-base", "--is-ancestor", branch, integration).returncode == 0:
+            skipped.append(_unit_label(train_id, str(unit["name"])))
+            continue
+        _merge(repo, state, train_id, unit)
+        merged += 1
+    lines = [f"merged {merged} units into {integration}"]
+    if skipped:
+        lines.append(f"skipped {', '.join(skipped)}: already on {integration}")
+    return lines
+
+
+VERIFIED = "[VERDICT: VERIFIED]"
+VERIFIER = "verifier"
+_DISPATCH_TOOLS = ("Agent", "SendMessage")
+
+
+def _strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    return []
+
+
+def _names_worktree(record: dict[str, Any], line: str) -> bool:
+    if record.get("event") != "PreToolUse" or record.get("tool_name") not in _DISPATCH_TOOLS:
+        return False
+    return any(line in text.splitlines() for text in _strings(record.get("tool_input")))
+
+
+def unit_verified(records: list[dict[str, Any]], worktree: Path) -> bool:
+    # 0121: ordered match, one verifier at a time; the newest verifier stop after the newest
+    # dispatch naming the worktree must end on the VERIFIED line.
+    line = f"Unit worktree: {worktree}"
+    anchors = [i for i, r in enumerate(records) if _names_worktree(r, line)]
+    if not anchors:
+        return False
+    stops = [
+        r
+        for r in records[anchors[-1] + 1 :]
+        if r.get("event") == "SubagentStop"
+        and isinstance(r.get("agent_type"), str)
+        and str(r["agent_type"]).rpartition(":")[2] == VERIFIER
+    ]
+    tail = stops[-1].get("last_message_tail") if stops else None
+    if not isinstance(tail, str):
+        return False
+    last = [text.strip() for text in tail.splitlines() if text.strip()]
+    return bool(last) and last[-1] == VERIFIED
+
+
+def _audit_records(repo: Path, state: dict[str, Any]) -> list[dict[str, Any]]:
+    session = train_state.audit_session(state)
+    if session is None or not SESSION_ID.fullmatch(session):
+        raise WorkspaceError(
+            "the train records no audit session, so no verifier verdict can be read. "
+            f"Next: {VERIFY_NEXT}"
+        )
+    try:
+        return audit_proof.read_chain(repo / audit_proof.AUDIT_DIR / f"{session}.jsonl")
+    except audit_proof.ProofError as exc:
+        raise WorkspaceError(
+            f"the audit log could not be read ({exc}). Next: {VERIFY_NEXT}"
+        ) from exc
+
+
+VERIFY_NEXT = (
+    "run the verifier step on that unit worktree, as the orchestrator recipe describes, "
+    "then rerun the merge."
+)
+
+
+def _plan_ids(state: dict[str, Any]) -> set[str]:
+    record = train_state.record(state, train_state.PLAN)
+    path, digest = record.get("path"), record.get("sha256")
+    rerun = "Next: record the plan with daedalus_train.py plan --path, then rerun the merge."
+    if not isinstance(path, str) or not isinstance(digest, str):
+        raise WorkspaceError(f"the train records no plan. {rerun}")
+    try:
+        data = Path(path).read_bytes()
+    except OSError as exc:
+        raise WorkspaceError(f"the plan {path} could not be read ({exc}). {rerun}") from exc
+    if not hmac.compare_digest(hashlib.sha256(data).hexdigest(), digest):
+        raise WorkspaceError(f"the plan {path} changed after it was recorded. {rerun}")
+    try:
+        plan = plan_record.load(Path(path))
+    except plan_record.PlanError as exc:
+        raise WorkspaceError(f"{exc} {rerun}") from exc
+    return {unit.id.casefold() for unit in plan.units}
+
+
+def _wave(repo: Path, train_id: str, state: dict[str, Any], ids: list[str]) -> list[dict[str, Any]]:
+    named = _plan_ids(state)
+    recorded = {
+        _unit_label(train_id, str(u.get("name"))).casefold(): u
+        for u in train_state.units(state)
+        if u.get("name") != audit_unit(train_id)
+    }
+    records: list[dict[str, Any]] | None = None
+    wave: list[dict[str, Any]] = []
+    for uid in ids:
+        if uid.casefold() not in named:
+            raise WorkspaceError(
+                f"the plan names no unit {uid}. Next: pass only unit ids the recorded plan names."
+            )
+        unit = recorded.get(uid.casefold())
+        if unit is None:
+            raise WorkspaceError(
+                f"train {train_id} records no worktree for unit {uid}. "
+                "Next: create the unit worktree with daedalus_workspace.py create first."
+            )
+        records = _audit_records(repo, state) if records is None else records
+        if not unit_verified(records, Path(str(unit["path"]))):
+            raise WorkspaceError(
+                f"unit {uid} has no recorded verifier verdict {VERIFIED} for its worktree "
+                f"{unit['path']}. Next: {VERIFY_NEXT}"
+            )
+        wave.append(unit)
+    return wave
+
+
+def merge(repo: Path, ids: list[str]) -> list[str]:
+    # 0121, 0118: one wave into the integration branch; the train stays open for the next wave.
+    repo = repo.resolve()
+    train_id, state = _active(repo)
+    integration = f"daedalus/{train_id}"
+    if not ids or len(set(i.casefold() for i in ids)) != len(ids):
+        raise WorkspaceError(
+            "--units names no unit or one unit twice. Next: pass each unit id once, comma-separated."
+        )
+    wave = _wave(repo, train_id, state, ids)
+    dirty = _dirty(repo)
+    if dirty:
+        raise WorkspaceError(
+            f"the integration worktree {repo} has changes: {_shown(dirty)}. "
+            "Next: commit or discard them from your own shell, then rerun the merge."
+        )
+    lock_sha = state.get("lock_sha")
+    for unit in wave:
+        if (
+            not lock_sha
+            or _run(
+                repo, "merge-base", "--is-ancestor", str(lock_sha), str(unit["branch"])
+            ).returncode
+        ):
+            raise WorkspaceError(
+                f"Unit {unit['branch']} does not descend from the integration branch. "
+                "Next: rerun the train; if it repeats, file an issue with the train summary."
+            )
+    _on_branch(repo, integration)
+    lines = _merge_all(repo, state, train_id, wave)
+    for unit in wave:
+        refused = unit_binding.mark_finished(repo, train_id, str(unit["name"]))
+        if refused is not None:
+            raise WorkspaceError(refused)
+    nexts: list[str] = []
+    if not _teardown(repo, wave, lines, nexts):
         raise WorkspaceError("\n".join([*lines, f"Next: {'; '.join(nexts)}"]))
     return lines
 
