@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from lib import dispatch_binding, jail, train_state
 from lib.config import Config
-from lib.unit_binding import bindings_path
+from lib.unit_binding import bindings_path, claim
 from lib.workspace import create, mark_train
 
 from tests.hook_chain import judge as decide
@@ -176,6 +176,26 @@ def test_only_the_train_scope_namespace_records_a_binding(
     tool_input = _dispatch(repo_cwd, unit, subagent)["tool_input"]
     assert dispatch_binding._dispatch_reason(tool_input, str(repo_cwd)) is None
     assert bindings_path(repo_cwd, TRAIN).exists() is binds
+
+
+@pytest.mark.parametrize(
+    ("bound", "needle"),
+    [(True, "is bound to coder agent-1"), (False, "was already dispatched to a coder")],
+)
+def test_a_foreign_coder_meets_the_once_check(
+    repo_cwd: Path, unit: Path, bound: bool, needle: str
+) -> None:
+    # issue 29: a unit a Daedalus coder holds refuses a coder under any namespace.
+    seed_plan(repo_cwd, TRAIN)
+    ours = _dispatch(repo_cwd, unit)["tool_input"]
+    assert dispatch_binding._dispatch_reason(ours, str(repo_cwd)) is None
+    if bound:
+        assert claim(repo_cwd, TRAIN, "agent-1", "u1") is None
+    before = bindings_path(repo_cwd, TRAIN).read_bytes()
+    foreign = _dispatch(repo_cwd, unit, "other:repo-coder")["tool_input"]
+    reason = dispatch_binding._dispatch_reason(foreign, str(repo_cwd))
+    assert reason is not None and needle in reason and "(issue 29)" in reason, reason
+    assert bindings_path(repo_cwd, TRAIN).read_bytes() == before
 
 
 def test_gate_is_off_outside_a_train(repo_cwd: Path, unit: Path) -> None:

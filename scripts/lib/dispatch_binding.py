@@ -182,7 +182,9 @@ def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     unit = _unit_named(state, match.group(1))
     if unit is None:
         return _not_a_unit(match.group(1), train)
-    return record_dispatch(repo, train, unit) if _our_coder(subagent) else None
+    if not _our_coder(subagent):
+        return unit_binding.held_reason(repo, train, unit)  # issue 29: once, never bound.
+    return record_dispatch(repo, train, unit)
 
 
 def _worktree_lines(text: str) -> list[str]:
