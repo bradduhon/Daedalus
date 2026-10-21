@@ -15,7 +15,7 @@ MOVED = frozenset(
     {"READ_ONLY_CMDS", "READ_ONLY_GIT", "SPECIALIST_GIT", "CHARTER_DOCS_GIT", "CONDUCTOR_GIT"}
     | {"CODER_GIT", "GIT_PLUMBING_REMOTE", "SHELL_VAR_CMDS", "SHELL_STATE_CMDS"}
     | {"WORKER_WRAPPERS", "_VALUE_LONG_NEXT", "_RESERVED", "_SHELLS", "_SHELL_ARG_OPTS"}
-    | {"_SHELL_LONG_FLAGS", "_TRUSTED_BIN", "_WRAPPER_OPTS", "_ASSIGN", "_SAFE_ENV"}
+    | {"_SHELL_LONG_FLAGS", "_TRUSTED_BIN", "_ASSIGN", "_SAFE_ENV"}
     | {"_GIT_CONFIG_DENY", "_GIT_GLOBAL_WITH_ARG", "_PUSH_FORBIDDEN", "_PUSH_ALL"}
     | {"_PUSH_ARG_OPTS", "_SIGNABLE_GIT", "_FIND_DENY", "_FALSE", "_HYGIENE_CHARS"}
     | {"_DEFAULT_BRANCHES", "_REPO_SCRIPTS", "_FALLBACK", "_PROJECT_DATA", "_GLOB_CHARS"}
@@ -39,8 +39,8 @@ MOVED = frozenset(
 )
 # 0044: lib.jail imports from lib.shell only the names it uses.
 JAIL_PASSTHROUGH: frozenset[str] = frozenset()
-# issue 55: helpers born in lib.shell that lib.jail shares rather than copies.
-SHARED = frozenset({"runs_claude"})
+# issue 55, issue 76: helpers born in lib.shell that lib.jail shares rather than copies.
+SHARED = frozenset({"runs_claude", "WRAPPER_OPTS", "DURATION", "strip_wrappers", "quote_walk"})
 
 
 def _tree(name: str) -> ast.Module:

@@ -186,6 +186,8 @@ def run_script(
             "def boom(hook_input, flags):\n"
             "    raise RuntimeError('probe failure')\n"
             "mod.judge = boom\n"
+            # issue 76: the trailer binds judge at import, so rebind it the way the trailer does.
+            "_, mod.main = mod.hook_io.entrypoint(boom, mod.TOOLS, mod.PARSER)\n"
             "sys.exit(mod.main())\n"
         )
         argv = [sys.executable, "-c", code, *flags]

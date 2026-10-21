@@ -9,7 +9,7 @@ import os
 import re
 import shlex
 import shutil
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from functools import lru_cache
 from pathlib import Path
 from typing import NamedTuple
@@ -82,24 +82,9 @@ SHELL_STATE_CMDS = frozenset(
     {"hash", "alias", "unalias", "unset", "shopt", "enable", "setopt", "unsetopt"}
     | {"trap", "getopts"}
 )
-# 8.5 ruling A: first tokens a worker may never run, bar the allowlisted test runner forms.
-WORKER_WRAPPERS = frozenset(
-    {"env", "nice", "nohup", "stdbuf", "timeout", "exec", "eval", "xargs", "command"}
-    | {"builtin", "source", ".", "sh", "bash", "zsh", "dash", "ksh", "python", "python3"}
-    | {"node", "perl", "ruby", "sudo", "doas", "time"}
-)
-_RESERVED = frozenset(
-    {"{", "}", "(", ")", "!", "if", "then", "else", "elif", "fi", "do", "done", "while"}
-    | {"until", "for", "case", "esac", "select", "function", "coproc", "[[", "time"}
-)
-_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
-_SHELL_ARG_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
-_SHELL_LONG_FLAGS = frozenset(
-    {"--login", "--norc", "--noprofile", "--posix", "--restricted", "--verbose", "--noediting"}
-)
-_TRUSTED_BIN = frozenset({"/bin", "/usr/bin", "/usr/local/bin", "/sbin", "/usr/sbin"})
-# (no-argument options, options taking one argument) per wrapper; anything else falls back.
-_WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+# issue 76: the one wrapper table, (no-argument options, one-argument options) per base name.
+# An option off its row makes strip_wrappers return None, so callers fail closed.
+WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "sudo": (
         frozenset({"-E", "-H", "-n", "-S", "-i", "-s", "-b", "-k", "-P"}),
         frozenset({"-u", "-g", "-h", "-p", "-C", "-U", "-D", "-r", "-t"}),
@@ -111,7 +96,7 @@ _WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     ),
     "nice": (frozenset(), frozenset({"-n", "--adjustment"})),
     "nohup": (frozenset(), frozenset()),
-    "stdbuf": (frozenset(), frozenset({"-i", "-o", "-e"})),
+    "stdbuf": (frozenset(), frozenset({"-i", "-o", "-e", "--input", "--output", "--error"})),
     "timeout": (
         frozenset({"--preserve-status", "--foreground", "-v", "--verbose"}),
         frozenset({"-s", "--signal", "-k", "--kill-after"}),
@@ -125,6 +110,23 @@ _WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         frozenset({"-I", "-n", "-P", "-d", "-L", "-s", "-E", "-a", "--arg-file", "--delimiter"}),
     ),
 }
+# issue 76: the one duration regex, timeout's first operand.
+DURATION = re.compile(r"[\d.]+[smhd]?")
+# 8.5 ruling A: first tokens a worker may never run, bar the allowlisted test runner forms.
+WORKER_WRAPPERS = frozenset(WRAPPER_OPTS) | frozenset(
+    {"eval", "source", ".", "sh", "bash", "zsh", "dash", "ksh", "python", "python3"}
+    | {"node", "perl", "ruby"}
+)
+_RESERVED = frozenset(
+    {"{", "}", "(", ")", "!", "if", "then", "else", "elif", "fi", "do", "done", "while"}
+    | {"until", "for", "case", "esac", "select", "function", "coproc", "[[", "time"}
+)
+_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
+_SHELL_ARG_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
+_SHELL_LONG_FLAGS = frozenset(
+    {"--login", "--norc", "--noprofile", "--posix", "--restricted", "--verbose", "--noediting"}
+)
+_TRUSTED_BIN = frozenset({"/bin", "/usr/bin", "/usr/local/bin", "/sbin", "/usr/sbin"})
 _ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _SAFE_ENV = re.compile(r"^(?:CI|NODE_ENV|TZ|LANG|LC_ALL|PYTHONDONTWRITEBYTECODE)=")
 _GIT_CONFIG_DENY = re.compile(
@@ -384,71 +386,87 @@ def _flush(raws: list[str], seps: list[str], buf: list[str], pending: list[str])
     pending.clear()
 
 
+CHAR, ESCAPE, OPEN, CLOSE = "char", "escape", "open", "close"
+
+
+class Lexeme(NamedTuple):
+    # issue 76: one quote_walk step; quote is the span it sits in, a mark carries the one it toggles.
+    at: int
+    text: str
+    quote: str
+    kind: str
+
+
+def quote_walk(text: str) -> Iterator[Lexeme]:
+    # issue 76: the one quote model; outside single quotes a backslash pairs with the next char.
+    quote = ""
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if quote and char == quote:
+            yield Lexeme(i, char, quote, CLOSE)
+            quote = ""
+            i += 1
+        elif char == "\\" and quote != "'":
+            yield Lexeme(i, text[i : i + 2], quote, ESCAPE)
+            i += 2
+        elif not quote and char in "'\"":
+            quote = char
+            yield Lexeme(i, char, quote, OPEN)
+            i += 1
+        else:
+            yield Lexeme(i, char, quote, CHAR)
+            i += 1
+
+
+def _unclosed(last: Lexeme | None) -> bool:
+    return last is not None and bool(last.quote) and last.kind != CLOSE
+
+
 def _scan(command: str, redirects: bool = False) -> tuple[list[str], list[str]] | None:
     # O3: redirects=True is the worker parse; a write redirect becomes a tee segment after its own.
     raws: list[str] = []
     seps: list[str] = []
     buf: list[str] = []
     pending: list[str] = []
-    quote = ""
-    i = 0
-    while i < len(command):
-        char = command[i]
-        if quote == "'":
-            buf.append(char)
-            quote = "" if char == "'" else quote
-            i += 1
+    skip = 0
+    last: Lexeme | None = None
+    for last in quote_walk(command):
+        at, chunk, quote, kind = last
+        if at < skip:
             continue
-        if char == "\\":
-            if command[i + 1 : i + 2] in {"\n", "\r"}:
-                return None
-            buf.append(command[i : i + 2])
-            i += 2
+        if kind == ESCAPE and chunk[1:] in {"\n", "\r"}:
+            return None
+        if quote == '"' and kind == CHAR and (chunk == "`" or command.startswith("$(", at)):
+            return None
+        if quote or kind != CHAR:
+            buf.append(chunk)
             continue
-        if quote == '"':
-            if char == "`" or command.startswith("$(", i):
-                return None
-            buf.append(char)
-            quote = "" if char == '"' else quote
-            i += 1
-            continue
-        if char in "'\"":
-            quote = char
-            buf.append(char)
-            i += 1
-            continue
-        if redirects and (char == ">" or command.startswith("&>", i)):
-            fd = "&" if char == "&" else _fd_word(buf)
+        if redirects and (chunk == ">" or command.startswith("&>", at)):
+            fd = "&" if chunk == "&" else _fd_word(buf)
             if fd is None:
                 return None
             if fd in {"1", "2"}:
                 buf.pop()
-            step = _redirect(command, i + 1 if fd == "&" else i, fd)
+            step = _redirect(command, at + 1 if fd == "&" else at, fd)
             if step is None:
                 return None
-            i, stand_in = step
+            skip, stand_in = step
             pending.extend([stand_in] if stand_in else [])
             continue
-        if char in "\n\r`<>()" or command.startswith("$(", i) or command.startswith("|&", i):
+        if chunk in "\n\r`<>()" or command.startswith(("$(", "|&"), at):
             return None
-        pair = command[i : i + 2]
-        if pair in {"&&", "||"}:
+        pair = command[at : at + 2]
+        if pair in {"&&", "||"} or chunk in "|;":
             _flush(raws, seps, buf, pending)
-            seps.append(pair)
+            seps.append(pair if pair in {"&&", "||"} else chunk)
             buf = []
-            i += 2
+            skip = at + len(seps[-1])
             continue
-        if char == "&":
+        if chunk == "&":
             return None
-        if char in "|;":
-            _flush(raws, seps, buf, pending)
-            seps.append(char)
-            buf = []
-            i += 1
-            continue
-        buf.append(char)
-        i += 1
-    if quote:
+        buf.append(chunk)
+    if _unclosed(last):
         return None
     _flush(raws, seps, buf, pending)
     return raws, seps
@@ -689,24 +707,12 @@ def _rm_reason(args: list[str]) -> str | None:
 
 
 def _quote_spans(text: str) -> str:
-    out: list[str] = []
-    i = 0
-    while i < len(text):
-        char = text[i]
-        if char == "\\":
-            out.append(text[i : i + 2])
-            i += 2
-            continue
-        if char not in "'\"":
-            out.append(char)
-            i += 1
-            continue
-        j = i + 1
-        while j < len(text) and text[j] != char:
-            j += 2 if char == '"' and text[j] == "\\" else 1
-        out.append("Q")
-        i = j + 1
-    return "".join(out)
+    # N3: each quoted span, its marks included, becomes one Q.
+    return "".join(
+        "Q" if lex.kind == OPEN else lex.text
+        for lex in quote_walk(text)
+        if not lex.quote or lex.kind == OPEN
+    )
 
 
 def _normalize(text: str, placeholder: bool) -> str:
@@ -724,25 +730,12 @@ def _normalize(text: str, placeholder: bool) -> str:
 def _raw_segments(text: str) -> list[str]:
     segments: list[str] = []
     buf: list[str] = []
-    quote = ""
-    i = 0
-    while i < len(text):
-        char = text[i]
-        if char == "\\" and quote != "'":
-            buf.append(text[i : i + 2])
-            i += 2
-            continue
-        if quote:
-            quote = "" if char == quote else quote
-        elif char in "'\"":
-            quote = char
-        elif char in ";&|\n\r()":
+    for lex in quote_walk(text):
+        if lex.kind == CHAR and not lex.quote and lex.text in ";&|\n\r()":
             segments.append("".join(buf))
             buf = []
-            i += 1
-            continue
-        buf.append(char)
-        i += 1
+        else:
+            buf.append(lex.text)
     segments.append("".join(buf))
     return segments
 
@@ -765,11 +758,11 @@ def _segment_views(raw: str) -> list[list[str]]:
             or tokens[0] in _RESERVED
             or tokens[0].startswith("-")
             or _word_parts(tokens[0]) & WORKER_WRAPPERS
-            or ("timeout" in wrapper and re.fullmatch(r"[\d.]+[smhd]?", tokens[0]))
+            or ("timeout" in wrapper and DURATION.fullmatch(tokens[0]))
         ):
-            if _word_parts(tokens[0]) & _WRAPPER_OPTS.keys():
-                wrapper = _word_parts(tokens[0]) & _WRAPPER_OPTS.keys()
-                with_arg = _WRAPPER_OPTS[min(wrapper)][1]
+            if _word_parts(tokens[0]) & WRAPPER_OPTS.keys():
+                wrapper = _word_parts(tokens[0]) & WRAPPER_OPTS.keys()
+                with_arg = WRAPPER_OPTS[min(wrapper)][1]
             tokens = tokens[2:] if tokens[0] in with_arg else tokens[1:]
         views.append(tokens)
     return views
@@ -812,15 +805,20 @@ def _regex_tripwire(command: str) -> str | None:
     return None
 
 
+def strip_wrappers(tokens: list[str]) -> list[str] | None:
+    # issue 76: the tokens from the wrapped command on; None when an option is off WRAPPER_OPTS.
+    return _strip_wrappers(tokens, [])
+
+
 def _strip_wrappers(tokens: list[str], assigns: list[str]) -> list[str] | None:
     while tokens:
         while tokens and _ASSIGN.match(tokens[0]):
             assigns.append(tokens[0])
             tokens = tokens[1:]
-        if not tokens or _base(tokens[0]) not in _WRAPPER_OPTS:
+        if not tokens or _base(tokens[0]) not in WRAPPER_OPTS:
             return tokens
         name = _base(tokens[0])
-        no_arg, with_arg = _WRAPPER_OPTS[name]
+        no_arg, with_arg = WRAPPER_OPTS[name]
         i = 1
         while i < len(tokens):
             token = tokens[i]
@@ -843,7 +841,10 @@ def _strip_wrappers(tokens: list[str], assigns: list[str]) -> list[str] | None:
             else:
                 return None
             i += 1
-        if name == "timeout" and i < len(tokens):
+        if name == "timeout":
+            # issue 76: a first operand that is not a duration leaves the command unknown.
+            if i >= len(tokens) or not DURATION.fullmatch(tokens[i]):
+                return None
             i += 1
         tokens = tokens[i:]
     return tokens
@@ -1102,20 +1103,9 @@ _READ_PATH_DENY = frozenset("*?[]{}$~\\")
 
 def _unquoted_expansion(raw: str) -> bool:
     # 0084: an unquoted glob, brace, tilde or $ can split into operands the jail never saw.
-    quote = ""
-    i = 0
-    while i < len(raw):
-        char = raw[i]
-        if quote:
-            quote = "" if char == quote else quote
-        elif char == "\\":
-            i += 1
-        elif char in "'\"":
-            quote = char
-        elif char in "*?[{~$":
-            return True
-        i += 1
-    return False
+    return any(
+        lex.kind == CHAR and not lex.quote and lex.text in "*?[{~$" for lex in quote_walk(raw)
+    )
 
 
 def _docs_read_split(name: str, args: list[str]) -> tuple[set[str], list[str], list[str]] | None:
@@ -1264,27 +1254,13 @@ def _raw_words(raw: str) -> list[str]:
     # O4: the shell words of one raw segment with their quotes kept, aligned with shlex.split.
     words: list[str] = []
     buf: list[str] = []
-    quote = ""
-    i = 0
-    while i < len(raw):
-        char = raw[i]
-        if char == "\\" and quote != "'":
-            buf.append(raw[i : i + 2])
-            i += 2
-            continue
-        if quote:
-            quote = "" if char == quote else quote
-            buf.append(char)
-        elif char in "'\"":
-            quote = char
-            buf.append(char)
-        elif char in " \t":
+    for lex in quote_walk(raw):
+        if lex.kind == CHAR and not lex.quote and lex.text in " \t":
             if buf:
                 words.append("".join(buf))
                 buf = []
         else:
-            buf.append(char)
-        i += 1
+            buf.append(lex.text)
     if buf:
         words.append("".join(buf))
     return words
@@ -1292,24 +1268,9 @@ def _raw_words(raw: str) -> list[str]:
 
 def _unsingled(word: str) -> str:
     # O4: the characters of a raw word the shell may still expand; single-quoted spans drop out.
-    out: list[str] = []
-    quote = ""
-    i = 0
-    while i < len(word):
-        char = word[i]
-        if quote == "'":
-            quote = "" if char == "'" else quote
-        elif char == "\\":
-            out.append(word[i : i + 2])
-            i += 1
-        elif char == '"':
-            quote = "" if quote else '"'
-        elif char == "'" and not quote:
-            quote = "'"
-        else:
-            out.append(char)
-        i += 1
-    return "".join(out)
+    return "".join(
+        lex.text for lex in quote_walk(word) if lex.quote != "'" and lex.kind not in {OPEN, CLOSE}
+    )
 
 
 def _hygiene_bad(token: str, word: str | None) -> bool:
@@ -1334,7 +1295,7 @@ def _claude_real(search_path: str) -> str | None:
 
 def runs_claude(tokens: list[str], base: str) -> bool:
     # issue 55: the command word, the word past wrappers or node's script, by name or real file.
-    stripped = _strip_wrappers(tokens, []) or []
+    stripped = strip_wrappers(tokens) or []
     words = tokens[:1] + stripped[:1]
     if stripped and _base(stripped[0]) == "node":
         words += [a for a in stripped[1:] if not a.startswith("-")][:1]

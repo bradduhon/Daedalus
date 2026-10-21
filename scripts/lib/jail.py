@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from lib import dispatch_binding
+from lib import dispatch_binding, hook_io
 from lib.audit import _git_env, project_data_dir, project_root
 from lib.audit_proof import SUMMARY_DIR
 from lib.config import Config
@@ -36,7 +36,7 @@ from lib.credential_paths import expand_word as _expand_word
 from lib.credential_paths import store_rest as _store_rest
 from lib.credential_paths import tilde as _tilde
 from lib.credential_paths import unjudged_root as _unjudged_root
-from lib.gh_policy import CONDUCTOR_GH, _push_reason, allowlist_applies, gh_reason
+from lib.gh_policy import CONDUCTOR_GH, GhFlag, _push_reason, allowlist_applies, gh_args, gh_reason
 from lib.ledger import LedgerError, resolve_ledger
 from lib.manifest import Manifest, ManifestError, extension_hit, path_hit
 from lib.manifest import load as load_manifest
@@ -70,9 +70,9 @@ from lib.shell import (
     _quote_spans,
     _shell_code,
     _short_flags,
-    _strip_wrappers,
     _under,
     runs_claude,
+    strip_wrappers,
     tokenize,
 )
 from lib.train_scope import (
@@ -93,15 +93,19 @@ REMOTE_GIT = (
     frozenset({"push", "remote", "fetch", "pull", "clone", "ls-remote", "submodule"})
     | GIT_PLUMBING_REMOTE
 )
-# Final review I3b: commands whose operands are write targets for repo-coder.
+# Final review I3b, issue 75: commands whose operands are write targets for repo-coder.
 CODER_WRITE_CMDS = frozenset(
     {"cp", "mv", "tee", "install", "ln", "truncate", "rsync", "dd"}
     | {"mkdir", "touch", "rm", "rmdir", "unlink", "chmod", "chown", "chgrp"}
+    | {"mkfifo", "mknod", "shred"}
 )
 # 0022: options whose value is not a path; every other non-option operand is a path.
 _VALUE_OPTS: dict[str, frozenset[str]] = {
     "install": frozenset({"-m", "-o", "-g", "-S"}),
     "mkdir": frozenset({"-m"}),
+    "mkfifo": frozenset({"-m"}),
+    "mknod": frozenset({"-m"}),
+    "shred": frozenset({"-n", "-s"}),
     "truncate": frozenset({"-s"}),
     "touch": frozenset({"-d", "-t"}),
     "cp": frozenset({"-S"}),
@@ -340,19 +344,10 @@ R_CREDENTIAL_PARAM = (
     "{path} could be a credential path; the jail cannot resolve its variable. "
     "Next: spell the path out"
 )
-_DURATION = re.compile(r"[\d.]+[smhd]?")
 _CONTROL_WORDS = frozenset({"!", "do", "then", "else", "elif", "while", "until", "if", "time"})
 _BINDERS = frozenset({"read", "mapfile", "readarray", "getopts", "select"})
-# spec 8: wrappers that run the next word as the command, with their value-taking options.
-_RUN_WRAPPERS = frozenset(
-    {"sudo", "env", "nice", "nohup", "time", "command", "exec", "builtin", "timeout", "stdbuf"}
-)
-_WRAPPER_VALUES: dict[str, frozenset[str]] = {
-    "sudo": frozenset({"-u", "-g"}),
-    "nice": frozenset({"-n"}),
-    "env": frozenset({"-u"}),
-    "timeout": frozenset({"-s", "-k"}),
-}
+# issue 76: _command_at's answer when a wrapper option is off shell.WRAPPER_OPTS.
+_OPAQUE = -1
 _GREPS = frozenset({"grep", "egrep", "fgrep"})
 # spec 8: short options whose value is the next word (or the rest of the cluster).
 _SEARCH_VALUES: dict[str, frozenset[str]] = {
@@ -375,7 +370,8 @@ _PATH_OPTION = re.compile(r"--?[\w-]*(?:dir|file|path|target|output|input|config
 _DATA_DIR_DEFAULT = "/.claude/plugins/data/daedalus"
 UNIT_WORKTREES = ".claude/worktrees"
 _DATA_DIR_WRITE = re.compile(
-    r">|(?:^|[\s;&|(/])(?:tee|rm|mv|cp|truncate|touch|ln|mkdir|chmod|chown|install|rmdir)"
+    r">|(?:^|[\s;&|(/])(?:tee|rm|mv|cp|truncate|touch|ln|mkdir|chmod|chown|install|rmdir"
+    r"|mkfifo|mknod|shred)"
     r"(?=[\s;&|)]|$)"
     r"|\bsed\b[^;&|\n]*\s(?:-[a-zA-Z]*i|--in-place)|\bpython[\d.]*\b[^;&|\n]*\s-[a-zA-Z]*c"
     r"|\bgit\b[^;&|\n]*\s(?:init|clone)\b"
@@ -834,17 +830,14 @@ _GH_PR_WRITES = frozenset({"create", "edit", "comment"})
 
 
 def _gh_words(tokens: list[str]) -> list[str]:
-    words: list[str] = []
-    i = 1
-    while i < len(tokens) and len(words) < 2:
-        token = tokens[i]
-        if token in {"-R", "--repo"}:
-            i += 2
-            continue
-        if not token.startswith(("--repo=", "-R")):
-            words.append(token)
-        i += 1
-    return words
+    # issue 76: gh_policy's parse; a segment it refuses has no command path, so nothing is allowed.
+    parsed = gh_args(tokens[1:])
+    return [] if parsed is None else parsed.words[:2]
+
+
+def _gh_flags(tokens: list[str], *names: str) -> list[GhFlag]:
+    parsed = gh_args(tokens[1:])
+    return [] if parsed is None else [f for f in parsed.flags if f.name in names]
 
 
 def _gh_pr_write(tokens: list[str]) -> bool:
@@ -854,10 +847,7 @@ def _gh_pr_write(tokens: list[str]) -> bool:
 
 def _gh_repo_flag(tokens: list[str]) -> bool:
     # I7: reads may name another repo; pr writes stay in the current one.
-    return _gh_pr_write(tokens) and any(
-        t in {"-R", "--repo"} or t.startswith(("--repo=", "-R")) or _gh_short_has(t, "R")
-        for t in tokens[1:]
-    )
+    return _gh_pr_write(tokens) and bool(_gh_flags(tokens, "-R", "--repo"))
 
 
 # 0078: gh's [HOST/]OWNER/REPO from an https, ssh or scp-form origin URL.
@@ -890,22 +880,10 @@ def _charter_slug(charter: str) -> str | None:
 
 def _gh_flag_values(tokens: list[str], long: str, short: str) -> list[str] | None:
     # 0078: `--x v`, `--x=v` and `-X v` only; an attached or bundled short form fails closed.
-    values: list[str] = []
-    i = 1
-    while i < len(tokens):
-        token = tokens[i]
-        if token in {long, f"-{short}"}:
-            if i + 1 >= len(tokens):
-                return None
-            values.append(tokens[i + 1])
-            i += 2
-            continue
-        if token.startswith(f"{long}="):
-            values.append(token.split("=", 1)[1])
-        elif _gh_short_has(token, short):
-            return None
-        i += 1
-    return values
+    if gh_args(tokens[1:]) is None:
+        return None
+    found = _gh_flags(tokens, long, f"-{short}")
+    return None if any(f.attached for f in found) else [f.value or "" for f in found]
 
 
 def _charter_pr_create_ok(tokens: list[str], cwd: str, charter: str | None) -> bool:
@@ -925,15 +903,8 @@ def _charter_pr_create_ok(tokens: list[str], cwd: str, charter: str | None) -> b
 def _gh_body_file_ok(tokens: list[str], cwd: str) -> bool:
     if not _gh_pr_write(tokens):
         return True
-    for i, token in enumerate(tokens):
-        if token in {"--body-file", "-F"}:
-            value = tokens[i + 1] if i + 1 < len(tokens) else ""
-        elif token.startswith("--body-file="):
-            value = token.split("=", 1)[1]
-        elif token.startswith("-F") and len(token) > 2:
-            value = token[2:]
-        else:
-            continue
+    for flag in _gh_flags(tokens, "--body-file", "-F"):
+        value = flag.value or ""
         # I7: stdin (-) and relative-to-elsewhere paths fail; realpath under the two homes only.
         if value in {"", "-"} or not (
             _under(_abs(value, cwd), f"{cwd}/docs/.tmp") or _under(_abs(value, cwd), "/tmp")
@@ -942,30 +913,12 @@ def _gh_body_file_ok(tokens: list[str], cwd: str) -> bool:
     return True
 
 
-def _gh_has_body_file(tokens: list[str]) -> bool:
-    return any(
-        t in {"--body-file", "-F"} or t.startswith(("--body-file=", "-F")) for t in tokens[1:]
-    )
-
-
-def _gh_short_has(token: str, letter: str) -> bool:
-    # I3: a pflag short bundle (-db x) carries the flag too; an -F value is a path, not a bundle.
-    if not re.match(r"-[A-Za-z]", token) or token.startswith("-F"):
-        return False
-    return letter in token[1:]
-
-
 def _gh_write_reason(tokens: list[str]) -> str | None:
     if not _gh_pr_write(tokens):
         return None
-    for token in tokens[1:]:
-        if token in {"--body", "-b"} or token.startswith("--body=") or _gh_short_has(token, "b"):
-            return R_BODY_INLINE
-    if not _gh_has_body_file(tokens):
+    if _gh_flags(tokens, "--body", "-b") or not _gh_flags(tokens, "--body-file", "-F"):
         return R_BODY_INLINE
-    if _gh_words(tokens)[1] == "edit" and any(
-        t == "--base" or t.startswith("--base=") or _gh_short_has(t, "B") for t in tokens[1:]
-    ):
+    if _gh_words(tokens)[1] == "edit" and _gh_flags(tokens, "--base", "-B"):
         return R_EDIT_BASE
     return None
 
@@ -1019,6 +972,9 @@ def _short_taker(arg: str, opts: frozenset[str]) -> tuple[str, str] | None:
 def _write_operands(name: str, args: list[str]) -> list[str]:
     if name == "dd":
         return [a.split("=", 1)[1] for a in args if a.startswith("of=")]
+    if name == "mknod":
+        # issue 75: NAME TYPE [MAJOR MINOR]; only NAME is a path.
+        return _write_operands("mkfifo", args)[:1]
     values = _VALUE_OPTS.get(name, frozenset())
     paths = _PATH_OPTS.get(name, frozenset())
     operands: list[str] = []
@@ -1343,20 +1299,28 @@ def _loop_union(
 
 
 def _command_at(clean: list[str], skip: set[int]) -> int | None:
-    # spec 8: skip control words, assignments and wrappers with their option values.
-    i = 0
-    while i < len(clean):
-        word = clean[i]
-        if i in skip or not word or word in _CONTROL_WORDS or _ASSIGN.match(word):
-            i += 1
+    # spec 8, issue 76: past control words and assignments, then shell.strip_wrappers.
+    places = [i for i, word in enumerate(clean) if word and i not in skip]
+    k = 0
+    while k < len(places):
+        word = clean[places[k]]
+        if word in _CONTROL_WORDS or _ASSIGN.match(word):
+            k += 1
             continue
-        name = _base(word)
-        if name not in _RUN_WRAPPERS:
-            return i
-        i += 1
-        while i < len(clean) and (clean[i].startswith("-") or _DURATION.fullmatch(clean[i])):
-            i += 2 if clean[i] in _WRAPPER_VALUES.get(name, ()) else 1
+        rest = strip_wrappers([clean[i] for i in places[k:]])
+        if rest is None:
+            return _OPAQUE
+        if not rest:
+            return None
+        if len(places) - len(rest) == k:
+            return places[k]
+        k = len(places) - len(rest)
     return None
+
+
+def _opaque_words(clean: list[str], skip: set[int]) -> set[int]:
+    # issue 76: past an unknown wrapper option every word could be a path, so all are judged.
+    return {i for i, word in enumerate(clean) if word and i not in skip}
 
 
 def _search_paths(name: str, clean: list[str], args: list[int]) -> set[int]:
@@ -1397,6 +1361,8 @@ def _path_positions(words: list[str]) -> tuple[str, int, set[int]]:
     clean = [_clean(w) for w in words]
     paths = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
     at = _command_at(clean, paths)
+    if at == _OPAQUE:
+        return "", -1, paths | _opaque_words(clean, paths)
     if at is None:
         return "", -1, paths
     name = _base(clean[at])
@@ -1554,7 +1520,7 @@ def _policy_segments(command: str, depth: int = 0) -> list[list[str]] | None:
         return None
     flat: list[list[str]] = []
     for segment in parsed:
-        tokens = _strip_wrappers(segment, [])
+        tokens = strip_wrappers(segment)
         if tokens is None:
             return None
         if not tokens:
@@ -1603,7 +1569,9 @@ def _bash_write_dirs(command: str, cwd: str) -> list[str]:
         redirects = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
         picks = [texts[i] for i in sorted(redirects)]
         at = _command_at(clean, redirects)
-        if at is not None:
+        if at == _OPAQUE:
+            picks += [texts[i] for i in sorted(_opaque_words(clean, redirects))]
+        elif at is not None:
             name = _base(clean[at])
             args = [texts[i] for i in range(at + 1, len(words)) if i not in redirects]
             if name in {"cd", "pushd"}:
@@ -1700,8 +1668,8 @@ def normalize_agent(agent_type: str) -> str:
 
 
 def decide(hook_input: dict[str, object], config: Config) -> Decision:
-    raw_agent = str(hook_input.get("agent_type") or "main")
-    agent = normalize_agent(raw_agent)
+    raw_agent = hook_io.raw_agent(hook_input)
+    agent = hook_io.agent(hook_input)
     tool = str(hook_input.get("tool_name") or "")
     cwd = str(hook_input.get("cwd") or "")
     raw_input = hook_input.get("tool_input")
@@ -1744,26 +1712,39 @@ def _with_agent(decision: Decision, agent: str) -> Decision:
     return Decision(decision.allow, decision.reason, agent, decision.ask)
 
 
+def integrity_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | None:
+    # 0053, issue 75: no absolute cwd, a write into .git or the data folder, Bash included.
+    is_write = tool in WRITE_TOOLS
+    if not (is_write or tool == "Bash"):
+        return None
+    if not os.path.isabs(cwd):
+        return R_NO_CWD
+    if not is_write:
+        command = str(tool_input.get("command") or "")
+        if _data_dir_write(command):
+            return R_DATA_DIR
+        return R_DATA_DIR_GIT if _cd_data_dir_git(command) else None
+    path = _abs(str(tool_input.get("file_path") or tool_input.get("notebook_path") or ""), cwd)
+    if ".git" in path.split(os.sep) or ".git" in os.path.normpath(path).split(os.sep):
+        return R_DOTGIT
+    return R_DATA_DIR if _data_dir_path(path, cwd) else None
+
+
 def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision:
     # 0106: every main-session finding below asks the operator; none of them blocks.
     command = str(tool_input.get("command") or "")
     raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
     is_write = tool in WRITE_TOOLS
-    if (is_write or tool == "Bash") and not os.path.isabs(cwd):
-        return _main_ask(ASK_NO_CWD, R_NO_CWD)
     path = _abs(raw_path, cwd)
-    if is_write and (
-        ".git" in path.split(os.sep) or ".git" in os.path.normpath(path).split(os.sep)
-    ):
+    integrity = integrity_reason(tool, tool_input, cwd)
+    if integrity == R_NO_CWD:
+        return _main_ask(ASK_NO_CWD, R_NO_CWD)
+    if integrity == R_DOTGIT:
         return _main_ask(ASK_DOTGIT.format(path=path), R_DOTGIT)
-    if is_write and _data_dir_path(path, cwd):
-        return _main_ask(ASK_DATA_DIR, R_DATA_DIR)
+    if integrity is not None:
+        return _main_ask(ASK_DATA_DIR, integrity)
     if tool == "Bash":
         # 8.5, 0106: main meets only the tripwires, as asks; regex fallback when tokenize refuses.
-        if _data_dir_write(command):
-            return _main_ask(ASK_DATA_DIR, R_DATA_DIR)
-        if _cd_data_dir_git(command):
-            return _main_ask(ASK_DATA_DIR, R_DATA_DIR_GIT)
         reason = _command_reason(command) or _gh_gate("main", cwd, command)
         reason = reason or (R_NESTED_CLAUDE if _nested_claude(command, cwd) else None)
         return _tripwire_ask(reason) if reason else _allow()

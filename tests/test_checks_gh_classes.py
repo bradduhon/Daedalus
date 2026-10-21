@@ -112,7 +112,6 @@ class TestFixWaveConductorGh:
             "gh pr create --title x -b b",
             "gh pr create --title x --body=b",
             "gh pr create --title x -bb",
-            "gh pr create --title x -db b",
             "gh pr create --title x --body-file docs/.tmp/pr.md --body b",
             "gh pr create --title x --body-file docs/.tmp/pr.md --body=b",
             "gh pr create --title x --body-file docs/.tmp/pr.md -bb",
@@ -140,7 +139,6 @@ class TestFixWaveConductorGh:
     @pytest.mark.parametrize(
         "command",
         [
-            "gh pr edit 3 --body-file docs/.tmp/pr.md -db b",
             "gh pr edit 3 --title t",
             "gh pr comment 3 --body b",
             "gh pr comment 3 -b b",
@@ -180,6 +178,27 @@ class TestFixWaveConductorGh:
         # K1: the body comes only from --body-file.
         d = decide(_b(self.C, command), CFG)
         assert not d.allow and "only from --body-file" in str(d.reason), command
+
+
+@pytest.mark.parametrize("agent", [C, "repo-coder", "security-auditor"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr create --title x -db b",
+        "gh pr edit 3 --body-file docs/.tmp/pr.md -db b",
+        "gh pr create -dH feat/x --title t --body-file docs/.tmp/pr.md",
+        "gh pr create -dR o/r --title t --body-file docs/.tmp/pr.md",
+        "gh api -iXDELETE repos/o/r",
+        "gh pr close -cd 5",
+        "gh run list -aL 5",
+        "gh pr create --title x --body-file",
+    ],
+)
+def test_bundled_short_flags_and_missing_values_fail_closed(agent: str, command: str) -> None:
+    # issue 76: gh_policy.gh_args refuses a short bundle or a value flag with no value.
+    assert evaluate(HOOK, _b(agent, command), *(["--conductor"] if agent == C else [])) == (
+        gh_policy.R_GH_BUNDLE
+    )
 
 
 def test_gh_classes_judges_the_hook_alone() -> None:
