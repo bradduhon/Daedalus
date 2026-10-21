@@ -1,16 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Derive the standing-rules file from a markdown-table ledger (0090, 0094).
-
-Areas, quoted from 0090-DAE-PLT: composition and phases; planning and dispatch; the jail and
-grammars; the audit log and proofs; the ledger and charter; GitHub and release; the project
-files; operator interaction. The backfill JSON maps every in-force id to one area, carries the
-Supersedes and Amends ids of every row before its relations_from id, and names the first row
-(names_from) whose Ruling cell starts with its name; earlier names come from the first clause.
---check exits 1 when --out differs from what this script would write; every refusal exits 1.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -29,6 +19,17 @@ from lib.ledger import (  # noqa: E402
     table_cells,
 )
 
+# 22: the --help text, kept below the future import as a plain string.
+DESCRIPTION = (
+    "Derive the standing-rules file from a markdown-table ledger (0090, 0094). "
+    "Areas, quoted from 0090-DAE-PLT: composition and phases; planning and dispatch; the jail and "
+    "grammars; the audit log and proofs; the ledger and charter; GitHub and release; the project "
+    "files; operator interaction. The backfill JSON maps every in-force id to one area, carries "
+    "the Supersedes and Amends ids of every row before its relations_from id, and names the first "
+    "row (names_from) whose Ruling cell starts with its name; earlier names come from the first "
+    "clause. --check exits 1 when --out differs from what this script would write; every refusal "
+    "exits 1."
+)
 AREAS = (
     "composition and phases",
     "planning and dispatch",
@@ -308,7 +309,7 @@ def render(ledger: Path, backfill_path: Path, scheme: str = TABLE_SCHEME) -> str
 
 def _parse(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="standing_rules.py", description=__doc__, allow_abbrev=False
+        prog="standing_rules.py", description=DESCRIPTION, allow_abbrev=False
     )
     parser.add_argument("--ledger", required=True, type=Path)
     parser.add_argument("--backfill", required=True, type=Path)

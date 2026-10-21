@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib.project_root import project_root  # noqa: E402
+from lib.project_root import repo_refusal  # noqa: E402
 from lib.workspace import (  # noqa: E402
     LedgerQuestion,
     WorkspaceError,
@@ -18,6 +18,7 @@ from lib.workspace import (  # noqa: E402
     finish,
     lock,
     mark_train,
+    merge,
     refresh,
     release,
     remove,
@@ -30,8 +31,8 @@ from lib.workspace import (  # noqa: E402
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Daedalus worktrees and train state: create, remove, refresh, mark, unmark, "
-        "begin, lock, stop, finish, resume, release. Exit 0 done, 1 stopped with a Next line, "
-        "3 ledger question."
+        "begin, lock, stop, finish, merge, resume, release. Exit 0 done, 1 stopped with a Next "
+        "line, 3 ledger question."
     )
     sub = parser.add_subparsers(dest="action", required=True)
     make = sub.add_parser("create")
@@ -58,6 +59,10 @@ def main(argv: list[str]) -> int:
     halt.add_argument("--next", dest="next_action")
     for action in ("finish", "resume"):
         sub.add_parser(action).add_argument("--repo", type=Path, required=True)
+    # 0121: one wave of units into the integration branch, the train left open.
+    wave = sub.add_parser("merge")
+    wave.add_argument("--repo", type=Path, required=True)
+    wave.add_argument("--units", required=True)
     publish = sub.add_parser("release")
     publish.add_argument("--repo", type=Path, required=True)
     publish.add_argument("--merge-sha", dest="merge_sha", required=True)
@@ -67,13 +72,9 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     repo = args.repo.resolve()
     # pin C3 -> C4, issue 63: --repo is the project root of the working directory, or nothing runs.
-    root = project_root(Path.cwd()).resolve()
-    if repo != root:
-        print(
-            f"daedalus-workspace: --repo {args.repo} is not the project root of the working "
-            f"directory ({root}). Next: run the command from {args.repo}, or pass --repo {root}.",
-            file=sys.stderr,
-        )
+    refusal = repo_refusal(args.repo, Path.cwd())
+    if refusal is not None:
+        print(f"daedalus-workspace: {refusal}", file=sys.stderr)
         return 1
     try:
         if args.action == "create":
@@ -97,6 +98,9 @@ def main(argv: list[str]) -> int:
             return 0 if ok else 1
         elif args.action == "finish":
             print("\n".join(finish(repo)))
+        elif args.action == "merge":
+            ids = [part.strip() for part in args.units.split(",") if part.strip()]
+            print("\n".join(merge(repo, ids)))
         elif args.action == "resume":
             print("\n".join(resume(repo)))
         elif args.action == "release":

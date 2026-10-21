@@ -30,6 +30,17 @@ def in_git_work_tree(path: Path) -> bool:
     return git_root(str(path)) is not None
 
 
+def repo_refusal(given: Path, cwd: Path) -> str | None:
+    # 63, pin C3 -> C4: --repo realpaths to the project root of the process cwd, or refuses.
+    root = project_root(cwd)
+    if os.path.realpath(given) == os.path.realpath(root):
+        return None
+    return (
+        f"--repo {given} is not the project root of the working directory ({root}). "
+        f"Next: run the command from {given}, or pass --repo {root}."
+    )
+
+
 def train_marked(cwd: object) -> bool:
     # 0035: no absolute cwd means the repo is unknown, so the hook acts as if a train runs.
     if not isinstance(cwd, str) or not os.path.isabs(cwd):

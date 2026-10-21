@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Render a Markdown digest of one session's audit chain after verifying it.
-
-The chain is verified first; a broken chain prints the verifier's message and exits 1.
-Default session is the newest *.jsonl under <repo>/.claude/daedalus/audit/ (0010).
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -15,19 +9,30 @@ import json
 import os
 import re
 import sys
-import tempfile
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib.audit import AuditLockError, project_data_dir, read_log, root_info  # noqa: E402
+from lib import atomic  # noqa: E402
+from lib.audit import (  # noqa: E402
+    SESSION_ID,
+    AuditLockError,
+    project_data_dir,
+    read_log,
+    root_info,
+)
 from lib.controls import Control, ControlsError, failure_line  # noqa: E402
 from lib.controls import load as load_controls  # noqa: E402
 from verify_audit_chain import NOT_UTF8, verify_lines  # noqa: E402
 
-_SESSION_ID = re.compile(r"[A-Za-z0-9_-]+")
+# 22: the --help text, kept below the future import as a plain string.
+DESCRIPTION = (
+    "Render a Markdown digest of one session's audit chain after verifying it. "
+    "The chain is verified first; a broken chain prints the verifier's message and exits 1. "
+    "Default session is the newest *.jsonl under <repo>/.claude/daedalus/audit/ (0010)."
+)
 _OK = re.compile(r"OK: (\d+) records, chain intact, head=([0-9a-f]{64})")
 _STATUS = (
     re.compile(r"\[STATUS: [A-Z_]+\]"),
@@ -53,7 +58,7 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _parse(argv: list[str]) -> argparse.Namespace:
-    parser = _Parser(prog="audit_report.py", description=__doc__, allow_abbrev=False)
+    parser = _Parser(prog="audit_report.py", description=DESCRIPTION, allow_abbrev=False)
     parser.add_argument("--session")
     parser.add_argument("--cwd", "--repo", dest="cwd", default=os.getcwd())
     parser.add_argument("--out")
@@ -90,7 +95,7 @@ def _session_path(cwd: str, session: str | None) -> Path:
                 "plugin loaded in this repo, then report it."
             )
         return sessions[-1]
-    if not _SESSION_ID.fullmatch(session):
+    if not SESSION_ID.fullmatch(session):
         raise ReportError(
             f"--session must match [A-Za-z0-9_-]+ (got {session!r}). "
             f"Next: list {audit_dir} and pass an existing session id."
@@ -351,7 +356,7 @@ def _out_target(out: str, cwd: str) -> Path:
     return write_path
 
 
-def _write_atomic(target: Path, text: str) -> None:
+def _write_report(target: Path, text: str) -> None:
     parent = target.parent
     if parent.exists() and not parent.is_dir():
         raise ReportError(
@@ -359,14 +364,7 @@ def _write_atomic(target: Path, text: str) -> None:
         )
     if not parent.is_dir():
         raise ReportError(f"{parent} does not exist. Next: create it or pass another --out.")
-    fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        os.replace(tmp, target)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    atomic.write_atomic(target, text)
 
 
 def main(argv: list[str]) -> int:
@@ -378,7 +376,7 @@ def main(argv: list[str]) -> int:
         if target is None:
             sys.stdout.write(report)
         else:
-            _write_atomic(target, report)
+            _write_report(target, report)
             print(f"wrote {target}")
         return 0
     except ReportError as exc:

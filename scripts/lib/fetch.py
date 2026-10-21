@@ -1,11 +1,8 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Fetch hardening shared by the framework refresh adapters (0026).
-
-URL rules, the GitHub-only redirect handler, the size cap, the cache lock and the
-symlink-refusing destination walk. Network and file state only; no adapter knowledge.
-"""
-
+# 0026: fetch hardening shared by the framework refresh adapters. URL rules, the GitHub-only
+# redirect handler, the size cap, the cache lock and the symlink-refusing destination walk.
+# Network and file state only; no adapter knowledge.
 from __future__ import annotations
 
 import errno
@@ -19,12 +16,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from email.message import Message
 from pathlib import Path
 from typing import IO, Any
 
-from lib.locks import bounded_flock
+from lib import locks
 
 ALLOWED_HOSTS = frozenset({"github.com", "raw.githubusercontent.com", "api.github.com"})
 TIMEOUT_S = 60
@@ -183,34 +180,26 @@ def _prepare_dest(root: Path, dest: Path, names: tuple[str, ...]) -> None:
             raise _symlink_error(path)
 
 
-def _open_lock(path: str, _flags: int) -> int:
-    # M4: O_NOFOLLOW and O_NONBLOCK so a planted symlink or FIFO cannot stand in for the lock.
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
-        os.close(fd)
-        raise RefreshError(f"lock {path} is not a regular file. Next: remove it and retry.")
-    return fd
-
-
 @contextmanager
 def _locked(dest: Path) -> Iterator[None]:
-    try:
-        fh = open(dest / LOCK, "r+", opener=_open_lock)
-    except OSError as exc:
-        if exc.errno == errno.ELOOP:
-            raise RefreshError(
-                f"{dest / LOCK} is a symlink. Next: remove the symlink and retry."
-            ) from exc
-        raise
-    with fh:
+    # M4, 75: the one opener refuses a planted symlink or FIFO at the lock path.
+    with ExitStack() as stack:
         try:
-            bounded_flock(fh, LOCK_TIMEOUT_S, label="refresh lock")
-        except RuntimeError as exc:
+            stack.enter_context(locks.locked(dest / LOCK, LOCK_TIMEOUT_S, label="refresh lock"))
+        except locks.LockRefused as exc:
+            raise RefreshError(str(exc)) from exc
+        except locks.LockHeld as exc:
             held = str(exc).split(" Next:")[0]
             raise RefreshError(
                 f"{held} Next: wait for the other refresh to finish, then run the script again; "
                 "do not delete the .lock file."
             ) from exc
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise RefreshError(
+                    f"{dest / LOCK} is a symlink. Next: remove the symlink and retry."
+                ) from exc
+            raise
         yield
 
 

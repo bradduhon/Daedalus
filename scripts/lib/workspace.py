@@ -2,17 +2,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-import os
+import hashlib
+import hmac
 import re
 import shlex
 import subprocess
-import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from lib import scrub, train_state
-from lib.audit import DataDirError, cache_dir_or_probe, ensure_project_data_dir
+from lib import atomic, audit_proof, git, plan_record, scrub, train_state, unit_binding
+from lib.audit import SESSION_ID, DataDirError, cache_dir_or_probe, ensure_project_data_dir
 from lib.audit_proof import SUMMARY_DIR
 from lib.config import Config, ConfigError, load_config
 from lib.ledger import LedgerError, read_sequence, resolve_ledger
@@ -62,14 +62,8 @@ def _confined(repo: Path, name: str) -> Path:
 
 def _run(repo: Path, *args: str, path: Path | None = None) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(
-            ["git", "-C", str(repo), *args],
-            capture_output=True,
-            text=True,
-            timeout=_GIT_TIMEOUT_S,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
+        return git.run(args, repo, _GIT_TIMEOUT_S)
+    except git.GitTimeout as exc:
         took = f"git {args[0]} {args[1]} timed out after {_GIT_TIMEOUT_S} s."
         if path is None:
             raise WorkspaceError(
@@ -229,21 +223,12 @@ def mark_train(repo: Path, train_id: str) -> Path:
             f"{marker.parent} is missing, so the audit hooks have not run here. "
             "Next: run the Daedalus health check (/daedalus:doctor)."
         )
-    if marker.is_symlink():
-        raise WorkspaceError(
-            f"{marker} is a symlink. Next: delete it from your own shell, then rerun."
-        )
     # 0023: temp file plus os.replace, so a reader never sees a partial id.
-    tmp: Path | None = None
     try:
-        fd, name = tempfile.mkstemp(prefix=f".{marker.name}.", dir=marker.parent)
-        tmp = Path(name)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(f"{train_id}\n")
-        os.replace(tmp, marker)
+        atomic.write_atomic(marker, f"{train_id}\n", 0o600)
+    except atomic.LinkRefused as exc:
+        raise WorkspaceError(str(exc)) from exc
     except OSError as exc:
-        if tmp is not None:
-            tmp.unlink(missing_ok=True)
         # 0023: a directory or an unwritable file at the marker is the operator's to remove.
         raise WorkspaceError(
             f"cannot write {marker} ({exc}). Next: remove {marker} from your own shell, then rerun."
@@ -778,12 +763,192 @@ def finish(repo: Path) -> list[str]:
                 "Next: rerun the train; if it repeats, file an issue with the train summary."
             )
     _git(repo, "switch", "-q", integration)
-    for unit in merging:
-        _merge(repo, state, train_id, unit)
+    lines = _merge_all(repo, state, train_id, merging)
     _record(repo, train_id, merged=True)
-    lines = [f"merged {len(merging)} units into {integration}"]
     nexts: list[str] = []
     if not _teardown(repo, units, lines, nexts):
+        raise WorkspaceError("\n".join([*lines, f"Next: {'; '.join(nexts)}"]))
+    return lines
+
+
+def _merge_all(
+    repo: Path, state: dict[str, Any], train_id: str, units: list[dict[str, Any]]
+) -> list[str]:
+    # 0121: a unit already on the integration branch is skipped, so a later wave never re-merges.
+    integration = f"daedalus/{train_id}"
+    merged, skipped = 0, []
+    for unit in units:
+        branch = str(unit["branch"])
+        if _run(repo, "merge-base", "--is-ancestor", branch, integration).returncode == 0:
+            skipped.append(_unit_label(train_id, str(unit["name"])))
+            continue
+        _merge(repo, state, train_id, unit)
+        merged += 1
+    lines = [f"merged {merged} units into {integration}"]
+    if skipped:
+        lines.append(f"skipped {', '.join(skipped)}: already on {integration}")
+    return lines
+
+
+VERIFIED = "[VERDICT: VERIFIED] claims=<n>"
+# 0121, agents/verifier.md:67: the verifier's closing line.
+VERIFIED_LINE = re.compile(r"\[VERDICT: VERIFIED\] claims=[0-9]+")
+VERIFIER = "verifier"
+_UNIT_LINE = "Unit worktree: "
+_DISPATCH_TOOLS = ("Agent", "SendMessage")
+
+
+def _strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    return []
+
+
+def _worktree_lines(record: dict[str, Any]) -> list[str]:
+    # 0121: the Unit worktree lines of a PreToolUse Agent or SendMessage record, else none.
+    if record.get("event") != "PreToolUse" or record.get("tool_name") not in _DISPATCH_TOOLS:
+        return []
+    texts = _strings(record.get("tool_input"))
+    return [line for text in texts for line in text.splitlines() if line.startswith(_UNIT_LINE)]
+
+
+def unit_verified(records: list[dict[str, Any]], worktree: Path) -> bool:
+    # 0121: ordered match, one verifier at a time; the window runs from the newest dispatch
+    # naming the worktree to the next dispatch naming any worktree.
+    line = f"{_UNIT_LINE}{worktree}"
+    anchors = [i for i, r in enumerate(records) if line in _worktree_lines(r)]
+    if not anchors:
+        return False
+    window: list[dict[str, Any]] = []
+    for record in records[anchors[-1] + 1 :]:
+        if _worktree_lines(record):
+            break
+        window.append(record)
+    stops = [
+        r
+        for r in window
+        if r.get("event") == "SubagentStop"
+        and isinstance(r.get("agent_type"), str)
+        and str(r["agent_type"]).rpartition(":")[2] == VERIFIER
+    ]
+    tail = stops[-1].get("last_message_tail") if stops else None
+    if not isinstance(tail, str):
+        return False
+    last = [text.strip() for text in tail.splitlines() if text.strip()]
+    return bool(last) and VERIFIED_LINE.fullmatch(last[-1]) is not None
+
+
+def _audit_records(repo: Path, state: dict[str, Any]) -> list[dict[str, Any]]:
+    session = train_state.audit_session(state)
+    if session is None or not SESSION_ID.fullmatch(session):
+        raise WorkspaceError(
+            "the train records no audit session, so no verifier verdict can be read. "
+            f"Next: {VERIFY_NEXT}"
+        )
+    try:
+        return audit_proof.read_chain(repo / audit_proof.AUDIT_DIR / f"{session}.jsonl")
+    except audit_proof.ProofError as exc:
+        raise WorkspaceError(
+            f"the audit log could not be read ({exc}). Next: {VERIFY_NEXT}"
+        ) from exc
+
+
+VERIFY_NEXT = (
+    "run the verifier step on that unit worktree, as the orchestrator recipe describes, "
+    "then rerun the merge."
+)
+
+
+def _plan_ids(state: dict[str, Any]) -> set[str]:
+    record = train_state.record(state, train_state.PLAN)
+    path, digest = record.get("path"), record.get("sha256")
+    rerun = "Next: record the plan with daedalus_train.py plan --path, then rerun the merge."
+    if not isinstance(path, str) or not isinstance(digest, str):
+        raise WorkspaceError(f"the train records no plan. {rerun}")
+    try:
+        data = Path(path).read_bytes()
+    except OSError as exc:
+        raise WorkspaceError(f"the plan {path} could not be read ({exc}). {rerun}") from exc
+    if not hmac.compare_digest(hashlib.sha256(data).hexdigest(), digest):
+        raise WorkspaceError(f"the plan {path} changed after it was recorded. {rerun}")
+    try:
+        plan = plan_record.load(Path(path))
+    except plan_record.PlanError as exc:
+        raise WorkspaceError(f"{exc} {rerun}") from exc
+    return {unit.id.casefold() for unit in plan.units}
+
+
+def _wave(repo: Path, train_id: str, state: dict[str, Any], ids: list[str]) -> list[dict[str, Any]]:
+    named = _plan_ids(state)
+    recorded = {
+        _unit_label(train_id, str(u.get("name"))).casefold(): u
+        for u in train_state.units(state)
+        if u.get("name") != audit_unit(train_id)
+    }
+    records: list[dict[str, Any]] | None = None
+    wave: list[dict[str, Any]] = []
+    for uid in ids:
+        if uid.casefold() not in named:
+            raise WorkspaceError(
+                f"the plan names no unit {uid}. Next: pass only unit ids the recorded plan names."
+            )
+        unit = recorded.get(uid.casefold())
+        if unit is None:
+            raise WorkspaceError(
+                f"train {train_id} records no worktree for unit {uid}. "
+                "Next: create the unit worktree with daedalus_workspace.py create first."
+            )
+        records = _audit_records(repo, state) if records is None else records
+        if not unit_verified(records, Path(str(unit["path"]))):
+            raise WorkspaceError(
+                f"unit {uid} has no recorded verifier verdict {VERIFIED} for its worktree "
+                f"{unit['path']}. Next: {VERIFY_NEXT}"
+            )
+        wave.append(unit)
+    return wave
+
+
+def merge(repo: Path, ids: list[str]) -> list[str]:
+    # 0121, 0118: one wave into the integration branch; the train stays open for the next wave.
+    repo = repo.resolve()
+    train_id, state = _active(repo)
+    integration = f"daedalus/{train_id}"
+    if not ids or len(set(i.casefold() for i in ids)) != len(ids):
+        raise WorkspaceError(
+            "--units names no unit or one unit twice. "
+            "Next: pass each unit id once, comma-separated."
+        )
+    wave = _wave(repo, train_id, state, ids)
+    dirty = _dirty(repo)
+    if dirty:
+        raise WorkspaceError(
+            f"the integration worktree {repo} has changes: {_shown(dirty)}. "
+            "Next: commit or discard them from your own shell, then rerun the merge."
+        )
+    lock_sha = state.get("lock_sha")
+    for unit in wave:
+        if (
+            not lock_sha
+            or _run(
+                repo, "merge-base", "--is-ancestor", str(lock_sha), str(unit["branch"])
+            ).returncode
+        ):
+            raise WorkspaceError(
+                f"Unit {unit['branch']} does not descend from the integration branch. "
+                "Next: rerun the train; if it repeats, file an issue with the train summary."
+            )
+    _on_branch(repo, integration)
+    lines = _merge_all(repo, state, train_id, wave)
+    for unit in wave:
+        refused = unit_binding.mark_finished(repo, train_id, str(unit["name"]))
+        if refused is not None:
+            raise WorkspaceError(refused)
+    nexts: list[str] = []
+    if not _teardown(repo, wave, lines, nexts):
         raise WorkspaceError("\n".join([*lines, f"Next: {'; '.join(nexts)}"]))
     return lines
 
@@ -953,18 +1118,16 @@ def _scrub_check(repo: Path, text: str) -> None:
 
 def _write_notes(repo: Path, train_id: str, text: str) -> Path:
     folder = repo / SUMMARY_DIR / train_id
-    for part in (repo / "docs", repo / "docs" / ".tmp", repo / SUMMARY_DIR, folder):
-        if part.is_symlink():
-            raise WorkspaceError(
-                f"{part} is a symlink. Next: delete it from your own shell, then rerun."
-            )
+    try:
+        for part in (repo / "docs", repo / "docs" / ".tmp", repo / SUMMARY_DIR, folder):
+            atomic.refuse_links(part)
+    except atomic.LinkRefused as exc:
+        raise WorkspaceError(str(exc)) from exc
     _scratch(repo)
     notes = folder / RELEASE_NOTES
     try:
         folder.mkdir(exist_ok=True)
-        fd = os.open(notes, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
+        atomic.write_atomic(notes, text, 0o644)
     except OSError as exc:
         raise WorkspaceError(
             f"cannot write {notes} ({exc}). Next: remove anything in its place, then rerun."

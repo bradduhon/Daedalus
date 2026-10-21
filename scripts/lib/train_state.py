@@ -5,12 +5,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import tempfile
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, ExitStack, contextmanager
 from pathlib import Path
 
-from lib.locks import bounded_flock
+from lib import atomic, locks
 
 # 0024: one state file per train; only scripts write here (the jail refuses tool writes).
 STATE_DIR = Path(".claude") / "daedalus" / "trains"
@@ -51,10 +50,10 @@ def state_path(repo: Path, train_id: str) -> Path:
 
 def _refuse_links(repo: Path, path: Path) -> None:
     for part in (repo / ".claude", repo / ".claude" / "daedalus", path.parent, path):
-        if part.is_symlink():
-            raise TrainStateError(
-                f"{part} is a symlink. Next: delete it from your own shell, then rerun."
-            )
+        try:
+            atomic.refuse_links(part)
+        except atomic.LinkRefused as exc:
+            raise TrainStateError(str(exc)) from exc
 
 
 def _state_dir(repo: Path, path: Path) -> Path:
@@ -76,22 +75,25 @@ def _state_dir(repo: Path, path: Path) -> Path:
 
 
 @contextmanager
-def _locked(repo: Path, train_id: str) -> Iterator[Path]:
-    path = state_path(repo, train_id)
-    directory = _state_dir(repo, path)
-    lock = directory / f"{train_id}.lock"
-    try:
-        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    except OSError as exc:
-        raise TrainStateError(
-            f"cannot open {lock} ({exc}). Next: delete it from your own shell if it is a symlink."
-        ) from exc
-    with os.fdopen(fd, "w") as handle:
+def locked_file(repo: Path, path: Path, lock_name: str, label: str) -> Iterator[Path]:
+    # 75: the train state and bindings locks open through locks.locked, so a FIFO is refused.
+    lock = _state_dir(repo, path) / lock_name
+    with ExitStack() as stack:
         try:
-            bounded_flock(handle, LOCK_TIMEOUT_S, label="train state lock")
-        except RuntimeError as exc:
+            stack.enter_context(locks.locked(lock, LOCK_TIMEOUT_S, label))
+        except locks.LockHeld as exc:
             raise TrainStateError(str(exc)) from exc
+        except OSError as exc:
+            raise TrainStateError(
+                f"cannot open {lock} ({exc}). "
+                "Next: delete it from your own shell if it is a symlink or not a regular file."
+            ) from exc
         yield path
+
+
+def _locked(repo: Path, train_id: str) -> AbstractContextManager[Path]:
+    path = state_path(repo, train_id)
+    return locked_file(repo, path, f"{train_id}.lock", "train state lock")
 
 
 def _read(path: Path) -> dict[str, object]:
@@ -115,17 +117,9 @@ def _read(path: Path) -> dict[str, object]:
 
 def _write(path: Path, state: dict[str, object]) -> None:
     # 0024: temp file plus os.replace, so a reader never sees a partial state.
-    tmp: Path | None = None
     try:
-        fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-        tmp = Path(name)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(state, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-        os.replace(tmp, path)
+        atomic.write_atomic(path, json.dumps(state, indent=2, sort_keys=True) + "\n", 0o600)
     except OSError as exc:
-        if tmp is not None:
-            tmp.unlink(missing_ok=True)
         raise TrainStateError(
             f"cannot write {path} ({exc}). Next: free space or fix permissions, then rerun."
         ) from exc

@@ -8,8 +8,9 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from lib import train_state
+from lib import git, train_state
 from lib.audit import GENESIS, AuditLockError, read_log, record_hash
+from lib.train_state import TRAIN_ID as _TRAIN_ID
 
 AUDIT_DIR = Path(".claude") / "daedalus" / "audit"
 SUMMARY_DIR = Path("docs") / ".tmp" / "daedalus"
@@ -22,7 +23,6 @@ VERDICT_REJECTED = "[VERDICT: REJECTED]"
 HANDBACK = "SubagentHandback"
 _VERDICT_FIELDS = ("last_message_head", "last_message_tail")
 _HANDBACK_FIELD = "tool_input.message"
-_TRAIN_ID = re.compile(r"[0-9]{8}-[0-9]{6}")
 TIP = re.compile(r"[0-9a-f]{40}")
 _SESSION_LINE = re.compile(r"^Session ([A-Za-z0-9_-]+):", re.MULTILINE)
 
@@ -220,12 +220,9 @@ def verdict_tip(turn: list[Mapping[str, object]], seq: int) -> str | None:
 
 
 def _git(repo: Path, *args: str) -> str | None:
-    # Lazy: lib.workspace imports this module.
-    from lib import workspace
-
     try:
-        found = workspace._run(repo, *args)
-    except (OSError, workspace.WorkspaceError):
+        found = git.run(args, repo, 120)
+    except (OSError, git.GitTimeout):
         return None
     return found.stdout if found.returncode == 0 else None
 

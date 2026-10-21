@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -13,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.agent_models import AgentModelError, resolve  # noqa: E402
 from lib.audit import DataDirError  # noqa: E402
 from lib.config import ConfigError, load_config  # noqa: E402
-from lib.project_root import project_root  # noqa: E402
+from lib.project_root import repo_refusal  # noqa: E402
 from lib.train_runner import (  # noqa: E402
     EXIT_OK,
     EXIT_STOP,
@@ -89,17 +88,6 @@ def _model(repo: Path, agent: str, override: str | None) -> Outcome:
         return Outcome(EXIT_STOP, [str(exc)])
 
 
-def _repo_refusal(given: Path) -> str | None:
-    # 63, pin C3 -> C4: --repo realpaths to the project root of the process cwd, or refuses.
-    root = project_root(Path.cwd())
-    if os.path.realpath(given) == os.path.realpath(root):
-        return None
-    return (
-        f"--repo {given} is not the project root of the working directory ({root}). "
-        f"Next: run the command from {given}, or pass --repo {root}."
-    )
-
-
 def _dispatch(args: argparse.Namespace) -> Outcome:
     repo = args.repo.resolve()
     if args.action == "start":
@@ -137,7 +125,7 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
 
 def main(argv: list[str]) -> int:
     args = _parser().parse_args(argv)
-    refusal = _repo_refusal(args.repo)
+    refusal = repo_refusal(args.repo, Path.cwd())
     if refusal is not None:
         print(refusal)
         return EXIT_STOP

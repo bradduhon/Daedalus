@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The one reader of <repo>/service-manifest.json; ledger.py, the jail and the trains use it."""
-
+# The one reader of <repo>/service-manifest.json; ledger.py, the jail and the trains use it.
 from __future__ import annotations
 
 import json

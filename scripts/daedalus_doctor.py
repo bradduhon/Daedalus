@@ -14,6 +14,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import git  # noqa: E402
 from lib.audit import (  # noqa: E402
     DataDirError,
     cache_dir_matches,
@@ -76,10 +77,12 @@ def _opt(ok: bool, name: str, missing: str, nxt: str) -> tuple[bool, str]:
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     cmd = ["git", "-C", str(repo), *args]
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, check=False)
+        return git.run(args, repo)
     except FileNotFoundError:
         # 0007: git off PATH reports a MISS instead of crashing the doctor.
         return subprocess.CompletedProcess(cmd, 127, "", "git not found")
+    except git.GitTimeout:
+        return subprocess.CompletedProcess(cmd, 124, "", "git timed out")
 
 
 def _cache_check() -> tuple[bool, str]:
