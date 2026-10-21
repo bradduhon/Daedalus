@@ -216,18 +216,50 @@ def test_an_ambiguous_or_unknown_long_option_is_refused(command: str) -> None:
 
 
 def test_opaque_values_take_the_value_inside_an_option_word() -> None:
-    # issue 76: --x=v, -Xv and -X=v carry a value that may name a folder.
+    # issue 76, audit round 1: --x=v, -X=v and every suffix of a short cluster may name a folder.
     words = ["env", "--zz=/m", "-Q/n", "-R=o", "rm", "x"]
     assert jail._opaque_values(words, set(range(len(words)))) == [
         "env",
         "/m",
         "/n",
+        "n",
         "o",
         "=o",
         "rm",
         "x",
     ]
     assert "/m/x" in jail._opaque_targets(words, set(range(len(words))), "/c")
+    cluster = ["env", "-iZQ/p", "rm", "x"]
+    assert "/p/x" in jail._opaque_targets(cluster, set(range(len(cluster))), "/c")
+
+
+@pytest.mark.parametrize(
+    ("command", "want"),
+    [
+        ("env -iC/m rm", [("env", "-C", "/m")]),
+        ("env -0iC /m rm", [("env", "-C", "/m")]),
+        ("sudo -nD/m rm", [("sudo", "-D", "/m")]),
+        ("sudo -nED /m rm", [("sudo", "-D", "/m")]),
+        ("sudo -Hu root rm", [("sudo", "-u", "root")]),
+        ("time -po/t rm", [("time", "-o", "/t")]),
+        ("time -vao /t rm", [("time", "-o", "/t")]),
+        ("env -i0 rm", []),
+    ],
+)
+def test_a_short_cluster_is_read_letter_by_letter(
+    command: str, want: list[tuple[str, str, str]]
+) -> None:
+    # audit round 1: no-argument letters continue; the first one-argument letter takes the rest.
+    tokens = shlex.split(command)
+    unwrapped = shell.unwrap(tokens)
+    assert unwrapped is not None and unwrapped[0] == ["rm"]
+    found = [(o.wrapper, o.option, tokens[o.at][len(o.prefix) :]) for o in unwrapped[1]]
+    assert found == want
+
+
+@pytest.mark.parametrize("command", ["env -iZ/m rm", "sudo -nQ rm", "time -pz rm"])
+def test_a_cluster_letter_off_the_row_is_refused(command: str) -> None:
+    assert shell.strip_wrappers(shlex.split(command)) is None
 
 
 @pytest.mark.parametrize(

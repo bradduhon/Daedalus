@@ -1334,7 +1334,8 @@ def _opaque_words(clean: list[str], skip: set[int]) -> set[int]:
 
 
 def _opaque_values(texts: list[str], indices: set[int]) -> list[str]:
-    # issue 76: each plain word, plus an option word's value (--x=v, -Xv, -X=v), as a path.
+    # issue 76: each plain word, plus an option word's value (--x=v, -X=v), as a path.
+    # audit round 1: a short cluster's value may start at any letter (-iC/x), so every suffix.
     values: list[str] = []
     for i in sorted(indices):
         word = texts[i]
@@ -1343,8 +1344,8 @@ def _opaque_values(texts: list[str], indices: set[int]) -> list[str]:
             continue
         if "=" in word:
             values.append(word.split("=", 1)[1])
-        if not word.startswith("--") and len(word) > 2:
-            values.append(word[2:])
+        if not word.startswith("--"):
+            values += [word[k:] for k in range(2, len(word))]
     return list(dict.fromkeys(v for v in values if v))
 
 
