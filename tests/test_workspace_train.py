@@ -1180,6 +1180,13 @@ def test_merge_refuses_a_refuted_unit(repo: Path) -> None:
     assert u1.exists()
 
 
+def test_merge_refuses_a_bare_verdict_with_no_claims_count(repo: Path) -> None:
+    _, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    _verifier_stop(repo, "[VERDICT: VERIFIED] claims=3\n| claim | result |\n[VERDICT: VERIFIED]\n")
+    _refused(repo, ["U1"], "no recorded verifier verdict")
+
+
 def test_merge_refuses_a_unit_with_no_verifier_stop(repo: Path) -> None:
     _, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)

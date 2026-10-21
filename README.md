@@ -296,6 +296,7 @@ Daedalus/
 │   ├── lib/__init__.py
 │   ├── lib/agent_files.py           # reads agent files and their hooks blocks
 │   ├── lib/agent_models.py          # the model each agent runs on: override, config, agent file
+│   ├── lib/atomic.py                # the one atomic writer and create-once writer
 │   ├── lib/audit.py                 # hash-chained append, redaction
 │   ├── lib/audit_proof.py           # the hooks-live and approved-verdict proofs
 │   ├── lib/audit_rounds.py          # the auditor's finding list and the stall rule
@@ -305,11 +306,12 @@ Daedalus/
 │   ├── lib/dispatch_binding.py      # coder dispatch, warm rebind and first-write claim
 │   ├── lib/fetch.py                 # GitHub-only download, size cap and cache lock for refreshes
 │   ├── lib/gh_policy.py             # the gh commands each agent may run
+│   ├── lib/git.py                   # the one git runner: timeout and redirect scrub
 │   ├── lib/hook_io.py               # hook input and output for the check scripts
 │   ├── lib/human_text.py            # counts the plain words in operator lines
 │   ├── lib/jail.py                  # per-agent tool policy
 │   ├── lib/ledger.py                # ledger resolution, sequence read, entry format
-│   ├── lib/locks.py                 # bounded flock shared by audit and ledger writers
+│   ├── lib/locks.py                 # the one FIFO-safe lock opener and bounded lock
 │   ├── lib/manifest.py              # the one reader of service-manifest.json
 │   ├── lib/plan_record.py           # loads and validates plan records
 │   ├── lib/project_keys.py          # every manifest and config key, its reference row, and the starter files

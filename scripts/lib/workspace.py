@@ -790,8 +790,11 @@ def _merge_all(
     return lines
 
 
-VERIFIED = "[VERDICT: VERIFIED]"
+VERIFIED = "[VERDICT: VERIFIED] claims=<n>"
+# 0121, agents/verifier.md:67: the verifier's closing line.
+VERIFIED_LINE = re.compile(r"\[VERDICT: VERIFIED\] claims=[0-9]+")
 VERIFIER = "verifier"
+_UNIT_LINE = "Unit worktree: "
 _DISPATCH_TOOLS = ("Agent", "SendMessage")
 
 
@@ -805,22 +808,29 @@ def _strings(value: object) -> list[str]:
     return []
 
 
-def _names_worktree(record: dict[str, Any], line: str) -> bool:
+def _worktree_lines(record: dict[str, Any]) -> list[str]:
+    # 0121: the Unit worktree lines of a PreToolUse Agent or SendMessage record, else none.
     if record.get("event") != "PreToolUse" or record.get("tool_name") not in _DISPATCH_TOOLS:
-        return False
-    return any(line in text.splitlines() for text in _strings(record.get("tool_input")))
+        return []
+    texts = _strings(record.get("tool_input"))
+    return [line for text in texts for line in text.splitlines() if line.startswith(_UNIT_LINE)]
 
 
 def unit_verified(records: list[dict[str, Any]], worktree: Path) -> bool:
-    # 0121: ordered match, one verifier at a time; the newest verifier stop after the newest
-    # dispatch naming the worktree must end on the VERIFIED line.
-    line = f"Unit worktree: {worktree}"
-    anchors = [i for i, r in enumerate(records) if _names_worktree(r, line)]
+    # 0121: ordered match, one verifier at a time; the window runs from the newest dispatch
+    # naming the worktree to the next dispatch naming any worktree.
+    line = f"{_UNIT_LINE}{worktree}"
+    anchors = [i for i, r in enumerate(records) if line in _worktree_lines(r)]
     if not anchors:
         return False
+    window: list[dict[str, Any]] = []
+    for record in records[anchors[-1] + 1 :]:
+        if _worktree_lines(record):
+            break
+        window.append(record)
     stops = [
         r
-        for r in records[anchors[-1] + 1 :]
+        for r in window
         if r.get("event") == "SubagentStop"
         and isinstance(r.get("agent_type"), str)
         and str(r["agent_type"]).rpartition(":")[2] == VERIFIER
@@ -829,7 +839,7 @@ def unit_verified(records: list[dict[str, Any]], worktree: Path) -> bool:
     if not isinstance(tail, str):
         return False
     last = [text.strip() for text in tail.splitlines() if text.strip()]
-    return bool(last) and last[-1] == VERIFIED
+    return bool(last) and VERIFIED_LINE.fullmatch(last[-1]) is not None
 
 
 def _audit_records(repo: Path, state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -909,7 +919,8 @@ def merge(repo: Path, ids: list[str]) -> list[str]:
     integration = f"daedalus/{train_id}"
     if not ids or len(set(i.casefold() for i in ids)) != len(ids):
         raise WorkspaceError(
-            "--units names no unit or one unit twice. Next: pass each unit id once, comma-separated."
+            "--units names no unit or one unit twice. "
+            "Next: pass each unit id once, comma-separated."
         )
     wave = _wave(repo, train_id, state, ids)
     dirty = _dirty(repo)

@@ -31,8 +31,8 @@ from lib.workspace import (  # noqa: E402
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Daedalus worktrees and train state: create, remove, refresh, mark, unmark, "
-        "begin, lock, stop, finish, merge, resume, release. Exit 0 done, 1 stopped with a Next line, "
-        "3 ledger question."
+        "begin, lock, stop, finish, merge, resume, release. Exit 0 done, 1 stopped with a Next "
+        "line, 3 ledger question."
     )
     sub = parser.add_subparsers(dest="action", required=True)
     make = sub.add_parser("create")
