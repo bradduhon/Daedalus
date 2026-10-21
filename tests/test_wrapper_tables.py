@@ -164,8 +164,43 @@ def test_strip_wrappers_refuses_an_option_off_the_table(command: str) -> None:
     ],
 )
 def test_jail_command_at_follows_the_shared_stripper(command: str, at: int | None) -> None:
-    # issue 76: lib.jail finds the command word through shell.strip_wrappers.
+    # issue 76: lib.jail finds the command word through shell.unwrap.
     assert jail._command_at(command.split(), set()) == at
+
+
+def test_unwrap_reports_the_options_it_passed() -> None:
+    # issue 76: each value sits at tokens[at][len(prefix):], so jail can move the folder.
+    tokens = shlex.split("env -C /a --chdir=/b -C/c sudo -D d -u root time -o t rm x")
+    unwrapped = shell.unwrap(tokens)
+    assert unwrapped is not None
+    rest, options = unwrapped
+    assert rest == ["rm", "x"]
+    values = [(o.wrapper, o.option, tokens[o.at][len(o.prefix) :]) for o in options]
+    assert values == [
+        ("env", "-C", "/a"),
+        ("env", "--chdir", "/b"),
+        ("env", "-C", "/c"),
+        ("sudo", "-D", "d"),
+        ("sudo", "-u", "root"),
+        ("time", "-o", "t"),
+    ]
+    assert {("env", "-C"), ("env", "--chdir"), ("sudo", "-D")} == shell.WRAPPER_CHDIR
+    assert ("time", "-o") in shell.WRAPPER_WRITES
+
+
+@pytest.mark.parametrize(
+    ("command", "cwd", "want"),
+    [
+        ("env -C /m rm -rf x", "/c", ["/m", "/m/x"]),
+        ("env -C /a env -C ../m rm x", "/c", ["/m", "/m/x"]),
+        ("sudo -D m rm x > out", "/c", ["/c/out", "/c/m", "/c/m/x"]),
+        ("time -o /t/log rm x", "/c", ["/t/log", "/c/x"]),
+        ("time -p rm -rf /m/x", "/c", ["/m/x"]),
+    ],
+)
+def test_write_dirs_follow_the_wrapper_folder(command: str, cwd: str, want: list[str]) -> None:
+    # issue 76: relative operands resolve in the folder the wrapper moves to; redirects in cwd.
+    assert jail._bash_write_dirs(command, cwd) == want
 
 
 def test_gh_tables_are_supersets_of_both_old_tables() -> None:

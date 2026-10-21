@@ -60,6 +60,9 @@ from lib.shell import (
     R_STASH_UNTRACKED,
     READ_ONLY_CMDS,
     READ_ONLY_GIT,
+    WRAPPER_CHDIR,
+    WRAPPER_WRITES,
+    WrapperOption,
     _abs,
     _base,
     _cmd_name,
@@ -74,6 +77,7 @@ from lib.shell import (
     runs_claude,
     strip_wrappers,
     tokenize,
+    unwrap,
 )
 from lib.train_scope import (
     AGENT_NAMESPACES,
@@ -344,7 +348,8 @@ R_CREDENTIAL_PARAM = (
     "{path} could be a credential path; the jail cannot resolve its variable. "
     "Next: spell the path out"
 )
-_CONTROL_WORDS = frozenset({"!", "do", "then", "else", "elif", "while", "until", "if", "time"})
+# issue 76: time is not here; its WRAPPER_OPTS row reads its options.
+_CONTROL_WORDS = frozenset({"!", "do", "then", "else", "elif", "while", "until", "if"})
 _BINDERS = frozenset({"read", "mapfile", "readarray", "getopts", "select"})
 # issue 76: _command_at's answer when a wrapper option is off shell.WRAPPER_OPTS.
 _OPAQUE = -1
@@ -1298,8 +1303,10 @@ def _loop_union(
                     envs[j][key] = list(dict.fromkeys([*envs[j].get(key, []), *values]))
 
 
-def _command_at(clean: list[str], skip: set[int]) -> int | None:
-    # spec 8, issue 76: past control words and assignments, then shell.strip_wrappers.
+def _command_at(
+    clean: list[str], skip: set[int], options: list[WrapperOption] | None = None
+) -> int | None:
+    # spec 8, issue 76: past control words and assignments, then shell.unwrap; options collects.
     places = [i for i, word in enumerate(clean) if word and i not in skip]
     k = 0
     while k < len(places):
@@ -1307,9 +1314,12 @@ def _command_at(clean: list[str], skip: set[int]) -> int | None:
         if word in _CONTROL_WORDS or _ASSIGN.match(word):
             k += 1
             continue
-        rest = strip_wrappers([clean[i] for i in places[k:]])
-        if rest is None:
+        unwrapped = unwrap([clean[i] for i in places[k:]])
+        if unwrapped is None:
             return _OPAQUE
+        rest, found = unwrapped
+        if options is not None:
+            options += [o._replace(at=places[k + o.at]) for o in found]
         if not rest:
             return None
         if len(places) - len(rest) == k:
@@ -1321,6 +1331,20 @@ def _command_at(clean: list[str], skip: set[int]) -> int | None:
 def _opaque_words(clean: list[str], skip: set[int]) -> set[int]:
     # issue 76: past an unknown wrapper option every word could be a path, so all are judged.
     return {i for i, word in enumerate(clean) if word and i not in skip}
+
+
+def _option_values(
+    texts: list[str], options: list[WrapperOption], kinds: frozenset[tuple[str, str]]
+) -> list[str]:
+    return [texts[o.at][len(o.prefix) :] for o in options if (o.wrapper, o.option) in kinds]
+
+
+def _moved_base(texts: list[str], options: list[WrapperOption], cwd: str) -> str | None:
+    # issue 76: env -C, env --chdir and sudo -D move the command's folder, each from the last.
+    base: str | None = cwd
+    for value in _option_values(texts, options, WRAPPER_CHDIR):
+        base = _anchor(value, base) if base is not None else None
+    return base
 
 
 def _search_paths(name: str, clean: list[str], args: list[int]) -> set[int]:
@@ -1449,6 +1473,16 @@ def _bash_credential_reason(
     parsed = [(words, _path_positions(words)) for words in segments]
     bases = [cwd] if os.path.isabs(cwd) else []
     for k, (words, (name, at, _)) in enumerate(parsed):
+        # issue 76: a wrapper that changes folder is a base for relative paths, like cd.
+        moves: list[WrapperOption] = []
+        _command_at(
+            [_clean(w) for w in words],
+            {i for i, w in enumerate(words) if w.startswith(_REDIRECT)},
+            moves,
+        )
+        texts = [(_expand_word(w, envs[k]) or [("", False)])[0][0] for w in words]
+        moved = _moved_base(texts, moves, cwd) if os.path.isabs(cwd) else None
+        bases += [moved] if moved is not None and moved not in bases else []
         if name not in {"cd", "pushd"}:
             continue
         # spec 8: the first non-option argument is the target; a bare cd goes home.
@@ -1567,25 +1601,32 @@ def _bash_write_dirs(command: str, cwd: str) -> list[str]:
         clean = [_clean(w) for w in words]
         texts = [(_expand_word(w, envs[k]) or [("", False)])[0][0] for w in words]
         redirects = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
-        picks = [texts[i] for i in sorted(redirects)]
-        at = _command_at(clean, redirects)
-        if at == _OPAQUE:
+        options: list[WrapperOption] = []
+        at = _command_at(clean, redirects, options)
+        # issue 76: redirects and the wrapper's own output open in cwd; the command's in base.
+        picks = [texts[i] for i in sorted(redirects)] + _option_values(
+            texts, options, WRAPPER_WRITES
+        )
+        base = _moved_base(texts, options, cwd)
+        acts = [base] if base is not None and base != cwd else []
+        if at == _OPAQUE or base is None:
             picks += [texts[i] for i in sorted(_opaque_words(clean, redirects))]
         elif at is not None:
             name = _base(clean[at])
             args = [texts[i] for i in range(at + 1, len(words)) if i not in redirects]
             if name in {"cd", "pushd"}:
-                picks += [a for a in args if not a.startswith("-")][:1]
+                acts += [a for a in args if not a.startswith("-")][:1]
             elif name == "git":
                 sub, _, globals_ = _git_split(["git", *args])
                 # spec 6: worktree reads by name only after its grammar; add and remove act on -C.
                 if sub not in READ_ONLY_GIT or sub == "worktree":
                     pairs = zip(globals_, globals_[1:], strict=False)
-                    picks += [value for flag, value in pairs if flag == "-C"]
-                    picks += [g.split("=", 1)[1] for g in globals_ if g.startswith(_GIT_DIR_OPTS)]
+                    acts += [value for flag, value in pairs if flag == "-C"]
+                    acts += [g.split("=", 1)[1] for g in globals_ if g.startswith(_GIT_DIR_OPTS)]
             elif name in CODER_WRITE_CMDS or (name in {"sed", "perl"} and _in_place(name, args)):
-                picks += [a for a in _write_operands(name, args) if a != "-"]
+                acts += [a for a in _write_operands(name, args) if a != "-"]
         found += [t for t in (_anchor(p, cwd) for p in picks) if t]
+        found += [t for t in (_anchor(p, base or cwd) for p in acts) if t]
     return found
 
 

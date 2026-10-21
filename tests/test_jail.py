@@ -1525,6 +1525,26 @@ def test_wrapper_option_values_are_consumed(
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
 @pytest.mark.parametrize(
+    "form",
+    [
+        "env -C {home} cat .ssh/id_ed25519",
+        "env --chdir={home} cat .aws/credentials",
+        "sudo -D {home} cat .ssh/id_ed25519",
+        "env -C{home}/.ssh cat id_ed25519",
+    ],
+)
+def test_a_wrapper_folder_change_is_a_base_for_credential_reads(
+    cred_home: Path, plain_repo: Path, agent: str | None, form: str
+) -> None:
+    # issue 76: env -C, env --chdir and sudo -D move relative reads like cd does.
+    _train(plain_repo)
+    command = form.format(home=cred_home)
+    d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
+    assert not d.allow and "credential path" in str(d.reason), command
+
+
+@pytest.mark.parametrize("agent", [None, "Explore"])
+@pytest.mark.parametrize(
     "command",
     [
         "for d in ~; do cat $d/.ssh/id_ed25519; done; for d in /tmp; do :; done",

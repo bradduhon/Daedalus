@@ -40,7 +40,10 @@ MOVED = frozenset(
 # 0044: lib.jail imports from lib.shell only the names it uses.
 JAIL_PASSTHROUGH: frozenset[str] = frozenset()
 # issue 55, issue 76: helpers born in lib.shell that lib.jail shares rather than copies.
-SHARED = frozenset({"runs_claude", "WRAPPER_OPTS", "DURATION", "strip_wrappers", "quote_walk"})
+SHARED = frozenset(
+    {"runs_claude", "WRAPPER_OPTS", "DURATION", "strip_wrappers", "quote_walk", "unwrap"}
+    | {"WrapperOption", "WRAPPER_CHDIR", "WRAPPER_WRITES"}
+)
 
 
 def _tree(name: str) -> ast.Module:

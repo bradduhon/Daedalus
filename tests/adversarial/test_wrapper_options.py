@@ -36,9 +36,27 @@ OPAQUE = (
     "timeout KILL rm -rf {repo}/x",
     "stdbuf -Z L rm -rf {repo}/x",
 )
+# issue 76: a wrapper that changes folder moves relative operands into the marked repo.
+RELATIVE = (
+    "env -C {repo} rm -rf x",
+    "env --chdir {repo} rm -rf x",
+    "env --chdir={repo} rm -rf x",
+    "env -C{repo} rm -rf x",
+    "sudo -D {repo} rm -rf x",
+    "env -C {other} env -C ../marked rm -rf x",
+    "env -C {repo} touch x",
+    "env -C {repo} git commit -m x",
+)
+# issue 76: time is a wrapper, never a control word; its -o value is a file time writes.
+TIME = (
+    "time -p rm -rf {repo}/x",
+    "time -o {repo}/t ls",
+    "time -f %e rm -rf {repo}/x",
+)
+ALL = FORMS + OPAQUE + RELATIVE + TIME
 
 
-@pytest.mark.parametrize("form", FORMS + OPAQUE)
+@pytest.mark.parametrize("form", ALL)
 def test_a_foreign_agent_cannot_hide_a_write_behind_a_wrapper_option(
     marked_repo: Path,  # noqa: F811
     other_repo: Path,  # noqa: F811
@@ -50,7 +68,7 @@ def test_a_foreign_agent_cannot_hide_a_write_behind_a_wrapper_option(
     assert "read-only while" in str(d.reason), (command, d.reason)
 
 
-@pytest.mark.parametrize("form", FORMS + OPAQUE)
+@pytest.mark.parametrize("form", ALL)
 def test_a_worker_never_runs_the_wrapper(form: str) -> None:
     # 8.5 ruling A: Daedalus workers meet WORKER_WRAPPERS first.
     assert_denied(_b("repo-coder", form.format(repo="/work/repo", other="/tmp")))

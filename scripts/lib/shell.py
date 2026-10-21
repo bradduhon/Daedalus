@@ -110,6 +110,10 @@ WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         frozenset({"-I", "-n", "-P", "-d", "-L", "-s", "-E", "-a", "--arg-file", "--delimiter"}),
     ),
 }
+# issue 76: options that move the working folder before the wrapped command runs.
+WRAPPER_CHDIR = frozenset({("env", "-C"), ("env", "--chdir"), ("sudo", "-D")})
+# issue 76: options whose value is a file the wrapper itself writes.
+WRAPPER_WRITES = frozenset({("time", "-o")})
 # issue 76: the one duration regex, timeout's first operand.
 DURATION: re.Pattern[str] = re.compile(r"[\d.]+[smhd]?")
 # 8.5 ruling A: first tokens a worker may never run, bar the allowlisted test runner forms.
@@ -805,12 +809,31 @@ def _regex_tripwire(command: str) -> str | None:
     return None
 
 
+class WrapperOption(NamedTuple):
+    # issue 76: a one-argument wrapper option; its value is tokens[at][len(prefix):].
+    wrapper: str
+    option: str
+    at: int
+    prefix: str
+
+
+def unwrap(tokens: list[str]) -> tuple[list[str], list[WrapperOption]] | None:
+    # issue 76: strip_wrappers plus the one-argument options it passed, in order.
+    options: list[WrapperOption] = []
+    rest = _strip_wrappers(tokens, [], options)
+    return None if rest is None else (rest, options)
+
+
 def strip_wrappers(tokens: list[str]) -> list[str] | None:
     # issue 76: the tokens from the wrapped command on; None when an option is off WRAPPER_OPTS.
     return _strip_wrappers(tokens, [])
 
 
-def _strip_wrappers(tokens: list[str], assigns: list[str]) -> list[str] | None:
+def _strip_wrappers(
+    tokens: list[str], assigns: list[str], options: list[WrapperOption] | None = None
+) -> list[str] | None:
+    total = len(tokens)
+    found: list[WrapperOption] = [] if options is None else options
     while tokens:
         while tokens and _ASSIGN.match(tokens[0]):
             assigns.append(tokens[0])
@@ -819,6 +842,7 @@ def _strip_wrappers(tokens: list[str], assigns: list[str]) -> list[str] | None:
             return tokens
         name = _base(tokens[0])
         no_arg, with_arg = WRAPPER_OPTS[name]
+        offset = total - len(tokens)
         i = 1
         while i < len(tokens):
             token = tokens[i]
@@ -830,11 +854,17 @@ def _strip_wrappers(tokens: list[str], assigns: list[str]) -> list[str] | None:
                 assigns.append(token)
             elif not token.startswith("-") or token == "-" and name != "env":
                 break
-            elif key in no_arg or (key in with_arg and "=" in token):
+            elif key in no_arg:
                 pass
+            elif key in with_arg and "=" in token:
+                found.append(WrapperOption(name, key, offset + i, key + "="))
             elif token in with_arg:
+                if i + 1 < len(tokens):
+                    found.append(WrapperOption(name, token, offset + i + 1, ""))
                 i += 1
-            elif token[:2] in with_arg or (name == "nice" and re.fullmatch(r"-\d+", token)):
+            elif token[:2] in with_arg:
+                found.append(WrapperOption(name, token[:2], offset + i, token[:2]))
+            elif name == "nice" and re.fullmatch(r"-\d+", token):
                 pass
             elif name == "command" and token in {"-v", "-V"}:
                 return []
