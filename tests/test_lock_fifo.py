@@ -11,10 +11,12 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
+import append_ledger
 import pytest
 from lib import audit, fetch, locks, train_state, unit_binding
 
 from tests.conftest import write_train_marker
+from tests.test_append_ledger import _entry, table_repo  # noqa: F401
 
 TRAIN = "20261016-120000"
 BOUND_S = 1.0
@@ -120,4 +122,16 @@ def test_refresh_lock_refuses_a_fifo(tmp_path: Path) -> None:
     assert isinstance(found, fetch.RefreshError) and "is not a regular file. Next:" in str(found)
 
 
-# The ledger lock is covered by tests/test_append_ledger.py::test_fifo_at_lock_path_fails_fast.
+def test_ledger_lock_refuses_a_fifo(
+    request: pytest.FixtureRequest, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The lock path comes from the script's own derivation, so the FIFO sits where it looks.
+    root: Path = request.getfixturevalue("table_repo")
+    ledger = append_ledger._resolve(str(root))
+    assert ledger is not None
+    os.mkfifo(append_ledger._lock_path(ledger))
+    entry = _entry(root, "Third ruling. | None. | None")
+    argv = ["--expected-seq", "2", "--entry-file", str(entry), "--repo", "TST", "--type", "PLT"]
+    found = _within_bound(lambda: append_ledger.main([*argv, "--cwd", str(root)]))
+    err = capsys.readouterr().err
+    assert found == 1 and "is not a regular file" in err and "Next:" in err
