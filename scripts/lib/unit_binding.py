@@ -39,21 +39,37 @@ def _read(path: Path) -> dict[str, dict[str, object]]:
     return {str(name): {str(k): v for k, v in rec.items()} for name, rec in units.items()}
 
 
+def _held(units: dict[str, dict[str, object]], unit_name: str) -> str | None:
+    # issue 29: a unit already dispatched or bound takes no second coder.
+    if unit_name not in units:
+        return None
+    holder = units[unit_name].get("agent_id")
+    if holder:
+        return (
+            f"unit {unit_name} is bound to coder {holder} (issue 29). "
+            "Next: resume that coder with SendMessage."
+        )
+    return (
+        f"unit {unit_name} was already dispatched to a coder that has not written "
+        "yet (issue 29). Next: wait for that coder, or stop the train."
+    )
+
+
+def held_reason(repo: Path, train_id: str, unit_name: str) -> str | None:
+    # issue 29: read-only once check for a coder dispatch that records no binding.
+    try:
+        return _held(_read(bindings_path(repo, train_id)), unit_name)
+    except TrainStateError as exc:
+        return str(exc)
+
+
 def record_dispatch(repo: Path, train_id: str, unit_name: str) -> str | None:
     try:
         with _locked(repo, train_id) as path:
             units = _read(path)
-            if unit_name in units:
-                holder = units[unit_name].get("agent_id")
-                if holder:
-                    return (
-                        f"unit {unit_name} is bound to coder {holder} (issue 29). "
-                        "Next: resume that coder with SendMessage."
-                    )
-                return (
-                    f"unit {unit_name} was already dispatched to a coder that has not written "
-                    "yet (issue 29). Next: wait for that coder, or stop the train."
-                )
+            held = _held(units, unit_name)
+            if held is not None:
+                return held
             units[unit_name] = {"agent_id": None}
             train_state._write(path, {"units": units})
     except TrainStateError as exc:

@@ -7,6 +7,7 @@ import string
 from dataclasses import dataclass
 from pathlib import Path
 
+from lib.agent_files import FRONTMATTER_KEY, parse_frontmatter
 from lib.audit import project_root
 from lib.config import LEDGER_FIELDS, LEDGER_FORMATS, Config, LedgerDecl
 from lib.manifest import MANIFEST_NAME, ManifestError, read_raw
@@ -19,7 +20,8 @@ _SEPARATOR = re.compile(r"^\|(\s*:?-+:?\s*\|)+\s*$")
 _ENTRY_HEADING = re.compile(r"^## Entry ([0-9]+)\b")
 _LEADING_INT = re.compile(r"[0-9]+")
 _DIGITS = re.compile(r"[0-9]+")
-_FRONTMATTER_SOURCE = re.compile(r"frontmatter:\S+")
+# W1.3: the key form the shared frontmatter reader accepts.
+_FRONTMATTER_SOURCE = re.compile("frontmatter:" + FRONTMATTER_KEY.pattern)
 _UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 _CODE_CLASS = "[A-Za-z0-9_-]+"
 _SCHEME_FIELDS = {"seq": "[0-9]+", "repo": _CODE_CLASS, "type": _CODE_CLASS}
@@ -96,23 +98,9 @@ def _validate(decl: LedgerDecl, where: str) -> None:
         )
 
 
-# 0004: a heading ledger must start with a `---` line to use a frontmatter sequence.
-def _frontmatter(text: str) -> dict[str, str]:
-    lines = text.splitlines()
-    if not lines or lines[0] != "---":
-        return {}
-    out: dict[str, str] = {}
-    for line in lines[1:]:
-        if line.strip() == "---":
-            return out
-        key, sep, value = line.partition(":")
-        if sep and key.strip():
-            out[key.strip()] = value.strip()
-    return {}
-
-
-def _cells(line: str) -> list[str]:
-    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+# 0004, W1.3: a heading ledger must start with a `---` line to use a frontmatter sequence.
+def _frontmatter(text: str, path: Path) -> dict[str, str]:
+    return parse_frontmatter(text.splitlines(), path, lenient=True)
 
 
 def _id_column(lines: list[str], i: int) -> int | None:
@@ -120,7 +108,7 @@ def _id_column(lines: list[str], i: int) -> int | None:
     line = lines[i]
     if not line.startswith("|") or i + 1 >= len(lines) or not _SEPARATOR.match(lines[i + 1]):
         return None
-    cells = [cell.lower() for cell in _cells(line)]
+    cells = [cell.lower() for cell in split_row(line)]
     return cells.index("id") if "id" in cells else None
 
 
@@ -164,7 +152,7 @@ def _infer(path: Path) -> ResolvedLedger | None:
         return None
     if _id_table(text.splitlines()) is not None:
         return ResolvedLedger(path, "markdown-table-row", TABLE_SCHEME, "last-row-id", "probe")
-    if "sequence_id" in _frontmatter(text):
+    if "sequence_id" in _frontmatter(text, path):
         return ResolvedLedger(
             path, "heading-entry", HEADING_SCHEME, "frontmatter:sequence_id", "probe"
         )
@@ -226,7 +214,7 @@ def _last_table_id(lines: list[str], ledger: ResolvedLedger) -> int:
             f"{ledger.path} has no table rows. Next: add a header, separator and first row."
         )
     column, rows = table
-    cells = _cells(rows[-1])
+    cells = split_row(rows[-1])
     return _leading_int(cells[column] if column < len(cells) else "", ledger)
 
 
@@ -258,7 +246,7 @@ def read_sequence(ledger: ResolvedLedger) -> int:
         return _last_heading_id(lines, ledger)
     if source.startswith("frontmatter:"):
         key = source.removeprefix("frontmatter:")
-        value = _frontmatter(text).get(key)
+        value = _frontmatter(text, ledger.path).get(key)
         if value is None or not _DIGITS.fullmatch(value):
             raise LedgerError(
                 f"{ledger.path} frontmatter key {key!r} is missing or not an integer. "

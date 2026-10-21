@@ -313,6 +313,7 @@ Daedalus/
 │   ├── lib/ledger.py                # ledger resolution, sequence read, entry format
 │   ├── lib/locks.py                 # the one FIFO-safe lock opener and bounded lock
 │   ├── lib/manifest.py              # the one reader of service-manifest.json
+│   ├── lib/narrow.py                # narrows parsed JSON values to typed values
 │   ├── lib/plan_record.py           # loads and validates plan records
 │   ├── lib/project_keys.py          # every manifest and config key, its reference row, and the starter files
 │   ├── lib/project_root.py          # finds the project root

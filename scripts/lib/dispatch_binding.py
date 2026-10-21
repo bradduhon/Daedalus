@@ -12,8 +12,10 @@ from pathlib import Path
 from lib import plan_record, unit_binding
 from lib.audit_proof import SUMMARY_DIR
 from lib.config import DEFAULT_MAX_CONCURRENT_BUILDERS
+from lib.narrow import integer
 from lib.project_root import project_root
 from lib.shell import _abs, _base, _git_split
+from lib.train_scope import policed_outside_train
 from lib.train_state import TRAIN_ID, TrainStateError, active_train
 from lib.train_state import load as load_train
 from lib.unit_binding import claim, rebind, record_dispatch
@@ -108,8 +110,6 @@ def _digest(path: Path) -> str:
 
 def _plan_defect(repo: Path, train: str, state: dict[str, object]) -> str | None:
     # spec 4.1, 0086: the hash covers the raw file bytes; validate runs at the train's builder cap.
-    from lib.train_runner import _int
-
     record = state.get("plan")
     if not isinstance(record, dict):
         return f"the state of train {train} records no plan."
@@ -132,11 +132,22 @@ def _plan_defect(repo: Path, train: str, state: dict[str, object]) -> str | None
         return (
             f"the plan file {raw} hashes to {after}, not {sha}; it changed after it was recorded."
         )
-    cap = _int(state, "max_concurrent_builders", DEFAULT_MAX_CONCURRENT_BUILDERS)
+    cap = integer(state, "max_concurrent_builders", DEFAULT_MAX_CONCURRENT_BUILDERS)
     defects = plan_record.validate(plan, cap)
     if defects:
         return f"the plan {raw} has {len(defects)} defect(s): {' '.join(defects)}"
     return None
+
+
+def _names_a_coder(subagent: str) -> bool:
+    # issue 29: fail closed; a repo-coder under any namespace meets the coder plan gate.
+    return subagent.rpartition(":")[2] == "repo-coder"
+
+
+def _our_coder(subagent: str) -> bool:
+    # W1.3: train_scope's namespace check decides which coder dispatch records a unit binding.
+    prefix, sep, name = subagent.partition(":")
+    return (name if sep else prefix) == "repo-coder" and policed_outside_train(subagent)
 
 
 def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
@@ -147,7 +158,7 @@ def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     if step is not None:
         return step
     subagent = str(tool_input.get("subagent_type") or "")
-    if subagent.rpartition(":")[2] != "repo-coder" or not os.path.isabs(cwd):
+    if not _names_a_coder(subagent) or not os.path.isabs(cwd):
         return None
     if not _train_active(cwd):
         return None
@@ -171,6 +182,8 @@ def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     unit = _unit_named(state, match.group(1))
     if unit is None:
         return _not_a_unit(match.group(1), train)
+    if not _our_coder(subagent):
+        return unit_binding.held_reason(repo, train, unit)  # issue 29: once, never bound.
     return record_dispatch(repo, train, unit)
 
 

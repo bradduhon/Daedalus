@@ -347,3 +347,41 @@ def test_supersedes_ids_follow_the_declared_scheme() -> None:
     assert supersedes_problem("Supersedes: 0012-DAE-PLT.", "{seq:04d}") is not None
     with pytest.raises(LedgerError, match="Next:"):
         id_pattern("{seq}-{owner}")
+
+
+def test_last_row_id_keeps_an_escaped_pipe_in_its_cell(tmp_path: Path) -> None:
+    # W1.3: the sequence reader and table_cells share split_row, escaped pipes included.
+    text = "| Note \\| x | Id |\n|---|---|\n| a \\| b | 0007-A |\n"
+    (tmp_path / "t.md").write_text(text, encoding="utf-8")
+    assert read_sequence(_led(tmp_path / "t.md", "markdown-table-row", "{seq}", "last-row-id")) == 7
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("---\nsequence_id: 9\nnot a pair\n---\n", 9),
+        ("---\n  sequence_id: 3\nsequence_id: 9\n---\n", 9),
+        ("---\n# comment\n- item\nsequence_id: 9\n---\n", 9),
+    ],
+)
+def test_frontmatter_sequence_uses_the_shared_lenient_reader(
+    tmp_path: Path, text: str, expected: int
+) -> None:
+    # W1.3: malformed, nested, comment and list lines are skipped, never raised.
+    (tmp_path / "h.md").write_text(text, encoding="utf-8")
+    led = _led(tmp_path / "h.md", "heading-entry", "{seq}", "frontmatter:sequence_id")
+    assert read_sequence(led) == expected
+
+
+def test_unclosed_frontmatter_reads_as_absent(tmp_path: Path) -> None:
+    (tmp_path / "h.md").write_text("---\nsequence_id: 9\n", encoding="utf-8")
+    led = _led(tmp_path / "h.md", "heading-entry", "{seq}", "frontmatter:sequence_id")
+    with pytest.raises(LedgerError, match="missing or not an integer"):
+        read_sequence(led)
+
+
+def test_frontmatter_source_key_follows_the_reader_key_form(repo: Path) -> None:
+    # W1.3: a key the shared reader would skip is refused when the ledger is declared.
+    cfg = Config(ledger=LedgerDecl(repo / "h.md", "heading-entry", "{seq}", "frontmatter:seq-id"))
+    with pytest.raises(LedgerError, match="frontmatter:<key>"):
+        resolve_ledger(str(repo), cfg)
