@@ -139,8 +139,13 @@ def _plan_defect(repo: Path, train: str, state: dict[str, object]) -> str | None
     return None
 
 
+def _names_a_coder(subagent: str) -> bool:
+    # issue 29: fail closed; a repo-coder under any namespace meets the coder plan gate.
+    return subagent.rpartition(":")[2] == "repo-coder"
+
+
 def _our_coder(subagent: str) -> bool:
-    # W1.3: train_scope's namespace check; a foreign plugin's repo-coder is not this coder.
+    # W1.3: train_scope's namespace check decides which coder dispatch records a unit binding.
     prefix, sep, name = subagent.partition(":")
     return (name if sep else prefix) == "repo-coder" and policed_outside_train(subagent)
 
@@ -153,7 +158,7 @@ def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     if step is not None:
         return step
     subagent = str(tool_input.get("subagent_type") or "")
-    if not _our_coder(subagent) or not os.path.isabs(cwd):
+    if not _names_a_coder(subagent) or not os.path.isabs(cwd):
         return None
     if not _train_active(cwd):
         return None
@@ -177,7 +182,7 @@ def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     unit = _unit_named(state, match.group(1))
     if unit is None:
         return _not_a_unit(match.group(1), train)
-    return record_dispatch(repo, train, unit)
+    return record_dispatch(repo, train, unit) if _our_coder(subagent) else None
 
 
 def _worktree_lines(text: str) -> list[str]:

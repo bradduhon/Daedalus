@@ -150,18 +150,32 @@ def test_non_coder_dispatch_needs_no_plan(repo_cwd: Path, unit: Path) -> None:
         (CODER, True),
         ("repo-coder", True),
         ("daedalus-probe:repo-coder", True),
-        ("other:repo-coder", False),
-        ("daedalus:x:repo-coder", False),
+        ("other:repo-coder", True),
+        ("daedalus:x:repo-coder", True),
         ("daedalus:repo-coder-x", False),
     ],
 )
-def test_coder_gate_uses_the_train_scope_namespace_check(
+def test_coder_plan_gate_fails_closed_on_any_namespace(
     repo_cwd: Path, unit: Path, subagent: str, gated: bool
 ) -> None:
-    # W1.3: only a Daedalus namespace, or the bare name, is this train's coder.
+    # issue 29: a repo-coder under any namespace meets the coder plan gate.
     tool_input = _dispatch(repo_cwd, unit, subagent)["tool_input"]
     reason = dispatch_binding._dispatch_reason(tool_input, str(repo_cwd))
     assert (reason is not None and "records no plan" in reason) is gated, reason
+
+
+@pytest.mark.parametrize(
+    ("subagent", "binds"),
+    [(CODER, True), ("repo-coder", True), ("other:repo-coder", False)],
+)
+def test_only_the_train_scope_namespace_records_a_binding(
+    repo_cwd: Path, unit: Path, subagent: str, binds: bool
+) -> None:
+    # W1.3: train_scope's namespace check decides which coder dispatch binds a unit.
+    seed_plan(repo_cwd, TRAIN)
+    tool_input = _dispatch(repo_cwd, unit, subagent)["tool_input"]
+    assert dispatch_binding._dispatch_reason(tool_input, str(repo_cwd)) is None
+    assert bindings_path(repo_cwd, TRAIN).exists() is binds
 
 
 def test_gate_is_off_outside_a_train(repo_cwd: Path, unit: Path) -> None:
