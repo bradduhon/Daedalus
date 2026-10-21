@@ -73,7 +73,7 @@ Every `MISS` line ends with a `Next:` instruction that says what to do. In a new
    - `[STATUS: EXCEPTION]`: you chose to merge with each remaining audit finding as a tracked-risk issue, and the session binds that exception ruling to the integration tip.
    - `[STATUS: STOP]`: the session runs the stop command and shows its `Next:` line. Say continue to resume.
    - `[STATUS: TRAIN_COMPLETE]`: the session shows the summary path and the audit log path, then ends the train.
-7. Read the audit result. The units merge onto the local branch `daedalus/<train-id>` first, and the security auditor judges that merged integration tip against the train's base. After two rejected rounds you pick what happens to the remaining findings: one more fix round, a merge with each finding as a tracked-risk issue, or a stop with the branches kept. A train merged on that exception stops at the Push Train's verdict check, so you push it by hand from the main session once the issues are filed (issue 62).
+7. Read the audit result. The units merge onto the local branch `daedalus/<train-id>` first, and the security auditor judges that merged integration tip against the train's base. Each rejected round runs a fix round until the audit stops making progress: a finding comes back after its fix, a new high or critical finding appears, or the round budget runs out (`audit_round_budget`, default 5). Then you pick what happens to the remaining findings: one more fix round, a merge with each finding as a tracked-risk issue, or a stop with the branches kept. The Push Train's verdict check accepts a train merged on that exception once the exception ruling is bound to the integration tip (issue 62).
 8. Push and merge. Review the integration branch, then read the session's audit log with `/daedalus:audit-report <session>`. Type `/daedalus:push-train` to push the branch and open its pull request. You merge the pull request.
 
 ## Saved recipes
@@ -121,12 +121,13 @@ Each agent's file lists the only tools it may use, the reply lines it ends with,
 | cis-specialist | judge | sonnet | Bash, Grep, Read | Evaluates cloud infrastructure, IAM/RCP policies, and OS/container hardening against operator-supplied CIS Benchmarks. | `[STATUS: CACHE_INVALID] <detail>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with control ids and file:line>` | clarification, audit |
 | contract-spec | producer | sonnet | Edit, Glob, Grep, Read, Write | Reads and updates service handshake contracts, API schemas, and specifications. | `## Locked Contract Packet` | clarification, plan |
 | nist-specialist | judge | sonnet | Bash, Grep, Read | Evaluates architecture, IAM, and cryptographic boundaries against the pinned NIST SP 800-53 OSCAL catalog and SP 800-57 key-management guidance. | `[STATUS: CACHE_INVALID] <detail>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with control ids and file:line>` | clarification, audit |
-| orchestrator | dispatcher | fable | Agent, Bash, Edit, Glob, Grep, Read, SendMessage, Write | Runs one Build Train from its plan to the audited integration tip. | `[STATUS: DECISION] brief=<path> questions=<n>`; `[STATUS: EXCEPTION] ledger_id=<id>`; `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path>`; `[STATUS: STOP] reason=<what happened> next=<next action>` | context, clarification, plan, implementation, audit |
+| orchestrator | dispatcher | fable | Agent, Bash, Edit, Glob, Grep, Read, SendMessage, Write | Runs one Build Train from its plan to the audited integration tip. | `[STATUS: DECISION] brief=<path> questions=<n>`; `[STATUS: EXCEPTION] ledger_id=<id>`; `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path> tip=<40 hex>`; `[STATUS: STOP] reason=<what happened> next=<next action>` | context, clarification, plan, implementation, audit |
 | planner | shaper | opus | Glob, Grep, Read, Write | Cuts a design spec into work units that coders can build in parallel. | `[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>`; `[STATUS: QUESTION] <what the task leaves open>` | plan |
 | pr-train-conductor | mover | opus | Bash, Glob, Grep, Read | GitHub specialist for the Push Train. | `[STATUS: PUSHED] branch=<b> pr=<url>`; `[STATUS: CI] run=<id> conclusion=<text>`; `[STATUS: BLOCKED] <precondition that failed>` | commit, release |
 | repo-coder | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Scoped implementation worker. | `[STATUS: YIELD_WEB] <query>`; `[STATUS: YIELD_CONTRACT] <mismatch>`; `[STATUS: YIELD_COMPLIANCE] <question>`; `[STATUS: YIELD_STANDARDS] <question>`; `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>` | implementation |
-| security-auditor | judge | opus | Bash, Glob, Grep, Read | Adversarial pre-commit security and contract verifier. | `[VERDICT: APPROVED]`; `[VERDICT: REJECTED]` | audit |
+| security-auditor | judge | opus | Bash, Edit, Glob, Grep, Read, Write | Adversarial pre-commit security and contract verifier. | `[VERDICT: APPROVED] tip=<40 lowercase hex>`; `[VERDICT: REJECTED] tip=<40 lowercase hex>` | audit |
 | standards-rules-specialist | finder | sonnet | Glob, Grep, Read | Adopts the project's declared standards. | `## Standards Packet`; `[STANDARDS: CONTRADICTION] <spec ref> vs <source:line>`; `[STATUS: STANDARD] <answer>` | clarification, plan |
+| verifier | judge | opus | Bash, Glob, Grep, Read | Adversarial read-only verifier of a coder's completion report. | `[VERDICT: VERIFIED] claims=<n>`; `[VERDICT: REFUTED] <rows>` | implementation |
 | web-researcher | finder | haiku | Read, WebFetch, WebSearch | Fast external documentation lookup on Haiku. | `[STATUS: RESEARCH] <payload under 300 words with URLs>` | context |
 <!-- end generated -->
 
@@ -143,8 +144,9 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 | planner | shaper | credential_paths, workspace_integrity, tool_bound, root_writes --touch scratch --name plan*.md |
 | pr-train-conductor | mover | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools --gh, command_allowlist --allow git,gh,gitleaks, git_grammar --allow conductor, git_push --conductor, gh_classes --conductor |
 | repo-coder | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes, gh_classes |
-| security-auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only, gh_classes |
+| security-auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only --test-runner audit, gh_classes, root_writes --touch audit |
 | standards-rules-specialist | finder | credential_paths, tool_bound |
+| verifier | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only --test-runner unit, gh_classes |
 | web-researcher | finder | credential_paths, tool_bound, network_tools --web |
 <!-- end generated -->
 
@@ -226,6 +228,8 @@ One row per key the two readers accept: what the key governs, then what goes the
 | `operator_signing_keys` | `.claude/daedalus/config.json` | Reserved for the key fingerprints allowed to sign merges; no check reads it yet | list of strings | Non-empty strings | `[]` | `["ABCD1234EF567890"]` |
 | `max_concurrent_builders` | `.claude/daedalus/config.json` | How many coding agents a parallel stage runs at once, and the cap on the plan width the plan validator prints (0072) | integer | A whole number of at least 1; `true` and `false` are refused | `5` | `3` |
 | `audit_retention_days` | `.claude/daedalus/config.json` | How many days a session's audit log is kept after its last record. When a new session starts writing, older logs are deleted, each named with its final record in the new session's own log. A log named on a train summary's `Session` line, the log of a train not yet merged, and the current session's log are never deleted (issue 50) | integer or null | A whole number of at least 90, or `null` | `null`: every log is kept | `365` |
+| `audit_round_budget` | `.claude/daedalus/config.json` | How many audit rounds a Build Train runs on its own. A rejected round continues while each round's findings shrink and no new high or critical finding appears; once the rounds used reach this number, the train stops and asks the operator (0109) | integer | A whole number from 1 to 10; `true` and `false` are refused | `5` | `3` |
+| `agent_models` | `.claude/daedalus/config.json` | Which model each catalog agent runs on, in place of the `model:` line of its agent file; a model a skill is given for one run still comes first | object | Keys are agent names the catalog lists; values are `"sonnet"`, `"opus"`, `"haiku"` or `"fable"`; any other name or value is refused | `{}`: every agent runs on its agent file's model | `{"repo-coder": "sonnet"}` |
 <!-- end key reference -->
 
 ## Safety model
@@ -261,6 +265,7 @@ Daedalus/
 │   ├── repo-coder.md
 │   ├── security-auditor.md
 │   ├── standards-rules-specialist.md
+│   ├── verifier.md
 │   └── web-researcher.md
 ├── docs/
 │   ├── howto/README.md              # operator guide
@@ -290,8 +295,10 @@ Daedalus/
 │   ├── checks/workspace_integrity.py # refuses writes into .git and the data folder
 │   ├── lib/__init__.py
 │   ├── lib/agent_files.py           # reads agent files and their hooks blocks
+│   ├── lib/agent_models.py          # the model each agent runs on: override, config, agent file
 │   ├── lib/audit.py                 # hash-chained append, redaction
 │   ├── lib/audit_proof.py           # the hooks-live and approved-verdict proofs
+│   ├── lib/audit_rounds.py          # the auditor's finding list and the stall rule
 │   ├── lib/config.py                # config.json loading and validation
 │   ├── lib/controls.py              # loads the controls fragments
 │   ├── lib/credential_paths.py      # the credential-path deny every agent meets

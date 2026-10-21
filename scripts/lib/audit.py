@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, suppress
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -507,6 +507,8 @@ def _chain_write(path: Path, record: dict[str, Any]) -> None:
 
 
 ROTATION_EVENT = "AuditRotation"
+# issue 61, AU-2: names each log an AuditRotation record named that survived its unlink.
+ROTATION_FAILED_EVENT = "AuditRotationFailed"
 _DAY_S = 86400
 
 
@@ -562,6 +564,25 @@ def _try_lock(log: Path, stack: ExitStack) -> bool:
     return True
 
 
+def _unlink_rotated(log: Path) -> dict[str, object] | None:
+    # issue 61, AU-5: caught per log, so one failed unlink never stops the rest.
+    error: OSError | None = None
+    try:
+        log.unlink()
+    except OSError as exc:
+        error = exc
+    if not os.path.lexists(log):
+        with suppress(OSError):
+            log.with_suffix(".lock").unlink(missing_ok=True)  # a leftover lock holds no records
+        return None
+    # issue 61, AU-3: errno and strerror only; str(exc) carries the path, which redact keeps.
+    return {
+        "session_id": log.stem,
+        "errno": None if error is None else error.errno,
+        "strerror": None if error is None else error.strerror,
+    }
+
+
 def rotate_logs(cwd: str, current: Path) -> list[str]:
     # issue 50, AU-11, AU-9(4): any read or parse error deletes nothing and never fails the append.
     try:
@@ -580,28 +601,30 @@ def rotate_logs(cwd: str, current: Path) -> list[str]:
                 ends.append({"session_id": log.stem, "seq": seq, "hash": digest, "path": log})
             if not ends:
                 return []
-            _rotation_record(cwd, current, days, ends)
-            for end in ends:
-                log = Path(str(end["path"]))
-                log.unlink()
-                log.with_suffix(".lock").unlink(missing_ok=True)
-        return [str(end["session_id"]) for end in ends]
+            rotated = [{k: end[k] for k in ("session_id", "seq", "hash")} for end in ends]
+            _chain_event(cwd, current, ROTATION_EVENT, retention_days=days, rotated=rotated)
+            failed = [_unlink_rotated(Path(str(end["path"]))) for end in ends]
+            survivors = [entry for entry in failed if entry is not None]
     except Exception:  # noqa: BLE001
         # issue 50: silent, as the jail's stderr is its block reason; a bad config blocks there.
         return []
+    if survivors:
+        # issue 61, AU-5: outside the catch-all, so a failed write fails the jail closed.
+        _chain_event(cwd, current, ROTATION_FAILED_EVENT, survivors=survivors)
+    kept = {entry["session_id"] for entry in survivors}
+    return [str(end["session_id"]) for end in ends if end["session_id"] not in kept]
 
 
-def _rotation_record(cwd: str, current: Path, days: int, ends: list[dict[str, object]]) -> None:
-    # AU-9(4): the deletion is chained into the session whose first write triggered it.
-    record = build_record({"hook_event_name": ROTATION_EVENT, "cwd": cwd})
+def _chain_event(cwd: str, current: Path, event: str, **fields: object) -> None:
+    # AU-9(4), AU-12: a rotation event is chained into the session whose first write triggered it.
+    record = build_record({"hook_event_name": event, "cwd": cwd})
     root, source, _ = root_info(cwd)
     record.update(
         session_id=current.stem,
         agent_type=None,
         project_root=str(root),
         root_source=source,
-        retention_days=days,
-        rotated=[{k: end[k] for k in ("session_id", "seq", "hash")} for end in ends],
+        **fields,
     )
     with audit_lock(current.with_suffix(".lock")):
         _chain_write(current, record)

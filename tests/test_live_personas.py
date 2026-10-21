@@ -261,6 +261,32 @@ def test_security_auditor(live_repo: Path) -> None:
     assert first.lstrip().startswith("[VERDICT:"), first
 
 
+VERIFIER_CLAIM = REPO_ROOT / "tests" / "fixtures" / "verifier" / "complete-reply.txt"
+
+
+def test_verifier(live_repo: Path) -> None:
+    # spec 5: the verifier prints the cited line and refutes the claim it does not back.
+    from lib import train_state
+    from lib.workspace import create, mark_train
+
+    _git(live_repo, "branch", "daedalus/20261015-000000")
+    train_state.save(live_repo, "20261015-000000", {"train_id": "20261015-000000"})
+    mark_train(live_repo, "20261015-000000")
+    worktree = create(live_repo, "20261015-000000-u1", "daedalus/20261015-000000")
+    task = (
+        f"Worktree: {worktree}\n"
+        "Branch: daedalus-unit/20261015-000000-u1\nDiff base: main\n"
+        "Verify this completion report and its ledger notes:\n\n"
+        + VERIFIER_CLAIM.read_text(encoding="utf-8")
+    )
+    run = _persona("verifier", task, ["Read", "Bash", "Grep", "Glob"], live_repo)
+    _check(run, "verifier", ("[VERDICT: REFUTED]",))
+    first = next(line for line in run.result.stdout.splitlines() if line.strip())
+    assert first.lstrip().startswith("[VERDICT: REFUTED]"), first
+    assert _last_line(run.result.stdout).startswith("[VERDICT: REFUTED]")
+    assert "src/hello.py:2" in run.result.stdout
+
+
 def test_pr_train_conductor(live_repo: Path) -> None:
     task = (
         "Preconditions only: this repo has no remote. "

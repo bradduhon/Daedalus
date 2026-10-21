@@ -1,0 +1,14 @@
+{
+  "jail.R_BASETEMP_AGENT": {
+    "failure": "issue 56: an agent's pytest run puts its temp folder where the write checks never look, and the refusal does not say which flag, which agent or what to do instead",
+    "premise_test": "tests/test_checks_read_only_bash.py::test_basetemp_is_refused_by_name_for_every_agent"
+  },
+  "read_only_bash.R_TEST_RUN": {
+    "failure": "0109: a judge's test run reaches test files outside the train's audit folder, the corpus or a recorded unit worktree, so it runs code no round wrote or no unit holds",
+    "premise_test": "tests/test_checks_read_only_bash.py::test_audit_test_run_refuses_other_paths"
+  },
+  "read_only_bash.R_TEST_RUN_NO_TRAIN": {
+    "failure": "0109: a judge runs tests in a repository with no active train, where no audit folder or unit worktree bounds what runs",
+    "premise_test": "tests/test_checks_read_only_bash.py::test_test_run_outside_a_train_is_refused"
+  }
+}

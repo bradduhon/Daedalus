@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.project_root import project_root  # noqa: E402
 from lib.workspace import (  # noqa: E402
     LedgerQuestion,
     WorkspaceError,
@@ -17,6 +18,7 @@ from lib.workspace import (  # noqa: E402
     finish,
     lock,
     mark_train,
+    refresh,
     release,
     remove,
     resume,
@@ -27,8 +29,8 @@ from lib.workspace import (  # noqa: E402
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Daedalus worktrees and train state: create, remove, mark, unmark, begin, "
-        "lock, stop, finish, resume, release. Exit 0 done, 1 stopped with a Next line, "
+        description="Daedalus worktrees and train state: create, remove, refresh, mark, unmark, "
+        "begin, lock, stop, finish, resume, release. Exit 0 done, 1 stopped with a Next line, "
         "3 ledger question."
     )
     sub = parser.add_subparsers(dest="action", required=True)
@@ -59,11 +61,25 @@ def main(argv: list[str]) -> int:
     publish = sub.add_parser("release")
     publish.add_argument("--repo", type=Path, required=True)
     publish.add_argument("--merge-sha", dest="merge_sha", required=True)
+    again = sub.add_parser("refresh")
+    again.add_argument("--repo", type=Path, required=True)
+    again.add_argument("--name", required=True)
     args = parser.parse_args(argv)
     repo = args.repo.resolve()
+    # pin C3 -> C4, issue 63: --repo is the project root of the working directory, or nothing runs.
+    root = project_root(Path.cwd()).resolve()
+    if repo != root:
+        print(
+            f"daedalus-workspace: --repo {args.repo} is not the project root of the working "
+            f"directory ({root}). Next: run the command from {args.repo}, or pass --repo {root}.",
+            file=sys.stderr,
+        )
+        return 1
     try:
         if args.action == "create":
             print(create(repo, args.name, args.base))
+        elif args.action == "refresh":
+            print(refresh(repo, args.name))
         elif args.action == "remove":
             remove(repo, args.name)
             print(f"removed {worktree_path(repo, args.name)}")

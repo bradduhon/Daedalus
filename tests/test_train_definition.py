@@ -275,6 +275,17 @@ def test_project_brief_resolves_beside_the_definition(tmp_path: Path) -> None:
     assert validate(defn, REPO_ROOT, "plugin") != []
 
 
+def test_audit_writer_still_touches_none() -> None:
+    # 0109: the auditor's audit class keeps a touch-none stage valid; a producer's write does not.
+    from lib import agent_files
+    from lib.train_definition import touch_grants
+
+    auditor = agent_files.load(REPO_ROOT / "agents" / "security-auditor.md")
+    assert touch_grants(auditor) == frozenset({"audit", "none"})
+    spec = agent_files.load(REPO_ROOT / "agents" / "contract-spec.md")
+    assert "none" not in touch_grants(spec)
+
+
 def test_definition_reads_name_version_and_stages() -> None:
     defn = load(FIXTURES / "valid.json")
     assert (defn.name, defn.version, len(defn.stages)) == ("valid", 1, 4)

@@ -10,7 +10,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.audit import AuditLockError, read_log  # noqa: E402
-from lib.audit_proof import NOT_UTF8, ProofError, approved, hooks_live, verify_lines  # noqa: E402
+from lib.audit_proof import NOT_UTF8, ProofError, hooks_live, push_proof, verify_lines  # noqa: E402
 
 __all__ = ["NOT_UTF8", "verify", "verify_lines"]
 HOOKS_LIVE_NEEDLE = "verify_audit_chain.py --hooks-live"
@@ -57,7 +57,8 @@ def _mode(argv: list[str]) -> int:
             # issue 57: the first hooks-live of a train records its start_seq.
             print(hooks_live(repo, HOOKS_LIVE_NEEDLE, mark=True))
         else:
-            print(approved(repo, args.approved))
+            # 62: prints which path passed, the approved verdict or the exception ruling.
+            print(push_proof(repo, args.approved))
     except ProofError as exc:
         print(exc)
         return 1

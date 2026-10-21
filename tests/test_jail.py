@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import dispatch_binding, jail, train_state
+from lib import dispatch_binding, jail, shell, train_state
 from lib.config import Config
 from lib.jail import KNOWN_AGENTS, decide
 from lib.shell import split_pipeline, tokenize
@@ -70,6 +70,7 @@ def test_known_agents_match_spec_matrix() -> None:
             "standards-rules-specialist",
             "planner",
             "orchestrator",
+            "verifier",
         }
     )
 
@@ -2233,3 +2234,22 @@ def test_every_deleted_case_has_a_destination() -> None:
     assert [name for name in DELETED_CASES if name not in copied] == []
     here = _case_names(Path(__file__))
     assert [name for name in DELETED_CASES if name in here] == []
+
+
+def test_git_read_rows_keep_worktree_writes_train_scoped(
+    marked_repo: Path, other_repo: Path
+) -> None:
+    # spec 6: grep and merge-base read by name; a worktree add into a marked repo stays scoped.
+    assert {"grep", "worktree", "merge-base"} <= shell.READ_ONLY_GIT
+    reads = (f"git -C {marked_repo} grep -n x", f"git -C {marked_repo} merge-base a b")
+    for command in reads:
+        assert jail._bash_write_dirs(command, str(other_repo)) == [], command
+    for sub in ("worktree add /tmp/x", "worktree list"):
+        found = jail._bash_write_dirs(f"git -C {marked_repo} {sub}", str(other_repo))
+        assert found == [str(marked_repo)], sub
+    assert (
+        jail._marked_repo(
+            str(other_repo), "Bash", {"command": f"git -C {marked_repo} worktree add /tmp/x"}
+        )
+        == marked_repo
+    )

@@ -10,7 +10,7 @@ from tests.conftest import REPO_ROOT
 def test_manifest_has_required_keys() -> None:
     data = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
     assert data["name"] == "daedalus"
-    assert data["version"] == "3.2.0"
+    assert data["version"] == "3.3.0"
     assert data["description"]
     assert data["author"]["name"] == "Brad Duhon"
 

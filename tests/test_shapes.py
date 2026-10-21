@@ -46,3 +46,11 @@ def test_only_the_dispatcher_carries_the_dispatch_gate() -> None:
     for entry in ("shell_tripwires", "git_push", "command_allowlist --allow train,inspect"):
         assert entry in data["dispatcher"], entry
     assert not any(e.startswith(("git_grammar", "network_tools --")) for e in data["dispatcher"])
+
+
+def test_judge_shape_names_no_write_hook() -> None:
+    # 0109: the auditor's audit write rides its agent file; the judge list grants no write.
+    data = json.loads(SHAPES.read_text(encoding="utf-8"))
+    flat = [e for entry in data["judge"] for e in (entry if isinstance(entry, list) else [entry])]
+    assert not any(e.startswith(("root_writes", "unit_writes")) for e in flat)
+    assert "read_only_bash" in flat

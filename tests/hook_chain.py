@@ -53,7 +53,17 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("tool_bound", ()),
         ("shell_tripwires", ()),
         ("network_tools", ()),
-        ("read_only_bash", ("--git", "read-only")),
+        ("read_only_bash", ("--git", "read-only", "--test-runner", "audit")),
+        ("gh_classes", ()),
+        ("root_writes", ("--touch", "audit")),
+    ),
+    "verifier": (
+        ("credential_paths", ()),
+        ("workspace_integrity", ()),
+        ("tool_bound", ()),
+        ("shell_tripwires", ()),
+        ("network_tools", ()),
+        ("read_only_bash", ("--git", "read-only", "--test-runner", "unit")),
         ("gh_classes", ()),
     ),
     "nist-specialist": (

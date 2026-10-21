@@ -4,6 +4,7 @@
 # 0088: the agent table is generated too; README and the catalog skill carry it verbatim.
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -12,6 +13,7 @@ from pathlib import Path
 import catalog
 import pytest
 from lib import agent_files
+from lib.config import Config
 
 from tests.conftest import REPO_ROOT, SCRIPTS_DIR
 
@@ -129,6 +131,47 @@ def test_catalog_skill_states_the_musts() -> None:
         assert rule in rules, rule
     assert "`Dispatch: <agent>`" in rules and "`Prompt file: <path>`" in rules
     assert "`Expect: <reply lines>`" in rules
+
+
+def _model_cells(out: str) -> dict[str, str]:
+    rows = [row.removeprefix("| ").split(" | ") for row in out.splitlines()[2:]]
+    return {cells[0]: cells[2] for cells in rows}
+
+
+def test_table_without_a_config_is_unchanged_by_the_default_config() -> None:
+    # pin C2 -> C1: no config prints the file models, which an empty config resolves to as well.
+    assert catalog.table(AGENTS) == catalog.table(AGENTS, Config())
+
+
+def test_table_with_a_config_prints_the_effective_model() -> None:
+    # spec 4: agent_models replaces only the Model cell of the agents it names.
+    config = Config(agent_models={"repo-coder": "sonnet", "web-researcher": "fable"})
+    plain, effective = catalog.table(AGENTS), catalog.table(AGENTS, config)
+    files = _model_cells(plain)
+    assert files["repo-coder"] == "opus" and files["web-researcher"] == "haiku"
+    assert _model_cells(effective) == files | config.agent_models
+    changed = [a != b for a, b in zip(plain.splitlines(), effective.splitlines(), strict=True)]
+    assert sum(changed) == 2
+
+
+def test_catalog_cli_table_reads_the_repo_config(repo_cwd: Path, project_data: Path) -> None:
+    doc = {"agent_models": {"planner": "haiku"}}
+    (project_data / "config.json").write_text(json.dumps(doc), encoding="utf-8")
+    script = str(SCRIPTS_DIR / "catalog.py")
+    argv = [sys.executable, script, "table", "--repo", str(repo_cwd)]
+    done = subprocess.run(argv, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == catalog.table(AGENTS, Config(agent_models={"planner": "haiku"}))
+    assert _model_cells(done.stdout)["planner"] == "haiku"
+
+
+def test_catalog_cli_table_reports_a_bad_config(repo_cwd: Path, project_data: Path) -> None:
+    (project_data / "config.json").write_text('{"agent_models": {"x": "opus"}}', encoding="utf-8")
+    script = str(SCRIPTS_DIR / "catalog.py")
+    argv = [sys.executable, script, "table", "--repo", str(repo_cwd)]
+    done = subprocess.run(argv, capture_output=True, text=True, check=False)
+    assert done.returncode == 1 and done.stdout == ""
+    assert "agent_models" in done.stderr and "Next: " in done.stderr
 
 
 def test_catalog_cli_prints_the_table() -> None:

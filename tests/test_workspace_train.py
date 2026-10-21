@@ -51,11 +51,13 @@ def _head(repo: Path) -> str:
 
 
 def _cli(*args: str) -> subprocess.CompletedProcess[str]:
+    # issue 63: the script refuses a --repo that is not the project root of its cwd.
     return subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "daedalus_workspace.py"), *args],
         capture_output=True,
         text=True,
         check=False,
+        cwd=args[args.index("--repo") + 1],
     )
 
 
@@ -680,6 +682,110 @@ def test_finish_and_resume_cli_exit_codes(repo: Path) -> None:
     again = _cli("resume", "--repo", str(repo))
     assert again.returncode == 0, again.stderr
     assert again.stdout.splitlines()[0] == f"resumed train {train}"
+
+
+# 0112, pin C4 -> C5: the audit worktree refresh fast-forwards and never discards a commit.
+def _audited(repo: Path) -> tuple[str, Path]:
+    train = _locked_train(repo)
+    _built(repo, train, "u1")
+    finish(repo)
+    return train, create(repo, workspace.audit_unit(train), f"daedalus/{train}")
+
+
+def _tip(path: Path, ref: str = "HEAD") -> str:
+    return _ok(path, "rev-parse", ref)
+
+
+def test_refresh_fast_forwards_an_existing_audit_worktree(repo: Path) -> None:
+    train, audit = _audited(repo)
+    (repo / "fix.txt").write_text("x\n")
+    _commit_all(repo, "fix on the integration branch")
+    result = _cli("refresh", "--repo", str(repo), "--name", f"{train}-audit")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"{audit}\n"
+    assert _tip(audit) == _tip(repo, f"daedalus/{train}")
+    assert (audit / "fix.txt").is_file() and _head(audit) == f"daedalus-unit/{train}-audit"
+
+
+def test_second_finish_neither_merges_nor_keeps_the_audit_worktree(repo: Path) -> None:
+    train, audit = _audited(repo)
+    (audit / "audit-only.txt").write_text("x\n")
+    _commit_all(audit, "audit scratch commit")
+    _built(repo, train, "fix1-u1", "fix.txt")
+    lines = finish(repo)
+    assert lines[0] == f"merged 2 units into daedalus/{train}"
+    assert not audit.exists() and f"removed {audit}" in lines
+    assert not (repo / "audit-only.txt").exists()
+    assert f"Merge audit for train {train}" not in _merges(repo, f"daedalus/{train}")
+
+
+def test_refresh_readds_a_worktree_a_finish_removed(repo: Path) -> None:
+    train, audit = _audited(repo)
+    _built(repo, train, "fix1-u1", "fix.txt")
+    finish(repo)
+    assert not audit.exists()
+    assert workspace.refresh(repo, f"{train}-audit") == audit
+    assert _head(audit) == f"daedalus-unit/{train}-audit"
+    assert _tip(audit) == _tip(repo, f"daedalus/{train}") and (audit / "fix.txt").is_file()
+    names = [u["name"] for u in train_state.load(repo, train)["units"]]
+    assert names.count(f"{train}-audit") == 1
+
+
+def test_refresh_creates_the_audit_branch_when_absent(repo: Path) -> None:
+    train = _locked_train(repo)
+    _built(repo, train, "u1")
+    finish(repo)
+    audit = workspace.refresh(repo, f"{train}-audit")
+    assert _tip(audit) == _tip(repo, f"daedalus/{train}")
+    units = train_state.load(repo, train)["units"]
+    assert units[-1] == {
+        "name": f"{train}-audit",
+        "branch": f"daedalus-unit/{train}-audit",
+        "path": str(audit),
+        "base": f"daedalus/{train}",
+    }
+
+
+def test_refresh_refuses_a_diverged_audit_branch(repo: Path) -> None:
+    train, audit = _audited(repo)
+    (audit / "audit-only.txt").write_text("x\n")
+    _commit_all(audit, "audit scratch commit")
+    kept = _tip(audit)
+    (repo / "fix.txt").write_text("x\n")
+    _commit_all(repo, "fix on the integration branch")
+    result = _cli("refresh", "--repo", str(repo), "--name", f"{train}-audit")
+    assert result.returncode == 1 and result.stdout == ""
+    assert f"Next: run git -C {audit} status" in result.stderr
+    assert _tip(audit) == kept and (audit / "audit-only.txt").is_file()
+
+
+def test_refresh_refuses_a_dirty_audit_worktree(repo: Path) -> None:
+    train, audit = _audited(repo)
+    (audit / "stray.txt").write_text("x\n")
+    with pytest.raises(WorkspaceError) as info:
+        workspace.refresh(repo, f"{train}-audit")
+    assert "stray.txt" in str(info.value) and f"Next: run git -C {audit} status" in str(info.value)
+    assert (audit / "stray.txt").is_file()
+
+
+def test_refresh_moves_only_the_audit_worktree(repo: Path) -> None:
+    train = _locked_train(repo)
+    unit = _unit(repo, train, "u1")
+    with pytest.raises(WorkspaceError, match=f"with --name {train}-audit"):
+        workspace.refresh(repo, f"{train}-u1")
+    assert unit.is_dir()
+
+
+def test_refresh_before_the_lock_names_it(repo: Path) -> None:
+    train = _train(repo)
+    with pytest.raises(WorkspaceError, match="Next: lock the contract"):
+        workspace.refresh(repo, f"{train}-audit")
+    assert not workspace.worktree_path(repo, f"{train}-audit").exists()
+
+
+def test_refresh_without_a_train_refuses(repo: Path) -> None:
+    with pytest.raises(WorkspaceError, match="no Daedalus train is active"):
+        workspace.refresh(repo, "20261020-131917-audit")
 
 
 # 0068, 0071, 0075: the release step reads VERSION at the merge sha and runs no command.

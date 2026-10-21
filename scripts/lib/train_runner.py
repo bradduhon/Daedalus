@@ -17,11 +17,12 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from lib import manifest, train_definition, train_state, workspace
+from lib import audit_rounds, manifest, train_definition, train_state, workspace
 from lib.audit import ReplyKeyError, message_hmac, reply_key
 from lib.audit_proof import (
     AUDITOR,
     SUMMARY_DIR,
+    TIP,
     VERDICT_APPROVED,
     VERDICT_REJECTED,
     ProofError,
@@ -31,7 +32,8 @@ from lib.audit_proof import (
     newest_log,
     read_chain,
     round_verdict,
-    train_start,
+    tip_problem,
+    verdict_tip,
 )
 from lib.config import ConfigError, load_config
 from lib.jail import normalize_agent
@@ -1280,14 +1282,23 @@ def record_exception(cwd: Path, ledger_id: str) -> Outcome:
     return _recorded(cwd, edit)
 
 
-def _auditor_seq(repo: Path, train_id: str, status: str, seq: int | None) -> int:
+def _auditor_seq(repo: Path, train_id: str, status: str, seq: int | None) -> tuple[int, str | None]:
     # 0089: the verdict is read from this session's auditor reply records, never from the caller.
     try:
         log, _ = live_log(repo, VERDICT_NEEDLE)
         records = read_chain(log)
     except ProofError as exc:
         raise RunnerError(str(exc)) from exc
-    start = train_start(repo, train_id)
+    state = train_state.load(repo, train_id)
+    # issue 60: the reader walks the log of the session the train's bound belongs to.
+    session = train_state.audit_session(state) or log.stem
+    if session != log.stem:
+        raise RunnerError(
+            f"the train's audit bound belongs to session {session}, not this session "
+            f"{log.stem}. Next: run verify_audit_chain.py --hooks-live --repo {repo}, then run "
+            "the security audit again."
+        )
+    start = train_state.session_bound(state, session)
     if start is None:
         raise RunnerError(
             f"the state of train {train_id} records no start_seq to bound the auditor search. "
@@ -1313,11 +1324,44 @@ def _auditor_seq(repo: Path, train_id: str, status: str, seq: int | None) -> int
             f"{problem}. Next: run the security audit; the verdict is recorded from the "
             "auditor's reply, never typed."
         )
+    return found, verdict_tip(turn, found)
+
+
+def _round_findings(
+    repo: Path, train_id: str, status: str, round_: int, path: Path
+) -> dict[str, audit_rounds.Finding]:
+    # pin C3 -> C1: the auditor's list for this round, at its one path; approved lists none.
+    want = repo / SUMMARY_DIR / train_id / "audit" / f"round{round_}" / "findings.txt"
+    given = os.path.normpath(path if path.is_absolute() else repo / path)
+    if given != str(want) or want.is_symlink() or not want.is_file():
+        raise RunnerError(
+            f"--findings {path} is not the round {round_} finding list file. "
+            f"Next: have the auditor write {want}, then rerun verdict with --findings {want}."
+        )
+    try:
+        found = audit_rounds.parse(want.read_text(encoding="utf-8"), str(want))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RunnerError(f"cannot read {want} ({exc}). Next: make it a UTF-8 file.") from exc
+    except audit_rounds.FindingsError as exc:
+        raise RunnerError(str(exc)) from exc
+    if (status == train_state.REJECTED) != bool(found):
+        raise RunnerError(
+            f"the {status} round {round_} lists {len(found)} findings in {want}, off-contract. "
+            "Next: have the auditor list each blocking finding for a rejection and none for "
+            "an approval."
+        )
     return found
 
 
-def record_verdict(cwd: Path, status: str, round_: int, seq: int | None = None) -> Outcome:
-    # 0089: a skill-driven train records the auditor's verdict on the tip as it stands now.
+def record_verdict(
+    cwd: Path,
+    status: str,
+    round_: int,
+    seq: int | None = None,
+    tip: str | None = None,
+    findings: Path | None = None,
+) -> Outcome:
+    # 0089, 59: records the tip the auditor judged; 0109: a finding list adds the stall word.
     def edit(repo: Path, train_id: str) -> list[str]:
         if status not in (train_state.APPROVED, train_state.REJECTED):
             raise RunnerError(
@@ -1329,13 +1373,79 @@ def record_verdict(cwd: Path, status: str, round_: int, seq: int | None = None) 
                 f"round {round_} or audit seq {seq} is out of range. "
                 "Next: rerun verdict with a round of 1 or more and the auditor's stop record seq."
             )
-        found = _auditor_seq(repo, train_id, status, seq)
-        tip = _integration_tip(repo, train_id)
-        record = _verdict_record(status, tip, round_, found)
-        train_state.update(repo, train_id, **{train_state.VERDICT: record})
-        return [f"Verdict {status} recorded on tip {tip[:12]} (round {round_})"]
+        named_tip = tip is not None and TIP.fullmatch(tip) is not None
+        if (tip is not None or status == train_state.APPROVED) and not named_tip:
+            raise RunnerError(
+                f"--tip {tip} is not a 40-hex tip; an approved verdict must name one. "
+                "Next: rerun verdict with --tip set to the tip= value on the auditor's "
+                "verdict line."
+            )
+        listed = _round_findings(repo, train_id, status, round_, findings) if findings else None
+        found, named = _auditor_seq(repo, train_id, status, seq)
+        current = _integration_tip(repo, train_id)
+        if tip is not None:
+            if named != tip:
+                raise RunnerError(
+                    f"the {AUDITOR} verdict names tip {named or 'none'}, not --tip {tip}. "
+                    "Next: rerun verdict with the tip= value of the auditor's verdict line."
+                )
+            problem = tip_problem(repo, tip, current)
+            if problem is not None:
+                raise RunnerError(f"{problem}. Next: run the security audit on {current[:12]}.")
+        judged = tip or current
+        budget = 0
+        if listed is not None and status == train_state.REJECTED:
+            try:
+                budget = load_config(cwd=str(repo)).audit_round_budget
+            except ConfigError as exc:
+                raise RunnerError(str(exc)) from exc
+        word: list[str] = []
+
+        def change(state: dict[str, object]) -> None:
+            state[train_state.VERDICT] = _verdict_record(status, judged, round_, found)
+            if listed is None:
+                return
+            rounds = train_state.record(state, train_state.AUDIT_ROUNDS)
+            prior = rounds.get(str(round_ - 1))
+            previous = None
+            if isinstance(prior, dict):
+                previous = {
+                    str(k): str(v.get("severity")) if isinstance(v, dict) else ""
+                    for k, v in prior.items()
+                }
+            rounds[str(round_)] = {
+                f.key: {"severity": f.severity, "class": f.kind} for f in listed.values()
+            }
+            state[train_state.AUDIT_ROUNDS] = rounds
+            if status == train_state.REJECTED:
+                current_map = {f.key: f.severity for f in listed.values()}
+                word.append(audit_rounds.judge(previous, current_map, round_, budget))
+
+        train_state.change(repo, train_id, change)
+        return word or [f"Verdict {status} recorded on tip {judged[:12]} (round {round_})"]
 
     return _recorded(cwd, edit)
+
+
+# spec 6: the bindings file records repo-coder dispatches only (dispatch_binding._dispatch_reason).
+BOUND_AGENT = "repo-coder"
+BINDINGS_UNREADABLE = (
+    "the unit bindings file could not be read. Next: stop the train and start a new one."
+)
+Bound = dict[str, dict[str, object]]
+
+
+def _bindings(repo: Path, train_id: str) -> Bound:
+    from lib.unit_binding import _read, bindings_path
+
+    return _read(bindings_path(repo, train_id))
+
+
+def _done(name: str, latest: dict[str, dict[str, object]], bound: Bound) -> bool:
+    # 0086: a unit the runner never dispatched is done once its coder moved on to another unit.
+    if name in latest:
+        return _text(latest[name], "status") == RETURNED
+    return bool(bound.get(name, {}).get("retired_to"))
 
 
 def _unit_status(
@@ -1343,9 +1453,14 @@ def _unit_status(
     latest: dict[str, dict[str, object]],
     labels: dict[str, str],
     by_branch: dict[str, str],
+    bound: Bound,
 ) -> str:
-    dispatch = latest.get(_text(unit, "name"))
+    name = _text(unit, "name")
+    dispatch = latest.get(name)
     status = _text(dispatch, "status") if dispatch else ""
+    if dispatch is None and name in bound:
+        # spec 6: a hand-driven recipe leaves no runner dispatch; the bindings file holds the unit.
+        return "done" if _done(name, latest, bound) else f"running ({BOUND_AGENT})"
     if status == RETURNED:
         return "done"
     if status == DISPATCHED and dispatch is not None:
@@ -1354,7 +1469,7 @@ def _unit_status(
         yielded = _text(dispatch, "line").startswith(YIELD_PREFIX)
         return "waiting on an answer" if yielded else "stopped"
     base = by_branch.get(_text(unit, "base"), "")
-    if base and _text(latest.get(base, {}), "status") != RETURNED:
+    if base and not _done(base, latest, bound):
         return f"waiting on {labels.get(base, base)}"
     return "queued"
 
@@ -1386,7 +1501,13 @@ def progress(cwd: Path) -> Outcome:
     except RunnerError:
         text = None
     plan = _plan_units(text) if text else {}
-    units = train_state.units(state)
+    try:
+        bound = _bindings(repo, train_id)
+    except train_state.TrainStateError:
+        return Outcome(EXIT_STOP, [BINDINGS_UNREADABLE])
+    # pin C4 -> C7: the audit worktree is a train unit, never a line of the progress note.
+    audit_unit = f"{train_id}-audit"
+    units = [u for u in train_state.units(state) if _text(u, "name") != audit_unit]
     labels: dict[str, str] = {}
     for unit in units:
         key = _unit_key(state, unit)
@@ -1404,7 +1525,7 @@ def progress(cwd: Path) -> Outcome:
         name = _text(unit, "name")
         found = plan.get(_unit_key(state, unit).casefold())
         title = f"{labels[name]} {found[1]}" if found else labels[name]
-        status = _unit_status(unit, latest, labels, by_branch)
+        status = _unit_status(unit, latest, labels, by_branch, bound)
         lines.append(f"{title}: {status}")
         if status == "waiting on an answer":
             open_.append(f"{labels[name]}: {_text(latest[name], 'line')}")

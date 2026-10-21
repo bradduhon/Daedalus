@@ -4,12 +4,21 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
 from lib import audit, train_state
-from lib.audit_proof import ProofError, approved, hooks_live, newest_log, read_chain
+from lib.audit_proof import (
+    ProofError,
+    approved,
+    hooks_live,
+    newest_log,
+    push_proof,
+    read_chain,
+    tip_problem,
+)
 
 from tests.conftest import replay_auditor, write_train_marker
 
@@ -151,13 +160,37 @@ def _refused(repo_cwd: Path, train: str = TRAIN) -> str:
     return str(info.value)
 
 
+def _git(repo: Path, *args: str) -> str:
+    ident = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+    done = subprocess.run(
+        ["git", "-C", str(repo), *ident, *args], capture_output=True, text=True, check=True
+    )
+    return done.stdout.strip()
+
+
+def _judged(repo: Path, status: str = "approved") -> str:
+    # 59: a commit on the integration branch and the verdict recorded on it.
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "unit")
+    _git(repo, "branch", "-f", f"daedalus/{TRAIN}", "HEAD")
+    tip = _git(repo, "rev-parse", "HEAD")
+    verdict = {"status": status, "tip": tip, "round": 1, "seq": 1}
+    train_state.update(repo, TRAIN, verdict=verdict)
+    return tip
+
+
+def _ok(seq: int, tip: str) -> str:
+    return (
+        f"OK approved: approved verdict, train {TRAIN}, session sess-test, "
+        f"auditor record seq {seq}, judged tip {tip[:12]}"
+    )
+
+
 def test_approved_passes_on_an_approved_final_round(
     project_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
-    _train(hook_input, repo_cwd, "[VERDICT: APPROVED] ok")
-    assert approved(repo_cwd, TRAIN) == (
-        f"OK approved: train {TRAIN}, session sess-test, auditor record seq 1"
-    )
+    tip = _judged(repo_cwd)
+    _train(hook_input, repo_cwd, f"[VERDICT: APPROVED] tip={tip} ok")
+    assert approved(repo_cwd, TRAIN) == _ok(1, tip)
 
 
 def test_approved_refuses_a_rejected_final_round(
@@ -236,7 +269,9 @@ def test_approved_passes_on_a_closing_verdict_line(
     project_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
     # 41: B1, a hand-back sentence first and the verdict as the last line.
-    _train(hook_input, repo_cwd, "The audit found no defect in the two units.\n[VERDICT: APPROVED]")
+    tip = _judged(repo_cwd)
+    reply = f"The audit found no defect in the two units.\n[VERDICT: APPROVED] tip={tip}"
+    _train(hook_input, repo_cwd, reply)
     assert approved(repo_cwd, TRAIN).startswith("OK approved:")
 
 
@@ -251,7 +286,8 @@ def test_approved_reads_the_tail_of_a_long_reply(
     project_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
     # 41: B3, the head holds no verdict, so the pass comes from the tail.
-    _train(hook_input, repo_cwd, "x" * 3000 + "\n[VERDICT: APPROVED]")
+    tip = _judged(repo_cwd)
+    _train(hook_input, repo_cwd, "x" * 3000 + f"\n[VERDICT: APPROVED] tip={tip}")
     assert approved(repo_cwd, TRAIN).startswith("OK approved:")
 
 
@@ -306,10 +342,9 @@ def test_approved_refuses_a_tail_that_is_not_text(project_data: Path, repo_cwd: 
 def test_approved_passes_a_record_from_before_the_tail_field(
     project_data: Path, repo_cwd: Path
 ) -> None:
-    _hand_chain(repo_cwd, {"last_message_head": "[VERDICT: APPROVED] ok"})
-    assert approved(repo_cwd, TRAIN) == (
-        f"OK approved: train {TRAIN}, session sess-test, auditor record seq 1"
-    )
+    tip = _judged(repo_cwd)
+    _hand_chain(repo_cwd, {"last_message_head": f"[VERDICT: APPROVED] tip={tip} ok"})
+    assert approved(repo_cwd, TRAIN) == _ok(1, tip)
 
 
 def _handback(hook_input: Any, message: str) -> None:
@@ -333,13 +368,25 @@ def test_approved_finds_the_verdict_in_the_auditor_hand_back(
     project_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
     # issue 57: Train A's stop records hold only a relay; the verdict is in the hand-back call.
+    tip = _judged(repo_cwd)
     replayed = replay_auditor(repo_cwd, "sess-test")
     _summary_write(hook_input, repo_cwd)
     _summary(repo_cwd)
     assert replayed[-2]["tool_input"] == {"message": "[VERDICT: APPROVED]"}
-    assert approved(repo_cwd, TRAIN) == (
-        f"OK approved: train {TRAIN}, session sess-test, auditor record seq {replayed[-2]['seq']}"
-    )
+    # 59: the hand-back verdict is found, and its line names no tip, so it refuses.
+    assert f"verdict names tip none, not the recorded tip {tip[:12]}" in _refused(repo_cwd)
+
+
+def test_approved_reads_the_tip_from_the_auditor_hand_back(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    tip = _judged(repo_cwd)
+    replay_auditor(repo_cwd, "sess-test")
+    _handback(hook_input, f"[VERDICT: APPROVED] tip={tip}")
+    _summary_write(hook_input, repo_cwd)
+    _summary(repo_cwd)
+    seq = len(read_chain(audit.log_path("sess-test", str(repo_cwd)))) - 1
+    assert approved(repo_cwd, TRAIN) == _ok(seq, tip)
 
 
 def test_approved_refuses_train_a_without_its_hand_back_records(
@@ -413,3 +460,142 @@ def test_approved_refuses_a_hand_back_message_that_is_not_text(
     )
     _train(hook_input, repo_cwd, "[VERDICT: APPROVED] ok")
     assert "(record seq 2) has a tool_input.message that is not text" in _refused(repo_cwd)
+
+
+LEDGER = "docs/decisions.md"
+
+
+def _repo_ledger(project_data: Path, repo: Path, path: str = LEDGER) -> None:
+    # spec 3.5: a repo-local ledger, so its commit lands on the integration branch.
+    decl = {
+        "path": path,
+        "format": "markdown-table-row",
+        "id_scheme": "{seq:04d}-{repo}-{type}",
+        "sequence_source": "last-row-id",
+    }
+    (project_data / "config.json").write_text(json.dumps({"ledger": decl}), encoding="utf-8")
+    (repo / "docs").mkdir(exist_ok=True)
+
+
+def _commit(repo: Path, *files: str) -> str:
+    for name in files:
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(path.read_text() + "row\n" if path.exists() else "row\n")
+        _git(repo, "add", name)
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "next")
+    _git(repo, "branch", "-f", f"daedalus/{TRAIN}", "HEAD")
+    return _git(repo, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("named", ["{tip}", "", "{other}", "{upper}", "{tip} tip={other}"], ids=str)
+def test_verdict_tip_must_be_the_recorded_tip(
+    project_data: Path, hook_input: Any, repo_cwd: Path, named: str
+) -> None:
+    # 59: the auditor's tip= equals the recorded tip; none, another, uppercase or two refuse.
+    tip = _judged(repo_cwd)
+    words = named.format(tip=tip, other="b" * 40, upper=tip.upper())
+    line = "[VERDICT: APPROVED]" + (f" tip={words}" if words else "")
+    _train(hook_input, repo_cwd, f"{line}\nnotes\n[VERDICT: APPROVED] tip={tip}")
+    if named == "{tip}":
+        assert approved(repo_cwd, TRAIN) == _ok(1, tip)
+    else:
+        assert "verdict names tip none, not the recorded tip" in _refused(repo_cwd)
+
+
+def test_approved_refuses_a_rejected_or_absent_recorded_verdict(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    tip = _judged(repo_cwd, status="rejected")
+    _train(hook_input, repo_cwd, f"[VERDICT: APPROVED] tip={tip}")
+    assert "records no approved verdict" in _refused(repo_cwd)
+
+
+def test_the_single_ledger_commit_on_the_judged_tip_passes(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # spec 3.5: the train's own ledger commit is the one move past the judged tip that passes.
+    _repo_ledger(project_data, repo_cwd)
+    tip = _judged(repo_cwd)
+    _train(hook_input, repo_cwd, f"[VERDICT: APPROVED] tip={tip}")
+    ledger_tip = _commit(repo_cwd, LEDGER)
+    assert ledger_tip != tip
+    assert approved(repo_cwd, TRAIN) == _ok(1, tip)
+    assert tip_problem(repo_cwd, tip, ledger_tip) is None
+
+
+@pytest.mark.parametrize(
+    "files", [(LEDGER, LEDGER), (LEDGER, "src/app.py"), ("src/app.py",), ()], ids=str
+)
+def test_any_other_move_past_the_judged_tip_refuses(
+    project_data: Path, hook_input: Any, repo_cwd: Path, files: tuple[str, ...]
+) -> None:
+    # spec 3.5: two commits, or one that changes any path but the ledger, refuse.
+    _repo_ledger(project_data, repo_cwd)
+    tip = _judged(repo_cwd)
+    _train(hook_input, repo_cwd, f"[VERDICT: APPROVED] tip={tip}")
+    if files[:2] == (LEDGER, LEDGER):
+        _commit(repo_cwd, LEDGER)
+        moved = _commit(repo_cwd, LEDGER)
+        want = "is not one plain commit on top of it"
+    else:
+        moved = _commit(repo_cwd, *files)
+        want = "with a commit that changes more than the ledger"
+    message = _refused(repo_cwd)
+    assert f"the tip {moved[:12]} moved past the judged tip {tip[:12]}" in message
+    assert want in message
+
+
+def test_a_ledger_commit_refuses_when_the_ledger_is_not_in_the_repo(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # spec 3.5: a ledger under a Charter outside the repo leaves no commit that may pass.
+    _repo_ledger(project_data, repo_cwd, str(repo_cwd.parent / "charter" / "decisions.md"))
+    tip = _judged(repo_cwd)
+    _train(hook_input, repo_cwd, f"[VERDICT: APPROVED] tip={tip}")
+    _commit(repo_cwd, LEDGER)
+    assert "with a commit that changes more than the ledger" in _refused(repo_cwd)
+
+
+def test_push_proof_takes_the_exception_path_on_the_current_tip(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # 62: no approved verdict, and an exception ruling bound to the integration tip passes.
+    tip = _judged(repo_cwd, status="rejected")
+    _train(hook_input, repo_cwd, f"[VERDICT: REJECTED] tip={tip} a.py:1 high")
+    assert _refused(repo_cwd).startswith("NOT APPROVED:")
+    train_state.update(repo_cwd, TRAIN, exception={"ledger_id": "0113-DAE-PLT", "tip": tip})
+    assert push_proof(repo_cwd, TRAIN) == (
+        f"OK approved: exception 0113-DAE-PLT, train {TRAIN}, integration tip {tip[:12]}"
+    )
+    moved = _commit(repo_cwd, "src/app.py")
+    with pytest.raises(ProofError) as info:
+        push_proof(repo_cwd, TRAIN)
+    assert str(info.value).startswith("NOT APPROVED:") and moved != tip
+
+
+def test_push_proof_prefers_the_approved_verdict(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    tip = _judged(repo_cwd)
+    _train(hook_input, repo_cwd, f"[VERDICT: APPROVED] tip={tip}")
+    train_state.update(repo_cwd, TRAIN, exception={"ledger_id": "0113-DAE-PLT", "tip": tip})
+    assert push_proof(repo_cwd, TRAIN) == _ok(1, tip)
+
+
+def test_approved_reads_the_bound_of_the_summary_session(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # issue 60: a push session's hooks-live moves start_seq, and the build session keeps its bound.
+    tip = _judged(repo_cwd)
+    train_state.save(repo_cwd, TRAIN, {**train_state.load(repo_cwd, TRAIN), "start_seq": None})
+    _bash(hook_input, "python3 /p/scripts/verify_audit_chain.py --hooks-live")
+    train_state.mark_start(repo_cwd, TRAIN, 1, "sess-test")
+    _train(hook_input, repo_cwd, f"[VERDICT: APPROVED] tip={tip}")
+    train_state.mark_start(repo_cwd, TRAIN, 40, "sess-push")
+    state = train_state.load(repo_cwd, TRAIN)
+    assert state["start_seq"] == 40 and state["audit_session"] == "sess-push"
+    assert approved(repo_cwd, TRAIN) == _ok(2, tip)
+    _summary(repo_cwd, "Session sess-other: .claude/daedalus/audit/sess-other.jsonl\n")
+    _bash(hook_input, "x", session_id="sess-other")
+    assert "records no start_seq for session sess-other" in _refused(repo_cwd)

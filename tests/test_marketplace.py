@@ -31,7 +31,7 @@ def test_plugin_entry_points_at_the_repo_root() -> None:
 
 def test_entry_version_mirrors_plugin_json() -> None:
     entry = _load("marketplace.json")["plugins"][0]
-    assert entry["version"] == _load("plugin.json")["version"] == "3.2.0"
+    assert entry["version"] == _load("plugin.json")["version"] == "3.3.0"
 
 
 def test_pinned_version_sites_agree() -> None:

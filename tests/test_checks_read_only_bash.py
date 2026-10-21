@@ -3,10 +3,13 @@
 # 0044: the read_only_bash hook; cases copied from tests/test_jail.py run each agent's chain.
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 from lib import jail
 
-from tests.conftest import CFG
+from tests.conftest import CFG, write_train_marker
 from tests.hook_chain import (
     decide,
     evaluate,
@@ -18,7 +21,7 @@ from tests.hook_chain import (
     run_script,
     unknown_flag_denies,
 )
-from tests.test_jail import _b
+from tests.test_jail import _b, _git_init
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "read_only_bash"
@@ -174,9 +177,13 @@ def test_read_only_bash_judges_the_hook_alone() -> None:
     assert evaluate(HOOK, _b("x", "git log")) is not None
 
 
-def test_read_only_bash_declares_no_test_runner_flag() -> None:
-    # 0051: --test-runner is reserved for unit 3.1 and is not declared in group 1.
-    assert set(load(HOOK).FLAGS) == {"--git"}
+def test_read_only_bash_declares_the_test_runner_flag() -> None:
+    # 0109: the flag 0051 reserved now carries the audit and unit test runs.
+    flags = load(HOOK).FLAGS
+    assert set(flags) == {"--git", "--test-runner"}
+    assert flags["--test-runner"].values == {"audit", "unit"}
+    bad = run_script(HOOK, payload("Bash", command="ls"), "--test-runner", "all")
+    assert bad["decision"] == "deny" and bad["reason"].startswith("hook read_only_bash failed")
 
 
 def test_read_only_bash_fixture_decisions() -> None:
@@ -204,3 +211,184 @@ def test_read_only_bash_malformed_input_denies() -> None:
 
 def test_read_only_bash_internal_error_denies_and_names_the_hook() -> None:
     internal_error_denies(HOOK, payload("Bash", command="ls"), "--git", "read-only")
+
+
+# spec 6: one allow and one refusal per git read row the read-only grant gains.
+GIT_ROWS = [
+    ("git grep -n decide -- scripts", "git grep --open-files-in-pager=vi decide"),
+    ("git grep -il jail HEAD", "git grep -O decide"),
+    ("git worktree list", "git worktree add /tmp/x"),
+    ("git worktree list --porcelain", "git worktree remove x"),
+    ("git merge-base --is-ancestor main HEAD", "git merge-base --output=x main HEAD"),
+    ("git show HEAD:scripts/a.py | sed -n 10,40p", "sed -n 10,40p scripts/a.py"),
+    ("git show HEAD:a.py | sed -n 1p", "git show HEAD:a.py | sed -n 1w/tmp/x"),
+    ("git show main:a.py | sed -n '5,9p' | head", "git show HEAD:a.py | sed 1,2p"),
+    ("git show HEAD:a.py | grep -n x", "git log | sed -n 1p"),
+    ("git -C .claude/worktrees/u1 grep -n x", "git show HEAD:a.py ; sed -n 1p"),
+]
+
+
+@pytest.mark.parametrize(("allowed", "refused"), GIT_ROWS)
+def test_read_only_grant_git_rows(allowed: str, refused: str) -> None:
+    for agent in ("security-auditor", "verifier"):
+        assert decide(_b(agent, allowed), CFG).allow, (agent, allowed)
+        assert evaluate(HOOK, _b(agent, allowed), "--git", "read-only") is None, allowed
+        refusal = evaluate(HOOK, _b(agent, refused), "--git", "read-only")
+        assert refusal == jail.R_AUDITOR_BASH, (agent, refused)
+
+
+def test_specialist_grant_gains_no_git_row() -> None:
+    # spec 6: only the read-only grant widens; the specialist set stays diff, show and log.
+    for command in ("git grep x", "git worktree list", "git merge-base main HEAD"):
+        assert evaluate(HOOK, _b("x", command), "--git", "specialist") == jail.R_SPECIALIST_BASH
+
+
+TRAIN = "20261017-120000"
+
+
+def _train_repo(tmp_path: Path, marked: bool = True) -> Path:
+    repo = _git_init(tmp_path / "repo")
+    if marked:
+        write_train_marker(repo)
+    return repo
+
+
+def _rb(repo: Path, agent: str, command: str) -> dict[str, Any]:
+    return {**_b(agent, command), "cwd": str(repo)}
+
+
+AUDIT = ("--git", "read-only", "--test-runner", "audit")
+UNIT = ("--git", "read-only", "--test-runner", "unit")
+
+
+def _places(repo: Path) -> tuple[str, str]:
+    return f"{repo}/docs/.tmp/daedalus/{TRAIN}/audit", f"{repo}/.claude/worktrees/{TRAIN}-audit"
+
+
+def test_audit_test_run_admits_the_audit_folder_and_the_corpus(tmp_path: Path) -> None:
+    # pin C4 -> C1: paths under the train's audit folder or the audit worktree's corpus.
+    repo = _train_repo(tmp_path)
+    audit, tree = _places(repo)
+    for command in (
+        f"python3 -m pytest {audit}/round1/test_scope_x.py -q",
+        f"python3 -m pytest {audit}/round1/test_scope_x.py::test_refused -q -p no:cacheprovider"
+        f" --rootdir {tree}",
+        f"python3 -m pytest {tree}/tests/adversarial -q -k quoting",
+        f"python3 -m pytest {audit}/round2 {tree}/tests/adversarial/test_globs.py -q | tail -n 5",
+    ):
+        assert evaluate(HOOK, _rb(repo, "security-auditor", command), *AUDIT) is None, command
+        assert decide(_rb(repo, "security-auditor", command), CFG).allow, command
+
+
+def test_audit_test_run_refuses_other_paths(tmp_path: Path) -> None:
+    # 0109: every other path, flag or spelling names the one admitted form.
+    repo = _train_repo(tmp_path)
+    audit, tree = _places(repo)
+    (repo / "src").mkdir()
+    Path(audit, "round1").mkdir(parents=True)
+    Path(audit, "round1", "link").symlink_to(repo / "src")
+    want = read_only_bash().R_TEST_RUN.format(
+        runner="audit", where=f"{audit} or {tree}/tests/adversarial", rootdir=tree
+    )
+    for command in (
+        f"python3 -m pytest {repo}/tests/test_x.py -q",
+        f"python3 -m pytest docs/.tmp/daedalus/{TRAIN}/audit/x.py -q",
+        f"python3 -m pytest {audit}/../briefs/x.py -q",
+        f"python3 -m pytest {audit}/round1/link/test_x.py -q",
+        f"python3 -m pytest {audit}/x.py",
+        f"python3 -m pytest {audit}/x.py -q -x",
+        f"python3 -m pytest {audit}/x.py -q -p evil",
+        f"python3 -m pytest {audit}/x.py -q --rootdir {repo}",
+        f"python3 -m pytest {repo}/docs/.tmp/daedalus/20261017-999999/audit/x.py -q",
+        f"python3 -m pytest {tree}/tests/test_jail.py -q",
+        f"pytest {audit}/x.py -q",
+        f"python -m pytest {audit}/x.py -q",
+        "python3 -m pytest -q",
+    ):
+        assert evaluate(HOOK, _rb(repo, "security-auditor", command), *AUDIT) == want, command
+
+
+def test_test_run_outside_a_train_is_refused(tmp_path: Path) -> None:
+    repo = _train_repo(tmp_path, marked=False)
+    audit, _ = _places(repo)
+    command = f"python3 -m pytest {audit}/x.py -q"
+    for runner, flags in (("audit", AUDIT), ("unit", UNIT)):
+        want = read_only_bash().R_TEST_RUN_NO_TRAIN.format(runner=runner)
+        assert evaluate(HOOK, _rb(repo, "security-auditor", command), *flags) == want
+
+
+def test_pytest_without_the_runner_grant_is_refused(tmp_path: Path) -> None:
+    # spec 3.7: an agent whose hook carries no --test-runner runs no tests.
+    repo = _train_repo(tmp_path)
+    audit, _ = _places(repo)
+    command = f"python3 -m pytest {audit}/x.py -q"
+    assert evaluate(HOOK, _rb(repo, "x", command), "--git", "read-only") == jail.R_AUDITOR_BASH
+    for agent in ("nist-specialist", "cis-specialist"):
+        assert not decide(_rb(repo, agent, command), CFG).allow, agent
+
+
+def test_unit_test_run_admits_only_a_recorded_unit_worktree(tmp_path: Path) -> None:
+    # pin C4 -> C1: --test-runner unit binds the run to one worktree the train records.
+    from lib import train_state
+
+    repo = _train_repo(tmp_path)
+    unit = f"{repo}/.claude/worktrees/{TRAIN}-u1"
+    other = f"{repo}/.claude/worktrees/{TRAIN}-u2"
+    units = [
+        {"name": f"{TRAIN}-u1", "branch": f"daedalus-unit/{TRAIN}-u1", "path": unit},
+        {"name": "stray", "branch": "daedalus-unit/stray", "path": f"{tmp_path}/elsewhere"},
+    ]
+    train_state.save(repo, TRAIN, {"train_id": TRAIN, "units": units})
+    ok = f"python3 -m pytest {unit}/tests/test_a.py {unit}/tests -q -p no:cacheprovider"
+    assert evaluate(HOOK, _rb(repo, "verifier", f"{ok} --rootdir {unit}"), *UNIT) is None
+    assert decide(_rb(repo, "verifier", ok), CFG).allow
+    want = read_only_bash().R_TEST_RUN.format(
+        runner="unit", where="one unit worktree this train records", rootdir="<that worktree>"
+    )
+    audit, _ = _places(repo)
+    for command in (
+        f"python3 -m pytest {other}/tests -q",
+        f"python3 -m pytest {unit}/tests -q --rootdir {other}",
+        f"python3 -m pytest {tmp_path}/elsewhere/tests -q",
+        f"python3 -m pytest {audit}/x.py -q",
+    ):
+        assert evaluate(HOOK, _rb(repo, "verifier", command), *UNIT) == want, command
+
+
+def test_unit_test_run_without_train_state_is_refused(tmp_path: Path) -> None:
+    repo = _train_repo(tmp_path)
+    command = f"python3 -m pytest {repo}/.claude/worktrees/{TRAIN}-u1/tests -q"
+    reason = evaluate(HOOK, _rb(repo, "verifier", command), *UNIT)
+    assert reason is not None and reason.startswith("the unit test run is")
+
+
+@pytest.mark.parametrize(
+    ("agent", "flags"),
+    [
+        ("security-auditor", AUDIT),
+        ("daedalus:verifier", UNIT),
+        ("nist-specialist", ("--git", "specialist")),
+        ("x", ()),
+    ],
+)
+def test_basetemp_is_refused_by_name_for_every_agent(
+    tmp_path: Path, agent: str, flags: tuple[str, ...]
+) -> None:
+    # issue 56: the reason names the flag, the agent and the next action, before any grammar.
+    repo = _train_repo(tmp_path)
+    audit, _ = _places(repo)
+    name = agent.removeprefix("daedalus:")
+    want = jail.R_BASETEMP_AGENT.format(agent=name)
+    for command in (
+        f"python3 -m pytest {audit}/x.py -q --basetemp=/tmp/x",
+        "pytest --basetemp /tmp/x",
+        "git log | python3 -m pytest -q --basetemp=x",
+    ):
+        assert evaluate(HOOK, _rb(repo, agent, command), *flags) == want, command
+    assert f"for {name}:" in want and "Next: drop --basetemp" in want
+    grep = "grep -n -e --basetemp scripts/lib/jail.py"
+    assert evaluate(HOOK, _rb(repo, agent, grep), *flags) is None
+
+
+def read_only_bash() -> Any:
+    return load(HOOK)

@@ -276,3 +276,69 @@ def test_root_writes_malformed_input_denies() -> None:
 def test_root_writes_internal_error_denies_and_names_the_hook() -> None:
     inside = payload("Write", file_path=f"{CWD}/docs/a.md")
     internal_error_denies(HOOK, inside, "--touch", "docs")
+
+
+TRAIN = "20261017-120000"
+
+
+def _audit_judged(repo: Path, path: str, tool: str = "Write") -> str | None:
+    return evaluate(HOOK, {**_w("x", path, tool), "cwd": str(repo)}, "--touch", "audit")
+
+
+def test_root_writes_audit_class_admits_only_the_trains_audit_folder(tmp_path: Path) -> None:
+    # 0109, spec 3.1: docs/.tmp/daedalus/<train-id>/audit/ in a train; nothing outside a train.
+    repo = _git_init(tmp_path / "repo")
+    scratch = f"{repo}/docs/.tmp/daedalus"
+    inside = f"{scratch}/{TRAIN}/audit/round1/test_scope_x.py"
+    findings = f"{scratch}/{TRAIN}/audit/round1/findings.txt"
+    assert _audit_judged(repo, inside) is not None
+    (repo / ".claude" / "daedalus").mkdir(parents=True)
+    (repo / ".claude" / "daedalus" / "train.active").write_text(f"{TRAIN}\n")
+    for path in (inside, findings):
+        for tool in ("Write", "Edit"):
+            assert _audit_judged(repo, path, tool) is None, (path, tool)
+    for path in (
+        f"{scratch}/{TRAIN}-summary.md",
+        f"{scratch}/{TRAIN}/briefs/c1.md",
+        f"{scratch}/{TRAIN}/plan.md",
+        f"{scratch}/{TRAIN}/audit/../briefs/c1.md",
+        f"{scratch}/20261017-999999/audit/round1/test_x.py",
+        f"{repo}/scripts/checks/root_writes.py",
+        f"{repo}/.claude/worktrees/{TRAIN}-audit/tests/adversarial/test_x.py",
+    ):
+        reason = _audit_judged(repo, path)
+        assert reason == f"writes are limited to audit: {path}. Next: write there.", path
+
+
+def test_root_writes_audit_class_refuses_a_symlink_out_of_the_folder(tmp_path: Path) -> None:
+    repo = _git_init(tmp_path / "repo")
+    (repo / ".claude" / "daedalus").mkdir(parents=True)
+    (repo / ".claude" / "daedalus" / "train.active").write_text(f"{TRAIN}\n")
+    audit = repo / "docs" / ".tmp" / "daedalus" / TRAIN / "audit"
+    audit.mkdir(parents=True)
+    (repo / "src").mkdir()
+    (audit / "link").symlink_to(repo / "src")
+    assert _audit_judged(repo, f"{audit}/link/a.py") is not None
+
+
+def test_auditor_chain_writes_its_audit_folder_only(tmp_path: Path) -> None:
+    # 0109: the auditor's own agent-file hooks, run as the router runs them.
+    from lib import router
+
+    from tests.conftest import REPO_ROOT
+
+    repo = _git_init(tmp_path / "repo")
+    (repo / ".claude" / "daedalus").mkdir(parents=True)
+    (repo / ".claude" / "daedalus" / "train.active").write_text(f"{TRAIN}\n")
+    scratch = f"{repo}/docs/.tmp/daedalus/{TRAIN}"
+
+    def route(path: str) -> tuple[bool, str | None, str]:
+        return router.route({**_w("daedalus:security-auditor", path), "cwd": str(repo)}, REPO_ROOT)
+
+    assert route(f"{scratch}/audit/round1/test_scope_x.py") == (True, None, "")
+    for path in (f"{scratch}/briefs/c1.md", f"{repo}/src/a.py"):
+        allow, _, hook = route(path)
+        assert not allow and hook == "root_writes", path
+    verifier = {**_w("daedalus:verifier", f"{scratch}/audit/round1/x.py"), "cwd": str(repo)}
+    allow, _, hook = router.route(verifier, REPO_ROOT)
+    assert not allow and hook == "tool_bound"
