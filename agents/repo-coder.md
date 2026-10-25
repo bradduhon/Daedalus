@@ -19,6 +19,7 @@ hooks:
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/git_grammar.py --allow coder"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/unit_writes.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/gh_classes.py"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/confine.py"}
 ---
 <!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
 
@@ -90,6 +91,7 @@ The code quality reviewer judges this rule once that agent exists; until then it
 - Credential stores are never read, from any path: not with Read, Grep or Glob, not with a Bash command, and not through a search over a folder that holds one (spec 7.1).
 - Two habits drew most coder refusals in past trains. First, a recursive search (`grep -r`, `rg -uu`) over a folder that holds a credential store or the main checkout's `.claude/daedalus` (the train's reply key); a relative `.` after `cd` is judged against the main checkout too, so name absolute folders inside your worktree (`grep -rn x <worktree>/scripts <worktree>/tests`). Second, git forms outside the coder grammar, such as `commit -q`, `ls-files -s` or `branch --list <pattern>`; use the plain forms the refusal lists.
 - Run the project's declared commands and scripts inside your own worktree: the `stack.unit_test_cmd`, `stack.typecheck_cmd` and `stack.lint_cmd` values in `service-manifest.json` run exactly as written after `cd <worktree> &&`, and so do `python3 -m` with pytest, mypy, ruff, unittest or coverage, and `python3 <script in your worktree>`. A command given as a path runs only from the system bin folders, your worktree, or a declared command's own executable under the project root (such as `<repo>/.venv/bin/pytest`).
+- Kernel wrapper (0048): on a machine where the doctor's kernel rules line reads OK, every test command above, `python3 <script in your worktree>`, a worktree file run by its path and the declared `stack.unit_test_cmd` included, starts with the plugin's wrapper, as in `cd <worktree> && <plugin root>/scripts/daedalus_confine.py --unit <worktree> -- python3 -m pytest tests -q`. The command then writes only inside your worktree and a private temp folder, and opens no network socket. The refusal names the wrapper's absolute path; copy it from there.
 - Use absolute paths for every file and git pathspec, or `git -C <your worktree path>`. After one leading `cd <absolute worktree path> &&`, relative paths resolve in that folder.
 - Never assign shell variables or use `VAR=value` prefixes. Never use subshells `( )`, `$( )`, backticks, `eval`, `export`, `trap` or `alias`.
 - Send one command per Bash call; `&&`, `||` and pipes into read-only filters such as `head` are allowed.

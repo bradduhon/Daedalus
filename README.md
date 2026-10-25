@@ -143,7 +143,7 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 | orchestrator | dispatcher | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, command_allowlist --allow train,inspect, root_writes --touch scratch --ledger-guard, gh_classes, dispatch_gate |
 | planner | shaper | credential_paths, workspace_integrity, tool_bound, root_writes --touch scratch --name plan*.md |
 | pr-train-conductor | mover | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools --gh, command_allowlist --allow git,gh,gitleaks, git_grammar --allow conductor, git_push --conductor, gh_classes --conductor |
-| repo-coder | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes, gh_classes |
+| repo-coder | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes, gh_classes, confine |
 | security-auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only --test-runner audit, gh_classes, root_writes --touch audit |
 | standards-rules-specialist | finder | credential_paths, tool_bound |
 | verifier | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only --test-runner unit, gh_classes |
@@ -280,6 +280,7 @@ Daedalus/
 │   └── nist-800-53-distilled.md     # the rubric the nist-specialist maps findings to
 ├── scripts/                         # Python 3.12, stdlib only
 │   ├── checks/command_allowlist.py  # every Bash segment runs a command the --allow list names
+│   ├── checks/confine.py            # a coder's test command starts with the kernel wrapper
 │   ├── checks/controls/             # the failure each control prevents and its premise test
 │   ├── checks/credential_paths.py   # refuses a path or command that names a credential store
 │   ├── checks/dispatch_gate.py      # the orchestrator's coder dispatch and plan gates
@@ -333,6 +334,7 @@ Daedalus/
 │   ├── audit_log.py                 # all other hook events to the audit log
 │   ├── audit_report.py              # digest of a verified session log
 │   ├── catalog.py                   # prints the agent table and hooks matrix
+│   ├── daedalus_confine.py          # kernel wrapper: a coder's test command stays in its worktree, no network
 │   ├── daedalus_doctor.py           # first-run check behind /daedalus:doctor
 │   ├── daedalus_setup.py            # writes the missing starter files behind /daedalus:setup
 │   ├── daedalus_train.py            # the train runner: progress, choice, plan, verdict, exception

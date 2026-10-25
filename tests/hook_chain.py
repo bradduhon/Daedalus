@@ -28,6 +28,7 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("git_grammar", ("--allow", "coder")),
         ("unit_writes", ()),
         ("gh_classes", ()),
+        ("confine", ()),
     ),
     "contract-spec": (
         ("credential_paths", ()),

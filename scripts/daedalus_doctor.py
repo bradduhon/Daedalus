@@ -15,6 +15,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import daedalus_confine  # noqa: E402
 from lib import git  # noqa: E402
 from lib.audit import (  # noqa: E402
     DataDirError,
@@ -225,6 +226,17 @@ def _hook_failure_check() -> Iterator[tuple[bool, str]]:
                 f"{least} or later (the documented minimum) blocks a timed-out hook"
             ),
         )
+
+
+def _kernel_rules_check() -> tuple[bool, str]:
+    # 0048: the probe the confine check reads; OPT when this kernel cannot hold the rules.
+    support = daedalus_confine.kernel_support()
+    if not support.ok:
+        return True, "OPT  kernel rules: not available on this kernel"
+    return True, (
+        f"OK   kernel rules: Landlock ABI {support.abi} and the seccomp socket filter on "
+        f"{support.arch}; coder test commands run under the kernel wrapper"
+    )
 
 
 def _trust_error(repo: Path) -> DataDirError | None:
@@ -516,6 +528,7 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     yield _gitleaks_check(repo)
     yield from _gh_checks(repo)
     yield from _hook_failure_check()
+    yield _kernel_rules_check()
     yield from _repo_checks(repo, is_repo)
 
 
