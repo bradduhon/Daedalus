@@ -20,7 +20,11 @@ PROBE = daedalus_confine.kernel_support
 
 
 def _run(
-    data_dir: Path | None, repo: Path, path_env: str, home: Path | None = None
+    data_dir: Path | None,
+    repo: Path,
+    path_env: str,
+    home: Path | None = None,
+    extra: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     # PATH is always the test's own; the real PATH never leaks in.
     env = dict(os.environ)
@@ -30,7 +34,7 @@ def _run(
     env["PATH"] = path_env
     if home is not None:
         env["HOME"] = str(home)
-    return run_cli("daedalus_doctor.py", "--repo", str(repo), env=env)
+    return run_cli("daedalus_doctor.py", "--repo", str(repo), *extra, env=env)
 
 
 def _git_repo(path: Path) -> None:
@@ -908,12 +912,56 @@ def test_doctor_opt_lines_name_the_setup_skill(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout
 
 
-def _typecheck_lines(repo: Path, command: str | None) -> list[str]:
+def _typecheck_lines(repo: Path, command: str | None, run: bool = True) -> list[str]:
     import daedalus_doctor
 
     stack = {"typecheck_cmd": command}
     (repo / "service-manifest.json").write_text(json.dumps({"stack": stack}), encoding="utf-8")
-    return [line for _, line in daedalus_doctor._typecheck_check(repo)]
+    return [line for _, line in daedalus_doctor._typecheck_check(repo, run)]
+
+
+def test_default_run_prints_the_typecheck_command_and_never_runs_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # 0076: audit round 4; a repository-declared command runs only behind --run-typecheck.
+    import daedalus_doctor
+
+    def refuse(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise AssertionError(f"the default doctor run executed {cmd}")
+
+    monkeypatch.setattr(daedalus_doctor.subprocess, "run", refuse)
+    manifest = {"stack": {"typecheck_cmd": "mypy scripts"}}
+    (tmp_path / "service-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert list(daedalus_doctor._typecheck_check(tmp_path)) == [
+        (
+            True,
+            "OPT  typecheck (mypy scripts): not run. Next: run mypy scripts by hand from the"
+            " repo root, or rerun the doctor with --run-typecheck",
+        )
+    ]
+
+
+def test_default_cli_run_leaves_the_declared_command_unrun(tmp_path: Path) -> None:
+    # 0076: the doctor skill's own form, with no flag, writes no marker the command would write.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    marker = tmp_path / "ran"
+    command = f"{sys.executable} -c \"open({str(marker)!r}, 'w').write('ran')\""
+    manifest = {"stack": {"typecheck_cmd": command}}
+    (repo / "service-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    bins = _bins_with_git(tmp_path)
+    result = _run(None, repo, path_env=bins, home=tmp_path / "home")
+    assert not marker.exists()
+    assert f"OPT  typecheck ({command}): not run." in result.stdout
+    flagged = _run(None, repo, path_env=bins, home=tmp_path / "home", extra=("--run-typecheck",))
+    assert marker.exists(), flagged.stdout
+
+
+def test_doctor_skill_never_passes_the_run_typecheck_flag() -> None:
+    from tests.conftest import REPO_ROOT
+
+    skill = (REPO_ROOT / "skills" / "doctor" / "SKILL.md").read_text(encoding="utf-8")
+    assert "--run-typecheck" not in skill
 
 
 def test_typecheck_result_line_is_printed_on_success(tmp_path: Path) -> None:
