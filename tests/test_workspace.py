@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import sys
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -20,16 +20,12 @@ from lib.workspace import (
     worktree_path,
 )
 
-from tests.conftest import SCRIPTS_DIR
+from tests.conftest import SCRIPTS_DIR, git
+from tests.conftest import workspace_cli as _cli
 
 BASE = "daedalus/20261015-120000"
 NAME = "20261015-120000-u1"
-
-
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
-    )
+_git = partial(git, check=False)
 
 
 @pytest.fixture
@@ -187,17 +183,6 @@ def test_create_reports_an_unwritable_marker(repo: Path) -> None:
     with pytest.raises(WorkspaceError) as info:
         create(repo, NAME, BASE)
     assert "cannot write" in str(info.value) and "Next:" in str(info.value)
-
-
-def _cli(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    # issue 63: the script runs from its --repo unless a test names another working directory.
-    return subprocess.run(
-        [sys.executable, str(SCRIPTS_DIR / "daedalus_workspace.py"), *args],
-        capture_output=True,
-        text=True,
-        check=False,
-        cwd=cwd or args[args.index("--repo") + 1],
-    )
 
 
 def test_cli_create_prints_the_path_and_remove_names_it(repo: Path) -> None:

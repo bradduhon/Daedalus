@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -16,6 +15,7 @@ from lib.config import Config
 from lib.unit_binding import bindings_path, claim
 from lib.workspace import create, mark_train
 
+from tests.conftest import git as _git
 from tests.hook_chain import judge as decide
 
 TRAIN = "20261016-120000"
@@ -46,10 +46,6 @@ def seed_plan(repo: Path, train: str, source: Path = VALID) -> Path:
     path = plan_file(repo, train, source)
     record_plan(repo, train, str(path), _sha(path))
     return path
-
-
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
 @pytest.fixture

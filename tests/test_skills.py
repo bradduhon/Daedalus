@@ -1235,7 +1235,7 @@ def _conductor_decide(repo_cwd: Path, project_data: Path, command: str) -> Any:
     from lib.config import Config
 
     from tests.hook_chain import judge as decide
-    from tests.test_checks_git_push import audited_train
+    from tests.jail_cases import audited_train
 
     # spec 4.2: an audited train, so the push and pr create meet an approved verdict.
     audited_train(repo_cwd, "20261016-120000")

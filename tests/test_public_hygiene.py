@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import REPO_ROOT
+from tests.conftest import git as _git
 
 # The public allowlist, as normalized by _entry().
 ALLOWLIST = frozenset(
@@ -203,10 +204,6 @@ def test_hygiene_admits_the_adversarial_corpus() -> None:
     assert corpus, "tests/adversarial/ is not tracked"
     assert {_entry(p) for p in corpus} == {"tests/"}
     assert set(corpus) <= set(_public_files())
-
-
-def _git(cwd: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=True)
 
 
 def test_pre_split_mode_is_gone(tmp_path: Path) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +20,8 @@ from lib.audit_proof import (
     tip_problem,
 )
 
-from tests.conftest import replay_auditor, write_train_marker
+from tests.conftest import append_handback, replay_auditor, write_train_marker
+from tests.conftest import git as _git
 
 NEEDLE = "daedalus_workspace.py begin"
 TRAIN = "20261016-120000"
@@ -160,19 +161,11 @@ def _refused(repo_cwd: Path, train: str = TRAIN) -> str:
     return str(info.value)
 
 
-def _git(repo: Path, *args: str) -> str:
-    ident = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
-    done = subprocess.run(
-        ["git", "-C", str(repo), *ident, *args], capture_output=True, text=True, check=True
-    )
-    return done.stdout.strip()
-
-
 def _judged(repo: Path, status: str = "approved") -> str:
     # 59: a commit on the integration branch and the verdict recorded on it.
     _git(repo, "commit", "-q", "--allow-empty", "-m", "unit")
     _git(repo, "branch", "-f", f"daedalus/{TRAIN}", "HEAD")
-    tip = _git(repo, "rev-parse", "HEAD")
+    tip = _git(repo, "rev-parse", "HEAD").stdout.strip()
     verdict = {"status": status, "tip": tip, "round": 1, "seq": 1}
     train_state.update(repo, TRAIN, verdict=verdict)
     return tip
@@ -347,17 +340,7 @@ def test_approved_passes_a_record_from_before_the_tail_field(
     assert approved(repo_cwd, TRAIN) == _ok(1, tip)
 
 
-def _handback(hook_input: Any, message: str) -> None:
-    audit.audit_append(
-        hook_input(
-            hook_event_name="PostToolUse",
-            tool_name="SubagentHandback",
-            tool_input={"message": message},
-            tool_response={"success": True},
-            agent_type=AUDITOR,
-            agent_id="a1",
-        )
-    )
+_handback = partial(append_handback, tool_response={"success": True})
 
 
 def _start(repo_cwd: Path, seq: int) -> None:
@@ -485,7 +468,7 @@ def _commit(repo: Path, *files: str) -> str:
         _git(repo, "add", name)
     _git(repo, "commit", "-q", "--allow-empty", "-m", "next")
     _git(repo, "branch", "-f", f"daedalus/{TRAIN}", "HEAD")
-    return _git(repo, "rev-parse", "HEAD")
+    return _git(repo, "rev-parse", "HEAD").stdout.strip()
 
 
 @pytest.mark.parametrize("named", ["{tip}", "", "{other}", "{upper}", "{tip} tip={other}"], ids=str)

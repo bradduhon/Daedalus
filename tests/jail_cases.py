@@ -3,6 +3,7 @@
 # W1.4: the agent lists, case tables and repo builders the jail test modules share.
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from lib import train_state
@@ -107,3 +108,53 @@ def _refusal(path: str) -> str:
 def _train(root: Path) -> None:
     # 0035: main and foreign agents meet the Bash credential model only while a train runs.
     write_train_marker(root, UNIT_TRAIN)
+
+
+GATE_TRAIN = "20261019-120000"
+GATE_BRANCH = f"daedalus/{GATE_TRAIN}"
+GATE_NEXT = "Next: audit the exact tip, or record the operator's exception."
+LEDGER = "docs/decisions.md"
+
+
+def seed_train(repo: Path, state: bool = True, train: str = GATE_TRAIN) -> str:
+    # spec 4.2: a real repo with the train branch, its marker and its state; returns the tip.
+    git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+    git(repo, "switch", "-q", "-c", f"daedalus/{train}")
+    write_train_marker(repo, train)
+    if state:
+        train_state.save(repo, train, {"train_id": train})
+    return git(repo, "rev-parse", f"daedalus/{train}").stdout.strip()
+
+
+def move_tip(repo: Path) -> str:
+    git(repo, "commit", "-q", "--allow-empty", "-m", "after the verdict")
+    return git(repo, "rev-parse", GATE_BRANCH).stdout.strip()
+
+
+def approve(repo: Path, tip: str, train: str = GATE_TRAIN) -> None:
+    verdict = {"status": "approved", "tip": tip, "round": 1, "seq": 7}
+    train_state.update(repo, train, verdict=verdict)
+
+
+def audited_train(repo: Path, train: str) -> None:
+    # spec 4.2: a train whose integration tip carries an approved verdict.
+    approve(repo, seed_train(repo, train=train), train)
+
+
+def _ledger_commit(repo: Path, *paths: str) -> str:
+    # spec 3.5: a repo-local ledger declared in config, then one commit touching the paths.
+    decl = {
+        "path": LEDGER,
+        "format": "markdown-table-row",
+        "id_scheme": "{seq:04d}-{repo}-{type}",
+        "sequence_source": "last-row-id",
+    }
+    config = repo / ".claude" / "daedalus" / "config.json"
+    config.write_text(json.dumps({"ledger": decl}), encoding="utf-8")
+    for name in paths:
+        target = repo / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f"{name} row\n", encoding="utf-8")
+        git(repo, "add", name)
+    git(repo, "commit", "-q", "-m", "ledger")
+    return git(repo, "rev-parse", GATE_BRANCH).stdout.strip()

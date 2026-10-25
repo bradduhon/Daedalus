@@ -163,6 +163,11 @@ def run_cli(
     )
 
 
+def workspace_cli(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    # issue 63: daedalus_workspace.py refuses a --repo that is not the project root of its cwd.
+    return run_cli("daedalus_workspace.py", *args, cwd=cwd or Path(args[args.index("--repo") + 1]))
+
+
 TRAIN_A_AUDITOR = REPO_ROOT / "tests" / "fixtures" / "audit" / "train-a-auditor.jsonl"
 
 
