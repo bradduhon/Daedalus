@@ -1536,6 +1536,15 @@ def test_push_train_runs_the_recovery_round_on_a_moved_tip() -> None:
     places = [recovery.index(part) for part in order]
     assert places == sorted(places)
     assert "the line `Worktree: <audit worktree path>`" in recovery
+    # audit_proof._summary_session reads the first Session line; step 8 bound this session.
+    step4 = recovery.split("\n4. ", 1)[1].split("\n5. ", 1)[0]
+    write = step4.split("rewrite the whole summary with one Write", 1)[1]
+    assert (
+        "In the same Write, the first line under `## Audit log` becomes "
+        "`Session <id>: .claude/daedalus/audit/<id>.jsonl` with this session's id from step 8, "
+        "and the Build Train's session line stays after it"
+    ) in write
+    assert "the push proof reads the log of the first `Session <id>:` line" in write
     rejected = recovery.split("\n5. `[VERDICT: REJECTED] tip=<sha>`: ", 1)[1]
     assert "with `--status rejected`" in rejected
     assert "the three choices of the audit escalation prompt" in rejected

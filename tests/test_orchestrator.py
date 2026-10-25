@@ -348,7 +348,13 @@ def test_recipe_records_the_ledger_then_the_verdict_then_one_summary_write() -> 
     write = "   - Summary Write, the last step (issue 73): after the verdict record, rewrite"
     assert step5.index(LEDGER_CMD) < step5.index(approved) < step5.index(write)
     assert write in step5 and "step 7 follows it" in step5
-    assert "nothing comes between the verdict record and this Write" in step5
+    # audit_proof.summary_anchor: the first summary Write after the recorded auditor reply.
+    assert "the first summary Write after the auditor reply the verdict record names" in step5
+    assert "this Write comes after the verdict record and before any later auditor round" in step5
+    assert "nothing comes between" not in step5
+    # REAUDIT reaches the orchestrator only by SendMessage, so it runs in the build session.
+    round_ = _recovery().split("Recovery round (issue 73). ", 1)[1].split("\nLedger resume", 1)[0]
+    assert "the round runs in the session the summary's `Session <id>:` line names" in round_
 
 
 def test_recipe_routes_a_probe_only_reply_as_a_resume_to_append() -> None:
