@@ -828,17 +828,21 @@ def unit_verified(records: list[dict[str, Any]], worktree: Path) -> bool:
         if _worktree_lines(record):
             break
         window.append(record)
-    stops = [
-        r
-        for r in window
-        if r.get("event") == "SubagentStop"
-        and isinstance(r.get("agent_type"), str)
-        and str(r["agent_type"]).rpartition(":")[2] == VERIFIER
-    ]
-    tail = stops[-1].get("last_message_tail") if stops else None
-    if not isinstance(tail, str):
+    # 0121: a verifier's reply sits in its stop tail or its hand-back call; the newest
+    # string reply decides, so a null-tail stop after a hand-back does not override it.
+    replies: list[object] = []
+    for r in window:
+        agent = r.get("agent_type")
+        if not isinstance(agent, str) or agent.rpartition(":")[2] != VERIFIER:
+            continue
+        if r.get("event") == "SubagentStop":
+            replies.append(r.get("last_message_tail"))
+        elif r.get("event") == "PostToolUse" and r.get("tool_name") == audit_proof.HANDBACK:
+            replies.append(audit_proof.handback_message(r))
+    texts = [reply for reply in replies if isinstance(reply, str)]
+    if not texts:
         return False
-    last = [text.strip() for text in tail.splitlines() if text.strip()]
+    last = [text.strip() for text in texts[-1].splitlines() if text.strip()]
     return bool(last) and VERIFIED_LINE.fullmatch(last[-1]) is not None
 
 

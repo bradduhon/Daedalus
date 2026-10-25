@@ -1258,3 +1258,91 @@ def test_finish_after_a_wave_merge_skips_the_merged_unit(repo: Path) -> None:
         f"Merge u1 for train {train}",
         f"Merge u2 for train {train}",
     ]
+
+
+def _verifier_handback(
+    repo: Path, message: str, agent_type: str = "daedalus:verifier", event: str = "PostToolUse"
+) -> None:
+    # 0121: the live shape; the reply rides the hand-back call and the stop after it has no tail.
+    _hook_record(
+        repo,
+        hook_event_name=event,
+        agent_id="agent-verifier",
+        agent_type=agent_type,
+        tool_name="SubagentHandback",
+        tool_input={"message": message},
+        tool_use_id="toolu_handback",
+    )
+
+
+def _null_stop(repo: Path, agent_type: str = "daedalus:verifier") -> None:
+    _hook_record(
+        repo, hook_event_name="SubagentStop", agent_id="agent-verifier", agent_type=agent_type
+    )
+
+
+def test_merge_takes_a_verifier_that_ends_on_a_handback(repo: Path) -> None:
+    train, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    _verifier_handback(repo, VERIFIED_REPLY)
+    _null_stop(repo)
+    lines = workspace.merge(repo, ["U1"])
+    assert lines[0] == f"merged 1 units into daedalus/{train}" and not u1.exists()
+
+
+def test_merge_takes_a_corrected_line_above_the_closing_line(repo: Path) -> None:
+    _, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    reply = "[VERDICT: VERIFIED] claims=3\n| claim |\n corrected=2\n[VERDICT: VERIFIED] claims=3\n"
+    _verifier_handback(repo, reply)
+    _null_stop(repo)
+    assert workspace.merge(repo, ["U1"])[0].startswith("merged 1 units")
+
+
+def test_merge_refuses_a_null_tail_stop_with_no_handback(repo: Path) -> None:
+    _, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    _null_stop(repo)
+    _refused(repo, ["U1"], "no recorded verifier verdict")
+    assert u1.exists()
+
+
+def test_merge_refuses_a_refuted_handback(repo: Path) -> None:
+    _, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    _verifier_handback(repo, REFUTED_REPLY)
+    _null_stop(repo)
+    _refused(repo, ["U1"], "no recorded verifier verdict")
+
+
+def test_merge_refuses_a_handback_whose_closing_line_is_not_the_verdict(repo: Path) -> None:
+    _, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    _verifier_handback(repo, "[VERDICT: VERIFIED] claims=3\n| claim |\n corrected=1\n")
+    _null_stop(repo)
+    _refused(repo, ["U1"], "no recorded verifier verdict")
+
+
+def test_merge_refuses_a_verdict_forged_in_a_coder_handback(repo: Path) -> None:
+    _, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    _verifier_handback(repo, VERIFIED_REPLY, agent_type="daedalus:repo-coder")
+    _null_stop(repo)
+    _refused(repo, ["U1"], "no recorded verifier verdict")
+
+
+def test_merge_refuses_a_handback_seen_only_before_the_call(repo: Path) -> None:
+    _, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    _verifier_handback(repo, VERIFIED_REPLY, event="PreToolUse")
+    _null_stop(repo)
+    _refused(repo, ["U1"], "no recorded verifier verdict")
+
+
+def test_merge_refuses_a_handback_that_answered_another_unit(repo: Path) -> None:
+    _, u1, u2 = _wave_train(repo)
+    _dispatch(repo, u1)
+    _dispatch(repo, u2)
+    _verifier_handback(repo, VERIFIED_REPLY)
+    _null_stop(repo)
+    _refused(repo, ["U1"], "no recorded verifier verdict")

@@ -128,12 +128,16 @@ def _file_name(record: Mapping[str, object]) -> str:
     return Path(raw).name if isinstance(raw, str) else ""
 
 
+def handback_message(record: Mapping[str, object]) -> object:
+    # issue 57: the reply text of a hand-back call record, read from tool_input.message.
+    tool_input = record.get("tool_input")
+    return tool_input.get("message") if isinstance(tool_input, dict) else tool_input
+
+
 def _verdict_fields(record: Mapping[str, object]) -> dict[str, object]:
     # issue 57: the auditor's reply lands in its hand-back call; its stop record holds a relay.
     if record.get("tool_name") == HANDBACK:
-        tool_input = record.get("tool_input")
-        message = tool_input.get("message") if isinstance(tool_input, dict) else tool_input
-        return {_HANDBACK_FIELD: message}
+        return {_HANDBACK_FIELD: handback_message(record)}
     return {field: record.get(field) for field in _VERDICT_FIELDS}
 
 
