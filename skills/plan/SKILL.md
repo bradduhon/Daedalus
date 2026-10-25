@@ -21,20 +21,20 @@ This skill runs outside a train, and inside a Build Train at Phase 1 before the 
    - `max_concurrent_builders: <n>`;
    - the repository's file areas: the `entrypoints` block of `<repo>/service-manifest.json`, pasted as it stands, or `none declared` when the file or block is absent;
    - `Write exactly one file: <path>`;
-   - the rule: cut into bodies that touch non-overlapping file areas; name every edge's kind; prefer an interface pin (a named function, flag or line shape both sides build to) over a file overlap; print the graph.
+   - the rule: cut into bodies that touch non-overlapping file areas; name every edge's kind; prefer an interface pin (a named function, flag or line shape both sides build to) over a file overlap; when the spec's Version section bumps the version, cut it into one unit and write the version line `version: <x.y.z> | class: <X, Y or Z> | reason: <one line> | unit: <unit id>` naming it; print the graph.
    - the reply contract: end with exactly one of `[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>` or `[STATUS: QUESTION] <what the task leaves open>`.
 6. Read the planner's last line.
    - `[STATUS: QUESTION] ...`: ask the operator that question in plain words, with what the spec says around it. Send the answer to the same planner by SendMessage and read its next reply from this step.
    - `[STATUS: PLAN] ...`: go to step 7.
    - Anything else: stop and show the reply's last 10 lines. Next: rerun `/daedalus:plan` or report the planner's reply.
 7. Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_plan.py <path> --max-concurrent <n>`.
-   - Exit 0 prints `OK plan: graph: units=<n> critical_path=<k> width=<w> overlap_only=<pairs>`. Check its units, critical_path and width against the planner's reply line. A mismatch counts as a defect: send both lines to the planner as below.
+   - Exit 0 prints `OK plan: graph: units=<n> critical_path=<k> width=<w> overlap_only=<pairs>`. Check its units, critical_path and width against the planner's reply line. A mismatch counts as a defect: send both lines to the planner as below. When the plan carries a version line, a second line follows: `OK version: unit=<unit id> Version class: <x.y.z> <class>: <reason>`.
    - Exit 1 prints one defect line per failed check and a `Next:` line. Send the defect lines to the same planner by SendMessage and ask for the corrected file at the same path, then rerun this step once. A second exit 1 or mismatch: show the validator's output unchanged and stop. Next: fix the plan by hand or rerun `/daedalus:plan` with a narrower spec.
 8. Show the operator the validator's graph line, then a unit table in plain words, one row per unit line of the plan block:
 
-   | Unit | What it builds | Starts from | Waits on | Shares files with |
-   |---|---|---|---|---|
+   | Unit | What it builds | Starts from | Waits on | Shares files with | Version line |
+   |---|---|---|---|---|---|
 
-   What it builds is the unit's title. Starts from reads "the integration branch" for `base: integration`, else "unit <id>'s branch". Waits on lists the units with a serial edge into this one, with each edge's why. Shares files with lists each overlap edge's other unit, its files and the merge order. Under the table, list each pin as the shape both units build to, so the operator sees no unit waits on it.
+   What it builds is the unit's title. Starts from reads "the integration branch" for `base: integration`, else "unit <id>'s branch". Waits on lists the units with a serial edge into this one, with each edge's why. Shares files with lists each overlap edge's other unit, its files and the merge order. Version line is filled only on the unit the plan's version line names (`version: <x.y.z> | class: <X, Y or Z> | reason: <one line> | unit: <unit id>`): the new version, its change class and the reason, as "bumps to <x.y.z>, class <class>: <reason>". Every other row, and every row of a plan with no version line, leaves it empty. Under the table, list each pin as the shape both units build to, so the operator sees no unit waits on it.
 9. Inside a Build Train only: run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py plan --repo <repo> --path <path>` and show its output unchanged. It records the plan's path and hash in train state; a coder dispatch is refused until it has (0089). Exit 1: show its output and stop; its `Next:` line is the next action.
 10. End. Outside a train, Next: start `/daedalus:build-train` and name `<path>` as the plan to build. Inside a train, Next: continue Phase 1 of the Build Train with the recorded plan.

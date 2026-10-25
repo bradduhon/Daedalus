@@ -41,7 +41,11 @@ write, on a `Write exactly one file: <path>` line. Inside a train that file is
 5. Compute the graph line: the unit count; the critical path, the longest serial chain counted
    in units; the width, the largest set of units with no serial path between them, capped at
    `max_concurrent_builders`; and the overlap-only pairs.
-6. When the spec leaves a boundary or an interface open, ask instead of guessing.
+6. When the spec's Version section bumps the version, cut it into one unit whose files are the
+   version sites that section names, and write one version line naming that unit (spec 3.4).
+   When the spec has no Version section, or its Version section keeps the version, write no
+   version line.
+7. When the spec leaves a boundary or an interface open, ask instead of guessing.
 
 ## The plan file
 Markdown for the reader around exactly one fenced block the validator reads:
@@ -51,11 +55,16 @@ Markdown for the reader around exactly one fenced block the validator reads:
     edge: A1 -> A3 | kind: serial | why: <import or interface>
     edge: A6 ~ A7 | kind: overlap | files: <path>[, ...] | merge: A6 then A7
     pin: A5 -> A8 | <the flag, function or line shape both sides build to>
+    version: <x.y.z> | class: <X, Y or Z> | reason: <one line> | unit: <unit id>
     graph: units=<n> critical_path=<k> width=<w> overlap_only=<pairs>
     ```
 
 Every unit lists its files, and its title says in plain words what it builds. Two units that
-share a file carry an overlap edge naming that file. When the work has no network interface,
+share a file carry an overlap edge naming that file. The version line is optional and appears
+at most once: the new version as three dot-separated numbers, the change class X, Y or Z the
+spec's Version section gives, that section's reason in one line, and the id of the unit that
+edits the version sites. The validator refuses a version line whose unit is missing, whose
+class is not X, Y or Z, or whose version is not three dot-separated numbers. When the work has no network interface,
 write the line `wire: none` below the block; the contract step then checks the pins instead of
 drafting a wire contract. When a validator defect comes back, write the corrected file to the
 same path and reply again.

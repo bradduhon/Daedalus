@@ -21,8 +21,11 @@ _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 _PAIR = re.compile(r"(\S+) (->|~) (\S+)")
 _MERGE = re.compile(r"(\S+) then (\S+)")
 _GRAPH = re.compile(r"graph: units=(\d+) critical_path=(\d+) width=(\d+) overlap_only=(\S*)")
+_SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 _UNIT_KEYS = ("title", "files", "base")
 _EDGE_KEYS = ("kind", "why", "files", "merge")
+_VERSION_KEYS = ("class", "reason", "unit")
+VERSION_CLASSES = ("X", "Y", "Z")
 _GLOB_CHARS = "*?["
 
 
@@ -61,12 +64,26 @@ class Pin:
 
 
 @dataclass(frozen=True)
+class Version:
+    version: str
+    change_class: str
+    reason: str
+    unit: str
+
+    @property
+    def summary_line(self) -> str:
+        # Pin D4 -> D5: the line the orchestrator copies into the summary for the release step.
+        return f"Version class: {self.version} {self.change_class}: {self.reason}"
+
+
+@dataclass(frozen=True)
 class Plan:
     units: tuple[Unit, ...]
     edges: tuple[Edge, ...]
     pins: tuple[Pin, ...]
     graph: str | None
     defects: tuple[str, ...]
+    version: Version | None = None
 
 
 @dataclass(frozen=True)
@@ -139,11 +156,24 @@ def _pin(line: str, number: int, out: list[str]) -> Pin | None:
     return Pin(pair.group(1), pair.group(3), shape.strip())
 
 
+def _version(line: str, out: list[str]) -> Version:
+    # Spec 3.4: version: <x.y.z> | class: <X, Y or Z> | reason: <one line> | unit: <unit id>
+    head, *parts = line.split(_SEP)
+    fields = _fields(parts, _VERSION_KEYS, "the version line", out)
+    return Version(
+        head.partition(":")[2].strip(),
+        fields.get("class", ""),
+        fields.get("reason", ""),
+        fields.get("unit", ""),
+    )
+
+
 def _parse(block: list[str]) -> Plan:
     units: list[Unit] = []
     edges: list[Edge] = []
     pins: list[Pin] = []
     graphs: list[str] = []
+    versions: list[Version] = []
     out: list[str] = []
     for number, raw in enumerate(block, 1):
         line = raw.strip()
@@ -164,13 +194,25 @@ def _parse(block: list[str]) -> Plan:
             pins.extend([pin] if pin is not None else [])
         elif kind == "graph":
             graphs.append(line)
+        elif kind == "version":
+            versions.append(_version(line, out))
         else:
             out.append(
-                f"line {number} of the plan block is not a unit, edge, pin or graph line: {line}"
+                f"line {number} of the plan block is not a unit, edge, pin, version or graph "
+                f"line: {line}"
             )
     if len(graphs) > 1:
         out.append(f"the plan block has {len(graphs)} graph lines; keep exactly one.")
-    return Plan(tuple(units), tuple(edges), tuple(pins), graphs[0] if graphs else None, tuple(out))
+    if len(versions) > 1:
+        out.append(f"the plan block has {len(versions)} version lines; keep at most one.")
+    return Plan(
+        tuple(units),
+        tuple(edges),
+        tuple(pins),
+        graphs[0] if graphs else None,
+        tuple(out),
+        versions[0] if versions else None,
+    )
 
 
 def _empty(defect: str) -> Plan:
@@ -403,6 +445,28 @@ def _pin_defects(plan: Plan) -> list[str]:
     return out
 
 
+def _version_defects(plan: Plan) -> list[str]:
+    # Spec 3.4: no version line validates as before; a present one is checked field by field.
+    v = plan.version
+    if v is None:
+        return []
+    out: list[str] = []
+    if not _SEMVER.fullmatch(v.version):
+        out.append(
+            f"the version line names version {v.version or '(none)'}; "
+            "write three dot-separated numbers, such as 4.0.0."
+        )
+    if v.change_class not in VERSION_CLASSES:
+        out.append(f"the version line names class {v.change_class or '(none)'}; use X, Y or Z.")
+    if not v.reason:
+        out.append("the version line names no reason; give the change in one line.")
+    if not v.unit:
+        out.append("the version line names no unit; name the unit that edits the version sites.")
+    elif v.unit not in _known(plan):
+        out.append(f"the version line names unknown unit {v.unit}.")
+    return out
+
+
 def _shared_defects(plan: Plan, reach: dict[str, set[str]]) -> list[str]:
     # 0086: a shared file needs an overlap edge, unless a serial path already orders the two units.
     joined = {frozenset(pair) for pair in _overlaps(plan)}
@@ -460,6 +524,7 @@ def validate(plan: Plan, max_concurrent: int) -> list[str]:
     if not plan.units:
         return defects or ["the plan block declares no units."]
     defects += _unit_defects(plan) + _edge_defects(plan) + _pin_defects(plan)
+    defects += _version_defects(plan)
     after = _serial(plan)
     cycle = _cycle(after)
     if cycle:
