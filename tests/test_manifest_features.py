@@ -35,13 +35,13 @@ def _refused(repo: Path, payload: object) -> str:
 
 
 def test_feature_keys_are_the_features_fields() -> None:
-    assert FEATURE_KEYS == ("scope", "secrets_scan", "scrub_file", "ledger")
+    assert FEATURE_KEYS == ("scope", "secrets_scan", "scrub_file", "ledger", "github")
 
 
 def test_absent_manifest_gives_every_feature_its_default(tmp_path: Path) -> None:
     # 0069: no manifest is no feature; load stays None and the dataclass default is all off.
     assert load(tmp_path) is None
-    assert manifest.features(tmp_path) == Features(None, False, None, None)
+    assert manifest.features(tmp_path) == Features(None, False, None, None, False)
 
 
 def test_absent_features_object_gives_every_feature_its_default(tmp_path: Path) -> None:
@@ -50,6 +50,8 @@ def test_absent_features_object_gives_every_feature_its_default(tmp_path: Path) 
     assert loaded is not None
     assert loaded.features == Features(scope=None, secrets_scan=False, scrub_file=None)
     assert loaded.features.ledger is None
+    # issue 48: an absent github key reads false, never null.
+    assert loaded.features.github is False
     assert manifest.features(tmp_path) == loaded.features
 
 
@@ -66,9 +68,18 @@ def test_absent_features_object_gives_every_feature_its_default(tmp_path: Path) 
         ({"ledger": True}, Features(ledger=True)),
         ({"ledger": False}, Features(ledger=False)),
         ({"ledger": None}, Features()),
+        ({"github": True}, Features(github=True)),
+        ({"github": False}, Features()),
+        ({"github": None}, Features(github=None)),
         (
-            {"scope": "folder", "secrets_scan": True, "scrub_file": "t.txt", "ledger": False},
-            Features("folder", True, "t.txt", False),
+            {
+                "scope": "folder",
+                "secrets_scan": True,
+                "scrub_file": "t.txt",
+                "ledger": False,
+                "github": True,
+            },
+            Features("folder", True, "t.txt", False, True),
         ),
     ],
 )
@@ -96,6 +107,9 @@ def test_unknown_feature_key_is_refused(tmp_path: Path) -> None:
         {"secrets_scan": 1},
         {"ledger": "on"},
         {"ledger": 0},
+        {"github": "true"},
+        {"github": 1},
+        {"github": {}},
         {"scrub_file": 3},
         {"scrub_file": ["a"]},
     ],

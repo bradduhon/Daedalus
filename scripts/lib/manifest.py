@@ -27,6 +27,8 @@ class Features:
     secrets_scan: bool = False
     scrub_file: str | None = None
     ledger: bool | None = None
+    # issue 48: true, false or null; absent reads false, and only true makes the gh lines a MISS.
+    github: bool | None = False
 
 
 # 0073: the one list of feature names; validator check 13 and the key reference import it.
@@ -157,10 +159,13 @@ def _features(target: Path, raw: dict[str, object]) -> Features:
     ledger = block.get("ledger")
     if ledger is not None and not isinstance(ledger, bool):
         raise _key_error(target, "features.ledger", "must be true, false or null")
+    github = block.get("github", False)
+    if github is not None and not isinstance(github, bool):
+        raise _key_error(target, "features.github", "must be true, false or null")
     kind: Literal["repository", "folder"] | None = (
         "repository" if scope == "repository" else "folder" if scope == "folder" else None
     )
-    return Features(kind, secrets, scrub, ledger)
+    return Features(kind, secrets, scrub, ledger, github)
 
 
 def _trains_dir(target: Path, raw: dict[str, object]) -> str | None:

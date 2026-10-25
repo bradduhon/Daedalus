@@ -88,6 +88,16 @@ def test_audit_round_budget_and_agent_models_rows() -> None:
     assert models.example == '`{"repo-coder": "sonnet"}`'
 
 
+def test_github_feature_row() -> None:
+    # issue 48: the row sits after features.ledger and names both doctor outcomes.
+    keys = [key for key, file, _ in _rows() if file == MANIFEST_FILE]
+    assert keys[keys.index("features.ledger") + 1] == "features.github"
+    row = KEY_ROWS[(MANIFEST_FILE, "features.github")]
+    assert row.kind == "boolean or null" and row.default.startswith("`false`")
+    assert "`MISS`" in row.governs and "`OPT`" in row.governs
+    assert "`null` reads as `false`" in row.values
+
+
 def test_reader_keys_follow_the_reader_dataclasses() -> None:
     # 0076: a field added to a reader adds a key, so the reference test sees it.
     from dataclasses import fields
