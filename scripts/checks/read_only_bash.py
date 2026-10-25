@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
@@ -33,6 +35,45 @@ R_TEST_RUN_NO_TRAIN = (
     "the {runner} test run needs an active train in this repository, and none is marked (0109). "
     "Next: run tests only inside a train's audit or verify step."
 )
+R_CD_CHAIN = (
+    "a read chain changes folder only with one leading cd <absolute path> joined by &&, and no "
+    "git command or test run follows it (spec 7.1). Next: drop the cd and pass absolute paths."
+)
+# spec 7.1: read-only flags jail._GIT_GRAMMAR lacks, judged as a stand-in flag its row admits,
+# so a flag that takes a value still swallows the same next token.
+LOG_STAND_INS = {"--first-parent": "--oneline", "--graph": "--oneline"}
+_GREP_PERL = re.compile(r"-[A-Za-z]*P[A-Za-z]*")
+
+
+def _log_ok(args: list[str], cwd: str) -> bool:
+    return jail._GIT_GRAMMAR["log"]([LOG_STAND_INS.get(a, a) for a in args], cwd)
+
+
+def _grep_ok(args: list[str], cwd: str) -> bool:
+    # spec 7.1: -P reads as -E does; it stands in as n inside its short-flag bundle.
+    perl = [a.replace("P", "n") if _GREP_PERL.fullmatch(a) else a for a in args]
+    return jail._GIT_GRAMMAR["grep"](perl, cwd)
+
+
+def _branch_ok(args: list[str], cwd: str) -> bool:
+    # spec 7.1: with --list every operand is a pattern git lists by, never a branch it creates.
+    flags = [a for a in args if a.startswith("-")] if "--list" in args else args
+    return jail._GIT_GRAMMAR["branch"](flags, cwd)
+
+
+READ_GIT_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
+    **jail._GIT_GRAMMAR,
+    "log": _log_ok,
+    "grep": _grep_ok,
+    "branch": _branch_ok,
+}
+
+
+def read_segment_ok(tokens: list[str], subs: frozenset[str], cwd: str, charter: str | None) -> bool:
+    # spec 7.1: jail's read set plus the Train C git rows; command_allowlist judges inspect by it.
+    if shell._cmd_name(tokens) == "git":
+        return jail._git_grammar_ok(tokens, subs, cwd, charter, READ_GIT_GRAMMAR)
+    return jail._read_only_segment(tokens, subs, cwd, charter)
 
 
 class Bound(NamedTuple):
@@ -142,6 +183,20 @@ def _show_sed(prev: list[str], sep: str, tokens: list[str], subs: frozenset[str]
     )
 
 
+def _moves(chain: shell.WorkerChain) -> bool:
+    return any(s and shell._base(s[0]) in jail.DIR_CHANGE_CMDS for s in chain.segments)
+
+
+def _cd_reason(chain: shell.WorkerChain, cwd: str) -> str | None:
+    # spec 7.1: `cd <folder> && <reads>`; git -C and the test-run bounds are judged against cwd.
+    if shell.chain_bases(chain, cwd, jail.DIR_CHANGE_CMDS) is None:
+        return R_CD_CHAIN
+    later = [s for s in chain.segments[1:] if s]
+    if any(shell._cmd_name(s) == "git" or _pytest_args(s) is not None for s in later):
+        return R_CD_CHAIN
+    return None
+
+
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
     grant: str | None = flags.git
     runner: str | None = flags.test_runner
@@ -154,10 +209,13 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
         args = _pytest_args(tokens) if tokens else None
         if args is not None and any(a.startswith("--basetemp") for a in args):
             return jail.R_BASETEMP_AGENT.format(agent=agent)
+    moved = _moves(chain)
+    if moved and (reason := _cd_reason(chain, cwd)) is not None:
+        return reason
     subs = shell.GIT_SETS[grant] if grant else frozenset()
     charter = hook_io.hook_charter(cwd)
     for i, tokens in enumerate(chain.segments):
-        if jail._read_only_segment(tokens, subs, cwd, charter):
+        if (i == 0 and moved) or read_segment_ok(tokens, subs, cwd, charter):
             continue
         if i and _show_sed(chain.segments[i - 1], chain.seps[i - 1], tokens, subs):
             continue

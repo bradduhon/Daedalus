@@ -15,7 +15,8 @@ from tests.adversarial.corpus import (
     assert_denied,
     assert_store_read_denied,
 )
-from tests.conftest import CWD, WT
+from tests.conftest import CFG, CWD, WT
+from tests.hook_chain import decide
 from tests.payloads import _b, _cred, _w
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
@@ -66,14 +67,19 @@ STORE_READS = (
     "cat {home}/./.gnupg/pubring.kbx",
 )
 # spec 3.7: the auditor's audit folder is never a door to the summary, the briefs or source.
-AUDIT = f"{CWD}/docs/.tmp/daedalus/20261015-120000/audit"
 AUDIT_ESCAPES = (
-    f"{AUDIT}/../20261015-120000-summary.md",
-    f"{AUDIT}/../briefs/c1.md",
-    f"{AUDIT}/round1/../../briefs/c1.md",
-    f"{AUDIT}/../../../../../scripts/lib/jail.py",
-    f"{AUDIT}/round1/../../../../../../src/a.py",
+    "{audit}/../20261015-120000-summary.md",
+    "{audit}/../briefs/c1.md",
+    "{audit}/round1/../../briefs/c1.md",
+    "{audit}/../../../../../scripts/lib/jail.py",
+    "{audit}/round1/../../../../../../src/a.py",
 )
+AUDIT_REFUSAL = "writes are limited to audit"
+
+
+def _audit(repo: Path) -> str:
+    # issue 70: marked_repo carries train 20261015-120000, so its audit folder is open.
+    return f"{repo}/docs/.tmp/daedalus/20261015-120000/audit"
 
 
 @pytest.mark.parametrize("template", CODER_WRITE_PATHS)
@@ -114,8 +120,19 @@ def test_read_tool_traversal_into_a_store_is_denied(
         assert_denied(_cred(agent, "Read", file_path=path), CREDENTIAL)
 
 
-@pytest.mark.parametrize("path", AUDIT_ESCAPES)
-def test_auditor_write_leaving_the_audit_folder_is_denied(path: str) -> None:
-    assert_denied(_cred("security-auditor", "Write", file_path=path, content="x"))
-    assert_denied(_cred("security-auditor", "Bash", command=f"tee {path}"))
-    assert_denied(_cred("security-auditor", "Bash", command=f"echo x > {path}"))
+@pytest.mark.parametrize("template", AUDIT_ESCAPES)
+def test_auditor_write_leaving_the_audit_folder_is_denied(marked_repo: Path, template: str) -> None:
+    # issue 70: inside a marked train, so the deny is for leaving the folder, not for no train.
+    path, cwd = template.format(audit=_audit(marked_repo)), str(marked_repo)
+    write = _cred("security-auditor", "Write", cwd, file_path=path, content="x")
+    assert_denied(write, AUDIT_REFUSAL)
+    assert_denied(_cred("security-auditor", "Bash", cwd, command=f"tee {path}"))
+    assert_denied(_cred("security-auditor", "Bash", cwd, command=f"echo x > {path}"))
+
+
+def test_auditor_write_inside_the_audit_folder_is_allowed(marked_repo: Path) -> None:
+    # issue 70: the same marked repo admits the in-folder write the escape rows depart from.
+    for name in ("round1/test_scope_x.py", "round1/findings.txt"):
+        path = f"{_audit(marked_repo)}/{name}"
+        write = _cred("security-auditor", "Write", str(marked_repo), file_path=path, content="x")
+        assert decide(write, CFG).allow, path

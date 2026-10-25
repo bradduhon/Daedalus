@@ -646,6 +646,84 @@ def test_train_script_repo_resolves_from_a_subfolder_of_a_real_project(tmp_path:
     assert reason is not None and f"{repo}/docs" in reason and f"({repo})" in reason
 
 
+LEDGER = (
+    f"python3 {SCRIPTS}/daedalus_train.py ledger --repo {CWD} --sha {'a' * 40} --ids 0120-DAE-PLT"
+)
+
+
+def test_ledger_is_the_orchestrators_and_reaudit_and_resume_stay_main() -> None:
+    # pin D1 -> D6, 0119: ledger by its first argument; reaudit and resume stay main-session.
+    module = load(HOOK)
+    assert decide(_b("orchestrator", LEDGER), CFG).allow
+    assert "ledger" in module.R_ORCHESTRATOR_BASH and "reaudit" in module.R_ORCHESTRATOR_BASH
+    trains = module.TRAIN_SCRIPTS["daedalus_train.py"]
+    assert "ledger" in trains and not {"reaudit", "resume"} & trains
+    for sub in ("reaudit", "resume"):
+        command = f"python3 {SCRIPTS}/daedalus_train.py {sub} --repo {CWD}"
+        reason = evaluate(HOOK, _b("orchestrator", command), *TRAIN_FLAGS)
+        assert reason == module.R_ORCHESTRATOR_BASH, sub
+    other = LEDGER.replace(f"--repo {CWD}", "--repo /work/other")
+    reason = evaluate(HOOK, _b("orchestrator", other), *TRAIN_FLAGS)
+    assert reason == module.R_TRAIN_REPO.format(flag="--repo", given="/work/other", root=CWD)
+    for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+        assert not decide(_b(agent, LEDGER), CFG).allow, agent
+
+
+# spec 7.1: the orchestrator's Train C read rows, one allow and one nearest-write refusal each.
+ORCHESTRATOR_READ_ROWS = [
+    ("date -u", "date -s 2026-01-01"),
+    ("date -u +%Y-%m-%dT%H:%M:%SZ", "date -u 0101000026"),
+    (
+        f'git -C {CWD} grep -n -e "--hard" -e "ff-only" daedalus-unit/t-u1 -- scripts/lib/a.py',
+        f"git -C {CWD} grep --open-files-in-pager=vi -e hard daedalus-unit/t-u1",
+    ),
+    (
+        f"git -C {CWD} log --format='%h %s' a..daedalus/t --first-parent",
+        f"git -C {CWD} log --first-parent --output=x a..daedalus/t",
+    ),
+    (f"git -C {CWD} branch --list 'daedalus*'", f"git -C {CWD} branch daedalus-x"),
+    (f"sed -n 1225,1275p {CWD}/scripts/lib/shell.py", f"sed -n 1p {CWD}/scripts/lib/shell.py -i"),
+    (f"sed -n '325,345p;480,600p' {CWD}/scripts/a.py", f"sed -n '1w {CWD}/x' {CWD}/scripts/a.py"),
+    (
+        f"ls {CWD}/docs/.tmp/daedalus/; git -C {CWD} branch --list 'daedalus*'; "
+        f"git -C {CWD}/docs/private branch --show-current; git -C {CWD} status --porcelain",
+        f"ls {CWD}/docs && git -C {CWD} status --porcelain && touch {CWD}/docs/x",
+    ),
+    (
+        f"git -C {CWD} status --porcelain && date -u && sed -n 1,20p {CWD}/scripts/a.py",
+        f"git -C {CWD} status --porcelain && git -C {CWD} branch -D daedalus-x",
+    ),
+]
+
+
+@pytest.mark.parametrize(("allowed", "refused"), ORCHESTRATOR_READ_ROWS)
+def test_orchestrator_train_c_read_rows(allowed: str, refused: str) -> None:
+    assert decide(_b("orchestrator", allowed), CFG).allow, allowed
+    reason = evaluate(HOOK, _b("orchestrator", refused), *TRAIN_FLAGS)
+    assert reason == load(HOOK).R_ORCHESTRATOR_BASH, refused
+    assert not decide(_b("orchestrator", refused), CFG).allow, refused
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "date",
+        "date --set=2026-01-01",
+        "date -u -f dates.txt",
+        "date -u +%s +%F",
+        "sed -n 1,2p",
+        "sed -n -e 1p a.py",
+        "sed -n 1,2p a.py -- b.py",
+        "sed 1,2p a.py",
+        "python3 -c 'print(open(\"a.py\").read())'",
+    ],
+)
+def test_orchestrator_read_rows_refuse_their_neighbours(command: str) -> None:
+    # spec 7.1, 0117: only the printed forms; an interpreter one-liner stays refused.
+    reason = evaluate(HOOK, _b("orchestrator", command), *TRAIN_FLAGS)
+    assert reason == load(HOOK).R_ORCHESTRATOR_BASH, command
+
+
 def test_train_script_ok_keeps_its_shape_check_without_a_cwd() -> None:
     # pin B6 -> B4: shell_tripwires calls it with the segment alone.
     module = load(HOOK)
