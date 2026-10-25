@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import fetch  # noqa: E402
@@ -183,7 +183,7 @@ ADAPTERS: dict[str, Adapter] = {
 }
 
 
-def _old_entries(path: Path, replaced: set[str]) -> list[dict[str, Any]]:
+def _old_entries(path: Path, replaced: set[str]) -> list[dict[str, object]]:
     # 0026: a legacy single-catalog dict manifest is dropped; list entries of other adapters stay.
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -242,7 +242,7 @@ def run_adapter(adapter: Adapter, root: Path) -> list[tuple[str, str, Path]]:
                 outputs = [(adapter.output, name, digest, source)]
             entries = _old_entries(dest / MANIFEST, {o[0] for o in outputs})
             for local, _, sha256, url in outputs:
-                entry = {
+                entry: dict[str, object] = {
                     "file": local,
                     "license": adapter.license,
                     "pinned_on": pinned_on,

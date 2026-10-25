@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import atomic, narrow  # noqa: E402
+from lib import atomic  # noqa: E402
 from lib.audit import (  # noqa: E402
     SESSION_ID,
     AuditLockError,
@@ -234,13 +234,20 @@ def _fmt(seconds: float | None) -> str:
     return "none" if seconds is None else f"{seconds:.1f}"
 
 
+def _seq_of(rec: dict[str, object]) -> int:
+    value = rec.get("seq") or 0
+    if not isinstance(value, int | float | str):
+        raise TypeError(f"audit record seq is not a number: {value!r}")
+    return int(value)
+
+
 def _until_allowed(
     pre: list[dict[str, object]], origin: dict[str, object], tools: tuple[str, ...] | None = None
 ) -> str:
     # 6.2: seconds from origin to the same agent's next allowed call, optionally of these tools.
-    seq = narrow.integer(origin, "seq", 0)
+    seq = _seq_of(origin)
     for rec in pre:
-        if narrow.integer(rec, "seq", 0) <= seq or rec.get("agent_id") != origin.get("agent_id"):
+        if _seq_of(rec) <= seq or rec.get("agent_id") != origin.get("agent_id"):
             continue
         if rec.get("decision") == "allow" and (tools is None or rec.get("tool_name") in tools):
             return _fmt(_seconds(origin.get("ts"), rec.get("ts")))

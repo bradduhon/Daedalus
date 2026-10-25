@@ -162,3 +162,12 @@ def test_hook_rotation_record_passes_the_chain_check(
         check=False,
     )
     assert check.returncode == 0 and check.stdout.startswith("OK: 2 records, chain intact")
+
+
+def test_chain_seq_accepts_what_int_accepted() -> None:
+    # 38: typing the tail read must not add a refusal; a float or numeric str seq still chains.
+    from lib.audit import _seq
+
+    assert _seq({"seq": 5.0}) == 5 and _seq({"seq": "7"}) == 7 and _seq({"seq": True}) == 1
+    with pytest.raises(TypeError):
+        _seq({"seq": None})

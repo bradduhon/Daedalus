@@ -480,8 +480,8 @@ def audit_append(
 
 def _seq(record: dict[str, object]) -> int:
     seq = record["seq"]
-    if isinstance(seq, bool) or not isinstance(seq, int | str):
-        raise ValueError(f"audit record seq is not a number: {seq!r}")
+    if not isinstance(seq, int | float | str):
+        raise TypeError(f"audit record seq is not a number: {seq!r}")
     return int(seq)
 
 
