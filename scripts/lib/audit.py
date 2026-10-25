@@ -21,7 +21,7 @@ from lib import atomic, git, locks
 from lib.credential_paths import REPLY_KEY_NAME
 from lib.project_root import in_git_work_tree
 from lib.project_root import project_root as _project_root
-from lib.redact import redact
+from lib.redact import redact, redact_text
 from lib.train_state import STATE_DIR, TRAIN_ID, TRAIN_MARKER
 
 GENESIS = "0" * 64
@@ -301,6 +301,15 @@ def _tail(text: str, limit: int) -> str:
     return window[-limit:]
 
 
+VERDICT_TAG = "[VERDICT:"
+
+
+def _verdict_lines(text: str) -> list[str]:
+    # 45, AU-9: picked from the whole raw reply; each line redacted alone, then cut.
+    picked = [line.strip() for line in text.splitlines() if line.strip().startswith(VERDICT_TAG)]
+    return [redact_text(line)[:MESSAGE_HEAD_CHARS] for line in picked]
+
+
 def _error_field(error: object) -> object:
     return _head(error) if isinstance(error, str) else redact(error)
 
@@ -333,7 +342,7 @@ def build_record(
         else None
     )
     # 8.2: error, source and stop_reason are event-specific; null when absent.
-    return {
+    record: dict[str, object] = {
         "ts": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
         "session_id": hook_input.get("session_id"),
         "event": event,
@@ -359,6 +368,11 @@ def build_record(
         # 6.1: the jail's own wall time; inside the hashed body, null off PreToolUse.
         "judge_ms": judge_ms if event == "PreToolUse" else None,
     }
+    if event == "SubagentStop":
+        # pin D3 -> D1: stop records only; a hand-back stop has no reply, so the list is empty.
+        lines = _verdict_lines(last) if isinstance(last, str) else []
+        record.update(verdict_lines=lines, verdict_line_count=len(lines))
+    return record
 
 
 class AuditLockError(RuntimeError):
@@ -444,6 +458,40 @@ def _started_type(path: Path, agent_id: str) -> str | None:
     return None
 
 
+def is_fork_stop(hook_input: dict[str, object]) -> bool:
+    # 0114: a stop naming a transcript absent at hook time is a fork; never judged by message shape.
+    transcript = hook_input.get("agent_transcript_path")
+    if hook_input.get("hook_event_name") != "SubagentStop" or not isinstance(transcript, str):
+        return False
+    return not os.path.exists(transcript)
+
+
+def skipped_path(log: Path) -> Path:
+    return log.with_suffix(".skipped")
+
+
+def skipped_count(log: Path) -> int:
+    # 0114: the fork stop counter beside the log, outside the chain; a missing counter reads 0.
+    counter = skipped_path(log)
+    atomic.refuse_links(counter)
+    try:
+        text = counter.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return 0
+    if not re.fullmatch(r"[0-9]+\n?", text):
+        raise AuditCorruptError(
+            f"{counter} does not hold a count of skipped fork stops. "
+            "Next: move the file aside from your own shell; the next fork stop starts it at 1."
+        )
+    return int(text)
+
+
+def _count_skipped(log: Path, lock: Path) -> None:
+    # pin U1 -> D3: one more skipped stop, written whole at 0600 under the log's own lock.
+    with audit_lock(lock):
+        atomic.write_atomic(skipped_path(log), f"{skipped_count(log) + 1}\n", 0o600)
+
+
 def audit_append(
     hook_input: dict[str, object],
     decision: str | None = None,
@@ -459,6 +507,10 @@ def audit_append(
     audit_dir = path.parent
     audit_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(audit_dir, 0o700)
+    # 0114: judged on the raw payload, before build_record collapses the agent type.
+    if is_fork_stop(hook_input):
+        _count_skipped(path, lock)
+        return None
     root, source, _ = root_info(cwd)
     last = hook_input.get("last_assistant_message")
     key = reply_key(cwd, create=True) if isinstance(last, str) and last else None

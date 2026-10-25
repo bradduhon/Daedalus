@@ -259,6 +259,56 @@ def test_verdict_lines_keep_reply_order_and_cut_each_line(
     assert record["verdict_line_count"] == 2
 
 
+def _verdicts(hook_input: Any, project_data: Path, reply: str) -> list[str]:
+    from lib import audit
+
+    write_train_marker(project_data.parent.parent)
+    record = audit.audit_append(_stop(hook_input, agent_id="a1", last_assistant_message=reply))
+    assert record is not None
+    return list(record["verdict_lines"])
+
+
+def test_verdict_line_keeps_tip_and_claims_through_redaction(
+    project_data: Path, hook_input: Any
+) -> None:
+    line = "[VERDICT: VERIFIED] claims=4 tip=" + "0123456789abcdef" * 2 + "01234567"
+    assert _verdicts(hook_input, project_data, f"done\n{line}") == [line]
+
+
+def test_verdict_line_secret_is_masked(project_data: Path, hook_input: Any) -> None:
+    # AU-9, SI-12: a verdict line is redacted like the head and tail before it is stored.
+    token = "ghp_" + "Q" * 36
+    got = _verdicts(hook_input, project_data, f"[VERDICT: REJECTED] leaked {token}")
+    assert got == ["[VERDICT: REJECTED] leaked [REDACTED_GH_TOKEN]"]
+
+
+def test_unterminated_quote_after_a_keyword_masks_the_tip(
+    project_data: Path, hook_input: Any
+) -> None:
+    # AU-9: the mask runs to the line end, so the suffix is lost and the reader sees no verdict.
+    reply = '[VERDICT: VERIFIED] token="abc claims=2 tip=' + "a" * 40
+    assert _verdicts(hook_input, project_data, reply) == ['[VERDICT: VERIFIED] token="[REDACTED]']
+
+
+def test_open_private_key_masks_only_its_own_line(project_data: Path, hook_input: Any) -> None:
+    # AU-9: each line is redacted alone, so a BEGIN with no END never reaches the next line.
+    first = "[VERDICT: REJECTED] -----BEGIN RSA PRIVATE KEY----- tip=" + "b" * 40
+    second = "[VERDICT: VERIFIED] claims=1 tip=" + "c" * 40
+    got = _verdicts(hook_input, project_data, f"{first}\n{second}")
+    assert got == ["[VERDICT: REJECTED] [REDACTED_PRIVATE_KEY]", second]
+
+
+def test_verdict_line_is_redacted_before_the_cut(project_data: Path, hook_input: Any) -> None:
+    # AU-9: a cut through a secret never leaves a raw prefix; the redaction runs first.
+    from lib import audit
+
+    lead = "[VERDICT: REJECTED] "
+    pad = "a" * (audit.MESSAGE_HEAD_CHARS - len(lead) - 14)
+    got = _verdicts(hook_input, project_data, lead + pad + "ghp_" + "b" * 30)
+    assert len(got[0]) == audit.MESSAGE_HEAD_CHARS
+    assert "ghp_" not in got[0] and "bbbb" not in got[0]
+
+
 def test_stop_with_no_reply_carries_empty_verdict_lines(
     project_data: Path, hook_input: Any
 ) -> None:

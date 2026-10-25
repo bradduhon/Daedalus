@@ -18,10 +18,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import atomic  # noqa: E402
 from lib.audit import (  # noqa: E402
     SESSION_ID,
+    AuditCorruptError,
     AuditLockError,
     project_data_dir,
     read_log,
     root_info,
+    skipped_count,
 )
 from lib.controls import Control, ControlsError, failure_line  # noqa: E402
 from lib.controls import load as load_controls  # noqa: E402
@@ -128,30 +130,40 @@ def md_escape(value: object, limit: int | None = None) -> str:
 
 
 def _timeline(records: list[dict[str, object]]) -> list[str]:
-    agents: dict[str, dict[str, object]] = {}
+    # 0114: a start opens a row; a stop closes its id's newest open row, else opens a resume row.
+    rows: list[dict[str, object]] = []
+    open_rows: dict[str, dict[str, object]] = {}
+    stopped: set[str] = set()
     for rec in records:
         if rec.get("event") not in ("SubagentStart", "SubagentStop") or not rec.get("agent_id"):
             continue
-        row = agents.setdefault(
-            str(rec["agent_id"]),
-            {"type": rec.get("agent_type"), "start": None, "stop": None, "head": None},
-        )
+        agent_id = str(rec["agent_id"])
         if rec["event"] == "SubagentStart":
-            row["start"] = rec.get("seq")
-        else:
-            row["stop"], row["head"] = rec.get("seq"), rec.get("last_message_head")
+            row: dict[str, object] = {"id": agent_id, "type": rec.get("agent_type")}
+            row.update(start=rec.get("seq"), stop=None, head=None)
+            rows.append(row)
+            open_rows[agent_id] = row
+            continue
+        row = open_rows.pop(agent_id, {})
+        if not row:
+            row.update(id=agent_id, type=rec.get("agent_type"))
+            row["start"] = "resume" if agent_id in stopped else None
+            rows.append(row)
+        row["type"] = row.get("type") or rec.get("agent_type")
+        row["stop"], row["head"] = rec.get("seq"), rec.get("last_message_head")
+        stopped.add(agent_id)
     lines = [
         "## Subagent timeline",
         "",
         "| agent_id | agent_type | start seq | stop seq | last message |",
         "|---|---|---|---|---|",
     ]
-    for agent_id, row in agents.items():
+    for row in rows:
         start = "-" if row["start"] is None else row["start"]
         stop = "open" if row["stop"] is None else row["stop"]
         head = md_escape(row["head"], TIMELINE_CHARS)
         lines.append(
-            f"| {md_escape(agent_id)} | {md_escape(row['type'])} | {start} | {stop} | {head} |"
+            f"| {md_escape(row['id'])} | {md_escape(row['type'])} | {start} | {stop} | {head} |"
         )
     return lines
 
@@ -206,10 +218,15 @@ def _status_lines(records: list[dict[str, object]]) -> list[str]:
     return lines
 
 
-def _totals(records: list[dict[str, object]]) -> list[str]:
+def _totals(records: list[dict[str, object]], path: Path) -> list[str]:
     tally = Counter(str(rec.get("event")) for rec in records)
     lines = ["## Totals by event", "", "| event | records |", "|---|---|"]
     lines.extend(f"| {md_escape(event)} | {n} |" for event, n in sorted(tally.items()))
+    try:
+        skipped = skipped_count(path)
+    except AuditCorruptError as exc:
+        raise ReportError(str(exc)) from exc
+    lines += ["", f"skipped fork stops: {skipped}"]
     return lines
 
 
@@ -322,7 +339,7 @@ def render(path: Path, controls_only: bool = False) -> str:
             _blocks(records),
             _controls(records),
             _status_lines(records),
-            _totals(records),
+            _totals(records, path),
         ]
     return "\n\n".join("\n".join(s) for s in sections) + "\n"
 
