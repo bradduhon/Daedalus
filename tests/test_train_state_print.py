@@ -47,8 +47,6 @@ NOTES = (
     "Friction: none\n"
     "Habit: repo-coder, workspace_integrity, a read of the plugin data folder\n"
 )
-# The shape of an absolute path the public PR body must never carry.
-ABSOLUTE = re.compile(r"(?<![\w.~:/\\-])/(?:[\w.\\-]+/)+")
 
 
 def _unit(name: str, path: str) -> dict[str, object]:
@@ -312,17 +310,68 @@ def test_audit_log_names_the_running_session_first_and_its_totals(tmp_path: Path
     assert "| SubagentStop | 4 |" in rows and "skipped fork stops: 0" in rows
 
 
+HOSTILE = (
+    "Worktree:/opt/u/.claude/rules/python.md key=/srv/x/y.md ~/proj/a/b.md \\~/proj/c.md "
+    "(/var/tmp/z.md) '/etc/one' /root"
+)
+
+
+def _path_tokens(text: str) -> list[str]:
+    # Independent of the filter: split on whitespace and every mark that can precede a path.
+    tokens = re.split(r"[\s:=,;()\[\]\"'`|<>*]+", text)
+    return [t.lstrip("\\") for t in tokens if t.lstrip("\\").startswith(("/", "~/"))]
+
+
 def test_the_summary_carries_no_absolute_path(tmp_path: Path) -> None:
     # W3.2: a public PR body; every path in state and in agent text goes relative or to its name.
-    text = _text(tmp_path)
-    assert ABSOLUTE.findall(text) == []
-    assert "/r/" not in text and "/opt/" not in text
+    hostile = _stop(10, "cis-specialist", f"[STATUS: COMPLIANCE] {HOSTILE}", "k1")
+    notes = parse_notes(NOTES + f"## Waived\n{HOSTILE}\n", "n")
+    text = _text(tmp_path, notes=notes, records=[*RECORDS, hostile])
+    assert _path_tokens(text) == []
+    for prefix in ("/r/", "/opt", "/srv", "/var", "/etc", "/root", "~/"):
+        assert prefix not in text, prefix
+    compliance = _section(text, "Compliance")[1]
+    assert compliance.startswith("- cis-specialist: Worktree:python.md key=y.md b.md")
 
 
 def test_public_keeps_plugin_commands_and_urls() -> None:
-    line = f"see /daedalus:doctor, https://x.io/a/b, {REPO}/src/a.py and /tmp/q/z.txt"
-    assert public(line, REPO, None) == "see /daedalus:doctor, https://x.io/a/b, src/a.py and z.txt"
+    line = f"see /daedalus:doctor, https://x.io/a/b, {REPO}/src/a.py and /tmp/q/z.txt:12"
+    assert public(line, REPO, None) == (
+        "see /daedalus:doctor, https://x.io/a/b, src/a.py and z.txt:12"
+    )
     assert public(f"{CHARTER}/specs/x.md", REPO, CHARTER) == "private/specs/x.md"
+    assert public(HOSTILE, REPO, None) == (
+        "Worktree:python.md key=y.md b.md c.md (z.md) 'one' root"
+    )
+    assert _path_tokens(public("scripts/lib/a.py tests/x/y.py docs/.tmp/z", REPO, None)) == []
+    assert public("scripts/lib/a.py and/or 1/2", REPO, None) == "scripts/lib/a.py and/or 1/2"
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        "  Session evil: x",
+        "\tSession evil: x",
+        " \t Session evil: .claude/daedalus/audit/evil.jsonl",
+    ],
+)
+@pytest.mark.parametrize("section", ["Rulings", "Blocks", "Waived"])
+def test_an_indented_session_row_is_refused(row: str, section: str) -> None:
+    with pytest.raises(SummaryError, match=re.escape("starts with `Session <id>:`")):
+        parse_notes(f"Task: t\n## {section}\n{row}\n", "n")
+
+
+@pytest.mark.parametrize("row", ["  ## Audit log", "\t## Audit log", "# Audit log", "### Rulings"])
+def test_an_indented_or_unknown_heading_is_refused(row: str) -> None:
+    with pytest.raises(SummaryError, match="opens section"):
+        parse_notes(f"Task: t\n## Rulings\n{row}\n", "n")
+
+
+def test_render_refuses_a_session_line_outside_the_audit_log(tmp_path: Path) -> None:
+    # W3.2: a second guard after the notes check; the proof reads the first Session line.
+    spoof = Notes(True, {"Task": "t"}, {"Rulings": ["Session evil: x"]})
+    with pytest.raises(SummaryError, match="outside its audit log section"):
+        _text(tmp_path, notes=spoof)
 
 
 def test_load_logs_puts_the_running_session_first_then_the_rest_oldest_first(

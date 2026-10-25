@@ -40,8 +40,13 @@ NOT_RUN = "not run (no IAM, KMS, mTLS, key custody or infrastructure change)"
 NOTE_FIELDS = ("Task", "Codes", "Migration")
 NOTE_SECTIONS = ("Rulings", "Blocks", "Waived")
 _CODES = re.compile(r"--repo [A-Za-z0-9]{1,16} --type [A-Za-z0-9]{1,16}")
-# W3.2: an absolute path is a slash-led run of two or more segments; `/daedalus:doctor` is none.
-_ABSOLUTE = re.compile(r"(?<![\w.~:/\\-])/(?:[\w.\\-]+/)+[\w.\\-]*")
+# W3.2: a slash-led run of segments after any non-path character, or any home path; a URL's
+# `//` and `/daedalus:doctor` are none, since `/` must not follow `/` and `:` ends a segment.
+_SEGMENT = r"[\w.\\@+%-]"
+_ABSOLUTE = re.compile(
+    rf"(?<![\w./~-])/(?:{_SEGMENT}+/)*{_SEGMENT}+/?(?!{_SEGMENT}|:[A-Za-z])"
+    rf"|(?<![\w./-])\\?~/(?:{_SEGMENT}|/)*"
+)
 _COMPLETE = re.compile(
     r"\[STATUS: COMPLETE\] branch=(\S+) packet_version=(\S+) files=(.*?) tests=(.*?) ledger_notes="
 )
@@ -110,15 +115,16 @@ def parse_notes(text: str, where: str) -> Notes:
     sections: dict[str, list[str]] = {}
     current: list[str] | None = None
     for number, raw in enumerate(text.splitlines(), start=1):
-        line = raw.rstrip()
+        # Every row is judged with its leading whitespace stripped, as the summary prints it.
+        line = raw.strip()
         if _SESSION_LINE.match(line):
             raise SummaryError(
                 f"line {number} of {where} starts with `Session <id>:`, the audit log line the "
                 "push proof reads. Next: reword that line, then rerun summary."
             )
-        if line.startswith("## "):
-            name = line[3:].strip()
-            if name not in NOTE_SECTIONS or name in sections:
+        if line.startswith("#"):
+            name = line[3:].strip() if line.startswith("## ") else line
+            if not line.startswith("## ") or name not in NOTE_SECTIONS or name in sections:
                 raise SummaryError(
                     f"line {number} of {where} opens section {name!r}; the notes hold each of "
                     f"{', '.join(NOTE_SECTIONS)} at most once. Next: fix the notes, then rerun "
@@ -127,10 +133,10 @@ def parse_notes(text: str, where: str) -> Notes:
             current = sections.setdefault(name, [])
             continue
         if current is not None:
-            if line.strip():
-                current.append(line.strip())
+            if line:
+                current.append(line)
             continue
-        if not line.strip():
+        if not line:
             continue
         key, sep, value = line.partition(": ")
         if not sep or key not in NOTE_FIELDS or key in fields or not value.strip():
@@ -529,7 +535,17 @@ def render(
         except ReportError as exc:
             raise SummaryError(f"{exc}. Next: keep the audit log, report it.") from exc
         lines += [f"### Audit totals, session {log.session}", *totals[2:]]
-    return public("\n".join(lines) + "\n", repo, charter)
+    text = public("\n".join(lines) + "\n", repo, charter)
+    # W3.2: the proof reads the first Session line, so only the Audit log section carries any.
+    found = list(_SESSION_LINE.finditer(text))
+    section = text.find("\n## Audit log\n")
+    named = [m.group(1) for m in found]
+    if named != [log.session for log in logs] or any(m.start() < section for m in found):
+        raise SummaryError(
+            "the rendered summary carries a `Session <id>:` line outside its audit log section. "
+            "Next: report it; the summary was not written."
+        )
+    return text
 
 
 def load_logs(repo: Path, state: dict[str, object], first: str | None) -> list[SessionLog]:

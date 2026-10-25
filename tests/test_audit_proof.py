@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import itertools
 import json
 import os
 from functools import partial
@@ -17,6 +18,7 @@ from lib.audit_proof import (
     ProofError,
     approved,
     hooks_live,
+    live_summary,
     newest_log,
     push_proof,
     read_chain,
@@ -25,7 +27,7 @@ from lib.audit_proof import (
     tip_problem,
 )
 
-from tests.conftest import append_handback, replay_auditor, write_train_marker
+from tests.conftest import SCRIPTS_DIR, append_handback, replay_auditor, write_train_marker
 from tests.conftest import git as _git
 
 NEEDLE = "daedalus_workspace.py begin"
@@ -144,12 +146,42 @@ def _stop(hook_input: Any, verdict: str, agent_type: str = AUDITOR) -> None:
     )
 
 
-SUMMARY_CMD = "python3 /p/scripts/daedalus_train.py summary --repo /r"
+SCRIPT = SCRIPTS_DIR / "daedalus_train.py"
+_USES = itertools.count(1)
 
 
-def _summary_run(hook_input: Any, repo_cwd: Path) -> None:
-    # W3.2: the summary command's PreToolUse Bash record is the proof's anchor.
-    _bash(hook_input, SUMMARY_CMD)
+def _summary_cmd(repo: Path) -> str:
+    return f"python3 {SCRIPT} summary --repo {repo}"
+
+
+def _written(train: str = TRAIN) -> dict[str, object]:
+    line = (
+        f"summary written train={train} path=docs/.tmp/daedalus/{train}-summary.md ledger=pending"
+    )
+    return {"stdout": f"{line}\n", "stderr": ""}
+
+
+def _summary_run(
+    hook_input: Any,
+    repo_cwd: Path,
+    command: str | None = None,
+    response: dict[str, object] | None = None,
+    post: str | None = "PostToolUse",
+    **kw: Any,
+) -> None:
+    # W3.2: the summary command's PreToolUse Bash record and its PostToolUse written line.
+    use = f"toolu_sum{next(_USES)}"
+    tool_input = {"command": command or _summary_cmd(repo_cwd)}
+    audit.audit_append(hook_input(tool_input=tool_input, tool_use_id=use, **kw))
+    if post is not None:
+        done = hook_input(
+            hook_event_name=post,
+            tool_input=tool_input,
+            tool_use_id=use,
+            tool_response=_written() if response is None else response,
+            **kw,
+        )
+        audit.audit_append(done)
 
 
 def _summary_write(hook_input: Any, repo_cwd: Path) -> None:
@@ -342,14 +374,17 @@ def test_approved_refuses_a_rejected_line_in_the_tail(
 
 def _hand_chain(repo_cwd: Path, stop: dict[str, object]) -> None:
     # 41: B5/B6, chain-valid records written without build_record.
-    write: dict[str, object] = {
+    run: dict[str, object] = {
         "event": "PreToolUse",
         "tool_name": "Bash",
-        "tool_input": {"command": SUMMARY_CMD},
+        "agent_type": "main",
+        "tool_use_id": "u1",
+        "tool_input": {"command": _summary_cmd(repo_cwd)},
     }
+    done = {**run, "event": "PostToolUse", "result_head": json.dumps(_written())}
     first: dict[str, object] = {"event": "SubagentStop", "agent_type": AUDITOR, **stop}
     prev, lines = audit.GENESIS, []
-    for seq, rec in enumerate((first, write), start=1):
+    for seq, rec in enumerate((first, run, done), start=1):
         rec.update(seq=seq, prev_hash=prev)
         rec["hash"] = prev = audit.record_hash(rec)
         lines.append(json.dumps(rec))
@@ -630,27 +665,28 @@ def test_train_c_shape_proves_round_two(
     project_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
     # 73, W3.2: a summary command between round 1 and round 2, a second one after round 2.
-    tip = _judged(repo_cwd, seq=3)
+    # Each summary call is two records, its PreToolUse and its PostToolUse.
+    tip = _judged(repo_cwd, seq=4)
     _stop(hook_input, f"[VERDICT: REJECTED] tip={tip} a.py:1 high")
     _summary_run(hook_input, repo_cwd)
     _stop(hook_input, f"[VERDICT: APPROVED] tip={tip}")
     _summary_run(hook_input, repo_cwd)
     _summary(repo_cwd)
-    assert approved(repo_cwd, TRAIN) == _ok(3, tip)
-    assert push_proof(repo_cwd, TRAIN) == _ok(3, tip)
+    assert approved(repo_cwd, TRAIN) == _ok(4, tip)
+    assert push_proof(repo_cwd, TRAIN) == _ok(4, tip)
 
 
 def test_no_summary_write_after_the_recorded_verdict_refuses(
     project_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
-    # pin D1 -> D5: the Write before the verdict record never anchors the proof.
-    tip = _judged(repo_cwd, seq=3)
+    # pin D1 -> D5, W3.2: the summary call before the verdict record never anchors the proof.
+    tip = _judged(repo_cwd, seq=4)
     _stop(hook_input, f"[VERDICT: REJECTED] tip={tip} a.py:1 high")
     _summary_run(hook_input, repo_cwd)
     _stop(hook_input, f"[VERDICT: APPROVED] tip={tip}")
     _summary(repo_cwd)
     assert _refused(repo_cwd) == (
-        "NOT APPROVED: no summary Write after the recorded verdict at seq 3. "
+        "NOT APPROVED: no summary Write after the recorded verdict at seq 4. "
         "Next: rewrite the summary with daedalus_train.py summary --repo <repo>, then rerun the "
         "proof."
     )
@@ -692,57 +728,135 @@ def test_a_summary_write_never_anchors_the_proof(
     assert approved(repo_cwd, TRAIN) == _ok(1, tip)
 
 
-@pytest.mark.parametrize(
-    "command",
-    [
-        "grep -n 'daedalus_train.py summary' /p/agents/orchestrator.md",
-        "echo python3 /p/scripts/daedalus_train.py summary",
-        "cd /r && python3 /p/scripts/daedalus_train.py summary --repo /r",
-        "python3 /p/scripts/daedalus_train.py summaryx --repo /r",
-        "python3 /p/scripts/other_train.py summary --repo /r",
-        "python3 '/p/scripts/daedalus_train.py summary",
-    ],
-)
-def test_only_a_plain_summary_command_anchors(
+REFUSED_CALLS = {
+    "a grep naming it": "grep -n 'daedalus_train.py summary' {script}",
+    "an echo of it": "echo python3 {script} summary --repo {repo}",
+    "a compound command": "cd {repo} && python3 {script} summary --repo {repo}",
+    "another action": "python3 {script} summaryx --repo {repo}",
+    "a help call": "python3 {script} summary --help",
+    "a trailing help flag": "python3 {script} summary --repo {repo} --help",
+    "an abbreviated flag": "python3 {script} summary --rep {repo}",
+    "the two-space spelling": "python3 {script}  summary --repo {repo}",
+    "a tab between words": "python3\t{script} summary --repo {repo}",
+    "a worktree copy": "python3 {repo}/.claude/worktrees/u1/scripts/daedalus_train.py summary "
+    "--repo {repo}",
+    "another plugin path": "python3 /p/scripts/daedalus_train.py summary --repo {repo}",
+    "a relative script": "python3 scripts/daedalus_train.py summary --repo {repo}",
+    "another repo": "python3 {script} summary --repo {repo}/../other",
+    "an unclosed quote": "python3 '{script} summary --repo {repo}",
+}
+
+
+@pytest.mark.parametrize("command", REFUSED_CALLS.values(), ids=REFUSED_CALLS.keys())
+def test_only_the_plugins_own_summary_call_anchors(
     project_data: Path, hook_input: Any, repo_cwd: Path, command: str
 ) -> None:
-    # W3.2: a command that only names the summary command never anchors.
+    # W3.2: each call below printed the written line, and still none anchors the proof.
     tip = _judged(repo_cwd, seq=1)
     _stop(hook_input, f"[VERDICT: APPROVED] tip={tip}")
-    _bash(hook_input, command)
+    _summary_run(hook_input, repo_cwd, command.format(script=SCRIPT, repo=repo_cwd))
     _summary(repo_cwd)
     assert "no summary Write after the recorded verdict at seq 1" in _refused(repo_cwd)
 
 
+@pytest.mark.parametrize(
+    ("label", "kw"),
+    [
+        ("a repo-coder's call", {"agent_type": "daedalus:repo-coder", "agent_id": "c1"}),
+        ("a failed call", {"post": "PostToolUseFailure"}),
+        ("a call with no result record", {"post": None}),
+        ("a refused call", {"response": {"stdout": "x. Next: rerun summary.\n"}}),
+        ("another train's line", {"response": _written("20261001-000000")}),
+    ],
+)
+def test_a_summary_call_that_did_not_write_this_train_never_anchors(
+    project_data: Path, hook_input: Any, repo_cwd: Path, label: str, kw: dict[str, Any]
+) -> None:
+    tip = _judged(repo_cwd, seq=1)
+    _stop(hook_input, f"[VERDICT: APPROVED] tip={tip}")
+    _summary_run(hook_input, repo_cwd, **kw)
+    _summary(repo_cwd)
+    assert "no summary Write after the recorded verdict at seq 1" in _refused(repo_cwd), label
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 ${{CLAUDE_PLUGIN_ROOT}}/scripts/daedalus_train.py summary --repo {repo}",
+        "python3 {script} summary --repo={repo}",
+        "/usr/bin/python3 {script} summary --repo {repo}",
+    ],
+)
+def test_the_main_session_and_orchestrator_forms_anchor(
+    project_data: Path, hook_input: Any, repo_cwd: Path, command: str
+) -> None:
+    tip = _judged(repo_cwd, seq=1)
+    _stop(hook_input, f"[VERDICT: APPROVED] tip={tip}")
+    orchestrator = {"agent_type": "daedalus:orchestrator", "agent_id": "o1"}
+    _summary_run(hook_input, repo_cwd, command.format(script=SCRIPT, repo=repo_cwd), **orchestrator)
+    _summary(repo_cwd)
+    assert approved(repo_cwd, TRAIN) == _ok(1, tip)
+
+
 @pytest.mark.parametrize("decision", ["block", "ask"])
 def test_a_refused_summary_command_never_anchors(decision: str) -> None:
-    command = {"seq": 2, "event": "PreToolUse", "tool_name": "Bash", "decision": decision}
-    command["tool_input"] = {"command": SUMMARY_CMD}
-    assert summary_anchor([command], 1) is None
-    assert summary_anchor([{**command, "decision": "allow"}], 1) == 2
+    command: dict[str, object] = {
+        "seq": 2,
+        "event": "PreToolUse",
+        "tool_name": "Bash",
+        "agent_type": "main",
+        "tool_use_id": "u1",
+        "decision": decision,
+        "tool_input": {"command": _summary_cmd(Path("/r"))},
+    }
+    done = {**command, "seq": 3, "event": "PostToolUse", "result_head": json.dumps(_written())}
+    assert summary_anchor([command, done], 1) is None
+    assert summary_anchor([{**command, "decision": "allow"}, done], 1) == 2
 
 
-def test_summary_anchor_returns_the_first_command_after_the_verdict() -> None:
-    def run(seq: int, command: str = SUMMARY_CMD, tool: str = "Bash") -> dict[str, object]:
-        return {
+def test_summary_anchor_returns_the_first_written_call_after_the_verdict() -> None:
+    def run(seq: int, use: str, command: str = _summary_cmd(Path("/r"))) -> list[dict[str, object]]:
+        pre = {
             "seq": seq,
             "event": "PreToolUse",
-            "tool_name": tool,
+            "tool_name": "Bash",
+            "agent_type": "main",
+            "tool_use_id": use,
             "tool_input": {"command": command},
         }
+        post = {
+            **pre,
+            "seq": seq + 1,
+            "event": "PostToolUse",
+            "result_head": json.dumps(_written()),
+        }
+        return [pre, post]
 
     records = [
-        run(1),
-        run(2, "ls"),
-        {"seq": 3, "tool_name": "Write", "tool_input": {"file_path": f"/r/{TRAIN}-summary.md"}},
-        {**run(4), "event": "PostToolUse"},
-        run(5, tool="Write"),
-        run(6, "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py summary --repo /r"),
-        run(7),
+        *run(1, "a"),
+        *run(3, "b", "ls"),
+        {"seq": 5, "tool_name": "Write", "tool_input": {"file_path": f"/r/{TRAIN}-summary.md"}},
+        *run(6, "c"),
+        *run(8, "d"),
     ]
     assert summary_anchor(records, 1) == 6
     assert summary_anchor(records, 0) == 1
-    assert summary_anchor(records, 7) is None
+    assert summary_anchor(records, 6) == 8
+    assert summary_anchor(records, 8) is None
+    assert summary_anchor(records, 0, repo=Path("/other"), train_id=TRAIN) is None
+    assert summary_anchor(records, 0, repo=Path("/r"), train_id=TRAIN) == 1
+
+
+def test_live_summary_and_the_anchor_share_one_spelling(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # W3.2: a call the anchor refuses is refused before the command writes anything.
+    two = f"python3 {SCRIPT}  summary --repo {repo_cwd}"
+    _bash(hook_input, two)
+    with pytest.raises(ProofError, match="not the summary command the push proof anchors on"):
+        live_summary(repo_cwd)
+    _bash(hook_input, _summary_cmd(repo_cwd))
+    assert live_summary(repo_cwd).stem == "sess-test"
 
 
 def test_a_reply_with_both_verdict_kinds_refuses(project_data: Path, repo_cwd: Path) -> None:

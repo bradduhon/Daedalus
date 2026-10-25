@@ -302,8 +302,17 @@ def _hooks_live_start(hook_input: Any, repo_cwd: Path) -> subprocess.CompletedPr
 def _summary_written(hook_input: Any, repo_cwd: Path) -> None:
     # W3.2: the summary command's record anchors the proof.
     summary = repo_cwd / "docs" / ".tmp" / "daedalus" / f"{APPROVED_TRAIN}-summary.md"
-    command = f"python3 x/daedalus_train.py summary --repo {repo_cwd}"
-    audit.audit_append(hook_input(tool_input={"command": command}))
+    command = {"command": f"python3 {SCRIPTS_DIR}/daedalus_train.py summary --repo {repo_cwd}"}
+    audit.audit_append(hook_input(tool_input=command, tool_use_id="toolu_summary"))
+    path = f"docs/.tmp/daedalus/{APPROVED_TRAIN}-summary.md"
+    line = f"summary written train={APPROVED_TRAIN} path={path} ledger=recorded\n"
+    done = hook_input(
+        hook_event_name="PostToolUse",
+        tool_input=command,
+        tool_use_id="toolu_summary",
+        tool_response={"stdout": line, "stderr": ""},
+    )
+    audit.audit_append(done)
     summary.parent.mkdir(parents=True, exist_ok=True)
     summary.write_text("Session sess-test: .claude/daedalus/audit/sess-test.jsonl\n")
 

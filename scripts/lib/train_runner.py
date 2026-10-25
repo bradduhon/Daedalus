@@ -31,6 +31,7 @@ from lib.audit_proof import (
     auditor_round,
     hooks_live,
     live_log,
+    live_summary,
     newest_log,
     read_chain,
     round_verdict,
@@ -1283,7 +1284,6 @@ def record_exception(cwd: Path, ledger_id: str) -> Outcome:
 # 73, spec 3.3: reaudit {judged, tip, round}; spec 3.5: resume {summary}, pin D1 -> E4 ledger.
 REAUDIT, RESUME = "reaudit", "resume"
 AUDITOR_AGENT, ORCHESTRATOR_AGENT = "security-auditor", "orchestrator"
-SUMMARY_NEEDLE = "daedalus_train.py summary"
 
 
 def _open_consult(state: dict[str, object], agent: str) -> None:
@@ -1771,8 +1771,7 @@ def summary(cwd: Path) -> Outcome:
     # W3.2: the summary from state and the audit logs; this command's record anchors the proof.
     def edit(repo: Path, train_id: str) -> list[str]:
         try:
-            log, _ = live_log(repo, SUMMARY_NEEDLE)
-            return [write_summary(repo, train_id, log.stem)]
+            return [write_summary(repo, train_id, live_summary(repo).stem)]
         except (ProofError, SummaryError) as exc:
             raise RunnerError(str(exc)) from exc
 

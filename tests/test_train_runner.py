@@ -1733,6 +1733,10 @@ def test_ledger_records_the_commit_and_refuses_bad_values(repo: Path, plugin: Pa
     assert _state(repo)["ledger"] == {"sha": sha, "ids": ["0120-DAE-PLT", "0121-DAE-PLT"]}
 
 
+def _summary_cmd(repo: Path) -> str:
+    return f"python3 {SCRIPTS_DIR / 'daedalus_train.py'} summary --repo {repo}"
+
+
 def _summary_file(repo: Path) -> Path:
     train = train_state.active_train(repo)
     assert train is not None
@@ -1746,11 +1750,19 @@ def test_summary_writes_the_file_from_state_after_its_own_bash_record(
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
     train = train_state.active_train(repo)
-    _record(repo, tool_input={"command": "ls"})
-    refused = train_runner.summary(repo)
-    assert refused.code == 1 and refused.lines[0].startswith("NOT LIVE:")
-    assert not _summary_file(repo).exists()
-    _record(repo, tool_input={"command": f"python3 /p/daedalus_train.py summary --repo {repo}"})
+    script = SCRIPTS_DIR / "daedalus_train.py"
+    coder = {"agent_id": "c1", "agent_type": "daedalus:repo-coder"}
+    for command, who in (
+        ("ls", {}),
+        (f"python3 {script}  summary --repo {repo}", {}),
+        (f"python3 {script} summary --repo {repo.parent}", {}),
+        (_summary_cmd(repo), coder),
+    ):
+        _record(repo, tool_input={"command": command}, **who)
+        refused = train_runner.summary(repo)
+        assert refused.code == 1 and refused.lines[0].startswith("NOT LIVE:"), command
+        assert not _summary_file(repo).exists()
+    _record(repo, tool_input={"command": _summary_cmd(repo)})
     done = train_runner.summary(repo)
     rel = f"docs/.tmp/daedalus/{train}-summary.md"
     assert done.lines == [f"summary written train={train} path={rel} ledger=pending"], done.lines
@@ -1760,7 +1772,7 @@ def test_summary_writes_the_file_from_state_after_its_own_bash_record(
     assert f"\nSession {SESSION}: .claude/daedalus/audit/{SESSION}.jsonl\n" in text
     assert str(repo) not in text
     train_runner.record_ledger(repo, "c" * 40, "0127-DAE-PLT")
-    _record(repo, tool_input={"command": f"python3 /p/daedalus_train.py summary --repo {repo}"})
+    _record(repo, tool_input={"command": _summary_cmd(repo)})
     assert train_runner.summary(repo).lines[0].endswith("ledger=recorded")
     assert f"Ledger ids: 0127-DAE-PLT in commit {'c' * 40}." in _summary_file(repo).read_text()
 
@@ -1772,7 +1784,7 @@ def test_summary_reads_the_notes_file_and_refuses_a_bad_one(repo: Path, plugin: 
     notes = repo / "docs" / ".tmp" / "daedalus" / str(train) / "summary-notes.md"
     notes.parent.mkdir(parents=True, exist_ok=True)
     notes.write_text("Task: one task\n## Rulings\nnone\n", encoding="utf-8")
-    command = f"python3 /p/daedalus_train.py summary --repo {repo}"
+    command = _summary_cmd(repo)
     _record(repo, tool_input={"command": command})
     assert train_runner.summary(repo).code == 0
     assert "\nTask: one task\n" in _summary_file(repo).read_text(encoding="utf-8")
@@ -1787,7 +1799,7 @@ def test_summary_cli_and_stop_write_the_summary(repo: Path, plugin: Path) -> Non
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
     train = train_state.active_train(repo)
-    _record(repo, tool_input={"command": f"python3 /p/daedalus_train.py summary --repo {repo}"})
+    _record(repo, tool_input={"command": _summary_cmd(repo)})
     done = _train_cli(repo, "summary", "--repo", str(repo))
     assert done.returncode == 0 and done.stdout.startswith(f"summary written train={train}")
     summary = _summary_file(repo)
