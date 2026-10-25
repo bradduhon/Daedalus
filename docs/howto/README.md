@@ -5,7 +5,7 @@ This guide assumes you have never seen this plugin. Each section says what to ty
 
 ## What Daedalus does
 
-Daedalus is a Claude Code plugin that gives your session a catalog of scoped agents and two saved recipes over them, the Build Train and the Push Train (0088). While a train runs, it writes a hash-chained audit log of every tool call the hook matcher routes (Bash, file reads, searches and edits, web fetches, agent spawns, messages, MCP tools). Each record carries the hash of the one before it, so an edited record, or one removed from the middle, breaks the chain. It confines each agent to a jail: a PreToolUse hook checks every tool call against the rules for that agent and blocks anything outside them. It refuses every agent's reads of your credential stores through file tools and the Bash forms it models; when the main session itself reaches for one, it asks you first and you approve or deny that one call. It has a first-run doctor that checks your setup. It renders an audit report, a readable digest of one session's log, with `/daedalus:audit-report`. It shows the agent catalog, the six phases and their exit conditions with `/daedalus:catalog`, and cuts a design spec into units with `/daedalus:plan`. It runs a Build Train with `/daedalus:build-train`. The main session starts one orchestrator agent, which gives each unit to a coding agent in its own git worktree. Agents raise questions to specialists. The units merge onto a local integration branch, and an adversarial security audit judges the merged result. It runs a Push Train with `/daedalus:push-train`, which commits, pushes, and opens the pull request for a finished Build Train. You review and merge.
+Daedalus is a Claude Code plugin that gives your session a catalog of scoped agents and two saved recipes over them, the Build Train and the Push Train (0088). While a train runs, it writes a hash-chained audit log of every tool call the hook matcher routes (Bash, file reads, searches and edits, web fetches, agent spawns, messages, MCP tools). Each record carries the hash of the one before it, so an edited record, or one removed from the middle, breaks the chain. It confines each agent to a jail: a PreToolUse hook checks every tool call against the rules for that agent and blocks anything outside them. It refuses every agent's reads of your credential stores through file tools and the Bash forms it models; when the main session itself reaches for one, the call runs with a warning in the session's context and in your transcript, and you are never prompted. It has a first-run doctor that checks your setup. It renders an audit report, a readable digest of one session's log, with `/daedalus:audit-report`. It shows the agent catalog, the six phases and their exit conditions with `/daedalus:catalog`, and cuts a design spec into units with `/daedalus:plan`. It runs a Build Train with `/daedalus:build-train`. The main session starts one orchestrator agent, which gives each unit to a coding agent in its own git worktree. Agents raise questions to specialists. The units merge onto a local integration branch, and an adversarial security audit judges the merged result. It runs a Push Train with `/daedalus:push-train`, which commits, pushes, and opens the pull request for a finished Build Train. You review and merge.
 
 ## Install
 
@@ -220,7 +220,7 @@ The train writes `docs/.tmp/daedalus/<train-id>-summary.md`. It holds:
 - the task, the base commit, and the integration branch
 - the Charter repo by directory name, with its `daedalus/<train-id>` branch and the branch it forked from when `charter_root` is declared, or `charter: none (repo-local ledger)`
 - the packet version, the ledger path relative to its repo, and the contract file with its version on a `Contract:` line. The summary becomes the pull request body, so it holds no absolute path
-- the ledger entries added, on a `Ledger ids:` line. The train writes the summary before the ledger step with `Ledger ids: pending`, so a stop there still leaves a summary. The Push Train refuses a pending summary and names the steps to finish it
+- the ledger entries added, on a `Ledger ids:` line. The train writes the summary before the ledger step with `Ledger ids: pending`, so a stop there still leaves a summary. The Push Train refuses a pending summary and names the ledger resume that finishes it. After the ledger commit and the approved verdict are recorded, the train rewrites the summary as its last step
 - the policy line
 - every ruling you made during the train, with its ledger id, and a `Deviation:` line for each pick that keeps the plugin's way
 - one row per unit: branch, packet, files, tests
@@ -254,7 +254,7 @@ The train stops, with a `Next:` line, when any of these fails:
 - The working tree has unstaged or untracked changes. Staged changes are fine; the conductor commits them.
 - This session's hooks are not writing the audit log. The train marks itself running before this check, since the log records only during a train. Run `/daedalus:doctor`.
 - An audit log fails its hash chain check. Keep the file, report it, and do not edit it, as in "When the chain is BROKEN" above.
-- The security auditor's last reply before this train's summary, in the Build Train's audit log and after the mark its hooks check made, is not `[VERDICT: APPROVED]`, or the ledger commit is not on the branch.
+- The security auditor's last reply before this train's summary, in the Build Train's audit log and after the mark its hooks check made, is not `[VERDICT: APPROVED]`, or the ledger commit is not on the branch. When the only problem is a commit that landed on the branch after the audit, the Push Train runs one recovery round on the new tip instead of stopping (see "Recovering a train" below).
 
 ### What the conductor does
 
@@ -273,14 +273,23 @@ The train ends with the pull request URLs and a numbered list:
 1. Review the pull request.
 2. Check CI on the pull request.
 3. Merge the pull request. You merge; the train never does.
-4. Switch back to your base branch, then delete the branch `daedalus/<train-id>`.
+4. Check that the pull request is merged with `gh pr view <url> --json state`. Then, from your own shell, switch back to your base branch and delete the branch with `git branch -D daedalus/<train-id>`. A squash merge leaves the branch looking unmerged to git, so `git branch -d` would refuse it.
 5. Run `/daedalus:audit-report <session>` to read this session's audit log.
 
-With a Charter branch, item 6 reviews and merges the Charter pull request after the code pull request, then switches the Charter back and deletes its branch. The list ends with a note that a later Daedalus release adds the Execution Train readiness checklist: the manual drills and boundary checks before production.
+With a Charter branch, item 6 reviews and merges the Charter pull request after the code pull request, checks it is merged the same way, then switches the Charter back and deletes its branch with `git branch -D`. The list ends with a note that a later Daedalus release adds the Execution Train readiness checklist: the manual drills and boundary checks before production.
 
 ### What BLOCKED means
 
 `[STATUS: BLOCKED] <detail>` from the conductor means a check it runs failed before anything changed on GitHub, or a command it needed was refused. The most common detail is `gitleaks findings`: the scan found something that looks like a secret in the branch's commits. The findings are shown with the secret redacted. Rotate the credential, remove it from the branch history from your own shell, and run `/daedalus:push-train` again. For any other detail, do what the detail names and rerun.
+
+## Recovering a train
+
+Two kinds of trouble after the merge no longer mean a full rerun. Both run in the session that ran the Build Train.
+
+- A commit landed on `daedalus/<train-id>` after the audit approved it, so the approval no longer names the tip. In the Build Train session, tell it about the commit after the train completes; in the Push Train, its verdict check finds the moved tip itself. Either way the session runs `daedalus_train.py reaudit`, which prints `reaudit round=<n> tip=<sha>`, and one audit round judges the new tip. An approved round rewrites the summary and the train goes on. A rejected round shows you the findings and the same three choices as a stalled audit; no second recovery round runs on the same tip.
+- The train stopped after its merge and before its ledger commit, so the summary still reads `Ledger ids: pending`. Ask the Build Train session for the ledger resume. It runs `daedalus_train.py resume`, which prints `resume ledger train=<train-id> summary=<path>`, and starts a fresh orchestrator for that one step. That orchestrator commits the ledger entries, records the verdict, rewrites the summary and ends the train; then run `/daedalus:push-train`.
+
+The Build Train also stops at its start when an agent file changed after the session loaded it, with the line `stale agents: <names>`. The session would run the old agent text, so start a new Claude Code session and run `/daedalus:build-train` again.
 
 ## Developing Daedalus
 
@@ -308,4 +317,4 @@ If it fails: after the restart, run `/daedalus:doctor`; its `plugin root` line n
 
 ## Sections added by later plans
 
-Service manifests, train recovery, and the new-service scaffold each add a section here in the pull request that ships them.
+Service manifests and the new-service scaffold each add a section here in the pull request that ships them.

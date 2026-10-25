@@ -61,6 +61,46 @@ def test_add_unit_appends_in_order_and_refuses_a_duplicate(repo: Path) -> None:
     assert len(load(repo, TRAIN)["units"]) == 2
 
 
+def test_add_unit_writes_the_audit_flag_only_when_asked(repo: Path) -> None:
+    # pin D2 -> D1: the audit unit entry carries "audit": true; a coder unit carries no key.
+    save(repo, TRAIN, {"train_id": TRAIN})
+    add_unit(repo, TRAIN, f"{TRAIN}-u1", "b1", repo / "w1")
+    add_unit(repo, TRAIN, f"{TRAIN}-audit", "b2", repo / "w2", "daedalus/x", audit=True)
+    coder, audit = train_state.units(load(repo, TRAIN))
+    assert "audit" not in coder and audit["audit"] is True and audit["base"] == "daedalus/x"
+    assert not train_state.is_audit_unit(coder) and train_state.is_audit_unit(audit)
+
+
+@pytest.mark.parametrize(
+    ("unit", "audit"),
+    [
+        ({"name": "u1", "audit": True}, True),
+        ({"name": f"{TRAIN}-audit"}, True),
+        ({"name": f"{TRAIN}-u1"}, False),
+        ({"name": f"{TRAIN}-audit-x"}, False),
+        ({"name": "x-audit"}, False),
+        ({"name": f"{TRAIN}-u1", "audit": "true"}, False),
+        ({"name": 7}, False),
+        ({}, False),
+    ],
+)
+def test_is_audit_unit_reads_the_flag_or_a_pre_d2_name(
+    unit: dict[str, object], audit: bool
+) -> None:
+    # spec 4: a state written before D2 names the audit unit <train-id>-audit with no flag.
+    assert train_state.is_audit_unit(unit) is audit
+
+
+def test_mark_audit_flags_a_recorded_unit_and_keeps_the_rest(repo: Path) -> None:
+    save(repo, TRAIN, {"train_id": TRAIN, "phase": "build"})
+    add_unit(repo, TRAIN, f"{TRAIN}-u1", "b1", repo / "w1")
+    add_unit(repo, TRAIN, f"{TRAIN}-audit", "b2", repo / "w2")
+    train_state.mark_audit(repo, TRAIN, f"{TRAIN}-audit")
+    state = load(repo, TRAIN)
+    coder, audit = train_state.units(state)
+    assert audit["audit"] is True and "audit" not in coder and state["phase"] == "build"
+
+
 def test_save_is_atomic(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     save(repo, TRAIN, {"train_id": TRAIN, "v": 1})
 

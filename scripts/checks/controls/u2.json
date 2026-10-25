@@ -1,0 +1,6 @@
+{
+  "gh_policy.R_GH_BUNDLE": {
+    "failure": "issue 76: a gh command bundles short flags in one word or leaves a value flag without its value, so the jail reads a value as a flag or a flag as a value and judges a different command than gh runs",
+    "premise_test": "tests/test_gh_policy.py::test_bundled_short_flags_are_refused_in_a_train"
+  }
+}

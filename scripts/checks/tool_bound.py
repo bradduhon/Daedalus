@@ -32,7 +32,7 @@ R_NO_DISPATCH_GATE = (
 
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
     tool = hook_io.text(hook_input, "tool_name")
-    agent = jail.normalize_agent(str(hook_input.get("agent_type") or "main"))
+    agent = hook_io.agent(hook_input)
     dispatcher = agent == ORCHESTRATOR and tool in ORCHESTRATOR_TOOLS
     if (tool in jail.WORKER_DENIED_TOOLS and not dispatcher) or tool.startswith("mcp__"):
         return jail.R_TOOL
@@ -45,13 +45,7 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     return None if tool in {t.strip() for t in listed.split(",")} else jail.R_TOOL
 
 
-def decide(hook_input: dict[str, object], flags: list[str]) -> hook_io.HookDecision:
-    return hook_io.evaluate(hook_input, flags, judge, TOOLS, PARSER)
-
-
-def main() -> int:
-    return hook_io.run(judge, TOOLS, PARSER)
-
+decide, main = hook_io.entrypoint(judge, TOOLS, PARSER)
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -3,14 +3,13 @@
 # 0044: the git_push hook; cases copied from tests/test_jail.py run each agent's chain.
 from __future__ import annotations
 
-import json
-import subprocess
 from pathlib import Path
 
 import pytest
 from lib import jail, train_state
 
 from tests.conftest import CFG, TRAIN_BRANCH
+from tests.conftest import git as _git
 from tests.hook_chain import (
     decide,
     evaluate,
@@ -21,7 +20,18 @@ from tests.hook_chain import (
     run_script,
     unknown_flag_denies,
 )
-from tests.test_jail import _b
+from tests.jail_cases import (
+    GATE_BRANCH,
+    GATE_NEXT,
+    GATE_TRAIN,
+    LEDGER,
+    _ledger_commit,
+    approve,
+    audited_train,
+    move_tip,
+    seed_train,
+)
+from tests.payloads import _b
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "git_push"
@@ -110,43 +120,6 @@ def test_git_push_fixture_decisions(repo_cwd: Path) -> None:
     assert run_script(HOOK, extra, "--conductor") == want
 
 
-GATE_TRAIN = "20261019-120000"
-GATE_BRANCH = f"daedalus/{GATE_TRAIN}"
-GATE_NEXT = "Next: audit the exact tip, or record the operator's exception."
-
-
-def _git(repo: Path, *args: str) -> str:
-    cmd = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com"]
-    return subprocess.run([*cmd, *args], check=True, capture_output=True, text=True).stdout
-
-
-def seed_train(repo: Path, state: bool = True, train: str = GATE_TRAIN) -> str:
-    # spec 4.2: a real repo with the train branch, its marker and its state; returns the tip.
-    _git(repo, "commit", "-q", "--allow-empty", "-m", "base")
-    _git(repo, "switch", "-q", "-c", f"daedalus/{train}")
-    marker = repo / ".claude" / "daedalus" / "train.active"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(f"{train}\n", encoding="utf-8")
-    if state:
-        train_state.save(repo, train, {"train_id": train})
-    return _git(repo, "rev-parse", f"daedalus/{train}").strip()
-
-
-def move_tip(repo: Path) -> str:
-    _git(repo, "commit", "-q", "--allow-empty", "-m", "after the verdict")
-    return _git(repo, "rev-parse", GATE_BRANCH).strip()
-
-
-def approve(repo: Path, tip: str, train: str = GATE_TRAIN) -> None:
-    verdict = {"status": "approved", "tip": tip, "round": 1, "seq": 7}
-    train_state.update(repo, train, verdict=verdict)
-
-
-def audited_train(repo: Path, train: str) -> None:
-    # spec 4.2: a train whose integration tip carries an approved verdict.
-    approve(repo, seed_train(repo, train=train), train)
-
-
 def _conductor_push(repo: Path, branch: str = GATE_BRANCH) -> str | None:
     hook_input: dict[str, object] = {
         "tool_name": "Bash",
@@ -164,7 +137,7 @@ def test_push_with_no_verdict_is_refused(repo_cwd: Path) -> None:
     train_state.save(repo_cwd, GATE_TRAIN, {"train_id": GATE_TRAIN})
     none = _conductor_push(repo_cwd)
     assert none is not None and none.endswith(GATE_NEXT) and "no verdict" in none
-    tip = _git(repo_cwd, "rev-parse", GATE_BRANCH).strip()
+    tip = _git(repo_cwd, "rev-parse", GATE_BRANCH).stdout.strip()
     rejected = {"status": "rejected", "tip": tip, "round": 2, "seq": 9}
     train_state.update(repo_cwd, GATE_TRAIN, verdict=rejected)
     refused = _conductor_push(repo_cwd)
@@ -210,28 +183,6 @@ def test_push_with_an_exception_for_the_tip_is_allowed(repo_cwd: Path) -> None:
     blank = {"ledger_id": "", "tip": moved}
     train_state.update(repo_cwd, GATE_TRAIN, exception=blank)
     assert _conductor_push(repo_cwd) is not None
-
-
-LEDGER = "docs/decisions.md"
-
-
-def _ledger_commit(repo: Path, *paths: str) -> str:
-    # spec 3.5: a repo-local ledger declared in config, then one commit touching the paths.
-    decl = {
-        "path": LEDGER,
-        "format": "markdown-table-row",
-        "id_scheme": "{seq:04d}-{repo}-{type}",
-        "sequence_source": "last-row-id",
-    }
-    config = repo / ".claude" / "daedalus" / "config.json"
-    config.write_text(json.dumps({"ledger": decl}), encoding="utf-8")
-    for name in paths:
-        target = repo / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(f"{name} row\n", encoding="utf-8")
-        _git(repo, "add", name)
-    _git(repo, "commit", "-q", "-m", "ledger")
-    return _git(repo, "rev-parse", GATE_BRANCH).strip()
 
 
 def test_push_after_the_single_ledger_commit_is_allowed(repo_cwd: Path) -> None:

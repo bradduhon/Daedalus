@@ -49,9 +49,19 @@ def _declared_tools(cwd: str) -> frozenset[str]:
     return frozenset(shell.command_path(s[0], root) for s in _declared(cwd, root))
 
 
+def exit_echo_ok(segment: list[str], words: list[str]) -> bool:
+    # spec 7.1: the coder's `echo exit=$?` after its dash grep; $? expands to digits only.
+    if segment[:1] != ["echo"] or len(words) != len(segment):
+        return False
+    return not any(
+        shell._hygiene_bad(t.replace("$?", ""), w.replace("$?", ""))
+        for t, w in zip(segment[1:], words[1:], strict=True)
+    )
+
+
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
     command = hook_io.text(hook_io.tool_input(hook_input), "command")
-    agent = jail.normalize_agent(str(hook_input.get("agent_type") or "main"))
+    agent = hook_io.agent(hook_input)
     chain = shell.worker_parse(command)
     if chain is None:
         return shell.R_UNSUPPORTED
@@ -73,18 +83,14 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
         reason = shell._worker_hygiene(segment, agent, words, own, base, tools)
         if reason and agent == CODER and tuple(segment) in _declared(cwd):
             continue
+        if reason == shell.R_HYGIENE and agent == CODER and exit_echo_ok(segment, words):
+            continue
         if reason:
             return reason
     return None
 
 
-def decide(hook_input: dict[str, object], flags: list[str]) -> hook_io.HookDecision:
-    return hook_io.evaluate(hook_input, flags, judge, TOOLS, PARSER)
-
-
-def main() -> int:
-    return hook_io.run(judge, TOOLS, PARSER)
-
+decide, main = hook_io.entrypoint(judge, TOOLS, PARSER)
 
 if __name__ == "__main__":
     sys.exit(main())

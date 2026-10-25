@@ -1,0 +1,6 @@
+{
+  "read_only_bash.R_CD_CHAIN": {
+    "failure": "spec 7.1: a read-only agent changes folder before a git command or a test run, or changes it more than once, so git -C and the test-run bounds are judged against a folder the command no longer runs in",
+    "premise_test": "tests/test_checks_read_only_bash.py::test_cd_before_git_or_a_test_run_is_refused"
+  }
+}

@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from checks.read_only_bash import read_segment_ok  # noqa: E402
 from lib import hook_io, jail, shell  # noqa: E402
 from lib.audit import project_root  # noqa: E402
 
@@ -18,11 +19,12 @@ NAMES = frozenset({"append_ledger", "git", "gh", "gitleaks", "read", "train", "i
 FLAGS: dict[str, hook_io.Flag] = {"--allow": hook_io.Flag(values=NAMES, many=True)}
 PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
 _SCRIPTS = os.path.realpath(Path(__file__).resolve().parents[1])
-# 0060: the train class, script to its admitted first arguments; stop, resume and the
-# operator's exception record stay with the main session.
+# 0060, 0119: the train class, script to its admitted first arguments; stop, resume, reaudit
+# and the operator's exception record stay with the main session. W3.2: summary is the recipe's.
 TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
     "daedalus_train.py": frozenset(
         {"progress", "choice", "plan", "verdict", "state", "step", "check-reply", "model"}
+        | {"ledger", "summary"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir"}),
@@ -32,12 +34,15 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
 # 0060: the inspect class is the auditor's read-only set plus the unit-descent check.
 INSPECT_GIT = shell.READ_ONLY_GIT | {"merge-base"}
 R_ORCHESTRATOR_BASH = (
-    "the orchestrator's Bash runs only daedalus_train.py, daedalus_workspace.py create, lock, "
-    "refresh and finish, daedalus_doctor.py --print-cache-dir, audit_report.py and "
-    "validate_plan.py by their absolute plugin path, and read-only inspection with git reads "
-    "(0060). Next: use those only; a stop, a resume, an exception record, a push and a merge "
+    "the orchestrator's Bash runs only daedalus_train.py with its train subcommands and ledger, "
+    "daedalus_workspace.py create, lock, refresh and finish, daedalus_doctor.py "
+    "--print-cache-dir, audit_report.py and validate_plan.py by their absolute plugin path, and "
+    "read-only inspection with git reads, date -u and sed -n line ranges (0060, 0119). "
+    "Next: use those only; a stop, a resume, a reaudit, an exception record, a push and a merge "
     "into main belong to the main session and the operator."
 )
+# spec 7.1: date prints the clock in UTC; -s, --set and a bare MMDDhhmm operand would set it.
+DATE_UTC = frozenset({"-u", "--utc", "--universal"})
 # issue 63, pin C3 -> C4: a train script's --repo or --cwd is the project root of the hook cwd.
 REPO_FLAGS = ("--repo", "--cwd")
 R_TRAIN_REPO = (
@@ -102,6 +107,37 @@ def train_script_ok(segment: list[str], cwd: str | None = None) -> bool:
     return cwd is None or train_repo_reason(segment, cwd) is None
 
 
+def date_ok(segment: list[str]) -> bool:
+    # spec 7.1: `date -u [+FORMAT]`, nothing else.
+    rest = segment[2:]
+    return (
+        segment[:1] == ["date"]
+        and segment[1:2] != []
+        and segment[1] in DATE_UTC
+        and (rest == [] or (len(rest) == 1 and rest[0].startswith("+")))
+    )
+
+
+def sed_print_ok(segment: list[str]) -> bool:
+    # spec 7.1: `sed -n <ranges>p <file>...`; GNU sed takes a later -i, so no operand is a flag.
+    return (
+        len(segment) >= 4
+        and segment[:2] == ["sed", "-n"]
+        and shell._SED_PRINT.fullmatch(segment[2]) is not None
+        and not any(arg.startswith("-") for arg in segment[3:])
+    )
+
+
+def _inspect_ok(segment: list[str], cwd: str) -> bool:
+    # 0060, spec 7.1: the auditor's read set, the merge-base check, date -u and sed -n ranges.
+    charter = hook_io.hook_charter(cwd)
+    return (
+        read_segment_ok(segment, INSPECT_GIT, cwd, charter)
+        or date_ok(segment)
+        or sed_print_ok(segment)
+    )
+
+
 def _read_roots(cwd: str) -> tuple[list[str], str]:
     # 0084: the read class reaches the charter root and the project's docs/, scratch included.
     base = str(project_root(cwd))
@@ -138,21 +174,13 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
             if mismatch is not None:
                 return mismatch
             continue
-        if "inspect" in allowed and jail._read_only_segment(
-            segment, INSPECT_GIT, cwd, hook_io.hook_charter(cwd)
-        ):
+        if "inspect" in allowed and _inspect_ok(segment, cwd):
             continue
         return _reason(allowed)
     return None
 
 
-def decide(hook_input: dict[str, object], flags: list[str]) -> hook_io.HookDecision:
-    return hook_io.evaluate(hook_input, flags, judge, TOOLS, PARSER)
-
-
-def main() -> int:
-    return hook_io.run(judge, TOOLS, PARSER)
-
+decide, main = hook_io.entrypoint(judge, TOOLS, PARSER)
 
 if __name__ == "__main__":
     sys.exit(main())

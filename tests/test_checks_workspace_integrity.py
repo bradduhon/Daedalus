@@ -21,7 +21,8 @@ from tests.hook_chain import (
     run_script,
     unknown_flag_denies,
 )
-from tests.test_jail import DATA, _b, _w
+from tests.jail_cases import DATA
+from tests.payloads import _b, _w
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "workspace_integrity"
@@ -93,8 +94,28 @@ def test_workspace_integrity_judges_the_hook_alone() -> None:
     assert evaluate(HOOK, _w("repo-coder", f"{CWD}/.claude/daedalus/x")) == jail.R_DATA_DIR
     assert evaluate(HOOK, {**_b("repo-coder", "ls"), "cwd": "rel"}) == jail.R_NO_CWD
     assert evaluate(HOOK, _w("repo-coder", f"{CWD}/.gitignore")) is None
-    # 0044, open item 5: no Bash data-folder condition is added in group 1.
-    assert evaluate(HOOK, _b("repo-coder", "touch .claude/daedalus/x")) is None
+    # issue 75: a Bash write into the data folder is refused here too.
+    assert evaluate(HOOK, _b("repo-coder", "touch .claude/daedalus/x")) == jail.R_DATA_DIR
+    assert evaluate(HOOK, _b("repo-coder", "ls .claude/daedalus")) is None
+
+
+@pytest.mark.parametrize("agent", ["repo-coder", "security-auditor", "orchestrator"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "mkfifo {data}/train_state.lock",
+        "mkfifo -m 600 {data}/audit/s.jsonl.lock",
+        "mknod {data}/bindings.lock p",
+        "shred -u {data}/audit/s.jsonl",
+        "cd {repo} && mkfifo .claude/daedalus/x.lock",
+        "echo x > {data}/x",
+    ],
+)
+def test_bash_plants_in_the_data_folder_are_refused(agent: str, command: str) -> None:
+    # issue 75: a FIFO planted at a lock path hangs the next hook that opens it.
+    filled = command.format(data=f"{CWD}/.claude/daedalus", repo=CWD)
+    assert evaluate(HOOK, _b(agent, filled)) == jail.R_DATA_DIR
+    assert not decide(_b(agent, filled), CFG).allow
 
 
 def test_workspace_integrity_fixture_decisions() -> None:

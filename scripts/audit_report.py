@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Render a Markdown digest of one session's audit chain after verifying it.
-
-The chain is verified first; a broken chain prints the verifier's message and exits 1.
-Default session is the newest *.jsonl under <repo>/.claude/daedalus/audit/ (0010).
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -15,19 +9,32 @@ import json
 import os
 import re
 import sys
-import tempfile
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib.audit import AuditLockError, project_data_dir, read_log, root_info  # noqa: E402
+from lib import atomic  # noqa: E402
+from lib.audit import (  # noqa: E402
+    SESSION_ID,
+    AuditCorruptError,
+    AuditLockError,
+    project_data_dir,
+    read_log,
+    root_info,
+    skipped_count,
+)
 from lib.controls import Control, ControlsError, failure_line  # noqa: E402
 from lib.controls import load as load_controls  # noqa: E402
 from verify_audit_chain import NOT_UTF8, verify_lines  # noqa: E402
 
-_SESSION_ID = re.compile(r"[A-Za-z0-9_-]+")
+# 22: the --help text, kept below the future import as a plain string.
+DESCRIPTION = (
+    "Render a Markdown digest of one session's audit chain after verifying it. "
+    "The chain is verified first; a broken chain prints the verifier's message and exits 1. "
+    "Default session is the newest *.jsonl under <repo>/.claude/daedalus/audit/ (0010)."
+)
 _OK = re.compile(r"OK: (\d+) records, chain intact, head=([0-9a-f]{64})")
 _STATUS = (
     re.compile(r"\[STATUS: [A-Z_]+\]"),
@@ -53,7 +60,7 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _parse(argv: list[str]) -> argparse.Namespace:
-    parser = _Parser(prog="audit_report.py", description=__doc__, allow_abbrev=False)
+    parser = _Parser(prog="audit_report.py", description=DESCRIPTION, allow_abbrev=False)
     parser.add_argument("--session")
     parser.add_argument("--cwd", "--repo", dest="cwd", default=os.getcwd())
     parser.add_argument("--out")
@@ -90,7 +97,7 @@ def _session_path(cwd: str, session: str | None) -> Path:
                 "plugin loaded in this repo, then report it."
             )
         return sessions[-1]
-    if not _SESSION_ID.fullmatch(session):
+    if not SESSION_ID.fullmatch(session):
         raise ReportError(
             f"--session must match [A-Za-z0-9_-]+ (got {session!r}). "
             f"Next: list {audit_dir} and pass an existing session id."
@@ -113,7 +120,7 @@ def _read_lines(path: Path) -> list[str]:
         raise ReportError(str(exc)) from exc
 
 
-def md_escape(value: Any, limit: int | None = None) -> str:
+def md_escape(value: object, limit: int | None = None) -> str:
     # 8.6: agent text is untrusted; cut, then HTML and Markdown escape so it renders inert.
     text = "" if value is None else str(value)
     if limit is not None:
@@ -122,36 +129,46 @@ def md_escape(value: Any, limit: int | None = None) -> str:
     return " ".join(text.splitlines())
 
 
-def _timeline(records: list[dict[str, Any]]) -> list[str]:
-    agents: dict[str, dict[str, Any]] = {}
+def _timeline(records: list[dict[str, object]]) -> list[str]:
+    # 0114: a start opens a row; a stop closes its id's newest open row, else opens a resume row.
+    rows: list[dict[str, object]] = []
+    open_rows: dict[str, dict[str, object]] = {}
+    stopped: set[str] = set()
     for rec in records:
         if rec.get("event") not in ("SubagentStart", "SubagentStop") or not rec.get("agent_id"):
             continue
-        row = agents.setdefault(
-            rec["agent_id"],
-            {"type": rec.get("agent_type"), "start": None, "stop": None, "head": None},
-        )
+        agent_id = str(rec["agent_id"])
         if rec["event"] == "SubagentStart":
-            row["start"] = rec.get("seq")
-        else:
-            row["stop"], row["head"] = rec.get("seq"), rec.get("last_message_head")
+            row: dict[str, object] = {"id": agent_id, "type": rec.get("agent_type")}
+            row.update(start=rec.get("seq"), stop=None, head=None)
+            rows.append(row)
+            open_rows[agent_id] = row
+            continue
+        row = open_rows.pop(agent_id, {})
+        if not row:
+            row.update(id=agent_id, type=rec.get("agent_type"))
+            row["start"] = "resume" if agent_id in stopped else None
+            rows.append(row)
+        row["type"] = row.get("type") or rec.get("agent_type")
+        row["stop"], row["head"] = rec.get("seq"), rec.get("last_message_head")
+        stopped.add(agent_id)
     lines = [
         "## Subagent timeline",
         "",
         "| agent_id | agent_type | start seq | stop seq | last message |",
         "|---|---|---|---|---|",
     ]
-    for agent_id, row in agents.items():
+    for row in rows:
         start = "-" if row["start"] is None else row["start"]
         stop = "open" if row["stop"] is None else row["stop"]
         head = md_escape(row["head"], TIMELINE_CHARS)
         lines.append(
-            f"| {md_escape(agent_id)} | {md_escape(row['type'])} | {start} | {stop} | {head} |"
+            f"| {md_escape(row['id'])} | {md_escape(row['type'])} | {start} | {stop} | {head} |"
         )
     return lines
 
 
-def _tool_table(records: list[dict[str, Any]]) -> list[str]:
+def _tool_table(records: list[dict[str, object]]) -> list[str]:
     counts: dict[tuple[str, str], Counter[str]] = {}
     for rec in records:
         if rec.get("event") != "PreToolUse" or rec.get("tool_name") not in _TOOLS:
@@ -169,7 +186,7 @@ def _tool_table(records: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _blocks(records: list[dict[str, Any]]) -> list[str]:
+def _blocks(records: list[dict[str, object]]) -> list[str]:
     lines = ["## Blocks", ""]
     for rec in records:
         if rec.get("decision") in _REFUSALS:
@@ -183,7 +200,7 @@ def _blocks(records: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _status_lines(records: list[dict[str, Any]]) -> list[str]:
+def _status_lines(records: list[dict[str, object]]) -> list[str]:
     lines = ["## Status lines", ""]
     for rec in records:
         for field in ("last_message_head", "reason"):
@@ -201,14 +218,19 @@ def _status_lines(records: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _totals(records: list[dict[str, Any]]) -> list[str]:
+def _totals(records: list[dict[str, object]], path: Path) -> list[str]:
     tally = Counter(str(rec.get("event")) for rec in records)
     lines = ["## Totals by event", "", "| event | records |", "|---|---|"]
     lines.extend(f"| {md_escape(event)} | {n} |" for event, n in sorted(tally.items()))
+    try:
+        skipped = skipped_count(path)
+    except AuditCorruptError as exc:
+        raise ReportError(str(exc)) from exc
+    lines += ["", f"skipped fork stops: {skipped}"]
     return lines
 
 
-def _hook_of(rec: dict[str, Any]) -> str:
+def _hook_of(rec: dict[str, object]) -> str:
     # 0105: an ask is its own row beside the same hook's blocks.
     reason = rec.get("reason")
     match = _HOOK_PREFIX.match(reason) if isinstance(reason, str) else None
@@ -216,7 +238,7 @@ def _hook_of(rec: dict[str, Any]) -> str:
     return f"{hook} (ask)" if rec.get("decision") == "ask" else hook
 
 
-def _seconds(start: Any, end: Any) -> float | None:
+def _seconds(start: object, end: object) -> float | None:
     try:
         return (
             datetime.fromisoformat(str(end)) - datetime.fromisoformat(str(start))
@@ -229,13 +251,20 @@ def _fmt(seconds: float | None) -> str:
     return "none" if seconds is None else f"{seconds:.1f}"
 
 
+def _seq_of(rec: dict[str, object]) -> int:
+    value = rec.get("seq") or 0
+    if not isinstance(value, int | float | str):
+        raise TypeError(f"audit record seq is not a number: {value!r}")
+    return int(value)
+
+
 def _until_allowed(
-    pre: list[dict[str, Any]], origin: dict[str, Any], tools: tuple[str, ...] | None = None
+    pre: list[dict[str, object]], origin: dict[str, object], tools: tuple[str, ...] | None = None
 ) -> str:
     # 6.2: seconds from origin to the same agent's next allowed call, optionally of these tools.
-    seq = int(origin.get("seq") or 0)
+    seq = _seq_of(origin)
     for rec in pre:
-        if int(rec.get("seq") or 0) <= seq or rec.get("agent_id") != origin.get("agent_id"):
+        if _seq_of(rec) <= seq or rec.get("agent_id") != origin.get("agent_id"):
             continue
         if rec.get("decision") == "allow" and (tools is None or rec.get("tool_name") in tools):
             return _fmt(_seconds(origin.get("ts"), rec.get("ts")))
@@ -249,7 +278,7 @@ def _control_rows() -> dict[str, Control]:
         raise ReportError(str(exc)) from exc
 
 
-def _controls(records: list[dict[str, Any]]) -> list[str]:
+def _controls(records: list[dict[str, object]]) -> list[str]:
     # 6.2: hook names, agent types, tools and timings only; no reason body or reply text.
     pre = [r for r in records if r.get("event") == "PreToolUse"]
     blocks = [r for r in pre if r.get("decision") in _REFUSALS]
@@ -273,7 +302,8 @@ def _controls(records: list[dict[str, Any]]) -> list[str]:
     for start in (r for r in records if r.get("event") == "SubagentStart" and r.get("agent_id")):
         named = f"{md_escape(start['agent_id'])} | {md_escape(start.get('agent_type'))}"
         lines.append(f"| {named} | {_until_allowed(pre, start, _EDIT_TOOLS)} |")
-    timed = [float(r["judge_ms"]) for r in pre if isinstance(r.get("judge_ms"), (int, float))]
+    judged = [r.get("judge_ms") for r in pre]
+    timed = [float(ms) for ms in judged if isinstance(ms, (int, float))]
     lines.append("")
     if timed:
         lines.append(f"mean judge time: {sum(timed) / len(timed):.1f} ms over {len(timed)} calls")
@@ -309,7 +339,7 @@ def render(path: Path, controls_only: bool = False) -> str:
             _blocks(records),
             _controls(records),
             _status_lines(records),
-            _totals(records),
+            _totals(records, path),
         ]
     return "\n\n".join("\n".join(s) for s in sections) + "\n"
 
@@ -351,7 +381,7 @@ def _out_target(out: str, cwd: str) -> Path:
     return write_path
 
 
-def _write_atomic(target: Path, text: str) -> None:
+def _write_report(target: Path, text: str) -> None:
     parent = target.parent
     if parent.exists() and not parent.is_dir():
         raise ReportError(
@@ -359,14 +389,7 @@ def _write_atomic(target: Path, text: str) -> None:
         )
     if not parent.is_dir():
         raise ReportError(f"{parent} does not exist. Next: create it or pass another --out.")
-    fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        os.replace(tmp, target)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    atomic.write_atomic(target, text)
 
 
 def main(argv: list[str]) -> int:
@@ -378,7 +401,7 @@ def main(argv: list[str]) -> int:
         if target is None:
             sys.stdout.write(report)
         else:
-            _write_atomic(target, report)
+            _write_report(target, report)
             print(f"wrote {target}")
         return 0
     except ReportError as exc:

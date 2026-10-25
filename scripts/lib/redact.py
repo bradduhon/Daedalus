@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
 _KEYWORDS = r"password|passwd|secret|token|api[_-]?key|authorization"
 _SECRET_KEY = re.compile(rf"(?i){_KEYWORDS}")
@@ -56,7 +55,7 @@ def redact_text(text: str) -> str:
     return _ASSIGNMENT.sub(_mask_assignment, text)
 
 
-def redact(value: Any) -> Any:
+def redact(value: object) -> object:
     if isinstance(value, str):
         return redact_text(value)
     if isinstance(value, dict):

@@ -72,13 +72,13 @@ Every `MISS` line ends with a `Next:` instruction that says what to do. In a new
    - `[STATUS: DECISION]`: the session asks you the brief's questions and sends your picks back.
    - `[STATUS: EXCEPTION]`: you chose to merge with each remaining audit finding as a tracked-risk issue, and the session binds that exception ruling to the integration tip.
    - `[STATUS: STOP]`: the session runs the stop command and shows its `Next:` line. Say continue to resume.
-   - `[STATUS: TRAIN_COMPLETE]`: the session shows the summary path and the audit log path, then ends the train.
+   - `[STATUS: TRAIN_COMPLETE]`: the session shows the summary path and the audit log path, then ends the train. If a commit lands on the integration branch after that, tell the session; it runs one recovery audit round on the new tip (`daedalus_train.py reaudit`) instead of a full rerun. A train that stopped before its ledger commit is finished by the session's ledger resume (`daedalus_train.py resume`).
 7. Read the audit result. The units merge onto the local branch `daedalus/<train-id>` first, and the security auditor judges that merged integration tip against the train's base. Each rejected round runs a fix round until the audit stops making progress: a finding comes back after its fix, a new high or critical finding appears, or the round budget runs out (`audit_round_budget`, default 5). Then you pick what happens to the remaining findings: one more fix round, a merge with each finding as a tracked-risk issue, or a stop with the branches kept. The Push Train's verdict check accepts a train merged on that exception once the exception ruling is bound to the integration tip (issue 62).
 8. Push and merge. Review the integration branch, then read the session's audit log with `/daedalus:audit-report <session>`. Type `/daedalus:push-train` to push the branch and open its pull request. You merge the pull request.
 
 ## Saved recipes
 
-The Build Train and the Push Train are saved recipes over the catalog, not the required shape (0088). A body of work can use any agents from the catalog in any order. Outside a train, catalog agents keep their own hooks; the main session and agents from Claude Code itself or other plugins meet only the credential check on reads and searches, which asks the main session and refuses an agent (see Safety model below).
+The Build Train and the Push Train are saved recipes over the catalog, not the required shape (0088). A body of work can use any agents from the catalog in any order. Outside a train, catalog agents keep their own hooks; the main session and agents from Claude Code itself or other plugins meet only the credential check on reads and searches, which warns the main session in its context and refuses an agent (see Safety model below).
 
 ### Build Train
 
@@ -96,7 +96,7 @@ Then type the command and your task:
 
 ### Push Train
 
-The Push Train commits, pushes, and opens the pull request for a finished Build Train. It first checks that the Build Train's audit log holds an approved security verdict for that train. When `features.secrets_scan` is `true` in `service-manifest.json`, it scans the commits for secrets with gitleaks before the push. Your repository needs a GitHub remote named `origin`, and `gh` must be signed in to it. The conductor, the agent named pr-train-conductor, does the pushing and watches CI. When the Build Train used a Charter branch, the conductor also pushes that branch and opens its pull request after the code one. You review and merge.
+The Push Train commits, pushes, and opens the pull request for a finished Build Train. It first checks that the Build Train's audit log holds an approved security verdict for that train. When `features.secrets_scan` is `true` in `service-manifest.json`, it scans the commits for secrets with gitleaks before the push. Your repository needs a GitHub remote named `origin`, and `gh` must be signed in to it. The conductor, the agent named pr-train-conductor, does the pushing and watches CI. When the Build Train used a Charter branch, the conductor also pushes that branch and opens its pull request after the code one. When a commit landed on the integration branch after the audit, the Push Train runs one recovery audit round on the new tip before it pushes. You review and merge, then delete the train branch from your own shell with `git branch -D daedalus/<train-id>` once `gh pr view <url> --json state` shows the merge.
 
     /daedalus:push-train
 
@@ -143,7 +143,7 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 | orchestrator | dispatcher | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, command_allowlist --allow train,inspect, root_writes --touch scratch --ledger-guard, gh_classes, dispatch_gate |
 | planner | shaper | credential_paths, workspace_integrity, tool_bound, root_writes --touch scratch --name plan*.md |
 | pr-train-conductor | mover | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools --gh, command_allowlist --allow git,gh,gitleaks, git_grammar --allow conductor, git_push --conductor, gh_classes --conductor |
-| repo-coder | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes, gh_classes |
+| repo-coder | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes, gh_classes, confine |
 | security-auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only --test-runner audit, gh_classes, root_writes --touch audit |
 | standards-rules-specialist | finder | credential_paths, tool_bound |
 | verifier | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only --test-runner unit, gh_classes |
@@ -207,6 +207,7 @@ One row per key the two readers accept: what the key governs, then what goes the
 | `features.secrets_scan` | `service-manifest.json` | Turns on the Push Train's gitleaks scan of the commits a push sends; with the scan on, the Push Train stops when gitleaks is missing or finds a secret, and the doctor's gitleaks line is a `MISS` (0069) | boolean | `true` or `false` | `false`: no scan, and gitleaks need not be installed | `true` |
 | `features.scrub_file` | `service-manifest.json` | A file of terms, one per line, that the release step checks the release notes against; a hit stops the release and names how many terms it found, never the terms (0069) | string or null | A project-relative path without a leading slash, `..` or glob characters, or `null` | `null`: nothing is checked | `"docs/scrub-terms.txt"` |
 | `features.ledger` | `service-manifest.json` | Turns the decision ledger steps on or off (0069) | boolean or null | `true`: the ledger is used, and a train asks before creating one; `false`: no ledger step and no ledger question; `null`: the default | `null`: a ledger the config declares or the probe finds is used, and none is created | `true` |
+| `features.github` | `service-manifest.json` | Says the project pushes to GitHub and opens its pull requests there with the gh tool; with it on, the doctor's two gh lines are a `MISS` when gh is missing or not signed in, and with it off they are `OPT` (0069) | boolean or null | `true`, `false` or `null`; `null` reads as `false` | `false`: the doctor never fails on gh | `true` |
 | `trains_dir` | `service-manifest.json` | The project folder that holds its own train definitions; a train is looked up there first, as `<trains_dir>/<name>.json`, and then in the plugin's own trains folder (0073) | string or null | A project-relative folder path without a leading slash, `..` or glob characters, or `null` | `null`: only the plugin's trains are used | `"trains"` |
 | `stack.unit_test_cmd` | `service-manifest.json` | The command that runs the project's unit tests; a coding agent may run it exactly as written, as one command (0073, 0098) | string or null | A non-empty command string, or `null` | `null`: no declared command | `"pytest -q"` |
 | `stack.typecheck_cmd` | `service-manifest.json` | The command that type-checks the project; a coding agent may run it exactly as written, as one command (0098) | string or null | A non-empty command string, or `null` | `null`: no declared command | `"mypy src"` |
@@ -234,9 +235,11 @@ One row per key the two readers accept: what the key governs, then what goes the
 
 ## Safety model
 
-Outside a train, Daedalus leaves your session and your repository alone, except that catalog agents keep their own hooks and a read or search of a credential file meets one check, which asks the main session and refuses an agent. Outside a train, Daedalus writes no files and keeps no audit log in any repository, including one where a train ran before; the one exception is `/daedalus:setup`, which writes its two starter files when you run it. Inside a train, the jail judges every tool call and the audit log records each step. A train works in three folders: the repository's `.claude/worktrees/` folder holds the unit worktrees, its `.claude/daedalus/` folder holds train state and the audit log, and the git-ignored `docs/.tmp/daedalus/` folder holds scratch files and summaries. To have the plugin's hooks in some repositories only, enable the plugin at project scope in each of those repositories' `.claude/settings.json` (Claude Code's `enabledPlugins`) instead of for your user.
+Outside a train, Daedalus leaves your session and your repository alone, except that catalog agents keep their own hooks and a read or search of a credential file meets one check, which warns the main session in its context and refuses an agent. Outside a train, Daedalus writes no files and keeps no audit log in any repository, including one where a train ran before; the one exception is `/daedalus:setup`, which writes its two starter files when you run it. Inside a train, the jail judges every tool call and the audit log records each step. A train works in three folders: the repository's `.claude/worktrees/` folder holds the unit worktrees, its `.claude/daedalus/` folder holds train state and the audit log, and the git-ignored `docs/.tmp/daedalus/` folder holds scratch files and summaries. To have the plugin's hooks in some repositories only, enable the plugin at project scope in each of those repositories' `.claude/settings.json` (Claude Code's `enabledPlugins`) instead of for your user.
 
-Each agent gets a short list of allowed tools, and a tool not on the list is never offered to it. A PreToolUse hook is a check Claude Code runs before each tool call. Daedalus uses one, the jail, to compare every call against that agent's rules and block anything outside them. A coding agent may write only inside its own unit worktree, and there never to `contracts/`, `.github/`, `.claude/`, `service-manifest.json`, the decision ledger, or the paths and file extensions the repository lists under `jail_narrowing` in `service-manifest.json`. At all times, a read or search of `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh` or `~/.claude/.credentials.json` is refused for every agent and asked of the main session. Daedalus's own agents are always refused writing those paths with a file tool or naming them in Bash; while a train runs, the main session is asked before it does either. While a train runs, agents from Claude Code itself or from other plugins are refused every checked tool except reads and searches, in the train's repository and when they write into it from another one. The jail hooks are the enforced boundary and judge each tool call before it runs. Code an agent runs inside a tool call, such as its tests, is the same exposure any developer accepts when using a model in their environment, so Daedalus asks every agent never to circumvent its boundaries and does not try to control the environment. A blocked agent sees a line starting with `daedalus-jail[<agent>]:` that says what was refused and what to do next. Hooks, not agents, write each step to the hash-chained audit log. No agent pushes except the conductor inside the Push Train, and no agent merges. You merge.
+Each agent gets a short list of allowed tools, and a tool not on the list is never offered to it. A PreToolUse hook is a check Claude Code runs before each tool call. Daedalus uses one, the jail, to compare every call against that agent's rules and block anything outside them. A coding agent may write only inside its own unit worktree, and there never to `contracts/`, `.github/`, `.claude/`, `service-manifest.json`, the decision ledger, or the paths and file extensions the repository lists under `jail_narrowing` in `service-manifest.json`. At all times, a read or search of `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh` or `~/.claude/.credentials.json` is refused for every agent; the main session's call runs with a warning in its context and its transcript. Daedalus's own agents are always refused writing those paths with a file tool or naming them in Bash; while a train runs, the main session is warned in context when it does either. A train never stops the main session with a permission prompt: each call the jail flags in your own session runs, and the warning names what the call touches and what can go wrong (Main never prompted, amending 0105 and 0106). While a train runs, agents from Claude Code itself or from other plugins are refused every checked tool except reads and searches, in the train's repository and when they write into it from another one. The jail hooks are the enforced boundary and judge each tool call before it runs. Code an agent runs inside a tool call, such as its tests, is the same exposure any developer accepts when using a model in their environment, so Daedalus asks every agent never to circumvent its boundaries and does not try to control the environment. A blocked agent sees a line starting with `daedalus-jail[<agent>]:` that says what was refused and what to do next. Hooks, not agents, write each step to the hash-chained audit log. No agent pushes except the conductor inside the Push Train, and no agent merges. You merge.
+
+[docs/guardrails.md](docs/guardrails.md) pairs each of these principles with the mechanism that enforces it and the test that shows the mechanism exists.
 
 With no declared standards, the Standards Packet is empty and the auditor judges each unit against its contract only. The NIST and CIS specialists review only units that touched IAM, KMS, mTLS, key custody or infrastructure configuration. To declare your standards, see [docs/project-requirements.md](docs/project-requirements.md). To start from a shipped set instead, declare the opt-in baseline pack, `{"kind": "pack", "name": "baseline"}`: five baseline checks plus the Daedalus cloud security standards, written in Daedalus's own words. The doctor offers it while `standards_sources` is empty.
 
@@ -268,6 +271,7 @@ Daedalus/
 │   ├── verifier.md
 │   └── web-researcher.md
 ├── docs/
+│   ├── guardrails.md                # each principle with its mechanism and test
 │   ├── howto/README.md              # operator guide
 │   └── project-requirements.md      # every file Daedalus reads, with examples
 ├── hooks/
@@ -279,6 +283,7 @@ Daedalus/
 │   └── nist-800-53-distilled.md     # the rubric the nist-specialist maps findings to
 ├── scripts/                         # Python 3.12, stdlib only
 │   ├── checks/command_allowlist.py  # every Bash segment runs a command the --allow list names
+│   ├── checks/confine.py            # a coder's test command starts with the kernel wrapper
 │   ├── checks/controls/             # the failure each control prevents and its premise test
 │   ├── checks/credential_paths.py   # refuses a path or command that names a credential store
 │   ├── checks/dispatch_gate.py      # the orchestrator's coder dispatch and plan gates
@@ -296,6 +301,7 @@ Daedalus/
 │   ├── lib/__init__.py
 │   ├── lib/agent_files.py           # reads agent files and their hooks blocks
 │   ├── lib/agent_models.py          # the model each agent runs on: override, config, agent file
+│   ├── lib/atomic.py                # the one atomic writer and create-once writer
 │   ├── lib/audit.py                 # hash-chained append, redaction
 │   ├── lib/audit_proof.py           # the hooks-live and approved-verdict proofs
 │   ├── lib/audit_rounds.py          # the auditor's finding list and the stall rule
@@ -305,12 +311,14 @@ Daedalus/
 │   ├── lib/dispatch_binding.py      # coder dispatch, warm rebind and first-write claim
 │   ├── lib/fetch.py                 # GitHub-only download, size cap and cache lock for refreshes
 │   ├── lib/gh_policy.py             # the gh commands each agent may run
+│   ├── lib/git.py                   # the one git runner: timeout and redirect scrub
 │   ├── lib/hook_io.py               # hook input and output for the check scripts
 │   ├── lib/human_text.py            # counts the plain words in operator lines
 │   ├── lib/jail.py                  # per-agent tool policy
 │   ├── lib/ledger.py                # ledger resolution, sequence read, entry format
-│   ├── lib/locks.py                 # bounded flock shared by audit and ledger writers
+│   ├── lib/locks.py                 # the one FIFO-safe lock opener and bounded lock
 │   ├── lib/manifest.py              # the one reader of service-manifest.json
+│   ├── lib/narrow.py                # narrows parsed JSON values to typed values
 │   ├── lib/plan_record.py           # loads and validates plan records
 │   ├── lib/project_keys.py          # every manifest and config key, its reference row, and the starter files
 │   ├── lib/project_root.py          # finds the project root
@@ -323,12 +331,14 @@ Daedalus/
 │   ├── lib/train_runner.py          # the train state machine behind daedalus_train.py
 │   ├── lib/train_scope.py           # the train scope the jail's entry script reads first
 │   ├── lib/train_state.py           # one state file per train
+│   ├── lib/train_summary.py         # the train summary, written from state and the audit log
 │   ├── lib/unit_binding.py          # one coder per unit worktree
 │   ├── lib/workspace.py             # unit worktrees and the train marker
 │   ├── append_ledger.py             # locked, sequence-checked ledger writer
 │   ├── audit_log.py                 # all other hook events to the audit log
 │   ├── audit_report.py              # digest of a verified session log
 │   ├── catalog.py                   # prints the agent table and hooks matrix
+│   ├── daedalus_confine.py          # kernel wrapper: a coder's test command stays in its worktree, no network
 │   ├── daedalus_doctor.py           # first-run check behind /daedalus:doctor
 │   ├── daedalus_setup.py            # writes the missing starter files behind /daedalus:setup
 │   ├── daedalus_train.py            # the train runner: progress, choice, plan, verdict, exception

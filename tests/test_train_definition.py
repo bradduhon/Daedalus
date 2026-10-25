@@ -5,14 +5,13 @@ from __future__ import annotations
 import copy
 import json
 import subprocess
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from lib.train_definition import Definition, DefinitionError, load, validate
 
-from tests.conftest import REPO_ROOT, SCRIPTS_DIR
+from tests.conftest import REPO_ROOT, run_cli
 
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "trains"
 INVALID = sorted(p.stem for p in FIXTURES.glob("*.json") if p.stem != "valid")
@@ -31,10 +30,7 @@ def _only(check: int, name: str) -> str:
 
 
 def _cli(path: Path) -> subprocess.CompletedProcess[str]:
-    script = SCRIPTS_DIR / "validate_train.py"
-    return subprocess.run(
-        [sys.executable, str(script), str(path)], capture_output=True, text=True, check=False
-    )
+    return run_cli("validate_train.py", str(path))
 
 
 def test_check1_refuses_a_missing_top_level_field() -> None:
@@ -137,8 +133,7 @@ def test_cli_refuses_a_file_that_is_not_a_json_object(tmp_path: Path, text: str)
 def test_cli_refuses_a_missing_file_and_bad_usage(tmp_path: Path) -> None:
     result = _cli(tmp_path / "absent.json")
     assert result.returncode == 1 and result.stdout.startswith("check 1: ")
-    script = SCRIPTS_DIR / "validate_train.py"
-    usage = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
+    usage = run_cli("validate_train.py")
     assert usage.returncode == 1 and "Next:" in usage.stderr
 
 

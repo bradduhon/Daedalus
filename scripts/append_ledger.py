@@ -1,29 +1,21 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Append one entry to the declared or probed ledger under a lock (0004).
-
---probe prints the resolved ledger and its sequence. An append checks --expected-seq
-against the ledger under the lock and exits 2 on a mismatch, 1 on any other error.
-A table row's Supersedes and Ruling cells are checked when the header has the column
-(0090, 0094); rows already in the ledger are never re-checked.
-"""
-
 from __future__ import annotations
 
 import argparse
 import hashlib
 import os
 import re
-import stat
 import sys
-import tempfile
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import atomic, locks  # noqa: E402
 from lib.audit import DataDirError, ensure_project_data_dir, root_info  # noqa: E402
 from lib.config import ConfigError, load_config  # noqa: E402
 from lib.ledger import (  # noqa: E402
@@ -37,9 +29,16 @@ from lib.ledger import (  # noqa: E402
     resolve_ledger,
     split_row,
 )
-from lib.locks import bounded_flock  # noqa: E402
 from lib.project_root import project_root  # noqa: E402
 
+# 22: the --help text, kept below the future import as a plain string.
+DESCRIPTION = (
+    "Append one entry to the declared or probed ledger under a lock (0004). "
+    "--probe prints the resolved ledger and its sequence. An append checks --expected-seq "
+    "against the ledger under the lock and exits 2 on a mismatch, 1 on any other error. "
+    "A table row's Supersedes and Ruling cells are checked when the header has the column "
+    "(0090, 0094); rows already in the ledger are never re-checked."
+)
 NONE_FOUND = (
     "ledger: none declared and none found. "
     "Next: declare a ledger block or create one (docs/project-requirements.md)"
@@ -73,7 +72,7 @@ class _Parser(argparse.ArgumentParser):
 
 def _parse(argv: list[str]) -> argparse.Namespace:
     # I2: no prefix abbreviations, so --cwd has exactly one spelling for the jail to fence.
-    parser = _Parser(prog="append_ledger.py", description=__doc__, allow_abbrev=False)
+    parser = _Parser(prog="append_ledger.py", description=DESCRIPTION, allow_abbrev=False)
     parser.add_argument("--probe", action="store_true")
     parser.add_argument("--expected-seq", type=int)
     parser.add_argument("--entry-file")
@@ -220,21 +219,6 @@ def _bump_frontmatter(lines: list[str], key: str, seq: int, ledger: ResolvedLedg
     )
 
 
-def _write_atomic(path: Path, text: str) -> None:
-    target = Path(os.path.realpath(path))
-    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.chmod(tmp, target.stat().st_mode & 0o7777)
-        os.replace(tmp, target)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
-
-
 def _require_git(path: str) -> None:
     # M6, 0077: the owner resolves as the jail resolves it; a non-git root is refused.
     if root_info(str(project_root(Path(path))))[1] != "git":
@@ -253,32 +237,26 @@ def _lock_path(ledger: ResolvedLedger) -> Path:
     owner = str(project_root(Path(real).parent))
     _require_git(owner)
     # C1, 0077: the lock lives in the project that owns the ledger, so every caller shares it.
-    locks = ensure_project_data_dir(owner) / "ledger-locks"
-    if locks.is_symlink():
-        raise AppendError(f"{locks} is a symlink. Next: remove it; the plugin recreates it.")
-    locks.mkdir(mode=0o700, exist_ok=True)
-    os.chmod(locks, 0o700)
+    folder = ensure_project_data_dir(owner) / "ledger-locks"
+    if folder.is_symlink():
+        raise AppendError(f"{folder} is a symlink. Next: remove it; the plugin recreates it.")
+    folder.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(folder, 0o700)
     name = hashlib.sha256(real.encode()).hexdigest()[:16] + ".lock"
-    return locks / name
-
-
-def _open_lock(path: str) -> int:
-    # M5: O_NONBLOCK so a planted FIFO cannot hang the open; only a regular file is a lock.
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
-        os.close(fd)
-        raise AppendError(f"lock {path} is not a regular file. Next: remove it and retry.")
-    return fd
+    return folder / name
 
 
 def _append(args: argparse.Namespace, ledger: ResolvedLedger) -> str:
     entry = _read_entry(Path(args.cwd, args.entry_file))
     date = datetime.now(UTC).date().isoformat()
     lock = _lock_path(ledger)
-    with open(lock, "r+", opener=lambda path, _flags: _open_lock(path)) as lock_fh:
+    with ExitStack() as stack:
         try:
-            bounded_flock(lock_fh, LOCK_TIMEOUT_S, label="ledger lock")
-        except RuntimeError as exc:
+            # M5, 75: the one opener refuses a planted FIFO instead of hanging on it.
+            stack.enter_context(locks.locked(lock, LOCK_TIMEOUT_S, label="ledger lock"))
+        except locks.LockRefused as exc:
+            raise AppendError(str(exc)) from exc
+        except locks.LockHeld as exc:
             held = str(exc).split(" Next:")[0]
             raise AppendError(
                 f"{held} Next: retry after the other append finishes; do not delete the .lock file."
@@ -304,7 +282,8 @@ def _append(args: argparse.Namespace, ledger: ResolvedLedger) -> str:
             text = _table_text(lines, ledger, entry, ids)
         else:
             text = _heading_text(lines, ledger, entry, ids)
-        _write_atomic(ledger.path, bom + text)
+        # W1.1: the realpath is written, so a ledger reached through a link keeps that link.
+        atomic.write_atomic(Path(os.path.realpath(ledger.path)), bom + text)
     return next_id(ledger, ids.seq, ids.repo, ids.type_)
 
 

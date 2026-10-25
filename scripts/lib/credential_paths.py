@@ -13,7 +13,16 @@ from pathlib import Path
 from lib.project_root import project_root
 
 # spec 8, 0023: credential stores refused to every agent, main included.
-CREDENTIAL_DENY = (".ssh", ".aws", ".gnupg", ".config/gh", ".claude/.credentials.json")
+# 0048: the last two are git's credential-store files, the default and the XDG one.
+CREDENTIAL_DENY = (
+    ".ssh",
+    ".aws",
+    ".gnupg",
+    ".config/gh",
+    ".claude/.credentials.json",
+    ".git-credentials",
+    ".config/git/credentials",
+)
 # 0023: these tools carry only the credential deny, for every agent known or not.
 CREDENTIAL_TOOLS = frozenset({"Read", "Glob", "Grep"})
 R_CREDENTIAL = (

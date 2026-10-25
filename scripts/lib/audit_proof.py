@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
 import re
-from collections.abc import Iterable, Mapping
+import shlex
+from collections.abc import Iterable, Mapping, Sequence
+from datetime import datetime
 from pathlib import Path
-from typing import Any
 
-from lib import train_state
+from lib import git, train_state
 from lib.audit import GENESIS, AuditLockError, read_log, record_hash
+from lib.train_state import TRAIN_ID as _TRAIN_ID
 
 AUDIT_DIR = Path(".claude") / "daedalus" / "audit"
 SUMMARY_DIR = Path("docs") / ".tmp" / "daedalus"
@@ -22,9 +25,31 @@ VERDICT_REJECTED = "[VERDICT: REJECTED]"
 HANDBACK = "SubagentHandback"
 _VERDICT_FIELDS = ("last_message_head", "last_message_tail")
 _HANDBACK_FIELD = "tool_input.message"
-_TRAIN_ID = re.compile(r"[0-9]{8}-[0-9]{6}")
 TIP = re.compile(r"[0-9a-f]{40}")
 _SESSION_LINE = re.compile(r"^Session ([A-Za-z0-9_-]+):", re.MULTILINE)
+# pin D3 -> D1: the stop record's full-reply verdict lines; absent on a record written before D3.
+VERDICT_LINES = "verdict_lines"
+_VERDICT_TAG = "[VERDICT:"
+_VERDICT_KIND = re.compile(r"\[VERDICT:\s*([A-Za-z_]+)\s*\]")
+VERDICT_BOTH = "both verdicts"
+# W3.2: the summary command the proof anchors on: the plugin's own script, run by the
+# orchestrator or the main session, unrefused, whose PostToolUse record shows its written line.
+SUMMARY_SCRIPT, SUMMARY_ACTION = "daedalus_train.py", "summary"
+PLUGIN_SCRIPT = Path(__file__).resolve().parents[1] / SUMMARY_SCRIPT
+_PLUGIN_VARS = ("${CLAUDE_PLUGIN_ROOT}", "$CLAUDE_PLUGIN_ROOT")
+_SUMMARY_AGENTS = ("main", "daedalus:orchestrator")
+_REFUSED = ("block", "ask")
+_PYTHONS = ("python3", "python")
+# pin D1 -> E4: the D1 refusal texts; only their Next: action names the summary command.
+R_NO_SUMMARY_WRITE = (
+    "no summary Write after the recorded verdict at seq {seq}. "
+    "Next: rewrite the summary with daedalus_train.py summary --repo <repo>, then rerun the proof."
+)
+R_GRADED_NOT_RECORDED = (
+    "the graded auditor turn at seq {graded} is not the recorded verdict at seq {recorded}. "
+    "Next: rerun the audit round."
+)
+R_BOTH_VERDICTS = "auditor reply at seq {seq} carries both verdicts. Next: rerun the audit round."
 
 
 class ProofError(RuntimeError):
@@ -53,7 +78,7 @@ def verify_lines(lines: Iterable[str]) -> tuple[bool, str]:
     return True, f"OK: {count} records, chain intact, head={prev}"
 
 
-def read_chain(path: Path) -> list[dict[str, Any]]:
+def read_chain(path: Path) -> list[dict[str, object]]:
     # issue 10: the runner's hooks-live and check-reply reads wait on the writer's lock too.
     try:
         lines = read_log(path).splitlines()
@@ -78,13 +103,18 @@ def newest_log(repo: Path) -> Path:
     return logs[-1]
 
 
-def live_log(repo: Path, needle: str) -> tuple[Path, int]:
+def _newest_bash(repo: Path) -> tuple[Path, list[dict[str, object]], dict[str, object] | None]:
     # 0024: the jail appends PreToolUse before the command runs, so this call is the newest
     # Bash record.
     log = newest_log(repo)
     records = read_chain(log)
     bash = [r for r in records if r.get("event") == "PreToolUse" and r.get("tool_name") == "Bash"]
-    tool_input = bash[-1].get("tool_input") if bash else None
+    return log, records, bash[-1] if bash else None
+
+
+def live_log(repo: Path, needle: str) -> tuple[Path, int]:
+    log, records, newest = _newest_bash(repo)
+    tool_input = newest.get("tool_input") if newest else None
     command = str(tool_input.get("command") or "") if isinstance(tool_input, dict) else ""
     if needle not in command:
         raise ProofError(
@@ -92,6 +122,18 @@ def live_log(repo: Path, needle: str) -> tuple[Path, int]:
             f"session's hooks are not writing the audit log. {DOCTOR_NEXT}"
         )
     return log, len(records)
+
+
+def live_summary(repo: Path) -> Path:
+    # W3.2: the summary command checks its own record with the predicate the proof anchors on.
+    log, _, newest = _newest_bash(repo)
+    if newest is None or not summary_call(newest, repo):
+        raise ProofError(
+            f"NOT LIVE: the newest Bash record in {log.name} is not the summary command the "
+            f"push proof anchors on. Next: run `python3 {PLUGIN_SCRIPT} summary --repo {repo}` "
+            "exactly, single-spaced, from the orchestrator or the main session."
+        )
+    return log
 
 
 def hooks_live(repo: Path, needle: str, mark: bool = False) -> str:
@@ -104,6 +146,27 @@ def hooks_live(repo: Path, needle: str, mark: bool = False) -> str:
         except train_state.TrainStateError as exc:
             raise ProofError(f"BROKEN: {exc}") from exc
     return f"OK hooks live: session {log.stem}, chain intact ({count} records)"
+
+
+def stale_agents(log: Path, agents: Path) -> list[str]:
+    # spec 6: agent files load at session start; one changed after the first record is stale.
+    records = read_chain(log)
+    raw = records[0].get("ts") if records else None
+    try:
+        first = datetime.fromisoformat(raw).timestamp() if isinstance(raw, str) else None
+    except ValueError:
+        first = None
+    if first is None:
+        return []
+    found: list[str] = []
+    for path in sorted(agents.glob("*.md")):
+        try:
+            changed = path.stat().st_mtime
+        except OSError:
+            continue
+        if changed > first:
+            found.append(path.stem)
+    return found
 
 
 def _not_approved(check: str) -> ProofError:
@@ -122,19 +185,32 @@ def _summary_session(repo: Path, train_id: str) -> str:
     return match.group(1)
 
 
-def _file_name(record: Mapping[str, object]) -> str:
+def handback_message(record: Mapping[str, object]) -> object:
+    # issue 57: the reply text of a hand-back call record, read from tool_input.message.
     tool_input = record.get("tool_input")
-    raw = tool_input.get("file_path") if isinstance(tool_input, dict) else None
-    return Path(raw).name if isinstance(raw, str) else ""
+    return tool_input.get("message") if isinstance(tool_input, dict) else tool_input
 
 
 def _verdict_fields(record: Mapping[str, object]) -> dict[str, object]:
     # issue 57: the auditor's reply lands in its hand-back call; its stop record holds a relay.
     if record.get("tool_name") == HANDBACK:
-        tool_input = record.get("tool_input")
-        message = tool_input.get("message") if isinstance(tool_input, dict) else tool_input
-        return {_HANDBACK_FIELD: message}
+        return {_HANDBACK_FIELD: handback_message(record)}
     return {field: record.get(field) for field in _VERDICT_FIELDS}
+
+
+def verdict_lines(record: Mapping[str, object]) -> list[str] | None:
+    # pin D3 -> D1: a hand-back's verdict lines come from its whole message; None is no field.
+    if record.get("tool_name") == HANDBACK:
+        message = handback_message(record)
+        if not isinstance(message, str):
+            return None
+        return [ln.strip() for ln in message.splitlines() if ln.strip().startswith(_VERDICT_TAG)]
+    raw = record.get(VERDICT_LINES)
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not all(isinstance(ln, str) for ln in raw):
+        raise ValueError(VERDICT_LINES)
+    return [ln.strip() for ln in raw]
 
 
 def stop_verdict(stop: Mapping[str, object]) -> str | None:
@@ -144,6 +220,15 @@ def stop_verdict(stop: Mapping[str, object]) -> str | None:
         if value is not None and not isinstance(value, str):
             return None
         lines[field] = [ln.strip() for ln in (value or "").splitlines() if ln.strip()]
+    try:
+        listed = verdict_lines(stop) or []
+    except ValueError:
+        return None
+    # spec 3.6: one verdict kind per reply; the full-reply lines also catch a mid-reply reject.
+    if len({m.group(1).upper() for ln in listed if (m := _VERDICT_KIND.match(ln))}) > 1:
+        return VERDICT_BOTH
+    if any(ln.startswith(VERDICT_REJECTED) for ln in listed):
+        return VERDICT_REJECTED
     if any(ln.startswith(VERDICT_REJECTED) for rows in lines.values() for ln in rows):
         return VERDICT_REJECTED
     firsts = [rows[0] for f, rows in lines.items() if rows and f != "last_message_tail"]
@@ -183,7 +268,7 @@ def auditor_round(
 def round_verdict(turn: list[Mapping[str, object]]) -> tuple[str | None, int]:
     # 0089: a rejection anywhere in the turn wins; the seq is the record that carries the verdict.
     found = [(stop_verdict(r), _seq(r)) for r in turn]
-    for want in (VERDICT_REJECTED, VERDICT_APPROVED):
+    for want in (VERDICT_BOTH, VERDICT_REJECTED, VERDICT_APPROVED):
         hits = [seq for verdict, seq in found if verdict == want]
         if hits:
             return want, hits[-1]
@@ -193,10 +278,17 @@ def round_verdict(turn: list[Mapping[str, object]]) -> tuple[str | None, int]:
 def _verdict_refusal(turn: list[Mapping[str, object]]) -> str | None:
     for record in turn:
         bad = [f for f, v in _verdict_fields(record).items() if not isinstance(v, str | None)]
+        try:
+            verdict_lines(record)
+        except ValueError:
+            bad.append(VERDICT_LINES)
         if bad:
             where = f"the {AUDITOR} final round (record seq {_seq(record)})"
             return f"{where} has a {bad[0]} that is not text"
     verdict, seq = round_verdict(turn)
+    if verdict == VERDICT_BOTH:
+        # pin D1 -> D5: this refusal carries its own Next line.
+        raise ProofError(f"NOT APPROVED: {R_BOTH_VERDICTS.format(seq=seq)}")
     where = f"the {AUDITOR} final round (record seq {seq or '?'})"
     if verdict == VERDICT_REJECTED:
         return f"{where} carries a {VERDICT_REJECTED} line"
@@ -220,12 +312,9 @@ def verdict_tip(turn: list[Mapping[str, object]], seq: int) -> str | None:
 
 
 def _git(repo: Path, *args: str) -> str | None:
-    # Lazy: lib.workspace imports this module.
-    from lib import workspace
-
     try:
-        found = workspace._run(repo, *args)
-    except (OSError, workspace.WorkspaceError):
+        found = git.run(args, repo, 120)
+    except (OSError, git.GitTimeout):
         return None
     return found.stdout if found.returncode == 0 else None
 
@@ -298,6 +387,99 @@ def _judged(repo: Path, train_id: str, state: dict[str, object], named: str | No
     return named
 
 
+def _same_path(given: str, want: Path) -> bool:
+    return os.path.realpath(given) == os.path.realpath(want)
+
+
+def summary_call(record: Mapping[str, object], repo: Path | None = None) -> bool:
+    # W3.2: exactly `python3 <plugin>/scripts/daedalus_train.py summary --repo <repo>`, one space
+    # between words, as the jail allowed it; a coder, a copied script or --help never counts.
+    if record.get("event") != "PreToolUse" or record.get("tool_name") != "Bash":
+        return False
+    if record.get("decision") in _REFUSED or record.get("agent_type") not in _SUMMARY_AGENTS:
+        return False
+    tool_input = record.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(command, str):
+        return False
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return False
+    # Single spaces only, plain or shlex-quoted; the live check and the anchor share this form.
+    if command != " ".join(argv) and command != " ".join(shlex.quote(a) for a in argv):
+        return False
+    if len(argv) == 4 and argv[3].startswith("--repo="):
+        argv = [*argv[:3], "--repo", argv[3].removeprefix("--repo=")]
+    if (
+        len(argv) != 5
+        or Path(argv[0]).name not in _PYTHONS
+        or argv[2:4] != [SUMMARY_ACTION, "--repo"]
+    ):
+        return False
+    script = argv[1]
+    for var in _PLUGIN_VARS:
+        if script.startswith(f"{var}/"):
+            script = f"{PLUGIN_SCRIPT.parents[1]}{script.removeprefix(var)}"
+    if not Path(script).is_absolute() or not _same_path(script, PLUGIN_SCRIPT):
+        return False
+    if repo is None:
+        return True
+    target = Path(argv[4])
+    cwd = record.get("cwd")
+    if not target.is_absolute():
+        if not isinstance(cwd, str):
+            return False
+        target = Path(cwd) / target
+    return _same_path(str(target), repo)
+
+
+def _wrote(later: Sequence[Mapping[str, object]], call: Mapping[str, object], train: str) -> bool:
+    # W3.2: the call's own PostToolUse record, by tool_use_id, holds the line a written file prints.
+    use = call.get("tool_use_id")
+    if not isinstance(use, str) or not use:
+        return False
+    line = f"summary written train={train}"
+    if train:
+        line += f" path={SUMMARY_DIR.as_posix()}/{train}-summary.md "
+    for record in later:
+        if record.get("tool_use_id") != use or record.get("agent_id") != call.get("agent_id"):
+            continue
+        if record.get("event") not in ("PostToolUse", "PostToolUseFailure"):
+            continue
+        head = record.get("result_head")
+        return record.get("event") == "PostToolUse" and isinstance(head, str) and line in head
+    return False
+
+
+def summary_anchor(
+    records: Sequence[Mapping[str, object]],
+    verdict_seq: int,
+    *,
+    repo: Path | None = None,
+    train_id: str = "",
+) -> int | None:
+    # pin D1 -> E4: the seq of the first summary command record after the recorded verdict seq;
+    # W3.2: the proof also binds the record to its repo and to the train the written line names.
+    for index, record in enumerate(records):
+        if _seq(record) <= verdict_seq or not summary_call(record, repo):
+            continue
+        if _wrote(records[index + 1 :], record, train_id):
+            return _seq(record)
+    return None
+
+
+def _recorded_seq(train_id: str, state: dict[str, object]) -> int:
+    # 73: the proof grades the verdict the train recorded, so an approval names its audit seq.
+    verdict = train_state.record(state, train_state.VERDICT)
+    if verdict.get("status") != train_state.APPROVED:
+        raise _not_approved(f"the state of train {train_id} records no approved verdict")
+    seq = verdict.get("seq")
+    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
+        raise _not_approved(f"the recorded verdict of train {train_id} names no audit seq")
+    return seq
+
+
 def approved(repo: Path, train_id: str) -> str:
     if not _TRAIN_ID.fullmatch(train_id):
         raise ProofError(
@@ -317,22 +499,23 @@ def approved(repo: Path, train_id: str) -> str:
             "to bound the search"
         )
     records = read_chain(log)
-    name = f"{train_id}-summary.md"
-    writes = [
-        i
-        for i, r in enumerate(records)
-        if _seq(r) > start and r.get("tool_name") == "Write" and _file_name(r) == name
-    ]
-    if not writes:
-        raise _not_approved(f"session {session} has no Write record of {name}")
-    # 0024: the auditor's final round for this train is its last turn before the summary Write.
-    turn = auditor_round(records[: writes[0]], start)
+    recorded = _recorded_seq(train_id, state)
+    # W3.2: a Write of the summary file never anchors; only the summary command's record does.
+    anchor = summary_anchor(records, recorded, repo=repo, train_id=train_id)
+    if anchor is None:
+        raise ProofError(f"NOT APPROVED: {R_NO_SUMMARY_WRITE.format(seq=recorded)}")
+    # 73: the graded turn is the last auditor turn before that command, and it is the recorded one.
+    turn = auditor_round([r for r in records if _seq(r) < anchor], start)
     if not turn:
-        raise _not_approved(f"no {AUDITOR} reply after seq {start} before the summary Write")
+        raise _not_approved(f"no {AUDITOR} reply after seq {start} before the summary command")
     refusal = _verdict_refusal(turn)
     if refusal is not None:
         raise _not_approved(refusal)
     _, seq = round_verdict(turn)
+    if seq != recorded:
+        raise ProofError(
+            f"NOT APPROVED: {R_GRADED_NOT_RECORDED.format(graded=seq, recorded=recorded)}"
+        )
     tip = _judged(repo, train_id, state, verdict_tip(turn, seq))
     return (
         f"OK approved: approved verdict, train {train_id}, session {session}, "
@@ -350,7 +533,8 @@ def push_proof(repo: Path, train_id: str) -> str:
         except train_state.TrainStateError:
             raise refused from None
         ledger_id, tip = exception.get("ledger_id"), exception.get("tip")
-        bound = isinstance(ledger_id, str) and ledger_id and isinstance(tip, str)
-        if not bound or tip != integration_tip(repo, train_id):
+        if not (isinstance(ledger_id, str) and ledger_id and isinstance(tip, str)):
+            raise refused from None
+        if tip != integration_tip(repo, train_id):
             raise refused from None
         return f"OK approved: exception {ledger_id}, train {train_id}, integration tip {tip[:12]}"

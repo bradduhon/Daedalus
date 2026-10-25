@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import subprocess
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import pytest
 from lib import audit
 
-from tests.conftest import write_train_marker
+from tests.conftest import git, write_train_marker
 
-_GIT_ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
 # 0035: a record that only names the begin command creates nothing.
 BEGIN = {"command": "python3 /p/scripts/daedalus_workspace.py begin --repo /r"}
 
@@ -22,10 +22,7 @@ def project_data(project_data: Path, repo_cwd: Path) -> Path:
     return project_data
 
 
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(repo), *_GIT_ID, *args], capture_output=True, text=True, check=False
-    )
+_git = partial(git, check=False)
 
 
 def test_main_tree_and_linked_worktree_resolve_to_main_root(repo_cwd: Path, tmp_path: Path) -> None:

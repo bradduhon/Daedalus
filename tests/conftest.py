@@ -91,12 +91,90 @@ def fake_bin(
     return bin_dir
 
 
-def write_train_marker(repo: Path) -> Path:
+def write_train_marker(repo: Path, train: str = "20261017-120000") -> Path:
     # 0035: the audit log records only while this marker exists.
     marker = repo / ".claude" / "daedalus" / "train.active"
     marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("20261017-120000\n", encoding="utf-8")
+    marker.write_text(f"{train}\n", encoding="utf-8")
     return marker
+
+
+# 0010: a throwaway identity so a test commit never reads the operator's git config.
+GIT_IDENT = (
+    "-c",
+    "user.name=t",
+    "-c",
+    "user.email=t@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+)
+
+
+def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    # W1.4: the one test git runner; check=False hands back a non-zero exit for the caller to read.
+    from lib import git as git_lib
+
+    done = git_lib.run([*GIT_IDENT, *args], repo)
+    if check and done.returncode != 0:
+        raise subprocess.CalledProcessError(done.returncode, done.args, done.stdout, done.stderr)
+    return done
+
+
+def audit_records(log: Path) -> list[dict[str, Any]]:
+    # W1.4: every record of one audit log, in order.
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
+
+
+def main_warning(stdout: str) -> str:
+    # Main never prompted (amends 0105, 0106): no decision; one text in context and transcript.
+    doc = json.loads(stdout)
+    out = doc["hookSpecificOutput"]
+    assert out["hookEventName"] == "PreToolUse" and "permissionDecision" not in out, doc
+    assert out["additionalContext"] == doc["systemMessage"], doc
+    return str(out["additionalContext"])
+
+
+def append_handback(
+    make_input: Callable[..., dict[str, Any]],
+    message: str,
+    agent_type: str = "daedalus:security-auditor",
+    **extra: Any,
+) -> None:
+    # W1.4: one auditor SubagentHandback appended through the hook writer.
+    from lib import audit
+
+    audit.audit_append(
+        make_input(
+            hook_event_name="PostToolUse",
+            tool_name="SubagentHandback",
+            tool_input={"message": message},
+            agent_type=agent_type,
+            agent_id="a1",
+            **extra,
+        )
+    )
+
+
+def run_cli(
+    script: str,
+    *args: str,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    # W1.4: a script under scripts/ run as the operator runs it; a non-zero exit is returned.
+    return subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / script), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=cwd,
+        env=env,
+    )
+
+
+def workspace_cli(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    # issue 63: daedalus_workspace.py refuses a --repo that is not the project root of its cwd.
+    return run_cli("daedalus_workspace.py", *args, cwd=cwd or Path(args[args.index("--repo") + 1]))
 
 
 TRAIN_A_AUDITOR = REPO_ROOT / "tests" / "fixtures" / "audit" / "train-a-auditor.jsonl"
@@ -130,6 +208,63 @@ def replay_auditor(cwd: Path, session: str, handbacks: bool = True) -> list[dict
 
 
 @pytest.fixture
+def fake_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    # issue 55: a versioned claude binary and the PATH link to it, as the installer lays them out.
+    versions = tmp_path.resolve() / "share" / "versions"
+    versions.mkdir(parents=True)
+    binary = versions / "2.0.0"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    bin_dir = tmp_path.resolve() / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "claude").symlink_to(binary)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    return binary
+
+
+@pytest.fixture
+def cred_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    root = tmp_path.resolve() / "home"
+    root.mkdir()
+    monkeypatch.setenv("HOME", str(root))
+    return root
+
+
+@pytest.fixture
+def train_cwd(tmp_path: Path) -> Path:
+    root = tmp_path.resolve() / "trainrepo"
+    (root / ".claude" / "daedalus").mkdir(parents=True)
+    return root
+
+
+@pytest.fixture
+def plain_repo(tmp_path: Path) -> Path:
+    root = tmp_path.resolve() / "repo"
+    (root / "src").mkdir(parents=True)
+    (root / ".github").mkdir()
+    (root / "src" / "a.py").write_text("x\n")
+    return root
+
+
+@pytest.fixture
+def marked_repo(tmp_path: Path) -> Path:
+    # 0035: a real repo whose train marker is present.
+    repo = tmp_path.resolve() / "marked"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    write_train_marker(repo, "20261015-120000")
+    return repo
+
+
+@pytest.fixture
+def other_repo(tmp_path: Path) -> Path:
+    repo = tmp_path.resolve() / "other"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    return repo
+
+
+@pytest.fixture
 def plugin_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "plugin-data"
     root.mkdir()
@@ -149,11 +284,30 @@ def _fresh_project_root() -> Iterator[None]:
     audit._TRACKED.clear()
 
 
+@pytest.fixture(autouse=True)
+def _kernel_rules_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 0048: the confine check steps aside in-process; tests/test_confine.py restores the probe.
+    import daedalus_confine
+
+    off = daedalus_confine.Support(None, 0, False)
+    monkeypatch.setattr(daedalus_confine, "kernel_support", lambda: off)
+
+
 @pytest.fixture
 def repo_cwd(tmp_path: Path) -> Path:
     root = tmp_path.resolve() / "repo"
     root.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+    git(root, "init", "-q", "-b", "main")
+    return root
+
+
+@pytest.fixture
+def git_repo(tmp_path: Path) -> Path:
+    # W1.4: a repo on main with one empty commit, built through git().
+    root = tmp_path.resolve() / "repo"
+    root.mkdir()
+    git(root, "init", "-q", "-b", "main")
+    git(root, "commit", "-q", "--allow-empty", "-m", "init")
     return root
 
 

@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import shutil
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -13,9 +11,11 @@ from typing import Any
 import pytest
 from lib import dispatch_binding, jail, train_state
 from lib.config import Config
-from lib.unit_binding import bindings_path
+from lib.unit_binding import bindings_path, claim
 from lib.workspace import create, mark_train
 
+from tests.conftest import git as _git
+from tests.conftest import main_warning
 from tests.hook_chain import judge as decide
 
 TRAIN = "20261016-120000"
@@ -46,10 +46,6 @@ def seed_plan(repo: Path, train: str, source: Path = VALID) -> Path:
     path = plan_file(repo, train, source)
     record_plan(repo, train, str(path), _sha(path))
     return path
-
-
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
 @pytest.fixture
@@ -144,6 +140,60 @@ def test_non_coder_dispatch_needs_no_plan(repo_cwd: Path, unit: Path) -> None:
         assert d.allow, (agent, d.reason)
 
 
+@pytest.mark.parametrize(
+    ("subagent", "gated"),
+    [
+        (CODER, True),
+        ("repo-coder", True),
+        ("daedalus-probe:repo-coder", True),
+        ("other:repo-coder", True),
+        ("daedalus:x:repo-coder", True),
+        ("daedalus:repo-coder-x", False),
+    ],
+)
+def test_coder_plan_gate_fails_closed_on_any_namespace(
+    repo_cwd: Path, unit: Path, subagent: str, gated: bool
+) -> None:
+    # issue 29: a repo-coder under any namespace meets the coder plan gate.
+    tool_input = _dispatch(repo_cwd, unit, subagent)["tool_input"]
+    reason = dispatch_binding._dispatch_reason(tool_input, str(repo_cwd))
+    assert (reason is not None and "records no plan" in reason) is gated, reason
+
+
+@pytest.mark.parametrize(
+    ("subagent", "binds"),
+    [(CODER, True), ("repo-coder", True), ("other:repo-coder", False)],
+)
+def test_only_the_train_scope_namespace_records_a_binding(
+    repo_cwd: Path, unit: Path, subagent: str, binds: bool
+) -> None:
+    # W1.3: train_scope's namespace check decides which coder dispatch binds a unit.
+    seed_plan(repo_cwd, TRAIN)
+    tool_input = _dispatch(repo_cwd, unit, subagent)["tool_input"]
+    assert dispatch_binding._dispatch_reason(tool_input, str(repo_cwd)) is None
+    assert bindings_path(repo_cwd, TRAIN).exists() is binds
+
+
+@pytest.mark.parametrize(
+    ("bound", "needle"),
+    [(True, "is bound to coder agent-1"), (False, "was already dispatched to a coder")],
+)
+def test_a_foreign_coder_meets_the_once_check(
+    repo_cwd: Path, unit: Path, bound: bool, needle: str
+) -> None:
+    # issue 29: a unit a Daedalus coder holds refuses a coder under any namespace.
+    seed_plan(repo_cwd, TRAIN)
+    ours = _dispatch(repo_cwd, unit)["tool_input"]
+    assert dispatch_binding._dispatch_reason(ours, str(repo_cwd)) is None
+    if bound:
+        assert claim(repo_cwd, TRAIN, "agent-1", "u1") is None
+    before = bindings_path(repo_cwd, TRAIN).read_bytes()
+    foreign = _dispatch(repo_cwd, unit, "other:repo-coder")["tool_input"]
+    reason = dispatch_binding._dispatch_reason(foreign, str(repo_cwd))
+    assert reason is not None and needle in reason and "(issue 29)" in reason, reason
+    assert bindings_path(repo_cwd, TRAIN).read_bytes() == before
+
+
 def test_gate_is_off_outside_a_train(repo_cwd: Path, unit: Path) -> None:
     (repo_cwd / ".claude" / "daedalus" / "train.active").unlink()
     _ok(repo_cwd, unit)
@@ -227,11 +277,10 @@ def test_a_relative_plan_path_resolves_from_the_repo(repo_cwd: Path, unit: Path)
 def test_the_hook_chain_enforces_the_plan_gate(
     repo_cwd: Path, unit: Path, run_script: Callable[[str, dict[str, Any]], Any]
 ) -> None:
-    # 0106: the operator's own dispatch without a plan record is asked, never refused.
-    asked = run_script("enforce_agent_jail.py", _dispatch(repo_cwd, unit))
-    assert asked.returncode == 0, asked.stderr
-    out = json.loads(asked.stdout)["hookSpecificOutput"]
-    assert out["permissionDecision"] == "ask" and NEXT in out["permissionDecisionReason"]
+    # Main never prompted (amends 0106): the operator's own dispatch without a plan is warned.
+    warned = run_script("enforce_agent_jail.py", _dispatch(repo_cwd, unit))
+    assert warned.returncode == 0, warned.stderr
+    assert NEXT in main_warning(warned.stdout)
     # 0106: a subagent claiming main stays refused, by the identity rule ahead of the plan gate.
     claimed = {**_dispatch(repo_cwd, unit), "agent_id": "sub1"}
     refused = run_script("enforce_agent_jail.py", claimed)
@@ -240,3 +289,49 @@ def test_the_hook_chain_enforces_the_plan_gate(
     seed_plan(repo_cwd, TRAIN)
     allowed = run_script("enforce_agent_jail.py", _dispatch(repo_cwd, unit))
     assert allowed.returncode == 0, allowed.stderr
+
+
+def _audit_tree(repo: Path, flagged: bool) -> Path:
+    # spec 4: create flags the audit unit; a state written before D2 carries only its name.
+    tree = create(repo, f"{TRAIN}-audit", f"daedalus/{TRAIN}")
+    if not flagged:
+
+        def strip(state: dict[str, object]) -> None:
+            state["units"] = [
+                {k: v for k, v in u.items() if k != "audit"} for u in train_state.units(state)
+            ]
+
+        train_state.change(repo, TRAIN, strip)
+    jail._registered_worktrees.cache_clear()
+    return tree
+
+
+@pytest.mark.parametrize("flagged", [True, False])
+def test_a_coder_dispatch_naming_the_audit_worktree_is_refused(
+    repo_cwd: Path, unit: Path, flagged: bool
+) -> None:
+    seed_plan(repo_cwd, TRAIN)
+    tree = _audit_tree(repo_cwd, flagged)
+    want = dispatch_binding.R_AUDIT_UNIT.format(path=tree, train=TRAIN)
+    tool_input = _dispatch(repo_cwd, tree)["tool_input"]
+    assert dispatch_binding._dispatch_reason(tool_input, str(repo_cwd)) == want
+    d = decide(_dispatch(repo_cwd, tree), Config())
+    assert not d.allow and want in str(d.reason)
+    assert f"{tree} is the audit worktree" in want and "Next: name the coder's own unit" in want
+    assert not bindings_path(repo_cwd, TRAIN).exists(), "a refused dispatch is never recorded"
+    _ok(repo_cwd, unit)
+
+
+def test_a_resume_moving_a_coder_onto_the_audit_worktree_is_refused(
+    repo_cwd: Path, unit: Path
+) -> None:
+    # spec 4: a rebind onto the audit worktree meets the same refusal as a cold dispatch.
+    seed_plan(repo_cwd, TRAIN)
+    tree = _audit_tree(repo_cwd, flagged=True)
+    _ok(repo_cwd, unit)
+    assert claim(repo_cwd, TRAIN, "c1", "u1") is None
+    before = bindings_path(repo_cwd, TRAIN).read_bytes()
+    message = {"to": "c1", "message": f"FIX.\nWorktree: {tree}"}
+    reason = dispatch_binding._resume_reason(message, str(repo_cwd))
+    assert reason == dispatch_binding.R_AUDIT_UNIT.format(path=tree, train=TRAIN)
+    assert bindings_path(repo_cwd, TRAIN).read_bytes() == before

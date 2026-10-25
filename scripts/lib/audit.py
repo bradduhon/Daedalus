@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import hmac
 import json
@@ -17,13 +16,12 @@ from contextlib import ExitStack, contextmanager, suppress
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
 
+from lib import atomic, git, locks
 from lib.credential_paths import REPLY_KEY_NAME
-from lib.locks import bounded_flock
 from lib.project_root import in_git_work_tree
 from lib.project_root import project_root as _project_root
-from lib.redact import redact
+from lib.redact import redact, redact_text
 from lib.train_state import STATE_DIR, TRAIN_ID, TRAIN_MARKER
 
 GENESIS = "0" * 64
@@ -37,8 +35,8 @@ _OPEN_USERINFO = re.compile(r"^[:/]*[^/\s\"']*@")
 _OPEN_PEM_TAIL = re.compile(r"\A.*?-----END [A-Z ]*PRIVATE KEY-----", re.S)
 _OPEN_TOKEN = re.compile(r"^[A-Za-z0-9._~+/=-]{16,}")
 LOCK_TIMEOUT_S = 5.0
-LOCK_POLL_S = 0.05
-_SESSION_ID = re.compile(r"[A-Za-z0-9_-]+")
+# W1.1: the one session id pattern; audit_report and the skipped-round record import it.
+SESSION_ID = re.compile(r"[A-Za-z0-9_-]+")
 
 
 class AuditCorruptError(RuntimeError):
@@ -85,8 +83,6 @@ class DataDirError(RuntimeError):
         self.kind = kind
 
 
-# 0010: env vars that would redirect git away from the cwd's own repository.
-_GIT_REDIRECT_ENV = ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 _SYMLINK_NEXT = (
     "Next: remove the symlink; the plugin data directory must be a real directory inside the repo."
 )
@@ -99,8 +95,8 @@ _MARKER_NEXT = "Next: restore the `*` marker in .claude/daedalus/.gitignore."
 _TRACKED: dict[str, list[str]] = {}
 
 
-def _git_env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if k not in _GIT_REDIRECT_ENV}
+# W1.1: the jail's git calls take the one scrubbed environment through this name.
+_git_env = git.env
 
 
 @lru_cache(maxsize=32)
@@ -109,11 +105,8 @@ def root_info(cwd: str) -> tuple[Path, str, str | None]:
     root = _project_root(Path(cwd))
     if not in_git_work_tree(root):
         return root, "cwd-fallback", "no git work tree at this folder"
-    cmd = ["git", "-C", str(root), "rev-parse", "--path-format=absolute", "--git-common-dir"]
     try:
-        out = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=2, env=_git_env(), check=False
-        )
+        out = git.run(["rev-parse", "--path-format=absolute", "--git-common-dir"], root, 2)
     except subprocess.TimeoutExpired:
         return root, "cwd-fallback", "git timed out after 2 s"
     except (OSError, subprocess.SubprocessError) as exc:
@@ -137,11 +130,8 @@ def project_data_dir(cwd: str) -> Path:
 def _tracked_files(root: Path) -> list[str]:
     key = str(root)
     if key not in _TRACKED:
-        cmd = ["git", "-C", key, "ls-files", "-z", "--", ".claude/daedalus"]
         try:
-            out = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=2, env=_git_env(), check=False
-            )
+            out = git.run(["ls-files", "-z", "--", ".claude/daedalus"], key, 2)
         except (OSError, subprocess.SubprocessError) as exc:
             raise DataDirError(
                 f"could not list tracked files under {root}/.claude/daedalus ({exc}). "
@@ -165,8 +155,10 @@ def check_project_data_dir(cwd: str) -> Path:
     data = root / ".claude" / "daedalus"
     # 0010: a symlinked component would redirect hook writes or config reads out of the repo.
     for part in (root / ".claude", data, data / "audit", data / ".gitignore", data / "config.json"):
-        if part.is_symlink():
-            raise DataDirError(f"{part} is a symlink. " + _SYMLINK_NEXT, "symlink")
+        try:
+            atomic.refuse_links(part)
+        except atomic.LinkRefused as exc:
+            raise DataDirError(f"{part} is a symlink. " + _SYMLINK_NEXT, "symlink") from exc
     # 0069, CM-7: no git call outside a work tree, so a plain folder's check runs none.
     if in_git_work_tree(root) and source == "git":
         tracked = _tracked_files(root)
@@ -193,16 +185,8 @@ def ensure_project_data_dir(cwd: str) -> Path:
     marker = data / ".gitignore"
     if not marker.exists():
         # 0010: written whole then linked in, so a concurrent hook never reads a partial marker.
-        tmp = data / f".gitignore.{os.getpid()}.tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write("*\n")
-        try:
-            os.link(tmp, marker)
-        except FileExistsError:
-            pass
-        finally:
-            tmp.unlink()
+        with suppress(FileExistsError):
+            atomic.create_once(marker, "*\n", 0o600)
         return check_project_data_dir(cwd)
     return data
 
@@ -257,7 +241,7 @@ def message_hmac(key: bytes, data: bytes) -> str:
     return hmac.new(key, data, hashlib.sha256).hexdigest()
 
 
-def _require_cwd(cwd: Any) -> str:
+def _require_cwd(cwd: object) -> str:
     if not isinstance(cwd, str) or not os.path.isabs(cwd):
         raise ValueError(
             f"hook input cwd must be an absolute path (got {cwd!r}). "
@@ -266,9 +250,9 @@ def _require_cwd(cwd: Any) -> str:
     return cwd
 
 
-def _session_file(session_id: str | None, cwd: Any) -> tuple[Path, Path]:
+def _session_file(session_id: object, cwd: object) -> tuple[Path, Path]:
     session = str(session_id or "unknown")
-    if not _SESSION_ID.fullmatch(session):
+    if not SESSION_ID.fullmatch(session):
         raise ValueError(
             f"session_id must match [A-Za-z0-9_-]+ (got {session!r}). Next: report the hook input."
         )
@@ -280,16 +264,16 @@ def log_path(session_id: str, cwd: str) -> Path:
     return _session_file(session_id, cwd)[0]
 
 
-def canonical(record: dict[str, Any]) -> str:
+def canonical(record: dict[str, object]) -> str:
     body = {key: value for key, value in record.items() if key != "hash"}
     return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
-def record_hash(record: dict[str, Any]) -> str:
+def record_hash(record: dict[str, object]) -> str:
     return hashlib.sha256(canonical(record).encode("utf-8")).hexdigest()
 
 
-def _result_fields(hook_input: dict[str, Any]) -> tuple[str | None, str | None]:
+def _result_fields(hook_input: dict[str, object]) -> tuple[str | None, str | None]:
     raw = hook_input.get("tool_response", hook_input.get("error"))
     if raw is None:
         return None, None
@@ -317,17 +301,26 @@ def _tail(text: str, limit: int) -> str:
     return window[-limit:]
 
 
-def _error_field(error: Any) -> Any:
+VERDICT_TAG = "[VERDICT:"
+
+
+def _verdict_lines(text: str) -> list[str]:
+    # 45, AU-9: picked from the whole raw reply; each line redacted alone, then cut.
+    picked = [line.strip() for line in text.splitlines() if line.strip().startswith(VERDICT_TAG)]
+    return [redact_text(line)[:MESSAGE_HEAD_CHARS] for line in picked]
+
+
+def _error_field(error: object) -> object:
     return _head(error) if isinstance(error, str) else redact(error)
 
 
 def build_record(
-    hook_input: dict[str, Any],
+    hook_input: dict[str, object],
     decision: str | None = None,
     reason: str | None = None,
     key: bytes | None = None,
     judge_ms: float | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     event = hook_input.get("hook_event_name")
     tool_name = hook_input.get("tool_name")
     tool_input = hook_input.get("tool_input")
@@ -349,7 +342,7 @@ def build_record(
         else None
     )
     # 8.2: error, source and stop_reason are event-specific; null when absent.
-    return {
+    record: dict[str, object] = {
         "ts": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
         "session_id": hook_input.get("session_id"),
         "event": event,
@@ -375,6 +368,11 @@ def build_record(
         # 6.1: the jail's own wall time; inside the hashed body, null off PreToolUse.
         "judge_ms": judge_ms if event == "PreToolUse" else None,
     }
+    if event == "SubagentStop":
+        # pin D3 -> D1: stop records only; a hand-back stop has no reply, so the list is empty.
+        lines = _verdict_lines(last) if isinstance(last, str) else []
+        record.update(verdict_lines=lines, verdict_line_count=len(lines))
+    return record
 
 
 class AuditLockError(RuntimeError):
@@ -384,18 +382,17 @@ class AuditLockError(RuntimeError):
 @contextmanager
 def audit_lock(lock: Path) -> Iterator[None]:
     # issue 10: the one bounded lock the writer and every reader of a session log take.
-    try:
-        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    except OSError as exc:
-        raise AuditLockError(
-            f"cannot open the audit lock {lock} ({exc}). "
-            "Next: remove it from your own shell if it is a symlink, then retry."
-        ) from exc
-    with os.fdopen(fd, "w") as handle:
+    with ExitStack() as stack:
         try:
-            bounded_flock(handle, LOCK_TIMEOUT_S, LOCK_POLL_S, label="audit lock")
-        except RuntimeError as exc:
+            stack.enter_context(locks.locked(lock, LOCK_TIMEOUT_S, label="audit lock"))
+        except locks.LockHeld as exc:
             raise AuditLockError(str(exc)) from exc
+        except OSError as exc:
+            raise AuditLockError(
+                f"cannot open the audit lock {lock} ({exc}). "
+                "Next: remove it from your own shell if it is a symlink or not a regular file, "
+                "then retry."
+            ) from exc
         yield
 
 
@@ -405,7 +402,7 @@ def read_log(path: Path) -> str:
         return path.read_bytes().decode("utf-8")
 
 
-def _tail_record(path: Path) -> dict[str, Any] | None:
+def _tail_record(path: Path) -> dict[str, object] | None:
     if not path.exists() or path.stat().st_size == 0:
         return None
     with open(path, "rb") as fh:
@@ -461,23 +458,62 @@ def _started_type(path: Path, agent_id: str) -> str | None:
     return None
 
 
+def is_fork_stop(hook_input: dict[str, object]) -> bool:
+    # 0114: a stop naming a transcript absent at hook time is a fork; never judged by message shape.
+    transcript = hook_input.get("agent_transcript_path")
+    if hook_input.get("hook_event_name") != "SubagentStop" or not isinstance(transcript, str):
+        return False
+    return not os.path.exists(transcript)
+
+
+def skipped_path(log: Path) -> Path:
+    return log.with_suffix(".skipped")
+
+
+def skipped_count(log: Path) -> int:
+    # 0114: the fork stop counter beside the log, outside the chain; a missing counter reads 0.
+    counter = skipped_path(log)
+    atomic.refuse_links(counter)
+    try:
+        text = counter.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return 0
+    if not re.fullmatch(r"[0-9]+\n?", text):
+        raise AuditCorruptError(
+            f"{counter} does not hold a count of skipped fork stops. "
+            "Next: move the file aside from your own shell; the next fork stop starts it at 1."
+        )
+    return int(text)
+
+
+def _count_skipped(log: Path, lock: Path) -> None:
+    # pin U1 -> D3: one more skipped stop, written whole at 0600 under the log's own lock.
+    with audit_lock(lock):
+        atomic.write_atomic(skipped_path(log), f"{skipped_count(log) + 1}\n", 0o600)
+
+
 def audit_append(
-    hook_input: dict[str, Any],
+    hook_input: dict[str, object],
     decision: str | None = None,
     reason: str | None = None,
     judge_ms: float | None = None,
-) -> dict[str, Any] | None:
+) -> dict[str, object] | None:
     # 0035: no train marker means no train runs here; lexists, as the jail judges a train.
-    if not os.path.lexists(project_root(_require_cwd(hook_input.get("cwd"))) / TRAIN_MARKER):
+    cwd = _require_cwd(hook_input.get("cwd"))
+    if not os.path.lexists(project_root(cwd) / TRAIN_MARKER):
         return None
-    path, lock = _session_file(hook_input.get("session_id"), hook_input.get("cwd"))
-    ensure_project_data_dir(hook_input["cwd"])
+    path, lock = _session_file(hook_input.get("session_id"), cwd)
+    ensure_project_data_dir(cwd)
     audit_dir = path.parent
     audit_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(audit_dir, 0o700)
-    root, source, _ = root_info(hook_input["cwd"])
+    # 0114: judged on the raw payload, before build_record collapses the agent type.
+    if is_fork_stop(hook_input):
+        _count_skipped(path, lock)
+        return None
+    root, source, _ = root_info(cwd)
     last = hook_input.get("last_assistant_message")
-    key = reply_key(hook_input["cwd"], create=True) if isinstance(last, str) and last else None
+    key = reply_key(cwd, create=True) if isinstance(last, str) and last else None
     if judge_ms is None and hook_input.get("hook_event_name") == "PreToolUse":
         judge_ms = _take_judge_ms()
     record = build_record(hook_input, decision, reason, key, judge_ms)
@@ -490,14 +526,21 @@ def audit_append(
                 record["agent_type"] = _started_type(path, agent_id)
         _chain_write(path, record)
     if record["seq"] == 1:
-        rotate_logs(hook_input["cwd"], path)
+        rotate_logs(cwd, path)
     return record
 
 
-def _chain_write(path: Path, record: dict[str, Any]) -> None:
+def _seq(record: dict[str, object]) -> int:
+    seq = record["seq"]
+    if not isinstance(seq, int | float | str):
+        raise TypeError(f"audit record seq is not a number: {seq!r}")
+    return int(seq)
+
+
+def _chain_write(path: Path, record: dict[str, object]) -> None:
     # Caller holds the audit lock; the one place a record is chained and appended.
     tail = _tail_record(path)
-    record["seq"] = 1 if tail is None else int(tail["seq"]) + 1
+    record["seq"] = 1 if tail is None else _seq(tail) + 1
     record["prev_hash"] = GENESIS if tail is None else tail["hash"]
     record["hash"] = record_hash(record)
     line = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -555,11 +598,9 @@ def _rotation_targets(cwd: str, current: Path, days: int) -> list[Path]:
 
 def _try_lock(log: Path, stack: ExitStack) -> bool:
     # issue 50: never wait on a log another session holds; a held log stays for a later rotation.
-    fd = os.open(log.with_suffix(".lock"), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    handle = stack.enter_context(os.fdopen(fd, "w"))
     try:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+        stack.enter_context(locks.locked(log.with_suffix(".lock"), 0.0, label="rotation lock"))
+    except locks.LockHeld:
         return False
     return True
 
@@ -597,7 +638,7 @@ def rotate_logs(cwd: str, current: Path) -> list[str]:
                 if not _try_lock(log, stack):
                     continue
                 tail = _tail_record(log)
-                seq, digest = (0, GENESIS) if tail is None else (int(tail["seq"]), tail["hash"])
+                seq, digest = (0, GENESIS) if tail is None else (_seq(tail), tail["hash"])
                 ends.append({"session_id": log.stem, "seq": seq, "hash": digest, "path": log})
             if not ends:
                 return []

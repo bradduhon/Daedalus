@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,8 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import daedalus_confine  # noqa: E402
+from lib import git  # noqa: E402
 from lib.audit import (  # noqa: E402
     DataDirError,
     cache_dir_matches,
@@ -26,12 +29,17 @@ from lib.config import Config, ConfigError, load_config  # noqa: E402
 from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
 from lib.manifest import ManifestError  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
-from lib.workspace import UNMARK_NEXT, train_marker  # noqa: E402
+from lib.workspace import _BARE_VERSION, UNMARK_NEXT, VERSION_FILE, train_marker  # noqa: E402
 
 REQ_DOC = "docs/project-requirements.md"
 GH_NEXT = "install gh (https://cli.github.com); the Push Train opens pull requests with it"
 GH_TIMEOUT_S = 10
+TYPECHECK_TIMEOUT_S = 120
 GH_STUCK_NEXT = "run gh auth status from your own shell, then gh auth login if it asks"
+GH_OFF = ", and features.github is off in service-manifest.json"
+CLAUDE_TIMEOUT_S = 10
+# 0122: code.claude.com/docs/en/hooks, Command hook fields: onFailure needs v2.1.295 or later.
+ON_FAILURE_MIN = (2, 1, 295)
 NO_LEDGER = "OK   ledger: none found (the Build Train asks before creating docs/decisions.md)"
 PROJECT_DATA_NEXT = "write a single line * to {marker}"
 IGNORE_NEXT = (
@@ -76,10 +84,12 @@ def _opt(ok: bool, name: str, missing: str, nxt: str) -> tuple[bool, str]:
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     cmd = ["git", "-C", str(repo), *args]
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, check=False)
+        return git.run(args, repo)
     except FileNotFoundError:
         # 0007: git off PATH reports a MISS instead of crashing the doctor.
         return subprocess.CompletedProcess(cmd, 127, "", "git not found")
+    except git.GitTimeout:
+        return subprocess.CompletedProcess(cmd, 124, "", "git timed out")
 
 
 def _cache_check() -> tuple[bool, str]:
@@ -144,13 +154,25 @@ def _plugin_root_check() -> tuple[bool, str]:
     return True, f"OK   plugin root: {Path(__file__).resolve().parent.parent}"
 
 
-def _gh_checks() -> Iterator[tuple[bool, str]]:
-    # spec 5: the Push Train needs gh on PATH and signed in; no auth probe without gh.
+def github_on(repo: Path) -> bool:
+    # issue 48: a manifest the reader refuses counts as on, as the gitleaks line treats one.
+    try:
+        loaded = load_manifest(repo)
+    except ManifestError:
+        return True
+    return loaded is not None and loaded.features.github is True
+
+
+def _gh_checks(repo: Path) -> Iterator[tuple[bool, str]]:
+    # spec 5, issue 48: the gh lines are a MISS with features.github on and OPT with it off.
+    on = github_on(repo)
+    report = _check if on else _opt
+    off = "" if on else GH_OFF
     on_path = shutil.which("gh") is not None
-    yield _check(on_path, "gh on PATH", "not found", GH_NEXT)
+    yield report(on_path, "gh on PATH", f"not found{off}", GH_NEXT)
     if not on_path:
-        yield _check(
-            False, "gh authenticated", "gh not on PATH", "install gh, then run gh auth login"
+        yield report(
+            False, "gh authenticated", f"gh not on PATH{off}", "install gh, then run gh auth login"
         )
         return
     try:
@@ -163,16 +185,57 @@ def _gh_checks() -> Iterator[tuple[bool, str]]:
             check=False,
         )
     except subprocess.TimeoutExpired:
-        detail = f"gh auth status did not finish within {GH_TIMEOUT_S} s"
-        yield _check(False, "gh authenticated", detail, GH_STUCK_NEXT)
+        detail = f"gh auth status did not finish within {GH_TIMEOUT_S} s{off}"
+        yield report(False, "gh authenticated", detail, GH_STUCK_NEXT)
         return
     except (OSError, subprocess.SubprocessError) as exc:
-        detail = f"gh auth status could not run ({exc})"
-        yield _check(False, "gh authenticated", detail, GH_STUCK_NEXT)
+        detail = f"gh auth status could not run ({exc}){off}"
+        yield report(False, "gh authenticated", detail, GH_STUCK_NEXT)
         return
     code = status.returncode
-    yield _check(
-        code == 0, "gh authenticated", f"gh auth status exited {code}", "run gh auth login"
+    yield report(
+        code == 0, "gh authenticated", f"gh auth status exited {code}{off}", "run gh auth login"
+    )
+
+
+def _hook_failure_check() -> Iterator[tuple[bool, str]]:
+    # U2 -> D9: no line when claude is missing, fails, times out or prints no n.n.n version.
+    claude = shutil.which("claude")
+    if claude is None:
+        return
+    try:
+        done = subprocess.run(
+            [claude, "--version"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=CLAUDE_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return
+    found = _BARE_VERSION.search(done.stdout)
+    if done.returncode != 0 or found is None:
+        return
+    if tuple(int(part) for part in found.groups()) < ON_FAILURE_MIN:
+        least = ".".join(str(part) for part in ON_FAILURE_MIN)
+        yield (
+            True,
+            (
+                f"OPT  hook failure mode: Claude Code {found.group(0)} ignores onFailure; "
+                f"{least} or later (the documented minimum) blocks a timed-out hook"
+            ),
+        )
+
+
+def _kernel_rules_check() -> tuple[bool, str]:
+    # 0048: the probe the confine check reads; OPT when this kernel cannot hold the rules.
+    support = daedalus_confine.kernel_support()
+    if not support.ok:
+        return True, "OPT  kernel rules: not available on this kernel"
+    return True, (
+        f"OK   kernel rules: Landlock ABI {support.abi} and the seccomp socket filter on "
+        f"{support.arch}; coder test commands run under the kernel wrapper"
     )
 
 
@@ -324,6 +387,21 @@ def _clean_tree_check(repo: Path) -> tuple[bool, str]:
     return _check(False, "clean working tree", f"uncommitted changes present: {shown}", nxt)
 
 
+def _version_tag_check(repo: Path) -> Iterator[tuple[bool, str]]:
+    # issue 47: the release step tags v<VERSION>; no line without a bare VERSION or with the tag.
+    root = project_root(str(repo))
+    try:
+        version = (root / VERSION_FILE).read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return
+    if not _BARE_VERSION.fullmatch(version):
+        return
+    # issue 47: rev-parse --verify --quiet exits 1 for a missing ref; any other failure skips.
+    found = _git(root, "rev-parse", "--verify", "--quiet", f"refs/tags/v{version}")
+    if found.returncode == 1:
+        yield True, f"OPT  version tag: v{version} has no tag"
+
+
 def _manifest_check(repo: Path) -> tuple[bool, str]:
     # 0054: the jail reads jail_narrowing from this file; a ManifestError is a MISS.
     try:
@@ -343,7 +421,55 @@ def _manifest_check(repo: Path) -> tuple[bool, str]:
     )
 
 
-def _repo_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
+def _typecheck_check(repo: Path, run: bool = False) -> Iterator[tuple[bool, str]]:
+    # 38, 0076: the declared typecheck_cmd runs only on --run-typecheck, argv only, bounded;
+    # no line when none is declared.
+    try:
+        manifest = load_manifest(repo)
+    except ManifestError:
+        return
+    command = manifest.typecheck_cmd if manifest is not None else None
+    if command is None:
+        return
+    name = f"typecheck ({command})"
+    # 0076: the doctor runs no repository-declared command unless --run-typecheck is passed
+    # (audit round 4).
+    if not run:
+        yield (
+            True,
+            f"OPT  {name}: not run. Next: run {command} by hand from your own shell"
+            " at the repo root",
+        )
+        return
+    nxt = f"run {command} from the repo root and fix what it reports"
+    try:
+        argv = shlex.split(command)
+        done = subprocess.run(
+            argv,
+            cwd=repo,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=TYPECHECK_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        yield _check(False, name, f"did not finish within {TYPECHECK_TIMEOUT_S} s", nxt)
+        return
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        yield _check(False, name, f"could not run ({exc})", nxt)
+        return
+    lines = [line for line in done.stdout.splitlines() if line.strip()]
+    result = lines[-1] if lines else f"exited {done.returncode}"
+    if done.returncode == 0:
+        yield True, f"OK   {name}: {result}"
+    else:
+        yield _check(False, name, f"exited {done.returncode}: {result}", nxt)
+
+
+def _repo_checks(
+    repo: Path, is_repo: bool, run_typecheck: bool = False
+) -> Iterator[tuple[bool, str]]:
     yield _check(
         is_repo,
         "git repository",
@@ -352,7 +478,9 @@ def _repo_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
     )
     if is_repo:
         yield _clean_tree_check(repo)
+        yield from _version_tag_check(repo)
     yield _manifest_check(repo)
+    yield from _typecheck_check(repo, run_typecheck)
     yield _opt(
         (repo / "contracts").is_dir(),
         "contracts/",
@@ -396,7 +524,7 @@ def print_secrets_scan(repo: Path) -> int:
     return 0
 
 
-def checks(repo: Path) -> Iterator[tuple[bool, str]]:
+def checks(repo: Path, run_typecheck: bool = False) -> Iterator[tuple[bool, str]]:
     yield _check(
         sys.version_info >= (3, 12),
         "python >= 3.12",
@@ -410,8 +538,10 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     yield _plugin_root_check()
     yield from _framework_lines()
     yield _gitleaks_check(repo)
-    yield from _gh_checks()
-    yield from _repo_checks(repo, is_repo)
+    yield from _gh_checks(repo)
+    yield from _hook_failure_check()
+    yield _kernel_rules_check()
+    yield from _repo_checks(repo, is_repo, run_typecheck)
 
 
 def print_cache_dir() -> int:
@@ -439,13 +569,19 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="print whether the service manifest turns the Push Train's secret scan on, and exit",
     )
+    parser.add_argument(
+        "--run-typecheck",
+        action="store_true",
+        help="run the stack.typecheck_cmd the repository declares in service-manifest.json;"
+        " this executes a command the repository chose",
+    )
     args = parser.parse_args(argv)
     if args.print_cache_dir:
         return print_cache_dir()
     if args.print_secrets_scan:
         return print_secrets_scan(Path(args.repo).resolve())
     all_ok = True
-    for ok, line in checks(Path(args.repo).resolve()):
+    for ok, line in checks(Path(args.repo).resolve(), args.run_typecheck):
         print(line)
         all_ok = all_ok and ok
     print(

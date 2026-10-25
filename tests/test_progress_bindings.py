@@ -69,6 +69,39 @@ def test_the_audit_unit_is_never_listed(repo: Path, plugin: Path) -> None:
     assert any(u["name"] == f"{train}-audit" for u in train_state.units(_state(repo)))
 
 
+def test_a_finished_unit_reads_done_and_frees_its_stacked_unit(repo: Path, plugin: Path) -> None:
+    # spec 4: finish marks each merged unit, so a hand-driven unit reads done, not running.
+    train = _hand_driven(repo, plugin)
+    assert unit_binding.record_dispatch(repo, train, f"{train}-a1") is None
+    assert unit_binding.claim(repo, train, "coder-1", f"{train}-a1") is None
+    assert unit_binding.mark_finished(repo, train, f"{train}-a1") is None
+    assert unit_binding.mark_finished(repo, train, f"{train}-a3") is None
+    outcome = train_runner.progress(repo)
+    assert outcome.code == 0, outcome.lines
+    assert _unit_lines(outcome) == ["A1 first piece: done", "A2 second piece: queued", "a3: done"]
+
+
+def test_a_finished_mark_wins_over_a_runner_dispatch_record(repo: Path, plugin: Path) -> None:
+    # spec 4: _done reads finished before the dispatch status and before retired_to.
+    train = _hand_driven(repo, plugin)
+    name = f"{train}-a1"
+    dispatch = {"unit": name, "agent": "repo-coder", "status": train_runner.DISPATCHED}
+    train_state.update(repo, train, dispatches=[dispatch])
+    assert _unit_lines(train_runner.progress(repo))[0] == "A1 first piece: running (repo-coder)"
+    assert unit_binding.mark_finished(repo, train, name) is None
+    assert _unit_lines(train_runner.progress(repo))[0] == "A1 first piece: done"
+
+
+def test_a_flagged_audit_unit_is_never_listed(repo: Path, plugin: Path) -> None:
+    # issue 71: the flag, not only the <train-id>-audit name, keeps the audit unit off the note.
+    train = _hand_driven(repo, plugin)
+    tree = repo / ".claude" / "worktrees" / f"{train}-probe"
+    train_state.add_unit(repo, train, f"{train}-probe", "b", tree, audit=True)
+    outcome = train_runner.progress(repo)
+    assert outcome.code == 0, outcome.lines
+    assert not any("probe" in line for line in outcome.lines)
+
+
 def test_an_unreadable_bindings_file_stops_without_a_path(repo: Path, plugin: Path) -> None:
     train = _hand_driven(repo, plugin)
     unit_binding.bindings_path(repo, train).write_text("{not json", encoding="utf-8")

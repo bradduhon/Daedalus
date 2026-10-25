@@ -19,7 +19,7 @@ from tests.hook_chain import (
     run_script,
     unknown_flag_denies,
 )
-from tests.test_jail import _b, _t, fake_claude_fixture  # noqa: F401 - registers fake_claude
+from tests.payloads import _b, _t
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "network_tools"

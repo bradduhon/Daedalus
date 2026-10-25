@@ -14,17 +14,11 @@ from tests.adversarial.corpus import (
     READERS,
     REPLY_KEY,
     assert_denied,
+    assert_store_read_denied,
 )
+from tests.jail_cases import _unit_repo
+from tests.payloads import _b, _cred, _cwd, _w
 from tests.test_checks_credential_paths import _bash_in, _key_repo
-from tests.test_jail import (  # noqa: F401 - registers cred_home and fake_claude
-    _b,
-    _cred,
-    _cwd,
-    _unit_repo,
-    _w,
-    cred_home,
-    fake_claude_fixture,
-)
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 
@@ -68,8 +62,7 @@ STORE_LINK_TOOLS = (
 def test_bash_through_a_link_into_a_store_is_denied(
     store_links: dict[str, Path], agent: str, template: str
 ) -> None:
-    command = template.format(**store_links)
-    assert_denied(_cred(agent, "Bash", command=command), CREDENTIAL)
+    assert_store_read_denied(agent, template, **store_links)
 
 
 @pytest.mark.parametrize("agent", READERS)

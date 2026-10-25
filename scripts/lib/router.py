@@ -60,7 +60,7 @@ def _run(hook: agent_files.Hook, hook_input: dict[str, object], plugin_root: Pat
 
 def route(hook_input: dict[str, object], plugin_root: Path) -> tuple[bool, str | None, str]:
     # 0044: (allow, reason, hook name); the caller passes the plugin root, never the environment.
-    name = jail.normalize_agent(str(hook_input.get("agent_type") or "main"))
+    name = hook_io.agent(hook_input)
     if name == "main":
         return False, R_MAIN, ROUTER
     path = plugin_root / "agents" / f"{name}.md"

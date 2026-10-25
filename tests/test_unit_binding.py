@@ -3,25 +3,21 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
 from lib import jail, train_state
 from lib.config import Config
-from lib.unit_binding import bindings_path, claim, rebind, record_dispatch
+from lib.unit_binding import bindings_path, claim, mark_finished, rebind, record_dispatch
 from lib.workspace import create, mark_train
 
+from tests.conftest import git as _git
 from tests.hook_chain import judge as decide
 from tests.test_dispatch_binding import seed_plan
 
 TRAIN = "20261016-120000"
 CODER = "daedalus:repo-coder"
-
-
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
 @pytest.fixture
@@ -128,6 +124,38 @@ def test_unit_binding_rebinds_a_warm_coder_to_the_next_worktree(
     assert data == {
         "units": {"u1": {"agent_id": None, "retired_to": "u2"}, "u2": {"agent_id": "a-1"}}
     }
+
+
+def test_mark_finished_keeps_the_binding_and_closes_the_unit(
+    repo_cwd: Path, units: dict[str, Path]
+) -> None:
+    # spec 4: finished: true joins the unit's entry; its own coder and every other is refused.
+    _ok(_dispatch(repo_cwd, f"Worktree: {units['u1']}"))
+    _ok(_write(repo_cwd, "a-1", units["u1"] / "src" / "a.py"))
+    assert mark_finished(repo_cwd, TRAIN, "u1") is None
+    assert mark_finished(repo_cwd, TRAIN, "u1") is None
+    data = json.loads(bindings_path(repo_cwd, TRAIN).read_text(encoding="utf-8"))
+    assert data == {"units": {"u1": {"agent_id": "a-1", "finished": True}}}
+    _refused(_write(repo_cwd, "a-1", units["u1"] / "src" / "a.py"), "merged and finished")
+    _refused(_write(repo_cwd, "a-9", units["u1"] / "src" / "a.py"), "merged and finished")
+    _ok(_dispatch(repo_cwd, f"Worktree: {units['u2']}"))
+
+
+def test_mark_finished_records_a_unit_no_coder_was_bound_to(
+    repo_cwd: Path, units: dict[str, Path]
+) -> None:
+    # spec 4: a runner-dispatched unit has no bindings entry until finish marks it.
+    assert mark_finished(repo_cwd, TRAIN, "u2") is None
+    data = json.loads(bindings_path(repo_cwd, TRAIN).read_text(encoding="utf-8"))
+    assert data == {"units": {"u2": {"agent_id": None, "finished": True}}}
+
+
+def test_mark_finished_names_an_unreadable_bindings_file(
+    repo_cwd: Path, units: dict[str, Path]
+) -> None:
+    bindings_path(repo_cwd, TRAIN).write_text("{not json", encoding="utf-8")
+    refused = mark_finished(repo_cwd, TRAIN, "u1")
+    assert refused is not None and "Next: stop the train" in refused
 
 
 def test_bound_agent_writes_its_unit(repo_cwd: Path, units: dict[str, Path]) -> None:

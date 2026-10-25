@@ -7,9 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from tests.adversarial.corpus import CREDENTIAL, OUTSIDE, READERS, assert_denied
+from tests.adversarial.corpus import (
+    CREDENTIAL,
+    OUTSIDE,
+    READERS,
+    assert_denied,
+    assert_store_read_denied,
+)
 from tests.conftest import WT
-from tests.test_jail import _b, _cred, cred_home  # noqa: F401 - registers cred_home
+from tests.payloads import _b, _cred
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 STORE_READS = (
@@ -62,8 +68,7 @@ def test_expanded_store_read_is_denied(
     agent: str,
     template: str,
 ) -> None:
-    command = template.format(home=cred_home, name=cred_home.name)
-    assert_denied(_cred(agent, "Bash", command=command), CREDENTIAL)
+    assert_store_read_denied(agent, template, home=cred_home, name=cred_home.name)
 
 
 @pytest.mark.parametrize("agent", READERS)

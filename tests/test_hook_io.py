@@ -6,12 +6,17 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
-from lib import hook_io
+from lib import hook_io, jail
 from lib.config import ConfigError
 from lib.hook_io import EVERY_TOOL, Flag
+
+from tests.conftest import SCRIPTS_DIR
+from tests.hook_chain import load
 
 FLAGS = {
     "--on": Flag(),
@@ -61,18 +66,34 @@ def test_read_input_reads_an_object_or_nothing(
     assert hook_io.read_input() == want
 
 
-def test_emit_prints_one_decision_line(capsys: pytest.CaptureFixture[str]) -> None:
+def test_emit_prints_nothing_on_allow(capsys: pytest.CaptureFixture[str]) -> None:
+    # issue 39: a standalone check can deny but never grant a permission.
     assert hook_io.emit(None) == 0
+    assert capsys.readouterr() == ("", "")
+
+
+def test_run_prints_nothing_when_the_judge_allows(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("sys.argv", ["probe.py"])
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"tool_name": "Write"}'))
+    assert hook_io.run(_never, BASH, PARSER) == 0
+    assert capsys.readouterr() == ("", "")
+
+
+def test_a_standalone_check_prints_nothing_when_it_allows() -> None:
+    # issue 39: the script run Claude Code would see; an allow leaves stdout empty.
+    stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git status"}})
+    script = str(SCRIPTS_DIR / "checks" / "git_grammar.py")
+    argv = [sys.executable, script, "--allow", "coder"]
+    done = subprocess.run(argv, input=stdin, capture_output=True, text=True, check=False)
+    assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
+
+
+def test_emit_prints_one_deny_line(capsys: pytest.CaptureFixture[str]) -> None:
     assert hook_io.emit("no. Next: stop.") == 0
     lines = capsys.readouterr().out.splitlines()
     assert [json.loads(line) for line in lines] == [
-        {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "permissionDecisionReason": "",
-            }
-        },
         {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -198,6 +219,54 @@ def test_run_passes_argv_and_stdin_through(
     assert hook_io.run(_seen, BASH, PARSER) == 0
     reason = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecisionReason"]
     assert reason.startswith("judged Bash {'on': True")
+
+
+def test_entrypoint_binds_decide_and_main(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 0044: decide is evaluate in-process, main is run on stdin and argv.
+    decide, main = hook_io.entrypoint(_seen, BASH, PARSER)
+    assert decide({"tool_name": "Bash"}, ["--on"]) == hook_io.evaluate(
+        {"tool_name": "Bash"}, ["--on"], _seen, BASH, PARSER
+    )
+    assert decide({"tool_name": "Write"}, []).allow
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"tool_name": "Bash"}'))
+    monkeypatch.setattr("sys.argv", ["probe.py"])
+    assert main() == 0
+    reason = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason.startswith("judged Bash")
+
+
+def test_every_check_module_ends_in_the_one_trailer() -> None:
+    # issue 76: each scripts/checks module binds decide and main from hook_io.entrypoint.
+    checks = sorted((SCRIPTS_DIR / "checks").glob("*.py"))
+    assert len(checks) == 14  # 0048: confine joined the thirteen.
+    for path in checks:
+        module = load(path.stem)
+        assert module.decide.__qualname__ == "entrypoint.<locals>.decide", path.stem
+        assert module.main.__qualname__ == "entrypoint.<locals>.main", path.stem
+        assert "def decide(" not in path.read_text(encoding="utf-8"), path.stem
+
+
+@pytest.mark.parametrize(
+    ("hook_input", "want"),
+    [
+        ({}, "main"),
+        ({"agent_type": ""}, "main"),
+        ({"agent_type": None}, "main"),
+        ({"agent_type": "repo-coder"}, "repo-coder"),
+        ({"agent_type": "daedalus:repo-coder"}, "repo-coder"),
+        ({"agent_type": "other:repo-coder"}, "other:repo-coder"),
+        ({"agent_type": "daedalus:"}, "daedalus:"),
+        ({"agent_type": "Explore"}, "Explore"),
+    ],
+)
+def test_agent_matches_the_jail_normalizer(hook_input: dict[str, object], want: str) -> None:
+    # pin U2 -> U4: agent() returns what normalize_agent(str(agent_type or "main")) returns.
+    assert hook_io.agent(hook_input) == want
+    assert hook_io.agent(hook_input) == jail.normalize_agent(
+        str(hook_input.get("agent_type") or "main")
+    )
 
 
 def test_hook_config_reads_the_project_config(tmp_path: Path) -> None:

@@ -10,15 +10,21 @@ import subprocess
 import sys
 from pathlib import Path
 
+import daedalus_confine
 import pytest
 
-from tests.conftest import SCRIPTS_DIR, fake_bin
+from tests.conftest import fake_bin, git, run_cli
 
 SCAFFOLDS = ("service-manifest.json", "contracts/", ".gitleaks.toml")
+PROBE = daedalus_confine.kernel_support
 
 
 def _run(
-    data_dir: Path | None, repo: Path, path_env: str, home: Path | None = None
+    data_dir: Path | None,
+    repo: Path,
+    path_env: str,
+    home: Path | None = None,
+    extra: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     # PATH is always the test's own; the real PATH never leaks in.
     env = dict(os.environ)
@@ -28,37 +34,22 @@ def _run(
     env["PATH"] = path_env
     if home is not None:
         env["HOME"] = str(home)
-    return subprocess.run(
-        [sys.executable, str(SCRIPTS_DIR / "daedalus_doctor.py"), "--repo", str(repo)],
-        capture_output=True,
-        text=True,
-        env=env,
-        check=False,
-    )
+    return run_cli("daedalus_doctor.py", "--repo", str(repo), *extra, env=env)
 
 
 def _git_repo(path: Path) -> None:
+    # W1.4: a repo with no commit at an arbitrary path; the git_repo fixture commits once.
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
+    git(path, "init", "-q", "-b", "main")
 
 
 def _commit_all(path: Path) -> None:
-    subprocess.run(["git", "add", "-A"], cwd=path, check=True)
-    subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
-        + ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "init"],
-        cwd=path,
-        check=True,
-    )
+    git(path, "add", "-A")
+    git(path, "commit", "-q", "-m", "init")
 
 
 def _commit_all_empty(path: Path) -> None:
-    subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
-        + ["-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"],
-        cwd=path,
-        check=True,
-    )
+    git(path, "commit", "-q", "--allow-empty", "-m", "init")
 
 
 def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: Path) -> None:
@@ -94,6 +85,9 @@ def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: P
     gitleaks = next(line for line in lines if "gitleaks on PATH" in line)
     assert gitleaks.startswith("OPT  gitleaks on PATH: not found, and the secret scan is off.")
     assert "set secrets_scan to true in the features object" in gitleaks
+    # issue 48: no manifest means features.github is off, so both gh lines are optional.
+    gh = [line for line in lines if line[5:].startswith("gh ")]
+    assert len(gh) == 2 and all(line.startswith("OPT  gh ") for line in gh)
 
 
 def _settings(path: Path, body: object) -> None:
@@ -266,7 +260,7 @@ def test_worktree_resolves_to_main_repo_data_dir(tmp_path: Path) -> None:
     _git_repo(repo)
     _commit_all_empty(repo)
     worktree = tmp_path / "wt"
-    subprocess.run(["git", "worktree", "add", "-q", str(worktree)], cwd=repo, check=True)
+    git(repo, "worktree", "add", "-q", str(worktree))
     result = _run(None, worktree, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     data = repo.resolve() / ".claude" / "daedalus"
     assert f"OK   project data dir: {data} (not created yet; a train's start creates it)" in (
@@ -402,13 +396,7 @@ def _print_cache(data_dir: Path | None, home: Path) -> subprocess.CompletedProce
     if data_dir is not None:
         env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
     env["HOME"] = str(home)
-    return subprocess.run(
-        [sys.executable, str(SCRIPTS_DIR / "daedalus_doctor.py"), "--print-cache-dir"],
-        capture_output=True,
-        text=True,
-        env=env,
-        check=False,
-    )
+    return run_cli("daedalus_doctor.py", "--print-cache-dir", env=env)
 
 
 def test_print_cache_dir_prefers_env(plugin_data: Path, tmp_path: Path) -> None:
@@ -442,9 +430,16 @@ def test_print_cache_dir_none_exits_one_with_next(tmp_path: Path) -> None:
     )
 
 
+def _github(repo: Path, value: object) -> None:
+    # issue 48: a manifest holding only features.github, or no features key for the absent case.
+    body = {} if value == "absent" else {"features": {"github": value}}
+    (repo / "service-manifest.json").write_text(json.dumps(body), encoding="utf-8")
+
+
 def test_gh_absent_is_two_misses_with_next(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
+    _github(tmp_path, True)
     lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
     assert (
         "MISS gh on PATH: not found. Next: install gh (https://cli.github.com); "
@@ -476,7 +471,8 @@ def test_minor_7_gh_auth_timeout_names_the_timeout(
 
     monkeypatch.setenv("PATH", _bins(tmp_path, "gh"))
     monkeypatch.setattr(daedalus_doctor.subprocess, "run", hang)
-    lines = [line for _, line in daedalus_doctor._gh_checks()]
+    _github(tmp_path, True)
+    lines = [line for _, line in daedalus_doctor._gh_checks(tmp_path)]
     assert lines[1] == (
         "MISS gh authenticated: gh auth status did not finish within 10 s. "
         "Next: run gh auth status from your own shell, then gh auth login if it asks"
@@ -494,7 +490,8 @@ def test_minor_7_gh_auth_oserror_names_the_error(
 
     monkeypatch.setenv("PATH", _bins(tmp_path, "gh"))
     monkeypatch.setattr(daedalus_doctor.subprocess, "run", broken)
-    line = [line for _, line in daedalus_doctor._gh_checks()][1]
+    _github(tmp_path, True)
+    line = [line for _, line in daedalus_doctor._gh_checks(tmp_path)][1]
     assert line.startswith("MISS gh authenticated: gh auth status could not run (")
     assert "Permission denied" in line and "exited" not in line and "Next:" in line
 
@@ -503,9 +500,60 @@ def test_gh_signed_out_is_a_miss(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     bins = _bins(tmp_path, "gh", exit_codes={"gh": 1})
+    _github(tmp_path, True)
     lines = _run(None, tmp_path, path_env=bins, home=home).stdout.splitlines()
     assert "OK   gh on PATH" in lines
     assert ("MISS gh authenticated: gh auth status exited 1. Next: run gh auth login") in lines
+
+
+GH_OFF = ", and features.github is off in service-manifest.json"
+
+
+@pytest.mark.parametrize("value", ["absent", False, None])
+def test_gh_lines_are_opt_when_github_is_off(tmp_path: Path, value: object) -> None:
+    # issue 48: off, a missing or signed-out gh never fails the doctor, as gitleaks with no scan.
+    import daedalus_doctor
+
+    _github(tmp_path, value)
+    assert daedalus_doctor.github_on(tmp_path) is False
+    home = tmp_path / "home"
+    home.mkdir()
+    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
+    assert (
+        f"OPT  gh on PATH: not found{GH_OFF}. Next: install gh (https://cli.github.com); "
+        "the Push Train opens pull requests with it"
+    ) in lines
+    assert (
+        f"OPT  gh authenticated: gh not on PATH{GH_OFF}. Next: install gh, then run gh auth login"
+    ) in lines
+    bins = _bins(tmp_path, "gh", exit_codes={"gh": 1})
+    lines = _run(None, tmp_path, path_env=bins, home=home).stdout.splitlines()
+    assert "OK   gh on PATH" in lines
+    assert f"OPT  gh authenticated: gh auth status exited 1{GH_OFF}. Next: run gh auth login" in (
+        lines
+    )
+
+
+def test_gh_lines_are_ok_when_github_is_on_and_gh_is_signed_in(tmp_path: Path) -> None:
+    import daedalus_doctor
+
+    _github(tmp_path, True)
+    assert daedalus_doctor.github_on(tmp_path) is True
+    home = tmp_path / "home"
+    home.mkdir()
+    lines = _run(None, tmp_path, path_env=_bins(tmp_path, "gh"), home=home).stdout.splitlines()
+    assert "OK   gh on PATH" in lines and "OK   gh authenticated" in lines
+
+
+def test_refused_manifest_counts_github_on(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # issue 48: a typo in the manifest never hides a missing gh, as the gitleaks line treats one.
+    import daedalus_doctor
+
+    _github(tmp_path, "yes")
+    monkeypatch.setenv("PATH", _bins(tmp_path))
+    assert daedalus_doctor.github_on(tmp_path) is True
+    lines = [line for _, line in daedalus_doctor._gh_checks(tmp_path)]
+    assert len(lines) == 2 and all(line.startswith("MISS gh ") for line in lines)
 
 
 def test_absent_config_runs_the_ledger_probe_none_found(tmp_path: Path) -> None:
@@ -862,3 +910,229 @@ def test_doctor_opt_lines_name_the_setup_skill(tmp_path: Path) -> None:
         f"OPT  service-manifest.json: not found at repo root. {SETUP_NEXT}service-manifest.json"
     ) in lines
     assert result.returncode == 0, result.stdout
+
+
+def _typecheck_lines(repo: Path, command: str | None, run: bool = True) -> list[str]:
+    import daedalus_doctor
+
+    stack = {"typecheck_cmd": command}
+    (repo / "service-manifest.json").write_text(json.dumps({"stack": stack}), encoding="utf-8")
+    return [line for _, line in daedalus_doctor._typecheck_check(repo, run)]
+
+
+def test_default_run_prints_the_typecheck_command_and_never_runs_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # 0076: audit round 4; a repository-declared command runs only behind --run-typecheck.
+    import daedalus_doctor
+
+    def refuse(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise AssertionError(f"the default doctor run executed {cmd}")
+
+    monkeypatch.setattr(daedalus_doctor.subprocess, "run", refuse)
+    manifest = {"stack": {"typecheck_cmd": "mypy scripts"}}
+    (tmp_path / "service-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert list(daedalus_doctor._typecheck_check(tmp_path)) == [
+        (
+            True,
+            "OPT  typecheck (mypy scripts): not run. Next: run mypy scripts by hand from your"
+            " own shell at the repo root",
+        )
+    ]
+
+
+def test_default_typecheck_line_never_names_the_run_flag(tmp_path: Path) -> None:
+    # 0076: the doctor skill performs picked Next actions, so the line must not offer the flag.
+    (line,) = _typecheck_lines(tmp_path, "mypy scripts", run=False)
+    assert "--run-typecheck" not in line
+
+
+def test_default_cli_run_leaves_the_declared_command_unrun(tmp_path: Path) -> None:
+    # 0076: the doctor skill's own form, with no flag, writes no marker the command would write.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    marker = tmp_path / "ran"
+    command = f"{sys.executable} -c \"open({str(marker)!r}, 'w').write('ran')\""
+    manifest = {"stack": {"typecheck_cmd": command}}
+    (repo / "service-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    bins = _bins_with_git(tmp_path)
+    result = _run(None, repo, path_env=bins, home=tmp_path / "home")
+    assert not marker.exists()
+    assert f"OPT  typecheck ({command}): not run." in result.stdout
+    flagged = _run(None, repo, path_env=bins, home=tmp_path / "home", extra=("--run-typecheck",))
+    assert marker.exists(), flagged.stdout
+
+
+def test_doctor_skill_never_passes_the_run_typecheck_flag() -> None:
+    from tests.conftest import REPO_ROOT
+
+    skill = (REPO_ROOT / "skills" / "doctor" / "SKILL.md").read_text(encoding="utf-8")
+    assert "--run-typecheck" not in skill
+
+
+def test_typecheck_result_line_is_printed_on_success(tmp_path: Path) -> None:
+    command = f"{sys.executable} -c \"print('Success: no issues found')\""
+    assert _typecheck_lines(tmp_path, command) == [
+        f"OK   typecheck ({command}): Success: no issues found"
+    ]
+
+
+def test_typecheck_failure_is_a_miss_with_next(tmp_path: Path) -> None:
+    command = f"{sys.executable} -c \"print('Found 2 errors'); raise SystemExit(1)\""
+    (line,) = _typecheck_lines(tmp_path, command)
+    assert line.startswith(f"MISS typecheck ({command}): exited 1: Found 2 errors. Next: run ")
+
+
+def test_typecheck_timeout_is_a_miss(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import daedalus_doctor
+
+    def hang(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert kwargs["timeout"] == daedalus_doctor.TYPECHECK_TIMEOUT_S
+        raise subprocess.TimeoutExpired(cmd, 1)
+
+    monkeypatch.setattr(daedalus_doctor.subprocess, "run", hang)
+    (line,) = _typecheck_lines(tmp_path, "mypy scripts")
+    assert "did not finish within 120 s" in line and line.startswith("MISS typecheck")
+
+
+def test_typecheck_missing_tool_is_a_miss(tmp_path: Path) -> None:
+    (line,) = _typecheck_lines(tmp_path, "no-such-typechecker-xyz scripts")
+    assert line.startswith("MISS typecheck (no-such-typechecker-xyz scripts): could not run (")
+
+
+def test_no_typecheck_line_when_undeclared(tmp_path: Path) -> None:
+    import daedalus_doctor
+
+    assert _typecheck_lines(tmp_path, None) == []
+    (tmp_path / "service-manifest.json").unlink()
+    assert list(daedalus_doctor._typecheck_check(tmp_path)) == []
+
+
+def _tag_lines(repo: Path, tmp_path: Path) -> list[str]:
+    lines = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home").stdout
+    return [line for line in lines.splitlines() if "version tag" in line]
+
+
+def test_untagged_version_is_an_opt_line(git_repo: Path, tmp_path: Path) -> None:
+    # issue 47: VERSION names a version no tag carries; the line is optional and has no Next.
+    (git_repo / "VERSION").write_text("3.3.0\n", encoding="utf-8")
+    _commit_all(git_repo)
+    assert _tag_lines(git_repo, tmp_path) == ["OPT  version tag: v3.3.0 has no tag"]
+    git(git_repo, "tag", "v3.3.0")
+    assert _tag_lines(git_repo, tmp_path) == []
+
+
+def test_annotated_tag_counts_as_a_tag(git_repo: Path, tmp_path: Path) -> None:
+    (git_repo / "VERSION").write_text("1.2.3", encoding="utf-8")
+    _commit_all(git_repo)
+    git(git_repo, "tag", "-a", "v1.2.3", "-m", "release")
+    assert _tag_lines(git_repo, tmp_path) == []
+
+
+@pytest.mark.parametrize("body", [None, "v3.3.0", "3.3", "not a version", "\xff"])
+def test_no_version_tag_line_without_a_bare_version(
+    git_repo: Path, tmp_path: Path, body: str | None
+) -> None:
+    if body is not None:
+        (git_repo / "VERSION").write_bytes(body.encode("latin-1"))
+    assert _tag_lines(git_repo, tmp_path) == []
+
+
+def _hook_lines(fake_claude: Path, tmp_path: Path, script: str) -> list[str]:
+    # U2 -> D9: the fake claude prints what script says; PATH holds only the test's bin folder.
+    fake_claude.write_text(f"#!/bin/sh\n{script}\n", encoding="utf-8")
+    bins = _bins(tmp_path)
+    assert (Path(bins) / "claude").exists()
+    lines = _run(None, tmp_path, path_env=bins, home=tmp_path / "home").stdout.splitlines()
+    return [line for line in lines if "hook failure mode" in line]
+
+
+def test_old_claude_code_gets_the_hook_failure_line(fake_claude: Path, tmp_path: Path) -> None:
+    assert _hook_lines(fake_claude, tmp_path, "echo '2.1.280 (Claude Code)'") == [
+        "OPT  hook failure mode: Claude Code 2.1.280 ignores onFailure; "
+        "2.1.295 or later (the documented minimum) blocks a timed-out hook"
+    ]
+
+
+@pytest.mark.parametrize("printed", ["2.1.295 (Claude Code)", "2.2.0", "3.0.1 (Claude Code)"])
+def test_current_claude_code_gets_no_hook_failure_line(
+    fake_claude: Path, tmp_path: Path, printed: str
+) -> None:
+    assert _hook_lines(fake_claude, tmp_path, f"echo '{printed}'") == []
+
+
+@pytest.mark.parametrize(
+    "script", ["echo 'Claude Code'", "echo ''", "echo '2.1.280'; exit 3", "exit 1"]
+)
+def test_unreadable_claude_version_skips_the_line(
+    fake_claude: Path, tmp_path: Path, script: str
+) -> None:
+    assert _hook_lines(fake_claude, tmp_path, script) == []
+
+
+def test_no_claude_on_path_skips_the_line(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
+    assert not any("hook failure mode" in line for line in lines)
+
+
+def test_claude_version_timeout_skips_the_line(
+    monkeypatch: pytest.MonkeyPatch, fake_claude: Path
+) -> None:
+    import daedalus_doctor
+
+    seen: dict[str, object] = {}
+
+    def hang(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen.update(kwargs, argv=cmd)
+        raise subprocess.TimeoutExpired(cmd, daedalus_doctor.CLAUDE_TIMEOUT_S)
+
+    monkeypatch.setattr(daedalus_doctor.subprocess, "run", hang)
+    assert list(daedalus_doctor._hook_failure_check()) == []
+    argv = seen["argv"]
+    assert isinstance(argv, list) and argv[1:] == ["--version"]
+    assert Path(argv[0]).name == "claude" and seen["timeout"] == daedalus_doctor.CLAUDE_TIMEOUT_S
+    assert seen["stdin"] is subprocess.DEVNULL and "shell" not in seen
+
+
+def test_kernel_rules_line_reports_the_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 0048: the line reads the same probe the confine check steps aside on.
+    import daedalus_confine
+    import daedalus_doctor
+
+    off = daedalus_confine.Support(None, 0, False)
+    assert daedalus_doctor._kernel_rules_check() == (
+        True,
+        "OPT  kernel rules: not available on this kernel",
+    )
+    for no_filter in (daedalus_confine.Support("x86_64", 3, False), off):
+        monkeypatch.setattr(daedalus_confine, "kernel_support", lambda s=no_filter: s)
+        assert daedalus_doctor._kernel_rules_check()[1].startswith("OPT  kernel rules: not")
+    on = daedalus_confine.Support("x86_64", 3, True)
+    monkeypatch.setattr(daedalus_confine, "kernel_support", lambda: on)
+    assert daedalus_doctor._kernel_rules_check() == (
+        True,
+        "OK   kernel rules: Landlock ABI 3 and the seccomp socket filter on x86_64; "
+        "coder test commands run under the kernel wrapper",
+    )
+
+
+def test_the_doctor_prints_this_kernels_probe(tmp_path: Path) -> None:
+    # 0048: the doctor runs as a script, so it prints the live probe the fixture leaves alone.
+    support = PROBE()
+    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=tmp_path / "home").stdout
+    kernel = [line for line in lines.splitlines() if "kernel rules" in line]
+    if support.ok:
+        assert kernel == [
+            f"OK   kernel rules: Landlock ABI {support.abi} and the seccomp socket filter on "
+            f"{support.arch}; coder test commands run under the kernel wrapper"
+        ]
+    else:
+        assert kernel == ["OPT  kernel rules: not available on this kernel"]
+
+
+def test_no_version_tag_line_outside_a_repository(tmp_path: Path) -> None:
+    folder = tmp_path / "plain"
+    folder.mkdir()
+    (folder / "VERSION").write_text("3.3.0\n", encoding="utf-8")
+    assert _tag_lines(folder, tmp_path) == []

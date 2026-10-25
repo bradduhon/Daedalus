@@ -23,7 +23,8 @@ from tests.hook_chain import (
     run_script,
     unknown_flag_denies,
 )
-from tests.test_jail import BUILTIN_REL, NARROWING, _b, _cwd, _narrowed_repo, _unit_repo, _w
+from tests.jail_cases import BUILTIN_REL, NARROWING, _narrowed_repo, _unit_repo
+from tests.payloads import _b, _cwd, _w
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "unit_writes"

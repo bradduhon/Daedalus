@@ -11,7 +11,7 @@ import pytest
 from lib import jail
 from lib.config import Config, LedgerDecl
 
-from tests.conftest import CFG, CWD
+from tests.conftest import CFG, CWD, write_train_marker
 from tests.hook_chain import (
     decide,
     evaluate,
@@ -22,7 +22,8 @@ from tests.hook_chain import (
     run_script,
     unknown_flag_denies,
 )
-from tests.test_jail import _MANIFEST_LEDGER, _b, _git_init, _w, _wr
+from tests.jail_cases import _MANIFEST_LEDGER, _git_init
+from tests.payloads import _b, _w, _wr
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "root_writes"
@@ -167,14 +168,14 @@ def test_root_writes_scratch_class_follows_the_train(tmp_path: Path) -> None:
     outside = {**_w("x", f"{repo}/docs/notes.md"), "cwd": str(repo)}
     assert evaluate(HOOK, outside, "--touch", "scratch") is not None
     (repo / ".claude" / "daedalus").mkdir(parents=True)
-    (repo / ".claude" / "daedalus" / "train.active").write_text("20261017-120000\n")
+    write_train_marker(repo)
     assert evaluate(HOOK, hook_input, "--touch", "scratch") is None
     other = {**_w("x", f"{repo}/docs/.tmp/daedalus/20261017-999999/b.md"), "cwd": str(repo)}
     assert evaluate(HOOK, other, "--touch", "scratch") is not None
 
 
-def test_root_writes_scratch_class_admits_the_trains_one_summary_file(tmp_path: Path) -> None:
-    # 0060: the summary sits beside the train's folder; only the active train's file passes.
+def test_root_writes_scratch_class_refuses_the_trains_summary_file(tmp_path: Path) -> None:
+    # W3.2: the summary command writes the summary; the scratch class admits only the folder.
     repo = _git_init(tmp_path / "repo")
     scratch = f"{repo}/docs/.tmp/daedalus"
 
@@ -183,9 +184,10 @@ def test_root_writes_scratch_class_admits_the_trains_one_summary_file(tmp_path: 
 
     summary = f"{scratch}/20261017-120000-summary.md"
     (repo / ".claude" / "daedalus").mkdir(parents=True)
-    (repo / ".claude" / "daedalus" / "train.active").write_text("20261017-120000\n")
-    assert judged(summary) is None
+    write_train_marker(repo)
+    assert judged(f"{scratch}/20261017-120000/summary-notes.md") is None
     for path in (
+        summary,
         f"{scratch}/20261017-999999-summary.md",
         f"{scratch}/20261017-120000-charter-pr.md",
         f"{scratch}/other.md",
@@ -231,7 +233,7 @@ def test_planner_writes_its_plan_outside_a_train(tmp_path: Path) -> None:
 def test_planner_writes_its_plan_inside_a_train(tmp_path: Path) -> None:
     repo = _git_init(tmp_path / "repo")
     (repo / ".claude" / "daedalus").mkdir(parents=True)
-    (repo / ".claude" / "daedalus" / "train.active").write_text("20261017-120000\n")
+    write_train_marker(repo)
     scratch = repo / "docs" / ".tmp" / "daedalus"
     assert _planner(repo, f"{scratch}/20261017-120000/plan.md") == (True, None, "")
     for path in (
@@ -293,7 +295,7 @@ def test_root_writes_audit_class_admits_only_the_trains_audit_folder(tmp_path: P
     findings = f"{scratch}/{TRAIN}/audit/round1/findings.txt"
     assert _audit_judged(repo, inside) is not None
     (repo / ".claude" / "daedalus").mkdir(parents=True)
-    (repo / ".claude" / "daedalus" / "train.active").write_text(f"{TRAIN}\n")
+    write_train_marker(repo, TRAIN)
     for path in (inside, findings):
         for tool in ("Write", "Edit"):
             assert _audit_judged(repo, path, tool) is None, (path, tool)
@@ -313,7 +315,7 @@ def test_root_writes_audit_class_admits_only_the_trains_audit_folder(tmp_path: P
 def test_root_writes_audit_class_refuses_a_symlink_out_of_the_folder(tmp_path: Path) -> None:
     repo = _git_init(tmp_path / "repo")
     (repo / ".claude" / "daedalus").mkdir(parents=True)
-    (repo / ".claude" / "daedalus" / "train.active").write_text(f"{TRAIN}\n")
+    write_train_marker(repo, TRAIN)
     audit = repo / "docs" / ".tmp" / "daedalus" / TRAIN / "audit"
     audit.mkdir(parents=True)
     (repo / "src").mkdir()
@@ -329,7 +331,7 @@ def test_auditor_chain_writes_its_audit_folder_only(tmp_path: Path) -> None:
 
     repo = _git_init(tmp_path / "repo")
     (repo / ".claude" / "daedalus").mkdir(parents=True)
-    (repo / ".claude" / "daedalus" / "train.active").write_text(f"{TRAIN}\n")
+    write_train_marker(repo, TRAIN)
     scratch = f"{repo}/docs/.tmp/daedalus/{TRAIN}"
 
     def route(path: str) -> tuple[bool, str | None, str]:

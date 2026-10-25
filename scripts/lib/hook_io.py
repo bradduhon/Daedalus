@@ -1,7 +1,8 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0044: hook input and output for the scripts under scripts/checks, and the order of judgement.
-# Standard library plus lib.config only; any failure on the path to a decision denies.
+# Standard library plus lib.config at import; agent() reads lib.jail when called.
+# Any failure on the path to a decision denies.
 from __future__ import annotations
 
 import argparse
@@ -11,7 +12,7 @@ import sys
 import traceback
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import NoReturn
+from typing import NamedTuple, NoReturn
 
 from lib.config import Config, load_config
 
@@ -70,12 +71,14 @@ def read_input() -> dict[str, object]:
 
 
 def emit(reason: str | None) -> int:
-    decision = "allow" if reason is None else "deny"
+    # issue 39: an allow prints nothing, so a standalone check can deny but never grant.
+    if reason is None:
+        return 0
     out = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": decision,
-            "permissionDecisionReason": reason or "",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
         }
     }
     print(json.dumps(out))
@@ -200,6 +203,35 @@ def run(judge: Judge, tools: frozenset[str], parser: argparse.ArgumentParser) ->
         return emit(evaluate(read_input(), sys.argv[1:], judge, tools, parser).reason)
     except (Exception, SystemExit) as exc:  # noqa: BLE001
         return emit(failed_closed(parser.prog, exc))
+
+
+class Entrypoint(NamedTuple):
+    # 0044: decide is what lib.router calls in-process; main is the standalone script run.
+    decide: Callable[[dict[str, object], list[str]], HookDecision]
+    main: Callable[[], int]
+
+
+def entrypoint(judge: Judge, tools: frozenset[str], parser: argparse.ArgumentParser) -> Entrypoint:
+    # 0044: the one trailer every scripts/checks module binds as `decide, main = entrypoint(...)`.
+    def decide(hook_input: dict[str, object], flags: list[str]) -> HookDecision:
+        return evaluate(hook_input, flags, judge, tools, parser)
+
+    def main() -> int:
+        return run(judge, tools, parser)
+
+    return Entrypoint(decide, main)
+
+
+def raw_agent(hook_input: dict[str, object]) -> str:
+    # 0023: the agent_type as Claude Code sent it; an absent one is the main session.
+    return str(hook_input.get("agent_type") or "main")
+
+
+def agent(hook_input: dict[str, object]) -> str:
+    # 0044: the agent name with its plugin namespace unwrapped, as lib.jail judges it.
+    from lib.jail import normalize_agent  # lib.jail imports this module.
+
+    return normalize_agent(raw_agent(hook_input))
 
 
 # 0044: field readers every judge shares; evaluate has already refused a non-object tool_input.

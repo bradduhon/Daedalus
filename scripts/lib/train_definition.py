@@ -13,6 +13,11 @@ from typing import Literal
 from lib import agent_files
 from lib.human_text import MIN_WORDS, plain_words
 from lib.manifest import FEATURE_KEYS, SCOPE_KINDS, repo_relative
+from lib.narrow import integer
+from lib.narrow import obj as _obj
+from lib.narrow import objects as _objects
+from lib.narrow import strings as _texts
+from lib.narrow import text as _text
 
 TOP_FIELDS = (
     "name",
@@ -98,12 +103,11 @@ class Definition:
 
     @property
     def version(self) -> int:
-        value = self.raw.get("version")
-        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+        return integer(self.raw, "version", 0)
 
     @property
     def stages(self) -> list[dict[str, object]]:
-        return _objects(self.raw.get("stages"))
+        return _objects(self.raw, "stages")
 
 
 def load(path: Path) -> Definition:
@@ -119,26 +123,6 @@ def load(path: Path) -> Definition:
     if not isinstance(raw, dict):
         raise DefinitionError(f"{path} is not a JSON object")
     return Definition(path, raw)
-
-
-def _objects(value: object) -> list[dict[str, object]]:
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, dict)]
-
-
-def _obj(block: dict[str, object], key: str) -> dict[str, object]:
-    value = block.get(key)
-    return value if isinstance(value, dict) else {}
-
-
-def _text(block: dict[str, object], key: str) -> str:
-    value = block.get(key)
-    return value if isinstance(value, str) else ""
-
-
-def _texts(value: object) -> list[str]:
-    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
 
 def _strings_only(value: object, allow_empty: bool = False) -> bool:
@@ -234,7 +218,7 @@ def _check1(defn: Definition) -> list[str]:
     ):
         out.append("check 1: consults must map each gate to a list of agent names")
     stages = raw.get("stages", [{}])
-    if not isinstance(stages, list) or not stages or len(_objects(stages)) != len(stages):
+    if not isinstance(stages, list) or not stages or not all(isinstance(s, dict) for s in stages):
         out.append("check 1: stages must be a non-empty list of stage objects")
     if "off_contract" in raw and not _text(raw, "off_contract").strip():
         out.append("check 1: off_contract must be a route written as text")

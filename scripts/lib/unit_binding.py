@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
-from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager
 from pathlib import Path
 
 from lib import train_state
-from lib.locks import bounded_flock
 from lib.train_state import TrainStateError
 
 # issue 29: one coder per unit worktree; the dispatch records the unit, the first write binds it.
-LOCK_TIMEOUT_S = 5.0
 WRITE_NEXT = "Next: write only in the unit worktree you were dispatched to."
 
 
@@ -21,23 +17,10 @@ def bindings_path(repo: Path, train_id: str) -> Path:
     return train_state.state_path(repo, train_id).with_name(f"{train_id}.bindings.json")
 
 
-@contextmanager
-def _locked(repo: Path, train_id: str) -> Iterator[Path]:
+def _locked(repo: Path, train_id: str) -> AbstractContextManager[Path]:
+    # 75: the bindings lock opens through locks.locked, via the one train-state lock helper.
     path = bindings_path(repo, train_id)
-    directory = train_state._state_dir(repo, path)
-    lock = directory / f"{train_id}.bindings.lock"
-    try:
-        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    except OSError as exc:
-        raise TrainStateError(
-            f"cannot open {lock} ({exc}). Next: delete it from your own shell if it is a symlink."
-        ) from exc
-    with os.fdopen(fd, "w") as handle:
-        try:
-            bounded_flock(handle, LOCK_TIMEOUT_S, label="unit binding lock")
-        except RuntimeError as exc:
-            raise TrainStateError(str(exc)) from exc
-        yield path
+    return train_state.locked_file(repo, path, f"{train_id}.bindings.lock", "unit binding lock")
 
 
 def _read(path: Path) -> dict[str, dict[str, object]]:
@@ -56,21 +39,37 @@ def _read(path: Path) -> dict[str, dict[str, object]]:
     return {str(name): {str(k): v for k, v in rec.items()} for name, rec in units.items()}
 
 
+def _held(units: dict[str, dict[str, object]], unit_name: str) -> str | None:
+    # issue 29: a unit already dispatched or bound takes no second coder.
+    if unit_name not in units:
+        return None
+    holder = units[unit_name].get("agent_id")
+    if holder:
+        return (
+            f"unit {unit_name} is bound to coder {holder} (issue 29). "
+            "Next: resume that coder with SendMessage."
+        )
+    return (
+        f"unit {unit_name} was already dispatched to a coder that has not written "
+        "yet (issue 29). Next: wait for that coder, or stop the train."
+    )
+
+
+def held_reason(repo: Path, train_id: str, unit_name: str) -> str | None:
+    # issue 29: read-only once check for a coder dispatch that records no binding.
+    try:
+        return _held(_read(bindings_path(repo, train_id)), unit_name)
+    except TrainStateError as exc:
+        return str(exc)
+
+
 def record_dispatch(repo: Path, train_id: str, unit_name: str) -> str | None:
     try:
         with _locked(repo, train_id) as path:
             units = _read(path)
-            if unit_name in units:
-                holder = units[unit_name].get("agent_id")
-                if holder:
-                    return (
-                        f"unit {unit_name} is bound to coder {holder} (issue 29). "
-                        "Next: resume that coder with SendMessage."
-                    )
-                return (
-                    f"unit {unit_name} was already dispatched to a coder that has not written "
-                    "yet (issue 29). Next: wait for that coder, or stop the train."
-                )
+            held = _held(units, unit_name)
+            if held is not None:
+                return held
             units[unit_name] = {"agent_id": None}
             train_state._write(path, {"units": units})
     except TrainStateError as exc:
@@ -112,6 +111,8 @@ def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | Non
                     f"unit {unit_name} was never dispatched in train {train_id}. "
                     "Next: dispatch a repo-coder with one Worktree: line naming it."
                 )
+            if record.get("finished"):
+                return f"unit {unit_name} is merged and finished (0121). {WRITE_NEXT}"
             moved = record.get("retired_to")
             if moved:
                 return (
@@ -130,6 +131,18 @@ def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | Non
                     f"{WRITE_NEXT}"
                 )
             record["agent_id"] = agent_id
+            train_state._write(path, {"units": units})
+    except TrainStateError as exc:
+        return str(exc)
+    return None
+
+
+def mark_finished(repo: Path, train_id: str, unit: str) -> str | None:
+    # spec 4, 0121: finish and merge mark each merged unit; claim refuses it, progress reads done.
+    try:
+        with _locked(repo, train_id) as path:
+            units = _read(path)
+            units[unit] = {**units.get(unit, {"agent_id": None}), "finished": True}
             train_state._write(path, {"units": units})
     except TrainStateError as exc:
         return str(exc)
