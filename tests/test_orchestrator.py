@@ -19,6 +19,7 @@ from tests.conftest import git as _git
 from tests.hook_chain import evaluate, load
 from tests.hook_chain import judge as decide
 from tests.test_dispatch_binding import TRAIN, seed_plan
+from tests.test_skills import HAND_WRITES
 
 ORCHESTRATOR = "daedalus:orchestrator"
 AGENT_FILE = REPO_ROOT / "agents" / "orchestrator.md"
@@ -338,21 +339,24 @@ def _recovery() -> str:
     return _recipe().split("\n## Recovery\n", 1)[1].split("\n## Status contract", 1)[0]
 
 
-def test_recipe_records_the_ledger_then_the_verdict_then_one_summary_write() -> None:
-    # 3, 73, spec 3.2 and 3.5: ledger on COMMITTED, the verdict record, then the last summary Write.
+SUMMARY_CMD = PLUGIN + "daedalus_train.py summary --repo <repo>`"
+
+
+def test_recipe_records_the_ledger_then_the_verdict_then_the_summary_command() -> None:
+    # 3, 73, W3.2: ledger on COMMITTED, the verdict record, then the last summary command.
     step5 = _step5()
     committed = step5.split("   - `[STATUS: COMMITTED] <sha> ids=<id>[,<id>]`: ", 1)[1]
     committed = committed.split("\n", 1)[0]
-    assert committed.index("using the Edit tool") < committed.index(LEDGER_CMD)
-    assert "`ledger recorded sha=<sha> ids=<ids>`" in committed
+    assert "the notes file's `## Rulings` lines" in committed
+    assert "Edit tool" not in committed and "`ledger recorded sha=<sha> ids=<ids>`" in committed
     approved = PLUGIN + "daedalus_train.py verdict --repo <repo> --status approved --round <n>"
-    write = "   - Summary Write, the last step (issue 73): after the verdict record, rewrite"
-    assert step5.index(LEDGER_CMD) < step5.index(approved) < step5.index(write)
-    assert write in step5 and "step 7 follows it" in step5
-    # audit_proof.summary_anchor: the first summary Write after the recorded auditor reply.
-    assert "the first summary Write after the auditor reply the verdict record names" in step5
-    assert "this Write comes after the verdict record and before any later auditor round" in step5
-    assert "nothing comes between" not in step5
+    last = "   - Summary command, the last step (issue 73, 0046): after the verdict record, run"
+    assert step5.index(LEDGER_CMD) < step5.index(approved) < step5.index(last)
+    assert step5.index(last) < step5.rindex(SUMMARY_CMD) and "Step 7 follows it" in step5
+    # audit_proof.summary_anchor: the first summary command record after the recorded reply.
+    assert "the first summary command record after the auditor reply the verdict record" in step5
+    assert "this command runs after the verdict record and before any later auditor round" in step5
+    assert "a Write of the summary file never satisfies the proof" in step5
     # REAUDIT reaches the orchestrator only by SendMessage, so it runs in the build session.
     round_ = _recovery().split("Recovery round (issue 73). ", 1)[1].split("\nLedger resume", 1)[0]
     assert "the round runs in the session the summary's `Session <id>:` line names" in round_
@@ -386,7 +390,7 @@ def test_recipe_handles_the_reaudit_and_ledger_resume_messages() -> None:
         PLUGIN + "daedalus_train.py verdict --repo <repo> --status approved --round <n> "
         "--findings <findings path> --tip <judged tip>`"
     )
-    order = [refresh, "resume the security-auditor by SendMessage", approved, "one Write"]
+    order = [refresh, "resume the security-auditor by SendMessage", approved, SUMMARY_CMD]
     places = [round_.index(part) for part in order]
     assert places == sorted(places)
     rejected = round_.split("- `[VERDICT: REJECTED] tip=<sha>`: ", 1)[1]
@@ -395,7 +399,7 @@ def test_recipe_handles_the_reaudit_and_ledger_resume_messages() -> None:
 
 
 def test_recipe_ledger_resume_runs_the_ledger_step_only() -> None:
-    # 3, spec 3.5: codes, Charter status, charter-docs, ledger, verdict, one Write, TRAIN_COMPLETE.
+    # 3, spec 3.5, W3.2: codes, Charter, charter-docs, ledger, verdict, summary, TRAIN_COMPLETE.
     resume = _recovery().split("Ledger resume (issue 3). ", 1)[1]
     assert "`<repo>/docs/.tmp/daedalus/<train-id>/ledger-notes.md`" in resume
     assert "`Ledger ids: pending. Codes: --repo <R> --type <T>.`" in resume
@@ -407,7 +411,7 @@ def test_recipe_ledger_resume_runs_the_ledger_step_only() -> None:
         "the charter-docs dispatch",
         "`ledger` on `[STATUS: COMMITTED]`",
         verdict,
-        "the one summary Write",
+        "and the summary command",
         "Then step 7.",
     ]
     places = [resume.index(part) for part in order]
@@ -435,3 +439,25 @@ def test_recipe_ledger_command_is_admitted_for_the_orchestrator() -> None:
     # pin D1 -> D6: the allowlist admits ledger; the hook test above routes the full command.
     names = {" ".join(cmd.split()[1:3]).rsplit("/", 1)[1] for cmd in _recipe_commands()}
     assert "daedalus_train.py ledger" in names
+    # W3.2: the summary command runs in place of the recipe's summary Write and Edit.
+    assert "daedalus_train.py summary" in names
+
+
+def test_no_recipe_step_writes_the_summary_by_hand() -> None:
+    # W3.2: every summary rewrite in the recipe is the summary command, never a Write or Edit.
+    text = _recipe()
+    assert HAND_WRITES.findall(text) == []
+    for part in (_step5(), _recovery()):
+        assert SUMMARY_CMD in part
+    assert "the hook refuses your Write or Edit of it (0046)" in text
+
+
+def test_summary_command_runs_through_the_orchestrator_hooks(
+    repo_cwd: Path, units: tuple[Path, Path]
+) -> None:
+    # W3.2: the allowlist admits summary; the Write of the summary file is refused.
+    command = f"python3 {REPO_ROOT}/scripts/daedalus_train.py summary --repo {repo_cwd}"
+    assert decide(_call("Bash", str(repo_cwd), command=command), Config()).allow
+    summary = repo_cwd / "docs" / ".tmp" / "daedalus" / f"{TRAIN}-summary.md"
+    write = _call("Write", str(repo_cwd), file_path=str(summary), content="x")
+    assert not decide(write, Config()).allow

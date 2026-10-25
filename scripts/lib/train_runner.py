@@ -1784,6 +1784,12 @@ def _stop_summary(repo: Path) -> list[str]:
     train_id = train_state.active_train(repo)
     if train_id is None or not train_state.state_path(repo, train_id).is_file():
         return []
+    try:
+        # 0069: a folder-scope train has no repository to hold a summary.
+        if train_state.load(repo, train_id).get("scope_kind") == "folder":
+            return []
+    except train_state.TrainStateError as exc:
+        return [f"summary not written: {exc}"]
     session = first_session(repo, train_id)
     if session is None:
         try:

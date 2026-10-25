@@ -550,7 +550,19 @@ def load_logs(repo: Path, state: dict[str, object], first: str | None) -> list[S
             logs.append(SessionLog(session, path, read_chain(path)))
         except ProofError as exc:
             raise SummaryError(str(exc)) from exc
-    return logs
+    # Train state stores its bounds with sorted keys, so the other sessions go oldest first.
+    head = [log for log in logs if log.session == first]
+    rest = sorted((log for log in logs if log.session != first), key=_mtime)
+    if not head and rest:
+        head = [rest.pop()]
+    return head + rest
+
+
+def _mtime(log: SessionLog) -> int:
+    try:
+        return log.path.stat().st_mtime_ns
+    except OSError:
+        return 0
 
 
 def read_notes(repo: Path, train_id: str) -> Notes:
