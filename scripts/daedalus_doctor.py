@@ -28,13 +28,14 @@ from lib.config import Config, ConfigError, load_config  # noqa: E402
 from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
 from lib.manifest import ManifestError  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
-from lib.workspace import UNMARK_NEXT, train_marker  # noqa: E402
+from lib.workspace import _BARE_VERSION, UNMARK_NEXT, VERSION_FILE, train_marker  # noqa: E402
 
 REQ_DOC = "docs/project-requirements.md"
 GH_NEXT = "install gh (https://cli.github.com); the Push Train opens pull requests with it"
 GH_TIMEOUT_S = 10
 TYPECHECK_TIMEOUT_S = 120
 GH_STUCK_NEXT = "run gh auth status from your own shell, then gh auth login if it asks"
+GH_OFF = ", and features.github is off in service-manifest.json"
 NO_LEDGER = "OK   ledger: none found (the Build Train asks before creating docs/decisions.md)"
 PROJECT_DATA_NEXT = "write a single line * to {marker}"
 IGNORE_NEXT = (
@@ -149,13 +150,25 @@ def _plugin_root_check() -> tuple[bool, str]:
     return True, f"OK   plugin root: {Path(__file__).resolve().parent.parent}"
 
 
-def _gh_checks() -> Iterator[tuple[bool, str]]:
-    # spec 5: the Push Train needs gh on PATH and signed in; no auth probe without gh.
+def github_on(repo: Path) -> bool:
+    # issue 48: a manifest the reader refuses counts as on, as the gitleaks line treats one.
+    try:
+        loaded = load_manifest(repo)
+    except ManifestError:
+        return True
+    return loaded is not None and loaded.features.github is True
+
+
+def _gh_checks(repo: Path) -> Iterator[tuple[bool, str]]:
+    # spec 5, issue 48: the gh lines are a MISS with features.github on and OPT with it off.
+    on = github_on(repo)
+    report = _check if on else _opt
+    off = "" if on else GH_OFF
     on_path = shutil.which("gh") is not None
-    yield _check(on_path, "gh on PATH", "not found", GH_NEXT)
+    yield report(on_path, "gh on PATH", f"not found{off}", GH_NEXT)
     if not on_path:
-        yield _check(
-            False, "gh authenticated", "gh not on PATH", "install gh, then run gh auth login"
+        yield report(
+            False, "gh authenticated", f"gh not on PATH{off}", "install gh, then run gh auth login"
         )
         return
     try:
@@ -168,16 +181,16 @@ def _gh_checks() -> Iterator[tuple[bool, str]]:
             check=False,
         )
     except subprocess.TimeoutExpired:
-        detail = f"gh auth status did not finish within {GH_TIMEOUT_S} s"
-        yield _check(False, "gh authenticated", detail, GH_STUCK_NEXT)
+        detail = f"gh auth status did not finish within {GH_TIMEOUT_S} s{off}"
+        yield report(False, "gh authenticated", detail, GH_STUCK_NEXT)
         return
     except (OSError, subprocess.SubprocessError) as exc:
-        detail = f"gh auth status could not run ({exc})"
-        yield _check(False, "gh authenticated", detail, GH_STUCK_NEXT)
+        detail = f"gh auth status could not run ({exc}){off}"
+        yield report(False, "gh authenticated", detail, GH_STUCK_NEXT)
         return
     code = status.returncode
-    yield _check(
-        code == 0, "gh authenticated", f"gh auth status exited {code}", "run gh auth login"
+    yield report(
+        code == 0, "gh authenticated", f"gh auth status exited {code}{off}", "run gh auth login"
     )
 
 
@@ -329,6 +342,21 @@ def _clean_tree_check(repo: Path) -> tuple[bool, str]:
     return _check(False, "clean working tree", f"uncommitted changes present: {shown}", nxt)
 
 
+def _version_tag_check(repo: Path) -> Iterator[tuple[bool, str]]:
+    # issue 47: the release step tags v<VERSION>; no line without a bare VERSION or with the tag.
+    root = project_root(str(repo))
+    try:
+        version = (root / VERSION_FILE).read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return
+    if not _BARE_VERSION.fullmatch(version):
+        return
+    # issue 47: rev-parse --verify --quiet exits 1 for a missing ref; any other failure skips.
+    found = _git(root, "rev-parse", "--verify", "--quiet", f"refs/tags/v{version}")
+    if found.returncode == 1:
+        yield True, f"OPT  version tag: v{version} has no tag"
+
+
 def _manifest_check(repo: Path) -> tuple[bool, str]:
     # 0054: the jail reads jail_narrowing from this file; a ManifestError is a MISS.
     try:
@@ -393,6 +421,7 @@ def _repo_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
     )
     if is_repo:
         yield _clean_tree_check(repo)
+        yield from _version_tag_check(repo)
     yield _manifest_check(repo)
     yield from _typecheck_check(repo)
     yield _opt(
@@ -452,7 +481,7 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     yield _plugin_root_check()
     yield from _framework_lines()
     yield _gitleaks_check(repo)
-    yield from _gh_checks()
+    yield from _gh_checks(repo)
     yield from _repo_checks(repo, is_repo)
 
 

@@ -190,6 +190,15 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`null`: a ledger the config declares or the probe finds is used, and none is created",
         "`true`",
     ),
+    (MANIFEST_FILE, "features.github"): KeyRow(
+        "Says the project pushes to GitHub and opens its pull requests there with the gh tool; "
+        "with it on, the doctor's two gh lines are a `MISS` when gh is missing or not signed in, "
+        "and with it off they are `OPT` (0069)",
+        "boolean or null",
+        "`true`, `false` or `null`; `null` reads as `false`",
+        "`false`: the doctor never fails on gh",
+        "`true`",
+    ),
     (MANIFEST_FILE, "trains_dir"): KeyRow(
         "The project folder that holds its own train definitions; a train is looked up there "
         "first, as `<trains_dir>/<name>.json`, and then in the plugin's own trains folder (0073)",

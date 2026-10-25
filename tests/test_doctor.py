@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import SCRIPTS_DIR, fake_bin
+from tests.conftest import fake_bin, git, run_cli
 
 SCAFFOLDS = ("service-manifest.json", "contracts/", ".gitleaks.toml")
 
@@ -28,37 +28,22 @@ def _run(
     env["PATH"] = path_env
     if home is not None:
         env["HOME"] = str(home)
-    return subprocess.run(
-        [sys.executable, str(SCRIPTS_DIR / "daedalus_doctor.py"), "--repo", str(repo)],
-        capture_output=True,
-        text=True,
-        env=env,
-        check=False,
-    )
+    return run_cli("daedalus_doctor.py", "--repo", str(repo), env=env)
 
 
 def _git_repo(path: Path) -> None:
+    # W1.4: a repo with no commit at an arbitrary path; the git_repo fixture commits once.
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
+    git(path, "init", "-q", "-b", "main")
 
 
 def _commit_all(path: Path) -> None:
-    subprocess.run(["git", "add", "-A"], cwd=path, check=True)
-    subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
-        + ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "init"],
-        cwd=path,
-        check=True,
-    )
+    git(path, "add", "-A")
+    git(path, "commit", "-q", "-m", "init")
 
 
 def _commit_all_empty(path: Path) -> None:
-    subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
-        + ["-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"],
-        cwd=path,
-        check=True,
-    )
+    git(path, "commit", "-q", "--allow-empty", "-m", "init")
 
 
 def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: Path) -> None:
@@ -94,6 +79,9 @@ def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: P
     gitleaks = next(line for line in lines if "gitleaks on PATH" in line)
     assert gitleaks.startswith("OPT  gitleaks on PATH: not found, and the secret scan is off.")
     assert "set secrets_scan to true in the features object" in gitleaks
+    # issue 48: no manifest means features.github is off, so both gh lines are optional.
+    gh = [line for line in lines if line[5:].startswith("gh ")]
+    assert len(gh) == 2 and all(line.startswith("OPT  gh ") for line in gh)
 
 
 def _settings(path: Path, body: object) -> None:
@@ -266,7 +254,7 @@ def test_worktree_resolves_to_main_repo_data_dir(tmp_path: Path) -> None:
     _git_repo(repo)
     _commit_all_empty(repo)
     worktree = tmp_path / "wt"
-    subprocess.run(["git", "worktree", "add", "-q", str(worktree)], cwd=repo, check=True)
+    git(repo, "worktree", "add", "-q", str(worktree))
     result = _run(None, worktree, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     data = repo.resolve() / ".claude" / "daedalus"
     assert f"OK   project data dir: {data} (not created yet; a train's start creates it)" in (
@@ -402,13 +390,7 @@ def _print_cache(data_dir: Path | None, home: Path) -> subprocess.CompletedProce
     if data_dir is not None:
         env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
     env["HOME"] = str(home)
-    return subprocess.run(
-        [sys.executable, str(SCRIPTS_DIR / "daedalus_doctor.py"), "--print-cache-dir"],
-        capture_output=True,
-        text=True,
-        env=env,
-        check=False,
-    )
+    return run_cli("daedalus_doctor.py", "--print-cache-dir", env=env)
 
 
 def test_print_cache_dir_prefers_env(plugin_data: Path, tmp_path: Path) -> None:
@@ -442,9 +424,16 @@ def test_print_cache_dir_none_exits_one_with_next(tmp_path: Path) -> None:
     )
 
 
+def _github(repo: Path, value: object) -> None:
+    # issue 48: a manifest holding only features.github, or no features key for the absent case.
+    body = {} if value == "absent" else {"features": {"github": value}}
+    (repo / "service-manifest.json").write_text(json.dumps(body), encoding="utf-8")
+
+
 def test_gh_absent_is_two_misses_with_next(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
+    _github(tmp_path, True)
     lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
     assert (
         "MISS gh on PATH: not found. Next: install gh (https://cli.github.com); "
@@ -476,7 +465,8 @@ def test_minor_7_gh_auth_timeout_names_the_timeout(
 
     monkeypatch.setenv("PATH", _bins(tmp_path, "gh"))
     monkeypatch.setattr(daedalus_doctor.subprocess, "run", hang)
-    lines = [line for _, line in daedalus_doctor._gh_checks()]
+    _github(tmp_path, True)
+    lines = [line for _, line in daedalus_doctor._gh_checks(tmp_path)]
     assert lines[1] == (
         "MISS gh authenticated: gh auth status did not finish within 10 s. "
         "Next: run gh auth status from your own shell, then gh auth login if it asks"
@@ -494,7 +484,8 @@ def test_minor_7_gh_auth_oserror_names_the_error(
 
     monkeypatch.setenv("PATH", _bins(tmp_path, "gh"))
     monkeypatch.setattr(daedalus_doctor.subprocess, "run", broken)
-    line = [line for _, line in daedalus_doctor._gh_checks()][1]
+    _github(tmp_path, True)
+    line = [line for _, line in daedalus_doctor._gh_checks(tmp_path)][1]
     assert line.startswith("MISS gh authenticated: gh auth status could not run (")
     assert "Permission denied" in line and "exited" not in line and "Next:" in line
 
@@ -503,9 +494,60 @@ def test_gh_signed_out_is_a_miss(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     bins = _bins(tmp_path, "gh", exit_codes={"gh": 1})
+    _github(tmp_path, True)
     lines = _run(None, tmp_path, path_env=bins, home=home).stdout.splitlines()
     assert "OK   gh on PATH" in lines
     assert ("MISS gh authenticated: gh auth status exited 1. Next: run gh auth login") in lines
+
+
+GH_OFF = ", and features.github is off in service-manifest.json"
+
+
+@pytest.mark.parametrize("value", ["absent", False, None])
+def test_gh_lines_are_opt_when_github_is_off(tmp_path: Path, value: object) -> None:
+    # issue 48: off, a missing or signed-out gh never fails the doctor, as gitleaks with no scan.
+    import daedalus_doctor
+
+    _github(tmp_path, value)
+    assert daedalus_doctor.github_on(tmp_path) is False
+    home = tmp_path / "home"
+    home.mkdir()
+    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
+    assert (
+        f"OPT  gh on PATH: not found{GH_OFF}. Next: install gh (https://cli.github.com); "
+        "the Push Train opens pull requests with it"
+    ) in lines
+    assert (
+        f"OPT  gh authenticated: gh not on PATH{GH_OFF}. Next: install gh, then run gh auth login"
+    ) in lines
+    bins = _bins(tmp_path, "gh", exit_codes={"gh": 1})
+    lines = _run(None, tmp_path, path_env=bins, home=home).stdout.splitlines()
+    assert "OK   gh on PATH" in lines
+    assert f"OPT  gh authenticated: gh auth status exited 1{GH_OFF}. Next: run gh auth login" in (
+        lines
+    )
+
+
+def test_gh_lines_are_ok_when_github_is_on_and_gh_is_signed_in(tmp_path: Path) -> None:
+    import daedalus_doctor
+
+    _github(tmp_path, True)
+    assert daedalus_doctor.github_on(tmp_path) is True
+    home = tmp_path / "home"
+    home.mkdir()
+    lines = _run(None, tmp_path, path_env=_bins(tmp_path, "gh"), home=home).stdout.splitlines()
+    assert "OK   gh on PATH" in lines and "OK   gh authenticated" in lines
+
+
+def test_refused_manifest_counts_github_on(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # issue 48: a typo in the manifest never hides a missing gh, as the gitleaks line treats one.
+    import daedalus_doctor
+
+    _github(tmp_path, "yes")
+    monkeypatch.setenv("PATH", _bins(tmp_path))
+    assert daedalus_doctor.github_on(tmp_path) is True
+    lines = [line for _, line in daedalus_doctor._gh_checks(tmp_path)]
+    assert len(lines) == 2 and all(line.startswith("MISS gh ") for line in lines)
 
 
 def test_absent_config_runs_the_ledger_probe_none_found(tmp_path: Path) -> None:
@@ -908,3 +950,40 @@ def test_no_typecheck_line_when_undeclared(tmp_path: Path) -> None:
     assert _typecheck_lines(tmp_path, None) == []
     (tmp_path / "service-manifest.json").unlink()
     assert list(daedalus_doctor._typecheck_check(tmp_path)) == []
+
+
+def _tag_lines(repo: Path, tmp_path: Path) -> list[str]:
+    lines = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home").stdout
+    return [line for line in lines.splitlines() if "version tag" in line]
+
+
+def test_untagged_version_is_an_opt_line(git_repo: Path, tmp_path: Path) -> None:
+    # issue 47: VERSION names a version no tag carries; the line is optional and has no Next.
+    (git_repo / "VERSION").write_text("3.3.0\n", encoding="utf-8")
+    _commit_all(git_repo)
+    assert _tag_lines(git_repo, tmp_path) == ["OPT  version tag: v3.3.0 has no tag"]
+    git(git_repo, "tag", "v3.3.0")
+    assert _tag_lines(git_repo, tmp_path) == []
+
+
+def test_annotated_tag_counts_as_a_tag(git_repo: Path, tmp_path: Path) -> None:
+    (git_repo / "VERSION").write_text("1.2.3", encoding="utf-8")
+    _commit_all(git_repo)
+    git(git_repo, "tag", "-a", "v1.2.3", "-m", "release")
+    assert _tag_lines(git_repo, tmp_path) == []
+
+
+@pytest.mark.parametrize("body", [None, "v3.3.0", "3.3", "not a version", "\xff"])
+def test_no_version_tag_line_without_a_bare_version(
+    git_repo: Path, tmp_path: Path, body: str | None
+) -> None:
+    if body is not None:
+        (git_repo / "VERSION").write_bytes(body.encode("latin-1"))
+    assert _tag_lines(git_repo, tmp_path) == []
+
+
+def test_no_version_tag_line_outside_a_repository(tmp_path: Path) -> None:
+    folder = tmp_path / "plain"
+    folder.mkdir()
+    (folder / "VERSION").write_text("3.3.0\n", encoding="utf-8")
+    assert _tag_lines(folder, tmp_path) == []
