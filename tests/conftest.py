@@ -284,6 +284,16 @@ def repo_cwd(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def git_repo(tmp_path: Path) -> Path:
+    # W1.4: a repo on main with one empty commit, built through git().
+    root = tmp_path.resolve() / "repo"
+    root.mkdir()
+    git(root, "init", "-q", "-b", "main")
+    git(root, "commit", "-q", "--allow-empty", "-m", "init")
+    return root
+
+
+@pytest.fixture
 def project_data(repo_cwd: Path) -> Path:
     data = repo_cwd / ".claude" / "daedalus"
     data.mkdir(parents=True)

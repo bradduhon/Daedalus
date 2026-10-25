@@ -29,15 +29,9 @@ _git = partial(git, check=False)
 
 
 @pytest.fixture
-def repo(tmp_path: Path) -> Path:
-    root = tmp_path.resolve() / "repo"
-    root.mkdir()
-    assert _git(root, "init", "-q", "-b", "main").returncode == 0
-    commit = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
-    commit += ["-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"]
-    assert _git(root, *commit).returncode == 0
-    assert _git(root, "branch", BASE).returncode == 0
-    return root
+def repo(git_repo: Path) -> Path:
+    assert _git(git_repo, "branch", BASE).returncode == 0
+    return git_repo
 
 
 def test_create_branches_from_the_base_ref(repo: Path) -> None:
