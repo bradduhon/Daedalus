@@ -1,0 +1,6 @@
+{
+  "jail.R_CONDUCTOR_COMMIT_ALL": {
+    "failure": "issue 2: the conductor runs git commit -a, --all, a short option group holding a, or a commit with paths, so the push carries every tracked change in the tree instead of the staged Build Train result",
+    "premise_test": "tests/test_checks_git_grammar.py::test_conductor_commit_refuses_every_all_files_spelling"
+  }
+}

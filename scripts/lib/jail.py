@@ -70,6 +70,7 @@ from lib.shell import (
     _git_split,
     _long_matches,
     _names_project_data,
+    _pathspecs,
     _quote_spans,
     _shell_code,
     _short_flags,
@@ -273,6 +274,12 @@ R_CONDUCTOR_BASH = (
     "add/commit, "
     "gh pr/run, gitleaks detect. Next: use those only."
 )
+R_CONDUCTOR_COMMIT_ALL = (
+    "the conductor commits only what is already staged; git commit -a, --all or any prefix "
+    "of it, a short option group holding a, and paths on the commit line are refused "
+    "(issue 2). Next: stage each file by path with git add <path>, then run "
+    "git commit -m <message>."
+)
 R_CONDUCTOR_WEB = "the conductor has no web access. Next: use gh."
 R_WEB_RESEARCHER_ONLY = (
     "only web-researcher may fetch. Next: ask the orchestrating session to dispatch web-researcher."
@@ -467,6 +474,15 @@ def _commit_ok(args: list[str], cwd: str) -> bool:
         else:
             return False
     return True
+
+
+def _commits_work_tree(args: list[str]) -> bool:
+    # issue 2: -a, --all or a prefix, a cluster holding a, or a pathspec commits past the index.
+    # Every word is read, option values included, so no value reading decides it.
+    return bool(_pathspecs("commit", args)) or any(
+        _long_matches(arg, "--all", 1) or (not arg.startswith("--") and "a" in _short_flags(arg))
+        for arg in args
+    )
 
 
 @lru_cache(maxsize=32)
@@ -717,6 +733,11 @@ _DOCS_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
     "status": _GIT_GRAMMAR["status"],
     "log": _GIT_GRAMMAR["log"],
     "diff": _GIT_GRAMMAR["diff"],
+}
+# issue 2: the conductor commits the index as staged; the coder's commit grammar is unchanged.
+_CONDUCTOR_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
+    **_GIT_GRAMMAR,
+    "commit": lambda a, cwd: not _commits_work_tree(a) and _commit_ok(a, cwd),
 }
 
 

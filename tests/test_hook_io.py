@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -64,18 +66,34 @@ def test_read_input_reads_an_object_or_nothing(
     assert hook_io.read_input() == want
 
 
-def test_emit_prints_one_decision_line(capsys: pytest.CaptureFixture[str]) -> None:
+def test_emit_prints_nothing_on_allow(capsys: pytest.CaptureFixture[str]) -> None:
+    # issue 39: a standalone check can deny but never grant a permission.
     assert hook_io.emit(None) == 0
+    assert capsys.readouterr() == ("", "")
+
+
+def test_run_prints_nothing_when_the_judge_allows(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("sys.argv", ["probe.py"])
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"tool_name": "Write"}'))
+    assert hook_io.run(_never, BASH, PARSER) == 0
+    assert capsys.readouterr() == ("", "")
+
+
+def test_a_standalone_check_prints_nothing_when_it_allows() -> None:
+    # issue 39: the script run Claude Code would see; an allow leaves stdout empty.
+    stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git status"}})
+    script = str(SCRIPTS_DIR / "checks" / "git_grammar.py")
+    argv = [sys.executable, script, "--allow", "coder"]
+    done = subprocess.run(argv, input=stdin, capture_output=True, text=True, check=False)
+    assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
+
+
+def test_emit_prints_one_deny_line(capsys: pytest.CaptureFixture[str]) -> None:
     assert hook_io.emit("no. Next: stop.") == 0
     lines = capsys.readouterr().out.splitlines()
     assert [json.loads(line) for line in lines] == [
-        {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "permissionDecisionReason": "",
-            }
-        },
         {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
