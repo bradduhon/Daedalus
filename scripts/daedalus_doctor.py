@@ -422,7 +422,8 @@ def _manifest_check(repo: Path) -> tuple[bool, str]:
 
 
 def _typecheck_check(repo: Path, run: bool = False) -> Iterator[tuple[bool, str]]:
-    # 38: the declared typecheck_cmd runs once, argv only, bounded; no line when none is declared.
+    # 38, 0076: the declared typecheck_cmd runs only on --run-typecheck, argv only, bounded;
+    # no line when none is declared.
     try:
         manifest = load_manifest(repo)
     except ManifestError:
@@ -436,10 +437,8 @@ def _typecheck_check(repo: Path, run: bool = False) -> Iterator[tuple[bool, str]
     if not run:
         yield (
             True,
-            (
-                f"OPT  {name}: not run. Next: run {command} by hand from the repo root,"
-                " or rerun the doctor with --run-typecheck"
-            ),
+            f"OPT  {name}: not run. Next: run {command} by hand from your own shell"
+            " at the repo root",
         )
         return
     nxt = f"run {command} from the repo root and fix what it reports"

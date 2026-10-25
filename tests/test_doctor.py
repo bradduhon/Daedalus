@@ -935,10 +935,16 @@ def test_default_run_prints_the_typecheck_command_and_never_runs_it(
     assert list(daedalus_doctor._typecheck_check(tmp_path)) == [
         (
             True,
-            "OPT  typecheck (mypy scripts): not run. Next: run mypy scripts by hand from the"
-            " repo root, or rerun the doctor with --run-typecheck",
+            "OPT  typecheck (mypy scripts): not run. Next: run mypy scripts by hand from your"
+            " own shell at the repo root",
         )
     ]
+
+
+def test_default_typecheck_line_never_names_the_run_flag(tmp_path: Path) -> None:
+    # 0076: the doctor skill performs picked Next actions, so the line must not offer the flag.
+    (line,) = _typecheck_lines(tmp_path, "mypy scripts", run=False)
+    assert "--run-typecheck" not in line
 
 
 def test_default_cli_run_leaves_the_declared_command_unrun(tmp_path: Path) -> None:
