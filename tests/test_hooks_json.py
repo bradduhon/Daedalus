@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
+from lib import agent_files
 from lib.jail import CREDENTIAL_TOOLS, WEB_TOOLS, WORKER_DENIED_TOOLS, WRITE_TOOLS
 
 from tests.conftest import REPO_ROOT
@@ -116,6 +118,39 @@ def test_post_events_are_async() -> None:
 def test_blocking_events_are_not_async() -> None:
     for event in BLOCKING_EVENTS:
         assert all(not hook.get("async", False) for hook in _commands(event))
+
+
+def _frontmatter_lines(path: Path) -> list[str]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not lines or lines[0] != "---" or "---" not in lines[1:]:
+        return []
+    return lines[1 : lines.index("---", 1)]
+
+
+def test_hooks_register_only_in_hooks_json() -> None:
+    # issue 39: Claude Code runs the router alone; no other plugin file registers a hook.
+    assert sorted(p.name for p in (REPO_ROOT / "hooks").iterdir()) == ["hooks.json"]
+    for name in ("plugin.json", "marketplace.json"):
+        doc = json.loads((REPO_ROOT / ".claude-plugin" / name).read_text(encoding="utf-8"))
+        entries = [doc, *doc.get("plugins", [])]
+        assert all("hooks" not in entry for entry in entries), name
+    for path in sorted((REPO_ROOT / ".claude").glob("settings*.json")):
+        assert "hooks" not in json.loads(path.read_text(encoding="utf-8")), path
+    skills = sorted((REPO_ROOT / "skills").glob("*/SKILL.md"))
+    assert skills
+    for path in skills:
+        assert not any(line.startswith("hooks:") for line in _frontmatter_lines(path)), path
+    pre = [h["command"] for e in _load()["hooks"]["PreToolUse"] for h in e["hooks"]]
+    assert pre == ["python3 ${CLAUDE_PLUGIN_ROOT}/" + JAIL_SCRIPT]
+
+
+def test_agent_hooks_blocks_name_only_router_checks() -> None:
+    # 0044, issue 39: an agent's hooks block is the router's binding of scripts/checks.
+    agents = agent_files.load_all(REPO_ROOT / "agents")
+    assert agents
+    for agent in agents.values():
+        for hook in agent.hooks:
+            assert (REPO_ROOT / "scripts" / "checks" / f"{hook.script}.py").is_file(), hook
 
 
 def test_session_start_runs_only_the_audit() -> None:

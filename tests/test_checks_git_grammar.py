@@ -22,7 +22,12 @@ from tests.hook_chain import (
     run_script,
     unknown_flag_denies,
 )
-from tests.jail_cases import BASH_AGENTS, audited_train
+from tests.jail_cases import (
+    BASH_AGENTS,
+    CONDUCTOR_COMMIT_ADMITTED,
+    CONDUCTOR_COMMIT_ALL,
+    audited_train,
+)
 from tests.payloads import _b
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
@@ -504,3 +509,53 @@ def test_charter_pr_create_refusal_never_prints_the_remote(tmp_path: Path) -> No
     assert decide(_b(C, _pr_create(f"--repo {SLUG}")), cfg).allow
     d = decide(_b(C, _pr_create("--repo acme/other")), cfg)
     assert "secret" not in str(d.reason) and "github.com" not in str(d.reason)
+
+
+CONDUCTOR = ("--allow", "conductor")
+
+
+@pytest.mark.parametrize("command", CONDUCTOR_COMMIT_ALL)
+def test_conductor_commit_refuses_every_all_files_spelling(command: str) -> None:
+    # issue 2: the hook names staging by path; the whole chain refuses too.
+    assert evaluate(HOOK, _b(C, command), *CONDUCTOR) == jail.R_CONDUCTOR_COMMIT_ALL, command
+    assert not decide(_b(C, command), CFG).allow, command
+
+
+def test_conductor_commit_refusal_names_staging_by_path() -> None:
+    reason = jail.R_CONDUCTOR_COMMIT_ALL
+    assert "Next: stage each file by path with git add <path>" in reason
+    assert "git commit -m <message>" in reason.split("Next:", 1)[1]
+
+
+@pytest.mark.parametrize("command", CONDUCTOR_COMMIT_ADMITTED)
+def test_conductor_commit_admits_a_staged_commit(command: str) -> None:
+    assert evaluate(HOOK, _b(C, command), *CONDUCTOR) is None, command
+    d = decide(_b(C, command), CFG)
+    assert d.allow, (command, d.reason)
+
+
+@pytest.mark.parametrize(
+    "command", ["git commit --amend -m x", "git commit -m x -S", "git commit --message=x"]
+)
+def test_conductor_commit_other_forms_keep_the_grammar_text(command: str) -> None:
+    assert evaluate(HOOK, _b(C, command), *CONDUCTOR) == jail.R_CONDUCTOR_BASH, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"git -C {WT} commit -am x",
+        f"git -C {WT} commit -a -m x",
+        f"git -C {WT} commit -m x -- a.py",
+    ],
+)
+def test_coder_commit_grammar_is_unchanged(command: str) -> None:
+    # issue 2 is the conductor's grammar only; the coder still commits its worktree with -a.
+    assert evaluate(HOOK, _b("repo-coder", command), "--allow", "coder") is None, command
+
+
+def test_conductor_commit_all_fixture_decisions() -> None:
+    refused = run_script(HOOK, payload("Bash", command="git commit -am x"), *CONDUCTOR)
+    assert refused == {"decision": "deny", "reason": jail.R_CONDUCTOR_COMMIT_ALL}
+    admitted = run_script(HOOK, payload("Bash", command="git commit -m x"), *CONDUCTOR)
+    assert admitted == {"decision": "allow", "reason": ""}

@@ -71,12 +71,14 @@ def read_input() -> dict[str, object]:
 
 
 def emit(reason: str | None) -> int:
-    decision = "allow" if reason is None else "deny"
+    # issue 39: an allow prints nothing, so a standalone check can deny but never grant.
+    if reason is None:
+        return 0
     out = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": decision,
-            "permissionDecisionReason": reason or "",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
         }
     }
     print(json.dumps(out))

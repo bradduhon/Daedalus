@@ -175,7 +175,7 @@ def judge(hook_input: dict[str, object], config: Config) -> Decision:
 def run_script(
     script: str, stdin: str, *flags: str, raise_in_judge: bool = False
 ) -> dict[str, str]:
-    # 0044: the standalone path, stdin JSON in and one line of decision JSON out.
+    # 0044: the standalone path, stdin JSON in and one deny line out, or nothing on allow.
     path = str(CHECKS / f"{script}.py")
     if raise_in_judge:
         code = (
@@ -195,11 +195,13 @@ def run_script(
         argv = [sys.executable, path, *flags]
     done = subprocess.run(argv, input=stdin, capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
+    if not done.stdout:
+        return {"decision": "allow", "reason": ""}  # issue 39: an allow prints nothing.
     lines = done.stdout.splitlines()
     assert len(lines) == 1, done.stdout
     out = json.loads(lines[0])["hookSpecificOutput"]
     assert out["hookEventName"] == "PreToolUse"
-    assert out["permissionDecision"] in {"allow", "deny"}
+    assert out["permissionDecision"] == "deny" and out["permissionDecisionReason"]
     return {"decision": out["permissionDecision"], "reason": out["permissionDecisionReason"]}
 
 

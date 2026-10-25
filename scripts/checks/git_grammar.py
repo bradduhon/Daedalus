@@ -46,6 +46,8 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     if grant in {"docs", "specialist", "read-only", "conductor"}:
         charter = hook_io.hook_charter(cwd)
     grammar = jail._DOCS_GRAMMAR if grant == "docs" else None
+    if grant == "conductor":
+        grammar = jail._CONDUCTOR_GRAMMAR
     for segment in git_segments:
         if grant == "conductor":
             if shell._git_subcommand(segment) == "push":
@@ -53,6 +55,9 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
             # 0078: no other conductor git reaches the charter root, nested or not.
             if jail._reaches_charter(segment, cwd, charter):
                 return jail.R_CONDUCTOR_CHARTER
+            sub, args, _ = shell._git_split(segment)
+            if sub == "commit" and jail._commits_work_tree(args):
+                return jail.R_CONDUCTOR_COMMIT_ALL
         granted = None if grant == "conductor" else charter
         if not jail._git_grammar_ok(segment, shell.GIT_SETS[grant], cwd, granted, grammar):
             return _TEXTS[grant]

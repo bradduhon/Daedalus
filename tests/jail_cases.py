@@ -62,6 +62,46 @@ BUILTIN_REL = [
 NARROWING = {
     "jail_narrowing": {"forbidden_paths": ["infra/", "Makefile"], "forbidden_extensions": [".pem"]}
 }
+# issue 2: conductor commits that reach past the index; each draws R_CONDUCTOR_COMMIT_ALL.
+CONDUCTOR_COMMIT_ALL = [
+    "git commit -a",
+    "git commit -a -m x",
+    "git commit -m x -a",
+    "git commit -q -a -m x",
+    "git commit --all",
+    "git commit --all -m x",
+    "git commit -m x --all",
+    "git commit --al -m x",
+    "git commit --a -m x",
+    "git commit --all=yes -m x",
+    "git commit -am x",
+    "git commit -qam x",
+    "git commit -aqm x",
+    "git commit -qa -m x",
+    "git commit -vam x",
+    "git commit -ma",
+    "git commit -mall",
+    "git commit -a=1 -m x",
+    "git commit -m -a",
+    "git commit -m --all",
+    "git commit -m x -- .",
+    "git commit -m x -- src/a.py",
+    "git commit -m x src/a.py",
+    "git --no-pager commit -am x",
+    "git -C . commit -a -m x",
+    "git -c core.editor=true commit -a -m x",
+    "git -c commit.verbose=true commit --all -m x",
+]
+# issue 2: the conductor's admitted commit forms, message words holding an a included.
+CONDUCTOR_COMMIT_ADMITTED = [
+    "git commit -m x",
+    "git commit -q -m x",
+    "git commit --quiet -m x",
+    "git commit -m 'stage a file'",
+    "git commit -m 'Commit Build Train result for train 20261015-120000'",
+    "git commit -F docs/.tmp/message.md",
+    "git --no-pager commit -m x",
+]
 CREDENTIAL_PATHS = [
     ".ssh/id_ed25519",
     ".aws/credentials",
