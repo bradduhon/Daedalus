@@ -1487,7 +1487,10 @@ def _findings_path(repo: Path, train_id: str, round_: int) -> Path:
 
 
 def derived_round(state: dict[str, object]) -> int:
-    return audit_rounds.next_round(train_state.record(state, train_state.AUDIT_ROUNDS))
+    # 67: a pre-D1 approval wrote no audit_rounds entry, so the recorded verdict round counts too.
+    recorded = _int(train_state.record(state, train_state.VERDICT), "round", 0)
+    rounds = audit_rounds.next_round(train_state.record(state, train_state.AUDIT_ROUNDS))
+    return max(rounds, recorded + 1 if recorded > 0 else 1)
 
 
 def _round_findings(

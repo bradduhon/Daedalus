@@ -1504,8 +1504,42 @@ def test_verdict_derives_the_round_from_audit_rounds(repo: Path, plugin: Path) -
     _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
     approved = _verdict_call(repo, "approved", None, tip=tip)
     assert approved.lines == [f"Verdict approved recorded on tip {tip[:12]} (round 3)"]
-    assert _state(repo)["audit_rounds"]["3"] == {}  # type: ignore[index]
+    assert train_state.record(_state(repo), "audit_rounds")["3"] == {}
     assert train_runner.derived_round(_state(repo)) == 4
+
+
+@pytest.mark.parametrize(
+    ("state", "want"),
+    [
+        ({}, 1),
+        ({"audit_rounds": {"1": {}, "2": {}}}, 3),
+        # 67: a pre-D1 approval of round 3 left audit_rounds at {1, 2}.
+        ({"audit_rounds": {"1": {}, "2": {}}, "verdict": {"status": "approved", "round": 3}}, 4),
+        ({"audit_rounds": {"1": {}, "2": {}, "3": {}}, "verdict": {"round": 3}}, 4),
+        ({"audit_rounds": {"1": {}}, "verdict": {"round": True}}, 2),
+        ({"verdict": {"round": "5"}}, 1),
+        ({"verdict": {"round": -2}}, 1),
+    ],
+)
+def test_derived_round_counts_the_recorded_verdict_round(
+    state: dict[str, object], want: int
+) -> None:
+    assert train_runner.derived_round(state) == want
+
+
+def test_a_state_from_before_d1_takes_the_next_round(repo: Path, plugin: Path) -> None:
+    # 67: audit_rounds {1, 2} and an approved round 3 verdict derive round 4, and --round 4 passes.
+    tip = _audit_train(repo, plugin)
+    train = str(_state(repo)["train_id"])
+    verdict = {"status": "approved", "tip": tip, "round": 3, "seq": 1}
+    train_state.update(repo, train, verdict=verdict, audit_rounds={"1": {}, "2": {}})
+    _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
+    stale = _verdict_call(repo, "rejected", 3, tip=tip, findings=_findings(repo, 3, A))
+    assert stale.code == 1 and "--round 3 is not round 4" in stale.lines[0]
+    passed = _verdict_call(repo, "rejected", 4, tip=tip, findings=_findings(repo, 4, A))
+    assert passed.code == 0, passed.lines
+    assert sorted(train_state.record(_state(repo), "audit_rounds")) == ["1", "2", "4"]
+    assert train_runner.derived_round(_state(repo)) == 5
 
 
 def test_a_differing_round_is_refused_naming_both_numbers(repo: Path, plugin: Path) -> None:
