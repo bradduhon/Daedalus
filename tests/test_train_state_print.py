@@ -274,10 +274,10 @@ def test_audit_section_after_a_rejection_an_exception_and_no_verdict(tmp_path: P
         f"The operator's exception (0130-DAE-PLT) on tip {TIP} after 1 rejected round(s).",
         "- t.py::test\\_x: tracked-risk issue not recorded",
     ]
-    notes = parse_notes(NOTES + "## Waived\nt.py::test_x: tracked-risk issue #91\n", "n")
+    notes = parse_notes(NOTES + "## Waived\nt.py::test_x: tracked-risk issue filed\n", "n")
     assert (
         _section(_text(tmp_path, state, notes), "Audit")[1]
-        == "t.py::test_x: tracked-risk issue #91"
+        == "t.py::test_x: tracked-risk issue filed"
     )
     del state["verdict"], state["exception"], state["audit_rounds"]
     assert _section(_text(tmp_path, state), "Audit") == ["Verdict: pending"]
