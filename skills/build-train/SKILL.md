@@ -11,7 +11,7 @@ You are the main session of this train. You run the Preconditions, start one orc
 
 Rules for the whole train:
 - Read `/daedalus:catalog` first. It names every agent, the six phases with their exit conditions, the musts and the audit escalation prompt; the orchestrator's recipe is one saved recipe over it (0088, 0089).
-- Your own writes go under `docs/.tmp/daedalus/`. While this train runs, the jail warns and asks before any Write or Edit of yours outside that folder in the repository that holds the train, and the operator approves or denies that one call; it never blocks the main session's Write or Edit (0105). Daedalus writes code only in unit worktrees.
+- Your own writes go under `docs/.tmp/daedalus/`. While this train runs, the jail puts a warning into your context for any Write or Edit of yours outside that folder in the repository that holds the train, and the call runs; it never blocks the main session's Write or Edit and never prompts for it (0105, Main never prompted). Daedalus writes code only in unit worktrees.
 - Start the orchestrator with the Agent tool, written below as `Agent(<name>)`; Claude Code loads it as `daedalus:<name>`. Resume it with SendMessage. Never start `claude` from Bash.
 - Progress (0085): after Preconditions, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py progress --repo <repo>` and show its note unchanged; the orchestrator shows it after each phase. Print the State Block only at a stop, at a resume, and in the summary.
 - The train never pushes and never merges into `main` or `master` (0001). The operator merges. The Push Train (`/daedalus:push-train`), a separate step after this one, pushes.
@@ -50,7 +50,7 @@ The first six lines of the **State Block** are begin's output, with the audit se
    - `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path> tip=<40 hex>`: show the summary path, the audit log path and the judged tip, the integration branch commit the audit approved or the operator's exception is bound to. Then end the train: run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py stop --repo <repo> --reason "train complete" --next "review the integration branch, run /daedalus:audit-report <id> to read this session's audit log, then run /daedalus:push-train to push the branch and open the pull request"` and show its output.
    - Any other last line: stop with the reason "the orchestrator's reply ended off its contract" and show its last 10 lines. Next: rerun the train or report the orchestrator.
 3. If SendMessage to the orchestrator fails, never start a second orchestrator; it would start without the first one's State Block and the train's half-done state. Stop with "The orchestrator cannot be resumed. Next: rerun the train; the integration branch daedalus/<train-id> and every unit branch are kept for reference." The one exception is the ledger resume below, after its `resume` command printed its line: that orchestrator resumes the stopped train for one step, not a second train.
-4. While the orchestrator runs, a refused call of one of its agents comes back to it, not to you. A hook that asks you instead (0106) asks about a call of your own session; the operator approves or denies it.
+4. While the orchestrator runs, a refused call of one of its agents comes back to it, not to you. A hook warning in your context (0106, Main never prompted) is about a call of your own session; the call ran, so read the warning and act on what it names.
 
 ## Recovery
 

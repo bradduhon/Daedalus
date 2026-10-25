@@ -17,7 +17,7 @@ import enforce_agent_jail
 import pytest
 from lib import jail
 
-from tests.conftest import audit_records, write_train_marker
+from tests.conftest import audit_records, main_warning, write_train_marker
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "enforce_agent_jail.py"
 
@@ -49,32 +49,32 @@ def test_allow_exits_zero_and_logs_allow(
     assert rec["decision"] == "allow" and rec["reason"] is None
 
 
-def test_main_write_in_a_train_exits_zero_with_ask_and_logs_ask(
+def test_main_write_in_a_train_exits_zero_with_context_and_logs_allow(
     run_script: Any, project_data: Path, repo_cwd: Path, hook_input: Any
 ) -> None:
-    # 0105: the operator approves or denies the one call; main is never blocked by this rule.
+    # Main never prompted (amends 0105): allowed, the warning in context, recorded as allow.
     _in_train(project_data)
     payload = hook_input(tool_name="Write", tool_input={"file_path": "README.md", "content": "x"})
     result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 0 and result.stderr == "", result.stderr
-    out = json.loads(result.stdout)["hookSpecificOutput"]
-    assert out["hookEventName"] == "PreToolUse" and out["permissionDecision"] == "ask"
-    reason = out["permissionDecisionReason"]
+    reason = main_warning(result.stdout)
     assert reason.startswith("Build Train 20261015-120000 is active in this repository")
     assert f"Writing {repo_cwd}/README.md here" in reason
     rec = audit_records(project_data / "audit" / "sess-test.jsonl")[-1]
-    assert rec["decision"] == "ask" and rec["reason"] == f"jail: {reason}"
-    # 0105, 6.1: the record names the deciding hook; the operator's prompt text does not.
+    assert rec["decision"] == "allow" and rec["reason"] == f"jail: {reason}"
+    # 0105, 6.1: the record names the deciding hook; the session's warning text does not.
     assert rec["reason"].startswith("jail: ") and not reason.startswith("jail: ")
 
 
 def test_routed_agent_never_gets_ask(run_script: Any, project_data: Path, hook_input: Any) -> None:
-    # 0105: the ask decision is the main session's alone; every agent stays allow or deny.
+    # Main never prompted (amends 0105): a denied agent write stays denied, with no warning.
     _in_train(project_data)
     write = {"file_path": "README.md", "content": "x"}
     payload = hook_input(agent_type="repo-coder", tool_name="Write", tool_input=write)
     result = run_script("enforce_agent_jail.py", payload)
-    assert result.returncode == 2 and '"ask"' not in result.stdout
+    assert result.returncode == 2 and result.stdout == "", result.stdout
+    rec = audit_records(project_data / "audit" / "sess-test.jsonl")[-1]
+    assert rec["decision"] == "block", rec
 
 
 def test_block_exits_two_with_message_and_logs_block(
@@ -130,24 +130,18 @@ def test_unknown_agent_passes_without_a_train(
     assert result.returncode == 0, result.stderr
 
 
-def _ask_reason(stdout: str) -> str:
-    out = json.loads(stdout)["hookSpecificOutput"]
-    assert out["hookEventName"] == "PreToolUse" and out["permissionDecision"] == "ask"
-    return str(out["permissionDecisionReason"])
-
-
 @pytest.mark.parametrize("agent", [None, "ghost"])
-def test_unwritable_audit_dir_asks_main_and_fails_closed_for_an_agent(
+def test_unwritable_audit_dir_alerts_main_and_fails_closed_for_an_agent(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     project_data: Path,
     hook_input: Any,
     agent: str | None,
 ) -> None:
-    # 0106, AU-5: main is alerted and asked; 8.5 no record, no action stays for every agent.
+    # Main never prompted (amends 0106), AU-5: main is alerted and allowed; agents stay denied.
     _in_train(project_data)
     (project_data / "audit").write_text("not a directory")
-    allowed = SimpleNamespace(allow=True, reason=None, ask=False, agent=agent or "main")
+    allowed = SimpleNamespace(allow=True, reason=None, warn=False, agent=agent or "main")
     monkeypatch.setattr(jail, "decide", lambda *_args: allowed)
     payload = hook_input(tool_input={"command": "ls"})
     if agent:
@@ -155,12 +149,13 @@ def test_unwritable_audit_dir_asks_main_and_fails_closed_for_an_agent(
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
     code = enforce_agent_jail.main()
     out = capsys.readouterr()
-    assert "audit log unavailable" in out.err
     if agent:
-        assert code == 2 and out.out == ""
+        assert code == 2 and out.out == "" and "audit log unavailable" in out.err
     else:
         assert code == 0
-        assert _ask_reason(out.out).startswith(enforce_agent_jail._AUDIT_ASK)
+        alert = main_warning(out.out)
+        assert alert.startswith(enforce_agent_jail._AUDIT_WARN.format(tool="Bash")), alert
+        assert alert.startswith("auditing is down") and alert in out.err
 
 
 def test_unwritable_audit_dir_outside_a_train_lets_main_proceed(
@@ -187,6 +182,7 @@ def test_data_dir_without_a_train_marker_gets_no_record(
 
 
 AUDITOR = {"agent_type": "daedalus:security-auditor", "agent_id": "a1"}
+CODER = {"agent_type": "daedalus:repo-coder", "agent_id": "c1"}
 
 
 def _last_record(project_data: Path) -> dict[str, Any]:
@@ -216,39 +212,40 @@ def test_oversized_int_config_blocks_and_records(
     assert rec["decision"] == "block" and "not valid JSON" in rec["reason"]
 
 
-def test_malformed_config_asks_the_operator_and_records_the_ask(
+def test_malformed_config_alerts_the_operator_and_records_allow(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
-    # 0106, AC-3: the operator's own session is asked, and the ask carries the exception text.
+    # Main never prompted (amends 0106), SI-4: main is alerted with the exception text.
     _in_train(project_data)
     (project_data / "config.json").write_text("{bad")
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
-    assert result.returncode == 0 and result.stderr == "", result.stderr
-    reason = _ask_reason(result.stdout)
-    assert reason.startswith(enforce_agent_jail._CONFIG_ASK + " (")
-    assert "not valid JSON" in reason and "Next:" in reason
+    assert result.returncode == 0, result.stderr
+    reason = main_warning(result.stdout)
+    assert reason.startswith(enforce_agent_jail._CONFIG_WARN.format(tool="Bash") + " (")
+    assert "not valid JSON" in reason and "Next:" in reason and reason in result.stderr
     rec = _last_record(project_data)
-    assert rec["decision"] == "ask" and rec["reason"].startswith("config: ")
-    assert "not valid JSON" in rec["reason"]
+    assert rec["decision"] == "allow" and rec["reason"] == f"config: {reason}"
 
 
-def test_config_failure_with_no_audit_record_asks_the_operator_unrecorded(
+def test_config_failure_with_no_audit_record_alerts_the_operator_unrecorded(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     project_data: Path,
     hook_input: Any,
 ) -> None:
-    # 0106, AU-5: the stderr line is the alert, then the ask names the unrecorded call.
+    # Main never prompted (amends 0106), AU-5: the alert names the unrecorded call everywhere.
     _in_train(project_data)
     (project_data / "config.json").write_text("{bad")
     (project_data / "audit").write_text("not a directory")
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(hook_input())))
     assert enforce_agent_jail.main() == 0
     out = capsys.readouterr()
-    assert "audit log unavailable" in out.err
-    reason = _ask_reason(out.out)
-    assert reason.startswith(enforce_agent_jail._AUDIT_ASK)
-    assert enforce_agent_jail._CONFIG_ASK in reason and "not valid JSON" in reason
+    reason = main_warning(out.out)
+    assert (
+        reason.startswith(enforce_agent_jail._AUDIT_WARN.format(tool="Bash")) and reason in out.err
+    )
+    assert enforce_agent_jail._CONFIG_WARN.format(tool="Bash") in reason
+    assert "not valid JSON" in reason
 
 
 def test_malformed_config_records_block(
@@ -352,7 +349,7 @@ def test_missing_marker_finder_fails_open_outside_a_train(
 def test_missing_marker_finder_fails_closed_inside_a_train(
     tmp_path: Path, project_data: Path, hook_input: Any, agent: str | None
 ) -> None:
-    # 0035, 0106: the inline finder sees the marker; an agent is blocked, main is asked.
+    # 0035, Main never prompted (amends 0106): an agent is blocked, main is alerted and allowed.
     _in_train(project_data)
     payload = hook_input(agent_type=agent, agent_id="a1") if agent else hook_input()
     result = _run_raw(json.dumps(payload), _lone_script(tmp_path, gate=False))
@@ -361,7 +358,9 @@ def test_missing_marker_finder_fails_closed_inside_a_train(
         assert result.stderr.startswith("daedalus-jail[?]: hook could not load its libraries (")
     else:
         assert result.returncode == 0, result.stderr
-        assert _ask_reason(result.stdout).startswith(enforce_agent_jail._LOAD_ASK)
+        alert = main_warning(result.stdout)
+        assert alert.startswith(enforce_agent_jail._LOAD_WARN.format(tool="Bash"))
+        assert alert in result.stderr
 
 
 def test_inline_marker_finder_agrees_with_the_library(repo_cwd: Path) -> None:
@@ -435,7 +434,7 @@ def test_inline_project_root_matches_lib(repo_cwd: Path, tmp_path: Path) -> None
 def test_missing_libraries_fail_closed_during_a_train(
     tmp_path: Path, project_data: Path, hook_input: Any, agent: str | None
 ) -> None:
-    # 0035, 0106: a broken install blocks an agent's call; main is asked to run it unjudged.
+    # 0035, Main never prompted (amends 0106): an agent is blocked; main runs it with an alert.
     (project_data / "train.active").write_text("20261015-120000\n")
     payload = hook_input(agent_type=agent, agent_id="a1") if agent else hook_input()
     result = _run_raw(json.dumps(payload), _lone_script(tmp_path))
@@ -446,8 +445,9 @@ def test_missing_libraries_fail_closed_during_a_train(
         assert next_line in result.stderr
     else:
         assert result.returncode == 0, result.stderr
-        reason = _ask_reason(result.stdout)
-        assert reason.startswith(enforce_agent_jail._LOAD_ASK) and next_line in reason
+        reason = main_warning(result.stdout)
+        assert reason.startswith(enforce_agent_jail._LOAD_WARN.format(tool="Bash"))
+        assert next_line in reason and reason in result.stderr
 
 
 @pytest.mark.parametrize("tool", ["Bash", "Write", "Read"])
@@ -473,9 +473,9 @@ def test_missing_libraries_in_a_linked_worktree_of_a_train_fail_closed(
     worktree = repo_cwd / ".claude" / "worktrees" / "u1"
     subprocess.run(["git", "-C", str(repo_cwd), "worktree", "add", "-q", str(worktree)], check=True)
     result = _run_raw(json.dumps(hook_input(cwd=str(worktree))), _lone_script(tmp_path))
-    # 0106: main is asked, and the ask names the train, so the marker was found.
+    # Main never prompted (amends 0106): the alert names the train, so the marker was found.
     assert result.returncode == 0, result.stderr
-    assert _ask_reason(result.stdout).startswith(enforce_agent_jail._LOAD_ASK)
+    assert main_warning(result.stdout).startswith(enforce_agent_jail._LOAD_WARN.format(tool="Bash"))
 
 
 def test_decide_exception_blocks_and_records(
@@ -520,13 +520,13 @@ def test_routed_agent_judge_exception_blocks_and_records(
     assert _last_record(project_data)["decision"] == "block"
 
 
-def test_judge_exception_asks_the_operator_and_records_the_ask(
+def test_judge_exception_alerts_the_operator_and_records_allow(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     project_data: Path,
     hook_input: Any,
 ) -> None:
-    # 0106, AC-3: the operator's own session is asked, and the ask carries the exception text.
+    # Main never prompted (amends 0106), SI-4: main is alerted with the exception text.
     def _boom(*_args: Any) -> Any:
         raise RuntimeError("decide exploded")
 
@@ -535,12 +535,12 @@ def test_judge_exception_asks_the_operator_and_records_the_ask(
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(hook_input())))
     assert enforce_agent_jail.main() == 0
     out = capsys.readouterr()
-    assert out.err == ""
-    reason = _ask_reason(out.out)
-    assert reason.startswith(f"{enforce_agent_jail._JUDGE_ASK} (decide exploded).")
+    reason = main_warning(out.out)
+    lead = enforce_agent_jail._JUDGE_WARN.format(tool="Bash")
+    assert reason.startswith(f"{lead} (decide exploded).") and reason in out.err
     assert enforce_agent_jail._REPORT_NEXT.strip() in reason
     rec = _last_record(project_data)
-    assert rec["decision"] == "ask" and rec["reason"].startswith("jail: decide exploded Next:")
+    assert rec["decision"] == "allow" and rec["reason"] == f"jail: {reason}"
 
 
 @pytest.mark.parametrize("cwd", [None, "relative"])
@@ -559,7 +559,7 @@ def test_config_in_project_data_dir_is_loaded(
     (project_data / "config.json").write_text('{"ledger": {"path": "/x"}}')
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
     assert result.returncode == 0, result.stderr
-    assert "config.json is missing ledger.format" in _ask_reason(result.stdout)
+    assert "config.json is missing ledger.format" in main_warning(result.stdout)
 
 
 def _git_commit_all(repo: Path) -> None:
@@ -650,10 +650,10 @@ def test_explore_read_of_an_ssh_key_is_refused(
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
-def test_main_grep_rooted_at_home_is_asked_and_an_agent_refused(
+def test_main_grep_rooted_at_home_is_warned_and_an_agent_refused(
     temp_home: Path, plugin_data: Path, project_data: Path, hook_input: Any, agent: str | None
 ) -> None:
-    # 0106: outside a train the operator's own session is asked; an agent stays refused.
+    # Main never prompted (amends 0106): the operator's own session is warned; an agent refused.
     payload = hook_input(tool_name="Grep", tool_input={"pattern": "x", "path": str(temp_home)})
     if agent:
         payload.update(agent_type=agent, agent_id="e1")
@@ -663,7 +663,7 @@ def test_main_grep_rooted_at_home_is_asked_and_an_agent_refused(
         assert result.stderr.startswith(f"daedalus-jail[{agent}]:"), result.stderr
     else:
         assert result.returncode == 0, result.stderr
-        assert _ask_reason(result.stdout).startswith(enforce_agent_jail._CREDENTIAL_ASK)
+        assert main_warning(result.stdout).startswith(enforce_agent_jail._CREDENTIAL_WARN)
 
 
 def test_main_glob_over_the_repo_is_allowed(
@@ -723,9 +723,9 @@ def test_bad_config_still_refuses_an_ssh_key_read(
     key = temp_home / ".ssh" / "id_ed25519"
     payload = hook_input(tool_name="Read", tool_input={"file_path": str(key)})
     result = _run_home(payload, temp_home, plugin_data)
-    # 0106: outside a train the operator's own session is asked, never blocked.
+    # Main never prompted (amends 0106): outside a train the operator's session is warned.
     assert result.returncode == 0, result.stderr
-    assert "credential path" in _ask_reason(result.stdout)
+    assert "credential path" in main_warning(result.stdout)
 
 
 def test_bad_config_still_blocks_bash(
@@ -783,7 +783,7 @@ def test_main_outside_a_train_meets_no_jail_rule(
 
 @pytest.mark.parametrize(
     ("tool", "tool_input", "reason"),
-    # 0105: a main Write in a train asks instead; see the ask test above.
+    # 0105: a main Write in a train is warned; see the context test above.
     [("Bash", {"command": "git clean -fdx"}, "git clean")],
 )
 def test_main_inside_a_train_meets_the_jail(
@@ -795,20 +795,19 @@ def test_main_inside_a_train_meets_the_jail(
     tool_input: dict[str, str],
     reason: str,
 ) -> None:
-    # 0106: main meets the jail as an ask carrying the warning and the finding.
+    # Main never prompted (amends 0106): main meets the jail as a warning and the finding.
     _in_train(project_data)
     payload = hook_input(tool_name=tool, tool_input=tool_input)
     result = _run_home(payload, temp_home, plugin_data)
     assert result.returncode == 0 and result.stderr == "", result.stderr
-    out = json.loads(result.stdout)["hookSpecificOutput"]
-    assert out["permissionDecision"] == "ask" and reason in out["permissionDecisionReason"]
+    assert reason in main_warning(result.stdout)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
-def test_credential_read_asks_main_and_refuses_an_agent_outside_a_train(
+def test_credential_read_warns_main_and_refuses_an_agent_outside_a_train(
     temp_home: Path, plugin_data: Path, repo_cwd: Path, hook_input: Any, agent: str | None
 ) -> None:
-    # 0023, 0106: main is asked per call with the literal exposure text; an agent is refused.
+    # 0023, Main never prompted (amends 0106): main is warned with the literal exposure text.
     key = temp_home / ".ssh" / "id_ed25519"
     payload = hook_input(tool_name="Read", tool_input={"file_path": str(key)})
     if agent:
@@ -819,10 +818,10 @@ def test_credential_read_asks_main_and_refuses_an_agent_outside_a_train(
         assert "is a credential path" in result.stderr
     else:
         assert result.returncode == 0, result.stderr
-        reason = _ask_reason(result.stdout)
+        reason = main_warning(result.stdout)
         assert reason.startswith(
             "This path holds credentials; reading it puts the secret into the session "
-            "transcript. Approve to proceed anyway. The jail's finding: "
+            "transcript. The jail's finding: "
         )
         assert "is a credential path" in reason
     assert not (repo_cwd / ".claude").exists()
@@ -847,10 +846,9 @@ def test_main_writing_into_another_repos_train_is_judged(
     _in_train(marked / ".claude" / "daedalus")
     command = f"git -C {marked} clean -fdx"
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": command}))
-    # 0106: judged by the full jail, which asks the operator rather than blocking main.
+    # Main never prompted (amends 0106): judged by the full jail, which warns main.
     assert result.returncode == 0
-    out = json.loads(result.stdout)["hookSpecificOutput"]
-    assert out["permissionDecision"] == "ask" and "git clean" in out["permissionDecisionReason"]
+    assert "git clean" in main_warning(result.stdout)
 
 
 def test_fast_path_imports_only_the_standard_library_modules(repo_cwd: Path) -> None:
@@ -885,3 +883,87 @@ def test_fast_path_modules_use_the_standard_library_only(module: str) -> None:
     names += [n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)]
     fast = {"lib.repo_root", "lib.project_root"} - {f"lib.{module.removesuffix('.py')}"}
     assert not [n for n in names if (n == "lib" or n.startswith("lib.")) and n not in fast]
+
+
+_RETIRED_ASKS = [
+    "repo write",
+    "data folder write",
+    "git write",
+    "credential read",
+    "force push",
+    "recursive delete",
+    "push during a train",
+]
+
+
+def _retired_ask(case: str, repo: Path, home: Path) -> tuple[str, dict[str, str], str]:
+    # Main never prompted (amends 0105, 0106): each class that asked before, with its warning.
+    dotgit = f"{repo}/.git/config"
+    return {
+        "repo write": ("Write", {"file_path": f"{repo}/src/a.py"}, "Build Train 20261015-120000"),
+        "data folder write": (
+            "Write",
+            {"file_path": f"{repo}/.claude/daedalus/config.json"},
+            jail.WARN_DATA_DIR,
+        ),
+        "git write": ("Write", {"file_path": dotgit}, jail.WARN_DOTGIT.format(path=dotgit)),
+        "credential read": ("Read", {"file_path": f"{home}/.ssh/id_ed25519"}, jail.WARN_CREDENTIAL),
+        "force push": ("Bash", {"command": "git push --force origin f/x"}, jail.WARN_FORCE_PUSH),
+        "recursive delete": ("Bash", {"command": "rm -rf /"}, jail.WARN_DELETE),
+        "push during a train": (
+            "Bash",
+            {"command": "git push -u origin f/x"},
+            jail.WARN_TRAIN_PUSH,
+        ),
+    }[case]
+
+
+@pytest.mark.parametrize("case", _RETIRED_ASKS)
+def test_main_retired_ask_is_allowed_with_the_warning_in_context(
+    temp_home: Path,
+    plugin_data: Path,
+    project_data: Path,
+    repo_cwd: Path,
+    hook_input: Any,
+    case: str,
+) -> None:
+    # Main never prompted (amends 0105, 0106): allow, the warning in context, an allow record.
+    _in_train(project_data)
+    tool, tool_input, lead = _retired_ask(case, repo_cwd, temp_home)
+    result = _run_home(hook_input(tool_name=tool, tool_input=tool_input), temp_home, plugin_data)
+    assert result.returncode == 0 and result.stderr == "", result.stderr
+    warning = main_warning(result.stdout)
+    assert warning.startswith(lead) and "Approve" not in warning, warning
+    rec = _last_record(project_data)
+    assert rec["decision"] == "allow" and rec["reason"] == f"jail: {warning}", rec
+
+
+@pytest.mark.parametrize("case", _RETIRED_ASKS)
+def test_agent_stays_denied_where_main_is_warned(
+    temp_home: Path,
+    plugin_data: Path,
+    project_data: Path,
+    repo_cwd: Path,
+    hook_input: Any,
+    case: str,
+) -> None:
+    # Main never prompted (amends 0105, 0106): every agent decision stays allow or deny.
+    _in_train(project_data)
+    tool, tool_input, _ = _retired_ask(case, repo_cwd, temp_home)
+    payload = hook_input(tool_name=tool, tool_input=tool_input, **CODER)
+    result = _run_home(payload, temp_home, plugin_data)
+    assert result.returncode == 2 and result.stdout == "", result.stdout
+    assert _last_record(project_data)["decision"] == "block"
+
+
+def test_main_path_outside_every_marked_repo_stays_unjudged(
+    temp_home: Path, plugin_data: Path, project_data: Path, hook_input: Any
+) -> None:
+    # 0105, unchanged by Main never prompted: a path outside every train repo meets no warning.
+    _in_train(project_data)
+    for path in (temp_home / "notes" / "memory.md", Path("/tmp/daedalus-unjudged.md")):
+        payload = hook_input(tool_name="Write", tool_input={"file_path": str(path)})
+        result = _run_home(payload, temp_home, plugin_data)
+        assert result.returncode == 0 and result.stdout == "", (path, result.stdout)
+        rec = _last_record(project_data)
+        assert rec["decision"] == "allow" and rec["reason"] is None, rec

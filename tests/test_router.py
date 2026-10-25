@@ -207,11 +207,12 @@ def test_main_session_duties_unchanged(monkeypatch: pytest.MonkeyPatch, jail_fak
     main = {"tool_name": "Bash", "tool_input": {"command": "git status"}, "cwd": CWD}
     assert jail.decide(main, CFG).allow
     push = {**main, "tool_input": {"command": "git push --force origin main"}}
-    assert not jail.decide(push, CFG).allow
+    pushed = jail.decide(push, CFG)
+    assert not pushed.allow and pushed.warn and "The jail's finding: " in str(pushed.reason)
     write = {"tool_name": "Write", "tool_input": {"file_path": f"{WT}/src/a.py"}, "cwd": CWD}
-    # 0105: the code write asks the operator rather than refusing.
-    asked = jail.decide(write, CFG)
-    assert asked.ask and "Build Train" in str(asked.reason)
+    # Main never prompted (amends 0105): the code write is a finding the hook warns about.
+    warned = jail.decide(write, CFG)
+    assert warned.warn and not warned.allow and "Build Train" in str(warned.reason)
     seen: list[dict[str, object]] = []
 
     def dispatch(tool_input: dict[str, object], cwd: str) -> str:
@@ -221,9 +222,9 @@ def test_main_session_duties_unchanged(monkeypatch: pytest.MonkeyPatch, jail_fak
     monkeypatch.setattr(dispatch_binding, "_dispatch_reason", dispatch)
     agent_call = {"tool_name": "Agent", "tool_input": {"prompt": "x"}, "cwd": CWD}
     d = jail.decide(agent_call, CFG)
-    # 0106: the operator's dispatch is asked with the skipped invariant, never blocked.
-    want = jail.ASK_DISPATCH.format(reason="dispatch refused. Next: name one unit.")
-    assert (d.allow, d.ask, d.reason) == (False, True, want)
+    # Main never prompted (amends 0106): the dispatch is warned with the skipped invariant named.
+    want = jail.WARN_DISPATCH.format(reason="dispatch refused. Next: name one unit.")
+    assert (d.allow, d.warn, d.reason) == (False, True, want)
     assert seen == [{"prompt": "x"}]
 
 

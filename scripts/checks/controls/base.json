@@ -77,7 +77,7 @@
   },
   "dispatch_binding.R_WORKTREE_LINE": {
     "failure": "issue 29: a coder starts without one named unit worktree, so its writes cannot be bound to a unit",
-    "premise_test": "tests/test_jail.py::test_main_coder_dispatch_without_worktree_line_asks"
+    "premise_test": "tests/test_jail.py::test_main_coder_dispatch_without_worktree_line_warns"
   },
   "dispatch_binding.R_TWO_UNITS": {
     "failure": "issue 29: one command writes into two unit worktrees and a coder edits a sibling unit's branch",
@@ -129,7 +129,7 @@
   },
   "jail.R_NESTED_CLAUDE": {
     "failure": "audit A7-1: a nested claude session reaches the jail as the operator and escapes every agent rule",
-    "premise_test": "tests/test_jail.py::test_main_claude_is_asked"
+    "premise_test": "tests/test_jail.py::test_main_claude_is_warned"
   },
   "jail.R_NAMESPACED_MAIN": {
     "failure": "0106: a namespaced agent claims the operator's role and gets the operator's asks instead of an agent's denies",
@@ -291,9 +291,9 @@
     "failure": "0100: a foreign agent writes, dispatches or fetches while a train runs",
     "premise_test": "tests/test_jail.py::test_unknown_agent_fails_closed"
   },
-  "jail.R_MAIN_TRAIN_ASK": {
+  "jail.R_MAIN_TRAIN_WARN": {
     "failure": "0105: a main-session write in a repository with an active train leaves a dirty tree or lands on the integration branch",
-    "premise_test": "tests/test_jail.py::test_main_write_to_readme_in_the_train_repo_asks"
+    "premise_test": "tests/test_jail.py::test_main_write_to_readme_in_the_train_repo_warns"
   },
   "jail.R_ROUTED": {
     "failure": "0058: a Daedalus agent judged outside its own hooks gets a verdict its agent file never declared",

@@ -125,6 +125,15 @@ def audit_records(log: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
 
 
+def main_warning(stdout: str) -> str:
+    # Main never prompted (amends 0105, 0106): no decision; one text in context and transcript.
+    doc = json.loads(stdout)
+    out = doc["hookSpecificOutput"]
+    assert out["hookEventName"] == "PreToolUse" and "permissionDecision" not in out, doc
+    assert out["additionalContext"] == doc["systemMessage"], doc
+    return str(out["additionalContext"])
+
+
 def append_handback(
     make_input: Callable[..., dict[str, Any]],
     message: str,

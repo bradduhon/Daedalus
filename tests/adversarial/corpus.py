@@ -30,10 +30,10 @@ PROTECTED = "protected path"
 
 
 def assert_denied(hook_input: dict[str, Any], *markers: str) -> None:
-    # pin C1 -> C6: a deny through tests/hook_chain.py, never an ask; a marker names the finding.
+    # pin C1 -> C6: a deny through tests/hook_chain.py, never a warning; a marker names the finding.
     d = decide(hook_input, CFG)
     reason = str(d.reason)
-    assert not d.allow and not d.ask, (hook_input, reason)
+    assert not d.allow and not d.warn, (hook_input, reason)
     assert not markers or any(m in reason for m in markers), (hook_input, reason)
 
 
