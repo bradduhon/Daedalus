@@ -502,9 +502,9 @@ def _in_unit_worktree(target: str, cwd: str) -> bool:
 def _main_write_train(path: str, cwd: str) -> str | None:
     # 0105, 0104: the train id when the path is in a marked repo outside its scratch, else None.
     target = os.path.realpath(_abs(path, cwd))
-    root = project_root(Path(cwd))
+    root = project_root(cwd)
     if not (_under(target, str(root)) and _train_scoped(cwd, "", {})):
-        root = project_root(Path(os.path.dirname(target)))
+        root = project_root(os.path.dirname(target))
         if not os.path.lexists(train_marker(root)):
             return None
     if _under(target, str(root / SUMMARY_DIR)):
@@ -1291,10 +1291,8 @@ def _loop_union(
         merged: dict[str, list[str] | None] = {}
         for j in span:
             for key, values in changes[j].items():
-                if values is None or merged.get(key, []) is None:
-                    merged[key] = None
-                else:
-                    merged[key] = [*merged.get(key, []), *values]
+                prior = merged.get(key, [])
+                merged[key] = None if values is None or prior is None else [*prior, *values]
         for j in span:
             for key, values in merged.items():
                 if values is None:

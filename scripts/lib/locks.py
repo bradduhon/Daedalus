@@ -10,7 +10,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import IO, Any
+from typing import IO
 
 R_LOCK_NOT_REGULAR = "lock {path} is not a regular file. Next: remove it and retry."
 
@@ -26,7 +26,7 @@ class LockHeld(RuntimeError):
 
 
 def bounded_flock(
-    fh: Any, timeout_s: float = 5.0, poll_s: float = 0.05, label: str = "lock"
+    fh: IO[str] | IO[bytes], timeout_s: float = 5.0, poll_s: float = 0.05, label: str = "lock"
 ) -> None:
     # I6: bounded wait; a hung holder must not stall every later caller.
     deadline = time.monotonic() + timeout_s

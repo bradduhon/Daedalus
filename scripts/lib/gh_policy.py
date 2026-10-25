@@ -378,8 +378,8 @@ def verdict_reason(cwd: str, what: str) -> str | None:
         detail = "no train is active here"
         return R_VERDICT.format(what=what, branch="the train branch", detail=detail)
     branch = f"daedalus/{train}"
-    detail = _verdict_detail(cwd, train, branch)
-    return None if detail is None else R_VERDICT.format(what=what, branch=branch, detail=detail)
+    found = _verdict_detail(cwd, train, branch)
+    return None if found is None else R_VERDICT.format(what=what, branch=branch, detail=found)
 
 
 def pr_create_reason(tokens: list[str], cwd: str) -> str | None:

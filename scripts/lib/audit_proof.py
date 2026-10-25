@@ -6,7 +6,6 @@ import json
 import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any
 
 from lib import git, train_state
 from lib.audit import GENESIS, AuditLockError, read_log, record_hash
@@ -53,7 +52,7 @@ def verify_lines(lines: Iterable[str]) -> tuple[bool, str]:
     return True, f"OK: {count} records, chain intact, head={prev}"
 
 
-def read_chain(path: Path) -> list[dict[str, Any]]:
+def read_chain(path: Path) -> list[dict[str, object]]:
     # issue 10: the runner's hooks-live and check-reply reads wait on the writer's lock too.
     try:
         lines = read_log(path).splitlines()
@@ -351,7 +350,8 @@ def push_proof(repo: Path, train_id: str) -> str:
         except train_state.TrainStateError:
             raise refused from None
         ledger_id, tip = exception.get("ledger_id"), exception.get("tip")
-        bound = isinstance(ledger_id, str) and ledger_id and isinstance(tip, str)
-        if not bound or tip != integration_tip(repo, train_id):
+        if not (isinstance(ledger_id, str) and ledger_id and isinstance(tip, str)):
+            raise refused from None
+        if tip != integration_tip(repo, train_id):
             raise refused from None
         return f"OK approved: exception {ledger_id}, train {train_id}, integration tip {tip[:12]}"

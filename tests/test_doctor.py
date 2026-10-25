@@ -862,3 +862,49 @@ def test_doctor_opt_lines_name_the_setup_skill(tmp_path: Path) -> None:
         f"OPT  service-manifest.json: not found at repo root. {SETUP_NEXT}service-manifest.json"
     ) in lines
     assert result.returncode == 0, result.stdout
+
+
+def _typecheck_lines(repo: Path, command: str | None) -> list[str]:
+    import daedalus_doctor
+
+    stack = {"typecheck_cmd": command}
+    (repo / "service-manifest.json").write_text(json.dumps({"stack": stack}), encoding="utf-8")
+    return [line for _, line in daedalus_doctor._typecheck_check(repo)]
+
+
+def test_typecheck_result_line_is_printed_on_success(tmp_path: Path) -> None:
+    command = f"{sys.executable} -c \"print('Success: no issues found')\""
+    assert _typecheck_lines(tmp_path, command) == [
+        f"OK   typecheck ({command}): Success: no issues found"
+    ]
+
+
+def test_typecheck_failure_is_a_miss_with_next(tmp_path: Path) -> None:
+    command = f"{sys.executable} -c \"print('Found 2 errors'); raise SystemExit(1)\""
+    (line,) = _typecheck_lines(tmp_path, command)
+    assert line.startswith(f"MISS typecheck ({command}): exited 1: Found 2 errors. Next: run ")
+
+
+def test_typecheck_timeout_is_a_miss(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import daedalus_doctor
+
+    def hang(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert kwargs["timeout"] == daedalus_doctor.TYPECHECK_TIMEOUT_S
+        raise subprocess.TimeoutExpired(cmd, 1)
+
+    monkeypatch.setattr(daedalus_doctor.subprocess, "run", hang)
+    (line,) = _typecheck_lines(tmp_path, "mypy scripts")
+    assert "did not finish within 120 s" in line and line.startswith("MISS typecheck")
+
+
+def test_typecheck_missing_tool_is_a_miss(tmp_path: Path) -> None:
+    (line,) = _typecheck_lines(tmp_path, "no-such-typechecker-xyz scripts")
+    assert line.startswith("MISS typecheck (no-such-typechecker-xyz scripts): could not run (")
+
+
+def test_no_typecheck_line_when_undeclared(tmp_path: Path) -> None:
+    import daedalus_doctor
+
+    assert _typecheck_lines(tmp_path, None) == []
+    (tmp_path / "service-manifest.json").unlink()
+    assert list(daedalus_doctor._typecheck_check(tmp_path)) == []

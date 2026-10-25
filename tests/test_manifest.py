@@ -45,6 +45,7 @@ def test_this_repos_manifest_loads() -> None:
     # 0073, B2: this repo's declared stack commands are read; only the secret scan is switched on.
     assert load(REPO_ROOT) == Manifest(
         unit_test_cmd=".venv/bin/pytest -q",
+        typecheck_cmd="python3 -m mypy scripts",
         lint_cmd=".venv/bin/ruff check scripts tests",
         features=Features(secrets_scan=True),
     )
