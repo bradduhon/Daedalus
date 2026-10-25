@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -40,17 +41,15 @@ NOT_RUN = "not run (no IAM, KMS, mTLS, key custody or infrastructure change)"
 NOTE_FIELDS = ("Task", "Codes", "Migration")
 NOTE_SECTIONS = ("Rulings", "Blocks", "Waived")
 _CODES = re.compile(r"--repo [A-Za-z0-9]{1,16} --type [A-Za-z0-9]{1,16}")
-# W3.2: a slash-led run of segments after any non-path character, or any home path; a URL's
-# `//` and `/daedalus:doctor` are none, since `/` must not follow `/` and `:` ends a segment.
-_SEGMENT = r"[\w.\\@+%-]"
-_ABSOLUTE = re.compile(
-    rf"(?<![\w./~-])/(?:{_SEGMENT}+/)*{_SEGMENT}+/?(?!{_SEGMENT}|:[A-Za-z])"
-    rf"|(?<![\w./-])\\?~/(?:{_SEGMENT}|/)*"
-)
-# W3.2: a file URL becomes its path, and a run of leading slashes one slash, before the cut;
-# only an http or https `//` stays, so `Worktree://x/y` and `ssh://h/p` are cut too.
-_FILE_URL = re.compile(r"(?i)(?<![\w.+-])file:(?://[^/\s]*)?/+")
-_SLASHES = re.compile(r"(?<!https:)(?<!http:)(?<![\w./~-])/{2,}", re.IGNORECASE)
+# W3.2 allow-list: a token is split on whitespace and the marks that can wrap a path; it is
+# path-like when it holds `/`, `\` or a percent-encoded slash, and passes only as a plain
+# relative path under the repo or the Charter.
+_TOKEN_SPLIT = re.compile(r"[\s\"'`()<>\[\]{},;|=*]+")
+_PATH_LIKE = re.compile(r"[/\\]|%2f|%5c", re.IGNORECASE)
+_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
+_LINE_SUFFIX = re.compile(r"(?::[0-9]+)+$")
+_TRAILING = ".,:;!?"
+_MD_ESCAPED = re.compile(r"\\(.)")
 _COMPLETE = re.compile(
     r"\[STATUS: COMPLETE\] branch=(\S+) packet_version=(\S+) files=(.*?) tests=(.*?) ledger_notes="
 )
@@ -159,13 +158,45 @@ def parse_notes(text: str, where: str) -> Notes:
     return Notes(True, fields, sections)
 
 
-def public(text: str, repo: Path, charter: Path | None) -> str:
-    # W3.2: the summary is a public PR body; repo paths go relative, every other path to its name.
-    text = _SLASHES.sub("/", _FILE_URL.sub("/", text))
+LOG_NEXT = "Next: report it to the operator; an audit log record is never edited."
+NOTES_NEXT = f"Next: remove that path from {NOTES_FILE}, then rerun summary."
+
+
+def _under(path: Path, root: Path) -> bool:
+    real, base = os.path.realpath(path), os.path.realpath(root)
+    return real == base or real.startswith(base + os.sep)
+
+
+def plain_path(token: str, repo: Path, charter: Path | None) -> bool:
+    # W3.2: no scheme, leading slash, backslash, drive, `~`, `%` or `..`, and resolves inside.
+    path = _LINE_SUFFIX.sub("", token.rstrip(_TRAILING))
+    if not path or _SCHEME.match(path) or path[0] in "/~" or "\\" in path or "%" in path:
+        return False
+    parts = path.split("/")
+    if ".." in parts:
+        return False
+    if charter is not None and parts[0] == charter.name and _under(charter.parent / path, charter):
+        return True
+    return _under(repo / path, repo)
+
+
+def _relative(text: str, root: Path, label: str) -> str:
+    text = text.replace(f"{root}/", f"{label}/" if label else "")
+    return re.sub(re.escape(str(root)) + r"(?![\w./-])", label or ".", text)
+
+
+def public(text: str, repo: Path, charter: Path | None, where: str, fix: str = LOG_NEXT) -> str:
+    # W3.2: a public PR body; repo and Charter paths go relative, any other path refuses.
     if charter is not None:
-        text = text.replace(f"{charter}/", f"{charter.name}/")
-    text = text.replace(f"{repo}/", "")
-    return _ABSOLUTE.sub(lambda m: m.group(0).rstrip("/").rsplit("/", 1)[-1], text)
+        text = _relative(text, charter, charter.name)
+    text = _relative(text, repo, "")
+    for token in _TOKEN_SPLIT.split(text):
+        if _PATH_LIKE.search(token) and not plain_path(token, repo, charter):
+            raise SummaryError(
+                f"{where} carries the path {token!r}, which is not a plain relative path under "
+                f"this repository or the Charter, so no summary was written. {fix}"
+            )
+    return text
 
 
 def _seq(record: Record) -> int:
@@ -216,18 +247,24 @@ def _unit_in(text: str, paths: list[tuple[str, re.Pattern[str]]]) -> str | None:
     return next((name for name, pattern in paths if pattern.search(text)), None)
 
 
-def _cell(value: str, repo: Path, charter: Path | None, limit: int = _CELL_CHARS) -> str:
+def _cell(
+    value: str, repo: Path, charter: Path | None, where: str, limit: int = _CELL_CHARS
+) -> str:
     from audit_report import md_escape
 
-    return md_escape(public(value, repo, charter), limit) or "-"
+    return md_escape(public(value, repo, charter, where), limit) or "-"
+
+
+def _source(reply: Reply, log: SessionLog) -> str:
+    return f"the {reply.agent or 'unnamed agent'} reply at seq {reply.seq} of session {log.session}"
 
 
 @dataclass
 class _Facts:
-    complete: dict[str, tuple[str, str, str]] = field(default_factory=dict)
-    verified: dict[str, str] = field(default_factory=dict)
-    yields: list[tuple[str, str, str, str]] = field(default_factory=list)
-    compliance: list[tuple[str, str]] = field(default_factory=list)
+    complete: dict[str, tuple[str, str, str, str]] = field(default_factory=dict)
+    verified: dict[str, tuple[str, str]] = field(default_factory=dict)
+    yields: list[tuple[str, str, str, str, str]] = field(default_factory=list)
+    compliance: list[tuple[str, str, str]] = field(default_factory=list)
     blocks: Counter[tuple[str, str]] = field(default_factory=Counter)
 
 
@@ -240,21 +277,22 @@ def _gather(logs: Sequence[SessionLog], units: Sequence[dict[str, object]]) -> _
         records = list(log.records)
         found = replies(records)
         for reply in found:
-            line = reply.last
+            line, where = reply.last, _source(reply, log)
             done = _COMPLETE.search(line)
             if reply.agent == "repo-coder" and done:
-                facts.complete[done.group(1)] = (done.group(2), done.group(3), done.group(4))
+                packet, files, tests = done.group(2), done.group(3), done.group(4)
+                facts.complete[done.group(1)] = (packet, files, tests, where)
             asked = _YIELD.match(line)
             if reply.agent == "repo-coder" and asked:
-                facts.yields.append(_yield_row(records, found, reply, asked, paths))
+                facts.yields.append((*_yield_row(records, found, reply, asked, paths), where))
             listed = _COMPLIANCE.match(line)
             if reply.agent in _COMPLIANCE_AGENTS and listed:
-                facts.compliance.append((reply.agent, listed.group(1)))
+                facts.compliance.append((reply.agent, listed.group(1), where))
             judged = _VERIFIER.match(line)
             if reply.agent == "verifier" and judged:
                 unit = _verified_unit(records, reply.seq, paths)
                 if unit is not None:
-                    facts.verified[unit] = line
+                    facts.verified[unit] = (line, where)
         for record in records:
             if record.get("event") == "PreToolUse" and record.get("decision") in _REFUSALS:
                 facts.blocks[(_hook_of(dict(record)), _agent(record) or "main")] += 1
@@ -340,7 +378,7 @@ def _header(
     base = f"{_text(state, 'base_branch') or 'unknown'} @ {_text(state, 'base_sha') or 'unknown'}"
     lines = [
         f"# Build Train {train_id}",
-        f"Task: {public(notes.fields.get('Task', NO_NOTES), repo, charter)}",
+        f"Task: {_note(notes.fields.get('Task', NO_NOTES), repo, charter, 'Task line')}",
         f"Base: {base}. Integration branch: daedalus/{train_id}.",
     ]
     if charter is None:
@@ -364,7 +402,15 @@ def _header(
         f"[POLICY: {'declared, gate not yet shipped' if policy_declared else 'none declared'}]"
     )
     if version is not None:
-        lines.append(public(version.summary_line, repo, charter))
+        lines.append(
+            public(
+                version.summary_line,
+                repo,
+                charter,
+                "the recorded plan's version line",
+                "Next: reword the plan's version reason, record the plan, then rerun summary.",
+            )
+        )
         if version.change_class == "X":
             migration = notes.fields.get("Migration")
             if migration is None:
@@ -373,15 +419,20 @@ def _header(
                     "`Migration: <what an operator edits>` line. Next: add it to the notes, then "
                     "rerun summary."
                 )
-            lines.append(f"Migration: {public(migration, repo, charter)}")
+            lines.append(f"Migration: {_note(migration, repo, charter, 'Migration line')}")
     return lines
+
+
+def _note(text: str, repo: Path, charter: Path | None, row: str) -> str:
+    return public(text, repo, charter, f"the {row} of {NOTES_FILE}", NOTES_NEXT)
 
 
 def _noted(notes: Notes, name: str, empty: str, repo: Path, charter: Path | None) -> list[str]:
     if name not in notes.sections:
         return [NO_NOTES if not notes.found else f"not recorded in the summary notes ({name})"]
-    rows = [public(row, repo, charter) for row in notes.sections[name]]
-    return rows or [empty]
+    rows = notes.sections[name]
+    found = [_note(r, repo, charter, f"{name} row {n}") for n, r in enumerate(rows, start=1)]
+    return found or [empty]
 
 
 def _units(
@@ -390,13 +441,14 @@ def _units(
     lines = ["## Units", "| Unit | Branch | Packet | Files | Tests |", "|---|---|---|---|---|"]
     for unit in units:
         branch = _text(unit, "branch")
-        packet, files, tests = facts.complete.get(branch, ("", "", ""))
+        packet, files, tests, where = facts.complete.get(branch, ("", "", "", ""))
+        state = f"the train state unit {_text(unit, 'name')}"
         cells = [
-            _cell(_text(unit, "name").removeprefix(f"{train_id}-"), repo, None),
-            _cell(branch, repo, None),
-            _cell(f"v{packet}" if packet else "", repo, None),
-            _cell(files, repo, None),
-            _cell(tests, repo, None),
+            _cell(_text(unit, "name").removeprefix(f"{train_id}-"), repo, None, state),
+            _cell(branch, repo, None, state),
+            _cell(f"v{packet}" if packet else "", repo, None, where),
+            _cell(files, repo, None, where),
+            _cell(tests, repo, None, where),
         ]
         lines.append(f"| {' | '.join(cells)} |")
     return lines
@@ -405,8 +457,6 @@ def _units(
 def _audit(
     repo: Path, state: dict[str, object], logs: Sequence[SessionLog], notes: Notes
 ) -> list[str]:
-    from audit_report import md_escape
-
     charter_raw = _text(state, "charter_root")
     charter = Path(charter_raw) if charter_raw else None
     verdict = train_state.record(state, train_state.VERDICT)
@@ -428,18 +478,17 @@ def _audit(
             lines += _noted(notes, "Waived", "none", repo, charter)
         else:
             lines += [
-                f"- {md_escape(public(key, repo, charter))}: tracked-risk issue not recorded"
+                f"- {_cell(key, repo, charter, 'a train state finding key')}: tracked-risk issue "
+                "not recorded"
                 for key in waived
             ]
     elif status == train_state.APPROVED:
         lines.append(
             f"{VERDICT_APPROVED} tip={tip} on the merged integration tip after {last} round(s)."
         )
-        paragraph = _paragraph(logs, _int(verdict, "seq", 0), _text(state, "audit_session"))
+        paragraph, where = _paragraph(logs, _int(verdict, "seq", 0), _text(state, "audit_session"))
         if paragraph:
-            lines.append(
-                f"Auditor: {md_escape(public(paragraph, repo, charter), _PARAGRAPH_CHARS)}"
-            )
+            lines.append(f"Auditor: {_cell(paragraph, repo, charter, where, _PARAGRAPH_CHARS)}")
     elif status == train_state.REJECTED:
         lines.append(f"{VERDICT_REJECTED} tip={tip} after {last} round(s).")
     else:
@@ -461,10 +510,10 @@ def _audit(
     return lines
 
 
-def _paragraph(logs: Sequence[SessionLog], seq: int, session: str) -> str:
+def _paragraph(logs: Sequence[SessionLog], seq: int, session: str) -> tuple[str, str]:
     # 0089: the auditor reply the verdict record names, minus its verdict lines.
     if seq < 1:
-        return ""
+        return "", ""
     ordered = sorted(logs, key=lambda log: log.session != session)
     for log in ordered:
         for record in log.records:
@@ -476,11 +525,12 @@ def _paragraph(logs: Sequence[SessionLog], seq: int, session: str) -> str:
                 else record.get("last_message_head")
             )
             if not isinstance(raw, str):
-                return ""
+                return "", ""
             kept = [ln for ln in raw.splitlines() if not ln.strip().startswith("[VERDICT:")]
             paragraphs = "\n".join(kept).split("\n\n")
-            return next((" ".join(p.split()) for p in paragraphs if p.strip()), "")
-    return ""
+            body = next((" ".join(p.split()) for p in paragraphs if p.strip()), "")
+            return body, f"the security-auditor reply at seq {seq} of session {log.session}"
+    return "", ""
 
 
 def render(
@@ -505,17 +555,22 @@ def render(
     lines += ["## Rulings", *_noted(notes, "Rulings", "none", repo, charter)]
     lines += _units(repo, train_id, units, facts)
     lines.append("## Verification")
-    verified = [f"- {labels[n]}: {md_escape(v)}" for n, v in facts.verified.items() if n in labels]
+    verified = [
+        f"- {labels[n]}: {_cell(line, repo, charter, where)}"
+        for n, (line, where) in facts.verified.items()
+        if n in labels
+    ]
     lines += verified or ["none"]
     lines.append("## Yields")
     lines += [
-        f"- {labels.get(unit, 'unknown unit')}: {kind} {_cell(question, repo, charter)} "
+        f"- {labels.get(unit, 'unknown unit')}: {kind} {_cell(question, repo, charter, where)} "
         f"(answered by {who})"
-        for unit, kind, question, who in facts.yields
+        for unit, kind, question, who, where in facts.yields
     ] or ["none"]
     lines.append("## Compliance")
     lines += [
-        f"- {agent}: {_cell(listed, repo, charter)}" for agent, listed in facts.compliance
+        f"- {agent}: {_cell(listed, repo, charter, where)}"
+        for agent, listed, where in facts.compliance
     ] or [NOT_RUN]
     lines += _audit(repo, state, logs, notes)
     lines.append("## Blocks")
@@ -540,7 +595,9 @@ def render(
         except ReportError as exc:
             raise SummaryError(f"{exc}. Next: keep the audit log, report it.") from exc
         lines += [f"### Audit totals, session {log.session}", *totals[2:]]
-    text = public("\n".join(lines) + "\n", repo, charter)
+    text = "\n".join(lines) + "\n"
+    # W3.2: a last pass over the whole body, with the Markdown escapes taken back out.
+    public(_MD_ESCAPED.sub(r"\1", text), repo, charter, "the rendered summary (train state)")
     # W3.2: the proof reads the first Session line, so only the Audit log section carries any.
     found = list(_SESSION_LINE.finditer(text))
     section = text.find("\n## Audit log\n")

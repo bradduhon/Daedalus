@@ -1792,6 +1792,14 @@ def test_summary_reads_the_notes_file_and_refuses_a_bad_one(repo: Path, plugin: 
     _record(repo, tool_input={"command": command})
     refused = train_runner.summary(repo)
     assert refused.code == 1 and "starts with `Session <id>:`" in refused.lines[0]
+    # W3.2: a path outside the allow-list exits 1 with one Next line and writes nothing.
+    before = _summary_file(repo).read_text(encoding="utf-8")
+    notes.write_text("Task: see C:\\Users\\u\\x.json\n", encoding="utf-8")
+    _record(repo, tool_input={"command": command})
+    refused = train_runner.summary(repo)
+    assert refused.code == 1 and refused.lines[0].count("Next:") == 1
+    assert "the Task line of summary-notes.md carries the path" in refused.lines[0]
+    assert _summary_file(repo).read_text(encoding="utf-8") == before
 
 
 def test_summary_cli_and_stop_write_the_summary(repo: Path, plugin: Path) -> None:

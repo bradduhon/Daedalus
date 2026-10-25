@@ -111,7 +111,9 @@ def _pre(seq: int, agent: str, tool: str, agent_id: str, **tool_input: object) -
 RECORDS: list[dict[str, object]] = [
     _handback(1, "repo-coder", COMPLETE, "c1"),
     _pre(2, "repo-coder", "Bash", "c2", command=f"git -C {U2} commit -m 'WIP: yield'"),
-    _stop(3, "repo-coder", "[STATUS: YIELD_STANDARDS] which rule covers /opt/x/rules/py.md?", "c2"),
+    _stop(
+        3, "repo-coder", f"[STATUS: YIELD_STANDARDS] which rule covers {REPO}/scripts/x.py?", "c2"
+    ),
     _stop(4, "standards-rules-specialist", "[STATUS: STANDARD] python.md:10", "s1"),
     _stop(5, "nist-specialist", "[STATUS: COMPLIANCE] AU-9 PASS, AU-3 PASS", "n1"),
     _pre(6, "orchestrator", "Agent", "o1", prompt=f"Check it.\nUnit worktree: {U1}\nGo."),
@@ -226,7 +228,8 @@ def test_verification_lists_one_verdict_per_verified_unit(tmp_path: Path) -> Non
 
 def test_yields_name_the_unit_kind_question_and_answerer(tmp_path: Path) -> None:
     assert _section(_text(tmp_path), "Yields") == [
-        "- u2: YIELD_STANDARDS which rule covers py.md? (answered by standards-rules-specialist)"
+        "- u2: YIELD_STANDARDS which rule covers scripts/x.py? "
+        "(answered by standards-rules-specialist)"
     ]
     assert _section(_text(tmp_path, records=RECORDS[:1]), "Yields") == ["none"]
 
@@ -310,48 +313,85 @@ def test_audit_log_names_the_running_session_first_and_its_totals(tmp_path: Path
     assert "| SubagentStop | 4 |" in rows and "skipped fork stops: 0" in rows
 
 
-HOSTILE = (
-    "Worktree:/opt/u/.claude/rules/python.md key=/srv/x/y.md ~/proj/a/b.md \\~/proj/c.md "
-    "(/var/tmp/z.md) '/etc/one' /root file:///opt/u/.claude/f.md //srv/q/d.md "
-    "Worktree://opt/w/e.md FILE://localhost/var/g.md"
-)
+# W3.2 allow-list: the six known spellings of a path outside the repo and the Charter, and the
+# other forms the rule names; each is refused wherever it appears.
+REFUSED_PATHS = {
+    "Unix absolute": "/opt/u/.claude/rules/python.md",
+    "file URL": "file:///opt/u/.claude/f.md",
+    "double slash": "//srv/q/d.md",
+    "home path": "~/proj/a/b.md",
+    "Windows drive": "C:\\Users\\u\\AppData\\x.json",
+    "UNC path": "\\\\wsl.localhost\\Ubuntu\\srv\\u\\x",
+    "percent-encoded slash": "docs%2Fsecret.md",
+    "escaped home path": "\\~/proj/c.md",
+    "parent component": "docs/../../outside/x.md",
+    "label before a path": "Worktree:/opt/w/e.md",
+    "https URL": "https://x.io/a/b",
+    "plugin command": "/daedalus:doctor",
+    "backslash relative": "docs\\x.md",
+}
 
 
 def _path_tokens(text: str) -> list[str]:
-    # Independent of the filter: split on whitespace and every mark that can precede a path.
-    tokens = re.split(r"[\s:=,;()\[\]\"'`|<>*]+", text)
-    return [t.lstrip("\\") for t in tokens if t.lstrip("\\").startswith(("/", "~/"))]
+    # Independent of the filter: split on whitespace and the marks around a path, undo escapes.
+    plain = re.sub(r"\\([\\`*_\[\]()!#|~.])", r"\1", text)
+    tokens = re.split(r"[\s:=,;()\[\]\"'`|<>*]+", plain)
+    starts = ("/", "~", "\\", "file", "http")
+    return [t for t in tokens if t.startswith(starts) or "\\" in t or "%2" in t.lower()]
 
 
-def test_the_summary_carries_no_absolute_path(tmp_path: Path) -> None:
-    # W3.2: a public PR body; every path in state and in agent text goes relative or to its name.
-    hostile = _stop(10, "cis-specialist", f"[STATUS: COMPLIANCE] {HOSTILE}", "k1")
-    notes = parse_notes(NOTES + f"## Waived\n{HOSTILE}\n", "n")
-    text = _text(tmp_path, notes=notes, records=[*RECORDS, hostile])
+@pytest.mark.parametrize("token", REFUSED_PATHS.values(), ids=REFUSED_PATHS.keys())
+def test_public_refuses_every_path_outside_the_allow_list(token: str) -> None:
+    with pytest.raises(SummaryError) as info:
+        public(f"see {token} here", REPO, CHARTER, "the test row")
+    message = str(info.value)
+    assert message.startswith("the test row carries the path")
+    assert message.count("Next:") == 1
+
+
+@pytest.mark.parametrize("token", REFUSED_PATHS.values(), ids=REFUSED_PATHS.keys())
+def test_a_compliance_reply_or_notes_row_with_such_a_path_writes_nothing(
+    tmp_path: Path, token: str
+) -> None:
+    # W3.2: the refusal names the source record or notes row and the token, with one Next line.
+    hostile = _stop(10, "cis-specialist", f"[STATUS: COMPLIANCE] AU-9 PASS at {token}", "k1")
+    with pytest.raises(SummaryError) as reply:
+        _text(tmp_path, records=[*RECORDS, hostile])
+    assert str(reply.value).startswith("the cis-specialist reply at seq 10 of session sess-a")
+    assert "an audit log record is never edited" in str(reply.value)
+    notes = parse_notes(NOTES.replace("## Blocks", f"A ruling: see {token}\n## Blocks"), "n")
+    with pytest.raises(SummaryError) as row:
+        _text(tmp_path, notes=notes)
+    assert str(row.value).startswith("the Rulings row 3 of summary-notes.md carries the path")
+    assert str(row.value).endswith(
+        "Next: remove that path from summary-notes.md, then rerun summary."
+    )
+
+
+def test_public_accepts_plain_paths_under_the_repo_and_the_charter() -> None:
+    assert public(f"see {REPO}/src/a.py:12, here", REPO, CHARTER, "w") == "see src/a.py:12, here"
+    assert public(f"{CHARTER}/specs/x.md", REPO, CHARTER, "w") == "private/specs/x.md"
+    assert public("private/specs/x.md", REPO, CHARTER, "w") == "private/specs/x.md"
+    assert public("scripts/lib/a.py tests/x/y.py docs/.tmp/z", REPO, None, "w")
+    assert public(f"--repo {REPO} ok", REPO, None, "w") == "--repo . ok"
+
+
+def test_public_refuses_a_relative_path_through_a_link_that_leaves_the_repo(
+    tmp_path: Path,
+) -> None:
+    repo, outside = tmp_path / "repo", tmp_path / "outside"
+    repo.mkdir()
+    outside.mkdir()
+    (repo / "out").symlink_to(outside)
+    assert public("docs/a.md", repo, None, "w") == "docs/a.md"
+    with pytest.raises(SummaryError, match="out/secret.md"):
+        public("see out/secret.md", repo, None, "w")
+
+
+def test_the_rendered_summary_holds_no_path_outside_the_allow_list(tmp_path: Path) -> None:
+    text = _text(tmp_path)
     assert _path_tokens(text) == []
-    for prefix in ("/r/", "/opt", "/srv", "/var", "/etc", "/root", "~/"):
-        assert prefix not in text, prefix
-    compliance = _section(text, "Compliance")[1]
-    assert compliance.startswith("- cis-specialist: Worktree:python.md key=y.md b.md")
-
-
-def test_public_keeps_plugin_commands_and_urls() -> None:
-    line = f"see /daedalus:doctor, https://x.io/a/b, {REPO}/src/a.py and /tmp/q/z.txt:12"
-    assert public(line, REPO, None) == (
-        "see /daedalus:doctor, https://x.io/a/b, src/a.py and z.txt:12"
-    )
-    assert public(f"{CHARTER}/specs/x.md", REPO, CHARTER) == "private/specs/x.md"
-    assert public(HOSTILE, REPO, None) == (
-        "Worktree:python.md key=y.md b.md c.md (z.md) 'one' root f.md d.md Worktree:e.md g.md"
-    )
-    # W3.2: a file URL or a doubled slash into the repo or the Charter goes relative first.
-    inside = f"file://{REPO}/src/a.py //{CHARTER.relative_to('/')}/specs/x.md"
-    assert public(inside, REPO, CHARTER) == "src/a.py private/specs/x.md"
-    assert public("https://x.io/a/b HTTP://y.io/c/d", REPO, None) == (
-        "https://x.io/a/b HTTP://y.io/c/d"
-    )
-    assert _path_tokens(public("scripts/lib/a.py tests/x/y.py docs/.tmp/z", REPO, None)) == []
-    assert public("scripts/lib/a.py and/or 1/2", REPO, None) == "scripts/lib/a.py and/or 1/2"
+    assert "/r/" not in text
 
 
 @pytest.mark.parametrize(
