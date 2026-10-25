@@ -241,7 +241,7 @@ def message_hmac(key: bytes, data: bytes) -> str:
     return hmac.new(key, data, hashlib.sha256).hexdigest()
 
 
-def _require_cwd(cwd: Any) -> str:
+def _require_cwd(cwd: object) -> str:
     if not isinstance(cwd, str) or not os.path.isabs(cwd):
         raise ValueError(
             f"hook input cwd must be an absolute path (got {cwd!r}). "
@@ -250,7 +250,7 @@ def _require_cwd(cwd: Any) -> str:
     return cwd
 
 
-def _session_file(session_id: str | None, cwd: Any) -> tuple[Path, Path]:
+def _session_file(session_id: object, cwd: object) -> tuple[Path, Path]:
     session = str(session_id or "unknown")
     if not SESSION_ID.fullmatch(session):
         raise ValueError(
@@ -264,16 +264,16 @@ def log_path(session_id: str, cwd: str) -> Path:
     return _session_file(session_id, cwd)[0]
 
 
-def canonical(record: dict[str, Any]) -> str:
+def canonical(record: dict[str, object]) -> str:
     body = {key: value for key, value in record.items() if key != "hash"}
     return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
-def record_hash(record: dict[str, Any]) -> str:
+def record_hash(record: dict[str, object]) -> str:
     return hashlib.sha256(canonical(record).encode("utf-8")).hexdigest()
 
 
-def _result_fields(hook_input: dict[str, Any]) -> tuple[str | None, str | None]:
+def _result_fields(hook_input: dict[str, object]) -> tuple[str | None, str | None]:
     raw = hook_input.get("tool_response", hook_input.get("error"))
     if raw is None:
         return None, None
@@ -301,17 +301,17 @@ def _tail(text: str, limit: int) -> str:
     return window[-limit:]
 
 
-def _error_field(error: Any) -> Any:
+def _error_field(error: object) -> object:
     return _head(error) if isinstance(error, str) else redact(error)
 
 
 def build_record(
-    hook_input: dict[str, Any],
+    hook_input: dict[str, object],
     decision: str | None = None,
     reason: str | None = None,
     key: bytes | None = None,
     judge_ms: float | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     event = hook_input.get("hook_event_name")
     tool_name = hook_input.get("tool_name")
     tool_input = hook_input.get("tool_input")
@@ -388,7 +388,7 @@ def read_log(path: Path) -> str:
         return path.read_bytes().decode("utf-8")
 
 
-def _tail_record(path: Path) -> dict[str, Any] | None:
+def _tail_record(path: Path) -> dict[str, object] | None:
     if not path.exists() or path.stat().st_size == 0:
         return None
     with open(path, "rb") as fh:
@@ -445,11 +445,11 @@ def _started_type(path: Path, agent_id: str) -> str | None:
 
 
 def audit_append(
-    hook_input: dict[str, Any],
+    hook_input: dict[str, object],
     decision: str | None = None,
     reason: str | None = None,
     judge_ms: float | None = None,
-) -> dict[str, Any] | None:
+) -> dict[str, object] | None:
     # 0035: no train marker means no train runs here; lexists, as the jail judges a train.
     cwd = _require_cwd(hook_input.get("cwd"))
     if not os.path.lexists(project_root(cwd) / TRAIN_MARKER):
@@ -485,7 +485,7 @@ def _seq(record: dict[str, object]) -> int:
     return int(seq)
 
 
-def _chain_write(path: Path, record: dict[str, Any]) -> None:
+def _chain_write(path: Path, record: dict[str, object]) -> None:
     # Caller holds the audit lock; the one place a record is chained and appended.
     tail = _tail_record(path)
     record["seq"] = 1 if tail is None else _seq(tail) + 1
