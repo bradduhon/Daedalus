@@ -421,8 +421,9 @@ def _manifest_check(repo: Path) -> tuple[bool, str]:
     )
 
 
-def _typecheck_check(repo: Path) -> Iterator[tuple[bool, str]]:
-    # 38: the declared typecheck_cmd runs once, argv only, bounded; no line when none is declared.
+def _typecheck_check(repo: Path, run: bool = False) -> Iterator[tuple[bool, str]]:
+    # 38, 0076: the declared typecheck_cmd runs only on --run-typecheck, argv only, bounded;
+    # no line when none is declared.
     try:
         manifest = load_manifest(repo)
     except ManifestError:
@@ -431,6 +432,15 @@ def _typecheck_check(repo: Path) -> Iterator[tuple[bool, str]]:
     if command is None:
         return
     name = f"typecheck ({command})"
+    # 0076: the doctor runs no repository-declared command unless --run-typecheck is passed
+    # (audit round 4).
+    if not run:
+        yield (
+            True,
+            f"OPT  {name}: not run. Next: run {command} by hand from your own shell"
+            " at the repo root",
+        )
+        return
     nxt = f"run {command} from the repo root and fix what it reports"
     try:
         argv = shlex.split(command)
@@ -457,7 +467,9 @@ def _typecheck_check(repo: Path) -> Iterator[tuple[bool, str]]:
         yield _check(False, name, f"exited {done.returncode}: {result}", nxt)
 
 
-def _repo_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
+def _repo_checks(
+    repo: Path, is_repo: bool, run_typecheck: bool = False
+) -> Iterator[tuple[bool, str]]:
     yield _check(
         is_repo,
         "git repository",
@@ -468,7 +480,7 @@ def _repo_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
         yield _clean_tree_check(repo)
         yield from _version_tag_check(repo)
     yield _manifest_check(repo)
-    yield from _typecheck_check(repo)
+    yield from _typecheck_check(repo, run_typecheck)
     yield _opt(
         (repo / "contracts").is_dir(),
         "contracts/",
@@ -512,7 +524,7 @@ def print_secrets_scan(repo: Path) -> int:
     return 0
 
 
-def checks(repo: Path) -> Iterator[tuple[bool, str]]:
+def checks(repo: Path, run_typecheck: bool = False) -> Iterator[tuple[bool, str]]:
     yield _check(
         sys.version_info >= (3, 12),
         "python >= 3.12",
@@ -529,7 +541,7 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     yield from _gh_checks(repo)
     yield from _hook_failure_check()
     yield _kernel_rules_check()
-    yield from _repo_checks(repo, is_repo)
+    yield from _repo_checks(repo, is_repo, run_typecheck)
 
 
 def print_cache_dir() -> int:
@@ -557,13 +569,19 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="print whether the service manifest turns the Push Train's secret scan on, and exit",
     )
+    parser.add_argument(
+        "--run-typecheck",
+        action="store_true",
+        help="run the stack.typecheck_cmd the repository declares in service-manifest.json;"
+        " this executes a command the repository chose",
+    )
     args = parser.parse_args(argv)
     if args.print_cache_dir:
         return print_cache_dir()
     if args.print_secrets_scan:
         return print_secrets_scan(Path(args.repo).resolve())
     all_ok = True
-    for ok, line in checks(Path(args.repo).resolve()):
+    for ok, line in checks(Path(args.repo).resolve(), args.run_typecheck):
         print(line)
         all_ok = all_ok and ok
     print(
