@@ -6,7 +6,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
@@ -14,7 +13,9 @@ from typing import Any
 import pytest
 from verify_audit_chain import verify
 
-from tests.conftest import REPO_ROOT
+from tests.conftest import REPO_ROOT, audit_records
+from tests.conftest import git as _git
+from tests.live import LiveRun, require_claude, run_claude
 
 LEDGER_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "ledgers" / "table.md"
 RECORD_KEYS = (
@@ -60,13 +61,6 @@ SPECIALIST_TASK = (
 pytestmark = pytest.mark.live
 
 
-class LiveRun:
-    def __init__(self, result: subprocess.CompletedProcess[str], session: str, repo: Path) -> None:
-        self.result = result
-        self.session = session
-        self.repo = repo
-
-
 def _field(rec: dict[str, Any], key: str) -> Any:
     value: Any = rec
     for part in key.split("."):
@@ -83,43 +77,27 @@ def _last_line(text: str) -> str:
     return lines[-1].strip() if lines else ""
 
 
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
-
-
 def _persona(name: str, task: str, tools: list[str], repo: Path) -> LiveRun:
     # 0010: the real daedalus namespace only; the probe flag stays unset.
     env = {k: v for k, v in os.environ.items() if k != "DAEDALUS_LIVE_TEST"}
     session = str(uuid.uuid4())
-    result = subprocess.run(
-        [
-            "claude",
-            "-p",
-            "--plugin-dir",
-            str(REPO_ROOT),
-            # Operator user-level hooks stay out of the result.
-            "--setting-sources",
-            "project,local",
-            "--agent",
-            f"daedalus:{name}",
-            "--session-id",
-            session,
-            "--allowedTools",
-            ",".join(tools),
-            "--output-format",
-            "text",
-            task,
-        ],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=repo,
-        check=False,
-        timeout=300,
-    )
-    print(f"persona={name} session={session} exit={result.returncode}")
-    print(f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
-    return LiveRun(result, session, repo)
+    argv = [
+        "--plugin-dir",
+        str(REPO_ROOT),
+        # Operator user-level hooks stay out of the result.
+        "--setting-sources",
+        "project,local",
+        "--agent",
+        f"daedalus:{name}",
+        "--session-id",
+        session,
+        "--allowedTools",
+        ",".join(tools),
+        "--output-format",
+        "text",
+        task,
+    ]
+    return run_claude(argv, session, repo, env, label=f"persona={name} ")
 
 
 def _records(run: LiveRun) -> list[dict[str, Any]]:
@@ -134,7 +112,7 @@ def _records(run: LiveRun) -> list[dict[str, Any]]:
     ok, detail = verify(log)
     print(f"chain: {detail}")
     assert ok, detail
-    recs = [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+    recs = audit_records(log)
     for r in recs:
         print(json.dumps(_fields(r)))
     return recs
@@ -160,8 +138,7 @@ def _check(
 
 @pytest.fixture
 def live_repo(tmp_path: Path) -> Path:
-    if shutil.which("claude") is None:
-        pytest.skip("claude CLI not on PATH")
+    require_claude()
     repo = tmp_path.resolve() / "repo"
     (repo / "docs" / ".tmp").mkdir(parents=True)
     (repo / "src").mkdir()
@@ -178,7 +155,7 @@ def live_repo(tmp_path: Path) -> Path:
     data.mkdir(parents=True)
     (data / ".gitignore").write_text("*\n", encoding="utf-8")
     (data / "config.json").write_text(json.dumps(CONFIG, indent=2) + "\n", encoding="utf-8")
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "live@example.invalid")
     _git(repo, "config", "user.name", "Live Test")
     _git(repo, "add", "-A")
@@ -213,8 +190,7 @@ def test_repo_coder(live_repo: Path) -> None:
     from lib.unit_binding import record_dispatch
     from lib.workspace import create, mark_train
 
-    commit = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c"]
-    _git(live_repo, *commit, "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "base")
+    _git(live_repo, "commit", "-q", "--allow-empty", "-m", "base")
     _git(live_repo, "branch", "daedalus/20261015-000000")
     # issue 29: coders write only inside a train, in the unit their dispatch named.
     train_state.save(live_repo, "20261015-000000", {"train_id": "20261015-000000"})
