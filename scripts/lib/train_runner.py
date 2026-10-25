@@ -92,7 +92,6 @@ _UNIT_HEADING = re.compile(r"### Unit ([A-Za-z0-9][A-Za-z0-9-]*): (.+)")
 _HEADING = re.compile(r"#{1,3} ")
 _PHASE = re.compile(r"[a-z][a-z-]{0,31}")
 _LEDGER_ID = re.compile(r"[0-9]{1,6}(?:-[A-Za-z0-9]{1,16}){0,2}")
-_ROUND_KEY = re.compile(r"[1-9][0-9]{0,5}")
 _CHOICE_MAX = 200
 _SCRIPT = re.compile(r"[a-z0-9_]+\.py")
 _SCRIPT_TIMEOUT_S = 900
@@ -1314,8 +1313,9 @@ def reaudit(cwd: Path) -> Outcome:
         judged = verdict.get("tip")
         if tip_problem(repo, judged, current) is None:
             raise RunnerError(
-                f"the approved verdict already admits the tip {current[:12]}. Next: rerun "
-                f"verify_audit_chain.py --approved {train_id} --repo {repo}."
+                f"the approved verdict already admits the tip {current[:12]}. Next: no recovery "
+                f"round is needed; run the push proof verify_audit_chain.py --approved {train_id} "
+                f"--repo {repo} again."
             )
         round_ = derived_round(state)
 
@@ -1487,9 +1487,7 @@ def _findings_path(repo: Path, train_id: str, round_: int) -> Path:
 
 
 def derived_round(state: dict[str, object]) -> int:
-    # 67: one more than the highest round audit_rounds holds, else 1.
-    rounds = train_state.record(state, train_state.AUDIT_ROUNDS)
-    return max((int(key) for key in rounds if _ROUND_KEY.fullmatch(key)), default=0) + 1
+    return audit_rounds.next_round(train_state.record(state, train_state.AUDIT_ROUNDS))
 
 
 def _round_findings(

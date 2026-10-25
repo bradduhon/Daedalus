@@ -1,0 +1,14 @@
+{
+  "audit_proof.R_NO_SUMMARY_WRITE": {
+    "failure": "issue 73: the push proof anchors on a summary Write made before the recorded verdict, so an earlier round's turn is graded and a moved or unrecorded approval passes the push gate",
+    "premise_test": "tests/test_audit_proof.py::test_no_summary_write_after_the_recorded_verdict_refuses"
+  },
+  "audit_proof.R_GRADED_NOT_RECORDED": {
+    "failure": "issue 73: the push proof grades an auditor turn other than the verdict the train recorded, so an approval the verdict command never checked opens the push",
+    "premise_test": "tests/test_audit_proof.py::test_a_graded_turn_other_than_the_recorded_one_refuses"
+  },
+  "audit_proof.R_BOTH_VERDICTS": {
+    "failure": "issue 45: an auditor reply carries an approved and a rejected verdict line, and the reader keeps the approving line, so a rejected round records or proves as approved",
+    "premise_test": "tests/test_audit_proof.py::test_a_reply_with_both_verdict_kinds_refuses"
+  }
+}
