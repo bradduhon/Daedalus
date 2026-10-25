@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from lib.audit import project_data_dir
 
-from tests.conftest import SCRIPTS_DIR
+from tests.conftest import SCRIPTS_DIR, run_cli
 from tests.test_ledger import FIX
 
 SCRIPT = SCRIPTS_DIR / "append_ledger.py"
@@ -24,12 +24,7 @@ TODAY = datetime.now(UTC).date().isoformat()
 
 
 def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(SCRIPT), *args, "--cwd", str(repo)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    return run_cli("append_ledger.py", *args, "--cwd", str(repo))
 
 
 def _append(repo: Path, seq: int, entry: Path) -> subprocess.CompletedProcess[str]:

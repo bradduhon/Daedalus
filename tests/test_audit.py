@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from lib import audit
 
-from tests.conftest import SCRIPTS_DIR, write_train_marker
+from tests.conftest import SCRIPTS_DIR, audit_records, write_train_marker
 
 
 @pytest.fixture
@@ -290,7 +290,7 @@ def test_concurrent_appends_keep_chain_linear(project_data: Path, repo_cwd: Path
     assert all(p.wait() == 0 for p in procs)
     lines = audit.log_path("par", str(repo_cwd)).read_text().splitlines()
     assert len(lines) == 100
-    seqs = [json.loads(line)["seq"] for line in lines]
+    seqs = [rec["seq"] for rec in audit_records(audit.log_path("par", str(repo_cwd)))]
     assert seqs == list(range(1, 101))
     for prev, cur in zip(lines, lines[1:], strict=False):
         assert json.loads(cur)["prev_hash"] == json.loads(prev)["hash"]
@@ -342,9 +342,7 @@ def test_held_lock_raises_after_deadline(project_data: Path, hook_input: Any) ->
 
 
 def _last_record(project_data: Path) -> dict[str, Any]:
-    lines = (project_data / "audit" / "sess-test.jsonl").read_text().splitlines()
-    rec: dict[str, Any] = json.loads(lines[-1])
-    return rec
+    return audit_records(project_data / "audit" / "sess-test.jsonl")[-1]
 
 
 @pytest.mark.parametrize(

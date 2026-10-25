@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import subprocess
-import sys
+from functools import partial
 from pathlib import Path
 
 import pytest
 from lib.plan_record import Plan, PlanError, graph_line, load, validate
 
-from tests.conftest import REPO_ROOT, SCRIPTS_DIR
+from tests.conftest import REPO_ROOT, run_cli
 
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "plans"
 THIS_PLAN = Path("docs/private/superpowers/plans/2026-10-19-plan-7-efficiency.md")
@@ -28,11 +28,7 @@ def _plan_text(tmp_path: Path, *lines: str) -> Plan:
     return load(path)
 
 
-def _cli(*args: str) -> subprocess.CompletedProcess[str]:
-    script = SCRIPTS_DIR / "validate_plan.py"
-    return subprocess.run(
-        [sys.executable, str(script), *args], capture_output=True, text=True, check=False
-    )
+_cli = partial(run_cli, "validate_plan.py")
 
 
 def _this_plan() -> Path | None:

@@ -17,7 +17,7 @@ import enforce_agent_jail
 import pytest
 from lib import jail
 
-from tests.conftest import write_train_marker
+from tests.conftest import audit_records, write_train_marker
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "enforce_agent_jail.py"
 
@@ -45,7 +45,7 @@ def test_allow_exits_zero_and_logs_allow(
     _in_train(project_data)
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "git status"}))
     assert result.returncode == 0, result.stderr
-    rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
+    rec = audit_records(project_data / "audit" / "sess-test.jsonl")[-1]
     assert rec["decision"] == "allow" and rec["reason"] is None
 
 
@@ -62,7 +62,7 @@ def test_main_write_in_a_train_exits_zero_with_ask_and_logs_ask(
     reason = out["permissionDecisionReason"]
     assert reason.startswith("Build Train 20261015-120000 is active in this repository")
     assert f"Writing {repo_cwd}/README.md here" in reason
-    rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
+    rec = audit_records(project_data / "audit" / "sess-test.jsonl")[-1]
     assert rec["decision"] == "ask" and rec["reason"] == f"jail: {reason}"
     # 0105, 6.1: the record names the deciding hook; the operator's prompt text does not.
     assert rec["reason"].startswith("jail: ") and not reason.startswith("jail: ")
@@ -88,7 +88,7 @@ def test_block_exits_two_with_message_and_logs_block(
     want = "git_push: no remote git operations in the Build Train."
     assert result.stderr.startswith(f"daedalus-jail[repo-coder]: {want}")
     assert "Next:" in result.stderr
-    rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
+    rec = audit_records(project_data / "audit" / "sess-test.jsonl")[-1]
     assert rec["decision"] == "block" and rec["reason"].startswith(want)
 
 
@@ -190,9 +190,7 @@ AUDITOR = {"agent_type": "daedalus:security-auditor", "agent_id": "a1"}
 
 
 def _last_record(project_data: Path) -> dict[str, Any]:
-    return dict(
-        json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
-    )
+    return dict(audit_records(project_data / "audit" / "sess-test.jsonl")[-1])
 
 
 def test_malformed_config_blocks(run_script: Any, project_data: Path, hook_input: Any) -> None:
@@ -261,7 +259,7 @@ def test_malformed_config_records_block(
     payload = hook_input(tool_input={"command": "ls"}, **AUDITOR)
     result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2
-    rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
+    rec = audit_records(project_data / "audit" / "sess-test.jsonl")[-1]
     assert rec["decision"] == "block"
     assert "config.json" in rec["reason"] and "not valid JSON" in rec["reason"]
 
@@ -637,7 +635,7 @@ def test_explore_read_of_a_normal_file_is_allowed_and_audited(
     )
     result = _run_home(payload, temp_home, plugin_data)
     assert result.returncode == 0, result.stderr
-    rec = json.loads((project_data / "audit" / "sess-test.jsonl").read_text().splitlines()[-1])
+    rec = audit_records(project_data / "audit" / "sess-test.jsonl")[-1]
     assert rec["decision"] == "allow" and rec["tool_name"] == "Read"
 
 
