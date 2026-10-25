@@ -384,6 +384,15 @@ def test_a_glued_tilde_or_doubled_slash_path_is_withheld_or_refused(token: str) 
         public(f"at {token} now", REPO, CHARTER, "the Task line of summary-notes.md")
 
 
+def test_a_relative_path_before_a_placeholder_is_written_intact(tmp_path: Path) -> None:
+    # W3.2: escaping turns `<` into an entity; the body check reads the text before escaping.
+    reply = "[STATUS: COMPLIANCE] notes in docs/.tmp/daedalus/<train-id>-summary.md PASS"
+    text = _text(tmp_path, records=[*RECORDS, _stop(14, "cis-specialist", reply, "k2")])
+    line = "docs/.tmp/daedalus/&lt;train-id&gt;-summary.md PASS"
+    assert line in _section(text, "Compliance")[1]
+    assert "withheld" not in _section(text, "Compliance")[1]
+
+
 def test_this_trains_live_record_shapes_render_with_the_marker(tmp_path: Path) -> None:
     # W3.2: the three audit records of train 20261021-014310 that once stopped its summary.
     web = _stop(

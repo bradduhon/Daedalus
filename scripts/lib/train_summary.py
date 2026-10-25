@@ -4,6 +4,7 @@
 # train state, the audit logs and one orchestrator-written notes file; it is a public PR body.
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -621,7 +622,10 @@ def render(
         lines += [f"### Audit totals, session {log.session}", *totals[2:]]
     text = "\n".join(lines) + "\n"
     # W3.2: a last pass over the whole body, with the Markdown escapes taken back out.
-    public(_MD_ESCAPED.sub(r"\1", text), repo, charter, "the rendered summary (train state)")
+    # The pass reads the body as it stood before md_escape: its backslashes come out first,
+    # then its HTML entities, so escaping never makes a token the checked fields lacked.
+    unescaped = html.unescape(_MD_ESCAPED.sub(r"\1", text))
+    public(unescaped, repo, charter, "the rendered summary (train state)")
     # W3.2: the proof reads the first Session line, so only the Audit log section carries any.
     found = list(_SESSION_LINE.finditer(text))
     section = text.find("\n## Audit log\n")
