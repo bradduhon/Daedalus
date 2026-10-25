@@ -672,3 +672,43 @@ def test_shell_tripwires_malformed_input_denies() -> None:
 
 def test_shell_tripwires_internal_error_denies_and_names_the_hook() -> None:
     internal_error_denies(HOOK, payload("Bash", command="ls"))
+
+
+# spec 7.1, Train C seqs 889, 930, 968, 972, 1503: the coder's dash grep of its worktree.
+DASH_GREP = f'grep -rnP "\\x{{2013}}|\\x{{2014}}" {WT}/scripts {WT}/tests'
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        DASH_GREP,
+        f'{DASH_GREP}; echo "dash-grep exit $?"',
+        f"cd {WT} && grep -n -v '^[ -~]*$' scripts/a.py tests/b.py; echo exit=$?",
+        f"cd {WT} && python3 -m pytest tests/adversarial -q 2>&1 | tail -2 && {DASH_GREP}",
+    ],
+)
+def test_coder_dash_grep_with_its_exit_echo_is_allowed(command: str) -> None:
+    assert evaluate(HOOK, _b("repo-coder", command)) is None, command
+    assert decide(_b("repo-coder", command), CFG).allow, command
+
+
+def test_coder_dash_grep_write_forms_are_refused() -> None:
+    for command in (
+        f"{DASH_GREP} > {WT}/../../../src/a.py",
+        f'{DASH_GREP}; echo "exit=$?" > {WT}/../../../src/a.py',
+        f"{DASH_GREP} | tee {WT}/../../../src/a.py",
+    ):
+        assert not decide(_b("repo-coder", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    ['echo "$HOME"', 'echo "${?}"', 'echo "$$?"', 'echo "\\$?"', "echo ~/x$?", "cat x$?"],
+)
+def test_exit_echo_admits_only_the_exit_status(command: str) -> None:
+    assert evaluate(HOOK, _b("repo-coder", command)) == shell.R_HYGIENE, command
+
+
+def test_exit_echo_is_the_coders_alone() -> None:
+    for agent in ("pr-train-conductor", "charter-docs", "security-auditor", "orchestrator"):
+        assert evaluate(HOOK, _b(agent, 'echo "exit=$?"')) == shell.R_HYGIENE, agent
