@@ -112,7 +112,10 @@ WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         frozenset({"-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose", "-p", "-x"}),
         frozenset({"-I", "-n", "-P", "-d", "-L", "-s", "-E", "-a", "--arg-file", "--delimiter"}),
     ),
+    # 0048, pin U2 -> E6: the kernel wrapper, daedalus_confine.py --unit <worktree> -- <command>.
+    "daedalus_confine.py": (frozenset({"--"}), frozenset({"--unit"})),
 }
+CONFINE = "daedalus_confine.py"
 # issue 76: options that move the working folder before the wrapped command runs.
 WRAPPER_CHDIR = frozenset({("env", "-C"), ("env", "--chdir"), ("sudo", "-D"), ("sudo", "--chdir")})
 # issue 76: options whose value is a file the wrapper itself writes.
@@ -249,6 +252,15 @@ R_CLAUDE_PATH = (
 R_UNTRUSTED_PATH = (
     "a command given as a path runs only from the system bin folders, a unit worktree or the "
     "manifest's declared commands (issue 55). Next: run the tool by name or from your worktree."
+)
+CONFINE_PATH = os.path.join(_REPO_SCRIPTS, CONFINE)
+CONFINE_NEXT = (
+    f"Next: run the plugin's kernel wrapper {CONFINE_PATH} with --unit, your unit worktree "
+    "path, then -- and the command."
+)
+R_CONFINE_FORM = (
+    "the kernel wrapper runs in one form only, the plugin's own file with --unit, the unit "
+    f"worktree path, then -- and the command (0048). {CONFINE_NEXT}"
 )
 _PROJECT_DATA = ".claude/daedalus"
 _GLOB_CHARS = frozenset("*?[")
@@ -1245,6 +1257,18 @@ def python_script(tokens: list[str]) -> str | None:
     return args[0] if args and not args[0].startswith("-") else None
 
 
+def confine_split(tokens: list[str]) -> tuple[str, list[str]] | None:
+    # 0048: <wrapper> --unit <worktree> -- <command...>, the one form; None for any other.
+    if len(tokens) < 5 or tokens[1] != "--unit" or tokens[3] != "--":
+        return None
+    return tokens[2], tokens[4:]
+
+
+def confine_wrapper(word: str, base: str) -> bool:
+    # 0048: the plugin's own wrapper by its real file; a copy in a worktree is not it.
+    return _base(word) == CONFINE and command_path(word, base) == CONFINE_PATH
+
+
 def _tester_runner_ok(
     name: str, tokens: list[str], own_script: Callable[[str], bool] | None = None
 ) -> bool:
@@ -1392,6 +1416,17 @@ def _worker_hygiene(
         return R_ENV
     if runs_claude(tokens, base):
         return R_CLAUDE_PATH
+    if own_script is not None and _base(tokens[0]) == CONFINE:
+        # 0048: the coder's wrapped command is judged as if it ran bare; the wrapper adds no grant.
+        split = confine_split(tokens)
+        if split is None or not confine_wrapper(tokens[0], base):
+            return R_CONFINE_FORM
+        cut = len(tokens) - len(split[1])
+        aligned = list(words) if words and len(words) == len(tokens) else []
+        if _hygiene_bad(tokens[2], aligned[2] if aligned else None):
+            return R_HYGIENE
+        inner = aligned[cut:] if aligned else None
+        return _worker_hygiene(split[1], agent, inner, own_script, base, tools)
     # issue 55: own_script marks the coder, the one worker whose path commands are judged here.
     if own_script is not None and not _path_trusted(tokens[0], base, own_script, tools):
         return R_UNTRUSTED_PATH

@@ -275,6 +275,15 @@ def _fresh_project_root() -> Iterator[None]:
     audit._TRACKED.clear()
 
 
+@pytest.fixture(autouse=True)
+def _kernel_rules_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 0048: the confine check steps aside in-process; tests/test_confine.py restores the probe.
+    import daedalus_confine
+
+    off = daedalus_confine.Support(None, 0, False)
+    monkeypatch.setattr(daedalus_confine, "kernel_support", lambda: off)
+
+
 @pytest.fixture
 def repo_cwd(tmp_path: Path) -> Path:
     root = tmp_path.resolve() / "repo"

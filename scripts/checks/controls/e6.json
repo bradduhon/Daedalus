@@ -1,0 +1,18 @@
+{
+  "checks/confine": {
+    "failure": "0048: a coder's test command runs arbitrary test code with the coder's full file and network reach, so it writes outside its unit worktree, reads the train's data folder or opens a network socket",
+    "premise_test": "tests/test_confine.py::test_unwrapped_test_command_is_refused_when_the_kernel_holds_rules"
+  },
+  "confine.R_CONFINE": {
+    "failure": "0048: a coder runs a test command without the kernel wrapper on a kernel that holds the rules, so its test code reaches files outside the worktree and the network",
+    "premise_test": "tests/test_confine.py::test_unwrapped_test_command_is_refused_when_the_kernel_holds_rules"
+  },
+  "confine.R_CONFINE_UNIT": {
+    "failure": "0048: the wrapper's --unit names another unit's worktree or the main checkout, or the command runs outside it, so the read-write grant covers files the coder does not own",
+    "premise_test": "tests/test_confine.py::test_wrapper_unit_must_be_the_command_worktree"
+  },
+  "shell.R_CONFINE_FORM": {
+    "failure": "0048: a copy of the wrapper in the worktree or another spelling of its options passes as the wrapper, so a command that applies no kernel rules satisfies the confine check",
+    "premise_test": "tests/test_confine.py::test_a_wrapper_copy_or_another_form_is_refused"
+  }
+}

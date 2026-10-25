@@ -93,8 +93,10 @@ def test_wrapper_table_is_a_superset_of_the_shell_table() -> None:
 
 def test_stdbuf_has_its_row_and_worker_wrappers_are_unchanged() -> None:
     assert {"-i", "-o", "-e", "--input", "--output", "--error"} <= shell.WRAPPER_OPTS["stdbuf"][1]
-    assert shell.WORKER_WRAPPERS == OLD_WORKER_WRAPPERS
+    # pin U2 -> E6: the kernel wrapper's row is the one addition since a83accf.
+    assert shell.WORKER_WRAPPERS == OLD_WORKER_WRAPPERS | {shell.CONFINE}
     assert shell.WRAPPER_OPTS.keys() <= shell.WORKER_WRAPPERS
+    assert shell.WRAPPER_OPTS[shell.CONFINE] == (frozenset({"--"}), frozenset({"--unit"}))
 
 
 def _assigned(module: str) -> set[str]:

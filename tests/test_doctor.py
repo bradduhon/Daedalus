@@ -10,11 +10,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import daedalus_confine
 import pytest
 
 from tests.conftest import fake_bin, git, run_cli
 
 SCAFFOLDS = ("service-manifest.json", "contracts/", ".gitleaks.toml")
+PROBE = daedalus_confine.kernel_support
 
 
 def _run(
@@ -1037,6 +1039,42 @@ def test_claude_version_timeout_skips_the_line(
     assert isinstance(argv, list) and argv[1:] == ["--version"]
     assert Path(argv[0]).name == "claude" and seen["timeout"] == daedalus_doctor.CLAUDE_TIMEOUT_S
     assert seen["stdin"] is subprocess.DEVNULL and "shell" not in seen
+
+
+def test_kernel_rules_line_reports_the_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 0048: the line reads the same probe the confine check steps aside on.
+    import daedalus_confine
+    import daedalus_doctor
+
+    off = daedalus_confine.Support(None, 0, False)
+    assert daedalus_doctor._kernel_rules_check() == (
+        True,
+        "OPT  kernel rules: not available on this kernel",
+    )
+    for no_filter in (daedalus_confine.Support("x86_64", 3, False), off):
+        monkeypatch.setattr(daedalus_confine, "kernel_support", lambda s=no_filter: s)
+        assert daedalus_doctor._kernel_rules_check()[1].startswith("OPT  kernel rules: not")
+    on = daedalus_confine.Support("x86_64", 3, True)
+    monkeypatch.setattr(daedalus_confine, "kernel_support", lambda: on)
+    assert daedalus_doctor._kernel_rules_check() == (
+        True,
+        "OK   kernel rules: Landlock ABI 3 and the seccomp socket filter on x86_64; "
+        "coder test commands run under the kernel wrapper",
+    )
+
+
+def test_the_doctor_prints_this_kernels_probe(tmp_path: Path) -> None:
+    # 0048: the doctor runs as a script, so it prints the live probe the fixture leaves alone.
+    support = PROBE()
+    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=tmp_path / "home").stdout
+    kernel = [line for line in lines.splitlines() if "kernel rules" in line]
+    if support.ok:
+        assert kernel == [
+            f"OK   kernel rules: Landlock ABI {support.abi} and the seccomp socket filter on "
+            f"{support.arch}; coder test commands run under the kernel wrapper"
+        ]
+    else:
+        assert kernel == ["OPT  kernel rules: not available on this kernel"]
 
 
 def test_no_version_tag_line_outside_a_repository(tmp_path: Path) -> None:
