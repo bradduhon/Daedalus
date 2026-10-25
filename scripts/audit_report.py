@@ -12,10 +12,10 @@ import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import atomic  # noqa: E402
+from lib import atomic, narrow  # noqa: E402
 from lib.audit import (  # noqa: E402
     SESSION_ID,
     AuditLockError,
@@ -118,7 +118,7 @@ def _read_lines(path: Path) -> list[str]:
         raise ReportError(str(exc)) from exc
 
 
-def md_escape(value: Any, limit: int | None = None) -> str:
+def md_escape(value: object, limit: int | None = None) -> str:
     # 8.6: agent text is untrusted; cut, then HTML and Markdown escape so it renders inert.
     text = "" if value is None else str(value)
     if limit is not None:
@@ -127,13 +127,13 @@ def md_escape(value: Any, limit: int | None = None) -> str:
     return " ".join(text.splitlines())
 
 
-def _timeline(records: list[dict[str, Any]]) -> list[str]:
-    agents: dict[str, dict[str, Any]] = {}
+def _timeline(records: list[dict[str, object]]) -> list[str]:
+    agents: dict[str, dict[str, object]] = {}
     for rec in records:
         if rec.get("event") not in ("SubagentStart", "SubagentStop") or not rec.get("agent_id"):
             continue
         row = agents.setdefault(
-            rec["agent_id"],
+            str(rec["agent_id"]),
             {"type": rec.get("agent_type"), "start": None, "stop": None, "head": None},
         )
         if rec["event"] == "SubagentStart":
@@ -156,7 +156,7 @@ def _timeline(records: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _tool_table(records: list[dict[str, Any]]) -> list[str]:
+def _tool_table(records: list[dict[str, object]]) -> list[str]:
     counts: dict[tuple[str, str], Counter[str]] = {}
     for rec in records:
         if rec.get("event") != "PreToolUse" or rec.get("tool_name") not in _TOOLS:
@@ -174,7 +174,7 @@ def _tool_table(records: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _blocks(records: list[dict[str, Any]]) -> list[str]:
+def _blocks(records: list[dict[str, object]]) -> list[str]:
     lines = ["## Blocks", ""]
     for rec in records:
         if rec.get("decision") in _REFUSALS:
@@ -188,7 +188,7 @@ def _blocks(records: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _status_lines(records: list[dict[str, Any]]) -> list[str]:
+def _status_lines(records: list[dict[str, object]]) -> list[str]:
     lines = ["## Status lines", ""]
     for rec in records:
         for field in ("last_message_head", "reason"):
@@ -206,14 +206,14 @@ def _status_lines(records: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _totals(records: list[dict[str, Any]]) -> list[str]:
+def _totals(records: list[dict[str, object]]) -> list[str]:
     tally = Counter(str(rec.get("event")) for rec in records)
     lines = ["## Totals by event", "", "| event | records |", "|---|---|"]
     lines.extend(f"| {md_escape(event)} | {n} |" for event, n in sorted(tally.items()))
     return lines
 
 
-def _hook_of(rec: dict[str, Any]) -> str:
+def _hook_of(rec: dict[str, object]) -> str:
     # 0105: an ask is its own row beside the same hook's blocks.
     reason = rec.get("reason")
     match = _HOOK_PREFIX.match(reason) if isinstance(reason, str) else None
@@ -221,7 +221,7 @@ def _hook_of(rec: dict[str, Any]) -> str:
     return f"{hook} (ask)" if rec.get("decision") == "ask" else hook
 
 
-def _seconds(start: Any, end: Any) -> float | None:
+def _seconds(start: object, end: object) -> float | None:
     try:
         return (
             datetime.fromisoformat(str(end)) - datetime.fromisoformat(str(start))
@@ -235,12 +235,12 @@ def _fmt(seconds: float | None) -> str:
 
 
 def _until_allowed(
-    pre: list[dict[str, Any]], origin: dict[str, Any], tools: tuple[str, ...] | None = None
+    pre: list[dict[str, object]], origin: dict[str, object], tools: tuple[str, ...] | None = None
 ) -> str:
     # 6.2: seconds from origin to the same agent's next allowed call, optionally of these tools.
-    seq = int(origin.get("seq") or 0)
+    seq = narrow.integer(origin, "seq", 0)
     for rec in pre:
-        if int(rec.get("seq") or 0) <= seq or rec.get("agent_id") != origin.get("agent_id"):
+        if narrow.integer(rec, "seq", 0) <= seq or rec.get("agent_id") != origin.get("agent_id"):
             continue
         if rec.get("decision") == "allow" and (tools is None or rec.get("tool_name") in tools):
             return _fmt(_seconds(origin.get("ts"), rec.get("ts")))
@@ -254,7 +254,7 @@ def _control_rows() -> dict[str, Control]:
         raise ReportError(str(exc)) from exc
 
 
-def _controls(records: list[dict[str, Any]]) -> list[str]:
+def _controls(records: list[dict[str, object]]) -> list[str]:
     # 6.2: hook names, agent types, tools and timings only; no reason body or reply text.
     pre = [r for r in records if r.get("event") == "PreToolUse"]
     blocks = [r for r in pre if r.get("decision") in _REFUSALS]
@@ -278,7 +278,8 @@ def _controls(records: list[dict[str, Any]]) -> list[str]:
     for start in (r for r in records if r.get("event") == "SubagentStart" and r.get("agent_id")):
         named = f"{md_escape(start['agent_id'])} | {md_escape(start.get('agent_type'))}"
         lines.append(f"| {named} | {_until_allowed(pre, start, _EDIT_TOOLS)} |")
-    timed = [float(r["judge_ms"]) for r in pre if isinstance(r.get("judge_ms"), (int, float))]
+    judged = [r.get("judge_ms") for r in pre]
+    timed = [float(ms) for ms in judged if isinstance(ms, (int, float))]
     lines.append("")
     if timed:
         lines.append(f"mean judge time: {sum(timed) / len(timed):.1f} ms over {len(timed)} calls")

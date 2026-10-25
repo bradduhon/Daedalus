@@ -16,7 +16,6 @@ from contextlib import ExitStack, contextmanager, suppress
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
 
 from lib import atomic, git, locks
 from lib.credential_paths import REPLY_KEY_NAME
@@ -242,7 +241,7 @@ def message_hmac(key: bytes, data: bytes) -> str:
     return hmac.new(key, data, hashlib.sha256).hexdigest()
 
 
-def _require_cwd(cwd: Any) -> str:
+def _require_cwd(cwd: object) -> str:
     if not isinstance(cwd, str) or not os.path.isabs(cwd):
         raise ValueError(
             f"hook input cwd must be an absolute path (got {cwd!r}). "
@@ -251,7 +250,7 @@ def _require_cwd(cwd: Any) -> str:
     return cwd
 
 
-def _session_file(session_id: str | None, cwd: Any) -> tuple[Path, Path]:
+def _session_file(session_id: object, cwd: object) -> tuple[Path, Path]:
     session = str(session_id or "unknown")
     if not SESSION_ID.fullmatch(session):
         raise ValueError(
@@ -265,16 +264,16 @@ def log_path(session_id: str, cwd: str) -> Path:
     return _session_file(session_id, cwd)[0]
 
 
-def canonical(record: dict[str, Any]) -> str:
+def canonical(record: dict[str, object]) -> str:
     body = {key: value for key, value in record.items() if key != "hash"}
     return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
-def record_hash(record: dict[str, Any]) -> str:
+def record_hash(record: dict[str, object]) -> str:
     return hashlib.sha256(canonical(record).encode("utf-8")).hexdigest()
 
 
-def _result_fields(hook_input: dict[str, Any]) -> tuple[str | None, str | None]:
+def _result_fields(hook_input: dict[str, object]) -> tuple[str | None, str | None]:
     raw = hook_input.get("tool_response", hook_input.get("error"))
     if raw is None:
         return None, None
@@ -302,17 +301,17 @@ def _tail(text: str, limit: int) -> str:
     return window[-limit:]
 
 
-def _error_field(error: Any) -> Any:
+def _error_field(error: object) -> object:
     return _head(error) if isinstance(error, str) else redact(error)
 
 
 def build_record(
-    hook_input: dict[str, Any],
+    hook_input: dict[str, object],
     decision: str | None = None,
     reason: str | None = None,
     key: bytes | None = None,
     judge_ms: float | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     event = hook_input.get("hook_event_name")
     tool_name = hook_input.get("tool_name")
     tool_input = hook_input.get("tool_input")
@@ -389,7 +388,7 @@ def read_log(path: Path) -> str:
         return path.read_bytes().decode("utf-8")
 
 
-def _tail_record(path: Path) -> dict[str, Any] | None:
+def _tail_record(path: Path) -> dict[str, object] | None:
     if not path.exists() or path.stat().st_size == 0:
         return None
     with open(path, "rb") as fh:
@@ -446,22 +445,23 @@ def _started_type(path: Path, agent_id: str) -> str | None:
 
 
 def audit_append(
-    hook_input: dict[str, Any],
+    hook_input: dict[str, object],
     decision: str | None = None,
     reason: str | None = None,
     judge_ms: float | None = None,
-) -> dict[str, Any] | None:
+) -> dict[str, object] | None:
     # 0035: no train marker means no train runs here; lexists, as the jail judges a train.
-    if not os.path.lexists(project_root(_require_cwd(hook_input.get("cwd"))) / TRAIN_MARKER):
+    cwd = _require_cwd(hook_input.get("cwd"))
+    if not os.path.lexists(project_root(cwd) / TRAIN_MARKER):
         return None
-    path, lock = _session_file(hook_input.get("session_id"), hook_input.get("cwd"))
-    ensure_project_data_dir(hook_input["cwd"])
+    path, lock = _session_file(hook_input.get("session_id"), cwd)
+    ensure_project_data_dir(cwd)
     audit_dir = path.parent
     audit_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(audit_dir, 0o700)
-    root, source, _ = root_info(hook_input["cwd"])
+    root, source, _ = root_info(cwd)
     last = hook_input.get("last_assistant_message")
-    key = reply_key(hook_input["cwd"], create=True) if isinstance(last, str) and last else None
+    key = reply_key(cwd, create=True) if isinstance(last, str) and last else None
     if judge_ms is None and hook_input.get("hook_event_name") == "PreToolUse":
         judge_ms = _take_judge_ms()
     record = build_record(hook_input, decision, reason, key, judge_ms)
@@ -474,14 +474,21 @@ def audit_append(
                 record["agent_type"] = _started_type(path, agent_id)
         _chain_write(path, record)
     if record["seq"] == 1:
-        rotate_logs(hook_input["cwd"], path)
+        rotate_logs(cwd, path)
     return record
 
 
-def _chain_write(path: Path, record: dict[str, Any]) -> None:
+def _seq(record: dict[str, object]) -> int:
+    seq = record["seq"]
+    if isinstance(seq, bool) or not isinstance(seq, int | str):
+        raise ValueError(f"audit record seq is not a number: {seq!r}")
+    return int(seq)
+
+
+def _chain_write(path: Path, record: dict[str, object]) -> None:
     # Caller holds the audit lock; the one place a record is chained and appended.
     tail = _tail_record(path)
-    record["seq"] = 1 if tail is None else int(tail["seq"]) + 1
+    record["seq"] = 1 if tail is None else _seq(tail) + 1
     record["prev_hash"] = GENESIS if tail is None else tail["hash"]
     record["hash"] = record_hash(record)
     line = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -579,7 +586,7 @@ def rotate_logs(cwd: str, current: Path) -> list[str]:
                 if not _try_lock(log, stack):
                     continue
                 tail = _tail_record(log)
-                seq, digest = (0, GENESIS) if tail is None else (int(tail["seq"]), tail["hash"])
+                seq, digest = (0, GENESIS) if tail is None else (_seq(tail), tail["hash"])
                 ends.append({"session_id": log.stem, "seq": seq, "hash": digest, "path": log})
             if not ends:
                 return []
