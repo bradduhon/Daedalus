@@ -3,6 +3,8 @@
 # 0048, spec W3.4: the kernel wrapper's rules on this kernel, and the confine check around it.
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -23,7 +25,8 @@ from tests.hook_chain import (
     payload,
     unknown_flag_denies,
 )
-from tests.payloads import _b
+from tests.jail_cases import _narrowed_repo
+from tests.payloads import _b, _cwd
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 PROBE = daedalus_confine.kernel_support
@@ -50,9 +53,13 @@ def _unit(tmp_path: Path) -> tuple[Path, Path]:
     return repo, unit
 
 
-def _confined(unit: Path, code: str) -> subprocess.CompletedProcess[str]:
-    argv = [str(shell.CONFINE_PATH), "--unit", str(unit), "--", sys.executable, "-c", code]
-    return subprocess.run(argv, capture_output=True, text=True, check=False, cwd=unit)
+def _confined(
+    unit: Path, code: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    # 0048: by the wrapper's own path; with env, through this interpreter so HOME may move.
+    lead = [str(shell.CONFINE_PATH)] if env is None else [sys.executable, str(shell.CONFINE_PATH)]
+    argv = [*lead, "--unit", str(unit), "--", sys.executable, "-c", code]
+    return subprocess.run(argv, capture_output=True, text=True, check=False, cwd=unit, env=env)
 
 
 @needs_kernel
@@ -69,6 +76,31 @@ def test_the_first_line_is_the_rule_set_applied(tmp_path: Path) -> None:
     assert f"ro={repo}(-.claude/daedalus,-.claude/worktrees)," in first
     assert "refused=socket(AF_INET,AF_INET6,any family but AF_UNIX,AF_NETLINK),io_uring" in first
     assert second == "ran"
+    assert f"git_config={tmp}/gitconfig xdg_config={tmp}/config" in first
+    assert f"{Path.home()}/.gitconfig" not in first and f"{Path.home()}/.config" not in first
+
+
+@needs_kernel
+def test_git_stores_and_config_are_unreadable_and_git_still_runs(tmp_path: Path) -> None:
+    # 0048: no grant under the home folder; git reads the wrapper's empty config instead.
+    _, unit = _unit(tmp_path)
+    home = tmp_path / "home"
+    files = [home / ".git-credentials", home / ".config/git/credentials", home / ".gitconfig"]
+    for path in files:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("https://u:token@example.invalid\n", encoding="utf-8")
+    code = (
+        "import subprocess\n"
+        f"for path in {[str(p) for p in files]!r}:\n"
+        "    try:\n        open(path).read(); print('read', path)\n"
+        "    except PermissionError:\n        print('refused')\n"
+        f"print(subprocess.run(['git', 'init', '-q', {str(unit / 'r')!r}]).returncode)"
+    )
+    env = {**os.environ, "HOME": str(home)}
+    env.pop("XDG_CONFIG_HOME", None)
+    done = _confined(unit, code, env)
+    assert done.stdout.splitlines()[1:] == ["refused", "refused", "refused", "0"], done.stderr
+    assert (unit / "r" / ".git").is_dir()
 
 
 @needs_kernel
@@ -200,6 +232,9 @@ def test_the_check_steps_aside_without_kernel_rules(monkeypatch: pytest.MonkeyPa
         f"cd {WT} && python3 {WT}/scripts/catalog.py matrix",
         f"cd {WT} && .venv/bin/pytest -q",
         "npm test",
+        f"{WT}/scripts/run.sh",
+        f"cd {WT} && ./scripts/run.sh",
+        f"cd {WT}/scripts && ../scripts/daedalus_doctor.py",
     ],
 )
 def test_unwrapped_test_command_is_refused_when_the_kernel_holds_rules(command: str) -> None:
@@ -214,11 +249,27 @@ def test_unwrapped_test_command_is_refused_when_the_kernel_holds_rules(command: 
         f"cd {WT} && {WRAP} python3 -m pytest tests -q 2>&1 | tail -3",
         f"cd {WT}/tests && {WRAP} python3 -m pytest -q",
         f"cd {WT} && {WRAP} python3 {WT}/scripts/catalog.py matrix",
+        f"cd {WT} && {WRAP} ./scripts/run.sh",
+        f"cd {WT} && {WRAP} {WT}/scripts/run.sh",
     ],
 )
 def test_the_wrapped_form_passes_the_whole_coder_chain(command: str) -> None:
     assert evaluate("confine", _b("repo-coder", command)) is None
     assert decide(_b("repo-coder", command), CFG).allow, command
+
+
+@pytest.mark.usefixtures("kernel")
+@pytest.mark.parametrize("declared", ["make test", "tox -e py312"])
+def test_a_declared_non_runner_test_command_needs_the_wrapper(
+    tmp_path: Path, declared: str
+) -> None:
+    repo, wt = _narrowed_repo(tmp_path, json.dumps({"stack": {"unit_test_cmd": declared}}))
+    bare = _cwd(_b("repo-coder", f"cd {wt} && {declared}"), repo)
+    assert evaluate("confine", bare) == load("confine").R_CONFINE
+    command = f"cd {wt} && {shell.CONFINE_PATH} --unit {wt} -- {declared}"
+    wrapped = _cwd(_b("repo-coder", command), repo)
+    assert evaluate("confine", wrapped) is None
+    assert decide(wrapped, CFG).allow, decide(wrapped, CFG).reason
 
 
 @pytest.mark.usefixtures("kernel")

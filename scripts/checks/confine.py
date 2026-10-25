@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import daedalus_confine  # noqa: E402
 from lib import hook_io, jail, shell  # noqa: E402
+from lib.project_root import project_root  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset({"Bash"})
 FLAGS: dict[str, hook_io.Flag] = {}
@@ -28,10 +29,31 @@ R_CONFINE_UNIT = (
 )
 
 
-def _is_test(segment: list[str]) -> bool:
-    # 0048, Plan 6 section 10.3: a test command is a segment the runner check accepts.
+def _declared_tests(cwd: str) -> frozenset[tuple[str, ...]]:
+    # 0048: each segment of the manifest's unit_test_cmd, bar its cd; an unusable one adds none.
+    if not os.path.isabs(cwd):
+        return frozenset()
+    loaded = jail._manifest_at(os.path.realpath(str(project_root(Path(cwd)))))
+    command = None if isinstance(loaded, str) else loaded.unit_test_cmd
+    chain = shell.worker_parse(command) if command else None
+    if chain is None:
+        return frozenset()
+    return frozenset(
+        tuple(s) for s in chain.segments if s and shell._base(s[0]) not in jail.DIR_CHANGE_CMDS
+    )
+
+
+def _is_test(segment: list[str], base: str, cwd: str) -> bool:
+    # 0048, Plan 6 section 10.3: a runner the runner check accepts, a worktree file run by its
+    # path, or a segment of the declared unit_test_cmd.
     tokens = shell.strip_wrappers(segment) or segment
-    return shell._tester_runner_ok(shell._base(tokens[0]), tokens, lambda _: True)
+    if shell._tester_runner_ok(shell._base(tokens[0]), tokens, lambda _: True):
+        return True
+    word = tokens[0]
+    if "/" in word and os.path.isabs(cwd) and jail._in_unit_worktree(shell._abs(word, base), cwd):
+        return True
+    declared = _declared_tests(cwd)
+    return tuple(tokens) in declared or tuple(segment) in declared
 
 
 def _wrapped_reason(segment: list[str], base: str, cwd: str) -> str | None:
@@ -58,7 +80,7 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
         if shell._base(segment[0]) == shell.CONFINE:
             reason = _wrapped_reason(segment, base, cwd)
         else:
-            reason = R_CONFINE if _is_test(segment) else None
+            reason = R_CONFINE if _is_test(segment, base, cwd) else None
         if reason:
             return reason
     return None

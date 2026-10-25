@@ -24,6 +24,7 @@ from functools import lru_cache
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import shell  # noqa: E402
 from lib.credential_paths import credential_roots  # noqa: E402
 from lib.jail import UNIT_WORKTREES  # noqa: E402
 from lib.project_root import project_root  # noqa: E402
@@ -63,8 +64,9 @@ DENY = RET_ERRNO | errno.EPERM
 LOCAL_FAMILIES = (int(socket.AF_UNIX), int(socket.AF_NETLINK))
 SYSTEM_RO = ("/usr", "/lib", "/lib64", "/lib32", "/bin", "/sbin", "/etc", "/proc", "/sys", "/dev")
 DEVICES_RW = ("/dev/null",)
-# 0048: git exits 128 when it cannot read the user's git config, so both are read-only.
-HOME_GIT = (".gitconfig", ".config/git")
+# 0048: git exits 128 on an unreadable user config, so it reads an empty one in the temp folder.
+GIT_CONFIG = "gitconfig"
+XDG_CONFIG = "config"
 HIDDEN = (".claude/daedalus", f"{UNIT_WORKTREES}")
 NEXT_FORM = CONFINE_NEXT
 NEXT_BARE = (
@@ -121,7 +123,8 @@ class RuleSet:
             f"daedalus_confine: abi={self.abi} arch={self.arch} rw={','.join(self.rw)} "
             f"ro={self.repo}({hidden}),{','.join(self.ro)} "
             f"refused={net}socket(AF_INET,AF_INET6,any family but AF_UNIX,AF_NETLINK),io_uring "
-            f"tmpdir={self.tmp}"
+            f"tmpdir={self.tmp} git_config={os.path.join(self.tmp, GIT_CONFIG)} "
+            f"xdg_config={os.path.join(self.tmp, XDG_CONFIG)}"
         )
 
 
@@ -269,13 +272,12 @@ def _interpreter_paths() -> list[str]:
 
 def rule_set(unit: str, repo: str, tmp: str, support: Support) -> RuleSet:
     assert support.arch is not None
-    home = [str(Path.home() / rel) for rel in HOME_GIT]
     stores = credential_roots()
     ro: list[str] = []
-    for path in [*_interpreter_paths(), *SYSTEM_RO, *home]:
+    for path in [*_interpreter_paths(), *SYSTEM_RO]:
         real = os.path.realpath(path)
-        # 0048, Plan 6 section 10.1: a credential store is never granted, whatever names it.
-        if any(real == s or real.startswith(s + os.sep) for s in stores):
+        # 0048, Plan 6 section 10.1: no grant holds a credential store or sits inside one.
+        if any(shell._under(real, s) or shell._under(s, real) for s in stores):
             continue
         if os.path.exists(real) and real not in ro:
             ro.append(real)
@@ -316,6 +318,18 @@ def apply(rules: RuleSet) -> None:
     _install_filter(libc, ARCHES[rules.arch])
 
 
+def _tool_env(tmp: str) -> dict[str, str]:
+    # 0048: an empty git config written fresh each run and an empty config home, both in tmp.
+    config = os.path.join(tmp, GIT_CONFIG)
+    os.close(os.open(config, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600))
+    xdg = os.path.join(tmp, XDG_CONFIG)
+    try:
+        os.mkdir(xdg, 0o700)
+    except FileExistsError:
+        pass
+    return {"TMPDIR": tmp, "GIT_CONFIG_GLOBAL": config, "XDG_CONFIG_HOME": xdg}
+
+
 def _refuse(text: str) -> int:
     print(f"daedalus_confine: {text}", file=sys.stderr)
     return 1
@@ -339,7 +353,7 @@ def main(argv: list[str]) -> int:
         return _refuse(str(exc))
     except OSError as exc:
         return _refuse(f"the kernel refused a rule ({exc}). {NEXT_BARE}")
-    os.environ["TMPDIR"] = rules.tmp
+    os.environ.update(_tool_env(rules.tmp))
     print(rules.line(), flush=True)
     command = split[1]
     try:
