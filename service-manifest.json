@@ -7,7 +7,7 @@
     "runtime": "python3.12",
     "package_registries": ["pypi.org"],
     "unit_test_cmd": ".venv/bin/pytest -q",
-    "typecheck_cmd": null,
+    "typecheck_cmd": "python3 -m mypy scripts",
     "lint_cmd": ".venv/bin/ruff check scripts tests",
     "build_cmd": null
   },
