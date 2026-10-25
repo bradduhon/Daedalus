@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,7 @@ from lib.workspace import UNMARK_NEXT, train_marker  # noqa: E402
 REQ_DOC = "docs/project-requirements.md"
 GH_NEXT = "install gh (https://cli.github.com); the Push Train opens pull requests with it"
 GH_TIMEOUT_S = 10
+TYPECHECK_TIMEOUT_S = 120
 GH_STUCK_NEXT = "run gh auth status from your own shell, then gh auth login if it asks"
 NO_LEDGER = "OK   ledger: none found (the Build Train asks before creating docs/decisions.md)"
 PROJECT_DATA_NEXT = "write a single line * to {marker}"
@@ -346,6 +348,42 @@ def _manifest_check(repo: Path) -> tuple[bool, str]:
     )
 
 
+def _typecheck_check(repo: Path) -> Iterator[tuple[bool, str]]:
+    # 38: the declared typecheck_cmd runs once, argv only, bounded; no line when none is declared.
+    try:
+        manifest = load_manifest(repo)
+    except ManifestError:
+        return
+    command = manifest.typecheck_cmd if manifest is not None else None
+    if command is None:
+        return
+    name = f"typecheck ({command})"
+    nxt = f"run {command} from the repo root and fix what it reports"
+    try:
+        argv = shlex.split(command)
+        done = subprocess.run(
+            argv,
+            cwd=repo,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=TYPECHECK_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        yield _check(False, name, f"did not finish within {TYPECHECK_TIMEOUT_S} s", nxt)
+        return
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        yield _check(False, name, f"could not run ({exc})", nxt)
+        return
+    lines = [line for line in done.stdout.splitlines() if line.strip()]
+    result = lines[-1] if lines else f"exited {done.returncode}"
+    if done.returncode == 0:
+        yield True, f"OK   {name}: {result}"
+    else:
+        yield _check(False, name, f"exited {done.returncode}: {result}", nxt)
+
+
 def _repo_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
     yield _check(
         is_repo,
@@ -356,6 +394,7 @@ def _repo_checks(repo: Path, is_repo: bool) -> Iterator[tuple[bool, str]]:
     if is_repo:
         yield _clean_tree_check(repo)
     yield _manifest_check(repo)
+    yield from _typecheck_check(repo)
     yield _opt(
         (repo / "contracts").is_dir(),
         "contracts/",
