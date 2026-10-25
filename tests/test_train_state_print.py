@@ -312,7 +312,8 @@ def test_audit_log_names_the_running_session_first_and_its_totals(tmp_path: Path
 
 HOSTILE = (
     "Worktree:/opt/u/.claude/rules/python.md key=/srv/x/y.md ~/proj/a/b.md \\~/proj/c.md "
-    "(/var/tmp/z.md) '/etc/one' /root"
+    "(/var/tmp/z.md) '/etc/one' /root file:///opt/u/.claude/f.md //srv/q/d.md "
+    "Worktree://opt/w/e.md FILE://localhost/var/g.md"
 )
 
 
@@ -341,7 +342,13 @@ def test_public_keeps_plugin_commands_and_urls() -> None:
     )
     assert public(f"{CHARTER}/specs/x.md", REPO, CHARTER) == "private/specs/x.md"
     assert public(HOSTILE, REPO, None) == (
-        "Worktree:python.md key=y.md b.md c.md (z.md) 'one' root"
+        "Worktree:python.md key=y.md b.md c.md (z.md) 'one' root f.md d.md Worktree:e.md g.md"
+    )
+    # W3.2: a file URL or a doubled slash into the repo or the Charter goes relative first.
+    inside = f"file://{REPO}/src/a.py //{CHARTER.relative_to('/')}/specs/x.md"
+    assert public(inside, REPO, CHARTER) == "src/a.py private/specs/x.md"
+    assert public("https://x.io/a/b HTTP://y.io/c/d", REPO, None) == (
+        "https://x.io/a/b HTTP://y.io/c/d"
     )
     assert _path_tokens(public("scripts/lib/a.py tests/x/y.py docs/.tmp/z", REPO, None)) == []
     assert public("scripts/lib/a.py and/or 1/2", REPO, None) == "scripts/lib/a.py and/or 1/2"

@@ -47,6 +47,10 @@ _ABSOLUTE = re.compile(
     rf"(?<![\w./~-])/(?:{_SEGMENT}+/)*{_SEGMENT}+/?(?!{_SEGMENT}|:[A-Za-z])"
     rf"|(?<![\w./-])\\?~/(?:{_SEGMENT}|/)*"
 )
+# W3.2: a file URL becomes its path, and a run of leading slashes one slash, before the cut;
+# only an http or https `//` stays, so `Worktree://x/y` and `ssh://h/p` are cut too.
+_FILE_URL = re.compile(r"(?i)(?<![\w.+-])file:(?://[^/\s]*)?/+")
+_SLASHES = re.compile(r"(?<!https:)(?<!http:)(?<![\w./~-])/{2,}", re.IGNORECASE)
 _COMPLETE = re.compile(
     r"\[STATUS: COMPLETE\] branch=(\S+) packet_version=(\S+) files=(.*?) tests=(.*?) ledger_notes="
 )
@@ -157,6 +161,7 @@ def parse_notes(text: str, where: str) -> Notes:
 
 def public(text: str, repo: Path, charter: Path | None) -> str:
     # W3.2: the summary is a public PR body; repo paths go relative, every other path to its name.
+    text = _SLASHES.sub("/", _FILE_URL.sub("/", text))
     if charter is not None:
         text = text.replace(f"{charter}/", f"{charter.name}/")
     text = text.replace(f"{repo}/", "")
