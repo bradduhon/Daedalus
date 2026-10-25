@@ -75,6 +75,7 @@ def read_segment_ok(tokens: list[str], subs: frozenset[str], cwd: str, charter: 
         return jail._git_grammar_ok(tokens, subs, cwd, charter, READ_GIT_GRAMMAR)
     return jail._read_only_segment(tokens, subs, cwd, charter)
 
+
 R_TEST_RUN_AUDIT = (
     "the unit test run never reads the audit worktree {tree}; it holds the auditor's tests, "
     "not a coder's unit (spec 4). Next: run the tests under the unit worktree you verify, "
