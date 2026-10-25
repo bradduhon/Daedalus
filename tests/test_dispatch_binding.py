@@ -290,3 +290,49 @@ def test_the_hook_chain_enforces_the_plan_gate(
     seed_plan(repo_cwd, TRAIN)
     allowed = run_script("enforce_agent_jail.py", _dispatch(repo_cwd, unit))
     assert allowed.returncode == 0, allowed.stderr
+
+
+def _audit_tree(repo: Path, flagged: bool) -> Path:
+    # spec 4: create flags the audit unit; a state written before D2 carries only its name.
+    tree = create(repo, f"{TRAIN}-audit", f"daedalus/{TRAIN}")
+    if not flagged:
+
+        def strip(state: dict[str, object]) -> None:
+            state["units"] = [
+                {k: v for k, v in u.items() if k != "audit"} for u in train_state.units(state)
+            ]
+
+        train_state.change(repo, TRAIN, strip)
+    jail._registered_worktrees.cache_clear()
+    return tree
+
+
+@pytest.mark.parametrize("flagged", [True, False])
+def test_a_coder_dispatch_naming_the_audit_worktree_is_refused(
+    repo_cwd: Path, unit: Path, flagged: bool
+) -> None:
+    seed_plan(repo_cwd, TRAIN)
+    tree = _audit_tree(repo_cwd, flagged)
+    want = dispatch_binding.R_AUDIT_UNIT.format(path=tree, train=TRAIN)
+    tool_input = _dispatch(repo_cwd, tree)["tool_input"]
+    assert dispatch_binding._dispatch_reason(tool_input, str(repo_cwd)) == want
+    d = decide(_dispatch(repo_cwd, tree), Config())
+    assert not d.allow and want in str(d.reason)
+    assert f"{tree} is the audit worktree" in want and "Next: name the coder's own unit" in want
+    assert not bindings_path(repo_cwd, TRAIN).exists(), "a refused dispatch is never recorded"
+    _ok(repo_cwd, unit)
+
+
+def test_a_resume_moving_a_coder_onto_the_audit_worktree_is_refused(
+    repo_cwd: Path, unit: Path
+) -> None:
+    # spec 4: a rebind onto the audit worktree meets the same refusal as a cold dispatch.
+    seed_plan(repo_cwd, TRAIN)
+    tree = _audit_tree(repo_cwd, flagged=True)
+    _ok(repo_cwd, unit)
+    assert claim(repo_cwd, TRAIN, "c1", "u1") is None
+    before = bindings_path(repo_cwd, TRAIN).read_bytes()
+    message = {"to": "c1", "message": f"FIX.\nWorktree: {tree}"}
+    reason = dispatch_binding._resume_reason(message, str(repo_cwd))
+    assert reason == dispatch_binding.R_AUDIT_UNIT.format(path=tree, train=TRAIN)
+    assert bindings_path(repo_cwd, TRAIN).read_bytes() == before

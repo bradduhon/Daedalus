@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from pathlib import Path
 
@@ -34,6 +34,9 @@ START_SEQ = "start_seq"
 AUDIT_SESSION, AUDIT_BOUNDS = "audit_session", "audit_bounds"
 # 0109: one finding map per audit round, {"<n>": {"<key>": {"severity", "class"}}}.
 AUDIT_ROUNDS = "audit_rounds"
+# spec 4, pin C4 -> C1: the audit worktree is the unit <train-id>-audit, flagged "audit": true.
+AUDIT, AUDIT_SUFFIX = "audit", "-audit"
+_AUDIT_NAME = re.compile(rf"{TRAIN_ID.pattern}{AUDIT_SUFFIX}")
 
 
 class TrainStateError(RuntimeError):
@@ -212,8 +215,22 @@ def units(state: dict[str, object]) -> list[dict[str, object]]:
     return [{str(k): v for k, v in item.items()} for item in items if isinstance(item, dict)]
 
 
+def is_audit_unit(unit: Mapping[str, object]) -> bool:
+    # spec 4: the flag marks the audit worktree; a unit recorded before D2 carries only the name.
+    if unit.get(AUDIT) is True:
+        return True
+    name = unit.get("name")
+    return isinstance(name, str) and _AUDIT_NAME.fullmatch(name) is not None
+
+
 def add_unit(
-    repo: Path, train_id: str, name: str, branch: str, path: Path, base: str | None = None
+    repo: Path,
+    train_id: str,
+    name: str,
+    branch: str,
+    path: Path,
+    base: str | None = None,
+    audit: bool = False,
 ) -> None:
     # 0072: the base ref is kept, so a unit stacked on another unit waits for it to return.
     with _locked(repo, train_id) as target:
@@ -226,8 +243,22 @@ def add_unit(
         entry: dict[str, object] = {"name": name, "branch": branch, "path": str(path)}
         if base is not None:
             entry["base"] = base
+        if audit:
+            entry[AUDIT] = True
         state["units"] = [*recorded, entry]
         _write(target, state)
+
+
+def mark_audit(repo: Path, train_id: str, name: str) -> None:
+    # spec 4: an audit unit recorded before D2 gains the flag on its next re-add.
+    def edit(state: dict[str, object]) -> None:
+        recorded = units(state)
+        for unit in recorded:
+            if unit.get("name") == name:
+                unit[AUDIT] = True
+        state["units"] = recorded
+
+    change(repo, train_id, edit)
 
 
 def active_train(repo: Path) -> str | None:

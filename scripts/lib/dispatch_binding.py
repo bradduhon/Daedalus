@@ -16,8 +16,9 @@ from lib.narrow import integer
 from lib.project_root import project_root
 from lib.shell import _abs, _base, _git_split
 from lib.train_scope import policed_outside_train
-from lib.train_state import TRAIN_ID, TrainStateError, active_train
+from lib.train_state import TRAIN_ID, TrainStateError, active_train, is_audit_unit
 from lib.train_state import load as load_train
+from lib.train_state import units as units_of
 from lib.unit_binding import claim, rebind, record_dispatch
 from lib.workspace import UNMARK_NEXT, train_marker
 
@@ -59,6 +60,11 @@ R_RESUME_UNBOUND = (
     "coder {coder} holds no unit in train {train}, so a resume cannot move it to unit {unit} "
     "(0086). Next: resume it without the Worktree: line while it is on its first unit, or "
     "dispatch a cold coder for unit {unit}."
+)
+R_AUDIT_UNIT = (
+    "{path} is the audit worktree of train {train}; it holds the auditor's tests, not a coder's "
+    "unit (spec 4). Next: name the coder's own unit worktree on the Worktree: line, as "
+    "daedalus_workspace.py create printed it."
 )
 DISPATCH_TOOLS = frozenset({"Agent", "Task"})
 RESUME_TOOLS = frozenset({"SendMessage"})
@@ -179,9 +185,9 @@ def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     why = _plan_defect(repo, train, state)
     if why is not None:
         return R_NO_PLAN.format(why=why)
-    unit = _unit_named(state, match.group(1))
-    if unit is None:
-        return _not_a_unit(match.group(1), train)
+    unit, refused = _coder_unit(state, match.group(1), train)
+    if refused is not None:
+        return refused
     if not _our_coder(subagent):
         return unit_binding.held_reason(repo, train, unit)  # issue 29: once, never bound.
     return record_dispatch(repo, train, unit)
@@ -191,15 +197,24 @@ def _worktree_lines(text: str) -> list[str]:
     return [line for line in text.splitlines() if line.startswith("Worktree:")]
 
 
-def _unit_named(state: dict[str, object], path: str) -> str | None:
+def _unit_named(state: dict[str, object], path: str) -> dict[str, object] | None:
     # issue 29: the recorded unit whose worktree the line names, compared by real path.
     named = os.path.realpath(path)
-    units = state.get("units")
-    for unit in units if isinstance(units, list) else []:
-        if isinstance(unit, dict) and unit.get("path") and unit.get("name"):
+    for unit in units_of(state):
+        if unit.get("path") and unit.get("name"):
             if os.path.realpath(str(unit["path"])) == named:
-                return str(unit["name"])
+                return unit
     return None
+
+
+def _coder_unit(state: dict[str, object], path: str, train: str) -> tuple[str, str | None]:
+    # spec 4: the unit a coder may take, or the refusal; the audit worktree is never one.
+    unit = _unit_named(state, path)
+    if unit is None:
+        return "", _not_a_unit(path, train)
+    if is_audit_unit(unit):
+        return "", R_AUDIT_UNIT.format(path=path, train=train)
+    return str(unit["name"]), None
 
 
 def _not_a_unit(path: str, train: str) -> str:
@@ -248,9 +263,9 @@ def _resume_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     why = _plan_defect(repo, train, state)
     if why is not None:
         return R_NO_PLAN.format(why=why)
-    unit = _unit_named(state, match.group(1))
-    if unit is None:
-        return _not_a_unit(match.group(1), train)
+    unit, refused = _coder_unit(state, match.group(1), train)
+    if refused is not None:
+        return refused
     if bound.get(unit, {}).get("agent_id") == coder:
         return None  # 0086: the runner's queue rebound it already, or the coder holds this unit.
     held = [name for name, record in bound.items() if record.get("agent_id") == coder]
