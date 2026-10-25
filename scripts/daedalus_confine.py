@@ -82,7 +82,8 @@ class Arch:
 
 
 # x86_64: linux/audit.h:442, asm/unistd_64.h:45 and :340-342, asm/unistd.h:13 (x32 bit).
-# aarch64: linux/audit.h:390, asm-generic/unistd.h:522 and :759-764.
+# aarch64: linux/audit.h:390, asm-generic/unistd.h:522, :759-764; arm64 unistd_64.h is built from
+# torvalds/linux scripts/syscall.tbl (Makefile.asm-headers); seccomp.h:56 arch is AUDIT_ARCH_*.
 ARCHES: dict[str, Arch] = {
     "x86_64": Arch(0xC000003E, 41, (425, 426, 427), 0x40000000),
     "aarch64": Arch(0xC00000B7, 198, (425, 426, 427), 0),
