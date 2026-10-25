@@ -11,12 +11,17 @@ from typing import Any
 import pytest
 from lib import audit, train_state
 from lib.audit_proof import (
+    VERDICT_APPROVED,
+    VERDICT_BOTH,
+    VERDICT_REJECTED,
     ProofError,
     approved,
     hooks_live,
     newest_log,
     push_proof,
     read_chain,
+    stop_verdict,
+    summary_anchor,
     tip_problem,
 )
 
@@ -32,7 +37,9 @@ AUDITOR = "daedalus:security-auditor"
 @pytest.fixture
 def project_data(project_data: Path, repo_cwd: Path) -> Path:
     write_train_marker(repo_cwd)
-    train_state.save(repo_cwd, TRAIN, {"train_id": TRAIN, "start_seq": 0})
+    # 73: the proof anchors on the recorded verdict seq; refusal tests grade the turn before it.
+    verdict = {"status": "approved", "tip": "0" * 40, "round": 1, "seq": 1}
+    train_state.save(repo_cwd, TRAIN, {"train_id": TRAIN, "start_seq": 0, "verdict": verdict})
     return project_data
 
 
@@ -161,14 +168,24 @@ def _refused(repo_cwd: Path, train: str = TRAIN) -> str:
     return str(info.value)
 
 
-def _judged(repo: Path, status: str = "approved") -> str:
+def _judged(repo: Path, status: str = "approved", seq: int = 1) -> str:
     # 59: a commit on the integration branch and the verdict recorded on it.
     _git(repo, "commit", "-q", "--allow-empty", "-m", "unit")
     _git(repo, "branch", "-f", f"daedalus/{TRAIN}", "HEAD")
     tip = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    verdict = {"status": status, "tip": tip, "round": 1, "seq": 1}
-    train_state.update(repo, TRAIN, verdict=verdict)
+    _record_seq(repo, seq, status, tip)
     return tip
+
+
+def _record_seq(repo: Path, seq: int, status: str = "approved", tip: str | None = None) -> None:
+    # 73: the verdict record_verdict writes, naming the auditor record it graded.
+    old = train_state.load(repo, TRAIN)["verdict"]
+    verdict = {"status": status, "tip": tip or old["tip"], "round": 1, "seq": seq}
+    train_state.update(repo, TRAIN, verdict=verdict)
+
+
+def _log_len(repo: Path) -> int:
+    return len(read_chain(audit.log_path("sess-test", str(repo))))
 
 
 def _ok(seq: int, tip: str) -> str:
@@ -353,6 +370,7 @@ def test_approved_finds_the_verdict_in_the_auditor_hand_back(
     # issue 57: Train A's stop records hold only a relay; the verdict is in the hand-back call.
     tip = _judged(repo_cwd)
     replayed = replay_auditor(repo_cwd, "sess-test")
+    _record_seq(repo_cwd, replayed[-2]["seq"])
     _summary_write(hook_input, repo_cwd)
     _summary(repo_cwd)
     assert replayed[-2]["tool_input"] == {"message": "[VERDICT: APPROVED]"}
@@ -366,9 +384,10 @@ def test_approved_reads_the_tip_from_the_auditor_hand_back(
     tip = _judged(repo_cwd)
     replay_auditor(repo_cwd, "sess-test")
     _handback(hook_input, f"[VERDICT: APPROVED] tip={tip}")
+    seq = _log_len(repo_cwd)
+    _record_seq(repo_cwd, seq)
     _summary_write(hook_input, repo_cwd)
     _summary(repo_cwd)
-    seq = len(read_chain(audit.log_path("sess-test", str(repo_cwd)))) - 1
     assert approved(repo_cwd, TRAIN) == _ok(seq, tip)
 
 
@@ -570,7 +589,7 @@ def test_approved_reads_the_bound_of_the_summary_session(
     project_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
     # issue 60: a push session's hooks-live moves start_seq, and the build session keeps its bound.
-    tip = _judged(repo_cwd)
+    tip = _judged(repo_cwd, seq=2)
     train_state.save(repo_cwd, TRAIN, {**train_state.load(repo_cwd, TRAIN), "start_seq": None})
     _bash(hook_input, "python3 /p/scripts/verify_audit_chain.py --hooks-live")
     train_state.mark_start(repo_cwd, TRAIN, 1, "sess-test")
@@ -582,3 +601,150 @@ def test_approved_reads_the_bound_of_the_summary_session(
     _summary(repo_cwd, "Session sess-other: .claude/daedalus/audit/sess-other.jsonl\n")
     _bash(hook_input, "x", session_id="sess-other")
     assert "records no start_seq for session sess-other" in _refused(repo_cwd)
+
+
+def test_train_c_shape_proves_round_two(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # 73: a summary Write between round 1 and round 2, a second Write after round 2.
+    tip = _judged(repo_cwd, seq=3)
+    _stop(hook_input, f"[VERDICT: REJECTED] tip={tip} a.py:1 high")
+    _summary_write(hook_input, repo_cwd)
+    _stop(hook_input, f"[VERDICT: APPROVED] tip={tip}")
+    _summary_write(hook_input, repo_cwd)
+    _summary(repo_cwd)
+    assert approved(repo_cwd, TRAIN) == _ok(3, tip)
+    assert push_proof(repo_cwd, TRAIN) == _ok(3, tip)
+
+
+def test_no_summary_write_after_the_recorded_verdict_refuses(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # pin D1 -> D5: the Write before the verdict record never anchors the proof.
+    tip = _judged(repo_cwd, seq=3)
+    _stop(hook_input, f"[VERDICT: REJECTED] tip={tip} a.py:1 high")
+    _summary_write(hook_input, repo_cwd)
+    _stop(hook_input, f"[VERDICT: APPROVED] tip={tip}")
+    _summary(repo_cwd)
+    assert _refused(repo_cwd) == (
+        "NOT APPROVED: no summary Write after the recorded verdict at seq 3. "
+        "Next: rewrite the summary with the Write tool, then rerun the proof."
+    )
+
+
+def test_a_graded_turn_other_than_the_recorded_one_refuses(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # pin D1 -> D5: a later auditor turn before the Write is not the verdict the train recorded.
+    tip = _judged(repo_cwd, seq=1)
+    _stop(hook_input, f"[VERDICT: APPROVED] tip={tip}")
+    _stop(hook_input, f"[VERDICT: APPROVED] tip={tip} again")
+    _summary_write(hook_input, repo_cwd)
+    _summary(repo_cwd)
+    assert _refused(repo_cwd) == (
+        "NOT APPROVED: the graded auditor turn at seq 2 is not the recorded verdict at seq 1. "
+        "Next: rerun the audit round."
+    )
+
+
+def test_another_trains_summary_write_never_anchors(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    tip = _judged(repo_cwd, seq=1)
+    _stop(hook_input, f"[VERDICT: APPROVED] tip={tip}")
+    other = f"{repo_cwd}/docs/.tmp/daedalus/20261001-000000-summary.md"
+    audit.audit_append(hook_input(tool_name="Write", tool_input={"file_path": other}))
+    _summary(repo_cwd)
+    assert "no summary Write after the recorded verdict at seq 1" in _refused(repo_cwd)
+    _summary_write(hook_input, repo_cwd)
+    assert approved(repo_cwd, TRAIN) == _ok(1, tip)
+
+
+def test_summary_anchor_returns_the_first_write_after_the_verdict() -> None:
+    def write(seq: int, name: str) -> dict[str, object]:
+        return {"seq": seq, "tool_name": "Write", "tool_input": {"file_path": f"/r/{name}"}}
+
+    records = [
+        write(1, f"{TRAIN}-summary.md"),
+        {"seq": 2, "tool_name": "Bash"},
+        write(3, "notes.md"),
+        write(4, f"{TRAIN}-summary.md"),
+        write(5, f"{TRAIN}-summary.md"),
+    ]
+    assert summary_anchor(records, 1) == 4
+    assert summary_anchor(records, 0) == 1
+    assert summary_anchor(records, 5) is None
+
+
+def test_a_reply_with_both_verdict_kinds_refuses(project_data: Path, repo_cwd: Path) -> None:
+    # spec 3.6, pin D3 -> D1: the full-reply verdict lines carry both kinds.
+    tip = _judged(repo_cwd)
+    lines = [f"[VERDICT: APPROVED] tip={tip}", f"[VERDICT: REJECTED] tip={tip} a.py:1 high"]
+    _hand_chain(
+        repo_cwd,
+        {"last_message_head": lines[0], "last_message_tail": lines[0], "verdict_lines": lines},
+    )
+    assert _refused(repo_cwd) == (
+        "NOT APPROVED: auditor reply at seq 1 carries both verdicts. Next: rerun the audit round."
+    )
+
+
+def test_a_hand_back_with_both_verdict_kinds_refuses(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # issue 57: the hand-back's whole message is read for its verdict lines.
+    tip = _judged(repo_cwd)
+    _handback(hook_input, f"[VERDICT: APPROVED] tip={tip}\nx\n[VERDICT: REJECTED] a.py:1 high")
+    _summary_write(hook_input, repo_cwd)
+    _summary(repo_cwd)
+    assert "auditor reply at seq 1 carries both verdicts" in _refused(repo_cwd)
+
+
+def test_verdict_lines_catch_a_rejection_outside_the_head_and_tail(
+    project_data: Path, repo_cwd: Path
+) -> None:
+    # pin D3 -> D1: a REJECTED line mid-reply is in verdict_lines though head and tail approve.
+    tip = _judged(repo_cwd)
+    head = f"[VERDICT: REJECTED] tip={tip} a.py:1 high"
+    _hand_chain(
+        repo_cwd,
+        {
+            "last_message_head": "notes",
+            "last_message_tail": f"[VERDICT: APPROVED] tip={tip}",
+            "verdict_lines": [head],
+        },
+    )
+    assert "carries a [VERDICT: REJECTED] line" in _refused(repo_cwd)
+
+
+@pytest.mark.parametrize("field", [None, "approved"], ids=["no field", "approved only"])
+def test_a_record_without_both_kinds_reads_as_today(
+    project_data: Path, repo_cwd: Path, field: str | None
+) -> None:
+    # spec 3.6: a record from before D3 reads its head and tail; one kind passes as today.
+    tip = _judged(repo_cwd)
+    line = f"[VERDICT: APPROVED] tip={tip}"
+    stop: dict[str, object] = {"last_message_head": line, "last_message_tail": line}
+    if field is not None:
+        stop["verdict_lines"] = [line]
+    _hand_chain(repo_cwd, stop)
+    assert approved(repo_cwd, TRAIN) == _ok(1, tip)
+
+
+def test_verdict_lines_that_are_not_text_refuse(project_data: Path, repo_cwd: Path) -> None:
+    line = "[VERDICT: APPROVED] ok"
+    _hand_chain(
+        repo_cwd,
+        {"last_message_head": line, "last_message_tail": line, "verdict_lines": [line, 3]},
+    )
+    assert "(record seq 1) has a verdict_lines that is not text" in _refused(repo_cwd)
+
+
+def test_stop_verdict_reads_verdict_lines_and_falls_back() -> None:
+    approve, reject = "[VERDICT: APPROVED] tip=x", "[VERDICT: REJECTED] a.py:1 high"
+    base = {"last_message_head": approve, "last_message_tail": approve}
+    assert stop_verdict(base) == VERDICT_APPROVED
+    assert stop_verdict({**base, "verdict_lines": [approve]}) == VERDICT_APPROVED
+    assert stop_verdict({**base, "verdict_lines": [reject]}) == VERDICT_REJECTED
+    assert stop_verdict({**base, "verdict_lines": [approve, reject]}) == VERDICT_BOTH
+    assert stop_verdict({**base, "verdict_lines": "x"}) is None

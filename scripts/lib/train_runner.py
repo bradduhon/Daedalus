@@ -17,13 +17,15 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from lib import audit_rounds, manifest, train_definition, train_state, workspace
+from lib import audit_rounds, git, manifest, train_definition, train_state, workspace
 from lib.audit import ReplyKeyError, message_hmac, reply_key
 from lib.audit_proof import (
     AUDITOR,
+    R_BOTH_VERDICTS,
     SUMMARY_DIR,
     TIP,
     VERDICT_APPROVED,
+    VERDICT_BOTH,
     VERDICT_REJECTED,
     ProofError,
     auditor_round,
@@ -90,6 +92,7 @@ _UNIT_HEADING = re.compile(r"### Unit ([A-Za-z0-9][A-Za-z0-9-]*): (.+)")
 _HEADING = re.compile(r"#{1,3} ")
 _PHASE = re.compile(r"[a-z][a-z-]{0,31}")
 _LEDGER_ID = re.compile(r"[0-9]{1,6}(?:-[A-Za-z0-9]{1,16}){0,2}")
+_ROUND_KEY = re.compile(r"[1-9][0-9]{0,5}")
 _CHOICE_MAX = 200
 _SCRIPT = re.compile(r"[a-z0-9_]+\.py")
 _SCRIPT_TIMEOUT_S = 900
@@ -1164,7 +1167,8 @@ def allowed_dispatch(state: dict[str, object]) -> tuple[set[str], str, str]:
     stages = _stages(defn)
     index = _int(state, "stage_index", 0)
     if index >= len(stages):
-        return set(), "none", "none"
+        # 73, spec 3.5: after the last stage only a reaudit or resume consult is admitted.
+        return set(_strings(state.get("consults_open"))), "none", "none"
     sid, gate = _text(stages[index], "id"), _text(stages[index], "gate")
     allowed = {
         _text(d, "agent")
@@ -1176,10 +1180,24 @@ def allowed_dispatch(state: dict[str, object]) -> tuple[set[str], str, str]:
     return allowed, sid, gate
 
 
-def _recorded(cwd: Path, edit: Callable[[Path, str], list[str]]) -> Outcome:
+def _recorded(
+    cwd: Path, edit: Callable[[Path, str], list[str]], stopped: str | None = None
+) -> Outcome:
+    # spec 3.3, 3.5: a main-session command on a stopped train names the workspace resume first.
     try:
         repo, train_id = _active(cwd)
         return Outcome(EXIT_OK, edit(repo, train_id))
+    except NoTrainError as exc:
+        if stopped is None:
+            return Outcome(EXIT_STOP, [str(exc)])
+        root = project_root(cwd.resolve())
+        return Outcome(
+            EXIT_STOP,
+            [
+                f"no Daedalus train is active in {root}. Next: run daedalus_workspace.py resume "
+                f"--repo {root} to mark the stopped train active, then rerun {stopped}."
+            ],
+        )
     except (RunnerError, train_state.TrainStateError) as exc:
         return Outcome(EXIT_STOP, [str(exc)])
 
@@ -1262,6 +1280,161 @@ def record_exception(cwd: Path, ledger_id: str) -> Outcome:
     return _recorded(cwd, edit)
 
 
+# 73, spec 3.3: reaudit {judged, tip, round}; spec 3.5: resume {summary}, pin D1 -> E4 ledger.
+REAUDIT, RESUME, LEDGER = "reaudit", "resume", "ledger"
+AUDITOR_AGENT, ORCHESTRATOR_AGENT = "security-auditor", "orchestrator"
+LEDGER_PENDING = "Ledger ids: pending"
+
+
+def _open_consult(state: dict[str, object], agent: str) -> None:
+    consults = _strings(state.get("consults_open"))
+    state["consults_open"] = consults if agent in consults else [*consults, agent]
+
+
+def _close_consult(state: dict[str, object], agent: str) -> None:
+    state["consults_open"] = [a for a in _strings(state.get("consults_open")) if a != agent]
+
+
+def reaudit(cwd: Path) -> Outcome:
+    # 73, spec 3.3: one recovery round when the approved tip moved; the main session runs it.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        state = train_state.load(repo, train_id)
+        verdict = train_state.record(state, train_state.VERDICT)
+        if verdict.get("status") != train_state.APPROVED:
+            raise RunnerError(
+                f"train {train_id} records no approved verdict, so no audited tip moved. "
+                "Next: run the security audit round of the Build Train (/daedalus:build-train)."
+            )
+        current = _integration_tip(repo, train_id)
+        if _text(train_state.record(state, REAUDIT), "tip") == current:
+            raise RunnerError(
+                f"a recovery round already ran on tip {current[:12]}. Next: put the three "
+                "escalation choices to the operator; no second recovery round runs on one tip."
+            )
+        judged = verdict.get("tip")
+        if tip_problem(repo, judged, current) is None:
+            raise RunnerError(
+                f"the approved verdict already admits the tip {current[:12]}. Next: rerun "
+                f"verify_audit_chain.py --approved {train_id} --repo {repo}."
+            )
+        round_ = derived_round(state)
+
+        def change(fresh: dict[str, object]) -> None:
+            fresh[REAUDIT] = {"judged": judged, "tip": current, "round": round_}
+            _open_consult(fresh, AUDITOR_AGENT)
+
+        train_state.change(repo, train_id, change)
+        return [f"reaudit round={round_} tip={current}"]
+
+    return _recorded(cwd, edit, REAUDIT)
+
+
+def _unmerged(repo: Path, train_id: str, state: dict[str, object]) -> list[str]:
+    # spec 3.5: each unit the recorded plan names has a branch on daedalus/<train-id>.
+    try:
+        named = sorted(workspace._plan_ids(state))
+    except workspace.WorkspaceError as exc:
+        raise RunnerError(str(exc)) from exc
+    branches = {
+        workspace._unit_label(train_id, _text(u, "name")).casefold(): _text(u, "branch")
+        for u in train_state.units(state)
+    }
+    integration = f"refs/heads/daedalus/{train_id}"
+    missing: list[str] = []
+    for uid in named:
+        branch = branches.get(uid, "")
+        try:
+            # 0024: a recorded branch never becomes a git option.
+            done = (
+                bool(branch)
+                and not branch.startswith("-")
+                and (
+                    git.run(["merge-base", "--is-ancestor", branch, integration], repo).returncode
+                    == 0
+                )
+            )
+        except (OSError, git.GitTimeout) as exc:
+            raise RunnerError(
+                f"git merge-base did not finish for unit {uid} ({exc}). "
+                "Next: check git from your own shell, then rerun resume."
+            ) from exc
+        if not done:
+            missing.append(uid)
+    return missing
+
+
+def resume(cwd: Path) -> Outcome:
+    # 3, spec 3.5: a train stopped before its ledger commit resumes for that one step.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        state = train_state.load(repo, train_id)
+        ledger = train_state.record(state, LEDGER)
+        if ledger:
+            raise RunnerError(
+                f"train {train_id} already records its ledger commit "
+                f"{_text(ledger, 'sha')[:12]}. Next: run the Push Train (/daedalus:push-train)."
+            )
+        if train_state.record(state, RESUME):
+            raise RunnerError(
+                f"a ledger resume of train {train_id} is already open. Next: wait for the "
+                "resumed orchestrator's TRAIN_COMPLETE; it runs the ledger step once."
+            )
+        missing = _unmerged(repo, train_id, state)
+        if missing:
+            raise RunnerError(
+                f"unit(s) {', '.join(missing)} of the recorded plan are not merged into "
+                f"daedalus/{train_id}. Next: resume the Build Train at its finish step; the "
+                "ledger resume runs only after every plan unit merged."
+            )
+        rel = (SUMMARY_DIR / f"{train_id}-summary.md").as_posix()
+        try:
+            text = (repo / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise RunnerError(
+                f"cannot read the summary {rel} ({exc}). Next: resume the Build Train; it "
+                "writes the summary before its ledger step."
+            ) from exc
+        if not any(line.strip().startswith(LEDGER_PENDING) for line in text.splitlines()):
+            raise RunnerError(
+                f"the summary {rel} holds no `{LEDGER_PENDING}` line, so its ledger step ran. "
+                "Next: run the Push Train (/daedalus:push-train)."
+            )
+
+        def change(fresh: dict[str, object]) -> None:
+            fresh[RESUME] = {"summary": rel}
+            _open_consult(fresh, ORCHESTRATOR_AGENT)
+
+        train_state.change(repo, train_id, change)
+        return [f"resume ledger train={train_id} summary={rel}"]
+
+    return _recorded(cwd, edit, RESUME)
+
+
+def record_ledger(cwd: Path, sha: str, ids: str) -> Outcome:
+    # pin D1 -> E4: the ledger commit the summary's Ledger ids line reads.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        if not TIP.fullmatch(sha):
+            raise RunnerError(
+                f"--sha {sha!r} is not a 40 lowercase hex commit sha. "
+                "Next: rerun ledger with the sha of charter-docs' COMMITTED line."
+            )
+        names = ids.split(",")
+        if len(set(names)) != len(names) or not all(_LEDGER_ID.fullmatch(n) for n in names):
+            raise RunnerError(
+                f"--ids {ids!r} is not a comma-separated list of distinct ledger ids such as "
+                "0101-DAE-PLT. Next: rerun ledger with the ids of charter-docs' COMMITTED line."
+            )
+
+        def change(state: dict[str, object]) -> None:
+            state[LEDGER] = {"sha": sha, "ids": names}
+            if train_state.record(state, RESUME):
+                _close_consult(state, ORCHESTRATOR_AGENT)
+
+        train_state.change(repo, train_id, change)
+        return [f"ledger recorded sha={sha} ids={','.join(names)}"]
+
+    return _recorded(cwd, edit)
+
+
 def _auditor_seq(repo: Path, train_id: str, status: str, seq: int | None) -> tuple[int, str | None]:
     # 0089: the verdict is read from this session's auditor reply records, never from the caller.
     try:
@@ -1289,6 +1462,8 @@ def _auditor_seq(repo: Path, train_id: str, status: str, seq: int | None) -> tup
     # 0089, issue 57: only the newest auditor turn after start_seq counts.
     turn = auditor_round(records, start)
     verdict, found = round_verdict(turn)
+    if verdict == VERDICT_BOTH:
+        raise RunnerError(R_BOTH_VERDICTS.format(seq=found))
     problem = None
     if not turn:
         problem = f"audit log {log.name} holds no {AUDITOR} reply after seq {start}"
@@ -1307,11 +1482,21 @@ def _auditor_seq(repo: Path, train_id: str, status: str, seq: int | None) -> tup
     return found, verdict_tip(turn, found)
 
 
+def _findings_path(repo: Path, train_id: str, round_: int) -> Path:
+    return repo / SUMMARY_DIR / train_id / "audit" / f"round{round_}" / "findings.txt"
+
+
+def derived_round(state: dict[str, object]) -> int:
+    # 67: one more than the highest round audit_rounds holds, else 1.
+    rounds = train_state.record(state, train_state.AUDIT_ROUNDS)
+    return max((int(key) for key in rounds if _ROUND_KEY.fullmatch(key)), default=0) + 1
+
+
 def _round_findings(
     repo: Path, train_id: str, status: str, round_: int, path: Path
 ) -> dict[str, audit_rounds.Finding]:
     # pin C3 -> C1: the auditor's list for this round, at its one path; approved lists none.
-    want = repo / SUMMARY_DIR / train_id / "audit" / f"round{round_}" / "findings.txt"
+    want = _findings_path(repo, train_id, round_)
     given = os.path.normpath(path if path.is_absolute() else repo / path)
     if given != str(want) or want.is_symlink() or not want.is_file():
         raise RunnerError(
@@ -1336,7 +1521,7 @@ def _round_findings(
 def record_verdict(
     cwd: Path,
     status: str,
-    round_: int,
+    given_round: int | None = None,
     seq: int | None = None,
     tip: str | None = None,
     findings: Path | None = None,
@@ -1348,10 +1533,17 @@ def record_verdict(
                 f"verdict status {status!r} is neither approved nor rejected. "
                 "Next: rerun verdict with the status the auditor's verdict line names."
             )
-        if round_ < 1 or (seq is not None and seq < 0):
+        # 67: the round comes from train state; --round stays accepted and must agree.
+        round_ = derived_round(train_state.load(repo, train_id))
+        if given_round is not None and given_round != round_:
             raise RunnerError(
-                f"round {round_} or audit seq {seq} is out of range. "
-                "Next: rerun verdict with a round of 1 or more and the auditor's stop record seq."
+                f"--round {given_round} is not round {round_}, one more than the highest round "
+                f"the train recorded. Next: rerun verdict with --round {round_} or no --round."
+            )
+        if seq is not None and seq < 0:
+            raise RunnerError(
+                f"audit seq {seq} is out of range. "
+                "Next: rerun verdict with the auditor's stop record seq, or with no --seq."
             )
         named_tip = tip is not None and TIP.fullmatch(tip) is not None
         if (tip is not None or status == train_state.APPROVED) and not named_tip:
@@ -1359,6 +1551,13 @@ def record_verdict(
                 f"--tip {tip} is not a 40-hex tip; an approved verdict must name one. "
                 "Next: rerun verdict with --tip set to the tip= value on the auditor's "
                 "verdict line."
+            )
+        if status == train_state.REJECTED and findings is None:
+            want = _findings_path(repo, train_id, round_)
+            raise RunnerError(
+                f"a rejected verdict needs the round {round_} finding list, and this call passed "
+                f"no --findings. Next: have the auditor write {want}, then rerun verdict with "
+                f"--findings {want}."
             )
         listed = _round_findings(repo, train_id, status, round_, findings) if findings else None
         found, named = _auditor_seq(repo, train_id, status, seq)
@@ -1382,10 +1581,21 @@ def record_verdict(
         word: list[str] = []
 
         def change(state: dict[str, object]) -> None:
+            if derived_round(state) != round_:
+                raise RunnerError(
+                    f"another verdict call recorded round {round_} first. "
+                    "Next: rerun verdict with no --round."
+                )
             state[train_state.VERDICT] = _verdict_record(status, judged, round_, found)
-            if listed is None:
-                return
+            # 73: the recovery round's auditor consult closes with its verdict.
+            if train_state.record(state, REAUDIT):
+                _close_consult(state, AUDITOR_AGENT)
             rounds = train_state.record(state, train_state.AUDIT_ROUNDS)
+            # 67: an approval without a list records an empty round, so the next round derives.
+            if listed is None:
+                rounds[str(round_)] = {}
+                state[train_state.AUDIT_ROUNDS] = rounds
+                return
             prior = rounds.get(str(round_ - 1))
             previous = None
             if isinstance(prior, dict):

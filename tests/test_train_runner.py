@@ -1083,7 +1083,7 @@ HOOKS_LIVE_CMD = "verify_audit_chain.py --hooks-live"
 def _verdict_call(
     repo: Path,
     status: str,
-    round_: int,
+    round_: int | None,
     seq: int | None = None,
     tip: str | None = None,
     findings: Path | None = None,
@@ -1116,10 +1116,13 @@ def test_verdict_records_the_newest_matching_auditor_stop(
     _agent_stop(repo, "security-auditor", _verdict(status.upper(), tip), "aud-1")
     newest = _agent_stop(repo, "security-auditor", _verdict(status.upper(), tip), "aud-1")
     _agent_stop(repo, "repo-coder", COMPLETE, "coder-1")
-    outcome = _verdict_call(repo, status, 2, tip=tip)
+    # 67: a rejection always carries its finding list, so it prints the stall word.
+    listed = _findings(repo, 1, A) if status == "rejected" else None
+    outcome = _verdict_call(repo, status, 1, tip=tip, findings=listed)
     assert outcome.code == 0, outcome.lines
-    assert outcome.lines == [f"Verdict {status} recorded on tip {tip[:12]} (round 2)"]
-    record = {"status": status, "tip": tip, "round": 2, "seq": newest["seq"]}
+    want = f"Verdict {status} recorded on tip {tip[:12]} (round 1)"
+    assert outcome.lines == ["continue round=2 budget_left=4" if listed else want]
+    record = {"status": status, "tip": tip, "round": 1, "seq": newest["seq"]}
     assert _state(repo)["verdict"] == record
     assert tip == _tip(repo)
 
@@ -1178,11 +1181,11 @@ def test_verdict_reads_only_the_newest_auditor_stop(repo: Path, plugin: Path) ->
     assert "verdict" not in _state(repo)
     first = _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
     again = _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
-    older_approved = _verdict_call(repo, "approved", 2, int(first["seq"]), tip)
+    older_approved = _verdict_call(repo, "approved", 1, int(first["seq"]), tip)
     assert older_approved.code == 1 and "is not the newest" in older_approved.lines[0]
-    passed = _verdict_call(repo, "approved", 2, tip=tip)
+    passed = _verdict_call(repo, "approved", 1, tip=tip)
     assert passed.code == 0, passed.lines
-    record = {"status": "approved", "tip": tip, "round": 2, "seq": again["seq"]}
+    record = {"status": "approved", "tip": tip, "round": 1, "seq": again["seq"]}
     assert _state(repo)["verdict"] == record
 
 
@@ -1258,13 +1261,13 @@ def test_verdict_finds_train_a_verdict_in_the_hand_back_and_the_push_gate_passes
     refused = gh_policy.verdict_reason(str(repo), "git push")
     assert refused is not None and "no verdict is recorded" in refused
     # 59: Train A's hand-back is found, but its verdict line names no tip.
-    untipped = _verdict_call(repo, "approved", 3, tip=tip)
+    untipped = _verdict_call(repo, "approved", 1, tip=tip)
     assert untipped.code == 1 and "verdict names tip none, not --tip" in untipped.lines[0]
     named = _handback(repo, f"[VERDICT: APPROVED] tip={tip}")
     _agent_stop(repo, "security-auditor", "Sent the round 4 verdict.", "aud-1")
-    passed = _verdict_call(repo, "approved", 4, tip=tip)
+    passed = _verdict_call(repo, "approved", None, tip=tip)
     assert passed.code == 0, passed.lines
-    record = {"status": "approved", "tip": tip, "round": 4, "seq": named["seq"]}
+    record = {"status": "approved", "tip": tip, "round": 1, "seq": named["seq"]}
     assert _state(repo)["verdict"] == record
     assert gh_policy.verdict_reason(str(repo), "git push") is None
     assert gh_policy.verdict_reason(str(repo), "gh pr create") is None
@@ -1277,7 +1280,7 @@ def test_verdict_refuses_train_a_without_its_hand_back_records(repo: Path, plugi
     _marked(repo)
     tip = _integration(repo)
     replay_auditor(repo, SESSION, handbacks=False)
-    refused = _verdict_call(repo, "approved", 3, tip=tip)
+    refused = _verdict_call(repo, "approved", 1, tip=tip)
     assert refused.code == 1 and "carries no verdict line" in refused.lines[0]
     assert "verdict" not in _state(repo)
     reason = gh_policy.verdict_reason(str(repo), "git push")
@@ -1293,12 +1296,12 @@ def test_verdict_newer_rejection_in_a_hand_back_wins(repo: Path, plugin: Path) -
     replay_auditor(repo, SESSION)
     rejection = _handback(repo, "[VERDICT: REJECTED] a.py:1 high")
     _agent_stop(repo, "security-auditor", "Sent the round 4 verdict.", "aud-1")
-    refused = _verdict_call(repo, "approved", 4, tip=tip)
+    refused = _verdict_call(repo, "approved", 1, tip=tip)
     assert refused.code == 1
     assert "carries [VERDICT: REJECTED], not [VERDICT: APPROVED]" in refused.lines[0]
-    passed = _verdict_call(repo, "rejected", 4)
+    passed = _verdict_call(repo, "rejected", None, findings=_findings(repo, 1, A))
     assert passed.code == 0, passed.lines
-    record = {"status": "rejected", "tip": tip, "round": 4, "seq": rejection["seq"]}
+    record = {"status": "rejected", "tip": tip, "round": 1, "seq": rejection["seq"]}
     assert _state(repo)["verdict"] == record
 
 
@@ -1387,8 +1390,8 @@ def test_findings_must_be_the_round_file_and_match_the_status(repo: Path, plugin
     elsewhere.write_text(A + "\n", encoding="utf-8")
     wrong = _verdict_call(repo, "rejected", 1, tip=tip, findings=elsewhere)
     assert wrong.code == 1 and "is not the round 1 finding list file. Next: " in wrong.lines[0]
-    other_round = _verdict_call(repo, "rejected", 2, tip=tip, findings=_findings(repo, 1, A))
-    assert other_round.code == 1 and "round 2 finding list" in other_round.lines[0]
+    other_round = _verdict_call(repo, "rejected", None, tip=tip, findings=_findings(repo, 2, A))
+    assert other_round.code == 1 and "round 1 finding list" in other_round.lines[0]
     empty = _verdict_call(repo, "rejected", 1, tip=tip, findings=_findings(repo, 1))
     assert empty.code == 1 and "the rejected round 1 lists 0 findings" in empty.lines[0]
     bad = _verdict_call(repo, "rejected", 1, tip=tip, findings=_findings(repo, 1, "x | y"))
