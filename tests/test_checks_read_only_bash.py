@@ -245,6 +245,96 @@ def test_specialist_grant_gains_no_git_row() -> None:
         assert evaluate(HOOK, _b("x", command), "--git", "specialist") == jail.R_SPECIALIST_BASH
 
 
+# spec 7.1: the Train C read rows of the read-only grant, one allow and one nearest-write refusal.
+TRAIN_C_GIT_ROWS = [
+    (
+        "git -C /work/repo grep -n -P '[\\x{2013}\\x{2014}]' daedalus/t -- agents skills",
+        "git grep -P --open-files-in-pager=vi x",
+    ),
+    ("git -C /work/repo log --oneline --graph a..b", "git log --graph --output=x a..b"),
+    ("git log --first-parent --format='%h %s' a..b", "git log --first-parent --output x a..b"),
+    ("git branch --list 'daedalus*'", "git branch --list -D daedalus-x"),
+]
+
+
+@pytest.mark.parametrize(("allowed", "refused"), TRAIN_C_GIT_ROWS)
+def test_read_only_grant_train_c_git_rows(allowed: str, refused: str) -> None:
+    for agent in ("security-auditor", "verifier"):
+        assert decide(_b(agent, allowed), CFG).allow, (agent, allowed)
+        refusal = evaluate(HOOK, _b(agent, refused), "--git", "read-only")
+        assert refusal == jail.R_AUDITOR_BASH, (agent, refused)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git log -S --graph --ext-diff",
+        "git log -G --first-parent --textconv",
+        "git grep -e -P -Ovi x",
+        "git grep -e -nP --open-files-in-pager x",
+        "git branch --list --delete daedalus-x",
+        "git branch -- --list",
+    ],
+)
+def test_a_stand_in_flag_swallows_the_same_token(command: str) -> None:
+    # spec 7.1: a value-taking flag before a new flag still takes it, so the next one is judged.
+    assert evaluate(HOOK, _b("x", command), "--git", "read-only") == jail.R_AUDITOR_BASH
+
+
+def test_specialist_grant_gains_only_the_log_rows() -> None:
+    # spec 6, 7.1: grep and branch stay outside the specialist set; its log reads widen.
+    spec = ("--git", "specialist")
+    assert evaluate(HOOK, _b("x", "git log --graph --first-parent a..b"), *spec) is None
+    for command in ("git grep -P x HEAD", "git branch --list 'daedalus*'"):
+        assert evaluate(HOOK, _b("x", command), *spec) == jail.R_SPECIALIST_BASH, command
+
+
+SPECIALIST_CD = "cd /tmp/nist && jq -r '[.. | objects | select(.id?)] | .[] | .id' catalog.json"
+
+
+@pytest.mark.parametrize("agent", READ_ONLY_AGENTS)
+def test_specialist_cd_then_read_is_allowed(agent: str) -> None:
+    # spec 7.1, Train C seq 848: one absolute cd heading an && chain of reads.
+    assert decide(_b(agent, SPECIALIST_CD), CFG).allow, agent
+    assert decide(_b(agent, f"{SPECIALIST_CD} | head -n 40"), CFG).allow, agent
+    assert not decide(_b(agent, f"{SPECIALIST_CD} > /tmp/nist/out.json"), CFG).allow, agent
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd /tmp/nist && git log",
+        "cd /tmp/nist && git -C /work/repo diff",
+        "cd /tmp && python3 -m pytest /tmp/x.py -q",
+        "cd /tmp/nist ; jq . catalog.json",
+        "cd nist && jq . catalog.json",
+        "jq . catalog.json && cd /tmp",
+        "cd /tmp && cd /tmp/nist && cat x",
+        "pushd /tmp && cat x",
+    ],
+)
+def test_cd_before_git_or_a_test_run_is_refused(command: str) -> None:
+    reason = evaluate(HOOK, _b("x", command), "--git", "read-only", "--test-runner", "audit")
+    assert reason == load(HOOK).R_CD_CHAIN, command
+
+
+def test_cd_into_a_credential_store_is_still_refused(cred_home: Path, tmp_path: Path) -> None:
+    # spec 7.1: the cd row opens no store and no reply key; credential_paths follows the cd base.
+    repo = _key_repo(tmp_path)
+    for agent in READ_ONLY_AGENTS:
+        store = _b(agent, f"cd {cred_home}/.ssh && cat id_ed25519")
+        key = _bash_in(repo, agent, f"cd {repo}/.claude/daedalus && cat reply-hmac.key")
+        for hook_input in (store, key):
+            reason = str(decide(hook_input, CFG).reason)
+            assert "credential path" in reason or "reply key" in reason, (agent, reason)
+
+
+def test_auditor_sed_on_a_file_stays_refused() -> None:
+    # spec 6: sed reads behind git show only; Train C seq 2016 reads line ranges with Read.
+    command = "sed -n '325,345p;480,600p' /work/repo/scripts/lib/shell.py"
+    assert evaluate(HOOK, _b("x", command), "--git", "read-only") == jail.R_AUDITOR_BASH
+
+
 TRAIN = "20261017-120000"
 
 
@@ -394,93 +484,3 @@ def test_basetemp_is_refused_by_name_for_every_agent(
 
 def read_only_bash() -> Any:
     return load(HOOK)
-
-
-# spec 7.1: the Train C read rows of the read-only grant, one allow and one nearest-write refusal.
-TRAIN_C_GIT_ROWS = [
-    (
-        "git -C /work/repo grep -n -P '[\\x{2013}\\x{2014}]' daedalus/t -- agents skills",
-        "git grep -P --open-files-in-pager=vi x",
-    ),
-    ("git -C /work/repo log --oneline --graph a..b", "git log --graph --output=x a..b"),
-    ("git log --first-parent --format='%h %s' a..b", "git log --first-parent --output x a..b"),
-    ("git branch --list 'daedalus*'", "git branch --list -D daedalus-x"),
-]
-
-
-@pytest.mark.parametrize(("allowed", "refused"), TRAIN_C_GIT_ROWS)
-def test_read_only_grant_train_c_git_rows(allowed: str, refused: str) -> None:
-    for agent in ("security-auditor", "verifier"):
-        assert decide(_b(agent, allowed), CFG).allow, (agent, allowed)
-        refusal = evaluate(HOOK, _b(agent, refused), "--git", "read-only")
-        assert refusal == jail.R_AUDITOR_BASH, (agent, refused)
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "git log -S --graph --ext-diff",
-        "git log -G --first-parent --textconv",
-        "git grep -e -P -Ovi x",
-        "git grep -e -nP --open-files-in-pager x",
-        "git branch --list --delete daedalus-x",
-        "git branch -- --list",
-    ],
-)
-def test_a_stand_in_flag_swallows_the_same_token(command: str) -> None:
-    # spec 7.1: a value-taking flag before a new flag still takes it, so the next one is judged.
-    assert evaluate(HOOK, _b("x", command), "--git", "read-only") == jail.R_AUDITOR_BASH
-
-
-def test_specialist_grant_gains_only_the_log_rows() -> None:
-    # spec 6, 7.1: grep and branch stay outside the specialist set; its log reads widen.
-    spec = ("--git", "specialist")
-    assert evaluate(HOOK, _b("x", "git log --graph --first-parent a..b"), *spec) is None
-    for command in ("git grep -P x HEAD", "git branch --list 'daedalus*'"):
-        assert evaluate(HOOK, _b("x", command), *spec) == jail.R_SPECIALIST_BASH, command
-
-
-SPECIALIST_CD = "cd /tmp/nist && jq -r '[.. | objects | select(.id?)] | .[] | .id' catalog.json"
-
-
-@pytest.mark.parametrize("agent", READ_ONLY_AGENTS)
-def test_specialist_cd_then_read_is_allowed(agent: str) -> None:
-    # spec 7.1, Train C seq 848: one absolute cd heading an && chain of reads.
-    assert decide(_b(agent, SPECIALIST_CD), CFG).allow, agent
-    assert decide(_b(agent, f"{SPECIALIST_CD} | head -n 40"), CFG).allow, agent
-    assert not decide(_b(agent, f"{SPECIALIST_CD} > /tmp/nist/out.json"), CFG).allow, agent
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "cd /tmp/nist && git log",
-        "cd /tmp/nist && git -C /work/repo diff",
-        "cd /tmp && python3 -m pytest /tmp/x.py -q",
-        "cd /tmp/nist ; jq . catalog.json",
-        "cd nist && jq . catalog.json",
-        "jq . catalog.json && cd /tmp",
-        "cd /tmp && cd /tmp/nist && cat x",
-        "pushd /tmp && cat x",
-    ],
-)
-def test_cd_before_git_or_a_test_run_is_refused(command: str) -> None:
-    reason = evaluate(HOOK, _b("x", command), "--git", "read-only", "--test-runner", "audit")
-    assert reason == load(HOOK).R_CD_CHAIN, command
-
-
-def test_cd_into_a_credential_store_is_still_refused(cred_home: Path, tmp_path: Path) -> None:
-    # spec 7.1: the cd row opens no store and no reply key; credential_paths follows the cd base.
-    repo = _key_repo(tmp_path)
-    for agent in READ_ONLY_AGENTS:
-        store = _b(agent, f"cd {cred_home}/.ssh && cat id_ed25519")
-        key = _bash_in(repo, agent, f"cd {repo}/.claude/daedalus && cat reply-hmac.key")
-        for hook_input in (store, key):
-            reason = str(decide(hook_input, CFG).reason)
-            assert "credential path" in reason or "reply key" in reason, (agent, reason)
-
-
-def test_auditor_sed_on_a_file_stays_refused() -> None:
-    # spec 6: sed reads behind git show only; Train C seq 2016 reads line ranges with Read.
-    command = "sed -n '325,345p;480,600p' /work/repo/scripts/lib/shell.py"
-    assert evaluate(HOOK, _b("x", command), "--git", "read-only") == jail.R_AUDITOR_BASH
