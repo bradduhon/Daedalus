@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0086, spec 3.2: validate_plan.py <path> [--max-concurrent N]; exit 0 prints OK, exit 1 defects.
+# Spec 3.4: a plan with a version line also prints an OK version line after the OK plan line.
 from __future__ import annotations
 
 import sys
@@ -48,6 +49,9 @@ def main(argv: list[str]) -> int:
         print("\n".join([*defects, PLAN_NEXT]))
         return 1
     print(f"OK plan: {graph_line(plan, limit)}")
+    if plan.version is not None:
+        # Spec 3.4, pin D4 -> D5: printed only when the plan carries a version line.
+        print(f"OK version: unit={plan.version.unit} {plan.version.summary_line}")
     return 0
 
 

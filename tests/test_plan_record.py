@@ -7,7 +7,8 @@ from functools import partial
 from pathlib import Path
 
 import pytest
-from lib.plan_record import Plan, PlanError, graph_line, load, validate
+from lib.plan_record import Plan, PlanError, Version, graph_line, load, validate
+from lib.workspace import _CLASS_LINE
 
 from tests.conftest import REPO_ROOT, run_cli
 
@@ -15,6 +16,10 @@ FIXTURES = REPO_ROOT / "tests" / "fixtures" / "plans"
 THIS_PLAN = Path("docs/private/superpowers/plans/2026-10-19-plan-7-efficiency.md")
 ONE = "unit: U1 | title: one | files: a.py | base: integration"
 TWO = "unit: U2 | title: two | files: b.py | base: integration"
+BUMP = "unit: V1 | title: bump the version | files: VERSION | base: integration"
+TWO_GRAPH = "graph: units=2 critical_path=1 width=2 overlap_only=none"
+VERSION_LINE = "version: 4.0.0 | class: X | reason: renames a manifest key | unit: V1"
+VERSION_SHAPE = "version: <x.y.z> | class: <X, Y or Z> | reason: <one line> | unit: <unit id>"
 
 
 def _defects(name: str, max_concurrent: int = 5) -> list[str]:
@@ -200,7 +205,7 @@ def test_unknown_line_and_duplicate_unit_are_refused(tmp_path: Path) -> None:
     )
     defects = validate(plan, 5)
     assert any("unit U1 is declared twice" in d for d in defects), defects
-    assert any("is not a unit, edge, pin or graph line" in d for d in defects), defects
+    assert any("is not a unit, edge, pin, version or graph line" in d for d in defects), defects
 
 
 def test_file_without_one_plan_block_is_refused(tmp_path: Path) -> None:
@@ -266,3 +271,115 @@ def test_this_plan_validates(tmp_path: Path) -> None:
     broken = tmp_path / "plan.md"
     broken.write_text(cut, encoding="utf-8")
     assert any("names no kind" in d for d in validate(load(broken), 5))
+
+
+def test_version_line_is_parsed_and_validates(tmp_path: Path) -> None:
+    # Spec 3.4, pin D4 -> D5: the optional version line and the summary line copied from it.
+    plan = _plan_text(tmp_path, ONE, BUMP, VERSION_LINE, TWO_GRAPH)
+    assert plan.version == Version("4.0.0", "X", "renames a manifest key", "V1")
+    assert validate(plan, 5) == []
+    assert plan.version.summary_line == "Version class: 4.0.0 X: renames a manifest key"
+    assert _CLASS_LINE.fullmatch(plan.version.summary_line), "the release step must read it"
+
+
+def test_plan_without_a_version_line_is_unchanged() -> None:
+    plan = load(FIXTURES / "valid.md")
+    assert plan.version is None
+    assert validate(plan, 5) == []
+    assert _cli(str(FIXTURES / "valid.md")).stdout.count("\n") == 1
+
+
+@pytest.mark.parametrize(
+    ("line", "defect"),
+    [
+        (
+            "version: 4.0.0 | class: Y | reason: adds a step",
+            "the version line names no unit; name the unit that edits the version sites.",
+        ),
+        (
+            "version: 4.0.0 | class: Y | reason: adds a step | unit: U9",
+            "the version line names unknown unit U9.",
+        ),
+        (
+            "version: 4.0.0 | class: W | reason: adds a step | unit: V1",
+            "the version line names class W; use X, Y or Z.",
+        ),
+        (
+            "version: 4.0.0 | class: y | reason: adds a step | unit: V1",
+            "the version line names class y; use X, Y or Z.",
+        ),
+        (
+            "version: 4.0.0 | reason: adds a step | unit: V1",
+            "the version line names class (none); use X, Y or Z.",
+        ),
+        (
+            "version: 4.0 | class: Y | reason: adds a step | unit: V1",
+            "the version line names version 4.0; write three dot-separated numbers, such as 4.0.0.",
+        ),
+        (
+            "version: v4.0.0 | class: Y | reason: adds a step | unit: V1",
+            "the version line names version v4.0.0; "
+            "write three dot-separated numbers, such as 4.0.0.",
+        ),
+        (
+            "version: 4.0.0-rc1 | class: Y | reason: adds a step | unit: V1",
+            "the version line names version 4.0.0-rc1; "
+            "write three dot-separated numbers, such as 4.0.0.",
+        ),
+        (
+            "version: | class: Y | reason: adds a step | unit: V1",
+            "the version line names version (none); "
+            "write three dot-separated numbers, such as 4.0.0.",
+        ),
+        (
+            "version: 4.0.0 | class: Y | unit: V1",
+            "the version line names no reason; give the change in one line.",
+        ),
+        (
+            "version: 4.0.0 | class: Y | reason: adds a step | unit: V1 | migration: none",
+            "the version line has a field it does not know: migration: none",
+        ),
+    ],
+)
+def test_version_line_refusals(tmp_path: Path, line: str, defect: str) -> None:
+    plan = _plan_text(tmp_path, ONE, BUMP, line, TWO_GRAPH)
+    assert validate(plan, 5) == [defect]
+
+
+def test_two_version_lines_are_refused(tmp_path: Path) -> None:
+    plan = _plan_text(tmp_path, ONE, BUMP, VERSION_LINE, VERSION_LINE, TWO_GRAPH)
+    assert validate(plan, 5) == ["the plan block has 2 version lines; keep at most one."]
+
+
+def test_cli_prints_the_version_line_after_the_ok_line(tmp_path: Path) -> None:
+    path = tmp_path / "plan.md"
+    path.write_text(f"```plan\n{ONE}\n{BUMP}\n{VERSION_LINE}\n{TWO_GRAPH}\n```\n", encoding="utf-8")
+    proc = _cli(str(path))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.splitlines() == [
+        f"OK plan: {TWO_GRAPH}",
+        "OK version: unit=V1 Version class: 4.0.0 X: renames a manifest key",
+    ]
+    path.write_text(path.read_text(encoding="utf-8").replace("class: X", "class: Q"), "utf-8")
+    refused = _cli(str(path))
+    assert refused.returncode == 1
+    assert refused.stdout.splitlines()[0] == "the version line names class Q; use X, Y or Z."
+    assert refused.stdout.splitlines()[-1].startswith("Next: ")
+
+
+def test_planner_and_plan_skill_name_the_version_line() -> None:
+    # Plan Choices: these assertions live here, not in tests/test_skills.py, which D5 owns.
+    planner = " ".join((REPO_ROOT / "agents" / "planner.md").read_text(encoding="utf-8").split())
+    block = planner.split("```plan", 1)[1].split("```", 1)[0]
+    assert VERSION_SHAPE in block
+    assert "When the spec's Version section bumps the version, cut it into one unit" in planner
+    assert "keeps the version, write no version line" in planner
+    skill = (REPO_ROOT / "skills" / "plan" / "SKILL.md").read_text(encoding="utf-8")
+    step5 = skill.split("\n5. ", 1)[1].split("\n6. ", 1)[0]
+    assert VERSION_SHAPE in step5
+    step7 = skill.split("\n7. ", 1)[1].split("\n8. ", 1)[0]
+    assert "`OK version: unit=<unit id> Version class: <x.y.z> <class>: <reason>`" in step7
+    step8 = skill.split("\n8. ", 1)[1].split("\n9. ", 1)[0]
+    header = "| Unit | What it builds | Starts from | Waits on | Shares files with | Version line |"
+    assert header in step8
+    assert VERSION_SHAPE in step8 and "a plan with no version line, leaves it empty" in step8
