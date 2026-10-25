@@ -239,6 +239,8 @@ Outside a train, Daedalus leaves your session and your repository alone, except 
 
 Each agent gets a short list of allowed tools, and a tool not on the list is never offered to it. A PreToolUse hook is a check Claude Code runs before each tool call. Daedalus uses one, the jail, to compare every call against that agent's rules and block anything outside them. A coding agent may write only inside its own unit worktree, and there never to `contracts/`, `.github/`, `.claude/`, `service-manifest.json`, the decision ledger, or the paths and file extensions the repository lists under `jail_narrowing` in `service-manifest.json`. At all times, a read or search of `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh` or `~/.claude/.credentials.json` is refused for every agent and asked of the main session. Daedalus's own agents are always refused writing those paths with a file tool or naming them in Bash; while a train runs, the main session is asked before it does either. While a train runs, agents from Claude Code itself or from other plugins are refused every checked tool except reads and searches, in the train's repository and when they write into it from another one. The jail hooks are the enforced boundary and judge each tool call before it runs. Code an agent runs inside a tool call, such as its tests, is the same exposure any developer accepts when using a model in their environment, so Daedalus asks every agent never to circumvent its boundaries and does not try to control the environment. A blocked agent sees a line starting with `daedalus-jail[<agent>]:` that says what was refused and what to do next. Hooks, not agents, write each step to the hash-chained audit log. No agent pushes except the conductor inside the Push Train, and no agent merges. You merge.
 
+[docs/guardrails.md](docs/guardrails.md) pairs each of these principles with the mechanism that enforces it and the test that shows the mechanism exists.
+
 With no declared standards, the Standards Packet is empty and the auditor judges each unit against its contract only. The NIST and CIS specialists review only units that touched IAM, KMS, mTLS, key custody or infrastructure configuration. To declare your standards, see [docs/project-requirements.md](docs/project-requirements.md). To start from a shipped set instead, declare the opt-in baseline pack, `{"kind": "pack", "name": "baseline"}`: five baseline checks plus the Daedalus cloud security standards, written in Daedalus's own words. The doctor offers it while `standards_sources` is empty.
 
 ## What is in this repo
@@ -269,6 +271,7 @@ Daedalus/
 │   ├── verifier.md
 │   └── web-researcher.md
 ├── docs/
+│   ├── guardrails.md                # each principle with its mechanism and test
 │   ├── howto/README.md              # operator guide
 │   └── project-requirements.md      # every file Daedalus reads, with examples
 ├── hooks/

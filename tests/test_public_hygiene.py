@@ -31,6 +31,7 @@ ALLOWLIST = frozenset(
         "service-manifest.json",
         "skills/",
         "tests/",
+        "docs/guardrails.md",
         "docs/howto/README.md",
         "docs/project-requirements.md",
     }
@@ -204,6 +205,12 @@ def test_hygiene_admits_the_adversarial_corpus() -> None:
     assert corpus, "tests/adversarial/ is not tracked"
     assert {_entry(p) for p in corpus} == {"tests/"}
     assert set(corpus) <= set(_public_files())
+
+
+def test_hygiene_admits_the_guardrails_document() -> None:
+    # 0047: docs/guardrails.md is public and every term rule reads it.
+    assert "docs/guardrails.md" in ALLOWLIST
+    assert "docs/guardrails.md" in _public_files()
 
 
 def test_pre_split_mode_is_gone(tmp_path: Path) -> None:
