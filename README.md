@@ -280,6 +280,7 @@ Daedalus/
 │   └── nist-800-53-distilled.md     # the rubric the nist-specialist maps findings to
 ├── scripts/                         # Python 3.12, stdlib only
 │   ├── checks/command_allowlist.py  # every Bash segment runs a command the --allow list names
+│   ├── checks/confine.py            # a coder's test command starts with the kernel wrapper
 │   ├── checks/controls/             # the failure each control prevents and its premise test
 │   ├── checks/credential_paths.py   # refuses a path or command that names a credential store
 │   ├── checks/dispatch_gate.py      # the orchestrator's coder dispatch and plan gates
@@ -333,6 +334,7 @@ Daedalus/
 │   ├── audit_log.py                 # all other hook events to the audit log
 │   ├── audit_report.py              # digest of a verified session log
 │   ├── catalog.py                   # prints the agent table and hooks matrix
+│   ├── daedalus_confine.py          # kernel wrapper: a coder's test command stays in its worktree, no network
 │   ├── daedalus_doctor.py           # first-run check behind /daedalus:doctor
 │   ├── daedalus_setup.py            # writes the missing starter files behind /daedalus:setup
 │   ├── daedalus_train.py            # the train runner: progress, choice, plan, verdict, exception
