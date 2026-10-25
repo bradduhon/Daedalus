@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from tests.adversarial.corpus import CREDENTIAL, OUTSIDE, PROTECTED, READERS, assert_denied
+from tests.adversarial.corpus import (
+    CREDENTIAL,
+    OUTSIDE,
+    PROTECTED,
+    READERS,
+    assert_denied,
+    assert_store_read_denied,
+)
 from tests.conftest import CWD, WT
 from tests.payloads import _b, _cred, _w
 
@@ -95,7 +102,7 @@ def test_traversal_into_a_store_is_denied(
     agent: str,
     template: str,
 ) -> None:
-    assert_denied(_cred(agent, "Bash", command=template.format(home=cred_home)), CREDENTIAL)
+    assert_store_read_denied(agent, template, home=cred_home)
 
 
 @pytest.mark.parametrize("agent", READERS)

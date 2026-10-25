@@ -163,13 +163,58 @@ def live_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def test_contract_spec(live_repo: Path) -> None:
-    task = (
+# W1.4: personas whose live check is one task, one tool list and the status lines they may end on.
+SIMPLE_PERSONAS = [
+    pytest.param(
+        "contract-spec",
         "Produce the Locked Contract Packet for a function add(a: int, b: int) -> int "
-        "in src/hello.py. No files to read."
-    )
-    run = _persona("contract-spec", task, ["Read", "Glob", "Grep"], live_repo)
-    _check(run, "contract-spec", ("## Locked Contract Packet",))
+        "in src/hello.py. No files to read.",
+        ["Read", "Glob", "Grep"],
+        ("## Locked Contract Packet",),
+        False,
+        id="contract-spec",
+    ),
+    pytest.param(
+        "web-researcher",
+        "Research question: what is the current stable Python 3 minor version? "
+        "Answer under 50 words with one URL.",
+        ["WebSearch", "WebFetch"],
+        ("[STATUS: RESEARCH]",),
+        False,
+        id="web-researcher",
+    ),
+    pytest.param(
+        "pr-train-conductor",
+        "Preconditions only: this repo has no remote. "
+        "Check your preconditions and end with your status line.",
+        ["Bash", "Read"],
+        ("[STATUS: BLOCKED]",),
+        True,
+        id="pr-train-conductor",
+    ),
+    pytest.param(
+        "standards-rules-specialist",
+        "Read docs/STANDARDS.md and produce the Standards Packet for a task that adds "
+        "one function to src/hello.py.",
+        ["Read", "Glob", "Grep"],
+        ("## Standards Packet",),
+        False,
+        id="standards-rules-specialist",
+    ),
+]
+
+
+@pytest.mark.parametrize("name, task, tools, markers, block_ok", SIMPLE_PERSONAS)
+def test_simple_persona(
+    live_repo: Path,
+    name: str,
+    task: str,
+    tools: list[str],
+    markers: tuple[str, ...],
+    block_ok: bool,
+) -> None:
+    run = _persona(name, task, tools, live_repo)
+    _check(run, name, markers, block_ok=block_ok)
 
 
 def test_charter_docs(live_repo: Path) -> None:
@@ -206,15 +251,6 @@ def test_repo_coder(live_repo: Path) -> None:
     tools = ["Read", "Edit", "Write", "Bash", "Glob", "Grep"]
     run = _persona("repo-coder", task, tools, live_repo)
     _check(run, "repo-coder", ("[STATUS: COMPLETE]",))
-
-
-def test_web_researcher(live_repo: Path) -> None:
-    task = (
-        "Research question: what is the current stable Python 3 minor version? "
-        "Answer under 50 words with one URL."
-    )
-    run = _persona("web-researcher", task, ["WebSearch", "WebFetch"], live_repo)
-    _check(run, "web-researcher", ("[STATUS: RESEARCH]",))
 
 
 @pytest.mark.parametrize("name", ["nist-specialist", "cis-specialist"])
@@ -261,21 +297,3 @@ def test_verifier(live_repo: Path) -> None:
     assert first.lstrip().startswith("[VERDICT: REFUTED]"), first
     assert _last_line(run.result.stdout).startswith("[VERDICT: REFUTED]")
     assert "src/hello.py:2" in run.result.stdout
-
-
-def test_pr_train_conductor(live_repo: Path) -> None:
-    task = (
-        "Preconditions only: this repo has no remote. "
-        "Check your preconditions and end with your status line."
-    )
-    run = _persona("pr-train-conductor", task, ["Bash", "Read"], live_repo)
-    _check(run, "pr-train-conductor", ("[STATUS: BLOCKED]",), block_ok=True)
-
-
-def test_standards_rules_specialist(live_repo: Path) -> None:
-    task = (
-        "Read docs/STANDARDS.md and produce the Standards Packet for a task that adds "
-        "one function to src/hello.py."
-    )
-    run = _persona("standards-rules-specialist", task, ["Read", "Glob", "Grep"], live_repo)
-    _check(run, "standards-rules-specialist", ("## Standards Packet",))

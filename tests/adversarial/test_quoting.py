@@ -7,8 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from tests.adversarial.corpus import CREDENTIAL, NESTED, READERS, REPLY_KEY, assert_denied
-from tests.payloads import _b, _cred
+from tests.adversarial.corpus import (
+    CREDENTIAL,
+    NESTED,
+    READERS,
+    REPLY_KEY,
+    assert_denied,
+    assert_store_read_denied,
+)
+from tests.payloads import _b
 from tests.test_checks_credential_paths import _bash_in, _key_repo
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
@@ -69,7 +76,7 @@ def test_quoted_store_read_is_denied(
     agent: str,
     template: str,
 ) -> None:
-    assert_denied(_cred(agent, "Bash", command=template.format(home=cred_home)), CREDENTIAL)
+    assert_store_read_denied(agent, template, home=cred_home)
 
 
 @pytest.mark.parametrize("agent", READERS)
