@@ -31,6 +31,7 @@ from lib.audit_proof import (
     auditor_round,
     hooks_live,
     live_log,
+    live_summary,
     newest_log,
     read_chain,
     round_verdict,
@@ -61,6 +62,7 @@ from lib.train_definition import (
     DefinitionError,
     Origin,
 )
+from lib.train_summary import LEDGER, LEDGER_PENDING, SummaryError, first_session, write_summary
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 MODE_DEFINED = "defined"
@@ -1280,9 +1282,8 @@ def record_exception(cwd: Path, ledger_id: str) -> Outcome:
 
 
 # 73, spec 3.3: reaudit {judged, tip, round}; spec 3.5: resume {summary}, pin D1 -> E4 ledger.
-REAUDIT, RESUME, LEDGER = "reaudit", "resume", "ledger"
+REAUDIT, RESUME = "reaudit", "resume"
 AUDITOR_AGENT, ORCHESTRATOR_AGENT = "security-auditor", "orchestrator"
-LEDGER_PENDING = "Ledger ids: pending"
 
 
 def _open_consult(state: dict[str, object], agent: str) -> None:
@@ -1766,7 +1767,42 @@ def state_lines(cwd: Path, plugin_root: Path = PLUGIN_ROOT) -> Outcome:
     )
 
 
+def summary(cwd: Path) -> Outcome:
+    # W3.2: the summary from state and the audit logs; this command's record anchors the proof.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        try:
+            return [write_summary(repo, train_id, live_summary(repo).stem)]
+        except (ProofError, SummaryError) as exc:
+            raise RunnerError(str(exc)) from exc
+
+    return _recorded(cwd, edit, "summary")
+
+
+def _stop_summary(repo: Path) -> list[str]:
+    # W3.2: stop rewrites the summary first; a refusal is shown and never blocks the teardown.
+    train_id = train_state.active_train(repo)
+    if train_id is None or not train_state.state_path(repo, train_id).is_file():
+        return []
+    try:
+        # 0069: a folder-scope train has no repository to hold a summary.
+        if train_state.load(repo, train_id).get("scope_kind") == "folder":
+            return []
+    except train_state.TrainStateError as exc:
+        return [f"summary not written: {exc}"]
+    session = first_session(repo, train_id)
+    if session is None:
+        try:
+            session = newest_log(repo).stem
+        except ProofError:
+            session = None
+    try:
+        return [write_summary(repo, train_id, session)]
+    except (SummaryError, train_state.TrainStateError) as exc:
+        return [f"summary not written: {exc}"]
+
+
 def stop(cwd: Path, reason: str, next_action: str | None) -> Outcome:
     repo = project_root(cwd.resolve())
+    written = _stop_summary(repo)
     lines, ok = workspace.stop(repo, reason, next_action)
-    return Outcome(EXIT_OK if ok else EXIT_STOP, lines)
+    return Outcome(EXIT_OK if ok else EXIT_STOP, [*written, *lines])

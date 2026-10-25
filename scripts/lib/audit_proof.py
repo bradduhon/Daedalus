@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -30,11 +32,18 @@ VERDICT_LINES = "verdict_lines"
 _VERDICT_TAG = "[VERDICT:"
 _VERDICT_KIND = re.compile(r"\[VERDICT:\s*([A-Za-z_]+)\s*\]")
 VERDICT_BOTH = "both verdicts"
-_SUMMARY_NAME = re.compile(r"[0-9]{8}-[0-9]{6}-summary\.md")
-# pin D1 -> D5: the proof refusals for the recorded verdict seq and a reply with both verdicts.
+# W3.2: the summary command the proof anchors on: the plugin's own script, run by the
+# orchestrator or the main session, unrefused, whose PostToolUse record shows its written line.
+SUMMARY_SCRIPT, SUMMARY_ACTION = "daedalus_train.py", "summary"
+PLUGIN_SCRIPT = Path(__file__).resolve().parents[1] / SUMMARY_SCRIPT
+_PLUGIN_VARS = ("${CLAUDE_PLUGIN_ROOT}", "$CLAUDE_PLUGIN_ROOT")
+_SUMMARY_AGENTS = ("main", "daedalus:orchestrator")
+_REFUSED = ("block", "ask")
+_PYTHONS = ("python3", "python")
+# pin D1 -> E4: the D1 refusal texts; only their Next: action names the summary command.
 R_NO_SUMMARY_WRITE = (
     "no summary Write after the recorded verdict at seq {seq}. "
-    "Next: rewrite the summary with the Write tool, then rerun the proof."
+    "Next: rewrite the summary with daedalus_train.py summary --repo <repo>, then rerun the proof."
 )
 R_GRADED_NOT_RECORDED = (
     "the graded auditor turn at seq {graded} is not the recorded verdict at seq {recorded}. "
@@ -94,13 +103,18 @@ def newest_log(repo: Path) -> Path:
     return logs[-1]
 
 
-def live_log(repo: Path, needle: str) -> tuple[Path, int]:
+def _newest_bash(repo: Path) -> tuple[Path, list[dict[str, object]], dict[str, object] | None]:
     # 0024: the jail appends PreToolUse before the command runs, so this call is the newest
     # Bash record.
     log = newest_log(repo)
     records = read_chain(log)
     bash = [r for r in records if r.get("event") == "PreToolUse" and r.get("tool_name") == "Bash"]
-    tool_input = bash[-1].get("tool_input") if bash else None
+    return log, records, bash[-1] if bash else None
+
+
+def live_log(repo: Path, needle: str) -> tuple[Path, int]:
+    log, records, newest = _newest_bash(repo)
+    tool_input = newest.get("tool_input") if newest else None
     command = str(tool_input.get("command") or "") if isinstance(tool_input, dict) else ""
     if needle not in command:
         raise ProofError(
@@ -108,6 +122,18 @@ def live_log(repo: Path, needle: str) -> tuple[Path, int]:
             f"session's hooks are not writing the audit log. {DOCTOR_NEXT}"
         )
     return log, len(records)
+
+
+def live_summary(repo: Path) -> Path:
+    # W3.2: the summary command checks its own record with the predicate the proof anchors on.
+    log, _, newest = _newest_bash(repo)
+    if newest is None or not summary_call(newest, repo):
+        raise ProofError(
+            f"NOT LIVE: the newest Bash record in {log.name} is not the summary command the "
+            f"push proof anchors on. Next: run `python3 {PLUGIN_SCRIPT} summary --repo {repo}` "
+            "exactly, single-spaced, from the orchestrator or the main session."
+        )
+    return log
 
 
 def hooks_live(repo: Path, needle: str, mark: bool = False) -> str:
@@ -157,12 +183,6 @@ def _summary_session(repo: Path, train_id: str) -> str:
     if match is None:
         raise _not_approved(f"{summary.name} has no Session <id>: line")
     return match.group(1)
-
-
-def _file_name(record: Mapping[str, object]) -> str:
-    tool_input = record.get("tool_input")
-    raw = tool_input.get("file_path") if isinstance(tool_input, dict) else None
-    return Path(raw).name if isinstance(raw, str) else ""
 
 
 def handback_message(record: Mapping[str, object]) -> object:
@@ -367,13 +387,86 @@ def _judged(repo: Path, train_id: str, state: dict[str, object], named: str | No
     return named
 
 
-def _summary_write(record: Mapping[str, object]) -> bool:
-    return record.get("tool_name") == "Write" and bool(_SUMMARY_NAME.fullmatch(_file_name(record)))
+def _same_path(given: str, want: Path) -> bool:
+    return os.path.realpath(given) == os.path.realpath(want)
 
 
-def summary_anchor(records: Sequence[Mapping[str, object]], verdict_seq: int) -> int | None:
-    # pin D1 -> E4: the seq of the first summary Write after the recorded verdict seq.
-    return next((_seq(r) for r in records if _seq(r) > verdict_seq and _summary_write(r)), None)
+def summary_call(record: Mapping[str, object], repo: Path | None = None) -> bool:
+    # W3.2: exactly `python3 <plugin>/scripts/daedalus_train.py summary --repo <repo>`, one space
+    # between words, as the jail allowed it; a coder, a copied script or --help never counts.
+    if record.get("event") != "PreToolUse" or record.get("tool_name") != "Bash":
+        return False
+    if record.get("decision") in _REFUSED or record.get("agent_type") not in _SUMMARY_AGENTS:
+        return False
+    tool_input = record.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(command, str):
+        return False
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return False
+    # Single spaces only, plain or shlex-quoted; the live check and the anchor share this form.
+    if command != " ".join(argv) and command != " ".join(shlex.quote(a) for a in argv):
+        return False
+    if len(argv) == 4 and argv[3].startswith("--repo="):
+        argv = [*argv[:3], "--repo", argv[3].removeprefix("--repo=")]
+    if (
+        len(argv) != 5
+        or Path(argv[0]).name not in _PYTHONS
+        or argv[2:4] != [SUMMARY_ACTION, "--repo"]
+    ):
+        return False
+    script = argv[1]
+    for var in _PLUGIN_VARS:
+        if script.startswith(f"{var}/"):
+            script = f"{PLUGIN_SCRIPT.parents[1]}{script.removeprefix(var)}"
+    if not Path(script).is_absolute() or not _same_path(script, PLUGIN_SCRIPT):
+        return False
+    if repo is None:
+        return True
+    target = Path(argv[4])
+    cwd = record.get("cwd")
+    if not target.is_absolute():
+        if not isinstance(cwd, str):
+            return False
+        target = Path(cwd) / target
+    return _same_path(str(target), repo)
+
+
+def _wrote(later: Sequence[Mapping[str, object]], call: Mapping[str, object], train: str) -> bool:
+    # W3.2: the call's own PostToolUse record, by tool_use_id, holds the line a written file prints.
+    use = call.get("tool_use_id")
+    if not isinstance(use, str) or not use:
+        return False
+    line = f"summary written train={train}"
+    if train:
+        line += f" path={SUMMARY_DIR.as_posix()}/{train}-summary.md "
+    for record in later:
+        if record.get("tool_use_id") != use or record.get("agent_id") != call.get("agent_id"):
+            continue
+        if record.get("event") not in ("PostToolUse", "PostToolUseFailure"):
+            continue
+        head = record.get("result_head")
+        return record.get("event") == "PostToolUse" and isinstance(head, str) and line in head
+    return False
+
+
+def summary_anchor(
+    records: Sequence[Mapping[str, object]],
+    verdict_seq: int,
+    *,
+    repo: Path | None = None,
+    train_id: str = "",
+) -> int | None:
+    # pin D1 -> E4: the seq of the first summary command record after the recorded verdict seq;
+    # W3.2: the proof also binds the record to its repo and to the train the written line names.
+    for index, record in enumerate(records):
+        if _seq(record) <= verdict_seq or not summary_call(record, repo):
+            continue
+        if _wrote(records[index + 1 :], record, train_id):
+            return _seq(record)
+    return None
 
 
 def _recorded_seq(train_id: str, state: dict[str, object]) -> int:
@@ -407,16 +500,14 @@ def approved(repo: Path, train_id: str) -> str:
         )
     records = read_chain(log)
     recorded = _recorded_seq(train_id, state)
-    name = f"{train_id}-summary.md"
-    # 73: another train's summary Write in this log never anchors this train's proof.
-    own = [r for r in records if not (_summary_write(r) and _file_name(r) != name)]
-    anchor = summary_anchor(own, recorded)
+    # W3.2: a Write of the summary file never anchors; only the summary command's record does.
+    anchor = summary_anchor(records, recorded, repo=repo, train_id=train_id)
     if anchor is None:
         raise ProofError(f"NOT APPROVED: {R_NO_SUMMARY_WRITE.format(seq=recorded)}")
-    # 73: the graded turn is the last auditor turn before that Write, and it is the recorded one.
+    # 73: the graded turn is the last auditor turn before that command, and it is the recorded one.
     turn = auditor_round([r for r in records if _seq(r) < anchor], start)
     if not turn:
-        raise _not_approved(f"no {AUDITOR} reply after seq {start} before the summary Write")
+        raise _not_approved(f"no {AUDITOR} reply after seq {start} before the summary command")
     refusal = _verdict_refusal(turn)
     if refusal is not None:
         raise _not_approved(refusal)

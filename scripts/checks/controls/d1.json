@@ -1,6 +1,6 @@
 {
   "audit_proof.R_NO_SUMMARY_WRITE": {
-    "failure": "issue 73: the push proof anchors on a summary Write made before the recorded verdict, so an earlier round's turn is graded and a moved or unrecorded approval passes the push gate",
+    "failure": "issue 73: the push proof anchors on a summary command record made before the recorded verdict, so an earlier round's turn is graded and a moved or unrecorded approval passes the push gate",
     "premise_test": "tests/test_audit_proof.py::test_no_summary_write_after_the_recorded_verdict_refuses"
   },
   "audit_proof.R_GRADED_NOT_RECORDED": {

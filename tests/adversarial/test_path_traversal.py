@@ -130,6 +130,24 @@ def test_auditor_write_leaving_the_audit_folder_is_denied(marked_repo: Path, tem
     assert_denied(_cred("security-auditor", "Bash", cwd, command=f"echo x > {path}"))
 
 
+@pytest.mark.parametrize(
+    "template",
+    (
+        "{scratch}/20261015-120000-summary.md",
+        "{scratch}/20261015-120000/../20261015-120000-summary.md",
+        "{scratch}/20261015-120000/./../20261015-120000-summary.md",
+        "{scratch}//20261015-120000-summary.md",
+    ),
+)
+def test_orchestrator_write_of_the_summary_is_denied(marked_repo: Path, template: str) -> None:
+    # W3.2: only the summary command writes the summary, so no Write of it anchors the proof.
+    path = template.format(scratch=f"{marked_repo}/docs/.tmp/daedalus")
+    for tool in ("Write", "Edit"):
+        write = _cred("orchestrator", tool, str(marked_repo), file_path=path, content="x")
+        assert_denied(write, "writes are limited to scratch")
+    assert_denied(_cred("orchestrator", "Bash", str(marked_repo), command=f"tee {path}"))
+
+
 def test_auditor_write_inside_the_audit_folder_is_allowed(marked_repo: Path) -> None:
     # issue 70: the same marked repo admits the in-folder write the escape rows depart from.
     for name in ("round1/test_scope_x.py", "round1/findings.txt"):

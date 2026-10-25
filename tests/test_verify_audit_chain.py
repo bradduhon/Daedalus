@@ -300,8 +300,19 @@ def _hooks_live_start(hook_input: Any, repo_cwd: Path) -> subprocess.CompletedPr
 
 
 def _summary_written(hook_input: Any, repo_cwd: Path) -> None:
+    # W3.2: the summary command's record anchors the proof.
     summary = repo_cwd / "docs" / ".tmp" / "daedalus" / f"{APPROVED_TRAIN}-summary.md"
-    audit.audit_append(hook_input(tool_name="Write", tool_input={"file_path": str(summary)}))
+    command = {"command": f"python3 {SCRIPTS_DIR}/daedalus_train.py summary --repo {repo_cwd}"}
+    audit.audit_append(hook_input(tool_input=command, tool_use_id="toolu_summary"))
+    path = f"docs/.tmp/daedalus/{APPROVED_TRAIN}-summary.md"
+    line = f"summary written train={APPROVED_TRAIN} path={path} ledger=recorded\n"
+    done = hook_input(
+        hook_event_name="PostToolUse",
+        tool_input=command,
+        tool_use_id="toolu_summary",
+        tool_response={"stdout": line, "stderr": ""},
+    )
+    audit.audit_append(done)
     summary.parent.mkdir(parents=True, exist_ok=True)
     summary.write_text("Session sess-test: .claude/daedalus/audit/sess-test.jsonl\n")
 
@@ -378,7 +389,6 @@ def _judge(repo: Path, tip: str, status: str = "approved", seq: int = 1) -> None
 
 
 def _approved_train(hook_input: Any, repo_cwd: Path, verdict: str) -> None:
-    train = "20261016-120000"
     assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
     audit.audit_append(
         hook_input(
@@ -389,10 +399,7 @@ def _approved_train(hook_input: Any, repo_cwd: Path, verdict: str) -> None:
             last_assistant_message=verdict,
         )
     )
-    summary = repo_cwd / "docs" / ".tmp" / "daedalus" / f"{train}-summary.md"
-    audit.audit_append(hook_input(tool_name="Write", tool_input={"file_path": str(summary)}))
-    summary.parent.mkdir(parents=True)
-    summary.write_text("Session sess-test: .claude/daedalus/audit/sess-test.jsonl\n")
+    _summary_written(hook_input, repo_cwd)
 
 
 def test_cli_approved_round_trip(project_data: Path, hook_input: Any, repo_cwd: Path) -> None:

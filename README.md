@@ -328,6 +328,7 @@ Daedalus/
 │   ├── lib/train_runner.py          # the train state machine behind daedalus_train.py
 │   ├── lib/train_scope.py           # the train scope the jail's entry script reads first
 │   ├── lib/train_state.py           # one state file per train
+│   ├── lib/train_summary.py         # the train summary, written from state and the audit log
 │   ├── lib/unit_binding.py          # one coder per unit worktree
 │   ├── lib/workspace.py             # unit worktrees and the train marker
 │   ├── append_ledger.py             # locked, sequence-checked ledger writer

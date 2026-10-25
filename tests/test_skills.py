@@ -633,16 +633,18 @@ def test_build_train_records_choices_plan_packets_and_controls() -> None:
     phase3 = " ".join(_section(text, "## Phase 3", "\n6. The summary").split())
     controls = PLUGIN + "audit_report.py --repo <repo> --session <id> --controls`"
     assert controls in phase3
-    assert phase3.index(controls) < phase3.index("Write the summary now")
+    assert phase3.index(controls) < phase3.index("Run the summary command now")
     for word in ("friction", "habit"):
         assert word in phase3, word
     # spec 8, pin B2 -> B6: a blocking hook with `failure: none` is the contradiction item.
-    item = phase3.split("Contradiction item (spec 8):", 1)[1].split("Write the summary now", 1)[0]
+    item = phase3.split("Contradiction item (spec 8):", 1)[1].split(
+        "Run the summary command now", 1
+    )[0]
     assert "`failure: none`" in item
     for option in ("keep it", "redesign it", "remove it"):
         assert option in item, option
     # pin B3 -> B6: the final audit round comes before the summary Write.
-    assert phase3.index("Agent(`security-auditor`)") < phase3.index("Write the summary now")
+    assert phase3.index("Agent(`security-auditor`)") < phase3.index("Run the summary command now")
     assert "       ## Blocks\n" in text.split("Shape:", 1)[1]
     # O7: every charter-docs dispatch names append_ledger.py by its absolute path.
     for part in (phase1, phase3):
@@ -1010,11 +1012,12 @@ def test_push_train_routes_ci_without_waiting() -> None:
 def test_both_trains_carry_the_pending_ledger_line() -> None:
     # Ruling N3: the summary exists before charter-docs; push-train refuses it pending.
     bt = _recipe()
-    assert "with the line `Ledger ids: pending. Codes: --repo <R> --type <T>.`" in bt
-    assert "replace the summary's `Ledger ids: pending` line with" in bt
+    assert "it writes the line `Ledger ids: pending. Codes: --repo <R> --type <T>.`" in bt
+    # pin D1 -> E4: the summary command reads the ledger record; nobody edits the pending line.
+    assert "replace the summary's `Ledger ids: pending` line with" not in bt
     # 0057: Phase 1 records picks first, so compare against the Phase 3 dispatch.
     phase3 = bt.index("## Phase 3")
-    assert bt.index("Write the summary now") < bt.index("Agent(`charter-docs`)", phase3)
+    assert bt.index("Run the summary command now") < bt.index("Agent(`charter-docs`)", phase3)
     pt = _push_train()
     assert "A `Ledger ids: pending` line means the Build Train stopped before" in pt
     # issue 3, spec 3.5: the pending Next: names the Build Train's ledger resume.
@@ -1022,7 +1025,8 @@ def test_both_trains_carry_the_pending_ledger_line() -> None:
     assert "ask for the ledger resume of `/daedalus:build-train`" in step
     assert "A later Daedalus release adds a Build Train resume" not in pt
     assert "`git -C <charter_root> switch daedalus/<train-id>`" not in pt
-    assert "with `Ledger ids: <ids> in commit <sha>.` using the Edit tool" in bt
+    assert "using the Edit tool" not in bt
+    assert "its `Ledger ids:` line names the ids and the commit from the ledger record" in bt
     # N5-M2: the Charter dirty-tree stop precedes the summary write.
     assert "Every stop after this point leaves a summary." in bt
     assert "Every stop after the merge" not in bt
@@ -1530,7 +1534,7 @@ def test_push_train_runs_the_recovery_round_on_a_moved_tip() -> None:
         "`<repo>/docs/.tmp/daedalus/<train-id>/audit/round<n>/findings.txt`",
         MAIN + "daedalus_train.py verdict --repo <repo> --status approved --round <n> "
         "--findings <findings path> --tip <judged tip>`",
-        "rewrite the whole summary with one Write",
+        MAIN + "daedalus_train.py summary --repo <repo>`",
         "Then run Preconditions step 9 again.",
     ]
     places = [recovery.index(part) for part in order]
@@ -1538,13 +1542,15 @@ def test_push_train_runs_the_recovery_round_on_a_moved_tip() -> None:
     assert "the line `Worktree: <audit worktree path>`" in recovery
     # audit_proof._summary_session reads the first Session line; step 8 bound this session.
     step4 = recovery.split("\n4. ", 1)[1].split("\n5. ", 1)[0]
-    write = step4.split("rewrite the whole summary with one Write", 1)[1]
+    write = step4.split(MAIN + "daedalus_train.py summary --repo <repo>`", 1)[1]
+    assert "never write the summary by hand (0046)" in write
     assert (
-        "In the same Write, the first line under `## Audit log` becomes "
+        "the first line under `## Audit log` is "
         "`Session <id>: .claude/daedalus/audit/<id>.jsonl` with this session's id from step 8, "
-        "and the Build Train's session line stays after it"
+        "the Build Train's session line after it"
     ) in write
-    assert "the push proof reads the log of the first `Session <id>:` line" in write
+    assert "The push proof reads the log of the first `Session <id>:` line" in write
+    assert "with one Write" not in step4
     rejected = recovery.split("\n5. `[VERDICT: REJECTED] tip=<sha>`: ", 1)[1]
     assert "with `--status rejected`" in rejected
     assert "the three choices of the audit escalation prompt" in rejected
@@ -1566,7 +1572,7 @@ def test_catalog_names_the_recovery_commands_and_lines() -> None:
     rules = catalog.split("## Composition rules", 1)[1].split("\n## ", 1)[0]
     assert "`REAUDIT. <the reaudit line>`" in rules
     assert "`RESUME LEDGER. <the resume line>`" in rules
-    assert "the push proof anchors on that Write" in rules
+    assert "the push proof anchors on that command's record" in rules
     commands = catalog.split("## Commands and reply lines", 1)[1].split("\n## ", 1)[0]
     for line in (
         "`reaudit round=<n> tip=<40 hex>`",
@@ -1575,6 +1581,25 @@ def test_catalog_names_the_recovery_commands_and_lines() -> None:
         "both run from the main session only",
     ):
         assert line in commands, line
+
+
+# W3.2: the phrases the recipes used for a hand Write or Edit of the summary.
+HAND_WRITES = re.compile(
+    r"with one Write|summary (?:file )?with the (?:Write|Edit) tool|[Ss]ummary Write\b|"
+    r"Write the summary now|using the Edit tool|summary's `Ledger ids: pending` line with"
+)
+
+
+@pytest.mark.parametrize("name", ["build-train", "push-train", "catalog"])
+def test_no_recipe_writes_the_summary_by_hand(name: str) -> None:
+    # W3.2: the summary command writes the train summary; the push train's post-push CI and
+    # release lines stay outside the Recovery round this test reads.
+    text = (REPO_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+    if name == "push-train":
+        text = _section(text, "## Recovery round", "## Push")
+    assert HAND_WRITES.findall(text) == []
+    if name != "build-train":
+        assert "daedalus_train.py summary" in text
 
 
 def test_coder_bash_section_opens_with_the_credential_habit_line() -> None:
