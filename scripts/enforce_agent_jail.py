@@ -34,15 +34,18 @@ _ROOT_CAP = 16
 # 6.1: the reason prefix for blocks this hook decides itself, main and foreign agents alike.
 _JAIL_HOOK = "jail"
 _CONFIG_HOOK = "config"
-# 0106: ask texts for the operator's own session; IA-5g and AU-5 require this wording.
-_CREDENTIAL_ASK = (
+# Main never prompted (amends 0106): context warnings for the main session; IA-5, AU-5, SI-4.
+_CREDENTIAL_WARN = (
     "This path holds credentials; reading it puts the secret into the session transcript. "
-    "Approve to proceed anyway. The jail's finding: "
+    "The jail's finding: "
 )
-_LOAD_ASK = "the jail's library failed to load; approving runs this call unjudged during a train"
-_AUDIT_ASK = "the audit log cannot be written; approving leaves this call unrecorded"
-_CONFIG_ASK = "the project config failed to load; approving runs this call unjudged during a train"
-_JUDGE_ASK = "the jail failed while judging this call; approving runs it unjudged during a train"
+_LOAD_WARN = (
+    "auditing is down: the jail's library failed to load, so this {tool} call runs unjudged "
+    "and unrecorded during a train"
+)
+_AUDIT_WARN = "auditing is down: the audit log cannot be written, so this {tool} call is unrecorded"
+_CONFIG_WARN = "the project config failed to load, so this {tool} call runs unjudged during a train"
+_JUDGE_WARN = "the jail failed while judging this {tool} call, so it runs unjudged during a train"
 
 
 _TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
@@ -154,8 +157,8 @@ def _fast_path(payload: dict[str, object], agent: str, cwd: str) -> int:
     tool_input: dict[str, object] = raw_input if isinstance(raw_input, dict) else {}
     reason = path_reason(tool, tool_input, cwd) if tool in CREDENTIAL_TOOLS else None
     if reason and _bare_main(payload):
-        # 0106, IA-5g, AC-3: the operator approves each credential read; the text stays literal.
-        return _ask(_CREDENTIAL_ASK + reason)
+        # Main never prompted (amends 0106): allow with context, never ask; IA-5, the text literal.
+        return _warn(_CREDENTIAL_WARN + reason)
     return _block(agent, reason) if reason else 0
 
 
@@ -174,11 +177,11 @@ def _block(agent: str, message: str, next_step: str = _REPORT_NEXT) -> int:
     return 2
 
 
-def _ask(message: str) -> int:
-    # 0105: exit 0 with the PreToolUse ask decision; the operator approves or denies the call.
-    out = {"hookEventName": "PreToolUse", "permissionDecision": "ask"}
-    out["permissionDecisionReason"] = message
-    print(json.dumps({"hookSpecificOutput": out}))
+def _warn(message: str) -> int:
+    # Main never prompted (amends 0105, 0106): allow with context, never ask, for the main session.
+    # No permissionDecision: the operator's own permission rules and hooks still apply.
+    out = {"hookEventName": "PreToolUse", "additionalContext": message}
+    print(json.dumps({"systemMessage": message, "hookSpecificOutput": out}))
     return 0
 
 
@@ -189,11 +192,18 @@ def _note(agent: str, message: str) -> None:
         pass  # m5: a closed stderr must not turn an allow into exit 1.
 
 
-def _load_failed(exc: Exception, in_train: bool, main_session: bool) -> int:
+def _alert(agent: str, message: str) -> int:
+    # Main never prompted (amends 0106): allow with context, never ask, for the main session.
+    # AU-5, SI-4: a main-session failure alert on stderr and in context, on every call.
+    _note(agent, message)
+    return _warn(message)
+
+
+def _load_failed(exc: Exception, in_train: bool, main_session: bool, tool: str) -> int:
     # 0035: exit 1 does not block a PreToolUse hook, so a train's broken jail must exit 2.
     if in_train and main_session:
-        # 0106: the operator's own session is asked, never blocked; agents keep the deny.
-        return _ask(f"{_LOAD_ASK} ({exc}). {_LOAD_NEXT}")
+        # Main never prompted (amends 0106): allow with an alert, never ask; agents keep the deny.
+        return _alert("main", f"{_LOAD_WARN.format(tool=tool)} ({exc}). {_LOAD_NEXT}")
     if in_train:
         return _block("?", f"hook could not load its libraries ({exc}). {_LOAD_NEXT}")
     _note(
@@ -234,28 +244,27 @@ def _hook_failed(
     agent: str,
     hook: str,
     exc: Exception,
-    ask_lead: str,
+    warn_lead: str,
     next_step: str = _REPORT_NEXT,
 ) -> int:
-    # 0106: a hook failure asks the operator's own session; agents keep the recorded block.
+    # Main never prompted (amends 0106): a hook failure alerts the main session, never asks.
     # 0010: no absolute cwd names no repository to record in, so that call stays blocked.
     cwd = payload.get("cwd")
     if not _bare_main(payload) or not (isinstance(cwd, str) and os.path.isabs(cwd)):
         return _record_and_block(payload, agent, f"{hook}: {exc}", next_step)
     from lib.audit import audit_append
 
-    record = f"{hook}: {exc}"
-    text = f"{ask_lead} ({exc})."
-    if "Next:" not in record:
-        record += next_step
+    tool = str(payload.get("tool_name"))
+    text = f"{warn_lead.format(tool=tool)} ({exc})."
+    if "Next:" not in text:
         text += next_step
     try:
-        audit_append(payload, "ask", record)
+        # AU-3, AU-12: the row records the decision taken, allow, with the warning as reason.
+        audit_append(payload, "allow", f"{hook}: {text}")
     except Exception as audit_exc:  # noqa: BLE001
-        # 0106, AU-5: the stderr line is the alert; the operator may run the call unrecorded.
-        _note(agent, f"audit log unavailable ({audit_exc}).")
-        return _ask(f"{_AUDIT_ASK} ({audit_exc}). The jail's finding: {text}")
-    return _ask(text)
+        warning = f"{_AUDIT_WARN.format(tool=tool)} ({audit_exc}). The jail's finding: {text}"
+        return _alert(agent, warning)
+    return _alert(agent, text)
 
 
 def _judge(payload: dict[str, object], agent: str) -> int:
@@ -272,10 +281,10 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         config = load_config(cwd if isinstance(cwd, str) else None)
     except Exception as exc:  # noqa: BLE001
         if not read:
-            # 0106: the operator's own session is asked; an agent's call stays blocked.
-            return _hook_failed(payload, agent, _CONFIG_HOOK, exc, _CONFIG_ASK, _CONFIG_NEXT)
+            # Main never prompted (amends 0106): main is alerted, never asked; agents stay blocked.
+            return _hook_failed(payload, agent, _CONFIG_HOOK, exc, _CONFIG_WARN, _CONFIG_NEXT)
         config = Config()
-    ask = False
+    warn = False
     finding: str | None = None
     if routed(agent):
         # 0044: a Daedalus agent's call runs the hooks its agent file names.
@@ -284,23 +293,24 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         agent = normalize_agent(agent)
     else:
         decision = decide(payload, config)
-        allow, finding, ask = decision.allow, decision.reason, decision.ask
+        allow, finding, warn = decision.allow, decision.reason, decision.warn
         agent = decision.agent or agent
-        # 0105, 6.1: the record carries the hook prefix; the operator's ask text does not.
+        # 0105, 6.1: the record carries the hook prefix; the main session's warning does not.
         reason = f"{_JAIL_HOOK}: {finding}" if finding else None
     try:
-        verdict = "ask" if ask else "allow" if allow else "block"
-        record = audit_append(payload, verdict, reason)
+        # Main never prompted (amends 0105, 0106): a warned call is recorded as allow, AU-3.
+        record = audit_append(payload, "allow" if allow or warn else "block", reason)
     except Exception as exc:  # noqa: BLE001
         if read and allow:
             # spec 8: an allowed read is non-blocking on a failed record, as audit_log.py is.
             _note(agent, f"audit log unavailable ({exc}); the read proceeds unrecorded.")
             return 0
-        if (allow or ask) and _bare_main(payload):
-            # 0106, AU-5: the stderr line is the alert; the operator may run the call unrecorded.
-            _note(agent, f"audit log unavailable ({exc}).")
-            unrecorded = f"{_AUDIT_ASK} ({exc})."
-            return _ask(f"{unrecorded} The jail's finding: {finding}" if ask else unrecorded)
+        if (allow or warn) and _bare_main(payload):
+            # Main never prompted (amends 0106): AU-5 alert on every unrecorded call, never ask.
+            unrecorded = f"{_AUDIT_WARN.format(tool=payload.get('tool_name'))} ({exc})."
+            return _alert(
+                agent, f"{unrecorded} The jail's finding: {finding}" if warn else unrecorded
+            )
         # 8.5: no record, no action. The jail fails closed when the chain cannot be written.
         detail = f"audit log unavailable ({exc})."
         if "Next:" not in detail:
@@ -310,14 +320,15 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         _warn_fallback(str(payload.get("cwd")))
     if allow:
         return 0
-    if ask:
-        return _ask(str(finding))
+    if warn:
+        # Main never prompted (amends 0105, 0106): allow with context, never ask, for main.
+        return _warn(str(finding))
     return _block(agent, str(reason))
 
 
 def main() -> int:
     # Every path but a clean allow exits 2, except a library failure outside a train
-    # and 0106 asks to the operator's own session.
+    # and the main session's warnings and alerts (Main never prompted, amends 0106).
     try:
         text = sys.stdin.read()
         started = time.monotonic()
@@ -339,13 +350,13 @@ def main() -> int:
     train_marked, lib_error = _marker_finder()
     in_train = train_marked(cwd)
     if lib_error is not None:
-        return _load_failed(lib_error, in_train, main_session)
+        return _load_failed(lib_error, in_train, main_session, tool_name)
     if not in_train and isinstance(cwd, str):
         try:
             from lib.credential_paths import CREDENTIAL_TOOLS
             from lib.train_scope import policed_outside_train
         except Exception as exc:  # noqa: BLE001
-            return _load_failed(exc, in_train, main_session)
+            return _load_failed(exc, in_train, main_session, tool_name)
         try:
             named = _names_marked_repo(tool_name, payload.get("tool_input") or {}, cwd)
         except Exception:  # noqa: BLE001
@@ -362,7 +373,7 @@ def main() -> int:
         for name in _LIBS:
             importlib.import_module(name)
     except Exception as exc:  # noqa: BLE001
-        return _load_failed(exc, in_train, main_session)
+        return _load_failed(exc, in_train, main_session, tool_name)
     from lib.audit import mark_judge_start
 
     # 6.1: the fast path loads no lib, so the read-time clock is handed over once lib.audit loads.
@@ -370,8 +381,8 @@ def main() -> int:
     try:
         return _judge(payload, agent)
     except Exception as exc:  # noqa: BLE001
-        # 0106: the operator's own session is asked; an agent's call stays blocked.
-        return _hook_failed(payload, agent, _JAIL_HOOK, exc, _JUDGE_ASK)
+        # Main never prompted (amends 0106): main is alerted, never asked; agents stay blocked.
+        return _hook_failed(payload, agent, _JAIL_HOOK, exc, _JUDGE_WARN)
 
 
 if __name__ == "__main__":

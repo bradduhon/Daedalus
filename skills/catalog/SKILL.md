@@ -56,7 +56,7 @@ Phases overlap freely. A phase's weight scales with the task: a one-file fix car
 
 These are musts, not suggestions.
 
-1. All work is audited and passes before it leaves a workspace, or the operator accepts the exception as a ruling with the findings it waives. Nothing is pushed and no pull request is opened until train state holds an approved verdict on the exact tip being pushed, or that exception. The hooks refuse such a push or pull request from an agent, and ask the operator before the main session's own (0106); never argue with a refusal and never work around it.
+1. All work is audited and passes before it leaves a workspace, or the operator accepts the exception as a ruling with the findings it waives. Nothing is pushed and no pull request is opened until train state holds an approved verdict on the exact tip being pushed, or that exception. The hooks refuse such a push or pull request from an agent, and warn the main session in context about its own (0106, Main never prompted); never argue with a refusal and never work around it.
 2. No coder starts without a plan record and a worktree binding.
 3. Every ruling is captured in the ledger in the session it is made.
 4. Every choice is printed with its alternative and its cost before it is taken. Inside a train, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py choice --repo <repo> --chose "<what>" --over "<alternative>" --cost "<time or tokens>"` and add `--phase <name>` for a weight choice; it records the choice and prints `Chose <what> over <alternative>: <cost>`. Outside a train, print that same line in your reply.

@@ -293,58 +293,60 @@ R_UNKNOWN_TRAIN = (
     "inspection and git reads, pipes allowed; Write, Edit, dispatch and web tools are refused "
     "(0100).\n" + UNMARK_NEXT
 )
-# 0106: the plain-words warnings the operator reads before approving one main-session call.
-ASK_DOTGIT = "Writing {path} edits the repository's own metadata; a wrong write corrupts the clone."
-ASK_DATA_DIR = (
+# Main never prompted (amends 0106): the plain-words warnings sent into the main session's context.
+WARN_DOTGIT = (
+    "Writing {path} edits the repository's own metadata; a wrong write corrupts the clone."
+)
+WARN_DATA_DIR = (
     "This touches the plugin data folder. It holds the audit log, train state and coder "
     "bindings; a hand edit breaks the hash chain that proves the audit happened."
 )
-ASK_CREDENTIAL = (
+WARN_CREDENTIAL = (
     "This path holds credentials; reading it puts the secret into the session transcript."
 )
-ASK_CREDENTIAL_WRITE = (
+WARN_CREDENTIAL_WRITE = (
     "This path holds credentials; writing it can replace a key or leave a secret behind."
 )
-ASK_FORCE_PUSH = (
+WARN_FORCE_PUSH = (
     "A force, delete or mirror push rewrites the remote branch; commits that exist only there "
     "are lost."
 )
-ASK_DEFAULT_BRANCH = "Pushing to the default branch skips the pull request the operator merges."
-ASK_DELETE = (
+WARN_DEFAULT_BRANCH = "Pushing to the default branch skips the pull request the operator merges."
+WARN_DELETE = (
     "This recursive or raw-device delete removes files that neither git nor the plugin can restore."
 )
-ASK_CLEAN = (
+WARN_CLEAN = (
     "git clean deletes untracked files, the plugin data folder included; nothing restores them."
 )
-ASK_TRAIN_PUSH = "Pushing during a train publishes a branch before the audit approves its tip."
-ASK_COMMAND = "This command matches a pattern the plugin guards against."
-ASK_NESTED_CLAUDE = (
+WARN_TRAIN_PUSH = "Pushing during a train publishes a branch before the audit approves its tip."
+WARN_COMMAND = "This command matches a pattern the plugin guards against."
+WARN_NESTED_CLAUDE = (
     "This starts a nested Claude session; the jail judges its calls as yours, with no agent's "
     "limits."
 )
-ASK_DISPATCH = (
-    "This dispatch skips a train invariant ({reason}). Approving starts the agent without it; "
-    "the audit log records the ask."
+WARN_DISPATCH = (
+    "This dispatch skips a train invariant ({reason}). The agent starts without it; "
+    "the audit log records the warning."
 )
-ASK_NO_CWD = (
+WARN_NO_CWD = (
     "The hook received no working folder, so the plugin cannot tell which repository this "
     "call touches."
 )
-# 0106: tripwire findings with their own consequence; any other finding gets ASK_COMMAND.
-_TRIPWIRE_ASKS = {
-    R_FORCE_PUSH: ASK_FORCE_PUSH,
-    R_DEFAULT_BRANCH: ASK_DEFAULT_BRANCH,
-    R_DESTRUCTIVE: ASK_DELETE,
-    R_CLEAN: ASK_CLEAN,
-    R_DATA_DIR_GIT: ASK_DATA_DIR,
-    R_STASH_UNTRACKED: ASK_DATA_DIR,
-    R_NESTED_CLAUDE: ASK_NESTED_CLAUDE,
+# 0106: tripwire findings with their own consequence; any other finding gets WARN_COMMAND.
+_TRIPWIRE_WARNINGS = {
+    R_FORCE_PUSH: WARN_FORCE_PUSH,
+    R_DEFAULT_BRANCH: WARN_DEFAULT_BRANCH,
+    R_DESTRUCTIVE: WARN_DELETE,
+    R_CLEAN: WARN_CLEAN,
+    R_DATA_DIR_GIT: WARN_DATA_DIR,
+    R_STASH_UNTRACKED: WARN_DATA_DIR,
+    R_NESTED_CLAUDE: WARN_NESTED_CLAUDE,
 }
-# 0105, 0106: the operator approves or denies the one call; main is never blocked.
-R_MAIN_TRAIN_ASK = (
+# Main never prompted (amends 0105, 0106): allow with context, never ask, for the main session.
+R_MAIN_TRAIN_WARN = (
     "Build Train {train} is active in this repository and works in unit worktrees. "
     "Writing {path} here can leave a dirty tree that finish refuses, conflict with a unit "
-    "branch, or land on the integration branch. Approve to proceed anyway."
+    "branch, or land on the integration branch."
 )
 R_ROUTED = (
     "{agent} is judged by the router, not lib.jail.decide. "
@@ -399,8 +401,8 @@ class Decision:
     allow: bool
     reason: str | None = None
     agent: str | None = None
-    # 0105: not allowed, not refused; the operator decides this one main-session call.
-    ask: bool = False
+    # Main never prompted (amends 0105, 0106): a main-session finding the hook allows with context.
+    warn: bool = False
 
 
 def _allow() -> Decision:
@@ -411,21 +413,24 @@ def _block(reason: str) -> Decision:
     return Decision(False, reason)
 
 
-def _ask(reason: str) -> Decision:
-    return Decision(False, reason, ask=True)
+def _warn(reason: str) -> Decision:
+    # Main never prompted (amends 0105, 0106): allow with context, never ask, for the main session.
+    return Decision(False, reason, warn=True)
 
 
-def _main_ask(warning: str, finding: str) -> Decision:
-    # 0106: the warning first, then the jail's finding verbatim so the audit log keeps it whole.
-    return _ask(f"{warning} Approve to proceed anyway. The jail's finding: {finding}")
+def _main_warn(warning: str, finding: str) -> Decision:
+    # Main never prompted (amends 0106): allow with context, never ask, for the main session.
+    # The warning first, then the jail's finding verbatim so the audit log keeps it whole.
+    return _warn(f"{warning} The jail's finding: {finding}")
 
 
-def _tripwire_ask(finding: str) -> Decision:
-    # 0106: git push during a train carries the gh policy's push finding.
-    warning = _TRIPWIRE_ASKS.get(finding, ASK_COMMAND)
+def _tripwire_warn(finding: str) -> Decision:
+    # Main never prompted (amends 0106): allow with context, never ask, for the main session.
+    # Git push during a train carries the gh policy's push finding.
+    warning = _TRIPWIRE_WARNINGS.get(finding, WARN_COMMAND)
     if finding == _push_reason("main"):
-        warning = ASK_TRAIN_PUSH
-    return _main_ask(warning, finding)
+        warning = WARN_TRAIN_PUSH
+    return _main_warn(warning, finding)
 
 
 def _flags_ok(
@@ -1759,20 +1764,22 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
     cwd = str(hook_input.get("cwd") or "")
     raw_input = hook_input.get("tool_input")
     tool_input: dict[str, object] = raw_input if isinstance(raw_input, dict) else {}
-    # m4, 0106: the operator's own session is bare main with no agent_id; it is asked, never denied.
+    # m4, 0106: the operator's own session is bare main with no agent_id; it is never denied.
     operator = raw_agent == "main" and not hook_input.get("agent_id")
     if tool in CREDENTIAL_TOOLS:
         reason = path_reason(tool, tool_input, cwd)
         if reason and operator:
-            return _with_agent(_main_ask(ASK_CREDENTIAL, reason), agent)
+            # Main never prompted (amends 0106): allow with context, never ask, for main.
+            return _with_agent(_main_warn(WARN_CREDENTIAL, reason), agent)
         return Decision(reason is None, reason, agent)
     # 0035: outside a train, main and foreign agents carry only the read deny above.
     if not policed_outside_train(raw_agent) and not _train_scoped(cwd, tool, tool_input):
         return Decision(True, None, agent)
     credential = _credential_reason(tool, tool_input, cwd)
     if credential and operator:
-        warning = ASK_CREDENTIAL_WRITE if tool in WRITE_TOOLS else ASK_CREDENTIAL
-        return _with_agent(_main_ask(warning, credential), agent)
+        warning = WARN_CREDENTIAL_WRITE if tool in WRITE_TOOLS else WARN_CREDENTIAL
+        # Main never prompted (amends 0106): allow with context, never ask, for the main session.
+        return _with_agent(_main_warn(warning, credential), agent)
     if credential:
         return Decision(False, credential, agent)
     if agent == "main" and raw_agent != "main":
@@ -1794,7 +1801,7 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
 
 
 def _with_agent(decision: Decision, agent: str) -> Decision:
-    return Decision(decision.allow, decision.reason, agent, decision.ask)
+    return Decision(decision.allow, decision.reason, agent, decision.warn)
 
 
 def integrity_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | None:
@@ -1816,31 +1823,31 @@ def integrity_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str 
 
 
 def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision:
-    # 0106: every main-session finding below asks the operator; none of them blocks.
+    # Main never prompted (amends 0105, 0106): allow with context, never ask, for the main session.
     command = str(tool_input.get("command") or "")
     raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
     is_write = tool in WRITE_TOOLS
     path = _abs(raw_path, cwd)
     integrity = integrity_reason(tool, tool_input, cwd)
     if integrity == R_NO_CWD:
-        return _main_ask(ASK_NO_CWD, R_NO_CWD)
+        return _main_warn(WARN_NO_CWD, R_NO_CWD)
     if integrity == R_DOTGIT:
-        return _main_ask(ASK_DOTGIT.format(path=path), R_DOTGIT)
+        return _main_warn(WARN_DOTGIT.format(path=path), R_DOTGIT)
     if integrity is not None:
-        return _main_ask(ASK_DATA_DIR, integrity)
+        return _main_warn(WARN_DATA_DIR, integrity)
     if tool == "Bash":
-        # 8.5, 0106: main meets only the tripwires, as asks; regex fallback when tokenize refuses.
+        # 8.5, 0106: main meets only the tripwires, as warnings; regex fallback if tokenize refuses.
         reason = _command_reason(command) or _gh_gate("main", cwd, command)
         reason = reason or (R_NESTED_CLAUDE if _nested_claude(command, cwd) else None)
-        return _tripwire_ask(reason) if reason else _allow()
+        return _tripwire_warn(reason) if reason else _allow()
     train = _main_write_train(path, cwd) if is_write else None
     if train is not None:
-        return _ask(R_MAIN_TRAIN_ASK.format(train=train, path=path))
+        return _warn(R_MAIN_TRAIN_WARN.format(train=train, path=path))
     if tool in dispatch_binding.DISPATCH_TOOLS:
         reason = dispatch_binding._dispatch_reason(tool_input, cwd)
         if reason:
-            # 0106: the operator's dispatch is asked with the invariant it skips, never blocked.
-            return _ask(ASK_DISPATCH.format(reason=reason))
+            # Main never prompted (amends 0106): the dispatch runs with the skipped invariant named.
+            return _warn(WARN_DISPATCH.format(reason=reason))
     return _allow()
 
 

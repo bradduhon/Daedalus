@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from lib import audit
 
-from tests.conftest import SCRIPTS_DIR, audit_records, write_train_marker
+from tests.conftest import SCRIPTS_DIR, audit_records, main_warning, write_train_marker
 
 
 @pytest.fixture
@@ -361,18 +361,17 @@ def test_main_block_reason_carries_a_prefix(
     tool_input: dict[str, str],
     prefix: str,
 ) -> None:
-    # 6.1: main asks and foreign blocks both record the deciding hook as routed blocks do.
+    # 6.1: main warnings and foreign blocks both record the deciding hook as routed blocks do.
     payload = hook_input(tool_name=tool, tool_input=tool_input)
     if agent is not None:
         payload.update(agent_type=agent, agent_id="f1")
     result = run_script("enforce_agent_jail.py", payload)
     rec = _last_record(project_data)
     if agent is None:
-        # 0106: the operator's own session is asked, never blocked.
+        # Main never prompted (amends 0106): allowed with the warning, recorded as allow.
         assert result.returncode == 0, result.stderr
-        out = json.loads(result.stdout)["hookSpecificOutput"]
-        assert out["permissionDecision"] == "ask"
-        assert rec["decision"] == "ask" and rec["reason"].startswith(prefix), rec["reason"]
+        warning = main_warning(result.stdout)
+        assert rec["decision"] == "allow" and rec["reason"] == f"{prefix}{warning}", rec["reason"]
         return
     assert result.returncode == 2, result.stderr
     assert rec["decision"] == "block" and rec["reason"].startswith(prefix), rec["reason"]

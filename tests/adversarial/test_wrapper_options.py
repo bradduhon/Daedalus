@@ -105,7 +105,7 @@ def test_a_foreign_agent_cannot_hide_a_write_behind_a_wrapper_option(
 ) -> None:
     command = form.format(repo=marked_repo, other=other_repo)
     d = jail.decide(_cred("Explore", "Bash", str(other_repo), command=command), CFG)
-    assert not d.allow and not d.ask, (command, d.reason)
+    assert not d.allow and not d.warn, (command, d.reason)
     assert "read-only while" in str(d.reason), (command, d.reason)
 
 

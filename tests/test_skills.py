@@ -541,7 +541,8 @@ def test_build_train_records_each_verdict_for_the_push_gate() -> None:
     assert "- Verdict record, last: after `[STATUS: COMMITTED]` on `[VERDICT: APPROVED]`" in step5
     assert (
         "The push gate reads this record: it refuses an agent's push or pull request for any tip "
-        "that moved after it, and asks the operator before the main session's own (0106)."
+        "that moved after it, and warns the main session in context about its own (0106, Main "
+        "never prompted)."
     ) in step5
     assert "    verdict: <the verdict command's printed line, or pending>\n" in text
 
@@ -607,7 +608,7 @@ def test_build_train_records_choices_plan_packets_and_controls() -> None:
     for kind in ("warm or cold", "parallel or serial", "weight", "agent"):
         assert kind in choice, kind
     assert "`/daedalus:catalog`" in rules and "`/daedalus:catalog`" in _build_train()
-    # 0105: the jail warns and asks, never blocks, the main session's own writes.
+    # 0105, Main never prompted: the jail warns in context, never blocks or prompts, main's writes.
     relay = _build_train().split("## Preconditions", 1)[0]
     assert "the jail blocks writes under `src/` and `tests/` for you" not in text + relay
     assert "it never blocks the main session" in relay and "unit worktrees" in relay

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -16,6 +15,7 @@ from lib.unit_binding import bindings_path, claim
 from lib.workspace import create, mark_train
 
 from tests.conftest import git as _git
+from tests.conftest import main_warning
 from tests.hook_chain import judge as decide
 
 TRAIN = "20261016-120000"
@@ -277,11 +277,10 @@ def test_a_relative_plan_path_resolves_from_the_repo(repo_cwd: Path, unit: Path)
 def test_the_hook_chain_enforces_the_plan_gate(
     repo_cwd: Path, unit: Path, run_script: Callable[[str, dict[str, Any]], Any]
 ) -> None:
-    # 0106: the operator's own dispatch without a plan record is asked, never refused.
-    asked = run_script("enforce_agent_jail.py", _dispatch(repo_cwd, unit))
-    assert asked.returncode == 0, asked.stderr
-    out = json.loads(asked.stdout)["hookSpecificOutput"]
-    assert out["permissionDecision"] == "ask" and NEXT in out["permissionDecisionReason"]
+    # Main never prompted (amends 0106): the operator's own dispatch without a plan is warned.
+    warned = run_script("enforce_agent_jail.py", _dispatch(repo_cwd, unit))
+    assert warned.returncode == 0, warned.stderr
+    assert NEXT in main_warning(warned.stdout)
     # 0106: a subagent claiming main stays refused, by the identity rule ahead of the plan gate.
     claimed = {**_dispatch(repo_cwd, unit), "agent_id": "sub1"}
     refused = run_script("enforce_agent_jail.py", claimed)
