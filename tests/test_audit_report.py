@@ -319,6 +319,43 @@ def test_no_subagent_stop_renders_open(project_data: Path, hook_input: Any) -> N
     assert "| repo-coder | Edit | 1 | 0 |" in result.stdout
 
 
+def test_totals_count_skipped_fork_stops(
+    project_data: Path, hook_input: Any, tmp_path: Path
+) -> None:
+    # 0114: the counter beside the log feeds one totals line; no counter reads 0.
+    audit.audit_append(hook_input())
+    assert "skipped fork stops: 0\n" in _report("--cwd", hook_input()["cwd"]).stdout
+    gone = str(tmp_path / "never-written.jsonl")
+    for n in range(3):
+        _subagent(hook_input, "SubagentStop", f"f{n}", "", agent_transcript_path=gone)
+    result = _report("--cwd", hook_input()["cwd"])
+    assert result.returncode == 0, result.stderr
+    assert "skipped fork stops: 3\n" in result.stdout
+    assert "| SubagentStop |" not in result.stdout
+
+
+def test_two_resumes_of_one_agent_show_as_two_rows(project_data: Path, hook_input: Any) -> None:
+    # 0114: rows key on the start record; a stop with no start since the last stop is a resume.
+    _subagent(hook_input, "SubagentStart", "a1", "repo-coder")
+    _subagent(hook_input, "SubagentStop", "a1", "repo-coder", last_assistant_message="first")
+    _subagent(hook_input, "SubagentStop", "a1", "repo-coder", last_assistant_message="second")
+    _subagent(hook_input, "SubagentStop", "a1", "repo-coder", last_assistant_message="third")
+    _subagent(hook_input, "SubagentStart", "a1", "repo-coder")
+    out = _report("--cwd", hook_input()["cwd"]).stdout
+    assert "| a1 | repo-coder | 1 | 2 | first |" in out
+    assert "| a1 | repo-coder | resume | 3 | second |" in out
+    assert "| a1 | repo-coder | resume | 4 | third |" in out
+    assert "| a1 | repo-coder | 5 | open |  |" in out
+
+
+def test_stop_with_no_earlier_record_keeps_a_dash_start(
+    project_data: Path, hook_input: Any
+) -> None:
+    _subagent(hook_input, "SubagentStop", "a7", "verifier", last_assistant_message="done")
+    out = _report("--cwd", hook_input()["cwd"]).stdout
+    assert "| a7 | verifier | - | 1 | done |" in out
+
+
 def test_symlinked_out_is_refused(project_data: Path, hook_input: Any, tmp_path: Path) -> None:
     _synthetic_chain(hook_input)
     outside = tmp_path / "outside.md"

@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from tests.conftest import SCRIPTS_DIR, write_train_marker
+from tests.conftest import SCRIPTS_DIR, audit_records, write_train_marker
 
 _PYCACHE = shutil.ignore_patterns("__pycache__")
 
@@ -162,6 +162,115 @@ def test_hook_rotation_record_passes_the_chain_check(
         check=False,
     )
     assert check.returncode == 0 and check.stdout.startswith("OK: 2 records, chain intact")
+
+
+def _stop(hook_input: Any, **extra: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = hook_input(
+        hook_event_name="SubagentStop", tool_name=None, tool_input=None, tool_use_id=None
+    )
+    payload.update(extra)
+    return payload
+
+
+def test_fork_stop_with_no_transcript_is_skipped_and_counted(
+    project_data: Path, hook_input: Any, tmp_path: Path
+) -> None:
+    # 0114: a stop naming a transcript absent on disk is a fork; counted outside the chain.
+    from lib import audit
+
+    write_train_marker(project_data.parent.parent)
+    audit.audit_append(hook_input())
+    gone = str(tmp_path / "never-written.jsonl")
+    for n in range(2):
+        fork = _stop(
+            hook_input,
+            agent_id=f"f{n}",
+            agent_type="",
+            agent_transcript_path=gone,
+            last_assistant_message="progress",
+        )
+        assert audit.audit_append(fork) is None
+    log = project_data / "audit" / "sess-test.jsonl"
+    assert [r["event"] for r in audit_records(log)] == ["PreToolUse"]
+    counter = log.with_suffix(".skipped")
+    assert counter.read_text(encoding="utf-8") == "2\n"
+    assert counter.stat().st_mode & 0o777 == 0o600
+
+
+def test_stop_with_a_transcript_on_disk_is_written(
+    project_data: Path, hook_input: Any, tmp_path: Path
+) -> None:
+    from lib import audit
+
+    write_train_marker(project_data.parent.parent)
+    transcript = tmp_path / "agent.jsonl"
+    transcript.write_text("{}\n")
+    stop = _stop(hook_input, agent_id="a1", agent_transcript_path=str(transcript))
+    record = audit.audit_append(stop)
+    assert record is not None and record["event"] == "SubagentStop"
+    assert not (project_data / "audit" / "sess-test.skipped").exists()
+
+
+@pytest.mark.parametrize("field", [None, 7, "absent"])
+def test_stop_without_a_transcript_string_is_written(
+    project_data: Path, hook_input: Any, field: object
+) -> None:
+    # 0114: only a string naming no file skips; no field, or a non-string, is written as today.
+    from lib import audit
+
+    write_train_marker(project_data.parent.parent)
+    stop = _stop(hook_input, agent_id="a1")
+    if field != "absent":
+        stop["agent_transcript_path"] = field
+    assert audit.audit_append(stop) is not None
+    assert not (project_data / "audit" / "sess-test.skipped").exists()
+
+
+def test_verdict_line_in_the_middle_of_a_long_reply_is_kept(
+    project_data: Path, hook_input: Any
+) -> None:
+    # 45: a verdict line outside the head and tail windows still reaches the record.
+    from lib import audit
+
+    write_train_marker(project_data.parent.parent)
+    verdict = "[VERDICT: REJECTED] tip=" + "a" * 40
+    reply = "x" * 2990 + "\n  " + verdict + "  \n" + "y" * 2990
+    assert len(reply) >= 6000
+    record = audit.audit_append(_stop(hook_input, agent_id="a1", last_assistant_message=reply))
+    assert record is not None
+    assert record["verdict_lines"] == [verdict] and record["verdict_line_count"] == 1
+    assert verdict not in str(record["last_message_head"]) + str(record["last_message_tail"])
+
+
+def test_verdict_lines_keep_reply_order_and_cut_each_line(
+    project_data: Path, hook_input: Any
+) -> None:
+    from lib import audit
+
+    write_train_marker(project_data.parent.parent)
+    long_line = "[VERDICT: APPROVED] " + "z" * (audit.MESSAGE_HEAD_CHARS + 50)
+    reply = f"intro\n[VERDICT: REJECTED] one\nnot [VERDICT: x] here\n{long_line}"
+    record = audit.audit_append(_stop(hook_input, agent_id="a1", last_assistant_message=reply))
+    assert record is not None
+    assert record["verdict_lines"] == [
+        "[VERDICT: REJECTED] one",
+        long_line[: audit.MESSAGE_HEAD_CHARS],
+    ]
+    assert record["verdict_line_count"] == 2
+
+
+def test_stop_with_no_reply_carries_empty_verdict_lines(
+    project_data: Path, hook_input: Any
+) -> None:
+    # 85: an agent that ended on a hand-back stops with no reply text.
+    from lib import audit
+
+    write_train_marker(project_data.parent.parent)
+    record = audit.audit_append(_stop(hook_input, agent_id="a1"))
+    assert record is not None
+    assert record["verdict_lines"] == [] and record["verdict_line_count"] == 0
+    other = audit.audit_append(hook_input())
+    assert other is not None and "verdict_lines" not in other
 
 
 def test_chain_seq_accepts_what_int_accepted() -> None:
