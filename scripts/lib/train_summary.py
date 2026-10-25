@@ -191,7 +191,8 @@ def public(text: str, repo: Path, charter: Path | None, where: str, fix: str = L
         text = _relative(text, charter, charter.name)
     text = _relative(text, repo, "")
     for token in _TOKEN_SPLIT.split(text):
-        if _PATH_LIKE.search(token) and not plain_path(token, repo, charter):
+        # A lone `/` is a prose separator ("pass / fail"), not a path; `//` and longer are paths.
+        if token != "/" and _PATH_LIKE.search(token) and not plain_path(token, repo, charter):
             raise SummaryError(
                 f"{where} carries the path {token!r}, which is not a plain relative path under "
                 f"this repository or the Charter, so no summary was written. {fix}"

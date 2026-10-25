@@ -374,6 +374,7 @@ def test_public_accepts_plain_paths_under_the_repo_and_the_charter() -> None:
     assert public("private/specs/x.md", REPO, CHARTER, "w") == "private/specs/x.md"
     assert public("scripts/lib/a.py tests/x/y.py docs/.tmp/z", REPO, None, "w")
     assert public(f"--repo {REPO} ok", REPO, None, "w") == "--repo . ok"
+    assert public("pass / fail", REPO, None, "w") == "pass / fail"
 
 
 def test_public_refuses_a_relative_path_through_a_link_that_leaves_the_repo(
