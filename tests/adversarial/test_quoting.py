@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from tests.adversarial.corpus import CREDENTIAL, NESTED, READERS, REPLY_KEY, assert_denied
+from tests.payloads import _b, _cred
 from tests.test_checks_credential_paths import _bash_in, _key_repo
-from tests.test_jail import _b, _cred, cred_home  # noqa: F401 - registers cred_home
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 STORE_READS = (

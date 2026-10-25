@@ -9,7 +9,7 @@ import pytest
 
 from tests.adversarial.corpus import CREDENTIAL, OUTSIDE, PROTECTED, READERS, assert_denied
 from tests.conftest import CWD, WT
-from tests.test_jail import _b, _cred, _w, cred_home  # noqa: F401 - registers cred_home
+from tests.payloads import _b, _cred, _w
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 # 0022, 0054: each target resolves into the main checkout or another repository.

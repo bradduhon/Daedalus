@@ -22,8 +22,9 @@ from tests.hook_chain import (
     run_script,
     unknown_flag_denies,
 )
+from tests.jail_cases import BASH_AGENTS
+from tests.payloads import _b
 from tests.test_checks_git_push import audited_train
-from tests.test_jail import BASH_AGENTS, _b
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "git_grammar"

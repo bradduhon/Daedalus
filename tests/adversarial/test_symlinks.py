@@ -15,16 +15,9 @@ from tests.adversarial.corpus import (
     REPLY_KEY,
     assert_denied,
 )
+from tests.jail_cases import _unit_repo
+from tests.payloads import _b, _cred, _cwd, _w
 from tests.test_checks_credential_paths import _bash_in, _key_repo
-from tests.test_jail import (  # noqa: F401 - registers cred_home and fake_claude
-    _b,
-    _cred,
-    _cwd,
-    _unit_repo,
-    _w,
-    cred_home,
-    fake_claude_fixture,
-)
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 

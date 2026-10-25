@@ -19,7 +19,7 @@ from tests.hook_chain import (
     run_script,
     unknown_flag_denies,
 )
-from tests.test_jail import _b, _t, _w
+from tests.payloads import _b, _t, _w
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "tool_bound"

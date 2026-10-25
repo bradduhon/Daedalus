@@ -13,7 +13,7 @@ from lib import controls, dispatch_binding, jail, shell
 
 from tests.conftest import CWD, REPO_ROOT, WT
 from tests.hook_chain import evaluate, load
-from tests.test_jail import _b
+from tests.payloads import _b
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 SCAN = (REPO_ROOT / "scripts" / "lib", REPO_ROOT / "scripts" / "checks")

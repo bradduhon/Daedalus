@@ -10,7 +10,7 @@ from lib import jail
 
 from tests.adversarial.corpus import assert_denied
 from tests.conftest import CFG
-from tests.test_jail import _b, _cred, marked_repo, other_repo  # noqa: F401 - fixtures
+from tests.payloads import _b, _cred
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 # issue 76: the allowed forms, each a recursive delete of a file in a repository a train marks.
