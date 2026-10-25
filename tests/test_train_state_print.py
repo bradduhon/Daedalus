@@ -113,9 +113,7 @@ def _pre(seq: int, agent: str, tool: str, agent_id: str, **tool_input: object) -
 RECORDS: list[dict[str, object]] = [
     _handback(1, "repo-coder", COMPLETE, "c1"),
     _pre(2, "repo-coder", "Bash", "c2", command=f"git -C {U2} commit -m 'WIP: yield'"),
-    _stop(
-        3, "repo-coder", "[STATUS: YIELD_STANDARDS] which rule covers /home/x/rules/py.md?", "c2"
-    ),
+    _stop(3, "repo-coder", "[STATUS: YIELD_STANDARDS] which rule covers /opt/x/rules/py.md?", "c2"),
     _stop(4, "standards-rules-specialist", "[STATUS: STANDARD] python.md:10", "s1"),
     _stop(5, "nist-specialist", "[STATUS: COMPLIANCE] AU-9 PASS, AU-3 PASS", "n1"),
     _pre(6, "orchestrator", "Agent", "o1", prompt=f"Check it.\nUnit worktree: {U1}\nGo."),
@@ -318,7 +316,7 @@ def test_the_summary_carries_no_absolute_path(tmp_path: Path) -> None:
     # W3.2: a public PR body; every path in state and in agent text goes relative or to its name.
     text = _text(tmp_path)
     assert ABSOLUTE.findall(text) == []
-    assert "/r/" not in text and "/home/" not in text
+    assert "/r/" not in text and "/opt/" not in text
 
 
 def test_public_keeps_plugin_commands_and_urls() -> None:
