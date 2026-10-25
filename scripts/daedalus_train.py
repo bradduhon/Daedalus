@@ -20,9 +20,12 @@ from lib.train_runner import (  # noqa: E402
     check_reply,
     choice,
     progress,
+    reaudit,
     record_exception,
+    record_ledger,
     record_plan,
     record_verdict,
+    resume,
     start,
     state_lines,
     step,
@@ -34,7 +37,7 @@ from lib.train_state import TrainStateError  # noqa: E402
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
-        "choice, plan, exception, verdict, model. Exit 0 action "
+        "choice, plan, exception, verdict, reaudit, resume, ledger, model. Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
     sub = parser.add_subparsers(dest="action", required=True)
@@ -42,7 +45,8 @@ def _parser() -> argparse.ArgumentParser:
     begin.add_argument("--repo", type=Path, required=True)
     begin.add_argument("--train", required=True)
     begin.add_argument("--output")
-    for name in ("step", "state"):
+    # pin D1 -> D6: reaudit and resume run from the main session; ledger from the orchestrator.
+    for name in ("step", "state", "reaudit", "resume"):
         sub.add_parser(name).add_argument("--repo", type=Path, required=True)
     check = sub.add_parser("check-reply")
     check.add_argument("--repo", type=Path, required=True)
@@ -68,11 +72,16 @@ def _parser() -> argparse.ArgumentParser:
     judged = sub.add_parser("verdict")
     judged.add_argument("--repo", type=Path, required=True)
     judged.add_argument("--status", required=True)
-    judged.add_argument("--round", dest="round_", type=int, required=True)
+    # 67: the round is derived from train state; a given --round must agree with it.
+    judged.add_argument("--round", dest="round_", type=int)
     judged.add_argument("--seq", type=int)
     # 0109, 59, pin C3 -> C5: the auditor's finding list and the tip its verdict line names.
     judged.add_argument("--findings", type=Path)
     judged.add_argument("--tip")
+    ledger = sub.add_parser("ledger")
+    ledger.add_argument("--repo", type=Path, required=True)
+    ledger.add_argument("--sha", required=True)
+    ledger.add_argument("--ids", required=True)
     # spec 4, pin C3 -> C5: the effective model of one catalog agent, inside or outside a train.
     model = sub.add_parser("model")
     model.add_argument("--repo", type=Path, required=True)
@@ -114,6 +123,12 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
                 ],
             )
         return record_verdict(repo, args.status, args.round_, args.seq, args.tip, args.findings)
+    if args.action == "reaudit":
+        return reaudit(repo)
+    if args.action == "resume":
+        return resume(repo)
+    if args.action == "ledger":
+        return record_ledger(repo, args.sha, args.ids)
     if args.action == "model":
         return _model(repo, args.agent, args.override)
     if args.action == "check-reply":

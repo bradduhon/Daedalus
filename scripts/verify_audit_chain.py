@@ -10,10 +10,19 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.audit import AuditLockError, read_log  # noqa: E402
-from lib.audit_proof import NOT_UTF8, ProofError, hooks_live, push_proof, verify_lines  # noqa: E402
+from lib.audit_proof import (  # noqa: E402
+    NOT_UTF8,
+    ProofError,
+    hooks_live,
+    newest_log,
+    push_proof,
+    stale_agents,
+    verify_lines,
+)
 
 __all__ = ["NOT_UTF8", "verify", "verify_lines"]
 HOOKS_LIVE_NEEDLE = "verify_audit_chain.py --hooks-live"
+AGENTS_DIR = Path(__file__).resolve().parents[1] / "agents"
 
 
 def verify(path: Path) -> tuple[bool, str]:
@@ -56,6 +65,10 @@ def _mode(argv: list[str]) -> int:
         if args.approved is None:
             # issue 57: the first hooks-live of a train records its start_seq.
             print(hooks_live(repo, HOOKS_LIVE_NEEDLE, mark=True))
+            # pin D1 -> D5: a warning line only; the exit stays 0.
+            stale = stale_agents(newest_log(repo), AGENTS_DIR)
+            if stale:
+                print(f"stale agents: {', '.join(stale)}")
         else:
             # 62: prints which path passed, the approved verdict or the exception ruling.
             print(push_proof(repo, args.approved))

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import pytest
-from lib.audit_rounds import SEVERITIES, Finding, FindingsError, judge, parse
+from lib.audit_rounds import SEVERITIES, Finding, FindingsError, judge, next_round, parse
 
 LOW = "low"
 
@@ -82,3 +82,19 @@ def test_parse_refuses_an_off_shape_list_with_a_next_line(text: str, why: str) -
     with pytest.raises(FindingsError) as info:
         parse(text, "findings.txt")
     assert why in str(info.value) and "Next: " in str(info.value)
+
+
+@pytest.mark.parametrize(
+    ("rounds", "want"),
+    [
+        ({}, 1),
+        ({"1": {}}, 2),
+        ({"1": {}, "3": {"a": {}}, "2": {}}, 4),
+        # 67: a key that is not a round number never moves the round.
+        ({"0": {}, "-2": {}, "x": {}, "01": {}, "²": {}, "1": {}}, 2),
+    ],
+)
+def test_next_round_is_one_more_than_the_highest_recorded(
+    rounds: dict[str, object], want: int
+) -> None:
+    assert next_round(rounds) == want

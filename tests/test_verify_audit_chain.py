@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 import re
 import subprocess
 import sys
@@ -15,7 +16,13 @@ from typing import Any
 import pytest
 from lib import audit, train_state
 
-from tests.conftest import SCRIPTS_DIR, append_handback, replay_auditor, write_train_marker
+from tests.conftest import (
+    SCRIPTS_DIR,
+    append_handback,
+    audit_records,
+    replay_auditor,
+    write_train_marker,
+)
 
 
 @pytest.fixture
@@ -241,6 +248,45 @@ def test_cli_hooks_live_passes_on_its_own_record(
     assert result.stdout.startswith("OK hooks live: session sess-test")
 
 
+def _live_in_process(repo: Path, hook_input: Any, capsys: Any) -> tuple[int, list[str]]:
+    import verify_audit_chain
+
+    command = f"python3 x/verify_audit_chain.py --hooks-live --repo {repo}"
+    audit.audit_append(hook_input(tool_input={"command": command}))
+    code = verify_audit_chain.main(["verify_audit_chain.py", "--hooks-live", "--repo", str(repo)])
+    return code, capsys.readouterr().out.splitlines()
+
+
+def test_hooks_live_names_agent_files_changed_after_the_first_record(
+    project_data: Path,
+    hook_input: Any,
+    repo_cwd: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: Any,
+) -> None:
+    # spec 6, pin D1 -> D5: the stale line names agent file stems, sorted; the exit stays 0.
+    import verify_audit_chain
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    past = time.time() - 3600
+    for name in ("security-auditor", "verifier", "repo-coder"):
+        (agents / f"{name}.md").write_text("x\n", encoding="utf-8")
+        os.utime(agents / f"{name}.md", (past, past))
+    (agents / "notes.txt").write_text("x\n", encoding="utf-8")
+    monkeypatch.setattr(verify_audit_chain, "AGENTS_DIR", agents)
+    code, out = _live_in_process(repo_cwd, hook_input, capsys)
+    assert code == 0 and len(out) == 1 and out[0].startswith("OK hooks live:")
+    future = time.time() + 60
+    for name in ("verifier", "repo-coder"):
+        os.utime(agents / f"{name}.md", (future, future))
+    os.utime(agents / "notes.txt", (future, future))
+    code, out = _live_in_process(repo_cwd, hook_input, capsys)
+    assert code == 0 and out[0].startswith("OK hooks live:")
+    assert out[1:] == ["stale agents: repo-coder, verifier"]
+
+
 APPROVED_TRAIN = "20261016-120000"
 
 
@@ -278,22 +324,25 @@ def test_cli_approved_passes_on_train_a_and_refuses_without_its_hand_back(
     # issue 57: --approved finds Train A's hand-back; 59: its line names no tip, so it refuses.
     assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
     tip = _tip(repo_cwd)
-    _judge(repo_cwd, tip)
-    replay_auditor(repo_cwd, "sess-test")
+    replayed = replay_auditor(repo_cwd, "sess-test")
+    # 73: the recorded verdict names the hand-back record the auditor's last turn carried.
+    _judge(repo_cwd, tip, seq=replayed[-2]["seq"])
     _summary_written(hook_input, repo_cwd)
     result = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
     assert result.returncode == 1 and "verdict names tip none" in result.stdout
-    audit.log_path("sess-test", str(repo_cwd)).unlink()
+    log = audit.log_path("sess-test", str(repo_cwd))
+    log.unlink()
     assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
-    _judge(repo_cwd, tip)
     replay_auditor(repo_cwd, "sess-test")
     append_handback(hook_input, f"[VERDICT: APPROVED] tip={tip}")
+    _judge(repo_cwd, tip, seq=audit_records(log)[-1]["seq"])
     _summary_written(hook_input, repo_cwd)
     result = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
     assert result.returncode == 0, result.stdout
     assert result.stdout.endswith(f"judged tip {tip[:12]}\n")
-    audit.log_path("sess-test", str(repo_cwd)).unlink()
+    log.unlink()
     assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
+    _judge(repo_cwd, tip)
     replay_auditor(repo_cwd, "sess-test", handbacks=False)
     _summary_written(hook_input, repo_cwd)
     refused = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
@@ -306,6 +355,7 @@ def test_cli_approved_ignores_a_verdict_before_start_seq(
     # issue 57: an approval logged before this train's hooks-live belongs to an earlier train.
     replay_auditor(repo_cwd, "sess-test")
     assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
+    _judge(repo_cwd, _tip(repo_cwd))
     _summary_written(hook_input, repo_cwd)
     result = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
     assert result.returncode == 1
@@ -322,8 +372,8 @@ def _tip(repo: Path) -> str:
     return out.stdout.strip()
 
 
-def _judge(repo: Path, tip: str, status: str = "approved") -> None:
-    verdict = {"status": status, "tip": tip, "round": 1, "seq": 1}
+def _judge(repo: Path, tip: str, status: str = "approved", seq: int = 1) -> None:
+    verdict = {"status": status, "tip": tip, "round": 1, "seq": seq}
     train_state.update(repo, APPROVED_TRAIN, verdict=verdict)
 
 
@@ -348,7 +398,7 @@ def _approved_train(hook_input: Any, repo_cwd: Path, verdict: str) -> None:
 def test_cli_approved_round_trip(project_data: Path, hook_input: Any, repo_cwd: Path) -> None:
     tip = _tip(repo_cwd)
     _approved_train(hook_input, repo_cwd, f"[VERDICT: APPROVED] tip={tip} ok")
-    _judge(repo_cwd, tip)
+    _judge(repo_cwd, tip, seq=2)
     result = _verify("--approved", "20261016-120000", "--repo", repo_cwd)
     assert result.returncode == 0, result.stdout
     assert result.stdout == (
@@ -412,7 +462,7 @@ def test_second_hooks_live_in_a_new_session_moves_the_bound(
     assert outcome.code == 0, outcome.lines
     # A verdict call from the old session no longer owns the bound and refuses.
     audit.audit_append(hook_input(tool_input={"command": verdict}))
-    stale = train_runner.record_verdict(repo_cwd, "approved", 1, tip=tip)
+    stale = train_runner.record_verdict(repo_cwd, "approved", tip=tip)
     assert stale.code == 1
     assert "belongs to session sess-new, not this session sess-test" in stale.lines[0]
 

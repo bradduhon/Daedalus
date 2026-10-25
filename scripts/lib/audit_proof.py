@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from datetime import datetime
 from pathlib import Path
 
 from lib import git, train_state
@@ -24,6 +25,22 @@ _VERDICT_FIELDS = ("last_message_head", "last_message_tail")
 _HANDBACK_FIELD = "tool_input.message"
 TIP = re.compile(r"[0-9a-f]{40}")
 _SESSION_LINE = re.compile(r"^Session ([A-Za-z0-9_-]+):", re.MULTILINE)
+# pin D3 -> D1: the stop record's full-reply verdict lines; absent on a record written before D3.
+VERDICT_LINES = "verdict_lines"
+_VERDICT_TAG = "[VERDICT:"
+_VERDICT_KIND = re.compile(r"\[VERDICT:\s*([A-Za-z_]+)\s*\]")
+VERDICT_BOTH = "both verdicts"
+_SUMMARY_NAME = re.compile(r"[0-9]{8}-[0-9]{6}-summary\.md")
+# pin D1 -> D5: the proof refusals for the recorded verdict seq and a reply with both verdicts.
+R_NO_SUMMARY_WRITE = (
+    "no summary Write after the recorded verdict at seq {seq}. "
+    "Next: rewrite the summary with the Write tool, then rerun the proof."
+)
+R_GRADED_NOT_RECORDED = (
+    "the graded auditor turn at seq {graded} is not the recorded verdict at seq {recorded}. "
+    "Next: rerun the audit round."
+)
+R_BOTH_VERDICTS = "auditor reply at seq {seq} carries both verdicts. Next: rerun the audit round."
 
 
 class ProofError(RuntimeError):
@@ -105,6 +122,27 @@ def hooks_live(repo: Path, needle: str, mark: bool = False) -> str:
     return f"OK hooks live: session {log.stem}, chain intact ({count} records)"
 
 
+def stale_agents(log: Path, agents: Path) -> list[str]:
+    # spec 6: agent files load at session start; one changed after the first record is stale.
+    records = read_chain(log)
+    raw = records[0].get("ts") if records else None
+    try:
+        first = datetime.fromisoformat(raw).timestamp() if isinstance(raw, str) else None
+    except ValueError:
+        first = None
+    if first is None:
+        return []
+    found: list[str] = []
+    for path in sorted(agents.glob("*.md")):
+        try:
+            changed = path.stat().st_mtime
+        except OSError:
+            continue
+        if changed > first:
+            found.append(path.stem)
+    return found
+
+
 def _not_approved(check: str) -> ProofError:
     return ProofError(f"NOT APPROVED: {check}. {APPROVED_NEXT}")
 
@@ -140,6 +178,21 @@ def _verdict_fields(record: Mapping[str, object]) -> dict[str, object]:
     return {field: record.get(field) for field in _VERDICT_FIELDS}
 
 
+def verdict_lines(record: Mapping[str, object]) -> list[str] | None:
+    # pin D3 -> D1: a hand-back's verdict lines come from its whole message; None is no field.
+    if record.get("tool_name") == HANDBACK:
+        message = handback_message(record)
+        if not isinstance(message, str):
+            return None
+        return [ln.strip() for ln in message.splitlines() if ln.strip().startswith(_VERDICT_TAG)]
+    raw = record.get(VERDICT_LINES)
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not all(isinstance(ln, str) for ln in raw):
+        raise ValueError(VERDICT_LINES)
+    return [ln.strip() for ln in raw]
+
+
 def stop_verdict(stop: Mapping[str, object]) -> str | None:
     # 41: every field is untrusted; a first or closing line approves, any reject refuses.
     lines: dict[str, list[str]] = {}
@@ -147,6 +200,15 @@ def stop_verdict(stop: Mapping[str, object]) -> str | None:
         if value is not None and not isinstance(value, str):
             return None
         lines[field] = [ln.strip() for ln in (value or "").splitlines() if ln.strip()]
+    try:
+        listed = verdict_lines(stop) or []
+    except ValueError:
+        return None
+    # spec 3.6: one verdict kind per reply; the full-reply lines also catch a mid-reply reject.
+    if len({m.group(1).upper() for ln in listed if (m := _VERDICT_KIND.match(ln))}) > 1:
+        return VERDICT_BOTH
+    if any(ln.startswith(VERDICT_REJECTED) for ln in listed):
+        return VERDICT_REJECTED
     if any(ln.startswith(VERDICT_REJECTED) for rows in lines.values() for ln in rows):
         return VERDICT_REJECTED
     firsts = [rows[0] for f, rows in lines.items() if rows and f != "last_message_tail"]
@@ -186,7 +248,7 @@ def auditor_round(
 def round_verdict(turn: list[Mapping[str, object]]) -> tuple[str | None, int]:
     # 0089: a rejection anywhere in the turn wins; the seq is the record that carries the verdict.
     found = [(stop_verdict(r), _seq(r)) for r in turn]
-    for want in (VERDICT_REJECTED, VERDICT_APPROVED):
+    for want in (VERDICT_BOTH, VERDICT_REJECTED, VERDICT_APPROVED):
         hits = [seq for verdict, seq in found if verdict == want]
         if hits:
             return want, hits[-1]
@@ -196,10 +258,17 @@ def round_verdict(turn: list[Mapping[str, object]]) -> tuple[str | None, int]:
 def _verdict_refusal(turn: list[Mapping[str, object]]) -> str | None:
     for record in turn:
         bad = [f for f, v in _verdict_fields(record).items() if not isinstance(v, str | None)]
+        try:
+            verdict_lines(record)
+        except ValueError:
+            bad.append(VERDICT_LINES)
         if bad:
             where = f"the {AUDITOR} final round (record seq {_seq(record)})"
             return f"{where} has a {bad[0]} that is not text"
     verdict, seq = round_verdict(turn)
+    if verdict == VERDICT_BOTH:
+        # pin D1 -> D5: this refusal carries its own Next line.
+        raise ProofError(f"NOT APPROVED: {R_BOTH_VERDICTS.format(seq=seq)}")
     where = f"the {AUDITOR} final round (record seq {seq or '?'})"
     if verdict == VERDICT_REJECTED:
         return f"{where} carries a {VERDICT_REJECTED} line"
@@ -298,6 +367,26 @@ def _judged(repo: Path, train_id: str, state: dict[str, object], named: str | No
     return named
 
 
+def _summary_write(record: Mapping[str, object]) -> bool:
+    return record.get("tool_name") == "Write" and bool(_SUMMARY_NAME.fullmatch(_file_name(record)))
+
+
+def summary_anchor(records: Sequence[Mapping[str, object]], verdict_seq: int) -> int | None:
+    # pin D1 -> E4: the seq of the first summary Write after the recorded verdict seq.
+    return next((_seq(r) for r in records if _seq(r) > verdict_seq and _summary_write(r)), None)
+
+
+def _recorded_seq(train_id: str, state: dict[str, object]) -> int:
+    # 73: the proof grades the verdict the train recorded, so an approval names its audit seq.
+    verdict = train_state.record(state, train_state.VERDICT)
+    if verdict.get("status") != train_state.APPROVED:
+        raise _not_approved(f"the state of train {train_id} records no approved verdict")
+    seq = verdict.get("seq")
+    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
+        raise _not_approved(f"the recorded verdict of train {train_id} names no audit seq")
+    return seq
+
+
 def approved(repo: Path, train_id: str) -> str:
     if not _TRAIN_ID.fullmatch(train_id):
         raise ProofError(
@@ -317,22 +406,25 @@ def approved(repo: Path, train_id: str) -> str:
             "to bound the search"
         )
     records = read_chain(log)
+    recorded = _recorded_seq(train_id, state)
     name = f"{train_id}-summary.md"
-    writes = [
-        i
-        for i, r in enumerate(records)
-        if _seq(r) > start and r.get("tool_name") == "Write" and _file_name(r) == name
-    ]
-    if not writes:
-        raise _not_approved(f"session {session} has no Write record of {name}")
-    # 0024: the auditor's final round for this train is its last turn before the summary Write.
-    turn = auditor_round(records[: writes[0]], start)
+    # 73: another train's summary Write in this log never anchors this train's proof.
+    own = [r for r in records if not (_summary_write(r) and _file_name(r) != name)]
+    anchor = summary_anchor(own, recorded)
+    if anchor is None:
+        raise ProofError(f"NOT APPROVED: {R_NO_SUMMARY_WRITE.format(seq=recorded)}")
+    # 73: the graded turn is the last auditor turn before that Write, and it is the recorded one.
+    turn = auditor_round([r for r in records if _seq(r) < anchor], start)
     if not turn:
         raise _not_approved(f"no {AUDITOR} reply after seq {start} before the summary Write")
     refusal = _verdict_refusal(turn)
     if refusal is not None:
         raise _not_approved(refusal)
     _, seq = round_verdict(turn)
+    if seq != recorded:
+        raise ProofError(
+            f"NOT APPROVED: {R_GRADED_NOT_RECORDED.format(graded=seq, recorded=recorded)}"
+        )
     tip = _judged(repo, train_id, state, verdict_tip(turn, seq))
     return (
         f"OK approved: approved verdict, train {train_id}, session {session}, "

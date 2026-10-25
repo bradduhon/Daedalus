@@ -4,12 +4,14 @@
 # The orchestrator obeys the printed word and never judges the stall itself.
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 SEVERITIES = ("critical", "high", "medium", "low")
 HIGH = frozenset({"critical", "high"})
 _SEP = " | "
+_ROUND_KEY = re.compile(r"[1-9][0-9]{0,5}")
 
 
 class FindingsError(ValueError):
@@ -48,6 +50,11 @@ def parse(text: str, where: str) -> dict[str, Finding]:
             )
         found[key] = Finding(key, severity, kind)
     return found
+
+
+def next_round(rounds: Mapping[str, object]) -> int:
+    # 67: one more than the highest round key the train recorded, else 1; other keys are skipped.
+    return max((int(key) for key in rounds if _ROUND_KEY.fullmatch(key)), default=0) + 1
 
 
 def judge(

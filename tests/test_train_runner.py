@@ -1083,7 +1083,7 @@ HOOKS_LIVE_CMD = "verify_audit_chain.py --hooks-live"
 def _verdict_call(
     repo: Path,
     status: str,
-    round_: int,
+    round_: int | None,
     seq: int | None = None,
     tip: str | None = None,
     findings: Path | None = None,
@@ -1116,10 +1116,13 @@ def test_verdict_records_the_newest_matching_auditor_stop(
     _agent_stop(repo, "security-auditor", _verdict(status.upper(), tip), "aud-1")
     newest = _agent_stop(repo, "security-auditor", _verdict(status.upper(), tip), "aud-1")
     _agent_stop(repo, "repo-coder", COMPLETE, "coder-1")
-    outcome = _verdict_call(repo, status, 2, tip=tip)
+    # 67: a rejection always carries its finding list, so it prints the stall word.
+    listed = _findings(repo, 1, A) if status == "rejected" else None
+    outcome = _verdict_call(repo, status, 1, tip=tip, findings=listed)
     assert outcome.code == 0, outcome.lines
-    assert outcome.lines == [f"Verdict {status} recorded on tip {tip[:12]} (round 2)"]
-    record = {"status": status, "tip": tip, "round": 2, "seq": newest["seq"]}
+    want = f"Verdict {status} recorded on tip {tip[:12]} (round 1)"
+    assert outcome.lines == ["continue round=2 budget_left=4" if listed else want]
+    record = {"status": status, "tip": tip, "round": 1, "seq": newest["seq"]}
     assert _state(repo)["verdict"] == record
     assert tip == _tip(repo)
 
@@ -1178,11 +1181,11 @@ def test_verdict_reads_only_the_newest_auditor_stop(repo: Path, plugin: Path) ->
     assert "verdict" not in _state(repo)
     first = _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
     again = _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
-    older_approved = _verdict_call(repo, "approved", 2, int(first["seq"]), tip)
+    older_approved = _verdict_call(repo, "approved", 1, int(first["seq"]), tip)
     assert older_approved.code == 1 and "is not the newest" in older_approved.lines[0]
-    passed = _verdict_call(repo, "approved", 2, tip=tip)
+    passed = _verdict_call(repo, "approved", 1, tip=tip)
     assert passed.code == 0, passed.lines
-    record = {"status": "approved", "tip": tip, "round": 2, "seq": again["seq"]}
+    record = {"status": "approved", "tip": tip, "round": 1, "seq": again["seq"]}
     assert _state(repo)["verdict"] == record
 
 
@@ -1258,13 +1261,13 @@ def test_verdict_finds_train_a_verdict_in_the_hand_back_and_the_push_gate_passes
     refused = gh_policy.verdict_reason(str(repo), "git push")
     assert refused is not None and "no verdict is recorded" in refused
     # 59: Train A's hand-back is found, but its verdict line names no tip.
-    untipped = _verdict_call(repo, "approved", 3, tip=tip)
+    untipped = _verdict_call(repo, "approved", 1, tip=tip)
     assert untipped.code == 1 and "verdict names tip none, not --tip" in untipped.lines[0]
     named = _handback(repo, f"[VERDICT: APPROVED] tip={tip}")
     _agent_stop(repo, "security-auditor", "Sent the round 4 verdict.", "aud-1")
-    passed = _verdict_call(repo, "approved", 4, tip=tip)
+    passed = _verdict_call(repo, "approved", None, tip=tip)
     assert passed.code == 0, passed.lines
-    record = {"status": "approved", "tip": tip, "round": 4, "seq": named["seq"]}
+    record = {"status": "approved", "tip": tip, "round": 1, "seq": named["seq"]}
     assert _state(repo)["verdict"] == record
     assert gh_policy.verdict_reason(str(repo), "git push") is None
     assert gh_policy.verdict_reason(str(repo), "gh pr create") is None
@@ -1277,7 +1280,7 @@ def test_verdict_refuses_train_a_without_its_hand_back_records(repo: Path, plugi
     _marked(repo)
     tip = _integration(repo)
     replay_auditor(repo, SESSION, handbacks=False)
-    refused = _verdict_call(repo, "approved", 3, tip=tip)
+    refused = _verdict_call(repo, "approved", 1, tip=tip)
     assert refused.code == 1 and "carries no verdict line" in refused.lines[0]
     assert "verdict" not in _state(repo)
     reason = gh_policy.verdict_reason(str(repo), "git push")
@@ -1293,12 +1296,12 @@ def test_verdict_newer_rejection_in_a_hand_back_wins(repo: Path, plugin: Path) -
     replay_auditor(repo, SESSION)
     rejection = _handback(repo, "[VERDICT: REJECTED] a.py:1 high")
     _agent_stop(repo, "security-auditor", "Sent the round 4 verdict.", "aud-1")
-    refused = _verdict_call(repo, "approved", 4, tip=tip)
+    refused = _verdict_call(repo, "approved", 1, tip=tip)
     assert refused.code == 1
     assert "carries [VERDICT: REJECTED], not [VERDICT: APPROVED]" in refused.lines[0]
-    passed = _verdict_call(repo, "rejected", 4)
+    passed = _verdict_call(repo, "rejected", None, findings=_findings(repo, 1, A))
     assert passed.code == 0, passed.lines
-    record = {"status": "rejected", "tip": tip, "round": 4, "seq": rejection["seq"]}
+    record = {"status": "rejected", "tip": tip, "round": 1, "seq": rejection["seq"]}
     assert _state(repo)["verdict"] == record
 
 
@@ -1387,8 +1390,8 @@ def test_findings_must_be_the_round_file_and_match_the_status(repo: Path, plugin
     elsewhere.write_text(A + "\n", encoding="utf-8")
     wrong = _verdict_call(repo, "rejected", 1, tip=tip, findings=elsewhere)
     assert wrong.code == 1 and "is not the round 1 finding list file. Next: " in wrong.lines[0]
-    other_round = _verdict_call(repo, "rejected", 2, tip=tip, findings=_findings(repo, 1, A))
-    assert other_round.code == 1 and "round 2 finding list" in other_round.lines[0]
+    other_round = _verdict_call(repo, "rejected", None, tip=tip, findings=_findings(repo, 2, A))
+    assert other_round.code == 1 and "round 1 finding list" in other_round.lines[0]
     empty = _verdict_call(repo, "rejected", 1, tip=tip, findings=_findings(repo, 1))
     assert empty.code == 1 and "the rejected round 1 lists 0 findings" in empty.lines[0]
     bad = _verdict_call(repo, "rejected", 1, tip=tip, findings=_findings(repo, 1, "x | y"))
@@ -1479,3 +1482,251 @@ def test_a_repo_outside_the_working_directory_root_is_refused(repo: Path, plain:
     linked = repo.parent / "link"
     linked.symlink_to(repo)
     assert _train_cli(sub, "state", "--repo", str(linked)).returncode == 0
+
+
+def _audit_train(repo: Path, plugin: Path) -> str:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    _marked(repo)
+    return _integration(repo)
+
+
+def test_verdict_derives_the_round_from_audit_rounds(repo: Path, plugin: Path) -> None:
+    # 67, spec 3.1: one more than the highest recorded round, else 1; --round may be left out.
+    tip = _audit_train(repo, plugin)
+    assert train_runner.derived_round(_state(repo)) == 1
+    _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
+    first = _verdict_call(repo, "rejected", None, tip=tip, findings=_findings(repo, 1, A, B))
+    assert first.lines == ["continue round=2 budget_left=4"]
+    _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
+    second = _verdict_call(repo, "rejected", 2, tip=tip, findings=_findings(repo, 2, A))
+    assert second.lines == ["continue round=3 budget_left=3"]
+    _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
+    approved = _verdict_call(repo, "approved", None, tip=tip)
+    assert approved.lines == [f"Verdict approved recorded on tip {tip[:12]} (round 3)"]
+    assert train_state.record(_state(repo), "audit_rounds")["3"] == {}
+    assert train_runner.derived_round(_state(repo)) == 4
+
+
+@pytest.mark.parametrize(
+    ("state", "want"),
+    [
+        ({}, 1),
+        ({"audit_rounds": {"1": {}, "2": {}}}, 3),
+        # 67: a pre-D1 approval of round 3 left audit_rounds at {1, 2}.
+        ({"audit_rounds": {"1": {}, "2": {}}, "verdict": {"status": "approved", "round": 3}}, 4),
+        ({"audit_rounds": {"1": {}, "2": {}, "3": {}}, "verdict": {"round": 3}}, 4),
+        ({"audit_rounds": {"1": {}}, "verdict": {"round": True}}, 2),
+        ({"verdict": {"round": "5"}}, 1),
+        ({"verdict": {"round": -2}}, 1),
+    ],
+)
+def test_derived_round_counts_the_recorded_verdict_round(
+    state: dict[str, object], want: int
+) -> None:
+    assert train_runner.derived_round(state) == want
+
+
+def test_a_state_from_before_d1_takes_the_next_round(repo: Path, plugin: Path) -> None:
+    # 67: audit_rounds {1, 2} and an approved round 3 verdict derive round 4, and --round 4 passes.
+    tip = _audit_train(repo, plugin)
+    train = str(_state(repo)["train_id"])
+    verdict = {"status": "approved", "tip": tip, "round": 3, "seq": 1}
+    train_state.update(repo, train, verdict=verdict, audit_rounds={"1": {}, "2": {}})
+    _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
+    stale = _verdict_call(repo, "rejected", 3, tip=tip, findings=_findings(repo, 3, A))
+    assert stale.code == 1 and "--round 3 is not round 4" in stale.lines[0]
+    passed = _verdict_call(repo, "rejected", 4, tip=tip, findings=_findings(repo, 4, A))
+    assert passed.code == 0, passed.lines
+    assert sorted(train_state.record(_state(repo), "audit_rounds")) == ["1", "2", "4"]
+    assert train_runner.derived_round(_state(repo)) == 5
+
+
+def test_a_differing_round_is_refused_naming_both_numbers(repo: Path, plugin: Path) -> None:
+    tip = _audit_train(repo, plugin)
+    _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
+    refused = _verdict_call(repo, "approved", 2, tip=tip)
+    assert refused.code == 1
+    assert refused.lines == [
+        "--round 2 is not round 1, one more than the highest round the train recorded. "
+        "Next: rerun verdict with --round 1 or no --round."
+    ]
+    assert "verdict" not in _state(repo)
+
+
+def test_a_rejection_without_findings_is_refused_naming_the_path(repo: Path, plugin: Path) -> None:
+    # 67: a rejection always carries its list, so the stall word prints on every rejection.
+    tip = _audit_train(repo, plugin)
+    _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
+    refused = _verdict_call(repo, "rejected", 1, tip=tip)
+    want = repo / "docs" / ".tmp" / "daedalus" / str(_state(repo)["train_id"]) / "audit"
+    path = want / "round1" / "findings.txt"
+    assert refused.code == 1
+    assert refused.lines[0].endswith(
+        f"Next: have the auditor write {path}, then rerun verdict with --findings {path}."
+    )
+    assert "verdict" not in _state(repo)
+    approval = _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
+    passed = _verdict_call(repo, "approved", 1, tip=tip)
+    assert passed.code == 0, passed.lines
+    assert _state(repo)["verdict"] == {
+        "status": "approved",
+        "tip": tip,
+        "round": 1,
+        "seq": approval["seq"],
+    }
+
+
+def test_verdict_refuses_a_reply_with_both_verdicts(repo: Path, plugin: Path) -> None:
+    # spec 3.6: the hand-back's whole message carries both kinds.
+    tip = _audit_train(repo, plugin)
+    both = _handback(repo, f"[VERDICT: APPROVED] tip={tip}\nnotes\n[VERDICT: REJECTED] a.py:1 high")
+    refused = _verdict_call(repo, "approved", None, tip=tip)
+    assert refused.lines == [
+        f"auditor reply at seq {both['seq']} carries both verdicts. Next: rerun the audit round."
+    ]
+
+
+def _approved_state(repo: Path, tip: str) -> None:
+    train = str(_state(repo)["train_id"])
+    verdict = {"status": "approved", "tip": tip, "round": 1, "seq": 1}
+    train_state.update(repo, train, verdict=verdict, audit_rounds={"1": {}}, stage_index=1)
+
+
+def _commit_on_integration(repo: Path) -> str:
+    (repo / "src.py").write_text("moved\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "after the audit")
+    return _integration(repo)
+
+
+def test_reaudit_admits_one_recovery_round_on_a_moved_tip(repo: Path, plugin: Path) -> None:
+    # 73, spec 3.3: refused with no approval and on an admitted tip; one round per moved tip.
+    tip = _audit_train(repo, plugin)
+    none = train_runner.reaudit(repo)
+    assert none.code == 1 and "records no approved verdict" in none.lines[0]
+    assert "Next:" in none.lines[0]
+    _approved_state(repo, tip)
+    admitted = train_runner.reaudit(repo)
+    assert admitted.code == 1 and "already admits the tip" in admitted.lines[0]
+    assert "run the push proof verify_audit_chain.py --approved" in admitted.lines[0]
+    assert train_runner.allowed_dispatch(_state(repo))[0] == set()
+    moved = _commit_on_integration(repo)
+    outcome = train_runner.reaudit(repo)
+    assert outcome.code == 0, outcome.lines
+    assert outcome.lines == [f"reaudit round=2 tip={moved}"]
+    state = _state(repo)
+    assert state["reaudit"] == {"judged": tip, "tip": moved, "round": 2}
+    assert train_runner.allowed_dispatch(state)[0] == {"security-auditor"}
+    again = train_runner.reaudit(repo)
+    assert again.code == 1 and f"already ran on tip {moved[:12]}" in again.lines[0]
+    assert "Next:" in again.lines[0]
+    _agent_stop(repo, "security-auditor", _verdict("APPROVED", moved), "aud-1")
+    recorded = _verdict_call(repo, "approved", 2, tip=moved)
+    assert recorded.lines == [f"Verdict approved recorded on tip {moved[:12]} (round 2)"]
+    assert train_runner.allowed_dispatch(_state(repo))[0] == set()
+    closed = train_runner.reaudit(repo)
+    assert closed.code == 1 and "already" in closed.lines[0]
+
+
+def test_reaudit_and_resume_on_a_stopped_train_name_the_workspace_resume(repo: Path) -> None:
+    for verb in ("reaudit", "resume"):
+        done = _train_cli(repo, verb, "--repo", str(repo))
+        assert done.returncode == 1
+        assert done.stdout == (
+            f"no Daedalus train is active in {repo}. Next: run daedalus_workspace.py resume "
+            f"--repo {repo} to mark the stopped train active, then rerun {verb}.\n"
+        )
+
+
+RESUME_PLAN = (
+    "# plan\n\n```plan\n"
+    "unit: U1 | title: one | files: u1.txt | base: integration\n"
+    "unit: U2 | title: two | files: u2.txt | base: integration\n"
+    "```\n"
+)
+
+
+def _resumable(repo: Path, plugin: Path, pending: bool = True) -> tuple[str, Path]:
+    # spec 3.5: a recorded plan of two units, U2 merged and U1 on its own branch.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    train = str(_state(repo)["train_id"])
+    plan = repo / "docs" / ".tmp" / "daedalus" / train / "plan.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text(RESUME_PLAN, encoding="utf-8")
+    assert train_runner.record_plan(repo, plan).code == 0
+    _integration(repo)
+    _units(repo, ["u1", "u2"])
+    _git(repo, "branch", f"daedalus-unit/{train}-u2", "HEAD")
+    _git(repo, "switch", "-q", "-c", f"daedalus-unit/{train}-u1")
+    (repo / "u1.txt").write_text("u1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "u1")
+    _git(repo, "switch", "-q", "main")
+    summary = repo / "docs" / ".tmp" / "daedalus" / f"{train}-summary.md"
+    line = "Ledger ids: pending. Codes: --repo DAE --type PLT." if pending else "Ledger ids: x."
+    summary.write_text(f"# Build Train {train}\n{line}\n", encoding="utf-8")
+    return train, summary
+
+
+def test_resume_admits_one_ledger_resume_after_every_unit_merged(repo: Path, plugin: Path) -> None:
+    # 3, spec 3.5: refused with an unmerged unit, admitted once, then the ledger record closes it.
+    train, _ = _resumable(repo, plugin)
+    unmerged = train_runner.resume(repo)
+    assert unmerged.code == 1 and "unit(s) u1 of the recorded plan" in unmerged.lines[0]
+    assert "Next: resume the Build Train at its finish step" in unmerged.lines[0]
+    _git(repo, "branch", "-f", f"daedalus/{train}", f"daedalus-unit/{train}-u1")
+    train_state.update(repo, train, stage_index=1)
+    outcome = train_runner.resume(repo)
+    assert outcome.code == 0, outcome.lines
+    rel = f"docs/.tmp/daedalus/{train}-summary.md"
+    assert outcome.lines == [f"resume ledger train={train} summary={rel}"]
+    assert train_runner.allowed_dispatch(_state(repo))[0] == {"orchestrator"}
+    again = train_runner.resume(repo)
+    assert again.code == 1 and "already open" in again.lines[0] and "Next:" in again.lines[0]
+    sha = "a" * 40
+    ledger = _train_cli(repo, "ledger", "--repo", str(repo), "--sha", sha, "--ids", "0120-DAE-PLT")
+    assert ledger.stdout == f"ledger recorded sha={sha} ids=0120-DAE-PLT\n", ledger.stderr
+    assert train_runner.allowed_dispatch(_state(repo))[0] == set()
+    recorded = train_runner.resume(repo)
+    assert (
+        recorded.code == 1
+        and "already records its ledger commit aaaaaaaaaaaa" in (recorded.lines[0])
+    )
+
+
+def test_resume_refuses_a_ledger_record_and_a_summary_without_pending(
+    repo: Path, plugin: Path
+) -> None:
+    train, summary = _resumable(repo, plugin, pending=False)
+    _git(repo, "branch", "-f", f"daedalus/{train}", f"daedalus-unit/{train}-u1")
+    no_pending = train_runner.resume(repo)
+    assert no_pending.code == 1 and "holds no `Ledger ids: pending` line" in no_pending.lines[0]
+    summary.unlink()
+    missing = train_runner.resume(repo)
+    assert missing.code == 1 and "cannot read the summary" in missing.lines[0]
+    train_state.update(repo, train, ledger={"sha": "b" * 40, "ids": ["0120-DAE-PLT"]})
+    refused = train_runner.resume(repo)
+    assert refused.code == 1 and "already records its ledger commit" in refused.lines[0]
+    assert "resume" not in _state(repo)
+
+
+def test_ledger_records_the_commit_and_refuses_bad_values(repo: Path, plugin: Path) -> None:
+    # pin D1 -> E4: {sha, ids} in train state; each refusal exits 1 with a Next line.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    sha = "c" * 40
+    done = train_runner.record_ledger(repo, sha, "0120-DAE-PLT,0121-DAE-PLT")
+    assert done.lines == [f"ledger recorded sha={sha} ids=0120-DAE-PLT,0121-DAE-PLT"]
+    assert _state(repo)["ledger"] == {"sha": sha, "ids": ["0120-DAE-PLT", "0121-DAE-PLT"]}
+    for bad_sha, ids in (
+        ("C" * 40, "0120-DAE-PLT"),
+        ("c" * 39, "0120-DAE-PLT"),
+        (sha, ""),
+        (sha, "0120-DAE-PLT,0120-DAE-PLT"),
+        (sha, "--x"),
+    ):
+        refused = train_runner.record_ledger(repo, bad_sha, ids)
+        assert refused.code == 1 and "Next:" in refused.lines[0], (bad_sha, ids)
+    assert _state(repo)["ledger"] == {"sha": sha, "ids": ["0120-DAE-PLT", "0121-DAE-PLT"]}
