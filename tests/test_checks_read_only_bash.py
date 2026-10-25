@@ -21,7 +21,8 @@ from tests.hook_chain import (
     run_script,
     unknown_flag_denies,
 )
-from tests.test_jail import _b, _git_init
+from tests.jail_cases import _git_init
+from tests.payloads import _b
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "read_only_bash"

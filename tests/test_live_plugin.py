@@ -12,7 +12,8 @@ from typing import Any
 
 import pytest
 
-from tests.conftest import REPO_ROOT
+from tests.conftest import REPO_ROOT, audit_records, git
+from tests.live import LiveRun, require_claude, run_claude
 
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "live-agent"
 RECEIPT_NAME = "2026-10-14-live-plugin.md"
@@ -34,40 +35,13 @@ RECORD_KEYS = (
 pytestmark = pytest.mark.live
 
 
-class LiveRun:
-    def __init__(self, result: subprocess.CompletedProcess[str], session: str, repo: Path) -> None:
-        self.result = result
-        self.session = session
-        self.repo = repo
-
-
 def _claude(args: list[str], cwd: Path) -> LiveRun:
     env = dict(os.environ)
     # Jail accepts the daedalus-probe namespace only under this flag.
     env["DAEDALUS_LIVE_TEST"] = "1"
     session = str(uuid.uuid4())
-    result = subprocess.run(
-        [
-            "claude",
-            "-p",
-            "--session-id",
-            session,
-            "--plugin-dir",
-            str(REPO_ROOT),
-            "--plugin-dir",
-            str(FIXTURE),
-            *args,
-        ],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=cwd,
-        check=False,
-        timeout=300,
-    )
-    print(f"session={session} exit={result.returncode}")
-    print(f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
-    return LiveRun(result, session, cwd)
+    argv = ["--session-id", session, "--plugin-dir", str(REPO_ROOT), "--plugin-dir", str(FIXTURE)]
+    return run_claude([*argv, *args], session, cwd, env)
 
 
 def _records(run: LiveRun) -> list[dict[str, Any]]:
@@ -75,7 +49,7 @@ def _records(run: LiveRun) -> list[dict[str, Any]]:
     log = run.repo / ".claude" / "daedalus" / "audit" / f"{run.session}.jsonl"
     assert log.is_file(), f"no audit log at {log}; plugin hooks did not fire for this session"
     print(f"audit log: {log}")
-    recs = [json.loads(line) for line in log.read_text().splitlines()]
+    recs = audit_records(log)
     for r in recs:
         print(json.dumps({k: r.get(k) for k in RECORD_KEYS}))
     return recs
@@ -102,10 +76,8 @@ def _train(repo: Path, *names: str) -> list[Path]:
     from lib import train_state
     from lib.workspace import create, mark_train
 
-    commit = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c"]
-    commit += ["commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"]
-    subprocess.run(["git", "-C", str(repo), *commit], check=True)
-    subprocess.run(["git", "-C", str(repo), "branch", f"daedalus/{TRAIN}"], check=True)
+    git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+    git(repo, "branch", f"daedalus/{TRAIN}")
     (repo / ".claude" / "daedalus").mkdir(parents=True, exist_ok=True)
     train_state.save(repo, TRAIN, {"train_id": TRAIN})
     mark_train(repo, TRAIN)
@@ -114,11 +86,10 @@ def _train(repo: Path, *names: str) -> list[Path]:
 
 @pytest.fixture
 def live_repo(tmp_path: Path) -> Path:
-    if shutil.which("claude") is None:
-        pytest.skip("claude CLI not on PATH")
+    require_claude()
     repo = tmp_path.resolve() / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    git(repo, "init", "-q")
     return repo
 
 
@@ -228,7 +199,7 @@ def test_train_made_worktree_keeps_root_log_and_jail(live_repo: Path) -> None:
         assert results[bad].stderr.startswith("daedalus-jail[repo-coder]:"), results[bad].stderr
         log = live_repo / ".claude" / "daedalus" / "audit" / f"{session}.jsonl"
         assert log.is_file() and not (wt / ".claude" / "daedalus").exists()
-        recs = [json.loads(line) for line in log.read_text().splitlines()]
+        recs = audit_records(log)
         for r in recs:
             print(json.dumps({k: r.get(k) for k in (*RECORD_KEYS, "tool_input", "project_root")}))
         got = [(r["tool_input"]["file_path"], r["decision"]) for r in recs]
@@ -284,7 +255,7 @@ def test_coder_write_outside_its_worktree_is_refused_through_the_router(live_rep
     assert bad.returncode == 2, bad.stderr
     assert bad.stderr.startswith("daedalus-jail[repo-coder]: unit_writes: "), bad.stderr
     log = live_repo / ".claude" / "daedalus" / "audit" / f"{session}.jsonl"
-    recs = [json.loads(line) for line in log.read_text().splitlines()]
+    recs = audit_records(log)
     for r in recs:
         print(json.dumps({k: r.get(k) for k in RECORD_KEYS}))
     assert [r["decision"] for r in recs] == ["allow", "block"], recs
@@ -350,14 +321,12 @@ def test_parallel_coders_stay_in_their_units(live_repo: Path) -> None:
     ledger = live_repo / "docs" / "decisions.md"
     ledger.parent.mkdir()
     shutil.copy(REPO_ROOT / "tests" / "fixtures" / "ledgers" / "table.md", ledger)
-    commit = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c"]
-    commit += ["commit.gpgsign=false", "commit", "-q", "-m", "init"]
-    subprocess.run(["git", "-C", str(live_repo), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(live_repo), *commit], check=True)
+    git(live_repo, "add", "-A")
+    git(live_repo, "commit", "-q", "-m", "init")
     seed = begin(live_repo)
     train = seed[0].split()[1]
     # 0011: lock creates the integration branch in a real train; this test has no contract.
-    subprocess.run(["git", "-C", str(live_repo), "branch", f"daedalus/{train}"], check=True)
+    git(live_repo, "branch", f"daedalus/{train}")
     w1, w2 = (create(live_repo, f"{train}-{n}", f"daedalus/{train}") for n in ("u1", "u2"))
     own = {w1: w1 / "src" / "one.py", w2: w2 / "src" / "two.py"}
     stray = {w1: w2 / "src" / "stray1.py", w2: w1 / "src" / "stray2.py"}

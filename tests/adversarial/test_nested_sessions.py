@@ -9,7 +9,7 @@ import pytest
 
 from tests.adversarial.corpus import NESTED, assert_denied
 from tests.hook_chain import CHAINS
-from tests.test_jail import _b, fake_claude_fixture  # noqa: F401 - registers fake_claude
+from tests.payloads import _b
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 # audit A7-1, issue 55: every agent whose chain carries a Bash judge.

@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from lib import audit, train_state
 
-from tests.conftest import SCRIPTS_DIR, replay_auditor, write_train_marker
+from tests.conftest import SCRIPTS_DIR, append_handback, replay_auditor, write_train_marker
 
 
 @pytest.fixture
@@ -287,7 +287,7 @@ def test_cli_approved_passes_on_train_a_and_refuses_without_its_hand_back(
     assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
     _judge(repo_cwd, tip)
     replay_auditor(repo_cwd, "sess-test")
-    _handback(hook_input, f"[VERDICT: APPROVED] tip={tip}")
+    append_handback(hook_input, f"[VERDICT: APPROVED] tip={tip}")
     _summary_written(hook_input, repo_cwd)
     result = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
     assert result.returncode == 0, result.stdout
@@ -325,18 +325,6 @@ def _tip(repo: Path) -> str:
 def _judge(repo: Path, tip: str, status: str = "approved") -> None:
     verdict = {"status": status, "tip": tip, "round": 1, "seq": 1}
     train_state.update(repo, APPROVED_TRAIN, verdict=verdict)
-
-
-def _handback(hook_input: Any, message: str) -> None:
-    audit.audit_append(
-        hook_input(
-            hook_event_name="PostToolUse",
-            tool_name="SubagentHandback",
-            tool_input={"message": message},
-            agent_type="daedalus:security-auditor",
-            agent_id="a1",
-        )
-    )
 
 
 def _approved_train(hook_input: Any, repo_cwd: Path, verdict: str) -> None:

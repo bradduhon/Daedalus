@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +15,7 @@ from lib.train_scope import KNOWN_AGENTS
 from lib.workspace import create, mark_train
 
 from tests.conftest import CWD, REPO_ROOT
+from tests.conftest import git as _git
 from tests.hook_chain import evaluate, load
 from tests.hook_chain import judge as decide
 from tests.test_dispatch_binding import TRAIN, seed_plan
@@ -42,10 +42,6 @@ def _start(cwd: str, subagent: str, prompt: str = "x") -> dict[str, object]:
 
 def _resume(cwd: str, to: str, message: object) -> dict[str, object]:
     return _call("SendMessage", cwd, to=to, message=message)
-
-
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
 @pytest.fixture

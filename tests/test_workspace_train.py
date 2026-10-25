@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -25,15 +26,11 @@ from lib.workspace import (
     train_marker,
 )
 
-from tests.conftest import SCRIPTS_DIR
+from tests.conftest import SCRIPTS_DIR, git
+from tests.conftest import workspace_cli as _cli
 
 LEDGER = "| Id | Date | Ruling | Supersedes | Follow-ups |\n|---|---|---|---|---|\n"
-
-
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
-    )
+_git = partial(git, check=False)
 
 
 def _ok(repo: Path, *args: str) -> str:
@@ -49,17 +46,6 @@ def _commit_all(repo: Path, message: str) -> None:
 
 def _head(repo: Path) -> str:
     return _ok(repo, "rev-parse", "--abbrev-ref", "HEAD")
-
-
-def _cli(*args: str) -> subprocess.CompletedProcess[str]:
-    # issue 63: the script refuses a --repo that is not the project root of its cwd.
-    return subprocess.run(
-        [sys.executable, str(SCRIPTS_DIR / "daedalus_workspace.py"), *args],
-        capture_output=True,
-        text=True,
-        check=False,
-        cwd=args[args.index("--repo") + 1],
-    )
 
 
 @pytest.fixture(autouse=True)

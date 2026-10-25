@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from tests.adversarial.corpus import CREDENTIAL, READERS, REPLY_KEY, assert_denied
+from tests.adversarial.corpus import (
+    CREDENTIAL,
+    READERS,
+    REPLY_KEY,
+    assert_denied,
+    assert_store_read_denied,
+)
+from tests.payloads import _cred
 from tests.test_checks_credential_paths import (
     BRACE_CLASS_TABLE,
     RE_ROOTED_READS,
@@ -15,7 +22,6 @@ from tests.test_checks_credential_paths import (
     _bash_in,
     _key_repo,
 )
-from tests.test_jail import _cred, cred_home  # noqa: F401 - registers cred_home
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 # issue 53, audit B4 rounds 1 to 3: the existing refused rows, plus the follow-up spellings.
@@ -89,7 +95,7 @@ def test_bash_brace_or_glob_into_a_store_is_denied(
     agent: str,
     template: str,
 ) -> None:
-    assert_denied(_cred(agent, "Bash", command=template.format(home=cred_home)), CREDENTIAL)
+    assert_store_read_denied(agent, template, home=cred_home)
 
 
 @pytest.mark.parametrize("agent", READERS)

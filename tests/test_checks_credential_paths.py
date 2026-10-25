@@ -19,28 +19,12 @@ from tests.hook_chain import (
     run_script,
     unknown_flag_denies,
 )
-from tests.test_jail import CREDENTIAL_PATHS, _b, _cred, _refusal, _train, _w
+from tests.jail_cases import CREDENTIAL_PATHS, _refusal, _train
+from tests.payloads import _b, _cred, _w
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "credential_paths"
 CREDENTIAL_AGENTS = ["repo-coder", "security-auditor"]
-
-
-@pytest.fixture
-def cred_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    root = tmp_path.resolve() / "home"
-    root.mkdir()
-    monkeypatch.setenv("HOME", str(root))
-    return root
-
-
-@pytest.fixture
-def plain_repo(tmp_path: Path) -> Path:
-    root = tmp_path.resolve() / "repo"
-    (root / "src").mkdir(parents=True)
-    (root / ".github").mkdir()
-    (root / "src" / "a.py").write_text("x\n")
-    return root
 
 
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)

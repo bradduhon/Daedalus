@@ -21,7 +21,8 @@ from tests.hook_chain import (
     run_script,
     unknown_flag_denies,
 )
-from tests.test_jail import DATA, _b, _w
+from tests.jail_cases import DATA
+from tests.payloads import _b, _w
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "workspace_integrity"

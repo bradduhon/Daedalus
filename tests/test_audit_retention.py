@@ -15,7 +15,7 @@ import pytest
 from lib import audit
 from lib.audit_proof import verify_lines
 
-from tests.conftest import write_train_marker
+from tests.conftest import audit_records, write_train_marker
 
 DAY = 86400
 
@@ -66,7 +66,7 @@ def _old(repo: Path, session: str, days_ago: float = 100, records: int = 2) -> d
 
 
 def _records(repo: Path, session: str) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in _log(repo, session).read_text().splitlines()]
+    return audit_records(_log(repo, session))
 
 
 def _train(repo: Path, days_ago: float, merged: bool) -> None:

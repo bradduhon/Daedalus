@@ -21,13 +21,13 @@ from lib.gh_policy import (
 )
 
 from tests.conftest import REPO_ROOT
+from tests.conftest import git as _git
 from tests.hook_chain import judge as decide
-from tests.test_checks_git_push import (
+from tests.jail_cases import (
     GATE_BRANCH,
     GATE_NEXT,
     GATE_TRAIN,
     LEDGER,
-    _git,
     _ledger_commit,
     approve,
     move_tip,
@@ -250,7 +250,7 @@ def test_pr_create_follows_the_same_gate(repo_cwd: Path) -> None:
     assert d.allow, d.reason
     move_tip(repo_cwd)
     assert _reason(repo_cwd, "pr-train-conductor", command).endswith(GATE_NEXT)
-    moved = _git(repo_cwd, "rev-parse", GATE_BRANCH).strip()
+    moved = _git(repo_cwd, "rev-parse", GATE_BRANCH).stdout.strip()
     exception = {"ledger_id": "0104-DAE-PLT", "tip": moved}
     train_state.update(repo_cwd, GATE_TRAIN, exception=exception)
     d = decide(_bash(repo_cwd, "pr-train-conductor", command), Config())

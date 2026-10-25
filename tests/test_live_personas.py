@@ -6,7 +6,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
@@ -14,7 +13,9 @@ from typing import Any
 import pytest
 from verify_audit_chain import verify
 
-from tests.conftest import REPO_ROOT
+from tests.conftest import REPO_ROOT, audit_records
+from tests.conftest import git as _git
+from tests.live import LiveRun, require_claude, run_claude
 
 LEDGER_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "ledgers" / "table.md"
 RECORD_KEYS = (
@@ -60,13 +61,6 @@ SPECIALIST_TASK = (
 pytestmark = pytest.mark.live
 
 
-class LiveRun:
-    def __init__(self, result: subprocess.CompletedProcess[str], session: str, repo: Path) -> None:
-        self.result = result
-        self.session = session
-        self.repo = repo
-
-
 def _field(rec: dict[str, Any], key: str) -> Any:
     value: Any = rec
     for part in key.split("."):
@@ -83,43 +77,27 @@ def _last_line(text: str) -> str:
     return lines[-1].strip() if lines else ""
 
 
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
-
-
 def _persona(name: str, task: str, tools: list[str], repo: Path) -> LiveRun:
     # 0010: the real daedalus namespace only; the probe flag stays unset.
     env = {k: v for k, v in os.environ.items() if k != "DAEDALUS_LIVE_TEST"}
     session = str(uuid.uuid4())
-    result = subprocess.run(
-        [
-            "claude",
-            "-p",
-            "--plugin-dir",
-            str(REPO_ROOT),
-            # Operator user-level hooks stay out of the result.
-            "--setting-sources",
-            "project,local",
-            "--agent",
-            f"daedalus:{name}",
-            "--session-id",
-            session,
-            "--allowedTools",
-            ",".join(tools),
-            "--output-format",
-            "text",
-            task,
-        ],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=repo,
-        check=False,
-        timeout=300,
-    )
-    print(f"persona={name} session={session} exit={result.returncode}")
-    print(f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
-    return LiveRun(result, session, repo)
+    argv = [
+        "--plugin-dir",
+        str(REPO_ROOT),
+        # Operator user-level hooks stay out of the result.
+        "--setting-sources",
+        "project,local",
+        "--agent",
+        f"daedalus:{name}",
+        "--session-id",
+        session,
+        "--allowedTools",
+        ",".join(tools),
+        "--output-format",
+        "text",
+        task,
+    ]
+    return run_claude(argv, session, repo, env, label=f"persona={name} ")
 
 
 def _records(run: LiveRun) -> list[dict[str, Any]]:
@@ -134,7 +112,7 @@ def _records(run: LiveRun) -> list[dict[str, Any]]:
     ok, detail = verify(log)
     print(f"chain: {detail}")
     assert ok, detail
-    recs = [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+    recs = audit_records(log)
     for r in recs:
         print(json.dumps(_fields(r)))
     return recs
@@ -160,8 +138,7 @@ def _check(
 
 @pytest.fixture
 def live_repo(tmp_path: Path) -> Path:
-    if shutil.which("claude") is None:
-        pytest.skip("claude CLI not on PATH")
+    require_claude()
     repo = tmp_path.resolve() / "repo"
     (repo / "docs" / ".tmp").mkdir(parents=True)
     (repo / "src").mkdir()
@@ -178,7 +155,7 @@ def live_repo(tmp_path: Path) -> Path:
     data.mkdir(parents=True)
     (data / ".gitignore").write_text("*\n", encoding="utf-8")
     (data / "config.json").write_text(json.dumps(CONFIG, indent=2) + "\n", encoding="utf-8")
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "live@example.invalid")
     _git(repo, "config", "user.name", "Live Test")
     _git(repo, "add", "-A")
@@ -186,13 +163,58 @@ def live_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def test_contract_spec(live_repo: Path) -> None:
-    task = (
+# W1.4: personas whose live check is one task, one tool list and the status lines they may end on.
+SIMPLE_PERSONAS = [
+    pytest.param(
+        "contract-spec",
         "Produce the Locked Contract Packet for a function add(a: int, b: int) -> int "
-        "in src/hello.py. No files to read."
-    )
-    run = _persona("contract-spec", task, ["Read", "Glob", "Grep"], live_repo)
-    _check(run, "contract-spec", ("## Locked Contract Packet",))
+        "in src/hello.py. No files to read.",
+        ["Read", "Glob", "Grep"],
+        ("## Locked Contract Packet",),
+        False,
+        id="contract-spec",
+    ),
+    pytest.param(
+        "web-researcher",
+        "Research question: what is the current stable Python 3 minor version? "
+        "Answer under 50 words with one URL.",
+        ["WebSearch", "WebFetch"],
+        ("[STATUS: RESEARCH]",),
+        False,
+        id="web-researcher",
+    ),
+    pytest.param(
+        "pr-train-conductor",
+        "Preconditions only: this repo has no remote. "
+        "Check your preconditions and end with your status line.",
+        ["Bash", "Read"],
+        ("[STATUS: BLOCKED]",),
+        True,
+        id="pr-train-conductor",
+    ),
+    pytest.param(
+        "standards-rules-specialist",
+        "Read docs/STANDARDS.md and produce the Standards Packet for a task that adds "
+        "one function to src/hello.py.",
+        ["Read", "Glob", "Grep"],
+        ("## Standards Packet",),
+        False,
+        id="standards-rules-specialist",
+    ),
+]
+
+
+@pytest.mark.parametrize("name, task, tools, markers, block_ok", SIMPLE_PERSONAS)
+def test_simple_persona(
+    live_repo: Path,
+    name: str,
+    task: str,
+    tools: list[str],
+    markers: tuple[str, ...],
+    block_ok: bool,
+) -> None:
+    run = _persona(name, task, tools, live_repo)
+    _check(run, name, markers, block_ok=block_ok)
 
 
 def test_charter_docs(live_repo: Path) -> None:
@@ -213,8 +235,7 @@ def test_repo_coder(live_repo: Path) -> None:
     from lib.unit_binding import record_dispatch
     from lib.workspace import create, mark_train
 
-    commit = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c"]
-    _git(live_repo, *commit, "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "base")
+    _git(live_repo, "commit", "-q", "--allow-empty", "-m", "base")
     _git(live_repo, "branch", "daedalus/20261015-000000")
     # issue 29: coders write only inside a train, in the unit their dispatch named.
     train_state.save(live_repo, "20261015-000000", {"train_id": "20261015-000000"})
@@ -230,15 +251,6 @@ def test_repo_coder(live_repo: Path) -> None:
     tools = ["Read", "Edit", "Write", "Bash", "Glob", "Grep"]
     run = _persona("repo-coder", task, tools, live_repo)
     _check(run, "repo-coder", ("[STATUS: COMPLETE]",))
-
-
-def test_web_researcher(live_repo: Path) -> None:
-    task = (
-        "Research question: what is the current stable Python 3 minor version? "
-        "Answer under 50 words with one URL."
-    )
-    run = _persona("web-researcher", task, ["WebSearch", "WebFetch"], live_repo)
-    _check(run, "web-researcher", ("[STATUS: RESEARCH]",))
 
 
 @pytest.mark.parametrize("name", ["nist-specialist", "cis-specialist"])
@@ -285,21 +297,3 @@ def test_verifier(live_repo: Path) -> None:
     assert first.lstrip().startswith("[VERDICT: REFUTED]"), first
     assert _last_line(run.result.stdout).startswith("[VERDICT: REFUTED]")
     assert "src/hello.py:2" in run.result.stdout
-
-
-def test_pr_train_conductor(live_repo: Path) -> None:
-    task = (
-        "Preconditions only: this repo has no remote. "
-        "Check your preconditions and end with your status line."
-    )
-    run = _persona("pr-train-conductor", task, ["Bash", "Read"], live_repo)
-    _check(run, "pr-train-conductor", ("[STATUS: BLOCKED]",), block_ok=True)
-
-
-def test_standards_rules_specialist(live_repo: Path) -> None:
-    task = (
-        "Read docs/STANDARDS.md and produce the Standards Packet for a task that adds "
-        "one function to src/hello.py."
-    )
-    run = _persona("standards-rules-specialist", task, ["Read", "Glob", "Grep"], live_repo)
-    _check(run, "standards-rules-specialist", ("## Standards Packet",))

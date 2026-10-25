@@ -9,6 +9,7 @@ from typing import Any
 
 from tests.conftest import CFG
 from tests.hook_chain import decide
+from tests.payloads import _cred
 
 CLASSES = (
     "brace_glob",
@@ -34,3 +35,8 @@ def assert_denied(hook_input: dict[str, Any], *markers: str) -> None:
     reason = str(d.reason)
     assert not d.allow and not d.ask, (hook_input, reason)
     assert not markers or any(m in reason for m in markers), (hook_input, reason)
+
+
+def assert_store_read_denied(agent: str, template: str, **fields: object) -> None:
+    # W1.4: the one body of every "Bash read into a credential store is denied" row.
+    assert_denied(_cred(agent, "Bash", command=template.format(**fields)), CREDENTIAL)

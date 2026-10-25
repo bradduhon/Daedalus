@@ -4,38 +4,30 @@ from __future__ import annotations
 
 import ast
 import os
-import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import dispatch_binding, jail, shell, train_state
+from lib import dispatch_binding, jail, shell
 from lib.config import Config
 from lib.jail import KNOWN_AGENTS, decide
 from lib.shell import split_pipeline, tokenize
-from lib.unit_binding import record_dispatch
-from lib.workspace import mark_train, train_marker
+from lib.workspace import train_marker
 
 from tests import hook_chain
-from tests.conftest import CFG, CWD, REPO_ROOT, WT
+from tests.conftest import CFG, CWD, REPO_ROOT, WT, write_train_marker
+from tests.jail_cases import (
+    CREDENTIAL_PATHS,
+    DATA,
+    UNIT_TRAIN,
+    _refusal,
+    _train,
+    _unit_repo,
+)
+from tests.payloads import _b, _cred, _t, _w
 
-UNIT_TRAIN = "20261015-120000"
 # 0044: the fake unit worktrees live in tests/conftest.py as the jail_fakes fixture.
 pytestmark = pytest.mark.usefixtures("jail_fakes")
-
-
-def _w(agent: str | None, path: str, tool: str = "Write") -> dict[str, Any]:
-    payload: dict[str, Any] = {"tool_name": tool, "tool_input": {"file_path": path}, "cwd": CWD}
-    if agent:
-        payload["agent_type"] = agent
-    return payload
-
-
-def _b(agent: str | None, command: str) -> dict[str, Any]:
-    payload: dict[str, Any] = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
-    if agent:
-        payload["agent_type"] = agent
-    return payload
 
 
 def _asks(d: jail.Decision, path: str) -> bool:
@@ -49,10 +41,6 @@ def _main_asks(d: jail.Decision, warning: str | None = None) -> bool:
     reason = str(d.reason)
     lead = warning is None or reason.startswith(f"{warning} Approve to proceed anyway.")
     return d.ask and not d.allow and "The jail's finding: " in reason and lead
-
-
-def _t(agent: str, tool: str) -> dict[str, Any]:
-    return {"tool_name": tool, "tool_input": {}, "cwd": CWD, "agent_type": agent}
 
 
 def test_known_agents_match_spec_matrix() -> None:
@@ -235,34 +223,6 @@ def test_split_pipeline() -> None:
     assert split_pipeline("a < f") is None
     assert split_pipeline("echo `x`") is None
     assert split_pipeline("echo $(x)") is None
-
-
-# Fix round 1: hardening regressions.
-BASH_AGENTS = [
-    "repo-coder",
-    "charter-docs",
-    "security-auditor",
-    "nist-specialist",
-    "cis-specialist",
-    "pr-train-conductor",
-]
-PIPE_ALLOWED = {"security-auditor", "nist-specialist", "cis-specialist"}
-SEPARATORS = [
-    "git diff & git diff",
-    "git diff\ngit diff",
-    "git diff\rgit diff",
-    "git diff || git diff",
-    "git diff $(git diff)",
-    "git diff `git diff`",
-    "git diff > f",
-    "git diff >> f",
-    "git diff 2> f",
-    "git diff &> f",
-    "git diff < f",
-    "git diff |& head",
-    "git diff <(git diff)",
-    "git diff >(cat)",
-]
 
 
 def test_tokenize() -> None:
@@ -460,7 +420,6 @@ class TestRegressionToolsAndCwd:
 
 # Fix round 3: worker grammars, quote-aware tokenizer, hardened main fallback.
 HOME = os.path.normpath(os.path.expanduser("~"))
-WORKERS_WITH_SHELL = [a for a in BASH_AGENTS]
 
 
 class TestRound3Breakage:
@@ -702,9 +661,6 @@ class TestRound5BraceFallback:
 
 
 # Final whole-branch review fixes (I1, I3, I4, I7, m4).
-DATA = "/tmp/daedalus-test-data/daedalus-inline"
-
-
 class TestFinalRemotePlumbing:
     @pytest.mark.parametrize(
         "command",
@@ -984,121 +940,16 @@ class TestFinalSubagentAsMain:
 
 
 # Fix wave after the whole-branch review (I1, I3, I4, M1).
-def _git_init(path: Path) -> Path:
-    path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
-    return path.resolve()
-
-
-def _wr(cwd: Path, path: Path, tool: str = "Write") -> dict[str, Any]:
-    payload = _w("charter-docs", str(path), tool)
-    payload["cwd"] = str(cwd)
-    return payload
-
-
-_MANIFEST_LEDGER = {
-    "path": "docs/adr.md",
-    "format": "markdown-table-row",
-    "id_scheme": "{seq:04d}",
-    "sequence_source": "last-row-id",
-}
-
-
-BUILTIN_REL = [
-    "contracts/openapi.yaml",
-    "contracts/events/x.schema.json",
-    "contracts",
-    ".github/workflows/ci.yml",
-    ".github/CODEOWNERS",
-    ".github",
-    ".claude/settings.json",
-    ".claude/agents/x.md",
-    "service-manifest.json",
-    "Service-Manifest.JSON",
-    "CONTRACTS/openapi.yaml",
-]
-
-
 def test_main_never_writes_unit_worktree_code() -> None:
     # 0105: a main write into a unit worktree asks the operator.
     assert _asks(decide(_w(None, f"{WT}/src/a.py"), CFG), f"{WT}/src/a.py")
 
 
-def _unit_repo(path: Path) -> tuple[Path, Path]:
-    repo = _git_init(path)
-    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
-    git += ["-c", "commit.gpgsign=false"]
-    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "init"], check=True)
-    wt = repo / ".claude" / "worktrees" / "u1"
-    subprocess.run([*git, "worktree", "add", "-q", "-b", "daedalus-unit/u1", str(wt)], check=True)
-    # issue 29: coder writes need a train with the unit recorded and dispatched.
-    (repo / ".claude" / "daedalus").mkdir(exist_ok=True)
-    unit = {"name": "u1", "branch": "daedalus-unit/u1", "path": str(wt)}
-    train_state.save(repo, UNIT_TRAIN, {"train_id": UNIT_TRAIN, "units": [unit]})
-    mark_train(repo, UNIT_TRAIN)
-    assert record_dispatch(repo, UNIT_TRAIN, "u1") is None
-    return repo, wt.resolve()
-
-
-def _cwd(payload: dict[str, Any], cwd: Path) -> dict[str, Any]:
-    payload["cwd"] = str(cwd)
-    payload.setdefault("session_id", "s")
-    return payload
-
-
-def _narrowed_repo(tmp_path: Path, manifest: str) -> tuple[Path, Path]:
-    repo, wt = _unit_repo(tmp_path / "repo")
-    (repo / "service-manifest.json").write_text(manifest, encoding="utf-8")
-    return repo, wt
-
-
-NARROWING = {
-    "jail_narrowing": {"forbidden_paths": ["infra/", "Makefile"], "forbidden_extensions": [".pem"]}
-}
-
-
-CREDENTIAL_PATHS = [
-    ".ssh/id_ed25519",
-    ".aws/credentials",
-    ".aws/config",
-    ".gnupg/pubring.kbx",
-    ".config/gh/hosts.yml",
-    ".claude/.credentials.json",
-]
 CREDENTIAL_AGENTS = [None, "repo-coder", "security-auditor", "Explore"]
 
 
-@pytest.fixture
-def cred_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    root = tmp_path.resolve() / "home"
-    root.mkdir()
-    monkeypatch.setenv("HOME", str(root))
-    return root
-
-
-@pytest.fixture
-def train_cwd(tmp_path: Path) -> Path:
-    root = tmp_path.resolve() / "trainrepo"
-    (root / ".claude" / "daedalus").mkdir(parents=True)
-    return root
-
-
 def _mark(cwd: Path) -> None:
-    (cwd / ".claude" / "daedalus" / "train.active").write_text("20261015-120000\n")
-
-
-def _cred(agent: str | None, tool: str, cwd: str = CWD, **tool_input: str) -> dict[str, Any]:
-    payload: dict[str, Any] = {"tool_name": tool, "tool_input": tool_input, "cwd": cwd}
-    if agent:
-        payload["agent_type"] = agent
-    return payload
-
-
-def _refusal(path: str) -> str:
-    return (
-        f"{path} is a credential path. "
-        "Next: Daedalus never reads credentials; use the tool that needs them from your own shell"
-    )
+    write_train_marker(cwd, UNIT_TRAIN)
 
 
 def _judged(
@@ -1420,21 +1271,6 @@ def test_unknown_agent_dotgit_write_is_refused_only_during_a_train(train_cwd: Pa
     assert not decide(payload, CFG).allow
 
 
-@pytest.fixture
-def plain_repo(tmp_path: Path) -> Path:
-    root = tmp_path.resolve() / "repo"
-    (root / "src").mkdir(parents=True)
-    (root / ".github").mkdir()
-    (root / "src" / "a.py").write_text("x\n")
-    return root
-
-
-def _train(root: Path) -> None:
-    # 0035: main and foreign agents meet the Bash credential model only while a train runs.
-    (root / ".claude" / "daedalus").mkdir(parents=True, exist_ok=True)
-    _mark(root)
-
-
 @pytest.mark.parametrize("agent", [None, "Explore"])
 @pytest.mark.parametrize(
     "command",
@@ -1577,19 +1413,6 @@ def test_a_later_binding_does_not_taint_an_earlier_read(
 
 
 # issue 30: residual shell forms, the write-target train marker and unmodelled copiers.
-@pytest.fixture
-def marked_repo(tmp_path: Path) -> Path:
-    repo = _git_init(tmp_path / "marked")
-    (repo / ".claude" / "daedalus").mkdir(parents=True)
-    _mark(repo)
-    return repo
-
-
-@pytest.fixture
-def other_repo(tmp_path: Path) -> Path:
-    return _git_init(tmp_path / "other")
-
-
 SHELL_FORMS = [
     "echo $(date)",
     "echo `date`",
@@ -1880,21 +1703,6 @@ def test_main_claude_is_asked(command: str) -> None:
 def test_main_mentions_of_claude_pass() -> None:
     for command in ("ls .claude", "cat ~/.claude/CLAUDE.md", "echo claude-code", "git log"):
         assert decide(_b(None, command), CFG).allow, command
-
-
-@pytest.fixture(name="fake_claude")
-def fake_claude_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    # issue 55: a versioned claude binary and the PATH link to it, as the installer lays them out.
-    versions = tmp_path.resolve() / "share" / "versions"
-    versions.mkdir(parents=True)
-    binary = versions / "2.0.0"
-    binary.write_text("#!/bin/sh\n")
-    binary.chmod(0o755)
-    bin_dir = tmp_path.resolve() / "bin"
-    bin_dir.mkdir()
-    (bin_dir / "claude").symlink_to(binary)
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
-    return binary
 
 
 def test_main_versioned_claude_path_is_asked(fake_claude: Path) -> None:

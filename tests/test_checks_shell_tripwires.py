@@ -20,17 +20,15 @@ from tests.hook_chain import (
     run_script,
     unknown_flag_denies,
 )
-from tests.test_jail import (
+from tests.jail_cases import (
     BASH_AGENTS,
     PIPE_ALLOWED,
     SEPARATORS,
     WORKERS_WITH_SHELL,
-    _b,
-    _cwd,
     _narrowed_repo,
     _unit_repo,
-    fake_claude_fixture,  # noqa: F401 - registers fake_claude
 )
+from tests.payloads import _b, _cwd
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "shell_tripwires"

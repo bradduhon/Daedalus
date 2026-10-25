@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -13,15 +12,12 @@ from lib.config import Config
 from lib.unit_binding import bindings_path, claim, rebind, record_dispatch
 from lib.workspace import create, mark_train
 
+from tests.conftest import git as _git
 from tests.hook_chain import judge as decide
 from tests.test_dispatch_binding import seed_plan
 
 TRAIN = "20261016-120000"
 CODER = "daedalus:repo-coder"
-
-
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
 @pytest.fixture

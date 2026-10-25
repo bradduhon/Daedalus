@@ -19,6 +19,7 @@ from lib.jail import decide
 from lib.train_runner import STEP_NEEDLE
 
 from tests.conftest import REPO_ROOT, SCRIPTS_DIR, replay_auditor
+from tests.conftest import git as _git
 
 SESSION = "sess-run"
 # 0024: the probe script prints a record line and exits with the code it is given.
@@ -121,10 +122,6 @@ def _write_train(plugin: Path, stages: list[dict[str, Any]], scopes: tuple[str, 
     path = plugin / "trains" / "t.json"
     path.write_text(json.dumps(_definition(stages, scopes)))
     return path
-
-
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=True)
 
 
 @pytest.fixture
