@@ -89,7 +89,7 @@ def _revision(raw: bytes) -> str:
     return _printable(meta["version"], key, NOT_CATALOG_NEXT)
 
 
-def _printable(value: Any, key: str, nxt: str) -> str:
+def _printable(value: object, key: str, nxt: str) -> str:
     # 8.8: untrusted text reaches the terminal and the manifest; refuse control characters.
     if isinstance(value, str) and value and len(value) <= 64 and value.isprintable():
         return value

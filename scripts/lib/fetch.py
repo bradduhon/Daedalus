@@ -17,9 +17,8 @@ import urllib.parse
 import urllib.request
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
-from email.message import Message
 from pathlib import Path
-from typing import IO, Any
+from typing import IO
 
 from lib import locks
 
@@ -80,7 +79,7 @@ class _GitHubOnlyRedirect(urllib.request.HTTPRedirectHandler):
         fp: IO[bytes],
         code: int,
         msg: str,
-        headers: Message,
+        headers: http.client.HTTPMessage,
         newurl: str,
     ) -> urllib.request.Request | None:
         if not _allowed(newurl, redirect=True):
@@ -91,8 +90,13 @@ class _GitHubOnlyRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
     def http_error_302(
-        self, req: urllib.request.Request, fp: IO[bytes], code: int, msg: str, headers: Message
-    ) -> Any:
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: http.client.HTTPMessage,
+    ) -> IO[bytes] | None:
         # R1-m4: urllib parses Location before redirect_request; a bad one raises ValueError.
         try:
             return super().http_error_302(req, fp, code, msg, headers)
@@ -104,7 +108,7 @@ class _GitHubOnlyRedirect(urllib.request.HTTPRedirectHandler):
     http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
 
 
-def _open(url: str, accept: str) -> Any:
+def _open(url: str, accept: str) -> IO[bytes]:
     # 8.8: opener, not urlopen; the global opener would follow redirects to any host.
     opener = urllib.request.build_opener(_GitHubOnlyRedirect)
     req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": USER_AGENT})

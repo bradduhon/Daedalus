@@ -9,9 +9,8 @@ import shlex
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
-from lib import atomic, audit_proof, git, plan_record, scrub, train_state, unit_binding
+from lib import atomic, audit_proof, git, narrow, plan_record, scrub, train_state, unit_binding
 from lib.audit import SESSION_ID, DataDirError, cache_dir_or_probe, ensure_project_data_dir
 from lib.audit_proof import SUMMARY_DIR
 from lib.config import Config, ConfigError, load_config
@@ -481,7 +480,7 @@ def begin_folder(root: Path, ledger_feature: bool | None) -> list[str]:
     ]
 
 
-def _active(repo: Path) -> tuple[str, dict[str, Any]]:
+def _active(repo: Path) -> tuple[str, dict[str, object]]:
     train_id = train_state.active_train(repo)
     if train_id is None:
         raise WorkspaceError(
@@ -494,7 +493,7 @@ def _active(repo: Path) -> tuple[str, dict[str, Any]]:
         raise WorkspaceError(str(exc)) from exc
 
 
-def _record(repo: Path, train_id: str, **fields: Any) -> None:
+def _record(repo: Path, train_id: str, **fields: object) -> None:
     try:
         train_state.update(repo, train_id, **fields)
     except train_state.TrainStateError as exc:
@@ -513,10 +512,10 @@ def _on_branch(repo: Path, branch: str, start: str | None = None) -> None:
         raise WorkspaceError(f"branch {branch} is missing in {repo}. Next: {RERUN}")
 
 
-def _contract_target(repo: Path, state: dict[str, Any], contract: str) -> tuple[Path, Path]:
+def _contract_target(repo: Path, state: dict[str, object], contract: str) -> tuple[Path, Path]:
     # 0011: contracts/<name>.md in this repo, or specs/<name>.md under the declared charter_root.
     path = (repo / contract).resolve()
-    charter = Path(state["charter_root"]) if state.get("charter_root") else None
+    charter = Path(str(state["charter_root"])) if state.get("charter_root") else None
     root, folder = (
         (charter, "specs") if charter and path.is_relative_to(charter) else (repo, "contracts")
     )
@@ -548,7 +547,7 @@ def lock(repo: Path, contract: str, version: int) -> list[str]:
     if not path.is_file():
         raise WorkspaceError(f"contract-spec did not save the packet at {path}. Next: {RERUN}")
     integration = f"daedalus/{train_id}"
-    _on_branch(repo, integration, state["base_sha"])
+    _on_branch(repo, integration, str(state["base_sha"]))
     if root != repo:
         _on_branch(root, integration)
     rel = str(path.relative_to(root))
@@ -593,7 +592,9 @@ def _unit_worktrees(repo: Path) -> dict[str, Path]:
     return found
 
 
-def _teardown(repo: Path, units: list[dict[str, Any]], lines: list[str], nexts: list[str]) -> bool:
+def _teardown(
+    repo: Path, units: list[dict[str, object]], lines: list[str], nexts: list[str]
+) -> bool:
     # 0024: only the units this train recorded, never another worktree under .claude/worktrees/.
     listed = _unit_worktrees(repo)
     ok = True
@@ -629,7 +630,7 @@ def _switch(repo: Path, branch: str, lines: list[str], nexts: list[str]) -> bool
 
 
 def _integration_back(
-    repo: Path, state: dict[str, Any], integration: str, lines: list[str], nexts: list[str]
+    repo: Path, state: dict[str, object], integration: str, lines: list[str], nexts: list[str]
 ) -> bool:
     if (
         state.get("merged")
@@ -639,7 +640,7 @@ def _integration_back(
     # 0024: a dirty main checkout or uncommitted contract stays on the integration branch.
     dirty = _dirty(repo)
     if state.get("charter_root"):
-        charter = Path(state["charter_root"])
+        charter = Path(str(state["charter_root"]))
         dirty += [f"{charter.name}/{p}" for p in _dirty(charter, "--", "specs/")]
     if dirty:
         lines.append(f"kept on {integration}: {_shown(dirty)}")
@@ -652,11 +653,11 @@ def _integration_back(
 
 
 def _charter_back(
-    state: dict[str, Any], integration: str, lines: list[str], nexts: list[str]
+    state: dict[str, object], integration: str, lines: list[str], nexts: list[str]
 ) -> bool:
     if not state.get("charter_branch_created") or not state.get("charter_root"):
         return True
-    charter, base = Path(state["charter_root"]), str(state["charter_base"])
+    charter, base = Path(str(state["charter_root"])), str(state["charter_base"])
     dirty = _dirty(charter)
     if dirty:
         lines.append(f"kept on {integration} in {charter.name}: {_shown(dirty)}")
@@ -693,7 +694,7 @@ def stop(repo: Path, reason: str, next_action: str | None) -> tuple[list[str], b
                 if state.get("scope_kind") == "folder":
                     lines.append("folder scope: no worktrees or branches to restore")
                 else:
-                    ok = _teardown(repo, list(state.get("units") or []), lines, nexts) and ok
+                    ok = _teardown(repo, narrow.objects(state, "units"), lines, nexts) and ok
                     ok = _integration_back(repo, state, integration, lines, nexts) and ok
                     ok = _charter_back(state, integration, lines, nexts) and ok
             except (WorkspaceError, train_state.TrainStateError) as exc:
@@ -718,7 +719,7 @@ def _unit_label(train_id: str, name: str) -> str:
     return name.removeprefix(f"{train_id}-")
 
 
-def _merge(repo: Path, state: dict[str, Any], train_id: str, unit: dict[str, Any]) -> None:
+def _merge(repo: Path, state: dict[str, object], train_id: str, unit: dict[str, object]) -> None:
     branch = str(unit["branch"])
     message = f"Merge {_unit_label(train_id, str(unit['name']))} for train {train_id}"
     merged = _run(repo, "merge", "-q", "--no-ff", branch, "-m", message)
@@ -748,7 +749,7 @@ def finish(repo: Path) -> list[str]:
             "Next: inspect and discard those changes from your own shell, run git switch "
             f"{state['base_branch']}, then rerun the train."
         )
-    units = list(state.get("units") or [])
+    units = narrow.objects(state, "units")
     # pin C4 -> C5: the audit unit is never merged; _teardown still removes its worktree.
     merging = [u for u in units if u.get("name") != audit_unit(train_id)]
     lock_sha = state.get("lock_sha")
@@ -772,7 +773,7 @@ def finish(repo: Path) -> list[str]:
 
 
 def _merge_all(
-    repo: Path, state: dict[str, Any], train_id: str, units: list[dict[str, Any]]
+    repo: Path, state: dict[str, object], train_id: str, units: list[dict[str, object]]
 ) -> list[str]:
     # 0121: a unit already on the integration branch is skipped, so a later wave never re-merges.
     integration = f"daedalus/{train_id}"
@@ -808,7 +809,7 @@ def _strings(value: object) -> list[str]:
     return []
 
 
-def _worktree_lines(record: dict[str, Any]) -> list[str]:
+def _worktree_lines(record: dict[str, object]) -> list[str]:
     # 0121: the Unit worktree lines of a PreToolUse Agent or SendMessage record, else none.
     if record.get("event") != "PreToolUse" or record.get("tool_name") not in _DISPATCH_TOOLS:
         return []
@@ -816,14 +817,14 @@ def _worktree_lines(record: dict[str, Any]) -> list[str]:
     return [line for text in texts for line in text.splitlines() if line.startswith(_UNIT_LINE)]
 
 
-def unit_verified(records: list[dict[str, Any]], worktree: Path) -> bool:
+def unit_verified(records: list[dict[str, object]], worktree: Path) -> bool:
     # 0121: ordered match, one verifier at a time; the window runs from the newest dispatch
     # naming the worktree to the next dispatch naming any worktree.
     line = f"{_UNIT_LINE}{worktree}"
     anchors = [i for i, r in enumerate(records) if line in _worktree_lines(r)]
     if not anchors:
         return False
-    window: list[dict[str, Any]] = []
+    window: list[dict[str, object]] = []
     for record in records[anchors[-1] + 1 :]:
         if _worktree_lines(record):
             break
@@ -842,7 +843,7 @@ def unit_verified(records: list[dict[str, Any]], worktree: Path) -> bool:
     return bool(last) and VERIFIED_LINE.fullmatch(last[-1]) is not None
 
 
-def _audit_records(repo: Path, state: dict[str, Any]) -> list[dict[str, Any]]:
+def _audit_records(repo: Path, state: dict[str, object]) -> list[dict[str, object]]:
     session = train_state.audit_session(state)
     if session is None or not SESSION_ID.fullmatch(session):
         raise WorkspaceError(
@@ -863,7 +864,7 @@ VERIFY_NEXT = (
 )
 
 
-def _plan_ids(state: dict[str, Any]) -> set[str]:
+def _plan_ids(state: dict[str, object]) -> set[str]:
     record = train_state.record(state, train_state.PLAN)
     path, digest = record.get("path"), record.get("sha256")
     rerun = "Next: record the plan with daedalus_train.py plan --path, then rerun the merge."
@@ -882,15 +883,17 @@ def _plan_ids(state: dict[str, Any]) -> set[str]:
     return {unit.id.casefold() for unit in plan.units}
 
 
-def _wave(repo: Path, train_id: str, state: dict[str, Any], ids: list[str]) -> list[dict[str, Any]]:
+def _wave(
+    repo: Path, train_id: str, state: dict[str, object], ids: list[str]
+) -> list[dict[str, object]]:
     named = _plan_ids(state)
     recorded = {
         _unit_label(train_id, str(u.get("name"))).casefold(): u
         for u in train_state.units(state)
         if u.get("name") != audit_unit(train_id)
     }
-    records: list[dict[str, Any]] | None = None
-    wave: list[dict[str, Any]] = []
+    records: list[dict[str, object]] | None = None
+    wave: list[dict[str, object]] = []
     for uid in ids:
         if uid.casefold() not in named:
             raise WorkspaceError(
@@ -1211,7 +1214,7 @@ def resume(repo: Path) -> list[str]:
     except train_state.TrainStateError as exc:
         raise WorkspaceError(str(exc)) from exc
     integration = f"daedalus/{train_id}"
-    charter = Path(state["charter_root"]) if state.get("charter_branch_created") else None
+    charter = Path(str(state["charter_root"])) if state.get("charter_branch_created") else None
     switch_charter = charter is not None and _resume_target(charter, integration)
     switch_repo = not state.get("merged") and _resume_target(repo, integration)
     mark_train(repo, train_id)
