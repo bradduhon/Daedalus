@@ -193,6 +193,7 @@ def _note(agent: str, message: str) -> None:
 
 
 def _alert(agent: str, message: str) -> int:
+    # Main never prompted (amends 0106): allow with context, never ask, for the main session.
     # AU-5, SI-4: a main-session failure alert on stderr and in context, on every call.
     _note(agent, message)
     return _warn(message)
@@ -320,6 +321,7 @@ def _judge(payload: dict[str, object], agent: str) -> int:
     if allow:
         return 0
     if warn:
+        # Main never prompted (amends 0105, 0106): allow with context, never ask, for main.
         return _warn(str(finding))
     return _block(agent, str(reason))
 

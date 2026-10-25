@@ -419,12 +419,14 @@ def _warn(reason: str) -> Decision:
 
 
 def _main_warn(warning: str, finding: str) -> Decision:
-    # 0106: the warning first, then the jail's finding verbatim so the audit log keeps it whole.
+    # Main never prompted (amends 0106): allow with context, never ask, for the main session.
+    # The warning first, then the jail's finding verbatim so the audit log keeps it whole.
     return _warn(f"{warning} The jail's finding: {finding}")
 
 
 def _tripwire_warn(finding: str) -> Decision:
-    # 0106: git push during a train carries the gh policy's push finding.
+    # Main never prompted (amends 0106): allow with context, never ask, for the main session.
+    # Git push during a train carries the gh policy's push finding.
     warning = _TRIPWIRE_WARNINGS.get(finding, WARN_COMMAND)
     if finding == _push_reason("main"):
         warning = WARN_TRAIN_PUSH

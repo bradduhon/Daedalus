@@ -132,7 +132,7 @@
     "premise_test": "tests/test_jail.py::test_main_claude_is_warned"
   },
   "jail.R_NAMESPACED_MAIN": {
-    "failure": "0106: a namespaced agent claims the operator's role and gets the operator's asks instead of an agent's denies",
+    "failure": "0106: a namespaced agent claims the operator's role and is warned in context like the operator instead of getting an agent's denies",
     "premise_test": "tests/test_jail.py::test_namespaced_main_reason"
   },
   "jail.R_PIPE": {
@@ -208,7 +208,7 @@
     "premise_test": "tests/test_checks_workspace_integrity.py::test_workspace_integrity_judges_the_hook_alone"
   },
   "jail.R_SUBAGENT_MAIN": {
-    "failure": "0106: a subagent claims to be main and gets the operator's asks instead of an agent's denies",
+    "failure": "0106: a subagent claims to be main and is warned in context like the operator instead of getting an agent's denies",
     "premise_test": "tests/test_jail.py::TestFinalSubagentAsMain::test_agent_id_without_type_blocks"
   },
   "jail.R_CONDUCTOR_REPO": {
