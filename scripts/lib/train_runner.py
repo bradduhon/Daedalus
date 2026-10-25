@@ -1422,10 +1422,13 @@ def _bindings(repo: Path, train_id: str) -> Bound:
 
 
 def _done(name: str, latest: dict[str, dict[str, object]], bound: Bound) -> bool:
-    # 0086: a unit the runner never dispatched is done once its coder moved on to another unit.
+    # spec 4: a merged unit is done whatever its dispatch says; 0086: so is a retired one.
+    record = bound.get(name, {})
+    if record.get("finished") is True:
+        return True
     if name in latest:
         return _text(latest[name], "status") == RETURNED
-    return bool(bound.get(name, {}).get("retired_to"))
+    return bool(record.get("retired_to"))
 
 
 def _unit_status(
@@ -1438,11 +1441,11 @@ def _unit_status(
     name = _text(unit, "name")
     dispatch = latest.get(name)
     status = _text(dispatch, "status") if dispatch else ""
+    if _done(name, latest, bound):
+        return "done"
     if dispatch is None and name in bound:
         # spec 6: a hand-driven recipe leaves no runner dispatch; the bindings file holds the unit.
-        return "done" if _done(name, latest, bound) else f"running ({BOUND_AGENT})"
-    if status == RETURNED:
-        return "done"
+        return f"running ({BOUND_AGENT})"
     if status == DISPATCHED and dispatch is not None:
         return f"running ({_text(dispatch, 'agent')})"
     if status == FAILED and dispatch is not None:
@@ -1485,9 +1488,8 @@ def progress(cwd: Path) -> Outcome:
         bound = _bindings(repo, train_id)
     except train_state.TrainStateError:
         return Outcome(EXIT_STOP, [BINDINGS_UNREADABLE])
-    # pin C4 -> C7: the audit worktree is a train unit, never a line of the progress note.
-    audit_unit = f"{train_id}-audit"
-    units = [u for u in train_state.units(state) if _text(u, "name") != audit_unit]
+    # pin C4 -> C7, issue 71: the audit worktree is a train unit, never a line of the note.
+    units = [u for u in train_state.units(state) if not train_state.is_audit_unit(u)]
     labels: dict[str, str] = {}
     for unit in units:
         key = _unit_key(state, unit)

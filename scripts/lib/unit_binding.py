@@ -138,7 +138,7 @@ def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | Non
 
 
 def mark_finished(repo: Path, train_id: str, unit: str) -> str | None:
-    # 0121: the smallest finished mark the merge subcommand needs; D2 extends it.
+    # spec 4, 0121: finish and merge mark each merged unit; claim refuses it, progress reads done.
     try:
         with _locked(repo, train_id) as path:
             units = _read(path)

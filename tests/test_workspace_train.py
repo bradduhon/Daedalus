@@ -516,8 +516,11 @@ def test_stop_remove_failure_exits_one_with_the_manual_command(
     monkeypatch.setattr(workspace, "remove", _fail)
     lines, ok = stop(repo, "operator", "ignored")
     assert not ok
+    # issue 24: the Next line names the unlock before the remove.
     assert lines[-1] == (
-        f"Next: run git worktree remove --force {unit} and git worktree prune from your own shell"
+        f"Next: run git -C {repo} worktree unlock {unit} if it is locked, then "
+        f"git -C {repo} worktree remove --force {unit} and git -C {repo} worktree prune "
+        "from your own shell"
     )
     assert not train_marker(repo).exists()
 
@@ -734,6 +737,7 @@ def test_refresh_creates_the_audit_branch_when_absent(repo: Path) -> None:
         "branch": f"daedalus-unit/{train}-audit",
         "path": str(audit),
         "base": f"daedalus/{train}",
+        "audit": True,
     }
 
 
@@ -1332,3 +1336,137 @@ def test_merge_refuses_a_handback_that_answered_another_unit(repo: Path) -> None
     _verifier_handback(repo, VERIFIED_REPLY)
     _null_stop(repo)
     _refused(repo, ["U1"], "no recorded verifier verdict")
+
+
+# spec 4: the audit unit flag, the finished mark, the early-stop branch drop and the unlock.
+def _recorded(repo: Path, train: str, name: str) -> dict[str, Any]:
+    found = [u for u in train_state.units(train_state.load(repo, train)) if u["name"] == name]
+    assert len(found) == 1, found
+    return found[0]
+
+
+def test_create_flags_the_audit_unit_and_no_coder_unit(repo: Path) -> None:
+    train = _locked_train(repo)
+    _unit(repo, train, "u1")
+    create(repo, workspace.audit_unit(train), f"daedalus/{train}")
+    assert "audit" not in _recorded(repo, train, f"{train}-u1")
+    assert _recorded(repo, train, f"{train}-audit")["audit"] is True
+
+
+def test_refresh_flags_an_audit_unit_recorded_before_the_flag(repo: Path) -> None:
+    # spec 4: a live train's audit unit, recorded without the flag, gains it on the re-add.
+    train, audit = _audited(repo)
+    workspace.remove(repo, f"{train}-audit")
+
+    def strip(state: dict[str, object]) -> None:
+        state["units"] = [
+            {k: v for k, v in u.items() if k != "audit"} for u in train_state.units(state)
+        ]
+
+    train_state.change(repo, train, strip)
+    assert train_state.is_audit_unit(_recorded(repo, train, f"{train}-audit"))
+    assert workspace.refresh(repo, f"{train}-audit") == audit
+    assert _recorded(repo, train, f"{train}-audit")["audit"] is True
+
+
+def test_finish_skips_a_flagged_audit_unit_by_its_flag(repo: Path) -> None:
+    train = _locked_train(repo)
+    _built(repo, train, "u1")
+    probe = _built(repo, train, "probe", "probe.txt")
+    train_state.mark_audit(repo, train, f"{train}-probe")
+    lines = finish(repo)
+    assert lines[0] == f"merged 1 units into daedalus/{train}"
+    assert not (repo / "probe.txt").exists() and not probe.exists()
+    assert f"{train}-probe" not in _bindings(repo, train)
+
+
+def test_finish_marks_every_merged_unit_finished(repo: Path) -> None:
+    train = _locked_train(repo)
+    _built(repo, train, "u1")
+    _built(repo, train, "u2")
+    create(repo, workspace.audit_unit(train), f"daedalus/{train}")
+    finish(repo)
+    bound = _bindings(repo, train)
+    assert bound[f"{train}-u1"]["finished"] is True and bound[f"{train}-u2"]["finished"] is True
+    assert f"{train}-audit" not in bound
+
+
+def _branch_exists(root: Path, branch: str) -> bool:
+    return _git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}").returncode == 0
+
+
+def test_an_early_stop_deletes_an_empty_repo_branch_and_keeps_a_charter_commit(
+    repo: Path, charter: Path
+) -> None:
+    # issue 23: the Charter holds the contract commit, so only the repo branch is empty.
+    train = _train(repo)
+    lock(repo, str(_contract(charter, "specs/api.md")), 1)
+    lines, ok = stop(repo, "operator", None)
+    assert ok, lines
+    assert f"deleted the empty branch daedalus/{train} in {repo}" in lines
+    assert not _branch_exists(repo, f"daedalus/{train}") and _head(repo) == "main"
+    assert _branch_exists(charter, f"daedalus/{train}") and _head(charter) == "main"
+
+
+def test_an_early_stop_deletes_an_empty_charter_branch_and_keeps_a_repo_commit(
+    repo: Path, charter: Path
+) -> None:
+    train = _locked_train(repo)
+    lines, ok = stop(repo, "operator", None)
+    assert ok, lines
+    assert f"deleted the empty branch daedalus/{train} in {charter}" in lines
+    assert not _branch_exists(charter, f"daedalus/{train}") and _head(charter) == "main"
+    assert _branch_exists(repo, f"daedalus/{train}") and _head(repo) == "main"
+
+
+def test_a_stop_before_the_lock_deletes_the_empty_charter_branch(repo: Path, charter: Path) -> None:
+    train = _train(repo)
+    lines, ok = stop(repo, "operator", None)
+    assert ok, lines
+    assert not _branch_exists(charter, f"daedalus/{train}")
+    assert not _branch_exists(repo, f"daedalus/{train}")
+
+
+def test_a_stop_after_phase_two_keeps_an_empty_branch(repo: Path, charter: Path) -> None:
+    # issue 23: a recorded unit means Phase 2 began, so the integration branch stays.
+    train = _train(repo)
+    lock(repo, str(_contract(charter, "specs/api.md")), 1)
+    _unit(repo, train, "u1")
+    lines, ok = stop(repo, "operator", None)
+    assert ok, lines
+    assert _branch_exists(repo, f"daedalus/{train}") and _head(repo) == "main"
+    assert not any(line.startswith("deleted the empty branch") for line in lines)
+
+
+def test_resume_recreates_a_branch_an_early_stop_deleted(repo: Path, charter: Path) -> None:
+    train = _train(repo)
+    lock(repo, str(_contract(charter, "specs/api.md")), 1)
+    lock_sha = str(train_state.load(repo, train)["lock_sha"])
+    stop(repo, "operator", None)
+    lines = resume(repo)
+    assert f"switched {repo} to daedalus/{train}" in lines
+    assert _head(repo) == f"daedalus/{train}" and _tip(repo) == lock_sha
+    assert _head(charter) == f"daedalus/{train}"
+
+
+def test_a_stop_unlocks_a_locked_unit_worktree_before_removing_it(repo: Path) -> None:
+    # issue 24: a single --force leaves a locked worktree, so teardown unlocks it first.
+    train = _locked_train(repo)
+    unit = _unit(repo, train, "u1")
+    _ok(repo, "worktree", "lock", "--reason", "killed add", str(unit))
+    lines, ok = stop(repo, "operator", None)
+    assert ok, lines
+    assert not unit.exists() and f"removed {unit}" in lines
+    listing = _ok(repo, "worktree", "list", "--porcelain")
+    assert str(unit) not in listing
+
+
+def test_remove_leaves_an_unlocked_worktree_path_alone_when_another_is_locked(
+    repo: Path,
+) -> None:
+    train = _locked_train(repo)
+    u1, u2 = _unit(repo, train, "u1"), _unit(repo, train, "u2")
+    _ok(repo, "worktree", "lock", str(u2))
+    workspace.remove(repo, f"{train}-u1")
+    assert not u1.exists() and u2.is_dir()
+    assert "locked" in _ok(repo, "worktree", "list", "--porcelain")

@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lib import hook_io, jail, shell, train_state  # noqa: E402
 from lib.audit import project_root  # noqa: E402
-from lib.workspace import WORKTREES_DIR, worktree_path  # noqa: E402
+from lib.workspace import WORKTREES_DIR, audit_unit, worktree_path  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset({"Bash"})
 RUNNERS = frozenset({"audit", "unit"})
@@ -32,6 +32,12 @@ R_TEST_RUN = (
 R_TEST_RUN_NO_TRAIN = (
     "the {runner} test run needs an active train in this repository, and none is marked (0109). "
     "Next: run tests only inside a train's audit or verify step."
+)
+
+R_TEST_RUN_AUDIT = (
+    "the unit test run never reads the audit worktree {tree}; it holds the auditor's tests, "
+    "not a coder's unit (spec 4). Next: run the tests under the unit worktree you verify, "
+    "one absolute path per test file."
 )
 
 
@@ -70,13 +76,35 @@ def _bounds(runner: str, cwd: str) -> list[Bound] | None:
         tree = str(worktree_path(repo, f"{train}-audit"))
         scratch = str(repo / "docs" / ".tmp" / "daedalus" / train / "audit")
         return [Bound((scratch, f"{tree}/tests/adversarial"), tree)]
+    home = str(repo / WORKTREES_DIR)
+    # spec 4: the audit worktree is a recorded unit, never a unit test run's bound.
+    paths = [
+        str(u.get("path") or "") for u in _units(repo, train) if not train_state.is_audit_unit(u)
+    ]
+    return [Bound((p,), p) for p in paths if os.path.isabs(p) and shell._under(p, home)]
+
+
+def _units(repo: Path, train: str) -> list[dict[str, object]]:
     try:
-        units = train_state.units(train_state.load(repo, train))
+        return train_state.units(train_state.load(repo, train))
     except train_state.TrainStateError:
         return []
-    home = str(repo / WORKTREES_DIR)
-    paths = [str(unit.get("path") or "") for unit in units]
-    return [Bound((p,), p) for p in paths if os.path.isabs(p) and shell._under(p, home)]
+
+
+def _audit_tree(tokens: list[str], cwd: str) -> str | None:
+    # spec 4: the audit worktree a unit test run names, by its flag or its <train-id>-audit name.
+    repo = project_root(cwd)
+    train = train_state.active_train(repo)
+    if train is None:
+        return None
+    trees = {str(worktree_path(repo, audit_unit(train)))}
+    trees |= {str(u.get("path") or "") for u in _units(repo, train) if train_state.is_audit_unit(u)}
+    for arg in _pytest_args(tokens) or []:
+        file = arg.split("::", 1)[0]
+        for tree in sorted(t for t in trees if os.path.isabs(t)):
+            if os.path.isabs(file) and shell._under(file, tree):
+                return tree
+    return None
 
 
 def _path_ok(arg: str, roots: tuple[str, ...]) -> bool:
@@ -121,6 +149,9 @@ def _test_run_reason(tokens: list[str], runner: str, cwd: str) -> str | None:
     bounds = _bounds(runner, cwd)
     if bounds is None:
         return R_TEST_RUN_NO_TRAIN.format(runner=runner)
+    tree = _audit_tree(tokens, cwd) if runner == "unit" else None
+    if tree is not None:
+        return R_TEST_RUN_AUDIT.format(tree=tree)
     if any(_test_run_ok(tokens, bound) for bound in bounds):
         return None
     if runner == "audit" and bounds:

@@ -1,0 +1,10 @@
+{
+  "dispatch_binding.R_AUDIT_UNIT": {
+    "failure": "spec 4: a repo-coder is dispatched or resumed onto the audit worktree, so a coder writes into the worktree that holds the auditor's tests and the audit judges code the coder planted there",
+    "premise_test": "tests/test_dispatch_binding.py::test_a_coder_dispatch_naming_the_audit_worktree_is_refused"
+  },
+  "read_only_bash.R_TEST_RUN_AUDIT": {
+    "failure": "spec 4: the verifier's unit test run reaches the audit worktree, which the train records as a unit, so it runs the auditor's tests as if they were a coder's unit tests",
+    "premise_test": "tests/test_checks_read_only_bash.py::test_unit_test_run_on_the_audit_worktree_is_refused"
+  }
+}

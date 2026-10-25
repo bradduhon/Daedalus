@@ -393,3 +393,49 @@ def test_basetemp_is_refused_by_name_for_every_agent(
 
 def read_only_bash() -> Any:
     return load(HOOK)
+
+
+def _audit_units(repo: Path, flagged: bool) -> tuple[str, str]:
+    from lib import train_state
+
+    unit = f"{repo}/.claude/worktrees/{TRAIN}-u1"
+    _, tree = _places(repo)
+    audit: dict[str, object] = {"name": f"{TRAIN}-audit", "branch": "b", "path": tree}
+    if flagged:
+        audit["audit"] = True
+    units = [{"name": f"{TRAIN}-u1", "branch": f"daedalus-unit/{TRAIN}-u1", "path": unit}, audit]
+    train_state.save(repo, TRAIN, {"train_id": TRAIN, "units": units})
+    return unit, tree
+
+
+@pytest.mark.parametrize("flagged", [True, False])
+def test_unit_test_run_on_the_audit_worktree_is_refused(tmp_path: Path, flagged: bool) -> None:
+    # spec 4: the audit worktree is a recorded unit, flagged or (before D2) named, never a bound.
+    repo = _train_repo(tmp_path)
+    unit, tree = _audit_units(repo, flagged)
+    want = read_only_bash().R_TEST_RUN_AUDIT.format(tree=tree)
+    for command in (
+        f"python3 -m pytest {tree}/tests -q",
+        f"python3 -m pytest {tree}/tests/adversarial/test_x.py::test_y -q --rootdir {tree}",
+        f"python3 -m pytest {unit}/tests -q --rootdir {tree}",
+    ):
+        assert evaluate(HOOK, _rb(repo, "verifier", command), *UNIT) == want, command
+        assert not decide(_rb(repo, "verifier", command), CFG).allow, command
+    assert "Next: run the tests under the unit worktree you verify" in want
+
+
+def test_unit_test_run_admits_a_coder_worktree_beside_the_audit_unit(tmp_path: Path) -> None:
+    # spec 4: excluding the audit worktree leaves every coder unit worktree admitted.
+    repo = _train_repo(tmp_path)
+    unit, _ = _audit_units(repo, flagged=True)
+    command = f"python3 -m pytest {unit}/tests -q -p no:cacheprovider --rootdir {unit}"
+    assert evaluate(HOOK, _rb(repo, "verifier", command), *UNIT) is None
+    assert decide(_rb(repo, "verifier", command), CFG).allow
+
+
+def test_audit_test_run_still_reads_the_audit_worktree_corpus(tmp_path: Path) -> None:
+    # spec 4: the unit refusal leaves the auditor's --test-runner audit form unchanged.
+    repo = _train_repo(tmp_path)
+    _, tree = _audit_units(repo, flagged=True)
+    command = f"python3 -m pytest {tree}/tests/adversarial -q --rootdir {tree}"
+    assert evaluate(HOOK, _rb(repo, "security-auditor", command), *AUDIT) is None
