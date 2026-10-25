@@ -36,6 +36,9 @@ GH_TIMEOUT_S = 10
 TYPECHECK_TIMEOUT_S = 120
 GH_STUCK_NEXT = "run gh auth status from your own shell, then gh auth login if it asks"
 GH_OFF = ", and features.github is off in service-manifest.json"
+CLAUDE_TIMEOUT_S = 10
+# 0122: code.claude.com/docs/en/hooks, Command hook fields: onFailure needs v2.1.295 or later.
+ON_FAILURE_MIN = (2, 1, 295)
 NO_LEDGER = "OK   ledger: none found (the Build Train asks before creating docs/decisions.md)"
 PROJECT_DATA_NEXT = "write a single line * to {marker}"
 IGNORE_NEXT = (
@@ -192,6 +195,36 @@ def _gh_checks(repo: Path) -> Iterator[tuple[bool, str]]:
     yield report(
         code == 0, "gh authenticated", f"gh auth status exited {code}{off}", "run gh auth login"
     )
+
+
+def _hook_failure_check() -> Iterator[tuple[bool, str]]:
+    # U2 -> D9: no line when claude is missing, fails, times out or prints no n.n.n version.
+    claude = shutil.which("claude")
+    if claude is None:
+        return
+    try:
+        done = subprocess.run(
+            [claude, "--version"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=CLAUDE_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return
+    found = _BARE_VERSION.search(done.stdout)
+    if done.returncode != 0 or found is None:
+        return
+    if tuple(int(part) for part in found.groups()) < ON_FAILURE_MIN:
+        least = ".".join(str(part) for part in ON_FAILURE_MIN)
+        yield (
+            True,
+            (
+                f"OPT  hook failure mode: Claude Code {found.group(0)} ignores onFailure; "
+                f"{least} or later (the documented minimum) blocks a timed-out hook"
+            ),
+        )
 
 
 def _trust_error(repo: Path) -> DataDirError | None:
@@ -482,6 +515,7 @@ def checks(repo: Path) -> Iterator[tuple[bool, str]]:
     yield from _framework_lines()
     yield _gitleaks_check(repo)
     yield from _gh_checks(repo)
+    yield from _hook_failure_check()
     yield from _repo_checks(repo, is_repo)
 
 

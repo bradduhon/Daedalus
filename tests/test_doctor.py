@@ -982,6 +982,63 @@ def test_no_version_tag_line_without_a_bare_version(
     assert _tag_lines(git_repo, tmp_path) == []
 
 
+def _hook_lines(fake_claude: Path, tmp_path: Path, script: str) -> list[str]:
+    # U2 -> D9: the fake claude prints what script says; PATH holds only the test's bin folder.
+    fake_claude.write_text(f"#!/bin/sh\n{script}\n", encoding="utf-8")
+    bins = _bins(tmp_path)
+    assert (Path(bins) / "claude").exists()
+    lines = _run(None, tmp_path, path_env=bins, home=tmp_path / "home").stdout.splitlines()
+    return [line for line in lines if "hook failure mode" in line]
+
+
+def test_old_claude_code_gets_the_hook_failure_line(fake_claude: Path, tmp_path: Path) -> None:
+    assert _hook_lines(fake_claude, tmp_path, "echo '2.1.280 (Claude Code)'") == [
+        "OPT  hook failure mode: Claude Code 2.1.280 ignores onFailure; "
+        "2.1.295 or later (the documented minimum) blocks a timed-out hook"
+    ]
+
+
+@pytest.mark.parametrize("printed", ["2.1.295 (Claude Code)", "2.2.0", "3.0.1 (Claude Code)"])
+def test_current_claude_code_gets_no_hook_failure_line(
+    fake_claude: Path, tmp_path: Path, printed: str
+) -> None:
+    assert _hook_lines(fake_claude, tmp_path, f"echo '{printed}'") == []
+
+
+@pytest.mark.parametrize(
+    "script", ["echo 'Claude Code'", "echo ''", "echo '2.1.280'; exit 3", "exit 1"]
+)
+def test_unreadable_claude_version_skips_the_line(
+    fake_claude: Path, tmp_path: Path, script: str
+) -> None:
+    assert _hook_lines(fake_claude, tmp_path, script) == []
+
+
+def test_no_claude_on_path_skips_the_line(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
+    assert not any("hook failure mode" in line for line in lines)
+
+
+def test_claude_version_timeout_skips_the_line(
+    monkeypatch: pytest.MonkeyPatch, fake_claude: Path
+) -> None:
+    import daedalus_doctor
+
+    seen: dict[str, object] = {}
+
+    def hang(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen.update(kwargs, argv=cmd)
+        raise subprocess.TimeoutExpired(cmd, daedalus_doctor.CLAUDE_TIMEOUT_S)
+
+    monkeypatch.setattr(daedalus_doctor.subprocess, "run", hang)
+    assert list(daedalus_doctor._hook_failure_check()) == []
+    argv = seen["argv"]
+    assert isinstance(argv, list) and argv[1:] == ["--version"]
+    assert Path(argv[0]).name == "claude" and seen["timeout"] == daedalus_doctor.CLAUDE_TIMEOUT_S
+    assert seen["stdin"] is subprocess.DEVNULL and "shell" not in seen
+
+
 def test_no_version_tag_line_outside_a_repository(tmp_path: Path) -> None:
     folder = tmp_path / "plain"
     folder.mkdir()
