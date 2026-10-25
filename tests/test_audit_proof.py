@@ -32,6 +32,7 @@ NEEDLE = "daedalus_workspace.py begin"
 TRAIN = "20261016-120000"
 MARKED = "20261017-120000"
 AUDITOR = "daedalus:security-auditor"
+BOTH_REFUSAL = "auditor reply at seq 1 carries both verdicts. Next: rerun the audit round."
 
 
 @pytest.fixture
@@ -304,7 +305,18 @@ def test_approved_reads_the_tail_of_a_long_reply(
 def test_approved_refuses_any_rejected_line(
     project_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
+    # spec 3.6, pin D3 -> D1: the stop's verdict_lines carry both kinds, the narrower refusal.
     _train(hook_input, repo_cwd, "[VERDICT: REJECTED] a.py:1 high\nnotes\n[VERDICT: APPROVED]")
+    assert BOTH_REFUSAL in _refused(repo_cwd)
+
+
+def test_approved_refuses_a_reply_with_only_a_rejected_line(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # 41, spec 3.6: one verdict kind, REJECTED, keeps the rejected-line refusal.
+    _train(hook_input, repo_cwd, "[VERDICT: REJECTED] a.py:1 high\nnotes\n[VERDICT: REJECTED]")
+    (stop,) = [r for r in read_chain(audit.log_path("sess-test", str(repo_cwd))) if r["seq"] == 1]
+    assert stop["verdict_lines"] == ["[VERDICT: REJECTED] a.py:1 high", "[VERDICT: REJECTED]"]
     assert "carries a [VERDICT: REJECTED] line" in _refused(repo_cwd)
 
 
@@ -317,7 +329,7 @@ def test_approved_refuses_a_rejected_line_in_the_tail(
         repo_cwd,
         "[VERDICT: APPROVED]\n" + "x" * 3000 + "\n[VERDICT: REJECTED] a.py:1 high\nend",
     )
-    assert "carries a [VERDICT: REJECTED] line" in _refused(repo_cwd)
+    assert BOTH_REFUSAL in _refused(repo_cwd)
 
 
 def _hand_chain(repo_cwd: Path, stop: dict[str, object]) -> None:
