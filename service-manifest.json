@@ -11,7 +11,7 @@
     "lint_cmd": ".venv/bin/ruff check scripts tests",
     "build_cmd": null
   },
-  "features": { "secrets_scan": true },
+  "features": { "secrets_scan": true, "github": true },
   "entrypoints": {
     "scripts": "scripts/",
     "lib": "scripts/lib/",
