@@ -20,11 +20,11 @@ FLAGS: dict[str, hook_io.Flag] = {"--allow": hook_io.Flag(values=NAMES, many=Tru
 PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
 _SCRIPTS = os.path.realpath(Path(__file__).resolve().parents[1])
 # 0060, 0119: the train class, script to its admitted first arguments; stop, resume, reaudit
-# and the operator's exception record stay with the main session.
+# and the operator's exception record stay with the main session. W3.2: summary is the recipe's.
 TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
     "daedalus_train.py": frozenset(
         {"progress", "choice", "plan", "verdict", "state", "step", "check-reply", "model"}
-        | {"ledger"}
+        | {"ledger", "summary"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir"}),

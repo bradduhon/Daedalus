@@ -174,8 +174,8 @@ def test_root_writes_scratch_class_follows_the_train(tmp_path: Path) -> None:
     assert evaluate(HOOK, other, "--touch", "scratch") is not None
 
 
-def test_root_writes_scratch_class_admits_the_trains_one_summary_file(tmp_path: Path) -> None:
-    # 0060: the summary sits beside the train's folder; only the active train's file passes.
+def test_root_writes_scratch_class_refuses_the_trains_summary_file(tmp_path: Path) -> None:
+    # W3.2: the summary command writes the summary; the scratch class admits only the folder.
     repo = _git_init(tmp_path / "repo")
     scratch = f"{repo}/docs/.tmp/daedalus"
 
@@ -185,8 +185,9 @@ def test_root_writes_scratch_class_admits_the_trains_one_summary_file(tmp_path: 
     summary = f"{scratch}/20261017-120000-summary.md"
     (repo / ".claude" / "daedalus").mkdir(parents=True)
     write_train_marker(repo)
-    assert judged(summary) is None
+    assert judged(f"{scratch}/20261017-120000/summary-notes.md") is None
     for path in (
+        summary,
         f"{scratch}/20261017-999999-summary.md",
         f"{scratch}/20261017-120000-charter-pr.md",
         f"{scratch}/other.md",

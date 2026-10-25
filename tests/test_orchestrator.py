@@ -210,13 +210,14 @@ def test_resume_target_field_is_not_scanned(repo_cwd: Path, units: tuple[Path, P
     assert "u2" not in _bindings(repo_cwd)
 
 
-def test_orchestrator_writes_only_its_scratch_folder_and_summary(
+def test_orchestrator_writes_only_its_scratch_folder(
     repo_cwd: Path, units: tuple[Path, Path]
 ) -> None:
-    # 0060: the summary and the train folder pass; the rest of docs/ and the ledger do not.
+    # 0060, W3.2: the train folder passes; the summary, the rest of docs/ and the ledger do not.
     scratch = repo_cwd / "docs" / ".tmp" / "daedalus"
-    allowed = [scratch / TRAIN / "briefs" / "u1.md", scratch / f"{TRAIN}-summary.md"]
+    allowed = [scratch / TRAIN / "briefs" / "u1.md", scratch / TRAIN / "summary-notes.md"]
     refused = [
+        scratch / f"{TRAIN}-summary.md",
         repo_cwd / "docs" / "howto" / "README.md",
         repo_cwd / "docs" / "private" / "specs" / "x.md",
         repo_cwd / "docs" / "decisions.md",

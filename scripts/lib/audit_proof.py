@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -30,11 +31,14 @@ VERDICT_LINES = "verdict_lines"
 _VERDICT_TAG = "[VERDICT:"
 _VERDICT_KIND = re.compile(r"\[VERDICT:\s*([A-Za-z_]+)\s*\]")
 VERDICT_BOTH = "both verdicts"
-_SUMMARY_NAME = re.compile(r"[0-9]{8}-[0-9]{6}-summary\.md")
-# pin D1 -> D5: the proof refusals for the recorded verdict seq and a reply with both verdicts.
+# W3.2: the summary command the proof anchors on; a refused call never anchors.
+SUMMARY_SCRIPT, SUMMARY_ACTION = "daedalus_train.py", "summary"
+_REFUSED = ("block", "ask")
+_PYTHONS = ("python3", "python")
+# pin D1 -> E4: the D1 refusal texts; only their Next: action names the summary command.
 R_NO_SUMMARY_WRITE = (
     "no summary Write after the recorded verdict at seq {seq}. "
-    "Next: rewrite the summary with the Write tool, then rerun the proof."
+    "Next: rewrite the summary with daedalus_train.py summary --repo <repo>, then rerun the proof."
 )
 R_GRADED_NOT_RECORDED = (
     "the graded auditor turn at seq {graded} is not the recorded verdict at seq {recorded}. "
@@ -157,12 +161,6 @@ def _summary_session(repo: Path, train_id: str) -> str:
     if match is None:
         raise _not_approved(f"{summary.name} has no Session <id>: line")
     return match.group(1)
-
-
-def _file_name(record: Mapping[str, object]) -> str:
-    tool_input = record.get("tool_input")
-    raw = tool_input.get("file_path") if isinstance(tool_input, dict) else None
-    return Path(raw).name if isinstance(raw, str) else ""
 
 
 def handback_message(record: Mapping[str, object]) -> object:
@@ -367,13 +365,31 @@ def _judged(repo: Path, train_id: str, state: dict[str, object], named: str | No
     return named
 
 
-def _summary_write(record: Mapping[str, object]) -> bool:
-    return record.get("tool_name") == "Write" and bool(_SUMMARY_NAME.fullmatch(_file_name(record)))
+def summary_command(record: Mapping[str, object]) -> bool:
+    # W3.2: one plain `python3 <path>/daedalus_train.py summary ...` call, allowed by the jail.
+    if record.get("event") != "PreToolUse" or record.get("tool_name") != "Bash":
+        return False
+    if record.get("decision") in _REFUSED:
+        return False
+    tool_input = record.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(command, str):
+        return False
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return False
+    return (
+        len(argv) >= 3
+        and Path(argv[0]).name in _PYTHONS
+        and Path(argv[1]).name == SUMMARY_SCRIPT
+        and argv[2] == SUMMARY_ACTION
+    )
 
 
 def summary_anchor(records: Sequence[Mapping[str, object]], verdict_seq: int) -> int | None:
-    # pin D1 -> E4: the seq of the first summary Write after the recorded verdict seq.
-    return next((_seq(r) for r in records if _seq(r) > verdict_seq and _summary_write(r)), None)
+    # pin D1 -> E4: the seq of the first summary command record after the recorded verdict seq.
+    return next((_seq(r) for r in records if _seq(r) > verdict_seq and summary_command(r)), None)
 
 
 def _recorded_seq(train_id: str, state: dict[str, object]) -> int:
@@ -407,16 +423,14 @@ def approved(repo: Path, train_id: str) -> str:
         )
     records = read_chain(log)
     recorded = _recorded_seq(train_id, state)
-    name = f"{train_id}-summary.md"
-    # 73: another train's summary Write in this log never anchors this train's proof.
-    own = [r for r in records if not (_summary_write(r) and _file_name(r) != name)]
-    anchor = summary_anchor(own, recorded)
+    # W3.2: a Write of the summary file never anchors; only the summary command's record does.
+    anchor = summary_anchor(records, recorded)
     if anchor is None:
         raise ProofError(f"NOT APPROVED: {R_NO_SUMMARY_WRITE.format(seq=recorded)}")
-    # 73: the graded turn is the last auditor turn before that Write, and it is the recorded one.
+    # 73: the graded turn is the last auditor turn before that command, and it is the recorded one.
     turn = auditor_round([r for r in records if _seq(r) < anchor], start)
     if not turn:
-        raise _not_approved(f"no {AUDITOR} reply after seq {start} before the summary Write")
+        raise _not_approved(f"no {AUDITOR} reply after seq {start} before the summary command")
     refusal = _verdict_refusal(turn)
     if refusal is not None:
         raise _not_approved(refusal)
