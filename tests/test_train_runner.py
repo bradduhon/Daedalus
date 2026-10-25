@@ -1777,6 +1777,17 @@ def test_summary_writes_the_file_from_state_after_its_own_bash_record(
     assert f"Ledger ids: 0127-DAE-PLT in commit {'c' * 40}." in _summary_file(repo).read_text()
 
 
+def test_summary_withholds_a_log_path_and_still_writes(repo: Path, plugin: Path) -> None:
+    # W3.2: an audit log record cannot be edited, so its refused path prints as the marker.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    _agent_stop(repo, "repo-coder", "[STATUS: YIELD_WEB] fields at https://x.io/docs/hooks")
+    _record(repo, tool_input={"command": _summary_cmd(repo)})
+    assert train_runner.summary(repo).code == 0
+    text = _summary_file(repo).read_text(encoding="utf-8")
+    assert "YIELD_WEB fields at \\[path withheld\\]" in text and "x.io" not in text
+
+
 def test_summary_reads_the_notes_file_and_refuses_a_bad_one(repo: Path, plugin: Path) -> None:
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)

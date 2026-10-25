@@ -350,15 +350,12 @@ def test_public_refuses_every_path_outside_the_allow_list(token: str) -> None:
 
 
 @pytest.mark.parametrize("token", REFUSED_PATHS.values(), ids=REFUSED_PATHS.keys())
-def test_a_compliance_reply_or_notes_row_with_such_a_path_writes_nothing(
-    tmp_path: Path, token: str
-) -> None:
-    # W3.2: the refusal names the source record or notes row and the token, with one Next line.
+def test_a_reply_path_is_withheld_and_a_notes_path_refuses(tmp_path: Path, token: str) -> None:
+    # W3.2: log text, which nobody can edit, prints the marker; a notes row stops the command.
     hostile = _stop(10, "cis-specialist", f"[STATUS: COMPLIANCE] AU-9 PASS at {token}", "k1")
-    with pytest.raises(SummaryError) as reply:
-        _text(tmp_path, records=[*RECORDS, hostile])
-    assert str(reply.value).startswith("the cis-specialist reply at seq 10 of session sess-a")
-    assert "an audit log record is never edited" in str(reply.value)
+    text = _text(tmp_path, records=[*RECORDS, hostile])
+    assert _section(text, "Compliance")[1] == "- cis-specialist: AU-9 PASS at \\[path withheld\\]"
+    assert _path_tokens(text) == []
     notes = parse_notes(NOTES.replace("## Blocks", f"A ruling: see {token}\n## Blocks"), "n")
     with pytest.raises(SummaryError) as row:
         _text(tmp_path, notes=notes)
@@ -366,6 +363,42 @@ def test_a_compliance_reply_or_notes_row_with_such_a_path_writes_nothing(
     assert str(row.value).endswith(
         "Next: remove that path from summary-notes.md, then rerun summary."
     )
+
+
+GLUED = {
+    "digits before a colon": "12:/srv/u/x",
+    "shell variable": "$HOME/.ssh/x",
+    "dash prefix": "-/etc/x",
+    "at prefix": "a@/srv/x",
+    "tilde inside": "docs/~/x",
+    "doubled slash inside": "docs//srv/u/x",
+}
+
+
+@pytest.mark.parametrize("token", GLUED.values(), ids=GLUED.keys())
+def test_a_glued_tilde_or_doubled_slash_path_is_withheld_or_refused(token: str) -> None:
+    assert public(f"at {token} now", REPO, CHARTER, "w", withhold=True) == (
+        "at [path withheld] now"
+    )
+    with pytest.raises(SummaryError, match=re.escape(repr(token))):
+        public(f"at {token} now", REPO, CHARTER, "the Task line of summary-notes.md")
+
+
+def test_this_trains_live_record_shapes_render_with_the_marker(tmp_path: Path) -> None:
+    # W3.2: the three audit records of train 20261021-014310 that once stopped its summary.
+    web = _stop(
+        11, "repo-coder", "[STATUS: YIELD_WEB] hook fields at https://x.io/docs/hooks", "c3"
+    )
+    placeholder = COMPLETE.replace("tests=pytest 10 passed", "tests=rw=<wt>/x,/dev/null passed")
+    done = _handback(12, "repo-coder", placeholder, "c1")
+    regex = _stop(13, "repo-coder", "[STATUS: YIELD_CONTRACT] reads `\\[VERDICT:` lines?", "c2")
+    text = _text(tmp_path, records=[*RECORDS, web, done, regex])
+    assert _path_tokens(text) == []
+    yields = _section(text, "Yields")
+    assert "YIELD_WEB hook fields at \\[path withheld\\]" in yields[1]
+    assert "YIELD_CONTRACT reads \\`\\[path withheld\\]\\[VERDICT:\\` lines?" in yields[2]
+    tests = "rw=&lt;wt&gt;\\[path withheld\\],\\[path withheld\\] passed"
+    assert tests in _section(text, "Units")[2]
 
 
 def test_public_accepts_plain_paths_under_the_repo_and_the_charter() -> None:

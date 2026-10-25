@@ -41,13 +41,16 @@ NOT_RUN = "not run (no IAM, KMS, mTLS, key custody or infrastructure change)"
 NOTE_FIELDS = ("Task", "Codes", "Migration")
 NOTE_SECTIONS = ("Rulings", "Blocks", "Waived")
 _CODES = re.compile(r"--repo [A-Za-z0-9]{1,16} --type [A-Za-z0-9]{1,16}")
-# W3.2 allow-list: a token is split on whitespace and the marks that can wrap a path; it is
-# path-like when it holds `/`, `\` or a percent-encoded slash, and passes only as a plain
+# W3.2 allow-list: a token is a run between whitespace and the marks that can wrap a path; it
+# is path-like when it holds `/`, `\` or a percent-encoded slash, and passes only as a plain
 # relative path under the repo or the Charter.
-_TOKEN_SPLIT = re.compile(r"[\s\"'`()<>\[\]{},;|=*]+")
+_TOKEN = re.compile(r"[^\s\"'`()<>\[\]{},;|=*]+")
 _PATH_LIKE = re.compile(r"[/\\]|%2f|%5c", re.IGNORECASE)
-_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
+_COMPONENT = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9_.+-]*")
+_NODE = re.compile(r"[A-Za-z0-9_.:-]+")
 _LINE_SUFFIX = re.compile(r"(?::[0-9]+)+$")
+# W3.2: the one marker a refused path from the audit log or train state prints as.
+WITHHELD = "[path withheld]"
 _TRAILING = ".,:;!?"
 _MD_ESCAPED = re.compile(r"\\(.)")
 _COMPLETE = re.compile(
@@ -168,12 +171,15 @@ def _under(path: Path, root: Path) -> bool:
 
 
 def plain_path(token: str, repo: Path, charter: Path | None) -> bool:
-    # W3.2: no scheme, leading slash, backslash, drive, `~`, `%` or `..`, and resolves inside.
+    # W3.2: every component a plain ASCII name, so no scheme, leading or doubled slash, drive,
+    # backslash, `~`, `%`, `$`, `@`, `..` or glued prefix, and the path resolves inside.
     path = _LINE_SUFFIX.sub("", token.rstrip(_TRAILING))
-    if not path or _SCHEME.match(path) or path[0] in "/~" or "\\" in path or "%" in path:
+    path, _, node = path.partition("::")
+    if node and not _NODE.fullmatch(node):
         return False
+    path = path.removesuffix("/")
     parts = path.split("/")
-    if ".." in parts:
+    if not path or ".." in parts or not all(_COMPONENT.fullmatch(part) for part in parts):
         return False
     if charter is not None and parts[0] == charter.name and _under(charter.parent / path, charter):
         return True
@@ -185,19 +191,34 @@ def _relative(text: str, root: Path, label: str) -> str:
     return re.sub(re.escape(str(root)) + r"(?![\w./-])", label or ".", text)
 
 
-def public(text: str, repo: Path, charter: Path | None, where: str, fix: str = LOG_NEXT) -> str:
-    # W3.2: a public PR body; repo and Charter paths go relative, any other path refuses.
+def public(
+    text: str,
+    repo: Path,
+    charter: Path | None,
+    where: str,
+    fix: str = LOG_NEXT,
+    withhold: bool = False,
+) -> str:
+    # W3.2: a public PR body; repo and Charter paths go relative. Any other path refuses, or,
+    # for text from the audit log or train state, which nobody can edit, becomes the marker.
     if charter is not None:
         text = _relative(text, charter, charter.name)
     text = _relative(text, repo, "")
-    for token in _TOKEN_SPLIT.split(text):
+    kept: list[str] = []
+    start = 0
+    for match in _TOKEN.finditer(text):
+        token = match.group(0)
         # A lone `/` is a prose separator ("pass / fail"), not a path; `//` and longer are paths.
-        if token != "/" and _PATH_LIKE.search(token) and not plain_path(token, repo, charter):
+        if token == "/" or not _PATH_LIKE.search(token) or plain_path(token, repo, charter):
+            continue
+        if not withhold:
             raise SummaryError(
                 f"{where} carries the path {token!r}, which is not a plain relative path under "
                 f"this repository or the Charter, so no summary was written. {fix}"
             )
-    return text
+        kept += [text[start : match.start()], WITHHELD]
+        start = match.end()
+    return "".join([*kept, text[start:]])
 
 
 def _seq(record: Record) -> int:
@@ -253,7 +274,7 @@ def _cell(
 ) -> str:
     from audit_report import md_escape
 
-    return md_escape(public(value, repo, charter, where), limit) or "-"
+    return md_escape(public(value, repo, charter, where, withhold=True), limit) or "-"
 
 
 def _source(reply: Reply, log: SessionLog) -> str:
@@ -399,6 +420,8 @@ def _header(
     else:
         lines.append("Contract: not locked")
     lines.append(_ledger_lines(state, notes))
+    # W3.2: the train state lines above withhold a path; the Task line already passed the check.
+    lines = [public(line, repo, charter, "the train state", withhold=True) for line in lines]
     lines.append(
         f"[POLICY: {'declared, gate not yet shipped' if policy_declared else 'none declared'}]"
     )
@@ -581,7 +604,7 @@ def render(
         lines += [f"Friction: {NO_NOTES}", f"Habit: {NO_NOTES}"]
     lines.append("Recorded blocks per hook:")
     lines += [
-        f"- {md_escape(hook)}, {md_escape(agent)}: {n}"
+        f"- {md_escape(hook)}, {_cell(agent, repo, charter, 'an audit record agent type')}: {n}"
         for (hook, agent), n in sorted(facts.blocks.items())
     ] or ["- none"]
     lines.append("## Audit log")
