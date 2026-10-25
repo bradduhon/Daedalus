@@ -131,3 +131,41 @@ def test_howto_credential_read_claim_names_the_main_session_ask() -> None:
     assert "It refuses every agent's reads of your credential stores" in intro
     assert "when the main session itself reaches for one, it asks you first" in intro
     assert "It refuses reads of your credential stores through file tools" not in intro
+
+
+def _howto() -> str:
+    return (REPO_ROOT / "docs" / "howto" / "README.md").read_text(encoding="utf-8")
+
+
+def test_howto_checklist_force_deletes_the_train_branch_after_the_merge_check() -> None:
+    # issue 19: a squash merge leaves the branch unmerged to git, so -d refuses it.
+    checklist = _howto().split("### Your checklist", 1)[1].split("\n### ", 1)[0]
+    item4 = checklist.split("\n4. ", 1)[1].split("\n5. ", 1)[0]
+    assert item4.index("`gh pr view <url> --json state`") < item4.index(
+        "`git branch -D daedalus/<train-id>`"
+    )
+    assert "from your own shell" in item4
+    assert "deletes its branch with `git branch -D`" in checklist
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    push = readme.split("### Push Train", 1)[1].split("\n### ", 1)[0]
+    assert "`git branch -D daedalus/<train-id>`" in push and "gh pr view <url> --json state" in push
+
+
+def test_howto_explains_the_recovery_round_and_the_ledger_resume() -> None:
+    # 3, 73, spec 6: the recovery paths and the stale agent stop, in the operator's words.
+    text = _howto()
+    section = text.split("\n## Recovering a train\n", 1)[1].split("\n## ", 1)[0]
+    for part in (
+        "`reaudit round=<n> tip=<sha>`",
+        "no second recovery round runs on the same tip",
+        "`Ledger ids: pending`",
+        "`resume ledger train=<train-id> summary=<path>`",
+        "`stale agents: <names>`",
+        "start a new Claude Code session",
+    ):
+        assert part in section, part
+    assert "train recovery" not in text.split("## Sections added by later plans", 1)[1]
+    assert "names the ledger resume that finishes it" in text
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "recovery audit round on the new tip (`daedalus_train.py reaudit`)" in readme
+    assert "ledger resume (`daedalus_train.py resume`)" in readme

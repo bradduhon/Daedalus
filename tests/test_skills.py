@@ -113,8 +113,9 @@ def test_build_train_dispatches_existing_agents() -> None:
     personas = {p.stem for p in (REPO_ROOT / "agents").glob("*.md")}
     # The Push Train owns pr-train-conductor; the relay starts only the orchestrator (0060).
     assert relay == {"orchestrator"}
-    # spec 5: the verifier's recipe step lands with unit C5; until then it may be unnamed.
-    assert names - {"verifier"} == personas - {"pr-train-conductor", "orchestrator", "verifier"}
+    # issue 68: strict equality again, with the verifier named on both sides (spec 5).
+    assert names == personas - {"pr-train-conductor", "orchestrator"}
+    assert "verifier" in names and "verifier" in personas
     assert "`/daedalus:plan " in _recipe()
     assert "${CLAUDE_PLUGIN_ROOT}" not in _recipe().split("\n---\n", 1)[1]
 
@@ -1454,3 +1455,122 @@ def test_operator_line_scanner_flags_bare_ids() -> None:
     assert len(_words("run the Daedalus health check (/daedalus:doctor).")) >= MIN_WORDS
     lines = _skill_lines(SKILLS[0])
     assert all(kind in {"next", "stop"} for _, kind, _ in lines)
+
+
+MAIN = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/"
+WORKSPACE_RESUME = MAIN + "daedalus_workspace.py resume --repo <repo>`"
+REAUDIT_CMD = MAIN + "daedalus_train.py reaudit --repo <repo>`"
+RESUME_CMD = MAIN + "daedalus_train.py resume --repo <repo>`"
+
+
+def test_build_train_relays_the_recovery_round_after_train_complete() -> None:
+    # 73, spec 3.3, pin D1 -> D5: resume the stopped train, reaudit, then the REAUDIT relay.
+    recovery = _build_train().split("## Recovery", 1)[1]
+    assert WORKSPACE_RESUME in recovery.split("\n- ", 1)[0]
+    item = recovery.split("- Recovery round (issue 73): ", 1)[1].split("\n- ", 1)[0]
+    assert item.startswith("after TRAIN_COMPLETE, the operator reports a commit on the integration")
+    assert "`reaudit round=<n> tip=<40 hex>`" in item
+    order = [
+        "Run the resume command",
+        REAUDIT_CMD,
+        'SendMessage(orchestrator, "REAUDIT. <its printed line>")',
+        "replies TRAIN_COMPLETE again",
+        "no second recovery round runs on this session's authority",
+    ]
+    places = [item.index(part) for part in order]
+    assert places == sorted(places)
+    assert "the three escalation choices" in item
+
+
+def test_build_train_admits_the_ledger_resume_as_a_resume() -> None:
+    # 3, spec 3.5: the one orchestrator start after the first, admitted only after resume printed.
+    text = _build_train()
+    item = text.split("- Ledger resume (issue 3): ", 1)[1].split("\n", 1)[0]
+    assert "`Ledger ids: pending`" in item
+    assert "`resume ledger train=<train-id> summary=<repo-relative path>`" in item
+    order = [
+        "Run the resume command",
+        RESUME_CMD,
+        "Agent(`orchestrator`) with `model: <that word>`",
+        "`RESUME LEDGER. <its printed line>`",
+        "replies TRAIN_COMPLETE",
+    ]
+    places = [item.index(part) for part in order]
+    assert places == sorted(places)
+    step3 = _section(text, "## Relay", "## Recovery").split("\n3. ", 1)[1].split("\n4. ", 1)[0]
+    assert step3.startswith("If SendMessage to the orchestrator fails, never start a second")
+    assert (
+        "The one exception is the ledger resume below, after its `resume` command printed its "
+        "line: that orchestrator resumes the stopped train for one step, not a second train."
+    ) in step3
+
+
+def test_build_train_precondition_stops_on_stale_agents() -> None:
+    # spec 6, pin D1 -> D5: hooks-live prints the stale line and exits 0; the skill stops on it.
+    step = _section(_build_train(), "## Preconditions", "## Relay").split("\n3. ", 1)[1]
+    step = step.split("\n\n", 1)[0]
+    stale = step.split("`stale agents: <names>`", 1)[1]
+    assert "stop and show that line." in stale
+    assert "Next: start a new Claude Code session, then run /daedalus:build-train again." in stale
+
+
+def test_push_train_runs_the_recovery_round_on_a_moved_tip() -> None:
+    # 73, spec 3.3: a step 9 refusal for a moved tip runs reaudit, one round, then step 9 again.
+    text = _push_train()
+    step9 = text.split("\n9. ", 1)[1].split("\n10. ", 1)[0]
+    moved = step9.split("Exit 1 whose output says the tip moved past the judged tip", 1)[1]
+    assert "run the Recovery round below once, then run this step again" in moved
+    assert "Any other exit 1: stop and show its output" in moved
+    recovery = _section(text, "## Recovery round", "## Push")
+    order = [
+        REAUDIT_CMD,
+        MAIN + "daedalus_workspace.py refresh --repo <repo> --name <train-id>-audit`",
+        MAIN + "daedalus_train.py model --repo <repo> --agent security-auditor`",
+        "Agent(`security-auditor`) with `model: <that word>`",
+        "`<repo>/docs/.tmp/daedalus/<train-id>/audit/round<n>/findings.txt`",
+        MAIN + "daedalus_train.py verdict --repo <repo> --status approved --round <n> "
+        "--findings <findings path> --tip <judged tip>`",
+        "rewrite the whole summary with one Write",
+        "Then run Preconditions step 9 again.",
+    ]
+    places = [recovery.index(part) for part in order]
+    assert places == sorted(places)
+    assert "the line `Worktree: <audit worktree path>`" in recovery
+    rejected = recovery.split("\n5. `[VERDICT: REJECTED] tip=<sha>`: ", 1)[1]
+    assert "with `--status rejected`" in rejected
+    assert "the three choices of the audit escalation prompt" in rejected
+    assert "the Push Train runs no second recovery round" in rejected
+
+
+def test_push_train_routes_a_ci_reply_at_push_step_two() -> None:
+    # issue 20: a conductor that watched CI in its push reply goes straight to the CI rules.
+    step2 = _section(_push_train(), "\n2. Route the reply:", "\n3. SendMessage(conductor")
+    route = step2.split("- `[STATUS: CI] run=<id> conclusion=<text>`: ", 1)[1].split("\n", 1)[0]
+    assert "route this CI line by the step 3 conclusion rules" in route
+    assert "without sending the Watch CI message" in route
+    assert "Run `gh pr view daedalus/<train-id> --json url`." in route
+
+
+def test_catalog_names_the_recovery_commands_and_lines() -> None:
+    # pin D1 -> D5, 0119: reaudit and resume are main-session commands; ledger is the recipe's.
+    catalog = (REPO_ROOT / "skills" / "catalog" / "SKILL.md").read_text(encoding="utf-8")
+    rules = catalog.split("## Composition rules", 1)[1].split("\n## ", 1)[0]
+    assert "`REAUDIT. <the reaudit line>`" in rules
+    assert "`RESUME LEDGER. <the resume line>`" in rules
+    assert "the push proof anchors on that Write" in rules
+    commands = catalog.split("## Commands and reply lines", 1)[1].split("\n## ", 1)[0]
+    for line in (
+        "`reaudit round=<n> tip=<40 hex>`",
+        "`resume ledger train=<train-id> summary=<repo-relative path>`",
+        "`ledger recorded sha=<sha> ids=<ids>`",
+        "both run from the main session only",
+    ):
+        assert line in commands, line
+
+
+def test_coder_bash_section_opens_with_the_credential_habit_line() -> None:
+    # spec 7.1: the habit block is the first line of the coder's Bash section.
+    coder = (REPO_ROOT / "agents" / "repo-coder.md").read_text(encoding="utf-8")
+    section = coder.split("## Shell rules (0022, spec 7)\n", 1)[1]
+    first = section.splitlines()[0]
+    assert first.startswith("- Credential stores are never read, from any path:"), first

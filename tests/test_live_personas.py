@@ -6,6 +6,8 @@ import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
@@ -271,6 +273,67 @@ def test_security_auditor(live_repo: Path) -> None:
     _check(run, "security-auditor", ("[VERDICT:",))
     first = next(line for line in run.result.stdout.splitlines() if line.strip())
     assert first.lstrip().startswith("[VERDICT:"), first
+
+
+PLANTED_TRAIN = "20261015-000000"
+# spec 6: an injection the auditor's fixed shell=True pickaxe finds; a test can prove it.
+PLANTED_DEFECT = (
+    "import subprocess\n\n\n"
+    "def greet(name: str) -> str:\n"
+    '    cmd = f"echo hello {name}"\n'
+    "    return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout\n"
+)
+REJECTED_LINE = re.compile(r"^\[VERDICT: REJECTED\] tip=([0-9a-f]{40})$")
+
+
+def test_security_auditor_files_a_planted_defect_as_a_failing_test(live_repo: Path) -> None:
+    # spec 6: round 1 on a planted defect writes a failing test, a findings line and tip=.
+    from lib import train_state
+    from lib.workspace import create, mark_train
+
+    base = _git(live_repo, "rev-parse", "HEAD").stdout.strip()
+    integration = f"daedalus/{PLANTED_TRAIN}"
+    _git(live_repo, "switch", "-q", "-c", integration)
+    (live_repo / "src" / "run.py").write_text(PLANTED_DEFECT, encoding="utf-8")
+    _git(live_repo, "add", "src/run.py")
+    _git(live_repo, "commit", "-q", "-m", "Add greet")
+    tip = _git(live_repo, "rev-parse", "HEAD").stdout.strip()
+    _git(live_repo, "switch", "-q", "main")
+    train_state.save(live_repo, PLANTED_TRAIN, {"train_id": PLANTED_TRAIN})
+    mark_train(live_repo, PLANTED_TRAIN)
+    worktree = create(live_repo, f"{PLANTED_TRAIN}-audit", integration)
+    round_dir = live_repo / "docs" / ".tmp" / "daedalus" / PLANTED_TRAIN / "audit" / "round1"
+    task = (
+        f"Diff base: {base}\nBranch: {integration}\n"
+        f"Units and their changed files: u1: src/run.py\n"
+        "Packet: none (no contract for this round); compliance reports: none.\n"
+        f"Round: 1. Findings file: {round_dir / 'findings.txt'}\n"
+        f"Worktree: {worktree}\n"
+        "Audit the branch by your procedure and end with your verdict line."
+    )
+    run = _persona("security-auditor", task, ["Read", "Bash", "Grep", "Glob", "Write"], live_repo)
+    _check(run, "security-auditor", ("[VERDICT: REJECTED]",), block_ok=True)
+    verdict = REJECTED_LINE.match(_last_line(run.result.stdout))
+    assert verdict, _last_line(run.result.stdout)
+    assert verdict.group(1) == tip
+    tests = sorted(round_dir.glob("test_*.py"))
+    assert tests, f"no audit test under {round_dir}"
+    findings = (round_dir / "findings.txt").read_text(encoding="utf-8").splitlines()
+    keys = [line.split(" | ", 1)[0].strip() for line in findings if line.strip()]
+    named = [k for k in keys if k.split("::", 1)[0] in {f"audit/round1/{t.name}" for t in tests}]
+    assert named, findings
+    failing = round_dir.parent.parent / named[0].split("::", 1)[0]
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", str(failing), "-q", "-p", "no:cacheprovider"]
+        + ["--rootdir", str(worktree)],
+        capture_output=True,
+        text=True,
+        cwd=worktree,
+        check=False,
+        timeout=120,
+    )
+    print(result.stdout)
+    assert result.returncode != 0, "the audit test passes on the judged tip"
 
 
 VERIFIER_CLAIM = REPO_ROOT / "tests" / "fixtures" / "verifier" / "complete-reply.txt"
