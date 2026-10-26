@@ -156,6 +156,29 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("gh_classes", ()),
         ("confine", ()),
     ),
+    # 0135, D.5: the two document agents read through the read-only check and write only output.
+    "doc-deriver": (
+        ("credential_paths", ()),
+        ("workspace_integrity", ()),
+        ("tool_bound", ()),
+        ("shell_tripwires", ()),
+        ("network_tools", ()),
+        ("git_push", ()),
+        ("git_grammar", ()),
+        ("read_only_bash", ()),
+        ("doc_outputs", ()),
+    ),
+    "change-logger": (
+        ("credential_paths", ()),
+        ("workspace_integrity", ()),
+        ("tool_bound", ()),
+        ("shell_tripwires", ()),
+        ("network_tools", ()),
+        ("git_push", ()),
+        ("git_grammar", ()),
+        ("read_only_bash", ()),
+        ("doc_outputs", ()),
+    ),
 }
 _MODULES: dict[str, ModuleType] = {}
 

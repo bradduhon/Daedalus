@@ -114,7 +114,13 @@ def test_build_train_dispatches_existing_agents() -> None:
     # The Push Train owns pr-train-conductor; the relay starts only the orchestrator (0060).
     assert relay == {"orchestrator"}
     # issue 68: strict equality again, with the verifier named on both sides (spec 5).
-    assert names == personas - {"pr-train-conductor", "orchestrator"}
+    # 0135: the document train recipe, not the Build Train, dispatches the two document agents.
+    assert names == personas - {
+        "pr-train-conductor",
+        "orchestrator",
+        "doc-deriver",
+        "change-logger",
+    }
     assert "verifier" in names and "verifier" in personas
     assert "`/daedalus:plan " in _recipe()
     assert "${CLAUDE_PLUGIN_ROOT}" not in _recipe().split("\n---\n", 1)[1]

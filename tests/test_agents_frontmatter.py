@@ -31,6 +31,8 @@ EXPECTED_MODEL = {
     "dependency-auditor": "sonnet",
     "terraform-reviewer": "sonnet",
     "docs-writer": "opus",
+    "doc-deriver": "opus",
+    "change-logger": "opus",
 }
 # 0089: phase affinities guide the session's choice of agent; they never gate a phase.
 EXPECTED_PHASES = {
@@ -49,6 +51,8 @@ EXPECTED_PHASES = {
     "dependency-auditor": ("audit",),
     "terraform-reviewer": ("audit",),
     "docs-writer": ("audit",),
+    "doc-deriver": ("implementation",),
+    "change-logger": ("implementation",),
 }
 # 0060: the orchestrator alone dispatches; the dispatch hook refuses a Task call by name.
 DISPATCHER_TOOLS = {"orchestrator": {"Agent", "SendMessage"}}
