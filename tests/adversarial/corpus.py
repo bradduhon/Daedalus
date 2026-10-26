@@ -29,6 +29,66 @@ OUTSIDE = "outside your unit worktree"
 PROTECTED = "protected path"
 
 
+# issue 80 (unit H1): env -S hides a write inside one word; {repo} is a repository a train marks.
+H1_ENV_SPLIT = (
+    "env -S 'touch {repo}/x'",
+    "env -S'touch {repo}/x'",
+    "env --split-string='touch {repo}/x'",
+    "env --split-string 'touch {repo}/x'",
+    "env --spl='touch {repo}/x'",
+    "env -iS 'touch {repo}/x'",
+    "env -u HOME -S 'touch {repo}/x'",
+    "nice -n 5 env -S 'rm -rf {repo}/x'",
+)
+# issue 81 (unit H1): a shell -c body, flock's included, hides its write targets.
+H1_SHELL_BODY = (
+    "bash -c 'touch {repo}/x'",
+    "sh -c 'touch {repo}/x'",
+    "bash -lc 'touch {repo}/x'",
+    "sh -ec 'rm -rf {repo}/x'",
+    "bash --norc -c 'touch {repo}/x'",
+    "bash --frobnicate -c 'touch {repo}/x'",
+    "dash -c 'touch {repo}/x'",
+    "setsid sh -c 'touch {repo}/x'",
+    "flock /tmp/l -c 'touch {repo}/x'",
+    "flock /tmp/l --command 'touch {repo}/x'",
+)
+# issue 82 (unit H1): one row per runner wrapper row, then options kept off a row.
+H1_WRAPPERS = (
+    "setsid -f touch {repo}/x",
+    "chroot / touch {repo}/x",
+    "ionice -c 3 touch {repo}/x",
+    "taskset -c 0 touch {repo}/x",
+    "flock -w 5 /tmp/l touch {repo}/x",
+    "unshare --fork touch {repo}/x",
+    "chrt -o 0 touch {repo}/x",
+    "nsenter -t 1 -m touch {repo}/x",
+)
+H1_WRAPPERS_OFF_ROW = (
+    "chroot {repo} touch /x",
+    "unshare --root {repo} touch /x",
+    "unshare -w {repo} touch x",
+    "nsenter --wd={repo} touch x",
+    "ionice --frobnicate touch {repo}/x",
+    "taskset touch {repo}/x",
+)
+# issue 83 (unit H1): {other}/deep links to {repo}/sub, so deep/.. is {repo} on disk.
+H1_SYMLINK = ("touch {other}/deep/../x", "mkdir {other}/deep/../y", "rm -rf {other}/deep/../x")
+# issue 97 (unit H1): an icase pathspec names notes/a.md under another case; notes is excluded.
+H1_ICASE = (
+    "git add ':(icase)NOTES/a.md'",
+    "git add ':(top,icase)Notes/a.md'",
+    "git add ':(ICASE)nOtes'",
+    "git commit -m m -- ':(icase)NOTES/a.md'",
+    "git stash push -- ':(icase)notes'",
+    "git add ':i:NOTES/a.md'",
+    "git add ':/i:NOTES'",
+    "git --icase-pathspecs add NOTES/a.md",
+    "GIT_ICASE_PATHSPECS=1 git add NOTES/a.md",
+    "git add ':(icase)NOTES/a.md' $(true)",
+)
+
+
 def assert_denied(hook_input: dict[str, Any], *markers: str) -> None:
     # pin C1 -> C6: a deny through tests/hook_chain.py, never a warning; a marker names the finding.
     d = decide(hook_input, CFG)

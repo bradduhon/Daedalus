@@ -90,6 +90,7 @@ WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         frozenset({"-u", "-g", "-h", "-p", "-C", "-U", "-D", "-r", "-t", "--chdir"}),
     ),
     "doas": (frozenset({"-n", "-s"}), frozenset({"-u", "-C"})),
+    # issue 80: -S and --split-string stay off this row; env_split_values finds them to refuse.
     "env": (
         frozenset({"-i", "--ignore-environment", "-0", "--null", "-"}),
         frozenset({"-u", "--unset", "-C", "--chdir"}),
@@ -114,7 +115,48 @@ WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     ),
     # 0048, pin U2 -> E6: the kernel wrapper, daedalus_confine.py --unit <worktree> -- <command>.
     "daedalus_confine.py": (frozenset({"--"}), frozenset({"--unit"})),
+    # issue 82: runner wrappers; --root and --wd stay off unshare and nsenter so they fail closed.
+    "setsid": (frozenset({"-c", "--ctty", "-f", "--fork", "-w", "--wait"}), frozenset()),
+    "chroot": (frozenset({"--skip-chdir"}), frozenset({"--groups", "--userspec"})),
+    "ionice": (
+        frozenset({"-t", "--ignore"}),
+        frozenset({"-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid"})
+        | frozenset({"-u", "--uid"}),
+    ),
+    "taskset": (frozenset({"-a", "--all-tasks", "-p", "--pid", "-c", "--cpu-list"}), frozenset()),
+    "flock": (
+        frozenset({"-s", "--shared", "-x", "-e", "--exclusive", "-u", "--unlock", "-n", "--nb"})
+        | frozenset({"--nonblock", "-o", "--close", "-F", "--no-fork", "--verbose"}),
+        frozenset({"-w", "--wait", "--timeout", "-E", "--conflict-exit-code"}),
+    ),
+    "unshare": (
+        frozenset({"-f", "--fork", "-m", "--mount", "-u", "--uts", "-i", "--ipc", "-n", "--net"})
+        | frozenset({"-p", "--pid", "-U", "--user", "-C", "--cgroup", "-T", "--time"})
+        | frozenset({"-r", "--map-root-user", "-c", "--map-current-user", "--map-auto"})
+        | frozenset({"--mount-proc", "--kill-child", "--keep-caps"}),
+        frozenset({"-S", "--setuid", "-G", "--setgid", "-l", "--load-interp", "--propagation"})
+        | frozenset({"--setgroups", "--map-user", "--map-group", "--map-users", "--map-groups"})
+        | frozenset({"--monotonic", "--boottime"}),
+    ),
+    "chrt": (
+        frozenset({"-a", "--all-tasks", "-b", "--batch", "-d", "--deadline", "-f", "--fifo"})
+        | frozenset({"-i", "--idle", "-o", "--other", "-r", "--rr", "-R", "--reset-on-fork"})
+        | frozenset({"-m", "--max", "-p", "--pid", "-v", "--verbose"}),
+        frozenset({"-T", "--sched-runtime", "-P", "--sched-period", "-D", "--sched-deadline"}),
+    ),
+    "nsenter": (
+        frozenset({"-a", "--all", "-m", "--mount", "-u", "--uts", "-i", "--ipc", "-n", "--net"})
+        | frozenset({"-p", "--pid", "-C", "--cgroup", "-U", "--user", "-T", "--time"})
+        | frozenset({"--preserve-credentials", "-e", "--env", "-F", "--no-fork"})
+        | frozenset({"-Z", "--follow-context", "-c", "--join-cgroup", "--user-parent"}),
+        frozenset({"-t", "--target", "-S", "--setuid", "-G", "--setgid"}),
+    ),
 }
+# issue 80: env -S and --split-string pack a whole command into one word.
+R_ENV_SPLIT = (
+    "env -S and --split-string pack a whole command into one word, so the jail cannot see what "
+    "it runs or writes (issue 80). Next: write the command without env -S, one word per argument."
+)
 CONFINE = "daedalus_confine.py"
 # issue 76: options that move the working folder before the wrapped command runs.
 WRAPPER_CHDIR = frozenset({("env", "-C"), ("env", "--chdir"), ("sudo", "-D"), ("sudo", "--chdir")})
@@ -122,6 +164,16 @@ WRAPPER_CHDIR = frozenset({("env", "-C"), ("env", "--chdir"), ("sudo", "-D"), ("
 WRAPPER_WRITES = frozenset({("time", "-o"), ("time", "--output")})
 # issue 76: the one duration regex, timeout's first operand.
 DURATION: re.Pattern[str] = re.compile(r"[\d.]+[smhd]?")
+# issue 82: the operand a wrapper reads before its command; None never matches (chroot re-roots).
+WRAPPER_OPERAND: dict[str, re.Pattern[str] | None] = {
+    "timeout": DURATION,
+    "taskset": re.compile(r"[0-9a-fA-FxX,:-]+"),
+    "chrt": re.compile(r"\d+"),
+    "flock": re.compile(r"[^-].*"),
+    "chroot": None,
+}
+# issue 82: flock runs a shell body after its file operand; the jail never walks one.
+FLOCK_BODY = frozenset({"-c", "--command"})
 # 8.5 ruling A: first tokens a worker may never run, bar the allowlisted test runner forms.
 WORKER_WRAPPERS = frozenset(WRAPPER_OPTS) | frozenset(
     {"eval", "source", ".", "sh", "bash", "zsh", "dash", "ksh", "python", "python3"}
@@ -917,13 +969,49 @@ def _strip_wrappers(
             else:
                 return None
             i += 1
-        if name == "timeout":
-            # issue 76: a first operand that is not a duration leaves the command unknown.
-            if i >= len(tokens) or not DURATION.fullmatch(tokens[i]):
+        if name in WRAPPER_OPERAND:
+            # issue 76, 82: an operand off its pattern leaves the command unknown.
+            operand = WRAPPER_OPERAND[name]
+            if i >= len(tokens) or operand is None or not operand.fullmatch(tokens[i]):
                 return None
             i += 1
+            if name == "flock" and tokens[i : i + 1] and tokens[i].split("=")[0] in FLOCK_BODY:
+                return None
         tokens = tokens[i:]
     return tokens
+
+
+def env_split_values(tokens: list[str]) -> list[str]:
+    # issue 80: the value of each env -S or --split-string, in clusters and long prefixes too.
+    return [
+        v
+        for at, word in enumerate(tokens)
+        if _base(word) == "env"
+        for v in _env_split(tokens[at + 1 :])
+    ]
+
+
+def _env_split(args: list[str]) -> list[str]:
+    # issue 80: getopt order; an unknown letter or option is read past, so -S behind it is found.
+    with_arg = WRAPPER_OPTS["env"][1]
+    i = 0
+    while i < len(args) and args[i].startswith("-") and args[i] not in {"-", "--"}:
+        token = args[i]
+        later = args[i + 1 : i + 2] or [""]
+        if token.startswith("--"):
+            key, eq, value = token.partition("=")
+            if "--split-string".startswith(key):
+                return [value if eq else later[0]]
+            i += 2 if not eq and _long_option(key, with_arg) in with_arg else 1
+            continue
+        for cut, letter in enumerate(token[1:], start=2):
+            if letter == "S":
+                return [token[cut:] or later[0]]
+            if "-" + letter in with_arg:
+                i += 0 if token[cut:] else 1
+                break
+        i += 1
+    return []
 
 
 def _inline_code(tokens: list[str], letters: str, longs: frozenset[str]) -> str | None:
@@ -985,6 +1073,9 @@ def _segment_reason(segment: list[str], depth: int, main: bool) -> str | None:
         rest = segment[[_base(t) for t in segment].index("xargs") + 1 :]
         if any(_base(t) == "git" for t in rest) and {"push", "commit", "tag", "clean"} & set(rest):
             return R_XARGS
+    if not main and env_split_values(segment):
+        # issue 80: workers only, main stays exempt from construct limits; a tripwire names itself.
+        return _regex_tripwire(" ".join(segment)) or R_ENV_SPLIT
     assigns: list[str] = []
     tokens = _strip_wrappers(segment, assigns)
     if tokens is None:
