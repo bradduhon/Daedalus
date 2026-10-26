@@ -338,12 +338,14 @@ Daedalus/
 │   ├── audit_log.py                 # all other hook events to the audit log
 │   ├── audit_report.py              # digest of a verified session log
 │   ├── catalog.py                   # prints the agent table and hooks matrix
+│   ├── cite.py                      # prints file:line for each line holding a fixed string
 │   ├── daedalus_confine.py          # kernel wrapper: a coder's test command stays in its worktree, no network
 │   ├── daedalus_doctor.py           # first-run check behind /daedalus:doctor
 │   ├── daedalus_setup.py            # writes the missing starter files behind /daedalus:setup
 │   ├── daedalus_train.py            # the train runner: progress, choice, plan, verdict, exception
 │   ├── daedalus_workspace.py        # begin, lock, create, remove, finish, stop, resume, mark, unmark, release
 │   ├── enforce_agent_jail.py        # PreToolUse policy
+│   ├── handback_check.py            # SubagentStop check of a coder's receipts block
 │   ├── refresh_frameworks.py        # operator-run: compile the pinned framework caches
 │   ├── standing_rules.py            # derives the standing-rules file from the ledger
 │   ├── validate_plan.py             # checks a plan file and prints its graph line
