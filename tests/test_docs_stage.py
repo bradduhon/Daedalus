@@ -103,7 +103,7 @@ def test_docs_verdict_verified_reads_the_verifier_reply(repo: Path, plugin: Path
     assert outcome.code == 0, outcome.lines
     assert outcome.lines == [f"docs verdict recorded status=verified tip={tip[:12]}"]
     assert _state(repo)["docs_verdict"] == {"status": "verified", "tip": tip}
-    # The security verdict record stays apart.
+    # 0131: the security verdict record stays apart.
     assert "verdict" not in _state(repo)
 
 
@@ -189,7 +189,7 @@ def test_a_refuted_docs_claim_takes_its_exemption_into_the_docs_record(
     assert again.code == 1 and "already carries an exemption" in again.lines[0]
     exempt = train_state.record(_state(repo)["docs_verdict"], "exemptions")  # type: ignore[arg-type]
     assert exempt == {CLAIM: {"ledger_id": ID, "tip": tip, "tracking": "local"}}
-    # A security finding still lands in its round.
+    # 0133: a security finding still lands in its round.
     assert KEY_A in train_state.record(_state(repo)["exemptions"], "1")  # type: ignore[arg-type]
     _commit(repo, "README.md")
     moved = train_runner.record_exception(repo, ID, CLAIM2, "issue")
@@ -281,7 +281,7 @@ def test_a_refuted_docs_record_passes_once_every_claim_is_exempted(
     assert push_proof(repo, train).endswith(
         f"docs refuted with every claim exempted on tip {current[:12]}"
     )
-    # A claim the file gains after the record counts too.
+    # 0131: a claim the file gains after the record counts too.
     _claims(repo, CLAIM, CLAIM2, "docs/guardrails.md:3")
     with pytest.raises(ProofError):
         push_proof(repo, train)
