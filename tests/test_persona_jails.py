@@ -20,7 +20,7 @@ from tests.hook_chain import evaluate, first_deny
 from tests.hook_chain import judge as decide
 from tests.test_dispatch_binding import TRAIN, seed_plan
 
-DOCS = f"{TRAIN}-docs"
+DOCS = f"{TRAIN}-docstage"
 WRITER = "daedalus:docs-writer"
 AGENTS = REPO_ROOT / "agents"
 ALLOW = ("--allow", "terraform,inspect")
@@ -71,7 +71,7 @@ def _bound_writer(repo: Path) -> None:
     )
 
 
-# Requirement 1: the docs-writer dispatch binds the <train-id>-docs worktree alone.
+# Requirement 1: the docs-writer dispatch binds the <train-id>-docstage worktree alone.
 
 
 def test_docs_writer_dispatch_binds_the_docs_worktree(

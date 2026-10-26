@@ -10,12 +10,14 @@ import re
 from pathlib import Path
 
 from lib import plan_record, unit_binding
+from lib.audit_proof import PUBLIC_DOCS as PUBLIC_DOCS
 from lib.audit_proof import SUMMARY_DIR
 from lib.config import DEFAULT_MAX_CONCURRENT_BUILDERS
 from lib.narrow import integer
 from lib.project_root import project_root
 from lib.shell import _abs, _base, _git_split
 from lib.train_scope import policed_outside_train
+from lib.train_state import DOCS_SUFFIX as DOCS_SUFFIX
 from lib.train_state import TRAIN_ID, TrainStateError, active_train, is_audit_unit
 from lib.train_state import load as load_train
 from lib.train_state import units as units_of
@@ -76,16 +78,7 @@ R_DOCS_REBIND = (
     "never moves an agent onto it (0134). Next: dispatch the docs-writer with one Worktree: "
     "line naming the docs worktree, and resume coders only onto their own units."
 )
-# 0134: the docs stage worktree, beside the audit worktree's <train-id>-audit.
-DOCS_SUFFIX = "-docs"
 DOCS_WRITER = "docs-writer"
-# 0134: the only files the docs-writer writes, relative to its docs worktree.
-PUBLIC_DOCS = (
-    "README.md",
-    "docs/howto/README.md",
-    "docs/guardrails.md",
-    "docs/project-requirements.md",
-)
 DISPATCH_TOOLS = frozenset({"Agent", "Task"})
 RESUME_TOOLS = frozenset({"SendMessage"})
 _WORKTREE_LINE = re.compile(r"Worktree: (/\S+)")
@@ -216,7 +209,7 @@ def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
 
 
 def docs_unit(train_id: str) -> str:
-    # 0134: the docs stage worktree is the train unit named <train-id>-docs.
+    # 0134: the docs stage worktree is the train unit named <train-id>-docstage.
     return f"{train_id}{DOCS_SUFFIX}"
 
 
@@ -272,6 +265,9 @@ def _coder_unit(state: dict[str, object], path: str, train: str) -> tuple[str, s
         return "", _not_a_unit(path, train)
     if is_audit_unit(unit):
         return "", R_AUDIT_UNIT.format(path=path, train=train)
+    # 0134: the docs stage worktree takes the docs-writer only, by dispatch or by resume.
+    if unit.get("name") == docs_unit(train):
+        return "", R_DOCS_REBIND.format(name=docs_unit(train))
     return str(unit["name"]), None
 
 
@@ -326,8 +322,6 @@ def _resume_reason(tool_input: dict[str, object], cwd: str) -> str | None:
         return refused
     if bound.get(unit, {}).get("agent_id") == coder:
         return None  # 0086: the runner's queue rebound it already, or the coder holds this unit.
-    if unit == docs_unit(train):
-        return R_DOCS_REBIND.format(name=unit)
     held = [name for name, record in bound.items() if record.get("agent_id") == coder]
     if not held:
         return R_RESUME_UNBOUND.format(coder=coder, train=train, unit=unit)

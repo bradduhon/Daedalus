@@ -33,6 +33,7 @@ from lib.audit_proof import (
     docs_keys,
     findings_path,
     hooks_live,
+    ledger_parent,
     live_log,
     live_summary,
     newest_log,
@@ -1339,7 +1340,8 @@ def _docs_exemption(
     if finding not in keys:
         return None
     tip = _text(docs, "tip")
-    if tip != current:
+    # 0131: the exemption ruling's one ledger commit may sit on top of the docs record's tip.
+    if tip != current and ledger_parent(repo, current) != tip:
         raise RunnerError(
             f"the docs record names tip {tip[:12]}, not the integration tip {current[:12]}. "
             "Next: record the docs verdict again with daedalus_train.py verdict --gate docs."

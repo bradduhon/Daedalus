@@ -26,10 +26,15 @@ HANDBACK = "SubagentHandback"
 _VERDICT_FIELDS = ("last_message_head", "last_message_tail")
 _HANDBACK_FIELD = "tool_input.message"
 TIP = re.compile(r"[0-9a-f]{40}")
-# 0131, 0134: the four public docs; a commit past the judged tip may change only these.
-PUBLIC_DOCS = frozenset(
-    {"README.md", "docs/howto/README.md", "docs/guardrails.md", "docs/project-requirements.md"}
+# 0131, 0134: the one list of the four public docs; dispatch_binding imports it.
+PUBLIC_DOCS = (
+    "README.md",
+    "docs/howto/README.md",
+    "docs/guardrails.md",
+    "docs/project-requirements.md",
 )
+# 0131: a public doc stays a regular non-executable file; 000000 marks a path that is new.
+DOC_MODE, NO_MODE = "100644", "000000"
 _SESSION_LINE = re.compile(r"^Session ([A-Za-z0-9_-]+):", re.MULTILINE)
 # pin D3 -> D1: the stop record's full-reply verdict lines; absent on a record written before D3.
 VERDICT_LINES = "verdict_lines"
@@ -614,25 +619,68 @@ def docs_problem(repo: Path, train_id: str, state: dict[str, object], current: s
     return None
 
 
-def _changed(repo: Path, parent: str, commit: str) -> set[str] | None:
-    out = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", parent, commit)
-    return None if out is None else {path for path in out.split("\0") if path}
+def _parents(repo: Path, commit: str) -> list[str]:
+    return (_git(repo, "rev-list", "--parents", "-n", "1", commit) or "").split()[1:]
 
 
-def _docs_moves(repo: Path, judged: str, current: str) -> str | None:
+def _raw(repo: Path, parent: str, commit: str) -> list[tuple[str, str, str]] | None:
+    # 0131: (old mode, new mode, path) per changed path; None when git or the format fails.
+    out = _git(
+        repo, "diff-tree", "--no-commit-id", "--no-renames", "--raw", "-r", "-z", parent, commit
+    )
+    if out is None:
+        return None
+    fields, entries = out.split("\0"), []
+    for meta, path in zip(fields[0:-1:2], fields[1::2], strict=False):
+        modes = meta.removeprefix(":").split()
+        if not meta.startswith(":") or len(modes) != 5 or not path:
+            return None
+        entries.append((modes[0], modes[1], path))
+    return entries
+
+
+def _docs_only(entries: list[tuple[str, str, str]]) -> bool:
+    # 0131: only the four docs, each a regular non-executable file before and after.
+    return all(
+        path in PUBLIC_DOCS and new == DOC_MODE and old in (DOC_MODE, NO_MODE)
+        for old, new, path in entries
+    )
+
+
+def ledger_parent(repo: Path, commit: str) -> str | None:
+    # 59, 0131: the parent of a one-parent commit that changes only the declared ledger, else None.
+    ledger, parents = _ledger_rel(repo), _parents(repo, commit)
+    if ledger is None or len(parents) != 1:
+        return None
+    entries = _raw(repo, parents[0], commit)
+    return parents[0] if entries and {path for _, _, path in entries} == {ledger} else None
+
+
+def _docs_end(repo: Path, judged: str, current: str) -> str:
+    # 0131: the tip the docs-only commits end at; one ledger commit on top of them is admitted.
+    parent = ledger_parent(repo, current) if current != judged else None
+    return parent if parent is not None and parent != judged else current
+
+
+def _docs_moves(repo: Path, judged: str, end: str) -> str | None:
     # 0131: each commit past the judged tip changes only the four public docs, or is issue 59's
     # one ledger commit on the judged tip; a merge is judged against its first parent.
-    if _git(repo, "merge-base", "--is-ancestor", judged, current) is None:
-        return f"the tip {current[:12]} does not descend from the judged tip {judged[:12]}"
-    commits = (_git(repo, "rev-list", f"{judged}..{current}") or "").split()
+    if _git(repo, "merge-base", "--is-ancestor", judged, end) is None:
+        return f"the tip {end[:12]} does not descend from the judged tip {judged[:12]}"
     ledger = _ledger_rel(repo)
-    for commit in commits:
-        parents = (_git(repo, "rev-list", "--parents", "-n", "1", commit) or "").split()[1:]
-        changed = _changed(repo, parents[0], commit) if parents else None
-        if changed is not None and changed <= PUBLIC_DOCS:
+    for commit in (_git(repo, "rev-list", f"{judged}..{end}") or "").split():
+        parents = _parents(repo, commit)
+        entries = _raw(repo, parents[0], commit) if parents else None
+        paths = {path for _, _, path in entries or ()}
+        if entries is not None and _docs_only(entries):
             continue
-        if changed is not None and parents == [judged] and ledger and changed == {ledger}:
+        if entries is not None and parents == [judged] and ledger and paths == {ledger}:
             continue
+        if entries is not None and paths <= set(PUBLIC_DOCS):
+            return (
+                f"the commit {commit[:12]} past the judged tip {judged[:12]} changes the type or "
+                "mode of a public doc"
+            )
         return (
             f"the commit {commit[:12]} past the judged tip {judged[:12]} changes more than the "
             "four public docs"
@@ -649,17 +697,19 @@ def tip_admits(
         return problem
     if not isinstance(judged, str) or not TIP.fullmatch(judged):
         return problem
-    return _docs_moves(repo, judged, current) or docs_problem(repo, train_id, state, current)
+    end = _docs_end(repo, judged, current)
+    return _docs_moves(repo, judged, end) or docs_problem(repo, train_id, state, end)
 
 
 def _docs_note(repo: Path, train_id: str, state: dict[str, object], current: str) -> str:
-    # 0131: the proof line names the docs path when a docs record covers the current tip.
+    # 0131: the proof line names the docs path when a docs record covers the docs tip.
     docs = train_state.record(state, train_state.DOCS_VERDICT)
-    if not docs or docs_problem(repo, train_id, state, current) is not None:
+    end = current if docs.get("tip") == current else ledger_parent(repo, current) or current
+    if not docs or docs_problem(repo, train_id, state, end) is not None:
         return ""
     if docs.get("status") == train_state.VERIFIED:
-        return f", docs verified on tip {current[:12]}"
-    return f", docs refuted with every claim exempted on tip {current[:12]}"
+        return f", docs verified on tip {end[:12]}"
+    return f", docs refuted with every claim exempted on tip {end[:12]}"
 
 
 def exemption_problem(

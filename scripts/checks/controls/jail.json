@@ -11,6 +11,10 @@
     "failure": "0134: the docs writer edits a script, a test or a coder's unit, so the docs stage changes code after the security verdict",
     "premise_test": "tests/test_persona_jails.py::test_docs_writer_refuses_any_other_path_in_the_docs_worktree"
   },
+  "unit_writes.R_DOCS_COMMIT": {
+    "failure": "0134: the docs writer commits with -a, --all or a pathspec, so files it never staged reach the docs branch",
+    "premise_test": "tests/test_wave2_fix.py::test_docs_writer_commit_takes_only_a_message"
+  },
   "unit_writes.R_DOCS_GIT": {
     "failure": "0134: the docs writer restores, checks out or stashes files in its worktree, so files other than the four public docs change",
     "premise_test": "tests/test_persona_jails.py::test_docs_writer_bash_writes_stay_on_the_public_docs"
