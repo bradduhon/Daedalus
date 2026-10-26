@@ -8,7 +8,14 @@ import os
 from pathlib import Path
 
 import pytest
-from lib import audit_proof, dispatch_binding, train_runner, train_state, train_summary
+from lib import (
+    audit_proof,
+    dispatch_binding,
+    plan_record,
+    train_runner,
+    train_state,
+    train_summary,
+)
 from lib.audit_proof import PUBLIC_DOCS, ProofError, push_proof
 from lib.config import Config
 from lib.manifest import ManifestError
@@ -19,7 +26,7 @@ from tests.conftest import REPO_ROOT
 from tests.conftest import git as _git
 from tests.hook_chain import evaluate
 from tests.hook_chain import judge as decide
-from tests.test_dispatch_binding import TRAIN, seed_plan
+from tests.test_dispatch_binding import TRAIN, VALID, seed_plan
 from tests.test_docs_stage import (
     CLAIM,
     ID,
@@ -104,6 +111,24 @@ def test_a_bound_coder_resume_onto_the_docstage_worktree_is_refused(
     assert dispatch_binding.claim(repo_cwd, TRAIN, "coder-2", "u1") is None
     stay = {**move, "tool_input": {"to": "coder-2", "message": f"Again.\nWorktree: {unit}"}}
     assert decide(stay, Config()).allow
+
+
+@pytest.mark.parametrize(("unit_id", "reserved"), [("DOCS", False), ("DocStage", True)])
+def test_plan_validation_reserves_the_docstage_slug(
+    tmp_path: Path, unit_id: str, reserved: bool
+) -> None:
+    # 0134: a unit whose slug would be docstage is a plan defect, so no unit takes that worktree.
+    text = (VALID).read_text(encoding="utf-8").replace("U3", unit_id)
+    path = tmp_path / "plan.md"
+    path.write_text(text, encoding="utf-8")
+    defects = plan_record.validate(plan_record.load(path), 5)
+    want = (
+        f"unit {unit_id} takes the slug of the reserved docs stage worktree "
+        "<train-id>-docstage. Next: give that unit another id in the plan."
+    )
+    assert (want in defects) is reserved, defects
+    if not reserved:
+        assert defects == plan_record.validate(plan_record.load(VALID), 5)
 
 
 # Requirement 3: the docs writer commits only with -m <message>.
