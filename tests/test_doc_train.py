@@ -95,7 +95,7 @@ def test_recipe_applies_small_findings_and_rechecks_in_claims_mode() -> None:
     assert "Rounds 2 and 3 read the claims the verifier rejected in the prior round" in verify
     assert "plus a random 20 percent sample of the rest" in verify
     assert "no round budget applies (0133)" in verify
-    for choice in ("`Exempt the finding`", "`Run a fix round`", "`End the train`"):
+    for choice in ("`Fix it now (Recommended)`", "`Skip, track or exempt it`", "`Stop the train`"):
         assert choice in verify, choice
 
 

@@ -278,7 +278,7 @@ def test_audit_section_after_a_rejection_an_exemption_and_no_verdict(tmp_path: P
     assert waived[:2] == [
         f"[VERDICT: REJECTED] tip={TIP} after 1 round(s); the operator exempted 1 of the 1 "
         "finding(s) of round 1.",
-        "- Exempted t.py::test\\_x (0130-DAE-PLT), tracking: GitHub tracked-risk issue",
+        "- Exempted t.py::test\\_x (0130-DAE-PLT), tracking: Track it",
     ]
     notes = parse_notes(NOTES + "## Waived\nt.py::test_x: tracked-risk issue filed\n", "n")
     assert (

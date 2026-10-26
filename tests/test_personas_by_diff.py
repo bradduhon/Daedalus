@@ -38,7 +38,7 @@ FOUR_DOCS = (
     "`docs/guardrails.md`",
     "`docs/project-requirements.md`",
 )
-PER_FINDING = "`Exempt the finding`, `Run a fix round` and `End the train`"
+PER_FINDING = "`Fix it now (Recommended)`, `Skip, track or exempt it` and `Stop the train`"
 VERIFIER_DESCRIPTION = (
     "Adversarial read-only verifier of one unit's diff against its brief. Judges what the unit "
     "did, did not do, added or subtracted against its requirements; agreement earns nothing."

@@ -32,11 +32,11 @@ APPROVED, REJECTED = "approved", "rejected"
 DOCS_VERDICT, VERIFIED, REFUTED = "docs_verdict", "verified", "refuted"
 # 0134: the docs writer's worktree is the unit <train-id>-docstage; no plan unit slug ends so.
 DOCS_SUFFIX = "-docstage"
-# 0139, 0142: how an exemption is tracked, each value with the operator's choice label.
+# 0139, 0142: how an exemption is tracked, each stored value with the operator's plain label.
 TRACKING = {
-    "dropped": "Silently dropped",
-    "issue": "GitHub tracked-risk issue",
-    "local": "Recorded locally",
+    "dropped": "Skip it",
+    "issue": "Track it",
+    "local": "Exempt it",
     "other": "Other",
 }
 # 0142: these answers leave no tracked issue, so the pull request body carries a Deviation: line.
