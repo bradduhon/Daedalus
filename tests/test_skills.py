@@ -34,6 +34,7 @@ def test_skills_exist() -> None:
     assert {p.parent.name for p in SKILLS} >= {
         "doctor",
         "audit-report",
+        "brainstorm",
         "build-train",
         "push-train",
     }
