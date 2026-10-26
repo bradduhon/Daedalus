@@ -698,7 +698,31 @@ def tip_admits(
     if not isinstance(judged, str) or not TIP.fullmatch(judged):
         return problem
     end = _docs_end(repo, judged, current)
-    return _docs_moves(repo, judged, end) or docs_problem(repo, train_id, state, end)
+    return (
+        _docs_moves(repo, judged, end)
+        or _tree_problem(repo, judged, end)
+        or docs_problem(repo, train_id, state, end)
+    )
+
+
+def _tree_problem(repo: Path, judged: str, end: str) -> str | None:
+    # 0131, audit round 1: the end tree is the judged tree but for the four docs and the ledger,
+    # whatever parents a merge names.
+    entries = _raw(repo, judged, end)
+    ledger = _ledger_rel(repo)
+    allowed = set(PUBLIC_DOCS) | ({ledger} if ledger else set())
+    if entries is not None and {path for _, _, path in entries} <= allowed:
+        # 0131: each public doc in the end tree stays a regular non-executable file.
+        if _docs_only([e for e in entries if e[2] in PUBLIC_DOCS]):
+            return None
+        return (
+            f"the tree of {end[:12]} holds a public doc whose type or mode differs from a "
+            f"regular file, or drops one, against the judged tip {judged[:12]}"
+        )
+    return (
+        f"the tree of {end[:12]} differs from the judged tip {judged[:12]} outside the four "
+        "public docs and the ledger"
+    )
 
 
 def _docs_note(repo: Path, train_id: str, state: dict[str, object], current: str) -> str:

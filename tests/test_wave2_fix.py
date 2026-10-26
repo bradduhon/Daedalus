@@ -36,7 +36,7 @@ from tests.test_docs_stage import (
     _train,
 )
 from tests.test_persona_jails import _bound_writer, _dispatch, _writer, trees
-from tests.test_train_runner import _config, _integration
+from tests.test_train_runner import _config, _integration, _state
 from tests.test_train_state_print import RECORDS, _section, _stop, _text
 
 # 0131: the runner tests' fixtures, a temp HOME, a plugin root and a one-commit repository.
@@ -247,6 +247,88 @@ def test_a_docs_exemption_lands_after_the_ruling_ledger_commit(repo: Path, plugi
     _ledger(repo)
     with pytest.raises(ProofError):
         push_proof(repo, train)
+
+
+# Audit round 1 fix: the end tree matches the judged tree outside the docs and the ledger.
+
+
+def _merge(repo: Path, first: str, second: str, doc: str) -> str:
+    # 0131: a merge commit with the parents given; its tree is the first parent plus one doc edit.
+    _git(repo, "checkout", "-q", first)
+    (repo / doc).parent.mkdir(parents=True, exist_ok=True)
+    (repo / doc).write_text(f"{doc} merged\n", encoding="utf-8")
+    _git(repo, "add", doc)
+    tree = _git(repo, "write-tree").stdout.strip()
+    done = _git(repo, "commit-tree", tree, "-p", first, "-p", second, "-m", "docs")
+    merge = done.stdout.strip()
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "reset", "-q", "--hard", merge)
+    return _integration(repo)
+
+
+def test_a_merge_onto_an_older_first_parent_is_refused(repo: Path, plugin: Path) -> None:
+    # 0131: the judged tip adds app.py; a merge onto the older commit drops it from the tree.
+    older = _exempted_security(repo, plugin)
+    train = _train(repo)
+    judged = _commit(repo, "app.py")
+    merged = _merge(repo, older, judged, "README.md")
+    _verified_at(repo, merged)
+    problem = audit_proof.tip_admits(repo, train, _state(repo), judged, merged)
+    assert problem == (
+        f"the tree of {merged[:12]} differs from the judged tip {judged[:12]} outside the four "
+        "public docs and the ledger"
+    )
+
+
+def test_the_no_ff_docs_merge_onto_the_judged_tip_still_passes(repo: Path, plugin: Path) -> None:
+    judged = _exempted_security(repo, plugin)
+    train = _train(repo)
+    _config(repo, {"ledger": LEDGER_DECL})
+    side = _commit(repo, "docs/howto/README.md")
+    _git(repo, "reset", "-q", "--hard", judged)
+    merged = _merge(repo, judged, side, "README.md")
+    _verified_at(repo, merged)
+    assert audit_proof.tip_admits(repo, train, _state(repo), judged, merged) is None
+    assert push_proof(repo, train).endswith(f"docs verified on tip {merged[:12]}")
+
+
+@pytest.mark.parametrize("change", ["edit", "executable", "symlink", "dropped"])
+def test_the_end_tree_keeps_each_public_doc_a_regular_file(
+    repo: Path, plugin: Path, change: str
+) -> None:
+    # 0131: the judged-to-end comparison applies the doc mode rule whatever the merge parents.
+    _exempted_security(repo, plugin)
+    judged = _commit(repo, "README.md", "docs/guardrails.md")
+    if change == "edit":
+        (repo / "README.md").write_text("edited\n", encoding="utf-8")
+        _git(repo, "add", "README.md")
+    elif change == "executable":
+        _git(repo, "update-index", "--chmod=+x", "README.md")
+    elif change == "symlink":
+        (repo / "docs" / "guardrails.md").unlink()
+        os.symlink("../README.md", repo / "docs" / "guardrails.md")
+        _git(repo, "add", "docs/guardrails.md")
+    else:
+        _git(repo, "rm", "-q", "docs/guardrails.md")
+    _git(repo, "commit", "-q", "-m", change)
+    end = _integration(repo)
+    problem = audit_proof._tree_problem(repo, judged, end)
+    if change == "edit":
+        assert problem is None
+    else:
+        assert problem == (
+            f"the tree of {end[:12]} holds a public doc whose type or mode differs from a "
+            f"regular file, or drops one, against the judged tip {judged[:12]}"
+        )
+
+
+def test_with_no_docs_record_tip_admits_is_todays_rule(repo: Path, plugin: Path) -> None:
+    judged = _exempted_security(repo, plugin)
+    train = _train(repo)
+    for moved in (judged, _commit(repo, "README.md"), _commit(repo, "app.py")):
+        state = _state(repo)
+        want = audit_proof.tip_problem(repo, judged, moved)
+        assert audit_proof.tip_admits(repo, train, state, judged, moved) == want
 
 
 # Requirement 6: one list of the four public docs.
