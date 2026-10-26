@@ -734,7 +734,8 @@ def test_train_script_ok_keeps_its_shape_check_without_a_cwd() -> None:
 
 
 # Pins MAP -> REQ, REQ -> MAP, SRC -> MAP: the map, the tool check and both frozen source forms.
-MAP_OUT = f"{CWD}/docs/.tmp/daedalus/t/map"
+TRAIN_ID = TRAIN_BRANCH.removeprefix("daedalus/")
+MAP_OUT = f"{CWD}/docs/.tmp/daedalus/{TRAIN_ID}/map"
 SOURCES = f"{CWD}/.claude/daedalus/trains/t.sources.json"
 MAP_TRAIN_OK = [
     f"python3 {SCRIPTS}/daedalus_map.py --repo {CWD} --out {MAP_OUT}",
@@ -786,6 +787,54 @@ def test_map_repo_outside_the_project_root_is_refused(args: str) -> None:
     # issue 63: the map's --repo is judged like every other train script's.
     command = f"python3 {SCRIPTS}/daedalus_map.py {args}"
     assert not decide(_b("orchestrator", command), CFG).allow, command
+
+
+MAP = f"python3 {SCRIPTS}/daedalus_map.py --repo {CWD}"
+
+
+@pytest.mark.parametrize(
+    "out",
+    [f"--out {MAP_OUT}", f"--out={MAP_OUT}", f"--out {MAP_OUT}/", f"--out {MAP_OUT}/../map"],
+)
+def test_map_out_in_the_active_train_map_folder_is_admitted(out: str) -> None:
+    # MAP -> REQ: the map folder of the train the marker names.
+    assert decide(_b("orchestrator", f"{MAP} {out}"), CFG).allow, out
+
+
+@pytest.mark.parametrize(
+    "out",
+    [
+        f"--out {CWD}/docs/.tmp/daedalus/20991231-000000/map",
+        f"--out {CWD}/docs/.tmp/daedalus",
+        f"--out {MAP_OUT}/sub",
+        f"--out {CWD}/docs/out",
+        f"--out {CWD}/scripts",
+        f"--out {MAP_OUT}/../../../../scripts",
+        f"--out {MAP_OUT} --out {CWD}/scripts",
+        f"--ou {MAP_OUT}",
+        "--out",
+        "",
+    ],
+)
+def test_map_out_elsewhere_is_refused(out: str) -> None:
+    # MAP -> REQ: any other --out reaches outside the train's scratch map folder.
+    reason = evaluate(HOOK, _b("orchestrator", f"{MAP} {out}".strip()), *TRAIN_FLAGS)
+    assert reason is not None and "daedalus_map.py writes its map only into" in reason, out
+    assert MAP_OUT in reason
+    assert not decide(_b("orchestrator", f"{MAP} {out}".strip()), CFG).allow, out
+
+
+def test_map_out_without_a_readable_train_id_stays_in_the_train_scratch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # MAP -> REQ: with no train id, any folder under <repo>/docs/.tmp/daedalus/ and nothing else.
+    module = load(HOOK)
+    monkeypatch.setattr(jail, "_train_branch", lambda cwd: None)
+    seg = ["python3", f"{SCRIPTS}/daedalus_map.py", "--repo", CWD, "--out"]
+    assert module.map_out_reason([*seg, f"{CWD}/docs/.tmp/daedalus/any/map"], CWD) is None
+    for out in (f"{CWD}/docs/.tmp/daedalus", f"{CWD}/docs/.tmp/x", f"{CWD}/scripts"):
+        reason = module.map_out_reason([*seg, out], CWD)
+        assert reason is not None and f"{CWD}/docs/.tmp/daedalus/" in reason, out
 
 
 def test_map_and_sources_stay_out_of_other_agents() -> None:

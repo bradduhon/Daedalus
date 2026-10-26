@@ -14,7 +14,7 @@ from lib.config import Config
 from lib.train_scope import KNOWN_AGENTS
 from lib.workspace import create, mark_train
 
-from tests.conftest import CWD, REPO_ROOT
+from tests.conftest import CWD, REPO_ROOT, TRAIN_BRANCH
 from tests.conftest import git as _git
 from tests.hook_chain import evaluate, load
 from tests.hook_chain import judge as decide
@@ -271,7 +271,10 @@ def _recipe_commands() -> list[str]:
         for m in _RECIPE_CMD.findall(text)
         if "/scripts/<script>" not in m
     ]
-    return [re.sub(r"<[^>]+>", "x", m.replace("<repo>", CWD)) for m in found]
+    # MAP -> REQ: the map's --out names the active train, which the jail fakes read as TRAIN_BRANCH.
+    train = TRAIN_BRANCH.removeprefix("daedalus/")
+    found = [m.replace("<repo>", CWD).replace("<train-id>", train) for m in found]
+    return [re.sub(r"<[^>]+>", "x", m) for m in found]
 
 
 def test_recipe_names_every_train_script_it_may_run() -> None:

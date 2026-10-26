@@ -33,7 +33,7 @@ MAP_MD = "map.md"
 SKIP_DIRS = frozenset({"__pycache__", "node_modules", "venv", "site-packages"})
 TEXT_SUFFIXES = frozenset({".md", ".json", ".toml", ".yml", ".yaml", ".sh", ".txt", ".cfg"})
 MAX_BYTES = 1_000_000
-# Train C duplication audit method: a window of normalized tokens, reported from six lines up.
+# MAP -> VER: the Train C duplication audit method, a token window reported from six lines up.
 WINDOW = 60
 MIN_LINES = 6
 STATUS = re.compile(r"\[(?:STATUS|VERDICT|STANDARDS): [A-Z][A-Z_]*[A-Z]\]")
@@ -51,7 +51,7 @@ EVENTS = (
     "SubagentStop",
     "UserPromptSubmit",
 )
-# A record is security-relevant when it is a hook event or its name carries one of these words.
+# MAP -> VER: security-relevant is a hook event or a name carrying one of these words.
 SECURITY = re.compile(
     r"verdict|compliance|audit|secret|token|key|password|credential|auth|hmac|session|ledger"
     r"|approv|reject|narrow|protect|jail|exception|exempt",
@@ -125,7 +125,7 @@ def _is_test(rel: str) -> bool:
 
 
 def _walk(repo: Path, out: Path) -> list[str]:
-    # Hidden folders hold worktrees, caches and train scratch; links are never followed.
+    # MAP -> VER: hidden folders (worktrees, caches, scratch) are skipped; links never followed.
     found: list[str] = []
     for top, dirs, names in os.walk(repo):
         here = Path(top)
@@ -163,7 +163,7 @@ def _parse(scan: Scan) -> dict[str, ast.Module]:
     return trees
 
 
-# Import graph
+# MAP -> VER: import graph
 
 
 def _candidate(base: str, dotted: str, py: frozenset[str]) -> str | None:
@@ -175,7 +175,7 @@ def _candidate(base: str, dotted: str, py: frozenset[str]) -> str | None:
 
 
 def _fallback(py: frozenset[str]) -> dict[str, str | None]:
-    # A dotted name found once in the tree; an ambiguous one maps to None, a stdlib one is left out.
+    # MAP -> VER: a dotted name found once; an ambiguous one maps to None, stdlib names left out.
     names: dict[str, str | None] = {}
     for rel in sorted(py):
         parts = rel[:-3].split("/")
@@ -194,7 +194,7 @@ class Resolver:
         self.fallback = _fallback(py)
 
     def resolve(self, importer: str, dotted: str, level: int) -> str | None:
-        # The importer's own folder and its parents first, as a script run sees them.
+        # MAP -> VER: the importer's folder and its parents first, as a script run sees them.
         parts = importer.split("/")[:-1]
         if level:
             if level - 1 > len(parts):
@@ -278,7 +278,7 @@ def imports_table(scan: Scan, trees: dict[str, ast.Module]) -> dict[str, ImportR
     }
 
 
-# Test-to-module coverage
+# MAP -> VER: test-to-module coverage
 
 
 def _named(value: str, by_name: dict[str, set[str]], sources: list[str]) -> set[str]:
@@ -290,7 +290,7 @@ def _named(value: str, by_name: dict[str, set[str]], sources: list[str]) -> set[
 
 
 def coverage_table(scan: Scan, trees: dict[str, ast.Module]) -> dict[str, list[str]]:
-    # A test covers a module it imports or names as `x.py`, a path, or a unique snake-case stem.
+    # MAP -> VER: a test covers what it imports or names as `x.py`, a path or a unique snake stem.
     resolver = Resolver(scan.py)
     sources = sorted(scan.py - scan.tests)
     by_name: dict[str, set[str]] = {}
@@ -310,7 +310,7 @@ def coverage_table(scan: Scan, trees: dict[str, ast.Module]) -> dict[str, list[s
     return {rel: sorted(tests) for rel, tests in covered.items()}
 
 
-# Readers and writers of shared records
+# MAP -> VER: readers and writers of shared records
 
 
 @dataclass
@@ -331,7 +331,7 @@ class Records:
         {"reader": occ.readers, "writer": occ.writers}.get(role, occ.mentions).add(where)
 
 
-# How a literal's use counts per record kind; a use the kind does not list is a mention.
+# MAP -> VER: a literal's use per record kind; a use the kind does not list is a mention.
 _LINE_ROLE = {"reader": "reader", "writer": "writer", "emit": "writer", "value": "writer"}
 _KEY_ROLE = {"reader": "reader", "writer": "writer"}
 
@@ -351,7 +351,7 @@ def _call_name(call: ast.Call) -> tuple[str, str]:
 
 
 def _role(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str:
-    # reader or writer by the literal's use; value in a dict, emit when it leaves as output.
+    # MAP -> VER: reader or writer by use; value inside a dict; emit when it leaves as output.
     parent = parents.get(node)
     while isinstance(parent, ast.Tuple | ast.List | ast.Set | ast.JoinedStr | ast.BinOp):
         node, parent = parent, parents.get(parent)
@@ -375,7 +375,7 @@ def _role(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str:
 
 
 def _env_role(node: ast.expr, parents: dict[ast.AST, ast.AST]) -> str | None:
-    # An environment name read through os.environ or getenv, or set through env= or setenv.
+    # MAP -> VER: an env name read via os.environ or getenv, or set via env= or setenv.
     parent = parents.get(node)
     if isinstance(parent, ast.Subscript) and parent.slice is node:
         value = parent.value
@@ -409,7 +409,7 @@ def _key_leaves() -> dict[str, set[str]]:
 
 
 def _module_strings(tree: ast.Module) -> dict[str, str]:
-    # A module-level NAME = "literal" stands for its literal wherever the module loads NAME.
+    # MAP -> VER: a module-level NAME = "literal" stands for the literal wherever NAME loads.
     found: dict[str, str] = {}
     for stmt in tree.body:
         value = stmt.value if isinstance(stmt, ast.Assign | ast.AnnAssign) else None
@@ -463,7 +463,7 @@ def _alternation(words: Iterable[str]) -> str:
 
 
 def _text_records(scan: Scan, records: Records, leaves: dict[str, set[str]]) -> None:
-    # Prose and config files are mentions only: a backticked key, a quoted event, a ${NAME}.
+    # MAP -> VER: prose and config files only mention: a backticked key, quoted event, ${NAME}.
     envs = [name for name, kind in records.kinds.items() if kind == "env"]
     patterns: list[tuple[re.Pattern[str], str]] = [
         (re.compile(r"[`\"'](" + _alternation(EVENTS) + r")[`\"']"), "event"),
@@ -510,7 +510,7 @@ def readers_table(scan: Scan, trees: dict[str, ast.Module]) -> dict[str, RecordR
     }
 
 
-# File ownership by plan unit
+# MAP -> REQ: file ownership by plan unit
 
 
 def ownership_table(plan_path: Path | None, files: Iterable[str]) -> dict[str, list[str]]:
@@ -529,11 +529,11 @@ def ownership_table(plan_path: Path | None, files: Iterable[str]) -> dict[str, l
     }
 
 
-# Near-duplicate blocks
+# MAP -> VER: near-duplicate blocks
 
 
 def _norm_tokens(text: str) -> tuple[list[str], list[int]]:
-    # Names and literals normalized; keywords, operators and attribute names kept; imports dropped.
+    # MAP -> VER: names and literals normalized; keywords, operators, attributes kept; no imports.
     skip = {tokenize.NL, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT, tokenize.ENCODING}
     skip |= {tokenize.ENDMARKER, tokenize.FSTRING_MIDDLE, tokenize.FSTRING_END}
     words: list[str] = []
@@ -598,7 +598,7 @@ def _merge(ranges: list[tuple[str, int, int]]) -> list[tuple[str, int, int]]:
 def _windows(
     scan: Scan, files: list[str]
 ) -> tuple[list[list[int]], dict[int, list[tuple[int, int]]]]:
-    # Each window of normalized tokens by a 64-bit digest; only digests seen twice keep their spots.
+    # MAP -> VER: windows by 64-bit digest; only digests seen twice keep their spots.
     vocab: dict[str, int] = {}
     lines_of: list[list[int]] = []
     first: dict[int, tuple[int, int]] = {}
@@ -644,7 +644,7 @@ def duplicates_table(scan: Scan) -> list[list[str]]:
     return sorted([f"{p}:{a}-{b}" for p, a, b in block] for block in blocks if len(block) > 1)
 
 
-# Output
+# MAP -> REQ: output
 
 
 def build(repo: Path, out: Path, plan_path: Path | None) -> MapTables:
