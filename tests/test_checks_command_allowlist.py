@@ -10,7 +10,7 @@ import pytest
 from lib import jail
 from lib.config import Config
 
-from tests.conftest import CFG, CWD, REPO_ROOT, TRAIN_BRANCH
+from tests.conftest import CFG, CWD, REPO_ROOT, TRAIN_BRANCH, write_train_marker
 from tests.hook_chain import (
     decide,
     evaluate,
@@ -835,6 +835,46 @@ def test_map_out_without_a_readable_train_id_stays_in_the_train_scratch(
     for out in (f"{CWD}/docs/.tmp/daedalus", f"{CWD}/docs/.tmp/x", f"{CWD}/scripts"):
         reason = module.map_out_reason([*seg, out], CWD)
         assert reason is not None and f"{CWD}/docs/.tmp/daedalus/" in reason, out
+
+
+def _map_project(tmp_path: Path) -> tuple[Path, str]:
+    # MAP -> REQ: a real project with a train marker, so the guard reads the train id itself.
+    repo = _git_init(tmp_path / "repo")
+    write_train_marker(repo, "20261026-002310")
+    (repo / "docs").mkdir()
+    return repo, "docs/.tmp/daedalus/20261026-002310/map"
+
+
+def _map_call(repo: Path, cwd: Path, out: str) -> str | None:
+    hook_input = _b("orchestrator", f"python3 {SCRIPTS}/daedalus_map.py --repo {repo} --out {out}")
+    hook_input["cwd"] = str(cwd)
+    return evaluate(HOOK, hook_input, *TRAIN_FLAGS)
+
+
+def test_relative_map_out_is_admitted_from_the_project_root(tmp_path: Path) -> None:
+    repo, rel = _map_project(tmp_path)
+    assert _map_call(repo, repo, rel) is None
+    assert _map_call(repo, repo / "docs", rel) is None
+
+
+def test_relative_map_out_resolves_from_the_root_not_the_working_folder(tmp_path: Path) -> None:
+    # MAP -> REQ: from <repo>/docs this value lands in <repo>/.tmp, where the script writes it.
+    repo, rel = _map_project(tmp_path)
+    landing = rel.removeprefix("docs/")
+    reason = _map_call(repo, repo / "docs", landing)
+    assert reason is not None and f"{repo}/{rel}" in reason
+    assert _map_call(repo, repo, landing) is not None
+
+
+def test_symlinked_map_folder_is_refused(tmp_path: Path) -> None:
+    repo, rel = _map_project(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (repo / rel).parent.mkdir(parents=True)
+    (repo / rel).symlink_to(elsewhere, target_is_directory=True)
+    for out in (rel, f"{repo}/{rel}"):
+        reason = _map_call(repo, repo, out)
+        assert reason is not None and "writes its map only into" in reason, out
 
 
 def test_map_and_sources_stay_out_of_other_agents() -> None:

@@ -129,7 +129,8 @@ def map_out_reason(segment: list[str], cwd: str) -> str | None:
     values = _out_values(segment[2:])
     if values is None or len(values) != 1:
         return R_MAP_OUT.format(allowed=allowed, given="(one value)")
-    real = os.path.realpath(os.path.join(cwd, values[0]))
+    # MAP -> REQ: a relative --out joins the project root, as daedalus_map.py joins it to --repo.
+    real = os.path.realpath(os.path.join(root, values[0]))
     ok = real == allowed if train else real.startswith(allowed)
     return None if ok else R_MAP_OUT.format(allowed=allowed, given=values[0])
 
