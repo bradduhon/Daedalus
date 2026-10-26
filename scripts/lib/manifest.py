@@ -29,10 +29,26 @@ class Features:
     ledger: bool | None = None
     # issue 48: true, false or null; absent reads false, and only true makes the gh lines a MISS.
     github: bool | None = False
+    # 0132: true, false or null; only false turns the dependency auditor's web lookup off.
+    dependency_web_lookup: bool | None = None
+    # 0132: true, false or null; only false turns off terraform fmt -check and validate.
+    terraform_tools: bool | None = None
 
 
 # 0073: the one list of feature names; validator check 13 and the key reference import it.
 FEATURE_KEYS = tuple(f.name for f in fields(Features))
+# 0134: a docs.literacy value is a level word or profile:<project-relative path>.
+LITERACY_LEVELS = ("plain", "standard", "expert")
+LITERACY_PROFILE = "profile:"
+
+
+@dataclass(frozen=True)
+class Docs:
+    # 0134: null lets the docs writer keep the register the public docs already use.
+    literacy: str | None = None
+
+
+DOCS_KEYS = tuple(f.name for f in fields(Docs))
 
 
 @dataclass(frozen=True)
@@ -44,6 +60,7 @@ class Manifest:
     unit_test_cmd: str | None = None
     typecheck_cmd: str | None = None
     lint_cmd: str | None = None
+    docs: Docs = field(default_factory=Docs)
 
 
 # 0073, B2: the stack keys that hold a command the coder may run verbatim.
@@ -156,16 +173,56 @@ def _features(target: Path, raw: dict[str, object]) -> Features:
             "features.scrub_file",
             "must be null or a project-relative path without a leading slash, '..' or globs",
         )
-    ledger = block.get("ledger")
-    if ledger is not None and not isinstance(ledger, bool):
-        raise _key_error(target, "features.ledger", "must be true, false or null")
-    github = block.get("github", False)
-    if github is not None and not isinstance(github, bool):
-        raise _key_error(target, "features.github", "must be true, false or null")
     kind: Literal["repository", "folder"] | None = (
         "repository" if scope == "repository" else "folder" if scope == "folder" else None
     )
-    return Features(kind, secrets, scrub, ledger, github)
+    return Features(
+        kind,
+        secrets,
+        scrub,
+        _switch(target, block, "ledger", None),
+        _switch(target, block, "github", False),
+        _switch(target, block, "dependency_web_lookup", None),
+        _switch(target, block, "terraform_tools", None),
+    )
+
+
+def _switch(target: Path, block: dict[str, object], key: str, absent: bool | None) -> bool | None:
+    # 0069, 0132: a true, false or null feature; absent reads as the field's default.
+    value = block.get(key, absent)
+    if value is not None and not isinstance(value, bool):
+        raise _key_error(target, f"features.{key}", "must be true, false or null")
+    return value
+
+
+def _literacy_ok(value: object) -> bool:
+    if value is None or value in LITERACY_LEVELS:
+        return True
+    if not isinstance(value, str) or not value.startswith(LITERACY_PROFILE):
+        return False
+    return repo_relative(value.removeprefix(LITERACY_PROFILE))
+
+
+def _docs(target: Path, raw: dict[str, object]) -> Docs:
+    # 0134: the docs block holds the docs writer's literacy; unknown keys are refused.
+    block = raw.get("docs", {})
+    if not isinstance(block, dict):
+        raise _key_error(target, "docs", "must be an object")
+    unknown = sorted(str(key) for key in set(block) - set(DOCS_KEYS))
+    if unknown:
+        raise _key_error(
+            target, "docs", f"has unknown keys {unknown} (known: {', '.join(DOCS_KEYS)})"
+        )
+    literacy = block.get("literacy")
+    if not _literacy_ok(literacy):
+        levels = ", ".join(f'"{level}"' for level in LITERACY_LEVELS)
+        raise _key_error(
+            target,
+            "docs.literacy",
+            f"must be null, one of {levels}, or {LITERACY_PROFILE}<project-relative path to a "
+            "voice profile without a leading slash, '..' or globs>",
+        )
+    return Docs(literacy if isinstance(literacy, str) else None)
 
 
 def _trains_dir(target: Path, raw: dict[str, object]) -> str | None:
@@ -214,6 +271,7 @@ def load(repo: Path) -> Manifest | None:
         unit_test_cmd=commands["unit_test_cmd"],
         typecheck_cmd=commands["typecheck_cmd"],
         lint_cmd=commands["lint_cmd"],
+        docs=_docs(target, raw),
     )
 
 

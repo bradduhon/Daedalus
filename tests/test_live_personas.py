@@ -336,6 +336,63 @@ def test_security_auditor_files_a_planted_defect_as_a_failing_test(live_repo: Pa
     assert result.returncode != 0, "the audit test passes on the judged tip"
 
 
+def test_dependency_auditor(live_repo: Path) -> None:
+    # 0132: off the network with the lookup off, it judges the lockfile and lists PASS/FAIL.
+    (live_repo / "requirements.txt").write_text("requests==2.32.3\n", encoding="utf-8")
+    _git(live_repo, "add", "requirements.txt")
+    _git(live_repo, "commit", "-q", "-m", "Add requests")
+    task = (
+        f"Diff base: HEAD~1\nBranch: HEAD\nRepo: {live_repo}\n"
+        "Changed dependency files: requirements.txt\nWeb lookup: off\n"
+        "Judge the change by your method and end with your status line."
+    )
+    run = _persona("dependency-auditor", task, ["Read", "Bash", "Grep", "Glob"], live_repo)
+    _check(run, "dependency-auditor", ("[STATUS: COMPLIANCE]",))
+    assert "DEP-5" in run.result.stdout
+
+
+def test_terraform_reviewer(live_repo: Path) -> None:
+    # 0132: TF-0 records the binary check; a missing or refused run is a warning, never a FAIL.
+    tf = 'variable "region" {\n  type = string\n}\n'
+    (live_repo / "main.tf").write_text(tf, encoding="utf-8")
+    _git(live_repo, "add", "main.tf")
+    _git(live_repo, "commit", "-q", "-m", "Add main.tf")
+    task = (
+        f"Diff base: HEAD~1\nBranch: HEAD\nRepo: {live_repo}\n"
+        "Changed Terraform files: main.tf\nTerraform tools: on\n"
+        "Review the change by your method and end with your status line."
+    )
+    run = _persona("terraform-reviewer", task, ["Read", "Bash", "Grep", "Glob"], live_repo)
+    _check(run, "terraform-reviewer", ("[STATUS: COMPLIANCE]",), block_ok=True)
+    assert "TF-0" in run.result.stdout
+    assert "TF-1 FAIL" not in run.result.stdout and "TF-2 FAIL" not in run.result.stdout
+
+
+def test_docs_writer(live_repo: Path) -> None:
+    # 0134: the writer edits a public doc in the docs worktree and claims the passage.
+    from lib import train_state
+    from lib.unit_binding import record_dispatch
+    from lib.workspace import create, mark_train
+
+    _git(live_repo, "branch", "daedalus/20261015-000000")
+    train_state.save(live_repo, "20261015-000000", {"train_id": "20261015-000000"})
+    mark_train(live_repo, "20261015-000000")
+    worktree = create(live_repo, "20261015-000000-docs", "daedalus/20261015-000000")
+    assert record_dispatch(live_repo, "20261015-000000", "20261015-000000-docs") is None
+    task = (
+        f"Worktree: {worktree}\n"
+        "Diff base: HEAD~1\nIntegration branch: daedalus/20261015-000000\n"
+        "Hand-back summary: unit u1 added src/hello.py with hello(name) returning hello <name>.\n"
+        "Public docs: README.md, docs/howto/README.md, docs/guardrails.md, "
+        "docs/project-requirements.md\nLiteracy: plain\n"
+        "Make README.md describe hello(name), commit, and end with your status line."
+    )
+    tools = ["Read", "Edit", "Write", "Bash", "Glob", "Grep"]
+    run = _persona("docs-writer", task, tools, live_repo)
+    _check(run, "docs-writer", ("[STATUS: DOCS_WRITTEN]",))
+    assert re.search(r"^Claim: README\.md:[0-9]+ ", run.result.stdout, re.M)
+
+
 VERIFIER_CLAIM = REPO_ROOT / "tests" / "fixtures" / "verifier" / "complete-reply.txt"
 
 

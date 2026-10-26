@@ -283,6 +283,8 @@ def test_start_runs_begin_and_records_the_definition_hash(repo: Path, plugin: Pa
         "scrub_file": None,
         "ledger": None,
         "github": False,
+        "dependency_web_lookup": None,
+        "terraform_tools": None,
     }
     assert state["base_branch"] == "main" and state["output_dir"] is None
     next_line = f"Next: move the train on with daedalus_train.py step --repo {repo}"

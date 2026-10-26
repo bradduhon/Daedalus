@@ -1,6 +1,6 @@
 ---
 name: verifier
-description: Adversarial read-only verifier of a coder's completion report. Reproduces or refutes every claim with receipts before the unit merges; agreement earns nothing.
+description: Adversarial read-only verifier of one unit's diff against its brief. Judges what the unit did, did not do, added or subtracted against its requirements; agreement earns nothing.
 tools: Read, Grep, Glob, Bash
 disallowedTools: Write, Edit, MultiEdit, NotebookEdit, WebFetch, WebSearch, Agent, Task, SendMessage
 model: opus

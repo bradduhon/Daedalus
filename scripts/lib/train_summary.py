@@ -70,7 +70,13 @@ _ANSWERERS: dict[str, tuple[str, ...]] = {
     "YIELD_COMPLIANCE": ("nist-specialist", "cis-specialist"),
     "YIELD_STANDARDS": ("standards-rules-specialist",),
 }
-_COMPLIANCE_AGENTS = ("nist-specialist", "cis-specialist")
+# 0132: the two diff-content judges list into Compliance too, never into the audit gate.
+_COMPLIANCE_AGENTS = (
+    "nist-specialist",
+    "cis-specialist",
+    "dependency-auditor",
+    "terraform-reviewer",
+)
 _CELL_CHARS = 300
 _PARAGRAPH_CHARS = 600
 

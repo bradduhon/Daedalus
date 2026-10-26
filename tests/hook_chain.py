@@ -123,6 +123,38 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("gh_classes", ()),
         ("dispatch_gate", ()),
     ),
+    # 0132: the two diff-content judges carry the verifier's read-only list without a test run.
+    "dependency-auditor": (
+        ("credential_paths", ()),
+        ("workspace_integrity", ()),
+        ("tool_bound", ()),
+        ("shell_tripwires", ()),
+        ("network_tools", ()),
+        ("read_only_bash", ("--git", "read-only")),
+        ("gh_classes", ()),
+    ),
+    "terraform-reviewer": (
+        ("credential_paths", ()),
+        ("workspace_integrity", ()),
+        ("tool_bound", ()),
+        ("shell_tripwires", ()),
+        ("network_tools", ()),
+        ("read_only_bash", ("--git", "read-only")),
+        ("gh_classes", ()),
+    ),
+    # 0134: the docs writer carries the repo-coder's list until its write jail narrows it.
+    "docs-writer": (
+        ("credential_paths", ()),
+        ("workspace_integrity", ()),
+        ("tool_bound", ()),
+        ("shell_tripwires", ()),
+        ("network_tools", ()),
+        ("git_push", ()),
+        ("git_grammar", ("--allow", "coder")),
+        ("unit_writes", ()),
+        ("gh_classes", ()),
+        ("confine", ()),
+    ),
 }
 _MODULES: dict[str, ModuleType] = {}
 
