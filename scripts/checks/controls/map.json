@@ -1,0 +1,6 @@
+{
+  "command_allowlist.R_MAP_OUT": {
+    "failure": "0060: the orchestrator runs daedalus_map.py with an --out outside the active train's map folder, so the map script overwrites map.md and map.json anywhere in the repository",
+    "premise_test": "tests/test_checks_command_allowlist.py::test_map_out_elsewhere_is_refused"
+  }
+}
