@@ -556,7 +556,7 @@ def print_cache_dir() -> int:
 
 
 def _tool_present(repo: Path, name: str) -> bool:
-    # A name with a slash is a repo-relative executable, such as .venv/bin/pytest; else PATH.
+    # 0128: a name with a slash is a repo-relative executable, such as .venv/bin/pytest; else PATH.
     if "/" in name:
         path = repo / name
         return path.is_file() and os.access(path, os.X_OK)

@@ -314,7 +314,7 @@ def test_plan_skill_table_lists_needs() -> None:
 
 
 def test_the_train_plan_validates() -> None:
-    # The train's own plan sits in the main checkout's scratch, which a unit worktree lacks.
+    # 0128: the train's own plan sits in the main checkout's scratch, which a worktree lacks.
     path = checkout_file(TRAIN_PLAN)
     if path is None:
         pytest.skip("the train's plan file is not present in this checkout")

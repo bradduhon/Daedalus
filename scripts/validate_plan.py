@@ -31,7 +31,7 @@ MAP_NEXT = "Next: rerun daedalus_map.py with --plan on this plan, then rerun the
 
 
 def _option(rest: list[str], flag: str) -> str | None:
-    # Removes `flag <value>` from rest; "" means the flag is present with no usable value.
+    # Pin MAP -> REQ: removes `flag <value>` from rest; "" means a flag with no usable value.
     if flag not in rest:
         return None
     at = rest.index(flag)

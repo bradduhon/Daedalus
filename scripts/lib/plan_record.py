@@ -291,7 +291,7 @@ def _requirements(lines: list[str], at: int) -> tuple[list[str], str | None]:
 
 
 def _sections(lines: list[str]) -> tuple[Section, ...]:
-    # Headings inside any fenced block, the plan block included, are never sections.
+    # Pin REQ -> VER: headings inside any fenced block, the plan block included, are never sections.
     fenced = False
     heads: list[tuple[int, re.Match[str]]] = []
     ends: list[int] = []
