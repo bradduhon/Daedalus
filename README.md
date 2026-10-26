@@ -173,6 +173,10 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 | `.claude/daedalus/ledger-locks/` in the repo that holds the ledger | A ledger entry is appended | Locks so two writers never change the ledger at once |
 | `<repo>/docs/.tmp/daedalus/` | A Build Train starts | Scratch files and the train summary, ignored by git |
 | `<repo>/.claude/daedalus/train.active` | A Build Train or Push Train starts | Marks a running train; removed when the train ends or stops |
+| `<repo>/.claude/daedalus/trains/<train-id>.json` | A Build Train starts | The train state file: plan record, units, verdicts, exemptions and ledger record (see How it works) |
+| `<repo>/.claude/daedalus/trains/<train-id>.bindings.json` | The first coder of a train is dispatched | Which coding agent holds each unit worktree |
+| `<repo>/.claude/daedalus/trains/<train-id>.sources.json` | A document train freezes its sources | Each frozen source with its sha256, and the excluded folders |
+| `<repo>/.claude/daedalus/reply-hmac.key` | The first agent reply recorded during a train | The secret that keys each reply digest in the audit log; no agent may read it |
 | `<repo>/.claude/worktrees/<train-id>-<unit-slug>` | The Build Train starts a unit | The coding agent's worktree, on branch `daedalus-unit/<train-id>-<unit-slug>`; removed when the train ends or stops, and the branch is kept |
 | `<repo>/.claude/worktrees/.gitignore` | The first unit worktree is created | Holds `*` so git ignores every worktree there |
 | `<repo>/docs/decisions.md` | You answer "create" to the Build Train's ledger question | A new ledger holding only a table header |
@@ -265,6 +269,186 @@ Each agent gets a short list of allowed tools, and a tool not on the list is nev
 [docs/guardrails.md](docs/guardrails.md) pairs each of these principles with the mechanism that enforces it and the test that shows the mechanism exists.
 
 With no declared standards, the Standards Packet is empty and the auditor judges each unit against its contract only. The NIST and CIS specialists review only units that touched IAM, KMS, mTLS, key custody or infrastructure configuration. To declare your standards, see [docs/project-requirements.md](docs/project-requirements.md). To start from a shipped set instead, declare the opt-in baseline pack, `{"kind": "pack", "name": "baseline"}`: five baseline checks plus the Daedalus cloud security standards, written in Daedalus's own words. The doctor offers it while `standards_sources` is empty.
+
+## How it works
+
+This section follows one tool call from Claude Code to its audit record, then one Build Train from the first command to the pull request. Each passage says what a piece is, what reads it and what it feeds.
+
+### One tool call, end to end
+
+Claude Code runs the hooks that `hooks/hooks.json` binds. Before a Bash, file, search, web, agent, message or MCP call, it runs `scripts/enforce_agent_jail.py` with the call as JSON on its input. That entry has a 10-second timeout, and its failure mode is block, so a hook that crashes or hangs refuses the call. Input that is empty, unparsable or missing a tool name is refused.
+
+The entry first decides the call's train scope. It walks up from the call's working folder to the project root. The root is the first folder holding `service-manifest.json` or `.claude/daedalus/`, or the main checkout when that folder is a linked worktree; with neither, it is the git root. The entry then looks for the train marker `.claude/daedalus/train.active` there. `scripts/lib/train_scope.py` names who meets the jail without a marker: every Daedalus agent, arriving as `daedalus:<name>`. The main session and agents from Claude Code itself or other plugins meet the full jail only during a train.
+
+With no marker, a call from the main session or a foreign agent takes the fast path, unless a path it names lies in a repository with a marker. The fast path loads none of the jail's other libraries and runs one check: a read or search of a credential store refuses an agent and warns the main session. A Bash command the entry cannot split, or one with more than 256 words or naming more than 16 repositories, goes to the full jail instead.
+
+Otherwise the entry loads the config and the jail libraries and judges the call:
+
+- A Daedalus agent's call goes to the router, `scripts/lib/router.py`. The router reads the agent's file under `agents/`, runs each check its hooks block names, then runs the excluded-roots check that every routed agent meets.
+- The main session's call goes to `scripts/lib/jail.py`. The jail never refuses the operator's own session: a call it flags runs, with a warning in the session's context (Main never prompted, amending 0105 and 0106).
+- A foreign agent's call also goes to `scripts/lib/jail.py`. During a train it may read and search in the train's repository, and every other checked tool there is refused.
+
+The entry then appends the decision to the session's audit log as a PreToolUse record, with the refusing check's name as the prefix of its reason. When the record cannot be written, an agent's call is refused unless it is an allowed read, and the main session's call runs with an alert. A refusal exits 2 and prints `daedalus-jail[<agent>]: <reason> Next: <what to do>` on stderr, which Claude Code shows the agent. An allowed call exits 0. After the tool runs, `scripts/audit_log.py` records the PostToolUse or PostToolUseFailure event in the background, with a hash and the start of the tool's output.
+
+When the jail's own libraries fail to load, a call in a train is refused for an agent and runs with an alert for the main session. Outside a train such a call proceeds, with a note on stderr.
+
+### How a rule set is built from a hooks block
+
+Each agent file's frontmatter carries a hooks block: one `PreToolUse` event holding one `- hooks:` item, then one entry per check, written `{type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/<script>.py <flags>"}`. The agent file loader, `scripts/lib/agent_files.py`, refuses any other shape and any script that is not shipped under `scripts/checks/`. Claude Code itself ignores hooks blocks on plugin agents, so the router is what runs them, in the jail's own process (0044).
+
+- Order: the checks run in the order the block lists them, and the first refusal ends the call. The hooks matrix under "The agents" above prints each block in that order.
+- Flags: the words after the script path are that check's flags. Each check declares the flags it takes, and a flag it does not know or a value of the wrong form refuses the call.
+- Tools: a check that names the tools it judges allows every other tool without judging it.
+- Combination: the call passes only when every check allows it. A check that fails to load, raises, or returns something other than a decision refuses the call with its full cause. An agent with no agent file or no hooks block is refused before any check runs.
+
+`scripts/checks/shapes.json` lists the checks each agent shape must carry. A test fails when an agent file lacks a check its shape lists.
+
+### The train marker
+
+The train marker is the file `<repo>/.claude/daedalus/train.active`, whose first line names the running train's id. `daedalus_workspace.py begin` writes it when a Build Train starts, `daedalus_workspace.py mark` writes it for a Push Train and a document train, and the stop and unmark commands remove it. While the marker exists in a repository, it switches on all of these there:
+
+- The full jail for the main session and for foreign agents; without it they meet only the credential check.
+- The refusal of every foreign agent's checked tools except reads and searches.
+- The main session's warnings in context: writes into `.git` or `.claude/daedalus/`, writes into the repository outside the train's scratch folder, naming a credential store, the shell tripwires, a skipped dispatch rule, and a git, gh or redirect command that names an excluded root.
+- The audit log: without a marker no hook writes a record, and the first record in a new session log also runs log retention.
+- The reply key, created with the first record that carries an agent's reply.
+- The receipts check on a coding agent's hand-back.
+- The checks that read the running train's id: the coding agent's unit worktree binding, the scratch and audit folders other writers may write, the document train's output folder, the unit worktree a test run is bound to, and the folder the dependency map may be written to.
+- The push and pull request gate, which reads the train branch and its recorded verdict through the marker.
+
+Daedalus's own agents keep their hooks with or without a marker.
+
+### The audit log and the reply key
+
+Each session gets one log, `<repo>/.claude/daedalus/audit/<session_id>.jsonl`, written only by the hooks. `scripts/lib/audit.py` writes every record under a lock. Each record holds its sequence number `seq`, the hash of the record before it (`prev_hash`) and its own `hash` over the rest of the record, so an edited, removed or reordered record breaks the chain. The chain verifier and the audit report recompute it before they read anything else. These are the record types and what each one holds:
+
+| Event | What the record holds | Who reads it |
+|---|---|---|
+| `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd` | The event, the session and its working folder, and for a prompt the redacted prompt text | The audit report |
+| `PreToolUse` | The tool and its redacted input (a Read records only its path), the jail's decision (`allow` or `block`), the refusal reason with its check name, and the jail's own time in milliseconds | The hooks check, the summary's Blocks section, the control cost report, the push proof's summary anchor, and the wave merge and summary, which find each verifier dispatch by its `Unit worktree:` line |
+| `PostToolUse`, `PostToolUseFailure` | A sha256 of the tool's output and its first 4096 characters, redacted, or the error | The push proof, which reads the summary command's own output line; the audit report |
+| `SubagentStart` | The agent's id and type | The stop record, which takes its agent type from here when Claude Code omits it |
+| `SubagentStop` | The redacted head and tail of the agent's last reply, 2048 characters each, a keyed digest of the whole reply, and every `[VERDICT: ...]` line of the reply | The push proof, the wave merge's verifier check, the docs verdict record, the summary, the reply check of project train definitions |
+| `SubagentHandback` tool call | An agent's report, in the tool input of its PostToolUse record | The same readers as a stop record, which read the report from the tool input |
+| `AuditRotation`, `AuditRotationFailed` | Each old session log retention deleted, or each one it failed to delete | The audit report |
+
+The reply key is `<repo>/.claude/daedalus/reply-hmac.key`: 32 random bytes in an owner-only file. The hooks create it with the first record that carries an agent's reply. Each such record gets `last_message_hmac`, an HMAC-SHA256 of the whole reply under that key. The key keeps the log alone from confirming a guessed reply, since the log holds only a redacted head and tail. Its reader is `daedalus_train.py check-reply`, which compares a reply a project train definition saved to a file with the agent's own stop record. No agent may read the key, and the credential check refuses one that tries. A key file that is not a 32-byte owner-only regular file stops the record. Its `Next:` line says to delete the key from your own shell, and the next reply creates a new one.
+
+### Train state and the bindings file
+
+Each train has one state file, `<repo>/.claude/daedalus/trains/<train-id>.json`. Only scripts write it, under the lock file `<train-id>.lock` beside it, and the jail refuses tool writes into `.claude/daedalus/`. Its fields:
+
+- `train_id`, `repo`, `base_branch`, `base_sha`, `charter_root`, `charter_base`, `charter_branch_created`, `ledger_line` and `cache_dir`, written by `begin`.
+- `lock_sha`, the contract lock commit every unit branch must descend from, written by `lock`.
+- `merged`, set by finish once every unit merged.
+- `units`, one entry per worktree with its `name`, `branch` and `path`, and `audit: true` on the audit worktree.
+- `plan`, the recorded plan's `path` and `sha256`; the dispatch gate refuses a coder when the file no longer matches.
+- `choices`, `phase` and `weight`, from the choice command; with project priorities a choice also records the deciding `driver` and `rule`.
+- `start_seq`, `audit_session` and `audit_bounds`, from the hooks check: the log record after which the train's verdicts are read.
+- `verdict`, holding `status`, `tip`, `round` and `seq`, from the verdict command; `seq` is the auditor reply's record number in the log.
+- `audit_rounds`, one map of findings per round with each finding's severity and class.
+- `exemptions`, per round and per finding: the exemption's `ledger_id`, the `tip` it covers and how it is `tracking`.
+- `docs_verdict`, the docs stage record: `status`, `tip`, and for a refuted record its `findings` and `exemptions`.
+- `ledger`, the ledger commit's `sha` and `ids`; `reaudit` and `resume` for the recovery paths; `consults_open`, the consulted agents whose reply the train still waits for.
+- A train started from a project train definition adds the runner's own fields, such as `mode`, `definition`, `stage_index`, `dispatches`, `records` and `stage_log`.
+
+The progress note, the summary command, the dispatch gate, the merge commands, the push proof and the push gate read it.
+
+The bindings file, `<repo>/.claude/daedalus/trains/<train-id>.bindings.json`, holds one entry per unit worktree under `units`, written under its own lock. It keeps one coding agent per unit, in four steps:
+
+1. Dispatch: when the orchestrator starts a repo-coder with one `Worktree:` line, the dispatch gate records the unit with no agent yet. A second dispatch to the same unit is refused.
+2. Claim: the coding agent's first write, or first git write, in that worktree binds the unit to its agent id. Every later write by that agent must stay in that worktree, and no other agent may write there.
+3. Rebind: when the orchestrator resumes a coder with a new `Worktree:` line, the gate moves the coder to the new unit and records the old unit as `retired_to` the new one.
+4. Finish: finish and the wave merge mark each merged unit `finished`, and a later write into it is refused.
+
+### The push proof
+
+`python3 <plugin>/scripts/verify_audit_chain.py --approved <train-id> --repo <repo>` is the check the Push Train runs before it pushes. The push gate applies the same tip and exemption rules to an agent's `git push` and `gh pr create`. It reads the train summary's `Session <id>:` line to find the audit log, and the train state for the hooks-check bound of that session. It grades the approved path first:
+
+1. The recorded verdict must be approved and name the auditor reply's record number, its `seq`.
+2. The anchor is the first record after that number of the summary command, `daedalus_train.py summary --repo <repo>`, whose own output says the summary was written for this train. A summary written by any other tool never anchors the proof.
+3. The graded turn is the last security auditor turn after the hooks-check bound and before the anchor. A reply in it that carries both an approved and a rejected verdict line is refused with `carries both verdicts`, and the round must be rerun.
+4. The turn's verdict must be approved, its record number must equal the recorded `seq`, and its `tip=` must equal the recorded tip.
+5. The integration branch must sit on that tip. Two moves past it are admitted. The first is one plain commit that changes only the ledger. The second, when a docs record exists, is a run of commits that change nothing but the four public docs, which the docs record covers, plus one ledger-only commit after them.
+
+When the approved path fails and the recorded verdict is rejected, the proof takes the exemption path instead. Every finding in that round's findings file and in its recorded round must carry an exemption for the judged tip, with a ledger id and a tracking answer, and the tip rule of step 5 still applies. When a docs record exists, it must name the current tip as verified, or as refuted with every refuted claim exempted.
+
+Exit 0 prints `OK approved: approved verdict, ...` or `OK approved: every finding exempted, ...`, followed by the docs result when a docs record covers the tip. Exit 1 prints `NOT APPROVED: <reason>` with a `Next:` line. Run it from your own shell to see what a push would meet.
+
+### The controls register
+
+`scripts/checks/controls/` holds one JSON fragment per unit of work that added a control. Each key is `checks/<script>` for a hook script, or `<module>.<R_ constant>` for a refusal message. Each value holds exactly two fields: `failure`, the failure the control prevents, starting with its ruling or issue id, and `premise_test`, the test that goes red when that control's premise stops holding. `scripts/lib/controls.py` merges the fragments and refuses a key named twice.
+
+`python3 <plugin>/scripts/audit_report.py --session <id> --controls` reads it for its Control cost section, which lists the blocks per check and one `failure:` line for each check that blocked. The orchestrator reads that report at the end of a train. Each check that blocked and whose line reads `failure: none` goes to you as a keep, redesign or remove question. `tests/test_controls.py` fails when a hook script or a refusal constant has no row, when a field is empty, when a failure does not start with an id, when a premise test does not exist, or when a row names a constant its module no longer has.
+
+### One train, end to end
+
+1. Start. The main session runs `daedalus_workspace.py begin`. That command refuses a dirty tree, writes the data folder and its `.gitignore`, the train state file and the train marker, and prints the first State Block lines. Then `verify_audit_chain.py --hooks-live` finds its own command as the newest Bash record of this session's log and records the bound the push proof reads. The main session starts one orchestrator agent and relays between it and you.
+2. Standards and the map. The standards specialist writes the Standards Packet from your declared sources. Its fifth part is a `## Priorities` section, holding your `priorities` block or the line `priorities: none declared`. The orchestrator runs `daedalus_map.py --repo <repo> --out <repo>/docs/.tmp/daedalus/<train-id>/map` and records the sha256 of `map.json`; the jail refuses an `--out` outside that folder.
+3. Plan. The planner cuts the work into units. Each unit has a line in the plan block and a requirement section below it. `validate_plan.py` checks the file, and `daedalus_train.py plan` records its path and sha256 in train state.
+4. Contract lock. The contract agent writes the Locked Contract Packet. `daedalus_workspace.py lock` commits it on the integration branch `daedalus/<train-id>` and records `lock_sha`.
+5. Units. For each wave, the orchestrator checks the units' `needs:` with `daedalus_doctor.py --check-tools`. For each unit it then runs `daedalus_workspace.py create`, writes the brief file, and starts a repo-coder with the brief path and one `Worktree:` line. The dispatch gate checks the recorded plan and records the dispatch, and the coder's first write claims the unit.
+6. Hand-back and verification. The coder ends with a receipts block above its `[STATUS: COMPLETE]` line, which the receipts check reads. The orchestrator checks the reply's branch, packet hashes and lock ancestry. The verifier then judges the unit's diff against its brief, and the unit is ready to merge once its verdict is `[VERDICT: VERIFIED]`.
+7. Merge. `daedalus_workspace.py finish` merges every unit into the integration branch with `--no-ff`. A train cut into waves merges each wave first with the wave merge command.
+8. Audit. Judges join by what the diff touches. The NIST and CIS specialists come in for IAM, KMS, mTLS, key custody or infrastructure changes, the dependency auditor for a dependency manifest or lockfile, and the Terraform reviewer for a `.tf` or `.tfvars` file. The security auditor judges the merged tip in its own audit worktree, and `daedalus_train.py verdict` records its verdict. Each finding of a rejected round goes to you one question at a time.
+9. Ledger and docs. On an approved verdict, or once you exempted every finding, charter-docs commits the ledger entries. After an approval, the approved verdict is recorded next. The docs writer then brings the four public docs up to date in the docs stage.
+10. Summary. `daedalus_train.py summary` writes the summary from train state and the audit log, and the orchestrator ends with `[STATUS: TRAIN_COMPLETE]`.
+11. Push. `/daedalus:push-train` marks the train again, runs the hooks check and the push proof, and has the conductor push the branch and open the pull request. The push gate checks the verdict again on the conductor's own push. You review and merge.
+
+### Requirement sections and needs
+
+Each unit of a plan has a requirement section outside the plan block. The section opens with a heading `### <unit id>: <title>`. Somewhere under it, a line reading exactly `Requirements:` is followed by lines `1. <requirement>`, numbered from 1. Each requirement is one sentence ending in a period, and it names a backticked token or a path holding a slash. `scripts/lib/plan_record.py` reads the sections, and `validate_plan.py` refuses a unit without one, a list that breaks its numbering, and a requirement in another shape. The dispatch gate runs the same check before any coder starts. The orchestrator copies each unit's section into its brief, and the verifier counts one claim per numbered line.
+
+A unit line may also carry `needs: <tool or protected path>[, ...]`: the tools the unit's build needs, such as `mypy` or `.venv/bin/ruff`, and each protected file it needs changed. Before a wave starts, the orchestrator passes every tool need to `daedalus_doctor.py --check-tools <names> --repo <repo>`. That command prints `OK   tool <name>` or `MISS tool <name>` per name and exits 1 on any MISS. Missing tools and protected-file needs reach you as one question per wave.
+
+### The receipts check
+
+`scripts/handback_check.py` runs on every SubagentStop and on every `SubagentHandback` tool call, during a train only. It judges only a repo-coder's reply whose last line is `[STATUS: COMPLETE]`. Directly above that line it wants a `## Receipts` line followed only by lines of five shapes: `- commit <40 hex> <subject>`, `- test <command> => <last output line>`, `- typecheck <command> => <last output line>`, `- yield <kind> <question> => <who answered>` and `- deviation <file or behaviour> | <reason>`. At least one commit line and one test line must be there. A reply in another shape is sent back with one `Next:` line naming the shape, before the verifier sees it. A check that cannot run never blocks the coder, and the verifier still judges the unit. `scripts/cite.py` prints the `file:line` of each line holding a fixed string, so a coder can paste a citation instead of retyping it.
+
+### The verifier
+
+The verifier judges each unit's diff against its brief, never against the coder's report (verify against the brief, 0128). Its claims are the brief's numbered requirements, the unit's files list, the pins that name the unit and the Standards Packet rules a changed line falls under. The map adds two more kinds of claim. For each module the diff changes, `imports.<module>.fan_in` lists its importers, and each one must still get what it relied on. Each `duplicates` entry that overlaps the added lines must not repeat code the project already holds. Each refuted claim is a `code` row or a `scope` row. A `scope` row is a file outside the files list, or a behaviour change no requirement asks for, unless a `- deviation` receipt names it with a reason.
+
+A receipt the branch contradicts, such as a wrong test count or commit subject, is corrected inside the verdict and counted on a `corrected=<k>` line above the closing verdict line. It never refutes the unit, and the coder is not resumed for it (report refutations never stop, 0127). Only `code` and `scope` rows send a coder a fix pass, and a second refutation of the same unit stops the train. The orchestrator runs finish only once every unit's verdict is `[VERDICT: VERIFIED] claims=<n>`. The wave merge command reads that last line itself, from the verifier's reply in the audit log. The summary's Verification section prints each unit's verdict line with its corrected count. A prompt whose first line is `CLAIMS MODE.` lists `Claim: <path>:<line> <claim>` lines instead of a brief, and the verifier checks only those lines. The docs stage and the document train use this form.
+
+### Merges and fix units
+
+`daedalus_workspace.py finish` merges every recorded unit except the audit worktree's, one `--no-ff` merge commit each, and skips a unit already on the integration branch. Each merge message reads `Merge <name> for train <train-id>`, where `<name>` is the worktree name without its `<train-id>-` prefix. The wave merge command, `python3 <plugin>/scripts/daedalus_workspace.py merge --repo <repo> --units <id>[,<id>]`, merges only the named units and leaves the train open for the next wave. It refuses a unit the recorded plan does not name, and a unit without a `[VERDICT: VERIFIED]` verifier reply for its worktree in the audit log. A fix unit from an audit round, the worktree `<train-id>-fix<n>-<unit>`, is outside the plan, so the wave merge refuses it and finish merges it on its next run. To merge such a unit by hand, run this from your own shell on the integration branch, with `<name>` the worktree name without its `<train-id>-` prefix, and finish then skips it:
+
+    git merge --no-ff daedalus-unit/<train-id>-<name> -m "Merge <name> for train <train-id>"
+
+### Exemptions, the docs stage and the personas
+
+Each failing finding goes to you as one question with three choices: exempt the finding, run a fix round, or end the train. No round budget applies, and the train never opens a fix round or stops on its own authority (operator holds every gate, 0133). An exemption brings a second question, how it is tracked: silently dropped, a GitHub tracked-risk issue, recorded locally, or your own answer. The main session records each exemption with `daedalus_train.py exception --ledger-id <id> --finding <id> --tracking <dropped, issue, local or other>`. The command writes it in train state, under the round for a security finding and in the docs record for a docs claim. The push proof reads it, and the summary's Audit section prints each exempted finding with its tracking answer.
+
+The docs stage runs after the security verdict is recorded (docs writer ends the train, 0134). It creates the worktree `<train-id>-docstage`, which the dispatch gate binds to the docs writer alone. The docs writer may write only the four public docs: `README.md`, `docs/howto/README.md`, `docs/guardrails.md` and `docs/project-requirements.md`. Its claims go to the verifier in claims mode. A verified reply merges the docs branch, and `daedalus_train.py verdict --gate docs` records the docs verdict in train state. Each refuted claim goes to you as a finding. The summary's Audit section names the docs verdict, or `Docs: not run`.
+
+Two read-only judges join by what the diff touches (personas by diff, 0132). The dependency auditor judges a changed dependency manifest or lockfile. It asks for security advisories only through a web question the train sends to the web researcher. When `features.dependency_web_lookup` is `false`, the train answers that question with "web lookup is off", and the auditor judges from the lockfile and any advisory export. The Terraform reviewer judges a changed `.tf` or `.tfvars` file. It may run only `terraform fmt -check` and `terraform validate`, and neither when `features.terraform_tools` is `false`. Each FAIL row from either judge goes to you as a finding.
+
+### Project priorities
+
+The `priorities` block of `service-manifest.json` ranks four concerns, `security`, `trust`, `ops` and `cost`, and may add rules, principles and per-agent rankings (see the key reference above). The doctor prints `priorities: <ranking>, <n> rules` or `priorities: none declared`. The standards specialist writes it into the Standards Packet's `## Priorities` section, and every agent of every train reads that section, never your own session (priorities bind agents in every train, 0137). When two concerns conflict, the orchestrator walks the rules in order, and the first match decides. A rule ending in a concern settles the choice alone, and its choice record names the driver and the rule. A rule ending in `surface` puts the choice to you. A coder surfaces a default with `[STATUS: YIELD_STANDARDS] priorities rule <n>: ...`. A global rule or your answer outranks the ranking, and no rule lowers an audit finding's severity. The summary's Priorities section lists each decision a rule settled or surfaced.
+
+### The document train and excluded roots
+
+`/daedalus:doc-train` derives a document from frozen sources (document train accepted, 0135). `freeze_sources.py --train <id> --output-dir <folder> --source <alias>=<role>:<path>` records each source with its sha256 in `<repo>/.claude/daedalus/trains/<id>.sources.json`. `freeze_sources.py --verify <that file>` exits 4 when a source changed. It exits 5 when an output carries an en or em dash, placeholder copy, or a sentence copied from a style source that carries a number. The doc-deriver and the change-logger write only inside the output folder, which `scripts/checks/doc_outputs.py` checks. The verifier checks the deriver's claims in claims mode. `/daedalus:round` keeps the record of one round of correspondence.
+
+The `excluded_roots` key of `config.json` names folders whose files must never reach git, GitHub or a redirect. `scripts/checks/excluded_roots.py` runs for every Daedalus agent after its own checks. It refuses a git command that stages, commits or stashes a path inside such a folder, a gh command or a redirect that names one. The doc-deriver and the change-logger may redirect into such a folder, since their outputs live there. During a train the main session is warned instead. `freeze_sources.py` records the resolved folders in the sources file.
+
+### The summary's path rule
+
+The train summary becomes a public pull request body, so `scripts/lib/train_summary.py` lets no absolute path through. It first rewrites paths under the repository as relative paths, and paths under the Charter as starting with the Charter's folder name. Every other word holding a `/`, a `\` or a percent-encoded slash must then be a plain relative path inside the repository or the Charter. Each part of such a path is a plain ASCII name, with no `..`, `~`, `%`, `$`, `@`, scheme, drive, or leading or doubled slash. A path from the summary notes file that breaks this rule stops the summary, with a `Next:` line naming the path. A path from the audit log or train state, which nobody may edit, prints as `[path withheld]`, and the summary is still written.
+
+### The kernel wrapper's grants
+
+On a kernel with Landlock and seccomp, a coder's test command runs as `daedalus_confine.py --unit <worktree> -- <command>`, which the coder's confine check requires. The wrapper applies its rules to its own process, then runs the command, and every child inherits them. Nothing is installed, and the rules end with the process tree. It grants:
+
+- Read and write: the unit worktree, a private temporary folder `daedalus-confine-<uid>/<hash>` under the system temp folder (mode 0700, owned by you), and `/dev/null`.
+- Read only: every entry of the repository except `.claude/daedalus` and `.claude/worktrees`, never following a link; the running Python's prefixes and site-packages folders; and `/usr`, `/lib`, `/lib64`, `/lib32`, `/bin`, `/sbin`, `/etc`, `/proc`, `/sys` and `/dev`. A folder that holds or sits inside a credential store is left out.
+- Network: a seccomp filter refuses every socket family except `AF_UNIX` and `AF_NETLINK`, and refuses io_uring. On Landlock ABI 4 and later, TCP bind and connect are refused too.
+- Environment: `TMPDIR` names the private folder, `GIT_CONFIG_GLOBAL` names an empty git config written fresh for each run, and `XDG_CONFIG_HOME` names an empty folder.
+
+It prints one `daedalus_confine:` line naming the ABI, the architecture and every grant before the command starts.
 
 ## What is in this repo
 

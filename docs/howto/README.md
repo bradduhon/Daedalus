@@ -65,6 +65,7 @@ Each `OK` line is a check that passed. Each `MISS` line names what is missing an
 | Machine caches (NIST, CIS) | `${CLAUDE_PLUGIN_DATA}`, under `~/.claude/plugins/data/` | the plugin's refresh scripts |
 | Build Train scratch files and summary | `<repo>/docs/.tmp/daedalus/` | the Build Train; a `*` marker inside keeps it out of git |
 | Running-train marker | `<repo>/.claude/daedalus/train.active` | each train, removed when it ends or stops |
+| Train state and unit bindings | `<repo>/.claude/daedalus/trains/<train-id>.json` and `<train-id>.bindings.json` | the train's scripts only, under a lock |
 | Coder worktrees | `<repo>/.claude/worktrees/<train-id>-<unit-slug>` | the Build Train, removed when it ends or stops |
 
 `<repo>` is the main working tree of the git repository you started Claude Code in. Every worktree of that repository shares the one `.claude/daedalus/` directory. Outside a git repository, `<repo>` is the starting directory itself. The Build Train's start writes `.claude/daedalus/.gitignore` with a single `*` line, so git ignores the directory and your own `.gitignore` is untouched; outside a train, no hook writes anything into the repository. While a train runs, the jail also refuses any `git add` or `git commit` that names `.claude/daedalus`.
@@ -223,10 +224,13 @@ The train writes `docs/.tmp/daedalus/<train-id>-summary.md`. It holds:
 - the ledger entries added, on a `Ledger ids:` line. The train writes the summary before the ledger step with `Ledger ids: pending`, so a stop there still leaves a summary. The Push Train refuses a pending summary and names the ledger resume that finishes it. After the ledger commit and the approved verdict are recorded, the train rewrites the summary as its last step
 - the policy line
 - every ruling you made during the train, with its ledger id, and a `Deviation:` line for each pick that keeps the plugin's way
+- each decision a project priorities rule settled alone or put to you, with its rule and driver, or `none`
 - one row per unit: branch, packet, files, tests
+- each verified unit's last verifier verdict line, followed by `corrected=<k>`, the number of the coder's receipts the verifier corrected, when the reply carries that count
 - every yield and who answered it
-- the compliance results
+- the compliance results, the dependency auditor's and the Terraform reviewer's included
 - the audit verdict on the merged integration tip and its round count, or each exempted finding with its ledger id and how it is tracked
+- the docs verdict on the tip the docs stage merged, with each exempted docs claim, or `Docs: not run`
 - the blocks the hooks made, sorted into friction (work the agent's job needed) and habit (a reach outside the job)
 - the audit log path, relative to the repo (`.claude/daedalus/audit/<session>.jsonl`)
 
@@ -254,7 +258,7 @@ The train stops, with a `Next:` line, when any of these fails:
 - The working tree has unstaged or untracked changes. Staged changes are fine; the conductor commits them.
 - This session's hooks are not writing the audit log. The train marks itself running before this check, since the log records only during a train. Run `/daedalus:doctor`.
 - An audit log fails its hash chain check. Keep the file, report it, and do not edit it, as in "When the chain is BROKEN" above.
-- The security auditor's last reply before this train's summary, in the Build Train's audit log and after the mark its hooks check made, is not `[VERDICT: APPROVED]`, or the ledger commit is not on the branch. When the only problem is a commit that landed on the branch after the audit, the Push Train runs one recovery round on the new tip instead of stopping (see "Recovering a train" below).
+- The security auditor's last reply before this train's summary, in the Build Train's audit log and after the mark its hooks check made, is not `[VERDICT: APPROVED]`, or the ledger commit is not on the branch. A rejected round passes when every one of its findings carries an exemption. The plugin README's "The push proof" lists each rule this check applies. When the only problem is a commit that landed on the branch after the audit, the Push Train runs one recovery round on the new tip instead of stopping (see "Recovering a train" below).
 
 ### What the conductor does
 

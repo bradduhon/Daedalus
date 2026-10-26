@@ -35,6 +35,18 @@ REQUIRED = frozenset(
         "scripts/lib/audit_proof.py::summary_anchor",
         "scripts/lib/train_runner.py::reaudit",
         "scripts/daedalus_confine.py::rule_set",
+        # 0131: the controls Plan 9 built, each with its row.
+        "scripts/handback_check.py::receipts_problem",
+        "scripts/lib/plan_record.py::requirement_problem",
+        "scripts/daedalus_doctor.py::check_tools",
+        "scripts/checks/command_allowlist.py::R_MAP_OUT",
+        "scripts/lib/audit_proof.py::exemption_problem",
+        "scripts/lib/audit_proof.py::docs_problem",
+        "scripts/checks/unit_writes.py::R_DOCS_ONLY",
+        "scripts/checks/command_allowlist.py::TERRAFORM_FORMS",
+        "scripts/lib/manifest.py::PrioritiesError",
+        "scripts/checks/excluded_roots.py::judge",
+        "scripts/checks/doc_outputs.py::judge",
     }
 )
 

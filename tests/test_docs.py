@@ -125,6 +125,60 @@ def test_howto_exemptions_name_the_push_train_exemption_path() -> None:
     assert "stops at the Push Train's verdict check" not in readme
 
 
+def _how_it_works() -> str:
+    text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    return text.split("\n## How it works\n", 1)[1].split("\n## ", 1)[0]
+
+
+def test_readme_how_it_works_walks_a_call_and_a_train() -> None:
+    # 0131: one passage per mechanism the coverage map found unexplained, under one section.
+    section = _how_it_works()
+    heads = re.findall(r"^### (.+)$", section, re.MULTILINE)
+    for head in (
+        "One tool call, end to end",
+        "How a rule set is built from a hooks block",
+        "The train marker",
+        "The audit log and the reply key",
+        "Train state and the bindings file",
+        "The push proof",
+        "The controls register",
+        "One train, end to end",
+        "Merges and fix units",
+        "The summary's path rule",
+        "The kernel wrapper's grants",
+    ):
+        assert head in heads, head
+    for part in (
+        "`scripts/enforce_agent_jail.py`",
+        "`scripts/lib/train_scope.py`",
+        "`scripts/lib/router.py`",
+        "`<repo>/.claude/daedalus/reply-hmac.key`",
+        "`<repo>/.claude/daedalus/trains/<train-id>.json`",
+        "`<repo>/.claude/daedalus/trains/<train-id>.bindings.json`",
+        "`python3 <plugin>/scripts/verify_audit_chain.py --approved <train-id> --repo <repo>`",
+        "`carries both verdicts`",
+        "`scripts/checks/controls/`",
+        "`[path withheld]`",
+        "`daedalus_confine.py --unit <worktree> -- <command>`",
+    ):
+        assert part in section, part
+
+
+def test_readme_how_it_works_names_every_audit_record_type() -> None:
+    # 0131: each event hooks.json records, and the events the jail and rotation write.
+    section = _how_it_works()
+    hooks = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    events = set(hooks["hooks"]) | {"SubagentHandback", "AuditRotation", "AuditRotationFailed"}
+    assert sorted(e for e in events if f"`{e}`" not in section) == []
+
+
+def test_readme_train_marker_passage_names_the_marker_file() -> None:
+    # 0131: one passage lists what the marker switches on, so no effect hides in another section.
+    marker = _how_it_works().split("### The train marker", 1)[1].split("\n### ", 1)[0]
+    assert "`<repo>/.claude/daedalus/train.active`" in marker
+    assert "switches on all of these there" in marker
+
+
 def test_howto_credential_read_claim_names_the_main_session_warning() -> None:
     # spec 6, Main never prompted (amends 0106): agents are refused, the main session is warned.
     text = (REPO_ROOT / "docs" / "howto" / "README.md").read_text(encoding="utf-8")
