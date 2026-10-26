@@ -338,8 +338,8 @@ def test_the_audit_section_names_the_docs_verdict(tmp_path: Path) -> None:
         audit.index(f"Docs: refuted on tip {TIP}; the operator exempted 1 of the 2 claim(s)") :
     ]
     assert docs[1:] == [
-        f"- Exempted a.md:1 ({ID}), tracking: Recorded locally",
-        f"Deviation: finding a.md:1 exempted with no tracked issue (Recorded locally), "
+        f"- Exempted a.md:1 ({ID}), tracking: Exempt it",
+        f"Deviation: finding a.md:1 exempted with no tracked issue (Exempt it), "
         f"exemption row {ID}.",
     ]
 
@@ -366,7 +366,7 @@ def test_the_documentation_stage_records_the_docs_verdict() -> None:
         "<repo>/docs/.tmp/daedalus/<train-id>/docs/findings.txt" in refuted
     )
     assert refuted.index(finish) < refuted.index("--gate docs --status refuted")
-    assert "`Exempt the finding`, `Run a fix round` and `End the train`" in refuted
+    assert "`Fix it now (Recommended)`, `Skip, track or exempt it` and `Stop the train`" in refuted
     last = stage.split("8. Summary command and completion:", 1)[1]
     assert "daedalus_train.py summary --repo <repo>` after the docs record" in last
     assert "`[STATUS: TRAIN_COMPLETE]` (Phase 3 step 7) waits on both" in last

@@ -102,18 +102,18 @@ Paths here are relative to the plugin root.
 
 Every rejected round puts each finding in its findings file to the operator as one decision question, plus the tracking question on an exemption (0133). The verdict command only records the round; no round budget applies, and no fix round starts without the operator's pick. In a Build Train the orchestrator writes it as a decision brief and the session asks it.
 Put it to the operator with AskUserQuestion, in the decision-brief shape (0103), one question per finding:
-- Question: a plain question ending in a question mark that names the finding in words, such as "The security audit found that a ledger write skips its path check; what happens to this finding?"
-- Context: Two or three context sentences in the operator's words: what the work builds, what the finding is and what it exposes, and, for a finding that came back after its fix, what the fix missed. They carry no ruling ids, agent names or snake_case keys.
-- Choices, each with its consequence:
-  - `Exempt the finding`: the finding stays in the merged work, a second question asks how the exemption is tracked, charter-docs records the exemption as a ruling that names the finding, and the main session records it with the train runner's exception command.
-  - `Run a fix round`: the responsible coder resumes warm with this finding's failing test, and the audit runs again on the new tip.
-  - `End the train`: the train stops through its stop command, and every unit branch stays for fixes by hand or a narrower rerun.
-- Recommendation: The recommendation and its reason, in one sentence. The recommended choice is listed first, its label ending `(Recommended)`.
-- Tracking question, a second prompt asked only after `Exempt the finding`, never a fourth choice: a plain question such as "How is the exemption of this finding tracked?", with context sentences saying what each answer leaves behind. Every choice is offered in every environment, with no choice withheld for any project or rule:
-  - `GitHub tracked-risk issue`: the main session files the four-field tracked-risk issue before the pull request opens.
-  - `Recorded locally`: the ledger row alone records the exemption, and the pull request body carries a `Deviation:` line naming the finding and its exemption row.
-  - `Silently dropped`: nothing beyond the exemption row records it, and the pull request body carries the same `Deviation:` line.
-  - Other: the operator's own words, recorded with the exemption.
+- Question: the first line states what is at stake in one plain sentence, then asks, ending in a question mark, such as "A ledger write can land outside the ledger file. What do we do with this finding?"
+- Context: Two or three short sentences in the operator's words on what breaks and what happened in the test, and, for a finding that came back after its fix, what the fix missed. They name no mechanism: no ruling ids, agent names, script names or snake_case keys.
+- Choices, exactly these three labels in this order, each with what it does; the how of a fix stays out of the option text and lives in the finding file:
+  - `Fix it now (Recommended)`: runs a fix round. The responsible coder resumes warm with this finding's failing test, and the audit runs again on the new tip.
+  - `Skip, track or exempt it`: exempts the finding. It stays in the merged work, a second question asks how the exemption is tracked, charter-docs records the exemption as a ruling that names the finding, and the main session records it with the train runner's exception command.
+  - `Stop the train`: ends the train. The train stops through its stop command, and every unit branch stays for fixes by hand or a narrower rerun.
+- Recommendation: The recommendation and its reason, in one sentence. The recommended choice, `Fix it now (Recommended)`, is listed first.
+- Tracking question, a second prompt asked only after `Skip, track or exempt it`, never a fourth choice: a plain question such as "How do we keep track of this finding?", with context sentences saying what each answer leaves behind. Every choice is offered in every environment, with no choice withheld for any project or rule:
+  - `Skip it`: drops the finding silently, stored as `dropped`. Nothing beyond the exemption row records it, and the pull request body carries a `Deviation:` line naming the finding and its exemption row.
+  - `Track it`: a GitHub tracked-risk issue, stored as `issue`. The main session files the four-field tracked-risk issue before the pull request opens.
+  - `Exempt it`: the local ledger record alone, stored as `local`. The ledger row records the exemption, and the pull request body carries the same `Deviation:` line.
+  - Other: the operator's own words, recorded with the exemption and stored as `other`.
   The recommendation and its reason follow, in one sentence, as above.
 
-Record each pick through the choice record, then act on the round's picks together. Never start a fix round without a `Run a fix round` pick, and never stop the train on your own authority. An `End the train` pick stops the train; otherwise a `Run a fix round` pick runs a fix round for the findings it names; when every finding is exempted, the train goes on to the ledger step and the main session records one exemption per finding with `daedalus_train.py exception --repo <repo> --ledger-id <id> --finding <finding id> --tracking <dropped, issue, local or other>`. The same prompt follows every later rejected round.
+Record each pick through the choice record, then act on the round's picks together. Never start a fix round without a `Fix it now` pick, and never stop the train on your own authority. A `Stop the train` pick stops the train; otherwise a `Fix it now` pick runs a fix round for the findings it names; when every finding is exempted, the train goes on to the ledger step and the main session records one exemption per finding with `daedalus_train.py exception --repo <repo> --ledger-id <id> --finding <finding id> --tracking <dropped, issue, local or other>`. The same prompt follows every later rejected round.

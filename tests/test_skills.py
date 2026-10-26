@@ -369,7 +369,7 @@ ESCALATION_START = (
     "question per finding:"
 )
 ESCALATION_END = (
-    "Never start a fix round without a `Run a fix round` pick, and never stop the train on your "
+    "Never start a fix round without a `Fix it now` pick, and never stop the train on your "
     "own authority."
 )
 
@@ -407,7 +407,7 @@ def test_build_train_asks_per_finding_not_on_count() -> None:
     step4 = _section(text, "## Phase 3", "\n5. ").split("\n4. ", 1)[1]
     for gone in ("Obey the printed word", "budget_left", "escalate reason=", "`continue`"):
         assert gone not in step4, gone
-    assert "   - Otherwise any `Run a fix round` pick: run a fix round" in step4
+    assert "   - Otherwise any `Fix it now` pick: run a fix round" in step4
     assert ESCALATION_END in " ".join(step4.split())
     prompt = " ".join(catalog.split("## The per-finding audit prompt", 1)[1].split())
     assert prompt.startswith("Every rejected round puts each finding in its findings file")
@@ -549,12 +549,12 @@ def test_build_train_carries_the_escalation_prompt() -> None:
     # 0060: the orchestrator returns the prompt as a decision brief; the session asks it.
     assert "into a decision brief and return `[STATUS: DECISION]`" in step4
     order = [
-        "a plain question ending in a question mark",
-        "Two or three context sentences in the operator's words",
-        "what the finding is and what it exposes",
-        "`Exempt the finding`:",
-        "`Run a fix round`:",
-        "`End the train`:",
+        "states what is at stake in one plain sentence, then asks, ending in a question mark",
+        "Two or three short sentences in the operator's words",
+        "on what breaks and what happened in the test",
+        "`Fix it now (Recommended)`:",
+        "`Skip, track or exempt it`:",
+        "`Stop the train`:",
         "The recommendation and its reason",
     ]
     places = [prompt.index(item) for item in order]

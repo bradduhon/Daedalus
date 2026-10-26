@@ -41,11 +41,11 @@ KEY_A, KEY_B, KEY_C = (line.split(" | ", 1)[0] for line in (A, B, C))
 HIGH = "audit/round3/test_new.py::test_refused | high | scope"
 ID, ID2 = "0143-DAE-PLT", "0144-DAE-PLT"
 GATE_KEY = "audit/round1/test_gate.py::test_refused"
-CHOICES = ("`Exempt the finding`", "`Run a fix round`", "`End the train`")
+CHOICES = ("`Fix it now (Recommended)`", "`Skip, track or exempt it`", "`Stop the train`")
 TRACKING = (
-    "`GitHub tracked-risk issue`",
-    "`Recorded locally`",
-    "`Silently dropped`",
+    "`Skip it`",
+    "`Track it`",
+    "`Exempt it`",
     "Other: the operator's own words",
 )
 PROMPT_START = (
@@ -53,7 +53,7 @@ PROMPT_START = (
     "question per finding:"
 )
 PROMPT_END = (
-    "Never start a fix round without a `Run a fix round` pick, and never stop the train on your "
+    "Never start a fix round without a `Fix it now` pick, and never stop the train on your "
     "own authority."
 )
 RETIRED_WORDS = ("budget_left", "escalate reason=", "continue round=", "stall")
@@ -337,7 +337,8 @@ def test_the_orchestrator_puts_each_finding_to_the_operator() -> None:
     assert places == sorted(places)
     tracking = prompt.split("- Tracking question", 1)[1]
     assert (
-        "a second prompt asked only after `Exempt the finding`, never a fourth choice" in tracking
+        "a second prompt asked only after `Skip, track or exempt it`, never a fourth choice"
+        in tracking
     )
     assert "Every choice is offered in every environment" in tracking
     for choice in TRACKING:
@@ -382,6 +383,33 @@ def test_the_orchestrator_frontmatter_and_status_contract_are_unchanged() -> Non
     ]
 
 
+def test_the_prompt_uses_the_operators_plain_labels() -> None:
+    # Contract v2 pins 7 and 12: the three verb labels, the three tracking labels, stored values.
+    catalog = (REPO_ROOT / "skills" / "catalog" / "SKILL.md").read_text(encoding="utf-8")
+    for prompt in (_prompt(_step4()), _prompt(catalog)):
+        head, tracking = prompt.split("- Tracking question", 1)
+        choices = [
+            "- `Fix it now (Recommended)`: runs a fix round.",
+            "- `Skip, track or exempt it`: exempts the finding.",
+            "- `Stop the train`: ends the train.",
+        ]
+        places = [head.index(choice) for choice in choices]
+        assert places == sorted(places)
+        assert "the how of a fix stays out of the option text and lives in the finding file" in head
+        assert "the first line states what is at stake in one plain sentence, then asks" in head
+        for label, stored in (
+            ("Skip it", "dropped"),
+            ("Track it", "issue"),
+            ("Exempt it", "local"),
+        ):
+            assert f"- `{label}`:" in tracking and f"stored as `{stored}`" in tracking, label
+        assert "stored as `other`" in tracking
+        for old in ("Exempt the finding", "Run a fix round", "End the train", "Silently dropped"):
+            assert old not in prompt, old
+    assert list(train_state.TRACKING) == ["dropped", "issue", "local", "other"]
+    assert list(train_state.TRACKING.values())[:3] == ["Skip it", "Track it", "Exempt it"]
+
+
 def test_the_catalog_carries_the_same_per_finding_prompt() -> None:
     catalog = (REPO_ROOT / "skills" / "catalog" / "SKILL.md").read_text(encoding="utf-8")
     assert _prompt(catalog) == _prompt(_step4())
@@ -403,8 +431,8 @@ def test_the_relays_record_per_finding_exemptions() -> None:
         "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py exception --repo <repo> "
         "--ledger-id <id> --finding <finding id> --tracking <answer>`"
     ) in route
-    assert "for `GitHub tracked-risk issue` you file the four-field tracked-risk issue" in route
-    assert "for `Silently dropped` or `Recorded locally`" in route
+    assert "for `Track it` (`issue`) you file the four-field tracked-risk issue" in route
+    assert "for `Skip it` (`dropped`) or `Exempt it` (`local`)" in route
     assert "`Deviation:` line naming the finding and its exemption row" in route
     assert "binds the ruling to the integration tip" not in route
     push = _flat(REPO_ROOT / "skills" / "push-train" / "SKILL.md")
@@ -459,12 +487,12 @@ def test_the_summary_lists_each_exempted_finding(tmp_path: Path) -> None:
     assert audit[:7] == [
         f"[VERDICT: REJECTED] tip={TIP} after 2 round(s); the operator exempted 4 of the 4 "
         "finding(s) of round 2.",
-        "- Exempted a.py::t1 (0143-DAE-PLT), tracking: GitHub tracked-risk issue",
-        "- Exempted b.py::t2 (0144-DAE-PLT), tracking: Recorded locally",
-        "Deviation: finding b.py::t2 exempted with no tracked issue (Recorded locally), "
+        "- Exempted a.py::t1 (0143-DAE-PLT), tracking: Track it",
+        "- Exempted b.py::t2 (0144-DAE-PLT), tracking: Exempt it",
+        "Deviation: finding b.py::t2 exempted with no tracked issue (Exempt it), "
         "exemption row 0144-DAE-PLT.",
-        "- Exempted c.py::t3 (0145-DAE-PLT), tracking: Silently dropped",
-        "Deviation: finding c.py::t3 exempted with no tracked issue (Silently dropped), "
+        "- Exempted c.py::t3 (0145-DAE-PLT), tracking: Skip it",
+        "Deviation: finding c.py::t3 exempted with no tracked issue (Skip it), "
         "exemption row 0145-DAE-PLT.",
         "- Exempted d.py::t4 (0146-DAE-PLT), tracking: Other: the release checklist",
     ]

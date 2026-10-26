@@ -115,7 +115,7 @@ def test_readme_outside_train_claim_matches_the_jail() -> None:
 def test_howto_exemptions_name_the_push_train_exemption_path() -> None:
     # issue 62, 0133: --approved accepts a rejected round whose every finding is exempted.
     text = (REPO_ROOT / "docs" / "howto" / "README.md").read_text(encoding="utf-8")
-    bullet = next(line for line in text.splitlines() if line.startswith("- Exempt the finding"))
+    bullet = next(line for line in text.splitlines() if line.startswith("- Skip, track or exempt"))
     assert "by hand" not in bullet and "stops" not in bullet, bullet
     assert (
         "The Push Train's verdict check accepts a rejected round once every finding in its "

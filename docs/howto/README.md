@@ -202,11 +202,11 @@ The summary records the policy gate as `[POLICY: none declared]` or `[POLICY: de
 
 The auditor works in its own audit worktree, a checkout of the integration branch. Before each later round the train refreshes it with a fast-forward to the new integration tip; if that worktree holds a commit or a change the integration branch lacks, the refresh stops with a `Next:` line naming `git -C <path> status` instead of throwing the work away.
 
-A `[VERDICT: REJECTED]` names the tip it judged and writes each blocking finding as a failing test. Then the session asks you about each finding, one question per finding (0133):
+A `[VERDICT: REJECTED]` names the tip it judged and writes each blocking finding as a failing test. Then the session asks you about each finding, one question per finding (0133). The question's first line says what is at stake in one plain sentence, then asks. Two or three short sentences follow on what breaks and what happened in the test. The three choices are:
 
-- Exempt the finding: the finding stays in the merged work, and the exemption becomes a ruling in the ledger. A second question asks how the exemption is tracked: silently dropped, a GitHub tracked-risk issue the session files before the pull request opens, recorded locally in the ledger row alone, or your own answer. Every choice is offered in every project. A silently dropped or locally recorded exemption puts a `Deviation:` line in the pull request body naming the finding and its exemption row.
-- Run a fix round: the train sends the finding to the coding agent that wrote the code, in a fix unit cut from the integration branch, with the test it must make pass. Then it merges the fixes and audits again.
-- End the train: the train stops, and every unit branch stays for fixes by hand or a narrower rerun.
+- Fix it now (Recommended): the train sends the finding to the coding agent that wrote the code, in a fix unit cut from the integration branch, with the test it must make pass. Then it merges the fixes and audits again. How the fix is built is in the finding file, not in the choice.
+- Skip, track or exempt it: the finding stays in the merged work, and the exemption becomes a ruling in the ledger. A second question asks how the exemption is tracked: Skip it (dropped silently), Track it (a GitHub tracked-risk issue the session files before the pull request opens), Exempt it (the local ledger record alone), or your own answer. Every choice is offered in every project. A Skip it or Exempt it answer puts a `Deviation:` line in the pull request body naming the finding and its exemption row.
+- Stop the train: the train stops, and every unit branch stays for fixes by hand or a narrower rerun.
 
 The same questions follow every later rejected round. No round budget applies, and the train never runs a fix round or stops on its own authority. The Push Train's verdict check accepts a rejected round once every finding in its findings file carries an exemption.
 
