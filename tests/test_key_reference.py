@@ -100,10 +100,12 @@ def test_reader_keys_follow_the_reader_dataclasses() -> None:
     from dataclasses import fields
 
     from lib.config import Config
-    from lib.manifest import FEATURE_KEYS, Manifest
+    from lib.manifest import DOCS_KEYS, FEATURE_KEYS, Manifest
 
     tops = {key.split(".", 1)[0].removesuffix("[]") for key in config_keys()}
     assert tops == {f.name for f in fields(Config)}
     assert {f"features.{k}" for k in FEATURE_KEYS} <= set(manifest_keys())
+    # 0134: docs is a nested block like features, so its keys carry the block name.
+    assert {f"docs.{k}" for k in DOCS_KEYS} <= set(manifest_keys())
     leaves = {key.rsplit(".", 1)[-1] for key in manifest_keys()}
-    assert {f.name for f in fields(Manifest)} - {"features"} <= leaves
+    assert {f.name for f in fields(Manifest)} - {"features", "docs"} <= leaves

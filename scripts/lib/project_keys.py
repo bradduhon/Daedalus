@@ -16,10 +16,14 @@ from lib.config import (
     StandardsSource,
 )
 from lib.manifest import (
+    DOCS_KEYS,
     FEATURE_KEYS,
+    LITERACY_LEVELS,
+    LITERACY_PROFILE,
     MANIFEST_NAME,
     NARROWING_KEYS,
     STACK_COMMANDS,
+    Docs,
     Features,
     Manifest,
 )
@@ -45,6 +49,8 @@ def manifest_keys() -> tuple[str, ...]:
     for item in fields(Manifest):
         if item.name == "features":
             keys.extend(f"features.{key}" for key in FEATURE_KEYS)
+        elif item.name == "docs":
+            keys.extend(f"docs.{key}" for key in DOCS_KEYS)
         elif item.name in _MANIFEST_PARENT:
             keys.append(f"{_MANIFEST_PARENT[item.name]}.{item.name}")
         else:
@@ -73,6 +79,8 @@ def starter_manifest() -> dict[str, object]:
             doc["features"] = {
                 f.name: False if "bool" in str(f.type) else None for f in fields(Features)
             }
+        elif item.name == "docs":
+            doc["docs"] = {f.name: _json(getattr(Docs(), f.name)) for f in fields(Docs)}
         elif item.name in _MANIFEST_PARENT:
             parent = _MANIFEST_PARENT[item.name]
             doc[parent] = block = blocks.setdefault(parent, {})
@@ -137,6 +145,11 @@ _LEDGER_SEQUENCE = KeyRow(
     '`"last-row-id"`',
 )
 _COMMAND_VALUES = "A non-empty command string, or `null`"
+# 0134: the docs.literacy values the key reference and the setup command show.
+LITERACY_EXAMPLES = (
+    *(f'"{level}"' for level in LITERACY_LEVELS),
+    f'"{LITERACY_PROFILE}docs/voice-profile.md"',
+)
 # 0076, B7: one row per reader key; tests hold the README table equal to reference_table().
 KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     (MANIFEST_FILE, "jail_narrowing.forbidden_paths"): KeyRow(
@@ -197,6 +210,24 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`false`: the doctor never fails on gh",
         "`true`",
     ),
+    (MANIFEST_FILE, "features.dependency_web_lookup"): KeyRow(
+        "Lets the dependency auditor ask for security advisories on the web; the train sends "
+        "its questions to the web researcher. With it off, the auditor judges from the lockfile "
+        "and any advisory export the project supplies (0132)",
+        "boolean or null",
+        "`true`, `false` or `null`; only `false` turns the lookup off",
+        "`null`: the lookup is on",
+        "`false`",
+    ),
+    (MANIFEST_FILE, "features.terraform_tools"): KeyRow(
+        "Lets the Terraform reviewer run `terraform fmt -check` and `terraform validate` on the "
+        "Terraform files a train changes. With it off, the reviewer judges by reading the files "
+        "(0132)",
+        "boolean or null",
+        "`true`, `false` or `null`; only `false` turns both commands off",
+        "`null`: both commands may run",
+        "`false`",
+    ),
     (MANIFEST_FILE, "trains_dir"): KeyRow(
         "The project folder that holds its own train definitions; a train is looked up there "
         "first, as `<trains_dir>/<name>.json`, and then in the plugin's own trains folder (0073)",
@@ -229,6 +260,16 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         _COMMAND_VALUES,
         "`null`: no declared command",
         '`"ruff check ."`',
+    ),
+    (MANIFEST_FILE, "docs.literacy"): KeyRow(
+        "How plainly the docs writer writes the public docs at the end of a Build Train, as a "
+        "reader level or a voice profile the project declares; a brief may override it (0134)",
+        "string or null",
+        ", ".join(f"`{example}`" for example in LITERACY_EXAMPLES[:-1])
+        + f" or `{LITERACY_EXAMPLES[-1]}`, a project-relative path to the profile file without "
+        "a leading slash, `..` or glob characters",
+        "`null`: the writer keeps the register the public docs already use",
+        f"`{LITERACY_EXAMPLES[0]}`",
     ),
     (MANIFEST_FILE, "ledger.path"): KeyRow(
         "Where rulings are appended, declared for everyone who works on the project; it wins "

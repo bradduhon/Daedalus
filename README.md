@@ -120,6 +120,8 @@ Each agent's file lists the only tools it may use, the reply lines it ends with,
 | charter-docs | producer | sonnet | Bash, Edit, Glob, Grep, Read, Write | Single-writer custodian of the Charter repository, the architectural decision ledger, and Build Train commits. | `[STATUS: LEDGER_PROBED] <probe line>`; `[STATUS: LEDGER_APPENDED] <id>`; `[STATUS: LEDGER_MISMATCH] expected=<n> ledger=<m>`; `[STATUS: COMMITTED] <sha> ids=<id>[,<id>]`; `[STATUS: BLOCKED] <detail>` | clarification, commit, release |
 | cis-specialist | judge | sonnet | Bash, Grep, Read | Evaluates cloud infrastructure, IAM/RCP policies, and OS/container hardening against operator-supplied CIS Benchmarks. | `[STATUS: CACHE_INVALID] <detail>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with control ids and file:line>` | clarification, audit |
 | contract-spec | producer | sonnet | Edit, Glob, Grep, Read, Write | Reads and updates service handshake contracts, API schemas, and specifications. | `## Locked Contract Packet` | clarification, plan |
+| dependency-auditor | judge | sonnet | Bash, Glob, Grep, Read | Read-only judge of the dependency manifests and lockfiles a train changes. | `[STATUS: YIELD_WEB] <query>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with rule ids and file:line>` | audit |
+| docs-writer | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Writes the public docs to match what a train merged. | `[STATUS: DOCS_WRITTEN] branch=<b> commit=<40 hex> claims=<n>`; `[STATUS: DOCS_UNCHANGED] reason=<why no passage needed an edit>` | audit |
 | nist-specialist | judge | sonnet | Bash, Grep, Read | Evaluates architecture, IAM, and cryptographic boundaries against the pinned NIST SP 800-53 OSCAL catalog and SP 800-57 key-management guidance. | `[STATUS: CACHE_INVALID] <detail>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with control ids and file:line>` | clarification, audit |
 | orchestrator | dispatcher | fable | Agent, Bash, Edit, Glob, Grep, Read, SendMessage, Write | Runs one Build Train from its plan to the audited integration tip. | `[STATUS: DECISION] brief=<path> questions=<n>`; `[STATUS: EXCEPTION] ledger_id=<id>`; `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path> tip=<40 hex>`; `[STATUS: STOP] reason=<what happened> next=<next action>` | context, clarification, plan, implementation, audit |
 | planner | shaper | opus | Glob, Grep, Read, Write | Cuts a design spec into work units that coders can build in parallel. | `[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>`; `[STATUS: QUESTION] <what the task leaves open>` | plan |
@@ -127,7 +129,8 @@ Each agent's file lists the only tools it may use, the reply lines it ends with,
 | repo-coder | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Scoped implementation worker. | `[STATUS: YIELD_WEB] <query>`; `[STATUS: YIELD_CONTRACT] <mismatch>`; `[STATUS: YIELD_COMPLIANCE] <question>`; `[STATUS: YIELD_STANDARDS] <question>`; `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>` | implementation |
 | security-auditor | judge | opus | Bash, Edit, Glob, Grep, Read, Write | Adversarial pre-commit security and contract verifier. | `[VERDICT: APPROVED] tip=<40 lowercase hex>`; `[VERDICT: REJECTED] tip=<40 lowercase hex>` | audit |
 | standards-rules-specialist | finder | sonnet | Glob, Grep, Read | Adopts the project's declared standards. | `## Standards Packet`; `[STANDARDS: CONTRADICTION] <spec ref> vs <source:line>`; `[STATUS: STANDARD] <answer>` | clarification, plan |
-| verifier | judge | opus | Bash, Glob, Grep, Read | Adversarial read-only verifier of a coder's completion report. | `[VERDICT: VERIFIED] claims=<n>`; `[VERDICT: REFUTED] <rows>` | implementation |
+| terraform-reviewer | judge | sonnet | Bash, Glob, Grep, Read | Read-only judge of the .tf and .tfvars changes a train makes. | `[STATUS: COMPLIANCE] <PASS/FAIL list with rule ids and file:line, warnings included>` | audit |
+| verifier | judge | opus | Bash, Glob, Grep, Read | Adversarial read-only verifier of one unit's diff against its brief. | `[VERDICT: VERIFIED] claims=<n>`; `[VERDICT: REFUTED] <rows>` | implementation |
 | web-researcher | finder | haiku | Read, WebFetch, WebSearch | Fast external documentation lookup on Haiku. | `[STATUS: RESEARCH] <payload under 300 words with URLs>` | context |
 <!-- end generated -->
 
@@ -139,6 +142,8 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 | charter-docs | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow docs, root_writes --touch charter,docs --ledger-guard, command_allowlist --allow append_ledger,git,read, gh_classes |
 | cis-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
 | contract-spec | producer | credential_paths, workspace_integrity, tool_bound, root_writes --touch contracts,charter-specs |
+| dependency-auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only, gh_classes |
+| docs-writer | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes, gh_classes, confine |
 | nist-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
 | orchestrator | dispatcher | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, command_allowlist --allow train,inspect, root_writes --touch scratch --ledger-guard, gh_classes, dispatch_gate |
 | planner | shaper | credential_paths, workspace_integrity, tool_bound, root_writes --touch scratch --name plan*.md |
@@ -146,6 +151,7 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 | repo-coder | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes, gh_classes, confine |
 | security-auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only --test-runner audit, gh_classes, root_writes --touch audit |
 | standards-rules-specialist | finder | credential_paths, tool_bound |
+| terraform-reviewer | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only, gh_classes |
 | verifier | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only --test-runner unit, gh_classes |
 | web-researcher | finder | credential_paths, tool_bound, network_tools --web |
 <!-- end generated -->
@@ -192,7 +198,7 @@ CIS Benchmark files are licensed, so you place them by hand in `<cache>/framewor
 
 Every file and setting Daedalus reads is described, with a small working example, in [docs/project-requirements.md](docs/project-requirements.md). The full operator guide is [docs/howto/README.md](docs/howto/README.md). It covers each train step by step, how to read a block message, and how to read an audit report.
 
-To start both project files, type `/daedalus:setup`. It writes a starter `service-manifest.json` at the project root, with every feature off, and a starter `.claude/daedalus/config.json`, with every setting at its default. It writes only a file that is missing and never overwrites one. It prints one line per file: `written:` when it created the file, `kept:` when the file already existed (0076).
+To start both project files, type `/daedalus:setup`. It writes a starter `service-manifest.json` at the project root, with every feature off, and a starter `.claude/daedalus/config.json`, with every setting at its default. It writes only a file that is missing and never overwrites one. It prints one line per file: `written:` when it created the file, `kept:` when the file already existed (0076). After writing a new manifest it prints one more line with example values for the docs writer's `docs.literacy` key, which the manifest holds as `null` (0134).
 
 ### Key reference
 
@@ -208,10 +214,13 @@ One row per key the two readers accept: what the key governs, then what goes the
 | `features.scrub_file` | `service-manifest.json` | A file of terms, one per line, that the release step checks the release notes against; a hit stops the release and names how many terms it found, never the terms (0069) | string or null | A project-relative path without a leading slash, `..` or glob characters, or `null` | `null`: nothing is checked | `"docs/scrub-terms.txt"` |
 | `features.ledger` | `service-manifest.json` | Turns the decision ledger steps on or off (0069) | boolean or null | `true`: the ledger is used, and a train asks before creating one; `false`: no ledger step and no ledger question; `null`: the default | `null`: a ledger the config declares or the probe finds is used, and none is created | `true` |
 | `features.github` | `service-manifest.json` | Says the project pushes to GitHub and opens its pull requests there with the gh tool; with it on, the doctor's two gh lines are a `MISS` when gh is missing or not signed in, and with it off they are `OPT` (0069) | boolean or null | `true`, `false` or `null`; `null` reads as `false` | `false`: the doctor never fails on gh | `true` |
+| `features.dependency_web_lookup` | `service-manifest.json` | Lets the dependency auditor ask for security advisories on the web; the train sends its questions to the web researcher. With it off, the auditor judges from the lockfile and any advisory export the project supplies (0132) | boolean or null | `true`, `false` or `null`; only `false` turns the lookup off | `null`: the lookup is on | `false` |
+| `features.terraform_tools` | `service-manifest.json` | Lets the Terraform reviewer run `terraform fmt -check` and `terraform validate` on the Terraform files a train changes. With it off, the reviewer judges by reading the files (0132) | boolean or null | `true`, `false` or `null`; only `false` turns both commands off | `null`: both commands may run | `false` |
 | `trains_dir` | `service-manifest.json` | The project folder that holds its own train definitions; a train is looked up there first, as `<trains_dir>/<name>.json`, and then in the plugin's own trains folder (0073) | string or null | A project-relative folder path without a leading slash, `..` or glob characters, or `null` | `null`: only the plugin's trains are used | `"trains"` |
 | `stack.unit_test_cmd` | `service-manifest.json` | The command that runs the project's unit tests; a coding agent may run it exactly as written, as one command (0073, 0098) | string or null | A non-empty command string, or `null` | `null`: no declared command | `"pytest -q"` |
 | `stack.typecheck_cmd` | `service-manifest.json` | The command that type-checks the project; a coding agent may run it exactly as written, as one command (0098) | string or null | A non-empty command string, or `null` | `null`: no declared command | `"mypy src"` |
 | `stack.lint_cmd` | `service-manifest.json` | The command that lints the project; a coding agent may run it exactly as written, as one command (0098) | string or null | A non-empty command string, or `null` | `null`: no declared command | `"ruff check ."` |
+| `docs.literacy` | `service-manifest.json` | How plainly the docs writer writes the public docs at the end of a Build Train, as a reader level or a voice profile the project declares; a brief may override it (0134) | string or null | `"plain"`, `"standard"`, `"expert"` or `"profile:docs/voice-profile.md"`, a project-relative path to the profile file without a leading slash, `..` or glob characters | `null`: the writer keeps the register the public docs already use | `"plain"` |
 | `ledger.path` | `service-manifest.json` | Where rulings are appended, declared for everyone who works on the project; it wins over the config's ledger block (0004) | string | A path; `<repo_root>` and `<charter_root>` are filled in, and a relative path is read from the project root | No block, or `ledger: null`: the config's ledger block or the ledger probe is used | `"docs/decisions.md"` |
 | `ledger.format` | `service-manifest.json` | How each ruling is written to the ledger (0004) | string | `"markdown-table-row"` (one table row per ruling) or `"heading-entry"` (one `## Entry N` section per ruling) | Required once the block exists | `"markdown-table-row"` |
 | `ledger.id_scheme` | `service-manifest.json` | The pattern each new ruling id follows (0004) | string | A pattern such as `{seq:04d}-{repo}-{type}`; a heading ledger uses `{seq}` | Required once the block exists | `"{seq:04d}-{repo}-{type}"` |
@@ -260,6 +269,8 @@ Daedalus/
 │   ├── charter-docs.md
 │   ├── cis-specialist.md
 │   ├── contract-spec.md
+│   ├── dependency-auditor.md
+│   ├── docs-writer.md
 │   ├── nist-specialist.md
 │   ├── orchestrator.md
 │   ├── planner.md
@@ -267,6 +278,7 @@ Daedalus/
 │   ├── repo-coder.md
 │   ├── security-auditor.md
 │   ├── standards-rules-specialist.md
+│   ├── terraform-reviewer.md
 │   ├── verifier.md
 │   └── web-researcher.md
 ├── docs/

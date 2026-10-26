@@ -15,7 +15,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import atomic  # noqa: E402
 from lib.audit import DataDirError, check_project_data_dir, ensure_project_data_dir  # noqa: E402
 from lib.manifest import MANIFEST_NAME  # noqa: E402
-from lib.project_keys import starter_config, starter_manifest  # noqa: E402
+from lib.project_keys import (  # noqa: E402
+    LITERACY_EXAMPLES,
+    starter_config,
+    starter_manifest,
+)
 from lib.project_root import in_git_work_tree, project_root  # noqa: E402
 
 CONFIG_NAME = "config.json"
@@ -90,7 +94,11 @@ def setup(repo: Path) -> int:
         # 0010: the data folder passes its checks before either file is written.
         data = check_project_data_dir(str(root))
         manifest = root / MANIFEST_NAME
-        _report(manifest, _write_new(manifest, starter_manifest(), 0o644))
+        written = _write_new(manifest, starter_manifest(), 0o644)
+        _report(manifest, written)
+        if written:
+            # 0134: JSON holds no comments, so the literacy examples are printed beside the file.
+            print(f"docs.literacy: null; examples: {', '.join(LITERACY_EXAMPLES)}")
         config = data / CONFIG_NAME
         if os.path.lexists(config):
             _report(config, False)
