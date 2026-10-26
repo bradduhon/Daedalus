@@ -58,6 +58,16 @@ class Docs:
 
 
 DOCS_KEYS = tuple(f.name for f in fields(Docs))
+
+
+@dataclass(frozen=True)
+class Frameworks:
+    # 0157 (12.1): no pack folder named reads the shipped packs; false reads only pack_dir.
+    pack_dir: str | None = None
+    default_packs: bool = True
+
+
+FRAMEWORKS_KEYS = tuple(f.name for f in fields(Frameworks))
 # 0129, Addendum F.2: the four drivers, the closed reason vocabulary and the surface outcome.
 DRIVERS = ("security", "trust", "ops", "cost")
 REASONS = (
@@ -135,6 +145,7 @@ class Manifest:
     lint_cmd: str | None = None
     docs: Docs = field(default_factory=Docs)
     priorities: Priorities | None = None
+    frameworks: Frameworks = field(default_factory=Frameworks)
 
 
 # 0073, B2: the stack keys that hold a command the coder may run verbatim.
@@ -297,6 +308,31 @@ def _docs(target: Path, raw: dict[str, object]) -> Docs:
             "voice profile without a leading slash, '..' or globs>",
         )
     return Docs(literacy if isinstance(literacy, str) else None)
+
+
+def _frameworks(target: Path, raw: dict[str, object]) -> Frameworks:
+    # 0157: the frameworks block names the project's pack folder; unknown keys are refused.
+    block = raw.get("frameworks", {})
+    if not isinstance(block, dict):
+        raise _key_error(target, "frameworks", "must be an object")
+    unknown = sorted(str(key) for key in set(block) - set(FRAMEWORKS_KEYS))
+    if unknown:
+        raise _key_error(
+            target,
+            "frameworks",
+            f"has unknown keys {unknown} (known: {', '.join(FRAMEWORKS_KEYS)})",
+        )
+    pack_dir = block.get("pack_dir")
+    if pack_dir is not None and not (isinstance(pack_dir, str) and repo_relative(pack_dir)):
+        raise _key_error(
+            target,
+            "frameworks.pack_dir",
+            "must be null or a project-relative folder path without a leading slash, '..' or globs",
+        )
+    default_packs = block.get("default_packs", True)
+    if not isinstance(default_packs, bool):
+        raise _key_error(target, "frameworks.default_packs", "must be true or false")
+    return Frameworks(pack_dir, default_packs)
 
 
 def _bad(target: Path, row: str, detail: str) -> PrioritiesError:
@@ -490,6 +526,7 @@ def load(repo: Path) -> Manifest | None:
         lint_cmd=commands["lint_cmd"],
         docs=_docs(target, raw),
         priorities=_priorities(target, raw),
+        frameworks=_frameworks(target, raw),
     )
 
 

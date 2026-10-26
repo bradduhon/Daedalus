@@ -86,9 +86,10 @@ def test_setup_starter_files_carry_every_reader_key_at_its_default(repo_cwd: Pat
     manifest, config = _paths(repo_cwd)
     m_doc = json.loads(manifest.read_text(encoding="utf-8"))
     c_doc = json.loads(config.read_text(encoding="utf-8"))
-    # 0129, F.6: the starter leaves the priorities block absent, which reads as none declared.
-    wanted = [k for k in manifest_keys() if not k.startswith("priorities.")]
+    # 0129, F.6, 0157: the starter leaves the priorities and frameworks blocks absent.
+    wanted = [k for k in manifest_keys() if not k.startswith(("priorities.", "frameworks."))]
     assert [k for k in wanted if not _present(m_doc, k)] == [] and "priorities" not in m_doc
+    assert "frameworks" not in m_doc
     assert [k for k in config_keys() if not _present(c_doc, k)] == []
     # 0072, 0076: the readers accept both files, and the config reads as the defaults.
     assert load_config(path=config) == Config()

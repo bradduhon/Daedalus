@@ -19,6 +19,7 @@ from lib.manifest import (
     DOCS_KEYS,
     DRIVERS,
     FEATURE_KEYS,
+    FRAMEWORKS_KEYS,
     LITERACY_LEVELS,
     LITERACY_PROFILE,
     MANIFEST_NAME,
@@ -62,6 +63,8 @@ def manifest_keys() -> tuple[str, ...]:
             keys.extend(f"docs.{key}" for key in DOCS_KEYS)
         elif item.name == "priorities":
             keys.extend(f"priorities.{row}" for row in PRIORITY_ROWS)
+        elif item.name == "frameworks":
+            keys.extend(f"frameworks.{key}" for key in FRAMEWORKS_KEYS)
         elif item.name in _MANIFEST_PARENT:
             keys.append(f"{_MANIFEST_PARENT[item.name]}.{item.name}")
         else:
@@ -92,8 +95,9 @@ def starter_manifest() -> dict[str, object]:
             }
         elif item.name == "docs":
             doc["docs"] = {f.name: _json(getattr(Docs(), f.name)) for f in fields(Docs)}
-        elif item.name == "priorities":
-            continue  # 0129, F.6: the starter carries no priorities key; absent is none declared.
+        elif item.name in ("priorities", "frameworks"):
+            # 0129, 0157: no priorities or frameworks key; absent is none declared, shipped packs.
+            continue
         elif item.name in _MANIFEST_PARENT:
             parent = _MANIFEST_PARENT[item.name]
             doc[parent] = block = blocks.setdefault(parent, {})
@@ -359,6 +363,22 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"than `{NOT_OVERRIDABLE}`, which is refused",
         "Absent: the agent follows `priorities.drivers`",
         '`{"repo-coder": {"drivers": ["cost", "security", "ops", "trust"]}}`',
+    ),
+    (MANIFEST_FILE, "frameworks.pack_dir"): KeyRow(
+        "The project folder that holds its own control packs; each subfolder holding a "
+        "`pack.json` is one pack (0157)",
+        "string or null",
+        "A project-relative folder path without a leading slash, `..` or glob characters, or "
+        "`null`",
+        "No `frameworks` key: only the packs Daedalus ships are read",
+        '`"compliance/packs"`',
+    ),
+    (MANIFEST_FILE, "frameworks.default_packs"): KeyRow(
+        "Whether the packs Daedalus ships are read beside the project's own packs (0157)",
+        "boolean",
+        "`true` or `false`; `false` reads only the packs under `frameworks.pack_dir`",
+        "`true`: the shipped packs are read",
+        "`false`",
     ),
     (MANIFEST_FILE, "ledger.path"): KeyRow(
         "Where rulings are appended, declared for everyone who works on the project; it wins "

@@ -9,7 +9,16 @@ from pathlib import Path
 import pytest
 from lib import manifest
 from lib.config import load_config
-from lib.manifest import FEATURE_KEYS, Features, Manifest, ManifestError, load
+from lib.manifest import (
+    FEATURE_KEYS,
+    FRAMEWORKS_KEYS,
+    Features,
+    Frameworks,
+    Manifest,
+    ManifestError,
+    load,
+)
+from lib.project_keys import KEY_ROWS, MANIFEST_FILE, manifest_keys, starter_manifest
 
 from tests.conftest import SCRIPTS_DIR
 
@@ -232,3 +241,63 @@ def test_project_files_resolve_from_the_project_root_only(
     assert loaded is not None
     assert (loaded.features.scope, loaded.trains_dir) == ("folder", "project-trains")
     assert load_config(cwd=str(project)).charter_root == project / "Charter"
+
+
+# 0157: the frameworks block names the project's pack folder.
+
+
+def test_absent_frameworks_block_reads_the_shipped_packs(tmp_path: Path) -> None:
+    _write(tmp_path, {})
+    loaded = load(tmp_path)
+    assert loaded is not None and loaded.frameworks == Frameworks(None, True)
+    assert FRAMEWORKS_KEYS == ("pack_dir", "default_packs")
+
+
+@pytest.mark.parametrize(
+    ("block", "want"),
+    [
+        ({}, Frameworks()),
+        ({"pack_dir": "compliance/packs"}, Frameworks("compliance/packs", True)),
+        ({"pack_dir": None, "default_packs": False}, Frameworks(None, False)),
+        ({"pack_dir": "packs/", "default_packs": True}, Frameworks("packs/", True)),
+    ],
+)
+def test_each_frameworks_key_reads_its_values(
+    tmp_path: Path, block: dict[str, object], want: Frameworks
+) -> None:
+    _write(tmp_path, {"frameworks": block})
+    loaded = load(tmp_path)
+    assert loaded is not None and loaded.frameworks == want
+
+
+def test_unknown_frameworks_key_is_refused(tmp_path: Path) -> None:
+    message = _refused(tmp_path, {"frameworks": {"pack_dir": "p", "cache": "x"}})
+    assert "frameworks has unknown keys ['cache'] (known: pack_dir, default_packs)" in message
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"frameworks": []},
+        {"frameworks": "packs"},
+        {"frameworks": {"pack_dir": "/etc/packs"}},
+        {"frameworks": {"pack_dir": "../packs"}},
+        {"frameworks": {"pack_dir": "packs/*"}},
+        {"frameworks": {"pack_dir": 3}},
+        {"frameworks": {"default_packs": None}},
+        {"frameworks": {"default_packs": "yes"}},
+        {"frameworks": {"default_packs": 0}},
+    ],
+)
+def test_bad_frameworks_value_is_refused(tmp_path: Path, payload: object) -> None:
+    assert "frameworks" in _refused(tmp_path, payload)
+
+
+def test_frameworks_keys_have_rows_and_setup_writes_no_block() -> None:
+    keys = manifest_keys()
+    assert ("frameworks.pack_dir", "frameworks.default_packs") == tuple(
+        key for key in keys if key.startswith("frameworks.")
+    )
+    for key in ("frameworks.pack_dir", "frameworks.default_packs"):
+        assert (MANIFEST_FILE, key) in KEY_ROWS, key
+    assert "frameworks" not in starter_manifest()
