@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0086, spec 3.2: the one loader and validator of plan records; the coder gate imports it too.
 # load() reads the single fenced plan block; validate() returns one defect line per failed check.
+# 0128, pin REQ -> VER: load() also reads each unit's requirement section outside the block.
 from __future__ import annotations
 
 import fnmatch
+import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,11 +25,21 @@ _PAIR = re.compile(r"(\S+) (->|~) (\S+)")
 _MERGE = re.compile(r"(\S+) then (\S+)")
 _GRAPH = re.compile(r"graph: units=(\d+) critical_path=(\d+) width=(\d+) overlap_only=(\S*)")
 _SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
-_UNIT_KEYS = ("title", "files", "base")
+_UNIT_KEYS = ("title", "files", "base", "needs")
 _EDGE_KEYS = ("kind", "why", "files", "merge")
 _VERSION_KEYS = ("class", "reason", "unit")
 VERSION_CLASSES = ("X", "Y", "Z")
 _GLOB_CHARS = "*?["
+# 0128: a need is a tool name or a repo-relative protected path; never a flag, never absolute.
+_NEED = re.compile(r"(?!-)[A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*/?")
+_HEADING = re.compile(r"### ([A-Za-z0-9][A-Za-z0-9_.-]*): (\S.*)")
+_SECTION_END = re.compile(r"#{1,3} ")
+REQUIREMENTS = "Requirements:"
+_NUMBERED = re.compile(r"(\d+)\. (.*)")
+_TWO_SENTENCES = re.compile(r"\. [A-Z]")
+_BACKTICKED = re.compile(r"`[^`\s][^`]*`")
+_SLASH_PATH = re.compile(r"[\w.*<>-]+/[\w./*<>-]*")
+SECTION_SHAPE = "`### <unit id>: <title>`, then a `Requirements:` line and `1. <requirement>` lines"
 
 
 class PlanError(ValueError):
@@ -39,6 +52,18 @@ class Unit:
     title: str
     files: tuple[str, ...]
     base: str
+    needs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Section:
+    # Pin REQ -> VER: one unit's requirement section; the verifier counts one claim per line.
+    unit: str
+    title: str
+    line: int
+    listed: bool
+    requirements: tuple[str, ...]
+    stray: str | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +109,10 @@ class Plan:
     graph: str | None
     defects: tuple[str, ...]
     version: Version | None = None
+    sections: tuple[Section, ...] = ()
+
+    def section(self, uid: str) -> Section | None:
+        return next((s for s in self.sections if s.unit == uid), None)
 
 
 @dataclass(frozen=True)
@@ -122,9 +151,38 @@ def _unit(line: str, number: int, out: list[str]) -> Unit | None:
     for key in ("title", "base"):
         if not fields.get(key):
             out.append(f"unit {uid} names no {key}.")
+    needs = _needs(uid, fields["needs"], out) if "needs" in fields else ()
     return Unit(
-        uid, fields.get("title", ""), _list(fields.get("files", "")), fields.get("base", "")
+        uid,
+        fields.get("title", ""),
+        _list(fields.get("files", "")),
+        fields.get("base", ""),
+        needs,
     )
+
+
+def is_need(name: str) -> bool:
+    # 0128: the one shape check for a need, shared by the plan reader and doctor --check-tools.
+    return bool(_NEED.fullmatch(name)) and ".." not in name.split("/") and name.strip("/") != "."
+
+
+def _needs(uid: str, value: str, out: list[str]) -> tuple[str, ...]:
+    items = [item.strip() for item in value.split(",")]
+    shape = "write needs: <tool name or protected path>[, ...]"
+    if not value or any(not item for item in items):
+        out.append(f"unit {uid} has a needs field with an empty item; {shape}.")
+    kept: list[str] = []
+    for item in (i for i in items if i):
+        if not is_need(item):
+            out.append(
+                f"unit {uid} needs {item}, which is neither a tool name nor a repo-relative "
+                f"path; {shape}."
+            )
+        elif item in kept:
+            out.append(f"unit {uid} names the need {item} twice.")
+        else:
+            kept.append(item)
+    return tuple(kept)
 
 
 def _edge(line: str, number: int, out: list[str]) -> Edge | None:
@@ -219,6 +277,47 @@ def _empty(defect: str) -> Plan:
     return Plan((), (), (), None, (defect,))
 
 
+def _requirements(lines: list[str], at: int) -> tuple[list[str], str | None]:
+    # Pin REQ -> VER: numbered from 1 up to the first unnumbered line; a skipped number is stray.
+    found: list[str] = []
+    for line in lines[at:]:
+        numbered = _NUMBERED.fullmatch(line.rstrip())
+        if numbered is None:
+            break
+        if int(numbered.group(1)) != len(found) + 1:
+            return found, line.rstrip()
+        found.append(numbered.group(2).strip())
+    return found, None
+
+
+def _sections(lines: list[str]) -> tuple[Section, ...]:
+    # Pin REQ -> VER: headings inside any fenced block, the plan block included, are never sections.
+    fenced = False
+    heads: list[tuple[int, re.Match[str]]] = []
+    ends: list[int] = []
+    for i, line in enumerate(lines):
+        if line.strip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        head = _HEADING.fullmatch(line.rstrip())
+        if head is not None:
+            heads.append((i, head))
+        if _SECTION_END.match(line):
+            ends.append(i)
+    out: list[Section] = []
+    for i, head in heads:
+        stop = next((e for e in ends if e > i), len(lines))
+        body = lines[i + 1 : stop]
+        at = next((k for k, line in enumerate(body) if line.rstrip() == REQUIREMENTS), None)
+        found, stray = _requirements(body, at + 1) if at is not None else ([], None)
+        out.append(
+            Section(head.group(1), head.group(2), i + 1, at is not None, tuple(found), stray)
+        )
+    return tuple(out)
+
+
 def load(path: Path) -> Plan:
     try:
         text = path.read_text(encoding="utf-8")
@@ -234,7 +333,10 @@ def load(path: Path) -> Plan:
     end = next((i for i in range(start, len(lines)) if lines[i].strip() == _FENCE_CLOSE), None)
     if end is None:
         return _empty("the fenced plan block has no closing fence.")
-    return _parse(lines[start:end])
+    plan = _parse(lines[start:end])
+    return Plan(
+        plan.units, plan.edges, plan.pins, plan.graph, plan.defects, plan.version, _sections(lines)
+    )
 
 
 def _known(plan: Plan) -> set[str]:
@@ -467,6 +569,91 @@ def _version_defects(plan: Plan) -> list[str]:
     return out
 
 
+def requirement_problem(text: str) -> str | None:
+    # Pin REQ -> VER: one sentence ending in a period, naming a backticked token or a slash path.
+    if not text.endswith("."):
+        return "does not end in a period"
+    if _TWO_SENTENCES.search(text):
+        return "holds more than one sentence (a period, a space and a capital letter)"
+    if not (_BACKTICKED.search(text) or _SLASH_PATH.search(text)):
+        return "names no backticked token and no path holding a slash"
+    return None
+
+
+def _section_defects(plan: Plan) -> list[str]:
+    out: list[str] = []
+    for u in plan.units:
+        mine = [s for s in plan.sections if s.unit == u.id]
+        if not mine:
+            out.append(
+                f"unit {u.id} has no requirement section; below the plan block write "
+                f"{SECTION_SHAPE}."
+            )
+            continue
+        if len(mine) > 1:
+            lines = ", ".join(str(s.line) for s in mine)
+            out.append(
+                f"unit {u.id} has {len(mine)} requirement sections (lines {lines}); keep one."
+            )
+        s = mine[0]
+        if not s.requirements:
+            out.append(
+                f"the requirement section of unit {u.id} (line {s.line}) lists no requirement; "
+                f"under it write {SECTION_SHAPE}."
+            )
+        if s.stray is not None:
+            out.append(
+                f"the requirement list of unit {u.id} breaks its numbering at: {s.stray}; "
+                "number the requirements 1, 2, 3 in order."
+            )
+        for n, text in enumerate(s.requirements, 1):
+            problem = requirement_problem(text)
+            if problem is not None:
+                out.append(f"requirement {n} of unit {u.id} {problem}: {text}")
+    return out
+
+
+def read_ownership(path: Path) -> dict[str, tuple[str, ...]]:
+    # Pin MAP -> REQ: map.json's ownership object maps a repo-relative path to sorted unit ids.
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise PlanError(f"the map file {path} could not be read ({exc}).") from exc
+    owners = data.get("ownership") if isinstance(data, dict) else None
+    if not isinstance(owners, dict):
+        raise PlanError(f"the map file {path} holds no ownership object.")
+    out: dict[str, tuple[str, ...]] = {}
+    for key, ids in owners.items():
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            raise PlanError(f"the ownership entry {key} in {path} is not a list of unit ids.")
+        out[key] = tuple(ids)
+    return out
+
+
+def ownership_defects(plan: Plan, owners: Mapping[str, Sequence[str]]) -> list[str]:
+    # 0128: a path two units own needs an overlap edge or a serial path, as in _shared_defects.
+    known = _known(plan)
+    joined = {frozenset(pair) for pair in _overlaps(plan)}
+    reach = _reach(_serial(plan))
+    out: list[str] = []
+    for path in sorted(owners):
+        ids = list(dict.fromkeys(owners[path]))
+        out.extend(f"the map gives {path} to unknown unit {i}." for i in ids if i not in known)
+        mine = [i for i in ids if i in known]
+        pairs = [
+            f"{a} and {b}"
+            for k, a in enumerate(mine)
+            for b in mine[k + 1 :]
+            if frozenset((a, b)) not in joined and b not in reach[a] and a not in reach[b]
+        ]
+        if pairs:
+            out.append(
+                f"the map gives {path} to units {'; '.join(pairs)} with neither an overlap edge "
+                "nor a serial path between them."
+            )
+    return out
+
+
 def _shared_defects(plan: Plan, reach: dict[str, set[str]]) -> list[str]:
     # 0086: a shared file needs an overlap edge, unless a serial path already orders the two units.
     joined = {frozenset(pair) for pair in _overlaps(plan)}
@@ -524,7 +711,7 @@ def validate(plan: Plan, max_concurrent: int) -> list[str]:
     if not plan.units:
         return defects or ["the plan block declares no units."]
     defects += _unit_defects(plan) + _edge_defects(plan) + _pin_defects(plan)
-    defects += _version_defects(plan)
+    defects += _version_defects(plan) + _section_defects(plan)
     after = _serial(plan)
     cycle = _cycle(after)
     if cycle:
