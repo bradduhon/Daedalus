@@ -24,6 +24,8 @@ FLAGS: dict[str, hook_io.Flag] = {
     "--ledger-guard": hook_io.Flag(),
     # spec 3.1: an exact file name or a `*` glob over one name; no path, no other glob syntax.
     "--name": hook_io.Flag(pattern=r"[A-Za-z0-9*][A-Za-z0-9._*-]*"),
+    # 0152: a folder glob one level below a class root, then one exact file name.
+    "--sub": hook_io.Flag(pattern=r"[A-Za-z0-9*][A-Za-z0-9._*-]*/[A-Za-z0-9][A-Za-z0-9._-]*"),
 }
 PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
 
@@ -66,10 +68,7 @@ def _reason(classes: tuple[str, ...], path: str) -> str:
     return f"writes are limited to {listed}: {path}. Next: write there."
 
 
-def _allowed(path: str, roots: list[str], name: str | None) -> bool:
-    # W3.2: the train summary is the summary command's output, so no class admits that file.
-    if name is None:
-        return any(shell._under(path, root) for root in roots)
+def _named(path: str, roots: list[str], name: str) -> bool:
     # 0044: --name admits a file directly in a class root, named exactly or by its glob.
     parent = os.path.realpath(os.path.dirname(path))
     return fnmatch.fnmatchcase(os.path.basename(path), name) and any(
@@ -77,9 +76,32 @@ def _allowed(path: str, roots: list[str], name: str | None) -> bool:
     )
 
 
+def _in_sub(path: str, roots: list[str], sub: str) -> bool:
+    # 0152: two checks, never one fnmatch over the joined path; realpaths refuse symlinks out.
+    folder_glob, file_name = sub.split("/", 1)
+    real = os.path.realpath(path)
+    folder = os.path.dirname(real)
+    return (
+        os.path.basename(path) == file_name
+        and os.path.basename(real) == file_name
+        and fnmatch.fnmatchcase(os.path.basename(folder), folder_glob)
+        and any(os.path.dirname(folder) == os.path.realpath(root) for root in roots)
+    )
+
+
+def _allowed(path: str, roots: list[str], name: str | None, sub: str | None) -> bool:
+    # W3.2: the train summary is the summary command's output, so no class admits that file.
+    if name is None and sub is None:
+        return any(shell._under(path, root) for root in roots)
+    return (name is not None and _named(path, roots, name)) or (
+        sub is not None and _in_sub(path, roots, sub)
+    )
+
+
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
     classes: tuple[str, ...] = tuple(flags.touch or ())
     name: str | None = flags.name
+    sub: str | None = flags.sub
     ledger_guard: bool = flags.ledger_guard
     cwd = hook_io.text(hook_input, "cwd")
     config = hook_io.hook_config(cwd)
@@ -90,13 +112,13 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
             reason = jail._ledger_write_reason(path, cwd, config)
             if reason:
                 return reason
-        return None if _allowed(path, roots, name) else _reason(classes, path)
+        return None if _allowed(path, roots, name, sub) else _reason(classes, path)
     segments = shell.worker_segments(hook_io.text(hook_io.tool_input(hook_input), "command"))
     if segments is None:
         return shell.R_UNSUPPORTED
     for segment in filter(None, segments):
         for target in jail._coder_write_targets(segment, cwd):
-            if not _allowed(target, roots, name):
+            if not _allowed(target, roots, name, sub):
                 return _reason(classes, target)
     return None
 
