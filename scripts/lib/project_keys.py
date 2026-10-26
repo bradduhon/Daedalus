@@ -291,6 +291,18 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`contracts/`",
         '`"/work/decisions"`',
     ),
+    (CONFIG_FILE, "excluded_roots"): KeyRow(
+        "Folders whose files must never reach git, GitHub or a redirect. A Daedalus agent is "
+        "refused such a command in every session, and the main session is warned during a "
+        "train. A document train records the resolved folders in its frozen sources file (0136)",
+        "list of objects",
+        '`{"kind": "path", "path": "<folder>"}`, a folder with `<repo_root>` and '
+        "`<charter_root>` filled in and a relative path read from the project root; or "
+        '`{"kind": "gitignore", "match": "directories"}` (every folder git ignores) or '
+        '`"match": "all"` (every ignored path); a folder holding a linked worktree is skipped',
+        "`[]`: no folder is excluded",
+        '`[{"kind": "path", "path": "<repo_root>/private/"}]`',
+    ),
     (CONFIG_FILE, "ledger.path"): KeyRow(
         "Where rulings are appended on this machine, used when the manifest declares no "
         "ledger (0004)",

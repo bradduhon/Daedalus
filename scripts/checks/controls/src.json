@@ -1,0 +1,38 @@
+{
+  "checks/excluded_roots": {
+    "failure": "0136: a Daedalus agent stages, commits, stashes, publishes through gh or redirects a file from a folder the project excludes, so private content reaches the repository or GitHub",
+    "premise_test": "tests/test_excluded_roots.py::test_check_refuses_staging_an_excluded_root"
+  },
+  "checks/doc_outputs": {
+    "failure": "0135: a document agent writes outside the document train's output folder or over a frozen source, so a derived document changes the files its receipts cite",
+    "premise_test": "tests/test_freeze_sources.py::test_doc_outputs_admits_only_the_output_folder"
+  },
+  "jail.R_EXCLUDED_PATH": {
+    "failure": "0136: a git, gh or redirect command names a path inside an excluded root, so a file from that folder is staged, published or overwritten",
+    "premise_test": "tests/test_excluded_roots.py::test_a_command_naming_a_path_under_a_root_is_refused"
+  },
+  "jail.R_EXCLUDED_TREE": {
+    "failure": "0136: git add -A, git add ., git commit -a or git stash -u runs in a tree holding an excluded root git does not ignore, so the whole folder is staged without being named",
+    "premise_test": "tests/test_excluded_roots.py::test_a_whole_tree_command_refuses_a_root_git_does_not_ignore"
+  },
+  "jail.R_EXCLUDED_TEXT": {
+    "failure": "0136: a command the parser cannot split hides a path inside an excluded root behind substitution or grouping, so the path checks never see it",
+    "premise_test": "tests/test_excluded_roots.py::test_an_unparsed_command_is_judged_on_its_text"
+  },
+  "doc_outputs.R_NO_TRAIN": {
+    "failure": "0135: a document agent writes while no train is active, so no output folder bounds its writes",
+    "premise_test": "tests/test_freeze_sources.py::test_doc_outputs_refuses_without_a_train_or_its_manifest"
+  },
+  "doc_outputs.R_NO_MANIFEST": {
+    "failure": "0135: a document agent writes before its train froze the sources, so neither the output folder nor the source list is known",
+    "premise_test": "tests/test_freeze_sources.py::test_doc_outputs_refuses_without_a_train_or_its_manifest"
+  },
+  "doc_outputs.R_OUTSIDE": {
+    "failure": "0135: a document agent writes a file outside the train's output folder",
+    "premise_test": "tests/test_freeze_sources.py::test_doc_outputs_admits_only_the_output_folder"
+  },
+  "doc_outputs.R_SOURCE": {
+    "failure": "0135: a document agent overwrites a frozen source, so the verifier's hashes no longer match the files the receipts cite",
+    "premise_test": "tests/test_freeze_sources.py::test_doc_outputs_refuses_a_manifest_source"
+  }
+}

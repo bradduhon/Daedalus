@@ -7,7 +7,7 @@ import json
 import re
 
 import pytest
-from lib import agent_files, gh_policy, hook_io
+from lib import agent_files, gh_policy, hook_io, router
 from lib.agent_files import AgentFile, Hook
 
 from tests.conftest import REPO_ROOT, SCRIPTS_DIR
@@ -95,6 +95,8 @@ def test_every_hook_script_is_named_by_a_shape_list_or_an_agent() -> None:
     named = {hook.script for agent in LOADED.values() for hook in agent.hooks}
     for shape in SHAPES:
         named |= _shape_scripts(shape)
+    # 0136, D.5: the router names its every-agent checks; the DOCT agent files name doc_outputs.
+    named |= {hook.script for hook in router.EVERY_AGENT} | {"doc_outputs"}
     shipped = {p.stem for p in CHECKS.glob("*.py")}
     assert shipped
     assert shipped - named == set()

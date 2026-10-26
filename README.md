@@ -226,6 +226,7 @@ One row per key the two readers accept: what the key governs, then what goes the
 | `ledger.id_scheme` | `service-manifest.json` | The pattern each new ruling id follows (0004) | string | A pattern such as `{seq:04d}-{repo}-{type}`; a heading ledger uses `{seq}` | Required once the block exists | `"{seq:04d}-{repo}-{type}"` |
 | `ledger.sequence_source` | `service-manifest.json` | Where the next ruling number comes from (0004) | string | `"last-row-id"` or `"frontmatter:<key>"` | Required once the block exists | `"last-row-id"` |
 | `charter_root` | `.claude/daedalus/config.json` | The repository where your decisions and specs live; the contract and ledger agents may write there, and a Build Train branches it as `daedalus/<train-id>` (0011) | string or null | A non-empty path to a git repository, written absolute | `null`: those agents write only inside the project, and the contract lives in `contracts/` | `"/work/decisions"` |
+| `excluded_roots` | `.claude/daedalus/config.json` | Folders whose files must never reach git, GitHub or a redirect. A Daedalus agent is refused such a command in every session, and the main session is warned during a train. A document train records the resolved folders in its frozen sources file (0136) | list of objects | `{"kind": "path", "path": "<folder>"}`, a folder with `<repo_root>` and `<charter_root>` filled in and a relative path read from the project root; or `{"kind": "gitignore", "match": "directories"}` (every folder git ignores) or `"match": "all"` (every ignored path); a folder holding a linked worktree is skipped | `[]`: no folder is excluded | `[{"kind": "path", "path": "<repo_root>/private/"}]` |
 | `ledger.path` | `.claude/daedalus/config.json` | Where rulings are appended on this machine, used when the manifest declares no ledger (0004) | string | A path; `<repo_root>` and `<charter_root>` are filled in, and a relative path is read from the project root | `null`: the ledger probe looks for one | `"<charter_root>/decision-log.md"` |
 | `ledger.format` | `.claude/daedalus/config.json` | How each ruling is written to the ledger (0004) | string | `"markdown-table-row"` (one table row per ruling) or `"heading-entry"` (one `## Entry N` section per ruling) | Required once the block exists | `"markdown-table-row"` |
 | `ledger.id_scheme` | `.claude/daedalus/config.json` | The pattern each new ruling id follows (0004) | string | A pattern such as `{seq:04d}-{repo}-{type}`; a heading ledger uses `{seq}` | Required once the block exists | `"{seq:04d}-{repo}-{type}"` |
@@ -298,6 +299,8 @@ Daedalus/
 │   ├── checks/controls/             # the failure each control prevents and its premise test
 │   ├── checks/credential_paths.py   # refuses a path or command that names a credential store
 │   ├── checks/dispatch_gate.py      # the orchestrator's coder dispatch and plan gates
+│   ├── checks/doc_outputs.py        # document agents write only in the train's output folder
+│   ├── checks/excluded_roots.py     # git, gh and redirects never take a file from an excluded root
 │   ├── checks/gh_classes.py         # the gh deny classes; the conductor's gh rules
 │   ├── checks/git_grammar.py        # each git segment fits the grammar of its grant
 │   ├── checks/git_push.py           # refuses remote git; the conductor pushes the train branch only
@@ -357,6 +360,7 @@ Daedalus/
 │   ├── daedalus_train.py            # the train runner: progress, choice, plan, verdict, exception
 │   ├── daedalus_workspace.py        # begin, lock, create, remove, finish, stop, resume, mark, unmark, release
 │   ├── enforce_agent_jail.py        # PreToolUse policy
+│   ├── freeze_sources.py            # freezes and verifies a document train's sources
 │   ├── handback_check.py            # SubagentStop check of a coder's receipts block
 │   ├── refresh_frameworks.py        # operator-run: compile the pinned framework caches
 │   ├── standing_rules.py            # derives the standing-rules file from the ledger

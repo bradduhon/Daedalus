@@ -13,7 +13,13 @@ from pathlib import Path
 from lib import dispatch_binding, hook_io
 from lib.audit import _git_env, project_data_dir, project_root
 from lib.audit_proof import SUMMARY_DIR
-from lib.config import Config
+from lib.config import (
+    Config,
+    ConfigError,
+    ExcludedRoot,
+    resolve_excluded_roots,
+    root_ignored,
+)
 from lib.credential_paths import (
     CREDENTIAL_TOOLS,
     R_BRACE_UNJUDGED,
@@ -40,6 +46,7 @@ from lib.gh_policy import CONDUCTOR_GH, GhFlag, _push_reason, allowlist_applies,
 from lib.ledger import LedgerError, resolve_ledger
 from lib.manifest import Manifest, ManifestError, extension_hit, path_hit
 from lib.manifest import load as load_manifest
+from lib.repo_root import git_root
 from lib.shell import (
     _ASSIGN,
     _DEFAULT_BRANCHES,
@@ -75,10 +82,12 @@ from lib.shell import (
     _shell_code,
     _short_flags,
     _under,
+    chain_bases,
     runs_claude,
     strip_wrappers,
     tokenize,
     unwrap,
+    worker_parse,
 )
 from lib.train_scope import (
     AGENT_NAMESPACES,
@@ -1774,7 +1783,9 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
         return Decision(reason is None, reason, agent)
     # 0035: outside a train, main and foreign agents carry only the read deny above.
     if not policed_outside_train(raw_agent) and not _train_scoped(cwd, tool, tool_input):
-        return Decision(True, None, agent)
+        # 0130, D.5: main is warned here only when the hook calls the jail, during a train.
+        roots = _main_excluded(tool, tool_input, cwd, config) if operator else _allow()
+        return _with_agent(roots, agent)
     credential = _credential_reason(tool, tool_input, cwd)
     if credential and operator:
         warning = WARN_CREDENTIAL_WRITE if tool in WRITE_TOOLS else WARN_CREDENTIAL
@@ -1789,6 +1800,8 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
         return Decision(False, R_SUBAGENT_MAIN, agent)
     if agent == "main":
         decision = _decide_main(tool, cwd, tool_input)
+        if decision.allow and operator:
+            decision = _main_excluded(tool, tool_input, cwd, config)
     elif agent in KNOWN_AGENTS:
         # 0044: a Daedalus agent's calls run its agent file's hooks, never this function.
         decision = _block(R_ROUTED.format(agent=agent))
@@ -1857,3 +1870,242 @@ def _nested_claude(command: str, cwd: str) -> bool:
     if segments is None:
         return bool(_CLAUDE_WORD.search(command))
     return any(seg and runs_claude(seg, cwd) for seg in segments)
+
+
+# 0136, D.5: the excluded roots rule; checks/excluded_roots.py and the main session share it.
+R_EXCLUDED_PATH = (
+    "{what} names {path}, inside the excluded root {root} (D.2.1). "
+    "Next: keep files under that root out of git, gh and redirects."
+)
+R_EXCLUDED_TREE = (
+    "{what} would take in the excluded root {root}, which git does not ignore (D.5). "
+    "Next: name the paths to stage, or add the root to .gitignore."
+)
+R_EXCLUDED_TEXT = (
+    "a command the jail cannot parse mentions the excluded root {root} beside git, gh or a "
+    "redirect (D.5). Next: send one plain command that names its paths."
+)
+WARN_EXCLUDED = (
+    "This command would put a file from a folder the project excludes into git, GitHub or a "
+    "file write."
+)
+WARN_EXCLUDED_FAILED = "The excluded folders could not be resolved, so this command went unchecked."
+_EXCLUDED_GIT = frozenset({"add", "stage", "commit", "update-index", "stash"})
+_STASH_READS = frozenset({"list", "show", "pop", "apply", "drop", "clear", "branch", "create"})
+_EXCLUDED_WORDS = re.compile(r"\bgit\b[^;&|]*\b(?:add|stage|commit|update-index|stash)\b|\bgh\b")
+_EXCLUDED_WRITES = re.compile(r">|\btee\b")
+ExcludedRoots = Callable[[], tuple[ExcludedRoot, ...]]
+
+
+def excluded_roots_for(cwd: str, load: Callable[[], Config]) -> ExcludedRoots:
+    # D.2.1: resolved once per call and only when a command reaches git, gh or a redirect.
+    cache: list[tuple[ExcludedRoot, ...]] = []
+
+    def roots() -> tuple[ExcludedRoot, ...]:
+        if not cache:
+            cache.append(resolve_excluded_roots(load(), project_root(cwd)))
+        return cache[0]
+
+    return roots
+
+
+def _work_tree(path: str) -> str:
+    for folder in (Path(path), *Path(path).parents):
+        if (folder / ".git").exists():
+            return str(folder)
+    return path
+
+
+def _active_roots(roots: tuple[ExcludedRoot, ...], tree: str) -> list[ExcludedRoot]:
+    # D.5: a repository inside a root is another repo; a linked worktree gets each root again.
+    main = git_root(tree)
+    out = [r for r in roots if not _under(tree, r.path)]
+    if main is not None and os.path.normpath(main) != os.path.normpath(tree):
+        for root in roots:
+            rel = os.path.relpath(root.path, main)
+            if rel != "." and not rel.startswith(".." + os.sep) and rel != "..":
+                out.append(ExcludedRoot(os.path.join(tree, rel), root.ignored))
+    return out
+
+
+def _root_of(path: str, roots: list[ExcludedRoot]) -> ExcludedRoot | None:
+    return next((r for r in roots if _under(path, r.path)), None)
+
+
+def _candidates(raw: str) -> list[str]:
+    # D.5: an option value, a gh @file and an update-index cacheinfo path each name a path.
+    out = [raw, raw.split("=", 1)[1] if "=" in raw else "", raw.rsplit(",", 1)[-1]]
+    out += [c[1:] for c in out if c.startswith("@")]
+    return [c for c in dict.fromkeys(out) if c and not c.startswith("-")]
+
+
+def _pathspec(spec: str, base: str, tree: str) -> tuple[str, bool] | None:
+    # D.5: pathspec magic; top reads from the work tree, exclude names nothing, a glob is a folder.
+    if spec.startswith((":!", ":^")):
+        return None
+    if spec.startswith(":/"):
+        base, spec = tree, spec[2:]
+    elif spec.startswith(":(") and ")" in spec:
+        words, spec = spec[2:].split(")", 1)
+        magic = set(words.split(","))
+        if "exclude" in magic:
+            return None
+        base = tree if "top" in magic else base
+    cut = min((spec.index(c) for c in _GLOB_CHARS if c in spec), default=-1)
+    if cut < 0:
+        return os.path.normpath(_abs(spec, base)), False
+    folder = spec[:cut].rsplit("/", 1)[0] if "/" in spec[:cut] else ""
+    return os.path.normpath(_abs(folder or ".", base)), True
+
+
+def _git_parts(sub: str, args: list[str]) -> tuple[list[str], set[str]]:
+    # D.5: pathspecs and option values, and the short and long flags; a message is not a path.
+    paths: list[str] = []
+    flags: set[str] = set()
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        i += 1
+        if arg == "--":
+            paths += args[i:]
+            break
+        if not arg.startswith("-") or arg == "-":
+            paths.append(arg)
+        elif arg.startswith("--"):
+            key, eq, value = arg.partition("=")
+            flags.add(key)
+            if key == "--message" and not eq:
+                i += 1
+            elif eq and key != "--message":
+                paths.append(value)
+        else:
+            cluster = arg[1:]
+            taker = next((n for n, c in enumerate(cluster) if c in "mFC"), None)
+            flags |= set(cluster if taker is None else cluster[: taker + 1])
+            if taker is not None:
+                value = cluster[taker + 1 :] or (args[i] if i < len(args) else "")
+                i += 0 if cluster[taker + 1 :] else 1
+                paths += [value] if cluster[taker] == "F" else []
+    if sub == "stash" and paths[:1] and paths[0] in {"push", "save", *_STASH_READS}:
+        verb = paths.pop(0)
+        paths = [] if verb != "push" else paths
+    return paths, flags
+
+
+def _whole_tree(sub: str, flags: set[str]) -> tuple[bool, bool]:
+    # D.5: (takes the whole work tree, takes ignored files too) for add -A, commit -a, stash -u.
+    if sub in {"add", "stage"}:
+        whole = bool({"A", "--all", "--no-ignore-removal", "--pathspec-from-file"} & flags)
+        return whole, bool({"f", "--force"} & flags)
+    if sub == "commit":
+        return bool({"a", "--all", "--pathspec-from-file"} & flags), False
+    if sub == "stash":
+        every = bool({"a", "--all"} & flags)
+        return every or bool({"u", "--include-untracked", "--pathspec-from-file"} & flags), every
+    return False, False
+
+
+def _excluded_git(tokens: list[str], base: str, roots: ExcludedRoots) -> str | None:
+    sub, args, globals_ = _git_split(tokens)
+    if sub not in _EXCLUDED_GIT or (sub == "stash" and args[:1] and args[0] in _STASH_READS):
+        return None
+    where = _git_dir(globals_, base)
+    tree = _work_tree(where)
+    active = _active_roots(roots(), tree)
+    if not active:
+        return None
+    what = f"git {sub}"
+    hit = _root_of(where, active)
+    if hit is not None:
+        return R_EXCLUDED_PATH.format(what=what, path=where, root=hit.path)
+    paths, flags = _git_parts(sub, args)
+    whole, force = _whole_tree(sub, flags)
+    stages = sub in {"add", "stage", "stash"}
+    spans = [tree] if whole else []
+    for raw in paths:
+        for cand in _candidates(raw):
+            spec = _pathspec(cand, where, tree)
+            if spec is None:
+                continue
+            target, glob = spec
+            hit = _root_of(target, active)
+            if hit is not None:
+                return R_EXCLUDED_PATH.format(what=what, path=target, root=hit.path)
+            if stages or glob:
+                spans.append(target)
+    for span in spans:
+        for root in active:
+            if _under(root.path, span) and (force or not root_ignored(root, Path(tree))):
+                return R_EXCLUDED_TREE.format(what=what, root=root.path)
+    return None
+
+
+def _named_paths(tokens: list[str], base: str, every: bool) -> list[str]:
+    # D.5: every tee operand is a path; a gh word is one when absolute, with a slash, or on disk.
+    out: list[str] = []
+    for raw in tokens:
+        for cand in [raw] if every and not raw.startswith("-") else _candidates(raw):
+            path = os.path.normpath(_abs(cand, base))
+            if every or os.path.isabs(cand) or "/" in cand or os.path.lexists(path):
+                out.append(path)
+    return out
+
+
+def _excluded_named(what: str, tokens: list[str], base: str, roots: ExcludedRoots) -> str | None:
+    tree = _work_tree(base) if what == "gh" else base
+    active = _active_roots(roots(), tree) if what == "gh" else list(roots())
+    for path in _named_paths(tokens, base, what == "tee"):
+        hit = _root_of(path, active)
+        if hit is not None:
+            return R_EXCLUDED_PATH.format(what=what, path=path, root=hit.path)
+    return None
+
+
+def _excluded_text(command: str, cwd: str, roots: ExcludedRoots, writes: bool) -> str | None:
+    # D.5: an unparsed command is judged on its text, the roots named as written or from cwd.
+    if not (_EXCLUDED_WORDS.search(command) or (writes and _EXCLUDED_WRITES.search(command))):
+        return None
+    for root in _active_roots(roots(), _work_tree(cwd)):
+        rel = os.path.relpath(root.path, cwd)
+        names = [root.path] + ([rel] if not rel.startswith("..") and rel != "." else [])
+        if any(name in command for name in names):
+            return R_EXCLUDED_TEXT.format(root=root.path)
+    return None
+
+
+def excluded_root_reason(
+    command: str, cwd: str, roots: ExcludedRoots, writes: bool = True
+) -> str | None:
+    # 0136, D.5: git staging, commit, update-index and stash, gh and redirects into a root.
+    chain = worker_parse(command)
+    bases = None if chain is None else chain_bases(chain, cwd, DIR_CHANGE_CMDS)
+    if chain is None or bases is None:
+        return _excluded_text(command, cwd, roots, writes)
+    for segment, base in zip(chain.segments, bases, strict=True):
+        tokens = strip_wrappers(segment) if segment else []
+        if tokens is None:
+            return _excluded_text(command, cwd, roots, writes)
+        name = _base(tokens[0]) if tokens else ""
+        if name == "git":
+            reason = _excluded_git(tokens, base, roots)
+        elif name == "gh" or (name == "tee" and writes):
+            reason = _excluded_named(name, tokens[1:], base, roots)
+        elif name in _SHELLS or {"git", "gh"} & {_base(t) for t in tokens}:
+            reason = _excluded_text(" ".join(tokens), base, roots, writes)
+        else:
+            reason = None
+        if reason is not None:
+            return reason
+    return None
+
+
+def _main_excluded(tool: str, tool_input: dict[str, object], cwd: str, config: Config) -> Decision:
+    # 0130, D.5: main meets the excluded roots rule as a warning in context, never a refusal.
+    command = str(tool_input.get("command") or "")
+    if tool != "Bash" or not command or not os.path.isabs(cwd):
+        return _allow()
+    try:
+        reason = excluded_root_reason(command, cwd, excluded_roots_for(cwd, lambda: config))
+    except (ConfigError, OSError, subprocess.SubprocessError) as exc:
+        return _main_warn(WARN_EXCLUDED_FAILED, str(exc))
+    return _main_warn(WARN_EXCLUDED, reason) if reason else _allow()
