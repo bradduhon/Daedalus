@@ -153,6 +153,14 @@ def test_agent_hooks_blocks_name_only_router_checks() -> None:
             assert (REPO_ROOT / "scripts" / "checks" / f"{hook.script}.py").is_file(), hook
 
 
+def test_subagent_stop_runs_the_audit_and_the_handback_check() -> None:
+    # RCP, 0128: the hand-back receipts check binds beside the audit, synchronous with a timeout.
+    assert [hook["command"] for hook in _commands("SubagentStop")] == [
+        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py",
+        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/handback_check.py",
+    ]
+
+
 def test_session_start_runs_only_the_audit() -> None:
     # 0037: no session start notice; the audit hook is the only SessionStart command.
     assert [hook["command"] for hook in _commands("SessionStart")] == [
