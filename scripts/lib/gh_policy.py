@@ -9,7 +9,7 @@ from typing import NamedTuple
 
 from lib import train_state, workspace
 from lib.audit import project_root
-from lib.audit_proof import exemption_problem, integration_tip, tip_problem
+from lib.audit_proof import exemption_problem, integration_tip, tip_admits
 
 CONDUCTOR = "pr-train-conductor"
 # 0028: the allowed list intersected with the conductor's set; K1: pr edit changes the body only.
@@ -361,8 +361,8 @@ def _verdict_detail(cwd: str, train: str, branch: str) -> str | None:
         return exemption_problem(repo, train, state, tip)
     if status != train_state.APPROVED:
         return f"the recorded verdict is {status if isinstance(status, str) else 'unreadable'}"
-    # 59, spec 3.5: the same judged-tip rule the approved proof reads.
-    return tip_problem(repo, verdict.get("tip"), tip)
+    # 59, spec 3.5, 0131: the same judged-tip and docs-only rule the approved proof reads.
+    return tip_admits(repo, train, state, verdict.get("tip"), tip)
 
 
 def _active_train(cwd: str) -> str | None:

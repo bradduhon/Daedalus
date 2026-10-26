@@ -621,7 +621,20 @@ def _audit(
             lines.append(f"Round {number}: no findings recorded")
         else:
             lines.append(f"Round {number}: not recorded in train state")
-    return lines
+    return lines + _docs(state, repo, charter)
+
+
+def _docs(state: dict[str, object], repo: Path, charter: Path | None) -> list[str]:
+    # 0131, 0134: the docs verdict beside the security verdict; no record reads as not run.
+    docs = train_state.record(state, train_state.DOCS_VERDICT)
+    status, tip = _text(docs, "status"), _text(docs, "tip")
+    if status == train_state.VERIFIED:
+        return [f"Docs: verified on tip {tip}"]
+    if status != train_state.REFUTED:
+        return ["Docs: not run"]
+    claims, exempt = _obj(docs, "findings"), _obj(docs, "exemptions")
+    head = f"Docs: refuted on tip {tip}; the operator exempted {len(exempt)} of the "
+    return [f"{head}{len(claims)} claim(s)", *_exempted(exempt, repo, charter)]
 
 
 def _paragraph(logs: Sequence[SessionLog], seq: int, session: str) -> tuple[str, str]:

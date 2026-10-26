@@ -471,6 +471,7 @@ def test_the_summary_lists_each_exempted_finding(tmp_path: Path) -> None:
     assert audit[7:] == [
         "Round 1: rejected, 1 finding(s) (1 high)",
         "Round 2: rejected, 4 finding(s) (4 low)",
+        "Docs: not run",
     ]
     del state["exemptions"]
     assert _section(_text(tmp_path, state), "Audit")[0] == (
