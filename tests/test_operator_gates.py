@@ -32,7 +32,7 @@ from tests.test_train_runner import (
 )
 from tests.test_train_state_print import STATE, TIP, _section, _text
 
-# The runner tests' fixtures: a temp HOME, a plugin root and a one-commit repository.
+# 0133: the runner tests' fixtures, a temp HOME, a plugin root and a one-commit repository.
 _isolated_env = runner_tests._isolated_env
 plugin = runner_tests.plugin
 repo = runner_tests.repo
@@ -162,7 +162,7 @@ def test_exception_records_one_exemption_per_finding(repo: Path, plugin: Path) -
             },
         }
     }
-    # The verdict record stays as recorded beside the exemptions.
+    # 0133: the verdict record stays as recorded beside the exemptions.
     assert _state(repo)["verdict"]["status"] == "rejected"  # type: ignore[index]
     again = train_runner.record_exception(repo, ID, KEY_A, "local")
     assert again.code == 1 and "already carries an exemption" in again.lines[0]
@@ -258,7 +258,7 @@ def test_push_proof_passes_only_when_every_finding_is_exempted(
     assert gh_policy.verdict_reason(str(repo), "gh pr create") is None
     assert verify_audit_chain.main(["v", "--approved", train, "--repo", str(repo)]) == 0
     assert capsys.readouterr().out == f"{ok}\n"
-    # A finding the file gains after the verdict counts too.
+    # 0133: a finding the file gains after the verdict counts too.
     _findings(repo, 1, A, B, C)
     with pytest.raises(ProofError) as info:
         push_proof(repo, train)
@@ -305,7 +305,7 @@ def test_a_malformed_exemption_never_passes(repo: Path, plugin: Path, broken: ob
 
 
 def test_an_approved_verdict_still_takes_its_own_path(repo: Path, plugin: Path) -> None:
-    # The rejected path never admits an approved state, and a rejection lacking a file refuses.
+    # 0133: the rejected path never admits an approved state; a rejection lacking a file refuses.
     tip = _audit_train(repo, plugin)
     train = str(_state(repo)["train_id"])
     _rejected_round(repo, tip, 1, A)
