@@ -68,9 +68,13 @@ def _parser() -> argparse.ArgumentParser:
     plan = sub.add_parser("plan")
     plan.add_argument("--repo", type=Path, required=True)
     plan.add_argument("--path", type=Path, required=True)
+    # 0133, 0139: one exemption per finding, with how the operator chose to track it.
     waive = sub.add_parser("exception")
     waive.add_argument("--repo", type=Path, required=True)
     waive.add_argument("--ledger-id", dest="ledger_id", required=True)
+    waive.add_argument("--finding", required=True)
+    waive.add_argument("--tracking", required=True)
+    waive.add_argument("--other")
     judged = sub.add_parser("verdict")
     judged.add_argument("--repo", type=Path, required=True)
     judged.add_argument("--status", required=True)
@@ -112,7 +116,7 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "plan":
         return record_plan(repo, args.path)
     if args.action == "exception":
-        return record_exception(repo, args.ledger_id)
+        return record_exception(repo, args.ledger_id, args.finding, args.tracking, args.other)
     if args.action == "verdict":
         if args.status == "approved" and args.tip is None:
             # pin C3 -> C5: an approval always names the tip the auditor judged.

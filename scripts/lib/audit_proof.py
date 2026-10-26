@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 
-from lib import git, train_state
+from lib import audit_rounds, git, train_state
 from lib.audit import GENESIS, AuditLockError, read_log, record_hash
 from lib.train_state import TRAIN_ID as _TRAIN_ID
 
@@ -50,6 +50,10 @@ R_GRADED_NOT_RECORDED = (
     "Next: rerun the audit round."
 )
 R_BOTH_VERDICTS = "auditor reply at seq {seq} carries both verdicts. Next: rerun the audit round."
+UNEXEMPTED_NEXT = (
+    "Next: put each finding to the operator through the per-finding step of the Build Train, "
+    "then record each exemption with daedalus_train.py exception, or run a fix round."
+)
 
 
 class ProofError(RuntimeError):
@@ -523,18 +527,89 @@ def approved(repo: Path, train_id: str) -> str:
     )
 
 
+def findings_path(repo: Path, train_id: str, round_: int) -> Path:
+    # pin C3 -> C1: the one path of a round's finding list.
+    return repo / SUMMARY_DIR / train_id / "audit" / f"round{round_}" / "findings.txt"
+
+
+def read_findings(path: Path) -> dict[str, audit_rounds.Finding]:
+    if path.is_symlink() or not path.is_file():
+        raise ProofError(
+            f"{path} is not a regular file. Next: have the auditor write the round's finding list."
+        )
+    try:
+        return audit_rounds.parse(path.read_text(encoding="utf-8"), str(path))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ProofError(f"cannot read {path} ({exc}). Next: make it a UTF-8 file.") from exc
+    except audit_rounds.FindingsError as exc:
+        raise ProofError(str(exc)) from exc
+
+
+def _exempt(entry: object, judged: str) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    ledger_id = entry.get("ledger_id")
+    return (
+        isinstance(ledger_id, str)
+        and bool(ledger_id)
+        and entry.get("tip") == judged
+        and entry.get("tracking") in train_state.TRACKING
+    )
+
+
+def round_keys(repo: Path, train_id: str, state: dict[str, object], round_: int) -> list[str]:
+    # 0133: the findings file and the round recorded at verdict time; a key in either counts.
+    listed = read_findings(findings_path(repo, train_id, round_))
+    recorded = train_state.record(train_state.record(state, train_state.AUDIT_ROUNDS), str(round_))
+    return sorted(set(listed) | set(recorded))
+
+
+def exemption_problem(
+    repo: Path, train_id: str, state: dict[str, object], current: str
+) -> str | None:
+    # 0133: a rejected verdict passes when each of its round's findings carries an exemption.
+    verdict = train_state.record(state, train_state.VERDICT)
+    round_ = verdict.get("round")
+    rejected = verdict.get("status") == train_state.REJECTED
+    if not rejected or not isinstance(round_, int) or isinstance(round_, bool):
+        return "the recorded verdict is not a rejected round"
+    judged = verdict.get("tip")
+    problem = tip_problem(repo, judged, current)
+    if problem is not None:
+        return problem
+    try:
+        keys = round_keys(repo, train_id, state, round_)
+    except ProofError as exc:
+        return f"the rejected round {round_} finding list is unreadable ({exc})"
+    if not keys:
+        return f"the rejected round {round_} lists no findings"
+    exempt = train_state.record(train_state.record(state, train_state.EXEMPTIONS), str(round_))
+    missing = [key for key in keys if not _exempt(exempt.get(key), str(judged))]
+    if missing:
+        return (
+            f"finding {missing[0]} of the rejected round {round_} has no exemption, "
+            f"{len(missing)} of {len(keys)} findings have none"
+        )
+    return None
+
+
 def push_proof(repo: Path, train_id: str) -> str:
-    # 62: the approved verdict, else an exception ruling bound to the current integration tip.
+    # 0133: the approved verdict, else a rejected round whose every finding the operator exempted.
     try:
         return approved(repo, train_id)
     except ProofError as refused:
         try:
-            exception = train_state.record(train_state.load(repo, train_id), train_state.EXCEPTION)
+            state = train_state.load(repo, train_id)
         except train_state.TrainStateError:
             raise refused from None
-        ledger_id, tip = exception.get("ledger_id"), exception.get("tip")
-        if not (isinstance(ledger_id, str) and ledger_id and isinstance(tip, str)):
+        verdict = train_state.record(state, train_state.VERDICT)
+        current = integration_tip(repo, train_id)
+        if verdict.get("status") != train_state.REJECTED or current is None:
             raise refused from None
-        if tip != integration_tip(repo, train_id):
-            raise refused from None
-        return f"OK approved: exception {ledger_id}, train {train_id}, integration tip {tip[:12]}"
+        problem = exemption_problem(repo, train_id, state, current)
+        if problem is not None:
+            raise ProofError(f"NOT APPROVED: {problem}. {UNEXEMPTED_NEXT}") from None
+        return (
+            f"OK approved: every finding exempted, train {train_id}, round {verdict['round']}, "
+            f"integration tip {current[:12]}"
+        )

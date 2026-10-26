@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import router, train_state
+from lib import router
 from lib.config import Config
 from lib.gh_policy import (
     CONDUCTOR_GH,
@@ -33,6 +33,7 @@ from tests.jail_cases import (
     move_tip,
     seed_train,
 )
+from tests.test_operator_gates import exempt_round
 
 # 0044: repo-coder's chain refuses gh and git push in network_tools and git_push first.
 AGENTS = ("main", "pr-train-conductor", "general-purpose")
@@ -240,7 +241,7 @@ def test_main_pr_create_is_refused(train_repo: Path, command: str) -> None:
 
 
 def test_pr_create_follows_the_same_gate(repo_cwd: Path) -> None:
-    # spec 4.2: pr create passes only on an approved verdict or an exception for the exact tip.
+    # spec 4.2, 0133: pr create passes on an approved verdict or every finding exempted on the tip.
     command = "gh pr create --title t --body-file docs/.tmp/pr.md"
     tip = seed_train(repo_cwd)
     no_verdict = _reason(repo_cwd, "pr-train-conductor", command)
@@ -251,8 +252,7 @@ def test_pr_create_follows_the_same_gate(repo_cwd: Path) -> None:
     move_tip(repo_cwd)
     assert _reason(repo_cwd, "pr-train-conductor", command).endswith(GATE_NEXT)
     moved = _git(repo_cwd, "rev-parse", GATE_BRANCH).stdout.strip()
-    exception = {"ledger_id": "0104-DAE-PLT", "tip": moved}
-    train_state.update(repo_cwd, GATE_TRAIN, exception=exception)
+    exempt_round(repo_cwd, GATE_TRAIN, moved)
     d = decide(_bash(repo_cwd, "pr-train-conductor", command), Config())
     assert d.allow, d.reason
     assert "(0028)" in _reason(repo_cwd, "general-purpose", command)

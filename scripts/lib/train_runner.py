@@ -29,11 +29,14 @@ from lib.audit_proof import (
     VERDICT_REJECTED,
     ProofError,
     auditor_round,
+    findings_path,
     hooks_live,
     live_log,
     live_summary,
     newest_log,
     read_chain,
+    read_findings,
+    round_keys,
     round_verdict,
     tip_problem,
     verdict_tip,
@@ -1203,12 +1206,12 @@ def _recorded(
         return Outcome(EXIT_STOP, [str(exc)])
 
 
-def _one_line(label: str, value: str) -> str:
+def _one_line(label: str, value: str, command: str = "choice") -> str:
     text = value.strip()
     if not text or len(text) > _CHOICE_MAX or not text.isprintable():
         raise RunnerError(
             f"--{label} must be one printable line of 1 to {_CHOICE_MAX} characters. "
-            f"Next: rerun choice with one short printable line for --{label}."
+            f"Next: rerun {command} with one short printable line for --{label}."
         )
     return text
 
@@ -1265,18 +1268,82 @@ def record_plan(cwd: Path, path: Path) -> Outcome:
     return _recorded(cwd, edit)
 
 
-def record_exception(cwd: Path, ledger_id: str) -> Outcome:
-    # 0089: the operator's exception ruling binds the integration tip it was ruled on.
+def _exemption_args(ledger_id: str, finding: str, tracking: str, other: str | None) -> None:
+    if not _LEDGER_ID.fullmatch(ledger_id):
+        raise RunnerError(
+            f"ledger id {ledger_id!r} is not a ledger id such as 0101-DAE-PLT. "
+            "Next: rerun exception with the id charter-docs returned."
+        )
+    if not finding.strip() or not finding.isprintable():
+        raise RunnerError(
+            "--finding must name one finding id of the rejected round. "
+            "Next: rerun exception with a finding id from the round's findings file."
+        )
+    if tracking not in train_state.TRACKING:
+        raise RunnerError(
+            f"--tracking {tracking!r} is not one of {', '.join(train_state.TRACKING)}. "
+            "Next: rerun exception with the operator's tracking answer."
+        )
+    if (tracking == "other") != (other is not None):
+        raise RunnerError(
+            "--other carries the operator's own words, and only with --tracking other. "
+            "Next: rerun exception with --tracking other --other <words>, or without --other."
+        )
+    if other is not None:
+        _one_line("other", other, "exception")
+
+
+def record_exception(
+    cwd: Path, ledger_id: str, finding: str, tracking: str, other: str | None = None
+) -> Outcome:
+    # 0133, 0139: one exemption per finding of the recorded rejected round, with its tracking.
     def edit(repo: Path, train_id: str) -> list[str]:
-        if not _LEDGER_ID.fullmatch(ledger_id):
-            raise RunnerError(
-                f"ledger id {ledger_id!r} is not a ledger id such as 0101-DAE-PLT. "
-                "Next: rerun exception with the id charter-docs returned."
+        _exemption_args(ledger_id, finding, tracking, other)
+        current = _integration_tip(repo, train_id)
+        out: list[str] = []
+
+        def change(state: dict[str, object]) -> None:
+            verdict = train_state.record(state, train_state.VERDICT)
+            round_ = _int(verdict, "round", 0)
+            if verdict.get("status") != train_state.REJECTED or round_ < 1:
+                raise RunnerError(
+                    f"train {train_id} records no rejected verdict, so no finding needs an "
+                    "exemption. Next: record the rejected round with daedalus_train.py verdict."
+                )
+            judged = _text(verdict, "tip")
+            problem = tip_problem(repo, judged, current)
+            if problem is not None:
+                raise RunnerError(f"{problem}. Next: run the security audit on {current[:12]}.")
+            try:
+                keys = round_keys(repo, train_id, state, round_)
+            except ProofError as exc:
+                raise RunnerError(str(exc)) from exc
+            if finding not in keys:
+                raise RunnerError(
+                    f"finding {finding!r} is not in the rejected round {round_}. "
+                    "Next: rerun exception with a finding id from the round's findings file."
+                )
+            exemptions = train_state.record(state, train_state.EXEMPTIONS)
+            granted = train_state.record(exemptions, str(round_))
+            if finding in granted:
+                raise RunnerError(
+                    f"finding {finding} of round {round_} already carries an exemption. "
+                    "Next: record the next finding; one exemption stands per finding."
+                )
+            entry: dict[str, object] = {"ledger_id": ledger_id, "tip": judged, "tracking": tracking}
+            if other is not None:
+                entry["other"] = other.strip()
+            granted[finding] = entry
+            exemptions[str(round_)] = granted
+            state[train_state.EXEMPTIONS] = exemptions
+            left = len([key for key in keys if key not in granted])
+            out.append(
+                f"exemption recorded finding={finding} round={round_} ledger={ledger_id} "
+                f"tracking={tracking} remaining={left}"
             )
-        tip = _integration_tip(repo, train_id)
-        exception = {"ledger_id": ledger_id, "tip": tip}
-        train_state.update(repo, train_id, **{train_state.EXCEPTION: exception})
-        return [f"exception: {ledger_id} accepted for the integration tip {tip}"]
+
+        train_state.change(repo, train_id, change)
+        return out
 
     return _recorded(cwd, edit)
 
@@ -1308,8 +1375,8 @@ def reaudit(cwd: Path) -> Outcome:
         current = _integration_tip(repo, train_id)
         if _text(train_state.record(state, REAUDIT), "tip") == current:
             raise RunnerError(
-                f"a recovery round already ran on tip {current[:12]}. Next: put the three "
-                "escalation choices to the operator; no second recovery round runs on one tip."
+                f"a recovery round already ran on tip {current[:12]}. Next: put each finding to "
+                "the operator as its own question; no second recovery round runs on one tip."
             )
         judged = verdict.get("tip")
         if tip_problem(repo, judged, current) is None:
@@ -1483,10 +1550,6 @@ def _auditor_seq(repo: Path, train_id: str, status: str, seq: int | None) -> tup
     return found, verdict_tip(turn, found)
 
 
-def _findings_path(repo: Path, train_id: str, round_: int) -> Path:
-    return repo / SUMMARY_DIR / train_id / "audit" / f"round{round_}" / "findings.txt"
-
-
 def derived_round(state: dict[str, object]) -> int:
     # 67: a pre-D1 approval wrote no audit_rounds entry, so the recorded verdict round counts too.
     recorded = _int(train_state.record(state, train_state.VERDICT), "round", 0)
@@ -1498,7 +1561,7 @@ def _round_findings(
     repo: Path, train_id: str, status: str, round_: int, path: Path
 ) -> dict[str, audit_rounds.Finding]:
     # pin C3 -> C1: the auditor's list for this round, at its one path; approved lists none.
-    want = _findings_path(repo, train_id, round_)
+    want = findings_path(repo, train_id, round_)
     given = os.path.normpath(path if path.is_absolute() else repo / path)
     if given != str(want) or want.is_symlink() or not want.is_file():
         raise RunnerError(
@@ -1506,10 +1569,8 @@ def _round_findings(
             f"Next: have the auditor write {want}, then rerun verdict with --findings {want}."
         )
     try:
-        found = audit_rounds.parse(want.read_text(encoding="utf-8"), str(want))
-    except (OSError, UnicodeDecodeError) as exc:
-        raise RunnerError(f"cannot read {want} ({exc}). Next: make it a UTF-8 file.") from exc
-    except audit_rounds.FindingsError as exc:
+        found = read_findings(want)
+    except ProofError as exc:
         raise RunnerError(str(exc)) from exc
     if (status == train_state.REJECTED) != bool(found):
         raise RunnerError(
@@ -1528,7 +1589,7 @@ def record_verdict(
     tip: str | None = None,
     findings: Path | None = None,
 ) -> Outcome:
-    # 0089, 59: records the tip the auditor judged; 0109: a finding list adds the stall word.
+    # 0089, 59: records the tip the auditor judged; 0109, 0133: and the round's finding map.
     def edit(repo: Path, train_id: str) -> list[str]:
         if status not in (train_state.APPROVED, train_state.REJECTED):
             raise RunnerError(
@@ -1555,7 +1616,7 @@ def record_verdict(
                 "verdict line."
             )
         if status == train_state.REJECTED and findings is None:
-            want = _findings_path(repo, train_id, round_)
+            want = findings_path(repo, train_id, round_)
             raise RunnerError(
                 f"a rejected verdict needs the round {round_} finding list, and this call passed "
                 f"no --findings. Next: have the auditor write {want}, then rerun verdict with "
@@ -1574,13 +1635,6 @@ def record_verdict(
             if problem is not None:
                 raise RunnerError(f"{problem}. Next: run the security audit on {current[:12]}.")
         judged = tip or current
-        budget = 0
-        if listed is not None and status == train_state.REJECTED:
-            try:
-                budget = load_config(cwd=str(repo)).audit_round_budget
-            except ConfigError as exc:
-                raise RunnerError(str(exc)) from exc
-        word: list[str] = []
 
         def change(state: dict[str, object]) -> None:
             if derived_round(state) != round_:
@@ -1598,23 +1652,16 @@ def record_verdict(
                 rounds[str(round_)] = {}
                 state[train_state.AUDIT_ROUNDS] = rounds
                 return
-            prior = rounds.get(str(round_ - 1))
-            previous = None
-            if isinstance(prior, dict):
-                previous = {
-                    str(k): str(v.get("severity")) if isinstance(v, dict) else ""
-                    for k, v in prior.items()
-                }
             rounds[str(round_)] = {
                 f.key: {"severity": f.severity, "class": f.kind} for f in listed.values()
             }
             state[train_state.AUDIT_ROUNDS] = rounds
-            if status == train_state.REJECTED:
-                current_map = {f.key: f.severity for f in listed.values()}
-                word.append(audit_rounds.judge(previous, current_map, round_, budget))
 
         train_state.change(repo, train_id, change)
-        return word or [f"Verdict {status} recorded on tip {judged[:12]} (round {round_})"]
+        if status == train_state.REJECTED and listed is not None:
+            # 0133: a record only; the orchestrator puts each finding to the operator.
+            return [f"recorded rejected round={round_} findings={len(listed)}"]
+        return [f"Verdict {status} recorded on tip {judged[:12]} (round {round_})"]
 
     return _recorded(cwd, edit)
 

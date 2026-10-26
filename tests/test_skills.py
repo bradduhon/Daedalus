@@ -359,17 +359,18 @@ def test_build_train_hands_coders_the_pick_ledger_ids() -> None:
 
 
 ESCALATION_START = (
-    "Put it to the operator with AskUserQuestion, in the decision-brief shape (0103):"
+    "Put it to the operator with AskUserQuestion, in the decision-brief shape (0103), one "
+    "question per finding:"
 )
 ESCALATION_END = (
-    "Never run a round after an escalate line without the operator's pick, and never stop the "
-    "train on your own authority."
+    "Never start a fix round without a `Run a fix round` pick, and never stop the train on your "
+    "own authority."
 )
 
 
 def _escalation(text: str) -> str:
     flat = " ".join(text.split())
-    assert flat.count(ESCALATION_START) == 1, "one escalation prompt"
+    assert flat.count(ESCALATION_START) == 1, "one per-finding prompt"
     return flat.split(ESCALATION_START, 1)[1].split(ESCALATION_END, 1)[0]
 
 
@@ -388,8 +389,8 @@ def test_build_train_has_no_unit_cap_or_warm_roster_line() -> None:
     assert "one per unit line of its plan block" in phase2
 
 
-def test_build_train_escalates_on_stall_not_on_count() -> None:
-    # 0109, spec 3.4: the verdict command's printed word decides; the round count never does.
+def test_build_train_asks_per_finding_not_on_count() -> None:
+    # 0109, 0133: the operator's pick decides each finding; no round count or stall word does.
     text = _recipe()
     catalog = (REPO_ROOT / "skills" / "catalog" / "SKILL.md").read_text(encoding="utf-8")
     assert "After 3 rejected rounds" not in text and "3 rejected rounds" not in text
@@ -398,27 +399,13 @@ def test_build_train_escalates_on_stall_not_on_count() -> None:
         for gone in ("second rejected", "Never run a third round", "rejected this work twice"):
             assert gone not in flat, gone
     step4 = _section(text, "## Phase 3", "\n5. ").split("\n4. ", 1)[1]
-    assert "Obey the printed word; never judge the stall yourself (0109)." in step4
-    for word in (
-        "`continue round=<n+1> budget_left=<k>`",
-        "`escalate reason=recurring key=<key>`",
-        "`escalate reason=new-high key=<key>`",
-        "`escalate reason=budget`",
-        "   - `continue`: run a fix round.",
-        "   - `escalate`: do not start another round.",
-    ):
-        assert word in step4, word
+    for gone in ("Obey the printed word", "budget_left", "escalate reason=", "`continue`"):
+        assert gone not in step4, gone
+    assert "   - Otherwise any `Run a fix round` pick: run a fix round" in step4
     assert ESCALATION_END in " ".join(step4.split())
-    prompt = " ".join(catalog.split("## The audit escalation prompt", 1)[1].split())
-    assert prompt.startswith("The prompt fires only on an `escalate` line from the verdict command")
-    for reason in ("`reason=recurring`", "`reason=new-high`", "`reason=budget`"):
-        assert reason in prompt, reason
-    for plain in (
-        "a finding that came back after its fix",
-        "a new high or critical finding",
-        "a round budget that ran out",
-    ):
-        assert plain in _escalation(catalog), plain
+    prompt = " ".join(catalog.split("## The per-finding audit prompt", 1)[1].split())
+    assert prompt.startswith("Every rejected round puts each finding in its findings file")
+    assert "for a finding that came back after its fix, what the fix missed" in _escalation(catalog)
 
 
 def test_build_train_runs_the_audit_in_a_fast_forwarded_worktree() -> None:
@@ -459,7 +446,7 @@ def test_fix_briefs_carry_audit_tests_and_the_tip() -> None:
     assert "The auditor's verdict line carries `tip=<40 hex>`" in _rules()
     shape = text.split("Shape:", 1)[1].split("\n7. ", 1)[0]
     assert "[VERDICT: APPROVED] tip=<judged tip> on the merged integration tip" in shape
-    assert "on tip <judged tip> after <n> rejected rounds" in shape
+    assert "the operator exempted <k> of the <m> finding(s) of round <n>" in shape
 
 
 def test_complete_check_requires_adversarial_pass_for_jail_check_units() -> None:
@@ -512,10 +499,10 @@ def test_catalog_names_the_rebind_rule_and_the_verifier_step() -> None:
     assert "fast-forwards the audit branch" in rules and "` adversarial=pass`" in rules
 
 
-def test_push_train_proof_names_the_exception_path() -> None:
-    # issue 62: --approved passes on an approved verdict or a bound exception, and says which.
+def test_push_train_proof_names_the_exemption_path() -> None:
+    # issue 62, 0133: --approved passes on an approved verdict or every finding exempted.
     step = _push_train().split("\n9. ", 1)[1].split("\n10. ", 1)[0]
-    assert "the operator's exception ruling bound to the current tip (issue 62)" in step
+    assert "whose every finding carries the operator's exemption (issue 62, 0133)" in step
     assert "an approved audit verdict on the current tip" in step
 
 
@@ -558,10 +545,10 @@ def test_build_train_carries_the_escalation_prompt() -> None:
     order = [
         "a plain question ending in a question mark",
         "Two or three context sentences in the operator's words",
-        "what it protects and why the fix fell short",
-        "One more fix-and-audit round:",
-        "Merge with each finding as a tracked-risk issue:",
-        "Stop with the branches kept:",
+        "what the finding is and what it exposes",
+        "`Exempt the finding`:",
+        "`Run a fix round`:",
+        "`End the train`:",
         "The recommendation and its reason",
     ]
     places = [prompt.index(item) for item in order]
@@ -573,7 +560,7 @@ def test_build_train_carries_the_escalation_prompt() -> None:
     route = _build_train().split("- `[STATUS: EXCEPTION] ledger_id=<id>`:", 1)[1].split("\n", 1)[0]
     exception = (
         "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py exception --repo <repo> "
-        "--ledger-id <id>`"
+        "--ledger-id <id> --finding <finding id> --tracking <answer>`"
     )
     assert exception in route and "The orchestrator never runs it." in route
 
@@ -1484,7 +1471,7 @@ def test_build_train_relays_the_recovery_round_after_train_complete() -> None:
     ]
     places = [item.index(part) for part in order]
     assert places == sorted(places)
-    assert "the three escalation choices" in item
+    assert "one question per finding and the three per-finding choices" in item
 
 
 def test_build_train_admits_the_ledger_resume_as_a_resume() -> None:
@@ -1554,7 +1541,7 @@ def test_push_train_runs_the_recovery_round_on_a_moved_tip() -> None:
     assert "with one Write" not in step4
     rejected = recovery.split("\n5. `[VERDICT: REJECTED] tip=<sha>`: ", 1)[1]
     assert "with `--status rejected`" in rejected
-    assert "the three choices of the audit escalation prompt" in rejected
+    assert "the three choices of the per-finding audit prompt" in rejected
     assert "the Push Train runs no second recovery round" in rejected
 
 

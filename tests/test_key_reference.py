@@ -75,13 +75,10 @@ def test_reference_rows_name_their_file() -> None:
         assert not _VERSION.search(" ".join(cells)), key
 
 
-def test_audit_round_budget_and_agent_models_rows() -> None:
-    # 0109, 0110, spec 4: both keys are generated rows in the config section, in that order.
+def test_agent_models_row_closes_the_config_section() -> None:
+    # 0110, spec 4: agent_models is the last config row; 0133 retired audit_round_budget.
     keys = [key for key, file, _ in _rows() if file == CONFIG_FILE]
-    assert keys[-2:] == ["audit_round_budget", "agent_models"]
-    budget = KEY_ROWS[(CONFIG_FILE, "audit_round_budget")]
-    assert budget.kind == "integer" and budget.default == "`5`"
-    assert "from 1 to 10" in budget.values and "refused" in budget.values
+    assert keys[-1] == "agent_models" and "audit_round_budget" not in keys
     models = KEY_ROWS[(CONFIG_FILE, "agent_models")]
     assert models.kind == "object" and models.default.startswith("`{}`")
     assert '`"sonnet"`, `"opus"`, `"haiku"` or `"fable"`' in models.values

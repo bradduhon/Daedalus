@@ -7,7 +7,7 @@ Daedalus is a Claude Code plugin that gives your session a catalog of scoped AI 
 
 Every body of work passes through six phases: context, clarification, plan, implementation, audit, and commit and release (0089). Phases overlap freely. A phase's weight scales with the task: a one-file fix carries a one-unit plan and no contract packet, and a cross-module build carries the packet. A contract packet is a written spec of the interfaces each coding agent's code must follow, locked before coding starts.
 
-Hooks check four exit conditions today: a plan record before a coder, a worktree binding for every coder, an approved verdict on the exact tip (or the operator's exception) before a push or pull request, and the conductor as the only agent that pushes. Capturing each ruling in your decision ledger and merging the pull request are your duty; no hook checks them.
+Hooks check four exit conditions today: a plan record before a coder, a worktree binding for every coder, an approved verdict on the exact tip (or the operator's exemption for every finding of a rejected round) before a push or pull request, and the conductor as the only agent that pushes. Capturing each ruling in your decision ledger and merging the pull request are your duty; no hook checks them.
 
 While a train runs in a repository, tool calls there land in a hash-chained audit log. Each record carries the hash of the one before it, so an edited or removed record breaks the chain.
 
@@ -70,10 +70,10 @@ Every `MISS` line ends with a `Next:` instruction that says what to do. In a new
 5. Watch it run. The main session starts one orchestrator agent and relays between it and you (0060). After each phase you see a progress note that names the phase, its weight and the state of each unit. Before each choice the train prints one line, `Chose <what> over <alternative>: <cost>`.
 6. Answer its questions. When the train needs a ruling, the orchestrator writes a decision brief, and the session asks you through Claude Code's question prompt. Each question has a question line ending in a question mark, two or three context sentences and its options, with the recommended option first. The orchestrator ends each reply with one of four lines, and the session routes it:
    - `[STATUS: DECISION]`: the session asks you the brief's questions and sends your picks back.
-   - `[STATUS: EXCEPTION]`: you chose to merge with each remaining audit finding as a tracked-risk issue, and the session binds that exception ruling to the integration tip.
+   - `[STATUS: EXCEPTION]`: you exempted every finding of the last audit round, and the session records one exemption per finding, each with its ruling and how you chose to track it.
    - `[STATUS: STOP]`: the session runs the stop command and shows its `Next:` line. Say continue to resume.
    - `[STATUS: TRAIN_COMPLETE]`: the session shows the summary path and the audit log path, then ends the train. If a commit lands on the integration branch after that, tell the session; it runs one recovery audit round on the new tip (`daedalus_train.py reaudit`) instead of a full rerun. A train that stopped before its ledger commit is finished by the session's ledger resume (`daedalus_train.py resume`).
-7. Read the audit result. The units merge onto the local branch `daedalus/<train-id>` first, and the security auditor judges that merged integration tip against the train's base. Each rejected round runs a fix round until the audit stops making progress: a finding comes back after its fix, a new high or critical finding appears, or the round budget runs out (`audit_round_budget`, default 5). Then you pick what happens to the remaining findings: one more fix round, a merge with each finding as a tracked-risk issue, or a stop with the branches kept. The Push Train's verdict check accepts a train merged on that exception once the exception ruling is bound to the integration tip (issue 62).
+7. Read the audit result. The units merge onto the local branch `daedalus/<train-id>` first, and the security auditor judges that merged integration tip against the train's base. After each rejected round the session asks you about every finding, one question per finding, with three choices: exempt the finding, run a fix round, or end the train (0133). No fix round starts without your pick, and no number of rounds is set in advance. An exemption brings a second question, how it is tracked: silently dropped, a GitHub tracked-risk issue, recorded locally in the ledger row alone, or your own answer. The Push Train's verdict check accepts a rejected round once every one of its findings carries an exemption.
 8. Push and merge. Review the integration branch, then read the session's audit log with `/daedalus:audit-report <session>`. Type `/daedalus:push-train` to push the branch and open its pull request. You merge the pull request.
 
 ## Saved recipes
@@ -229,7 +229,6 @@ One row per key the two readers accept: what the key governs, then what goes the
 | `operator_signing_keys` | `.claude/daedalus/config.json` | Reserved for the key fingerprints allowed to sign merges; no check reads it yet | list of strings | Non-empty strings | `[]` | `["ABCD1234EF567890"]` |
 | `max_concurrent_builders` | `.claude/daedalus/config.json` | How many coding agents a parallel stage runs at once, and the cap on the plan width the plan validator prints (0072) | integer | A whole number of at least 1; `true` and `false` are refused | `5` | `3` |
 | `audit_retention_days` | `.claude/daedalus/config.json` | How many days a session's audit log is kept after its last record. When a new session starts writing, older logs are deleted, each named with its final record in the new session's own log. A log named on a train summary's `Session` line, the log of a train not yet merged, and the current session's log are never deleted (issue 50) | integer or null | A whole number of at least 90, or `null` | `null`: every log is kept | `365` |
-| `audit_round_budget` | `.claude/daedalus/config.json` | How many audit rounds a Build Train runs on its own. A rejected round continues while each round's findings shrink and no new high or critical finding appears; once the rounds used reach this number, the train stops and asks the operator (0109) | integer | A whole number from 1 to 10; `true` and `false` are refused | `5` | `3` |
 | `agent_models` | `.claude/daedalus/config.json` | Which model each catalog agent runs on, in place of the `model:` line of its agent file; a model a skill is given for one run still comes first | object | Keys are agent names the catalog lists; values are `"sonnet"`, `"opus"`, `"haiku"` or `"fable"`; any other name or value is refused | `{}`: every agent runs on its agent file's model | `{"repo-coder": "sonnet"}` |
 <!-- end key reference -->
 
@@ -304,7 +303,7 @@ Daedalus/
 │   ├── lib/atomic.py                # the one atomic writer and create-once writer
 │   ├── lib/audit.py                 # hash-chained append, redaction
 │   ├── lib/audit_proof.py           # the hooks-live and approved-verdict proofs
-│   ├── lib/audit_rounds.py          # the auditor's finding list and the stall rule
+│   ├── lib/audit_rounds.py          # the auditor's finding list and the round number
 │   ├── lib/config.py                # config.json loading and validation
 │   ├── lib/controls.py              # loads the controls fragments
 │   ├── lib/credential_paths.py      # the credential-path deny every agent meets

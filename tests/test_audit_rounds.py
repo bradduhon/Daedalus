@@ -1,51 +1,13 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 0109, spec 3.4 and 3.7: the stall rule table and the finding list shape of pin C3 -> C1.
+# 0109, spec 3.4: the finding list shape of pin C3 -> C1 and the round number; 0133 retired
+# the stall rule, which tests/test_operator_gates.py checks is gone.
 from __future__ import annotations
 
 import pytest
-from lib.audit_rounds import SEVERITIES, Finding, FindingsError, judge, next_round, parse
+from lib.audit_rounds import SEVERITIES, Finding, FindingsError, next_round, parse
 
 LOW = "low"
-
-
-def _set(*keys: str, severity: str = LOW) -> dict[str, str]:
-    return dict.fromkeys(keys, severity)
-
-
-@pytest.mark.parametrize(
-    ("previous", "current", "used", "budget", "word"),
-    [
-        # spec 3.7: (A,B,C) then (A,B) continues.
-        (_set("A", "B", "C"), _set("A", "B"), 2, 5, "continue round=3 budget_left=3"),
-        # spec 3.7: (A,B) then (A,B) escalates on the recurring finding.
-        (_set("A", "B"), _set("A", "B"), 2, 5, "escalate reason=recurring key=A"),
-        # spec 3.7: (A,B) then (C high) escalates on the new high.
-        (_set("A", "B"), {"C": "high"}, 2, 5, "escalate reason=new-high key=C"),
-        # spec 3.7: budget exhaustion escalates, even on a shrinking set.
-        (_set("A", "B", "C"), _set("A", "B"), 5, 5, "escalate reason=budget"),
-        (_set("A", "B", "C"), _set("A"), 7, 5, "escalate reason=budget"),
-        # A first round has nothing to compare: it continues inside the budget.
-        (None, {"A": "critical", "B": "high"}, 1, 5, "continue round=2 budget_left=4"),
-        (None, _set("A"), 1, 1, "escalate reason=budget"),
-        # A key that rises to high counts as a new high; critical over high does not.
-        (_set("A", "B"), {"A": "high"}, 2, 5, "escalate reason=new-high key=A"),
-        ({"A": "high", "B": LOW}, {"A": "critical"}, 2, 5, "continue round=3 budget_left=3"),
-        # A set that grows, or swaps one key while one recurs, does not shrink.
-        (_set("A", "B"), _set("A", "B", "C"), 2, 5, "escalate reason=recurring key=A"),
-        (_set("A", "B"), _set("B", "D"), 2, 5, "escalate reason=recurring key=B"),
-        # The new high wins over the recurring key and the budget.
-        (_set("A"), {"A": LOW, "Z": "critical"}, 5, 5, "escalate reason=new-high key=Z"),
-        # The recurring key wins over the budget.
-        (_set("A"), _set("A"), 5, 5, "escalate reason=recurring key=A"),
-        # Every earlier finding fixed and new low ones found: nothing recurs and no new high.
-        (_set("A", "B"), _set("C"), 2, 5, "continue round=3 budget_left=3"),
-    ],
-)
-def test_stall_rule_table(
-    previous: dict[str, str] | None, current: dict[str, str], used: int, budget: int, word: str
-) -> None:
-    assert judge(previous, current, used, budget) == word
 
 
 def test_parse_reads_the_pinned_line_shape() -> None:

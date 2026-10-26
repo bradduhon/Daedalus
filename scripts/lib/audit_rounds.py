@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 0109, spec 3.4: the auditor's finding list and the stall rule; pure, so the table test owns it.
-# The orchestrator obeys the printed word and never judges the stall itself.
+# 0109, spec 3.4: the auditor's finding list and the round number; pure, so the table test owns it.
+# 0133: no stall rule and no budget; the operator decides each finding.
 from __future__ import annotations
 
 import re
@@ -9,7 +9,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 SEVERITIES = ("critical", "high", "medium", "low")
-HIGH = frozenset({"critical", "high"})
 _SEP = " | "
 _ROUND_KEY = re.compile(r"[1-9][0-9]{0,5}")
 
@@ -55,21 +54,3 @@ def parse(text: str, where: str) -> dict[str, Finding]:
 def next_round(rounds: Mapping[str, object]) -> int:
     # 67: one more than the highest round key the train recorded, else 1; other keys are skipped.
     return max((int(key) for key in rounds if _ROUND_KEY.fullmatch(key)), default=0) + 1
-
-
-def judge(
-    previous: Mapping[str, str] | None, current: Mapping[str, str], used: int, budget: int
-) -> str:
-    # spec 3.4: maps are key to severity; continue while the set shrinks, no new high, in budget.
-    if previous is not None:
-        raised = sorted(
-            key for key, sev in current.items() if sev in HIGH and previous.get(key) not in HIGH
-        )
-        if raised:
-            return f"escalate reason=new-high key={raised[0]}"
-        recurring = sorted(set(current) & set(previous))
-        if recurring and not set(current) < set(previous):
-            return f"escalate reason=recurring key={recurring[0]}"
-    if used >= budget:
-        return "escalate reason=budget"
-    return f"continue round={used + 1} budget_left={budget - used}"

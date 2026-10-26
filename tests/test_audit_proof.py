@@ -29,6 +29,7 @@ from lib.audit_proof import (
 
 from tests.conftest import SCRIPTS_DIR, append_handback, replay_auditor, write_train_marker
 from tests.conftest import git as _git
+from tests.test_operator_gates import exempt_round
 
 NEEDLE = "daedalus_workspace.py begin"
 TRAIN = "20261016-120000"
@@ -617,16 +618,16 @@ def test_a_ledger_commit_refuses_when_the_ledger_is_not_in_the_repo(
     assert "with a commit that changes more than the ledger" in _refused(repo_cwd)
 
 
-def test_push_proof_takes_the_exception_path_on_the_current_tip(
+def test_push_proof_takes_the_exemption_path_on_the_current_tip(
     project_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
-    # 62: no approved verdict, and an exception ruling bound to the integration tip passes.
+    # 62, 0133: no approved verdict, and every finding of the rejected round exempted passes.
     tip = _judged(repo_cwd, status="rejected")
     _train(hook_input, repo_cwd, f"[VERDICT: REJECTED] tip={tip} a.py:1 high")
     assert _refused(repo_cwd).startswith("NOT APPROVED:")
-    train_state.update(repo_cwd, TRAIN, exception={"ledger_id": "0113-DAE-PLT", "tip": tip})
+    exempt_round(repo_cwd, TRAIN, tip)
     assert push_proof(repo_cwd, TRAIN) == (
-        f"OK approved: exception 0113-DAE-PLT, train {TRAIN}, integration tip {tip[:12]}"
+        f"OK approved: every finding exempted, train {TRAIN}, round 1, integration tip {tip[:12]}"
     )
     moved = _commit(repo_cwd, "src/app.py")
     with pytest.raises(ProofError) as info:
@@ -639,7 +640,8 @@ def test_push_proof_prefers_the_approved_verdict(
 ) -> None:
     tip = _judged(repo_cwd)
     _train(hook_input, repo_cwd, f"[VERDICT: APPROVED] tip={tip}")
-    train_state.update(repo_cwd, TRAIN, exception={"ledger_id": "0113-DAE-PLT", "tip": tip})
+    entry = {"ledger_id": "0113-DAE-PLT", "tip": tip, "tracking": "issue"}
+    train_state.update(repo_cwd, TRAIN, exemptions={"1": {"a.py:1": entry}})
     assert push_proof(repo_cwd, TRAIN) == _ok(1, tip)
 
 

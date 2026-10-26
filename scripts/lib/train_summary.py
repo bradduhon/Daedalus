@@ -479,34 +479,49 @@ def _units(
     return lines
 
 
+def _exempted(exempt: dict[str, object], repo: Path, charter: Path | None) -> list[str]:
+    # 0133, 0139: each exempted finding with its ledger id and tracking; 0142: untracked ones
+    # carry a Deviation: line naming the finding and its exemption row.
+    lines: list[str] = []
+    for key in sorted(exempt):
+        entry = _obj(exempt, key)
+        where = f"the train state exemption of {key}"
+        finding = _cell(key, repo, charter, "a train state finding key")
+        ledger = _cell(_text(entry, "ledger_id"), repo, charter, where)
+        tracking = _text(entry, "tracking")
+        label = train_state.TRACKING.get(tracking, "not recorded")
+        if tracking == "other":
+            label = f"{label}: {_cell(_text(entry, 'other'), repo, charter, where)}"
+        lines.append(f"- Exempted {finding} ({ledger}), tracking: {label}")
+        if tracking in train_state.UNTRACKED:
+            lines.append(
+                f"Deviation: finding {finding} exempted with no tracked issue ({label}), "
+                f"exemption row {ledger}."
+            )
+    return lines
+
+
 def _audit(
     repo: Path, state: dict[str, object], logs: Sequence[SessionLog], notes: Notes
 ) -> list[str]:
     charter_raw = _text(state, "charter_root")
     charter = Path(charter_raw) if charter_raw else None
     verdict = train_state.record(state, train_state.VERDICT)
-    exception = train_state.record(state, train_state.EXCEPTION)
     rounds = train_state.record(state, train_state.AUDIT_ROUNDS)
     status, tip = _text(verdict, "status"), _text(verdict, "tip")
     last = _int(verdict, "round", 0)
     keys = [int(k) for k in rounds if k.isdigit()]
     top = max([last, *keys], default=0)
-    rejected = [k for k in keys if isinstance(rounds.get(str(k)), dict) and rounds[str(k)]]
+    exempt = train_state.record(train_state.record(state, train_state.EXEMPTIONS), str(last))
     lines = ["## Audit"]
-    if exception and _text(exception, "ledger_id"):
+    if status == train_state.REJECTED and exempt:
         lines.append(
-            f"The operator's exception ({_text(exception, 'ledger_id')}) on tip "
-            f"{_text(exception, 'tip')} after {len(rejected)} rejected round(s)."
+            f"{VERDICT_REJECTED} tip={tip} after {last} round(s); the operator exempted "
+            f"{len(exempt)} of the {len(_obj(rounds, str(last)))} finding(s) of round {last}."
         )
-        waived = _obj(rounds, str(max(rejected))) if rejected else {}
+        lines += _exempted(exempt, repo, charter)
         if "Waived" in notes.sections:
             lines += _noted(notes, "Waived", "none", repo, charter)
-        else:
-            lines += [
-                f"- {_cell(key, repo, charter, 'a train state finding key')}: tracked-risk issue "
-                "not recorded"
-                for key in waived
-            ]
     elif status == train_state.APPROVED:
         lines.append(
             f"{VERDICT_APPROVED} tip={tip} on the merged integration tip after {last} round(s)."

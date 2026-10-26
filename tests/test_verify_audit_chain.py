@@ -23,6 +23,7 @@ from tests.conftest import (
     replay_auditor,
     write_train_marker,
 )
+from tests.test_operator_gates import GATE_KEY, exempt_round
 
 
 @pytest.fixture
@@ -414,23 +415,24 @@ def test_cli_approved_round_trip(project_data: Path, hook_input: Any, repo_cwd: 
     )
 
 
-def test_cli_approved_prints_the_exception_path(
+def test_cli_approved_prints_the_exemption_path(
     project_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
-    # 62: a train merged on an exception ruling bound to the current tip passes, and says so.
+    # 62, 0133: a rejected round whose every finding is exempted passes, and says so.
     tip = _tip(repo_cwd)
     _approved_train(hook_input, repo_cwd, f"[VERDICT: REJECTED] tip={tip} a.py:1 high")
     _judge(repo_cwd, tip, "rejected")
     refused = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
     assert refused.returncode == 1 and refused.stdout.startswith("NOT APPROVED:")
-    exception = {"ledger_id": "0113-DAE-PLT", "tip": tip}
-    train_state.update(repo_cwd, APPROVED_TRAIN, exception=exception)
+    exempt_round(repo_cwd, APPROVED_TRAIN, tip)
     result = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
     assert result.returncode == 0, result.stdout
     assert result.stdout == (
-        f"OK approved: exception 0113-DAE-PLT, train {APPROVED_TRAIN}, integration tip {tip[:12]}\n"
+        f"OK approved: every finding exempted, train {APPROVED_TRAIN}, round 1, "
+        f"integration tip {tip[:12]}\n"
     )
-    train_state.update(repo_cwd, APPROVED_TRAIN, exception={**exception, "tip": "c" * 40})
+    entry = {"ledger_id": "0113-DAE-PLT", "tip": "c" * 40, "tracking": "issue"}
+    train_state.update(repo_cwd, APPROVED_TRAIN, exemptions={"1": {GATE_KEY: entry}})
     assert _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd).returncode == 1
 
 

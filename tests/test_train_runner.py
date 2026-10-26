@@ -995,17 +995,6 @@ def test_check_reply_records_a_rejected_verdict(repo: Path, plugin: Path) -> Non
     }
 
 
-def test_exception_records_ledger_id_and_tip(repo: Path, plugin: Path) -> None:
-    _write_train(plugin, [_probe_stage()], ("repository",))
-    _started(repo, plugin)
-    tip = _integration(repo)
-    refused = train_runner.record_exception(repo, "--force")
-    assert refused.code == 1 and "Next:" in refused.lines[0]
-    outcome = train_runner.record_exception(repo, "0101-DAE-PLT")
-    assert outcome.code == 0, outcome.lines
-    assert _state(repo)["exception"] == {"ledger_id": "0101-DAE-PLT", "tip": tip}
-
-
 def test_brief_carries_the_plan_section_and_both_packet_hashes(repo: Path, plugin: Path) -> None:
     # 0083: the brief names each packet by path and hash; nothing is pasted.
     _write_train(plugin, [_code_stage(per_unit=True)], ("repository",))
@@ -1117,12 +1106,12 @@ def test_verdict_records_the_newest_matching_auditor_stop(
     _agent_stop(repo, "security-auditor", _verdict(status.upper(), tip), "aud-1")
     newest = _agent_stop(repo, "security-auditor", _verdict(status.upper(), tip), "aud-1")
     _agent_stop(repo, "repo-coder", COMPLETE, "coder-1")
-    # 67: a rejection always carries its finding list, so it prints the stall word.
+    # 67, 0133: a rejection always carries its finding list, so it prints the round record.
     listed = _findings(repo, 1, A) if status == "rejected" else None
     outcome = _verdict_call(repo, status, 1, tip=tip, findings=listed)
     assert outcome.code == 0, outcome.lines
     want = f"Verdict {status} recorded on tip {tip[:12]} (round 1)"
-    assert outcome.lines == ["continue round=2 budget_left=4" if listed else want]
+    assert outcome.lines == ["recorded rejected round=1 findings=1" if listed else want]
     record = {"status": status, "tip": tip, "round": 1, "seq": newest["seq"]}
     assert _state(repo)["verdict"] == record
     assert tip == _tip(repo)
@@ -1342,20 +1331,18 @@ B = "audit/round1/test_scope_b.py::test_refused | low | scope"
 C = "scripts/lib/jail.py:12 contract | low | contract"
 
 
-def test_rejected_rounds_print_the_stall_word_and_store_each_set(repo: Path, plugin: Path) -> None:
-    # 0109, spec 3.4: shrinking sets continue; a set that recurs unshrunk escalates.
+def test_rejected_rounds_record_each_set(repo: Path, plugin: Path) -> None:
+    # 0109, 0133: each rejected round records its set; a recurring set prints no stall word.
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
     _marked(repo)
     tip = _integration(repo)
     first = _rejected_round(repo, tip, 1, A, B, C)
-    assert first.code == 0 and first.lines == ["continue round=2 budget_left=4"]
+    assert first.code == 0 and first.lines == ["recorded rejected round=1 findings=3"]
     second = _rejected_round(repo, tip, 2, A, B)
-    assert second.lines == ["continue round=3 budget_left=3"]
+    assert second.lines == ["recorded rejected round=2 findings=2"]
     third = _rejected_round(repo, tip, 3, A, B)
-    assert third.lines == [
-        "escalate reason=recurring key=audit/round1/test_scope_a.py::test_refused"
-    ]
+    assert third.lines == ["recorded rejected round=3 findings=2"]
     rounds = _state(repo)["audit_rounds"]
     assert sorted(rounds) == ["1", "2", "3"]
     assert rounds["1"]["scripts/lib/jail.py:12 contract"] == {
@@ -1363,21 +1350,6 @@ def test_rejected_rounds_print_the_stall_word_and_store_each_set(repo: Path, plu
         "class": "contract",
     }
     assert _state(repo)["verdict"]["tip"] == tip
-
-
-def test_a_new_high_and_the_config_budget_escalate(repo: Path, plugin: Path) -> None:
-    # 0109: the budget comes from audit_round_budget; a new high escalates before it.
-    _write_train(plugin, [_probe_stage()], ("repository",))
-    _started(repo, plugin)
-    _config(repo, {"audit_round_budget": 2})
-    _marked(repo)
-    tip = _integration(repo)
-    assert _rejected_round(repo, tip, 1, A, B).lines == ["continue round=2 budget_left=1"]
-    high = "audit/round2/test_new.py::test_refused | high | scope"
-    assert _rejected_round(repo, tip, 2, high).lines == [
-        "escalate reason=new-high key=audit/round2/test_new.py::test_refused"
-    ]
-    assert _rejected_round(repo, tip, 3, A).lines == ["escalate reason=budget"]
 
 
 def test_findings_must_be_the_round_file_and_match_the_status(repo: Path, plugin: Path) -> None:
@@ -1498,10 +1470,10 @@ def test_verdict_derives_the_round_from_audit_rounds(repo: Path, plugin: Path) -
     assert train_runner.derived_round(_state(repo)) == 1
     _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
     first = _verdict_call(repo, "rejected", None, tip=tip, findings=_findings(repo, 1, A, B))
-    assert first.lines == ["continue round=2 budget_left=4"]
+    assert first.lines == ["recorded rejected round=1 findings=2"]
     _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
     second = _verdict_call(repo, "rejected", 2, tip=tip, findings=_findings(repo, 2, A))
-    assert second.lines == ["continue round=3 budget_left=3"]
+    assert second.lines == ["recorded rejected round=2 findings=1"]
     _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
     approved = _verdict_call(repo, "approved", None, tip=tip)
     assert approved.lines == [f"Verdict approved recorded on tip {tip[:12]} (round 3)"]
