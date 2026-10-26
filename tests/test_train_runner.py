@@ -1645,6 +1645,8 @@ RESUME_PLAN = (
     "unit: U1 | title: one | files: u1.txt | base: integration\n"
     "unit: U2 | title: two | files: u2.txt | base: integration\n"
     "```\n"
+    "\n### U1: one\n\nRequirements:\n1. Write `u1.txt`.\n"
+    "\n### U2: two\n\nRequirements:\n1. Write `u2.txt`.\n"
 )
 
 

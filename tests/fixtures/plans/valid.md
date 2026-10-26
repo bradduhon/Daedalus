@@ -17,3 +17,29 @@ graph: units=5 critical_path=2 width=3 overlap_only=U3~U4
 ```
 
 The prose around the block is for the reader.
+
+### U1: plan parser
+
+Requirements:
+1. Add `a.load()` to `scripts/lib/a.py`.
+2. Cover it in tests/test_a.py.
+
+### U2: plan gate
+
+Requirements:
+1. Make `scripts/lib/b.py` refuse a plan that `a.load()` cannot read.
+
+### U3: shell grammar
+
+Requirements:
+1. Add the new grammar rows to `scripts/lib/shell.py` and its README rows.
+
+### U4: jail rules
+
+Requirements:
+1. Name the new rows of `scripts/lib/shell.py` in scripts/lib/jail.py.
+
+### U5: docs and catalog
+
+Requirements:
+1. Regenerate the catalog in `README.md` and the docs pages.
