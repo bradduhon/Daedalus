@@ -8,7 +8,9 @@
     ],
     "PreToolUse": [
       { "matcher": "^(Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|WebSearch|Agent|Task|SendMessage|Read|Glob|Grep|mcp__.+)$",
-        "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/enforce_agent_jail.py", "timeout": 10, "onFailure": "block" } ] }
+        "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/enforce_agent_jail.py", "timeout": 10, "onFailure": "block" } ] },
+      { "matcher": "^SubagentHandback$",
+        "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/handback_check.py", "timeout": 10 } ] }
     ],
     "PostToolUse": [
       { "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py", "async": true } ] }
@@ -20,7 +22,8 @@
       { "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py", "timeout": 10 } ] }
     ],
     "SubagentStop": [
-      { "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py", "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py", "timeout": 10 } ] },
+      { "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/handback_check.py", "timeout": 10 } ] }
     ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py", "timeout": 10 } ] }

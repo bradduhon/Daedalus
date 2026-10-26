@@ -13,6 +13,18 @@ from lib.jail import CREDENTIAL_TOOLS, WEB_TOOLS, WORKER_DENIED_TOOLS, WRITE_TOO
 from tests.conftest import REPO_ROOT
 
 JAIL_SCRIPT = "scripts/enforce_agent_jail.py"
+HANDBACK_SCRIPT = "scripts/handback_check.py"
+# RCP, train 20261026-002310 pick 4: the hand-back tool's message gets the receipts check too.
+HANDBACK_ENTRY = {
+    "matcher": "^SubagentHandback$",
+    "hooks": [
+        {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/" + HANDBACK_SCRIPT,
+            "timeout": 10,
+        }
+    ],
+}
 BLOCKING_EVENTS = (
     "SessionStart",
     "UserPromptSubmit",
@@ -70,7 +82,7 @@ def test_pretooluse_mutating_matcher_runs_the_jail_synchronously() -> None:
     assert not hook.get("async", False)
     assert hook["timeout"] == 10
     # spec 8, 0023: Read, Glob and Grep left the audit-only binding; the jail audits them.
-    assert _load()["hooks"]["PreToolUse"] == jail
+    assert _load()["hooks"]["PreToolUse"] == [*jail, HANDBACK_ENTRY]
 
 
 def test_a_failed_jail_hook_blocks_the_call() -> None:
@@ -141,7 +153,10 @@ def test_hooks_register_only_in_hooks_json() -> None:
     for path in skills:
         assert not any(line.startswith("hooks:") for line in _frontmatter_lines(path)), path
     pre = [h["command"] for e in _load()["hooks"]["PreToolUse"] for h in e["hooks"]]
-    assert pre == ["python3 ${CLAUDE_PLUGIN_ROOT}/" + JAIL_SCRIPT]
+    assert pre == [
+        "python3 ${CLAUDE_PLUGIN_ROOT}/" + JAIL_SCRIPT,
+        "python3 ${CLAUDE_PLUGIN_ROOT}/" + HANDBACK_SCRIPT,
+    ]
 
 
 def test_agent_hooks_blocks_name_only_router_checks() -> None:
@@ -151,6 +166,23 @@ def test_agent_hooks_blocks_name_only_router_checks() -> None:
     for agent in agents.values():
         for hook in agent.hooks:
             assert (REPO_ROOT / "scripts" / "checks" / f"{hook.script}.py").is_file(), hook
+
+
+def test_subagent_stop_runs_the_audit_and_the_handback_check() -> None:
+    # RCP, 0128: the hand-back receipts check binds beside the audit, synchronous with a timeout.
+    assert [hook["command"] for hook in _commands("SubagentStop")] == [
+        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py",
+        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/handback_check.py",
+    ]
+
+
+def test_the_handback_tool_runs_the_handback_check_synchronously() -> None:
+    # RCP, pick 4: the hand-back tool alone; no onFailure, so a failed check never blocks.
+    entries = [e for e in _load()["hooks"]["PreToolUse"] if e["matcher"] == "^SubagentHandback$"]
+    assert entries == [HANDBACK_ENTRY]
+    assert re.fullmatch(HANDBACK_ENTRY["matcher"], "SubagentHandback")
+    for name in ("Bash", "SubagentHandbackX", "Agent", "SubagentStop"):
+        assert not re.fullmatch(HANDBACK_ENTRY["matcher"], name), name
 
 
 def test_session_start_runs_only_the_audit() -> None:

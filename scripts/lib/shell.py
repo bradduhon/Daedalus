@@ -1161,13 +1161,23 @@ def _git_data_dir_reason(sub: str, args: list[str], globals_: list[str]) -> str 
     return None
 
 
-def _is_append_ledger(tokens: list[str]) -> bool:
+def _is_plugin_script(tokens: list[str], name: str) -> bool:
+    # 8.5, F1: `python3 <absolute path>` whose real file is the plugin's own scripts/<name>.
     if len(tokens) < 2 or tokens[0] != "python3":
         return False
     script = tokens[1]
     if not script.startswith("/") or ".." in script.split("/"):
         return False
-    return os.path.realpath(script) == os.path.join(_REPO_SCRIPTS, "append_ledger.py")
+    return os.path.realpath(script) == os.path.join(_REPO_SCRIPTS, name)
+
+
+def _is_append_ledger(tokens: list[str]) -> bool:
+    return _is_plugin_script(tokens, "append_ledger.py")
+
+
+def _is_cite(tokens: list[str], own_script: Callable[[str], bool]) -> bool:
+    # RCP: `python3 <plugin root>/scripts/cite.py <file> <pattern>`, the file in the unit worktree.
+    return len(tokens) == 4 and _is_plugin_script(tokens, "cite.py") and own_script(tokens[2])
 
 
 _SED_ADDR = r"(?:\d+|\$|/[^/\\]*/)"
@@ -1448,6 +1458,8 @@ def _worker_hygiene(
         from checks.command_allowlist import train_script_ok
 
         ledger = train_script_ok(tokens)
+    if agent == "repo-coder" and own_script is not None and _is_cite(tokens, own_script):
+        ledger = True  # RCP, 0128: the coder's citation helper; its hygiene check still runs.
     is_wrapper = name in WORKER_WRAPPERS or name.startswith("python")
     if (
         agent == "charter-docs"

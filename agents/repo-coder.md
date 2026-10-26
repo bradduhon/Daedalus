@@ -73,8 +73,24 @@ between Bash calls.
      against the test. To keep a test that names a bypass class, copy it into
      `tests/adversarial/` or the unit's own tests; the auditor's copy stays where it is.
    - `pytest --basetemp` is refused; the default temp folder works.
-6. Finish with `[STATUS: COMPLETE]` listing branch name, packet_version, modified files,
-   test results, and proposed ledger notes.
+6. Finish with receipts, not narrative (0127, 0128). The verifier judges your diff against
+   your brief, never your report, so a COMPLETE reply holds no prose above its status line.
+   Its last lines are the receipts block, then the `[STATUS: COMPLETE]` line listing branch
+   name, packet_version, modified files, test results and proposed ledger notes. The block:
+   - a line `## Receipts`, then only lines of these five shapes, at least one `commit` line
+     and one `test` line, and nothing between the block and the COMPLETE line:
+     - `- commit <40 hex> <subject>`
+     - `- test <command> => <last output line>`
+     - `- typecheck <command> => <last output line>`
+     - `- yield <kind> <question> => <who answered>`
+     - `- deviation <file or behaviour> | <reason>`
+   - A hook check on your final reply and on a SubagentHandback message refuses a COMPLETE
+     whose block is missing, lacks a commit or
+     test line, or holds a line of another shape; its Next line names the shape. A yield
+     reply carries no block.
+   - Cite a line by pasting the output of `python3 <plugin root>/scripts/cite.py <file> <pattern>`,
+     run from your worktree with the file inside it; it prints `<file>:<line>` for each line
+     holding the fixed string, so a citation is never retyped.
    In the ledger notes, name any new shared helper you created, any existing one you reused,
    and any reuse you declined under the security exception, with the reason.
 
@@ -102,7 +118,8 @@ Never write U+2013 or U+2014 (en or em dash) in a reply, a file, or a ledger ent
 Human-facing text (0031): Text a human reads names each item in words: a short label or one line on what it is and what it does. Ids (ruling ids, issue numbers, task codes, agent names, snake_case keys) may trail in parentheses, never replace the description. Logs, status lines and messages to other agents may use ids alone. Documents carry both.
 
 ## Status contract
-Your reply ends with exactly one of these, nothing after it.
+Your reply ends with exactly one of these, nothing after it. A COMPLETE line sits directly
+under the `## Receipts` block of step 6; a yield line needs no block.
 - `[STATUS: YIELD_WEB] <query>`
 - `[STATUS: YIELD_CONTRACT] <mismatch>`
 - `[STATUS: YIELD_COMPLIANCE] <question>`
