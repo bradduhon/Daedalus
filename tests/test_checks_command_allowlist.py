@@ -780,6 +780,15 @@ def test_train_class_refuses_other_map_and_source_forms(command: str) -> None:
     )
 
 
+def test_refusal_names_every_admitted_freeze_sources_flag() -> None:
+    # 99: each first argument the train table admits for freeze_sources.py is in the refusal.
+    check = load(HOOK)
+    admitted = check.TRAIN_SCRIPTS["freeze_sources.py"]
+    assert admitted is not None and "--baselines-only" in admitted
+    for flag in sorted(admitted):
+        assert f"{flag} " in check.R_ORCHESTRATOR_BASH or f"{flag}," in check.R_ORCHESTRATOR_BASH
+
+
 @pytest.mark.parametrize(
     "args", ["--repo /work/other --out /work/other/m", "--repo=/work/other --out x", "--rep /x"]
 )
