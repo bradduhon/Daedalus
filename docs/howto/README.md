@@ -201,15 +201,15 @@ The summary records the policy gate as `[POLICY: none declared]` or `[POLICY: de
 
 The auditor works in its own audit worktree, a checkout of the integration branch. Before each later round the train refreshes it with a fast-forward to the new integration tip; if that worktree holds a commit or a change the integration branch lacks, the refresh stops with a `Next:` line naming `git -C <path> status` instead of throwing the work away.
 
-A `[VERDICT: REJECTED]` names the tip it judged and writes each blocking finding as a failing test. The train sends each finding to the coding agent that wrote the code, in a fix unit cut from the integration branch, with the test it must make pass. Then it merges the fixes and audits again. That loop goes on while each round makes progress. It stops when a finding comes back after its fix, a new high or critical finding appears, or the round budget runs out (`audit_round_budget` in your config, default 5). Then the session asks you what happens to the findings that remain:
+A `[VERDICT: REJECTED]` names the tip it judged and writes each blocking finding as a failing test. Then the session asks you about each finding, one question per finding (0133):
 
-- One more fix-and-audit round.
-- Merge with each finding as a tracked-risk issue: your exception becomes a ruling in the ledger, bound to the integration tip, and one tracked-risk issue per finding is filed. The Push Train's verdict check accepts that exception once it is bound to the tip it pushes (issue 62).
-- Stop with the branches kept, for fixes by hand or a narrower rerun.
+- Exempt the finding: the finding stays in the merged work, and the exemption becomes a ruling in the ledger. A second question asks how the exemption is tracked: silently dropped, a GitHub tracked-risk issue the session files before the pull request opens, recorded locally in the ledger row alone, or your own answer. Every choice is offered in every project. A silently dropped or locally recorded exemption puts a `Deviation:` line in the pull request body naming the finding and its exemption row.
+- Run a fix round: the train sends the finding to the coding agent that wrote the code, in a fix unit cut from the integration branch, with the test it must make pass. Then it merges the fixes and audits again.
+- End the train: the train stops, and every unit branch stays for fixes by hand or a narrower rerun.
 
-The same question follows every later rejected round; the train never runs another round or stops on its own authority.
+The same questions follow every later rejected round. No round budget applies, and the train never runs a fix round or stops on its own authority. The Push Train's verdict check accepts a rejected round once every finding in its findings file carries an exemption.
 
-On `[VERDICT: APPROVED]`, or your merge pick, the charter-docs agent appends the ledger entries through `append_ledger.py` and commits them. When the ledger lives in your Charter repo, the Charter working tree must be clean first. The train creates the Charter's `daedalus/<train-id>` branch in its checks, for the contract and ledger commits, then switches the Charter back to the branch it was on. Nothing is pushed.
+On `[VERDICT: APPROVED]`, or once you exempted every finding, the charter-docs agent appends the ledger entries through `append_ledger.py` and commits them. When the ledger lives in your Charter repo, the Charter working tree must be clean first. The train creates the Charter's `daedalus/<train-id>` branch in its checks, for the contract and ledger commits, then switches the Charter back to the branch it was on. Nothing is pushed.
 
 Any agent reply that does not end in one of its contract lines or contract sections stops the train and shows you the reply's last 10 lines. The auditor brief from standards-rules-specialist is the one exception: it ends with its rule list and has no status line. Once the train has created a Charter branch, it switches the Charter back to the branch it was on before any stop. Before any stop ahead of the merge, it also switches this repo back to your base branch. The exceptions: a stop while the Charter tree is dirty leaves the Charter on its `daedalus/<train-id>` branch, and a stop while the contract file is uncommitted leaves both repos on `daedalus/<train-id>`. Either way the stop names the uncommitted files and the branch they sit on. The security auditor writes its verdict line as both the first line and the last line of every reply it sends.
 
@@ -226,7 +226,7 @@ The train writes `docs/.tmp/daedalus/<train-id>-summary.md`. It holds:
 - one row per unit: branch, packet, files, tests
 - every yield and who answered it
 - the compliance results
-- the audit verdict on the merged integration tip and its round count, or your exception with each waived finding
+- the audit verdict on the merged integration tip and its round count, or each exempted finding with its ledger id and how it is tracked
 - the blocks the hooks made, sorted into friction (work the agent's job needed) and habit (a reach outside the job)
 - the audit log path, relative to the repo (`.claude/daedalus/audit/<session>.jsonl`)
 

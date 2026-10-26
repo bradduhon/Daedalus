@@ -9,7 +9,7 @@ from typing import NamedTuple
 
 from lib import train_state, workspace
 from lib.audit import project_root
-from lib.audit_proof import integration_tip, tip_problem
+from lib.audit_proof import exemption_problem, integration_tip, tip_problem
 
 CONDUCTOR = "pr-train-conductor"
 # 0028: the allowed list intersected with the conductor's set; K1: pr edit changes the body only.
@@ -352,15 +352,14 @@ def _verdict_detail(cwd: str, train: str, branch: str) -> str | None:
     tip = integration_tip(repo, train)
     if tip is None:
         return f"{branch} does not resolve to a commit in {cwd}"
-    exception = train_state.record(state, train_state.EXCEPTION)
-    ledger_id = exception.get("ledger_id")
-    if isinstance(ledger_id, str) and ledger_id and exception.get("tip") == tip:
-        return None
     verdict = train_state.record(state, train_state.VERDICT)
     status = verdict.get("status")
     if not verdict:
         return "no verdict is recorded"
-    if status != "approved":
+    if status == train_state.REJECTED:
+        # 0133: the push proof's own rule, one exemption per finding of the rejected round.
+        return exemption_problem(repo, train, state, tip)
+    if status != train_state.APPROVED:
         return f"the recorded verdict is {status if isinstance(status, str) else 'unreadable'}"
     # 59, spec 3.5: the same judged-tip rule the approved proof reads.
     return tip_problem(repo, verdict.get("tip"), tip)
@@ -371,7 +370,7 @@ def _active_train(cwd: str) -> str | None:
 
 
 def verdict_reason(cwd: str, what: str) -> str | None:
-    # spec 4.2: a push or pr create passes on the approved tip or an exception for that tip.
+    # spec 4.2, 0133: a push or pr create passes on the approved tip or every finding exempted.
     # The charter push and the -R charter pr create are gated on this project's integration tip.
     train = _active_train(cwd)
     if train is None:

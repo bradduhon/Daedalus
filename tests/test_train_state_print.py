@@ -261,7 +261,7 @@ def test_audit_section_reads_a_state_written_by_older_code(tmp_path: Path) -> No
     ]
 
 
-def test_audit_section_after_a_rejection_an_exception_and_no_verdict(tmp_path: Path) -> None:
+def test_audit_section_after_a_rejection_an_exemption_and_no_verdict(tmp_path: Path) -> None:
     state = copy.deepcopy(STATE)
     state["verdict"] = {"status": "rejected", "tip": TIP, "round": 1, "seq": 9}
     state["audit_rounds"] = {"1": {"t.py::test_x": {"severity": "high"}}}
@@ -269,18 +269,21 @@ def test_audit_section_after_a_rejection_an_exception_and_no_verdict(tmp_path: P
         _section(_text(tmp_path, state), "Audit")[0]
         == f"[VERDICT: REJECTED] tip={TIP} after 1 round(s)."
     )
-    state["exception"] = {"ledger_id": "0130-DAE-PLT", "tip": TIP}
+    # 0133: one exemption per finding; tests/test_operator_gates.py covers each tracking answer.
+    exempt = {"ledger_id": "0130-DAE-PLT", "tip": TIP, "tracking": "issue"}
+    state["exemptions"] = {"1": {"t.py::test_x": exempt}}
     waived = _section(_text(tmp_path, state), "Audit")
     assert waived[:2] == [
-        f"The operator's exception (0130-DAE-PLT) on tip {TIP} after 1 rejected round(s).",
-        "- t.py::test\\_x: tracked-risk issue not recorded",
+        f"[VERDICT: REJECTED] tip={TIP} after 1 round(s); the operator exempted 1 of the 1 "
+        "finding(s) of round 1.",
+        "- Exempted t.py::test\\_x (0130-DAE-PLT), tracking: GitHub tracked-risk issue",
     ]
     notes = parse_notes(NOTES + "## Waived\nt.py::test_x: tracked-risk issue filed\n", "n")
     assert (
-        _section(_text(tmp_path, state, notes), "Audit")[1]
+        _section(_text(tmp_path, state, notes), "Audit")[2]
         == "t.py::test_x: tracked-risk issue filed"
     )
-    del state["verdict"], state["exception"], state["audit_rounds"]
+    del state["verdict"], state["exemptions"], state["audit_rounds"]
     assert _section(_text(tmp_path, state), "Audit") == ["Verdict: pending"]
 
 

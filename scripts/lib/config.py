@@ -15,9 +15,8 @@ from lib.train_scope import KNOWN_AGENTS
 POLICY_ENGINES = ("cfn-guard", "conftest")
 # 0072: how many coders a parallel stage runs at once when the config names no number.
 DEFAULT_MAX_CONCURRENT_BUILDERS = 5
-# 0109: audit rounds a train runs before the verdict step escalates on budget.
-DEFAULT_AUDIT_ROUND_BUDGET = 5
-AUDIT_ROUND_BUDGET_RANGE = (1, 10)
+# 0133: the audit round budget is retired; a config that still sets it is refused.
+RETIRED_ROUND_BUDGET = "audit_round_budget"
 # AU-11, AU-6: a declared audit retention keeps at least this many days of session logs.
 AUDIT_RETENTION_FLOOR_DAYS = 90
 LEDGER_FORMATS = ("markdown-table-row", "heading-entry")
@@ -60,7 +59,6 @@ class Config:
     operator_signing_keys: tuple[str, ...] = field(default_factory=tuple)
     max_concurrent_builders: int = DEFAULT_MAX_CONCURRENT_BUILDERS
     audit_retention_days: int | None = None
-    audit_round_budget: int = DEFAULT_AUDIT_ROUND_BUDGET
     agent_models: dict[str, str] = field(default_factory=dict)
 
 
@@ -112,17 +110,14 @@ def _retention_days(raw: dict[str, object]) -> int | None:
     return value
 
 
-def _round_budget(raw: dict[str, object]) -> int:
-    # 0109: a whole number in range; bool is refused, as _max_builders refuses it.
-    low, high = AUDIT_ROUND_BUDGET_RANGE
-    value = raw.get("audit_round_budget", DEFAULT_AUDIT_ROUND_BUDGET)
-    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+def _refuse_round_budget(raw: dict[str, object]) -> None:
+    # 0133: every failing gate goes to the operator, so no number of rounds is configured.
+    if RETIRED_ROUND_BUDGET in raw:
         raise ConfigError(
-            f"config.json audit_round_budget must be a whole number from {low} to {high} "
-            f"(got {value!r}). Next: set audit_round_budget to {low} to {high}, or remove it "
-            f"to allow {DEFAULT_AUDIT_ROUND_BUDGET} rounds."
+            f"config.json sets {RETIRED_ROUND_BUDGET}, which Daedalus removed: the operator now "
+            "decides each audit finding, with no round budget. "
+            f"Next: delete the {RETIRED_ROUND_BUDGET} line from .claude/daedalus/config.json."
         )
-    return value
 
 
 def _agent_models(raw: dict[str, object]) -> dict[str, str]:
@@ -249,6 +244,7 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
             f"{target} must contain a JSON object. "
             "Next: make the file one JSON object, as docs/project-requirements.md shows."
         )
+    _refuse_round_budget(raw)
     # 0076: null is not declared, the same as an absent key; the setup starter writes null.
     charter = _require_str(raw, "charter_root", "") if raw.get("charter_root") is not None else None
     return Config(
@@ -259,6 +255,5 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
         operator_signing_keys=_signing_keys(raw),
         max_concurrent_builders=_max_builders(raw),
         audit_retention_days=_retention_days(raw),
-        audit_round_budget=_round_budget(raw),
         agent_models=_agent_models(raw),
     )

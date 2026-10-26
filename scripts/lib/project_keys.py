@@ -9,8 +9,6 @@ from dataclasses import dataclass, fields
 from lib.agent_models import MODELS
 from lib.config import (
     AUDIT_RETENTION_FLOOR_DAYS,
-    AUDIT_ROUND_BUDGET_RANGE,
-    DEFAULT_AUDIT_ROUND_BUDGET,
     LEDGER_FIELDS,
     Config,
     LedgerDecl,
@@ -325,16 +323,6 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"A whole number of at least {AUDIT_RETENTION_FLOOR_DAYS}, or `null`",
         "`null`: every log is kept",
         "`365`",
-    ),
-    (CONFIG_FILE, "audit_round_budget"): KeyRow(
-        "How many audit rounds a Build Train runs on its own. A rejected round continues while "
-        "each round's findings shrink and no new high or critical finding appears; once the "
-        "rounds used reach this number, the train stops and asks the operator (0109)",
-        "integer",
-        f"A whole number from {AUDIT_ROUND_BUDGET_RANGE[0]} to {AUDIT_ROUND_BUDGET_RANGE[1]}; "
-        "`true` and `false` are refused",
-        f"`{DEFAULT_AUDIT_ROUND_BUDGET}`",
-        "`3`",
     ),
     (CONFIG_FILE, "agent_models"): KeyRow(
         "Which model each catalog agent runs on, in place of the `model:` line of its agent "

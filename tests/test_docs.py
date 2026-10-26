@@ -112,14 +112,15 @@ def test_readme_outside_train_claim_matches_the_jail() -> None:
         assert [claim for claim in stale if claim in text] == [], doc
 
 
-def test_howto_merge_pick_names_the_push_train_exception_path() -> None:
-    # issue 62: --approved accepts an exception bound to the tip, so a merge pick no longer stops.
+def test_howto_exemptions_name_the_push_train_exemption_path() -> None:
+    # issue 62, 0133: --approved accepts a rejected round whose every finding is exempted.
     text = (REPO_ROOT / "docs" / "howto" / "README.md").read_text(encoding="utf-8")
-    bullet = next(
-        line for line in text.splitlines() if line.startswith("- Merge with each finding")
-    )
-    assert "The Push Train's verdict check accepts that exception" in bullet, bullet
+    bullet = next(line for line in text.splitlines() if line.startswith("- Exempt the finding"))
     assert "by hand" not in bullet and "stops" not in bullet, bullet
+    assert (
+        "The Push Train's verdict check accepts a rejected round once every finding in its "
+        "findings file carries an exemption."
+    ) in text
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "stops at the Push Train's verdict check" not in readme
 

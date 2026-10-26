@@ -70,7 +70,7 @@ def _mode(argv: list[str]) -> int:
             if stale:
                 print(f"stale agents: {', '.join(stale)}")
         else:
-            # 62: prints which path passed, the approved verdict or the exception ruling.
+            # 62, 0133: prints which path passed, the approved verdict or every finding exempted.
             print(push_proof(repo, args.approved))
     except ProofError as exc:
         print(exc)
