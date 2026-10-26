@@ -246,6 +246,7 @@ def test_audit_section_names_the_verdict_the_paragraph_and_each_round(tmp_path: 
         "Round 1: rejected, 1 finding(s) (1 high)",
         "Round 2: no findings recorded",
         "Round 3: approved",
+        "Docs: not run",
     ]
 
 
@@ -258,6 +259,7 @@ def test_audit_section_reads_a_state_written_by_older_code(tmp_path: Path) -> No
         f"[VERDICT: APPROVED] tip={TIP} on the merged integration tip after 2 round(s).",
         "Round 1: not recorded in train state",
         "Round 2: approved",
+        "Docs: not run",
     ]
 
 
@@ -284,7 +286,7 @@ def test_audit_section_after_a_rejection_an_exemption_and_no_verdict(tmp_path: P
         == "t.py::test_x: tracked-risk issue filed"
     )
     del state["verdict"], state["exemptions"], state["audit_rounds"]
-    assert _section(_text(tmp_path, state), "Audit") == ["Verdict: pending"]
+    assert _section(_text(tmp_path, state), "Audit") == ["Verdict: pending", "Docs: not run"]
 
 
 def test_blocks_carry_the_notes_lists_and_the_recorded_tally(tmp_path: Path) -> None:

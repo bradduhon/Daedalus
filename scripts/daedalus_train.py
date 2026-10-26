@@ -21,6 +21,7 @@ from lib.train_runner import (  # noqa: E402
     choice,
     progress,
     reaudit,
+    record_docs_verdict,
     record_exception,
     record_ledger,
     record_plan,
@@ -84,6 +85,8 @@ def _parser() -> argparse.ArgumentParser:
     # 0109, 59, pin C3 -> C5: the auditor's finding list and the tip its verdict line names.
     judged.add_argument("--findings", type=Path)
     judged.add_argument("--tip")
+    # 0131: --gate docs records the docs verifier's verdict, verified or refuted.
+    judged.add_argument("--gate", choices=("security", "docs"), default="security")
     ledger = sub.add_parser("ledger")
     ledger.add_argument("--repo", type=Path, required=True)
     ledger.add_argument("--sha", required=True)
@@ -118,6 +121,16 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "exception":
         return record_exception(repo, args.ledger_id, args.finding, args.tracking, args.other)
     if args.action == "verdict":
+        if args.gate == "docs":
+            if args.round_ is not None or args.seq is not None:
+                return Outcome(
+                    EXIT_STOP,
+                    [
+                        "verdict --gate docs takes no --round or --seq; the docs verdict has no "
+                        "audit round. Next: rerun it with --status and, when refuted, --findings."
+                    ],
+                )
+            return record_docs_verdict(repo, args.status, args.tip, args.findings)
         if args.status == "approved" and args.tip is None:
             # pin C3 -> C5: an approval always names the tip the auditor judged.
             return Outcome(

@@ -28,6 +28,10 @@ PLAN, CHOICES, VERDICT, EXEMPTIONS, PHASE, WEIGHT = (
     "weight",
 )
 APPROVED, REJECTED = "approved", "rejected"
+# 0131, 0134: the docs verifier's record {status, tip[, findings, exemptions]}, apart from VERDICT.
+DOCS_VERDICT, VERIFIED, REFUTED = "docs_verdict", "verified", "refuted"
+# 0134: the docs writer's worktree is the unit <train-id>-docs.
+DOCS_SUFFIX = "-docs"
 # 0139, 0142: how an exemption is tracked, each value with the operator's choice label.
 TRACKING = {
     "dropped": "Silently dropped",

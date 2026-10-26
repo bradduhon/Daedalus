@@ -29,6 +29,8 @@ from lib.audit_proof import (
     VERDICT_REJECTED,
     ProofError,
     auditor_round,
+    docs_findings_path,
+    docs_keys,
     findings_path,
     hooks_live,
     live_log,
@@ -38,6 +40,7 @@ from lib.audit_proof import (
     read_findings,
     round_keys,
     round_verdict,
+    tip_admits,
     tip_problem,
     verdict_tip,
 )
@@ -1293,6 +1296,47 @@ def _exemption_args(ledger_id: str, finding: str, tracking: str, other: str | No
         _one_line("other", other, "exception")
 
 
+def _exemption_entry(
+    ledger_id: str, tip: str, tracking: str, other: str | None
+) -> dict[str, object]:
+    entry: dict[str, object] = {"ledger_id": ledger_id, "tip": tip, "tracking": tracking}
+    if other is not None:
+        entry["other"] = other.strip()
+    return entry
+
+
+def _docs_exemption(
+    repo: Path,
+    train_id: str,
+    state: dict[str, object],
+    current: str,
+    ledger_id: str,
+    finding: str,
+) -> tuple[dict[str, object], list[str]] | None:
+    # 0131, 0133: a refuted docs claim's exemption lands in the docs record, bound to its tip.
+    docs = train_state.record(state, train_state.DOCS_VERDICT)
+    if docs.get("status") != train_state.REFUTED:
+        return None
+    try:
+        keys = docs_keys(repo, train_id, state)
+    except ProofError as exc:
+        raise RunnerError(str(exc)) from exc
+    if finding not in keys:
+        return None
+    tip = _text(docs, "tip")
+    if tip != current:
+        raise RunnerError(
+            f"the docs record names tip {tip[:12]}, not the integration tip {current[:12]}. "
+            "Next: record the docs verdict again with daedalus_train.py verdict --gate docs."
+        )
+    if finding in train_state.record(docs, "exemptions"):
+        raise RunnerError(
+            f"docs claim {finding} already carries an exemption. "
+            "Next: record the next finding; one exemption stands per finding."
+        )
+    return docs, keys
+
+
 def record_exception(
     cwd: Path, ledger_id: str, finding: str, tracking: str, other: str | None = None
 ) -> Outcome:
@@ -1303,6 +1347,20 @@ def record_exception(
         out: list[str] = []
 
         def change(state: dict[str, object]) -> None:
+            docs = _docs_exemption(repo, train_id, state, current, ledger_id, finding)
+            if docs is not None:
+                docs_record, keys = docs
+                granted = train_state.record(docs_record, "exemptions")
+                granted[finding] = _exemption_entry(
+                    ledger_id, _text(docs_record, "tip"), tracking, other
+                )
+                docs_record["exemptions"] = granted
+                state[train_state.DOCS_VERDICT] = docs_record
+                out.append(
+                    f"exemption recorded finding={finding} gate=docs ledger={ledger_id} "
+                    f"tracking={tracking} remaining={len([k for k in keys if k not in granted])}"
+                )
+                return
             verdict = train_state.record(state, train_state.VERDICT)
             round_ = _int(verdict, "round", 0)
             if verdict.get("status") != train_state.REJECTED or round_ < 1:
@@ -1330,10 +1388,7 @@ def record_exception(
                     f"finding {finding} of round {round_} already carries an exemption. "
                     "Next: record the next finding; one exemption stands per finding."
                 )
-            entry: dict[str, object] = {"ledger_id": ledger_id, "tip": judged, "tracking": tracking}
-            if other is not None:
-                entry["other"] = other.strip()
-            granted[finding] = entry
+            granted[finding] = _exemption_entry(ledger_id, judged, tracking, other)
             exemptions[str(round_)] = granted
             state[train_state.EXEMPTIONS] = exemptions
             left = len([key for key in keys if key not in granted])
@@ -1379,7 +1434,7 @@ def reaudit(cwd: Path) -> Outcome:
                 "the operator as its own question; no second recovery round runs on one tip."
             )
         judged = verdict.get("tip")
-        if tip_problem(repo, judged, current) is None:
+        if tip_admits(repo, train_id, state, judged, current) is None:
             raise RunnerError(
                 f"the approved verdict already admits the tip {current[:12]}. Next: no recovery "
                 f"round is needed; run the push proof verify_audit_chain.py --approved {train_id} "
@@ -1662,6 +1717,87 @@ def record_verdict(
             # 0133: a record only; the orchestrator puts each finding to the operator.
             return [f"recorded rejected round={round_} findings={len(listed)}"]
         return [f"Verdict {status} recorded on tip {judged[:12]} (round {round_})"]
+
+    return _recorded(cwd, edit)
+
+
+def _docs_claims(
+    repo: Path, train_id: str, status: str, findings: Path | None
+) -> dict[str, object]:
+    # 0131: a refuted verdict names its claim file at its one path; a verified one names none.
+    want = docs_findings_path(repo, train_id)
+    if (status == train_state.REFUTED) != (findings is not None):
+        raise RunnerError(
+            f"a {status} docs verdict takes --findings only when refuted. Next: rerun verdict "
+            f"--gate docs with --findings {want} for refuted, or with no --findings for verified."
+        )
+    if findings is None:
+        return {}
+    given = os.path.normpath(findings if findings.is_absolute() else repo / findings)
+    if given != str(want):
+        raise RunnerError(
+            f"--findings {findings} is not the docs claim file. "
+            f"Next: write the refuted claims to {want}, then rerun verdict --gate docs."
+        )
+    try:
+        listed = read_findings(want)
+    except ProofError as exc:
+        raise RunnerError(str(exc)) from exc
+    if not listed:
+        raise RunnerError(
+            f"the refuted docs verdict lists no claims in {want}. "
+            "Next: write one line per refuted claim, then rerun verdict --gate docs."
+        )
+    return {f.key: {"severity": f.severity, "class": f.kind} for f in listed.values()}
+
+
+def _docs_verified(repo: Path, train_id: str, state: dict[str, object]) -> None:
+    # 0121, 0131: a verified docs verdict is read from the verifier's reply, never typed.
+    name = f"{train_id}{train_state.DOCS_SUFFIX}"
+    unit = next((u for u in train_state.units(state) if u.get("name") == name), None)
+    if unit is None:
+        raise RunnerError(
+            f"train {train_id} records no docs worktree {name}. "
+            "Next: run the documentation stage, then rerun verdict --gate docs."
+        )
+    try:
+        verified = workspace.unit_verified(
+            workspace._audit_records(repo, state), Path(_text(unit, "path"))
+        )
+    except workspace.WorkspaceError as exc:
+        raise RunnerError(str(exc)) from exc
+    if not verified:
+        raise RunnerError(
+            f"no verifier reply ends {workspace.VERIFIED} for the docs worktree "
+            f"{_text(unit, 'path')}. Next: run the verifier's claims pass, then rerun verdict "
+            "--gate docs."
+        )
+
+
+def record_docs_verdict(
+    cwd: Path, status: str, tip: str | None = None, findings: Path | None = None
+) -> Outcome:
+    # 0131, 0134: the docs verifier's verdict on the integration tip, beside the security verdict.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        if status not in (train_state.VERIFIED, train_state.REFUTED):
+            raise RunnerError(
+                f"docs verdict status {status!r} is neither verified nor refuted. "
+                "Next: rerun verdict --gate docs with the status the verifier's line names."
+            )
+        current = _integration_tip(repo, train_id)
+        if tip is not None and tip != current:
+            raise RunnerError(
+                f"--tip {tip} is not the integration tip {current}. Next: merge the docs branch "
+                "with daedalus_workspace.py finish, then rerun verdict --gate docs with no --tip."
+            )
+        claims = _docs_claims(repo, train_id, status, findings)
+        if status == train_state.VERIFIED:
+            _docs_verified(repo, train_id, train_state.load(repo, train_id))
+        record: dict[str, object] = {"status": status, "tip": current}
+        if claims:
+            record["findings"] = claims
+        train_state.update(repo, train_id, **{train_state.DOCS_VERDICT: record})
+        return [f"docs verdict recorded status={status} tip={current[:12]}"]
 
     return _recorded(cwd, edit)
 
