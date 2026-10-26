@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# RCP, 0128: the SubagentStop check on a repo-coder's COMPLETE reply, before any verifier runs.
-# Pin RCP -> VER: the receipts block sits directly above the COMPLETE line. A yield, another
-# agent's reply and a hand-back stop with no reply pass; a check that cannot run never blocks.
+# RCP, 0128: the check on a repo-coder's COMPLETE reply, before any verifier runs. It reads the
+# SubagentStop reply and, by the operator's pick 4 of train 20261026-002310, the message of a
+# PreToolUse SubagentHandback call. Pin RCP -> VER: the receipts block sits directly above the
+# COMPLETE line. A yield, another agent's reply and an empty reply pass; a check that cannot run
+# never blocks.
 from __future__ import annotations
 
 import json
@@ -78,10 +80,21 @@ def _agent(hook_input: dict[str, object]) -> str:
     return hook_io.agent({"agent_type": raw}) if raw else ""
 
 
+def _reply(hook_input: dict[str, object]) -> object:
+    # RCP: the stop's reply, or the hand-back tool's message; any other event has none.
+    from lib.audit_proof import HANDBACK
+
+    event = hook_input.get("hook_event_name")
+    if event == "SubagentStop":
+        return hook_input.get("last_assistant_message")
+    fields = hook_input.get("tool_input")
+    if event == "PreToolUse" and hook_input.get("tool_name") == HANDBACK:
+        return fields.get("message") if isinstance(fields, dict) else None
+    return None
+
+
 def judge(hook_input: dict[str, object]) -> str | None:
-    if hook_input.get("hook_event_name") != "SubagentStop":
-        return None
-    reply = hook_input.get("last_assistant_message")
+    reply = _reply(hook_input)
     if not isinstance(reply, str) or not reply or _agent(hook_input) != CODER:
         return None
     problem = receipts_problem(reply)
@@ -98,7 +111,11 @@ def main() -> int:
         if not isinstance(payload, dict) or not train_marked(payload.get("cwd")):
             return 0  # 0035: no train marker, no check.
         reason = judge(payload)
-        if reason is not None:
+        if reason is not None and payload.get("hook_event_name") == "PreToolUse":
+            from lib import hook_io
+
+            hook_io.emit(reason)  # RCP: the PreToolUse deny shape the checks share.
+        elif reason is not None:
             print(json.dumps({"decision": "block", "reason": reason}))
     except Exception as exc:  # noqa: BLE001
         # RCP: a broken check never stalls a train; the verifier still judges the unit.

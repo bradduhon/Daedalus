@@ -215,3 +215,91 @@ def test_the_script_steps_aside_outside_a_train(tmp_path: Path) -> None:
 def test_the_script_never_blocks_on_bad_input(stdin: str) -> None:
     got = _run(stdin)
     assert (got.returncode, got.stdout) == (0, "")
+
+
+# RCP, train 20261026-002310 pick 4: the same check on the SubagentHandback tool's message.
+def _handback(message: object, agent: str | None = "daedalus:repo-coder", **extra: object) -> dict:
+    payload: dict[str, object] = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "SubagentHandback",
+        "tool_input": {"message": message},
+        "session_id": "s",
+        "cwd": "/work/repo",
+        "agent_id": "a1",
+        **extra,
+    }
+    if agent is not None:
+        payload["agent_type"] = agent
+    return payload
+
+
+# Pin RCP -> VER: the shape this train's coders hand back, narrative above the header allowed.
+CODER_MESSAGE = _reply(
+    "The unit added the check; the verifier judges the diff.",
+    "",
+    "## Receipts",
+    COMMIT,
+    f"- commit {SHA[::-1]} Name cite.py and handback_check.py in the README tree",
+    "- test daedalus_confine.py --unit <worktree> -- python3 -m pytest -q => 5914 passed, "
+    "1 skipped, 19 deselected in 138.45s (0:02:18)",
+    TYPECHECK,
+    "- deviation README.md (outside the files list) | tests/test_docs.py needs the tree line",
+    "- deviation hook errors | a broken check never stalls the train",
+    COMPLETE + " adversarial=pass",
+)
+
+
+def test_a_coder_handback_message_with_narrative_above_the_block_passes() -> None:
+    assert handback_check.receipts_problem(CODER_MESSAGE) is None
+    assert handback_check.judge(_handback(CODER_MESSAGE)) is None
+    assert handback_check.judge(_stop(CODER_MESSAGE)) is None
+
+
+def test_a_handback_message_without_a_block_is_refused_with_the_stop_reason() -> None:
+    bare = _reply("All done.", COMPLETE)
+    got = handback_check.judge(_handback(bare))
+    assert got is not None and got == handback_check.judge(_stop(bare))
+    assert got.count("Next:") == 1
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["[STATUS: YIELD_WEB] what does SubagentHandback send", "progress", "", None, ["x"]],
+)
+def test_handback_yields_and_non_text_messages_pass(message: object) -> None:
+    assert handback_check.judge(_handback(message)) is None
+
+
+@pytest.mark.parametrize("agent", ["daedalus:orchestrator", "daedalus:verifier", "x"])
+def test_handback_of_other_agents_passes(agent: str) -> None:
+    assert handback_check.judge(_handback(_reply("done", COMPLETE), agent)) is None
+
+
+def test_other_tools_and_a_bad_tool_input_pass() -> None:
+    bare = _reply("done", COMPLETE)
+    assert handback_check.judge({**_handback(bare), "tool_name": "Bash"}) is None
+    assert handback_check.judge({**_handback(bare), "tool_input": bare}) is None
+    assert handback_check.judge({**_handback(bare), "hook_event_name": "PostToolUse"}) is None
+
+
+def test_the_script_denies_a_handback_in_a_train(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / TRAIN_MARKER).parent.mkdir(parents=True)
+    (tmp_path / TRAIN_MARKER).write_text("20261026-002310\n", encoding="utf-8")
+    call = _handback(_reply("done", COMPLETE), cwd=str(tmp_path))
+    out = json.loads(_run(json.dumps(call)).stdout)
+    assert out == {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": handback_check.judge(call),
+        }
+    }
+    whole = _handback(CODER_MESSAGE, cwd=str(tmp_path))
+    assert _run(json.dumps(whole)).stdout == ""
+
+
+def test_the_script_steps_aside_on_a_handback_outside_a_train(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    got = _run(json.dumps(_handback(_reply("done", COMPLETE), cwd=str(tmp_path))))
+    assert (got.returncode, got.stdout) == (0, "")
