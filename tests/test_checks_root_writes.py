@@ -261,10 +261,10 @@ def test_root_writes_sub_judges_the_folder_and_the_file_realpath(tmp_path: Path)
         (scratch / folder).mkdir(parents=True)
     outside = tmp_path / "outside" / "brainstorm-x"
     outside.mkdir(parents=True)
-    # Folder out of scratch whose spec.md links back in: the folder's realpath refuses it.
+    # 0152: folder out of scratch whose spec.md links back in; the folder's realpath refuses it.
     os.symlink(outside, scratch / "brainstorm-link")
     os.symlink(scratch / "brainstorm-y" / "spec.md", outside / "spec.md")
-    # A spec.md that resolves to another name, and another name that resolves to spec.md.
+    # 0152: a spec.md that resolves to another name, and another name that resolves to spec.md.
     os.symlink(scratch / "brainstorm-b" / "notes.md", scratch / "brainstorm-a" / "spec.md")
     os.symlink(scratch / "brainstorm-y" / "spec.md", scratch / "brainstorm-b" / "alias")
     flags = ("--sub", "brainstorm-*/spec.md")
