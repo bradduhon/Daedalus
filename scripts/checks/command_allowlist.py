@@ -13,9 +13,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from checks.read_only_bash import read_segment_ok  # noqa: E402
 from lib import hook_io, jail, shell  # noqa: E402
 from lib.audit import project_root  # noqa: E402
+from lib.manifest import ManifestError, manifest_path  # noqa: E402
+from lib.manifest import load as load_manifest  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset({"Bash"})
-NAMES = frozenset({"append_ledger", "git", "gh", "gitleaks", "read", "train", "inspect"})
+NAMES = frozenset(
+    {"append_ledger", "git", "gh", "gitleaks", "read", "train", "inspect", "terraform"}
+)
 FLAGS: dict[str, hook_io.Flag] = {"--allow": hook_io.Flag(values=NAMES, many=True)}
 PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
 _SCRIPTS = os.path.realpath(Path(__file__).resolve().parents[1])
@@ -60,6 +64,46 @@ R_MAP_OUT = (
     "daedalus_map.py writes its map only into {allowed}; --out {given} is outside it. "
     "Next: pass --out {allowed}."
 )
+
+
+# 0132: the terraform class, `terraform [-chdir=<folder in the project>] fmt -check | validate`.
+TERRAFORM_FORMS = (("fmt", "-check"), ("validate",))
+R_TERRAFORM = (
+    "the terraform class runs only `terraform fmt -check` and `terraform validate`, each with an "
+    "optional -chdir=<absolute folder inside the project> (0132). Next: send one of those forms; "
+    "init, plan, apply and every other subcommand stay with the operator."
+)
+R_TERRAFORM_OFF = (
+    "features.terraform_tools is false in {manifest}, so the terraform class runs nothing "
+    "(0132). Next: judge the Terraform files by reading them, and report the skipped checks."
+)
+R_TERRAFORM_MANIFEST = (
+    "the service manifest could not be read, so the terraform class runs nothing (0132): {cause}"
+)
+
+
+def terraform_reason(segment: list[str], cwd: str) -> str | None:
+    # 0132: None admits the segment; a refusal names the form or the manifest switch.
+    if segment[:1] != ["terraform"]:
+        return R_TERRAFORM  # 0132: the binary on PATH only, never a path to another binary.
+    rest = segment[1:]
+    chdir = rest[0].removeprefix("-chdir=") if rest[:1] and rest[0].startswith("-chdir=") else None
+    if chdir is not None:
+        rest = rest[1:]
+    if tuple(rest) not in TERRAFORM_FORMS or not os.path.isabs(cwd):
+        return R_TERRAFORM
+    root = os.path.realpath(project_root(cwd))
+    if chdir is not None:
+        real = os.path.realpath(chdir)
+        if not os.path.isabs(chdir) or ".." in chdir.split("/") or not shell._under(real, root):
+            return R_TERRAFORM
+    try:
+        loaded = load_manifest(Path(root))
+    except ManifestError as exc:
+        return R_TERRAFORM_MANIFEST.format(cause=exc)
+    if loaded is not None and loaded.features.terraform_tools is False:
+        return R_TERRAFORM_OFF.format(manifest=manifest_path(Path(root)))
+    return None
 
 
 def _reason(allowed: frozenset[str]) -> str:
@@ -220,6 +264,11 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
                 return mismatch
             continue
         if "inspect" in allowed and _inspect_ok(segment, cwd):
+            continue
+        if "terraform" in allowed and name == "terraform":
+            refused = terraform_reason(segment, cwd)
+            if refused is not None:
+                return refused
             continue
         return _reason(allowed)
     return None

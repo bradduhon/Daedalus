@@ -66,6 +66,26 @@ R_AUDIT_UNIT = (
     "unit (spec 4). Next: name the coder's own unit worktree on the Worktree: line, as "
     "daedalus_workspace.py create printed it."
 )
+R_DOCS_WORKTREE = (
+    "a docs-writer dispatched during train {train} names exactly one line 'Worktree: {docs}', "
+    "the train's docs worktree, and no other worktree (0134). Next: create it with "
+    "daedalus_workspace.py create --name {name} and name it on one Worktree: line."
+)
+R_DOCS_REBIND = (
+    "the docs worktree {name} takes only the docs-writer its own dispatch names, and a resume "
+    "never moves an agent onto it (0134). Next: dispatch the docs-writer with one Worktree: "
+    "line naming the docs worktree, and resume coders only onto their own units."
+)
+# 0134: the docs stage worktree, beside the audit worktree's <train-id>-audit.
+DOCS_SUFFIX = "-docs"
+DOCS_WRITER = "docs-writer"
+# 0134: the only files the docs-writer writes, relative to its docs worktree.
+PUBLIC_DOCS = (
+    "README.md",
+    "docs/howto/README.md",
+    "docs/guardrails.md",
+    "docs/project-requirements.md",
+)
 DISPATCH_TOOLS = frozenset({"Agent", "Task"})
 RESUME_TOOLS = frozenset({"SendMessage"})
 _WORKTREE_LINE = re.compile(r"Worktree: (/\S+)")
@@ -150,10 +170,10 @@ def _names_a_coder(subagent: str) -> bool:
     return subagent.rpartition(":")[2] == "repo-coder"
 
 
-def _our_coder(subagent: str) -> bool:
-    # W1.3: train_scope's namespace check decides which coder dispatch records a unit binding.
+def _ours(subagent: str, agent: str) -> bool:
+    # W1.3: train_scope's namespace check decides which dispatch records a unit binding.
     prefix, sep, name = subagent.partition(":")
-    return (name if sep else prefix) == "repo-coder" and policed_outside_train(subagent)
+    return (name if sep else prefix) == agent and policed_outside_train(subagent)
 
 
 def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
@@ -164,6 +184,8 @@ def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     if step is not None:
         return step
     subagent = str(tool_input.get("subagent_type") or "")
+    if _names_docs_writer(subagent):
+        return _docs_dispatch_reason(tool_input, cwd, subagent)
     if not _names_a_coder(subagent) or not os.path.isabs(cwd):
         return None
     if not _train_active(cwd):
@@ -188,9 +210,45 @@ def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     unit, refused = _coder_unit(state, match.group(1), train)
     if refused is not None:
         return refused
-    if not _our_coder(subagent):
+    if not _ours(subagent, "repo-coder"):
         return unit_binding.held_reason(repo, train, unit)  # issue 29: once, never bound.
     return record_dispatch(repo, train, unit)
+
+
+def docs_unit(train_id: str) -> str:
+    # 0134: the docs stage worktree is the train unit named <train-id>-docs.
+    return f"{train_id}{DOCS_SUFFIX}"
+
+
+def _names_docs_writer(subagent: str) -> bool:
+    # 0134: fail closed; a docs-writer under any namespace meets the docs worktree gate.
+    return subagent.rpartition(":")[2] == DOCS_WRITER
+
+
+def _docs_dispatch_reason(tool_input: dict[str, object], cwd: str, subagent: str) -> str | None:
+    # 0134: during a train a docs-writer dispatch names the docs worktree alone, once.
+    from lib.jail import _train_active
+
+    if not os.path.isabs(cwd) or not _train_active(cwd):
+        return None
+    repo = project_root(Path(cwd))
+    train = active_train(repo)
+    if train is None:
+        return f"{train_marker(repo)} names no train id. " + UNMARK_NEXT.format(repo=repo)
+    try:
+        state = load_train(repo, train)
+    except TrainStateError as exc:
+        return str(exc)
+    name = docs_unit(train)
+    lines = _worktree_lines(str(tool_input.get("prompt") or ""))
+    match = _WORKTREE_LINE.fullmatch(lines[0]) if len(lines) == 1 else None
+    unit = _unit_named(state, match.group(1)) if match else None
+    if unit is None or unit.get("name") != name:
+        docs = next((str(u["path"]) for u in units_of(state) if u.get("name") == name), None)
+        return R_DOCS_WORKTREE.format(train=train, docs=docs or "<docs worktree path>", name=name)
+    if not _ours(subagent, DOCS_WRITER):
+        return unit_binding.held_reason(repo, train, name)
+    return record_dispatch(repo, train, name)
 
 
 def _worktree_lines(text: str) -> list[str]:
@@ -268,6 +326,8 @@ def _resume_reason(tool_input: dict[str, object], cwd: str) -> str | None:
         return refused
     if bound.get(unit, {}).get("agent_id") == coder:
         return None  # 0086: the runner's queue rebound it already, or the coder holds this unit.
+    if unit == docs_unit(train):
+        return R_DOCS_REBIND.format(name=unit)
     held = [name for name, record in bound.items() if record.get("agent_id") == coder]
     if not held:
         return R_RESUME_UNBOUND.format(coder=coder, train=train, unit=unit)
