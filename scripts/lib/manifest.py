@@ -423,8 +423,8 @@ def _bounded_list(target: Path, value: object, row: str, limit: int) -> list[obj
 
 
 def _priorities(target: Path, raw: dict[str, object]) -> Priorities | None:
-    # 0129, F.6: absent is none declared; anything off the field table is refused.
-    if "priorities" not in raw:
+    # 0129, F.6, 0076: absent or null is none declared; anything off the field table is refused.
+    if raw.get("priorities") is None:
         return None
     keys = {"drivers", "rules", "principles", "agents"}
     block = _object(target, raw["priorities"], "", keys, {"drivers"})

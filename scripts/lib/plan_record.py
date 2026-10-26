@@ -12,6 +12,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from lib.train_state import DOCS_SUFFIX
+
 INTEGRATION = "integration"
 SERIAL = "serial"
 OVERLAP = "overlap"
@@ -482,6 +484,12 @@ def _unit_defects(plan: Plan) -> list[str]:
     for u in plan.units:
         if not u.files:
             out.append(f"unit {u.id} lists no files; name the files or folders it changes.")
+        # 0134: the docs stage worktree <train-id>-docstage is no plan unit's slug.
+        if u.id.lower() == DOCS_SUFFIX.removeprefix("-"):
+            out.append(
+                f"unit {u.id} takes the slug of the reserved docs stage worktree "
+                f"<train-id>{DOCS_SUFFIX}. Next: give that unit another id in the plan."
+            )
         if u.base and u.base != INTEGRATION and u.base not in known:
             out.append(
                 f"unit {u.id} starts from {u.base}, which is neither {INTEGRATION} "

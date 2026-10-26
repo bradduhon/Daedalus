@@ -289,7 +289,7 @@ def test_documentation_stage_sits_directly_before_recovery() -> None:
     flat = " ".join(stage.split())
     for phrase in (
         "after the security verdict record",
-        "--name <train-id>-docs --base daedalus/<train-id>",
+        "--name <train-id>-docstage --base daedalus/<train-id>",
         "Agent(`docs-writer`)",
         "the hand-back summary of every unit whose agent changed something",
         "the line `Worktree: <docs worktree path>`",

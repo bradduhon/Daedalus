@@ -56,10 +56,11 @@ def _commit(repo: Path, *paths: str) -> str:
 
 
 def _docs_unit(repo: Path) -> Path:
-    # 0134: the docs worktree the documentation stage records as unit <train-id>-docs.
+    # 0134: the docs worktree the documentation stage records as unit <train-id>-docstage.
     train = _train(repo)
-    path = repo.parent / f"{train}-docs"
-    train_state.add_unit(repo, train, f"{train}-docs", f"daedalus-unit/{train}-docs", path)
+    name = f"{train}{train_state.DOCS_SUFFIX}"
+    path = repo.parent / name
+    train_state.add_unit(repo, train, name, f"daedalus-unit/{name}", path)
     return path
 
 
@@ -307,12 +308,12 @@ def test_an_approved_verdict_admits_docs_commits_through_the_gh_gate(
 
 
 def test_the_four_public_docs_are_the_whole_set() -> None:
-    assert PUBLIC_DOCS == {
+    assert PUBLIC_DOCS == (
         "README.md",
         "docs/howto/README.md",
         "docs/guardrails.md",
         "docs/project-requirements.md",
-    }
+    )
 
 
 # Requirement 3: the Audit section names both verdicts.

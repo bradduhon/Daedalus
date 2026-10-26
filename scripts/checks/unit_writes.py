@@ -30,6 +30,12 @@ R_DOCS_GIT = (
     "the docs-writer's git writes are add and commit in the docs worktree; git {sub} is refused "
     "(0134). Next: stage the edited docs with git -C <docs worktree> add, then commit."
 )
+R_DOCS_COMMIT = (
+    "the docs-writer commits only what it staged, as git commit -m <message>; {command} is "
+    "refused, since -a, --all or a pathspec commits files it never staged (0134). Next: stage "
+    "each doc with git -C <docs worktree> add <path>, then run git -C <docs worktree> commit -m "
+    "<message>."
+)
 # 0134: git forms that change files beyond the staged docs.
 _DOCS_GIT_REFUSED = frozenset({"stage", "stash", "restore", "checkout"})
 
@@ -42,7 +48,7 @@ def _docs_unit(cwd: str) -> str:
 
 
 def _docs_reason(path: str, cwd: str) -> str | None:
-    # 0134: the unit must be <train-id>-docs and the rest of the path one of the four docs.
+    # 0134: the unit must be <train-id>-docstage and the rest of the path one of the four docs.
     name = _docs_unit(cwd)
     parts = jail._unit_parts(path, cwd) or []
     if parts[:1] == [name] and "/".join(parts[1:]) in dispatch_binding.PUBLIC_DOCS:
@@ -96,6 +102,9 @@ def _docs_segment_reason(segment: list[str], base: str, cwd: str) -> str | None:
             if not jail._docs_add_ok(args, base):
                 return _docs_refusal(" ".join(["git add", *args]), _docs_unit(cwd))
             targets += [shell._abs(a, git_dir) for a in args if a != "--"]
+        # 0134: the commit takes the staged docs only, as charter-docs commits (_DOCS_GRAMMAR).
+        if sub == "commit" and not jail._DOCS_GRAMMAR["commit"](args, base):
+            return R_DOCS_COMMIT.format(command=" ".join(["git commit", *args]))
     return next((r for t in targets if (r := _docs_reason(t, cwd))), None)
 
 
