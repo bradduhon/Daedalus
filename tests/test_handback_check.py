@@ -81,12 +81,12 @@ def test_a_block_without_a_commit_or_test_line_is_refused(
 @pytest.mark.parametrize(
     "between",
     [
-        "The unit adds a check.",  # narrative between the header and the block lines
-        "",  # a blank line is no pinned shape
+        "The unit adds a check.",  # pin RCP -> VER: narrative between header and block lines
+        "",  # pin RCP -> VER: a blank line is no pinned shape
         "  - commit " + SHA + " indented",
         "- commit 0123abc short sha",
         "- commit " + SHA.upper() + " upper hex",
-        "- test python3 -m pytest -q",  # no `=> <last output line>`
+        "- test python3 -m pytest -q",  # pin RCP -> VER: no `=> <last output line>`
         "- test python3 -m pytest -q => ",
         "- typecheck => Success",
         "- yield WEB => orchestrator",
@@ -121,7 +121,7 @@ def test_a_long_bad_line_is_shown_cut() -> None:
         "Blocked.\n[STATUS: YIELD_CONTRACT] pin 2 mismatch",
         "[STATUS: YIELD_COMPLIANCE] may I log the reply",
         "[STATUS: YIELD_STANDARDS] which comment cap applies",
-        f"{COMPLETE}\nand a trailing note",  # the last line is no COMPLETE line
+        f"{COMPLETE}\nand a trailing note",  # pin RCP -> VER: the last line is no COMPLETE line
         "progress note",
         "",
     ],
