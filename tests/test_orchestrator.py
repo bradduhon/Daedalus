@@ -316,7 +316,8 @@ def test_recipe_names_the_verifier_step_and_the_one_pass_rule() -> None:
     assert "the line `Unit worktree: <unit worktree path>`" in step
     assert "never a `Worktree:` line" in step
     refuted = next(ln for ln in phase2.splitlines() if ln.startswith("| `[VERDICT: REFUTED]"))
-    assert 'SendMessage(that unit\'s coder, "FIX. The verifier refuted: <rows>")' in refuted
+    fix = 'SendMessage(that unit\'s coder, "FIX. The verifier refuted: <code and scope rows>")'
+    assert fix in refuted
     assert "A second REFUTED on the same unit stops the train with the rows shown" in refuted
     assert any(ln.startswith("| `[VERDICT: VERIFIED] claims=<n>`") for ln in phase2.splitlines())
     merge = AGENT_FILE.read_text(encoding="utf-8").split("## Phase 3", 1)[1].split("\n2. ", 1)[0]
