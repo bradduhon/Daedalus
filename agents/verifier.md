@@ -127,3 +127,24 @@ A refuted row is `<class> | <claim> | <verdict> | <branch quote> | <brief quote>
 `<class>` is `code` or `scope`, rows joined by `; `.
 - `[VERDICT: VERIFIED] claims=<n>` then `<the per-claim table>` then `corrected=<k>` then `[VERDICT: VERIFIED] claims=<n>`
 - `[VERDICT: REFUTED] <rows>` then `<the per-claim table>` then `corrected=<k>` then `[VERDICT: REFUTED] <rows>`
+
+## What the jail passes and refuses
+The jail passes these for the verifier:
+- The inspection commands `cat`, `rg`, `grep`, `ls`, `find`, `jq`, `head`, `tail`, `wc`,
+  `sha256sum`, `file`, `stat`, `sort` and `uniq`, in their read forms.
+- The git reads listed above, and no other git subcommand.
+- One test run: `python3 -m pytest <absolute paths under the unit worktree> -q`, with
+  `-p no:cacheprovider`, `--rootdir <unit worktree>` and `-k <expr>` as the only other options.
+  It needs an active train and never reads the audit worktree.
+- Pipes between commands that each pass, and the `git show` to `sed -n` pipe above.
+- One leading `cd <absolute path> &&` before reads, when no git command or test run follows it.
+
+The jail refuses these:
+- Write, Edit, MultiEdit and NotebookEdit.
+- Git writes, such as `add`, `commit`, `stash`, `restore`, `checkout`, `merge` and `config`,
+  and every remote git command.
+- Dispatch and messages: Agent, Task and SendMessage.
+- Web tools: WebFetch and WebSearch.
+- Any other test runner or lint command, `ruff` included, and `pytest --basetemp`.
+- `find` with `-delete` or `-exec`, `sort -o`, and grouping, subshells, substitution or
+  background `&`.
