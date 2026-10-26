@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Literal
 
 from lib.project_root import project_root
+from lib.train_scope import KNOWN_AGENTS
 
 MANIFEST_NAME = "service-manifest.json"
 NARROWING_KEYS = ("forbidden_paths", "forbidden_extensions")
@@ -18,6 +20,13 @@ _GLOB = frozenset("*?[]")
 
 class ManifestError(ValueError):
     pass
+
+
+class PrioritiesError(ManifestError):
+    # 0129, F.6: the doctor names the key reference row a malformed priorities block broke.
+    def __init__(self, message: str, row: str) -> None:
+        super().__init__(message)
+        self.row = row
 
 
 @dataclass(frozen=True)
@@ -49,6 +58,70 @@ class Docs:
 
 
 DOCS_KEYS = tuple(f.name for f in fields(Docs))
+# 0129, Addendum F.2: the four drivers, the closed reason vocabulary and the surface outcome.
+DRIVERS = ("security", "trust", "ops", "cost")
+REASONS = (
+    "certification",
+    "framework",
+    "best-practice",
+    "incident",
+    "shape",
+    "domain-separation",
+    "ownership",
+    "convenience",
+    "latency",
+    "margin",
+    "running-cost",
+)
+SURFACE = "surface"
+# 0129, F.6: one key reference row per field, in table order, and each field's limits.
+PRIORITY_ROWS = (
+    "drivers",
+    "rules[].when.conflict",
+    "rules[].when.reason",
+    "rules[].then",
+    "rules[].note",
+    "principles[].id",
+    "principles[].driver",
+    "principles[].text",
+    "principles[].source",
+    "agents.<name>.drivers",
+)
+MAX_RULES, MAX_PRINCIPLES, NOTE_MAX, TEXT_MAX = 32, 64, 200, 300
+PRINCIPLE_ID = re.compile(r"P[0-9]+")
+NOT_OVERRIDABLE = "security-auditor"
+R_PRIORITIES = (
+    "{target} {key} {detail} (0129). Next: correct {key} against its row in the key reference, "
+    "then rerun."
+)
+
+
+@dataclass(frozen=True)
+class Rule:
+    conflict: tuple[str, str]
+    reason: tuple[str, ...]
+    then: str
+    note: str
+
+
+@dataclass(frozen=True)
+class Principle:
+    id: str
+    driver: str
+    text: str
+    source: str | None = None
+
+
+@dataclass(frozen=True)
+class Priorities:
+    # 0137: rules and principles are global; only the ranking varies per agent.
+    drivers: tuple[str, ...]
+    rules: tuple[Rule, ...] = ()
+    principles: tuple[Principle, ...] = ()
+    agents: tuple[tuple[str, tuple[str, ...]], ...] = ()
+
+    def ranking(self, agent: str) -> tuple[str, ...]:
+        return dict(self.agents).get(agent, self.drivers)
 
 
 @dataclass(frozen=True)
@@ -61,6 +134,7 @@ class Manifest:
     typecheck_cmd: str | None = None
     lint_cmd: str | None = None
     docs: Docs = field(default_factory=Docs)
+    priorities: Priorities | None = None
 
 
 # 0073, B2: the stack keys that hold a command the coder may run verbatim.
@@ -225,6 +299,149 @@ def _docs(target: Path, raw: dict[str, object]) -> Docs:
     return Docs(literacy if isinstance(literacy, str) else None)
 
 
+def _bad(target: Path, row: str, detail: str) -> PrioritiesError:
+    key = f"priorities.{row}" if row else "priorities"
+    return PrioritiesError(R_PRIORITIES.format(target=target, key=key, detail=detail), row)
+
+
+def _object(
+    target: Path, value: object, row: str, keys: set[str], need: set[str]
+) -> dict[str, object]:
+    # 0129, F.6: an object with only its table's keys and every required one.
+    if not isinstance(value, dict):
+        raise _bad(target, row, "must be an object")
+    unknown = sorted(str(key) for key in set(value) - keys)
+    if unknown:
+        raise _bad(target, row, f"has unknown keys {unknown} (known: {', '.join(sorted(keys))})")
+    missing = sorted(need - set(value))
+    if missing:
+        raise _bad(target, row, f"lacks {', '.join(missing)}")
+    return {str(key): item for key, item in value.items()}
+
+
+def _line(target: Path, value: object, row: str, limit: int) -> str:
+    if not isinstance(value, str) or not 1 <= len(value) <= limit or not value.isprintable():
+        raise _bad(target, row, f"must be one printable line of 1 to {limit} characters")
+    return value
+
+
+def _ranking(target: Path, value: object, row: str) -> tuple[str, ...]:
+    # 0129, F.6: exactly the four driver names, each once.
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise _bad(target, row, f"must be a list of the driver names {list(DRIVERS)}")
+    repeated = sorted({item for item in value if value.count(item) > 1})
+    if repeated:
+        raise _bad(target, row, f"repeats the driver {repeated[0]!r}")
+    if sorted(value) != sorted(DRIVERS):
+        raise _bad(target, row, f"must name each of {list(DRIVERS)} once, in rank order")
+    return tuple(str(item) for item in value)
+
+
+def _rule(target: Path, value: object) -> Rule:
+    rule = _object(
+        target, value, "rules[].then", {"when", "then", "note"}, {"when", "then", "note"}
+    )
+    when = _object(
+        target,
+        rule["when"],
+        "rules[].when.conflict",
+        {"conflict", "reason"},
+        {"conflict", "reason"},
+    )
+    conflict = when["conflict"]
+    if not (
+        isinstance(conflict, list)
+        and len(conflict) == 2
+        and all(item in DRIVERS for item in conflict)
+        and conflict[0] != conflict[1]
+    ):
+        raise _bad(
+            target, "rules[].when.conflict", f"must name two distinct drivers of {list(DRIVERS)}"
+        )
+    reason = when["reason"]
+    if not isinstance(reason, list) or not reason or len(set(map(str, reason))) != len(reason):
+        raise _bad(target, "rules[].when.reason", "must list one or more reasons, each once")
+    outside = [item for item in reason if item not in REASONS]
+    if outside:
+        raise _bad(
+            target,
+            "rules[].when.reason",
+            f"names {outside[0]!r}, outside the reason vocabulary {list(REASONS)}",
+        )
+    then = rule["then"]
+    if then not in (*DRIVERS, SURFACE):
+        raise _bad(target, "rules[].then", f"must be a driver of {list(DRIVERS)} or {SURFACE!r}")
+    note = _line(target, rule["note"], "rules[].note", NOTE_MAX)
+    return Rule((str(conflict[0]), str(conflict[1])), tuple(map(str, reason)), str(then), note)
+
+
+def _principle(target: Path, value: object, seen: set[str]) -> Principle:
+    item = _object(
+        target,
+        value,
+        "principles[].id",
+        {"id", "driver", "text", "source"},
+        {"id", "driver", "text"},
+    )
+    ident = item["id"]
+    if not isinstance(ident, str) or not PRINCIPLE_ID.fullmatch(ident) or ident in seen:
+        raise _bad(target, "principles[].id", "must be P followed by digits, unique in the block")
+    seen.add(ident)
+    if item["driver"] not in DRIVERS:
+        raise _bad(target, "principles[].driver", f"must be a driver of {list(DRIVERS)}")
+    text = _line(target, item["text"], "principles[].text", TEXT_MAX)
+    source = item.get("source")
+    if source is not None and not (isinstance(source, str) and repo_relative(source)):
+        raise _bad(
+            target,
+            "principles[].source",
+            "must be a repo-relative path or a ledger id without a leading slash, '..' or globs",
+        )
+    return Principle(ident, str(item["driver"]), text, source)
+
+
+def _overrides(target: Path, value: object) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    # 0129, F.2: the security auditor's ranking is never overridable.
+    row = "agents.<name>.drivers"
+    if not isinstance(value, dict):
+        raise _bad(target, row, "agents must be an object keyed by agent name")
+    out: list[tuple[str, tuple[str, ...]]] = []
+    for name, entry in value.items():
+        if name == NOT_OVERRIDABLE:
+            raise _bad(target, row, f"names {NOT_OVERRIDABLE}, whose ranking no project overrides")
+        if name not in KNOWN_AGENTS - {"main"}:
+            raise _bad(target, row, f"names {name!r}, which is not a Daedalus agent file name")
+        body = _object(target, entry, row, {"drivers"}, {"drivers"})
+        out.append((str(name), _ranking(target, body["drivers"], row)))
+    return tuple(out)
+
+
+def _bounded_list(target: Path, value: object, row: str, limit: int) -> list[object]:
+    if not isinstance(value, list) or len(value) > limit:
+        raise _bad(target, row, f"must be a list of at most {limit} entries")
+    return value
+
+
+def _priorities(target: Path, raw: dict[str, object]) -> Priorities | None:
+    # 0129, F.6: absent is none declared; anything off the field table is refused.
+    if "priorities" not in raw:
+        return None
+    keys = {"drivers", "rules", "principles", "agents"}
+    block = _object(target, raw["priorities"], "", keys, {"drivers"})
+    drivers = _ranking(target, block["drivers"], "drivers")
+    rules = _bounded_list(target, block.get("rules", []), "rules[].then", MAX_RULES)
+    principles = _bounded_list(
+        target, block.get("principles", []), "principles[].id", MAX_PRINCIPLES
+    )
+    seen: set[str] = set()
+    return Priorities(
+        drivers,
+        tuple(_rule(target, rule) for rule in rules),
+        tuple(_principle(target, item, seen) for item in principles),
+        _overrides(target, block.get("agents", {})),
+    )
+
+
 def _trains_dir(target: Path, raw: dict[str, object]) -> str | None:
     value = raw.get("trains_dir")
     if value is None:
@@ -272,6 +489,7 @@ def load(repo: Path) -> Manifest | None:
         typecheck_cmd=commands["typecheck_cmd"],
         lint_cmd=commands["lint_cmd"],
         docs=_docs(target, raw),
+        priorities=_priorities(target, raw),
     )
 
 

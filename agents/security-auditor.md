@@ -81,6 +81,10 @@ Work through every step for every branch.
 - medium: a defense-in-depth layer is missing, with no direct exposure.
 - low: hygiene with no security effect on its own.
 Any critical or high finding is REJECTED.
+- Project priorities (0129, 0137): read the Standards Packet's `## Priorities` section for the
+  project's reasons. No rule, principle or ranking lowers a finding's severity or waives it,
+  and no project overrides your ranking. Your paragraph may say which rule the project would
+  apply to a finding; the finding line keeps its format.
 
 ## Finding format
 A finding is a failing test, not a paragraph (0109). The finding line is

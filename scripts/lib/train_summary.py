@@ -28,6 +28,7 @@ from lib.audit_proof import (
 from lib.jail import normalize_agent
 from lib.narrow import integer as _int
 from lib.narrow import obj as _obj
+from lib.narrow import objects as _objects
 from lib.narrow import strings as _strings
 from lib.narrow import text as _text
 from lib.plan_record import Version
@@ -479,6 +480,60 @@ def _noted(notes: Notes, name: str, empty: str, repo: Path, charter: Path | None
     return found or [empty]
 
 
+def _choice_agents(logs: Sequence[SessionLog]) -> dict[tuple[str, str], str]:
+    # 0129: the agent whose allowed Bash call ran `daedalus_train.py choice --chose X --rule R`.
+    import shlex
+
+    found: dict[tuple[str, str], str] = {}
+    for log in logs:
+        for record in log.records:
+            command = _text(_obj(record, "tool_input"), "command")
+            if record.get("decision") != "allow" or "daedalus_train.py" not in command:
+                continue
+            try:
+                words = shlex.split(command)
+            except ValueError:
+                continue
+            given = dict(zip(words, words[1:], strict=False))
+            if "choice" in words and "--chose" in given and "--rule" in given:
+                key = (given["--chose"].strip(), given["--rule"].strip())
+                found[key] = _agent(record) or "main session"
+    return found
+
+
+def _priorities(
+    repo: Path, state: dict[str, object], logs: Sequence[SessionLog], charter: Path | None
+) -> list[str]:
+    # 0129, F.4: each decision a rule settled alone or surfaced, from the choice records.
+    from lib.manifest import SURFACE, ManifestError
+    from lib.manifest import load as load_manifest
+
+    try:
+        loaded = load_manifest(repo)
+    except ManifestError:
+        loaded = None
+    declared = loaded.priorities if loaded is not None else None
+    rules = declared.rules if declared is not None else ()
+    agents = _choice_agents(logs)
+    lines = ["## Priorities"]
+    for entry in _objects(state, train_state.CHOICES):
+        rule = _text(entry, "rule")
+        if not rule:
+            continue
+        index = int(rule) if rule.isdigit() else 0
+        surfaced = 0 < index <= len(rules) and rules[index - 1].then == SURFACE
+        how = "surfaced" if surfaced else "settled alone"
+        chose, over = _text(entry, "chose"), _text(entry, "over")
+        agent = agents.get((chose, rule), "unknown agent")
+        where = "a choice record (train state)"
+        lines.append(
+            f"- {how} by rule {_cell(rule, repo, charter, where)}, driver "
+            f"{_cell(_text(entry, 'driver') or 'none', repo, charter, where)}, {agent}: "
+            f"{_cell(chose, repo, charter, where)} over {_cell(over, repo, charter, where)}"
+        )
+    return lines if len(lines) > 1 else [*lines, "none"]
+
+
 def _units(
     repo: Path, train_id: str, units: Sequence[dict[str, object]], facts: _Facts
 ) -> list[str]:
@@ -612,6 +667,7 @@ def render(
     labels = {_text(u, "name"): _text(u, "name").removeprefix(f"{train_id}-") for u in units}
     lines = _header(repo, train_id, state, notes, policy_declared, version)
     lines += ["## Rulings", *_noted(notes, "Rulings", "none", repo, charter)]
+    lines += _priorities(repo, state, logs, charter)
     lines += _units(repo, train_id, units, facts)
     lines.append("## Verification")
     verified = [

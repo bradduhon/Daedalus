@@ -1,0 +1,6 @@
+{
+  "manifest.R_PRIORITIES": {
+    "failure": "0129: a malformed priorities block, a reason outside the closed vocabulary, a repeated driver or an override of the security auditor reaches the agents, so a typo or a lowered auditor ranking decides a trade-off",
+    "premise_test": "tests/test_priorities.py::test_reader_refuses_each_malformed_block"
+  }
+}

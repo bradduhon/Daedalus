@@ -94,6 +94,16 @@ between Bash calls.
    In the ledger notes, name any new shared helper you created, any existing one you reused,
    and any reuse you declined under the security exception, with the reason.
 
+## Project priorities (0129, 0137)
+Your Standards Packet ends with a `## Priorities` section. A default you write that trades one
+driver for another (a key per function or one shared key, an instance size, a retention
+period) follows your ranking: the `agent repo-coder:` line when present, else the `ranking:`
+line. Name the rule or principle you followed in your ledger notes. A default that a
+`then surface` rule covers is never a silent pick: commit WIP and return
+`[STATUS: YIELD_STANDARDS] priorities rule <n>: <the default and its options>`. A global rule
+or the operator's answer outranks the project's ranking. With `priorities: none declared`,
+nothing here applies.
+
 ## Code hygiene
 Follow this on every unit, whether or not the project declares standards.
 Reuse before writing.

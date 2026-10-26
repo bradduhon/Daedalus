@@ -17,12 +17,21 @@ from lib.config import (
 )
 from lib.manifest import (
     DOCS_KEYS,
+    DRIVERS,
     FEATURE_KEYS,
     LITERACY_LEVELS,
     LITERACY_PROFILE,
     MANIFEST_NAME,
+    MAX_PRINCIPLES,
+    MAX_RULES,
     NARROWING_KEYS,
+    NOT_OVERRIDABLE,
+    NOTE_MAX,
+    PRIORITY_ROWS,
+    REASONS,
     STACK_COMMANDS,
+    SURFACE,
+    TEXT_MAX,
     Docs,
     Features,
     Manifest,
@@ -51,6 +60,8 @@ def manifest_keys() -> tuple[str, ...]:
             keys.extend(f"features.{key}" for key in FEATURE_KEYS)
         elif item.name == "docs":
             keys.extend(f"docs.{key}" for key in DOCS_KEYS)
+        elif item.name == "priorities":
+            keys.extend(f"priorities.{row}" for row in PRIORITY_ROWS)
         elif item.name in _MANIFEST_PARENT:
             keys.append(f"{_MANIFEST_PARENT[item.name]}.{item.name}")
         else:
@@ -81,6 +92,8 @@ def starter_manifest() -> dict[str, object]:
             }
         elif item.name == "docs":
             doc["docs"] = {f.name: _json(getattr(Docs(), f.name)) for f in fields(Docs)}
+        elif item.name == "priorities":
+            continue  # 0129, F.6: the starter carries no priorities key; absent is none declared.
         elif item.name in _MANIFEST_PARENT:
             parent = _MANIFEST_PARENT[item.name]
             doc[parent] = block = blocks.setdefault(parent, {})
@@ -145,6 +158,7 @@ _LEDGER_SEQUENCE = KeyRow(
     '`"last-row-id"`',
 )
 _COMMAND_VALUES = "A non-empty command string, or `null`"
+_DRIVER_NAMES = ", ".join(f"`{driver}`" for driver in DRIVERS)
 # 0134: the docs.literacy values the key reference and the setup command show.
 LITERACY_EXAMPLES = (
     *(f'"{level}"' for level in LITERACY_LEVELS),
@@ -270,6 +284,81 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "a leading slash, `..` or glob characters",
         "`null`: the writer keeps the register the public docs already use",
         f"`{LITERACY_EXAMPLES[0]}`",
+    ),
+    (MANIFEST_FILE, "priorities.drivers"): KeyRow(
+        "Which concern wins when two conflict and no rule below matches, for every agent in "
+        "every train, never the operator's own session (0129, 0137)",
+        "list of strings",
+        f"Each of {_DRIVER_NAMES} exactly once, highest first",
+        "No `priorities` key: none declared, and agents follow no project ranking",
+        '`["security", "trust", "ops", "cost"]`',
+    ),
+    (MANIFEST_FILE, "priorities.rules[].when.conflict"): KeyRow(
+        "The two concerns a rule settles; rules are tried in order and the first match decides "
+        "(0129)",
+        "list of two strings",
+        f"Two different names of {_DRIVER_NAMES}; at most {MAX_RULES} rules",
+        "`rules` absent: no rule, so the ranking decides",
+        '`["security", "cost"]`',
+    ),
+    (MANIFEST_FILE, "priorities.rules[].when.reason"): KeyRow(
+        "Why the conflict arises; the rule matches only these reasons (0129)",
+        "list of strings",
+        "One or more of " + ", ".join(f"`{reason}`" for reason in REASONS) + ", each once",
+        "Required in each rule",
+        '`["certification", "framework"]`',
+    ),
+    (MANIFEST_FILE, "priorities.rules[].then"): KeyRow(
+        f"What a matching rule does: a concern named here wins and the agent decides alone; "
+        f"`{SURFACE}` puts the decision to the operator (0129)",
+        "string",
+        f"One of {_DRIVER_NAMES}, or `{SURFACE}`",
+        "Required in each rule",
+        f'`"{SURFACE}"`',
+    ),
+    (MANIFEST_FILE, "priorities.rules[].note"): KeyRow(
+        "The one line a choice record or a decision brief quotes when the rule applies (0129)",
+        "string",
+        f"One printable line of 1 to {NOTE_MAX} characters",
+        "Required in each rule",
+        '`"a control a certification asks for wins over its running cost"`',
+    ),
+    (MANIFEST_FILE, "priorities.principles[].id"): KeyRow(
+        "The name an agent cites when a decision rests on one of the project's principles (0129)",
+        "string",
+        f"`P` followed by digits, unique in the block; at most {MAX_PRINCIPLES} principles",
+        "`principles` absent: none declared",
+        '`"P1"`',
+    ),
+    (MANIFEST_FILE, "priorities.principles[].driver"): KeyRow(
+        "The concern a principle serves (0129)",
+        "string",
+        f"One of {_DRIVER_NAMES}",
+        "Required in each principle",
+        '`"security"`',
+    ),
+    (MANIFEST_FILE, "priorities.principles[].text"): KeyRow(
+        "The principle itself, as one sentence a decision brief quotes (0129)",
+        "string",
+        f"One printable line of 1 to {TEXT_MAX} characters",
+        "Required in each principle",
+        '`"Each tenant keeps its own key."`',
+    ),
+    (MANIFEST_FILE, "priorities.principles[].source"): KeyRow(
+        "Where the principle is written down, so a reader can follow it (0129)",
+        "string",
+        "A repo-relative path or a ruling id of the project's own ledger, without a leading "
+        "slash, `..` or glob characters",
+        "Absent: no source named",
+        '`"docs/design.md"`',
+    ),
+    (MANIFEST_FILE, "priorities.agents.<name>.drivers"): KeyRow(
+        "A different ranking for one agent; rules and principles still apply to it (0129)",
+        "list of strings",
+        f"Each of {_DRIVER_NAMES} exactly once; `<name>` is a Daedalus agent file name other "
+        f"than `{NOT_OVERRIDABLE}`, which is refused",
+        "Absent: the agent follows `priorities.drivers`",
+        '`{"repo-coder": {"drivers": ["cost", "security", "ops", "trust"]}}`',
     ),
     (MANIFEST_FILE, "ledger.path"): KeyRow(
         "Where rulings are appended, declared for everyone who works on the project; it wins "

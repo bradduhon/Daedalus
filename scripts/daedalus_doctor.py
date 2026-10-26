@@ -27,7 +27,7 @@ from lib.audit import (  # noqa: E402
 )
 from lib.config import Config, ConfigError, load_config  # noqa: E402
 from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
-from lib.manifest import ManifestError  # noqa: E402
+from lib.manifest import ManifestError, PrioritiesError  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
 from lib.plan_record import is_need  # noqa: E402
 from lib.workspace import _BARE_VERSION, UNMARK_NEXT, VERSION_FILE, train_marker  # noqa: E402
@@ -422,6 +422,30 @@ def _manifest_check(repo: Path) -> tuple[bool, str]:
     )
 
 
+def _priorities_check(repo: Path) -> Iterator[tuple[bool, str]]:
+    # 0129, F.5: the ranking and the rule count, or the key reference row a bad block broke.
+    try:
+        manifest = load_manifest(repo)
+    except PrioritiesError as exc:
+        row = f"priorities.{exc.row}" if exc.row else "priorities"
+        yield _check(
+            False,
+            "priorities",
+            f"the block breaks key reference row {row}",
+            "correct that field against its row in the README key reference",
+        )
+        return
+    except ManifestError:
+        return  # 0054: the manifest line already reports the unreadable file.
+    declared = manifest.priorities if manifest is not None else None
+    if declared is None:
+        yield _check(True, "priorities: none declared", "", "")
+        return
+    count = len(declared.rules)
+    rules = f"{count} rule{'' if count == 1 else 's'}"
+    yield _check(True, f"priorities: {' > '.join(declared.drivers)}, {rules}", "", "")
+
+
 def _typecheck_check(repo: Path, run: bool = False) -> Iterator[tuple[bool, str]]:
     # 38, 0076: the declared typecheck_cmd runs only on --run-typecheck, argv only, bounded;
     # no line when none is declared.
@@ -481,6 +505,7 @@ def _repo_checks(
         yield _clean_tree_check(repo)
         yield from _version_tag_check(repo)
     yield _manifest_check(repo)
+    yield from _priorities_check(repo)
     yield from _typecheck_check(repo, run_typecheck)
     yield _opt(
         (repo / "contracts").is_dir(),

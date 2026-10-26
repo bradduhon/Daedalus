@@ -1216,7 +1216,15 @@ def _one_line(label: str, value: str, command: str = "choice") -> str:
     return text
 
 
-def choice(cwd: Path, chose: str, over: str, cost: str, phase: str | None = None) -> Outcome:
+def choice(
+    cwd: Path,
+    chose: str,
+    over: str,
+    cost: str,
+    phase: str | None = None,
+    driver: str | None = None,
+    rule: str | None = None,
+) -> Outcome:
     # 0085: every choice is printed and recorded before it is taken.
     def edit(repo: Path, train_id: str) -> list[str]:
         entry: dict[str, object] = {
@@ -1224,6 +1232,10 @@ def choice(cwd: Path, chose: str, over: str, cost: str, phase: str | None = None
             "over": _one_line("over", over),
             "cost": _one_line("cost", cost),
         }
+        # 0129: the priorities fields keep the same one-line rule as the fields above.
+        for label, value in (("driver", driver), ("rule", rule)):
+            if value is not None:
+                entry[label] = _one_line(label, value)
         if phase is not None:
             if not _PHASE.fullmatch(phase):
                 raise RunnerError(
@@ -1239,7 +1251,10 @@ def choice(cwd: Path, chose: str, over: str, cost: str, phase: str | None = None
                 state[train_state.WEIGHT] = entry["chose"]
 
         train_state.change(repo, train_id, change)
-        return [f"Chose {entry['chose']} over {entry['over']}: {entry['cost']}"]
+        line = f"Chose {entry['chose']} over {entry['over']}: {entry['cost']}"
+        if "driver" in entry or "rule" in entry:
+            line += f" (driver {entry.get('driver', 'none')}, rule {entry.get('rule', 'none')})"
+        return [line]
 
     return _recorded(cwd, edit)
 

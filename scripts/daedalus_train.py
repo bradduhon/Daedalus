@@ -65,6 +65,9 @@ def _parser() -> argparse.ArgumentParser:
     chose.add_argument("--over", required=True)
     chose.add_argument("--cost", required=True)
     chose.add_argument("--phase")
+    # 0129: the driver that decided and the rule number or principle id that settled it.
+    chose.add_argument("--driver")
+    chose.add_argument("--rule")
     plan = sub.add_parser("plan")
     plan.add_argument("--repo", type=Path, required=True)
     plan.add_argument("--path", type=Path, required=True)
@@ -112,7 +115,7 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "progress":
         return progress(repo)
     if args.action == "choice":
-        return choice(repo, args.chose, args.over, args.cost, args.phase)
+        return choice(repo, args.chose, args.over, args.cost, args.phase, args.driver, args.rule)
     if args.action == "plan":
         return record_plan(repo, args.path)
     if args.action == "exception":
