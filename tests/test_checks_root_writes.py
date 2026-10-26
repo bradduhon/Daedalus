@@ -254,6 +254,29 @@ def test_root_writes_sub_refuses_symlinks_out_of_scratch(tmp_path: Path) -> None
     assert _sub_judged(repo, f"{scratch}/brainstorm-f/spec.md", *flags) is not None
 
 
+def test_root_writes_sub_judges_the_folder_and_the_file_realpath(tmp_path: Path) -> None:
+    repo = _git_init(tmp_path / "repo")
+    scratch = repo / "docs" / ".tmp" / "daedalus"
+    for folder in ("brainstorm-a", "brainstorm-b", "brainstorm-y"):
+        (scratch / folder).mkdir(parents=True)
+    outside = tmp_path / "outside" / "brainstorm-x"
+    outside.mkdir(parents=True)
+    # Folder out of scratch whose spec.md links back in: the folder's realpath refuses it.
+    os.symlink(outside, scratch / "brainstorm-link")
+    os.symlink(scratch / "brainstorm-y" / "spec.md", outside / "spec.md")
+    # A spec.md that resolves to another name, and another name that resolves to spec.md.
+    os.symlink(scratch / "brainstorm-b" / "notes.md", scratch / "brainstorm-a" / "spec.md")
+    os.symlink(scratch / "brainstorm-y" / "spec.md", scratch / "brainstorm-b" / "alias")
+    flags = ("--sub", "brainstorm-*/spec.md")
+    assert _sub_judged(repo, f"{scratch}/brainstorm-y/spec.md", *flags) is None
+    for path in (
+        f"{scratch}/brainstorm-link/spec.md",
+        f"{scratch}/brainstorm-a/spec.md",
+        f"{scratch}/brainstorm-b/alias",
+    ):
+        assert _sub_judged(repo, path, *flags) is not None, path
+
+
 def test_root_writes_sub_and_name_admit_either(tmp_path: Path) -> None:
     repo = _git_init(tmp_path / "repo")
     scratch = repo / "docs" / ".tmp" / "daedalus"

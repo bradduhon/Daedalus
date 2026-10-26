@@ -76,16 +76,23 @@ def _named(path: str, roots: list[str], name: str) -> bool:
     )
 
 
+def _placed(folder: str, folder_glob: str, real_roots: list[str]) -> bool:
+    return fnmatch.fnmatchcase(os.path.basename(folder), folder_glob) and (
+        os.path.dirname(folder) in real_roots
+    )
+
+
 def _in_sub(path: str, roots: list[str], sub: str) -> bool:
-    # 0152: two checks, never one fnmatch over the joined path; realpaths refuse symlinks out.
+    # 0152: folder glob and exact file name as two checks, never one fnmatch over the joined path.
+    # Both the folder's realpath and the file's realpath must sit one level below a class root.
     folder_glob, file_name = sub.split("/", 1)
+    real_roots = [os.path.realpath(root) for root in roots]
     real = os.path.realpath(path)
-    folder = os.path.dirname(real)
     return (
         os.path.basename(path) == file_name
         and os.path.basename(real) == file_name
-        and fnmatch.fnmatchcase(os.path.basename(folder), folder_glob)
-        and any(os.path.dirname(folder) == os.path.realpath(root) for root in roots)
+        and _placed(os.path.realpath(os.path.dirname(path)), folder_glob, real_roots)
+        and _placed(os.path.dirname(real), folder_glob, real_roots)
     )
 
 
