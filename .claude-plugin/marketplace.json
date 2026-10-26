@@ -6,7 +6,7 @@
     {
       "name": "daedalus",
       "source": ".",
-      "version": "3.3.0",
+      "version": "4.0.0",
       "description": "Deterministic multi-agent Build, Push, and Execution train orchestration with a jail hook, contract locks, adversarial security gates, and a hash-chained audit log."
     }
   ]
