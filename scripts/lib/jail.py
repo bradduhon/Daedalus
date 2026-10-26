@@ -577,9 +577,14 @@ def _coder_boundary(cwd: str, config: Config) -> CoderBoundary | str:
 
 def _coder_write_reason(target: str, cwd: str, boundary: CoderBoundary | str) -> str | None:
     # 0054: inside the unit worktree a write is refused only on a protected path.
+    rel = "/".join((_unit_parts(target, cwd) or [])[1:])
+    return protected_reason(rel, target, boundary)
+
+
+def protected_reason(rel: str, target: str, boundary: CoderBoundary | str) -> str | None:
+    # 0054: the one protected-path rule; rel is relative to the tree root, an ancestor hits too.
     if isinstance(boundary, str):
         return boundary
-    rel = "/".join((_unit_parts(target, cwd) or [])[1:])
     folded = rel.casefold()
     ledger = boundary.ledger_rel
     if ".git" in folded.split("/") or path_hit(BUILTIN_PROTECTED, rel):

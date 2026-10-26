@@ -37,7 +37,9 @@ R_SOURCE = (
 )
 
 
-def _reason(path: str, frozen: freeze_sources.Frozen, repo: Path) -> str | None:
+def _reason(
+    path: str, frozen: freeze_sources.Frozen, repo: Path, boundary: jail.CoderBoundary | str
+) -> str | None:
     for source in frozen.sources:
         if jail._same_path(path, str(freeze_sources.source_file(repo, source))):
             return R_SOURCE.format(
@@ -45,7 +47,10 @@ def _reason(path: str, frozen: freeze_sources.Frozen, repo: Path) -> str | None:
             )
     if not shell._under(path, frozen.output_dir):
         return R_OUTSIDE.format(out=frozen.output_dir, path=path)
-    return None
+    # 0054: the coder write check's protected list binds here too, inside the output folder,
+    # which output_dir_reason already holds below the project root.
+    rel = os.path.relpath(os.path.realpath(path), os.path.realpath(repo)).replace(os.sep, "/")
+    return jail.protected_reason(rel, path, boundary)
 
 
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
@@ -63,14 +68,20 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
         frozen = freeze_sources.load_manifest(path)
     except freeze_sources.SourcesError as exc:
         return str(exc)
+    boundary = jail._coder_boundary(cwd, hook_io.hook_config(cwd))
+    # D.5: a sources file frozen before the output bound existed meets the same bound here.
+    bad = freeze_sources.output_dir_reason(frozen.output_dir, repo, boundary)
+    if bad is not None:
+        return bad
     if hook_io.text(hook_input, "tool_name") in jail.WRITE_TOOLS:
-        return _reason(shell._abs(hook_io.write_path(hook_input), cwd), frozen, repo)
+        target = shell._abs(hook_io.write_path(hook_input), cwd)
+        return _reason(target, frozen, repo, boundary)
     segments = shell.worker_segments(hook_io.text(hook_io.tool_input(hook_input), "command"))
     if segments is None:
         return shell.R_UNSUPPORTED
     for segment in filter(None, segments):
         for target in jail._coder_write_targets(segment, cwd):
-            reason = _reason(target, frozen, repo)
+            reason = _reason(target, frozen, repo, boundary)
             if reason:
                 return reason
     return None
