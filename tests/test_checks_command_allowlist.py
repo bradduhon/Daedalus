@@ -731,3 +731,71 @@ def test_train_script_ok_keeps_its_shape_check_without_a_cwd() -> None:
     assert module.train_script_ok(segment)
     assert not module.train_script_ok(segment, CWD)
     assert module.train_script_ok([*segment[:3], "--repo", CWD], CWD)
+
+
+# Pins MAP -> REQ, REQ -> MAP, SRC -> MAP: the map, the tool check and both frozen source forms.
+MAP_OUT = f"{CWD}/docs/.tmp/daedalus/t/map"
+SOURCES = f"{CWD}/.claude/daedalus/trains/t.sources.json"
+MAP_TRAIN_OK = [
+    f"python3 {SCRIPTS}/daedalus_map.py --repo {CWD} --out {MAP_OUT}",
+    f"python3 {SCRIPTS}/daedalus_map.py --repo {CWD} --out {MAP_OUT} --plan {CWD}/plan.md",
+    f"python3 {SCRIPTS}/daedalus_map.py --repo {CWD} --out {MAP_OUT} --plan p.md --check",
+    f"python3 {SCRIPTS}/daedalus_doctor.py --check-tools pytest",
+    f"python3 {SCRIPTS}/daedalus_doctor.py --check-tools pytest,ruff,mypy",
+    f"python3 {SCRIPTS}/freeze_sources.py --train t --output-dir {CWD}/docs/out "
+    f"--source spec=deriver:{CWD}/docs/spec.md:intro,usage --source old=baseline:{CWD}/a.md",
+    f"python3 {SCRIPTS}/freeze_sources.py --baselines-only --train t --output-dir {CWD}/docs/out "
+    f"--source a=baseline:{CWD}/a.md --source b=baseline:{CWD}/b.md",
+    f"python3 {SCRIPTS}/freeze_sources.py --train t --baselines-only --output-dir {CWD}/docs/out "
+    f"--source a=baseline:{CWD}/a.md --source b=baseline:{CWD}/b.md",
+    f"python3 {SCRIPTS}/freeze_sources.py --verify {SOURCES}",
+]
+
+
+@pytest.mark.parametrize("command", MAP_TRAIN_OK)
+def test_train_class_admits_the_map_tools_and_sources(command: str) -> None:
+    assert evaluate(HOOK, _b("orchestrator", command), *TRAIN_FLAGS) is None, command
+    assert decide(_b("orchestrator", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"python3 {SCRIPTS}/daedalus_map.py --out {MAP_OUT} --repo {CWD}",
+        f"python3 {SCRIPTS}/daedalus_map.py --check --repo {CWD} --out {MAP_OUT}",
+        f"python3 {SCRIPTS}/daedalus_map.py",
+        f"python3 {SCRIPTS}/daedalus_doctor.py --fix",
+        f"python3 {SCRIPTS}/freeze_sources.py --output-dir {CWD}/docs/out --train t",
+        f"python3 {SCRIPTS}/freeze_sources.py",
+        f"python3 {SCRIPTS}/../scripts/daedalus_map.py --repo {CWD} --out {MAP_OUT}",
+        f"python3 {CWD}/scripts/daedalus_map.py --repo {CWD} --out {MAP_OUT}",
+        f"python3 {CWD}/scripts/freeze_sources.py --verify {SOURCES}",
+    ],
+)
+def test_train_class_refuses_other_map_and_source_forms(command: str) -> None:
+    # 0060: the script table admits each pinned first argument only, from the plugin's scripts.
+    assert (
+        evaluate(HOOK, _b("orchestrator", command), *TRAIN_FLAGS) == load(HOOK).R_ORCHESTRATOR_BASH
+    )
+
+
+@pytest.mark.parametrize(
+    "args", ["--repo /work/other --out /work/other/m", "--repo=/work/other --out x", "--rep /x"]
+)
+def test_map_repo_outside_the_project_root_is_refused(args: str) -> None:
+    # issue 63: the map's --repo is judged like every other train script's.
+    command = f"python3 {SCRIPTS}/daedalus_map.py {args}"
+    assert not decide(_b("orchestrator", command), CFG).allow, command
+
+
+def test_map_and_sources_stay_out_of_other_agents() -> None:
+    commands = [MAP_TRAIN_OK[0], MAP_TRAIN_OK[-1], MAP_TRAIN_OK[3]]
+    for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+        for command in commands:
+            assert not decide(_b(agent, command), CFG).allow, (agent, command)
+
+
+def test_orchestrator_refusal_names_the_new_scripts() -> None:
+    reason = load(HOOK).R_ORCHESTRATOR_BASH
+    for word in ("daedalus_map.py", "freeze_sources.py", "--check-tools", "--verify"):
+        assert word in reason, word

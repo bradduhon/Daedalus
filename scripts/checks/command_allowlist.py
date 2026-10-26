@@ -27,16 +27,20 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"ledger", "summary"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
-    "daedalus_doctor.py": frozenset({"--print-cache-dir"}),
+    "daedalus_doctor.py": frozenset({"--print-cache-dir", "--check-tools"}),
     "audit_report.py": None,
     "validate_plan.py": None,
+    # Pins MAP -> REQ, SRC -> MAP: the dependency map, and both frozen source forms (flag D).
+    "daedalus_map.py": frozenset({"--repo"}),
+    "freeze_sources.py": frozenset({"--train", "--verify", "--baselines-only"}),
 }
 # 0060: the inspect class is the auditor's read-only set plus the unit-descent check.
 INSPECT_GIT = shell.READ_ONLY_GIT | {"merge-base"}
 R_ORCHESTRATOR_BASH = (
     "the orchestrator's Bash runs only daedalus_train.py with its train subcommands and ledger, "
     "daedalus_workspace.py create, lock, refresh and finish, daedalus_doctor.py "
-    "--print-cache-dir, audit_report.py and validate_plan.py by their absolute plugin path, and "
+    "--print-cache-dir and --check-tools, audit_report.py, validate_plan.py, daedalus_map.py "
+    "--repo and freeze_sources.py --train or --verify by their absolute plugin path, and "
     "read-only inspection with git reads, date -u and sed -n line ranges (0060, 0119). "
     "Next: use those only; a stop, a resume, a reaudit, an exception record, a push and a merge "
     "into main belong to the main session and the operator."

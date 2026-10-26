@@ -279,7 +279,9 @@ def test_recipe_names_every_train_script_it_may_run() -> None:
     names = {cmd.split()[1].rsplit("/", 1)[1] for cmd in commands}
     allowlist = load("command_allowlist")
     # refresh_frameworks.py is the operator's own-shell Next line, never the orchestrator's call.
-    assert names - {"refresh_frameworks.py"} == set(allowlist.TRAIN_SCRIPTS)
+    # Pin SRC -> MAP: the document train recipe runs freeze_sources.py, not this Build Train one.
+    expected = set(allowlist.TRAIN_SCRIPTS) - {"freeze_sources.py"}
+    assert names - {"refresh_frameworks.py"} == expected
 
 
 @pytest.mark.usefixtures("jail_fakes")
