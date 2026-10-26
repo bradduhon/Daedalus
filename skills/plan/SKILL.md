@@ -9,7 +9,7 @@ argument-hint: Path of the design spec to cut into units, then optionally --mode
 
 Human-facing text (0031): Text a human reads names each item in words: a short label or one line on what it is and what it does. Ids (ruling ids, issue numbers, task codes, agent names, snake_case keys) may trail in parentheses, never replace the description. Logs, status lines and messages to other agents may use ids alone. Documents carry both.
 
-This skill runs outside a train, and inside a Build Train at Phase 1 before the lock (0086). It dispatches one agent, the planner, and nothing else. It never edits the spec and never writes the plan itself.
+This skill runs outside a train, and inside a Build Train at Phase 1 before the lock (0086). It dispatches the planner and, for the planner's web questions, the web researcher, and nothing else. It never edits the spec and never writes the plan itself.
 
 1. Set `<spec>` to the first word of `$ARGUMENTS`. When the words after it are `--model <value>`, set `<override>` to `<value>`; any other words after the path: stop. Next: run `/daedalus:plan` again with the spec path, optionally followed by `--model` and a model name. When `<spec>` is empty or names no readable file, stop. Next: run `/daedalus:plan` again with the path of the design spec to cut. A `Mode: plan` hand-off from the brainstorm skill (`${CLAUDE_PLUGIN_ROOT}/skills/brainstorm/SKILL.md`, step 11) enters here with `<spec>` set to the spec the operator moved and a warm planner that already holds the rounds.
 2. Set `<repo>` to the parent of the directory `git rev-parse --path-format=absolute --git-common-dir` prints (the main working tree). Not a repo: stop. Next: start the session inside the target repository, then run `/daedalus:plan` again.

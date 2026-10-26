@@ -68,6 +68,9 @@ def test_dispatches_only_its_three_agents_through_the_model_subcommand() -> None
     # 0086: one planner for the whole brainstorm; the hand-off resumes it warm.
     assert text.count("Dispatch `Agent(planner)`") == 1
     assert "adding `--override <override>`" in _step(text, 5)
+    assert "the planner, the web researcher and, at the hand-off, the verifier" in text
+    plan = PLAN.read_text(encoding="utf-8")
+    assert "the planner and, for the planner's web questions, the web researcher" in plan
 
 
 def test_dispatch_lists_every_prompt_line_and_reply_line() -> None:

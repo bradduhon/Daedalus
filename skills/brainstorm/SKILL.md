@@ -9,7 +9,7 @@ argument-hint: The idea in words, or the path of a notes file, then optionally -
 
 Human-facing text (0031): Text a human reads names each item in words: a short label or one line on what it is and what it does. Ids (ruling ids, issue numbers, task codes, agent names, snake_case keys) may trail in parentheses, never replace the description. Logs, status lines and messages to other agents may use ids alone. Documents carry both.
 
-This skill runs outside a train only (0152). It dispatches the planner and the web researcher, and nothing else. It relays rounds between the planner and the operator and writes no file: the planner writes the spec and later the plan.
+This skill runs outside a train only (0152). It dispatches the planner, the web researcher and, at the hand-off, the verifier, and nothing else. It relays rounds between the planner and the operator and writes no file: the planner writes the spec and later the plan.
 
 ## Inputs
 
