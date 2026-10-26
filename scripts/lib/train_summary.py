@@ -60,6 +60,8 @@ _COMPLETE = re.compile(
 _YIELD = re.compile(r"\[STATUS: (YIELD_[A-Z]+)\]\s*(.*)")
 _COMPLIANCE = re.compile(r"\[STATUS: COMPLIANCE\]\s*(.*)")
 _VERIFIER = re.compile(r"\[VERDICT: (VERIFIED|REFUTED)\]\s*(.*)")
+# 0127: agents/verifier.md status contract, the line directly above the closing verdict.
+_CORRECTED = re.compile(r"corrected=([0-9]+)")
 _UNIT_WORKTREE = re.compile(r"Unit worktree: (\S+)")
 _LEDGER_PATH = re.compile(r"ledger: (.+?) \(")
 _DISPATCH_TOOLS = ("Agent", "Task", "SendMessage")
@@ -103,9 +105,20 @@ class Reply:
     text: str
 
     @property
+    def rows(self) -> list[str]:
+        return [ln.strip() for ln in self.text.splitlines() if ln.strip()]
+
+    @property
     def last(self) -> str:
-        rows = [ln.strip() for ln in self.text.splitlines() if ln.strip()]
+        rows = self.rows
         return rows[-1] if rows else ""
+
+    @property
+    def corrected(self) -> int | None:
+        # 0127: None when no `corrected=<k>` line sits above the closing line, never a zero.
+        rows = self.rows
+        found = _CORRECTED.fullmatch(rows[-2]) if len(rows) > 1 else None
+        return int(found.group(1)) if found else None
 
 
 def summary_path(repo: Path, train_id: str) -> Path:
@@ -285,7 +298,7 @@ def _source(reply: Reply, log: SessionLog) -> str:
 @dataclass
 class _Facts:
     complete: dict[str, tuple[str, str, str, str]] = field(default_factory=dict)
-    verified: dict[str, tuple[str, str]] = field(default_factory=dict)
+    verified: dict[str, tuple[str, str, int | None]] = field(default_factory=dict)
     yields: list[tuple[str, str, str, str, str]] = field(default_factory=list)
     compliance: list[tuple[str, str, str]] = field(default_factory=list)
     blocks: Counter[tuple[str, str]] = field(default_factory=Counter)
@@ -315,7 +328,7 @@ def _gather(logs: Sequence[SessionLog], units: Sequence[dict[str, object]]) -> _
             if reply.agent == "verifier" and judged:
                 unit = _verified_unit(records, reply.seq, paths)
                 if unit is not None:
-                    facts.verified[unit] = (line, where)
+                    facts.verified[unit] = (line, where, reply.corrected)
         for record in records:
             if record.get("event") == "PreToolUse" and record.get("decision") in _REFUSALS:
                 facts.blocks[(_hook_of(dict(record)), _agent(record) or "main")] += 1
@@ -582,7 +595,8 @@ def render(
     lines.append("## Verification")
     verified = [
         f"- {labels[n]}: {_cell(line, repo, charter, where)}"
-        for n, (line, where) in facts.verified.items()
+        + ("" if corrected is None else f" corrected={corrected}")
+        for n, (line, where, corrected) in facts.verified.items()
         if n in labels
     ]
     lines += verified or ["none"]
