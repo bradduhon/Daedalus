@@ -1783,7 +1783,7 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
         return Decision(reason is None, reason, agent)
     # 0035: outside a train, main and foreign agents carry only the read deny above.
     if not policed_outside_train(raw_agent) and not _train_scoped(cwd, tool, tool_input):
-        # 0130, D.5: the excluded roots warning reaches the operator in every session.
+        # 0130, D.5: main is warned here only when the hook calls the jail, during a train.
         roots = _main_excluded(tool, tool_input, cwd, config) if operator else _allow()
         return _with_agent(roots, agent)
     credential = _credential_reason(tool, tool_input, cwd)
@@ -1940,7 +1940,7 @@ def _candidates(raw: str) -> list[str]:
 
 
 def _pathspec(spec: str, base: str, tree: str) -> tuple[str, bool] | None:
-    # git pathspec magic: top reads from the work tree, exclude names nothing; a glob is its folder.
+    # D.5: pathspec magic; top reads from the work tree, exclude names nothing, a glob is a folder.
     if spec.startswith((":!", ":^")):
         return None
     if spec.startswith(":/"):

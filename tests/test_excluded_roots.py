@@ -3,9 +3,12 @@
 # 0136, D.2.1, D.5: the excluded_roots key, its resolution, the check and the main session warning.
 from __future__ import annotations
 
+import io
 import json
+import sys
 from pathlib import Path
 
+import enforce_agent_jail
 import pytest
 from lib import hook_io, jail, router
 from lib.config import (
@@ -18,13 +21,13 @@ from lib.config import (
     root_ignored,
 )
 
-from tests.conftest import git, write_train_marker
+from tests.conftest import git, main_warning, write_train_marker
 from tests.hook_chain import load
 
 
 @pytest.fixture
 def repo(git_repo: Path) -> Path:
-    # A repo whose private/ is ignored and whose notes/ is not.
+    # D.5: a repo whose private/ is ignored and whose notes/ is not.
     (git_repo / ".gitignore").write_text("private/\n", encoding="utf-8")
     for name in ("private", "notes", "src"):
         (git_repo / name).mkdir()
@@ -279,7 +282,7 @@ def test_router_runs_the_check_for_every_routed_agent(
 
 
 def test_main_session_is_warned_and_never_refused(repo: Path) -> None:
-    # 0130: allow with context for the operator's own session, in a train or not.
+    # 0130: lib.jail allows with context for the operator's own session whenever it is called.
     payload = _payload("main", repo, "git add notes/a.md")
     got = jail.decide(payload, _config(repo))
     assert got.warn and not got.allow and got.reason is not None
@@ -287,6 +290,39 @@ def test_main_session_is_warned_and_never_refused(repo: Path) -> None:
     assert jail.decide(_payload("main", repo, "git add src/a.md"), _config(repo)).allow
     write_train_marker(repo)
     assert jail.decide(payload, _config(repo)).warn
+
+
+def _hook(
+    repo: Path, command: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> tuple[int, str]:
+    payload = _payload("main", repo, command) | {
+        "session_id": "sess-test",
+        "hook_event_name": "PreToolUse",
+    }
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    code = enforce_agent_jail.main()
+    return code, capsys.readouterr().out
+
+
+def test_hook_warns_the_main_session_during_a_train(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 0130, D.5: the PreToolUse entry gives main the warning in context for a marked repo.
+    _write_config(repo, [{"kind": "path", "path": "<repo_root>/notes"}])
+    write_train_marker(repo)
+    code, out = _hook(repo, "git add notes/a.md", monkeypatch, capsys)
+    assert code == 0
+    warning = main_warning(out)
+    assert warning.startswith(jail.WARN_EXCLUDED) and str(repo / "notes") in warning
+    assert _hook(repo, "git add src/a.md", monkeypatch, capsys) == (0, "")
+
+
+def test_hook_gives_no_warning_outside_a_train(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 0035: outside a train the hook steps aside for main, so no excluded roots warning appears.
+    _write_config(repo, [{"kind": "path", "path": "<repo_root>/notes"}])
+    assert _hook(repo, "git add notes/a.md", monkeypatch, capsys) == (0, "")
 
 
 def test_main_session_is_warned_when_roots_cannot_resolve(repo: Path) -> None:
