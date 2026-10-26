@@ -34,5 +34,21 @@
   "doc_outputs.R_SOURCE": {
     "failure": "0135: a document agent overwrites a frozen source, so the verifier's hashes no longer match the files the receipts cite",
     "premise_test": "tests/test_freeze_sources.py::test_doc_outputs_refuses_a_manifest_source"
+  },
+  "freeze_sources.R_OUTPUT_ROOT": {
+    "failure": "0135: a document train freezes the project root as its output folder, so a document agent writes service-manifest.json, .claude/ and .github/",
+    "premise_test": "tests/test_freeze_sources.py::test_an_unbounded_output_folder_exits_1"
+  },
+  "freeze_sources.R_OUTPUT_OUTSIDE": {
+    "failure": "0135: a document train freezes an output folder outside the project, so a document agent writes shell profiles and user settings the jail never protects",
+    "premise_test": "tests/test_freeze_sources.py::test_an_unbounded_output_folder_exits_1"
+  },
+  "freeze_sources.R_OUTPUT_PROTECTED": {
+    "failure": "0054: a document train freezes an output folder that is or holds a protected path, so a document agent writes a path the coder write check refuses",
+    "premise_test": "tests/test_freeze_sources.py::test_an_output_folder_holding_the_ledger_exits_1"
+  },
+  "freeze_sources.R_OUTPUT_UNCHECKED": {
+    "failure": "0054: an unusable service manifest or ledger hides the protected paths, so an output folder over one is frozen unchecked",
+    "premise_test": "tests/test_freeze_sources.py::test_an_unreadable_service_manifest_leaves_the_output_unchecked"
   }
 }

@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import atomic  # noqa: E402
+from lib import atomic, jail  # noqa: E402
 from lib.audit import DataDirError, check_project_data_dir  # noqa: E402
 from lib.config import (  # noqa: E402
     ConfigError,
@@ -37,11 +37,12 @@ DESCRIPTION = (
     "and reference. Writes .claude/daedalus/trains/<train>.sources.json (0600) with each "
     "source's sha256 and line count and the excluded roots the project config resolves, then "
     "prints it. Exit 1: a source is missing, not a regular file, or a working file by "
-    "--working-glob. Exit 2: two baselines without --baselines-only, a style source with topics, "
-    "or a malformed source. Exit 3: an excluded path root git does not ignore, or bad project "
-    "metadata. --verify <manifest> recomputes every hash and exits 4 on a mismatch, then lints "
-    "the outputs for en and em dashes, placeholder copy and style-source sentences carrying a "
-    "number, and exits 5 on any finding."
+    "--working-glob, or the output folder is the project root, outside the project, or is or "
+    "holds a protected path. Exit 2: two baselines without --baselines-only, a style source "
+    "with topics, or a malformed source. Exit 3: an excluded path root git does not ignore, "
+    "or bad project metadata. --verify <manifest> recomputes every hash and exits 4 on a "
+    "mismatch, then lints the outputs for en and em dashes, placeholder copy and style-source "
+    "sentences carrying a number, and exits 5 on any finding."
 )
 ROLES = ("baseline", "amendment", "style", "correspondence", "reference")
 EXIT_PATH, EXIT_SHAPE, EXIT_ROOT, EXIT_MISMATCH, EXIT_LINT = 1, 2, 3, 4, 5
@@ -50,6 +51,24 @@ SUFFIX = ".sources.json"
 _TRAIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _ALIAS = re.compile(r"[A-Za-z][A-Za-z0-9]{0,15}")
 _TOPICS = re.compile(r"[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*")
+R_OUTPUT_ROOT = (
+    "output folder {out} is the project root, so a document agent could write every project "
+    "file (D.5). Next: name a folder below the project root, such as one under an excluded root."
+)
+R_OUTPUT_OUTSIDE = (
+    "output folder {out} is outside the project {repo}, so a document agent could write files "
+    "the jail never sees (D.5). Next: name a folder inside the project, such as one under an "
+    "excluded root."
+)
+R_OUTPUT_PROTECTED = (
+    "output folder {out} is or holds a protected path, such as .claude/, .github/, contracts/, "
+    "service-manifest.json, the ledger or a jail_narrowing entry (0054, D.5). Next: name a "
+    "folder that holds no protected path."
+)
+R_OUTPUT_UNCHECKED = (
+    "output folder {out} could not be checked against the protected paths ({cause}). "
+    "Next: fix the service manifest or the ledger declaration, then freeze again."
+)
 _DASHES = {"\u2013": "en dash", "\u2014": "em dash"}
 # 0136 item 4: copy left in for a later edit; the list is closed, so a new form is a code change.
 _PLACEHOLDERS = re.compile(
@@ -237,6 +256,22 @@ def _roots(repo: Path) -> tuple[ExcludedRoot, ...]:
     return roots
 
 
+def output_dir_reason(out: str, repo: Path, boundary: jail.CoderBoundary | str) -> str | None:
+    # D.5: output_dir bounds every document agent write, so it sits inside the project,
+    # below its root, and neither is nor holds a path the coder write check protects.
+    real, root = os.path.realpath(out), os.path.realpath(repo)
+    if real == root:
+        return R_OUTPUT_ROOT.format(out=out)
+    if not real.startswith(root + os.sep):
+        return R_OUTPUT_OUTSIDE.format(out=out, repo=root)
+    if isinstance(boundary, str):
+        return R_OUTPUT_UNCHECKED.format(out=out, cause=boundary.split(" Next:", 1)[0])
+    rel = os.path.relpath(real, root).replace(os.sep, "/")
+    if jail.protected_reason(rel, real, boundary) is not None:
+        return R_OUTPUT_PROTECTED.format(out=out)
+    return None
+
+
 def _shown(path: Path, repo: Path) -> str:
     rel = os.path.relpath(path, repo)
     return path.as_posix() if rel.startswith("..") else Path(rel).as_posix()
@@ -271,6 +306,9 @@ def freeze(args: argparse.Namespace) -> tuple[Path, str, list[str]]:
     out = os.path.normpath(
         Path(args.output_dir) if os.path.isabs(args.output_dir) else cwd / args.output_dir
     )
+    bad = output_dir_reason(out, repo, jail._coder_boundary(str(repo), load_config(str(repo))))
+    if bad is not None:
+        raise SourcesError(bad, EXIT_PATH)
     notes = [] if roots else ["[EXCLUDED_ROOTS: none declared]"]
     if not any(_under(out, r.path) for r in roots):
         notes.append(

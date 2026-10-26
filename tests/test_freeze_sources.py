@@ -224,3 +224,90 @@ def test_doc_outputs_refuses_without_a_train_or_its_manifest(repo: Path) -> None
     got = check.decide(_doc_input(repo, "Write", file_path=target), [])
     path = freeze_sources.manifest_path(repo, TRAIN)
     assert got.reason == check.R_NO_MANIFEST.format(train=TRAIN, path=path)
+
+
+@pytest.mark.parametrize(
+    ("out", "constant"),
+    [
+        (".", "R_OUTPUT_ROOT"),
+        ("..", "R_OUTPUT_OUTSIDE"),
+        (".claude/daedalus/out", "R_OUTPUT_PROTECTED"),
+        (".github", "R_OUTPUT_PROTECTED"),
+        ("contracts/out", "R_OUTPUT_PROTECTED"),
+    ],
+)
+def test_an_unbounded_output_folder_exits_1(
+    repo: Path, capsys: pytest.CaptureFixture[str], out: str, constant: str
+) -> None:
+    # audit round 1: the output folder bounds every document agent write.
+    capsys.readouterr()
+    assert _freeze_to(out) == 1
+    err = capsys.readouterr().err
+    lead = getattr(freeze_sources, constant).split("{out}", 1)[1].split("{", 1)[0]
+    assert lead in err and err.count("Next:") == 1, err
+    assert not freeze_sources.manifest_path(repo, TRAIN).exists()
+
+
+def test_an_output_folder_holding_the_ledger_exits_1(repo: Path) -> None:
+    # 0054: an output folder over a protected path is refused, the ledger included.
+    (repo / "private" / "package" / "decisions.md").write_text("| a |\n|---|\n")
+    ledger = {
+        "path": "private/package/decisions.md",
+        "format": "markdown-table-row",
+        "id_scheme": "{seq:04d}",
+        "sequence_source": "last-row-id",
+    }
+    roots = [{"kind": "path", "path": "<repo_root>/private/"}]
+    config = {"excluded_roots": roots, "ledger": ledger}
+    (repo / ".claude" / "daedalus" / "config.json").write_text(json.dumps(config))
+    assert _freeze_to("private/package") == 1
+    assert _freeze_to("private/source/../other") == 0
+
+
+def test_an_unreadable_service_manifest_leaves_the_output_unchecked(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 0054: no protected list is known, so the freeze fails closed rather than skip the check.
+    (repo / "service-manifest.json").write_text("{bad", encoding="utf-8")
+    capsys.readouterr()
+    assert _freeze_to("private/package") == 1
+    err = capsys.readouterr().err
+    assert "could not be checked against the protected paths" in err and err.count("Next:") == 1
+
+
+def _freeze_to(out: str) -> int:
+    source = "A=baseline:private/source/base.sent-2026-10-01.md"
+    return freeze_sources.main(["--train", TRAIN, "--output-dir", out, "--source", source])
+
+
+def test_doc_outputs_refuses_a_protected_path_inside_the_output_folder(repo: Path) -> None:
+    assert _freeze(*SOURCES) == 0
+    write_train_marker(repo, TRAIN)
+    target = str(repo / "private" / "package" / ".git" / "config")
+    got = load("doc_outputs").decide(_doc_input(repo, "Write", file_path=target), [])
+    assert got.reason == load("doc_outputs").jail.R_PROTECTED_BUILTIN.format(target)
+
+
+@pytest.mark.parametrize("out", ["root", "above"])
+def test_doc_outputs_refuses_a_hand_written_unbounded_manifest(repo: Path, out: str) -> None:
+    # audit round 1: a sources file frozen before the bound meets it in the hook too.
+    assert _freeze(*SOURCES) == 0
+    path = freeze_sources.manifest_path(repo, TRAIN)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["output_dir"] = f"{repo}/" if out == "root" else f"{repo.parent}/"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    write_train_marker(repo, TRAIN)
+    check = load("doc_outputs")
+    for target in (repo / "service-manifest.json", repo.parent / ".zshrc"):
+        got = check.decide(_doc_input(repo, "Write", file_path=str(target)), [])
+        assert not got.allow and "output folder" in str(got.reason), target
+
+
+def test_doc_outputs_refuses_a_write_leaving_the_project(repo: Path, tmp_path: Path) -> None:
+    assert _freeze(*SOURCES) == 0
+    write_train_marker(repo, TRAIN)
+    link = repo / "private" / "package" / "away"
+    link.symlink_to(tmp_path, target_is_directory=True)
+    target = str(link / "x.md")
+    got = load("doc_outputs").decide(_doc_input(repo, "Write", file_path=target), [])
+    assert not got.allow
