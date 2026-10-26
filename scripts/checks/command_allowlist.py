@@ -27,16 +27,20 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"ledger", "summary"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
-    "daedalus_doctor.py": frozenset({"--print-cache-dir"}),
+    "daedalus_doctor.py": frozenset({"--print-cache-dir", "--check-tools"}),
     "audit_report.py": None,
     "validate_plan.py": None,
+    # Pins MAP -> REQ, SRC -> MAP: the dependency map, and both frozen source forms (flag D).
+    "daedalus_map.py": frozenset({"--repo"}),
+    "freeze_sources.py": frozenset({"--train", "--verify", "--baselines-only"}),
 }
 # 0060: the inspect class is the auditor's read-only set plus the unit-descent check.
 INSPECT_GIT = shell.READ_ONLY_GIT | {"merge-base"}
 R_ORCHESTRATOR_BASH = (
     "the orchestrator's Bash runs only daedalus_train.py with its train subcommands and ledger, "
     "daedalus_workspace.py create, lock, refresh and finish, daedalus_doctor.py "
-    "--print-cache-dir, audit_report.py and validate_plan.py by their absolute plugin path, and "
+    "--print-cache-dir and --check-tools, audit_report.py, validate_plan.py, daedalus_map.py "
+    "--repo and freeze_sources.py --train or --verify by their absolute plugin path, and "
     "read-only inspection with git reads, date -u and sed -n line ranges (0060, 0119). "
     "Next: use those only; a stop, a resume, a reaudit, an exception record, a push and a merge "
     "into main belong to the main session and the operator."
@@ -48,6 +52,13 @@ REPO_FLAGS = ("--repo", "--cwd")
 R_TRAIN_REPO = (
     "{flag} {given} is not the project root of the working directory ({root}). "
     "Next: run the command from {given}, or pass {flag} {root}."
+)
+# MAP -> REQ: the map writes only into the active train's map folder, else the train scratch.
+MAP_SCRIPT = "daedalus_map.py"
+OUT_FLAG = "--out"
+R_MAP_OUT = (
+    "daedalus_map.py writes its map only into {allowed}; --out {given} is outside it. "
+    "Next: pass --out {allowed}."
 )
 
 
@@ -88,6 +99,40 @@ def train_repo_reason(segment: list[str], cwd: str) -> str | None:
         if not root or os.path.realpath(os.path.join(cwd, given)) != root:
             return R_TRAIN_REPO.format(flag=flag, given=given, root=root or cwd)
     return None
+
+
+def _out_values(args: list[str]) -> list[str] | None:
+    # MAP -> REQ: every --out value, joined or split; None for an abbreviation or no value.
+    found: list[str] = []
+    for idx, arg in enumerate(args):
+        flag, eq, value = arg.partition("=")
+        if flag == OUT_FLAG:
+            if not eq:
+                value = args[idx + 1] if idx + 1 < len(args) else ""
+            if not value:
+                return None
+            found.append(value)
+        elif len(flag) > 2 and OUT_FLAG.startswith(flag):
+            return None
+    return found
+
+
+def map_out_reason(segment: list[str], cwd: str) -> str | None:
+    # MAP -> REQ: one --out, resolving to <repo>/docs/.tmp/daedalus/<train-id>/map.
+    if os.path.basename(os.path.realpath(segment[1])) != MAP_SCRIPT:
+        return None
+    root = os.path.realpath(project_root(cwd)) if os.path.isabs(cwd) else cwd
+    scratch = os.path.join(root, "docs", ".tmp", "daedalus")
+    branch = jail._train_branch(cwd) if os.path.isabs(cwd) else None
+    train = branch.removeprefix("daedalus/") if branch else ""
+    allowed = os.path.join(scratch, train, "map") if train else scratch + os.sep
+    values = _out_values(segment[2:])
+    if values is None or len(values) != 1:
+        return R_MAP_OUT.format(allowed=allowed, given="(one value)")
+    # MAP -> REQ: a relative --out joins the project root, as daedalus_map.py joins it to --repo.
+    real = os.path.realpath(os.path.join(root, values[0]))
+    ok = real == allowed if train else real.startswith(allowed)
+    return None if ok else R_MAP_OUT.format(allowed=allowed, given=values[0])
 
 
 def train_script_ok(segment: list[str], cwd: str | None = None) -> bool:
@@ -170,7 +215,7 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
             if shell.docs_read_ok(segment, raw, roots, cwd, base):
                 continue
         if "train" in allowed and train_script_ok(segment):
-            mismatch = train_repo_reason(segment, cwd)
+            mismatch = train_repo_reason(segment, cwd) or map_out_reason(segment, cwd)
             if mismatch is not None:
                 return mismatch
             continue

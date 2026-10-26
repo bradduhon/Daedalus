@@ -340,6 +340,7 @@ Daedalus/
 │   ├── cite.py                      # prints file:line for each line holding a fixed string
 │   ├── daedalus_confine.py          # kernel wrapper: a coder's test command stays in its worktree, no network
 │   ├── daedalus_doctor.py           # first-run check behind /daedalus:doctor
+│   ├── daedalus_map.py              # the dependency map: imports, coverage, record readers, ownership, duplicates
 │   ├── daedalus_setup.py            # writes the missing starter files behind /daedalus:setup
 │   ├── daedalus_train.py            # the train runner: progress, choice, plan, verdict, exception
 │   ├── daedalus_workspace.py        # begin, lock, create, remove, finish, stop, resume, mark, unmark, release
