@@ -240,7 +240,7 @@ def test_entrypoint_binds_decide_and_main(
 def test_every_check_module_ends_in_the_one_trailer() -> None:
     # issue 76: each scripts/checks module binds decide and main from hook_io.entrypoint.
     checks = sorted((SCRIPTS_DIR / "checks").glob("*.py"))
-    assert len(checks) == 14  # 0048: confine joined the thirteen.
+    assert len(checks) == 16  # 0136: excluded_roots and doc_outputs joined the fourteen.
     for path in checks:
         module = load(path.stem)
         assert module.decide.__qualname__ == "entrypoint.<locals>.decide", path.stem

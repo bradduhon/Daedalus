@@ -10,7 +10,7 @@ import pytest
 from lib import jail
 from lib.config import Config
 
-from tests.conftest import CFG, CWD, REPO_ROOT, TRAIN_BRANCH
+from tests.conftest import CFG, CWD, REPO_ROOT, TRAIN_BRANCH, write_train_marker
 from tests.hook_chain import (
     decide,
     evaluate,
@@ -731,3 +731,160 @@ def test_train_script_ok_keeps_its_shape_check_without_a_cwd() -> None:
     assert module.train_script_ok(segment)
     assert not module.train_script_ok(segment, CWD)
     assert module.train_script_ok([*segment[:3], "--repo", CWD], CWD)
+
+
+# Pins MAP -> REQ, REQ -> MAP, SRC -> MAP: the map, the tool check and both frozen source forms.
+TRAIN_ID = TRAIN_BRANCH.removeprefix("daedalus/")
+MAP_OUT = f"{CWD}/docs/.tmp/daedalus/{TRAIN_ID}/map"
+SOURCES = f"{CWD}/.claude/daedalus/trains/t.sources.json"
+MAP_TRAIN_OK = [
+    f"python3 {SCRIPTS}/daedalus_map.py --repo {CWD} --out {MAP_OUT}",
+    f"python3 {SCRIPTS}/daedalus_map.py --repo {CWD} --out {MAP_OUT} --plan {CWD}/plan.md",
+    f"python3 {SCRIPTS}/daedalus_map.py --repo {CWD} --out {MAP_OUT} --plan p.md --check",
+    f"python3 {SCRIPTS}/daedalus_doctor.py --check-tools pytest",
+    f"python3 {SCRIPTS}/daedalus_doctor.py --check-tools pytest,ruff,mypy",
+    f"python3 {SCRIPTS}/freeze_sources.py --train t --output-dir {CWD}/docs/out "
+    f"--source spec=deriver:{CWD}/docs/spec.md:intro,usage --source old=baseline:{CWD}/a.md",
+    f"python3 {SCRIPTS}/freeze_sources.py --baselines-only --train t --output-dir {CWD}/docs/out "
+    f"--source a=baseline:{CWD}/a.md --source b=baseline:{CWD}/b.md",
+    f"python3 {SCRIPTS}/freeze_sources.py --train t --baselines-only --output-dir {CWD}/docs/out "
+    f"--source a=baseline:{CWD}/a.md --source b=baseline:{CWD}/b.md",
+    f"python3 {SCRIPTS}/freeze_sources.py --verify {SOURCES}",
+]
+
+
+@pytest.mark.parametrize("command", MAP_TRAIN_OK)
+def test_train_class_admits_the_map_tools_and_sources(command: str) -> None:
+    assert evaluate(HOOK, _b("orchestrator", command), *TRAIN_FLAGS) is None, command
+    assert decide(_b("orchestrator", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"python3 {SCRIPTS}/daedalus_map.py --out {MAP_OUT} --repo {CWD}",
+        f"python3 {SCRIPTS}/daedalus_map.py --check --repo {CWD} --out {MAP_OUT}",
+        f"python3 {SCRIPTS}/daedalus_map.py",
+        f"python3 {SCRIPTS}/daedalus_doctor.py --fix",
+        f"python3 {SCRIPTS}/freeze_sources.py --output-dir {CWD}/docs/out --train t",
+        f"python3 {SCRIPTS}/freeze_sources.py",
+        f"python3 {SCRIPTS}/../scripts/daedalus_map.py --repo {CWD} --out {MAP_OUT}",
+        f"python3 {CWD}/scripts/daedalus_map.py --repo {CWD} --out {MAP_OUT}",
+        f"python3 {CWD}/scripts/freeze_sources.py --verify {SOURCES}",
+    ],
+)
+def test_train_class_refuses_other_map_and_source_forms(command: str) -> None:
+    # 0060: the script table admits each pinned first argument only, from the plugin's scripts.
+    assert (
+        evaluate(HOOK, _b("orchestrator", command), *TRAIN_FLAGS) == load(HOOK).R_ORCHESTRATOR_BASH
+    )
+
+
+@pytest.mark.parametrize(
+    "args", ["--repo /work/other --out /work/other/m", "--repo=/work/other --out x", "--rep /x"]
+)
+def test_map_repo_outside_the_project_root_is_refused(args: str) -> None:
+    # issue 63: the map's --repo is judged like every other train script's.
+    command = f"python3 {SCRIPTS}/daedalus_map.py {args}"
+    assert not decide(_b("orchestrator", command), CFG).allow, command
+
+
+MAP = f"python3 {SCRIPTS}/daedalus_map.py --repo {CWD}"
+
+
+@pytest.mark.parametrize(
+    "out",
+    [f"--out {MAP_OUT}", f"--out={MAP_OUT}", f"--out {MAP_OUT}/", f"--out {MAP_OUT}/../map"],
+)
+def test_map_out_in_the_active_train_map_folder_is_admitted(out: str) -> None:
+    # MAP -> REQ: the map folder of the train the marker names.
+    assert decide(_b("orchestrator", f"{MAP} {out}"), CFG).allow, out
+
+
+@pytest.mark.parametrize(
+    "out",
+    [
+        f"--out {CWD}/docs/.tmp/daedalus/20991231-000000/map",
+        f"--out {CWD}/docs/.tmp/daedalus",
+        f"--out {MAP_OUT}/sub",
+        f"--out {CWD}/docs/out",
+        f"--out {CWD}/scripts",
+        f"--out {MAP_OUT}/../../../../scripts",
+        f"--out {MAP_OUT} --out {CWD}/scripts",
+        f"--ou {MAP_OUT}",
+        "--out",
+        "",
+    ],
+)
+def test_map_out_elsewhere_is_refused(out: str) -> None:
+    # MAP -> REQ: any other --out reaches outside the train's scratch map folder.
+    reason = evaluate(HOOK, _b("orchestrator", f"{MAP} {out}".strip()), *TRAIN_FLAGS)
+    assert reason is not None and "daedalus_map.py writes its map only into" in reason, out
+    assert MAP_OUT in reason
+    assert not decide(_b("orchestrator", f"{MAP} {out}".strip()), CFG).allow, out
+
+
+def test_map_out_without_a_readable_train_id_stays_in_the_train_scratch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # MAP -> REQ: with no train id, any folder under <repo>/docs/.tmp/daedalus/ and nothing else.
+    module = load(HOOK)
+    monkeypatch.setattr(jail, "_train_branch", lambda cwd: None)
+    seg = ["python3", f"{SCRIPTS}/daedalus_map.py", "--repo", CWD, "--out"]
+    assert module.map_out_reason([*seg, f"{CWD}/docs/.tmp/daedalus/any/map"], CWD) is None
+    for out in (f"{CWD}/docs/.tmp/daedalus", f"{CWD}/docs/.tmp/x", f"{CWD}/scripts"):
+        reason = module.map_out_reason([*seg, out], CWD)
+        assert reason is not None and f"{CWD}/docs/.tmp/daedalus/" in reason, out
+
+
+def _map_project(tmp_path: Path) -> tuple[Path, str]:
+    # MAP -> REQ: a real project with a train marker, so the guard reads the train id itself.
+    repo = _git_init(tmp_path / "repo")
+    write_train_marker(repo, "20261026-002310")
+    (repo / "docs").mkdir()
+    return repo, "docs/.tmp/daedalus/20261026-002310/map"
+
+
+def _map_call(repo: Path, cwd: Path, out: str) -> str | None:
+    hook_input = _b("orchestrator", f"python3 {SCRIPTS}/daedalus_map.py --repo {repo} --out {out}")
+    hook_input["cwd"] = str(cwd)
+    return evaluate(HOOK, hook_input, *TRAIN_FLAGS)
+
+
+def test_relative_map_out_is_admitted_from_the_project_root(tmp_path: Path) -> None:
+    repo, rel = _map_project(tmp_path)
+    assert _map_call(repo, repo, rel) is None
+    assert _map_call(repo, repo / "docs", rel) is None
+
+
+def test_relative_map_out_resolves_from_the_root_not_the_working_folder(tmp_path: Path) -> None:
+    # MAP -> REQ: from <repo>/docs this value lands in <repo>/.tmp, where the script writes it.
+    repo, rel = _map_project(tmp_path)
+    landing = rel.removeprefix("docs/")
+    reason = _map_call(repo, repo / "docs", landing)
+    assert reason is not None and f"{repo}/{rel}" in reason
+    assert _map_call(repo, repo, landing) is not None
+
+
+def test_symlinked_map_folder_is_refused(tmp_path: Path) -> None:
+    repo, rel = _map_project(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (repo / rel).parent.mkdir(parents=True)
+    (repo / rel).symlink_to(elsewhere, target_is_directory=True)
+    for out in (rel, f"{repo}/{rel}"):
+        reason = _map_call(repo, repo, out)
+        assert reason is not None and "writes its map only into" in reason, out
+
+
+def test_map_and_sources_stay_out_of_other_agents() -> None:
+    commands = [MAP_TRAIN_OK[0], MAP_TRAIN_OK[-1], MAP_TRAIN_OK[3]]
+    for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+        for command in commands:
+            assert not decide(_b(agent, command), CFG).allow, (agent, command)
+
+
+def test_orchestrator_refusal_names_the_new_scripts() -> None:
+    reason = load(HOOK).R_ORCHESTRATOR_BASH
+    for word in ("daedalus_map.py", "freeze_sources.py", "--check-tools", "--verify"):
+        assert word in reason, word

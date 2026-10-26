@@ -59,6 +59,11 @@ def test_known_agents_match_spec_matrix() -> None:
             "planner",
             "orchestrator",
             "verifier",
+            "dependency-auditor",
+            "terraform-reviewer",
+            "docs-writer",
+            "doc-deriver",
+            "change-logger",
         }
     )
 

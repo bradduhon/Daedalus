@@ -28,6 +28,7 @@ from lib.audit_proof import (
 from lib.jail import normalize_agent
 from lib.narrow import integer as _int
 from lib.narrow import obj as _obj
+from lib.narrow import objects as _objects
 from lib.narrow import strings as _strings
 from lib.narrow import text as _text
 from lib.plan_record import Version
@@ -60,17 +61,29 @@ _COMPLETE = re.compile(
 _YIELD = re.compile(r"\[STATUS: (YIELD_[A-Z]+)\]\s*(.*)")
 _COMPLIANCE = re.compile(r"\[STATUS: COMPLIANCE\]\s*(.*)")
 _VERIFIER = re.compile(r"\[VERDICT: (VERIFIED|REFUTED)\]\s*(.*)")
+# 0127: agents/verifier.md status contract, the line directly above the closing verdict.
+_CORRECTED = re.compile(r"corrected=([0-9]+)")
 _UNIT_WORKTREE = re.compile(r"Unit worktree: (\S+)")
 _LEDGER_PATH = re.compile(r"ledger: (.+?) \(")
 _DISPATCH_TOOLS = ("Agent", "Task", "SendMessage")
 _REFUSALS = ("block", "ask")
+OPERATOR, PRIORITIES_YIELD = "operator", "YIELD_STANDARDS priorities"
+_PRIORITIES_RULE = re.compile(r"priorities rule [0-9]+:")
 _ANSWERERS: dict[str, tuple[str, ...]] = {
     "YIELD_WEB": ("web-researcher",),
     "YIELD_CONTRACT": ("contract-spec",),
     "YIELD_COMPLIANCE": ("nist-specialist", "cis-specialist"),
     "YIELD_STANDARDS": ("standards-rules-specialist",),
+    # 0129, 0137: a `priorities rule <n>:` yield is a surfaced default the operator answers.
+    PRIORITIES_YIELD: (OPERATOR,),
 }
-_COMPLIANCE_AGENTS = ("nist-specialist", "cis-specialist")
+# 0132: the two diff-content judges list into Compliance too, never into the audit gate.
+_COMPLIANCE_AGENTS = (
+    "nist-specialist",
+    "cis-specialist",
+    "dependency-auditor",
+    "terraform-reviewer",
+)
 _CELL_CHARS = 300
 _PARAGRAPH_CHARS = 600
 
@@ -103,9 +116,20 @@ class Reply:
     text: str
 
     @property
+    def rows(self) -> list[str]:
+        return [ln.strip() for ln in self.text.splitlines() if ln.strip()]
+
+    @property
     def last(self) -> str:
-        rows = [ln.strip() for ln in self.text.splitlines() if ln.strip()]
+        rows = self.rows
         return rows[-1] if rows else ""
+
+    @property
+    def corrected(self) -> int | None:
+        # 0127: None when no `corrected=<k>` line sits above the closing line, never a zero.
+        rows = self.rows
+        found = _CORRECTED.fullmatch(rows[-2]) if len(rows) > 1 else None
+        return int(found.group(1)) if found else None
 
 
 def summary_path(repo: Path, train_id: str) -> Path:
@@ -285,7 +309,7 @@ def _source(reply: Reply, log: SessionLog) -> str:
 @dataclass
 class _Facts:
     complete: dict[str, tuple[str, str, str, str]] = field(default_factory=dict)
-    verified: dict[str, tuple[str, str]] = field(default_factory=dict)
+    verified: dict[str, tuple[str, str, int | None]] = field(default_factory=dict)
     yields: list[tuple[str, str, str, str, str]] = field(default_factory=list)
     compliance: list[tuple[str, str, str]] = field(default_factory=list)
     blocks: Counter[tuple[str, str]] = field(default_factory=Counter)
@@ -315,7 +339,7 @@ def _gather(logs: Sequence[SessionLog], units: Sequence[dict[str, object]]) -> _
             if reply.agent == "verifier" and judged:
                 unit = _verified_unit(records, reply.seq, paths)
                 if unit is not None:
-                    facts.verified[unit] = (line, where)
+                    facts.verified[unit] = (line, where, reply.corrected)
         for record in records:
             if record.get("event") == "PreToolUse" and record.get("decision") in _REFUSALS:
                 facts.blocks[(_hook_of(dict(record)), _agent(record) or "main")] += 1
@@ -340,7 +364,10 @@ def _yield_row(
         if unit is not None:
             break
     kind = asked.group(1)
-    want = _ANSWERERS.get(kind, ())
+    surfaced = kind == "YIELD_STANDARDS" and _PRIORITIES_RULE.match(asked.group(2))
+    want = _ANSWERERS[PRIORITIES_YIELD] if surfaced else _ANSWERERS.get(kind, ())
+    if want == (OPERATOR,):
+        return unit or "", kind, asked.group(2), OPERATOR
     answer = next((r.agent for r in found if r.seq > reply.seq and r.agent in want), None)
     return unit or "", kind, asked.group(2), answer or "no answer recorded"
 
@@ -460,6 +487,60 @@ def _noted(notes: Notes, name: str, empty: str, repo: Path, charter: Path | None
     return found or [empty]
 
 
+def _choice_agents(logs: Sequence[SessionLog]) -> dict[tuple[str, str], str]:
+    # 0129: the agent whose allowed Bash call ran `daedalus_train.py choice --chose X --rule R`.
+    import shlex
+
+    found: dict[tuple[str, str], str] = {}
+    for log in logs:
+        for record in log.records:
+            command = _text(_obj(record, "tool_input"), "command")
+            if record.get("decision") != "allow" or "daedalus_train.py" not in command:
+                continue
+            try:
+                words = shlex.split(command)
+            except ValueError:
+                continue
+            given = dict(zip(words, words[1:], strict=False))
+            if "choice" in words and "--chose" in given and "--rule" in given:
+                key = (given["--chose"].strip(), given["--rule"].strip())
+                found[key] = _agent(record) or "main session"
+    return found
+
+
+def _priorities(
+    repo: Path, state: dict[str, object], logs: Sequence[SessionLog], charter: Path | None
+) -> list[str]:
+    # 0129, F.4: each decision a rule settled alone or surfaced, from the choice records.
+    from lib.manifest import SURFACE, ManifestError
+    from lib.manifest import load as load_manifest
+
+    try:
+        loaded = load_manifest(repo)
+    except ManifestError:
+        loaded = None
+    declared = loaded.priorities if loaded is not None else None
+    rules = declared.rules if declared is not None else ()
+    agents = _choice_agents(logs)
+    lines = ["## Priorities"]
+    for entry in _objects(state, train_state.CHOICES):
+        rule = _text(entry, "rule")
+        if not rule:
+            continue
+        index = int(rule) if rule.isdigit() else 0
+        surfaced = 0 < index <= len(rules) and rules[index - 1].then == SURFACE
+        how = "surfaced" if surfaced else "settled alone"
+        chose, over = _text(entry, "chose"), _text(entry, "over")
+        agent = agents.get((chose, rule), "unknown agent")
+        where = "a choice record (train state)"
+        lines.append(
+            f"- {how} by rule {_cell(rule, repo, charter, where)}, driver "
+            f"{_cell(_text(entry, 'driver') or 'none', repo, charter, where)}, {agent}: "
+            f"{_cell(chose, repo, charter, where)} over {_cell(over, repo, charter, where)}"
+        )
+    return lines if len(lines) > 1 else [*lines, "none"]
+
+
 def _units(
     repo: Path, train_id: str, units: Sequence[dict[str, object]], facts: _Facts
 ) -> list[str]:
@@ -479,34 +560,49 @@ def _units(
     return lines
 
 
+def _exempted(exempt: dict[str, object], repo: Path, charter: Path | None) -> list[str]:
+    # 0133, 0139: each exempted finding with its ledger id and tracking; 0142: untracked ones
+    # carry a Deviation: line naming the finding and its exemption row.
+    lines: list[str] = []
+    for key in sorted(exempt):
+        entry = _obj(exempt, key)
+        where = f"the train state exemption of {key}"
+        finding = _cell(key, repo, charter, "a train state finding key")
+        ledger = _cell(_text(entry, "ledger_id"), repo, charter, where)
+        tracking = _text(entry, "tracking")
+        label = train_state.TRACKING.get(tracking, "not recorded")
+        if tracking == "other":
+            label = f"{label}: {_cell(_text(entry, 'other'), repo, charter, where)}"
+        lines.append(f"- Exempted {finding} ({ledger}), tracking: {label}")
+        if tracking in train_state.UNTRACKED:
+            lines.append(
+                f"Deviation: finding {finding} exempted with no tracked issue ({label}), "
+                f"exemption row {ledger}."
+            )
+    return lines
+
+
 def _audit(
     repo: Path, state: dict[str, object], logs: Sequence[SessionLog], notes: Notes
 ) -> list[str]:
     charter_raw = _text(state, "charter_root")
     charter = Path(charter_raw) if charter_raw else None
     verdict = train_state.record(state, train_state.VERDICT)
-    exception = train_state.record(state, train_state.EXCEPTION)
     rounds = train_state.record(state, train_state.AUDIT_ROUNDS)
     status, tip = _text(verdict, "status"), _text(verdict, "tip")
     last = _int(verdict, "round", 0)
     keys = [int(k) for k in rounds if k.isdigit()]
     top = max([last, *keys], default=0)
-    rejected = [k for k in keys if isinstance(rounds.get(str(k)), dict) and rounds[str(k)]]
+    exempt = train_state.record(train_state.record(state, train_state.EXEMPTIONS), str(last))
     lines = ["## Audit"]
-    if exception and _text(exception, "ledger_id"):
+    if status == train_state.REJECTED and exempt:
         lines.append(
-            f"The operator's exception ({_text(exception, 'ledger_id')}) on tip "
-            f"{_text(exception, 'tip')} after {len(rejected)} rejected round(s)."
+            f"{VERDICT_REJECTED} tip={tip} after {last} round(s); the operator exempted "
+            f"{len(exempt)} of the {len(_obj(rounds, str(last)))} finding(s) of round {last}."
         )
-        waived = _obj(rounds, str(max(rejected))) if rejected else {}
+        lines += _exempted(exempt, repo, charter)
         if "Waived" in notes.sections:
             lines += _noted(notes, "Waived", "none", repo, charter)
-        else:
-            lines += [
-                f"- {_cell(key, repo, charter, 'a train state finding key')}: tracked-risk issue "
-                "not recorded"
-                for key in waived
-            ]
     elif status == train_state.APPROVED:
         lines.append(
             f"{VERDICT_APPROVED} tip={tip} on the merged integration tip after {last} round(s)."
@@ -532,7 +628,20 @@ def _audit(
             lines.append(f"Round {number}: no findings recorded")
         else:
             lines.append(f"Round {number}: not recorded in train state")
-    return lines
+    return lines + _docs(state, repo, charter)
+
+
+def _docs(state: dict[str, object], repo: Path, charter: Path | None) -> list[str]:
+    # 0131, 0134: the docs verdict beside the security verdict; no record reads as not run.
+    docs = train_state.record(state, train_state.DOCS_VERDICT)
+    status, tip = _text(docs, "status"), _text(docs, "tip")
+    if status == train_state.VERIFIED:
+        return [f"Docs: verified on tip {tip}"]
+    if status != train_state.REFUTED:
+        return ["Docs: not run"]
+    claims, exempt = _obj(docs, "findings"), _obj(docs, "exemptions")
+    head = f"Docs: refuted on tip {tip}; the operator exempted {len(exempt)} of the "
+    return [f"{head}{len(claims)} claim(s)", *_exempted(exempt, repo, charter)]
 
 
 def _paragraph(logs: Sequence[SessionLog], seq: int, session: str) -> tuple[str, str]:
@@ -578,11 +687,13 @@ def render(
     labels = {_text(u, "name"): _text(u, "name").removeprefix(f"{train_id}-") for u in units}
     lines = _header(repo, train_id, state, notes, policy_declared, version)
     lines += ["## Rulings", *_noted(notes, "Rulings", "none", repo, charter)]
+    lines += _priorities(repo, state, logs, charter)
     lines += _units(repo, train_id, units, facts)
     lines.append("## Verification")
     verified = [
         f"- {labels[n]}: {_cell(line, repo, charter, where)}"
-        for n, (line, where) in facts.verified.items()
+        + ("" if corrected is None else f" corrected={corrected}")
+        for n, (line, where, corrected) in facts.verified.items()
         if n in labels
     ]
     lines += verified or ["none"]

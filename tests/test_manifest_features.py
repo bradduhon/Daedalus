@@ -35,7 +35,16 @@ def _refused(repo: Path, payload: object) -> str:
 
 
 def test_feature_keys_are_the_features_fields() -> None:
-    assert FEATURE_KEYS == ("scope", "secrets_scan", "scrub_file", "ledger", "github")
+    # 0132: the persona switches are appended after github.
+    assert FEATURE_KEYS == (
+        "scope",
+        "secrets_scan",
+        "scrub_file",
+        "ledger",
+        "github",
+        "dependency_web_lookup",
+        "terraform_tools",
+    )
 
 
 def test_absent_manifest_gives_every_feature_its_default(tmp_path: Path) -> None:

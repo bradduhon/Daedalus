@@ -65,6 +65,7 @@ Each `OK` line is a check that passed. Each `MISS` line names what is missing an
 | Machine caches (NIST, CIS) | `${CLAUDE_PLUGIN_DATA}`, under `~/.claude/plugins/data/` | the plugin's refresh scripts |
 | Build Train scratch files and summary | `<repo>/docs/.tmp/daedalus/` | the Build Train; a `*` marker inside keeps it out of git |
 | Running-train marker | `<repo>/.claude/daedalus/train.active` | each train, removed when it ends or stops |
+| Train state and unit bindings | `<repo>/.claude/daedalus/trains/<train-id>.json` and `<train-id>.bindings.json` | the train's scripts only, under a lock |
 | Coder worktrees | `<repo>/.claude/worktrees/<train-id>-<unit-slug>` | the Build Train, removed when it ends or stops |
 
 `<repo>` is the main working tree of the git repository you started Claude Code in. Every worktree of that repository shares the one `.claude/daedalus/` directory. Outside a git repository, `<repo>` is the starting directory itself. The Build Train's start writes `.claude/daedalus/.gitignore` with a single `*` line, so git ignores the directory and your own `.gitignore` is untouched; outside a train, no hook writes anything into the repository. While a train runs, the jail also refuses any `git add` or `git commit` that names `.claude/daedalus`.
@@ -201,15 +202,15 @@ The summary records the policy gate as `[POLICY: none declared]` or `[POLICY: de
 
 The auditor works in its own audit worktree, a checkout of the integration branch. Before each later round the train refreshes it with a fast-forward to the new integration tip; if that worktree holds a commit or a change the integration branch lacks, the refresh stops with a `Next:` line naming `git -C <path> status` instead of throwing the work away.
 
-A `[VERDICT: REJECTED]` names the tip it judged and writes each blocking finding as a failing test. The train sends each finding to the coding agent that wrote the code, in a fix unit cut from the integration branch, with the test it must make pass. Then it merges the fixes and audits again. That loop goes on while each round makes progress. It stops when a finding comes back after its fix, a new high or critical finding appears, or the round budget runs out (`audit_round_budget` in your config, default 5). Then the session asks you what happens to the findings that remain:
+A `[VERDICT: REJECTED]` names the tip it judged and writes each blocking finding as a failing test. Then the session asks you about each finding, one question per finding (0133). The question's first line says what is at stake in one plain sentence, then asks. Two or three short sentences follow on what breaks and what happened in the test. The three choices are:
 
-- One more fix-and-audit round.
-- Merge with each finding as a tracked-risk issue: your exception becomes a ruling in the ledger, bound to the integration tip, and one tracked-risk issue per finding is filed. The Push Train's verdict check accepts that exception once it is bound to the tip it pushes (issue 62).
-- Stop with the branches kept, for fixes by hand or a narrower rerun.
+- Fix it now (Recommended): the train sends the finding to the coding agent that wrote the code, in a fix unit cut from the integration branch, with the test it must make pass. Then it merges the fixes and audits again. How the fix is built is in the finding file, not in the choice.
+- Skip, track or exempt it: the finding stays in the merged work, and the exemption becomes a ruling in the ledger. A second question asks how the exemption is tracked: Skip it (dropped silently), Track it (a GitHub tracked-risk issue the session files before the pull request opens), Exempt it (the local ledger record alone), or your own answer. Every choice is offered in every project. A Skip it or Exempt it answer puts a `Deviation:` line in the pull request body naming the finding and its exemption row.
+- Stop the train: the train stops, and every unit branch stays for fixes by hand or a narrower rerun.
 
-The same question follows every later rejected round; the train never runs another round or stops on its own authority.
+The same questions follow every later rejected round. No round budget applies, and the train never runs a fix round or stops on its own authority. The Push Train's verdict check accepts a rejected round once every finding in its findings file carries an exemption.
 
-On `[VERDICT: APPROVED]`, or your merge pick, the charter-docs agent appends the ledger entries through `append_ledger.py` and commits them. When the ledger lives in your Charter repo, the Charter working tree must be clean first. The train creates the Charter's `daedalus/<train-id>` branch in its checks, for the contract and ledger commits, then switches the Charter back to the branch it was on. Nothing is pushed.
+On `[VERDICT: APPROVED]`, or once you exempted every finding, the charter-docs agent appends the ledger entries through `append_ledger.py` and commits them. When the ledger lives in your Charter repo, the Charter working tree must be clean first. The train creates the Charter's `daedalus/<train-id>` branch in its checks, for the contract and ledger commits, then switches the Charter back to the branch it was on. Nothing is pushed.
 
 Any agent reply that does not end in one of its contract lines or contract sections stops the train and shows you the reply's last 10 lines. The auditor brief from standards-rules-specialist is the one exception: it ends with its rule list and has no status line. Once the train has created a Charter branch, it switches the Charter back to the branch it was on before any stop. Before any stop ahead of the merge, it also switches this repo back to your base branch. The exceptions: a stop while the Charter tree is dirty leaves the Charter on its `daedalus/<train-id>` branch, and a stop while the contract file is uncommitted leaves both repos on `daedalus/<train-id>`. Either way the stop names the uncommitted files and the branch they sit on. The security auditor writes its verdict line as both the first line and the last line of every reply it sends.
 
@@ -223,10 +224,13 @@ The train writes `docs/.tmp/daedalus/<train-id>-summary.md`. It holds:
 - the ledger entries added, on a `Ledger ids:` line. The train writes the summary before the ledger step with `Ledger ids: pending`, so a stop there still leaves a summary. The Push Train refuses a pending summary and names the ledger resume that finishes it. After the ledger commit and the approved verdict are recorded, the train rewrites the summary as its last step
 - the policy line
 - every ruling you made during the train, with its ledger id, and a `Deviation:` line for each pick that keeps the plugin's way
+- each decision a project priorities rule settled alone or put to you, with its rule and driver, or `none`
 - one row per unit: branch, packet, files, tests
+- each verified unit's last verifier verdict line, followed by `corrected=<k>`, the number of the coder's receipts the verifier corrected, when the reply carries that count
 - every yield and who answered it
-- the compliance results
-- the audit verdict on the merged integration tip and its round count, or your exception with each waived finding
+- the compliance results, the dependency auditor's and the Terraform reviewer's included
+- the audit verdict on the merged integration tip and its round count, or each exempted finding with its ledger id and how it is tracked
+- the docs verdict on the tip the docs stage merged, with each exempted docs claim, or `Docs: not run`
 - the blocks the hooks made, sorted into friction (work the agent's job needed) and habit (a reach outside the job)
 - the audit log path, relative to the repo (`.claude/daedalus/audit/<session>.jsonl`)
 
@@ -254,7 +258,7 @@ The train stops, with a `Next:` line, when any of these fails:
 - The working tree has unstaged or untracked changes. Staged changes are fine; the conductor commits them.
 - This session's hooks are not writing the audit log. The train marks itself running before this check, since the log records only during a train. Run `/daedalus:doctor`.
 - An audit log fails its hash chain check. Keep the file, report it, and do not edit it, as in "When the chain is BROKEN" above.
-- The security auditor's last reply before this train's summary, in the Build Train's audit log and after the mark its hooks check made, is not `[VERDICT: APPROVED]`, or the ledger commit is not on the branch. When the only problem is a commit that landed on the branch after the audit, the Push Train runs one recovery round on the new tip instead of stopping (see "Recovering a train" below).
+- The security auditor's last reply before this train's summary, in the Build Train's audit log and after the mark its hooks check made, is not `[VERDICT: APPROVED]`, or the ledger commit is not on the branch. A rejected round passes when every one of its findings carries an exemption. The plugin README's "The push proof" lists each rule this check applies. When the only problem is a commit that landed on the branch after the audit, the Push Train runs one recovery round on the new tip instead of stopping (see "Recovering a train" below).
 
 ### What the conductor does
 

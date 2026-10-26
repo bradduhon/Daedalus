@@ -32,6 +32,7 @@ from tests.jail_cases import (
     seed_train,
 )
 from tests.payloads import _b
+from tests.test_operator_gates import GATE_KEY, exempt_round
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "git_push"
@@ -171,18 +172,18 @@ def test_push_naming_another_branch_at_the_approved_tip_is_refused(repo_cwd: Pat
     assert reason == jail.R_CONDUCTOR_PUSH_BRANCH.format(branch=GATE_BRANCH)
 
 
-def test_push_with_an_exception_for_the_tip_is_allowed(repo_cwd: Path) -> None:
+def test_push_with_every_finding_exempted_on_the_tip_is_allowed(repo_cwd: Path) -> None:
+    # 0133: a rejected round passes once each of its findings carries an exemption.
     old = seed_train(repo_cwd)
-    rejected = {"status": "rejected", "tip": old, "round": 2, "seq": 9}
-    train_state.update(repo_cwd, GATE_TRAIN, verdict=rejected)
-    train_state.update(repo_cwd, GATE_TRAIN, exception={"ledger_id": "0104-DAE-PLT", "tip": old})
+    exempt_round(repo_cwd, GATE_TRAIN, old)
     assert _conductor_push(repo_cwd) is None
-    moved = move_tip(repo_cwd)
+    blank = {"ledger_id": "", "tip": old, "tracking": "issue"}
+    train_state.update(repo_cwd, GATE_TRAIN, exemptions={"1": {GATE_KEY: blank}})
+    assert _conductor_push(repo_cwd) is not None
+    exempt_round(repo_cwd, GATE_TRAIN, old)
+    move_tip(repo_cwd)
     stale = _conductor_push(repo_cwd)
     assert stale is not None and stale.endswith(GATE_NEXT)
-    blank = {"ledger_id": "", "tip": moved}
-    train_state.update(repo_cwd, GATE_TRAIN, exception=blank)
-    assert _conductor_push(repo_cwd) is not None
 
 
 def test_push_after_the_single_ledger_commit_is_allowed(repo_cwd: Path) -> None:

@@ -14,7 +14,7 @@ from lib.config import Config
 from lib.train_scope import KNOWN_AGENTS
 from lib.workspace import create, mark_train
 
-from tests.conftest import CWD, REPO_ROOT
+from tests.conftest import CWD, REPO_ROOT, TRAIN_BRANCH
 from tests.conftest import git as _git
 from tests.hook_chain import evaluate, load
 from tests.hook_chain import judge as decide
@@ -271,7 +271,10 @@ def _recipe_commands() -> list[str]:
         for m in _RECIPE_CMD.findall(text)
         if "/scripts/<script>" not in m
     ]
-    return [re.sub(r"<[^>]+>", "x", m.replace("<repo>", CWD)) for m in found]
+    # MAP -> REQ: the map's --out names the active train, which the jail fakes read as TRAIN_BRANCH.
+    train = TRAIN_BRANCH.removeprefix("daedalus/")
+    found = [m.replace("<repo>", CWD).replace("<train-id>", train) for m in found]
+    return [re.sub(r"<[^>]+>", "x", m) for m in found]
 
 
 def test_recipe_names_every_train_script_it_may_run() -> None:
@@ -279,7 +282,9 @@ def test_recipe_names_every_train_script_it_may_run() -> None:
     names = {cmd.split()[1].rsplit("/", 1)[1] for cmd in commands}
     allowlist = load("command_allowlist")
     # refresh_frameworks.py is the operator's own-shell Next line, never the orchestrator's call.
-    assert names - {"refresh_frameworks.py"} == set(allowlist.TRAIN_SCRIPTS)
+    # Pin SRC -> MAP: the document train recipe runs freeze_sources.py, not this Build Train one.
+    expected = set(allowlist.TRAIN_SCRIPTS) - {"freeze_sources.py"}
+    assert names - {"refresh_frameworks.py"} == expected
 
 
 @pytest.mark.usefixtures("jail_fakes")
@@ -316,7 +321,8 @@ def test_recipe_names_the_verifier_step_and_the_one_pass_rule() -> None:
     assert "the line `Unit worktree: <unit worktree path>`" in step
     assert "never a `Worktree:` line" in step
     refuted = next(ln for ln in phase2.splitlines() if ln.startswith("| `[VERDICT: REFUTED]"))
-    assert 'SendMessage(that unit\'s coder, "FIX. The verifier refuted: <rows>")' in refuted
+    fix = 'SendMessage(that unit\'s coder, "FIX. The verifier refuted: <code and scope rows>")'
+    assert fix in refuted
     assert "A second REFUTED on the same unit stops the train with the rows shown" in refuted
     assert any(ln.startswith("| `[VERDICT: VERIFIED] claims=<n>`") for ln in phase2.splitlines())
     merge = AGENT_FILE.read_text(encoding="utf-8").split("## Phase 3", 1)[1].split("\n2. ", 1)[0]

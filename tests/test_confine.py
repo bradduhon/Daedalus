@@ -329,7 +329,8 @@ def test_the_wrapper_grants_nothing_the_bare_command_lacks(inner: str) -> None:
 def test_only_the_coder_carries_the_confine_check() -> None:
     # 0048, Plan 6 section 10.3: the verifier's and auditor's --test-runner forms stay untouched.
     carriers = {name for name, chain in CHAINS.items() if any(s == "confine" for s, _ in chain)}
-    assert carriers == {"repo-coder"}
+    # 0134: the docs writer carries the repo-coder's list, so it carries confine too.
+    assert carriers == {"repo-coder", "docs-writer"}
 
 
 def test_confine_hook_standard_properties() -> None:

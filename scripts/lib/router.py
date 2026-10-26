@@ -20,6 +20,10 @@ R_NO_HOOKS = (
 )
 # 0044: one import per hook script per process, keyed by script stem.
 _MODULES: dict[str, ModuleType] = {}
+# 0136, D.5: checks every routed agent meets after its own hooks, loaded from this plugin tree.
+EVERY_AGENT = (agent_files.Hook("excluded_roots", ()),)
+_OWN_ROOT = Path(__file__).resolve().parents[2]
+_EVERY_MODULES: dict[str, ModuleType] = {}
 
 
 def routed(raw_agent: str) -> bool:
@@ -27,8 +31,11 @@ def routed(raw_agent: str) -> bool:
     return policed_outside_train(raw_agent) and jail.normalize_agent(raw_agent) != "main"
 
 
-def _module(script: str, plugin_root: Path) -> ModuleType:
-    module = _MODULES.get(script)
+def _module(
+    script: str, plugin_root: Path, cache: dict[str, ModuleType] | None = None
+) -> ModuleType:
+    cache = _MODULES if cache is None else cache
+    module = cache.get(script)
     if module is None:
         path = plugin_root / "scripts" / "checks" / f"{script}.py"
         spec = importlib.util.spec_from_file_location(f"daedalus_checks_{script}", path)
@@ -36,14 +43,19 @@ def _module(script: str, plugin_root: Path) -> ModuleType:
             raise ImportError(f"no loader for {path}")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        _MODULES[script] = module
+        cache[script] = module
     return module
 
 
-def _run(hook: agent_files.Hook, hook_input: dict[str, object], plugin_root: Path) -> str | None:
+def _run(
+    hook: agent_files.Hook,
+    hook_input: dict[str, object],
+    plugin_root: Path,
+    cache: dict[str, ModuleType] | None = None,
+) -> str | None:
     # 0044: any failure on the way to a HookDecision denies with its full cause.
     try:
-        module = _module(hook.script, plugin_root)
+        module = _module(hook.script, plugin_root, cache)
     except (Exception, SystemExit) as exc:  # noqa: BLE001
         return hook_io.failed_closed(hook.script, exc)
     decide = getattr(module, "decide", None)
@@ -74,6 +86,10 @@ def route(hook_input: dict[str, object], plugin_root: Path) -> tuple[bool, str |
         return False, R_NO_HOOKS.format(name=name), ROUTER
     for hook in agent.hooks:
         reason = _run(hook, hook_input, plugin_root)
+        if reason is not None:
+            return False, reason, hook.script
+    for hook in EVERY_AGENT:
+        reason = _run(hook, hook_input, _OWN_ROOT, _EVERY_MODULES)
         if reason is not None:
             return False, reason, hook.script
     return True, None, ""

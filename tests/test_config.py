@@ -198,21 +198,10 @@ def _load(project_data: Path, doc: dict[str, object]) -> Config:
     return load_config(str(project_data.parents[1]))
 
 
-def test_audit_round_budget_defaults_to_five(project_data: Path) -> None:
-    # 0109: an absent key allows five audit rounds.
-    assert Config().audit_round_budget == 5
-    assert _load(project_data, {}).audit_round_budget == 5
-    assert _load(project_data, {"audit_round_budget": 1}).audit_round_budget == 1
-    assert _load(project_data, {"audit_round_budget": 10}).audit_round_budget == 10
-
-
-@pytest.mark.parametrize("value", [0, 11, -1, True, False, 2.0, "3", None, [5]])
-def test_audit_round_budget_refuses_outside_one_to_ten(project_data: Path, value: object) -> None:
-    with pytest.raises(ConfigError) as info:
-        _load(project_data, {"audit_round_budget": value})
-    text = str(info.value)
-    assert "audit_round_budget must be a whole number from 1 to 10" in text
-    assert "Next: set audit_round_budget to 1 to 10, or remove it" in text
+def test_retired_audit_round_budget_is_refused(project_data: Path) -> None:
+    # 0133: the key is gone; tests/test_operator_gates.py covers its refusal text.
+    with pytest.raises(ConfigError):
+        _load(project_data, {"audit_round_budget": 5})
 
 
 def test_agent_models_absent_or_null_is_empty(project_data: Path) -> None:

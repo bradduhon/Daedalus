@@ -1,0 +1,34 @@
+{
+  "dispatch_binding.R_DOCS_WORKTREE": {
+    "failure": "0134: a docs-writer is dispatched onto a coder's unit or the main checkout, so its writes land outside the train's docs worktree",
+    "premise_test": "tests/test_persona_jails.py::test_docs_writer_dispatch_naming_another_worktree_is_refused"
+  },
+  "dispatch_binding.R_DOCS_REBIND": {
+    "failure": "0134: a resume moves a coder onto the docs worktree, so code changes reach the branch the docs writer commits on",
+    "premise_test": "tests/test_persona_jails.py::test_a_resume_never_moves_a_coder_onto_the_docs_worktree"
+  },
+  "unit_writes.R_DOCS_ONLY": {
+    "failure": "0134: the docs writer edits a script, a test or a coder's unit, so the docs stage changes code after the security verdict",
+    "premise_test": "tests/test_persona_jails.py::test_docs_writer_refuses_any_other_path_in_the_docs_worktree"
+  },
+  "unit_writes.R_DOCS_COMMIT": {
+    "failure": "0134: the docs writer commits with -a, --all or a pathspec, so files it never staged reach the docs branch",
+    "premise_test": "tests/test_wave2_fix.py::test_docs_writer_commit_takes_only_a_message"
+  },
+  "unit_writes.R_DOCS_GIT": {
+    "failure": "0134: the docs writer restores, checks out or stashes files in its worktree, so files other than the four public docs change",
+    "premise_test": "tests/test_persona_jails.py::test_docs_writer_bash_writes_stay_on_the_public_docs"
+  },
+  "command_allowlist.R_TERRAFORM": {
+    "failure": "0132: the Terraform reviewer runs init, plan, apply or another subcommand, so a review changes state or infrastructure",
+    "premise_test": "tests/test_persona_jails.py::test_terraform_class_refuses_every_other_form"
+  },
+  "command_allowlist.R_TERRAFORM_OFF": {
+    "failure": "0132: the Terraform reviewer runs terraform while the project turned features.terraform_tools off",
+    "premise_test": "tests/test_persona_jails.py::test_terraform_class_refuses_both_checks_when_the_switch_is_off"
+  },
+  "command_allowlist.R_TERRAFORM_MANIFEST": {
+    "failure": "0132: an unreadable service manifest hides the terraform_tools switch, so terraform runs when the project may have turned it off",
+    "premise_test": "tests/test_persona_jails.py::test_terraform_class_fails_closed_on_an_unreadable_manifest"
+  }
+}

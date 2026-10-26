@@ -26,10 +26,21 @@ def _defects(name: str, max_concurrent: int = 5) -> list[str]:
     return validate(load(FIXTURES / f"{name}.md"), max_concurrent)
 
 
+def requirement_sections(*lines: str) -> str:
+    # 0128, pin REQ -> VER: one requirement section per unit line, below the plan block.
+    heads = [line.split(" | ")[:2] for line in lines if line.startswith("unit:")]
+    return "".join(
+        f"\n### {uid.partition(':')[2].strip()}: {title.partition(':')[2].strip()}\n\n"
+        "Requirements:\n1. Build the unit in `scripts/`.\n"
+        for uid, title in heads
+    )
+
+
 def _plan_text(tmp_path: Path, *lines: str) -> Plan:
     path = tmp_path / "plan.md"
     block = "\n".join(lines)
-    path.write_text(f"# plan\n\n```plan\n{block}\n```\n", encoding="utf-8")
+    sections = requirement_sections(*lines)
+    path.write_text(f"# plan\n\n```plan\n{block}\n```\n{sections}", encoding="utf-8")
     return load(path)
 
 
@@ -37,6 +48,10 @@ _cli = partial(run_cli, "validate_plan.py")
 
 
 def _this_plan() -> Path | None:
+    return checkout_file(THIS_PLAN)
+
+
+def checkout_file(relative: Path) -> Path | None:
     # 0086: a unit worktree has no private clone; the main working tree may carry it.
     common = subprocess.run(
         ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -46,7 +61,7 @@ def _this_plan() -> Path | None:
         check=False,
     ).stdout.strip()
     roots = [REPO_ROOT] + ([Path(common).parent] if common else [])
-    return next((r / THIS_PLAN for r in roots if (r / THIS_PLAN).is_file()), None)
+    return next((r / relative for r in roots if (r / relative).is_file()), None)
 
 
 def test_valid_fixture_has_no_defects() -> None:
@@ -263,7 +278,8 @@ def test_this_plan_validates(tmp_path: Path) -> None:
     path = _this_plan()
     if path is None:
         pytest.skip("the private plan file is not present in this checkout")
-    assert validate(load(path), 5) == []
+    # 0138 migration line: Plan 7 predates requirement sections, so only those defects remain.
+    assert [d for d in validate(load(path), 5) if "requirement section" not in d] == []
     # Auditor check: the same plan with one edge kind removed is refused.
     text = path.read_text(encoding="utf-8")
     cut = text.replace("edge: A1 -> A3 | kind: serial | ", "edge: A1 -> A3 | ", 1)
@@ -353,7 +369,9 @@ def test_two_version_lines_are_refused(tmp_path: Path) -> None:
 
 def test_cli_prints_the_version_line_after_the_ok_line(tmp_path: Path) -> None:
     path = tmp_path / "plan.md"
-    path.write_text(f"```plan\n{ONE}\n{BUMP}\n{VERSION_LINE}\n{TWO_GRAPH}\n```\n", encoding="utf-8")
+    sections = requirement_sections(ONE, BUMP)
+    block = f"```plan\n{ONE}\n{BUMP}\n{VERSION_LINE}\n{TWO_GRAPH}\n```\n"
+    path.write_text(block + sections, encoding="utf-8")
     proc = _cli(str(path))
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert proc.stdout.splitlines() == [
@@ -380,6 +398,9 @@ def test_planner_and_plan_skill_name_the_version_line() -> None:
     step7 = skill.split("\n7. ", 1)[1].split("\n8. ", 1)[0]
     assert "`OK version: unit=<unit id> Version class: <x.y.z> <class>: <reason>`" in step7
     step8 = skill.split("\n8. ", 1)[1].split("\n9. ", 1)[0]
-    header = "| Unit | What it builds | Starts from | Waits on | Shares files with | Version line |"
+    header = (
+        "| Unit | What it builds | Starts from | Waits on | Shares files with | Needs "
+        "| Version line |"
+    )
     assert header in step8
     assert VERSION_SHAPE in step8 and "a plan with no version line, leaves it empty" in step8

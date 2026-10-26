@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0060: the orchestrator's Agent and SendMessage calls meet the coder dispatch and plan gates.
+# 0134: a docs-writer dispatch names the train's <train-id>-docstage worktree and binds it alone.
 # A resume handing a coder another unit's Worktree: line rebinds it here (0086, spec 8).
 from __future__ import annotations
 

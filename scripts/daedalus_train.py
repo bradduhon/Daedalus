@@ -21,6 +21,7 @@ from lib.train_runner import (  # noqa: E402
     choice,
     progress,
     reaudit,
+    record_docs_verdict,
     record_exception,
     record_ledger,
     record_plan,
@@ -65,12 +66,19 @@ def _parser() -> argparse.ArgumentParser:
     chose.add_argument("--over", required=True)
     chose.add_argument("--cost", required=True)
     chose.add_argument("--phase")
+    # 0129: the driver that decided and the rule number or principle id that settled it.
+    chose.add_argument("--driver")
+    chose.add_argument("--rule")
     plan = sub.add_parser("plan")
     plan.add_argument("--repo", type=Path, required=True)
     plan.add_argument("--path", type=Path, required=True)
+    # 0133, 0139: one exemption per finding, with how the operator chose to track it.
     waive = sub.add_parser("exception")
     waive.add_argument("--repo", type=Path, required=True)
     waive.add_argument("--ledger-id", dest="ledger_id", required=True)
+    waive.add_argument("--finding", required=True)
+    waive.add_argument("--tracking", required=True)
+    waive.add_argument("--other")
     judged = sub.add_parser("verdict")
     judged.add_argument("--repo", type=Path, required=True)
     judged.add_argument("--status", required=True)
@@ -80,6 +88,8 @@ def _parser() -> argparse.ArgumentParser:
     # 0109, 59, pin C3 -> C5: the auditor's finding list and the tip its verdict line names.
     judged.add_argument("--findings", type=Path)
     judged.add_argument("--tip")
+    # 0131: --gate docs records the docs verifier's verdict, verified or refuted.
+    judged.add_argument("--gate", choices=("security", "docs"), default="security")
     ledger = sub.add_parser("ledger")
     ledger.add_argument("--repo", type=Path, required=True)
     ledger.add_argument("--sha", required=True)
@@ -108,12 +118,22 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "progress":
         return progress(repo)
     if args.action == "choice":
-        return choice(repo, args.chose, args.over, args.cost, args.phase)
+        return choice(repo, args.chose, args.over, args.cost, args.phase, args.driver, args.rule)
     if args.action == "plan":
         return record_plan(repo, args.path)
     if args.action == "exception":
-        return record_exception(repo, args.ledger_id)
+        return record_exception(repo, args.ledger_id, args.finding, args.tracking, args.other)
     if args.action == "verdict":
+        if args.gate == "docs":
+            if args.round_ is not None or args.seq is not None:
+                return Outcome(
+                    EXIT_STOP,
+                    [
+                        "verdict --gate docs takes no --round or --seq; the docs verdict has no "
+                        "audit round. Next: rerun it with --status and, when refuted, --findings."
+                    ],
+                )
+            return record_docs_verdict(repo, args.status, args.tip, args.findings)
         if args.status == "approved" and args.tip is None:
             # pin C3 -> C5: an approval always names the tip the auditor judged.
             return Outcome(

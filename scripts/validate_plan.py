@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0086, spec 3.2: validate_plan.py <path> [--max-concurrent N]; exit 0 prints OK, exit 1 defects.
 # Spec 3.4: a plan with a version line also prints an OK version line after the OK plan line.
+# Pin MAP -> REQ: --map <map.json> adds one defect per path two unjoined units own.
 from __future__ import annotations
 
 import sys
@@ -10,27 +11,49 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.config import DEFAULT_MAX_CONCURRENT_BUILDERS  # noqa: E402
-from lib.plan_record import PlanError, graph_line, load, validate  # noqa: E402
+from lib.plan_record import (  # noqa: E402
+    PlanError,
+    graph_line,
+    load,
+    ownership_defects,
+    read_ownership,
+    validate,
+)
 
-USAGE = "usage: validate_plan.py <path to a plan.md file> [--max-concurrent N]"
-USAGE_NEXT = "Next: pass one plan file path and, optionally, a coder count of 1 or more."
+USAGE = "usage: validate_plan.py <path to a plan.md file> [--max-concurrent N] [--map <map.json>]"
+USAGE_NEXT = (
+    "Next: pass one plan file path and, optionally, a coder count of 1 or more and the "
+    "map.json path daedalus_map.py wrote."
+)
 PLAN_NEXT = "Next: fix each defect above in the plan block, then rerun the validator."
 READ_NEXT = "Next: check the path, then rerun the validator on the plan file the planner wrote."
+MAP_NEXT = "Next: rerun daedalus_map.py with --plan on this plan, then rerun the validator."
 
 
-def _args(argv: list[str]) -> tuple[Path, int] | None:
+def _option(rest: list[str], flag: str) -> str | None:
+    # Pin MAP -> REQ: removes `flag <value>` from rest; "" means a flag with no usable value.
+    if flag not in rest:
+        return None
+    at = rest.index(flag)
+    value = rest[at + 1] if at + 1 < len(rest) else ""
+    del rest[at : at + 2]
+    return "" if value.startswith("--") else value
+
+
+def _args(argv: list[str]) -> tuple[Path, int, Path | None] | None:
     rest = list(argv)
     limit = DEFAULT_MAX_CONCURRENT_BUILDERS
-    if "--max-concurrent" in rest:
-        at = rest.index("--max-concurrent")
-        value = rest[at + 1] if at + 1 < len(rest) else ""
-        if not value.isdigit() or int(value) < 1:
+    count = _option(rest, "--max-concurrent")
+    if count is not None:
+        if not count.isdigit() or int(count) < 1:
             return None
-        limit = int(value)
-        del rest[at : at + 2]
+        limit = int(count)
+    mapped = _option(rest, "--map")
+    if mapped == "":
+        return None
     if len(rest) != 1 or rest[0].startswith("--"):
         return None
-    return Path(rest[0]), limit
+    return Path(rest[0]), limit, Path(mapped) if mapped else None
 
 
 def main(argv: list[str]) -> int:
@@ -38,13 +61,19 @@ def main(argv: list[str]) -> int:
     if parsed is None:
         print(f"{USAGE}\n{USAGE_NEXT}", file=sys.stderr)
         return 1
-    path, limit = parsed
+    path, limit, map_path = parsed
     try:
         plan = load(path)
     except PlanError as exc:
         print(f"{exc}\n{READ_NEXT}")
         return 1
     defects = validate(plan, limit)
+    if map_path is not None:
+        try:
+            defects += ownership_defects(plan, read_ownership(map_path))
+        except PlanError as exc:
+            print("\n".join([*defects, str(exc), MAP_NEXT]))
+            return 1
     if defects:
         print("\n".join([*defects, PLAN_NEXT]))
         return 1

@@ -13,9 +13,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from checks.read_only_bash import read_segment_ok  # noqa: E402
 from lib import hook_io, jail, shell  # noqa: E402
 from lib.audit import project_root  # noqa: E402
+from lib.manifest import ManifestError, manifest_path  # noqa: E402
+from lib.manifest import load as load_manifest  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset({"Bash"})
-NAMES = frozenset({"append_ledger", "git", "gh", "gitleaks", "read", "train", "inspect"})
+NAMES = frozenset(
+    {"append_ledger", "git", "gh", "gitleaks", "read", "train", "inspect", "terraform"}
+)
 FLAGS: dict[str, hook_io.Flag] = {"--allow": hook_io.Flag(values=NAMES, many=True)}
 PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
 _SCRIPTS = os.path.realpath(Path(__file__).resolve().parents[1])
@@ -27,16 +31,20 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"ledger", "summary"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
-    "daedalus_doctor.py": frozenset({"--print-cache-dir"}),
+    "daedalus_doctor.py": frozenset({"--print-cache-dir", "--check-tools"}),
     "audit_report.py": None,
     "validate_plan.py": None,
+    # Pins MAP -> REQ, SRC -> MAP: the dependency map, and both frozen source forms (flag D).
+    "daedalus_map.py": frozenset({"--repo"}),
+    "freeze_sources.py": frozenset({"--train", "--verify", "--baselines-only"}),
 }
 # 0060: the inspect class is the auditor's read-only set plus the unit-descent check.
 INSPECT_GIT = shell.READ_ONLY_GIT | {"merge-base"}
 R_ORCHESTRATOR_BASH = (
     "the orchestrator's Bash runs only daedalus_train.py with its train subcommands and ledger, "
     "daedalus_workspace.py create, lock, refresh and finish, daedalus_doctor.py "
-    "--print-cache-dir, audit_report.py and validate_plan.py by their absolute plugin path, and "
+    "--print-cache-dir and --check-tools, audit_report.py, validate_plan.py, daedalus_map.py "
+    "--repo and freeze_sources.py --train or --verify by their absolute plugin path, and "
     "read-only inspection with git reads, date -u and sed -n line ranges (0060, 0119). "
     "Next: use those only; a stop, a resume, a reaudit, an exception record, a push and a merge "
     "into main belong to the main session and the operator."
@@ -49,6 +57,53 @@ R_TRAIN_REPO = (
     "{flag} {given} is not the project root of the working directory ({root}). "
     "Next: run the command from {given}, or pass {flag} {root}."
 )
+# MAP -> REQ: the map writes only into the active train's map folder, else the train scratch.
+MAP_SCRIPT = "daedalus_map.py"
+OUT_FLAG = "--out"
+R_MAP_OUT = (
+    "daedalus_map.py writes its map only into {allowed}; --out {given} is outside it. "
+    "Next: pass --out {allowed}."
+)
+
+
+# 0132: the terraform class, `terraform [-chdir=<folder in the project>] fmt -check | validate`.
+TERRAFORM_FORMS = (("fmt", "-check"), ("validate",))
+R_TERRAFORM = (
+    "the terraform class runs only `terraform fmt -check` and `terraform validate`, each with an "
+    "optional -chdir=<absolute folder inside the project> (0132). Next: send one of those forms; "
+    "init, plan, apply and every other subcommand stay with the operator."
+)
+R_TERRAFORM_OFF = (
+    "features.terraform_tools is false in {manifest}, so the terraform class runs nothing "
+    "(0132). Next: judge the Terraform files by reading them, and report the skipped checks."
+)
+R_TERRAFORM_MANIFEST = (
+    "the service manifest could not be read, so the terraform class runs nothing (0132): {cause}"
+)
+
+
+def terraform_reason(segment: list[str], cwd: str) -> str | None:
+    # 0132: None admits the segment; a refusal names the form or the manifest switch.
+    if segment[:1] != ["terraform"]:
+        return R_TERRAFORM  # 0132: the binary on PATH only, never a path to another binary.
+    rest = segment[1:]
+    chdir = rest[0].removeprefix("-chdir=") if rest[:1] and rest[0].startswith("-chdir=") else None
+    if chdir is not None:
+        rest = rest[1:]
+    if tuple(rest) not in TERRAFORM_FORMS or not os.path.isabs(cwd):
+        return R_TERRAFORM
+    root = os.path.realpath(project_root(cwd))
+    if chdir is not None:
+        real = os.path.realpath(chdir)
+        if not os.path.isabs(chdir) or ".." in chdir.split("/") or not shell._under(real, root):
+            return R_TERRAFORM
+    try:
+        loaded = load_manifest(Path(root))
+    except ManifestError as exc:
+        return R_TERRAFORM_MANIFEST.format(cause=exc)
+    if loaded is not None and loaded.features.terraform_tools is False:
+        return R_TERRAFORM_OFF.format(manifest=manifest_path(Path(root)))
+    return None
 
 
 def _reason(allowed: frozenset[str]) -> str:
@@ -88,6 +143,40 @@ def train_repo_reason(segment: list[str], cwd: str) -> str | None:
         if not root or os.path.realpath(os.path.join(cwd, given)) != root:
             return R_TRAIN_REPO.format(flag=flag, given=given, root=root or cwd)
     return None
+
+
+def _out_values(args: list[str]) -> list[str] | None:
+    # MAP -> REQ: every --out value, joined or split; None for an abbreviation or no value.
+    found: list[str] = []
+    for idx, arg in enumerate(args):
+        flag, eq, value = arg.partition("=")
+        if flag == OUT_FLAG:
+            if not eq:
+                value = args[idx + 1] if idx + 1 < len(args) else ""
+            if not value:
+                return None
+            found.append(value)
+        elif len(flag) > 2 and OUT_FLAG.startswith(flag):
+            return None
+    return found
+
+
+def map_out_reason(segment: list[str], cwd: str) -> str | None:
+    # MAP -> REQ: one --out, resolving to <repo>/docs/.tmp/daedalus/<train-id>/map.
+    if os.path.basename(os.path.realpath(segment[1])) != MAP_SCRIPT:
+        return None
+    root = os.path.realpath(project_root(cwd)) if os.path.isabs(cwd) else cwd
+    scratch = os.path.join(root, "docs", ".tmp", "daedalus")
+    branch = jail._train_branch(cwd) if os.path.isabs(cwd) else None
+    train = branch.removeprefix("daedalus/") if branch else ""
+    allowed = os.path.join(scratch, train, "map") if train else scratch + os.sep
+    values = _out_values(segment[2:])
+    if values is None or len(values) != 1:
+        return R_MAP_OUT.format(allowed=allowed, given="(one value)")
+    # MAP -> REQ: a relative --out joins the project root, as daedalus_map.py joins it to --repo.
+    real = os.path.realpath(os.path.join(root, values[0]))
+    ok = real == allowed if train else real.startswith(allowed)
+    return None if ok else R_MAP_OUT.format(allowed=allowed, given=values[0])
 
 
 def train_script_ok(segment: list[str], cwd: str | None = None) -> bool:
@@ -170,11 +259,16 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
             if shell.docs_read_ok(segment, raw, roots, cwd, base):
                 continue
         if "train" in allowed and train_script_ok(segment):
-            mismatch = train_repo_reason(segment, cwd)
+            mismatch = train_repo_reason(segment, cwd) or map_out_reason(segment, cwd)
             if mismatch is not None:
                 return mismatch
             continue
         if "inspect" in allowed and _inspect_ok(segment, cwd):
+            continue
+        if "terraform" in allowed and name == "terraform":
+            refused = terraform_reason(segment, cwd)
+            if refused is not None:
+                return refused
             continue
         return _reason(allowed)
     return None

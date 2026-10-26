@@ -43,6 +43,7 @@ JAIL_PASSTHROUGH: frozenset[str] = frozenset()
 SHARED = frozenset(
     {"runs_claude", "WRAPPER_OPTS", "DURATION", "strip_wrappers", "quote_walk", "unwrap"}
     | {"WrapperOption", "WRAPPER_CHDIR", "WRAPPER_WRITES"}
+    | {"worker_parse", "chain_bases"}
 )
 
 

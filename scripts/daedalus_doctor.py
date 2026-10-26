@@ -27,8 +27,9 @@ from lib.audit import (  # noqa: E402
 )
 from lib.config import Config, ConfigError, load_config  # noqa: E402
 from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
-from lib.manifest import ManifestError  # noqa: E402
+from lib.manifest import ManifestError, PrioritiesError  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
+from lib.plan_record import is_need  # noqa: E402
 from lib.workspace import _BARE_VERSION, UNMARK_NEXT, VERSION_FILE, train_marker  # noqa: E402
 
 REQ_DOC = "docs/project-requirements.md"
@@ -421,6 +422,30 @@ def _manifest_check(repo: Path) -> tuple[bool, str]:
     )
 
 
+def _priorities_check(repo: Path) -> Iterator[tuple[bool, str]]:
+    # 0129, F.5: the ranking and the rule count, or the key reference row a bad block broke.
+    try:
+        manifest = load_manifest(repo)
+    except PrioritiesError as exc:
+        row = f"priorities.{exc.row}" if exc.row else "priorities"
+        yield _check(
+            False,
+            "priorities",
+            f"the block breaks key reference row {row}",
+            "correct that field against its row in the README key reference",
+        )
+        return
+    except ManifestError:
+        return  # 0054: the manifest line already reports the unreadable file.
+    declared = manifest.priorities if manifest is not None else None
+    if declared is None:
+        yield _check(True, "priorities: none declared", "", "")
+        return
+    count = len(declared.rules)
+    rules = f"{count} rule{'' if count == 1 else 's'}"
+    yield _check(True, f"priorities: {' > '.join(declared.drivers)}, {rules}", "", "")
+
+
 def _typecheck_check(repo: Path, run: bool = False) -> Iterator[tuple[bool, str]]:
     # 38, 0076: the declared typecheck_cmd runs only on --run-typecheck, argv only, bounded;
     # no line when none is declared.
@@ -480,6 +505,7 @@ def _repo_checks(
         yield _clean_tree_check(repo)
         yield from _version_tag_check(repo)
     yield _manifest_check(repo)
+    yield from _priorities_check(repo)
     yield from _typecheck_check(repo, run_typecheck)
     yield _opt(
         (repo / "contracts").is_dir(),
@@ -554,6 +580,33 @@ def print_cache_dir() -> int:
     return 0
 
 
+def _tool_present(repo: Path, name: str) -> bool:
+    # 0128: a name with a slash is a repo-relative executable, such as .venv/bin/pytest; else PATH.
+    if "/" in name:
+        path = repo / name
+        return path.is_file() and os.access(path, os.X_OK)
+    return shutil.which(name) is not None
+
+
+def check_tools(repo: Path, value: str) -> int:
+    # Pin REQ -> MAP: one OK or MISS line per name; exit 1 on any MISS.
+    names = [name.strip() for name in value.split(",")]
+    bad = [name for name in names if not is_need(name)]
+    if bad or not names:
+        print(
+            f"--check-tools takes tool names or repo-relative paths separated by commas; "
+            f"refused: {', '.join(bad) or '(none)'}. Next: pass names such as mypy,.venv/bin/ruff.",
+            file=sys.stderr,
+        )
+        return 1
+    missing = False
+    for name in names:
+        present = _tool_present(repo, name)
+        missing = missing or not present
+        print(f"{'OK  ' if present else 'MISS'} tool {name}")
+    return 1 if missing else 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="daedalus first-run check. Changes nothing.")
     parser.add_argument(
@@ -575,7 +628,15 @@ def main(argv: list[str]) -> int:
         help="run the stack.typecheck_cmd the repository declares in service-manifest.json;"
         " this executes a command the repository chose",
     )
+    parser.add_argument(
+        "--check-tools",
+        metavar="NAME[,NAME...]",
+        help="print OK or MISS for each tool name on PATH or executable path under --repo, and"
+        " exit 1 on any MISS",
+    )
     args = parser.parse_args(argv)
+    if args.check_tools is not None:
+        return check_tools(Path(args.repo).resolve(), args.check_tools)
     if args.print_cache_dir:
         return print_cache_dir()
     if args.print_secrets_scan:

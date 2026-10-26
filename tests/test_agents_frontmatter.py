@@ -28,6 +28,11 @@ EXPECTED_MODEL = {
     "planner": "opus",
     "orchestrator": "fable",
     "verifier": "opus",
+    "dependency-auditor": "sonnet",
+    "terraform-reviewer": "sonnet",
+    "docs-writer": "opus",
+    "doc-deriver": "opus",
+    "change-logger": "opus",
 }
 # 0089: phase affinities guide the session's choice of agent; they never gate a phase.
 EXPECTED_PHASES = {
@@ -43,6 +48,11 @@ EXPECTED_PHASES = {
     "planner": ("plan",),
     "orchestrator": ("context", "clarification", "plan", "implementation", "audit"),
     "verifier": ("implementation",),
+    "dependency-auditor": ("audit",),
+    "terraform-reviewer": ("audit",),
+    "docs-writer": ("audit",),
+    "doc-deriver": ("implementation",),
+    "change-logger": ("implementation",),
 }
 # 0060: the orchestrator alone dispatches; the dispatch hook refuses a Task call by name.
 DISPATCHER_TOOLS = {"orchestrator": {"Agent", "SendMessage"}}
@@ -214,7 +224,9 @@ def test_every_persona_forbids_dashes(name: str) -> None:
     assert "U+2014" in text
 
 
-@pytest.mark.parametrize("name", ["repo-coder", "charter-docs", "pr-train-conductor"])
+@pytest.mark.parametrize(
+    "name", ["repo-coder", "charter-docs", "pr-train-conductor", "docs-writer"]
+)
 def test_committing_personas_forbid_attribution_trailers(name: str) -> None:
     text = (AGENTS / f"{name}.md").read_text()
     assert "Commit messages carry no Co-Authored-By or other attribution trailer." in text

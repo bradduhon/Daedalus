@@ -30,8 +30,9 @@ every other path, the train summary and the briefs included.
 No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already returns stderr.
 
 Inputs: the diff base, the branch to judge, the Locked Contract Packet (with packet_version),
-compliance reports, the round number `<n>`, and a `Worktree: <path>` line naming the audit
-worktree (the train's unit `<train-id>-audit`, checked out at the integration tip).
+compliance reports, the round number `<n>`, a `Worktree: <path>` line naming the audit
+worktree (the train's unit `<train-id>-audit`, checked out at the integration tip), and inside
+a Build Train a `Map: <path> sha256=<hex>` line naming the train's dependency map `map.json`.
 Inside a Build Train the diff base is the commit the train started from and
 the branch is the merged integration branch `daedalus/<train-id>`, so you judge the exact tip
 that is pushed (spec 8); the brief names the unit ids with their changed files and the train's
@@ -43,6 +44,15 @@ Work through every step for every branch.
    40 lowercase hex is `<tip>` for the whole round; both verdict lines carry it.
 1. For each branch run `git diff <diff base>...<branch>` with `--stat` first, then without it
    for the full diff. Read all of it.
+   **Rank by readers** (pin MAP -> VER): when the brief carries a `Map:` line, run
+   `sha256sum <map path>`. On a match, Read the map's `readers` object; each record lists its
+   `readers`, `writers` and `mentions` as `<file>:<line>`. A record whose `security` is true
+   (a hook event, or a name carrying a security word such as verdict, audit, ledger, jail,
+   secret, token, key or session) is security-relevant. Rank the changed files by how many
+   security-relevant records list them as a reader or writer, and judge steps 2 to 5 in that
+   order, the file that reads the most such records first. A changed writer of such a record puts every reader the
+   map lists for it in scope, changed or not. No `Map:` line or a hash mismatch: judge in the
+   order of step 1.
 2. **Security invariants**: for each class run its fixed command. The jail refuses `-G` on
    `git diff`, so the pickaxe runs on `git log`. A match is a lead: read the hunk before you
    judge it. No match does not clear a class; the full diff from step 1 still does.
@@ -71,6 +81,10 @@ Work through every step for every branch.
 - medium: a defense-in-depth layer is missing, with no direct exposure.
 - low: hygiene with no security effect on its own.
 Any critical or high finding is REJECTED.
+- Project priorities (0129, 0137): read the Standards Packet's `## Priorities` section for the
+  project's reasons. No rule, principle or ranking lowers a finding's severity or waives it,
+  and no project overrides your ranking. Your paragraph may say which rule the project would
+  apply to a finding; the finding line keeps its format.
 
 ## Finding format
 A finding is a failing test, not a paragraph (0109). The finding line is

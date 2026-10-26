@@ -26,17 +26,15 @@ Every file and setting daedalus reads, with the smallest example that works. `/d
   "operator_signing_keys": [],
   "max_concurrent_builders": 5,
   "audit_retention_days": null,
-  "audit_round_budget": 5,
   "agent_models": { "repo-coder": "sonnet", "security-auditor": "opus" }
 }
 ```
 
-Every key in this file is a row of the generated key reference in the plugin [README](../README.md#key-reference): what it governs, its type, its allowed values, its default and an example. The doctor checks `ledger`, `standards_sources`, `policy` and `audit_retention_days` **(checked)**. A key set to `null` counts as absent (0076). Five notes the table has no room for:
+Every key in this file is a row of the generated key reference in the plugin [README](../README.md#key-reference): what it governs, its type, its allowed values, its default and an example. The doctor checks `ledger`, `standards_sources`, `policy` and `audit_retention_days` **(checked)**. A key set to `null` counts as absent (0076). Four notes the table has no room for:
 
 - `ledger`: with no ledger declared and none found, the Build Train stops and asks before creating one.
 - `standards_sources`: with none declared, the Standards Packet is empty, the auditor judges against the spec only, and the doctor offers the baseline pack on an `OPT` line.
 - `audit_retention_days`: a whole number of at least 90 (AU-11). When a new session writes its first record, each older log is deleted under its own lock, and one `AuditRotation` record in the new session's chain names every deleted session with its final seq and hash (AU-9(4)). A log named on a summary's `Session <id>:` line, a log changed since an unmerged train started, the current session's log, and a log another session holds are kept. Any read or parse error deletes nothing.
-- `audit_round_budget`: a whole number from 1 to 10, default 5 (0109). For example, `"audit_round_budget": 3` lets a train run three audit rounds before it stops and asks you; a value outside 1 to 10, or `true` or `false`, refuses the config with a `Next:` line.
 - `agent_models`: an object from an agent name the catalog lists to `sonnet`, `opus`, `haiku` or `fable`. For example, `"agent_models": { "repo-coder": "sonnet" }` runs the coding agent on sonnet while every other agent keeps the model its agent file names. An unknown agent name or model refuses the config with a `Next:` line naming the key. Run `python3 scripts/catalog.py table --repo <repo>` from the plugin folder to see the model each agent runs on.
 
 ### Ledger formats

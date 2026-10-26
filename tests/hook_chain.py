@@ -123,6 +123,62 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("gh_classes", ()),
         ("dispatch_gate", ()),
     ),
+    # 0132: the two diff-content judges carry the verifier's read-only list without a test run.
+    "dependency-auditor": (
+        ("credential_paths", ()),
+        ("workspace_integrity", ()),
+        ("tool_bound", ()),
+        ("shell_tripwires", ()),
+        ("network_tools", ()),
+        ("read_only_bash", ("--git", "read-only")),
+        ("gh_classes", ()),
+    ),
+    # 0132: the reviewer's Bash is the inspect read set plus the two terraform forms.
+    "terraform-reviewer": (
+        ("credential_paths", ()),
+        ("workspace_integrity", ()),
+        ("tool_bound", ()),
+        ("shell_tripwires", ()),
+        ("network_tools", ()),
+        ("command_allowlist", ("--allow", "terraform,inspect")),
+        ("gh_classes", ()),
+    ),
+    # 0134: the docs writer carries the repo-coder's list with its write check narrowed by --docs.
+    "docs-writer": (
+        ("credential_paths", ()),
+        ("workspace_integrity", ()),
+        ("tool_bound", ()),
+        ("shell_tripwires", ()),
+        ("network_tools", ()),
+        ("git_push", ()),
+        ("git_grammar", ("--allow", "coder")),
+        ("unit_writes", ("--docs",)),
+        ("gh_classes", ()),
+        ("confine", ()),
+    ),
+    # 0135, D.5: the two document agents read through the read-only check and write only output.
+    "doc-deriver": (
+        ("credential_paths", ()),
+        ("workspace_integrity", ()),
+        ("tool_bound", ()),
+        ("shell_tripwires", ()),
+        ("network_tools", ()),
+        ("git_push", ()),
+        ("git_grammar", ()),
+        ("read_only_bash", ()),
+        ("doc_outputs", ()),
+    ),
+    "change-logger": (
+        ("credential_paths", ()),
+        ("workspace_integrity", ()),
+        ("tool_bound", ()),
+        ("shell_tripwires", ()),
+        ("network_tools", ()),
+        ("git_push", ()),
+        ("git_grammar", ()),
+        ("read_only_bash", ()),
+        ("doc_outputs", ()),
+    ),
 }
 _MODULES: dict[str, ModuleType] = {}
 

@@ -5,19 +5,24 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from lib import git
 from lib.agent_models import MODELS
 from lib.audit import check_project_data_dir
+from lib.project_root import in_git_work_tree
 from lib.train_scope import KNOWN_AGENTS
 
 POLICY_ENGINES = ("cfn-guard", "conftest")
+# D.2.1, 0136: the excluded root kinds this release resolves, and what a gitignore root takes.
+EXCLUDED_ROOT_KINDS = ("path", "gitignore")
+GITIGNORE_MATCHES = ("directories", "all")
 # 0072: how many coders a parallel stage runs at once when the config names no number.
 DEFAULT_MAX_CONCURRENT_BUILDERS = 5
-# 0109: audit rounds a train runs before the verdict step escalates on budget.
-DEFAULT_AUDIT_ROUND_BUDGET = 5
-AUDIT_ROUND_BUDGET_RANGE = (1, 10)
+# 0133: the audit round budget is retired; a config that still sets it is refused.
+RETIRED_ROUND_BUDGET = "audit_round_budget"
 # AU-11, AU-6: a declared audit retention keeps at least this many days of session logs.
 AUDIT_RETENTION_FLOOR_DAYS = 90
 LEDGER_FORMATS = ("markdown-table-row", "heading-entry")
@@ -52,15 +57,29 @@ class StandardsSource:
 
 
 @dataclass(frozen=True)
+class ExcludedRootDecl:
+    kind: str
+    path: str | None = None
+    match: str = "directories"
+
+
+@dataclass(frozen=True)
+class ExcludedRoot:
+    # D.2.1: ignored is True for a gitignore root and None until git check-ignore is asked.
+    path: str
+    ignored: bool | None = None
+
+
+@dataclass(frozen=True)
 class Config:
     charter_root: Path | None = None
+    excluded_roots: tuple[ExcludedRootDecl, ...] = field(default_factory=tuple)
     ledger: LedgerDecl | None = None
     policy: PolicyDecl | None = None
     standards_sources: tuple[StandardsSource, ...] = field(default_factory=tuple)
     operator_signing_keys: tuple[str, ...] = field(default_factory=tuple)
     max_concurrent_builders: int = DEFAULT_MAX_CONCURRENT_BUILDERS
     audit_retention_days: int | None = None
-    audit_round_budget: int = DEFAULT_AUDIT_ROUND_BUDGET
     agent_models: dict[str, str] = field(default_factory=dict)
 
 
@@ -112,17 +131,14 @@ def _retention_days(raw: dict[str, object]) -> int | None:
     return value
 
 
-def _round_budget(raw: dict[str, object]) -> int:
-    # 0109: a whole number in range; bool is refused, as _max_builders refuses it.
-    low, high = AUDIT_ROUND_BUDGET_RANGE
-    value = raw.get("audit_round_budget", DEFAULT_AUDIT_ROUND_BUDGET)
-    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+def _refuse_round_budget(raw: dict[str, object]) -> None:
+    # 0133: every failing gate goes to the operator, so no number of rounds is configured.
+    if RETIRED_ROUND_BUDGET in raw:
         raise ConfigError(
-            f"config.json audit_round_budget must be a whole number from {low} to {high} "
-            f"(got {value!r}). Next: set audit_round_budget to {low} to {high}, or remove it "
-            f"to allow {DEFAULT_AUDIT_ROUND_BUDGET} rounds."
+            f"config.json sets {RETIRED_ROUND_BUDGET}, which Daedalus removed: the operator now "
+            "decides each audit finding, with no round budget. "
+            f"Next: delete the {RETIRED_ROUND_BUDGET} line from .claude/daedalus/config.json."
         )
-    return value
 
 
 def _agent_models(raw: dict[str, object]) -> dict[str, str]:
@@ -220,6 +236,110 @@ def _pack(name: object) -> StandardsSource:
     )
 
 
+def _excluded_roots(raw: object) -> tuple[ExcludedRootDecl, ...]:
+    # D.2.1, 0136: a literal folder or the repository's ignored paths; the plugin names none.
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigError(
+            "config.json excluded_roots must be a list. "
+            'Next: write it as [{"kind": "path", "path": "<repo_root>/private/"}], or remove it.'
+        )
+    out: list[ExcludedRootDecl] = []
+    for item in raw:
+        kind = item.get("kind") if isinstance(item, dict) else None
+        if not isinstance(item, dict) or kind not in EXCLUDED_ROOT_KINDS:
+            raise ConfigError(
+                f"each excluded_roots entry needs a kind of {' or '.join(EXCLUDED_ROOT_KINDS)} "
+                f"(got {item!r}). Next: give the entry a kind of path or gitignore."
+            )
+        if kind == "path":
+            out.append(ExcludedRootDecl("path", _require_str(item, "path", "excluded_roots[]")))
+            continue
+        match = item.get("match", "directories")
+        if match not in GITIGNORE_MATCHES:
+            raise ConfigError(
+                f"config.json excluded_roots[].match must be one of {GITIGNORE_MATCHES} "
+                f"(got {match!r}). Next: set match to directories or all, or remove it."
+            )
+        out.append(ExcludedRootDecl("gitignore", None, str(match)))
+    return tuple(out)
+
+
+def _root_path(raw: str, repo_root: Path, charter_root: Path | None) -> str:
+    if "<charter_root>" in raw:
+        if charter_root is None:
+            raise ConfigError(
+                f"excluded root {raw} uses <charter_root> but no charter_root is set. "
+                "Next: set charter_root in .claude/daedalus/config.json, or write the path."
+            )
+        raw = raw.replace("<charter_root>", str(charter_root))
+    path = Path(raw.replace("<repo_root>", str(repo_root)))
+    # D.2.1: a relative root is read against the project root, never the process cwd.
+    return os.path.normpath(path if path.is_absolute() else repo_root / path)
+
+
+def _git_lines(args: list[str], repo_root: Path) -> list[str]:
+    try:
+        out = git.run(args, repo_root, 5)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ConfigError(
+            f"git {args[0]} failed in {repo_root} ({exc}). Next: fix git there, then rerun."
+        ) from exc
+    if out.returncode != 0:
+        first = (out.stderr.strip().splitlines() or ["no stderr"])[0]
+        raise ConfigError(
+            f"git {args[0]} failed in {repo_root} ({first}). "
+            "Next: fix git in that folder, then rerun."
+        )
+    return [line for line in out.stdout.split("\0" if "-z" in args else "\n") if line]
+
+
+def _ignored_paths(repo_root: Path, match: str) -> list[str]:
+    # D.2.1: a folder holding a linked worktree is another checkout, not excluded content.
+    if not in_git_work_tree(repo_root):
+        return []
+    args = ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"]
+    entries = _git_lines(args, repo_root)
+    listed = _git_lines(["worktree", "list", "--porcelain"], repo_root)
+    trees = [os.path.normpath(line[9:]) for line in listed if line.startswith("worktree ")]
+    out: list[str] = []
+    for entry in entries:
+        if match == "directories" and not entry.endswith("/"):
+            continue
+        path = os.path.normpath(repo_root / entry)
+        if not any(t == path or t.startswith(path + os.sep) for t in trees):
+            out.append(path)
+    return out
+
+
+def resolve_excluded_roots(config: Config, repo_root: Path) -> tuple[ExcludedRoot, ...]:
+    # D.2.1: resolved on each call from project metadata; no block resolves to none.
+    found: dict[str, ExcludedRoot] = {}
+    for decl in config.excluded_roots:
+        if decl.kind == "path":
+            path = _root_path(str(decl.path), repo_root, config.charter_root)
+            found.setdefault(path, ExcludedRoot(path))
+            continue
+        for path in _ignored_paths(repo_root, decl.match):
+            found[path] = ExcludedRoot(path, True)
+    return tuple(found.values())
+
+
+def root_ignored(root: ExcludedRoot, tree: Path) -> bool:
+    # D.7: git check-ignore on the folder; an error or a tracked path reads as not ignored.
+    if root.ignored is not None:
+        return root.ignored
+    rel = os.path.relpath(root.path, tree)
+    if rel == "." or rel.startswith(".." + os.sep) or not in_git_work_tree(tree):
+        return False
+    try:
+        out = git.run(["check-ignore", "-q", "--", rel + "/"], tree, 5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.returncode == 0
+
+
 def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
     if path is None:
         if not cwd or not os.path.isabs(cwd):
@@ -249,16 +369,17 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
             f"{target} must contain a JSON object. "
             "Next: make the file one JSON object, as docs/project-requirements.md shows."
         )
+    _refuse_round_budget(raw)
     # 0076: null is not declared, the same as an absent key; the setup starter writes null.
     charter = _require_str(raw, "charter_root", "") if raw.get("charter_root") is not None else None
     return Config(
         charter_root=Path(charter) if charter is not None else None,
+        excluded_roots=_excluded_roots(raw.get("excluded_roots")),
         ledger=_ledger(raw["ledger"]) if raw.get("ledger") is not None else None,
         policy=_policy(raw["policy"]) if raw.get("policy") is not None else None,
         standards_sources=_sources(raw.get("standards_sources")),
         operator_signing_keys=_signing_keys(raw),
         max_concurrent_builders=_max_builders(raw),
         audit_retention_days=_retention_days(raw),
-        audit_round_budget=_round_budget(raw),
         agent_models=_agent_models(raw),
     )

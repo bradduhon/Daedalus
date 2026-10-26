@@ -10,3 +10,18 @@ edge: U2 -> U3 | kind: serial | why: c imports b
 edge: U3 -> U1 | kind: serial | why: a imports c
 graph: units=3 critical_path=3 width=1 overlap_only=none
 ```
+
+### U1: plan parser
+
+Requirements:
+1. Make `scripts/lib/a.py` import `scripts/lib/c.py`.
+
+### U2: plan gate
+
+Requirements:
+1. Make `scripts/lib/b.py` import `scripts/lib/a.py`.
+
+### U3: catalog
+
+Requirements:
+1. Make `scripts/lib/c.py` import `scripts/lib/b.py`.

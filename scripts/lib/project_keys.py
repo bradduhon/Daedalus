@@ -9,8 +9,6 @@ from dataclasses import dataclass, fields
 from lib.agent_models import MODELS
 from lib.config import (
     AUDIT_RETENTION_FLOOR_DAYS,
-    AUDIT_ROUND_BUDGET_RANGE,
-    DEFAULT_AUDIT_ROUND_BUDGET,
     LEDGER_FIELDS,
     Config,
     LedgerDecl,
@@ -18,10 +16,23 @@ from lib.config import (
     StandardsSource,
 )
 from lib.manifest import (
+    DOCS_KEYS,
+    DRIVERS,
     FEATURE_KEYS,
+    LITERACY_LEVELS,
+    LITERACY_PROFILE,
     MANIFEST_NAME,
+    MAX_PRINCIPLES,
+    MAX_RULES,
     NARROWING_KEYS,
+    NOT_OVERRIDABLE,
+    NOTE_MAX,
+    PRIORITY_ROWS,
+    REASONS,
     STACK_COMMANDS,
+    SURFACE,
+    TEXT_MAX,
+    Docs,
     Features,
     Manifest,
 )
@@ -47,6 +58,10 @@ def manifest_keys() -> tuple[str, ...]:
     for item in fields(Manifest):
         if item.name == "features":
             keys.extend(f"features.{key}" for key in FEATURE_KEYS)
+        elif item.name == "docs":
+            keys.extend(f"docs.{key}" for key in DOCS_KEYS)
+        elif item.name == "priorities":
+            keys.extend(f"priorities.{row}" for row in PRIORITY_ROWS)
         elif item.name in _MANIFEST_PARENT:
             keys.append(f"{_MANIFEST_PARENT[item.name]}.{item.name}")
         else:
@@ -75,6 +90,10 @@ def starter_manifest() -> dict[str, object]:
             doc["features"] = {
                 f.name: False if "bool" in str(f.type) else None for f in fields(Features)
             }
+        elif item.name == "docs":
+            doc["docs"] = {f.name: _json(getattr(Docs(), f.name)) for f in fields(Docs)}
+        elif item.name == "priorities":
+            continue  # 0129, F.6: the starter carries no priorities key; absent is none declared.
         elif item.name in _MANIFEST_PARENT:
             parent = _MANIFEST_PARENT[item.name]
             doc[parent] = block = blocks.setdefault(parent, {})
@@ -139,6 +158,12 @@ _LEDGER_SEQUENCE = KeyRow(
     '`"last-row-id"`',
 )
 _COMMAND_VALUES = "A non-empty command string, or `null`"
+_DRIVER_NAMES = ", ".join(f"`{driver}`" for driver in DRIVERS)
+# 0134: the docs.literacy values the key reference and the setup command show.
+LITERACY_EXAMPLES = (
+    *(f'"{level}"' for level in LITERACY_LEVELS),
+    f'"{LITERACY_PROFILE}docs/voice-profile.md"',
+)
 # 0076, B7: one row per reader key; tests hold the README table equal to reference_table().
 KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     (MANIFEST_FILE, "jail_narrowing.forbidden_paths"): KeyRow(
@@ -199,6 +224,24 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`false`: the doctor never fails on gh",
         "`true`",
     ),
+    (MANIFEST_FILE, "features.dependency_web_lookup"): KeyRow(
+        "Lets the dependency auditor ask for security advisories on the web; the train sends "
+        "its questions to the web researcher. With it off, the auditor judges from the lockfile "
+        "and any advisory export the project supplies (0132)",
+        "boolean or null",
+        "`true`, `false` or `null`; only `false` turns the lookup off",
+        "`null`: the lookup is on",
+        "`false`",
+    ),
+    (MANIFEST_FILE, "features.terraform_tools"): KeyRow(
+        "Lets the Terraform reviewer run `terraform fmt -check` and `terraform validate` on the "
+        "Terraform files a train changes. With it off, the reviewer judges by reading the files "
+        "(0132)",
+        "boolean or null",
+        "`true`, `false` or `null`; only `false` turns both commands off",
+        "`null`: both commands may run",
+        "`false`",
+    ),
     (MANIFEST_FILE, "trains_dir"): KeyRow(
         "The project folder that holds its own train definitions; a train is looked up there "
         "first, as `<trains_dir>/<name>.json`, and then in the plugin's own trains folder (0073)",
@@ -232,6 +275,91 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`null`: no declared command",
         '`"ruff check ."`',
     ),
+    (MANIFEST_FILE, "docs.literacy"): KeyRow(
+        "How plainly the docs writer writes the public docs at the end of a Build Train, as a "
+        "reader level or a voice profile the project declares; a brief may override it (0134)",
+        "string or null",
+        ", ".join(f"`{example}`" for example in LITERACY_EXAMPLES[:-1])
+        + f" or `{LITERACY_EXAMPLES[-1]}`, a project-relative path to the profile file without "
+        "a leading slash, `..` or glob characters",
+        "`null`: the writer keeps the register the public docs already use",
+        f"`{LITERACY_EXAMPLES[0]}`",
+    ),
+    (MANIFEST_FILE, "priorities.drivers"): KeyRow(
+        "Which concern wins when two conflict and no rule below matches, for every agent in "
+        "every train, never the operator's own session (0129, 0137)",
+        "list of strings",
+        f"Each of {_DRIVER_NAMES} exactly once, highest first",
+        "No `priorities` key: none declared, and agents follow no project ranking",
+        '`["security", "trust", "ops", "cost"]`',
+    ),
+    (MANIFEST_FILE, "priorities.rules[].when.conflict"): KeyRow(
+        "The two concerns a rule settles; rules are tried in order and the first match decides "
+        "(0129)",
+        "list of two strings",
+        f"Two different names of {_DRIVER_NAMES}; at most {MAX_RULES} rules",
+        "`rules` absent: no rule, so the ranking decides",
+        '`["security", "cost"]`',
+    ),
+    (MANIFEST_FILE, "priorities.rules[].when.reason"): KeyRow(
+        "Why the conflict arises; the rule matches only these reasons (0129)",
+        "list of strings",
+        "One or more of " + ", ".join(f"`{reason}`" for reason in REASONS) + ", each once",
+        "Required in each rule",
+        '`["certification", "framework"]`',
+    ),
+    (MANIFEST_FILE, "priorities.rules[].then"): KeyRow(
+        f"What a matching rule does: a concern named here wins and the agent decides alone; "
+        f"`{SURFACE}` puts the decision to the operator (0129)",
+        "string",
+        f"One of {_DRIVER_NAMES}, or `{SURFACE}`",
+        "Required in each rule",
+        f'`"{SURFACE}"`',
+    ),
+    (MANIFEST_FILE, "priorities.rules[].note"): KeyRow(
+        "The one line a choice record or a decision brief quotes when the rule applies (0129)",
+        "string",
+        f"One printable line of 1 to {NOTE_MAX} characters",
+        "Required in each rule",
+        '`"a control a certification asks for wins over its running cost"`',
+    ),
+    (MANIFEST_FILE, "priorities.principles[].id"): KeyRow(
+        "The name an agent cites when a decision rests on one of the project's principles (0129)",
+        "string",
+        f"`P` followed by digits, unique in the block; at most {MAX_PRINCIPLES} principles",
+        "`principles` absent: none declared",
+        '`"P1"`',
+    ),
+    (MANIFEST_FILE, "priorities.principles[].driver"): KeyRow(
+        "The concern a principle serves (0129)",
+        "string",
+        f"One of {_DRIVER_NAMES}",
+        "Required in each principle",
+        '`"security"`',
+    ),
+    (MANIFEST_FILE, "priorities.principles[].text"): KeyRow(
+        "The principle itself, as one sentence a decision brief quotes (0129)",
+        "string",
+        f"One printable line of 1 to {TEXT_MAX} characters",
+        "Required in each principle",
+        '`"Each tenant keeps its own key."`',
+    ),
+    (MANIFEST_FILE, "priorities.principles[].source"): KeyRow(
+        "Where the principle is written down, so a reader can follow it (0129)",
+        "string",
+        "A repo-relative path or a ruling id of the project's own ledger, without a leading "
+        "slash, `..` or glob characters",
+        "Absent: no source named",
+        '`"docs/design.md"`',
+    ),
+    (MANIFEST_FILE, "priorities.agents.<name>.drivers"): KeyRow(
+        "A different ranking for one agent; rules and principles still apply to it (0129)",
+        "list of strings",
+        f"Each of {_DRIVER_NAMES} exactly once; `<name>` is a Daedalus agent file name other "
+        f"than `{NOT_OVERRIDABLE}`, which is refused",
+        "Absent: the agent follows `priorities.drivers`",
+        '`{"repo-coder": {"drivers": ["cost", "security", "ops", "trust"]}}`',
+    ),
     (MANIFEST_FILE, "ledger.path"): KeyRow(
         "Where rulings are appended, declared for everyone who works on the project; it wins "
         "over the config's ledger block (0004)",
@@ -251,6 +379,18 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`null`: those agents write only inside the project, and the contract lives in "
         "`contracts/`",
         '`"/work/decisions"`',
+    ),
+    (CONFIG_FILE, "excluded_roots"): KeyRow(
+        "Folders whose files must never reach git, GitHub or a redirect. A Daedalus agent is "
+        "refused such a command in every session, and the main session is warned during a "
+        "train. A document train records the resolved folders in its frozen sources file (0136)",
+        "list of objects",
+        '`{"kind": "path", "path": "<folder>"}`, a folder with `<repo_root>` and '
+        "`<charter_root>` filled in and a relative path read from the project root; or "
+        '`{"kind": "gitignore", "match": "directories"}` (every folder git ignores) or '
+        '`"match": "all"` (every ignored path); a folder holding a linked worktree is skipped',
+        "`[]`: no folder is excluded",
+        '`[{"kind": "path", "path": "<repo_root>/private/"}]`',
     ),
     (CONFIG_FILE, "ledger.path"): KeyRow(
         "Where rulings are appended on this machine, used when the manifest declares no "
@@ -325,16 +465,6 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"A whole number of at least {AUDIT_RETENTION_FLOOR_DAYS}, or `null`",
         "`null`: every log is kept",
         "`365`",
-    ),
-    (CONFIG_FILE, "audit_round_budget"): KeyRow(
-        "How many audit rounds a Build Train runs on its own. A rejected round continues while "
-        "each round's findings shrink and no new high or critical finding appears; once the "
-        "rounds used reach this number, the train stops and asks the operator (0109)",
-        "integer",
-        f"A whole number from {AUDIT_ROUND_BUDGET_RANGE[0]} to {AUDIT_ROUND_BUDGET_RANGE[1]}; "
-        "`true` and `false` are refused",
-        f"`{DEFAULT_AUDIT_ROUND_BUDGET}`",
-        "`3`",
     ),
     (CONFIG_FILE, "agent_models"): KeyRow(
         "Which model each catalog agent runs on, in place of the `model:` line of its agent "

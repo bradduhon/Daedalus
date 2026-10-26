@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 
-from lib import git, train_state
+from lib import audit_rounds, git, train_state
 from lib.audit import GENESIS, AuditLockError, read_log, record_hash
 from lib.train_state import TRAIN_ID as _TRAIN_ID
 
@@ -26,6 +26,15 @@ HANDBACK = "SubagentHandback"
 _VERDICT_FIELDS = ("last_message_head", "last_message_tail")
 _HANDBACK_FIELD = "tool_input.message"
 TIP = re.compile(r"[0-9a-f]{40}")
+# 0131, 0134: the one list of the four public docs; dispatch_binding imports it.
+PUBLIC_DOCS = (
+    "README.md",
+    "docs/howto/README.md",
+    "docs/guardrails.md",
+    "docs/project-requirements.md",
+)
+# 0131: a public doc stays a regular non-executable file; 000000 marks a path that is new.
+DOC_MODE, NO_MODE = "100644", "000000"
 _SESSION_LINE = re.compile(r"^Session ([A-Za-z0-9_-]+):", re.MULTILINE)
 # pin D3 -> D1: the stop record's full-reply verdict lines; absent on a record written before D3.
 VERDICT_LINES = "verdict_lines"
@@ -50,6 +59,10 @@ R_GRADED_NOT_RECORDED = (
     "Next: rerun the audit round."
 )
 R_BOTH_VERDICTS = "auditor reply at seq {seq} carries both verdicts. Next: rerun the audit round."
+UNEXEMPTED_NEXT = (
+    "Next: put each finding to the operator through the per-finding step of the Build Train, "
+    "then record each exemption with daedalus_train.py exception, or run a fix round."
+)
 
 
 class ProofError(RuntimeError):
@@ -367,7 +380,9 @@ def _state(repo: Path, train_id: str) -> dict[str, object]:
         raise _not_approved(f"the state of train {train_id} is not readable ({exc})") from exc
 
 
-def _judged(repo: Path, train_id: str, state: dict[str, object], named: str | None) -> str:
+def _judged(
+    repo: Path, train_id: str, state: dict[str, object], named: str | None
+) -> tuple[str, str]:
     # 59: the recorded approval, the auditor's tip= and the integration tip agree.
     verdict = train_state.record(state, train_state.VERDICT)
     if verdict.get("status") != train_state.APPROVED:
@@ -381,10 +396,10 @@ def _judged(repo: Path, train_id: str, state: dict[str, object], named: str | No
     current = integration_tip(repo, train_id)
     if current is None:
         raise _not_approved(f"daedalus/{train_id} does not resolve to a commit")
-    problem = tip_problem(repo, judged, current)
+    problem = tip_admits(repo, train_id, state, judged, current)
     if problem is not None:
         raise _not_approved(problem)
-    return named
+    return named, current
 
 
 def _same_path(given: str, want: Path) -> bool:
@@ -516,25 +531,257 @@ def approved(repo: Path, train_id: str) -> str:
         raise ProofError(
             f"NOT APPROVED: {R_GRADED_NOT_RECORDED.format(graded=seq, recorded=recorded)}"
         )
-    tip = _judged(repo, train_id, state, verdict_tip(turn, seq))
+    tip, current = _judged(repo, train_id, state, verdict_tip(turn, seq))
     return (
         f"OK approved: approved verdict, train {train_id}, session {session}, "
         f"auditor record seq {seq}, judged tip {tip[:12]}"
+        f"{_docs_note(repo, train_id, state, current)}"
     )
 
 
+def findings_path(repo: Path, train_id: str, round_: int) -> Path:
+    # pin C3 -> C1: the one path of a round's finding list.
+    return repo / SUMMARY_DIR / train_id / "audit" / f"round{round_}" / "findings.txt"
+
+
+def read_findings(path: Path) -> dict[str, audit_rounds.Finding]:
+    if path.is_symlink() or not path.is_file():
+        raise ProofError(
+            f"{path} is not a regular file. Next: have the auditor write the round's finding list."
+        )
+    try:
+        return audit_rounds.parse(path.read_text(encoding="utf-8"), str(path))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ProofError(f"cannot read {path} ({exc}). Next: make it a UTF-8 file.") from exc
+    except audit_rounds.FindingsError as exc:
+        raise ProofError(str(exc)) from exc
+
+
+def docs_findings_path(repo: Path, train_id: str) -> Path:
+    # 0131: the one path of the refuted docs claim list, in the round list's line shape.
+    return repo / SUMMARY_DIR / train_id / "docs" / "findings.txt"
+
+
+def _exempt(entry: object, judged: str) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    ledger_id = entry.get("ledger_id")
+    return (
+        isinstance(ledger_id, str)
+        and bool(ledger_id)
+        and entry.get("tip") == judged
+        and entry.get("tracking") in train_state.TRACKING
+    )
+
+
+def round_keys(repo: Path, train_id: str, state: dict[str, object], round_: int) -> list[str]:
+    # 0133: the findings file and the round recorded at verdict time; a key in either counts.
+    listed = read_findings(findings_path(repo, train_id, round_))
+    recorded = train_state.record(train_state.record(state, train_state.AUDIT_ROUNDS), str(round_))
+    return sorted(set(listed) | set(recorded))
+
+
+def docs_keys(repo: Path, train_id: str, state: dict[str, object]) -> list[str]:
+    # 0131: the refuted claim file and the claims the docs record holds; a key in either counts.
+    listed = read_findings(docs_findings_path(repo, train_id))
+    docs = train_state.record(state, train_state.DOCS_VERDICT)
+    return sorted(set(listed) | set(train_state.record(docs, "findings")))
+
+
+def _unexempted(keys: list[str], exempt: dict[str, object], tip: str) -> list[str]:
+    # 0133: the one exemption check, shared by the security round and the docs record.
+    return [key for key in keys if not _exempt(exempt.get(key), tip)]
+
+
+def docs_problem(repo: Path, train_id: str, state: dict[str, object], current: str) -> str | None:
+    # 0131, 0134: the docs record names the current tip verified, or every refuted claim exempted.
+    docs = train_state.record(state, train_state.DOCS_VERDICT)
+    tip, status = docs.get("tip"), docs.get("status")
+    if tip != current:
+        shown = tip[:12] if isinstance(tip, str) else "no tip"
+        return f"the docs record names tip {shown}, not the current tip {current[:12]}"
+    if status == train_state.VERIFIED:
+        return None
+    if status != train_state.REFUTED:
+        return "the docs record holds no verified or refuted verdict"
+    try:
+        keys = docs_keys(repo, train_id, state)
+    except ProofError as exc:
+        return f"the refuted docs claim list is unreadable ({exc})"
+    if not keys:
+        return "the refuted docs record lists no claims"
+    missing = _unexempted(keys, train_state.record(docs, "exemptions"), current)
+    if missing:
+        return (
+            f"refuted docs claim {missing[0]} has no exemption, "
+            f"{len(missing)} of {len(keys)} claims have none"
+        )
+    return None
+
+
+def _parents(repo: Path, commit: str) -> list[str]:
+    return (_git(repo, "rev-list", "--parents", "-n", "1", commit) or "").split()[1:]
+
+
+def _raw(repo: Path, parent: str, commit: str) -> list[tuple[str, str, str]] | None:
+    # 0131: (old mode, new mode, path) per changed path; None when git or the format fails.
+    out = _git(
+        repo, "diff-tree", "--no-commit-id", "--no-renames", "--raw", "-r", "-z", parent, commit
+    )
+    if out is None:
+        return None
+    fields, entries = out.split("\0"), []
+    for meta, path in zip(fields[0:-1:2], fields[1::2], strict=False):
+        modes = meta.removeprefix(":").split()
+        if not meta.startswith(":") or len(modes) != 5 or not path:
+            return None
+        entries.append((modes[0], modes[1], path))
+    return entries
+
+
+def _docs_only(entries: list[tuple[str, str, str]]) -> bool:
+    # 0131: only the four docs, each a regular non-executable file before and after.
+    return all(
+        path in PUBLIC_DOCS and new == DOC_MODE and old in (DOC_MODE, NO_MODE)
+        for old, new, path in entries
+    )
+
+
+def ledger_parent(repo: Path, commit: str) -> str | None:
+    # 59, 0131: the parent of a one-parent commit that changes only the declared ledger, else None.
+    ledger, parents = _ledger_rel(repo), _parents(repo, commit)
+    if ledger is None or len(parents) != 1:
+        return None
+    entries = _raw(repo, parents[0], commit)
+    return parents[0] if entries and {path for _, _, path in entries} == {ledger} else None
+
+
+def _docs_end(repo: Path, judged: str, current: str) -> str:
+    # 0131: the tip the docs-only commits end at; one ledger commit on top of them is admitted.
+    parent = ledger_parent(repo, current) if current != judged else None
+    return parent if parent is not None and parent != judged else current
+
+
+def _docs_moves(repo: Path, judged: str, end: str) -> str | None:
+    # 0131: each commit past the judged tip changes only the four public docs, or is issue 59's
+    # one ledger commit on the judged tip; a merge is judged against its first parent.
+    if _git(repo, "merge-base", "--is-ancestor", judged, end) is None:
+        return f"the tip {end[:12]} does not descend from the judged tip {judged[:12]}"
+    ledger = _ledger_rel(repo)
+    for commit in (_git(repo, "rev-list", f"{judged}..{end}") or "").split():
+        parents = _parents(repo, commit)
+        entries = _raw(repo, parents[0], commit) if parents else None
+        paths = {path for _, _, path in entries or ()}
+        if entries is not None and _docs_only(entries):
+            continue
+        if entries is not None and parents == [judged] and ledger and paths == {ledger}:
+            continue
+        if entries is not None and paths <= set(PUBLIC_DOCS):
+            return (
+                f"the commit {commit[:12]} past the judged tip {judged[:12]} changes the type or "
+                "mode of a public doc"
+            )
+        return (
+            f"the commit {commit[:12]} past the judged tip {judged[:12]} changes more than the "
+            "four public docs"
+        )
+    return None
+
+
+def tip_admits(
+    repo: Path, train_id: str, state: dict[str, object], judged: object, current: str
+) -> str | None:
+    # 59, 0131: the judged-tip rule, extended to docs-only commits the docs record covers.
+    problem = tip_problem(repo, judged, current)
+    if problem is None or not train_state.record(state, train_state.DOCS_VERDICT):
+        return problem
+    if not isinstance(judged, str) or not TIP.fullmatch(judged):
+        return problem
+    end = _docs_end(repo, judged, current)
+    return (
+        _docs_moves(repo, judged, end)
+        or _tree_problem(repo, judged, end)
+        or docs_problem(repo, train_id, state, end)
+    )
+
+
+def _tree_problem(repo: Path, judged: str, end: str) -> str | None:
+    # 0131, audit round 1: the end tree is the judged tree but for the four docs and the ledger,
+    # whatever parents a merge names.
+    entries = _raw(repo, judged, end)
+    ledger = _ledger_rel(repo)
+    allowed = set(PUBLIC_DOCS) | ({ledger} if ledger else set())
+    if entries is not None and {path for _, _, path in entries} <= allowed:
+        # 0131: each public doc in the end tree stays a regular non-executable file.
+        if _docs_only([e for e in entries if e[2] in PUBLIC_DOCS]):
+            return None
+        return (
+            f"the tree of {end[:12]} holds a public doc whose type or mode differs from a "
+            f"regular file, or drops one, against the judged tip {judged[:12]}"
+        )
+    return (
+        f"the tree of {end[:12]} differs from the judged tip {judged[:12]} outside the four "
+        "public docs and the ledger"
+    )
+
+
+def _docs_note(repo: Path, train_id: str, state: dict[str, object], current: str) -> str:
+    # 0131: the proof line names the docs path when a docs record covers the docs tip.
+    docs = train_state.record(state, train_state.DOCS_VERDICT)
+    end = current if docs.get("tip") == current else ledger_parent(repo, current) or current
+    if not docs or docs_problem(repo, train_id, state, end) is not None:
+        return ""
+    if docs.get("status") == train_state.VERIFIED:
+        return f", docs verified on tip {end[:12]}"
+    return f", docs refuted with every claim exempted on tip {end[:12]}"
+
+
+def exemption_problem(
+    repo: Path, train_id: str, state: dict[str, object], current: str
+) -> str | None:
+    # 0133: a rejected verdict passes when each of its round's findings carries an exemption.
+    verdict = train_state.record(state, train_state.VERDICT)
+    round_ = verdict.get("round")
+    rejected = verdict.get("status") == train_state.REJECTED
+    if not rejected or not isinstance(round_, int) or isinstance(round_, bool):
+        return "the recorded verdict is not a rejected round"
+    judged = verdict.get("tip")
+    problem = tip_admits(repo, train_id, state, judged, current)
+    if problem is not None:
+        return problem
+    try:
+        keys = round_keys(repo, train_id, state, round_)
+    except ProofError as exc:
+        return f"the rejected round {round_} finding list is unreadable ({exc})"
+    if not keys:
+        return f"the rejected round {round_} lists no findings"
+    exempt = train_state.record(train_state.record(state, train_state.EXEMPTIONS), str(round_))
+    missing = _unexempted(keys, exempt, str(judged))
+    if missing:
+        return (
+            f"finding {missing[0]} of the rejected round {round_} has no exemption, "
+            f"{len(missing)} of {len(keys)} findings have none"
+        )
+    return None
+
+
 def push_proof(repo: Path, train_id: str) -> str:
-    # 62: the approved verdict, else an exception ruling bound to the current integration tip.
+    # 0133: the approved verdict, else a rejected round whose every finding the operator exempted.
     try:
         return approved(repo, train_id)
     except ProofError as refused:
         try:
-            exception = train_state.record(train_state.load(repo, train_id), train_state.EXCEPTION)
+            state = train_state.load(repo, train_id)
         except train_state.TrainStateError:
             raise refused from None
-        ledger_id, tip = exception.get("ledger_id"), exception.get("tip")
-        if not (isinstance(ledger_id, str) and ledger_id and isinstance(tip, str)):
+        verdict = train_state.record(state, train_state.VERDICT)
+        current = integration_tip(repo, train_id)
+        if verdict.get("status") != train_state.REJECTED or current is None:
             raise refused from None
-        if tip != integration_tip(repo, train_id):
-            raise refused from None
-        return f"OK approved: exception {ledger_id}, train {train_id}, integration tip {tip[:12]}"
+        problem = exemption_problem(repo, train_id, state, current)
+        if problem is not None:
+            raise ProofError(f"NOT APPROVED: {problem}. {UNEXEMPTED_NEXT}") from None
+        return (
+            f"OK approved: every finding exempted, train {train_id}, round {verdict['round']}, "
+            f"integration tip {current[:12]}{_docs_note(repo, train_id, state, current)}"
+        )

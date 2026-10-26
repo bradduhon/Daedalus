@@ -49,7 +49,13 @@ def test_setup_writes_both_starter_files_when_missing(repo_cwd: Path) -> None:
     result = _setup(repo_cwd)
     assert result.returncode == 0, result.stderr
     manifest, config = _paths(repo_cwd)
-    assert result.stdout.splitlines() == [f"written: {manifest}", f"written: {config}"]
+    # 0134: a new manifest is followed by the docs.literacy examples line.
+    assert result.stdout.splitlines() == [
+        f"written: {manifest}",
+        'docs.literacy: null; examples: "plain", "standard", "expert", '
+        '"profile:docs/voice-profile.md"',
+        f"written: {config}",
+    ]
     assert manifest.is_file() and config.is_file()
     # 0010: the data folder carries its ignore marker, as a train's start writes it.
     assert (config.parent / ".gitignore").read_text(encoding="utf-8") == "*\n"
@@ -80,7 +86,9 @@ def test_setup_starter_files_carry_every_reader_key_at_its_default(repo_cwd: Pat
     manifest, config = _paths(repo_cwd)
     m_doc = json.loads(manifest.read_text(encoding="utf-8"))
     c_doc = json.loads(config.read_text(encoding="utf-8"))
-    assert [k for k in manifest_keys() if not _present(m_doc, k)] == []
+    # 0129, F.6: the starter leaves the priorities block absent, which reads as none declared.
+    wanted = [k for k in manifest_keys() if not k.startswith("priorities.")]
+    assert [k for k in wanted if not _present(m_doc, k)] == [] and "priorities" not in m_doc
     assert [k for k in config_keys() if not _present(c_doc, k)] == []
     # 0072, 0076: the readers accept both files, and the config reads as the defaults.
     assert load_config(path=config) == Config()
@@ -97,7 +105,9 @@ def test_setup_starter_files_load_through_the_readers_at_their_defaults(repo_cwd
     # 0076: the jail loads the config on every hook; a starter it refused would deny every call.
     assert _setup(repo_cwd).returncode == 0
     assert load_config(cwd=str(repo_cwd)) == Config()
-    assert load_manifest(repo_cwd) == Manifest(features=Features(ledger=False))
+    # 0076, 0132: the starter writes every switch false, the persona switches included.
+    off = Features(ledger=False, dependency_web_lookup=False, terraform_tools=False)
+    assert load_manifest(repo_cwd) == Manifest(features=off)
     assert resolve_ledger(str(repo_cwd), Config()) is None
 
 

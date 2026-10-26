@@ -17,16 +17,30 @@ STATE_DIR = Path(".claude") / "daedalus" / "trains"
 TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
 TRAIN_ID = re.compile(r"[0-9]{8}-[0-9]{6}")
 LOCK_TIMEOUT_S = 5.0
-# 0085, 0089: plan {path, sha256}, verdict {status, tip, round, seq}, exception {ledger_id, tip}.
-PLAN, CHOICES, VERDICT, EXCEPTION, PHASE, WEIGHT = (
+# 0085, 0089: plan {path, sha256}, verdict {status, tip, round, seq}.
+# 0133: exemptions {"<round>": {"<finding id>": {ledger_id, tip, tracking[, other]}}}.
+PLAN, CHOICES, VERDICT, EXEMPTIONS, PHASE, WEIGHT = (
     "plan",
     "choices",
     "verdict",
-    "exception",
+    "exemptions",
     "phase",
     "weight",
 )
 APPROVED, REJECTED = "approved", "rejected"
+# 0131, 0134: the docs verifier's record {status, tip[, findings, exemptions]}, apart from VERDICT.
+DOCS_VERDICT, VERIFIED, REFUTED = "docs_verdict", "verified", "refuted"
+# 0134: the docs writer's worktree is the unit <train-id>-docstage; no plan unit slug ends so.
+DOCS_SUFFIX = "-docstage"
+# 0139, 0142: how an exemption is tracked, each stored value with the operator's plain label.
+TRACKING = {
+    "dropped": "Skip it",
+    "issue": "Track it",
+    "local": "Exempt it",
+    "other": "Other",
+}
+# 0142: these answers leave no tracked issue, so the pull request body carries a Deviation: line.
+UNTRACKED = frozenset({"dropped", "local"})
 # issue 57: the audit-log seq hooks-live saw first; verdict searches read only records after it.
 START_SEQ = "start_seq"
 # issue 60: the session start_seq belongs to, and each session's first bound, so a push

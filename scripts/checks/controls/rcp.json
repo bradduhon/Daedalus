@@ -1,0 +1,6 @@
+{
+  "checks/handback_check": {
+    "failure": "0128: a repo-coder's COMPLETE reply reaches the verifier without its receipts block, so report prose the verifier cannot rerun stands in for commit and test receipts",
+    "premise_test": "tests/test_handback_check.py::test_the_script_blocks_in_a_train"
+  }
+}
