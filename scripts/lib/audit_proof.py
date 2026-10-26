@@ -712,7 +712,13 @@ def _tree_problem(repo: Path, judged: str, end: str) -> str | None:
     ledger = _ledger_rel(repo)
     allowed = set(PUBLIC_DOCS) | ({ledger} if ledger else set())
     if entries is not None and {path for _, _, path in entries} <= allowed:
-        return None
+        # 0131: each public doc in the end tree stays a regular non-executable file.
+        if _docs_only([e for e in entries if e[2] in PUBLIC_DOCS]):
+            return None
+        return (
+            f"the tree of {end[:12]} holds a public doc whose type or mode differs from a "
+            f"regular file, or drops one, against the judged tip {judged[:12]}"
+        )
     return (
         f"the tree of {end[:12]} differs from the judged tip {judged[:12]} outside the four "
         "public docs and the ledger"
