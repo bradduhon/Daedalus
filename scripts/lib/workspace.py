@@ -579,7 +579,9 @@ def lock(repo: Path, contract: str, version: int) -> list[str]:
     verb = "Revise" if isinstance(recorded, int) else "Lock"
     if unchanged.returncode == 1:
         _git(root, "commit", "-q", "-m", f"{verb} contract {path.stem} v{version}", "--", rel)
-    sha = _out(repo, "rev-parse", integration).strip()
+    # 0150, issue 96: a revise keeps the lock at the train base, never the integration tip.
+    kept = state.get("lock_sha") if isinstance(recorded, int) else None
+    sha = kept if isinstance(kept, str) and kept else _out(repo, "rev-parse", integration).strip()
     _record(
         repo,
         train_id,
@@ -777,14 +779,15 @@ def _merge(repo: Path, state: dict[str, object], train_id: str, unit: dict[str, 
     if merged.returncode == 0:
         return
     conflicts = _out(repo, "diff", "--name-only", "--diff-filter=U").split()
+    # issue 95: abort only; the repository stays on the integration branch with earlier merges.
     _run(repo, "merge", "--abort")
-    _run(repo, "switch", "-q", str(state["base_branch"]))
     detail = _shown(conflicts) if conflicts else " ".join(merged.stderr.split()) or "no stderr"
     raise WorkspaceError(
         f"merging {branch} into daedalus/{train_id} failed: {detail}. "
-        f"Next: inspect or delete the leftover daedalus/{train_id} branch, resolve the overlap "
-        "in the conflicting files named above, or rerun the train with units that do not "
-        "share files."
+        f"Next: the repository stays on daedalus/{train_id} with the completed merges in "
+        f"place; merge {branch} there by hand and resolve the conflicting files named above, "
+        "then rerun the merge step, which skips units already merged; or rerun the train with "
+        "units that do not share files."
     )
 
 
@@ -812,7 +815,10 @@ def finish(repo: Path) -> list[str]:
         if _run(repo, "merge-base", "--is-ancestor", str(lock_sha), str(unit["branch"])).returncode:
             raise WorkspaceError(
                 f"Unit {unit['branch']} does not descend from the integration branch. "
-                "Next: rerun the train; if it repeats, file an issue with the train summary."
+                f"Next: a likely cause is a contract revise that moved the lock {lock_sha} off "
+                f"the train base {state['base_sha']} (0150); set lock_sha in the train state "
+                "back to the lock the unit was built on, then rerun the finish; otherwise "
+                "rerun the train, and if it repeats, file an issue with the train summary."
             )
     _git(repo, "switch", "-q", integration)
     lines = _merge_all(repo, state, train_id, merging)
