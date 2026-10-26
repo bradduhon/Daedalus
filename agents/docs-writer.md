@@ -17,7 +17,7 @@ hooks:
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/network_tools.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/git_push.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/git_grammar.py --allow coder"}
-        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/unit_writes.py"}
+        - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/unit_writes.py --docs"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/gh_classes.py"}
         - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/confine.py"}
 ---
@@ -36,6 +36,8 @@ summary of every unit whose agent changed something, the four public docs, the l
 ## Scope
 1. Edit only these four files inside `<path>`: `README.md`, `docs/howto/README.md`,
    `docs/guardrails.md` and `docs/project-requirements.md`. Never touch any other file.
+   The write hook refuses any other path, any worktree but your `<train-id>-docs` one, a
+   `git add` without explicit doc paths, and git `stage`, `stash`, `restore` and `checkout`.
 2. Every file path and every git pathspec you use is absolute or goes through
    `git -C <path>`. Never change the main checkout.
 3. Never hand-edit a generated block: the lines between a `<!-- generated: ... -->` marker and

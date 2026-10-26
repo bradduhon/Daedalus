@@ -133,16 +133,17 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("read_only_bash", ("--git", "read-only")),
         ("gh_classes", ()),
     ),
+    # 0132: the reviewer's Bash is the inspect read set plus the two terraform forms.
     "terraform-reviewer": (
         ("credential_paths", ()),
         ("workspace_integrity", ()),
         ("tool_bound", ()),
         ("shell_tripwires", ()),
         ("network_tools", ()),
-        ("read_only_bash", ("--git", "read-only")),
+        ("command_allowlist", ("--allow", "terraform,inspect")),
         ("gh_classes", ()),
     ),
-    # 0134: the docs writer carries the repo-coder's list until its write jail narrows it.
+    # 0134: the docs writer carries the repo-coder's list with its write check narrowed by --docs.
     "docs-writer": (
         ("credential_paths", ()),
         ("workspace_integrity", ()),
@@ -151,7 +152,7 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("network_tools", ()),
         ("git_push", ()),
         ("git_grammar", ("--allow", "coder")),
-        ("unit_writes", ()),
+        ("unit_writes", ("--docs",)),
         ("gh_classes", ()),
         ("confine", ()),
     ),

@@ -282,8 +282,8 @@ DENIALS = {
     # 0132, 0134: the three persona files; each first deny is a hook of its copied list.
     "dependency-auditor": (_input("dependency-auditor", "WebFetch", url="https://x"), "tool_bound"),
     "terraform-reviewer": (
-        _input("terraform-reviewer", command="git checkout x"),
-        "read_only_bash",
+        _input("terraform-reviewer", command="terraform apply"),
+        "command_allowlist",
     ),
     "docs-writer": (_input("docs-writer", command="git push origin x"), "git_push"),
 }

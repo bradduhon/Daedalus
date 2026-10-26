@@ -163,11 +163,18 @@ def test_judges_are_read_only_off_the_network_and_carry_the_verifier_read_list()
         Hook(h.script, ("--git", "read-only")) if h.script == "read_only_bash" else h
         for h in verifier.hooks
     )
+    # 0132: the reviewer's read list is the inspect class plus the terraform class (JAIL).
+    terraform = Hook("command_allowlist", ("--allow", "terraform,inspect"))
     for name in JUDGES:
         judge = load(AGENTS / f"{name}.md")
         assert judge.shape == "judge", name
         assert judge.tools == frozenset({"Read", "Grep", "Glob", "Bash"}), name
-        assert judge.hooks == want, name
+        if name == "terraform-reviewer":
+            assert judge.hooks == tuple(
+                terraform if h.script == "read_only_bash" else h for h in want
+            ), name
+        else:
+            assert judge.hooks == want, name
         assert judge.status_lines[-1].startswith("[STATUS: COMPLIANCE] <PASS/FAIL list"), name
 
 
@@ -203,7 +210,11 @@ def test_terraform_reviewer_checks_the_binary_before_any_tool_run() -> None:
 def test_docs_writer_edits_only_the_four_docs_and_claims_each_passage() -> None:
     writer = load(AGENTS / "docs-writer.md")
     coder = load(AGENTS / "repo-coder.md")
-    assert writer.shape == "producer" and writer.hooks == coder.hooks
+    # 0134: the coder's list, with the write check narrowed by --docs (JAIL).
+    narrowed = tuple(
+        Hook(h.script, ("--docs",)) if h.script == "unit_writes" else h for h in coder.hooks
+    )
+    assert writer.shape == "producer" and writer.hooks == narrowed
     assert writer.status_lines == (
         "[STATUS: DOCS_WRITTEN] branch=<b> commit=<40 hex> claims=<n>",
         "[STATUS: DOCS_UNCHANGED] reason=<why no passage needed an edit>",
