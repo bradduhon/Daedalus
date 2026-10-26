@@ -84,7 +84,8 @@ between Bash calls.
      - `- typecheck <command> => <last output line>`
      - `- yield <kind> <question> => <who answered>`
      - `- deviation <file or behaviour> | <reason>`
-   - A SubagentStop check refuses a COMPLETE reply whose block is missing, lacks a commit or
+   - A hook check on your final reply and on a SubagentHandback message refuses a COMPLETE
+     whose block is missing, lacks a commit or
      test line, or holds a line of another shape; its Next line names the shape. A yield
      reply carries no block.
    - Cite a line by pasting the output of `python3 <plugin root>/scripts/cite.py <file> <pattern>`,
