@@ -62,6 +62,8 @@ def test_known_agents_match_spec_matrix() -> None:
             "dependency-auditor",
             "terraform-reviewer",
             "docs-writer",
+            "doc-deriver",
+            "change-logger",
         }
     )
 

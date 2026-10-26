@@ -1,5 +1,5 @@
 {
-  "producer": ["credential_paths", "workspace_integrity", "tool_bound", "shell_tripwires", "network_tools", "git_push", "git_grammar", ["unit_writes", "root_writes"]],
+  "producer": ["credential_paths", "workspace_integrity", "tool_bound", "shell_tripwires", "network_tools", "git_push", "git_grammar", ["unit_writes", "root_writes", "doc_outputs"]],
   "judge": ["credential_paths", "workspace_integrity", "tool_bound", "shell_tripwires", "network_tools", "read_only_bash"],
   "finder": ["credential_paths", "workspace_integrity", "tool_bound", "shell_tripwires", "network_tools", "read_only_bash"],
   "mover": ["credential_paths", "workspace_integrity", "tool_bound", "shell_tripwires", "network_tools", "command_allowlist", "git_grammar", "git_push", "gh_classes"],

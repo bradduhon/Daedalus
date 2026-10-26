@@ -117,10 +117,12 @@ Each agent's file lists the only tools it may use, the reply lines it ends with,
 <!-- generated: catalog.py table -->
 | Agent | Shape | Model | Tools | Job | Reply lines | Phases |
 |---|---|---|---|---|---|---|
+| change-logger | producer | opus | Bash, Glob, Grep, Read, Write | Produces the change gate between a baseline and a derived document, or between two baselines when no deriver runs: one row per departure, with the baseline quote, the derived quote, the reason, and a status the operator rules on. | `[STATUS: COMPLETE] change_log=<path> rows=<n> open=<k>`; `[STATUS: BLOCKED] <what the manifest or brief leaves out>` | implementation |
 | charter-docs | producer | sonnet | Bash, Edit, Glob, Grep, Read, Write | Single-writer custodian of the Charter repository, the architectural decision ledger, and Build Train commits. | `[STATUS: LEDGER_PROBED] <probe line>`; `[STATUS: LEDGER_APPENDED] <id>`; `[STATUS: LEDGER_MISMATCH] expected=<n> ledger=<m>`; `[STATUS: COMMITTED] <sha> ids=<id>[,<id>]`; `[STATUS: BLOCKED] <detail>` | clarification, commit, release |
 | cis-specialist | judge | sonnet | Bash, Grep, Read | Evaluates cloud infrastructure, IAM/RCP policies, and OS/container hardening against operator-supplied CIS Benchmarks. | `[STATUS: CACHE_INVALID] <detail>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with control ids and file:line>` | clarification, audit |
 | contract-spec | producer | sonnet | Edit, Glob, Grep, Read, Write | Reads and updates service handshake contracts, API schemas, and specifications. | `## Locked Contract Packet` | clarification, plan |
 | dependency-auditor | judge | sonnet | Bash, Glob, Grep, Read | Read-only judge of the dependency manifests and lockfiles a train changes. | `[STATUS: YIELD_WEB] <query>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with rule ids and file:line>` | audit |
+| doc-deriver | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Derives one document from frozen, manifest-declared sources with a file:line receipt on every value. | `[STATUS: COMPLETE] outputs=<path>[,<path>] claims=<n> judgments=<k> assumed=<m>`; `[STATUS: BLOCKED] <what the manifest or brief leaves out>` | implementation |
 | docs-writer | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Writes the public docs to match what a train merged. | `[STATUS: DOCS_WRITTEN] branch=<b> commit=<40 hex> claims=<n>`; `[STATUS: DOCS_UNCHANGED] reason=<why no passage needed an edit>` | audit |
 | nist-specialist | judge | sonnet | Bash, Grep, Read | Evaluates architecture, IAM, and cryptographic boundaries against the pinned NIST SP 800-53 OSCAL catalog and SP 800-57 key-management guidance. | `[STATUS: CACHE_INVALID] <detail>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with control ids and file:line>` | clarification, audit |
 | orchestrator | dispatcher | fable | Agent, Bash, Edit, Glob, Grep, Read, SendMessage, Write | Runs one Build Train from its plan to the audited integration tip. | `[STATUS: DECISION] brief=<path> questions=<n>`; `[STATUS: EXCEPTION] ledger_id=<id>`; `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path> tip=<40 hex>`; `[STATUS: STOP] reason=<what happened> next=<next action>` | context, clarification, plan, implementation, audit |
@@ -139,10 +141,12 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 <!-- generated: catalog.py matrix -->
 | Agent | Shape | Hooks |
 |---|---|---|
+| change-logger | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar, read_only_bash, doc_outputs |
 | charter-docs | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow docs, root_writes --touch charter,docs --ledger-guard, command_allowlist --allow append_ledger,git,read, gh_classes |
 | cis-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
 | contract-spec | producer | credential_paths, workspace_integrity, tool_bound, root_writes --touch contracts,charter-specs |
 | dependency-auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only, gh_classes |
+| doc-deriver | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar, read_only_bash, doc_outputs |
 | docs-writer | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes, gh_classes, confine |
 | nist-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
 | orchestrator | dispatcher | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, command_allowlist --allow train,inspect, root_writes --touch scratch --ledger-guard, gh_classes, dispatch_gate |
@@ -267,10 +271,12 @@ Daedalus/
 ├── pyproject.toml                   # dev tooling; the plugin itself is stdlib only
 ├── service-manifest.json            # this repository's own service manifest
 ├── agents/
+│   ├── change-logger.md
 │   ├── charter-docs.md
 │   ├── cis-specialist.md
 │   ├── contract-spec.md
 │   ├── dependency-auditor.md
+│   ├── doc-deriver.md
 │   ├── docs-writer.md
 │   ├── nist-specialist.md
 │   ├── orchestrator.md
@@ -371,9 +377,11 @@ Daedalus/
 │   ├── audit-report/SKILL.md        # /daedalus:audit-report
 │   ├── build-train/SKILL.md         # /daedalus:build-train
 │   ├── catalog/SKILL.md             # /daedalus:catalog
+│   ├── doc-train/SKILL.md           # /daedalus:doc-train
 │   ├── doctor/SKILL.md              # /daedalus:doctor
 │   ├── plan/SKILL.md                # /daedalus:plan
 │   ├── push-train/SKILL.md          # /daedalus:push-train
+│   ├── round/SKILL.md               # /daedalus:round
 │   └── setup/SKILL.md               # /daedalus:setup
 └── tests/                           # the pytest suite
 ```

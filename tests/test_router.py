@@ -286,6 +286,9 @@ DENIALS = {
         "read_only_bash",
     ),
     "docs-writer": (_input("docs-writer", command="git push origin x"), "git_push"),
+    # 0135: the two document agents.
+    "doc-deriver": (_input("doc-deriver", command="git push origin x"), "git_push"),
+    "change-logger": (_input("change-logger", "Edit", file_path=f"{CWD}/x.md"), "tool_bound"),
 }
 
 
