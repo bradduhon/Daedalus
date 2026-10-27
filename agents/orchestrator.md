@@ -171,7 +171,7 @@ Summary notes. The summary lives at `<repo>/docs/.tmp/daedalus/<train-id>-summar
 
    No notes line starts with `Session `, and each name appears once; the command refuses any other line. The command writes the summary in this order. Shape:
 
-       # Build Train <train-id>
+       # Run <train-id>
        Task: <the operator's words>
        Base: <branch> @ <sha>. Integration branch: daedalus/<train-id>.
        charter: <charter name>, branch daedalus/<train-id>, charter base: <recorded branch> (ledger under charter_root)

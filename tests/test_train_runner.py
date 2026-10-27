@@ -883,7 +883,17 @@ def test_progress_names_the_unit_a_waiting_unit_waits_on(repo: Path, plugin: Pat
         "Open: none",
         train_runner.NEXT_NONE,
     ]
-    assert train_runner.NEXT_NONE.startswith("Next: none")
+    assert train_runner.NEXT_NONE == "Next: none, the run needs nothing from the operator."
+
+
+def test_progress_with_no_train_says_run(repo: Path) -> None:
+    # 0169: the operator reads run; the refusal's script names keep train (0177).
+    outcome = train_runner.progress(repo)
+    assert outcome.code == 0
+    assert outcome.lines == [
+        "no Daedalus run is active here. Next: start a new run with /daedalus:run."
+    ]
+    assert "train" not in outcome.lines[0].casefold()
 
 
 def test_choice_appends_and_prints_the_line(repo: Path, plugin: Path) -> None:
@@ -1887,7 +1897,7 @@ def _resumable(repo: Path, plugin: Path, pending: bool = True) -> tuple[str, Pat
     _git(repo, "switch", "-q", "main")
     summary = repo / "docs" / ".tmp" / "daedalus" / f"{train}-summary.md"
     line = "Ledger ids: pending. Codes: --repo DAE --type PLT." if pending else "Ledger ids: x."
-    summary.write_text(f"# Build Train {train}\n{line}\n", encoding="utf-8")
+    summary.write_text(f"# Run {train}\n{line}\n", encoding="utf-8")
     return train, summary
 
 
@@ -1987,7 +1997,7 @@ def test_summary_writes_the_file_from_state_after_its_own_bash_record(
     rel = f"docs/.tmp/daedalus/{train}-summary.md"
     assert done.lines == [f"summary written train={train} path={rel} ledger=pending"], done.lines
     text = _summary_file(repo).read_text(encoding="utf-8")
-    assert text.startswith(f"# Build Train {train}\n")
+    assert text.startswith(f"# Run {train}\n")
     assert "\nLedger ids: pending.\n" in text
     assert f"\nSession {SESSION}: .claude/daedalus/audit/{SESSION}.jsonl\n" in text
     assert str(repo) not in text

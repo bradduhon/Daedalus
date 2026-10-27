@@ -195,7 +195,7 @@ def _summary(
 ) -> None:
     path = repo_cwd / "docs" / ".tmp" / "daedalus" / f"{TRAIN}-summary.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"# Build Train {TRAIN}\n{text}", encoding="utf-8")
+    path.write_text(f"# Run {TRAIN}\n{text}", encoding="utf-8")
 
 
 def _train(hook_input: Any, repo_cwd: Path, verdict: str) -> None:
