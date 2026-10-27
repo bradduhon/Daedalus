@@ -223,15 +223,6 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`null`: a ledger the config declares or the probe finds is used, and none is created",
         "`true`",
     ),
-    (MANIFEST_FILE, "features.github"): KeyRow(
-        "Says the project pushes to GitHub and opens its pull requests there with the gh tool; "
-        "with it on, the doctor's two gh lines are a `MISS` when gh is missing or not signed in, "
-        "and with it off they are `OPT` (0069)",
-        "boolean or null",
-        "`true`, `false` or `null`; `null` reads as `false`",
-        "`false`: the doctor never fails on gh",
-        "`true`",
-    ),
     (MANIFEST_FILE, "features.dependency_web_lookup"): KeyRow(
         "Lets the dependency auditor ask for security advisories on the web; the train sends "
         "its questions to the web researcher. With it off, the auditor judges from the lockfile "
@@ -413,6 +404,15 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`null`: those agents write only inside the project, and the contract lives in "
         "`contracts/`",
         '`"/work/decisions"`',
+    ),
+    (CONFIG_FILE, "standing_rules"): KeyRow(
+        "The standing-rules file the planner reads as the rules every plan must satisfy, "
+        "derived from the ledger by `scripts/standing_rules.py` (0090)",
+        "string or null",
+        "A non-empty path; a relative path is read from `charter_root` when one is declared, "
+        "else from the project root",
+        "`null`: the repository has no standing-rules file",
+        '`"standing-rules.md"`',
     ),
     (CONFIG_FILE, "excluded_roots"): KeyRow(
         "Folders whose files must never reach git, GitHub or a redirect. A Daedalus agent is "

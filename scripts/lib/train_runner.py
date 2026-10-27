@@ -52,7 +52,7 @@ from lib.narrow import obj as _obj
 from lib.narrow import objects as _objects
 from lib.narrow import strings as _strings
 from lib.narrow import text as _text
-from lib.project_root import in_git_work_tree, project_root
+from lib.project_root import project_root
 from lib.train_definition import (
     _ASK,
     _BACK,
@@ -1078,7 +1078,7 @@ def start(cwd: Path, train: str, output: str | None, plugin_root: Path = PLUGIN_
         config = load_config(path=root / ".claude" / "daedalus" / "config.json")
     except (manifest.ManifestError, ConfigError) as exc:
         return Outcome(EXIT_STOP, [str(exc)])
-    kind = features.scope or ("repository" if in_git_work_tree(root) else "folder")
+    kind = manifest.scope_kind(root, features)
     scopes = _strings(defn.raw.get("scopes"))
     if kind not in scopes:
         return Outcome(

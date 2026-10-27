@@ -112,6 +112,7 @@ Paths here are relative to the plugin root.
 - The model choice: `daedalus_train.py model --repo <repo> --agent <name> [--override <model>]` prints the effective model word alone on one line, inside or outside a train.
 - The audit worktree refresh: `daedalus_workspace.py refresh --repo <repo> --name <train-id>-audit` fast-forwards the audit branch with `git merge --ff-only` and prints the worktree path.
 - The control cost table: `python3 scripts/audit_report.py --repo <R> --session <S> --controls` prints the blocks per hook, the seconds each block cost, the seconds each agent took to its first write, and the mean judge time.
+- The token table: `python3 scripts/token_economy.py report --run <train id>` (or `--session <S>`) prints one row per agent and unit or audit round, then a totals row and the per-unit and per-round means, agents only; `history` prints the totals row of every saved run (`/daedalus:token-report`).
 
 ## The per-finding audit prompt
 

@@ -645,3 +645,50 @@ def test_containment_error_names_the_matched_path(
     assert result.returncode == 1
     assert f"--out {project_data / 'audit' / 'x.md'} is inside" in result.stderr
     assert not (project_data / "audit" / "x.md").exists()
+
+
+def _token_report(cwd: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    # Plan 11 A: a synthetic config dir, so the token section never reads a real transcript.
+    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")}
+    return subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "audit_report.py"), "--cwd", cwd],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+
+
+def test_no_transcript_prints_one_token_line(
+    project_data: Path, hook_input: Any, tmp_path: Path
+) -> None:
+    _synthetic_chain(hook_input)
+    result = _token_report(hook_input()["cwd"], tmp_path)
+    assert result.returncode == 0, result.stderr
+    section = result.stdout.split("## Token economy\n\n", 1)[1]
+    assert section.startswith("no agent transcript found for session sess-test under ")
+    assert section.count("\n") == 1
+
+
+def test_token_totals_follow_the_totals_section(
+    project_data: Path, hook_input: Any, tmp_path: Path
+) -> None:
+    _synthetic_chain(hook_input)
+    cwd = hook_input()["cwd"]
+    slug = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    folder = tmp_path / "cfg" / "projects" / slug / "sess-test" / "subagents"
+    folder.mkdir(parents=True)
+    stamp = "2026-10-15T12:00:0{}Z"
+    lines = [
+        {"type": "user", "sessionId": "sess-test", "timestamp": stamp.format(0),
+         "message": {"content": "Run Build Train 20261015-120000"}},
+        {"type": "assistant", "sessionId": "sess-test", "timestamp": stamp.format(5),
+         "message": {"id": "m1", "usage": {"output_tokens": 7}}},
+    ]  # fmt: skip
+    (folder / "agent-o1.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+    (folder / "agent-o1.meta.json").write_text(json.dumps({"agentType": "daedalus:orchestrator"}))
+    out = _token_report(cwd, tmp_path).stdout
+    assert out.index("skipped fork stops:") < out.index("## Token economy")
+    run = "| Build Train | 20261015-120000 |"
+    assert f"{run} total | 1 agents | 0 units, 0 rounds | 1 | 0 | 7 | 0 | 0 | 0m05s |" in out
+    assert f"{run} mean | per unit | 0 units | none | none | none | none | none | none |" in out

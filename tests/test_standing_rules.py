@@ -157,3 +157,45 @@ def test_first_clause_skips_parens_and_code() -> None:
     clause = standing_rules._first_clause("Keep `a, b` and (c, d) whole, then stop.")
     assert clause == "Keep `a, b` and (c, d) whole"
     assert standing_rules._first_clause("Python 3.12 only.") == "Python 3.12 only"
+
+
+@pytest.mark.parametrize(
+    ("names", "code", "needle"),
+    [
+        ({"0001-TST-PLT": "Trains for every change"}, 0, "### Trains for every change (0001"),
+        ({"0002-TST-PLT": "Network tools refused"}, 0, "Amended by 0004-TST-PLT (Ledger rows"),
+        ({"0006-TST-PLT": "Workers read"}, 1, "names 0006-TST-PLT, which is not a row before"),
+        ({"0001-TST-PLT": "Trains"}, 1, "for 0001-TST-PLT is not 2 to 5 plain words (0181)"),
+        ({"0003-TST-PLT": "Coders push"}, 1, "names 0003-TST-PLT, which is superseded by"),
+        (
+            {"0001-TST-PLT": "pipe ESCAPE kept"},
+            1,
+            "rows 0001-TST-PLT and 0008-TST-PLT share the name 'Pipe escape kept' (0094)",
+        ),
+        (
+            {"0001-TST-PLT": "Same name here", "0002-TST-PLT": "same name HERE"},
+            1,
+            "rows 0001-TST-PLT and 0002-TST-PLT share the name 'same name HERE' (0094)",
+        ),
+    ],
+)
+def test_backfill_names_read(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    names: dict[str, str],
+    code: int,
+    needle: str,
+) -> None:
+    # 0181: a mapped name replaces the first clause; an absent id falls back to it.
+    data = json.loads(BACKFILL.read_text(encoding="utf-8"))
+    data["names"] = names
+    backfill = tmp_path / "backfill.json"
+    backfill.write_text(json.dumps(data), encoding="utf-8")
+    out = tmp_path / "standing-rules.md"
+    assert standing_rules.main(_args(LEDGER, backfill, out)) == code
+    if code:
+        err = capsys.readouterr().err
+        assert needle in err and "Next:" in err
+        assert not out.exists()
+    else:
+        assert needle in out.read_text(encoding="utf-8")

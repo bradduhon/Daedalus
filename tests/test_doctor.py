@@ -59,7 +59,8 @@ def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: P
     repo = tmp_path / "repo"
     repo.mkdir()
     result = _run(plugin_data, repo, path_env=_bins(tmp_path), home=tmp_path / "home")
-    assert result.returncode == 1
+    # issue 48: a plain folder is folder scope, so nothing missing there fails the doctor.
+    assert result.returncode == 0
     lines = result.stdout.splitlines()
     misses = [line for line in lines if line.startswith("MISS")]
     assert all("Next:" in line for line in misses)
@@ -88,7 +89,7 @@ def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: P
     gitleaks = next(line for line in lines if "gitleaks on PATH" in line)
     assert gitleaks.startswith("OPT  gitleaks on PATH: not found, and the secret scan is off.")
     assert "set secrets_scan to true in the features object" in gitleaks
-    # issue 48: no manifest means features.github is off, so both gh lines are optional.
+    # 0172: a plain folder is folder scope, so both gh lines are optional.
     gh = [line for line in lines if line[5:].startswith("gh ")]
     assert len(gh) == 2 and all(line.startswith("OPT  gh ") for line in gh)
 
@@ -238,6 +239,7 @@ def test_absent_scaffolds_are_opt_and_pass(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout
     assert [line.split(":")[0][5:] for line in lines if line.startswith("OPT  ")] == [
         "config.json",
+        "standing_rules",
         "standards_sources",
         "service-manifest.json",
         "contracts/",
@@ -447,16 +449,21 @@ def test_print_files_one_line_per_row_and_exit_zero(tmp_path: Path) -> None:
     assert all(shape.fullmatch(line) for line in lines), lines
 
 
-def _github(repo: Path, value: object) -> None:
-    # issue 48: a manifest holding only features.github, or no features key for the absent case.
-    body = {} if value == "absent" else {"features": {"github": value}}
+def _features(repo: Path, block: dict[str, object] | None) -> None:
+    # 0172: a manifest holding only a features block, or no features key for None.
+    body = {} if block is None else {"features": block}
     (repo / "service-manifest.json").write_text(json.dumps(body), encoding="utf-8")
+
+
+def _repository(repo: Path) -> None:
+    # 0074: a declared repository scope stands in for a git work tree.
+    _features(repo, {"scope": "repository"})
 
 
 def test_gh_absent_is_two_misses_with_next(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
-    _github(tmp_path, True)
+    _repository(tmp_path)
     lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
     assert (
         "MISS gh on PATH: not found. Next: install gh (https://cli.github.com); "
@@ -488,8 +495,7 @@ def test_minor_7_gh_auth_timeout_names_the_timeout(
 
     monkeypatch.setenv("PATH", _bins(tmp_path, "gh"))
     monkeypatch.setattr(daedalus_doctor.subprocess, "run", hang)
-    _github(tmp_path, True)
-    lines = [line for _, line in daedalus_doctor._gh_checks(tmp_path)]
+    lines = [line for _, line in daedalus_doctor._gh_checks("repository")]
     assert lines[1] == (
         "MISS gh authenticated: gh auth status did not finish within 10 s. "
         "Next: run gh auth status from your own shell, then gh auth login if it asks"
@@ -507,8 +513,7 @@ def test_minor_7_gh_auth_oserror_names_the_error(
 
     monkeypatch.setenv("PATH", _bins(tmp_path, "gh"))
     monkeypatch.setattr(daedalus_doctor.subprocess, "run", broken)
-    _github(tmp_path, True)
-    line = [line for _, line in daedalus_doctor._gh_checks(tmp_path)][1]
+    line = [line for _, line in daedalus_doctor._gh_checks("repository")][1]
     assert line.startswith("MISS gh authenticated: gh auth status could not run (")
     assert "Permission denied" in line and "exited" not in line and "Next:" in line
 
@@ -517,60 +522,140 @@ def test_gh_signed_out_is_a_miss(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     bins = _bins(tmp_path, "gh", exit_codes={"gh": 1})
-    _github(tmp_path, True)
+    _repository(tmp_path)
     lines = _run(None, tmp_path, path_env=bins, home=home).stdout.splitlines()
     assert "OK   gh on PATH" in lines
     assert ("MISS gh authenticated: gh auth status exited 1. Next: run gh auth login") in lines
 
 
-GH_OFF = ", and features.github is off in service-manifest.json"
+FOLDER_OFF = ", and this is folder scope, where the Push Train never runs (0074)"
 
 
-@pytest.mark.parametrize("value", ["absent", False, None])
-def test_gh_lines_are_opt_when_github_is_off(tmp_path: Path, value: object) -> None:
-    # issue 48: off, a missing or signed-out gh never fails the doctor, as gitleaks with no scan.
+@pytest.mark.parametrize("block", [None, {"scope": "folder"}])
+def test_gh_lines_are_opt_in_folder_scope(tmp_path: Path, block: dict[str, object] | None) -> None:
+    # 0172: in folder scope a missing or signed-out gh never fails the doctor.
     import daedalus_doctor
 
-    _github(tmp_path, value)
-    assert daedalus_doctor.github_on(tmp_path) is False
+    _features(tmp_path, block)
+    assert daedalus_doctor.scope(tmp_path) == "folder"
     home = tmp_path / "home"
     home.mkdir()
     lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
     assert (
-        f"OPT  gh on PATH: not found{GH_OFF}. Next: install gh (https://cli.github.com); "
+        f"OPT  gh on PATH: not found{FOLDER_OFF}. Next: install gh (https://cli.github.com); "
         "the Push Train opens pull requests with it"
     ) in lines
     assert (
-        f"OPT  gh authenticated: gh not on PATH{GH_OFF}. Next: install gh, then run gh auth login"
+        f"OPT  gh authenticated: gh not on PATH{FOLDER_OFF}. "
+        "Next: install gh, then run gh auth login"
     ) in lines
     bins = _bins(tmp_path, "gh", exit_codes={"gh": 1})
     lines = _run(None, tmp_path, path_env=bins, home=home).stdout.splitlines()
     assert "OK   gh on PATH" in lines
-    assert f"OPT  gh authenticated: gh auth status exited 1{GH_OFF}. Next: run gh auth login" in (
-        lines
-    )
+    assert (
+        f"OPT  gh authenticated: gh auth status exited 1{FOLDER_OFF}. Next: run gh auth login"
+    ) in lines
 
 
-def test_gh_lines_are_ok_when_github_is_on_and_gh_is_signed_in(tmp_path: Path) -> None:
+def test_gh_lines_are_misses_in_a_detected_git_work_tree(tmp_path: Path) -> None:
+    # 0172: with no scope key a git work tree is repository scope, so a missing gh is a MISS.
     import daedalus_doctor
 
-    _github(tmp_path, True)
-    assert daedalus_doctor.github_on(tmp_path) is True
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    assert daedalus_doctor.scope(repo) == "repository"
+    lines = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
+    gh = [line for line in lines.stdout.splitlines() if line[5:].startswith("gh ")]
+    assert len(gh) == 2 and all(line.startswith("MISS gh ") for line in gh)
+
+
+def test_refused_manifest_falls_back_to_the_detected_scope(tmp_path: Path) -> None:
+    # 0074: a manifest the reader refuses leaves scope to detection; its own line is the MISS.
+    import daedalus_doctor
+
+    _features(tmp_path, {"scope": "repo"})
+    assert daedalus_doctor.scope(tmp_path) == "folder"
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    _features(repo, {"scope": "repo"})
+    assert daedalus_doctor.scope(repo) == "repository"
+
+
+RETIRED_LINE = (
+    "OPT  github key: has no effect since 0172; gh is required in repository scope only. "
+    "Next: remove github from the features object of service-manifest.json"
+)
+
+
+@pytest.mark.parametrize("value", [True, False, None, "yes"])
+def test_retired_github_key_prints_one_line_and_changes_nothing(
+    tmp_path: Path, value: object
+) -> None:
+    # 0172: the manifest still loads; one OPT line names the key, and the gh lines key on scope.
+    _features(tmp_path, {"github": value})
     home = tmp_path / "home"
     home.mkdir()
-    lines = _run(None, tmp_path, path_env=_bins(tmp_path, "gh"), home=home).stdout.splitlines()
-    assert "OK   gh on PATH" in lines and "OK   gh authenticated" in lines
+    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
+    assert lines.count(RETIRED_LINE) == 1
+    assert sum("github key" in line for line in lines) == 1
+    assert any(line.startswith("OK   service-manifest.json: ") for line in lines)
+    gh = [line for line in lines if line[5:].startswith("gh ")]
+    assert len(gh) == 2 and all(line.startswith("OPT  gh ") for line in gh)
 
 
-def test_refused_manifest_counts_github_on(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    # issue 48: a typo in the manifest never hides a missing gh, as the gitleaks line treats one.
-    import daedalus_doctor
+def test_no_retired_key_line_without_the_key(tmp_path: Path) -> None:
+    _features(tmp_path, {"secrets_scan": False})
+    home = tmp_path / "home"
+    home.mkdir()
+    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
+    assert not any("github key" in line for line in lines)
 
-    _github(tmp_path, "yes")
-    monkeypatch.setenv("PATH", _bins(tmp_path))
-    assert daedalus_doctor.github_on(tmp_path) is True
-    lines = [line for _, line in daedalus_doctor._gh_checks(tmp_path)]
-    assert len(lines) == 2 and all(line.startswith("MISS gh ") for line in lines)
+
+def test_plain_folder_runs_the_folder_scope_checks(tmp_path: Path) -> None:
+    # issue 48: a folder with no .git is folder scope; every git-dependent line is OPT, none MISS.
+    folder = tmp_path / "plain"
+    folder.mkdir()
+    _features(folder, {"secrets_scan": True})
+    assert not (folder / ".git").exists()
+    result = _run(None, folder, path_env=_bins(tmp_path), home=tmp_path / "home")
+    lines = result.stdout.splitlines()
+    assert (
+        f"OPT  git repository: {folder} is not a git repository, so trains here run in folder "
+        "scope without git (0074). Next: to use repository scope, run git init or point --repo "
+        "at a clone"
+    ) in lines
+    assert (
+        f"OPT  gitleaks on PATH: not found{FOLDER_OFF}. Next: the Push Train scans commits with "
+        "gitleaks; install it so the scan can run"
+    ) in lines
+    assert not any("clean working tree" in line or "version tag" in line for line in lines)
+    assert [line for line in lines if line.startswith("MISS")] == []
+    assert result.returncode == 0 and lines[-1] == "daedalus doctor: all checks passed"
+
+
+def test_declared_repository_scope_without_git_is_a_miss(tmp_path: Path) -> None:
+    # 0074: a declared repository scope keeps the git repository line a MISS.
+    _repository(tmp_path)
+    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=tmp_path / "home").stdout
+    assert (
+        f"MISS git repository: {tmp_path} is not a git repository. "
+        "Next: run git init or point --repo at a clone"
+    ) in lines.splitlines()
+
+
+def test_print_scope_names_the_scope_and_root(tmp_path: Path) -> None:
+    # issue 48: the plan skill reads this line instead of running git.
+    folder = tmp_path / "plain"
+    folder.mkdir()
+    out = run_cli("daedalus_doctor.py", "--print-scope", "--repo", str(folder))
+    assert out.returncode == 0 and out.stdout == f"scope: folder  root: {folder}\n"
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    out = run_cli("daedalus_doctor.py", "--print-scope", "--repo", str(repo))
+    assert out.stdout == f"scope: repository  root: {repo}\n"
+    _features(folder, {"scope": "bad"})
+    out = run_cli("daedalus_doctor.py", "--print-scope", "--repo", str(folder))
+    assert out.returncode == 1 and "features.scope" in out.stderr and "Next:" in out.stderr
 
 
 def test_absent_config_runs_the_ledger_probe_none_found(tmp_path: Path) -> None:
@@ -741,6 +826,34 @@ def test_config_ledger_valid_is_ok_with_config_origin(tmp_path: Path) -> None:
     lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
     assert f"OK   ledger: {path} (config, markdown-table-row)" in lines
     assert not any(line.startswith("MISS ledger") for line in lines)
+
+
+@pytest.mark.parametrize(
+    ("doc", "write", "prefix"),
+    [
+        ({}, False, "OPT  standing_rules: not declared. Next: set standing_rules"),
+        ({"standing_rules": "docs/standing-rules.md"}, True, "OK   standing_rules: "),
+        ({"standing_rules": "docs/standing-rules.md"}, False, "MISS standing_rules: "),
+    ],
+)
+def test_config_standing_rules_line(
+    tmp_path: Path, doc: dict[str, str], write: bool, prefix: str
+) -> None:
+    # 0090: one line for the key; absent is OPT, a declared path with no file a MISS.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (_data(repo) / "config.json").write_text(json.dumps(doc))
+    if write:
+        (repo / "docs").mkdir()
+        (repo / "docs" / "standing-rules.md").write_text("# Standing rules\n")
+    bins = _bins_with_git(tmp_path)
+    result = _run(None, repo, path_env=bins, home=tmp_path / "home")
+    lines = [line for line in result.stdout.splitlines() if line[5:].startswith("standing_rules:")]
+    assert len(lines) == 1 and lines[0].startswith(prefix), result.stdout
+    if prefix.startswith("MISS"):
+        assert "Next:" in lines[0] and result.returncode == 1
+    if write:
+        assert lines[0].endswith(str(repo.resolve() / "docs" / "standing-rules.md"))
 
 
 def test_train_marker_absent_is_ok_none(tmp_path: Path) -> None:

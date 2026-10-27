@@ -55,8 +55,8 @@ def _flat(path: Path) -> str:
 # Manifest keys (requirement 4).
 
 
-def test_persona_switches_follow_github_in_the_feature_list() -> None:
-    assert FEATURE_KEYS[FEATURE_KEYS.index("github") + 1 :] == (
+def test_persona_switches_follow_ledger_in_the_feature_list() -> None:
+    assert FEATURE_KEYS[FEATURE_KEYS.index("ledger") + 1 :] == (
         "dependency_web_lookup",
         "terraform_tools",
         "terraform_validate",
@@ -131,8 +131,8 @@ def test_docs_block_refuses_a_wrong_shape_or_unknown_key(tmp_path: Path, payload
 
 def test_key_reference_rows_cover_the_three_keys_in_order() -> None:
     keys = manifest_keys()
-    github = keys.index("features.github")
-    assert keys[github + 1 : github + 3] == (
+    ledger = keys.index("features.ledger")
+    assert keys[ledger + 1 : ledger + 3] == (
         "features.dependency_web_lookup",
         "features.terraform_tools",
     )

@@ -25,9 +25,16 @@ from lib.audit import (  # noqa: E402
     project_data_dir,
     project_root,
 )
-from lib.config import Config, ConfigError, load_config  # noqa: E402
+from lib.config import Config, ConfigError, load_config, standing_rules_path  # noqa: E402
 from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
-from lib.manifest import ManifestError, PrioritiesError  # noqa: E402
+from lib.manifest import (  # noqa: E402
+    Features,
+    ManifestError,
+    PrioritiesError,
+    retired_features,
+    scope_kind,
+)
+from lib.manifest import features as manifest_features  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
 from lib.plan_record import is_need  # noqa: E402
 from lib.workspace import _BARE_VERSION, UNMARK_NEXT, VERSION_FILE, train_marker  # noqa: E402
@@ -37,7 +44,9 @@ GH_NEXT = "install gh (https://cli.github.com); the Push Train opens pull reques
 GH_TIMEOUT_S = 10
 TYPECHECK_TIMEOUT_S = 120
 GH_STUCK_NEXT = "run gh auth status from your own shell, then gh auth login if it asks"
-GH_OFF = ", and features.github is off in service-manifest.json"
+# 0074, 0172: gh, gitleaks and git lines are optional in folder scope, where no Push Train runs.
+FOLDER_OFF = ", and this is folder scope, where the Push Train never runs (0074)"
+RETIRED_DETAIL = "has no effect since 0172; gh is required in repository scope only"
 CLAUDE_TIMEOUT_S = 10
 # 0122: code.claude.com/docs/en/hooks, Command hook fields: onFailure needs v2.1.295 or later.
 ON_FAILURE_MIN = (2, 1, 295)
@@ -56,6 +65,13 @@ ENABLEMENT = ".claude/settings.json"
 ENABLEMENT_NEXT = f"commit {ENABLEMENT}; it holds the enabledPlugins entry /plugin install wrote"
 # 0076: the setup skill writes whichever starter file is missing; the doctor never writes one.
 SETUP_NEXT = "run the Daedalus setup skill (/daedalus:setup) to write a starter {name}"
+STANDING_NEXT = (
+    "set standing_rules in .claude/daedalus/config.json to the standing-rules file, "
+    "so the planner reads it"
+)
+STANDING_MISS_NEXT = (
+    "write it with scripts/standing_rules.py, or fix standing_rules in .claude/daedalus/config.json"
+)
 # 0095: a local clone added as a marketplace caches under its marketplace name.
 CACHE_NAMING = (
     "a --plugin-dir session uses daedalus-inline; a marketplace install, the published one or a "
@@ -259,20 +275,20 @@ def _plugin_root_check() -> tuple[bool, str]:
     return True, f"OK   plugin root: {Path(__file__).resolve().parent.parent}"
 
 
-def github_on(repo: Path) -> bool:
-    # issue 48: a manifest the reader refuses counts as on, as the gitleaks line treats one.
+def scope(repo: Path) -> str:
+    # 0074: the manifest's own detector; a refused manifest falls back to detection alone.
     try:
-        loaded = load_manifest(repo)
+        declared = manifest_features(repo)
     except ManifestError:
-        return True
-    return loaded is not None and loaded.features.github is True
+        declared = Features()
+    return scope_kind(project_root(str(repo)), declared)
 
 
-def _gh_checks(repo: Path) -> Iterator[tuple[bool, str]]:
-    # spec 5, issue 48: the gh lines are a MISS with features.github on and OPT with it off.
-    on = github_on(repo)
+def _gh_checks(scope_name: str) -> Iterator[tuple[bool, str]]:
+    # 0172: the gh lines are a MISS in repository scope and OPT in folder scope, on scope alone.
+    on = scope_name == "repository"
     report = _check if on else _opt
-    off = "" if on else GH_OFF
+    off = "" if on else FOLDER_OFF
     on_path = shutil.which("gh") is not None
     yield report(on_path, "gh on PATH", f"not found{off}", GH_NEXT)
     if not on_path:
@@ -435,6 +451,16 @@ def _ledger_probe(root: Path, config: Config) -> tuple[bool, str]:
     return True, f"OK   ledger: {found.path} ({found.origin}, {found.format})"
 
 
+def _standing_rules_check(root: Path, config: Config) -> tuple[bool, str]:
+    # 0090: absent is optional; a declared path with no file is a MISS.
+    path = standing_rules_path(config, root)
+    if path is None:
+        return _opt(False, "standing_rules", "not declared", STANDING_NEXT)
+    if path.is_file():
+        return True, f"OK   standing_rules: {path}"
+    return False, f"MISS standing_rules: {path} is not a file. Next: {STANDING_MISS_NEXT}"
+
+
 def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
     cfg_path = data / "config.json"
     try:
@@ -453,6 +479,7 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
             SETUP_NEXT.format(name="config.json"),
         )
     yield _ledger_probe(data.parent.parent, config)
+    yield _standing_rules_check(data.parent.parent, config)
     # spec 5: standards_sources and policy are optional; undeclared is not a miss.
     if config.standards_sources:
         yield True, "OK   standards_sources declared"
@@ -596,19 +623,41 @@ def _typecheck_check(repo: Path, run: bool = False) -> Iterator[tuple[bool, str]
         yield _check(False, name, f"exited {done.returncode}: {result}", nxt)
 
 
-def _repo_checks(
-    repo: Path, is_repo: bool, run_typecheck: bool = False
-) -> Iterator[tuple[bool, str]]:
-    yield _check(
-        is_repo,
+def _git_repo_check(repo: Path, is_repo: bool, scope_name: str) -> tuple[bool, str]:
+    # issue 48, 0074: no git work tree is folder scope, never a failure, unless declared repository.
+    if scope_name == "repository" or is_repo:
+        nxt = "run git init or point --repo at a clone"
+        return _check(is_repo, "git repository", f"{repo} is not a git repository", nxt)
+    return _opt(
+        False,
         "git repository",
-        f"{repo} is not a git repository",
-        "run git init or point --repo at a clone",
+        f"{repo} is not a git repository, so trains here run in folder scope without git (0074)",
+        "to use repository scope, run git init or point --repo at a clone",
     )
-    if is_repo:
+
+
+def _retired_key_check(repo: Path) -> Iterator[tuple[bool, str]]:
+    # 0172: a dropped feature key loads and is ignored; one OPT line names it.
+    try:
+        retired = retired_features(repo)
+    except ManifestError:
+        return
+    for key in retired:
+        nxt = f"remove {key} from the features object of service-manifest.json"
+        yield _opt(False, f"{key} key", RETIRED_DETAIL, nxt)
+
+
+def _repo_checks(
+    repo: Path, is_repo: bool, scope_name: str, run_typecheck: bool = False
+) -> Iterator[tuple[bool, str]]:
+    yield _git_repo_check(repo, is_repo, scope_name)
+    if is_repo and scope_name == "repository":
+        # 0069: a folder-scope train runs no clean-tree check, so the doctor runs none either.
         yield _clean_tree_check(repo)
+    if is_repo:
         yield from _version_tag_check(repo)
     yield _manifest_check(repo)
+    yield from _retired_key_check(repo)
     yield from _priorities_check(repo)
     yield from _typecheck_check(repo, run_typecheck)
     yield _opt(
@@ -631,13 +680,16 @@ def secrets_scan_on(repo: Path) -> bool:
     return loaded is not None and loaded.features.secrets_scan
 
 
-def _gitleaks_check(repo: Path) -> tuple[bool, str]:
+def _gitleaks_check(repo: Path, scope_name: str) -> tuple[bool, str]:
     # 0069: a manifest the reader refuses counts as scan on, so a typo never hides a missing tool.
+    refused = False
     try:
         needed = secrets_scan_on(repo)
     except ManifestError:
-        needed = True
+        needed = refused = True
     found = shutil.which("gitleaks") is not None
+    if needed and not found and scope_name == "folder" and not refused:
+        return _opt(False, "gitleaks on PATH", f"not found{FOLDER_OFF}", GITLEAKS_NEXT)
     if needed or found:
         return _check(found, "gitleaks on PATH", "not found", GITLEAKS_NEXT)
     return _opt(False, "gitleaks on PATH", "not found, and the secret scan is off", SCAN_OFF_NEXT)
@@ -662,17 +714,30 @@ def checks(repo: Path, run_typecheck: bool = False) -> Iterator[tuple[bool, str]
         "install Python 3.12 and ensure python3 resolves to it",
     )
     is_repo = _is_repo(repo)
+    scope_name = scope(repo)
     yield from _data_checks(repo, is_repo)
     yield _marker_check(repo)
     yield _cache_check()
     yield _plugin_root_check()
     yield from _framework_lines()
     yield from _pack_lines(repo)
-    yield _gitleaks_check(repo)
-    yield from _gh_checks(repo)
+    yield _gitleaks_check(repo, scope_name)
+    yield from _gh_checks(scope_name)
     yield from _hook_failure_check()
     yield _kernel_rules_check()
-    yield from _repo_checks(repo, is_repo, run_typecheck)
+    yield from _repo_checks(repo, is_repo, scope_name, run_typecheck)
+
+
+def print_scope(repo: Path) -> int:
+    # issue 48, 0074: the plan skill reads this one line instead of running git to find its root.
+    try:
+        declared = manifest_features(repo)
+    except ManifestError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    root = project_root(str(repo))
+    print(f"scope: {scope_kind(root, declared)}  root: {root}")
+    return 0
 
 
 def print_cache_dir() -> int:
@@ -741,6 +806,11 @@ def main(argv: list[str]) -> int:
         help="print whether the service manifest turns the Push Train's secret scan on, and exit",
     )
     parser.add_argument(
+        "--print-scope",
+        action="store_true",
+        help="print the project's scope, repository or folder, and its root, and exit",
+    )
+    parser.add_argument(
         "--run-typecheck",
         action="store_true",
         help="run the stack.typecheck_cmd the repository declares in service-manifest.json;"
@@ -761,6 +831,8 @@ def main(argv: list[str]) -> int:
         return print_files()
     if args.print_secrets_scan:
         return print_secrets_scan(Path(args.repo).resolve())
+    if args.print_scope:
+        return print_scope(Path(args.repo).resolve())
     all_ok = True
     for ok, line in checks(Path(args.repo).resolve(), args.run_typecheck):
         print(line)

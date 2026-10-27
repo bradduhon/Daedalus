@@ -19,7 +19,7 @@ Daedalus is developed on Linux. macOS is untested.
 |---|---|---|
 | Python | 3.12 or newer | Your system's package manager |
 | Claude Code | Developed against 2.1.280 | Claude Code's own install instructions |
-| git | any | Your system's package manager |
+| git, for a project that is a git repository | any | Your system's package manager |
 | gitleaks, for the Push Train's secret scan when the service manifest turns it on | any | https://github.com/gitleaks/gitleaks#installing |
 | gh, the GitHub CLI, for the Push Train | any | Install it, then run `gh auth login` |
 
@@ -59,7 +59,7 @@ If `/daedalus:doctor` is not offered yet after you install, run `/reload-plugins
 
 The doctor lists every file and tool Daedalus needs. Each `OK` line is a check that passed. Each `MISS` line names what is missing. Running the doctor changes nothing. Fix the `MISS` lines and run it again.
 
-Every `MISS` line ends with a `Next:` instruction that says what to do. In a new repository, four lines read `OPT` until you add the files they name: `config.json`, `service-manifest.json`, `contracts/` and `.gitleaks.toml`. `/daedalus:setup` writes starter copies of the first two. `OPT` marks an optional scaffold your project declares about itself. Neither the Build Train nor the Push Train stops when they are absent, and their absence never fails the doctor. [docs/project-requirements.md](docs/project-requirements.md) lists every file Daedalus expects, says what each is for, and gives a small example of each.
+Every `MISS` line ends with a `Next:` instruction that says what to do. In a new repository, four lines read `OPT` until you add the files they name: `config.json`, `service-manifest.json`, `contracts/` and `.gitleaks.toml`. `/daedalus:setup` writes starter copies of the first two. `OPT` marks an optional scaffold your project declares about itself. Neither the Build Train nor the Push Train stops when they are absent, and their absence never fails the doctor. Outside a git repository the project is in folder scope, and the doctor runs its folder-scope checks: the `git repository` line, the two gh lines and, with the secret scan on, the gitleaks line read `OPT`, because the Push Train runs only in a repository (0074). A `github` key left in the features object of `service-manifest.json` has no effect, and the doctor prints one `OPT` line saying so (0172). [docs/project-requirements.md](docs/project-requirements.md) lists every file Daedalus expects, says what each is for, and gives a small example of each.
 
 ### Your first body of work
 
@@ -109,6 +109,14 @@ The Execution Train is not a saved recipe and has no command. It is your own man
 To read what every agent did in a session, open its audit report:
 
     /daedalus:audit-report
+
+### Token report
+
+To see what a run cost in tokens, agents only, in the same columns for every run type:
+
+    /daedalus:token-report <run id or session id>
+
+`/daedalus:token-report history` prints the totals row of every saved run.
 
 ## The agents
 
@@ -212,7 +220,6 @@ One row per key the two readers accept: what the key governs, then what goes the
 | `features.secrets_scan` | `service-manifest.json` | Turns on the Push Train's gitleaks scan of the commits a push sends; with the scan on, the Push Train stops when gitleaks is missing or finds a secret, and the doctor's gitleaks line is a `MISS` (0069) | boolean | `true` or `false` | `false`: no scan, and gitleaks need not be installed | `true` |
 | `features.scrub_file` | `service-manifest.json` | A file of terms, one per line, that the release step checks the release notes against; a hit stops the release and names how many terms it found, never the terms (0069) | string or null | A project-relative path without a leading slash, `..` or glob characters, or `null` | `null`: nothing is checked | `"docs/scrub-terms.txt"` |
 | `features.ledger` | `service-manifest.json` | Turns the decision ledger steps on or off (0069) | boolean or null | `true`: the ledger is used, and a train asks before creating one; `false`: no ledger step and no ledger question; `null`: the default | `null`: a ledger the config declares or the probe finds is used, and none is created | `true` |
-| `features.github` | `service-manifest.json` | Says the project pushes to GitHub and opens its pull requests there with the gh tool; with it on, the doctor's two gh lines are a `MISS` when gh is missing or not signed in, and with it off they are `OPT` (0069) | boolean or null | `true`, `false` or `null`; `null` reads as `false` | `false`: the doctor never fails on gh | `true` |
 | `features.dependency_web_lookup` | `service-manifest.json` | Lets the dependency auditor ask for security advisories on the web; the train sends its questions to the web researcher. With it off, the auditor judges from the lockfile and any advisory export the project supplies (0132) | boolean or null | `true`, `false` or `null`; only `false` turns the lookup off | `null`: the lookup is on | `false` |
 | `features.terraform_tools` | `service-manifest.json` | Lets the Terraform reviewer run `terraform fmt -check` and `terraform validate` on the Terraform files a train changes; validate also needs `features.terraform_validate`. With it off, the reviewer judges by reading the files (0132, 0158) | boolean or null | `true`, `false` or `null`; only `false` turns both commands off; validate also needs `features.terraform_validate` | `null`: `fmt -check` may run | `false` |
 | `features.terraform_validate` | `service-manifest.json` | Lets the Terraform reviewer run `terraform validate`, which starts the provider programs in a module's `.terraform` folder. Setup never writes it, and `features.terraform_tools` set to `false` still turns it off (0158) | boolean | `true` or `false` | `false`: the reviewer runs no validate and marks that check N/A | `true` |
@@ -238,6 +245,7 @@ One row per key the two readers accept: what the key governs, then what goes the
 | `ledger.id_scheme` | `service-manifest.json` | The pattern each new ruling id follows (0004) | string | A pattern such as `{seq:04d}-{repo}-{type}`; a heading ledger uses `{seq}` | Required once the block exists | `"{seq:04d}-{repo}-{type}"` |
 | `ledger.sequence_source` | `service-manifest.json` | Where the next ruling number comes from (0004) | string | `"last-row-id"` or `"frontmatter:<key>"` | Required once the block exists | `"last-row-id"` |
 | `charter_root` | `.claude/daedalus/config.json` | The repository where your decisions and specs live; the contract and ledger agents may write there, and a Build Train branches it as `daedalus/<train-id>` (0011) | string or null | A non-empty path to a git repository, written absolute | `null`: those agents write only inside the project, and the contract lives in `contracts/` | `"/work/decisions"` |
+| `standing_rules` | `.claude/daedalus/config.json` | The standing-rules file the planner reads as the rules every plan must satisfy, derived from the ledger by `scripts/standing_rules.py` (0090) | string or null | A non-empty path; a relative path is read from `charter_root` when one is declared, else from the project root | `null`: the repository has no standing-rules file | `"standing-rules.md"` |
 | `excluded_roots` | `.claude/daedalus/config.json` | Folders whose files must never reach git, GitHub or a redirect. A Daedalus agent is refused such a command in every session, and the main session is warned during a train. A document train records the resolved folders in its frozen sources file (0136) | list of objects | `{"kind": "path", "path": "<folder>"}`, a folder with `<repo_root>` and `<charter_root>` filled in and a relative path read from the project root; or `{"kind": "gitignore", "match": "directories"}` (every folder git ignores) or `"match": "all"` (every ignored path); a folder holding a linked worktree is skipped | `[]`: no folder is excluded | `[{"kind": "path", "path": "<repo_root>/private/"}]` |
 | `ledger.path` | `.claude/daedalus/config.json` | Where rulings are appended on this machine, used when the manifest declares no ledger (0004) | string | A path; `<repo_root>` and `<charter_root>` are filled in, and a relative path is read from the project root | `null`: the ledger probe looks for one | `"<charter_root>/decision-log.md"` |
 | `ledger.format` | `.claude/daedalus/config.json` | How each ruling is written to the ledger (0004) | string | `"markdown-table-row"` (one table row per ruling) or `"heading-entry"` (one `## Entry N` section per ruling) | Required once the block exists | `"markdown-table-row"` |
@@ -563,6 +571,7 @@ Daedalus/
 │   ├── import_pack.py               # operator-run: writes a control pack from an OSCAL catalog or a CIS id map
 │   ├── refresh_frameworks.py        # operator-run: compile the pinned framework caches
 │   ├── standing_rules.py            # derives the standing-rules file from the ledger
+│   ├── token_economy.py             # the token table of one run, and the saved-run history
 │   ├── validate_plan.py             # checks a plan file and prints its graph line
 │   ├── validate_train.py            # checks a train definition file
 │   └── verify_audit_chain.py        # recompute and verify a session's hash chain
@@ -582,6 +591,7 @@ Daedalus/
 │   ├── round/SKILL.md               # /daedalus:round
 │   ├── run/SKILL.md                 # /daedalus:run, the one command that starts any run
 │   ├── setup/SKILL.md               # /daedalus:setup
+│   ├── token-report/SKILL.md        # /daedalus:token-report
 │   └── verify/SKILL.md              # /daedalus:verify, the verify phase
 └── tests/                           # the pytest suite
 ```

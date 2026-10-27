@@ -73,6 +73,7 @@ class ExcludedRoot:
 @dataclass(frozen=True)
 class Config:
     charter_root: Path | None = None
+    standing_rules: str | None = None
     excluded_roots: tuple[ExcludedRootDecl, ...] = field(default_factory=tuple)
     ledger: LedgerDecl | None = None
     policy: PolicyDecl | None = None
@@ -279,6 +280,14 @@ def _root_path(raw: str, repo_root: Path, charter_root: Path | None) -> str:
     return os.path.normpath(path if path.is_absolute() else repo_root / path)
 
 
+def standing_rules_path(config: Config, repo_root: Path) -> Path | None:
+    # 0090: relative to charter_root when one is declared, else to the project root.
+    if config.standing_rules is None:
+        return None
+    base = repo_root / config.charter_root if config.charter_root else repo_root
+    return Path(os.path.normpath(base / config.standing_rules))
+
+
 def _git_lines(args: list[str], repo_root: Path) -> list[str]:
     try:
         out = git.run(args, repo_root, 5)
@@ -372,8 +381,12 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
     _refuse_round_budget(raw)
     # 0076: null is not declared, the same as an absent key; the setup starter writes null.
     charter = _require_str(raw, "charter_root", "") if raw.get("charter_root") is not None else None
+    rules = (
+        _require_str(raw, "standing_rules", "") if raw.get("standing_rules") is not None else None
+    )
     return Config(
         charter_root=Path(charter) if charter is not None else None,
+        standing_rules=rules,
         excluded_roots=_excluded_roots(raw.get("excluded_roots")),
         ledger=_ledger(raw["ledger"]) if raw.get("ledger") is not None else None,
         policy=_policy(raw["policy"]) if raw.get("policy") is not None else None,
