@@ -179,18 +179,20 @@ def _expand_alt(word: str, env: dict[str, list[str]]) -> list[tuple[str, bool]]:
 
 
 def anchor(text: str, base: str) -> str | None:
-    if not text:
+    # issue 83: the existing prefix resolves through its links before a later .. applies.
+    if not text or not (os.path.isabs(text) or os.path.isabs(base)):
         return None
-    if os.path.isabs(text):
-        return os.path.normpath(text)
-    return os.path.normpath(os.path.join(base, text)) if os.path.isabs(base) else None
+    path = os.path.join(base, text)
+    try:
+        return os.path.realpath(path)
+    except ValueError:
+        return os.path.normpath(path)
 
 
-def _expand_home(token: str, cwd: str) -> str | None:
+def _expand_home(token: str) -> str:
     # spec 8: quotes and backslashes are dropped; ~, $HOME and ${HOME...} expand to home.
     # audit B4 round 3: a path argument is literal; only a Glob pattern's braces expand.
-    text = _expand_alt(_UNQUOTE.sub("", token), {"HOME": [str(Path.home())]})[0][0]
-    return anchor(text, cwd)
+    return _expand_alt(_UNQUOTE.sub("", token), {"HOME": [str(Path.home())]})[0][0]
 
 
 def _candidates(tool: str, tool_input: dict[str, object], cwd: str) -> list[str]:
@@ -319,17 +321,20 @@ def path_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | Non
     if tool == "Glob" and unjudged_root(pattern):
         return R_BRACE_UNJUDGED.format(path=pattern)
     for raw in _candidates(tool, tool_input, cwd):
-        target = _expand_home(raw, cwd)
+        text = _expand_home(raw)
+        target = anchor(text, cwd)
         if target is None:
             continue
+        # issue 83: judged on the resolved path, named as the caller spelled it.
+        shown = os.path.normpath(os.path.join(cwd, text))
         # SC-12: Read names one file and Glob lists names only, so the key's own path is enough.
         if reply_key_hit(target):
-            return R_REPLY_KEY.format(path=target)
+            return R_REPLY_KEY.format(path=shown)
         if credential_hit(target, roots, tool == "Glob"):
-            return R_CREDENTIAL.format(path=target)
+            return R_CREDENTIAL.format(path=shown)
     if tool == "Grep":
         # spec 8: the Grep tool searches hidden dirs, so a root above a store reads it.
-        target = _expand_home(str(tool_input.get("path") or cwd), cwd)
+        target = anchor(_expand_home(str(tool_input.get("path") or cwd)), cwd)
         if target and any(store_rest(target, root, False, True) is not None for root in roots):
             return R_CREDENTIAL_TREE.format(path=target)
         if target:

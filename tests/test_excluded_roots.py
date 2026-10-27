@@ -21,6 +21,7 @@ from lib.config import (
     root_ignored,
 )
 
+from tests.adversarial.corpus import H1_ICASE
 from tests.conftest import git, main_warning, write_train_marker
 from tests.hook_chain import load
 
@@ -323,6 +324,52 @@ def test_hook_gives_no_warning_outside_a_train(
     # 0035: outside a train the hook steps aside for main, so no excluded roots warning appears.
     _write_config(repo, [{"kind": "path", "path": "<repo_root>/notes"}])
     assert _hook(repo, "git add notes/a.md", monkeypatch, capsys) == (0, "")
+
+
+@pytest.mark.parametrize("command", H1_ICASE)
+def test_an_icase_pathspec_is_refused_while_a_root_is_declared(repo: Path, command: str) -> None:
+    # issue 97: git would match notes/a.md in any case; the spelled path never names the root.
+    got = jail.excluded_root_reason(command, str(repo), _roots(str(repo / "notes")))
+    assert got is not None and got.startswith(jail.R_EXCLUDED_ICASE.split("{spec}")[0]), command
+    assert "Next: spell each path in its exact case" in got
+    assert jail.excluded_root_reason(command, str(repo), _roots()) is None, command
+
+
+@pytest.mark.parametrize("command", H1_ICASE)
+def test_check_refuses_an_icase_pathspec(
+    repo: Path, command: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # issue 97: judge in checks/excluded_roots.py meets the shared rule for every routed agent.
+    monkeypatch.setattr(hook_io, "hook_config", lambda cwd: _config(repo))
+    got = load("excluded_roots").decide(_payload("daedalus:repo-coder", repo, command), [])
+    assert not got.allow and "letter case" in str(got.reason), command
+
+
+@pytest.mark.parametrize(
+    ("spec", "icase"),
+    [
+        (":(icase)a", True),
+        (":(top, icase)a", True),
+        (":(icase", True),
+        (":i:a", True),
+        (":/I:a", True),
+        (":(top)a", False),
+        (":(icasefold)a", False),
+        (":/:a", False),
+        (":!a", False),
+        (":/icase-dir/a", False),
+        ("icase", False),
+    ],
+)
+def test_icase_spec_reads_the_long_and_short_magic(spec: str, icase: bool) -> None:
+    assert jail._icase_spec(spec) is icase
+
+
+def test_case_exact_pathspecs_and_reads_still_pass(repo: Path) -> None:
+    # issue 97: an exact-case pathspec outside the root, and a message naming icase, pass.
+    roots = _roots(str(repo / "notes"))
+    for command in ("git add ':(top)src/a.md'", "git commit -m ':(icase) note'", "git status"):
+        assert jail.excluded_root_reason(command, str(repo), roots) is None, command
 
 
 def test_main_session_is_warned_when_roots_cannot_resolve(repo: Path) -> None:

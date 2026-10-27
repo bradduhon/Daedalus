@@ -15,6 +15,16 @@ from lib.shell import split_pipeline, tokenize
 from lib.workspace import train_marker
 
 from tests import hook_chain
+from tests.adversarial.corpus import (
+    H1_DEEP_BODY,
+    H1_ENV_SPLIT,
+    H1_SHELL_BODY,
+    H1_SYMLINK,
+    H1_WRAPPERS,
+    H1_WRAPPERS_OFF_ROW,
+    assert_denied,
+    nest_bodies,
+)
 from tests.conftest import CFG, CWD, REPO_ROOT, WT, write_train_marker
 from tests.jail_cases import (
     CREDENTIAL_PATHS,
@@ -2121,3 +2131,133 @@ def test_a_foreign_agent_cannot_plant_a_fifo_in_a_marked_repo(
     for command in (f"mkfifo {marked_repo}/x", f"mkfifo {marked_repo}/.claude/daedalus/s.lock"):
         d = decide(_cred("Explore", "Bash", str(other_repo), command=command), CFG)
         assert not d.allow and not d.warn, command
+
+
+def test_env_split_string_hiding_a_write_is_refused_reproduction(
+    marked_repo: Path, other_repo: Path
+) -> None:
+    # issue 80: env -S packs the write into one word; the marked repo must still be found.
+    command = f"env -S 'touch {marked_repo}/x'"
+    d = decide(_cred("Explore", "Bash", str(other_repo), command=command), CFG)
+    assert not d.allow and not d.warn, d.reason
+    assert d.reason == shell.R_ENV_SPLIT
+
+
+def _foreign(cwd: Path, command: str) -> jail.Decision:
+    return decide(_cred("Explore", "Bash", str(cwd), command=command), CFG)
+
+
+@pytest.mark.parametrize("form", H1_ENV_SPLIT)
+def test_env_split_string_is_refused_to_a_foreign_agent_in_a_train(
+    marked_repo: Path, other_repo: Path, form: str
+) -> None:
+    # issue 80: from the train's repo or another one, the -S value's own targets scope the call.
+    for cwd in (marked_repo, other_repo):
+        d = _foreign(cwd, form.format(repo=marked_repo))
+        assert not d.allow and not d.warn and d.reason == shell.R_ENV_SPLIT, (form, cwd)
+        assert "Next: write the command without env -S" in str(d.reason)
+
+
+@pytest.mark.parametrize("form", H1_ENV_SPLIT)
+def test_env_split_string_is_refused_to_a_worker(form: str) -> None:
+    # issue 80: the worker's shell model names env -S before its wrapper refusal.
+    assert_denied(_b("repo-coder", form.format(repo=WT)), "env -S")
+
+
+@pytest.mark.parametrize("form", H1_SHELL_BODY)
+def test_a_shell_body_is_refused_to_a_foreign_agent_in_a_train(
+    marked_repo: Path, other_repo: Path, form: str
+) -> None:
+    # issue 81: the body's own targets scope the call, then the body itself is refused.
+    for cwd in (marked_repo, other_repo):
+        d = _foreign(cwd, form.format(repo=marked_repo))
+        assert not d.allow and not d.warn and d.reason == jail.R_SHELL_BODY, (form, cwd)
+        assert "Next: run the command directly" in str(d.reason)
+
+
+@pytest.mark.parametrize("form", H1_ENV_SPLIT + H1_SHELL_BODY)
+def test_hidden_bodies_pass_outside_a_train_and_for_main(
+    marked_repo: Path, other_repo: Path, form: str
+) -> None:
+    # 0035, issue 80, 81: no train, no refusal; main stays exempt from construct limits (0106).
+    assert _foreign(other_repo, form.format(repo=other_repo)).allow, form
+    command = form.format(repo=marked_repo).replace("rm -rf", "touch")
+    assert decide(_cred(None, "Bash", str(marked_repo), command=command), CFG).allow, form
+
+
+def test_hidden_bodies_nest_and_find_their_targets(marked_repo: Path, other_repo: Path) -> None:
+    # issue 80, 81: a body inside a body is walked to the depth cap.
+    nested = f"env -S \"bash -c 'touch {marked_repo}/x'\""
+    assert str(marked_repo / "x") in jail._bash_write_dirs(nested, str(other_repo))
+    assert jail._hidden_reason(f"echo a; sh -c 'touch {marked_repo}/x'") == jail.R_SHELL_BODY
+    assert jail._hidden_reason("bash script.sh -c x") is None
+    assert jail._hidden_reason("bash --version") is None
+    assert jail._hidden_reason("flock /tmp/l touch x") is None
+    assert jail._hidden_reason("flock /tmp/l --command=true") == jail.R_SHELL_BODY
+    assert jail._hidden_bodies(["bash", "--frob", "-c"]) == [(jail.R_SHELL_BODY, "")]
+
+
+@pytest.mark.parametrize("form", H1_DEEP_BODY)
+def test_a_body_past_the_depth_cap_fails_closed(
+    marked_repo: Path, other_repo: Path, form: str
+) -> None:
+    # issue 81: past the cap no target is walked, so the call is judged as if a train runs.
+    for repo in (marked_repo, other_repo):
+        command = form.format(repo=repo)
+        assert jail._body_past_cap(command), command
+        d = _foreign(other_repo, command)
+        hidden = (jail.R_SHELL_BODY, shell.R_ENV_SPLIT)
+        assert not d.allow and not d.warn and d.reason in hidden, (command, d.reason)
+    assert jail._train_scoped(str(other_repo), "Bash", {"command": form.format(repo=other_repo)})
+
+
+def test_a_body_within_the_depth_cap_is_walked(marked_repo: Path, other_repo: Path) -> None:
+    # issue 81: three levels are walked for targets; outside a train they pass.
+    inside = nest_bodies(f"touch {marked_repo}/x", 3)
+    assert not jail._body_past_cap(inside)
+    assert str(marked_repo / "x") in jail._bash_write_dirs(inside, str(other_repo))
+    assert _foreign(other_repo, inside).reason == jail.R_SHELL_BODY
+    assert _foreign(other_repo, nest_bodies(f"touch {other_repo}/x", 3)).allow
+
+
+@pytest.mark.parametrize("form", H1_WRAPPERS + H1_WRAPPERS_OFF_ROW)
+def test_a_runner_wrapper_cannot_hide_a_write(
+    marked_repo: Path, other_repo: Path, form: str
+) -> None:
+    # issue 82: each row reaches the wrapped write; an option off its row reads every word.
+    d = _foreign(other_repo, form.format(repo=marked_repo))
+    assert not d.allow and not d.warn and "read-only while" in str(d.reason), (form, d.reason)
+
+
+@pytest.mark.parametrize("form", H1_WRAPPERS)
+def test_a_runner_wrapper_is_refused_to_a_worker(form: str) -> None:
+    # 8.5 ruling A: each new row joins WORKER_WRAPPERS.
+    assert_denied(_b("repo-coder", form.format(repo=WT)))
+
+
+@pytest.fixture
+def deep_link(marked_repo: Path, other_repo: Path) -> Path:
+    # issue 83: other/deep is a link to marked/sub, so other/deep/.. is marked on disk.
+    (marked_repo / "sub").mkdir()
+    (other_repo / "deep").symlink_to(marked_repo / "sub")
+    return other_repo / "deep"
+
+
+@pytest.mark.parametrize("form", H1_SYMLINK)
+def test_dot_dot_after_a_link_resolves_on_disk(
+    deep_link: Path, marked_repo: Path, other_repo: Path, form: str
+) -> None:
+    # issue 83: the text says other/x; the kernel writes marked/x.
+    d = _foreign(other_repo, form.format(other=other_repo))
+    assert not d.allow and not d.warn and "read-only while" in str(d.reason), (form, d.reason)
+
+
+def test_anchor_resolves_the_existing_prefix(
+    deep_link: Path, marked_repo: Path, other_repo: Path
+) -> None:
+    # issue 83: both directions, a link then .., and a link into the marked repo.
+    assert jail._anchor("deep/../x", str(other_repo)) == str(marked_repo / "x")
+    assert jail._anchor(f"{deep_link}/y", "") == str(marked_repo / "sub" / "y")
+    assert jail._anchor("/no/such/../x", "") == "/no/x"
+    assert jail._anchor("rel", "rel") is None and jail._anchor("", "/x") is None
+    assert jail._anchor("a\x00b", "/x") == "/x/a\x00b"

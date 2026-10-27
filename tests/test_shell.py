@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import shlex
 
 import pytest
 from lib import jail, shell
@@ -44,6 +45,7 @@ SHARED = frozenset(
     {"runs_claude", "WRAPPER_OPTS", "DURATION", "strip_wrappers", "quote_walk", "unwrap"}
     | {"WrapperOption", "WRAPPER_CHDIR", "WRAPPER_WRITES"}
     | {"worker_parse", "chain_bases"}
+    | {"env_split_values", "R_ENV_SPLIT", "FLOCK_BODY"}
 )
 
 
@@ -236,3 +238,123 @@ def test_git_sets_name_the_moved_lists() -> None:
         "specialist": shell.SPECIALIST_GIT,
         "read-only": shell.READ_ONLY_GIT,
     }
+
+
+@pytest.mark.parametrize(
+    ("command", "want"),
+    [
+        ("env -S 'touch /x'", ["touch /x"]),
+        ("env -S'touch /x'", ["touch /x"]),
+        ("env --split-string='touch /x'", ["touch /x"]),
+        ("env --split-string 'touch /x'", ["touch /x"]),
+        ("env --s='a b'", ["a b"]),
+        ("env -iS 'a b'", ["a b"]),
+        ("env -i0vS 'a b'", ["a b"]),
+        ("env -u HOME -S 'a b'", ["a b"]),
+        ("env --unset HOME --split-string 'a b'", ["a b"]),
+        ("env -C /tmp -S 'a b'", ["a b"]),
+        ("env --frobnicate -S 'a b'", ["a b"]),
+        ("env -S", [""]),
+        ("nice env -i env -S 'a b'", ["a b"]),
+        ("env -uS rm x", []),
+        ("env -CS rm x", []),
+        ("env FOO=1 -S x", []),
+        ("env -- -S x", []),
+        ("env - -S x", []),
+        ("env -i rm x", []),
+        ("git commit -m 'env -S x'", []),
+    ],
+)
+def test_env_split_values_reads_getopt_forms(command: str, want: list[str]) -> None:
+    # issue 80: -S in a cluster or a long prefix is found; a value or a plain word is not.
+    assert shell.env_split_values(shlex.split(command)) == want
+
+
+@pytest.mark.parametrize(
+    ("command", "want"),
+    [
+        ("env -S 'touch /x'", shell.R_ENV_SPLIT),
+        ("env -S 'git push --force'", shell.R_FORCE_PUSH),
+        ("nice env --split-string='rm -rf /'", shell.R_DESTRUCTIVE),
+    ],
+)
+def test_env_split_is_a_worker_finding(command: str, want: str) -> None:
+    # issue 80: workers meet env -S by name; main stays exempt from construct limits.
+    assert shell._segment_reason(shlex.split(command), 0, main=False) == want
+    assert shell._segment_reason(shlex.split("env -S 'touch /x'"), 0, main=True) == shell._FALLBACK
+    assert "Next: write the command without env -S" in shell.R_ENV_SPLIT
+
+
+RUNNERS = ("setsid", "chroot", "ionice", "taskset", "flock", "unshare", "chrt", "nsenter")
+
+
+def test_each_runner_wrapper_has_a_row_and_is_a_worker_wrapper() -> None:
+    # issue 82: a row per runner wrapper; the runner list H2 widens stays a separate table.
+    assert set(RUNNERS) <= shell.WRAPPER_OPTS.keys() <= shell.WORKER_WRAPPERS
+    assert set(shell.WRAPPER_OPERAND) == {"timeout", "taskset", "chrt", "flock", "chroot"}
+    assert shell.WRAPPER_OPERAND["timeout"] is shell.DURATION
+    moves = {"unshare": {"-R", "--root", "-w", "--wd"}}
+    moves["nsenter"] = {"-r", "--root", "-w", "--wd", "-W", "--wdns"}
+    for name, kept_off in moves.items():
+        no_arg, with_arg = shell.WRAPPER_OPTS[name]
+        assert not kept_off & (no_arg | with_arg), name
+
+
+@pytest.mark.parametrize(
+    ("command", "want"),
+    [
+        ("setsid -f -w touch x", ["touch", "x"]),
+        ("setsid --fork touch x", ["touch", "x"]),
+        ("ionice -c 3 -n 7 -t touch x", ["touch", "x"]),
+        ("ionice -c3 touch x", ["touch", "x"]),
+        ("ionice --class=idle touch x", ["touch", "x"]),
+        ("taskset 0x3 touch x", ["touch", "x"]),
+        ("taskset -c 0-2,5 touch x", ["touch", "x"]),
+        ("taskset -p 1234", []),
+        ("flock /tmp/l touch x", ["touch", "x"]),
+        ("flock -x -w 5 /tmp/l touch x", ["touch", "x"]),
+        ("flock --timeout=5 -- /tmp/l touch x", ["touch", "x"]),
+        ("flock 9", []),
+        ("unshare -f -m touch x", ["touch", "x"]),
+        ("unshare --mount-proc=/proc -S 0 touch x", ["touch", "x"]),
+        ("chrt -o 0 touch x", ["touch", "x"]),
+        ("chrt --rr -T 5 10 touch x", ["touch", "x"]),
+        ("nsenter -t 1 -m -u touch x", ["touch", "x"]),
+        ("nsenter --target=1 --mount=/proc/1/ns/mnt touch x", ["touch", "x"]),
+        ("setsid ionice -c 3 nice touch x", ["touch", "x"]),
+    ],
+)
+def test_runner_rows_reach_the_wrapped_command(command: str, want: list[str]) -> None:
+    assert shell.strip_wrappers(shlex.split(command)) == want
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "setsid --frobnicate touch x",
+        "chroot / touch x",
+        "chroot --userspec=u:g /new touch x",
+        "chroot",
+        "ionice -Z touch x",
+        "taskset touch x",
+        "taskset -Z 1 touch x",
+        "flock -c 'touch x'",
+        "flock /tmp/l -c 'touch x'",
+        "flock /tmp/l --command='touch x'",
+        "flock",
+        "unshare -R / touch x",
+        "unshare --root=/ touch x",
+        "unshare -w /tmp touch x",
+        "unshare --wd /tmp touch x",
+        "chrt --other touch x",
+        "chrt -Z 5 touch x",
+        "nsenter -r touch x",
+        "nsenter --root=/ touch x",
+        "nsenter -w touch x",
+        "nsenter --wd=/tmp touch x",
+        "nsenter -W /tmp touch x",
+    ],
+)
+def test_runner_options_off_their_row_fail_closed(command: str) -> None:
+    # issue 82: an option, operand or body the rows cannot read leaves the command unknown.
+    assert shell.strip_wrappers(shlex.split(command)) is None

@@ -58,11 +58,13 @@ from lib.shell import (
     _REPO_SCRIPTS,
     _SHELLS,
     _VALUE_LONG_NEXT,
+    FLOCK_BODY,
     GIT_PLUMBING_REMOTE,
     R_CLEAN,
     R_DATA_DIR_GIT,
     R_DEFAULT_BRANCH,
     R_DESTRUCTIVE,
+    R_ENV_SPLIT,
     R_FORCE_PUSH,
     R_STASH_UNTRACKED,
     READ_ONLY_CMDS,
@@ -83,6 +85,7 @@ from lib.shell import (
     _short_flags,
     _under,
     chain_bases,
+    env_split_values,
     runs_claude,
     strip_wrappers,
     tokenize,
@@ -1653,9 +1656,57 @@ def _train_active(cwd: str) -> bool:
 
 _TARGET_CAP = 8
 _GIT_DIR_OPTS = ("--git-dir=", "--work-tree=")
+R_SHELL_BODY = (
+    "a shell -c body is one command string the jail does not walk for what it writes "
+    "(issue 81). Next: run the command directly, without bash -c, sh -c or flock -c."
+)
+_BODY_DEPTH = 3
 
 
-def _bash_write_dirs(command: str, cwd: str) -> list[str]:
+def _shell_body(words: list[str]) -> str | None:
+    # issue 81: the -c body of a shell; past an unknown long flag, the word after a c flag.
+    code = _shell_code(words)
+    if code != _FALLBACK:
+        return code
+    flags = [k for k, w in enumerate(words) if w[:1] in "-+" and w[1:2] != "-" and "c" in w[1:]]
+    return (words[flags[0] + 1 : flags[0] + 2] or [""])[0] if flags else None
+
+
+def _hidden_bodies(words: list[str]) -> list[tuple[str, str]]:
+    # issue 80, 81: (finding, command string) for each env -S value and shell or flock -c body.
+    found = [(R_ENV_SPLIT, value) for value in env_split_values(words)]
+    for at, word in enumerate(words):
+        name = _base(word)
+        body = _shell_body(words[at:]) if name in _SHELLS else None
+        if name == "flock" and (
+            hits := [k for k in range(at + 1, len(words)) if words[k].split("=")[0] in FLOCK_BODY]
+        ):
+            _, eq, value = words[hits[0]].partition("=")
+            body = value if eq else (words[hits[0] + 1 : hits[0] + 2] or [""])[0]
+        if body is not None:
+            found.append((R_SHELL_BODY, body))
+    return found
+
+
+def _hidden_reason(command: str) -> str | None:
+    # issue 80, 81: the first env -S or -c body in any segment, refused while a train runs.
+    for words in _shell_words(command):
+        hidden = _hidden_bodies([_clean(w) for w in words if not w.startswith(_REDIRECT)])
+        if hidden:
+            return hidden[0][0]
+    return None
+
+
+def _body_past_cap(command: str, depth: int = 0) -> bool:
+    # issue 81: a body nested past _BODY_DEPTH is never walked, so the call is judged in a train.
+    for words in _shell_words(command):
+        for _, body in _hidden_bodies([_clean(w) for w in words if not w.startswith(_REDIRECT)]):
+            if depth >= _BODY_DEPTH or _body_past_cap(body, depth + 1):
+                return True
+    return False
+
+
+def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
     # issue 30: redirects, write operands, cd targets and git -C name the repos a command acts on.
     segments = _shell_words(command)
     envs = _bash_env(segments)
@@ -1690,6 +1741,11 @@ def _bash_write_dirs(command: str, cwd: str) -> list[str]:
                 acts += [a for a in _write_operands(name, args) if a != "-"]
         found += [t for t in (_anchor(p, cwd) for p in picks) if t]
         found += [t for t in (_anchor(p, base or cwd) for p in acts) if t]
+        if depth < _BODY_DEPTH:
+            # issue 80, 81: a hidden body's own targets name the repo, so a train scopes the call.
+            plain = [texts[i] for i in range(len(words)) if i not in redirects]
+            for _, body in _hidden_bodies(plain):
+                found += _bash_write_dirs(body, base or cwd, depth + 1)
     return found
 
 
@@ -1721,7 +1777,11 @@ def _marked_repo(cwd: str, tool: str, tool_input: dict[str, object]) -> Path | N
 
 def _train_scoped(cwd: str, tool: str, tool_input: dict[str, object]) -> bool:
     # 0035: an unknown repo (no absolute cwd) is judged as if a train runs there.
-    return not os.path.isabs(cwd) or _marked_repo(cwd, tool, tool_input) is not None
+    return (
+        not os.path.isabs(cwd)
+        or _marked_repo(cwd, tool, tool_input) is not None
+        or (tool == "Bash" and _body_past_cap(str(tool_input.get("command") or "")))
+    )
 
 
 def _ours(raw_agent: str) -> bool:
@@ -1758,7 +1818,13 @@ def _unknown_decision(
     if command and (_data_dir_write(command) or _cd_data_dir_git(command)):
         return _block(R_DATA_DIR)
     repo = _marked_repo(cwd, tool, tool_input)
-    if repo is None or (tool == "Bash" and _foreign_read_ok(command, cwd, charter)):
+    # issue 81: a body past the walk's cap may name any repo, so it fails closed.
+    if repo is None and not (command and _body_past_cap(command)):
+        return _allow()
+    hidden = _hidden_reason(command) if command else None
+    if hidden is not None or repo is None:
+        return _block(hidden or R_SHELL_BODY)
+    if tool == "Bash" and _foreign_read_ok(command, cwd, charter):
         return _allow()
     return _block(R_UNKNOWN_TRAIN.format(agent=agent, marker=train_marker(repo), repo=repo))
 
@@ -1894,6 +1960,16 @@ WARN_EXCLUDED = (
     "This command would put a file from a folder the project excludes into git, GitHub or a "
     "file write."
 )
+R_EXCLUDED_ICASE = (
+    "{spec} makes git match paths in any letter case, so it can name a file in an excluded "
+    "root under another spelling (issue 97). Next: spell each path in its exact case, without "
+    ":(icase), the short :i: form, --icase-pathspecs or GIT_ICASE_PATHSPECS."
+)
+# issue 97: the icase spellings an unparsed command may carry.
+_ICASE_TEXT = re.compile(
+    r":\([^)]*\bicase\b|(?:^|[\s'\"=]):[^\s:(]*i[^\s:]*:|--icase-pathspecs|GIT_ICASE_PATHSPECS",
+    re.I,
+)
 WARN_EXCLUDED_FAILED = "The excluded folders could not be resolved, so this command went unchecked."
 _EXCLUDED_GIT = frozenset({"add", "stage", "commit", "update-index", "stash"})
 _STASH_READS = frozenset({"list", "show", "pop", "apply", "drop", "clear", "branch", "create"})
@@ -2010,6 +2086,24 @@ def _whole_tree(sub: str, flags: set[str]) -> tuple[bool, bool]:
     return False, False
 
 
+def _icase_spec(spec: str) -> bool:
+    # issue 97: the long :(icase) magic, or the short : form with i among its flag letters.
+    if spec.startswith(":("):
+        words = spec[2:].split(")", 1)[0].split(",")
+        return any(word.strip().lower() == "icase" for word in words)
+    return spec.startswith(":") and ":" in spec[1:] and "i" in spec[1:].split(":", 1)[0].lower()
+
+
+def _icase_git(segment: list[str], tokens: list[str]) -> str | None:
+    # issue 97: the icase pathspec, global option or environment variable a git call carries.
+    sub, args, globals_ = _git_split(tokens)
+    env = [w for w in segment if w.split("=", 1)[0] == "GIT_ICASE_PATHSPECS" and "=" in w]
+    spellings = env + [g for g in globals_ if g == "--icase-pathspecs"]
+    paths = _git_parts(sub or "", args)[0]
+    spellings += [p for p in paths for c in _candidates(p) if _icase_spec(c)]
+    return spellings[0] if spellings else None
+
+
 def _excluded_git(tokens: list[str], base: str, roots: ExcludedRoots) -> str | None:
     sub, args, globals_ = _git_split(tokens)
     if sub not in _EXCLUDED_GIT or (sub == "stash" and args[:1] and args[0] in _STASH_READS):
@@ -2070,6 +2164,9 @@ def _excluded_text(command: str, cwd: str, roots: ExcludedRoots, writes: bool) -
     # D.5: an unparsed command is judged on its text, the roots named as written or from cwd.
     if not (_EXCLUDED_WORDS.search(command) or (writes and _EXCLUDED_WRITES.search(command))):
         return None
+    icase = _ICASE_TEXT.search(command)
+    if icase and re.search(r"\bgit\b", command) and roots():
+        return R_EXCLUDED_ICASE.format(spec=icase.group(0).strip(" \t'\"="))
     for root in _active_roots(roots(), _work_tree(cwd)):
         rel = os.path.relpath(root.path, cwd)
         names = [root.path] + ([rel] if not rel.startswith("..") and rel != "." else [])
@@ -2091,14 +2188,16 @@ def excluded_root_reason(
         if tokens is None:
             return _excluded_text(command, cwd, roots, writes)
         name = _base(tokens[0]) if tokens else ""
-        if name == "git":
+        icase = _icase_git(segment, tokens) if name == "git" else None
+        reason: str | None = None
+        if icase is not None and roots():
+            reason = R_EXCLUDED_ICASE.format(spec=icase)
+        elif name == "git":
             reason = _excluded_git(tokens, base, roots)
         elif name == "gh" or (name == "tee" and writes):
             reason = _excluded_named(name, tokens[1:], base, roots)
         elif name in _SHELLS or {"git", "gh"} & {_base(t) for t in tokens}:
             reason = _excluded_text(" ".join(tokens), base, roots, writes)
-        else:
-            reason = None
         if reason is not None:
             return reason
     return None
