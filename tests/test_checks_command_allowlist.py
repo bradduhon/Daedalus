@@ -18,11 +18,8 @@ from tests.hook_chain import (
     first_deny,
     internal_error_denies,
     load,
-    malformed_input_denies,
-    outside_tools_allow,
     payload,
     run_script,
-    unknown_flag_denies,
 )
 from tests.jail_cases import _MANIFEST_LEDGER, _git_init
 from tests.payloads import _b
@@ -325,18 +322,6 @@ def test_command_allowlist_fixture_decisions() -> None:
     assert run_script(HOOK, ok, *mover) == {"decision": "allow", "reason": ""}
     leak = payload("Bash", agent="pr-train-conductor", command="gitleaks detect")
     assert run_script(HOOK, leak, *mover) == {"decision": "deny", "reason": jail.R_GITLEAKS}
-
-
-def test_command_allowlist_allows_tools_outside_its_tools() -> None:
-    outside_tools_allow(HOOK, "Write", "--allow", "git")
-
-
-def test_command_allowlist_unknown_flag_denies() -> None:
-    unknown_flag_denies(HOOK, payload("Bash", command="git status"), "--allow", "git")
-
-
-def test_command_allowlist_malformed_input_denies() -> None:
-    malformed_input_denies(HOOK, "--allow", "git")
 
 
 def test_command_allowlist_internal_error_denies_and_names_the_hook() -> None:

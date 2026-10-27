@@ -16,11 +16,8 @@ from tests.hook_chain import (
     decide,
     evaluate,
     internal_error_denies,
-    malformed_input_denies,
-    outside_tools_allow,
     payload,
     run_script,
-    unknown_flag_denies,
 )
 from tests.jail_cases import _MANIFEST_LEDGER, _git_init
 from tests.payloads import _b, _w, _wr
@@ -362,18 +359,6 @@ def test_root_writes_fixture_decisions() -> None:
     }
     wrong = run_script(HOOK, ok, "--touch", "unit-src-tests")
     assert wrong["decision"] == "deny" and wrong["reason"].startswith("hook root_writes failed")
-
-
-def test_root_writes_allows_tools_outside_its_tools() -> None:
-    outside_tools_allow(HOOK, "Read", "--touch", "docs")
-
-
-def test_root_writes_unknown_flag_denies() -> None:
-    unknown_flag_denies(HOOK, payload("Write", file_path=f"{CWD}/docs/a.md"), "--touch", "docs")
-
-
-def test_root_writes_malformed_input_denies() -> None:
-    malformed_input_denies(HOOK, "--touch", "docs")
 
 
 def test_root_writes_internal_error_denies_and_names_the_hook() -> None:

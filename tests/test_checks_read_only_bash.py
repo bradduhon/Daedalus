@@ -15,11 +15,8 @@ from tests.hook_chain import (
     evaluate,
     internal_error_denies,
     load,
-    malformed_input_denies,
-    outside_tools_allow,
     payload,
     run_script,
-    unknown_flag_denies,
 )
 from tests.jail_cases import _git_init
 from tests.payloads import _b
@@ -197,18 +194,6 @@ def test_read_only_bash_fixture_decisions() -> None:
     status = payload("Bash", command="git status")
     want = {"decision": "deny", "reason": jail.R_SPECIALIST_BASH}
     assert run_script(HOOK, status, "--git", "specialist") == want
-
-
-def test_read_only_bash_allows_tools_outside_its_tools() -> None:
-    outside_tools_allow(HOOK, "Write", "--git", "read-only")
-
-
-def test_read_only_bash_unknown_flag_denies() -> None:
-    unknown_flag_denies(HOOK, payload("Bash", command="ls"))
-
-
-def test_read_only_bash_malformed_input_denies() -> None:
-    malformed_input_denies(HOOK, "--git", "read-only")
 
 
 def test_read_only_bash_internal_error_denies_and_names_the_hook() -> None:

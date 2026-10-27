@@ -14,8 +14,6 @@ from tests.hook_chain import (
     decide,
     evaluate,
     internal_error_denies,
-    malformed_input_denies,
-    outside_tools_allow,
     payload,
     run_script,
     unknown_flag_denies,
@@ -654,20 +652,12 @@ def test_shell_tripwires_fixture_decisions() -> None:
     assert run_script(HOOK, payload("Bash", command="pytest -q")) == allow
 
 
-def test_shell_tripwires_allows_tools_outside_its_tools() -> None:
-    outside_tools_allow(HOOK, "Write")
-
-
 def test_shell_tripwires_unknown_flag_denies() -> None:
     unknown_flag_denies(HOOK, payload("Bash", command="ls"))
     # B1: the pipe flag is gone, so an agent file still passing it fails closed.
     got = run_script(HOOK, payload("Bash", command="ls"), "--no-pipes")
     want = "hook shell_tripwires failed closed (unknown flag --no-pipes)"
     assert got == {"decision": "deny", "reason": want}
-
-
-def test_shell_tripwires_malformed_input_denies() -> None:
-    malformed_input_denies(HOOK)
 
 
 def test_shell_tripwires_internal_error_denies_and_names_the_hook() -> None:

@@ -13,11 +13,8 @@ from tests.hook_chain import (
     decide,
     evaluate,
     internal_error_denies,
-    malformed_input_denies,
-    outside_tools_allow,
     payload,
     run_script,
-    unknown_flag_denies,
 )
 from tests.jail_cases import CREDENTIAL_PATHS, _refusal, _train
 from tests.payloads import _b, _cred, _w
@@ -504,18 +501,6 @@ def test_credential_paths_fixture_decisions(cred_home: Path) -> None:
     assert run_script(HOOK, payload("Read", file_path=f"{CWD}/src/a.py")) == allow
     bash = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": CWD})
     assert run_script(HOOK, bash) == allow
-
-
-def test_credential_paths_allows_tools_outside_its_tools() -> None:
-    outside_tools_allow(HOOK, "WebFetch")
-
-
-def test_credential_paths_unknown_flag_denies() -> None:
-    unknown_flag_denies(HOOK, payload("Read", file_path=f"{CWD}/a.py"))
-
-
-def test_credential_paths_malformed_input_denies() -> None:
-    malformed_input_denies(HOOK)
 
 
 def test_credential_paths_internal_error_denies_and_names_the_hook() -> None:

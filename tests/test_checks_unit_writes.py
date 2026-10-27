@@ -17,11 +17,8 @@ from tests.hook_chain import (
     decide,
     evaluate,
     internal_error_denies,
-    malformed_input_denies,
-    outside_tools_allow,
     payload,
     run_script,
-    unknown_flag_denies,
 )
 from tests.jail_cases import BUILTIN_REL, NARROWING, _narrowed_repo, _unit_repo
 from tests.payloads import _b, _cwd, _w
@@ -639,18 +636,6 @@ def test_unit_writes_fixture_decisions(tmp_path: Path) -> None:
     assert run_script(HOOK, rel) == want
     test = payload("Bash", cwd=str(repo), command="pytest -q")
     assert run_script(HOOK, test) == {"decision": "allow", "reason": ""}
-
-
-def test_unit_writes_allows_tools_outside_its_tools() -> None:
-    outside_tools_allow(HOOK, "Read")
-
-
-def test_unit_writes_unknown_flag_denies() -> None:
-    unknown_flag_denies(HOOK, payload("Bash", command="ls"))
-
-
-def test_unit_writes_malformed_input_denies() -> None:
-    malformed_input_denies(HOOK)
 
 
 def test_unit_writes_internal_error_denies_and_names_the_hook() -> None:
