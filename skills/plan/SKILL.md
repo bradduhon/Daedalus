@@ -19,7 +19,7 @@ This skill runs outside a train, and inside a Build Train at Phase 1 before the 
 4. Set `<n>`, how many coders may run at once: the `max_concurrent_builders` value in `<repo>/.claude/daedalus/config.json`. An absent file or key means 5.
 5. Choose the planner's model (spec 4): run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py model --repo <repo> --agent planner`, adding `--override <override>` when step 1 set one. It prints one model word: the override, else the `agent_models` setting for the planner, else the planner file's `model:` line. Exit 1: stop and show its output; its `Next:` line is the next action. Dispatch `Agent(planner)` with `model: <that word>`; Claude Code loads it as `daedalus:planner`. Its prompt carries, each on its own line:
    - the spec path `<spec>`;
-   - the standing-rules file path, when the repository has one;
+   - the standing-rules file path, from the `standing_rules` key of `<repo>/.claude/daedalus/config.json`, read from its `charter_root` when one is set, else from `<repo>`; leave this line out when the key is absent or null;
    - the dependency map's `map.md` and `map.json` paths, when the train wrote them with `daedalus_map.py`, and the Standards Packet path when one is written, for its `## Priorities` section;
    - `max_concurrent_builders: <n>`;
    - the repository's file areas: the `entrypoints` block of `<repo>/service-manifest.json`, pasted as it stands, or `none declared` when the file or block is absent;
