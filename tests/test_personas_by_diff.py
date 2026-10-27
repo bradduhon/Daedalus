@@ -37,7 +37,7 @@ FOUR_DOCS = (
     "`docs/guardrails.md`",
     "`docs/project-requirements.md`",
 )
-PER_FINDING = "`Fix it now (Recommended)`, `Skip, track or exempt it` and `Stop the train`"
+PER_FINDING = "`Fix it now (Recommended)`, `Skip, track or exempt it` and `Stop the run`"
 VERIFIER_DESCRIPTION = (
     "Adversarial read-only verifier of one unit's diff against its brief. Judges what the unit "
     "did, did not do, added or subtracted against its requirements; agreement earns nothing."
@@ -266,8 +266,8 @@ def _phase(name: str) -> str:
     return (REPO_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
 
 
-# 0169: the phase skills say run where the catalog's labels still say train (R1).
-PER_FINDING_RUN = PER_FINDING.replace("the train", "the run")
+# 0169: the phase skills and the catalog share one label set, all saying run.
+PER_FINDING_RUN = PER_FINDING
 
 
 def test_phase_3_step_2_consults_both_judges_by_diff_content() -> None:

@@ -307,7 +307,7 @@ A `[VERDICT: REJECTED]` names the tip it judged and writes each blocking finding
 
 - Fix it now (Recommended): the train sends the finding to the coding agent that wrote the code, in a fix unit cut from the integration branch, with the test it must make pass. Then it merges the fixes and audits again. How the fix is built is in the finding file, not in the choice.
 - Skip, track or exempt it: the finding stays in the merged work, and the exemption becomes a ruling in the ledger. A second question asks how the exemption is tracked: Skip it (dropped silently), Track it (a GitHub tracked-risk issue the session files before the pull request opens), Exempt it (the local ledger record alone), or your own answer. Every choice is offered in every project. A Skip it or Exempt it answer puts a `Deviation:` line in the pull request body naming the finding and its exemption row.
-- Stop the train: the train stops, and every unit branch stays for fixes by hand or a narrower rerun.
+- Stop the run: the run stops, and every unit branch stays for fixes by hand or a narrower rerun.
 
 The same questions follow every later rejected round. No fix round starts without your pick, and there is no limit on the number of rounds. The train never runs a fix round or stops on its own. The push run's verdict check accepts a rejected round once every finding in its findings file carries an exemption.
 

@@ -1644,8 +1644,8 @@ def test_an_ask_route_names_the_three_gate_labels(repo: Path, plugin: Path) -> N
     assert outcome.code == 0, outcome.lines
     assert outcome.lines[-1] == (
         "Next: put the question to the operator with the choices `Fix it now`, "
-        "`Skip, track or exempt it` and `Stop the train`; run step to retry the stage, "
-        "or stop on `Stop the train`."
+        "`Skip, track or exempt it` and `Stop the run`; run step to retry the stage, "
+        "or stop on `Stop the run`."
     )
     assert "end the train" not in "\n".join(outcome.lines)
 

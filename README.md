@@ -88,7 +88,7 @@ If your project is a plain folder and not a git repository, Daedalus works in fo
 
 1. See what Daedalus has. Type `/daedalus:catalog` once. It prints a list of the agents and the seven phases.
 2. Start a run. Type `/daedalus:run` and your task in your own words, for example `/daedalus:run Add a --verbose flag to the command-line tool`. A one-line task needs no file, because the run saves the words you type as the spec. With only an idea and no spec, type `/daedalus:brainstorm` and the idea, or the path of a notes file. The [operator guide](docs/howto/README.md) shows how to turn an idea into a spec and how to split a spec into units before you build.
-3. Answer its questions. The run works on its own and stops only when it needs you. Each question arrives in Claude Code's question prompt, with the recommended answer first. When the security audit finds a problem, you get one question per problem with three choices: `Fix it now (Recommended)`, `Skip, track or exempt it` or `Stop the train`.
+3. Answer its questions. The run works on its own and stops only when it needs you. Each question arrives in Claude Code's question prompt, with the recommended answer first. When the security audit finds a problem, you get one question per problem with three choices: `Fix it now (Recommended)`, `Skip, track or exempt it` or `Stop the run`.
 4. Merge the pull request. When the run ends, you can read what every agent did with `/daedalus:audit-report <session>`. Type `/daedalus:run push` to push the branch and open its pull request. Review the pull request and merge it yourself. Daedalus never merges.
 
 ## Runs and reports
@@ -513,7 +513,7 @@ Each failing finding comes to you as one question. Its first line says what is a
 
 - `Fix it now (Recommended)` runs a fix round.
 - `Skip, track or exempt it` exempts the finding.
-- `Stop the train` ends the train.
+- `Stop the run` ends the run.
 
 No limit on rounds applies. The train never opens a fix round or stops on its own; you hold every one of those choices. An exemption brings a second question, how it is tracked: `Skip it` (dropped silently), `Track it` (a GitHub tracked-risk issue), `Exempt it` (the local ledger record alone), or your own answer. These are stored as `dropped`, `issue`, `local` and `other`. Your session records each exemption with `daedalus_train.py exception --repo <repo> --ledger-id <id> --finding <id> --tracking <dropped, issue, local or other>`. The command writes it in train state: under the round for a security finding, and in the docs record for a docs claim. The push proof reads it. The summary's Audit section prints each exempted finding with its tracking answer.
 
