@@ -202,7 +202,7 @@ R_CONDUCTOR_PUSH_BRANCH = (
 )
 R_CONDUCTOR_NO_TRAIN = (
     "no active train names the branch to push (issue 11). "
-    "Next: run /daedalus:push-train, which marks the train before the push."
+    "Next: run /daedalus:run push, which marks the train before the push."
 )
 R_CONDUCTOR_CHARTER = (
     "git -C reaches only the charter root .claude/daedalus/config.json declares, and only for "

@@ -1,9 +1,10 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 0135, 0136, 0137: the document train recipe, its two agents and the round skill.
+# 0135, 0136, 0137: derived document mode, its two agents and the round skill.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -12,13 +13,16 @@ import pytest
 from lib import agent_files, router
 from lib.agent_files import Hook
 
-from tests.conftest import REPO_ROOT, write_train_marker
+from tests.conftest import REPO_ROOT, write_folder_run, write_train_marker
 
+# 0174: the doc-train skill is a stub; derived document mode of the document skill holds the recipe.
+DOCUMENT = REPO_ROOT / "skills" / "document" / "SKILL.md"
 DOC_TRAIN = REPO_ROOT / "skills" / "doc-train" / "SKILL.md"
 ROUND = REPO_ROOT / "skills" / "round" / "SKILL.md"
 DERIVER = REPO_ROOT / "agents" / "doc-deriver.md"
 LOGGER = REPO_ROOT / "agents" / "change-logger.md"
-STAGES = ("Freeze", "Derive", "Verify", "Change gate", "Docs writer", "Present")
+STAGES = ("Preconditions", "Freeze", "Derive", "Verify", "Change gate", "Docs writer", "Present")
+FIRST_STEP = 9
 _AGENT_REF = re.compile(r"Agent\(`([a-z-]+)`\)")
 TRAIN = "20261026-030405"
 
@@ -27,24 +31,41 @@ def _text(path: Path) -> str:
     return " ".join(path.read_text(encoding="utf-8").split())
 
 
+def _derived_raw() -> str:
+    text = DOCUMENT.read_text(encoding="utf-8")
+    return text.split("### Derived document mode\n", 1)[1].split("\n## ", 1)[0]
+
+
+def _derived() -> str:
+    return " ".join(_derived_raw().split())
+
+
 def _stage(name: str) -> str:
-    text = DOC_TRAIN.read_text(encoding="utf-8")
-    number = STAGES.index(name) + 1
-    body = text.split(f"## Stage {number}: {name}\n", 1)[1]
-    return " ".join(body.split("\n## ", 1)[0].split())
+    number = STAGES.index(name) + FIRST_STEP
+    body = _derived_raw().split(f"\n{number}. {name}.", 1)[1]
+    return " ".join(body.split(f"\n{number + 1}. ", 1)[0].split())
 
 
 def test_recipe_runs_the_stages_in_order() -> None:
     # 0135: freeze, derive, verify, change gate and present, with the docs writer as a stage.
-    heads = re.findall(r"^## Stage (\d+): (.+)$", DOC_TRAIN.read_text(encoding="utf-8"), re.M)
-    assert heads == [(str(n), name) for n, name in enumerate(STAGES, start=1)]
-    text = _text(DOC_TRAIN)
-    assert "in the shape of the Build and Push Trains" in text
-    assert "No train definition file and no runner exist" in text
+    heads = re.findall(r"^(\d+)\. ([A-Z][a-z ]+)\.", _derived_raw(), re.M)
+    assert heads == [(str(n), name) for n, name in enumerate(STAGES, start=FIRST_STEP)]
+    text = _derived()
+    assert "This mode is the doc composition, started with `/daedalus:run doc" in text
+    assert "No definition file and no runner exist for it." in text
+
+
+def test_document_skill_holds_the_recipe_the_stub_dropped() -> None:
+    # 0174: no shipped skill points at the doc-train text the stub dropped.
+    for name in ("document", "run"):
+        text = (REPO_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+        assert "doc-train" not in text, name
+    assert "The **State Block** of this mode holds:" in _derived()
+    assert "/daedalus:run doc" in DOC_TRAIN.read_text(encoding="utf-8")
 
 
 def test_recipe_dispatches_only_catalog_agents() -> None:
-    names = set(_AGENT_REF.findall(DOC_TRAIN.read_text(encoding="utf-8")))
+    names = set(_AGENT_REF.findall(_derived_raw()))
     assert names == {
         "standards-rules-specialist",
         "doc-deriver",
@@ -59,7 +80,7 @@ def test_recipe_dispatches_only_catalog_agents() -> None:
 
 def test_recipe_names_the_priorities_section_for_every_agent() -> None:
     # 0137, pin PRIO -> DOCT: the ranking is a brief input for every agent the recipe dispatches.
-    text = _text(DOC_TRAIN)
+    text = _derived()
     rule = "every brief, for every agent this recipe dispatches, carries the Standards Packet's"
     assert rule + " `## Priorities` section verbatim as a brief input" in text
     for stage in ("Derive", "Verify", "Change gate", "Docs writer"):
@@ -79,7 +100,7 @@ def test_recipe_freezes_and_verifies_through_the_script() -> None:
 
 def test_recipe_marks_the_train_the_output_check_reads() -> None:
     # 0135, D.5: doc_outputs reads the active train id from the YYYYMMDD-HHMMSS marker.
-    text = _text(DOC_TRAIN)
+    text = _stage("Preconditions")
     assert "`date -u +%Y%m%d-%H%M%S`" in text
     assert "daedalus_workspace.py mark --repo <repo> --train <train-id>" in text
     assert "daedalus_workspace.py unmark --repo <repo>" in _stage("Present")
@@ -95,7 +116,7 @@ def test_recipe_applies_small_findings_and_rechecks_in_claims_mode() -> None:
     assert "Rounds 2 and 3 read the claims the verifier rejected in the prior round" in verify
     assert "plus a random 20 percent sample of the rest" in verify
     assert "no round budget applies (0133)" in verify
-    for choice in ("`Fix it now (Recommended)`", "`Skip, track or exempt it`", "`Stop the train`"):
+    for choice in ("`Fix it now (Recommended)`", "`Skip, track or exempt it`", "`Stop the run`"):
         assert choice in verify, choice
 
 
@@ -107,7 +128,7 @@ def test_change_gate_runs_on_a_baseline_and_on_two_baselines() -> None:
 
 
 def test_recipe_never_pushes_or_stages() -> None:
-    text = _text(DOC_TRAIN)
+    text = _derived()
     assert "Zero `git push`, zero `gh`, nothing staged or committed." in text
     assert not re.search(r"`git (add|commit|push) ", text)
 
@@ -175,6 +196,39 @@ def test_routed_document_agent_writes_only_in_the_output_folder(doc_repo: Path, 
     assert (allow, hook) == (False, "doc_outputs") and "is source A" in str(reason)
     assert not _call(doc_repo, agent, "Bash", command="git status")[0]
     assert _call(doc_repo, agent, "Bash", command=f"wc -l {source}")[0]
+
+
+@pytest.mark.parametrize("agent", ["doc-deriver", "change-logger"])
+def test_document_agents_write_into_a_folder_runs_output_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str
+) -> None:
+    # issue 48: freeze and the doc outputs check take a folder run's output_dir outside the root.
+    root, out = tmp_path.resolve() / "plain", tmp_path.resolve() / "out"
+    root.mkdir()
+    out.mkdir()
+    (root / "base.sent-2026-10-01.md").write_text("The fee is 12.\n")
+    write_folder_run(root, out, train=TRAIN)
+    monkeypatch.chdir(root)
+    source = ["--source", "A=baseline:base.sent-2026-10-01.md"]
+    assert freeze_sources.main(["--train", TRAIN, "--output-dir", str(out), *source]) == 0
+    assert _call(root, agent, "Write", file_path=f"{out}/doc.md", content="x") == (True, None, "")
+    # (c) a path outside output_dir and (d) a link under it that resolves outside.
+    outside = tmp_path.resolve() / "outside"
+    outside.mkdir()
+    os.symlink(outside, out / "link")
+    for path in (f"{root}/a.md", f"{tmp_path}/doc.md", f"{out}/link/doc.md"):
+        allow, _, hook = _call(root, agent, "Write", file_path=path, content="x")
+        assert (allow, hook) == (False, "doc_outputs"), path
+    # (e) another agent class gets no output folder grant.
+    allow, _, hook = _call(root, "planner", "Write", file_path=f"{out}/doc.md", content="x")
+    assert (allow, hook) == (False, "root_writes")
+    # (a) a repository run and (b) a folder run with no output_dir keep the root bound.
+    for scope, recorded in (("repository", out), ("folder", None)):
+        write_folder_run(root, recorded, scope, TRAIN)
+        reason = freeze_sources.output_dir_reason(str(out), root, "unchecked")
+        assert reason == freeze_sources.R_OUTPUT_OUTSIDE.format(out=out, repo=root), scope
+        allow, _, hook = _call(root, agent, "Write", file_path=f"{out}/doc.md", content="x")
+        assert (allow, hook) == (False, "doc_outputs"), scope
 
 
 def test_round_skill_logs_holds_and_flips_on_the_operators_word() -> None:

@@ -149,10 +149,16 @@ def _section(text: str, head: str) -> list[str]:
     return body.split("\n## ", 1)[0].splitlines()
 
 
+def test_summary_heading_says_run(tmp_path: Path) -> None:
+    # 0169: the heading the release skill's `Run <train-id>` pull request title matches.
+    assert _text(tmp_path).splitlines()[0] == f"# Run {TRAIN}"
+    assert "Build Train" not in _text(tmp_path)
+
+
 def test_header_lines_come_from_state_and_the_notes(tmp_path: Path) -> None:
     lines = _text(tmp_path).splitlines()
     assert lines[:9] == [
-        f"# Build Train {TRAIN}",
+        f"# Run {TRAIN}",
         "Task: build the summary command",
         f"Base: main @ {'a' * 40}. Integration branch: daedalus/{TRAIN}.",
         f"charter: private, branch daedalus/{TRAIN}, charter base: charter/inputs "
@@ -182,11 +188,11 @@ def test_contract_line_reads_none_in_words_without_a_locked_packet(tmp_path: Pat
     state = copy.deepcopy(STATE)
     del state["contract_path"]
     lines = _text(tmp_path, state).splitlines()
-    assert "Contract: none. No contract was locked before the train stopped." in lines
+    assert "Contract: none. No contract was locked before the run stopped." in lines
     state["contract_skip"] = True
     lines = _text(tmp_path, state).splitlines()
     assert (
-        "Contract: none. This plan changes one file and declares no contract, "
+        "Contract: none. This plan changes at most 3 files and declares no contract, "
         "so no contract was written."
     ) in lines
     assert not any(line == "Contract: not locked" for line in lines)
@@ -274,7 +280,7 @@ def test_audit_section_reads_a_state_written_by_older_code(tmp_path: Path) -> No
     del state["audit_rounds"], state["ledger"]
     assert _section(_text(tmp_path, state), "Audit") == [
         f"[VERDICT: APPROVED] tip={TIP} on the merged integration tip after 2 round(s).",
-        "Round 1: not recorded in train state",
+        "Round 1: not recorded in the run state",
         "Round 2: approved",
         "Docs: not run",
     ]

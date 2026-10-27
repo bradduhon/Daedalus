@@ -352,35 +352,39 @@ def _flat(rel: str) -> str:
 
 
 def test_the_documentation_stage_records_the_docs_verdict() -> None:
-    recipe = (REPO_ROOT / "agents" / "orchestrator.md").read_text(encoding="utf-8")
+    # 0165: the documentation stage is the document phase skill's public docs mode.
+    doc = (REPO_ROOT / "skills" / "document" / "SKILL.md").read_text(encoding="utf-8")
     stage = " ".join(
-        recipe.split("## Documentation stage", 1)[1].split("## Recovery", 1)[0].split()
+        doc.split("### Public docs mode", 1)[1].split("### Derived document mode", 1)[0].split()
     )
-    verified = stage.split("6. `[VERDICT: VERIFIED]", 1)[1].split(" 7. ", 1)[0]
-    finish = "run the Phase 3 step 1 finish"
-    record = "daedalus_train.py verdict --repo <repo> --gate docs --status verified`"
+    verified = stage.split("- `[VERDICT: VERIFIED]", 1)[1].split(" - `[VERDICT: REFUTED]", 1)[0]
+    finish = "run the build phase's finish"
+    record = "daedalus_train.py verdict --repo <repo> --gate docs --status verified --judged <sha>`"
     assert verified.index(finish) < verified.index(record) < verified.index("go on to step 8")
-    refuted = stage.split("7. `[VERDICT: REFUTED]", 1)[1].split(" 8. ", 1)[0]
+    refuted = stage.split("- `[VERDICT: REFUTED]", 1)[1].split(" 8. ", 1)[0]
     assert (
         "--gate docs --status refuted --findings "
         "<repo>/docs/.tmp/daedalus/<train-id>/docs/findings.txt" in refuted
     )
     assert refuted.index(finish) < refuted.index("--gate docs --status refuted")
-    assert "`Fix it now (Recommended)`, `Skip, track or exempt it` and `Stop the train`" in refuted
-    last = stage.split("8. Summary command and completion:", 1)[1]
+    assert "`Fix it now (Recommended)`, `Skip, track or exempt it` and `Stop the run`" in refuted
+    last = stage.split("8. Summary command:", 1)[1]
     assert "daedalus_train.py summary --repo <repo>` after the docs record" in last
-    assert "`[STATUS: TRAIN_COMPLETE]` (Phase 3 step 7) waits on both" in last
+    assert "The run completes only after both" in last
+    recipe = (REPO_ROOT / "agents" / "orchestrator.md").read_text(encoding="utf-8")
+    assert "`[STATUS: TRAIN_COMPLETE]` waits on both the security verdict record" in recipe
     assert "`Docs: not run`" in last
     assert (
-        "4. `[STATUS: DOCS_UNCHANGED] reason=<why>`: no claim exists to verify; go on to step 8."
+        "5. `[STATUS: DOCS_UNCHANGED] reason=<why>`: no claim exists to verify; go on to step 8."
         in stage
     )
 
 
 def test_the_catalog_names_the_writer_stage_and_its_verifier_pass() -> None:
     catalog = _flat("skills/catalog/SKILL.md")
-    audit_row = catalog.split("| Audit |", 1)[1].split("| Commit and release |", 1)[0]
-    assert "Then the docs writer stage" in audit_row and "claims pass" in audit_row
+    # 0165: the docs writer stage is the document phase skill's row of the catalog table.
+    doc_row = catalog.split("| document |", 1)[1].split("| release |", 1)[0]
+    assert "Public docs mode is the docs writer stage" in doc_row and "claims pass" in doc_row
     rule = catalog.split("- Docs writer stage (0131, 0134):", 1)[1].split(" - ", 1)[0]
     for part in ("docs-writer", "the verifier checks its claims in a claims pass", "--gate docs"):
         assert part in rule, part
@@ -388,9 +392,10 @@ def test_the_catalog_names_the_writer_stage_and_its_verifier_pass() -> None:
 
 
 def test_the_push_train_carries_no_docs_precondition() -> None:
-    push = _flat("skills/push-train/SKILL.md")
+    # 0174: the release phase holds the push recipe; the push-train skill is a stub.
+    push = _flat("skills/release/SKILL.md")
     preconditions = push.split("## Recovery round", 1)[0]
     assert "--gate docs" not in push and "docs_verdict" not in push
     step9 = preconditions.split(" 9. ", 1)[1].split(" 10. ", 1)[0]
     assert "`docs verified on tip <12 hex>`" in step9
-    assert "the Push Train checks nothing more for the docs" in step9
+    assert "this phase checks nothing more for the docs" in step9

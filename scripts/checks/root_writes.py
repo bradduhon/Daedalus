@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lib import hook_io, jail, shell  # noqa: E402
 from lib.audit import project_root  # noqa: E402
 from lib.config import Config  # noqa: E402
-from lib.train_state import active_train  # noqa: E402
+from lib.train_state import active_train, folder_output  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset(jail.WRITE_TOOLS | {"Bash"})
 # open item 3: the unit-src-tests and none classes of spec 5.2 are not accepted in group 1.
@@ -105,6 +105,25 @@ def _allowed(path: str, roots: list[str], name: str | None, sub: str | None) -> 
     )
 
 
+def _folder_grant(
+    classes: tuple[str, ...], cwd: str, name: str | None, sub: str | None
+) -> str | None:
+    # issue 48: only the scratch file shapes reach a folder run's output folder; no bare grant.
+    if "scratch" not in classes or (name is None and sub is None):
+        return None
+    return folder_output(project_root(cwd))
+
+
+def _granted(path: str, out: str | None, name: str | None, sub: str | None) -> bool:
+    # issue 48: the file's own realpath must sit in the output folder too, so a link cannot leave.
+    if out is None:
+        return False
+    real = os.path.realpath(path)
+    return (name is not None and _named(path, [out], name) and _named(real, [out], name)) or (
+        sub is not None and _in_sub(path, [out], sub)
+    )
+
+
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
     classes: tuple[str, ...] = tuple(flags.touch or ())
     name: str | None = flags.name
@@ -113,19 +132,22 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     cwd = hook_io.text(hook_input, "cwd")
     config = hook_io.hook_config(cwd)
     roots = _roots(classes, cwd, config)
+    out = _folder_grant(classes, cwd, name, sub)
     if hook_io.text(hook_input, "tool_name") in jail.WRITE_TOOLS:
         path = shell._abs(hook_io.write_path(hook_input), cwd)
         if ledger_guard:
             reason = jail._ledger_write_reason(path, cwd, config)
             if reason:
                 return reason
-        return None if _allowed(path, roots, name, sub) else _reason(classes, path)
+        if _allowed(path, roots, name, sub) or _granted(path, out, name, sub):
+            return None
+        return _reason(classes, path)
     segments = shell.worker_segments(hook_io.text(hook_io.tool_input(hook_input), "command"))
     if segments is None:
         return shell.R_UNSUPPORTED
     for segment in filter(None, segments):
         for target in jail._coder_write_targets(segment, cwd):
-            if not _allowed(target, roots, name, sub):
+            if not (_allowed(target, roots, name, sub) or _granted(target, out, name, sub)):
                 return _reason(classes, target)
     return None
 

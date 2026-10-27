@@ -47,7 +47,7 @@ CLASS_NEXT = {
     "admin": "change repository settings from your own shell",
     "default-deny": "only the Push Train's conductor runs gh",
 }
-PUSH_NEXT = "push from your own shell, or through /daedalus:push-train"
+PUSH_NEXT = "push from your own shell, or through /daedalus:run push"
 EDIT_NEXT = "edit only the body with --body-file; the operator changes anything else on the PR"
 _EDIT_BODY = frozenset({"--body", "--body-file", "-b", "-F"})
 ADMIN_COMMANDS = frozenset({"secret", "variable", "ruleset"})

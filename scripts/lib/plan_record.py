@@ -32,6 +32,17 @@ _EDGE_KEYS = ("kind", "why", "files", "merge")
 _VERSION_KEYS = ("class", "reason", "unit")
 VERSION_CLASSES = ("X", "Y", "Z")
 _GLOB_CHARS = "*?["
+# 3.3, 0182: a unit touching one runs the adversarial corpus; skills/catalog/SKILL.md names it.
+JAIL_CHECK_PATHS = (
+    "scripts/checks/",
+    "scripts/lib/jail.py",
+    "scripts/lib/shell.py",
+    "scripts/enforce_agent_jail.py",
+)
+# 0175, 0182: never a small change or a contract skip; agents/security-auditor.md names it.
+CONTROL_PATHS = (*JAIL_CHECK_PATHS, "agents/", "skills/", "hooks/")
+# 0182: the most files a one-unit plan may name and still skip the contract.
+CONTRACT_SKIP_FILES = 3
 # 0128: a need is a tool name or a repo-relative protected path; never a flag, never absolute.
 _NEED = re.compile(r"(?!-)[A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*/?")
 _HEADING = re.compile(r"### ([A-Za-z0-9][A-Za-z0-9_.-]*): (\S.*)")

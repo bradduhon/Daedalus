@@ -48,7 +48,7 @@ def _reason(
     if not shell._under(path, frozen.output_dir):
         return R_OUTSIDE.format(out=frozen.output_dir, path=path)
     # 0054: the coder write check's protected list binds here too, inside the output folder,
-    # which output_dir_reason already holds below the project root.
+    # which output_dir_reason holds below the root or at a folder run's output (issue 48).
     rel = os.path.relpath(os.path.realpath(path), os.path.realpath(repo)).replace(os.sep, "/")
     return jail.protected_reason(rel, path, boundary)
 

@@ -199,7 +199,7 @@ def test_write_to_an_undispatched_unit_refused(repo_cwd: Path, units: dict[str, 
 def test_coder_write_without_a_train_refused(repo_cwd: Path, units: dict[str, Path]) -> None:
     (repo_cwd / ".claude" / "daedalus" / "train.active").unlink()
     reason = _refused(_write(repo_cwd, "a-1", units["u1"] / "src" / "a.py"))
-    assert reason.endswith("Next: start coders from /daedalus:build-train.")
+    assert reason.endswith("Next: start coders from /daedalus:run.")
 
 
 def test_claim_falls_back_to_the_session_without_an_agent_id(

@@ -13,6 +13,7 @@ from lib.workspace import (  # noqa: E402
     LedgerQuestion,
     WorkspaceError,
     begin,
+    begin_folder_run,
     clear_train,
     create,
     finish,
@@ -49,6 +50,9 @@ def main(argv: list[str]) -> int:
     unmark.add_argument("--repo", type=Path, required=True)
     start = sub.add_parser("begin")
     start.add_argument("--repo", type=Path, required=True)
+    # issue 48, 0178: --scope folder opens a run with no git command, its outputs in --out.
+    start.add_argument("--scope", choices=("repository", "folder"), default="repository")
+    start.add_argument("--out")
     locking = sub.add_parser("lock")
     locking.add_argument("--repo", type=Path, required=True)
     # 0156: --no-contract locks at the base once the contract subcommand recorded the skip.
@@ -75,6 +79,8 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if args.action == "lock" and args.no_contract and args.version is not None:
         parser.error("lock --no-contract takes no --version; there is no packet to version")
+    if args.action == "begin" and (args.scope == "folder") != (args.out is not None):
+        parser.error("begin takes --out with --scope folder only, and --scope folder needs --out")
     repo = args.repo.resolve()
     # pin C3 -> C4, issue 63: --repo is the project root of the working directory, or nothing runs.
     refusal = repo_refusal(args.repo, Path.cwd())
@@ -93,6 +99,8 @@ def main(argv: list[str]) -> int:
             print(mark_train(repo, args.train))
         elif args.action == "unmark":
             print(f"cleared {clear_train(repo)}")
+        elif args.action == "begin" and args.scope == "folder":
+            print("\n".join(begin_folder_run(repo, args.out)))
         elif args.action == "begin":
             print("\n".join(begin(repo)))
         elif args.action == "lock":

@@ -195,7 +195,7 @@ def _summary(
 ) -> None:
     path = repo_cwd / "docs" / ".tmp" / "daedalus" / f"{TRAIN}-summary.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"# Build Train {TRAIN}\n{text}", encoding="utf-8")
+    path.write_text(f"# Run {TRAIN}\n{text}", encoding="utf-8")
 
 
 def _train(hook_input: Any, repo_cwd: Path, verdict: str) -> None:
@@ -252,9 +252,7 @@ def test_approved_refuses_a_rejected_final_round(
     _train(hook_input, repo_cwd, "[VERDICT: REJECTED] a.py:1 high")
     message = _refused(repo_cwd)
     assert message.startswith("NOT APPROVED:")
-    assert message.endswith(
-        "Next: run /daedalus:build-train; this train has no approved audit in its log."
-    )
+    assert message.endswith("Next: run /daedalus:run; this train has no approved audit in its log.")
 
 
 def test_approved_ignores_auditor_stops_after_the_summary_write(

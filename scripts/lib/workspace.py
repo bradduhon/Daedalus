@@ -11,7 +11,17 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-from lib import atomic, audit_proof, git, narrow, plan_record, scrub, train_state, unit_binding
+from lib import (
+    atomic,
+    audit_proof,
+    git,
+    manifest,
+    narrow,
+    plan_record,
+    scrub,
+    train_state,
+    unit_binding,
+)
 from lib.audit import SESSION_ID, DataDirError, cache_dir_or_probe, ensure_project_data_dir
 from lib.audit_proof import SUMMARY_DIR
 from lib.config import Config, ConfigError, load_config
@@ -267,7 +277,7 @@ def clear_train(repo: Path) -> Path:
 
 
 DIRTY_LIMIT = 10
-RERUN = "start the Build Train again (/daedalus:build-train)."
+RERUN = "start the Build Train again (/daedalus:run)."
 CLEAN_NEXT = f"Next: commit or stash your changes from your own shell, then {RERUN}"
 LEDGER_NONE = "ledger: none declared and none found."
 LEDGER_OFF = "ledger: off in the service manifest."
@@ -500,12 +510,91 @@ def begin_folder(root: Path, ledger_feature: bool | None) -> list[str]:
     ]
 
 
+TMP_ROOT = Path("/tmp")
+
+
+def output_target(root: Path, output: str) -> Path:
+    # issue 48: a folder run's output path, absolute or relative to the project root.
+    return Path(output) if Path(output).is_absolute() else root / output
+
+
+def make_output(target: Path, rerun: str) -> Path:
+    # issue 48: the one creation of a folder run's output folder, for start and the folder begin.
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise WorkspaceError(
+            f"cannot create the output folder {target} ({exc}). "
+            f"Next: pick a writable folder and rerun {rerun}."
+        ) from exc
+    return target.resolve()
+
+
+def _folder_out(root: Path, output: str, rerun: str = "begin") -> Path | None:
+    # issue 48, 0069: an existing writable folder as is; None admits <root>/docs or new under /tmp.
+    target = output_target(root, output)
+    real = Path(os.path.realpath(target))
+    home = Path(os.path.realpath(Path.home()))
+    # issue 48: never the root, its parents, home, / or anything under <root>/.claude.
+    barred = (
+        Path(os.path.realpath(root)).is_relative_to(real)
+        or real == home
+        or real.is_relative_to(Path(os.path.realpath(root / ".claude")))
+    )
+    if not barred and real.is_dir() and os.access(real, os.W_OK | os.X_OK):
+        return real
+    docs = Path(os.path.realpath(root / "docs"))
+    tmp = Path(os.path.realpath(TMP_ROOT))
+    if not barred and not os.path.lexists(target) and (real == docs or real.is_relative_to(tmp)):
+        return None
+    raise WorkspaceError(
+        f"--out {output} is not an existing writable folder outside the project root, its "
+        f"parents, the home folder and {root / '.claude'}, nor {root / 'docs'}, nor a new folder "
+        "under /tmp. Next: pass --out one of those three, or create the folder from your own "
+        f"shell, then rerun {rerun}."
+    )
+
+
+def checked_output(root: Path, output: str, rerun: str) -> Path:
+    # issue 48: start and the folder begin record only an output folder _folder_out passed.
+    return _folder_out(root, output, rerun) or make_output(output_target(root, output), rerun)
+
+
+def begin_folder_run(root: Path, output: str) -> list[str]:
+    # issue 48, 0178: the run entry's folder start; the runner's start shares both helpers.
+    root = root.resolve()
+    try:
+        features = manifest.features(root)
+    except manifest.ManifestError as exc:
+        raise WorkspaceError(str(exc)) from exc
+    kind = manifest.scope_kind(root, features)
+    if kind != "folder":
+        raise WorkspaceError(
+            f"{root} is {kind} scope, so a run here starts with the repository begin. "
+            f"Next: run begin --repo {root} without --scope, then rerun."
+        )
+    found = _folder_out(root, output)
+    out = found or make_output(output_target(root, output), "begin")
+    try:
+        lines = begin_folder(root, features.ledger)
+    except WorkspaceError:
+        if found is None:
+            # issue 48: a refused begin leaves behind no output folder it made.
+            out.rmdir()
+        raise
+    train_id = train_state.active_train(root)
+    if train_id is None:
+        raise WorkspaceError(f"begin left no run marker in {root}. Next: {RERUN}")
+    _record(root, train_id, scope_kind="folder", output_dir=str(out))
+    return [*lines, f"scope: folder  out: {out}"]
+
+
 def _active(repo: Path) -> tuple[str, dict[str, object]]:
     train_id = train_state.active_train(repo)
     if train_id is None:
         raise WorkspaceError(
             f"no Daedalus train is active in {repo}. "
-            "Next: start a Build Train first (/daedalus:build-train)."
+            "Next: start a Build Train first (/daedalus:run)."
         )
     try:
         return train_id, train_state.load(repo, train_id)
@@ -622,7 +711,7 @@ def lock(repo: Path, contract: str | None, version: int | None = None) -> list[s
     return [f"lock: {sha}", detail]
 
 
-STOP_NEXT = "start the Build Train again (/daedalus:build-train)"
+STOP_NEXT = "start the Build Train again (/daedalus:run)"
 
 
 def _unit_worktrees(repo: Path) -> dict[str, Path]:
@@ -858,7 +947,7 @@ def finish(repo: Path) -> list[str]:
 SKIP_NEXT = (
     "Next: stop the train and run it again with a plan the contract step "
     "(daedalus_train.py contract --repo {repo}) answers contract: required for, so "
-    "contract-spec locks a contract before more than the plan's one file merges."
+    "contract-spec locks a contract before a file outside the plan's files merges."
 )
 
 
@@ -869,7 +958,7 @@ def _skip_scope(
     lock_sha: str,
     integration: str,
 ) -> None:
-    # prepush-2026-10-27 finding 4, 0156: a skipped contract covers one unit and one file.
+    # prepush-2026-10-27 finding 4, 0182: a skipped contract covers one unit and its plan files.
     if state.get(train_state.CONTRACT_SKIP) is not True or state.get("packet_version") is not None:
         return
     # 126: only unmerged units count; the integration branch is judged too, as the wave merge
@@ -881,19 +970,21 @@ def _skip_scope(
     ]
     files = [f for unit in _recorded_plan(state).units for f in unit.files]
     nxt = SKIP_NEXT.format(repo=repo)
-    if len(pending) > 1 or len(files) != 1:
+    if len(pending) > 1 or not 1 <= len(files) <= plan_record.CONTRACT_SKIP_FILES:
         raise WorkspaceError(
-            f"this train skipped the contract for a one-file plan, yet {len(pending)} units "
+            f"this train skipped the contract for a one-unit plan of at most "
+            f"{plan_record.CONTRACT_SKIP_FILES} files, yet {len(pending)} units "
             f"would merge against a plan naming {len(files)} files. {nxt}"
         )
-    allowed = os.path.normpath(files[0])
+    allowed = sorted({os.path.normpath(f) for f in files})
     for ref in [integration, *(str(unit["branch"]) for unit in pending)]:
         raw = _out(repo, "diff", "--name-only", "--no-renames", "-z", f"{lock_sha}...{ref}")
         changed = sorted(name for name in raw.split("\0") if name)
-        fits = changed in ([], [allowed]) if ref == integration else changed == [allowed]
+        # 0182: the unit changes a non-empty subset of the plan files; integration may change none.
+        fits = set(changed) <= set(allowed) and (bool(changed) or ref == integration)
         if not fits:
             raise WorkspaceError(
-                f"this train skipped the contract for the one file {files[0]}, yet {ref} "
+                f"this train skipped the contract for the files {_shown(allowed)}, yet {ref} "
                 f"changes {_shown(changed) if changed else 'no file'}. {nxt}"
             )
 
@@ -931,7 +1022,7 @@ VERIFIED_LINE = re.compile(r"\[VERDICT: VERIFIED\] claims=[0-9]+")
 VERIFIER = "verifier"
 _UNIT_LINE = "Unit worktree: "
 _DISPATCH_TOOLS = ("Agent", "SendMessage")
-# 101, agents/orchestrator.md:135: the relay's begin marker; a payload can forge the end marker.
+# 101, skills/build/SKILL.md:32: the relay's begin marker; a payload can forge the end marker.
 PAYLOAD_BEGIN = "--- research payload begin"
 
 

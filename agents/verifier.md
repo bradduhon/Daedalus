@@ -41,7 +41,7 @@ mode section instead.
 ## Procedure
 1. Read the brief, the packets, the full diff and the named ranges: the brief file whole, then
    the Contract and Standards files its two packet lines name (a brief whose contract line reads
-   `Contract: none` belongs to a one-file train with no contract, 0156: read no contract file
+   `Contract: none` belongs to a train the contract step skipped, 0156, 0182: read no contract file
    and judge no contract pin), then the full diff
    `git -C <unit worktree> diff <diff base>...<branch>` with every removed `-` line, then each
    range of the `Read:` line through the `git show` pipe of step 3. The full diff is a required

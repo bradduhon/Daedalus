@@ -28,7 +28,7 @@ PLAN, CHOICES, VERDICT, EXEMPTIONS, PHASE, WEIGHT = (
     "weight",
 )
 APPROVED, REJECTED = "approved", "rejected"
-# 0156: true once the contract subcommand found a one-file plan; lock --no-contract needs it.
+# 0156, 0182: true once the contract subcommand skipped the plan; lock --no-contract needs it.
 CONTRACT_SKIP = "contract_skip"
 # 0131, 0134: the docs verifier's record {status, tip[, findings, exemptions]}, apart from VERDICT.
 DOCS_VERDICT, VERIFIED, REFUTED = "docs_verdict", "verified", "refuted"
@@ -123,7 +123,7 @@ def _read(path: Path) -> dict[str, object]:
         data: object = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise TrainStateError(
-            f"no train state at {path}. Next: run /daedalus:build-train to start a train."
+            f"no train state at {path}. Next: run /daedalus:run to start a train."
         ) from exc
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise TrainStateError(
@@ -286,3 +286,20 @@ def active_train(repo: Path) -> str | None:
     if lines and TRAIN_ID.fullmatch(lines[0]):
         return lines[0]
     return None
+
+
+def folder_output(repo: Path) -> str | None:
+    # issue 48: the active folder run's checked output folder; None in any other run or state.
+    train_id = active_train(repo)
+    if train_id is None:
+        return None
+    try:
+        state = load(repo, train_id)
+    except TrainStateError:
+        return None
+    out = state.get("output_dir")
+    if state.get("scope_kind") != "folder" or not isinstance(out, str) or not os.path.isabs(out):
+        return None
+    # issue 48: a recorded folder later swapped for a symlink loses the grant.
+    real = os.path.realpath(out)
+    return real if real == os.path.normpath(out) else None

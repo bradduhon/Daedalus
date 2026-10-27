@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import audit, gh_policy, train_runner, train_state, workspace
+from lib import audit, gh_policy, plan_record, train_runner, train_state, workspace
 from lib.audit_proof import ProofError, live_log
 from lib.config import Config
 from lib.jail import decide
@@ -883,7 +883,17 @@ def test_progress_names_the_unit_a_waiting_unit_waits_on(repo: Path, plugin: Pat
         "Open: none",
         train_runner.NEXT_NONE,
     ]
-    assert train_runner.NEXT_NONE.startswith("Next: none")
+    assert train_runner.NEXT_NONE == "Next: none, the run needs nothing from the operator."
+
+
+def test_progress_with_no_train_says_run(repo: Path) -> None:
+    # 0169: the operator reads run; the refusal's script names keep train (0177).
+    outcome = train_runner.progress(repo)
+    assert outcome.code == 0
+    assert outcome.lines == [
+        "no Daedalus run is active here. Next: start a new run with /daedalus:run."
+    ]
+    assert "train" not in outcome.lines[0].casefold()
 
 
 def test_choice_appends_and_prints_the_line(repo: Path, plugin: Path) -> None:
@@ -945,7 +955,7 @@ def test_plan_records_path_and_sha256(repo: Path, plugin: Path) -> None:
     assert refused.code == 1 and "changed after it was recorded" in refused.lines[-1]
 
 
-# 0156, 0089: the contract skip check over the recorded plan.
+# 0156, 0182: the contract skip check over the recorded plan.
 SKIP_UNIT = "unit: U1 | title: one | files: a.py | base: integration\n"
 SKIP_GRAPH = "graph: units=1 critical_path=1 width=1 overlap_only=\n"
 
@@ -977,7 +987,7 @@ def test_contract_skips_a_one_unit_one_file_plan_with_wire_none(repo: Path, plug
 
 
 def test_a_new_plan_is_refused_after_a_no_contract_lock(repo: Path, plugin: Path) -> None:
-    # 0156, 0089: the no-contract lock holds for its one-file plan; a swap needs a new train.
+    # 0156, 0089: the no-contract lock holds for its skipped plan; a swap needs a new train.
     assert _contract_run(repo, plugin, _skip_plan()).lines == ["contract: skip"]
     train = str(_state(repo)["train_id"])
     train_state.update(repo, train, lock_sha=_integration(repo))
@@ -996,28 +1006,97 @@ def test_a_new_plan_is_refused_after_a_no_contract_lock(repo: Path, plugin: Path
     assert _state(repo)["plan"]["path"] == str(wide.resolve())  # type: ignore[index]
 
 
+def _files(names: str) -> str:
+    return _skip_plan(SKIP_UNIT.replace("a.py", names))
+
+
+# 0182: the contract skip row, one case per condition; None means `contract: skip`.
 @pytest.mark.parametrize(
     ("text", "reason"),
     [
+        (_skip_plan(), None),
+        (_files("a.py, src/b.py, docs/c.md"), None),
+        (_files("a.py, b.py, c.py, d.py"), "4 files, more than 3"),
+        (
+            _files("a.py, b.py, skills/plan/SKILL.md"),
+            "unit touches a control path: skills/plan/SKILL.md",
+        ),
+        (_files("a.py, Agents/planner.md"), "unit touches a control path: Agents/planner.md"),
+        (_files("./hooks/hooks.json"), "unit touches a control path: ./hooks/hooks.json"),
+        (_files("scripts/checks/x.py"), "unit touches a control path: scripts/checks/x.py"),
+        (_files("scripts/lib/shell.py"), "unit touches a control path: scripts/lib/shell.py"),
+        (_files("a.py, b.py, .github/ci.yml"), "unit touches a protected path: .github/ci.yml"),
+        (_files("service-manifest.json"), "unit touches a protected path: service-manifest.json"),
+        (_files("../a.py"), "unit names a path outside the repository: ../a.py"),
         (
             _skip_plan(SKIP_UNIT + "unit: U2 | title: two | files: b.py | base: integration\n"),
-            "2 units",
+            "2 units, more than 1",
         ),
-        (_skip_plan(SKIP_UNIT.replace("a.py", "a.py, b.py")), "2 files"),
-        (_skip_plan(SKIP_UNIT.replace("a.py", "src/*.py")), "a file glob"),
+        (_files("src/*.py"), "unit names a file glob or folder: src/*.py"),
         (_skip_plan(extra="pin: U1 -> U2 | the shape\n"), "a pin line"),
         (_skip_plan(below=""), "no wire: none line"),
         (_skip_plan(below="```text\nwire: none\n```\n"), "no wire: none line"),
         ("wire: none\n\n" + _skip_plan(below=""), "no wire: none line"),
     ],
-    ids=["two-units", "two-files", "glob", "pin", "no-wire", "fenced-wire", "wire-above"],
+    ids=[
+        "one-file",
+        "three-files",
+        "four-files",
+        "skills",
+        "agents-case",
+        "hooks-dot",
+        "checks",
+        "shell",
+        "protected",
+        "manifest",
+        "outside",
+        "two-units",
+        "glob",
+        "pin",
+        "no-wire",
+        "fenced-wire",
+        "wire-above",
+    ],
 )
-def test_contract_is_required_and_records_nothing(
-    repo: Path, plugin: Path, text: str, reason: str
-) -> None:
+def test_contract_skip_row(repo: Path, plugin: Path, text: str, reason: str | None) -> None:
     outcome = _contract_run(repo, plugin, text)
-    assert (outcome.code, outcome.lines) == (0, [f"contract: required ({reason})"])
-    assert "contract_skip" not in _state(repo)
+    line = "contract: skip" if reason is None else f"contract: required ({reason})"
+    assert (outcome.code, outcome.lines) == (0, [line])
+    assert ("contract_skip" in _state(repo)) is (reason is None)
+
+
+def test_contract_reads_the_manifest_protected_paths(repo: Path, plugin: Path) -> None:
+    # 0182, 0054: the jail_narrowing paths and extensions bind the skip as they bind a coder.
+    narrowing = {"forbidden_paths": ["infra/"], "forbidden_extensions": [".pem"]}
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    (repo / "service-manifest.json").write_text(json.dumps({"jail_narrowing": narrowing}))
+    for name in ("infra/main.tf", "certs/ca.pem"):
+        outcome = _contract_run(repo, plugin, _files(f"a.py, {name}"))
+        assert outcome.lines == [f"contract: required (unit touches a protected path: {name})"]
+    assert _contract_run(repo, plugin, _files("a.py, src/b.py")).lines == ["contract: skip"]
+
+
+@pytest.mark.parametrize(
+    ("name", "paths", "readers"),
+    [
+        ("JAIL_CHECK_PATHS", plan_record.JAIL_CHECK_PATHS, ("skills/catalog/SKILL.md",)),
+        (
+            "CONTROL_PATHS",
+            plan_record.CONTROL_PATHS,
+            ("agents/security-auditor.md", "agents/orchestrator.md"),
+        ),
+    ],
+)
+def test_control_path_readers_name_the_constant_and_its_paths(
+    name: str, paths: tuple[str, ...], readers: tuple[str, ...]
+) -> None:
+    # 0182: the prose lists stay the constant's paths; each reader names the constant.
+    for reader in readers:
+        text = (REPO_ROOT / reader).read_text(encoding="utf-8")
+        assert f"`{name}` in `scripts/lib/plan_record.py`" in " ".join(text.split()), reader
+        for path in paths:
+            assert f"`{path}`" in text, (reader, path)
 
 
 def test_contract_stops_on_no_plan_a_changed_plan_or_a_defect(repo: Path, plugin: Path) -> None:
@@ -1818,7 +1897,7 @@ def _resumable(repo: Path, plugin: Path, pending: bool = True) -> tuple[str, Pat
     _git(repo, "switch", "-q", "main")
     summary = repo / "docs" / ".tmp" / "daedalus" / f"{train}-summary.md"
     line = "Ledger ids: pending. Codes: --repo DAE --type PLT." if pending else "Ledger ids: x."
-    summary.write_text(f"# Build Train {train}\n{line}\n", encoding="utf-8")
+    summary.write_text(f"# Run {train}\n{line}\n", encoding="utf-8")
     return train, summary
 
 
@@ -1918,7 +1997,7 @@ def test_summary_writes_the_file_from_state_after_its_own_bash_record(
     rel = f"docs/.tmp/daedalus/{train}-summary.md"
     assert done.lines == [f"summary written train={train} path={rel} ledger=pending"], done.lines
     text = _summary_file(repo).read_text(encoding="utf-8")
-    assert text.startswith(f"# Build Train {train}\n")
+    assert text.startswith(f"# Run {train}\n")
     assert "\nLedger ids: pending.\n" in text
     assert f"\nSession {SESSION}: .claude/daedalus/audit/{SESSION}.jsonl\n" in text
     assert str(repo) not in text

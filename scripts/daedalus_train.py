@@ -117,9 +117,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-PACKS_NEXT = (
-    "Next: run /daedalus:doctor and fix each pack it names, then run /daedalus:build-train again."
-)
+PACKS_NEXT = "Next: run /daedalus:doctor and fix each pack it names, then run /daedalus:run again."
 
 
 def _packs(repo: Path) -> Outcome:

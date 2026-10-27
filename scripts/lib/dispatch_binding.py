@@ -26,7 +26,7 @@ from lib.workspace import UNMARK_NEXT, before_payload, train_marker
 
 R_NO_TRAIN = (
     "a repo-coder writes only inside a Daedalus train (issue 29). "
-    "Next: start coders from /daedalus:build-train."
+    "Next: start coders from /daedalus:run."
 )
 R_WORKTREE_LINE = (
     "a repo-coder dispatched during a train names its unit on exactly one line "

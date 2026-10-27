@@ -45,6 +45,23 @@ Trust model: attacker input is anything a coder can commit (any file, ignore fil
 folders, configs) and anything a project ships. Finish merges coder files into the tree every
 judge and hook reads, so "needs a planted file" never dismisses a lead.
 
+## Short form (0166, 0175)
+When the dispatch carries a `Size: small` line, run these two commands right after step 0:
+`git diff --stat <diff base>...<branch>` and `git diff --name-only <diff base>...<branch>`.
+The change is small only when the stat shows at most 3 files and at most 150 changed lines
+(insertions plus deletions), and the name list holds no path under `scripts/checks/`,
+`agents/`, `skills/` or `hooks/`, none of `scripts/lib/jail.py`, `scripts/lib/shell.py` or
+`scripts/enforce_agent_jail.py`, and no protected path of step 4. When either check fails,
+take the full procedure and say so in your paragraph. The excluded paths are `CONTROL_PATHS`
+in `scripts/lib/plan_record.py` (0182).
+A small change takes the short form. Keep the judged tip of step 0, the full diff with its
+removed lines (step 1), the fixed class commands of step 2, scope (step 4) and compliance
+(step 5), one failing test per blocking finding with the findings file (Finding format items
+1 to 4), and both verdict lines. Skip the rank by readers, the reachable scope with its
+`Reachable:` and `Hunt:` lines, and the adversarial corpus run (Finding format item 5); a
+small change touches no jail check file. The short form is one round, round 1. A later round
+after a fix takes the full procedure.
+
 ## Procedure
 Work through every step for every branch.
 0. **The judged tip**: run `git -C <audit worktree> rev-parse HEAD` before anything else. Its
