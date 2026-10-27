@@ -85,14 +85,11 @@ def test_agent_models_row_closes_the_config_section() -> None:
     assert models.example == '`{"repo-coder": "sonnet"}`'
 
 
-def test_github_feature_row() -> None:
-    # issue 48: the row sits after features.ledger and names both doctor outcomes.
+def test_github_key_has_no_row() -> None:
+    # 0172: the dropped github key has no key reference row; the switches follow features.ledger.
     keys = [key for key, file, _ in _rows() if file == MANIFEST_FILE]
-    assert keys[keys.index("features.ledger") + 1] == "features.github"
-    row = KEY_ROWS[(MANIFEST_FILE, "features.github")]
-    assert row.kind == "boolean or null" and row.default.startswith("`false`")
-    assert "`MISS`" in row.governs and "`OPT`" in row.governs
-    assert "`null` reads as `false`" in row.values
+    assert "features.github" not in keys
+    assert keys[keys.index("features.ledger") + 1] == "features.dependency_web_lookup"
 
 
 def test_reader_keys_follow_the_reader_dataclasses() -> None:
