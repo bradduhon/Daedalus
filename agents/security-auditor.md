@@ -36,26 +36,42 @@ a Build Train a `Map: <path> sha256=<hex>` line naming the train's dependency ma
 Inside a Build Train the diff base is the commit the train started from and
 the branch is the merged integration branch `daedalus/<train-id>`, so you judge the exact tip
 that is pushed (spec 8); the brief names the unit ids with their changed files and the train's
-own commits on that branch (`Lock contract`, `Revise contract` and a pick ledger commit).
+own commits on that branch (`Lock contract`, `Revise contract` and a pick ledger commit). It
+also carries the auditor brief (the rules each unit is judged against), `Reachable: <new
+feature> -> <older rule or gate> <file>:<line>` lines and `Hunt: can <attacker input> reach
+<protected thing> after <unit>?` lines.
+
+Trust model: attacker input is anything a coder can commit (any file, ignore files, pack
+folders, configs) and anything a project ships. Finish merges coder files into the tree every
+judge and hook reads, so "needs a planted file" never dismisses a lead.
 
 ## Procedure
 Work through every step for every branch.
 0. **The judged tip**: run `git -C <audit worktree> rev-parse HEAD` before anything else. Its
    40 lowercase hex is `<tip>` for the whole round; both verdict lines carry it.
 1. For each branch run `git diff <diff base>...<branch>` with `--stat` first, then without it
-   for the full diff. Read all of it.
+   for the full diff. Read all of it, removed lines included. Every round judges the full diff
+   from `<diff base>`; a later round starts at the delta since your last round and never stops
+   there.
+   **Reachable scope**: scope is the diff plus what it makes reachable. For each new file,
+   flag, subcommand, input source or agent instruction, list the older rules and enforcement
+   points it feeds or relies on, each `Reachable:` line included, and judge each at `<tip>` in
+   full, changed or not.
    **Rank by readers** (pin MAP -> VER): when the brief carries a `Map:` line, run
    `sha256sum <map path>`. On a match, Read the map's `readers` object; each record lists its
    `readers`, `writers` and `mentions` as `<file>:<line>`. A record whose `security` is true
    (a hook event, or a name carrying a security word such as verdict, audit, ledger, jail,
-   secret, token, key or session) is security-relevant. Rank the changed files by how many
+   secret, token, key, session, skip, lock or pack) is security-relevant. Rank the changed files by how many
    security-relevant records list them as a reader or writer, and judge steps 2 to 5 in that
    order, the file that reads the most such records first. A changed writer of such a record puts every reader the
    map lists for it in scope, changed or not. No `Map:` line or a hash mismatch: judge in the
    order of step 1.
-2. **Security invariants**: for each class run its fixed command. The jail refuses `-G` on
-   `git diff`, so the pickaxe runs on `git log`. A match is a lead: read the hunk before you
-   judge it. No match does not clear a class; the full diff from step 1 still does.
+2. **Security invariants**: for each class run its fixed command or method. The jail refuses
+   `-G` on `git diff`, so the pickaxe runs on `git log`. A match is a lead: read the hunk before
+   you judge it. No match does not clear a class; the full diff from step 1 still does.
+   A lead (a match, a `Hunt:` line, or one the brief names) closes only by a test, a
+   reproduction, or a `no-test:` line with its reason; reading alone never closes it. A probe
+   toward a secret reads a decoy key you Write under the round folder, never a real key.
    - secrets: `git log -p -G '([Pp]assword|[Ss]ecret|[Tt]oken|[Aa]pi_?[Kk]ey)[^=:]*[:=]|PRIVATE KEY|AKIA[0-9A-Z]+' <diff base>..<branch>`
    - auth weakening: `git log -p -G 'verify *= *False|CERT_NONE|check_hostname *= *False|InsecureSkipVerify|[Aa]llow_?[Aa]nonymous|HS256|alg.*none' <diff base>..<branch>`
    - broad IAM: `git log -p -G '"(Action|Resource|Principal)": *"[*]"|Action.*:[*]|AdministratorAccess|iam:PassRole' <diff base>..<branch>`
@@ -65,6 +81,17 @@ Work through every step for every branch.
    - dependency manifests: `git diff <diff base>...<branch> --name-only`; any changed
      requirements file, `pyproject.toml`, `package.json`, lockfile, `go.mod` or `Cargo.toml` is
      a dependency addition to judge.
+   - tool surface: when a jail rule admits a tool or a new form of one, list the tool's full
+     option, config-file and environment surface from its own `--help`, and judge each way it
+     reaches hidden, ignored, followed or config-loaded paths. Each admitted form needs a row
+     in the adversarial corpus; one that reaches such a path is filed by Finding format item 5.
+     When the jail refuses the help call, reply `[STATUS: YIELD_WEB] <tool> options and config
+     files` and judge from the researcher's payload.
+   - hostile input: each new parser or loader of a file a coder or project can write gets one
+     test feeding it wrong types, nested lists, an unreadable folder and a symlinked folder.
+   - control: `agents/*.md` and `skills/*/SKILL.md` are controls. Read their full diff,
+     `git diff <diff base>...<branch> -- agents skills`, never filtered to added lines. A
+     removed or narrowed instruction on what a judge must read, run or refuse is a finding.
 3. **Contract fidelity**: check field by field against the Packet. Every field, header,
    status code and auth requirement matches exactly. Any unit built against a stale
    packet_version is REJECTED outright.
@@ -73,7 +100,8 @@ Work through every step for every branch.
    `service-manifest.json`) is REJECTED. The train's own commits the brief names are exempt:
    the contract file the Packet names, and the ledger rows of its pick commit.
 5. **Compliance**: every FAIL in the specialist reports is remediated in the diff; any FAIL
-   that is not remediated is REJECTED.
+   that is not remediated is REJECTED. Apply each auditor brief rule with a security effect to
+   the files of the unit it names; a broken one is a compliance finding.
 
 ## Severity
 - critical: exploitable now, or exposes data, credentials or key material.
@@ -89,7 +117,9 @@ Any critical or high finding is REJECTED.
 ## Finding format
 A finding is a failing test, not a paragraph (0109). The finding line is
 `<branch> <file>:<line> <severity> <class>: <what the test shows>`. The class is one of the
-step 2 classes, contract, scope or compliance.
+step 2 classes, contract, scope or compliance. `<what the test shows>` names the invariant
+broken, not the one case. The test asserts it at every enforcement point that holds it at
+`<tip>`; a later round re-derives those points at the new tip before it reruns the test.
 1. **One test per blocking finding** (critical, high, or any class you mark blocking): write it
    with Write to `<repo>/docs/.tmp/daedalus/<train-id>/audit/round<n>/test_<class>_<slug>.py`.
    Its docstring is the finding line. The test reaches the code under test through pytest's
@@ -128,7 +158,8 @@ Human-facing text (0031): Text a human reads names each item in words: a short l
 
 ## Status contract
 Your reply starts with exactly one of these verdict lines as its first line and ends with the
-same verdict line, alone, as its last line. This holds for every reply, fix rounds included.
-The `tip=` value is the 40 lowercase hex step 0 printed.
+same verdict line, alone, as its last line. This holds for every reply, fix rounds included,
+except the tool surface yield below. The `tip=` value is the 40 lowercase hex step 0 printed.
 - `[VERDICT: APPROVED] tip=<40 lowercase hex>` then `<paragraph>` then `[VERDICT: APPROVED] tip=<40 lowercase hex>`
 - `[VERDICT: REJECTED] tip=<40 lowercase hex>` then `<itemized findings>` then `[VERDICT: REJECTED] tip=<40 lowercase hex>`
+- `[STATUS: YIELD_WEB] <tool> options and config files` as both the first and the last line: a question, not a verdict; the next prompt resumes the round.

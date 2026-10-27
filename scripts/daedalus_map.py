@@ -56,7 +56,8 @@ EVENTS = (
 # MAP -> VER: security-relevant is a hook event or a name carrying one of these words.
 SECURITY = re.compile(
     r"verdict|compliance|audit|secret|token|key|password|credential|auth|hmac|session|ledger"
-    r"|approv|reject|narrow|protect|jail|exception|exempt",
+    r"|approv|reject|narrow|protect|jail|exception|exempt"
+    r"|contract|lock|skip|plan|pack|verify|ignore",
     re.IGNORECASE,
 )
 READ_CALLS = frozenset(

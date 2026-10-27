@@ -77,7 +77,10 @@ Your reply lists one claim per edited passage, one line each:
 `Claim: <doc path>:<line> <what the passage now says> | receipt: <command>`.
 The receipt is one read-only command the verifier can rerun from the worktree, such as
 `git -C <path> show <commit>:<source file> | sed -n <first>,<last>p` or a `grep -n` on the
-source file the passage describes. A passage with no rerunnable receipt is not written.
+source file the passage describes. A passage saying a check, gate or refusal exists, in
+`docs/guardrails.md` or elsewhere, carries a receipt that includes the caller grep, such as
+`git -C <path> grep -n <name> <tip>`, showing where it runs, never the definition alone.
+A passage with no rerunnable receipt is not written.
 A resume that starts `FIX.` names the claims the verifier refuted: correct those passages,
 commit again, and reply with every claim of the docs as they now stand.
 
