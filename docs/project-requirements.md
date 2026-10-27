@@ -295,14 +295,15 @@ A route is one of four forms: `stop: Next: <at least four plain words>`, `back:<
 
 `--check` writes nothing and exits 1 when the file at `--out` differs from what the script would write. `--id-scheme` overrides the ledger id pattern, by default `{seq:04d}-{repo}-{type}`.
 
-The backfill file is one JSON object holding exactly four keys; any other key is refused:
+The backfill file is one JSON object holding four required keys and an optional `names`; any other key is refused:
 
 | Key | What it governs | Type | Allowed values | Example |
 |---|---|---|---|---|
 | `relations_from` | The first ledger row that carries its own relations; every earlier row takes its relations from `relations` | string | A ledger id that is a row of the ledger | `"0090-DAE-PLT"` |
-| `names_from` | The first ledger row whose Ruling cell starts with its name as its first sentence; earlier rows are named by the first clause of their Ruling cell | string | A ledger id that is a row of the ledger | `"0094-DAE-PLT"` |
+| `names_from` | The first ledger row whose Ruling cell starts with its name as its first sentence; earlier rows take their name from `names`, else from the first clause of their Ruling cell | string | A ledger id that is a row of the ledger | `"0094-DAE-PLT"` |
 | `areas` | The area each ruling in force is filed under | object | Each key is a ledger id; each value is one of the eight area names below. Every ruling in force needs one, and an id that is not in the ledger is refused | `{"0004-DAE-PLT": "the ledger and charter"}` |
 | `relations` | What each row before `relations_from` supersedes and amends | object | Each key is a ledger id before `relations_from`; each value is an object holding exactly a `supersedes` list and an `amends` list of earlier ledger ids | `{"0012-DAE-PLT": {"supersedes": ["0007-DAE-PLT"], "amends": []}}` |
+| `names` | The hand-written name of a ruling before `names_from`, used in its heading and wherever it is named (0181) | object | Optional. Each key is a ledger id before `names_from` whose ruling is in force; each value is a name of two to five words with no period. A row left out is named by its first clause | `{"0004-DAE-PLT": "Ledger declared per project"}` |
 
 From `relations_from` on, a row reads its own Supersedes cell: a sentence starting `Supersedes: ` or `Amends: ` lists the ids it supersedes or amends. A row from `relations_from` on that also appears in `relations` is refused.
 
