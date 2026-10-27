@@ -99,6 +99,30 @@ def write_train_marker(repo: Path, train: str = "20261017-120000") -> Path:
     return marker
 
 
+def write_folder_run(
+    root: Path, out: Path | None, scope: str = "folder", train: str = "20261017-120000"
+) -> str:
+    # issue 48: a marked run whose state records its scope and, when given, its output folder.
+    from lib import train_state
+
+    write_train_marker(root, train)
+    state: dict[str, object] = {"train_id": train, "repo": str(root), "scope_kind": scope}
+    if out is not None:
+        state["output_dir"] = str(out)
+    train_state.save(root, train, state)
+    return train
+
+
+@pytest.fixture
+def folder_run(tmp_path: Path) -> tuple[Path, Path]:
+    # issue 48: a plain folder whose marked run records an output folder outside it.
+    root, out = tmp_path.resolve() / "plain", tmp_path.resolve() / "out"
+    root.mkdir()
+    (out / "brainstorm-a").mkdir(parents=True)
+    write_folder_run(root, out)
+    return root, out
+
+
 # 0010: a throwaway identity so a test commit never reads the operator's git config.
 GIT_IDENT = (
     "-c",

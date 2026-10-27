@@ -145,3 +145,17 @@ def test_coder_write_through_a_worktree_link_is_denied(
         _b("repo-coder", f"tee {wt}/k/authorized_keys"),
     ):
         assert_denied(_cwd(hook_input, repo), CREDENTIAL, OUTSIDE)
+
+
+def test_planner_link_out_of_a_folder_runs_output_folder_is_denied(
+    folder_run: tuple[Path, Path], tmp_path: Path
+) -> None:
+    # issue 48: a file or folder link under the output folder that resolves outside it.
+    root, out = folder_run
+    outside = tmp_path.resolve() / "outside"
+    (outside / "brainstorm-x").mkdir(parents=True)
+    (out / "plan-link.md").symlink_to(outside / "plan.md")
+    (out / "brainstorm-link").symlink_to(outside / "brainstorm-x")
+    for path in (f"{out}/plan-link.md", f"{out}/brainstorm-link/spec.md"):
+        write = _cred("planner", "Write", str(root), file_path=path, content="x")
+        assert_denied(write, "writes are limited to scratch")

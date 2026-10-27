@@ -631,7 +631,8 @@ def _git_repo_check(repo: Path, is_repo: bool, scope_name: str) -> tuple[bool, s
     return _opt(
         False,
         "git repository",
-        f"{repo} is not a git repository, so trains here run in folder scope without git (0074)",
+        f"{repo} is not a git repository, so runs here use folder scope without git, and "
+        "build, audit and release need a repository (0074, 0178)",
         "to use repository scope, run git init or point --repo at a clone",
     )
 

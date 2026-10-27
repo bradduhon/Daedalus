@@ -29,6 +29,7 @@ from lib.config import (  # noqa: E402
 )
 from lib.project_root import in_git_work_tree, project_root  # noqa: E402
 from lib.shell import _under  # noqa: E402
+from lib.train_state import folder_output  # noqa: E402
 
 # 22: the --help text, kept below the future import as a plain string.
 DESCRIPTION = (
@@ -261,6 +262,10 @@ def output_dir_reason(out: str, repo: Path, boundary: jail.CoderBoundary | str) 
     # D.5: output_dir bounds every document agent write, so it sits inside the project,
     # below its root, and neither is nor holds a path the coder write check protects.
     real, root = os.path.realpath(out), os.path.realpath(repo)
+    # issue 48: a folder run's checked output folder outside the root is the one bound allowed
+    # there; inside the root the checks below still bind it.
+    if real == folder_output(repo) and not real.startswith(root + os.sep):
+        return None
     if real == root:
         return R_OUTPUT_ROOT.format(out=out)
     if not real.startswith(root + os.sep):

@@ -117,6 +117,19 @@ def test_same_day_draft_asks_each_time_with_continue_first() -> None:
     assert "`<repo>/docs/.tmp/daedalus/brainstorm-<YYYYMMDD>-<k>`" in step4
 
 
+def test_folder_run_writes_the_spec_and_plan_into_out() -> None:
+    # issue 48: the planner's hook admits its shapes in a folder run's <out>, so no copy step.
+    text = _text()
+    step2, step4 = _flat(_step(text, 2)), _flat(_step(text, 4))
+    assert "In a folder run, take `<repo>`, `<train-id>` and `<out>`" in step2
+    assert "and skip step 3" in step2
+    assert "Next: run `/daedalus:run brainstorm` with the idea" in step2
+    assert "the spec is written to `<out>/brainstorm-<YYYYMMDD>/spec.md`" in step4
+    handoff = _flat(text.split("### Hand-off: the spec stands", 1)[1])
+    assert "In a folder run it is `<out>/plan-<YYYYMMDD>.md`." in handoff
+    assert "with Read and Write" not in text
+
+
 def test_round_loop_prints_as_written_and_returns_answers_unchanged() -> None:
     text = _text()
     step6, step7 = _flat(_step(text, 6)), _flat(_step(text, 7))

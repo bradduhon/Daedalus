@@ -329,3 +329,7 @@ If it fails: after the restart, run `/daedalus:doctor`; its `plugin root` line n
 ## Sections added by later plans
 
 Service manifests and the new-service scaffold each add a section here in the pull request that ships them.
+
+### Running in a plain folder
+
+When the session is not in a git repository, `/daedalus:run` can brainstorm, plan, write documents and check their claims, but it cannot build, audit or push. It asks where the outputs go: the project's `docs` folder, a new folder under `/tmp`, or a folder you name. It then opens the run with `daedalus_workspace.py begin --repo <folder> --scope folder --out <outputs>`. The last line it prints is `scope: folder  out: <outputs>`. The plan file, the brainstorm spec, the derived documents and the change log are written straight into that output folder (issue 48). When the run ends, the session runs the stop command, which clears the run marker and touches no branch.

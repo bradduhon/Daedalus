@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -12,7 +13,7 @@ import pytest
 from lib import agent_files, router
 from lib.agent_files import Hook
 
-from tests.conftest import REPO_ROOT, write_train_marker
+from tests.conftest import REPO_ROOT, write_folder_run, write_train_marker
 
 # 0174: the doc-train skill is a stub; derived document mode of the document skill holds the recipe.
 DOCUMENT = REPO_ROOT / "skills" / "document" / "SKILL.md"
@@ -195,6 +196,39 @@ def test_routed_document_agent_writes_only_in_the_output_folder(doc_repo: Path, 
     assert (allow, hook) == (False, "doc_outputs") and "is source A" in str(reason)
     assert not _call(doc_repo, agent, "Bash", command="git status")[0]
     assert _call(doc_repo, agent, "Bash", command=f"wc -l {source}")[0]
+
+
+@pytest.mark.parametrize("agent", ["doc-deriver", "change-logger"])
+def test_document_agents_write_into_a_folder_runs_output_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str
+) -> None:
+    # issue 48: freeze and the doc outputs check take a folder run's output_dir outside the root.
+    root, out = tmp_path.resolve() / "plain", tmp_path.resolve() / "out"
+    root.mkdir()
+    out.mkdir()
+    (root / "base.sent-2026-10-01.md").write_text("The fee is 12.\n")
+    write_folder_run(root, out, train=TRAIN)
+    monkeypatch.chdir(root)
+    source = ["--source", "A=baseline:base.sent-2026-10-01.md"]
+    assert freeze_sources.main(["--train", TRAIN, "--output-dir", str(out), *source]) == 0
+    assert _call(root, agent, "Write", file_path=f"{out}/doc.md", content="x") == (True, None, "")
+    # (c) a path outside output_dir and (d) a link under it that resolves outside.
+    outside = tmp_path.resolve() / "outside"
+    outside.mkdir()
+    os.symlink(outside, out / "link")
+    for path in (f"{root}/a.md", f"{tmp_path}/doc.md", f"{out}/link/doc.md"):
+        allow, _, hook = _call(root, agent, "Write", file_path=path, content="x")
+        assert (allow, hook) == (False, "doc_outputs"), path
+    # (e) another agent class gets no output folder grant.
+    allow, _, hook = _call(root, "planner", "Write", file_path=f"{out}/doc.md", content="x")
+    assert (allow, hook) == (False, "root_writes")
+    # (a) a repository run and (b) a folder run with no output_dir keep the root bound.
+    for scope, recorded in (("repository", out), ("folder", None)):
+        write_folder_run(root, recorded, scope, TRAIN)
+        reason = freeze_sources.output_dir_reason(str(out), root, "unchecked")
+        assert reason == freeze_sources.R_OUTPUT_OUTSIDE.format(out=out, repo=root), scope
+        allow, _, hook = _call(root, agent, "Write", file_path=f"{out}/doc.md", content="x")
+        assert (allow, hook) == (False, "doc_outputs"), scope
 
 
 def test_round_skill_logs_holds_and_flips_on_the_operators_word() -> None:
