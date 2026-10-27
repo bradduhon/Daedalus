@@ -232,6 +232,45 @@ def test_out_folder_is_left_out_of_the_scan(repo: Path) -> None:
     assert "[STATUS: SCRATCH]" not in (out / "map.json").read_text(encoding="utf-8")
 
 
+def test_excluded_roots_are_left_out_of_the_scan(repo: Path) -> None:
+    # 99, D.2.1: every excluded root of the project config is skipped, a relative one included.
+    roots = [
+        {"kind": "path", "path": "<repo_root>/private/"},
+        {"kind": "path", "path": "docs/inner"},
+    ]
+    _write(repo, ".claude/daedalus/config.json", json.dumps({"excluded_roots": roots}))
+    _write(repo, "private/leak.py", 'print("[STATUS: PRIVATE]")\n')
+    _write(repo, "docs/inner/notes.md", "Reply `[STATUS: INNER]` here.\n")
+    _write(repo, "docs/kept.md", "Reply `[STATUS: KEPT]` here.\n")
+    code, out = _map(repo)
+    assert code == 0, out
+    text = (repo / "out" / "map.json").read_text(encoding="utf-8")
+    assert "[STATUS: KEPT]" in text
+    assert "[STATUS: PRIVATE]" not in text and "private/leak.py" not in text
+    assert "[STATUS: INNER]" not in text and "docs/inner" not in text
+
+
+def test_unreadable_excluded_roots_exit_2_and_write_nothing(repo: Path) -> None:
+    # 99: the walk fails closed when the excluded roots cannot be resolved.
+    _write(repo, ".claude/daedalus/config.json", json.dumps({"excluded_roots": "private/"}))
+    code, out = _map(repo)
+    assert code == 2 and "excluded roots" in out and out.count("Next:") == 1, out
+    assert not (repo / "out").exists()
+
+
+def test_a_root_error_without_a_next_line_gets_one(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 99: a cause lacking its own Next line gets the map's.
+    def refuse(_repo: Path) -> frozenset[Path]:
+        raise daedalus_map.ConfigError("roots unreadable")
+
+    monkeypatch.setattr(daedalus_map, "excluded_paths", refuse)
+    assert daedalus_map.main(["--repo", str(repo), "--out", "out"]) == 2
+    out = capsys.readouterr().out
+    assert "roots unreadable" in out and out.count("Next:") == 1, out
+
+
 def test_plugin_tree_maps_its_own_plan_loader() -> None:
     # Pin MAP -> REQ: validate_plan.py reads the plan record, so the record's fan-in names it.
     scan = daedalus_map.scan_tree(REPO_ROOT, REPO_ROOT / "docs" / ".tmp")

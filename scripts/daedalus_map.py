@@ -25,6 +25,8 @@ from typing import TypedDict
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import atomic  # noqa: E402
+from lib.audit import DataDirError  # noqa: E402
+from lib.config import ConfigError, load_config, resolve_excluded_roots  # noqa: E402
 from lib.plan_record import PlanError, _covers, load  # noqa: E402
 from lib.project_keys import config_keys, manifest_keys  # noqa: E402
 
@@ -80,6 +82,8 @@ R_PLAN = (
     "The map could not read the plan it was given: {error}\n"
     "Next: pass the plan file the train recorded as --plan."
 )
+R_ROOTS = "The map could not resolve the project's excluded roots, so nothing was written: {error}"
+R_ROOTS_NEXT = "\nNext: fix excluded_roots in .claude/daedalus/config.json, then rerun the map."
 
 
 class ImportRow(TypedDict):
@@ -124,24 +128,36 @@ def _is_test(rel: str) -> bool:
     )
 
 
-def _walk(repo: Path, out: Path) -> list[str]:
+def excluded_paths(repo: Path) -> frozenset[Path]:
+    # 99, D.2.1: the project's excluded roots, resolved against --repo as freeze_sources does.
+    roots = resolve_excluded_roots(load_config(str(repo)), repo)
+    return frozenset(Path(os.path.realpath(r.path)) for r in roots)
+
+
+def _walk(repo: Path, out: Path, skip: frozenset[Path]) -> list[str]:
     # MAP -> VER: hidden folders (worktrees, caches, scratch) are skipped; links never followed.
     found: list[str] = []
     for top, dirs, names in os.walk(repo):
         here = Path(top)
         dirs[:] = sorted(
-            d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS and here / d != out
+            d
+            for d in dirs
+            if not d.startswith(".") and d not in SKIP_DIRS and here / d not in skip | {out}
         )
         for name in names:
             path = here / name
-            if path.suffix in TEXT_SUFFIXES | {".py"} and not path.is_symlink():
+            if (
+                path.suffix in TEXT_SUFFIXES | {".py"}
+                and not path.is_symlink()
+                and path not in skip
+            ):
                 found.append(path.relative_to(repo).as_posix())
     return sorted(found)
 
 
-def scan_tree(repo: Path, out: Path) -> Scan:
+def scan_tree(repo: Path, out: Path, skip: frozenset[Path] = frozenset()) -> Scan:
     texts: dict[str, str] = {}
-    for rel in _walk(repo, out):
+    for rel in _walk(repo, out, skip):
         path = repo / rel
         try:
             if path.stat().st_size <= MAX_BYTES:
@@ -648,7 +664,7 @@ def duplicates_table(scan: Scan) -> list[list[str]]:
 
 
 def build(repo: Path, out: Path, plan_path: Path | None) -> MapTables:
-    scan = scan_tree(repo, out)
+    scan = scan_tree(repo, out, excluded_paths(repo))
     trees = _parse(scan)
     return {
         "coverage": coverage_table(scan, trees),
@@ -751,6 +767,10 @@ def main(argv: list[str]) -> int:
         data = build(repo, out, args.plan)
     except PlanError as exc:
         print(R_PLAN.format(error=exc))
+        return 2
+    except (ConfigError, DataDirError) as exc:
+        # 99: the cause's own Next line wins; the generic one only fills a gap.
+        print(R_ROOTS.format(error=exc) + ("" if "Next:" in str(exc) else R_ROOTS_NEXT))
         return 2
     texts = {MAP_JSON: render_json(data), MAP_MD: render_md(data, args.plan is not None)}
     if args.check:
