@@ -103,6 +103,36 @@ H1_ICASE = (
     "GIT_ICASE_PATHSPECS=1 git add NOTES/a.md",
     "git add ':(icase)NOTES/a.md' $(true)",
 )
+# SC-12 (fix round 1, finding 1): an rg whitelist glob reaches the hidden .claude folder.
+FIX1_RG_GLOBS = (
+    "rg -g .claude -g '*.key' -l . .",
+    "rg --glob=.claude --glob='*.key' -l . .",
+    "rg --iglob .claude --iglob '*.KEY' -l . .",
+    "rg -g '.claude' -g 'reply-hmac.key' -n . .",
+    "rg -g.claude -g'*.key' -l token",
+    "rg -ig .claude -g '*.key' token .",
+    "rg -g '{.claude,x}' -g '*.key' token .",
+    "rg -g '.*' token .",
+    "rg -g '**/*.key' token .",
+    # SC-12 (fix round 1, verifier): gitignore **/ matches zero folders; a trailing / is a folder.
+    "rg -g '**/.claude' -g '**/.claude/**' -l . .",
+    "rg -g '.claude/' -g '**/.claude/**/reply-hmac.key' -l . .",
+    "rg -g=.claude -g='*.key' -l . .",
+    # SC-12 (fix round 1, operator ruling): a glob character the matcher does not model.
+    "rg -g '\\.claude' -g '\\.claude/**' -l . .",
+    "rg -g '.clau[d]e' -g '*.key' -l . .",
+)
+# SC-12 (fix round 1, verifier): the same gitignore spellings for the Grep tool's glob.
+FIX1_GREP_GLOBS = ("**/.claude/**", "**/.claude", ".claude/", "**/.claude/**/reply-hmac.key")
+FIX1_GREP_GLOBS += ("\\.claude/**", ".clau[d]e/**")
+# SC-12 (fix round 1, finding 1): positive globs that name no hidden folder or key still pass.
+FIX1_RG_GLOBS_ALLOWED = (
+    "rg -g '*.tf' -g '*.yml' -l token .",
+    "rg -g '!.claude' token .",
+    "rg -e -g token .",
+    "rg -g '**/*.py' -g '*Dockerfile*' -g '*requirements*.txt' token .",
+    "rg -g 'src/' token .",
+)
 
 
 def assert_denied(hook_input: dict[str, Any], *markers: str) -> None:

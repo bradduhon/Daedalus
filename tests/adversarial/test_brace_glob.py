@@ -6,14 +6,21 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from lib import jail
+from lib.credential_paths import glob_reaches
 
 from tests.adversarial.corpus import (
     CREDENTIAL,
+    FIX1_GREP_GLOBS,
+    FIX1_RG_GLOBS,
+    FIX1_RG_GLOBS_ALLOWED,
     READERS,
     REPLY_KEY,
     assert_denied,
     assert_store_read_denied,
 )
+from tests.conftest import CFG
+from tests.hook_chain import decide
 from tests.payloads import _cred
 from tests.test_checks_credential_paths import (
     BRACE_CLASS_TABLE,
@@ -127,3 +134,56 @@ def test_bash_brace_or_glob_reaching_the_reply_key_is_denied(
 ) -> None:
     repo = _key_repo(tmp_path)
     assert_denied(_bash_in(repo, agent, template.format(repo=repo)), REPLY_KEY, CREDENTIAL)
+
+
+@pytest.mark.parametrize("agent", READERS)
+@pytest.mark.parametrize("command", FIX1_RG_GLOBS)
+def test_an_rg_whitelist_glob_reaching_the_reply_key_is_denied(
+    tmp_path: Path, agent: str, command: str
+) -> None:
+    # SC-12: a -g, --glob or --iglob whitelist overrides rg's hidden-folder skip.
+    assert_denied(_bash_in(_key_repo(tmp_path), agent, command), REPLY_KEY, CREDENTIAL)
+
+
+@pytest.mark.parametrize("command", FIX1_RG_GLOBS_ALLOWED)
+def test_an_rg_glob_naming_no_hidden_folder_still_passes(tmp_path: Path, command: str) -> None:
+    # SC-12: the shipped pack verify globs (*.tf, *.yml) stay admitted beside a reply key.
+    d = decide(_bash_in(_key_repo(tmp_path), "framework-specialist", command), CFG)
+    assert d.allow, (command, d.reason)
+
+
+def test_an_rg_whitelist_glob_reaching_a_credential_store_is_denied(
+    cred_home: Path,  # noqa: F811
+) -> None:
+    # SC-12: the same override reaches a hidden credential store under home.
+    (cred_home / ".ssh").mkdir()
+    forms = ("rg -g .ssh -g 'id_*' BEGIN ~", "rg --iglob=.SSH BEGIN {home}")
+    forms += ("rg -g '**/.ssh' -g '**/.ssh/**' BEGIN ~", "rg -g '.ssh/' BEGIN {home}")
+    forms += ("rg -g '\\.ssh' -g '\\.ssh/**' BEGIN {home}",)
+    for command in forms:
+        assert_store_read_denied("security-auditor", command, home=cred_home)
+    assert jail._rg_globs(["-e", "-g", "-g", "!x", "--glob", "$X", "-ng*.tf"]) == ["*", "*.tf"]
+    assert jail._rg_globs(["-g=.claude"]) == ["=.claude", ".claude"]
+    # SC-12: outside the modelled characters a glob reaches every store; a negated glob never does.
+    assert glob_reaches(["\\.x"], ["a"]) and glob_reaches(["[a]"], ["b"])
+    assert not glob_reaches(["!\\.ssh", "**/*.py", "*Dockerfile*"], [".ssh"])
+
+
+@pytest.mark.parametrize("agent", READERS)
+@pytest.mark.parametrize("glob", FIX1_GREP_GLOBS)
+def test_grep_tool_gitignore_glob_reaching_the_reply_key_is_denied(
+    tmp_path: Path, agent: str, glob: str
+) -> None:
+    # SC-12: the Grep tool shares glob_reaches, so a zero-folder **/ reaches the key too.
+    repo = _key_repo(tmp_path)
+    tool_input = {"pattern": ".", "glob": glob, "path": str(repo)}
+    assert_denied(_cred(agent, "Grep", cwd=str(repo), **tool_input), REPLY_KEY, CREDENTIAL)
+
+
+def test_grep_tool_pack_globs_still_pass(tmp_path: Path) -> None:
+    # SC-12: globs naming no hidden folder or key stay admitted for the Grep tool.
+    repo = _key_repo(tmp_path)
+    for glob in ("*.tf", "**/*.py", "*Dockerfile*", "src/**"):
+        tool_input = {"pattern": ".", "glob": glob, "path": str(repo)}
+        d = decide(_cred("framework-specialist", "Grep", cwd=str(repo), **tool_input), CFG)
+        assert d.allow, (glob, d.reason)

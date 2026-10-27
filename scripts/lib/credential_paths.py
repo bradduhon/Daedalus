@@ -8,6 +8,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import string
 from pathlib import Path
 
 from lib.project_root import project_root
@@ -293,23 +294,42 @@ def key_roots(*paths: str) -> list[str]:
     return sorted(os.path.realpath(k) for k in keys if k.is_absolute() and os.path.lexists(k))
 
 
-def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
-    # SC-12: the Grep tool honors the data folder's `*` marker from above, so only a search
-    # rooted inside .claude, or a glob that overrides the marker, can read the key.
-    raw = glob if isinstance(glob, str) else ""
+def glob_patterns(raw: str) -> list[str]:
     # issue 53: each brace alternative is its own glob; past the cap or on a sequence, a brace is *.
     pats = (expand_braces(raw) or [_braces_to_star(raw)]) if raw else []
     # SC-12: a leading / anchors an rg glob to the search root; the match ignores it.
-    pats = [p.lstrip("/") for p in pats if p.lstrip("/")]
+    return [p.lstrip("/") for p in pats if p.lstrip("/")]
+
+
+# SC-12: the glob characters glob_reaches models; any other (\, [, {, ,) fails closed.
+GLOB_MODELLED = frozenset(string.ascii_letters + string.digits + "._-*?/")
+
+
+def glob_reaches(pats: list[str], rest: list[str]) -> bool:
+    # SC-12: a whitelist glob naming any run of components below the search root, case folded.
+    # SC-12: fnmatch's * crosses /, and the / edges let a gitignore **/ match zero folders.
+    pats = [p for p in pats if not p.startswith("!")]
+    if any(set(p) - GLOB_MODELLED for p in pats):
+        return True
+    runs = {"/".join(rest[i:j]) for i in range(len(rest)) for j in range(i + 1, len(rest) + 1)}
+    names = {edge.format(run.casefold()) for run in runs for edge in ("{}", "/{}", "{}/", "/{}/")}
+    folded = {p.casefold() for pat in pats for p in (pat, pat.rstrip("/")) if p}
+    return any(fnmatch.fnmatchcase(name, pat) for name in names for pat in folded)
+
+
+def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
+    # SC-12: the Grep tool honors the data folder's `*` marker from above, so only a search
+    # rooted inside .claude, or a glob that overrides the marker, can read the key.
+    pats = glob_patterns(glob if isinstance(glob, str) else "")
     for key in keys:
         if _contains(os.path.dirname(os.path.dirname(key)), target):
             return R_REPLY_KEY_TREE.format(path=target)
         if not pats:
             continue
-        names = [os.path.basename(key)]
+        rest = [os.path.basename(key)]
         if _contains(target, key):
-            names.append(os.path.relpath(key, os.path.realpath(target)))
-        if any(fnmatch.fnmatchcase(name, pat) for name in names for pat in pats):
+            rest = os.path.relpath(key, os.path.realpath(target)).split(os.sep)
+        if glob_reaches(pats, rest):
             return R_REPLY_KEY_TREE.format(path=target)
     return None
 
