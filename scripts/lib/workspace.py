@@ -863,6 +863,18 @@ VERIFIED_LINE = re.compile(r"\[VERDICT: VERIFIED\] claims=[0-9]+")
 VERIFIER = "verifier"
 _UNIT_LINE = "Unit worktree: "
 _DISPATCH_TOOLS = ("Agent", "SendMessage")
+# 101, agents/orchestrator.md:135: the relay's begin marker; a payload can forge the end marker.
+PAYLOAD_BEGIN = "--- research payload begin"
+
+
+def before_payload(text: str) -> str:
+    # 101: reading stops at the first begin marker line, so no fetched line names a worktree.
+    kept: list[str] = []
+    for line in text.splitlines():
+        if line.lstrip().startswith(PAYLOAD_BEGIN):
+            break
+        kept.append(line)
+    return "\n".join(kept)
 
 
 def _strings(value: object) -> list[str]:
@@ -879,8 +891,8 @@ def _worktree_lines(record: dict[str, object]) -> list[str]:
     # 0121: the Unit worktree lines of a PreToolUse Agent or SendMessage record, else none.
     if record.get("event") != "PreToolUse" or record.get("tool_name") not in _DISPATCH_TOOLS:
         return []
-    texts = _strings(record.get("tool_input"))
-    return [line for text in texts for line in text.splitlines() if line.startswith(_UNIT_LINE)]
+    text = before_payload("\n".join(_strings(record.get("tool_input"))))
+    return [line for line in text.splitlines() if line.startswith(_UNIT_LINE)]
 
 
 def unit_verified(records: list[dict[str, object]], worktree: Path) -> bool:

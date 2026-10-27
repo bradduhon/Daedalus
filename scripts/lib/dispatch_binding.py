@@ -22,7 +22,7 @@ from lib.train_state import TRAIN_ID, TrainStateError, active_train, is_audit_un
 from lib.train_state import load as load_train
 from lib.train_state import units as units_of
 from lib.unit_binding import claim, rebind, record_dispatch
-from lib.workspace import UNMARK_NEXT, train_marker
+from lib.workspace import UNMARK_NEXT, before_payload, train_marker
 
 R_NO_TRAIN = (
     "a repo-coder writes only inside a Daedalus train (issue 29). "
@@ -296,7 +296,7 @@ def _resume_reason(tool_input: dict[str, object], cwd: str) -> str | None:
 
     # 0086: every field but the target, since the message key is ASSUMED, not verified live.
     fields = {key: value for key, value in tool_input.items() if key != "to"}
-    lines = _worktree_lines("\n".join(_strings(fields)))
+    lines = _worktree_lines(before_payload("\n".join(_strings(fields))))
     if not lines or not os.path.isabs(cwd) or not _train_active(cwd):
         return None
     repo = project_root(Path(cwd))
