@@ -415,11 +415,13 @@ def _add_rows(run: Run, agent: Agent) -> None:
         if seg.first is not None and seg.last is not None:
             run.first = min(run.first, seg.first) if run.first else seg.first
             run.spans.append((seg.first, seg.last))
-        label = None if run.run_type == SESSION else seg.label
+        # 0163: a session row carries its agent id, as the audit timeline does; no mean counts it.
+        session = run.run_type == SESSION
+        label = agent.agent_id if session else seg.label
         row = rows.get(label)
         if row is None:
             kind = None
-            if label is not None and label not in STAGES:
+            if not session and label is not None and label not in STAGES:
                 kind = "round" if agent.agent_type in ROUND_AGENTS else "unit"
             phase = _phase(run.run_type, agent.agent_type, seg.prompt)
             row = Row(
@@ -565,7 +567,7 @@ LEGEND = (
     "apart, once per message id, from its last transcript line. Wall time on an agent row adds "
     "up that agent's active spans; on a total row it is the time any agent of the run was active. "
     "The mean per unit counts coders only. Run type session holds the agents the main session "
-    "started outside any run."
+    "started outside any run; its rows carry the agent id."
 )
 
 

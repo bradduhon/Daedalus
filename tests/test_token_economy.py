@@ -195,6 +195,8 @@ def test_audit_lines_carry_the_session_group(home: Path, tmp_path: Path) -> None
     lines = te.audit_lines(SESSION, tmp_path / "repo", [])
     assert lines[-2].startswith(f"| session | {SESSION} | total | 1 agents | 0 units, 0 rounds |")
     assert lines[-1].startswith(f"| session | {SESSION} | mean | per unit | 0 units | none |")
+    runs, _ = te.session_runs(SESSION, tmp_path / "repo", [])
+    assert [r.label for r in runs[-1].rows] == ["loose"]
     assert not any("outside any run" in line for line in lines)
 
 
@@ -208,7 +210,10 @@ def test_agents_outside_any_run_group_under_the_session(home: Path) -> None:
     session = runs[-1]
     assert (session.run_type, session.run_id) == (te.SESSION, SESSION)
     assert sorted(r.agent_id for r in session.rows) == ["loose", "loose2"]
-    assert {(r.phase, r.label, r.kind) for r in session.rows} == {(None, None, None)}
+    assert {(r.phase, r.kind) for r in session.rows} == {(None, None)}
+    assert sorted(r.label for r in session.rows) == ["loose", "loose2"]
+    text = te.render(runs, f"session {SESSION}")
+    assert f"| session | {SESSION} | none | general-purpose | loose2 | 1 | 2 | 8 |" in text
     total = te.totals_row(session)
     assert total.startswith(f"| session | {SESSION} | total | 2 agents | 0 units, 0 rounds | 1 |")
     for kind in ("unit", "round"):
