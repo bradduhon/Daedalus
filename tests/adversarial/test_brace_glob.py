@@ -14,6 +14,10 @@ from tests.adversarial.corpus import (
     FIX1_GREP_GLOBS,
     FIX1_RG_GLOBS,
     FIX1_RG_GLOBS_ALLOWED,
+    PREPUSH_IGNORE_BODIES,
+    PREPUSH_IGNORE_FILES,
+    PREPUSH_IGNORE_SEARCHES,
+    PREPUSH_RG_REACH,
     READERS,
     REPLY_KEY,
     assert_denied,
@@ -187,3 +191,45 @@ def test_grep_tool_pack_globs_still_pass(tmp_path: Path) -> None:
         tool_input = {"pattern": ".", "glob": glob, "path": str(repo)}
         d = decide(_cred("framework-specialist", "Grep", cwd=str(repo), **tool_input), CFG)
         assert d.allow, (glob, d.reason)
+
+
+@pytest.mark.parametrize("agent", READERS)
+@pytest.mark.parametrize("name", PREPUSH_IGNORE_FILES)
+@pytest.mark.parametrize("body", PREPUSH_IGNORE_BODIES)
+def test_an_ignore_file_whitelist_reaching_the_reply_key_is_denied(
+    tmp_path: Path, agent: str, name: str, body: str
+) -> None:
+    # prepush-2026-10-27 finding 1: plain rg and the Grep tool alike, at the root or one up.
+    repo = _key_repo(tmp_path)
+    for folder in (repo, repo.parent):
+        (folder / name).write_text(body, encoding="utf-8")
+        for command in PREPUSH_IGNORE_SEARCHES:
+            assert_denied(_bash_in(repo, agent, command), REPLY_KEY, CREDENTIAL)
+        for path in (None, str(repo)):
+            tool_input = {"pattern": "."} | ({"path": path} if path else {})
+            assert_denied(_cred(agent, "Grep", cwd=str(repo), **tool_input), REPLY_KEY)
+        (folder / name).unlink()
+
+
+def test_an_ignore_file_without_a_whitelist_line_still_passes(tmp_path: Path) -> None:
+    # prepush-2026-10-27 finding 1: only a `!` line refuses; a folder off the key's path passes.
+    repo = _key_repo(tmp_path)
+    (repo / ".rgignore").write_text("build/\n# !kept\n", encoding="utf-8")
+    (repo / "src" / ".ignore").write_text("!*\n", encoding="utf-8")
+    for command in PREPUSH_IGNORE_SEARCHES[:2] + ("rg -l token src",):
+        d = decide(_bash_in(repo, "framework-specialist", command), CFG)
+        assert d.allow, (command, d.reason)
+    d = decide(_cred("framework-specialist", "Grep", cwd=str(repo), pattern="."), CFG)
+    assert d.allow, d.reason
+
+
+@pytest.mark.parametrize("agent", READERS)
+@pytest.mark.parametrize("command", PREPUSH_RG_REACH)
+def test_an_rg_flag_reading_hidden_or_ignored_files_is_denied(
+    tmp_path: Path, agent: str, command: str
+) -> None:
+    # 113, prepush-2026-10-27 finding 2: each fails closed beside the reply key, like --hidden.
+    repo = _key_repo(tmp_path)
+    assert_denied(_bash_in(repo, agent, command))
+    # 113: the credential check alone refuses it, whatever the agent's own grammar admits.
+    assert jail._credential_reason("Bash", {"command": command}, str(repo)) is not None

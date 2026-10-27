@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import re
 import shlex
 import subprocess
@@ -843,6 +844,7 @@ def finish(repo: Path) -> list[str]:
                 "back to the lock the unit was built on, then rerun the finish; otherwise "
                 "rerun the train, and if it repeats, file an issue with the train summary."
             )
+    _skip_scope(repo, state, merging, str(lock_sha))
     _git(repo, "switch", "-q", integration)
     lines = _merge_all(repo, state, train_id, merging)
     _finished(repo, train_id, merging)
@@ -851,6 +853,36 @@ def finish(repo: Path) -> list[str]:
     if not _teardown(repo, units, lines, nexts):
         raise WorkspaceError("\n".join([*lines, f"Next: {'; '.join(nexts)}"]))
     return lines
+
+
+SKIP_NEXT = (
+    "Next: stop the train and run it again with a plan the contract step "
+    "(daedalus_train.py contract --repo {repo}) answers contract: required for, so "
+    "contract-spec locks a contract before more than the plan's one file merges."
+)
+
+
+def _skip_scope(
+    repo: Path, state: dict[str, object], merging: list[dict[str, object]], lock_sha: str
+) -> None:
+    # prepush-2026-10-27 finding 4, 0156: a skipped contract covers one unit and one file.
+    if state.get(train_state.CONTRACT_SKIP) is not True or state.get("packet_version") is not None:
+        return
+    files = [f for unit in _recorded_plan(state).units for f in unit.files]
+    nxt = SKIP_NEXT.format(repo=repo)
+    if len(merging) != 1 or len(files) != 1:
+        raise WorkspaceError(
+            f"this train skipped the contract for a one-file plan, yet {len(merging)} units "
+            f"would merge against a plan naming {len(files)} files. {nxt}"
+        )
+    branch = str(merging[0]["branch"])
+    raw = _out(repo, "diff", "--name-only", "--no-renames", "-z", f"{lock_sha}...{branch}")
+    changed = sorted(name for name in raw.split("\0") if name)
+    if changed != [os.path.normpath(files[0])]:
+        raise WorkspaceError(
+            f"this train skipped the contract for the one file {files[0]}, yet {branch} changes "
+            f"{_shown(changed) if changed else 'no file'}. {nxt}"
+        )
 
 
 def _finished(repo: Path, train_id: str, units: list[dict[str, object]]) -> None:
@@ -881,7 +913,7 @@ def _merge_all(
 
 
 VERIFIED = "[VERDICT: VERIFIED] claims=<n>"
-# 0121, agents/verifier.md:136: the verifier's closing line, after its corrected=<k> line.
+# 0121, agents/verifier.md:138: the verifier's closing line, after its corrected=<k> line.
 VERIFIED_LINE = re.compile(r"\[VERDICT: VERIFIED\] claims=[0-9]+")
 VERIFIER = "verifier"
 _UNIT_LINE = "Unit worktree: "
@@ -970,6 +1002,10 @@ VERIFY_NEXT = (
 
 
 def _plan_ids(state: dict[str, object]) -> set[str]:
+    return {unit.id.casefold() for unit in _recorded_plan(state).units}
+
+
+def _recorded_plan(state: dict[str, object]) -> plan_record.Plan:
     record = train_state.record(state, train_state.PLAN)
     path, digest = record.get("path"), record.get("sha256")
     rerun = "Next: record the plan with daedalus_train.py plan --path, then rerun the merge."
@@ -982,10 +1018,9 @@ def _plan_ids(state: dict[str, object]) -> set[str]:
     if not hmac.compare_digest(hashlib.sha256(data).hexdigest(), digest):
         raise WorkspaceError(f"the plan {path} changed after it was recorded. {rerun}")
     try:
-        plan = plan_record.load(Path(path))
+        return plan_record.load(Path(path))
     except plan_record.PlanError as exc:
         raise WorkspaceError(f"{exc} {rerun}") from exc
-    return {unit.id.casefold() for unit in plan.units}
 
 
 def _wave(

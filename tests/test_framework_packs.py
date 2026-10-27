@@ -28,7 +28,7 @@ def _control(ident: str = "X-1", **extra: object) -> dict[str, object]:
         "title": "A title",
         "statement": "A statement.",
         "look_for": "A hint.",
-        "verify": "git grep -n x",
+        "verify": "rg -n x .",
         "refs": {"nist": ["AC-2"], "cis": [], "asvs": []},
     }
     return {**base, **extra}
@@ -345,6 +345,45 @@ def test_a_nist_id_outside_the_catalog_list_is_a_problem(tmp_path: Path) -> None
     assert _problems(folder) == "control X-1 refs.nist id 'AC-999' is not in nist-control-ids.txt"
 
 
+def test_a_nist_ref_holding_a_list_is_a_problem_not_a_crash(tmp_path: Path) -> None:
+    # prepush-2026-10-27 finding 5: an unhashable id never reaches the catalog lookup.
+    refs = {"nist": [["AC-2"], {"x": 1}, "AC-2"], "cis": [], "asvs": []}
+    folder = _make(tmp_path / "p", [_control(refs=refs)])
+    assert _problems(folder) == "control X-1 refs.nist must be a list of ids"
+
+
+# 113, prepush-2026-10-27 finding 2: verify commands the specialist's jail refuses.
+HOSTILE_VERIFY = (
+    "rg --ignore-file /tmp/ig -n BEGIN .",
+    "rg --ignore-file=/tmp/ig -n BEGIN .",
+    "rg -L -n BEGIN .",
+    "rg --follow BEGIN .",
+    "rg --hidden -n BEGIN .",
+    "rg -n BEGIN ~/.ssh",
+    "rg -g .claude -g '*.key' -l . .",
+    "RIPGREP_CONFIG_PATH=/tmp/rc rg -n BEGIN .",
+    "git diff --stat",
+    "rg -n x . | head",
+    "rg --pre cat x .",
+)
+
+
+@pytest.mark.parametrize("command", HOSTILE_VERIFY)
+def test_a_verify_the_specialists_jail_refuses_is_a_pack_problem(
+    tmp_path: Path, command: str
+) -> None:
+    folder = _make(tmp_path / "p", [_control(verify=command)])
+    found = _problems(folder)
+    assert found.startswith("control X-1 verify is refused by the framework specialist's jail: ")
+    with pytest.raises(PackError):
+        load_pack(folder, known=())
+
+
+def test_a_plain_rg_verify_is_no_problem(tmp_path: Path) -> None:
+    for command in ("rg -n x .", "rg -n -F 'AC-2(1)' .", "rg -n 'a|b' -g '*.tf' -g '*.yml' ."):
+        assert pack_problems(_make(tmp_path / "p", [_control(verify=command)]), known=()) == []
+
+
 def test_an_unreadable_nist_list_is_a_problem(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -420,3 +459,27 @@ def test_pack_folders_with_a_missing_declared_folder(repo_cwd: Path) -> None:
     assert pack_folders(repo_cwd) == []
     _manifest(repo_cwd, {"pack_dir": "absent"})
     assert pack_folders(repo_cwd) == _shipped()
+
+
+# prepush-2026-10-27 finding 6: the train step that runs pack_problems before the specialist.
+
+
+def test_train_packs_prints_the_checked_folders_or_stops(
+    repo_cwd: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import daedalus_train
+
+    monkeypatch.chdir(repo_cwd)
+    run = ["packs", "--repo", str(repo_cwd)]
+    one = _make(repo_cwd / "packs" / "one")
+    _manifest(repo_cwd, {"pack_dir": "packs", "default_packs": False})
+    assert daedalus_train.main(run) == 0
+    assert capsys.readouterr().out == f"Packs: {one}\n"
+    _make(repo_cwd / "packs" / "two", [_control(verify="rg --ignore-file /tmp/x -n . .")])
+    assert daedalus_train.main(run) == 1
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].startswith("pack two: control X-1 verify is refused by the framework")
+    assert out[-1].startswith("Next: run /daedalus:doctor and fix each pack it names")
+    _manifest(repo_cwd, {"pack_dir": "absent", "default_packs": False})
+    assert daedalus_train.main(run) == 1
+    assert capsys.readouterr().out.startswith("No control pack was found")

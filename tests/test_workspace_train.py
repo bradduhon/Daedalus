@@ -1319,6 +1319,68 @@ def test_finish_after_a_wave_merge_skips_the_merged_unit(repo: Path) -> None:
     ]
 
 
+ONE_FILE_PLAN = (
+    "```plan\n"
+    "unit: U1 | title: one | files: u1.txt | base: integration\n"
+    "```\n"
+    "\nwire: none\n"
+    "\n### U1: one\n\nRequirements:\n1. Write `u1.txt`.\n"
+)
+
+
+def _skipped_train(repo: Path) -> str:
+    # 0156: the contract step recorded a skip and the lock took --no-contract.
+    train = _train(repo)
+    plan = repo / "docs" / ".tmp" / "daedalus" / train / "plan.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text(f"# plan\n\n{ONE_FILE_PLAN}", encoding="utf-8")
+    digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+    record = {train_state.PLAN: {"path": str(plan), "sha256": digest}}
+    train_state.update(repo, train, contract_skip=True, **record)
+    lock(repo, None)
+    return train
+
+
+@pytest.mark.parametrize(
+    ("extra", "said"),
+    [
+        ("unit", "2 units would merge against a plan naming 1 files"),
+        ("file", "changes u1.txt, u2.txt"),
+        ("other", "changes u2.txt"),
+    ],
+)
+def test_finish_refuses_a_skipped_train_past_its_one_file(
+    repo: Path, extra: str, said: str
+) -> None:
+    # prepush-2026-10-27 finding 4: no contract covers a second unit or a second file.
+    train = _skipped_train(repo)
+    if extra == "unit":
+        _built(repo, train, "u1")
+        _built(repo, train, "u2")
+    elif extra == "file":
+        unit = _built(repo, train, "u1")
+        (unit / "u2.txt").write_text("x\n")
+        _commit_all(unit, "second file")
+    else:
+        _built(repo, train, "u1", name="u2.txt")
+    base = _ok(repo, "rev-parse", f"daedalus/{train}")
+    with pytest.raises(WorkspaceError) as info:
+        finish(repo)
+    assert said in str(info.value)
+    assert "Next: stop the train and run it again with a plan the contract step " in str(info.value)
+    assert f"(daedalus_train.py contract --repo {repo})" in str(info.value)
+    assert _ok(repo, "rev-parse", f"daedalus/{train}") == base
+    assert _merges(repo, f"daedalus/{train}") == []
+
+
+def test_finish_merges_a_skipped_train_writing_only_its_one_file(repo: Path) -> None:
+    # prepush-2026-10-27 finding 4: the one unit writing the plan's one file still merges.
+    train = _skipped_train(repo)
+    _built(repo, train, "u1")
+    assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
+    assert (repo / "u1.txt").is_file()
+
+
 def _verifier_handback(
     repo: Path, message: str, agent_type: str = "daedalus:verifier", event: str = "PostToolUse"
 ) -> None:

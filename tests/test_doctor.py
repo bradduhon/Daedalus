@@ -989,6 +989,33 @@ def test_shipped_pack_problem_says_reinstall(
     ]
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode 000 folder")
+def test_unreadable_pack_dir_is_a_miss_line_not_a_crash(repo_cwd: Path) -> None:
+    # prepush-2026-10-27 finding 5: the folder walk's PermissionError becomes one MISS line.
+    _make(repo_cwd / "packs" / "one")
+    _manifest(repo_cwd, PACK_DIR_ONLY)
+    (repo_cwd / "packs").chmod(0)
+    try:
+        [(ok, line)] = _pack_lines_at(repo_cwd)
+    finally:
+        (repo_cwd / "packs").chmod(0o755)
+    assert not ok and line.startswith("MISS framework packs: [Errno 13] Permission denied")
+    assert line.endswith("Next: make the pack folders readable to you, or fix frameworks.pack_dir")
+
+
+def test_a_nist_ref_holding_a_list_is_a_miss_line_not_a_crash(repo_cwd: Path) -> None:
+    # prepush-2026-10-27 finding 5: hostile refs.nist content is a pack problem.
+    refs = {"nist": [["AC-2"]], "cis": [], "asvs": []}
+    _make(repo_cwd / "packs" / "hostile", [_control(refs=refs)])
+    _manifest(repo_cwd, PACK_DIR_ONLY)
+    [(ok, line)] = _pack_lines_at(repo_cwd)
+    assert not ok
+    assert (
+        line
+        == f"MISS framework pack hostile: control X-1 refs.nist must be a list of ids. {OTHER_NEXT}"
+    )
+
+
 @pytest.mark.parametrize("kind", ["absent", "file", "link"])
 def test_declared_pack_dir_that_is_not_a_folder_fails(repo_cwd: Path, kind: str) -> None:
     target = repo_cwd / "packs"

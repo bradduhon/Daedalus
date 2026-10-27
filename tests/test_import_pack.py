@@ -122,7 +122,7 @@ def test_oscal_writes_the_named_controls_and_one_line(
     )
     assert first.refs == packs.Refs(("AC-2",), (), ())
     assert (second.id, second.statement) == ("AC-3", "Enforce approved access.")
-    assert first.verify == import_pack.OSCAL_VERIFY and first.look_for == import_pack.OSCAL_LOOK_FOR
+    assert first.verify == "rg -n -F AC-2 ." and first.look_for == import_pack.OSCAL_LOOK_FOR
     for name in ("pack.json", "controls.json"):
         assert stat.S_IMODE(os.stat(folder / name).st_mode) == 0o644
 

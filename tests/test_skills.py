@@ -180,6 +180,12 @@ def test_build_train_resolves_the_packs_for_the_framework_specialist() -> None:
     assert "`Packs: <absolute pack folder>[, <absolute pack folder>...]`" in text
     assert "<that path>/frameworks" not in text and "CACHE_INVALID" not in text
     assert "Unless `frameworks.default_packs` is `false`" in text
+    # prepush-2026-10-27 finding 6: the packs step checks every pack before the first dispatch.
+    assert (
+        "Then, before that first dispatch, run `python3 <plugin root>/scripts/daedalus_train.py "
+        "packs --repo <repo>`: it checks the hash and format of every pack the train reads"
+    ) in text
+    assert "A non-zero exit stops the train and shows its lines" in text
     assert "Every compliance topic goes to Agent(`framework-specialist`)" in text
     assert "run one Agent(`framework-specialist`) on the merged diff" in text
     assert (

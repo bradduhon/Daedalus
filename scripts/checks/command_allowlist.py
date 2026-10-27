@@ -33,6 +33,8 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"contract"}
         # 0153, 0157 (12.5): the literacy check on each decision brief before DECISION.
         | {"brief-check"}
+        # prepush-2026-10-27 finding 6: the pack check before the first framework specialist.
+        | {"packs"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir", "--check-tools"}),

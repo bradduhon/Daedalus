@@ -69,10 +69,17 @@ def test_procedure_takes_its_claims_from_the_brief_not_the_report() -> None:
         in procedure.lower()
     )
     assert "each Standards Packet rule that a changed line falls under is one claim" in procedure
-    # V1 req 3, spec 9.2: step 1 reads the named ranges, not the whole diff.
+    # V1 req 3, spec 9.2: step 1 reads the named ranges first; prepush-2026-10-27 finding 3:
+    # the full diff with its removed lines is a required read, so the ranges never bound it.
     assert "a `Read: <file>:<first>-<last>[, ...]` line" in _body("Inputs:", "## Procedure")
     step1 = procedure.split("1. ", 1)[1].split(" 2. ", 1)[0]
-    assert step1.startswith("Read the brief, the packets and the named ranges:")
+    assert step1.startswith("Read the brief, the packets, the full diff and the named ranges:")
+    assert "`git -C <unit worktree> diff <diff base>...<branch>` with every removed `-` line" in (
+        step1
+    )
+    assert "The full diff is a required read for every unit" in step1
+    assert "The `Read:` ranges guide your attention and never bound it" in step1
+    assert "Without a `Read:` line, read the full diff instead." not in procedure
     assert "each range of the `Read:` line through the `git show` pipe of step 3" in step1
     assert "Open another file only to settle a named claim" in step1
     assert "list each extra file in the verdict's receipts" in step1

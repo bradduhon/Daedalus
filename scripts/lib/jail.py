@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from lib import dispatch_binding, hook_io
+from lib import dispatch_binding, hook_io, shell
 from lib.audit import _git_env, project_data_dir, project_root
 from lib.audit_proof import SUMMARY_DIR
 from lib.config import (
@@ -22,12 +22,17 @@ from lib.config import (
 )
 from lib.credential_paths import (
     CREDENTIAL_TOOLS,
+    IGNORE_FILES,
     R_BRACE_UNJUDGED,
     R_CREDENTIAL,
     R_CREDENTIAL_TREE,
+    R_IGNORE_WHITELIST,
     R_REPLY_KEY,
+    R_REPLY_KEY_TREE,
+    REPLY_KEY_NAME,
     glob_patterns,
     glob_reaches,
+    ignore_whitelist,
     key_roots,
     path_reason,
     reply_key_hit,
@@ -593,6 +598,9 @@ def protected_reason(rel: str, target: str, boundary: CoderBoundary | str) -> st
     folded = rel.casefold()
     ledger = boundary.ledger_rel
     if ".git" in folded.split("/") or path_hit(BUILTIN_PROTECTED, rel):
+        return R_PROTECTED_BUILTIN.format(target)
+    # prepush-2026-10-27: a `!` line in either file lets rg read the reply key.
+    if folded.rsplit("/", 1)[-1] in IGNORE_FILES:
         return R_PROTECTED_BUILTIN.format(target)
     if ledger is not None and path_hit(Manifest((ledger,)), rel):
         return R_PROTECTED_BUILTIN.format(target)
@@ -1483,8 +1491,7 @@ def _tree_reader(
         on = on or any(a.startswith("--directories=recurse") for a in args)
         return (True, ops, not ops) if on else None
     if name == "rg":
-        hidden = bool({"u", "."} & short or {"--hidden", "--no-ignore", "--unrestricted"} & longs)
-        return hidden, ops, not ops
+        return rg_reaches_hidden(args, command), ops, not ops
     if name == "find":
         on = bool({"-exec", "-execdir", "-ok", "-okdir"} & set(args)) or "xargs" in command
         return (True, ops, not ops) if on else None
@@ -1500,6 +1507,24 @@ def _tree_reader(
 
 
 _RG_GLOBS = frozenset({"--glob", "--iglob"})
+# 113, prepush-2026-10-27: each reads hidden or ignored files, or follows a link out of the tree.
+_RG_REACH_LONGS = frozenset(
+    {"--hidden", "--no-ignore", "--unrestricted", "--ignore-file", "--follow"}
+)
+_RG_REACH_SHORT = frozenset("u.L")
+_RG_CONFIG_ENV = "RIPGREP_CONFIG_PATH"
+R_RG_REACH = (
+    "rg with --hidden, -u, --no-ignore, --ignore-file, -L, --follow or RIPGREP_CONFIG_PATH reads "
+    "hidden or ignored files (113). Next: drop the flag and search the tree as rg skips it"
+)
+R_RG_ONE = "a verify is one plain rg search with no wrapper, prefix, pipe or chain (113)"
+
+
+def rg_reaches_hidden(args: list[str], command: str) -> bool:
+    # 113: a config file can add any flag, so its variable anywhere in the command fails closed.
+    longs = {a.split("=", 1)[0] for a in args if a.startswith("--")}
+    short = {c for a in args if a.startswith("-") and not a.startswith("--") for c in a[1:]}
+    return bool(_RG_REACH_SHORT & short or _RG_REACH_LONGS & longs) or _RG_CONFIG_ENV in command
 
 
 def _rg_globs(args: list[str]) -> list[str]:
@@ -1558,7 +1583,25 @@ def _tree_reason(
                 shown = hidden or glob_reaches(globs, rest or [])
                 if rest is not None and (shown or not any(p.startswith(".") for p in rest)):
                     return R_CREDENTIAL_TREE.format(path=target)
+                if rest is not None and name == "rg" and ignore_whitelist(root):
+                    return R_IGNORE_WHITELIST.format(path=target)
     return None
+
+
+def rg_reason(command: str, cwd: str) -> str | None:
+    # 113: the specialist's rg judgement as one call; packs.py judges each pack verify by it.
+    chain = shell.worker_parse(command)
+    if chain is None or len(chain.tokens) != 1 or chain.tokens[0][:1] != ["rg"]:
+        return R_RG_ONE
+    tokens = chain.tokens[0]
+    if not _read_only_segment(tokens, frozenset(), cwd, None):
+        return R_SPECIALIST_BASH
+    if rg_reaches_hidden(tokens[1:], command):
+        return R_RG_REACH
+    # 113: judged against the reply key's fixed place, whether or not one exists yet.
+    if glob_reaches(_rg_globs(tokens[1:]), [".claude", "daedalus", REPLY_KEY_NAME]):
+        return R_REPLY_KEY_TREE.format(path=cwd)
+    return _credential_reason("Bash", {"command": command}, cwd)
 
 
 def _bash_credential_reason(

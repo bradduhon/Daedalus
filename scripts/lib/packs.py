@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from lib import jail
 from lib.config import PACKS_DIR
 from lib.controls import ControlsError, _unique
 from lib.manifest import load as load_manifest
@@ -199,7 +200,8 @@ def _refs_problems(where: str, refs: object, nist: frozenset[str] | None) -> lis
             out.append(f"{where} refs.{key} must be a list of ids")
     listed = refs.get("nist")
     if isinstance(listed, list):
-        for ident in listed:
+        # prepush-2026-10-27: a non-string id is reported above and never looked up.
+        for ident in (i for i in listed if isinstance(i, str)):
             if nist is None:
                 out.append(f"{where} refs.nist cannot be checked: {NIST_IDS} is unreadable")
                 break
@@ -209,7 +211,7 @@ def _refs_problems(where: str, refs: object, nist: frozenset[str] | None) -> lis
 
 
 def _control_problems(
-    index: int, item: object, licensed: bool, nist: frozenset[str] | None
+    index: int, item: object, licensed: bool, nist: frozenset[str] | None, root: str
 ) -> list[str]:
     where = f"controls[{index}]"
     if not isinstance(item, dict):
@@ -231,6 +233,11 @@ def _control_problems(
         limit = LINE_MAX if key in ("verify", "live_check") else TEXT_MAX
         if key in item and not _line(item[key], limit):
             out.append(f"{where} {key} must be one printable line of 1 to {limit} characters")
+    verify = item.get("verify")
+    refused = jail.rg_reason(verify, root) if isinstance(verify, str) else None
+    if refused is not None and _line(verify, LINE_MAX):
+        # 113: pack text is data; a verify the specialist's jail refuses never reaches it.
+        out.append(f"{where} verify is refused by the framework specialist's jail: {refused}")
     if mapped and not (isinstance(item["maps_to"], str) and CONTROL_ID.fullmatch(item["maps_to"])):
         out.append(f"{where} maps_to must be a control id")
     statement = item.get("statement")
@@ -245,10 +252,14 @@ def _control_problems(
 
 
 def content_problems(
-    meta: object, controls_raw: bytes, known: Collection[str] | None = None
+    meta: object,
+    controls_raw: bytes,
+    known: Collection[str] | None = None,
+    root: Path | None = None,
 ) -> list[str]:
     # 2.3: every problem kind on in-memory content; known None checks maps_to against
     # this pack's own ids only, so callers pass the ids of the other packs they read.
+    # 113: root is the tree a verify searches; the plugin root when none is given.
     out = _meta_problems(meta)
     declared = meta.get("sha256") if isinstance(meta, dict) else None
     actual = digest(controls_raw)
@@ -268,9 +279,10 @@ def content_problems(
     license_ = meta.get("license") if isinstance(meta, dict) else None
     licensed = isinstance(license_, str) and license_.startswith(OPERATOR_LICENSED)
     nist = _nist_ids()
+    tree = str(root if root is not None else PACKS_DIR.parent)
     seen: set[str] = set()
     for index, item in enumerate(controls):
-        out += _control_problems(index, item, licensed, nist)
+        out += _control_problems(index, item, licensed, nist, tree)
         ident = item.get("id") if isinstance(item, dict) else None
         if isinstance(ident, str):
             if ident in seen:
@@ -332,7 +344,8 @@ def _checked(folder: Path, known: Collection[str] | None) -> tuple[object, bytes
     if problems or controls_raw is None:
         return meta, b"", problems
     scope = neighbour_ids(folder) if known is None else known
-    return meta, controls_raw, content_problems(meta, controls_raw, scope)
+    root = project_root(folder)
+    return meta, controls_raw, content_problems(meta, controls_raw, scope, root)
 
 
 def pack_problems(folder: Path, known: Collection[str] | None = None) -> list[str]:

@@ -134,6 +134,28 @@ FIX1_RG_GLOBS_ALLOWED = (
     "rg -g 'src/' token .",
 )
 
+# prepush-2026-10-27 finding 1: a .rgignore or .ignore `!` line outranks the data folder marker.
+PREPUSH_IGNORE_FILES = (".rgignore", ".ignore")
+PREPUSH_IGNORE_BODIES = ("!.claude\n!.claude/**\n", "  !*\n")
+PREPUSH_IGNORE_SEARCHES = ("rg -l token .", "rg -n token", "rg -l token src/..")
+# prepush-2026-10-27 finding 1: a coder writing either name anywhere in its unit worktree.
+PREPUSH_IGNORE_WRITES = (
+    "{wt}/.rgignore",
+    "{wt}/.ignore",
+    "{wt}/src/.rgignore",
+    "{wt}/src/deep/.IGNORE",
+)
+# 113, prepush-2026-10-27 finding 2: rg flags and config that read hidden or ignored files.
+PREPUSH_RG_REACH = (
+    "rg --ignore-file /tmp/ig -n . .",
+    "rg --ignore-file=/tmp/ig token .",
+    "rg -L token .",
+    "rg --follow token .",
+    "rg -nL token .",
+    "RIPGREP_CONFIG_PATH=/tmp/rc rg token .",
+    "env RIPGREP_CONFIG_PATH=/tmp/rc rg token .",
+)
+
 
 def assert_denied(hook_input: dict[str, Any], *markers: str) -> None:
     # pin C1 -> C6: a deny through tests/hook_chain.py, never a warning; a marker names the finding.

@@ -44,6 +44,14 @@ R_REPLY_KEY_TREE = (
     "{path} contains the train's reply key. "
     "Next: search a folder outside .claude/daedalus, or name the files you need"
 )
+# prepush-2026-10-27: rg ranks these above .gitignore, so a `!` line beats the data folder marker.
+IGNORE_FILES = (".rgignore", ".ignore")
+IGNORE_READ_MAX = 1024 * 1024
+R_IGNORE_WHITELIST = (
+    "{path} holds the train's reply key or a credential path, and a .rgignore or .ignore file "
+    "on the way to it holds a `!` line that makes rg read hidden folders. "
+    "Next: search a folder that holds neither, or name the files you need"
+)
 _GLOB_START = re.compile(r"[*?\[{]")
 VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*|[0-9]+)[^}]*\}|\$([A-Za-z_][A-Za-z0-9_]*|[0-9])")
 _UNQUOTE = re.compile(r"[\"'\\]")
@@ -317,6 +325,29 @@ def glob_reaches(pats: list[str], rest: list[str]) -> bool:
     return any(fnmatch.fnmatchcase(name, pat) for name in names for pat in folded)
 
 
+def _negates(path: Path) -> bool:
+    # prepush-2026-10-27: an unreadable or oversized ignore file fails closed.
+    try:
+        if not path.is_file():
+            return False
+        with path.open("rb") as handle:
+            data = handle.read(IGNORE_READ_MAX + 1)
+    except OSError:
+        return True
+    if len(data) > IGNORE_READ_MAX:
+        return True
+    return any(line.lstrip().startswith(b"!") for line in data.splitlines())
+
+
+def ignore_whitelist(store: str) -> bool:
+    # prepush-2026-10-27: rg reads the ignore files of every parent, so walk / down to the store.
+    return any(
+        _negates(folder / name)
+        for folder in Path(os.path.realpath(store)).parents
+        for name in IGNORE_FILES
+    )
+
+
 def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
     # SC-12: the Grep tool honors the data folder's `*` marker from above, so only a search
     # rooted inside .claude, or a glob that overrides the marker, can read the key.
@@ -324,6 +355,8 @@ def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
     for key in keys:
         if _contains(os.path.dirname(os.path.dirname(key)), target):
             return R_REPLY_KEY_TREE.format(path=target)
+        if _contains(target, key) and ignore_whitelist(key):
+            return R_IGNORE_WHITELIST.format(path=target)
         if not pats:
             continue
         rest = [os.path.basename(key)]

@@ -12,6 +12,7 @@ import io
 import json
 import os
 import re
+import shlex
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,7 +36,8 @@ BENCHMARK_MAX = 80
 CIS_COLUMNS = ["cis_id", "control_id"]
 # 2.5: an OSCAL catalog carries no diff hint or command, so these two are the importer's own.
 OSCAL_LOOK_FOR = "Code or configuration the statement governs; judge the diff against it."
-OSCAL_VERIFY = "git diff --stat"
+# 113, prepush-2026-10-27: one rg search the specialist's jail admits, for code citing the id.
+OSCAL_VERIFY = "rg -n -F {id} ."
 _PARAM = re.compile(r"\{\{\s*insert:\s*param,\s*([A-Za-z0-9_.-]+)\s*\}\}")
 R_OUTSIDE = (
     "--out {out} is outside the project {repo}. Next: name a pack folder inside the project, "
@@ -95,7 +97,8 @@ def write_pack(out: Path, meta: dict[str, object], controls: list[dict[str, obje
     # 2.5: checked in memory first; controls.json lands before pack.json marks the folder a pack.
     text = packs.controls_text(controls)
     meta = {**meta, "sha256": packs.digest(text.encode("utf-8"))}
-    problems = packs.content_problems(meta, text.encode("utf-8"), packs.neighbour_ids(out))
+    raw, known = text.encode("utf-8"), packs.neighbour_ids(out)
+    problems = packs.content_problems(meta, raw, known, project_root(out))
     if problems:
         raise PackImportError(
             f"the pack would not load: {'; '.join(problems)}. Next: fix the input file, then "
@@ -216,7 +219,7 @@ def oscal(args: argparse.Namespace, out: Path) -> int:
                 "title": title,
                 "statement": statement,
                 "look_for": OSCAL_LOOK_FOR,
-                "verify": OSCAL_VERIFY,
+                "verify": OSCAL_VERIFY.format(id=shlex.quote(label)),
                 "refs": {"nist": [label], "cis": [], "asvs": []},
             }
         )

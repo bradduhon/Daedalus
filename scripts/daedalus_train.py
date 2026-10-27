@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import packs  # noqa: E402
 from lib.agent_models import AgentModelError, resolve  # noqa: E402
 from lib.audit import DataDirError  # noqa: E402
 from lib.briefs import BriefError, brief_file_problems  # noqa: E402
@@ -43,7 +44,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
         "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
-        "brief-check. "
+        "brief-check, packs. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -111,7 +112,34 @@ def _parser() -> argparse.ArgumentParser:
     brief = sub.add_parser("brief-check")
     brief.add_argument("--repo", type=Path, required=True)
     brief.add_argument("--brief", type=Path, required=True)
+    # prepush-2026-10-27 finding 6, 0157: the pack check before any framework specialist runs.
+    sub.add_parser("packs").add_argument("--repo", type=Path, required=True)
     return parser
+
+
+PACKS_NEXT = (
+    "Next: run /daedalus:doctor and fix each pack it names, then run /daedalus:build-train again."
+)
+
+
+def _packs(repo: Path) -> Outcome:
+    # 0157: every pack folder the train reads passes pack_problems, or the train stops.
+    try:
+        folders = packs.pack_folders(repo)
+        problems = [f"pack {f.name}: {p}" for f in folders for p in packs.pack_problems(f)]
+    except (ManifestError, OSError) as exc:
+        return Outcome(EXIT_STOP, [f"packs: {exc}", PACKS_NEXT])
+    if not folders:
+        return Outcome(
+            EXIT_STOP,
+            [
+                "No control pack was found for the compliance check. Next: run "
+                "/daedalus:doctor, then fix the frameworks block of service-manifest.json."
+            ],
+        )
+    if problems:
+        return Outcome(EXIT_STOP, [*problems, PACKS_NEXT])
+    return Outcome(EXIT_OK, [f"Packs: {', '.join(str(f) for f in folders)}"])
 
 
 def _brief_check(repo: Path, brief: Path) -> Outcome:
@@ -212,6 +240,8 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return _model(repo, args.agent, args.override)
     if args.action == "brief-check":
         return _brief_check(repo, args.brief)
+    if args.action == "packs":
+        return _packs(repo)
     if args.action == "check-reply":
         return check_reply(repo, args.stage)
     if args.action == "state":

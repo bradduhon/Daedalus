@@ -10,6 +10,7 @@ import pytest
 from tests.adversarial.corpus import (
     CREDENTIAL,
     OUTSIDE,
+    PREPUSH_IGNORE_WRITES,
     PROTECTED,
     READERS,
     assert_denied,
@@ -98,6 +99,15 @@ def test_coder_bash_traversal_is_denied(template: str) -> None:
 def test_traversal_onto_a_protected_path_is_denied(template: str) -> None:
     path = template.format(wt=WT)
     assert_denied(_w("repo-coder", path), PROTECTED)
+    assert_denied(_b("repo-coder", f"tee {path}"), PROTECTED)
+
+
+@pytest.mark.parametrize("template", PREPUSH_IGNORE_WRITES)
+@pytest.mark.parametrize("tool", ("Write", "Edit"))
+def test_coder_write_of_an_ignore_file_is_denied(template: str, tool: str) -> None:
+    # prepush-2026-10-27 finding 1: a merged `!` line would let rg read the reply key.
+    path = template.format(wt=WT)
+    assert_denied(_w("repo-coder", path, tool), PROTECTED)
     assert_denied(_b("repo-coder", f"tee {path}"), PROTECTED)
 
 

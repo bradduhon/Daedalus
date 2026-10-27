@@ -505,3 +505,34 @@ def test_credential_paths_fixture_decisions(cred_home: Path) -> None:
 
 def test_credential_paths_internal_error_denies_and_names_the_hook() -> None:
     internal_error_denies(HOOK, payload("Read", file_path=f"{CWD}/a.py"))
+
+
+def test_an_ignore_file_whitelist_names_its_reason(tmp_path: Path) -> None:
+    # prepush-2026-10-27 finding 1: rg and the Grep tool name the `!` line as the cause.
+    from lib import jail
+    from lib.credential_paths import R_IGNORE_WHITELIST, path_reason
+
+    repo = _key_repo(tmp_path)
+    assert jail._credential_reason("Bash", {"command": "rg -l x ."}, str(repo)) is None
+    (repo / ".ignore").write_text("!.claude/**\n", encoding="utf-8")
+    want = R_IGNORE_WHITELIST.format(path=str(repo))
+    assert jail._credential_reason("Bash", {"command": "rg -l x ."}, str(repo)) == want
+    assert path_reason("Grep", {"pattern": "x", "path": str(repo)}, str(repo)) == want
+    assert jail._credential_reason("Bash", {"command": "rg -l x src"}, str(repo)) is None
+
+
+def test_an_rg_reach_flag_names_its_reason(tmp_path: Path) -> None:
+    # 113, prepush-2026-10-27 finding 2: each flag fails closed like --hidden.
+    from lib import jail
+
+    repo = _key_repo(tmp_path)
+    for command in (
+        "rg --ignore-file x y .",
+        "rg --ignore-file=x y .",
+        "rg -L y .",
+        "rg --follow y .",
+    ):
+        assert jail.rg_reason(command, str(repo)) == jail.R_RG_REACH, command
+        assert jail._credential_reason("Bash", {"command": command}, str(repo)), command
+    assert jail.rg_reason("RIPGREP_CONFIG_PATH=x rg y .", str(repo)) == jail.R_RG_ONE
+    assert jail.rg_reason("rg -n y .", str(repo)) is None

@@ -685,6 +685,16 @@ def test_brief_check_is_the_orchestrators_train_subcommand() -> None:
     assert reason == module.R_TRAIN_REPO.format(flag="--repo", given="/work/other", root=CWD)
 
 
+def test_packs_is_the_orchestrators_train_subcommand() -> None:
+    # prepush-2026-10-27 finding 6: the pack check runs before any framework specialist.
+    module = load(HOOK)
+    assert "packs" in module.TRAIN_SCRIPTS["daedalus_train.py"]
+    command = f"python3 {SCRIPTS}/daedalus_train.py packs --repo {CWD}"
+    assert decide(_b("orchestrator", command), CFG).allow
+    for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+        assert not decide(_b(agent, command), CFG).allow, agent
+
+
 # spec 7.1: the orchestrator's Train C read rows, one allow and one nearest-write refusal each.
 ORCHESTRATOR_READ_ROWS = [
     ("date -u", "date -s 2026-01-01"),
