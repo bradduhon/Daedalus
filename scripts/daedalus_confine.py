@@ -204,16 +204,17 @@ def _install_filter(libc: ctypes.CDLL, arch: Arch) -> None:
 
 
 def _probe_child(arch: Arch) -> str:
-    # 0048, issue 86: "" when the filter refuses an AF_INET socket with EPERM, else the cause.
+    # 0048, issue 86: "" only when the probe socket() answers EPERM; an install error is reported.
     try:
         libc = _libc()
         _no_new_privs(libc)
         _install_filter(libc, arch)
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM).close()
-    except PermissionError:
-        return ""
     except OSError as exc:
         return f"seccomp probe: {exc}"
+    try:
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).close()
+    except OSError as exc:
+        return "" if exc.errno == errno.EPERM else f"seccomp probe: {exc}"
     return "seccomp probe: an AF_INET socket opened under the filter"
 
 

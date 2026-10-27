@@ -1299,7 +1299,10 @@ def _tester_runner_ok(
     if any(arg.startswith("--basetemp") for arg in args):
         return False
     if name in TEST_RUNNERS:
+        # issue 91: an option before the lead word (cargo +nightly test) fails closed as a test.
         lead = TEST_RUNNERS[name]
+        if lead and args and args[0][:1] in {"-", "+"}:
+            return True
         return tuple(args[: len(lead)]) == lead
     if name == "npm":
         return bool(args) and (

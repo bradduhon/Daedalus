@@ -109,6 +109,17 @@ def test_the_first_line_is_the_rule_set_applied(tmp_path: Path) -> None:
 
 
 @needs_kernel
+def test_the_wrapper_runs_by_its_own_path(tmp_path: Path) -> None:
+    # 0048: the shebang form CONFINE_NEXT gives coders, running a non-Python command.
+    _, unit = _unit(tmp_path)
+    argv = [str(shell.CONFINE_PATH), "--unit", str(unit), "--", "/bin/echo", "ran"]
+    done = subprocess.run(argv, capture_output=True, text=True, check=False, cwd=unit)
+    assert done.returncode == 0, done.stderr
+    first, second = done.stdout.splitlines()
+    assert first.startswith("daedalus_confine: abi=") and second == "ran"
+
+
+@needs_kernel
 def test_git_stores_and_config_are_unreadable_and_git_still_runs(tmp_path: Path) -> None:
     # 0048: no grant under the home folder; git reads the wrapper's empty config instead.
     _, unit = _unit(tmp_path)
@@ -447,6 +458,25 @@ def test_the_probe_child_proves_the_filter_only_on_eperm(monkeypatch: pytest.Mon
     assert failed == "seccomp probe: an AF_INET socket opened under the filter"
     error = _child(monkeypatch, OSError(errno.EINVAL, "seccomp: Invalid argument"), None)
     assert error == "seccomp probe: [Errno 22] seccomp: Invalid argument"
+    denied = _child(monkeypatch, None, PermissionError(errno.EACCES, "Permission denied"))
+    assert denied == "seccomp probe: [Errno 13] Permission denied"
+
+
+@pytest.mark.parametrize("code", [errno.EPERM, errno.EACCES])
+def test_an_install_step_permission_error_is_never_proof(
+    monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    # 0048, issue 86: an outer policy refusing prctl must surface, not read as a proven filter.
+    refused = PermissionError(code, os.strerror(code))
+    expected = f"seccomp probe: [Errno {code}] {refused.strerror}"
+    assert _child(monkeypatch, refused, SimpleNamespace(close=lambda: None)) == expected
+
+    def no_new_privs(libc: object) -> None:
+        raise refused
+
+    monkeypatch.setattr(daedalus_confine, "_install_filter", lambda libc, arch: None)
+    monkeypatch.setattr(daedalus_confine, "_no_new_privs", no_new_privs)
+    assert daedalus_confine._probe_child(daedalus_confine.ARCHES["x86_64"]) == expected
 
 
 @pytest.mark.parametrize(

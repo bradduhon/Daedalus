@@ -51,6 +51,10 @@ CONFINE_RUNNERS = (
     "cargo test",
     "timeout 60 cargo test",
     "nice -n 5 just test",
+    "cargo -q test",
+    "cargo +nightly test",
+    "go -C . test ./...",
+    "uv --quiet run pytest",
 )
 # H2, issue 87: Python run inside the wrapper; each opens an AF_UNIX socket() the filter refuses.
 UNIX_SOCKETS = (
