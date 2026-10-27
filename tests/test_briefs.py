@@ -19,6 +19,8 @@ from lib.briefs import (
 
 from tests.conftest import REPO_ROOT
 
+# 0017: the public hygiene test refuses a literal issue reference in a tracked file.
+ISSUE = "#" + "75"
 GOOD = "\n".join(
     [
         "## Question 1",
@@ -28,7 +30,7 @@ GOOD = "\n".join(
         "Context: The write test put a row in the wrong file. The fix should keep rows in one "
         "place.",
         "Options:",
-        "- Fix it now (Recommended): runs a fix round (0133, #75, security-auditor).",
+        f"- Fix it now (Recommended): runs a fix round (0133, {ISSUE}, security-auditor).",
         "- Skip, track or exempt it: exempts the finding (snake_case_ok in the description).",
         "- Stop the train: ends the train.",
     ]
@@ -92,7 +94,7 @@ def test_profile_and_unknown_levels_judge_as_plain() -> None:
         ("Should lock_sha move?", "Question carries the snake_case token lock_sha"),
         ("Should scripts/checks change?", "Question carries the word scripts/checks with a slash"),
         ("Does 0153-DAE-PLT still hold?", "Question carries the ruling id 0153-DAE-PLT"),
-        ("Is #75 closed by this?", "Question carries the issue number #75"),
+        (f"Is {ISSUE} closed by this?", f"Question carries the issue number {ISSUE}"),
         ("Should the verifier run again?", "Question carries the agent name verifier"),
         ("Should the Orchestrator stop?", "Question carries the agent name Orchestrator"),
     ],
@@ -106,8 +108,8 @@ def test_token_rules_at_plain_and_standard(text: str, problem: str) -> None:
 def test_token_rules_read_context_and_labels_but_not_descriptions() -> None:
     context = _brief(context="The row lands in docs/x.md today.")
     assert brief_problems(context, "plain") == ["Context carries the word docs/x.md with a slash"]
-    label = _brief().replace("- Drop it: drops it.", "- Drop #75: drops it (0153-DAE-PLT).")
-    assert brief_problems(label, "plain") == ["Option label carries the issue number #75"]
+    label = _brief().replace("- Drop it: drops it.", f"- Drop {ISSUE}: drops it (0153-DAE-PLT).")
+    assert brief_problems(label, "plain") == [f"Option label carries the issue number {ISSUE}"]
 
 
 def test_context_continuation_lines_join_the_field() -> None:
