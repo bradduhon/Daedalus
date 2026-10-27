@@ -335,3 +335,35 @@ def test_verify_skill_carries_the_verifier_step_and_claims_mode() -> None:
     evidence = text.split("## Evidence that ends it", 1)[1].split("## Agents it uses", 1)[0]
     assert "(scripts/lib/workspace.py:966, :1062)" in evidence
     assert "no recorded VERIFIED reply for its worktree" in evidence
+
+
+def test_the_verifier_opens_the_named_set_in_one_turn_and_never_searches_for_it() -> None:
+    # item 15: the brief names every file once; a search runs only for a map importer.
+    assert "an `Open: <path>[, ...]` line naming once every file to open" in _body(
+        "Inputs:", "## Procedure"
+    )
+    procedure = _body("## Procedure", "## Claims mode")
+    step1 = procedure.split("1. ", 1)[1].split(" 2. ", 1)[0]
+    assert (
+        "first open every path of the `Open:` line in one turn of parallel Read calls (item 15)"
+        in step1
+    )
+    assert (
+        "Never search with Grep, Glob or `find` for a file the brief or the `Open:` line names"
+        in step1
+    )
+    assert "search only for an importer the map's `fan_in` names" in step1
+    step = _flat(VERIFY_SKILL.read_text(encoding="utf-8"))
+    assert (
+        "Then build the `Open:` line (item 15), which names once, as absolute paths, every file "
+        "the verifier opens" in step
+    )
+    for part in (
+        "the brief file, the Contract and Standards files its packet lines name",
+        "each file of the unit's `files:` list in the unit worktree that exists on `<b>`",
+        "each test file the coder's `- test` receipts run that is not on that list",
+        "- the line `Open: <path>[, ...]` from step 3;",
+        "Open every file of the `Open:` line in one turn of parallel Read calls before anything "
+        "else, and never search with Grep, Glob or find for a file it names.",
+    ):
+        assert part in step, part

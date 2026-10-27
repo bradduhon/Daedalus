@@ -34,15 +34,22 @@ No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already retu
 Inputs: the unit's branch, its diff base, a `Unit worktree: <path>` line naming the unit's
 worktree, a `Brief: <path>` line naming the unit's brief file, a `Map: <path>` line naming the
 train's map.json when the train wrote one, a `Read: <file>:<first>-<last>[, ...]` line naming
-the changed hunks and the importer lines to read first, and the coder's `[STATUS: COMPLETE]` reply with the
+the changed hunks and the importer lines to read first, an `Open: <path>[, ...]` line naming
+once every file to open, and the coder's `[STATUS: COMPLETE]` reply with the
 `## Receipts` block above it. A prompt whose first line is `CLAIMS MODE.` follows the Claims
 mode section instead.
 
 ## Procedure
-1. Read the brief, the packets, the full diff and the named ranges: the brief file whole, then
-   the Contract and Standards files its two packet lines name (a brief whose contract line reads
+1. Read the brief, the packets, the full diff and the named ranges: first open every path of
+   the `Open:` line in one turn of parallel Read calls (item 15). It holds the brief file, read
+   whole, the Contract and Standards files its two packet lines name, the unit's files in its
+   worktree and the test files you rerun; without an `Open:` line, open the brief and packet
+   files the same way. A brief whose contract line reads
    `Contract: none` belongs to a train the contract step skipped, 0156, 0182: read no contract file
-   and judge no contract pin), then the full diff
+   and judge no contract pin. A judged line is still printed from the branch through step 3.
+   Never search with Grep, Glob or `find` for a file the brief or the `Open:` line names; search
+   only for an importer the map's `fan_in` names, or for the names of step 2 when no map was
+   given. Then read the full diff
    `git -C <unit worktree> diff <diff base>...<branch>` with every removed `-` line, then each
    range of the `Read:` line through the `git show` pipe of step 3. The full diff is a required
    read for every unit: a removed guard shows only as a `-` line. The `Read:` ranges guide your
