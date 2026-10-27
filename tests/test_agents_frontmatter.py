@@ -507,6 +507,30 @@ def test_auditor_judges_what_a_change_makes_reachable() -> None:
         assert phrase in recipe, phrase
 
 
+def test_auditor_short_form_measures_first_and_keeps_the_gate() -> None:
+    # 0166, 0175, spec 5: Size: small is measured on the merged diff; either check failing is full.
+    text = " ".join(AUDITOR.read_text().split())
+    short = text.split("## Short form (0166, 0175)", 1)[1].split("## Procedure", 1)[0]
+    for phrase in (
+        "When the dispatch carries a `Size: small` line",
+        "`git diff --stat <diff base>...<branch>` and "
+        "`git diff --name-only <diff base>...<branch>`",
+        "at most 3 files and at most 150 changed lines",
+        "`scripts/checks/`, `agents/`, `skills/` or `hooks/`",
+        "`scripts/lib/jail.py`, `scripts/lib/shell.py` or `scripts/enforce_agent_jail.py`",
+        "no protected path of step 4",
+        "When either check fails, take the full procedure and say so in your paragraph.",
+        "the full diff with its removed lines (step 1)",
+        "one failing test per blocking finding with the findings file",
+        "and both verdict lines",
+        "Skip the rank by readers, the reachable scope with its `Reachable:` and `Hunt:` lines, "
+        "and the adversarial corpus run",
+        "A later round after a fix takes the full procedure.",
+    ):
+        assert phrase in short, phrase
+    assert text.index("## Short form (0166, 0175)") < text.index("## Procedure")
+
+
 def test_auditor_keeps_the_phrases_later_units_read() -> None:
     # pin C1 -> C5: four phrases stay verbatim in the auditor file.
     text = " ".join(AUDITOR.read_text().split())

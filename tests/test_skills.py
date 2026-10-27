@@ -1650,8 +1650,8 @@ def test_coder_bash_section_opens_with_the_credential_habit_line() -> None:
     assert first.startswith("- Credential stores are never read, from any path:"), first
 
 
-# 0165, spec 3: the phase skills built so far; a later unit adds audit and document.
-PHASE_SKILLS = ("plan", "build", "verify", "release", "brainstorm")
+# 0165, spec 3: the seven phase skills.
+PHASE_SKILLS = ("plan", "build", "verify", "release", "brainstorm", "audit", "document")
 PHASES = {"brainstorm", "plan", "build", "verify", "audit", "document", "release"}
 # spec 3.6, 3.8: none ends a run where the operator stops or a folder run presents.
 NEXT_NAMES = PHASES | {"none"}
@@ -1771,6 +1771,35 @@ def test_release_conductor_commands_pass_the_jail(
                 "`[STATUS: YIELD_COMPLIANCE] <question>`",
                 "`git merge-base --is-ancestor <lock sha> <b>`",
                 "scripts/daedalus_workspace.py finish --repo <repo>`",
+            ),
+        ),
+        (
+            "audit",
+            (
+                "scripts/daedalus_workspace.py create --repo <repo> --name <train-id>-audit "
+                "--base daedalus/<train-id>`",
+                "scripts/daedalus_workspace.py refresh --repo <repo> --name <train-id>-audit`",
+                "`Hunt: can <attacker input> reach <protected thing> after <unit>?`",
+                "scripts/daedalus_train.py verdict --repo <repo> --status rejected --round <n> "
+                "--findings <findings path> --tip <judged tip>`",
+                "scripts/daedalus_train.py ledger --repo <repo> --sha <sha> --ids <ids>`",
+                "scripts/daedalus_train.py reaudit --repo <repo>`",
+                "The orchestrator puts a `Size: small` line in the auditor's dispatch",
+                "A later round on the same run, after a fix, uses the full procedure.",
+                "A run in folder scope runs no audit",
+            ),
+        ),
+        (
+            "document",
+            (
+                "scripts/daedalus_workspace.py create --repo <repo> --name <train-id>-docstage "
+                "--base daedalus/<train-id>`",
+                "`<repo>/docs/.tmp/daedalus/<train-id>/briefs/docs.md`",
+                "scripts/daedalus_train.py verdict --repo <repo> --gate docs --status verified "
+                "--judged <sha>`",
+                "scripts/freeze_sources.py --train <train-id> --output-dir <output folder>",
+                "Runs only when the manifest declares a `baseline` role",
+                "nothing derived is used anywhere until its rows read agreed",
             ),
         ),
         (
