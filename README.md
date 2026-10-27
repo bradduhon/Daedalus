@@ -160,27 +160,18 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 
 ## Files Daedalus creates
 
-`<repo>` is the main working tree of the git repository you started Claude Code in.
+Print every path Daedalus can write from your own shell, where `<plugin>` is the path the doctor prints on its `plugin root` line:
 
-| Path | When | Why |
-|---|---|---|
-| `<repo>/service-manifest.json` | You run `/daedalus:setup` and the file is missing | The starter manifest, with every feature off |
-| `<repo>/.claude/daedalus/config.json` | You run `/daedalus:setup` and the file is missing | The starter config, with every setting at its default |
-| `<repo>/.claude/daedalus/.gitignore` | A Build Train starts in the repository for the first time, or `/daedalus:setup` writes the config | Holds `*` so git ignores the whole directory |
-| `<repo>/.claude/daedalus/audit/<session_id>.jsonl` | Every session, while a train runs in that repository | The hash-chained audit log for that session; kept until `audit_retention_days` says otherwise |
-| `.claude/daedalus/ledger-locks/` in the repo that holds the ledger | A ledger entry is appended | Locks so two writers never change the ledger at once |
-| `<repo>/docs/.tmp/daedalus/` | A Build Train starts | Scratch files and the train summary, ignored by git |
-| `<repo>/.claude/daedalus/train.active` | A Build Train or Push Train starts | Marks a running train; removed when the train ends or stops |
-| `<repo>/.claude/daedalus/trains/<train-id>.json` | A Build Train starts | The train state file: plan record, units, verdicts, exemptions and ledger record (see How it works) |
-| `<repo>/.claude/daedalus/trains/<train-id>.bindings.json` | The first coder of a train is dispatched | Which coding agent holds each unit worktree |
-| `<repo>/.claude/daedalus/trains/<train-id>.sources.json` | A document train freezes its sources | Each frozen source with its sha256, and the excluded folders |
-| `<repo>/.claude/daedalus/reply-hmac.key` | The first agent reply recorded during a train | The secret that keys each reply digest in the audit log; no agent may read it |
-| `<repo>/.claude/worktrees/<train-id>-<unit-slug>` | The Build Train starts a unit | The coding agent's worktree, on branch `daedalus-unit/<train-id>-<unit-slug>`; removed when the train ends or stops, and the branch is kept |
-| `<repo>/.claude/worktrees/.gitignore` | The first unit worktree is created | Holds `*` so git ignores every worktree there |
-| `<repo>/docs/decisions.md` | You answer "create" to the Build Train's ledger question | A new ledger holding only a table header |
-| `contracts/<name>.md` | The contract is locked | The contract every coding agent works from, committed on the train's branch |
-| Rows in your decision ledger | An approved Build Train ends | One entry per ruling, appended through `append_ledger.py` |
-| `<cache>/frameworks/<family>/` | You run `refresh_frameworks.py` | The pinned framework files and their manifest |
+    python3 <plugin>/scripts/daedalus_doctor.py --print-files
+
+Each line reads `<path pattern> | <writer> | <when>`: the writer is the script function that writes the path, and `<repo>` is the main working tree of the git repository you started Claude Code in. The list is never empty, so empty output means the plugin files are damaged; reinstall Daedalus. A `No such file` error means `<plugin>` is wrong; copy it again from the doctor's `plugin root` line.
+
+Part of the output on 2026-10-26:
+
+    <repo>/service-manifest.json | scripts/daedalus_setup.py:_write_new | you run /daedalus:setup and the file is missing
+    <repo>/.claude/daedalus/train.active | scripts/lib/workspace.py:mark_train | a Build Train begins or resumes; removed when the train ends or stops
+    <repo>/.claude/worktrees/<train-id>-<unit-slug> | scripts/lib/workspace.py:create | the Build Train starts a unit; removed when the train ends or stops
+    refs/heads/daedalus/<train-id> | scripts/lib/workspace.py:_merge | a wave merges; one merge commit per unit branch
 
 `<repo>/.claude/daedalus/config.json` is optional. `/daedalus:setup` writes a starter copy when it is missing, and nothing else in Daedalus writes it (see Configuration below for the fields).
 
@@ -531,6 +522,7 @@ Daedalus/
 │   ├── lib/git.py                   # the one git runner: timeout and redirect scrub
 │   ├── lib/hook_io.py               # hook input and output for the check scripts
 │   ├── lib/human_text.py            # counts the plain words in operator lines
+│   ├── lib/inventory.py             # FILES: every path the plugin can write, for --print-files
 │   ├── lib/jail.py                  # per-agent tool policy
 │   ├── lib/ledger.py                # ledger resolution, sequence read, entry format
 │   ├── lib/locks.py                 # the one FIFO-safe lock opener and bounded lock

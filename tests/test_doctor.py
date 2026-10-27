@@ -433,6 +433,20 @@ def test_print_cache_dir_none_exits_one_with_next(tmp_path: Path) -> None:
     )
 
 
+def test_print_files_one_line_per_row_and_exit_zero(tmp_path: Path) -> None:
+    # Plan 10 spec 3.2 item 1: `<path pattern> | <writer> | <when>`, writer scripts/<file>.py:<fn>.
+    from lib import inventory
+
+    result = run_cli("daedalus_doctor.py", "--print-files", cwd=tmp_path)
+    assert result.returncode == 0
+    assert result.stderr == ""
+    lines = result.stdout.splitlines()
+    assert lines == inventory.lines()
+    assert len(lines) == len(inventory.FILES) > 0
+    shape = re.compile(r"[^|]+ \| scripts/[A-Za-z0-9_/]+\.py:[A-Za-z_][A-Za-z0-9_.]* \| [^|]+")
+    assert all(shape.fullmatch(line) for line in lines), lines
+
+
 def _github(repo: Path, value: object) -> None:
     # issue 48: a manifest holding only features.github, or no features key for the absent case.
     body = {} if value == "absent" else {"features": {"github": value}}
