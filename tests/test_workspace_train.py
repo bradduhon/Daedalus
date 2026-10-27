@@ -1739,6 +1739,15 @@ def test_folder_begin_refuses_an_output_it_may_not_use(
     (plain / "note.txt").write_text("x\n")
     with pytest.raises(WorkspaceError, match=r"--out note\.txt is not .*Next: pass --out"):
         workspace.begin_folder_run(plain, "note.txt")
+    # issue 48: the root, a parent of it, /, home and <root>/.claude are refused though writable.
+    (plain / ".claude" / "x").mkdir(parents=True)
+    fake_home = tmp_path.resolve() / "home-folder"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    for barred in (".", str(plain), str(tmp_path), "/", str(fake_home), ".claude/x", ".claude/new"):
+        with pytest.raises(WorkspaceError, match="Next: pass --out one of those three"):
+            workspace.begin_folder_run(plain, barred)
+    assert not (plain / ".claude" / "new").exists()
     monkeypatch.setattr(workspace, "TMP_ROOT", tmp_path / "elsewhere")
     with pytest.raises(WorkspaceError, match="Next: pass --out one of those"):
         workspace.begin_folder_run(plain, "new-out")

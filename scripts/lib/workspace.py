@@ -534,16 +534,24 @@ def _folder_out(root: Path, output: str) -> Path | None:
     # issue 48, 0069: an existing writable folder as is; None admits <root>/docs or new under /tmp.
     target = output_target(root, output)
     real = Path(os.path.realpath(target))
-    if real.is_dir() and os.access(real, os.W_OK | os.X_OK):
+    home = Path(os.path.realpath(Path.home()))
+    # issue 48: never the root, its parents, home, / or anything under <root>/.claude.
+    barred = (
+        Path(os.path.realpath(root)).is_relative_to(real)
+        or real == home
+        or real.is_relative_to(Path(os.path.realpath(root / ".claude")))
+    )
+    if not barred and real.is_dir() and os.access(real, os.W_OK | os.X_OK):
         return real
     docs = Path(os.path.realpath(root / "docs"))
     tmp = Path(os.path.realpath(TMP_ROOT))
-    if not os.path.lexists(target) and (real == docs or real.is_relative_to(tmp)):
+    if not barred and not os.path.lexists(target) and (real == docs or real.is_relative_to(tmp)):
         return None
     raise WorkspaceError(
-        f"--out {output} is not an existing writable folder, {root / 'docs'}, or a new folder "
-        "under /tmp. Next: pass --out one of those, or create the folder from your own shell, "
-        "then rerun begin."
+        f"--out {output} is not an existing writable folder outside the project root, its "
+        f"parents, the home folder and {root / '.claude'}, nor {root / 'docs'}, nor a new folder "
+        "under /tmp. Next: pass --out one of those three, or create the folder from your own "
+        "shell, then rerun begin."
     )
 
 
