@@ -46,6 +46,16 @@ FILES: tuple[Entry, ...] = (
         "you run audit_report.py with --out; refused inside any .claude/daedalus folder",
     ),
     Entry(
+        "<charter_root>/reports/<date>-tokens-<run id>.md",
+        "scripts/audit_report.py:_write_report",
+        "you run token_economy.py report --save and config.json declares charter_root",
+    ),
+    Entry(
+        f"{_SCRATCH}/<run id>/tokens.md",
+        "scripts/audit_report.py:_write_report",
+        "you run token_economy.py report --save with no charter_root declared",
+    ),
+    Entry(
         f"{_CONFINE}/",
         "scripts/daedalus_confine.py:_private_tmp",
         "a command runs under the kernel wrapper; outside the project, one folder per worktree",

@@ -91,7 +91,7 @@ Inside the session type:
 
 With no argument it reports the newest session log for this repo, which is usually the session you are in. To report an older one, pass its id: `/daedalus:audit-report <session>`. The ids are the file names in `<repo>/.claude/daedalus/audit/`, without `.jsonl`.
 
-The report checks the log's hash chain first. Only an intact chain gets a digest. The digest has six parts:
+The report checks the log's hash chain first. Only an intact chain gets a digest. The digest has seven parts:
 
 - Header: the session id, the number of records, the hash of the last record (`head=`), and the repo the session ran in.
 - Subagent timeline: one row per agent, with the record number where it started and stopped. `open` in the stop column means the log holds no stop record for that agent.
@@ -99,6 +99,7 @@ The report checks the log's hash chain first. Only an intact chain gets a digest
 - Blocks: every refused action, one line each.
 - Status lines: every `[STATUS: ...]`, `[VERDICT: ...]` and `[STANDARDS: ...]` line an agent reported.
 - Totals by event: how many records of each hook event the log holds.
+- Token economy: for each run the session holds, its token totals row and its mean per unit, the same rows `/daedalus:token-report` prints. A session whose agent transcripts are gone shows one line saying so.
 
 A block line reads like this:
 
@@ -136,6 +137,10 @@ The file is written with mode 0600, so only your user can read it. Run `chmod` o
 - A path that is a symlink. The script never writes through a link. Pass the real file path instead.
 
 It also refuses a path that names a directory, a path whose parent directory does not exist, and `--out -`. To print to the screen, leave out `--out`.
+
+### Reading a token report
+
+To see what a run cost in tokens, type `/daedalus:token-report <run id>` with a train id, or `/daedalus:token-report <session>` for every run in one session. It reads the transcripts Claude Code keeps for each agent and prints one table in fixed columns: run type, run id, phase, agent, unit or round, turns, input, output, cache write, cache read and wall time. Each run ends with a totals row, a mean per unit and a mean per audit round. The main session's own tokens are left out, so the totals cover the agents only, and no column is in dollars. A value a run type does not have prints `none`. Every run type uses the same columns, so a Build Train, a Push Train and a plan run compare side by side. After a run's table the skill offers to save it, to `<charter_root>/reports/<date>-tokens-<run id>.md` when `charter_root` is set, else to `docs/.tmp/daedalus/<run id>/tokens.md`. `/daedalus:token-report history` prints the totals row of every saved run. The audit report prints the same totals rows after its own totals.
 
 ## Running a Build Train
 
