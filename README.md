@@ -576,7 +576,7 @@ Daedalus/
 │   └── verify_audit_chain.py        # recompute and verify a session's hash chain
 ├── skills/
 │   ├── audit-report/SKILL.md        # /daedalus:audit-report
-│   ├── brainstorm/SKILL.md          # /daedalus:brainstorm
+│   ├── brainstorm/SKILL.md          # /daedalus:brainstorm, the brainstorm phase
 │   ├── build/SKILL.md               # /daedalus:build, the build phase
 │   ├── build-train/SKILL.md         # /daedalus:build-train
 │   ├── catalog/SKILL.md             # /daedalus:catalog
@@ -584,6 +584,7 @@ Daedalus/
 │   ├── doctor/SKILL.md              # /daedalus:doctor
 │   ├── plan/SKILL.md                # /daedalus:plan, the plan phase
 │   ├── push-train/SKILL.md          # /daedalus:push-train
+│   ├── release/SKILL.md             # the release phase, started by /daedalus:run push
 │   ├── round/SKILL.md               # /daedalus:round
 │   ├── setup/SKILL.md               # /daedalus:setup
 │   ├── token-report/SKILL.md        # /daedalus:token-report
