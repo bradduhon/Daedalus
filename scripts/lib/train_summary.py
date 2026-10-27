@@ -68,9 +68,9 @@ _LEDGER_PATH = re.compile(r"ledger: (.+?) \(")
 _DISPATCH_TOOLS = ("Agent", "Task", "SendMessage")
 _REFUSALS = ("block", "ask")
 OPERATOR, PRIORITIES_YIELD = "operator", "YIELD_STANDARDS priorities"
-# 0156: the Contract line in words when no packet was locked.
+# 0156, 0182: the Contract line in words when no packet was locked.
 CONTRACT_SKIPPED = (
-    "Contract: none. This plan changes one file and declares no contract, "
+    "Contract: none. This plan changes at most 3 files and declares no contract, "
     "so no contract was written."
 )
 CONTRACT_NOT_LOCKED = "Contract: none. No contract was locked before the run stopped."

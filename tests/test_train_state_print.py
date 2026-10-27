@@ -192,7 +192,7 @@ def test_contract_line_reads_none_in_words_without_a_locked_packet(tmp_path: Pat
     state["contract_skip"] = True
     lines = _text(tmp_path, state).splitlines()
     assert (
-        "Contract: none. This plan changes one file and declares no contract, "
+        "Contract: none. This plan changes at most 3 files and declares no contract, "
         "so no contract was written."
     ) in lines
     assert not any(line == "Contract: not locked" for line in lines)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import posixpath
 import re
 import shlex
 import subprocess
@@ -46,7 +47,7 @@ from lib.audit_proof import (
     verdict_tip,
 )
 from lib.config import ConfigError, load_config
-from lib.jail import normalize_agent
+from lib.jail import CoderBoundary, _coder_boundary, normalize_agent, protected_reason
 from lib.narrow import integer as _int
 from lib.narrow import obj as _obj
 from lib.narrow import objects as _objects
@@ -1287,10 +1288,10 @@ def record_plan(cwd: Path, path: Path) -> Outcome:
             record = {"path": str(target), "sha256": sha}
             if state.get(train_state.PLAN) == record:
                 return
-            # 0156, 0089: a no-contract lock holds only for the one-file plan it was taken on.
+            # 0156, 0089: a no-contract lock holds only for the plan it was taken on.
             if state.get("lock_sha") and state.get("packet_version") is None:
                 raise RunnerError(
-                    f"train {train_id} locked with no contract on its one-file plan, so a new "
+                    f"train {train_id} locked with no contract on its skipped plan, so a new "
                     "plan is refused. Next: stop the train with daedalus_train.py stop, then "
                     "start a new train with the new plan."
                 )
@@ -1323,22 +1324,45 @@ def _wire_none(text: str) -> bool:
     return False
 
 
-def _contract_reason(plan: plan_record.Plan, text: str) -> str | None:
-    # 0089, 0156: the first failed test of the one-file rule, or None when the contract skips.
+_CONTROL = manifest.Manifest(plan_record.CONTROL_PATHS)
+
+
+def _skip_boundary(repo: Path) -> CoderBoundary | str:
+    # 0182: the coder jail's protected list; an unreadable config fails closed as a reason.
+    try:
+        return _coder_boundary(str(repo), load_config(str(repo)))
+    except ConfigError as exc:
+        return str(exc)
+
+
+def _contract_reason(plan: plan_record.Plan, text: str, repo: Path) -> str | None:
+    # 0156, 0182: the first failed test of the contract skip row, or None when the contract skips.
     if len(plan.units) != 1:
-        return f"{len(plan.units)} units"
+        return f"{len(plan.units)} units, more than 1"
     files = plan.units[0].files
-    if len(files) != 1:
-        return f"{len(files)} files"
-    if any(c in files[0] for c in "*?[") or files[0].endswith("/"):
-        return "a file glob"
+    if len(files) > plan_record.CONTRACT_SKIP_FILES:
+        return f"{len(files)} files, more than {plan_record.CONTRACT_SKIP_FILES}"
+    for name in files:
+        if any(c in name for c in "*?[") or name.endswith("/"):
+            return f"unit names a file glob or folder: {name}"
+        rel = posixpath.normpath(name)
+        if posixpath.isabs(rel) or rel.split("/")[0] == "..":
+            return f"unit names a path outside the repository: {name}"
+        if manifest.path_hit(_CONTROL, rel):
+            return f"unit touches a control path: {name}"
+    boundary = _skip_boundary(repo)
+    if isinstance(boundary, str):
+        return f"protected paths unknown: {boundary}"
+    for name in files:
+        if protected_reason(posixpath.normpath(name), name, boundary) is not None:
+            return f"unit touches a protected path: {name}"
     if plan.pins:
         return "a pin line"
     return None if _wire_none(text) else f"no {WIRE_NONE} line"
 
 
 def contract(cwd: Path) -> Outcome:
-    # 0156: a one-unit, one-file plan with no pin line and `wire: none` starts no contract-spec.
+    # 0156, 0182: a one-unit plan of at most 3 non-control files, no pin and `wire: none` skips.
     def edit(repo: Path, train_id: str) -> list[str]:
         state = train_state.load(repo, train_id)
         before = _plan_text(state, True)
@@ -1355,7 +1379,7 @@ def contract(cwd: Path) -> Outcome:
                 f"the plan {path} has {len(plan.defects)} defect(s): {' '.join(plan.defects)} "
                 f"Next: fix the plan, then {_CONTRACT_RERUN}."
             )
-        reason = _contract_reason(plan, text)
+        reason = _contract_reason(plan, text, repo)
         if reason is not None:
             return [f"contract: required ({reason})"]
         train_state.update(repo, train_id, **{train_state.CONTRACT_SKIP: True})

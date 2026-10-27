@@ -858,7 +858,7 @@ def finish(repo: Path) -> list[str]:
 SKIP_NEXT = (
     "Next: stop the train and run it again with a plan the contract step "
     "(daedalus_train.py contract --repo {repo}) answers contract: required for, so "
-    "contract-spec locks a contract before more than the plan's one file merges."
+    "contract-spec locks a contract before a file outside the plan's files merges."
 )
 
 
@@ -869,7 +869,7 @@ def _skip_scope(
     lock_sha: str,
     integration: str,
 ) -> None:
-    # prepush-2026-10-27 finding 4, 0156: a skipped contract covers one unit and one file.
+    # prepush-2026-10-27 finding 4, 0182: a skipped contract covers one unit and its plan files.
     if state.get(train_state.CONTRACT_SKIP) is not True or state.get("packet_version") is not None:
         return
     # 126: only unmerged units count; the integration branch is judged too, as the wave merge
@@ -881,19 +881,21 @@ def _skip_scope(
     ]
     files = [f for unit in _recorded_plan(state).units for f in unit.files]
     nxt = SKIP_NEXT.format(repo=repo)
-    if len(pending) > 1 or len(files) != 1:
+    if len(pending) > 1 or not 1 <= len(files) <= plan_record.CONTRACT_SKIP_FILES:
         raise WorkspaceError(
-            f"this train skipped the contract for a one-file plan, yet {len(pending)} units "
+            f"this train skipped the contract for a one-unit plan of at most "
+            f"{plan_record.CONTRACT_SKIP_FILES} files, yet {len(pending)} units "
             f"would merge against a plan naming {len(files)} files. {nxt}"
         )
-    allowed = os.path.normpath(files[0])
+    allowed = sorted({os.path.normpath(f) for f in files})
     for ref in [integration, *(str(unit["branch"]) for unit in pending)]:
         raw = _out(repo, "diff", "--name-only", "--no-renames", "-z", f"{lock_sha}...{ref}")
         changed = sorted(name for name in raw.split("\0") if name)
-        fits = changed in ([], [allowed]) if ref == integration else changed == [allowed]
+        # 0182: the unit changes a non-empty subset of the plan files; integration may change none.
+        fits = set(changed) <= set(allowed) and (bool(changed) or ref == integration)
         if not fits:
             raise WorkspaceError(
-                f"this train skipped the contract for the one file {files[0]}, yet {ref} "
+                f"this train skipped the contract for the files {_shown(allowed)}, yet {ref} "
                 f"changes {_shown(changed) if changed else 'no file'}. {nxt}"
             )
 
