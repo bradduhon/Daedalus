@@ -122,6 +122,7 @@ No custom decorator, wrapper or helper that repeats one the project already has.
 Normalize and standardize: the same problem is solved the same way everywhere in the repo; match the existing pattern before inventing a new one.
 Tests reuse too: before writing a new test function, find an existing one in the same module or a shared helper whose body differs only in literals. Add a parametrize row or call the shared helper instead of a new test function whose body differs only in literals, and name the reused test in the ledger notes.
 Batch your turns: read every file the brief names in one turn of parallel Read calls before the first edit, make the edits in as few turns as they allow, and run the declared suite once before COMPLETE and once after any fix, not after each edit.
+Turn target (item 15): one tool call reads or writes as much as the task needs. Make all edits to one file in one Edit or Write where the change allows, put independent calls in one turn of parallel calls, and run the suite once after the edits rather than after each. A unit takes at most 24 turns, a turn being one reply of yours however many parallel calls it holds, because every turn rereads your whole context. End the COMPLETE line with ` turns=<n>`, the turns this unit took, so the token report can check the target.
 The one exception is security: never share or reuse code when doing so widens a permission, crosses a tenant or trust boundary, or couples a sensitive path to a general one, and name that exception in the commit message.
 The code quality reviewer judges this rule once that agent exists; until then it is your method, not a gate.
 
@@ -174,4 +175,4 @@ under the `## Receipts` block of step 6; a yield line needs no block.
 - `[STATUS: YIELD_CONTRACT] <mismatch>`
 - `[STATUS: YIELD_COMPLIANCE] <question>`
 - `[STATUS: YIELD_STANDARDS] <question>`
-- `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>`, optionally followed by ` adversarial=pass` and then ` audit_tests=pass`
+- `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>`, optionally followed by ` adversarial=pass` and then ` audit_tests=pass`, and always ending with ` turns=<n>` (item 15)
