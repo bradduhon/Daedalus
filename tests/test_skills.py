@@ -1733,7 +1733,7 @@ def test_release_names_the_conductor_as_the_only_pusher_and_the_operator_as_merg
     assert "only the conductor pushes (scripts/lib/gh_policy.py:307)" in evidence
     assert "No agent merges (scripts/lib/gh_policy.py:45)" in evidence
     assert "never in the orchestrator" in flat and "(agents/orchestrator.md:36)" in flat
-    assert "`/daedalus:run push` (0173)" in flat and "/daedalus:push-train" not in flat
+    assert "started with `/daedalus:push-train`." in flat and "/daedalus:run" not in flat
 
 
 @pytest.mark.parametrize("command", _conductor_commands(RELEASE, "### Push", "### Hand-off"))
