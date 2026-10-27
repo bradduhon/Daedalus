@@ -553,9 +553,33 @@ def _contract_target(repo: Path, state: dict[str, object], contract: str) -> tup
     return root, path
 
 
-def lock(repo: Path, contract: str, version: int) -> list[str]:
+def lock(repo: Path, contract: str | None, version: int | None = None) -> list[str]:
     repo = repo.resolve()
     train_id, state = _active(repo)
+    integration = f"daedalus/{train_id}"
+    if contract is None:
+        # 0156: a skipped contract locks the integration branch at the base and commits nothing.
+        if state.get(train_state.CONTRACT_SKIP) is not True:
+            raise WorkspaceError(
+                f"train {train_id} records no contract skip, so lock --no-contract is refused. "
+                f"Next: run daedalus_train.py contract --repo {repo}; when it prints contract: "
+                "required, lock the contract contract-spec saves with --contract and --version."
+            )
+        if state.get("packet_version") is not None:
+            raise WorkspaceError(
+                f"train {train_id} already locked contract packet_version "
+                f"{state['packet_version']}. Next: revise that contract with --contract and a "
+                "higher --version instead of --no-contract."
+            )
+        base = str(state["base_sha"])
+        _on_branch(repo, integration, base)
+        _record(repo, train_id, lock_sha=base)
+        return [f"lock: {base}"]
+    if version is None:
+        raise WorkspaceError(
+            f"lock --contract {contract} names no --version. "
+            "Next: rerun the lock with --version set to the packet_version contract-spec gave."
+        )
     root, path = _contract_target(repo, state, contract)
     recorded = state.get("packet_version")
     if isinstance(recorded, int) and version <= recorded:
@@ -565,7 +589,6 @@ def lock(repo: Path, contract: str, version: int) -> list[str]:
         )
     if not path.is_file():
         raise WorkspaceError(f"contract-spec did not save the packet at {path}. Next: {RERUN}")
-    integration = f"daedalus/{train_id}"
     _on_branch(repo, integration, str(state["base_sha"]))
     if root != repo:
         _on_branch(root, integration)
@@ -858,7 +881,7 @@ def _merge_all(
 
 
 VERIFIED = "[VERDICT: VERIFIED] claims=<n>"
-# 0121, agents/verifier.md:134: the verifier's closing line, after its corrected=<k> line.
+# 0121, agents/verifier.md:136: the verifier's closing line, after its corrected=<k> line.
 VERIFIED_LINE = re.compile(r"\[VERDICT: VERIFIED\] claims=[0-9]+")
 VERIFIER = "verifier"
 _UNIT_LINE = "Unit worktree: "

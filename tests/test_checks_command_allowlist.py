@@ -669,6 +669,22 @@ def test_ledger_is_the_orchestrators_and_reaudit_and_resume_stay_main() -> None:
         assert not decide(_b(agent, LEDGER), CFG).allow, agent
 
 
+def test_contract_is_the_orchestrators_train_subcommand() -> None:
+    # 0156: the contract skip check and lock --no-contract run from the orchestrator only.
+    module = load(HOOK)
+    assert "contract" in module.TRAIN_SCRIPTS["daedalus_train.py"]
+    for command in (
+        f"python3 {SCRIPTS}/daedalus_train.py contract --repo {CWD}",
+        f"python3 {SCRIPTS}/daedalus_workspace.py lock --repo {CWD} --no-contract",
+    ):
+        assert decide(_b("orchestrator", command), CFG).allow, command
+        for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+            assert not decide(_b(agent, command), CFG).allow, (agent, command)
+    other = f"python3 {SCRIPTS}/daedalus_train.py contract --repo /work/other"
+    reason = evaluate(HOOK, _b("orchestrator", other), *TRAIN_FLAGS)
+    assert reason == module.R_TRAIN_REPO.format(flag="--repo", given="/work/other", root=CWD)
+
+
 # spec 7.1: the orchestrator's Train C read rows, one allow and one nearest-write refusal each.
 ORCHESTRATOR_READ_ROWS = [
     ("date -u", "date -s 2026-01-01"),

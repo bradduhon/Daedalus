@@ -29,6 +29,8 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
     "daedalus_train.py": frozenset(
         {"progress", "choice", "plan", "verdict", "state", "step", "check-reply", "model"}
         | {"ledger", "summary"}
+        # 0156: the contract skip check the orchestrator runs before any contract-spec start.
+        | {"contract"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir", "--check-tools"}),

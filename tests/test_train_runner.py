@@ -945,6 +945,75 @@ def test_plan_records_path_and_sha256(repo: Path, plugin: Path) -> None:
     assert refused.code == 1 and "changed after it was recorded" in refused.lines[-1]
 
 
+# 0156, 0089: the contract skip check over the recorded plan.
+SKIP_UNIT = "unit: U1 | title: one | files: a.py | base: integration\n"
+SKIP_GRAPH = "graph: units=1 critical_path=1 width=1 overlap_only=\n"
+
+
+def _skip_plan(units: str = SKIP_UNIT, extra: str = "", below: str = "wire: none\n") -> str:
+    return f"# plan\n\n```plan\n{units}{extra}{SKIP_GRAPH}```\n\n{below}"
+
+
+def _contract_run(repo: Path, plugin: Path, text: str) -> train_runner.Outcome:
+    if train_state.active_train(repo) is None:
+        _write_train(plugin, [_probe_stage()], ("repository",))
+        _started(repo, plugin)
+    path = repo / "plan.md"
+    path.write_text(text, encoding="utf-8")
+    assert train_runner.record_plan(repo, path).code == 0
+    return train_runner.contract(repo)
+
+
+def test_contract_skips_a_one_unit_one_file_plan_with_wire_none(repo: Path, plugin: Path) -> None:
+    outcome = _contract_run(repo, plugin, _skip_plan())
+    assert (outcome.code, outcome.lines) == (0, ["contract: skip"])
+    assert _state(repo)["contract_skip"] is True
+    done = _train_cli(repo, "contract", "--repo", str(repo))
+    assert (done.returncode, done.stdout) == (0, "contract: skip\n"), done.stderr
+    # 0156: recording a new plan voids the skip until the check runs again.
+    again = _contract_run(repo, plugin, _skip_plan(below=""))
+    assert again.lines == ["contract: required (no wire: none line)"]
+    assert "contract_skip" not in _state(repo)
+
+
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        (
+            _skip_plan(SKIP_UNIT + "unit: U2 | title: two | files: b.py | base: integration\n"),
+            "2 units",
+        ),
+        (_skip_plan(SKIP_UNIT.replace("a.py", "a.py, b.py")), "2 files"),
+        (_skip_plan(SKIP_UNIT.replace("a.py", "src/*.py")), "a file glob"),
+        (_skip_plan(extra="pin: U1 -> U2 | the shape\n"), "a pin line"),
+        (_skip_plan(below=""), "no wire: none line"),
+        (_skip_plan(below="```text\nwire: none\n```\n"), "no wire: none line"),
+        ("wire: none\n\n" + _skip_plan(below=""), "no wire: none line"),
+    ],
+    ids=["two-units", "two-files", "glob", "pin", "no-wire", "fenced-wire", "wire-above"],
+)
+def test_contract_is_required_and_records_nothing(
+    repo: Path, plugin: Path, text: str, reason: str
+) -> None:
+    outcome = _contract_run(repo, plugin, text)
+    assert (outcome.code, outcome.lines) == (0, [f"contract: required ({reason})"])
+    assert "contract_skip" not in _state(repo)
+
+
+def test_contract_stops_on_no_plan_a_changed_plan_or_a_defect(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    none = train_runner.contract(repo)
+    assert none.code == 1 and "records no plan. Next: record the plan" in none.lines[0]
+    changed = _contract_run(repo, plugin, _skip_plan())
+    (repo / "plan.md").write_text(_skip_plan() + "x\n", encoding="utf-8")
+    assert changed.code == 0
+    edited = train_runner.contract(repo)
+    assert edited.code == 1 and "changed after it was recorded" in edited.lines[0]
+    broken = _contract_run(repo, plugin, _skip_plan(extra="pin: nonsense\n"))
+    assert broken.code == 1 and "defect(s)" in broken.lines[0] and "Next: fix" in broken.lines[0]
+
+
 def test_check_reply_records_an_approved_verdict_with_the_tip(repo: Path, plugin: Path) -> None:
     # 0089: the verdict binds the integration branch tip at check-reply time.
     _write_train(plugin, [_probe_stage(), _audit_stage()], ("repository",))

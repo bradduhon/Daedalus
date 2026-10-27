@@ -19,6 +19,7 @@ from lib.train_runner import (  # noqa: E402
     Outcome,
     check_reply,
     choice,
+    contract,
     progress,
     reaudit,
     record_docs_verdict,
@@ -39,7 +40,8 @@ from lib.train_state import TrainStateError  # noqa: E402
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
-        "choice, plan, exception, verdict, reaudit, resume, ledger, summary, model. Exit 0 action "
+        "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model. "
+        "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
     sub = parser.add_subparsers(dest="action", required=True)
@@ -49,7 +51,8 @@ def _parser() -> argparse.ArgumentParser:
     begin.add_argument("--output")
     # pin D1 -> D6: reaudit and resume run from the main session; ledger from the orchestrator.
     # W3.2: summary writes <train-id>-summary.md from train state and the audit logs.
-    for name in ("step", "state", "reaudit", "resume", "summary"):
+    # 0156: contract prints `contract: skip` or `contract: required (<reason>)`.
+    for name in ("step", "state", "reaudit", "resume", "summary", "contract"):
         sub.add_parser(name).add_argument("--repo", type=Path, required=True)
     check = sub.add_parser("check-reply")
     check.add_argument("--repo", type=Path, required=True)
@@ -121,6 +124,8 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return choice(repo, args.chose, args.over, args.cost, args.phase, args.driver, args.rule)
     if args.action == "plan":
         return record_plan(repo, args.path)
+    if args.action == "contract":
+        return contract(repo)
     if args.action == "exception":
         return record_exception(repo, args.ledger_id, args.finding, args.tracking, args.other)
     if args.action == "verdict":
