@@ -167,6 +167,16 @@ def test_first_clause_skips_parens_and_code() -> None:
         ({"0006-TST-PLT": "Workers read"}, 1, "names 0006-TST-PLT, which is not a row before"),
         ({"0001-TST-PLT": "Trains"}, 1, "for 0001-TST-PLT is not 2 to 5 plain words (0181)"),
         ({"0003-TST-PLT": "Coders push"}, 1, "names 0003-TST-PLT, which is superseded by"),
+        (
+            {"0001-TST-PLT": "pipe ESCAPE kept"},
+            1,
+            "rows 0001-TST-PLT and 0008-TST-PLT share the name 'Pipe escape kept' (0094)",
+        ),
+        (
+            {"0001-TST-PLT": "Same name here", "0002-TST-PLT": "same name HERE"},
+            1,
+            "rows 0001-TST-PLT and 0002-TST-PLT share the name 'same name HERE' (0094)",
+        ),
     ],
 )
 def test_backfill_names_read(
