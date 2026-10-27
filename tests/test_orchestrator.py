@@ -254,8 +254,13 @@ def test_orchestrator_without_the_dispatch_gate_is_refused(
 _RECIPE_CMD = re.compile(r"`(python3 <plugin root>/scripts/[^`]+)`")
 # 0165: the phase skills the orchestrator reads and runs, in run order.
 RUN_PHASES = ("plan", "build", "verify", "audit", "document")
-# 0119: the main session runs these two; the phase skills name them as its commands.
-MAIN_ONLY = ("daedalus_train.py exception", "daedalus_train.py reaudit")
+# 0119: the main session runs the first two; the phase skills name them as its commands.
+MAIN_ONLY = (
+    "daedalus_train.py exception",
+    "daedalus_train.py reaudit",
+    # issue 48, 0173: plan step 2 runs it outside a run only; the run entry set the scope.
+    "daedalus_doctor.py --print-scope",
+)
 
 
 def _phase_text(name: str) -> str:

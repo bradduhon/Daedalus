@@ -80,7 +80,7 @@ def test_dispatch_lists_every_prompt_line_and_reply_line() -> None:
         "`Idea file: <notes>`",
         "`Idea:` on its own line",
         "`Idea ends` line",
-        "the standing-rules file path, when the repository has one",
+        "the standing-rules file path, from the `standing_rules` key",
         "the `entrypoints` block of `<repo>/service-manifest.json`",
         "`none declared`",
         "`Write exactly one file: <folder>/spec.md`",

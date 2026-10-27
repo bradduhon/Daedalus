@@ -12,10 +12,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.ledger import (  # noqa: E402
+    NAME_WORDS,
     TABLE_SCHEME,
     LedgerError,
     id_pattern,
     ruling_name,
+    ruling_problem,
     table_cells,
 )
 
@@ -26,9 +28,10 @@ DESCRIPTION = (
     "grammars; the audit log and proofs; the ledger and charter; GitHub and release; the project "
     "files; operator interaction. The backfill JSON maps every in-force id to one area, carries "
     "the Supersedes and Amends ids of every row before its relations_from id, and names the first "
-    "row (names_from) whose Ruling cell starts with its name; earlier names come from the first "
-    "clause. --check exits 1 when --out differs from what this script would write; every refusal "
-    "exits 1."
+    "row (names_from) whose Ruling cell starts with its name. An optional names object gives a row "
+    "before names_from a hand-written name of two to five words (0181); a row it leaves out is "
+    "named by the first clause of its Ruling cell. --check exits 1 when --out differs from what "
+    "this script would write; every refusal exits 1."
 )
 AREAS = (
     "composition and phases",
@@ -42,6 +45,7 @@ AREAS = (
 )
 COLUMNS = ("id", "date", "ruling", "supersedes")
 BACKFILL_KEYS = frozenset({"relations_from", "names_from", "areas", "relations"})
+OPTIONAL_BACKFILL_KEYS = frozenset({"names"})
 RELATION_KEYS = frozenset({"supersedes", "amends"})
 _SENTENCE_BREAK = re.compile(r"(?<=\.)\s+")
 _CLAUSE_END = ",;:"
@@ -64,6 +68,7 @@ class Backfill:
     names_from: str
     areas: dict[str, str]
     relations: dict[str, Relations]
+    names: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -88,10 +93,12 @@ def _load_backfill(path: Path) -> Backfill:
         raise StandingRulesError(
             f"backfill {path} is not readable JSON ({exc}). Next: fix the backfill file."
         ) from exc
-    if not isinstance(data, dict) or set(data) != BACKFILL_KEYS:
+    if not isinstance(data, dict) or not BACKFILL_KEYS <= set(data) <= (
+        BACKFILL_KEYS | OPTIONAL_BACKFILL_KEYS
+    ):
         raise StandingRulesError(
-            f"backfill {path} is not an object with exactly {', '.join(sorted(BACKFILL_KEYS))}. "
-            "Next: keep those four keys and no others."
+            f"backfill {path} is not an object with exactly {', '.join(sorted(BACKFILL_KEYS))} "
+            "and an optional names. Next: keep those keys and no others."
         )
     relations_from, names_from = data["relations_from"], data["names_from"]
     areas, relations = data["areas"], data["relations"]
@@ -123,7 +130,14 @@ def _load_backfill(path: Path) -> Backfill:
         relation_map[str(row_id)] = Relations(
             _id_list(record["supersedes"], where), _id_list(record["amends"], where)
         )
-    return Backfill(relations_from, names_from, area_map, relation_map)
+    names = data.get("names", {})
+    if not isinstance(names, dict) or not all(isinstance(v, str) for v in names.values()):
+        raise StandingRulesError(
+            f"backfill {path} names is not an object of names. "
+            "Next: key each name by its row id, each value a string."
+        )
+    name_map = {str(row_id): str(name) for row_id, name in names.items()}
+    return Backfill(relations_from, names_from, area_map, relation_map, name_map)
 
 
 def _first_clause(text: str) -> str:
@@ -225,11 +239,15 @@ def _rows(raw: list[dict[str, str]], backfill: Backfill, scheme: str) -> list[Ro
         )
     relations_at = _index(ids, backfill.relations_from, "relations_from")
     names_at = _index(ids, backfill.names_from, "names_from")
+    _check_names(ids, names_at, backfill)
     ident = re.compile(rf"(?<![{_ID_EDGE}])(?:{id_pattern(scheme)})(?![{_ID_EDGE}])")
     rows: list[Row] = []
     for i, cells in enumerate(raw):
         row_id, ruling = cells["id"], cells["ruling"]
-        name = ruling_name(ruling) if i >= names_at else _first_clause(ruling)
+        if i >= names_at:
+            name = ruling_name(ruling)
+        else:
+            name = backfill.names.get(row_id) or _first_clause(ruling)
         if not name:
             raise StandingRulesError(
                 f"row {row_id} has no name in its Ruling cell (0094). "
@@ -244,6 +262,38 @@ def _rows(raw: list[dict[str, str]], backfill: Backfill, scheme: str) -> list[Ro
                 )
         rows.append(Row(row_id, cells["date"], ruling, name, relations))
     return rows
+
+
+def _check_names(ids: list[str], names_at: int, backfill: Backfill) -> None:
+    # 0181: hand-written names only for rows before names_from, each of two to five words.
+    low, high = NAME_WORDS
+    for row_id, name in backfill.names.items():
+        if row_id not in ids[:names_at]:
+            raise StandingRulesError(
+                f"backfill names {row_id}, which is not a row before {backfill.names_from} "
+                f"(0181). Next: remove it; from {backfill.names_from} on the Ruling cell names it."
+            )
+        if ruling_problem(f"{name}.") is not None:
+            raise StandingRulesError(
+                f"backfill name {name!r} for {row_id} is not {low} to {high} plain words (0181). "
+                "Next: write a name of two to five words with no period."
+            )
+
+
+def _check_unique(in_force: list[Row], backfill: Backfill) -> None:
+    # 0094: a name is unique within its ledger, compared case-insensitively over in-force rows.
+    seen: dict[str, Row] = {}
+    for row in in_force:
+        first = seen.setdefault(row.name.casefold(), row)
+        if first is row:
+            continue
+        if first.id in backfill.names or row.id in backfill.names:
+            fix = "rename one of them in the backfill names"
+        else:
+            fix = f"rename {row.id} in the ledger, the later of the two rows"
+        raise StandingRulesError(
+            f"rows {first.id} and {row.id} share the name {row.name!r} (0094). Next: {fix}."
+        )
 
 
 def _check_areas(rows: list[Row], in_force: list[Row], backfill: Backfill) -> None:
@@ -277,7 +327,15 @@ def render(ledger: Path, backfill_path: Path, scheme: str = TABLE_SCHEME) -> str
         for target in row.relations.amends:
             amended_by[target].append(row.id)
     in_force = [row for row in rows if not superseded_by[row.id]]
+    for row_id in backfill.names:
+        if superseded_by[row_id]:
+            raise StandingRulesError(
+                f"backfill names {row_id}, which is superseded by "
+                f"{', '.join(superseded_by[row_id])} (0181). "
+                "Next: remove the name of this superseded row."
+            )
     _check_areas(rows, in_force, backfill)
+    _check_unique(in_force, backfill)
     out = [leading] if leading else []
     out += [
         f"<!-- Generated by scripts/standing_rules.py from {ledger.name}; do not edit. -->",
