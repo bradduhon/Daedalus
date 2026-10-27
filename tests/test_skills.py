@@ -654,7 +654,7 @@ def test_build_train_carries_the_escalation_prompt() -> None:
         "on what breaks and what happened in the test",
         "`Fix it now (Recommended)`:",
         "`Skip, track or exempt it`:",
-        "`Stop the train`:",
+        "`Stop the run`:",
         "The recommendation and its reason",
     ]
     places = [prompt.index(item) for item in order]

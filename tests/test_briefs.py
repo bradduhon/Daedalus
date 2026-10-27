@@ -32,7 +32,7 @@ GOOD = "\n".join(
         "Options:",
         f"- Fix it now (Recommended): runs a fix round (0133, {ISSUE}, security-auditor).",
         "- Skip, track or exempt it: exempts the finding (snake_case_ok in the description).",
-        "- Stop the train: ends the train.",
+        "- Stop the run: ends the run.",
     ]
 )
 # 0153: 18 words; over plain's 15, under standard's 22.
@@ -159,7 +159,7 @@ def test_every_shipped_example_question_and_label_passes_at_plain() -> None:
     assert len({p for p in SHIPPED if _QUOTED.search(p.read_text(encoding="utf-8"))}) == 2
     assert _QUOTED.search((REPO_ROOT / "agents" / "orchestrator.md").read_text("utf-8")) is None
     # pin A1 -> P1: the three gate labels are among the shipped labels.
-    for gate in ("Fix it now (Recommended)", "Skip, track or exempt it", "Stop the train"):
+    for gate in ("Fix it now (Recommended)", "Skip, track or exempt it", "Stop the run"):
         assert gate in labels, gate
     for question in questions:
         assert brief_problems(_brief(question), "plain") == [], question

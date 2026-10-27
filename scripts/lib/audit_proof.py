@@ -62,7 +62,7 @@ R_BOTH_VERDICTS = "auditor reply at seq {seq} carries both verdicts. Next: rerun
 # 0149: the gate labels the operator picks from, verbatim.
 UNEXEMPTED_NEXT = (
     "Next: put each finding to the operator through the per-finding step of the Build Train "
-    "with the choices `Fix it now`, `Skip, track or exempt it` and `Stop the train`, then record "
+    "with the choices `Fix it now`, `Skip, track or exempt it` and `Stop the run`, then record "
     "each exemption with daedalus_train.py exception."
 )
 

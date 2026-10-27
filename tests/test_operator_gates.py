@@ -41,7 +41,7 @@ KEY_A, KEY_B, KEY_C = (line.split(" | ", 1)[0] for line in (A, B, C))
 HIGH = "audit/round3/test_new.py::test_refused | high | scope"
 ID, ID2 = "0143-DAE-PLT", "0144-DAE-PLT"
 GATE_KEY = "audit/round1/test_gate.py::test_refused"
-CHOICES = ("`Fix it now (Recommended)`", "`Skip, track or exempt it`", "`Stop the train`")
+CHOICES = ("`Fix it now (Recommended)`", "`Skip, track or exempt it`", "`Stop the run`")
 TRACKING = (
     "`Skip it`",
     "`Track it`",
@@ -332,7 +332,7 @@ def test_an_other_exemption_with_words_passes_and_the_refusal_names_the_labels(
     with pytest.raises(ProofError) as info:
         push_proof(repo, train)
     message = str(info.value)
-    assert "`Fix it now`, `Skip, track or exempt it` and `Stop the train`" in message
+    assert "`Fix it now`, `Skip, track or exempt it` and `Stop the run`" in message
     assert "run a fix round" not in message
     entry = {"ledger_id": ID, "tip": tip, "tracking": "other", "other": "kept in team notes"}
     train_state.update(repo, train, exemptions={"1": {KEY_A: entry}})
@@ -369,9 +369,7 @@ def test_the_orchestrator_puts_each_finding_to_the_operator() -> None:
     assert "and the tracking question (`Skip it`, `Track it`, `Exempt it` or other)" in flat
     # 0165: the audit phase reads the catalog's one copy of the prompt.
     assert CATALOG_PROMPT in flat and PROMPT_START not in flat
-    run = [choice.replace("the train", "the run") for choice in CHOICES]
-    run[2] = "`Stop the run`"
-    assert [flat.index(choice) for choice in run] == sorted(flat.index(c) for c in run)
+    assert [flat.index(choice) for choice in CHOICES] == sorted(flat.index(c) for c in CHOICES)
     prompt = _prompt(_catalog())
     places = [prompt.index(choice) for choice in CHOICES]
     assert places == sorted(places)
@@ -436,7 +434,7 @@ def test_the_prompt_uses_the_operators_plain_labels() -> None:
         choices = [
             "- `Fix it now (Recommended)`: runs a fix round.",
             "- `Skip, track or exempt it`: exempts the finding.",
-            "- `Stop the train`: ends the train.",
+            "- `Stop the run`: ends the run.",
         ]
         places = [head.index(choice) for choice in choices]
         assert places == sorted(places)
