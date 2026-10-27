@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 import pytest
-from lib.config import Config, ConfigError, load_config
+from lib.config import Config, ConfigError, load_config, standing_rules_path
 
 from tests.conftest import REPO_ROOT
 
@@ -20,7 +20,7 @@ def test_missing_file_gives_empty_config(project_data: Path) -> None:
 
 def test_config_null_means_not_declared(project_data: Path) -> None:
     # 0076: null is the same as an absent key, so the setup starter loads as the defaults.
-    nulls = {"charter_root": None, "ledger": None, "policy": None}
+    nulls = {"charter_root": None, "standing_rules": None, "ledger": None, "policy": None}
     (project_data / "config.json").write_text(json.dumps(nulls))
     assert load_config(str(project_data.parents[1])) == Config()
     for key in nulls:
@@ -92,6 +92,8 @@ _LEDGER = {
         {"charter_root": ""},
         {"charter_root": False},
         {"charter_root": 0},
+        {"standing_rules": 5},
+        {"standing_rules": ""},
         {"ledger": {**_LEDGER, "path": 1}},
         {"ledger": {**_LEDGER, "format": ["markdown-table-row"]}},
         {"ledger": {**_LEDGER, "id_scheme": 7}},
@@ -294,3 +296,28 @@ def test_pack_rules_are_one_line_with_ids() -> None:
         assert "CIS" not in line, line
         if " Maps: " in line:
             assert MAPS.search(line), line
+
+
+@pytest.mark.parametrize(
+    ("doc", "expected"),
+    [
+        ({}, None),
+        ({"standing_rules": "standing-rules.md"}, "repo/standing-rules.md"),
+        ({"charter_root": "/work/Charter", "standing_rules": "rules.md"}, "/work/Charter/rules.md"),
+        ({"charter_root": "docs/private", "standing_rules": "s.md"}, "repo/docs/private/s.md"),
+        ({"charter_root": "/work/Charter", "standing_rules": "/abs/s.md"}, "/abs/s.md"),
+    ],
+)
+def test_standing_rules_key_resolves(
+    project_data: Path, tmp_path: Path, doc: dict[str, object], expected: str | None
+) -> None:
+    # 0090: relative to charter_root when declared, else to the project root; absent is none.
+    (project_data / "config.json").write_text(json.dumps(doc))
+    cfg = load_config(str(project_data.parents[1]))
+    assert cfg.standing_rules == doc.get("standing_rules")
+    found = standing_rules_path(cfg, tmp_path / "repo")
+    if expected is None:
+        assert found is None
+    else:
+        want = Path(expected) if expected.startswith("/") else tmp_path / expected
+        assert found == want

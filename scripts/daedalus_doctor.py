@@ -25,7 +25,7 @@ from lib.audit import (  # noqa: E402
     project_data_dir,
     project_root,
 )
-from lib.config import Config, ConfigError, load_config  # noqa: E402
+from lib.config import Config, ConfigError, load_config, standing_rules_path  # noqa: E402
 from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
 from lib.manifest import (  # noqa: E402
     Features,
@@ -65,6 +65,13 @@ ENABLEMENT = ".claude/settings.json"
 ENABLEMENT_NEXT = f"commit {ENABLEMENT}; it holds the enabledPlugins entry /plugin install wrote"
 # 0076: the setup skill writes whichever starter file is missing; the doctor never writes one.
 SETUP_NEXT = "run the Daedalus setup skill (/daedalus:setup) to write a starter {name}"
+STANDING_NEXT = (
+    "set standing_rules in .claude/daedalus/config.json to the standing-rules file, "
+    "so the planner reads it"
+)
+STANDING_MISS_NEXT = (
+    "write it with scripts/standing_rules.py, or fix standing_rules in .claude/daedalus/config.json"
+)
 # 0095: a local clone added as a marketplace caches under its marketplace name.
 CACHE_NAMING = (
     "a --plugin-dir session uses daedalus-inline; a marketplace install, the published one or a "
@@ -444,6 +451,16 @@ def _ledger_probe(root: Path, config: Config) -> tuple[bool, str]:
     return True, f"OK   ledger: {found.path} ({found.origin}, {found.format})"
 
 
+def _standing_rules_check(root: Path, config: Config) -> tuple[bool, str]:
+    # 0090: absent is optional; a declared path with no file is a MISS.
+    path = standing_rules_path(config, root)
+    if path is None:
+        return _opt(False, "standing_rules", "not declared", STANDING_NEXT)
+    if path.is_file():
+        return True, f"OK   standing_rules: {path}"
+    return False, f"MISS standing_rules: {path} is not a file. Next: {STANDING_MISS_NEXT}"
+
+
 def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
     cfg_path = data / "config.json"
     try:
@@ -462,6 +479,7 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
             SETUP_NEXT.format(name="config.json"),
         )
     yield _ledger_probe(data.parent.parent, config)
+    yield _standing_rules_check(data.parent.parent, config)
     # spec 5: standards_sources and policy are optional; undeclared is not a miss.
     if config.standards_sources:
         yield True, "OK   standards_sources declared"

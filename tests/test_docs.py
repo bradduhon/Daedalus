@@ -39,7 +39,11 @@ def _leaves(value: object, prefix: str = "") -> set[str]:
 
 def test_backfill_keys_and_areas_are_documented() -> None:
     section = _section("### Standing-rules backfill file")
-    for key in sorted(standing_rules.BACKFILL_KEYS | standing_rules.RELATION_KEYS):
+    for key in sorted(
+        standing_rules.BACKFILL_KEYS
+        | standing_rules.OPTIONAL_BACKFILL_KEYS
+        | standing_rules.RELATION_KEYS
+    ):
         assert f"`{key}`" in section, key
     for area in standing_rules.AREAS:
         assert f"`{area}`" in section, area
