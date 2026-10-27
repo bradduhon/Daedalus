@@ -576,7 +576,7 @@ Daedalus/
 │   ├── doctor/SKILL.md              # /daedalus:doctor
 │   ├── plan/SKILL.md                # /daedalus:plan, the plan phase
 │   ├── push-train/SKILL.md          # /daedalus:push-train
-│   ├── release/SKILL.md             # the release phase, started by /daedalus:run push
+│   ├── release/SKILL.md             # the release phase, started by /daedalus:push-train
 │   ├── round/SKILL.md               # /daedalus:round
 │   ├── setup/SKILL.md               # /daedalus:setup
 │   └── verify/SKILL.md              # /daedalus:verify, the verify phase
