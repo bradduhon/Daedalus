@@ -340,11 +340,13 @@ def test_lock_refuses_a_version_not_raised(repo: Path) -> None:
 def test_lock_revises_with_the_revise_message(repo: Path) -> None:
     train = _train(repo)
     _contract(repo)
-    lock(repo, "contracts/api.md", 1)
+    first = lock(repo, "contracts/api.md", 1)
     _contract(repo, text="packet v2\n")
     lines = lock(repo, "contracts/api.md", 2)
     assert _subject(repo) == "Revise contract api v2"
-    assert lines[0] == f"lock: {_ok(repo, 'rev-parse', f'daedalus/{train}')}"
+    # 0150, issue 96: the revise keeps the v1 lock, never the new integration tip.
+    assert lines[0] == first[0] != f"lock: {_ok(repo, 'rev-parse', f'daedalus/{train}')}"
+    assert f"lock: {train_state.load(repo, train)['lock_sha']}" == first[0]
 
 
 def test_lock_commits_a_charter_contract_in_the_charter(repo: Path, charter: Path) -> None:
@@ -591,14 +593,19 @@ def test_finish_refuses_a_unit_not_descending_from_the_lock(repo: Path) -> None:
     _commit_all(unit, "build u1")
     with pytest.raises(WorkspaceError) as info:
         finish(repo)
+    state = train_state.load(repo, train)
     assert str(info.value) == (
         f"Unit daedalus-unit/{train}-u1 does not descend from the integration branch. "
-        "Next: rerun the train; if it repeats, file an issue with the train summary."
+        f"Next: a likely cause is a contract revise that moved the lock {state['lock_sha']} off "
+        f"the train base {state['base_sha']} (0150); set lock_sha in the train state "
+        "back to the lock the unit was built on, then rerun the finish; otherwise "
+        "rerun the train, and if it repeats, file an issue with the train summary."
     )
     assert _merges(repo, f"daedalus/{train}") == []
 
 
-def test_finish_aborts_and_names_conflicts(repo: Path) -> None:
+def test_finish_aborts_and_stays_on_the_train_branch(repo: Path) -> None:
+    # issue 95: a failed merge keeps the repository on daedalus/<train-id> with earlier merges.
     train = _locked_train(repo)
     _built(repo, train, "u1", "shared.txt", "one\n")
     _built(repo, train, "u2", "shared.txt", "two\n")
@@ -607,11 +614,39 @@ def test_finish_aborts_and_names_conflicts(repo: Path) -> None:
     message = str(info.value)
     assert (
         "shared.txt" in message
-        and f"Next: inspect or delete the leftover daedalus/{train}" in message
+        and (
+            f"Next: the repository stays on daedalus/{train} with the completed merges in place; "
+            f"merge daedalus-unit/{train}-u2 there by hand"
+        )
+        in message
     )
-    assert _head(repo) == "main"
+    assert _head(repo) == f"daedalus/{train}"
+    assert _merges(repo, f"daedalus/{train}") == [f"Merge u1 for train {train}"]
+    assert (repo / "shared.txt").read_text() == "one\n"
     assert _git(repo, "rev-parse", "--verify", "--quiet", "MERGE_HEAD").returncode != 0
     assert _git(repo, "status", "--porcelain").stdout == ""
+    assert train_state.load(repo, train)["merged"] is not True
+
+
+def test_finish_after_a_revise_takes_a_unit_built_on_the_first_lock(repo: Path) -> None:
+    # issue 96, 0150: lock v1, merge a wave, revise to v2; the earlier unit still passes.
+    train, u1, u2 = _wave_train(repo)
+    v1 = train_state.load(repo, train)["lock_sha"]
+    _dispatch(repo, u1)
+    _verifier_stop(repo, VERIFIED_REPLY)
+    workspace.merge(repo, ["U1"])
+    _contract(repo, text="packet v2\n")
+    assert lock(repo, "contracts/api.md", 2)[0] == f"lock: {v1}"
+    tip = _ok(repo, "rev-parse", f"daedalus/{train}")
+    assert _git(repo, "merge-base", "--is-ancestor", tip, f"daedalus-unit/{train}-u2").returncode
+    lines = finish(repo)
+    assert lines[0] == f"merged 1 units into daedalus/{train}"
+    assert _merges(repo, f"daedalus/{train}") == [
+        f"Merge u1 for train {train}",
+        f"Merge u2 for train {train}",
+    ]
+    assert _subject(repo, f"daedalus/{train}~1") == "Revise contract api v2"
+    assert not u2.exists() and train_state.load(repo, train)["merged"] is True
 
 
 def test_finish_tears_down_and_marks_merged(repo: Path) -> None:
