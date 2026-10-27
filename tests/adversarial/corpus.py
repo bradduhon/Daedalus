@@ -5,6 +5,7 @@
 # the --test-runner pytest forms or an auditor write under the train's audit folder.
 from __future__ import annotations
 
+import shlex
 from typing import Any
 
 from tests.conftest import CFG
@@ -52,6 +53,21 @@ H1_SHELL_BODY = (
     "setsid sh -c 'touch {repo}/x'",
     "flock /tmp/l -c 'touch {repo}/x'",
     "flock /tmp/l --command 'touch {repo}/x'",
+)
+
+
+def nest_bodies(command: str, levels: int, shell: str = "sh") -> str:
+    # issue 81: the command inside `levels` shell -c bodies, each level quoted once more.
+    for _ in range(levels):
+        command = f"{shell} -c {shlex.quote(command)}"
+    return command
+
+
+# issue 81 (unit H1): bodies nested past the walk's depth cap of three fail closed.
+H1_DEEP_BODY = (
+    nest_bodies("touch {repo}/x", 4),
+    nest_bodies("touch {repo}/x", 6, "bash"),
+    "env -S " + shlex.quote(nest_bodies("touch {repo}/x", 3)),
 )
 # issue 82 (unit H1): one row per runner wrapper row, then options kept off a row.
 H1_WRAPPERS = (

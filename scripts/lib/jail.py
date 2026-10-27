@@ -1697,6 +1697,15 @@ def _hidden_reason(command: str) -> str | None:
     return None
 
 
+def _body_past_cap(command: str, depth: int = 0) -> bool:
+    # issue 81: a body nested past _BODY_DEPTH is never walked, so the call is judged in a train.
+    for words in _shell_words(command):
+        for _, body in _hidden_bodies([_clean(w) for w in words if not w.startswith(_REDIRECT)]):
+            if depth >= _BODY_DEPTH or _body_past_cap(body, depth + 1):
+                return True
+    return False
+
+
 def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
     # issue 30: redirects, write operands, cd targets and git -C name the repos a command acts on.
     segments = _shell_words(command)
@@ -1768,7 +1777,11 @@ def _marked_repo(cwd: str, tool: str, tool_input: dict[str, object]) -> Path | N
 
 def _train_scoped(cwd: str, tool: str, tool_input: dict[str, object]) -> bool:
     # 0035: an unknown repo (no absolute cwd) is judged as if a train runs there.
-    return not os.path.isabs(cwd) or _marked_repo(cwd, tool, tool_input) is not None
+    return (
+        not os.path.isabs(cwd)
+        or _marked_repo(cwd, tool, tool_input) is not None
+        or (tool == "Bash" and _body_past_cap(str(tool_input.get("command") or "")))
+    )
 
 
 def _ours(raw_agent: str) -> bool:
@@ -1805,11 +1818,12 @@ def _unknown_decision(
     if command and (_data_dir_write(command) or _cd_data_dir_git(command)):
         return _block(R_DATA_DIR)
     repo = _marked_repo(cwd, tool, tool_input)
-    if repo is None:
+    # issue 81: a body past the walk's cap may name any repo, so it fails closed.
+    if repo is None and not (command and _body_past_cap(command)):
         return _allow()
     hidden = _hidden_reason(command) if command else None
-    if hidden is not None:
-        return _block(hidden)
+    if hidden is not None or repo is None:
+        return _block(hidden or R_SHELL_BODY)
     if tool == "Bash" and _foreign_read_ok(command, cwd, charter):
         return _allow()
     return _block(R_UNKNOWN_TRAIN.format(agent=agent, marker=train_marker(repo), repo=repo))

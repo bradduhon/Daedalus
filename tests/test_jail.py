@@ -16,12 +16,14 @@ from lib.workspace import train_marker
 
 from tests import hook_chain
 from tests.adversarial.corpus import (
+    H1_DEEP_BODY,
     H1_ENV_SPLIT,
     H1_SHELL_BODY,
     H1_SYMLINK,
     H1_WRAPPERS,
     H1_WRAPPERS_OFF_ROW,
     assert_denied,
+    nest_bodies,
 )
 from tests.conftest import CFG, CWD, REPO_ROOT, WT, write_train_marker
 from tests.jail_cases import (
@@ -2193,6 +2195,29 @@ def test_hidden_bodies_nest_and_find_their_targets(marked_repo: Path, other_repo
     assert jail._hidden_reason("flock /tmp/l touch x") is None
     assert jail._hidden_reason("flock /tmp/l --command=true") == jail.R_SHELL_BODY
     assert jail._hidden_bodies(["bash", "--frob", "-c"]) == [(jail.R_SHELL_BODY, "")]
+
+
+@pytest.mark.parametrize("form", H1_DEEP_BODY)
+def test_a_body_past_the_depth_cap_fails_closed(
+    marked_repo: Path, other_repo: Path, form: str
+) -> None:
+    # issue 81: past the cap no target is walked, so the call is judged as if a train runs.
+    for repo in (marked_repo, other_repo):
+        command = form.format(repo=repo)
+        assert jail._body_past_cap(command), command
+        d = _foreign(other_repo, command)
+        hidden = (jail.R_SHELL_BODY, shell.R_ENV_SPLIT)
+        assert not d.allow and not d.warn and d.reason in hidden, (command, d.reason)
+    assert jail._train_scoped(str(other_repo), "Bash", {"command": form.format(repo=other_repo)})
+
+
+def test_a_body_within_the_depth_cap_is_walked(marked_repo: Path, other_repo: Path) -> None:
+    # issue 81: three levels are walked for targets; outside a train they pass.
+    inside = nest_bodies(f"touch {marked_repo}/x", 3)
+    assert not jail._body_past_cap(inside)
+    assert str(marked_repo / "x") in jail._bash_write_dirs(inside, str(other_repo))
+    assert _foreign(other_repo, inside).reason == jail.R_SHELL_BODY
+    assert _foreign(other_repo, nest_bodies(f"touch {other_repo}/x", 3)).allow
 
 
 @pytest.mark.parametrize("form", H1_WRAPPERS + H1_WRAPPERS_OFF_ROW)
