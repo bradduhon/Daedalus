@@ -76,7 +76,8 @@ mode section instead.
    - WRONG VALUE: the line exists and holds a different value.
    - WRONG LINE: the value exists, at a line other than the one the brief or a receipt names.
    - MISSING: nothing on the branch backs the claim.
-   - OVERSTATED: the line says more than the code does, such as present tense over unbuilt code.
+   - OVERSTATED: the line says more than the code does, such as present tense over unbuilt code
+     or a check no caller runs.
    - NARROWED: the code covers less than the claim asks.
    - WIDENED: the code covers more than the claim asks, such as a refusal that now admits a form.
 4. Class every claim that is not MATCH. Its row is `code` or `scope`, never anything else:
@@ -114,6 +115,10 @@ skip steps 1, 2, 4 and 5 and check only the listed claims:
 1. Print each named line: the `git show` pipe of step 3 for a path on a branch, else Read at
    that line. Give each claim one verdict from step 3, with the two checks of step 6 when a
    clause number sits beside it. A claim that is not MATCH is a `code` row.
+   A claim that a mechanism enforces, refuses, checks or gates something gets two checks:
+   existence (its definition) and attachment (a caller on the path it governs). Run your own
+   `git -C <unit worktree> grep -n <name> <branch>` for the caller beside the writer's receipt;
+   existence alone is OVERSTATED.
 2. Rounds: the first `CLAIMS MODE.` prompt over a set of output paths in this conversation is
    round 1 and checks every listed claim. The next prompt over the same output paths is
    round 2, then round 3. In rounds 2 and 3, check every listed claim and every claim you
