@@ -298,3 +298,35 @@ def test_summary_prints_no_count_without_a_corrected_line_above_the_verdict(
     # 0127: a reply with no counted line prints the verdict alone, never an invented zero.
     lines = _section(_text(tmp_path, records=_with_verdict(reply)), "Verification")
     assert lines == ["- u1: \\[VERDICT: VERIFIED\\] claims=12"]
+
+
+VERIFY_SKILL = REPO_ROOT / "skills" / "verify" / "SKILL.md"
+
+
+def test_verify_skill_carries_the_verifier_step_and_claims_mode() -> None:
+    # spec 3.4, 0127, 0128: the verify phase holds the verifier step, its routes and claims mode.
+    text = _flat(VERIFY_SKILL.read_text(encoding="utf-8"))
+    method = text.split("## What the phase does well", 1)[1].split("## Evidence that ends it", 1)[0]
+    assert "never against the coder's report (0128)" in method
+    assert "The coder's report is receipts only" in method
+    assert "the coder's `[STATUS: COMPLETE]` line with its ledger notes and the `## Receipts`" in (
+        method
+    )
+    assert (
+        "Typecheck and lint receipts are judged from the coder's receipts block, not rerun; "
+        "only a pytest run is reproduced." in method
+    )
+    assert "never a `Worktree:` line" in method
+    assert "never counts as a refutation (0127)" in method
+    assert "only rows of class `code` or `scope` count (0127)" in method
+    assert "a prompt whose first line is `CLAIMS MODE.`" in method
+    assert "a random 20 percent sample of the rest of the prior round's claims" in method
+    # 0161, 0133: a later refutation goes to the operator; no automatic stop.
+    step5 = method.split(" 5. Route the verdict.", 1)[1].split("### Claims mode", 1)[0]
+    for label in ("`Fix it now (Recommended)`", "`Skip, track or exempt it`", "`Stop the run`"):
+        assert label in step5, label
+    assert "stops the run" not in step5
+    assert "exempt it` pick at a later refutation" in text.split("## Evidence that ends it", 1)[1]
+    evidence = text.split("## Evidence that ends it", 1)[1].split("## Agents it uses", 1)[0]
+    assert "(scripts/lib/workspace.py:966, :1062)" in evidence
+    assert "no recorded VERIFIED reply for its worktree" in evidence
