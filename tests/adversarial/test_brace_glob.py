@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from lib import jail
+from lib.credential_paths import glob_reaches
 
 from tests.adversarial.corpus import (
     CREDENTIAL,
@@ -158,10 +159,14 @@ def test_an_rg_whitelist_glob_reaching_a_credential_store_is_denied(
     (cred_home / ".ssh").mkdir()
     forms = ("rg -g .ssh -g 'id_*' BEGIN ~", "rg --iglob=.SSH BEGIN {home}")
     forms += ("rg -g '**/.ssh' -g '**/.ssh/**' BEGIN ~", "rg -g '.ssh/' BEGIN {home}")
+    forms += ("rg -g '\\.ssh' -g '\\.ssh/**' BEGIN {home}",)
     for command in forms:
         assert_store_read_denied("security-auditor", command, home=cred_home)
     assert jail._rg_globs(["-e", "-g", "-g", "!x", "--glob", "$X", "-ng*.tf"]) == ["*", "*.tf"]
     assert jail._rg_globs(["-g=.claude"]) == ["=.claude", ".claude"]
+    # SC-12: outside the modelled characters a glob reaches every store; a negated glob never does.
+    assert glob_reaches(["\\.x"], ["a"]) and glob_reaches(["[a]"], ["b"])
+    assert not glob_reaches(["!\\.ssh", "**/*.py", "*Dockerfile*"], [".ssh"])
 
 
 @pytest.mark.parametrize("agent", READERS)

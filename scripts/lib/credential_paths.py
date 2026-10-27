@@ -8,6 +8,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import string
 from pathlib import Path
 
 from lib.project_root import project_root
@@ -300,9 +301,16 @@ def glob_patterns(raw: str) -> list[str]:
     return [p.lstrip("/") for p in pats if p.lstrip("/")]
 
 
+# SC-12: the glob characters glob_reaches models; any other (\, [, {, ,) fails closed.
+GLOB_MODELLED = frozenset(string.ascii_letters + string.digits + "._-*?/")
+
+
 def glob_reaches(pats: list[str], rest: list[str]) -> bool:
     # SC-12: a whitelist glob naming any run of components below the search root, case folded.
     # SC-12: fnmatch's * crosses /, and the / edges let a gitignore **/ match zero folders.
+    pats = [p for p in pats if not p.startswith("!")]
+    if any(set(p) - GLOB_MODELLED for p in pats):
+        return True
     runs = {"/".join(rest[i:j]) for i in range(len(rest)) for j in range(i + 1, len(rest) + 1)}
     names = {edge.format(run.casefold()) for run in runs for edge in ("{}", "/{}", "{}/", "/{}/")}
     folded = {p.casefold() for pat in pats for p in (pat, pat.rstrip("/")) if p}
