@@ -24,8 +24,8 @@ never edit the spec.
 
 ## Your brief
 It names, each on its own line: the spec path; the standing-rules file path, when the
-repository has one; `max_concurrent_builders: <n>`; the repository's file areas (the
-`entrypoints` block of `service-manifest.json`, or `none declared`); the dependency map's
+`standing_rules` key of config.json sets one; `max_concurrent_builders: <n>`; the repository's
+file areas (the `entrypoints` block of `service-manifest.json`, or `none declared`); the dependency map's
 `map.md` and `map.json` paths, when the train wrote them with `daedalus_map.py`; the Standards
 Packet path, when one is written; and the one file you write, on a
 `Write exactly one file: <path>` line. Inside a train that file is
@@ -66,8 +66,8 @@ Packet path, when one is written; and the one file you write, on a
 ## Challenge mode
 A `Mode: challenge` brief (0152, 0154) names the idea as `Idea file: <path>` for a notes file,
 or as the operator's text between an `Idea:` line and an `Idea ends` line. It also names the
-standing-rules file when the repository has one, the repository's file areas, and the one file
-you write on a `Write exactly one file: <path>` line. In challenge mode that file is
+standing-rules file when config.json's `standing_rules` key sets one, the repository's file
+areas, and the one file you write on a `Write exactly one file: <path>` line. In challenge mode that file is
 `docs/.tmp/daedalus/brainstorm-<YYYYMMDD>/spec.md`. After a `Mode: plan` hand-off it is the plan
 file the new brief names. A warm planner therefore writes two files in one life, each named by
 its own brief. The hook refuses any other write.

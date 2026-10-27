@@ -29,7 +29,7 @@ The brainstorm phase turns an idea into a design spec through numbered challenge
 5. Choose the planner's model: run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py model --repo <repo> --agent planner`, adding `--override <override>` when step 1 set one. It prints one model word. Exit 1: stop and show its output; its `Next:` line is the next action. Dispatch `Agent(planner)` with `model: <that word>`; Claude Code loads it as `daedalus:planner`. Its prompt carries, each on its own line:
    - `Mode: challenge`;
    - `Idea file: <notes>` when step 1 or step 4 set `<notes>`; otherwise `Idea:` on its own line, then the operator's `<idea>` verbatim, then a closing `Idea ends` line;
-   - the standing-rules file path, when the repository has one;
+   - the standing-rules file path, from the `standing_rules` key of `<repo>/.claude/daedalus/config.json`, read from its `charter_root` when one is set, else from `<repo>`; leave this line out when the key is absent or null;
    - the repository's file areas: the `entrypoints` block of `<repo>/service-manifest.json`, pasted as it stands, or `none declared` when the file or block is absent;
    - `Write exactly one file: <folder>/spec.md`;
    - the grounding rules below, verbatim;
