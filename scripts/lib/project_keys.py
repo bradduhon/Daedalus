@@ -44,6 +44,8 @@ CONFIG_FILE = ".claude/daedalus/config.json"
 _MANIFEST_PARENT = {key: "jail_narrowing" for key in NARROWING_KEYS} | {
     key: "stack" for key in STACK_COMMANDS
 }
+# 0158: opt-in feature switches setup never writes; each reads false until the operator sets it.
+SETUP_OMITS = frozenset({"terraform_validate"})
 # 0004: lib.ledger reads a manifest ledger block with the config ledger's four fields.
 MANIFEST_LEDGER = "ledger"
 _Nested = type[LedgerDecl] | type[PolicyDecl] | type[StandardsSource]
@@ -91,7 +93,9 @@ def starter_manifest() -> dict[str, object]:
     for item in fields(Manifest):
         if item.name == "features":
             doc["features"] = {
-                f.name: False if "bool" in str(f.type) else None for f in fields(Features)
+                f.name: False if "bool" in str(f.type) else None
+                for f in fields(Features)
+                if f.name not in SETUP_OMITS
             }
         elif item.name == "docs":
             doc["docs"] = {f.name: _json(getattr(Docs(), f.name)) for f in fields(Docs)}
@@ -245,6 +249,15 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`true`, `false` or `null`; only `false` turns both commands off",
         "`null`: both commands may run",
         "`false`",
+    ),
+    (MANIFEST_FILE, "features.terraform_validate"): KeyRow(
+        "Lets the Terraform reviewer run `terraform validate`, which starts the provider "
+        "programs in a module's `.terraform` folder. Setup never writes it, and "
+        "`features.terraform_tools` set to `false` still turns it off (0158)",
+        "boolean",
+        "`true` or `false`",
+        "`false`: the reviewer runs no validate and marks that check N/A",
+        "`true`",
     ),
     (MANIFEST_FILE, "trains_dir"): KeyRow(
         "The project folder that holds its own train definitions; a train is looked up there "

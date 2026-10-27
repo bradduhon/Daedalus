@@ -198,6 +198,9 @@ def _tf(repo: Path, command: str) -> dict[str, Any]:
     ],
 )
 def test_terraform_class_admits_the_two_checks(repo_cwd: Path, command: str) -> None:
+    # 0158: validate needs its own switch on.
+    manifest = repo_cwd / "service-manifest.json"
+    manifest.write_text(json.dumps({"features": {"terraform_validate": True}}), encoding="utf-8")
     payload = _tf(repo_cwd, command.format(repo=repo_cwd))
     assert evaluate("command_allowlist", payload, *ALLOW) is None
     assert first_deny(payload, Config()) is None
@@ -231,7 +234,8 @@ def test_terraform_class_refuses_both_checks_when_the_switch_is_off(repo_cwd: Pa
     for command in ("terraform fmt -check", "terraform validate"):
         reason = evaluate("command_allowlist", _tf(repo_cwd, command), *ALLOW)
         assert reason is not None and reason.startswith("features.terraform_tools is false")
-    manifest.write_text(json.dumps({"features": {"terraform_tools": True}}), encoding="utf-8")
+    on = {"terraform_tools": True, "terraform_validate": True}
+    manifest.write_text(json.dumps({"features": on}), encoding="utf-8")
     assert evaluate("command_allowlist", _tf(repo_cwd, "terraform validate"), *ALLOW) is None
 
 

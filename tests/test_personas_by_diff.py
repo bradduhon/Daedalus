@@ -60,6 +60,7 @@ def test_persona_switches_follow_github_in_the_feature_list() -> None:
     assert FEATURE_KEYS[FEATURE_KEYS.index("github") + 1 :] == (
         "dependency_web_lookup",
         "terraform_tools",
+        "terraform_validate",
     )
     assert Features().dependency_web_lookup is None and Features().terraform_tools is None
 
