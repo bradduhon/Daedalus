@@ -51,22 +51,14 @@ class PackImportError(Exception):
     pass
 
 
-def _read(path: str, what: str, limit: int) -> bytes:
-    target = Path(path)
-    if target.is_symlink() or not target.is_file():
+def _read(path: str, what: str, limit: int | None = None) -> bytes:
+    # 2.5: the pack reader's own guards: no link followed, no file over the cap read.
+    data, bad = packs.read_capped(Path(path), limit)
+    if data is None:
         raise PackImportError(
-            f"{what} {path} is not a regular file. Next: name the real file, not a link or folder."
+            f"{what} {bad}. Next: name the real input file, readable to you and not a link."
         )
-    try:
-        if target.stat().st_size > limit:
-            raise PackImportError(
-                f"{what} {path} is larger than {limit} bytes. Next: check you named the right file."
-            )
-        return target.read_bytes()
-    except OSError as exc:
-        raise PackImportError(
-            f"{what} {path} could not be read ({exc}). Next: check the file is readable to you."
-        ) from exc
+    return data
 
 
 def out_folder(out: str, repo: Path) -> Path:
@@ -234,7 +226,7 @@ def oscal(args: argparse.Namespace, out: Path) -> int:
 
 
 def cis_map(args: argparse.Namespace, out: Path) -> int:
-    raw = _read(args.map, "--map", packs.MAX_BYTES)
+    raw = _read(args.map, "--map")
     benchmark = args.benchmark
     if not (1 <= len(benchmark) <= BENCHMARK_MAX and benchmark.isprintable()):
         raise PackImportError(

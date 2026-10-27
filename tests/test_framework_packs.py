@@ -127,6 +127,8 @@ def test_a_linked_file_is_a_problem(tmp_path: Path) -> None:
     (folder / "pack.json").rename(tmp_path / "real.json")
     os.symlink(tmp_path / "real.json", folder / "pack.json")
     assert pack_problems(folder) == ["pack.json is a symlink"]
+    with pytest.raises(PackError, match="pack.json is a symlink"):
+        load_pack(folder)
 
 
 def test_a_missing_folder_is_a_problem(tmp_path: Path) -> None:
@@ -184,7 +186,7 @@ def test_a_missing_pack_json_key_is_a_problem(tmp_path: Path) -> None:
     [
         ("[]", "pack.json is not a JSON object"),
         ("{", "pack.json is not valid UTF-8 JSON"),
-        ('{"id": "p", "id": "q"}', "repeats the key 'id'"),
+        ('{"id": "p", "id": "q"}', "key 'id' is named twice"),
     ],
 )
 def test_a_malformed_pack_json_is_a_problem(tmp_path: Path, text: str, want: str) -> None:

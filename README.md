@@ -535,6 +535,7 @@ Daedalus/
 │   ├── lib/locks.py                 # the one FIFO-safe lock opener and bounded lock
 │   ├── lib/manifest.py              # the one reader of service-manifest.json
 │   ├── lib/narrow.py                # narrows parsed JSON values to typed values
+│   ├── lib/packs.py                 # loads and checks framework control packs
 │   ├── lib/plan_record.py           # loads and validates plan records
 │   ├── lib/project_keys.py          # every manifest and config key, its reference row, and the starter files
 │   ├── lib/project_root.py          # finds the project root
@@ -564,6 +565,7 @@ Daedalus/
 │   ├── enforce_agent_jail.py        # PreToolUse policy
 │   ├── freeze_sources.py            # freezes and verifies a document train's sources
 │   ├── handback_check.py            # SubagentStop check of a coder's receipts block
+│   ├── import_pack.py               # operator-run: writes a control pack from an OSCAL catalog or a CIS id map
 │   ├── refresh_frameworks.py        # operator-run: compile the pinned framework caches
 │   ├── standing_rules.py            # derives the standing-rules file from the ledger
 │   ├── validate_plan.py             # checks a plan file and prints its graph line

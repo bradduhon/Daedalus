@@ -14,6 +14,7 @@ from datetime import date
 from pathlib import Path
 
 from lib.config import PACKS_DIR
+from lib.controls import ControlsError, _unique
 from lib.manifest import load as load_manifest
 from lib.project_root import project_root
 
@@ -116,34 +117,26 @@ def controls_text(controls: list[dict[str, object]]) -> str:
     return json.dumps({"schema": SCHEMA, "controls": controls}, indent=2, ensure_ascii=False) + "\n"
 
 
-def _no_repeats(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    # python.md:28: a repeated key would let a later value hide an earlier one.
-    out: dict[str, object] = {}
-    for key, value in pairs:
-        if key in out:
-            raise ValueError(f"repeats the key {key!r}")
-        out[key] = value
-    return out
-
-
-def _read(path: Path) -> tuple[bytes | None, str | None]:
-    # 0010: a link is never followed; a file over MAX_BYTES is refused unread.
+def read_capped(path: Path, limit: int | None = None) -> tuple[bytes | None, str | None]:
+    # 0010: the pack and importer reader; a link is never followed, a file over limit is unread.
+    cap = MAX_BYTES if limit is None else limit
     if path.is_symlink():
         return None, f"{path.name} is a symlink"
     if not path.is_file():
         return None, f"{path.name} is missing"
     try:
-        if path.stat().st_size > MAX_BYTES:
-            return None, f"{path.name} is larger than {MAX_BYTES} bytes"
+        if path.stat().st_size > cap:
+            return None, f"{path.name} is larger than {cap} bytes"
         return path.read_bytes(), None
     except OSError as exc:
         return None, f"{path.name} could not be read ({exc.strerror or exc})"
 
 
 def _parse(name: str, data: bytes) -> tuple[object, str | None]:
+    # python.md:28: controls._unique refuses a repeated key that would hide an earlier value.
     try:
-        return json.loads(data.decode("utf-8"), object_pairs_hook=_no_repeats), None
-    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
+        return json.loads(data.decode("utf-8"), object_pairs_hook=_unique), None
+    except (UnicodeDecodeError, ValueError, RecursionError, ControlsError) as exc:
         return None, f"{name} is not valid UTF-8 JSON ({exc})"
 
 
@@ -294,8 +287,8 @@ def content_problems(
 def _pack_parts(folder: Path) -> tuple[object, bytes | None, list[str]]:
     if folder.is_symlink() or not folder.is_dir():
         return None, None, [f"{folder} is not a folder"]
-    meta_raw, meta_bad = _read(folder / PACK_FILE)
-    controls_raw, controls_bad = _read(folder / CONTROLS_FILE)
+    meta_raw, meta_bad = read_capped(folder / PACK_FILE)
+    controls_raw, controls_bad = read_capped(folder / CONTROLS_FILE)
     missing = [bad for bad in (meta_bad, controls_bad) if bad is not None]
     if meta_raw is None or controls_raw is None:
         return None, None, missing
@@ -333,12 +326,18 @@ def neighbour_ids(folder: Path) -> set[str]:
     return control_ids(sorted(folders - {folder}))
 
 
-def pack_problems(folder: Path, known: Collection[str] | None = None) -> list[str]:
-    # Pin F1 -> F3: an empty list means the pack loads; known None reads neighbour_ids(folder).
+def _checked(folder: Path, known: Collection[str] | None) -> tuple[object, bytes, list[str]]:
+    # One read per file; load_pack builds from the same bytes pack_problems judged.
     meta, controls_raw, problems = _pack_parts(folder)
     if problems or controls_raw is None:
-        return problems
-    return content_problems(meta, controls_raw, neighbour_ids(folder) if known is None else known)
+        return meta, b"", problems
+    scope = neighbour_ids(folder) if known is None else known
+    return meta, controls_raw, content_problems(meta, controls_raw, scope)
+
+
+def pack_problems(folder: Path, known: Collection[str] | None = None) -> list[str]:
+    # Pin F1 -> F3: an empty list means the pack loads; known None reads neighbour_ids(folder).
+    return _checked(folder, known)[2]
 
 
 def _refs(raw: dict[str, list[str]]) -> Refs:
@@ -347,11 +346,10 @@ def _refs(raw: dict[str, list[str]]) -> Refs:
 
 def load_pack(folder: Path, known: Collection[str] | None = None) -> Pack:
     # Pin F1 -> F3: a pack with any problem raises PackError naming every one.
-    problems = pack_problems(folder, known)
-    if problems:
-        raise PackError(folder, problems)
-    meta = json.loads((folder / PACK_FILE).read_text(encoding="utf-8"))
-    doc = json.loads((folder / CONTROLS_FILE).read_text(encoding="utf-8"))
+    meta, controls_raw, problems = _checked(folder, known)
+    doc = _parse(CONTROLS_FILE, controls_raw)[0] if not problems else None
+    if problems or not isinstance(meta, dict) or not isinstance(doc, dict):
+        raise PackError(folder, problems or ["the pack changed while it was read"])
     controls = tuple(
         Control(
             item["id"],

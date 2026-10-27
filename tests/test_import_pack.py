@@ -173,7 +173,14 @@ def test_oscal_refuses_a_linked_or_oversized_catalog(
 ) -> None:
     os.symlink(repo / "catalog.json", repo / "link.json")
     assert import_pack.main(["oscal", "--catalog", "link.json", "--ids", "AC-2", "--out", "p"]) == 1
-    assert "is not a regular file" in _err(capsys)
+    assert "--catalog link.json is a symlink" in _err(capsys)
+    assert (
+        import_pack.main(
+            ["cis-map", "--map", "none.csv", "--benchmark", "B", "--version", "1.0.0", "--out", "p"]
+        )
+        == 1
+    )
+    assert "--map none.csv is missing" in _err(capsys)
     size = import_pack.CATALOG_MAX
     monkeypatch.setattr(import_pack, "CATALOG_MAX", 10)
     assert _oscal() == 1
