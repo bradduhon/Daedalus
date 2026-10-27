@@ -43,7 +43,7 @@ Inside the session, type:
 
 The doctor lists every file and tool Daedalus needs, and whether each is present. It changes nothing. `docs/project-requirements.md` describes every file it checks, each with a small example.
 
-Here is the output of a real run in a new repository with one empty commit, no `service-manifest.json` and no `config.json`. The machine had gitleaks installed, gh signed in, a framework cache, and a kernel that can hold the kernel wrapper's rules. Your paths differ. `<repo>` stands for your repository, `<plugin>` for the plugin root, and `~` for your home directory, which the doctor prints in full:
+Here is the output of a real run in a new repository with one empty commit, no `service-manifest.json` and no `config.json`. The machine had gitleaks installed, gh signed in, a framework cache, and a kernel that can hold the kernel wrapper's rules. `CLAUDE_PLUGIN_DATA` was set, as it is inside a Claude Code session. Your paths differ. `<repo>` stands for your repository, `<cache>` for the plugin's data folder, and `<plugin>` for the plugin root:
 
     OK   python >= 3.12
     OK   project data dir: <repo>/.claude/daedalus (not created yet; a train's start creates it)
@@ -54,7 +54,7 @@ Here is the output of a real run in a new repository with one empty commit, no `
     OPT  standards_sources: no standards file or pack is declared. Next: to adopt the shipped baseline pack, add {"kind": "pack", "name": "baseline"} to standards_sources in .claude/daedalus/config.json
     OK   policy: not declared (optional)
     OK   train marker: none
-    OK   cache dir: ~/.claude/plugins/data/daedalus-daedalus, ~/.claude/plugins/data/daedalus-inline (a --plugin-dir session uses daedalus-inline; a marketplace install, the published one or a local clone added with claude plugin marketplace add <clone path>, uses daedalus-<marketplace>)
+    OK   cache dir: CLAUDE_PLUGIN_DATA=<cache>
     OK   plugin root: <plugin>
     OK   frameworks nist: pinned 2026-10-19
     OK   framework pack aws-default: 1.0.0, 34 controls
