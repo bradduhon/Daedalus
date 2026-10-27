@@ -103,6 +103,24 @@ H1_ICASE = (
     "GIT_ICASE_PATHSPECS=1 git add NOTES/a.md",
     "git add ':(icase)NOTES/a.md' $(true)",
 )
+# SC-12 (fix round 1, finding 1): an rg whitelist glob reaches the hidden .claude folder.
+FIX1_RG_GLOBS = (
+    "rg -g .claude -g '*.key' -l . .",
+    "rg --glob=.claude --glob='*.key' -l . .",
+    "rg --iglob .claude --iglob '*.KEY' -l . .",
+    "rg -g '.claude' -g 'reply-hmac.key' -n . .",
+    "rg -g.claude -g'*.key' -l token",
+    "rg -ig .claude -g '*.key' token .",
+    "rg -g '{.claude,x}' -g '*.key' token .",
+    "rg -g '.*' token .",
+    "rg -g '**/*.key' token .",
+)
+# SC-12 (fix round 1, finding 1): positive globs that name no hidden folder or key still pass.
+FIX1_RG_GLOBS_ALLOWED = (
+    "rg -g '*.tf' -g '*.yml' -l token .",
+    "rg -g '!.claude' token .",
+    "rg -e -g token .",
+)
 
 
 def assert_denied(hook_input: dict[str, Any], *markers: str) -> None:

@@ -293,14 +293,23 @@ def key_roots(*paths: str) -> list[str]:
     return sorted(os.path.realpath(k) for k in keys if k.is_absolute() and os.path.lexists(k))
 
 
-def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
-    # SC-12: the Grep tool honors the data folder's `*` marker from above, so only a search
-    # rooted inside .claude, or a glob that overrides the marker, can read the key.
-    raw = glob if isinstance(glob, str) else ""
+def glob_patterns(raw: str) -> list[str]:
     # issue 53: each brace alternative is its own glob; past the cap or on a sequence, a brace is *.
     pats = (expand_braces(raw) or [_braces_to_star(raw)]) if raw else []
     # SC-12: a leading / anchors an rg glob to the search root; the match ignores it.
-    pats = [p.lstrip("/") for p in pats if p.lstrip("/")]
+    return [p.lstrip("/") for p in pats if p.lstrip("/")]
+
+
+def glob_reaches(pats: list[str], rest: list[str]) -> bool:
+    # SC-12: an rg whitelist glob naming any component below the search root, case folded.
+    names = [p.casefold() for p in rest] + ["/".join(rest[i:]).casefold() for i in range(len(rest))]
+    return any(fnmatch.fnmatchcase(name, pat.casefold()) for name in names for pat in pats)
+
+
+def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
+    # SC-12: the Grep tool honors the data folder's `*` marker from above, so only a search
+    # rooted inside .claude, or a glob that overrides the marker, can read the key.
+    pats = glob_patterns(glob if isinstance(glob, str) else "")
     for key in keys:
         if _contains(os.path.dirname(os.path.dirname(key)), target):
             return R_REPLY_KEY_TREE.format(path=target)

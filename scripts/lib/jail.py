@@ -26,6 +26,8 @@ from lib.credential_paths import (
     R_CREDENTIAL,
     R_CREDENTIAL_TREE,
     R_REPLY_KEY,
+    glob_patterns,
+    glob_reaches,
     key_roots,
     path_reason,
     reply_key_hit,
@@ -1497,6 +1499,32 @@ def _tree_reader(
     return None
 
 
+_RG_GLOBS = frozenset({"--glob", "--iglob"})
+
+
+def _rg_globs(args: list[str]) -> list[str]:
+    # SC-12: each -g, --glob or --iglob whitelist; a negated glob only hides, a $ value is *.
+    raws: list[str] = []
+    letters = _SEARCH_VALUES["rg"]
+    i = 0
+    while i < len(args) and args[i] != "--":
+        arg, later = args[i], (args[i + 1 : i + 2] or [""])[0]
+        key, eq, value = arg.partition("=")
+        if arg.startswith("--") and (key in _RG_GLOBS or key in _SEARCH_LONGS) and not eq:
+            raws += [later] if key in _RG_GLOBS else []
+            i += 1
+        elif arg.startswith("--"):
+            raws += [value] if key in _RG_GLOBS else []
+        elif arg.startswith("-"):
+            hit = next((k for k, c in enumerate(arg[1:], 2) if c in letters), None)
+            if hit is not None:
+                raws += [arg[hit:] or later] if arg[hit - 1] == "g" else []
+                i += 0 if arg[hit:] else 1
+        i += 1
+    raws = ["*" if set("$`") & set(r) else r for r in raws if not r.startswith("!")]
+    return [p for raw in raws for p in glob_patterns(raw)]
+
+
 def _tree_reason(
     parsed: list[tuple[list[str], tuple[str, int, set[int]]]],
     envs: list[dict[str, list[str]]],
@@ -1516,6 +1544,7 @@ def _tree_reason(
         if found is None:
             continue
         hidden, ops, implicit = found
+        globs = _rg_globs([_clean(w) for w in words[at + 1 :]]) if name == "rg" else []
         targets = list(bases) if implicit else []
         for i in ops:
             for text, _ in _expand_word(words[i], envs[k]):
@@ -1523,8 +1552,9 @@ def _tree_reason(
         for target in targets:
             for root, dots_hide in pairs:
                 rest = _store_rest(target, root, True, dotglob, dots_hide)
-                # spec 8: rg skips hidden dirs by default, so a hidden component shields a store.
-                if rest is not None and (hidden or not any(p.startswith(".") for p in rest)):
+                # spec 8, SC-12: rg skips hidden dirs unless a flag or a whitelist glob reaches one.
+                shown = hidden or glob_reaches(globs, rest or [])
+                if rest is not None and (shown or not any(p.startswith(".") for p in rest)):
                     return R_CREDENTIAL_TREE.format(path=target)
     return None
 
