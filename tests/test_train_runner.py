@@ -1591,6 +1591,8 @@ def test_docs_verdict_records_the_judged_docs_tip(repo: Path, plugin: Path) -> N
     unmerged = train_runner.record_docs_verdict(repo, "verified", judged=side)
     assert unmerged.code == 1 and "is not merged into the integration tip" in unmerged.lines[0]
     assert "docs_verdict" not in _state(repo)
+    refuted = train_runner.record_docs_verdict(repo, "refuted", judged=head)
+    assert refuted.code == 1 and "verified docs verdict only. Next:" in refuted.lines[0]
     _git(repo, "branch", "-f", branch, head)
     done = train_runner.record_docs_verdict(repo, "verified", judged=head)
     assert done.lines == [f"docs verdict recorded status=verified tip={head[:12]}"]
@@ -1610,6 +1612,11 @@ def test_the_docs_verdict_command_requires_judged_on_verified(repo: Path, plugin
         repo, "verdict", "--repo", str(repo), "--status", "approved", "--judged", head
     )
     assert stray.returncode == 1 and "belongs to --gate docs only. Next:" in stray.stdout
+    refuted = ("verdict", "--repo", str(repo), "--gate", "docs", "--status", "refuted")
+    widened = _train_cli(repo, *refuted, "--judged", head)
+    assert widened.returncode == 1
+    assert "belongs to --gate docs --status verified only. Next:" in widened.stdout
+    assert "docs_verdict" not in _state(repo)
     done = _train_cli(repo, *gate, "--judged", head)
     assert done.returncode == 0, done.stdout + done.stderr
     assert train_state.record(_state(repo), train_state.DOCS_VERDICT)["judged"] == head

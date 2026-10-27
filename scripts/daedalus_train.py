@@ -150,6 +150,14 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
                         "--judged set to the Docs tip: sha of the verifier dispatch."
                     ],
                 )
+            if args.status != "verified" and args.judged is not None:
+                return Outcome(
+                    EXIT_STOP,
+                    [
+                        "verdict --judged belongs to --gate docs --status verified only. Next: "
+                        "rerun the docs verdict without --judged."
+                    ],
+                )
             return record_docs_verdict(repo, args.status, args.tip, args.findings, args.judged)
         if args.judged is not None:
             return Outcome(

@@ -1903,6 +1903,11 @@ def record_docs_verdict(
                 f"docs verdict status {status!r} is neither verified nor refuted. "
                 "Next: rerun verdict --gate docs with the status the verifier's line names."
             )
+        if judged is not None and status != train_state.VERIFIED:
+            raise RunnerError(
+                "--judged belongs to a verified docs verdict only. "
+                "Next: rerun verdict --gate docs without --judged."
+            )
         current = _integration_tip(repo, train_id)
         if tip is not None and tip != current:
             raise RunnerError(
