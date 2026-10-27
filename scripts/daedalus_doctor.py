@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import daedalus_confine  # noqa: E402
-from lib import git  # noqa: E402
+from lib import git, packs  # noqa: E402
 from lib.audit import (  # noqa: E402
     DataDirError,
     cache_dir_matches,
@@ -111,7 +111,9 @@ def _cache_check() -> tuple[bool, str]:
 FRAMEWORK_FAMILIES = ("nist", "owasp", "cis")
 FRAMEWORK_MAX_DAYS = 90
 REFRESH_NEXT = "refresh the framework caches with python3 <plugin>/scripts/refresh_frameworks.py"
-CIS_NEXT = f"place a current benchmark and its manifest entry per {REQ_DOC}"
+CIS_NEXT = (
+    f"build a CIS id-map pack with python3 <plugin>/scripts/import_pack.py cis-map per {REQ_DOC}"
+)
 
 
 def _oldest_pin(manifest: Path) -> date | None:
@@ -148,6 +150,99 @@ def _framework_lines() -> Iterator[tuple[bool, str]]:
     except RuntimeError:
         return
     yield from _framework_checks(cache, datetime.now(UTC).date())
+
+
+PACK_DIR_NEXT = "create it or remove frameworks.pack_dir from service-manifest.json"
+PACK_SHIPPED_NEXT = "reinstall the Daedalus plugin; a shipped pack is never edited in place"
+PACK_SHIPPED_OLD_NEXT = "update the Daedalus plugin to a release with a newer shipped pack"
+# 0157 (spec 2.2 point 6): the one remaining refresh hint, in its full form.
+PACK_OSCAL_NEXT = (
+    "download the NIST catalog with python3 <plugin>/scripts/refresh_frameworks.py --only "
+    "nist-800-53 --cache-root <dir>, then rebuild the pack with python3 "
+    "<plugin>/scripts/import_pack.py oscal --catalog <dir>/frameworks/nist/catalog.json "
+    "--ids {ids} --out {out}"
+)
+PACK_CIS_NEXT = (
+    "rebuild the pack from your CIS id map with python3 <plugin>/scripts/import_pack.py cis-map "
+    "--map <csv> --benchmark <name> --version <x.y.z> --out {out}"
+)
+PACK_OTHER_NEXT = (
+    f"fix the pack files or rebuild the pack with python3 <plugin>/scripts/import_pack.py per "
+    f"{REQ_DOC}"
+)
+
+
+def _printable(text: str) -> str:
+    # 0023: pack and marker text is untrusted; control characters never reach the terminal.
+    return "".join(c for c in text if c.isprintable())
+
+
+def _pack_meta(folder: Path) -> dict[str, object]:
+    # 2.6: pack.json alone picks the Next line, so a pack with a bad controls.json still gets one.
+    raw, _ = packs.read_capped(folder / packs.PACK_FILE)
+    meta = packs._parse(packs.PACK_FILE, raw)[0] if raw is not None else None
+    return meta if isinstance(meta, dict) else {}
+
+
+def _pack_next(folder: Path, meta: dict[str, object], old: bool = False) -> str:
+    # 2.5: the importer each pack came from, told by its license; a shipped pack has none.
+    license_ = meta.get("license")
+    if folder.parent == packs.FRAMEWORKS_DIR:
+        return PACK_SHIPPED_OLD_NEXT if old else PACK_SHIPPED_NEXT
+    if license_ == packs.NIST_LICENSE:
+        ids = ",".join(sorted(packs.control_ids([folder]))) or "<ids>"
+        return PACK_OSCAL_NEXT.format(ids=ids, out=folder)
+    if license_ == packs.ID_MAP_LICENSE:
+        return PACK_CIS_NEXT.format(out=folder)
+    return PACK_OTHER_NEXT
+
+
+def _pack_dir_check(repo: Path) -> Iterator[tuple[bool, str]]:
+    # 2.6: pack_folders reads a missing pack_dir as empty; the doctor names it instead.
+    manifest = load_manifest(repo)
+    pack_dir = manifest.frameworks.pack_dir if manifest is not None else None
+    if pack_dir is None:
+        return
+    path = project_root(str(repo)) / pack_dir
+    if path.is_symlink():
+        problem = f"{pack_dir} is a symlink, which the pack reader never follows"
+    elif not path.is_dir():
+        problem = f"{pack_dir} is not a folder"
+    else:
+        return
+    yield False, _printable(f"MISS framework packs: {problem}. Next: {PACK_DIR_NEXT}")
+
+
+def _pack_checks(repo: Path, today: date) -> Iterator[tuple[bool, str]]:
+    # 0157, pin F2 -> F3: one line per pack the next train reads; OLD never fails the doctor.
+    try:
+        yield from _pack_dir_check(repo)
+        folders = packs.pack_folders(repo)
+    except ManifestError:
+        return  # 0054: the manifest line already reports the refusal as a MISS.
+    for folder in folders:
+        try:
+            pack = packs.load_pack(folder)
+        except packs.PackError as exc:
+            nxt = _pack_next(folder, _pack_meta(folder))
+            for problem in exc.problems:
+                yield (
+                    False,
+                    _printable(f"MISS framework pack {folder.name}: {problem}. Next: {nxt}"),
+                )
+            continue
+        pinned = date.fromisoformat(pack.pinned_on)
+        days = (today - pinned).days
+        name = f"framework pack {pack.id}"
+        if days > FRAMEWORK_MAX_DAYS:
+            nxt = _pack_next(folder, {"license": pack.license}, old=True)
+            yield True, _printable(f"OLD  {name}: pinned {pinned} ({days} days). Next: {nxt}")
+        else:
+            yield True, f"OK   {name}: {pack.version}, {len(pack.controls)} controls"
+
+
+def _pack_lines(repo: Path) -> Iterator[tuple[bool, str]]:
+    yield from _pack_checks(repo, datetime.now(UTC).date())
 
 
 def _plugin_root_check() -> tuple[bool, str]:
@@ -312,7 +407,7 @@ def _marker_check(repo: Path) -> tuple[bool, str]:
         # 0023: a symlinked marker is never followed; its target could be anything.
         text = "symlink" if marker.is_symlink() else marker.read_text(encoding="utf-8")
         # 0023: the first line only, printable characters only; a hand-written id is untrusted.
-        first = "".join(c for c in text.split("\n", 1)[0] if c.isprintable())
+        first = _printable(text.split("\n", 1)[0])
         train_id = first.strip()[:32] or "empty"
     except (OSError, UnicodeDecodeError):
         train_id = "unreadable"
@@ -563,6 +658,7 @@ def checks(repo: Path, run_typecheck: bool = False) -> Iterator[tuple[bool, str]
     yield _cache_check()
     yield _plugin_root_check()
     yield from _framework_lines()
+    yield from _pack_lines(repo)
     yield _gitleaks_check(repo)
     yield from _gh_checks(repo)
     yield from _hook_failure_check()
