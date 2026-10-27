@@ -11,7 +11,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.agent_models import AgentModelError, resolve  # noqa: E402
 from lib.audit import DataDirError  # noqa: E402
+from lib.briefs import BriefError, brief_file_problems  # noqa: E402
 from lib.config import ConfigError, load_config  # noqa: E402
+from lib.manifest import ManifestError  # noqa: E402
 from lib.project_root import repo_refusal  # noqa: E402
 from lib.train_runner import (  # noqa: E402
     EXIT_OK,
@@ -40,7 +42,8 @@ from lib.train_state import TrainStateError  # noqa: E402
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
-        "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model. "
+        "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
+        "brief-check. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -102,7 +105,26 @@ def _parser() -> argparse.ArgumentParser:
     model.add_argument("--repo", type=Path, required=True)
     model.add_argument("--agent", required=True)
     model.add_argument("--override")
+    # 0153, 0157 (12.5): a decision brief checked at the manifest literacy level.
+    brief = sub.add_parser("brief-check")
+    brief.add_argument("--repo", type=Path, required=True)
+    brief.add_argument("--brief", type=Path, required=True)
     return parser
+
+
+def _brief_check(repo: Path, brief: Path) -> Outcome:
+    try:
+        level, problems = brief_file_problems(repo, brief)
+    except (BriefError, ManifestError) as exc:
+        return Outcome(EXIT_STOP, [str(exc)])
+    if not problems:
+        return Outcome(EXIT_OK, ["brief ok"])
+    lines = [f"brief: {problem}" for problem in problems]
+    lines.append(
+        f"Next: rewrite each named question, context sentence or option label at the {level} "
+        "level, then run brief-check again."
+    )
+    return Outcome(EXIT_STOP, lines)
 
 
 def _model(repo: Path, agent: str, override: str | None) -> Outcome:
@@ -160,6 +182,8 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return summary(repo)
     if args.action == "model":
         return _model(repo, args.agent, args.override)
+    if args.action == "brief-check":
+        return _brief_check(repo, args.brief)
     if args.action == "check-reply":
         return check_reply(repo, args.stage)
     if args.action == "state":

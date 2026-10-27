@@ -11,6 +11,8 @@ Human-facing text (0031): Text a human reads names each item in words: a short l
 
 This skill runs outside a train only (0152). It dispatches the planner, the web researcher and, at the hand-off, the verifier, and nothing else. It relays rounds between the planner and the operator and writes no file: the planner writes the spec and later the plan.
 
+Literacy (0153): read `docs.literacy` from `<repo>/service-manifest.json` and write every question this skill asks the operator at that level, `plain` when the file or key is absent. The planner's rounds are printed as written and are not reworded.
+
 ## Inputs
 
 1. Set `<override>` when `$ARGUMENTS` ends with `--model <value>`, and drop those two words. When the first word of what is left names a readable file, set `<notes>` to that file. Otherwise the whole text is `<idea>`. Empty arguments: stop. Next: run `/daedalus:brainstorm` with the idea in words or the path of a notes file.
