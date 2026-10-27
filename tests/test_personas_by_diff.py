@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -262,46 +261,59 @@ def _orchestrator() -> str:
     return (AGENTS / "orchestrator.md").read_text(encoding="utf-8")
 
 
+def _phase(name: str) -> str:
+    # 0165: the orchestrator reads and runs each phase from its skill.
+    return (REPO_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+
+
+# 0169: the phase skills say run where the catalog's labels still say train (R1).
+PER_FINDING_RUN = PER_FINDING.replace("the train", "the run")
+
+
 def test_phase_3_step_2_consults_both_judges_by_diff_content() -> None:
-    text = _orchestrator()
-    step2 = text[text.index("2. Policy gate:") : text.index("3. SendMessage(standards specialist")]
+    text = _phase("audit")
+    step2 = text[text.index("1. Policy gate:") : text.index("### Auditor rounds")]
     flat = " ".join(step2.split())
+    rejected = " ".join(text.split("\n8. Per-finding step.", 1)[1].split("\n9. ", 1)[0].split())
+    assert f"with the choices {PER_FINDING_RUN}" in rejected
     for phrase in (
         "Consults by diff content (0132), beside the standards specialists",
-        "Agent(`dependency-auditor`)",
-        "Agent(`terraform-reviewer`)",
+        "dispatch `dependency-auditor`",
+        "dispatch `terraform-reviewer`",
         "`.tf` or `.tfvars`",
         "`features.dependency_web_lookup` is `false`",
         "`features.terraform_tools` is `false`",
         "The reviewer checks for the terraform binary itself.",
         "[STATUS: YIELD_WEB] <query>",
         "never the audit gate",
-        f"through the per-finding step of Phase 3, one decision question per FAIL with the "
-        f"options {PER_FINDING}",
+        "through the per-finding step below, one decision question per FAIL",
     ):
         assert phrase in flat, phrase
 
 
 def test_documentation_stage_sits_directly_before_recovery() -> None:
+    # 0165: the orchestrator runs the document phase after the audit, before any recovery round.
     text = _orchestrator()
-    headings = re.findall(r"^## .+$", text, re.M)
-    assert headings.index("## Documentation stage") + 1 == headings.index("## Recovery")
-    stage = text[text.index("## Documentation stage") : text.index("## Recovery")]
+    phases = text[text.index("## Phases") : text.index("## Recovery")]
+    audit = phases.index("Read and run `<plugin root>/skills/audit/SKILL.md`")
+    assert audit < phases.index("Read and run `<plugin root>/skills/document/SKILL.md`")
+    doc = _phase("document")
+    stage = doc[doc.index("### Public docs mode") : doc.index("### Derived document mode")]
     flat = " ".join(stage.split())
     for phrase in (
         "after the security verdict record",
         "--name <train-id>-docstage --base daedalus/<train-id>",
-        "Agent(`docs-writer`)",
+        "dispatch `docs-writer`",
         "the hand-back summary of every unit whose agent changed something",
         "the line `Worktree: <docs worktree path>`",
         "the first line `CLAIMS MODE.`",
         "`Claim: <doc path>:<line> <claim>`",
         "`docs.literacy`",
-        f"one decision question per refuted claim with the options {PER_FINDING}",
+        f"one decision question per refuted claim with the options {PER_FINDING_RUN}",
     ):
         assert phrase in flat, phrase
-    for doc in FOUR_DOCS:
-        assert doc in flat, doc
+    for name in FOUR_DOCS:
+        assert name in flat, name
 
 
 # Train summary (requirement 7).

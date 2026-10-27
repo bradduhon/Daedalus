@@ -65,7 +65,7 @@ def _flat(rel: str) -> str:
 def test_the_docs_stage_worktree_is_named_docstage() -> None:
     assert dispatch_binding.docs_unit(TRAIN) == f"{TRAIN}-docstage"
     assert train_state.DOCS_SUFFIX == dispatch_binding.DOCS_SUFFIX == "-docstage"
-    for rel in ("agents/orchestrator.md", "skills/catalog/SKILL.md", "agents/docs-writer.md"):
+    for rel in ("skills/document/SKILL.md", "skills/catalog/SKILL.md", "agents/docs-writer.md"):
         text = _flat(rel)
         assert "<train-id>-docstage" in text, rel
         assert "<train-id>-docs`" not in text and "<train-id>-docs " not in text, rel
@@ -357,11 +357,14 @@ def test_a_priorities_yield_names_the_operator_as_its_answerer(tmp_path: Path) -
 
 
 def test_the_yield_table_routes_priorities_rule_yields_to_the_operator() -> None:
-    recipe = (REPO_ROOT / "agents" / "orchestrator.md").read_text(encoding="utf-8")
-    row = next(ln for ln in recipe.splitlines() if ln.startswith("| `[STATUS: YIELD_STANDARDS]"))
+    # 0165: the yield table lives in the build phase skill the orchestrator runs.
+    recipe = (REPO_ROOT / "skills" / "build" / "SKILL.md").read_text(encoding="utf-8")
+    row = next(ln.strip() for ln in recipe.splitlines() if "| `[STATUS: YIELD_STANDARDS]" in ln)
     assert "A question that starts `priorities rule <n>:` is a surfaced default" in row
-    assert "goes to the operator as the Priorities rule says" in row
+    assert "it goes to the operator as a decision brief" in row
     assert "never to the standards specialist" in row
+    rules = (REPO_ROOT / "agents" / "orchestrator.md").read_text(encoding="utf-8")
+    assert "put it to the operator as a `then surface` decision brief" in rules
 
 
 # Requirement 9: "priorities": null reads as no block declared.

@@ -85,8 +85,21 @@ def _prompt(text: str) -> str:
 
 
 def _step4() -> str:
-    recipe = (REPO_ROOT / "agents" / "orchestrator.md").read_text(encoding="utf-8")
-    return recipe.split("## Phase 3", 1)[1].split("\n4. ", 1)[1].split("\n5. ", 1)[0]
+    # 0165: the rejected round is the audit phase skill's steps 7 and 8.
+    skill = (REPO_ROOT / "skills" / "audit" / "SKILL.md").read_text(encoding="utf-8")
+    return skill.split("\n7. ", 1)[1].split("\n9. ", 1)[0]
+
+
+def _catalog() -> str:
+    return (REPO_ROOT / "skills" / "catalog" / "SKILL.md").read_text(encoding="utf-8")
+
+
+# 0169: the phase skills say run where the catalog's prompt still says train (R1).
+PROMPT_END_RUN = PROMPT_END.replace("the train", "the run")
+CATALOG_PROMPT = (
+    "through the per-finding audit prompt of the catalog "
+    "(`${CLAUDE_PLUGIN_ROOT}/skills/catalog/SKILL.md`)"
+)
 
 
 # Requirements 1 and 2: the verdict command records the round and prints no stall word.
@@ -352,9 +365,14 @@ def test_the_orchestrator_puts_each_finding_to_the_operator() -> None:
     assert "It prints `recorded rejected round=<n> findings=<k>`" in flat
     for word in RETIRED_WORDS:
         assert word not in flat, word
-    assert "every finding in the round's findings file goes to the operator as one decision" in flat
-    assert "plus the tracking question on an exemption" in flat
-    prompt = _prompt(step)
+    assert "Every finding in the round's findings file goes to the operator as one decision" in flat
+    assert "and the tracking question (`Skip it`, `Track it`, `Exempt it` or other)" in flat
+    # 0165: the audit phase reads the catalog's one copy of the prompt.
+    assert CATALOG_PROMPT in flat and PROMPT_START not in flat
+    run = [choice.replace("the train", "the run") for choice in CHOICES]
+    run[2] = "`Stop the run`"
+    assert [flat.index(choice) for choice in run] == sorted(flat.index(c) for c in run)
+    prompt = _prompt(_catalog())
     places = [prompt.index(choice) for choice in CHOICES]
     assert places == sorted(places)
     tracking = prompt.split("- Tracking question", 1)[1]
@@ -367,8 +385,8 @@ def test_the_orchestrator_puts_each_finding_to_the_operator() -> None:
         assert choice in tracking, choice
     head = prompt.split("- Tracking question", 1)[0]
     assert not any(choice in head for choice in TRACKING[:3])
-    assert PROMPT_END in flat
-    assert flat.index(PROMPT_END) < flat.index("SendMessage(each responsible coder")
+    assert PROMPT_END_RUN in flat
+    assert flat.index(PROMPT_END_RUN) < flat.index("Each responsible coder resumes with a `FIX.`")
     assert "`[STATUS: EXCEPTION] ledger_id=<the exception ruling's id>`" in flat
     assert "`Exempt: <finding id> tracking=<dropped, issue, local or other>`" in flat
     assert "daedalus_train.py exception" not in (
@@ -379,14 +397,16 @@ def test_the_orchestrator_puts_each_finding_to_the_operator() -> None:
 def test_the_recovery_round_uses_the_per_finding_step() -> None:
     recipe = (REPO_ROOT / "agents" / "orchestrator.md").read_text(encoding="utf-8")
     recovery = " ".join(recipe.split("## Recovery", 1)[1].split("## Status contract", 1)[0].split())
-    assert (
-        "Run the step 4 per-finding step with these findings, one question per finding" in recovery
-    )
-    assert "escalation" not in recovery
+    assert "return `[STATUS: DECISION]` with one question per finding" in recovery
+    assert "act on the picks as the audit phase's step 8 says" in recovery
+    skill = (REPO_ROOT / "skills" / "audit" / "SKILL.md").read_text(encoding="utf-8")
+    round_ = " ".join(skill.split("### Recovery round", 1)[1].split("## Evidence", 1)[0].split())
+    assert "Run the step 8 per-finding step with these findings, one question per finding" in round_
+    assert "escalation" not in recovery and "escalation" not in round_
 
 
 def test_the_orchestrator_frontmatter_and_status_contract_are_unchanged() -> None:
-    # Requirement 9: the generated agent tables read these lines, so they stay as they were.
+    # Requirement 9: the generated agent tables read these lines; 0168 adds the announce line.
     recipe = (REPO_ROOT / "agents" / "orchestrator.md").read_text(encoding="utf-8")
     head = recipe.split("\n---\n", 1)[0]
     assert (
@@ -397,7 +417,8 @@ def test_the_orchestrator_frontmatter_and_status_contract_are_unchanged() -> Non
     ) in head
     assert "model: fable" in head and "shape: dispatcher" in head
     contract = recipe.split("## Status contract\n", 1)[1].splitlines()
-    assert contract[1:5] == [
+    assert contract[1:6] == [
+        "- `[STATUS: ANNOUNCE] size=<size> phases=<list>`",
         "- `[STATUS: DECISION] brief=<path> questions=<n>`",
         "- `[STATUS: EXCEPTION] ledger_id=<id>`",
         "- `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path> tip=<40 hex>`",
@@ -407,8 +428,10 @@ def test_the_orchestrator_frontmatter_and_status_contract_are_unchanged() -> Non
 
 def test_the_prompt_uses_the_operators_plain_labels() -> None:
     # Contract v2 pins 7 and 12: the three verb labels, the three tracking labels, stored values.
-    catalog = (REPO_ROOT / "skills" / "catalog" / "SKILL.md").read_text(encoding="utf-8")
-    for prompt in (_prompt(_step4()), _prompt(catalog)):
+    catalog = _catalog()
+    step = " ".join(_step4().split())
+    assert "`Fix it now (Recommended)`, `Skip, track or exempt it` and `Stop the run`" in step
+    for prompt in (_prompt(catalog),):
         head, tracking = prompt.split("- Tracking question", 1)
         choices = [
             "- `Fix it now (Recommended)`: runs a fix round.",
@@ -433,8 +456,12 @@ def test_the_prompt_uses_the_operators_plain_labels() -> None:
 
 
 def test_the_catalog_carries_the_same_per_finding_prompt() -> None:
-    catalog = (REPO_ROOT / "skills" / "catalog" / "SKILL.md").read_text(encoding="utf-8")
-    assert _prompt(catalog) == _prompt(_step4())
+    catalog = _catalog()
+    # 0165: one copy; the audit phase points at it and the orchestrator carries none.
+    assert _prompt(catalog)
+    assert CATALOG_PROMPT in " ".join(_step4().split())
+    orchestrator = (REPO_ROOT / "agents" / "orchestrator.md").read_text(encoding="utf-8")
+    assert PROMPT_START not in " ".join((orchestrator + _step4()).split())
     section = " ".join(catalog.split("## The per-finding audit prompt", 1)[1].split())
     assert section.startswith("Every rejected round puts each finding in its findings file")
     assert "## The audit escalation prompt" not in catalog

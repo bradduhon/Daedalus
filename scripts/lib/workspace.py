@@ -931,7 +931,7 @@ VERIFIED_LINE = re.compile(r"\[VERDICT: VERIFIED\] claims=[0-9]+")
 VERIFIER = "verifier"
 _UNIT_LINE = "Unit worktree: "
 _DISPATCH_TOOLS = ("Agent", "SendMessage")
-# 101, agents/orchestrator.md:135: the relay's begin marker; a payload can forge the end marker.
+# 101, skills/build/SKILL.md:32: the relay's begin marker; a payload can forge the end marker.
 PAYLOAD_BEGIN = "--- research payload begin"
 
 

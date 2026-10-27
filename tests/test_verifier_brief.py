@@ -212,36 +212,41 @@ def test_a_clause_number_beside_a_receipt_gets_two_checks() -> None:
 
 def test_orchestrator_sends_the_brief_and_counts_only_code_and_scope_rows() -> None:
     # VER 7: the verifier step and the two VERDICT route rows of Phase 2.
-    text = ORCHESTRATOR.read_text(encoding="utf-8")
-    phase2 = text.split("## Phase 2", 1)[1].split("## Phase 3", 1)[0]
-    step = _flat(phase2.split("Verifier step (spec 5): ", 1)[1].split("\n", 1)[0])
-    assert (
-        "the verifier judges the unit's diff against its brief, never against the reply (0128)"
-        in step
+    # 0165: the verifier step is the verify phase skill the orchestrator runs per unit.
+    assert "skills/verify/SKILL.md` in unit mode" in ORCHESTRATOR.read_text(encoding="utf-8")
+    phase2 = (REPO_ROOT / "skills" / "verify" / "SKILL.md").read_text(encoding="utf-8")
+    phase2 = (
+        phase2.split("### Unit mode", 1)[0]
+        + phase2.split("### Unit mode", 1)[1].split("### Claims mode", 1)[0]
     )
-    assert "the line `Brief: <the unit's brief path from Phase 2>`" in step
+    step = _flat(phase2)
+    assert (
+        "The verifier judges each unit's diff against its brief, never against the coder's "
+        "report (0128)" in step
+    )
+    assert "the line `Brief: <the unit's brief path from the build phase>`" in step
     assert (
         "the line `Map: <repo>/docs/.tmp/daedalus/<train-id>/map/map.json` when that file exists"
         in step
     )
-    assert "the `## Receipts` block above it as receipts only" in step
+    assert "the `## Receipts` block above it, as receipts only" in step
     # V1 reqs 1 and 2, spec 9.2 and 6.4: named ranges, and lint judged from the receipts.
+    assert "the line `Read: <file>:<first>-<last>[, ...]` from step 3" in step
     assert (
-        "the line `Read: <file>:<first>-<last>[, ...]` built from the changed hunks of "
-        "`git diff --unified=0 <lock>...<b>` plus the map's importer lines for each changed module"
-        in step
-    )
+        "Then, for each changed module, add the line of each importer its map entry "
+        "`imports.<module path>.fan_in` names that imports it"
+    ) in step
     assert "`git -C <repo> diff -U0 <lock sha>...<b>`" in step
     assert (
         "Typecheck and lint receipts are judged from the coder's receipts block, not rerun; "
         "only a pytest run is reproduced." in step
     )
     rows = phase2.splitlines()
-    verified = next(ln for ln in rows if ln.startswith("| `[VERDICT: VERIFIED] claims=<n>`"))
+    verified = next(ln for ln in rows if ln.startswith("   - `[VERDICT: VERIFIED] claims=<n>`"))
     assert "the `<k>` of the `corrected=<k>` line above the verdict" in verified
     assert "never counts as a refutation (0127)" in verified
-    refuted = next(ln for ln in rows if ln.startswith("| `[VERDICT: REFUTED]"))
-    assert "Only rows of class `code` or `scope` count (0127)" in refuted
+    refuted = next(ln for ln in rows if ln.startswith("   - `[VERDICT: REFUTED]"))
+    assert "only rows of class `code` or `scope` count (0127)" in refuted
     assert '"FIX. The verifier refuted: <code and scope rows>"' in refuted
 
 

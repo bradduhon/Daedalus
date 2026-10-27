@@ -42,8 +42,8 @@ LONG = (
 )
 # 0153: 27 words; over standard's 22 too.
 LONGER = LONG[:-1] + " on the same machine at the same time today."
+# 0165: the orchestrator reads the catalog's per-finding prompt; it ships no copy of its own.
 SHIPPED = (
-    REPO_ROOT / "agents" / "orchestrator.md",
     REPO_ROOT / "skills" / "catalog" / "SKILL.md",
     REPO_ROOT / "skills" / "plan" / "SKILL.md",
 )
@@ -156,7 +156,8 @@ def test_every_shipped_example_question_and_label_passes_at_plain() -> None:
         text = path.read_text(encoding="utf-8")
         questions += _QUOTED.findall(text)
         labels += _LABEL.findall(text)
-    assert len({p for p in SHIPPED if _QUOTED.search(p.read_text(encoding="utf-8"))}) == 3
+    assert len({p for p in SHIPPED if _QUOTED.search(p.read_text(encoding="utf-8"))}) == 2
+    assert _QUOTED.search((REPO_ROOT / "agents" / "orchestrator.md").read_text("utf-8")) is None
     # pin A1 -> P1: the three gate labels are among the shipped labels.
     for gate in ("Fix it now (Recommended)", "Skip, track or exempt it", "Stop the train"):
         assert gate in labels, gate
@@ -263,7 +264,9 @@ def test_recipes_name_the_check_and_the_literacy_rule() -> None:
     assert check in decisions
     assert decisions.index("brief-check") < decisions.index("A brief file holds one section")
     assert "rewrite the brief at the same path and run the check again" in decisions
-    assert "return `[STATUS: DECISION]` once its brief check prints `brief ok`" in orchestrator
+    # 0165: the audit phase's per-finding step returns its brief after the check.
+    audit = (REPO_ROOT / "skills" / "audit" / "SKILL.md").read_text(encoding="utf-8")
+    assert "return `[STATUS: DECISION]` once its brief check prints `brief ok`" in audit
     for path in (
         REPO_ROOT / "agents" / "orchestrator.md",
         REPO_ROOT / "skills" / "plan" / "SKILL.md",

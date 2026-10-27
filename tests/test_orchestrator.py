@@ -252,6 +252,24 @@ def test_orchestrator_without_the_dispatch_gate_is_refused(
 
 
 _RECIPE_CMD = re.compile(r"`(python3 <plugin root>/scripts/[^`]+)`")
+# 0165: the phase skills the orchestrator reads and runs, in run order.
+RUN_PHASES = ("plan", "build", "verify", "audit", "document")
+# 0119: the main session runs these two; the phase skills name them as its commands.
+MAIN_ONLY = ("daedalus_train.py exception", "daedalus_train.py reaudit")
+
+
+def _phase_text(name: str) -> str:
+    # 0060: the orchestrator writes the plugin root out in full; its hook refuses the variable.
+    text = (REPO_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+    return text.replace("${CLAUDE_PLUGIN_ROOT}", "<plugin root>")
+
+
+def _phase_step(name: str, first: int, last: int | None = None) -> str:
+    body = _phase_text(name).split(f"\n{first}. ", 1)[1]
+    end = first if last is None else last
+    return re.split(rf"\n(?:{end + 1}\. |#)", body, maxsplit=1)[0]
+
+
 INSPECT = [
     "git merge-base --is-ancestor abc123 daedalus-unit/t-u1",
     f"git -C {CWD} rev-parse daedalus/t",
@@ -265,11 +283,13 @@ INSPECT = [
 
 def _recipe_commands() -> list[str]:
     text = AGENT_FILE.read_text(encoding="utf-8").split("\n---\n", 1)[1]
+    # 0165: the commands of every phase skill the orchestrator runs pass its hooks too.
+    text = "\n".join([text, *(_phase_text(name) for name in RUN_PHASES)])
     # The rules line names the template `python3 <plugin root>/scripts/<script>` itself.
     found = [
         m.replace("<plugin root>", str(REPO_ROOT))
         for m in _RECIPE_CMD.findall(text)
-        if "/scripts/<script>" not in m
+        if "/scripts/<script>" not in m and not any(cmd in m for cmd in MAIN_ONLY)
     ]
     # MAP -> REQ: the map's --out names the active train, which the jail fakes read as TRAIN_BRANCH.
     train = TRAIN_BRANCH.removeprefix("daedalus/")
@@ -282,9 +302,8 @@ def test_recipe_names_every_train_script_it_may_run() -> None:
     names = {cmd.split()[1].rsplit("/", 1)[1] for cmd in commands}
     allowlist = load("command_allowlist")
     # refresh_frameworks.py is the operator's own-shell Next line, never the orchestrator's call.
-    # Pin SRC -> MAP: the document train recipe runs freeze_sources.py, not this Build Train one.
-    expected = set(allowlist.TRAIN_SCRIPTS) - {"freeze_sources.py"}
-    assert names - {"refresh_frameworks.py"} == expected
+    # Pin SRC -> MAP: the document phase's derived mode runs freeze_sources.py (0165).
+    assert names - {"refresh_frameworks.py"} == set(allowlist.TRAIN_SCRIPTS)
 
 
 @pytest.mark.usefixtures("jail_fakes")
@@ -303,19 +322,15 @@ def test_recipe_runs_the_refresh_and_model_subcommands() -> None:
     assert {"daedalus_workspace.py refresh", "daedalus_train.py model"} <= names
 
 
-def _phase2() -> str:
-    return (
-        AGENT_FILE.read_text(encoding="utf-8").split("## Phase 2", 1)[1].split("## Phase 3", 1)[0]
-    )
-
-
 def test_recipe_names_the_verifier_step_and_the_one_pass_rule() -> None:
-    # spec 5: once per unit, after the COMPLETE checks and before finish; one FIX pass, then stop.
-    phase2 = _phase2()
-    step = " ".join(phase2.split("Verifier step (spec 5): ", 1)[1].split("\n", 1)[0].split())
-    assert step.startswith("once per unit, after its `[STATUS: COMPLETE]` passes the branch")
-    assert "and before finish merges it" in step
-    assert "Agent(`verifier`)" in step and "The verifier stays warm (0086)" in step
+    # spec 5: once per unit, after the COMPLETE checks and before finish; one FIX pass (0161).
+    verify = "Read and run `<plugin root>/skills/verify/SKILL.md` in unit mode"
+    assert verify in AGENT_FILE.read_text(encoding="utf-8")
+    step = " ".join(_phase_step("verify", 1, 4).split())
+    assert step.startswith("When it runs (spec 5). Once per unit, after its `[STATUS: COMPLETE]`")
+    assert "passes the branch, packet, descent and jail check rows" in step
+    assert "and before the build phase's finish merges it" in step
+    assert "Dispatch `verifier` with:" in step and "The verifier stays warm (0086)" in step
     assert "`[VERDICT: VERIFIED] claims=<n>` or `[VERDICT: REFUTED] <rows>`" in step
     # 0086: a resume's Worktree: line rebinds a coder, so the verifier gets a Unit worktree: line.
     assert "the line `Unit worktree: <unit worktree path>`" in step
@@ -329,12 +344,14 @@ def test_recipe_names_the_verifier_step_and_the_one_pass_rule() -> None:
     )
     assert "never replaces the full diff, whose `-` lines show a removed guard" in step
     assert "`git -C <repo> diff -U0 <lock sha>...<b>`" in step
-    refuted = next(ln for ln in phase2.splitlines() if ln.startswith("| `[VERDICT: REFUTED]"))
+    route = _phase_step("verify", 5)
+    refuted = next(ln for ln in route.splitlines() if ln.startswith("   - `[VERDICT: REFUTED]"))
     fix = 'SendMessage(that unit\'s coder, "FIX. The verifier refuted: <code and scope rows>")'
     assert fix in refuted
-    assert "A second REFUTED on the same unit stops the train with the rows shown" in refuted
-    assert any(ln.startswith("| `[VERDICT: VERIFIED] claims=<n>`") for ln in phase2.splitlines())
-    merge = AGENT_FILE.read_text(encoding="utf-8").split("## Phase 3", 1)[1].split("\n2. ", 1)[0]
+    # 0161: a later refutation goes to the operator; it no longer stops the run by itself.
+    assert "A later REFUTED on the same unit goes to the operator as a decision" in refuted
+    assert any(ln.startswith("   - `[VERDICT: VERIFIED] claims=<n>`") for ln in route.splitlines())
+    merge = _phase_step("build", 10)
     assert "its verifier verdict is `[VERDICT: VERIFIED]`" in merge
 
 
@@ -347,7 +364,8 @@ def _recipe() -> str:
 
 
 def _step5() -> str:
-    return _recipe().split("\n5. `[VERDICT: APPROVED]", 1)[1].split("\n6. The summary", 1)[0]
+    # 0165: the ledger, verdict and summary step lives in the audit phase skill.
+    return _phase_step("audit", 9)
 
 
 def _recovery() -> str:
@@ -367,7 +385,9 @@ def test_recipe_records_the_ledger_then_the_verdict_then_the_summary_command() -
     approved = PLUGIN + "daedalus_train.py verdict --repo <repo> --status approved --round <n>"
     last = "   - Summary command, the last step (issue 73, 0046): after the verdict record, run"
     assert step5.index(LEDGER_CMD) < step5.index(approved) < step5.index(last)
-    assert step5.index(last) < step5.rindex(SUMMARY_CMD) and "Step 7 follows it" in step5
+    assert step5.index(last) < step5.rindex(SUMMARY_CMD)
+    # 0165: the orchestrator's Completion step follows the audit phase's last summary command.
+    assert "Completion. Print the State Block" in _recipe()
     # audit_proof.summary_anchor: the first summary command record after the recorded reply.
     assert "the first summary command record after the auditor reply the verdict record" in step5
     assert "this command runs after the verdict record and before any later auditor round" in step5
@@ -375,15 +395,17 @@ def test_recipe_records_the_ledger_then_the_verdict_then_the_summary_command() -
     # REAUDIT reaches the orchestrator only by SendMessage, so it runs in the build session.
     round_ = _recovery().split("Recovery round (issue 73). ", 1)[1].split("\nLedger resume", 1)[0]
     assert "the round runs in the session the summary's `Session <id>:` line names" in round_
+    assert "The round runs in the session the summary's `Session <id>:` line names" in (
+        _phase_step("audit", 10)
+    )
 
 
 def test_recipe_routes_a_probe_only_reply_as_a_resume_to_append() -> None:
     # issue 20: a charter-docs LEDGER_PROBED reply resumes it to append; it is no off-contract stop.
     step5 = _step5()
-    route = step5.split("`[STATUS: LEDGER_PROBED] <probe line>`: ", 1)[1].split(". `[STATUS:", 1)[0]
-    assert route.startswith("charter-docs ran only the probe, so resume it to append (issue 20)")
-    assert 'SendMessage(charter-docs, "RESUME. The probe printed: <probe line>.' in route
-    assert "return COMMITTED." in route
+    route = step5.split("`[STATUS: LEDGER_PROBED]`", 1)[1].split("; `[STATUS:", 1)[0]
+    assert route.startswith(" resumes charter-docs to append and commit")
+    assert "`[STATUS: LEDGER_APPENDED]` resumes it to commit" in step5
 
 
 def test_recipe_handles_the_reaudit_and_ledger_resume_messages() -> None:
@@ -397,18 +419,24 @@ def test_recipe_handles_the_reaudit_and_ledger_resume_messages() -> None:
         assert PLUGIN + cmd not in text, cmd
     brief = text.split("## Your brief", 1)[1].split("Rules for the whole train:", 1)[0]
     assert "A prompt whose first line starts `RESUME LEDGER.` is a ledger resume" in brief
-    rules = text.split("Rules for the whole train:", 1)[1].split("## Phase 1", 1)[0]
+    rules = text.split("Rules for the whole train:", 1)[1].split("## Entry shapes", 1)[0]
     assert "no reaudit and no exception record" in rules
     round_ = recovery.split("Recovery round (issue 73). ", 1)[1].split("\nLedger resume", 1)[0]
-    refresh = PLUGIN + "daedalus_workspace.py refresh --repo <repo> --name <train-id>-audit`"
+    assert "read and run the recovery round of `<plugin root>/skills/audit/SKILL.md`" in round_
+    # 0165: the round itself is the audit phase's step 10, refreshed before the auditor resumes.
+    audit = _phase_step("audit", 10)
+    refresh = "refresh the audit worktree as step 3 says"
     approved = (
         PLUGIN + "daedalus_train.py verdict --repo <repo> --status approved --round <n> "
         "--findings <findings path> --tip <judged tip>`"
     )
-    order = [refresh, "resume the security-auditor by SendMessage", approved, SUMMARY_CMD]
-    places = [round_.index(part) for part in order]
+    order = [refresh, "resume the auditor with the step 5 items", approved, "the summary command"]
+    places = [audit.index(part) for part in order]
     assert places == sorted(places)
-    rejected = round_.split("- `[VERDICT: REJECTED] tip=<sha>`: ", 1)[1]
+    assert PLUGIN + "daedalus_workspace.py refresh --repo <repo> --name <train-id>-audit`" in (
+        _phase_step("audit", 3)
+    )
+    rejected = round_.split("On `[VERDICT: REJECTED] tip=<sha>`, ", 1)[1]
     assert "no fix round runs" in rejected and "`[STATUS: DECISION]`" in rejected
     assert "no second recovery round runs on your own authority" in rejected
 
@@ -427,20 +455,21 @@ def test_recipe_ledger_resume_runs_the_ledger_step_only() -> None:
         "`ledger` on `[STATUS: COMMITTED]`",
         verdict,
         "and the summary command",
-        "Then step 7.",
+        "Then Completion.",
     ]
     places = [resume.index(part) for part in order]
     assert places == sorted(places)
+    assert "run its step 9 ledger step only" in resume
     # The notes file the resume reads is written beside the pending summary.
     step5 = _step5()
     assert step5.index("`<repo>/docs/.tmp/daedalus/<train-id>/ledger-notes.md`") < step5.index(
-        "Agent(`charter-docs`)"
+        "Dispatch `charter-docs`"
     )
 
 
 def test_recipe_copies_the_version_line_only_when_the_plan_carries_one() -> None:
     # pin D4 -> D5: the summary's Version class line comes from the plan's optional version line.
-    shape = _recipe().split("Shape:", 1)[1].split("\n7. ", 1)[0]
+    shape = _recipe().split("Shape:", 1)[1].split("\nCompletion. ", 1)[0]
     lines = shape.splitlines()
     at = lines.index("       Version class: <x.y.z> <class>: <reason>")
     note = lines[at + 1]
@@ -476,3 +505,150 @@ def test_summary_command_runs_through_the_orchestrator_hooks(
     summary = repo_cwd / "docs" / ".tmp" / "daedalus" / f"{TRAIN}-summary.md"
     write = _call("Write", str(repo_cwd), file_path=str(summary), content="x")
     assert not decide(write, Config()).allow
+
+
+def _part(head: str, nxt: str) -> str:
+    return _recipe().split(f"\n## {head}\n", 1)[1].split(f"\n## {nxt}\n", 1)[0]
+
+
+def test_glue_holds_the_new_sections_in_order() -> None:
+    # 0165, spec 4: the body is the rules, the State Block and the glue; no phase text stays.
+    heads = re.findall(r"^## .+$", _recipe().split("\n---\n", 1)[1], re.M)
+    assert heads == [
+        "## Your brief",
+        "## Entry shapes",
+        "## Sizing",
+        "## Announce and go",
+        "## Phases",
+        "## Named compositions",
+        "## Folder scope",
+        "## Summary notes and completion",
+        "## Recovery",
+        "## Status contract",
+    ]
+    for gone in ("## Phase 1", "## Phase 2", "## Phase 3", "## Documentation stage"):
+        assert gone not in _recipe(), gone
+
+
+def test_entry_shapes_name_the_three_inputs_and_the_composition_line() -> None:
+    # 0173, spec 4.1: a task in prose, a plan path, a spec path; brainstorm stays in main (0179).
+    entry = " ".join(_part("Entry shapes", "Sizing").split())
+    assert "1. `Task: <words>`, a task in prose." in entry
+    assert "For a small effort you write a one-unit plan yourself" in entry
+    plan = "2. `Plan: <path>`, a plan file `/daedalus:plan` or the brainstorm hand-off wrote."
+    assert plan in entry
+    assert "from the validator's graph line (units, critical path, width)" in entry
+    assert "dispatch no planner" in entry and "3. `Spec: <path>`" in entry
+    assert "The main session runs brainstorm before it starts you" in entry
+    assert "A `Composition: <name>` line picks that named composition and skips the sizing" in entry
+    assert "you still record the size" in entry
+
+
+SIZE_ROWS = (
+    "| small | one unit; at most 3 files and about 150 changed lines expected; no file under "
+    "`scripts/checks/`, `agents/`, `skills/` or `hooks/`, and not `scripts/lib/jail.py`, "
+    "`scripts/lib/shell.py` or `scripts/enforce_agent_jail.py`; no protected path; "
+    "`contract: skip` | build, verify, audit in the short form; document only when the change "
+    "touches what the four public docs describe |",
+    "| medium | up to 4 units in one wave, or a small change that touches agent, skill or hook "
+    "files; a contract may be needed | plan, build, verify, audit, document |",
+    "| full | more than 4 units, more than one wave, any jail check file, a revised contract or a "
+    "cross-module change | plan with the standards and contract stages, build, verify, audit "
+    "with the reachability pass, document |",
+)
+
+
+def test_sizing_table_carries_the_ruled_small_row() -> None:
+    # 0175, spec 4.2: the three rows, the excluded paths and the measured audit.
+    sizing = _part("Sizing", "Announce and go")
+    rows = [ln for ln in sizing.splitlines() if ln.startswith("| ")]
+    assert rows[0] == "| Size | When | Phases |"
+    assert tuple(rows[1:]) == SIZE_ROWS
+    flat = " ".join(sizing.split())
+    assert "The small row is ruled (small change defined, 0175)." in flat
+    required = "When the contract command prints `contract: required (<reason>)`, the run is not"
+    assert required + " small" in flat
+    assert "A size estimate never shrinks the audit by itself." in flat
+    assert "either check failing means the full procedure" in flat
+    # 0175: the auditor's short form names the same excluded paths the small row names.
+    auditor = " ".join((REPO_ROOT / "agents" / "security-auditor.md").read_text().split())
+    for path in ("`scripts/checks/`, `agents/`, `skills/` or `hooks/`", "`scripts/lib/shell.py`"):
+        assert path in auditor and path in SIZE_ROWS[0], path
+
+
+ANNOUNCE_LINE = (
+    "`Run <run id>: <size>, because <one-clause reason>. Phases: <list>. Reply to change it.`"
+)
+ANNOUNCE_STATUS = "[STATUS: ANNOUNCE] size=<size> phases=<list>"
+
+
+def test_announce_and_go_records_prints_and_ends_with_the_status_line() -> None:
+    # 0168, spec 4.3: choice with --phase, one plain line, the status line, then GO. or CHANGE.
+    part = " ".join(_part("Announce and go", "Phases").split())
+    choice = (
+        PLUGIN + "daedalus_train.py choice --repo <repo> --phase <first phase> --chose "
+        '"<size>: <phases in order>" --over "<the next shape up or down>" --cost "<agents and '
+        'rounds it adds or saves>"`'
+    )
+    assert part.index(choice) < part.index(ANNOUNCE_LINE) < part.index(f"`{ANNOUNCE_STATUS}`")
+    assert "It prints `Chose <what> over <alternative>: <cost>`" in part
+    assert "joined by a comma and a space" in part and "joined by commas with no space" in part
+    assert "resumes you at once with `GO.`; it never asks the operator to confirm" in part
+    assert "A resume message whose last line starts `CHANGE. `" in part
+    assert "A phase already finished stays finished." in part
+    contract = _recipe().split("## Status contract\n", 1)[1]
+    assert f"- `{ANNOUNCE_STATUS}`" in contract.splitlines()
+
+
+def test_each_phase_line_reads_its_skill_by_the_full_plugin_root() -> None:
+    # 0165: one line per phase skill; the hook refuses the plugin root variable in a command.
+    phases = _part("Phases", "Named compositions")
+    for name in RUN_PHASES:
+        line = f"Read and run `<plugin root>/skills/{name}/SKILL.md`"
+        assert line in phases, name
+        assert (REPO_ROOT / "skills" / name / "SKILL.md").is_file(), name
+    assert "${CLAUDE_PLUGIN_ROOT}" not in _recipe().split("\n---\n", 1)[1]
+    flat = " ".join(phases.split())
+    for overlap in (
+        "the plan beside the standards packet",
+        "verify per unit while later units build",
+        "the compliance judges beside the audit worktree creation",
+        "the docs writer after the security verdict record",
+    ):
+        assert overlap in flat, overlap
+    # 0179: brainstorm and release stay in the main session; the hook refuses the conductor.
+    assert "Brainstorm and release run in the main session, never here" in flat
+    assert "You never start the release phase" in flat
+    assert "`--phase <the phase skill's name>`" in flat
+
+
+def test_named_compositions_table_matches_spec_six() -> None:
+    # spec 6, 0167: build, push and doc are compositions; only build runs in the orchestrator.
+    part = _part("Named compositions", "Folder scope")
+    rows = [ln for ln in part.splitlines() if ln.startswith("| ")]
+    assert rows[0] == "| Name | Phases in order | Notes |"
+    assert [row.split(" | ", 1)[0] for row in rows[1:]] == ["| build", "| push", "| doc"]
+    assert rows[1].startswith("| build | plan, build, verify, audit, document | ")
+    assert "Sized phases are not trimmed when the operator names it." in rows[1]
+    assert rows[2].startswith(
+        "| push | release, with one audit recovery round first when the tip moved after the "
+        "verdict | Runs in the main session"
+    )
+    assert rows[3].startswith(
+        "| doc | document in derived document mode, verify in claims mode, then the change gate "
+        "and the present step | "
+    )
+    flat = " ".join(part.split())
+    assert "You run build. The main session runs push and doc itself" in flat
+    assert "next=run it from the main session with /daedalus:run`" in flat
+
+
+def test_folder_scope_never_sizes_into_build_audit_or_release() -> None:
+    # 0178, spec 9: no audit in a folder; the stop names a repository.
+    flat = " ".join(_part("Folder scope", "Summary notes and completion").split())
+    assert "Never size a folder run into build, audit or release" in flat
+    assert "(no audit in a folder, 0178)" in flat
+    assert (
+        "`[STATUS: STOP] reason=a plain folder cannot build, audit or push next=open the session "
+        "in a git repository, then run /daedalus:run again`"
+    ) in flat
