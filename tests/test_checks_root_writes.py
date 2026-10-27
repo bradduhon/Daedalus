@@ -11,7 +11,7 @@ import pytest
 from lib import jail
 from lib.config import Config, LedgerDecl
 
-from tests.conftest import CFG, CWD, write_train_marker
+from tests.conftest import CFG, CWD, write_folder_run, write_train_marker
 from tests.hook_chain import (
     decide,
     evaluate,
@@ -430,3 +430,39 @@ def test_auditor_chain_writes_its_audit_folder_only(tmp_path: Path) -> None:
     verifier = {**_w("daedalus:verifier", f"{scratch}/audit/round1/x.py"), "cwd": str(repo)}
     allow, _, hook = router.route(verifier, REPO_ROOT)
     assert not allow and hook == "tool_bound"
+
+
+def test_planner_writes_its_shapes_into_a_folder_runs_output_folder(tmp_path: Path) -> None:
+    # issue 48: a folder run's recorded output_dir takes the planner's scratch shapes, nothing more.
+    root, out = tmp_path.resolve() / "plain", tmp_path.resolve() / "out"
+    root.mkdir()
+    (out / "brainstorm-a").mkdir(parents=True)
+    plan, spec = f"{out}/plan-20261027.md", f"{out}/brainstorm-a/spec.md"
+    write_folder_run(root, out)
+    assert _planner(root, plan) == (True, None, "")
+    assert _planner(root, spec) == (True, None, "")
+    # (c) off the shapes or outside output_dir.
+    for path in (f"{out}/notes.md", f"{out}/x/plan.md", f"{tmp_path}/plan-1.md", f"{out}/../p.md"):
+        allow, _, hook = _planner(root, path)
+        assert not allow and hook == "root_writes", path
+    # (d) a file or folder link under output_dir that resolves outside it.
+    outside = tmp_path.resolve() / "outside"
+    (outside / "brainstorm-x").mkdir(parents=True)
+    os.symlink(outside / "f.md", out / "plan-link.md")
+    os.symlink(outside / "brainstorm-x", out / "brainstorm-link")
+    for path in (f"{out}/plan-link.md", f"{out}/brainstorm-link/spec.md"):
+        allow, _, hook = _planner(root, path)
+        assert not allow and hook == "root_writes", path
+    # (e) another agent's root_writes flags, the orchestrator's bare scratch class, get nothing.
+    hook_input = {**_w("x", plan), "cwd": str(root)}
+    assert evaluate(HOOK, hook_input, "--touch", "scratch", "--ledger-guard") is not None
+    # (a) a repository run and (b) a folder run with no output_dir are refused as before.
+    for scope, recorded in (("repository", out), ("folder", None)):
+        write_folder_run(root, recorded, scope)
+        allow, _, hook = _planner(root, plan)
+        assert not allow and hook == "root_writes", scope
+    # issue 48: a recorded output_dir that is itself a link loses the grant.
+    os.symlink(out, tmp_path.resolve() / "out-link")
+    write_folder_run(root, tmp_path.resolve() / "out-link")
+    allow, _, hook = _planner(root, f"{tmp_path.resolve()}/out-link/plan-20261027.md")
+    assert not allow and hook == "root_writes"

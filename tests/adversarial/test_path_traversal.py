@@ -172,3 +172,25 @@ def test_auditor_write_inside_the_audit_folder_is_allowed(marked_repo: Path) -> 
 def test_an_archive_or_multi_call_write_is_denied(agent: str, template: str) -> None:
     # prepush2-2026-10-27 item 3: the write check models none of these targets, so all refuse.
     assert_denied(_b(agent, template.format(wt=WT)), "archive and multi-call tools")
+
+
+@pytest.mark.parametrize(
+    "template",
+    (
+        "{out}/../plan-x.md",
+        "{out}/brainstorm-a/../../plan-x.md",
+        "{out}/./x/../../plan-x.md",
+        "{out}/brainstorm-a/../../brainstorm-a/spec.md",
+        "{out}//x/plan-x.md",
+        "{out}/brainstorm-a/b/spec.md",
+    ),
+)
+def test_planner_write_leaving_a_folder_runs_output_folder_is_denied(
+    folder_run: tuple[Path, Path], template: str
+) -> None:
+    # issue 48: the output folder grant takes the planner's two shapes only, after normalising.
+    root, out = folder_run
+    write = _cred("planner", "Write", str(root), file_path=template.format(out=out), content="x")
+    assert_denied(write, "writes are limited to scratch")
+    plan = _cred("planner", "Write", str(root), file_path=f"{out}/plan-x.md", content="x")
+    assert decide(plan, CFG).allow

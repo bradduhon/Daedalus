@@ -530,7 +530,7 @@ def make_output(target: Path, rerun: str) -> Path:
     return target.resolve()
 
 
-def _folder_out(root: Path, output: str) -> Path | None:
+def _folder_out(root: Path, output: str, rerun: str = "begin") -> Path | None:
     # issue 48, 0069: an existing writable folder as is; None admits <root>/docs or new under /tmp.
     target = output_target(root, output)
     real = Path(os.path.realpath(target))
@@ -551,8 +551,13 @@ def _folder_out(root: Path, output: str) -> Path | None:
         f"--out {output} is not an existing writable folder outside the project root, its "
         f"parents, the home folder and {root / '.claude'}, nor {root / 'docs'}, nor a new folder "
         "under /tmp. Next: pass --out one of those three, or create the folder from your own "
-        "shell, then rerun begin."
+        f"shell, then rerun {rerun}."
     )
+
+
+def checked_output(root: Path, output: str, rerun: str) -> Path:
+    # issue 48: start and the folder begin record only an output folder _folder_out passed.
+    return _folder_out(root, output, rerun) or make_output(output_target(root, output), rerun)
 
 
 def begin_folder_run(root: Path, output: str) -> list[str]:

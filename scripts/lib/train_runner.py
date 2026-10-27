@@ -1127,7 +1127,7 @@ def _record_start(
     out_dir: str | None = None
     if output is not None:
         try:
-            out_dir = str(workspace.make_output(workspace.output_target(repo, output), "start"))
+            out_dir = str(workspace.checked_output(repo, output, "start"))
         except workspace.WorkspaceError as exc:
             return Outcome(EXIT_STOP, [*lines, str(exc)])
     train_state.update(
