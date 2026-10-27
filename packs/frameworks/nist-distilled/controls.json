@@ -7,7 +7,7 @@
       "title": "Account Management",
       "statement": "Every account, role and service identity is created for a named purpose, owned, and removed when the purpose ends.",
       "look_for": "New users, roles or service accounts; accounts with no owner or expiry; shared or generic identities.",
-      "verify": "grep -rnE 'aws_iam_user\"|aws_iam_role\"|aws_iam_group_membership|AWS::IAM::(User|Role)|service_account' --include='*.tf' --include='*.json' --include='*.yaml' --include='*.yml' --exclude-dir=.git .",
+      "verify": "rg -n 'aws_iam_user\"|aws_iam_role\"|aws_iam_group_membership|AWS::IAM::(User|Role)|service_account' -g '*.tf' -g '*.json' -g '*.yaml' -g '*.yml' .",
       "refs": {"nist": ["AC-2"], "cis": [], "asvs": []}
     },
     {
@@ -16,7 +16,7 @@
       "title": "Access Enforcement",
       "statement": "Every request is checked against an explicit authorization decision before it touches a protected resource.",
       "look_for": "Handlers or routes without an authorization check; checks done only in the client; allow-by-default branches.",
-      "verify": "grep -rniE 'authori[sz]|is_allowed|permission|allow_all|AllowAll' --exclude-dir=.git .",
+      "verify": "rg -ni 'authori[sz]|is_allowed|permission|allow_all|AllowAll' .",
       "refs": {"nist": ["AC-3"], "cis": [], "asvs": []}
     },
     {
@@ -25,7 +25,7 @@
       "title": "Information Flow Enforcement",
       "statement": "Data moves only along flows that are declared and enforced, including between tenants and trust zones.",
       "look_for": "Cross-tenant queries without a tenant key; new egress paths; data copied across accounts, regions or buckets.",
-      "verify": "grep -rniE 'tenant_?id|cross_?account|replication_configuration|egress' --exclude-dir=.git .",
+      "verify": "rg -ni 'tenant_?id|cross_?account|replication_configuration|egress' .",
       "refs": {"nist": ["AC-4"], "cis": [], "asvs": []}
     },
     {
@@ -34,7 +34,7 @@
       "title": "Least Privilege",
       "statement": "Each identity holds only the permissions its task needs, scoped to the resources it touches.",
       "look_for": "Wildcard actions or resources in policies; admin or root grants; permissions broader than the code path uses.",
-      "verify": "grep -rnE '\"(Action|Resource)\" *: *\"[*]\"|(actions|resources) *= *[[] *\"[*]\"|AdministratorAccess' --include='*.tf' --include='*.json' --include='*.yaml' --include='*.yml' --exclude-dir=.git .",
+      "verify": "rg -n '\"(Action|Resource)\" *: *\"[*]\"|(actions|resources) *= *\\[ *\"[*]\"|AdministratorAccess' -g '*.tf' -g '*.json' -g '*.yaml' -g '*.yml' .",
       "refs": {"nist": ["AC-6"], "cis": [], "asvs": []}
     },
     {
@@ -43,7 +43,7 @@
       "title": "Remote Access",
       "statement": "Remote and administrative access goes through an authenticated, encrypted and monitored path.",
       "look_for": "Open SSH or RDP ports; bastion or console access without MFA; debug endpoints reachable from outside.",
-      "verify": "grep -rnE 'from_port *= *(22|3389)|FromPort: *(22|3389)|0[.]0[.]0[.]0/0|debug' --include='*.tf' --include='*.json' --include='*.yaml' --include='*.yml' --exclude-dir=.git .",
+      "verify": "rg -n 'from_port *= *(22|3389)|FromPort: *(22|3389)|0[.]0[.]0[.]0/0|debug' -g '*.tf' -g '*.json' -g '*.yaml' -g '*.yml' .",
       "refs": {"nist": ["AC-17"], "cis": [], "asvs": []}
     },
     {
@@ -52,7 +52,7 @@
       "title": "Event Logging",
       "statement": "The system decides which security events it records, and records them.",
       "look_for": "Auth, authorization, key use and admin actions with no log call; logging disabled on a new resource.",
-      "verify": "grep -rnE 'aws_cloudtrail|aws_flow_log|access_logs|logging_config|import logging|getLogger' --exclude-dir=.git .",
+      "verify": "rg -n 'aws_cloudtrail|aws_flow_log|access_logs|logging_config|import logging|getLogger' .",
       "refs": {"nist": ["AU-2"], "cis": [], "asvs": []}
     },
     {
@@ -61,7 +61,7 @@
       "title": "Content of Audit Records",
       "statement": "Each audit record says what happened, when, where, who did it and what the outcome was.",
       "look_for": "Log lines missing actor, timestamp, resource or result; free-text logs where a structured record is needed.",
-      "verify": "grep -rnE 'logger[.](info|warning|error)|logging[.](info|warning|error)|console[.]log' --exclude-dir=.git .",
+      "verify": "rg -n 'logger[.](info|warning|error)|logging[.](info|warning|error)|console[.]log' .",
       "refs": {"nist": ["AU-3"], "cis": [], "asvs": []}
     },
     {
@@ -70,7 +70,7 @@
       "title": "Audit Record Review, Analysis, and Reporting",
       "statement": "Audit records are reviewed and suspicious activity is reported to someone who acts on it.",
       "look_for": "New log groups with no alarm, metric filter or subscription; findings routed nowhere.",
-      "verify": "grep -rnE 'aws_cloudwatch_metric_alarm|aws_cloudwatch_log_metric_filter|aws_cloudwatch_log_subscription_filter|aws_guardduty' --include='*.tf' --include='*.json' --include='*.yaml' --include='*.yml' --exclude-dir=.git .",
+      "verify": "rg -n 'aws_cloudwatch_metric_alarm|aws_cloudwatch_log_metric_filter|aws_cloudwatch_log_subscription_filter|aws_guardduty' -g '*.tf' -g '*.json' -g '*.yaml' -g '*.yml' .",
       "refs": {"nist": ["AU-6"], "cis": [], "asvs": []}
     },
     {
@@ -79,7 +79,7 @@
       "title": "Protection of Audit Information",
       "statement": "Audit records and logging settings are protected from change and deletion by the identities they record.",
       "look_for": "Log stores writable or deletable by application roles; missing retention or immutability; logging that the app can turn off.",
-      "verify": "grep -rnE 'retention_in_days|object_lock|logs:DeleteLogGroup|cloudtrail:StopLogging|s3:DeleteObject' --include='*.tf' --include='*.json' --include='*.yaml' --include='*.yml' --exclude-dir=.git .",
+      "verify": "rg -n 'retention_in_days|object_lock|logs:DeleteLogGroup|cloudtrail:StopLogging|s3:DeleteObject' -g '*.tf' -g '*.json' -g '*.yaml' -g '*.yml' .",
       "refs": {"nist": ["AU-9"], "cis": [], "asvs": []}
     },
     {
@@ -88,7 +88,7 @@
       "title": "Audit Record Generation",
       "statement": "Every component that handles a security event generates the audit record itself.",
       "look_for": "New services, functions or queues without logging configured; trails or flow logs not enabled.",
-      "verify": "grep -rnE 'aws_cloudtrail|aws_flow_log|logging_config|access_logs|aws_cloudwatch_log_group' --include='*.tf' --include='*.json' --include='*.yaml' --include='*.yml' --exclude-dir=.git .",
+      "verify": "rg -n 'aws_cloudtrail|aws_flow_log|logging_config|access_logs|aws_cloudwatch_log_group' -g '*.tf' -g '*.json' -g '*.yaml' -g '*.yml' .",
       "refs": {"nist": ["AU-12"], "cis": [], "asvs": []}
     },
     {
@@ -97,7 +97,7 @@
       "title": "Baseline Configuration",
       "statement": "The approved configuration is kept under version control and deployments come from it.",
       "look_for": "Resources created outside code; manual console steps in docs; drift-prone defaults left implicit.",
-      "verify": "grep -rniE 'console|manually|by hand|click' --include='*.md' --exclude-dir=.git .",
+      "verify": "rg -ni 'console|manually|by hand|click' -g '*.md' .",
       "refs": {"nist": ["CM-2"], "cis": [], "asvs": []}
     },
     {
@@ -106,7 +106,7 @@
       "title": "Configuration Settings",
       "statement": "Security-relevant settings are set explicitly to their hardened values.",
       "look_for": "Insecure defaults left in place; TLS, encryption or public-access flags unset; debug modes on.",
-      "verify": "grep -rniE 'debug *[:=] *true|verify *= *false|insecure|ssl_verify|DEBUG=1' --exclude-dir=.git .",
+      "verify": "rg -ni 'debug *[:=] *true|verify *= *false|insecure|ssl_verify|DEBUG=1' .",
       "refs": {"nist": ["CM-6"], "cis": [], "asvs": []}
     },
     {
@@ -115,7 +115,7 @@
       "title": "Least Functionality",
       "statement": "Only the ports, services, features and packages the system needs are enabled.",
       "look_for": "New open ports; unused services or packages; broad CORS; features enabled for convenience.",
-      "verify": "grep -rniE 'allow_origins|Access-Control-Allow-Origin|ingress|^EXPOSE ' --exclude-dir=.git .",
+      "verify": "rg -ni 'allow_origins|Access-Control-Allow-Origin|ingress|^EXPOSE ' .",
       "refs": {"nist": ["CM-7"], "cis": [], "asvs": []}
     },
     {
@@ -124,7 +124,7 @@
       "title": "Identification and Authentication (Organizational Users)",
       "statement": "Staff and operators are uniquely identified and authenticated, with MFA for privileged and network access.",
       "look_for": "Shared logins; privileged paths without MFA; authentication bypass flags.",
-      "verify": "grep -rniE 'mfa|MultiFactorAuthPresent|skip_auth|auth_bypass|no_auth' --exclude-dir=.git .",
+      "verify": "rg -ni 'mfa|MultiFactorAuthPresent|skip_auth|auth_bypass|no_auth' .",
       "refs": {"nist": ["IA-2"], "cis": [], "asvs": []}
     },
     {
@@ -133,7 +133,7 @@
       "title": "Authenticator Management",
       "statement": "Passwords, keys, tokens and certificates are generated, stored, rotated and revoked safely.",
       "look_for": "Hardcoded secrets; tokens in config or logs; weak hashing; no rotation or expiry on keys and tokens.",
-      "verify": "grep -rniE '(password|secret|token|api_?key) *[:=] *\"[^\"]+\"' --exclude-dir=.git .",
+      "verify": "rg -ni '(password|secret|token|api_?key) *[:=] *\"[^\"]+\"' .",
       "refs": {"nist": ["IA-5"], "cis": [], "asvs": []}
     },
     {
@@ -142,7 +142,7 @@
       "title": "Identification and Authentication (Non-organizational Users)",
       "statement": "Customers and external callers are uniquely identified and authenticated before they get access.",
       "look_for": "Anonymous endpoints that return tenant data; API keys with no caller binding; trust in caller-supplied identity headers.",
-      "verify": "grep -rniE 'anonymous|authorization_type *= *\"NONE\"|x-user-id|x-forwarded-user|api_key_required *= *false' --exclude-dir=.git .",
+      "verify": "rg -ni 'anonymous|authorization_type *= *\"NONE\"|x-user-id|x-forwarded-user|api_key_required *= *false' .",
       "refs": {"nist": ["IA-8"], "cis": [], "asvs": []}
     },
     {
@@ -151,7 +151,7 @@
       "title": "Boundary Protection",
       "statement": "Traffic crossing a trust boundary passes through a controlled interface that allows only what is declared.",
       "look_for": "Security groups or firewalls open to 0.0.0.0/0; public subnets for private services; missing WAF or gateway in front of an API.",
-      "verify": "grep -rnE '0[.]0[.]0[.]0/0|::/0|map_public_ip_on_launch *= *true|aws_wafv2' --include='*.tf' --include='*.json' --include='*.yaml' --include='*.yml' --exclude-dir=.git .",
+      "verify": "rg -n '0[.]0[.]0[.]0/0|::/0|map_public_ip_on_launch *= *true|aws_wafv2' -g '*.tf' -g '*.json' -g '*.yaml' -g '*.yml' .",
       "refs": {"nist": ["SC-7"], "cis": [], "asvs": []}
     },
     {
@@ -160,7 +160,7 @@
       "title": "Transmission Confidentiality and Integrity",
       "statement": "Data in transit is encrypted and integrity protected, including inside the network.",
       "look_for": "Plain HTTP; TLS below 1.2; certificate verification turned off; unencrypted internal hops.",
-      "verify": "grep -rniE 'http://|TLSv1(_0|_1|[.]0|[.]1)|verify *= *false|InsecureSkipVerify|rejectUnauthorized: *false' --exclude-dir=.git .",
+      "verify": "rg -ni 'http://|TLSv1(_0|_1|[.]0|[.]1)|verify *= *false|InsecureSkipVerify|rejectUnauthorized: *false' .",
       "refs": {"nist": ["SC-8"], "cis": [], "asvs": []}
     },
     {
@@ -169,7 +169,7 @@
       "title": "Cryptographic Key Establishment and Management",
       "statement": "Keys are generated, distributed, stored, rotated and destroyed under a defined process, separated per tenant where data is.",
       "look_for": "Key material in code or env vars; keys shared across tenants; rotation disabled; key policies broader than their users.",
-      "verify": "grep -rnE 'enable_key_rotation|BEGIN [A-Z ]*PRIVATE KEY|kms_key_id|aws_kms_key' --exclude-dir=.git .",
+      "verify": "rg -n 'enable_key_rotation|BEGIN [A-Z ]*PRIVATE KEY|kms_key_id|aws_kms_key' .",
       "refs": {"nist": ["SC-12"], "cis": [], "asvs": []}
     },
     {
@@ -178,7 +178,7 @@
       "title": "Cryptographic Protection",
       "statement": "Only approved algorithms, modes and key sizes protect data.",
       "look_for": "MD5, SHA-1, DES or ECB; custom crypto; short keys; random values from a non-cryptographic generator.",
-      "verify": "grep -rniE 'md5|sha1|des3|_des[(]|ecb|random[.]random|Math[.]random' --exclude-dir=.git .",
+      "verify": "rg -ni 'md5|sha1|des3|_des[(]|ecb|random[.]random|Math[.]random' .",
       "refs": {"nist": ["SC-13"], "cis": [], "asvs": []}
     },
     {
@@ -187,7 +187,7 @@
       "title": "Public Key Infrastructure Certificates",
       "statement": "Certificates come from an approved authority under a defined issuance and revocation policy.",
       "look_for": "Self-signed certificates in production paths; skipped chain or revocation checks; long-lived certificates with no renewal.",
-      "verify": "grep -rniE 'self_signed|aws_acm_certificate|aws_acmpca|verify_mode|CERT_NONE' --exclude-dir=.git .",
+      "verify": "rg -ni 'self_signed|aws_acm_certificate|aws_acmpca|verify_mode|CERT_NONE' .",
       "refs": {"nist": ["SC-17"], "cis": [], "asvs": []}
     },
     {
@@ -196,7 +196,7 @@
       "title": "Protection of Information at Rest",
       "statement": "Stored data is protected, normally by encryption, wherever it rests.",
       "look_for": "Buckets, databases, volumes, queues or backups without encryption at rest; plaintext sensitive fields.",
-      "verify": "grep -rnE 'server_side_encryption|storage_encrypted|encrypted *= *false|kms_key_id|sse_specification' --include='*.tf' --include='*.json' --include='*.yaml' --include='*.yml' --exclude-dir=.git .",
+      "verify": "rg -n 'server_side_encryption|storage_encrypted|encrypted *= *false|kms_key_id|sse_specification' -g '*.tf' -g '*.json' -g '*.yaml' -g '*.yml' .",
       "refs": {"nist": ["SC-28"], "cis": [], "asvs": []}
     },
     {
@@ -205,7 +205,7 @@
       "title": "Flaw Remediation",
       "statement": "Known flaws are found, fixed and the fix is tested and shipped within a set time.",
       "look_for": "Pinned dependencies with published advisories; suppressed scanner findings with no tracked reason.",
-      "verify": "grep -rniE 'nosec|ignore-vuln|audit-level|pip-audit|npm audit|dependabot' --exclude-dir=.git .",
+      "verify": "rg -ni 'nosec|ignore-vuln|audit-level|pip-audit|npm audit|dependabot' .",
       "refs": {"nist": ["SI-2"], "cis": [], "asvs": []}
     },
     {
@@ -214,7 +214,7 @@
       "title": "System Monitoring",
       "statement": "The system is monitored for attacks and unauthorized use, and alerts reach someone.",
       "look_for": "New entry points with no monitoring; detection services disabled; alerts with no destination.",
-      "verify": "grep -rnE 'aws_guardduty|aws_securityhub|aws_cloudwatch_metric_alarm|alarm_actions' --include='*.tf' --include='*.json' --include='*.yaml' --include='*.yml' --exclude-dir=.git .",
+      "verify": "rg -n 'aws_guardduty|aws_securityhub|aws_cloudwatch_metric_alarm|alarm_actions' -g '*.tf' -g '*.json' -g '*.yaml' -g '*.yml' .",
       "refs": {"nist": ["SI-4"], "cis": [], "asvs": []}
     },
     {
@@ -223,7 +223,7 @@
       "title": "Information Input Validation",
       "statement": "Input is validated for type, length, range and format at the point it enters.",
       "look_for": "Unvalidated request fields; string-built SQL, shell or paths; unsafe deserialization of caller data.",
-      "verify": "grep -rnE 'shell=True|os[.]system|pickle[.]loads|yaml[.]load[(]|eval[(]|execute[(]f\"' --exclude-dir=.git .",
+      "verify": "rg -n 'shell=True|os[.]system|pickle[.]loads|yaml[.]load[(]|eval[(]|execute[(]f\"' .",
       "refs": {"nist": ["SI-10"], "cis": [], "asvs": []}
     },
     {
@@ -232,7 +232,7 @@
       "title": "Developer Testing and Evaluation",
       "statement": "Changes ship with security tests and analysis whose findings are fixed or tracked.",
       "look_for": "Security-relevant code without tests; scanners removed from CI; tests weakened to pass.",
-      "verify": "grep -rnE 'pytest|unittest|bandit|semgrep|codeql|skip' --include='*.yml' --include='*.yaml' --include='*.toml' --include='*.cfg' --exclude-dir=.git .",
+      "verify": "rg -n 'pytest|unittest|bandit|semgrep|codeql|skip' -g '*.yml' -g '*.yaml' -g '*.toml' -g '*.cfg' .",
       "refs": {"nist": ["SA-11"], "cis": [], "asvs": []}
     },
     {
@@ -241,7 +241,7 @@
       "title": "Development Process, Standards, and Tools",
       "statement": "Development follows a documented process with defined standards and pinned tools.",
       "look_for": "Unpinned build tools or actions; process steps skipped; standards sources not declared.",
-      "verify": "grep -rnE 'uses: .+@(main|master|v[0-9]+)$|>=' --include='*.yml' --include='*.yaml' --include='*requirements*.txt' --include='*.toml' --exclude-dir=.git .",
+      "verify": "rg -n 'uses: .+@(main|master|v[0-9]+)$|>=' -g '*.yml' -g '*.yaml' -g '*requirements*.txt' -g '*.toml' .",
       "refs": {"nist": ["SA-15"], "cis": [], "asvs": []}
     }
   ]

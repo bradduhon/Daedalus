@@ -45,9 +45,11 @@ an OWASP file, and you never fetch or write (0157).
 3. Map each to the controls of every pack. A control whose `service` is `any` applies to every
    path; any other `service` word applies to that service's resources. A control with
    `maps_to` is an id map: judge the control it names and cite both ids.
-4. A control's `verify` command is one read-only search of the tree. Run it as written from the
-   root of the tree under review when it helps the verdict. Never run a `live_check` command;
-   it is for the operator.
+4. A control's `verify` command is one read-only `rg` search of the tree. Run it as written from
+   the root of the tree under review when it helps the verdict. `rg` skips hidden folders such
+   as `.claude` and the files git ignores; never add `--hidden`, `-u` or `--no-ignore`, and never
+   swap it for `grep -r`, which the jail refuses beside the train's reply key.
+   Never run a `live_check` command; it is for the operator.
 5. Give PASS, FAIL or N/A per control, with file:line for every FAIL and the evidence line for
    every PASS. Cite the pack id, the control id (AWS-IAM-1, SC-12) and its `refs` ids (NIST,
    CIS and ASVS) with each verdict.

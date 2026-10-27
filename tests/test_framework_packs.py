@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 from pathlib import Path
 
 import pytest
@@ -14,7 +15,7 @@ from lib.packs import PackError, load_pack, pack_folders, pack_problems
 
 from tests.conftest import CFG
 from tests.hook_chain import decide
-from tests.payloads import _b
+from tests.test_checks_credential_paths import _bash_in, _key_repo
 
 SHIPPED = {"aws-default": 34, "nist-distilled": 27}
 AWS_ID = re.compile(r"AWS-([A-Z0-9]+)-[0-9]+")
@@ -88,7 +89,7 @@ def test_aws_default_controls_name_their_service_verify_and_nist_ids() -> None:
     for control in pack.controls:
         match = AWS_ID.fullmatch(control.id)
         assert match and match.group(1) == control.service.upper(), control.id
-        assert control.verify and control.verify.startswith("grep -r"), control.id
+        assert control.verify and control.verify.startswith("rg -n"), control.id
         assert control.refs.nist and control.refs.cis == (), control.id
         assert control.statement and control.look_for and control.maps_to is None
 
@@ -98,7 +99,7 @@ def test_nist_distilled_controls_are_any_service_and_cite_themselves() -> None:
     for control in pack.controls:
         assert control.service == "any"
         assert control.refs.nist == (control.id,)
-        assert control.verify and control.verify.startswith("grep -r")
+        assert control.verify and control.verify.startswith("rg -n")
 
 
 def test_shipped_packs_hold_no_long_quote() -> None:
@@ -109,17 +110,37 @@ def test_shipped_packs_hold_no_long_quote() -> None:
         assert [s for s in re.findall("“([^”]*)”", text) if len(s) > 40] == []
 
 
-@pytest.mark.usefixtures("jail_fakes")
-def test_every_shipped_verify_command_passes_the_framework_specialist_jail() -> None:
-    # 2.3, 0157: a verify command is one the specialist's jail admits; git grep is not.
-    refused = [
-        control.id
+def _verify_commands() -> list[tuple[str, str]]:
+    return [
+        (control.id, control.verify or "")
         for name in SHIPPED
         for control in load_pack(packs.FRAMEWORKS_DIR / name).controls
-        if not decide(_b("framework-specialist", control.verify or ""), CFG).allow
+    ]
+
+
+@pytest.mark.usefixtures("jail_fakes")
+def test_every_shipped_verify_command_passes_the_jail_beside_a_reply_key(tmp_path: Path) -> None:
+    # 2.3, SC-12: run from a checkout holding .claude/daedalus/reply-hmac.key, each verify is
+    # admitted, since rg skips the hidden .claude folder; grep -r and git grep are refused.
+    repo = _key_repo(tmp_path)
+    assert (repo / ".claude" / "daedalus" / "reply-hmac.key").is_file()
+    refused = [
+        ident
+        for ident, command in _verify_commands()
+        if not decide(_bash_in(repo, "framework-specialist", command), CFG).allow
     ]
     assert refused == []
-    assert not decide(_b("framework-specialist", "git grep -n x"), CFG).allow
+    for bad in ("grep -rn x .", "rg -n --hidden x .", "rg -nu x .", "git grep -n x"):
+        assert not decide(_bash_in(repo, "framework-specialist", bad), CFG).allow, bad
+
+
+def test_every_shipped_verify_pattern_compiles() -> None:
+    # 2.3: rg -n[i] '<pattern>' [-g '<glob>'...] . with no hidden-folder flag; Python re as a proxy.
+    for ident, command in _verify_commands():
+        words = shlex.split(command)
+        assert words[0] == "rg" and words[1] in ("-n", "-ni") and words[-1] == ".", ident
+        assert all(w == "-g" for w in words[3:-1:2]), ident
+        re.compile(words[2])
 
 
 NIST_IDS = packs.NIST_IDS
