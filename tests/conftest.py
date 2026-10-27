@@ -286,11 +286,15 @@ def _fresh_project_root() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def _kernel_rules_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 0048: the confine check steps aside in-process; tests/test_confine.py restores the probe.
+    # 0048, issue 86: no live probe in-process, and the test chain judges the coder without the
+    # confine check, which never steps aside; tests/test_confine.py restores both.
     import daedalus_confine
+
+    from tests.hook_chain import load
 
     off = daedalus_confine.Support(None, 0, False)
     monkeypatch.setattr(daedalus_confine, "kernel_support", lambda: off)
+    monkeypatch.setattr(load("confine"), "judge", lambda hook_input, flags: None)
 
 
 @pytest.fixture

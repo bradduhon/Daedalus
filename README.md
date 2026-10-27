@@ -447,10 +447,12 @@ On a kernel with Landlock and seccomp, a coder's test command runs as `daedalus_
 
 - Read and write: the unit worktree, a private temporary folder `daedalus-confine-<uid>/<hash>` under the system temp folder (mode 0700, owned by you), and `/dev/null`.
 - Read only: every entry of the repository except `.claude/daedalus` and `.claude/worktrees`, never following a link; the running Python's prefixes and site-packages folders; and `/usr`, `/lib`, `/lib64`, `/lib32`, `/bin`, `/sbin`, `/etc`, `/proc`, `/sys` and `/dev`. A folder that holds or sits inside a credential store is left out.
-- Network: a seccomp filter refuses every socket family except `AF_UNIX` and `AF_NETLINK`, and refuses io_uring. On Landlock ABI 4 and later, TCP bind and connect are refused too.
+- Network: a seccomp filter refuses a `socket()` call for every family except `AF_NETLINK`, `AF_UNIX` included, and refuses io_uring. A `socketpair()` call still works. On Landlock ABI 4 and later, TCP bind and connect are refused too.
 - Environment: `TMPDIR` names the private folder, `GIT_CONFIG_GLOBAL` names an empty git config written fresh for each run, and `XDG_CONFIG_HOME` names an empty folder.
 
 It prints one `daedalus_confine:` line naming the ABI, the architecture and every grant before the command starts.
+
+On a kernel without Landlock, or when the kernel probe fails, the confine check refuses every coder test command and names the cause.
 
 ## What is in this repo
 

@@ -1348,6 +1348,19 @@ def docs_read_ok(tokens: list[str], raw: str, roots: list[str], cwd: str, base: 
 
 # B2 narrowed by audit finding (c), Build Train 20261019-124612: -m runs these modules only.
 RUNNER_MODULES = frozenset({"pytest", "mypy", "ruff", "unittest", "coverage"})
+# 0048, issue 91: runners the confine check wraps, each with the leading arguments it needs.
+# Kept apart from WRAPPER_OPTS (pin H1 -> H2); none is a WORKER_WRAPPERS name, so no grant widens.
+TEST_RUNNERS: dict[str, tuple[str, ...]] = {
+    "pytest": (),
+    "make": (),
+    "tox": (),
+    "nox": (),
+    "just": (),
+    "npx": (),
+    "uv": ("run",),
+    "go": ("test",),
+    "cargo": ("test",),
+}
 
 
 def python_script(tokens: list[str]) -> str | None:
@@ -1376,14 +1389,16 @@ def _tester_runner_ok(
     args = tokens[1:]
     if any(arg.startswith("--basetemp") for arg in args):
         return False
-    if name == "pytest":
-        return True
+    if name in TEST_RUNNERS:
+        # issue 91: an option before the lead word (cargo +nightly test) fails closed as a test.
+        lead = TEST_RUNNERS[name]
+        if lead and args and args[0][:1] in {"-", "+"}:
+            return True
+        return tuple(args[: len(lead)]) == lead
     if name == "npm":
         return bool(args) and (
             args[0] in {"test", "t"} or (args[0] in {"run", "run-script"} and len(args) > 1)
         )
-    if name == "uv":
-        return args[:2] == ["run", "pytest"]
     if name in {"python", "python3"}:
         # B2, finding (c): a runner module, or a script own_script places in the coder's worktree.
         if args[:1] == ["-m"]:
@@ -1392,8 +1407,6 @@ def _tester_runner_ok(
         return script is not None and own_script is not None and own_script(script)
     if name == "node":
         return bool(args) and not args[0].startswith("-")
-    if name in {"go", "cargo"}:
-        return args[:1] == ["test"]
     return False
 
 

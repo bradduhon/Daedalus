@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 0048: a coder's test command starts with the kernel wrapper whenever the doctor's probe
-# finds Landlock and the seccomp filter; on any other kernel the check steps aside.
+# 0048: a coder's test command starts with the kernel wrapper. Issue 86: on a kernel where the
+# doctor's probe finds no Landlock, no seccomp filter or an error, the test command is refused.
 from __future__ import annotations
 
 import argparse
@@ -67,20 +67,20 @@ def _wrapped_reason(segment: list[str], base: str, cwd: str) -> str | None:
 
 
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
-    if not daedalus_confine.kernel_support().ok:
-        return None  # 0048: no kernel rules here; the doctor prints the OPT kernel rules line.
     chain = shell.worker_parse(hook_io.text(hook_io.tool_input(hook_input), "command"))
     if chain is None:
         return shell.R_UNSUPPORTED
     cwd = hook_io.text(hook_input, "cwd")
+    # 0048, issue 86: an unusable kernel refuses every test command, wrapped or bare.
+    kernel = daedalus_confine.unusable(daedalus_confine.kernel_support())
     bases = shell.chain_bases(chain, cwd, jail.DIR_CHANGE_CMDS) or [cwd] * len(chain.segments)
     for segment, base in zip(chain.segments, bases, strict=True):
         if not segment:
             continue
         if shell._base(segment[0]) == shell.CONFINE:
-            reason = _wrapped_reason(segment, base, cwd)
+            reason = _wrapped_reason(segment, base, cwd) or kernel
         else:
-            reason = R_CONFINE if _is_test(segment, base, cwd) else None
+            reason = (kernel or R_CONFINE) if _is_test(segment, base, cwd) else None
         if reason:
             return reason
     return None
