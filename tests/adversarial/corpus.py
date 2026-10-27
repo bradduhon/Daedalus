@@ -22,7 +22,7 @@ CLASSES = (
     "wrapper_options",
 )
 # spec 3.3: the agents whose Bash grammar is widest; credential reads judge them all.
-READERS = ("repo-coder", "security-auditor", "nist-specialist")
+READERS = ("repo-coder", "security-auditor", "framework-specialist")
 CREDENTIAL = "credential path"
 REPLY_KEY = "the train's reply key"
 NESTED = "nested session"

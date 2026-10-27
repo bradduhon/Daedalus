@@ -172,10 +172,20 @@ def test_build_train_writes_summary_under_docs_tmp() -> None:
     assert "/daedalus:audit-report" in _build_train()
 
 
-def test_build_train_resolves_the_cache_for_specialists() -> None:
+def test_build_train_resolves_the_packs_for_the_framework_specialist() -> None:
+    # 0157: Read and Glob resolve the pack folders; no cache path reaches a specialist.
     text = _recipe()
-    assert "daedalus_doctor.py --print-cache-dir" in text
-    assert "<that path>/frameworks" in text
+    assert "Glob `<plugin root>/packs/frameworks/*/pack.json`" in text
+    assert "Glob `<repo>/<pack_dir>/*/pack.json`" in text
+    assert "`Packs: <absolute pack folder>[, <absolute pack folder>...]`" in text
+    assert "<that path>/frameworks" not in text and "CACHE_INVALID" not in text
+    assert "Unless `frameworks.default_packs` is `false`" in text
+    assert "Every compliance topic goes to Agent(`framework-specialist`)" in text
+    assert "run one Agent(`framework-specialist`) on the merged diff" in text
+    assert (
+        "A `[STATUS: PACK_INVALID] <pack id>: <problem>` reply stops the train and shows that "
+        'line, with "Next: run `/daedalus:doctor` and fix the pack <pack id> it names'
+    ) in text
 
 
 def test_build_train_stops_on_off_contract_replies_and_dead_hooks() -> None:

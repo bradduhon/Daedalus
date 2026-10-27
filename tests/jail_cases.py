@@ -17,11 +17,10 @@ BASH_AGENTS = [
     "repo-coder",
     "charter-docs",
     "security-auditor",
-    "nist-specialist",
-    "cis-specialist",
+    "framework-specialist",
     "pr-train-conductor",
 ]
-PIPE_ALLOWED = {"security-auditor", "nist-specialist", "cis-specialist"}
+PIPE_ALLOWED = {"security-auditor", "framework-specialist"}
 SEPARATORS = [
     "git diff & git diff",
     "git diff\ngit diff",

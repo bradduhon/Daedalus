@@ -72,15 +72,15 @@ _PRIORITIES_RULE = re.compile(r"priorities rule [0-9]+:")
 _ANSWERERS: dict[str, tuple[str, ...]] = {
     "YIELD_WEB": ("web-researcher",),
     "YIELD_CONTRACT": ("contract-spec",),
-    "YIELD_COMPLIANCE": ("nist-specialist", "cis-specialist"),
+    # 0157: one framework specialist answers every compliance topic.
+    "YIELD_COMPLIANCE": ("framework-specialist",),
     "YIELD_STANDARDS": ("standards-rules-specialist",),
     # 0129, 0137: a `priorities rule <n>:` yield is a surfaced default the operator answers.
     PRIORITIES_YIELD: (OPERATOR,),
 }
 # 0132: the two diff-content judges list into Compliance too, never into the audit gate.
 _COMPLIANCE_AGENTS = (
-    "nist-specialist",
-    "cis-specialist",
+    "framework-specialist",
     "dependency-auditor",
     "terraform-reviewer",
 )

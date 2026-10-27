@@ -21,8 +21,7 @@ EXPECTED_MODEL = {
     "pr-train-conductor": "opus",
     "contract-spec": "sonnet",
     "charter-docs": "sonnet",
-    "nist-specialist": "sonnet",
-    "cis-specialist": "sonnet",
+    "framework-specialist": "sonnet",
     "standards-rules-specialist": "sonnet",
     "web-researcher": "haiku",
     "planner": "opus",
@@ -42,8 +41,7 @@ EXPECTED_PHASES = {
     "standards-rules-specialist": ("clarification", "plan"),
     "charter-docs": ("clarification", "commit", "release"),
     "pr-train-conductor": ("commit", "release"),
-    "nist-specialist": ("clarification", "audit"),
-    "cis-specialist": ("clarification", "audit"),
+    "framework-specialist": ("clarification", "audit"),
     "web-researcher": ("context",),
     "planner": ("plan",),
     "orchestrator": ("context", "clarification", "plan", "implementation", "audit"),
@@ -269,60 +267,64 @@ def test_charter_docs_probe_status_and_dash_rule() -> None:
     assert "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_ledger.py" not in text
 
 
-@pytest.mark.parametrize("name,sub", [("nist-specialist", "nist"), ("cis-specialist", "cis")])
-def test_specialists_anchor_the_manifest_to_the_cache_dir(name: str, sub: str) -> None:
-    # F6: one absolute anchor; no relative manifest path, no $ or { in the body.
-    text = (AGENTS / f"{name}.md").read_text()
-    assert "`<cache dir>` is the absolute frameworks cache directory named in your prompt" in text
-    assert f"Read `<cache dir>/{sub}/manifest.json`" in text
-    assert f"Read `{sub}/manifest.json`" not in text
-    # 0024: the plugin root variable is substituted at load; nothing else may carry $ or {.
-    body = text.split("---\n", 2)[2].replace("${CLAUDE_PLUGIN_ROOT}/references/", "")
-    assert "$" not in body and "{" not in body
-
-
-JUDGES = ("nist-specialist", "cis-specialist")
-JUDGE_REFERENCES = {
-    "nist-specialist": "references/nist-800-53-distilled.md",
-    "cis-specialist": "references/hardening-rubric.md",
-}
+FRAMEWORK = AGENTS / "framework-specialist.md"
 JUDGE_CONTRACT = (
     "Your reply ends with exactly one of these, nothing after it.\n"
-    "- `[STATUS: CACHE_INVALID] <detail>`\n"
-    "- `[STATUS: COMPLIANCE] <PASS/FAIL list with control ids and file:line>`\n"
+    "- `[STATUS: PACK_INVALID] <pack id>: <problem>`\n"
+    "- `[STATUS: COMPLIANCE] <PASS/FAIL list with pack control ids, refs ids and file:line>`\n"
 )
 
 
-@pytest.mark.parametrize("name", JUDGES)
-def test_judges_name_their_reference_files(name: str) -> None:
-    # 0024: the judge's method maps the diff to an existing own-words reference file.
-    text = (AGENTS / f"{name}.md").read_text()
-    named = re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}/(references/[A-Za-z0-9.-]+\.md)", text)
-    assert JUDGE_REFERENCES[name] in named
-    assert [ref for ref in named if not (REPO_ROOT / ref).is_file()] == []
+def test_framework_specialist_reads_only_its_packs_line() -> None:
+    # 0157 (12.2): controls come from the Packs: folders only; no cache, OWASP file or fetcher.
+    text = FRAMEWORK.read_text()
+    assert "`Packs: <absolute pack folder>[, <absolute pack folder>...]`" in text
+    assert "You read\ncontrols only from those folders" in text
+    for gone in ("<cache dir>", "asvs-5.0.0.json", "refresh_frameworks.py", "references/"):
+        assert gone not in text, gone
+    # 0024: the body carries no $ or {, so nothing is substituted at load.
+    body = text.split("---\n", 2)[2]
+    assert "$" not in body and "{" not in body
+
+
+def test_framework_specialist_keeps_the_judge_method_and_rubric() -> None:
+    # 0024: the merged agent keeps the NIST judge's rubric rules and verdict shape.
+    text = FRAMEWORK.read_text()
     method = text.split("\n## Method\n", 1)[1].split("\n## ", 1)[0]
     assert "PASS, FAIL or N/A" in method
+    assert "the pack id, the control id" in method and "`refs` ids" in method
+    assert "Never run a `live_check` command" in method
     rubric = text.split("\n## Rubric\n", 1)[1].split("\n## ", 1)[0]
-    assert "never PASS on absence of evidence" in rubric
+    for rule in (
+        "FAIL means the diff contradicts the control.",
+        "N/A needs a one-line reason.",
+        "never PASS on absence of evidence",
+        "Never quote\n  benchmark text",
+    ):
+        assert rule in rubric, rule
 
 
-@pytest.mark.parametrize("name", JUDGES)
-def test_judges_read_the_list_manifest(name: str) -> None:
-    # 0026: the manifest is a list of entries; each file is hashed and its age noted.
-    text = (AGENTS / f"{name}.md").read_text()
-    phase0 = text.split("## Phase 0", 1)[1].split("\n## ", 1)[0]
-    for key in ("`file`", "`sha256`", "`pinned_on`"):
+def test_framework_specialist_checks_each_pack_first() -> None:
+    # 0157: each pack is hashed against pack.json before any control is read; age is noted.
+    phase0 = FRAMEWORK.read_text().split("## Phase 0", 1)[1].split("\n## ", 1)[0]
+    for key in ("`sha256`", "`pinned_on`", "`daedalus-controls/1`", "sha256sum"):
         assert key in phase0, key
-    assert "JSON list" in phase0
-    assert "sha256sum" in phase0
+    assert "`[STATUS: PACK_INVALID] <pack id>: <problem>`" in phase0
     assert "90 days" in phase0
-    assert "catalog_sha256" not in text
 
 
-@pytest.mark.parametrize("name", JUDGES)
-def test_judges_keep_their_status_contract(name: str) -> None:
-    text = (AGENTS / f"{name}.md").read_text()
+def test_framework_specialist_keeps_its_status_contract() -> None:
+    text = FRAMEWORK.read_text()
     assert text.split("## Status contract\n", 1)[1] == JUDGE_CONTRACT
+
+
+def test_old_specialist_agents_are_gone() -> None:
+    # 0157 (12.4): no alias for the two old agent names, and no agent names the fetcher.
+    assert sorted(AGENTS.glob("*-specialist.md")) == [
+        FRAMEWORK,
+        AGENTS / "standards-rules-specialist.md",
+    ]
+    assert [p.name for p in AGENTS.glob("*.md") if "refresh_frameworks.py" in p.read_text()] == []
 
 
 def test_conductor_lists_the_git_reads_the_jail_allows() -> None:
@@ -332,38 +334,6 @@ def test_conductor_lists_the_git_reads_the_jail_allows() -> None:
         assert read in text, read
     assert "`git rev-parse --abbrev-ref HEAD`" in text
     assert "refuses `git remote`, `git branch -vv`, and `@{u}`" in text
-
-
-NIST_DISTILLED = REPO_ROOT / "references" / "nist-800-53-distilled.md"
-NIST_IDS = REPO_ROOT / "tests" / "fixtures" / "nist-control-ids.txt"
-
-
-def test_nist_distillation_ids_exist_in_the_catalog() -> None:
-    # 0024: every distilled row names a base control of the pinned catalog (oscal-content v1.5.0).
-    catalog = set(NIST_IDS.read_text().split())
-    rows = re.findall(r"^\| ([A-Z]{2}-[0-9]+) \|", NIST_DISTILLED.read_text(), re.MULTILINE)
-    assert rows
-    assert len(rows) == len(set(rows))
-    assert [row for row in rows if row not in catalog] == []
-
-
-RUBRIC = REPO_ROOT / "references" / "hardening-rubric.md"
-RUBRIC_ITEM = re.compile(r"^- HR-[0-9]+: .+ CIS: (unmapped|[A-Za-z0-9 .]+ [0-9]+(\.[0-9]+)*)$")
-
-
-def test_rubric_items_have_ids_and_cis_cites() -> None:
-    # 0024: own-words items cite a CIS section number or unmapped, never CIS text.
-    items = [line for line in RUBRIC.read_text().splitlines() if line.startswith("- ")]
-    assert items
-    assert [line for line in items if not RUBRIC_ITEM.match(line)] == []
-    ids = [line.split(":", 1)[0] for line in items]
-    assert len(ids) == len(set(ids))
-
-
-def test_rubric_has_no_long_quotes() -> None:
-    # 0024: a tripwire for pasted benchmark text, not a license proof.
-    spans = re.findall('"([^"]*)"|\u201c([^\u201d]*)\u201d', RUBRIC.read_text())
-    assert [s for pair in spans for s in pair if len(s) > 40] == []
 
 
 AUDITOR = AGENTS / "security-auditor.md"

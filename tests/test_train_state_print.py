@@ -115,7 +115,7 @@ RECORDS: list[dict[str, object]] = [
         3, "repo-coder", f"[STATUS: YIELD_STANDARDS] which rule covers {REPO}/scripts/x.py?", "c2"
     ),
     _stop(4, "standards-rules-specialist", "[STATUS: STANDARD] python.md:10", "s1"),
-    _stop(5, "nist-specialist", "[STATUS: COMPLIANCE] AU-9 PASS, AU-3 PASS", "n1"),
+    _stop(5, "framework-specialist", "[STATUS: COMPLIANCE] AU-9 PASS, AU-3 PASS", "n1"),
     _pre(6, "orchestrator", "Agent", "o1", prompt=f"Check it.\nUnit worktree: {U1}\nGo."),
     _stop(
         7, "verifier", "[VERDICT: VERIFIED] claims=12\nrows\n[VERDICT: VERIFIED] claims=12", "v1"
@@ -235,7 +235,9 @@ def test_yields_name_the_unit_kind_question_and_answerer(tmp_path: Path) -> None
 
 
 def test_compliance_lists_each_specialist_reply(tmp_path: Path) -> None:
-    assert _section(_text(tmp_path), "Compliance") == ["- nist-specialist: AU-9 PASS, AU-3 PASS"]
+    assert _section(_text(tmp_path), "Compliance") == [
+        "- framework-specialist: AU-9 PASS, AU-3 PASS"
+    ]
     assert _section(_text(tmp_path, records=RECORDS[:1]), "Compliance") == [NOT_RUN]
 
 
@@ -357,9 +359,12 @@ def test_public_refuses_every_path_outside_the_allow_list(token: str) -> None:
 @pytest.mark.parametrize("token", REFUSED_PATHS.values(), ids=REFUSED_PATHS.keys())
 def test_a_reply_path_is_withheld_and_a_notes_path_refuses(tmp_path: Path, token: str) -> None:
     # W3.2: log text, which nobody can edit, prints the marker; a notes row stops the command.
-    hostile = _stop(10, "cis-specialist", f"[STATUS: COMPLIANCE] AU-9 PASS at {token}", "k1")
+    hostile = _stop(10, "framework-specialist", f"[STATUS: COMPLIANCE] AU-9 PASS at {token}", "k1")
     text = _text(tmp_path, records=[*RECORDS, hostile])
-    assert _section(text, "Compliance")[1] == "- cis-specialist: AU-9 PASS at \\[path withheld\\]"
+    assert (
+        _section(text, "Compliance")[1]
+        == "- framework-specialist: AU-9 PASS at \\[path withheld\\]"
+    )
     assert _path_tokens(text) == []
     notes = parse_notes(NOTES.replace("## Blocks", f"A ruling: see {token}\n## Blocks"), "n")
     with pytest.raises(SummaryError) as row:
@@ -392,7 +397,7 @@ def test_a_glued_tilde_or_doubled_slash_path_is_withheld_or_refused(token: str) 
 def test_a_relative_path_before_a_placeholder_is_written_intact(tmp_path: Path) -> None:
     # W3.2: escaping turns `<` into an entity; the body check reads the text before escaping.
     reply = "[STATUS: COMPLIANCE] notes in docs/.tmp/daedalus/<train-id>-summary.md PASS"
-    text = _text(tmp_path, records=[*RECORDS, _stop(14, "cis-specialist", reply, "k2")])
+    text = _text(tmp_path, records=[*RECORDS, _stop(14, "framework-specialist", reply, "k2")])
     line = "docs/.tmp/daedalus/&lt;train-id&gt;-summary.md PASS"
     assert line in _section(text, "Compliance")[1]
     assert "withheld" not in _section(text, "Compliance")[1]

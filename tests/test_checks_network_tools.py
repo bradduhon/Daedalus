@@ -56,7 +56,7 @@ class TestNoShellAgents:
         assert decide(_t("web-researcher", "WebFetch"), CFG).allow
         assert decide(_t("web-researcher", "WebSearch"), CFG).allow
         assert not decide(_t("standards-rules-specialist", "WebFetch"), CFG).allow
-        assert not decide(_t("nist-specialist", "WebFetch"), CFG).allow
+        assert not decide(_t("framework-specialist", "WebFetch"), CFG).allow
 
 
 class TestRound3WorkerHygiene:
