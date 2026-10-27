@@ -45,7 +45,7 @@ EXPECTED_PHASES = {
     "nist-specialist": ("clarification", "audit"),
     "cis-specialist": ("clarification", "audit"),
     "web-researcher": ("context",),
-    "planner": ("plan",),
+    "planner": ("clarification", "plan"),
     "orchestrator": ("context", "clarification", "plan", "implementation", "audit"),
     "verifier": ("implementation",),
     "dependency-auditor": ("audit",),
@@ -92,11 +92,18 @@ def test_planner_frontmatter_and_reply_lines() -> None:
         Hook("credential_paths", ()),
         Hook("workspace_integrity", ()),
         Hook("tool_bound", ()),
-        Hook("root_writes", ("--touch", "scratch", "--name", "plan*.md")),
+        Hook(
+            "root_writes",
+            ("--touch", "scratch", "--name", "plan*.md", "--sub", "brainstorm-*/spec.md"),
+        ),
     )
     assert planner.status_lines == (
         "[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>",
         "[STATUS: QUESTION] <what the task leaves open>",
+        "[STATUS: ROUND] round=<k> items=<m>",
+        "[STATUS: SPEC] round=<k> path=<path> open=<m>",
+        "[STATUS: NOT_VIABLE] round=<k> <the blocking fact in one line>",
+        "[STATUS: YIELD_WEB] <query>",
     )
     disallowed = _list(frontmatter(PLANNER)["disallowedTools"], PLANNER)
     assert {"Edit", "Bash", "WebFetch", "WebSearch", "Agent", "Task", "SendMessage"} <= disallowed
@@ -111,6 +118,81 @@ def test_planner_frontmatter_and_reply_lines() -> None:
     ):
         assert rule in text, rule
     assert "```plan" in text
+
+
+def _planner_section(heading: str) -> str:
+    text = PLANNER.read_text(encoding="utf-8")
+    return text.split(f"\n{heading}\n", 1)[1].split("\n## ", 1)[0]
+
+
+def test_planner_mode_line_picks_plan_or_challenge_mode() -> None:
+    # 0152: brainstorm spec 4.1, the opening scopes "never edit the spec" to plan mode.
+    opening = " ".join(PLANNER.read_text(encoding="utf-8").split("\n## ", 1)[0].split())
+    assert "The brief's `Mode:` line picks plan mode or challenge mode" in opening
+    assert "a brief with no `Mode:` line is plan mode" in opening
+    assert "In plan mode you never edit the spec." in opening
+    assert "Cuts a design spec" in frontmatter(PLANNER)["description"].split(". ")[0]
+    assert "In challenge mode" in frontmatter(PLANNER)["description"].split(". ")[1]
+
+
+def test_planner_challenge_mode_section_holds_the_steps_and_grounding_rules() -> None:
+    # 0152, 0154: brainstorm spec 4.1 steps and spec 5 rules, after the method section.
+    text = PLANNER.read_text(encoding="utf-8")
+    assert text.index("\n## Method\n") < text.index("\n## Challenge mode\n")
+    assert text.index("\n## Challenge mode\n") < text.index("\n## The plan file\n")
+    section = _planner_section("## Challenge mode")
+    for step in (
+        "1. Read the idea, the notes file when named, and the repository areas the idea touches",
+        "2. Open each round with `Round <k>` and one to three sentences headed "
+        "`What I take you to want:`.",
+        "3. Number the items across the whole round.",
+        "4. List feasibility claims under `Feasibility:`, each with `Receipt:`.",
+        "5. Ask the researcher with `[STATUS: YIELD_WEB] <query>`",
+        "6. When a fact defeats the idea, end with the not-viable lines of 3.5 and "
+        "`[STATUS: NOT_VIABLE]`.",
+        "7. When the open items fit under Open risks, write the spec in the shape of section 6 "
+        "and end with `[STATUS: SPEC]`.",
+        "8. On `Mode: plan` after a brainstorm, cut the spec as `## Method` says, holding the "
+        "rounds as context.",
+    ):
+        assert step in section, step
+    from tests.test_brainstorm import GROUNDING
+
+    # 0152: spec 5 rule 5 ends "(3.5)"; the planner keeps it verbatim, the skill's copy drops it.
+    for rule in GROUNDING:
+        verbatim = rule.replace("nearest viable version.", "nearest viable version (3.5).")
+        assert verbatim in section.splitlines(), verbatim
+    assert "`docs/.tmp/daedalus/brainstorm-<YYYYMMDD>/spec.md`" in section
+    assert "Nearest viable version: <what changes" in section
+    flat = " ".join(section.split())
+    assert "A planner whose context is lost resumes cold from the draft spec" in flat
+    assert "the brief names the draft as its notes file" in flat
+
+
+def test_planner_status_contract_names_each_modes_lines() -> None:
+    # 0152: brainstorm spec 4.2, the mode line sits outside the bullets the parser reads.
+    contract = PLANNER.read_text(encoding="utf-8").split("## Status contract\n", 1)[1]
+    assert contract.count("\n- `") == 6 and contract.startswith("Your reply ends")
+    assert (
+        "Plan mode ends with PLAN, QUESTION or YIELD_WEB; challenge mode ends with ROUND, SPEC, "
+        "NOT_VIABLE, YIELD_WEB or QUESTION." in contract.splitlines()
+    )
+
+
+def test_planner_hooks_admit_the_brainstorm_spec_only(tmp_path: Path) -> None:
+    # 0152: brainstorm spec 7.2, the planner's hooks round-tripped through the router.
+    from tests.jail_cases import _git_init
+    from tests.payloads import _w
+
+    repo = _git_init(tmp_path / "repo")
+    folder = repo / "docs" / ".tmp" / "daedalus" / "brainstorm-20261026"
+
+    def routed(path: Path) -> tuple[bool, str | None, str]:
+        return router.route({**_w("daedalus:planner", str(path)), "cwd": str(repo)}, REPO_ROOT)
+
+    assert routed(folder / "spec.md") == (True, None, "")
+    allow, _, hook = routed(folder / "notes.md")
+    assert not allow and hook == "root_writes"
 
 
 @pytest.mark.parametrize("name", sorted(EXPECTED_MODEL))
