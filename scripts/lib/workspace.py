@@ -1017,7 +1017,7 @@ def _merge_all(
 
 
 VERIFIED = "[VERDICT: VERIFIED] claims=<n>"
-# 0121, agents/verifier.md:143: the verifier's closing line, after its corrected=<k> line.
+# 0121, agents/verifier.md:150: the verifier's closing line, after its corrected=<k> line.
 VERIFIED_LINE = re.compile(r"\[VERDICT: VERIFIED\] claims=[0-9]+")
 VERIFIER = "verifier"
 _UNIT_LINE = "Unit worktree: "
