@@ -31,6 +31,8 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"ledger", "summary"}
         # 0156: the contract skip check the orchestrator runs before any contract-spec start.
         | {"contract"}
+        # 0153, 0157 (12.5): the literacy check on each decision brief before DECISION.
+        | {"brief-check"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir", "--check-tools"}),

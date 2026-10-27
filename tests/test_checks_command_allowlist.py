@@ -686,6 +686,20 @@ def test_contract_is_the_orchestrators_train_subcommand() -> None:
     assert reason == module.R_TRAIN_REPO.format(flag="--repo", given="/work/other", root=CWD)
 
 
+def test_brief_check_is_the_orchestrators_train_subcommand() -> None:
+    # 0153, 0157 (12.5): the orchestrator checks each decision brief; no other agent runs it.
+    module = load(HOOK)
+    assert "brief-check" in module.TRAIN_SCRIPTS["daedalus_train.py"]
+    brief = f"{CWD}/docs/.tmp/daedalus/t/decisions/1.md"
+    command = f"python3 {SCRIPTS}/daedalus_train.py brief-check --repo {CWD} --brief {brief}"
+    assert decide(_b("orchestrator", command), CFG).allow
+    for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+        assert not decide(_b(agent, command), CFG).allow, agent
+    other = command.replace(f"--repo {CWD}", "--repo /work/other")
+    reason = evaluate(HOOK, _b("orchestrator", other), *TRAIN_FLAGS)
+    assert reason == module.R_TRAIN_REPO.format(flag="--repo", given="/work/other", root=CWD)
+
+
 # spec 7.1: the orchestrator's Train C read rows, one allow and one nearest-write refusal each.
 ORCHESTRATOR_READ_ROWS = [
     ("date -u", "date -s 2026-01-01"),

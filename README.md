@@ -513,6 +513,7 @@ Daedalus/
 │   ├── lib/audit.py                 # hash-chained append, redaction
 │   ├── lib/audit_proof.py           # the hooks-live and approved-verdict proofs
 │   ├── lib/audit_rounds.py          # the auditor's finding list and the round number
+│   ├── lib/briefs.py                # decision briefs checked at the manifest literacy level
 │   ├── lib/config.py                # config.json loading and validation
 │   ├── lib/controls.py              # loads the controls fragments
 │   ├── lib/credential_paths.py      # the credential-path deny every agent meets
