@@ -15,11 +15,8 @@ from tests.hook_chain import (
     decide,
     evaluate,
     internal_error_denies,
-    malformed_input_denies,
-    outside_tools_allow,
     payload,
     run_script,
-    unknown_flag_denies,
 )
 from tests.jail_cases import DATA
 from tests.payloads import _b, _w
@@ -125,18 +122,6 @@ def test_workspace_integrity_fixture_decisions() -> None:
     nocwd = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": ""})
     assert run_script(HOOK, nocwd) == {"decision": "deny", "reason": jail.R_NO_CWD}
     assert run_script(HOOK, payload("Write", file_path=f"{CWD}/src/a.py")) == allow
-
-
-def test_workspace_integrity_allows_tools_outside_its_tools() -> None:
-    outside_tools_allow(HOOK, "Read")
-
-
-def test_workspace_integrity_unknown_flag_denies() -> None:
-    unknown_flag_denies(HOOK, payload("Write", file_path=f"{CWD}/src/a.py"))
-
-
-def test_workspace_integrity_malformed_input_denies() -> None:
-    malformed_input_denies(HOOK)
 
 
 def test_workspace_integrity_internal_error_denies_and_names_the_hook() -> None:

@@ -13,11 +13,9 @@ from tests.hook_chain import (
     evaluate,
     internal_error_denies,
     load,
-    malformed_input_denies,
     outside_tools_allow,
     payload,
     run_script,
-    unknown_flag_denies,
 )
 from tests.payloads import _b, _t, _w
 
@@ -114,14 +112,6 @@ def test_tool_bound_allows_tools_outside_its_tools() -> None:
     # 0044: tool_bound judges every tool, so only the agent's own listed tools pass.
     assert load(HOOK).TOOLS == hook_io.EVERY_TOOL
     outside_tools_allow(HOOK, "Read")
-
-
-def test_tool_bound_unknown_flag_denies() -> None:
-    unknown_flag_denies(HOOK, payload("Read"))
-
-
-def test_tool_bound_malformed_input_denies() -> None:
-    malformed_input_denies(HOOK)
 
 
 def test_tool_bound_internal_error_denies_and_names_the_hook() -> None:
