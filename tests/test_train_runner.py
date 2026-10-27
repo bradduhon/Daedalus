@@ -282,7 +282,6 @@ def test_start_runs_begin_and_records_the_definition_hash(repo: Path, plugin: Pa
         "secrets_scan": False,
         "scrub_file": None,
         "ledger": None,
-        "github": False,
         "dependency_web_lookup": None,
         "terraform_tools": None,
         "terraform_validate": False,

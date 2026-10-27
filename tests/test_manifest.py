@@ -42,12 +42,12 @@ def test_absent_jail_narrowing_is_empty(tmp_path: Path) -> None:
 
 
 def test_this_repos_manifest_loads() -> None:
-    # 0073, B2, issue 48: this repo's stack commands are read; the secret scan and github are on.
+    # 0073, B2: this repo's stack commands are read and the secret scan is on.
     assert load(REPO_ROOT) == Manifest(
         unit_test_cmd=".venv/bin/pytest -q",
         typecheck_cmd="python3 -m mypy scripts",
         lint_cmd=".venv/bin/ruff check scripts tests",
-        features=Features(secrets_scan=True, github=True),
+        features=Features(secrets_scan=True),
     )
 
 

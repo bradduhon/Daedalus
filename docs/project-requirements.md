@@ -189,7 +189,7 @@ Example:
   "jail_narrowing": { "forbidden_extensions": [], "forbidden_paths": [] },
   "upstream_dependencies": [], "downstream_dependencies": [] }
 ```
-The manifest reader checks `jail_narrowing`, `features`, `trains_dir`, `frameworks`, the three stack commands and the `ledger` block; each of those keys is a row of the generated key reference in the plugin [README](../README.md#key-reference). The reader refuses an unknown key inside `jail_narrowing`, `features` or `frameworks`. The `frameworks` keys are described under "Framework control packs" above. The keys below describe the project for the people and agents who read the file. No reader checks them, so a wrong value is never refused.
+The manifest reader checks `jail_narrowing`, `features`, `trains_dir`, `frameworks`, the three stack commands and the `ledger` block; each of those keys is a row of the generated key reference in the plugin [README](../README.md#key-reference). The reader refuses an unknown key inside `jail_narrowing`, `features` or `frameworks`, except the dropped `features.github` key: a manifest that still carries it loads with any value, the key changes nothing, and the doctor prints one `OPT` line naming it (0172). The doctor's two gh lines are a `MISS` in repository scope and `OPT` in folder scope (0074). The `frameworks` keys are described under "Framework control packs" above. The keys below describe the project for the people and agents who read the file. No reader checks them, so a wrong value is never refused.
 
 | Key | What it governs | Type | Allowed values | Default | Example |
 |---|---|---|---|---|---|

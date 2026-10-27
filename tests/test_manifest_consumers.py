@@ -126,10 +126,15 @@ def _gitleaks_line(lines: list[str]) -> str:
 
 def test_doctor_gitleaks_line_follows_the_feature(tmp_path: Path) -> None:
     on, off, bad = tmp_path / "on", tmp_path / "off", tmp_path / "bad"
-    _features(on, {"secrets_scan": True})
+    _features(on, {"secrets_scan": True, "scope": "repository"})
     _features(off, {})
     _features(bad, {"secrets_scan": 1})
     assert _gitleaks_line(_doctor(on, tmp_path)).startswith("MISS gitleaks on PATH: not found.")
+    # 0074: in folder scope the Push Train never runs, so the scan's missing tool is optional.
+    _features(on, {"secrets_scan": True})
+    assert _gitleaks_line(_doctor(on, tmp_path)).startswith(
+        "OPT  gitleaks on PATH: not found, and this is folder scope"
+    )
     assert _gitleaks_line(_doctor(off, tmp_path)).startswith("OPT  gitleaks on PATH: not found")
     # 0069: a refused manifest counts as scan on, so the missing tool is still a MISS.
     assert _gitleaks_line(_doctor(bad, tmp_path)).startswith("MISS gitleaks on PATH")
