@@ -193,6 +193,15 @@ def test_claims_mode_checks_only_the_listed_claims_and_samples_later_rounds() ->
     assert "in claims mode every claim checked this round" in _body("## Status contract", "\0")
 
 
+def test_claims_mode_checks_attachment_beside_existence() -> None:
+    # Train 10 audit-miss diagnosis V1 and V1b: a check claim needs a caller, not a definition.
+    mode = _body("## Claims mode", "Never write U+2013")
+    assert "existence (its definition) and attachment (a caller on the path it governs)" in mode
+    assert "existence alone is OVERSTATED" in mode
+    writer = _flat((REPO_ROOT / "agents" / "docs-writer.md").read_text(encoding="utf-8"))
+    assert "carries a receipt that includes the caller grep" in writer
+
+
 def test_a_clause_number_beside_a_receipt_gets_two_checks() -> None:
     # VER 6, 0136 item 6: the line holds the claim, and the number names that line's clause.
     procedure = _body("## Procedure", "## Claims mode")

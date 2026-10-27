@@ -147,6 +147,20 @@ def test_readers_split_readers_writers_and_mentions(repo: Path) -> None:
     assert "[STATUS: HIDDEN]" not in readers
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["contract_skip", "lock_sha", "skip", "plan_record", "pack_dir", "verify", "--ignore-file"],
+)
+def test_train_control_names_are_security_relevant(name: str) -> None:
+    # Train 10 audit-miss root cause 1: skip, lock, pack, verify and ignore names reach the auditor.
+    assert daedalus_map.SECURITY.search(name)
+
+
+def test_plain_names_stay_out_of_the_security_words() -> None:
+    assert not daedalus_map.SECURITY.search("[STATUS: COMPLETE]")
+    assert not daedalus_map.SECURITY.search("charter_root")
+
+
 def test_ownership_comes_from_the_plan(repo: Path) -> None:
     assert _map(repo, "--plan", str(repo / "docs" / "plan.md"))[0] == 0
     assert _json(repo)["ownership"] == {

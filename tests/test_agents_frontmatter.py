@@ -479,6 +479,34 @@ def test_auditor_files_findings_as_failing_tests() -> None:
     assert "reset --hard" not in text
 
 
+def test_auditor_judges_what_a_change_makes_reachable() -> None:
+    # Train 10 audit-miss diagnosis S1 to S8, O1 to O3, R1: reachable scope, trust model, leads.
+    text = " ".join(AUDITOR.read_text().split())
+    procedure = text.split("## Procedure", 1)[1].split("## Severity", 1)[0]
+    for cls in ("tool surface", "hostile input", "control"):
+        assert f"- {cls}: " in procedure, cls
+    for phrase in (
+        "Trust model: attacker input is anything a coder can commit",
+        "scope is the diff plus what it makes reachable",
+        "Every round judges the full diff from `<diff base>`",
+        "reading alone never closes it",
+        "never a real key",
+        "`[STATUS: YIELD_WEB] <tool> options and config files`",
+        "never filtered to added lines",
+        "Apply each auditor brief rule with a security effect",
+        "names the invariant broken, not the one case",
+    ):
+        assert phrase in text, phrase
+    recipe = " ".join((AGENTS / "orchestrator.md").read_text().split())
+    for phrase in (
+        "Reachability pass, before round 1",
+        "`Hunt: can <attacker input> reach <protected thing> after <unit>?`",
+        "never mark a lead optional or the auditor's to drop",
+        "A later round judges the full diff from `<base sha>` again",
+    ):
+        assert phrase in recipe, phrase
+
+
 def test_auditor_keeps_the_phrases_later_units_read() -> None:
     # pin C1 -> C5: four phrases stay verbatim in the auditor file.
     text = " ".join(AUDITOR.read_text().split())
@@ -564,6 +592,10 @@ def test_auditor_grep_commands_pass_the_jail(monkeypatch: pytest.MonkeyPatch) ->
         assert router.route(payload, REPO_ROOT) == (True, None, ""), command
 
 
+# Train 10 audit-miss diagnosis S3: the tool surface help fallback.
+YIELD = "[STATUS: YIELD_WEB] <tool> options and config files"
+
+
 def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
     # pin C1 -> C3: first and last line `[VERDICT: <word>] tip=<40 lowercase hex>`.
     contract = AUDITOR.read_text().split("## Status contract\n", 1)[1]
@@ -571,14 +603,18 @@ def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
     assert contract == (
         "Your reply starts with exactly one of these verdict lines as its first line and ends with"
         " the\nsame verdict line, alone, as its last line. This holds for every reply, fix rounds"
-        " included.\nThe `tip=` value is the 40 lowercase hex step 0 printed.\n"
+        " included,\nexcept the tool surface yield below. The `tip=` value is the 40 lowercase hex"
+        " step 0 printed.\n"
         f"- `[VERDICT: APPROVED] {tip}` then `<paragraph>` then `[VERDICT: APPROVED] {tip}`\n"
         f"- `[VERDICT: REJECTED] {tip}` then `<itemized findings>`"
         f" then `[VERDICT: REJECTED] {tip}`\n"
+        f"- `{YIELD}` as both the first and the last line: a question, not a verdict; the next"
+        " prompt resumes the round.\n"
     )
     assert load(AUDITOR).status_lines == (
         f"[VERDICT: APPROVED] {tip}",
         f"[VERDICT: REJECTED] {tip}",
+        YIELD,
     )
 
 
