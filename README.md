@@ -522,6 +522,7 @@ Daedalus/
 │   ├── lib/git.py                   # the one git runner: timeout and redirect scrub
 │   ├── lib/hook_io.py               # hook input and output for the check scripts
 │   ├── lib/human_text.py            # counts the plain words in operator lines
+│   ├── lib/inventory.py             # FILES: every path the plugin can write, for --print-files
 │   ├── lib/jail.py                  # per-agent tool policy
 │   ├── lib/ledger.py                # ledger resolution, sequence read, entry format
 │   ├── lib/locks.py                 # the one FIFO-safe lock opener and bounded lock
