@@ -282,15 +282,16 @@ def _flat(path: Path) -> str:
 
 
 def test_orchestrator_copies_sections_and_checks_needs_per_wave() -> None:
-    text = (REPO_ROOT / "agents" / "orchestrator.md").read_text(encoding="utf-8")
-    phase2 = " ".join(text.split("## Phase 2", 1)[1].split("\nRead the last line", 1)[0].split())
+    # 0165: the build phase skill the orchestrator runs holds the brief and needs steps.
+    text = (REPO_ROOT / "skills" / "build" / "SKILL.md").read_text(encoding="utf-8")
+    phase2 = " ".join(text.split("\n1. ", 1)[1].split("\n5. ", 1)[0].split())
     assert "the unit's requirement section of the plan verbatim" in phase2
     assert "`### <unit id>: <title>` heading through its last numbered requirement" in phase2
     check = "scripts/daedalus_doctor.py --check-tools <names> --repo <repo>`"
     assert check in phase2 and "`MISS tool <name>`" in phase2
-    assert "before the first dispatch of each wave" in phase2
-    assert "ask once per wave, never once per unit" in phase2
-    assert phase2.index(check) < phase2.index("Then write the unit's brief file")
+    assert "Before the first dispatch of each wave" in phase2
+    assert "Ask once per wave, never once per unit" in phase2
+    assert phase2.index(check) < phase2.index("Write the unit's brief file")
 
 
 def test_planner_reads_the_map_and_writes_sections_and_needs() -> None:

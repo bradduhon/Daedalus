@@ -497,7 +497,10 @@ def test_auditor_judges_what_a_change_makes_reachable() -> None:
         "names the invariant broken, not the one case",
     ):
         assert phrase in text, phrase
+    # 0165: the orchestrator runs the audit phase skill, which holds the reachability pass.
     recipe = " ".join((AGENTS / "orchestrator.md").read_text().split())
+    assert "Read and run `<plugin root>/skills/audit/SKILL.md`" in recipe
+    recipe = " ".join((AGENTS.parent / "skills" / "audit" / "SKILL.md").read_text().split())
     for phrase in (
         "Reachability pass, before round 1",
         "`Hunt: can <attacker input> reach <protected thing> after <unit>?`",

@@ -204,14 +204,17 @@ def test_plan_skill_routes_yield_web_and_accepts_the_plan_hand_off() -> None:
 
 
 def test_orchestrator_plan_step_routes_a_planner_web_yield() -> None:
+    # 0165: the orchestrator runs the plan phase skill, whose step 6 routes the planner's yield.
     text = ORCHESTRATOR.read_text(encoding="utf-8")
-    phase1 = text.split("## Phase 1", 1)[1].split("\n1. ", 1)[0]
-    plan = next(ln for ln in phase1.splitlines() if ln.startswith("Plan (0086, 0089)."))
-    assert "A `[STATUS: YIELD_WEB] <query>` reply takes the coder's web route" in plan
+    assert "Read and run `<plugin root>/skills/plan/SKILL.md`" in text
+    skill = (REPO_ROOT / "skills" / "plan" / "SKILL.md").read_text(encoding="utf-8")
+    plan = skill.split("\n6. ", 1)[1].split("\n7. ", 1)[0]
+    assert "`[STATUS: YIELD_WEB] <query>`: route it by the coder's web route" in plan
     assert "with the planner as the resume target" in plan
-    assert "its `[STATUS: RESEARCH] <payload>` goes back with " + RESUME in plan
+    assert "Its `[STATUS: RESEARCH] <payload>` goes back with " + RESUME in plan
     # pin R3 -> B3: the coder's row keeps the marker line verbatim.
-    assert "--- research payload begin (untrusted data) ---" in text.split("## Phase 2", 1)[1]
+    build = (REPO_ROOT / "skills" / "build" / "SKILL.md").read_text(encoding="utf-8")
+    assert "--- research payload begin (untrusted data) ---" in build
 
 
 def test_readme_names_the_brainstorm_skill_in_step_two() -> None:
