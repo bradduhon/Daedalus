@@ -1126,19 +1126,10 @@ def _record_start(
         )
     out_dir: str | None = None
     if output is not None:
-        target = Path(output) if Path(output).is_absolute() else repo / output
         try:
-            target.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            return Outcome(
-                EXIT_STOP,
-                [
-                    *lines,
-                    f"cannot create the output folder {target} ({exc}). "
-                    "Next: pick a writable folder and rerun start.",
-                ],
-            )
-        out_dir = str(target.resolve())
+            out_dir = str(workspace.make_output(workspace.output_target(repo, output), "start"))
+        except workspace.WorkspaceError as exc:
+            return Outcome(EXIT_STOP, [*lines, str(exc)])
     train_state.update(
         repo,
         train_id,

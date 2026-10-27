@@ -1954,6 +1954,48 @@ def test_run_skill_refuses_build_audit_and_release_in_a_folder() -> None:
     assert _run_skill().index("## Scope") < _run_skill().index("## Preconditions")
 
 
+def test_run_skill_starts_a_folder_run_with_the_folder_begin() -> None:
+    # issue 48, 0178: ask the output folder, begin with --out, hooks check, phases, then stop.
+    assert "run as the Folder run section below says" in " ".join(_run_step(1).split())
+    section = " ".join(_run_skill().split("\n## Folder run\n", 1)[1].split())
+    plugin = "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/"
+    asked = section.index("1) the project's docs folder `<repo>/docs`, 2) a new folder under /tmp")
+    begin = section.index(
+        f"`{plugin}daedalus_workspace.py begin --repo <repo> --scope folder --out <out>`"
+    )
+    live = section.index(f"`{plugin}verify_audit_chain.py --hooks-live --repo <repo>`")
+    phases = section.index("- Phases.")
+    end = section.index(
+        f'`{plugin}daedalus_workspace.py stop --repo <repo> --reason "run complete"'
+    )
+    assert asked < begin < live < phases < end
+    assert "the last one `scope: folder out: <out>`" in section
+    assert "never starts the orchestrator (no audit in a folder, 0178)" in section
+    for skill in ("brainstorm", "plan", "verify"):
+        assert f"`${{CLAUDE_PLUGIN_ROOT}}/skills/{skill}/SKILL.md`" in section
+    assert "`${CLAUDE_PLUGIN_ROOT}/skills/document/SKILL.md` in derived document mode" in section
+    assert "the planner in the run folder `<repo>/docs/.tmp/daedalus/<train-id>/`" in section
+    assert "copies each finished output into `<out>`" in section
+    assert "Build, audit and release never run here." in section
+
+
+def test_plan_and_document_skills_copy_folder_outputs_into_the_run_output_folder() -> None:
+    # issue 48: agents write where their hooks admit them; the main session copies into <out>.
+    plan = " ".join(_phase_skill("plan").read_text(encoding="utf-8").split())
+    assert "unit S1" not in plan
+    assert "take `<repo>`, `<train-id>` and `<out>` from the State Block lines" in plan
+    assert "Both hold in folder scope too, because the planner's write hook admits" in plan
+    assert (
+        "In folder scope, copy `<path>` to `<out>/plan-<YYYYMMDD>.md` with Read and Write" in plan
+    )
+    assert "the run ends with the plan file at `<out>`, or goes on to a document phase" in plan
+    doc = " ".join(_phase_skill("document").read_text(encoding="utf-8").split())
+    assert "The output folder is `<out>` when it sits below `<repo>`" in doc
+    assert "`<repo>/docs/.tmp/daedalus/<train-id>/out` otherwise" in doc
+    assert "copy each output and the change log into `<out>` with Read and Write" in doc
+    assert "the run entry's stop command then ends the run in place of unmark" in doc
+
+
 def test_run_skill_relays_the_announce_line_and_goes() -> None:
     # 0168: print the announce line, resume with GO. at once, never ask to confirm.
     route = _run_step(7)

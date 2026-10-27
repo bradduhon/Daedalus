@@ -11,7 +11,17 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-from lib import atomic, audit_proof, git, narrow, plan_record, scrub, train_state, unit_binding
+from lib import (
+    atomic,
+    audit_proof,
+    git,
+    manifest,
+    narrow,
+    plan_record,
+    scrub,
+    train_state,
+    unit_binding,
+)
 from lib.audit import SESSION_ID, DataDirError, cache_dir_or_probe, ensure_project_data_dir
 from lib.audit_proof import SUMMARY_DIR
 from lib.config import Config, ConfigError, load_config
@@ -498,6 +508,72 @@ def begin_folder(root: Path, ledger_feature: bool | None) -> list[str]:
         f"charter_root: {charter or 'none'}  charter base: none",
         *_config_lines(config, cache),
     ]
+
+
+TMP_ROOT = Path("/tmp")
+
+
+def output_target(root: Path, output: str) -> Path:
+    # issue 48: a folder run's output path, absolute or relative to the project root.
+    return Path(output) if Path(output).is_absolute() else root / output
+
+
+def make_output(target: Path, rerun: str) -> Path:
+    # issue 48: the one creation of a folder run's output folder, for start and the folder begin.
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise WorkspaceError(
+            f"cannot create the output folder {target} ({exc}). "
+            f"Next: pick a writable folder and rerun {rerun}."
+        ) from exc
+    return target.resolve()
+
+
+def _folder_out(root: Path, output: str) -> Path | None:
+    # issue 48, 0069: an existing writable folder as is; None admits <root>/docs or new under /tmp.
+    target = output_target(root, output)
+    real = Path(os.path.realpath(target))
+    if real.is_dir() and os.access(real, os.W_OK | os.X_OK):
+        return real
+    docs = Path(os.path.realpath(root / "docs"))
+    tmp = Path(os.path.realpath(TMP_ROOT))
+    if not os.path.lexists(target) and (real == docs or real.is_relative_to(tmp)):
+        return None
+    raise WorkspaceError(
+        f"--out {output} is not an existing writable folder, {root / 'docs'}, or a new folder "
+        "under /tmp. Next: pass --out one of those, or create the folder from your own shell, "
+        "then rerun begin."
+    )
+
+
+def begin_folder_run(root: Path, output: str) -> list[str]:
+    # issue 48, 0178: the run entry's folder start; the runner's start shares both helpers.
+    root = root.resolve()
+    try:
+        features = manifest.features(root)
+    except manifest.ManifestError as exc:
+        raise WorkspaceError(str(exc)) from exc
+    kind = manifest.scope_kind(root, features)
+    if kind != "folder":
+        raise WorkspaceError(
+            f"{root} is {kind} scope, so a run here starts with the repository begin. "
+            f"Next: run begin --repo {root} without --scope, then rerun."
+        )
+    found = _folder_out(root, output)
+    out = found or make_output(output_target(root, output), "begin")
+    try:
+        lines = begin_folder(root, features.ledger)
+    except WorkspaceError:
+        if found is None:
+            # issue 48: a refused begin leaves behind no output folder it made.
+            out.rmdir()
+        raise
+    train_id = train_state.active_train(root)
+    if train_id is None:
+        raise WorkspaceError(f"begin left no run marker in {root}. Next: {RERUN}")
+    _record(root, train_id, scope_kind="folder", output_dir=str(out))
+    return [*lines, f"scope: folder  out: {out}"]
 
 
 def _active(repo: Path) -> tuple[str, dict[str, object]]:

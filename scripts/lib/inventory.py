@@ -191,9 +191,9 @@ FILES: tuple[Entry, ...] = (
         "every lock a caller takes; the caller's own row names the lock file",
     ),
     Entry(
-        "<--output folder>",
-        "scripts/lib/train_runner.py:_record_start",
-        "a document train begins with --output; a relative folder is taken under <repo>",
+        "<--output or --out folder>",
+        "scripts/lib/workspace.py:make_output",
+        "start with --output or the folder begin with --out; a relative folder is under <repo>",
     ),
     Entry(
         f"{_SCRATCH}/<train-id>/briefs/<stage>-<n>.md",
