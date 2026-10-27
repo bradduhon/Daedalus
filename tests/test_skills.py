@@ -1627,3 +1627,114 @@ def test_coder_bash_section_opens_with_the_credential_habit_line() -> None:
     section = coder.split("## Shell rules (0022, spec 7)\n", 1)[1]
     first = section.splitlines()[0]
     assert first.startswith("- Credential stores are never read, from any path:"), first
+
+
+# 0165, spec 3: the phase skills built so far; later units add audit, document and release.
+PHASE_SKILLS = ("plan", "build", "verify")
+PHASES = {"brainstorm", "plan", "build", "verify", "audit", "document", "release"}
+PHASE_PARTS = (
+    "## What the phase does well",
+    "## Evidence that ends it",
+    "## Agents it uses",
+    "## Suggested next",
+)
+_NEXT_ITEM = re.compile(r"- `([a-z]+)`: \S")
+# 0169: a code span holding a path, command, id or placeholder keeps its train name.
+_SPAN = re.compile(r"`[^`\n]*`")
+_CODE_CHARS = re.compile(r"[/_<.:\[=-]")
+
+
+def _phase_skill(name: str) -> Path:
+    return REPO_ROOT / "skills" / name / "SKILL.md"
+
+
+def _drop_code_spans(text: str) -> str:
+    return _SPAN.sub(lambda m: "" if _CODE_CHARS.search(m.group(0)) else m.group(0), text)
+
+
+@pytest.mark.parametrize("name", PHASE_SKILLS)
+def test_phase_skill_is_found_by_the_skill_loader(name: str) -> None:
+    # Claude Code loads skills/<name>/SKILL.md by its folder; the frontmatter name matches it.
+    path = _phase_skill(name)
+    assert path in SKILLS
+    fields, _ = _split(path)
+    assert fields.get("name") == name and fields.get("description")
+
+
+@pytest.mark.parametrize("name", PHASE_SKILLS)
+def test_phase_skill_holds_the_four_parts_in_order(name: str) -> None:
+    # spec 3: method, evidence, agents, then the suggested-next block, and no other part.
+    _, body = _split(_phase_skill(name))
+    heads = [line for line in body.splitlines() if line.startswith("## ")]
+    assert heads == list(PHASE_PARTS)
+
+
+@pytest.mark.parametrize("name", PHASE_SKILLS)
+def test_phase_skill_suggests_only_phase_skills(name: str) -> None:
+    # spec 3.2 to 3.4: each item names one phase skill and its trigger.
+    _, body = _split(_phase_skill(name))
+    block = body.split("\n## Suggested next\n", 1)[1]
+    items = [line for line in block.splitlines() if line.strip()]
+    assert items
+    named = [m.group(1) for line in items if (m := _NEXT_ITEM.match(line))]
+    assert len(named) == len(items), items
+    assert set(named) <= PHASES, named
+
+
+@pytest.mark.parametrize("name", PHASE_SKILLS)
+def test_phase_skill_says_run_not_train(name: str) -> None:
+    # 0169: operator text says run; command, state file, script and hook names keep train.
+    text = _drop_code_spans(_phase_skill(name).read_text(encoding="utf-8"))
+    assert re.findall(r"\btrains?\b", text, re.IGNORECASE) == []
+
+
+def test_run_not_train_scan_keeps_code_spans_and_catches_prose() -> None:
+    # 0169: the scan above drops a command span but not a plain-word label span.
+    kept = _drop_code_spans("run `/daedalus:build-train` on `<train-id>`, then `End the train`")
+    assert re.findall(r"\btrains?\b", kept, re.IGNORECASE) == ["train"]
+
+
+@pytest.mark.parametrize(
+    ("name", "moved"),
+    [
+        (
+            "plan",
+            (
+                "scripts/daedalus_map.py --repo <repo> --out "
+                "<repo>/docs/.tmp/daedalus/<train-id>/map`",
+                "scripts/daedalus_train.py contract --repo <repo>`",
+                "scripts/daedalus_workspace.py lock --repo <repo> --no-contract`",
+                "scripts/daedalus_workspace.py lock --repo <repo> --contract <contract path> "
+                "--version <packet_version>`",
+                "`Follow Plugin + amend global`",
+                "`Contract: <contract path> sha256=<hex>`",
+            ),
+        ),
+        (
+            "build",
+            (
+                "scripts/daedalus_workspace.py create --repo <repo> --name <train-id>-<unit-slug> "
+                "--base daedalus/<train-id>`",
+                "scripts/daedalus_doctor.py --check-tools <names> --repo <repo>`",
+                "`[STATUS: YIELD_CONTRACT] <mismatch>`",
+                "`[STATUS: YIELD_COMPLIANCE] <question>`",
+                "`git merge-base --is-ancestor <lock sha> <b>`",
+                "scripts/daedalus_workspace.py finish --repo <repo>`",
+            ),
+        ),
+        (
+            "verify",
+            (
+                "`git -C <repo> diff -U0 <lock sha>...<b>`",
+                "the line `Brief: <the unit's brief path from the build phase>`",
+                "`[VERDICT: REFUTED] <rows>`",
+                "`Claim: <output path>:<line> <claim>`",
+            ),
+        ),
+    ],
+)
+def test_phase_skill_carries_the_method_it_moved(name: str, moved: tuple[str, ...]) -> None:
+    # spec 3.1: the method moves from the orchestrator recipe into the phase skill.
+    flat = " ".join(_phase_skill(name).read_text(encoding="utf-8").split())
+    for item in moved:
+        assert item in flat, item

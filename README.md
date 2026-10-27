@@ -569,14 +569,16 @@ Daedalus/
 ├── skills/
 │   ├── audit-report/SKILL.md        # /daedalus:audit-report
 │   ├── brainstorm/SKILL.md          # /daedalus:brainstorm
+│   ├── build/SKILL.md               # /daedalus:build, the build phase
 │   ├── build-train/SKILL.md         # /daedalus:build-train
 │   ├── catalog/SKILL.md             # /daedalus:catalog
 │   ├── doc-train/SKILL.md           # /daedalus:doc-train
 │   ├── doctor/SKILL.md              # /daedalus:doctor
-│   ├── plan/SKILL.md                # /daedalus:plan
+│   ├── plan/SKILL.md                # /daedalus:plan, the plan phase
 │   ├── push-train/SKILL.md          # /daedalus:push-train
 │   ├── round/SKILL.md               # /daedalus:round
-│   └── setup/SKILL.md               # /daedalus:setup
+│   ├── setup/SKILL.md               # /daedalus:setup
+│   └── verify/SKILL.md              # /daedalus:verify, the verify phase
 └── tests/                           # the pytest suite
 ```
 
