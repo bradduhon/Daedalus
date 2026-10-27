@@ -170,11 +170,15 @@ OUTSIDE_FORM = {
     "expanded root": "python3 /plugin/scripts/checks/tool_bound.py",
     "dot dot in path": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/../lib/jail.py",
     "dot dot in flag": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --name a..b",
-    "dot dot leads sub": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --sub ../x/spec.md",
+    "dot dot leads sub": (
+        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --sub ../x/spec.md"
+    ),
     "dot dot inside sub": (
         "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --sub b-*/../spec.md"
     ),
-    "slash leads flag": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --sub /x/spec.md",
+    "slash leads flag": (
+        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --sub /x/spec.md"
+    ),
     "semicolon": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/tool_bound.py; rm x",
     "pipe": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/tool_bound.py | cat",
     "and chain": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/tool_bound.py && id",
