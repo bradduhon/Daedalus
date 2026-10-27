@@ -1283,7 +1283,17 @@ def record_plan(cwd: Path, path: Path) -> Outcome:
             ) from exc
 
         def change(state: dict[str, object]) -> None:
-            state[train_state.PLAN] = {"path": str(target), "sha256": sha}
+            record = {"path": str(target), "sha256": sha}
+            if state.get(train_state.PLAN) == record:
+                return
+            # 0156, 0089: a no-contract lock holds only for the one-file plan it was taken on.
+            if state.get("lock_sha") and state.get("packet_version") is None:
+                raise RunnerError(
+                    f"train {train_id} locked with no contract on its one-file plan, so a new "
+                    "plan is refused. Next: stop the train with daedalus_train.py stop, then "
+                    "start a new train with the new plan."
+                )
+            state[train_state.PLAN] = record
             # 0156: a new plan voids an earlier skip; the contract subcommand judges it again.
             state.pop(train_state.CONTRACT_SKIP, None)
 

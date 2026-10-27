@@ -977,6 +977,26 @@ def test_contract_skips_a_one_unit_one_file_plan_with_wire_none(repo: Path, plug
     assert "contract_skip" not in _state(repo)
 
 
+def test_a_new_plan_is_refused_after_a_no_contract_lock(repo: Path, plugin: Path) -> None:
+    # 0156, 0089: the no-contract lock holds for its one-file plan; a swap needs a new train.
+    assert _contract_run(repo, plugin, _skip_plan()).lines == ["contract: skip"]
+    train = str(_state(repo)["train_id"])
+    train_state.update(repo, train, lock_sha=_integration(repo))
+    plan = _state(repo)["plan"]
+    same = train_runner.record_plan(repo, repo / "plan.md")
+    assert same.code == 0 and _state(repo)["contract_skip"] is True
+    wide = repo / "wide.md"
+    wide.write_text(_skip_plan(SKIP_UNIT.replace("a.py", "a.py, b.py")), encoding="utf-8")
+    refused = train_runner.record_plan(repo, wide)
+    assert refused.code == 1 and "locked with no contract" in refused.lines[0]
+    assert "Next: stop the train" in refused.lines[0]
+    assert _state(repo)["plan"] == plan and _state(repo)["contract_skip"] is True
+    # 0156: a contract-locked train still records a revised plan.
+    train_state.update(repo, train, packet_version=1)
+    assert train_runner.record_plan(repo, wide).code == 0
+    assert _state(repo)["plan"]["path"] == str(wide.resolve())  # type: ignore[index]
+
+
 @pytest.mark.parametrize(
     ("text", "reason"),
     [
