@@ -22,6 +22,47 @@ START = "<!-- generated: catalog.py matrix -->\n"
 TABLE_START = "<!-- generated: catalog.py table -->\n"
 END = "<!-- end generated -->"
 CATALOG_SKILL = REPO_ROOT / "skills" / "catalog" / "SKILL.md"
+# 0165, spec 3: the seven phase skills in run order.
+PHASE_SKILLS = ("brainstorm", "plan", "build", "verify", "audit", "document", "release")
+# 0176: each phase word on agent files maps to the phase skill that serves it.
+WORD_MAP = {
+    "context": "plan",
+    "clarification": "plan",
+    "plan": "plan",
+    "implementation": "build",
+    "audit": "audit",
+    "commit": "release",
+    "release": "release",
+}
+
+
+def _section_rows(head: str) -> list[list[str]]:
+    text = CATALOG_SKILL.read_text(encoding="utf-8")
+    section = text.split(f"\n{head}\n", 1)[1].split("\n## ", 1)[0]
+    rows = [ln for ln in section.splitlines() if ln.startswith("| ")]
+    return [row.removeprefix("| ").removesuffix(" |").split(" | ") for row in rows]
+
+
+def test_catalog_tables_the_seven_phase_skills() -> None:
+    # 0165, spec 3: one row per phase skill, each with what happens and the evidence that ends it.
+    rows = _section_rows("## The seven phase skills")
+    assert rows[0] == ["Phase skill", "What happens", "Evidence that ends it"]
+    assert [row[0] for row in rows[1:]] == list(PHASE_SKILLS)
+    for row in rows[1:]:
+        assert len(row) == 3 and all(cell.strip() for cell in row), row
+        assert (REPO_ROOT / "skills" / row[0] / "SKILL.md").is_file(), row[0]
+    text = " ".join(CATALOG_SKILL.read_text(encoding="utf-8").split())
+    assert "## The six phases" not in text and "| Commit and release |" not in text
+
+
+def test_catalog_maps_each_phase_word_to_its_phase_skill() -> None:
+    # 0176: the words stay on agent files; the catalog prints the word-to-skill map.
+    rows = _section_rows("## The phase word map")
+    assert rows[0] == ["Phase word", "Phase skill", "What the word covers there"]
+    assert {row[0].strip("`"): row[1] for row in rows[1:]} == WORD_MAP
+    assert [row[0].strip("`") for row in rows[1:]] == list(agent_files.PHASES)
+    for path in AGENTS.glob("*.md"):
+        assert set(agent_files.load(path).phases) <= set(WORD_MAP), path.stem
 
 
 def _block(path: Path, start: str) -> str:
@@ -90,7 +131,7 @@ def test_catalog_skill_names_every_agent() -> None:
 
 
 def test_catalog_skill_states_the_musts() -> None:
-    # 0088, 0089: the musts and the six phases with their exit conditions.
+    # 0088, 0089, 0165: the musts and the seven phase skills with the evidence that ends each.
     text = " ".join(CATALOG_SKILL.read_text(encoding="utf-8").split())
     musts = text.split("## The musts", 1)[1].split(" ## ", 1)[0]
     for must in (
@@ -106,12 +147,12 @@ def test_catalog_skill_states_the_musts() -> None:
     assert "Hooks check four exit conditions today:" in text
     assert "no hook checks them" in text
     assert "warn the main session in context about its own (0106, Main never prompted)" in musts
-    phases = text.split("## The six phases", 1)[1].split(" ## ", 1)[0]
-    for phase in ("Context", "Clarification", "Plan", "Implementation", "Audit"):
+    phases = text.split("## The seven phase skills", 1)[1].split(" ## ", 1)[0]
+    for phase in PHASE_SKILLS:
         assert f"| {phase} |" in phases, phase
-    assert "| Commit and release |" in phases
+    words = text.split("## The phase word map", 1)[1].split(" ## ", 1)[0]
     for token in agent_files.PHASES:
-        assert f"`{token}`" in phases, token
+        assert f"`{token}`" in words, token
     for pin in (
         "`python3 scripts/validate_plan.py <path> [--max-concurrent N]`",
         "`[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>`",

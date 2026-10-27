@@ -382,8 +382,9 @@ def test_the_documentation_stage_records_the_docs_verdict() -> None:
 
 def test_the_catalog_names_the_writer_stage_and_its_verifier_pass() -> None:
     catalog = _flat("skills/catalog/SKILL.md")
-    audit_row = catalog.split("| Audit |", 1)[1].split("| Commit and release |", 1)[0]
-    assert "Then the docs writer stage" in audit_row and "claims pass" in audit_row
+    # 0165: the docs writer stage is the document phase skill's row of the catalog table.
+    doc_row = catalog.split("| document |", 1)[1].split("| release |", 1)[0]
+    assert "Public docs mode is the docs writer stage" in doc_row and "claims pass" in doc_row
     rule = catalog.split("- Docs writer stage (0131, 0134):", 1)[1].split(" - ", 1)[0]
     for part in ("docs-writer", "the verifier checks its claims in a claims pass", "--gate docs"):
         assert part in rule, part
@@ -391,9 +392,10 @@ def test_the_catalog_names_the_writer_stage_and_its_verifier_pass() -> None:
 
 
 def test_the_push_train_carries_no_docs_precondition() -> None:
-    push = _flat("skills/push-train/SKILL.md")
+    # 0174: the release phase holds the push recipe; the push-train skill is a stub.
+    push = _flat("skills/release/SKILL.md")
     preconditions = push.split("## Recovery round", 1)[0]
     assert "--gate docs" not in push and "docs_verdict" not in push
     step9 = preconditions.split(" 9. ", 1)[1].split(" 10. ", 1)[0]
     assert "`docs verified on tip <12 hex>`" in step9
-    assert "the Push Train checks nothing more for the docs" in step9
+    assert "this phase checks nothing more for the docs" in step9

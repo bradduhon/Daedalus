@@ -138,13 +138,13 @@ def test_doctor_gitleaks_line_follows_the_feature(tmp_path: Path) -> None:
 
 
 def test_push_train_runs_gitleaks_only_with_the_scan_on() -> None:
-    text = (REPO_ROOT / "skills" / "push-train" / "SKILL.md").read_text(encoding="utf-8")
+    text = (REPO_ROOT / "skills" / "release" / "SKILL.md").read_text(encoding="utf-8")
     step = text.split("\n5. ", 1)[1].split("\n6. ", 1)[0]
     assert step.startswith(
         "Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_doctor.py --print-secrets-scan"
     )
     assert step.index("With the scan on, run `gitleaks version`") < step.index("gh auth status")
     assert "With the scan off, gitleaks is not run" in step
-    push = text.split("\n## Push\n", 1)[1].split("\n## ", 1)[0]
+    push = text.split("\n### Push\n", 1)[1].split("\n### ", 1)[0]
     scan = next(line for line in push.splitlines() if "gitleaks detect" in line)
     assert scan.endswith("Include this line only when step 5 recorded the scan on.")

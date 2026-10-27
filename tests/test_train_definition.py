@@ -87,7 +87,7 @@ def test_check11_refuses_a_next_line_without_four_plain_words() -> None:
     defects = _only(11, "check11").splitlines()
     assert len(defects) == 2
     assert any("description" in line for line in defects)
-    assert any("/daedalus:build-train" in line for line in defects)
+    assert any("/daedalus:run" in line for line in defects)
 
 
 @pytest.mark.parametrize("name", ["check13-empty", "check13-unknown"])

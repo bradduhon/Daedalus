@@ -19,7 +19,7 @@ from tests.conftest import git as _git
 from tests.hook_chain import evaluate, load
 from tests.hook_chain import judge as decide
 from tests.test_dispatch_binding import TRAIN, seed_plan
-from tests.test_skills import HAND_WRITES
+from tests.test_skills import HAND_WRITES, orchestrated
 
 ORCHESTRATOR = "daedalus:orchestrator"
 AGENT_FILE = REPO_ROOT / "agents" / "orchestrator.md"
@@ -261,7 +261,7 @@ MAIN_ONLY = ("daedalus_train.py exception", "daedalus_train.py reaudit")
 def _phase_text(name: str) -> str:
     # 0060: the orchestrator writes the plugin root out in full; its hook refuses the variable.
     text = (REPO_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
-    return text.replace("${CLAUDE_PLUGIN_ROOT}", "<plugin root>")
+    return orchestrated(text).replace("${CLAUDE_PLUGIN_ROOT}", "<plugin root>")
 
 
 def _phase_step(name: str, first: int, last: int | None = None) -> str:
@@ -302,8 +302,9 @@ def test_recipe_names_every_train_script_it_may_run() -> None:
     names = {cmd.split()[1].rsplit("/", 1)[1] for cmd in commands}
     allowlist = load("command_allowlist")
     # refresh_frameworks.py is the operator's own-shell Next line, never the orchestrator's call.
-    # Pin SRC -> MAP: the document phase's derived mode runs freeze_sources.py (0165).
-    assert names - {"refresh_frameworks.py"} == set(allowlist.TRAIN_SCRIPTS)
+    # Pin SRC -> MAP: derived document mode, run by the main session, runs freeze_sources.py (0135).
+    expected = set(allowlist.TRAIN_SCRIPTS) - {"freeze_sources.py"}
+    assert names - {"refresh_frameworks.py"} == expected
 
 
 @pytest.mark.usefixtures("jail_fakes")

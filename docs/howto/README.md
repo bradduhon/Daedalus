@@ -5,7 +5,7 @@ This guide assumes you have never seen this plugin. Each section says what to ty
 
 ## What Daedalus does
 
-Daedalus is a Claude Code plugin that gives your session a catalog of scoped agents and two saved recipes over them, the Build Train and the Push Train (0088). While a train runs, it writes a hash-chained audit log of every tool call the hook matcher routes (Bash, file reads, searches and edits, web fetches, agent spawns, messages, MCP tools). Each record carries the hash of the one before it, so an edited record, or one removed from the middle, breaks the chain. It confines each agent to a jail: a PreToolUse hook checks every tool call against the rules for that agent and blocks anything outside them. It refuses every agent's reads of your credential stores through file tools and the Bash forms it models; when the main session itself reaches for one, the call runs with a warning in the session's context and in your transcript, and you are never prompted. It has a first-run doctor that checks your setup. It renders an audit report, a readable digest of one session's log, with `/daedalus:audit-report`. It shows the agent catalog, the six phases and their exit conditions with `/daedalus:catalog`, and cuts a design spec into units with `/daedalus:plan`. It runs a Build Train with `/daedalus:build-train`. The main session starts one orchestrator agent, which gives each unit to a coding agent in its own git worktree. Agents raise questions to specialists. The units merge onto a local integration branch, and an adversarial security audit judges the merged result. It runs a Push Train with `/daedalus:push-train`, which commits, pushes, and opens the pull request for a finished Build Train. You review and merge.
+Daedalus is a Claude Code plugin that gives your session a catalog of scoped agents and the phase skills a run composes over them (0088, 0165). While a train runs, it writes a hash-chained audit log of every tool call the hook matcher routes (Bash, file reads, searches and edits, web fetches, agent spawns, messages, MCP tools). Each record carries the hash of the one before it, so an edited record, or one removed from the middle, breaks the chain. It confines each agent to a jail: a PreToolUse hook checks every tool call against the rules for that agent and blocks anything outside them. It refuses every agent's reads of your credential stores through file tools and the Bash forms it models; when the main session itself reaches for one, the call runs with a warning in the session's context and in your transcript, and you are never prompted. It has a first-run doctor that checks your setup. It renders an audit report, a readable digest of one session's log, with `/daedalus:audit-report`. It shows the agent catalog, the seven phase skills and the evidence that ends each with `/daedalus:catalog`, and cuts a design spec into units with `/daedalus:plan`. It starts a run with `/daedalus:run`. The main session starts one orchestrator agent, which gives each unit to a coding agent in its own git worktree. Agents raise questions to specialists. The units merge onto a local integration branch, and an adversarial security audit judges the merged result. It runs a Push Train with `/daedalus:run push`, which commits, pushes, and opens the pull request for a finished Build Train. You review and merge.
 
 ## Install
 
@@ -141,7 +141,7 @@ It also refuses a path that names a directory, a path whose parent directory doe
 
 Start from a clean working tree on the branch you want to build from. Inside the session type the command and the task in your own words:
 
-    /daedalus:build-train Add a /healthz endpoint that returns the build version
+    /daedalus:run Add a /healthz endpoint that returns the build version
 
 Where it runs: a Claude Code session started inside the target repository. `<repo>/.claude/daedalus/config.json` is optional (see `docs/project-requirements.md`). Run `/daedalus:doctor` first if you have not.
 
@@ -245,9 +245,9 @@ The train ends by naming the audit session. To read what every agent did:
 
 After a Build Train ends, stay on its `daedalus/<train-id>` branch and type:
 
-    /daedalus:push-train
+    /daedalus:run push
 
-With no argument it pushes the newest Build Train in `docs/.tmp/daedalus/`. To push an older one, pass its train id: `/daedalus:push-train 20261014-120000`. A train id is the UTC time the Build Train started, `YYYYMMDD-HHMMSS`; anything else stops the train. Start the session in the repo's top directory, not a subdirectory or a linked worktree. No summary there means no Build Train has run yet; run `/daedalus:build-train` first.
+With no argument it pushes the newest Build Train in `docs/.tmp/daedalus/`. To push an older one, pass its train id: `/daedalus:run push 20261014-120000`. A train id is the UTC time the Build Train started, `YYYYMMDD-HHMMSS`; anything else stops the train. Start the session in the repo's top directory, not a subdirectory or a linked worktree. No summary there means no Build Train has run yet; run `/daedalus:run` first.
 
 ### Before anything is pushed
 
@@ -265,7 +265,7 @@ The train stops, with a `Next:` line, when any of these fails:
 
 The pr-train-conductor agent commits any staged result. With the secret scan on, it then scans the commits since the base with `gitleaks detect --redact`. It pushes the branch with `git push -u origin daedalus/<train-id>` and opens the pull request with the Build Train summary as its body. When a pull request for the branch is already open, it updates that body instead. The jail lets it push only a named branch to `origin`, never `main` or `master`, never a force push, and it cannot merge.
 
-Then it watches the GitHub Actions runs for the pushed commit and reports each conclusion. Only `success`, `skipped` and `neutral` let the train go on; every `skipped` or `neutral` result is named in your checklist, even when a later run succeeded. Any other conclusion, including `startup_failure` or one Daedalus does not know, stops the train: its log lines are added to the summary under `## CI` and shown to you. Fix the failure through `/daedalus:build-train`; the Push Train never fixes CI. The conductor cannot wait, so a run that has not started yet is not seen. Then the summary and the pull request body get the line `Deviation: CI not observed at push time`, and your checklist starts with `CI not observed; check the PR's checks before merging`.
+Then it watches the GitHub Actions runs for the pushed commit and reports each conclusion. Only `success`, `skipped` and `neutral` let the train go on; every `skipped` or `neutral` result is named in your checklist, even when a later run succeeded. Any other conclusion, including `startup_failure` or one Daedalus does not know, stops the train: its log lines are added to the summary under `## CI` and shown to you. Fix the failure through `/daedalus:run`; the Push Train never fixes CI. The conductor cannot wait, so a run that has not started yet is not seen. Then the summary and the pull request body get the line `Deviation: CI not observed at push time`, and your checklist starts with `CI not observed; check the PR's checks before merging`.
 
 ### When the Charter has a branch
 
@@ -285,16 +285,16 @@ With a Charter branch, item 6 reviews and merges the Charter pull request after 
 
 ### What BLOCKED means
 
-`[STATUS: BLOCKED] <detail>` from the conductor means a check it runs failed before anything changed on GitHub, or a command it needed was refused. The most common detail is `gitleaks findings`: the scan found something that looks like a secret in the branch's commits. The findings are shown with the secret redacted. Rotate the credential, remove it from the branch history from your own shell, and run `/daedalus:push-train` again. For any other detail, do what the detail names and rerun.
+`[STATUS: BLOCKED] <detail>` from the conductor means a check it runs failed before anything changed on GitHub, or a command it needed was refused. The most common detail is `gitleaks findings`: the scan found something that looks like a secret in the branch's commits. The findings are shown with the secret redacted. Rotate the credential, remove it from the branch history from your own shell, and run `/daedalus:run push` again. For any other detail, do what the detail names and rerun.
 
 ## Recovering a train
 
 Two kinds of trouble after the merge no longer mean a full rerun. Both run in the session that ran the Build Train.
 
 - A commit landed on `daedalus/<train-id>` after the audit approved it, so the approval no longer names the tip. In the Build Train session, tell it about the commit after the train completes; in the Push Train, its verdict check finds the moved tip itself. Either way the session runs `daedalus_train.py reaudit`, which prints `reaudit round=<n> tip=<sha>`, and one audit round judges the new tip. An approved round rewrites the summary and the train goes on. A rejected round shows you the findings and the same three choices as a stalled audit; no second recovery round runs on the same tip.
-- The train stopped after its merge and before its ledger commit, so the summary still reads `Ledger ids: pending`. Ask the Build Train session for the ledger resume. It runs `daedalus_train.py resume`, which prints `resume ledger train=<train-id> summary=<path>`, and starts a fresh orchestrator for that one step. That orchestrator commits the ledger entries, records the verdict, rewrites the summary and ends the train; then run `/daedalus:push-train`.
+- The train stopped after its merge and before its ledger commit, so the summary still reads `Ledger ids: pending`. Ask the Build Train session for the ledger resume. It runs `daedalus_train.py resume`, which prints `resume ledger train=<train-id> summary=<path>`, and starts a fresh orchestrator for that one step. That orchestrator commits the ledger entries, records the verdict, rewrites the summary and ends the train; then run `/daedalus:run push`.
 
-The Build Train also stops at its start when an agent file changed after the session loaded it, with the line `stale agents: <names>`. The session would run the old agent text, so start a new Claude Code session and run `/daedalus:build-train` again.
+The Build Train also stops at its start when an agent file changed after the session loaded it, with the line `stale agents: <names>`. The session would run the old agent text, so start a new Claude Code session and run `/daedalus:run` again.
 
 ## Developing Daedalus
 

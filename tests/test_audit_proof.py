@@ -252,9 +252,7 @@ def test_approved_refuses_a_rejected_final_round(
     _train(hook_input, repo_cwd, "[VERDICT: REJECTED] a.py:1 high")
     message = _refused(repo_cwd)
     assert message.startswith("NOT APPROVED:")
-    assert message.endswith(
-        "Next: run /daedalus:build-train; this train has no approved audit in its log."
-    )
+    assert message.endswith("Next: run /daedalus:run; this train has no approved audit in its log.")
 
 
 def test_approved_ignores_auditor_stops_after_the_summary_write(

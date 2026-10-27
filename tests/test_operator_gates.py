@@ -474,7 +474,7 @@ def test_the_catalog_carries_the_same_per_finding_prompt() -> None:
 
 def test_the_relays_record_per_finding_exemptions() -> None:
     # Requirements 7 and 14: one exception call per finding, and the tracking answer's trail.
-    build = _flat(REPO_ROOT / "skills" / "build-train" / "SKILL.md")
+    build = _flat(REPO_ROOT / "skills" / "run" / "SKILL.md")
     route = build.split("- `[STATUS: EXCEPTION] ledger_id=<id>`:", 1)[1].split(" - `[STATUS:", 1)[0]
     assert (
         "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py exception --repo <repo> "
@@ -484,7 +484,7 @@ def test_the_relays_record_per_finding_exemptions() -> None:
     assert "for `Skip it` (`dropped`) or `Exempt it` (`local`)" in route
     assert "`Deviation:` line naming the finding and its exemption row" in route
     assert "binds the ruling to the integration tip" not in route
-    push = _flat(REPO_ROOT / "skills" / "push-train" / "SKILL.md")
+    push = _flat(REPO_ROOT / "skills" / "release" / "SKILL.md")
     step9 = push.split(" 9. ", 1)[1].split(" 10. ", 1)[0]
     assert "a rejected round on the current tip whose every finding carries the operator's" in step9
     assert "four-field tracked-risk issue is filed before the pull request opens" in step9
@@ -500,8 +500,8 @@ def test_the_round_budget_is_gone_from_the_prose() -> None:
         "docs/project-requirements.md",
         "agents/orchestrator.md",
         "skills/catalog/SKILL.md",
-        "skills/build-train/SKILL.md",
-        "skills/push-train/SKILL.md",
+        "skills/run/SKILL.md",
+        "skills/release/SKILL.md",
     ):
         text = _flat(REPO_ROOT / rel)
         assert "audit_round_budget" not in text, rel

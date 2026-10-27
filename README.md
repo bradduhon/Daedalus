@@ -3,9 +3,9 @@
 
 ## What Daedalus is
 
-Daedalus is a Claude Code plugin that gives your session a catalog of scoped AI agents. Each agent has a short list of tools and works inside a jail, a set of hook-checked rules that blocks anything outside its job. Daedalus is an open composition over those agents (0088): you compose each body of work yourself, and the Build Train (`/daedalus:build-train`) is one saved recipe over this catalog, not the required shape. The Push Train (`/daedalus:push-train`) is a second saved recipe, for the push and the pull request.
+Daedalus is a Claude Code plugin that gives your session a catalog of scoped AI agents. Each agent has a short list of tools and works inside a jail, a set of hook-checked rules that blocks anything outside its job. Daedalus is an open composition over those agents (0088): you compose each body of work yourself from the phase skills, and no fixed recipe is the required shape. One command, `/daedalus:run`, starts any run: the orchestrator sizes the work, names the phases it picked and runs each from its phase skill. `/daedalus:run push` pushes and opens the pull request. The old commands `/daedalus:build-train`, `/daedalus:push-train` and `/daedalus:doc-train` only print the new command, and the release after 5.1.0 will remove them.
 
-Every body of work passes through six phases: context, clarification, plan, implementation, audit, and commit and release (0089). Phases overlap freely. A phase's weight scales with the task: a one-file fix carries a one-unit plan and no contract packet, and a cross-module build carries the packet. A contract packet is a written spec of the interfaces each coding agent's code must follow, locked before coding starts.
+Every body of work passes through phases, each one a skill: brainstorm, plan, build, verify, audit, document and release (0089, 0165). The phase words on agent files (context, clarification, plan, implementation, audit, commit and release) map to those skills in the catalog (0176). Phases overlap freely. A phase's weight scales with the task: a one-file fix carries a one-unit plan and no contract packet, and a cross-module build carries the packet. A contract packet is a written spec of the interfaces each coding agent's code must follow, locked before coding starts.
 
 Hooks check four exit conditions today: a plan record before a coder, a worktree binding for every coder, an approved verdict on the exact tip (or the operator's exemption for every finding of a rejected round) before a push or pull request, and the conductor as the only agent that pushes. Capturing each ruling in your decision ledger and merging the pull request are your duty; no hook checks them.
 
@@ -63,10 +63,10 @@ Every `MISS` line ends with a `Next:` instruction that says what to do. In a new
 
 ### Your first body of work
 
-1. Read the catalog. Type `/daedalus:catalog`. It prints every agent with its tools, its reply lines and the phases it suits, then the six phases with their exit conditions and the musts.
+1. Read the catalog. Type `/daedalus:catalog`. It prints every agent with its tools, its reply lines and the phases it suits, then the seven phase skills with the evidence that ends each, the phase word map and the musts.
 2. Write a spec, or point at one. A spec is a file in your repository that says what to build and how you will know it works. A one-line task needs no file; the Build Train saves the words you type as the spec. With only an idea and no spec, type `/daedalus:brainstorm` and the idea, or the path of a notes file. The planner answers in numbered rounds of contradictions, gaps and proposals, each tied to a sentence you wrote, and you answer in your own words. When the idea settles, the planner writes a spec draft under `docs/.tmp/daedalus/brainstorm-<YYYYMMDD>/`. Move it where your project keeps its specs and say the spec stands; the same planner then cuts the plan, as in step 3.
 3. Cut the spec into units. Type `/daedalus:plan` and the spec's path, for example `/daedalus:plan docs/specs/healthz.md`. The planner agent writes a plan file, and the plan validator checks it and prints `OK plan: graph: units=<n> critical_path=<k> width=<w> overlap_only=<pairs>`. The session then shows a unit table with the columns Unit, What it builds, Starts from, Waits on and Shares files with. Each row is one coding agent's work. Waits on names the units that must finish first, and Shares files with names the units that edit the same files, with the order they merge in. Outside a train the plan lands at `docs/.tmp/daedalus/plan-<YYYYMMDD>.md`.
-4. Start the Build Train. Type `/daedalus:build-train` and your task, naming the plan file the plan step wrote, as its `Next:` line says. The session hands it to the orchestrator as the train's plan; the orchestrator checks it with the plan validator and records it instead of cutting a new one. With no plan named, the orchestrator cuts and records the plan itself before any coder starts. The session checks the preconditions and prints the first State Block lines. The hooks check then prints `OK hooks live: session <id>, chain intact (<n> records)`. That check also marks where this train's audit begins; the Push Train later reads the security verdict only from records after that mark (issue 57).
+4. Start the run. Type `/daedalus:run` and the plan file the plan step wrote, `/daedalus:run <plan path>`, as its `Next:` line says. The session hands it to the orchestrator as the train's plan; the orchestrator checks it with the plan validator and records it instead of cutting a new one. With no plan named, the orchestrator cuts and records the plan itself before any coder starts. The session checks the preconditions and prints the first State Block lines. The hooks check then prints `OK hooks live: session <id>, chain intact (<n> records)`. That check also marks where this train's audit begins; the Push Train later reads the security verdict only from records after that mark (issue 57).
 5. Watch it run. The main session starts one orchestrator agent and relays between it and you (0060). After each phase you see a progress note that names the phase, its weight and the state of each unit. Before each choice the train prints one line, `Chose <what> over <alternative>: <cost>`.
 6. Answer its questions. When the train needs a ruling, the orchestrator writes a decision brief, and the session asks you through Claude Code's question prompt. Each question has a question line ending in a question mark, two or three context sentences and its options, with the recommended option first. Each question is written at the reading level the `docs.literacy` key of `service-manifest.json` names, `plain` when the key is absent, and the orchestrator runs `daedalus_train.py brief-check` on each brief before it hands the brief over (plain briefs by manifest level, 0153). The orchestrator ends each reply with one of four lines, and the session routes it:
    - `[STATUS: DECISION]`: the session asks you the brief's questions and sends your picks back.
@@ -74,7 +74,7 @@ Every `MISS` line ends with a `Next:` instruction that says what to do. In a new
    - `[STATUS: STOP]`: the session runs the stop command and shows its `Next:` line. Say continue to resume.
    - `[STATUS: TRAIN_COMPLETE]`: the session shows the summary path and the audit log path, then ends the train. If a commit lands on the integration branch after that, tell the session; it runs one recovery audit round on the new tip (`daedalus_train.py reaudit`) instead of a full rerun. A train that stopped before its ledger commit is finished by the session's ledger resume (`daedalus_train.py resume`).
 7. Read the audit result. The units merge onto the local branch `daedalus/<train-id>` first, and the security auditor judges that merged integration tip against the train's base. Before the first round the orchestrator lists the older rules and gates each new feature reaches (`Reachable:` lines). For each unit that touches a jail, a gate, a parser or an agent instruction, it also writes one or two attacker questions (`Hunt:` lines), and the auditor answers each with a test or a reproduction. Every round judges the full diff from the base, never only the fixes. After each rejected round the session asks you about every finding, one question per finding, with three choices: `Fix it now (Recommended)`, `Skip, track or exempt it` and `Stop the train` (0133). No fix round starts without your pick, and no number of rounds is set in advance. `Skip, track or exempt it` brings a second question, how the exemption is tracked: `Skip it` (dropped silently), `Track it` (a GitHub tracked-risk issue), `Exempt it` (the local ledger record alone), or your own answer. The Push Train's verdict check accepts a rejected round once every one of its findings carries an exemption.
-8. Push and merge. Review the integration branch, then read the session's audit log with `/daedalus:audit-report <session>`. Type `/daedalus:push-train` to push the branch and open its pull request. You merge the pull request.
+8. Push and merge. Review the integration branch, then read the session's audit log with `/daedalus:audit-report <session>`. Type `/daedalus:run push` to push the branch and open its pull request. You merge the pull request.
 
 ## Saved recipes
 
@@ -82,7 +82,7 @@ The Build Train and the Push Train are saved recipes over the catalog, not the r
 
 ### Build Train
 
-The Build Train (`/daedalus:build-train`) takes a task from its plan to an audited local branch. The main session checks the preconditions, starts one orchestrator agent, and relays between it and you. The orchestrator follows its recipe over the catalog. It reads your standards, cuts and records the plan, and locks the contract when the task carries one. It gives each unit to a coding agent in its own worktree, which is a separate checkout of your repository. It merges every unit into a local branch named `daedalus/<train-id>` and has the security auditor judge that merged branch. The train creates each worktree itself and removes it when the train ends. The Build Train never pushes.
+The Build Train (`/daedalus:run <task>`, or `/daedalus:run build <task>` for the full build order) takes a task from its plan to an audited local branch. The main session checks the preconditions, starts one orchestrator agent, and relays between it and you. The orchestrator follows its recipe over the catalog. It reads your standards, cuts and records the plan, and locks the contract when the task carries one. It gives each unit to a coding agent in its own worktree, which is a separate checkout of your repository. It merges every unit into a local branch named `daedalus/<train-id>` and has the security auditor judge that merged branch. The train creates each worktree itself and removes it when the train ends. The Build Train never pushes.
 
 Before you start, you need:
 
@@ -92,13 +92,13 @@ Before you start, you need:
 
 Then type the command and your task:
 
-    /daedalus:build-train Add a --verbose flag to the command-line tool
+    /daedalus:run Add a --verbose flag to the command-line tool
 
 ### Push Train
 
 The Push Train commits, pushes, and opens the pull request for a finished Build Train. It first checks that the Build Train's audit log holds an approved security verdict for that train. When `features.secrets_scan` is `true` in `service-manifest.json`, it scans the commits for secrets with gitleaks before the push. Your repository needs a GitHub remote named `origin`, and `gh` must be signed in to it. The conductor, the agent named pr-train-conductor, does the pushing and watches CI. When the Build Train used a Charter branch, the conductor also pushes that branch and opens its pull request after the code one. When a commit landed on the integration branch after the audit, the Push Train runs one recovery audit round on the new tip before it pushes. You review and merge, then delete the train branch from your own shell with `git branch -D daedalus/<train-id>` once `gh pr view <url> --json state` shows the merge.
 
-    /daedalus:push-train
+    /daedalus:run push
 
 ### Execution Train
 
@@ -388,7 +388,7 @@ Exit 0 prints `OK approved: approved verdict, ...` or `OK approved: every findin
 8. Audit. Judges join by what the diff touches. The framework specialist comes in for IAM, KMS, mTLS, key custody or infrastructure changes, with the shipped AWS and NIST packs or your own, the dependency auditor for a dependency manifest or lockfile, and the Terraform reviewer for a `.tf` or `.tfvars` file. The security auditor judges the merged tip in its own audit worktree, and `daedalus_train.py verdict` records its verdict. Each finding of a rejected round goes to you one question at a time.
 9. Ledger and docs. On an approved verdict, or once you exempted every finding, charter-docs commits the ledger entries. After an approval, the approved verdict is recorded next. The docs writer then brings the four public docs up to date in the docs stage.
 10. Summary. `daedalus_train.py summary` writes the summary from train state and the audit log, and the orchestrator ends with `[STATUS: TRAIN_COMPLETE]`.
-11. Push. `/daedalus:push-train` marks the train again, runs the hooks check and the push proof, and has the conductor push the branch and open the pull request. The push gate checks the verdict again on the conductor's own push. You review and merge.
+11. Push. `/daedalus:run push` marks the train again, runs the hooks check and the push proof, and has the conductor push the branch and open the pull request. The push gate checks the verdict again on the conductor's own push. You review and merge.
 
 ### Requirement sections and needs
 
@@ -426,7 +426,7 @@ The `priorities` block of `service-manifest.json` ranks four concerns, `security
 
 ### The document train and excluded roots
 
-`/daedalus:doc-train` derives a document from frozen sources (document train accepted, 0135). `freeze_sources.py --train <id> --output-dir <folder> --source <alias>=<role>:<path>` records each source with its sha256 in `<repo>/.claude/daedalus/trains/<id>.sources.json`. `freeze_sources.py --verify <that file>` exits 4 when a source changed. It exits 1 when the recorded output folder fails the same output folder check, before it reads any output. It exits 5 when an output carries an en or em dash, placeholder copy, or a sentence copied from a style source that carries a number. The doc-deriver and the change-logger write only inside the output folder, which `scripts/checks/doc_outputs.py` checks. The verifier checks the deriver's claims in claims mode. `/daedalus:round` keeps the record of one round of correspondence.
+`/daedalus:run doc <what, sources, folder>` derives a document from frozen sources (document train accepted, 0135). `freeze_sources.py --train <id> --output-dir <folder> --source <alias>=<role>:<path>` records each source with its sha256 in `<repo>/.claude/daedalus/trains/<id>.sources.json`. `freeze_sources.py --verify <that file>` exits 4 when a source changed. It exits 1 when the recorded output folder fails the same output folder check, before it reads any output. It exits 5 when an output carries an en or em dash, placeholder copy, or a sentence copied from a style source that carries a number. The doc-deriver and the change-logger write only inside the output folder, which `scripts/checks/doc_outputs.py` checks. The verifier checks the deriver's claims in claims mode. `/daedalus:round` keeps the record of one round of correspondence.
 
 The `excluded_roots` key of `config.json` names folders whose files must never reach git, GitHub or a redirect. `scripts/checks/excluded_roots.py` runs for every Daedalus agent after its own checks. It refuses a git command that stages, commits or stashes a path inside such a folder, a gh command or a redirect that names one. While any such folder is declared, it also refuses a git command that matches paths in any letter case: an `:(icase)` or short `:i:` pathspec, `--icase-pathspecs` or `GIT_ICASE_PATHSPECS` (issue 97). The doc-deriver and the change-logger may redirect into such a folder, since their outputs live there. During a train the main session is warned instead. `freeze_sources.py` records the resolved folders in the sources file.
 
@@ -571,14 +571,14 @@ Daedalus/
 │   ├── audit-report/SKILL.md        # /daedalus:audit-report
 │   ├── brainstorm/SKILL.md          # /daedalus:brainstorm, the brainstorm phase
 │   ├── build/SKILL.md               # /daedalus:build, the build phase
-│   ├── build-train/SKILL.md         # /daedalus:build-train
+│   ├── build-train/SKILL.md         # moved to /daedalus:run; prints the new command
 │   ├── catalog/SKILL.md             # /daedalus:catalog
-│   ├── doc-train/SKILL.md           # /daedalus:doc-train
+│   ├── doc-train/SKILL.md           # moved to /daedalus:run doc; prints the new command
 │   ├── document/SKILL.md            # the document phase, in two modes
 │   ├── doctor/SKILL.md              # /daedalus:doctor
 │   ├── plan/SKILL.md                # /daedalus:plan, the plan phase
-│   ├── push-train/SKILL.md          # /daedalus:push-train
-│   ├── release/SKILL.md             # the release phase, started by /daedalus:push-train
+│   ├── push-train/SKILL.md          # moved to /daedalus:run push; prints the new command
+│   ├── release/SKILL.md             # the release phase, started by /daedalus:run push
 │   ├── round/SKILL.md               # /daedalus:round
 │   ├── run/SKILL.md                 # /daedalus:run, the one command that starts any run
 │   ├── setup/SKILL.md               # /daedalus:setup

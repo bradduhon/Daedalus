@@ -1518,7 +1518,7 @@ def reaudit(cwd: Path) -> Outcome:
         if verdict.get("status") != train_state.APPROVED:
             raise RunnerError(
                 f"train {train_id} records no approved verdict, so no audited tip moved. "
-                "Next: run the security audit round of the Build Train (/daedalus:build-train)."
+                "Next: run the security audit round of the Build Train (/daedalus:run)."
             )
         current = _integration_tip(repo, train_id)
         if _text(train_state.record(state, REAUDIT), "tip") == current:
@@ -1587,7 +1587,7 @@ def resume(cwd: Path) -> Outcome:
         if ledger:
             raise RunnerError(
                 f"train {train_id} already records its ledger commit "
-                f"{_text(ledger, 'sha')[:12]}. Next: run the Push Train (/daedalus:push-train)."
+                f"{_text(ledger, 'sha')[:12]}. Next: run the Push Train (/daedalus:run push)."
             )
         if train_state.record(state, RESUME):
             raise RunnerError(
@@ -1612,7 +1612,7 @@ def resume(cwd: Path) -> Outcome:
         if not any(line.strip().startswith(LEDGER_PENDING) for line in text.splitlines()):
             raise RunnerError(
                 f"the summary {rel} holds no `{LEDGER_PENDING}` line, so its ledger step ran. "
-                "Next: run the Push Train (/daedalus:push-train)."
+                "Next: run the Push Train (/daedalus:run push)."
             )
 
         def change(fresh: dict[str, object]) -> None:
@@ -2003,10 +2003,7 @@ def progress(cwd: Path) -> Outcome:
     except NoTrainError:
         return Outcome(
             EXIT_OK,
-            [
-                "no Daedalus train is active here. "
-                "Next: start a Build Train with /daedalus:build-train."
-            ],
+            ["no Daedalus train is active here. Next: start a Build Train with /daedalus:run."],
         )
     except (RunnerError, train_state.TrainStateError):
         return Outcome(

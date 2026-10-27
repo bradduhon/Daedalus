@@ -267,7 +267,7 @@ def clear_train(repo: Path) -> Path:
 
 
 DIRTY_LIMIT = 10
-RERUN = "start the Build Train again (/daedalus:build-train)."
+RERUN = "start the Build Train again (/daedalus:run)."
 CLEAN_NEXT = f"Next: commit or stash your changes from your own shell, then {RERUN}"
 LEDGER_NONE = "ledger: none declared and none found."
 LEDGER_OFF = "ledger: off in the service manifest."
@@ -505,7 +505,7 @@ def _active(repo: Path) -> tuple[str, dict[str, object]]:
     if train_id is None:
         raise WorkspaceError(
             f"no Daedalus train is active in {repo}. "
-            "Next: start a Build Train first (/daedalus:build-train)."
+            "Next: start a Build Train first (/daedalus:run)."
         )
     try:
         return train_id, train_state.load(repo, train_id)
@@ -622,7 +622,7 @@ def lock(repo: Path, contract: str | None, version: int | None = None) -> list[s
     return [f"lock: {sha}", detail]
 
 
-STOP_NEXT = "start the Build Train again (/daedalus:build-train)"
+STOP_NEXT = "start the Build Train again (/daedalus:run)"
 
 
 def _unit_worktrees(repo: Path) -> dict[str, Path]:

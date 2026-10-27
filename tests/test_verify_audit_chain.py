@@ -483,7 +483,7 @@ def test_cli_approved_failure_exits_one_with_next(
     result = _verify("--approved", "20261016-120000", "--repo", repo_cwd)
     assert result.returncode == 1
     assert result.stdout.startswith("NOT APPROVED:")
-    assert "Next: run /daedalus:build-train" in result.stdout
+    assert "Next: run /daedalus:run;" in result.stdout
 
 
 def test_cli_mode_usage_error_exits_one(repo_cwd: Path) -> None:

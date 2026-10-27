@@ -123,7 +123,7 @@ def _read(path: Path) -> dict[str, object]:
         data: object = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise TrainStateError(
-            f"no train state at {path}. Next: run /daedalus:build-train to start a train."
+            f"no train state at {path}. Next: run /daedalus:run to start a train."
         ) from exc
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise TrainStateError(

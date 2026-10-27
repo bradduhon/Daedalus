@@ -331,9 +331,7 @@ def test_git_push_only_for_the_conductor(train_repo: Path) -> None:
         for command in ("git push origin feat/x", "git -C . push -u origin feat/x"):
             reason = _reason(train_repo, agent, command)
             assert "git push runs only in the Push Train's conductor (0028, 0030)" in reason
-            assert reason.endswith(
-                "Next: push from your own shell, or through /daedalus:push-train."
-            )
+            assert reason.endswith("Next: push from your own shell, or through /daedalus:run push.")
     # spec 4.2: past the 0028 list, a train with no state meets the verdict gate.
     push = "git push origin daedalus/20261016-120000"
     unaudited = _reason(train_repo, "pr-train-conductor", push)
