@@ -234,3 +234,33 @@ def test_unit_mean_counts_coders_only() -> None:
         == f"| Build Train | {TRAIN} | mean | per unit | 1 units | 2 | 2 | 40 | 10 | 100 | 1m00s |"
     )
     assert "| 4 | 4 | 44 | 20 | 200 |" in te.totals_row(run)
+
+
+def test_turn_line_follows_the_means_with_the_coder_target(home: Path) -> None:
+    # item 15: the coder mean against the target, after the table; no line for a run without coders.
+    _train(home)
+    runs, _ = te.session_runs(SESSION, home.parents[2] / "repo", [])
+    lines = te.render(runs, f"session {SESSION}").splitlines()
+    want = f"turns per coder unit: 2 (target {te.CODER_TURN_TARGET})"
+    assert lines[-2:] == ["", want]
+    assert lines.index(want) > max(i for i, ln in enumerate(lines) if "| mean |" in ln)
+    assert te.turn_lines([te.Run(te.PUSH, TRAIN)]) == []
+
+
+def test_turn_line_names_the_run_when_several_runs_have_coders() -> None:
+    runs = []
+    for run_id, turns in ((TRAIN, 30), ("20261016-120000", 11)):
+        run = te.Run(te.BUILD, run_id)
+        usage = te.Usage(turns=turns, tokens=[0, 0, 0, 0])
+        run.rows.append(te.Row("c", te.BUILD, run_id, "2", te.CODER, "a1", "unit", usage, None))
+        runs.append(run)
+    assert te.turn_lines(runs) == [
+        f"turns per coder unit: 30 (target 24) in Build Train {TRAIN}",
+        "turns per coder unit: 11 (target 24) in Build Train 20261016-120000",
+    ]
+
+
+def test_turn_target_matches_the_coder_rule() -> None:
+    # item 15: one number, stated in the coder's turn rule and read by the report.
+    coder = " ".join((SCRIPTS_DIR.parent / "agents" / "repo-coder.md").read_text().split())
+    assert f"A unit takes at most {te.CODER_TURN_TARGET} turns" in coder

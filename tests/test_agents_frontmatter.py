@@ -235,6 +235,8 @@ def test_repo_coder_reads_the_packets_by_hash() -> None:
     # pin C1 -> C5: two optional fields may trail the standards hash, in this order.
     item = text.split("## Status contract", 1)[1].split("- `[STATUS: COMPLETE]", 1)[1]
     assert "optionally followed by ` adversarial=pass` and then ` audit_tests=pass`" in item
+    # item 15: the turn count closes the line after the optional fields.
+    assert "and always ending with ` turns=<n>` (item 15)" in item
 
 
 def test_repo_coder_runs_the_corpus_and_the_audit_tests() -> None:
@@ -283,6 +285,13 @@ def test_repo_coder_carries_the_code_hygiene_rule() -> None:
         "read every file the brief names in one turn of parallel Read calls before the first"
         " edit, make the edits in as few turns as they allow, and run the declared suite once"
         " before COMPLETE and once after any fix",
+        # item 15: one call does as much as the task needs; a turn target the report checks.
+        "Make all edits to one file in one Edit or Write where the change allows, put"
+        " independent calls in one turn of parallel calls, and run the suite once after the"
+        " edits rather than after each.",
+        "A unit takes at most 24 turns, a turn being one reply of yours however many parallel"
+        " calls it holds",
+        "End the COMPLETE line with ` turns=<n>`, the turns this unit took",
     ],
 )
 def test_repo_coder_code_hygiene_carries_the_test_reuse_and_turn_rules(rule: str) -> None:
