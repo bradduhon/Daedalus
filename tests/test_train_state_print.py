@@ -177,6 +177,21 @@ def test_header_without_a_charter_is_repo_local(tmp_path: Path) -> None:
     assert "Contract: contracts/c.md v3" in lines
 
 
+def test_contract_line_reads_none_in_words_without_a_locked_packet(tmp_path: Path) -> None:
+    # 0156: a recorded skip and a train stopped before its lock each get their own sentence.
+    state = copy.deepcopy(STATE)
+    del state["contract_path"]
+    lines = _text(tmp_path, state).splitlines()
+    assert "Contract: none. No contract was locked before the train stopped." in lines
+    state["contract_skip"] = True
+    lines = _text(tmp_path, state).splitlines()
+    assert (
+        "Contract: none. This plan changes one file and declares no contract, "
+        "so no contract was written."
+    ) in lines
+    assert not any(line == "Contract: not locked" for line in lines)
+
+
 def test_ledger_ids_read_pending_without_the_ledger_record(tmp_path: Path) -> None:
     # pin D1 -> E4: the Ledger ids line reads the ledger record, else pending.
     state = copy.deepcopy(STATE)

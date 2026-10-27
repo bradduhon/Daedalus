@@ -51,8 +51,11 @@ def main(argv: list[str]) -> int:
     start.add_argument("--repo", type=Path, required=True)
     locking = sub.add_parser("lock")
     locking.add_argument("--repo", type=Path, required=True)
-    locking.add_argument("--contract", required=True)
-    locking.add_argument("--version", type=int, required=True)
+    # 0156: --no-contract locks at the base once the contract subcommand recorded the skip.
+    packet = locking.add_mutually_exclusive_group(required=True)
+    packet.add_argument("--contract")
+    packet.add_argument("--no-contract", dest="no_contract", action="store_true")
+    locking.add_argument("--version", type=int)
     halt = sub.add_parser("stop")
     halt.add_argument("--repo", type=Path, required=True)
     halt.add_argument("--reason", required=True)
@@ -70,6 +73,8 @@ def main(argv: list[str]) -> int:
     again.add_argument("--repo", type=Path, required=True)
     again.add_argument("--name", required=True)
     args = parser.parse_args(argv)
+    if args.action == "lock" and args.no_contract and args.version is not None:
+        parser.error("lock --no-contract takes no --version; there is no packet to version")
     repo = args.repo.resolve()
     # pin C3 -> C4, issue 63: --repo is the project root of the working directory, or nothing runs.
     refusal = repo_refusal(args.repo, Path.cwd())
@@ -91,7 +96,7 @@ def main(argv: list[str]) -> int:
         elif args.action == "begin":
             print("\n".join(begin(repo)))
         elif args.action == "lock":
-            print("\n".join(lock(repo, args.contract, args.version)))
+            print("\n".join(lock(repo, None if args.no_contract else args.contract, args.version)))
         elif args.action == "stop":
             lines, ok = stop(repo, args.reason, args.next_action)
             print("\n".join(lines))

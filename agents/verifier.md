@@ -40,7 +40,9 @@ mode section instead.
 
 ## Procedure
 1. Read the brief, the packets and the named ranges: the brief file whole, then the Contract
-   and Standards files its two packet lines name, then each range of the `Read:` line through
+   and Standards files its two packet lines name (a brief whose contract line reads
+   `Contract: none` belongs to a one-file train with no contract, 0156: read no contract file
+   and judge no contract pin), then each range of the `Read:` line through
    the `git show` pipe of step 3. Run `git -C <unit worktree> diff <diff base>...<branch> --stat`.
    Open another file only to settle a named claim, and list each extra file in the verdict's
    receipts as a table row `extra read | <file>:<first>-<last> | <the claim it settled>`.

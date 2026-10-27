@@ -68,6 +68,12 @@ _LEDGER_PATH = re.compile(r"ledger: (.+?) \(")
 _DISPATCH_TOOLS = ("Agent", "Task", "SendMessage")
 _REFUSALS = ("block", "ask")
 OPERATOR, PRIORITIES_YIELD = "operator", "YIELD_STANDARDS priorities"
+# 0156: the Contract line in words when no packet was locked.
+CONTRACT_SKIPPED = (
+    "Contract: none. This plan changes one file and declares no contract, "
+    "so no contract was written."
+)
+CONTRACT_NOT_LOCKED = "Contract: none. No contract was locked before the train stopped."
 _PRIORITIES_RULE = re.compile(r"priorities rule [0-9]+:")
 _ANSWERERS: dict[str, tuple[str, ...]] = {
     "YIELD_WEB": ("web-researcher",),
@@ -445,8 +451,10 @@ def _header(
     contract = _text(state, "contract_path")
     if contract:
         lines.append(f"Contract: {_located(contract, repo, charter, False)} v{packet}")
+    elif state.get(train_state.CONTRACT_SKIP) is True:
+        lines.append(CONTRACT_SKIPPED)
     else:
-        lines.append("Contract: not locked")
+        lines.append(CONTRACT_NOT_LOCKED)
     lines.append(_ledger_lines(state, notes))
     # W3.2: the train state lines above withhold a path; the Task line already passed the check.
     lines = [public(line, repo, charter, "the train state", withhold=True) for line in lines]

@@ -385,6 +385,38 @@ def test_lock_cli_exit_codes(repo: Path) -> None:
     assert done.stdout.startswith("lock: ")
 
 
+def test_lock_no_contract_is_refused_without_the_skip_record(repo: Path) -> None:
+    # 0156: --no-contract needs contract_skip: true from the contract subcommand.
+    train = _train(repo)
+    with pytest.raises(WorkspaceError) as info:
+        lock(repo, None)
+    assert f"train {train} records no contract skip" in str(info.value)
+    assert "Next: run daedalus_train.py contract" in str(info.value)
+    assert _head(repo) == "main" and "lock_sha" not in train_state.load(repo, train)
+    refused = _cli("lock", "--repo", str(repo), "--no-contract")
+    assert refused.returncode == 1 and "Next:" in refused.stderr
+    both = _cli("lock", "--repo", str(repo), "--no-contract", "--version", "1")
+    assert both.returncode == 2 and "takes no --version" in both.stderr
+    bare = _cli("lock", "--repo", str(repo), "--contract", "contracts/api.md")
+    assert bare.returncode == 1 and "names no --version. Next:" in bare.stderr
+
+
+def test_lock_no_contract_locks_at_the_base_and_commits_nothing(repo: Path) -> None:
+    # 0156: the integration branch starts at the base sha and no contract commit lands.
+    train = _train(repo)
+    base = _ok(repo, "rev-parse", "HEAD")
+    train_state.update(repo, train, contract_skip=True)
+    done = _cli("lock", "--repo", str(repo), "--no-contract")
+    assert (done.returncode, done.stdout) == (0, f"lock: {base}\n"), done.stderr
+    assert _head(repo) == f"daedalus/{train}" and _ok(repo, "rev-parse", "HEAD") == base
+    state = train_state.load(repo, train)
+    assert state["lock_sha"] == base and "packet_version" not in state
+    _contract(repo)
+    lock(repo, "contracts/api.md", 1)
+    with pytest.raises(WorkspaceError, match="already locked contract packet_version 1"):
+        lock(repo, None)
+
+
 DEFAULT_NEXT = "Next: start the Build Train again (/daedalus:build-train)"
 
 

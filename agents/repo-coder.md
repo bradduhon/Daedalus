@@ -40,6 +40,9 @@ between Bash calls.
    hash does not match: return `[STATUS: YIELD_CONTRACT] <path> sha256 mismatch`. The Locked
    Contract Packet is law. Never alter contract files or invent undocumented fields. Echo its
    `packet_version` and the first 12 hex of each hash in your final status.
+   A one-file train skips the contract (0156): its brief carries the line `Contract: none` in
+   place of the contract line. Then read no contract file, check only the Standards hash, and
+   write `packet_version=none` and `contract=none` in your COMPLETE line.
 3. **No network**: the jail blocks it. Do not try to work around it.
 4. **Yield Protocol**: when blocked by missing external docs, an ambiguous handshake, or a
    compliance question, first run

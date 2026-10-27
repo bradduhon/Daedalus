@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from lib import audit_rounds, git, manifest, train_definition, train_state, workspace
+from lib import audit_rounds, git, manifest, plan_record, train_definition, train_state, workspace
 from lib.audit import ReplyKeyError, message_hmac, reply_key
 from lib.audit_proof import (
     AUDITOR,
@@ -1279,10 +1279,74 @@ def record_plan(cwd: Path, path: Path) -> Outcome:
                 f"cannot read the plan {target} ({exc}). "
                 "Next: make the plan file readable, then rerun plan."
             ) from exc
-        train_state.update(
-            repo, train_id, **{train_state.PLAN: {"path": str(target), "sha256": sha}}
-        )
+
+        def change(state: dict[str, object]) -> None:
+            state[train_state.PLAN] = {"path": str(target), "sha256": sha}
+            # 0156: a new plan voids an earlier skip; the contract subcommand judges it again.
+            state.pop(train_state.CONTRACT_SKIP, None)
+
+        train_state.change(repo, train_id, change)
         return [f"plan: {target} sha256={sha}"]
+
+    return _recorded(cwd, edit)
+
+
+WIRE_NONE = "wire: none"
+_CONTRACT_RERUN = "record the plan with daedalus_train.py plan --path, then rerun contract"
+
+
+def _wire_none(text: str) -> bool:
+    # agents/planner.md: the `wire: none` line sits below the plan block, outside any fence.
+    fenced, plan_open, after = False, False, False
+    for line in (raw.strip() for raw in text.splitlines()):
+        if line.startswith("```"):
+            if fenced:
+                after = after or plan_open
+                fenced, plan_open = False, False
+            else:
+                fenced, plan_open = True, line == "```plan"
+        elif after and not fenced and line == WIRE_NONE:
+            return True
+    return False
+
+
+def _contract_reason(plan: plan_record.Plan, text: str) -> str | None:
+    # 0089, 0156: the first failed test of the one-file rule, or None when the contract skips.
+    if len(plan.units) != 1:
+        return f"{len(plan.units)} units"
+    files = plan.units[0].files
+    if len(files) != 1:
+        return f"{len(files)} files"
+    if any(c in files[0] for c in "*?[") or files[0].endswith("/"):
+        return "a file glob"
+    if plan.pins:
+        return "a pin line"
+    return None if _wire_none(text) else f"no {WIRE_NONE} line"
+
+
+def contract(cwd: Path) -> Outcome:
+    # 0156: a one-unit, one-file plan with no pin line and `wire: none` starts no contract-spec.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        state = train_state.load(repo, train_id)
+        before = _plan_text(state, True)
+        if before is None:
+            raise RunnerError(f"train {train_id} records no plan. Next: {_CONTRACT_RERUN}.")
+        path = Path(_text(_obj(state, train_state.PLAN), "path"))
+        try:
+            plan = plan_record.load(path)
+        except plan_record.PlanError as exc:
+            raise RunnerError(f"{exc} Next: {_CONTRACT_RERUN}.") from exc
+        text = _plan_text(state, True) or ""
+        if plan.defects:
+            raise RunnerError(
+                f"the plan {path} has {len(plan.defects)} defect(s): {' '.join(plan.defects)} "
+                f"Next: fix the plan, then {_CONTRACT_RERUN}."
+            )
+        reason = _contract_reason(plan, text)
+        if reason is not None:
+            return [f"contract: required ({reason})"]
+        train_state.update(repo, train_id, **{train_state.CONTRACT_SKIP: True})
+        return ["contract: skip"]
 
     return _recorded(cwd, edit)
 
