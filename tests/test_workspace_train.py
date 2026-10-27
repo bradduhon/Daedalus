@@ -1405,6 +1405,26 @@ def test_finish_of_a_skipped_train_judges_only_the_unmerged_fix_unit(
     assert _ok(repo, "rev-parse", f"daedalus/{train}") == base
 
 
+def test_finish_refuses_a_skipped_train_whose_wave_merge_carried_an_extra_file(
+    repo: Path,
+) -> None:
+    # 126: the wave merge never judges scope, so finish judges the integration branch.
+    train = _skipped_train(repo)
+    train_state.update(repo, train, audit_session=SESSION)
+    u1 = _built(repo, train, "u1")
+    (u1 / "extra.txt").write_text("x\n")
+    _commit_all(u1, "extra file")
+    _dispatch(repo, u1)
+    _verifier_stop(repo, VERIFIED_REPLY)
+    assert workspace.merge(repo, ["U1"])[0] == f"merged 1 units into daedalus/{train}"
+    base = _ok(repo, "rev-parse", f"daedalus/{train}")
+    with pytest.raises(WorkspaceError) as info:
+        finish(repo)
+    assert "Next: stop the train and run it again with a plan the contract step " in str(info.value)
+    assert _ok(repo, "rev-parse", f"daedalus/{train}") == base
+    assert train_state.load(repo, train)["merged"] is False
+
+
 def _verifier_handback(
     repo: Path, message: str, agent_type: str = "daedalus:verifier", event: str = "PostToolUse"
 ) -> None:

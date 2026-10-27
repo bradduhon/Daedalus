@@ -872,29 +872,30 @@ def _skip_scope(
     # prepush-2026-10-27 finding 4, 0156: a skipped contract covers one unit and one file.
     if state.get(train_state.CONTRACT_SKIP) is not True or state.get("packet_version") is not None:
         return
-    # prepush2-2026-10-27: a unit already on the integration branch merged under this check.
+    # 126: only unmerged units count; the integration branch is judged too, as the wave merge
+    # never runs this check.
     pending = [
         unit
         for unit in merging
         if _run(repo, "merge-base", "--is-ancestor", str(unit["branch"]), integration).returncode
     ]
-    if not pending:
-        return
     files = [f for unit in _recorded_plan(state).units for f in unit.files]
     nxt = SKIP_NEXT.format(repo=repo)
-    if len(pending) != 1 or len(files) != 1:
+    if len(pending) > 1 or len(files) != 1:
         raise WorkspaceError(
             f"this train skipped the contract for a one-file plan, yet {len(pending)} units "
             f"would merge against a plan naming {len(files)} files. {nxt}"
         )
-    branch = str(pending[0]["branch"])
-    raw = _out(repo, "diff", "--name-only", "--no-renames", "-z", f"{lock_sha}...{branch}")
-    changed = sorted(name for name in raw.split("\0") if name)
-    if changed != [os.path.normpath(files[0])]:
-        raise WorkspaceError(
-            f"this train skipped the contract for the one file {files[0]}, yet {branch} changes "
-            f"{_shown(changed) if changed else 'no file'}. {nxt}"
-        )
+    allowed = os.path.normpath(files[0])
+    for ref in [integration, *(str(unit["branch"]) for unit in pending)]:
+        raw = _out(repo, "diff", "--name-only", "--no-renames", "-z", f"{lock_sha}...{ref}")
+        changed = sorted(name for name in raw.split("\0") if name)
+        fits = changed in ([], [allowed]) if ref == integration else changed == [allowed]
+        if not fits:
+            raise WorkspaceError(
+                f"this train skipped the contract for the one file {files[0]}, yet {ref} "
+                f"changes {_shown(changed) if changed else 'no file'}. {nxt}"
+            )
 
 
 def _finished(repo: Path, train_id: str, units: list[dict[str, object]]) -> None:
