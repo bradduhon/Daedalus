@@ -43,26 +43,33 @@ Inside the session, type:
 
 The doctor lists every file and tool Daedalus needs, and whether each is present. It changes nothing. `docs/project-requirements.md` describes every file it checks, each with a small example.
 
-Here is the output of a real run in a new repository with one empty commit. The machine had no Daedalus settings and no gitleaks, and gh was not signed in. Your paths differ, and the doctor prints your home directory in full where this shows `~`:
+Here is the output of a real run in a new repository with one empty commit, no `service-manifest.json` and no `config.json`. The machine had gitleaks installed, gh signed in, a framework cache, and a kernel that can hold the kernel wrapper's rules. Your paths differ. `<repo>` stands for your repository, `<plugin>` for the plugin root, and `~` for your home directory, which the doctor prints in full:
 
     OK   python >= 3.12
-    OK   project data dir: /work/my-service/.claude/daedalus (not created yet; a train's start creates it)
+    OK   project data dir: <repo>/.claude/daedalus (not created yet; a train's start creates it)
     OK   audit log: off until a train runs here
-    OK   config.json: not present, defaults in use
+    OPT  config.json: not present, defaults in use. Next: run the Daedalus setup skill (/daedalus:setup) to write a starter config.json
     OK   ledger: none found (the Build Train asks before creating docs/decisions.md)
+    OPT  standing_rules: not declared. Next: set standing_rules in .claude/daedalus/config.json to the standing-rules file, so the planner reads it
     OPT  standards_sources: no standards file or pack is declared. Next: to adopt the shipped baseline pack, add {"kind": "pack", "name": "baseline"} to standards_sources in .claude/daedalus/config.json
     OK   policy: not declared (optional)
-    OK   cache dir: none yet (create it with scripts/refresh_frameworks.py or by hand per docs/project-requirements.md)
-    OK   plugin root: ~/.claude/plugins/cache/daedalus/daedalus/<version>
-    MISS gitleaks on PATH: not found. Next: the Push Train scans commits with gitleaks; install it so the scan can run
+    OK   train marker: none
+    OK   cache dir: ~/.claude/plugins/data/daedalus-daedalus, ~/.claude/plugins/data/daedalus-inline (a --plugin-dir session uses daedalus-inline; a marketplace install, the published one or a local clone added with claude plugin marketplace add <clone path>, uses daedalus-<marketplace>)
+    OK   plugin root: <plugin>
+    OK   frameworks nist: pinned 2026-10-19
+    OK   framework pack aws-default: 1.0.0, 34 controls
+    OK   framework pack nist-distilled: 1.0.0, 27 controls
+    OK   gitleaks on PATH
     OK   gh on PATH
-    MISS gh authenticated: gh auth status exited 1. Next: run gh auth login
+    OK   gh authenticated
+    OK   kernel rules: Landlock ABI 3 and the seccomp socket filter on x86_64; coder test commands run under the kernel wrapper
     OK   git repository
     OK   clean working tree
-    OPT  service-manifest.json: not found at repo root. Next: create it from the example in docs/project-requirements.md
+    OPT  service-manifest.json: not found at repo root. Next: run the Daedalus setup skill (/daedalus:setup) to write a starter service-manifest.json
+    OK   priorities: none declared
     OPT  contracts/: directory missing. Next: mkdir contracts and add openapi.yaml or events/*.schema.json
     OPT  .gitleaks.toml: not found at repo root. Next: copy the baseline from docs/project-requirements.md
-    daedalus doctor: fix each MISS line, then rerun
+    daedalus doctor: all checks passed
 
 Each line starts with one word:
 
@@ -71,17 +78,23 @@ Each line starts with one word:
 - `OPT` marks an optional file your project declares about itself. A build run and a push run both work without it, and it never fails the doctor.
 - `OLD` marks a framework cache or a control pack more than 90 days old. It never fails the doctor.
 
-The doctor exits 0 when every check passes and 1 otherwise. After the output, the doctor skill asks you once which `Next:` actions to take: all, the numbers you pick, or none.
+The doctor exits 0 when every check passes and 1 otherwise. Its last line reads `daedalus doctor: all checks passed`, or `daedalus doctor: fix each MISS line, then rerun` when a check failed. After the output, the doctor skill asks you once which `Next:` actions to take: all, the numbers you pick, or none.
 
 Some lines need a word of explanation:
 
-- In a new repository, the `service-manifest.json`, `contracts/` and `.gitleaks.toml` lines read `OPT` until you add those files. `docs/project-requirements.md` has an example of each.
+- In a new repository, the `config.json`, `service-manifest.json`, `contracts/` and `.gitleaks.toml` lines read `OPT` until you add those files. The `Next:` lines for the first two say to run `/daedalus:setup`, which writes a starter copy of each. `docs/project-requirements.md` has an example of every file.
+- The `standing_rules` line reads `OPT` until `config.json` names a standing-rules file, the rules every plan must satisfy, which the planner reads.
 - The `standards_sources` line reads `OPT` until you declare a standards source. Its `Next:` offers the baseline pack that ships with Daedalus. Taking it is your choice.
+- `train marker: none` means no train is running in this repository.
+- `priorities: none declared` means the manifest has no `priorities` block. With one, the line prints the ranking and the number of rules.
+- The `kernel rules` line says whether this kernel can hold the kernel wrapper's rules, which keep a coder's test command inside its worktree and off the network. On a kernel that cannot, the line reads `OPT  kernel rules: not available on this kernel`, and coder test commands are refused.
+- The gitleaks line is a `MISS` when gitleaks is missing and the secret scan is on. With the scan off, a missing gitleaks reads `OPT`.
+- When gh is not signed in, the `gh authenticated` line is a `MISS`, and its `Next:` says to run `gh auth login`.
 - When the working tree is not clean, the `clean working tree` line names up to ten changed paths, then `+N more`. When the only change is the `.claude/settings.json` that `/plugin install` wrote, its `Next:` says to commit that file.
 - Once the `.claude/daedalus/` directory exists, the doctor also checks that `.claude/daedalus/.gitignore` holds a `*` line and that git ignores the directory.
 - The `cache dir` and `plugin root` lines are for your information and never a `MISS`. When more than one `~/.claude/plugins/data/daedalus*` directory exists, the cache dir line names each one. The plugin root is the directory the commands in this guide call `<plugin>`.
-- Once a framework cache holds a `manifest.json`, one line per family follows the plugin root line, for example `OK   frameworks nist: pinned 2026-10-16`. When the oldest file in that family was pinned more than 90 days ago, the line reads `OLD  frameworks nist: pinned 2026-06-01 (137 days). Next: refresh the framework caches with python3 <plugin>/scripts/refresh_frameworks.py`. For CIS, the `Next:` says instead to build a CIS id-map pack with `import_pack.py cis-map` per docs/project-requirements.md.
-- After those lines comes one line per control pack the next train reads. A control pack is a list of security controls a change is judged against. A pack that loads prints `OK   framework pack <id>: <version>, <n> controls`. Each problem prints `MISS framework pack <id>: <problem>. Next: <action>`. A missing or linked `frameworks.pack_dir` folder prints `MISS framework packs: <problem>`. A pack more than 90 days old prints `OLD  framework pack <id>: pinned <date> (<days> days). Next: <action>`. A `MISS` pack line fails the doctor.
+- Once a framework cache holds a `manifest.json`, one line per family follows the plugin root line, as `OK   frameworks nist: pinned 2026-10-19` does in the example. When the oldest file in that family was pinned more than 90 days ago, the line reads `OLD  frameworks nist: pinned 2026-06-01 (137 days). Next: refresh the framework caches with python3 <plugin>/scripts/refresh_frameworks.py`. For CIS, the `Next:` says instead to build a CIS id-map pack with `import_pack.py cis-map` per docs/project-requirements.md.
+- After those lines comes one line per control pack the next train reads. A control pack is a list of security controls a change is judged against. A pack that loads prints `OK   framework pack <id>: <version>, <n> controls`, like the two shipped packs in the example. Each problem prints `MISS framework pack <id>: <problem>. Next: <action>`. A missing or linked `frameworks.pack_dir` folder prints `MISS framework packs: <problem>`. A pack more than 90 days old prints `OLD  framework pack <id>: pinned <date> (<days> days). Next: <action>`. A `MISS` pack line fails the doctor.
 - A `github` key left in the features object of `service-manifest.json` has no effect. The doctor prints one `OPT` line saying so.
 
 Outside a git repository, the project is in folder scope. Only a repository can be pushed, so the `git repository` line and the two gh lines read `OPT`. With the secret scan on, the gitleaks line reads `OPT` too.

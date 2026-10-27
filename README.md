@@ -76,7 +76,7 @@ The doctor checks every file and tool Daedalus needs. It prints one line per che
 - `MISS`: something Daedalus needs is missing. The line ends with `Next:` and says what to do. Do it, then run the doctor again.
 - `OPT`: something optional is absent. Daedalus works without it, and an `OPT` line never fails the doctor.
 
-In a new repository, four lines read `OPT`: `config.json`, `service-manifest.json`, `contracts/` and `.gitleaks.toml`. These are files your project writes about itself. Type `/daedalus:setup` to write starter copies of the first two. A build run and a push run both work without any of them.
+In a new repository, the `config.json`, `service-manifest.json`, `contracts/` and `.gitleaks.toml` lines read `OPT`. These are files your project writes about itself. Type `/daedalus:setup` to write starter copies of the first two. A build run and a push run both work without any of them.
 
 If the features object of your `service-manifest.json` still has a `github` key, the doctor prints one `OPT` line saying the key does nothing.
 
