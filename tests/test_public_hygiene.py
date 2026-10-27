@@ -26,7 +26,6 @@ ALLOWLIST = frozenset(
         "hooks/",
         "packs/",
         "pyproject.toml",
-        "references/",
         "scripts/",
         "service-manifest.json",
         "skills/",

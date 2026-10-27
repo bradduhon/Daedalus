@@ -119,12 +119,11 @@ Each agent's file lists the only tools it may use, the reply lines it ends with,
 |---|---|---|---|---|---|---|
 | change-logger | producer | opus | Bash, Glob, Grep, Read, Write | Produces the change gate between a baseline and a derived document, or between two baselines when no deriver runs: one row per departure, with the baseline quote, the derived quote, the reason, and a status the operator rules on. | `[STATUS: COMPLETE] change_log=<path> rows=<n> open=<k>`; `[STATUS: BLOCKED] <what the manifest or brief leaves out>` | implementation |
 | charter-docs | producer | sonnet | Bash, Edit, Glob, Grep, Read, Write | Single-writer custodian of the Charter repository, the architectural decision ledger, and Build Train commits. | `[STATUS: LEDGER_PROBED] <probe line>`; `[STATUS: LEDGER_APPENDED] <id>`; `[STATUS: LEDGER_MISMATCH] expected=<n> ledger=<m>`; `[STATUS: COMMITTED] <sha> ids=<id>[,<id>]`; `[STATUS: BLOCKED] <detail>` | clarification, commit, release |
-| cis-specialist | judge | sonnet | Bash, Grep, Read | Evaluates cloud infrastructure, IAM/RCP policies, and OS/container hardening against operator-supplied CIS Benchmarks. | `[STATUS: CACHE_INVALID] <detail>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with control ids and file:line>` | clarification, audit |
 | contract-spec | producer | sonnet | Edit, Glob, Grep, Read, Write | Reads and updates service handshake contracts, API schemas, and specifications. | `## Locked Contract Packet` | clarification, plan |
 | dependency-auditor | judge | sonnet | Bash, Glob, Grep, Read | Read-only judge of the dependency manifests and lockfiles a train changes. | `[STATUS: YIELD_WEB] <query>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with rule ids and file:line>` | audit |
 | doc-deriver | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Derives one document from frozen, manifest-declared sources with a file:line receipt on every value. | `[STATUS: COMPLETE] outputs=<path>[,<path>] claims=<n> judgments=<k> assumed=<m>`; `[STATUS: BLOCKED] <what the manifest or brief leaves out>` | implementation |
 | docs-writer | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Writes the public docs to match what a train merged. | `[STATUS: DOCS_WRITTEN] branch=<b> commit=<40 hex> claims=<n>`; `[STATUS: DOCS_UNCHANGED] reason=<why no passage needed an edit>` | audit |
-| nist-specialist | judge | sonnet | Bash, Grep, Read | Evaluates architecture, IAM, and cryptographic boundaries against the pinned NIST SP 800-53 OSCAL catalog and SP 800-57 key-management guidance. | `[STATUS: CACHE_INVALID] <detail>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with control ids and file:line>` | clarification, audit |
+| framework-specialist | judge | sonnet | Bash, Grep, Read | Evaluates a diff against the control packs named in its prompt, by default the shipped AWS hardening and NIST SP 800-53 packs, and cites each pack control id with its NIST, CIS and ASVS ids. | `[STATUS: PACK_INVALID] <pack id>: <problem>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with pack control ids, refs ids and file:line>` | clarification, audit |
 | orchestrator | dispatcher | fable | Agent, Bash, Edit, Glob, Grep, Read, SendMessage, Write | Runs one Build Train from its plan to the audited integration tip. | `[STATUS: DECISION] brief=<path> questions=<n>`; `[STATUS: EXCEPTION] ledger_id=<id>`; `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path> tip=<40 hex>`; `[STATUS: STOP] reason=<what happened> next=<next action>` | context, clarification, plan, implementation, audit |
 | planner | shaper | opus | Glob, Grep, Read, Write | Cuts a design spec into work units that coders can build in parallel. | `[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>`; `[STATUS: QUESTION] <what the task leaves open>`; `[STATUS: ROUND] round=<k> items=<m>`; `[STATUS: SPEC] round=<k> path=<path> open=<m>`; `[STATUS: NOT_VIABLE] round=<k> <the blocking fact in one line>`; `[STATUS: YIELD_WEB] <query>` | clarification, plan |
 | pr-train-conductor | mover | opus | Bash, Glob, Grep, Read | GitHub specialist for the Push Train. | `[STATUS: PUSHED] branch=<b> pr=<url>`; `[STATUS: CI] run=<id> conclusion=<text>`; `[STATUS: BLOCKED] <precondition that failed>` | commit, release |
@@ -143,12 +142,11 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 |---|---|---|
 | change-logger | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar, read_only_bash, doc_outputs |
 | charter-docs | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow docs, root_writes --touch charter,docs --ledger-guard, command_allowlist --allow append_ledger,git,read, gh_classes |
-| cis-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
 | contract-spec | producer | credential_paths, workspace_integrity, tool_bound, root_writes --touch contracts,charter-specs |
 | dependency-auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only, gh_classes |
 | doc-deriver | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar, read_only_bash, doc_outputs |
 | docs-writer | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes --docs, gh_classes, confine |
-| nist-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
+| framework-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
 | orchestrator | dispatcher | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, command_allowlist --allow train,inspect, root_writes --touch scratch --ledger-guard, gh_classes, dispatch_gate |
 | planner | shaper | credential_paths, workspace_integrity, tool_bound, root_writes --touch scratch --name plan*.md --sub brainstorm-*/spec.md |
 | pr-train-conductor | mover | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools --gh, command_allowlist --allow git,gh,gitleaks, git_grammar --allow conductor, git_push --conductor, gh_classes --conductor |
@@ -186,21 +184,23 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 
 `<repo>/.claude/daedalus/config.json` is optional. `/daedalus:setup` writes a starter copy when it is missing, and nothing else in Daedalus writes it (see Configuration below for the fields).
 
-### The NIST and CIS cache
+### Control packs
 
-The commands below run from your own shell. `<plugin>` is the path the doctor prints on its `plugin root` line.
+When a train touches IAM, keys, network rules or other infrastructure, the framework specialist judges the merged change against control packs. Daedalus ships two packs under `<plugin>/packs/frameworks/`. `aws-default` holds AWS hardening controls written in Daedalus's own words. `nist-distilled` holds a NIST SP 800-53 checklist. A project with no `frameworks` block in `service-manifest.json` is judged against those two packs and needs no setup. To add your own packs, name a project folder in `frameworks.pack_dir`; each subfolder holding a `pack.json` and a `controls.json` is one pack. Set `frameworks.default_packs` to `false` to read only your own packs. A pack that fails its hash or format check stops the train.
 
-`<cache>` is a directory whose name depends on how you installed Daedalus. Print it with:
+The commands below run from your own shell, in your project. `<plugin>` is the path the doctor prints on its `plugin root` line. `<cache>` is a directory whose name depends on how you installed Daedalus; print it with:
 
     python3 <plugin>/scripts/daedalus_doctor.py --print-cache-dir
 
-Exit 1 means no cache exists yet; run `/daedalus:doctor` inside Claude Code once.
+To build a pack from the NIST catalog, fetch the catalog first, then import the controls you want:
 
-The nist-specialist needs the NIST catalog, in NIST's OSCAL JSON format. Without it, the specialist stops the train with `CACHE_INVALID`. Fetch every pinned framework with:
+    python3 <plugin>/scripts/refresh_frameworks.py --only nist-800-53 --cache-root <cache>
 
-    python3 <plugin>/scripts/refresh_frameworks.py
+    python3 <plugin>/scripts/import_pack.py oscal --catalog <cache>/frameworks/nist/catalog.json --ids AC-2,SC-12 --out compliance/packs/nist-picked
 
-CIS Benchmark files are licensed, so you place them by hand in `<cache>/frameworks/cis/`. Next to them you write a `manifest.json` with one entry per file, holding its name and its `sha256sum` hash. The exact format is in [docs/project-requirements.md](docs/project-requirements.md), under "CIS benchmarks".
+CIS Benchmark text is licensed, so a CIS pack carries ids only. Write a CSV with exactly the columns `cis_id,control_id`, each row mapping a CIS id to a control in another pack, then import it:
+
+    python3 <plugin>/scripts/import_pack.py cis-map --map cis-map.csv --benchmark "CIS AWS Foundations" --version 3.0.0 --out compliance/packs/cis-aws
 
 ## Configuration
 
@@ -270,7 +270,7 @@ Each agent gets a short list of allowed tools, and a tool not on the list is nev
 
 [docs/guardrails.md](docs/guardrails.md) pairs each of these principles with the mechanism that enforces it and the test that shows the mechanism exists.
 
-With no declared standards, the Standards Packet is empty and the auditor judges each unit against its contract only. The NIST and CIS specialists review only units that touched IAM, KMS, mTLS, key custody or infrastructure configuration. To declare your standards, see [docs/project-requirements.md](docs/project-requirements.md). To start from a shipped set instead, declare the opt-in baseline pack, `{"kind": "pack", "name": "baseline"}`: five baseline checks plus the Daedalus cloud security standards, written in Daedalus's own words. The doctor offers it while `standards_sources` is empty.
+With no declared standards, the Standards Packet is empty and the auditor judges each unit against its contract only. The framework specialist reviews only trains that touched IAM, KMS, mTLS, key custody or infrastructure configuration, against the control packs described under Control packs. To declare your standards, see [docs/project-requirements.md](docs/project-requirements.md). To start from a shipped set instead, declare the opt-in baseline pack, `{"kind": "pack", "name": "baseline"}`: five baseline checks plus the Daedalus cloud security standards, written in Daedalus's own words. The doctor offers it while `standards_sources` is empty.
 
 ## How it works
 
@@ -392,7 +392,7 @@ Exit 0 prints `OK approved: approved verdict, ...` or `OK approved: every findin
 5. Units. For each wave, the orchestrator checks the units' `needs:` with `daedalus_doctor.py --check-tools`. For each unit it then runs `daedalus_workspace.py create`, writes the brief file, and starts a repo-coder with the brief path and one `Worktree:` line. The dispatch gate checks the recorded plan and records the dispatch, and the coder's first write claims the unit.
 6. Hand-back and verification. The coder ends with a receipts block above its `[STATUS: COMPLETE]` line, which the receipts check reads. The orchestrator checks the reply's branch, packet hashes and lock ancestry. The verifier then judges the unit's diff against its brief, and the unit is ready to merge once its verdict is `[VERDICT: VERIFIED]`.
 7. Merge. `daedalus_workspace.py finish` merges every unit into the integration branch with `--no-ff`. A train cut into waves merges each wave first with the wave merge command.
-8. Audit. Judges join by what the diff touches. The NIST and CIS specialists come in for IAM, KMS, mTLS, key custody or infrastructure changes, the dependency auditor for a dependency manifest or lockfile, and the Terraform reviewer for a `.tf` or `.tfvars` file. The security auditor judges the merged tip in its own audit worktree, and `daedalus_train.py verdict` records its verdict. Each finding of a rejected round goes to you one question at a time.
+8. Audit. Judges join by what the diff touches. The framework specialist comes in for IAM, KMS, mTLS, key custody or infrastructure changes, with the shipped AWS and NIST packs or your own, the dependency auditor for a dependency manifest or lockfile, and the Terraform reviewer for a `.tf` or `.tfvars` file. The security auditor judges the merged tip in its own audit worktree, and `daedalus_train.py verdict` records its verdict. Each finding of a rejected round goes to you one question at a time.
 9. Ledger and docs. On an approved verdict, or once you exempted every finding, charter-docs commits the ledger entries. After an approval, the approved verdict is recorded next. The docs writer then brings the four public docs up to date in the docs stage.
 10. Summary. `daedalus_train.py summary` writes the summary from train state and the audit log, and the orchestrator ends with `[STATUS: TRAIN_COMPLETE]`.
 11. Push. `/daedalus:push-train` marks the train again, runs the hooks check and the push proof, and has the conductor push the branch and open the pull request. The push gate checks the verdict again on the conductor's own push. You review and merge.
@@ -471,12 +471,11 @@ Daedalus/
 ├── agents/
 │   ├── change-logger.md
 │   ├── charter-docs.md
-│   ├── cis-specialist.md
 │   ├── contract-spec.md
 │   ├── dependency-auditor.md
 │   ├── doc-deriver.md
 │   ├── docs-writer.md
-│   ├── nist-specialist.md
+│   ├── framework-specialist.md
 │   ├── orchestrator.md
 │   ├── planner.md
 │   ├── pr-train-conductor.md
@@ -493,10 +492,9 @@ Daedalus/
 ├── hooks/
 │   └── hooks.json                   # enforcement and audit bindings
 ├── packs/
-│   └── baseline/rules.md            # opt-in baseline and cloud security standards pack
-├── references/
-│   ├── hardening-rubric.md          # the rubric the cis-specialist maps findings to
-│   └── nist-800-53-distilled.md     # the rubric the nist-specialist maps findings to
+│   ├── baseline/rules.md            # opt-in baseline and cloud security standards pack
+│   ├── frameworks/aws-default/      # AWS hardening control pack the framework specialist reads by default
+│   └── frameworks/nist-distilled/   # NIST SP 800-53 control pack the framework specialist reads by default
 ├── scripts/                         # Python 3.12, stdlib only
 │   ├── checks/command_allowlist.py  # every Bash segment runs a command the --allow list names
 │   ├── checks/confine.py            # a coder's test command starts with the kernel wrapper

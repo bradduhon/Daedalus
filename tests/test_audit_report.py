@@ -114,14 +114,14 @@ def _synthetic_chain(hook_input: Any) -> Path:
         "repo-coder",
         last_assistant_message="Built it | twice.\n[STATUS: COMPLETE]",
     )
-    _subagent(hook_input, "SubagentStart", "a2", "nist-specialist")
-    _agent_calls(hook_input, "a2", "nist-specialist")
-    _block(hook_input, "a2", "nist-specialist", BLOCK_CURL)
+    _subagent(hook_input, "SubagentStart", "a2", "framework-specialist")
+    _agent_calls(hook_input, "a2", "framework-specialist")
+    _block(hook_input, "a2", "framework-specialist", BLOCK_CURL)
     _subagent(
         hook_input,
         "SubagentStop",
         "a2",
-        "nist-specialist",
+        "framework-specialist",
         last_assistant_message="Need a source.\n[STATUS: YIELD_WEB] x",
     )
     _subagent(hook_input, "SubagentStart", "a3", "auditor")
@@ -149,7 +149,7 @@ def test_report_renders_every_section(project_data: Path, hook_input: Any) -> No
     assert f"project_root: {md_escape(hook_input()['cwd'])}\n" in out
     assert md_escape(BLOCK_PUSH) in out and md_escape(BLOCK_CURL) in out
     assert "- seq 14 repo-coder: \\[STATUS: COMPLETE\\]\n" in out
-    assert "- seq 27 nist-specialist: \\[STATUS: YIELD\\_WEB\\] x\n" in out
+    assert "- seq 27 framework-specialist: \\[STATUS: YIELD\\_WEB\\] x\n" in out
     assert "- seq 29 auditor: \\[VERDICT: APPROVED\\]\n" in out
     assert "| a1 | repo-coder | 2 | 14 | Built it \\| twice. \\[STATUS: COMPLETE\\] |" in out
     assert "| repo-coder | Bash | 2 | 1 |" in out

@@ -59,13 +59,13 @@ class TestReadOnlyAgents:
             assert not decide(_b("security-auditor", command), CFG).allow, command
 
     def test_specialists_read_only_set(self) -> None:
-        assert decide(_b("nist-specialist", "sha256sum catalog.json"), CFG).allow
-        assert decide(_b("cis-specialist", "git diff main...b | head"), CFG).allow
-        assert not decide(_b("nist-specialist", "curl https://nist.gov"), CFG).allow
-        assert not decide(_b("cis-specialist", "git checkout x"), CFG).allow
+        assert decide(_b("framework-specialist", "sha256sum controls.json"), CFG).allow
+        assert decide(_b("framework-specialist", "git diff main...b | head"), CFG).allow
+        assert not decide(_b("framework-specialist", "curl https://nist.gov"), CFG).allow
+        assert not decide(_b("framework-specialist", "git checkout x"), CFG).allow
 
 
-READ_ONLY_AGENTS = ("security-auditor", "nist-specialist", "cis-specialist")
+READ_ONLY_AGENTS = ("security-auditor", "framework-specialist")
 
 
 class TestSpecialistPipes:
@@ -136,7 +136,7 @@ class TestRegressionReadOnly:
         ):
             assert decide(_b("security-auditor", command), CFG).allow, command
 
-    @pytest.mark.parametrize("agent", ["nist-specialist", "cis-specialist"])
+    @pytest.mark.parametrize("agent", ["framework-specialist"])
     def test_specialists_blocked(self, agent: str) -> None:
         for command in ("find . -delete", "sort -o out x", "git diff --output=f", "git branch"):
             assert not decide(_b(agent, command), CFG).allow, (agent, command)
@@ -146,7 +146,7 @@ class TestRound3Breakage:
     def test_quoted_filters_allowed(self) -> None:
         assert decide(_b("security-auditor", "jq '.[] | .name' x.json"), CFG).allow
         assert decide(_b("security-auditor", "rg 'foo|bar' src"), CFG).allow
-        assert decide(_b("nist-specialist", "jq -r '.controls[] | .id' c.json"), CFG).allow
+        assert decide(_b("framework-specialist", "jq -r '.controls[] | .id' c.json"), CFG).allow
         assert decide(_b("security-auditor", "grep -n 'a;b' x"), CFG).allow
         assert decide(_b("security-auditor", "grep -n '$x' src"), CFG).allow
 
@@ -415,8 +415,7 @@ def test_pytest_without_the_runner_grant_is_refused(tmp_path: Path) -> None:
     audit, _ = _places(repo)
     command = f"python3 -m pytest {audit}/x.py -q"
     assert evaluate(HOOK, _rb(repo, "x", command), "--git", "read-only") == jail.R_AUDITOR_BASH
-    for agent in ("nist-specialist", "cis-specialist"):
-        assert not decide(_rb(repo, agent, command), CFG).allow, agent
+    assert not decide(_rb(repo, "framework-specialist", command), CFG).allow
 
 
 def test_unit_test_run_admits_only_a_recorded_unit_worktree(tmp_path: Path) -> None:
@@ -459,7 +458,7 @@ def test_unit_test_run_without_train_state_is_refused(tmp_path: Path) -> None:
     [
         ("security-auditor", AUDIT),
         ("daedalus:verifier", UNIT),
-        ("nist-specialist", ("--git", "specialist")),
+        ("framework-specialist", ("--git", "specialist")),
         ("x", ()),
     ],
 )

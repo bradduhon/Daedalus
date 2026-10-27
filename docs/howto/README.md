@@ -154,7 +154,7 @@ The train runs these checks and stops with a `Next:` line when one fails:
 - `config.json` is optional. When it exists it must be valid JSON.
 - A decision ledger must exist. The train runs `append_ledger.py --probe`. If no ledger is declared and none is found, it asks: "This repo has no decision ledger. Options: name an existing file, or let Daedalus create docs/decisions.md as a table. Which?" Naming a file means you add a `ledger` block for it to config.json from your own shell. Choosing create writes `docs/decisions.md` holding only the table header and separator, which the probe reads as `seq=0`; you review and commit it, then start the train again.
 - The hooks must be writing this session's audit log. The train's start creates `<repo>/.claude/daedalus/`; the next check reads the newest log in `<repo>/.claude/daedalus/audit/` and looks for its own probe command as the last Bash record. If it is not there, the jail is not enforcing and the train stops. Run `/daedalus:doctor`. When it is there, the check prints `OK hooks live: session <id>, chain intact (<n> records)` and marks where this train's audit begins; the Push Train reads the security verdict only from records after that mark.
-- Before the first NIST or CIS question, the plugin cache must exist. If `daedalus_doctor.py --print-cache-dir` finds none, run `/daedalus:doctor` once and start again.
+- Before the first compliance question, the orchestrator finds the control packs: your `frameworks.pack_dir` packs, then the shipped packs unless `frameworks.default_packs` is `false`. A pack that fails its check stops the train; run `/daedalus:doctor` and fix the pack it names.
 
 The train creates `docs/.tmp/daedalus/` with a `*` marker so git ignores its scratch files and summary. It writes `<repo>/.claude/daedalus/train.active` while it runs and removes it when it ends or stops. While that file exists, agents from Claude Code itself or from other plugins are refused every checked tool except reads and searches.
 
@@ -189,7 +189,7 @@ A coding agent that is stuck commits its work in progress and returns a yield. T
 |---|---|---|
 | `YIELD_WEB` | It needs external documentation. | web-researcher, from official docs, with URLs |
 | `YIELD_CONTRACT` | The contract does not cover what it found. Other affected agents are put on hold. | contract-spec, with a new packet_version sent to every affected agent |
-| `YIELD_COMPLIANCE` | It has a security control question. | nist-specialist or cis-specialist, with control ids |
+| `YIELD_COMPLIANCE` | It has a security control question. | framework-specialist, with pack control ids from the shipped packs or your own |
 | `YIELD_STANDARDS` | It has a question about one of your standards. | standards-rules-specialist, with the source and line |
 
 The scope of each unit comes from the recorded plan and the contract.

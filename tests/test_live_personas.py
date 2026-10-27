@@ -57,8 +57,7 @@ HELLO_TEST = (
     '    assert hello("x") == "hello x"\n'
 )
 SPECIALIST_TASK = (
-    "Phase 0 only: the frameworks cache directory named in this prompt is "
-    "/nonexistent/frameworks. Verify the manifest and report."
+    "Phase 0 only.\nPacks: /nonexistent/packs/aws-default\nVerify the pack and report."
 )
 pytestmark = pytest.mark.live
 
@@ -255,10 +254,10 @@ def test_repo_coder(live_repo: Path) -> None:
     _check(run, "repo-coder", ("[STATUS: COMPLETE]",))
 
 
-@pytest.mark.parametrize("name", ["nist-specialist", "cis-specialist"])
-def test_framework_specialist_without_cache(live_repo: Path, name: str) -> None:
+def test_framework_specialist_without_its_pack(live_repo: Path) -> None:
+    name = "framework-specialist"
     run = _persona(name, SPECIALIST_TASK, ["Read", "Grep", "Bash"], live_repo)
-    _check(run, name, ("[STATUS: CACHE_INVALID]",))
+    _check(run, name, ("[STATUS: PACK_INVALID]",))
 
 
 def test_security_auditor(live_repo: Path) -> None:

@@ -63,7 +63,7 @@ class TestRound3WorkerGitGrammar:
             ("security-auditor", "git ls-files --others"),
             ("security-auditor", "git rev-parse --git-path x"),
             ("security-auditor", "git grep --open-files-in-pager x"),
-            ("nist-specialist", "git log --exec x"),
+            ("framework-specialist", "git log --exec x"),
             # Round 4: `git commit -am x` flipped to allowed by ruling (see TestRound4Breakage).
             ("charter-docs", "git commit -F /etc/passwd"),
             ("charter-docs", "git commit --amend -m x"),
@@ -123,7 +123,7 @@ class TestRound4Breakage:
             ("security-auditor", "git log -G pattern"),
             ("security-auditor", "git log --author=brad"),
             ("security-auditor", "git diff --word-diff --color=never"),
-            ("nist-specialist", "git log -n5 --all"),
+            ("framework-specialist", "git log -n5 --all"),
             ("charter-docs", "git diff --cached"),
             ("charter-docs", "git log --oneline -3"),
             ("charter-docs", "git status --porcelain"),
