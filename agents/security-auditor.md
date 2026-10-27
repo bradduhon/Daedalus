@@ -52,7 +52,8 @@ The change is small only when the stat shows at most 3 files and at most 150 cha
 (insertions plus deletions), and the name list holds no path under `scripts/checks/`,
 `agents/`, `skills/` or `hooks/`, none of `scripts/lib/jail.py`, `scripts/lib/shell.py` or
 `scripts/enforce_agent_jail.py`, and no protected path of step 4. When either check fails,
-take the full procedure and say so in your paragraph.
+take the full procedure and say so in your paragraph. The excluded paths are `CONTROL_PATHS`
+in `scripts/lib/plan_record.py` (0182).
 A small change takes the short form. Keep the judged tip of step 0, the full diff with its
 removed lines (step 1), the fixed class commands of step 2, scope (step 4) and compliance
 (step 5), one failing test per blocking finding with the findings file (Finding format items

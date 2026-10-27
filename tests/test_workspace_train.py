@@ -1328,12 +1328,12 @@ ONE_FILE_PLAN = (
 )
 
 
-def _skipped_train(repo: Path) -> str:
+def _skipped_train(repo: Path, text: str = ONE_FILE_PLAN) -> str:
     # 0156: the contract step recorded a skip and the lock took --no-contract.
     train = _train(repo)
     plan = repo / "docs" / ".tmp" / "daedalus" / train / "plan.md"
     plan.parent.mkdir(parents=True, exist_ok=True)
-    plan.write_text(f"# plan\n\n{ONE_FILE_PLAN}", encoding="utf-8")
+    plan.write_text(f"# plan\n\n{text}", encoding="utf-8")
     digest = hashlib.sha256(plan.read_bytes()).hexdigest()
     record = {train_state.PLAN: {"path": str(plan), "sha256": digest}}
     train_state.update(repo, train, contract_skip=True, **record)
@@ -1379,6 +1379,29 @@ def test_finish_merges_a_skipped_train_writing_only_its_one_file(repo: Path) -> 
     _built(repo, train, "u1")
     assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
     assert (repo / "u1.txt").is_file()
+
+
+@pytest.mark.parametrize(
+    ("extra", "said"), [("", ""), ("u3.txt", ""), ("u4.txt", "changes u1.txt, u2.txt, u4.txt")]
+)
+def test_finish_of_a_three_file_skip_takes_a_subset_of_its_files(
+    repo: Path, extra: str, said: str
+) -> None:
+    # 0182: a skipped three-file plan merges a unit that changes only files the plan names.
+    train = _skipped_train(repo, ONE_FILE_PLAN.replace("u1.txt |", "u1.txt, u2.txt, u3.txt |"))
+    unit = _built(repo, train, "u1")
+    (unit / "u2.txt").write_text("x\n")
+    if extra:
+        (unit / extra).write_text("x\n")
+    _commit_all(unit, "more files")
+    base = _ok(repo, "rev-parse", f"daedalus/{train}")
+    if not said:
+        assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
+        return
+    with pytest.raises(WorkspaceError) as info:
+        finish(repo)
+    assert said in str(info.value) and "the files u1.txt, u2.txt, u3.txt" in str(info.value)
+    assert _ok(repo, "rev-parse", f"daedalus/{train}") == base
 
 
 @pytest.mark.parametrize(("name", "said"), [("u1.txt", ""), ("fix.txt", "changes fix.txt")])
