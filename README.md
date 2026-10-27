@@ -567,12 +567,14 @@ Daedalus/
 │   ├── validate_train.py            # checks a train definition file
 │   └── verify_audit_chain.py        # recompute and verify a session's hash chain
 ├── skills/
+│   ├── audit/SKILL.md               # the audit phase, run by the orchestrator
 │   ├── audit-report/SKILL.md        # /daedalus:audit-report
 │   ├── brainstorm/SKILL.md          # /daedalus:brainstorm, the brainstorm phase
 │   ├── build/SKILL.md               # /daedalus:build, the build phase
 │   ├── build-train/SKILL.md         # /daedalus:build-train
 │   ├── catalog/SKILL.md             # /daedalus:catalog
 │   ├── doc-train/SKILL.md           # /daedalus:doc-train
+│   ├── document/SKILL.md            # the document phase, in two modes
 │   ├── doctor/SKILL.md              # /daedalus:doctor
 │   ├── plan/SKILL.md                # /daedalus:plan, the plan phase
 │   ├── push-train/SKILL.md          # /daedalus:push-train
