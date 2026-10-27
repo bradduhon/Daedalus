@@ -15,11 +15,8 @@ from tests.hook_chain import (
     evaluate,
     internal_error_denies,
     load,
-    malformed_input_denies,
-    outside_tools_allow,
     payload,
     run_script,
-    unknown_flag_denies,
 )
 from tests.jail_cases import _git_init
 from tests.payloads import _b
@@ -59,13 +56,13 @@ class TestReadOnlyAgents:
             assert not decide(_b("security-auditor", command), CFG).allow, command
 
     def test_specialists_read_only_set(self) -> None:
-        assert decide(_b("nist-specialist", "sha256sum catalog.json"), CFG).allow
-        assert decide(_b("cis-specialist", "git diff main...b | head"), CFG).allow
-        assert not decide(_b("nist-specialist", "curl https://nist.gov"), CFG).allow
-        assert not decide(_b("cis-specialist", "git checkout x"), CFG).allow
+        assert decide(_b("framework-specialist", "sha256sum controls.json"), CFG).allow
+        assert decide(_b("framework-specialist", "git diff main...b | head"), CFG).allow
+        assert not decide(_b("framework-specialist", "curl https://nist.gov"), CFG).allow
+        assert not decide(_b("framework-specialist", "git checkout x"), CFG).allow
 
 
-READ_ONLY_AGENTS = ("security-auditor", "nist-specialist", "cis-specialist")
+READ_ONLY_AGENTS = ("security-auditor", "framework-specialist")
 
 
 class TestSpecialistPipes:
@@ -136,7 +133,7 @@ class TestRegressionReadOnly:
         ):
             assert decide(_b("security-auditor", command), CFG).allow, command
 
-    @pytest.mark.parametrize("agent", ["nist-specialist", "cis-specialist"])
+    @pytest.mark.parametrize("agent", ["framework-specialist"])
     def test_specialists_blocked(self, agent: str) -> None:
         for command in ("find . -delete", "sort -o out x", "git diff --output=f", "git branch"):
             assert not decide(_b(agent, command), CFG).allow, (agent, command)
@@ -146,7 +143,7 @@ class TestRound3Breakage:
     def test_quoted_filters_allowed(self) -> None:
         assert decide(_b("security-auditor", "jq '.[] | .name' x.json"), CFG).allow
         assert decide(_b("security-auditor", "rg 'foo|bar' src"), CFG).allow
-        assert decide(_b("nist-specialist", "jq -r '.controls[] | .id' c.json"), CFG).allow
+        assert decide(_b("framework-specialist", "jq -r '.controls[] | .id' c.json"), CFG).allow
         assert decide(_b("security-auditor", "grep -n 'a;b' x"), CFG).allow
         assert decide(_b("security-auditor", "grep -n '$x' src"), CFG).allow
 
@@ -197,18 +194,6 @@ def test_read_only_bash_fixture_decisions() -> None:
     status = payload("Bash", command="git status")
     want = {"decision": "deny", "reason": jail.R_SPECIALIST_BASH}
     assert run_script(HOOK, status, "--git", "specialist") == want
-
-
-def test_read_only_bash_allows_tools_outside_its_tools() -> None:
-    outside_tools_allow(HOOK, "Write", "--git", "read-only")
-
-
-def test_read_only_bash_unknown_flag_denies() -> None:
-    unknown_flag_denies(HOOK, payload("Bash", command="ls"))
-
-
-def test_read_only_bash_malformed_input_denies() -> None:
-    malformed_input_denies(HOOK, "--git", "read-only")
 
 
 def test_read_only_bash_internal_error_denies_and_names_the_hook() -> None:
@@ -415,8 +400,7 @@ def test_pytest_without_the_runner_grant_is_refused(tmp_path: Path) -> None:
     audit, _ = _places(repo)
     command = f"python3 -m pytest {audit}/x.py -q"
     assert evaluate(HOOK, _rb(repo, "x", command), "--git", "read-only") == jail.R_AUDITOR_BASH
-    for agent in ("nist-specialist", "cis-specialist"):
-        assert not decide(_rb(repo, agent, command), CFG).allow, agent
+    assert not decide(_rb(repo, "framework-specialist", command), CFG).allow
 
 
 def test_unit_test_run_admits_only_a_recorded_unit_worktree(tmp_path: Path) -> None:
@@ -459,7 +443,7 @@ def test_unit_test_run_without_train_state_is_refused(tmp_path: Path) -> None:
     [
         ("security-auditor", AUDIT),
         ("daedalus:verifier", UNIT),
-        ("nist-specialist", ("--git", "specialist")),
+        ("framework-specialist", ("--git", "specialist")),
         ("x", ()),
     ],
 )
@@ -530,3 +514,14 @@ def test_audit_test_run_still_reads_the_audit_worktree_corpus(tmp_path: Path) ->
     _, tree = _audit_units(repo, flagged=True)
     command = f"python3 -m pytest {tree}/tests/adversarial -q --rootdir {tree}"
     assert evaluate(HOOK, _rb(repo, "security-auditor", command), *AUDIT) is None
+
+
+def test_a_rewritten_search_word_or_rg_program_option_names_its_reason() -> None:
+    # prepush2-2026-10-27 items 1 and 2: the read check alone refuses both, whatever the target.
+    ro = ("--git", "read-only")
+    for command in ("rg $'-uu' -l x src", 'grep $"-r" x src', "rg {-uu,} x src", "rg x *"):
+        assert evaluate(HOOK, _b("x", command), *ro) == jail.R_RG_OPAQUE, command
+    for command in ("rg --hostname-bin=/tmp/x -n x src", "rg --pre /tmp/x x src"):
+        assert evaluate(HOOK, _b("x", command), *ro) == jail.R_RG_PROGRAM, command
+    for command in ("rg -n 'a$' src", "rg -g '*.{tf,yml}' x src", "rg -n x src/*.py"):
+        assert evaluate(HOOK, _b("x", command), *ro) is None, command

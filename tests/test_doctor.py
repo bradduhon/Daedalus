@@ -8,12 +8,15 @@ import re
 import shutil
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 import daedalus_confine
 import pytest
+from lib import packs
 
 from tests.conftest import fake_bin, git, run_cli
+from tests.test_framework_packs import _control, _make, _manifest
 
 SCAFFOLDS = ("service-manifest.json", "contracts/", ".gitleaks.toml")
 PROBE = daedalus_confine.kernel_support
@@ -430,6 +433,20 @@ def test_print_cache_dir_none_exits_one_with_next(tmp_path: Path) -> None:
     )
 
 
+def test_print_files_one_line_per_row_and_exit_zero(tmp_path: Path) -> None:
+    # Plan 10 spec 3.2 item 1: `<path pattern> | <writer> | <when>`, writer scripts/<file>.py:<fn>.
+    from lib import inventory
+
+    result = run_cli("daedalus_doctor.py", "--print-files", cwd=tmp_path)
+    assert result.returncode == 0
+    assert result.stderr == ""
+    lines = result.stdout.splitlines()
+    assert lines == inventory.lines()
+    assert len(lines) == len(inventory.FILES) > 0
+    shape = re.compile(r"[^|]+ \| scripts/[A-Za-z0-9_/]+\.py:[A-Za-z_][A-Za-z0-9_.]* \| [^|]+")
+    assert all(shape.fullmatch(line) for line in lines), lines
+
+
 def _github(repo: Path, value: object) -> None:
     # issue 48: a manifest holding only features.github, or no features key for the absent case.
     body = {} if value == "absent" else {"features": {"github": value}}
@@ -828,8 +845,8 @@ def test_cis_manual_manifest_reported_the_same_way(tmp_path: Path) -> None:
     assert list(daedalus_doctor._framework_checks(tmp_path, date(2026, 10, 16))) == [
         (
             True,
-            "OLD  frameworks cis: pinned 2026-06-01 (137 days). Next: place a current benchmark "
-            "and its manifest entry per docs/project-requirements.md",
+            "OLD  frameworks cis: pinned 2026-06-01 (137 days). Next: build a CIS id-map pack "
+            "with python3 <plugin>/scripts/import_pack.py cis-map per docs/project-requirements.md",
         )
     ]
 
@@ -861,6 +878,236 @@ def test_no_manifest_no_line(plugin_data: Path, tmp_path: Path) -> None:
     home.mkdir()
     result = _run(None, tmp_path, path_env=_bins(tmp_path), home=home)
     assert _framework_lines(result.stdout) == []
+
+
+# 0157, Plan 10 spec 2.6: the framework pack lines (F3 requirements 1 to 5).
+PACK_DAY = date(2026, 10, 26)
+PACK_DIR_ONLY = {"pack_dir": "packs", "default_packs": False}
+OTHER_NEXT = (
+    "Next: fix the pack files or rebuild the pack with python3 <plugin>/scripts/import_pack.py "
+    "per docs/project-requirements.md"
+)
+
+
+def _pack_lines_at(repo: Path, day: date = PACK_DAY) -> list[tuple[bool, str]]:
+    import daedalus_doctor
+
+    return list(daedalus_doctor._pack_checks(repo, day))
+
+
+def _break_hash(folder: Path) -> None:
+    (folder / "controls.json").write_text(packs.controls_text([_control("X-2")]), encoding="utf-8")
+
+
+def test_pack_line_ok_for_each_folder_after_the_declared_ones(repo_cwd: Path) -> None:
+    _make(repo_cwd / "packs" / "one")
+    _manifest(repo_cwd, {"pack_dir": "packs"})
+    shipped = [packs.load_pack(f) for f in sorted(packs.FRAMEWORKS_DIR.iterdir())]
+    day = max(date.fromisoformat(p.pinned_on) for p in shipped)
+    assert _pack_lines_at(repo_cwd, day) == [
+        (True, "OK   framework pack one: 1.0.0, 1 controls"),
+        *[
+            (True, f"OK   framework pack {p.id}: {p.version}, {len(p.controls)} controls")
+            for p in shipped
+        ],
+    ]
+
+
+def test_pack_problems_are_one_failing_line_each(repo_cwd: Path) -> None:
+    folder = _make(repo_cwd / "packs" / "bad", version="1.0")
+    _break_hash(folder)
+    _manifest(repo_cwd, PACK_DIR_ONLY)
+    lines = _pack_lines_at(repo_cwd)
+    assert [ok for ok, _ in lines] == [False, False]
+    assert lines[0][1].startswith("MISS framework pack bad: pack.json version must be x.y.z")
+    assert lines[1][1].startswith("MISS framework pack bad: controls.json sha256 is ")
+    assert all(line.endswith(f". {OTHER_NEXT}") for _, line in lines)
+
+
+def test_pack_from_oscal_names_the_refresh_then_the_importer(repo_cwd: Path) -> None:
+    folder = _make(repo_cwd / "packs" / "nist", license=packs.NIST_LICENSE)
+    _break_hash(folder)
+    _manifest(repo_cwd, PACK_DIR_ONLY)
+    [(ok, line)] = _pack_lines_at(repo_cwd)
+    assert not ok
+    assert line.endswith(
+        "Next: download the NIST catalog with python3 <plugin>/scripts/refresh_frameworks.py "
+        "--only nist-800-53 --cache-root <dir>, then rebuild the pack with python3 "
+        "<plugin>/scripts/import_pack.py oscal --catalog "
+        f"<dir>/frameworks/nist/catalog.json --ids X-2 --out {folder}"
+    )
+    (folder / "controls.json").unlink()
+    [(_, line)] = _pack_lines_at(repo_cwd)
+    assert line.startswith("MISS framework pack nist: controls.json is missing. ")
+    assert line.endswith(f"--ids <ids> --out {folder}")
+
+
+def test_pack_from_a_cis_map_names_the_cis_importer(repo_cwd: Path) -> None:
+    folder = _make(repo_cwd / "packs" / "cis", license=packs.ID_MAP_LICENSE)
+    _break_hash(folder)
+    _manifest(repo_cwd, PACK_DIR_ONLY)
+    [(_, line)] = _pack_lines_at(repo_cwd)
+    assert line.endswith(
+        "Next: rebuild the pack from your CIS id map with python3 <plugin>/scripts/import_pack.py "
+        f"cis-map --map <csv> --benchmark <name> --version <x.y.z> --out {folder}"
+    )
+
+
+def test_unreadable_pack_json_gets_the_general_next(repo_cwd: Path) -> None:
+    folder = _make(repo_cwd / "packs" / "raw", license=packs.NIST_LICENSE)
+    (folder / "pack.json").write_text("{not json", encoding="utf-8")
+    _manifest(repo_cwd, PACK_DIR_ONLY)
+    [(ok, line)] = _pack_lines_at(repo_cwd)
+    assert not ok
+    assert line.startswith("MISS framework pack raw: pack.json is not valid UTF-8 JSON")
+    assert line.endswith(f". {OTHER_NEXT}")
+
+
+def test_pack_line_drops_control_characters(repo_cwd: Path) -> None:
+    _make(repo_cwd / "packs" / "evil\x1b[31m")
+    _manifest(repo_cwd, PACK_DIR_ONLY)
+    lines = _pack_lines_at(repo_cwd)
+    assert lines and all(not ok and line.isprintable() for ok, line in lines)
+    assert lines[0][1].startswith("MISS framework pack evil[31m: pack.json id must be")
+
+
+def test_shipped_pack_problem_says_reinstall(
+    monkeypatch: pytest.MonkeyPatch, repo_cwd: Path, tmp_path: Path
+) -> None:
+    shipped = tmp_path / "shipped"
+    _break_hash(_make(shipped / "aws-default", source="daedalus"))
+    monkeypatch.setattr(packs, "FRAMEWORKS_DIR", shipped)
+    assert _pack_lines_at(repo_cwd) == [
+        (
+            False,
+            f"MISS framework pack aws-default: controls.json sha256 is "
+            f"{packs.digest(packs.controls_text([_control('X-2')]).encode())}, not the "
+            f"{json.loads((shipped / 'aws-default' / 'pack.json').read_text())['sha256']} "
+            "pack.json declares. Next: reinstall the Daedalus plugin; a shipped pack is never "
+            "edited in place",
+        )
+    ]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode 000 folder")
+def test_unreadable_pack_dir_is_a_miss_line_not_a_crash(repo_cwd: Path) -> None:
+    # prepush-2026-10-27 finding 5: the folder walk's PermissionError becomes one MISS line.
+    _make(repo_cwd / "packs" / "one")
+    _manifest(repo_cwd, PACK_DIR_ONLY)
+    (repo_cwd / "packs").chmod(0)
+    try:
+        [(ok, line)] = _pack_lines_at(repo_cwd)
+    finally:
+        (repo_cwd / "packs").chmod(0o755)
+    assert not ok and line.startswith("MISS framework packs: [Errno 13] Permission denied")
+    assert line.endswith("Next: make the pack folders readable to you, or fix frameworks.pack_dir")
+
+
+def test_a_nist_ref_holding_a_list_is_a_miss_line_not_a_crash(repo_cwd: Path) -> None:
+    # prepush-2026-10-27 finding 5: hostile refs.nist content is a pack problem.
+    refs = {"nist": [["AC-2"]], "cis": [], "asvs": []}
+    _make(repo_cwd / "packs" / "hostile", [_control(refs=refs)])
+    _manifest(repo_cwd, PACK_DIR_ONLY)
+    [(ok, line)] = _pack_lines_at(repo_cwd)
+    assert not ok
+    assert (
+        line
+        == f"MISS framework pack hostile: control X-1 refs.nist must be a list of ids. {OTHER_NEXT}"
+    )
+
+
+@pytest.mark.parametrize("kind", ["absent", "file", "link"])
+def test_declared_pack_dir_that_is_not_a_folder_fails(repo_cwd: Path, kind: str) -> None:
+    target = repo_cwd / "packs"
+    if kind == "file":
+        target.write_text("x")
+    if kind == "link":
+        (repo_cwd / "real").mkdir()
+        target.symlink_to(repo_cwd / "real")
+    _manifest(repo_cwd, PACK_DIR_ONLY)
+    problem = (
+        "packs is a symlink, which the pack reader never follows"
+        if kind == "link"
+        else "packs is not a folder"
+    )
+    assert _pack_lines_at(repo_cwd) == [
+        (
+            False,
+            f"MISS framework packs: {problem}. Next: create it or remove frameworks.pack_dir "
+            "from service-manifest.json",
+        )
+    ]
+
+
+def test_refused_manifest_prints_no_pack_line(repo_cwd: Path) -> None:
+    (repo_cwd / "service-manifest.json").write_text("{not json", encoding="utf-8")
+    assert _pack_lines_at(repo_cwd) == []
+
+
+def test_pack_line_old_after_90_days_never_fails(repo_cwd: Path) -> None:
+    _make(repo_cwd / "packs" / "own", pinned_on="2026-07-28")
+    _make(repo_cwd / "packs" / "nist", pinned_on="2026-07-27", license=packs.NIST_LICENSE)
+    _manifest(repo_cwd, PACK_DIR_ONLY)
+    nist = repo_cwd / "packs" / "nist"
+    assert _pack_lines_at(repo_cwd) == [
+        (
+            True,
+            "OLD  framework pack nist: pinned 2026-07-27 (91 days). Next: download the NIST "
+            "catalog with python3 <plugin>/scripts/refresh_frameworks.py --only nist-800-53 "
+            "--cache-root <dir>, then rebuild the pack with python3 "
+            "<plugin>/scripts/import_pack.py oscal --catalog "
+            f"<dir>/frameworks/nist/catalog.json --ids X-1 --out {nist}",
+        ),
+        (True, "OK   framework pack own: 1.0.0, 1 controls"),
+    ]
+
+
+def test_old_shipped_pack_says_update_the_plugin(repo_cwd: Path) -> None:
+    lines = _pack_lines_at(repo_cwd, date(2099, 1, 1))
+    assert lines and all(ok for ok, _ in lines)
+    assert all(
+        line.startswith("OLD  framework pack ")
+        and line.endswith(
+            " days). Next: update the Daedalus plugin to a release with a newer shipped pack"
+        )
+        for _, line in lines
+    )
+
+
+def _pack_cli_repo(
+    tmp_path: Path, pinned_on: str, broken: bool
+) -> subprocess.CompletedProcess[str]:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    folder = _make(repo / "packs" / "own", pinned_on=pinned_on)
+    if broken:
+        _break_hash(folder)
+    _manifest(repo, {"pack_dir": "packs"})
+    (repo / "contracts").mkdir()
+    (repo / "contracts" / "openapi.yaml").write_text("")
+    (repo / ".gitleaks.toml").write_text("")
+    _commit_all(repo)
+    home = tmp_path / "home"
+    home.mkdir()
+    bins = _bins_with_git(tmp_path, "gitleaks", "gh")
+    return _run(None, repo, path_env=bins, home=home)
+
+
+def test_cli_old_pack_line_follows_the_cache_lines_and_passes(tmp_path: Path) -> None:
+    result = _pack_cli_repo(tmp_path, "2020-01-01", broken=False)
+    lines = result.stdout.splitlines()
+    assert result.returncode == 0, result.stdout
+    cache = next(i for i, line in enumerate(lines) if line.startswith("OK   cache dir:"))
+    own = next(i for i, line in enumerate(lines) if "framework pack own:" in line)
+    assert cache < own
+    assert lines[own].startswith("OLD  framework pack own: pinned 2020-01-01 (")
+    assert any(line[5:].startswith("framework pack aws-default: ") for line in lines[own:])
+
+
+def test_cli_pack_problem_fails_the_run(tmp_path: Path) -> None:
+    result = _pack_cli_repo(tmp_path, "2026-10-26", broken=True)
+    assert result.returncode == 1
+    assert "MISS framework pack own: controls.json sha256 is " in result.stdout
 
 
 PACK_OFFER = (

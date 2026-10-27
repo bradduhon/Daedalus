@@ -247,6 +247,12 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     subs = shell.GIT_SETS[grant] if grant else frozenset()
     charter = hook_io.hook_charter(cwd)
     for i, tokens in enumerate(chain.segments):
+        # prepush2-2026-10-27: a rewritten word or a program option refuses whatever the target.
+        name = shell._cmd_name(tokens)
+        if name in shell.SEARCH_CMDS and shell.search_opaque(chain.raws[i]):
+            return jail.R_RG_OPAQUE
+        if name == "rg" and jail.rg_program(tokens[1:]):
+            return jail.R_RG_PROGRAM
         if (i == 0 and moved) or read_segment_ok(tokens, subs, cwd, charter):
             continue
         if i and _show_sed(chain.segments[i - 1], chain.seps[i - 1], tokens, subs):

@@ -64,11 +64,11 @@ Every `MISS` line ends with a `Next:` instruction that says what to do. In a new
 ### Your first body of work
 
 1. Read the catalog. Type `/daedalus:catalog`. It prints every agent with its tools, its reply lines and the phases it suits, then the six phases with their exit conditions and the musts.
-2. Write a spec, or point at one. A spec is a file in your repository that says what to build and how you will know it works. A one-line task needs no file; the Build Train saves the words you type as the spec.
+2. Write a spec, or point at one. A spec is a file in your repository that says what to build and how you will know it works. A one-line task needs no file; the Build Train saves the words you type as the spec. With only an idea and no spec, type `/daedalus:brainstorm` and the idea, or the path of a notes file. The planner answers in numbered rounds of contradictions, gaps and proposals, each tied to a sentence you wrote, and you answer in your own words. When the idea settles, the planner writes a spec draft under `docs/.tmp/daedalus/brainstorm-<YYYYMMDD>/`. Move it where your project keeps its specs and say the spec stands; the same planner then cuts the plan, as in step 3.
 3. Cut the spec into units. Type `/daedalus:plan` and the spec's path, for example `/daedalus:plan docs/specs/healthz.md`. The planner agent writes a plan file, and the plan validator checks it and prints `OK plan: graph: units=<n> critical_path=<k> width=<w> overlap_only=<pairs>`. The session then shows a unit table with the columns Unit, What it builds, Starts from, Waits on and Shares files with. Each row is one coding agent's work. Waits on names the units that must finish first, and Shares files with names the units that edit the same files, with the order they merge in. Outside a train the plan lands at `docs/.tmp/daedalus/plan-<YYYYMMDD>.md`.
 4. Start the Build Train. Type `/daedalus:build-train` and your task, naming the plan file the plan step wrote, as its `Next:` line says. The session hands it to the orchestrator as the train's plan; the orchestrator checks it with the plan validator and records it instead of cutting a new one. With no plan named, the orchestrator cuts and records the plan itself before any coder starts. The session checks the preconditions and prints the first State Block lines. The hooks check then prints `OK hooks live: session <id>, chain intact (<n> records)`. That check also marks where this train's audit begins; the Push Train later reads the security verdict only from records after that mark (issue 57).
 5. Watch it run. The main session starts one orchestrator agent and relays between it and you (0060). After each phase you see a progress note that names the phase, its weight and the state of each unit. Before each choice the train prints one line, `Chose <what> over <alternative>: <cost>`.
-6. Answer its questions. When the train needs a ruling, the orchestrator writes a decision brief, and the session asks you through Claude Code's question prompt. Each question has a question line ending in a question mark, two or three context sentences and its options, with the recommended option first. The orchestrator ends each reply with one of four lines, and the session routes it:
+6. Answer its questions. When the train needs a ruling, the orchestrator writes a decision brief, and the session asks you through Claude Code's question prompt. Each question has a question line ending in a question mark, two or three context sentences and its options, with the recommended option first. Each question is written at the reading level the `docs.literacy` key of `service-manifest.json` names, `plain` when the key is absent, and the orchestrator runs `daedalus_train.py brief-check` on each brief before it hands the brief over (plain briefs by manifest level, 0153). The orchestrator ends each reply with one of four lines, and the session routes it:
    - `[STATUS: DECISION]`: the session asks you the brief's questions and sends your picks back.
    - `[STATUS: EXCEPTION]`: you exempted every finding of the last audit round, and the session records one exemption per finding, each with its ruling and how you chose to track it.
    - `[STATUS: STOP]`: the session runs the stop command and shows its `Next:` line. Say continue to resume.
@@ -119,14 +119,13 @@ Each agent's file lists the only tools it may use, the reply lines it ends with,
 |---|---|---|---|---|---|---|
 | change-logger | producer | opus | Bash, Glob, Grep, Read, Write | Produces the change gate between a baseline and a derived document, or between two baselines when no deriver runs: one row per departure, with the baseline quote, the derived quote, the reason, and a status the operator rules on. | `[STATUS: COMPLETE] change_log=<path> rows=<n> open=<k>`; `[STATUS: BLOCKED] <what the manifest or brief leaves out>` | implementation |
 | charter-docs | producer | sonnet | Bash, Edit, Glob, Grep, Read, Write | Single-writer custodian of the Charter repository, the architectural decision ledger, and Build Train commits. | `[STATUS: LEDGER_PROBED] <probe line>`; `[STATUS: LEDGER_APPENDED] <id>`; `[STATUS: LEDGER_MISMATCH] expected=<n> ledger=<m>`; `[STATUS: COMMITTED] <sha> ids=<id>[,<id>]`; `[STATUS: BLOCKED] <detail>` | clarification, commit, release |
-| cis-specialist | judge | sonnet | Bash, Grep, Read | Evaluates cloud infrastructure, IAM/RCP policies, and OS/container hardening against operator-supplied CIS Benchmarks. | `[STATUS: CACHE_INVALID] <detail>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with control ids and file:line>` | clarification, audit |
 | contract-spec | producer | sonnet | Edit, Glob, Grep, Read, Write | Reads and updates service handshake contracts, API schemas, and specifications. | `## Locked Contract Packet` | clarification, plan |
 | dependency-auditor | judge | sonnet | Bash, Glob, Grep, Read | Read-only judge of the dependency manifests and lockfiles a train changes. | `[STATUS: YIELD_WEB] <query>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with rule ids and file:line>` | audit |
 | doc-deriver | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Derives one document from frozen, manifest-declared sources with a file:line receipt on every value. | `[STATUS: COMPLETE] outputs=<path>[,<path>] claims=<n> judgments=<k> assumed=<m>`; `[STATUS: BLOCKED] <what the manifest or brief leaves out>` | implementation |
 | docs-writer | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Writes the public docs to match what a train merged. | `[STATUS: DOCS_WRITTEN] branch=<b> commit=<40 hex> claims=<n>`; `[STATUS: DOCS_UNCHANGED] reason=<why no passage needed an edit>` | audit |
-| nist-specialist | judge | sonnet | Bash, Grep, Read | Evaluates architecture, IAM, and cryptographic boundaries against the pinned NIST SP 800-53 OSCAL catalog and SP 800-57 key-management guidance. | `[STATUS: CACHE_INVALID] <detail>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with control ids and file:line>` | clarification, audit |
+| framework-specialist | judge | sonnet | Bash, Grep, Read | Evaluates a diff against the control packs named in its prompt, by default the shipped AWS hardening and NIST SP 800-53 packs, and cites each pack control id with its NIST, CIS and ASVS ids. | `[STATUS: PACK_INVALID] <pack id>: <problem>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with pack control ids, refs ids and file:line>` | clarification, audit |
 | orchestrator | dispatcher | fable | Agent, Bash, Edit, Glob, Grep, Read, SendMessage, Write | Runs one Build Train from its plan to the audited integration tip. | `[STATUS: DECISION] brief=<path> questions=<n>`; `[STATUS: EXCEPTION] ledger_id=<id>`; `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path> tip=<40 hex>`; `[STATUS: STOP] reason=<what happened> next=<next action>` | context, clarification, plan, implementation, audit |
-| planner | shaper | opus | Glob, Grep, Read, Write | Cuts a design spec into work units that coders can build in parallel. | `[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>`; `[STATUS: QUESTION] <what the task leaves open>` | plan |
+| planner | shaper | opus | Glob, Grep, Read, Write | Cuts a design spec into work units that coders can build in parallel. | `[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>`; `[STATUS: QUESTION] <what the task leaves open>`; `[STATUS: ROUND] round=<k> items=<m>`; `[STATUS: SPEC] round=<k> path=<path> open=<m>`; `[STATUS: NOT_VIABLE] round=<k> <the blocking fact in one line>`; `[STATUS: YIELD_WEB] <query>` | clarification, plan |
 | pr-train-conductor | mover | opus | Bash, Glob, Grep, Read | GitHub specialist for the Push Train. | `[STATUS: PUSHED] branch=<b> pr=<url>`; `[STATUS: CI] run=<id> conclusion=<text>`; `[STATUS: BLOCKED] <precondition that failed>` | commit, release |
 | repo-coder | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Scoped implementation worker. | `[STATUS: YIELD_WEB] <query>`; `[STATUS: YIELD_CONTRACT] <mismatch>`; `[STATUS: YIELD_COMPLIANCE] <question>`; `[STATUS: YIELD_STANDARDS] <question>`; `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>` | implementation |
 | security-auditor | judge | opus | Bash, Edit, Glob, Grep, Read, Write | Adversarial pre-commit security and contract verifier. | `[VERDICT: APPROVED] tip=<40 lowercase hex>`; `[VERDICT: REJECTED] tip=<40 lowercase hex>` | audit |
@@ -143,14 +142,13 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 |---|---|---|
 | change-logger | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar, read_only_bash, doc_outputs |
 | charter-docs | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow docs, root_writes --touch charter,docs --ledger-guard, command_allowlist --allow append_ledger,git,read, gh_classes |
-| cis-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
 | contract-spec | producer | credential_paths, workspace_integrity, tool_bound, root_writes --touch contracts,charter-specs |
 | dependency-auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only, gh_classes |
 | doc-deriver | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar, read_only_bash, doc_outputs |
 | docs-writer | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes --docs, gh_classes, confine |
-| nist-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
+| framework-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
 | orchestrator | dispatcher | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, command_allowlist --allow train,inspect, root_writes --touch scratch --ledger-guard, gh_classes, dispatch_gate |
-| planner | shaper | credential_paths, workspace_integrity, tool_bound, root_writes --touch scratch --name plan*.md |
+| planner | shaper | credential_paths, workspace_integrity, tool_bound, root_writes --touch scratch --name plan*.md --sub brainstorm-*/spec.md |
 | pr-train-conductor | mover | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools --gh, command_allowlist --allow git,gh,gitleaks, git_grammar --allow conductor, git_push --conductor, gh_classes --conductor |
 | repo-coder | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes, gh_classes, confine |
 | security-auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only --test-runner audit, gh_classes, root_writes --touch audit |
@@ -162,45 +160,38 @@ Each agent file also declares a shape and the hook scripts listed in its hooks b
 
 ## Files Daedalus creates
 
-`<repo>` is the main working tree of the git repository you started Claude Code in.
+Print every path Daedalus can write from your own shell, where `<plugin>` is the path the doctor prints on its `plugin root` line:
 
-| Path | When | Why |
-|---|---|---|
-| `<repo>/service-manifest.json` | You run `/daedalus:setup` and the file is missing | The starter manifest, with every feature off |
-| `<repo>/.claude/daedalus/config.json` | You run `/daedalus:setup` and the file is missing | The starter config, with every setting at its default |
-| `<repo>/.claude/daedalus/.gitignore` | A Build Train starts in the repository for the first time, or `/daedalus:setup` writes the config | Holds `*` so git ignores the whole directory |
-| `<repo>/.claude/daedalus/audit/<session_id>.jsonl` | Every session, while a train runs in that repository | The hash-chained audit log for that session; kept until `audit_retention_days` says otherwise |
-| `.claude/daedalus/ledger-locks/` in the repo that holds the ledger | A ledger entry is appended | Locks so two writers never change the ledger at once |
-| `<repo>/docs/.tmp/daedalus/` | A Build Train starts | Scratch files and the train summary, ignored by git |
-| `<repo>/.claude/daedalus/train.active` | A Build Train or Push Train starts | Marks a running train; removed when the train ends or stops |
-| `<repo>/.claude/daedalus/trains/<train-id>.json` | A Build Train starts | The train state file: plan record, units, verdicts, exemptions and ledger record (see How it works) |
-| `<repo>/.claude/daedalus/trains/<train-id>.bindings.json` | The first coder of a train is dispatched | Which coding agent holds each unit worktree |
-| `<repo>/.claude/daedalus/trains/<train-id>.sources.json` | A document train freezes its sources | Each frozen source with its sha256, and the excluded folders |
-| `<repo>/.claude/daedalus/reply-hmac.key` | The first agent reply recorded during a train | The secret that keys each reply digest in the audit log; no agent may read it |
-| `<repo>/.claude/worktrees/<train-id>-<unit-slug>` | The Build Train starts a unit | The coding agent's worktree, on branch `daedalus-unit/<train-id>-<unit-slug>`; removed when the train ends or stops, and the branch is kept |
-| `<repo>/.claude/worktrees/.gitignore` | The first unit worktree is created | Holds `*` so git ignores every worktree there |
-| `<repo>/docs/decisions.md` | You answer "create" to the Build Train's ledger question | A new ledger holding only a table header |
-| `contracts/<name>.md` | The contract is locked | The contract every coding agent works from, committed on the train's branch |
-| Rows in your decision ledger | An approved Build Train ends | One entry per ruling, appended through `append_ledger.py` |
-| `<cache>/frameworks/<family>/` | You run `refresh_frameworks.py` | The pinned framework files and their manifest |
+    python3 <plugin>/scripts/daedalus_doctor.py --print-files
+
+Each line reads `<path pattern> | <writer> | <when>`: the writer is the script function that writes the path, and `<repo>` is the main working tree of the git repository you started Claude Code in. The list is never empty, so empty output means the plugin files are damaged; reinstall Daedalus. A `No such file` error means `<plugin>` is wrong; copy it again from the doctor's `plugin root` line.
+
+Part of the output on 2026-10-26:
+
+    <repo>/service-manifest.json | scripts/daedalus_setup.py:_write_new | you run /daedalus:setup and the file is missing
+    <repo>/.claude/daedalus/train.active | scripts/lib/workspace.py:mark_train | a Build Train begins or resumes; removed when the train ends or stops
+    <repo>/.claude/worktrees/<train-id>-<unit-slug> | scripts/lib/workspace.py:create | the Build Train starts a unit; removed when the train ends or stops
+    refs/heads/daedalus/<train-id> | scripts/lib/workspace.py:_merge | a wave merges; one merge commit per unit branch
 
 `<repo>/.claude/daedalus/config.json` is optional. `/daedalus:setup` writes a starter copy when it is missing, and nothing else in Daedalus writes it (see Configuration below for the fields).
 
-### The NIST and CIS cache
+### Control packs
 
-The commands below run from your own shell. `<plugin>` is the path the doctor prints on its `plugin root` line.
+When a train touches IAM, keys, network rules or other infrastructure, the framework specialist judges the merged change against control packs. Daedalus ships two packs under `<plugin>/packs/frameworks/`. `aws-default` holds AWS hardening controls written in Daedalus's own words. `nist-distilled` holds a NIST SP 800-53 checklist. A project with no `frameworks` block in `service-manifest.json` is judged against those two packs and needs no setup. To add your own packs, name a project folder in `frameworks.pack_dir`; each subfolder holding a `pack.json` and a `controls.json` is one pack. Set `frameworks.default_packs` to `false` to read only your own packs. A pack that fails its hash or format check stops the train.
 
-`<cache>` is a directory whose name depends on how you installed Daedalus. Print it with:
+The commands below run from your own shell, in your project. `<plugin>` is the path the doctor prints on its `plugin root` line. `<cache>` is a directory whose name depends on how you installed Daedalus; print it with:
 
     python3 <plugin>/scripts/daedalus_doctor.py --print-cache-dir
 
-Exit 1 means no cache exists yet; run `/daedalus:doctor` inside Claude Code once.
+To build a pack from the NIST catalog, fetch the catalog first, then import the controls you want:
 
-The nist-specialist needs the NIST catalog, in NIST's OSCAL JSON format. Without it, the specialist stops the train with `CACHE_INVALID`. Fetch every pinned framework with:
+    python3 <plugin>/scripts/refresh_frameworks.py --only nist-800-53 --cache-root <cache>
 
-    python3 <plugin>/scripts/refresh_frameworks.py
+    python3 <plugin>/scripts/import_pack.py oscal --catalog <cache>/frameworks/nist/catalog.json --ids AC-2,SC-12 --out compliance/packs/nist-picked
 
-CIS Benchmark files are licensed, so you place them by hand in `<cache>/frameworks/cis/`. Next to them you write a `manifest.json` with one entry per file, holding its name and its `sha256sum` hash. The exact format is in [docs/project-requirements.md](docs/project-requirements.md), under "CIS benchmarks".
+CIS Benchmark text is licensed, so a CIS pack carries ids only. Write a CSV with exactly the columns `cis_id,control_id`, each row mapping a CIS id to a control in another pack, then import it:
+
+    python3 <plugin>/scripts/import_pack.py cis-map --map cis-map.csv --benchmark "CIS AWS Foundations" --version 3.0.0 --out compliance/packs/cis-aws
 
 ## Configuration
 
@@ -223,7 +214,8 @@ One row per key the two readers accept: what the key governs, then what goes the
 | `features.ledger` | `service-manifest.json` | Turns the decision ledger steps on or off (0069) | boolean or null | `true`: the ledger is used, and a train asks before creating one; `false`: no ledger step and no ledger question; `null`: the default | `null`: a ledger the config declares or the probe finds is used, and none is created | `true` |
 | `features.github` | `service-manifest.json` | Says the project pushes to GitHub and opens its pull requests there with the gh tool; with it on, the doctor's two gh lines are a `MISS` when gh is missing or not signed in, and with it off they are `OPT` (0069) | boolean or null | `true`, `false` or `null`; `null` reads as `false` | `false`: the doctor never fails on gh | `true` |
 | `features.dependency_web_lookup` | `service-manifest.json` | Lets the dependency auditor ask for security advisories on the web; the train sends its questions to the web researcher. With it off, the auditor judges from the lockfile and any advisory export the project supplies (0132) | boolean or null | `true`, `false` or `null`; only `false` turns the lookup off | `null`: the lookup is on | `false` |
-| `features.terraform_tools` | `service-manifest.json` | Lets the Terraform reviewer run `terraform fmt -check` and `terraform validate` on the Terraform files a train changes. With it off, the reviewer judges by reading the files (0132) | boolean or null | `true`, `false` or `null`; only `false` turns both commands off | `null`: both commands may run | `false` |
+| `features.terraform_tools` | `service-manifest.json` | Lets the Terraform reviewer run `terraform fmt -check` and `terraform validate` on the Terraform files a train changes; validate also needs `features.terraform_validate`. With it off, the reviewer judges by reading the files (0132, 0158) | boolean or null | `true`, `false` or `null`; only `false` turns both commands off; validate also needs `features.terraform_validate` | `null`: `fmt -check` may run | `false` |
+| `features.terraform_validate` | `service-manifest.json` | Lets the Terraform reviewer run `terraform validate`, which starts the provider programs in a module's `.terraform` folder. Setup never writes it, and `features.terraform_tools` set to `false` still turns it off (0158) | boolean | `true` or `false` | `false`: the reviewer runs no validate and marks that check N/A | `true` |
 | `trains_dir` | `service-manifest.json` | The project folder that holds its own train definitions; a train is looked up there first, as `<trains_dir>/<name>.json`, and then in the plugin's own trains folder (0073) | string or null | A project-relative folder path without a leading slash, `..` or glob characters, or `null` | `null`: only the plugin's trains are used | `"trains"` |
 | `stack.unit_test_cmd` | `service-manifest.json` | The command that runs the project's unit tests; a coding agent may run it exactly as written, as one command (0073, 0098) | string or null | A non-empty command string, or `null` | `null`: no declared command | `"pytest -q"` |
 | `stack.typecheck_cmd` | `service-manifest.json` | The command that type-checks the project; a coding agent may run it exactly as written, as one command (0098) | string or null | A non-empty command string, or `null` | `null`: no declared command | `"mypy src"` |
@@ -239,6 +231,8 @@ One row per key the two readers accept: what the key governs, then what goes the
 | `priorities.principles[].text` | `service-manifest.json` | The principle itself, as one sentence a decision brief quotes (0129) | string | One printable line of 1 to 300 characters | Required in each principle | `"Each tenant keeps its own key."` |
 | `priorities.principles[].source` | `service-manifest.json` | Where the principle is written down, so a reader can follow it (0129) | string | A repo-relative path or a ruling id of the project's own ledger, without a leading slash, `..` or glob characters | Absent: no source named | `"docs/design.md"` |
 | `priorities.agents.<name>.drivers` | `service-manifest.json` | A different ranking for one agent; rules and principles still apply to it (0129) | list of strings | Each of `security`, `trust`, `ops`, `cost` exactly once; `<name>` is a Daedalus agent file name other than `security-auditor`, which is refused | Absent: the agent follows `priorities.drivers` | `{"repo-coder": {"drivers": ["cost", "security", "ops", "trust"]}}` |
+| `frameworks.pack_dir` | `service-manifest.json` | The project folder that holds its own control packs; each subfolder holding a `pack.json` is one pack (0157) | string or null | A project-relative folder path without a leading slash, `..` or glob characters, or `null` | No `frameworks` key: only the packs Daedalus ships are read | `"compliance/packs"` |
+| `frameworks.default_packs` | `service-manifest.json` | Whether the packs Daedalus ships are read beside the project's own packs (0157) | boolean | `true` or `false`; `false` reads only the packs under `frameworks.pack_dir` | `true`: the shipped packs are read | `false` |
 | `ledger.path` | `service-manifest.json` | Where rulings are appended, declared for everyone who works on the project; it wins over the config's ledger block (0004) | string | A path; `<repo_root>` and `<charter_root>` are filled in, and a relative path is read from the project root | No block, or `ledger: null`: the config's ledger block or the ledger probe is used | `"docs/decisions.md"` |
 | `ledger.format` | `service-manifest.json` | How each ruling is written to the ledger (0004) | string | `"markdown-table-row"` (one table row per ruling) or `"heading-entry"` (one `## Entry N` section per ruling) | Required once the block exists | `"markdown-table-row"` |
 | `ledger.id_scheme` | `service-manifest.json` | The pattern each new ruling id follows (0004) | string | A pattern such as `{seq:04d}-{repo}-{type}`; a heading ledger uses `{seq}` | Required once the block exists | `"{seq:04d}-{repo}-{type}"` |
@@ -264,11 +258,11 @@ One row per key the two readers accept: what the key governs, then what goes the
 
 Outside a train, Daedalus leaves your session and your repository alone, except that catalog agents keep their own hooks and a read or search of a credential file meets one check, which warns the main session in its context and refuses an agent. Outside a train, Daedalus writes no files and keeps no audit log in any repository, including one where a train ran before; the one exception is `/daedalus:setup`, which writes its two starter files when you run it. Inside a train, the jail judges every tool call and the audit log records each step. A train works in three folders: the repository's `.claude/worktrees/` folder holds the unit worktrees, its `.claude/daedalus/` folder holds train state and the audit log, and the git-ignored `docs/.tmp/daedalus/` folder holds scratch files and summaries. To have the plugin's hooks in some repositories only, enable the plugin at project scope in each of those repositories' `.claude/settings.json` (Claude Code's `enabledPlugins`) instead of for your user.
 
-Each agent gets a short list of allowed tools, and a tool not on the list is never offered to it. A PreToolUse hook is a check Claude Code runs before each tool call. Daedalus uses one, the jail, to compare every call against that agent's rules and block anything outside them. A coding agent may write only inside its own unit worktree, and there never to `contracts/`, `.github/`, `.claude/`, `service-manifest.json`, the decision ledger, or the paths and file extensions the repository lists under `jail_narrowing` in `service-manifest.json`. At all times, a read or search of `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh` or `~/.claude/.credentials.json` is refused for every agent; the main session's call runs with a warning in its context and its transcript. Daedalus's own agents are always refused writing those paths with a file tool or naming them in Bash; while a train runs, the main session is warned in context when it does either. A train never stops the main session with a permission prompt: each call the jail flags in your own session runs, and the warning names what the call touches and what can go wrong (Main never prompted, amending 0105 and 0106). While a train runs, agents from Claude Code itself or from other plugins are refused every checked tool except reads and searches, in the train's repository and when they write into it from another one. The jail hooks are the enforced boundary and judge each tool call before it runs. Code an agent runs inside a tool call, such as its tests, is the same exposure any developer accepts when using a model in their environment, so Daedalus asks every agent never to circumvent its boundaries and does not try to control the environment. A blocked agent sees a line starting with `daedalus-jail[<agent>]:` that says what was refused and what to do next. Hooks, not agents, write each step to the hash-chained audit log. No agent pushes except the conductor inside the Push Train, and no agent merges. You merge.
+Each agent gets a short list of allowed tools, and a tool not on the list is never offered to it. A PreToolUse hook is a check Claude Code runs before each tool call. Daedalus uses one, the jail, to compare every call against that agent's rules and block anything outside them. A coding agent may write only inside its own unit worktree, and there never to `contracts/`, `.github/`, `.claude/`, `service-manifest.json`, the decision ledger, or the paths and file extensions the repository lists under `jail_narrowing` in `service-manifest.json`. At all times, a read or search of `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh` or `~/.claude/.credentials.json` is refused for every agent; the main session's call runs with a warning in its context and its transcript. The check judges each path after resolving its links, so a link into one of those folders meets the same refusal (issue 83). Daedalus's own agents are always refused writing those paths with a file tool or naming them in Bash; while a train runs, the main session is warned in context when it does either. A train never stops the main session with a permission prompt: each call the jail flags in your own session runs, and the warning names what the call touches and what can go wrong (Main never prompted, amending 0105 and 0106). While a train runs, agents from Claude Code itself or from other plugins are refused every checked tool except reads and searches, in the train's repository and when they write into it from another one. The jail hooks are the enforced boundary and judge each tool call before it runs. Code an agent runs inside a tool call, such as its tests, is the same exposure any developer accepts when using a model in their environment, so Daedalus asks every agent never to circumvent its boundaries and does not try to control the environment. A blocked agent sees a line starting with `daedalus-jail[<agent>]:` that says what was refused and what to do next. Hooks, not agents, write each step to the hash-chained audit log. No agent pushes except the conductor inside the Push Train, and no agent merges. You merge.
 
 [docs/guardrails.md](docs/guardrails.md) pairs each of these principles with the mechanism that enforces it and the test that shows the mechanism exists.
 
-With no declared standards, the Standards Packet is empty and the auditor judges each unit against its contract only. The NIST and CIS specialists review only units that touched IAM, KMS, mTLS, key custody or infrastructure configuration. To declare your standards, see [docs/project-requirements.md](docs/project-requirements.md). To start from a shipped set instead, declare the opt-in baseline pack, `{"kind": "pack", "name": "baseline"}`: five baseline checks plus the Daedalus cloud security standards, written in Daedalus's own words. The doctor offers it while `standards_sources` is empty.
+With no declared standards, the Standards Packet is empty and the auditor judges each unit against its contract only. The framework specialist reviews only trains that touched IAM, KMS, mTLS, key custody or infrastructure configuration, against the control packs described under Control packs. To declare your standards, see [docs/project-requirements.md](docs/project-requirements.md). To start from a shipped set instead, declare the opt-in baseline pack, `{"kind": "pack", "name": "baseline"}`: five baseline checks plus the Daedalus cloud security standards, written in Daedalus's own words. The doctor offers it while `standards_sources` is empty.
 
 ## How it works
 
@@ -286,7 +280,7 @@ Otherwise the entry loads the config and the jail libraries and judges the call:
 
 - A Daedalus agent's call goes to the router, `scripts/lib/router.py`. The router reads the agent's file under `agents/`, runs each check its hooks block names, then runs the excluded-roots check that every routed agent meets.
 - The main session's call goes to `scripts/lib/jail.py`. The jail never refuses the operator's own session: a call it flags runs, with a warning in the session's context (Main never prompted, amending 0105 and 0106).
-- A foreign agent's call also goes to `scripts/lib/jail.py`. During a train it may read and search in the train's repository, and every other checked tool there is refused.
+- A foreign agent's call also goes to `scripts/lib/jail.py`. During a train it may read and search in the train's repository, and every other checked tool there is refused. Its Bash command is judged by the repositories the command's `env -S` value or `bash -c`, `sh -c` or `flock -c` body writes into, and such a command that reaches the train's repository is refused, because the jail does not walk a command string (issues 80 and 81).
 
 The entry then appends the decision to the session's audit log as a PreToolUse record, with the refusing check's name as the prefix of its reason. When the record cannot be written, an agent's call is refused unless it is an allowed read, and the main session's call runs with an alert. A refusal exits 2 and prints `daedalus-jail[<agent>]: <reason> Next: <what to do>` on stderr, which Claude Code shows the agent. An allowed call exits 0. After the tool runs, `scripts/audit_log.py` records the PostToolUse or PostToolUseFailure event in the background, with a hash and the start of the tool's output.
 
@@ -332,7 +326,7 @@ Each session gets one log, `<repo>/.claude/daedalus/audit/<session_id>.jsonl`, w
 | `SubagentHandback` tool call | An agent's report, in the tool input of its PostToolUse record | The same readers as a stop record, which read the report from the tool input |
 | `AuditRotation`, `AuditRotationFailed` | Each old session log retention deleted, or each one it failed to delete | The audit report |
 
-The reply key is `<repo>/.claude/daedalus/reply-hmac.key`: 32 random bytes in an owner-only file. The hooks create it with the first record that carries an agent's reply. Each such record gets `last_message_hmac`, an HMAC-SHA256 of the whole reply under that key. The key keeps the log alone from confirming a guessed reply, since the log holds only a redacted head and tail. Its reader is `daedalus_train.py check-reply`, which compares a reply a project train definition saved to a file with the agent's own stop record. No agent may read the key, and the credential check refuses one that tries. A key file that is not a 32-byte owner-only regular file stops the record. Its `Next:` line says to delete the key from your own shell, and the next reply creates a new one.
+The reply key is `<repo>/.claude/daedalus/reply-hmac.key`: 32 random bytes in an owner-only file. The hooks create it with the first record that carries an agent's reply. Each such record gets `last_message_hmac`, an HMAC-SHA256 of the whole reply under that key. The key keeps the log alone from confirming a guessed reply, since the log holds only a redacted head and tail. Its reader is `daedalus_train.py check-reply`, which compares a reply a project train definition saved to a file with the agent's own stop record. No agent may read the key, and the credential check refuses one that tries. An `rg` search's `-g`, `--glob` or `--iglob` pattern, or a Grep tool glob, that can reach the key from the search's folder is refused too, and a pattern holding a glob character the check does not model counts as reaching it. A key file that is not a 32-byte owner-only regular file stops the record. Its `Next:` line says to delete the key from your own shell, and the next reply creates a new one.
 
 ### Train state and the bindings file
 
@@ -340,6 +334,7 @@ Each train has one state file, `<repo>/.claude/daedalus/trains/<train-id>.json`.
 
 - `train_id`, `repo`, `base_branch`, `base_sha`, `charter_root`, `charter_base`, `charter_branch_created`, `ledger_line` and `cache_dir`, written by `begin`.
 - `lock_sha`, the contract lock commit every unit branch must descend from, written by `lock`.
+- `contract_skip`, `true` once `daedalus_train.py contract` found a one-file plan; `lock --no-contract` refuses without it, and a new plan clears it.
 - `merged`, set by finish once every unit merged.
 - `units`, one entry per worktree with its `name`, `branch` and `path`, and `audit: true` on the audit worktree.
 - `plan`, the recorded plan's `path` and `sha256`; the dispatch gate refuses a coder when the file no longer matches.
@@ -348,7 +343,7 @@ Each train has one state file, `<repo>/.claude/daedalus/trains/<train-id>.json`.
 - `verdict`, holding `status`, `tip`, `round` and `seq`, from the verdict command; `seq` is the auditor reply's record number in the log.
 - `audit_rounds`, one map of findings per round with each finding's severity and class.
 - `exemptions`, per round and per finding: the exemption's `ledger_id`, the `tip` it covers and how it is `tracking`.
-- `docs_verdict`, the docs stage record: `status`, `tip`, and for a refuted record its `findings` and `exemptions`.
+- `docs_verdict`, the docs stage record: `status`, `tip`, for a verified record the `judged` docs branch head, and for a refuted record its `findings` and `exemptions`.
 - `ledger`, the ledger commit's `sha` and `ids`; `reaudit` and `resume` for the recovery paths; `consults_open`, the consulted agents whose reply the train still waits for.
 - A train started from a project train definition adds the runner's own fields, such as `mode`, `definition`, `stage_index`, `dispatches`, `records` and `stage_log`.
 
@@ -384,13 +379,13 @@ Exit 0 prints `OK approved: approved verdict, ...` or `OK approved: every findin
 ### One train, end to end
 
 1. Start. The main session runs `daedalus_workspace.py begin`. That command refuses a dirty tree, writes the data folder and its `.gitignore`, the train state file and the train marker, and prints the first State Block lines. Then `verify_audit_chain.py --hooks-live` finds its own command as the newest Bash record of this session's log and records the bound the push proof reads. The main session starts one orchestrator agent and relays between it and you.
-2. Standards and the map. The standards specialist writes the Standards Packet from your declared sources. Its fifth part is a `## Priorities` section, holding your `priorities` block or the line `priorities: none declared`. The orchestrator runs `daedalus_map.py --repo <repo> --out <repo>/docs/.tmp/daedalus/<train-id>/map` and records the sha256 of `map.json`; the jail refuses an `--out` outside that folder.
+2. Standards and the map. The standards specialist writes the Standards Packet from your declared sources. Its fifth part is a `## Priorities` section, holding your `priorities` block or the line `priorities: none declared`. The orchestrator runs `daedalus_map.py --repo <repo> --out <repo>/docs/.tmp/daedalus/<train-id>/map` and records the sha256 of `map.json`; the jail refuses an `--out` outside that folder. The map skips every folder the `excluded_roots` key of `config.json` names, and exits 2 when those folders cannot be resolved.
 3. Plan. The planner cuts the work into units. Each unit has a line in the plan block and a requirement section below it. `validate_plan.py` checks the file, and `daedalus_train.py plan` records its path and sha256 in train state.
-4. Contract lock. The contract agent writes the Locked Contract Packet. `daedalus_workspace.py lock` commits it on the integration branch `daedalus/<train-id>` and records `lock_sha`.
+4. Contract lock. The orchestrator first runs `daedalus_train.py contract --repo <repo>`. It prints `contract: skip` when the recorded plan has one unit with one file, no pin line and a `wire: none` line, and `contract: required (<reason>)` otherwise (contract skip path built, 0156). On a skip, no contract agent starts: `daedalus_workspace.py lock --no-contract` puts the integration branch `daedalus/<train-id>` at the base commit, commits nothing, and records the base as `lock_sha`. Each brief then carries `Contract: none`, and `daedalus_train.py plan` refuses a new plan for that train. Otherwise the contract agent writes the Locked Contract Packet, and `daedalus_workspace.py lock` commits it on the integration branch and records `lock_sha`. A later contract revision keeps `lock_sha` at the first lock (lock stays at base, 0150).
 5. Units. For each wave, the orchestrator checks the units' `needs:` with `daedalus_doctor.py --check-tools`. For each unit it then runs `daedalus_workspace.py create`, writes the brief file, and starts a repo-coder with the brief path and one `Worktree:` line. The dispatch gate checks the recorded plan and records the dispatch, and the coder's first write claims the unit.
 6. Hand-back and verification. The coder ends with a receipts block above its `[STATUS: COMPLETE]` line, which the receipts check reads. The orchestrator checks the reply's branch, packet hashes and lock ancestry. The verifier then judges the unit's diff against its brief, and the unit is ready to merge once its verdict is `[VERDICT: VERIFIED]`.
-7. Merge. `daedalus_workspace.py finish` merges every unit into the integration branch with `--no-ff`. A train cut into waves merges each wave first with the wave merge command.
-8. Audit. Judges join by what the diff touches. The NIST and CIS specialists come in for IAM, KMS, mTLS, key custody or infrastructure changes, the dependency auditor for a dependency manifest or lockfile, and the Terraform reviewer for a `.tf` or `.tfvars` file. The security auditor judges the merged tip in its own audit worktree, and `daedalus_train.py verdict` records its verdict. Each finding of a rejected round goes to you one question at a time.
+7. Merge. `daedalus_workspace.py finish` merges every unit into the integration branch with `--no-ff`. A train cut into waves merges each wave first with the wave merge command. A merge that fails is aborted, and the repository stays on `daedalus/<train-id>` with the merges that completed (issue 95). The `Next:` line names the conflicting files; merge that unit there by hand, then run the merge step again, which skips units already merged.
+8. Audit. Judges join by what the diff touches. The framework specialist comes in for IAM, KMS, mTLS, key custody or infrastructure changes, with the shipped AWS and NIST packs or your own, the dependency auditor for a dependency manifest or lockfile, and the Terraform reviewer for a `.tf` or `.tfvars` file. The security auditor judges the merged tip in its own audit worktree, and `daedalus_train.py verdict` records its verdict. Each finding of a rejected round goes to you one question at a time.
 9. Ledger and docs. On an approved verdict, or once you exempted every finding, charter-docs commits the ledger entries. After an approval, the approved verdict is recorded next. The docs writer then brings the four public docs up to date in the docs stage.
 10. Summary. `daedalus_train.py summary` writes the summary from train state and the audit log, and the orchestrator ends with `[STATUS: TRAIN_COMPLETE]`.
 11. Push. `/daedalus:push-train` marks the train again, runs the hooks check and the push proof, and has the conductor push the branch and open the pull request. The push gate checks the verdict again on the conductor's own push. You review and merge.
@@ -409,7 +404,7 @@ A unit line may also carry `needs: <tool or protected path>[, ...]`: the tools t
 
 The verifier judges each unit's diff against its brief, never against the coder's report (verify against the brief, 0128). Its claims are the brief's numbered requirements, the unit's files list, the pins that name the unit and the Standards Packet rules a changed line falls under. The map adds two more kinds of claim. For each module the diff changes, `imports.<module>.fan_in` lists its importers, and each one must still get what it relied on. Each `duplicates` entry that overlaps the added lines must not repeat code the project already holds. Each refuted claim is a `code` row or a `scope` row. A `scope` row is a file outside the files list, or a behaviour change no requirement asks for, unless a `- deviation` receipt names it with a reason.
 
-A receipt the branch contradicts, such as a wrong test count or commit subject, is corrected inside the verdict and counted on a `corrected=<k>` line above the closing verdict line. It never refutes the unit, and the coder is not resumed for it (report refutations never stop, 0127). Only `code` and `scope` rows send a coder a fix pass, and a second refutation of the same unit stops the train. The orchestrator runs finish only once every unit's verdict is `[VERDICT: VERIFIED] claims=<n>`. The wave merge command reads that last line itself, from the verifier's reply in the audit log. The summary's Verification section prints each unit's verdict line with its corrected count. A prompt whose first line is `CLAIMS MODE.` lists `Claim: <path>:<line> <claim>` lines instead of a brief, and the verifier checks only those lines. The docs stage and the document train use this form.
+A receipt the branch contradicts, such as a wrong test count or commit subject, is corrected inside the verdict and counted on a `corrected=<k>` line above the closing verdict line. It never refutes the unit, and the coder is not resumed for it (report refutations never stop, 0127). Only `code` and `scope` rows send a coder a fix pass, and a second refutation of the same unit stops the train. The orchestrator runs finish only once every unit's verdict is `[VERDICT: VERIFIED] claims=<n>`. The wave merge command reads that last line itself, from the verifier's reply in the audit log. The summary's Verification section prints each unit's verdict line with its corrected count. The orchestrator hands the verifier a `Read: <file>:<first>-<last>[, ...]` line built from the diff's changed hunks and the map's importer lines. The verifier reads those ranges, and lists each other file it opens as an `extra read` row. It judges typecheck and lint receipts from the coder's receipts block and reruns only pytest. A brief whose contract line reads `Contract: none` has no contract pin to judge. A prompt whose first line is `CLAIMS MODE.` lists `Claim: <path>:<line> <claim>` lines instead of a brief, and the verifier checks only those lines. The docs stage and the document train use this form.
 
 ### Merges and fix units
 
@@ -419,11 +414,11 @@ A receipt the branch contradicts, such as a wrong test count or commit subject, 
 
 ### Exemptions, the docs stage and the personas
 
-Each failing finding goes to you as one question. Its first line says what is at stake in one plain sentence, then asks, and two or three short sentences say what breaks and what happened in the test. The three choices are `Fix it now (Recommended)`, which runs a fix round, `Skip, track or exempt it`, which exempts the finding, and `Stop the train`, which ends the train. No round budget applies, and the train never opens a fix round or stops on its own authority (operator holds every gate, 0133). An exemption brings a second question, how it is tracked: `Skip it` (dropped silently), `Track it` (a GitHub tracked-risk issue), `Exempt it` (the local ledger record alone), or your own answer, stored as `dropped`, `issue`, `local` and `other`. The main session records each exemption with `daedalus_train.py exception --ledger-id <id> --finding <id> --tracking <dropped, issue, local or other>`. The command writes it in train state, under the round for a security finding and in the docs record for a docs claim. The push proof reads it, and the summary's Audit section prints each exempted finding with its tracking answer.
+Each failing finding goes to you as one question. Its first line says what is at stake in one plain sentence, then asks, and two or three short sentences say what breaks and what happened in the test. The three choices are `Fix it now (Recommended)`, which runs a fix round, `Skip, track or exempt it`, which exempts the finding, and `Stop the train`, which ends the train. No round budget applies, and the train never opens a fix round or stops on its own authority (operator holds every gate, 0133). An exemption brings a second question, how it is tracked: `Skip it` (dropped silently), `Track it` (a GitHub tracked-risk issue), `Exempt it` (the local ledger record alone), or your own answer, stored as `dropped`, `issue`, `local` and `other`. The main session records each exemption with `daedalus_train.py exception --repo <repo> --ledger-id <id> --finding <id> --tracking <dropped, issue, local or other>`. The command writes it in train state, under the round for a security finding and in the docs record for a docs claim. The push proof reads it, and the summary's Audit section prints each exempted finding with its tracking answer.
 
-The docs stage runs after the security verdict is recorded (docs writer ends the train, 0134). It creates the worktree `<train-id>-docstage`, which the dispatch gate binds to the docs writer alone. The docs writer may write only the four public docs: `README.md`, `docs/howto/README.md`, `docs/guardrails.md` and `docs/project-requirements.md`. Its claims go to the verifier in claims mode. A verified reply merges the docs branch, and `daedalus_train.py verdict --gate docs` records the docs verdict in train state. Each refuted claim goes to you as a finding. The summary's Audit section names the docs verdict, or `Docs: not run`.
+The docs stage runs after the security verdict is recorded (docs writer ends the train, 0134). It creates the worktree `<train-id>-docstage`, which the dispatch gate binds to the docs writer alone. The docs writer may write only the four public docs: `README.md`, `docs/howto/README.md`, `docs/guardrails.md` and `docs/project-requirements.md`. Its claims go to the verifier in claims mode. The verifier's dispatch names the docs branch head on a `Docs tip:` line. A verified reply merges the docs branch, and `daedalus_train.py verdict --gate docs --status verified --judged <sha>` records the docs verdict in train state, with `<sha>` that docs tip. The command refuses a verified record without `--judged`, and refuses when the merged docs commits end at another commit. Each refuted claim goes to you as a finding. The summary's Audit section names the docs verdict, or `Docs: not run`.
 
-Two read-only judges join by what the diff touches (personas by diff, 0132). The dependency auditor judges a changed dependency manifest or lockfile. It asks for security advisories only through a web question the train sends to the web researcher. When `features.dependency_web_lookup` is `false`, the train answers that question with "web lookup is off", and the auditor judges from the lockfile and any advisory export. The Terraform reviewer judges a changed `.tf` or `.tfvars` file. It may run only `terraform fmt -check` and `terraform validate`, and neither when `features.terraform_tools` is `false`. Each FAIL row from either judge goes to you as a finding.
+Two read-only judges join by what the diff touches (personas by diff, 0132). The dependency auditor judges a changed dependency manifest or lockfile. It asks for security advisories only through a web question the train sends to the web researcher. When `features.dependency_web_lookup` is `false`, the train answers that question with "web lookup is off", and the auditor judges from the lockfile and any advisory export. The Terraform reviewer judges a changed `.tf` or `.tfvars` file. It may run only `terraform fmt -check` and `terraform validate`, and neither when `features.terraform_tools` is `false`. The jail refuses `terraform validate` unless `features.terraform_validate` is `true`, because validate starts the provider programs under `.terraform/providers`; the reviewer then marks that check N/A (validate off by default, 0158). Each FAIL row from either judge goes to you as a finding.
 
 ### Project priorities
 
@@ -431,9 +426,9 @@ The `priorities` block of `service-manifest.json` ranks four concerns, `security
 
 ### The document train and excluded roots
 
-`/daedalus:doc-train` derives a document from frozen sources (document train accepted, 0135). `freeze_sources.py --train <id> --output-dir <folder> --source <alias>=<role>:<path>` records each source with its sha256 in `<repo>/.claude/daedalus/trains/<id>.sources.json`. `freeze_sources.py --verify <that file>` exits 4 when a source changed. It exits 5 when an output carries an en or em dash, placeholder copy, or a sentence copied from a style source that carries a number. The doc-deriver and the change-logger write only inside the output folder, which `scripts/checks/doc_outputs.py` checks. The verifier checks the deriver's claims in claims mode. `/daedalus:round` keeps the record of one round of correspondence.
+`/daedalus:doc-train` derives a document from frozen sources (document train accepted, 0135). `freeze_sources.py --train <id> --output-dir <folder> --source <alias>=<role>:<path>` records each source with its sha256 in `<repo>/.claude/daedalus/trains/<id>.sources.json`. `freeze_sources.py --verify <that file>` exits 4 when a source changed. It exits 1 when the recorded output folder fails the same output folder check, before it reads any output. It exits 5 when an output carries an en or em dash, placeholder copy, or a sentence copied from a style source that carries a number. The doc-deriver and the change-logger write only inside the output folder, which `scripts/checks/doc_outputs.py` checks. The verifier checks the deriver's claims in claims mode. `/daedalus:round` keeps the record of one round of correspondence.
 
-The `excluded_roots` key of `config.json` names folders whose files must never reach git, GitHub or a redirect. `scripts/checks/excluded_roots.py` runs for every Daedalus agent after its own checks. It refuses a git command that stages, commits or stashes a path inside such a folder, a gh command or a redirect that names one. The doc-deriver and the change-logger may redirect into such a folder, since their outputs live there. During a train the main session is warned instead. `freeze_sources.py` records the resolved folders in the sources file.
+The `excluded_roots` key of `config.json` names folders whose files must never reach git, GitHub or a redirect. `scripts/checks/excluded_roots.py` runs for every Daedalus agent after its own checks. It refuses a git command that stages, commits or stashes a path inside such a folder, a gh command or a redirect that names one. While any such folder is declared, it also refuses a git command that matches paths in any letter case: an `:(icase)` or short `:i:` pathspec, `--icase-pathspecs` or `GIT_ICASE_PATHSPECS` (issue 97). The doc-deriver and the change-logger may redirect into such a folder, since their outputs live there. During a train the main session is warned instead. `freeze_sources.py` records the resolved folders in the sources file.
 
 ### The summary's path rule
 
@@ -441,14 +436,16 @@ The train summary becomes a public pull request body, so `scripts/lib/train_summ
 
 ### The kernel wrapper's grants
 
-On a kernel with Landlock and seccomp, a coder's test command runs as `daedalus_confine.py --unit <worktree> -- <command>`, which the coder's confine check requires. The wrapper applies its rules to its own process, then runs the command, and every child inherits them. Nothing is installed, and the rules end with the process tree. It grants:
+On a kernel with Landlock and seccomp, a coder's test command runs as `daedalus_confine.py --unit <worktree> -- <command>`, which the coder's confine check requires. A test command is one the runner table names: `pytest`, `make`, `tox`, `nox`, `just`, `npx`, `uv run`, `go test` and `cargo test` (issue 91). The wrapper applies its rules to its own process, then runs the command, and every child inherits them. Nothing is installed, and the rules end with the process tree. It grants:
 
 - Read and write: the unit worktree, a private temporary folder `daedalus-confine-<uid>/<hash>` under the system temp folder (mode 0700, owned by you), and `/dev/null`.
 - Read only: every entry of the repository except `.claude/daedalus` and `.claude/worktrees`, never following a link; the running Python's prefixes and site-packages folders; and `/usr`, `/lib`, `/lib64`, `/lib32`, `/bin`, `/sbin`, `/etc`, `/proc`, `/sys` and `/dev`. A folder that holds or sits inside a credential store is left out.
-- Network: a seccomp filter refuses every socket family except `AF_UNIX` and `AF_NETLINK`, and refuses io_uring. On Landlock ABI 4 and later, TCP bind and connect are refused too.
+- Network: a seccomp filter refuses a `socket()` call for every family except `AF_NETLINK`, `AF_UNIX` included, and refuses io_uring. A `socketpair()` call still works. On Landlock ABI 4 and later, TCP bind and connect are refused too.
 - Environment: `TMPDIR` names the private folder, `GIT_CONFIG_GLOBAL` names an empty git config written fresh for each run, and `XDG_CONFIG_HOME` names an empty folder.
 
 It prints one `daedalus_confine:` line naming the ABI, the architecture and every grant before the command starts.
+
+On a kernel without Landlock, or when the kernel probe fails, the confine check refuses every coder test command and names the cause.
 
 ## What is in this repo
 
@@ -467,12 +464,11 @@ Daedalus/
 ├── agents/
 │   ├── change-logger.md
 │   ├── charter-docs.md
-│   ├── cis-specialist.md
 │   ├── contract-spec.md
 │   ├── dependency-auditor.md
 │   ├── doc-deriver.md
 │   ├── docs-writer.md
-│   ├── nist-specialist.md
+│   ├── framework-specialist.md
 │   ├── orchestrator.md
 │   ├── planner.md
 │   ├── pr-train-conductor.md
@@ -489,10 +485,9 @@ Daedalus/
 ├── hooks/
 │   └── hooks.json                   # enforcement and audit bindings
 ├── packs/
-│   └── baseline/rules.md            # opt-in baseline and cloud security standards pack
-├── references/
-│   ├── hardening-rubric.md          # the rubric the cis-specialist maps findings to
-│   └── nist-800-53-distilled.md     # the rubric the nist-specialist maps findings to
+│   ├── baseline/rules.md            # opt-in baseline and cloud security standards pack
+│   ├── frameworks/aws-default/      # AWS hardening control pack the framework specialist reads by default
+│   └── frameworks/nist-distilled/   # NIST SP 800-53 control pack the framework specialist reads by default
 ├── scripts/                         # Python 3.12, stdlib only
 │   ├── checks/command_allowlist.py  # every Bash segment runs a command the --allow list names
 │   ├── checks/confine.py            # a coder's test command starts with the kernel wrapper
@@ -519,6 +514,7 @@ Daedalus/
 │   ├── lib/audit.py                 # hash-chained append, redaction
 │   ├── lib/audit_proof.py           # the hooks-live and approved-verdict proofs
 │   ├── lib/audit_rounds.py          # the auditor's finding list and the round number
+│   ├── lib/briefs.py                # decision briefs checked at the manifest literacy level
 │   ├── lib/config.py                # config.json loading and validation
 │   ├── lib/controls.py              # loads the controls fragments
 │   ├── lib/credential_paths.py      # the credential-path deny every agent meets
@@ -528,11 +524,13 @@ Daedalus/
 │   ├── lib/git.py                   # the one git runner: timeout and redirect scrub
 │   ├── lib/hook_io.py               # hook input and output for the check scripts
 │   ├── lib/human_text.py            # counts the plain words in operator lines
+│   ├── lib/inventory.py             # FILES: every path the plugin can write, for --print-files
 │   ├── lib/jail.py                  # per-agent tool policy
 │   ├── lib/ledger.py                # ledger resolution, sequence read, entry format
 │   ├── lib/locks.py                 # the one FIFO-safe lock opener and bounded lock
 │   ├── lib/manifest.py              # the one reader of service-manifest.json
 │   ├── lib/narrow.py                # narrows parsed JSON values to typed values
+│   ├── lib/packs.py                 # loads and checks framework control packs
 │   ├── lib/plan_record.py           # loads and validates plan records
 │   ├── lib/project_keys.py          # every manifest and config key, its reference row, and the starter files
 │   ├── lib/project_root.py          # finds the project root
@@ -562,6 +560,7 @@ Daedalus/
 │   ├── enforce_agent_jail.py        # PreToolUse policy
 │   ├── freeze_sources.py            # freezes and verifies a document train's sources
 │   ├── handback_check.py            # SubagentStop check of a coder's receipts block
+│   ├── import_pack.py               # operator-run: writes a control pack from an OSCAL catalog or a CIS id map
 │   ├── refresh_frameworks.py        # operator-run: compile the pinned framework caches
 │   ├── standing_rules.py            # derives the standing-rules file from the ledger
 │   ├── validate_plan.py             # checks a plan file and prints its graph line
@@ -569,6 +568,7 @@ Daedalus/
 │   └── verify_audit_chain.py        # recompute and verify a session's hash chain
 ├── skills/
 │   ├── audit-report/SKILL.md        # /daedalus:audit-report
+│   ├── brainstorm/SKILL.md          # /daedalus:brainstorm
 │   ├── build-train/SKILL.md         # /daedalus:build-train
 │   ├── catalog/SKILL.md             # /daedalus:catalog
 │   ├── doc-train/SKILL.md           # /daedalus:doc-train

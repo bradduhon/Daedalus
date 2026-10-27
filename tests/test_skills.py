@@ -34,6 +34,7 @@ def test_skills_exist() -> None:
     assert {p.parent.name for p in SKILLS} >= {
         "doctor",
         "audit-report",
+        "brainstorm",
         "build-train",
         "push-train",
     }
@@ -171,10 +172,34 @@ def test_build_train_writes_summary_under_docs_tmp() -> None:
     assert "/daedalus:audit-report" in _build_train()
 
 
-def test_build_train_resolves_the_cache_for_specialists() -> None:
+def test_build_train_resolves_the_packs_for_the_framework_specialist() -> None:
+    # 0157: Read and Glob resolve the pack folders; no cache path reaches a specialist.
     text = _recipe()
-    assert "daedalus_doctor.py --print-cache-dir" in text
-    assert "<that path>/frameworks" in text
+    assert "Glob `<plugin root>/packs/frameworks/*/pack.json`" in text
+    assert "Glob `<repo>/<pack_dir>/*/pack.json`" in text
+    assert "`Packs: <absolute pack folder>[, <absolute pack folder>...]`" in text
+    assert "<that path>/frameworks" not in text and "CACHE_INVALID" not in text
+    assert "Unless `frameworks.default_packs` is `false`" in text
+    # prepush2-2026-10-27 item 5: the packs step runs before every specialist dispatch or resume.
+    assert (
+        "Then, before every framework-specialist dispatch or resume, the Phase 2 "
+        "`YIELD_COMPLIANCE` routing and the Phase 3 merged-diff check alike, run `python3 "
+        "<plugin root>/scripts/daedalus_train.py packs --repo <repo>`: it checks the hash and "
+        "format of every pack the train reads, a pack a merged unit changed included"
+    ) in text
+    assert "Resolve the pack folders and run the pack check (below)." in text
+    assert (
+        "run the pack check (`daedalus_train.py packs`, Phase 2) on the merged tree, then run one "
+        "Agent(`framework-specialist`) on the merged diff"
+    ) in text
+    assert "before that first dispatch" not in text
+    assert "A non-zero exit stops the train and shows its lines" in text
+    assert "Every compliance topic goes to Agent(`framework-specialist`)" in text
+    assert "run one Agent(`framework-specialist`) on the merged diff" in text
+    assert (
+        "A `[STATUS: PACK_INVALID] <pack id>: <problem>` reply stops the train and shows that "
+        'line, with "Next: run `/daedalus:doctor` and fix the pack <pack id> it names'
+    ) in text
 
 
 def test_build_train_stops_on_off_contract_replies_and_dead_hooks() -> None:

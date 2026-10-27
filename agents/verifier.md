@@ -33,14 +33,22 @@ No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already retu
 
 Inputs: the unit's branch, its diff base, a `Unit worktree: <path>` line naming the unit's
 worktree, a `Brief: <path>` line naming the unit's brief file, a `Map: <path>` line naming the
-train's map.json when the train wrote one, and the coder's `[STATUS: COMPLETE]` reply with the
+train's map.json when the train wrote one, a `Read: <file>:<first>-<last>[, ...]` line naming
+the changed hunks and the importer lines to read first, and the coder's `[STATUS: COMPLETE]` reply with the
 `## Receipts` block above it. A prompt whose first line is `CLAIMS MODE.` follows the Claims
 mode section instead.
 
 ## Procedure
-1. Read the brief file whole, then the Contract and Standards files its two packet lines name.
-   Run `git -C <unit worktree> diff <diff base>...<branch> --stat`, then the full diff. Read
-   all of it.
+1. Read the brief, the packets, the full diff and the named ranges: the brief file whole, then
+   the Contract and Standards files its two packet lines name (a brief whose contract line reads
+   `Contract: none` belongs to a one-file train with no contract, 0156: read no contract file
+   and judge no contract pin), then the full diff
+   `git -C <unit worktree> diff <diff base>...<branch>` with every removed `-` line, then each
+   range of the `Read:` line through the `git show` pipe of step 3. The full diff is a required
+   read for every unit: a removed guard shows only as a `-` line. The `Read:` ranges guide your
+   attention and never bound it; judge every changed line, removed lines included.
+   Open another file only to settle a named claim, and list each extra file in the verdict's
+   receipts as a table row `extra read | <file>:<first>-<last> | <the claim it settled>`.
 2. List the claims from the brief, never from the report. No claim is skipped:
    - Requirements: under the heading `### <unit id>: <title>`, the line reading exactly
      `Requirements:` is followed by lines `<n>. <requirement>` numbered from 1. Each numbered
@@ -55,7 +63,9 @@ mode section instead.
      every name it imports from that module, with the behaviour it relied on.
    - Added: each `duplicates` entry of the map lists the file:line ranges of one near-duplicate
      block. An entry with a range inside the diff's added lines is one claim: the added block
-     does not repeat code the project already holds.
+     does not repeat code the project already holds. A new test function whose body, with
+     constants replaced, matches an existing test's body is a `scope` refutation unless the
+     brief names it.
    Without a `Map:` line, take the subtracted and added claims from
    `git -C <unit worktree> grep -n <name> <branch>` over each name the diff removes, renames or
    defines, and say in the table that no map was given.
@@ -145,6 +155,8 @@ The jail refuses these:
   and every remote git command.
 - Dispatch and messages: Agent, Task and SendMessage.
 - Web tools: WebFetch and WebSearch.
-- Any other test runner or lint command, `ruff` included, and `pytest --basetemp`.
+- Any other test runner or lint command, `ruff` included, and `pytest --basetemp`. Typecheck
+  and lint receipts are judged from the coder's receipts block, never rerun; only the pytest
+  run above is reproduced.
 - `find` with `-delete` or `-exec`, `sort -o`, and grouping, subshells, substitution or
   background `&`.

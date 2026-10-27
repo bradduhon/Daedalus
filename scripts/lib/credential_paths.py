@@ -8,6 +8,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import string
 from pathlib import Path
 
 from lib.project_root import project_root
@@ -42,6 +43,14 @@ R_REPLY_KEY = (
 R_REPLY_KEY_TREE = (
     "{path} contains the train's reply key. "
     "Next: search a folder outside .claude/daedalus, or name the files you need"
+)
+# prepush-2026-10-27: rg ranks these above .gitignore, so a `!` line beats the data folder marker.
+IGNORE_FILES = (".rgignore", ".ignore")
+IGNORE_READ_MAX = 1024 * 1024
+R_IGNORE_WHITELIST = (
+    "{path} holds the train's reply key or a credential path, and a .rgignore or .ignore file "
+    "on the way to it holds a `!` line that makes rg read hidden folders. "
+    "Next: search a folder that holds neither, or name the files you need"
 )
 _GLOB_START = re.compile(r"[*?\[{]")
 VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*|[0-9]+)[^}]*\}|\$([A-Za-z_][A-Za-z0-9_]*|[0-9])")
@@ -179,18 +188,20 @@ def _expand_alt(word: str, env: dict[str, list[str]]) -> list[tuple[str, bool]]:
 
 
 def anchor(text: str, base: str) -> str | None:
-    if not text:
+    # issue 83: the existing prefix resolves through its links before a later .. applies.
+    if not text or not (os.path.isabs(text) or os.path.isabs(base)):
         return None
-    if os.path.isabs(text):
-        return os.path.normpath(text)
-    return os.path.normpath(os.path.join(base, text)) if os.path.isabs(base) else None
+    path = os.path.join(base, text)
+    try:
+        return os.path.realpath(path)
+    except ValueError:
+        return os.path.normpath(path)
 
 
-def _expand_home(token: str, cwd: str) -> str | None:
+def _expand_home(token: str) -> str:
     # spec 8: quotes and backslashes are dropped; ~, $HOME and ${HOME...} expand to home.
     # audit B4 round 3: a path argument is literal; only a Glob pattern's braces expand.
-    text = _expand_alt(_UNQUOTE.sub("", token), {"HOME": [str(Path.home())]})[0][0]
-    return anchor(text, cwd)
+    return _expand_alt(_UNQUOTE.sub("", token), {"HOME": [str(Path.home())]})[0][0]
 
 
 def _candidates(tool: str, tool_input: dict[str, object], cwd: str) -> list[str]:
@@ -291,23 +302,67 @@ def key_roots(*paths: str) -> list[str]:
     return sorted(os.path.realpath(k) for k in keys if k.is_absolute() and os.path.lexists(k))
 
 
-def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
-    # SC-12: the Grep tool honors the data folder's `*` marker from above, so only a search
-    # rooted inside .claude, or a glob that overrides the marker, can read the key.
-    raw = glob if isinstance(glob, str) else ""
+def glob_patterns(raw: str) -> list[str]:
     # issue 53: each brace alternative is its own glob; past the cap or on a sequence, a brace is *.
     pats = (expand_braces(raw) or [_braces_to_star(raw)]) if raw else []
     # SC-12: a leading / anchors an rg glob to the search root; the match ignores it.
-    pats = [p.lstrip("/") for p in pats if p.lstrip("/")]
+    return [p.lstrip("/") for p in pats if p.lstrip("/")]
+
+
+# SC-12: the glob characters glob_reaches models; any other (\, [, {, ,) fails closed.
+GLOB_MODELLED = frozenset(string.ascii_letters + string.digits + "._-*?/")
+
+
+def glob_reaches(pats: list[str], rest: list[str]) -> bool:
+    # SC-12: a whitelist glob naming any run of components below the search root, case folded.
+    # SC-12: fnmatch's * crosses /, and the / edges let a gitignore **/ match zero folders.
+    pats = [p for p in pats if not p.startswith("!")]
+    if any(set(p) - GLOB_MODELLED for p in pats):
+        return True
+    runs = {"/".join(rest[i:j]) for i in range(len(rest)) for j in range(i + 1, len(rest) + 1)}
+    names = {edge.format(run.casefold()) for run in runs for edge in ("{}", "/{}", "{}/", "/{}/")}
+    folded = {p.casefold() for pat in pats for p in (pat, pat.rstrip("/")) if p}
+    return any(fnmatch.fnmatchcase(name, pat) for name in names for pat in folded)
+
+
+def _negates(path: Path) -> bool:
+    # prepush-2026-10-27: an unreadable or oversized ignore file fails closed.
+    try:
+        if not path.is_file():
+            return False
+        with path.open("rb") as handle:
+            data = handle.read(IGNORE_READ_MAX + 1)
+    except OSError:
+        return True
+    if len(data) > IGNORE_READ_MAX:
+        return True
+    return any(line.lstrip().startswith(b"!") for line in data.splitlines())
+
+
+def ignore_whitelist(store: str) -> bool:
+    # prepush-2026-10-27: rg reads the ignore files of every parent, so walk / down to the store.
+    return any(
+        _negates(folder / name)
+        for folder in Path(os.path.realpath(store)).parents
+        for name in IGNORE_FILES
+    )
+
+
+def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
+    # SC-12: the Grep tool honors the data folder's `*` marker from above, so only a search
+    # rooted inside .claude, or a glob that overrides the marker, can read the key.
+    pats = glob_patterns(glob if isinstance(glob, str) else "")
     for key in keys:
         if _contains(os.path.dirname(os.path.dirname(key)), target):
             return R_REPLY_KEY_TREE.format(path=target)
+        if _contains(target, key) and ignore_whitelist(key):
+            return R_IGNORE_WHITELIST.format(path=target)
         if not pats:
             continue
-        names = [os.path.basename(key)]
+        rest = [os.path.basename(key)]
         if _contains(target, key):
-            names.append(os.path.relpath(key, os.path.realpath(target)))
-        if any(fnmatch.fnmatchcase(name, pat) for name in names for pat in pats):
+            rest = os.path.relpath(key, os.path.realpath(target)).split(os.sep)
+        if glob_reaches(pats, rest):
             return R_REPLY_KEY_TREE.format(path=target)
     return None
 
@@ -319,17 +374,20 @@ def path_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | Non
     if tool == "Glob" and unjudged_root(pattern):
         return R_BRACE_UNJUDGED.format(path=pattern)
     for raw in _candidates(tool, tool_input, cwd):
-        target = _expand_home(raw, cwd)
+        text = _expand_home(raw)
+        target = anchor(text, cwd)
         if target is None:
             continue
+        # issue 83: judged on the resolved path, named as the caller spelled it.
+        shown = os.path.normpath(os.path.join(cwd, text))
         # SC-12: Read names one file and Glob lists names only, so the key's own path is enough.
         if reply_key_hit(target):
-            return R_REPLY_KEY.format(path=target)
+            return R_REPLY_KEY.format(path=shown)
         if credential_hit(target, roots, tool == "Glob"):
-            return R_CREDENTIAL.format(path=target)
+            return R_CREDENTIAL.format(path=shown)
     if tool == "Grep":
         # spec 8: the Grep tool searches hidden dirs, so a root above a store reads it.
-        target = _expand_home(str(tool_input.get("path") or cwd), cwd)
+        target = anchor(_expand_home(str(tool_input.get("path") or cwd)), cwd)
         if target and any(store_rest(target, root, False, True) is not None for root in roots):
             return R_CREDENTIAL_TREE.format(path=target)
         if target:

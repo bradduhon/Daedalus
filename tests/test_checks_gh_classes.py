@@ -12,11 +12,8 @@ from tests.hook_chain import (
     evaluate,
     first_deny,
     internal_error_denies,
-    malformed_input_denies,
-    outside_tools_allow,
     payload,
     run_script,
-    unknown_flag_denies,
 )
 from tests.payloads import _b
 
@@ -230,18 +227,6 @@ def test_gh_classes_fixture_decisions() -> None:
     want = {"decision": "deny", "reason": jail.R_BODY_INLINE}
     assert run_script(HOOK, body, "--conductor") == want
     assert gh_policy.conductor_gh_refusal().startswith("conductor gh is limited to")
-
-
-def test_gh_classes_allows_tools_outside_its_tools() -> None:
-    outside_tools_allow(HOOK, "Write", "--conductor")
-
-
-def test_gh_classes_unknown_flag_denies() -> None:
-    unknown_flag_denies(HOOK, payload("Bash", agent=C, command="gh run list"))
-
-
-def test_gh_classes_malformed_input_denies() -> None:
-    malformed_input_denies(HOOK, "--conductor")
 
 
 def test_gh_classes_internal_error_denies_and_names_the_hook() -> None:

@@ -78,7 +78,7 @@ def test_table_job_is_the_first_sentence() -> None:
     planner = next(r for r in catalog.table(AGENTS).splitlines() if r.startswith("| planner |"))
     assert "| shaper | opus | Glob, Grep, Read, Write |" in planner
     assert "`[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>`" in planner
-    assert planner.endswith("| plan |")
+    assert planner.endswith("| clarification, plan |")
 
 
 def test_catalog_skill_names_every_agent() -> None:

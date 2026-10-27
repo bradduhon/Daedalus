@@ -10,6 +10,8 @@ import pytest
 from tests.adversarial.corpus import (
     CREDENTIAL,
     OUTSIDE,
+    PREPUSH2_ARCHIVE_WRITES,
+    PREPUSH_IGNORE_WRITES,
     PROTECTED,
     READERS,
     assert_denied,
@@ -101,6 +103,15 @@ def test_traversal_onto_a_protected_path_is_denied(template: str) -> None:
     assert_denied(_b("repo-coder", f"tee {path}"), PROTECTED)
 
 
+@pytest.mark.parametrize("template", PREPUSH_IGNORE_WRITES)
+@pytest.mark.parametrize("tool", ("Write", "Edit"))
+def test_coder_write_of_an_ignore_file_is_denied(template: str, tool: str) -> None:
+    # prepush-2026-10-27 finding 1: a merged `!` line would let rg read the reply key.
+    path = template.format(wt=WT)
+    assert_denied(_w("repo-coder", path, tool), PROTECTED)
+    assert_denied(_b("repo-coder", f"tee {path}"), PROTECTED)
+
+
 @pytest.mark.parametrize("agent", READERS)
 @pytest.mark.parametrize("template", STORE_READS)
 def test_traversal_into_a_store_is_denied(
@@ -154,3 +165,10 @@ def test_auditor_write_inside_the_audit_folder_is_allowed(marked_repo: Path) -> 
         path = f"{_audit(marked_repo)}/{name}"
         write = _cred("security-auditor", "Write", str(marked_repo), file_path=path, content="x")
         assert decide(write, CFG).allow, path
+
+
+@pytest.mark.parametrize("agent", ("repo-coder", "docs-writer"))
+@pytest.mark.parametrize("template", PREPUSH2_ARCHIVE_WRITES)
+def test_an_archive_or_multi_call_write_is_denied(agent: str, template: str) -> None:
+    # prepush2-2026-10-27 item 3: the write check models none of these targets, so all refuse.
+    assert_denied(_b(agent, template.format(wt=WT)), "archive and multi-call tools")

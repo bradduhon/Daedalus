@@ -71,6 +71,10 @@
     "failure": "0091: a search over the plugin data folder reads the reply key, so the reply digest can be forged",
     "premise_test": "tests/test_checks_credential_paths.py::test_grep_tool_on_the_data_folder_is_refused"
   },
+  "credential_paths.R_IGNORE_WHITELIST": {
+    "failure": "audit PREPUSH-2026-10-27: a `!` line in a .rgignore or .ignore file outranks the data folder marker, so plain rg or the Grep tool reads the reply key",
+    "premise_test": "tests/test_checks_credential_paths.py::test_an_ignore_file_whitelist_names_its_reason"
+  },
   "dispatch_binding.R_NO_TRAIN": {
     "failure": "issue 29: a coder writes outside a train, with no unit binding and no audit it answers to",
     "premise_test": "tests/test_unit_binding.py::test_coder_write_without_a_train_refused"
@@ -268,8 +272,24 @@
     "premise_test": "tests/test_checks_read_only_bash.py::test_read_only_bash_fixture_decisions"
   },
   "jail.R_SPECIALIST_BASH": {
-    "failure": "0024: a NIST or CIS specialist changes the tree it is judging",
+    "failure": "0024: a framework specialist changes the tree it is judging",
     "premise_test": "tests/test_checks_read_only_bash.py::test_read_only_bash_judges_the_hook_alone"
+  },
+  "jail.R_RG_REACH": {
+    "failure": "issue 113: rg reads hidden or ignored files through --ignore-file, -L, --follow or a config file, and reaches the reply key or a credential store",
+    "premise_test": "tests/test_checks_credential_paths.py::test_an_rg_reach_flag_names_its_reason"
+  },
+  "jail.R_RG_OPAQUE": {
+    "failure": "issue 113: a quoted or expanded rg or grep word becomes a reach flag after the jail judged it, and the search reads the reply key or a credential store",
+    "premise_test": "tests/test_checks_read_only_bash.py::test_a_rewritten_search_word_or_rg_program_option_names_its_reason"
+  },
+  "jail.R_RG_PROGRAM": {
+    "failure": "issue 113: rg runs a program named by --pre, --hostname-bin or another --*-bin option from a read-only agent or a pack verify",
+    "premise_test": "tests/test_checks_read_only_bash.py::test_a_rewritten_search_word_or_rg_program_option_names_its_reason"
+  },
+  "jail.R_RG_ONE": {
+    "failure": "issue 113: a pack verify that is not one plain rg search runs another command through the framework specialist",
+    "premise_test": "tests/test_framework_packs.py::test_a_verify_the_specialists_jail_refuses_is_a_pack_problem"
   },
   "jail.R_CONDUCTOR_BASH": {
     "failure": "0001: the conductor runs a command outside push, pull request and secret-scan work",
@@ -342,6 +362,10 @@
   "shell.R_FIND_WRITE": {
     "failure": "0022: find deletes, runs or writes files the write checks never see",
     "premise_test": "tests/test_controls.py::test_find_that_writes_is_refused"
+  },
+  "shell.R_ARCHIVE": {
+    "failure": "spec 8.5: a worker archive or multi-call tool writes a path the coder write check never judges",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_an_archive_tool_names_its_reason"
   },
   "shell.R_HYGIENE": {
     "failure": "0022: an expansion in a word changes the path or command after the jail judged the literal",

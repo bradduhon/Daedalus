@@ -69,6 +69,34 @@ def test_procedure_takes_its_claims_from_the_brief_not_the_report() -> None:
         in procedure.lower()
     )
     assert "each Standards Packet rule that a changed line falls under is one claim" in procedure
+    # V1 req 3, spec 9.2: step 1 reads the named ranges first; prepush-2026-10-27 finding 3:
+    # the full diff with its removed lines is a required read, so the ranges never bound it.
+    assert "a `Read: <file>:<first>-<last>[, ...]` line" in _body("Inputs:", "## Procedure")
+    step1 = procedure.split("1. ", 1)[1].split(" 2. ", 1)[0]
+    assert step1.startswith("Read the brief, the packets, the full diff and the named ranges:")
+    assert "`git -C <unit worktree> diff <diff base>...<branch>` with every removed `-` line" in (
+        step1
+    )
+    assert "The full diff is a required read for every unit" in step1
+    assert "The `Read:` ranges guide your attention and never bound it" in step1
+    assert "Without a `Read:` line, read the full diff instead." not in procedure
+    assert "each range of the `Read:` line through the `git show` pipe of step 3" in step1
+    assert "Open another file only to settle a named claim" in step1
+    assert "list each extra file in the verdict's receipts" in step1
+    assert "then the full diff. Read all of it." not in procedure
+
+
+def test_lint_receipts_are_judged_from_the_receipts_block_with_the_jail_unchanged() -> None:
+    # V1 req 4, spec 6.4: ruff stays refused; the verifier judges lint from the coder's receipts.
+    jail = _body("The jail refuses these:", "\0")
+    assert (
+        "Any other test runner or lint command, `ruff` included, and `pytest --basetemp`. "
+        "Typecheck and lint receipts are judged from the coder's receipts block, never rerun; "
+        "only the pytest run above is reproduced." in jail
+    )
+    assert Hook("read_only_bash", ("--git", "read-only", "--test-runner", "unit")) in (
+        load(VERIFIER).hooks
+    )
 
 
 def test_refuted_rows_are_code_or_scope_and_a_deviation_excuses_scope() -> None:
@@ -137,6 +165,12 @@ def test_the_map_feeds_the_subtracted_and_added_rows() -> None:
         "Added: each `duplicates` entry of the map lists the file:line ranges of one "
         "near-duplicate block" in procedure
     )
+    # V1 req 5, spec 5.2 item 2: a copied test body is a scope row unless the brief names it.
+    added = procedure.split("Added: ", 1)[1].split("Without a `Map:` line", 1)[0]
+    assert (
+        "A new test function whose body, with constants replaced, matches an existing test's "
+        "body is a `scope` refutation unless the brief names it." in added
+    )
 
 
 def test_claims_mode_checks_only_the_listed_claims_and_samples_later_rounds() -> None:
@@ -182,6 +216,17 @@ def test_orchestrator_sends_the_brief_and_counts_only_code_and_scope_rows() -> N
         in step
     )
     assert "the `## Receipts` block above it as receipts only" in step
+    # V1 reqs 1 and 2, spec 9.2 and 6.4: named ranges, and lint judged from the receipts.
+    assert (
+        "the line `Read: <file>:<first>-<last>[, ...]` built from the changed hunks of "
+        "`git diff --unified=0 <lock>...<b>` plus the map's importer lines for each changed module"
+        in step
+    )
+    assert "`git -C <repo> diff -U0 <lock sha>...<b>`" in step
+    assert (
+        "Typecheck and lint receipts are judged from the coder's receipts block, not rerun; "
+        "only a pytest run is reproduced." in step
+    )
     rows = phase2.splitlines()
     verified = next(ln for ln in rows if ln.startswith("| `[VERDICT: VERIFIED] claims=<n>`"))
     assert "the `<k>` of the `corrected=<k>` line above the verdict" in verified

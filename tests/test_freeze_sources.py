@@ -184,6 +184,40 @@ def test_verify_lints_dashes_placeholders_and_numbered_style_sentences(
     assert not any("be warm" in line for line in lines)
 
 
+@pytest.mark.parametrize(
+    ("where", "constant"), [("..", "R_OUTPUT_OUTSIDE"), (".", "R_OUTPUT_ROOT")]
+)
+def test_verify_checks_the_output_folder_before_the_lint(
+    repo: Path, capsys: pytest.CaptureFixture[str], where: str, constant: str
+) -> None:
+    # 99: a hand-edited output_dir exits 1 before the lint walks it.
+    assert _freeze(*SOURCES) == 0
+    folder = os.path.normpath(repo / where)
+    (Path(folder) / "loose.md").write_text(f"Range 1{EN}2 here.\n", encoding="utf-8")
+    path = freeze_sources.manifest_path(repo, TRAIN)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["output_dir"] = folder + os.sep
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    capsys.readouterr()
+    assert freeze_sources.main(["--verify", str(path)]) == 1
+    out = capsys.readouterr().out
+    lead = getattr(freeze_sources, constant).split("{out}", 1)[1].split("{", 1)[0]
+    assert lead in out and out.count("Next:") == 1, out
+    assert "DASH" not in out
+
+
+def test_verify_exits_3_when_the_project_metadata_is_unreadable(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 99: the output folder check fails closed on bad project metadata.
+    assert _freeze(*SOURCES) == 0
+    config = repo / ".claude" / "daedalus" / "config.json"
+    config.write_text(json.dumps({"excluded_roots": "private/"}), encoding="utf-8")
+    capsys.readouterr()
+    assert freeze_sources.main(["--verify", str(freeze_sources.manifest_path(repo, TRAIN))]) == 3
+    assert "project metadata could not be read" in capsys.readouterr().err
+
+
 def _doc_input(repo: Path, tool: str, **fields: str) -> dict[str, object]:
     return {
         "agent_type": "daedalus:doc-deriver",

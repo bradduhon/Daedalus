@@ -29,6 +29,12 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
     "daedalus_train.py": frozenset(
         {"progress", "choice", "plan", "verdict", "state", "step", "check-reply", "model"}
         | {"ledger", "summary"}
+        # 0156: the contract skip check the orchestrator runs before any contract-spec start.
+        | {"contract"}
+        # 0153, 0157 (12.5): the literacy check on each decision brief before DECISION.
+        | {"brief-check"}
+        # prepush-2026-10-27 finding 6: the pack check before the first framework specialist.
+        | {"packs"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir", "--check-tools"}),
@@ -44,7 +50,8 @@ R_ORCHESTRATOR_BASH = (
     "the orchestrator's Bash runs only daedalus_train.py with its train subcommands and ledger, "
     "daedalus_workspace.py create, lock, refresh and finish, daedalus_doctor.py "
     "--print-cache-dir and --check-tools, audit_report.py, validate_plan.py, daedalus_map.py "
-    "--repo and freeze_sources.py --train or --verify by their absolute plugin path, and "
+    "--repo and freeze_sources.py --train, --baselines-only or --verify by their absolute "
+    "plugin path, and "
     "read-only inspection with git reads, date -u and sed -n line ranges (0060, 0119). "
     "Next: use those only; a stop, a resume, a reaudit, an exception record, a push and a merge "
     "into main belong to the main session and the operator."
@@ -70,8 +77,15 @@ R_MAP_OUT = (
 TERRAFORM_FORMS = (("fmt", "-check"), ("validate",))
 R_TERRAFORM = (
     "the terraform class runs only `terraform fmt -check` and `terraform validate`, each with an "
-    "optional -chdir=<absolute folder inside the project> (0132). Next: send one of those forms; "
+    "optional -chdir=<absolute folder inside the project> (0132), and validate only while "
+    "features.terraform_validate is true (0158). Next: send one of those forms; "
     "init, plan, apply and every other subcommand stay with the operator."
+)
+R_TERRAFORM_VALIDATE_OFF = (
+    "features.terraform_validate is not true in {manifest}, so the terraform class refuses "
+    "`terraform validate`, which would start the provider programs under .terraform/providers "
+    "(0158). Next: judge the files by reading them and mark the validate check N/A, or ask the "
+    "operator to set features.terraform_validate to true in service-manifest.json."
 )
 R_TERRAFORM_OFF = (
     "features.terraform_tools is false in {manifest}, so the terraform class runs nothing "
@@ -103,6 +117,9 @@ def terraform_reason(segment: list[str], cwd: str) -> str | None:
         return R_TERRAFORM_MANIFEST.format(cause=exc)
     if loaded is not None and loaded.features.terraform_tools is False:
         return R_TERRAFORM_OFF.format(manifest=manifest_path(Path(root)))
+    # 0159-DAE-PLT: validate off by default - deviation from the global Terraform rule
+    if rest == ["validate"] and (loaded is None or loaded.features.terraform_validate is not True):
+        return R_TERRAFORM_VALIDATE_OFF.format(manifest=manifest_path(Path(root)))
     return None
 
 

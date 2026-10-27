@@ -35,7 +35,7 @@ Every key in this file is a row of the generated key reference in the plugin [RE
 - `ledger`: with no ledger declared and none found, the Build Train stops and asks before creating one.
 - `standards_sources`: with none declared, the Standards Packet is empty, the auditor judges against the spec only, and the doctor offers the baseline pack on an `OPT` line.
 - `audit_retention_days`: a whole number of at least 90 (AU-11). When a new session writes its first record, each older log is deleted under its own lock, and one `AuditRotation` record in the new session's chain names every deleted session with its final seq and hash (AU-9(4)). A log named on a summary's `Session <id>:` line, a log changed since an unmerged train started, the current session's log, and a log another session holds are kept. Any read or parse error deletes nothing.
-- `agent_models`: an object from an agent name the catalog lists to `sonnet`, `opus`, `haiku` or `fable`. For example, `"agent_models": { "repo-coder": "sonnet" }` runs the coding agent on sonnet while every other agent keeps the model its agent file names. An unknown agent name or model refuses the config with a `Next:` line naming the key. Run `python3 scripts/catalog.py table --repo <repo>` from the plugin folder to see the model each agent runs on.
+- `agent_models`: an object from an agent name the catalog lists to `sonnet`, `opus`, `haiku` or `fable`. For example, `"agent_models": { "repo-coder": "sonnet" }` runs the coding agent on sonnet while every other agent keeps the model its agent file names. An unknown agent name or model refuses the config with a `Next:` line naming the key. The names `nist-specialist` and `cis-specialist` are no longer catalog agents, so a config that still names either is refused; rename the key to `framework-specialist`, the one agent that replaced both. Run `python3 scripts/catalog.py table --repo <repo>` from the plugin folder to see the model each agent runs on.
 
 ### Ledger formats
 
@@ -78,13 +78,11 @@ A hit prints `ledger: <path> (<origin>, <format>, seq=<n>)`, for example `ledger
 
 ## Machine caches
 
-The NIST and CIS specialists read reference files from the plugin's machine cache. Find its path with:
+The refresh script downloads NIST and OWASP reference files into the plugin's machine cache. Those files are input for the pack importer: `scripts/import_pack.py oscal` turns a downloaded NIST catalog into a control pack (see "Framework control packs" below). Find the cache path with:
 
     python3 <plugin>/scripts/daedalus_doctor.py --print-cache-dir
 
 It prints one absolute path, called `<cache>` below. Exit 1 means no cache exists yet; run `/daedalus:doctor` inside Claude Code once.
-
-The specialists verify every hash before they answer. A mismatch or a missing file stops the train with `CACHE_INVALID`.
 
 ### NIST catalogs (`<cache>/frameworks/nist/`)
 
@@ -115,20 +113,62 @@ The same script holds two OWASP adapters. OWASP publishes both under the Creativ
 - `owasp-asvs` writes `asvs-5.0.0.json`, the Application Security Verification Standard 5.0.0 JSON export from `OWASP/ASVS` tag `v5.0.0_release`. The script refuses a file without the keys `Name`, `ShortName`, `Version`, `Description` and a non-empty `Requirements` list. `version` is its `Version` key.
 - `owasp-top10` reads the ten 2025 English pages from `OWASP/Top10` commit `3a31f35` (the project has no release tag for 2025) and writes `top10-2025.json`: a list of `{"id": "A01:2025", "title": "...", "source_file": "..."}`, with each title taken from the page's first level-one heading. A page without one fails the adapter. `version` is `2025@3a31f35`, and `source_url` is the directory the ten pages came from.
 
-### CIS benchmarks (`<cache>/frameworks/cis/`)
+### CIS id maps (`import_pack.py cis-map`)
 
-CIS benchmarks are licensed, so you place them by hand:
+CIS benchmarks are licensed, so no benchmark text enters a pack. You map each CIS id you hold a license for to a control in another pack, and the importer writes an id-map pack:
 
-1. Create the directory: `mkdir -p -m 700 <cache>/frameworks/cis`.
-2. Copy in each benchmark file you hold a license for.
-3. Hash each file: `sha256sum <cache>/frameworks/cis/<file>`. The first field of the output is the hash.
-4. Write `<cache>/frameworks/cis/manifest.json` as a JSON list with one entry per file, using the file name relative to `cis/`:
+1. Write a UTF-8 CSV file whose header is exactly `cis_id,control_id`, with one line per CIS id, such as `1.4,AWS-IAM-1`. The importer refuses any other column.
+2. From inside the project, run:
 
-       [
-         { "file": "benchmark.json", "sha256": "<sha256sum output>", "version": "3.0.0", "pinned_on": "2026-10-14" }
-       ]
+       python3 <plugin>/scripts/import_pack.py cis-map --map <csv file> --benchmark <benchmark name> --version <x.y.z> --out <pack folder>
 
-Repeat steps 2 to 4 when you replace a benchmark.
+Each CSV line becomes one control: its `id` and `refs.cis` are the CIS id, its `maps_to` is the control id, and its title is the benchmark name plus the CIS id. The pack's `license` is `operator-licensed, ids only`. Each `control_id` must name a control in a pack beside `--out` or in a shipped pack. Run the command again with a new `--version` when you change the map.
+
+### Framework control packs
+
+A pack is a folder holding `pack.json` and `controls.json`. The folder name is the pack id. Daedalus ships two packs under `<plugin>/packs/frameworks/`: `aws-default` and `nist-distilled`.
+
+`pack.json` is one JSON object with exactly these keys:
+
+- `id`: the pack name, lowercase letters, digits and dashes, 1 to 40 characters.
+- `version`: three dot-separated numbers, such as `1.0.0`.
+- `source`: `daedalus` for a shipped pack, else the file the importer read.
+- `license`: one line, such as `GPL-3.0-or-later`, `public domain (17 U.S.C. 105)` or `operator-licensed, ids only`.
+- `pinned_on`: the `YYYY-MM-DD` date the pack was written.
+- `sha256`: the 64 lowercase hex SHA-256 of `controls.json`.
+
+`controls.json` is `{"schema": "daedalus-controls/1", "controls": [...]}`. Each control holds:
+
+- `id` (required): unique in the pack, such as `AWS-IAM-1`.
+- `service` (required): one of `iam`, `s3`, `kms`, `cloudtrail`, `vpc`, `lambda`, `dynamodb`, `apigateway`, `ec2`, `ecs`, `ecr`, `logs` or `any`.
+- `title` (required): one line in the pack author's words.
+- `statement`, `look_for` and `verify` (required unless `maps_to` is set): the requirement in the author's words, what in a diff shows the control met or broken, and one read-only command that tests the control against the tree.
+- `live_check` (optional): one read-only cloud command for the operator to run.
+- `refs` (required): `{"nist": [...], "cis": [...], "asvs": [...]}`, ids only; any list may be empty. Each `nist` id must be in `tests/fixtures/nist-control-ids.txt`.
+- `maps_to` (optional): the id of a control in another pack, for an id-map pack.
+
+A pack is refused when a file is missing, a link, or over 4 MiB; when the hash does not match; when a key is off these lists or repeated; when a control id repeats; when a `maps_to` names no control in the packs beside it or the shipped packs; or when a `statement` runs over 400 characters in a pack whose license starts with `operator-licensed`.
+
+To build a pack from a NIST catalog, download the catalog with the refresh script, then import the controls you want, from inside the project:
+
+    python3 <plugin>/scripts/refresh_frameworks.py --only nist-800-53 --cache-root <dir>
+    python3 <plugin>/scripts/import_pack.py oscal --catalog <dir>/frameworks/nist/catalog.json --ids AC-2,AC-3 --out <pack folder>
+
+`--version <x.y.z>` sets the pack version; without it the importer uses the catalog's own version. Both importers refuse an `--out` outside the project or under an excluded root, and an `--out` folder name that is not a pack id. Each prints `wrote <pack folder> (<n> controls)`.
+
+The `frameworks` block of `service-manifest.json` picks the packs a train reads:
+
+- `frameworks.pack_dir`: a project-relative folder; each subfolder of it holding `pack.json` is one pack. A linked subfolder is skipped.
+- `frameworks.default_packs`: `true` (the default) also reads the shipped packs; `false` reads only the packs under `frameworks.pack_dir`.
+
+With no `frameworks` block, only the shipped packs are read. The manifest reader refuses any other key in the block.
+
+The doctor prints one line per pack, after the framework cache lines:
+
+- `OK   framework pack <id>: <version>, <n> controls` for a pack that loads.
+- `MISS framework pack <id>: <problem>. Next: <action>` for each problem; the run fails. For a pack built from a NIST catalog, the action is the two commands above.
+- `MISS framework packs: <pack_dir> is not a folder. Next: create it or remove frameworks.pack_dir from service-manifest.json`; the run fails.
+- `OLD  framework pack <id>: pinned <date> (<days> days). Next: <action>` once `pinned_on` is more than 90 days old. The action re-runs the importer, or updates the plugin for a shipped pack. The run still passes.
 
 ## In each target repository
 
@@ -145,10 +185,11 @@ Example:
                             "data_classification": "INTERNAL" },
   "features": { "scope": null, "secrets_scan": false, "scrub_file": null, "ledger": null },
   "trains_dir": null,
+  "frameworks": { "pack_dir": "compliance/packs", "default_packs": true },
   "jail_narrowing": { "forbidden_extensions": [], "forbidden_paths": [] },
   "upstream_dependencies": [], "downstream_dependencies": [] }
 ```
-The manifest reader checks `jail_narrowing`, `features`, `trains_dir`, the three stack commands and the `ledger` block; each of those keys is a row of the generated key reference in the plugin [README](../README.md#key-reference). The reader refuses an unknown key inside `jail_narrowing` or `features`. The keys below describe the project for the people and agents who read the file. No reader checks them, so a wrong value is never refused.
+The manifest reader checks `jail_narrowing`, `features`, `trains_dir`, `frameworks`, the three stack commands and the `ledger` block; each of those keys is a row of the generated key reference in the plugin [README](../README.md#key-reference). The reader refuses an unknown key inside `jail_narrowing`, `features` or `frameworks`. The `frameworks` keys are described under "Framework control packs" above. The keys below describe the project for the people and agents who read the file. No reader checks them, so a wrong value is never refused.
 
 | Key | What it governs | Type | Allowed values | Default | Example |
 |---|---|---|---|---|---|
@@ -293,4 +334,8 @@ Every agent file and every skill carries that rule. A test reads each `Next:` li
 
 A finding about git or file state is closed by a script change and a script test, never by a skill sentence.
 
-An agent file for a judge (the nist and cis specialists and the security auditor) must carry a method and a rubric. An agent file for an actor stays thin, because its tools and the hooks bound what it can do.
+An agent file for a judge, any file under `agents/` whose frontmatter reads `shape: judge`, must carry a method and a rubric. List the judges from the plugin root of a clone; it needs no credential:
+
+    grep -l "^shape: judge" agents/*.md
+
+Each line names one judge's agent file. Empty output means no file declares the judge shape. `No such file or directory` means the command ran outside the plugin root. An agent file for an actor stays thin, because its tools and the hooks bound what it can do.

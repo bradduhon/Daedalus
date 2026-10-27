@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from lib import jail
@@ -17,11 +18,8 @@ from tests.hook_chain import (
     first_deny,
     internal_error_denies,
     load,
-    malformed_input_denies,
-    outside_tools_allow,
     payload,
     run_script,
-    unknown_flag_denies,
 )
 from tests.jail_cases import _MANIFEST_LEDGER, _git_init
 from tests.payloads import _b
@@ -324,18 +322,6 @@ def test_command_allowlist_fixture_decisions() -> None:
     assert run_script(HOOK, ok, *mover) == {"decision": "allow", "reason": ""}
     leak = payload("Bash", agent="pr-train-conductor", command="gitleaks detect")
     assert run_script(HOOK, leak, *mover) == {"decision": "deny", "reason": jail.R_GITLEAKS}
-
-
-def test_command_allowlist_allows_tools_outside_its_tools() -> None:
-    outside_tools_allow(HOOK, "Write", "--allow", "git")
-
-
-def test_command_allowlist_unknown_flag_denies() -> None:
-    unknown_flag_denies(HOOK, payload("Bash", command="git status"), "--allow", "git")
-
-
-def test_command_allowlist_malformed_input_denies() -> None:
-    malformed_input_denies(HOOK, "--allow", "git")
 
 
 def test_command_allowlist_internal_error_denies_and_names_the_hook() -> None:
@@ -669,6 +655,46 @@ def test_ledger_is_the_orchestrators_and_reaudit_and_resume_stay_main() -> None:
         assert not decide(_b(agent, LEDGER), CFG).allow, agent
 
 
+def test_contract_is_the_orchestrators_train_subcommand() -> None:
+    # 0156: the contract skip check and lock --no-contract run from the orchestrator only.
+    module = load(HOOK)
+    assert "contract" in module.TRAIN_SCRIPTS["daedalus_train.py"]
+    for command in (
+        f"python3 {SCRIPTS}/daedalus_train.py contract --repo {CWD}",
+        f"python3 {SCRIPTS}/daedalus_workspace.py lock --repo {CWD} --no-contract",
+    ):
+        assert decide(_b("orchestrator", command), CFG).allow, command
+        for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+            assert not decide(_b(agent, command), CFG).allow, (agent, command)
+    other = f"python3 {SCRIPTS}/daedalus_train.py contract --repo /work/other"
+    reason = evaluate(HOOK, _b("orchestrator", other), *TRAIN_FLAGS)
+    assert reason == module.R_TRAIN_REPO.format(flag="--repo", given="/work/other", root=CWD)
+
+
+def test_brief_check_is_the_orchestrators_train_subcommand() -> None:
+    # 0153, 0157 (12.5): the orchestrator checks each decision brief; no other agent runs it.
+    module = load(HOOK)
+    assert "brief-check" in module.TRAIN_SCRIPTS["daedalus_train.py"]
+    brief = f"{CWD}/docs/.tmp/daedalus/t/decisions/1.md"
+    command = f"python3 {SCRIPTS}/daedalus_train.py brief-check --repo {CWD} --brief {brief}"
+    assert decide(_b("orchestrator", command), CFG).allow
+    for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+        assert not decide(_b(agent, command), CFG).allow, agent
+    other = command.replace(f"--repo {CWD}", "--repo /work/other")
+    reason = evaluate(HOOK, _b("orchestrator", other), *TRAIN_FLAGS)
+    assert reason == module.R_TRAIN_REPO.format(flag="--repo", given="/work/other", root=CWD)
+
+
+def test_packs_is_the_orchestrators_train_subcommand() -> None:
+    # prepush-2026-10-27 finding 6: the pack check runs before any framework specialist.
+    module = load(HOOK)
+    assert "packs" in module.TRAIN_SCRIPTS["daedalus_train.py"]
+    command = f"python3 {SCRIPTS}/daedalus_train.py packs --repo {CWD}"
+    assert decide(_b("orchestrator", command), CFG).allow
+    for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+        assert not decide(_b(agent, command), CFG).allow, agent
+
+
 # spec 7.1: the orchestrator's Train C read rows, one allow and one nearest-write refusal each.
 ORCHESTRATOR_READ_ROWS = [
     ("date -u", "date -s 2026-01-01"),
@@ -780,6 +806,15 @@ def test_train_class_refuses_other_map_and_source_forms(command: str) -> None:
     )
 
 
+def test_refusal_names_every_admitted_freeze_sources_flag() -> None:
+    # 99: each first argument the train table admits for freeze_sources.py is in the refusal.
+    check = load(HOOK)
+    admitted = check.TRAIN_SCRIPTS["freeze_sources.py"]
+    assert admitted is not None and "--baselines-only" in admitted
+    for flag in sorted(admitted):
+        assert f"{flag} " in check.R_ORCHESTRATOR_BASH or f"{flag}," in check.R_ORCHESTRATOR_BASH
+
+
 @pytest.mark.parametrize(
     "args", ["--repo /work/other --out /work/other/m", "--repo=/work/other --out x", "--rep /x"]
 )
@@ -888,3 +923,88 @@ def test_orchestrator_refusal_names_the_new_scripts() -> None:
     reason = load(HOOK).R_ORCHESTRATOR_BASH
     for word in ("daedalus_map.py", "freeze_sources.py", "--check-tools", "--verify"):
         assert word in reason, word
+
+
+# 0158, 0159-DAE-PLT: validate starts provider programs, so it runs only on its own switch.
+TF_ALLOW = ("--allow", "terraform,inspect")
+VALIDATE_NEXT = "set features.terraform_validate to true in service-manifest.json"
+
+
+def _tf_payload(repo: Path, command: str) -> dict[str, Any]:
+    hook_input = _b("daedalus:terraform-reviewer", command)
+    hook_input["cwd"] = str(repo)
+    return hook_input
+
+
+def _tf_call(repo: Path, command: str) -> str | None:
+    return evaluate(HOOK, _tf_payload(repo, command), *TF_ALLOW)
+
+
+def _plant_provider(repo: Path) -> Path:
+    # 0158: a provider program where terraform init leaves one; the hook refuses before it runs.
+    module = repo / "infra"
+    folder = module / ".terraform" / "providers" / "registry.terraform.io" / "hashicorp"
+    folder = folder / "null" / "3.2.0" / "linux_amd64"
+    folder.mkdir(parents=True)
+    provider = folder / "terraform-provider-null_v3.2.0_x5"
+    provider.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    provider.chmod(0o755)
+    return module
+
+
+def _features(repo: Path, block: dict[str, object] | None) -> None:
+    if block is not None:
+        manifest = repo / "service-manifest.json"
+        manifest.write_text(json.dumps({"features": block}), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        None,
+        {},
+        {"terraform_validate": False},
+        {"terraform_tools": True},
+        {"terraform_tools": None, "terraform_validate": False},
+    ],
+)
+def test_terraform_validate_refused_unless_the_switch_is_true(
+    repo_cwd: Path, block: dict[str, object] | None
+) -> None:
+    module = _plant_provider(repo_cwd)
+    _features(repo_cwd, block)
+    for command in ("terraform validate", f"terraform -chdir={module} validate"):
+        reason = _tf_call(repo_cwd, command)
+        assert reason is not None, command
+        assert reason.startswith("features.terraform_validate is not true"), reason
+        assert reason.count("Next:") == 1 and VALIDATE_NEXT in reason.split("Next:")[1], reason
+    # 0158: fmt -check stays under features.terraform_tools alone.
+    for command in ("terraform fmt -check", f"terraform -chdir={module} fmt -check"):
+        assert _tf_call(repo_cwd, command) is None, command
+
+
+def test_terraform_validate_admitted_when_the_switch_is_true(repo_cwd: Path) -> None:
+    module = _plant_provider(repo_cwd)
+    for block in (
+        {"terraform_validate": True},
+        {"terraform_tools": True, "terraform_validate": True},
+    ):
+        _features(repo_cwd, block)
+        for command in ("terraform validate", f"terraform -chdir={module} validate"):
+            assert _tf_call(repo_cwd, command) is None, (block, command)
+            assert first_deny(_tf_payload(repo_cwd, command), Config()) is None, command
+
+
+def test_terraform_tools_off_outranks_the_validate_switch(repo_cwd: Path) -> None:
+    module = _plant_provider(repo_cwd)
+    _features(repo_cwd, {"terraform_tools": False, "terraform_validate": True})
+    for command in ("terraform validate", f"terraform -chdir={module} fmt -check"):
+        reason = _tf_call(repo_cwd, command)
+        assert reason is not None and reason.startswith("features.terraform_tools is false")
+
+
+def test_terraform_validate_refused_on_a_non_boolean_switch(repo_cwd: Path) -> None:
+    _plant_provider(repo_cwd)
+    _features(repo_cwd, {"terraform_validate": "true"})
+    reason = _tf_call(repo_cwd, "terraform validate")
+    assert reason is not None and reason.startswith("the service manifest could not be read")

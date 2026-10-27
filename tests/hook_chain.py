@@ -67,16 +67,7 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("read_only_bash", ("--git", "read-only", "--test-runner", "unit")),
         ("gh_classes", ()),
     ),
-    "nist-specialist": (
-        ("credential_paths", ()),
-        ("workspace_integrity", ()),
-        ("tool_bound", ()),
-        ("shell_tripwires", ()),
-        ("network_tools", ()),
-        ("read_only_bash", ("--git", "specialist")),
-        ("gh_classes", ()),
-    ),
-    "cis-specialist": (
+    "framework-specialist": (
         ("credential_paths", ()),
         ("workspace_integrity", ()),
         ("tool_bound", ()),
@@ -98,7 +89,10 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("credential_paths", ()),
         ("workspace_integrity", ()),
         ("tool_bound", ()),
-        ("root_writes", ("--touch", "scratch", "--name", "plan*.md")),
+        (
+            "root_writes",
+            ("--touch", "scratch", "--name", "plan*.md", "--sub", "brainstorm-*/spec.md"),
+        ),
     ),
     "pr-train-conductor": (
         ("credential_paths", ()),

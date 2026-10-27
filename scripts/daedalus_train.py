@@ -9,9 +9,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import packs  # noqa: E402
 from lib.agent_models import AgentModelError, resolve  # noqa: E402
 from lib.audit import DataDirError  # noqa: E402
+from lib.briefs import BriefError, brief_file_problems  # noqa: E402
 from lib.config import ConfigError, load_config  # noqa: E402
+from lib.manifest import ManifestError  # noqa: E402
 from lib.project_root import repo_refusal  # noqa: E402
 from lib.train_runner import (  # noqa: E402
     EXIT_OK,
@@ -19,6 +22,7 @@ from lib.train_runner import (  # noqa: E402
     Outcome,
     check_reply,
     choice,
+    contract,
     progress,
     reaudit,
     record_docs_verdict,
@@ -39,7 +43,9 @@ from lib.train_state import TrainStateError  # noqa: E402
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
-        "choice, plan, exception, verdict, reaudit, resume, ledger, summary, model. Exit 0 action "
+        "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
+        "brief-check, packs. "
+        "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
     sub = parser.add_subparsers(dest="action", required=True)
@@ -49,7 +55,8 @@ def _parser() -> argparse.ArgumentParser:
     begin.add_argument("--output")
     # pin D1 -> D6: reaudit and resume run from the main session; ledger from the orchestrator.
     # W3.2: summary writes <train-id>-summary.md from train state and the audit logs.
-    for name in ("step", "state", "reaudit", "resume", "summary"):
+    # 0156: contract prints `contract: skip` or `contract: required (<reason>)`.
+    for name in ("step", "state", "reaudit", "resume", "summary", "contract"):
         sub.add_parser(name).add_argument("--repo", type=Path, required=True)
     check = sub.add_parser("check-reply")
     check.add_argument("--repo", type=Path, required=True)
@@ -90,6 +97,8 @@ def _parser() -> argparse.ArgumentParser:
     judged.add_argument("--tip")
     # 0131: --gate docs records the docs verifier's verdict, verified or refuted.
     judged.add_argument("--gate", choices=("security", "docs"), default="security")
+    # 0131: --judged is the Docs tip sha the docs verifier judged, the docs branch head.
+    judged.add_argument("--judged")
     ledger = sub.add_parser("ledger")
     ledger.add_argument("--repo", type=Path, required=True)
     ledger.add_argument("--sha", required=True)
@@ -99,7 +108,53 @@ def _parser() -> argparse.ArgumentParser:
     model.add_argument("--repo", type=Path, required=True)
     model.add_argument("--agent", required=True)
     model.add_argument("--override")
+    # 0153, 0157 (12.5): a decision brief checked at the manifest literacy level.
+    brief = sub.add_parser("brief-check")
+    brief.add_argument("--repo", type=Path, required=True)
+    brief.add_argument("--brief", type=Path, required=True)
+    # prepush-2026-10-27 finding 6, 0157: the pack check before any framework specialist runs.
+    sub.add_parser("packs").add_argument("--repo", type=Path, required=True)
     return parser
+
+
+PACKS_NEXT = (
+    "Next: run /daedalus:doctor and fix each pack it names, then run /daedalus:build-train again."
+)
+
+
+def _packs(repo: Path) -> Outcome:
+    # 0157: every pack folder the train reads passes pack_problems, or the train stops.
+    try:
+        folders = packs.pack_folders(repo)
+        problems = [f"pack {f.name}: {p}" for f in folders for p in packs.pack_problems(f)]
+    except (ManifestError, OSError) as exc:
+        return Outcome(EXIT_STOP, [f"packs: {exc}", PACKS_NEXT])
+    if not folders:
+        return Outcome(
+            EXIT_STOP,
+            [
+                "No control pack was found for the compliance check. Next: run "
+                "/daedalus:doctor, then fix the frameworks block of service-manifest.json."
+            ],
+        )
+    if problems:
+        return Outcome(EXIT_STOP, [*problems, PACKS_NEXT])
+    return Outcome(EXIT_OK, [f"Packs: {', '.join(str(f) for f in folders)}"])
+
+
+def _brief_check(repo: Path, brief: Path) -> Outcome:
+    try:
+        level, problems = brief_file_problems(repo, brief)
+    except (BriefError, ManifestError) as exc:
+        return Outcome(EXIT_STOP, [str(exc)])
+    if not problems:
+        return Outcome(EXIT_OK, ["brief ok"])
+    lines = [f"brief: {problem}" for problem in problems]
+    lines.append(
+        f"Next: rewrite each named question, context sentence or option label at the {level} "
+        "level, then run brief-check again."
+    )
+    return Outcome(EXIT_STOP, lines)
 
 
 def _model(repo: Path, agent: str, override: str | None) -> Outcome:
@@ -121,6 +176,8 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return choice(repo, args.chose, args.over, args.cost, args.phase, args.driver, args.rule)
     if args.action == "plan":
         return record_plan(repo, args.path)
+    if args.action == "contract":
+        return contract(repo)
     if args.action == "exception":
         return record_exception(repo, args.ledger_id, args.finding, args.tracking, args.other)
     if args.action == "verdict":
@@ -133,7 +190,33 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
                         "audit round. Next: rerun it with --status and, when refuted, --findings."
                     ],
                 )
-            return record_docs_verdict(repo, args.status, args.tip, args.findings)
+            if args.status == "verified" and args.judged is None:
+                # 0131: a verified docs verdict always names the docs tip the verifier judged.
+                return Outcome(
+                    EXIT_STOP,
+                    [
+                        "verdict --gate docs --status verified requires --judged, the Docs tip "
+                        "sha the verifier judged, and this call passed none. Next: rerun it with "
+                        "--judged set to the Docs tip: sha of the verifier dispatch."
+                    ],
+                )
+            if args.status != "verified" and args.judged is not None:
+                return Outcome(
+                    EXIT_STOP,
+                    [
+                        "verdict --judged belongs to --gate docs --status verified only. Next: "
+                        "rerun the docs verdict without --judged."
+                    ],
+                )
+            return record_docs_verdict(repo, args.status, args.tip, args.findings, args.judged)
+        if args.judged is not None:
+            return Outcome(
+                EXIT_STOP,
+                [
+                    "verdict --judged belongs to --gate docs only. Next: rerun the security "
+                    "verdict with --tip and without --judged."
+                ],
+            )
         if args.status == "approved" and args.tip is None:
             # pin C3 -> C5: an approval always names the tip the auditor judged.
             return Outcome(
@@ -155,6 +238,10 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return summary(repo)
     if args.action == "model":
         return _model(repo, args.agent, args.override)
+    if args.action == "brief-check":
+        return _brief_check(repo, args.brief)
+    if args.action == "packs":
+        return _packs(repo)
     if args.action == "check-reply":
         return check_reply(repo, args.stage)
     if args.action == "state":

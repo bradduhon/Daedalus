@@ -41,7 +41,8 @@ DESCRIPTION = (
     "holds a protected path. Exit 2: two baselines without --baselines-only, a style source "
     "with topics, or a malformed source. Exit 3: an excluded path root git does not ignore, "
     "or bad project metadata. --verify <manifest> recomputes every hash and exits 4 on a "
-    "mismatch, then lints the outputs for en and em dashes, placeholder copy and style-source "
+    "mismatch, exits 1 when the recorded output folder fails the same output folder check, "
+    "then lints the outputs for en and em dashes, placeholder copy and style-source "
     "sentences carrying a number, and exits 5 on any finding."
 )
 ROLES = ("baseline", "amendment", "style", "correspondence", "reference")
@@ -406,6 +407,14 @@ def verify(path: Path) -> tuple[int, list[str]]:
             lines.append(f"OK   {source.alias} {source.path}")
     if bad:
         return EXIT_MISMATCH, [*lines, "[STATUS: MANIFEST_INVALID]"]
+    # 99: the lint walks output_dir, so a hand-edited manifest is bounded before the walk.
+    try:
+        boundary = jail._coder_boundary(str(repo), load_config(str(repo)))
+    except (ConfigError, DataDirError) as exc:
+        raise SourcesError(f"project metadata could not be read: {exc}", EXIT_ROOT) from exc
+    reason = output_dir_reason(frozen.output_dir, repo, boundary)
+    if reason is not None:
+        return EXIT_PATH, [*lines, reason]
     findings = _lint(frozen, repo)
     if findings:
         return EXIT_LINT, [*lines, *findings, f"verify: {len(findings)} output finding(s)"]

@@ -16,11 +16,8 @@ from tests.hook_chain import (
     decide,
     evaluate,
     internal_error_denies,
-    malformed_input_denies,
-    outside_tools_allow,
     payload,
     run_script,
-    unknown_flag_denies,
 )
 from tests.jail_cases import (
     BASH_AGENTS,
@@ -63,7 +60,7 @@ class TestRound3WorkerGitGrammar:
             ("security-auditor", "git ls-files --others"),
             ("security-auditor", "git rev-parse --git-path x"),
             ("security-auditor", "git grep --open-files-in-pager x"),
-            ("nist-specialist", "git log --exec x"),
+            ("framework-specialist", "git log --exec x"),
             # Round 4: `git commit -am x` flipped to allowed by ruling (see TestRound4Breakage).
             ("charter-docs", "git commit -F /etc/passwd"),
             ("charter-docs", "git commit --amend -m x"),
@@ -123,7 +120,7 @@ class TestRound4Breakage:
             ("security-auditor", "git log -G pattern"),
             ("security-auditor", "git log --author=brad"),
             ("security-auditor", "git diff --word-diff --color=never"),
-            ("nist-specialist", "git log -n5 --all"),
+            ("framework-specialist", "git log -n5 --all"),
             ("charter-docs", "git diff --cached"),
             ("charter-docs", "git log --oneline -3"),
             ("charter-docs", "git status --porcelain"),
@@ -327,18 +324,6 @@ def test_git_grammar_fixture_decisions() -> None:
     assert run_script(HOOK, status, "--allow", "coder") == {"decision": "allow", "reason": ""}
     bad = run_script(HOOK, status, "--allow", "everything")
     assert bad["decision"] == "deny" and bad["reason"].startswith("hook git_grammar failed closed")
-
-
-def test_git_grammar_allows_tools_outside_its_tools() -> None:
-    outside_tools_allow(HOOK, "Write", "--allow", "coder")
-
-
-def test_git_grammar_unknown_flag_denies() -> None:
-    unknown_flag_denies(HOOK, payload("Bash", command="git status"))
-
-
-def test_git_grammar_malformed_input_denies() -> None:
-    malformed_input_denies(HOOK, "--allow", "coder")
 
 
 def test_git_grammar_internal_error_denies_and_names_the_hook() -> None:

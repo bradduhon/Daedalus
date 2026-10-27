@@ -607,6 +607,54 @@ def test_any_other_move_past_the_judged_tip_refuses(
     assert want in message
 
 
+def _odd_ledger(repo: Path, kind: str) -> str:
+    # 59: a ledger-only commit that leaves the ledger executable or a symlink.
+    path = repo / LEDGER
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if kind == "exec":
+        path.write_text("row\n")
+        path.chmod(0o755)
+    else:
+        path.symlink_to("../README.md")
+    _git(repo, "add", LEDGER)
+    _git(repo, "commit", "-q", "-m", "ledger")
+    _git(repo, "branch", "-f", f"daedalus/{TRAIN}", "HEAD")
+    return _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
+@pytest.mark.parametrize("kind", ["exec", "link"])
+def test_a_ledger_commit_passes_only_with_a_regular_non_executable_ledger(
+    project_data: Path, hook_input: Any, repo_cwd: Path, kind: str
+) -> None:
+    # 59, 0131: every ledger-only check applies the _docs_only mode test.
+    from lib import audit_proof
+
+    _repo_ledger(project_data, repo_cwd)
+    tip = _judged(repo_cwd)
+    _train(hook_input, repo_cwd, f"[VERDICT: APPROVED] tip={tip}")
+    moved = _odd_ledger(repo_cwd, kind)
+    assert "changes more than the ledger, or its file mode" in _refused(repo_cwd)
+    assert audit_proof.ledger_parent(repo_cwd, moved) is None
+    assert "changes more than the four public docs" in str(
+        audit_proof._docs_moves(repo_cwd, tip, moved)
+    )
+
+
+def test_a_regular_ledger_commit_passes_every_ledger_only_check(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # 59, 0131: a new or edited regular ledger file still passes.
+    from lib import audit_proof
+
+    _repo_ledger(project_data, repo_cwd)
+    tip = _judged(repo_cwd)
+    moved = _commit(repo_cwd, LEDGER)
+    assert audit_proof.ledger_parent(repo_cwd, moved) == tip
+    assert audit_proof._docs_moves(repo_cwd, tip, moved) is None
+    again = _commit(repo_cwd, LEDGER)
+    assert audit_proof.ledger_parent(repo_cwd, again) == moved
+
+
 def test_a_ledger_commit_refuses_when_the_ledger_is_not_in_the_repo(
     project_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:

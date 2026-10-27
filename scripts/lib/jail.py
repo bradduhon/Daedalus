@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from lib import dispatch_binding, hook_io
+from lib import dispatch_binding, hook_io, shell
 from lib.audit import _git_env, project_data_dir, project_root
 from lib.audit_proof import SUMMARY_DIR
 from lib.config import (
@@ -22,10 +22,17 @@ from lib.config import (
 )
 from lib.credential_paths import (
     CREDENTIAL_TOOLS,
+    IGNORE_FILES,
     R_BRACE_UNJUDGED,
     R_CREDENTIAL,
     R_CREDENTIAL_TREE,
+    R_IGNORE_WHITELIST,
     R_REPLY_KEY,
+    R_REPLY_KEY_TREE,
+    REPLY_KEY_NAME,
+    glob_patterns,
+    glob_reaches,
+    ignore_whitelist,
     key_roots,
     path_reason,
     reply_key_hit,
@@ -58,11 +65,13 @@ from lib.shell import (
     _REPO_SCRIPTS,
     _SHELLS,
     _VALUE_LONG_NEXT,
+    FLOCK_BODY,
     GIT_PLUMBING_REMOTE,
     R_CLEAN,
     R_DATA_DIR_GIT,
     R_DEFAULT_BRANCH,
     R_DESTRUCTIVE,
+    R_ENV_SPLIT,
     R_FORCE_PUSH,
     R_STASH_UNTRACKED,
     READ_ONLY_CMDS,
@@ -83,6 +92,7 @@ from lib.shell import (
     _short_flags,
     _under,
     chain_bases,
+    env_split_values,
     runs_claude,
     strip_wrappers,
     tokenize,
@@ -375,7 +385,7 @@ _GREPS = frozenset({"grep", "egrep", "fgrep"})
 # spec 8: short options whose value is the next word (or the rest of the cluster).
 _SEARCH_VALUES: dict[str, frozenset[str]] = {
     "grep": frozenset("efmABCdD"),
-    "rg": frozenset("efmABCgtTjMrE"),
+    "rg": frozenset("efmABCgtTjMrEd"),
 }
 _SEARCH_LONGS = frozenset(
     {"--regexp", "--file", "--max-count", "--context", "--after-context", "--before-context"}
@@ -588,6 +598,9 @@ def protected_reason(rel: str, target: str, boundary: CoderBoundary | str) -> st
     folded = rel.casefold()
     ledger = boundary.ledger_rel
     if ".git" in folded.split("/") or path_hit(BUILTIN_PROTECTED, rel):
+        return R_PROTECTED_BUILTIN.format(target)
+    # prepush-2026-10-27: a `!` line in either file lets rg read the reply key.
+    if folded.rsplit("/", 1)[-1] in IGNORE_FILES:
         return R_PROTECTED_BUILTIN.format(target)
     if ledger is not None and path_hit(Manifest((ledger,)), rel):
         return R_PROTECTED_BUILTIN.format(target)
@@ -825,7 +838,7 @@ def _read_only_segment(
             for arg in args
         )
     if name == "rg":
-        return not any(arg.split("=", 1)[0] in {"--pre", "--pre-glob"} for arg in args)
+        return not rg_program(args)
     if name == "uniq":
         # 8.5: uniq writes its second positional operand.
         return len([arg for arg in args if not arg.startswith("-")]) <= 1
@@ -1423,7 +1436,8 @@ def _search_paths(name: str, clean: list[str], args: list[int]) -> set[int]:
             pending = ""
         elif word.startswith("--"):
             opt = word.split("=", 1)[0]
-            explicit = explicit or opt in {"--regexp", "--file"}
+            # prepush2-2026-10-27: rg --files takes no pattern, so every operand is a path.
+            explicit = explicit or opt in {"--regexp", "--file", "--files"}
             if opt == "--file" and "=" in word:
                 paths.add(i)
             elif "=" not in word and opt in _SEARCH_LONGS:
@@ -1476,10 +1490,10 @@ def _tree_reader(
     if name in _GREPS:
         on = bool({"r", "R"} & short or {"--recursive", "--dereference-recursive"} & longs)
         on = on or any(a.startswith("--directories=recurse") for a in args)
+        on = on or shell.search_opaque(command)
         return (True, ops, not ops) if on else None
     if name == "rg":
-        hidden = bool({"u", "."} & short or {"--hidden", "--no-ignore", "--unrestricted"} & longs)
-        return hidden, ops, not ops
+        return rg_reaches_hidden(args, command), ops, not ops
     if name == "find":
         on = bool({"-exec", "-execdir", "-ok", "-okdir"} & set(args)) or "xargs" in command
         return (True, ops, not ops) if on else None
@@ -1492,6 +1506,85 @@ def _tree_reader(
     if name == "zip" and ({"r", "R"} & short or "--recurse-paths" in longs):
         return True, ops, False
     return None
+
+
+_RG_GLOBS = frozenset({"--glob", "--iglob"})
+# 113, prepush-2026-10-27: each reads hidden or ignored files, or follows a link out of the tree.
+_RG_REACH_LONGS = frozenset(
+    {"--hidden", "--no-ignore", "--unrestricted", "--ignore-file", "--follow"}
+)
+_RG_REACH_SHORT = frozenset("u.L")
+_RG_CONFIG_ENV = "RIPGREP_CONFIG_PATH"
+R_RG_REACH = (
+    "rg with --hidden, -u, --no-ignore, --ignore-file, -L, --follow or RIPGREP_CONFIG_PATH reads "
+    "hidden or ignored files (113). Next: drop the flag and search the tree as rg skips it"
+)
+R_RG_ONE = "a verify is one plain rg search with no wrapper, prefix, pipe or chain (113)"
+R_RG_OPAQUE = (
+    "rg or grep with a word the shell rewrites ($'...', $\"...\", $VAR, an unquoted brace or a "
+    "leading glob) may carry a flag the jail never reads (113, prepush2-2026-10-27). Next: spell "
+    "every argument literally and single-quote the pattern"
+)
+R_RG_PROGRAM = (
+    "rg --pre, --pre-glob, --hostname-bin or any --*-bin option runs or loads a program "
+    "(113, prepush2-2026-10-27). Next: drop the option"
+)
+
+
+def rg_program(args: list[str]) -> bool:
+    # prepush2-2026-10-27: each names a program rg runs or a file it loads for one.
+    keys = {a.split("=", 1)[0] for a in args if a.startswith("--")}
+    return bool(keys & {"--pre", "--pre-glob", "--hostname-bin"}) or any(
+        k.endswith("-bin") for k in keys
+    )
+
+
+def _rg_short_letters(arg: str) -> set[str]:
+    # prepush2-2026-10-27: letters after a value-taking flag are its value (-trust is -t rust).
+    letters: set[str] = set()
+    for ch in arg[1:]:
+        letters.add(ch)
+        if ch in _SEARCH_VALUES["rg"]:
+            break
+    return letters
+
+
+def rg_reaches_hidden(args: list[str], command: str) -> bool:
+    # 113: a config file can add any flag, so its variable anywhere in the command fails closed.
+    longs = {a.split("=", 1)[0] for a in args if a.startswith("--")}
+    short = {
+        c
+        for a in args
+        if a.startswith("-") and not a.startswith("--")
+        for c in _rg_short_letters(a)
+    }
+    reach = bool(_RG_REACH_SHORT & short or _RG_REACH_LONGS & longs)
+    return reach or _RG_CONFIG_ENV in command or shell.search_opaque(command)
+
+
+def _rg_globs(args: list[str]) -> list[str]:
+    # SC-12: each -g, --glob or --iglob whitelist; a negated glob only hides, a $ value is *.
+    raws: list[str] = []
+    letters = _SEARCH_VALUES["rg"]
+    i = 0
+    while i < len(args) and args[i] != "--":
+        arg, later = args[i], (args[i + 1 : i + 2] or [""])[0]
+        key, eq, value = arg.partition("=")
+        if arg.startswith("--") and (key in _RG_GLOBS or key in _SEARCH_LONGS) and not eq:
+            raws += [later] if key in _RG_GLOBS else []
+            i += 1
+        elif arg.startswith("--"):
+            raws += [value] if key in _RG_GLOBS else []
+        elif arg.startswith("-"):
+            hit = next((k for k, c in enumerate(arg[1:], 2) if c in letters), None)
+            if hit is not None:
+                # SC-12: -g=x may reach rg as x or =x, so both are judged.
+                value = arg[hit:] or later
+                raws += [value, value.removeprefix("=")] if arg[hit - 1] == "g" else []
+                i += 0 if arg[hit:] else 1
+        i += 1
+    raws = ["*" if set("$`") & set(r) else r for r in dict.fromkeys(raws) if not r.startswith("!")]
+    return [p for raw in raws for p in glob_patterns(raw)]
 
 
 def _tree_reason(
@@ -1513,6 +1606,7 @@ def _tree_reason(
         if found is None:
             continue
         hidden, ops, implicit = found
+        globs = _rg_globs([_clean(w) for w in words[at + 1 :]]) if name == "rg" else []
         targets = list(bases) if implicit else []
         for i in ops:
             for text, _ in _expand_word(words[i], envs[k]):
@@ -1520,10 +1614,33 @@ def _tree_reason(
         for target in targets:
             for root, dots_hide in pairs:
                 rest = _store_rest(target, root, True, dotglob, dots_hide)
-                # spec 8: rg skips hidden dirs by default, so a hidden component shields a store.
-                if rest is not None and (hidden or not any(p.startswith(".") for p in rest)):
+                # spec 8, SC-12: rg skips hidden dirs unless a flag or a whitelist glob reaches one.
+                shown = hidden or glob_reaches(globs, rest or [])
+                if rest is not None and (shown or not any(p.startswith(".") for p in rest)):
                     return R_CREDENTIAL_TREE.format(path=target)
+                if rest is not None and name == "rg" and ignore_whitelist(root):
+                    return R_IGNORE_WHITELIST.format(path=target)
     return None
+
+
+def rg_reason(command: str, cwd: str) -> str | None:
+    # 113: the specialist's rg judgement as one call; packs.py judges each pack verify by it.
+    chain = shell.worker_parse(command)
+    if chain is None or len(chain.tokens) != 1 or chain.tokens[0][:1] != ["rg"]:
+        return R_RG_ONE
+    tokens = chain.tokens[0]
+    if rg_program(tokens[1:]):
+        return R_RG_PROGRAM
+    if not _read_only_segment(tokens, frozenset(), cwd, None):
+        return R_SPECIALIST_BASH
+    if shell.search_opaque(command):
+        return R_RG_OPAQUE
+    if rg_reaches_hidden(tokens[1:], command):
+        return R_RG_REACH
+    # 113: judged against the reply key's fixed place, whether or not one exists yet.
+    if glob_reaches(_rg_globs(tokens[1:]), [".claude", "daedalus", REPLY_KEY_NAME]):
+        return R_REPLY_KEY_TREE.format(path=cwd)
+    return _credential_reason("Bash", {"command": command}, cwd)
 
 
 def _bash_credential_reason(
@@ -1653,9 +1770,57 @@ def _train_active(cwd: str) -> bool:
 
 _TARGET_CAP = 8
 _GIT_DIR_OPTS = ("--git-dir=", "--work-tree=")
+R_SHELL_BODY = (
+    "a shell -c body is one command string the jail does not walk for what it writes "
+    "(issue 81). Next: run the command directly, without bash -c, sh -c or flock -c."
+)
+_BODY_DEPTH = 3
 
 
-def _bash_write_dirs(command: str, cwd: str) -> list[str]:
+def _shell_body(words: list[str]) -> str | None:
+    # issue 81: the -c body of a shell; past an unknown long flag, the word after a c flag.
+    code = _shell_code(words)
+    if code != _FALLBACK:
+        return code
+    flags = [k for k, w in enumerate(words) if w[:1] in "-+" and w[1:2] != "-" and "c" in w[1:]]
+    return (words[flags[0] + 1 : flags[0] + 2] or [""])[0] if flags else None
+
+
+def _hidden_bodies(words: list[str]) -> list[tuple[str, str]]:
+    # issue 80, 81: (finding, command string) for each env -S value and shell or flock -c body.
+    found = [(R_ENV_SPLIT, value) for value in env_split_values(words)]
+    for at, word in enumerate(words):
+        name = _base(word)
+        body = _shell_body(words[at:]) if name in _SHELLS else None
+        if name == "flock" and (
+            hits := [k for k in range(at + 1, len(words)) if words[k].split("=")[0] in FLOCK_BODY]
+        ):
+            _, eq, value = words[hits[0]].partition("=")
+            body = value if eq else (words[hits[0] + 1 : hits[0] + 2] or [""])[0]
+        if body is not None:
+            found.append((R_SHELL_BODY, body))
+    return found
+
+
+def _hidden_reason(command: str) -> str | None:
+    # issue 80, 81: the first env -S or -c body in any segment, refused while a train runs.
+    for words in _shell_words(command):
+        hidden = _hidden_bodies([_clean(w) for w in words if not w.startswith(_REDIRECT)])
+        if hidden:
+            return hidden[0][0]
+    return None
+
+
+def _body_past_cap(command: str, depth: int = 0) -> bool:
+    # issue 81: a body nested past _BODY_DEPTH is never walked, so the call is judged in a train.
+    for words in _shell_words(command):
+        for _, body in _hidden_bodies([_clean(w) for w in words if not w.startswith(_REDIRECT)]):
+            if depth >= _BODY_DEPTH or _body_past_cap(body, depth + 1):
+                return True
+    return False
+
+
+def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
     # issue 30: redirects, write operands, cd targets and git -C name the repos a command acts on.
     segments = _shell_words(command)
     envs = _bash_env(segments)
@@ -1690,6 +1855,11 @@ def _bash_write_dirs(command: str, cwd: str) -> list[str]:
                 acts += [a for a in _write_operands(name, args) if a != "-"]
         found += [t for t in (_anchor(p, cwd) for p in picks) if t]
         found += [t for t in (_anchor(p, base or cwd) for p in acts) if t]
+        if depth < _BODY_DEPTH:
+            # issue 80, 81: a hidden body's own targets name the repo, so a train scopes the call.
+            plain = [texts[i] for i in range(len(words)) if i not in redirects]
+            for _, body in _hidden_bodies(plain):
+                found += _bash_write_dirs(body, base or cwd, depth + 1)
     return found
 
 
@@ -1721,7 +1891,11 @@ def _marked_repo(cwd: str, tool: str, tool_input: dict[str, object]) -> Path | N
 
 def _train_scoped(cwd: str, tool: str, tool_input: dict[str, object]) -> bool:
     # 0035: an unknown repo (no absolute cwd) is judged as if a train runs there.
-    return not os.path.isabs(cwd) or _marked_repo(cwd, tool, tool_input) is not None
+    return (
+        not os.path.isabs(cwd)
+        or _marked_repo(cwd, tool, tool_input) is not None
+        or (tool == "Bash" and _body_past_cap(str(tool_input.get("command") or "")))
+    )
 
 
 def _ours(raw_agent: str) -> bool:
@@ -1758,7 +1932,13 @@ def _unknown_decision(
     if command and (_data_dir_write(command) or _cd_data_dir_git(command)):
         return _block(R_DATA_DIR)
     repo = _marked_repo(cwd, tool, tool_input)
-    if repo is None or (tool == "Bash" and _foreign_read_ok(command, cwd, charter)):
+    # issue 81: a body past the walk's cap may name any repo, so it fails closed.
+    if repo is None and not (command and _body_past_cap(command)):
+        return _allow()
+    hidden = _hidden_reason(command) if command else None
+    if hidden is not None or repo is None:
+        return _block(hidden or R_SHELL_BODY)
+    if tool == "Bash" and _foreign_read_ok(command, cwd, charter):
         return _allow()
     return _block(R_UNKNOWN_TRAIN.format(agent=agent, marker=train_marker(repo), repo=repo))
 
@@ -1894,6 +2074,16 @@ WARN_EXCLUDED = (
     "This command would put a file from a folder the project excludes into git, GitHub or a "
     "file write."
 )
+R_EXCLUDED_ICASE = (
+    "{spec} makes git match paths in any letter case, so it can name a file in an excluded "
+    "root under another spelling (issue 97). Next: spell each path in its exact case, without "
+    ":(icase), the short :i: form, --icase-pathspecs or GIT_ICASE_PATHSPECS."
+)
+# issue 97: the icase spellings an unparsed command may carry.
+_ICASE_TEXT = re.compile(
+    r":\([^)]*\bicase\b|(?:^|[\s'\"=]):[^\s:(]*i[^\s:]*:|--icase-pathspecs|GIT_ICASE_PATHSPECS",
+    re.I,
+)
 WARN_EXCLUDED_FAILED = "The excluded folders could not be resolved, so this command went unchecked."
 _EXCLUDED_GIT = frozenset({"add", "stage", "commit", "update-index", "stash"})
 _STASH_READS = frozenset({"list", "show", "pop", "apply", "drop", "clear", "branch", "create"})
@@ -2010,6 +2200,24 @@ def _whole_tree(sub: str, flags: set[str]) -> tuple[bool, bool]:
     return False, False
 
 
+def _icase_spec(spec: str) -> bool:
+    # issue 97: the long :(icase) magic, or the short : form with i among its flag letters.
+    if spec.startswith(":("):
+        words = spec[2:].split(")", 1)[0].split(",")
+        return any(word.strip().lower() == "icase" for word in words)
+    return spec.startswith(":") and ":" in spec[1:] and "i" in spec[1:].split(":", 1)[0].lower()
+
+
+def _icase_git(segment: list[str], tokens: list[str]) -> str | None:
+    # issue 97: the icase pathspec, global option or environment variable a git call carries.
+    sub, args, globals_ = _git_split(tokens)
+    env = [w for w in segment if w.split("=", 1)[0] == "GIT_ICASE_PATHSPECS" and "=" in w]
+    spellings = env + [g for g in globals_ if g == "--icase-pathspecs"]
+    paths = _git_parts(sub or "", args)[0]
+    spellings += [p for p in paths for c in _candidates(p) if _icase_spec(c)]
+    return spellings[0] if spellings else None
+
+
 def _excluded_git(tokens: list[str], base: str, roots: ExcludedRoots) -> str | None:
     sub, args, globals_ = _git_split(tokens)
     if sub not in _EXCLUDED_GIT or (sub == "stash" and args[:1] and args[0] in _STASH_READS):
@@ -2070,6 +2278,9 @@ def _excluded_text(command: str, cwd: str, roots: ExcludedRoots, writes: bool) -
     # D.5: an unparsed command is judged on its text, the roots named as written or from cwd.
     if not (_EXCLUDED_WORDS.search(command) or (writes and _EXCLUDED_WRITES.search(command))):
         return None
+    icase = _ICASE_TEXT.search(command)
+    if icase and re.search(r"\bgit\b", command) and roots():
+        return R_EXCLUDED_ICASE.format(spec=icase.group(0).strip(" \t'\"="))
     for root in _active_roots(roots(), _work_tree(cwd)):
         rel = os.path.relpath(root.path, cwd)
         names = [root.path] + ([rel] if not rel.startswith("..") and rel != "." else [])
@@ -2091,14 +2302,16 @@ def excluded_root_reason(
         if tokens is None:
             return _excluded_text(command, cwd, roots, writes)
         name = _base(tokens[0]) if tokens else ""
-        if name == "git":
+        icase = _icase_git(segment, tokens) if name == "git" else None
+        reason: str | None = None
+        if icase is not None and roots():
+            reason = R_EXCLUDED_ICASE.format(spec=icase)
+        elif name == "git":
             reason = _excluded_git(tokens, base, roots)
         elif name == "gh" or (name == "tee" and writes):
             reason = _excluded_named(name, tokens[1:], base, roots)
         elif name in _SHELLS or {"git", "gh"} & {_base(t) for t in tokens}:
             reason = _excluded_text(" ".join(tokens), base, roots, writes)
-        else:
-            reason = None
         if reason is not None:
             return reason
     return None

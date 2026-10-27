@@ -285,6 +285,7 @@ def test_start_runs_begin_and_records_the_definition_hash(repo: Path, plugin: Pa
         "github": False,
         "dependency_web_lookup": None,
         "terraform_tools": None,
+        "terraform_validate": False,
     }
     assert state["base_branch"] == "main" and state["output_dir"] is None
     next_line = f"Next: move the train on with daedalus_train.py step --repo {repo}"
@@ -945,6 +946,95 @@ def test_plan_records_path_and_sha256(repo: Path, plugin: Path) -> None:
     assert refused.code == 1 and "changed after it was recorded" in refused.lines[-1]
 
 
+# 0156, 0089: the contract skip check over the recorded plan.
+SKIP_UNIT = "unit: U1 | title: one | files: a.py | base: integration\n"
+SKIP_GRAPH = "graph: units=1 critical_path=1 width=1 overlap_only=\n"
+
+
+def _skip_plan(units: str = SKIP_UNIT, extra: str = "", below: str = "wire: none\n") -> str:
+    return f"# plan\n\n```plan\n{units}{extra}{SKIP_GRAPH}```\n\n{below}"
+
+
+def _contract_run(repo: Path, plugin: Path, text: str) -> train_runner.Outcome:
+    if train_state.active_train(repo) is None:
+        _write_train(plugin, [_probe_stage()], ("repository",))
+        _started(repo, plugin)
+    path = repo / "plan.md"
+    path.write_text(text, encoding="utf-8")
+    assert train_runner.record_plan(repo, path).code == 0
+    return train_runner.contract(repo)
+
+
+def test_contract_skips_a_one_unit_one_file_plan_with_wire_none(repo: Path, plugin: Path) -> None:
+    outcome = _contract_run(repo, plugin, _skip_plan())
+    assert (outcome.code, outcome.lines) == (0, ["contract: skip"])
+    assert _state(repo)["contract_skip"] is True
+    done = _train_cli(repo, "contract", "--repo", str(repo))
+    assert (done.returncode, done.stdout) == (0, "contract: skip\n"), done.stderr
+    # 0156: recording a new plan voids the skip until the check runs again.
+    again = _contract_run(repo, plugin, _skip_plan(below=""))
+    assert again.lines == ["contract: required (no wire: none line)"]
+    assert "contract_skip" not in _state(repo)
+
+
+def test_a_new_plan_is_refused_after_a_no_contract_lock(repo: Path, plugin: Path) -> None:
+    # 0156, 0089: the no-contract lock holds for its one-file plan; a swap needs a new train.
+    assert _contract_run(repo, plugin, _skip_plan()).lines == ["contract: skip"]
+    train = str(_state(repo)["train_id"])
+    train_state.update(repo, train, lock_sha=_integration(repo))
+    plan = _state(repo)["plan"]
+    same = train_runner.record_plan(repo, repo / "plan.md")
+    assert same.code == 0 and _state(repo)["contract_skip"] is True
+    wide = repo / "wide.md"
+    wide.write_text(_skip_plan(SKIP_UNIT.replace("a.py", "a.py, b.py")), encoding="utf-8")
+    refused = train_runner.record_plan(repo, wide)
+    assert refused.code == 1 and "locked with no contract" in refused.lines[0]
+    assert "Next: stop the train" in refused.lines[0]
+    assert _state(repo)["plan"] == plan and _state(repo)["contract_skip"] is True
+    # 0156: a contract-locked train still records a revised plan.
+    train_state.update(repo, train, packet_version=1)
+    assert train_runner.record_plan(repo, wide).code == 0
+    assert _state(repo)["plan"]["path"] == str(wide.resolve())  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        (
+            _skip_plan(SKIP_UNIT + "unit: U2 | title: two | files: b.py | base: integration\n"),
+            "2 units",
+        ),
+        (_skip_plan(SKIP_UNIT.replace("a.py", "a.py, b.py")), "2 files"),
+        (_skip_plan(SKIP_UNIT.replace("a.py", "src/*.py")), "a file glob"),
+        (_skip_plan(extra="pin: U1 -> U2 | the shape\n"), "a pin line"),
+        (_skip_plan(below=""), "no wire: none line"),
+        (_skip_plan(below="```text\nwire: none\n```\n"), "no wire: none line"),
+        ("wire: none\n\n" + _skip_plan(below=""), "no wire: none line"),
+    ],
+    ids=["two-units", "two-files", "glob", "pin", "no-wire", "fenced-wire", "wire-above"],
+)
+def test_contract_is_required_and_records_nothing(
+    repo: Path, plugin: Path, text: str, reason: str
+) -> None:
+    outcome = _contract_run(repo, plugin, text)
+    assert (outcome.code, outcome.lines) == (0, [f"contract: required ({reason})"])
+    assert "contract_skip" not in _state(repo)
+
+
+def test_contract_stops_on_no_plan_a_changed_plan_or_a_defect(repo: Path, plugin: Path) -> None:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    none = train_runner.contract(repo)
+    assert none.code == 1 and "records no plan. Next: record the plan" in none.lines[0]
+    changed = _contract_run(repo, plugin, _skip_plan())
+    (repo / "plan.md").write_text(_skip_plan() + "x\n", encoding="utf-8")
+    assert changed.code == 0
+    edited = train_runner.contract(repo)
+    assert edited.code == 1 and "changed after it was recorded" in edited.lines[0]
+    broken = _contract_run(repo, plugin, _skip_plan(extra="pin: nonsense\n"))
+    assert broken.code == 1 and "defect(s)" in broken.lines[0] and "Next: fix" in broken.lines[0]
+
+
 def test_check_reply_records_an_approved_verdict_with_the_tip(repo: Path, plugin: Path) -> None:
     # 0089: the verdict binds the integration branch tip at check-reply time.
     _write_train(plugin, [_probe_stage(), _audit_stage()], ("repository",))
@@ -1464,6 +1554,92 @@ def _audit_train(repo: Path, plugin: Path) -> str:
     _started(repo, plugin)
     _marked(repo)
     return _integration(repo)
+
+
+def test_an_ask_route_names_the_three_gate_labels(repo: Path, plugin: Path) -> None:
+    # 0149: the ask route's Next line carries the plain gate labels, not the old choice prose.
+    stage = _probe_stage(1)
+    stage["on_fail"] = {"stopped": "ask: Retry the probe?"}
+    _write_train(plugin, [stage], ("repository",))
+    _started(repo, plugin)
+    outcome = _step(repo, plugin)
+    assert outcome.code == 0, outcome.lines
+    assert outcome.lines[-1] == (
+        "Next: put the question to the operator with the choices `Fix it now`, "
+        "`Skip, track or exempt it` and `Stop the train`; run step to retry the stage, "
+        "or stop on `Stop the train`."
+    )
+    assert "end the train" not in "\n".join(outcome.lines)
+
+
+def _docs_branch(repo: Path) -> tuple[str, str, str]:
+    # 0131: a verified docs worktree whose branch head is merged into the integration tip.
+    from tests.test_docs_stage import _docs_unit, _verifier_says
+
+    base = _integration(repo)
+    worktree = _docs_unit(repo)
+    branch = f"daedalus-unit/{_state(repo)['train_id']}{train_state.DOCS_SUFFIX}"
+    (repo / "README.md").write_text("docs\n")
+    _git(repo, "commit", "-q", "-am", "docs")
+    head = _integration(repo)
+    _git(repo, "branch", "-f", branch, head)
+    _verifier_says(repo, worktree, "[VERDICT: VERIFIED] claims=1")
+    return base, head, branch
+
+
+def test_docs_verdict_records_the_judged_docs_tip(repo: Path, plugin: Path) -> None:
+    # 0131: --judged is the docs branch head merged into the tip, recorded beside tip.
+    _audit_train(repo, plugin)
+    base, head, branch = _docs_branch(repo)
+    bad = train_runner.record_docs_verdict(repo, "verified", judged="HEAD")
+    assert bad.code == 1 and "is not a 40 lowercase hex commit sha. Next:" in bad.lines[0]
+    other = train_runner.record_docs_verdict(repo, "verified", judged=base)
+    assert (
+        other.code == 1
+        and (
+            f"the merged docs commits end at {head[:12]}, not at the judged docs tip {base[:12]}. "
+            "Next:"
+        )
+        in other.lines[0]
+    )
+    _git(repo, "switch", "-q", "-c", "side")
+    (repo / "README.md").write_text("side\n")
+    _git(repo, "commit", "-q", "-am", "side")
+    side = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "switch", "-q", "main")
+    _git(repo, "branch", "-f", branch, side)
+    unmerged = train_runner.record_docs_verdict(repo, "verified", judged=side)
+    assert unmerged.code == 1 and "is not merged into the integration tip" in unmerged.lines[0]
+    assert "docs_verdict" not in _state(repo)
+    refuted = train_runner.record_docs_verdict(repo, "refuted", judged=head)
+    assert refuted.code == 1 and "verified docs verdict only. Next:" in refuted.lines[0]
+    _git(repo, "branch", "-f", branch, head)
+    done = train_runner.record_docs_verdict(repo, "verified", judged=head)
+    assert done.lines == [f"docs verdict recorded status=verified tip={head[:12]}"]
+    assert _state(repo)["docs_verdict"] == {"status": "verified", "tip": head, "judged": head}
+
+
+def test_the_docs_verdict_command_requires_judged_on_verified(repo: Path, plugin: Path) -> None:
+    # 0131: the command line refuses a verified docs verdict with no --judged, and --judged
+    # on the security gate.
+    _audit_train(repo, plugin)
+    _, head, _ = _docs_branch(repo)
+    gate = ("verdict", "--repo", str(repo), "--gate", "docs", "--status", "verified")
+    missing = _train_cli(repo, *gate)
+    assert missing.returncode == 1 and "requires --judged" in missing.stdout
+    assert "Next:" in missing.stdout and "docs_verdict" not in _state(repo)
+    stray = _train_cli(
+        repo, "verdict", "--repo", str(repo), "--status", "approved", "--judged", head
+    )
+    assert stray.returncode == 1 and "belongs to --gate docs only. Next:" in stray.stdout
+    refuted = ("verdict", "--repo", str(repo), "--gate", "docs", "--status", "refuted")
+    widened = _train_cli(repo, *refuted, "--judged", head)
+    assert widened.returncode == 1
+    assert "belongs to --gate docs --status verified only. Next:" in widened.stdout
+    assert "docs_verdict" not in _state(repo)
+    done = _train_cli(repo, *gate, "--judged", head)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert train_state.record(_state(repo), train_state.DOCS_VERDICT)["judged"] == head
 
 
 def test_verdict_derives_the_round_from_audit_rounds(repo: Path, plugin: Path) -> None:

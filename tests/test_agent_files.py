@@ -170,6 +170,15 @@ OUTSIDE_FORM = {
     "expanded root": "python3 /plugin/scripts/checks/tool_bound.py",
     "dot dot in path": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/../lib/jail.py",
     "dot dot in flag": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --name a..b",
+    "dot dot leads sub": (
+        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --sub ../x/spec.md"
+    ),
+    "dot dot inside sub": (
+        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --sub b-*/../spec.md"
+    ),
+    "slash leads flag": (
+        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/root_writes.py --sub /x/spec.md"
+    ),
     "semicolon": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/tool_bound.py; rm x",
     "pipe": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/tool_bound.py | cat",
     "and chain": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/tool_bound.py && id",
@@ -205,6 +214,15 @@ def test_parser_reads_flags_in_the_checks_form(tmp_path: Path) -> None:
     quoted = [*HEAD, *BLOCK[:3], ENTRY % "root_writes.py --name 'plan*.md'", *BODY]
     with pytest.raises(AgentFileError, match="Next: "):
         agent_files.load(_write(tmp_path, quoted))
+
+
+def test_parser_reads_the_planner_sub_flag(tmp_path: Path) -> None:
+    # 0152: the planner hook line of pin B1 -> B2; a --sub value carries one `/`.
+    flags = "root_writes.py --touch scratch --name plan*.md --sub brainstorm-*/spec.md"
+    agent = agent_files.load(_write(tmp_path, [*HEAD, *BLOCK[:3], ENTRY % flags, *BODY]))
+    want = ("--touch", "scratch", "--name", "plan*.md", "--sub", "brainstorm-*/spec.md")
+    assert agent.hooks == (Hook("root_writes", want),)
+    assert agent_files.load(AGENTS / "planner.md").hooks[-1] == Hook("root_writes", want)
 
 
 @pytest.mark.parametrize("name", sorted(p.stem for p in AGENTS.glob("*.md")))

@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from lib import audit_rounds, git, manifest, train_definition, train_state, workspace
+from lib import audit_rounds, git, manifest, plan_record, train_definition, train_state, workspace
 from lib.audit import ReplyKeyError, message_hmac, reply_key
 from lib.audit_proof import (
     AUDITOR,
@@ -413,8 +413,10 @@ def _route(session: Session, stage: dict[str, object], label: str, route: str) -
         session.lines += [
             f"stage {sid}: {label}.",
             f"Ask the operator: {route.removeprefix('ask: ')}",
-            "Next: put the question to the operator, then run step to retry the stage "
-            "or stop to end the train.",
+            # 0149: the gate labels the operator picks from, verbatim.
+            "Next: put the question to the operator with the choices `Fix it now`, "
+            "`Skip, track or exempt it` and `Stop the train`; run step to retry the stage, "
+            "or stop on `Stop the train`.",
         ]
         return Outcome(EXIT_OK, session.lines)
     consult = _CONSULT.fullmatch(route)
@@ -1279,10 +1281,84 @@ def record_plan(cwd: Path, path: Path) -> Outcome:
                 f"cannot read the plan {target} ({exc}). "
                 "Next: make the plan file readable, then rerun plan."
             ) from exc
-        train_state.update(
-            repo, train_id, **{train_state.PLAN: {"path": str(target), "sha256": sha}}
-        )
+
+        def change(state: dict[str, object]) -> None:
+            record = {"path": str(target), "sha256": sha}
+            if state.get(train_state.PLAN) == record:
+                return
+            # 0156, 0089: a no-contract lock holds only for the one-file plan it was taken on.
+            if state.get("lock_sha") and state.get("packet_version") is None:
+                raise RunnerError(
+                    f"train {train_id} locked with no contract on its one-file plan, so a new "
+                    "plan is refused. Next: stop the train with daedalus_train.py stop, then "
+                    "start a new train with the new plan."
+                )
+            state[train_state.PLAN] = record
+            # 0156: a new plan voids an earlier skip; the contract subcommand judges it again.
+            state.pop(train_state.CONTRACT_SKIP, None)
+
+        train_state.change(repo, train_id, change)
         return [f"plan: {target} sha256={sha}"]
+
+    return _recorded(cwd, edit)
+
+
+WIRE_NONE = "wire: none"
+_CONTRACT_RERUN = "record the plan with daedalus_train.py plan --path, then rerun contract"
+
+
+def _wire_none(text: str) -> bool:
+    # agents/planner.md: the `wire: none` line sits below the plan block, outside any fence.
+    fenced, plan_open, after = False, False, False
+    for line in (raw.strip() for raw in text.splitlines()):
+        if line.startswith("```"):
+            if fenced:
+                after = after or plan_open
+                fenced, plan_open = False, False
+            else:
+                fenced, plan_open = True, line == "```plan"
+        elif after and not fenced and line == WIRE_NONE:
+            return True
+    return False
+
+
+def _contract_reason(plan: plan_record.Plan, text: str) -> str | None:
+    # 0089, 0156: the first failed test of the one-file rule, or None when the contract skips.
+    if len(plan.units) != 1:
+        return f"{len(plan.units)} units"
+    files = plan.units[0].files
+    if len(files) != 1:
+        return f"{len(files)} files"
+    if any(c in files[0] for c in "*?[") or files[0].endswith("/"):
+        return "a file glob"
+    if plan.pins:
+        return "a pin line"
+    return None if _wire_none(text) else f"no {WIRE_NONE} line"
+
+
+def contract(cwd: Path) -> Outcome:
+    # 0156: a one-unit, one-file plan with no pin line and `wire: none` starts no contract-spec.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        state = train_state.load(repo, train_id)
+        before = _plan_text(state, True)
+        if before is None:
+            raise RunnerError(f"train {train_id} records no plan. Next: {_CONTRACT_RERUN}.")
+        path = Path(_text(_obj(state, train_state.PLAN), "path"))
+        try:
+            plan = plan_record.load(path)
+        except plan_record.PlanError as exc:
+            raise RunnerError(f"{exc} Next: {_CONTRACT_RERUN}.") from exc
+        text = _plan_text(state, True) or ""
+        if plan.defects:
+            raise RunnerError(
+                f"the plan {path} has {len(plan.defects)} defect(s): {' '.join(plan.defects)} "
+                f"Next: fix the plan, then {_CONTRACT_RERUN}."
+            )
+        reason = _contract_reason(plan, text)
+        if reason is not None:
+            return [f"contract: required ({reason})"]
+        train_state.update(repo, train_id, **{train_state.CONTRACT_SKIP: True})
+        return ["contract: skip"]
 
     return _recorded(cwd, edit)
 
@@ -1768,8 +1844,7 @@ def _docs_claims(
     return {f.key: {"severity": f.severity, "class": f.kind} for f in listed.values()}
 
 
-def _docs_verified(repo: Path, train_id: str, state: dict[str, object]) -> None:
-    # 0121, 0131: a verified docs verdict is read from the verifier's reply, never typed.
+def _docs_unit(train_id: str, state: dict[str, object]) -> dict[str, object]:
     name = f"{train_id}{train_state.DOCS_SUFFIX}"
     unit = next((u for u in train_state.units(state) if u.get("name") == name), None)
     if unit is None:
@@ -1777,6 +1852,39 @@ def _docs_verified(repo: Path, train_id: str, state: dict[str, object]) -> None:
             f"train {train_id} records no docs worktree {name}. "
             "Next: run the documentation stage, then rerun verdict --gate docs."
         )
+    return unit
+
+
+def _docs_judged(
+    repo: Path, train_id: str, state: dict[str, object], judged: str, current: str
+) -> None:
+    # 0131: the Docs tip the verifier judged is the docs branch head, merged into the tip.
+    rerun = "rerun verdict --gate docs with --judged set to the Docs tip: sha the verifier judged"
+    if not TIP.fullmatch(judged):
+        raise RunnerError(
+            f"--judged {judged!r} is not a 40 lowercase hex commit sha. Next: {rerun}."
+        )
+    branch = _text(_docs_unit(train_id, state), "branch")
+    try:
+        head = workspace._out(repo, "rev-parse", "--verify", f"refs/heads/{branch}").strip()
+    except workspace.WorkspaceError as exc:
+        raise RunnerError(f"the docs branch {branch} has no readable head: {exc}") from exc
+    if workspace._run(repo, "merge-base", "--is-ancestor", head, current).returncode:
+        raise RunnerError(
+            f"the docs branch head {head[:12]} is not merged into the integration tip "
+            f"{current[:12]}. Next: merge the docs branch with daedalus_workspace.py finish, "
+            f"then {rerun}."
+        )
+    if judged != head:
+        raise RunnerError(
+            f"the merged docs commits end at {head[:12]}, not at the judged docs tip "
+            f"{judged[:12]}. Next: send the docs branch to the verifier again, then {rerun}."
+        )
+
+
+def _docs_verified(repo: Path, train_id: str, state: dict[str, object]) -> None:
+    # 0121, 0131: a verified docs verdict is read from the verifier's reply, never typed.
+    unit = _docs_unit(train_id, state)
     try:
         verified = workspace.unit_verified(
             workspace._audit_records(repo, state), Path(_text(unit, "path"))
@@ -1792,7 +1900,11 @@ def _docs_verified(repo: Path, train_id: str, state: dict[str, object]) -> None:
 
 
 def record_docs_verdict(
-    cwd: Path, status: str, tip: str | None = None, findings: Path | None = None
+    cwd: Path,
+    status: str,
+    tip: str | None = None,
+    findings: Path | None = None,
+    judged: str | None = None,
 ) -> Outcome:
     # 0131, 0134: the docs verifier's verdict on the integration tip, beside the security verdict.
     def edit(repo: Path, train_id: str) -> list[str]:
@@ -1801,6 +1913,11 @@ def record_docs_verdict(
                 f"docs verdict status {status!r} is neither verified nor refuted. "
                 "Next: rerun verdict --gate docs with the status the verifier's line names."
             )
+        if judged is not None and status != train_state.VERIFIED:
+            raise RunnerError(
+                "--judged belongs to a verified docs verdict only. "
+                "Next: rerun verdict --gate docs without --judged."
+            )
         current = _integration_tip(repo, train_id)
         if tip is not None and tip != current:
             raise RunnerError(
@@ -1808,9 +1925,14 @@ def record_docs_verdict(
                 "with daedalus_workspace.py finish, then rerun verdict --gate docs with no --tip."
             )
         claims = _docs_claims(repo, train_id, status, findings)
+        state = train_state.load(repo, train_id)
         if status == train_state.VERIFIED:
-            _docs_verified(repo, train_id, train_state.load(repo, train_id))
+            _docs_verified(repo, train_id, state)
+        if judged is not None:
+            _docs_judged(repo, train_id, state, judged, current)
         record: dict[str, object] = {"status": status, "tip": current}
+        if judged is not None:
+            record["judged"] = judged
         if claims:
             record["findings"] = claims
         train_state.update(repo, train_id, **{train_state.DOCS_VERDICT: record})

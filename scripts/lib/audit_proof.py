@@ -59,9 +59,11 @@ R_GRADED_NOT_RECORDED = (
     "Next: rerun the audit round."
 )
 R_BOTH_VERDICTS = "auditor reply at seq {seq} carries both verdicts. Next: rerun the audit round."
+# 0149: the gate labels the operator picks from, verbatim.
 UNEXEMPTED_NEXT = (
-    "Next: put each finding to the operator through the per-finding step of the Build Train, "
-    "then record each exemption with daedalus_train.py exception, or run a fix round."
+    "Next: put each finding to the operator through the per-finding step of the Build Train "
+    "with the choices `Fix it now`, `Skip, track or exempt it` and `Stop the train`, then record "
+    "each exemption with daedalus_train.py exception."
 )
 
 
@@ -364,12 +366,8 @@ def tip_problem(repo: Path, judged: object, current: str) -> str | None:
     parents = (_git(repo, "rev-list", "--parents", "-n", "1", current) or "").split()
     if parents[1:] != [judged]:
         return f"{moved}, and the tip is not one plain commit on top of it"
-    changed = (
-        _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", judged, current) or ""
-    ).split("\0")
-    ledger = _ledger_rel(repo)
-    if ledger is None or [path for path in changed if path] != [ledger]:
-        return f"{moved} with a commit that changes more than the ledger"
+    if not _ledger_only(_raw(repo, judged, current), _ledger_rel(repo)):
+        return f"{moved} with a commit that changes more than the ledger, or its file mode"
     return None
 
 
@@ -565,12 +563,15 @@ def docs_findings_path(repo: Path, train_id: str) -> Path:
 def _exempt(entry: object, judged: str) -> bool:
     if not isinstance(entry, dict):
         return False
-    ledger_id = entry.get("ledger_id")
+    ledger_id, tracking, other = entry.get("ledger_id"), entry.get("tracking"), entry.get("other")
+    # 0139: `other` holds the operator's own words, as the exception recorder requires.
+    worded = tracking != "other" or (isinstance(other, str) and bool(other.strip()))
     return (
         isinstance(ledger_id, str)
         and bool(ledger_id)
         and entry.get("tip") == judged
-        and entry.get("tracking") in train_state.TRACKING
+        and tracking in train_state.TRACKING
+        and worded
     )
 
 
@@ -639,11 +640,23 @@ def _raw(repo: Path, parent: str, commit: str) -> list[tuple[str, str, str]] | N
     return entries
 
 
+def _regular(entries: list[tuple[str, str, str]]) -> bool:
+    # 0131: each changed path is a regular non-executable file before and after.
+    return all(new == DOC_MODE and old in (DOC_MODE, NO_MODE) for old, new, _ in entries)
+
+
 def _docs_only(entries: list[tuple[str, str, str]]) -> bool:
     # 0131: only the four docs, each a regular non-executable file before and after.
-    return all(
-        path in PUBLIC_DOCS and new == DOC_MODE and old in (DOC_MODE, NO_MODE)
-        for old, new, path in entries
+    return _regular(entries) and all(path in PUBLIC_DOCS for _, _, path in entries)
+
+
+def _ledger_only(entries: list[tuple[str, str, str]] | None, ledger: str | None) -> bool:
+    # 59: only the declared ledger changes, and it passes the _docs_only mode test.
+    return (
+        bool(entries)
+        and ledger is not None
+        and {path for _, _, path in entries or ()} == {ledger}
+        and _regular(entries or [])
     )
 
 
@@ -652,8 +665,7 @@ def ledger_parent(repo: Path, commit: str) -> str | None:
     ledger, parents = _ledger_rel(repo), _parents(repo, commit)
     if ledger is None or len(parents) != 1:
         return None
-    entries = _raw(repo, parents[0], commit)
-    return parents[0] if entries and {path for _, _, path in entries} == {ledger} else None
+    return parents[0] if _ledger_only(_raw(repo, parents[0], commit), ledger) else None
 
 
 def _docs_end(repo: Path, judged: str, current: str) -> str:
@@ -674,7 +686,7 @@ def _docs_moves(repo: Path, judged: str, end: str) -> str | None:
         paths = {path for _, _, path in entries or ()}
         if entries is not None and _docs_only(entries):
             continue
-        if entries is not None and parents == [judged] and ledger and paths == {ledger}:
+        if parents == [judged] and _ledger_only(entries, ledger):
             continue
         if entries is not None and paths <= set(PUBLIC_DOCS):
             return (

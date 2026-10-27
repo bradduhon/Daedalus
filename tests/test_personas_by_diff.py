@@ -60,6 +60,7 @@ def test_persona_switches_follow_github_in_the_feature_list() -> None:
     assert FEATURE_KEYS[FEATURE_KEYS.index("github") + 1 :] == (
         "dependency_web_lookup",
         "terraform_tools",
+        "terraform_validate",
     )
     assert Features().dependency_web_lookup is None and Features().terraform_tools is None
 
@@ -316,7 +317,7 @@ def test_judge_lists_join_the_compliance_section(tmp_path: Path) -> None:
     log = SessionLog("sess-a", tmp_path / "sess-a.jsonl", records)
     text = render(REPO, TRAIN, STATE, [log], parse_notes(NOTES, "notes"), False, None)
     assert _section(text, "Compliance") == [
-        "- nist-specialist: AU-9 PASS, AU-3 PASS",
+        "- framework-specialist: AU-9 PASS, AU-3 PASS",
         "- dependency-auditor: DEP-1 PASS, DEP-5 PASS",
         "- terraform-reviewer: TF-0 WARN, TF-3 PASS",
     ]

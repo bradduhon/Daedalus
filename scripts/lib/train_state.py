@@ -28,6 +28,8 @@ PLAN, CHOICES, VERDICT, EXEMPTIONS, PHASE, WEIGHT = (
     "weight",
 )
 APPROVED, REJECTED = "approved", "rejected"
+# 0156: true once the contract subcommand found a one-file plan; lock --no-contract needs it.
+CONTRACT_SKIP = "contract_skip"
 # 0131, 0134: the docs verifier's record {status, tip[, findings, exemptions]}, apart from VERDICT.
 DOCS_VERDICT, VERIFIED, REFUTED = "docs_verdict", "verified", "refuted"
 # 0134: the docs writer's worktree is the unit <train-id>-docstage; no plan unit slug ends so.

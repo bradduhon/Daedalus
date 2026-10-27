@@ -1,0 +1,8 @@
+{
+  "id": "aws-default",
+  "version": "1.0.0",
+  "source": "daedalus",
+  "license": "GPL-3.0-or-later",
+  "pinned_on": "2026-10-26",
+  "sha256": "d7c3f73824d259d313ac8920b49007897185bd3d5d8cebbd837f20e73d2e82ab"
+}

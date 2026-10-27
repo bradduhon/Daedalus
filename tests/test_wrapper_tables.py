@@ -93,8 +93,9 @@ def test_wrapper_table_is_a_superset_of_the_shell_table() -> None:
 
 def test_stdbuf_has_its_row_and_worker_wrappers_are_unchanged() -> None:
     assert {"-i", "-o", "-e", "--input", "--output", "--error"} <= shell.WRAPPER_OPTS["stdbuf"][1]
-    # pin U2 -> E6: the kernel wrapper's row is the one addition since a83accf.
-    assert shell.WORKER_WRAPPERS == OLD_WORKER_WRAPPERS | {shell.CONFINE}
+    # pin U2 -> E6, issue 82: the kernel wrapper's row and the runner wrapper rows since a83accf.
+    runners = {"setsid", "chroot", "ionice", "taskset", "flock", "unshare", "chrt", "nsenter"}
+    assert shell.WORKER_WRAPPERS == OLD_WORKER_WRAPPERS | {shell.CONFINE} | runners
     assert shell.WRAPPER_OPTS.keys() <= shell.WORKER_WRAPPERS
     assert shell.WRAPPER_OPTS[shell.CONFINE] == (frozenset({"--"}), frozenset({"--unit"}))
 

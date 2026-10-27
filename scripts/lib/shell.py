@@ -82,6 +82,11 @@ SHELL_STATE_CMDS = frozenset(
     {"hash", "alias", "unalias", "unset", "shopt", "enable", "setopt", "unsetopt"}
     | {"trap", "getopts"}
 )
+# prepush2-2026-10-27: archive and multi-call tools write targets the jail does not model.
+ARCHIVE_CMDS = frozenset(
+    {"tar", "bsdtar", "gtar", "unzip", "zip", "busybox", "toybox", "cpio", "pax", "ar"}
+    | {"7z", "7za", "7zr", "7zz"}
+)
 # issue 76: the one wrapper table, (no-argument options, one-argument options) per base name.
 # An option off its row makes strip_wrappers return None, so callers fail closed.
 WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
@@ -90,6 +95,7 @@ WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         frozenset({"-u", "-g", "-h", "-p", "-C", "-U", "-D", "-r", "-t", "--chdir"}),
     ),
     "doas": (frozenset({"-n", "-s"}), frozenset({"-u", "-C"})),
+    # issue 80: -S and --split-string stay off this row; env_split_values finds them to refuse.
     "env": (
         frozenset({"-i", "--ignore-environment", "-0", "--null", "-"}),
         frozenset({"-u", "--unset", "-C", "--chdir"}),
@@ -114,7 +120,48 @@ WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     ),
     # 0048, pin U2 -> E6: the kernel wrapper, daedalus_confine.py --unit <worktree> -- <command>.
     "daedalus_confine.py": (frozenset({"--"}), frozenset({"--unit"})),
+    # issue 82: runner wrappers; --root and --wd stay off unshare and nsenter so they fail closed.
+    "setsid": (frozenset({"-c", "--ctty", "-f", "--fork", "-w", "--wait"}), frozenset()),
+    "chroot": (frozenset({"--skip-chdir"}), frozenset({"--groups", "--userspec"})),
+    "ionice": (
+        frozenset({"-t", "--ignore"}),
+        frozenset({"-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid"})
+        | frozenset({"-u", "--uid"}),
+    ),
+    "taskset": (frozenset({"-a", "--all-tasks", "-p", "--pid", "-c", "--cpu-list"}), frozenset()),
+    "flock": (
+        frozenset({"-s", "--shared", "-x", "-e", "--exclusive", "-u", "--unlock", "-n", "--nb"})
+        | frozenset({"--nonblock", "-o", "--close", "-F", "--no-fork", "--verbose"}),
+        frozenset({"-w", "--wait", "--timeout", "-E", "--conflict-exit-code"}),
+    ),
+    "unshare": (
+        frozenset({"-f", "--fork", "-m", "--mount", "-u", "--uts", "-i", "--ipc", "-n", "--net"})
+        | frozenset({"-p", "--pid", "-U", "--user", "-C", "--cgroup", "-T", "--time"})
+        | frozenset({"-r", "--map-root-user", "-c", "--map-current-user", "--map-auto"})
+        | frozenset({"--mount-proc", "--kill-child", "--keep-caps"}),
+        frozenset({"-S", "--setuid", "-G", "--setgid", "-l", "--load-interp", "--propagation"})
+        | frozenset({"--setgroups", "--map-user", "--map-group", "--map-users", "--map-groups"})
+        | frozenset({"--monotonic", "--boottime"}),
+    ),
+    "chrt": (
+        frozenset({"-a", "--all-tasks", "-b", "--batch", "-d", "--deadline", "-f", "--fifo"})
+        | frozenset({"-i", "--idle", "-o", "--other", "-r", "--rr", "-R", "--reset-on-fork"})
+        | frozenset({"-m", "--max", "-p", "--pid", "-v", "--verbose"}),
+        frozenset({"-T", "--sched-runtime", "-P", "--sched-period", "-D", "--sched-deadline"}),
+    ),
+    "nsenter": (
+        frozenset({"-a", "--all", "-m", "--mount", "-u", "--uts", "-i", "--ipc", "-n", "--net"})
+        | frozenset({"-p", "--pid", "-C", "--cgroup", "-U", "--user", "-T", "--time"})
+        | frozenset({"--preserve-credentials", "-e", "--env", "-F", "--no-fork"})
+        | frozenset({"-Z", "--follow-context", "-c", "--join-cgroup", "--user-parent"}),
+        frozenset({"-t", "--target", "-S", "--setuid", "-G", "--setgid"}),
+    ),
 }
+# issue 80: env -S and --split-string pack a whole command into one word.
+R_ENV_SPLIT = (
+    "env -S and --split-string pack a whole command into one word, so the jail cannot see what "
+    "it runs or writes (issue 80). Next: write the command without env -S, one word per argument."
+)
 CONFINE = "daedalus_confine.py"
 # issue 76: options that move the working folder before the wrapped command runs.
 WRAPPER_CHDIR = frozenset({("env", "-C"), ("env", "--chdir"), ("sudo", "-D"), ("sudo", "--chdir")})
@@ -122,6 +169,16 @@ WRAPPER_CHDIR = frozenset({("env", "-C"), ("env", "--chdir"), ("sudo", "-D"), ("
 WRAPPER_WRITES = frozenset({("time", "-o"), ("time", "--output")})
 # issue 76: the one duration regex, timeout's first operand.
 DURATION: re.Pattern[str] = re.compile(r"[\d.]+[smhd]?")
+# issue 82: the operand a wrapper reads before its command; None never matches (chroot re-roots).
+WRAPPER_OPERAND: dict[str, re.Pattern[str] | None] = {
+    "timeout": DURATION,
+    "taskset": re.compile(r"[0-9a-fA-FxX,:-]+"),
+    "chrt": re.compile(r"\d+"),
+    "flock": re.compile(r"[^-].*"),
+    "chroot": None,
+}
+# issue 82: flock runs a shell body after its file operand; the jail never walks one.
+FLOCK_BODY = frozenset({"-c", "--command"})
 # 8.5 ruling A: first tokens a worker may never run, bar the allowlisted test runner forms.
 WORKER_WRAPPERS = frozenset(WRAPPER_OPTS) | frozenset(
     {"eval", "source", ".", "sh", "bash", "zsh", "dash", "ksh", "python", "python3"}
@@ -252,6 +309,11 @@ R_CLAUDE_PATH = (
 R_UNTRUSTED_PATH = (
     "a command given as a path runs only from the system bin folders, a unit worktree or the "
     "manifest's declared commands (issue 55). Next: run the tool by name or from your worktree."
+)
+R_ARCHIVE = (
+    "archive and multi-call tools (tar, zip, unzip, cpio, 7z, ar, busybox and kin) write paths "
+    "the jail cannot judge, so workers never run them (prepush2-2026-10-27). Next: copy or "
+    "write each file by name with an allowed command."
 )
 CONFINE_PATH = os.path.join(_REPO_SCRIPTS, CONFINE)
 CONFINE_NEXT = (
@@ -917,13 +979,49 @@ def _strip_wrappers(
             else:
                 return None
             i += 1
-        if name == "timeout":
-            # issue 76: a first operand that is not a duration leaves the command unknown.
-            if i >= len(tokens) or not DURATION.fullmatch(tokens[i]):
+        if name in WRAPPER_OPERAND:
+            # issue 76, 82: an operand off its pattern leaves the command unknown.
+            operand = WRAPPER_OPERAND[name]
+            if i >= len(tokens) or operand is None or not operand.fullmatch(tokens[i]):
                 return None
             i += 1
+            if name == "flock" and tokens[i : i + 1] and tokens[i].split("=")[0] in FLOCK_BODY:
+                return None
         tokens = tokens[i:]
     return tokens
+
+
+def env_split_values(tokens: list[str]) -> list[str]:
+    # issue 80: the value of each env -S or --split-string, in clusters and long prefixes too.
+    return [
+        v
+        for at, word in enumerate(tokens)
+        if _base(word) == "env"
+        for v in _env_split(tokens[at + 1 :])
+    ]
+
+
+def _env_split(args: list[str]) -> list[str]:
+    # issue 80: getopt order; an unknown letter or option is read past, so -S behind it is found.
+    with_arg = WRAPPER_OPTS["env"][1]
+    i = 0
+    while i < len(args) and args[i].startswith("-") and args[i] not in {"-", "--"}:
+        token = args[i]
+        later = args[i + 1 : i + 2] or [""]
+        if token.startswith("--"):
+            key, eq, value = token.partition("=")
+            if "--split-string".startswith(key):
+                return [value if eq else later[0]]
+            i += 2 if not eq and _long_option(key, with_arg) in with_arg else 1
+            continue
+        for cut, letter in enumerate(token[1:], start=2):
+            if letter == "S":
+                return [token[cut:] or later[0]]
+            if "-" + letter in with_arg:
+                i += 0 if token[cut:] else 1
+                break
+        i += 1
+    return []
 
 
 def _inline_code(tokens: list[str], letters: str, longs: frozenset[str]) -> str | None:
@@ -985,6 +1083,9 @@ def _segment_reason(segment: list[str], depth: int, main: bool) -> str | None:
         rest = segment[[_base(t) for t in segment].index("xargs") + 1 :]
         if any(_base(t) == "git" for t in rest) and {"push", "commit", "tag", "clean"} & set(rest):
             return R_XARGS
+    if not main and env_split_values(segment):
+        # issue 80: workers only, main stays exempt from construct limits; a tripwire names itself.
+        return _regex_tripwire(" ".join(segment)) or R_ENV_SPLIT
     assigns: list[str] = []
     tokens = _strip_wrappers(segment, assigns)
     if tokens is None:
@@ -1257,6 +1358,19 @@ def docs_read_ok(tokens: list[str], raw: str, roots: list[str], cwd: str, base: 
 
 # B2 narrowed by audit finding (c), Build Train 20261019-124612: -m runs these modules only.
 RUNNER_MODULES = frozenset({"pytest", "mypy", "ruff", "unittest", "coverage"})
+# 0048, issue 91: runners the confine check wraps, each with the leading arguments it needs.
+# Kept apart from WRAPPER_OPTS (pin H1 -> H2); none is a WORKER_WRAPPERS name, so no grant widens.
+TEST_RUNNERS: dict[str, tuple[str, ...]] = {
+    "pytest": (),
+    "make": (),
+    "tox": (),
+    "nox": (),
+    "just": (),
+    "npx": (),
+    "uv": ("run",),
+    "go": ("test",),
+    "cargo": ("test",),
+}
 
 
 def python_script(tokens: list[str]) -> str | None:
@@ -1285,14 +1399,16 @@ def _tester_runner_ok(
     args = tokens[1:]
     if any(arg.startswith("--basetemp") for arg in args):
         return False
-    if name == "pytest":
-        return True
+    if name in TEST_RUNNERS:
+        # issue 91: an option before the lead word (cargo +nightly test) fails closed as a test.
+        lead = TEST_RUNNERS[name]
+        if lead and args and args[0][:1] in {"-", "+"}:
+            return True
+        return tuple(args[: len(lead)]) == lead
     if name == "npm":
         return bool(args) and (
             args[0] in {"test", "t"} or (args[0] in {"run", "run-script"} and len(args) > 1)
         )
-    if name == "uv":
-        return args[:2] == ["run", "pytest"]
     if name in {"python", "python3"}:
         # B2, finding (c): a runner module, or a script own_script places in the coder's worktree.
         if args[:1] == ["-m"]:
@@ -1301,8 +1417,6 @@ def _tester_runner_ok(
         return script is not None and own_script is not None and own_script(script)
     if name == "node":
         return bool(args) and not args[0].startswith("-")
-    if name in {"go", "cargo"}:
-        return args[:1] == ["test"]
     return False
 
 
@@ -1369,6 +1483,43 @@ def _unsingled(word: str) -> str:
     return "".join(
         lex.text for lex in quote_walk(word) if lex.quote != "'" and lex.kind not in {OPEN, CLOSE}
     )
+
+
+def _unquoted(word: str) -> str:
+    return "".join(
+        lex.text[1:] if lex.kind == ESCAPE else lex.text
+        for lex in quote_walk(word)
+        if lex.kind not in {OPEN, CLOSE}
+    )
+
+
+def opaque_word(word: str) -> bool:
+    # prepush2-2026-10-27: bash rewrites the word ($'-uu', $X, {-u,}, a leading glob) unseen.
+    if set("$`") & set(_unsingled(word)):
+        return True
+    bare = [lex for lex in quote_walk(word) if lex.kind == CHAR and not lex.quote]
+    if any(lex.text in "{}" for lex in bare):
+        return True
+    if not any(lex.text in _GLOB_CHARS for lex in bare):
+        return False
+    # prepush2-2026-10-27: a glob can expand to a planted file named like a flag.
+    lead = next((lex for lex in quote_walk(word) if lex.kind not in {OPEN, CLOSE}), None)
+    leading = lead is not None and lead in bare and lead.text in _GLOB_CHARS
+    return _unquoted(word).startswith("-") or leading
+
+
+SEARCH_CMDS = frozenset({"rg", "grep", "egrep", "fgrep"})
+
+
+def search_opaque(command: str) -> bool:
+    # prepush2-2026-10-27: a search segment holding a word bash rewrites may hide a reach flag.
+    for raw in _raw_segments(command):
+        words = _raw_words(raw)
+        if any(_base(_unquoted(w)) in SEARCH_CMDS for w in words) and any(
+            opaque_word(w) for w in words
+        ):
+            return True
+    return False
 
 
 def _hygiene_bad(token: str, word: str | None) -> bool:
@@ -1441,6 +1592,9 @@ def _worker_hygiene(
     if own_script is not None and not _path_trusted(tokens[0], base, own_script, tools):
         return R_UNTRUSTED_PATH
     name = _base(tokens[0])
+    inner = strip_wrappers(tokens) or tokens
+    if {name, _base(inner[0])} & ARCHIVE_CMDS:
+        return R_ARCHIVE
     allexport = any(re.fullmatch(r"-[a-zA-Z]*a[a-zA-Z]*|allexport", t) for t in tokens[1:])
     if name in SHELL_VAR_CMDS or (name == "set" and allexport):
         return R_SHELL_VARS

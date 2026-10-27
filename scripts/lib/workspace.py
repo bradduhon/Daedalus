@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import re
 import shlex
 import subprocess
@@ -553,9 +554,33 @@ def _contract_target(repo: Path, state: dict[str, object], contract: str) -> tup
     return root, path
 
 
-def lock(repo: Path, contract: str, version: int) -> list[str]:
+def lock(repo: Path, contract: str | None, version: int | None = None) -> list[str]:
     repo = repo.resolve()
     train_id, state = _active(repo)
+    integration = f"daedalus/{train_id}"
+    if contract is None:
+        # 0156: a skipped contract locks the integration branch at the base and commits nothing.
+        if state.get(train_state.CONTRACT_SKIP) is not True:
+            raise WorkspaceError(
+                f"train {train_id} records no contract skip, so lock --no-contract is refused. "
+                f"Next: run daedalus_train.py contract --repo {repo}; when it prints contract: "
+                "required, lock the contract contract-spec saves with --contract and --version."
+            )
+        if state.get("packet_version") is not None:
+            raise WorkspaceError(
+                f"train {train_id} already locked contract packet_version "
+                f"{state['packet_version']}. Next: revise that contract with --contract and a "
+                "higher --version instead of --no-contract."
+            )
+        base = str(state["base_sha"])
+        _on_branch(repo, integration, base)
+        _record(repo, train_id, lock_sha=base)
+        return [f"lock: {base}"]
+    if version is None:
+        raise WorkspaceError(
+            f"lock --contract {contract} names no --version. "
+            "Next: rerun the lock with --version set to the packet_version contract-spec gave."
+        )
     root, path = _contract_target(repo, state, contract)
     recorded = state.get("packet_version")
     if isinstance(recorded, int) and version <= recorded:
@@ -565,7 +590,6 @@ def lock(repo: Path, contract: str, version: int) -> list[str]:
         )
     if not path.is_file():
         raise WorkspaceError(f"contract-spec did not save the packet at {path}. Next: {RERUN}")
-    integration = f"daedalus/{train_id}"
     _on_branch(repo, integration, str(state["base_sha"]))
     if root != repo:
         _on_branch(root, integration)
@@ -579,7 +603,9 @@ def lock(repo: Path, contract: str, version: int) -> list[str]:
     verb = "Revise" if isinstance(recorded, int) else "Lock"
     if unchanged.returncode == 1:
         _git(root, "commit", "-q", "-m", f"{verb} contract {path.stem} v{version}", "--", rel)
-    sha = _out(repo, "rev-parse", integration).strip()
+    # 0150, issue 96: a revise keeps the lock at the train base, never the integration tip.
+    kept = state.get("lock_sha") if isinstance(recorded, int) else None
+    sha = kept if isinstance(kept, str) and kept else _out(repo, "rev-parse", integration).strip()
     _record(
         repo,
         train_id,
@@ -777,14 +803,15 @@ def _merge(repo: Path, state: dict[str, object], train_id: str, unit: dict[str, 
     if merged.returncode == 0:
         return
     conflicts = _out(repo, "diff", "--name-only", "--diff-filter=U").split()
+    # issue 95: abort only; the repository stays on the integration branch with earlier merges.
     _run(repo, "merge", "--abort")
-    _run(repo, "switch", "-q", str(state["base_branch"]))
     detail = _shown(conflicts) if conflicts else " ".join(merged.stderr.split()) or "no stderr"
     raise WorkspaceError(
         f"merging {branch} into daedalus/{train_id} failed: {detail}. "
-        f"Next: inspect or delete the leftover daedalus/{train_id} branch, resolve the overlap "
-        "in the conflicting files named above, or rerun the train with units that do not "
-        "share files."
+        f"Next: the repository stays on daedalus/{train_id} with the completed merges in "
+        f"place; merge {branch} there by hand and resolve the conflicting files named above, "
+        "then rerun the merge step, which skips units already merged; or rerun the train with "
+        "units that do not share files."
     )
 
 
@@ -812,8 +839,12 @@ def finish(repo: Path) -> list[str]:
         if _run(repo, "merge-base", "--is-ancestor", str(lock_sha), str(unit["branch"])).returncode:
             raise WorkspaceError(
                 f"Unit {unit['branch']} does not descend from the integration branch. "
-                "Next: rerun the train; if it repeats, file an issue with the train summary."
+                f"Next: a likely cause is a contract revise that moved the lock {lock_sha} off "
+                f"the train base {state['base_sha']} (0150); set lock_sha in the train state "
+                "back to the lock the unit was built on, then rerun the finish; otherwise "
+                "rerun the train, and if it repeats, file an issue with the train summary."
             )
+    _skip_scope(repo, state, merging, str(lock_sha), integration)
     _git(repo, "switch", "-q", integration)
     lines = _merge_all(repo, state, train_id, merging)
     _finished(repo, train_id, merging)
@@ -822,6 +853,49 @@ def finish(repo: Path) -> list[str]:
     if not _teardown(repo, units, lines, nexts):
         raise WorkspaceError("\n".join([*lines, f"Next: {'; '.join(nexts)}"]))
     return lines
+
+
+SKIP_NEXT = (
+    "Next: stop the train and run it again with a plan the contract step "
+    "(daedalus_train.py contract --repo {repo}) answers contract: required for, so "
+    "contract-spec locks a contract before more than the plan's one file merges."
+)
+
+
+def _skip_scope(
+    repo: Path,
+    state: dict[str, object],
+    merging: list[dict[str, object]],
+    lock_sha: str,
+    integration: str,
+) -> None:
+    # prepush-2026-10-27 finding 4, 0156: a skipped contract covers one unit and one file.
+    if state.get(train_state.CONTRACT_SKIP) is not True or state.get("packet_version") is not None:
+        return
+    # 126: only unmerged units count; the integration branch is judged too, as the wave merge
+    # never runs this check.
+    pending = [
+        unit
+        for unit in merging
+        if _run(repo, "merge-base", "--is-ancestor", str(unit["branch"]), integration).returncode
+    ]
+    files = [f for unit in _recorded_plan(state).units for f in unit.files]
+    nxt = SKIP_NEXT.format(repo=repo)
+    if len(pending) > 1 or len(files) != 1:
+        raise WorkspaceError(
+            f"this train skipped the contract for a one-file plan, yet {len(pending)} units "
+            f"would merge against a plan naming {len(files)} files. {nxt}"
+        )
+    allowed = os.path.normpath(files[0])
+    for ref in [integration, *(str(unit["branch"]) for unit in pending)]:
+        raw = _out(repo, "diff", "--name-only", "--no-renames", "-z", f"{lock_sha}...{ref}")
+        changed = sorted(name for name in raw.split("\0") if name)
+        fits = changed in ([], [allowed]) if ref == integration else changed == [allowed]
+        if not fits:
+            raise WorkspaceError(
+                f"this train skipped the contract for the one file {files[0]}, yet {ref} "
+                f"changes {_shown(changed) if changed else 'no file'}. {nxt}"
+            )
 
 
 def _finished(repo: Path, train_id: str, units: list[dict[str, object]]) -> None:
@@ -852,11 +926,23 @@ def _merge_all(
 
 
 VERIFIED = "[VERDICT: VERIFIED] claims=<n>"
-# 0121, agents/verifier.md:128: the verifier's closing line, after its corrected=<k> line.
+# 0121, agents/verifier.md:138: the verifier's closing line, after its corrected=<k> line.
 VERIFIED_LINE = re.compile(r"\[VERDICT: VERIFIED\] claims=[0-9]+")
 VERIFIER = "verifier"
 _UNIT_LINE = "Unit worktree: "
 _DISPATCH_TOOLS = ("Agent", "SendMessage")
+# 101, agents/orchestrator.md:135: the relay's begin marker; a payload can forge the end marker.
+PAYLOAD_BEGIN = "--- research payload begin"
+
+
+def before_payload(text: str) -> str:
+    # 101: reading stops at the first begin marker line, so no fetched line names a worktree.
+    kept: list[str] = []
+    for line in text.splitlines():
+        if line.lstrip().startswith(PAYLOAD_BEGIN):
+            break
+        kept.append(line)
+    return "\n".join(kept)
 
 
 def _strings(value: object) -> list[str]:
@@ -873,8 +959,8 @@ def _worktree_lines(record: dict[str, object]) -> list[str]:
     # 0121: the Unit worktree lines of a PreToolUse Agent or SendMessage record, else none.
     if record.get("event") != "PreToolUse" or record.get("tool_name") not in _DISPATCH_TOOLS:
         return []
-    texts = _strings(record.get("tool_input"))
-    return [line for text in texts for line in text.splitlines() if line.startswith(_UNIT_LINE)]
+    text = before_payload("\n".join(_strings(record.get("tool_input"))))
+    return [line for line in text.splitlines() if line.startswith(_UNIT_LINE)]
 
 
 def unit_verified(records: list[dict[str, object]], worktree: Path) -> bool:
@@ -929,6 +1015,10 @@ VERIFY_NEXT = (
 
 
 def _plan_ids(state: dict[str, object]) -> set[str]:
+    return {unit.id.casefold() for unit in _recorded_plan(state).units}
+
+
+def _recorded_plan(state: dict[str, object]) -> plan_record.Plan:
     record = train_state.record(state, train_state.PLAN)
     path, digest = record.get("path"), record.get("sha256")
     rerun = "Next: record the plan with daedalus_train.py plan --path, then rerun the merge."
@@ -941,10 +1031,9 @@ def _plan_ids(state: dict[str, object]) -> set[str]:
     if not hmac.compare_digest(hashlib.sha256(data).hexdigest(), digest):
         raise WorkspaceError(f"the plan {path} changed after it was recorded. {rerun}")
     try:
-        plan = plan_record.load(Path(path))
+        return plan_record.load(Path(path))
     except plan_record.PlanError as exc:
         raise WorkspaceError(f"{exc} {rerun}") from exc
-    return {unit.id.casefold() for unit in plan.units}
 
 
 def _wave(

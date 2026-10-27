@@ -60,8 +60,10 @@ RET_K = 0x06 | 0x00  # linux/bpf_common.h:13, :50
 # linux/seccomp.h:62-66: nr at 0, arch at 4, args[0] at 16, low word first on both arches.
 OFF_NR, OFF_ARCH, OFF_ARG0 = 0, 4, 16
 DENY = RET_ERRNO | errno.EPERM
-# 0048, Plan 6 section 10.1: AF_UNIX stays open; AF_NETLINK only asks the kernel.
-LOCAL_FAMILIES = (int(socket.AF_UNIX), int(socket.AF_NETLINK))
+# 0048, issue 87: AF_NETLINK only asks the kernel; AF_UNIX socket() is refused, socketpair() not.
+LOCAL_FAMILY = int(socket.AF_NETLINK)
+# 0048, issue 86: the errors meaning the kernel lacks Landlock; any other probe error is surfaced.
+LANDLOCK_ABSENT = frozenset({errno.ENOSYS, errno.EOPNOTSUPP})
 SYSTEM_RO = ("/usr", "/lib", "/lib64", "/lib32", "/bin", "/sbin", "/etc", "/proc", "/sys", "/dev")
 DEVICES_RW = ("/dev/null",)
 # 0048: git exits 128 on an unreadable user config, so it reads an empty one in the temp folder.
@@ -69,9 +71,17 @@ GIT_CONFIG = "gitconfig"
 XDG_CONFIG = "config"
 HIDDEN = (".claude/daedalus", f"{UNIT_WORKTREES}")
 NEXT_FORM = CONFINE_NEXT
-NEXT_BARE = (
-    "Next: run the command without the wrapper; the confine check steps aside on this machine "
-    "and the doctor's kernel rules line says so."
+KERNEL_NEED = (
+    "a coder's test command runs only under the kernel wrapper, which needs Linux on x86_64 or "
+    "aarch64 with Landlock ABI 1 or later and seccomp filters (0048, issue 86)"
+)
+NEXT_KERNEL = (
+    "Next: commit WIP and yield with this line; the operator boots a kernel with Landlock "
+    "enabled (landlock in the lsm= list) and reruns the doctor."
+)
+NEXT_PROBE = (
+    "Next: commit WIP and yield with this line; the operator reruns the doctor and fixes the "
+    "cause it names."
 )
 
 
@@ -101,10 +111,11 @@ class Support:
     arch: str | None
     abi: int
     seccomp: bool
+    error: str = ""
 
     @property
     def ok(self) -> bool:
-        return self.arch is not None and self.abi >= 1 and self.seccomp
+        return self.arch is not None and self.abi >= 1 and self.seccomp and not self.error
 
 
 @dataclass(frozen=True)
@@ -122,7 +133,7 @@ class RuleSet:
         return (
             f"daedalus_confine: abi={self.abi} arch={self.arch} rw={','.join(self.rw)} "
             f"ro={self.repo}({hidden}),{','.join(self.ro)} "
-            f"refused={net}socket(AF_INET,AF_INET6,any family but AF_UNIX,AF_NETLINK),io_uring "
+            f"refused={net}socket(AF_INET,AF_INET6,AF_UNIX,any family but AF_NETLINK),io_uring "
             f"tmpdir={self.tmp} git_config={os.path.join(self.tmp, GIT_CONFIG)} "
             f"xdg_config={os.path.join(self.tmp, XDG_CONFIG)}"
         )
@@ -152,17 +163,22 @@ def _call(func: Callable[..., int], *args: Arg) -> int:
 
 
 def landlock_abi() -> int:
-    # 0048: the highest Landlock ABI this kernel serves; 0 when it serves none.
+    # 0048, issue 86: the highest Landlock ABI this kernel serves; 0 only on a LANDLOCK_ABSENT.
+    libc = _libc()
     try:
-        libc = _libc()
-    except OSError:
-        return 0
-    return max(_call(libc.syscall, NR_CREATE_RULESET, None, 0, CREATE_RULESET_VERSION), 0)
+        return _check(
+            _call(libc.syscall, NR_CREATE_RULESET, None, 0, CREATE_RULESET_VERSION),
+            "landlock version probe",
+        )
+    except OSError as exc:
+        if exc.errno in LANDLOCK_ABSENT:
+            return 0
+        raise
 
 
 def socket_filter(arch: Arch) -> list[tuple[int, int, int, int]]:
-    # 0048: a foreign arch is killed; x32 numbers, io_uring and every socket family but the
-    # two local ones (AF_INET, AF_INET6 and AF_VSOCK among them) fail with EPERM.
+    # 0048, issue 87: a foreign arch is killed; x32 numbers, io_uring and every socket() family but
+    # AF_NETLINK (AF_INET, AF_INET6, AF_UNIX and AF_VSOCK among them) fail with EPERM.
     prog = [(LD_W_ABS, 0, 0, OFF_ARCH), (JEQ_K, 1, 0, arch.audit), (RET_K, 0, 0, RET_KILL_PROCESS)]
     prog.append((LD_W_ABS, 0, 0, OFF_NR))
     if arch.x32:
@@ -170,7 +186,7 @@ def socket_filter(arch: Arch) -> list[tuple[int, int, int, int]]:
     for nr in arch.io_uring:
         prog += [(JEQ_K, 0, 1, nr), (RET_K, 0, 0, DENY)]
     prog += [(JEQ_K, 1, 0, arch.socket), (RET_K, 0, 0, RET_ALLOW), (LD_W_ABS, 0, 0, OFF_ARG0)]
-    prog += [(JEQ_K, 2, 0, LOCAL_FAMILIES[0]), (JEQ_K, 1, 0, LOCAL_FAMILIES[1])]
+    prog.append((JEQ_K, 1, 0, LOCAL_FAMILY))
     return prog + [(RET_K, 0, 0, DENY), (RET_K, 0, 0, RET_ALLOW)]
 
 
@@ -187,38 +203,73 @@ def _install_filter(libc: ctypes.CDLL, arch: Arch) -> None:
     _check(_call(libc.prctl, PR_SET_SECCOMP, SECCOMP_MODE_FILTER, fprog, 0, 0), "seccomp")
 
 
-def _seccomp_probe(arch: Arch) -> bool:
-    # 0048: a child applies the filter and opens an AF_INET socket; only EPERM proves the filter.
+def _probe_child(arch: Arch) -> str:
+    # 0048, issue 86: "" only when the probe socket() answers EPERM; an install error is reported.
+    try:
+        libc = _libc()
+        _no_new_privs(libc)
+        _install_filter(libc, arch)
+    except OSError as exc:
+        return f"seccomp probe: {exc}"
+    try:
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).close()
+    except OSError as exc:
+        return "" if exc.errno == errno.EPERM else f"seccomp probe: {exc}"
+    return "seccomp probe: an AF_INET socket opened under the filter"
+
+
+def _seccomp_probe(arch: Arch) -> str | None:
+    # 0048, issue 86: a child applies the filter and reports through a pipe; None proves the filter.
+    read_fd, write_fd = os.pipe()
     pid = os.fork()
     if pid == 0:
         code = 1
         try:
-            libc = _libc()
-            _no_new_privs(libc)
-            _install_filter(libc, arch)
-            try:
-                socket.socket(socket.AF_INET, socket.SOCK_STREAM).close()
-                code = 2
-            except PermissionError:
-                code = 0
+            os.close(read_fd)
+            os.write(write_fd, _probe_child(arch).encode())
+            code = 0
         finally:
             os._exit(code)
+    os.close(write_fd)
+    with os.fdopen(read_fd, "rb") as pipe:
+        text = pipe.read().decode(errors="replace")
     _, status = os.waitpid(pid, 0)
-    return os.waitstatus_to_exitcode(status) == 0
+    code = os.waitstatus_to_exitcode(status)
+    if code != 0:
+        return f"seccomp probe: the probe child exited with status {code}"
+    return text or None
 
 
 @lru_cache(maxsize=1)
 def kernel_support() -> Support:
-    # 0048: the doctor's probe and the confine check's step-aside read this one answer.
+    # 0048, issue 86: the doctor and the confine check read this one answer; a probe error is kept.
     machine = platform.machine()
     if not sys.platform.startswith("linux") or machine not in ARCHES:
         return Support(None, 0, False)
-    abi = landlock_abi()
     try:
-        seccomp = abi >= 1 and _seccomp_probe(ARCHES[machine])
-    except OSError:
-        seccomp = False
-    return Support(machine, abi, seccomp)
+        abi = landlock_abi()
+    except OSError as exc:
+        return Support(machine, 0, False, f"landlock probe: {exc}")
+    if abi < 1:
+        return Support(machine, 0, False)
+    try:
+        failure = _seccomp_probe(ARCHES[machine])
+    except OSError as exc:
+        failure = f"seccomp probe: {exc}"
+    return Support(machine, abi, failure is None, failure or "")
+
+
+def unusable(support: Support) -> str | None:
+    # 0048, issue 86: None when the rules hold, else the cause and its Next line; no step-aside.
+    if support.ok:
+        return None
+    if support.arch is None:
+        where = f"{sys.platform} on {platform.machine() or 'an unknown architecture'}"
+        return f"{where} has no modelled syscall table; {KERNEL_NEED}. {NEXT_KERNEL}"
+    if support.abi < 1 and not support.error:
+        return f"this kernel serves no Landlock ABI; {KERNEL_NEED}. {NEXT_KERNEL}"
+    error = support.error or "the seccomp filter is not proven"
+    return f"the kernel rules probe failed: {error}; {KERNEL_NEED}. {NEXT_PROBE}"
 
 
 def _private_tmp(unit: str) -> str:
@@ -340,11 +391,9 @@ def main(argv: list[str]) -> int:
     if split is None:
         return _refuse(f"usage: {CONFINE} --unit <worktree> -- <command...>. {NEXT_FORM}")
     support = kernel_support()
-    if support.arch is None:
-        machine = platform.machine() or "unknown"
-        return _refuse(f"architecture {machine} has no modelled syscall table. {NEXT_BARE}")
-    if not support.ok:
-        return _refuse(f"Landlock ABI {support.abi} or seccomp is not usable. {NEXT_BARE}")
+    cause = unusable(support)
+    if cause is not None:
+        return _refuse(cause)
     try:
         unit, repo = _unit(split[0])
         rules = rule_set(unit, repo, _private_tmp(unit), support)
@@ -352,7 +401,7 @@ def main(argv: list[str]) -> int:
     except Refusal as exc:
         return _refuse(str(exc))
     except OSError as exc:
-        return _refuse(f"the kernel refused a rule ({exc}). {NEXT_BARE}")
+        return _refuse(f"the kernel refused a rule ({exc}); {KERNEL_NEED}. {NEXT_PROBE}")
     os.environ.update(_tool_env(rules.tmp))
     print(rules.line(), flush=True)
     command = split[1]

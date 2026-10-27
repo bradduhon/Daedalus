@@ -42,6 +42,8 @@ class Features:
     dependency_web_lookup: bool | None = None
     # 0132: true, false or null; only false turns off terraform fmt -check and validate.
     terraform_tools: bool | None = None
+    # 0158: true or false; absent reads false, and only true admits terraform validate.
+    terraform_validate: bool = False
 
 
 # 0073: the one list of feature names; validator check 13 and the key reference import it.
@@ -58,6 +60,16 @@ class Docs:
 
 
 DOCS_KEYS = tuple(f.name for f in fields(Docs))
+
+
+@dataclass(frozen=True)
+class Frameworks:
+    # 0157 (12.1): no pack folder named reads the shipped packs; false reads only pack_dir.
+    pack_dir: str | None = None
+    default_packs: bool = True
+
+
+FRAMEWORKS_KEYS = tuple(f.name for f in fields(Frameworks))
 # 0129, Addendum F.2: the four drivers, the closed reason vocabulary and the surface outcome.
 DRIVERS = ("security", "trust", "ops", "cost")
 REASONS = (
@@ -135,6 +147,7 @@ class Manifest:
     lint_cmd: str | None = None
     docs: Docs = field(default_factory=Docs)
     priorities: Priorities | None = None
+    frameworks: Frameworks = field(default_factory=Frameworks)
 
 
 # 0073, B2: the stack keys that hold a command the coder may run verbatim.
@@ -247,6 +260,9 @@ def _features(target: Path, raw: dict[str, object]) -> Features:
             "features.scrub_file",
             "must be null or a project-relative path without a leading slash, '..' or globs",
         )
+    validate = block.get("terraform_validate", False)
+    if not isinstance(validate, bool):
+        raise _key_error(target, "features.terraform_validate", "must be true or false")
     kind: Literal["repository", "folder"] | None = (
         "repository" if scope == "repository" else "folder" if scope == "folder" else None
     )
@@ -258,6 +274,7 @@ def _features(target: Path, raw: dict[str, object]) -> Features:
         _switch(target, block, "github", False),
         _switch(target, block, "dependency_web_lookup", None),
         _switch(target, block, "terraform_tools", None),
+        validate,
     )
 
 
@@ -297,6 +314,31 @@ def _docs(target: Path, raw: dict[str, object]) -> Docs:
             "voice profile without a leading slash, '..' or globs>",
         )
     return Docs(literacy if isinstance(literacy, str) else None)
+
+
+def _frameworks(target: Path, raw: dict[str, object]) -> Frameworks:
+    # 0157: the frameworks block names the project's pack folder; unknown keys are refused.
+    block = raw.get("frameworks", {})
+    if not isinstance(block, dict):
+        raise _key_error(target, "frameworks", "must be an object")
+    unknown = sorted(str(key) for key in set(block) - set(FRAMEWORKS_KEYS))
+    if unknown:
+        raise _key_error(
+            target,
+            "frameworks",
+            f"has unknown keys {unknown} (known: {', '.join(FRAMEWORKS_KEYS)})",
+        )
+    pack_dir = block.get("pack_dir")
+    if pack_dir is not None and not (isinstance(pack_dir, str) and repo_relative(pack_dir)):
+        raise _key_error(
+            target,
+            "frameworks.pack_dir",
+            "must be null or a project-relative folder path without a leading slash, '..' or globs",
+        )
+    default_packs = block.get("default_packs", True)
+    if not isinstance(default_packs, bool):
+        raise _key_error(target, "frameworks.default_packs", "must be true or false")
+    return Frameworks(pack_dir, default_packs)
 
 
 def _bad(target: Path, row: str, detail: str) -> PrioritiesError:
@@ -490,6 +532,7 @@ def load(repo: Path) -> Manifest | None:
         lint_cmd=commands["lint_cmd"],
         docs=_docs(target, raw),
         priorities=_priorities(target, raw),
+        frameworks=_frameworks(target, raw),
     )
 
 

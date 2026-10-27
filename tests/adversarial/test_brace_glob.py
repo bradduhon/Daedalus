@@ -6,14 +6,26 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from lib import jail
+from lib.credential_paths import glob_reaches
 
 from tests.adversarial.corpus import (
     CREDENTIAL,
+    FIX1_GREP_GLOBS,
+    FIX1_RG_GLOBS,
+    FIX1_RG_GLOBS_ALLOWED,
+    PREPUSH_IGNORE_BODIES,
+    PREPUSH_IGNORE_FAIL_CLOSED,
+    PREPUSH_IGNORE_FILES,
+    PREPUSH_IGNORE_SEARCHES,
+    PREPUSH_RG_REACH,
     READERS,
     REPLY_KEY,
     assert_denied,
     assert_store_read_denied,
 )
+from tests.conftest import CFG
+from tests.hook_chain import decide
 from tests.payloads import _cred
 from tests.test_checks_credential_paths import (
     BRACE_CLASS_TABLE,
@@ -127,3 +139,138 @@ def test_bash_brace_or_glob_reaching_the_reply_key_is_denied(
 ) -> None:
     repo = _key_repo(tmp_path)
     assert_denied(_bash_in(repo, agent, template.format(repo=repo)), REPLY_KEY, CREDENTIAL)
+
+
+@pytest.mark.parametrize("agent", READERS)
+@pytest.mark.parametrize("command", FIX1_RG_GLOBS)
+def test_an_rg_whitelist_glob_reaching_the_reply_key_is_denied(
+    tmp_path: Path, agent: str, command: str
+) -> None:
+    # SC-12: a -g, --glob or --iglob whitelist overrides rg's hidden-folder skip.
+    assert_denied(_bash_in(_key_repo(tmp_path), agent, command), REPLY_KEY, CREDENTIAL)
+
+
+@pytest.mark.parametrize("command", FIX1_RG_GLOBS_ALLOWED)
+def test_an_rg_glob_naming_no_hidden_folder_still_passes(tmp_path: Path, command: str) -> None:
+    # SC-12: the shipped pack verify globs (*.tf, *.yml) stay admitted beside a reply key.
+    d = decide(_bash_in(_key_repo(tmp_path), "framework-specialist", command), CFG)
+    assert d.allow, (command, d.reason)
+
+
+def test_an_rg_whitelist_glob_reaching_a_credential_store_is_denied(
+    cred_home: Path,  # noqa: F811
+) -> None:
+    # SC-12: the same override reaches a hidden credential store under home.
+    (cred_home / ".ssh").mkdir()
+    forms = ("rg -g .ssh -g 'id_*' BEGIN ~", "rg --iglob=.SSH BEGIN {home}")
+    forms += ("rg -g '**/.ssh' -g '**/.ssh/**' BEGIN ~", "rg -g '.ssh/' BEGIN {home}")
+    forms += ("rg -g '\\.ssh' -g '\\.ssh/**' BEGIN {home}",)
+    for command in forms:
+        assert_store_read_denied("security-auditor", command, home=cred_home)
+    assert jail._rg_globs(["-e", "-g", "-g", "!x", "--glob", "$X", "-ng*.tf"]) == ["*", "*.tf"]
+    assert jail._rg_globs(["-g=.claude"]) == ["=.claude", ".claude"]
+    # SC-12: outside the modelled characters a glob reaches every store; a negated glob never does.
+    assert glob_reaches(["\\.x"], ["a"]) and glob_reaches(["[a]"], ["b"])
+    assert not glob_reaches(["!\\.ssh", "**/*.py", "*Dockerfile*"], [".ssh"])
+
+
+@pytest.mark.parametrize("agent", READERS)
+@pytest.mark.parametrize("glob", FIX1_GREP_GLOBS)
+def test_grep_tool_gitignore_glob_reaching_the_reply_key_is_denied(
+    tmp_path: Path, agent: str, glob: str
+) -> None:
+    # SC-12: the Grep tool shares glob_reaches, so a zero-folder **/ reaches the key too.
+    repo = _key_repo(tmp_path)
+    tool_input = {"pattern": ".", "glob": glob, "path": str(repo)}
+    assert_denied(_cred(agent, "Grep", cwd=str(repo), **tool_input), REPLY_KEY, CREDENTIAL)
+
+
+def test_grep_tool_pack_globs_still_pass(tmp_path: Path) -> None:
+    # SC-12: globs naming no hidden folder or key stay admitted for the Grep tool.
+    repo = _key_repo(tmp_path)
+    for glob in ("*.tf", "**/*.py", "*Dockerfile*", "src/**"):
+        tool_input = {"pattern": ".", "glob": glob, "path": str(repo)}
+        d = decide(_cred("framework-specialist", "Grep", cwd=str(repo), **tool_input), CFG)
+        assert d.allow, (glob, d.reason)
+
+
+@pytest.mark.parametrize("agent", READERS)
+@pytest.mark.parametrize("name", PREPUSH_IGNORE_FILES)
+@pytest.mark.parametrize("body", PREPUSH_IGNORE_BODIES)
+def test_an_ignore_file_whitelist_reaching_the_reply_key_is_denied(
+    tmp_path: Path, agent: str, name: str, body: str
+) -> None:
+    # prepush-2026-10-27 finding 1: plain rg and the Grep tool alike, at the root or one up.
+    repo = _key_repo(tmp_path)
+    for folder in (repo, repo.parent):
+        (folder / name).write_text(body, encoding="utf-8")
+        for command in PREPUSH_IGNORE_SEARCHES:
+            assert_denied(_bash_in(repo, agent, command), REPLY_KEY, CREDENTIAL)
+        for path in (None, str(repo)):
+            tool_input = {"pattern": "."} | ({"path": path} if path else {})
+            assert_denied(_cred(agent, "Grep", cwd=str(repo), **tool_input), REPLY_KEY)
+        (folder / name).unlink()
+
+
+def test_an_ignore_file_without_a_whitelist_line_still_passes(tmp_path: Path) -> None:
+    # prepush-2026-10-27 finding 1: only a `!` line refuses; a folder off the key's path passes.
+    repo = _key_repo(tmp_path)
+    (repo / ".rgignore").write_text("build/\n# !kept\n", encoding="utf-8")
+    (repo / "src" / ".ignore").write_text("!*\n", encoding="utf-8")
+    for command in PREPUSH_IGNORE_SEARCHES[:2] + ("rg -l token src",):
+        d = decide(_bash_in(repo, "framework-specialist", command), CFG)
+        assert d.allow, (command, d.reason)
+    d = decide(_cred("framework-specialist", "Grep", cwd=str(repo), pattern="."), CFG)
+    assert d.allow, d.reason
+
+
+@pytest.mark.parametrize("agent", READERS)
+@pytest.mark.parametrize("command", PREPUSH_RG_REACH)
+def test_an_rg_flag_reading_hidden_or_ignored_files_is_denied(
+    tmp_path: Path, agent: str, command: str
+) -> None:
+    # 113, prepush-2026-10-27 finding 2: each fails closed beside the reply key, like --hidden.
+    repo = _key_repo(tmp_path)
+    assert_denied(_bash_in(repo, agent, command))
+    # 113: the credential check alone refuses it, whatever the agent's own grammar admits.
+    assert jail._credential_reason("Bash", {"command": command}, str(repo)) is not None
+
+
+@pytest.mark.parametrize("name", PREPUSH_IGNORE_FILES)
+@pytest.mark.parametrize("body", PREPUSH_IGNORE_FAIL_CLOSED)
+def test_a_leading_space_bang_line_is_refused_fail_closed(
+    tmp_path: Path, name: str, body: str
+) -> None:
+    # prepush2-2026-10-27 item 7: rg 14 reads no negation here; the refusal is fail closed only.
+    repo = _key_repo(tmp_path)
+    (repo / name).write_text(body, encoding="utf-8")
+    for command in PREPUSH_IGNORE_SEARCHES:
+        assert_denied(_bash_in(repo, "framework-specialist", command), REPLY_KEY, CREDENTIAL)
+
+
+# prepush2-2026-10-27 item 7: a value glued to rg's value-taking short flag is no flag letter.
+GLUED_VALUES = (
+    "rg -trust -n token .",
+    "rg -g'*.tf' -n token .",
+    "rg -tpy -n token .",
+    "rg -Tjs -n token .",
+    "rg -m1 -n token .",
+    "rg -d2 -n token .",
+    "rg -eu token .",
+)
+
+
+@pytest.mark.parametrize("command", GLUED_VALUES)
+def test_a_glued_short_flag_value_is_not_read_as_flags(tmp_path: Path, command: str) -> None:
+    repo = _key_repo(tmp_path)
+    d = decide(_bash_in(repo, "framework-specialist", command), CFG)
+    assert d.allow, (command, d.reason)
+    assert jail.rg_reason(command, str(repo)) is None
+
+
+@pytest.mark.parametrize("command", ("rg -ut token .", "rg -nLt rust token .", "rg -.g x token ."))
+def test_a_reach_letter_before_the_value_flag_still_refuses(tmp_path: Path, command: str) -> None:
+    # prepush2-2026-10-27 item 7: only letters after the value-taking flag are its value.
+    repo = _key_repo(tmp_path)
+    assert_denied(_bash_in(repo, "framework-specialist", command))
+    assert jail.rg_reason(command, str(repo)) == jail.R_RG_REACH
