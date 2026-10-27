@@ -334,4 +334,8 @@ Every agent file and every skill carries that rule. A test reads each `Next:` li
 
 A finding about git or file state is closed by a script change and a script test, never by a skill sentence.
 
-An agent file for a judge (the framework specialist and the security auditor) must carry a method and a rubric. An agent file for an actor stays thin, because its tools and the hooks bound what it can do.
+An agent file for a judge, any file under `agents/` whose frontmatter reads `shape: judge`, must carry a method and a rubric. List the judges from the plugin root of a clone; it needs no credential:
+
+    grep -l "^shape: judge" agents/*.md
+
+Each line names one judge's agent file. Empty output means no file declares the judge shape. `No such file or directory` means the command ran outside the plugin root. An agent file for an actor stays thin, because its tools and the hooks bound what it can do.
