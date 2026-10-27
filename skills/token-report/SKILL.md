@@ -1,0 +1,18 @@
+---
+name: token-report
+description: Shows what one orchestrated run cost in tokens, or every run in one session, in fixed columns every run type shares. One row per agent and unit or audit round, then a totals row and the means per unit and per round. With history, shows the totals row of every saved run.
+argument-hint: A run id (a train id such as 20261026-232337), a session id, or the word history.
+---
+<!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
+
+# daedalus token report
+
+Human-facing text (0031): Text a human reads names each item in words: a short label or one line on what it is and what it does. Ids (ruling ids, issue numbers, task codes, agent names, snake_case keys) may trail in parentheses, never replace the description. Logs, status lines and messages to other agents may use ids alone. Documents carry both.
+
+1. Read `$ARGUMENTS`. When it is the word `history`, go to step 6. When it has the shape of a train id, eight digits, a dash and six digits, it is a run id. Anything else is a session id. With no argument, ask the operator: "Which run or session should I report? Give a train id like 20261026-232337, or a session id." Wait for the answer.
+2. For a run id, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/token_economy.py report --run "<id>"` with Bash. For a session id, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/token_economy.py report --session "<id>"`. The script reads the transcripts Claude Code keeps for each agent of this project. It never reads the main session's own transcript, so every total covers the agents only, and no column is in dollars.
+3. If the script exits 0, show the table to the operator unchanged. Then say in one line what the rows are: one row per agent and per unit or audit round it worked on, then for each run a totals row, the mean per unit and the mean per audit round. The mean per unit counts the coding agents only; the checking agents stay in the totals row. A session table ends with a group whose run type is `session`: the agents the main session started outside any run, one row each. A cell that reads `none` is a value that run type does not have.
+4. If the script exits 1, show the message unchanged. Its `Next:` part is the next action.
+5. After a run's table is shown, ask the operator: "Save this run's token table so later runs can be compared with it? (yes/no)". Skip this step for a session id. On yes, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/token_economy.py report --run <id> --save` and show its `wrote` line. The file goes to `<charter_root>/reports/<date>-tokens-<run id>.md` when `<repo>/.claude/daedalus/config.json` declares `charter_root`, else to `docs/.tmp/daedalus/<run id>/tokens.md`. If the message says the folder does not exist, offer to create it; on yes, create it with `mkdir -p` and rerun the command. For any other exit 1, show the message unchanged; its `Next:` part is the next action. Say a file under the Charter root is ready for the charter-docs agent to commit in a later Build Train. Do not commit it and do not start an agent from this skill. On no, say the table stays on screen only.
+6. History: run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/token_economy.py history` with Bash. It prints the totals row of every saved run, from the Charter reports folder and from `docs/.tmp/daedalus/`, in the same columns, so two runs of any type compare side by side. Show it unchanged. A line starting `no saved token report found` means no run is saved yet; its `Next:` part is the next action.
+7. The audit report (`/daedalus:audit-report`) prints the same totals row and mean per unit for every run in its session, after its own totals. Point the operator there when they want the tokens beside the agents' tool calls.

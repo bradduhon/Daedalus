@@ -110,6 +110,14 @@ To read what every agent did in a session, open its audit report:
 
     /daedalus:audit-report
 
+### Token report
+
+To see what a run cost in tokens, agents only, in the same columns for every run type:
+
+    /daedalus:token-report <run id or session id>
+
+`/daedalus:token-report history` prints the totals row of every saved run.
+
 ## The agents
 
 Each agent's file lists the only tools it may use, the reply lines it ends with, and the phases of a body of work it suits: context, clarification, plan, implementation, audit, and commit and release. Phases guide which agent the session picks; they never limit it. The table below is generated from the agent files by `python3 scripts/catalog.py table`, and `/daedalus:catalog` shows the session the same table. A test fails when it goes stale.
@@ -563,6 +571,7 @@ Daedalus/
 │   ├── import_pack.py               # operator-run: writes a control pack from an OSCAL catalog or a CIS id map
 │   ├── refresh_frameworks.py        # operator-run: compile the pinned framework caches
 │   ├── standing_rules.py            # derives the standing-rules file from the ledger
+│   ├── token_economy.py             # the token table of one run, and the saved-run history
 │   ├── validate_plan.py             # checks a plan file and prints its graph line
 │   ├── validate_train.py            # checks a train definition file
 │   └── verify_audit_chain.py        # recompute and verify a session's hash chain
@@ -576,7 +585,8 @@ Daedalus/
 │   ├── plan/SKILL.md                # /daedalus:plan
 │   ├── push-train/SKILL.md          # /daedalus:push-train
 │   ├── round/SKILL.md               # /daedalus:round
-│   └── setup/SKILL.md               # /daedalus:setup
+│   ├── setup/SKILL.md               # /daedalus:setup
+│   └── token-report/SKILL.md        # /daedalus:token-report
 └── tests/                           # the pytest suite
 ```
 

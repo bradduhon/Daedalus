@@ -27,6 +27,7 @@ from lib.audit import (  # noqa: E402
 )
 from lib.controls import Control, ControlsError, failure_line  # noqa: E402
 from lib.controls import load as load_controls  # noqa: E402
+from token_economy import audit_lines  # noqa: E402
 from verify_audit_chain import NOT_UTF8, verify_lines  # noqa: E402
 
 # 22: the --help text, kept below the future import as a plain string.
@@ -312,6 +313,12 @@ def _controls(records: list[dict[str, object]]) -> list[str]:
     return lines
 
 
+def _repo_of(records: list[dict[str, object]], path: Path) -> Path:
+    # 0010: the log sits at <repo>/.claude/daedalus/audit/<session>.jsonl.
+    root = records[0].get("project_root") if records else None
+    return Path(root) if isinstance(root, str) and root else path.parents[3]
+
+
 def render(path: Path, controls_only: bool = False) -> str:
     # 8.6: one read; verify and render the same lines so the header describes the rows shown.
     lines = _read_lines(path)
@@ -340,6 +347,8 @@ def render(path: Path, controls_only: bool = False) -> str:
             _controls(records),
             _status_lines(records),
             _totals(records, path),
+            # Plan 11 A item 2: the token totals and per-unit means, from the one reader.
+            audit_lines(path.stem, _repo_of(records, path), records),
         ]
     return "\n\n".join("\n".join(s) for s in sections) + "\n"
 
