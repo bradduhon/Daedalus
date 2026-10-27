@@ -243,11 +243,12 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "features.terraform_tools"): KeyRow(
         "Lets the Terraform reviewer run `terraform fmt -check` and `terraform validate` on the "
-        "Terraform files a train changes. With it off, the reviewer judges by reading the files "
-        "(0132)",
+        "Terraform files a train changes; validate also needs `features.terraform_validate`. "
+        "With it off, the reviewer judges by reading the files (0132, 0158)",
         "boolean or null",
-        "`true`, `false` or `null`; only `false` turns both commands off",
-        "`null`: both commands may run",
+        "`true`, `false` or `null`; only `false` turns both commands off; validate also needs "
+        "`features.terraform_validate`",
+        "`null`: `fmt -check` may run",
         "`false`",
     ),
     (MANIFEST_FILE, "features.terraform_validate"): KeyRow(
