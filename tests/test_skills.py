@@ -1227,7 +1227,7 @@ def test_skill_script_commands_are_allowed_for_main() -> None:
     root = str(REPO_ROOT)
     commands = [
         re.sub(r"<[^>]+>", "x", m.replace("${CLAUDE_PLUGIN_ROOT}", root).replace("<repo>", root))
-        for path in (REPO_ROOT / "skills" / n for n in ("build-train", "push-train"))
+        for path in (REPO_ROOT / "skills" / n for n in ("build-train", "push-train", "release"))
         for m in _SKILL_SCRIPT.findall((path / "SKILL.md").read_text(encoding="utf-8"))
     ]
     assert len(commands) >= 4
@@ -1248,7 +1248,7 @@ def test_issue30_skill_script_commands_pass_for_main_during_a_train(
     root, repo = str(REPO_ROOT), str(repo_cwd)
     commands = [
         re.sub(r"<[^>]+>", "x", m.replace("${CLAUDE_PLUGIN_ROOT}", root).replace("<repo>", repo))
-        for path in (REPO_ROOT / "skills" / n for n in ("build-train", "push-train"))
+        for path in (REPO_ROOT / "skills" / n for n in ("build-train", "push-train", "release"))
         for m in _SKILL_SCRIPT.findall((path / "SKILL.md").read_text(encoding="utf-8"))
     ]
     assert len(commands) >= 4
@@ -1261,10 +1261,12 @@ def test_issue30_skill_script_commands_pass_for_main_during_a_train(
 _CONDUCTOR_CMD = re.compile(r"(?:[Rr]un|then) `((?:git|gh|gitleaks) [^`]+)`")
 
 
-def _conductor_commands() -> list[str]:
+def _conductor_commands(
+    path: Path = PUSH_TRAIN, head: str = "## Push", end: str = "## Hand-off"
+) -> list[str]:
     # 0028, 0078: every command Push and Charter branch hand the conductor, minus never-run lines.
-    text = PUSH_TRAIN.read_text(encoding="utf-8")
-    push = _section(text, "## Push", "## Hand-off")
+    text = path.read_text(encoding="utf-8")
+    push = _section(text, head, end)
     allowed = "\n".join(ln for ln in push.splitlines() if "Use only the commands above" not in ln)
     return sorted(set(_CONDUCTOR_CMD.findall(allowed)))
 
@@ -1629,9 +1631,11 @@ def test_coder_bash_section_opens_with_the_credential_habit_line() -> None:
     assert first.startswith("- Credential stores are never read, from any path:"), first
 
 
-# 0165, spec 3: the phase skills built so far; later units add audit, document and release.
-PHASE_SKILLS = ("plan", "build", "verify")
+# 0165, spec 3: the phase skills built so far; a later unit adds audit and document.
+PHASE_SKILLS = ("plan", "build", "verify", "release", "brainstorm")
 PHASES = {"brainstorm", "plan", "build", "verify", "audit", "document", "release"}
+# spec 3.6, 3.8: none ends a run where the operator stops or a folder run presents.
+NEXT_NAMES = PHASES | {"none"}
 PHASE_PARTS = (
     "## What the phase does well",
     "## Evidence that ends it",
@@ -1642,6 +1646,7 @@ _NEXT_ITEM = re.compile(r"- `([a-z]+)`: \S")
 # 0169: a code span holding a path, command, id or placeholder keeps its train name.
 _SPAN = re.compile(r"`[^`\n]*`")
 _CODE_CHARS = re.compile(r"[/_<.:\[=-]")
+_PLACEHOLDER = re.compile(r"<[^<>\n]*>")
 
 
 def _phase_skill(name: str) -> Path:
@@ -1649,7 +1654,8 @@ def _phase_skill(name: str) -> Path:
 
 
 def _drop_code_spans(text: str) -> str:
-    return _SPAN.sub(lambda m: "" if _CODE_CHARS.search(m.group(0)) else m.group(0), text)
+    kept = _SPAN.sub(lambda m: "" if _CODE_CHARS.search(m.group(0)) else m.group(0), text)
+    return _PLACEHOLDER.sub("", kept)
 
 
 @pytest.mark.parametrize("name", PHASE_SKILLS)
@@ -1678,7 +1684,7 @@ def test_phase_skill_suggests_only_phase_skills(name: str) -> None:
     assert items
     named = [m.group(1) for line in items if (m := _NEXT_ITEM.match(line))]
     assert len(named) == len(items), items
-    assert set(named) <= PHASES, named
+    assert set(named) <= NEXT_NAMES, named
 
 
 @pytest.mark.parametrize("name", PHASE_SKILLS)
@@ -1690,8 +1696,34 @@ def test_phase_skill_says_run_not_train(name: str) -> None:
 
 def test_run_not_train_scan_keeps_code_spans_and_catches_prose() -> None:
     # 0169: the scan above drops a command span but not a plain-word label span.
-    kept = _drop_code_spans("run `/daedalus:build-train` on `<train-id>`, then `End the train`")
+    kept = _drop_code_spans("run `/daedalus:build-train` on <train-id>, then `End the train`")
     assert re.findall(r"\btrains?\b", kept, re.IGNORECASE) == ["train"]
+
+
+RELEASE = REPO_ROOT / "skills" / "release" / "SKILL.md"
+
+
+def test_release_names_the_conductor_as_the_only_pusher_and_the_operator_as_merger() -> None:
+    # 0001, spec 3.7: the conductor alone pushes; the operator merges; main, never the orchestrator.
+    _, body = _split(RELEASE)
+    flat = " ".join(body.split())
+    assert "You never run `git push` or any `gh` command but `gh auth status` yourself" in flat
+    assert "the conductor does." in flat
+    assert "Nobody here merges" in flat and "the operator merges (0001)" in flat
+    evidence = flat.split("## Evidence that ends it", 1)[1].split("## Agents it uses", 1)[0]
+    assert "only the conductor pushes (scripts/lib/gh_policy.py:307)" in evidence
+    assert "No agent merges (scripts/lib/gh_policy.py:45)" in evidence
+    assert "never in the orchestrator" in flat and "(agents/orchestrator.md:36)" in flat
+    assert "`/daedalus:run push` (0173)" in flat and "/daedalus:push-train" not in flat
+
+
+@pytest.mark.parametrize("command", _conductor_commands(RELEASE, "### Push", "### Hand-off"))
+def test_release_conductor_commands_pass_the_jail(
+    repo_cwd: Path, project_data: Path, command: str
+) -> None:
+    # spec 3.7: the release phase hands the conductor the same command grammar as the push train.
+    d = _conductor_decide(repo_cwd, project_data, command)
+    assert d.allow, (command, d.reason)
 
 
 @pytest.mark.parametrize(

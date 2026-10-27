@@ -105,7 +105,7 @@ def test_stops_on_empty_arguments_outside_a_repo_and_on_a_train_marker() -> None
     assert "`git rev-parse --path-format=absolute --git-common-dir`" in step2
     assert "Not a repo: stop. Next:" in step2
     assert "`<repo>/.claude/daedalus/train.active` exists" in step3
-    assert "stop. Next: finish or stop the running train" in step3
+    assert "stop. Next: finish or stop the active run" in step3
 
 
 def test_same_day_draft_asks_each_time_with_continue_first() -> None:
