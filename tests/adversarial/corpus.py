@@ -136,7 +136,10 @@ FIX1_RG_GLOBS_ALLOWED = (
 
 # prepush-2026-10-27 finding 1: a .rgignore or .ignore `!` line outranks the data folder marker.
 PREPUSH_IGNORE_FILES = (".rgignore", ".ignore")
-PREPUSH_IGNORE_BODIES = ("!.claude\n!.claude/**\n", "  !*\n")
+PREPUSH_IGNORE_BODIES = ("!.claude\n!.claude/**\n",)
+# prepush2-2026-10-27 item 7: rg 14 reads a leading-space `!` as a plain glob, never a
+# negation; the jail still refuses it, fail closed, and claims no attack.
+PREPUSH_IGNORE_FAIL_CLOSED = ("  !*\n",)
 PREPUSH_IGNORE_SEARCHES = ("rg -l token .", "rg -n token", "rg -l token src/..")
 # prepush-2026-10-27 finding 1: a coder writing either name anywhere in its unit worktree.
 PREPUSH_IGNORE_WRITES = (
@@ -154,6 +157,46 @@ PREPUSH_RG_REACH = (
     "rg -nL token .",
     "RIPGREP_CONFIG_PATH=/tmp/rc rg token .",
     "env RIPGREP_CONFIG_PATH=/tmp/rc rg token .",
+)
+
+# prepush2-2026-10-27 item 1: words bash rewrites into a reach flag the jail never reads.
+PREPUSH2_RG_OPAQUE = (
+    "rg $'-uu' -l token .",
+    "rg $'--hidden' -l token .",
+    "rg $'--follow' -l token .",
+    "rg $'-g' $'.claude/**' -l token .",
+    "rg $'--no-ignore' -l token .",
+    'rg $"-uu" -l token .',
+    "rg {-uu,} -l token .",
+    "rg --{hidden,count} token .",
+    "rg $X -l token .",
+    'rg "$X" -l token .',
+    "rg * -l token .",
+    "grep $'-r' -l token .",
+    'grep $"-r" -l token .',
+)
+# prepush2-2026-10-27 item 2: rg options that run a program or load one.
+PREPUSH2_RG_PROGRAM = (
+    "rg --hostname-bin=/tmp/x -n token .",
+    "rg --hostname-bin /tmp/x -n token .",
+    "rg --hyperlink-format=default --hostname-bin=/tmp/x -n token .",
+    "rg --hyperlink-format default --hostname-bin /tmp/x -n token .",
+    "rg --pre /tmp/x token .",
+    "rg --pre-glob '*' --pre /tmp/x token .",
+    "rg --other-bin=/tmp/x token .",
+)
+# prepush2-2026-10-27 item 3: archive and multi-call writes the coder write check never models.
+PREPUSH2_ARCHIVE_WRITES = (
+    "unzip -o {wt}/z.zip -d /tmp/out",
+    "busybox cp {wt}/a /tmp/out",
+    "tar -C {wt} -cf /tmp/out/x.tar a",
+    "tar -xPf {wt}/x.tar",
+    "tar --transform s/a/.rgignore/ -xf {wt}/x.tar",
+    "zip /tmp/out/z.zip {wt}/a",
+    "cpio -o -F /tmp/out/x.cpio",
+    "7z a /tmp/out/a.7z {wt}/a",
+    "ar rc /tmp/out/a.a {wt}/a",
+    "bsdtar -xf {wt}/x.tar -C /tmp/out",
 )
 
 

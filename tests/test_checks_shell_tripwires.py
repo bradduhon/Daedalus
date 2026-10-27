@@ -702,3 +702,10 @@ def test_exit_echo_admits_only_the_exit_status(command: str) -> None:
 def test_exit_echo_is_the_coders_alone() -> None:
     for agent in ("pr-train-conductor", "charter-docs", "security-auditor", "orchestrator"):
         assert evaluate(HOOK, _b(agent, 'echo "exit=$?"')) == shell.R_HYGIENE, agent
+
+
+@pytest.mark.parametrize("agent", WORKERS_WITH_SHELL)
+@pytest.mark.parametrize("command", ["tar -xf a.tar", "unzip a.zip", "busybox cp a b", "7z x a"])
+def test_an_archive_tool_names_its_reason(agent: str, command: str) -> None:
+    # prepush2-2026-10-27 item 3: no worker runs a tool whose write targets the jail never models.
+    assert evaluate(HOOK, _b(agent, command)) == shell.R_ARCHIVE

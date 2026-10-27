@@ -15,6 +15,7 @@ from tests.adversarial.corpus import (
     FIX1_RG_GLOBS,
     FIX1_RG_GLOBS_ALLOWED,
     PREPUSH_IGNORE_BODIES,
+    PREPUSH_IGNORE_FAIL_CLOSED,
     PREPUSH_IGNORE_FILES,
     PREPUSH_IGNORE_SEARCHES,
     PREPUSH_RG_REACH,
@@ -233,3 +234,43 @@ def test_an_rg_flag_reading_hidden_or_ignored_files_is_denied(
     assert_denied(_bash_in(repo, agent, command))
     # 113: the credential check alone refuses it, whatever the agent's own grammar admits.
     assert jail._credential_reason("Bash", {"command": command}, str(repo)) is not None
+
+
+@pytest.mark.parametrize("name", PREPUSH_IGNORE_FILES)
+@pytest.mark.parametrize("body", PREPUSH_IGNORE_FAIL_CLOSED)
+def test_a_leading_space_bang_line_is_refused_fail_closed(
+    tmp_path: Path, name: str, body: str
+) -> None:
+    # prepush2-2026-10-27 item 7: rg 14 reads no negation here; the refusal is fail closed only.
+    repo = _key_repo(tmp_path)
+    (repo / name).write_text(body, encoding="utf-8")
+    for command in PREPUSH_IGNORE_SEARCHES:
+        assert_denied(_bash_in(repo, "framework-specialist", command), REPLY_KEY, CREDENTIAL)
+
+
+# prepush2-2026-10-27 item 7: a value glued to rg's value-taking short flag is no flag letter.
+GLUED_VALUES = (
+    "rg -trust -n token .",
+    "rg -g'*.tf' -n token .",
+    "rg -tpy -n token .",
+    "rg -Tjs -n token .",
+    "rg -m1 -n token .",
+    "rg -d2 -n token .",
+    "rg -eu token .",
+)
+
+
+@pytest.mark.parametrize("command", GLUED_VALUES)
+def test_a_glued_short_flag_value_is_not_read_as_flags(tmp_path: Path, command: str) -> None:
+    repo = _key_repo(tmp_path)
+    d = decide(_bash_in(repo, "framework-specialist", command), CFG)
+    assert d.allow, (command, d.reason)
+    assert jail.rg_reason(command, str(repo)) is None
+
+
+@pytest.mark.parametrize("command", ("rg -ut token .", "rg -nLt rust token .", "rg -.g x token ."))
+def test_a_reach_letter_before_the_value_flag_still_refuses(tmp_path: Path, command: str) -> None:
+    # prepush2-2026-10-27 item 7: only letters after the value-taking flag are its value.
+    repo = _key_repo(tmp_path)
+    assert_denied(_bash_in(repo, "framework-specialist", command))
+    assert jail.rg_reason(command, str(repo)) == jail.R_RG_REACH

@@ -514,3 +514,14 @@ def test_audit_test_run_still_reads_the_audit_worktree_corpus(tmp_path: Path) ->
     _, tree = _audit_units(repo, flagged=True)
     command = f"python3 -m pytest {tree}/tests/adversarial -q --rootdir {tree}"
     assert evaluate(HOOK, _rb(repo, "security-auditor", command), *AUDIT) is None
+
+
+def test_a_rewritten_search_word_or_rg_program_option_names_its_reason() -> None:
+    # prepush2-2026-10-27 items 1 and 2: the read check alone refuses both, whatever the target.
+    ro = ("--git", "read-only")
+    for command in ("rg $'-uu' -l x src", 'grep $"-r" x src', "rg {-uu,} x src", "rg x *"):
+        assert evaluate(HOOK, _b("x", command), *ro) == jail.R_RG_OPAQUE, command
+    for command in ("rg --hostname-bin=/tmp/x -n x src", "rg --pre /tmp/x x src"):
+        assert evaluate(HOOK, _b("x", command), *ro) == jail.R_RG_PROGRAM, command
+    for command in ("rg -n 'a$' src", "rg -g '*.{tf,yml}' x src", "rg -n x src/*.py"):
+        assert evaluate(HOOK, _b("x", command), *ro) is None, command

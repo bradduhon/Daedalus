@@ -1381,6 +1381,30 @@ def test_finish_merges_a_skipped_train_writing_only_its_one_file(repo: Path) -> 
     assert (repo / "u1.txt").is_file()
 
 
+@pytest.mark.parametrize(("name", "said"), [("u1.txt", ""), ("fix.txt", "changes fix.txt")])
+def test_finish_of_a_skipped_train_judges_only_the_unmerged_fix_unit(
+    repo: Path, name: str, said: str
+) -> None:
+    # prepush2-2026-10-27 item 6: the merged unit is not counted; the fix keeps to the one file.
+    train = _skipped_train(repo)
+    _built(repo, train, "u1")
+    finish(repo)
+    _built(repo, train, "fix1-u1", name, text="fixed\n")
+    base = _ok(repo, "rev-parse", f"daedalus/{train}")
+    if not said:
+        lines = finish(repo)
+        assert lines[:2] == [
+            f"merged 1 units into daedalus/{train}",
+            f"skipped u1: already on daedalus/{train}",
+        ]
+        assert (repo / "u1.txt").read_text() == "fixed\n"
+        return
+    with pytest.raises(WorkspaceError) as info:
+        finish(repo)
+    assert said in str(info.value) and "u1.txt" in str(info.value)
+    assert _ok(repo, "rev-parse", f"daedalus/{train}") == base
+
+
 def _verifier_handback(
     repo: Path, message: str, agent_type: str = "daedalus:verifier", event: str = "PostToolUse"
 ) -> None:

@@ -279,6 +279,14 @@
     "failure": "issue 113: rg reads hidden or ignored files through --ignore-file, -L, --follow or a config file, and reaches the reply key or a credential store",
     "premise_test": "tests/test_checks_credential_paths.py::test_an_rg_reach_flag_names_its_reason"
   },
+  "jail.R_RG_OPAQUE": {
+    "failure": "issue 113: a quoted or expanded rg or grep word becomes a reach flag after the jail judged it, and the search reads the reply key or a credential store",
+    "premise_test": "tests/test_checks_read_only_bash.py::test_a_rewritten_search_word_or_rg_program_option_names_its_reason"
+  },
+  "jail.R_RG_PROGRAM": {
+    "failure": "issue 113: rg runs a program named by --pre, --hostname-bin or another --*-bin option from a read-only agent or a pack verify",
+    "premise_test": "tests/test_checks_read_only_bash.py::test_a_rewritten_search_word_or_rg_program_option_names_its_reason"
+  },
   "jail.R_RG_ONE": {
     "failure": "issue 113: a pack verify that is not one plain rg search runs another command through the framework specialist",
     "premise_test": "tests/test_framework_packs.py::test_a_verify_the_specialists_jail_refuses_is_a_pack_problem"
@@ -354,6 +362,10 @@
   "shell.R_FIND_WRITE": {
     "failure": "0022: find deletes, runs or writes files the write checks never see",
     "premise_test": "tests/test_controls.py::test_find_that_writes_is_refused"
+  },
+  "shell.R_ARCHIVE": {
+    "failure": "spec 8.5: a worker archive or multi-call tool writes a path the coder write check never judges",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_an_archive_tool_names_its_reason"
   },
   "shell.R_HYGIENE": {
     "failure": "0022: an expansion in a word changes the path or command after the jail judged the literal",

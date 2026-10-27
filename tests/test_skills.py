@@ -180,11 +180,19 @@ def test_build_train_resolves_the_packs_for_the_framework_specialist() -> None:
     assert "`Packs: <absolute pack folder>[, <absolute pack folder>...]`" in text
     assert "<that path>/frameworks" not in text and "CACHE_INVALID" not in text
     assert "Unless `frameworks.default_packs` is `false`" in text
-    # prepush-2026-10-27 finding 6: the packs step checks every pack before the first dispatch.
+    # prepush2-2026-10-27 item 5: the packs step runs before every specialist dispatch or resume.
     assert (
-        "Then, before that first dispatch, run `python3 <plugin root>/scripts/daedalus_train.py "
-        "packs --repo <repo>`: it checks the hash and format of every pack the train reads"
+        "Then, before every framework-specialist dispatch or resume, the Phase 2 "
+        "`YIELD_COMPLIANCE` routing and the Phase 3 merged-diff check alike, run `python3 "
+        "<plugin root>/scripts/daedalus_train.py packs --repo <repo>`: it checks the hash and "
+        "format of every pack the train reads, a pack a merged unit changed included"
     ) in text
+    assert "Resolve the pack folders and run the pack check (below)." in text
+    assert (
+        "run the pack check (`daedalus_train.py packs`, Phase 2) on the merged tree, then run one "
+        "Agent(`framework-specialist`) on the merged diff"
+    ) in text
+    assert "before that first dispatch" not in text
     assert "A non-zero exit stops the train and shows its lines" in text
     assert "Every compliance topic goes to Agent(`framework-specialist`)" in text
     assert "run one Agent(`framework-specialist`) on the merged diff" in text

@@ -238,6 +238,12 @@ def _control_problems(
     if refused is not None and _line(verify, LINE_MAX):
         # 113: pack text is data; a verify the specialist's jail refuses never reaches it.
         out.append(f"{where} verify is refused by the framework specialist's jail: {refused}")
+    elif isinstance(verify, str) and _line(verify, LINE_MAX):
+        out += [
+            f"{where} verify searches {path!r} outside the project tree; name . or a relative "
+            "path without .."
+            for path in _outside_paths(verify)
+        ]
     if mapped and not (isinstance(item["maps_to"], str) and CONTROL_ID.fullmatch(item["maps_to"])):
         out.append(f"{where} maps_to must be a control id")
     statement = item.get("statement")
@@ -248,6 +254,23 @@ def _control_problems(
         )
     if "refs" in item:
         out += _refs_problems(where, item["refs"], nist)
+    return out
+
+
+def _outside_paths(verify: str) -> list[str]:
+    # prepush2-2026-10-27: a verify path stays under the project root; no /, ~ or .. part.
+    segments = jail._shell_words(verify)
+    words = segments[0] if len(segments) == 1 else []
+    _, _, paths = jail._path_positions(words)
+    out: list[str] = []
+    for i in sorted(paths):
+        text = jail._clean(words[i])
+        if text.startswith("--"):
+            text = text.partition("=")[2]
+        elif text.startswith("-"):
+            text = text[text.index("f") + 1 :] if "f" in text else ""
+        if not text or text.startswith(("/", "~")) or ".." in text.split("/"):
+            out.append(text)
     return out
 
 

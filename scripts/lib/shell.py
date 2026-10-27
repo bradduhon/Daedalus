@@ -82,6 +82,11 @@ SHELL_STATE_CMDS = frozenset(
     {"hash", "alias", "unalias", "unset", "shopt", "enable", "setopt", "unsetopt"}
     | {"trap", "getopts"}
 )
+# prepush2-2026-10-27: archive and multi-call tools write targets the jail does not model.
+ARCHIVE_CMDS = frozenset(
+    {"tar", "bsdtar", "gtar", "unzip", "zip", "busybox", "toybox", "cpio", "pax", "ar"}
+    | {"7z", "7za", "7zr", "7zz"}
+)
 # issue 76: the one wrapper table, (no-argument options, one-argument options) per base name.
 # An option off its row makes strip_wrappers return None, so callers fail closed.
 WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
@@ -304,6 +309,11 @@ R_CLAUDE_PATH = (
 R_UNTRUSTED_PATH = (
     "a command given as a path runs only from the system bin folders, a unit worktree or the "
     "manifest's declared commands (issue 55). Next: run the tool by name or from your worktree."
+)
+R_ARCHIVE = (
+    "archive and multi-call tools (tar, zip, unzip, cpio, 7z, ar, busybox and kin) write paths "
+    "the jail cannot judge, so workers never run them (prepush2-2026-10-27). Next: copy or "
+    "write each file by name with an allowed command."
 )
 CONFINE_PATH = os.path.join(_REPO_SCRIPTS, CONFINE)
 CONFINE_NEXT = (
@@ -1475,6 +1485,43 @@ def _unsingled(word: str) -> str:
     )
 
 
+def _unquoted(word: str) -> str:
+    return "".join(
+        lex.text[1:] if lex.kind == ESCAPE else lex.text
+        for lex in quote_walk(word)
+        if lex.kind not in {OPEN, CLOSE}
+    )
+
+
+def opaque_word(word: str) -> bool:
+    # prepush2-2026-10-27: bash rewrites the word ($'-uu', $X, {-u,}, a leading glob) unseen.
+    if set("$`") & set(_unsingled(word)):
+        return True
+    bare = [lex for lex in quote_walk(word) if lex.kind == CHAR and not lex.quote]
+    if any(lex.text in "{}" for lex in bare):
+        return True
+    if not any(lex.text in _GLOB_CHARS for lex in bare):
+        return False
+    # prepush2-2026-10-27: a glob can expand to a planted file named like a flag.
+    lead = next((lex for lex in quote_walk(word) if lex.kind not in {OPEN, CLOSE}), None)
+    leading = lead is not None and lead in bare and lead.text in _GLOB_CHARS
+    return _unquoted(word).startswith("-") or leading
+
+
+SEARCH_CMDS = frozenset({"rg", "grep", "egrep", "fgrep"})
+
+
+def search_opaque(command: str) -> bool:
+    # prepush2-2026-10-27: a search segment holding a word bash rewrites may hide a reach flag.
+    for raw in _raw_segments(command):
+        words = _raw_words(raw)
+        if any(_base(_unquoted(w)) in SEARCH_CMDS for w in words) and any(
+            opaque_word(w) for w in words
+        ):
+            return True
+    return False
+
+
 def _hygiene_bad(token: str, word: str | None) -> bool:
     # O4: judge the raw span when it is known, else the shlex token as before.
     text = token if word is None else _unsingled(word)
@@ -1545,6 +1592,9 @@ def _worker_hygiene(
     if own_script is not None and not _path_trusted(tokens[0], base, own_script, tools):
         return R_UNTRUSTED_PATH
     name = _base(tokens[0])
+    inner = strip_wrappers(tokens) or tokens
+    if {name, _base(inner[0])} & ARCHIVE_CMDS:
+        return R_ARCHIVE
     allexport = any(re.fullmatch(r"-[a-zA-Z]*a[a-zA-Z]*|allexport", t) for t in tokens[1:])
     if name in SHELL_VAR_CMDS or (name == "set" and allexport):
         return R_SHELL_VARS

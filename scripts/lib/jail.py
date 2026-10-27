@@ -385,7 +385,7 @@ _GREPS = frozenset({"grep", "egrep", "fgrep"})
 # spec 8: short options whose value is the next word (or the rest of the cluster).
 _SEARCH_VALUES: dict[str, frozenset[str]] = {
     "grep": frozenset("efmABCdD"),
-    "rg": frozenset("efmABCgtTjMrE"),
+    "rg": frozenset("efmABCgtTjMrEd"),
 }
 _SEARCH_LONGS = frozenset(
     {"--regexp", "--file", "--max-count", "--context", "--after-context", "--before-context"}
@@ -838,7 +838,7 @@ def _read_only_segment(
             for arg in args
         )
     if name == "rg":
-        return not any(arg.split("=", 1)[0] in {"--pre", "--pre-glob"} for arg in args)
+        return not rg_program(args)
     if name == "uniq":
         # 8.5: uniq writes its second positional operand.
         return len([arg for arg in args if not arg.startswith("-")]) <= 1
@@ -1436,7 +1436,8 @@ def _search_paths(name: str, clean: list[str], args: list[int]) -> set[int]:
             pending = ""
         elif word.startswith("--"):
             opt = word.split("=", 1)[0]
-            explicit = explicit or opt in {"--regexp", "--file"}
+            # prepush2-2026-10-27: rg --files takes no pattern, so every operand is a path.
+            explicit = explicit or opt in {"--regexp", "--file", "--files"}
             if opt == "--file" and "=" in word:
                 paths.add(i)
             elif "=" not in word and opt in _SEARCH_LONGS:
@@ -1489,6 +1490,7 @@ def _tree_reader(
     if name in _GREPS:
         on = bool({"r", "R"} & short or {"--recursive", "--dereference-recursive"} & longs)
         on = on or any(a.startswith("--directories=recurse") for a in args)
+        on = on or shell.search_opaque(command)
         return (True, ops, not ops) if on else None
     if name == "rg":
         return rg_reaches_hidden(args, command), ops, not ops
@@ -1518,13 +1520,46 @@ R_RG_REACH = (
     "hidden or ignored files (113). Next: drop the flag and search the tree as rg skips it"
 )
 R_RG_ONE = "a verify is one plain rg search with no wrapper, prefix, pipe or chain (113)"
+R_RG_OPAQUE = (
+    "rg or grep with a word the shell rewrites ($'...', $\"...\", $VAR, an unquoted brace or a "
+    "leading glob) may carry a flag the jail never reads (113, prepush2-2026-10-27). Next: spell "
+    "every argument literally and single-quote the pattern"
+)
+R_RG_PROGRAM = (
+    "rg --pre, --pre-glob, --hostname-bin or any --*-bin option runs or loads a program "
+    "(113, prepush2-2026-10-27). Next: drop the option"
+)
+
+
+def rg_program(args: list[str]) -> bool:
+    # prepush2-2026-10-27: each names a program rg runs or a file it loads for one.
+    keys = {a.split("=", 1)[0] for a in args if a.startswith("--")}
+    return bool(keys & {"--pre", "--pre-glob", "--hostname-bin"}) or any(
+        k.endswith("-bin") for k in keys
+    )
+
+
+def _rg_short_letters(arg: str) -> set[str]:
+    # prepush2-2026-10-27: letters after a value-taking flag are its value (-trust is -t rust).
+    letters: set[str] = set()
+    for ch in arg[1:]:
+        letters.add(ch)
+        if ch in _SEARCH_VALUES["rg"]:
+            break
+    return letters
 
 
 def rg_reaches_hidden(args: list[str], command: str) -> bool:
     # 113: a config file can add any flag, so its variable anywhere in the command fails closed.
     longs = {a.split("=", 1)[0] for a in args if a.startswith("--")}
-    short = {c for a in args if a.startswith("-") and not a.startswith("--") for c in a[1:]}
-    return bool(_RG_REACH_SHORT & short or _RG_REACH_LONGS & longs) or _RG_CONFIG_ENV in command
+    short = {
+        c
+        for a in args
+        if a.startswith("-") and not a.startswith("--")
+        for c in _rg_short_letters(a)
+    }
+    reach = bool(_RG_REACH_SHORT & short or _RG_REACH_LONGS & longs)
+    return reach or _RG_CONFIG_ENV in command or shell.search_opaque(command)
 
 
 def _rg_globs(args: list[str]) -> list[str]:
@@ -1594,8 +1629,12 @@ def rg_reason(command: str, cwd: str) -> str | None:
     if chain is None or len(chain.tokens) != 1 or chain.tokens[0][:1] != ["rg"]:
         return R_RG_ONE
     tokens = chain.tokens[0]
+    if rg_program(tokens[1:]):
+        return R_RG_PROGRAM
     if not _read_only_segment(tokens, frozenset(), cwd, None):
         return R_SPECIALIST_BASH
+    if shell.search_opaque(command):
+        return R_RG_OPAQUE
     if rg_reaches_hidden(tokens[1:], command):
         return R_RG_REACH
     # 113: judged against the reply key's fixed place, whether or not one exists yet.

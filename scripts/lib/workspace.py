@@ -844,7 +844,7 @@ def finish(repo: Path) -> list[str]:
                 "back to the lock the unit was built on, then rerun the finish; otherwise "
                 "rerun the train, and if it repeats, file an issue with the train summary."
             )
-    _skip_scope(repo, state, merging, str(lock_sha))
+    _skip_scope(repo, state, merging, str(lock_sha), integration)
     _git(repo, "switch", "-q", integration)
     lines = _merge_all(repo, state, train_id, merging)
     _finished(repo, train_id, merging)
@@ -863,19 +863,31 @@ SKIP_NEXT = (
 
 
 def _skip_scope(
-    repo: Path, state: dict[str, object], merging: list[dict[str, object]], lock_sha: str
+    repo: Path,
+    state: dict[str, object],
+    merging: list[dict[str, object]],
+    lock_sha: str,
+    integration: str,
 ) -> None:
     # prepush-2026-10-27 finding 4, 0156: a skipped contract covers one unit and one file.
     if state.get(train_state.CONTRACT_SKIP) is not True or state.get("packet_version") is not None:
         return
+    # prepush2-2026-10-27: a unit already on the integration branch merged under this check.
+    pending = [
+        unit
+        for unit in merging
+        if _run(repo, "merge-base", "--is-ancestor", str(unit["branch"]), integration).returncode
+    ]
+    if not pending:
+        return
     files = [f for unit in _recorded_plan(state).units for f in unit.files]
     nxt = SKIP_NEXT.format(repo=repo)
-    if len(merging) != 1 or len(files) != 1:
+    if len(pending) != 1 or len(files) != 1:
         raise WorkspaceError(
-            f"this train skipped the contract for a one-file plan, yet {len(merging)} units "
+            f"this train skipped the contract for a one-file plan, yet {len(pending)} units "
             f"would merge against a plan naming {len(files)} files. {nxt}"
         )
-    branch = str(merging[0]["branch"])
+    branch = str(pending[0]["branch"])
     raw = _out(repo, "diff", "--name-only", "--no-renames", "-z", f"{lock_sha}...{branch}")
     changed = sorted(name for name in raw.split("\0") if name)
     if changed != [os.path.normpath(files[0])]:

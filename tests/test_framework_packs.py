@@ -379,6 +379,34 @@ def test_a_verify_the_specialists_jail_refuses_is_a_pack_problem(
         load_pack(folder, known=())
 
 
+# prepush2-2026-10-27 item 4: verify paths that leave the project tree.
+OUTSIDE_VERIFY = (
+    ("rg -n x /", "/"),
+    ("rg -n x ~", "~"),
+    ("rg --files /srv/someone", "/srv/someone"),
+    ("rg -n x /srv/someone/.claude", "/srv/someone/.claude"),
+    ("rg -n x ..", ".."),
+    ("rg -n x src/../..", "src/../.."),
+    ("rg -n x . ../other", "../other"),
+    ("rg -f /etc/hostname .", "/etc/hostname"),
+    ("rg --file=/etc/hostname .", "/etc/hostname"),
+)
+
+
+@pytest.mark.parametrize(("command", "path"), OUTSIDE_VERIFY)
+def test_a_verify_searching_outside_the_tree_is_a_pack_problem(
+    tmp_path: Path, command: str, path: str
+) -> None:
+    folder = _make(tmp_path / "p", [_control(verify=command)])
+    want = f"control X-1 verify searches {path!r} outside the project tree"
+    assert want in _problems(folder)
+
+
+def test_a_verify_inside_the_tree_is_no_problem(tmp_path: Path) -> None:
+    for command in ("rg -n x src", "rg --files src", "rg -n x ./src", "rg -n '/api/..' ."):
+        assert pack_problems(_make(tmp_path / "p", [_control(verify=command)]), known=()) == []
+
+
 def test_a_plain_rg_verify_is_no_problem(tmp_path: Path) -> None:
     for command in ("rg -n x .", "rg -n -F 'AC-2(1)' .", "rg -n 'a|b' -g '*.tf' -g '*.yml' ."):
         assert pack_problems(_make(tmp_path / "p", [_control(verify=command)]), known=()) == []

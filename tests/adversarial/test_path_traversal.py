@@ -10,6 +10,7 @@ import pytest
 from tests.adversarial.corpus import (
     CREDENTIAL,
     OUTSIDE,
+    PREPUSH2_ARCHIVE_WRITES,
     PREPUSH_IGNORE_WRITES,
     PROTECTED,
     READERS,
@@ -164,3 +165,10 @@ def test_auditor_write_inside_the_audit_folder_is_allowed(marked_repo: Path) -> 
         path = f"{_audit(marked_repo)}/{name}"
         write = _cred("security-auditor", "Write", str(marked_repo), file_path=path, content="x")
         assert decide(write, CFG).allow, path
+
+
+@pytest.mark.parametrize("agent", ("repo-coder", "docs-writer"))
+@pytest.mark.parametrize("template", PREPUSH2_ARCHIVE_WRITES)
+def test_an_archive_or_multi_call_write_is_denied(agent: str, template: str) -> None:
+    # prepush2-2026-10-27 item 3: the write check models none of these targets, so all refuse.
+    assert_denied(_b(agent, template.format(wt=WT)), "archive and multi-call tools")
