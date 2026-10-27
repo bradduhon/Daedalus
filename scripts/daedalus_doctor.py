@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import daedalus_confine  # noqa: E402
-from lib import git, packs  # noqa: E402
+from lib import git, inventory, packs  # noqa: E402
 from lib.audit import (  # noqa: E402
     DataDirError,
     cache_dir_matches,
@@ -676,6 +676,13 @@ def print_cache_dir() -> int:
     return 0
 
 
+def print_files() -> int:
+    # Plan 10 spec 3.2: one `<path pattern> | <writer> | <when>` line per FILES row.
+    for line in inventory.lines():
+        print(line)
+    return 0
+
+
 def _tool_present(repo: Path, name: str) -> bool:
     # 0128: a name with a slash is a repo-relative executable, such as .venv/bin/pytest; else PATH.
     if "/" in name:
@@ -714,6 +721,12 @@ def main(argv: list[str]) -> int:
         help="print the plugin cache directory as one absolute path and exit",
     )
     parser.add_argument(
+        "--print-files",
+        action="store_true",
+        help="print one `<path pattern> | <writer> | <when>` line per path the plugin can write,"
+        " and exit",
+    )
+    parser.add_argument(
         "--print-secrets-scan",
         action="store_true",
         help="print whether the service manifest turns the Push Train's secret scan on, and exit",
@@ -735,6 +748,8 @@ def main(argv: list[str]) -> int:
         return check_tools(Path(args.repo).resolve(), args.check_tools)
     if args.print_cache_dir:
         return print_cache_dir()
+    if args.print_files:
+        return print_files()
     if args.print_secrets_scan:
         return print_secrets_scan(Path(args.repo).resolve())
     all_ok = True
