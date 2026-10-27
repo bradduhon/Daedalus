@@ -238,6 +238,7 @@ def test_absent_scaffolds_are_opt_and_pass(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout
     assert [line.split(":")[0][5:] for line in lines if line.startswith("OPT  ")] == [
         "config.json",
+        "standing_rules",
         "standards_sources",
         "service-manifest.json",
         "contracts/",
@@ -741,6 +742,34 @@ def test_config_ledger_valid_is_ok_with_config_origin(tmp_path: Path) -> None:
     lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
     assert f"OK   ledger: {path} (config, markdown-table-row)" in lines
     assert not any(line.startswith("MISS ledger") for line in lines)
+
+
+@pytest.mark.parametrize(
+    ("doc", "write", "prefix"),
+    [
+        ({}, False, "OPT  standing_rules: not declared. Next: set standing_rules"),
+        ({"standing_rules": "docs/standing-rules.md"}, True, "OK   standing_rules: "),
+        ({"standing_rules": "docs/standing-rules.md"}, False, "MISS standing_rules: "),
+    ],
+)
+def test_config_standing_rules_line(
+    tmp_path: Path, doc: dict[str, str], write: bool, prefix: str
+) -> None:
+    # 0090: one line for the key; absent is OPT, a declared path with no file a MISS.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (_data(repo) / "config.json").write_text(json.dumps(doc))
+    if write:
+        (repo / "docs").mkdir()
+        (repo / "docs" / "standing-rules.md").write_text("# Standing rules\n")
+    bins = _bins_with_git(tmp_path)
+    result = _run(None, repo, path_env=bins, home=tmp_path / "home")
+    lines = [line for line in result.stdout.splitlines() if line[5:].startswith("standing_rules:")]
+    assert len(lines) == 1 and lines[0].startswith(prefix), result.stdout
+    if prefix.startswith("MISS"):
+        assert "Next:" in lines[0] and result.returncode == 1
+    if write:
+        assert lines[0].endswith(str(repo.resolve() / "docs" / "standing-rules.md"))
 
 
 def test_train_marker_absent_is_ok_none(tmp_path: Path) -> None:

@@ -113,3 +113,11 @@ def test_reader_keys_follow_the_reader_dataclasses() -> None:
     assert {f"frameworks.{k}" for k in FRAMEWORKS_KEYS} <= set(manifest_keys())
     nested = {"features", "docs", "priorities", "frameworks"}
     assert {f.name for f in fields(Manifest)} - nested <= leaves
+
+
+def test_standing_rules_key_has_its_reference_row() -> None:
+    # 0090: the planner's locator key is documented in the config section of the README table.
+    assert "standing_rules" in config_keys()
+    rows = {(file, key): cells for key, file, cells in _rows()}
+    cells = rows[(CONFIG_FILE, "standing_rules")]
+    assert "charter_root" in cells[2] and cells[3].startswith("`null`")

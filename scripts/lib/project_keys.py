@@ -414,6 +414,15 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`contracts/`",
         '`"/work/decisions"`',
     ),
+    (CONFIG_FILE, "standing_rules"): KeyRow(
+        "The standing-rules file the planner reads as the rules every plan must satisfy, "
+        "derived from the ledger by `scripts/standing_rules.py` (0090)",
+        "string or null",
+        "A non-empty path; a relative path is read from `charter_root` when one is declared, "
+        "else from the project root",
+        "`null`: the repository has no standing-rules file",
+        '`"standing-rules.md"`',
+    ),
     (CONFIG_FILE, "excluded_roots"): KeyRow(
         "Folders whose files must never reach git, GitHub or a redirect. A Daedalus agent is "
         "refused such a command in every session, and the main session is warned during a "
