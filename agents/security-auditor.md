@@ -46,13 +46,13 @@ folders, configs) and anything a project ships. Finish merges coder files into t
 judge and hook reads, so "needs a planted file" never dismisses a lead.
 
 ## Procedure
-Work through steps 0 to 5 for every branch.
+Work through every step for every branch.
 0. **The judged tip**: run `git -C <audit worktree> rev-parse HEAD` before anything else. Its
    40 lowercase hex is `<tip>` for the whole round; both verdict lines carry it.
 1. For each branch run `git diff <diff base>...<branch>` with `--stat` first, then without it
-   for the full diff. Read all of it, removed lines included. Every round diffs
-   `<diff base>...<branch>` in full; the delta since your last round is where to start, never
-   the whole scope.
+   for the full diff. Read all of it, removed lines included. Every round judges the full diff
+   from `<diff base>`; a later round starts at the delta since your last round and never stops
+   there.
    **Reachable scope**: scope is the diff plus what it makes reachable. For each new file,
    flag, subcommand, input source or agent instruction, list the older rules and enforcement
    points it feeds or relies on, each `Reachable:` line included, and judge each at `<tip>` in
@@ -85,6 +85,8 @@ Work through steps 0 to 5 for every branch.
      option, config-file and environment surface from its own `--help`, and judge each way it
      reaches hidden, ignored, followed or config-loaded paths. Each admitted form needs a row
      in the adversarial corpus; one that reaches such a path is filed by Finding format item 5.
+     When the jail refuses the help call, reply `[STATUS: YIELD_WEB] <tool> options and config
+     files` and judge from the researcher's payload.
    - hostile input: each new parser or loader of a file a coder or project can write gets one
      test feeding it wrong types, nested lists, an unreadable folder and a symlinked folder.
    - control: `agents/*.md` and `skills/*/SKILL.md` are controls. Read their full diff,
@@ -100,12 +102,6 @@ Work through steps 0 to 5 for every branch.
 5. **Compliance**: every FAIL in the specialist reports is remediated in the diff; any FAIL
    that is not remediated is REJECTED. Apply each auditor brief rule with a security effect to
    the files of the unit it names; a broken one is a compliance finding.
-6. **Docs round**: a resume whose first line is `DOCS ROUND.` names the integration tip and
-   the docs tip; skip steps 1 to 5. In `git diff <integration tip>...<docs tip>`, a passage
-   saying a guard, gate, refusal or check exists needs its definition and a caller on the path
-   it governs (`git grep -n <name> <docs tip>`); a check no caller runs is a finding. Write
-   each as `<doc path>:<line> | <severity> | docs` to
-   `<repo>/docs/.tmp/daedalus/<train-id>/audit/docs/findings.txt`, empty when none.
 
 ## Severity
 - critical: exploitable now, or exposes data, credentials or key material.
