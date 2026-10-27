@@ -63,6 +63,9 @@ USAGE_FIELDS = (
 )
 PREFIX = "daedalus:"
 BUILD, PUSH, DOC = "Build Train", "Push Train", "Document Train"
+# 0163: agents the main session starts outside any run group under the session itself.
+SESSION = "session"
+CODER = "repo-coder"
 ROOT_RUN_TYPES = {
     "orchestrator": BUILD,
     "pr-train-conductor": PUSH,
@@ -380,7 +383,7 @@ def _phase(run_type: str, agent_type: str, prompt: str) -> str | None:
     return match.group(1) if match else BUILD_PHASES.get(agent_type)
 
 
-def build_runs(agents: list[Agent]) -> tuple[list[Run], int]:
+def build_runs(agents: list[Agent], session: str) -> list[Run]:
     # Plan 11 A: a run is a root agent's whole tree; an unclassed root joins a run it names.
     by_id = {a.agent_id: a for a in agents}
     runs: dict[tuple[str, str], Run] = {}
@@ -393,19 +396,17 @@ def build_runs(agents: list[Agent]) -> tuple[list[Run], int]:
     ids: dict[str, tuple[str, str]] = {}
     for owned in sorted(set(owners.values())):
         ids.setdefault(owned[1], owned)
-    outside = 0
     for agent in agents:
         key = owners.get(agent.agent_id)
         named = _named_id(agent)
         if key is None and agent.plugin and agent.parent is None and named in ids:
             key = ids[named]
-        if key is None:
-            outside += 1
-            continue
-        run = runs.setdefault(key, Run(*key))
+        run = runs.setdefault(key or (SESSION, session), Run(*(key or (SESSION, session))))
         _add_rows(run, agent)
-    ordered = sorted(runs.values(), key=lambda r: (r.first or _LATEST, r.run_id))
-    return ordered, outside
+    # 0163: the session group prints after the runs it sits beside.
+    return sorted(
+        runs.values(), key=lambda r: (r.run_type == SESSION, r.first or _LATEST, r.run_id)
+    )
 
 
 def _add_rows(run: Run, agent: Agent) -> None:
@@ -414,10 +415,11 @@ def _add_rows(run: Run, agent: Agent) -> None:
         if seg.first is not None and seg.last is not None:
             run.first = min(run.first, seg.first) if run.first else seg.first
             run.spans.append((seg.first, seg.last))
-        row = rows.get(seg.label)
+        label = None if run.run_type == SESSION else seg.label
+        row = rows.get(label)
         if row is None:
             kind = None
-            if seg.label is not None and seg.label not in STAGES:
+            if label is not None and label not in STAGES:
                 kind = "round" if agent.agent_type in ROUND_AGENTS else "unit"
             phase = _phase(run.run_type, agent.agent_type, seg.prompt)
             row = Row(
@@ -426,12 +428,12 @@ def _add_rows(run: Run, agent: Agent) -> None:
                 run.run_id,
                 phase,
                 agent.agent_type,
-                seg.label,
+                label,
                 kind,
                 Usage(),
                 seg.first,
             )
-            rows[seg.label] = row
+            rows[label] = row
             run.rows.append(row)
         row.usage.add(seg.usage)
     run.rows.sort(key=lambda r: (r.first or _LATEST, r.agent))
@@ -494,8 +496,8 @@ def totals_row(run: Run) -> str:
 
 
 def mean_row(run: Run, kind: str) -> str:
-    # Plan 11 A: per-unit and per-round means over the rows that carry that label kind.
-    picked = [r for r in run.rows if r.kind == kind]
+    # Plan 11 A: the unit mean is coders only, as the hand reports divided; verifiers stay in total.
+    picked = [r for r in run.rows if r.kind == kind and (kind != "unit" or r.agent == CODER)]
     count = len({r.label for r in picked})
     label = f"per {kind}"
     if not count:
@@ -537,12 +539,11 @@ def _audit_records(root: Path, session: str) -> list[dict[str, object]]:
 
 def session_runs(
     session: str, root: Path, records: list[dict[str, object]] | None = None
-) -> tuple[list[Run], int, int]:
-    # Returns the runs, the agents outside any run, and the transcript count.
+) -> tuple[list[Run], int]:
+    # Returns the runs, the session group included, and the transcript count.
     files = transcript_files(session, root)
     types = audit_types(_audit_records(root, session) if records is None else records)
-    runs, outside = build_runs(load_agents(files, types))
-    return runs, outside, len(files)
+    return build_runs(load_agents(files, types), session), len(files)
 
 
 def _merge(runs: list[Run]) -> list[Run]:
@@ -554,22 +555,25 @@ def _merge(runs: list[Run]) -> list[Run]:
         into.spans += run.spans
         if run.first is not None:
             into.first = min(into.first, run.first) if into.first else run.first
-    return sorted(merged.values(), key=lambda r: (r.first or _LATEST, r.run_id))
+    return sorted(
+        merged.values(), key=lambda r: (r.run_type == SESSION, r.first or _LATEST, r.run_id)
+    )
 
 
 LEGEND = (
     "Agents only: the main session's own tokens are left out. The four token counts are summed "
     "apart, once per message id, from its last transcript line. Wall time on an agent row adds "
-    "up that agent's active spans; on a total row it is the time any agent of the run was active."
+    "up that agent's active spans; on a total row it is the time any agent of the run was active. "
+    "The mean per unit counts coders only. Run type session holds the agents the main session "
+    "started outside any run."
 )
 
 
-def render(runs: list[Run], source: str, outside: int) -> str:
+def render(runs: list[Run], source: str) -> str:
     lines = ["# Token economy", "", f"source: {source}", "", LEGEND, "", *header()]
     for run in runs:
         lines += [detail_row(row) for row in run.rows]
         lines += [totals_row(run), mean_row(run, "unit"), mean_row(run, "round")]
-    lines += ["", f"agents outside any run: {outside} (not counted)"]
     return "\n".join(lines) + "\n"
 
 
@@ -606,13 +610,13 @@ def _run_sessions(root: Path, run_id: str) -> list[str]:
 
 def report(root: Path, session: str | None, run_id: str | None) -> str:
     if session is not None:
-        runs, outside, files = session_runs(_session_arg(session), root)
+        runs, files = session_runs(_session_arg(session), root)
         if not files:
             raise TokenError(
                 f"no agent transcript names session {session} under {projects_dir()}. "
                 "Next: check the session id; Claude Code removes old transcripts."
             )
-        return render(_merge(runs), f"session {session}", outside)
+        return render(_merge(runs), f"session {session}")
     assert run_id is not None
     sessions = _run_sessions(root, run_id)
     picked: list[Run] = []
@@ -624,7 +628,7 @@ def report(root: Path, session: str | None, run_id: str | None) -> str:
             f"(sessions {', '.join(sessions)}). Next: check the run id; Claude Code removes "
             "old transcripts."
         )
-    return render(_merge(picked), f"run {run_id}, sessions {', '.join(sessions)}", 0)
+    return render(_merge(picked), f"run {run_id}, sessions {', '.join(sessions)}")
 
 
 def _charter(root: Path) -> Path | None:
@@ -675,7 +679,7 @@ def audit_lines(session: str, root: Path, records: list[dict[str, object]]) -> l
     # Plan 11 A item 2: the audit report's token section; it never fails the audit report.
     lines = ["## Token economy", ""]
     try:
-        runs, outside, files = session_runs(session, root, records)
+        runs, files = session_runs(session, root, records)
     except (OSError, UnicodeDecodeError) as exc:
         return lines + [f"token totals not shown: the transcripts could not be read ({exc})."]
     if not files:
@@ -683,12 +687,10 @@ def audit_lines(session: str, root: Path, records: list[dict[str, object]]) -> l
             f"no agent transcript found for session {session} under {projects_dir()}; "
             "token totals not shown."
         ]
-    if not runs:
-        return lines + [f"no orchestrated run in this session; {outside} agents outside any run."]
     lines += header()
     for run in _merge(runs):
         lines += [totals_row(run), mean_row(run, "unit")]
-    return lines + ["", f"agents outside any run: {outside} (not counted)"]
+    return lines
 
 
 def _write(text: str, out: str, cwd: str) -> Path:

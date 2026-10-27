@@ -117,9 +117,9 @@ def test_dedup_takes_the_last_line_of_each_message_id(tmp_path: Path) -> None:
 
 def test_warm_resume_splits_at_the_new_unit_prompt(home: Path) -> None:
     _train(home)
-    runs, outside, files = te.session_runs(SESSION, home.parents[2] / "repo", [])
-    assert (outside, files) == (1, 4)
-    (run,) = runs
+    runs, files = te.session_runs(SESSION, home.parents[2] / "repo", [])
+    assert files == 4
+    run, _session = runs
     coder = {r.label: r for r in run.rows if r.agent == "repo-coder"}
     # The FIX prompt names no unit, so it stays on A1; the RESUME prompt opens A3.
     assert sorted(coder) == ["a1", "a3"]
@@ -132,12 +132,12 @@ def test_warm_resume_splits_at_the_new_unit_prompt(home: Path) -> None:
 
 def test_missing_values_print_none(home: Path) -> None:
     _train(home)
-    runs, outside, _ = te.session_runs(SESSION, home.parents[2] / "repo", [])
-    text = te.render(runs, f"session {SESSION}", outside)
+    runs, _ = te.session_runs(SESSION, home.parents[2] / "repo", [])
+    text = te.render(runs, f"session {SESSION}")
     assert f"| Build Train | {TRAIN} | none | orchestrator | none | 1 | 2 | 100 |" in text
     assert f"| Build Train | {TRAIN} | 2 | repo-coder | a1 | 3 | 6 | 105 | 30 | 0 | 0m50s |" in text
     assert f"| Build Train | {TRAIN} | total | 3 agents | 2 units, 2 rounds | 7 |" in text
-    assert "agents outside any run: 1 (not counted)" in text
+    assert "agents outside any run" not in text
     row = te.table_row(["x", None, "", 1, 2, 3, 4, 5, 6, 7, 8])
     assert row == "| x | none | none | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |"
     push = te.Run(te.PUSH, TRAIN)
@@ -188,3 +188,44 @@ def test_audit_lines_without_transcripts_is_one_line(home: Path, tmp_path: Path)
     assert lines[0] == "## Token economy"
     assert lines[2].startswith(f"no agent transcript found for session {SESSION}")
     assert len(lines) == 3
+
+
+def test_audit_lines_carry_the_session_group(home: Path, tmp_path: Path) -> None:
+    _train(home)
+    lines = te.audit_lines(SESSION, tmp_path / "repo", [])
+    assert lines[-2].startswith(f"| session | {SESSION} | total | 1 agents | 0 units, 0 rounds |")
+    assert lines[-1].startswith(f"| session | {SESSION} | mean | per unit | 0 units | none |")
+    assert not any("outside any run" in line for line in lines)
+
+
+def test_agents_outside_any_run_group_under_the_session(home: Path) -> None:
+    # 0163: main-session agents are a run of type session, one row each, means none.
+    _train(home)
+    _agent(
+        home, "loose2", "general-purpose", [_prompt("09:00.000", "w"), _reply("09:04.000", "g", 8)]
+    )
+    runs, _ = te.session_runs(SESSION, home.parents[2] / "repo", [])
+    session = runs[-1]
+    assert (session.run_type, session.run_id) == (te.SESSION, SESSION)
+    assert sorted(r.agent_id for r in session.rows) == ["loose", "loose2"]
+    assert {(r.phase, r.label, r.kind) for r in session.rows} == {(None, None, None)}
+    total = te.totals_row(session)
+    assert total.startswith(f"| session | {SESSION} | total | 2 agents | 0 units, 0 rounds | 1 |")
+    for kind in ("unit", "round"):
+        assert te.mean_row(session, kind).endswith(
+            f"| 0 {kind}s | none | none | none | none | none | none |"
+        )
+
+
+def test_unit_mean_counts_coders_only() -> None:
+    # Plan 11 A: the hand reports divided coder rows by units; a verifier row stays in the total.
+    run = te.Run(te.BUILD, TRAIN)
+    for agent, out in (("repo-coder", 40), ("verifier", 4)):
+        usage = te.Usage(turns=2, tokens=[2, out, 10, 100], seconds=60.0)
+        run.rows.append(te.Row(agent, te.BUILD, TRAIN, "2", agent, "a1", "unit", usage, None))
+    mean = te.mean_row(run, "unit")
+    assert (
+        mean
+        == f"| Build Train | {TRAIN} | mean | per unit | 1 units | 2 | 2 | 40 | 10 | 100 | 1m00s |"
+    )
+    assert "| 4 | 4 | 44 | 20 | 200 |" in te.totals_row(run)
