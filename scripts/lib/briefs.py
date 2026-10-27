@@ -23,7 +23,10 @@ SCRATCH = Path("docs") / ".tmp" / "daedalus"
 # 0031: "main" names the main session, not an agent file, and is an everyday word.
 AGENT_NAMES = KNOWN_AGENTS - {"main"}
 _LABEL = re.compile(r"[A-Z][A-Za-z ]*:(\s|$)")
-_SENTENCE_END = re.compile(r"(?<=[.?!])\s+")
+# 0153: an ellipsis never ends a sentence, so a quoted "..." cannot split one in two.
+_SENTENCE_END = re.compile(r"(?<=[^.][.?!])\s+")
+# 0153: every name-shaped run in a word, so a possessive or a daedalus: prefix still matches.
+_NAME_RUN = re.compile(r"[a-z]+(?:-[a-z]+)*")
 _SNAKE = re.compile(r"[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+")
 _RULING_ID = re.compile(r"[0-9]{4}-[A-Z]{3}")
 _ISSUE = re.compile(r"#[0-9]+")
@@ -42,7 +45,7 @@ def level_of(literacy: str | None) -> str:
 
 
 def _fields(text: str) -> list[tuple[str, str]]:
-    # One (where, text) pair per Question:, Context: and option label; descriptions are skipped.
+    # 0153: one (where, text) pair per Question:, Context: and option label; no descriptions.
     out: list[tuple[str, list[str]]] = []
     mode = ""
     for raw in text.splitlines():
@@ -79,7 +82,8 @@ def _token_problems(where: str, text: str) -> list[str]:
             found.append(f"{where} carries the ruling id {bare}")
         if _ISSUE.search(bare):
             found.append(f"{where} carries the issue number {bare}")
-        if bare.lower() in AGENT_NAMES:
+        runs = _NAME_RUN.findall(bare.lower())
+        if AGENT_NAMES & {*runs, *(part for run in runs for part in run.split("-"))}:
             found.append(f"{where} carries the agent name {bare}")
     return found
 

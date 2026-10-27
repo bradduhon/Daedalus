@@ -97,6 +97,11 @@ def test_profile_and_unknown_levels_judge_as_plain() -> None:
         (f"Is {ISSUE} closed by this?", f"Question carries the issue number {ISSUE}"),
         ("Should the verifier run again?", "Question carries the agent name verifier"),
         ("Should the Orchestrator stop?", "Question carries the agent name Orchestrator"),
+        ("Is the verifier's table right?", "Question carries the agent name verifier's"),
+        ("Was the planner’s cut right?", "Question carries the agent name planner’s"),
+        ("Should daedalus:verifier run?", "Question carries the agent name daedalus:verifier"),
+        ("Is the repo-coder's branch done?", "Question carries the agent name repo-coder's"),
+        ("Is it planner-written?", "Question carries the agent name planner-written"),
     ],
 )
 def test_token_rules_at_plain_and_standard(text: str, problem: str) -> None:
@@ -117,6 +122,18 @@ def test_context_continuation_lines_join_the_field() -> None:
         "Options:", "  It moved with lock_sha.\nOptions:"
     )
     assert brief_problems(text, "plain") == ["Context carries the snake_case token lock_sha"]
+
+
+def test_an_ellipsis_does_not_end_a_sentence() -> None:
+    # 0153: 22 words around a bare ellipsis count as one sentence, over plain's 15.
+    context = (
+        "The check printed an error and then ... the train kept going and wrote "
+        "a second brief file for the same finding."
+    )
+    assert len(context.split()) == 22
+    assert brief_problems(_brief(context=context), "plain") == [
+        f"Context sentence has 22 words, over 15 at plain: {context}"
+    ]
 
 
 def test_main_and_everyday_words_pass() -> None:
