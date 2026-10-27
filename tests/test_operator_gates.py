@@ -290,6 +290,11 @@ def test_an_earlier_rounds_exemption_never_covers_a_later_round(repo: Path, plug
         {"ledger_id": "", "tip": None, "tracking": "issue"},
         {"ledger_id": ID, "tip": "c" * 40, "tracking": "issue"},
         {"ledger_id": ID, "tip": None, "tracking": "unknown"},
+        # 0139: an `other` answer with no words, empty words or blank words never passes.
+        {"ledger_id": ID, "tip": None, "tracking": "other"},
+        {"ledger_id": ID, "tip": None, "tracking": "other", "other": ""},
+        {"ledger_id": ID, "tip": None, "tracking": "other", "other": "  "},
+        {"ledger_id": ID, "tip": None, "tracking": "other", "other": None},
         "not an object",
     ],
 )
@@ -302,6 +307,23 @@ def test_a_malformed_exemption_never_passes(repo: Path, plugin: Path, broken: ob
     with pytest.raises(ProofError):
         push_proof(repo, train)
     assert gh_policy.verdict_reason(str(repo), "gh pr create") is not None
+
+
+def test_an_other_exemption_with_words_passes_and_the_refusal_names_the_labels(
+    repo: Path, plugin: Path
+) -> None:
+    # 0139, 0149: worded `other` passes; the refusal's Next line names the three gate labels.
+    tip = _audit_train(repo, plugin)
+    train = str(_state(repo)["train_id"])
+    _rejected_round(repo, tip, 1, A)
+    with pytest.raises(ProofError) as info:
+        push_proof(repo, train)
+    message = str(info.value)
+    assert "`Fix it now`, `Skip, track or exempt it` and `Stop the train`" in message
+    assert "run a fix round" not in message
+    entry = {"ledger_id": ID, "tip": tip, "tracking": "other", "other": "kept in team notes"}
+    train_state.update(repo, train, exemptions={"1": {KEY_A: entry}})
+    assert push_proof(repo, train).startswith("OK approved: every finding exempted")
 
 
 def test_an_approved_verdict_still_takes_its_own_path(repo: Path, plugin: Path) -> None:

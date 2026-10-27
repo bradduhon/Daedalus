@@ -413,8 +413,10 @@ def _route(session: Session, stage: dict[str, object], label: str, route: str) -
         session.lines += [
             f"stage {sid}: {label}.",
             f"Ask the operator: {route.removeprefix('ask: ')}",
-            "Next: put the question to the operator, then run step to retry the stage "
-            "or stop to end the train.",
+            # 0149: the gate labels the operator picks from, verbatim.
+            "Next: put the question to the operator with the choices `Fix it now`, "
+            "`Skip, track or exempt it` and `Stop the train`; run step to retry the stage, "
+            "or stop on `Stop the train`.",
         ]
         return Outcome(EXIT_OK, session.lines)
     consult = _CONSULT.fullmatch(route)
@@ -1832,8 +1834,7 @@ def _docs_claims(
     return {f.key: {"severity": f.severity, "class": f.kind} for f in listed.values()}
 
 
-def _docs_verified(repo: Path, train_id: str, state: dict[str, object]) -> None:
-    # 0121, 0131: a verified docs verdict is read from the verifier's reply, never typed.
+def _docs_unit(train_id: str, state: dict[str, object]) -> dict[str, object]:
     name = f"{train_id}{train_state.DOCS_SUFFIX}"
     unit = next((u for u in train_state.units(state) if u.get("name") == name), None)
     if unit is None:
@@ -1841,6 +1842,39 @@ def _docs_verified(repo: Path, train_id: str, state: dict[str, object]) -> None:
             f"train {train_id} records no docs worktree {name}. "
             "Next: run the documentation stage, then rerun verdict --gate docs."
         )
+    return unit
+
+
+def _docs_judged(
+    repo: Path, train_id: str, state: dict[str, object], judged: str, current: str
+) -> None:
+    # 0131: the Docs tip the verifier judged is the docs branch head, merged into the tip.
+    rerun = "rerun verdict --gate docs with --judged set to the Docs tip: sha the verifier judged"
+    if not TIP.fullmatch(judged):
+        raise RunnerError(
+            f"--judged {judged!r} is not a 40 lowercase hex commit sha. Next: {rerun}."
+        )
+    branch = _text(_docs_unit(train_id, state), "branch")
+    try:
+        head = workspace._out(repo, "rev-parse", "--verify", f"refs/heads/{branch}").strip()
+    except workspace.WorkspaceError as exc:
+        raise RunnerError(f"the docs branch {branch} has no readable head: {exc}") from exc
+    if workspace._run(repo, "merge-base", "--is-ancestor", head, current).returncode:
+        raise RunnerError(
+            f"the docs branch head {head[:12]} is not merged into the integration tip "
+            f"{current[:12]}. Next: merge the docs branch with daedalus_workspace.py finish, "
+            f"then {rerun}."
+        )
+    if judged != head:
+        raise RunnerError(
+            f"the merged docs commits end at {head[:12]}, not at the judged docs tip "
+            f"{judged[:12]}. Next: send the docs branch to the verifier again, then {rerun}."
+        )
+
+
+def _docs_verified(repo: Path, train_id: str, state: dict[str, object]) -> None:
+    # 0121, 0131: a verified docs verdict is read from the verifier's reply, never typed.
+    unit = _docs_unit(train_id, state)
     try:
         verified = workspace.unit_verified(
             workspace._audit_records(repo, state), Path(_text(unit, "path"))
@@ -1856,7 +1890,11 @@ def _docs_verified(repo: Path, train_id: str, state: dict[str, object]) -> None:
 
 
 def record_docs_verdict(
-    cwd: Path, status: str, tip: str | None = None, findings: Path | None = None
+    cwd: Path,
+    status: str,
+    tip: str | None = None,
+    findings: Path | None = None,
+    judged: str | None = None,
 ) -> Outcome:
     # 0131, 0134: the docs verifier's verdict on the integration tip, beside the security verdict.
     def edit(repo: Path, train_id: str) -> list[str]:
@@ -1865,6 +1903,11 @@ def record_docs_verdict(
                 f"docs verdict status {status!r} is neither verified nor refuted. "
                 "Next: rerun verdict --gate docs with the status the verifier's line names."
             )
+        if judged is not None and status != train_state.VERIFIED:
+            raise RunnerError(
+                "--judged belongs to a verified docs verdict only. "
+                "Next: rerun verdict --gate docs without --judged."
+            )
         current = _integration_tip(repo, train_id)
         if tip is not None and tip != current:
             raise RunnerError(
@@ -1872,9 +1915,14 @@ def record_docs_verdict(
                 "with daedalus_workspace.py finish, then rerun verdict --gate docs with no --tip."
             )
         claims = _docs_claims(repo, train_id, status, findings)
+        state = train_state.load(repo, train_id)
         if status == train_state.VERIFIED:
-            _docs_verified(repo, train_id, train_state.load(repo, train_id))
+            _docs_verified(repo, train_id, state)
+        if judged is not None:
+            _docs_judged(repo, train_id, state, judged, current)
         record: dict[str, object] = {"status": status, "tip": current}
+        if judged is not None:
+            record["judged"] = judged
         if claims:
             record["findings"] = claims
         train_state.update(repo, train_id, **{train_state.DOCS_VERDICT: record})
