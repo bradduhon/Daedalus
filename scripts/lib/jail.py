@@ -1518,10 +1518,12 @@ def _rg_globs(args: list[str]) -> list[str]:
         elif arg.startswith("-"):
             hit = next((k for k, c in enumerate(arg[1:], 2) if c in letters), None)
             if hit is not None:
-                raws += [arg[hit:] or later] if arg[hit - 1] == "g" else []
+                # SC-12: -g=x may reach rg as x or =x, so both are judged.
+                value = arg[hit:] or later
+                raws += [value, value.removeprefix("=")] if arg[hit - 1] == "g" else []
                 i += 0 if arg[hit:] else 1
         i += 1
-    raws = ["*" if set("$`") & set(r) else r for r in raws if not r.startswith("!")]
+    raws = ["*" if set("$`") & set(r) else r for r in dict.fromkeys(raws) if not r.startswith("!")]
     return [p for raw in raws for p in glob_patterns(raw)]
 
 

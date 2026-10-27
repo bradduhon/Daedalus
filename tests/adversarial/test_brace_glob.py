@@ -10,6 +10,7 @@ from lib import jail
 
 from tests.adversarial.corpus import (
     CREDENTIAL,
+    FIX1_GREP_GLOBS,
     FIX1_RG_GLOBS,
     FIX1_RG_GLOBS_ALLOWED,
     READERS,
@@ -155,6 +156,29 @@ def test_an_rg_whitelist_glob_reaching_a_credential_store_is_denied(
 ) -> None:
     # SC-12: the same override reaches a hidden credential store under home.
     (cred_home / ".ssh").mkdir()
-    for command in ("rg -g .ssh -g 'id_*' BEGIN ~", "rg --iglob=.SSH BEGIN {home}"):
+    forms = ("rg -g .ssh -g 'id_*' BEGIN ~", "rg --iglob=.SSH BEGIN {home}")
+    forms += ("rg -g '**/.ssh' -g '**/.ssh/**' BEGIN ~", "rg -g '.ssh/' BEGIN {home}")
+    for command in forms:
         assert_store_read_denied("security-auditor", command, home=cred_home)
     assert jail._rg_globs(["-e", "-g", "-g", "!x", "--glob", "$X", "-ng*.tf"]) == ["*", "*.tf"]
+    assert jail._rg_globs(["-g=.claude"]) == ["=.claude", ".claude"]
+
+
+@pytest.mark.parametrize("agent", READERS)
+@pytest.mark.parametrize("glob", FIX1_GREP_GLOBS)
+def test_grep_tool_gitignore_glob_reaching_the_reply_key_is_denied(
+    tmp_path: Path, agent: str, glob: str
+) -> None:
+    # SC-12: the Grep tool shares glob_reaches, so a zero-folder **/ reaches the key too.
+    repo = _key_repo(tmp_path)
+    tool_input = {"pattern": ".", "glob": glob, "path": str(repo)}
+    assert_denied(_cred(agent, "Grep", cwd=str(repo), **tool_input), REPLY_KEY, CREDENTIAL)
+
+
+def test_grep_tool_pack_globs_still_pass(tmp_path: Path) -> None:
+    # SC-12: globs naming no hidden folder or key stay admitted for the Grep tool.
+    repo = _key_repo(tmp_path)
+    for glob in ("*.tf", "**/*.py", "*Dockerfile*", "src/**"):
+        tool_input = {"pattern": ".", "glob": glob, "path": str(repo)}
+        d = decide(_cred("framework-specialist", "Grep", cwd=str(repo), **tool_input), CFG)
+        assert d.allow, (glob, d.reason)

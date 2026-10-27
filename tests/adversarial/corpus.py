@@ -114,12 +114,20 @@ FIX1_RG_GLOBS = (
     "rg -g '{.claude,x}' -g '*.key' token .",
     "rg -g '.*' token .",
     "rg -g '**/*.key' token .",
+    # SC-12 (fix round 1, verifier): gitignore **/ matches zero folders; a trailing / is a folder.
+    "rg -g '**/.claude' -g '**/.claude/**' -l . .",
+    "rg -g '.claude/' -g '**/.claude/**/reply-hmac.key' -l . .",
+    "rg -g=.claude -g='*.key' -l . .",
 )
+# SC-12 (fix round 1, verifier): the same gitignore spellings for the Grep tool's glob.
+FIX1_GREP_GLOBS = ("**/.claude/**", "**/.claude", ".claude/", "**/.claude/**/reply-hmac.key")
 # SC-12 (fix round 1, finding 1): positive globs that name no hidden folder or key still pass.
 FIX1_RG_GLOBS_ALLOWED = (
     "rg -g '*.tf' -g '*.yml' -l token .",
     "rg -g '!.claude' token .",
     "rg -e -g token .",
+    "rg -g '**/*.py' -g '*Dockerfile*' -g '*requirements*.txt' token .",
+    "rg -g 'src/' token .",
 )
 
 

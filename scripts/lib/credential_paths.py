@@ -301,9 +301,12 @@ def glob_patterns(raw: str) -> list[str]:
 
 
 def glob_reaches(pats: list[str], rest: list[str]) -> bool:
-    # SC-12: an rg whitelist glob naming any component below the search root, case folded.
-    names = [p.casefold() for p in rest] + ["/".join(rest[i:]).casefold() for i in range(len(rest))]
-    return any(fnmatch.fnmatchcase(name, pat.casefold()) for name in names for pat in pats)
+    # SC-12: a whitelist glob naming any run of components below the search root, case folded.
+    # SC-12: fnmatch's * crosses /, and the / edges let a gitignore **/ match zero folders.
+    runs = {"/".join(rest[i:j]) for i in range(len(rest)) for j in range(i + 1, len(rest) + 1)}
+    names = {edge.format(run.casefold()) for run in runs for edge in ("{}", "/{}", "{}/", "/{}/")}
+    folded = {p.casefold() for pat in pats for p in (pat, pat.rstrip("/")) if p}
+    return any(fnmatch.fnmatchcase(name, pat) for name in names for pat in folded)
 
 
 def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
@@ -315,10 +318,10 @@ def _grep_key_reason(target: str, keys: list[str], glob: object) -> str | None:
             return R_REPLY_KEY_TREE.format(path=target)
         if not pats:
             continue
-        names = [os.path.basename(key)]
+        rest = [os.path.basename(key)]
         if _contains(target, key):
-            names.append(os.path.relpath(key, os.path.realpath(target)))
-        if any(fnmatch.fnmatchcase(name, pat) for name in names for pat in pats):
+            rest = os.path.relpath(key, os.path.realpath(target)).split(os.sep)
+        if glob_reaches(pats, rest):
             return R_REPLY_KEY_TREE.format(path=target)
     return None
 
