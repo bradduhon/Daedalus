@@ -64,7 +64,7 @@ Every `MISS` line ends with a `Next:` instruction that says what to do. In a new
 ### Your first body of work
 
 1. Read the catalog. Type `/daedalus:catalog`. It prints every agent with its tools, its reply lines and the phases it suits, then the six phases with their exit conditions and the musts.
-2. Write a spec, or point at one. A spec is a file in your repository that says what to build and how you will know it works. A one-line task needs no file; the Build Train saves the words you type as the spec.
+2. Write a spec, or point at one. A spec is a file in your repository that says what to build and how you will know it works. A one-line task needs no file; the Build Train saves the words you type as the spec. With only an idea and no spec, type `/daedalus:brainstorm` and the idea, or the path of a notes file. The planner answers in numbered rounds of contradictions, gaps and proposals, each tied to a sentence you wrote, and you answer in your own words. When the idea settles, the planner writes a spec draft under `docs/.tmp/daedalus/brainstorm-<YYYYMMDD>/`. Move it where your project keeps its specs and say the spec stands; the same planner then cuts the plan, as in step 3.
 3. Cut the spec into units. Type `/daedalus:plan` and the spec's path, for example `/daedalus:plan docs/specs/healthz.md`. The planner agent writes a plan file, and the plan validator checks it and prints `OK plan: graph: units=<n> critical_path=<k> width=<w> overlap_only=<pairs>`. The session then shows a unit table with the columns Unit, What it builds, Starts from, Waits on and Shares files with. Each row is one coding agent's work. Waits on names the units that must finish first, and Shares files with names the units that edit the same files, with the order they merge in. Outside a train the plan lands at `docs/.tmp/daedalus/plan-<YYYYMMDD>.md`.
 4. Start the Build Train. Type `/daedalus:build-train` and your task, naming the plan file the plan step wrote, as its `Next:` line says. The session hands it to the orchestrator as the train's plan; the orchestrator checks it with the plan validator and records it instead of cutting a new one. With no plan named, the orchestrator cuts and records the plan itself before any coder starts. The session checks the preconditions and prints the first State Block lines. The hooks check then prints `OK hooks live: session <id>, chain intact (<n> records)`. That check also marks where this train's audit begins; the Push Train later reads the security verdict only from records after that mark (issue 57).
 5. Watch it run. The main session starts one orchestrator agent and relays between it and you (0060). After each phase you see a progress note that names the phase, its weight and the state of each unit. Before each choice the train prints one line, `Chose <what> over <alternative>: <cost>`.
@@ -573,6 +573,7 @@ Daedalus/
 │   └── verify_audit_chain.py        # recompute and verify a session's hash chain
 ├── skills/
 │   ├── audit-report/SKILL.md        # /daedalus:audit-report
+│   ├── brainstorm/SKILL.md          # /daedalus:brainstorm
 │   ├── build-train/SKILL.md         # /daedalus:build-train
 │   ├── catalog/SKILL.md             # /daedalus:catalog
 │   ├── doc-train/SKILL.md           # /daedalus:doc-train
