@@ -592,6 +592,10 @@ def test_auditor_grep_commands_pass_the_jail(monkeypatch: pytest.MonkeyPatch) ->
         assert router.route(payload, REPO_ROOT) == (True, None, ""), command
 
 
+# Train 10 audit-miss diagnosis S3: the tool surface help fallback.
+YIELD = "[STATUS: YIELD_WEB] <tool> options and config files"
+
+
 def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
     # pin C1 -> C3: first and last line `[VERDICT: <word>] tip=<40 lowercase hex>`.
     contract = AUDITOR.read_text().split("## Status contract\n", 1)[1]
@@ -599,14 +603,18 @@ def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
     assert contract == (
         "Your reply starts with exactly one of these verdict lines as its first line and ends with"
         " the\nsame verdict line, alone, as its last line. This holds for every reply, fix rounds"
-        " included.\nThe `tip=` value is the 40 lowercase hex step 0 printed.\n"
+        " included,\nexcept the tool surface yield below. The `tip=` value is the 40 lowercase hex"
+        " step 0 printed.\n"
         f"- `[VERDICT: APPROVED] {tip}` then `<paragraph>` then `[VERDICT: APPROVED] {tip}`\n"
         f"- `[VERDICT: REJECTED] {tip}` then `<itemized findings>`"
         f" then `[VERDICT: REJECTED] {tip}`\n"
+        f"- `{YIELD}` as both the first and the last line: a question, not a verdict; the next"
+        " prompt resumes the round.\n"
     )
     assert load(AUDITOR).status_lines == (
         f"[VERDICT: APPROVED] {tip}",
         f"[VERDICT: REJECTED] {tip}",
+        YIELD,
     )
 
 

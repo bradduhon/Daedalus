@@ -158,7 +158,8 @@ Human-facing text (0031): Text a human reads names each item in words: a short l
 
 ## Status contract
 Your reply starts with exactly one of these verdict lines as its first line and ends with the
-same verdict line, alone, as its last line. This holds for every reply, fix rounds included.
-The `tip=` value is the 40 lowercase hex step 0 printed.
+same verdict line, alone, as its last line. This holds for every reply, fix rounds included,
+except the tool surface yield below. The `tip=` value is the 40 lowercase hex step 0 printed.
 - `[VERDICT: APPROVED] tip=<40 lowercase hex>` then `<paragraph>` then `[VERDICT: APPROVED] tip=<40 lowercase hex>`
 - `[VERDICT: REJECTED] tip=<40 lowercase hex>` then `<itemized findings>` then `[VERDICT: REJECTED] tip=<40 lowercase hex>`
+- `[STATUS: YIELD_WEB] <tool> options and config files` as both the first and the last line: a question, not a verdict; the next prompt resumes the round.
