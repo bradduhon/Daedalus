@@ -144,7 +144,8 @@ _LEDGER_PATH_VALUES = (
     "from the project root"
 )
 _LEDGER_FORMAT = KeyRow(
-    "How each ruling is written to the ledger (0004)",
+    "How each ruling is written to the ledger; see the requirements page, the section on "
+    "ledger formats",
     "string",
     '`"markdown-table-row"` (one table row per ruling) or `"heading-entry"` (one `## Entry N` '
     "section per ruling)",
@@ -152,14 +153,14 @@ _LEDGER_FORMAT = KeyRow(
     '`"markdown-table-row"`',
 )
 _LEDGER_ID_SCHEME = KeyRow(
-    "The pattern each new ruling id follows (0004)",
+    "The pattern each new ruling id follows",
     "string",
     "A pattern such as `{seq:04d}-{repo}-{type}`; a heading ledger uses `{seq}`",
     "Required once the block exists",
     '`"{seq:04d}-{repo}-{type}"`',
 )
 _LEDGER_SEQUENCE = KeyRow(
-    "Where the next ruling number comes from (0004)",
+    "Where the next ruling number comes from",
     "string",
     '`"last-row-id"` or `"frontmatter:<key>"`',
     "Required once the block exists",
@@ -176,7 +177,7 @@ LITERACY_EXAMPLES = (
 KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     (MANIFEST_FILE, "jail_narrowing.forbidden_paths"): KeyRow(
         "Paths in your project no coding agent may write, on top of the paths the jail always "
-        "protects (0054)",
+        "protects; see the requirements page, the section on the coder write boundary",
         "list of strings",
         "Project-relative paths with forward slashes and no leading slash, `..` or glob "
         "characters; a trailing slash covers the whole folder, and matching ignores case",
@@ -184,7 +185,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         '`["infra/", "scripts/release.sh"]`',
     ),
     (MANIFEST_FILE, "jail_narrowing.forbidden_extensions"): KeyRow(
-        "File endings no coding agent may write (0054)",
+        "File endings no coding agent may write",
         "list of strings",
         "Endings that each start with a dot and hold no slash or glob characters; matching "
         "ignores case",
@@ -192,7 +193,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         '`[".pem", ".tfstate"]`',
     ),
     (MANIFEST_FILE, "features.scope"): KeyRow(
-        "Whether a train treats the project as a git repository or as a plain folder (0074)",
+        "Whether a train treats the project as a git repository or as a plain folder",
         "string or null",
         '`"repository"`, `"folder"` or `null`',
         "`null`: a git work tree is a repository, anything else is a plain folder",
@@ -201,7 +202,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     (MANIFEST_FILE, "features.secrets_scan"): KeyRow(
         "Turns on the Push Train's gitleaks scan of the commits a push sends; with the scan on, "
         "the Push Train stops when gitleaks is missing or finds a secret, and the doctor's "
-        "gitleaks line is a `MISS` (0069)",
+        "gitleaks line is a `MISS`",
         "boolean",
         "`true` or `false`",
         "`false`: no scan, and gitleaks need not be installed",
@@ -209,14 +210,14 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "features.scrub_file"): KeyRow(
         "A file of terms, one per line, that the release step checks the release notes against; "
-        "a hit stops the release and names how many terms it found, never the terms (0069)",
+        "a hit stops the release and names how many terms it found, never the terms",
         "string or null",
         "A project-relative path without a leading slash, `..` or glob characters, or `null`",
         "`null`: nothing is checked",
         '`"docs/scrub-terms.txt"`',
     ),
     (MANIFEST_FILE, "features.ledger"): KeyRow(
-        "Turns the decision ledger steps on or off (0069)",
+        "Turns the decision ledger steps on or off",
         "boolean or null",
         "`true`: the ledger is used, and a train asks before creating one; `false`: no ledger "
         "step and no ledger question; `null`: the default",
@@ -226,7 +227,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     (MANIFEST_FILE, "features.dependency_web_lookup"): KeyRow(
         "Lets the dependency auditor ask for security advisories on the web; the train sends "
         "its questions to the web researcher. With it off, the auditor judges from the lockfile "
-        "and any advisory export the project supplies (0132)",
+        "and any advisory export the project supplies",
         "boolean or null",
         "`true`, `false` or `null`; only `false` turns the lookup off",
         "`null`: the lookup is on",
@@ -235,7 +236,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     (MANIFEST_FILE, "features.terraform_tools"): KeyRow(
         "Lets the Terraform reviewer run `terraform fmt -check` and `terraform validate` on the "
         "Terraform files a train changes; validate also needs `features.terraform_validate`. "
-        "With it off, the reviewer judges by reading the files (0132, 0158)",
+        "With it off, the reviewer judges by reading the files",
         "boolean or null",
         "`true`, `false` or `null`; only `false` turns both commands off; validate also needs "
         "`features.terraform_validate`",
@@ -245,7 +246,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     (MANIFEST_FILE, "features.terraform_validate"): KeyRow(
         "Lets the Terraform reviewer run `terraform validate`, which starts the provider "
         "programs in a module's `.terraform` folder. Setup never writes it, and "
-        "`features.terraform_tools` set to `false` still turns it off (0158)",
+        "`features.terraform_tools` set to `false` still turns it off",
         "boolean",
         "`true` or `false`",
         "`false`: the reviewer runs no validate and marks that check N/A",
@@ -253,7 +254,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "trains_dir"): KeyRow(
         "The project folder that holds its own train definitions; a train is looked up there "
-        "first, as `<trains_dir>/<name>.json`, and then in the plugin's own trains folder (0073)",
+        "first, as `<trains_dir>/<name>.json`, and then in the plugin's own trains folder; see the "
+        "requirements page, the section on project train definitions",
         "string or null",
         "A project-relative folder path without a leading slash, `..` or glob characters, or "
         "`null`",
@@ -262,7 +264,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "stack.unit_test_cmd"): KeyRow(
         "The command that runs the project's unit tests; a coding agent may run it exactly as "
-        "written, as one command (0073, 0098)",
+        "written, as one command",
         "string or null",
         _COMMAND_VALUES,
         "`null`: no declared command",
@@ -270,7 +272,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "stack.typecheck_cmd"): KeyRow(
         "The command that type-checks the project; a coding agent may run it exactly as "
-        "written, as one command (0098)",
+        "written, as one command",
         "string or null",
         _COMMAND_VALUES,
         "`null`: no declared command",
@@ -278,7 +280,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "stack.lint_cmd"): KeyRow(
         "The command that lints the project; a coding agent may run it exactly as written, as "
-        "one command (0098)",
+        "one command",
         "string or null",
         _COMMAND_VALUES,
         "`null`: no declared command",
@@ -286,7 +288,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "docs.literacy"): KeyRow(
         "How plainly the docs writer writes the public docs at the end of a Build Train, as a "
-        "reader level or a voice profile the project declares; a brief may override it (0134)",
+        "reader level or a voice profile the project declares; a brief may override it",
         "string or null",
         ", ".join(f"`{example}`" for example in LITERACY_EXAMPLES[:-1])
         + f" or `{LITERACY_EXAMPLES[-1]}`, a project-relative path to the profile file without "
@@ -296,22 +298,22 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "priorities.drivers"): KeyRow(
         "Which concern wins when two conflict and no rule below matches, for every agent in "
-        "every train, never the operator's own session (0129, 0137)",
+        "every train, never the operator's own session; see the guardrails page, the row on "
+        "project priorities",
         "list of strings",
         f"Each of {_DRIVER_NAMES} exactly once, highest first",
         "No `priorities` key: none declared, and agents follow no project ranking",
         '`["security", "trust", "ops", "cost"]`',
     ),
     (MANIFEST_FILE, "priorities.rules[].when.conflict"): KeyRow(
-        "The two concerns a rule settles; rules are tried in order and the first match decides "
-        "(0129)",
+        "The two concerns a rule settles; rules are tried in order and the first match decides",
         "list of two strings",
         f"Two different names of {_DRIVER_NAMES}; at most {MAX_RULES} rules",
         "`rules` absent: no rule, so the ranking decides",
         '`["security", "cost"]`',
     ),
     (MANIFEST_FILE, "priorities.rules[].when.reason"): KeyRow(
-        "Why the conflict arises; the rule matches only these reasons (0129)",
+        "Why the conflict arises; the rule matches only these reasons",
         "list of strings",
         "One or more of " + ", ".join(f"`{reason}`" for reason in REASONS) + ", each once",
         "Required in each rule",
@@ -319,42 +321,42 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "priorities.rules[].then"): KeyRow(
         f"What a matching rule does: a concern named here wins and the agent decides alone; "
-        f"`{SURFACE}` puts the decision to the operator (0129)",
+        f"`{SURFACE}` puts the decision to the operator",
         "string",
         f"One of {_DRIVER_NAMES}, or `{SURFACE}`",
         "Required in each rule",
         f'`"{SURFACE}"`',
     ),
     (MANIFEST_FILE, "priorities.rules[].note"): KeyRow(
-        "The one line a choice record or a decision brief quotes when the rule applies (0129)",
+        "The one line a choice record or a decision brief quotes when the rule applies",
         "string",
         f"One printable line of 1 to {NOTE_MAX} characters",
         "Required in each rule",
         '`"a control a certification asks for wins over its running cost"`',
     ),
     (MANIFEST_FILE, "priorities.principles[].id"): KeyRow(
-        "The name an agent cites when a decision rests on one of the project's principles (0129)",
+        "The name an agent cites when a decision rests on one of the project's principles",
         "string",
         f"`P` followed by digits, unique in the block; at most {MAX_PRINCIPLES} principles",
         "`principles` absent: none declared",
         '`"P1"`',
     ),
     (MANIFEST_FILE, "priorities.principles[].driver"): KeyRow(
-        "The concern a principle serves (0129)",
+        "The concern a principle serves",
         "string",
         f"One of {_DRIVER_NAMES}",
         "Required in each principle",
         '`"security"`',
     ),
     (MANIFEST_FILE, "priorities.principles[].text"): KeyRow(
-        "The principle itself, as one sentence a decision brief quotes (0129)",
+        "The principle itself, as one sentence a decision brief quotes",
         "string",
         f"One printable line of 1 to {TEXT_MAX} characters",
         "Required in each principle",
         '`"Each tenant keeps its own key."`',
     ),
     (MANIFEST_FILE, "priorities.principles[].source"): KeyRow(
-        "Where the principle is written down, so a reader can follow it (0129)",
+        "Where the principle is written down, so a reader can follow it",
         "string",
         "A repo-relative path or a ruling id of the project's own ledger, without a leading "
         "slash, `..` or glob characters",
@@ -362,7 +364,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         '`"docs/design.md"`',
     ),
     (MANIFEST_FILE, "priorities.agents.<name>.drivers"): KeyRow(
-        "A different ranking for one agent; rules and principles still apply to it (0129)",
+        "A different ranking for one agent; rules and principles still apply to it",
         "list of strings",
         f"Each of {_DRIVER_NAMES} exactly once; `<name>` is a Daedalus agent file name other "
         f"than `{NOT_OVERRIDABLE}`, which is refused",
@@ -371,7 +373,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "frameworks.pack_dir"): KeyRow(
         "The project folder that holds its own control packs; each subfolder holding a "
-        "`pack.json` is one pack (0157)",
+        "`pack.json` is one pack; see the requirements page, the section on framework control "
+        "packs",
         "string or null",
         "A project-relative folder path without a leading slash, `..` or glob characters, or "
         "`null`",
@@ -379,7 +382,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         '`"compliance/packs"`',
     ),
     (MANIFEST_FILE, "frameworks.default_packs"): KeyRow(
-        "Whether the packs Daedalus ships are read beside the project's own packs (0157)",
+        "Whether the packs Daedalus ships are read beside the project's own packs",
         "boolean",
         "`true` or `false`; `false` reads only the packs under `frameworks.pack_dir`",
         "`true`: the shipped packs are read",
@@ -387,7 +390,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "ledger.path"): KeyRow(
         "Where rulings are appended, declared for everyone who works on the project; it wins "
-        "over the config's ledger block (0004)",
+        "over the config's ledger block",
         "string",
         _LEDGER_PATH_VALUES,
         "No block, or `ledger: null`: the config's ledger block or the ledger probe is used",
@@ -398,7 +401,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     (MANIFEST_FILE, "ledger.sequence_source"): _LEDGER_SEQUENCE,
     (CONFIG_FILE, "charter_root"): KeyRow(
         "The repository where your decisions and specs live; the contract and ledger agents "
-        "may write there, and a Build Train branches it as `daedalus/<train-id>` (0011)",
+        "may write there, and a Build Train branches it as `daedalus/<train-id>`",
         "string or null",
         "A non-empty path to a git repository, written absolute",
         "`null`: those agents write only inside the project, and the contract lives in "
@@ -407,7 +410,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (CONFIG_FILE, "standing_rules"): KeyRow(
         "The standing-rules file the planner reads as the rules every plan must satisfy, "
-        "derived from the ledger by `scripts/standing_rules.py` (0090)",
+        "derived from the ledger by `scripts/standing_rules.py`; see the requirements page, the "
+        "section on the standing-rules backfill file",
         "string or null",
         "A non-empty path; a relative path is read from `charter_root` when one is declared, "
         "else from the project root",
@@ -417,7 +421,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     (CONFIG_FILE, "excluded_roots"): KeyRow(
         "Folders whose files must never reach git, GitHub or a redirect. A Daedalus agent is "
         "refused such a command in every session, and the main session is warned during a "
-        "train. A document train records the resolved folders in its frozen sources file (0136)",
+        "train. A document train records the resolved folders in its frozen sources file. "
+        "See the guardrails page, the row on excluded roots",
         "list of objects",
         '`{"kind": "path", "path": "<folder>"}`, a folder with `<repo_root>` and '
         "`<charter_root>` filled in and a relative path read from the project root; or "
@@ -427,8 +432,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         '`[{"kind": "path", "path": "<repo_root>/private/"}]`',
     ),
     (CONFIG_FILE, "ledger.path"): KeyRow(
-        "Where rulings are appended on this machine, used when the manifest declares no "
-        "ledger (0004)",
+        "Where rulings are appended on this machine, used when the manifest declares no ledger",
         "string",
         _LEDGER_PATH_VALUES,
         "`null`: the ledger probe looks for one",
@@ -453,7 +457,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (CONFIG_FILE, "standards_sources[].kind"): KeyRow(
         "What one source of your standards is; the standards specialist reads only these "
-        "entries (0019)",
+        "entries; see the requirements page, the section on standards_sources kinds",
         "string",
         '`"rules-dir"` (a folder of rule files), `"file"` (one file) or `"pack"` (a pack '
         "shipped inside the plugin)",
@@ -468,7 +472,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         '`"/work/rules"`',
     ),
     (CONFIG_FILE, "standards_sources[].name"): KeyRow(
-        "Which pack shipped with Daedalus to use (0019)",
+        "Which pack shipped with Daedalus to use",
         "string",
         "The name of a folder under the plugin's `packs/` that holds a `rules.md`; any other "
         "name is refused",
@@ -484,7 +488,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (CONFIG_FILE, "max_concurrent_builders"): KeyRow(
         "How many coding agents a parallel stage runs at once, and the cap on the plan width "
-        "the plan validator prints (0072)",
+        "the plan validator prints",
         "integer",
         "A whole number of at least 1; `true` and `false` are refused",
         "`5`",
@@ -494,7 +498,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "How many days a session's audit log is kept after its last record. When a new session "
         "starts writing, older logs are deleted, each named with its final record in the new "
         "session's own log. A log named on a train summary's `Session` line, the log of a train "
-        "not yet merged, and the current session's log are never deleted (issue 50)",
+        "not yet merged, and the current session's log are never deleted",
         "integer or null",
         f"A whole number of at least {AUDIT_RETENTION_FLOOR_DAYS}, or `null`",
         "`null`: every log is kept",
