@@ -122,11 +122,11 @@ def test_howto_exemptions_name_the_push_train_exemption_path() -> None:
     bullet = next(line for line in text.splitlines() if line.startswith("- Skip, track or exempt"))
     assert "by hand" not in bullet and "stops" not in bullet, bullet
     assert (
-        "The Push Train's verdict check accepts a rejected round once every finding in its "
+        "The push run's verdict check accepts a rejected round once every finding in its "
         "findings file carries an exemption."
     ) in text
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "stops at the Push Train's verdict check" not in readme
+    assert "stops at the push run's verdict check" not in readme
 
 
 def _how_it_works() -> str:
@@ -207,7 +207,7 @@ def test_howto_checklist_force_deletes_the_train_branch_after_the_merge_check() 
     assert "from your own shell" in item4
     assert "deletes its branch with `git branch -D`" in checklist
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    push = readme.split("### Push Train", 1)[1].split("\n### ", 1)[0]
+    push = readme.split("### Push run", 1)[1].split("\n### ", 1)[0]
     assert "`git branch -D daedalus/<train-id>`" in push and "gh pr view <url> --json state" in push
 
 

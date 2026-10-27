@@ -96,7 +96,8 @@ STANDARDS_FILE = "standards-packet.md"
 PACKETS = ("contract", "standards")
 PICK_LINE = "Pick ledger ids:"
 NOT_CHOSEN = "not chosen"
-NEXT_NONE = "Next: none, the train needs nothing from the operator."
+NEXT_NONE = "Next: none, the run needs nothing from the operator."
+NO_RUN = "no Daedalus run is active here. Next: start a new run with /daedalus:run."
 _UNIT_HEADING = re.compile(r"### Unit ([A-Za-z0-9][A-Za-z0-9-]*): (.+)")
 _HEADING = re.compile(r"#{1,3} ")
 _PHASE = re.compile(r"[a-z][a-z-]{0,31}")
@@ -1944,7 +1945,7 @@ def record_docs_verdict(
 # spec 6: the bindings file records repo-coder dispatches only (dispatch_binding._dispatch_reason).
 BOUND_AGENT = "repo-coder"
 BINDINGS_UNREADABLE = (
-    "the unit bindings file could not be read. Next: stop the train and start a new one."
+    "the unit bindings file could not be read. Next: stop the run and start a new one."
 )
 Bound = dict[str, dict[str, object]]
 
@@ -1997,18 +1998,16 @@ def _listed(header: str, rows: list[str]) -> list[str]:
 
 def progress(cwd: Path) -> Outcome:
     # 0085, spec 5.1: the operator view; no sha, agent handle or absolute path reaches it.
+    # 0169: the note's sentences say run; script names keep train.
     try:
         repo, train_id = _active(cwd)
         state = train_state.load(repo, train_id)
     except NoTrainError:
-        return Outcome(
-            EXIT_OK,
-            ["no Daedalus train is active here. Next: start a Build Train with /daedalus:run."],
-        )
+        return Outcome(EXIT_OK, [NO_RUN])
     except (RunnerError, train_state.TrainStateError):
         return Outcome(
             EXIT_STOP,
-            ["the train state could not be read. Next: run daedalus_train.py state for the cause."],
+            ["the run state could not be read. Next: run daedalus_train.py state for the cause."],
         )
     try:
         text = _plan_text(state, check=False)
@@ -2053,7 +2052,7 @@ def progress(cwd: Path) -> Outcome:
     lines += _listed("Choices", choices) + _listed("Open", open_)
     answers = [row for row in open_ if not row.startswith("consult ")]
     if _text(state, "halted"):
-        lines.append("Next: the train is halted; tear it down with daedalus_train.py stop.")
+        lines.append("Next: the run is halted; tear it down with daedalus_train.py stop.")
     elif answers:
         noun = "item" if len(answers) == 1 else "items"
         lines.append(f"Next: answer the open {noun} above, then run step to retry the stage.")

@@ -73,7 +73,7 @@ CONTRACT_SKIPPED = (
     "Contract: none. This plan changes one file and declares no contract, "
     "so no contract was written."
 )
-CONTRACT_NOT_LOCKED = "Contract: none. No contract was locked before the train stopped."
+CONTRACT_NOT_LOCKED = "Contract: none. No contract was locked before the run stopped."
 _PRIORITIES_RULE = re.compile(r"priorities rule [0-9]+:")
 _ANSWERERS: dict[str, tuple[str, ...]] = {
     "YIELD_WEB": ("web-researcher",),
@@ -432,8 +432,9 @@ def _header(
     ledger = ledger_match.group(1) if ledger_match else ""
     under = charter is not None and bool(ledger) and Path(ledger).is_relative_to(charter)
     base = f"{_text(state, 'base_branch') or 'unknown'} @ {_text(state, 'base_sha') or 'unknown'}"
+    # 0169: the heading says run; the release skill's pull request title is `Run <train-id>`.
     lines = [
-        f"# Build Train {train_id}",
+        f"# Run {train_id}",
         f"Task: {_note(notes.fields.get('Task', NO_NOTES), repo, charter, 'Task line')}",
         f"Base: {base}. Integration branch: daedalus/{train_id}.",
     ]
@@ -635,7 +636,7 @@ def _audit(
         elif isinstance(entry, dict):
             lines.append(f"Round {number}: no findings recorded")
         else:
-            lines.append(f"Round {number}: not recorded in train state")
+            lines.append(f"Round {number}: not recorded in the run state")
     return lines + _docs(state, repo, charter)
 
 
