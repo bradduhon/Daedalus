@@ -31,7 +31,7 @@ The verifier judges each unit's diff against its brief, never against the coder'
    Name the worktree on a `Unit worktree:` line, never a `Worktree:` line, because the hook reads a resume's `Worktree:` line as a coder moving to a new unit. The verifier stays warm (0086): every later unit goes to it by the orchestrator's message with the same items.
 5. Route the verdict. Read it from the last line; the verifier's verdict line is also its first line, and a reply whose first and last lines differ is off its contract: stop and show its last 10 lines.
    - `[VERDICT: VERIFIED] claims=<n>`: the orchestrator records the unit as verified with `<n>` claims and the `<k>` of the `corrected=<k>` line above the verdict. A correction never goes back to the coder and never counts as a refutation (0127). The unit is ready for the build phase's merge.
-   - `[VERDICT: REFUTED] <rows>`: only rows of class `code` or `scope` count (0127); a REFUTED with neither is off its contract. The first REFUTED on a unit sends that unit's coder one fix pass with the `code` and `scope` rows, as a `FIX.` message. Its next `[STATUS: COMPLETE]` runs the build phase's checks and this phase again. A second REFUTED on the same unit stops the run with the rows shown: "The verifier refuted unit <unit> twice. Next: fix the claims by hand on the unit branch, or start the run again with a narrower unit."
+   - `[VERDICT: REFUTED] <rows>`: only rows of class `code` or `scope` count (0127); a REFUTED with neither is off its contract. The first REFUTED on a unit sends that unit's coder one fix pass with the `code` and `scope` rows, as a `FIX.` message. Its next `[STATUS: COMPLETE]` runs the build phase's checks and this phase again. A later REFUTED on the same unit goes to the operator as a decision (0161, 0133): one question per refuted row, through the per-finding audit prompt of the catalog (`${CLAUDE_PLUGIN_ROOT}/skills/catalog/SKILL.md`), with the options `Fix it now (Recommended)`, `Skip, track or exempt it` and `Stop the run`. Only the operator's pick starts another fix pass, records an exemption or ends the run.
 
 ### Claims mode
 
@@ -42,7 +42,7 @@ The verifier judges each unit's diff against its brief, never against the coder'
 
 ## Evidence that ends it
 
-- Unit mode: a `[VERDICT: VERIFIED]` verdict per unit. No hook at dispatch. The finish script refuses to merge a unit with no recorded VERIFIED reply for its worktree (scripts/lib/workspace.py:966, :1062); this is a script refusal, not a hook.
+- Unit mode: a `[VERDICT: VERIFIED]` verdict per unit, or every refuted row exempted by the operator's `Skip, track or exempt it` pick at a later refutation, recorded as the per-finding prompt records an exemption (0161). No hook at dispatch. The finish script refuses to merge a unit with no recorded VERIFIED reply for its worktree (scripts/lib/workspace.py:966, :1062); this is a script refusal, not a hook.
 - Claims mode: a `[VERDICT: VERIFIED]` verdict over the claims, or every refuted row exempted by the operator. For claims over the public docs, the docs record (scripts/lib/train_runner.py:1902) and the push proof's docs rule (scripts/lib/audit_proof.py:703, :740) apply.
 
 ## Agents it uses
@@ -51,6 +51,6 @@ The verifier judges each unit's diff against its brief, never against the coder'
 
 ## Suggested next
 
-- `build`: for a unit the verifier refuted, sent back to its coder for its one fix pass (step 5).
+- `build`: for a unit the verifier refuted: the first time on its own for one fix pass, a later time on the operator's Fix it now pick (step 5).
 - `audit`: when every unit is verified and the build phase merged them.
 - `release`: when a document phase's claims are verified in a repository.
