@@ -66,6 +66,8 @@ BUILD, PUSH, DOC = "Build Train", "Push Train", "Document Train"
 # 0163: agents the main session starts outside any run group under the session itself.
 SESSION = "session"
 CODER = "repo-coder"
+# item 15: the turn target of agents/repo-coder.md; the report checks the coder mean against it.
+CODER_TURN_TARGET = 24
 ROOT_RUN_TYPES = {
     "orchestrator": BUILD,
     "pr-train-conductor": PUSH,
@@ -497,21 +499,40 @@ def totals_row(run: Run) -> str:
     return table_row(cells)
 
 
-def mean_row(run: Run, kind: str) -> str:
+def _picked(run: Run, kind: str) -> tuple[int, Usage]:
     # Plan 11 A: the unit mean is coders only, as the hand reports divided; verifiers stay in total.
     picked = [r for r in run.rows if r.kind == kind and (kind != "unit" or r.agent == CODER)]
-    count = len({r.label for r in picked})
-    label = f"per {kind}"
-    if not count:
-        return table_row([run.run_type, run.run_id, MEAN, label, f"0 {kind}s", *[NONE] * 6])
     total = Usage()
     for row in picked:
         total.add(row.usage)
+    return len({r.label for r in picked}), total
+
+
+def mean_row(run: Run, kind: str) -> str:
+    count, total = _picked(run, kind)
+    label = f"per {kind}"
+    if not count:
+        return table_row([run.run_type, run.run_id, MEAN, label, f"0 {kind}s", *[NONE] * 6])
     turns = round(total.turns / count)
     tokens = [f"{round(n / count):,}" for n in total.tokens]
     cells: list[object] = [run.run_type, run.run_id, MEAN, label, f"{count} {kind}s"]
     cells += [f"{turns:,}", *tokens, duration(total.seconds / count)]
     return table_row(cells)
+
+
+def turn_lines(runs: list[Run]) -> list[str]:
+    # item 15: one line per run with coder units; the run is named only when several have them.
+    means: list[tuple[Run, int]] = []
+    for run in runs:
+        count, total = _picked(run, "unit")
+        if count:
+            means.append((run, round(total.turns / count)))
+    many = len(means) > 1
+    return [
+        f"turns per coder unit: {turns:,} (target {CODER_TURN_TARGET})"
+        + (f" in {run.run_type} {run.run_id}" if many else "")
+        for run, turns in means
+    ]
 
 
 def detail_row(row: Row) -> str:
@@ -576,6 +597,8 @@ def render(runs: list[Run], source: str) -> str:
     for run in runs:
         lines += [detail_row(row) for row in run.rows]
         lines += [totals_row(run), mean_row(run, "unit"), mean_row(run, "round")]
+    turns = turn_lines(runs)
+    lines += ["", *turns] if turns else []
     return "\n".join(lines) + "\n"
 
 
