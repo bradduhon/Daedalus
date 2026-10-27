@@ -13,7 +13,7 @@ from lib.config import Config, load_config
 from lib.ledger import resolve_ledger
 from lib.manifest import FEATURE_KEYS, Features, Manifest
 from lib.manifest import load as load_manifest
-from lib.project_keys import config_keys, manifest_keys
+from lib.project_keys import SETUP_OMITS, config_keys, manifest_keys
 
 from tests.conftest import SCRIPTS_DIR
 
@@ -88,6 +88,8 @@ def test_setup_starter_files_carry_every_reader_key_at_its_default(repo_cwd: Pat
     c_doc = json.loads(config.read_text(encoding="utf-8"))
     # 0129, F.6, 0157: the starter leaves the priorities and frameworks blocks absent.
     wanted = [k for k in manifest_keys() if not k.startswith(("priorities.", "frameworks."))]
+    # 0158: an opt-in switch stays unwritten.
+    wanted = [k for k in wanted if k.removeprefix("features.") not in SETUP_OMITS]
     assert [k for k in wanted if not _present(m_doc, k)] == [] and "priorities" not in m_doc
     assert "frameworks" not in m_doc
     assert [k for k in config_keys() if not _present(c_doc, k)] == []
@@ -116,7 +118,7 @@ def test_setup_starter_manifest_has_every_feature_off(repo_cwd: Path) -> None:
     assert _setup(repo_cwd).returncode == 0
     manifest, _ = _paths(repo_cwd)
     features = json.loads(manifest.read_text(encoding="utf-8"))["features"]
-    assert sorted(features) == sorted(FEATURE_KEYS)
+    assert sorted(features) == sorted(set(FEATURE_KEYS) - SETUP_OMITS)
     assert all(value in (False, None) for value in features.values()), features
 
 

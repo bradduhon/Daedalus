@@ -73,8 +73,15 @@ R_MAP_OUT = (
 TERRAFORM_FORMS = (("fmt", "-check"), ("validate",))
 R_TERRAFORM = (
     "the terraform class runs only `terraform fmt -check` and `terraform validate`, each with an "
-    "optional -chdir=<absolute folder inside the project> (0132). Next: send one of those forms; "
+    "optional -chdir=<absolute folder inside the project> (0132), and validate only while "
+    "features.terraform_validate is true (0158). Next: send one of those forms; "
     "init, plan, apply and every other subcommand stay with the operator."
+)
+R_TERRAFORM_VALIDATE_OFF = (
+    "features.terraform_validate is not true in {manifest}, so the terraform class refuses "
+    "`terraform validate`, which would start the provider programs under .terraform/providers "
+    "(0158). Next: judge the files by reading them and mark the validate check N/A, or ask the "
+    "operator to set features.terraform_validate to true in service-manifest.json."
 )
 R_TERRAFORM_OFF = (
     "features.terraform_tools is false in {manifest}, so the terraform class runs nothing "
@@ -106,6 +113,9 @@ def terraform_reason(segment: list[str], cwd: str) -> str | None:
         return R_TERRAFORM_MANIFEST.format(cause=exc)
     if loaded is not None and loaded.features.terraform_tools is False:
         return R_TERRAFORM_OFF.format(manifest=manifest_path(Path(root)))
+    # 0159-DAE-PLT: validate off by default - deviation from the global Terraform rule
+    if rest == ["validate"] and (loaded is None or loaded.features.terraform_validate is not True):
+        return R_TERRAFORM_VALIDATE_OFF.format(manifest=manifest_path(Path(root)))
     return None
 
 

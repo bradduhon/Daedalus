@@ -53,6 +53,7 @@ def test_feature_keys_are_the_features_fields() -> None:
         "github",
         "dependency_web_lookup",
         "terraform_tools",
+        "terraform_validate",
     )
 
 
@@ -301,3 +302,38 @@ def test_frameworks_keys_have_rows_and_setup_writes_no_block() -> None:
     for key in ("frameworks.pack_dir", "frameworks.default_packs"):
         assert (MANIFEST_FILE, key) in KEY_ROWS, key
     assert "frameworks" not in starter_manifest()
+
+
+# 0158: features.terraform_validate is an opt-in switch beside terraform_tools.
+
+
+def test_terraform_validate_reads_false_when_absent(tmp_path: Path) -> None:
+    # 0158: validate is opt-in; no key, no features object and no manifest all read false.
+    assert Features().terraform_validate is False
+    assert manifest.features(tmp_path).terraform_validate is False
+    for payload in ({}, {"features": {}}, {"features": {"terraform_tools": True}}):
+        _write(tmp_path, payload)
+        loaded = load(tmp_path)
+        assert loaded is not None and loaded.features.terraform_validate is False, payload
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_terraform_validate_reads_its_boolean(tmp_path: Path, value: bool) -> None:
+    _write(tmp_path, {"features": {"terraform_validate": value}})
+    loaded = load(tmp_path)
+    assert loaded is not None and loaded.features == Features(terraform_validate=value)
+
+
+@pytest.mark.parametrize("value", [None, "true", "on", 1, 0, [], {}])
+def test_terraform_validate_refuses_a_non_boolean(tmp_path: Path, value: object) -> None:
+    # 0158: true or false only; null is refused, unlike the true-false-null persona switches.
+    message = _refused(tmp_path, {"features": {"terraform_validate": value}})
+    assert "features.terraform_validate" in message and "must be true or false" in message
+
+
+def test_terraform_validate_has_a_row_and_setup_writes_no_value() -> None:
+    assert "features.terraform_validate" in manifest_keys()
+    row = KEY_ROWS[(MANIFEST_FILE, "features.terraform_validate")]
+    assert row.kind == "boolean" and row.default.startswith("`false`")
+    features = starter_manifest()["features"]
+    assert isinstance(features, dict) and "terraform_validate" not in features

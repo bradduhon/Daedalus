@@ -30,6 +30,8 @@ module folder with `-chdir=` (0132):
 `terraform -chdir=<absolute module folder> fmt -check` and
 `terraform -chdir=<absolute module folder> validate`. The folder lies inside the project.
 The hook refuses every other form, and refuses both while `features.terraform_tools` is false.
+It refuses `validate` unless `features.terraform_validate` is true (0158), because validate
+starts the provider programs under `.terraform/providers`.
 Never run `init`, `plan`, `apply`, `destroy`, `import`, `state`, `taint`, `refresh` or any
 other Terraform subcommand.
 No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already returns stderr.
@@ -40,20 +42,25 @@ and a line `Terraform tools: on` or `Terraform tools: off`.
 ## Binary check (before any tool run)
 1. With `Terraform tools: off`, run no Terraform command; judge by reading the files, and mark
    TF-1 and TF-2 N/A with the reason `terraform tools off in the service manifest`.
-2. Otherwise, before the first Terraform command, run
+2. Read `<repo>/service-manifest.json` with the Read tool and find `features.terraform_validate`.
+   When the file, the `features` object or the key is absent, or the value is anything but
+   `true`, run no `terraform validate`, and mark TF-2 N/A with the reason
+   `terraform validate off in the service manifest` (0158). `fmt -check` still runs.
+3. With the tools on, before the first Terraform command, run
    `find /usr/local/bin /usr/bin /bin /opt/homebrew/bin /snap/bin -maxdepth 1 -name terraform`.
-3. An empty result means the binary is missing: run no Terraform command, and write TF-0 as
+4. An empty result means the binary is missing: run no Terraform command, and write TF-0 as
    `WARN terraform binary missing: fmt -check and validate not run` in your list. A missing
    binary is a warning, never a FAIL and never a blind failing call. A binary outside those
    folders reads as missing too, so the warning names the folders searched.
-4. A Terraform run the hook refuses is a WARN row naming the refusal, never a FAIL.
+5. A Terraform run the hook refuses is a WARN row naming the refusal, never a FAIL.
 
 ## Method
 1. Run `git -C <repo> diff <diff base>...<branch> -- <each changed Terraform file>` and read
    all of it.
 2. List each module folder the diff touches.
 3. With the binary present and the tools on, run `terraform -chdir=<module folder> fmt -check`
-   and then `terraform -chdir=<module folder> validate` once in each module folder, the folder
+   once in each module folder, and, only when `features.terraform_validate` is `true`,
+   `terraform -chdir=<module folder> validate` after it, the folder
    written as an absolute path. A validate error that the folder is not
    initialized is a WARN row; never initialize it.
 4. Give each row below PASS, FAIL, WARN or N/A, with `file:line`.

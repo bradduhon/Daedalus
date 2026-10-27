@@ -42,6 +42,8 @@ class Features:
     dependency_web_lookup: bool | None = None
     # 0132: true, false or null; only false turns off terraform fmt -check and validate.
     terraform_tools: bool | None = None
+    # 0158: true or false; absent reads false, and only true admits terraform validate.
+    terraform_validate: bool = False
 
 
 # 0073: the one list of feature names; validator check 13 and the key reference import it.
@@ -258,6 +260,9 @@ def _features(target: Path, raw: dict[str, object]) -> Features:
             "features.scrub_file",
             "must be null or a project-relative path without a leading slash, '..' or globs",
         )
+    validate = block.get("terraform_validate", False)
+    if not isinstance(validate, bool):
+        raise _key_error(target, "features.terraform_validate", "must be true or false")
     kind: Literal["repository", "folder"] | None = (
         "repository" if scope == "repository" else "folder" if scope == "folder" else None
     )
@@ -269,6 +274,7 @@ def _features(target: Path, raw: dict[str, object]) -> Features:
         _switch(target, block, "github", False),
         _switch(target, block, "dependency_web_lookup", None),
         _switch(target, block, "terraform_tools", None),
+        validate,
     )
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from lib import jail
@@ -913,3 +914,88 @@ def test_orchestrator_refusal_names_the_new_scripts() -> None:
     reason = load(HOOK).R_ORCHESTRATOR_BASH
     for word in ("daedalus_map.py", "freeze_sources.py", "--check-tools", "--verify"):
         assert word in reason, word
+
+
+# 0158, 0159-DAE-PLT: validate starts provider programs, so it runs only on its own switch.
+TF_ALLOW = ("--allow", "terraform,inspect")
+VALIDATE_NEXT = "set features.terraform_validate to true in service-manifest.json"
+
+
+def _tf_payload(repo: Path, command: str) -> dict[str, Any]:
+    hook_input = _b("daedalus:terraform-reviewer", command)
+    hook_input["cwd"] = str(repo)
+    return hook_input
+
+
+def _tf_call(repo: Path, command: str) -> str | None:
+    return evaluate(HOOK, _tf_payload(repo, command), *TF_ALLOW)
+
+
+def _plant_provider(repo: Path) -> Path:
+    # 0158: a provider program where terraform init leaves one; the hook refuses before it runs.
+    module = repo / "infra"
+    folder = module / ".terraform" / "providers" / "registry.terraform.io" / "hashicorp"
+    folder = folder / "null" / "3.2.0" / "linux_amd64"
+    folder.mkdir(parents=True)
+    provider = folder / "terraform-provider-null_v3.2.0_x5"
+    provider.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    provider.chmod(0o755)
+    return module
+
+
+def _features(repo: Path, block: dict[str, object] | None) -> None:
+    if block is not None:
+        manifest = repo / "service-manifest.json"
+        manifest.write_text(json.dumps({"features": block}), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        None,
+        {},
+        {"terraform_validate": False},
+        {"terraform_tools": True},
+        {"terraform_tools": None, "terraform_validate": False},
+    ],
+)
+def test_terraform_validate_refused_unless_the_switch_is_true(
+    repo_cwd: Path, block: dict[str, object] | None
+) -> None:
+    module = _plant_provider(repo_cwd)
+    _features(repo_cwd, block)
+    for command in ("terraform validate", f"terraform -chdir={module} validate"):
+        reason = _tf_call(repo_cwd, command)
+        assert reason is not None, command
+        assert reason.startswith("features.terraform_validate is not true"), reason
+        assert reason.count("Next:") == 1 and VALIDATE_NEXT in reason.split("Next:")[1], reason
+    # 0158: fmt -check stays under features.terraform_tools alone.
+    for command in ("terraform fmt -check", f"terraform -chdir={module} fmt -check"):
+        assert _tf_call(repo_cwd, command) is None, command
+
+
+def test_terraform_validate_admitted_when_the_switch_is_true(repo_cwd: Path) -> None:
+    module = _plant_provider(repo_cwd)
+    for block in (
+        {"terraform_validate": True},
+        {"terraform_tools": True, "terraform_validate": True},
+    ):
+        _features(repo_cwd, block)
+        for command in ("terraform validate", f"terraform -chdir={module} validate"):
+            assert _tf_call(repo_cwd, command) is None, (block, command)
+            assert first_deny(_tf_payload(repo_cwd, command), Config()) is None, command
+
+
+def test_terraform_tools_off_outranks_the_validate_switch(repo_cwd: Path) -> None:
+    module = _plant_provider(repo_cwd)
+    _features(repo_cwd, {"terraform_tools": False, "terraform_validate": True})
+    for command in ("terraform validate", f"terraform -chdir={module} fmt -check"):
+        reason = _tf_call(repo_cwd, command)
+        assert reason is not None and reason.startswith("features.terraform_tools is false")
+
+
+def test_terraform_validate_refused_on_a_non_boolean_switch(repo_cwd: Path) -> None:
+    _plant_provider(repo_cwd)
+    _features(repo_cwd, {"terraform_validate": "true"})
+    reason = _tf_call(repo_cwd, "terraform validate")
+    assert reason is not None and reason.startswith("the service manifest could not be read")
