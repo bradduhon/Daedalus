@@ -1,0 +1,8 @@
+{
+  "id": "nist-distilled",
+  "version": "1.0.0",
+  "source": "daedalus",
+  "license": "GPL-3.0-or-later",
+  "pinned_on": "2026-10-26",
+  "sha256": "c8227ed5ec713e263095ad8adb8370323fd18b191d7a6019045e6f8f04ffa2c4"
+}

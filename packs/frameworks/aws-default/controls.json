@@ -1,0 +1,311 @@
+{
+  "schema": "daedalus-controls/1",
+  "controls": [
+    {
+      "id": "AWS-IAM-1",
+      "service": "iam",
+      "title": "IAM statements name their actions and resources",
+      "statement": "Every IAM policy statement grants named actions on named resources; a wildcard action or wildcard resource on a write, delete or permission-changing action fails.",
+      "look_for": "Policy documents or aws_iam_policy_document blocks with \"Action\": \"*\", \"Resource\": \"*\", service:* actions or AdministratorAccess on a workload role.",
+      "verify": "git grep -nE '\"(Action|Resource)\" *: *\"[*]\"|(actions|resources) *= *[[] *\"[*]\"|AdministratorAccess' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["AC-6", "AC-3"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-IAM-2",
+      "service": "iam",
+      "title": "Role trust policies name their principals",
+      "statement": "Every IAM role trust policy names the exact principals allowed to assume the role; an open principal, or a whole-account principal without a condition, fails.",
+      "look_for": "assume_role_policy or AssumeRolePolicyDocument with \"AWS\": \"*\", identifiers [\"*\"], or an account root principal with no Condition block.",
+      "verify": "git grep -nE '\"AWS\" *: *\"[*]\"|identifiers *= *[[] *\"[*]\"|:root\"|assume_role_policy|AssumeRolePolicyDocument' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["AC-3", "AC-6"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-IAM-3",
+      "service": "iam",
+      "title": "No long-lived access keys",
+      "statement": "No long-lived IAM access keys are created for people, or for workloads that can use a role or a federated identity instead.",
+      "look_for": "aws_iam_access_key resources, AWS::IAM::AccessKey, or access key ids passed to a workload through configuration.",
+      "verify": "git grep -nE 'aws_iam_access_key|AWS::IAM::AccessKey|AWS_ACCESS_KEY_ID' -- '*.tf' '*.json' '*.yaml' '*.yml' '*.py' '*.ts' '*.js'",
+      "refs": {"nist": ["IA-5", "AC-2"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-IAM-4",
+      "service": "iam",
+      "title": "The root user has no keys and runs no automation",
+      "statement": "The account root user or break-glass identity has no access keys and is not used by any automation in the change.",
+      "look_for": "Root access keys, automation that signs in as root, or pipelines whose credentials belong to the root user.",
+      "verify": "git grep -nE 'arn:aws:iam::[0-9]+:root|root_access_key|aws_iam_access_key' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["AC-6", "AC-2", "IA-2"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-IAM-5",
+      "service": "iam",
+      "title": "Privileged sign-in needs a second factor",
+      "statement": "Human sign-in to a privileged IAM role or IAM Identity Center permission set requires a second factor.",
+      "look_for": "Privileged roles assumable by people with no aws:MultiFactorAuthPresent condition; Identity Center settings that turn MFA off.",
+      "verify": "git grep -niE 'MultiFactorAuthPresent|mfa' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["IA-2"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-IAM-6",
+      "service": "iam",
+      "title": "Permissions attach to roles or groups",
+      "statement": "IAM permissions attach to roles or groups, never directly to individual IAM users.",
+      "look_for": "aws_iam_user_policy, aws_iam_user_policy_attachment or inline Policies on an AWS::IAM::User.",
+      "verify": "git grep -nE 'aws_iam_user_policy|AWS::IAM::UserPolicy|AWS::IAM::User\"' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["AC-2", "AC-6"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-IAM-7",
+      "service": "iam",
+      "title": "Roles that change IAM, keys or logging carry a boundary",
+      "statement": "A new IAM role that can change IAM, KMS key policies or logging configuration carries a permissions boundary or an equivalent guard.",
+      "look_for": "Roles granted iam:*, kms:PutKeyPolicy, cloudtrail:StopLogging or logs:Delete* with no permissions_boundary.",
+      "verify": "git grep -nE 'permissions_boundary|PermissionsBoundary|iam:[*]|kms:PutKeyPolicy|cloudtrail:StopLogging' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["AC-6", "CM-5"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-IAM-8",
+      "service": "iam",
+      "title": "Password policy needs length and blocks reuse",
+      "statement": "An IAM account password policy set by the change requires at least 14 characters and blocks password reuse.",
+      "look_for": "aws_iam_account_password_policy with minimum_password_length under 14 or no password_reuse_prevention.",
+      "verify": "git grep -nE 'aws_iam_account_password_policy|minimum_password_length|password_reuse_prevention' -- '*.tf'",
+      "refs": {"nist": ["IA-5"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-VPC-1",
+      "service": "vpc",
+      "title": "No administrative port open to the internet",
+      "statement": "No security group or network ACL ingress rule opens an administrative port (SSH, RDP, database ports) to any internet address.",
+      "look_for": "Ingress from 0.0.0.0/0 or ::/0 on ports 22, 3389, 3306, 5432, 1433 or 27017.",
+      "verify": "git grep -nE '0[.]0[.]0[.]0/0|::/0|from_port *= *(22|3389|3306|5432|1433|27017)' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["SC-7", "AC-17", "CM-7"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-VPC-2",
+      "service": "vpc",
+      "title": "Default security groups allow nothing",
+      "statement": "The default security group and default network ACL of a VPC allow no traffic in either direction.",
+      "look_for": "aws_default_security_group or aws_default_network_acl blocks holding ingress or egress rules, or a new VPC whose default group is left open.",
+      "verify": "git grep -nE 'aws_default_security_group|aws_default_network_acl|aws_vpc\"' -- '*.tf'",
+      "refs": {"nist": ["SC-7", "CM-7"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-VPC-3",
+      "service": "vpc",
+      "title": "Egress is limited to what the workload needs",
+      "statement": "Security group egress is limited to the destinations the workload needs; an allow-all egress rule on a workload holding sensitive data fails.",
+      "look_for": "egress blocks with protocol -1 to 0.0.0.0/0 on groups attached to databases, key services or data processors.",
+      "verify": "git grep -nE 'egress|SecurityGroupEgress|protocol *= *\"-1\"' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["SC-7", "AC-4"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-VPC-4",
+      "service": "vpc",
+      "title": "Flow logs on every new VPC or subnet",
+      "statement": "VPC flow logging is on for every new VPC or subnet the change creates.",
+      "look_for": "A new aws_vpc or aws_subnet with no aws_flow_log naming it.",
+      "verify": "git grep -nE 'aws_flow_log|AWS::EC2::FlowLog|aws_vpc\"|aws_subnet\"' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["AU-12", "AU-2", "SI-4"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-VPC-5",
+      "service": "vpc",
+      "title": "Storage and database endpoints stay private",
+      "statement": "Storage and database endpoints are private by default; public access needs an explicit, documented exception in the change.",
+      "look_for": "publicly_accessible = true on a database, public subnets for data stores, or map_public_ip_on_launch on private tiers.",
+      "verify": "git grep -nE 'publicly_accessible *= *true|PubliclyAccessible|map_public_ip_on_launch *= *true' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["SC-7", "AC-3"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-APIGATEWAY-1",
+      "service": "apigateway",
+      "title": "Public endpoints take TLS 1.2 or later only",
+      "statement": "API Gateway, load balancer and CloudFront endpoints reachable from outside accept TLS 1.2 or later only and reject plain HTTP except to redirect.",
+      "look_for": "security_policy TLS_1_0, ssl_policy or minimum_protocol_version below TLS 1.2, or HTTP listeners that serve content.",
+      "verify": "git grep -nE 'security_policy|ssl_policy|minimum_protocol_version|TLS_1_0|TLSv1[.]1|protocol *= *\"HTTP\"' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["SC-8", "SC-13"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-EC2-1",
+      "service": "ec2",
+      "title": "Instance metadata needs session tokens",
+      "statement": "EC2 instances and launch templates require IMDSv2 session tokens, so a request forgery bug cannot read workload credentials.",
+      "look_for": "Instances or launch templates with no metadata_options block, or http_tokens other than required.",
+      "verify": "git grep -nE 'http_tokens|HttpTokens|metadata_options|aws_instance\"|aws_launch_template\"' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["CM-6", "AC-3"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-CLOUDTRAIL-1",
+      "service": "cloudtrail",
+      "title": "CloudTrail records every region and global events",
+      "statement": "CloudTrail records control-plane API activity in every region the account uses, including global service events.",
+      "look_for": "aws_cloudtrail with is_multi_region_trail false or include_global_service_events false, or a trail removed.",
+      "verify": "git grep -nE 'aws_cloudtrail|is_multi_region_trail|include_global_service_events|IsMultiRegionTrail' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["AU-2", "AU-12"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-CLOUDTRAIL-2",
+      "service": "cloudtrail",
+      "title": "Trail log files are integrity-protected",
+      "statement": "CloudTrail log file validation is on, so a later change or deletion of a log file is detectable.",
+      "look_for": "A trail with enable_log_file_validation false or absent.",
+      "verify": "git grep -nE 'enable_log_file_validation|EnableLogFileValidation' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["AU-9", "SI-7"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-CLOUDTRAIL-3",
+      "service": "cloudtrail",
+      "title": "Audit log storage denies delete and overwrite",
+      "statement": "The S3 bucket or log group that holds audit logs denies deletion and overwrite to the workloads it records.",
+      "look_for": "Trail buckets with no Object Lock or deny statement, or application roles granted s3:DeleteObject or logs:DeleteLogGroup on log stores.",
+      "verify": "git grep -nE 'object_lock|ObjectLock|s3:DeleteObject|logs:DeleteLogGroup|mfa_delete' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["AU-9"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-LOGS-1",
+      "service": "logs",
+      "title": "Log groups state a retention period",
+      "statement": "CloudWatch log groups and log buckets have a stated retention period that meets the project's declared standard; unbounded or zero retention fails.",
+      "look_for": "aws_cloudwatch_log_group with no retention_in_days, or lifecycle rules that delete audit logs early.",
+      "verify": "git grep -nE 'aws_cloudwatch_log_group|retention_in_days|RetentionInDays' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["AU-11"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-LOGS-2",
+      "service": "logs",
+      "title": "Alarms on root use, IAM changes, key loss and logging off",
+      "statement": "Alarms exist for root or break-glass use, IAM policy changes, KMS key disable or deletion, and CloudTrail being turned off.",
+      "look_for": "Metric filters and alarms for these events removed, or new accounts with none.",
+      "verify": "git grep -nE 'aws_cloudwatch_log_metric_filter|aws_cloudwatch_metric_alarm|MetricFilter|aws_cloudwatch_event_rule' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["AU-6", "SI-4"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-LOGS-3",
+      "service": "logs",
+      "title": "Application logs carry no secrets or personal data",
+      "statement": "Application logs carry no secrets, tokens, key material or personal data, and request bodies are not logged by default.",
+      "look_for": "Log or print calls that pass passwords, tokens, keys, request bodies or personal fields.",
+      "verify": "git grep -niE '(logger|logging|log|print|console)[.a-z]*[(].*(password|secret|token|api_?key|private_?key|body)'",
+      "refs": {"nist": ["AU-3", "SI-11"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-S3-1",
+      "service": "s3",
+      "title": "New storage is encrypted at rest",
+      "statement": "Every new storage resource (S3 bucket, EBS volume, RDS or DynamoDB table, SQS queue, CloudWatch log group, Secrets Manager secret) is encrypted at rest.",
+      "look_for": "Storage resources with encryption off, encrypted = false, or no server-side encryption setting where the service default is off.",
+      "verify": "git grep -nE 'server_side_encryption|sse_specification|storage_encrypted|encrypted *= *false|kms_key_id|SSESpecification|StorageEncrypted' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["SC-28", "SC-12"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-KMS-1",
+      "service": "kms",
+      "title": "Customer-managed keys rotate",
+      "statement": "Customer-managed KMS keys have automatic rotation turned on.",
+      "look_for": "aws_kms_key with enable_key_rotation false or absent on a symmetric key.",
+      "verify": "git grep -nE 'aws_kms_key\"|enable_key_rotation|EnableKeyRotation' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["SC-12"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-KMS-2",
+      "service": "kms",
+      "title": "Key policies name users and administrators",
+      "statement": "KMS key policies name the principals that may use and administer a key, and no single principal holds both roles without a stated reason.",
+      "look_for": "Key policies granting kms:* to a principal, or one role that both administers and uses a key.",
+      "verify": "git grep -nE 'aws_kms_key_policy|KeyPolicy|kms:[*]|policy *= *' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["SC-12", "AC-5", "AC-6"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-DYNAMODB-1",
+      "service": "dynamodb",
+      "title": "Backups, snapshots and replicas stay encrypted and private",
+      "statement": "DynamoDB backups and replicas, EBS and RDS snapshots inherit encryption and are never shared publicly.",
+      "look_for": "Snapshot permissions naming all, unencrypted copies or replicas, or restore paths that drop the key.",
+      "verify": "git grep -nE 'point_in_time_recovery|replica|snapshot|create_volume_permission|shared_accounts|group *= *\"all\"' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["SC-28", "CP-9"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-S3-2",
+      "service": "s3",
+      "title": "Buckets block public access and require TLS",
+      "statement": "S3 buckets block public access at the bucket or account level, and their policies deny requests that do not use TLS.",
+      "look_for": "Buckets with no public access block, block flags set false, public ACLs, or no aws:SecureTransport deny.",
+      "verify": "git grep -nE 'aws_s3_bucket_public_access_block|block_public_acls|restrict_public_buckets|aws:SecureTransport|acl *= *\"public' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["AC-3", "SC-8", "SC-7"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-ECR-1",
+      "service": "ecr",
+      "title": "Images come from a pinned digest or version",
+      "statement": "Container images come from a pinned digest or pinned version in a trusted registry, never a floating latest tag.",
+      "look_for": "image references ending in :latest or with no tag, FROM lines with no digest, or mutable ECR tags.",
+      "verify": "git grep -nE ':latest|^FROM |image_tag_mutability|\"image\" *:' -- '*Dockerfile*' '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["CM-2", "SI-7"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-ECS-1",
+      "service": "ecs",
+      "title": "Containers run as a non-root user",
+      "statement": "ECS tasks and other containers run as a non-root user and drop the Linux capabilities they do not need.",
+      "look_for": "Task definitions with no user or user root, Dockerfiles with no USER line, or capabilities added.",
+      "verify": "git grep -nE '\"user\" *:|^USER |linuxParameters|capabilities' -- '*Dockerfile*' '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["AC-6", "CM-7"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-ECS-2",
+      "service": "ecs",
+      "title": "Containers are not privileged and share no host namespace",
+      "statement": "Containers do not run privileged, do not share the host network, PID or IPC namespace, and do not mount the container runtime socket.",
+      "look_for": "privileged true, networkMode host, pidMode or ipcMode host, or docker.sock mounts.",
+      "verify": "git grep -nE 'privileged|\"networkMode\" *: *\"host\"|network_mode *= *\"host\"|pidMode|ipcMode|docker[.]sock' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["AC-6", "SC-39"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-ECS-3",
+      "service": "ecs",
+      "title": "Container root filesystems are read-only",
+      "statement": "The root filesystem of a container is read-only where the workload allows, with writable paths named explicitly.",
+      "look_for": "Task definitions with readonlyRootFilesystem false or absent.",
+      "verify": "git grep -nE 'readonlyRootFilesystem|read_only_root_filesystem' -- '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["CM-7", "SI-7"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-LAMBDA-1",
+      "service": "lambda",
+      "title": "Secrets reach functions and containers from a secret store",
+      "statement": "Secrets reach a Lambda function, container or host through Secrets Manager, SSM Parameter Store or a mounted file, never through an image layer, a build argument or a plain environment variable.",
+      "look_for": "Secret values in environment blocks, ARG or ENV lines holding secrets, or secrets copied into an image.",
+      "verify": "git grep -nE '(ARG|ENV) [A-Z_]*(SECRET|TOKEN|PASSWORD|KEY)|environment *[{=]|secretsmanager|ssm:GetParameter' -- '*Dockerfile*' '*.tf' '*.json' '*.yaml' '*.yml'",
+      "refs": {"nist": ["IA-5", "SC-28"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-EC2-2",
+      "service": "ec2",
+      "title": "Hosts and images are patched on a schedule",
+      "statement": "EC2 hosts and images receive security patches through an automated, scheduled path stated in the change or the project's standards.",
+      "look_for": "New hosts or AMIs with no patch baseline, maintenance window or image rebuild schedule.",
+      "verify": "git grep -nE 'aws_ssm_patch_baseline|aws_ssm_maintenance_window|aws_imagebuilder|yum update|dnf update|apt-get upgrade' -- '*.tf' '*.json' '*.yaml' '*.yml' '*.sh' '*Dockerfile*'",
+      "refs": {"nist": ["SI-2"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-EC2-3",
+      "service": "ec2",
+      "title": "Remote shell uses keys or federation",
+      "statement": "Remote shell access to hosts uses key, SSM Session Manager or federated authentication; password login and direct root login are off.",
+      "look_for": "PasswordAuthentication yes, PermitRootLogin yes, or shared key pairs in user data.",
+      "verify": "git grep -nE 'PasswordAuthentication|PermitRootLogin|key_name|aws_key_pair' -- '*.tf' '*.json' '*.yaml' '*.yml' '*.sh' '*.conf'",
+      "refs": {"nist": ["IA-2", "IA-5", "AC-17"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "AWS-EC2-4",
+      "service": "ec2",
+      "title": "Unused services and packages are not installed",
+      "statement": "Services and packages the workload does not use are not installed, or are disabled, in the image or host configuration.",
+      "look_for": "Package installs or enabled services in user data or Dockerfiles that the workload never uses.",
+      "verify": "git grep -nE 'apt-get install|yum install|dnf install|apk add|systemctl enable' -- '*.tf' '*.json' '*.yaml' '*.yml' '*.sh' '*Dockerfile*'",
+      "refs": {"nist": ["CM-7"], "cis": [], "asvs": []}
+    }
+  ]
+}

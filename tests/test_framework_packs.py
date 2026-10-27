@@ -1,0 +1,356 @@
+# Copyright (c) 2026 Brad Duhon.
+# SPDX-License-Identifier: GPL-3.0-or-later
+# 0157, Plan 10 spec 2.3 and 2.4: the pack format checks and the two shipped packs.
+from __future__ import annotations
+
+import json
+import os
+import re
+from pathlib import Path
+
+import pytest
+from lib import packs
+from lib.packs import PackError, load_pack, pack_folders, pack_problems
+
+SHIPPED = {"aws-default": 34, "nist-distilled": 27}
+AWS_ID = re.compile(r"AWS-([A-Z0-9]+)-[0-9]+")
+
+
+def _control(ident: str = "X-1", **extra: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "id": ident,
+        "service": "any",
+        "title": "A title",
+        "statement": "A statement.",
+        "look_for": "A hint.",
+        "verify": "git grep -n x",
+        "refs": {"nist": ["AC-2"], "cis": [], "asvs": []},
+    }
+    return {**base, **extra}
+
+
+def _make(
+    folder: Path,
+    controls: list[dict[str, object]] | None = None,
+    text: str | None = None,
+    **meta: object,
+) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    body = text if text is not None else packs.controls_text(controls or [_control()])
+    (folder / "controls.json").write_text(body, encoding="utf-8")
+    doc: dict[str, object] = {
+        "id": folder.name,
+        "version": "1.0.0",
+        "source": "test",
+        "license": "GPL-3.0-or-later",
+        "pinned_on": "2026-10-26",
+        "sha256": packs.digest(body.encode("utf-8")),
+    }
+    doc.update(meta)
+    (folder / "pack.json").write_text(json.dumps(doc), encoding="utf-8")
+    return folder
+
+
+def _problems(folder: Path) -> str:
+    found = pack_problems(folder, known=())
+    assert found
+    return "\n".join(found)
+
+
+# The shipped packs (requirements 7 to 9 and 13).
+
+
+@pytest.mark.parametrize(("name", "count"), sorted(SHIPPED.items()))
+def test_shipped_pack_loads_with_no_problem(name: str, count: int) -> None:
+    folder = packs.FRAMEWORKS_DIR / name
+    assert pack_problems(folder) == []
+    pack = load_pack(folder)
+    assert (pack.id, pack.source, pack.license) == (name, "daedalus", "GPL-3.0-or-later")
+    assert pack.sha256 == packs.digest((folder / "controls.json").read_bytes())
+    assert len(pack.controls) == count
+    assert not (folder / "rules.md").exists()
+
+
+def test_frameworks_folder_holds_no_standards_pack() -> None:
+    # 2.4: no rules.md anywhere, so the standards lookup never takes it for a standards pack.
+    assert list(packs.FRAMEWORKS_DIR.rglob("rules.md")) == []
+    assert sorted(p.name for p in packs.FRAMEWORKS_DIR.iterdir()) == sorted(SHIPPED)
+
+
+def test_aws_default_controls_name_their_service_verify_and_nist_ids() -> None:
+    pack = load_pack(packs.FRAMEWORKS_DIR / "aws-default")
+    services = {control.service for control in pack.controls}
+    assert services == set(packs.SERVICES) - {"any"}
+    for control in pack.controls:
+        match = AWS_ID.fullmatch(control.id)
+        assert match and match.group(1) == control.service.upper(), control.id
+        assert control.verify and control.verify.startswith("git grep "), control.id
+        assert control.refs.nist and control.refs.cis == (), control.id
+        assert control.statement and control.look_for and control.maps_to is None
+
+
+def test_nist_distilled_controls_are_any_service_and_cite_themselves() -> None:
+    pack = load_pack(packs.FRAMEWORKS_DIR / "nist-distilled")
+    for control in pack.controls:
+        assert control.service == "any"
+        assert control.refs.nist == (control.id,)
+        assert control.verify and control.verify.startswith("git grep ")
+
+
+def test_shipped_packs_hold_no_long_quote() -> None:
+    # 0024: a tripwire for pasted text, as the rubric test was.
+    for name in SHIPPED:
+        text = (packs.FRAMEWORKS_DIR / name / "controls.json").read_text(encoding="utf-8")
+        assert chr(0x2013) not in text and chr(0x2014) not in text
+        assert [s for s in re.findall("“([^”]*)”", text) if len(s) > 40] == []
+
+
+# Problem kinds (requirements 2, 3 and 13).
+
+
+def test_a_good_fixture_pack_loads(tmp_path: Path) -> None:
+    folder = _make(tmp_path / "good", [_control(live_check="aws iam list-roles")])
+    pack = load_pack(folder, known=())
+    assert pack.controls[0].live_check == "aws iam list-roles"
+    assert pack.controls[0].refs == packs.Refs(("AC-2",), (), ())
+
+
+@pytest.mark.parametrize("name", ["pack.json", "controls.json"])
+def test_a_missing_file_is_a_problem(tmp_path: Path, name: str) -> None:
+    folder = _make(tmp_path / "p")
+    (folder / name).unlink()
+    assert pack_problems(folder) == [f"{name} is missing"]
+
+
+def test_a_linked_file_is_a_problem(tmp_path: Path) -> None:
+    folder = _make(tmp_path / "p")
+    (folder / "pack.json").rename(tmp_path / "real.json")
+    os.symlink(tmp_path / "real.json", folder / "pack.json")
+    assert pack_problems(folder) == ["pack.json is a symlink"]
+    with pytest.raises(PackError, match="pack.json is a symlink"):
+        load_pack(folder)
+
+
+def test_a_missing_folder_is_a_problem(tmp_path: Path) -> None:
+    assert pack_problems(tmp_path / "none") == [f"{tmp_path / 'none'} is not a folder"]
+
+
+def test_a_file_over_the_size_cap_is_a_problem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = _make(tmp_path / "p")
+    monkeypatch.setattr(packs, "MAX_BYTES", 10)
+    assert "pack.json is larger than 10 bytes" in _problems(folder)
+
+
+def test_an_unreadable_file_is_a_problem(tmp_path: Path) -> None:
+    folder = _make(tmp_path / "p")
+    (folder / "controls.json").chmod(0)
+    assert _problems(folder) == "controls.json could not be read (Permission denied)"
+
+
+def test_a_hash_mismatch_is_a_problem(tmp_path: Path) -> None:
+    folder = _make(tmp_path / "p", sha256="0" * 64)
+    assert "not the " + "0" * 64 + " pack.json declares" in _problems(folder)
+
+
+@pytest.mark.parametrize(
+    ("meta", "want"),
+    [
+        ({"extra": 1}, "pack.json has the key 'extra', which is off the spec 2.3 tables"),
+        ({"id": "Bad_Id"}, "pack.json id must be"),
+        ({"version": "1.0"}, "pack.json version must be"),
+        ({"source": ""}, "pack.json source must be"),
+        ({"license": 7}, "pack.json license must be"),
+        ({"pinned_on": "2026-02-30"}, "pack.json pinned_on must be"),
+        ({"pinned_on": "26-10-2026"}, "pack.json pinned_on must be"),
+        ({"sha256": "ABC"}, "pack.json sha256 must be"),
+    ],
+)
+def test_a_bad_pack_json_value_is_a_problem(
+    tmp_path: Path, meta: dict[str, object], want: str
+) -> None:
+    assert want in _problems(_make(tmp_path / "p", **meta))
+
+
+def test_a_missing_pack_json_key_is_a_problem(tmp_path: Path) -> None:
+    folder = _make(tmp_path / "p")
+    doc = json.loads((folder / "pack.json").read_text())
+    del doc["pinned_on"]
+    (folder / "pack.json").write_text(json.dumps(doc))
+    assert _problems(folder) == "pack.json lacks the key 'pinned_on'"
+
+
+@pytest.mark.parametrize(
+    ("text", "want"),
+    [
+        ("[]", "pack.json is not a JSON object"),
+        ("{", "pack.json is not valid UTF-8 JSON"),
+        ('{"id": "p", "id": "q"}', "key 'id' is named twice"),
+    ],
+)
+def test_a_malformed_pack_json_is_a_problem(tmp_path: Path, text: str, want: str) -> None:
+    folder = _make(tmp_path / "p")
+    (folder / "pack.json").write_text(text)
+    assert want in _problems(folder)
+
+
+@pytest.mark.parametrize(
+    ("doc", "want"),
+    [
+        (
+            {"schema": "daedalus-controls/1", "controls": [], "x": 1},
+            "controls.json has the key 'x'",
+        ),
+        ({"schema": "other/1", "controls": []}, "controls.json schema must be"),
+        ({"schema": "daedalus-controls/1", "controls": {}}, "controls must be a list"),
+        ([], "controls.json is not a JSON object"),
+        ({"schema": "daedalus-controls/1", "controls": [1]}, "controls[0] is not a JSON object"),
+    ],
+)
+def test_a_bad_controls_json_is_a_problem(tmp_path: Path, doc: object, want: str) -> None:
+    assert want in _problems(_make(tmp_path / "p", text=json.dumps(doc)))
+
+
+def test_controls_json_that_is_not_json_is_a_problem(tmp_path: Path) -> None:
+    assert "controls.json is not valid UTF-8 JSON" in _problems(_make(tmp_path / "p", text="{"))
+
+
+@pytest.mark.parametrize(
+    ("control", "want"),
+    [
+        (_control(extra="x"), "control X-1 has the key 'extra', which is off the spec 2.3 tables"),
+        (_control(refs={"nist": [], "cis": [], "asvs": [], "x": []}), "refs has the key 'x'"),
+        (_control(refs=[]), "refs must be an object"),
+        (_control(refs={"nist": [], "cis": ["a b"], "asvs": []}), "refs.cis must be a list"),
+        (_control(refs={"nist": [], "cis": []}), "refs.asvs must be a list"),
+        (_control(service="rds"), "service must be one of"),
+        (_control(title="two\nlines"), "title must be one printable line"),
+        (_control(verify=""), "verify must be one printable line"),
+        (_control(statement="x" * 4001), "statement must be one printable line"),
+        (_control("bad id"), "controls[0] id must match"),
+        (_control(maps_to="no such id!"), "maps_to must be a control id"),
+    ],
+)
+def test_a_bad_control_value_is_a_problem(
+    tmp_path: Path, control: dict[str, object], want: str
+) -> None:
+    assert want in _problems(_make(tmp_path / "p", [control]))
+
+
+@pytest.mark.parametrize(
+    "key", ["id", "service", "title", "refs", "statement", "look_for", "verify"]
+)
+def test_a_missing_control_key_is_a_problem(tmp_path: Path, key: str) -> None:
+    control = _control()
+    del control[key]
+    assert f"lacks the key {key!r}" in _problems(_make(tmp_path / "p", [control]))
+
+
+def test_an_id_map_control_needs_no_statement_hint_or_command(tmp_path: Path) -> None:
+    mapped = {"id": "1.1", "service": "any", "title": "B 1.1", "maps_to": "X-1"}
+    mapped["refs"] = {"nist": [], "cis": ["1.1"], "asvs": []}
+    folder = _make(tmp_path / "p", [_control(), mapped])
+    assert pack_problems(folder, known=()) == []
+
+
+def test_a_duplicate_control_id_is_a_problem(tmp_path: Path) -> None:
+    folder = _make(tmp_path / "p", [_control(), _control()])
+    assert _problems(folder) == "control X-1 is a duplicate id"
+
+
+def test_a_maps_to_naming_no_loaded_control_is_a_problem(tmp_path: Path) -> None:
+    folder = _make(tmp_path / "p", [_control(maps_to="AWS-IAM-99")])
+    want = "control X-1 maps_to 'AWS-IAM-99', which no loaded pack holds"
+    assert pack_problems(folder) == [want]
+    assert pack_problems(folder, known={"AWS-IAM-99"}) == []
+
+
+def test_maps_to_reads_the_packs_beside_it_and_the_shipped_packs(tmp_path: Path) -> None:
+    _make(tmp_path / "base", [_control("BASE-1")])
+    shipped = _make(tmp_path / "s", [_control(maps_to="AWS-IAM-1")])
+    folder = _make(tmp_path / "p", [_control(maps_to="BASE-1")])
+    assert pack_problems(folder) == [] and pack_problems(shipped) == []
+    assert "maps_to 'BASE-1'" in "".join(pack_problems(folder, known=()))
+
+
+def test_a_nist_id_outside_the_catalog_list_is_a_problem(tmp_path: Path) -> None:
+    folder = _make(tmp_path / "p", [_control(refs={"nist": ["AC-999"], "cis": [], "asvs": []})])
+    assert _problems(folder) == "control X-1 refs.nist id 'AC-999' is not in nist-control-ids.txt"
+
+
+def test_an_unreadable_nist_list_is_a_problem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(packs, "NIST_IDS", tmp_path / "missing.txt")
+    assert "refs.nist cannot be checked" in _problems(_make(tmp_path / "p"))
+
+
+@pytest.mark.parametrize(
+    ("license_", "length", "flagged"),
+    [
+        ("operator-licensed, ids only", 401, True),
+        ("operator-licensed", 401, True),
+        ("operator-licensed, ids only", 400, False),
+        ("GPL-3.0-or-later", 401, False),
+    ],
+)
+def test_a_long_statement_in_an_operator_licensed_pack_is_a_problem(
+    tmp_path: Path, license_: str, length: int, flagged: bool
+) -> None:
+    folder = _make(tmp_path / "p", [_control(statement="s" * length)], license=license_)
+    found = pack_problems(folder, known=())
+    want = f"control X-1 statement is {length} characters, over 400 in an operator-licensed pack"
+    assert found == ([want] if flagged else [])
+
+
+def test_load_pack_raises_with_every_problem(tmp_path: Path) -> None:
+    folder = _make(tmp_path / "p", [_control(), _control()], sha256="0" * 64)
+    with pytest.raises(PackError) as caught:
+        load_pack(folder, known=())
+    assert len(caught.value.problems) == 2
+    assert "duplicate id" in str(caught.value)
+
+
+def test_control_ids_skip_an_unreadable_pack(tmp_path: Path) -> None:
+    good = _make(tmp_path / "good", [_control("G-1")])
+    bad = _make(tmp_path / "bad", text="{")
+    assert packs.control_ids([good, bad, tmp_path / "none"]) == {"G-1"}
+
+
+# pack_folders (requirement 4).
+
+
+def _manifest(repo: Path, frameworks: object) -> None:
+    doc = {} if frameworks is None else {"frameworks": frameworks}
+    (repo / "service-manifest.json").write_text(json.dumps(doc), encoding="utf-8")
+
+
+def _shipped() -> list[Path]:
+    return [packs.FRAMEWORKS_DIR / name for name in sorted(SHIPPED)]
+
+
+def test_pack_folders_reads_the_shipped_packs_with_no_folder_named(repo_cwd: Path) -> None:
+    # 0157 (12.1): no manifest, or one with no frameworks block, reads the shipped packs.
+    assert pack_folders(repo_cwd) == _shipped()
+    _manifest(repo_cwd, None)
+    assert pack_folders(repo_cwd) == _shipped()
+
+
+def test_pack_folders_reads_the_declared_folder_then_the_shipped_packs(repo_cwd: Path) -> None:
+    root = repo_cwd / "compliance" / "packs"
+    one, two = _make(root / "one"), _make(root / "two")
+    (root / "empty").mkdir()
+    (root / "notes.txt").write_text("x")
+    os.symlink(one, root / "linked")
+    _manifest(repo_cwd, {"pack_dir": "compliance/packs"})
+    assert pack_folders(repo_cwd) == [one, two, *_shipped()]
+    _manifest(repo_cwd, {"pack_dir": "compliance/packs", "default_packs": False})
+    assert pack_folders(repo_cwd) == [one, two]
+
+
+def test_pack_folders_with_a_missing_declared_folder(repo_cwd: Path) -> None:
+    _manifest(repo_cwd, {"pack_dir": "absent", "default_packs": False})
+    assert pack_folders(repo_cwd) == []
+    _manifest(repo_cwd, {"pack_dir": "absent"})
+    assert pack_folders(repo_cwd) == _shipped()

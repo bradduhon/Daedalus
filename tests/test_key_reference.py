@@ -100,7 +100,7 @@ def test_reader_keys_follow_the_reader_dataclasses() -> None:
     from dataclasses import fields
 
     from lib.config import Config
-    from lib.manifest import DOCS_KEYS, FEATURE_KEYS, PRIORITY_ROWS, Manifest
+    from lib.manifest import DOCS_KEYS, FEATURE_KEYS, FRAMEWORKS_KEYS, PRIORITY_ROWS, Manifest
 
     tops = {key.split(".", 1)[0].removesuffix("[]") for key in config_keys()}
     assert tops == {f.name for f in fields(Config)}
@@ -110,4 +110,6 @@ def test_reader_keys_follow_the_reader_dataclasses() -> None:
     leaves = {key.rsplit(".", 1)[-1] for key in manifest_keys()}
     # 0129: priorities is a nested block too; its rows are priorities.<field> keys.
     assert {f"priorities.{row}" for row in PRIORITY_ROWS} <= set(manifest_keys())
-    assert {f.name for f in fields(Manifest)} - {"features", "docs", "priorities"} <= leaves
+    assert {f"frameworks.{k}" for k in FRAMEWORKS_KEYS} <= set(manifest_keys())
+    nested = {"features", "docs", "priorities", "frameworks"}
+    assert {f.name for f in fields(Manifest)} - nested <= leaves

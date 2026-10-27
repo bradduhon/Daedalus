@@ -239,6 +239,8 @@ One row per key the two readers accept: what the key governs, then what goes the
 | `priorities.principles[].text` | `service-manifest.json` | The principle itself, as one sentence a decision brief quotes (0129) | string | One printable line of 1 to 300 characters | Required in each principle | `"Each tenant keeps its own key."` |
 | `priorities.principles[].source` | `service-manifest.json` | Where the principle is written down, so a reader can follow it (0129) | string | A repo-relative path or a ruling id of the project's own ledger, without a leading slash, `..` or glob characters | Absent: no source named | `"docs/design.md"` |
 | `priorities.agents.<name>.drivers` | `service-manifest.json` | A different ranking for one agent; rules and principles still apply to it (0129) | list of strings | Each of `security`, `trust`, `ops`, `cost` exactly once; `<name>` is a Daedalus agent file name other than `security-auditor`, which is refused | Absent: the agent follows `priorities.drivers` | `{"repo-coder": {"drivers": ["cost", "security", "ops", "trust"]}}` |
+| `frameworks.pack_dir` | `service-manifest.json` | The project folder that holds its own control packs; each subfolder holding a `pack.json` is one pack (0157) | string or null | A project-relative folder path without a leading slash, `..` or glob characters, or `null` | No `frameworks` key: only the packs Daedalus ships are read | `"compliance/packs"` |
+| `frameworks.default_packs` | `service-manifest.json` | Whether the packs Daedalus ships are read beside the project's own packs (0157) | boolean | `true` or `false`; `false` reads only the packs under `frameworks.pack_dir` | `true`: the shipped packs are read | `false` |
 | `ledger.path` | `service-manifest.json` | Where rulings are appended, declared for everyone who works on the project; it wins over the config's ledger block (0004) | string | A path; `<repo_root>` and `<charter_root>` are filled in, and a relative path is read from the project root | No block, or `ledger: null`: the config's ledger block or the ledger probe is used | `"docs/decisions.md"` |
 | `ledger.format` | `service-manifest.json` | How each ruling is written to the ledger (0004) | string | `"markdown-table-row"` (one table row per ruling) or `"heading-entry"` (one `## Entry N` section per ruling) | Required once the block exists | `"markdown-table-row"` |
 | `ledger.id_scheme` | `service-manifest.json` | The pattern each new ruling id follows (0004) | string | A pattern such as `{seq:04d}-{repo}-{type}`; a heading ledger uses `{seq}` | Required once the block exists | `"{seq:04d}-{repo}-{type}"` |
@@ -533,6 +535,7 @@ Daedalus/
 │   ├── lib/locks.py                 # the one FIFO-safe lock opener and bounded lock
 │   ├── lib/manifest.py              # the one reader of service-manifest.json
 │   ├── lib/narrow.py                # narrows parsed JSON values to typed values
+│   ├── lib/packs.py                 # loads and checks framework control packs
 │   ├── lib/plan_record.py           # loads and validates plan records
 │   ├── lib/project_keys.py          # every manifest and config key, its reference row, and the starter files
 │   ├── lib/project_root.py          # finds the project root
@@ -562,6 +565,7 @@ Daedalus/
 │   ├── enforce_agent_jail.py        # PreToolUse policy
 │   ├── freeze_sources.py            # freezes and verifies a document train's sources
 │   ├── handback_check.py            # SubagentStop check of a coder's receipts block
+│   ├── import_pack.py               # operator-run: writes a control pack from an OSCAL catalog or a CIS id map
 │   ├── refresh_frameworks.py        # operator-run: compile the pinned framework caches
 │   ├── standing_rules.py            # derives the standing-rules file from the ledger
 │   ├── validate_plan.py             # checks a plan file and prints its graph line
