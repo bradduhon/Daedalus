@@ -164,7 +164,7 @@ Print every path Daedalus can write from your own shell, where `<plugin>` is the
 
     python3 <plugin>/scripts/daedalus_doctor.py --print-files
 
-Each line reads `<path pattern> | <writer> | <when>`: the writer is the script function that writes the path, and `<repo>` is the main working tree of the git repository you started Claude Code in.
+Each line reads `<path pattern> | <writer> | <when>`: the writer is the script function that writes the path, and `<repo>` is the main working tree of the git repository you started Claude Code in. The list is never empty, so empty output means the plugin files are damaged; reinstall Daedalus. A `No such file` error means `<plugin>` is wrong; copy it again from the doctor's `plugin root` line.
 
 Part of the output on 2026-10-26:
 
