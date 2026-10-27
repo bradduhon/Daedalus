@@ -93,6 +93,8 @@ def _parser() -> argparse.ArgumentParser:
     judged.add_argument("--tip")
     # 0131: --gate docs records the docs verifier's verdict, verified or refuted.
     judged.add_argument("--gate", choices=("security", "docs"), default="security")
+    # 0131: --judged is the Docs tip sha the docs verifier judged, the docs branch head.
+    judged.add_argument("--judged")
     ledger = sub.add_parser("ledger")
     ledger.add_argument("--repo", type=Path, required=True)
     ledger.add_argument("--sha", required=True)
@@ -138,7 +140,25 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
                         "audit round. Next: rerun it with --status and, when refuted, --findings."
                     ],
                 )
-            return record_docs_verdict(repo, args.status, args.tip, args.findings)
+            if args.status == "verified" and args.judged is None:
+                # 0131: a verified docs verdict always names the docs tip the verifier judged.
+                return Outcome(
+                    EXIT_STOP,
+                    [
+                        "verdict --gate docs --status verified requires --judged, the Docs tip "
+                        "sha the verifier judged, and this call passed none. Next: rerun it with "
+                        "--judged set to the Docs tip: sha of the verifier dispatch."
+                    ],
+                )
+            return record_docs_verdict(repo, args.status, args.tip, args.findings, args.judged)
+        if args.judged is not None:
+            return Outcome(
+                EXIT_STOP,
+                [
+                    "verdict --judged belongs to --gate docs only. Next: rerun the security "
+                    "verdict with --tip and without --judged."
+                ],
+            )
         if args.status == "approved" and args.tip is None:
             # pin C3 -> C5: an approval always names the tip the auditor judged.
             return Outcome(

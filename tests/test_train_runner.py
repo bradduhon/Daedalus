@@ -1536,6 +1536,85 @@ def _audit_train(repo: Path, plugin: Path) -> str:
     return _integration(repo)
 
 
+def test_an_ask_route_names_the_three_gate_labels(repo: Path, plugin: Path) -> None:
+    # 0149: the ask route's Next line carries the plain gate labels, not the old choice prose.
+    stage = _probe_stage(1)
+    stage["on_fail"] = {"stopped": "ask: Retry the probe?"}
+    _write_train(plugin, [stage], ("repository",))
+    _started(repo, plugin)
+    outcome = _step(repo, plugin)
+    assert outcome.code == 0, outcome.lines
+    assert outcome.lines[-1] == (
+        "Next: put the question to the operator with the choices `Fix it now`, "
+        "`Skip, track or exempt it` and `Stop the train`; run step to retry the stage, "
+        "or stop on `Stop the train`."
+    )
+    assert "end the train" not in "\n".join(outcome.lines)
+
+
+def _docs_branch(repo: Path) -> tuple[str, str, str]:
+    # 0131: a verified docs worktree whose branch head is merged into the integration tip.
+    from tests.test_docs_stage import _docs_unit, _verifier_says
+
+    base = _integration(repo)
+    worktree = _docs_unit(repo)
+    branch = f"daedalus-unit/{_state(repo)['train_id']}{train_state.DOCS_SUFFIX}"
+    (repo / "README.md").write_text("docs\n")
+    _git(repo, "commit", "-q", "-am", "docs")
+    head = _integration(repo)
+    _git(repo, "branch", "-f", branch, head)
+    _verifier_says(repo, worktree, "[VERDICT: VERIFIED] claims=1")
+    return base, head, branch
+
+
+def test_docs_verdict_records_the_judged_docs_tip(repo: Path, plugin: Path) -> None:
+    # 0131: --judged is the docs branch head merged into the tip, recorded beside tip.
+    _audit_train(repo, plugin)
+    base, head, branch = _docs_branch(repo)
+    bad = train_runner.record_docs_verdict(repo, "verified", judged="HEAD")
+    assert bad.code == 1 and "is not a 40 lowercase hex commit sha. Next:" in bad.lines[0]
+    other = train_runner.record_docs_verdict(repo, "verified", judged=base)
+    assert (
+        other.code == 1
+        and (
+            f"the merged docs commits end at {head[:12]}, not at the judged docs tip {base[:12]}. "
+            "Next:"
+        )
+        in other.lines[0]
+    )
+    _git(repo, "switch", "-q", "-c", "side")
+    (repo / "README.md").write_text("side\n")
+    _git(repo, "commit", "-q", "-am", "side")
+    side = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "switch", "-q", "main")
+    _git(repo, "branch", "-f", branch, side)
+    unmerged = train_runner.record_docs_verdict(repo, "verified", judged=side)
+    assert unmerged.code == 1 and "is not merged into the integration tip" in unmerged.lines[0]
+    assert "docs_verdict" not in _state(repo)
+    _git(repo, "branch", "-f", branch, head)
+    done = train_runner.record_docs_verdict(repo, "verified", judged=head)
+    assert done.lines == [f"docs verdict recorded status=verified tip={head[:12]}"]
+    assert _state(repo)["docs_verdict"] == {"status": "verified", "tip": head, "judged": head}
+
+
+def test_the_docs_verdict_command_requires_judged_on_verified(repo: Path, plugin: Path) -> None:
+    # 0131: the command line refuses a verified docs verdict with no --judged, and --judged
+    # on the security gate.
+    _audit_train(repo, plugin)
+    _, head, _ = _docs_branch(repo)
+    gate = ("verdict", "--repo", str(repo), "--gate", "docs", "--status", "verified")
+    missing = _train_cli(repo, *gate)
+    assert missing.returncode == 1 and "requires --judged" in missing.stdout
+    assert "Next:" in missing.stdout and "docs_verdict" not in _state(repo)
+    stray = _train_cli(
+        repo, "verdict", "--repo", str(repo), "--status", "approved", "--judged", head
+    )
+    assert stray.returncode == 1 and "belongs to --gate docs only. Next:" in stray.stdout
+    done = _train_cli(repo, *gate, "--judged", head)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert train_state.record(_state(repo), train_state.DOCS_VERDICT)["judged"] == head
+
+
 def test_verdict_derives_the_round_from_audit_rounds(repo: Path, plugin: Path) -> None:
     # 67, spec 3.1: one more than the highest recorded round, else 1; --round may be left out.
     tip = _audit_train(repo, plugin)
