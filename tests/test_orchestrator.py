@@ -320,6 +320,9 @@ def test_recipe_names_the_verifier_step_and_the_one_pass_rule() -> None:
     # 0086: a resume's Worktree: line rebinds a coder, so the verifier gets a Unit worktree: line.
     assert "the line `Unit worktree: <unit worktree path>`" in step
     assert "never a `Worktree:` line" in step
+    # V1 req 1, spec 9.2: the verifier reads named ranges; -U0 is the form the hook admits.
+    assert "the line `Read: <file>:<first>-<last>[, ...]`" in step
+    assert "`git -C <repo> diff -U0 <lock sha>...<b>`" in step
     refuted = next(ln for ln in phase2.splitlines() if ln.startswith("| `[VERDICT: REFUTED]"))
     fix = 'SendMessage(that unit\'s coder, "FIX. The verifier refuted: <code and scope rows>")'
     assert fix in refuted

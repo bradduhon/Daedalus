@@ -193,6 +193,24 @@ def test_repo_coder_carries_the_code_hygiene_rule() -> None:
     ) in text
 
 
+@pytest.mark.parametrize(
+    "rule",
+    [
+        # V1 req 6, spec 5.2 item 1: a parametrize row or the shared helper, never a copied test.
+        "Add a parametrize row or call the shared helper instead of a new test function whose"
+        " body differs only in literals, and name the reused test in the ledger notes.",
+        # V1 req 7, spec 9.2 item 3: batched reads and edits, the suite once before COMPLETE.
+        "read every file the brief names in one turn of parallel Read calls before the first"
+        " edit, make the edits in as few turns as they allow, and run the declared suite once"
+        " before COMPLETE and once after any fix",
+    ],
+)
+def test_repo_coder_code_hygiene_carries_the_test_reuse_and_turn_rules(rule: str) -> None:
+    text = (AGENTS / "repo-coder.md").read_text()
+    hygiene = " ".join(text.split("## Code hygiene", 1)[1].split("\n## ", 1)[0].split())
+    assert rule in hygiene
+
+
 @pytest.mark.parametrize("name", sorted(EXPECTED_MODEL))
 def test_body_has_header_status_contract_and_no_dashes(name: str) -> None:
     text = (AGENTS / f"{name}.md").read_text()
