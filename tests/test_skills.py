@@ -1974,26 +1974,24 @@ def test_run_skill_starts_a_folder_run_with_the_folder_begin() -> None:
     for skill in ("brainstorm", "plan", "verify"):
         assert f"`${{CLAUDE_PLUGIN_ROOT}}/skills/{skill}/SKILL.md`" in section
     assert "`${CLAUDE_PLUGIN_ROOT}/skills/document/SKILL.md` in derived document mode" in section
-    assert "the planner in the run folder `<repo>/docs/.tmp/daedalus/<train-id>/`" in section
-    assert "copies each finished output into `<out>`" in section
+    assert "The phase agents write their finished files straight into `<out>`" in section
     assert "Build, audit and release never run here." in section
+    assert "with Read and Write" not in section
 
 
-def test_plan_and_document_skills_copy_folder_outputs_into_the_run_output_folder() -> None:
-    # issue 48: agents write where their hooks admit them; the main session copies into <out>.
+def test_plan_and_document_skills_write_folder_outputs_into_the_run_output_folder() -> None:
+    # issue 48: the hooks admit a folder run's output folder, so agents write there; no copy step.
     plan = " ".join(_phase_skill("plan").read_text(encoding="utf-8").split())
     assert "unit S1" not in plan
     assert "take `<repo>`, `<train-id>` and `<out>` from the State Block lines" in plan
-    assert "Both hold in folder scope too, because the planner's write hook admits" in plan
-    assert (
-        "In folder scope, copy `<path>` to `<out>/plan-<YYYYMMDD>.md` with Read and Write" in plan
-    )
+    assert "In a folder run it is `<out>/plan-<YYYYMMDD>.md`" in plan
+    assert "Next: run `/daedalus:run <spec>`, which opens a run in this folder" in plan
     assert "the run ends with the plan file at `<out>`, or goes on to a document phase" in plan
     doc = " ".join(_phase_skill("document").read_text(encoding="utf-8").split())
-    assert "The output folder is `<out>` when it sits below `<repo>`" in doc
-    assert "`<repo>/docs/.tmp/daedalus/<train-id>/out` otherwise" in doc
-    assert "copy each output and the change log into `<out>` with Read and Write" in doc
-    assert "the run entry's stop command then ends the run in place of unmark" in doc
+    assert "The output folder is `<out>`: freeze and the document outputs check admit it" in doc
+    assert "In a folder run, the run entry's stop command ends the run in place of unmark." in doc
+    for text in (plan, doc):
+        assert "with Read and Write" not in text
 
 
 def test_run_skill_relays_the_announce_line_and_goes() -> None:

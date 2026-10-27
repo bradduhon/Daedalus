@@ -81,7 +81,7 @@ A run in folder scope (step 1) runs every phase here, in the main session, and n
   - Exit 3: begin found no decision ledger and wrote nothing; ask the question it prints, as step 4 says.
   - Exit 1: show its output unchanged and stop; begin left no run behind, so the stop command does not run. Its `Next:` line is the next action.
 - Hooks check. Run step 5's command, `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify_audit_chain.py --hooks-live --repo <repo>`, and act on its exits as step 5 says.
-- Phases. Run each phase here with `<repo>`, `<train-id>` and `<out>` from begin. The phase agents write only where their write hooks admit them: the planner in the run folder `<repo>/docs/.tmp/daedalus/<train-id>/`, and the document agents below `<repo>`. Each phase skill names those paths for folder scope and copies each finished output into `<out>`.
+- Phases. Run each phase here with `<repo>`, `<train-id>` and `<out>` from begin. The phase agents write their finished files straight into `<out>`, which their write hooks admit as this run's output folder (issue 48): the planner its plan file and brainstorm spec, and the doc-deriver and change-logger each derived document and change log. Each phase skill names its folder-run paths.
   - `brainstorm`: read and run `${CLAUDE_PLUGIN_ROOT}/skills/brainstorm/SKILL.md` with the rest as its argument. Its hand-off runs the plan phase.
   - A spec path: read and run `${CLAUDE_PLUGIN_ROOT}/skills/plan/SKILL.md` with that path.
   - `doc`: read and run `${CLAUDE_PLUGIN_ROOT}/skills/document/SKILL.md` in derived document mode, with the rest as what to derive and its sources. Its claims go to the verify phase in claims mode (`${CLAUDE_PLUGIN_ROOT}/skills/verify/SKILL.md`), and the operator rules on every change-log row.
