@@ -211,6 +211,107 @@ def test_root_writes_name_takes_a_glob() -> None:
         assert reason is not None and reason.startswith("hook root_writes failed closed"), bad
 
 
+def _sub_judged(repo: Path, path: str, *flags: str) -> str | None:
+    hook_input = {**_w("x", path), "cwd": str(repo)}
+    return evaluate(HOOK, hook_input, "--touch", "scratch", *flags)
+
+
+def test_root_writes_sub_admits_one_folder_level(tmp_path: Path) -> None:
+    # 0152: brainstorm spec 4.3, the planner's draft one folder below scratch.
+    repo = _git_init(tmp_path / "repo")
+    scratch = repo / "docs" / ".tmp" / "daedalus"
+    (scratch / "brainstorm-a").mkdir(parents=True)
+    flags = ("--sub", "brainstorm-*/spec.md")
+    assert _sub_judged(repo, f"{scratch}/brainstorm-a/spec.md", *flags) is None
+    assert _sub_judged(repo, f"{scratch}/brainstorm-new/spec.md", *flags) is None
+    for path in (
+        f"{scratch}/brainstorm-a/b/spec.md",
+        f"{scratch}/x/brainstorm-a/spec.md",
+        f"{scratch}/brainstorm-a/../spec.md",
+        f"{scratch}/brainstorm-a/../../spec.md",
+        f"{scratch}/../brainstorm-a/spec.md",
+        f"{scratch}/brainstorm-a/../other/spec.md",
+        f"{scratch}/brainstorm-a/plan.md",
+        f"{scratch}/brainstorm-a/spec.md.bak",
+        f"{scratch}/spec.md",
+        f"{scratch}/other/spec.md",
+        f"{repo}/docs/brainstorm-a/spec.md",
+    ):
+        assert _sub_judged(repo, path, *flags) is not None, path
+
+
+def test_root_writes_sub_refuses_symlinks_out_of_scratch(tmp_path: Path) -> None:
+    repo = _git_init(tmp_path / "repo")
+    scratch = repo / "docs" / ".tmp" / "daedalus"
+    scratch.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    (outside / "brainstorm-x").mkdir(parents=True)
+    os.symlink(outside / "brainstorm-x", scratch / "brainstorm-link")
+    (scratch / "brainstorm-f").mkdir()
+    os.symlink(outside / "spec.md", scratch / "brainstorm-f" / "spec.md")
+    flags = ("--sub", "brainstorm-*/spec.md")
+    assert _sub_judged(repo, f"{scratch}/brainstorm-link/spec.md", *flags) is not None
+    assert _sub_judged(repo, f"{scratch}/brainstorm-f/spec.md", *flags) is not None
+
+
+def test_root_writes_sub_judges_the_folder_and_the_file_realpath(tmp_path: Path) -> None:
+    repo = _git_init(tmp_path / "repo")
+    scratch = repo / "docs" / ".tmp" / "daedalus"
+    for folder in ("brainstorm-a", "brainstorm-b", "brainstorm-y"):
+        (scratch / folder).mkdir(parents=True)
+    outside = tmp_path / "outside" / "brainstorm-x"
+    outside.mkdir(parents=True)
+    # 0152: folder out of scratch whose spec.md links back in; the folder's realpath refuses it.
+    os.symlink(outside, scratch / "brainstorm-link")
+    os.symlink(scratch / "brainstorm-y" / "spec.md", outside / "spec.md")
+    # 0152: a spec.md that resolves to another name, and another name that resolves to spec.md.
+    os.symlink(scratch / "brainstorm-b" / "notes.md", scratch / "brainstorm-a" / "spec.md")
+    os.symlink(scratch / "brainstorm-y" / "spec.md", scratch / "brainstorm-b" / "alias")
+    flags = ("--sub", "brainstorm-*/spec.md")
+    assert _sub_judged(repo, f"{scratch}/brainstorm-y/spec.md", *flags) is None
+    for path in (
+        f"{scratch}/brainstorm-link/spec.md",
+        f"{scratch}/brainstorm-a/spec.md",
+        f"{scratch}/brainstorm-b/alias",
+    ):
+        assert _sub_judged(repo, path, *flags) is not None, path
+
+
+def test_root_writes_sub_and_name_admit_either(tmp_path: Path) -> None:
+    repo = _git_init(tmp_path / "repo")
+    scratch = repo / "docs" / ".tmp" / "daedalus"
+    flags = ("--name", "plan*.md", "--sub", "brainstorm-*/spec.md")
+    assert _sub_judged(repo, f"{scratch}/plan-2026-10-26.md", *flags) is None
+    assert _sub_judged(repo, f"{scratch}/brainstorm-a/spec.md", *flags) is None
+    assert _sub_judged(repo, f"{scratch}/brainstorm-a/plan.md", *flags) is not None
+    assert _sub_judged(repo, f"{scratch}/spec.md", *flags) is not None
+    assert _sub_judged(repo, f"{scratch}/other.md", *flags) is not None
+    bash = {**_b("x", f"touch {scratch}/brainstorm-a/spec.md"), "cwd": str(repo)}
+    assert evaluate(HOOK, bash, "--touch", "scratch", *flags) is None
+    bash = {**_b("x", f"touch {scratch}/brainstorm-a/b/spec.md"), "cwd": str(repo)}
+    assert evaluate(HOOK, bash, "--touch", "scratch", *flags) is not None
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "brainstorm-*/spe*.md",
+        "brainstorm-*/spec?.md",
+        "brainstorm-*/[s]pec.md",
+        "brainstorm-*/a/spec.md",
+        "brainstorm-*/../spec.md",
+        "../spec.md",
+        "brainstorm-*/",
+        "spec.md",
+        "/spec.md",
+        "brainstorm-?/spec.md",
+    ],
+)
+def test_root_writes_sub_flag_value_fails_closed(bad: str) -> None:
+    reason = evaluate(HOOK, _w("x", f"{CWD}/docs/b/spec.md"), "--touch", "docs", "--sub", bad)
+    assert reason is not None and reason.startswith("hook root_writes failed closed"), bad
+
+
 def _planner(repo: Path, path: str) -> tuple[bool, str | None, str]:
     # spec 3.1: the planner's own agent-file hooks, run as the router runs them.
     from lib import router
