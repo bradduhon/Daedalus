@@ -88,7 +88,7 @@ If your project is a plain folder and not a git repository, Daedalus works in fo
 
 1. See what Daedalus has. Type `/daedalus:catalog` once. It prints a list of the agents and the seven phases.
 2. Start a run. Type `/daedalus:run` and your task in your own words, for example `/daedalus:run Add a --verbose flag to the command-line tool`. A one-line task needs no file, because the run saves the words you type as the spec. With only an idea and no spec, type `/daedalus:brainstorm` and the idea, or the path of a notes file. The [operator guide](docs/howto/README.md) shows how to turn an idea into a spec and how to split a spec into units before you build.
-3. Answer its questions. The run works on its own and stops only when it needs you. Each question arrives in Claude Code's question prompt, with the recommended answer first. When the security audit finds a problem, you get one question per problem with three choices: fix it now, skip, track or exempt it, or stop the train.
+3. Answer its questions. The run works on its own and stops only when it needs you. Each question arrives in Claude Code's question prompt, with the recommended answer first. When the security audit finds a problem, you get one question per problem with three choices: `Fix it now (Recommended)`, `Skip, track or exempt it` or `Stop the train`.
 4. Merge the pull request. When the run ends, you can read what every agent did with `/daedalus:audit-report <session>`. Type `/daedalus:run push` to push the branch and open its pull request. Review the pull request and merge it yourself. Daedalus never merges.
 
 ## Runs and reports
