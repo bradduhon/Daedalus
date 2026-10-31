@@ -57,6 +57,14 @@ R_ENV_FILE_TREE = (
     "live keys (0192). Next: search without a hidden-file flag or a glob naming .env, or name "
     "the files you need"
 )
+# 0192, issue 152: the walk for nested .env files; past either cap the read is refused.
+ENV_WALK_DEPTH = 24
+ENV_WALK_ENTRIES = 100_000
+ENV_WALK_SKIP = frozenset({".git", "node_modules"})
+R_ENV_WALK_CAP = (
+    "{path} holds more than 100000 entries or 24 folder levels, so the .env deny cannot rule out "
+    "a .env file inside it (0192). Next: search a narrower folder, or name the files you need"
+)
 # prepush-2026-10-27: rg ranks these above .gitignore, so a `!` line beats the data folder marker.
 IGNORE_FILES = (".rgignore", ".ignore")
 IGNORE_READ_MAX = 1024 * 1024
@@ -310,8 +318,9 @@ def reply_key_hit(target: str) -> bool:
 
 
 def env_name(name: str) -> bool:
-    # 0192: .env and .env.<anything>, except the names-only .env.example.
-    return name == ENV_FILE or (name.startswith(ENV_FILE + ".") and name != ENV_EXAMPLE)
+    # 0192: .env and .env.<anything> in any case, except the names-only .env.example.
+    folded = name.casefold()
+    return folded == ENV_FILE or (folded.startswith(ENV_FILE + ".") and folded != ENV_EXAMPLE)
 
 
 def env_file_hit(target: str) -> bool:
@@ -436,18 +445,71 @@ def path_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | Non
         if target:
             glob = tool_input.get("glob")
             return _grep_key_reason(target, key_roots(cwd, target), glob) or _grep_env_reason(
-                target, env_roots(cwd, target), glob
+                target, glob
             )
     return None
 
 
-def _grep_env_reason(target: str, envs: list[str], glob: object) -> str | None:
-    # 0192: the Grep tool skips git-ignored files, so only a glob naming a .env file reaches it.
+def _grep_env_reason(target: str, glob: object) -> str | None:
+    # 0192, issue 152: a glob naming a .env file under target reaches it; with no glob, the
+    # Grep tool reads every .env file git does not confirm ignored.
+    if not os.path.isdir(target):
+        return None
+    found = env_walk(target)
+    if found is None:
+        return R_ENV_WALK_CAP.format(path=target)
     pats = glob_patterns(glob if isinstance(glob, str) else "")
-    for env in envs if pats else []:
-        rest = [os.path.basename(env)]
-        if _contains(target, env):
-            rest = os.path.relpath(env, os.path.realpath(target)).split(os.sep)
-        if glob_reaches(pats, rest):
-            return R_ENV_FILE_TREE.format(path=target)
-    return None
+    if pats:
+        rests = [os.path.relpath(env, target).split(os.sep) for env in found]
+        hit = any(glob_reaches(pats, rest) for rest in rests)
+    else:
+        hit = bool(set(found) - git_ignored(found))
+    return R_ENV_FILE_TREE.format(path=target) if hit else None
+
+
+def env_walk(folder: str) -> list[str] | None:
+    # 0192, issue 152: every .env file under folder, links never followed; None past the cap.
+    found: list[str] = []
+    seen = 0
+    pending = [(os.path.realpath(folder), 0)]
+    while pending:
+        here, depth = pending.pop()
+        try:
+            with os.scandir(here) as entries:
+                listed = list(entries)
+        except OSError:
+            continue
+        seen += len(listed)
+        if seen > ENV_WALK_ENTRIES:
+            return None
+        for entry in listed:
+            if env_name(entry.name) and not entry.is_dir(follow_symlinks=False):
+                found.append(entry.path)
+            elif entry.is_dir(follow_symlinks=False) and entry.name not in ENV_WALK_SKIP:
+                if depth + 1 > ENV_WALK_DEPTH:
+                    return None
+                pending.append((entry.path, depth + 1))
+    return sorted(found)
+
+
+def git_ignored(paths: list[str]) -> set[str]:
+    # 0192: the paths `git check-ignore` confirms ignored; no git, or any error, confirms none.
+    import subprocess  # 0035: kept off the fast path's import list.
+
+    out: set[str] = set()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    for path in paths:
+        try:
+            done = subprocess.run(
+                ["git", "-C", os.path.dirname(path), "check-ignore", "-q", "--", path],
+                capture_output=True,
+                timeout=10,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if done.returncode == 0:
+            out.add(path)
+    return out

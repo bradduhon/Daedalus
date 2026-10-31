@@ -231,7 +231,7 @@ A control pack is a list of security controls a change is judged against. When a
 
 When a change touches `package.json` or an npm lockfile, the dependency auditor also judges four npm rules from `<plugin>/packs/dependencies/npm.md`.
 
-A project with no `frameworks` block in `service-manifest.json` is judged against the three packs that are on by default and needs no setup. To add your own packs, name a project folder in `frameworks.pack_dir`. Each subfolder holding a `pack.json` and a `controls.json` is one pack. Set `frameworks.default_packs` to `false` to read only your own packs. A pack that fails its hash or format check stops the train.
+A project with no `frameworks` block in `service-manifest.json` is judged against the three packs that are on by default and needs no setup. To add your own packs, name a project folder in `frameworks.pack_dir`. Each subfolder holding a `pack.json` and a `controls.json` is one pack. Set `frameworks.default_packs` to `false` to stop reading the shipped packs that are on by default. Your own packs and any shipped pack named in `frameworks.packs` are still read. The `default` and `triggers` keys of `pack.json` work only in the packs Daedalus ships; a pack of your own that holds either one fails its check. A pack that fails its hash or format check stops the train.
 
 The commands below run from your own shell, in your project. `<plugin>` is the path the doctor prints on its `plugin root` line. `<cache>` is a directory whose name depends on how you installed Daedalus. Print it with:
 
@@ -331,7 +331,7 @@ A coding agent may write only inside its own unit worktree. Even there it may ne
 
 At all times, every agent is refused a read or search of `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh` or `~/.claude/.credentials.json`. When your own session does it, the call runs with a warning in its context and its transcript. The check follows links before it judges a path, so a link into one of those folders is refused the same way. Daedalus's own agents are always refused writing those paths with a file tool or naming them in Bash. While a train runs, your session is warned in its context when it does either.
 
-A `.env` file anywhere in the project gets the same treatment, because it holds live keys such as a Stripe secret key. That covers `.env` and every `.env.<name>`, such as `.env.local`. `.env.example` stays open, because it holds the variable names only. A search tool may still list a `.env` file by name; a search that would read inside one is refused.
+An agent is also refused a read or write of a `.env` file, because such a file holds live keys such as a Stripe secret key. That covers `.env` and every `.env.<name>` in any letter case, such as `.env.local`. `.env.example` stays open, because it holds the variable names only. Listing files by name stays open. The check also refuses a folder-wide read when it finds a `.env` file anywhere under the folder, up to 24 folder levels down, skipping `.git` and `node_modules`. That covers a recursive grep, `rg --hidden`, an rg glob that names `.env`, `tar` and `cp -r`. It also covers the Grep tool when its glob names a `.env` file, or when it has no glob and git does not report the `.env` file as ignored. A folder with more than 100000 entries or more than 24 levels is refused too, because the check cannot rule out a `.env` file inside it.
 
 A train never stops your session with a permission prompt. A call the jail flags in your own session runs, and the warning names what the call touches and what can go wrong.
 

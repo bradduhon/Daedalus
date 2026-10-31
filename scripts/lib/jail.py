@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import glob as _glob
 import os
 import re
 import subprocess
@@ -28,12 +29,14 @@ from lib.credential_paths import (
     R_CREDENTIAL_TREE,
     R_ENV_FILE,
     R_ENV_FILE_TREE,
+    R_ENV_WALK_CAP,
     R_IGNORE_WHITELIST,
     R_REPLY_KEY,
     R_REPLY_KEY_TREE,
     REPLY_KEY_NAME,
     env_file_hit,
     env_roots,
+    env_walk,
     glob_patterns,
     glob_reaches,
     ignore_whitelist,
@@ -1628,6 +1631,31 @@ def _tree_reason(
                     return reason.format(path=target)
                 if rest is not None and name == "rg" and ignore_whitelist(root):
                     return R_IGNORE_WHITELIST.format(path=target)
+            walked = _env_walk_reason(target, hidden, globs, name == "rg", dotglob)
+            if walked:
+                return walked
+    return None
+
+
+def _env_walk_reason(
+    target: str, hidden: bool, globs: list[str], rg: bool, dotglob: bool
+) -> str | None:
+    # 0192, issue 152: a folder read reaches a nested .env file when it shows dot files or a
+    # glob names one; a glob operand walks each match. Plain rg skips dot files, so no walk.
+    if not (hidden or globs):
+        return None
+    globbed = bool(_GLOB_CHARS & set(target))
+    folders = _glob.glob(target, include_hidden=dotglob) if globbed else [target]
+    for folder in (f for f in folders if os.path.isdir(f)):
+        found = env_walk(folder)
+        if found is None:
+            return R_ENV_WALK_CAP.format(path=folder)
+        for env in found:
+            rest = os.path.relpath(env, os.path.realpath(folder)).split(os.sep)
+            if hidden or glob_reaches(globs, rest):
+                return R_ENV_FILE_TREE.format(path=folder)
+            if rg and ignore_whitelist(env):
+                return R_IGNORE_WHITELIST.format(path=folder)
     return None
 
 

@@ -143,8 +143,10 @@ A pack is a folder holding `pack.json` and `controls.json`. The folder name is t
 - `license`: one line, such as `GPL-3.0-or-later`, `public domain (17 U.S.C. 105)` or `operator-licensed, ids only`.
 - `pinned_on`: the `YYYY-MM-DD` date the pack was written.
 - `sha256`: the 64 lowercase hex SHA-256 of `controls.json`.
-- `default` (optional): `false` keeps a shipped pack off until `frameworks.packs` names it. Absent means `true`.
-- `triggers` (optional): a list of 1 to 32 path globs, such as `**/*stripe*`. The audit reads the pack only when a changed path matches one, and then it asks the framework specialist even when no unit touched IAM, keys or infrastructure. A leading `**/` also matches a file at the project root. Absent means the pack is read whenever the specialist runs.
+- `default` (optional, shipped packs only): `false` keeps a shipped pack off until `frameworks.packs` names it. Absent means `true`.
+- `triggers` (optional, shipped packs only): a list of 1 to 32 path globs, such as `**/*stripe*`. The audit reads the pack only when a changed path matches one, and then it asks the framework specialist even when no unit touched IAM, keys or infrastructure. Matching ignores letter case, and a leading `**/` also matches a file at the project root. Absent means the pack is read whenever the specialist runs.
+
+A pack under `frameworks.pack_dir` that holds `default` or `triggers` fails its check.
 
 `controls.json` is `{"schema": "daedalus-controls/1", "controls": [...]}`. Each control holds:
 

@@ -388,7 +388,16 @@ def _checked(folder: Path, known: Collection[str] | None) -> tuple[object, bytes
         return meta, b"", problems
     scope = neighbour_ids(folder) if known is None else known
     root = project_root(folder)
-    return meta, controls_raw, content_problems(meta, controls_raw, scope, root)
+    out = content_problems(meta, controls_raw, scope, root)
+    shipped = folder.resolve().parent == FRAMEWORKS_DIR.resolve()
+    if not shipped and isinstance(meta, dict):
+        # 0192: default and triggers steer only the shipped packs; a project pack never has them.
+        out += [
+            f"pack.json {key} applies only to a pack Daedalus ships; remove it from this pack"
+            for key in OPTIONAL_PACK_KEYS
+            if key in meta
+        ]
+    return meta, controls_raw, out
 
 
 def pack_problems(folder: Path, known: Collection[str] | None = None) -> list[str]:
@@ -466,7 +475,8 @@ def unknown_named(repo: Path) -> list[str]:
 
 
 def trigger_match(pattern: str, path: str) -> bool:
-    # 0192: fnmatch's * crosses /, so a leading **/ also matches a path at the project root.
+    # 0192: case folded; fnmatch's * crosses /, so a leading **/ also matches at the root.
+    path, pattern = path.casefold(), pattern.casefold()
     return fnmatch.fnmatchcase(path, pattern) or (
         pattern.startswith("**/") and fnmatch.fnmatchcase(path, pattern[3:])
     )

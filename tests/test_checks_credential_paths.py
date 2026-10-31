@@ -626,3 +626,112 @@ def test_grep_glob_naming_an_env_file_is_refused(tmp_path: Path) -> None:
     for glob in ("*.py", ".env.example"):
         case = _cred("auditor", "Grep", cwd=str(repo), pattern="STRIPE", path=str(repo), glob=glob)
         assert evaluate(HOOK, case) is None, glob
+
+
+# Issue 152: a .env file that sits only in a subfolder, with none at the project root.
+
+
+def _nested_env_repo(tmp_path: Path, ignored: bool = False) -> Path:
+    from tests.conftest import git
+
+    repo = tmp_path.resolve() / "repo"
+    (repo / "apps" / "web").mkdir(parents=True)
+    (repo / "src").mkdir()
+    (repo / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "apps" / "web" / ".env").write_text("STRIPE_SECRET_KEY=placeholder\n")
+    git(repo, "init", "-q", "-b", "main")
+    if ignored:
+        (repo / ".gitignore").write_text(".env\n", encoding="utf-8")
+    _train(repo)
+    return repo
+
+
+NESTED_REFUSED = [
+    "rg --hidden STRIPE .",
+    "grep -r STRIPE .",
+    "tar cf - .",
+    "cp -r . /tmp/x",
+    "rg --hidden STRIPE apps",
+    "grep -r STRIPE *",
+    "rg -n STRIPE -g '**/.env' .",
+    "grep -r STRIPE apps/web",
+]
+
+
+@pytest.mark.parametrize("command", NESTED_REFUSED)
+def test_a_folder_read_over_a_nested_env_file_is_refused(tmp_path: Path, command: str) -> None:
+    repo = _nested_env_repo(tmp_path)
+    reason = evaluate(HOOK, _bash_in(repo, "auditor", command))
+    assert reason is not None and ".env deny" in reason, (command, reason)
+
+
+@pytest.mark.parametrize("command", ["rg -n STRIPE .", "grep -r STRIPE src", "tar cf - src"])
+def test_a_folder_read_that_cannot_reach_the_nested_env_file_is_allowed(
+    tmp_path: Path, command: str
+) -> None:
+    repo = _nested_env_repo(tmp_path)
+    assert evaluate(HOOK, _bash_in(repo, "auditor", command)) is None, command
+
+
+@pytest.mark.parametrize("glob", ["**/.env", ".env", "**/web/**"])
+def test_grep_tool_glob_over_a_nested_env_file_is_refused(tmp_path: Path, glob: str) -> None:
+    repo = _nested_env_repo(tmp_path, ignored=True)
+    for path in (None, str(repo), str(repo / "apps")):
+        tool_input = {"pattern": "STRIPE", "glob": glob} | ({"path": path} if path else {})
+        case = {"tool_name": "Grep", "tool_input": tool_input, "cwd": str(repo)}
+        reason = evaluate(HOOK, {**case, "agent_type": "auditor"})
+        assert ENV_DENY in str(reason), (glob, path)
+
+
+def test_grep_tool_with_no_glob_refuses_an_env_file_git_does_not_ignore(tmp_path: Path) -> None:
+    # 0192: the Grep tool reads what git does not ignore; no git counts as not ignored.
+    repo = _nested_env_repo(tmp_path)
+    for path in (None, str(repo), str(repo / "apps" / "web")):
+        tool_input = {"pattern": "STRIPE"} | ({"path": path} if path else {})
+        case = {"tool_name": "Grep", "tool_input": tool_input, "cwd": str(repo)}
+        assert ENV_DENY in str(evaluate(HOOK, {**case, "agent_type": "auditor"})), path
+    src = _cred("auditor", "Grep", cwd=str(repo), pattern="STRIPE", path=str(repo / "src"))
+    assert evaluate(HOOK, src) is None
+    py = _cred("auditor", "Grep", cwd=str(repo), pattern="STRIPE", path=str(repo), glob="*.py")
+    assert evaluate(HOOK, py) is None
+    (repo / ".gitignore").write_text(".env\n", encoding="utf-8")
+    case = _cred("auditor", "Grep", cwd=str(repo), pattern="STRIPE", path=str(repo))
+    assert evaluate(HOOK, case) is None
+    plain = tmp_path.resolve() / "plain"
+    (plain / "sub").mkdir(parents=True)
+    (plain / "sub" / ".env.local").write_text("K=placeholder\n", encoding="utf-8")
+    case = _cred("auditor", "Grep", cwd=str(plain), pattern="K", path=str(plain))
+    assert ENV_DENY in str(evaluate(HOOK, case))
+
+
+def test_env_walk_skips_git_and_node_modules_and_refuses_past_its_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lib import credential_paths
+
+    root = tmp_path.resolve() / "walk"
+    for rel in (".git/.env", "node_modules/pkg/.env", "a/b/.Env.Local", "a/.env.example"):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("x\n", encoding="utf-8")
+    assert credential_paths.env_walk(str(root)) == [str(root / "a" / "b" / ".Env.Local")]
+    monkeypatch.setattr(credential_paths, "ENV_WALK_ENTRIES", 3)
+    assert credential_paths.env_walk(str(root)) is None
+    monkeypatch.setattr(credential_paths, "ENV_WALK_ENTRIES", 100_000)
+    monkeypatch.setattr(credential_paths, "ENV_WALK_DEPTH", 1)
+    assert credential_paths.env_walk(str(root)) is None
+    reason = evaluate(HOOK, _bash_in(root, "auditor", "grep -r x ."))
+    assert reason is not None and "cannot rule out a .env file" in reason
+
+
+@pytest.mark.parametrize("name", [".ENV", ".Env.local", ".env.LOCAL"])
+def test_env_names_match_in_any_case_and_example_stays_open(tmp_path: Path, name: str) -> None:
+    from lib.credential_paths import env_name
+
+    repo = _env_repo(tmp_path)
+    (repo / name).write_text("K=placeholder\n", encoding="utf-8")
+    assert env_name(name) and not env_name(".ENV.Example")
+    read = _cred("coder", "Read", cwd=str(repo), file_path=str(repo / name))
+    assert ENV_DENY in str(evaluate(HOOK, read)), name
+    assert ".env deny" in str(evaluate(HOOK, _bash_in(repo, "auditor", f"cat {name}"))), name
+    example = _cred("coder", "Read", cwd=str(repo), file_path=str(repo / ".ENV.Example"))
+    assert evaluate(HOOK, example) is None

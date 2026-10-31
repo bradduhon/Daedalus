@@ -550,14 +550,35 @@ def test_a_bad_default_or_triggers_value_is_a_problem(
     assert want in _problems(folder)
 
 
-def test_default_and_triggers_load_and_absent_reads_as_on_with_no_triggers(tmp_path: Path) -> None:
-    plain = load_pack(_make(tmp_path / "plain"), known=())
+def _as_shipped(monkeypatch: pytest.MonkeyPatch, folder: Path) -> Path:
+    # 0192: default and triggers load only from the shipped folder, so tests stand one up.
+    folder.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(packs, "FRAMEWORKS_DIR", folder)
+    return folder
+
+
+def test_default_and_triggers_load_and_absent_reads_as_on_with_no_triggers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipped = _as_shipped(monkeypatch, tmp_path / "shipped")
+    plain = load_pack(_make(shipped / "plain"), known=())
     assert (plain.default, plain.triggers) == (True, None)
-    folder = _make(tmp_path / "trig", default=False, triggers=["**/*stripe*"])
-    assert (load_pack(folder, known=()).default, load_pack(folder, known=()).triggers) == (
-        False,
-        ("**/*stripe*",),
-    )
+    folder = _make(shipped / "trig", default=False, triggers=["**/*stripe*"])
+    pack = load_pack(folder, known=())
+    assert (pack.default, pack.triggers) == (False, ("**/*stripe*",))
+
+
+@pytest.mark.parametrize(("key", "value"), [("default", True), ("triggers", ["**/*.py"])])
+def test_a_project_pack_with_default_or_triggers_is_refused(
+    tmp_path: Path, key: str, value: object
+) -> None:
+    folder = _make(tmp_path / "compliance" / "p")
+    meta = json.loads((folder / "pack.json").read_text(encoding="utf-8"))
+    (folder / "pack.json").write_text(json.dumps({**meta, key: value}), encoding="utf-8")
+    want = f"pack.json {key} applies only to a pack Daedalus ships; remove it from this pack"
+    assert pack_problems(folder, known=()) == [want]
+    with pytest.raises(PackError, match="applies only to a pack Daedalus ships"):
+        load_pack(folder, known=())
 
 
 @pytest.mark.parametrize(
@@ -572,6 +593,9 @@ def test_default_and_triggers_load_and_absent_reads_as_on_with_no_triggers(tmp_p
         ("src/main.ts", False),
         ("infra/main.tf", False),
         (".env.example", True),
+        ("src/StripeClient.ts", True),
+        ("apps/web/.ENV.Local", True),
+        ("Package.JSON", True),
     ],
 )
 def test_the_stripe_triggers_match_the_game_stack_paths(path: str, hit: bool) -> None:
@@ -587,21 +611,25 @@ def test_a_pack_with_triggers_is_named_only_when_a_path_matches(tmp_path: Path) 
     assert packs.select_packs([plain, trig], ["src/stripe.py"]) == ([plain, trig], [trig])
     assert packs.select_packs([plain, trig], ["docs/a.md"]) == ([plain, trig], [trig])
     assert packs.select_packs([trig], []) == ([], [])
+    assert packs.trigger_match("**/*STRIPE*", "src/StripeClient.ts")
 
 
 def test_train_packs_with_a_diff_prints_the_triggered_packs(
-    repo_cwd: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    repo_cwd: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     import daedalus_train
 
     from tests.conftest import git
 
     monkeypatch.chdir(repo_cwd)
-    plain = _make(repo_cwd / "packs" / "plain")
-    trig = _make(repo_cwd / "packs" / "trig", triggers=["**/*stripe*"])
-    _manifest(repo_cwd, {"pack_dir": "packs", "default_packs": False})
-    git(repo_cwd, "add", "-A")
-    git(repo_cwd, "commit", "-q", "-m", "base")
+    shipped = _as_shipped(monkeypatch, tmp_path / "shipped")
+    plain = _make(shipped / "plain")
+    trig = _make(shipped / "trig", triggers=["**/*stripe*"])
+    _make(shipped / "off", default=False)
+    git(repo_cwd, "commit", "-q", "--allow-empty", "-m", "base")
     (repo_cwd / "main.py").write_text("x\n", encoding="utf-8")
     git(repo_cwd, "add", "-A")
     git(repo_cwd, "commit", "-q", "-m", "plain change")
@@ -619,6 +647,32 @@ def test_train_packs_with_a_diff_prints_the_triggered_packs(
         assert "is not a <base>...<branch> range" in capsys.readouterr().out
     assert daedalus_train.main(["packs", "--repo", str(repo_cwd), "--diff", "nope...HEAD"]) == 1
     assert "git diff --name-only nope...HEAD failed" in capsys.readouterr().out
+
+
+def test_train_packs_with_a_diff_and_no_pack_goes_on_but_a_broken_pack_stops(
+    repo_cwd: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 0192: default_packs false and no project pack must not stop a docs-only audit.
+    import daedalus_train
+
+    from tests.conftest import git
+
+    monkeypatch.chdir(repo_cwd)
+    _manifest(repo_cwd, {"default_packs": False})
+    git(repo_cwd, "add", "-A")
+    git(repo_cwd, "commit", "-q", "-m", "base")
+    (repo_cwd / "README.md").write_text("x\n", encoding="utf-8")
+    git(repo_cwd, "add", "-A")
+    git(repo_cwd, "commit", "-q", "-m", "docs change")
+    run = ["packs", "--repo", str(repo_cwd), "--diff", "HEAD^...HEAD"]
+    assert daedalus_train.main(run) == 0
+    assert capsys.readouterr().out == "Packs: none\nTriggered: none\n"
+    assert daedalus_train.main(["packs", "--repo", str(repo_cwd)]) == 1
+    assert capsys.readouterr().out.startswith("No control pack was found")
+    bad = _make(repo_cwd / "packs" / "bad", version="1.0")
+    _manifest(repo_cwd, {"pack_dir": "packs", "default_packs": False})
+    assert daedalus_train.main(run) == 1
+    assert capsys.readouterr().out.startswith(f"pack {bad.name}: pack.json version must be")
 
 
 def test_train_packs_stops_on_a_named_pack_daedalus_does_not_ship(

@@ -153,6 +153,9 @@ def _packs(repo: Path, diff: str | None = None) -> Outcome:
         f"pack {ident}: frameworks.packs names {ident}, which is not a pack Daedalus ships"
         for ident in unknown
     ]
+    if not folders and diff is not None and not problems:
+        # 0192: an audit with no pack to read goes on; only a broken pack stops it.
+        return Outcome(EXIT_OK, ["Packs: none", "Triggered: none"])
     if not folders:
         return Outcome(
             EXIT_STOP,
