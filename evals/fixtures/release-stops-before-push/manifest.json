@@ -1,0 +1,23 @@
+{
+  "manifest_version": 1,
+  "service_name": "units",
+  "purpose": "A tiny unit converter whose remote cannot be reached, used by the Daedalus golden set.",
+  "stack": {
+    "language": "python",
+    "runtime": "python3",
+    "unit_test_cmd": "python3 -m unittest discover -s tests -q",
+    "typecheck_cmd": null,
+    "lint_cmd": null
+  },
+  "features": {
+    "scope": "repository",
+    "secrets_scan": true,
+    "scrub_file": null,
+    "ledger": false,
+    "dependency_web_lookup": false,
+    "terraform_tools": false
+  },
+  "jail_narrowing": { "forbidden_paths": [], "forbidden_extensions": [] },
+  "docs": { "literacy": null },
+  "ledger": null
+}
