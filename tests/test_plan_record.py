@@ -7,7 +7,15 @@ from functools import partial
 from pathlib import Path
 
 import pytest
-from lib.plan_record import Plan, PlanError, Version, graph_line, load, validate
+from lib.plan_record import (
+    MAX_OPERATOR_CHECKS,
+    Plan,
+    PlanError,
+    Version,
+    graph_line,
+    load,
+    validate,
+)
 from lib.workspace import _CLASS_LINE
 
 from tests.conftest import REPO_ROOT, run_cli
@@ -77,6 +85,46 @@ def test_load_reads_units_edges_and_pins() -> None:
     assert (overlap.source, overlap.target, overlap.kind) == ("U3", "U4", "overlap")
     assert overlap.files == ("scripts/lib/shell.py",) and overlap.merge == ("U3", "U4")
     assert [(p.source, p.target) for p in plan.pins] == [("U1", "U5")]
+
+
+def test_operator_checks_are_read_from_the_unit_line() -> None:
+    # 0164, 0192: GPU and browser checks ride the plan as operator checks, never a coder test.
+    plan = load(FIXTURES / "valid_operator_checks.md")
+    assert _defects("valid_operator_checks") == []
+    assert plan.units[0].operator_checks == (
+        "the scene loads with its models",
+        "the player can move with the arrow keys",
+    )
+    assert plan.units[1].operator_checks == ()
+    assert all(u.operator_checks == () for u in load(FIXTURES / "valid.md").units)
+
+
+def test_more_than_ten_operator_checks_are_refused() -> None:
+    assert _defects("operator_checks_over_limit") == [
+        f"unit W1 has 11 operator checks, over the limit of {MAX_OPERATOR_CHECKS}; keep the ones "
+        "the operator must see."
+    ]
+
+
+@pytest.mark.parametrize(
+    ("value", "defect"),
+    [
+        ("", "unit U1 has an operator_checks field with an empty item"),
+        ("a; ; b", "unit U1 has an operator_checks field with an empty item"),
+        ("a;", "unit U1 has an operator_checks field with an empty item"),
+        ("a; a", "unit U1 names the operator check 'a' twice."),
+        ("run `pnpm dev`", "which is not plain words on one line without backticks."),
+    ],
+)
+def test_a_bad_operator_checks_field_is_refused(tmp_path: Path, value: str, defect: str) -> None:
+    line = f"{ONE} | operator_checks: {value}"
+    path = tmp_path / "plan.md"
+    graph = "graph: units=1 critical_path=1 width=1 overlap_only=none"
+    path.write_text(
+        f"```plan\n{line}\n{graph}\n```\n\n{requirement_sections(ONE)}", encoding="utf-8"
+    )
+    defects = validate(load(path), 5)
+    assert any(defect in d for d in defects), defects
 
 
 def test_unit_without_files_is_refused() -> None:
@@ -252,7 +300,7 @@ def test_cli_takes_max_concurrent() -> None:
 
 @pytest.mark.parametrize(
     "name",
-    sorted(p.stem for p in FIXTURES.glob("*.md") if p.stem != "valid"),
+    sorted(p.stem for p in FIXTURES.glob("*.md") if not p.stem.startswith("valid")),
 )
 def test_each_refusal_fixture_exits_one_with_a_next_line(name: str) -> None:
     proc = _cli(str(FIXTURES / f"{name}.md"))

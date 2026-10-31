@@ -27,7 +27,10 @@ _PAIR = re.compile(r"(\S+) (->|~) (\S+)")
 _MERGE = re.compile(r"(\S+) then (\S+)")
 _GRAPH = re.compile(r"graph: units=(\d+) critical_path=(\d+) width=(\d+) overlap_only=(\S*)")
 _SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
-_UNIT_KEYS = ("title", "files", "base", "needs")
+_UNIT_KEYS = ("title", "files", "base", "needs", "operator_checks")
+# 0164, 0192: GPU, browser and running-server checks the operator makes; never a coder test.
+MAX_OPERATOR_CHECKS = 10
+OPERATOR_CHECKS_SHAPE = "write operator_checks: <plain-words check>[; ...]"
 _EDGE_KEYS = ("kind", "why", "files", "merge")
 _VERSION_KEYS = ("class", "reason", "unit")
 VERSION_CLASSES = ("X", "Y", "Z")
@@ -66,6 +69,7 @@ class Unit:
     files: tuple[str, ...]
     base: str
     needs: tuple[str, ...] = ()
+    operator_checks: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -165,13 +169,43 @@ def _unit(line: str, number: int, out: list[str]) -> Unit | None:
         if not fields.get(key):
             out.append(f"unit {uid} names no {key}.")
     needs = _needs(uid, fields["needs"], out) if "needs" in fields else ()
+    checks = (
+        _operator_checks(uid, fields["operator_checks"], out) if "operator_checks" in fields else ()
+    )
     return Unit(
         uid,
         fields.get("title", ""),
         _list(fields.get("files", "")),
         fields.get("base", ""),
         needs,
+        checks,
     )
+
+
+def _operator_checks(uid: str, value: str, out: list[str]) -> tuple[str, ...]:
+    # 0164, 0192: semicolon-separated plain-words checks, each non-empty, at most ten, no repeats.
+    items = [item.strip() for item in value.split(";")]
+    if not value or any(not item for item in items):
+        out.append(
+            f"unit {uid} has an operator_checks field with an empty item; {OPERATOR_CHECKS_SHAPE}."
+        )
+    kept: list[str] = []
+    for item in (i for i in items if i):
+        if not item.isprintable() or "`" in item:
+            out.append(
+                f"unit {uid} has the operator check {item!r}, which is not plain words "
+                "on one line without backticks."
+            )
+        elif item in kept:
+            out.append(f"unit {uid} names the operator check {item!r} twice.")
+        else:
+            kept.append(item)
+    if len(kept) > MAX_OPERATOR_CHECKS:
+        out.append(
+            f"unit {uid} has {len(kept)} operator checks, over the limit of "
+            f"{MAX_OPERATOR_CHECKS}; keep the ones the operator must see."
+        )
+    return tuple(kept)
 
 
 def is_need(name: str) -> bool:

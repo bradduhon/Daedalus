@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from lib.agent_aliases import current as current_name
 from lib.project_root import in_git_work_tree, project_root
@@ -17,6 +18,7 @@ MANIFEST_NAME = "service-manifest.json"
 NARROWING_KEYS = ("forbidden_paths", "forbidden_extensions")
 SCOPE_KINDS = ("repository", "folder")
 _GLOB = frozenset("*?[]")
+_PATHSPEC_WORD = re.compile(r"[A-Za-z0-9._/-]+")
 
 
 class ManifestError(ValueError):
@@ -138,26 +140,56 @@ class Priorities:
 
 
 @dataclass(frozen=True)
+class Assets:
+    # 0192: asset files kept out of the judges' diffs and the secret scan; never a source file.
+    roots: tuple[str, ...] = ()
+    extensions: tuple[str, ...] = ()
+    max_bytes: int | None = None
+
+
+ASSETS_KEYS = tuple(f.name for f in fields(Assets))
+
+
+@dataclass(frozen=True)
+class DevServer:
+    # 0164: the operator hosts the site; the plugin only names the url and the check.
+    url: str
+    check: str
+
+
+DEV_SERVER_KEYS = tuple(f.name for f in fields(DevServer))
+DEV_SERVER_HOSTS = ("localhost", "127.0.0.1")
+# 0192: the package managers a stack may name; anything else is refused.
+PACKAGE_MANAGERS = ("pnpm", "npm", "yarn", "pip", "uv")
+
+
+@dataclass(frozen=True)
 class Manifest:
     forbidden_paths: tuple[str, ...] = ()
     forbidden_extensions: tuple[str, ...] = ()
     features: Features = field(default_factory=Features)
     trains_dir: str | None = None
-    unit_test_cmd: str | None = None
-    typecheck_cmd: str | None = None
-    lint_cmd: str | None = None
+    # 0192: each stack command reads as its commands in order; null is not declared.
+    unit_test_cmd: tuple[str, ...] | None = None
+    typecheck_cmd: tuple[str, ...] | None = None
+    lint_cmd: tuple[str, ...] | None = None
+    package_manager: str | None = None
     docs: Docs = field(default_factory=Docs)
     priorities: Priorities | None = None
     frameworks: Frameworks = field(default_factory=Frameworks)
+    assets: Assets = field(default_factory=Assets)
+    dev_server: DevServer | None = None
 
 
 # 0073, B2: the stack keys that hold a command the coder may run verbatim.
 STACK_COMMANDS = ("unit_test_cmd", "typecheck_cmd", "lint_cmd")
+# 0192: the stack keys the reader checks, the commands and the package manager.
+STACK_KEYS = (*STACK_COMMANDS, "package_manager")
 
 
 def declared_commands(manifest: Manifest) -> tuple[str, ...]:
-    values = (getattr(manifest, key) for key in STACK_COMMANDS)
-    return tuple(value for value in values if isinstance(value, str))
+    # 0192: every declared command, flat, in key order then list order.
+    return tuple(cmd for key in STACK_COMMANDS for cmd in getattr(manifest, key) or ())
 
 
 def manifest_path(repo: Path) -> Path:
@@ -501,17 +533,118 @@ def _trains_dir(target: Path, raw: dict[str, object]) -> str | None:
     return value
 
 
-def _stack_commands(target: Path, raw: dict[str, object]) -> dict[str, str | None]:
+def _command_list(value: object) -> tuple[str, ...] | None:
+    # 0192: a non-empty string, or a non-empty list of non-empty strings; None when neither.
+    if isinstance(value, str):
+        return (value,) if value.strip() else None
+    if not isinstance(value, list) or not value:
+        return None
+    if not all(isinstance(item, str) and item.strip() for item in value):
+        return None
+    return tuple(str(item) for item in value)
+
+
+def _stack_commands(
+    target: Path, raw: dict[str, object]
+) -> tuple[dict[str, tuple[str, ...] | None], str | None]:
     stack = raw.get("stack", {})
     if not isinstance(stack, dict):
         raise _key_error(target, "stack", "must be an object")
-    out: dict[str, str | None] = {}
+    out: dict[str, tuple[str, ...] | None] = {}
     for key in STACK_COMMANDS:
         value = stack.get(key)
-        if value is not None and (not isinstance(value, str) or not value.strip()):
-            raise _key_error(target, f"stack.{key}", "must be null or a non-empty string")
-        out[key] = value
-    return out
+        commands = None if value is None else _command_list(value)
+        if value is not None and commands is None:
+            raise _key_error(
+                target,
+                f"stack.{key}",
+                "must be null, a non-empty string, or a non-empty list of non-empty strings",
+            )
+        out[key] = commands
+    manager = stack.get("package_manager")
+    if manager is not None and manager not in PACKAGE_MANAGERS:
+        names = ", ".join(f'"{name}"' for name in PACKAGE_MANAGERS)
+        raise _key_error(target, "stack.package_manager", f"must be null or one of {names}")
+    return out, manager if isinstance(manager, str) else None
+
+
+def pathspec_safe(entry: str) -> bool:
+    # 0192: a word that renders unquoted in gitleaks --log-opts and single-quoted in git diff.
+    return bool(_PATHSPEC_WORD.fullmatch(entry))
+
+
+def _assets(target: Path, raw: dict[str, object]) -> Assets:
+    # 0192: roots and extensions as jail_narrowing checks them, in words a pathspec can carry.
+    block = raw.get("assets", {})
+    if not isinstance(block, dict):
+        raise _key_error(target, "assets", "must be an object")
+    unknown = sorted(str(key) for key in set(block) - set(ASSETS_KEYS))
+    if unknown:
+        known = ", ".join(ASSETS_KEYS)
+        raise _key_error(target, "assets", f"has unknown keys {unknown} (known: {known})")
+    roots = block.get("roots", [])
+    if not isinstance(roots, list) or not all(
+        isinstance(r, str) and repo_relative(r) and pathspec_safe(r) for r in roots
+    ):
+        raise _key_error(
+            target,
+            "assets.roots",
+            "must be a list of project-relative folder paths of letters, digits, dots, dashes, "
+            "underscores and slashes, without a leading slash, '..' or globs",
+        )
+    extensions = block.get("extensions", [])
+    if not isinstance(extensions, list) or not all(
+        isinstance(e, str) and _extension_ok(e) and pathspec_safe(e) for e in extensions
+    ):
+        raise _key_error(
+            target,
+            "assets.extensions",
+            "must be a list of endings that each start with a dot and hold only letters, "
+            "digits, dots, dashes and underscores",
+        )
+    size = block.get("max_bytes")
+    if size is not None and (isinstance(size, bool) or not isinstance(size, int) or size < 1):
+        raise _key_error(target, "assets.max_bytes", "must be null or a whole number of at least 1")
+    return Assets(tuple(map(str, roots)), tuple(map(str, extensions)), size)
+
+
+def _local_url(url: object) -> bool:
+    # 0164: http or https on this machine, any port, no user part.
+    if not isinstance(url, str) or not url.isprintable() or any(c.isspace() for c in url):
+        return False
+    parts = urlsplit(url)
+    try:
+        _ = parts.port  # urlsplit raises here on a port outside 0 to 65535.
+    except ValueError:
+        return False
+    return (
+        parts.scheme in ("http", "https")
+        and parts.hostname in DEV_SERVER_HOSTS
+        and parts.username is None
+        and parts.password is None
+    )
+
+
+def _dev_server(target: Path, raw: dict[str, object]) -> DevServer | None:
+    # 0164: the plugin names the operator's local site; it never starts or fetches it.
+    block = raw.get("dev_server")
+    if block is None:
+        return None
+    if not isinstance(block, dict):
+        raise _key_error(target, "dev_server", "must be null or an object")
+    unknown = sorted(str(key) for key in set(block) - set(DEV_SERVER_KEYS))
+    missing = sorted(set(DEV_SERVER_KEYS) - set(block))
+    if unknown or missing:
+        detail = f"has unknown keys {unknown}" if unknown else f"lacks {', '.join(missing)}"
+        raise _key_error(target, "dev_server", f"{detail} (known: {', '.join(DEV_SERVER_KEYS)})")
+    url = block["url"]
+    if not _local_url(url):
+        hosts = " or ".join(DEV_SERVER_HOSTS)
+        raise _key_error(target, "dev_server.url", f"must be an http or https url on {hosts}")
+    check = block["check"]
+    if not isinstance(check, str) or not check.strip() or not check.isprintable():
+        raise _key_error(target, "dev_server.check", "must be one printable line of plain words")
+    return DevServer(str(url), check)
 
 
 def load(repo: Path) -> Manifest | None:
@@ -525,7 +658,7 @@ def load(repo: Path) -> Manifest | None:
             "docs/project-requirements.md."
         )
     paths, extensions = _narrowing(target, raw)
-    commands = _stack_commands(target, raw)
+    commands, manager = _stack_commands(target, raw)
     return Manifest(
         paths,
         extensions,
@@ -534,9 +667,12 @@ def load(repo: Path) -> Manifest | None:
         unit_test_cmd=commands["unit_test_cmd"],
         typecheck_cmd=commands["typecheck_cmd"],
         lint_cmd=commands["lint_cmd"],
+        package_manager=manager,
         docs=_docs(target, raw),
         priorities=_priorities(target, raw),
         frameworks=_frameworks(target, raw),
+        assets=_assets(target, raw),
+        dev_server=_dev_server(target, raw),
     )
 
 

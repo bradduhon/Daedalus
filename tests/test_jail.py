@@ -2259,3 +2259,46 @@ def test_anchor_resolves_the_existing_prefix(
     assert jail._anchor("/no/such/../x", "") == "/no/x"
     assert jail._anchor("rel", "rel") is None and jail._anchor("", "/x") is None
     assert jail._anchor("a\x00b", "/x") == "/x/a\x00b"
+
+
+# 0192: the asset tail a judge copies; exclude magic on a reader, never on a write path.
+ASSET_TAIL = "-- . ':(exclude)assets/' ':(exclude)*.glb' ':(exclude)web/big.bin'"
+ASSET_LOG_OPTS = "-- . :(exclude)assets/ :(exclude)*.glb :(exclude)web/big.bin"
+
+
+@pytest.mark.parametrize(
+    ("agent", "command"),
+    [
+        ("verifier", f"git -C {WT} diff abc123...daedalus-unit/u1 {ASSET_TAIL}"),
+        ("verifier", f"git -C {WT} diff -U0 abc123...daedalus-unit/u1 {ASSET_TAIL}"),
+        ("auditor", f"git diff abc123...daedalus/t {ASSET_TAIL}"),
+        ("auditor", f"git diff --stat abc123...daedalus/t {ASSET_TAIL}"),
+        ("auditor", f"git log -p abc123..daedalus/t {ASSET_TAIL}"),
+        ("framework-specialist", f"git diff abc123...daedalus/t {ASSET_TAIL}"),
+        ("orchestrator", f"git -C {CWD} diff -U0 abc123...daedalus/t {ASSET_TAIL}"),
+        ("orchestrator", f"git -C {CWD} diff --stat abc123...daedalus/t {ASSET_TAIL}"),
+    ],
+)
+def test_exclude_magic_is_admitted_on_a_readers_git_diff_and_log(agent: str, command: str) -> None:
+    # 0192: the read-only checks admit the pathspec as is; no widening was needed.
+    assert hook_chain.first_deny(_b(agent, command), CFG) is None, command
+
+
+def test_exclude_magic_stays_refused_on_a_coder_write_path() -> None:
+    # 0022: :/ and :(top) reach the worktree top, so a write path refuses every magic form.
+    for command in (
+        f"git -C {WT} add -- ':(exclude)assets/'",
+        f"git -C {WT} restore -- ':(exclude)assets/'",
+    ):
+        assert hook_chain.first_deny(_b("coder", command), CFG) is not None, command
+
+
+def test_the_releaser_gitleaks_form_with_the_asset_tail_is_admitted() -> None:
+    # 0192: the tail rides inside --log-opts, unquoted, because gitleaks splits it on spaces.
+    command = f'gitleaks detect --redact --log-opts="abc123..daedalus/t {ASSET_LOG_OPTS}"'
+    assert hook_chain.first_deny(_b("releaser", command), CFG) is None
+    assert jail._gitleaks_ok((shell.tokenize(command) or [[]])[0])
+    # I4: the tail never lifts the --redact rule.
+    bare = f'gitleaks detect --log-opts="abc123..daedalus/t {ASSET_LOG_OPTS}"'
+    assert hook_chain.first_deny(_b("releaser", bare), CFG) is not None
+    assert not jail._gitleaks_ok((shell.tokenize(bare) or [[]])[0])

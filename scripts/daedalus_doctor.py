@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import daedalus_confine  # noqa: E402
-from lib import git, inventory, packs  # noqa: E402
+from lib import assets, git, inventory, packs  # noqa: E402
 from lib.agent_aliases import OLD_NAMES, renamed_line  # noqa: E402
 from lib.audit import (  # noqa: E402
     DataDirError,
@@ -32,6 +32,7 @@ from lib.manifest import (  # noqa: E402
     Features,
     ManifestError,
     PrioritiesError,
+    declared_commands,
     retired_features,
     scope_kind,
 )
@@ -578,16 +579,88 @@ def _priorities_check(repo: Path) -> Iterator[tuple[bool, str]]:
     yield _check(True, f"priorities: {' > '.join(declared.drivers)}, {rules}", "", "")
 
 
-def _typecheck_check(repo: Path, run: bool = False) -> Iterator[tuple[bool, str]]:
-    # 38, 0076: the declared typecheck_cmd runs only on --run-typecheck, argv only, bounded;
-    # no line when none is declared.
+def _plural(count: int, word: str) -> str:
+    return f"{count} {word}{'' if count == 1 else 's'}"
+
+
+def _stack_check(repo: Path) -> Iterator[tuple[bool, str]]:
+    # 0192: one line naming the package manager and the declared command counts; none undeclared.
     try:
         manifest = load_manifest(repo)
     except ManifestError:
         return
-    command = manifest.typecheck_cmd if manifest is not None else None
-    if command is None:
+    if manifest is None or not (manifest.package_manager or declared_commands(manifest)):
         return
+    manager = manifest.package_manager or "none declared"
+    labels = {"unit_test_cmd": "unit test", "typecheck_cmd": "typecheck", "lint_cmd": "lint"}
+    counts = ", ".join(
+        f"{len(getattr(manifest, key) or ())} {label}" for key, label in labels.items()
+    )
+    yield True, f"OK   stack: package manager {manager}; commands: {counts}"
+
+
+def _dev_server_check(repo: Path) -> Iterator[tuple[bool, str]]:
+    # 0164: the site the operator hosts; the doctor never starts or fetches it.
+    try:
+        manifest = load_manifest(repo)
+    except ManifestError:
+        return
+    server = manifest.dev_server if manifest is not None else None
+    if server is not None:
+        yield (
+            True,
+            (
+                f"OK   dev server: {server.url}; the verify step asks you to open it and check: "
+                f"{server.check}"
+            ),
+        )
+
+
+def _assets_check(repo: Path) -> Iterator[tuple[bool, str]]:
+    # 0192: the asset exclusion, and one warning line per source file under an asset root.
+    try:
+        manifest = load_manifest(repo)
+    except ManifestError:
+        return
+    declared = manifest.assets if manifest is not None else None
+    if declared is None or not assets.declared(declared):
+        return
+    size = declared.max_bytes
+    cap = f", changed files over {size} bytes listed by name" if size is not None else ""
+    yield (
+        True,
+        (
+            f"OK   assets: {_plural(len(declared.roots), 'root')}, "
+            f"{_plural(len(declared.extensions), 'ending')}{cap}, kept out of the judges' diffs "
+            "and the secret scan"
+        ),
+    )
+    found = assets.sources_in_roots(project_root(str(repo)), declared)
+    for path in found[: assets.MAX_SOURCE_LINES]:
+        yield _opt(
+            False,
+            f"asset root source file {path}",
+            "a source file under an asset root is never read by the judges or scanned for secrets",
+            "move it out of the asset root, or narrow assets.roots in service-manifest.json",
+        )
+    if len(found) > assets.MAX_SOURCE_LINES:
+        more = len(found) - assets.MAX_SOURCE_LINES
+        yield True, f"OPT  asset roots: {_plural(more, 'more source file')} not listed"
+
+
+def _typecheck_check(repo: Path, run: bool = False) -> Iterator[tuple[bool, str]]:
+    # 38, 0076, 0192: each declared typecheck_cmd runs only on --run-typecheck, argv only,
+    # bounded; no line when none is declared.
+    try:
+        manifest = load_manifest(repo)
+    except ManifestError:
+        return
+    commands = manifest.typecheck_cmd if manifest is not None else None
+    for command in commands or ():
+        yield from _typecheck_one(repo, command, run)
+
+
+def _typecheck_one(repo: Path, command: str, run: bool) -> Iterator[tuple[bool, str]]:
     name = f"typecheck ({command})"
     # 0076: the doctor runs no repository-declared command unless --run-typecheck is passed
     # (audit round 4).
@@ -685,7 +758,10 @@ def _repo_checks(
     yield from _retired_key_check(repo)
     yield from _old_agent_name_check(repo)
     yield from _priorities_check(repo)
+    yield from _stack_check(repo)
     yield from _typecheck_check(repo, run_typecheck)
+    yield from _dev_server_check(repo)
+    yield from _assets_check(repo)
     yield _opt(
         (repo / "contracts").is_dir(),
         "contracts/",

@@ -368,3 +368,77 @@ def test_the_verifier_opens_the_named_set_in_one_turn_and_never_searches_for_it(
         "else, and never search with Grep, Glob or find for a file it names.",
     ):
         assert part in step, part
+
+
+def test_the_read_line_and_the_full_diff_carry_the_asset_tail() -> None:
+    # 0192: the session prints the tail once; the Read line and the verifier's diff copy it.
+    step = _flat(VERIFY_SKILL.read_text(encoding="utf-8"))
+    assert (
+        "first run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py assets --repo <repo> "
+        "--base <lock sha> --tip <b>`" in step
+    )
+    assert (
+        "With a tail, the `-U0` command below ends with it, copied exactly, so no asset file "
+        "reaches the `Read:` or `Open:` line." in step
+    )
+    assert (
+        "- the `Assets: <tail>` line and its `Over size:` lines from step 3, unchanged, when it "
+        "printed a tail; the verifier ends its full diff command with that tail;" in step
+    )
+    assert "an `Assets: <tail>` line and its `Over size:` lines when the project keeps asset" in (
+        _body("Inputs:", "## Procedure")
+    )
+    step1 = _body("## Procedure", "## Claims mode").split("1. ", 1)[1].split(" 2. ", 1)[0]
+    assert "with an `Assets:` line, end the full diff command with its tail exactly as given" in (
+        step1
+    )
+    assert "judge an `Over size:` file by its name" in step1
+    assert "The files check of step 2 runs without the tail." in step1
+
+
+def test_the_verify_step_asks_the_operator_each_check_and_never_fetches_the_site() -> None:
+    # 0164, 0192: operator checks and the dev server check become pass, fail or skip questions.
+    text = _flat(VERIFY_SKILL.read_text(encoding="utf-8"))
+    route = text.split(" 5. Route the verdict.", 1)[1].split("### Claims mode", 1)[0]
+    checks = route.split("- Operator checks (0164, 0192).", 1)[1]
+    for part in (
+        "one operator check per entry of its plan line's `operator_checks:` field",
+        "the manifest's `dev_server` check, when `dev_server` is set and the unit touches web "
+        "code: the stack declares a `vitest` or `tsc` command, or the unit's files include a "
+        "`.ts`, `.tsx` or `.html` file",
+        "in the shape of the per-finding audit prompt of the catalog",
+        "with the options `Pass`, `Fail` and `Skip`",
+        "A dev server question names its url and its check text",
+        "`Fail` is a refuted `code` row routed like a verifier refutation",
+        "`Skip` records the operator's reason.",
+        "`operator check | <url or none> | <check text> | <pass, fail or skip> | <the "
+        "operator's words>`",
+        "Daedalus never starts, polls or fetches the site; the operator hosts it.",
+    ):
+        assert part in checks, part
+    assert "ready for the build phase's merge once its operator checks below are answered" in (
+        route
+    )
+    evidence = text.split("## Evidence that ends it", 1)[1].split("## Agents it uses", 1)[0]
+    assert "Each operator check of the unit has an `operator check` evidence row" in evidence
+
+
+def test_the_second_refutation_escalates_and_the_third_reaches_the_operator() -> None:
+    # 0187, issue 115: a fresh coder on the escalated model takes the second refutation.
+    text = _flat(VERIFY_SKILL.read_text(encoding="utf-8"))
+    nxt = text.split("## Suggested next", 1)[1]
+    assert (
+        "the first time on its own for one fix pass, the second time by a fresh coder on the "
+        "escalated model, a third time on the operator's Fix it now pick (step 5)." in nxt
+    )
+
+
+def test_a_local_url_is_the_one_slash_word_a_decision_brief_may_carry() -> None:
+    # 0164: the dev server question names the site; any other slash word is still refused.
+    from lib.briefs import brief_problems
+
+    good = "Question: Open http://localhost:5173 in your browser. Does the scene load?"
+    assert brief_problems(good, "plain") == []
+    for url in ("http://example.com", "file:///tmp/x", "http://localhost.evil.com/a"):
+        problems = brief_problems(f"Question: Open {url} now?", "plain")
+        assert any("with a slash" in p for p in problems), url

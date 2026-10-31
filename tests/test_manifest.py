@@ -8,6 +8,8 @@ from typing import Any
 
 import pytest
 from lib.manifest import (
+    Assets,
+    DevServer,
     Features,
     Manifest,
     ManifestError,
@@ -44,9 +46,9 @@ def test_absent_jail_narrowing_is_empty(tmp_path: Path) -> None:
 def test_this_repos_manifest_loads() -> None:
     # 0073, B2: this repo's stack commands are read and the secret scan is on.
     assert load(REPO_ROOT) == Manifest(
-        unit_test_cmd=".venv/bin/pytest -q",
-        typecheck_cmd="python3 -m mypy scripts",
-        lint_cmd=".venv/bin/ruff check scripts tests",
+        unit_test_cmd=(".venv/bin/pytest -q",),
+        typecheck_cmd=("python3 -m mypy scripts",),
+        lint_cmd=(".venv/bin/ruff check scripts tests",),
         features=Features(secrets_scan=True),
     )
 
@@ -57,7 +59,7 @@ def test_manifest_reads_typecheck_and_lint_cmd(tmp_path: Path) -> None:
     _write(tmp_path, {"stack": stack})
     loaded = load(tmp_path)
     assert loaded == Manifest(
-        unit_test_cmd="pytest -q", typecheck_cmd="mypy src", lint_cmd="ruff check ."
+        unit_test_cmd=("pytest -q",), typecheck_cmd=("mypy src",), lint_cmd=("ruff check .",)
     )
     assert declared_commands(loaded) == ("pytest -q", "mypy src", "ruff check .")
     _write(tmp_path, {"stack": {"typecheck_cmd": None, "lint_cmd": None}})
@@ -66,11 +68,154 @@ def test_manifest_reads_typecheck_and_lint_cmd(tmp_path: Path) -> None:
     assert declared_commands(Manifest()) == ()
 
 
-@pytest.mark.parametrize("key", ["typecheck_cmd", "lint_cmd"])
-@pytest.mark.parametrize("value", ["", "  ", 5, ["mypy"]])
+def test_a_stack_command_list_is_read_in_order_and_declared_flat(tmp_path: Path) -> None:
+    # 0192: a Python plus TypeScript stack lists one command per toolchain.
+    stack = {
+        "unit_test_cmd": ["pytest -q", "pnpm vitest run"],
+        "typecheck_cmd": ["mypy src", "pnpm tsc --noEmit"],
+        "lint_cmd": "ruff check .",
+        "package_manager": "pnpm",
+    }
+    _write(tmp_path, {"stack": stack})
+    loaded = load(tmp_path)
+    assert loaded is not None
+    assert loaded.unit_test_cmd == ("pytest -q", "pnpm vitest run")
+    assert loaded.typecheck_cmd == ("mypy src", "pnpm tsc --noEmit")
+    assert loaded.package_manager == "pnpm"
+    assert declared_commands(loaded) == (
+        "pytest -q",
+        "pnpm vitest run",
+        "mypy src",
+        "pnpm tsc --noEmit",
+        "ruff check .",
+    )
+
+
+@pytest.mark.parametrize("key", ["unit_test_cmd", "typecheck_cmd", "lint_cmd"])
+@pytest.mark.parametrize(
+    "value", ["", "  ", 5, [], ["mypy", 5], ["mypy", ""], ["  "], [None], {"a": "b"}, True]
+)
 def test_manifest_refuses_a_bad_stack_command(tmp_path: Path, key: str, value: object) -> None:
+    # 0192: an empty list, or a list holding anything but non-empty strings, is refused.
     _write(tmp_path, {"stack": {key: value}})
     with pytest.raises(ManifestError, match=f"stack.{key}") as caught:
+        load(tmp_path)
+    assert _ends_with_next(str(caught.value))
+
+
+@pytest.mark.parametrize("name", ["pnpm", "npm", "yarn", "pip", "uv", None])
+def test_manifest_reads_a_known_package_manager(tmp_path: Path, name: str | None) -> None:
+    _write(tmp_path, {"stack": {"package_manager": name}})
+    loaded = load(tmp_path)
+    assert loaded is not None and loaded.package_manager == name
+
+
+@pytest.mark.parametrize("name", ["bun", "PNPM", "", 5, ["pnpm"], True])
+def test_manifest_refuses_an_unknown_package_manager(tmp_path: Path, name: object) -> None:
+    # 0192: one of the five names or null; the refusal names the key and ends with Next.
+    _write(tmp_path, {"stack": {"package_manager": name}})
+    with pytest.raises(ManifestError, match="stack.package_manager") as caught:
+        load(tmp_path)
+    assert _ends_with_next(str(caught.value))
+
+
+def test_manifest_reads_the_assets_block(tmp_path: Path) -> None:
+    # 0192: every part optional; absent is the empty block.
+    block = {
+        "roots": ["assets/", "public/models/"],
+        "extensions": [".glb", ".ktx2", ".wgsl"],
+        "max_bytes": 1048576,
+    }
+    _write(tmp_path, {"assets": block})
+    loaded = load(tmp_path)
+    assert loaded is not None
+    assert loaded.assets == Assets(
+        ("assets/", "public/models/"), (".glb", ".ktx2", ".wgsl"), 1048576
+    )
+    _write(tmp_path, {"assets": {"extensions": [".png"]}})
+    loaded = load(tmp_path)
+    assert loaded is not None and loaded.assets == Assets(extensions=(".png",))
+    _write(tmp_path, {})
+    loaded = load(tmp_path)
+    assert loaded is not None and loaded.assets == Assets()
+
+
+@pytest.mark.parametrize(
+    ("block", "key"),
+    [
+        ([], "assets"),
+        ({"excluded_roots": []}, "assets"),
+        ({"roots": "assets/"}, "assets.roots"),
+        ({"roots": ["/abs/"]}, "assets.roots"),
+        ({"roots": ["../out/"]}, "assets.roots"),
+        ({"roots": ["models/*"]}, "assets.roots"),
+        ({"roots": ["my models/"]}, "assets.roots"),
+        ({"roots": ["it's/"]}, "assets.roots"),
+        ({"roots": [5]}, "assets.roots"),
+        ({"extensions": ["glb"]}, "assets.extensions"),
+        ({"extensions": [".g lb"]}, "assets.extensions"),
+        ({"extensions": ["*.glb"]}, "assets.extensions"),
+        ({"extensions": [".a/b"]}, "assets.extensions"),
+        ({"max_bytes": 0}, "assets.max_bytes"),
+        ({"max_bytes": -1}, "assets.max_bytes"),
+        ({"max_bytes": True}, "assets.max_bytes"),
+        ({"max_bytes": "1MB"}, "assets.max_bytes"),
+        ({"max_bytes": 1.5}, "assets.max_bytes"),
+    ],
+)
+def test_manifest_refuses_a_bad_assets_block(tmp_path: Path, block: object, key: str) -> None:
+    _write(tmp_path, {"assets": block})
+    with pytest.raises(ManifestError, match=f"{key} ") as caught:
+        load(tmp_path)
+    assert _ends_with_next(str(caught.value))
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost:5173",
+        "https://localhost:5173/play",
+        "http://127.0.0.1:8080/",
+        "http://localhost",
+        "http://LOCALHOST:3000",
+    ],
+)
+def test_manifest_reads_a_local_dev_server(tmp_path: Path, url: str) -> None:
+    # 0164: the operator hosts the site on this machine.
+    check = "the scene loads and the player can move"
+    _write(tmp_path, {"dev_server": {"url": url, "check": check}})
+    loaded = load(tmp_path)
+    assert loaded is not None and loaded.dev_server == DevServer(url, check)
+    _write(tmp_path, {"dev_server": None})
+    loaded = load(tmp_path)
+    assert loaded is not None and loaded.dev_server is None
+
+
+@pytest.mark.parametrize(
+    ("block", "key"),
+    [
+        ("http://localhost:5173", "dev_server"),
+        ({"url": "http://localhost:5173"}, "dev_server"),
+        ({"url": "http://localhost:5173", "check": "x", "port": 1}, "dev_server"),
+        ({"url": "http://example.com", "check": "x"}, "dev_server.url"),
+        ({"url": "http://localhost.example.com", "check": "x"}, "dev_server.url"),
+        ({"url": "http://127.0.0.1@example.com", "check": "x"}, "dev_server.url"),
+        ({"url": "http://user:pw@localhost:5173", "check": "x"}, "dev_server.url"),
+        ({"url": "http://10.0.0.5:5173", "check": "x"}, "dev_server.url"),
+        ({"url": "ftp://localhost", "check": "x"}, "dev_server.url"),
+        ({"url": "file:///tmp/index.html", "check": "x"}, "dev_server.url"),
+        ({"url": "http://localhost:99999", "check": "x"}, "dev_server.url"),
+        ({"url": "http://localhost:5173/a b", "check": "x"}, "dev_server.url"),
+        ({"url": 5173, "check": "x"}, "dev_server.url"),
+        ({"url": "http://localhost:5173", "check": ""}, "dev_server.check"),
+        ({"url": "http://localhost:5173", "check": "a\nb"}, "dev_server.check"),
+        ({"url": "http://localhost:5173", "check": 1}, "dev_server.check"),
+    ],
+)
+def test_manifest_refuses_a_bad_dev_server(tmp_path: Path, block: object, key: str) -> None:
+    # 0164: a url off this machine is refused; the plugin never reaches beyond localhost.
+    _write(tmp_path, {"dev_server": block})
+    with pytest.raises(ManifestError, match=f"{key} ") as caught:
         load(tmp_path)
     assert _ends_with_next(str(caught.value))
 

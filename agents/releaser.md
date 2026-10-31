@@ -32,7 +32,7 @@ Commit messages carry no Co-Authored-By or other attribution trailer.
 No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already returns stderr.
 
 1. For each branch: commit any staged Build Train result.
-2. `gitleaks detect --redact --log-opts="<base>..<branch>"`; the hook refuses it without `--redact`. Any finding or a missing binary: stop.
+2. `gitleaks detect --redact --log-opts="<base>..<branch>"`; the hook refuses it without `--redact`. Any finding or a missing binary: stop. When the session's line carries an asset tail inside `--log-opts`, such as `"<base>..<branch> -- . :(exclude)assets/"`, run it exactly as given (0192).
 3. `git push -u origin <branch>`; the jail enforces this exact grammar: only `-u` or
    `--set-upstream` plus `origin <branch>`, no refspecs, no other flags, and never a push to
    `main` or `master`. `<branch>` is this train's `daedalus/<train-id>`, never `HEAD` (issue 11).

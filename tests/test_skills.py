@@ -2030,3 +2030,41 @@ def test_run_skill_carries_the_build_train_preconditions_and_relay() -> None:
     assert run.index(BEGIN) < run.index("--hooks-live") < run.index("Agent(`orchestrator`)")
     assert STOP_CMD in run
     assert "git push" not in run
+
+
+ASSETS_CMD = (
+    "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py assets --repo <repo> --base <base "
+    "sha> --tip daedalus/<train-id>`"
+)
+
+
+def test_audit_judges_read_the_merged_diff_without_the_asset_files() -> None:
+    # 0192: one assets run; every content diff and stat carries the tail, a name list never.
+    text = " ".join((REPO_ROOT / "skills" / "audit" / "SKILL.md").read_text("utf-8").split())
+    intro = _section(text, "Asset exclusion (0192).", "### Compliance judges")
+    assert f"Before the first judge, run {ASSETS_CMD}." in intro
+    assert "every content diff and `--stat` command of this phase ends with it" in intro
+    assert "a `--name-only` list never carries it" in intro
+    assert "the framework specialist's and the auditor's, carries the `Assets:`" in intro
+    short = _section(text, "### Short form", "## ")
+    assert "With an asset tail, the `--stat` command ends with it" in short
+    auditor = " ".join((REPO_ROOT / "agents" / "auditor.md").read_text("utf-8").split())
+    assert "the stat command ends with its tail" in auditor
+    assert "the name list never carries the tail" in auditor
+    specialist = (REPO_ROOT / "agents" / "framework-specialist.md").read_text("utf-8")
+    assert "end the diff command with that tail exactly as given" in " ".join(specialist.split())
+
+
+def test_release_scans_for_secrets_without_the_asset_files() -> None:
+    # 0192: gitleaks splits --log-opts on spaces and keeps quotes, so the tail goes unquoted.
+    push = " ".join(_section(_release(), "### Push", "### Hand-off").split())
+    scan = push.split("gitleaks detect --redact --log-opts=<base sha>", 1)[1]
+    assert f"first run {ASSETS_CMD}; exit 1: stop and show its output." in scan
+    assert (
+        'write the command as `gitleaks detect --redact --log-opts="<base sha>..daedalus/'
+        '<train-id> <tail>"`, the tail copied exactly and unquoted inside the double quotes' in scan
+    )
+    releaser = " ".join((REPO_ROOT / "agents" / "releaser.md").read_text("utf-8").split())
+    assert '`"<base>..<branch> -- . :(exclude)assets/"`, run it exactly as given (0192)' in (
+        releaser
+    )

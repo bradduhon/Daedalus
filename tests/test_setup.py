@@ -122,6 +122,17 @@ def test_setup_starter_manifest_has_every_feature_off(repo_cwd: Path) -> None:
     assert all(value in (False, None) for value in features.values()), features
 
 
+def test_setup_starter_manifest_writes_assets_empty_and_no_dev_server(repo_cwd: Path) -> None:
+    # 0192, 0076: assets with every key present and empty; dev_server and package manager null.
+    assert _setup(repo_cwd).returncode == 0
+    manifest, _ = _paths(repo_cwd)
+    doc = json.loads(manifest.read_text(encoding="utf-8"))
+    assert doc["assets"] == {"roots": [], "extensions": [], "max_bytes": None}
+    assert doc["dev_server"] is None
+    assert doc["stack"]["package_manager"] is None
+    assert all(doc["stack"][key] is None for key in ("unit_test_cmd", "typecheck_cmd", "lint_cmd"))
+
+
 def test_setup_refuses_a_parent_folder_that_holds_repositories(tmp_path: Path) -> None:
     # 0077: files here would become the project root of every child repository below.
     parent = tmp_path / "parent"
