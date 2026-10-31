@@ -39,7 +39,8 @@ that is pushed (spec 8); the brief names the unit ids with their changed files a
 own commits on that branch (`Lock contract`, `Revise contract` and a pick ledger commit). It
 also carries the auditor brief (the rules each unit is judged against), `Reachable: <new
 feature> -> <older rule or gate> <file>:<line>` lines and `Hunt: can <attacker input> reach
-<protected thing> after <unit>?` lines.
+<protected thing> after <unit>?` lines. When the project keeps asset files out of the diff, it
+carries an `Assets: <tail>` line and its `Over size:` and `Asset root source:` lines (0192).
 
 Trust model: attacker input is anything a coder can commit (any file, ignore files, pack
 folders, configs) and anything a project ships. Finish merges coder files into the tree every
@@ -53,7 +54,8 @@ The change is small only when the stat shows at most 3 files and at most 150 cha
 `agents/`, `skills/` or `hooks/`, none of `scripts/lib/jail.py`, `scripts/lib/shell.py` or
 `scripts/enforce_agent_jail.py`, and no protected path of step 4. When either check fails,
 take the full procedure and say so in your paragraph. The excluded paths are `CONTROL_PATHS`
-in `scripts/lib/plan_record.py` (0182).
+in `scripts/lib/plan_record.py` (0182). With an `Assets:` line, the stat command ends with its
+tail, so asset files never count toward the size; the name list never carries the tail.
 A small change takes the short form. Keep the judged tip of step 0, the full diff with its
 removed lines (step 1), the fixed class commands of step 2, scope (step 4) and compliance
 (step 5), one failing test per blocking finding with the findings file (Finding format items
@@ -67,7 +69,12 @@ Work through every step for every branch.
 0. **The judged tip**: run `git -C <audit worktree> rev-parse HEAD` before anything else. Its
    40 lowercase hex is `<tip>` for the whole round; both verdict lines carry it.
 1. For each branch run `git diff <diff base>...<branch>` with `--stat` first, then without it
-   for the full diff. Read all of it, removed lines included. Every round judges the full diff
+   for the full diff. Read all of it, removed lines included. With an `Assets:` line, both
+   commands end with its tail exactly as given (0192): it drops only asset files, and an
+   `Over size:` asset file is judged by its name, never its content. A file with a source
+   ending is never excluded, so it is in the diff. Each `Asset root source:` line names a
+   source file under an asset root: judge its change as usual, and file it as a finding,
+   because an asset root is no place for source. Every round judges the full diff
    from `<diff base>`; a later round starts at the delta since your last round and never stops
    there.
    **Reachable scope**: scope is the diff plus what it makes reachable. For each new file,

@@ -417,6 +417,19 @@ class TestDeclaredCommands:
         got = evaluate(HOOK, _cwd(_b("coder", "bash scripts/test.sh"), repo))
         assert got == shell.R_INLINE
 
+    def test_each_entry_of_a_declared_command_list_runs_verbatim(self, tmp_path: Path) -> None:
+        # 0192: a list declares each entry as its own verbatim command, and nothing more.
+        stack = {
+            "unit_test_cmd": ["bash scripts/test.sh", "bash scripts/web-test.sh"],
+            "typecheck_cmd": ["python3 -X dev -m mypy src", "env CI=1 bash scripts/tsc.sh"],
+        }
+        repo, _ = _narrowed_repo(tmp_path, json.dumps({"stack": stack}))
+        for command in (*stack["unit_test_cmd"], *stack["typecheck_cmd"]):
+            assert decide(_cwd(_b("coder", command), repo), CFG).allow, command
+        for command in ("bash scripts/web-test.sh -x", "bash scripts/tsc.sh"):
+            got = evaluate(HOOK, _cwd(_b("coder", command), repo))
+            assert got == shell.R_INLINE, command
+
 
 class TestNestedClaudeAndPathCommands:
     # issue 55: the command word resolves to its real file; a coder's path command is placed.

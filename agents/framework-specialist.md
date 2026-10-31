@@ -38,7 +38,9 @@ an OWASP file, and you never fetch or write (0157).
 5. No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already returns stderr.
 
 ## Method
-1. Read the diff given (`git diff <base>...<branch>`), or the spec when no diff is given.
+1. Read the diff given (`git diff <base>...<branch>`), or the spec when no diff is given. With
+   an `Assets: <tail>` line in the prompt, end the diff command with that tail exactly as given
+   (0192); it drops only asset files such as models, textures and sounds.
 2. List each changed resource or code path: IAM and key policies, network rules, logging,
    encryption settings, OS and container definitions, and the code paths that handle tenant
    data, keys and audit records.

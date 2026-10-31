@@ -1360,6 +1360,76 @@ def test_typecheck_missing_tool_is_a_miss(tmp_path: Path) -> None:
     assert line.startswith("MISS typecheck (no-such-typechecker-xyz scripts): could not run (")
 
 
+def _manifest_lines(repo: Path, manifest: dict[str, object], check: str) -> list[str]:
+    import daedalus_doctor
+
+    (repo / "service-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return [line for _, line in getattr(daedalus_doctor, check)(repo)]
+
+
+def test_each_typecheck_command_of_a_list_gets_its_own_line(tmp_path: Path) -> None:
+    # 0192: a Python and TypeScript stack declares two typecheck commands; neither runs.
+    stack = {"typecheck_cmd": ["mypy src", "pnpm tsc --noEmit"]}
+    assert _manifest_lines(tmp_path, {"stack": stack}, "_typecheck_check") == [
+        "OPT  typecheck (mypy src): not run. Next: run mypy src by hand from your own shell at "
+        "the repo root",
+        "OPT  typecheck (pnpm tsc --noEmit): not run. Next: run pnpm tsc --noEmit by hand from "
+        "your own shell at the repo root",
+    ]
+    ok = f"{sys.executable} -c \"print('clean')\""
+    bad = f"{sys.executable} -c \"print('Found 1 error'); raise SystemExit(1)\""
+    (tmp_path / "service-manifest.json").write_text(
+        json.dumps({"stack": {"typecheck_cmd": [ok, bad]}}), encoding="utf-8"
+    )
+    import daedalus_doctor
+
+    lines = list(daedalus_doctor._typecheck_check(tmp_path, run=True))
+    assert lines[0] == (True, f"OK   typecheck ({ok}): clean")
+    assert lines[1][0] is False and lines[1][1].startswith(f"MISS typecheck ({bad}): exited 1")
+
+
+def test_the_stack_line_names_the_package_manager_and_the_command_counts(tmp_path: Path) -> None:
+    # 0192: one stack line when any stack key is declared; none for an empty stack.
+    stack = {
+        "package_manager": "pnpm",
+        "unit_test_cmd": ["pytest -q", "pnpm vitest run"],
+        "lint_cmd": "ruff check .",
+    }
+    assert _manifest_lines(tmp_path, {"stack": stack}, "_stack_check") == [
+        "OK   stack: package manager pnpm; commands: 2 unit test, 0 typecheck, 1 lint"
+    ]
+    assert _manifest_lines(tmp_path, {"stack": {"lint_cmd": "ruff check ."}}, "_stack_check") == [
+        "OK   stack: package manager none declared; commands: 0 unit test, 0 typecheck, 1 lint"
+    ]
+    assert _manifest_lines(tmp_path, {"stack": {"language": "python"}}, "_stack_check") == []
+
+
+def test_the_dev_server_line_names_the_url_and_the_check(tmp_path: Path) -> None:
+    # 0164: printed only when set; the doctor never starts or fetches the site.
+    server = {"url": "http://localhost:5173", "check": "the scene loads"}
+    assert _manifest_lines(tmp_path, {"dev_server": server}, "_dev_server_check") == [
+        "OK   dev server: http://localhost:5173; the verify step asks you to open it and check: "
+        "the scene loads"
+    ]
+    assert _manifest_lines(tmp_path, {"dev_server": None}, "_dev_server_check") == []
+
+
+def test_the_doctor_lists_the_new_manifest_lines_in_a_full_run(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    manifest = {
+        "stack": {"package_manager": "pnpm", "unit_test_cmd": ["pytest -q", "pnpm vitest run"]},
+        "dev_server": {"url": "http://127.0.0.1:5173/", "check": "the player can move"},
+        "assets": {"roots": ["assets/"], "extensions": [".glb"]},
+    }
+    (repo / "service-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
+    lines = result.stdout.splitlines()
+    assert "OK   stack: package manager pnpm; commands: 2 unit test, 0 typecheck, 0 lint" in lines
+    assert any(line.startswith("OK   dev server: http://127.0.0.1:5173/;") for line in lines)
+    assert any(line.startswith("OK   assets: 1 root, 1 ending, kept out") for line in lines)
+
+
 def test_no_typecheck_line_when_undeclared(tmp_path: Path) -> None:
     import daedalus_doctor
 

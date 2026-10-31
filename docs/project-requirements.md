@@ -179,8 +179,10 @@ The doctor prints one line per pack, after the framework cache lines:
 Example:
 ```json
 { "manifest_version": 1, "service_name": "my-service", "purpose": "One sentence.",
-  "stack": { "language": "python", "runtime": "python3.12", "package_registries": ["pypi.org"],
-             "unit_test_cmd": "pytest -q", "typecheck_cmd": null, "lint_cmd": "ruff check .", "build_cmd": null },
+  "stack": { "language": "python", "runtime": "python3.12", "package_registries": ["pypi.org", "registry.npmjs.org"],
+             "package_manager": "pnpm",
+             "unit_test_cmd": ["pytest -q", "pnpm vitest run"], "typecheck_cmd": ["mypy src", "pnpm tsc --noEmit"],
+             "lint_cmd": "ruff check .", "build_cmd": null },
   "entrypoints": { "handlers": "src/handlers/", "models": "src/models/", "infra": "infra/", "contracts": "contracts/" },
   "exposure_and_traits": { "is_public": false, "has_website": false, "operator_panel_integrated": false,
                             "contains_customer_data": false, "touches_key_material": false,
@@ -189,9 +191,12 @@ Example:
   "trains_dir": null,
   "frameworks": { "pack_dir": "compliance/packs", "default_packs": true },
   "jail_narrowing": { "forbidden_extensions": [], "forbidden_paths": [] },
+  "assets": { "roots": ["assets/", "public/models/"], "extensions": [".glb", ".gltf", ".png", ".ktx2", ".wav", ".ogg", ".wgsl", ".spv"],
+              "max_bytes": 1048576 },
+  "dev_server": { "url": "http://localhost:5173", "check": "the scene loads and the player can move" },
   "upstream_dependencies": [], "downstream_dependencies": [] }
 ```
-The manifest reader checks `jail_narrowing`, `features`, `trains_dir`, `frameworks`, the three stack commands and the `ledger` block; each of those keys is a row of the generated key reference in the plugin [README](../README.md#key-reference). The reader refuses an unknown key inside `jail_narrowing`, `features` or `frameworks`, except the dropped `features.github` key: a manifest that still carries it loads with any value, the key changes nothing, and the doctor prints one `OPT` line naming it (0172). The doctor's two gh lines are a `MISS` in repository scope and `OPT` in folder scope (0074). The `frameworks` keys are described under "Framework control packs" above. The keys below describe the project for the people and agents who read the file. No reader checks them, so a wrong value is never refused.
+The manifest reader checks `jail_narrowing`, `features`, `trains_dir`, `frameworks`, the three stack commands, `stack.package_manager`, `assets`, `dev_server` and the `ledger` block; each of those keys is a row of the generated key reference in the plugin [README](../README.md#key-reference). The reader refuses an unknown key inside `jail_narrowing`, `features`, `frameworks`, `assets` or `dev_server`, except the dropped `features.github` key: a manifest that still carries it loads with any value, the key changes nothing, and the doctor prints one `OPT` line naming it (0172). The doctor's two gh lines are a `MISS` in repository scope and `OPT` in folder scope (0074). The `frameworks` keys are described under "Framework control packs" above. The keys below describe the project for the people and agents who read the file. No reader checks them, so a wrong value is never refused.
 
 | Key | What it governs | Type | Allowed values | Default | Example |
 |---|---|---|---|---|---|
@@ -213,6 +218,12 @@ The manifest reader checks `jail_narrowing`, `features`, `trains_dir`, `framewor
 | `downstream_dependencies` | The services that call this project; no Daedalus code reads it yet | list | Service names or objects of your choosing | none | `[]` |
 
 `jail_narrowing` adds paths a coder may not write (0054-DAE-PLT). Each `forbidden_paths` entry is relative to the repository root, uses forward slashes, and holds no leading slash, `..` or glob characters. An entry ending in a slash covers that folder and everything under it; an entry without one names one file. Each `forbidden_extensions` entry starts with a dot and covers every file name ending in it. Matching ignores case. The jail reads this file from the main checkout, never from a coder's worktree. A manifest that is not valid JSON, or whose `jail_narrowing` has the wrong shape, refuses every coder write until it is fixed, and the doctor reports it as a `MISS`. When the file is present, the doctor's line counts the entries: `OK   service-manifest.json: jail_narrowing <n> paths, <m> extensions`. When `stack.typecheck_cmd` is declared, the doctor prints it on an `OPT` line and does not run it; it runs the command only when you pass `--run-typecheck` to `daedalus_doctor.py` yourself, because that flag executes a command the repository chose (0076).
+
+Stack commands as lists. Each of `unit_test_cmd`, `typecheck_cmd` and `lint_cmd` takes one command or a list of commands, so a Python and TypeScript project can declare `["pytest -q", "pnpm vitest run"]`. A coder may run each entry exactly as written. An empty list, or a list holding anything but non-empty strings, is refused. The doctor prints one `OPT` typecheck line per declared typecheck command. `stack.package_manager` names `pnpm`, `npm`, `yarn`, `pip` or `uv`, and the doctor prints it on its stack line: `OK   stack: package manager pnpm; commands: 2 unit test, 2 typecheck, 1 lint`. `stack.build_cmd` stays unchecked, and no coder runs it.
+
+Asset files. The `assets` block keeps models, textures, sounds and shader binaries out of the diffs the verifier, the auditor and the framework specialist read, and out of the secret scan. `roots` names asset folders and `extensions` names asset file endings. A file with a source ending, such as `.py`, `.ts`, `.js`, `.json`, `.env`, `.sh` or `.md`, is never kept out, wherever it sits and however large it is. An `extensions` entry with a source ending is refused. `max_bytes` lists each kept-out asset file larger than it by name and size, so the judges know it changed. Each run prints the exclusion with `daedalus_train.py assets --repo <repo> --base <sha> --tip <branch>`: `Assets: none`, or `Assets: -- . ':(exclude)assets/' ...` and an `Assets log-opts:` line for the secret scan. Then come one `Over size: <file> (<n> bytes)` line per large asset file and one `Asset root source: <file>` line per source file under an asset root. The judges copy those lines, so nobody composes the exclusion by hand. Keep source files out of asset folders. A source file under a root stays in every diff, the auditor reports a change to it as a finding, and the doctor prints one `OPT  asset root source file <path>` line for each one it finds.
+
+Operator checks and the dev server. A coder never starts a dev server and never writes a test that needs a GPU or a browser. The plan lists such checks on the unit's line as `operator_checks: the scene loads; the player can move`, at most ten. Set `dev_server` to the site you host on your own machine: its `url` must be `http` or `https` on `localhost` or `127.0.0.1`, and `check` says what to look at. After the verifier passes a unit, the session asks you each check in plain words: open the url, do the check, and answer pass, fail or skip. It also asks the `dev_server` check when the unit changes web code. A fail goes back to the unit's coder as a fix. A skip is recorded with your reason. Daedalus never starts, polls or fetches the site. The doctor prints `OK   dev server: <url>; the verify step asks you to open it and check: <check>` when the key is set.
 
 A later Daedalus release reads missing exposure flags as the stricter value. Coders cannot edit this file (enforced for file tools and the common copy/edit commands; a script the coder writes and runs is not blocked yet). In that later release, a change to it goes through contract-spec and the ledger.
 

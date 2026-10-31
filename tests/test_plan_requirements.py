@@ -314,6 +314,32 @@ def test_plan_skill_table_lists_needs() -> None:
     assert "Needs lists the unit line's `needs:` values (0128)" in skill
 
 
+def test_gpu_browser_and_server_work_is_an_operator_check_never_a_coder_test() -> None:
+    # 0164, 0192: the planner, the plan skill and the coder each say it once.
+    planner = _flat(REPO_ROOT / "agents" / "planner.md")
+    assert (
+        "Anything that needs a GPU, a browser or a running server goes there as plain-words "
+        "checks separated by semicolons, at most ten" in planner
+    )
+    assert "and never in a coder test command" in planner
+    skill = _flat(REPO_ROOT / "skills" / "plan" / "SKILL.md")
+    assert (
+        "put anything that needs a GPU, a browser or a running server in the unit's "
+        "`operator_checks:` field, never in a coder test command (0164)" in skill
+    )
+    coder = _flat(REPO_ROOT / "agents" / "coder.md")
+    assert (
+        "A test that needs a GPU, a browser or a running server is an operator check the plan "
+        "lists, never a test command you write or run (0164)." in coder
+    )
+
+
+def test_validate_plan_accepts_the_operator_checks_fixture() -> None:
+    proc = run_cli("validate_plan.py", str(FIXTURES / "valid_operator_checks.md"))
+    assert proc.returncode == 0, proc.stdout
+    assert proc.stdout.startswith("OK plan: graph: units=2")
+
+
 def test_the_train_plan_validates() -> None:
     # 0128: the train's own plan sits in the main checkout's scratch, which a worktree lacks.
     path = checkout_file(TRAIN_PLAN)
