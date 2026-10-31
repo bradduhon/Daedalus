@@ -250,7 +250,7 @@ def test_absent_frameworks_block_reads_the_shipped_packs(tmp_path: Path) -> None
     _write(tmp_path, {})
     loaded = load(tmp_path)
     assert loaded is not None and loaded.frameworks == Frameworks(None, True)
-    assert FRAMEWORKS_KEYS == ("pack_dir", "default_packs")
+    assert FRAMEWORKS_KEYS == ("pack_dir", "default_packs", "packs")
 
 
 @pytest.mark.parametrize(
@@ -260,6 +260,8 @@ def test_absent_frameworks_block_reads_the_shipped_packs(tmp_path: Path) -> None
         ({"pack_dir": "compliance/packs"}, Frameworks("compliance/packs", True)),
         ({"pack_dir": None, "default_packs": False}, Frameworks(None, False)),
         ({"pack_dir": "packs/", "default_packs": True}, Frameworks("packs/", True)),
+        ({"packs": ["cost-tier"]}, Frameworks(None, True, ("cost-tier",))),
+        ({"packs": []}, Frameworks()),
     ],
 )
 def test_each_frameworks_key_reads_its_values(
@@ -272,7 +274,7 @@ def test_each_frameworks_key_reads_its_values(
 
 def test_unknown_frameworks_key_is_refused(tmp_path: Path) -> None:
     message = _refused(tmp_path, {"frameworks": {"pack_dir": "p", "cache": "x"}})
-    assert "frameworks has unknown keys ['cache'] (known: pack_dir, default_packs)" in message
+    assert "frameworks has unknown keys ['cache'] (known: pack_dir, default_packs, packs)" in message
 
 
 @pytest.mark.parametrize(
@@ -287,6 +289,10 @@ def test_unknown_frameworks_key_is_refused(tmp_path: Path) -> None:
         {"frameworks": {"default_packs": None}},
         {"frameworks": {"default_packs": "yes"}},
         {"frameworks": {"default_packs": 0}},
+        {"frameworks": {"packs": "cost-tier"}},
+        {"frameworks": {"packs": ["Cost_Tier"]}},
+        {"frameworks": {"packs": ["cost-tier", "cost-tier"]}},
+        {"frameworks": {"packs": [3]}},
     ],
 )
 def test_bad_frameworks_value_is_refused(tmp_path: Path, payload: object) -> None:
@@ -295,10 +301,9 @@ def test_bad_frameworks_value_is_refused(tmp_path: Path, payload: object) -> Non
 
 def test_frameworks_keys_have_rows_and_setup_writes_no_block() -> None:
     keys = manifest_keys()
-    assert ("frameworks.pack_dir", "frameworks.default_packs") == tuple(
-        key for key in keys if key.startswith("frameworks.")
-    )
-    for key in ("frameworks.pack_dir", "frameworks.default_packs"):
+    want = ("frameworks.pack_dir", "frameworks.default_packs", "frameworks.packs")
+    assert want == tuple(key for key in keys if key.startswith("frameworks."))
+    for key in want:
         assert (MANIFEST_FILE, key) in KEY_ROWS, key
     assert "frameworks" not in starter_manifest()
 
