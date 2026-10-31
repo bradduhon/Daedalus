@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# RCP, 0128: the SubagentStop receipts check on a repo-coder's COMPLETE reply (pin RCP -> VER).
+# RCP, 0128: the SubagentStop receipts check on a coder's COMPLETE reply (pin RCP -> VER).
 from __future__ import annotations
 
 import json
@@ -30,7 +30,7 @@ def _reply(*lines: str) -> str:
     return "\n".join(lines)
 
 
-def _stop(reply: object, agent: str | None = "daedalus:repo-coder", **extra: object) -> dict:
+def _stop(reply: object, agent: str | None = "daedalus:coder", **extra: object) -> dict:
     payload: dict[str, object] = {
         "hook_event_name": "SubagentStop",
         "session_id": "s",
@@ -141,8 +141,8 @@ def test_the_refusal_carries_one_next_line_naming_the_shape() -> None:
         assert shape in got
 
 
-@pytest.mark.parametrize("agent", ["repo-coder", "daedalus:repo-coder"])
-def test_the_check_binds_the_repo_coder(agent: str) -> None:
+@pytest.mark.parametrize("agent", ["coder", "daedalus:coder"])
+def test_the_check_binds_the_coder(agent: str) -> None:
     assert handback_check.judge(_stop(_reply("done", COMPLETE), agent)) is not None
 
 
@@ -150,7 +150,7 @@ def test_the_check_binds_the_repo_coder(agent: str) -> None:
     "agent", ["orchestrator", "daedalus:orchestrator", "daedalus:verifier", "charter-docs", "x"]
 )
 def test_other_agents_pass(agent: str) -> None:
-    # RCP: the check binds repo-coders only, not the orchestrator's reports.
+    # RCP: the check binds coders only, not the orchestrator's reports.
     assert handback_check.judge(_stop(_reply("done", COMPLETE), agent)) is None
 
 
@@ -171,7 +171,7 @@ def test_a_stop_without_agent_type_takes_the_started_type(
 
     def started(path: Path, agent_id: str) -> str | None:
         seen.append((path, agent_id))
-        return "daedalus:repo-coder"
+        return "daedalus:coder"
 
     monkeypatch.setattr(audit, "_started_type", started)
     assert handback_check.judge(_stop(_reply("done", COMPLETE), None)) is not None
@@ -218,7 +218,7 @@ def test_the_script_never_blocks_on_bad_input(stdin: str) -> None:
 
 
 # RCP, train 20261026-002310 pick 4: the same check on the SubagentHandback tool's message.
-def _handback(message: object, agent: str | None = "daedalus:repo-coder", **extra: object) -> dict:
+def _handback(message: object, agent: str | None = "daedalus:coder", **extra: object) -> dict:
     payload: dict[str, object] = {
         "hook_event_name": "PreToolUse",
         "tool_name": "SubagentHandback",

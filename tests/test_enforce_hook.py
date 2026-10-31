@@ -70,7 +70,7 @@ def test_routed_agent_never_gets_ask(run_script: Any, project_data: Path, hook_i
     # Main never prompted (amends 0105): a denied agent write stays denied, with no warning.
     _in_train(project_data)
     write = {"file_path": "README.md", "content": "x"}
-    payload = hook_input(agent_type="repo-coder", tool_name="Write", tool_input=write)
+    payload = hook_input(agent_type="coder", tool_name="Write", tool_input=write)
     result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2 and result.stdout == "", result.stdout
     rec = audit_records(project_data / "audit" / "sess-test.jsonl")[-1]
@@ -81,12 +81,12 @@ def test_block_exits_two_with_message_and_logs_block(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
     _in_train(project_data)
-    payload = hook_input(agent_type="repo-coder", tool_input={"command": "git push origin x"})
+    payload = hook_input(agent_type="coder", tool_input={"command": "git push origin x"})
     result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2
     # 0044: the router prefixes the denying hook's name in stderr and in the record.
     want = "git_push: no remote git operations in the Build Train."
-    assert result.stderr.startswith(f"daedalus-jail[repo-coder]: {want}")
+    assert result.stderr.startswith(f"daedalus-jail[coder]: {want}")
     assert "Next:" in result.stderr
     rec = audit_records(project_data / "audit" / "sess-test.jsonl")[-1]
     assert rec["decision"] == "block" and rec["reason"].startswith(want)
@@ -94,12 +94,10 @@ def test_block_exits_two_with_message_and_logs_block(
 
 def test_namespaced_block_label_uses_normalized_name(run_script: Any, hook_input: Any) -> None:
     # m2: the stderr label names the agent the jail judged, not the raw plugin:agent string.
-    payload = hook_input(
-        agent_type="daedalus:repo-coder", tool_input={"command": "git push origin x"}
-    )
+    payload = hook_input(agent_type="daedalus:coder", tool_input={"command": "git push origin x"})
     result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2
-    assert result.stderr.startswith("daedalus-jail[repo-coder]:")
+    assert result.stderr.startswith("daedalus-jail[coder]:")
 
 
 def test_closed_stderr_still_exits_two(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -109,7 +107,7 @@ def test_closed_stderr_still_exits_two(monkeypatch: pytest.MonkeyPatch) -> None:
             raise BrokenPipeError("closed")
 
     monkeypatch.setattr(sys, "stderr", Closed())
-    assert enforce_agent_jail._block("repo-coder", "x. Next: y.") == 2
+    assert enforce_agent_jail._block("coder", "x. Next: y.") == 2
 
 
 def test_unknown_agent_blocks_during_a_train(
@@ -167,7 +165,7 @@ def test_unwritable_audit_dir_outside_a_train_lets_main_proceed(
     assert result.returncode == 0 and result.stderr == ""
 
 
-@pytest.mark.parametrize("agent", [None, "ghost", "daedalus:security-auditor"])
+@pytest.mark.parametrize("agent", [None, "ghost", "daedalus:auditor"])
 def test_data_dir_without_a_train_marker_gets_no_record(
     run_script: Any, project_data: Path, hook_input: Any, agent: str | None
 ) -> None:
@@ -181,8 +179,8 @@ def test_data_dir_without_a_train_marker_gets_no_record(
     assert sorted(p.name for p in project_data.iterdir()) == []
 
 
-AUDITOR = {"agent_type": "daedalus:security-auditor", "agent_id": "a1"}
-CODER = {"agent_type": "daedalus:repo-coder", "agent_id": "c1"}
+AUDITOR = {"agent_type": "daedalus:auditor", "agent_id": "a1"}
+CODER = {"agent_type": "daedalus:coder", "agent_id": "c1"}
 
 
 def _last_record(project_data: Path) -> dict[str, Any]:
@@ -206,7 +204,7 @@ def test_oversized_int_config_blocks_and_records(
     payload = hook_input(tool_input={"command": "ls"}, **AUDITOR)
     result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2
-    assert result.stderr.startswith("daedalus-jail[daedalus:security-auditor]: ")
+    assert result.stderr.startswith("daedalus-jail[daedalus:auditor]: ")
     assert "Next:" in result.stderr
     rec = _last_record(project_data)
     assert rec["decision"] == "block" and "not valid JSON" in rec["reason"]
@@ -281,7 +279,7 @@ def test_unparseable_input_writes_no_record(project_data: Path) -> None:
     assert not (project_data / "audit").exists()
 
 
-@pytest.mark.parametrize("agent", ["main", "repo-coder"])
+@pytest.mark.parametrize("agent", ["main", "coder"])
 def test_string_tool_input_blocks_without_record(
     run_script: Any, project_data: Path, hook_input: Any, agent: str
 ) -> None:
@@ -345,7 +343,7 @@ def test_missing_marker_finder_fails_open_outside_a_train(
     assert not (repo_cwd / ".claude").exists()
 
 
-@pytest.mark.parametrize("agent", [None, "daedalus:repo-coder"])
+@pytest.mark.parametrize("agent", [None, "daedalus:coder"])
 def test_missing_marker_finder_fails_closed_inside_a_train(
     tmp_path: Path, project_data: Path, hook_input: Any, agent: str | None
 ) -> None:
@@ -430,7 +428,7 @@ def test_inline_project_root_matches_lib(repo_cwd: Path, tmp_path: Path) -> None
         assert enforce_agent_jail._inline_git_root(str(path)) == repo_root.git_root(str(path))
 
 
-@pytest.mark.parametrize("agent", [None, "daedalus:repo-coder"])
+@pytest.mark.parametrize("agent", [None, "daedalus:coder"])
 def test_missing_libraries_fail_closed_during_a_train(
     tmp_path: Path, project_data: Path, hook_input: Any, agent: str | None
 ) -> None:
@@ -516,7 +514,7 @@ def test_routed_agent_judge_exception_blocks_and_records(
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(hook_input(**AUDITOR))))
     assert enforce_agent_jail.main() == 2
     err = capsys.readouterr().err
-    assert err.startswith("daedalus-jail[daedalus:security-auditor]: jail: router exploded")
+    assert err.startswith("daedalus-jail[daedalus:auditor]: jail: router exploded")
     assert _last_record(project_data)["decision"] == "block"
 
 
@@ -584,7 +582,7 @@ def test_untrusted_data_dir_blocks_the_hook(
         (data / ("config.json" if case == "tracked" else ".gitignore")).write_text("{}")
     _git_commit_all(repo_cwd)
     # 0035: a Daedalus agent meets the data dir checks with or without a train.
-    payload = hook_input(agent_type="daedalus:security-auditor", tool_input={"command": "ls"})
+    payload = hook_input(agent_type="daedalus:auditor", tool_input={"command": "ls"})
     result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2, result.stderr
     assert "Next:" in result.stderr
@@ -830,7 +828,7 @@ def test_credential_read_warns_main_and_refuses_an_agent_outside_a_train(
 def test_daedalus_agent_outside_a_train_is_still_judged(
     run_script: Any, repo_cwd: Path, hook_input: Any
 ) -> None:
-    payload = hook_input(agent_type="daedalus:repo-coder", tool_input={"command": "git push o x"})
+    payload = hook_input(agent_type="daedalus:coder", tool_input={"command": "git push o x"})
     result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2
     assert not (repo_cwd / ".claude").exists()

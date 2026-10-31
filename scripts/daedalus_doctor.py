@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import daedalus_confine  # noqa: E402
 from lib import git, inventory, packs  # noqa: E402
+from lib.agent_aliases import OLD_NAMES, renamed_line  # noqa: E402
 from lib.audit import (  # noqa: E402
     DataDirError,
     cache_dir_matches,
@@ -648,6 +649,29 @@ def _retired_key_check(repo: Path) -> Iterator[tuple[bool, str]]:
         yield _opt(False, f"{key} key", RETIRED_DETAIL, nxt)
 
 
+def _json_keys(path: Path, *keys: str) -> list[str]:
+    # 0190: the keys of one nested object of a JSON file; unreadable or absent reads as none.
+    try:
+        node: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return []
+    for key in keys:
+        node = node.get(key) if isinstance(node, dict) else None
+    return [str(name) for name in node] if isinstance(node, dict) else []
+
+
+def _old_agent_name_check(repo: Path) -> Iterator[tuple[bool, str]]:
+    # 0190: an old agent name still loads for one release; one OPT line names old and new.
+    places = (
+        (repo / ".claude" / "daedalus" / "config.json", ("agent_models",), "agent_models"),
+        (repo / "service-manifest.json", ("priorities", "agents"), "priorities.agents"),
+    )
+    for path, keys, label in places:
+        for name in _json_keys(path, *keys):
+            if name in OLD_NAMES:
+                yield True, renamed_line(name, f"{path.name} {label}")
+
+
 def _repo_checks(
     repo: Path, is_repo: bool, scope_name: str, run_typecheck: bool = False
 ) -> Iterator[tuple[bool, str]]:
@@ -659,6 +683,7 @@ def _repo_checks(
         yield from _version_tag_check(repo)
     yield _manifest_check(repo)
     yield from _retired_key_check(repo)
+    yield from _old_agent_name_check(repo)
     yield from _priorities_check(repo)
     yield from _typecheck_check(repo, run_typecheck)
     yield _opt(

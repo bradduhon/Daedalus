@@ -11,7 +11,7 @@ from typing import Any
 
 import enforce_agent_jail
 import pytest
-from lib import audit, dispatch_binding, jail, router
+from lib import audit, dispatch_binding, jail, router, writer_mode
 
 from tests.conftest import CFG, CWD, REPO_ROOT, WT, write_train_marker
 
@@ -160,11 +160,13 @@ def test_router_starts_no_process(
     router._MODULES.clear()
     for name in REAL_AGENTS:
         read = _input(name, "Read", file_path=f"{CWD}/README.md")
-        assert router.route(read, REPO_ROOT) == (True, None, ""), name
+        # 0190: a writer outside a run holds no recorded kind, so even its Read is refused.
+        want = (False, writer_mode.R_NO_RUN, "router") if name == "writer" else (True, None, "")
+        assert router.route(read, REPO_ROOT) == want, name
     assert started == []
 
 
-@pytest.mark.parametrize("name", ["ghost", "../agents/repo-coder", "Repo-Coder", "a:b"])
+@pytest.mark.parametrize("name", ["ghost", "../agents/coder", "Repo-Coder", "a:b"])
 def test_agent_without_a_file_is_refused_with_no_binding(tmp_path: Path, name: str) -> None:
     _agent(tmp_path, "probe", ["tool_bound"])
     want = f"no binding exists for agent '{name}': agents/{name}.md is missing (0044). {NEXT}"
@@ -243,10 +245,10 @@ def test_unknown_agent_refused_only_in_a_train(
 
 def test_daedalus_agent_routed_outside_a_train(run_script: Any, hook_input: Any) -> None:
     # 0023: a Daedalus agent meets its hooks with or without a train.
-    payload = hook_input(agent_type="daedalus:repo-coder", tool_input={"command": "git push o x"})
+    payload = hook_input(agent_type="daedalus:coder", tool_input={"command": "git push o x"})
     result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2
-    assert result.stderr.startswith("daedalus-jail[repo-coder]: git_push: no remote git")
+    assert result.stderr.startswith("daedalus-jail[coder]: git_push: no remote git")
     ghost = hook_input(agent_type="daedalus:mystery", tool_input={"command": "ls"})
     result = run_script("enforce_agent_jail.py", ghost)
     want = "daedalus-jail[mystery]: router: no binding exists for agent 'mystery'"
@@ -255,11 +257,11 @@ def test_daedalus_agent_routed_outside_a_train(run_script: Any, hook_input: Any)
 
 # 0044: one fixture input per agent file and the hook its chain names as the first deny.
 DENIALS = {
-    "repo-coder": (_input("repo-coder", command="git push origin x"), "git_push"),
+    "coder": (_input("coder", command="git push origin x"), "git_push"),
     "contract-spec": (_input("contract-spec", "Write", file_path=f"{CWD}/src/a.py"), "root_writes"),
     "charter-docs": (_input("charter-docs", command="ls"), "command_allowlist"),
-    "security-auditor": (
-        _input("security-auditor", "Write", file_path=f"{CWD}/docs/x.md"),
+    "auditor": (
+        _input("auditor", "Write", file_path=f"{CWD}/docs/x.md"),
         "root_writes",
     ),
     "verifier": (_input("verifier", "Write", file_path=f"{CWD}/docs/x.md"), "tool_bound"),
@@ -270,8 +272,8 @@ DENIALS = {
         _input("standards-rules-specialist", "WebFetch", url="https://x"),
         "tool_bound",
     ),
-    "pr-train-conductor": (
-        _input("daedalus:pr-train-conductor", command="gh pr merge 3"),
+    "releaser": (
+        _input("daedalus:releaser", command="gh pr merge 3"),
         "gh_classes",
     ),
     "orchestrator": (
@@ -284,10 +286,9 @@ DENIALS = {
         _input("terraform-reviewer", command="terraform apply"),
         "command_allowlist",
     ),
-    "docs-writer": (_input("docs-writer", command="git push origin x"), "git_push"),
-    # 0135: the two document agents.
-    "doc-deriver": (_input("doc-deriver", command="git push origin x"), "git_push"),
-    "change-logger": (_input("change-logger", "Edit", file_path=f"{CWD}/x.md"), "tool_bound"),
+    "writer": (_input("writer", command="git push origin x"), "git_push"),
+    # 0135: the comparer.
+    "comparer": (_input("comparer", "Edit", file_path=f"{CWD}/x.md"), "tool_bound"),
 }
 
 
@@ -325,6 +326,6 @@ def test_allowed_call_audits_no_reason(monkeypatch: pytest.MonkeyPatch, jail_fak
         records.append((decision, reason))
 
     monkeypatch.setattr(audit, "audit_append", record)
-    payload = _input("repo-coder", "Write", file_path=f"{WT}/src/a.py")
-    assert enforce_agent_jail._judge(payload, "repo-coder") == 0
+    payload = _input("coder", "Write", file_path=f"{WT}/src/a.py")
+    assert enforce_agent_jail._judge(payload, "coder") == 0
     assert records == [("allow", None)]

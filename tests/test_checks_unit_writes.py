@@ -27,14 +27,14 @@ pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "unit_writes"
 
 
-class TestRepoCoder:
+class TestCoder:
     def test_main_checkout_writes_refused(self) -> None:
         # 0022, 0054: the main checkout is never a coder write target; see the unit worktree tests.
-        assert not decide(_w("repo-coder", f"{CWD}/src/a.py"), CFG).allow
-        assert not decide(_w("repo-coder", f"{CWD}/tests/test_a.py", "Edit"), CFG).allow
-        assert not decide(_w("repo-coder", f"{CWD}/service-manifest.json"), CFG).allow
-        assert not decide(_w("repo-coder", f"{CWD}/src/../infra/a.tf"), CFG).allow
-        assert not decide(_w("repo-coder", "/other/repo/src/a.py"), CFG).allow
+        assert not decide(_w("coder", f"{CWD}/src/a.py"), CFG).allow
+        assert not decide(_w("coder", f"{CWD}/tests/test_a.py", "Edit"), CFG).allow
+        assert not decide(_w("coder", f"{CWD}/service-manifest.json"), CFG).allow
+        assert not decide(_w("coder", f"{CWD}/src/../infra/a.tf"), CFG).allow
+        assert not decide(_w("coder", "/other/repo/src/a.py"), CFG).allow
 
     def test_local_work_allowed(self) -> None:
         for command in (
@@ -43,14 +43,14 @@ class TestRepoCoder:
             f"git -C {WT} add -A && git -C {WT} commit -m 'WIP: yield'",
             "git diff",
         ):
-            assert decide(_b("repo-coder", command), CFG).allow, command
+            assert decide(_b("coder", command), CFG).allow, command
 
 
-class TestRegressionRepoCoder:
+class TestRegressionCoder:
     def test_relative_paths_resolve_against_cwd(self) -> None:
-        assert not decide(_w("repo-coder", "src/a.py"), CFG).allow
-        assert decide(_w("repo-coder", ".claude/worktrees/u1/src/a.py"), CFG).allow
-        assert not decide(_w("repo-coder", "infra/a.tf"), CFG).allow
+        assert not decide(_w("coder", "src/a.py"), CFG).allow
+        assert decide(_w("coder", ".claude/worktrees/u1/src/a.py"), CFG).allow
+        assert not decide(_w("coder", "infra/a.tf"), CFG).allow
 
     def test_notebook_path(self) -> None:
         def nb(path: str) -> dict[str, Any]:
@@ -58,11 +58,11 @@ class TestRegressionRepoCoder:
                 "tool_name": "NotebookEdit",
                 "tool_input": {"notebook_path": path},
                 "cwd": CWD,
-                "agent_type": "repo-coder",
+                "agent_type": "coder",
             }
 
         assert evaluate(HOOK, nb(f"{CWD}/.claude/worktrees/u1/src/n.ipynb")) is None
-        # open item 4: repo-coder lists no NotebookEdit tool, so tool_bound refuses the chain.
+        # open item 4: coder lists no NotebookEdit tool, so tool_bound refuses the chain.
         assert decide(nb(f"{CWD}/.claude/worktrees/u1/src/n.ipynb"), CFG).reason == jail.R_TOOL
         assert not decide(nb(f"{CWD}/src/n.ipynb"), CFG).allow
         assert not decide(nb(f"{CWD}/docs/n.ipynb"), CFG).allow
@@ -80,7 +80,7 @@ class TestRound3SortPytestGitleaks:
         ],
     )
     def test_basetemp_denied(self, command: str) -> None:
-        assert not decide(_b("repo-coder", command), CFG).allow, command
+        assert not decide(_b("coder", command), CFG).allow, command
 
 
 class TestFinalCoderWriteTargets:
@@ -102,7 +102,7 @@ class TestFinalCoderWriteTargets:
         ],
     )
     def test_blocked(self, command: str) -> None:
-        d = decide(_b("repo-coder", command), CFG)
+        d = decide(_b("coder", command), CFG)
         assert not d.allow and d.reason.startswith("Bash write outside your unit worktree:"), (
             command
         )
@@ -122,7 +122,7 @@ class TestFinalCoderWriteTargets:
         ],
     )
     def test_allowed(self, command: str) -> None:
-        assert decide(_b("repo-coder", command), CFG).allow, command
+        assert decide(_b("coder", command), CFG).allow, command
 
     @pytest.mark.parametrize(
         "command",
@@ -138,7 +138,7 @@ class TestFinalCoderWriteTargets:
     )
     def test_main_checkout_blocked(self, command: str) -> None:
         # 0022: the same grammar aimed at the main checkout is refused.
-        d = decide(_b("repo-coder", command), CFG)
+        d = decide(_b("coder", command), CFG)
         assert not d.allow and d.reason.startswith("Bash write outside your unit worktree:"), (
             command
         )
@@ -156,14 +156,14 @@ class TestProjectDataDir:
     )
     def test_ordinary_git_add_commit_allowed(self, command: str) -> None:
         # 0022: the coder runs the same command inside its unit worktree.
-        assert decide(_b("repo-coder", f"git -C {WT} {command[4:]}"), CFG).allow, command
+        assert decide(_b("coder", f"git -C {WT} {command[4:]}"), CFG).allow, command
 
 
 def test_coder_writes_inside_a_unit_worktree() -> None:
     # 0022: the coder's cwd is the main checkout; its code dirs live in the unit worktree.
-    assert decide(_w("repo-coder", f"{WT}/src/a.py"), CFG).allow
-    assert decide(_w("repo-coder", f"{WT}/tests/test_a.py", "Edit"), CFG).allow
-    assert decide(_b("repo-coder", f"cp {WT}/src/a.py {WT}/src/b.py"), CFG).allow
+    assert decide(_w("coder", f"{WT}/src/a.py"), CFG).allow
+    assert decide(_w("coder", f"{WT}/tests/test_a.py", "Edit"), CFG).allow
+    assert decide(_b("coder", f"cp {WT}/src/a.py {WT}/src/b.py"), CFG).allow
 
 
 @pytest.mark.parametrize(
@@ -175,12 +175,12 @@ def test_coder_writes_inside_a_unit_worktree() -> None:
     ],
 )
 def test_coder_write_outside_a_unit_worktree_is_refused(path: str) -> None:
-    d = decide(_w("repo-coder", path), CFG)
+    d = decide(_w("coder", path), CFG)
     assert not d.allow and "Next:" in str(d.reason), path
 
 
 def test_coder_write_outside_reason() -> None:
-    d = decide(_w("repo-coder", f"{CWD}/infra/a.tf"), CFG)
+    d = decide(_w("coder", f"{CWD}/infra/a.tf"), CFG)
     want = f"write outside your unit worktree: {CWD}/infra/a.tf. Next: ask the orchestrating"
     assert not d.allow and str(d.reason).startswith(want)
 
@@ -190,20 +190,20 @@ def test_coder_write_outside_reason() -> None:
 )
 def test_coder_writes_anywhere_unprotected_in_its_worktree(rel: str) -> None:
     # 0054: the boundary is the unit worktree minus protected paths.
-    assert decide(_w("repo-coder", f"{WT}/{rel}"), CFG).allow, rel
-    assert decide(_w("repo-coder", f"{WT}/{rel}", "Edit"), CFG).allow, rel
-    assert decide(_b("repo-coder", f"tee {WT}/{rel}"), CFG).allow, rel
+    assert decide(_w("coder", f"{WT}/{rel}"), CFG).allow, rel
+    assert decide(_w("coder", f"{WT}/{rel}", "Edit"), CFG).allow, rel
+    assert decide(_b("coder", f"tee {WT}/{rel}"), CFG).allow, rel
 
 
 @pytest.mark.parametrize("rel", BUILTIN_REL)
 def test_coder_builtin_protected_paths_are_refused(rel: str) -> None:
     target = f"{WT}/{rel}"
     want = f"protected path (built in): {target}. Next: ask the orchestrating session"
-    for hook_input in (_w("repo-coder", target), _w("repo-coder", target, "Edit")):
+    for hook_input in (_w("coder", target), _w("coder", target, "Edit")):
         d = decide(hook_input, CFG)
         assert not d.allow and str(d.reason).startswith(want), (rel, d.reason)
         assert "contract-spec or charter-docs" in str(d.reason)
-    d = decide(_b("repo-coder", f"tee {target}"), CFG)
+    d = decide(_b("coder", f"tee {target}"), CFG)
     assert not d.allow and str(d.reason).startswith(want), (rel, d.reason)
 
 
@@ -222,7 +222,7 @@ def test_coder_builtin_protected_paths_are_refused(rel: str) -> None:
     ],
 )
 def test_coder_bash_writes_to_builtin_protected_paths_are_refused(command: str) -> None:
-    d = decide(_b("repo-coder", command), CFG)
+    d = decide(_b("coder", command), CFG)
     assert not d.allow and str(d.reason).startswith("protected path (built in):"), command
 
 
@@ -231,25 +231,25 @@ def test_coder_repo_local_ledger_in_worktree_is_refused() -> None:
     decl = LedgerDecl(Path("docs/decisions.md"), "markdown-table-row", "{seq:04d}", "last-row-id")
     cfg = Config(ledger=decl)
     target = f"{WT}/docs/decisions.md"
-    d = decide(_w("repo-coder", target), cfg)
+    d = decide(_w("coder", target), cfg)
     assert not d.allow and str(d.reason).startswith(f"protected path (built in): {target}.")
-    d = decide(_b("repo-coder", f"rm -r {WT}/docs"), cfg)
+    d = decide(_b("coder", f"rm -r {WT}/docs"), cfg)
     assert not d.allow and str(d.reason).startswith("protected path (built in):")
-    assert decide(_w("repo-coder", f"{WT}/docs/other.md"), cfg).allow
+    assert decide(_w("coder", f"{WT}/docs/other.md"), cfg).allow
     # 0054: a ledger outside the repo has no worktree copy to protect.
-    assert decide(_w("repo-coder", f"{WT}/docs/decisions.md"), CFG).allow
+    assert decide(_w("coder", f"{WT}/docs/decisions.md"), CFG).allow
 
 
 def test_coder_restores_paths_inside_its_unit_worktree() -> None:
-    assert decide(_b("repo-coder", f"git restore -- {WT}/src/a.py"), CFG).allow
+    assert decide(_b("coder", f"git restore -- {WT}/src/a.py"), CFG).allow
 
 
 def test_coder_cannot_write_the_main_checkout() -> None:
     # 0022: coders own a unit worktree; the main checkout is never their write target.
-    assert not decide(_w("repo-coder", f"{CWD}/src/a.py"), CFG).allow
-    assert not decide(_w("repo-coder", f"{CWD}/tests/test_a.py", "Edit"), CFG).allow
-    assert not decide(_b("repo-coder", f"cp a {CWD}/src/b.py"), CFG).allow
-    assert not decide(_b("repo-coder", f"git restore -- {CWD}/src/a.py"), CFG).allow
+    assert not decide(_w("coder", f"{CWD}/src/a.py"), CFG).allow
+    assert not decide(_w("coder", f"{CWD}/tests/test_a.py", "Edit"), CFG).allow
+    assert not decide(_b("coder", f"cp a {CWD}/src/b.py"), CFG).allow
+    assert not decide(_b("coder", f"git restore -- {CWD}/src/a.py"), CFG).allow
 
 
 def test_coder_unit_worktree_through_a_symlinked_root(tmp_path: Path) -> None:
@@ -258,18 +258,18 @@ def test_coder_unit_worktree_through_a_symlinked_root(tmp_path: Path) -> None:
     link = tmp_path / "link"
     link.symlink_to(repo)
     for cwd, root in ((link, repo), (repo, link), (link, link)):
-        hook_input = _w("repo-coder", f"{root}/.claude/worktrees/u1/src/a.py")
+        hook_input = _w("coder", f"{root}/.claude/worktrees/u1/src/a.py")
         hook_input["cwd"] = str(cwd)
         hook_input["session_id"] = "s"
         assert decide(hook_input, CFG).allow, (cwd, root)
-        hook_input = _w("repo-coder", f"{root}/src/a.py")
+        hook_input = _w("coder", f"{root}/src/a.py")
         hook_input["cwd"] = str(cwd)
         assert not decide(hook_input, CFG).allow, (cwd, root)
 
 
 def test_coder_plain_unit_worktree_bash_write_still_allowed() -> None:
-    assert decide(_b("repo-coder", f"tee {WT}/src/a.py"), CFG).allow
-    assert decide(_b("repo-coder", "set -e"), CFG).allow
+    assert decide(_b("coder", f"tee {WT}/src/a.py"), CFG).allow
+    assert decide(_b("coder", "set -e"), CFG).allow
 
 
 def test_coder_unregistered_worktree_dir_is_refused(tmp_path: Path) -> None:
@@ -277,10 +277,10 @@ def test_coder_unregistered_worktree_dir_is_refused(tmp_path: Path) -> None:
     repo, wt = _unit_repo(tmp_path / "repo")
     evil = repo / ".claude" / "worktrees" / "evil"
     (evil / "src").mkdir(parents=True)
-    assert decide(_cwd(_w("repo-coder", f"{wt}/src/a.py"), repo), CFG).allow
-    assert not decide(_cwd(_w("repo-coder", f"{evil}/src/a.py"), repo), CFG).allow
-    assert not decide(_cwd(_b("repo-coder", f"tee {evil}/src/a.py"), repo), CFG).allow
-    assert not decide(_w("repo-coder", f"{CWD}/.claude/worktrees/u2/src/a.py"), CFG).allow
+    assert decide(_cwd(_w("coder", f"{wt}/src/a.py"), repo), CFG).allow
+    assert not decide(_cwd(_w("coder", f"{evil}/src/a.py"), repo), CFG).allow
+    assert not decide(_cwd(_b("coder", f"tee {evil}/src/a.py"), repo), CFG).allow
+    assert not decide(_w("coder", f"{CWD}/.claude/worktrees/u2/src/a.py"), CFG).allow
 
 
 @pytest.mark.parametrize(
@@ -296,7 +296,7 @@ def test_coder_unregistered_worktree_dir_is_refused(tmp_path: Path) -> None:
     ],
 )
 def test_coder_file_mutators_outside_unit_worktree_are_refused(command: str) -> None:
-    assert not decide(_b("repo-coder", command), CFG).allow, command
+    assert not decide(_b("coder", command), CFG).allow, command
 
 
 @pytest.mark.parametrize(
@@ -309,7 +309,7 @@ def test_coder_file_mutators_outside_unit_worktree_are_refused(command: str) -> 
     ],
 )
 def test_coder_file_mutators_inside_unit_worktree_are_allowed(command: str) -> None:
-    assert decide(_b("repo-coder", command), CFG).allow, command
+    assert decide(_b("coder", command), CFG).allow, command
 
 
 @pytest.mark.parametrize(
@@ -324,7 +324,7 @@ def test_coder_file_mutators_inside_unit_worktree_are_allowed(command: str) -> N
 )
 def test_coder_relative_write_after_cd_is_refused(command: str) -> None:
     # 0022: relative operands after cd resolve against the hook cwd, not the cd target.
-    d = decide(_b("repo-coder", command), CFG)
+    d = decide(_b("coder", command), CFG)
     assert not d.allow and "absolute" in str(d.reason), command
 
 
@@ -337,7 +337,7 @@ def test_coder_relative_write_after_cd_is_refused(command: str) -> None:
     ],
 )
 def test_coder_absolute_write_after_cd_is_allowed(command: str) -> None:
-    assert decide(_b("repo-coder", command), CFG).allow, command
+    assert decide(_b("coder", command), CFG).allow, command
 
 
 def test_cd_absolute_then_relative_write_resolves_against_target(tmp_path: Path) -> None:
@@ -350,10 +350,10 @@ def test_cd_absolute_then_relative_write_resolves_against_target(tmp_path: Path)
         f"cd {wt}/src && cp a.py b.py && git diff | head",
         f"cd {wt} && git add -A && git commit -m x",
     ):
-        assert decide(_cwd(_b("repo-coder", command), repo), CFG).allow, command
-    d = decide(_cwd(_b("repo-coder", f"cd {wt} && tee contracts/x.yaml"), repo), CFG)
+        assert decide(_cwd(_b("coder", command), repo), CFG).allow, command
+    d = decide(_cwd(_b("coder", f"cd {wt} && tee contracts/x.yaml"), repo), CFG)
     assert d.reason == jail.R_PROTECTED_BUILTIN.format(f"{wt}/contracts/x.yaml")
-    d = decide(_cwd(_b("repo-coder", f"cd {wt} && tee ../../../x"), repo), CFG)
+    d = decide(_cwd(_b("coder", f"cd {wt} && tee ../../../x"), repo), CFG)
     assert not d.allow and str(d.reason).startswith("Bash write outside your unit worktree:")
 
 
@@ -376,7 +376,7 @@ def test_cd_absolute_then_relative_write_resolves_against_target(tmp_path: Path)
 def test_two_cd_targets_keep_the_refusal(tmp_path: Path, command: str) -> None:
     # O6: two targets, a relative target, a target outside a unit, or a non-&& join refuse.
     repo, wt = _unit_repo(tmp_path / "repo")
-    hook_input = _cwd(_b("repo-coder", command.format(wt=wt, repo=repo)), repo)
+    hook_input = _cwd(_b("coder", command.format(wt=wt, repo=repo)), repo)
     d = decide(hook_input, CFG)
     assert not d.allow and "absolute" in str(d.reason), (command, d.reason)
 
@@ -384,7 +384,7 @@ def test_two_cd_targets_keep_the_refusal(tmp_path: Path, command: str) -> None:
 def test_redirect_to_a_path_is_judged_as_a_write() -> None:
     # O3: > and >> are writes to their target; 2> and &> too.
     for command in (f"git diff > {WT}/out.txt", f"git log >> {WT}/out.txt", f"ls 2> {WT}/e"):
-        assert decide(_b("repo-coder", command), CFG).allow, command
+        assert decide(_b("coder", command), CFG).allow, command
     for command, target in (
         ("git diff > /tmp/out.txt", "/tmp/out.txt"),
         ("git diff 2> err.txt", f"{CWD}/err.txt"),
@@ -392,9 +392,9 @@ def test_redirect_to_a_path_is_judged_as_a_write() -> None:
         (f"echo x >> {CWD}/src/a.py", f"{CWD}/src/a.py"),
         (f"ls 2>/dev/null > {CWD}/x", f"{CWD}/x"),
     ):
-        d = decide(_b("repo-coder", command), CFG)
+        d = decide(_b("coder", command), CFG)
         assert d.reason == jail.R_BASH_OUTSIDE.format(target), (command, d.reason)
-    d = decide(_b("repo-coder", f"echo x > {WT}/contracts/x.yaml"), CFG)
+    d = decide(_b("coder", f"echo x > {WT}/contracts/x.yaml"), CFG)
     assert d.reason == jail.R_PROTECTED_BUILTIN.format(f"{WT}/contracts/x.yaml")
 
 
@@ -402,8 +402,8 @@ def test_redirect_write_binds_the_unit(tmp_path: Path) -> None:
     # issue 29: a redirect target claims the unit as any other write does.
     repo, wt = _unit_repo(tmp_path / "repo")
     other = repo / ".claude" / "worktrees" / "u2"
-    assert decide(_cwd(_b("repo-coder", f"echo x > {wt}/a.txt"), repo), CFG).allow
-    d = decide(_cwd(_b("repo-coder", f"echo x > {other}/a.txt"), repo), CFG)
+    assert decide(_cwd(_b("coder", f"echo x > {wt}/a.txt"), repo), CFG).allow
+    d = decide(_cwd(_b("coder", f"echo x > {other}/a.txt"), repo), CFG)
     assert not d.allow
 
 
@@ -413,9 +413,9 @@ def test_python3_path_binds_the_unit(tmp_path: Path) -> None:
     other = repo / ".claude" / "worktrees" / "u2"
     git = ["git", "-C", str(repo), "worktree", "add", "-q", "-b", "daedalus-unit/u2", str(other)]
     subprocess.run(git, check=True)
-    assert decide(_cwd(_b("repo-coder", f"python3 {wt}/x.py"), repo), CFG).allow
-    assert evaluate(HOOK, _cwd(_b("repo-coder", f"python3 {other}/x.py"), repo)) is not None
-    assert evaluate(HOOK, _cwd(_b("repo-coder", "python3 -m pytest"), repo)) is None
+    assert decide(_cwd(_b("coder", f"python3 {wt}/x.py"), repo), CFG).allow
+    assert evaluate(HOOK, _cwd(_b("coder", f"python3 {other}/x.py"), repo)) is not None
+    assert evaluate(HOOK, _cwd(_b("coder", "python3 -m pytest"), repo)) is None
 
 
 def test_coder_cwd_inside_a_real_unit_worktree(tmp_path: Path) -> None:
@@ -423,13 +423,13 @@ def test_coder_cwd_inside_a_real_unit_worktree(tmp_path: Path) -> None:
     repo, wt = _unit_repo(tmp_path / "repo")
     (wt / "src").mkdir()
     for cwd in (wt, wt / "src"):
-        assert decide(_cwd(_w("repo-coder", f"{wt}/src/a.py"), cwd), CFG).allow, cwd
-        assert decide(_cwd(_w("repo-coder", f"{wt}/tests/t.py"), cwd), CFG).allow, cwd
-        assert not decide(_cwd(_w("repo-coder", f"{repo}/src/a.py"), cwd), CFG).allow, cwd
-        assert decide(_cwd(_w("repo-coder", f"{wt}/README.md"), cwd), CFG).allow, cwd
-        hook_input = _cwd(_w("repo-coder", f"{wt}/.claude/settings.json"), cwd)
+        assert decide(_cwd(_w("coder", f"{wt}/src/a.py"), cwd), CFG).allow, cwd
+        assert decide(_cwd(_w("coder", f"{wt}/tests/t.py"), cwd), CFG).allow, cwd
+        assert not decide(_cwd(_w("coder", f"{repo}/src/a.py"), cwd), CFG).allow, cwd
+        assert decide(_cwd(_w("coder", f"{wt}/README.md"), cwd), CFG).allow, cwd
+        hook_input = _cwd(_w("coder", f"{wt}/.claude/settings.json"), cwd)
         assert not decide(hook_input, CFG).allow, cwd
-    assert decide(_cwd(_w("repo-coder", "src/a.py"), wt), CFG).allow
+    assert decide(_cwd(_w("coder", "src/a.py"), wt), CFG).allow
 
 
 @pytest.mark.parametrize("rel", ["infra/main.tf", "infra", "Makefile", "INFRA/x.tf"])
@@ -437,12 +437,12 @@ def test_coder_manifest_forbidden_path_is_refused(tmp_path: Path, rel: str) -> N
     repo, wt = _narrowed_repo(tmp_path, json.dumps(NARROWING))
     target = f"{wt}/{rel}"
     want = f"protected path (service-manifest.json jail_narrowing): {target}. Next:"
-    d = decide(_cwd(_w("repo-coder", target), repo), CFG)
+    d = decide(_cwd(_w("coder", target), repo), CFG)
     assert not d.allow and str(d.reason).startswith(want), d.reason
-    d = decide(_cwd(_b("repo-coder", f"tee {target}"), repo), CFG)
+    d = decide(_cwd(_b("coder", f"tee {target}"), repo), CFG)
     assert not d.allow and str(d.reason).startswith(want), d.reason
-    assert decide(_cwd(_w("repo-coder", f"{wt}/infra2/x.tf"), repo), CFG).allow
-    assert decide(_cwd(_w("repo-coder", f"{wt}/Makefile.d/x"), repo), CFG).allow
+    assert decide(_cwd(_w("coder", f"{wt}/infra2/x.tf"), repo), CFG).allow
+    assert decide(_cwd(_w("coder", f"{wt}/Makefile.d/x"), repo), CFG).allow
 
 
 def test_coder_manifest_forbidden_extension_is_refused(tmp_path: Path) -> None:
@@ -450,11 +450,11 @@ def test_coder_manifest_forbidden_extension_is_refused(tmp_path: Path) -> None:
     for rel in ("keys/server.pem", "a.PEM"):
         target = f"{wt}/{rel}"
         want = f"protected extension (service-manifest.json jail_narrowing): {target}. Next:"
-        d = decide(_cwd(_w("repo-coder", target), repo), CFG)
+        d = decide(_cwd(_w("coder", target), repo), CFG)
         assert not d.allow and str(d.reason).startswith(want), d.reason
-        d = decide(_cwd(_b("repo-coder", f"cp {wt}/src/a {target}"), repo), CFG)
+        d = decide(_cwd(_b("coder", f"cp {wt}/src/a {target}"), repo), CFG)
         assert not d.allow and str(d.reason).startswith(want), d.reason
-    assert decide(_cwd(_w("repo-coder", f"{wt}/src/pem.py"), repo), CFG).allow
+    assert decide(_cwd(_w("coder", f"{wt}/src/pem.py"), repo), CFG).allow
 
 
 @pytest.mark.parametrize(
@@ -469,13 +469,13 @@ def test_coder_manifest_forbidden_extension_is_refused(tmp_path: Path) -> None:
 def test_coder_manifest_error_fails_closed(tmp_path: Path, manifest: str) -> None:
     repo, wt = _narrowed_repo(tmp_path, manifest)
     for hook_input in (
-        _w("repo-coder", f"{wt}/src/a.py"),
-        _b("repo-coder", f"tee {wt}/src/a.py"),
+        _w("coder", f"{wt}/src/a.py"),
+        _b("coder", f"tee {wt}/src/a.py"),
     ):
         d = decide(_cwd(hook_input, repo), CFG)
         reason = str(d.reason)
         assert not d.allow and "coder writes fail closed" in reason and "Next:" in reason
-    assert decide(_cwd(_b("repo-coder", "pytest -q"), repo), CFG).allow
+    assert decide(_cwd(_b("coder", "pytest -q"), repo), CFG).allow
 
 
 @pytest.mark.parametrize(
@@ -495,7 +495,7 @@ def test_coder_manifest_error_fails_closed(tmp_path: Path, manifest: str) -> Non
 )
 def test_coder_bare_and_owner_operands_are_paths(command: str) -> None:
     # 0022: every non-option operand of a coder write command is a path, no heuristic.
-    assert not decide(_b("repo-coder", command), CFG).allow, command
+    assert not decide(_b("coder", command), CFG).allow, command
 
 
 @pytest.mark.parametrize(
@@ -513,7 +513,7 @@ def test_coder_bare_and_owner_operands_are_paths(command: str) -> None:
     ],
 )
 def test_coder_unit_worktree_operands_allowed(command: str) -> None:
-    assert decide(_b("repo-coder", command), CFG).allow, command
+    assert decide(_b("coder", command), CFG).allow, command
 
 
 @pytest.mark.parametrize(
@@ -530,7 +530,7 @@ def test_coder_unit_worktree_operands_allowed(command: str) -> None:
 )
 def test_coder_add_and_commit_outside_unit_worktree_refused(command: str) -> None:
     # 0022: staging or committing in the main checkout lands on the main branch.
-    assert not decide(_b("repo-coder", command), CFG).allow, command
+    assert not decide(_b("coder", command), CFG).allow, command
 
 
 @pytest.mark.parametrize(
@@ -543,14 +543,14 @@ def test_coder_add_and_commit_outside_unit_worktree_refused(command: str) -> Non
     ],
 )
 def test_coder_add_and_commit_in_unit_worktree_allowed(command: str) -> None:
-    assert decide(_b("repo-coder", command), CFG).allow, command
+    assert decide(_b("coder", command), CFG).allow, command
 
 
 def test_coder_add_and_commit_with_cwd_in_real_unit_worktree(tmp_path: Path) -> None:
     repo, wt = _unit_repo(tmp_path / "repo")
-    assert decide(_cwd(_b("repo-coder", "git add -A"), wt), CFG).allow
-    assert decide(_cwd(_b("repo-coder", "git commit -m x"), wt), CFG).allow
-    assert not decide(_cwd(_b("repo-coder", "git add -A"), repo), CFG).allow
+    assert decide(_cwd(_b("coder", "git add -A"), wt), CFG).allow
+    assert decide(_cwd(_b("coder", "git commit -m x"), wt), CFG).allow
+    assert not decide(_cwd(_b("coder", "git add -A"), repo), CFG).allow
 
 
 @pytest.mark.parametrize(
@@ -572,7 +572,7 @@ def test_coder_add_and_commit_with_cwd_in_real_unit_worktree(tmp_path: Path) -> 
 )
 def test_coder_attached_targets_and_remote_rsync_refused(command: str) -> None:
     # 0022: an attached -t<dir> is a write target; host:path is a remote rsync operand.
-    assert not decide(_b("repo-coder", command), CFG).allow, command
+    assert not decide(_b("coder", command), CFG).allow, command
 
 
 @pytest.mark.parametrize(
@@ -592,7 +592,7 @@ def test_coder_attached_targets_and_remote_rsync_refused(command: str) -> None:
     ],
 )
 def test_coder_value_options_skipped_as_non_paths(command: str) -> None:
-    assert decide(_b("repo-coder", command), CFG).allow, command
+    assert decide(_b("coder", command), CFG).allow, command
 
 
 @pytest.mark.parametrize(
@@ -606,24 +606,24 @@ def test_coder_value_options_skipped_as_non_paths(command: str) -> None:
     ],
 )
 def test_issue30_coder_temp_dir_and_backup_suffix_are_write_targets(command: str) -> None:
-    assert not decide(_b("repo-coder", command), CFG).allow, command
+    assert not decide(_b("coder", command), CFG).allow, command
 
 
 def test_issue30_coder_plain_backup_suffix_passes() -> None:
     command = f"cp -b --suffix=.orig {WT}/src/a.py {WT}/src/b.py"
-    assert decide(_b("repo-coder", command), CFG).allow
+    assert decide(_b("coder", command), CFG).allow
 
 
 def test_unit_writes_judges_the_hook_alone() -> None:
     # 0054: the worktree minus protected paths; there is no src/tests allow-list.
-    assert evaluate(HOOK, _w("repo-coder", f"{WT}/infra/main.tf")) is None
-    outside = evaluate(HOOK, _w("repo-coder", f"{CWD}/src/a.py"))
+    assert evaluate(HOOK, _w("coder", f"{WT}/infra/main.tf")) is None
+    outside = evaluate(HOOK, _w("coder", f"{CWD}/src/a.py"))
     assert outside == jail.R_UNIT_OUTSIDE.format(f"{CWD}/src/a.py")
-    protected = evaluate(HOOK, _w("repo-coder", f"{WT}/contracts/x.yaml"))
+    protected = evaluate(HOOK, _w("coder", f"{WT}/contracts/x.yaml"))
     assert protected == jail.R_PROTECTED_BUILTIN.format(f"{WT}/contracts/x.yaml")
-    assert evaluate(HOOK, _b("repo-coder", "pytest --basetemp=x")) == jail.R_BASETEMP
-    assert evaluate(HOOK, _b("repo-coder", "git commit -m x")) == jail.R_CODER_UNIT_GIT
-    assert evaluate(HOOK, _b("repo-coder", "git push origin x")) is None
+    assert evaluate(HOOK, _b("coder", "pytest --basetemp=x")) == jail.R_BASETEMP
+    assert evaluate(HOOK, _b("coder", "git commit -m x")) == jail.R_CODER_UNIT_GIT
+    assert evaluate(HOOK, _b("coder", "git push origin x")) is None
 
 
 def test_unit_writes_fixture_decisions(tmp_path: Path) -> None:
@@ -657,7 +657,7 @@ AUDIT_DIR = f"{CWD}/docs/.tmp/daedalus/20261015-120000/audit/round1"
 )
 def test_coder_reads_and_runs_the_audit_tests(command: str) -> None:
     # spec 3.2, 0109: a fix coder runs the auditor's tests from its worktree.
-    d = decide(_b("repo-coder", command), CFG)
+    d = decide(_b("coder", command), CFG)
     assert d.allow, (command, d.reason)
 
 
@@ -665,13 +665,13 @@ def test_coder_never_writes_the_audit_tests() -> None:
     # spec 3.2: readable and runnable, never writable, by a coder.
     target = f"{AUDIT_DIR}/test_scope_x.py"
     for tool in ("Write", "Edit"):
-        assert evaluate(HOOK, _w("repo-coder", target, tool)) == jail.R_UNIT_OUTSIDE.format(target)
+        assert evaluate(HOOK, _w("coder", target, tool)) == jail.R_UNIT_OUTSIDE.format(target)
     for command in (f"tee {target}", f"cp {WT}/a.py {target}", f"rm {target}"):
-        assert not decide(_b("repo-coder", command), CFG).allow, command
+        assert not decide(_b("coder", command), CFG).allow, command
 
 
 def test_coder_basetemp_refusal_names_the_flag_the_agent_and_the_next_action() -> None:
     # issue 56: the named reason, not a fixed one; the same text the read-only grammar gives.
-    reason = evaluate(HOOK, _b("repo-coder", f"cd {WT} && python3 -m pytest -q --basetemp=/tmp/x"))
-    assert reason == jail.R_BASETEMP == jail.R_BASETEMP_AGENT.format(agent="repo-coder")
-    assert "--basetemp" in reason and "repo-coder" in reason and "Next: drop --basetemp" in reason
+    reason = evaluate(HOOK, _b("coder", f"cd {WT} && python3 -m pytest -q --basetemp=/tmp/x"))
+    assert reason == jail.R_BASETEMP == jail.R_BASETEMP_AGENT.format(agent="coder")
+    assert "--basetemp" in reason and "coder" in reason and "Next: drop --basetemp" in reason

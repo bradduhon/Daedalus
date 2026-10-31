@@ -19,7 +19,7 @@ from tests.payloads import _b
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "gh_classes"
-C = "pr-train-conductor"
+C = "releaser"
 
 
 class TestRegressionConductor:
@@ -50,7 +50,7 @@ class TestRegressionConductor:
         ],
     )
     def test_blocked(self, command: str) -> None:
-        assert not decide(_b("pr-train-conductor", command), CFG).allow, command
+        assert not decide(_b("releaser", command), CFG).allow, command
 
     def test_allowed(self) -> None:
         for command in (
@@ -59,11 +59,11 @@ class TestRegressionConductor:
             "gh run view 1",
             "gh pr list --repo o/r",
         ):
-            assert decide(_b("pr-train-conductor", command), CFG).allow, command
+            assert decide(_b("releaser", command), CFG).allow, command
 
 
 class TestFinalConductorGh:
-    C = "pr-train-conductor"
+    C = "releaser"
 
     @pytest.mark.parametrize(
         "command",
@@ -100,7 +100,7 @@ class TestFinalConductorGh:
 
 
 class TestFixWaveConductorGh:
-    C = "pr-train-conductor"
+    C = "releaser"
 
     @pytest.mark.parametrize(
         "command",
@@ -177,7 +177,7 @@ class TestFixWaveConductorGh:
         assert not d.allow and "only from --body-file" in str(d.reason), command
 
 
-@pytest.mark.parametrize("agent", [C, "repo-coder", "security-auditor"])
+@pytest.mark.parametrize("agent", [C, "coder", "auditor"])
 @pytest.mark.parametrize(
     "command",
     [
@@ -206,7 +206,7 @@ def test_gh_classes_judges_the_hook_alone() -> None:
     assert repo == jail.R_CONDUCTOR_REPO
     assert evaluate(HOOK, _b(C, "gh pr create --title x"), "--conductor") == jail.R_BODY_INLINE
     assert evaluate(HOOK, _b(C, "gh pr create --title x")) is None
-    assert "not on the repo-coder gh list" in str(evaluate(HOOK, _b("repo-coder", "gh pr view 1")))
+    assert "not on the coder gh list" in str(evaluate(HOOK, _b("coder", "gh pr view 1")))
 
 
 def test_charter_docs_ledger_value_naming_git_push_is_refused_by_gh_classes() -> None:

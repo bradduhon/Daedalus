@@ -11,7 +11,7 @@ from lib import train_state, workspace
 from lib.audit import project_root
 from lib.audit_proof import exemption_problem, integration_tip, tip_admits
 
-CONDUCTOR = "pr-train-conductor"
+CONDUCTOR = "releaser"
 # 0028: the allowed list intersected with the conductor's set; K1: pr edit changes the body only.
 CONDUCTOR_GH = frozenset(
     {("pr", "create"), ("pr", "edit"), ("pr", "view"), ("pr", "list"), ("pr", "checks")}

@@ -117,7 +117,7 @@ REMOTE_GIT = (
     frozenset({"push", "remote", "fetch", "pull", "clone", "ls-remote", "submodule"})
     | GIT_PLUMBING_REMOTE
 )
-# Final review I3b, issue 75: commands whose operands are write targets for repo-coder.
+# Final review I3b, issue 75: commands whose operands are write targets for the coder.
 CODER_WRITE_CMDS = frozenset(
     {"cp", "mv", "tee", "install", "ln", "truncate", "rsync", "dd"}
     | {"mkdir", "touch", "rm", "rmdir", "unlink", "chmod", "chown", "chgrp"}
@@ -169,7 +169,7 @@ R_NO_CWD = "hook received no absolute cwd; failing closed. Next: report to the o
 R_TOOL = "workers use only their allowlisted tools. Next: ask the orchestrating session."
 R_DOTGIT = "writes into .git/ are never permitted. Next: change the repository through git."
 R_CODER_UNIT_GIT = (
-    "repo-coder git add and commit run only inside your unit worktree. "
+    "coder git add and commit run only inside your unit worktree. "
     "Next: use git -C <your unit worktree> add/commit."
 )
 # 0054: a coder's protected paths, relative to its unit worktree root.
@@ -211,7 +211,7 @@ R_CONDUCTOR_CHARTER = (
     "daedalus/<train-id>`."
 )
 R_CODER_GIT = (
-    "repo-coder git is limited to add, commit, status, diff (--check included), log (-S and -G "
+    "coder git is limited to add, commit, status, diff (--check included), log (-S and -G "
     "included), show, grep, blame, merge-base, rev-parse, ls-files, "
     "branch listing, stash list/push/pop/show, "
     "restore/checkout -- <unit worktree paths>, "
@@ -272,7 +272,7 @@ R_BASETEMP_AGENT = (
     "pytest --basetemp is refused for {agent}: the temp folder it names lies outside the "
     "write checks (issue 56). Next: drop --basetemp and rerun; pytest's default temp folder works."
 )
-R_BASETEMP = R_BASETEMP_AGENT.format(agent="repo-coder")
+R_BASETEMP = R_BASETEMP_AGENT.format(agent="coder")
 R_CONTRACT_SPEC_WRITE = (
     "contract-spec may write only contracts/ or the charter specs/ directory. "
     "Next: put schema changes there."

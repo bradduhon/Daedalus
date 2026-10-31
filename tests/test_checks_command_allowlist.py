@@ -69,9 +69,9 @@ class TestConductor:
             "gh pr create && gh pr merge 1",
         ]
         for command in ok:
-            assert decide(_b("pr-train-conductor", command), CFG).allow, command
+            assert decide(_b("releaser", command), CFG).allow, command
         for command in bad:
-            assert not decide(_b("pr-train-conductor", command), CFG).allow, command
+            assert not decide(_b("releaser", command), CFG).allow, command
 
 
 class TestRegressionCharterDocs:
@@ -162,7 +162,7 @@ class TestRegressionCharterDocs:
 
 class TestRound3SortPytestGitleaks:
     def test_gitleaks_report_path(self) -> None:
-        conductor = "pr-train-conductor"
+        conductor = "releaser"
         for form in ("--report-path=/tmp/r.json", "--report-path /tmp/r.json"):
             assert decide(_b(conductor, f"gitleaks detect --redact {form}"), CFG).allow
         for command in (
@@ -187,7 +187,7 @@ class TestRound4Conductor:
         ],
     )
     def test_blocked(self, command: str) -> None:
-        assert not decide(_b("pr-train-conductor", command), CFG).allow, command
+        assert not decide(_b("releaser", command), CFG).allow, command
 
     @pytest.mark.parametrize(
         "command",
@@ -200,7 +200,7 @@ class TestRound4Conductor:
         ],
     )
     def test_allowed(self, command: str) -> None:
-        assert decide(_b("pr-train-conductor", command), CFG).allow, command
+        assert decide(_b("releaser", command), CFG).allow, command
 
 
 class TestFixWaveLedgerResolution:
@@ -214,7 +214,7 @@ class TestFixWaveLedgerResolution:
 
 
 class TestFixWaveGitleaksRedact:
-    C = "pr-train-conductor"
+    C = "releaser"
 
     @pytest.mark.parametrize(
         "command",
@@ -316,11 +316,11 @@ def test_command_allowlist_judges_the_hook_alone() -> None:
 
 def test_command_allowlist_fixture_decisions() -> None:
     mover = ("--allow", "git,gh,gitleaks")
-    ls = payload("Bash", agent="pr-train-conductor", command="ls")
+    ls = payload("Bash", agent="releaser", command="ls")
     assert run_script(HOOK, ls, *mover) == {"decision": "deny", "reason": jail.R_CONDUCTOR_BASH}
-    ok = payload("Bash", agent="pr-train-conductor", command="git status && gh run list")
+    ok = payload("Bash", agent="releaser", command="git status && gh run list")
     assert run_script(HOOK, ok, *mover) == {"decision": "allow", "reason": ""}
-    leak = payload("Bash", agent="pr-train-conductor", command="gitleaks detect")
+    leak = payload("Bash", agent="releaser", command="gitleaks detect")
     assert run_script(HOOK, leak, *mover) == {"decision": "deny", "reason": jail.R_GITLEAKS}
 
 
@@ -500,7 +500,7 @@ ORCHESTRATOR_OK = [
     f"python3 {SCRIPTS}/daedalus_workspace.py lock --repo {CWD} --contract c.md --version 1",
     f"python3 {SCRIPTS}/daedalus_workspace.py finish --repo {CWD}",
     f"python3 {SCRIPTS}/daedalus_workspace.py refresh --repo {CWD} --name t-audit",
-    f"python3 {SCRIPTS}/daedalus_train.py model --repo {CWD} --agent repo-coder",
+    f"python3 {SCRIPTS}/daedalus_train.py model --repo {CWD} --agent coder",
     f"python3 {SCRIPTS}/daedalus_doctor.py --print-cache-dir",
     f"python3 {SCRIPTS}/audit_report.py --repo {CWD} --session s --controls",
     f"python3 {SCRIPTS}/validate_plan.py {CWD}/docs/.tmp/daedalus/t/plan.md --max-concurrent 5",
@@ -560,7 +560,7 @@ def test_shell_exemption_is_the_orchestrators_alone() -> None:
     # pin B6 -> B4: the R_INLINE exemption names the orchestrator; no other agent runs these.
     command = f"python3 {SCRIPTS}/daedalus_train.py progress --repo {CWD}"
     assert evaluate("shell_tripwires", _b("orchestrator", command)) is None
-    for agent in ("repo-coder", "security-auditor", "pr-train-conductor", "charter-docs"):
+    for agent in ("coder", "auditor", "releaser", "charter-docs"):
         assert evaluate("shell_tripwires", _b(agent, command)) is not None, agent
 
 
@@ -575,7 +575,7 @@ def test_refresh_is_the_orchestrators() -> None:
     assert "refresh" in load(HOOK).TRAIN_SCRIPTS["daedalus_workspace.py"]
     assert "model" in load(HOOK).TRAIN_SCRIPTS["daedalus_train.py"]
     assert "refresh" in load(HOOK).R_ORCHESTRATOR_BASH
-    for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+    for agent in ("coder", "auditor", "charter-docs", "releaser"):
         assert not decide(_b(agent, command), CFG).allow, agent
 
 
@@ -651,7 +651,7 @@ def test_ledger_is_the_orchestrators_and_reaudit_and_resume_stay_main() -> None:
     other = LEDGER.replace(f"--repo {CWD}", "--repo /work/other")
     reason = evaluate(HOOK, _b("orchestrator", other), *TRAIN_FLAGS)
     assert reason == module.R_TRAIN_REPO.format(flag="--repo", given="/work/other", root=CWD)
-    for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+    for agent in ("coder", "auditor", "charter-docs", "releaser"):
         assert not decide(_b(agent, LEDGER), CFG).allow, agent
 
 
@@ -664,7 +664,7 @@ def test_contract_is_the_orchestrators_train_subcommand() -> None:
         f"python3 {SCRIPTS}/daedalus_workspace.py lock --repo {CWD} --no-contract",
     ):
         assert decide(_b("orchestrator", command), CFG).allow, command
-        for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+        for agent in ("coder", "auditor", "charter-docs", "releaser"):
             assert not decide(_b(agent, command), CFG).allow, (agent, command)
     other = f"python3 {SCRIPTS}/daedalus_train.py contract --repo /work/other"
     reason = evaluate(HOOK, _b("orchestrator", other), *TRAIN_FLAGS)
@@ -678,7 +678,7 @@ def test_brief_check_is_the_orchestrators_train_subcommand() -> None:
     brief = f"{CWD}/docs/.tmp/daedalus/t/decisions/1.md"
     command = f"python3 {SCRIPTS}/daedalus_train.py brief-check --repo {CWD} --brief {brief}"
     assert decide(_b("orchestrator", command), CFG).allow
-    for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+    for agent in ("coder", "auditor", "charter-docs", "releaser"):
         assert not decide(_b(agent, command), CFG).allow, agent
     other = command.replace(f"--repo {CWD}", "--repo /work/other")
     reason = evaluate(HOOK, _b("orchestrator", other), *TRAIN_FLAGS)
@@ -691,7 +691,7 @@ def test_packs_is_the_orchestrators_train_subcommand() -> None:
     assert "packs" in module.TRAIN_SCRIPTS["daedalus_train.py"]
     command = f"python3 {SCRIPTS}/daedalus_train.py packs --repo {CWD}"
     assert decide(_b("orchestrator", command), CFG).allow
-    for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+    for agent in ("coder", "auditor", "charter-docs", "releaser"):
         assert not decide(_b(agent, command), CFG).allow, agent
 
 
@@ -914,7 +914,7 @@ def test_symlinked_map_folder_is_refused(tmp_path: Path) -> None:
 
 def test_map_and_sources_stay_out_of_other_agents() -> None:
     commands = [MAP_TRAIN_OK[0], MAP_TRAIN_OK[-1], MAP_TRAIN_OK[3]]
-    for agent in ("repo-coder", "security-auditor", "charter-docs", "pr-train-conductor"):
+    for agent in ("coder", "auditor", "charter-docs", "releaser"):
         for command in commands:
             assert not decide(_b(agent, command), CFG).allow, (agent, command)
 

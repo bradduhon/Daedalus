@@ -30,7 +30,7 @@ GOOD = "\n".join(
         "Context: The write test put a row in the wrong file. The fix should keep rows in one "
         "place.",
         "Options:",
-        f"- Fix it now (Recommended): runs a fix round (0133, {ISSUE}, security-auditor).",
+        f"- Fix it now (Recommended): runs a fix round (0133, {ISSUE}, auditor).",
         "- Skip, track or exempt it: exempts the finding (snake_case_ok in the description).",
         "- Stop the run: ends the run.",
     ]
@@ -100,7 +100,7 @@ def test_profile_and_unknown_levels_judge_as_plain() -> None:
         ("Is the verifier's table right?", "Question carries the agent name verifier's"),
         ("Was the planner’s cut right?", "Question carries the agent name planner’s"),
         ("Should daedalus:verifier run?", "Question carries the agent name daedalus:verifier"),
-        ("Is the repo-coder's branch done?", "Question carries the agent name repo-coder's"),
+        ("Is the coder's branch done?", "Question carries the agent name coder's"),
         ("Is it planner-written?", "Question carries the agent name planner-written"),
     ],
 )

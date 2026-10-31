@@ -45,21 +45,21 @@ class TestRound3Breakage:
             f"git -C {WT} commit -m 'cost: $5'",
             f"git -C {WT} commit -m 'fix curl handling'",
         ):
-            assert decide(_b("repo-coder", command), CFG).allow, command
+            assert decide(_b("coder", command), CFG).allow, command
 
 
 class TestRound3WorkerGitGrammar:
     @pytest.mark.parametrize(
         ("agent", "command"),
         [
-            ("security-auditor", "git log --output=x"),
-            ("security-auditor", "git diff --ext-diff"),
-            ("security-auditor", "git log --format=%H --output=y"),
-            ("security-auditor", "git show --textconv HEAD"),
-            ("security-auditor", "git status --ignored"),
-            ("security-auditor", "git ls-files --others"),
-            ("security-auditor", "git rev-parse --git-path x"),
-            ("security-auditor", "git grep --open-files-in-pager x"),
+            ("auditor", "git log --output=x"),
+            ("auditor", "git diff --ext-diff"),
+            ("auditor", "git log --format=%H --output=y"),
+            ("auditor", "git show --textconv HEAD"),
+            ("auditor", "git status --ignored"),
+            ("auditor", "git ls-files --others"),
+            ("auditor", "git rev-parse --git-path x"),
+            ("auditor", "git grep --open-files-in-pager x"),
             ("framework-specialist", "git log --exec x"),
             # Round 4: `git commit -am x` flipped to allowed by ruling (see TestRound4Breakage).
             ("charter-docs", "git commit -F /etc/passwd"),
@@ -69,9 +69,9 @@ class TestRound3WorkerGitGrammar:
             ("charter-docs", "git add --force x"),
             ("charter-docs", "git -C /other/repo status"),
             ("charter-docs", "git --git-dir=/x status"),
-            ("pr-train-conductor", "git commit --amend"),
-            ("pr-train-conductor", "git branch -D x"),
-            ("pr-train-conductor", "git rebase main"),
+            ("releaser", "git commit --amend"),
+            ("releaser", "git branch -D x"),
+            ("releaser", "git rebase main"),
         ],
     )
     def test_blocked(self, agent: str, command: str) -> None:
@@ -80,12 +80,12 @@ class TestRound3WorkerGitGrammar:
     @pytest.mark.parametrize(
         ("agent", "command"),
         [
-            ("security-auditor", "git log -n 5 --stat"),
-            ("security-auditor", "git diff -U3 --cached -- src"),
-            ("security-auditor", "git show --format=%H --name-only HEAD"),
-            ("security-auditor", "git rev-parse --abbrev-ref HEAD"),
-            ("security-auditor", "git ls-files -z"),
-            ("security-auditor", "git status --porcelain"),
+            ("auditor", "git log -n 5 --stat"),
+            ("auditor", "git diff -U3 --cached -- src"),
+            ("auditor", "git show --format=%H --name-only HEAD"),
+            ("auditor", "git rev-parse --abbrev-ref HEAD"),
+            ("auditor", "git ls-files -z"),
+            ("auditor", "git status --porcelain"),
             ("charter-docs", "git commit -m x"),
             ("charter-docs", "git -C /work/Charter add decision-log.md"),
             ("charter-docs", "git -C /work/Charter status"),
@@ -98,33 +98,33 @@ class TestRound3WorkerGitGrammar:
 
 
 class TestRound3WorkerHygiene:
-    def test_git_config_read_only_for_repo_coder(self) -> None:
-        assert decide(_b("repo-coder", "git config --get user.name"), CFG).allow
-        assert decide(_b("repo-coder", "git config --list"), CFG).allow
+    def test_git_config_read_only_for_coder(self) -> None:
+        assert decide(_b("coder", "git config --get user.name"), CFG).allow
+        assert decide(_b("coder", "git config --list"), CFG).allow
         for command in (
             "git config core.hooksPath x",
             "git config --global x y",
             "git config --get-all x --add y",
             "git config --unset x",
         ):
-            assert not decide(_b("repo-coder", command), CFG).allow, command
+            assert not decide(_b("coder", command), CFG).allow, command
 
 
 class TestRound4Breakage:
     @pytest.mark.parametrize(
         ("agent", "command"),
         [
-            ("security-auditor", "git log -n5"),
-            ("security-auditor", "git log --grep=fix --no-merges --all"),
-            ("security-auditor", "git log -S needle --oneline"),
-            ("security-auditor", "git log -G pattern"),
-            ("security-auditor", "git log --author=brad"),
-            ("security-auditor", "git diff --word-diff --color=never"),
+            ("auditor", "git log -n5"),
+            ("auditor", "git log --grep=fix --no-merges --all"),
+            ("auditor", "git log -S needle --oneline"),
+            ("auditor", "git log -G pattern"),
+            ("auditor", "git log --author=brad"),
+            ("auditor", "git diff --word-diff --color=never"),
             ("framework-specialist", "git log -n5 --all"),
             ("charter-docs", "git diff --cached"),
             ("charter-docs", "git log --oneline -3"),
             ("charter-docs", "git status --porcelain"),
-            ("repo-coder", "CI=1 npm test"),
+            ("coder", "CI=1 npm test"),
         ],
     )
     def test_allowed(self, agent: str, command: str) -> None:
@@ -133,10 +133,10 @@ class TestRound4Breakage:
     @pytest.mark.parametrize(
         ("agent", "command"),
         [
-            ("repo-coder", "PATH=/tmp npm test"),
-            ("security-auditor", "GIT_CONFIG_PARAMETERS=x git log"),
-            ("security-auditor", "git log --output=x"),
-            ("security-auditor", "git diff --color=always"),
+            ("coder", "PATH=/tmp npm test"),
+            ("auditor", "GIT_CONFIG_PARAMETERS=x git log"),
+            ("auditor", "git log --output=x"),
+            ("auditor", "git diff --color=always"),
             ("charter-docs", "git commit --amend -am x"),
             ("charter-docs", "git commit -m x -S"),
         ],
@@ -171,7 +171,7 @@ class TestFinalCoderGitAllowlist:
         ],
     )
     def test_blocked(self, command: str) -> None:
-        d = decide(_b("repo-coder", command), CFG)
+        d = decide(_b("coder", command), CFG)
         assert not d.allow and "Next:" in d.reason, command
 
     @pytest.mark.parametrize(
@@ -195,7 +195,7 @@ class TestFinalCoderGitAllowlist:
         ],
     )
     def test_allowed(self, command: str) -> None:
-        assert decide(_b("repo-coder", command), CFG).allow, command
+        assert decide(_b("coder", command), CFG).allow, command
 
 
 class TestLiveRunGrammar:
@@ -216,8 +216,8 @@ class TestLiveRunGrammar:
     )
     def test_status_read_forms_allowed(self, command: str) -> None:
         # F3b: read-only status flags, alone or bundled.
-        assert decide(_b("repo-coder", command), CFG).allow, command
-        assert decide(_b("pr-train-conductor", command), CFG).allow, command
+        assert decide(_b("coder", command), CFG).allow, command
+        assert decide(_b("releaser", command), CFG).allow, command
 
     @pytest.mark.parametrize(
         "command",
@@ -232,7 +232,7 @@ class TestLiveRunGrammar:
         ],
     )
     def test_status_writes_and_unknown_flags_blocked(self, command: str) -> None:
-        d = decide(_b("repo-coder", command), CFG)
+        d = decide(_b("coder", command), CFG)
         assert not d.allow and "Next:" in d.reason, command
 
     @pytest.mark.parametrize(
@@ -247,19 +247,19 @@ class TestLiveRunGrammar:
         ],
     )
     def test_conductor_read_commands_allowed(self, command: str) -> None:
-        # N9: the git reads agents/pr-train-conductor.md lists.
-        assert decide(_b("pr-train-conductor", command), CFG).allow, command
+        # N9: the git reads agents/releaser.md lists.
+        assert decide(_b("releaser", command), CFG).allow, command
 
     @pytest.mark.parametrize(
         "command",
         ["git remote -v", "git remote get-url origin", "git branch -vv", "git rev-parse @{u}"],
     )
     def test_conductor_remote_reads_blocked(self, command: str) -> None:
-        assert not decide(_b("pr-train-conductor", command), CFG).allow, command
+        assert not decide(_b("releaser", command), CFG).allow, command
 
     def test_conductor_block_message_matches_its_git_grammar(self) -> None:
         # N9: the message lists exactly CONDUCTOR_GIT.
-        d = decide(_b("pr-train-conductor", "git remote -v"), CFG)
+        d = decide(_b("releaser", "git remote -v"), CFG)
         assert d.reason is not None
         listed = d.reason.split("limited to git ", 1)[1].split(",", 1)[0]
         assert set(listed.split("/")) == CONDUCTOR_GIT
@@ -275,12 +275,12 @@ class TestFixWaveCharterDocsBash:
 
 def test_coder_pathspec_resolves_against_git_dash_c() -> None:
     # 0022: a relative pathspec names a path under the -C directory, else under cwd.
-    assert decide(_b("repo-coder", f"git -C {WT} restore -- src/a.py"), CFG).allow
-    assert decide(_b("repo-coder", f"git -C {WT} checkout -- tests/test_a.py"), CFG).allow
-    assert not decide(_b("repo-coder", f"git -C {CWD} restore -- src/a.py"), CFG).allow
-    assert not decide(_b("repo-coder", f"git -C {WT} restore -- ../../../src/a.py"), CFG).allow
-    assert decide(_b("repo-coder", f"git -C {WT} restore -- README.md"), CFG).allow
-    assert decide(_b("repo-coder", f"git restore -- {WT}/src/a.py"), CFG).allow
+    assert decide(_b("coder", f"git -C {WT} restore -- src/a.py"), CFG).allow
+    assert decide(_b("coder", f"git -C {WT} checkout -- tests/test_a.py"), CFG).allow
+    assert not decide(_b("coder", f"git -C {CWD} restore -- src/a.py"), CFG).allow
+    assert not decide(_b("coder", f"git -C {WT} restore -- ../../../src/a.py"), CFG).allow
+    assert decide(_b("coder", f"git -C {WT} restore -- README.md"), CFG).allow
+    assert decide(_b("coder", f"git restore -- {WT}/src/a.py"), CFG).allow
 
 
 @pytest.mark.parametrize(
@@ -296,20 +296,20 @@ def test_coder_pathspec_resolves_against_git_dash_c() -> None:
 )
 def test_coder_pathspec_magic_is_refused(command: str) -> None:
     # 0022: :/ and :(top) are worktree-top relative; the jail cannot resolve them lexically.
-    assert not decide(_b("repo-coder", command), CFG).allow, command
+    assert not decide(_b("coder", command), CFG).allow, command
 
 
 def test_coder_plain_git_status_in_unit_worktree_allowed() -> None:
-    assert decide(_b("repo-coder", f"git -C {WT} status"), CFG).allow
+    assert decide(_b("coder", f"git -C {WT} status"), CFG).allow
 
 
 def test_git_grammar_judges_the_hook_alone() -> None:
     coder = ("--allow", "coder")
-    assert evaluate(HOOK, _b("repo-coder", "git merge x"), *coder) == jail.R_CODER_GIT
-    assert evaluate(HOOK, _b("repo-coder", "git status && ls -la"), *coder) is None
+    assert evaluate(HOOK, _b("coder", "git merge x"), *coder) == jail.R_CODER_GIT
+    assert evaluate(HOOK, _b("coder", "git status && ls -la"), *coder) is None
     assert evaluate(HOOK, _b("charter-docs", "git add -A"), "--allow", "docs") == jail.R_DOCS_BASH
     conductor = ("--allow", "conductor")
-    assert evaluate(HOOK, _b("pr-train-conductor", "git push origin x"), *conductor) is None
+    assert evaluate(HOOK, _b("releaser", "git push origin x"), *conductor) is None
     assert evaluate(HOOK, _b("x", "git fetch"), *conductor) == jail.R_CONDUCTOR_BASH
     assert evaluate(HOOK, _b("x", "git add x"), "--allow", "read-only") == jail.R_AUDITOR_BASH
     assert evaluate(HOOK, _b("x", "git branch"), "--allow", "specialist") == jail.R_SPECIALIST_BASH
@@ -330,7 +330,7 @@ def test_git_grammar_internal_error_denies_and_names_the_hook() -> None:
     internal_error_denies(HOOK, payload("Bash", command="git status"), "--allow", "coder")
 
 
-C = "pr-train-conductor"
+C = "releaser"
 SLUG = "acme/charter"
 CHARTER_BODY = f"--body-file {CWD}/docs/.tmp/daedalus/20261015-120000-charter-pr.md"
 
@@ -536,7 +536,7 @@ def test_conductor_commit_other_forms_keep_the_grammar_text(command: str) -> Non
 )
 def test_coder_commit_grammar_is_unchanged(command: str) -> None:
     # issue 2 is the conductor's grammar only; the coder still commits its worktree with -a.
-    assert evaluate(HOOK, _b("repo-coder", command), "--allow", "coder") is None, command
+    assert evaluate(HOOK, _b("coder", command), "--allow", "coder") is None, command
 
 
 def test_conductor_commit_all_fixture_decisions() -> None:

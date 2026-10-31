@@ -22,16 +22,16 @@ FLAGS: dict[str, hook_io.Flag] = {"--docs": hook_io.Flag()}
 PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
 Boundary = Callable[[], jail.CoderBoundary | str]
 R_DOCS_ONLY = (
-    "the docs-writer writes only the four public docs ({docs}) inside the train's docs worktree "
+    "the writer writes only the four public docs ({docs}) inside the train's docs worktree "
     "{name}; {path} is not one of them (0134). Next: edit only those four files in the docs "
     "worktree."
 )
 R_DOCS_GIT = (
-    "the docs-writer's git writes are add and commit in the docs worktree; git {sub} is refused "
+    "the writer's git writes are add and commit in the docs worktree; git {sub} is refused "
     "(0134). Next: stage the edited docs with git -C <docs worktree> add, then commit."
 )
 R_DOCS_COMMIT = (
-    "the docs-writer commits only what it staged, as git commit -m <message>; {command} is "
+    "the writer commits only what it staged, as git commit -m <message>; {command} is "
     "refused, since -a, --all or a pathspec commits files it never staged (0134). Next: stage "
     "each doc with git -C <docs worktree> add <path>, then run git -C <docs worktree> commit -m "
     "<message>."

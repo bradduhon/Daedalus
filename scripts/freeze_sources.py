@@ -222,13 +222,13 @@ def _shape(specs: list[tuple[str, str, Path, tuple[str, ...]]], baselines_only: 
     if baselines_only and baselines != 2:
         raise SourcesError(
             f"--baselines-only needs exactly two baseline sources (got {baselines}). "
-            "Next: name the two baselines the change logger diffs.",
+            "Next: name the two baselines the comparer diffs.",
             EXIT_SHAPE,
         )
     if not baselines_only and baselines > 1:
         raise SourcesError(
             "more than one source carries role baseline. Next: keep one baseline, or pass "
-            "--baselines-only when no deriver runs and the change logger diffs two.",
+            "--baselines-only when no deriver runs and the comparer diffs two.",
             EXIT_SHAPE,
         )
     for alias, role, _, topics in specs:

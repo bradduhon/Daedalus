@@ -27,7 +27,7 @@ Every file and setting daedalus reads, with the smallest example that works. `/d
   "operator_signing_keys": [],
   "max_concurrent_builders": 5,
   "audit_retention_days": null,
-  "agent_models": { "repo-coder": "sonnet", "security-auditor": "opus" }
+  "agent_models": { "coder": "sonnet", "auditor": "opus" }
 }
 ```
 
@@ -37,7 +37,7 @@ Every key in this file is a row of the generated key reference in the plugin [RE
 - `standing_rules`: the file `scripts/standing_rules.py` writes from the ledger (see the standing-rules backfill file below). The plan and brainstorm skills hand its path to the planner. The doctor prints `OK` when the file exists, `OPT` when the key is absent, and `MISS` when the key names no file.
 - `standards_sources`: with none declared, the Standards Packet is empty, the auditor judges against the spec only, and the doctor offers the baseline pack on an `OPT` line.
 - `audit_retention_days`: a whole number of at least 90 (AU-11). When a new session writes its first record, each older log is deleted under its own lock, and one `AuditRotation` record in the new session's chain names every deleted session with its final seq and hash (AU-9(4)). A log named on a summary's `Session <id>:` line, a log changed since an unmerged train started, the current session's log, and a log another session holds are kept. Any read or parse error deletes nothing.
-- `agent_models`: an object from an agent name the catalog lists to `sonnet`, `opus`, `haiku` or `fable`. For example, `"agent_models": { "repo-coder": "sonnet" }` runs the coding agent on sonnet while every other agent keeps the model its agent file names. An unknown agent name or model refuses the config with a `Next:` line naming the key. The names `nist-specialist` and `cis-specialist` are no longer catalog agents, so a config that still names either is refused; rename the key to `framework-specialist`, the one agent that replaced both. Run `python3 scripts/catalog.py table --repo <repo>` from the plugin folder to see the model each agent runs on.
+- `agent_models`: an object from an agent name the catalog lists to `sonnet`, `opus`, `haiku` or `fable`. For example, `"agent_models": { "coder": "sonnet" }` runs the coding agent on sonnet while every other agent keeps the model its agent file names. An unknown agent name or model refuses the config with a `Next:` line naming the key. The names `nist-specialist` and `cis-specialist` are no longer catalog agents, so a config that still names either is refused; rename the key to `framework-specialist`, the one agent that replaced both. Six agents took the name of the phase they serve in this release (agents named by phase, 0190): the coder, the auditor, the releaser, the comparer, and the writer, which does the work of two former agents. A config, a priorities block or a train definition that still uses one of their old names reads it as the new name for this release only. The health check (`/daedalus:doctor`) prints one line for each old name it finds, naming the new name to write in its place. Run `python3 scripts/catalog.py table --repo <repo>` from the plugin folder to see the model each agent runs on.
 
 ### Ledger formats
 
@@ -266,7 +266,7 @@ Each stage object holds `id`, `gate`, `agent`, `scope`, `proof` and `on_fail`, a
 |---|---|---|---|---|
 | `id` | The stage's name, used by routes and records | string | A slug, unique in the definition | `"code"` |
 | `gate` | The checkpoint the stage belongs to | string | A gate named in `gates` | `"build"` |
-| `agent` | Who runs the stage | string | `"main"` for a step the runner runs itself, or the name of an agent file in the plugin | `"repo-coder"` |
+| `agent` | Who runs the stage | string | `"main"` for a step the runner runs itself, or the name of an agent file in the plugin | `"coder"` |
 | `scope` | What the agent is told, where it may write and how it may reply | object | Exactly `told`, `touch` and `reply`, below | see below |
 | `proof` | The command that proves the stage passed | object | Exactly `script`, `exit` and `records`, below | see below |
 | `on_fail` | Where each failing outcome or reply line goes | object | Each key is a failing exit outcome or a reply line of the stage; each value is a route, below | `{"[STATUS: YIELD_WEB]": "consult:web-researcher"}` |

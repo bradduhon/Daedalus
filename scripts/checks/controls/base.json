@@ -341,7 +341,7 @@
   },
   "shell.R_GIT_CONFIG": {
     "failure": "0022: a git config override changes hooks, pager or transport and runs code behind the git grammar",
-    "premise_test": "tests/test_checks_git_grammar.py::TestRound3WorkerHygiene::test_git_config_read_only_for_repo_coder"
+    "premise_test": "tests/test_checks_git_grammar.py::TestRound3WorkerHygiene::test_git_config_read_only_for_coder"
   },
   "shell.R_ENV": {
     "failure": "0022: an environment prefix such as GIT_DIR or GIT_SSH_COMMAND redirects a command the jail approved",
@@ -413,7 +413,7 @@
   },
   "shell.R_GIT_PLUMBING": {
     "failure": "0001: git transport plumbing such as send-pack pushes past the push grammar",
-    "premise_test": "tests/test_checks_git_push.py::TestFinalRemotePlumbing::test_repo_coder_blocks"
+    "premise_test": "tests/test_checks_git_push.py::TestFinalRemotePlumbing::test_coder_blocks"
   },
   "shell.R_DATA_DIR_GIT": {
     "failure": "0010: the plugin data folder is committed, so the audit log and reply key leave the machine in a push",

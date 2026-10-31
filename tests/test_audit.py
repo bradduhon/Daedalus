@@ -215,7 +215,7 @@ def test_subagent_stop_keeps_bounded_message_head(project_data: Path, hook_input
         hook_input(
             hook_event_name="SubagentStop",
             agent_id="a1",
-            agent_type="repo-coder",
+            agent_type="coder",
             last_assistant_message="[STATUS: COMPLETE] " + "y" * 5000,
         )
     )
@@ -235,7 +235,7 @@ def test_subagent_stop_record_carries_sha_and_tail(
         hook_input(
             hook_event_name="SubagentStop",
             agent_id="a1",
-            agent_type="daedalus:repo-coder",
+            agent_type="daedalus:coder",
             last_assistant_message=message,
         )
     )
@@ -387,7 +387,7 @@ def test_subagent_stop_resolves_agent_type_from_its_start(
         hook_input(hook_event_name="SubagentStart", agent_id="a1", agent_type="auditor", **bare)
     )
     audit.audit_append(
-        hook_input(hook_event_name="SubagentStart", agent_id="a2", agent_type="repo-coder", **bare)
+        hook_input(hook_event_name="SubagentStart", agent_id="a2", agent_type="coder", **bare)
     )
     stop = audit.audit_append(hook_input(hook_event_name="SubagentStop", agent_id="a1", **bare))
     assert stop is not None and stop["agent_type"] == "auditor"

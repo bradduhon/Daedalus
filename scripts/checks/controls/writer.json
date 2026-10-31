@@ -1,0 +1,30 @@
+{
+  "dispatch_binding.R_NO_SOURCES": {
+    "failure": "0190: a writer dispatched with no Worktree: line takes the derived kind in a run that froze no sources, so it writes with no output folder or source list to hold it",
+    "premise_test": "tests/test_persona_jails.py::test_a_writer_dispatch_with_no_worktree_line_needs_frozen_sources"
+  },
+  "dispatch_gate.R_OLD_NAME": {
+    "failure": "0190: the orchestrator starts an agent by a name from before the rename, so a brief written for the old name reaches no agent file and the run stalls without saying why",
+    "premise_test": "tests/test_agent_aliases.py::test_the_orchestrator_is_told_the_new_name_of_an_old_agent"
+  },
+  "router.R_NO_MODE": {
+    "failure": "0190: an agent file carries modes the router cannot pick from, so a call would run the hooks block alone and skip the write check of every mode",
+    "premise_test": "tests/test_writer_kinds.py::test_modes_on_any_agent_but_the_writer_refuse_every_call"
+  },
+  "writer_mode.R_NO_RUN": {
+    "failure": "0190: a writer works outside a marked run, where no dispatch recorded its kind, so neither write check of the two kinds is known to bind it",
+    "premise_test": "tests/test_writer_kinds.py::test_a_writer_outside_a_run_is_refused"
+  },
+  "writer_mode.R_NO_ID": {
+    "failure": "0190: a writer call carries no agent id or session id, so its kind cannot be bound and two writers could share one kind",
+    "premise_test": "tests/test_writer_kinds.py::test_a_writer_call_with_no_id_is_refused"
+  },
+  "writer_mode.R_NO_DISPATCH": {
+    "failure": "0190: a writer no dispatch recorded makes calls, so it would pick a kind, and with it a write boundary, the operator never chose",
+    "premise_test": "tests/test_writer_kinds.py::test_a_writer_with_no_recorded_dispatch_is_refused_every_call"
+  },
+  "writer_mode.R_PENDING": {
+    "failure": "0190: a second writer is dispatched before the first one's first call, so either writer could take the other's kind and its write boundary",
+    "premise_test": "tests/test_writer_kinds.py::test_each_writer_keeps_the_kind_its_own_dispatch_recorded"
+  }
+}

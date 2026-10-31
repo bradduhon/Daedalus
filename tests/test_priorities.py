@@ -49,7 +49,7 @@ BLOCK: dict[str, Any] = {
             "source": "docs/d.md",
         }
     ],
-    "agents": {"repo-coder": {"drivers": ["cost", "security", "ops", "trust"]}},
+    "agents": {"coder": {"drivers": ["cost", "security", "ops", "trust"]}},
 }
 
 
@@ -93,9 +93,9 @@ def test_reader_reads_the_f2_example(tmp_path: Path) -> None:
             ),
         ),
         (Principle("P1", "security", "Each tenant keeps its own key.", "docs/d.md"),),
-        (("repo-coder", ("cost", "security", "ops", "trust")),),
+        (("coder", ("cost", "security", "ops", "trust")),),
     )
-    assert loaded.priorities.ranking("repo-coder")[0] == "cost"
+    assert loaded.priorities.ranking("coder")[0] == "cost"
     assert loaded.priorities.ranking("planner") == DRIVERS
 
 
@@ -140,7 +140,7 @@ def test_absent_block_is_none_declared(tmp_path: Path) -> None:
         (_edited("principles/0/text", "x" * 301), "principles[].text", "1 to 300"),
         (_edited("principles/0/source", "/etc/x"), "principles[].source", "repo-relative"),
         (
-            _edited("agents", {"security-auditor": {"drivers": DRIVERS}}),
+            _edited("agents", {"auditor": {"drivers": DRIVERS}}),
             "agents.<name>.drivers",
             "no project overrides",
         ),
@@ -149,7 +149,7 @@ def test_absent_block_is_none_declared(tmp_path: Path) -> None:
             "agents.<name>.drivers",
             "not a Daedalus agent",
         ),
-        (_edited("agents/repo-coder/drivers", ["cost"]), "agents.<name>.drivers", "each of"),
+        (_edited("agents/coder/drivers", ["cost"]), "agents.<name>.drivers", "each of"),
     ],
 )
 def test_reader_refuses_each_malformed_block(
@@ -313,10 +313,10 @@ def test_orchestrator_walks_the_rules_and_a_surface_brief_quotes_the_note() -> N
 
 
 def test_coder_yields_a_surfaced_default_and_the_auditor_keeps_its_severity() -> None:
-    coder = _flat("repo-coder")
+    coder = _flat("coder")
     assert "`[STATUS: YIELD_STANDARDS] priorities rule <n>: <the default and its options>`" in coder
-    assert "the `agent repo-coder:` line when present, else the `ranking:` line" in coder
-    auditor = _flat("security-auditor")
+    assert "the `agent coder:` line when present, else the `ranking:` line" in coder
+    auditor = _flat("auditor")
     assert "No rule, principle or ranking lowers a finding's severity or waives it" in auditor
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import dispatch_binding, jail, train_state
+from lib import dispatch_binding, jail, train_state, writer_mode
 from lib.agent_files import Hook, load
 from lib.config import Config
 from lib.unit_binding import bindings_path, claim
@@ -21,7 +21,7 @@ from tests.hook_chain import judge as decide
 from tests.test_dispatch_binding import TRAIN, seed_plan
 
 DOCS = f"{TRAIN}-docstage"
-WRITER = "daedalus:docs-writer"
+WRITER = "daedalus:writer"
 AGENTS = REPO_ROOT / "agents"
 ALLOW = ("--allow", "terraform,inspect")
 
@@ -64,17 +64,17 @@ def _writer(repo: Path, tool: str, **tool_input: str) -> dict[str, Any]:
 
 def _bound_writer(repo: Path) -> None:
     assert (
-        dispatch_binding._docs_dispatch_reason(
+        dispatch_binding._writer_dispatch_reason(
             {"prompt": f"Worktree: {repo}/.claude/worktrees/{DOCS}"}, str(repo), WRITER
         )
         is None
     )
 
 
-# Requirement 1: the docs-writer dispatch binds the <train-id>-docstage worktree alone.
+# Requirement 1: the writer dispatch binds the <train-id>-docstage worktree alone.
 
 
-def test_docs_writer_dispatch_binds_the_docs_worktree(
+def test_public_docs_writer_dispatch_binds_the_docs_worktree(
     repo_cwd: Path, trees: tuple[Path, Path]
 ) -> None:
     d = decide(_dispatch(repo_cwd, f"Write the docs.\nWorktree: {trees[1]}\n"), Config())
@@ -83,19 +83,25 @@ def test_docs_writer_dispatch_binds_the_docs_worktree(
     assert units == {DOCS: {"agent_id": None}}
 
 
-@pytest.mark.parametrize("which", ["unit", "none", "two"])
-def test_docs_writer_dispatch_naming_another_worktree_is_refused(
+@pytest.mark.parametrize("which", ["unit", "two"])
+def test_public_docs_writer_dispatch_naming_another_worktree_is_refused(
     repo_cwd: Path, trees: tuple[Path, Path], which: str
 ) -> None:
     unit, docs = trees
-    prompt = {
-        "unit": f"Worktree: {unit}",
-        "none": "Write the docs.",
-        "two": f"Worktree: {docs}\nWorktree: {unit}",
-    }[which]
+    prompt = {"unit": f"Worktree: {unit}", "two": f"Worktree: {docs}\nWorktree: {unit}"}[which]
     d = decide(_dispatch(repo_cwd, prompt), Config())
     assert not d.allow and "(0134)" in str(d.reason) and f"Worktree: {docs}" in str(d.reason)
     assert not bindings_path(repo_cwd, TRAIN).exists(), "a refused dispatch is never recorded"
+
+
+def test_a_writer_dispatch_with_no_worktree_line_needs_frozen_sources(
+    repo_cwd: Path, trees: tuple[Path, Path]
+) -> None:
+    # 0190: no Worktree: line is the derived kind; a build run has no frozen sources file.
+    d = decide(_dispatch(repo_cwd, "Write the docs."), Config())
+    assert not d.allow and "frozen sources file" in str(d.reason) and "(0190" in str(d.reason)
+    assert not bindings_path(repo_cwd, TRAIN).exists(), "a refused dispatch is never recorded"
+    assert not writer_mode.records_path(repo_cwd, TRAIN).exists()
 
 
 def test_a_resume_never_moves_a_coder_onto_the_docs_worktree(
@@ -113,11 +119,11 @@ def test_a_resume_never_moves_a_coder_onto_the_docs_worktree(
     assert decide(stay, Config()).allow
 
 
-# Requirement 2: --docs lets the docs-writer write only the four public docs.
+# Requirement 2: --docs lets the writer write only the four public docs.
 
 
 @pytest.mark.parametrize("doc", dispatch_binding.PUBLIC_DOCS)
-def test_docs_writer_writes_each_public_doc(
+def test_public_docs_writer_writes_each_public_doc(
     repo_cwd: Path, trees: tuple[Path, Path], doc: str
 ) -> None:
     _bound_writer(repo_cwd)
@@ -128,23 +134,23 @@ def test_docs_writer_writes_each_public_doc(
 @pytest.mark.parametrize(
     "rel", ["scripts/a.py", "docs/other.md", "readme.md", "docs/howto/README.md.bak"]
 )
-def test_docs_writer_refuses_any_other_path_in_the_docs_worktree(
+def test_public_docs_writer_refuses_any_other_path_in_the_docs_worktree(
     repo_cwd: Path, trees: tuple[Path, Path], rel: str
 ) -> None:
     _bound_writer(repo_cwd)
     payload = _writer(repo_cwd, "Write", file_path=f"{trees[1]}/{rel}", content="x")
     reason = evaluate("unit_writes", payload, "--docs")
-    assert reason is not None and reason.startswith("the docs-writer writes only"), reason
+    assert reason is not None and reason.startswith("the writer writes only"), reason
 
 
-def test_docs_writer_refuses_a_public_doc_in_a_coder_unit(
+def test_public_docs_writer_refuses_a_public_doc_in_a_coder_unit(
     repo_cwd: Path, trees: tuple[Path, Path]
 ) -> None:
     payload = _writer(repo_cwd, "Edit", file_path=f"{trees[0]}/README.md")
     reason = evaluate("unit_writes", payload, "--docs")
     assert reason is not None and f"docs worktree {DOCS}" in reason, reason
     # 0054: without --docs the same write is a coder's ordinary unit write.
-    assert "docs-writer" not in str(evaluate("unit_writes", payload))
+    assert "writer" not in str(evaluate("unit_writes", payload))
 
 
 @pytest.mark.parametrize(
@@ -162,7 +168,7 @@ def test_docs_writer_refuses_a_public_doc_in_a_coder_unit(
         ("git -C {unit} add README.md", False),
     ],
 )
-def test_docs_writer_bash_writes_stay_on_the_public_docs(
+def test_public_docs_writer_bash_writes_stay_on_the_public_docs(
     repo_cwd: Path, trees: tuple[Path, Path], command: str, allowed: bool
 ) -> None:
     _bound_writer(repo_cwd)
@@ -257,7 +263,7 @@ def test_agent_files_name_the_new_class_and_the_narrowed_check() -> None:
     reviewer = load(AGENTS / "terraform-reviewer.md")
     assert Hook("command_allowlist", ALLOW) in reviewer.hooks
     assert "read_only_bash" not in {h.script for h in reviewer.hooks}
-    writer = load(AGENTS / "docs-writer.md")
-    assert Hook("unit_writes", ("--docs",)) in writer.hooks
-    coder = load(AGENTS / "repo-coder.md")
+    writer = load(AGENTS / "writer.md")
+    assert Hook("unit_writes", ("--docs",)) in writer.chains()["public-docs"]
+    coder = load(AGENTS / "coder.md")
     assert Hook("unit_writes", ()) in coder.hooks

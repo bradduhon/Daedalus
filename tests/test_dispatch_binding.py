@@ -20,7 +20,7 @@ from tests.hook_chain import judge as decide
 
 TRAIN = "20261016-120000"
 OTHER = "20261015-090000"
-CODER = "daedalus:repo-coder"
+CODER = "daedalus:coder"
 PLANS = Path(__file__).resolve().parent / "fixtures" / "plans"
 VALID = PLANS / "valid.md"
 NEXT = "Next: run /daedalus:plan"
@@ -135,7 +135,7 @@ def test_coder_dispatch_with_a_valid_plan_is_allowed(repo_cwd: Path, unit: Path)
 
 
 def test_non_coder_dispatch_needs_no_plan(repo_cwd: Path, unit: Path) -> None:
-    for agent in ("daedalus:security-auditor", "daedalus:charter-docs", "Explore"):
+    for agent in ("daedalus:auditor", "daedalus:charter-docs", "Explore"):
         d = decide(_dispatch(repo_cwd, unit, agent), Config())
         assert d.allow, (agent, d.reason)
 
@@ -144,17 +144,17 @@ def test_non_coder_dispatch_needs_no_plan(repo_cwd: Path, unit: Path) -> None:
     ("subagent", "gated"),
     [
         (CODER, True),
-        ("repo-coder", True),
-        ("daedalus-probe:repo-coder", True),
-        ("other:repo-coder", True),
-        ("daedalus:x:repo-coder", True),
-        ("daedalus:repo-coder-x", False),
+        ("coder", True),
+        ("daedalus-probe:coder", True),
+        ("other:coder", True),
+        ("daedalus:x:coder", True),
+        ("daedalus:coder-x", False),
     ],
 )
 def test_coder_plan_gate_fails_closed_on_any_namespace(
     repo_cwd: Path, unit: Path, subagent: str, gated: bool
 ) -> None:
-    # issue 29: a repo-coder under any namespace meets the coder plan gate.
+    # issue 29: a coder under any namespace meets the coder plan gate.
     tool_input = _dispatch(repo_cwd, unit, subagent)["tool_input"]
     reason = dispatch_binding._dispatch_reason(tool_input, str(repo_cwd))
     assert (reason is not None and "records no plan" in reason) is gated, reason
@@ -162,7 +162,7 @@ def test_coder_plan_gate_fails_closed_on_any_namespace(
 
 @pytest.mark.parametrize(
     ("subagent", "binds"),
-    [(CODER, True), ("repo-coder", True), ("other:repo-coder", False)],
+    [(CODER, True), ("coder", True), ("other:coder", False)],
 )
 def test_only_the_train_scope_namespace_records_a_binding(
     repo_cwd: Path, unit: Path, subagent: str, binds: bool
@@ -188,7 +188,7 @@ def test_a_foreign_coder_meets_the_once_check(
     if bound:
         assert claim(repo_cwd, TRAIN, "agent-1", "u1") is None
     before = bindings_path(repo_cwd, TRAIN).read_bytes()
-    foreign = _dispatch(repo_cwd, unit, "other:repo-coder")["tool_input"]
+    foreign = _dispatch(repo_cwd, unit, "other:coder")["tool_input"]
     reason = dispatch_binding._dispatch_reason(foreign, str(repo_cwd))
     assert reason is not None and needle in reason and "(issue 29)" in reason, reason
     assert bindings_path(repo_cwd, TRAIN).read_bytes() == before

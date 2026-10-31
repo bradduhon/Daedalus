@@ -57,7 +57,7 @@ GIT_PLUMBING_REMOTE = frozenset(
     {"send-pack", "http-push", "receive-pack", "upload-pack", "fetch-pack"}
     | {"credential", "credential-store", "credential-cache"}
 )
-# Final review I3a: repo-coder git is an allowlist; everything else blocks.
+# Final review I3a: coder git is an allowlist; everything else blocks.
 CODER_GIT = frozenset(
     {"add", "commit", "status", "diff", "log", "show", "rev-parse", "ls-files", "branch"}
     | {"stash", "restore", "checkout", "worktree", "config", "grep", "blame", "merge-base"}
@@ -1612,7 +1612,7 @@ def _worker_hygiene(
         from checks.command_allowlist import train_script_ok
 
         ledger = train_script_ok(tokens)
-    if agent == "repo-coder" and own_script is not None and _is_cite(tokens, own_script):
+    if agent == "coder" and own_script is not None and _is_cite(tokens, own_script):
         ledger = True  # RCP, 0128: the coder's citation helper; its hygiene check still runs.
     is_wrapper = name in WORKER_WRAPPERS or name.startswith("python")
     if (

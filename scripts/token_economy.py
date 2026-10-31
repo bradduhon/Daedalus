@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.agent_aliases import current as current_name  # noqa: E402
 from lib.audit import (  # noqa: E402
     SESSION_ID,
     AuditLockError,
@@ -65,14 +66,14 @@ PREFIX = "daedalus:"
 BUILD, PUSH, DOC = "Build Train", "Push Train", "Document Train"
 # 0163: agents the main session starts outside any run group under the session itself.
 SESSION = "session"
-CODER = "repo-coder"
-# item 15: the turn target of agents/repo-coder.md; the report checks the coder mean against it.
+CODER = "coder"
+# item 15: the turn target of agents/coder.md; the report checks the coder mean against it.
 CODER_TURN_TARGET = 24
 ROOT_RUN_TYPES = {
     "orchestrator": BUILD,
-    "pr-train-conductor": PUSH,
-    "doc-deriver": DOC,
-    "change-logger": DOC,
+    "releaser": PUSH,
+    "writer": DOC,
+    "comparer": DOC,
 }
 # Plan 11 A: the Build Train phase an agent type works in when its prompt names none.
 BUILD_PHASES = {
@@ -80,17 +81,17 @@ BUILD_PHASES = {
     "standards-rules-specialist": "1",
     "contract-spec": "1",
     "charter-docs": "1",
-    "repo-coder": "2",
+    "coder": "2",
     "verifier": "2",
     "web-researcher": "2",
-    "security-auditor": "3",
-    "docs-writer": "3",
+    "auditor": "3",
+    "writer": "3",
     "framework-specialist": "3",
     "terraform-reviewer": "3",
     "dependency-auditor": "3",
 }
-UNIT_AGENTS = frozenset({"repo-coder", "verifier"})
-ROUND_AGENTS = frozenset({"security-auditor"})
+UNIT_AGENTS = frozenset({CODER, "verifier"})
+ROUND_AGENTS = frozenset({"auditor"})
 _UNIT = re.compile(rf"(?:worktrees|daedalus-unit)/{TRAIN_ID.pattern}-([a-z0-9][a-z0-9-]*)")
 _ROUND = re.compile(r"\bround (\d+)\b", re.IGNORECASE)
 _PHASE = re.compile(r"\bPhase (\d+)\b")
@@ -339,7 +340,8 @@ def load_agents(files: list[Path], types: dict[str, str]) -> list[Agent]:
         meta = _meta(path)
         agent_id = path.stem.removeprefix("agent-")
         raw_type = types.get(agent_id) or meta.get("agentType") or "unknown"
-        agent_type = str(raw_type).removeprefix(PREFIX)
+        # 0190: a run from before the rename reports its agents under their new names.
+        agent_type = current_name(str(raw_type).removeprefix(PREFIX))
         if not _AGENT_TYPE.fullmatch(agent_type):
             agent_type = "unknown"
         parent = meta.get("parentAgentId")

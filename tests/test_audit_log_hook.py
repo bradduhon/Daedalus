@@ -27,11 +27,11 @@ def test_logs_every_event_shape(run_script: Any, project_data: Path, hook_input:
             hook_event_name="UserPromptSubmit", tool_name=None, tool_input=None, prompt="build it"
         ),
         hook_input(hook_event_name="PostToolUse", tool_response={"stdout": "ok"}),
-        hook_input(hook_event_name="SubagentStart", agent_id="a1", agent_type="repo-coder"),
+        hook_input(hook_event_name="SubagentStart", agent_id="a1", agent_type="coder"),
         hook_input(
             hook_event_name="SubagentStop",
             agent_id="a1",
-            agent_type="repo-coder",
+            agent_type="coder",
             last_assistant_message="[STATUS: COMPLETE] branch daedalus/u1",
         ),
         hook_input(hook_event_name="Stop"),

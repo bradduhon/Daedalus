@@ -272,7 +272,7 @@ def test_hooks_live_names_agent_files_changed_after_the_first_record(
     agents = tmp_path / "agents"
     agents.mkdir()
     past = time.time() - 3600
-    for name in ("security-auditor", "verifier", "repo-coder"):
+    for name in ("auditor", "verifier", "coder"):
         (agents / f"{name}.md").write_text("x\n", encoding="utf-8")
         os.utime(agents / f"{name}.md", (past, past))
     (agents / "notes.txt").write_text("x\n", encoding="utf-8")
@@ -280,12 +280,12 @@ def test_hooks_live_names_agent_files_changed_after_the_first_record(
     code, out = _live_in_process(repo_cwd, hook_input, capsys)
     assert code == 0 and len(out) == 1 and out[0].startswith("OK hooks live:")
     future = time.time() + 60
-    for name in ("verifier", "repo-coder"):
+    for name in ("verifier", "coder"):
         os.utime(agents / f"{name}.md", (future, future))
     os.utime(agents / "notes.txt", (future, future))
     code, out = _live_in_process(repo_cwd, hook_input, capsys)
     assert code == 0 and out[0].startswith("OK hooks live:")
-    assert out[1:] == ["stale agents: repo-coder, verifier"]
+    assert out[1:] == ["stale agents: coder, verifier"]
 
 
 APPROVED_TRAIN = "20261016-120000"
@@ -371,7 +371,7 @@ def test_cli_approved_ignores_a_verdict_before_start_seq(
     _summary_written(hook_input, repo_cwd)
     result = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
     assert result.returncode == 1
-    assert "no daedalus:security-auditor reply after seq 7" in result.stdout
+    assert "no daedalus:auditor reply after seq 7" in result.stdout
 
 
 def _tip(repo: Path) -> str:
@@ -396,7 +396,7 @@ def _approved_train(hook_input: Any, repo_cwd: Path, verdict: str) -> None:
             hook_event_name="SubagentStop",
             tool_name=None,
             tool_input=None,
-            agent_type="daedalus:security-auditor",
+            agent_type="daedalus:auditor",
             last_assistant_message=verdict,
         )
     )
@@ -460,7 +460,7 @@ def test_second_hooks_live_in_a_new_session_moves_the_bound(
             hook_event_name="SubagentStop",
             tool_name=None,
             tool_input=None,
-            agent_type="daedalus:security-auditor",
+            agent_type="daedalus:auditor",
             last_assistant_message=f"[VERDICT: APPROVED] tip={tip}",
         )
     )
