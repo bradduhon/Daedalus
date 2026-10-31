@@ -1037,6 +1037,9 @@ def _files(names: str) -> str:
         (_skip_plan(below=""), "no wire: none line"),
         (_skip_plan(below="```text\nwire: none\n```\n"), "no wire: none line"),
         ("wire: none\n\n" + _skip_plan(below=""), "no wire: none line"),
+        # 0187: the whole repository is a folder, with or without the slash.
+        (_files("."), "unit names a file glob or folder: ."),
+        (_files("./"), "unit names a file glob or folder: ./"),
     ],
     ids=[
         "one-file",
@@ -1056,6 +1059,8 @@ def _files(names: str) -> str:
         "no-wire",
         "fenced-wire",
         "wire-above",
+        "repo-dot",
+        "repo-dot-slash",
     ],
 )
 def test_contract_skip_row(repo: Path, plugin: Path, text: str, reason: str | None) -> None:

@@ -1344,7 +1344,8 @@ def _contract_reason(plan: plan_record.Plan, text: str, repo: Path) -> str | Non
     if len(files) > plan_record.CONTRACT_SKIP_FILES:
         return f"{len(files)} files, more than {plan_record.CONTRACT_SKIP_FILES}"
     for name in files:
-        if any(c in name for c in "*?[") or name.endswith("/"):
+        # 0187: `.` names the whole repository, a folder like `./`.
+        if any(c in name for c in "*?[") or name.endswith("/") or posixpath.normpath(name) == ".":
             return f"unit names a file glob or folder: {name}"
         rel = posixpath.normpath(name)
         if posixpath.isabs(rel) or rel.split("/")[0] == "..":

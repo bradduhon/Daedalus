@@ -68,9 +68,11 @@ def test_a_glob_that_could_reach_a_control_path_counts(name: str, tier: str) -> 
     assert coder_tier([name], CONTROL, 0)[0] == tier
 
 
-@pytest.mark.parametrize("name", ["/etc/agents/x.py", "../other/a.py", "src/../../a.py"])
+@pytest.mark.parametrize(
+    "name", ["/etc/agents/x.py", "../other/a.py", "src/../../a.py", ".", "./", "", "src/.."]
+)
 def test_an_unsafe_path_fails_closed_to_the_control_path_tier(name: str) -> None:
-    # 0187: an absolute or parent path never falls to the default tier.
+    # 0187: an absolute, parent or whole-repository path never falls to the default tier.
     assert coder_tier(["src/a.py", name], CONTROL, 0) == (CONTROL_PATH, f"unsafe path {name}")
 
 
