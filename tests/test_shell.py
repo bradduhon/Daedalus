@@ -394,10 +394,26 @@ def test_node_is_the_one_runner_that_is_a_worker_wrapper() -> None:
         ("pnpm exec tsc --noEmit -w", shell.R_TSC),
         ("terraform -chdir=/x apply", shell.R_TERRAFORM_MUTATE),
         ("terraform state list", shell.R_TERRAFORM_MUTATE),
+        ("node --test --watch", shell.R_WATCH),
+        ("node --test --watch-path=.", shell.R_WATCH),
+        ("vitest run --watch=true", shell.R_VITEST_WATCH),
+        ("tsc --noEmit -watch", shell.R_TSC),
+        ("tsc --noEmit --Watch", shell.R_TSC),
+        ("tsc --noEmit false", shell.R_TSC),
+        ("pnpm test --watch", shell.R_WATCH),
+        ("pnpm test -- --watch", shell.R_WATCH),
+        ("npm test -- --watch", shell.R_WATCH),
+        ("pnpm run -- dev", shell.R_DEV_SERVER),
+        ("pnpm -- dev", shell.R_DEV_SERVER),
+        ("npm run -- dev", shell.R_DEV_SERVER),
+        ("terraform plan", shell.R_TERRAFORM_OPERATOR),
+        ("terraform fmt -check=false", shell.R_TERRAFORM_OPERATOR),
+        ("terraform untaint a.b", shell.R_TERRAFORM_MUTATE),
         ("vite build", None),
         ("vitest run -t name", None),
-        ("pnpm test -- --watch", None),
-        ("terraform plan", None),
+        ("tsc -NoEmit", None),
+        ("pnpm -w test", None),
+        ("terraform -chdir=/x fmt -recursive -check", None),
         ("npm test", None),
     ],
 )
@@ -405,3 +421,27 @@ def test_runner_refusal_names_the_server_watch_or_state_change(
     command: str, want: str | None
 ) -> None:
     assert shell.runner_refusal(shlex.split(command)) == want
+
+
+@pytest.mark.parametrize(
+    ("command", "want"),
+    [
+        ("pnpm exec node -e 1", ["node", "-e", "1"]),
+        ("pnpm exec -- node t.js", ["node", "t.js"]),
+        ("npx node t.js", ["node", "t.js"]),
+        ("pnpm node t.js", ["node", "t.js"]),
+        ("pnpm exec pnpm exec bash -c ls", ["bash", "-c", "ls"]),
+        ("npm test", None),
+        ("pnpm", None),
+    ],
+)
+def test_js_inner_finds_the_bin_a_package_manager_runs(
+    command: str, want: list[str] | None
+) -> None:
+    assert shell.js_inner(shlex.split(command)) == want
+
+
+def test_under_holds_every_path_under_the_filesystem_root() -> None:
+    # 0164: "/" plus os.sep once matched nothing, so "/" slipped past every overlap guard.
+    assert shell._under("/srv/x/.ssh", "/") and shell._under("/", "/")
+    assert shell._under("/a/b", "/a/") and not shell._under("/ab", "/a")

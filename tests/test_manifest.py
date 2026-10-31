@@ -47,7 +47,7 @@ def test_this_repos_manifest_loads(tmp_path: Path) -> None:
     assert load(tmp_path) == Manifest(
         unit_test_cmd="python3 -m pytest -q",
         typecheck_cmd="python3 -m mypy scripts",
-        lint_cmd=".venv/bin/ruff check scripts tests",
+        lint_cmd="python3 -m ruff check scripts tests",
         features=Features(secrets_scan=True),
     )
 

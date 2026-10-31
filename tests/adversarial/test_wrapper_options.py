@@ -11,13 +11,17 @@ from lib import jail, shell
 
 from tests.adversarial.corpus import (
     DEV_SERVERS,
+    GAME_RUNNERS,
+    INTERPRETER_BINS,
+    PACKAGE_DOWNLOADS,
     PACKAGE_INSTALL_CMDS,
     TERRAFORM_MUTATIONS,
+    TERRAFORM_OPERATOR_FORMS,
     WATCH_MODES,
     assert_denied,
 )
 from tests.conftest import CFG, WT
-from tests.hook_chain import load
+from tests.hook_chain import decide, load
 from tests.payloads import _b, _cred
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
@@ -125,16 +129,47 @@ def test_a_worker_never_runs_the_wrapper(form: str) -> None:
     assert_denied(_b("coder", form.format(repo="/work/repo", other="/tmp")))
 
 
-@pytest.mark.parametrize(
-    "command", DEV_SERVERS + WATCH_MODES + TERRAFORM_MUTATIONS + PACKAGE_INSTALL_CMDS
-)
-def test_the_kernel_wrapper_admits_no_dev_server_watch_mode_state_change_or_install(
-    monkeypatch: pytest.MonkeyPatch, command: str
-) -> None:
-    # 0164, 0158: refused bare and wrapped, with the ruling named unless a wrapper word leads.
+@pytest.fixture
+def _confine_live(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 0164: the real confine check on a kernel that holds the rules.
     monkeypatch.setattr(load("confine"), "judge", REAL_CONFINE)
     support = daedalus_confine.Support("x86_64", 3, True)
     monkeypatch.setattr(daedalus_confine, "kernel_support", lambda: support)
-    markers = () if command.split()[0] in shell.WORKER_WRAPPERS else ("(0164)", "(0158)")
+
+
+@pytest.mark.usefixtures("_confine_live")
+@pytest.mark.parametrize(
+    "command",
+    DEV_SERVERS
+    + WATCH_MODES
+    + TERRAFORM_MUTATIONS
+    + TERRAFORM_OPERATOR_FORMS
+    + PACKAGE_INSTALL_CMDS
+    + PACKAGE_DOWNLOADS,
+)
+def test_the_kernel_wrapper_admits_no_dev_server_watch_mode_state_change_or_install(
+    command: str,
+) -> None:
+    # 0164, 0158: refused bare and wrapped, with the ruling named unless a wrapper word leads.
+    markers = () if command.split()[0] in shell.WORKER_WRAPPERS else ("0164)", "(0158)")
     for form in (command, f"{shell.CONFINE_PATH} --unit {WT} -- {command}"):
         assert_denied(_b("coder", f"cd {WT} && {form}"), *markers)
+
+
+@pytest.mark.usefixtures("_confine_live")
+@pytest.mark.parametrize("command", INTERPRETER_BINS)
+def test_a_package_manager_bin_is_no_way_past_the_interpreter_rule(command: str) -> None:
+    for form in (command, f"{shell.CONFINE_PATH} --unit {WT} -- {command}"):
+        assert_denied(_b("coder", f"cd {WT} && {form}"))
+
+
+@pytest.mark.usefixtures("_confine_live")
+@pytest.mark.parametrize(
+    "command", [c for c in GAME_RUNNERS if c.split()[0] not in shell.WORKER_WRAPPERS]
+)
+def test_each_game_runner_is_refused_bare_and_admitted_wrapped(command: str) -> None:
+    # 0164: must-admit rows; the wrapper is the one way they run.
+    assert_denied(_b("coder", f"cd {WT} && {command}"), "kernel wrapper")
+    wrapped = _b("coder", f"cd {WT} && {shell.CONFINE_PATH} --unit {WT} -- {command}")
+    decision = decide(wrapped, CFG)
+    assert decision.allow and not decision.warn, (command, decision.reason)

@@ -57,19 +57,20 @@ def _is_test(segment: list[str], base: str, cwd: str) -> bool:
     return tuple(tokens) in declared or tuple(segment) in declared
 
 
-def _terraform_reason(tokens: list[str], cwd: str) -> str | None:
-    # 0158, 0159: a coder's validate or fmt -check meets the terraform class's switches, bare or
-    # wrapped; any other terraform subcommand is left to runner_refusal.
+def _terraform_reason(tokens: list[str], base: str, cwd: str) -> str | None:
+    # 0158, 0159: a coder's allowlisted form meets the terraform class's switches, its fmt
+    # folder sits in a unit worktree; runner_refusal has refused every other form.
     tokens = shell.strip_wrappers(tokens) or tokens
-    rest = tokens[1:]
-    if rest[:1] and rest[0].startswith("-chdir="):
-        rest = rest[1:]
-    if (
-        shell._base(tokens[0]) != "terraform"
-        or tuple(rest) not in command_allowlist.TERRAFORM_FORMS
-    ):
+    paths = shell.terraform_check(tokens[1:]) if shell._base(tokens[0]) == "terraform" else None
+    if paths is None:
         return None
-    return command_allowlist.terraform_reason(tokens, cwd)
+    for path in paths:
+        target = shell._abs(path, base)
+        if not os.path.isabs(cwd) or jail._unit_parts(target, cwd) is None:
+            return shell.R_TERRAFORM_OPERATOR
+    chdir = [tokens[1]] if tokens[1].startswith("-chdir=") else []
+    form = ["validate"] if "validate" in tokens else ["fmt", "-check"]
+    return command_allowlist.terraform_reason([tokens[0], *chdir, *form], cwd)
 
 
 def _wrapped_reason(segment: list[str], base: str, cwd: str) -> str | None:
@@ -96,7 +97,7 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
         split = shell.confine_split(segment) if shell._base(segment[0]) == shell.CONFINE else None
         inner = split[1] if split else segment
         # 0164: a dev server, watch mode or terraform state change is refused wrapped or bare.
-        refused = shell.runner_refusal(inner) or _terraform_reason(inner, cwd)
+        refused = shell.runner_refusal(inner) or _terraform_reason(inner, base, cwd)
         if refused:
             return refused
         if shell._base(segment[0]) == shell.CONFINE:

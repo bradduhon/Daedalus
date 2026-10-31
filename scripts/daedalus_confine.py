@@ -337,11 +337,15 @@ def rule_set(
 ) -> RuleSet:
     assert support.arch is not None
     stores = credential_roots()
+    dot = os.path.join(repo, ".claude")
     ro: list[str] = []
     for path in [*_interpreter_paths(), *SYSTEM_RO, *extra]:
         real = os.path.realpath(path)
         # 0048, Plan 6 section 10.1: no grant holds a credential store or sits inside one.
         if any(shell._under(real, s) or shell._under(s, real) for s in stores):
+            continue
+        # 0164: an operator root never reaches the project's .claude folder (the reply key).
+        if path in extra and (shell._under(real, dot) or shell._under(dot, real)):
             continue
         if os.path.exists(real) and real not in ro:
             ro.append(real)

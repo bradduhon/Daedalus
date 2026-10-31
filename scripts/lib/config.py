@@ -185,8 +185,15 @@ def _expand_root(entry: str) -> str:
     return os.path.normpath(os.path.expanduser(entry))
 
 
-def _wrapper_read_roots(raw: dict[str, object]) -> tuple[str, ...]:
-    # 0164: folders the kernel wrapper lets a runner row read and run; never a credential store.
+def overlaps(first: str, second: str) -> bool:
+    # 0164: either path holds the other; the filesystem root holds every path.
+    a, b = (os.path.realpath(p).rstrip(os.sep) + os.sep for p in (first, second))
+    return a.startswith(b) or b.startswith(a)
+
+
+def _wrapper_read_roots(raw: dict[str, object], dot_claude: Path) -> tuple[str, ...]:
+    # 0164: folders the kernel wrapper lets a runner row read and run; never a credential store
+    # and never the project's .claude folder, which holds the train's reply key.
     value = raw.get("wrapper_read_roots")
     if value is None:
         return ()
@@ -195,7 +202,7 @@ def _wrapper_read_roots(raw: dict[str, object]) -> tuple[str, ...]:
             "config.json wrapper_read_roots must be a list of non-empty strings. "
             'Next: write it as ["~/.local/share/pnpm/store"], or remove it.'
         )
-    stores = credential_roots()
+    guarded = [*credential_roots(), str(dot_claude)]
     out: list[str] = []
     for entry in value:
         path = _expand_root(entry)
@@ -204,14 +211,13 @@ def _wrapper_read_roots(raw: dict[str, object]) -> tuple[str, ...]:
                 f"config.json wrapper_read_roots entry {entry!r} is not an absolute path. "
                 "Next: write it as an absolute path or a path starting with ~/."
             )
-        real = os.path.realpath(path)
-        for store in stores:
-            if real == store or real.startswith(store + os.sep) or store.startswith(real + os.sep):
+        for store in guarded:
+            if overlaps(path, store):
                 raise ConfigError(
-                    f"config.json wrapper_read_roots entry {entry!r} holds or sits inside the "
-                    f"credential store {store}, and the kernel wrapper never grants one. "
-                    "Next: name a folder that holds no credential store, such as "
-                    "~/.local/share/pnpm/store, or remove the entry."
+                    f"config.json wrapper_read_roots entry {entry!r} holds or sits inside "
+                    f"{store}, a credential store or the project's .claude folder, and the "
+                    "kernel wrapper never grants either. Next: name a folder that holds "
+                    "neither, such as ~/.local/share/pnpm/store, or remove the entry."
                 )
         out.append(path)
     return tuple(out)
@@ -443,6 +449,6 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
         operator_signing_keys=_signing_keys(raw),
         max_concurrent_builders=_max_builders(raw),
         audit_retention_days=_retention_days(raw),
-        wrapper_read_roots=_wrapper_read_roots(raw),
+        wrapper_read_roots=_wrapper_read_roots(raw, target.parent.parent),
         agent_models=_agent_models(raw),
     )

@@ -22,10 +22,13 @@ from lib.config import ConfigError, load_config
 from tests.adversarial.corpus import (
     CONFINE_RUNNERS,
     DEV_SERVERS,
+    INTERPRETER_BINS,
     TERRAFORM_MUTATIONS,
+    TERRAFORM_OPERATOR_FORMS,
     UNIX_SOCKETS,
     UNUSABLE_KERNEL,
     WATCH_MODES,
+    WATCH_REASONS,
     assert_denied,
 )
 from tests.conftest import CFG, CWD, WT
@@ -348,8 +351,10 @@ def test_a_dev_server_is_refused_bare_and_wrapped(command: str) -> None:
 @pytest.mark.usefixtures("kernel")
 @pytest.mark.parametrize("command", WATCH_MODES)
 def test_a_watch_mode_is_refused_bare_and_wrapped(command: str) -> None:
-    # 0164: bare vitest watches; tsc runs only as --noEmit, never watching.
-    _refused_bare_and_wrapped(command, shell.R_TSC if "tsc" in command else shell.R_VITEST_WATCH)
+    # 0164: bare vitest watches; tsc runs only as --noEmit; any other watch flag never exits.
+    tool = next((w for w in command.split() if w in WATCH_REASONS), None)
+    reason = getattr(shell, WATCH_REASONS[tool]) if tool else shell.R_WATCH
+    _refused_bare_and_wrapped(command, reason)
     assert "`vitest run`" in shell.R_VITEST_WATCH and "`tsc --noEmit`" in shell.R_TSC
 
 
@@ -357,6 +362,22 @@ def test_a_watch_mode_is_refused_bare_and_wrapped(command: str) -> None:
 @pytest.mark.parametrize("command", TERRAFORM_MUTATIONS)
 def test_a_terraform_state_change_is_refused_bare_and_wrapped(command: str) -> None:
     _refused_bare_and_wrapped(command, shell.R_TERRAFORM_MUTATE)
+
+
+@pytest.mark.usefixtures("kernel")
+@pytest.mark.parametrize("command", TERRAFORM_OPERATOR_FORMS)
+def test_any_other_terraform_form_is_the_operators(command: str) -> None:
+    # 0158, 0164: the coder's terraform is validate and fmt -check, nothing else.
+    _refused_bare_and_wrapped(command, shell.R_TERRAFORM_OPERATOR)
+
+
+@pytest.mark.usefixtures("kernel")
+@pytest.mark.parametrize("command", INTERPRETER_BINS)
+def test_a_package_manager_never_runs_an_interpreter_inline(command: str) -> None:
+    # 0164: pnpm exec node -e meets the rule bare node -e meets; the wrapper changes nothing.
+    for form in (f"cd {WT} && {command}", f"cd {WT} && {WRAP} {command}"):
+        assert evaluate("shell_tripwires", _b("coder", form)) == shell.R_INLINE, form
+        assert_denied(_b("coder", form))
 
 
 @pytest.mark.parametrize("support", [OFF, PROBE_ERROR])
@@ -418,7 +439,8 @@ def _read_roots_repo(tmp_path: Path, roots: list[str]) -> tuple[Path, Path]:
         ("timeout 60 vitest run", True),
         ("pytest -q", True),
         ("git status", False),
-        ("pnpm run build", False),
+        ("pnpm run build", True),
+        ("npm ls", False),
         ("python3 -c 1", False),
     ],
 )
@@ -463,6 +485,30 @@ def test_a_credential_store_in_wrapper_read_roots_is_refused_at_config_load(
     assert daedalus_confine.read_roots(str(repo), ["git", "status"]) == ()
 
 
+@pytest.mark.parametrize(
+    "entry", ["/", "/home", "{home}", "{repo}", "{repo}/.claude", "{repo}/.claude/daedalus"]
+)
+def test_a_root_holding_a_credential_store_or_the_data_folder_is_refused(
+    tmp_path: Path, entry: str
+) -> None:
+    # 0164: the filesystem root, a home ancestor and the project's .claude folder (reply key).
+    repo, _ = _read_roots_repo(tmp_path, ["placeholder"])
+    value = entry.format(home=Path.home(), repo=repo)
+    config = repo / ".claude" / "daedalus" / "config.json"
+    config.write_text(json.dumps({"wrapper_read_roots": [value]}), encoding="utf-8")
+    with pytest.raises(ConfigError, match="wrapper_read_roots entry"):
+        load_config(cwd=str(repo))
+
+
+@pytest.mark.parametrize("extra", ["/", "{repo}", "{repo}/.claude", "{repo}/.claude/daedalus"])
+def test_the_rule_set_drops_a_root_reaching_the_data_folder(tmp_path: Path, extra: str) -> None:
+    # 0164: the wrapper's own guard, behind the config check; "/" holds every store.
+    repo, unit = _unit(tmp_path)
+    path = extra.format(repo=repo)
+    rules = daedalus_confine.rule_set(str(unit), str(repo), str(tmp_path / "t"), ON, (path,))
+    assert os.path.realpath(path) not in rules.ro
+
+
 @needs_kernel
 def test_a_runner_row_reads_a_granted_root_and_never_writes_it(tmp_path: Path) -> None:
     # 0164: pytest, a runner row, reads the root and cannot write it; python3 -c never reads it.
@@ -496,7 +542,7 @@ def test_a_runner_row_reads_a_granted_root_and_never_writes_it(tmp_path: Path) -
 @pytest.mark.parametrize(
     "command",
     ["go build ./...", "cargo build", "uv pip list", "go vet ./...", "uvx ruff"]
-    + ["pnpm run build", "pnpm lint", "terraform plan", "terraform init", "npm --version"],
+    + ["npm --version", "npm ls"],
 )
 def test_a_runner_name_without_its_test_verb_needs_no_wrapper(command: str) -> None:
     assert evaluate("confine", _b("coder", f"cd {WT} && {command}")) is None

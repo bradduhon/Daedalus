@@ -8,7 +8,7 @@
     "package_registries": ["pypi.org"],
     "unit_test_cmd": "python3 -m pytest -q",
     "typecheck_cmd": "python3 -m mypy scripts",
-    "lint_cmd": ".venv/bin/ruff check scripts tests",
+    "lint_cmd": "python3 -m ruff check scripts tests",
     "build_cmd": null
   },
   "features": { "secrets_scan": true },

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from lib import jail, shell
 
-from tests.adversarial.corpus import PACKAGE_INSTALL_CMDS
+from tests.adversarial.corpus import PACKAGE_DOWNLOADS, PACKAGE_INSTALL_CMDS
 from tests.conftest import CFG
 from tests.hook_chain import (
     decide,
@@ -106,9 +106,21 @@ def test_a_package_install_is_refused_as_operator_run(command: str) -> None:
     assert "the operator runs it" in jail.R_PACKAGE_INSTALL and "(0164)" in jail.R_PACKAGE_INSTALL
 
 
+@pytest.mark.parametrize("command", PACKAGE_DOWNLOADS)
+def test_a_download_and_run_tool_is_refused_for_the_operator(command: str) -> None:
+    # 0164: dlx, bunx, npm exec and npx -y fetch a package the project does not pin.
+    for form in (command, f"{shell.CONFINE_PATH} --unit /w -- {command}"):
+        assert evaluate(HOOK, _b("coder", form)) == jail.R_PACKAGE_DOWNLOAD, form
+    assert "operator" in jail.R_PACKAGE_DOWNLOAD and "(0164)" in jail.R_PACKAGE_DOWNLOAD
+
+
 @pytest.mark.parametrize(
     "command",
     [
+        "pnpm run install",
+        "pnpm exec vitest run",
+        "npx vitest run",
+        "pnpm exec node --test",
         "pnpm test",
         "pnpm run test",
         "pnpm run build",

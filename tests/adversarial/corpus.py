@@ -226,7 +226,9 @@ CONFINE_RUNNERS = (
     "cargo +nightly test",
     "go -C . test ./...",
     "uv --quiet run pytest",
-    # 0164: the game stack runner rows.
+)
+# 0164: the game stack runner rows; must-admit under the wrapper, refused bare.
+GAME_RUNNERS = (
     "node --test",
     "node --test tests/a.test.js",
     "pnpm test",
@@ -241,7 +243,20 @@ CONFINE_RUNNERS = (
     "vite build",
     "npx vitest run",
     "timeout 120 pnpm test",
+    # 0164 fix round: pnpm wraps like npm; terraform's allowlisted fmt forms.
+    "pnpm run build",
+    "pnpm build:dev",
+    "pnpm run build:dev",
+    "pnpm lint",
+    "pnpm exec eslint .",
+    "pnpm exec node --test",
+    "pnpm run install",
+    "npm run build:dev",
+    "terraform fmt -check",
+    "terraform fmt -check -recursive",
+    "terraform fmt -recursive -check",
 )
+CONFINE_RUNNERS = CONFINE_RUNNERS + GAME_RUNNERS
 # 0164, 0158: dev servers, watch modes and terraform state changes; refused bare and wrapped.
 DEV_SERVERS = (
     "vite",
@@ -260,6 +275,11 @@ DEV_SERVERS = (
     "npm run dev",
     "npm start",
     "timeout 60 vite dev",
+    "pnpm run -- dev",
+    "pnpm -- dev",
+    "npm run -- dev",
+    "pnpm run -- start",
+    "npm run -- preview",
 )
 WATCH_MODES = (
     "vitest",
@@ -273,7 +293,19 @@ WATCH_MODES = (
     "tsc --noEmit --watch",
     "tsc",
     "pnpm exec tsc -w",
+    "node --test --watch",
+    "node --test --watch-path=.",
+    "vitest run --watch=true",
+    "tsc --noEmit -watch",
+    "tsc --noEmit --Watch",
+    "tsc --noEmit false",
+    "pnpm test --watch",
+    "pnpm test -- --watch",
+    "npm test -- --watch",
+    "pnpm run test -w",
 )
+# 0164: what each watch row is refused with.
+WATCH_REASONS = {"tsc": "R_TSC", "vitest": "R_VITEST_WATCH"}
 TERRAFORM_MUTATIONS = (
     "terraform apply",
     "terraform apply -auto-approve",
@@ -281,6 +313,54 @@ TERRAFORM_MUTATIONS = (
     "terraform import aws_s3_bucket.a a",
     "terraform state rm a.b",
     "terraform taint a.b",
+    "terraform untaint a.b",
+    "terraform force-unlock 1",
+    "terraform refresh",
+)
+# 0158, 0164: the coder's terraform is an allowlist; every other form names the operator.
+TERRAFORM_OPERATOR_FORMS = (
+    "terraform plan",
+    "terraform init",
+    "terraform console",
+    "terraform test",
+    "terraform workspace list",
+    "terraform login",
+    "terraform logout",
+    "terraform output",
+    "terraform graph",
+    "terraform providers",
+    "terraform fmt",
+    "terraform fmt -recursive",
+    "terraform fmt -write=true",
+    "terraform fmt -check=false",
+    "terraform fmt -check -write=true",
+    "terraform fmt -check -recursive /tmp",
+    "terraform fmt -check -check",
+    "terraform version",
+    "terraform",
+)
+# 0164: a package manager running an interpreter meets the interpreter rule.
+INTERPRETER_BINS = (
+    "pnpm exec node -e 1",
+    "pnpm exec node t.js",
+    "pnpm exec -- node t.js",
+    "pnpm node t.js",
+    "npx node t.js",
+    "pnpm exec bash -c ls",
+    "pnpm exec python3 -c 1",
+    "yarn node -e 1",
+)
+# 0164: download-and-run forms stay with the operator.
+PACKAGE_DOWNLOADS = (
+    "pnpm dlx cowsay",
+    "yarn dlx cowsay",
+    "bunx cowsay",
+    "bun x cowsay",
+    "npm exec cowsay",
+    "npm x cowsay",
+    "npx -y cowsay",
+    "npx --yes cowsay",
+    "npx --yes=true vitest run",
 )
 # 0164: package installs stay with the operator, through any wrapper.
 PACKAGE_INSTALL_CMDS = (
@@ -299,6 +379,28 @@ PACKAGE_INSTALL_CMDS = (
     "bun install",
     "bun add rapier",
     "timeout 60 pnpm install",
+    "pnpm exec pnpm install",
+    "pnpm exec npm install",
+    "pnpm exec -- yarn add three",
+    "corepack pnpm install",
+    "corepack install",
+    "corepack enable",
+    "npm install-test",
+    "npm it",
+    "npm cit",
+    "npm clean-install",
+    "npm in",
+    "npm isntall",
+    "npm ins",
+    "npm inst",
+    "npm up",
+    "npm upgrade",
+    "pnpm up",
+    "pnpm upgrade",
+    "yarn up",
+    "yarn upgrade",
+    "pnpm fetch",
+    "pnpm import",
 )
 # H2, issue 87: Python run inside the wrapper; each opens an AF_UNIX socket() the filter refuses.
 UNIX_SOCKETS = (
