@@ -41,7 +41,7 @@ def _read(path: Path) -> dict[str, dict[str, object]]:
 
 def _held(units: dict[str, dict[str, object]], unit_name: str) -> str | None:
     # issue 29: a unit already dispatched or bound takes no second coder.
-    if unit_name not in units:
+    if unit_name not in units or units[unit_name].get("released"):
         return None
     holder = units[unit_name].get("agent_id")
     if holder:
@@ -70,7 +70,30 @@ def record_dispatch(repo: Path, train_id: str, unit_name: str) -> str | None:
             held = _held(units, unit_name)
             if held is not None:
                 return held
-            units[unit_name] = {"agent_id": None}
+            units[unit_name] = {"agent_id": None, **_retired(units.get(unit_name, {}))}
+            train_state._write(path, {"units": units})
+    except TrainStateError as exc:
+        return str(exc)
+    return None
+
+
+def _retired(record: dict[str, object]) -> dict[str, object]:
+    retired = record.get("retired")
+    return {"retired": list(retired)} if isinstance(retired, list) and retired else {}
+
+
+def release(repo: Path, train_id: str, unit_name: str) -> str | None:
+    # 0187, issue 115: a second refutation frees the unit for one fresh coder; the old one retires.
+    try:
+        with _locked(repo, train_id) as path:
+            units = _read(path)
+            record = units.get(unit_name, {})
+            old = record.get("retired")
+            retired = [a for a in old if isinstance(a, str)] if isinstance(old, list) else []
+            holder = record.get("agent_id")
+            if isinstance(holder, str) and holder and holder not in retired:
+                retired.append(holder)
+            units[unit_name] = {"agent_id": None, "released": True, "retired": retired}
             train_state._write(path, {"units": units})
     except TrainStateError as exc:
         return str(exc)
@@ -118,6 +141,12 @@ def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | Non
                 return (
                     f"unit {unit_name} is finished; its coder moved on to unit {moved} "
                     f"(0086). {WRITE_NEXT}"
+                )
+            retired = record.get("retired")
+            if record.get("released") or (isinstance(retired, list) and agent_id in retired):
+                return (
+                    f"unit {unit_name} goes to a fresh coder after its second refutation "
+                    f"(0187). {WRITE_NEXT}"
                 )
             holder = record.get("agent_id")
             if holder == agent_id:

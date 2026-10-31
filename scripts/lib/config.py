@@ -13,6 +13,7 @@ from lib import git
 from lib.agent_aliases import current as current_name
 from lib.agent_models import MODELS
 from lib.audit import check_project_data_dir
+from lib.coder_model import DEFAULT_CODER_MODELS, TIERS
 from lib.project_root import in_git_work_tree
 from lib.train_scope import KNOWN_AGENTS
 
@@ -82,6 +83,8 @@ class Config:
     operator_signing_keys: tuple[str, ...] = field(default_factory=tuple)
     max_concurrent_builders: int = DEFAULT_MAX_CONCURRENT_BUILDERS
     audit_retention_days: int | None = None
+    # 0187: the coder's model per tier, passed per dispatch; agent_models stays the fallback.
+    coder_models: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CODER_MODELS))
     agent_models: dict[str, str] = field(default_factory=dict)
 
 
@@ -175,6 +178,33 @@ def _agent_models(raw: dict[str, object]) -> dict[str, str]:
                 "Next: delete one of the two entries, so that one model is left for it."
             )
         out[new] = str(model)
+    return out
+
+
+def _coder_models(raw: dict[str, object]) -> dict[str, str]:
+    # 0187: a tier left out keeps its default; an unknown tier or model is refused.
+    value = raw.get("coder_models")
+    if value is None:
+        return dict(DEFAULT_CODER_MODELS)
+    if not isinstance(value, dict):
+        raise ConfigError(
+            "config.json coder_models must be an object. "
+            'Next: write coder_models as {"default": "sonnet", "control_path": "opus", '
+            '"escalated": "opus"}, or remove it.'
+        )
+    out = dict(DEFAULT_CODER_MODELS)
+    for tier, model in value.items():
+        if tier not in TIERS:
+            raise ConfigError(
+                f"config.json coder_models names {tier!r}, which is not a coder tier. "
+                f"Next: name only the coder tiers in coder_models, which are {', '.join(TIERS)}."
+            )
+        if model not in MODELS:
+            raise ConfigError(
+                f"config.json coder_models.{tier} is {model!r}. "
+                f"Next: set coder_models.{tier} to one of {', '.join(MODELS)}."
+            )
+        out[str(tier)] = str(model)
     return out
 
 
@@ -404,5 +434,6 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
         operator_signing_keys=_signing_keys(raw),
         max_concurrent_builders=_max_builders(raw),
         audit_retention_days=_retention_days(raw),
+        coder_models=_coder_models(raw),
         agent_models=_agent_models(raw),
     )

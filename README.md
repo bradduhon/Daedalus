@@ -303,7 +303,8 @@ Some keys and files have no row here, because no reader checks them: the uncheck
 | `operator_signing_keys` | `.claude/daedalus/config.json` | Reserved for the key fingerprints allowed to sign merges; no check reads it yet | list of strings | Non-empty strings | `[]` | `["ABCD1234EF567890"]` |
 | `max_concurrent_builders` | `.claude/daedalus/config.json` | How many coding agents a parallel stage runs at once, and the cap on the plan width the plan validator prints | integer | A whole number of at least 1; `true` and `false` are refused | `5` | `3` |
 | `audit_retention_days` | `.claude/daedalus/config.json` | How many days a session's audit log is kept after its last record. When a new session starts writing, older logs are deleted, each named with its final record in the new session's own log. A log named on a train summary's `Session` line, the log of a train not yet merged, and the current session's log are never deleted | integer or null | A whole number of at least 90, or `null` | `null`: every log is kept | `365` |
-| `agent_models` | `.claude/daedalus/config.json` | Which model each catalog agent runs on, in place of the `model:` line of its agent file; a model a skill is given for one run still comes first | object | Keys are agent names the catalog lists; values are `"sonnet"`, `"opus"`, `"haiku"` or `"fable"`; any other name or value is refused | `{}`: every agent runs on its agent file's model | `{"coder": "sonnet"}` |
+| `coder_models` | `.claude/daedalus/config.json` | Which model a coding agent runs on for one unit. `default` is for most units. `control_path` is for a unit that changes a file under `agents/`, `skills/`, `hooks/` or `scripts/checks/`, or one of the three jail files. `escalated` is for the fresh coding agent that takes over a unit after its second failed check | object | Keys are `default`, `control_path` and `escalated`; values are `"sonnet"`, `"opus"`, `"haiku"` or `"fable"`; any other key or value is refused, and a key left out keeps its default | `{"default": "sonnet", "control_path": "opus", "escalated": "opus"}` | `{"default": "opus"}` |
+| `agent_models` | `.claude/daedalus/config.json` | Which model each catalog agent runs on, in place of the `model:` line of its agent file; a model a skill is given for one run still comes first. Inside a run the coding agent takes its model from `coder_models` instead | object | Keys are agent names the catalog lists; values are `"sonnet"`, `"opus"`, `"haiku"` or `"fable"`; any other name or value is refused | `{}`: every agent runs on its agent file's model | `{"planner": "sonnet"}` |
 <!-- end key reference -->
 
 ## Safety model
@@ -629,6 +630,7 @@ Daedalus/
 │   ├── lib/audit_proof.py           # the hooks-live and approved-verdict proofs
 │   ├── lib/audit_rounds.py          # the auditor's finding list and the round number
 │   ├── lib/briefs.py                # decision briefs checked at the manifest literacy level
+│   ├── lib/coder_model.py           # the coder's model tier for a unit: default, control path, escalated
 │   ├── lib/config.py                # config.json loading and validation
 │   ├── lib/controls.py              # loads the controls fragments
 │   ├── lib/credential_paths.py      # the credential-path deny every agent meets

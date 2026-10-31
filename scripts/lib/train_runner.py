@@ -18,7 +18,17 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from lib import audit_rounds, git, manifest, plan_record, train_definition, train_state, workspace
+from lib import (
+    audit_rounds,
+    git,
+    manifest,
+    plan_record,
+    train_definition,
+    train_state,
+    unit_binding,
+    workspace,
+)
+from lib import coder_model as coder_model_lib
 from lib.audit import ReplyKeyError, message_hmac, reply_key
 from lib.audit_proof import (
     AUDITOR,
@@ -1334,7 +1344,8 @@ def _contract_reason(plan: plan_record.Plan, text: str, repo: Path) -> str | Non
     if len(files) > plan_record.CONTRACT_SKIP_FILES:
         return f"{len(files)} files, more than {plan_record.CONTRACT_SKIP_FILES}"
     for name in files:
-        if any(c in name for c in "*?[") or name.endswith("/"):
+        # 0187: `.` names the whole repository, a folder like `./`.
+        if any(c in name for c in "*?[") or name.endswith("/") or posixpath.normpath(name) == ".":
             return f"unit names a file glob or folder: {name}"
         rel = posixpath.normpath(name)
         if posixpath.isabs(rel) or rel.split("/")[0] == "..":
@@ -1377,6 +1388,65 @@ def contract(cwd: Path) -> Outcome:
         return ["contract: skip"]
 
     return _recorded(cwd, edit)
+
+
+CODERS = "coders"
+
+
+def _unit_record(state: dict[str, object], train_id: str, unit_id: str) -> dict[str, object]:
+    for unit in train_state.units(state):
+        label = workspace._unit_label(train_id, str(unit.get("name")))
+        if not train_state.is_audit_unit(unit) and label.casefold() == unit_id.casefold():
+            return unit
+    raise RunnerError(
+        f"train {train_id} records no worktree for unit {unit_id}. "
+        "Next: create the unit worktree with daedalus_workspace.py create first."
+    )
+
+
+def coder_model(cwd: Path, unit_id: str) -> Outcome:
+    # 0187, issue 115: the coder model of one unit dispatch, recorded on the unit with its reason.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        try:
+            models = load_config(cwd=str(repo)).coder_models
+            state = train_state.load(repo, train_id)
+            plan = workspace._recorded_plan(state)
+            records = workspace._audit_records(repo, state)
+        except (ConfigError, workspace.WorkspaceError) as exc:
+            raise RunnerError(str(exc)) from exc
+        planned = next((u for u in plan.units if u.id.casefold() == unit_id.casefold()), None)
+        if planned is None:
+            raise RunnerError(
+                f"the recorded plan names no unit {unit_id}. "
+                "Next: pass a unit id the recorded plan names."
+            )
+        unit = _unit_record(state, train_id, unit_id)
+        refuted = workspace.unit_refutations(records, Path(str(unit["path"])))
+        tier, reason = coder_model_lib.coder_tier(planned.files, plan_record.CONTROL_PATHS, refuted)
+        entry: dict[str, object] = {"model": models[tier], "tier": tier, "reason": reason}
+        prior = _objects(unit, CODERS)
+        # 0187: a repeated call records nothing new and never frees the unit twice.
+        if prior and {k: prior[-1].get(k) for k in entry} == entry:
+            return [models[tier], _coder_line(unit_id, entry)]
+        if tier == coder_model_lib.ESCALATED:
+            why = unit_binding.release(repo, train_id, str(unit["name"]))
+            if why is not None:
+                raise RunnerError(why)
+
+        def add(state: dict[str, object]) -> None:
+            raw = state.get("units")
+            for each in raw if isinstance(raw, list) else []:
+                if isinstance(each, dict) and each.get("name") == unit["name"]:
+                    each[CODERS] = [*_objects(each, CODERS), entry]
+
+        train_state.change(repo, train_id, add)
+        return [models[tier], _coder_line(unit_id, entry)]
+
+    return _recorded(cwd, edit)
+
+
+def _coder_line(unit_id: str, entry: dict[str, object]) -> str:
+    return f"coder {unit_id}: {entry['model']} ({entry['reason']})"
 
 
 def _exemption_args(ledger_id: str, finding: str, tracking: str, other: str | None) -> None:

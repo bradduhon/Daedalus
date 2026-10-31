@@ -82,7 +82,8 @@ def test_agent_models_row_closes_the_config_section() -> None:
     models = KEY_ROWS[(CONFIG_FILE, "agent_models")]
     assert models.kind == "object" and models.default.startswith("`{}`")
     assert '`"sonnet"`, `"opus"`, `"haiku"` or `"fable"`' in models.values
-    assert models.example == '`{"coder": "sonnet"}`'
+    # 0187: inside a run coder_models sets the coder, so the example names another agent.
+    assert models.example == '`{"planner": "sonnet"}`'
 
 
 def test_github_key_has_no_row() -> None:
