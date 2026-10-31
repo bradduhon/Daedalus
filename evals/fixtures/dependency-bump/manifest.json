@@ -1,0 +1,24 @@
+{
+  "manifest_version": 1,
+  "service_name": "fetcher",
+  "purpose": "A tiny HTTP fetcher with one pinned dependency, used by the Daedalus golden set.",
+  "stack": {
+    "language": "python",
+    "runtime": "python3",
+    "package_registries": ["pypi.org"],
+    "unit_test_cmd": null,
+    "typecheck_cmd": null,
+    "lint_cmd": null
+  },
+  "features": {
+    "scope": "repository",
+    "secrets_scan": false,
+    "scrub_file": null,
+    "ledger": false,
+    "dependency_web_lookup": false,
+    "terraform_tools": false
+  },
+  "jail_narrowing": { "forbidden_paths": [], "forbidden_extensions": [] },
+  "docs": { "literacy": null },
+  "ledger": null
+}

@@ -1,0 +1,2 @@
+<!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
+The one-unit fix runs to completion on an audited tip. The session then starts the release phase. It reads the remote's address, which works, and stops at the GitHub sign-in check, because the sandbox is not signed in to GitHub. Its stop carries a Next line for the operator. The releaser never starts, and no git push, pull request or pushed status appears anywhere in the run.
