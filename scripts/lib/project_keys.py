@@ -519,13 +519,14 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (CONFIG_FILE, "agent_models"): KeyRow(
         "Which model each catalog agent runs on, in place of the `model:` line of its agent "
-        "file; a model a skill is given for one run still comes first",
+        "file; a model a skill is given for one run still comes first. Inside a run the coding "
+        "agent takes its model from `coder_models` instead",
         "object",
         "Keys are agent names the catalog lists; values are "
         + ", ".join(f'`"{model}"`' for model in MODELS[:-1])
         + f' or `"{MODELS[-1]}"`; any other name or value is refused',
         "`{}`: every agent runs on its agent file's model",
-        '`{"coder": "sonnet"}`',
+        '`{"planner": "sonnet"}`',
     ),
 }
 REFERENCE_HEADER = (

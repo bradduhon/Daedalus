@@ -159,7 +159,8 @@ def test_history_reads_total_rows_from_saved_files(tmp_path: Path) -> None:
                 *te.header(),
                 f"| Build Train | {TRAIN} | 2 | coder | opus | a1 | 3 | 6 | 105 | 30 | 0 | 0m50s |",
                 total + " none | 4 | 1m00s |",
-                f"| Build Train | {TRAIN} | mean | per unit | - | 2 units | 1 | 1 | 1 | 1 | 1 | 1s",
+                f"| Build Train | {TRAIN} | mean | per unit | - | 2 units | 1 | 1 | 1 | 1 | 1"
+                " | 1s |",
             ]
         ),
         encoding="utf-8",

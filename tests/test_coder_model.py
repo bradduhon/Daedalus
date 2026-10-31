@@ -68,6 +68,12 @@ def test_a_glob_that_could_reach_a_control_path_counts(name: str, tier: str) -> 
     assert coder_tier([name], CONTROL, 0)[0] == tier
 
 
+@pytest.mark.parametrize("name", ["/etc/agents/x.py", "../other/a.py", "src/../../a.py"])
+def test_an_unsafe_path_fails_closed_to_the_control_path_tier(name: str) -> None:
+    # 0187: an absolute or parent path never falls to the default tier.
+    assert coder_tier(["src/a.py", name], CONTROL, 0) == (CONTROL_PATH, f"unsafe path {name}")
+
+
 @pytest.mark.parametrize("files", [["src/a.py"], ["agents/coder.md"]])
 def test_a_second_refutation_escalates_any_unit(files: list[str]) -> None:
     assert coder_tier(files, CONTROL, 2) == (ESCALATED, REASON_ESCALATED)

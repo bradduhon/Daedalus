@@ -37,6 +37,9 @@ def coder_tier(
         return ESCALATED, REASON_ESCALATED
     hit = manifest.Manifest(tuple(control_paths))
     for name in files:
+        # 0187: fail closed, as the contract check refuses an absolute or parent path.
+        if posixpath.isabs(name) or ".." in name.split("/"):
+            return CONTROL_PATH, f"unsafe path {name}"
         if any(c in name for c in _GLOB_CHARS):
             if _glob_reaches(name, control_paths):
                 return CONTROL_PATH, f"control path {name}"
