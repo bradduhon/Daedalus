@@ -258,6 +258,8 @@ RUN_PHASES = ("plan", "build", "verify", "audit", "document")
 MAIN_ONLY = (
     "daedalus_train.py exception",
     "daedalus_train.py reaudit",
+    # 0190: the operator's writer queue clear runs from the main session only.
+    "daedalus_train.py writer-clear",
     # issue 48, 0173: plan step 2 runs it outside a run only; the run entry set the scope.
     "daedalus_doctor.py --print-scope",
 )

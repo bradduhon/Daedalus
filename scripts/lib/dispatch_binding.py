@@ -174,16 +174,17 @@ def _ours(subagent: str, agent: str) -> bool:
     return (name if sep else prefix) == agent and policed_outside_train(subagent)
 
 
-def _dispatch_reason(tool_input: dict[str, object], cwd: str) -> str | None:
+def _dispatch_reason(tool_input: dict[str, object], cwd: str, main: bool = False) -> str | None:
     # issue 29: during a train a coder dispatch names exactly one recorded unit, once.
+    # 0190: main marks the main session's path, where a refusal only warns and the agent runs.
     from lib.jail import _train_active
 
     step = _step_reason(tool_input, cwd)
-    if step is not None:
-        return step
     subagent = str(tool_input.get("subagent_type") or "")
     if _names_writer(subagent):
-        return _writer_dispatch_reason(tool_input, cwd, subagent)
+        return _writer_dispatch_reason(tool_input, cwd, subagent, step, main)
+    if step is not None:
+        return step
     if not _names_a_coder(subagent) or not os.path.isabs(cwd):
         return None
     if not _train_active(cwd):
@@ -223,51 +224,66 @@ def _names_writer(subagent: str) -> bool:
     return subagent.rpartition(":")[2] == WRITER
 
 
-def _derived_dispatch_reason(repo: Path, train: str, ours: bool) -> str | None:
+def _derived_kind(repo: Path, train: str) -> tuple[str | None, str | None]:
     # 0190: no Worktree: line is the derived kind, which needs the run's frozen sources file.
     import freeze_sources  # scripts/ is on sys.path in every hook process and test.
 
     path = freeze_sources.manifest_path(repo, train)
     if not path.is_file():
-        return R_NO_SOURCES.format(train=train, path=path)
-    if not ours:
-        return None
-    return writer_mode.record_dispatch(repo, train, writer_mode.DERIVED)
+        return None, R_NO_SOURCES.format(train=train, path=path)
+    return writer_mode.DERIVED, None
 
 
-def _writer_dispatch_reason(tool_input: dict[str, object], cwd: str, subagent: str) -> str | None:
-    # 0134, 0190: a Worktree: line is the public docs kind, bound to the docs worktree alone;
-    # no line is the derived kind. Either records the kind the writer's first call takes.
-    from lib.jail import _train_active
-
-    if not os.path.isabs(cwd) or not _train_active(cwd):
-        return None
-    repo = project_root(Path(cwd))
-    train = active_train(repo)
-    if train is None:
-        return f"{train_marker(repo)} names no train id. " + UNMARK_NEXT.format(repo=repo)
-    ours = _ours(subagent, WRITER)
-    waiting = writer_mode.pending_reason(repo, train) if ours else None
-    if waiting is not None:
-        return waiting
+def _writer_kind(
+    tool_input: dict[str, object], repo: Path, train: str, ours: bool
+) -> tuple[str | None, str | None]:
+    # 0134, 0190: (kind, refusal); a Worktree: line is the public docs kind, bound to the docs
+    # worktree alone, and no line is the derived kind.
     lines = _worktree_lines(str(tool_input.get("prompt") or ""))
     if not lines:
-        return _derived_dispatch_reason(repo, train, ours)
+        return _derived_kind(repo, train)
     try:
         state = load_train(repo, train)
     except TrainStateError as exc:
-        return str(exc)
+        return None, str(exc)
     name = docs_unit(train)
     match = _WORKTREE_LINE.fullmatch(lines[0]) if len(lines) == 1 else None
     unit = _unit_named(state, match.group(1)) if match else None
     if unit is None or unit.get("name") != name:
         docs = next((str(u["path"]) for u in units_of(state) if u.get("name") == name), None)
-        return R_DOCS_WORKTREE.format(train=train, docs=docs or "<docs worktree path>", name=name)
-    if not ours:
-        return unit_binding.held_reason(repo, train, name)
-    return record_dispatch(repo, train, name) or writer_mode.record_dispatch(
-        repo, train, writer_mode.PUBLIC_DOCS
+        why = R_DOCS_WORKTREE.format(train=train, docs=docs or "<docs worktree path>", name=name)
+        return None, why
+    held = (
+        record_dispatch(repo, train, name) if ours else unit_binding.held_reason(repo, train, name)
     )
+    return (None, held) if held else (writer_mode.PUBLIC_DOCS, None)
+
+
+def _writer_dispatch_reason(
+    tool_input: dict[str, object], cwd: str, subagent: str, step: str | None, main: bool
+) -> str | None:
+    # 0190: a refusable dispatch records its kind only into an empty queue; on the main path
+    # every dispatch runs, so each one queues, a refused one as kind none.
+    from lib.jail import _train_active
+
+    if not os.path.isabs(cwd) or not _train_active(cwd):
+        return step
+    repo = project_root(Path(cwd))
+    train = active_train(repo)
+    if train is None:
+        return f"{train_marker(repo)} names no train id. " + UNMARK_NEXT.format(repo=repo)
+    ours = _ours(subagent, WRITER)
+    if not main:
+        waiting = step or (writer_mode.pending_reason(repo, train) if ours else None)
+        if waiting is not None:
+            return waiting
+        kind, why = _writer_kind(tool_input, repo, train, ours)
+        if why is not None or not ours:
+            return why
+        return writer_mode.record_dispatch(repo, train, str(kind))
+    kind, why = (None, step) if step else _writer_kind(tool_input, repo, train, ours)
+    queued = writer_mode.queue_dispatch(repo, train, kind or writer_mode.NONE) if ours else None
+    return why or queued
 
 
 def _worktree_lines(text: str) -> list[str]:

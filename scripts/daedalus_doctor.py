@@ -743,6 +743,35 @@ def _old_agent_name_check(repo: Path) -> Iterator[tuple[bool, str]]:
         for name in _json_keys(path, *keys):
             if name in OLD_NAMES:
                 yield True, renamed_line(name, f"{path.name} {label}")
+    for path, name in _definition_names(repo):
+        if name in OLD_NAMES:
+            yield True, renamed_line(name, f"train definition {path.relative_to(repo)}")
+
+
+def _definition_names(repo: Path) -> Iterator[tuple[Path, str]]:
+    # 0190: the stage and consult agent names of each project train definition under trains_dir.
+    try:
+        declared = load_manifest(repo)
+    except ManifestError:
+        return
+    folder = repo / declared.trains_dir if declared and declared.trains_dir else None
+    if folder is None or not folder.is_dir():
+        return
+    for path in sorted(folder.glob("*.json")):
+        try:
+            raw: object = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue
+        data = raw if isinstance(raw, dict) else {}
+        stages = data.get("stages")
+        for stage in stages if isinstance(stages, list) else []:
+            if isinstance(stage, dict) and isinstance(stage.get("agent"), str):
+                yield path, stage["agent"]
+        consults = data.get("consults")
+        for names in consults.values() if isinstance(consults, dict) else []:
+            for name in names if isinstance(names, list) else []:
+                if isinstance(name, str):
+                    yield path, name
 
 
 def _repo_checks(
