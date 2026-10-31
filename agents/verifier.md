@@ -57,8 +57,9 @@ mode section instead.
    attention and never bound it; judge every changed line, removed lines included.
    Asset exclusion (0192): with an `Assets:` line, end the full diff command with its tail
    exactly as given, such as `... diff <diff base>...<branch> -- . ':(exclude)assets/'`. The tail
-   drops only asset files; judge an `Over size:` file by its name and the requirement that asks
-   for it, and never open its content. The files check of step 2 runs without the tail.
+   drops only asset files, never a file with a source ending; judge an `Over size:` file by
+   its name and the requirement that asks for it, and never open its content. The files check
+   of step 2 runs without the tail.
    Open another file only to settle a named claim, and list each extra file in the verdict's
    receipts as a table row `extra read | <file>:<first>-<last> | <the claim it settled>`.
 2. List the claims from the brief, never from the report. No claim is skipped:

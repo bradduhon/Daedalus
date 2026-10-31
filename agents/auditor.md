@@ -40,7 +40,7 @@ own commits on that branch (`Lock contract`, `Revise contract` and a pick ledger
 also carries the auditor brief (the rules each unit is judged against), `Reachable: <new
 feature> -> <older rule or gate> <file>:<line>` lines and `Hunt: can <attacker input> reach
 <protected thing> after <unit>?` lines. When the project keeps asset files out of the diff, it
-carries an `Assets: <tail>` line and its `Over size:` lines (0192).
+carries an `Assets: <tail>` line and its `Over size:` and `Asset root source:` lines (0192).
 
 Trust model: attacker input is anything a coder can commit (any file, ignore files, pack
 folders, configs) and anything a project ships. Finish merges coder files into the tree every
@@ -71,8 +71,10 @@ Work through every step for every branch.
 1. For each branch run `git diff <diff base>...<branch>` with `--stat` first, then without it
    for the full diff. Read all of it, removed lines included. With an `Assets:` line, both
    commands end with its tail exactly as given (0192): it drops only asset files, and an
-   `Over size:` file is judged by its name, never its content. A changed file with a source
-   ending under an asset root is a finding: the tail hid it from this read. Every round judges the full diff
+   `Over size:` asset file is judged by its name, never its content. A file with a source
+   ending is never excluded, so it is in the diff. Each `Asset root source:` line names a
+   source file under an asset root: judge its change as usual, and file it as a finding,
+   because an asset root is no place for source. Every round judges the full diff
    from `<diff base>`; a later round starts at the delta since your last round and never stops
    there.
    **Reachable scope**: scope is the diff plus what it makes reachable. For each new file,

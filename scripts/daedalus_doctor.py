@@ -626,21 +626,23 @@ def _assets_check(repo: Path) -> Iterator[tuple[bool, str]]:
     if declared is None or not assets.declared(declared):
         return
     size = declared.max_bytes
-    cap = f", changed files over {size} bytes listed by name" if size is not None else ""
+    cap = f", asset files over {size} bytes listed by name" if size is not None else ""
     yield (
         True,
         (
             f"OK   assets: {_plural(len(declared.roots), 'root')}, "
             f"{_plural(len(declared.extensions), 'ending')}{cap}, kept out of the judges' diffs "
-            "and the secret scan"
+            "and the secret scan; source files never are"
         ),
     )
     found = assets.sources_in_roots(project_root(str(repo)), declared)
     for path in found[: assets.MAX_SOURCE_LINES]:
+        # 0128: the file stays in every diff; the auditor treats a changed one as a finding.
         yield _opt(
             False,
             f"asset root source file {path}",
-            "a source file under an asset root is never read by the judges or scanned for secrets",
+            "a source file under an asset root keeps that root in every diff, and the auditor "
+            "treats a change to it as a finding",
             "move it out of the asset root, or narrow assets.roots in service-manifest.json",
         )
     if len(found) > assets.MAX_SOURCE_LINES:

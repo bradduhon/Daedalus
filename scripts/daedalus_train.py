@@ -168,10 +168,10 @@ def _assets(repo: Path, base: str, tip: str) -> Outcome:
     try:
         loaded = load_manifest(repo)
         declared = loaded.assets if loaded is not None else Assets()
-        big = assets.oversized(repo, base, tip, declared)
+        found = assets.exclusion(repo, base, tip, declared)
     except (ManifestError, assets.AssetsError, GitTimeout, OSError) as exc:
         return Outcome(EXIT_STOP, [f"assets: {exc}"])
-    return Outcome(EXIT_OK, assets.lines(declared, big))
+    return Outcome(EXIT_OK, assets.lines(found))
 
 
 def _writer_clear(repo: Path) -> Outcome:

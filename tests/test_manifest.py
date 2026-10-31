@@ -156,6 +156,12 @@ def test_manifest_reads_the_assets_block(tmp_path: Path) -> None:
         ({"extensions": [".g lb"]}, "assets.extensions"),
         ({"extensions": ["*.glb"]}, "assets.extensions"),
         ({"extensions": [".a/b"]}, "assets.extensions"),
+        # M1, 0128: a source ending is never an asset ending, whatever its case.
+        ({"extensions": [".glb", ".py"]}, "assets.extensions"),
+        ({"extensions": [".TS"]}, "assets.extensions"),
+        ({"extensions": [".env"]}, "assets.extensions"),
+        ({"extensions": [".sh"]}, "assets.extensions"),
+        ({"extensions": [".json"]}, "assets.extensions"),
         ({"max_bytes": 0}, "assets.max_bytes"),
         ({"max_bytes": -1}, "assets.max_bytes"),
         ({"max_bytes": True}, "assets.max_bytes"),
@@ -205,11 +211,14 @@ def test_manifest_reads_a_local_dev_server(tmp_path: Path, url: str) -> None:
         ({"url": "ftp://localhost", "check": "x"}, "dev_server.url"),
         ({"url": "file:///tmp/index.html", "check": "x"}, "dev_server.url"),
         ({"url": "http://localhost:99999", "check": "x"}, "dev_server.url"),
+        ({"url": "http://localhost:0", "check": "x"}, "dev_server.url"),
+        ({"url": "http://127.0.0.1:0/", "check": "x"}, "dev_server.url"),
         ({"url": "http://localhost:5173/a b", "check": "x"}, "dev_server.url"),
         ({"url": 5173, "check": "x"}, "dev_server.url"),
         ({"url": "http://localhost:5173", "check": ""}, "dev_server.check"),
         ({"url": "http://localhost:5173", "check": "a\nb"}, "dev_server.check"),
         ({"url": "http://localhost:5173", "check": 1}, "dev_server.check"),
+        ({"url": "http://localhost:5173", "check": "run `pnpm dev`"}, "dev_server.check"),
     ],
 )
 def test_manifest_refuses_a_bad_dev_server(tmp_path: Path, block: object, key: str) -> None:

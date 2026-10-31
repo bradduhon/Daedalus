@@ -148,6 +148,18 @@ class Assets:
 
 
 ASSETS_KEYS = tuple(f.name for f in fields(Assets))
+# 0128, 0192: endings the judges always read; never an asset ending, never excluded.
+SOURCE_EXTENSIONS = (
+    *(".sh", ".bash", ".zsh", ".mjs", ".cjs", ".ts", ".tsx", ".js", ".jsx", ".html", ".css"),
+    *(".toml", ".ini", ".cfg", ".env", ".txt", ".md", ".json", ".yaml", ".yml", ".tf"),
+    *(".tfvars", ".py", ".pyi", ".go", ".rs", ".java", ".kt", ".c", ".h", ".cpp", ".hpp"),
+    *(".cs", ".rb", ".php", ".sql"),
+)
+
+
+def is_source(path: str) -> bool:
+    # 0192: casefolded, so a case change never turns a source file into an asset.
+    return path.casefold().endswith(SOURCE_EXTENSIONS)
 
 
 @dataclass(frozen=True)
@@ -602,6 +614,14 @@ def _assets(target: Path, raw: dict[str, object]) -> Assets:
             "must be a list of endings that each start with a dot and hold only letters, "
             "digits, dots, dashes and underscores",
         )
+    sources = [str(e) for e in extensions if is_source(str(e))]
+    if sources:
+        raise _key_error(
+            target,
+            "assets.extensions",
+            f"names the source endings {sources}, which the judges always read and the secret "
+            "scan always covers",
+        )
     size = block.get("max_bytes")
     if size is not None and (isinstance(size, bool) or not isinstance(size, int) or size < 1):
         raise _key_error(target, "assets.max_bytes", "must be null or a whole number of at least 1")
@@ -609,16 +629,17 @@ def _assets(target: Path, raw: dict[str, object]) -> Assets:
 
 
 def _local_url(url: object) -> bool:
-    # 0164: http or https on this machine, any port, no user part.
+    # 0164: http or https on this machine, a port of 1 to 65535 or none, no user part.
     if not isinstance(url, str) or not url.isprintable() or any(c.isspace() for c in url):
         return False
     parts = urlsplit(url)
     try:
-        _ = parts.port  # urlsplit raises here on a port outside 0 to 65535.
+        port = parts.port  # urlsplit raises here on a port outside 0 to 65535.
     except ValueError:
         return False
     return (
-        parts.scheme in ("http", "https")
+        port != 0
+        and parts.scheme in ("http", "https")
         and parts.hostname in DEV_SERVER_HOSTS
         and parts.username is None
         and parts.password is None
@@ -642,8 +663,12 @@ def _dev_server(target: Path, raw: dict[str, object]) -> DevServer | None:
         hosts = " or ".join(DEV_SERVER_HOSTS)
         raise _key_error(target, "dev_server.url", f"must be an http or https url on {hosts}")
     check = block["check"]
-    if not isinstance(check, str) or not check.strip() or not check.isprintable():
-        raise _key_error(target, "dev_server.check", "must be one printable line of plain words")
+    if not isinstance(check, str) or not check.strip() or not check.isprintable() or "`" in check:
+        raise _key_error(
+            target,
+            "dev_server.check",
+            "must be one printable line of plain words without backticks",
+        )
     return DevServer(str(url), check)
 
 

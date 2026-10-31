@@ -413,8 +413,9 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "assets.roots"): KeyRow(
         "Folders of asset files, such as models, textures, sounds and shaders, kept out of the "
-        "diffs the verifier and the auditor read and out of the secret scan; the doctor warns "
-        "about a source file inside one",
+        "diffs the verifier and the auditor read and out of the secret scan. A source file "
+        "inside one, such as a `.py` or `.ts` file, is never kept out, and the doctor and the "
+        "auditor report it",
         "list of strings",
         "Project-relative folder paths of letters, digits, dots, dashes, underscores and "
         "slashes, without a leading slash, `..` or glob characters",
@@ -426,16 +427,16 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "matching keeps case",
         "list of strings",
         "Endings that each start with a dot and hold only letters, digits, dots, dashes and "
-        "underscores",
+        "underscores; a source ending such as `.py`, `.ts`, `.json` or `.env` is refused",
         "`[]`: no ending is kept out",
         '`[".glb", ".png", ".wav"]`',
     ),
     (MANIFEST_FILE, "assets.max_bytes"): KeyRow(
-        "The largest changed file the judges read in full; a larger one is listed by name and "
-        "size only, and kept out of the diffs and the secret scan",
+        "The size above which a kept-out asset file is listed by name and size, so the judges "
+        "know it changed; it never keeps out a file that is not an asset",
         "integer or null",
         "A whole number of at least 1, or `null`",
-        "`null`: no size limit",
+        "`null`: no asset file is listed by size",
         "`1048576`",
     ),
     (MANIFEST_FILE, "dev_server.url"): KeyRow(

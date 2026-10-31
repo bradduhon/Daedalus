@@ -411,6 +411,8 @@ def test_the_verify_step_asks_the_operator_each_check_and_never_fetches_the_site
         "A dev server question names its url and its check text",
         "`Fail` is a refuted `code` row routed like a verifier refutation",
         "`Skip` records the operator's reason.",
+        # L1: the second and third steps live in the REFUTED bullet below this one.
+        "the second and third take the steps of the `[VERDICT: REFUTED]` bullet below.",
         "`operator check | <url or none> | <check text> | <pass, fail or skip> | <the "
         "operator's words>`",
         "Daedalus never starts, polls or fetches the site; the operator hosts it.",
@@ -439,6 +441,14 @@ def test_a_local_url_is_the_one_slash_word_a_decision_brief_may_carry() -> None:
 
     good = "Question: Open http://localhost:5173 in your browser. Does the scene load?"
     assert brief_problems(good, "plain") == []
-    for url in ("http://example.com", "file:///tmp/x", "http://localhost.evil.com/a"):
+    assert brief_problems("Question: Open http://localhost:5173/x?y#z now?", "plain") == []
+    # L3: the path or query never carries another url or a user part.
+    for url in (
+        "http://example.com",
+        "file:///tmp/x",
+        "http://localhost.evil.com/a",
+        "http://localhost:5173/?u=https://evil.com",
+        "http://localhost:5173/a@evil.com",
+    ):
         problems = brief_problems(f"Question: Open {url} now?", "plain")
         assert any("with a slash" in p for p in problems), url

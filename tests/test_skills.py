@@ -2046,6 +2046,16 @@ def test_audit_judges_read_the_merged_diff_without_the_asset_files() -> None:
     assert "every content diff and `--stat` command of this phase ends with it" in intro
     assert "a `--name-only` list never carries it" in intro
     assert "the framework specialist's and the auditor's, carries the `Assets:`" in intro
+    # H1, 0128: a source ending is never excluded; a source file under a root is a finding.
+    assert "A file with a source ending is never excluded." in intro
+    assert "Run it again before each later auditor round" in intro
+    auditor_text = " ".join((REPO_ROOT / "agents" / "auditor.md").read_text("utf-8").split())
+    assert "Each `Asset root source:` line names a source file under an asset root" in (
+        auditor_text
+    )
+    assert "and file it as a finding, because an asset root is no place for source" in (
+        auditor_text
+    )
     short = _section(text, "### Short form", "## ")
     assert "With an asset tail, the `--stat` command ends with it" in short
     auditor = " ".join((REPO_ROOT / "agents" / "auditor.md").read_text("utf-8").split())
