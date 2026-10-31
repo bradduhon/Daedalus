@@ -148,7 +148,7 @@ def test_admin_class_refused(train_repo: Path, agent: str, command: str) -> None
 @pytest.mark.parametrize("agent", AGENTS)
 @pytest.mark.parametrize("command", DEFAULT_DENY)
 def test_default_deny(train_repo: Path, agent: str, command: str) -> None:
-    nxt = "only the Push Train's conductor runs gh"
+    nxt = "only the Push Train's releaser runs gh"
     _class_refused(train_repo, agent, command, "default-deny", nxt)
 
 
@@ -157,7 +157,7 @@ def test_conductor_allowlist(train_repo: Path, command: str) -> None:
     d = decide(_bash(train_repo, "releaser", command), Config())
     assert d.allow, d.reason
     reason = _reason(train_repo, "general-purpose", command)
-    assert "(0028)" in reason and "Next: only the Push Train's conductor runs gh." in reason
+    assert "(0028)" in reason and "Next: only the Push Train's releaser runs gh." in reason
     assert _denying_hook(train_repo, "coder", command) == "network_tools"
 
 
@@ -235,7 +235,7 @@ def test_main_may_view_issues_and_prs_during_a_train(train_repo: Path, command: 
     ["gh pr create --title t --body-file docs/.tmp/pr.md", "gh pr edit 3 --body-file x.md"],
 )
 def test_main_pr_create_is_refused(train_repo: Path, command: str) -> None:
-    # B7: pull request writes stay with the Push Train's conductor.
+    # B7: pull request writes stay with the Push Train's releaser.
     reason = _reason(train_repo, "main", command)
     assert "not on the main gh list (0028)" in reason and "Next:" in reason
 
@@ -330,7 +330,7 @@ def test_git_push_only_for_the_conductor(train_repo: Path) -> None:
     for agent in ("main", "general-purpose"):
         for command in ("git push origin feat/x", "git -C . push -u origin feat/x"):
             reason = _reason(train_repo, agent, command)
-            assert "git push runs only in the Push Train's conductor (0028, 0030)" in reason
+            assert "git push runs only in the Push Train's releaser (0028, 0030)" in reason
             assert reason.endswith("Next: push from your own shell, or through /daedalus:run push.")
     # spec 4.2: past the 0028 list, a train with no state meets the verdict gate.
     push = "git push origin daedalus/20261016-120000"

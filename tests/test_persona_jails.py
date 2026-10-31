@@ -65,7 +65,7 @@ def _writer(repo: Path, tool: str, **tool_input: str) -> dict[str, Any]:
 def _bound_writer(repo: Path) -> None:
     assert (
         dispatch_binding._writer_dispatch_reason(
-            {"prompt": f"Worktree: {repo}/.claude/worktrees/{DOCS}"}, str(repo), WRITER
+            {"prompt": f"Worktree: {repo}/.claude/worktrees/{DOCS}"}, str(repo), WRITER, None, False
         )
         is None
     )

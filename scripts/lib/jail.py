@@ -2042,7 +2042,7 @@ def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision
     if train is not None:
         return _warn(R_MAIN_TRAIN_WARN.format(train=train, path=path))
     if tool in dispatch_binding.DISPATCH_TOOLS:
-        reason = dispatch_binding._dispatch_reason(tool_input, cwd)
+        reason = dispatch_binding._dispatch_reason(tool_input, cwd, main=True)
         if reason:
             # Main never prompted (amends 0106): the dispatch runs with the skipped invariant named.
             return _warn(WARN_DISPATCH.format(reason=reason))

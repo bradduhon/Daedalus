@@ -1,19 +1,21 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 0190: one writer agent, two kinds; the dispatch records the kind and the writer's first call
-# binds it, so each writer runs exactly the jail of the agent its kind replaced.
+# 0190: one writer agent, two kinds; each dispatch queues its kind and a writer's first call
+# binds the one waiting entry, so each writer runs exactly the jail of the agent it replaced.
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
+import daedalus_train
 import freeze_sources
 import pytest
-from lib import agent_files, dispatch_binding, router, writer_mode
+from lib import agent_files, dispatch_binding, router, workspace, writer_mode
 from lib.config import Config
+from lib.jail import Decision
 
 from tests.conftest import REPO_ROOT
-from tests.hook_chain import CHAINS
+from tests.hook_chain import CHAINS, evaluate
 from tests.hook_chain import judge as decide
 from tests.test_dispatch_binding import TRAIN
 from tests.test_persona_jails import trees  # noqa: F401  # 0190: the shared fixture.
@@ -58,17 +60,28 @@ def _call(repo: Path, agent_id: str, tool: str, **tool_input: str) -> tuple[bool
     return d.allow, str(d.reason)
 
 
+def _queue(repo: Path) -> tuple[list[str], dict[str, str]]:
+    return writer_mode._read(writer_mode.records_path(repo, TRAIN))
+
+
+def _public_dispatch(repo: Path, docs: Path, by: str) -> Decision:
+    return decide(_dispatch(repo, f"Kind skill: public-docs\nWorktree: {docs}\n", by), Config())
+
+
+def _derived_dispatch(repo: Path, by: str) -> Decision:
+    return decide(_dispatch(repo, "Kind skill: derived\n", by), Config())
+
+
 def _public_writer(repo: Path, docs: Path) -> str:
-    d = decide(
-        _dispatch(repo, f"Kind skill: public-docs\nWorktree: {docs}\n", "orchestrator"), Config()
-    )
+    d = _public_dispatch(repo, docs, "orchestrator")
     assert d.allow, d.reason
     return "w-public"
 
 
 def _derived_writer(repo: Path) -> str:
-    assert decide(_dispatch(repo, "Kind skill: derived\n", "main"), Config()).allow
-    assert writer_mode._read(writer_mode.records_path(repo, TRAIN))[0] == writer_mode.DERIVED
+    d = _derived_dispatch(repo, "main")
+    assert d.allow and not d.warn, d.reason
+    assert _queue(repo)[0] == [writer_mode.DERIVED]
     return "w-derived"
 
 
@@ -85,10 +98,7 @@ def test_public_docs_writer_is_refused_a_write_under_the_output_folder(
     assert not allow and reason.startswith("the writer writes only the four public docs"), reason
     allow, reason = _call(repo_cwd, writer, "Bash", command=f"tee {repo_cwd}/out/doc.md")
     assert not allow, reason
-    assert writer_mode._read(writer_mode.records_path(repo_cwd, TRAIN)) == (
-        None,
-        {writer: writer_mode.PUBLIC_DOCS},
-    )
+    assert _queue(repo_cwd) == ([], {writer: writer_mode.PUBLIC_DOCS})
 
 
 @pytest.mark.parametrize("doc", dispatch_binding.PUBLIC_DOCS)
@@ -101,11 +111,20 @@ def test_derived_writer_is_refused_every_public_doc(repo_cwd: Path, run: Path, d
     assert not _call(repo_cwd, writer, "Bash", command=f"git -C {run} add {doc}")[0]
 
 
+def test_one_waiting_dispatch_binds_its_writer(repo_cwd: Path, run: Path) -> None:
+    # 0190: a single queue entry goes to the first writer that calls, and the queue empties.
+    writer = _derived_writer(repo_cwd)
+    assert _call(repo_cwd, writer, "Read", file_path=f"{run}/README.md")[0]
+    assert _queue(repo_cwd) == ([], {writer: writer_mode.DERIVED})
+
+
 def test_each_writer_keeps_the_kind_its_own_dispatch_recorded(repo_cwd: Path, run: Path) -> None:
     public = _public_writer(repo_cwd, run)
-    # 0190: a second dispatch waits until the first writer's first call binds its kind.
-    d = decide(_dispatch(repo_cwd, "Kind skill: derived\n", "main"), Config())
-    assert writer_mode.R_PENDING.split(" {kind}")[0] in str(d.reason)
+    # 0190: the orchestrator's second dispatch is refused while the first one waits.
+    d = _derived_dispatch(repo_cwd, "orchestrator")
+    assert not d.allow and not d.warn, d.reason
+    assert str(d.reason).startswith("a writer dispatched as public-docs in train"), d.reason
+    assert _queue(repo_cwd)[0] == [writer_mode.PUBLIC_DOCS]
     assert _call(repo_cwd, public, "Read", file_path=f"{run}/README.md")[0]
     derived = _derived_writer(repo_cwd)
     assert _call(repo_cwd, derived, "Read", file_path=f"{run}/README.md")[0]
@@ -113,6 +132,63 @@ def test_each_writer_keeps_the_kind_its_own_dispatch_recorded(repo_cwd: Path, ru
     assert not _call(repo_cwd, derived, "Write", file_path=f"{run}/README.md", content="x")[0]
     assert _call(repo_cwd, public, "Write", file_path=f"{run}/README.md", content="x")[0]
     assert _call(repo_cwd, derived, "Write", file_path=f"{repo_cwd}/out/a.md", content="x")[0]
+
+
+def test_two_waiting_dispatches_refuse_both_writers(repo_cwd: Path, run: Path) -> None:
+    # 0190: the main session's second dispatch runs with a warning and queues; neither writer
+    # binds, so the derived-briefed writer never borrows the public docs limits.
+    first = _public_dispatch(repo_cwd, run, "main")
+    assert first.allow and not first.warn, first.reason
+    second = _derived_dispatch(repo_cwd, "main")
+    # Main never prompted: a warned main call is not allowed outright, yet it runs.
+    assert not second.allow and second.warn, second.reason
+    assert "2 writer dispatches now wait" in str(second.reason)
+    readme = run / "README.md"
+    before = readme.read_bytes() if readme.exists() else None
+    for writer in ("w-derived", "w-public"):
+        allow, reason = _call(repo_cwd, writer, "Write", file_path=str(readme), content="x")
+        assert not allow and reason.startswith(f"writer {writer} takes no kind"), reason
+        assert "public-docs, derived" in reason and "writer-clear" in reason, reason
+        assert not _call(repo_cwd, writer, "Read", file_path=str(readme))[0]
+    assert (readme.read_bytes() if readme.exists() else None) == before
+    assert _queue(repo_cwd) == ([writer_mode.PUBLIC_DOCS, writer_mode.DERIVED], {})
+
+
+def test_a_dispatch_whose_kind_cannot_be_read_queues_as_none(repo_cwd: Path, run: Path) -> None:
+    # 0190: a warned main dispatch with two Worktree: lines still queues, as kind none.
+    d = decide(_dispatch(repo_cwd, f"Worktree: {run}\nWorktree: {repo_cwd}\n", "main"), Config())
+    assert not d.allow and d.warn and "(0134)" in str(d.reason), d.reason
+    assert _queue(repo_cwd)[0] == [writer_mode.NONE]
+    allow, reason = _call(repo_cwd, "w-odd", "Read", file_path=f"{run}/README.md")
+    assert not allow and "a brief whose kind could not be read" in reason, reason
+    assert _queue(repo_cwd) == ([], {"w-odd": writer_mode.NONE})
+
+
+def test_writer_clear_empties_the_queue(repo_cwd: Path, run: Path, capsys: Any) -> None:
+    _public_dispatch(repo_cwd, run, "main")
+    _derived_dispatch(repo_cwd, "main")
+    assert daedalus_train.main(["writer-clear", "--repo", str(repo_cwd)]) == 0
+    assert capsys.readouterr().out == f"writer queue cleared train={TRAIN} removed=2\n"
+    assert _queue(repo_cwd)[0] == []
+    writer = _derived_writer(repo_cwd)
+    assert _call(repo_cwd, writer, "Write", file_path=f"{repo_cwd}/out/a.md", content="x")[0]
+
+
+def test_writer_clear_is_the_main_sessions_alone(repo_cwd: Path) -> None:
+    # 0190: the orchestrator's train class does not admit writer-clear.
+    script = REPO_ROOT / "scripts" / "daedalus_train.py"
+    command = f"python3 {script} writer-clear --repo {repo_cwd}"
+    payload: dict[str, object] = {"agent_type": "daedalus:orchestrator", "tool_name": "Bash"}
+    payload["cwd"] = str(repo_cwd)
+    payload["tool_input"] = {"command": command}
+    assert evaluate("command_allowlist", payload, "--allow", "train,inspect") is not None
+
+
+def test_a_stop_empties_the_queue(repo_cwd: Path, run: Path) -> None:
+    _public_dispatch(repo_cwd, run, "main")
+    _derived_dispatch(repo_cwd, "main")
+    workspace.clear_train(repo_cwd)
+    assert _queue(repo_cwd)[0] == []
 
 
 def test_a_writer_with_no_recorded_dispatch_is_refused_every_call(
