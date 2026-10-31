@@ -45,7 +45,7 @@ CLASS_NEXT = {
     "merge": "the operator merges in the GitHub UI",
     "delete": "delete from your own shell if you mean it",
     "admin": "change repository settings from your own shell",
-    "default-deny": "only the Push Train's conductor runs gh",
+    "default-deny": "only the Push Train's releaser runs gh",
 }
 PUSH_NEXT = "push from your own shell, or through /daedalus:run push"
 EDIT_NEXT = "edit only the body with --body-file; the operator changes anything else on the PR"
@@ -307,7 +307,7 @@ def _gh_reason(agent: str, tokens: list[str]) -> str | None:
 def _push_reason(agent: str) -> str | None:
     if agent == CONDUCTOR:
         return None
-    return f"git push runs only in the Push Train's conductor (0028, 0030). Next: {PUSH_NEXT}."
+    return f"git push runs only in the Push Train's releaser (0028, 0030). Next: {PUSH_NEXT}."
 
 
 def _fallback_reason(agent: str, command: str) -> str | None:

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import writer_mode  # noqa: E402
 from lib.agent_aliases import current as current_name  # noqa: E402
 from lib.audit import (  # noqa: E402
     SESSION_ID,
@@ -72,9 +73,10 @@ CODER_TURN_TARGET = 24
 ROOT_RUN_TYPES = {
     "orchestrator": BUILD,
     "releaser": PUSH,
-    "writer": DOC,
     "comparer": DOC,
 }
+# 0190: a writer roots a document run only in its derived kind; a public docs writer roots none.
+WRITER_ROOT_TYPES = {writer_mode.DERIVED: DOC}
 # Plan 11 A: the Build Train phase an agent type works in when its prompt names none.
 BUILD_PHASES = {
     "planner": "1",
@@ -366,9 +368,11 @@ def _root(agent: Agent, by_id: dict[str, Agent]) -> Agent:
     return agent
 
 
-def _run_type(root: Agent) -> str | None:
+def _run_type(root: Agent, kinds: dict[str, str]) -> str | None:
     if root.agent_type == "planner":
         return "brainstorm" if _CHALLENGE.search(root.opening) else "plan"
+    if root.agent_type == writer_mode.WRITER:
+        return WRITER_ROOT_TYPES.get(kinds.get(root.agent_id, ""))
     return ROOT_RUN_TYPES.get(root.agent_type)
 
 
@@ -387,14 +391,15 @@ def _phase(run_type: str, agent_type: str, prompt: str) -> str | None:
     return match.group(1) if match else BUILD_PHASES.get(agent_type)
 
 
-def build_runs(agents: list[Agent], session: str) -> list[Run]:
+def build_runs(agents: list[Agent], session: str, kinds: dict[str, str] | None = None) -> list[Run]:
     # Plan 11 A: a run is a root agent's whole tree; an unclassed root joins a run it names.
+    # 0190: kinds maps a writer's agent id to the kind its dispatch bound, from the writer record.
     by_id = {a.agent_id: a for a in agents}
     runs: dict[tuple[str, str], Run] = {}
     owners: dict[str, tuple[str, str]] = {}
     for agent in agents:
         root = _root(agent, by_id)
-        run_type = _run_type(root)
+        run_type = _run_type(root, kinds or {})
         if run_type is not None:
             owners[agent.agent_id] = (run_type, _named_id(root) or root.agent_id)
     ids: dict[str, tuple[str, str]] = {}
@@ -568,7 +573,8 @@ def session_runs(
     # Returns the runs, the session group included, and the transcript count.
     files = transcript_files(session, root)
     types = audit_types(_audit_records(root, session) if records is None else records)
-    return build_runs(load_agents(files, types), session), len(files)
+    kinds = writer_mode.bound_kinds(root)
+    return build_runs(load_agents(files, types), session, kinds), len(files)
 
 
 def _merge(runs: list[Run]) -> list[Run]:

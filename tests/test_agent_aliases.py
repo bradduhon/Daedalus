@@ -102,6 +102,25 @@ def test_the_doctor_names_each_old_name_with_its_new_name(tmp_path: Path) -> Non
     assert "renamed to comparer" in lines[0] and "Next: write comparer" in lines[0]
 
 
+def test_the_doctor_names_an_old_name_in_a_project_train_definition(tmp_path: Path) -> None:
+    # 0190: a definition under trains_dir aliases silently at load; the doctor names it.
+    manifest = {"trains_dir": "trains"}
+    (tmp_path / "service-manifest.json").write_text(json.dumps(manifest), "utf-8")
+    raw = json.loads((REPO_ROOT / "tests" / "fixtures" / "trains" / "valid.json").read_text())
+    for stage in raw["stages"]:
+        if stage["agent"] == "coder":
+            stage["agent"] = CODER
+    raw["consults"] = {"code": [DERIVER, "verifier"]}
+    (tmp_path / "trains").mkdir()
+    (tmp_path / "trains" / "mine.json").write_text(json.dumps(raw), "utf-8")
+    lines = [line for _, line in daedalus_doctor._old_agent_name_check(tmp_path)]
+    where = "train definition trains/mine.json"
+    assert lines == [
+        agent_aliases.renamed_line(CODER, where),
+        agent_aliases.renamed_line(DERIVER, where),
+    ]
+
+
 def test_the_orchestrator_is_told_the_new_name_of_an_old_agent() -> None:
     gate = load("dispatch_gate")
     reason = evaluate("dispatch_gate", _start(CWD, f"daedalus:{AUDITOR}"))
