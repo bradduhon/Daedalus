@@ -3,4 +3,4 @@ type: regex
 target: "trace"
 match: "contains"
 ---
-\bDEP-[1-7]\b
+DEP-[1-7]\b[^\n]{0,80}?\b(?:PASS|FAIL)\b[^\n]{0,200}?requirements\.txt:\d+

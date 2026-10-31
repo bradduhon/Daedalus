@@ -3,4 +3,4 @@ type: regex
 target: "trace"
 match: "contains"
 ---
-contract: required \(
+contract: required \([^<{)\n][^)\n]*\)

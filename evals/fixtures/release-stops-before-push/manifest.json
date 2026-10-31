@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "service_name": "units",
-  "purpose": "A tiny unit converter whose remote cannot be reached, used by the Daedalus golden set.",
+  "purpose": "A tiny unit converter whose remote is a placeholder address, used by the Daedalus golden set.",
   "stack": {
     "language": "python",
     "runtime": "python3",

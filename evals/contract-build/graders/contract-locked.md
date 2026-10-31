@@ -3,4 +3,4 @@ type: regex
 target: "trace"
 match: "contains"
 ---
-TF-0[^\n]{0,120}\b(?:WARN|PASS)\b
+contract: \S*contracts/[a-z0-9-]+\.md v[0-9]+

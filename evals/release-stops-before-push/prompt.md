@@ -1,6 +1,6 @@
 ---
 name: "release-stops-before-push"
-description: "After a finished run, the release phase checks its preconditions and stops before any push; the sandbox has no GitHub sign-in and the remote cannot be reached."
+description: "After a finished run, the release phase checks its preconditions and stops at the GitHub sign-in check, before any push."
 tags: ["orchestrator", "coder", "verifier", "auditor", "fold-orchestrator", "model-coder"]
 runs: 2
 max_turns: 200

@@ -103,6 +103,11 @@ SHIM = (
     'exec python3 "$here/../scaffold.py" "$(basename "$here")"\n'
 )
 PLAN_PROMPT = re.compile(r"^/daedalus:run (plans/\S+\.md)$")
+# 0186: inputs a prompt names must ship in its fixture; outputs such as out/faq.md need not.
+NAMED_INPUT = re.compile(r"\b((?:plans|specs|sources|contracts)/[\w.-]+\.md)")
+# Plugin text a session reads into its trace; a trace grader must not be decided by it.
+PLUGIN_TEXT = ("agents", "skills", "hooks", "scripts", "packs", "docs/howto")
+PLUGIN_FILES = ("README.md", "docs/guardrails.md", "docs/project-requirements.md")
 
 
 def _json_lines(text: str, where: str) -> dict[str, Any]:
@@ -114,7 +119,8 @@ def _json_lines(text: str, where: str) -> dict[str, Any]:
         assert sep and key.isidentifier(), f"{where}: not a 'key: <json>' line: {line!r}"
         assert key not in out, f"{where}: duplicate key {key}"
         # A bare word is a YAML plain string, such as type: regex.
-        out[key] = raw if re.fullmatch(r"[a-z_][a-z_-]*", raw) else json.loads(raw)
+        bare = re.fullmatch(r"[a-z_][a-z_-]*", raw) and raw not in {"true", "false", "null"}
+        out[key] = raw if bare else json.loads(raw)
     try:
         import yaml  # type: ignore[import-untyped]
     except ImportError:
@@ -189,8 +195,9 @@ def test_graders(case: str) -> None:
         assert fm.get("arm", "both") in {"with-only", "both"}
         for key in ("target", "focus"):
             if key in fm:
-                assert fm[key] in TARGETS or (
-                    isinstance(fm[key], dict) and fm[key].get("source") == "file"
+                value = fm[key]
+                assert (isinstance(value, dict) and value.get("source") == "file") or (
+                    value in TARGETS
                 ), f"{path}: {key}"
         if kind == "regex":
             match = fm.get("match", "contains")
@@ -237,6 +244,10 @@ def test_fixture(case: str) -> None:
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["features"]["scope"] == ("repository" if spec["git"] else "folder")
     _, body = _split(EVALS / case / "prompt.md")
+    for named in NAMED_INPUT.findall(body):
+        assert (root / named).is_file(), (
+            f"{case}: the prompt names {named}, absent from the fixture"
+        )
     plan = PLAN_PROMPT.match(body)
     if plan:
         done = subprocess.run(
@@ -274,6 +285,30 @@ def test_scaffold_stages_fixture(case: str, tmp_path: Path) -> None:
     )
     want = "repository" if spec["git"] else "folder"
     assert scope.stdout.startswith(f"scope: {want}  root: "), scope.stdout
+
+
+def _plugin_text() -> list[tuple[str, str]]:
+    paths = [REPO_ROOT / name for name in PLUGIN_FILES]
+    for folder in PLUGIN_TEXT:
+        paths += [p for p in (REPO_ROOT / folder).rglob("*") if p.suffix in {".md", ".py"}]
+    out = []
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        # A trace records file reads as JSON strings, so the escaped form is checked too.
+        out += [(str(path), text), (str(path), json.dumps(text))]
+    return out
+
+
+def test_trace_graders_are_not_decided_by_plugin_text() -> None:
+    # 0186: a contains grader that plugin text satisfies passes trivially; not_contains fails.
+    corpus = _plugin_text()
+    for path in sorted(EVALS.glob("*/graders/*.md")):
+        fm, body = _split(path)
+        if fm.get("type") != "regex" or fm.get("target", "last_message") != "trace":
+            continue
+        pattern = re.compile(fm.get("pattern", body))
+        hits = [where for where, text in corpus if pattern.search(text)]
+        assert hits == [], f"{path}: plugin text matches: {hits[:3]}"
 
 
 def test_agent_names_are_phase_names() -> None:

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import re
 import subprocess
@@ -23,6 +24,7 @@ ALLOWLIST = frozenset(
         "README.md",
         "VERSION",
         "agents/",
+        "evals/",
         "hooks/",
         "packs/",
         "pyproject.toml",
@@ -51,6 +53,8 @@ SECTION_HEADER = re.compile(r"\[[a-z][a-z0-9-]*\]")
 PUBLIC_REMOTE = re.compile(r"github\.com[:/]bradduhon/Daedalus(?:\.git)?/?$", re.IGNORECASE)
 PY_HEADER = ["# Copyright (c) 2026 Brad Duhon.", "# SPDX-License-Identifier: GPL-3.0-or-later"]
 MD_HEADER = "<!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->"
+# 0186: eval prompts, grader bodies and fixtures are harness input; a header would change them.
+EVAL_INPUTS = ("evals/*/graders/*.md", "evals/*/prompt.md", "evals/fixtures/*")
 # sha256 of https://www.gnu.org/licenses/gpl-3.0.txt.
 GPL3_SHA256 = "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
 
@@ -167,6 +171,8 @@ def test_no_private_names() -> None:
 def test_every_py_and_md_carries_the_spdx_header() -> None:
     missing = []
     for path in _public_files():
+        if any(fnmatch.fnmatchcase(path, glob) for glob in EVAL_INPUTS):
+            continue
         text = (REPO_ROOT / path).read_text(encoding="utf-8")
         if path.endswith(".py"):
             lines = text.splitlines()
