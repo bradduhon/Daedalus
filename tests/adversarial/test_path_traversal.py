@@ -88,19 +88,19 @@ def _audit(repo: Path) -> str:
 @pytest.mark.parametrize("tool", ("Write", "Edit"))
 def test_coder_write_tool_traversal_is_denied(template: str, tool: str) -> None:
     path = template.format(wt=WT, cwd=CWD)
-    assert_denied(_w("repo-coder", path, tool), OUTSIDE, "plugin data directory")
+    assert_denied(_w("coder", path, tool), OUTSIDE, "plugin data directory")
 
 
 @pytest.mark.parametrize("template", CODER_WRITE_COMMANDS)
 def test_coder_bash_traversal_is_denied(template: str) -> None:
-    assert_denied(_b("repo-coder", template.format(wt=WT)))
+    assert_denied(_b("coder", template.format(wt=WT)))
 
 
 @pytest.mark.parametrize("template", PROTECTED_PATHS)
 def test_traversal_onto_a_protected_path_is_denied(template: str) -> None:
     path = template.format(wt=WT)
-    assert_denied(_w("repo-coder", path), PROTECTED)
-    assert_denied(_b("repo-coder", f"tee {path}"), PROTECTED)
+    assert_denied(_w("coder", path), PROTECTED)
+    assert_denied(_b("coder", f"tee {path}"), PROTECTED)
 
 
 @pytest.mark.parametrize("template", PREPUSH_IGNORE_WRITES)
@@ -108,8 +108,8 @@ def test_traversal_onto_a_protected_path_is_denied(template: str) -> None:
 def test_coder_write_of_an_ignore_file_is_denied(template: str, tool: str) -> None:
     # prepush-2026-10-27 finding 1: a merged `!` line would let rg read the reply key.
     path = template.format(wt=WT)
-    assert_denied(_w("repo-coder", path, tool), PROTECTED)
-    assert_denied(_b("repo-coder", f"tee {path}"), PROTECTED)
+    assert_denied(_w("coder", path, tool), PROTECTED)
+    assert_denied(_b("coder", f"tee {path}"), PROTECTED)
 
 
 @pytest.mark.parametrize("agent", READERS)
@@ -135,10 +135,10 @@ def test_read_tool_traversal_into_a_store_is_denied(
 def test_auditor_write_leaving_the_audit_folder_is_denied(marked_repo: Path, template: str) -> None:
     # issue 70: inside a marked train, so the deny is for leaving the folder, not for no train.
     path, cwd = template.format(audit=_audit(marked_repo)), str(marked_repo)
-    write = _cred("security-auditor", "Write", cwd, file_path=path, content="x")
+    write = _cred("auditor", "Write", cwd, file_path=path, content="x")
     assert_denied(write, AUDIT_REFUSAL)
-    assert_denied(_cred("security-auditor", "Bash", cwd, command=f"tee {path}"))
-    assert_denied(_cred("security-auditor", "Bash", cwd, command=f"echo x > {path}"))
+    assert_denied(_cred("auditor", "Bash", cwd, command=f"tee {path}"))
+    assert_denied(_cred("auditor", "Bash", cwd, command=f"echo x > {path}"))
 
 
 @pytest.mark.parametrize(
@@ -163,11 +163,11 @@ def test_auditor_write_inside_the_audit_folder_is_allowed(marked_repo: Path) -> 
     # issue 70: the same marked repo admits the in-folder write the escape rows depart from.
     for name in ("round1/test_scope_x.py", "round1/findings.txt"):
         path = f"{_audit(marked_repo)}/{name}"
-        write = _cred("security-auditor", "Write", str(marked_repo), file_path=path, content="x")
+        write = _cred("auditor", "Write", str(marked_repo), file_path=path, content="x")
         assert decide(write, CFG).allow, path
 
 
-@pytest.mark.parametrize("agent", ("repo-coder", "docs-writer"))
+@pytest.mark.parametrize("agent", ("coder", "writer"))
 @pytest.mark.parametrize("template", PREPUSH2_ARCHIVE_WRITES)
 def test_an_archive_or_multi_call_write_is_denied(agent: str, template: str) -> None:
     # prepush2-2026-10-27 item 3: the write check models none of these targets, so all refuse.

@@ -34,7 +34,7 @@ from tests.test_operator_gates import exempt_round
 NEEDLE = "daedalus_workspace.py begin"
 TRAIN = "20261016-120000"
 MARKED = "20261017-120000"
-AUDITOR = "daedalus:security-auditor"
+AUDITOR = "daedalus:auditor"
 BOTH_REFUSAL = "auditor reply at seq 1 carries both verdicts. Next: rerun the audit round."
 
 
@@ -266,7 +266,7 @@ def test_approved_ignores_auditor_stops_after_the_summary_write(
 def test_approved_requires_the_namespaced_agent_type(
     project_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
-    _stop(hook_input, "[VERDICT: APPROVED] ok", agent_type="security-auditor")
+    _stop(hook_input, "[VERDICT: APPROVED] ok", agent_type="auditor")
     _summary_run(hook_input, repo_cwd)
     _summary(repo_cwd)
     assert _refused(repo_cwd).startswith("NOT APPROVED:")
@@ -470,7 +470,7 @@ def test_approved_ignores_a_verdict_before_start_seq(
     _summary(repo_cwd)
     assert "(record seq 8) is not [VERDICT: APPROVED]" in _refused(repo_cwd)
     _start(repo_cwd, 8)
-    assert "no daedalus:security-auditor reply after seq 8" in _refused(repo_cwd)
+    assert "no daedalus:auditor reply after seq 8" in _refused(repo_cwd)
 
 
 def test_approved_refuses_without_start_seq(
@@ -810,7 +810,7 @@ def test_only_the_plugins_own_summary_call_anchors(
 @pytest.mark.parametrize(
     ("label", "kw"),
     [
-        ("a repo-coder's call", {"agent_type": "daedalus:repo-coder", "agent_id": "c1"}),
+        ("a coder's call", {"agent_type": "daedalus:coder", "agent_id": "c1"}),
         ("a failed call", {"post": "PostToolUseFailure"}),
         ("a call with no result record", {"post": None}),
         ("a refused call", {"response": {"stdout": "x. Next: rerun summary.\n"}}),

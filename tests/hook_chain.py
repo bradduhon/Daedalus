@@ -18,7 +18,7 @@ from tests.conftest import REPO_ROOT
 CHECKS = REPO_ROOT / "scripts" / "checks"
 # 0044: the packet section 8 table at v2, one (script, flags) entry per hook, in order.
 CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
-    "repo-coder": (
+    "coder": (
         ("credential_paths", ()),
         ("workspace_integrity", ()),
         ("tool_bound", ()),
@@ -48,7 +48,7 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("command_allowlist", ("--allow", "append_ledger,git,read")),
         ("gh_classes", ()),
     ),
-    "security-auditor": (
+    "auditor": (
         ("credential_paths", ()),
         ("workspace_integrity", ()),
         ("tool_bound", ()),
@@ -94,7 +94,7 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
             ("--touch", "scratch", "--name", "plan*.md", "--sub", "brainstorm-*/spec.md"),
         ),
     ),
-    "pr-train-conductor": (
+    "releaser": (
         ("credential_paths", ()),
         ("workspace_integrity", ()),
         ("tool_bound", ()),
@@ -137,8 +137,8 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("command_allowlist", ("--allow", "terraform,inspect")),
         ("gh_classes", ()),
     ),
-    # 0134: the docs writer carries the repo-coder's list with its write check narrowed by --docs.
-    "docs-writer": (
+    # 0134, 0190: the public docs writer has the coder's list, its write check narrowed by --docs.
+    "writer (public-docs)": (
         ("credential_paths", ()),
         ("workspace_integrity", ()),
         ("tool_bound", ()),
@@ -150,8 +150,8 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("gh_classes", ()),
         ("confine", ()),
     ),
-    # 0135, D.5: the two document agents read through the read-only check and write only output.
-    "doc-deriver": (
+    # 0135, D.5: the derived writer and the comparer read through the read-only check.
+    "writer (derived)": (
         ("credential_paths", ()),
         ("workspace_integrity", ()),
         ("tool_bound", ()),
@@ -162,7 +162,7 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("read_only_bash", ()),
         ("doc_outputs", ()),
     ),
-    "change-logger": (
+    "comparer": (
         ("credential_paths", ()),
         ("workspace_integrity", ()),
         ("tool_bound", ()),
@@ -194,13 +194,20 @@ def evaluate(script: str, hook_input: dict[str, object], *flags: str) -> str | N
     return decision.reason
 
 
-def first_deny(hook_input: dict[str, object], config: Config) -> tuple[str, str] | None:
+def first_deny(
+    hook_input: dict[str, object], config: Config, mode: str = ""
+) -> tuple[str, str] | None:
     # 0044: first deny wins; hook_io.hook_config answers with the case's config.
+    # 0190: a writer names its kind; with none named, a call is denied only when every kind denies.
     agent = normalize_agent(str(hook_input.get("agent_type") or "main"))
+    kinds = [] if mode else sorted(key for key in CHAINS if key.startswith(f"{agent} ("))
+    if kinds:
+        denies = [first_deny(hook_input, config, key[len(agent) + 2 : -1]) for key in kinds]
+        return None if None in denies else denies[0]
     saved = hook_io.hook_config
     hook_io.hook_config = lambda cwd: config
     try:
-        for script, flags in CHAINS[agent]:
+        for script, flags in CHAINS[f"{agent} ({mode})" if mode else agent]:
             reason = evaluate(script, hook_input, *flags)
             if reason is not None:
                 return script, reason
@@ -256,9 +263,7 @@ def run_script(
     return {"decision": out["permissionDecision"], "reason": out["permissionDecisionReason"]}
 
 
-def payload(
-    tool: str, cwd: str = "/work/repo", agent: str = "repo-coder", **tool_input: str
-) -> str:
+def payload(tool: str, cwd: str = "/work/repo", agent: str = "coder", **tool_input: str) -> str:
     return json.dumps(
         {"tool_name": tool, "tool_input": tool_input, "cwd": cwd, "agent_type": agent}
     )

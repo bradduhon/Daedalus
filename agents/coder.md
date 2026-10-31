@@ -1,5 +1,5 @@
 ---
-name: repo-coder
+name: coder
 description: Scoped implementation worker. Writes application code and unit tests for one work unit inside the git worktree its prompt names.
 tools: Read, Write, Edit, Bash, Glob, Grep
 disallowedTools: WebSearch, WebFetch, Agent, Task, SendMessage
@@ -107,7 +107,7 @@ between Bash calls.
 ## Project priorities (0129, 0137)
 Your Standards Packet ends with a `## Priorities` section. A default you write that trades one
 driver for another (a key per function or one shared key, an instance size, a retention
-period) follows your ranking: the `agent repo-coder:` line when present, else the `ranking:`
+period) follows your ranking: the `agent coder:` line when present, else the `ranking:`
 line. Name the rule or principle you followed in your ledger notes. A default that a
 `then surface` rule covers is never a silent pick: commit WIP and return
 `[STATUS: YIELD_STANDARDS] priorities rule <n>: <the default and its options>`. A global rule

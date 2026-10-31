@@ -57,12 +57,12 @@ def test_known_agents_match_spec_matrix() -> None:
     assert KNOWN_AGENTS == frozenset(
         {
             "main",
-            "repo-coder",
+            "coder",
             "contract-spec",
             "charter-docs",
-            "security-auditor",
+            "auditor",
             "framework-specialist",
-            "pr-train-conductor",
+            "releaser",
             "web-researcher",
             "standards-rules-specialist",
             "planner",
@@ -70,9 +70,8 @@ def test_known_agents_match_spec_matrix() -> None:
             "verifier",
             "dependency-auditor",
             "terraform-reviewer",
-            "docs-writer",
-            "doc-deriver",
-            "change-logger",
+            "writer",
+            "comparer",
         }
     )
 
@@ -154,23 +153,23 @@ def test_daedalus_namespaced_agent_acts_as_bare_agent(monkeypatch: pytest.Monkey
             monkeypatch.setenv("DAEDALUS_LIVE_TEST", flag)
         else:
             monkeypatch.delenv("DAEDALUS_LIVE_TEST", raising=False)
-        d = decide(_b("daedalus:repo-coder", "pytest -q"), CFG)
-        assert d.agent == "repo-coder", flag
-        assert d.reason == jail.R_ROUTED.format(agent="repo-coder"), flag
+        d = decide(_b("daedalus:coder", "pytest -q"), CFG)
+        assert d.agent == "coder", flag
+        assert d.reason == jail.R_ROUTED.format(agent="coder"), flag
 
 
 def test_test_namespace_fails_closed_without_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DAEDALUS_LIVE_TEST", raising=False)
-    d = decide(_b("daedalus-probe:repo-coder", "pytest -q"), CFG)
+    d = decide(_b("daedalus-probe:coder", "pytest -q"), CFG)
     assert not d.allow and "fail closed" in d.reason
     monkeypatch.setenv("DAEDALUS_LIVE_TEST", "true")
-    assert not decide(_b("daedalus-probe:repo-coder", "pytest -q"), CFG).allow
+    assert not decide(_b("daedalus-probe:coder", "pytest -q"), CFG).allow
 
 
 def test_test_namespace_acts_as_bare_agent_with_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DAEDALUS_LIVE_TEST", "1")
-    d = decide(_b("daedalus-probe:repo-coder", "pytest -q"), CFG)
-    assert d.agent == "repo-coder" and d.reason == jail.R_ROUTED.format(agent="repo-coder")
+    d = decide(_b("daedalus-probe:coder", "pytest -q"), CFG)
+    assert d.agent == "coder" and d.reason == jail.R_ROUTED.format(agent="coder")
 
 
 @pytest.mark.parametrize("flag", [None, "1"])
@@ -202,7 +201,7 @@ def test_empty_or_unknown_daedalus_name_fails_closed(agent: str) -> None:
     assert not d.allow and "fail closed" in d.reason
 
 
-@pytest.mark.parametrize("agent", ["otherplugin:repo-coder", "daedalus-x:repo-coder"])
+@pytest.mark.parametrize("agent", ["otherplugin:coder", "daedalus-x:coder"])
 def test_foreign_namespace_fails_closed_only_during_a_train(agent: str, tmp_path: Path) -> None:
     payload = {**_b(agent, "pytest -q"), "cwd": str(tmp_path)}
     assert decide(payload, CFG).allow
@@ -950,7 +949,7 @@ class TestFinalSubagentAsMain:
         assert decide(payload, CFG).allow
 
     def test_decision_carries_normalized_agent(self) -> None:
-        assert decide(_b("daedalus:repo-coder", "git push origin x"), CFG).agent == "repo-coder"
+        assert decide(_b("daedalus:coder", "git push origin x"), CFG).agent == "coder"
 
 
 # Fix wave after the whole-branch review (I1, I3, I4, M1).
@@ -959,7 +958,7 @@ def test_main_never_writes_unit_worktree_code() -> None:
     assert _warns(decide(_w(None, f"{WT}/src/a.py"), CFG), f"{WT}/src/a.py")
 
 
-CREDENTIAL_AGENTS = [None, "repo-coder", "security-auditor", "Explore"]
+CREDENTIAL_AGENTS = [None, "coder", "auditor", "Explore"]
 
 
 def _mark(cwd: Path) -> None:
@@ -1015,7 +1014,7 @@ def test_grep_regex_and_project_globs_are_allowed(cred_home: Path, agent: str | 
         assert decide(payload, CFG).allow, payload
 
 
-@pytest.mark.parametrize("agent", [None, "repo-coder", "Explore"])
+@pytest.mark.parametrize("agent", [None, "coder", "Explore"])
 @pytest.mark.parametrize(
     "command",
     [
@@ -1089,11 +1088,11 @@ def test_symlink_into_a_credential_store_is_refused(cred_home: Path) -> None:
     (cred_home / "keys").symlink_to(cred_home / ".ssh")
     path = str(cred_home / "keys" / "id_ed25519")
     assert _judged(decide(_cred(None, "Read", file_path=path), CFG), None, _refusal(path))
-    d = decide(_cred("repo-coder", "Read", file_path=path), CFG)
-    assert _judged(d, "repo-coder", _refusal(path))
+    d = decide(_cred("coder", "Read", file_path=path), CFG)
+    assert _judged(d, "coder", _refusal(path))
 
 
-@pytest.mark.parametrize("agent", [None, "repo-coder", "Explore"])
+@pytest.mark.parametrize("agent", [None, "coder", "Explore"])
 @pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
 def test_write_into_a_credential_store_is_refused(
     cred_home: Path, agent: str | None, tool: str
@@ -1141,7 +1140,7 @@ def test_unknown_agent_fails_closed_during_a_train(train_cwd: Path) -> None:
     for payload in (
         _cred("Explore", "Bash", cwd, command="touch x"),
         _cred("Explore", "Write", cwd, file_path=f"{cwd}/notes.md"),
-        _cred("otherplugin:repo-coder", "Bash", cwd, command="touch x"),
+        _cred("otherplugin:coder", "Bash", cwd, command="touch x"),
     ):
         d = decide(payload, CFG)
         assert not d.allow and "read-only while" in str(d.reason), payload
@@ -1158,8 +1157,8 @@ def test_daedalus_agents_are_policed_with_or_without_a_train(train_cwd: Path, ma
     if marked:
         _mark(train_cwd)
     cwd = str(train_cwd)
-    d = decide(_cred("daedalus:repo-coder", "Bash", cwd, command="pytest -q"), CFG)
-    assert not d.allow and d.reason == jail.R_ROUTED.format(agent="repo-coder")
+    d = decide(_cred("daedalus:coder", "Bash", cwd, command="pytest -q"), CFG)
+    assert not d.allow and d.reason == jail.R_ROUTED.format(agent="coder")
     d = decide(_cred("daedalus:mystery", "Bash", cwd, command="ls"), CFG)
     assert not d.allow and "fail closed" in str(d.reason)
 
@@ -1507,7 +1506,7 @@ def test_issue30_unknown_agent_reads_a_marked_repo_from_elsewhere(
     assert d.allow
 
 
-@pytest.mark.parametrize("agent", [None, "Explore", "security-auditor"])
+@pytest.mark.parametrize("agent", [None, "Explore", "auditor"])
 @pytest.mark.parametrize(
     "command",
     [
@@ -1632,7 +1631,7 @@ def test_main_dotgit_write_warns_and_the_coder_is_denied() -> None:
     path = f"{CWD}/.git/config"
     d = decide(_w(None, path), CFG)
     assert _main_warns(d, jail.WARN_DOTGIT.format(path=path)), d
-    coder = hook_chain.decide(_w("repo-coder", f"{WT}/.git/config"), CFG)
+    coder = hook_chain.decide(_w("coder", f"{WT}/.git/config"), CFG)
     assert not coder.allow and not coder.warn, coder
 
 
@@ -1640,7 +1639,7 @@ def test_main_data_dir_write_warns_and_the_coder_is_denied() -> None:
     path = f"{CWD}/.claude/daedalus/config.json"
     d = decide(_w(None, path), CFG)
     assert _main_warns(d, jail.WARN_DATA_DIR), d
-    for payload in (_w("repo-coder", path), _b("repo-coder", f"rm {path}")):
+    for payload in (_w("coder", path), _b("coder", f"rm {path}")):
         coder = hook_chain.decide(payload, CFG)
         assert not coder.allow and not coder.warn, coder
 
@@ -1650,7 +1649,7 @@ def test_main_credential_read_warns_and_the_coder_is_denied(cred_home: Path) -> 
     for payload in (_cred(None, "Read", file_path=path), _b(None, f"cat {path}")):
         d = decide(payload, CFG)
         assert _main_warns(d, jail.WARN_CREDENTIAL) and _refusal(path) in str(d.reason), d
-    for payload in (_cred("repo-coder", "Read", file_path=path), _b("repo-coder", f"cat {path}")):
+    for payload in (_cred("coder", "Read", file_path=path), _b("coder", f"cat {path}")):
         coder = hook_chain.decide(payload, CFG)
         assert not coder.allow and not coder.warn, coder
 
@@ -1668,7 +1667,7 @@ def test_main_credential_read_warns_and_the_coder_is_denied(cred_home: Path) -> 
 def test_main_tripwire_warns_and_the_coder_is_denied(command: str, warning: str) -> None:
     d = decide(_b(None, command), CFG)
     assert _main_warns(d, getattr(jail, warning)), (command, d.reason)
-    coder = hook_chain.decide(_b("repo-coder", command), CFG)
+    coder = hook_chain.decide(_b("coder", command), CFG)
     assert not coder.allow and not coder.warn, command
 
 
@@ -1676,7 +1675,7 @@ def test_main_push_during_a_train_warns_and_the_coder_is_denied(marked_repo: Pat
     command = "git push -u origin feature/x"
     d = decide(_cred(None, "Bash", str(marked_repo), command=command), CFG)
     assert _main_warns(d, jail.WARN_TRAIN_PUSH), d
-    coder = hook_chain.decide(_cred("repo-coder", "Bash", str(marked_repo), command=command), CFG)
+    coder = hook_chain.decide(_cred("coder", "Bash", str(marked_repo), command=command), CFG)
     assert not coder.allow and not coder.warn, coder
 
 
@@ -1697,7 +1696,7 @@ def test_main_warnings_name_the_consequence() -> None:
 # audit A7-1: a nested claude session would reach the jail as the operator.
 @pytest.mark.parametrize("command", ["claude -p hi", "env claude -p hi", "/usr/bin/claude"])
 def test_coder_claude_is_refused(command: str) -> None:
-    d = hook_chain.decide(_b("repo-coder", command), CFG)
+    d = hook_chain.decide(_b("coder", command), CFG)
     assert not d.allow and not d.warn, (command, d.reason)
 
 
@@ -1776,12 +1775,12 @@ class TestGlobDotsAndBraces:
 # Main never prompted (amends 0106): the dispatch that skips a train invariant is warned.
 def test_main_coder_dispatch_without_worktree_line_warns(tmp_path: Path) -> None:
     repo, _ = _unit_repo(tmp_path / "repo")
-    tool_input = {"subagent_type": "daedalus:repo-coder", "prompt": "build it"}
+    tool_input = {"subagent_type": "daedalus:coder", "prompt": "build it"}
     payload: dict[str, Any] = {"tool_name": "Agent", "tool_input": tool_input, "cwd": str(repo)}
     d = decide(payload, CFG)
     want = jail.WARN_DISPATCH.format(reason=dispatch_binding.R_WORKTREE_LINE)
     assert d.warn and not d.allow and d.reason == want, d
-    assert d.reason.startswith("This dispatch skips a train invariant (a repo-coder dispatched")
+    assert d.reason.startswith("This dispatch skips a train invariant (a coder dispatched")
     assert d.reason.endswith("The agent starts without it; the audit log records the warning.")
     d = decide({**payload, "agent_id": "sub-1"}, CFG)
     assert not d.allow and not d.warn and d.reason == jail.R_SUBAGENT_MAIN, d
@@ -1881,13 +1880,13 @@ def test_foreign_agent_git_push_is_refused(marked_repo: Path, agent: str, comman
     ],
 )
 def test_coder_git_grep_blame_merge_base_are_allowed(command: str) -> None:
-    d = hook_chain.decide(_b("repo-coder", command), CFG)
+    d = hook_chain.decide(_b("coder", command), CFG)
     assert d.allow, (command, d.reason)
 
 
 def test_coder_git_diff_check_is_allowed() -> None:
     for command in ("git diff --check", "git diff --check --cached", f"git -C {WT} diff --check"):
-        d = hook_chain.decide(_b("repo-coder", command), CFG)
+        d = hook_chain.decide(_b("coder", command), CFG)
         assert d.allow, (command, d.reason)
 
 
@@ -1911,7 +1910,7 @@ def test_coder_git_diff_check_is_allowed() -> None:
     ],
 )
 def test_coder_git_output_flag_is_refused(command: str) -> None:
-    d = hook_chain.decide(_b("repo-coder", command), CFG)
+    d = hook_chain.decide(_b("coder", command), CFG)
     assert not d.allow and d.reason is not None and "Next:" in d.reason, command
     assert jail.R_CODER_GIT in d.reason, (command, d.reason)
 
@@ -1921,11 +1920,11 @@ DELETED_CASES = (
     "test_every_block_reason_has_next",
     "test_workers_cannot_spawn_agents",
     "test_workers_cannot_send_messages",
-    "test_bare_repo_coder_unchanged",
-    "TestRepoCoder.test_main_checkout_writes_refused",
-    "TestRepoCoder.test_remote_and_network_blocked",
-    "TestRepoCoder.test_local_work_allowed",
-    "TestRepoCoder.test_no_web_tools",
+    "test_bare_coder_unchanged",
+    "TestCoder.test_main_checkout_writes_refused",
+    "TestCoder.test_remote_and_network_blocked",
+    "TestCoder.test_local_work_allowed",
+    "TestCoder.test_no_web_tools",
     "TestContractSpec.test_writes_contracts_or_charter_specs_only",
     "TestContractSpec.test_without_charter_root_only_contracts",
     "TestCharterDocs.test_ledger_file_is_never_written_directly",
@@ -1942,9 +1941,9 @@ DELETED_CASES = (
     "test_separator_matrix_blocks",
     "test_pipe_blocked_where_not_allowed",
     "test_workers_blocked_on_variable_commands",
-    "TestRegressionRepoCoder.test_blocked",
-    "TestRegressionRepoCoder.test_relative_paths_resolve_against_cwd",
-    "TestRegressionRepoCoder.test_notebook_path",
+    "TestRegressionCoder.test_blocked",
+    "TestRegressionCoder.test_relative_paths_resolve_against_cwd",
+    "TestRegressionCoder.test_notebook_path",
     "TestRegressionCharterDocs.test_blocked",
     "TestRegressionCharterDocs.test_append_flags_allowed",
     "TestRegressionCharterDocs.test_append_off_grammar_blocked",
@@ -1969,8 +1968,8 @@ DELETED_CASES = (
     "TestRound3WorkerHygiene.test_reserved_words_blocked",
     "TestRound3WorkerHygiene.test_wrappers_blocked",
     "TestRound3WorkerHygiene.test_env_and_token_hygiene",
-    "TestRound3WorkerHygiene.test_git_config_read_only_for_repo_coder",
-    "TestRound3WorkerHygiene.test_repo_coder_hidden_network_and_remote",
+    "TestRound3WorkerHygiene.test_git_config_read_only_for_coder",
+    "TestRound3WorkerHygiene.test_coder_hidden_network_and_remote",
     "TestRound3WorkerHygiene.test_runner_forms_still_allowed",
     "TestRound3SortPytestGitleaks.test_sort_denies",
     "TestRound3SortPytestGitleaks.test_basetemp_denied",
@@ -1979,7 +1978,7 @@ DELETED_CASES = (
     "TestRound4Conductor.test_allowed",
     "TestRound4Breakage.test_allowed",
     "TestRound4Breakage.test_blocked",
-    "TestFinalRemotePlumbing.test_repo_coder_blocks",
+    "TestFinalRemotePlumbing.test_coder_blocks",
     "TestFinalCoderGitAllowlist.test_blocked",
     "TestFinalCoderGitAllowlist.test_allowed",
     "TestLiveRunGrammar.test_status_read_forms_allowed",
@@ -2111,10 +2110,10 @@ def test_git_read_rows_keep_worktree_writes_train_scoped(
 def test_fifo_plant_commands_are_coder_writes(command: str, target: str) -> None:
     # issue 75: mkfifo, mknod and shred write their operands like any coder write command.
     assert {"mkfifo", "mknod", "shred"} <= jail.CODER_WRITE_CMDS
-    d = hook_chain.decide(_b("repo-coder", command), CFG)
+    d = hook_chain.decide(_b("coder", command), CFG)
     assert d.reason == jail.R_BASH_OUTSIDE.format(target), (command, d.reason)
     inside = command.replace(target, f"{WT}/p")
-    assert hook_chain.decide(_b("repo-coder", inside), CFG).allow, inside
+    assert hook_chain.decide(_b("coder", inside), CFG).allow, inside
 
 
 def test_mknod_judges_only_its_name() -> None:
@@ -2160,7 +2159,7 @@ def test_env_split_string_is_refused_to_a_foreign_agent_in_a_train(
 @pytest.mark.parametrize("form", H1_ENV_SPLIT)
 def test_env_split_string_is_refused_to_a_worker(form: str) -> None:
     # issue 80: the worker's shell model names env -S before its wrapper refusal.
-    assert_denied(_b("repo-coder", form.format(repo=WT)), "env -S")
+    assert_denied(_b("coder", form.format(repo=WT)), "env -S")
 
 
 @pytest.mark.parametrize("form", H1_SHELL_BODY)
@@ -2231,7 +2230,7 @@ def test_a_runner_wrapper_cannot_hide_a_write(
 @pytest.mark.parametrize("form", H1_WRAPPERS)
 def test_a_runner_wrapper_is_refused_to_a_worker(form: str) -> None:
     # 8.5 ruling A: each new row joins WORKER_WRAPPERS.
-    assert_denied(_b("repo-coder", form.format(repo=WT)))
+    assert_denied(_b("coder", form.format(repo=WT)))
 
 
 @pytest.fixture

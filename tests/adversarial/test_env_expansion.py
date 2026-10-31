@@ -87,7 +87,7 @@ def test_expanded_coder_write_outside_the_worktree_is_denied(
     cred_home: Path,  # noqa: F811
     template: str,
 ) -> None:
-    assert_denied(_b("repo-coder", template.format(wt=WT)))
+    assert_denied(_b("coder", template.format(wt=WT)))
 
 
 @pytest.mark.parametrize("path", ("~/.bashrc", "~/x.txt", "$HOME/x.txt"))
@@ -95,5 +95,5 @@ def test_tilde_in_a_coder_write_tool_path_is_denied(
     cred_home: Path,  # noqa: F811
     path: str,
 ) -> None:
-    hook_input = _cred("repo-coder", "Write", file_path=path, content="x")
+    hook_input = _cred("coder", "Write", file_path=path, content="x")
     assert_denied(hook_input, OUTSIDE, CREDENTIAL, "outside")

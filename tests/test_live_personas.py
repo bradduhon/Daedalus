@@ -185,13 +185,13 @@ SIMPLE_PERSONAS = [
         id="web-researcher",
     ),
     pytest.param(
-        "pr-train-conductor",
+        "releaser",
         "Preconditions only: this repo has no remote. "
         "Check your preconditions and end with your status line.",
         ["Bash", "Read"],
         ("[STATUS: BLOCKED]",),
         True,
-        id="pr-train-conductor",
+        id="releaser",
     ),
     pytest.param(
         "standards-rules-specialist",
@@ -231,7 +231,7 @@ def test_charter_docs(live_repo: Path) -> None:
     assert "[STATUS: LEDGER_APPENDED]" not in run.result.stdout, last
 
 
-def test_repo_coder(live_repo: Path) -> None:
+def test_coder(live_repo: Path) -> None:
     from lib import train_state
     from lib.unit_binding import record_dispatch
     from lib.workspace import create, mark_train
@@ -250,8 +250,8 @@ def test_repo_coder(live_repo: Path) -> None:
         "there, commit there with message 'Add add', and end with your completion status."
     )
     tools = ["Read", "Edit", "Write", "Bash", "Glob", "Grep"]
-    run = _persona("repo-coder", task, tools, live_repo)
-    _check(run, "repo-coder", ("[STATUS: COMPLETE]",))
+    run = _persona("coder", task, tools, live_repo)
+    _check(run, "coder", ("[STATUS: COMPLETE]",))
 
 
 def test_framework_specialist_without_its_pack(live_repo: Path) -> None:
@@ -260,7 +260,7 @@ def test_framework_specialist_without_its_pack(live_repo: Path) -> None:
     _check(run, name, ("[STATUS: PACK_INVALID]",))
 
 
-def test_security_auditor(live_repo: Path) -> None:
+def test_auditor(live_repo: Path) -> None:
     readme = live_repo / "README.md"
     readme.write_text(readme.read_text(encoding="utf-8") + "One more line.\n", encoding="utf-8")
     _git(live_repo, "commit", "-q", "-am", "Extend the README")
@@ -268,8 +268,8 @@ def test_security_auditor(live_repo: Path) -> None:
         "Audit the diff between HEAD~1 and HEAD in this repo (a one-line README change) "
         "for the five concerns in your brief. Verdict first."
     )
-    run = _persona("security-auditor", task, ["Read", "Bash", "Grep", "Glob"], live_repo)
-    _check(run, "security-auditor", ("[VERDICT:",))
+    run = _persona("auditor", task, ["Read", "Bash", "Grep", "Glob"], live_repo)
+    _check(run, "auditor", ("[VERDICT:",))
     first = next(line for line in run.result.stdout.splitlines() if line.strip())
     assert first.lstrip().startswith("[VERDICT:"), first
 
@@ -285,7 +285,7 @@ PLANTED_DEFECT = (
 REJECTED_LINE = re.compile(r"^\[VERDICT: REJECTED\] tip=([0-9a-f]{40})$")
 
 
-def test_security_auditor_files_a_planted_defect_as_a_failing_test(live_repo: Path) -> None:
+def test_auditor_files_a_planted_defect_as_a_failing_test(live_repo: Path) -> None:
     # spec 6: round 1 on a planted defect writes a failing test, a findings line and tip=.
     from lib import train_state
     from lib.workspace import create, mark_train
@@ -310,8 +310,8 @@ def test_security_auditor_files_a_planted_defect_as_a_failing_test(live_repo: Pa
         f"Worktree: {worktree}\n"
         "Audit the branch by your procedure and end with your verdict line."
     )
-    run = _persona("security-auditor", task, ["Read", "Bash", "Grep", "Glob", "Write"], live_repo)
-    _check(run, "security-auditor", ("[VERDICT: REJECTED]",), block_ok=True)
+    run = _persona("auditor", task, ["Read", "Bash", "Grep", "Glob", "Write"], live_repo)
+    _check(run, "auditor", ("[VERDICT: REJECTED]",), block_ok=True)
     verdict = REJECTED_LINE.match(_last_line(run.result.stdout))
     assert verdict, _last_line(run.result.stdout)
     assert verdict.group(1) == tip
@@ -367,7 +367,7 @@ def test_terraform_reviewer(live_repo: Path) -> None:
     assert "TF-1 FAIL" not in run.result.stdout and "TF-2 FAIL" not in run.result.stdout
 
 
-def test_docs_writer(live_repo: Path) -> None:
+def test_public_docs_writer(live_repo: Path) -> None:
     # 0134: the writer edits a public doc in the docs worktree and claims the passage.
     from lib import train_state
     from lib.unit_binding import record_dispatch
@@ -387,8 +387,8 @@ def test_docs_writer(live_repo: Path) -> None:
         "Make README.md describe hello(name), commit, and end with your status line."
     )
     tools = ["Read", "Edit", "Write", "Bash", "Glob", "Grep"]
-    run = _persona("docs-writer", task, tools, live_repo)
-    _check(run, "docs-writer", ("[STATUS: DOCS_WRITTEN]",))
+    run = _persona("writer", task, tools, live_repo)
+    _check(run, "writer", ("[STATUS: DOCS_WRITTEN]",))
     assert re.search(r"^Claim: README\.md:[0-9]+ ", run.result.stdout, re.M)
 
 

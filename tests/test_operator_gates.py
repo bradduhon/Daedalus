@@ -349,7 +349,7 @@ def test_an_approved_verdict_still_takes_its_own_path(repo: Path, plugin: Path) 
     with pytest.raises(ProofError) as info:
         push_proof(repo, train)
     assert "the rejected round 1 finding list is unreadable" in str(info.value)
-    _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-1")
     assert _verdict_call(repo, "approved", None, tip=tip).code == 0
     with pytest.raises(ProofError) as info:
         push_proof(repo, train)

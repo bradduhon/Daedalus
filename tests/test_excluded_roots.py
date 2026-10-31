@@ -10,7 +10,7 @@ from pathlib import Path
 
 import enforce_agent_jail
 import pytest
-from lib import hook_io, jail, router
+from lib import hook_io, jail, router, writer_mode
 from lib.config import (
     Config,
     ConfigError,
@@ -24,6 +24,8 @@ from lib.config import (
 from tests.adversarial.corpus import H1_ICASE
 from tests.conftest import git, main_warning, write_train_marker
 from tests.hook_chain import load
+
+TRAIN = "20261031-120000"
 
 
 @pytest.fixture
@@ -246,16 +248,24 @@ def test_check_refuses_staging_an_excluded_root(
 ) -> None:
     monkeypatch.setattr(hook_io, "hook_config", lambda cwd: _config(repo))
     check = load("excluded_roots")
-    got = check.decide(_payload("daedalus:repo-coder", repo, "git add notes/a.md"), [])
+    got = check.decide(_payload("daedalus:coder", repo, "git add notes/a.md"), [])
     assert not got.allow and str(repo / "notes") in str(got.reason)
-    assert check.decide(_payload("daedalus:repo-coder", repo, "git add src/a.md"), []).allow
-    writer = _payload("daedalus:doc-deriver", repo, "echo x > notes/b.md")
-    assert check.decide(writer, []).allow
-    assert not check.decide(_payload("daedalus:repo-coder", repo, "echo x > notes/b.md"), []).allow
+    assert check.decide(_payload("daedalus:coder", repo, "git add src/a.md"), []).allow
+    # 0190: a derived writer's redirect passes, as the doc-deriving agent's did; public docs never.
+    write_train_marker(repo, TRAIN)
+    for agent_id, kind in (
+        ("w-derived", writer_mode.DERIVED),
+        ("w-public", writer_mode.PUBLIC_DOCS),
+    ):
+        assert writer_mode.record_dispatch(repo, TRAIN, kind) is None
+        writer = {**_payload("daedalus:writer", repo, "echo x > notes/b.md"), "agent_id": agent_id}
+        assert writer_mode.kind_of(writer) == (kind, None)
+        assert check.decide(writer, []).allow is (kind == writer_mode.DERIVED), kind
+    assert not check.decide(_payload("daedalus:coder", repo, "echo x > notes/b.md"), []).allow
 
 
 def test_check_refuses_without_an_absolute_cwd() -> None:
-    got = load("excluded_roots").decide(_payload("daedalus:repo-coder", Path("rel"), "ls"), [])
+    got = load("excluded_roots").decide(_payload("daedalus:coder", Path("rel"), "ls"), [])
     assert got.reason == jail.R_NO_CWD
 
 
@@ -341,7 +351,7 @@ def test_check_refuses_an_icase_pathspec(
 ) -> None:
     # issue 97: judge in checks/excluded_roots.py meets the shared rule for every routed agent.
     monkeypatch.setattr(hook_io, "hook_config", lambda cwd: _config(repo))
-    got = load("excluded_roots").decide(_payload("daedalus:repo-coder", repo, command), [])
+    got = load("excluded_roots").decide(_payload("daedalus:coder", repo, command), [])
     assert not got.allow and "letter case" in str(got.reason), command
 
 

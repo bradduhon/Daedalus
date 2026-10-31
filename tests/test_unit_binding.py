@@ -17,7 +17,7 @@ from tests.hook_chain import judge as decide
 from tests.test_dispatch_binding import seed_plan
 
 TRAIN = "20261016-120000"
-CODER = "daedalus:repo-coder"
+CODER = "daedalus:coder"
 
 
 @pytest.fixture
@@ -93,7 +93,7 @@ def test_dispatch_refuses_a_second_dispatch_to_an_unbound_unit(
 def test_dispatch_rules_skip_other_agents_and_trainless_repos(
     repo_cwd: Path, units: dict[str, Path], tmp_path: Path
 ) -> None:
-    _ok(_dispatch(repo_cwd, "no worktree line", subagent="daedalus:security-auditor"))
+    _ok(_dispatch(repo_cwd, "no worktree line", subagent="daedalus:auditor"))
     plain = tmp_path / "plain"
     plain.mkdir()
     _ok(_dispatch(plain, "no worktree line"))

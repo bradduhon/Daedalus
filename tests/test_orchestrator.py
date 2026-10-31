@@ -66,7 +66,7 @@ def _bindings(repo: Path) -> dict[str, Any]:
 def _bound_to_u1(repo: Path, first: Path) -> None:
     # issue 29: the dispatch records u1, and the coder's first write binds it.
     seed_plan(repo, TRAIN)
-    d = decide(_start(str(repo), "daedalus:repo-coder", f"Build.\nWorktree: {first}\n"), Config())
+    d = decide(_start(str(repo), "daedalus:coder", f"Build.\nWorktree: {first}\n"), Config())
     assert d.allow, d.reason
     assert unit_binding.claim(repo, TRAIN, CODER_ID, "u1") is None
 
@@ -92,14 +92,14 @@ def test_every_other_routed_agent_is_refused_agent_and_sendmessage(tool: str) ->
 
 @pytest.mark.parametrize(
     "subagent",
-    ["general-purpose", "Explore", "repo-coder", "daedalus:mystery", "other:planner", ""],
+    ["general-purpose", "Explore", "coder", "daedalus:mystery", "other:planner", ""],
 )
 def test_orchestrator_starts_only_catalog_agents(subagent: str) -> None:
     gate = load("dispatch_gate")
     assert evaluate("dispatch_gate", _start(CWD, subagent)) == gate.R_FOREIGN_AGENT
 
 
-@pytest.mark.parametrize("agent", ["pr-train-conductor", "orchestrator"])
+@pytest.mark.parametrize("agent", ["releaser", "orchestrator"])
 def test_orchestrator_never_starts_the_conductor_or_itself(agent: str) -> None:
     reason = evaluate("dispatch_gate", _start(CWD, f"daedalus:{agent}"))
     assert reason is not None and agent in reason and "Next:" in reason
@@ -108,7 +108,7 @@ def test_orchestrator_never_starts_the_conductor_or_itself(agent: str) -> None:
 def test_coder_dispatch_refused_without_a_recorded_plan(
     repo_cwd: Path, units: tuple[Path, Path]
 ) -> None:
-    payload = _start(str(repo_cwd), "daedalus:repo-coder", f"Build.\nWorktree: {units[0]}\n")
+    payload = _start(str(repo_cwd), "daedalus:coder", f"Build.\nWorktree: {units[0]}\n")
     d = decide(payload, Config())
     assert not d.allow and "records no plan" in str(d.reason), d.reason
     assert not unit_binding.bindings_path(repo_cwd, TRAIN).exists()
@@ -121,7 +121,7 @@ def test_coder_dispatch_refused_without_a_worktree_line(
     repo_cwd: Path, units: tuple[Path, Path], prompt: str
 ) -> None:
     seed_plan(repo_cwd, TRAIN)
-    d = decide(_start(str(repo_cwd), "daedalus:repo-coder", prompt), Config())
+    d = decide(_start(str(repo_cwd), "daedalus:coder", prompt), Config())
     assert not d.allow and "'Worktree: <absolute path>'" in str(d.reason), d.reason
 
 
@@ -177,7 +177,7 @@ def test_resume_of_an_unbound_coder_is_refused(repo_cwd: Path, units: tuple[Path
 def test_resume_into_a_dispatched_unit_is_refused(repo_cwd: Path, units: tuple[Path, Path]) -> None:
     first, second = units
     _bound_to_u1(repo_cwd, first)
-    other = _start(str(repo_cwd), "daedalus:repo-coder", f"Worktree: {second}")
+    other = _start(str(repo_cwd), "daedalus:coder", f"Worktree: {second}")
     assert decide(other, Config()).allow
     reason = evaluate("dispatch_gate", _resume(str(repo_cwd), CODER_ID, f"Worktree: {second}"))
     assert reason is not None and "unit u2 was already dispatched" in reason
@@ -258,6 +258,8 @@ RUN_PHASES = ("plan", "build", "verify", "audit", "document")
 MAIN_ONLY = (
     "daedalus_train.py exception",
     "daedalus_train.py reaudit",
+    # 0190: the operator's writer queue clear runs from the main session only.
+    "daedalus_train.py writer-clear",
     # issue 48, 0173: plan step 2 runs it outside a run only; the run entry set the scope.
     "daedalus_doctor.py --print-scope",
 )
@@ -577,7 +579,7 @@ def test_sizing_table_carries_the_ruled_small_row() -> None:
     assert "A size estimate never shrinks the audit by itself." in flat
     assert "either check failing means the full procedure" in flat
     # 0175: the auditor's short form names the same excluded paths the small row names.
-    auditor = " ".join((REPO_ROOT / "agents" / "security-auditor.md").read_text().split())
+    auditor = " ".join((REPO_ROOT / "agents" / "auditor.md").read_text().split())
     for path in ("`scripts/checks/`, `agents/`, `skills/` or `hooks/`", "`scripts/lib/shell.py`"):
         assert path in auditor and path in SIZE_ROWS[0], path
 

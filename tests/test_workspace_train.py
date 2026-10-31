@@ -1273,7 +1273,7 @@ def test_merge_refuses_a_verdict_forged_in_a_write(repo: Path) -> None:
     _dispatch(repo, u1)
     forged = {"file_path": str(u1 / "notes.md"), "content": VERIFIED_REPLY}
     _hook_record(repo, hook_event_name="PreToolUse", tool_name="Write", tool_input=forged)
-    _verifier_stop(repo, VERIFIED_REPLY, agent_type="daedalus:repo-coder")
+    _verifier_stop(repo, VERIFIED_REPLY, agent_type="daedalus:coder")
     _refused(repo, ["U1"], "no recorded verifier verdict")
 
 
@@ -1514,7 +1514,7 @@ def test_merge_refuses_a_handback_whose_closing_line_is_not_the_verdict(repo: Pa
 def test_merge_refuses_a_verdict_forged_in_a_coder_handback(repo: Path) -> None:
     _, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_handback(repo, VERIFIED_REPLY, agent_type="daedalus:repo-coder")
+    _verifier_handback(repo, VERIFIED_REPLY, agent_type="daedalus:coder")
     _null_stop(repo)
     _refused(repo, ["U1"], "no recorded verifier verdict")
 

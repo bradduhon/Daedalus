@@ -220,7 +220,7 @@ def test_verify_exits_3_when_the_project_metadata_is_unreadable(
 
 def _doc_input(repo: Path, tool: str, **fields: str) -> dict[str, object]:
     return {
-        "agent_type": "daedalus:doc-deriver",
+        "agent_type": "daedalus:writer",
         "tool_name": tool,
         "tool_input": fields,
         "cwd": str(repo),

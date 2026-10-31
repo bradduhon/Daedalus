@@ -8,7 +8,7 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-from lib import agent_files, hook_io, jail
+from lib import agent_files, hook_io, jail, writer_mode
 from lib.train_scope import policed_outside_train
 
 ROUTER = "router"
@@ -17,6 +17,10 @@ _NEXT = "Next: add the agent file with its shape and hooks block, or start a cat
 R_NO_FILE = "no binding exists for agent '{name}': agents/{name}.md is missing (0044). " + _NEXT
 R_NO_HOOKS = (
     "no binding exists for agent '{name}': agents/{name}.md has no hooks block (0044). " + _NEXT
+)
+R_NO_MODE = (
+    "agents/{name}.md names modes, and none matches the kind {kind} recorded for this call "
+    "(0190). Next: restore the agent file from git."
 )
 # 0044: one import per hook script per process, keyed by script stem.
 _MODULES: dict[str, ModuleType] = {}
@@ -88,6 +92,16 @@ def route(hook_input: dict[str, object], plugin_root: Path) -> tuple[bool, str |
         reason = _run(hook, hook_input, plugin_root)
         if reason is not None:
             return False, reason, hook.script
+    if agent.modes:
+        # 0190: modes are the writer's; its recorded kind adds one entry, never the union.
+        kind, why = writer_mode.kind_of(hook_input) if name == writer_mode.WRITER else (None, None)
+        extra = dict(agent.modes).get(kind or "")
+        if extra is None:
+            return False, why or R_NO_MODE.format(name=name, kind=kind), ROUTER
+        for hook in extra:
+            reason = _run(hook, hook_input, plugin_root)
+            if reason is not None:
+                return False, reason, hook.script
     for hook in EVERY_AGENT:
         reason = _run(hook, hook_input, _OWN_ROOT, _EVERY_MODULES)
         if reason is not None:

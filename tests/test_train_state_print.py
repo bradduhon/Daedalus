@@ -45,7 +45,7 @@ NOTES = (
     "Deviation: up to five coders at once, against the one-agent rule (0120-DAE-PLT)\n"
     "## Blocks\n"
     "Friction: none\n"
-    "Habit: repo-coder, workspace_integrity, a read of the plugin data folder\n"
+    "Habit: coder, workspace_integrity, a read of the plugin data folder\n"
 )
 
 
@@ -109,11 +109,9 @@ def _pre(seq: int, agent: str, tool: str, agent_id: str, **tool_input: object) -
 
 
 RECORDS: list[dict[str, object]] = [
-    _handback(1, "repo-coder", COMPLETE, "c1"),
-    _pre(2, "repo-coder", "Bash", "c2", command=f"git -C {U2} commit -m 'WIP: yield'"),
-    _stop(
-        3, "repo-coder", f"[STATUS: YIELD_STANDARDS] which rule covers {REPO}/scripts/x.py?", "c2"
-    ),
+    _handback(1, "coder", COMPLETE, "c1"),
+    _pre(2, "coder", "Bash", "c2", command=f"git -C {U2} commit -m 'WIP: yield'"),
+    _stop(3, "coder", f"[STATUS: YIELD_STANDARDS] which rule covers {REPO}/scripts/x.py?", "c2"),
     _stop(4, "standards-rules-specialist", "[STATUS: STANDARD] python.md:10", "s1"),
     _stop(5, "framework-specialist", "[STATUS: COMPLIANCE] AU-9 PASS, AU-3 PASS", "n1"),
     _pre(6, "orchestrator", "Agent", "o1", prompt=f"Check it.\nUnit worktree: {U1}\nGo."),
@@ -123,7 +121,7 @@ RECORDS: list[dict[str, object]] = [
     {**_pre(8, "orchestrator", "Write", "o1", file_path="/x"), "decision": "block"},
     _handback(
         9,
-        "security-auditor",
+        "auditor",
         f"[VERDICT: APPROVED] tip={TIP}\nThe merged tip holds\nat {U1}/scripts/a.py.\n\n"
         f"Second paragraph.\n[VERDICT: APPROVED] tip={TIP}",
         "a1",
@@ -315,7 +313,7 @@ def test_audit_section_after_a_rejection_an_exemption_and_no_verdict(tmp_path: P
 def test_blocks_carry_the_notes_lists_and_the_recorded_tally(tmp_path: Path) -> None:
     assert _section(_text(tmp_path), "Blocks") == [
         "Friction: none",
-        "Habit: repo-coder, workspace_integrity, a read of the plugin data folder",
+        "Habit: coder, workspace_integrity, a read of the plugin data folder",
         "Recorded blocks per hook:",
         "- unprefixed, orchestrator: 1",
     ]
@@ -426,12 +424,10 @@ def test_a_relative_path_before_a_placeholder_is_written_intact(tmp_path: Path) 
 
 def test_this_trains_live_record_shapes_render_with_the_marker(tmp_path: Path) -> None:
     # W3.2: the three audit records of train 20261021-014310 that once stopped its summary.
-    web = _stop(
-        11, "repo-coder", "[STATUS: YIELD_WEB] hook fields at https://x.io/docs/hooks", "c3"
-    )
+    web = _stop(11, "coder", "[STATUS: YIELD_WEB] hook fields at https://x.io/docs/hooks", "c3")
     placeholder = COMPLETE.replace("tests=pytest 10 passed", "tests=rw=<wt>/x,/dev/null passed")
-    done = _handback(12, "repo-coder", placeholder, "c1")
-    regex = _stop(13, "repo-coder", "[STATUS: YIELD_CONTRACT] reads `\\[VERDICT:` lines?", "c2")
+    done = _handback(12, "coder", placeholder, "c1")
+    regex = _stop(13, "coder", "[STATUS: YIELD_CONTRACT] reads `\\[VERDICT:` lines?", "c2")
     text = _text(tmp_path, records=[*RECORDS, web, done, regex])
     assert _path_tokens(text) == []
     yields = _section(text, "Yields")

@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import writer_mode  # noqa: E402
+from lib.agent_aliases import current as current_name  # noqa: E402
 from lib.audit import (  # noqa: E402
     SESSION_ID,
     AuditLockError,
@@ -65,32 +67,33 @@ PREFIX = "daedalus:"
 BUILD, PUSH, DOC = "Build Train", "Push Train", "Document Train"
 # 0163: agents the main session starts outside any run group under the session itself.
 SESSION = "session"
-CODER = "repo-coder"
-# item 15: the turn target of agents/repo-coder.md; the report checks the coder mean against it.
+CODER = "coder"
+# item 15: the turn target of agents/coder.md; the report checks the coder mean against it.
 CODER_TURN_TARGET = 24
 ROOT_RUN_TYPES = {
     "orchestrator": BUILD,
-    "pr-train-conductor": PUSH,
-    "doc-deriver": DOC,
-    "change-logger": DOC,
+    "releaser": PUSH,
+    "comparer": DOC,
 }
+# 0190: a writer roots a document run only in its derived kind; a public docs writer roots none.
+WRITER_ROOT_TYPES = {writer_mode.DERIVED: DOC}
 # Plan 11 A: the Build Train phase an agent type works in when its prompt names none.
 BUILD_PHASES = {
     "planner": "1",
     "standards-rules-specialist": "1",
     "contract-spec": "1",
     "charter-docs": "1",
-    "repo-coder": "2",
+    "coder": "2",
     "verifier": "2",
     "web-researcher": "2",
-    "security-auditor": "3",
-    "docs-writer": "3",
+    "auditor": "3",
+    "writer": "3",
     "framework-specialist": "3",
     "terraform-reviewer": "3",
     "dependency-auditor": "3",
 }
-UNIT_AGENTS = frozenset({"repo-coder", "verifier"})
-ROUND_AGENTS = frozenset({"security-auditor"})
+UNIT_AGENTS = frozenset({CODER, "verifier"})
+ROUND_AGENTS = frozenset({"auditor"})
 _UNIT = re.compile(rf"(?:worktrees|daedalus-unit)/{TRAIN_ID.pattern}-([a-z0-9][a-z0-9-]*)")
 _ROUND = re.compile(r"\bround (\d+)\b", re.IGNORECASE)
 _PHASE = re.compile(r"\bPhase (\d+)\b")
@@ -339,7 +342,8 @@ def load_agents(files: list[Path], types: dict[str, str]) -> list[Agent]:
         meta = _meta(path)
         agent_id = path.stem.removeprefix("agent-")
         raw_type = types.get(agent_id) or meta.get("agentType") or "unknown"
-        agent_type = str(raw_type).removeprefix(PREFIX)
+        # 0190: a run from before the rename reports its agents under their new names.
+        agent_type = current_name(str(raw_type).removeprefix(PREFIX))
         if not _AGENT_TYPE.fullmatch(agent_type):
             agent_type = "unknown"
         parent = meta.get("parentAgentId")
@@ -364,9 +368,11 @@ def _root(agent: Agent, by_id: dict[str, Agent]) -> Agent:
     return agent
 
 
-def _run_type(root: Agent) -> str | None:
+def _run_type(root: Agent, kinds: dict[str, str]) -> str | None:
     if root.agent_type == "planner":
         return "brainstorm" if _CHALLENGE.search(root.opening) else "plan"
+    if root.agent_type == writer_mode.WRITER:
+        return WRITER_ROOT_TYPES.get(kinds.get(root.agent_id, ""))
     return ROOT_RUN_TYPES.get(root.agent_type)
 
 
@@ -385,14 +391,15 @@ def _phase(run_type: str, agent_type: str, prompt: str) -> str | None:
     return match.group(1) if match else BUILD_PHASES.get(agent_type)
 
 
-def build_runs(agents: list[Agent], session: str) -> list[Run]:
+def build_runs(agents: list[Agent], session: str, kinds: dict[str, str] | None = None) -> list[Run]:
     # Plan 11 A: a run is a root agent's whole tree; an unclassed root joins a run it names.
+    # 0190: kinds maps a writer's agent id to the kind its dispatch bound, from the writer record.
     by_id = {a.agent_id: a for a in agents}
     runs: dict[tuple[str, str], Run] = {}
     owners: dict[str, tuple[str, str]] = {}
     for agent in agents:
         root = _root(agent, by_id)
-        run_type = _run_type(root)
+        run_type = _run_type(root, kinds or {})
         if run_type is not None:
             owners[agent.agent_id] = (run_type, _named_id(root) or root.agent_id)
     ids: dict[str, tuple[str, str]] = {}
@@ -566,7 +573,8 @@ def session_runs(
     # Returns the runs, the session group included, and the transcript count.
     files = transcript_files(session, root)
     types = audit_types(_audit_records(root, session) if records is None else records)
-    return build_runs(load_agents(files, types), session), len(files)
+    kinds = writer_mode.bound_kinds(root)
+    return build_runs(load_agents(files, types), session, kinds), len(files)
 
 
 def _merge(runs: list[Run]) -> list[Run]:

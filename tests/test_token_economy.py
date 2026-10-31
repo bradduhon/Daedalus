@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import token_economy as te
+from lib import writer_mode
 
 from tests.conftest import SCRIPTS_DIR
 
@@ -72,14 +73,14 @@ def _train(home: Path) -> None:
         ),
         _reply("05:30.000", "c4", 7),
     ]
-    _agent(home, "coder", "daedalus:repo-coder", coder, parentAgentId="orch")
+    _agent(home, "coder", "daedalus:coder", coder, parentAgentId="orch")
     audit = [
         _prompt("06:00.000", "Phase 3 audit, round 1."),
         _reply("06:40.000", "u1", 9),
         _prompt("07:00.000", "Audit round 2 for the train."),
         _reply("07:20.000", "u2", 3),
     ]
-    _agent(home, "aud", "daedalus:security-auditor", audit, parentAgentId="orch")
+    _agent(home, "aud", "daedalus:auditor", audit, parentAgentId="orch")
     _agent(home, "loose", "general-purpose", [_prompt("00:00.000", f"Review {TRAIN}")])
 
 
@@ -120,7 +121,7 @@ def test_warm_resume_splits_at_the_new_unit_prompt(home: Path) -> None:
     runs, files = te.session_runs(SESSION, home.parents[2] / "repo", [])
     assert files == 4
     run, _session = runs
-    coder = {r.label: r for r in run.rows if r.agent == "repo-coder"}
+    coder = {r.label: r for r in run.rows if r.agent == "coder"}
     # The FIX prompt names no unit, so it stays on A1; the RESUME prompt opens A3.
     assert sorted(coder) == ["a1", "a3"]
     assert coder["a1"].usage.turns == 3 and coder["a1"].usage.tokens[1] == 105
@@ -135,7 +136,7 @@ def test_missing_values_print_none(home: Path) -> None:
     runs, _ = te.session_runs(SESSION, home.parents[2] / "repo", [])
     text = te.render(runs, f"session {SESSION}")
     assert f"| Build Train | {TRAIN} | none | orchestrator | none | 1 | 2 | 100 |" in text
-    assert f"| Build Train | {TRAIN} | 2 | repo-coder | a1 | 3 | 6 | 105 | 30 | 0 | 0m50s |" in text
+    assert f"| Build Train | {TRAIN} | 2 | coder | a1 | 3 | 6 | 105 | 30 | 0 | 0m50s |" in text
     assert f"| Build Train | {TRAIN} | total | 3 agents | 2 units, 2 rounds | 7 |" in text
     assert "agents outside any run" not in text
     row = te.table_row(["x", None, "", 1, 2, 3, 4, 5, 6, 7, 8])
@@ -156,7 +157,7 @@ def test_history_reads_total_rows_from_saved_files(tmp_path: Path) -> None:
         "\n".join(
             [
                 *te.header(),
-                f"| Build Train | {TRAIN} | 2 | repo-coder | a1 | 3 | 6 | 105 | 30 | 0 | 0m50s |",
+                f"| Build Train | {TRAIN} | 2 | coder | a1 | 3 | 6 | 105 | 30 | 0 | 0m50s |",
                 total + " 4 | 1m00s |",
                 f"| Build Train | {TRAIN} | mean | per unit | 2 units | 1 | 1 | 1 | 1 | 1 | 1s |",
             ]
@@ -225,7 +226,7 @@ def test_agents_outside_any_run_group_under_the_session(home: Path) -> None:
 def test_unit_mean_counts_coders_only() -> None:
     # Plan 11 A: the hand reports divided coder rows by units; a verifier row stays in the total.
     run = te.Run(te.BUILD, TRAIN)
-    for agent, out in (("repo-coder", 40), ("verifier", 4)):
+    for agent, out in (("coder", 40), ("verifier", 4)):
         usage = te.Usage(turns=2, tokens=[2, out, 10, 100], seconds=60.0)
         run.rows.append(te.Row(agent, te.BUILD, TRAIN, "2", agent, "a1", "unit", usage, None))
     mean = te.mean_row(run, "unit")
@@ -262,5 +263,27 @@ def test_turn_line_names_the_run_when_several_runs_have_coders() -> None:
 
 def test_turn_target_matches_the_coder_rule() -> None:
     # item 15: one number, stated in the coder's turn rule and read by the report.
-    coder = " ".join((SCRIPTS_DIR.parent / "agents" / "repo-coder.md").read_text().split())
+    coder = " ".join((SCRIPTS_DIR.parent / "agents" / "coder.md").read_text().split())
     assert f"A unit takes at most {te.CODER_TURN_TARGET} turns" in coder
+
+
+@pytest.mark.parametrize(
+    ("kind", "run_type"),
+    [(writer_mode.DERIVED, te.DOC), (writer_mode.PUBLIC_DOCS, te.SESSION)],
+)
+def test_a_root_writer_roots_a_document_run_only_in_its_derived_kind(
+    home: Path, kind: str, run_type: str
+) -> None:
+    # 0190: the bound kind in the writer record decides, as doc-deriver and docs-writer did.
+    repo = home.parents[2] / "repo"
+    path = writer_mode.records_path(repo, TRAIN)
+    path.parent.mkdir(parents=True)
+    writer_mode._write(path, [], {"w1": kind})
+    lines = [
+        _prompt("00:00.000", f"Write the document for run {TRAIN}"),
+        _reply("00:05.000", "m", 4),
+    ]
+    _agent(home, "w1", "daedalus:writer", lines)
+    runs, _ = te.session_runs(SESSION, repo, [])
+    [run] = [r for r in runs if any(row.agent == "writer" for row in r.rows)]
+    assert run.run_type == run_type

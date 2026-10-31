@@ -198,7 +198,8 @@ def test_claims_mode_checks_attachment_beside_existence() -> None:
     mode = _body("## Claims mode", "Never write U+2013")
     assert "existence (its definition) and attachment (a caller on the path it governs)" in mode
     assert "existence alone is OVERSTATED" in mode
-    writer = _flat((REPO_ROOT / "agents" / "docs-writer.md").read_text(encoding="utf-8"))
+    kind = REPO_ROOT / "skills" / "document" / "kinds" / "public-docs" / "SKILL.md"
+    writer = _flat(kind.read_text(encoding="utf-8"))
     assert "carries a receipt that includes the caller grep" in writer
 
 

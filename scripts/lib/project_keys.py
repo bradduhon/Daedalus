@@ -369,7 +369,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"Each of {_DRIVER_NAMES} exactly once; `<name>` is a Daedalus agent file name other "
         f"than `{NOT_OVERRIDABLE}`, which is refused",
         "Absent: the agent follows `priorities.drivers`",
-        '`{"repo-coder": {"drivers": ["cost", "security", "ops", "trust"]}}`',
+        '`{"coder": {"drivers": ["cost", "security", "ops", "trust"]}}`',
     ),
     (MANIFEST_FILE, "frameworks.pack_dir"): KeyRow(
         "The project folder that holds its own control packs; each subfolder holding a "
@@ -512,7 +512,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         + ", ".join(f'`"{model}"`' for model in MODELS[:-1])
         + f' or `"{MODELS[-1]}"`; any other name or value is refused',
         "`{}`: every agent runs on its agent file's model",
-        '`{"repo-coder": "sonnet"}`',
+        '`{"coder": "sonnet"}`',
     ),
 }
 REFERENCE_HEADER = (

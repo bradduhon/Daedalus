@@ -1514,7 +1514,7 @@ def record_exception(
 
 # 73, spec 3.3: reaudit {judged, tip, round}; spec 3.5: resume {summary}, pin D1 -> E4 ledger.
 REAUDIT, RESUME = "reaudit", "resume"
-AUDITOR_AGENT, ORCHESTRATOR_AGENT = "security-auditor", "orchestrator"
+AUDITOR_AGENT, ORCHESTRATOR_AGENT = "auditor", "orchestrator"
 
 
 def _open_consult(state: dict[str, object], agent: str) -> None:
@@ -1957,8 +1957,8 @@ def record_docs_verdict(
     return _recorded(cwd, edit)
 
 
-# spec 6: the bindings file records repo-coder dispatches only (dispatch_binding._dispatch_reason).
-BOUND_AGENT = "repo-coder"
+# spec 6: the bindings file records coder dispatches only (dispatch_binding._dispatch_reason).
+BOUND_AGENT = "coder"
 BINDINGS_UNREADABLE = (
     "the unit bindings file could not be read. Next: stop the run and start a new one."
 )

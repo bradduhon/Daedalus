@@ -421,7 +421,7 @@ def test_auditor_chain_writes_its_audit_folder_only(tmp_path: Path) -> None:
     scratch = f"{repo}/docs/.tmp/daedalus/{TRAIN}"
 
     def route(path: str) -> tuple[bool, str | None, str]:
-        return router.route({**_w("daedalus:security-auditor", path), "cwd": str(repo)}, REPO_ROOT)
+        return router.route({**_w("daedalus:auditor", path), "cwd": str(repo)}, REPO_ROOT)
 
     assert route(f"{scratch}/audit/round1/test_scope_x.py") == (True, None, "")
     for path in (f"{scratch}/briefs/c1.md", f"{repo}/src/a.py"):

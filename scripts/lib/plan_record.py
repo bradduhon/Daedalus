@@ -39,7 +39,7 @@ JAIL_CHECK_PATHS = (
     "scripts/lib/shell.py",
     "scripts/enforce_agent_jail.py",
 )
-# 0175, 0182: never a small change or a contract skip; agents/security-auditor.md names it.
+# 0175, 0182: never a small change or a contract skip; agents/auditor.md names it.
 CONTROL_PATHS = (*JAIL_CHECK_PATHS, "agents/", "skills/", "hooks/")
 # 0182: the most files a one-unit plan may name and still skip the contract.
 CONTRACT_SKIP_FILES = 3

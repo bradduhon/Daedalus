@@ -104,14 +104,14 @@ def _block(hook_input: Any, agent_id: str, agent_type: str, reason: str) -> None
 def _synthetic_chain(hook_input: Any) -> Path:
     bare = {"tool_name": None, "tool_input": None, "tool_use_id": None}
     audit.audit_append(hook_input(hook_event_name="SessionStart", source="startup", **bare))
-    _subagent(hook_input, "SubagentStart", "a1", "repo-coder")
-    _agent_calls(hook_input, "a1", "repo-coder")
-    _block(hook_input, "a1", "repo-coder", BLOCK_PUSH)
+    _subagent(hook_input, "SubagentStart", "a1", "coder")
+    _agent_calls(hook_input, "a1", "coder")
+    _block(hook_input, "a1", "coder", BLOCK_PUSH)
     _subagent(
         hook_input,
         "SubagentStop",
         "a1",
-        "repo-coder",
+        "coder",
         last_assistant_message="Built it | twice.\n[STATUS: COMPLETE]",
     )
     _subagent(hook_input, "SubagentStart", "a2", "framework-specialist")
@@ -148,12 +148,12 @@ def test_report_renders_every_section(project_data: Path, hook_input: Any) -> No
     assert re.search(r"^head=[0-9a-f]{64}$", out, re.M)
     assert f"project_root: {md_escape(hook_input()['cwd'])}\n" in out
     assert md_escape(BLOCK_PUSH) in out and md_escape(BLOCK_CURL) in out
-    assert "- seq 14 repo-coder: \\[STATUS: COMPLETE\\]\n" in out
+    assert "- seq 14 coder: \\[STATUS: COMPLETE\\]\n" in out
     assert "- seq 27 framework-specialist: \\[STATUS: YIELD\\_WEB\\] x\n" in out
     assert "- seq 29 auditor: \\[VERDICT: APPROVED\\]\n" in out
-    assert "| a1 | repo-coder | 2 | 14 | Built it \\| twice. \\[STATUS: COMPLETE\\] |" in out
-    assert "| repo-coder | Bash | 2 | 1 |" in out
-    assert "| repo-coder | Write | 2 | 0 |" in out
+    assert "| a1 | coder | 2 | 14 | Built it \\| twice. \\[STATUS: COMPLETE\\] |" in out
+    assert "| coder | Bash | 2 | 1 |" in out
+    assert "| coder | Write | 2 | 0 |" in out
     assert "| PreToolUse | 12 |" in out
     assert "| PostToolUse | 10 |" in out
 
@@ -166,9 +166,9 @@ def test_report_head_matches_verifier(project_data: Path, hook_input: Any) -> No
 
 
 def test_open_subagent_shows_open(project_data: Path, hook_input: Any) -> None:
-    _subagent(hook_input, "SubagentStart", "a9", "repo-coder")
+    _subagent(hook_input, "SubagentStart", "a9", "coder")
     out = _report("--cwd", hook_input()["cwd"]).stdout
-    assert "| a9 | repo-coder | 1 | open |  |" in out
+    assert "| a9 | coder | 1 | open |  |" in out
 
 
 def test_tampered_record_exits_one(project_data: Path, hook_input: Any) -> None:
@@ -246,13 +246,13 @@ def _row_columns(row: str) -> int:
 
 
 def test_agent_text_renders_inert(project_data: Path, hook_input: Any) -> None:
-    _subagent(hook_input, "SubagentStart", "a1", "repo-coder")
-    _block(hook_input, "a1", "repo-coder", f"{INJECTION} [STATUS: BLOCKED]")
+    _subagent(hook_input, "SubagentStart", "a1", "coder")
+    _block(hook_input, "a1", "coder", f"{INJECTION} [STATUS: BLOCKED]")
     _subagent(
         hook_input,
         "SubagentStop",
         "a1",
-        "repo-coder",
+        "coder",
         last_assistant_message=f"{INJECTION} [STATUS: COMPLETE]",
     )
     result = _report("--cwd", hook_input()["cwd"])
@@ -261,8 +261,8 @@ def test_agent_text_renders_inert(project_data: Path, hook_input: Any) -> None:
     assert "<" not in out and "![" not in out and "~~" not in out
     row = next(line for line in out.splitlines() if line.startswith("| a1 |"))
     assert _row_columns(row) == 5
-    status = [line for line in out.splitlines() if line.startswith("- seq 2 repo-coder: ")]
-    assert status == [f"- seq 2 repo-coder: {md_escape(INJECTION + ' [STATUS: BLOCKED]')}"]
+    status = [line for line in out.splitlines() if line.startswith("- seq 2 coder: ")]
+    assert status == [f"- seq 2 coder: {md_escape(INJECTION + ' [STATUS: BLOCKED]')}"]
     assert "\\!\\[t\\]\\(http://evil/x.png\\)" in status[0]
 
 
@@ -307,16 +307,16 @@ def test_session_start_only_renders(project_data: Path, hook_input: Any) -> None
 
 
 def test_no_subagent_stop_renders_open(project_data: Path, hook_input: Any) -> None:
-    _subagent(hook_input, "SubagentStart", "a1", "repo-coder")
+    _subagent(hook_input, "SubagentStart", "a1", "coder")
     for i, tool in enumerate(("Write", "Edit")):
         audit.audit_append(
-            hook_input(agent_id="a1", agent_type="repo-coder", tool_name=tool, tool_use_id=f"w{i}"),
+            hook_input(agent_id="a1", agent_type="coder", tool_name=tool, tool_use_id=f"w{i}"),
             decision="allow",
         )
     result = _report("--cwd", hook_input()["cwd"])
     assert result.returncode == 0, result.stderr
-    assert "| a1 | repo-coder | 1 | open |  |" in result.stdout
-    assert "| repo-coder | Edit | 1 | 0 |" in result.stdout
+    assert "| a1 | coder | 1 | open |  |" in result.stdout
+    assert "| coder | Edit | 1 | 0 |" in result.stdout
 
 
 def test_totals_count_skipped_fork_stops(
@@ -336,16 +336,16 @@ def test_totals_count_skipped_fork_stops(
 
 def test_two_resumes_of_one_agent_show_as_two_rows(project_data: Path, hook_input: Any) -> None:
     # 0114: rows key on the start record; a stop with no start since the last stop is a resume.
-    _subagent(hook_input, "SubagentStart", "a1", "repo-coder")
-    _subagent(hook_input, "SubagentStop", "a1", "repo-coder", last_assistant_message="first")
-    _subagent(hook_input, "SubagentStop", "a1", "repo-coder", last_assistant_message="second")
-    _subagent(hook_input, "SubagentStop", "a1", "repo-coder", last_assistant_message="third")
-    _subagent(hook_input, "SubagentStart", "a1", "repo-coder")
+    _subagent(hook_input, "SubagentStart", "a1", "coder")
+    _subagent(hook_input, "SubagentStop", "a1", "coder", last_assistant_message="first")
+    _subagent(hook_input, "SubagentStop", "a1", "coder", last_assistant_message="second")
+    _subagent(hook_input, "SubagentStop", "a1", "coder", last_assistant_message="third")
+    _subagent(hook_input, "SubagentStart", "a1", "coder")
     out = _report("--cwd", hook_input()["cwd"]).stdout
-    assert "| a1 | repo-coder | 1 | 2 | first |" in out
-    assert "| a1 | repo-coder | resume | 3 | second |" in out
-    assert "| a1 | repo-coder | resume | 4 | third |" in out
-    assert "| a1 | repo-coder | 5 | open |  |" in out
+    assert "| a1 | coder | 1 | 2 | first |" in out
+    assert "| a1 | coder | resume | 3 | second |" in out
+    assert "| a1 | coder | resume | 4 | third |" in out
+    assert "| a1 | coder | 5 | open |  |" in out
 
 
 def test_stop_with_no_earlier_record_keeps_a_dash_start(
@@ -531,9 +531,9 @@ REPLY = "SECRET-REPLY-TEXT [STATUS: COMPLETE]"
 
 def _controls_chain(hook_input: Any, monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setattr(audit, "datetime", _Clock([0, 1, 2, 5, 9, 10, 12, 13, 14, 15]))
-    a1 = {"agent_id": "a1", "agent_type": "repo-coder"}
+    a1 = {"agent_id": "a1", "agent_type": "coder"}
     a2 = {"agent_id": "a2", "agent_type": "auditor"}
-    _subagent(hook_input, "SubagentStart", "a1", "repo-coder")
+    _subagent(hook_input, "SubagentStart", "a1", "coder")
     calls: list[tuple[dict[str, str], str, str, str | None, float]] = [
         (a1, "Bash", "allow", None, 2.0),
         (a1, "Bash", "block", "git_push: no remote git operations. Next: x", 4.0),
@@ -564,7 +564,7 @@ def test_controls_counts_blocks_per_hook(
     assert result.returncode == 0, result.stderr
     out = result.stdout
     assert "## Control cost" in out and "## Subagent timeline" not in out
-    assert "| git\\_push | repo-coder | 1 |" in out
+    assert "| git\\_push | coder | 1 |" in out
     assert "| jail | main | 1 |" in out
     assert "| shell\\_tripwires | auditor | 1 |" in out
     assert "mean judge time: 8.0 ms over 7 calls" in out
@@ -600,7 +600,7 @@ def test_controls_seconds_to_next_allowed_call(
 ) -> None:
     repo = _controls_chain(hook_input, monkeypatch)
     out = _report("--repo", repo, "--controls").stdout
-    assert "| 3 | repo-coder | git\\_push | Bash | 3.0 |" in out
+    assert "| 3 | coder | git\\_push | Bash | 3.0 |" in out
     assert "| 6 | main | jail | Write | 2.0 |" in out
     assert "| 9 | auditor | shell\\_tripwires | Bash | none |" in out
 
@@ -610,7 +610,7 @@ def test_controls_seconds_to_first_write_per_agent(
 ) -> None:
     repo = _controls_chain(hook_input, monkeypatch)
     out = _report("--repo", repo, "--controls").stdout
-    assert "| a1 | repo-coder | 9.0 |" in out
+    assert "| a1 | coder | 9.0 |" in out
     assert "| a2 | auditor | none |" in out
 
 
@@ -631,7 +631,7 @@ def test_summary_carries_the_controls_table(
     repo = _controls_chain(hook_input, monkeypatch)
     out = _report("--repo", repo).stdout
     assert "## Subagent timeline" in out and "## Control cost" in out
-    assert "| jail | main | 1 |" in out and "| a1 | repo-coder | 9.0 |" in out
+    assert "| jail | main | 1 |" in out and "| a1 | coder | 9.0 |" in out
 
 
 def test_containment_error_names_the_matched_path(

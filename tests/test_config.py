@@ -214,7 +214,7 @@ def test_agent_models_absent_or_null_is_empty(project_data: Path) -> None:
 
 
 def test_agent_models_reads_a_valid_map(project_data: Path) -> None:
-    doc = {"agent_models": {"repo-coder": "sonnet", "planner": "fable", "web-researcher": "haiku"}}
+    doc = {"agent_models": {"coder": "sonnet", "planner": "fable", "web-researcher": "haiku"}}
     assert _load(project_data, doc).agent_models == doc["agent_models"]
 
 
@@ -225,19 +225,17 @@ def test_agent_models_refuses_an_unknown_agent(project_data: Path, name: str) ->
     text = str(info.value)
     assert f"agent_models names {name!r}, which is not a catalog agent" in text
     assert "Next: key agent_models by an agent name the catalog lists, one of " in text
-    assert "repo-coder" in text
+    assert "coder" in text
 
 
 @pytest.mark.parametrize("model", ["gpt-4", "Opus", "inherit", "", None, 1])
 def test_agent_models_refuses_an_unknown_model(project_data: Path, model: object) -> None:
     with pytest.raises(ConfigError) as info:
-        _load(project_data, {"agent_models": {"repo-coder": model}})
-    assert "Next: set agent_models.repo-coder to one of sonnet, opus, haiku, fable." in str(
-        info.value
-    )
+        _load(project_data, {"agent_models": {"coder": model}})
+    assert "Next: set agent_models.coder to one of sonnet, opus, haiku, fable." in str(info.value)
 
 
-@pytest.mark.parametrize("value", [["repo-coder"], "opus", 3])
+@pytest.mark.parametrize("value", [["coder"], "opus", 3])
 def test_agent_models_refuses_anything_but_an_object(project_data: Path, value: object) -> None:
     with pytest.raises(ConfigError, match="agent_models must be an object. Next: "):
         _load(project_data, {"agent_models": value})

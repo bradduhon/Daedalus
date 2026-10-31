@@ -17,7 +17,7 @@ from lib.project_root import project_root  # noqa: E402
 TOOLS: frozenset[str] = frozenset({"Bash"})
 FLAGS: dict[str, hook_io.Flag] = {}
 PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
-CODER = "repo-coder"
+CODER = "coder"
 
 
 def _own_script(cwd: str, base: str | None) -> Callable[[str], bool]:

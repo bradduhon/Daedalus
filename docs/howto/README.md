@@ -109,7 +109,7 @@ Outside a git repository, the project is in folder scope. Only a repository can 
 | Your own control packs, optional | each subfolder of the `frameworks.pack_dir` folder in `service-manifest.json` | you, with `scripts/import_pack.py` from your own shell |
 | Build run working files and summary | `<repo>/docs/.tmp/daedalus/` | the build run; a `*` marker inside keeps it out of git |
 | Running-train marker | `<repo>/.claude/daedalus/train.active` | each train, removed when it ends or stops |
-| Train state and unit bindings | `<repo>/.claude/daedalus/trains/<train-id>.json` and `<train-id>.bindings.json` | the train's scripts only, under a lock |
+| Train state, unit bindings and writer kinds | `<repo>/.claude/daedalus/trains/<train-id>.json`, `<train-id>.bindings.json` and `<train-id>.writers.json` | the train's scripts and hooks only, under a lock |
 | Coder worktrees | `<repo>/.claude/worktrees/<train-id>-<unit-slug>` | the build run, removed when it ends or stops |
 
 `<repo>` is the main working tree of the git repository you started Claude Code in. Every worktree of that repository shares the one `.claude/daedalus/` directory. Outside a git repository, `<repo>` is the starting directory itself.
@@ -124,7 +124,7 @@ Uninstalling the plugin leaves the audit logs and config in the repository. A co
 
 When Daedalus refuses an action, you see a line like this:
 
-    daedalus-jail[repo-coder]: write outside your unit worktree: /work/repo/infra/x.tf. Next: ask the orchestrating session to route this to contract-spec or charter-docs.
+    daedalus-jail[coder]: write outside your unit worktree: /work/repo/infra/x.tf. Next: ask the orchestrating session to route this to contract-spec or charter-docs.
 
 The name in brackets is the agent that was blocked. The part before `Next:` says what was refused and why. The part after it says what to do instead. The orchestrating session is the Claude Code session you are talking to, not the plugin.
 
@@ -149,9 +149,9 @@ The report checks the log's hash chain first. Only an intact chain gets a digest
 
 A block line reads like this:
 
-    - seq 3 repo-coder Bash: no remote git operations in the Build Train. Next: commit locally; the Push Train pushes.
+    - seq 3 coder Bash: no remote git operations in the Build Train. Next: commit locally; the Push Train pushes.
 
-`seq 3` is the record number in the log. `repo-coder` is the agent that was refused, and `Bash` is the tool it tried. The rest is the refusal the log stores. The agent saw the same text with a `daedalus-jail[<agent>]:` prefix. Every refusal ends with the `Next:` the agent was given. Characters such as brackets are shown with a backslash before them, so they do not act as Markdown. Text an agent wrote is shown escaped, so a link or tag in it appears as plain text and does nothing.
+`seq 3` is the record number in the log. `coder` is the agent that was refused, and `Bash` is the tool it tried. The rest is the refusal the log stores. The agent saw the same text with a `daedalus-jail[<agent>]:` prefix. Every refusal ends with the `Next:` the agent was given. Characters such as brackets are shown with a backslash before them, so they do not act as Markdown. Text an agent wrote is shown escaped, so a link or tag in it appears as plain text and does nothing.
 
 ### When the chain is BROKEN
 
@@ -361,17 +361,17 @@ The train stops, with a `Next:` line, when any of these fails:
 - An audit log fails its hash chain check. Keep the file, report it, and do not edit it, as in "When the chain is BROKEN" above.
 - The security auditor's last reply is not `[VERDICT: APPROVED]`, or the ledger commit is not on the branch. The reply checked is the last one before this train's summary, in the build run's audit log, after the mark its hooks check made. A rejected round passes when every one of its findings carries an exemption. The plugin README's "The push proof" lists each rule this check applies. When the only problem is a commit that landed on the branch after the audit, the push run adds one recovery round on the new tip instead of stopping (see "Recovering a train" below).
 
-### What the conductor does
+### What the releaser does
 
-The conductor is the push agent, pr-train-conductor. It commits any staged result. With the secret scan on, it then scans the commits since the base with `gitleaks detect --redact`. It pushes the branch with `git push -u origin daedalus/<train-id>` and opens the pull request with the build run's summary as its body. When a pull request for the branch is already open, it updates that body instead. The jail lets it push only a named branch to `origin`. It can never push `main` or `master`, never force a push, and never merge.
+The releaser is the agent that pushes. It commits any staged result. With the secret scan on, it then scans the commits since the base with `gitleaks detect --redact`. It pushes the branch with `git push -u origin daedalus/<train-id>` and opens the pull request with the build run's summary as its body. When a pull request for the branch is already open, it updates that body instead. The jail lets it push only a named branch to `origin`. It can never push `main` or `master`, never force a push, and never merge.
 
 Then it watches the GitHub Actions runs for the pushed commit and reports each conclusion. Only `success`, `skipped` and `neutral` let the train go on. Every `skipped` or `neutral` result is named in your checklist, even when a later run succeeded. Any other conclusion, including `startup_failure` or one Daedalus does not know, stops the train. Its log lines are added to the summary under `## CI` and shown to you. Fix the failure through `/daedalus:run`; the push run never fixes CI.
 
-The conductor cannot wait, so it does not see a run that has not started yet. In that case the summary and the pull request body get the line `Deviation: CI not observed at push time`. Your checklist then starts with `CI not observed; check the PR's checks before merging`.
+The releaser cannot wait, so it does not see a run that has not started yet. In that case the summary and the pull request body get the line `Deviation: CI not observed at push time`. Your checklist then starts with `CI not observed; check the PR's checks before merging`.
 
 ### When the Charter has a branch
 
-The build run may have put its contract on a `daedalus/<train-id>` branch in your Charter repository, with its ledger entry when the ledger lives there. Then the push run opens a second pull request for that branch, once the code pull request exists. The train writes a two-line pull request body to `docs/.tmp/daedalus/<train-id>-charter-pr.md` naming the code pull request. The conductor pushes the Charter branch and opens its pull request against the branch the Charter forked from.
+The build run may have put its contract on a `daedalus/<train-id>` branch in your Charter repository, with its ledger entry when the ledger lives there. Then the push run opens a second pull request for that branch, once the code pull request exists. The train writes a two-line pull request body to `docs/.tmp/daedalus/<train-id>-charter-pr.md` naming the code pull request. The releaser pushes the Charter branch and opens its pull request against the branch the Charter forked from.
 
 ### Your checklist
 
@@ -387,7 +387,7 @@ With a Charter branch, item 6 covers the Charter pull request. You review and me
 
 ### What BLOCKED means
 
-`[STATUS: BLOCKED] <detail>` from the conductor means one of two things. A check it runs failed before anything changed on GitHub, or a command it needed was refused. The most common detail is `gitleaks findings`: the scan found something that looks like a secret in the branch's commits. The findings are shown with the secret redacted. Rotate the credential, remove it from the branch history from your own shell, and run `/daedalus:run push` again. For any other detail, do what the detail names and rerun.
+`[STATUS: BLOCKED] <detail>` from the releaser means one of two things. A check it runs failed before anything changed on GitHub, or a command it needed was refused. The most common detail is `gitleaks findings`: the scan found something that looks like a secret in the branch's commits. The findings are shown with the secret redacted. Rotate the credential, remove it from the branch history from your own shell, and run `/daedalus:run push` again. For any other detail, do what the detail names and rerun.
 
 ## Recovering a train
 

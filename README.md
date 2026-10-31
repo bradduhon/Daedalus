@@ -134,7 +134,7 @@ The push run commits, pushes and opens the pull request for a finished build run
 
 It first checks that the build run's audit log holds an approved security verdict for that train. When `features.secrets_scan` is `true` in `service-manifest.json`, it also scans the commits for secrets with gitleaks before the push. Your repository needs a GitHub remote named `origin`, and `gh` must be signed in to it.
 
-The push agent, pr-train-conductor, pushes the branch and watches CI. If the build run used a branch in your Charter repository, the push agent also pushes that branch and opens its pull request after the code one. The Charter is a separate repository for your decisions and specs, named by the `charter_root` setting. If a commit landed on the train's branch after the audit, the push run adds one recovery audit round on the new tip before it pushes.
+The push agent, the releaser, pushes the branch and watches CI. If the build run used a branch in your Charter repository, the push agent also pushes that branch and opens its pull request after the code one. The Charter is a separate repository for your decisions and specs, named by the `charter_root` setting. If a commit landed on the train's branch after the audit, the push run adds one recovery audit round on the new tip before it pushes.
 
 You review and merge. Once `gh pr view <url> --json state` shows the merge, delete the train branch from your own shell with `git branch -D daedalus/<train-id>`.
 
@@ -163,45 +163,44 @@ Each agent's file lists the only tools it may use, the status lines it ends its 
 <!-- generated: catalog.py table -->
 | Agent | Shape | Model | Tools | Job | Reply lines | Phases |
 |---|---|---|---|---|---|---|
-| change-logger | producer | opus | Bash, Glob, Grep, Read, Write | Produces the change gate between a baseline and a derived document, or between two baselines when no deriver runs: one row per departure, with the baseline quote, the derived quote, the reason, and a status the operator rules on. | `[STATUS: COMPLETE] change_log=<path> rows=<n> open=<k>`; `[STATUS: BLOCKED] <what the manifest or brief leaves out>` | implementation |
+| auditor | judge | opus | Bash, Edit, Glob, Grep, Read, Write | Adversarial pre-commit security and contract verifier. | `[VERDICT: APPROVED] tip=<40 lowercase hex>`; `[VERDICT: REJECTED] tip=<40 lowercase hex>`; `[STATUS: YIELD_WEB] <tool> options and config files` | audit |
 | charter-docs | producer | sonnet | Bash, Edit, Glob, Grep, Read, Write | Single-writer custodian of the Charter repository, the architectural decision ledger, and Build Train commits. | `[STATUS: LEDGER_PROBED] <probe line>`; `[STATUS: LEDGER_APPENDED] <id>`; `[STATUS: LEDGER_MISMATCH] expected=<n> ledger=<m>`; `[STATUS: COMMITTED] <sha> ids=<id>[,<id>]`; `[STATUS: BLOCKED] <detail>` | clarification, commit, release |
+| coder | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Scoped implementation worker. | `[STATUS: YIELD_WEB] <query>`; `[STATUS: YIELD_CONTRACT] <mismatch>`; `[STATUS: YIELD_COMPLIANCE] <question>`; `[STATUS: YIELD_STANDARDS] <question>`; `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>` | implementation |
+| comparer | producer | opus | Bash, Glob, Grep, Read, Write | Produces the change gate between a baseline and a derived document, or between two baselines when no deriver runs: one row per departure, with the baseline quote, the derived quote, the reason, and a status the operator rules on. | `[STATUS: COMPLETE] change_log=<path> rows=<n> open=<k>`; `[STATUS: BLOCKED] <what the manifest or brief leaves out>` | implementation |
 | contract-spec | producer | sonnet | Edit, Glob, Grep, Read, Write | Reads and updates service handshake contracts, API schemas, and specifications. | `## Locked Contract Packet` | clarification, plan |
 | dependency-auditor | judge | sonnet | Bash, Glob, Grep, Read | Read-only judge of the dependency manifests and lockfiles a train changes. | `[STATUS: YIELD_WEB] <query>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with rule ids and file:line>` | audit |
-| doc-deriver | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Derives one document from frozen, manifest-declared sources with a file:line receipt on every value. | `[STATUS: COMPLETE] outputs=<path>[,<path>] claims=<n> judgments=<k> assumed=<m>`; `[STATUS: BLOCKED] <what the manifest or brief leaves out>` | implementation |
-| docs-writer | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Writes the public docs to match what a train merged. | `[STATUS: DOCS_WRITTEN] branch=<b> commit=<40 hex> claims=<n>`; `[STATUS: DOCS_UNCHANGED] reason=<why no passage needed an edit>` | audit |
 | framework-specialist | judge | sonnet | Bash, Grep, Read | Evaluates a diff against the control packs named in its prompt, by default the shipped AWS hardening and NIST SP 800-53 packs, and cites each pack control id with its NIST, CIS and ASVS ids. | `[STATUS: PACK_INVALID] <pack id>: <problem>`; `[STATUS: COMPLIANCE] <PASS/FAIL list with pack control ids, refs ids and file:line>` | clarification, audit |
 | orchestrator | dispatcher | fable | Agent, Bash, Edit, Glob, Grep, Read, SendMessage, Write | Runs one Build Train from its plan to the audited integration tip. | `[STATUS: ANNOUNCE] size=<size> phases=<list>`; `[STATUS: DECISION] brief=<path> questions=<n>`; `[STATUS: EXCEPTION] ledger_id=<id>`; `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path> tip=<40 hex>`; `[STATUS: STOP] reason=<what happened> next=<next action>` | context, clarification, plan, implementation, audit |
 | planner | shaper | opus | Glob, Grep, Read, Write | Cuts a design spec into work units that coders can build in parallel. | `[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>`; `[STATUS: QUESTION] <what the task leaves open>`; `[STATUS: ROUND] round=<k> items=<m>`; `[STATUS: SPEC] round=<k> path=<path> open=<m>`; `[STATUS: NOT_VIABLE] round=<k> <the blocking fact in one line>`; `[STATUS: YIELD_WEB] <query>` | clarification, plan |
-| pr-train-conductor | mover | opus | Bash, Glob, Grep, Read | GitHub specialist for the Push Train. | `[STATUS: PUSHED] branch=<b> pr=<url>`; `[STATUS: CI] run=<id> conclusion=<text>`; `[STATUS: BLOCKED] <precondition that failed>` | commit, release |
-| repo-coder | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Scoped implementation worker. | `[STATUS: YIELD_WEB] <query>`; `[STATUS: YIELD_CONTRACT] <mismatch>`; `[STATUS: YIELD_COMPLIANCE] <question>`; `[STATUS: YIELD_STANDARDS] <question>`; `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>` | implementation |
-| security-auditor | judge | opus | Bash, Edit, Glob, Grep, Read, Write | Adversarial pre-commit security and contract verifier. | `[VERDICT: APPROVED] tip=<40 lowercase hex>`; `[VERDICT: REJECTED] tip=<40 lowercase hex>`; `[STATUS: YIELD_WEB] <tool> options and config files` | audit |
+| releaser | mover | opus | Bash, Glob, Grep, Read | GitHub specialist for the Push Train. | `[STATUS: PUSHED] branch=<b> pr=<url>`; `[STATUS: CI] run=<id> conclusion=<text>`; `[STATUS: BLOCKED] <precondition that failed>` | commit, release |
 | standards-rules-specialist | finder | sonnet | Glob, Grep, Read | Adopts the project's declared standards. | `## Standards Packet`; `[STANDARDS: CONTRADICTION] <spec ref> vs <source:line>`; `[STATUS: STANDARD] <answer>` | clarification, plan |
 | terraform-reviewer | judge | sonnet | Bash, Glob, Grep, Read | Read-only judge of the .tf and .tfvars changes a train makes. | `[STATUS: COMPLIANCE] <PASS/FAIL list with rule ids and file:line, warnings included>` | audit |
 | verifier | judge | opus | Bash, Glob, Grep, Read | Adversarial read-only verifier of one unit's diff against its brief. | `[VERDICT: VERIFIED] claims=<n>`; `[VERDICT: REFUTED] <rows>` | implementation |
 | web-researcher | finder | haiku | Read, WebFetch, WebSearch | Fast external documentation lookup on Haiku. | `[STATUS: RESEARCH] <payload under 300 words with URLs>` | context |
+| writer | producer | opus | Bash, Edit, Glob, Grep, Read, Write | Writes documents with a rerunnable receipt on every claim, in the one kind its brief names: the four public docs after a run merged, or one document derived from frozen sources. | `[STATUS: DOCS_WRITTEN] branch=<b> commit=<40 hex> claims=<n>`; `[STATUS: DOCS_UNCHANGED] reason=<why no passage needed an edit>`; `[STATUS: COMPLETE] outputs=<path>[,<path>] claims=<n> judgments=<k> assumed=<m>`; `[STATUS: BLOCKED] <what the manifest or brief leaves out>` | implementation, audit |
 <!-- end generated -->
 
-Each agent file also declares a shape, the kind of job it does, and the checks that run before each of its tool calls, with their flags. The table below is generated from the agent files by `python3 scripts/catalog.py matrix`, and a test fails when it goes stale.
+Each agent file also declares a shape, the kind of job it does, and the checks that run before each of its tool calls, with their flags. The table below is generated from the agent files by `python3 scripts/catalog.py matrix`, and a test fails when it goes stale. The writer has one row per document kind. Each row lists the writer's own checks, then the checks of that kind, and a writer runs only the row of the kind its dispatch recorded.
 
 <!-- generated: catalog.py matrix -->
 | Agent | Shape | Hooks |
 |---|---|---|
-| change-logger | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar, read_only_bash, doc_outputs |
+| auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only --test-runner audit, gh_classes, root_writes --touch audit |
 | charter-docs | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow docs, root_writes --touch charter,docs --ledger-guard, command_allowlist --allow append_ledger,git,read, gh_classes |
+| coder | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes, gh_classes, confine |
+| comparer | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar, read_only_bash, doc_outputs |
 | contract-spec | producer | credential_paths, workspace_integrity, tool_bound, root_writes --touch contracts,charter-specs |
 | dependency-auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only, gh_classes |
-| doc-deriver | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar, read_only_bash, doc_outputs |
-| docs-writer | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes --docs, gh_classes, confine |
 | framework-specialist | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git specialist, gh_classes |
 | orchestrator | dispatcher | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, command_allowlist --allow train,inspect, root_writes --touch scratch --ledger-guard, gh_classes, dispatch_gate |
 | planner | shaper | credential_paths, workspace_integrity, tool_bound, root_writes --touch scratch --name plan*.md --sub brainstorm-*/spec.md |
-| pr-train-conductor | mover | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools --gh, command_allowlist --allow git,gh,gitleaks, git_grammar --allow conductor, git_push --conductor, gh_classes --conductor |
-| repo-coder | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes, gh_classes, confine |
-| security-auditor | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only --test-runner audit, gh_classes, root_writes --touch audit |
+| releaser | mover | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools --gh, command_allowlist --allow git,gh,gitleaks, git_grammar --allow conductor, git_push --conductor, gh_classes --conductor |
 | standards-rules-specialist | finder | credential_paths, tool_bound |
 | terraform-reviewer | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, command_allowlist --allow terraform,inspect, gh_classes |
 | verifier | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only --test-runner unit, gh_classes |
 | web-researcher | finder | credential_paths, tool_bound, network_tools --web |
+| writer (public-docs) | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar --allow coder, unit_writes --docs, gh_classes, confine |
+| writer (derived) | producer | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, git_grammar, read_only_bash, doc_outputs |
 <!-- end generated -->
 
 ## Files Daedalus creates
@@ -282,7 +281,7 @@ Some keys and files have no row here, because no reader checks them: the uncheck
 | `priorities.principles[].driver` | `service-manifest.json` | The concern a principle serves | string | One of `security`, `trust`, `ops`, `cost` | Required in each principle | `"security"` |
 | `priorities.principles[].text` | `service-manifest.json` | The principle itself, as one sentence a decision brief quotes | string | One printable line of 1 to 300 characters | Required in each principle | `"Each tenant keeps its own key."` |
 | `priorities.principles[].source` | `service-manifest.json` | Where the principle is written down, so a reader can follow it | string | A repo-relative path or a ruling id of the project's own ledger, without a leading slash, `..` or glob characters | Absent: no source named | `"docs/design.md"` |
-| `priorities.agents.<name>.drivers` | `service-manifest.json` | A different ranking for one agent; rules and principles still apply to it | list of strings | Each of `security`, `trust`, `ops`, `cost` exactly once; `<name>` is a Daedalus agent file name other than `security-auditor`, which is refused | Absent: the agent follows `priorities.drivers` | `{"repo-coder": {"drivers": ["cost", "security", "ops", "trust"]}}` |
+| `priorities.agents.<name>.drivers` | `service-manifest.json` | A different ranking for one agent; rules and principles still apply to it | list of strings | Each of `security`, `trust`, `ops`, `cost` exactly once; `<name>` is a Daedalus agent file name other than `auditor`, which is refused | Absent: the agent follows `priorities.drivers` | `{"coder": {"drivers": ["cost", "security", "ops", "trust"]}}` |
 | `frameworks.pack_dir` | `service-manifest.json` | The project folder that holds its own control packs; each subfolder holding a `pack.json` is one pack; see the requirements page, the section on framework control packs | string or null | A project-relative folder path without a leading slash, `..` or glob characters, or `null` | No `frameworks` key: only the packs Daedalus ships are read | `"compliance/packs"` |
 | `frameworks.default_packs` | `service-manifest.json` | Whether the packs Daedalus ships are read beside the project's own packs | boolean | `true` or `false`; `false` reads only the packs under `frameworks.pack_dir` | `true`: the shipped packs are read | `false` |
 | `ledger.path` | `service-manifest.json` | Where rulings are appended, declared for everyone who works on the project; it wins over the config's ledger block | string | A path; `<repo_root>` and `<charter_root>` are filled in, and a relative path is read from the project root | No block, or `ledger: null`: the config's ledger block or the ledger probe is used | `"docs/decisions.md"` |
@@ -304,7 +303,7 @@ Some keys and files have no row here, because no reader checks them: the uncheck
 | `operator_signing_keys` | `.claude/daedalus/config.json` | Reserved for the key fingerprints allowed to sign merges; no check reads it yet | list of strings | Non-empty strings | `[]` | `["ABCD1234EF567890"]` |
 | `max_concurrent_builders` | `.claude/daedalus/config.json` | How many coding agents a parallel stage runs at once, and the cap on the plan width the plan validator prints | integer | A whole number of at least 1; `true` and `false` are refused | `5` | `3` |
 | `audit_retention_days` | `.claude/daedalus/config.json` | How many days a session's audit log is kept after its last record. When a new session starts writing, older logs are deleted, each named with its final record in the new session's own log. A log named on a train summary's `Session` line, the log of a train not yet merged, and the current session's log are never deleted | integer or null | A whole number of at least 90, or `null` | `null`: every log is kept | `365` |
-| `agent_models` | `.claude/daedalus/config.json` | Which model each catalog agent runs on, in place of the `model:` line of its agent file; a model a skill is given for one run still comes first | object | Keys are agent names the catalog lists; values are `"sonnet"`, `"opus"`, `"haiku"` or `"fable"`; any other name or value is refused | `{}`: every agent runs on its agent file's model | `{"repo-coder": "sonnet"}` |
+| `agent_models` | `.claude/daedalus/config.json` | Which model each catalog agent runs on, in place of the `model:` line of its agent file; a model a skill is given for one run still comes first | object | Keys are agent names the catalog lists; values are `"sonnet"`, `"opus"`, `"haiku"` or `"fable"`; any other name or value is refused | `{}`: every agent runs on its agent file's model | `{"coder": "sonnet"}` |
 <!-- end key reference -->
 
 ## Safety model
@@ -428,10 +427,12 @@ The progress note, the summary command, the dispatch gate, the merge commands, t
 
 The bindings file, `<repo>/.claude/daedalus/trains/<train-id>.bindings.json`, keeps one coding agent per unit worktree. It holds one entry per unit worktree under `units`, written under its own lock. Each entry moves through four steps:
 
-1. Dispatch: when the orchestrator starts a repo-coder with one `Worktree:` line, the dispatch gate records the unit with no agent yet. A second dispatch to the same unit is refused.
+1. Dispatch: when the orchestrator starts a coder with one `Worktree:` line, the dispatch gate records the unit with no agent yet. A second dispatch to the same unit is refused.
 2. Claim: the coding agent's first write, or first git write, in that worktree binds the unit to its agent id. Every later write by that agent must stay in that worktree, and no other agent may write there.
 3. Rebind: when the orchestrator resumes a coder with a new `Worktree:` line, the gate moves the coder to the new unit and records the old unit as `retired_to` the new one.
 4. Finish: finish and the wave merge mark each merged unit `finished`, and a later write into it is refused.
+
+The writer record, `<repo>/.claude/daedalus/trains/<train-id>.writers.json`, holds the document kind of each writer, under its own lock. The writer is the one agent that writes documents, in one of two kinds. Each writer dispatch joins a queue with its kind: one `Worktree:` line naming the docs worktree is the public docs kind, and no `Worktree:` line is the derived kind, which needs the run's frozen sources file. A dispatch whose kind cannot be read joins with no kind. The orchestrator's dispatch joins only an empty queue and is refused otherwise. The main session's dispatch always joins, with a warning when a second dispatch now waits. A writer's first call takes the kind when exactly one dispatch waits, and binds it to the writer's agent id. From then on each of its calls meets the writer's own checks and the checks of its kind, never the other kind's. When two or more dispatches wait, every writer that has no kind yet is refused, because nothing tells which dispatch started it. To clear the queue, run `python3 <plugin>/scripts/daedalus_train.py writer-clear --repo <repo>` from your own shell or the main session; a stop and an unmark clear it too. A writer with no recorded kind is refused every call.
 
 ### The push proof
 
@@ -465,7 +466,7 @@ Exit 0 prints `OK approved: approved verdict, ...` or `OK approved: every findin
    - The plan has no pin line and has a `wire: none` line.
 
    The finish step then merges only a unit whose changes stay inside the plan's files. On a skip, no contract agent starts. `daedalus_workspace.py lock --no-contract` puts the integration branch `daedalus/<train-id>` at the base commit, commits nothing, and records the base as `lock_sha`. Each brief then carries `Contract: none`, and `daedalus_train.py plan` refuses a new plan for that train. Without a skip, the contract agent writes the Locked Contract Packet, and `daedalus_workspace.py lock` commits it on the integration branch and records `lock_sha`. A later contract revision leaves `lock_sha` at the first lock.
-5. Units. A wave is a group of units built at the same time. For each wave, the orchestrator checks the tools the units list under `needs:` with `daedalus_doctor.py --check-tools`. For each unit it then runs `daedalus_workspace.py create`, writes the brief file, and starts a repo-coder with the brief path and one `Worktree:` line. The dispatch gate checks the recorded plan and records the dispatch. The coder's first write claims the unit.
+5. Units. A wave is a group of units built at the same time. For each wave, the orchestrator checks the tools the units list under `needs:` with `daedalus_doctor.py --check-tools`. For each unit it then runs `daedalus_workspace.py create`, writes the brief file, and starts a coder with the brief path and one `Worktree:` line. The dispatch gate checks the recorded plan and records the dispatch. The coder's first write claims the unit.
 6. Report and verification. The coder ends its reply with a receipts block above its `[STATUS: COMPLETE]` line, and the receipts check reads that block. The orchestrator checks the reply's branch, its packet hashes and that the branch descends from the contract lock. The verifier then judges the unit's diff against its brief. The unit is ready to merge once its verdict is `[VERDICT: VERIFIED]`.
 7. Merge. `daedalus_workspace.py finish` merges every unit into the integration branch with `--no-ff`. A train cut into waves merges each wave first with the wave merge command. A merge that fails is aborted, and the repository stays on `daedalus/<train-id>` with the merges that completed. The `Next:` line names the conflicting files. Merge that unit there by hand, then run the merge step again, which skips units already merged.
 8. Audit. Extra judges join depending on what the diff touches. The framework specialist joins for IAM, KMS, mTLS, key custody or infrastructure changes, with the shipped AWS and NIST packs or your own. The dependency auditor joins for a dependency manifest or lockfile. The Terraform reviewer joins for a `.tf` or `.tfvars` file. The security auditor judges the merged tip in its own audit worktree, and `daedalus_train.py verdict` records its verdict. Each finding of a rejected round comes to you as its own question.
@@ -481,7 +482,7 @@ A unit line may also carry `needs: <tool or protected path>[, ...]`. It lists th
 
 ### The receipts check
 
-`scripts/handback_check.py` runs on every SubagentStop and on every `SubagentHandback` tool call, during a train only. It judges only a repo-coder's reply whose last line is `[STATUS: COMPLETE]`. Directly above that line it expects a `## Receipts` line, followed only by lines of five shapes:
+`scripts/handback_check.py` runs on every SubagentStop and on every `SubagentHandback` tool call, during a train only. It judges only a coder's reply whose last line is `[STATUS: COMPLETE]`. Directly above that line it expects a `## Receipts` line, followed only by lines of five shapes:
 
 - `- commit <40 hex> <subject>`
 - `- test <command> => <last output line>`
@@ -535,13 +536,13 @@ When two concerns conflict, the orchestrator tries the rules in order, and the f
 - It exits 1 when the recorded output folder fails the output folder check, before it reads any output.
 - It exits 5 when an output carries an en or em dash, placeholder copy, or a sentence copied from a style source that carries a number.
 
-The doc-deriver and the change-logger write only inside the output folder, which `scripts/checks/doc_outputs.py` checks. The verifier checks the deriver's claims in claims mode. `/daedalus:round` keeps the record of one round of correspondence.
+The writer and the comparer write only inside the output folder, which `scripts/checks/doc_outputs.py` checks. The verifier checks the writer's claims in claims mode. `/daedalus:round` keeps the record of one round of correspondence.
 
-The `excluded_roots` key of `config.json` names folders whose files must never reach git, GitHub or a redirect. `scripts/checks/excluded_roots.py` runs for every Daedalus agent after its own checks. It refuses a git command that stages, commits or stashes a path inside such a folder, and a gh command or a redirect that names one. While any such folder is declared, it also refuses a git command that matches paths in any letter case: an `:(icase)` or short `:i:` pathspec, `--icase-pathspecs` or `GIT_ICASE_PATHSPECS`. The doc-deriver and the change-logger may redirect into such a folder, since their outputs live there. During a train your session is warned instead. `freeze_sources.py` records the resolved folders in the sources file.
+The `excluded_roots` key of `config.json` names folders whose files must never reach git, GitHub or a redirect. `scripts/checks/excluded_roots.py` runs for every Daedalus agent after its own checks. It refuses a git command that stages, commits or stashes a path inside such a folder, and a gh command or a redirect that names one. While any such folder is declared, it also refuses a git command that matches paths in any letter case: an `:(icase)` or short `:i:` pathspec, `--icase-pathspecs` or `GIT_ICASE_PATHSPECS`. The writer and the comparer may redirect into such a folder, since their outputs live there. During a train your session is warned instead. `freeze_sources.py` records the resolved folders in the sources file.
 
 ### A run in a plain folder
 
-Outside a git repository, `/daedalus:run` runs only the brainstorm, plan, document and verify phases, in your session, and no security audit runs. It asks where the run's outputs go: the project's `docs` folder, a new folder under `/tmp`, or a folder you name. Then it opens the run with `daedalus_workspace.py begin --repo <folder> --scope folder --out <outputs>`, which runs no git command. Begin refuses an output folder that is the project folder, one of its parents, your home folder or a folder under `.claude`. The planner writes its plan file and brainstorm spec straight into that output folder. The doc-deriver and the change-logger write each derived document and change log there too. The write checks admit that folder only while the run that recorded it is active. Building, auditing and pushing need a git repository.
+Outside a git repository, `/daedalus:run` runs only the brainstorm, plan, document and verify phases, in your session, and no security audit runs. It asks where the run's outputs go: the project's `docs` folder, a new folder under `/tmp`, or a folder you name. Then it opens the run with `daedalus_workspace.py begin --repo <folder> --scope folder --out <outputs>`, which runs no git command. Begin refuses an output folder that is the project folder, one of its parents, your home folder or a folder under `.claude`. The planner writes its plan file and brainstorm spec straight into that output folder. The writer and the comparer write each derived document and change log there too. The write checks admit that folder only while the run that recorded it is active. Building, auditing and pushing need a git repository.
 
 ### The summary's path rule
 
@@ -575,22 +576,21 @@ Daedalus/
 ├── pyproject.toml                   # dev tooling; the plugin itself is stdlib only
 ├── service-manifest.json            # this repository's own service manifest
 ├── agents/
-│   ├── change-logger.md
+│   ├── auditor.md
 │   ├── charter-docs.md
+│   ├── coder.md
+│   ├── comparer.md
 │   ├── contract-spec.md
 │   ├── dependency-auditor.md
-│   ├── doc-deriver.md
-│   ├── docs-writer.md
 │   ├── framework-specialist.md
 │   ├── orchestrator.md
 │   ├── planner.md
-│   ├── pr-train-conductor.md
-│   ├── repo-coder.md
-│   ├── security-auditor.md
+│   ├── releaser.md
 │   ├── standards-rules-specialist.md
 │   ├── terraform-reviewer.md
 │   ├── verifier.md
-│   └── web-researcher.md
+│   ├── web-researcher.md
+│   └── writer.md
 ├── docs/
 │   ├── guardrails.md                # each principle with its mechanism and test
 │   ├── howto/README.md              # operator guide
@@ -609,9 +609,9 @@ Daedalus/
 │   ├── checks/dispatch_gate.py      # the orchestrator's coder dispatch and plan gates
 │   ├── checks/doc_outputs.py        # document agents write only in the train's output folder
 │   ├── checks/excluded_roots.py     # git, gh and redirects never take a file from an excluded root
-│   ├── checks/gh_classes.py         # the gh deny classes; the conductor's gh rules
+│   ├── checks/gh_classes.py         # the gh deny classes; the releaser's gh rules
 │   ├── checks/git_grammar.py        # each git segment fits the grammar of its grant
-│   ├── checks/git_push.py           # refuses remote git; the conductor pushes the train branch only
+│   ├── checks/git_push.py           # refuses remote git; the releaser pushes the train branch only
 │   ├── checks/network_tools.py      # refuses web tools and network commands without a grant
 │   ├── checks/read_only_bash.py     # every Bash segment is a read-only command or git read
 │   ├── checks/root_writes.py        # writes land only under the named path classes
@@ -621,6 +621,7 @@ Daedalus/
 │   ├── checks/unit_writes.py        # the coder writes only in its own unit worktree
 │   ├── checks/workspace_integrity.py # refuses writes into .git and the data folder
 │   ├── lib/__init__.py
+│   ├── lib/agent_aliases.py         # old agent names read as their new names, one release
 │   ├── lib/agent_files.py           # reads agent files and their hooks blocks
 │   ├── lib/agent_models.py          # the model each agent runs on: override, config, agent file
 │   ├── lib/atomic.py                # the one atomic writer and create-once writer
@@ -659,6 +660,7 @@ Daedalus/
 │   ├── lib/train_summary.py         # the train summary, written from state and the audit log
 │   ├── lib/unit_binding.py          # one coder per unit worktree
 │   ├── lib/workspace.py             # unit worktrees and the train marker
+│   ├── lib/writer_mode.py           # the kind each writer's dispatch recorded
 │   ├── append_ledger.py             # locked, sequence-checked ledger writer
 │   ├── audit_log.py                 # all other hook events to the audit log
 │   ├── audit_report.py              # digest of a verified session log
@@ -689,6 +691,7 @@ Daedalus/
 │   ├── catalog/SKILL.md             # /daedalus:catalog
 │   ├── doc-train/SKILL.md           # moved to /daedalus:run doc; prints the new command
 │   ├── document/SKILL.md            # the document phase, in two modes
+│   ├── document/kinds/              # the writer's kind skills: public docs and derived
 │   ├── doctor/SKILL.md              # /daedalus:doctor
 │   ├── plan/SKILL.md                # /daedalus:plan, the plan phase
 │   ├── push-train/SKILL.md          # moved to /daedalus:run push; prints the new command

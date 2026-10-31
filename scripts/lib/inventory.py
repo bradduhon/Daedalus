@@ -221,6 +221,11 @@ FILES: tuple[Entry, ...] = (
         "each unit binding change",
     ),
     Entry(
+        f"{_TRAINS}/<train-id>.writers.lock",
+        "scripts/lib/train_state.py:locked_file",
+        "each writer dispatch, and each writer's first call",
+    ),
+    Entry(
         f"{_TRAINS}/<train-id>.json",
         "scripts/lib/train_state.py:_write",
         "a Build Train starts and at each state change, the contract skip record included",
@@ -229,6 +234,11 @@ FILES: tuple[Entry, ...] = (
         f"{_TRAINS}/<train-id>.bindings.json",
         "scripts/lib/train_state.py:_write",
         "the first coder of a train is dispatched, and at each binding change",
+    ),
+    Entry(
+        f"{_TRAINS}/<train-id>.writers.json",
+        "scripts/lib/train_state.py:_write",
+        "a writer is dispatched, and its first call binds the kind its dispatch recorded",
     ),
     Entry(
         f"{_SCRATCH}/<train-id>-summary.md",

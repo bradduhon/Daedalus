@@ -174,12 +174,12 @@ def test_failure_line_names_the_row_or_none() -> None:
 
 def test_git_without_a_grant_is_refused() -> None:
     want = load("git_grammar").R_NO_GIT
-    assert evaluate("git_grammar", _b("repo-coder", "git status")) == want
+    assert evaluate("git_grammar", _b("coder", "git status")) == want
 
 
 def test_find_that_writes_is_refused() -> None:
     for command in ("find . -delete", "find . -exec ls {} +", f"find . -fprint {WT}/x"):
-        assert evaluate("shell_tripwires", _b("repo-coder", command)) == shell.R_FIND_WRITE, command
+        assert evaluate("shell_tripwires", _b("coder", command)) == shell.R_FIND_WRITE, command
 
 
 def test_coder_write_without_an_id_is_refused(
@@ -194,4 +194,4 @@ def test_basetemp_root_is_unseen_by_the_write_checks() -> None:
     # issue 56: red here means the write checks now judge the temp root and R_BASETEMP can retire.
     for segment in (["pytest", "--basetemp=/tmp/x"], ["pytest", "--basetemp", "/tmp/x"]):
         assert jail._coder_bash_reason(segment, CWD, lambda: "") is None, segment
-    assert evaluate("unit_writes", _b("repo-coder", "pytest --basetemp=/tmp/x")) == jail.R_BASETEMP
+    assert evaluate("unit_writes", _b("coder", "pytest --basetemp=/tmp/x")) == jail.R_BASETEMP

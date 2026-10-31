@@ -278,7 +278,7 @@ def test_the_check_refuses_a_test_command_without_landlock(
 ) -> None:
     # 0048, issue 86: no step-aside; the Next line names the kernel requirement.
     monkeypatch.setattr(daedalus_confine, "kernel_support", lambda: support)
-    hook_input = _b("repo-coder", f"cd {WT} && " + template.format(wrap=WRAP))
+    hook_input = _b("coder", f"cd {WT} && " + template.format(wrap=WRAP))
     reason = str(evaluate("confine", hook_input))
     assert daedalus_confine.KERNEL_NEED in reason and daedalus_confine.NEXT_KERNEL in reason
     assert_denied(hook_input, daedalus_confine.KERNEL_NEED)
@@ -289,7 +289,7 @@ def test_the_check_refuses_a_test_command_with_the_probe_error_text(
     monkeypatch: pytest.MonkeyPatch, template: str
 ) -> None:
     monkeypatch.setattr(daedalus_confine, "kernel_support", lambda: PROBE_ERROR)
-    hook_input = _b("repo-coder", f"cd {WT} && " + template.format(wrap=WRAP))
+    hook_input = _b("coder", f"cd {WT} && " + template.format(wrap=WRAP))
     reason = str(evaluate("confine", hook_input))
     assert "the kernel rules probe failed: seccomp probe: boom" in reason
     assert daedalus_confine.NEXT_PROBE in reason
@@ -301,7 +301,7 @@ def test_other_commands_pass_on_an_unusable_kernel(
     monkeypatch: pytest.MonkeyPatch, support: daedalus_confine.Support
 ) -> None:
     monkeypatch.setattr(daedalus_confine, "kernel_support", lambda: support)
-    assert evaluate("confine", _b("repo-coder", f"cd {WT} && git -C {WT} status")) is None
+    assert evaluate("confine", _b("coder", f"cd {WT} && git -C {WT} status")) is None
 
 
 def test_the_wrapper_refuses_to_run_on_a_probe_error(
@@ -317,10 +317,10 @@ def test_the_wrapper_refuses_to_run_on_a_probe_error(
 @pytest.mark.parametrize("command", CONFINE_RUNNERS)
 def test_each_new_runner_needs_the_wrapper(command: str) -> None:
     # 0048, issue 91: bare, the runner is refused; wrapped, the confine check passes it.
-    bare = _b("repo-coder", f"cd {WT} && {command}")
+    bare = _b("coder", f"cd {WT} && {command}")
     assert evaluate("confine", bare) == load("confine").R_CONFINE
     assert_denied(bare)
-    assert evaluate("confine", _b("repo-coder", f"cd {WT} && {WRAP} {command}")) is None
+    assert evaluate("confine", _b("coder", f"cd {WT} && {WRAP} {command}")) is None
 
 
 @pytest.mark.usefixtures("kernel")
@@ -328,7 +328,7 @@ def test_each_new_runner_needs_the_wrapper(command: str) -> None:
     "command", ["go build ./...", "cargo build", "uv pip list", "go vet ./...", "uvx ruff"]
 )
 def test_a_runner_name_without_its_test_verb_needs_no_wrapper(command: str) -> None:
-    assert evaluate("confine", _b("repo-coder", f"cd {WT} && {command}")) is None
+    assert evaluate("confine", _b("coder", f"cd {WT} && {command}")) is None
 
 
 class _Libc:
@@ -522,7 +522,7 @@ def test_the_live_seccomp_probe_proves_the_filter() -> None:
     ],
 )
 def test_unwrapped_test_command_is_refused_when_the_kernel_holds_rules(command: str) -> None:
-    assert evaluate("confine", _b("repo-coder", command)) == load("confine").R_CONFINE
+    assert evaluate("confine", _b("coder", command)) == load("confine").R_CONFINE
 
 
 @pytest.mark.usefixtures("kernel")
@@ -538,8 +538,8 @@ def test_unwrapped_test_command_is_refused_when_the_kernel_holds_rules(command: 
     ],
 )
 def test_the_wrapped_form_passes_the_whole_coder_chain(command: str) -> None:
-    assert evaluate("confine", _b("repo-coder", command)) is None
-    assert decide(_b("repo-coder", command), CFG).allow, command
+    assert evaluate("confine", _b("coder", command)) is None
+    assert decide(_b("coder", command), CFG).allow, command
 
 
 @pytest.mark.usefixtures("kernel")
@@ -548,10 +548,10 @@ def test_a_declared_non_runner_test_command_needs_the_wrapper(
     tmp_path: Path, declared: str
 ) -> None:
     repo, wt = _narrowed_repo(tmp_path, json.dumps({"stack": {"unit_test_cmd": declared}}))
-    bare = _cwd(_b("repo-coder", f"cd {wt} && {declared}"), repo)
+    bare = _cwd(_b("coder", f"cd {wt} && {declared}"), repo)
     assert evaluate("confine", bare) == load("confine").R_CONFINE
     command = f"cd {wt} && {shell.CONFINE_PATH} --unit {wt} -- {declared}"
-    wrapped = _cwd(_b("repo-coder", command), repo)
+    wrapped = _cwd(_b("coder", command), repo)
     assert evaluate("confine", wrapped) is None
     assert decide(wrapped, CFG).allow, decide(wrapped, CFG).reason
 
@@ -567,7 +567,7 @@ def test_a_declared_non_runner_test_command_needs_the_wrapper(
     ],
 )
 def test_other_commands_never_need_the_wrapper(command: str) -> None:
-    assert evaluate("confine", _b("repo-coder", command)) is None
+    assert evaluate("confine", _b("coder", command)) is None
 
 
 @pytest.mark.usefixtures("kernel")
@@ -582,7 +582,7 @@ def test_other_commands_never_need_the_wrapper(command: str) -> None:
     ],
 )
 def test_wrapper_unit_must_be_the_command_worktree(command: str) -> None:
-    assert evaluate("confine", _b("repo-coder", command)) == load("confine").R_CONFINE_UNIT
+    assert evaluate("confine", _b("coder", command)) == load("confine").R_CONFINE_UNIT
 
 
 @pytest.mark.usefixtures("kernel")
@@ -597,8 +597,8 @@ def test_wrapper_unit_must_be_the_command_worktree(command: str) -> None:
     ],
 )
 def test_a_wrapper_copy_or_another_form_is_refused(command: str) -> None:
-    assert evaluate("confine", _b("repo-coder", command)) == shell.R_CONFINE_FORM
-    assert not decide(_b("repo-coder", command), CFG).allow
+    assert evaluate("confine", _b("coder", command)) == shell.R_CONFINE_FORM
+    assert not decide(_b("coder", command), CFG).allow
 
 
 @pytest.mark.usefixtures("kernel")
@@ -606,15 +606,15 @@ def test_a_wrapper_copy_or_another_form_is_refused(command: str) -> None:
     "inner", ["python3 -c 'print(1)'", "bash -c ls", "timeout 5 pytest -q", "claude -p x"]
 )
 def test_the_wrapper_grants_nothing_the_bare_command_lacks(inner: str) -> None:
-    assert not decide(_b("repo-coder", f"cd {WT} && {WRAP} {inner}"), CFG).allow
-    assert not decide(_b("repo-coder", f"cd {WT} && {inner}"), CFG).allow
+    assert not decide(_b("coder", f"cd {WT} && {WRAP} {inner}"), CFG).allow
+    assert not decide(_b("coder", f"cd {WT} && {inner}"), CFG).allow
 
 
 def test_only_the_coder_carries_the_confine_check() -> None:
     # 0048, Plan 6 section 10.3: the verifier's and auditor's --test-runner forms stay untouched.
     carriers = {name for name, chain in CHAINS.items() if any(s == "confine" for s, _ in chain)}
-    # 0134: the docs writer carries the repo-coder's list, so it carries confine too.
-    assert carriers == {"repo-coder", "docs-writer"}
+    # 0134, 0190: the public docs writer carries the coder's list, so it carries confine too.
+    assert carriers == {"coder", "writer (public-docs)"}
 
 
 def test_confine_hook_standard_properties() -> None:
