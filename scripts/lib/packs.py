@@ -254,16 +254,17 @@ def _control_problems(
         if key in item and not _line(item[key], limit):
             out.append(f"{where} {key} must be one printable line of 1 to {limit} characters")
     verify = item.get("verify")
+    # 0192: a path outside the tree is named beside any jail refusal of the same verify.
+    outside = _outside_paths(verify) if isinstance(verify, str) and _line(verify, LINE_MAX) else []
     refused = jail.rg_reason(verify, root) if isinstance(verify, str) else None
     if refused is not None and _line(verify, LINE_MAX):
         # 113: pack text is data; a verify the specialist's jail refuses never reaches it.
         out.append(f"{where} verify is refused by the framework specialist's jail: {refused}")
-    elif isinstance(verify, str) and _line(verify, LINE_MAX):
-        out += [
-            f"{where} verify searches {path!r} outside the project tree; name . or a relative "
-            "path without .."
-            for path in _outside_paths(verify)
-        ]
+    out += [
+        f"{where} verify searches {path!r} outside the project tree; name . or a relative "
+        "path without .."
+        for path in outside
+    ]
     if mapped and not (isinstance(item["maps_to"], str) and CONTROL_ID.fullmatch(item["maps_to"])):
         out.append(f"{where} maps_to must be a control id")
     statement = item.get("statement")

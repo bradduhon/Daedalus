@@ -735,3 +735,60 @@ def test_env_names_match_in_any_case_and_example_stays_open(tmp_path: Path, name
     assert ".env deny" in str(evaluate(HOOK, _bash_in(repo, "auditor", f"cat {name}"))), name
     example = _cred("coder", "Read", cwd=str(repo), file_path=str(repo / ".ENV.Example"))
     assert evaluate(HOOK, example) is None
+
+
+# 0192: a `!` line in an ignore file makes plain rg and the Grep tool read a git-ignored .env.
+WHITELIST = "holds a `!` line that makes rg or the Grep tool read a .env file"
+WHITELIST_WRITE = "would get a `!` line that makes rg or the Grep tool read a .env file"
+
+
+@pytest.mark.parametrize(
+    "where", ["apps/web/.rgignore", ".rgignore", ".ignore", "apps/.ignore", ".gitignore"]
+)
+@pytest.mark.parametrize("agent", ["auditor", "coder"])
+def test_plain_rg_and_grep_beside_an_env_whitelist_are_refused(
+    tmp_path: Path, where: str, agent: str
+) -> None:
+    repo = _nested_env_repo(tmp_path, ignored=True)
+    line = "!.env\n" if where != ".gitignore" else ".env\n!apps/web/.env\n"
+    (repo / where).write_text(line, encoding="utf-8")
+    reason = evaluate(HOOK, _bash_in(repo, agent, "rg -n STRIPE ."))
+    assert reason is not None and WHITELIST in reason, (where, reason)
+    grep = _cred(agent, "Grep", cwd=str(repo), pattern="STRIPE", path=str(repo))
+    # 0192: with the line in .gitignore, git no longer ignores the file, so either reason fits.
+    assert "the .env deny refuses" in str(evaluate(HOOK, grep)), where
+
+
+@pytest.mark.parametrize("line", ["!build.log", "!.env.example", "!*/", "#!.env"])
+def test_a_whitelist_line_that_cannot_reach_the_env_file_is_allowed(
+    tmp_path: Path, line: str
+) -> None:
+    repo = _nested_env_repo(tmp_path, ignored=True)
+    (repo / "apps" / ".rgignore").write_text(f"{line}\n", encoding="utf-8")
+    # 0192: a root line anchored under src cannot name a file inside apps.
+    (repo / ".ignore").write_text("!src/.env\n", encoding="utf-8")
+    assert evaluate(HOOK, _bash_in(repo, "auditor", "rg -n STRIPE apps")) is None, line
+    grep = _cred("auditor", "Grep", cwd=str(repo), pattern="STRIPE", path=str(repo / "apps"))
+    assert evaluate(HOOK, grep) is None, line
+
+
+@pytest.mark.parametrize("name", [".rgignore", ".ignore", ".gitignore"])
+def test_writing_an_env_whitelist_into_an_ignore_file_is_refused(tmp_path: Path, name: str) -> None:
+    repo = _nested_env_repo(tmp_path)
+    path = str(repo / "apps" / "web" / name)
+    write = _cred("coder", "Write", cwd=str(repo), file_path=path, content="dist/\n!.env\n")
+    assert WHITELIST_WRITE in str(evaluate(HOOK, write)), name
+    ok = _cred("coder", "Write", cwd=str(repo), file_path=path, content="dist/\n!.env.example\n")
+    assert evaluate(HOOK, ok) is None, name
+    (repo / "apps" / "web" / name).write_text("#!.env.local\n", encoding="utf-8")
+    edit = {"file_path": path, "old_string": "#", "new_string": ""}
+    case = {"tool_name": "Edit", "tool_input": edit, "cwd": str(repo), "agent_type": "coder"}
+    assert WHITELIST_WRITE in str(evaluate(HOOK, case)), name
+    for command in (
+        f"echo '!.env' >> {name}",
+        f"printf 'dist/\\n!.env.*\\n' > apps/web/{name}",
+        f"cat >> {name} <<EOF\n!**/.env\nEOF",
+    ):
+        reason = evaluate(HOOK, _bash_in(repo, "coder", command))
+        assert reason is not None and WHITELIST_WRITE in reason, command
+    assert evaluate(HOOK, _bash_in(repo, "coder", f"echo '!build.log' >> {name}")) is None

@@ -9,6 +9,7 @@ import fnmatch
 import os
 import re
 import string
+from collections.abc import Callable
 from pathlib import Path
 
 from lib.project_root import project_root
@@ -437,6 +438,9 @@ def path_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | Non
         # 0192: Glob lists names only; every other path tool reads or writes the file.
         if tool != "Glob" and env_file_hit(target):
             return R_ENV_FILE.format(path=shown)
+        written = ignore_write_reason(tool, tool_input, target)
+        if written:
+            return written
     if tool == "Grep":
         # spec 8: the Grep tool searches hidden dirs, so a root above a store reads it.
         target = anchor(_expand_home(str(tool_input.get("path") or cwd)), cwd)
@@ -464,11 +468,135 @@ def _grep_env_reason(target: str, glob: object) -> str | None:
         hit = any(glob_reaches(pats, rest) for rest in rests)
     else:
         hit = bool(set(found) - git_ignored(found))
-    return R_ENV_FILE_TREE.format(path=target) if hit else None
+    if hit:
+        return R_ENV_FILE_TREE.format(path=target)
+    return env_whitelist_reason(target)
+
+
+# 0192: the ignore files whose `!` lines rg and the Grep tool obey over a dot file.
+ENV_IGNORE_FILES = frozenset({".rgignore", ".ignore", ".gitignore"})
+_ENV_SAMPLES = (".env", ".env.local", ".env.production", ".env.x")
+R_ENV_WHITELIST = (
+    "{path} holds a `!` line that makes rg or the Grep tool read a .env file, which the .env "
+    "deny refuses to every agent because it holds live keys (0192). Next: ask the operator to "
+    "remove the line, or name the files you need"
+)
+R_ENV_WHITELIST_WRITE = (
+    "{path} would get a `!` line that makes rg or the Grep tool read a .env file, which the .env "
+    "deny refuses to every agent because it holds live keys (0192). Next: leave the line out; "
+    "`!.env.example` by its full name stays open"
+)
+
+
+def pattern_reaches_env(pattern: str) -> bool:
+    # 0192: an ignore pattern whose last part, case folded, matches a .env name; a pattern
+    # ending in / names folders only, so it never whitelists a file.
+    text = pattern.strip()
+    if text.endswith("/"):
+        return False
+    last = text.rsplit("/", 1)[-1].casefold()
+    return bool(last) and any(fnmatch.fnmatchcase(name, last) for name in _ENV_SAMPLES)
+
+
+def _reaches_under(pattern: str, rel: list[str]) -> bool:
+    # 0192: whether a pattern with a folder part, anchored at its ignore file's folder, can name
+    # a path inside the search folder rel below it; a part holding ** may match any depth.
+    parts = pattern.strip().strip("/").split("/")[:-1]
+    for i, part in enumerate(parts):
+        if i >= len(rel) or "**" in part:
+            return True
+        if not fnmatch.fnmatchcase(rel[i].casefold(), part.casefold()):
+            return False
+    return True
+
+
+def whitelists_env(text: str, rel: list[str] | None = None) -> bool:
+    # 0192: any `!` line, split on real and spelled newlines, that reaches a .env name; rel is
+    # the search folder below the ignore file, when the file sits above the search.
+    lines = (p for line in text.splitlines() for p in line.split("\\n"))
+    for line in (raw.strip() for raw in lines):
+        pattern = line[1:].strip()
+        if not line.startswith("!") or not pattern_reaches_env(pattern):
+            continue
+        if rel is None or "/" not in pattern.rstrip("/") or _reaches_under(pattern, rel):
+            return True
+    return False
+
+
+def _ignore_text_problem(path: str, rel: list[str] | None) -> bool:
+    # 0192: True when the ignore file whitelists a .env name; unreadable or oversized fails closed.
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read(IGNORE_READ_MAX + 1)
+    except OSError:
+        return os.path.lexists(path)
+    if len(data) > IGNORE_READ_MAX:
+        return True
+    return whitelists_env(data.decode("utf-8", "replace"), rel)
+
+
+def env_whitelist_reason(folder: str) -> str | None:
+    # 0192: every ignore file under folder and on the way down to it, read for a `!` line that
+    # reaches a .env name, when a .env file sits where that ignore file applies.
+    found = _walk(folder, lambda name: name in ENV_IGNORE_FILES or env_name(name))
+    if found is None:
+        return R_ENV_WALK_CAP.format(path=folder)
+    envs = [p for p in found if env_name(os.path.basename(p))]
+    if not envs:
+        return None
+    real = Path(os.path.realpath(folder))
+    for parent in (real, *real.parents):
+        rel = list(real.relative_to(parent).parts)
+        for name in sorted(ENV_IGNORE_FILES):
+            path = str(parent / name)
+            if os.path.lexists(path) and _ignore_text_problem(path, rel):
+                return R_ENV_WHITELIST.format(path=path)
+    for path in (p for p in found if os.path.basename(p) in ENV_IGNORE_FILES):
+        under = os.path.dirname(path) + os.sep
+        if any(env.startswith(under) for env in envs) and _ignore_text_problem(path, None):
+            return R_ENV_WHITELIST.format(path=path)
+    return None
+
+
+def _edited_text(path: str, tool: str, tool_input: dict[str, object]) -> str:
+    # 0192: the ignore file as a write would leave it; an unreadable file judges the new text only.
+    if tool == "Write":
+        return str(tool_input.get("content") or "")
+    edits = tool_input.get("edits") if tool == "MultiEdit" else [tool_input]
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            text = handle.read(IGNORE_READ_MAX)
+    except OSError:
+        text = ""
+    added: list[str] = []
+    for edit in edits if isinstance(edits, list) else []:
+        if not isinstance(edit, dict):
+            continue
+        old, new = str(edit.get("old_string") or ""), str(edit.get("new_string") or "")
+        added.append(new)
+        if old:
+            text = text.replace(old, new) if edit.get("replace_all") else text.replace(old, new, 1)
+    return "\n".join([text, *added])
+
+
+def ignore_write_reason(tool: str, tool_input: dict[str, object], target: str) -> str | None:
+    # 0192: a file tool write that leaves a .env whitelist in an ignore file, at any depth.
+    if os.path.basename(target) not in ENV_IGNORE_FILES:
+        return None
+    if tool not in ("Write", "Edit", "MultiEdit"):
+        return None
+    if whitelists_env(_edited_text(target, tool, tool_input)):
+        return R_ENV_WHITELIST_WRITE.format(path=target)
+    return None
 
 
 def env_walk(folder: str) -> list[str] | None:
     # 0192, issue 152: every .env file under folder, links never followed; None past the cap.
+    return _walk(folder, env_name)
+
+
+def _walk(folder: str, want: Callable[[str], bool]) -> list[str] | None:
+    # 0192, issue 152: the files under folder whose name want admits; None past the cap.
     found: list[str] = []
     seen = 0
     pending = [(os.path.realpath(folder), 0)]
@@ -483,7 +611,7 @@ def env_walk(folder: str) -> list[str] | None:
         if seen > ENV_WALK_ENTRIES:
             return None
         for entry in listed:
-            if env_name(entry.name) and not entry.is_dir(follow_symlinks=False):
+            if want(entry.name) and not entry.is_dir(follow_symlinks=False):
                 found.append(entry.path)
             elif entry.is_dir(follow_symlinks=False) and entry.name not in ENV_WALK_SKIP:
                 if depth + 1 > ENV_WALK_DEPTH:

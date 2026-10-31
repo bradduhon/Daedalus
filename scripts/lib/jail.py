@@ -23,6 +23,7 @@ from lib.config import (
 )
 from lib.credential_paths import (
     CREDENTIAL_TOOLS,
+    ENV_IGNORE_FILES,
     IGNORE_FILES,
     R_BRACE_UNJUDGED,
     R_CREDENTIAL,
@@ -30,6 +31,7 @@ from lib.credential_paths import (
     R_ENV_FILE,
     R_ENV_FILE_TREE,
     R_ENV_WALK_CAP,
+    R_ENV_WHITELIST_WRITE,
     R_IGNORE_WHITELIST,
     R_REPLY_KEY,
     R_REPLY_KEY_TREE,
@@ -37,12 +39,14 @@ from lib.credential_paths import (
     env_file_hit,
     env_roots,
     env_walk,
+    env_whitelist_reason,
     glob_patterns,
     glob_reaches,
     ignore_whitelist,
     key_roots,
     path_reason,
     reply_key_hit,
+    whitelists_env,
 )
 from lib.credential_paths import CUT as _CUT
 from lib.credential_paths import LIT as _LIT
@@ -1641,12 +1645,19 @@ def _env_walk_reason(
     target: str, hidden: bool, globs: list[str], rg: bool, dotglob: bool
 ) -> str | None:
     # 0192, issue 152: a folder read reaches a nested .env file when it shows dot files or a
-    # glob names one; a glob operand walks each match. Plain rg skips dot files, so no walk.
-    if not (hidden or globs):
+    # glob names one; a glob operand walks each match. Plain rg reaches one only through a
+    # `!` line in an ignore file, so it reads the ignore files instead.
+    if not (hidden or globs or rg):
         return None
     globbed = bool(_GLOB_CHARS & set(target))
     folders = _glob.glob(target, include_hidden=dotglob) if globbed else [target]
     for folder in (f for f in folders if os.path.isdir(f)):
+        if rg:
+            listed = env_whitelist_reason(folder)
+            if listed:
+                return listed
+        if not (hidden or globs):
+            continue
         found = env_walk(folder)
         if found is None:
             return R_ENV_WALK_CAP.format(path=folder)
@@ -1654,8 +1665,6 @@ def _env_walk_reason(
             rest = os.path.relpath(env, os.path.realpath(folder)).split(os.sep)
             if hidden or glob_reaches(globs, rest):
                 return R_ENV_FILE_TREE.format(path=folder)
-            if rg and ignore_whitelist(env):
-                return R_IGNORE_WHITELIST.format(path=folder)
     return None
 
 
@@ -1711,6 +1720,11 @@ def _bash_credential_reason(
                 break
         texts = [t for t, _ in _expand_word(target, envs[k])] if target else envs[k]["HOME"]
         bases += [b for b in (_anchor(t, cwd) for t in texts) if b]
+    # 0192: a command naming an ignore file and carrying a `!` line that reaches a .env name.
+    words_all = [_clean(w) for s in segments for w in s]
+    named = [w for w in words_all if os.path.basename(w) in ENV_IGNORE_FILES]
+    if named and (whitelists_env(command) or any(whitelists_env(w) for w in words_all)):
+        return R_ENV_WHITELIST_WRITE.format(path=named[0])
     absolute: list[str] = []
     relative: list[str] = []
     unresolved = ""
