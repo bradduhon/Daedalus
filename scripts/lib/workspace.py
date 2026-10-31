@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import os
@@ -21,6 +22,7 @@ from lib import (
     scrub,
     train_state,
     unit_binding,
+    writer_mode,
 )
 from lib.audit import SESSION_ID, DataDirError, cache_dir_or_probe, ensure_project_data_dir
 from lib.audit_proof import SUMMARY_DIR
@@ -268,6 +270,12 @@ def mark_train(repo: Path, train_id: str) -> Path:
 
 def clear_train(repo: Path) -> Path:
     marker = train_marker(repo)
+    train = train_state.active_train(repo)
+    # 0190: a stop or an unmark leaves no writer dispatch waiting; an unreadable record stays,
+    # and every writer meeting it is refused, so it never blocks the stop.
+    if train is not None:
+        with contextlib.suppress(train_state.TrainStateError):
+            writer_mode.clear(repo, train)
     try:
         marker.unlink(missing_ok=True)
     except OSError as exc:

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import token_economy as te
+from lib import writer_mode
 
 from tests.conftest import SCRIPTS_DIR
 
@@ -367,3 +368,25 @@ def test_model_word_reads_a_transcript_model_id() -> None:
     ]
     assert te.model_word("<synthetic>") is None and te.model_word(None) is None
     assert te.model_word("gpt-x") == "gpt-x"
+
+
+@pytest.mark.parametrize(
+    ("kind", "run_type"),
+    [(writer_mode.DERIVED, te.DOC), (writer_mode.PUBLIC_DOCS, te.SESSION)],
+)
+def test_a_root_writer_roots_a_document_run_only_in_its_derived_kind(
+    home: Path, kind: str, run_type: str
+) -> None:
+    # 0190: the bound kind in the writer record decides, as doc-deriver and docs-writer did.
+    repo = home.parents[2] / "repo"
+    path = writer_mode.records_path(repo, TRAIN)
+    path.parent.mkdir(parents=True)
+    writer_mode._write(path, [], {"w1": kind})
+    lines = [
+        _prompt("00:00.000", f"Write the document for run {TRAIN}"),
+        _reply("00:05.000", "m", 4),
+    ]
+    _agent(home, "w1", "daedalus:writer", lines)
+    runs, _ = te.session_runs(SESSION, repo, [])
+    [run] = [r for r in runs if any(row.agent == "writer" for row in r.rows)]
+    assert run.run_type == run_type

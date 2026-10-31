@@ -214,7 +214,7 @@ def test_charter_docs_ledger_value_naming_git_push_is_refused_by_gh_classes() ->
     args = '--expected-seq 2 --entry-file docs/.tmp/e.md --repo DAE --type "git push"'
     hook_input = _b("charter-docs", f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}")
     assert first_deny(hook_input, CFG) == (HOOK, str(evaluate(HOOK, hook_input)))
-    assert "git push runs only in the Push Train's conductor" in str(evaluate(HOOK, hook_input))
+    assert "git push runs only in the Push Train's releaser" in str(evaluate(HOOK, hook_input))
 
 
 def test_gh_classes_fixture_decisions() -> None:
