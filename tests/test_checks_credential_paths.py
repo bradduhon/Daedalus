@@ -792,3 +792,55 @@ def test_writing_an_env_whitelist_into_an_ignore_file_is_refused(tmp_path: Path,
         reason = evaluate(HOOK, _bash_in(repo, "coder", command))
         assert reason is not None and WHITELIST_WRITE in reason, command
     assert evaluate(HOOK, _bash_in(repo, "coder", f"echo '!build.log' >> {name}")) is None
+
+
+ESCAPED = ["!\\.env", "!\\.e*", "!\\.env\\.local"]
+
+
+@pytest.mark.parametrize("line", ESCAPED)
+@pytest.mark.parametrize("agent", ["auditor", "coder"])
+def test_an_escaped_env_whitelist_is_refused_on_read(tmp_path: Path, line: str, agent: str) -> None:
+    # 0192: gitignore reads \. as ., so `!\.env` whitelists .env as `!.env` does.
+    repo = _nested_env_repo(tmp_path, ignored=True)
+    (repo / "apps" / "web" / ".env.local").write_text("K=placeholder\n", encoding="utf-8")
+    (repo / ".gitignore").write_text(".env\n.env.local\n", encoding="utf-8")
+    (repo / "apps" / "web" / ".rgignore").write_text(f"{line}\n", encoding="utf-8")
+    reason = evaluate(HOOK, _bash_in(repo, agent, "rg -n STRIPE ."))
+    assert reason is not None and WHITELIST in reason, (line, reason)
+    grep = _cred(agent, "Grep", cwd=str(repo), pattern="STRIPE", path=str(repo))
+    assert WHITELIST in str(evaluate(HOOK, grep)), line
+
+
+@pytest.mark.parametrize("line", ESCAPED)
+def test_an_escaped_env_whitelist_is_refused_on_write(tmp_path: Path, line: str) -> None:
+    repo = _nested_env_repo(tmp_path)
+    path = str(repo / "apps" / "web" / ".rgignore")
+    write = _cred("coder", "Write", cwd=str(repo), file_path=path, content=f"{line}\n")
+    assert WHITELIST_WRITE in str(evaluate(HOOK, write)), line
+    reason = evaluate(HOOK, _bash_in(repo, "coder", f"echo '{line}' >> apps/web/.rgignore"))
+    assert reason is not None and WHITELIST_WRITE in reason, line
+    assert evaluate(HOOK, _bash_in(repo, "coder", "echo '!\\.env\\.example' >> .rgignore")) is None
+
+
+def test_the_repository_exclude_file_is_read_from_a_worktree(tmp_path: Path) -> None:
+    # 0192: info/exclude lives in the shared git folder; a worktree finds it by rev-parse.
+    from tests.conftest import git
+
+    repo = _nested_env_repo(tmp_path, ignored=True)
+    (repo / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base")
+    tree = tmp_path.resolve() / "wt"
+    git(repo, "worktree", "add", "-q", str(tree))
+    (tree / "apps" / "web").mkdir(parents=True, exist_ok=True)
+    (tree / "apps" / "web" / ".env").write_text("K=placeholder\n", encoding="utf-8")
+    assert evaluate(HOOK, _bash_in(tree, "auditor", "rg -n STRIPE .")) is None
+    (repo / ".git" / "info").mkdir(exist_ok=True)
+    (repo / ".git" / "info" / "exclude").write_text("!apps/web/.env\n", encoding="utf-8")
+    for case in (
+        _bash_in(tree, "auditor", "rg -n STRIPE ."),
+        _cred("auditor", "Grep", cwd=str(tree), pattern="STRIPE", path=str(tree)),
+    ):
+        reason = evaluate(HOOK, case)
+        assert reason is not None and "info/exclude" in reason and WHITELIST in reason
+    assert evaluate(HOOK, _bash_in(tree, "auditor", "rg -n STRIPE src")) is None

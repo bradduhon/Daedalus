@@ -488,10 +488,13 @@ R_ENV_WHITELIST_WRITE = (
 )
 
 
+_UNESCAPE = re.compile(r"\\(.)")
+
+
 def pattern_reaches_env(pattern: str) -> bool:
     # 0192: an ignore pattern whose last part, case folded, matches a .env name; a pattern
     # ending in / names folders only, so it never whitelists a file.
-    text = pattern.strip()
+    text = _UNESCAPE.sub(r"\1", pattern.strip())
     if text.endswith("/"):
         return False
     last = text.rsplit("/", 1)[-1].casefold()
@@ -515,7 +518,8 @@ def whitelists_env(text: str, rel: list[str] | None = None) -> bool:
     # the search folder below the ignore file, when the file sits above the search.
     lines = (p for line in text.splitlines() for p in line.split("\\n"))
     for line in (raw.strip() for raw in lines):
-        pattern = line[1:].strip()
+        # 0192: gitignore reads \x as x; fnmatch would keep the backslash and miss `!\.env`.
+        pattern = _UNESCAPE.sub(r"\1", line[1:].strip())
         if not line.startswith("!") or not pattern_reaches_env(pattern):
             continue
         if rel is None or "/" not in pattern.rstrip("/") or _reaches_under(pattern, rel):
@@ -551,6 +555,9 @@ def env_whitelist_reason(folder: str) -> str | None:
             path = str(parent / name)
             if os.path.lexists(path) and _ignore_text_problem(path, rel):
                 return R_ENV_WHITELIST.format(path=path)
+    exclude = git_exclude(str(real))
+    if exclude and os.path.lexists(exclude[0]) and _ignore_text_problem(*exclude):
+        return R_ENV_WHITELIST.format(path=exclude[0])
     for path in (p for p in found if os.path.basename(p) in ENV_IGNORE_FILES):
         under = os.path.dirname(path) + os.sep
         if any(env.startswith(under) for env in envs) and _ignore_text_problem(path, None):
@@ -618,6 +625,36 @@ def _walk(folder: str, want: Callable[[str], bool]) -> list[str] | None:
                     return None
                 pending.append((entry.path, depth + 1))
     return sorted(found)
+
+
+def git_exclude(folder: str) -> tuple[str, list[str]] | None:
+    # 0192: the repository's info/exclude file, shared by its worktrees, and folder's parts
+    # below the work tree top; None outside git or on any error.
+    import subprocess  # 0035: kept off the fast path's import list.
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    args = ["git", "-C", folder, "rev-parse", "--show-toplevel", "--git-path", "info/exclude"]
+    try:
+        done = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = done.stdout.splitlines()
+    if done.returncode != 0 or len(lines) != 2:
+        return None
+    top, exclude = Path(os.path.realpath(lines[0])), os.path.join(folder, lines[1])
+    try:
+        rel = list(Path(folder).relative_to(top).parts)
+    except ValueError:
+        return None
+    return exclude, rel
 
 
 def git_ignored(paths: list[str]) -> set[str]:
