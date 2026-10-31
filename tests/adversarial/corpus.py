@@ -255,6 +255,13 @@ GAME_RUNNERS = (
     "terraform fmt -check",
     "terraform fmt -check -recursive",
     "terraform fmt -recursive -check",
+    # 0164 last fix: yarn and bun wrap like pnpm.
+    "yarn test",
+    "yarn run build",
+    "yarn build:dev",
+    "bun test",
+    "bun run x.ts",
+    "bun run build",
 )
 CONFINE_RUNNERS = CONFINE_RUNNERS + GAME_RUNNERS
 # 0164, 0158: dev servers, watch modes and terraform state changes; refused bare and wrapped.
@@ -280,6 +287,12 @@ DEV_SERVERS = (
     "npm run -- dev",
     "pnpm run -- start",
     "npm run -- preview",
+    "yarn run dev",
+    "yarn dev",
+    "yarn run -- dev",
+    "bun run dev",
+    "bun dev",
+    "bun run -- start",
 )
 WATCH_MODES = (
     "vitest",
@@ -303,6 +316,12 @@ WATCH_MODES = (
     "pnpm test -- --watch",
     "npm test -- --watch",
     "pnpm run test -w",
+    "yarn test --watch",
+    "yarn test -- --watch",
+    "bun test --watch",
+    "bun --watch run x.ts",
+    "bun --hot run x.ts",
+    "tsc --noEmit --noEmit false",
 )
 # 0164: what each watch row is refused with.
 WATCH_REASONS = {"tsc": "R_TSC", "vitest": "R_VITEST_WATCH"}
@@ -349,6 +368,14 @@ INTERPRETER_BINS = (
     "pnpm exec bash -c ls",
     "pnpm exec python3 -c 1",
     "yarn node -e 1",
+    "bun -e 1",
+    "bun --eval=1",
+    "bun -p 1",
+    "bun x.js",
+    "bun ./scripts/x.ts",
+    "bun repl",
+    "yarn bun x.js",
+    "pnpm exec bun -e 1",
 )
 # 0164: download-and-run forms stay with the operator.
 PACKAGE_DOWNLOADS = (

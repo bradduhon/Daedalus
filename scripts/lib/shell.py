@@ -1374,6 +1374,8 @@ TEST_RUNNERS: dict[str, tuple[tuple[str, ...], ...]] = {
     "node": (("--test",),),
     # 0164: pnpm wraps like npm; every script, exec and fallback bin runs under the wrapper.
     "pnpm": ((),),
+    "yarn": ((),),
+    "bun": ((),),
     "vitest": (("run",),),
     "tsc": (("--noEmit",),),
     "vite": (("build",),),
@@ -1392,6 +1394,12 @@ _JS_TOOLS = frozenset({"vite", "vitest", "tsc", "node"})
 # 0164: package managers that run a project script or a bin, and their exec verbs.
 JS_LAUNCHERS = frozenset({"pnpm", "npm", "npx", "yarn", "bun"})
 _JS_EXEC = frozenset({"exec", "x", "dlx"})
+# 0164: bun's eval options and the subcommands that are never a file to run.
+_BUN_EVAL = frozenset({"-e", "--eval", "-p", "--print"})
+_BUN_COMMANDS = frozenset(
+    {"run", "test", "x", "exec", "install", "i", "add", "a", "remove", "rm", "update", "build"}
+    | {"init", "create", "pm", "link", "unlink", "upgrade", "outdated", "publish", "patch"}
+)
 # 0164: package manager options whose value is the next word, never the command.
 _JS_VALUED = frozenset({"-C", "--dir", "-F", "--filter", "--prefix", "--cwd", "--workspace"})
 R_DEV_SERVER = (
@@ -1448,12 +1456,24 @@ def _first_positional(args: list[str], valued: frozenset[str] = frozenset()) -> 
     return None
 
 
+def bun_inline(tokens: list[str]) -> bool:
+    # 0164: bun is a runtime too; -e, -p, repl and a file operand run code like node -e.
+    args = tokens[1:]
+    if any(arg in _BUN_EVAL or arg.startswith(("--eval=", "--print=")) for arg in args):
+        return True
+    first = _first_positional(args, _JS_VALUED)
+    word = args[first] if first is not None else ""
+    return word == "repl" or (word not in _BUN_COMMANDS and ("/" in word or "." in word))
+
+
 def js_inner(tokens: list[str]) -> list[str] | None:
     # 0164: the command a package manager runs as a bin (pnpm exec node, npx node, pnpm node).
     if not tokens or _base(tokens[0]) not in JS_LAUNCHERS:
         return None
     while tokens and _base(tokens[0]) in JS_LAUNCHERS:
         name, args = _base(tokens[0]), tokens[1:]
+        if name == "bun" and bun_inline(tokens):
+            return tokens
         first = _first_positional(args, _JS_VALUED)
         if first is None:
             return None
@@ -1538,15 +1558,17 @@ def runner_refusal(tokens: list[str]) -> str | None:
     if not inner:
         return None
     name, args = _base(inner[0]), inner[1:]
-    if name in {"pnpm", "npm", "npx"}:
+    if name in JS_LAUNCHERS:
         # 0164: a dev script anywhere, -- included; a tool it runs; a watch flag after the verb.
         if name != "npx" and DEV_SCRIPTS & set(args):
             return R_DEV_SERVER
         tool = next((i for i, arg in enumerate(args) if _base(arg) in _JS_TOOLS), None)
         refused = None if tool is None else runner_refusal(args[tool:])
         first = _first_positional(args, _JS_VALUED)
-        if refused is None and name != "npx" and first is not None:
-            refused = R_WATCH if any(_watch(arg) for arg in args[first + 1 :]) else None
+        # 0164: bun's own --watch and --hot sit before its verb; yarn, pnpm and npm pass it on.
+        flags = args if name == "bun" else args[first + 1 :] if first is not None else []
+        if refused is None and name != "npx":
+            refused = R_WATCH if any(_watch(a) or a == "--hot" for a in flags) else None
         return refused
     head = args[: args.index("--")] if "--" in args else args
     watch = any(_watch(arg) for arg in head)
@@ -1558,7 +1580,9 @@ def runner_refusal(tokens: list[str]) -> str | None:
         return None if head[:1] == ["run"] and not watch else R_VITEST_WATCH
     if name == "tsc":
         options = [_tsc_option(arg) for arg in head]
-        emit = "noemit" not in options or head[options.index("noemit") + 1 :][:1] == ["false"]
+        # 0164: the last --noEmit decides; a following false turns emitting back on.
+        last = len(options) - 1 - options[::-1].index("noemit") if "noemit" in options else -1
+        emit = last < 0 or head[last + 1 :][:1] == ["false"]
         watching = any(opt == "w" or opt.startswith("watch") for opt in options)
         return R_TSC if emit or watching else None
     if name == "terraform":
@@ -1779,6 +1803,8 @@ def _worker_hygiene(
         return R_INLINE
     # 0164: pnpm exec node -e, npx node <file> and the like meet the interpreter rule too.
     bin_run = js_inner(tokens)
+    if bin_run and _base(bin_run[0]) == "bun" and bun_inline(bin_run):
+        return R_INLINE
     if bin_run and _base(bin_run[0]) in WORKER_WRAPPERS:
         if not _tester_runner_ok(_base(bin_run[0]), bin_run, own_script):
             return R_INLINE
