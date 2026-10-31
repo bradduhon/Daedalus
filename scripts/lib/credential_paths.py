@@ -9,6 +9,7 @@ import fnmatch
 import os
 import re
 import string
+from collections.abc import Callable
 from pathlib import Path
 
 from lib.project_root import project_root
@@ -43,6 +44,27 @@ R_REPLY_KEY = (
 R_REPLY_KEY_TREE = (
     "{path} contains the train's reply key. "
     "Next: search a folder outside .claude/daedalus, or name the files you need"
+)
+# 0192, STRIPE-1: a project .env file holds live keys; .env.example holds names only.
+ENV_FILE = ".env"
+ENV_EXAMPLE = ".env.example"
+R_ENV_FILE = (
+    "{path} is a .env file, which the .env deny refuses to every agent because it holds live "
+    "keys (0192). Next: read the key names from .env.example; the code reads keys from the "
+    "environment at run time"
+)
+R_ENV_FILE_TREE = (
+    "{path} contains a .env file, which the .env deny refuses to every agent because it holds "
+    "live keys (0192). Next: search without a hidden-file flag or a glob naming .env, or name "
+    "the files you need"
+)
+# 0192, issue 152: the walk for nested .env files; past either cap the read is refused.
+ENV_WALK_DEPTH = 24
+ENV_WALK_ENTRIES = 100_000
+ENV_WALK_SKIP = frozenset({".git", "node_modules"})
+R_ENV_WALK_CAP = (
+    "{path} holds more than 100000 entries or 24 folder levels, so the .env deny cannot rule out "
+    "a .env file inside it (0192). Next: search a narrower folder, or name the files you need"
 )
 # prepush-2026-10-27: rg ranks these above .gitignore, so a `!` line beats the data folder marker.
 IGNORE_FILES = (".rgignore", ".ignore")
@@ -296,6 +318,34 @@ def reply_key_hit(target: str) -> bool:
     )
 
 
+def env_name(name: str) -> bool:
+    # 0192: .env and .env.<anything> in any case, except the names-only .env.example.
+    folded = name.casefold()
+    return folded == ENV_FILE or (folded.startswith(ENV_FILE + ".") and folded != ENV_EXAMPLE)
+
+
+def env_file_hit(target: str) -> bool:
+    # 0192: judged on the spelled name and the real path, so a link to a .env file refuses too.
+    spelled = os.path.basename(os.path.normpath(target))
+    return env_name(spelled) or env_name(os.path.basename(os.path.realpath(target)))
+
+
+def env_roots(*paths: str) -> list[str]:
+    # 0192: the existing .env files directly in each named folder and in its project root.
+    folders: set[Path] = set()
+    for p in paths:
+        if p and os.path.isabs(p):
+            folders |= {Path(p), project_root(Path(p))}
+    found: set[str] = set()
+    for folder in folders:
+        try:
+            names = os.listdir(folder) if folder.is_dir() else []
+        except OSError:
+            continue
+        found |= {os.path.realpath(folder / n) for n in names if env_name(n)}
+    return sorted(found)
+
+
 def key_roots(*paths: str) -> list[str]:
     # SC-12: the existing reply key of each named path's project, as one more store root.
     keys = {project_root(Path(p)) / ".claude" / "daedalus" / REPLY_KEY_NAME for p in paths if p}
@@ -385,11 +435,246 @@ def path_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | Non
             return R_REPLY_KEY.format(path=shown)
         if credential_hit(target, roots, tool == "Glob"):
             return R_CREDENTIAL.format(path=shown)
+        # 0192: Glob lists names only; every other path tool reads or writes the file.
+        if tool != "Glob" and env_file_hit(target):
+            return R_ENV_FILE.format(path=shown)
+        written = ignore_write_reason(tool, tool_input, target)
+        if written:
+            return written
     if tool == "Grep":
         # spec 8: the Grep tool searches hidden dirs, so a root above a store reads it.
         target = anchor(_expand_home(str(tool_input.get("path") or cwd)), cwd)
         if target and any(store_rest(target, root, False, True) is not None for root in roots):
             return R_CREDENTIAL_TREE.format(path=target)
         if target:
-            return _grep_key_reason(target, key_roots(cwd, target), tool_input.get("glob"))
+            glob = tool_input.get("glob")
+            return _grep_key_reason(target, key_roots(cwd, target), glob) or _grep_env_reason(
+                target, glob
+            )
     return None
+
+
+def _grep_env_reason(target: str, glob: object) -> str | None:
+    # 0192, issue 152: a glob naming a .env file under target reaches it; with no glob, the
+    # Grep tool reads every .env file git does not confirm ignored.
+    if not os.path.isdir(target):
+        return None
+    found = env_walk(target)
+    if found is None:
+        return R_ENV_WALK_CAP.format(path=target)
+    pats = glob_patterns(glob if isinstance(glob, str) else "")
+    if pats:
+        rests = [os.path.relpath(env, target).split(os.sep) for env in found]
+        hit = any(glob_reaches(pats, rest) for rest in rests)
+    else:
+        hit = bool(set(found) - git_ignored(found))
+    if hit:
+        return R_ENV_FILE_TREE.format(path=target)
+    return env_whitelist_reason(target)
+
+
+# 0192: the ignore files whose `!` lines rg and the Grep tool obey over a dot file.
+ENV_IGNORE_FILES = frozenset({".rgignore", ".ignore", ".gitignore"})
+_ENV_SAMPLES = (".env", ".env.local", ".env.production", ".env.x")
+R_ENV_WHITELIST = (
+    "{path} holds a `!` line that makes rg or the Grep tool read a .env file, which the .env "
+    "deny refuses to every agent because it holds live keys (0192). Next: ask the operator to "
+    "remove the line, or name the files you need"
+)
+R_ENV_WHITELIST_WRITE = (
+    "{path} would get a `!` line that makes rg or the Grep tool read a .env file, which the .env "
+    "deny refuses to every agent because it holds live keys (0192). Next: leave the line out; "
+    "`!.env.example` by its full name stays open"
+)
+
+
+_UNESCAPE = re.compile(r"\\(.)")
+
+
+def pattern_reaches_env(pattern: str) -> bool:
+    # 0192: an ignore pattern whose last part, case folded, matches a .env name; a pattern
+    # ending in / names folders only, so it never whitelists a file.
+    text = _UNESCAPE.sub(r"\1", pattern.strip())
+    if text.endswith("/"):
+        return False
+    last = text.rsplit("/", 1)[-1].casefold()
+    return bool(last) and any(fnmatch.fnmatchcase(name, last) for name in _ENV_SAMPLES)
+
+
+def _reaches_under(pattern: str, rel: list[str]) -> bool:
+    # 0192: whether a pattern with a folder part, anchored at its ignore file's folder, can name
+    # a path inside the search folder rel below it; a part holding ** may match any depth.
+    parts = pattern.strip().strip("/").split("/")[:-1]
+    for i, part in enumerate(parts):
+        if i >= len(rel) or "**" in part:
+            return True
+        if not fnmatch.fnmatchcase(rel[i].casefold(), part.casefold()):
+            return False
+    return True
+
+
+def whitelists_env(text: str, rel: list[str] | None = None) -> bool:
+    # 0192: any `!` line, split on real and spelled newlines, that reaches a .env name; rel is
+    # the search folder below the ignore file, when the file sits above the search.
+    lines = (p for line in text.splitlines() for p in line.split("\\n"))
+    for line in (raw.strip() for raw in lines):
+        # 0192: gitignore reads \x as x; fnmatch would keep the backslash and miss `!\.env`.
+        pattern = _UNESCAPE.sub(r"\1", line[1:].strip())
+        if not line.startswith("!") or not pattern_reaches_env(pattern):
+            continue
+        if rel is None or "/" not in pattern.rstrip("/") or _reaches_under(pattern, rel):
+            return True
+    return False
+
+
+def _ignore_text_problem(path: str, rel: list[str] | None) -> bool:
+    # 0192: True when the ignore file whitelists a .env name; unreadable or oversized fails closed.
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read(IGNORE_READ_MAX + 1)
+    except OSError:
+        return os.path.lexists(path)
+    if len(data) > IGNORE_READ_MAX:
+        return True
+    return whitelists_env(data.decode("utf-8", "replace"), rel)
+
+
+def env_whitelist_reason(folder: str) -> str | None:
+    # 0192: every ignore file under folder and on the way down to it, read for a `!` line that
+    # reaches a .env name, when a .env file sits where that ignore file applies.
+    found = _walk(folder, lambda name: name in ENV_IGNORE_FILES or env_name(name))
+    if found is None:
+        return R_ENV_WALK_CAP.format(path=folder)
+    envs = [p for p in found if env_name(os.path.basename(p))]
+    if not envs:
+        return None
+    real = Path(os.path.realpath(folder))
+    for parent in (real, *real.parents):
+        rel = list(real.relative_to(parent).parts)
+        for name in sorted(ENV_IGNORE_FILES):
+            path = str(parent / name)
+            if os.path.lexists(path) and _ignore_text_problem(path, rel):
+                return R_ENV_WHITELIST.format(path=path)
+    exclude = git_exclude(str(real))
+    if exclude and os.path.lexists(exclude[0]) and _ignore_text_problem(*exclude):
+        return R_ENV_WHITELIST.format(path=exclude[0])
+    for path in (p for p in found if os.path.basename(p) in ENV_IGNORE_FILES):
+        under = os.path.dirname(path) + os.sep
+        if any(env.startswith(under) for env in envs) and _ignore_text_problem(path, None):
+            return R_ENV_WHITELIST.format(path=path)
+    return None
+
+
+def _edited_text(path: str, tool: str, tool_input: dict[str, object]) -> str:
+    # 0192: the ignore file as a write would leave it; an unreadable file judges the new text only.
+    if tool == "Write":
+        return str(tool_input.get("content") or "")
+    edits = tool_input.get("edits") if tool == "MultiEdit" else [tool_input]
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            text = handle.read(IGNORE_READ_MAX)
+    except OSError:
+        text = ""
+    added: list[str] = []
+    for edit in edits if isinstance(edits, list) else []:
+        if not isinstance(edit, dict):
+            continue
+        old, new = str(edit.get("old_string") or ""), str(edit.get("new_string") or "")
+        added.append(new)
+        if old:
+            text = text.replace(old, new) if edit.get("replace_all") else text.replace(old, new, 1)
+    return "\n".join([text, *added])
+
+
+def ignore_write_reason(tool: str, tool_input: dict[str, object], target: str) -> str | None:
+    # 0192: a file tool write that leaves a .env whitelist in an ignore file, at any depth.
+    if os.path.basename(target) not in ENV_IGNORE_FILES:
+        return None
+    if tool not in ("Write", "Edit", "MultiEdit"):
+        return None
+    if whitelists_env(_edited_text(target, tool, tool_input)):
+        return R_ENV_WHITELIST_WRITE.format(path=target)
+    return None
+
+
+def env_walk(folder: str) -> list[str] | None:
+    # 0192, issue 152: every .env file under folder, links never followed; None past the cap.
+    return _walk(folder, env_name)
+
+
+def _walk(folder: str, want: Callable[[str], bool]) -> list[str] | None:
+    # 0192, issue 152: the files under folder whose name want admits; None past the cap.
+    found: list[str] = []
+    seen = 0
+    pending = [(os.path.realpath(folder), 0)]
+    while pending:
+        here, depth = pending.pop()
+        try:
+            with os.scandir(here) as entries:
+                listed = list(entries)
+        except OSError:
+            continue
+        seen += len(listed)
+        if seen > ENV_WALK_ENTRIES:
+            return None
+        for entry in listed:
+            if want(entry.name) and not entry.is_dir(follow_symlinks=False):
+                found.append(entry.path)
+            elif entry.is_dir(follow_symlinks=False) and entry.name not in ENV_WALK_SKIP:
+                if depth + 1 > ENV_WALK_DEPTH:
+                    return None
+                pending.append((entry.path, depth + 1))
+    return sorted(found)
+
+
+def git_exclude(folder: str) -> tuple[str, list[str]] | None:
+    # 0192: the repository's info/exclude file, shared by its worktrees, and folder's parts
+    # below the work tree top; None outside git or on any error.
+    import subprocess  # 0035: kept off the fast path's import list.
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    args = ["git", "-C", folder, "rev-parse", "--show-toplevel", "--git-path", "info/exclude"]
+    try:
+        done = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = done.stdout.splitlines()
+    if done.returncode != 0 or len(lines) != 2:
+        return None
+    top, exclude = Path(os.path.realpath(lines[0])), os.path.join(folder, lines[1])
+    try:
+        rel = list(Path(folder).relative_to(top).parts)
+    except ValueError:
+        return None
+    return exclude, rel
+
+
+def git_ignored(paths: list[str]) -> set[str]:
+    # 0192: the paths `git check-ignore` confirms ignored; no git, or any error, confirms none.
+    import subprocess  # 0035: kept off the fast path's import list.
+
+    out: set[str] = set()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    for path in paths:
+        try:
+            done = subprocess.run(
+                ["git", "-C", os.path.dirname(path), "check-ignore", "-q", "--", path],
+                capture_output=True,
+                timeout=10,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if done.returncode == 0:
+            out.add(path)
+    return out

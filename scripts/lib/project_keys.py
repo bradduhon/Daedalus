@@ -384,9 +384,18 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     (MANIFEST_FILE, "frameworks.default_packs"): KeyRow(
         "Whether the packs Daedalus ships are read beside the project's own packs",
         "boolean",
-        "`true` or `false`; `false` reads only the packs under `frameworks.pack_dir`",
-        "`true`: the shipped packs are read",
+        "`true` or `false`; `false` reads only the packs under `frameworks.pack_dir` and the "
+        "packs named in `frameworks.packs`",
+        "`true`: the shipped packs that are on by default are read",
         "`false`",
+    ),
+    (MANIFEST_FILE, "frameworks.packs"): KeyRow(
+        "Shipped packs that are off until a project names them, such as the cost-tier pack; "
+        "a named pack is read even when `frameworks.default_packs` is `false`",
+        "list of strings",
+        "Pack ids of lowercase letters, digits and hyphens, each named once",
+        "`[]`: only the shipped packs that are on by default are read",
+        '`["cost-tier"]`',
     ),
     (MANIFEST_FILE, "ledger.path"): KeyRow(
         "Where rulings are appended, declared for everyone who works on the project; it wins "

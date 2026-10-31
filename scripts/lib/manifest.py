@@ -68,9 +68,13 @@ class Frameworks:
     # 0157 (12.1): no pack folder named reads the shipped packs; false reads only pack_dir.
     pack_dir: str | None = None
     default_packs: bool = True
+    # 0192: shipped packs whose pack.json says default false, read only when named here.
+    packs: tuple[str, ...] = ()
 
 
 FRAMEWORKS_KEYS = tuple(f.name for f in fields(Frameworks))
+# 0192: the shape of a pack id, as lib.packs.PACK_ID checks it.
+_PACK_ID = re.compile(r"[a-z0-9-]{1,40}")
 # 0129, Addendum F.2: the four drivers, the closed reason vocabulary and the surface outcome.
 DRIVERS = ("security", "trust", "ops", "cost")
 REASONS = (
@@ -338,7 +342,18 @@ def _frameworks(target: Path, raw: dict[str, object]) -> Frameworks:
     default_packs = block.get("default_packs", True)
     if not isinstance(default_packs, bool):
         raise _key_error(target, "frameworks.default_packs", "must be true or false")
-    return Frameworks(pack_dir, default_packs)
+    named = block.get("packs", [])
+    if not (
+        isinstance(named, list)
+        and all(isinstance(n, str) and _PACK_ID.fullmatch(n) for n in named)
+        and len(set(named)) == len(named)
+    ):
+        raise _key_error(
+            target,
+            "frameworks.packs",
+            "must be a list of distinct pack ids, each of lowercase letters, digits and hyphens",
+        )
+    return Frameworks(pack_dir, default_packs, tuple(named))
 
 
 def _bad(target: Path, row: str, detail: str) -> PrioritiesError:

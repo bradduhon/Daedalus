@@ -170,6 +170,8 @@ def _framework_lines() -> Iterator[tuple[bool, str]]:
 
 
 PACK_DIR_NEXT = "create it or remove frameworks.pack_dir from service-manifest.json"
+# 0192: a frameworks.packs id must be a folder under <plugin>/packs/frameworks.
+PACK_NAMED_NEXT = "name a pack listed in the README section on control packs, or remove the id"
 # prepush-2026-10-27: an unreadable pack folder is a MISS line, never a crash.
 PACK_READ_NEXT = "make the pack folders readable to you, or fix frameworks.pack_dir"
 PACK_SHIPPED_NEXT = "reinstall the Daedalus plugin; a shipped pack is never edited in place"
@@ -237,6 +239,9 @@ def _pack_checks(repo: Path, today: date) -> Iterator[tuple[bool, str]]:
     try:
         yield from _pack_dir_check(repo)
         folders = packs.pack_folders(repo)
+        for ident in packs.unknown_named(repo):
+            line = f"frameworks.packs names {ident}, which Daedalus does not ship"
+            yield False, _printable(f"MISS framework packs: {line}. Next: {PACK_NAMED_NEXT}")
     except ManifestError:
         return  # 0054: the manifest line already reports the refusal as a MISS.
     except OSError as exc:

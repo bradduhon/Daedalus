@@ -28,7 +28,8 @@ an OWASP file, and you never fetch or write (0157).
 
 ## Phase 0: Pack integrity (mandatory)
 1. For each folder on the `Packs:` line, Read `<folder>/pack.json`. It is one JSON object with
-   `id`, `version`, `source`, `license`, `pinned_on` and `sha256`.
+   `id`, `version`, `source`, `license`, `pinned_on` and `sha256`. Its optional `default` and
+   `triggers` keys were applied when the line was printed; ignore them (0192).
 2. Run `sha256sum <folder>/controls.json` and compare with that `sha256`. Read
    `<folder>/controls.json`; its `schema` must be `daedalus-controls/1` and `controls` a list.
 3. On a missing file, a hash mismatch, a wrong schema or a `maps_to` that names no control in

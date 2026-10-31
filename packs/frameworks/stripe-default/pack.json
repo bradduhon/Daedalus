@@ -1,0 +1,18 @@
+{
+  "id": "stripe-default",
+  "version": "1.0.0",
+  "source": "daedalus",
+  "license": "GPL-3.0-or-later",
+  "pinned_on": "2026-10-31",
+  "sha256": "6b62842700b77c1077a9ab363c87aeedd8e337799ca4949be114b5488d2c4407",
+  "default": true,
+  "triggers": [
+    "**/*stripe*",
+    "**/.env",
+    "**/.env.*",
+    "**/package.json",
+    "**/pnpm-lock.yaml",
+    "**/package-lock.json",
+    "**/yarn.lock"
+  ]
+}
