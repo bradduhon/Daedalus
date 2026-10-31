@@ -78,7 +78,8 @@ TERRAFORM_FORMS = (("fmt", "-check"), ("validate",))
 R_TERRAFORM = (
     "the terraform class runs only `terraform fmt -check` and `terraform validate`, each with an "
     "optional -chdir=<absolute folder inside the project> (0132), and validate only while "
-    "features.terraform_validate is true (0158). Next: send one of those forms; "
+    "features.terraform_validate is true (0158); either may run under the kernel wrapper with "
+    "--unit naming a unit worktree (0164). Next: send one of those forms; "
     "init, plan, apply and every other subcommand stay with the operator."
 )
 R_TERRAFORM_VALIDATE_OFF = (
@@ -121,6 +122,18 @@ def terraform_reason(segment: list[str], cwd: str) -> str | None:
     if rest == ["validate"] and (loaded is None or loaded.features.terraform_validate is not True):
         return R_TERRAFORM_VALIDATE_OFF.format(manifest=manifest_path(Path(root)))
     return None
+
+
+def wrapped_terraform_reason(segment: list[str], cwd: str) -> str | None:
+    # 0158, 0164: the plugin's wrapper on one unit worktree, then a form terraform_reason admits.
+    split = shell.confine_split(segment)
+    if split is None or not os.path.isabs(cwd) or not shell.confine_wrapper(segment[0], cwd):
+        return shell.R_CONFINE_FORM
+    unit, inner = split
+    parts = jail._unit_parts(unit, cwd) if os.path.isabs(unit) else None
+    if parts is None or len(parts) != 1:
+        return R_TERRAFORM
+    return terraform_reason(inner, cwd)
 
 
 def _reason(allowed: frozenset[str]) -> str:
@@ -284,6 +297,11 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
             continue
         if "terraform" in allowed and name == "terraform":
             refused = terraform_reason(segment, cwd)
+            if refused is not None:
+                return refused
+            continue
+        if "terraform" in allowed and shell._base(segment[0]) == shell.CONFINE:
+            refused = wrapped_terraform_reason(segment, cwd)
             if refused is not None:
                 return refused
             continue

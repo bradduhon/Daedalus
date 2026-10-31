@@ -504,6 +504,16 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`null`: every log is kept",
         "`365`",
     ),
+    (CONFIG_FILE, "wrapper_read_roots"): KeyRow(
+        "Folders outside the project that a test runner under the kernel wrapper may read and "
+        "run programs from, such as the pnpm package store or a Node.js install; the wrapper "
+        "never lets it write there",
+        "list of strings",
+        "Absolute paths or paths starting with `~/`; a path that holds or sits inside a "
+        "credential store, such as `~/.ssh`, is refused",
+        "`[]`: the wrapper reads only the project, the system folders and Python",
+        '`["~/.local/share/pnpm/store", "~/.nvm"]`',
+    ),
     (CONFIG_FILE, "agent_models"): KeyRow(
         "Which model each catalog agent runs on, in place of the `model:` line of its agent "
         "file; a model a skill is given for one run still comes first",

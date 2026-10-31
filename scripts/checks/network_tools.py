@@ -36,6 +36,11 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
         words = {shell._base(t) for i, t in enumerate(segment) if i not in exempt}
         if banned & words:
             return jail.R_NETWORK
+        judged = [t for i, t in enumerate(segment) if i not in exempt]
+        if jail.package_install(judged):
+            return jail.R_PACKAGE_INSTALL
+        if jail.package_download(judged):
+            return jail.R_PACKAGE_DOWNLOAD
         # issue 55: a link or versioned path to the claude binary, by its real file.
         if shell.runs_claude(segment, base):
             return shell.R_CLAUDE_PATH

@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import shell  # noqa: E402
+from lib.config import ConfigError, load_config  # noqa: E402
 from lib.credential_paths import credential_roots  # noqa: E402
 from lib.jail import UNIT_WORKTREES  # noqa: E402
 from lib.project_root import project_root  # noqa: E402
@@ -321,14 +322,30 @@ def _interpreter_paths() -> list[str]:
     return found
 
 
-def rule_set(unit: str, repo: str, tmp: str, support: Support) -> RuleSet:
+def read_roots(repo: str, command: list[str]) -> tuple[str, ...]:
+    # 0164: the operator config's wrapper_read_roots, for a runner row only; a bad config refuses.
+    if not shell.runner_row(command):
+        return ()
+    try:
+        return load_config(cwd=repo).wrapper_read_roots
+    except (ConfigError, OSError, RuntimeError) as exc:
+        raise Refusal(f"the operator config could not be read ({exc}). {NEXT_PROBE}") from exc
+
+
+def rule_set(
+    unit: str, repo: str, tmp: str, support: Support, extra: tuple[str, ...] = ()
+) -> RuleSet:
     assert support.arch is not None
     stores = credential_roots()
+    dot = os.path.join(repo, ".claude")
     ro: list[str] = []
-    for path in [*_interpreter_paths(), *SYSTEM_RO]:
+    for path in [*_interpreter_paths(), *SYSTEM_RO, *extra]:
         real = os.path.realpath(path)
         # 0048, Plan 6 section 10.1: no grant holds a credential store or sits inside one.
         if any(shell._under(real, s) or shell._under(s, real) for s in stores):
+            continue
+        # 0164: an operator root never reaches the project's .claude folder (the reply key).
+        if path in extra and (shell._under(real, dot) or shell._under(dot, real)):
             continue
         if os.path.exists(real) and real not in ro:
             ro.append(real)
@@ -396,7 +413,8 @@ def main(argv: list[str]) -> int:
         return _refuse(cause)
     try:
         unit, repo = _unit(split[0])
-        rules = rule_set(unit, repo, _private_tmp(unit), support)
+        extra = read_roots(repo, split[1])
+        rules = rule_set(unit, repo, _private_tmp(unit), support, extra)
         apply(rules)
     except Refusal as exc:
         return _refuse(str(exc))

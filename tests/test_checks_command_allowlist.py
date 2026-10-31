@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import jail
+from lib import jail, shell
 from lib.config import Config
 
 from tests.conftest import CFG, CWD, REPO_ROOT, TRAIN_BRANCH, write_train_marker
@@ -21,7 +21,7 @@ from tests.hook_chain import (
     payload,
     run_script,
 )
-from tests.jail_cases import _MANIFEST_LEDGER, _git_init
+from tests.jail_cases import _MANIFEST_LEDGER, _git_init, _unit_repo
 from tests.payloads import _b
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
@@ -1008,3 +1008,70 @@ def test_terraform_validate_refused_on_a_non_boolean_switch(repo_cwd: Path) -> N
     _features(repo_cwd, {"terraform_validate": "true"})
     reason = _tf_call(repo_cwd, "terraform validate")
     assert reason is not None and reason.startswith("the service manifest could not be read")
+
+
+def _wrapped_tf(tmp_path: Path, block: dict[str, object] | None) -> tuple[Path, Path, str]:
+    repo, wt = _unit_repo(tmp_path / "u")
+    _features(repo, block)
+    return repo, wt, f"{shell.CONFINE_PATH} --unit {wt} --"
+
+
+@pytest.mark.parametrize(
+    "inner", ["terraform validate", "terraform fmt -check", "terraform -chdir={wt} validate"]
+)
+def test_wrapped_terraform_passes_both_checks_when_validate_is_on(
+    tmp_path: Path, inner: str
+) -> None:
+    # 0158, 0164: the kernel wrapper's form passes the terraform class and the reviewer's chain.
+    repo, wt, wrap = _wrapped_tf(tmp_path, {"terraform_validate": True})
+    command = f"{wrap} {inner.format(wt=wt)}"
+    assert _tf_call(repo, command) is None
+    assert first_deny(_tf_payload(repo, command), Config()) is None
+
+
+@pytest.mark.parametrize("block", [None, {}, {"terraform_validate": False}])
+def test_wrapped_validate_waits_for_its_switch_and_fmt_check_does_not(
+    tmp_path: Path, block: dict[str, object] | None
+) -> None:
+    # 0159: the bare form keeps its deviation row; the wrapped form meets the same switch.
+    repo, _, wrap = _wrapped_tf(tmp_path, block)
+    for command in ("terraform validate", f"{wrap} terraform validate"):
+        reason = _tf_call(repo, command)
+        assert reason is not None and reason.startswith("features.terraform_validate is not true")
+    assert _tf_call(repo, f"{wrap} terraform fmt -check") is None
+
+
+@pytest.mark.parametrize(
+    "inner",
+    ["apply", "apply -auto-approve", "destroy", "import a.b c", "state rm a.b", "taint a.b"],
+)
+def test_terraform_state_changes_are_refused_bare_and_wrapped(tmp_path: Path, inner: str) -> None:
+    repo, wt, wrap = _wrapped_tf(tmp_path, {"terraform_validate": True})
+    for command in (f"terraform {inner}", f"{wrap} terraform {inner}"):
+        assert _tf_call(repo, command) == load(HOOK).R_TERRAFORM, command
+        assert not decide(_tf_payload(repo, command), Config()).allow, command
+
+
+def test_wrapped_terraform_names_one_unit_worktree_and_the_plugin_wrapper(tmp_path: Path) -> None:
+    repo, wt, _ = _wrapped_tf(tmp_path, {"terraform_validate": True})
+    for unit in (repo, wt / "infra", tmp_path):
+        command = f"{shell.CONFINE_PATH} --unit {unit} -- terraform validate"
+        assert _tf_call(repo, command) == load(HOOK).R_TERRAFORM, unit
+    copy = f"{wt}/scripts/daedalus_confine.py --unit {wt} -- terraform validate"
+    assert _tf_call(repo, copy) == shell.R_CONFINE_FORM
+    assert _tf_call(repo, f"{shell.CONFINE_PATH} --unit {wt} terraform validate") == (
+        shell.R_CONFINE_FORM
+    )
+
+
+def test_the_wrapper_admits_only_terraform_for_the_reviewer_and_nothing_for_others(
+    tmp_path: Path,
+) -> None:
+    # 0158: the wrapper adds no grant; its command meets the reviewer's terraform forms.
+    repo, wt, wrap = _wrapped_tf(tmp_path, {"terraform_validate": True})
+    for inner in ("python3 -c 1", "bash -c ls", f"cat {wt}/README.md", "terraform plan"):
+        assert not decide(_tf_payload(repo, f"{wrap} {inner}"), Config()).allow, inner
+    for agent in ("auditor", "verifier", "releaser"):
+        hook_input = _tf_payload(repo, f"{wrap} terraform validate")
+        hook_input["agent_type"] = agent
+        assert not decide(hook_input, Config()).allow, agent

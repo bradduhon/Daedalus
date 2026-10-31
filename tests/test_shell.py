@@ -358,3 +358,90 @@ def test_runner_rows_reach_the_wrapped_command(command: str, want: list[str]) ->
 def test_runner_options_off_their_row_fail_closed(command: str) -> None:
     # issue 82: an option, operand or body the rows cannot read leaves the command unknown.
     assert shell.strip_wrappers(shlex.split(command)) is None
+
+
+@pytest.mark.parametrize(
+    ("name", "form"), [(name, form) for name, forms in shell.TEST_RUNNERS.items() for form in forms]
+)
+def test_each_test_runner_form_is_a_runner_row_and_never_refused(
+    name: str, form: tuple[str, ...]
+) -> None:
+    # 0164: every form the table admits is a test command, and no form is a server or watch.
+    tokens = [name, *form]
+    assert shell._tester_runner_ok(name, tokens) and shell.runner_row(tokens)
+    assert shell.runner_refusal(tokens) is None, tokens
+
+
+def test_node_is_the_one_runner_that_is_a_worker_wrapper() -> None:
+    # 0164: a WORKER_WRAPPERS name in the table is admitted only by its exact form.
+    assert set(shell.TEST_RUNNERS) & shell.WORKER_WRAPPERS == {"node"}
+    assert shell.TEST_RUNNERS["node"] == (("--test",),)
+    for command in ("node t.js", "node -e 1", "node --inspect --test", "node"):
+        assert not shell._tester_runner_ok("node", shlex.split(command)), command
+
+
+@pytest.mark.parametrize(
+    ("command", "want"),
+    [
+        ("vite", shell.R_DEV_SERVER),
+        ("vite preview --port 1", shell.R_DEV_SERVER),
+        ("./node_modules/.bin/vite serve", shell.R_DEV_SERVER),
+        ("pnpm --filter web dev", shell.R_DEV_SERVER),
+        ("npx -y vite", shell.R_DEV_SERVER),
+        ("pnpm exec vitest", shell.R_VITEST_WATCH),
+        ("vitest bench", shell.R_VITEST_WATCH),
+        ("tsc -b", shell.R_TSC),
+        ("pnpm exec tsc --noEmit -w", shell.R_TSC),
+        ("terraform -chdir=/x apply", shell.R_TERRAFORM_MUTATE),
+        ("terraform state list", shell.R_TERRAFORM_MUTATE),
+        ("node --test --watch", shell.R_WATCH),
+        ("node --test --watch-path=.", shell.R_WATCH),
+        ("vitest run --watch=true", shell.R_VITEST_WATCH),
+        ("tsc --noEmit -watch", shell.R_TSC),
+        ("tsc --noEmit --Watch", shell.R_TSC),
+        ("tsc --noEmit false", shell.R_TSC),
+        ("pnpm test --watch", shell.R_WATCH),
+        ("pnpm test -- --watch", shell.R_WATCH),
+        ("npm test -- --watch", shell.R_WATCH),
+        ("pnpm run -- dev", shell.R_DEV_SERVER),
+        ("pnpm -- dev", shell.R_DEV_SERVER),
+        ("npm run -- dev", shell.R_DEV_SERVER),
+        ("terraform plan", shell.R_TERRAFORM_OPERATOR),
+        ("terraform fmt -check=false", shell.R_TERRAFORM_OPERATOR),
+        ("terraform untaint a.b", shell.R_TERRAFORM_MUTATE),
+        ("vite build", None),
+        ("vitest run -t name", None),
+        ("tsc -NoEmit", None),
+        ("pnpm -w test", None),
+        ("terraform -chdir=/x fmt -recursive -check", None),
+        ("npm test", None),
+    ],
+)
+def test_runner_refusal_names_the_server_watch_or_state_change(
+    command: str, want: str | None
+) -> None:
+    assert shell.runner_refusal(shlex.split(command)) == want
+
+
+@pytest.mark.parametrize(
+    ("command", "want"),
+    [
+        ("pnpm exec node -e 1", ["node", "-e", "1"]),
+        ("pnpm exec -- node t.js", ["node", "t.js"]),
+        ("npx node t.js", ["node", "t.js"]),
+        ("pnpm node t.js", ["node", "t.js"]),
+        ("pnpm exec pnpm exec bash -c ls", ["bash", "-c", "ls"]),
+        ("npm test", None),
+        ("pnpm", None),
+    ],
+)
+def test_js_inner_finds_the_bin_a_package_manager_runs(
+    command: str, want: list[str] | None
+) -> None:
+    assert shell.js_inner(shlex.split(command)) == want
+
+
+def test_under_holds_every_path_under_the_filesystem_root() -> None:
+    # 0164: "/" plus os.sep once matched nothing, so "/" slipped past every overlap guard.
+    assert shell._under("/srv/x/.ssh", "/") and shell._under("/", "/")
+    assert shell._under("/a/b", "/a/") and not shell._under("/ab", "/a")

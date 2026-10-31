@@ -154,6 +154,74 @@ DIR_CHANGE_CMDS = frozenset({"cd", "pushd", "popd"})
 NETWORK_TOOLS = frozenset(
     {"curl", "wget", "ssh", "scp", "nc", "ncat", "telnet", "aws", "gh", "claude"}
 )
+# 0164: a package install reaches the registry and writes a store outside the worktree.
+PACKAGE_INSTALLS = frozenset({"pnpm", "npm", "yarn", "bun"})
+# 0164: install, ci and update verbs with the npm aliases and misspellings npm accepts.
+INSTALL_VERBS = frozenset(
+    {"install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal"}
+    | {"isntall", "add", "ci", "clean-install", "ic", "install-clean", "isntall-clean"}
+    | {"install-test", "it", "install-ci-test", "cit", "update", "up", "upgrade", "udpate"}
+    | {"fetch", "import"}
+)
+_SCRIPT_VERBS = frozenset({"run", "run-script", "rum", "urn", "test", "t", "tst", "--"})
+_EXEC_VERBS = frozenset({"exec", "x", "dlx"})
+_COREPACK_VERBS = frozenset({"install", "prepare", "use", "up", "enable"})
+R_PACKAGE_INSTALL = (
+    "a package install reaches the package registry and writes a package store outside your "
+    "unit worktree, so the operator runs it from their own shell (0164). Next: yield the "
+    "install command for the operator to run, then rerun your tests."
+)
+R_PACKAGE_DOWNLOAD = (
+    "pnpm dlx, yarn dlx, bunx, npm exec and npx -y download a package and run it, so the "
+    "operator decides what joins the project (0164). Next: yield the package name for the "
+    "operator to add as a dev dependency, then run it through the project's own bin."
+)
+
+
+def _positional(args: list[str]) -> str:
+    return next((arg for arg in args if not arg.startswith("-")), "")
+
+
+def package_install(segment: list[str]) -> bool:
+    # 0164: an install verb after pnpm, npm, yarn, bun or corepack, before any script verb,
+    # looking past exec into the command it runs; bare yarn installs too.
+    for idx, token in enumerate(segment):
+        name, args = os.path.basename(token), segment[idx + 1 :]
+        if name == "corepack" and _positional(args) in _COREPACK_VERBS:
+            return True
+        if name not in PACKAGE_INSTALLS:
+            continue
+        if name == "yarn" and all(a.startswith("-") for a in args):
+            return True
+        for pos, arg in enumerate(args):
+            if arg in _EXEC_VERBS:
+                return package_install(args[pos + 1 :])
+            if arg in _SCRIPT_VERBS:
+                return False
+            if arg in INSTALL_VERBS:
+                return True
+        return False
+    return False
+
+
+def package_download(segment: list[str]) -> bool:
+    # 0164: a download-and-run form; bare npx of a project bin stays a runner.
+    for idx, token in enumerate(segment):
+        name, args = os.path.basename(token), segment[idx + 1 :]
+        head = args[: args.index("--")] if "--" in args else args
+        if name == "bunx":
+            return True
+        if name in {"pnpm", "yarn"} and "dlx" in head:
+            return True
+        if name == "bun" and _positional(head) == "x":
+            return True
+        if name == "npm" and _positional(head) in {"exec", "x"}:
+            return True
+        if name == "npx" and any(a == "-y" or a.startswith("--yes") for a in args):
+            return True
+    return False
+
+
 R_NESTED_CLAUDE = (
     "claude starts a nested session the jail cannot attribute to an agent (audit A7-1). "
     "Next: run it from your own shell."
