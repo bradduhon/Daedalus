@@ -241,6 +241,38 @@ def test_agent_models_refuses_anything_but_an_object(project_data: Path, value: 
         _load(project_data, {"agent_models": value})
 
 
+def test_coder_models_default_and_partial(project_data: Path) -> None:
+    # 0187: absent or null is the default map; a tier left out keeps its default.
+    want = {"default": "sonnet", "control_path": "opus", "escalated": "opus"}
+    assert Config().coder_models == want
+    assert _load(project_data, {"coder_models": None}).coder_models == want
+    doc: dict[str, object] = {"coder_models": {"default": "opus", "escalated": "fable"}}
+    got = _load(project_data, doc).coder_models
+    assert got == {"default": "opus", "control_path": "opus", "escalated": "fable"}
+
+
+def test_coder_models_refuses_an_unknown_tier(project_data: Path) -> None:
+    with pytest.raises(ConfigError) as info:
+        _load(project_data, {"coder_models": {"fast": "haiku"}})
+    text = str(info.value)
+    assert "coder_models names 'fast', which is not a coder tier" in text
+    assert "Next: name only the coder tiers in coder_models, which are default, " in text
+
+
+@pytest.mark.parametrize("model", ["gpt-4", "Opus", "claude-opus-4-8", "", None, 1])
+def test_coder_models_refuses_an_unknown_model(project_data: Path, model: object) -> None:
+    # 0187: the dispatch gate admits only the four model words, so a full id is refused here.
+    with pytest.raises(ConfigError) as info:
+        _load(project_data, {"coder_models": {"default": model}})
+    assert "Next: set coder_models.default to one of sonnet, opus, haiku, fable." in str(info.value)
+
+
+@pytest.mark.parametrize("value", [["opus"], "opus", 3])
+def test_coder_models_refuses_anything_but_an_object(project_data: Path, value: object) -> None:
+    with pytest.raises(ConfigError, match="coder_models must be an object. Next: "):
+        _load(project_data, {"coder_models": value})
+
+
 def test_missing_data_dir_gives_empty_config(repo_cwd: Path) -> None:
     # 0020: no .claude/daedalus at all is still the empty config.
     assert load_config(str(repo_cwd)) == Config()

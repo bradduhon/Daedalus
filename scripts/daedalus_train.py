@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import packs  # noqa: E402
+from lib.agent_aliases import current as current_name  # noqa: E402
 from lib.agent_models import AgentModelError, resolve  # noqa: E402
 from lib.audit import DataDirError  # noqa: E402
 from lib.briefs import BriefError, brief_file_problems  # noqa: E402
@@ -22,6 +23,7 @@ from lib.train_runner import (  # noqa: E402
     Outcome,
     check_reply,
     choice,
+    coder_model,
     contract,
     progress,
     reaudit,
@@ -108,6 +110,8 @@ def _parser() -> argparse.ArgumentParser:
     model.add_argument("--repo", type=Path, required=True)
     model.add_argument("--agent", required=True)
     model.add_argument("--override")
+    # 0187: --unit picks the coder's model from coder_models and records it on the unit.
+    model.add_argument("--unit")
     # 0153, 0157 (12.5): a decision brief checked at the manifest literacy level.
     brief = sub.add_parser("brief-check")
     brief.add_argument("--repo", type=Path, required=True)
@@ -155,7 +159,17 @@ def _brief_check(repo: Path, brief: Path) -> Outcome:
     return Outcome(EXIT_STOP, lines)
 
 
-def _model(repo: Path, agent: str, override: str | None) -> Outcome:
+def _model(repo: Path, agent: str, override: str | None, unit: str | None = None) -> Outcome:
+    if unit is not None:
+        if current_name(agent) != "coder" or override is not None:
+            return Outcome(
+                EXIT_STOP,
+                [
+                    "model --unit picks a coder's model and takes no --override. "
+                    "Next: rerun it as model --agent coder --unit <unit id>."
+                ],
+            )
+        return coder_model(repo, unit)
     try:
         return Outcome(EXIT_OK, [resolve(agent, load_config(cwd=str(repo)), override)])
     except (AgentModelError, ConfigError, DataDirError) as exc:
@@ -235,7 +249,7 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "summary":
         return summary(repo)
     if args.action == "model":
-        return _model(repo, args.agent, args.override)
+        return _model(repo, args.agent, args.override, args.unit)
     if args.action == "brief-check":
         return _brief_check(repo, args.brief)
     if args.action == "packs":

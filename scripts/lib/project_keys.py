@@ -504,6 +504,19 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`null`: every log is kept",
         "`365`",
     ),
+    (CONFIG_FILE, "coder_models"): KeyRow(
+        "Which model a coding agent runs on for one unit. `default` is for most units. "
+        "`control_path` is for a unit that changes a file under `agents/`, `skills/`, `hooks/` "
+        "or `scripts/checks/`, or one of the three jail files. `escalated` is for the fresh "
+        "coding agent that takes over a unit after its second failed check",
+        "object",
+        "Keys are `default`, `control_path` and `escalated`; values are "
+        + ", ".join(f'`"{model}"`' for model in MODELS[:-1])
+        + f' or `"{MODELS[-1]}"`; any other key or value is refused, and a key left out keeps '
+        "its default",
+        '`{"default": "sonnet", "control_path": "opus", "escalated": "opus"}`',
+        '`{"default": "opus"}`',
+    ),
     (CONFIG_FILE, "agent_models"): KeyRow(
         "Which model each catalog agent runs on, in place of the `model:` line of its agent "
         "file; a model a skill is given for one run still comes first",

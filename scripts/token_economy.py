@@ -17,6 +17,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.agent_aliases import current as current_name  # noqa: E402
+from lib.agent_models import MODELS  # noqa: E402
 from lib.audit import (  # noqa: E402
     SESSION_ID,
     AuditLockError,
@@ -24,6 +25,8 @@ from lib.audit import (  # noqa: E402
     read_log,
     root_info,
 )
+from lib.audit_proof import HANDBACK  # noqa: E402
+from lib.coder_model import REFUTED_PREFIX  # noqa: E402
 from lib.config import ConfigError, load_config  # noqa: E402
 from lib.train_state import (  # noqa: E402
     AUDIT_BOUNDS,
@@ -46,6 +49,7 @@ COLUMNS: tuple[str, ...] = (
     "run id",
     "phase",
     "agent",
+    "model",
     "unit or round",
     "turns",
     "input",
@@ -55,6 +59,9 @@ COLUMNS: tuple[str, ...] = (
     "wall time",
 )
 NONE = "none"
+# 0187: the model cell of a row no single model ran, and of a transcript that names none.
+NO_MODEL = "-"
+MODEL_AT = COLUMNS.index("model")
 TOTAL, MEAN = "total", "mean"
 USAGE_FIELDS = (
     "input_tokens",
@@ -67,6 +74,7 @@ BUILD, PUSH, DOC = "Build Train", "Push Train", "Document Train"
 # 0163: agents the main session starts outside any run group under the session itself.
 SESSION = "session"
 CODER = "coder"
+VERIFIER = "verifier"
 # item 15: the turn target of agents/coder.md; the report checks the coder mean against it.
 CODER_TURN_TARGET = 24
 ROOT_RUN_TYPES = {
@@ -90,7 +98,7 @@ BUILD_PHASES = {
     "terraform-reviewer": "3",
     "dependency-auditor": "3",
 }
-UNIT_AGENTS = frozenset({CODER, "verifier"})
+UNIT_AGENTS = frozenset({CODER, VERIFIER})
 ROUND_AGENTS = frozenset({"auditor"})
 _UNIT = re.compile(rf"(?:worktrees|daedalus-unit)/{TRAIN_ID.pattern}-([a-z0-9][a-z0-9-]*)")
 _ROUND = re.compile(r"\bround (\d+)\b", re.IGNORECASE)
@@ -127,6 +135,8 @@ class Segment:
     first: datetime | None = None
     last: datetime | None = None
     usage: Usage = field(default_factory=Usage)
+    model: str | None = None
+    refuted: bool = False
 
 
 @dataclass
@@ -154,6 +164,9 @@ class Row:
     kind: str | None
     usage: Usage
     first: datetime | None
+    model: str | None = None
+    # 0187: when each verifier segment on this unit ended REFUTED.
+    refuted_at: list[datetime] = field(default_factory=list)
 
 
 @dataclass
@@ -268,6 +281,31 @@ def label_of(agent_type: str, prompt: str) -> str | None:
     return None
 
 
+def model_word(raw: object) -> str | None:
+    # 0187: a transcript model id reads as its model word; a synthetic or absent id as none.
+    if not isinstance(raw, str) or not raw or raw.startswith("<"):
+        return None
+    return next((word for word in MODELS if word in raw.casefold()), raw)
+
+
+def _reply_text(message: dict[str, object]) -> str | None:
+    # 0187: the reply text of one assistant line, a hand-back call's message included.
+    content = message.get("content")
+    blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+    texts = [str(b.get("text", "")) for b in blocks if b.get("type") == "text"]
+    for block in blocks:
+        tool_input = block.get("input")
+        if block.get("name") == HANDBACK and isinstance(tool_input, dict):
+            texts.append(str(tool_input.get("message", "")))
+    joined = "\n".join(t for t in texts if t.strip())
+    return joined or None
+
+
+def _refuted(text: str) -> bool:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return bool(lines) and lines[-1].startswith(REFUTED_PREFIX)
+
+
 def read_segments(path: Path, agent_type: str) -> list[Segment]:
     # Plan 11 A: dedup by message.id, usage from its last line, the turn in its first line's span.
     segments: list[Segment] = []
@@ -302,6 +340,10 @@ def read_segments(path: Path, agent_type: str) -> list[Segment]:
             fields = message.get("usage")
             fields = fields if isinstance(fields, dict) else {}
             usage[key] = [_int(fields.get(name)) for name in USAGE_FIELDS]
+            current.model = model_word(message.get("model")) or current.model
+            text = _reply_text(message)
+            if text is not None:
+                current.refuted = _refuted(text)
     for key, index in owner.items():
         seg = segments[index]
         seg.usage.turns += 1
@@ -442,6 +484,9 @@ def _add_rows(run: Run, agent: Agent) -> None:
             rows[label] = row
             run.rows.append(row)
         row.usage.add(seg.usage)
+        row.model = seg.model or row.model
+        if seg.refuted and agent.agent_type == VERIFIER:
+            row.refuted_at.append(seg.last or seg.first or _LATEST)
     run.rows.sort(key=lambda r: (r.first or _LATEST, r.agent))
 
 
@@ -496,7 +541,7 @@ def totals_row(run: Run) -> str:
     units = len({r.label for r in run.rows if r.kind == "unit"})
     rounds = len({r.label for r in run.rows if r.kind == "round"})
     span = active_seconds(run.spans) if run.spans else None
-    cells: list[object] = [run.run_type, run.run_id, TOTAL, f"{agents} agents"]
+    cells: list[object] = [run.run_type, run.run_id, TOTAL, f"{agents} agents", NO_MODEL]
     cells += [f"{units} units, {rounds} rounds", *_numbers(total), duration(span)]
     return table_row(cells)
 
@@ -513,11 +558,12 @@ def _picked(run: Run, kind: str) -> tuple[int, Usage]:
 def mean_row(run: Run, kind: str) -> str:
     count, total = _picked(run, kind)
     label = f"per {kind}"
+    head: list[object] = [run.run_type, run.run_id, MEAN, label, NO_MODEL]
     if not count:
-        return table_row([run.run_type, run.run_id, MEAN, label, f"0 {kind}s", *[NONE] * 6])
+        return table_row([*head, f"0 {kind}s", *[NONE] * 6])
     turns = round(total.turns / count)
     tokens = [f"{round(n / count):,}" for n in total.tokens]
-    cells: list[object] = [run.run_type, run.run_id, MEAN, label, f"{count} {kind}s"]
+    cells: list[object] = [*head, f"{count} {kind}s"]
     cells += [f"{turns:,}", *tokens, duration(total.seconds / count)]
     return table_row(cells)
 
@@ -537,9 +583,49 @@ def turn_lines(runs: list[Run]) -> list[str]:
     ]
 
 
+def _model_order(word: str) -> tuple[int, str]:
+    return (MODELS.index(word) if word in MODELS else len(MODELS), word)
+
+
+def refuted_counts(run: Run) -> dict[str, tuple[int, int]]:
+    # 0187: per coder model, the units it coded and how many a verifier refuted while it held them.
+    coders = sorted(
+        (r for r in run.rows if r.agent == CODER and r.kind == "unit"),
+        key=lambda r: r.first or _LATEST,
+    )
+    units: dict[str, set[str]] = {}
+    refuted: dict[str, set[str]] = {}
+    for row in coders:
+        units.setdefault(row.model or NO_MODEL, set()).add(str(row.label))
+    for check in run.rows:
+        if check.agent != VERIFIER or check.kind != "unit":
+            continue
+        held = [r for r in coders if r.label == check.label]
+        for when in check.refuted_at:
+            before = [r for r in held if r.first is None or r.first <= when] or held[:1]
+            if before:
+                refuted.setdefault(before[-1].model or NO_MODEL, set()).add(str(check.label))
+    return {
+        model: (len(refuted.get(model, set())), len(units[model]))
+        for model in sorted(units, key=_model_order)
+    }
+
+
+def refuted_lines(runs: list[Run]) -> list[str]:
+    # 0187: one line per run with coder units, enumerated from its rows; named when several.
+    counted = [(run, counts) for run in runs if (counts := refuted_counts(run))]
+    many = len(counted) > 1
+    return [
+        "refuted: "
+        + ", ".join(f"{model} {k}/{n} units" for model, (k, n) in counts.items())
+        + (f" in {run.run_type} {run.run_id}" if many else "")
+        for run, counts in counted
+    ]
+
+
 def detail_row(row: Row) -> str:
-    cells: list[object] = [row.run_type, row.run_id, row.phase, row.agent, row.label]
-    cells += [*_numbers(row.usage), duration(row.usage.seconds)]
+    cells: list[object] = [row.run_type, row.run_id, row.phase, row.agent, row.model or NO_MODEL]
+    cells += [row.label, *_numbers(row.usage), duration(row.usage.seconds)]
     return table_row(cells)
 
 
@@ -590,7 +676,9 @@ LEGEND = (
     "apart, once per message id, from its last transcript line. Wall time on an agent row adds "
     "up that agent's active spans; on a total row it is the time any agent of the run was active. "
     "The mean per unit counts coders only. Run type session holds the agents the main session "
-    "started outside any run; its rows carry the agent id."
+    "started outside any run; its rows carry the agent id. The model cell is the model the "
+    "agent's transcript names, - on a total or mean row. A refuted line counts, per coder model, "
+    "the units a verifier refuted while a coder on that model held them."
 )
 
 
@@ -599,8 +687,8 @@ def render(runs: list[Run], source: str) -> str:
     for run in runs:
         lines += [detail_row(row) for row in run.rows]
         lines += [totals_row(run), mean_row(run, "unit"), mean_row(run, "round")]
-    turns = turn_lines(runs)
-    lines += ["", *turns] if turns else []
+    after = [*turn_lines(runs), *refuted_lines(runs)]
+    lines += ["", *after] if after else []
     return "\n".join(lines) + "\n"
 
 
@@ -685,9 +773,11 @@ def total_rows(text: str) -> list[str]:
     rows = []
     for line in text.splitlines():
         match = _ROW.match(line.strip())
-        cells = [c.strip() for c in match.group(1).split("|")] if match else []
+        cells: list[object] = [c.strip() for c in match.group(1).split("|")] if match else []
+        if len(cells) == len(COLUMNS) - 1:
+            cells.insert(MODEL_AT, NO_MODEL)  # 0187: a report saved before the model column.
         if len(cells) == len(COLUMNS) and cells[2] == TOTAL:
-            rows.append(table_row(list(cells)))
+            rows.append(table_row(cells))
     return rows
 
 
@@ -715,9 +805,11 @@ def audit_lines(session: str, root: Path, records: list[dict[str, object]]) -> l
             "token totals not shown."
         ]
     lines += header()
-    for run in _merge(runs):
+    merged = _merge(runs)
+    for run in merged:
         lines += [totals_row(run), mean_row(run, "unit")]
-    return lines
+    refuted = refuted_lines(merged)
+    return lines + (["", *refuted] if refuted else [])
 
 
 def _write(text: str, out: str, cwd: str) -> Path:
