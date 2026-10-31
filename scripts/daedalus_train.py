@@ -10,13 +10,17 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+<<<<<<< HEAD
 from lib import git, packs  # noqa: E402
+=======
+from lib import packs, writer_mode  # noqa: E402
+>>>>>>> feature/agents-named-by-phase
 from lib.agent_models import AgentModelError, resolve  # noqa: E402
 from lib.audit import DataDirError  # noqa: E402
 from lib.briefs import BriefError, brief_file_problems  # noqa: E402
 from lib.config import ConfigError, load_config  # noqa: E402
 from lib.manifest import ManifestError  # noqa: E402
-from lib.project_root import repo_refusal  # noqa: E402
+from lib.project_root import project_root, repo_refusal  # noqa: E402
 from lib.train_runner import (  # noqa: E402
     EXIT_OK,
     EXIT_STOP,
@@ -38,14 +42,14 @@ from lib.train_runner import (  # noqa: E402
     stop,
     summary,
 )
-from lib.train_state import TrainStateError  # noqa: E402
+from lib.train_state import TrainStateError, active_train  # noqa: E402
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
         "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
-        "brief-check, packs. "
+        "brief-check, packs, writer-clear. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -114,10 +118,16 @@ def _parser() -> argparse.ArgumentParser:
     brief.add_argument("--repo", type=Path, required=True)
     brief.add_argument("--brief", type=Path, required=True)
     # prepush-2026-10-27 finding 6, 0157: the pack check before any framework specialist runs.
+<<<<<<< HEAD
     packs_cmd = sub.add_parser("packs")
     packs_cmd.add_argument("--repo", type=Path, required=True)
     # 0192: the audit's merged range; a pack with triggers is listed only on a matching path.
     packs_cmd.add_argument("--diff")
+=======
+    sub.add_parser("packs").add_argument("--repo", type=Path, required=True)
+    # 0190: the operator empties a writer queue a dispatch that never started left behind.
+    sub.add_parser("writer-clear").add_argument("--repo", type=Path, required=True)
+>>>>>>> feature/agents-named-by-phase
     return parser
 
 
@@ -189,6 +199,22 @@ def _brief_check(repo: Path, brief: Path) -> Outcome:
         "level, then run brief-check again."
     )
     return Outcome(EXIT_STOP, lines)
+
+
+def _writer_clear(repo: Path) -> Outcome:
+    # 0190: main session only; the orchestrator's train class does not admit it.
+    root = project_root(repo)
+    train = active_train(root)
+    if train is None:
+        return Outcome(
+            EXIT_STOP,
+            [
+                f"no run is marked in {root}, so no writer queue waits. "
+                "Next: mark a run before you clear its queue."
+            ],
+        )
+    removed = writer_mode.clear(root, train)
+    return Outcome(EXIT_OK, [f"writer queue cleared train={train} removed={removed}"])
 
 
 def _model(repo: Path, agent: str, override: str | None) -> Outcome:
@@ -275,7 +301,13 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "brief-check":
         return _brief_check(repo, args.brief)
     if args.action == "packs":
+<<<<<<< HEAD
         return _packs(repo, args.diff)
+=======
+        return _packs(repo)
+    if args.action == "writer-clear":
+        return _writer_clear(repo)
+>>>>>>> feature/agents-named-by-phase
     if args.action == "check-reply":
         return check_reply(repo, args.stage)
     if args.action == "state":

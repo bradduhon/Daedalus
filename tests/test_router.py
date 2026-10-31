@@ -217,7 +217,8 @@ def test_main_session_duties_unchanged(monkeypatch: pytest.MonkeyPatch, jail_fak
     assert warned.warn and not warned.allow and "Build Train" in str(warned.reason)
     seen: list[dict[str, object]] = []
 
-    def dispatch(tool_input: dict[str, object], cwd: str) -> str:
+    def dispatch(tool_input: dict[str, object], cwd: str, main: bool = False) -> str:
+        assert main, "0190: the main session's dispatch is marked as the main path"
         seen.append(tool_input)
         return "dispatch refused. Next: name one unit."
 
