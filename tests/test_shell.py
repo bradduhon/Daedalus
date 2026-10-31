@@ -358,3 +358,50 @@ def test_runner_rows_reach_the_wrapped_command(command: str, want: list[str]) ->
 def test_runner_options_off_their_row_fail_closed(command: str) -> None:
     # issue 82: an option, operand or body the rows cannot read leaves the command unknown.
     assert shell.strip_wrappers(shlex.split(command)) is None
+
+
+@pytest.mark.parametrize(
+    ("name", "form"), [(name, form) for name, forms in shell.TEST_RUNNERS.items() for form in forms]
+)
+def test_each_test_runner_form_is_a_runner_row_and_never_refused(
+    name: str, form: tuple[str, ...]
+) -> None:
+    # 0164: every form the table admits is a test command, and no form is a server or watch.
+    tokens = [name, *form]
+    assert shell._tester_runner_ok(name, tokens) and shell.runner_row(tokens)
+    assert shell.runner_refusal(tokens) is None, tokens
+
+
+def test_node_is_the_one_runner_that_is_a_worker_wrapper() -> None:
+    # 0164: a WORKER_WRAPPERS name in the table is admitted only by its exact form.
+    assert set(shell.TEST_RUNNERS) & shell.WORKER_WRAPPERS == {"node"}
+    assert shell.TEST_RUNNERS["node"] == (("--test",),)
+    for command in ("node t.js", "node -e 1", "node --inspect --test", "node"):
+        assert not shell._tester_runner_ok("node", shlex.split(command)), command
+
+
+@pytest.mark.parametrize(
+    ("command", "want"),
+    [
+        ("vite", shell.R_DEV_SERVER),
+        ("vite preview --port 1", shell.R_DEV_SERVER),
+        ("./node_modules/.bin/vite serve", shell.R_DEV_SERVER),
+        ("pnpm --filter web dev", shell.R_DEV_SERVER),
+        ("npx -y vite", shell.R_DEV_SERVER),
+        ("pnpm exec vitest", shell.R_VITEST_WATCH),
+        ("vitest bench", shell.R_VITEST_WATCH),
+        ("tsc -b", shell.R_TSC),
+        ("pnpm exec tsc --noEmit -w", shell.R_TSC),
+        ("terraform -chdir=/x apply", shell.R_TERRAFORM_MUTATE),
+        ("terraform state list", shell.R_TERRAFORM_MUTATE),
+        ("vite build", None),
+        ("vitest run -t name", None),
+        ("pnpm test -- --watch", None),
+        ("terraform plan", None),
+        ("npm test", None),
+    ],
+)
+def test_runner_refusal_names_the_server_watch_or_state_change(
+    command: str, want: str | None
+) -> None:
+    assert shell.runner_refusal(shlex.split(command)) == want

@@ -5,14 +5,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import daedalus_confine
 import pytest
-from lib import jail
+from lib import jail, shell
 
-from tests.adversarial.corpus import assert_denied
-from tests.conftest import CFG
+from tests.adversarial.corpus import (
+    DEV_SERVERS,
+    PACKAGE_INSTALL_CMDS,
+    TERRAFORM_MUTATIONS,
+    WATCH_MODES,
+    assert_denied,
+)
+from tests.conftest import CFG, WT
+from tests.hook_chain import load
 from tests.payloads import _b, _cred
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
+# 0164: read at import, before the conftest fixture swaps the confine check out of the chain.
+REAL_CONFINE = load("confine").judge
 # issue 76: the allowed forms, each a recursive delete of a file in a repository a train marks.
 FORMS = (
     "env -C {other} rm -rf {repo}/x",
@@ -113,3 +123,18 @@ def test_a_foreign_agent_cannot_hide_a_write_behind_a_wrapper_option(
 def test_a_worker_never_runs_the_wrapper(form: str) -> None:
     # 8.5 ruling A: Daedalus workers meet WORKER_WRAPPERS first.
     assert_denied(_b("coder", form.format(repo="/work/repo", other="/tmp")))
+
+
+@pytest.mark.parametrize(
+    "command", DEV_SERVERS + WATCH_MODES + TERRAFORM_MUTATIONS + PACKAGE_INSTALL_CMDS
+)
+def test_the_kernel_wrapper_admits_no_dev_server_watch_mode_state_change_or_install(
+    monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    # 0164, 0158: refused bare and wrapped, with the ruling named unless a wrapper word leads.
+    monkeypatch.setattr(load("confine"), "judge", REAL_CONFINE)
+    support = daedalus_confine.Support("x86_64", 3, True)
+    monkeypatch.setattr(daedalus_confine, "kernel_support", lambda: support)
+    markers = () if command.split()[0] in shell.WORKER_WRAPPERS else ("(0164)", "(0158)")
+    for form in (command, f"{shell.CONFINE_PATH} --unit {WT} -- {command}"):
+        assert_denied(_b("coder", f"cd {WT} && {form}"), *markers)

@@ -27,17 +27,19 @@ Every file and setting daedalus reads, with the smallest example that works. `/d
   "operator_signing_keys": [],
   "max_concurrent_builders": 5,
   "audit_retention_days": null,
+  "wrapper_read_roots": ["~/.local/share/pnpm/store", "~/.nvm"],
   "agent_models": { "coder": "sonnet", "auditor": "opus" }
 }
 ```
 
-Every key in this file is a row of the generated key reference in the plugin [README](../README.md#key-reference): what it governs, its type, its allowed values, its default and an example. The doctor checks `ledger`, `standing_rules`, `standards_sources`, `policy` and `audit_retention_days` **(checked)**. A key set to `null` counts as absent (0076). Five notes the table has no room for:
+Every key in this file is a row of the generated key reference in the plugin [README](../README.md#key-reference): what it governs, its type, its allowed values, its default and an example. The doctor checks `ledger`, `standing_rules`, `standards_sources`, `policy` and `audit_retention_days` **(checked)**. A key set to `null` counts as absent (0076). Six notes the table has no room for:
 
 - `ledger`: with no ledger declared and none found, the Build Train stops and asks before creating one.
 - `standing_rules`: the file `scripts/standing_rules.py` writes from the ledger (see the standing-rules backfill file below). The plan and brainstorm skills hand its path to the planner. The doctor prints `OK` when the file exists, `OPT` when the key is absent, and `MISS` when the key names no file.
 - `standards_sources`: with none declared, the Standards Packet is empty, the auditor judges against the spec only, and the doctor offers the baseline pack on an `OPT` line.
 - `audit_retention_days`: a whole number of at least 90 (AU-11). When a new session writes its first record, each older log is deleted under its own lock, and one `AuditRotation` record in the new session's chain names every deleted session with its final seq and hash (AU-9(4)). A log named on a summary's `Session <id>:` line, a log changed since an unmerged train started, the current session's log, and a log another session holds are kept. Any read or parse error deletes nothing.
 - `agent_models`: an object from an agent name the catalog lists to `sonnet`, `opus`, `haiku` or `fable`. For example, `"agent_models": { "coder": "sonnet" }` runs the coding agent on sonnet while every other agent keeps the model its agent file names. An unknown agent name or model refuses the config with a `Next:` line naming the key. The names `nist-specialist` and `cis-specialist` are no longer catalog agents, so a config that still names either is refused; rename the key to `framework-specialist`, the one agent that replaced both. Six agents took the name of the phase they serve in this release (agents named by phase, 0190): the coder, the auditor, the releaser, the comparer, and the writer, which does the work of two former agents. A config, a priorities block or a train definition that still uses one of their old names reads it as the new name for this release only. The health check (`/daedalus:doctor`) prints one line for each old name it finds, naming the new name to write in its place. Run `python3 scripts/catalog.py table --repo <repo>` from the plugin folder to see the model each agent runs on.
+- `wrapper_read_roots`: folders outside the project that a coder's test runner needs, such as the pnpm package store and a Node.js install. The kernel wrapper lets a runner such as `pnpm test`, `vitest run` or `node --test` read those folders and run programs from them, and never write there; any other command gets no such grant. A `~/` path is expanded to your home folder. A path that holds or sits inside a credential store, such as `~/.ssh` or `~/.aws`, refuses the config with a `Next:` line (0164). Installing packages stays with you: a coder's `pnpm install`, `npm ci` or `yarn add` is refused.
 
 ### Ledger formats
 

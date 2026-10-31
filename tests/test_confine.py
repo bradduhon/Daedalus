@@ -7,6 +7,7 @@ import ctypes
 import errno
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -16,11 +17,15 @@ from types import SimpleNamespace
 import daedalus_confine
 import pytest
 from lib import shell
+from lib.config import ConfigError, load_config
 
 from tests.adversarial.corpus import (
     CONFINE_RUNNERS,
+    DEV_SERVERS,
+    TERRAFORM_MUTATIONS,
     UNIX_SOCKETS,
     UNUSABLE_KERNEL,
+    WATCH_MODES,
     assert_denied,
 )
 from tests.conftest import CFG, CWD, WT
@@ -323,9 +328,175 @@ def test_each_new_runner_needs_the_wrapper(command: str) -> None:
     assert evaluate("confine", _b("coder", f"cd {WT} && {WRAP} {command}")) is None
 
 
+def _refused_bare_and_wrapped(command: str, reason: str) -> None:
+    # 0164: through a WORKER_WRAPPERS word, the chain may refuse the wrapper first.
+    marker = () if command.split()[0] in shell.WORKER_WRAPPERS else (reason,)
+    for form in (f"cd {WT} && {command}", f"cd {WT} && {WRAP} {command}"):
+        assert evaluate("confine", _b("coder", form)) == reason, form
+        assert_denied(_b("coder", form), *marker)
+
+
+@pytest.mark.usefixtures("kernel")
+@pytest.mark.parametrize("command", DEV_SERVERS)
+def test_a_dev_server_is_refused_bare_and_wrapped(command: str) -> None:
+    # 0164: the operator hosts the dev server; the reason quotes the ruling.
+    _refused_bare_and_wrapped(command, shell.R_DEV_SERVER)
+    assert "the operator hosts the dev server" in shell.R_DEV_SERVER
+    assert "(0164)" in shell.R_DEV_SERVER
+
+
+@pytest.mark.usefixtures("kernel")
+@pytest.mark.parametrize("command", WATCH_MODES)
+def test_a_watch_mode_is_refused_bare_and_wrapped(command: str) -> None:
+    # 0164: bare vitest watches; tsc runs only as --noEmit, never watching.
+    _refused_bare_and_wrapped(command, shell.R_TSC if "tsc" in command else shell.R_VITEST_WATCH)
+    assert "`vitest run`" in shell.R_VITEST_WATCH and "`tsc --noEmit`" in shell.R_TSC
+
+
+@pytest.mark.usefixtures("kernel")
+@pytest.mark.parametrize("command", TERRAFORM_MUTATIONS)
+def test_a_terraform_state_change_is_refused_bare_and_wrapped(command: str) -> None:
+    _refused_bare_and_wrapped(command, shell.R_TERRAFORM_MUTATE)
+
+
+@pytest.mark.parametrize("support", [OFF, PROBE_ERROR])
+def test_a_dev_server_is_refused_on_an_unusable_kernel_too(
+    monkeypatch: pytest.MonkeyPatch, support: daedalus_confine.Support
+) -> None:
+    # 0164: the dev server refusal comes before the kernel line.
+    monkeypatch.setattr(daedalus_confine, "kernel_support", lambda: support)
+    assert evaluate("confine", _b("coder", f"cd {WT} && pnpm dev")) == shell.R_DEV_SERVER
+
+
+def _terraform_repo(tmp_path: Path, features: dict[str, object]) -> tuple[Path, Path, Path]:
+    repo, wt = _narrowed_repo(tmp_path, json.dumps({"features": features}))
+    module = wt / "infra"
+    module.mkdir()
+    return repo, wt, module
+
+
+@pytest.mark.usefixtures("kernel")
+def test_terraform_checks_need_the_wrapper_and_validate_its_switch(tmp_path: Path) -> None:
+    # 0158, 0159: fmt -check and validate are runner rows; validate waits for its switch.
+    repo, wt, module = _terraform_repo(tmp_path, {"terraform_validate": True})
+    wrap = f"{shell.CONFINE_PATH} --unit {wt} --"
+    for inner in (
+        "terraform validate",
+        f"terraform -chdir={module} validate",
+        "terraform fmt -check",
+    ):
+        bare = _cwd(_b("coder", f"cd {wt} && {inner}"), repo)
+        assert evaluate("confine", bare) == load("confine").R_CONFINE, inner
+        wrapped = _cwd(_b("coder", f"cd {wt} && {wrap} {inner}"), repo)
+        assert evaluate("confine", wrapped) is None, inner
+        assert decide(wrapped, CFG).allow, decide(wrapped, CFG).reason
+    (repo / "service-manifest.json").write_text("{}", encoding="utf-8")
+    for command in ("terraform validate", f"{wrap} terraform validate"):
+        reason = str(evaluate("confine", _cwd(_b("coder", f"cd {wt} && {command}"), repo)))
+        assert reason.startswith("features.terraform_validate is not true"), command
+    off = {"features": {"terraform_tools": False}}
+    (repo / "service-manifest.json").write_text(json.dumps(off), encoding="utf-8")
+    reason = str(
+        evaluate("confine", _cwd(_b("coder", f"cd {wt} && {wrap} terraform fmt -check"), repo))
+    )
+    assert reason.startswith("features.terraform_tools is false")
+
+
+def _read_roots_repo(tmp_path: Path, roots: list[str]) -> tuple[Path, Path]:
+    repo, unit = _unit(tmp_path)
+    config = repo / ".claude" / "daedalus" / "config.json"
+    config.write_text(json.dumps({"wrapper_read_roots": roots}), encoding="utf-8")
+    return repo, unit
+
+
+@pytest.mark.parametrize(
+    ("command", "granted"),
+    [
+        ("pnpm test", True),
+        ("pnpm exec vitest run", True),
+        ("node --test", True),
+        ("timeout 60 vitest run", True),
+        ("pytest -q", True),
+        ("git status", False),
+        ("pnpm run build", False),
+        ("python3 -c 1", False),
+    ],
+)
+def test_wrapper_read_roots_reach_the_rule_set_for_a_runner_row_only(
+    tmp_path: Path, command: str, granted: bool
+) -> None:
+    # 0164: read and execute for a runner row, never write, never for another command.
+    store = tmp_path / "store"
+    store.mkdir()
+    repo, unit = _read_roots_repo(tmp_path, [str(store)])
+    extra = daedalus_confine.read_roots(str(repo), command.split())
+    rules = daedalus_confine.rule_set(str(unit), str(repo), str(tmp_path / "t"), ON, extra)
+    assert (str(store.resolve()) in rules.ro) is granted
+    assert all(not shell._under(path, str(store.resolve())) for path in rules.rw)
+
+
+def test_wrapper_read_roots_expand_the_home_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    (home / ".local/share/pnpm/store").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    repo, _ = _read_roots_repo(tmp_path, ["~/.local/share/pnpm/store", "~/.nvm"])
+    roots = daedalus_confine.read_roots(str(repo), ["pnpm", "test"])
+    assert roots == (str(home / ".local/share/pnpm/store"), str(home / ".nvm"))
+
+
+@pytest.mark.parametrize(
+    "entry", ["~/.ssh", "~/.ssh/keys", "~", "~/.config/gh", "~/.aws/sso", "~/.config", "store"]
+)
+def test_a_credential_store_in_wrapper_read_roots_is_refused_at_config_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
+) -> None:
+    # 0164: a root holding or inside a credential store, or a relative one, refuses the config.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    repo, _ = _read_roots_repo(tmp_path, [entry])
+    with pytest.raises(ConfigError, match="wrapper_read_roots entry") as caught:
+        load_config(cwd=str(repo))
+    assert "Next:" in str(caught.value)
+    with pytest.raises(daedalus_confine.Refusal, match="wrapper_read_roots entry"):
+        daedalus_confine.read_roots(str(repo), ["pnpm", "test"])
+    assert daedalus_confine.read_roots(str(repo), ["git", "status"]) == ()
+
+
+@needs_kernel
+def test_a_runner_row_reads_a_granted_root_and_never_writes_it(tmp_path: Path) -> None:
+    # 0164: pytest, a runner row, reads the root and cannot write it; python3 -c never reads it.
+    runner = shutil.which("pytest", path=os.path.dirname(sys.executable))
+    if runner is None:
+        pytest.skip("no pytest script beside this interpreter")
+    store = tmp_path / "store"
+    store.mkdir()
+    (store / "pkg.txt").write_text("pkg", encoding="utf-8")
+    _, unit = _read_roots_repo(tmp_path, [str(store)])
+    read = f"open({str(store / 'pkg.txt')!r}).read()"
+    (unit / "test_store.py").write_text(
+        "import pytest\n\n\ndef test_store():\n"
+        f"    assert {read} == 'pkg'\n"
+        "    with pytest.raises(PermissionError):\n"
+        f"        open({str(store / 'new.txt')!r}, 'w')\n",
+        encoding="utf-8",
+    )
+    argv = [sys.executable, str(shell.CONFINE_PATH), "--unit", str(unit), "--", runner]
+    argv += ["-q", "-p", "no:cacheprovider", str(unit / "test_store.py")]
+    done = subprocess.run(argv, capture_output=True, text=True, check=False, cwd=unit)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert f",{store.resolve()} refused=" in done.stdout.splitlines()[0]
+    other = _confined(unit, f"print({read})")
+    assert other.returncode == 1 and "PermissionError" in other.stderr
+    assert str(store.resolve()) not in other.stdout.splitlines()[0]
+    assert not (store / "new.txt").exists()
+
+
 @pytest.mark.usefixtures("kernel")
 @pytest.mark.parametrize(
-    "command", ["go build ./...", "cargo build", "uv pip list", "go vet ./...", "uvx ruff"]
+    "command",
+    ["go build ./...", "cargo build", "uv pip list", "go vet ./...", "uvx ruff"]
+    + ["pnpm run build", "pnpm lint", "terraform plan", "terraform init", "npm --version"],
 )
 def test_a_runner_name_without_its_test_verb_needs_no_wrapper(command: str) -> None:
     assert evaluate("confine", _b("coder", f"cd {WT} && {command}")) is None

@@ -154,6 +154,34 @@ DIR_CHANGE_CMDS = frozenset({"cd", "pushd", "popd"})
 NETWORK_TOOLS = frozenset(
     {"curl", "wget", "ssh", "scp", "nc", "ncat", "telnet", "aws", "gh", "claude"}
 )
+# 0164: a package install reaches the registry and writes a store outside the worktree.
+PACKAGE_INSTALLS = frozenset({"pnpm", "npm", "yarn", "bun"})
+INSTALL_VERBS = frozenset({"install", "add", "update", "i", "ci"})
+_SCRIPT_VERBS = frozenset({"run", "run-script", "test", "t", "exec", "--"})
+R_PACKAGE_INSTALL = (
+    "a package install reaches the package registry and writes a package store outside your "
+    "unit worktree, so the operator runs it from their own shell (0164). Next: yield the "
+    "install command for the operator to run, then rerun your tests."
+)
+
+
+def package_install(segment: list[str]) -> bool:
+    # 0164: an install verb after pnpm, npm, yarn or bun, before any script verb; bare yarn too.
+    for idx, token in enumerate(segment):
+        if os.path.basename(token) not in PACKAGE_INSTALLS:
+            continue
+        args = segment[idx + 1 :]
+        if os.path.basename(token) == "yarn" and all(a.startswith("-") for a in args):
+            return True
+        for arg in args:
+            if arg in _SCRIPT_VERBS:
+                return False
+            if arg in INSTALL_VERBS:
+                return True
+        return False
+    return False
+
+
 R_NESTED_CLAUDE = (
     "claude starts a nested session the jail cannot attribute to an agent (audit A7-1). "
     "Next: run it from your own shell."

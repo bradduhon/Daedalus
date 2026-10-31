@@ -41,10 +41,11 @@ def test_absent_jail_narrowing_is_empty(tmp_path: Path) -> None:
     assert load(tmp_path) == Manifest()
 
 
-def test_this_repos_manifest_loads() -> None:
-    # 0073, B2: this repo's stack commands are read and the secret scan is on.
-    assert load(REPO_ROOT) == Manifest(
-        unit_test_cmd=".venv/bin/pytest -q",
+def test_this_repos_manifest_loads(tmp_path: Path) -> None:
+    # 0073, B2: this checkout's stack commands; 0010 reads a linked worktree's from its main tree.
+    _write(tmp_path, (REPO_ROOT / "service-manifest.json").read_text(encoding="utf-8"))
+    assert load(tmp_path) == Manifest(
+        unit_test_cmd="python3 -m pytest -q",
         typecheck_cmd="python3 -m mypy scripts",
         lint_cmd=".venv/bin/ruff check scripts tests",
         features=Features(secrets_scan=True),

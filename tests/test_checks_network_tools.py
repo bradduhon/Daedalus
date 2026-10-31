@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from lib import jail, shell
 
+from tests.adversarial.corpus import PACKAGE_INSTALL_CMDS
 from tests.conftest import CFG
 from tests.hook_chain import (
     decide,
@@ -95,6 +96,35 @@ def test_network_tools_judges_the_hook_alone() -> None:
     # spec 8: rg, grep and jq arguments and commit messages are exempt words.
     assert evaluate(HOOK, _b("coder", "rg curl src")) is None
     assert evaluate(HOOK, _b("coder", "git commit -m 'fix curl'")) is None
+
+
+@pytest.mark.parametrize("command", PACKAGE_INSTALL_CMDS)
+def test_a_package_install_is_refused_as_operator_run(command: str) -> None:
+    # 0164: the install reaches the registry and writes a store outside the worktree.
+    for form in (command, f"{shell.CONFINE_PATH} --unit /w -- {command}"):
+        assert evaluate(HOOK, _b("coder", form)) == jail.R_PACKAGE_INSTALL, form
+    assert "the operator runs it" in jail.R_PACKAGE_INSTALL and "(0164)" in jail.R_PACKAGE_INSTALL
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pnpm test",
+        "pnpm run test",
+        "pnpm run build",
+        "pnpm exec vitest run",
+        "npm test",
+        "npm run ci",
+        "npm run install",
+        "yarn test",
+        "bun test",
+        "npm --version",
+        "git commit -m 'npm install'",
+        "rg 'pnpm add' src",
+    ],
+)
+def test_any_other_package_manager_verb_is_no_network_tool(command: str) -> None:
+    assert evaluate(HOOK, _b("coder", command)) is None, command
 
 
 def test_network_tools_fixture_decisions() -> None:

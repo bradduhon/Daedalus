@@ -1358,19 +1358,49 @@ def docs_read_ok(tokens: list[str], raw: str, roots: list[str], cwd: str, base: 
 
 # B2 narrowed by audit finding (c), Build Train 20261019-124612: -m runs these modules only.
 RUNNER_MODULES = frozenset({"pytest", "mypy", "ruff", "unittest", "coverage"})
-# 0048, issue 91: runners the confine check wraps, each with the leading arguments it needs.
-# Kept apart from WRAPPER_OPTS (pin H1 -> H2); none is a WORKER_WRAPPERS name, so no grant widens.
-TEST_RUNNERS: dict[str, tuple[str, ...]] = {
-    "pytest": (),
-    "make": (),
-    "tox": (),
-    "nox": (),
-    "just": (),
-    "npx": (),
-    "uv": ("run",),
-    "go": ("test",),
-    "cargo": ("test",),
+# 0048, issue 91, 0164: runners the confine check wraps, each with the leading forms it admits;
+# () admits any. Apart from WRAPPER_OPTS (pin H1 -> H2); node, a WORKER_WRAPPERS name, is --test.
+TEST_RUNNERS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "pytest": ((),),
+    "make": ((),),
+    "tox": ((),),
+    "nox": ((),),
+    "just": ((),),
+    "npx": ((),),
+    "uv": (("run",),),
+    "go": (("test",),),
+    "cargo": (("test",),),
+    "node": (("--test",),),
+    "pnpm": (("test",), ("run", "test"), ("exec", "vitest", "run"), ("exec", "tsc", "--noEmit")),
+    "vitest": (("run",),),
+    "tsc": (("--noEmit",),),
+    "vite": (("build",),),
+    "terraform": (("validate",), ("fmt", "-check")),
 }
+# 0164: package scripts that start a dev server, and the flags that keep a runner watching.
+DEV_SCRIPTS = frozenset({"dev", "start", "serve", "preview"})
+WATCH_FLAGS = frozenset({"--watch", "-w"})
+# 0158, 0164: terraform subcommands that change state; refused bare and under the wrapper.
+TERRAFORM_MUTATE = frozenset({"apply", "destroy", "import", "state", "taint"})
+_JS_TOOLS = frozenset({"vite", "vitest", "tsc"})
+R_DEV_SERVER = (
+    "a coder never starts a dev server: the operator hosts the dev server and the verify step "
+    "names the URL and the check (0164). Next: run `vite build` for a build, or yield the URL "
+    "and the check for the operator."
+)
+R_VITEST_WATCH = (
+    "vitest without `run` starts watch mode, which never exits (0164). "
+    "Next: run `vitest run`, under the kernel wrapper."
+)
+R_TSC = (
+    "tsc runs only as the type check `tsc --noEmit`, never with --watch or -w and never "
+    "emitting files (0164). Next: run `tsc --noEmit`, under the kernel wrapper."
+)
+R_TERRAFORM_MUTATE = (
+    "terraform apply, destroy, import, state and taint change infrastructure or state and stay "
+    "with the operator, bare or under the kernel wrapper (0158). Next: run `terraform validate` "
+    "or `terraform fmt -check`, or yield the change to the operator."
+)
 
 
 def python_script(tokens: list[str]) -> str | None:
@@ -1400,11 +1430,12 @@ def _tester_runner_ok(
     if any(arg.startswith("--basetemp") for arg in args):
         return False
     if name in TEST_RUNNERS:
-        # issue 91: an option before the lead word (cargo +nightly test) fails closed as a test.
-        lead = TEST_RUNNERS[name]
-        if lead and args and args[0][:1] in {"-", "+"}:
+        # issue 91: an option before the lead (cargo +nightly test) fails closed as a test, bar
+        # a WORKER_WRAPPERS name, where a match admits the command (node -e stays refused).
+        forms = TEST_RUNNERS[name]
+        if all(forms) and args and args[0][:1] in {"-", "+"} and name not in WORKER_WRAPPERS:
             return True
-        return tuple(args[: len(lead)]) == lead
+        return any(tuple(args[: len(form)]) == form for form in forms)
     if name == "npm":
         return bool(args) and (
             args[0] in {"test", "t"} or (args[0] in {"run", "run-script"} and len(args) > 1)
@@ -1415,9 +1446,39 @@ def _tester_runner_ok(
             return len(args) > 1 and args[1] in RUNNER_MODULES
         script = python_script(tokens)
         return script is not None and own_script is not None and own_script(script)
-    if name == "node":
-        return bool(args) and not args[0].startswith("-")
     return False
+
+
+def runner_row(tokens: list[str]) -> bool:
+    # 0164: a TEST_RUNNERS form, after any wrapper; the kernel wrapper's read roots attach to it.
+    inner = strip_wrappers(tokens) or tokens
+    name = _base(inner[0]) if inner else ""
+    return name in TEST_RUNNERS and _tester_runner_ok(name, inner)
+
+
+def runner_refusal(tokens: list[str]) -> str | None:
+    # 0164, 0158: a dev server, a watch mode or a terraform state change, bare or wrapped.
+    inner = strip_wrappers(tokens) or tokens
+    if not inner:
+        return None
+    name, args = _base(inner[0]), inner[1:]
+    head = args[: args.index("--")] if "--" in args else args
+    if name in {"pnpm", "npm", "npx"}:
+        if name != "npx" and DEV_SCRIPTS & set(head):
+            return R_DEV_SERVER
+        tool = next((i for i, arg in enumerate(head) if _base(arg) in _JS_TOOLS), None)
+        return None if tool is None else runner_refusal(head[tool:])
+    watch = bool(WATCH_FLAGS & set(head))
+    if name == "vite":
+        return None if head[:1] == ["build"] and not watch else R_DEV_SERVER
+    if name == "vitest":
+        return None if head[:1] == ["run"] and not watch else R_VITEST_WATCH
+    if name == "tsc":
+        return None if "--noEmit" in head and not watch else R_TSC
+    if name == "terraform":
+        verbs = [arg for arg in head if not arg.startswith("-")]
+        return R_TERRAFORM_MUTATE if verbs[:1] and verbs[0] in TERRAFORM_MUTATE else None
+    return None
 
 
 def _exempt_indices(tokens: list[str]) -> set[int]:
@@ -1577,8 +1638,9 @@ def _worker_hygiene(
         return R_ENV
     if runs_claude(tokens, base):
         return R_CLAUDE_PATH
-    if own_script is not None and _base(tokens[0]) == CONFINE:
-        # 0048: the coder's wrapped command is judged as if it ran bare; the wrapper adds no grant.
+    wraps = own_script is not None or agent == "terraform-reviewer"
+    if wraps and _base(tokens[0]) == CONFINE:
+        # 0048, 0158: a coder's or the terraform reviewer's wrapped command is judged as if bare.
         split = confine_split(tokens)
         if split is None or not confine_wrapper(tokens[0], base):
             return R_CONFINE_FORM
