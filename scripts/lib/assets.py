@@ -101,8 +101,10 @@ def touched(repo: Path, base: str, tip: str) -> set[str]:
                 f"{ref!r} is not a commit name. Next: pass the recorded base sha and the branch "
                 "the judges read."
             )
-    logged = _names(repo, ["log", "-m", "--name-only", "-z", "--format=", f"{base}..{tip}"])
-    return logged | _names(repo, ["diff", "--name-only", "-z", f"{base}...{tip}"])
+    # 0192: --no-renames, so a source file renamed to an asset name still counts as touched.
+    log = ["log", "-m", "--no-renames", "--name-only", "-z", "--format=", f"{base}..{tip}"]
+    diff = ["diff", "--no-renames", "--name-only", "-z", f"{base}...{tip}"]
+    return _names(repo, log) | _names(repo, diff)
 
 
 def exclusion(repo: Path, base: str, tip: str, assets: Assets) -> Exclusion:

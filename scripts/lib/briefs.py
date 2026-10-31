@@ -30,9 +30,11 @@ _NAME_RUN = re.compile(r"[a-z]+(?:-[a-z]+)*")
 _SNAKE = re.compile(r"[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+")
 _RULING_ID = re.compile(r"[0-9]{4}-[A-Z]{3}")
 _ISSUE = re.compile(r"#[0-9]+")
-# 0164: the local site to open is the one slash word allowed; its rest holds no :// or @.
+# 0164: the local site to open is the one slash word allowed; its rest holds no :// or @,
+# and no query value shaped like a host and path, such as ?u=evil.com/x.
 _LOCAL_URL = re.compile(
-    r"https?://(?:localhost|127\.0\.0\.1)(?::[0-9]{1,5})?(?:[/?#](?:(?!://)[^\s`@])*)?"
+    r"https?://(?:localhost|127\.0\.0\.1)(?::[0-9]{1,5})?"
+    r"(?:[/?#](?:(?!://|=[^\s=&#/]*\.[^\s=&#/]*/)[^\s`@])*)?"
 )
 _EDGE = ".,;:!?\"'()[]"
 

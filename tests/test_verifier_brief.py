@@ -442,13 +442,15 @@ def test_a_local_url_is_the_one_slash_word_a_decision_brief_may_carry() -> None:
     good = "Question: Open http://localhost:5173 in your browser. Does the scene load?"
     assert brief_problems(good, "plain") == []
     assert brief_problems("Question: Open http://localhost:5173/x?y#z now?", "plain") == []
-    # L3: the path or query never carries another url or a user part.
+    assert brief_problems("Question: Open http://localhost:5173/play?v=1.2 now?", "plain") == []
+    # L3: the path or query never carries another url, a host and path, or a user part.
     for url in (
         "http://example.com",
         "file:///tmp/x",
         "http://localhost.evil.com/a",
         "http://localhost:5173/?u=https://evil.com",
         "http://localhost:5173/a@evil.com",
+        "http://localhost:5173?u=evil.com/x",
     ):
         problems = brief_problems(f"Question: Open {url} now?", "plain")
         assert any("with a slash" in p for p in problems), url

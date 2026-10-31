@@ -131,6 +131,19 @@ def test_a_source_file_under_an_asset_root_keeps_that_root_in_the_diff(tmp_path:
     assert "Kept in the diff: assets/odd name.bin (no exclusion can carry its name)" in lines
 
 
+def test_a_source_file_renamed_to_an_asset_name_still_keeps_its_root(tmp_path: Path) -> None:
+    # 0192: without --no-renames git names only assets/tool.bin and the removal is hidden.
+    repo, _ = _init(tmp_path)
+    _commit(repo, {"assets/tool.py": b"import os\nprint(os.getcwd())\n" * 20}, "add tool")
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    _git(repo, "mv", "assets/tool.py", "assets/tool.bin")
+    _git(repo, "commit", "-q", "-m", "rename")
+    found = assets.exclusion(repo, base, "HEAD", Assets(("assets/",)))
+    assert "Asset root source: assets/tool.py" in assets.lines(found)
+    assert found.roots == () and "':(exclude)assets/'" not in assets.diff_tail(found)
+    assert _changed(repo, base, found) == ["assets/tool.py"]
+
+
 def test_a_source_file_touched_then_deleted_in_the_range_still_keeps_its_root(
     tmp_path: Path,
 ) -> None:
