@@ -151,7 +151,34 @@ def test_two_waiting_dispatches_refuse_both_writers(repo_cwd: Path, run: Path) -
         assert "public-docs, derived" in reason and "writer-clear" in reason, reason
         assert not _call(repo_cwd, writer, "Read", file_path=str(readme))[0]
     assert (readme.read_bytes() if readme.exists() else None) == before
-    assert _queue(repo_cwd) == ([writer_mode.PUBLIC_DOCS, writer_mode.DERIVED], {})
+    marked = {"w-derived": writer_mode.NONE, "w-public": writer_mode.NONE}
+    assert _queue(repo_cwd) == ([writer_mode.PUBLIC_DOCS, writer_mode.DERIVED], marked)
+
+
+def test_a_writer_refused_as_ambiguous_never_takes_a_later_entry(
+    repo_cwd: Path, run: Path, capsys: Any
+) -> None:
+    # 0190: the verifier's sequence; the old writer stays refused after writer-clear and a new
+    # dispatch, and only a fresh writer takes the new entry.
+    _public_dispatch(repo_cwd, run, "main")
+    _derived_dispatch(repo_cwd, "main")
+    for writer in ("w-old-public", "w-old-derived"):
+        allow, reason = _call(repo_cwd, writer, "Read", file_path=f"{run}/README.md")
+        assert not allow and reason.startswith(f"writer {writer} takes no kind"), reason
+    assert daedalus_train.main(["writer-clear", "--repo", str(repo_cwd)]) == 0
+    capsys.readouterr()
+    fresh = _derived_writer(repo_cwd)
+    out = f"{repo_cwd}/out/a.md"
+    for writer in ("w-old-public", "w-old-derived"):
+        allow, reason = _call(repo_cwd, writer, "Write", file_path=out, content="x")
+        assert not allow and reason.startswith(f"writer {writer} holds no kind"), reason
+    assert not (repo_cwd / "out" / "a.md").exists()
+    assert _queue(repo_cwd)[0] == [writer_mode.DERIVED]
+    assert _call(repo_cwd, fresh, "Write", file_path=out, content="x")[0]
+    assert _queue(repo_cwd) == (
+        [],
+        {"w-old-public": writer_mode.NONE, "w-old-derived": writer_mode.NONE, fresh: "derived"},
+    )
 
 
 def test_a_dispatch_whose_kind_cannot_be_read_queues_as_none(repo_cwd: Path, run: Path) -> None:
@@ -160,7 +187,7 @@ def test_a_dispatch_whose_kind_cannot_be_read_queues_as_none(repo_cwd: Path, run
     assert not d.allow and d.warn and "(0134)" in str(d.reason), d.reason
     assert _queue(repo_cwd)[0] == [writer_mode.NONE]
     allow, reason = _call(repo_cwd, "w-odd", "Read", file_path=f"{run}/README.md")
-    assert not allow and "a brief whose kind could not be read" in reason, reason
+    assert not allow and reason.startswith("writer w-odd holds no kind"), reason
     assert _queue(repo_cwd) == ([], {"w-odd": writer_mode.NONE})
 
 
@@ -196,6 +223,10 @@ def test_a_writer_with_no_recorded_dispatch_is_refused_every_call(
 ) -> None:
     allow, reason = _call(repo_cwd, "w-stray", "Read", file_path=f"{run}/README.md")
     assert not allow and reason.startswith("writer w-stray holds no recorded kind"), reason
+    # 0190: the refusal marks the stray writer, so a later dispatch goes to a fresh one only.
+    fresh = _derived_writer(repo_cwd)
+    assert not _call(repo_cwd, "w-stray", "Read", file_path=f"{run}/README.md")[0]
+    assert _call(repo_cwd, fresh, "Read", file_path=f"{run}/README.md")[0]
 
 
 def test_the_writer_chains_are_the_two_folded_chains() -> None:

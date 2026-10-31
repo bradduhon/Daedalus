@@ -30,13 +30,13 @@ R_NO_ID = (
 )
 R_NO_DISPATCH = (
     "writer {agent} holds no recorded kind in train {train}, and no writer dispatch waits for it "
-    "(0190). Next: dispatch the writer again from the document phase."
+    "(0190). Next: stop this writer and dispatch a new one from the document phase."
 )
 R_NO_KIND = (
-    "writer {agent} was dispatched in train {train} with a brief whose kind could not be read, "
-    "so it takes neither kind's write limits (0190). Next: stop this writer and dispatch a new "
-    "one with one Worktree: line naming the docs worktree, or with no Worktree: line once the "
-    "sources are frozen."
+    "writer {agent} holds no kind in train {train}: its brief named no kind it could read, or "
+    "it was refused before it took one, and it never takes one later (0190). Next: stop this "
+    "writer and dispatch a new one with one Worktree: line naming the docs worktree, or with no "
+    "Worktree: line once the sources are frozen."
 )
 R_PENDING = (
     "a writer dispatched as {kind} in train {train} has made no call yet, so no second writer "
@@ -172,9 +172,12 @@ def kind_of(hook_input: dict[str, object]) -> tuple[str | None, str | None]:
             pending, agents = _read(path)
             if agent in agents:
                 return _bound(agent, train, agents[agent])
-            if not pending:
-                return None, R_NO_DISPATCH.format(agent=agent, train=train)
-            if len(pending) > 1:
+            if len(pending) != 1:
+                # 0190: a refused writer is marked none, so it never takes a later entry.
+                agents[agent] = NONE
+                _write(path, pending, agents)
+                if not pending:
+                    return None, R_NO_DISPATCH.format(agent=agent, train=train)
                 kinds = ", ".join(pending)
                 return None, R_AMBIGUOUS.format(
                     agent=agent, n=len(pending), train=train, kinds=kinds
