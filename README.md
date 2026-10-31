@@ -222,12 +222,16 @@ Part of the output on 2026-10-26:
 
 ### Control packs
 
-A control pack is a list of security controls a change is judged against. When a train touches IAM, keys, network rules or other infrastructure, the framework specialist judges the merged change against the control packs. Daedalus ships two packs under `<plugin>/packs/frameworks/`:
+A control pack is a list of security controls a change is judged against. When a train touches IAM, keys, network rules or other infrastructure, the framework specialist judges the merged change against the control packs. Daedalus ships four packs under `<plugin>/packs/frameworks/`:
 
-- `aws-default` holds AWS hardening controls, written in Daedalus's own words.
-- `nist-distilled` holds a NIST SP 800-53 checklist.
+- `aws-default` holds AWS hardening controls, written in Daedalus's own words. It is read by default.
+- `nist-distilled` holds a NIST SP 800-53 checklist. It is read by default.
+- `stripe-default` holds Stripe rules: no secret key in the code or in a committed file, webhook signatures checked, and prices set by the server. It is read by default, but only when a change touches a file with `stripe` in its name, a `.env` file, `package.json` or an npm lockfile. Such a change gets a framework check even when it touches no infrastructure.
+- `cost-tier` holds cost rules for Terraform on AWS, such as service-default keys, on-demand tables, no idle NAT gateway and log retention. It is off by default. To read it, add `"packs": ["cost-tier"]` to the `frameworks` block of `service-manifest.json`.
 
-A project with no `frameworks` block in `service-manifest.json` is judged against those two packs and needs no setup. To add your own packs, name a project folder in `frameworks.pack_dir`. Each subfolder holding a `pack.json` and a `controls.json` is one pack. Set `frameworks.default_packs` to `false` to read only your own packs. A pack that fails its hash or format check stops the train.
+When a change touches `package.json` or an npm lockfile, the dependency auditor also judges four npm rules from `<plugin>/packs/dependencies/npm.md`.
+
+A project with no `frameworks` block in `service-manifest.json` is judged against the three packs that are on by default and needs no setup. To add your own packs, name a project folder in `frameworks.pack_dir`. Each subfolder holding a `pack.json` and a `controls.json` is one pack. Set `frameworks.default_packs` to `false` to read only your own packs. A pack that fails its hash or format check stops the train.
 
 The commands below run from your own shell, in your project. `<plugin>` is the path the doctor prints on its `plugin root` line. `<cache>` is a directory whose name depends on how you installed Daedalus. Print it with:
 
@@ -326,6 +330,8 @@ Each agent gets a short list of allowed tools. A tool not on its list is never o
 A coding agent may write only inside its own unit worktree. Even there it may never write to `contracts/`, `.github/`, `.claude/`, `service-manifest.json`, the decision ledger, or the paths and file endings your repository lists under `jail_narrowing` in `service-manifest.json`.
 
 At all times, every agent is refused a read or search of `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh` or `~/.claude/.credentials.json`. When your own session does it, the call runs with a warning in its context and its transcript. The check follows links before it judges a path, so a link into one of those folders is refused the same way. Daedalus's own agents are always refused writing those paths with a file tool or naming them in Bash. While a train runs, your session is warned in its context when it does either.
+
+A `.env` file anywhere in the project gets the same treatment, because it holds live keys such as a Stripe secret key. That covers `.env` and every `.env.<name>`, such as `.env.local`. `.env.example` stays open, because it holds the variable names only. A search tool may still list a `.env` file by name; a search that would read inside one is refused.
 
 A train never stops your session with a permission prompt. A call the jail flags in your own session runs, and the warning names what the call touches and what can go wrong.
 

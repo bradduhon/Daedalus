@@ -5,11 +5,12 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import packs  # noqa: E402
+from lib import git, packs  # noqa: E402
 from lib.agent_models import AgentModelError, resolve  # noqa: E402
 from lib.audit import DataDirError  # noqa: E402
 from lib.briefs import BriefError, brief_file_problems  # noqa: E402
@@ -113,20 +114,43 @@ def _parser() -> argparse.ArgumentParser:
     brief.add_argument("--repo", type=Path, required=True)
     brief.add_argument("--brief", type=Path, required=True)
     # prepush-2026-10-27 finding 6, 0157: the pack check before any framework specialist runs.
-    sub.add_parser("packs").add_argument("--repo", type=Path, required=True)
+    packs_cmd = sub.add_parser("packs")
+    packs_cmd.add_argument("--repo", type=Path, required=True)
+    # 0192: the audit's merged range; a pack with triggers is listed only on a matching path.
+    packs_cmd.add_argument("--diff")
     return parser
 
 
 PACKS_NEXT = "Next: run /daedalus:doctor and fix each pack it names, then run /daedalus:run again."
+# 0192: two revisions joined by ... or .., never an option git would read.
+DIFF_RANGE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._/@^-]*\.\.\.?[A-Za-z0-9_][A-Za-z0-9._/@^-]*")
 
 
-def _packs(repo: Path) -> Outcome:
+def _changed(repo: Path, diff: str) -> list[str] | str:
+    # 0192: the changed paths of a merged range, or the reason git could not list them.
+    if not DIFF_RANGE.fullmatch(diff):
+        return f"packs: --diff {diff!r} is not a <base>...<branch> range"
+    try:
+        done = git.run(["diff", "--name-only", diff, "--"], repo)
+    except (OSError, git.GitTimeout) as exc:
+        return f"packs: git diff --name-only {diff} could not run ({exc})"
+    if done.returncode != 0:
+        return f"packs: git diff --name-only {diff} failed: {done.stderr.strip()}"
+    return [line for line in done.stdout.splitlines() if line]
+
+
+def _packs(repo: Path, diff: str | None = None) -> Outcome:
     # 0157: every pack folder the train reads passes pack_problems, or the train stops.
     try:
         folders = packs.pack_folders(repo)
         problems = [f"pack {f.name}: {p}" for f in folders for p in packs.pack_problems(f)]
+        unknown = packs.unknown_named(repo)
     except (ManifestError, OSError) as exc:
         return Outcome(EXIT_STOP, [f"packs: {exc}", PACKS_NEXT])
+    problems += [
+        f"pack {ident}: frameworks.packs names {ident}, which is not a pack Daedalus ships"
+        for ident in unknown
+    ]
     if not folders:
         return Outcome(
             EXIT_STOP,
@@ -137,7 +161,19 @@ def _packs(repo: Path) -> Outcome:
         )
     if problems:
         return Outcome(EXIT_STOP, [*problems, PACKS_NEXT])
-    return Outcome(EXIT_OK, [f"Packs: {', '.join(str(f) for f in folders)}"])
+    if diff is None:
+        return Outcome(EXIT_OK, [f"Packs: {', '.join(str(f) for f in folders)}"])
+    changed = _changed(repo, diff)
+    if isinstance(changed, str):
+        return Outcome(EXIT_STOP, [changed, PACKS_NEXT])
+    chosen, matched = packs.select_packs(folders, changed)
+    return Outcome(
+        EXIT_OK,
+        [
+            f"Packs: {', '.join(str(f) for f in chosen) or 'none'}",
+            f"Triggered: {', '.join(str(f) for f in matched) or 'none'}",
+        ],
+    )
 
 
 def _brief_check(repo: Path, brief: Path) -> Outcome:
@@ -239,7 +275,7 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "brief-check":
         return _brief_check(repo, args.brief)
     if args.action == "packs":
-        return _packs(repo)
+        return _packs(repo, args.diff)
     if args.action == "check-reply":
         return check_reply(repo, args.stage)
     if args.action == "state":

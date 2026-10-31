@@ -536,3 +536,93 @@ def test_an_rg_reach_flag_names_its_reason(tmp_path: Path) -> None:
         assert jail._credential_reason("Bash", {"command": command}, str(repo)), command
     assert jail.rg_reason("RIPGREP_CONFIG_PATH=x rg y .", str(repo)) == jail.R_RG_ONE
     assert jail.rg_reason("rg -n y .", str(repo)) is None
+
+
+# 0192: the .env deny, a project-relative rule beside the home credential stores.
+ENV_DENY = "which the .env deny refuses to every agent"
+
+
+def _env_repo(tmp_path: Path) -> Path:
+    # 0192: no reply key, so a folder read is refused for the .env file alone.
+    repo = tmp_path.resolve() / "repo"
+    (repo / "src").mkdir(parents=True)
+    _train(repo)
+    for rel in (".env", ".env.local", ".env.example", "apps/web/.env"):
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text("STRIPE_SECRET_KEY=placeholder\n", encoding="utf-8")
+    (repo / "notes.txt").symlink_to(repo / ".env.local")
+    return repo
+
+
+@pytest.mark.parametrize("agent", [None, "Explore", *CREDENTIAL_AGENTS])
+def test_env_files_are_refused_to_every_agent(tmp_path: Path, agent: str | None) -> None:
+    from lib.jail import decide as jail_decide
+
+    judge = decide if agent in CREDENTIAL_AGENTS else jail_decide
+    repo = _env_repo(tmp_path)
+    for rel in (".env", ".env.local", "apps/web/.env", "notes.txt"):
+        d = judge(_cred(agent, "Read", cwd=str(repo), file_path=str(repo / rel)), CFG)
+        assert not d.allow and ENV_DENY in str(d.reason), rel
+    example = _cred(agent, "Read", cwd=str(repo), file_path=str(repo / ".env.example"))
+    assert judge(example, CFG).allow
+    # 0192: Glob lists names only, so a pattern naming .env files stays open.
+    assert judge(_cred(agent, "Glob", cwd=str(repo), pattern="**/.env*"), CFG).allow
+
+
+@pytest.mark.parametrize("tool", ["Write", "Edit"])
+def test_env_file_writes_are_refused(tmp_path: Path, tool: str) -> None:
+    repo = _env_repo(tmp_path)
+    for rel in (".env", ".env.production", "apps/web/.env.local"):
+        hook_input = _cred("coder", tool, cwd=str(repo), file_path=str(repo / rel))
+        assert ENV_DENY in str(evaluate(HOOK, hook_input)), (tool, rel)
+    example = _cred("coder", tool, cwd=str(repo), file_path=str(repo / ".env.example"))
+    assert evaluate(HOOK, example) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat .env",
+        "cat .env.local",
+        "cat apps/web/.env",
+        "head -n 1 ./.env",
+        "cat .e*",
+        "cp .env.local /tmp/out.txt",
+        "echo STRIPE_SECRET_KEY=x >> .env",
+        "cat notes.txt",
+        "grep -r STRIPE .",
+        "rg -n STRIPE -g '.env*' .",
+        "rg -n STRIPE -g .env .",
+    ],
+)
+def test_bash_reads_and_writes_of_env_files_are_refused(tmp_path: Path, command: str) -> None:
+    repo = _env_repo(tmp_path)
+    for agent in CREDENTIAL_AGENTS:
+        reason = evaluate(HOOK, _bash_in(repo, agent, command))
+        assert reason is not None and ".env deny" in reason, (agent, command, reason)
+        assert not decide(_bash_in(repo, agent, command), CFG).allow, (agent, command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat .env.example",
+        "rg -n STRIPE .",
+        "rg -n STRIPE src",
+        "rg -n '^/?[.]env' -g '.gitignore' .",
+    ],
+)
+def test_bash_beside_env_files_is_allowed(tmp_path: Path, command: str) -> None:
+    # 0192: rg skips dot files by default, so a plain search beside a .env file stays open.
+    repo = _env_repo(tmp_path)
+    assert evaluate(HOOK, _bash_in(repo, "auditor", command)) is None, command
+
+
+def test_grep_glob_naming_an_env_file_is_refused(tmp_path: Path) -> None:
+    repo = _env_repo(tmp_path)
+    for glob in (".env*", "**/.env", ".env.local"):
+        case = _cred("auditor", "Grep", cwd=str(repo), pattern="STRIPE", path=str(repo), glob=glob)
+        assert ENV_DENY in str(evaluate(HOOK, case)), glob
+    for glob in ("*.py", ".env.example"):
+        case = _cred("auditor", "Grep", cwd=str(repo), pattern="STRIPE", path=str(repo), glob=glob)
+        assert evaluate(HOOK, case) is None, glob

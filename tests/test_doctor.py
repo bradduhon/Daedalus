@@ -1015,8 +1015,11 @@ def _break_hash(folder: Path) -> None:
 def test_pack_line_ok_for_each_folder_after_the_declared_ones(repo_cwd: Path) -> None:
     _make(repo_cwd / "packs" / "one")
     _manifest(repo_cwd, {"pack_dir": "packs"})
-    shipped = [packs.load_pack(f) for f in sorted(packs.FRAMEWORKS_DIR.iterdir())]
-    day = max(date.fromisoformat(p.pinned_on) for p in shipped)
+    every = [packs.load_pack(f) for f in sorted(packs.FRAMEWORKS_DIR.iterdir())]
+    # 0192: a pack that is off by default gets no line until frameworks.packs names it.
+    shipped = [p for p in every if p.default]
+    assert {p.id for p in every if not p.default} == {"cost-tier"}
+    day = max(date.fromisoformat(p.pinned_on) for p in every)
     assert _pack_lines_at(repo_cwd, day) == [
         (True, "OK   framework pack one: 1.0.0, 1 controls"),
         *[
@@ -1024,6 +1027,14 @@ def test_pack_line_ok_for_each_folder_after_the_declared_ones(repo_cwd: Path) ->
             for p in shipped
         ],
     ]
+    _manifest(repo_cwd, {"pack_dir": "packs", "packs": ["cost-tier", "no-such-pack"]})
+    lines = _pack_lines_at(repo_cwd, day)
+    assert lines[0] == (
+        False,
+        "MISS framework packs: frameworks.packs names no-such-pack, which Daedalus does not "
+        "ship. Next: name a pack listed in the README section on control packs, or remove the id",
+    )
+    assert (True, "OK   framework pack cost-tier: 1.0.0, 8 controls") in lines
 
 
 def test_pack_problems_are_one_failing_line_each(repo_cwd: Path) -> None:

@@ -26,10 +26,14 @@ from lib.credential_paths import (
     R_BRACE_UNJUDGED,
     R_CREDENTIAL,
     R_CREDENTIAL_TREE,
+    R_ENV_FILE,
+    R_ENV_FILE_TREE,
     R_IGNORE_WHITELIST,
     R_REPLY_KEY,
     R_REPLY_KEY_TREE,
     REPLY_KEY_NAME,
+    env_file_hit,
+    env_roots,
     glob_patterns,
     glob_reaches,
     ignore_whitelist,
@@ -1594,10 +1598,14 @@ def _tree_reason(
     roots: list[str],
     command: str,
     keys: tuple[str, ...] = (),
+    env_files: tuple[str, ...] = (),
 ) -> str | None:
     dotglob = _dotglob_on(command)
     # SC-12: reply key roots let a dot folder hide them from **; credential stores do not.
-    pairs = [(root, False) for root in roots] + [(key, True) for key in keys]
+    pairs = [(root, False, R_CREDENTIAL_TREE) for root in roots]
+    pairs += [(key, True, R_CREDENTIAL_TREE) for key in keys]
+    # 0192: a .env file is a dot file, so rg's default skip hides it like the reply key.
+    pairs += [(env, True, R_ENV_FILE_TREE) for env in env_files]
     for k, (words, (name, at, paths)) in enumerate(parsed):
         if at < 0:
             continue
@@ -1612,12 +1620,12 @@ def _tree_reason(
             for text, _ in _expand_word(words[i], envs[k]):
                 targets += [t for t in (_anchor(text, b) for b in bases or [""]) if t]
         for target in targets:
-            for root, dots_hide in pairs:
+            for root, dots_hide, reason in pairs:
                 rest = _store_rest(target, root, True, dotglob, dots_hide)
                 # spec 8, SC-12: rg skips hidden dirs unless a flag or a whitelist glob reaches one.
                 shown = hidden or glob_reaches(globs, rest or [])
                 if rest is not None and (shown or not any(p.startswith(".") for p in rest)):
-                    return R_CREDENTIAL_TREE.format(path=target)
+                    return reason.format(path=target)
                 if rest is not None and name == "rg" and ignore_whitelist(root):
                     return R_IGNORE_WHITELIST.format(path=target)
     return None
@@ -1693,8 +1701,12 @@ def _bash_credential_reason(
             return R_REPLY_KEY.format(path=target)
         if _credential_hit(target, roots, True, dotglob):
             return R_CREDENTIAL.format(path=target)
+        if env_file_hit(target) or _credential_hit(target, list(env_files), True, dotglob, True):
+            return R_ENV_FILE.format(path=target)
         return None
 
+    # 0192: the .env files beside every folder the command starts in or moves to.
+    env_files = tuple(env_roots(*bases))
     # spec 8: spelled-out paths first, so the message names the path the command wrote.
     for cand in absolute:
         reason = hit(os.path.normpath(cand))
@@ -1711,7 +1723,7 @@ def _bash_credential_reason(
             reason = hit(os.path.normpath(os.path.join(base, cand)))
             if reason:
                 return reason
-    return _tree_reason(parsed, envs, bases, roots, command, keys)
+    return _tree_reason(parsed, envs, bases, roots, command, keys, env_files)
 
 
 def _credential_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | None:

@@ -274,7 +274,8 @@ def test_each_frameworks_key_reads_its_values(
 
 def test_unknown_frameworks_key_is_refused(tmp_path: Path) -> None:
     message = _refused(tmp_path, {"frameworks": {"pack_dir": "p", "cache": "x"}})
-    assert "frameworks has unknown keys ['cache'] (known: pack_dir, default_packs, packs)" in message
+    known = "(known: pack_dir, default_packs, packs)"
+    assert f"frameworks has unknown keys ['cache'] {known}" in message
 
 
 @pytest.mark.parametrize(

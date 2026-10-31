@@ -44,6 +44,19 @@ R_REPLY_KEY_TREE = (
     "{path} contains the train's reply key. "
     "Next: search a folder outside .claude/daedalus, or name the files you need"
 )
+# 0192, STRIPE-1: a project .env file holds live keys; .env.example holds names only.
+ENV_FILE = ".env"
+ENV_EXAMPLE = ".env.example"
+R_ENV_FILE = (
+    "{path} is a .env file, which the .env deny refuses to every agent because it holds live "
+    "keys (0192). Next: read the key names from .env.example; the code reads keys from the "
+    "environment at run time"
+)
+R_ENV_FILE_TREE = (
+    "{path} contains a .env file, which the .env deny refuses to every agent because it holds "
+    "live keys (0192). Next: search without a hidden-file flag or a glob naming .env, or name "
+    "the files you need"
+)
 # prepush-2026-10-27: rg ranks these above .gitignore, so a `!` line beats the data folder marker.
 IGNORE_FILES = (".rgignore", ".ignore")
 IGNORE_READ_MAX = 1024 * 1024
@@ -296,6 +309,33 @@ def reply_key_hit(target: str) -> bool:
     )
 
 
+def env_name(name: str) -> bool:
+    # 0192: .env and .env.<anything>, except the names-only .env.example.
+    return name == ENV_FILE or (name.startswith(ENV_FILE + ".") and name != ENV_EXAMPLE)
+
+
+def env_file_hit(target: str) -> bool:
+    # 0192: judged on the spelled name and the real path, so a link to a .env file refuses too.
+    spelled = os.path.basename(os.path.normpath(target))
+    return env_name(spelled) or env_name(os.path.basename(os.path.realpath(target)))
+
+
+def env_roots(*paths: str) -> list[str]:
+    # 0192: the existing .env files directly in each named folder and in its project root.
+    folders: set[Path] = set()
+    for p in paths:
+        if p and os.path.isabs(p):
+            folders |= {Path(p), project_root(Path(p))}
+    found: set[str] = set()
+    for folder in folders:
+        try:
+            names = os.listdir(folder) if folder.is_dir() else []
+        except OSError:
+            continue
+        found |= {os.path.realpath(folder / n) for n in names if env_name(n)}
+    return sorted(found)
+
+
 def key_roots(*paths: str) -> list[str]:
     # SC-12: the existing reply key of each named path's project, as one more store root.
     keys = {project_root(Path(p)) / ".claude" / "daedalus" / REPLY_KEY_NAME for p in paths if p}
@@ -385,11 +425,29 @@ def path_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | Non
             return R_REPLY_KEY.format(path=shown)
         if credential_hit(target, roots, tool == "Glob"):
             return R_CREDENTIAL.format(path=shown)
+        # 0192: Glob lists names only; every other path tool reads or writes the file.
+        if tool != "Glob" and env_file_hit(target):
+            return R_ENV_FILE.format(path=shown)
     if tool == "Grep":
         # spec 8: the Grep tool searches hidden dirs, so a root above a store reads it.
         target = anchor(_expand_home(str(tool_input.get("path") or cwd)), cwd)
         if target and any(store_rest(target, root, False, True) is not None for root in roots):
             return R_CREDENTIAL_TREE.format(path=target)
         if target:
-            return _grep_key_reason(target, key_roots(cwd, target), tool_input.get("glob"))
+            glob = tool_input.get("glob")
+            return _grep_key_reason(target, key_roots(cwd, target), glob) or _grep_env_reason(
+                target, env_roots(cwd, target), glob
+            )
+    return None
+
+
+def _grep_env_reason(target: str, envs: list[str], glob: object) -> str | None:
+    # 0192: the Grep tool skips git-ignored files, so only a glob naming a .env file reaches it.
+    pats = glob_patterns(glob if isinstance(glob, str) else "")
+    for env in envs if pats else []:
+        rest = [os.path.basename(env)]
+        if _contains(target, env):
+            rest = os.path.relpath(env, os.path.realpath(target)).split(os.sep)
+        if glob_reaches(pats, rest):
+            return R_ENV_FILE_TREE.format(path=target)
     return None

@@ -128,9 +128,14 @@ Each CSV line becomes one control: its `id` and `refs.cis` are the CIS id, its `
 
 ### Framework control packs
 
-A pack is a folder holding `pack.json` and `controls.json`. The folder name is the pack id. Daedalus ships two packs under `<plugin>/packs/frameworks/`: `aws-default` and `nist-distilled`.
+A pack is a folder holding `pack.json` and `controls.json`. The folder name is the pack id. Daedalus ships four packs under `<plugin>/packs/frameworks/`:
 
-`pack.json` is one JSON object with exactly these keys:
+- `aws-default`: AWS hardening controls. It is read by default.
+- `nist-distilled`: a NIST SP 800-53 checklist. It is read by default.
+- `stripe-default`: Stripe key handling, webhook signatures and server-set prices. It is read by default, but only when a change touches a path its triggers name: a file with `stripe` in its name, a `.env` file, `package.json` or an npm lockfile.
+- `cost-tier`: cost rules for Terraform on AWS, such as service-default keys, on-demand tables and log retention. It is off by default. To read it, add `"packs": ["cost-tier"]` to the `frameworks` block.
+
+`pack.json` is one JSON object with these keys:
 
 - `id`: the pack name, lowercase letters, digits and dashes, 1 to 40 characters.
 - `version`: three dot-separated numbers, such as `1.0.0`.
@@ -138,11 +143,13 @@ A pack is a folder holding `pack.json` and `controls.json`. The folder name is t
 - `license`: one line, such as `GPL-3.0-or-later`, `public domain (17 U.S.C. 105)` or `operator-licensed, ids only`.
 - `pinned_on`: the `YYYY-MM-DD` date the pack was written.
 - `sha256`: the 64 lowercase hex SHA-256 of `controls.json`.
+- `default` (optional): `false` keeps a shipped pack off until `frameworks.packs` names it. Absent means `true`.
+- `triggers` (optional): a list of 1 to 32 path globs, such as `**/*stripe*`. The audit reads the pack only when a changed path matches one, and then it asks the framework specialist even when no unit touched IAM, keys or infrastructure. A leading `**/` also matches a file at the project root. Absent means the pack is read whenever the specialist runs.
 
 `controls.json` is `{"schema": "daedalus-controls/1", "controls": [...]}`. Each control holds:
 
 - `id` (required): unique in the pack, such as `AWS-IAM-1`.
-- `service` (required): one of `iam`, `s3`, `kms`, `cloudtrail`, `vpc`, `lambda`, `dynamodb`, `apigateway`, `ec2`, `ecs`, `ecr`, `logs` or `any`.
+- `service` (required): one of `iam`, `s3`, `kms`, `cloudtrail`, `vpc`, `lambda`, `dynamodb`, `apigateway`, `ec2`, `ecs`, `ecr`, `logs`, `payments` or `any`.
 - `title` (required): one line in the pack author's words.
 - `statement`, `look_for` and `verify` (required unless `maps_to` is set): the requirement in the author's words, what in a diff shows the control met or broken, and one read-only command that tests the control against the tree.
 - `live_check` (optional): one read-only cloud command for the operator to run.
@@ -161,7 +168,8 @@ To build a pack from a NIST catalog, download the catalog with the refresh scrip
 The `frameworks` block of `service-manifest.json` picks the packs a train reads:
 
 - `frameworks.pack_dir`: a project-relative folder; each subfolder of it holding `pack.json` is one pack. A linked subfolder is skipped.
-- `frameworks.default_packs`: `true` (the default) also reads the shipped packs; `false` reads only the packs under `frameworks.pack_dir`.
+- `frameworks.default_packs`: `true` (the default) also reads the shipped packs that are on by default; `false` reads only the packs under `frameworks.pack_dir` and the packs `frameworks.packs` names.
+- `frameworks.packs`: a list of shipped pack ids to read even though they are off by default, such as `["cost-tier"]`. An id Daedalus does not ship stops the train, and the doctor names it.
 
 With no `frameworks` block, only the shipped packs are read. The manifest reader refuses any other key in the block.
 

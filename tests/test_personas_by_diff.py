@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -194,6 +195,51 @@ def test_dependency_auditor_asks_for_advisories_only_through_a_web_yield() -> No
         "Never run a package manager",
     ):
         assert phrase in text, phrase
+
+
+# 0189, 0192: the npm rows live in a rulebook file the audit dispatch names, never the agent body.
+NPM_RULEBOOK = REPO_ROOT / "packs" / "dependencies" / "npm.md"
+RULE_ROW = re.compile(r"^- (DEP-[A-Z0-9-]+): (\S.*)$")
+
+
+def _rule_rows(text: str) -> list[str]:
+    rows = text.split("\n## Rows\n", 1)[1].split("\n## ", 1)[0]
+    return [m.group(1) for line in rows.splitlines() if (m := RULE_ROW.match(line))]
+
+
+def test_npm_rulebook_parses_to_the_row_shape_the_auditor_judges() -> None:
+    agent_rows = _rule_rows((AGENTS / "dependency-auditor.md").read_text(encoding="utf-8"))
+    assert agent_rows == [f"DEP-{n}" for n in range(1, 8)]
+    text = NPM_RULEBOOK.read_text(encoding="utf-8")
+    assert text.startswith("<!-- Copyright (c) 2026 Brad Duhon.")
+    assert _rule_rows(text) == [f"DEP-NPM-{n}" for n in range(1, 5)]
+    body = text.split("\n## Rows\n", 1)[1]
+    assert all(line.startswith("- DEP-NPM-") for line in body.strip().splitlines())
+    for phrase in ("`git+`", "`file:`", "`postinstall`", "`minimumReleaseAge`"):
+        assert phrase in text, phrase
+    assert "DEP-NPM" not in (AGENTS / "dependency-auditor.md").read_text(encoding="utf-8")
+    assert "When the dispatch carries a `Rulebook: <path>` line, Read that file" in _flat(
+        AGENTS / "dependency-auditor.md"
+    )
+
+
+def test_audit_dispatch_names_the_npm_rulebook_when_an_npm_file_changed() -> None:
+    text = _phase("audit")
+    step = " ".join(text.split("dispatch `dependency-auditor`", 1)[1].split("\n", 1)[0].split())
+    assert (
+        "`Rulebook: ${CLAUDE_PLUGIN_ROOT}/packs/dependencies/npm.md` when the diff names "
+        "`package.json`, `package-lock.json`, `pnpm-lock.yaml` or `yarn.lock`"
+    ) in step
+
+
+def test_dependency_auditor_may_read_the_npm_rulebook(jail_fakes: None) -> None:
+    hook_input: dict[str, object] = {
+        "agent_type": "daedalus:dependency-auditor",
+        "tool_name": "Read",
+        "tool_input": {"file_path": str(NPM_RULEBOOK)},
+        "cwd": CWD,
+    }
+    assert first_deny(hook_input, CFG) is None
 
 
 def test_terraform_reviewer_checks_the_binary_before_any_tool_run() -> None:
