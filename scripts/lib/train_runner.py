@@ -594,6 +594,11 @@ def _plan_units(text: str) -> dict[str, tuple[str, str, str]]:
 
 
 def _plan_text(state: dict[str, object], check: bool) -> str | None:
+    data = _plan_bytes(state, check)
+    return None if data is None else data.decode("utf-8", errors="replace")
+
+
+def _plan_bytes(state: dict[str, object], check: bool) -> bytes | None:
     record = _obj(state, train_state.PLAN)
     path = _text(record, "path")
     if not path:
@@ -610,7 +615,7 @@ def _plan_text(state: dict[str, object], check: bool) -> str | None:
             f"the plan {path} changed after it was recorded. "
             f"Next: validate it, then rerun daedalus_train.py plan --path {path}."
         )
-    return data.decode("utf-8", errors="replace")
+    return data
 
 
 def _unit_key(state: dict[str, object], unit: dict[str, object]) -> str:
@@ -1367,15 +1372,18 @@ def contract(cwd: Path) -> Outcome:
     # 0156, 0182: a one-unit plan of at most 3 non-control files, no pin and `wire: none` skips.
     def edit(repo: Path, train_id: str) -> list[str]:
         state = train_state.load(repo, train_id)
-        before = _plan_text(state, True)
-        if before is None:
+        # issue 105: one read; the hash check, the parse and the skip rule share these bytes.
+        data = _plan_bytes(state, True)
+        if data is None:
             raise RunnerError(f"train {train_id} records no plan. Next: {_CONTRACT_RERUN}.")
         path = Path(_text(_obj(state, train_state.PLAN), "path"))
         try:
-            plan = plan_record.load(path)
-        except plan_record.PlanError as exc:
-            raise RunnerError(f"{exc} Next: {_CONTRACT_RERUN}.") from exc
-        text = _plan_text(state, True) or ""
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise RunnerError(
+                f"the plan file {path} could not be read ({exc}). Next: {_CONTRACT_RERUN}."
+            ) from exc
+        plan = plan_record.loads(text)
         if plan.defects:
             raise RunnerError(
                 f"the plan {path} has {len(plan.defects)} defect(s): {' '.join(plan.defects)} "

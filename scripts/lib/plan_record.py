@@ -370,6 +370,11 @@ def load(path: Path) -> Plan:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         raise PlanError(f"the plan file {path} could not be read ({exc}).") from exc
+    return loads(text)
+
+
+def loads(text: str) -> Plan:
+    # issue 105: parses text already read, so a caller hashes and parses the same bytes.
     lines = text.splitlines()
     opens = [i for i, line in enumerate(lines) if line.strip() == _FENCE_OPEN]
     if not opens:

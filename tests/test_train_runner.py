@@ -1104,6 +1104,46 @@ def test_control_path_readers_name_the_constant_and_its_paths(
             assert f"`{path}`" in text, (reader, path)
 
 
+def swap_later_reads(monkeypatch: pytest.MonkeyPatch, path: Path, text: str) -> list[Path]:
+    # issue 105: every read of `path` after the first returns `text`; the list counts the reads.
+    target = path.resolve()
+    seen: list[Path] = []
+    real_bytes, real_text = Path.read_bytes, Path.read_text
+
+    def read_bytes(self: Path) -> bytes:
+        if self.resolve() == target:
+            seen.append(self)
+            if len(seen) > 1:
+                return text.encode("utf-8")
+        return real_bytes(self)
+
+    def read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self.resolve() == target:
+            seen.append(self)
+            if len(seen) > 1:
+                return text
+        return real_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    monkeypatch.setattr(Path, "read_text", read_text)
+    return seen
+
+
+def test_contract_judges_the_hashed_bytes_when_a_later_read_differs(
+    repo: Path, plugin: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # issue 105: a skip plan swapped in after the hash check never reaches the skip rule.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    path = repo / "plan.md"
+    path.write_text(_files("a.py, b.py, c.py, d.py"), encoding="utf-8")
+    assert train_runner.record_plan(repo, path).code == 0
+    reads = swap_later_reads(monkeypatch, path, _skip_plan())
+    outcome = train_runner.contract(repo)
+    assert (outcome.code, outcome.lines) == (0, ["contract: required (4 files, more than 3)"])
+    assert len(reads) == 1 and "contract_skip" not in _state(repo)
+
+
 def test_contract_stops_on_no_plan_a_changed_plan_or_a_defect(repo: Path, plugin: Path) -> None:
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)

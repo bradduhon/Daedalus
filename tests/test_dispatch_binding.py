@@ -17,6 +17,7 @@ from lib.workspace import create, mark_train
 from tests.conftest import git as _git
 from tests.conftest import main_warning
 from tests.hook_chain import judge as decide
+from tests.test_train_runner import swap_later_reads
 
 TRAIN = "20261016-120000"
 OTHER = "20261015-090000"
@@ -91,6 +92,17 @@ def test_coder_dispatch_with_a_stale_plan_hash_is_refused(repo_cwd: Path, unit: 
     with path.open("a", encoding="utf-8") as handle:
         handle.write("\nA late edit.\n")
     _refused(repo_cwd, unit, "changed after it was recorded")
+
+
+def test_coder_dispatch_validates_the_hashed_bytes(
+    repo_cwd: Path, unit: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # issue 105: a defective plan read after the hash check never replaces the hashed bytes.
+    path = seed_plan(repo_cwd, TRAIN)
+    cycle = (PLANS / "serial_cycle.md").read_text(encoding="utf-8")
+    reads = swap_later_reads(monkeypatch, path, cycle)
+    _ok(repo_cwd, unit)
+    assert len(reads) == 1
 
 
 def test_plan_hash_is_over_the_file_bytes(repo_cwd: Path, unit: Path) -> None:
