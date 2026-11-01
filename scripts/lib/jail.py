@@ -231,7 +231,9 @@ _GLOBAL_VALUED: dict[str, frozenset[str]] = {
     "poetry": frozenset({"-C", "--directory", "-P", "--project"}),
     "composer": frozenset({"-d", "--working-dir"}),
     "go": frozenset({"-C"}),
-    **{name: shell._JS_VALUED for name in ("npm", "pnpm", "yarn", "bun")},
+    **{name: shell._JS_VALUED for name in ("pnpm", "yarn", "bun")},
+    # 0196: npm's -w is --workspace; pnpm's -w is a flag, so it stays npm only.
+    "npm": shell._JS_VALUED | {"-w"},
 }
 _VERB_STOPS: dict[str, frozenset[str]] = {
     "uv": frozenset({"run"}),
@@ -397,14 +399,22 @@ def _yarn_options_only(args: list[str]) -> bool:
     return True
 
 
+def _option_value(words: list[str], pos: int) -> bool:
+    # 0196: the word may be the value of an option written without =, long or short.
+    before = words[pos - 1] if pos else ""
+    if before == "--" or "=" in before:
+        return False
+    return before.startswith("--") or (len(before) == 2 and before[0] == "-")
+
+
 def _js_install(name: str, args: list[str]) -> InstallForm | None:
     # 0164: an install verb before any script or exec verb; bare yarn installs too.
     verbs, required, extras = _JS_FROZEN[name]
     if name == "yarn" and _yarn_options_only(args):
         return InstallForm(name, name, _frozen_flags(args, required, extras))
-    words = _unvalued(args, shell._JS_VALUED)
+    words = _unvalued(args, _GLOBAL_VALUED[name])
     for pos, arg in enumerate(words):
-        if arg in _EXEC_VERBS or arg in _SCRIPT_VERBS:
+        if (arg in _EXEC_VERBS or arg in _SCRIPT_VERBS) and not _option_value(words, pos):
             return None
         if arg == "audit" and "fix" in words[pos + 1 :]:
             return InstallForm(name, f"{name} audit fix")

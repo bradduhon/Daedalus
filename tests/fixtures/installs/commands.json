@@ -171,5 +171,10 @@
   {"command": "bun --cwd run add x", "kind": "refused"},
   {"command": "yarn --cwd run add three", "kind": "refused"},
   {"command": "uv --allow-insecure-host run add httpx", "kind": "refused"},
-  {"command": "uv --unlisted-option run add httpx", "kind": "refused"}
+  {"command": "uv --unlisted-option run add httpx", "kind": "refused"},
+  {"command": "npm --cache run install left-pad", "kind": "refused"},
+  {"command": "npm -w run install left-pad", "kind": "refused"},
+  {"command": "yarn --cache-folder run add three", "kind": "refused"},
+  {"command": "pnpm -w add x", "kind": "refused"},
+  {"command": "pnpm exec vitest run", "kind": "none"}
 ]
