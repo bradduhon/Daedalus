@@ -216,7 +216,30 @@ _UV_FROZEN = (frozenset({"--frozen", "--no-build"}),)
 _UV_PIP_EXTRAS = frozenset({"--offline", "-q", "--quiet"})
 _UV_PIP_FROZEN = (frozenset({"--require-hashes", "--no-build"}),)
 # 0196: yarn options whose value is the next word; the value is never a verb.
-_YARN_VALUED = shell._JS_VALUED | {"--mode"}
+_YARN_COMMANDS = INSTALL_VERBS | _SCRIPT_VERBS | {"exec", "dlx", "create", "workspace"}
+# 0196: each manager's global options whose value is the next word, and words that end the verb.
+_GLOBAL_VALUED: dict[str, frozenset[str]] = {
+    "uv": frozenset(
+        {"--directory", "--project", "--cache-dir", "--config-file", "--color", "--python"}
+    ),
+    "pip": frozenset(
+        {"--timeout", "--cache-dir", "--proxy", "--retries", "--index-url", "--log", "--python"}
+        | {"--extra-index-url", "--trusted-host"}
+    ),
+    "cargo": frozenset({"--color", "--config", "-Z", "--manifest-path", "--target-dir"}),
+    "poetry": frozenset({"-C", "--directory", "-P", "--project"}),
+    "composer": frozenset({"-d", "--working-dir"}),
+    "go": frozenset({"-C"}),
+    **{name: shell._JS_VALUED for name in ("npm", "pnpm", "yarn", "bun")},
+}
+_VERB_STOPS: dict[str, frozenset[str]] = {
+    "uv": frozenset({"run"}),
+    "cargo": frozenset({"run", "test", "bench"}),
+    "poetry": frozenset({"run"}),
+    "composer": frozenset({"run", "run-script", "exec"}),
+    "go": frozenset({"run", "test", "build", "vet", "generate", "tool"}),
+}
+_CARGO_VERBS = frozenset({"add", "install", "update", "generate-lockfile"})
 _CARGO_EXTRAS = frozenset(
     {"--offline", "--release", "-q", "--quiet", "--workspace", "--all-targets"}
 )
@@ -357,10 +380,23 @@ def _unvalued(args: list[str], valued: frozenset[str]) -> list[str]:
     return out
 
 
+def _yarn_options_only(args: list[str]) -> bool:
+    # 0196: a --option without = takes the next word as its value unless that word is a verb.
+    skip = False
+    for arg in args:
+        if skip and arg not in _YARN_COMMANDS:
+            skip = False
+            continue
+        if not arg.startswith("-"):
+            return False
+        skip = arg.startswith("--") and "=" not in arg
+    return True
+
+
 def _js_install(name: str, args: list[str]) -> InstallForm | None:
     # 0164: an install verb before any script or exec verb; bare yarn installs too.
     verbs, required, extras = _JS_FROZEN[name]
-    if name == "yarn" and all(a.startswith("-") for a in _unvalued(args, _YARN_VALUED)):
+    if name == "yarn" and _yarn_options_only(args):
         return InstallForm(name, name, _frozen_flags(args, required, extras))
     for pos, arg in enumerate(args):
         if arg in _EXEC_VERBS or arg in _SCRIPT_VERBS:
@@ -368,35 +404,43 @@ def _js_install(name: str, args: list[str]) -> InstallForm | None:
         if arg == "audit" and "fix" in args[pos + 1 :]:
             return InstallForm(name, f"{name} audit fix")
         if arg in INSTALL_VERBS:
-            rest = args[:pos] + args[pos + 1 :]
-            frozen = arg in verbs and _frozen_flags(rest, required, extras)
+            rest = args[pos + 1 :]
+            frozen = pos == 0 and arg in verbs and _frozen_flags(rest, required, extras)
             return InstallForm(name, f"{name} {arg}", frozen)
     return None
 
 
+def _verbs_in(name: str, args: list[str]) -> list[str]:
+    # 0196: positional words past the manager's valued options, up to a word that runs other code.
+    head = args[: args.index("--")] if "--" in args else args
+    words = [a for a in _unvalued(head, _GLOBAL_VALUED.get(name, frozenset())) if a[:1] != "-"]
+    stops = _VERB_STOPS.get(name, frozenset())
+    return list(itertools.takewhile(lambda w: w not in stops, words))
+
+
 def _pip_install(label: str, args: list[str]) -> InstallForm | None:
-    verb = _positional(args)
-    if verb not in _PIP_VERBS:
+    verb = next((w for w in _verbs_in("pip", args) if w in _PIP_VERBS), "")
+    if not verb:
         return None
-    frozen = verb == "install" and _pip_frozen(_without(args, verb))
+    frozen = args[:1] == ["install"] and _pip_frozen(args[1:])
     return InstallForm("pip", f"{label} {verb}", frozen)
 
 
 def _uv_install(args: list[str]) -> InstallForm | None:
     # 0196: add, lock and pip install resolve; sync and pip sync pass frozen with --no-build.
-    words = [a for a in args if not a.startswith("-")]
-    head, sub = (words + ["", ""])[:2]
+    words = _verbs_in("uv", args)
+    at = next((i for i, w in enumerate(words) if w in {"add", "lock", "sync", "tool", "pip"}), -1)
+    head, sub = (words[at:] + ["", ""])[:2] if at >= 0 else ("", "")
     if head in {"add", "lock"} or (head == "tool" and sub in {"install", "upgrade"}):
         return InstallForm("uv", f"uv {head}")
     if head == "sync":
-        return InstallForm(
-            "uv",
-            "uv sync",
-            _frozen_flags(_without(args, head), _UV_FROZEN, _UV_SYNC_EXTRAS),
-        )
+        frozen = args[:1] == ["sync"] and _frozen_flags(args[1:], _UV_FROZEN, _UV_SYNC_EXTRAS)
+        return InstallForm("uv", "uv sync", frozen)
     if head != "pip" or sub not in {"install", "sync", "compile"}:
         return None
-    rest = _without(args, head, sub)
+    if args[:2] != ["pip", sub]:
+        return InstallForm("uv", f"uv pip {sub}")
+    rest = args[2:]
     files = [a for a in rest if not a.startswith("-")]
     flags = [a for a in rest if a.startswith("-")]
     frozen = (
@@ -409,27 +453,31 @@ def _uv_install(args: list[str]) -> InstallForm | None:
 
 
 def _cargo_install(args: list[str]) -> InstallForm | None:
-    verb = next((a for a in args if not a.startswith(("-", "+"))), "")
-    if verb in {"add", "install", "update", "generate-lockfile"}:
+    # 0196: a +toolchain word may lead the frozen form; no option may.
+    words = [w for w in _verbs_in("cargo", args) if not w.startswith("+")]
+    verb = next((w for w in words if w in _CARGO_VERBS | {"fetch", "build"}), "")
+    if verb in _CARGO_VERBS:
         return InstallForm("cargo", f"cargo {verb}")
-    if verb in {"fetch", "build"}:
-        rest = [a for a in _without(args, verb) if not a.startswith("+")]
-        return InstallForm(
-            "cargo", f"cargo {verb}", _frozen_flags(rest, _CARGO_LOCKS, _CARGO_EXTRAS)
+    if verb:
+        lead = 1 if args[:1] and args[0].startswith("+") else 0
+        frozen = args[lead : lead + 1] == [verb] and _frozen_flags(
+            args[lead + 1 :], _CARGO_LOCKS, _CARGO_EXTRAS
         )
+        return InstallForm("cargo", f"cargo {verb}", frozen)
     return None
 
 
 def _go_install(args: list[str]) -> InstallForm | None:
-    words = [a for a in args if not a.startswith("-")]
-    head, sub = (words + ["", ""])[:2]
+    words = _verbs_in("go", args)
+    at = next((i for i, w in enumerate(words) if w in {"get", "install", "mod", "work"}), -1)
+    head, sub = (words[at:] + ["", ""])[:2] if at >= 0 else ("", "")
     if head in {"get", "install"}:
         return InstallForm("go", f"go {head}")
     if (head, sub) in {("mod", "tidy"), ("work", "sync")}:
         return InstallForm("go", f"go {head} {sub}")
     if (head, sub) == ("mod", "download"):
-        rest = _without(args, head, sub)
-        return InstallForm("go", "go mod download", set(rest) <= {"-x", "-json"})
+        frozen = args[:2] == ["mod", "download"] and set(args[2:]) <= {"-x", "-json"}
+        return InstallForm("go", "go mod download", frozen)
     return None
 
 
@@ -458,9 +506,8 @@ def _install_at(name: str, args: list[str], head: bool) -> InstallForm | None:
     if name in {"bundle", "bundler"} and head and all(a.startswith("-") for a in args):
         return InstallForm(name, name)
     verbs = _NO_FROZEN.get(name)
-    if verbs is not None and _positional(args) in verbs:
-        return InstallForm(name, f"{name} {_positional(args)}")
-    return None
+    verb = next((w for w in _verbs_in(name, args) if w in verbs), "") if verbs else ""
+    return InstallForm(name, f"{name} {verb}") if verb else None
 
 
 def install_form(segment: list[str]) -> InstallForm | None:
@@ -506,6 +553,7 @@ def _leading_opts(args: list[str]) -> list[str]:
 def _download_at(name: str, args: list[str]) -> tuple[str, str] | None:
     # 0164, 0196: the launcher a command word starts and the installed form its refusal names.
     head = args[: args.index("--")] if "--" in args else args
+    head = _unvalued(head, _GLOBAL_VALUED.get(name, frozenset()))
     words = [a for a in head if not a.startswith("-")]
     if name in {"bunx", "pnpx"}:
         return name, JS_INSTALLED
