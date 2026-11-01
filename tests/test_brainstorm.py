@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from tests.conftest import REPO_ROOT
 
 BRAINSTORM = REPO_ROOT / "skills" / "brainstorm" / "SKILL.md"
@@ -130,16 +132,56 @@ def test_folder_run_writes_the_spec_and_plan_into_out() -> None:
     assert "with Read and Write" not in text
 
 
-def test_round_loop_prints_as_written_and_returns_answers_unchanged() -> None:
-    text = _text()
-    step6, step7 = _flat(_step(text, 6)), _flat(_step(text, 7))
-    assert "`[STATUS: ROUND] round=<k> ...` or `[STATUS: SPEC] round=<k> ...`" in step6
-    assert "print the reply text above the status line exactly as written" in step6
-    assert "Do not summarise, reorder or reword it." in step6
-    assert "Anything else: stop and show the reply's last 10 lines. Next:" in step6
-    assert '`SendMessage(planner, "ANSWERS round=<k>:\\n<the operator\'s text>")`' in step7
-    assert "Never paraphrase an answer and never answer for the operator." in step7
-    assert "`the spec stands`" in step7 and "`stop`" in step7
+ROUND_LOOP = (
+    "`[STATUS: ROUND] round=<k> ...` or `[STATUS: SPEC] round=<k> ...`",
+    "one question per numbered item, through AskUserQuestion (0198)",
+    "The question tool is the channel, never a paraphrase.",
+    "Do not summarise, reorder or reword the planner's text.",
+    "Split the reply text above the status line by the planner's own numbering.",
+    "Preamble, printed once. Before the first question, print exactly as written",
+    "the `What I take you to want:` paragraph",
+    "everything after the last item",
+    "The question is the item's full text verbatim, its `Rests on:` line included",
+    '"Type your answer, or pick one of the options."',
+    "Each description is the option's full text verbatim.",
+    "its label ends with `(Recommended)`",
+    "`Accept as proposed`, whose description is the item's proposal sentence verbatim",
+    '`Reply in my words`, whose description is "Type your answer in the box."',
+    "The operator's typed text is always an answer.",
+    "At most four questions go in one AskUserQuestion call.",
+    "Ask consecutive calls in item order until every item is asked.",
+    "multiSelect is false.",
+    "never the planner's text",
+    "Anything else: stop and show the reply's last 10 lines. Next:",
+)
+ANSWER_LOOP = (
+    "Return the operator's answers unchanged, in item order, as one message:",
+    '`SendMessage(planner, "ANSWERS round=<k>:\\n1: <answer>\\n2: <answer>\\n...")`',
+    "one `<n>: <answer>` line per item",
+    "A typed answer is relayed as typed.",
+    '`SendMessage(planner, "ANSWERS round=<k>:\\n<the operator\'s text>")`',
+    "Never paraphrase an answer and never answer for the operator.",
+    "whether typed as any answer or picked: `the spec stands` starts the hand-off",
+    "and `stop` ends the skill (step 12)",
+)
+
+
+@pytest.mark.parametrize("phrase", ROUND_LOOP)
+def test_round_loop_asks_each_item_verbatim_through_the_question_tool(phrase: str) -> None:
+    # 0198: one AskUserQuestion question per numbered item, the planner's words unaltered.
+    assert phrase in _flat(_step(_text(), 6)), phrase
+
+
+@pytest.mark.parametrize("phrase", ANSWER_LOOP)
+def test_answers_go_back_in_item_order_as_one_message(phrase: str) -> None:
+    assert phrase in _flat(_step(_text(), 7)), phrase
+
+
+def test_preamble_precedes_the_questions_and_the_description_names_the_channel() -> None:
+    step6 = _flat(_step(_text(), 6))
+    assert step6.index("Preamble, printed once.") < step6.index("One question per item.")
+    assert "print the reply text above the status line exactly as written" not in step6
+    assert "asks each numbered item exactly as written" in _text().split("\n---", 1)[0]
 
 
 def test_web_route_resumes_the_planner_inside_the_marker_lines_with_no_cap() -> None:
