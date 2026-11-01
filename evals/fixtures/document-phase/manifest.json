@@ -1,0 +1,23 @@
+{
+  "manifest_version": 1,
+  "service_name": "helpdesk",
+  "purpose": "Frozen customer documents a derived FAQ is built from, used by the Daedalus golden set.",
+  "stack": {
+    "language": "markdown",
+    "runtime": null,
+    "unit_test_cmd": null,
+    "typecheck_cmd": null,
+    "lint_cmd": null
+  },
+  "features": {
+    "scope": "repository",
+    "secrets_scan": false,
+    "scrub_file": null,
+    "ledger": false,
+    "dependency_web_lookup": false,
+    "terraform_tools": false
+  },
+  "jail_narrowing": { "forbidden_paths": [], "forbidden_extensions": [] },
+  "docs": { "literacy": "plain" },
+  "ledger": null
+}
