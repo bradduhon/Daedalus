@@ -4,7 +4,7 @@
   "description": "A small sample train that the validator accepts as sound",
   "scopes": ["repository", "folder"],
   "gates": ["contract-lock", "build", "merge"],
-  "consults": {"contract-lock": ["framework-specialist"], "build": ["web-researcher"], "merge": []},
+  "consults": {"contract-lock": ["auditor"], "build": ["web-researcher"], "merge": []},
   "stages": [
     {
       "id": "contract",

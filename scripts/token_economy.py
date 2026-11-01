@@ -95,9 +95,6 @@ BUILD_PHASES = {
     "web-researcher": "2",
     "auditor": "3",
     "writer": "3",
-    "framework-specialist": "3",
-    "terraform-reviewer": "3",
-    "dependency-auditor": "3",
 }
 UNIT_AGENTS = frozenset({CODER, VERIFIER})
 ROUND_AGENTS = frozenset({"auditor"})

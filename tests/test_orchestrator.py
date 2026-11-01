@@ -625,7 +625,7 @@ def test_each_phase_line_reads_its_skill_by_the_full_plugin_root() -> None:
     for overlap in (
         "the plan beside the standards packet",
         "verify per unit while later units build",
-        "the compliance judges beside the audit worktree creation",
+        "the compliance rulebook pick beside the audit worktree creation",
         "the docs writer after the security verdict record",
     ):
         assert overlap in flat, overlap

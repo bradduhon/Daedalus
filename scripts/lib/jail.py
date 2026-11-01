@@ -2129,7 +2129,7 @@ def _env_walk_reason(
 
 
 def rg_reason(command: str, cwd: str) -> str | None:
-    # 113: the specialist's rg judgement as one call; packs.py judges each pack verify by it.
+    # 113, 0186: the frameworks rulebook's rg judgement as one call; packs.py judges verifies by it.
     chain = shell.worker_parse(command)
     if chain is None or len(chain.tokens) != 1 or chain.tokens[0][:1] != ["rg"]:
         return R_RG_ONE

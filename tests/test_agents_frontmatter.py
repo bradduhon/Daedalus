@@ -21,30 +21,24 @@ EXPECTED_MODEL = {
     "releaser": "opus",
     "contract-spec": "sonnet",
     "charter-docs": "sonnet",
-    "framework-specialist": "sonnet",
     "web-researcher": "haiku",
     "planner": "opus",
     "orchestrator": "fable",
     "verifier": "opus",
-    "dependency-auditor": "sonnet",
-    "terraform-reviewer": "sonnet",
     "writer": "opus",
     "comparer": "opus",
 }
 # 0089: phase affinities guide the session's choice of agent; they never gate a phase.
 EXPECTED_PHASES = {
     "coder": ("implementation",),
-    "auditor": ("audit",),
+    "auditor": ("implementation", "audit"),
     "contract-spec": ("clarification", "plan"),
     "charter-docs": ("clarification", "commit", "release"),
     "releaser": ("commit", "release"),
-    "framework-specialist": ("clarification", "audit"),
     "web-researcher": ("context",),
     "planner": ("clarification", "plan"),
     "orchestrator": ("context", "clarification", "plan", "implementation", "audit"),
     "verifier": ("implementation",),
-    "dependency-auditor": ("audit",),
-    "terraform-reviewer": ("audit",),
     "writer": ("implementation", "audit"),
     "comparer": ("implementation",),
 }
@@ -385,28 +379,26 @@ def test_charter_docs_probe_status_and_dash_rule() -> None:
     assert "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_ledger.py" not in text
 
 
-FRAMEWORK = AGENTS / "framework-specialist.md"
-JUDGE_CONTRACT = (
-    "Your reply ends with exactly one of these, nothing after it.\n"
-    "- `[STATUS: PACK_INVALID] <pack id>: <problem>`\n"
-    "- `[STATUS: COMPLIANCE] <PASS/FAIL list with pack control ids, refs ids and file:line>`\n"
+FRAMEWORK = REPO_ROOT / "packs" / "judges" / "frameworks.md"
+QUESTION_LINE = (
+    "- `[STATUS: COMPLIANCE] <control ids with pack ids and refs ids>` as the last line in "
+    "compliance-question mode only: an answer to a coder's question, not a verdict.\n"
 )
 
 
-def test_framework_specialist_reads_only_its_packs_line() -> None:
-    # 0157 (12.2): controls come from the Packs: folders only; no cache, OWASP file or fetcher.
+def test_frameworks_rulebook_reads_only_its_packs_line() -> None:
+    # 0157 (12.2), 0186: controls come from the Packs: folders only; no cache, OWASP or fetcher.
     text = FRAMEWORK.read_text()
     assert "`Packs: <absolute pack folder>[, <absolute pack folder>...]`" in text
-    assert "You read\ncontrols only from those folders" in text
+    assert "Read controls only from those folders." in text
     for gone in ("<cache dir>", "asvs-5.0.0.json", "refresh_frameworks.py", "references/"):
         assert gone not in text, gone
-    # 0024: the body carries no $ or {, so nothing is substituted at load.
-    body = text.split("---\n", 2)[2]
-    assert "$" not in body and "{" not in body
+    # 0024: the rulebook carries no $ or {, so nothing is substituted when it is read.
+    assert "$" not in text and "{" not in text
 
 
-def test_framework_specialist_keeps_the_judge_method_and_rubric() -> None:
-    # 0024: the merged agent keeps the NIST judge's rubric rules and verdict shape.
+def test_frameworks_rulebook_keeps_the_judge_method_and_rubric() -> None:
+    # 0024: the folded rulebook keeps the NIST judge's rubric rules and verdict shape.
     text = FRAMEWORK.read_text()
     method = text.split("\n## Method\n", 1)[1].split("\n## ", 1)[0]
     assert "PASS, FAIL or N/A" in method
@@ -417,12 +409,12 @@ def test_framework_specialist_keeps_the_judge_method_and_rubric() -> None:
         "FAIL means the diff contradicts the control.",
         "N/A needs a one-line reason.",
         "never PASS on absence of evidence",
-        "Never quote\n  benchmark text",
+        "Never quote benchmark text",
     ):
         assert rule in rubric, rule
 
 
-def test_framework_specialist_treats_pack_text_as_data() -> None:
+def test_frameworks_rulebook_treats_pack_text_as_data() -> None:
     # 113, prepush-2026-10-27 finding 2: a verify runs as the jail admits it, never edited.
     method = " ".join(
         FRAMEWORK.read_text().split("\n## Method\n", 1)[1].split("\n## ", 1)[0].split()
@@ -434,24 +426,28 @@ def test_framework_specialist_treats_pack_text_as_data() -> None:
         assert flag in method, flag
 
 
-def test_framework_specialist_checks_each_pack_first() -> None:
-    # 0157: each pack is hashed against pack.json before any control is read; age is noted.
+def test_frameworks_rulebook_checks_each_pack_first() -> None:
+    # 0157, 0186: each pack is hashed before any control is read; a failure is a blocking row.
     phase0 = FRAMEWORK.read_text().split("## Phase 0", 1)[1].split("\n## ", 1)[0]
     for key in ("`sha256`", "`pinned_on`", "`daedalus-controls/1`", "sha256sum"):
         assert key in phase0, key
-    assert "`[STATUS: PACK_INVALID] <pack id>: <problem>`" in phase0
+    assert "`PACK_INVALID <pack id>: <problem>`" in phase0
+    assert "It is a blocking finding" in phase0
     assert "90 days" in phase0
 
 
-def test_framework_specialist_keeps_its_status_contract() -> None:
-    text = FRAMEWORK.read_text()
-    assert text.split("## Status contract\n", 1)[1] == JUDGE_CONTRACT
+def test_auditor_status_contract_carries_the_compliance_question_mode() -> None:
+    # 0186: the verdict lines stay first; the question mode answers with no verdict line.
+    text = (AGENTS / "auditor.md").read_text()
+    contract = text.split("## Status contract\n", 1)[1]
+    assert contract.endswith(QUESTION_LINE)
+    assert "`Mode: compliance-question`" in text and "## Compliance" in contract
 
 
 def test_old_specialist_agents_are_gone() -> None:
     # 0157 (12.4): no alias for the two old agent names, and no agent names the fetcher.
-    # 0186: the standards specialist folded into skills/plan/standards/SKILL.md.
-    assert sorted(AGENTS.glob("*-specialist.md")) == [FRAMEWORK]
+    # 0186: the standards, framework, terraform and dependency judges folded into rulebooks.
+    assert sorted(AGENTS.glob("*-specialist.md")) == []
     assert [p.name for p in AGENTS.glob("*.md") if "refresh_frameworks.py" in p.read_text()] == []
 
 
@@ -586,7 +582,9 @@ def test_auditor_frontmatter_grants_audit_writes_and_test_runs() -> None:
     assert auditor.shape == "judge" and auditor.model == "opus"
     assert auditor.tools == frozenset({"Read", "Grep", "Glob", "Bash", "Write", "Edit"})
     assert Hook("root_writes", ("--touch", "audit")) in auditor.hooks
-    assert Hook("read_only_bash", ("--git", "read-only", "--test-runner", "audit")) in auditor.hooks
+    # 0186, 0188: the judge folds widen the read check by --terraform alone.
+    reads = ("--git", "read-only", "--test-runner", "audit", "--terraform")
+    assert Hook("read_only_bash", reads) in auditor.hooks
     disallowed = _list(frontmatter(AUDITOR)["disallowedTools"], AUDITOR)
     assert {"MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Agent", "Task"} <= disallowed
 
@@ -654,7 +652,8 @@ def test_auditor_grep_commands_pass_the_jail(monkeypatch: pytest.MonkeyPatch) ->
 
 
 # Train 10 audit-miss diagnosis S3: the tool surface help fallback.
-YIELD = "[STATUS: YIELD_WEB] <tool> options and config files"
+YIELD = "[STATUS: YIELD_WEB] <query>"
+ANSWER = "[STATUS: COMPLIANCE] <control ids with pack ids and refs ids>"
 
 
 def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
@@ -664,18 +663,24 @@ def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
     assert contract == (
         "Your reply starts with exactly one of these verdict lines as its first line and ends with"
         " the\nsame verdict line, alone, as its last line. This holds for every reply, fix rounds"
-        " included,\nexcept the tool surface yield below. The `tip=` value is the 40 lowercase hex"
-        " step 0 printed.\n"
-        f"- `[VERDICT: APPROVED] {tip}` then `<paragraph>` then `[VERDICT: APPROVED] {tip}`\n"
-        f"- `[VERDICT: REJECTED] {tip}` then `<itemized findings>`"
+        " included,\nexcept the web yield and the compliance-question mode below. The `tip=` value"
+        " is the 40\nlowercase hex step 0 printed. The `## Compliance` section sits right before"
+        " the closing line.\n"
+        f"- `[VERDICT: APPROVED] {tip}` then `<paragraph>` and `## Compliance`"
+        f" then `[VERDICT: APPROVED] {tip}`\n"
+        f"- `[VERDICT: REJECTED] {tip}` then `<itemized findings>` and `## Compliance`"
         f" then `[VERDICT: REJECTED] {tip}`\n"
-        f"- `{YIELD}` as both the first and the last line: a question, not a verdict; the next"
-        " prompt resumes the round.\n"
+        f"- `{YIELD}` as both the first and the last line, `<tool> options and config files` or a"
+        " dependencies rulebook advisory query: a question, not a verdict; the next prompt resumes"
+        " the round.\n"
+        f"- `{ANSWER}` as the last line in compliance-question mode only: an answer to a coder's"
+        " question, not a verdict.\n"
     )
     assert load(AUDITOR).status_lines == (
         f"[VERDICT: APPROVED] {tip}",
         f"[VERDICT: REJECTED] {tip}",
         YIELD,
+        ANSWER,
     )
 
 

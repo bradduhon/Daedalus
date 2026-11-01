@@ -153,7 +153,7 @@ def test_an_rg_whitelist_glob_reaching_the_reply_key_is_denied(
 @pytest.mark.parametrize("command", FIX1_RG_GLOBS_ALLOWED)
 def test_an_rg_glob_naming_no_hidden_folder_still_passes(tmp_path: Path, command: str) -> None:
     # SC-12: the shipped pack verify globs (*.tf, *.yml) stay admitted beside a reply key.
-    d = decide(_bash_in(_key_repo(tmp_path), "framework-specialist", command), CFG)
+    d = decide(_bash_in(_key_repo(tmp_path), "auditor", command), CFG)
     assert d.allow, (command, d.reason)
 
 
@@ -190,7 +190,7 @@ def test_grep_tool_pack_globs_still_pass(tmp_path: Path) -> None:
     repo = _key_repo(tmp_path)
     for glob in ("*.tf", "**/*.py", "*Dockerfile*", "src/**"):
         tool_input = {"pattern": ".", "glob": glob, "path": str(repo)}
-        d = decide(_cred("framework-specialist", "Grep", cwd=str(repo), **tool_input), CFG)
+        d = decide(_cred("auditor", "Grep", cwd=str(repo), **tool_input), CFG)
         assert d.allow, (glob, d.reason)
 
 
@@ -218,9 +218,9 @@ def test_an_ignore_file_without_a_whitelist_line_still_passes(tmp_path: Path) ->
     (repo / ".rgignore").write_text("build/\n# !kept\n", encoding="utf-8")
     (repo / "src" / ".ignore").write_text("!*\n", encoding="utf-8")
     for command in PREPUSH_IGNORE_SEARCHES[:2] + ("rg -l token src",):
-        d = decide(_bash_in(repo, "framework-specialist", command), CFG)
+        d = decide(_bash_in(repo, "auditor", command), CFG)
         assert d.allow, (command, d.reason)
-    d = decide(_cred("framework-specialist", "Grep", cwd=str(repo), pattern="."), CFG)
+    d = decide(_cred("auditor", "Grep", cwd=str(repo), pattern="."), CFG)
     assert d.allow, d.reason
 
 
@@ -245,7 +245,7 @@ def test_a_leading_space_bang_line_is_refused_fail_closed(
     repo = _key_repo(tmp_path)
     (repo / name).write_text(body, encoding="utf-8")
     for command in PREPUSH_IGNORE_SEARCHES:
-        assert_denied(_bash_in(repo, "framework-specialist", command), REPLY_KEY, CREDENTIAL)
+        assert_denied(_bash_in(repo, "auditor", command), REPLY_KEY, CREDENTIAL)
 
 
 # prepush2-2026-10-27 item 7: a value glued to rg's value-taking short flag is no flag letter.
@@ -263,7 +263,7 @@ GLUED_VALUES = (
 @pytest.mark.parametrize("command", GLUED_VALUES)
 def test_a_glued_short_flag_value_is_not_read_as_flags(tmp_path: Path, command: str) -> None:
     repo = _key_repo(tmp_path)
-    d = decide(_bash_in(repo, "framework-specialist", command), CFG)
+    d = decide(_bash_in(repo, "auditor", command), CFG)
     assert d.allow, (command, d.reason)
     assert jail.rg_reason(command, str(repo)) is None
 
@@ -272,5 +272,5 @@ def test_a_glued_short_flag_value_is_not_read_as_flags(tmp_path: Path, command: 
 def test_a_reach_letter_before_the_value_flag_still_refuses(tmp_path: Path, command: str) -> None:
     # prepush2-2026-10-27 item 7: only letters after the value-taking flag are its value.
     repo = _key_repo(tmp_path)
-    assert_denied(_bash_in(repo, "framework-specialist", command))
+    assert_denied(_bash_in(repo, "auditor", command))
     assert jail.rg_reason(command, str(repo)) == jail.R_RG_REACH

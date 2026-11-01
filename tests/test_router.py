@@ -266,7 +266,6 @@ DENIALS = {
         "root_writes",
     ),
     "verifier": (_input("verifier", "Write", file_path=f"{CWD}/docs/x.md"), "tool_bound"),
-    "framework-specialist": (_input("framework-specialist", command="curl x"), "network_tools"),
     "web-researcher": (_input("web-researcher", command="ls"), "tool_bound"),
     "planner": (_input("planner", command="ls"), "tool_bound"),
     "releaser": (
@@ -277,12 +276,7 @@ DENIALS = {
         _input("daedalus:orchestrator", "Agent", subagent_type="general-purpose", prompt="x"),
         "dispatch_gate",
     ),
-    # 0132, 0134: the three persona files; each first deny is a hook of its copied list.
-    "dependency-auditor": (_input("dependency-auditor", "WebFetch", url="https://x"), "tool_bound"),
-    "terraform-reviewer": (
-        _input("terraform-reviewer", command="terraform apply"),
-        "command_allowlist",
-    ),
+    # 0134: the writer; its first deny is a hook of its copied list.
     "writer": (_input("writer", command="git push origin x"), "git_push"),
     # 0135: the comparer.
     "comparer": (_input("comparer", "Edit", file_path=f"{CWD}/x.md"), "tool_bound"),

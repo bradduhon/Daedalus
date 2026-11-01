@@ -39,7 +39,7 @@ class Features:
     secrets_scan: bool = False
     scrub_file: str | None = None
     ledger: bool | None = None
-    # 0132: true, false or null; only false turns the dependency auditor's web lookup off.
+    # 0132: true, false or null; only false turns the auditor's dependency web lookup off.
     dependency_web_lookup: bool | None = None
     # 0132: true, false or null; only false turns off terraform fmt -check and validate.
     terraform_tools: bool | None = None

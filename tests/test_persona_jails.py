@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 0132, 0134: the docs writer's worktree binding and write scope, and the terraform class.
+# 0132, 0134, 0186: the docs writer's binding and write scope, and the auditor's terraform class.
 from __future__ import annotations
 
 import json
@@ -23,7 +23,8 @@ from tests.test_dispatch_binding import TRAIN, seed_plan
 DOCS = f"{TRAIN}-docstage"
 WRITER = "daedalus:writer"
 AGENTS = REPO_ROOT / "agents"
-ALLOW = ("--allow", "terraform,inspect")
+ALLOW = ("--git", "read-only", "--test-runner", "audit", "--terraform")
+READS = "read_only_bash"
 
 
 @pytest.fixture
@@ -179,12 +180,12 @@ def test_public_docs_writer_bash_writes_stay_on_the_public_docs(
         assert "(0134)" in str(reason), reason
 
 
-# Requirement 3: the terraform class admits fmt -check and validate only.
+# Requirement 3: the auditor's terraform class admits fmt -check and validate only.
 
 
 def _tf(repo: Path, command: str) -> dict[str, Any]:
     return {
-        "agent_type": "daedalus:terraform-reviewer",
+        "agent_type": "daedalus:auditor",
         "agent_id": "tf-1",
         "tool_name": "Bash",
         "tool_input": {"command": command},
@@ -208,7 +209,7 @@ def test_terraform_class_admits_the_two_checks(repo_cwd: Path, command: str) -> 
     manifest = repo_cwd / "service-manifest.json"
     manifest.write_text(json.dumps({"features": {"terraform_validate": True}}), encoding="utf-8")
     payload = _tf(repo_cwd, command.format(repo=repo_cwd))
-    assert evaluate("command_allowlist", payload, *ALLOW) is None
+    assert evaluate(READS, payload, *ALLOW) is None
     assert first_deny(payload, Config()) is None
 
 
@@ -228,9 +229,9 @@ def test_terraform_class_admits_the_two_checks(repo_cwd: Path, command: str) -> 
     ],
 )
 def test_terraform_class_refuses_every_other_form(repo_cwd: Path, command: str) -> None:
-    reason = evaluate("command_allowlist", _tf(repo_cwd, command.format(repo=repo_cwd)), *ALLOW)
+    reason = evaluate(READS, _tf(repo_cwd, command.format(repo=repo_cwd)), *ALLOW)
     assert reason is not None, command
-    # 0132: a path to a binary is no terraform segment, so the class list refuses it.
+    # 0132: a path to a binary is no terraform segment, so the read check refuses it.
     assert "(0132)" in reason if command.startswith("terraform") else "Next:" in reason, reason
 
 
@@ -238,31 +239,50 @@ def test_terraform_class_refuses_both_checks_when_the_switch_is_off(repo_cwd: Pa
     manifest = repo_cwd / "service-manifest.json"
     manifest.write_text(json.dumps({"features": {"terraform_tools": False}}), encoding="utf-8")
     for command in ("terraform fmt -check", "terraform validate"):
-        reason = evaluate("command_allowlist", _tf(repo_cwd, command), *ALLOW)
+        reason = evaluate(READS, _tf(repo_cwd, command), *ALLOW)
         assert reason is not None and reason.startswith("features.terraform_tools is false")
     on = {"terraform_tools": True, "terraform_validate": True}
     manifest.write_text(json.dumps({"features": on}), encoding="utf-8")
-    assert evaluate("command_allowlist", _tf(repo_cwd, "terraform validate"), *ALLOW) is None
+    assert evaluate(READS, _tf(repo_cwd, "terraform validate"), *ALLOW) is None
 
 
 def test_terraform_class_fails_closed_on_an_unreadable_manifest(repo_cwd: Path) -> None:
     (repo_cwd / "service-manifest.json").write_text("{not json", encoding="utf-8")
-    reason = evaluate("command_allowlist", _tf(repo_cwd, "terraform validate"), *ALLOW)
+    reason = evaluate(READS, _tf(repo_cwd, "terraform validate"), *ALLOW)
     assert reason is not None and reason.startswith("the service manifest could not be read")
 
 
 def test_terraform_needs_its_class(repo_cwd: Path) -> None:
-    payload = _tf(repo_cwd, "terraform validate")
-    assert evaluate("command_allowlist", payload, "--allow", "inspect") is not None
+    # 0186, 0188: the verifier's read check carries no --terraform, so it refuses both forms.
+    payload = {**_tf(repo_cwd, "terraform fmt -check"), "agent_type": "daedalus:verifier"}
+    assert evaluate(READS, payload, "--git", "read-only", "--test-runner", "unit") is not None
+    assert first_deny(payload, Config()) is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd {repo} && terraform fmt -check",
+        "cd /etc && terraform validate",
+        "cd {repo}/infra && terraform -chdir={repo}/infra fmt -check",
+    ],
+)
+def test_terraform_after_a_cd_is_refused(repo_cwd: Path, command: str) -> None:
+    # 0188: the terraform folder is judged against the hook cwd, so no cd may move it first.
+    manifest = repo_cwd / "service-manifest.json"
+    manifest.write_text(json.dumps({"features": {"terraform_validate": True}}), encoding="utf-8")
+    (repo_cwd / "infra").mkdir(exist_ok=True)
+    reason = evaluate(READS, _tf(repo_cwd, command.format(repo=repo_cwd)), *ALLOW)
+    assert reason is not None and "terraform check follows it" in reason, reason
 
 
 # Requirement 4: the agent files name the class and the narrowed write check.
 
 
 def test_agent_files_name_the_new_class_and_the_narrowed_check() -> None:
-    reviewer = load(AGENTS / "terraform-reviewer.md")
-    assert Hook("command_allowlist", ALLOW) in reviewer.hooks
-    assert "read_only_bash" not in {h.script for h in reviewer.hooks}
+    auditor = load(AGENTS / "auditor.md")
+    assert Hook(READS, ALLOW) in auditor.hooks
+    assert "command_allowlist" not in {h.script for h in auditor.hooks}
     writer = load(AGENTS / "writer.md")
     assert Hook("unit_writes", ("--docs",)) in writer.chains()["public-docs"]
     coder = load(AGENTS / "coder.md")

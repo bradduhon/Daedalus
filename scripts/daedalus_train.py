@@ -123,7 +123,7 @@ def _parser() -> argparse.ArgumentParser:
     ask = sub.add_parser("ask-check")
     ask.add_argument("--repo", type=Path, required=True)
     ask.add_argument("--file", type=Path, required=True)
-    # prepush-2026-10-27 finding 6, 0157: the pack check before any framework specialist runs.
+    # prepush-2026-10-27 finding 6, 0157: the pack check before any frameworks rulebook runs.
     packs_cmd = sub.add_parser("packs")
     packs_cmd.add_argument("--repo", type=Path, required=True)
     # 0192: the audit's merged range; a pack with triggers is listed only on a matching path.

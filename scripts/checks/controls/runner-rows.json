@@ -12,7 +12,7 @@
     "premise_test": "tests/test_confine.py::test_a_watch_mode_is_refused_bare_and_wrapped"
   },
   "shell.R_TERRAFORM_MUTATE": {
-    "failure": "0158: a coder or the terraform reviewer runs terraform apply, destroy, import, state or taint, bare or under the kernel wrapper, and changes infrastructure or state",
+    "failure": "0158: a coder or the auditor runs terraform apply, destroy, import, state or taint, bare or under the kernel wrapper, and changes infrastructure or state",
     "premise_test": "tests/test_confine.py::test_a_terraform_state_change_is_refused_bare_and_wrapped"
   },
   "shell.R_TERRAFORM_OPERATOR": {

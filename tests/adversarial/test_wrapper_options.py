@@ -175,3 +175,11 @@ def test_each_game_runner_is_refused_bare_and_admitted_wrapped(command: str) -> 
     wrapped = _b("coder", f"cd {WT} && {shell.CONFINE_PATH} --unit {WT} -- {command}")
     decision = decide(wrapped, CFG)
     assert decision.allow and not decision.warn, (command, decision.reason)
+
+
+@pytest.mark.parametrize("command", TERRAFORM_MUTATIONS + TERRAFORM_OPERATOR_FORMS)
+def test_the_auditor_runs_no_other_terraform_form_bare_wrapped_or_after_a_cd(command: str) -> None:
+    # 0186, 0188: the auditor's terraform class admits fmt -check and validate only.
+    wrapped = f"{shell.CONFINE_PATH} --unit {WT} -- {command}"
+    for form in (command, wrapped, f"cd {WT} && {command}", f"cd {WT} && terraform validate"):
+        assert_denied(_b("auditor", form))

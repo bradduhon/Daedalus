@@ -17,9 +17,7 @@ from lib.manifest import ManifestError, manifest_path  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset({"Bash"})
-NAMES = frozenset(
-    {"append_ledger", "git", "gh", "gitleaks", "read", "train", "inspect", "terraform"}
-)
+NAMES = frozenset({"append_ledger", "git", "gh", "gitleaks", "read", "train", "inspect"})
 FLAGS: dict[str, hook_io.Flag] = {"--allow": hook_io.Flag(values=NAMES, many=True)}
 PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
 _SCRIPTS = os.path.realpath(Path(__file__).resolve().parents[1])
@@ -33,7 +31,7 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"contract"}
         # 0153, 0157 (12.5): the literacy check on each decision brief before DECISION.
         | {"brief-check"}
-        # prepush-2026-10-27 finding 6: the pack check before the first framework specialist.
+        # prepush-2026-10-27 finding 6: the pack check before the first frameworks rulebook.
         | {"packs"}
         # 0192: the asset pathspec tail the judges' diff lines carry.
         | {"assets"}
@@ -75,7 +73,8 @@ R_MAP_OUT = (
 )
 
 
-# 0132: the terraform class, `terraform [-chdir=<folder in the project>] fmt -check | validate`.
+# 0132, 0186: the terraform class, `terraform [-chdir=<folder in the project>] fmt -check |
+# validate`; the auditor's read_only_bash --terraform judges by it (0188).
 TERRAFORM_FORMS = (("fmt", "-check"), ("validate",))
 R_TERRAFORM = (
     "the terraform class runs only `terraform fmt -check` and `terraform validate`, each with an "
@@ -296,16 +295,6 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
                 return mismatch
             continue
         if "inspect" in allowed and _inspect_ok(segment, cwd):
-            continue
-        if "terraform" in allowed and name == "terraform":
-            refused = terraform_reason(segment, cwd)
-            if refused is not None:
-                return refused
-            continue
-        if "terraform" in allowed and shell._base(segment[0]) == shell.CONFINE:
-            refused = wrapped_terraform_reason(segment, cwd)
-            if refused is not None:
-                return refused
             continue
         return _reason(allowed)
     return None

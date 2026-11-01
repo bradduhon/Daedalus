@@ -252,7 +252,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`true`",
     ),
     (MANIFEST_FILE, "features.dependency_web_lookup"): KeyRow(
-        "Lets the dependency auditor ask for security advisories on the web; the train sends "
+        "Lets the auditor ask for security advisories on the web; the train sends "
         "its questions to the web researcher. With it off, the auditor judges from the lockfile "
         "and any advisory export the project supplies",
         "boolean or null",
@@ -261,9 +261,9 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`false`",
     ),
     (MANIFEST_FILE, "features.terraform_tools"): KeyRow(
-        "Lets the Terraform reviewer run `terraform fmt -check` and `terraform validate` on the "
+        "Lets the auditor run `terraform fmt -check` and `terraform validate` on the "
         "Terraform files a train changes; validate also needs `features.terraform_validate`. "
-        "With it off, the reviewer judges by reading the files",
+        "With it off, the auditor judges by reading the files",
         "boolean or null",
         "`true`, `false` or `null`; only `false` turns both commands off; validate also needs "
         "`features.terraform_validate`",
@@ -271,12 +271,12 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`false`",
     ),
     (MANIFEST_FILE, "features.terraform_validate"): KeyRow(
-        "Lets the Terraform reviewer run `terraform validate`, which starts the provider "
+        "Lets the auditor run `terraform validate`, which starts the provider "
         "programs in a module's `.terraform` folder. Setup never writes it, and "
         "`features.terraform_tools` set to `false` still turns it off",
         "boolean",
         "`true` or `false`",
-        "`false`: the reviewer runs no validate and marks that check N/A",
+        "`false`: the auditor runs no validate and marks that check N/A",
         "`true`",
     ),
     (MANIFEST_FILE, "trains_dir"): KeyRow(
@@ -474,7 +474,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "dependencies.minimum_release_age_days"): KeyRow(
         "The youngest a package version a change adds or updates may be, in days since it was "
-        "published; the dependency auditor fails a younger version. A security fix this holds "
+        "published; the auditor fails a younger version. A security fix this holds "
         "back is tracked as a risk, never exempted silently",
         "integer",
         f"A whole number of 0 or more; below {RELEASE_AGE_DEFAULT} it needs "
