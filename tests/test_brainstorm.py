@@ -148,6 +148,11 @@ ROUND_LOOP = (
     "`Accept as proposed`, whose description is the item's proposal sentence verbatim",
     '`Reply in my words`, whose description is "Type your answer in the box."',
     "The operator's typed text is always an answer.",
+    "A pick of `Reply in my words` with no typed text asks that item again, alone",
+    '"Choose Other and type your answer."',
+    "When fewer items are found than `items=<m>` on a ROUND line says, print the reply as written",
+    "ask one free-text question for the whole round with the two generic choices",
+    "relay the typed text as a single answer",
     "At most four questions go in one AskUserQuestion call.",
     "Ask consecutive calls in item order until every item is asked.",
     "multiSelect is false.",
@@ -163,6 +168,11 @@ ANSWER_LOOP = (
     "Never paraphrase an answer and never answer for the operator.",
     "whether typed as any answer or picked: `the spec stands` starts the hand-off",
     "and `stop` ends the skill (step 12)",
+    "A picked `Accept as proposed` is relayed as its label.",
+    "`Reply in my words` is never relayed; only the typed text that follows it is.",
+    "When either phrase follows an answered item, first send the answered items as one "
+    "`ANSWERS round=<k>` message and read the planner's reply",
+    "Then run step 11 for `the spec stands`, or step 12 for `stop`, so the draft reflects those",
 )
 
 
