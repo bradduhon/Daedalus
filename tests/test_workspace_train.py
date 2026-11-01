@@ -263,7 +263,7 @@ def test_begin_reports_policy_and_cache(
 
 
 def test_begin_prints_the_declared_pack_path(repo: Path) -> None:
-    # 0019, 0026: the standards specialist reads a pack at the path begin resolves.
+    # 0019, 0026: the standards skill reads a pack at the path begin resolves.
     config = {"standards_sources": [{"kind": "pack", "name": "baseline"}]}
     (repo / ".claude" / "daedalus" / "config.json").write_text(json.dumps(config))
     lines = begin(repo)

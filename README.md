@@ -173,7 +173,6 @@ Each agent's file lists the only tools it may use, the status lines it ends its 
 | orchestrator | dispatcher | fable | Agent, Bash, Edit, Glob, Grep, Read, SendMessage, Write | Runs one Build Train from its plan to the audited integration tip. | `[STATUS: ANNOUNCE] size=<size> phases=<list>`; `[STATUS: DECISION] brief=<path> questions=<n>`; `[STATUS: EXCEPTION] ledger_id=<id>`; `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path> tip=<40 hex>`; `[STATUS: STOP] reason=<what happened> next=<next action>` | context, clarification, plan, implementation, audit |
 | planner | shaper | opus | Glob, Grep, Read, Write | Cuts a design spec into work units that coders can build in parallel. | `[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>`; `[STATUS: QUESTION] <what the task leaves open>`; `[STATUS: ASK] n=<n>`; `[STATUS: SPEC] n=<n> path=<path> open=<m>`; `[STATUS: NOT_VIABLE] n=<n> <the blocking fact in one line>`; `[STATUS: YIELD_WEB] <query>` | clarification, plan |
 | releaser | mover | opus | Bash, Glob, Grep, Read | GitHub specialist for the Push Train. | `[STATUS: PUSHED] branch=<b> pr=<url>`; `[STATUS: CI] run=<id> conclusion=<text>`; `[STATUS: BLOCKED] <precondition that failed>` | commit, release |
-| standards-rules-specialist | finder | sonnet | Glob, Grep, Read | Adopts the project's declared standards. | `## Standards Packet`; `[STANDARDS: CONTRADICTION] <spec ref> vs <source:line>`; `[STATUS: STANDARD] <answer>` | clarification, plan |
 | terraform-reviewer | judge | sonnet | Bash, Glob, Grep, Read | Read-only judge of the .tf and .tfvars changes a train makes. | `[STATUS: COMPLIANCE] <PASS/FAIL list with rule ids and file:line, warnings included>` | audit |
 | verifier | judge | opus | Bash, Glob, Grep, Read | Adversarial read-only verifier of one unit's diff against its brief. | `[VERDICT: VERIFIED] claims=<n>`; `[VERDICT: REFUTED] <rows>` | implementation |
 | web-researcher | finder | haiku | Read, WebFetch, WebSearch | Fast external documentation lookup on Haiku. | `[STATUS: RESEARCH] <payload under 300 words with URLs>` | context |
@@ -195,7 +194,6 @@ Each agent file also declares a shape, the kind of job it does, and the checks t
 | orchestrator | dispatcher | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, git_push, command_allowlist --allow train,inspect, root_writes --touch scratch --ledger-guard, gh_classes, dispatch_gate |
 | planner | shaper | credential_paths, workspace_integrity, tool_bound, root_writes --touch scratch --name plan*.md --sub brainstorm-*/spec.md |
 | releaser | mover | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools --gh, command_allowlist --allow git,gh,gitleaks, git_grammar --allow conductor, git_push --conductor, gh_classes --conductor |
-| standards-rules-specialist | finder | credential_paths, tool_bound |
 | terraform-reviewer | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, command_allowlist --allow terraform,inspect, gh_classes |
 | verifier | judge | credential_paths, workspace_integrity, tool_bound, shell_tripwires, network_tools, read_only_bash --git read-only --test-runner unit, gh_classes |
 | web-researcher | finder | credential_paths, tool_bound, network_tools --web |
@@ -314,7 +312,7 @@ Some keys and files have no row here, because no reader checks them: the uncheck
 | `ledger.sequence_source` | `.claude/daedalus/config.json` | Where the next ruling number comes from | string | `"last-row-id"` or `"frontmatter:<key>"` | Required once the block exists | `"last-row-id"` |
 | `policy.engine` | `.claude/daedalus/config.json` | The tool for a deterministic policy check on infrastructure changes; no train runs it yet | string | `"cfn-guard"` or `"conftest"` | `policy: null`: none declared | `"conftest"` |
 | `policy.path` | `.claude/daedalus/config.json` | The folder that holds your policy rules; no train reads it yet | string | A non-empty path | Required once the block exists | `"/work/decisions/policy"` |
-| `standards_sources[].kind` | `.claude/daedalus/config.json` | What one source of your standards is; the standards specialist reads only these entries; see the requirements page, the section on standards_sources kinds | string | `"rules-dir"` (a folder of rule files), `"file"` (one file) or `"pack"` (a pack shipped inside the plugin) | `[]`: the Standards Packet is empty | `"rules-dir"` |
+| `standards_sources[].kind` | `.claude/daedalus/config.json` | What one source of your standards is; the run reads only these entries; see the requirements page, the section on standards_sources kinds | string | `"rules-dir"` (a folder of rule files), `"file"` (one file) or `"pack"` (a pack shipped inside the plugin) | `[]`: the Standards Packet is empty | `"rules-dir"` |
 | `standards_sources[].path` | `.claude/daedalus/config.json` | Where a rules folder or rules file lives | string | A non-empty path, written absolute; a pack entry carries none | Required for a `rules-dir` or `file` entry | `"/work/rules"` |
 | `standards_sources[].name` | `.claude/daedalus/config.json` | Which pack shipped with Daedalus to use | string | The name of a folder under the plugin's `packs/` that holds a `rules.md`; any other name is refused | Required for a `pack` entry | `"baseline"` |
 | `operator_signing_keys` | `.claude/daedalus/config.json` | Reserved for the key fingerprints allowed to sign merges; no check reads it yet | list of strings | Non-empty strings | `[]` | `["ABCD1234EF567890"]` |
@@ -478,7 +476,7 @@ Exit 0 prints `OK approved: approved verdict, ...` or `OK approved: every findin
 ### One train, end to end
 
 1. Start. Your session runs `daedalus_workspace.py begin`. That command refuses a working tree with uncommitted changes. It writes the data folder and its `.gitignore`, the train state file and the train marker, then prints the first status lines. Next, `verify_audit_chain.py --hooks-live` finds its own command as the newest Bash record of this session's log and records the point the push proof reads. Your session starts one orchestrator agent and passes messages between it and you.
-2. Standards and the map. The standards specialist writes the Standards Packet from your declared sources. Its fifth part is a `## Priorities` section, holding your `priorities` block or the line `priorities: none declared`. The orchestrator runs `daedalus_map.py --repo <repo> --out <repo>/docs/.tmp/daedalus/<train-id>/map` to build a dependency map of your code, and records the sha256 of `map.json`. The jail refuses an `--out` outside that folder. The map skips every folder the `excluded_roots` key of `config.json` names, and exits 2 when those folders cannot be resolved.
+2. Standards and the map. The orchestrator writes the Standards Packet from your declared sources. Its fifth part is a `## Priorities` section, holding your `priorities` block or the line `priorities: none declared`. The orchestrator runs `daedalus_map.py --repo <repo> --out <repo>/docs/.tmp/daedalus/<train-id>/map` to build a dependency map of your code, and records the sha256 of `map.json`. The jail refuses an `--out` outside that folder. The map skips every folder the `excluded_roots` key of `config.json` names, and exits 2 when those folders cannot be resolved.
 3. Plan. The planner cuts the work into units. Each unit has a line in the plan block and a requirement section below it. `validate_plan.py` checks the file, and `daedalus_train.py plan` records its path and sha256 in train state.
 4. Contract lock. The orchestrator first runs `daedalus_train.py contract --repo <repo>`. It prints `contract: skip` when the recorded plan has one unit and that unit meets every condition below. Otherwise it prints `contract: required (<reason>)`.
    - It changes at most 3 files.
@@ -545,7 +543,7 @@ Two read-only judges join depending on what the diff touches. The dependency aud
 
 ### Project priorities
 
-The `priorities` block of `service-manifest.json` ranks four concerns: `security`, `trust`, `ops` and `cost`. It may add rules, principles and a ranking per agent (see the key reference above). The doctor prints `priorities: <ranking>, <n> rules` or `priorities: none declared`. The standards specialist writes the block into the Standards Packet's `## Priorities` section. Every agent of every train reads that section; your own session does not.
+The `priorities` block of `service-manifest.json` ranks four concerns: `security`, `trust`, `ops` and `cost`. It may add rules, principles and a ranking per agent (see the key reference above). The doctor prints `priorities: <ranking>, <n> rules` or `priorities: none declared`. The orchestrator writes the block into the Standards Packet's `## Priorities` section. Every agent of every train reads that section; your own session does not.
 
 When two concerns conflict, the orchestrator tries the rules in order, and the first match decides. A rule ending in a concern settles the choice alone, and its choice record names the driver and the rule. A rule ending in `surface` puts the choice to you. A coder raises a default with `[STATUS: YIELD_STANDARDS] priorities rule <n>: ...`. A global rule or your answer outranks the ranking, and no rule lowers an audit finding's severity. The summary's Priorities section lists each decision a rule settled or put to you.
 
@@ -607,7 +605,6 @@ Daedalus/
 │   ├── orchestrator.md
 │   ├── planner.md
 │   ├── releaser.md
-│   ├── standards-rules-specialist.md
 │   ├── terraform-reviewer.md
 │   ├── verifier.md
 │   ├── web-researcher.md

@@ -256,7 +256,7 @@ After the checks, your session prints the first six lines of the State Block, th
     cache: unresolved
     standards packs: none declared
 
-The start command prints the `cache:` line. In the block it keeps, the orchestrator replaces that line with `packs: <absolute pack folder>[, ...]`, the control pack folders it finds before the first compliance question. Until then the line reads `packs: unresolved`. The full block adds the standards specialist, the ledger codes, the packet version with the contract path and lock commit, both packet hashes, the plan, the merged integration tip, the verdict, one line per unit and the open questions.
+The start command prints the `cache:` line. In the block it keeps, the orchestrator replaces that line with `packs: <absolute pack folder>[, ...]`, the control pack folders it finds before the first compliance question. Until then the line reads `packs: unresolved`. The full block adds the time the standards were last read, the ledger codes, the packet version with the contract path and lock commit, both packet hashes, the plan, the merged integration tip, the verdict, one line per unit and the open questions.
 
 The train id is the UTC start time. The audit session id is the name of the newest log in `<repo>/.claude/daedalus/audit/`, without `.jsonl`. Keep it for the audit report. `seq` is the last ledger entry number. The codes on the full block's `codes:` line are the `--repo` and `--type` parts of the next ledger id. The train takes them from the first ledger id the Standards Packet cites. If it cites none, or its ids disagree, the train asks you once. A heading-entry ledger ignores the codes.
 
@@ -264,7 +264,7 @@ The build run saves the Locked Contract Packet to a file, and the lock command c
 
 ### Standards and contract first
 
-The standards specialist reads the sources you declared in `standards_sources`, and your ledger. It writes a Standards Packet: the rules that apply to this task. If your task contradicts one of your own standards, the train asks you about it as a decision. The question quotes both sides: your words, and the rule with its file and line. When the rule comes from your global Claude environment, you get three options:
+The orchestrator reads the sources you declared in `standards_sources`, and your ledger. It writes a Standards Packet: the rules that apply to this task. If your task contradicts one of your own standards, the train asks you about it as a decision. The question quotes both sides: your words, and the rule with its file and line. When the rule comes from your global Claude environment, you get three options:
 
 - Follow Global: the plan or the plugin changes to comply.
 - Follow Plugin: the plugin's way stands, recorded as a deviation.
@@ -287,7 +287,7 @@ A coding agent that is stuck commits its work in progress and asks a question. D
 | `YIELD_WEB` | It needs external documentation. | web-researcher, from official docs, with URLs |
 | `YIELD_CONTRACT` | The contract does not cover what it found. Other affected agents are put on hold. | contract-spec, with a new packet_version sent to every affected agent; a train that skipped the contract stops instead, with `Next: rerun the train with a plan that declares the contract` |
 | `YIELD_COMPLIANCE` | It has a security control question. | framework-specialist, with pack control ids from the shipped packs or your own |
-| `YIELD_STANDARDS` | It has a question about one of your standards. | standards-rules-specialist, with the source and line |
+| `YIELD_STANDARDS` | It has a question about one of your standards. | the orchestrator itself, with the source and line |
 
 The scope of each unit comes from the recorded plan and the contract.
 
@@ -313,7 +313,7 @@ The same questions follow every later rejected round. No fix round starts withou
 
 On `[VERDICT: APPROVED]`, or once you exempted every finding, the charter-docs agent appends the ledger entries through `append_ledger.py` and commits them. When the ledger lives in your Charter repository, the Charter working tree must be clean first. The train creates the Charter's `daedalus/<train-id>` branch in its checks, for the contract and ledger commits, then switches the Charter back to the branch it was on. Nothing is pushed.
 
-Each agent ends its reply with one of its set status lines or sections. A reply that does not stops the train and shows you the reply's last 10 lines. The auditor brief from standards-rules-specialist is the one exception: it ends with its rule list and has no status line. The security auditor writes its verdict line as both the first line and the last line of every reply.
+Each agent ends its reply with one of its set status lines or sections. A reply that does not stops the train and shows you the reply's last 10 lines. The security auditor writes its verdict line as both the first line and the last line of every reply.
 
 Once the train has created a Charter branch, it switches the Charter back to the branch it was on before any stop. Before any stop ahead of the merge, it also switches this repository back to your base branch. There are two exceptions. A stop while the Charter tree is dirty leaves the Charter on its `daedalus/<train-id>` branch. A stop while the contract file is uncommitted leaves both repositories on `daedalus/<train-id>`. Either way, the stop names the uncommitted files and the branch they sit on.
 

@@ -193,15 +193,6 @@ SIMPLE_PERSONAS = [
         True,
         id="releaser",
     ),
-    pytest.param(
-        "standards-rules-specialist",
-        "Read docs/STANDARDS.md and produce the Standards Packet for a task that adds "
-        "one function to src/hello.py.",
-        ["Read", "Glob", "Grep"],
-        ("## Standards Packet",),
-        False,
-        id="standards-rules-specialist",
-    ),
 ]
 
 

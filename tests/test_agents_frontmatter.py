@@ -22,7 +22,6 @@ EXPECTED_MODEL = {
     "contract-spec": "sonnet",
     "charter-docs": "sonnet",
     "framework-specialist": "sonnet",
-    "standards-rules-specialist": "sonnet",
     "web-researcher": "haiku",
     "planner": "opus",
     "orchestrator": "fable",
@@ -37,7 +36,6 @@ EXPECTED_PHASES = {
     "coder": ("implementation",),
     "auditor": ("audit",),
     "contract-spec": ("clarification", "plan"),
-    "standards-rules-specialist": ("clarification", "plan"),
     "charter-docs": ("clarification", "commit", "release"),
     "releaser": ("commit", "release"),
     "framework-specialist": ("clarification", "audit"),
@@ -452,10 +450,8 @@ def test_framework_specialist_keeps_its_status_contract() -> None:
 
 def test_old_specialist_agents_are_gone() -> None:
     # 0157 (12.4): no alias for the two old agent names, and no agent names the fetcher.
-    assert sorted(AGENTS.glob("*-specialist.md")) == [
-        FRAMEWORK,
-        AGENTS / "standards-rules-specialist.md",
-    ]
+    # 0186: the standards specialist folded into skills/plan/standards/SKILL.md.
+    assert sorted(AGENTS.glob("*-specialist.md")) == [FRAMEWORK]
     assert [p.name for p in AGENTS.glob("*.md") if "refresh_frameworks.py" in p.read_text()] == []
 
 

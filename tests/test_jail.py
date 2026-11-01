@@ -64,7 +64,6 @@ def test_known_agents_match_spec_matrix() -> None:
             "framework-specialist",
             "releaser",
             "web-researcher",
-            "standards-rules-specialist",
             "planner",
             "orchestrator",
             "verifier",

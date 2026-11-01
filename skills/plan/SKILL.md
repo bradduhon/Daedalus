@@ -57,9 +57,9 @@ The orchestrator runs these steps (0060). Step 11 comes before the step 5 dispat
 
 11. Weight and map (0086, 0089). Record the weight of this body of work through the choice command, `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py choice --repo <repo> --phase plan --chose "<what>" --over "<alternative>" --cost "<time or tokens>"`. A fix of at most 3 files and no control file carries a one-unit plan and no contract packet (0182); a cross-module build carries the packet. `<spec>` is the operator's spec, or the task text saved to `<repo>/docs/.tmp/daedalus/<train-id>/task.md` when the task is only words. Before the planner starts, build the dependency map (pin MAP -> REQ): run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_map.py --repo <repo> --out <repo>/docs/.tmp/daedalus/<train-id>/map`, which writes `map.md` and `map.json` in that folder; exit 2: stop and show its output. Run `sha256sum <repo>/docs/.tmp/daedalus/<train-id>/map/map.json`; the orchestrator records the hash in its State Block, and the step 5 dispatch carries the line `Map: <repo>/docs/.tmp/daedalus/<train-id>/map/map.json sha256=<hex>`.
    - After step 9 records the plan, build the map again with the plan's file ownership: the same map command with `--plan <path>` added. Record the new `sha256sum` of `map.json`.
-   - A run that starts from a plan path the operator named, one `/daedalus:plan` or the brainstorm hand-off wrote, dispatches no planner. Run step 7, step 9 and both map commands on that file, with it as `<path>`. That plan file is the spec the standards specialist reads in step 12.
+   - A run that starts from a plan path the operator named, one `/daedalus:plan` or the brainstorm hand-off wrote, dispatches no planner. Run step 7, step 9 and both map commands on that file, with it as `<path>`. That plan file is the spec the standards step reads in step 12.
    - No coder starts before the plan is recorded; the hook refuses a coder dispatch without it.
-12. Standards and contradictions. Dispatch `standards-rules-specialist` with the config path, the ledger line, the `standards packs:` line, and "Emit a `## Standards Packet` (active rules, governing ledger ids, current ledger sequence, declared policy pack) relevant to: <the task>. Flag every spec-versus-standard contradiction." The orchestrator records the specialist's handle and the time of its reply, and every later standards question resumes that same specialist.
+12. Standards and contradictions (0186). Load the standards skill, `${CLAUDE_PLUGIN_ROOT}/skills/plan/standards/SKILL.md`, and follow it yourself with the config path, the ledger line and the `standards packs:` line: write a `## Standards Packet` (active rules, governing ledger ids, current ledger sequence, declared policy pack) relevant to the task, and flag every spec-versus-standard contradiction. The orchestrator records the time of that read on its `standards last read:` line, and every later standards question follows the same skill.
    - Contradiction prompt (0057). Every `[STANDARDS: CONTRADICTION] <spec ref> vs <source:line>` line is a decision only the operator makes. Never resolve it yourself.
      - Read both sides: the task or spec text at `<spec ref>`, and the rule text at `<source:line>`.
      - Write all contradictions into decision briefs, one question per contradiction, at most four questions per brief; the main session asks each brief with AskUserQuestion, at most four questions per call. More contradictions take more briefs.
@@ -76,12 +76,12 @@ The orchestrator runs these steps (0060). Step 11 comes before the step 5 dispat
      - To record the picks, dispatch `charter-docs` with: the absolute path of append_ledger.py (`${CLAUDE_PLUGIN_ROOT}/scripts/append_ledger.py`), one ledger note per pick (the question in plain words, the option picked, the operator's reason when given, and `Ruled by the operator in the plan phase contradiction prompt of run <train-id>`), the codes, the scratch directory `docs/.tmp/daedalus/`, and the orchestrator's charter-docs probe, retry and commit instruction.
      - The orchestrator routes its reply as at its ledger step, with two differences: no summary exists yet to edit, and the Charter stays on `daedalus/<train-id>` until the run ends. `[STATUS: COMMITTED] <sha> ids=<ids>` records the sha and the ids beside the picks; a repo-local pick commit sha is kept for the auditor brief.
      - Print each pick with its ledger id. No coder starts before `[STATUS: COMMITTED]`. With the ledger under `charter_root`, no contract is locked before it either.
-   - Re-check. Next, the orchestrator resumes the standards specialist with a `RECHECK.` message: one line per pick (the contradiction line, the option picked, its ledger id or pending), the rule files changed since its last read, and the ask to re-emit the Standards Packet for the same task with each pick applied, flagging only contradictions no pick answers.
-     - Its reply ends with the `## Standards Packet` section.
+   - Re-check. Next, the orchestrator re-checks by the standards skill, with one line per pick (the contradiction line, the option picked, its ledger id or pending) and the rule files changed since its last read: it writes the Standards Packet again for the same task with each pick applied, flagging only contradictions no pick answers.
+     - The re-check ends with the `## Standards Packet` section.
      - New contradiction lines go through the contradiction prompt and the pick recording again.
-     - A contradiction line that a pick already answered stops the run. Next: report the standards specialist as a defect.
+     - A contradiction line that a pick already answered stops the run. Next: report the standards skill as a defect.
      - The re-checked packet reaches contract-spec as an amendment (0082): the orchestrator sends contract-spec an `AMEND.` message with the packet, to fold it in and save the packet to the contract path again.
-     - The packet in the last re-check reply is the Standards Packet that step 15 writes to its file. Coders receive it by path and hash.
+     - The packet of the last re-check is the Standards Packet that step 15 writes to its file. Coders receive it by path and hash.
    - Picks reach the plan. The step 13 contract-spec dispatch carries the pick list.
      - With a repo-local ledger, the re-check and the contract run before the ids exist, so they name the picks `pick 1`, `pick 2` and so on.
      - For each `Follow Plugin` pick with a file site, the packet names the comment `<ledger id of pick k>: <one-line deviation>` at that site.
@@ -104,7 +104,7 @@ The orchestrator runs these steps (0060). Step 11 comes before the step 5 dispat
 
 - planner, which cuts the plan (steps 5 to 7).
 - web-researcher, for a planner's web question (step 6).
-- standards-rules-specialist, which writes the Standards Packet and flags contradictions (step 12).
+- No agent for the Standards Packet: the orchestrator follows the standards skill (`${CLAUDE_PLUGIN_ROOT}/skills/plan/standards/SKILL.md`) itself and flags contradictions (step 12, 0186).
 - charter-docs, which records the operator's picks in the ledger (step 12).
 - contract-spec, which writes the Locked Contract Packet (step 13).
 

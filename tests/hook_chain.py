@@ -81,10 +81,6 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("tool_bound", ()),
         ("network_tools", ("--web",)),
     ),
-    "standards-rules-specialist": (
-        ("credential_paths", ()),
-        ("tool_bound", ()),
-    ),
     "planner": (
         ("credential_paths", ()),
         ("workspace_integrity", ()),

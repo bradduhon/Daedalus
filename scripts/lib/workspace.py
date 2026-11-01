@@ -436,7 +436,7 @@ def _open_train(repo: Path, train_id: str, state: dict[str, object]) -> None:
 
 def _config_lines(config: Config, cache: str | None) -> list[str]:
     policy = f"{config.policy.engine} {config.policy.path}" if config.policy else "none declared"
-    # 0019: a pack has no path in config.json; the standards specialist reads it from this line.
+    # 0019: a pack has no path in config.json; the standards skill reads it from this line.
     packs = [f"{s.name} at {s.path}" for s in config.standards_sources if s.kind == "pack"]
     return [
         f"policy: {policy}  standards: {len(config.standards_sources)} sources",

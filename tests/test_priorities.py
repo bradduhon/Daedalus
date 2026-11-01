@@ -283,8 +283,10 @@ def _flat(name: str) -> str:
     return " ".join((AGENTS / f"{name}.md").read_text(encoding="utf-8").split())
 
 
-def test_specialist_writes_the_pinned_priorities_section() -> None:
-    text = _flat("standards-rules-specialist")
+def test_standards_skill_writes_the_pinned_priorities_section() -> None:
+    # 0186: the packet method lives in the standards skill, not an agent file.
+    skill = AGENTS.parent / "skills" / "plan" / "standards" / "SKILL.md"
+    text = " ".join(skill.read_text(encoding="utf-8").split())
     for line in (
         "`## Priorities`",
         "`ranking: <driver> > <driver> > <driver> > <driver>`",

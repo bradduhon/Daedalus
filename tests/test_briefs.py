@@ -321,9 +321,7 @@ def test_context_skips_the_operators_quote_only_beside_its_own_text(quoted: str)
 
 def test_a_quote_outside_context_is_checked_like_any_text() -> None:
     text = f'Question: Ready?\nWhy: You wrote: "{QUOTE}".'
-    assert [line.split(" over")[0] for line in ask_problems(text)] == [
-        "Why sentence has 17 words,"
-    ]
+    assert [line.split(" over")[0] for line in ask_problems(text)] == ["Why sentence has 17 words,"]
 
 
 def test_a_label_shaped_line_inside_context_is_checked() -> None:

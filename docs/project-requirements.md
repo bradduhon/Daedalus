@@ -64,7 +64,7 @@ To keep the sequence in frontmatter instead, start the file with a `---` block h
 
 ### standards_sources kinds
 
-Each entry has a `kind` and a `path`, except `pack`, which has a `name`. The standards specialist reads only these entries, and cites each rule as `source:line`.
+Each entry has a `kind` and a `path`, except `pack`, which has a `name`. The run reads only these entries, and cites each rule as `source:line`.
 
 - `rules-dir`: a directory of rule files. Example: `{ "kind": "rules-dir", "path": "/absolute/path/to/rules" }`
 - `file`: one file. Example: `{ "kind": "file", "path": "/work/my-service/CLAUDE.md" }`
