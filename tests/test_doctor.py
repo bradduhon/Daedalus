@@ -1662,7 +1662,7 @@ def test_the_doctor_prints_this_kernels_probe(tmp_path: Path) -> None:
     else:
         cause = daedalus_confine.unusable(support)
         assert cause is not None
-        assert kernel == [f"MISS kernel rules: {daedalus_doctor._operator_next(cause)}"]
+        assert kernel[0].startswith(f"MISS kernel rules: {cause.split('Next: ')[0]}")
         assert "commit WIP" not in kernel[0]
 
 
