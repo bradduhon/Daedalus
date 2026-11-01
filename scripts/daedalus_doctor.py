@@ -201,6 +201,11 @@ def _printable(text: str) -> str:
     return "".join(c for c in text if c.isprintable())
 
 
+def _escaped(text: str) -> str:
+    # 93: a manifest-declared string prints with each non-printable escaped, a newline as \n.
+    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode() for c in text)
+
+
 def _pack_meta(folder: Path) -> dict[str, object]:
     # 2.6: pack.json alone picks the Next line, so a pack with a bad controls.json still gets one.
     raw, _ = packs.read_capped(folder / packs.PACK_FILE)
@@ -359,10 +364,11 @@ def _hook_failure_check() -> Iterator[tuple[bool, str]]:
 
 
 def _kernel_rules_check() -> tuple[bool, str]:
-    # 0048: the probe the confine check reads; OPT when this kernel cannot hold the rules.
+    # 0048, 106: the probe the confine check reads; MISS with its cause where it refuses tests.
     support = daedalus_confine.kernel_support()
-    if not support.ok:
-        return True, "OPT  kernel rules: not available on this kernel"
+    cause = daedalus_confine.unusable(support)
+    if cause is not None:
+        return False, f"MISS kernel rules: {cause}"
     return True, (
         f"OK   kernel rules: Landlock ABI {support.abi} and the seccomp socket filter on "
         f"{support.arch}; coder test commands run under the kernel wrapper"
@@ -621,8 +627,8 @@ def _dev_server_check(repo: Path) -> Iterator[tuple[bool, str]]:
         yield (
             True,
             (
-                f"OK   dev server: {server.url}; the verify step asks you to open it and check: "
-                f"{server.check}"
+                f"OK   dev server: {_escaped(server.url)}; the verify step asks you to open it "
+                f"and check: {_escaped(server.check)}"
             ),
         )
 
@@ -673,7 +679,8 @@ def _dependencies_check(repo: Path) -> Iterator[tuple[bool, str]]:
     installs = ", ".join(deps.installs) or "none"
     age = f"minimum release age {_plural(deps.minimum_release_age_days, 'day')}"
     if deps.minimum_release_age_days < RELEASE_AGE_DEFAULT:
-        age += f", lowered from {RELEASE_AGE_DEFAULT}: {deps.minimum_release_age_reason}"
+        reason = _escaped(deps.minimum_release_age_reason or "")
+        age += f", lowered from {RELEASE_AGE_DEFAULT}: {reason}"
     yield True, f"OK   dependencies: frozen installs {installs}; {age}"
 
 
@@ -690,17 +697,17 @@ def _typecheck_check(repo: Path, run: bool = False) -> Iterator[tuple[bool, str]
 
 
 def _typecheck_one(repo: Path, command: str, run: bool) -> Iterator[tuple[bool, str]]:
-    name = f"typecheck ({command})"
+    shown = _escaped(command)
+    name = f"typecheck ({shown})"
     # 0076: the doctor runs no repository-declared command unless --run-typecheck is passed
     # (audit round 4).
     if not run:
         yield (
             True,
-            f"OPT  {name}: not run. Next: run {command} by hand from your own shell"
-            " at the repo root",
+            f"OPT  {name}: not run. Next: run {shown} by hand from your own shell at the repo root",
         )
         return
-    nxt = f"run {command} from the repo root and fix what it reports"
+    nxt = f"run {shown} from the repo root and fix what it reports"
     try:
         argv = shlex.split(command)
         done = subprocess.run(

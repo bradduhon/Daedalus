@@ -87,7 +87,7 @@ Some lines need a word of explanation:
 - The `standards_sources` line reads `OPT` until you declare a standards source. Its `Next:` offers the baseline pack that ships with Daedalus. Taking it is your choice.
 - `train marker: none` means no train is running in this repository.
 - `priorities: none declared` means the manifest has no `priorities` block. With one, the line prints the ranking and the number of rules.
-- The `kernel rules` line says whether this kernel can hold the kernel wrapper's rules, which keep a coder's test command inside its worktree and off the network. On a kernel that cannot, the line reads `OPT  kernel rules: not available on this kernel`, and coder test commands are refused.
+- The `kernel rules` line says whether this kernel can hold the kernel wrapper's rules, which keep a coder's test command inside its worktree and off the network. On a kernel that cannot, the line is a `MISS` that names the cause and gives a `Next:` step, and the doctor fails. Coder test commands are refused on that kernel, wrapped or bare.
 - The gitleaks line is a `MISS` when gitleaks is missing and the secret scan is on. With the scan off, a missing gitleaks reads `OPT`.
 - When gh is not signed in, the `gh authenticated` line is a `MISS`, and its `Next:` says to run `gh auth login`.
 - When the working tree is not clean, the `clean working tree` line names up to ten changed paths, then `+N more`. When the only change is the `.claude/settings.json` that `/plugin install` wrote, its `Next:` says to commit that file.
