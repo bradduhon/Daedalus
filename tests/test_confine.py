@@ -786,6 +786,20 @@ def test_each_entry_of_a_declared_test_command_list_needs_the_wrapper(tmp_path: 
 
 
 @pytest.mark.usefixtures("kernel")
+def test_a_plugin_helper_script_run_bare_needs_no_wrapper() -> None:
+    # 104: a python3 script outside the unit worktree is not a test command.
+    command = f"cd {WT} && python3 {shell._REPO_SCRIPTS}/catalog.py matrix"
+    assert evaluate("confine", _b("coder", command)) is None
+
+
+@pytest.mark.usefixtures("kernel")
+def test_a_worktree_test_script_run_bare_needs_the_wrapper() -> None:
+    # 104: a python3 script inside the unit worktree stays a test command.
+    command = f"cd {WT} && python3 tests/run_tests.py -q"
+    assert evaluate("confine", _b("coder", command)) == load("confine").R_CONFINE
+
+
+@pytest.mark.usefixtures("kernel")
 @pytest.mark.parametrize(
     "command",
     [

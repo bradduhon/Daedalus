@@ -466,3 +466,29 @@ def test_planner_writes_its_shapes_into_a_folder_runs_output_folder(tmp_path: Pa
     write_folder_run(root, tmp_path.resolve() / "out-link")
     allow, _, hook = _planner(root, f"{tmp_path.resolve()}/out-link/plan-20261027.md")
     assert not allow and hook == "root_writes"
+
+
+def test_root_writes_outside_the_repository_names_the_allowed_root(tmp_path: Path) -> None:
+    # 173: the refusal names the scratch root, outside a run and inside one, never the target.
+    target = "/tmp/daedalus-173/notes.md"
+    scratch = f"{CWD}/docs/.tmp/daedalus"
+    for hook_input in (_w("x", target), _b("x", f"tee {target}")):
+        reason = evaluate(HOOK, hook_input, "--touch", "scratch")
+        assert reason == (
+            f"writes are limited to {scratch}; {target} is outside the repository. "
+            f"Next: write under {scratch}."
+        )
+    repo = _git_init(tmp_path / "repo")
+    write_train_marker(repo, TRAIN)
+    run = f"{repo}/docs/.tmp/daedalus/{TRAIN}"
+    reason = evaluate(HOOK, {**_w("x", target), "cwd": str(repo)}, "--touch", "scratch")
+    assert reason == (
+        f"writes are limited to {run}; {target} is outside the repository. Next: write under {run}."
+    )
+
+
+def test_root_writes_inside_the_repository_keeps_the_class_message() -> None:
+    # 173: a target in the repository but outside the allowed roots keeps the class wording.
+    target = f"{CWD}/src/notes.md"
+    reason = evaluate(HOOK, _w("x", target), "--touch", "scratch")
+    assert reason == f"writes are limited to scratch: {target}. Next: write there."

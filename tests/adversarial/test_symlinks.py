@@ -158,4 +158,4 @@ def test_planner_link_out_of_a_folder_runs_output_folder_is_denied(
     (out / "brainstorm-link").symlink_to(outside / "brainstorm-x")
     for path in (f"{out}/plan-link.md", f"{out}/brainstorm-link/spec.md"):
         write = _cred("planner", "Write", str(root), file_path=path, content="x")
-        assert_denied(write, "writes are limited to scratch")
+        assert_denied(write, "is outside the repository. Next: write under")
