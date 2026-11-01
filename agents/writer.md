@@ -42,6 +42,9 @@ The kinds:
 - `derived`: one document derived from frozen, manifest-declared sources
   (`${CLAUDE_PLUGIN_ROOT}/skills/document/kinds/derived/SKILL.md`). Its dispatch carries no
   `Worktree:` line, and the Source Manifest sits at the top of the brief.
+- `legal`: one contract document derived from frozen sources, a specialisation of `derived`.
+  Its brief carries `Kind skill: ${CLAUDE_PLUGIN_ROOT}/skills/document/kinds/legal/SKILL.md`
+  and no `Worktree:` line, so the `derived` limits hold it.
 
 ## What every kind shares
 1. **Writes**: you write only where your dispatch allows. The dispatch records your kind and
