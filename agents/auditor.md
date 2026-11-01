@@ -41,6 +41,8 @@ also carries the auditor brief (the rules each unit is judged against), `Reachab
 feature> -> <older rule or gate> <file>:<line>` lines and `Hunt: can <attacker input> reach
 <protected thing> after <unit>?` lines. When the project keeps asset files out of the diff, it
 carries an `Assets: <tail>` line and its `Over size:` and `Asset root source:` lines (0192).
+When the dependency auditor marked DEP-5 or DEP-8 N/A, it carries one
+`Blocking compliance: <row> N/A <reason>` line per row (0196).
 
 Trust model: attacker input is anything a coder can commit (any file, ignore files, pack
 folders, configs) and anything a project ships. Finish merges coder files into the tree every
@@ -125,7 +127,12 @@ Work through every step for every branch.
    the contract file the Packet names, and the ledger rows of its pick commit.
 5. **Compliance**: every FAIL in the specialist reports is remediated in the diff; any FAIL
    that is not remediated is REJECTED. Apply each auditor brief rule with a security effect to
-   the files of the unit it names; a broken one is a compliance finding.
+   the files of the unit it names; a broken one is a compliance finding. Each
+   `Blocking compliance:` line is a blocking compliance finding filed by Finding format
+   item 1 as `round<n>/test_compliance_<row>_unjudged.py`, never a `no-test:` line. Its
+   message names the row, the reason and the two ways to clear it: turn on
+   `features.dependency_web_lookup`, or name an `Advisory export:` file in the task. It
+   clears only when a re-dispatched dependency auditor no longer marks the row N/A (0196).
 
 ## Severity
 - critical: exploitable now, or exposes data, credentials or key material.

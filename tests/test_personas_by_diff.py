@@ -268,6 +268,24 @@ def test_audit_dispatch_names_each_rulebook_for_its_manifest_paths(
         assert path in named, (book, path)
 
 
+def test_the_auditor_files_each_blocking_compliance_line_as_a_failing_test() -> None:
+    # 0196: the auditor takes the line as an input and never closes it with a no-test line.
+    text = (AGENTS / "auditor.md").read_text(encoding="utf-8")
+    inputs = " ".join(text.split("Inputs:", 1)[1].split("## Procedure", 1)[0].split())
+    assert "`Blocking compliance: <row> N/A <reason>` line per row (0196)" in inputs
+    step = text.split("5. **Compliance**", 1)[1].split("\n## ", 1)[0]
+    step = " ".join(step.split())
+    for phrase in (
+        "Each `Blocking compliance:` line is a blocking compliance finding filed by Finding format",
+        "`round<n>/test_compliance_<row>_unjudged.py`, never a `no-test:` line",
+        "names the row, the reason and the two ways to clear it",
+        "turn on `features.dependency_web_lookup`",
+        "name an `Advisory export:` file in the task",
+        "a re-dispatched dependency auditor no longer marks the row N/A",
+    ):
+        assert phrase in step, phrase
+
+
 def test_audit_dispatch_carries_the_release_age_and_blocks_an_unjudged_row() -> None:
     # 0196, 0197: an N/A on DEP-5 or DEP-8 is a failing test put to the operator, never a pass.
     text = " ".join(_phase("audit").split())

@@ -462,7 +462,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "dependencies.installs"): KeyRow(
         "The ecosystems whose frozen, scripts-off install a coding agent may run, such as "
-        "`npm ci --ignore-scripts` or `uv sync --frozen`; every other install, update, add or "
+        "`npm ci --ignore-scripts` or `uv sync --frozen --no-build`; every other install, update, "
+        "add or "
         "resolve command stays refused for every agent, and no other agent gets this exception",
         "list of strings",
         "Each of "

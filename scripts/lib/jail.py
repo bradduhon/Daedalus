@@ -212,8 +212,11 @@ _PIP_EXTRAS = frozenset({"--no-deps", "-q", "--quiet", "--no-input", "--disable-
 _UV_SYNC_EXTRAS = frozenset(
     {"--no-install-project", "--no-dev", "--all-extras", "--offline", "-q", "--quiet"}
 )
-_UV_FROZEN = (frozenset({"--frozen"}),)
-_UV_PIP_EXTRAS = frozenset({"--offline", "--no-build", "-q", "--quiet"})
+_UV_FROZEN = (frozenset({"--frozen", "--no-build"}),)
+_UV_PIP_EXTRAS = frozenset({"--offline", "-q", "--quiet"})
+_UV_PIP_FROZEN = (frozenset({"--require-hashes", "--no-build"}),)
+# 0196: yarn options whose value is the next word; the value is never a verb.
+_YARN_VALUED = shell._JS_VALUED | {"--mode"}
 _CARGO_EXTRAS = frozenset(
     {"--offline", "--release", "-q", "--quiet", "--workspace", "--all-targets"}
 )
@@ -248,8 +251,8 @@ FROZEN_EXAMPLES = {
     "pnpm": "pnpm install --frozen-lockfile --ignore-scripts",
     "yarn": "yarn install --immutable --mode=skip-build",
     "bun": "bun install --frozen-lockfile --ignore-scripts",
-    "pip": "python3 -m pip install --require-hashes -r requirements.txt",
-    "uv": "uv sync --frozen",
+    "pip": "python3 -m pip install --require-hashes --only-binary=:all: -r requirements.txt",
+    "uv": "uv sync --frozen --no-build",
     "cargo": "cargo fetch --locked",
     "go": "go mod download",
 }
@@ -279,6 +282,7 @@ JS_INSTALLED = (
 PY_INSTALLED = ".venv/bin/<bin> or python3 -m <module>"
 DENO_INSTALLED = "deno run on a file in the project"
 _REMOTE = ("http://", "https://", "npm:", "jsr:")
+_UV_WITH = ("--with", "--with-requirements", "--with-editable")
 
 
 def _positional(args: list[str]) -> str:
@@ -313,8 +317,8 @@ def _without(args: list[str], *verbs: str) -> list[str]:
 
 
 def _pip_frozen(rest: list[str]) -> bool:
-    # 0196: --require-hashes and one or more -r files, nothing that names a package or a source.
-    hashes, files, i = False, 0, 0
+    # 0196: --require-hashes, --only-binary :all: and -r files; no package, source or sdist.
+    hashes, binary, files, i = False, False, 0, 0
     while i < len(rest):
         arg = rest[i]
         value = None
@@ -327,6 +331,11 @@ def _pip_frozen(rest: list[str]) -> bool:
             value = arg[2:]
         elif arg == "--require-hashes":
             hashes = True
+        elif arg == "--only-binary=:all:":
+            binary = True
+        elif arg == "--only-binary" and rest[i + 1 : i + 2] == [":all:"]:
+            binary = True
+            i += 1
         elif arg not in _PIP_EXTRAS:
             return False
         if value is not None:
@@ -334,13 +343,24 @@ def _pip_frozen(rest: list[str]) -> bool:
                 return False
             files += 1
         i += 1
-    return hashes and files > 0
+    return hashes and binary and files > 0
+
+
+def _unvalued(args: list[str], valued: frozenset[str]) -> list[str]:
+    # 0196: the words left once each valued option and its value are dropped.
+    out: list[str] = []
+    skip = False
+    for arg in args:
+        if not skip and arg not in valued:
+            out.append(arg)
+        skip = not skip and arg in valued
+    return out
 
 
 def _js_install(name: str, args: list[str]) -> InstallForm | None:
     # 0164: an install verb before any script or exec verb; bare yarn installs too.
     verbs, required, extras = _JS_FROZEN[name]
-    if name == "yarn" and all(a.startswith("-") for a in args):
+    if name == "yarn" and all(a.startswith("-") for a in _unvalued(args, _YARN_VALUED)):
         return InstallForm(name, name, _frozen_flags(args, required, extras))
     for pos, arg in enumerate(args):
         if arg in _EXEC_VERBS or arg in _SCRIPT_VERBS:
@@ -363,7 +383,7 @@ def _pip_install(label: str, args: list[str]) -> InstallForm | None:
 
 
 def _uv_install(args: list[str]) -> InstallForm | None:
-    # 0196: add, lock and pip install resolve; sync --frozen and pip sync --require-hashes do not.
+    # 0196: add, lock and pip install resolve; sync and pip sync pass frozen with --no-build.
     words = [a for a in args if not a.startswith("-")]
     head, sub = (words + ["", ""])[:2]
     if head in {"add", "lock"} or (head == "tool" and sub in {"install", "upgrade"}):
@@ -383,7 +403,7 @@ def _uv_install(args: list[str]) -> InstallForm | None:
         sub == "sync"
         and bool(files)
         and all(_local_file(f) for f in files)
-        and _frozen_flags(flags, (frozenset({"--require-hashes"}),), _UV_PIP_EXTRAS)
+        and _frozen_flags(flags, _UV_PIP_FROZEN, _UV_PIP_EXTRAS)
     )
     return InstallForm("uv", f"uv pip {sub}", frozen)
 
@@ -487,8 +507,12 @@ def _download_at(name: str, args: list[str]) -> tuple[str, str] | None:
     # 0164, 0196: the launcher a command word starts and the installed form its refusal names.
     head = args[: args.index("--")] if "--" in args else args
     words = [a for a in head if not a.startswith("-")]
-    if name == "bunx":
-        return "bunx", JS_INSTALLED
+    if name in {"bunx", "pnpx"}:
+        return name, JS_INSTALLED
+    if name in PACKAGE_INSTALLS and _positional(head) == "create":
+        return f"{name} create", JS_INSTALLED
+    if name == "npm" and words[:1] == ["init"] and words[1:2]:
+        return "npm init <initializer>", JS_INSTALLED
     if name in {"pnpm", "yarn"} and "dlx" in head:
         return f"{name} dlx", JS_INSTALLED
     if name == "bun" and _positional(head) == "x":
@@ -504,6 +528,8 @@ def _download_at(name: str, args: list[str]) -> tuple[str, str] | None:
         return "uvx", PY_INSTALLED
     if name == "uv" and words[:2] == ["tool", "run"]:
         return "uv tool run", PY_INSTALLED
+    if name == "uv" and words[:1] == ["run"] and any(a.startswith(_UV_WITH) for a in head):
+        return "uv run --with", PY_INSTALLED
     if name == "pipx" and _positional(args) == "run":
         return "pipx run", PY_INSTALLED
     if name == "deno" and words[:1] == ["run"] and words[1:2] and words[1].startswith(_REMOTE):
