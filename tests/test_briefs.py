@@ -12,6 +12,8 @@ import pytest
 from lib.briefs import (
     MAX_BRIEF_BYTES,
     BriefError,
+    ask_file_problems,
+    ask_problems,
     brief_file_problems,
     brief_problems,
     level_of,
@@ -253,6 +255,83 @@ def test_brief_check_stops_on_a_bad_manifest(
     assert "docs.literacy" in capsys.readouterr().out
 
 
+# 0199, 0200: one brainstorm question's reader text; the quoted notes sentence is the operator's.
+ASK_GOOD = "\n".join(
+    [
+        "Heard: You want the level to scroll sideways.",
+        "Context: This decides how the player moves between screens.",
+        'You wrote: "the hero should run left to right across a big world with lots of secrets '
+        'hidden in the walls".',
+        "Question: Should the camera follow the player smoothly?",
+        "Proposal: The camera follows the player and keeps the hero in the middle.",
+        "Why: Players expect this in side-scrolling games.",
+        "Other ways:",
+        "A. The screen flips one full screen at a time.",
+        "B. The camera stays still and each level fits on one screen.",
+        "Rests on: notes file and src/game/camera_rig.ts:12",
+    ]
+)
+ASK_LONG = (
+    "The planner found that the tilemap loader reads every chunk at start, which is slow on phones."
+)
+ASK_BAD = "\n".join(
+    [
+        f"Context: {ASK_LONG}",
+        "Question: Should load_chunks stream?",
+        "Proposal: Stream the chunks from src/map as the player walks.",
+        "Why: It is faster.",
+        "Other ways:",
+        "A. Keep `load_chunks` as it is.",
+    ]
+)
+ASK_BAD_LINES = [
+    f"question: Context sentence has 17 words, over 15 at plain: {ASK_LONG}",
+    "question: Context carries the agent name planner",
+    "question: Question carries the snake_case token load_chunks",
+    "question: Proposal carries the word src/map with a slash",
+    "question: Other way A carries a backtick: Keep `load_chunks` as it is.",
+    "question: Other way A carries the snake_case token `load_chunks`",
+]
+
+
+def test_ask_problems_reads_every_reader_field_at_plain() -> None:
+    assert ask_problems(ASK_GOOD) == []
+    assert [f"question: {line}" for line in ask_problems(ASK_BAD)] == ASK_BAD_LINES
+    assert ask_problems("Heard: Nothing yet.") == ["the question holds no Question: line"]
+    assert ask_problems("Question: Ready?\nWhy:") == ["Why is empty"]
+
+
+@pytest.mark.parametrize("literacy", ["expert", "standard", None])
+def test_ask_check_command_is_plain_whatever_the_manifest_says(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    literacy: str | None,
+) -> None:
+    repo = _repo(tmp_path, literacy)
+    monkeypatch.chdir(repo)
+    # 0199: a folder run's brainstorm folder may sit outside the repository.
+    folder = tmp_path / "out" / "brainstorm-20261101"
+    folder.mkdir(parents=True)
+    good, bad = folder / "ask-1.md", folder / "ask-2.md"
+    good.write_text(ASK_GOOD, encoding="utf-8")
+    bad.write_text(ASK_BAD, encoding="utf-8")
+    assert daedalus_train.main(["ask-check", "--repo", str(repo), "--file", str(good)]) == 0
+    assert capsys.readouterr().out == "question ok\n"
+    assert daedalus_train.main(["ask-check", "--repo", str(repo), "--file", str(bad)]) == 1
+    assert capsys.readouterr().out.splitlines() == [
+        *ASK_BAD_LINES,
+        "Next: reword each named sentence in plain words, then run ask-check again.",
+    ]
+    missing = folder / "ask-3.md"
+    assert daedalus_train.main(["ask-check", "--repo", str(repo), "--file", str(missing)]) == 1
+    assert "is not a file. Next:" in capsys.readouterr().out
+    big = folder / "ask-4.md"
+    big.write_text("Question: Ready?\n" + "x" * MAX_BRIEF_BYTES, encoding="utf-8")
+    with pytest.raises(BriefError, match="bytes. Next:"):
+        ask_file_problems(big)
+
+
 def test_recipes_name_the_check_and_the_literacy_rule() -> None:
     # 0153: the orchestrator checks each brief; every question writer reads docs.literacy.
     orchestrator = (REPO_ROOT / "agents" / "orchestrator.md").read_text(encoding="utf-8")
@@ -267,10 +346,10 @@ def test_recipes_name_the_check_and_the_literacy_rule() -> None:
     # 0165: the audit phase's per-finding step returns its brief after the check.
     audit = (REPO_ROOT / "skills" / "audit" / "SKILL.md").read_text(encoding="utf-8")
     assert "return `[STATUS: DECISION]` once its brief check prints `brief ok`" in audit
+    # 0200: the brainstorm is always plain, so it reads no level; test_brainstorm checks it.
     for path in (
         REPO_ROOT / "agents" / "orchestrator.md",
         REPO_ROOT / "skills" / "plan" / "SKILL.md",
-        REPO_ROOT / "skills" / "brainstorm" / "SKILL.md",
     ):
         flat = " ".join(path.read_text(encoding="utf-8").split())
         assert "`docs.literacy` from `<repo>/service-manifest.json`" in flat, path

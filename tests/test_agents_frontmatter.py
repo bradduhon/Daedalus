@@ -96,9 +96,9 @@ def test_planner_frontmatter_and_reply_lines() -> None:
     assert planner.status_lines == (
         "[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>",
         "[STATUS: QUESTION] <what the task leaves open>",
-        "[STATUS: ROUND] round=<k> items=<m>",
-        "[STATUS: SPEC] round=<k> path=<path> open=<m>",
-        "[STATUS: NOT_VIABLE] round=<k> <the blocking fact in one line>",
+        "[STATUS: ASK] n=<n>",
+        "[STATUS: SPEC] n=<n> path=<path> open=<m>",
+        "[STATUS: NOT_VIABLE] n=<n> <the blocking fact in one line>",
         "[STATUS: YIELD_WEB] <query>",
     )
     disallowed = _list(frontmatter(PLANNER)["disallowedTools"], PLANNER)
@@ -139,19 +139,43 @@ def test_planner_challenge_mode_section_holds_the_steps_and_grounding_rules() ->
     section = _planner_section("## Challenge mode")
     for step in (
         "1. Read the idea, the notes file when named, and the repository areas the idea touches",
-        "2. Open each round with `Round <k>` and one to three sentences headed "
-        "`What I take you to want:`.",
-        "3. Number the items across the whole round.",
-        "4. List feasibility claims under `Feasibility:`, each with `Receipt:`.",
-        "5. Ask the researcher with `[STATUS: YIELD_WEB] <query>`",
-        "6. When a fact defeats the idea, end with the not-viable lines of 3.5 and "
+        "2. Open the first reply with `What I take you to want:` and one to three plain "
+        "sentences, then the first question.",
+        "3. Ask one question per reply and wait for its answer before you write the next one",
+        "Never ask two things in one question.",
+        "4. Follow up: when an answer opens something, the next question follows it up",
+        "When an answer makes a planned question moot, drop it.",
+        "5. Keep each feasibility claim with its `Receipt:`",
+        "6. Ask the researcher with `[STATUS: YIELD_WEB] <query>`",
+        "7. When a fact defeats the idea, end with the not-viable lines of 3.5 and "
         "`[STATUS: NOT_VIABLE]`.",
-        "7. When the open items fit under Open risks, write the spec in the shape of section 6 "
-        "and end with `[STATUS: SPEC]`.",
-        "8. On `Mode: plan` after a brainstorm, cut the spec as `## Method` says, holding the "
-        "rounds as context.",
+        '8. When enough is settled, ask that as a question too: "I think I have enough to write '
+        'the design. Write it now?"',
+        "9. On `Mode: plan` after a brainstorm, cut the spec as `## Method` says, holding the "
+        "conversation as context.",
     ):
         assert step in section, step
+    # 0199, 0200: the question reply's labels in order, the plain rule and the relay lines.
+    labels = ("Heard:", "Context:", "Question:", "Proposal:", "Why:", "Other ways:", "Rests on:")
+    shape = section.split("labels verbatim:", 1)[1].split("[STATUS: ASK] n=<n>", 1)[0]
+    assert [shape.index(f"    {label}") for label in labels] == sorted(
+        shape.index(f"    {label}") for label in labels
+    )
+    for rule in (
+        "Every question carries a proposal (0200)",
+        "`Other ways:` holds zero to three alternatives, lettered A, B and C",
+        "introduced as `You wrote:`",
+        "is plain whatever the manifest's reading-level key says",
+        "at most fifteen common words",
+        "gets a plain gloss in the same sentence the first time it appears",
+        "Never ask how technical the reader is.",
+        "The session relays each answer as `ANSWER n=<n>: <text>`",
+        "`REWORD n=<n>: <lines>`",
+        "`FIX n=<n>: <reason>`",
+        "`WRITE SPEC` asks for the spec now",
+    ):
+        assert rule in " ".join(section.split()), rule
+    assert "ANSWERS round=" not in section and "Round <k>" not in section
     from tests.test_brainstorm import GROUNDING
 
     # 0152: spec 5 rule 5 ends "(3.5)"; the planner keeps it verbatim, the skill's copy drops it.
@@ -170,8 +194,8 @@ def test_planner_status_contract_names_each_modes_lines() -> None:
     contract = PLANNER.read_text(encoding="utf-8").split("## Status contract\n", 1)[1]
     assert contract.count("\n- `") == 6 and contract.startswith("Your reply ends")
     assert (
-        "Plan mode ends with PLAN, QUESTION or YIELD_WEB; challenge mode ends with ROUND, SPEC, "
-        "NOT_VIABLE, YIELD_WEB or QUESTION." in contract.splitlines()
+        "Plan mode ends with PLAN, QUESTION or YIELD_WEB; challenge mode ends with ASK, SPEC, "
+        "NOT_VIABLE or YIELD_WEB, and every question it asks is an ASK." in contract.splitlines()
     )
 
 

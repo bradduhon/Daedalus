@@ -3,6 +3,7 @@
 # 0153, 0157 (12.5): a decision brief's operator text is checked at the manifest literacy level.
 # brief_problems reads the Question:, Context: and option label text of a brief file's sections;
 # brief_file_problems resolves docs.literacy and reads one brief under the repo's scratch root.
+# 0199, 0200: ask_file_problems checks one brainstorm question's reader text, always at plain.
 from __future__ import annotations
 
 import os
@@ -37,6 +38,12 @@ _LOCAL_URL = re.compile(
     r"(?:[/?#](?:(?!://|=[^\s=&#/]*\.[^\s=&#/]*/)[^\s`@])*)?"
 )
 _EDGE = ".,;:!?\"'()[]"
+# 0200: the reader text of one brainstorm question; Other ways lines are lettered A to C.
+ASK_FIELDS = ("Heard:", "Context:", "Question:", "Proposal:", "Why:")
+ASK_ALTERNATIVES = "Other ways:"
+_LETTERED = re.compile(r"([A-Z])[.)]\s+(.*)")
+# 0200: the operator's own quoted sentence is theirs, so the plain check skips it.
+_THEIR_WORDS = re.compile(r'You wrote:\s*"[^"]*"\.?')
 
 
 class BriefError(ValueError):
@@ -103,19 +110,81 @@ def brief_problems(text: str, level: str) -> list[str]:
     if not any(where == "Question" for where, _ in fields):
         problems.append("the brief holds no Question: line")
     for where, value in fields:
-        if not value:
-            problems.append(f"{where} is empty")
-            continue
-        if limit is not None:
-            for sentence in _SENTENCE_END.split(value):
-                count = len(sentence.split())
-                if count > limit:
-                    problems.append(
-                        f"{where} sentence has {count} words, over {limit} at {level}: {sentence}"
-                    )
-        if level != EXPERT:
-            problems.extend(_token_problems(where, value))
+        problems.extend(_value_problems(where, value, level, limit))
     return problems
+
+
+def _value_problems(where: str, value: str, level: str, limit: int | None) -> list[str]:
+    if not value:
+        return [f"{where} is empty"]
+    problems: list[str] = []
+    if limit is not None:
+        for sentence in _SENTENCE_END.split(value):
+            count = len(sentence.split())
+            if count > limit:
+                problems.append(
+                    f"{where} sentence has {count} words, over {limit} at {level}: {sentence}"
+                )
+    if level != EXPERT:
+        problems.extend(_token_problems(where, value))
+    return problems
+
+
+def _ask_fields(text: str) -> list[tuple[str, str]]:
+    # 0200: one (where, text) pair per reader field and per lettered Other ways line.
+    out: list[tuple[str, list[str]]] = []
+    mode = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        field = next((name for name in ASK_FIELDS if line.startswith(name)), None)
+        if line.startswith(ASK_ALTERNATIVES):
+            mode, line = "ways", line[len(ASK_ALTERNATIVES) :].strip()
+        lettered = _LETTERED.fullmatch(line) if mode == "ways" else None
+        if field is not None:
+            out.append((field.rstrip(":"), [line[len(field) :].strip()]))
+            mode = "field"
+        elif lettered is not None:
+            out.append((f"Other way {lettered[1]}", [lettered[2]]))
+        elif _LABEL.match(line) and not line.startswith("You wrote:"):
+            mode = ""
+        elif line and out and mode:
+            out[-1][1].append(line)
+    return [(where, " ".join(" ".join(parts).split())) for where, parts in out]
+
+
+def ask_problems(text: str) -> list[str]:
+    # 0199, 0200: plain whatever docs.literacy says; an empty list means the question passes.
+    fields = _ask_fields(text)
+    problems: list[str] = []
+    if not any(where == "Question" for where, _ in fields):
+        problems.append("the question holds no Question: line")
+    for where, value in fields:
+        mine = " ".join(_THEIR_WORDS.sub(" ", value).split())
+        if mine or not value:
+            problems.extend(_value_problems(where, mine, PLAIN, SENTENCE_LIMITS[PLAIN]))
+    return problems
+
+
+def _read(label: str, real: str, next_step: str) -> str:
+    if os.path.getsize(real) > MAX_BRIEF_BYTES:
+        raise BriefError(f"{label} is over {MAX_BRIEF_BYTES} bytes. Next: {next_step}")
+    try:
+        return Path(real).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise BriefError(
+            f"{label} could not be read ({exc}). Next: rewrite the file as UTF-8 text."
+        ) from exc
+
+
+def ask_file_problems(question: Path) -> list[str]:
+    # 0199: a folder run's brainstorm folder may sit outside the repo, so no root check here.
+    real = os.path.realpath(question)
+    if not os.path.isfile(real):
+        raise BriefError(
+            f"question file {question} is not a file. Next: write the question's reader text "
+            "to the file and run ask-check again."
+        )
+    return ask_problems(_read(f"question file {question}", real, "write one question per file."))
 
 
 def brief_file_problems(repo: Path, brief: Path) -> tuple[str, list[str]]:
@@ -127,17 +196,7 @@ def brief_file_problems(repo: Path, brief: Path) -> tuple[str, list[str]]:
             f"brief {brief} is not a file under {root}. Next: write the decision brief under "
             f"{root} and run brief-check on that file."
         )
-    if os.path.getsize(real) > MAX_BRIEF_BYTES:
-        raise BriefError(
-            f"brief {brief} is over {MAX_BRIEF_BYTES} bytes. Next: write at most four short "
-            "questions per brief file."
-        )
-    try:
-        text = Path(real).read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise BriefError(
-            f"brief {brief} could not be read ({exc}). Next: rewrite the brief file as UTF-8 text."
-        ) from exc
+    text = _read(f"brief {brief}", real, "write at most four short questions per brief file.")
     manifest = load(repo)
     level = level_of(manifest.docs.literacy if manifest is not None else None)
     return level, brief_problems(text, level)

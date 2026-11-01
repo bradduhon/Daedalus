@@ -14,7 +14,7 @@ from lib import assets, git, packs, writer_mode  # noqa: E402
 from lib.agent_aliases import current as current_name  # noqa: E402
 from lib.agent_models import AgentModelError, resolve  # noqa: E402
 from lib.audit import DataDirError  # noqa: E402
-from lib.briefs import BriefError, brief_file_problems  # noqa: E402
+from lib.briefs import BriefError, ask_file_problems, brief_file_problems  # noqa: E402
 from lib.config import ConfigError, load_config  # noqa: E402
 from lib.git import GitTimeout  # noqa: E402
 from lib.manifest import Assets, ManifestError  # noqa: E402
@@ -49,7 +49,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
         "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
-        "brief-check, packs, writer-clear, assets. "
+        "brief-check, ask-check, packs, writer-clear, assets. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -119,6 +119,10 @@ def _parser() -> argparse.ArgumentParser:
     brief = sub.add_parser("brief-check")
     brief.add_argument("--repo", type=Path, required=True)
     brief.add_argument("--brief", type=Path, required=True)
+    # 0199, 0200: one brainstorm question's reader text, always checked at plain.
+    ask = sub.add_parser("ask-check")
+    ask.add_argument("--repo", type=Path, required=True)
+    ask.add_argument("--file", type=Path, required=True)
     # prepush-2026-10-27 finding 6, 0157: the pack check before any framework specialist runs.
     packs_cmd = sub.add_parser("packs")
     packs_cmd.add_argument("--repo", type=Path, required=True)
@@ -204,6 +208,18 @@ def _brief_check(repo: Path, brief: Path) -> Outcome:
         f"Next: rewrite each named question, context sentence or option label at the {level} "
         "level, then run brief-check again."
     )
+    return Outcome(EXIT_STOP, lines)
+
+
+def _ask_check(question: Path) -> Outcome:
+    try:
+        problems = ask_file_problems(question)
+    except BriefError as exc:
+        return Outcome(EXIT_STOP, [str(exc)])
+    if not problems:
+        return Outcome(EXIT_OK, ["question ok"])
+    lines = [f"question: {problem}" for problem in problems]
+    lines.append("Next: reword each named sentence in plain words, then run ask-check again.")
     return Outcome(EXIT_STOP, lines)
 
 
@@ -326,6 +342,8 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return _model(repo, args.agent, args.override, args.unit)
     if args.action == "brief-check":
         return _brief_check(repo, args.brief)
+    if args.action == "ask-check":
+        return _ask_check(args.file)
     if args.action == "packs":
         return _packs(repo, args.diff)
     if args.action == "writer-clear":
