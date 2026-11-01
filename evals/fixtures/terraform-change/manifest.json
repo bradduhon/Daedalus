@@ -1,0 +1,23 @@
+{
+  "manifest_version": 1,
+  "service_name": "logstore",
+  "purpose": "A log bucket in Terraform, used by the Daedalus golden set.",
+  "stack": {
+    "language": "terraform",
+    "runtime": "terraform",
+    "unit_test_cmd": null,
+    "typecheck_cmd": null,
+    "lint_cmd": null
+  },
+  "features": {
+    "scope": "repository",
+    "secrets_scan": false,
+    "scrub_file": null,
+    "ledger": false,
+    "dependency_web_lookup": false,
+    "terraform_tools": true
+  },
+  "jail_narrowing": { "forbidden_paths": [], "forbidden_extensions": [] },
+  "docs": { "literacy": null },
+  "ledger": null
+}

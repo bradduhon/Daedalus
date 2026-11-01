@@ -1,0 +1,12 @@
+{
+  "charter_root": null,
+  "standing_rules": null,
+  "excluded_roots": [],
+  "ledger": null,
+  "policy": null,
+  "standards_sources": [],
+  "operator_signing_keys": [],
+  "max_concurrent_builders": 5,
+  "audit_retention_days": null,
+  "agent_models": {}
+}
