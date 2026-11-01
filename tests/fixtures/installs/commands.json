@@ -180,5 +180,10 @@
   {"command": "npm -- install left-pad", "kind": "refused"},
   {"command": "pnpm --workspace add left-pad", "kind": "refused"},
   {"command": "yarn --workspace foo add x", "kind": "refused"},
-  {"command": "npm run -- install", "kind": "none"}
+  {"command": "npm run -- install", "kind": "none"},
+  {"command": "deno run --config cfg.json https://example.com/mod.ts", "kind": "launcher"},
+  {"command": "deno run --config cfg.json main.ts", "kind": "none"},
+  {"command": "npm link left-pad", "kind": "refused"},
+  {"command": "npm link", "kind": "refused"},
+  {"command": "pnpm -- dev", "kind": "none"}
 ]

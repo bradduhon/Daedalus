@@ -173,7 +173,7 @@ INSTALL_VERBS = frozenset(
     {"install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal"}
     | {"isntall", "add", "ci", "clean-install", "ic", "install-clean", "isntall-clean"}
     | {"install-test", "it", "install-ci-test", "cit", "update", "up", "upgrade", "udpate"}
-    | {"fetch", "import", "dedupe", "ddp"}
+    | {"fetch", "import", "dedupe", "ddp", "link", "ln"}
 )
 _SCRIPT_VERBS = frozenset({"run", "run-script", "rum", "urn", "test", "t", "tst", "--"})
 _EXEC_VERBS = frozenset({"exec", "x", "dlx"})
@@ -231,6 +231,7 @@ _GLOBAL_VALUED: dict[str, frozenset[str]] = {
     "poetry": frozenset({"-C", "--directory", "-P", "--project"}),
     "composer": frozenset({"-d", "--working-dir"}),
     "go": frozenset({"-C"}),
+    "deno": frozenset({"--config", "-c", "--import-map", "--lock", "--cert"}),
     **{name: shell._JS_VALUED for name in ("yarn", "bun")},
     # 0196: pnpm's --workspace is a flag, so it never swallows the verb after it.
     "pnpm": shell._JS_VALUED - {"--workspace"},
