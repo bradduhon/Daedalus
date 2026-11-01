@@ -416,7 +416,8 @@ _REGEX_TRIPWIRES: tuple[tuple[re.Pattern[str], str], ...] = (
 def _under(path: str, root: str) -> bool:
     real_path = os.path.realpath(path)
     real_root = os.path.realpath(root)
-    return real_path == real_root or real_path.startswith(real_root + os.sep)
+    # 0164: the filesystem root holds every path; "/" plus os.sep would match none.
+    return real_path == real_root or real_path.startswith(real_root.rstrip(os.sep) + os.sep)
 
 
 def _abs(path: str, cwd: str) -> str:
@@ -1358,19 +1359,146 @@ def docs_read_ok(tokens: list[str], raw: str, roots: list[str], cwd: str, base: 
 
 # B2 narrowed by audit finding (c), Build Train 20261019-124612: -m runs these modules only.
 RUNNER_MODULES = frozenset({"pytest", "mypy", "ruff", "unittest", "coverage"})
-# 0048, issue 91: runners the confine check wraps, each with the leading arguments it needs.
-# Kept apart from WRAPPER_OPTS (pin H1 -> H2); none is a WORKER_WRAPPERS name, so no grant widens.
-TEST_RUNNERS: dict[str, tuple[str, ...]] = {
-    "pytest": (),
-    "make": (),
-    "tox": (),
-    "nox": (),
-    "just": (),
-    "npx": (),
-    "uv": ("run",),
-    "go": ("test",),
-    "cargo": ("test",),
+# 0048, issue 91, 0164: runners the confine check wraps, each with the leading forms it admits;
+# () admits any. Apart from WRAPPER_OPTS (pin H1 -> H2); node, a WORKER_WRAPPERS name, is --test.
+TEST_RUNNERS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "pytest": ((),),
+    "make": ((),),
+    "tox": ((),),
+    "nox": ((),),
+    "just": ((),),
+    "npx": ((),),
+    "uv": (("run",),),
+    "go": (("test",),),
+    "cargo": (("test",),),
+    "node": (("--test",),),
+    # 0164: pnpm wraps like npm; every script, exec and fallback bin runs under the wrapper.
+    "pnpm": ((),),
+    "yarn": ((),),
+    "bun": ((),),
+    "vitest": (("run",),),
+    "tsc": (("--noEmit",),),
+    "vite": (("build",),),
+    "terraform": (("validate",), ("fmt", "-check"), ("fmt", "-recursive", "-check")),
 }
+# 0164: package scripts that start a dev server; npm's run and test verbs with their aliases.
+DEV_SCRIPTS = frozenset({"dev", "start", "serve", "preview"})
+NPM_RUN = frozenset({"run", "run-script", "rum", "urn"})
+NPM_TEST = frozenset({"test", "t", "tst"})
+# 0158, 0164: terraform subcommands that change state; refused bare and under the wrapper.
+TERRAFORM_MUTATE = frozenset(
+    {"apply", "destroy", "import", "state", "taint", "untaint", "force-unlock", "refresh"}
+)
+TERRAFORM_FMT_FLAGS = frozenset({"-check", "-recursive"})
+_JS_TOOLS = frozenset({"vite", "vitest", "tsc", "node"})
+# 0164: package managers that run a project script or a bin, and their exec verbs.
+JS_LAUNCHERS = frozenset({"pnpm", "npm", "npx", "yarn", "bun"})
+_JS_EXEC = frozenset({"exec", "x", "dlx"})
+# 0164: bun's eval options and the subcommands that are never a file to run.
+_BUN_EVAL = frozenset({"-e", "--eval", "-p", "--print"})
+_BUN_COMMANDS = frozenset(
+    {"run", "test", "x", "exec", "install", "i", "add", "a", "remove", "rm", "update", "build"}
+    | {"init", "create", "pm", "link", "unlink", "upgrade", "outdated", "publish", "patch"}
+)
+# 0164: package manager options whose value is the next word, never the command.
+_JS_VALUED = frozenset({"-C", "--dir", "-F", "--filter", "--prefix", "--cwd", "--workspace"})
+R_DEV_SERVER = (
+    "a coder never starts a dev server: the operator hosts the dev server and the verify step "
+    "names the URL and the check (0164). Next: run `vite build` for a build, or yield the URL "
+    "and the check for the operator."
+)
+R_VITEST_WATCH = (
+    "vitest runs only as `vitest run` with no watch option; any other form starts watch mode, "
+    "which never exits (0164). Next: run `vitest run`, under the kernel wrapper."
+)
+R_TSC = (
+    "tsc runs only as the type check `tsc --noEmit`, never with --watch or -w and never "
+    "emitting files (0164). Next: run `tsc --noEmit`, under the kernel wrapper."
+)
+R_TERRAFORM_MUTATE = (
+    "terraform apply, destroy, import, state, taint, untaint, force-unlock and refresh change "
+    "infrastructure or state and stay with the operator, bare or under the kernel wrapper "
+    "(0158). Next: run `terraform validate` or `terraform fmt -check`, or yield the change to "
+    "the operator."
+)
+R_TERRAFORM_OPERATOR = (
+    "a coder runs only `terraform validate` and `terraform fmt -check`, the latter with "
+    "-recursive and one folder inside your unit worktree at most, each under the kernel "
+    "wrapper; init, plan and every other subcommand or fmt form stay with the operator "
+    "(0158, 0164). Next: send one of those two forms, or yield the command to the operator."
+)
+R_WATCH = (
+    "a watch option keeps the command running and never exits (0164). "
+    "Next: drop the watch option and run the command once, under the kernel wrapper."
+)
+
+
+def _watch(arg: str) -> bool:
+    # 0164: -w and every --watch spelling, with a value or a suffix (--watch=true, --watch-path).
+    return arg == "-w" or arg.startswith("--watch")
+
+
+def _tsc_option(arg: str) -> str:
+    # 0164: tsc reads -watch, --watch and --Watch alike; the bare lowercase name, or "".
+    return arg.lstrip("-").lower() if arg.startswith("-") else ""
+
+
+def _first_positional(args: list[str], valued: frozenset[str] = frozenset()) -> int | None:
+    # 0164: the first word that is not an option, nor the value of an option in valued.
+    skip = False
+    for idx, arg in enumerate(args):
+        if skip:
+            skip = False
+        elif arg.startswith("-"):
+            skip = arg in valued
+        else:
+            return idx
+    return None
+
+
+def bun_inline(tokens: list[str]) -> bool:
+    # 0164: bun is a runtime too; -e, -p, repl and a file operand run code like node -e.
+    args = tokens[1:]
+    if any(arg in _BUN_EVAL or arg.startswith(("--eval=", "--print=")) for arg in args):
+        return True
+    first = _first_positional(args, _JS_VALUED)
+    word = args[first] if first is not None else ""
+    return word == "repl" or (word not in _BUN_COMMANDS and ("/" in word or "." in word))
+
+
+def js_inner(tokens: list[str]) -> list[str] | None:
+    # 0164: the command a package manager runs as a bin (pnpm exec node, npx node, pnpm node).
+    if not tokens or _base(tokens[0]) not in JS_LAUNCHERS:
+        return None
+    while tokens and _base(tokens[0]) in JS_LAUNCHERS:
+        name, args = _base(tokens[0]), tokens[1:]
+        if name == "bun" and bun_inline(tokens):
+            return tokens
+        first = _first_positional(args, _JS_VALUED)
+        if first is None:
+            return None
+        if args[first] in _JS_EXEC:
+            rest = [arg for arg in args[first + 1 :] if arg != "--"]
+            start = _first_positional(rest)
+            tokens = rest[start:] if start is not None else []
+        elif name == "npm":
+            return None
+        else:
+            tokens = args[first:]
+    return tokens or None
+
+
+def terraform_check(args: list[str]) -> tuple[str, ...] | None:
+    # 0158, 0164: the coder's terraform allowlist; the fmt folder operands, or None when refused.
+    rest = args[1:] if args[:1] and args[0].startswith("-chdir=") else args
+    if rest == ["validate"]:
+        return ()
+    if rest[:1] != ["fmt"]:
+        return None
+    flags = [arg for arg in rest[1:] if arg.startswith("-")]
+    paths = tuple(arg for arg in rest[1:] if not arg.startswith("-"))
+    exact = len(flags) == len(set(flags)) and set(flags) <= TERRAFORM_FMT_FLAGS
+    return paths if exact and "-check" in flags and len(paths) <= 1 else None
 
 
 def python_script(tokens: list[str]) -> str | None:
@@ -1400,24 +1528,73 @@ def _tester_runner_ok(
     if any(arg.startswith("--basetemp") for arg in args):
         return False
     if name in TEST_RUNNERS:
-        # issue 91: an option before the lead word (cargo +nightly test) fails closed as a test.
-        lead = TEST_RUNNERS[name]
-        if lead and args and args[0][:1] in {"-", "+"}:
+        # issue 91: an option before the lead (cargo +nightly test) fails closed as a test, bar
+        # a WORKER_WRAPPERS name, where a match admits the command (node -e stays refused).
+        forms = TEST_RUNNERS[name]
+        if all(forms) and args and args[0][:1] in {"-", "+"} and name not in WORKER_WRAPPERS:
             return True
-        return tuple(args[: len(lead)]) == lead
+        return any(tuple(args[: len(form)]) == form for form in forms)
     if name == "npm":
-        return bool(args) and (
-            args[0] in {"test", "t"} or (args[0] in {"run", "run-script"} and len(args) > 1)
-        )
+        return bool(args) and (args[0] in NPM_TEST or (args[0] in NPM_RUN and len(args) > 1))
     if name in {"python", "python3"}:
         # B2, finding (c): a runner module, or a script own_script places in the coder's worktree.
         if args[:1] == ["-m"]:
             return len(args) > 1 and args[1] in RUNNER_MODULES
         script = python_script(tokens)
         return script is not None and own_script is not None and own_script(script)
-    if name == "node":
-        return bool(args) and not args[0].startswith("-")
     return False
+
+
+def runner_row(tokens: list[str]) -> bool:
+    # 0164: a TEST_RUNNERS form, after any wrapper; the kernel wrapper's read roots attach to it.
+    inner = strip_wrappers(tokens) or tokens
+    name = _base(inner[0]) if inner else ""
+    return name in TEST_RUNNERS and _tester_runner_ok(name, inner)
+
+
+def runner_refusal(tokens: list[str]) -> str | None:
+    # 0164, 0158: a dev server, a watch mode or a terraform state change, bare or wrapped.
+    inner = strip_wrappers(tokens) or tokens
+    if not inner:
+        return None
+    name, args = _base(inner[0]), inner[1:]
+    if name in JS_LAUNCHERS:
+        # 0164: a dev script anywhere, -- included; a tool it runs; a watch flag after the verb.
+        if name != "npx" and DEV_SCRIPTS & set(args):
+            return R_DEV_SERVER
+        tool = next((i for i, arg in enumerate(args) if _base(arg) in _JS_TOOLS), None)
+        refused = None if tool is None else runner_refusal(args[tool:])
+        first = _first_positional(args, _JS_VALUED)
+        # 0164: bun's own --watch and --hot sit before its verb; yarn, pnpm and npm pass it on.
+        flags = args if name == "bun" else args[first + 1 :] if first is not None else []
+        if refused is None and name != "npx":
+            refused = R_WATCH if any(_watch(a) or a == "--hot" for a in flags) else None
+        return refused
+    head = args[: args.index("--")] if "--" in args else args
+    watch = any(_watch(arg) for arg in head)
+    if name == "node":
+        return R_WATCH if watch else None
+    if name == "vite":
+        return None if head[:1] == ["build"] and not watch else R_DEV_SERVER
+    if name == "vitest":
+        return None if head[:1] == ["run"] and not watch else R_VITEST_WATCH
+    if name == "tsc":
+        options = [_tsc_option(arg) for arg in head]
+        # 0164: the last --noEmit decides; a following false turns emitting back on.
+        last = len(options) - 1 - options[::-1].index("noemit") if "noemit" in options else -1
+        emit = last < 0 or head[last + 1 :][:1] == ["false"]
+        watching = any(opt == "w" or opt.startswith("watch") for opt in options)
+        return R_TSC if emit or watching else None
+    if name == "terraform":
+        if terraform_check(args) is not None:
+            return None
+        verbs = [arg for arg in args if not arg.startswith("-")]
+        return (
+            R_TERRAFORM_MUTATE
+            if verbs[:1] and verbs[0] in TERRAFORM_MUTATE
+            else (R_TERRAFORM_OPERATOR)
+        )
+    return None
 
 
 def _exempt_indices(tokens: list[str]) -> set[int]:
@@ -1577,8 +1754,9 @@ def _worker_hygiene(
         return R_ENV
     if runs_claude(tokens, base):
         return R_CLAUDE_PATH
-    if own_script is not None and _base(tokens[0]) == CONFINE:
-        # 0048: the coder's wrapped command is judged as if it ran bare; the wrapper adds no grant.
+    wraps = own_script is not None or agent == "terraform-reviewer"
+    if wraps and _base(tokens[0]) == CONFINE:
+        # 0048, 0158: a coder's or the terraform reviewer's wrapped command is judged as if bare.
         split = confine_split(tokens)
         if split is None or not confine_wrapper(tokens[0], base):
             return R_CONFINE_FORM
@@ -1623,6 +1801,13 @@ def _worker_hygiene(
         return R_LEDGER_LITERAL
     if is_wrapper and not ledger and not _tester_runner_ok(name, tokens, own_script):
         return R_INLINE
+    # 0164: pnpm exec node -e, npx node <file> and the like meet the interpreter rule too.
+    bin_run = js_inner(tokens)
+    if bin_run and _base(bin_run[0]) == "bun" and bun_inline(bin_run):
+        return R_INLINE
+    if bin_run and _base(bin_run[0]) in WORKER_WRAPPERS:
+        if not _tester_runner_ok(_base(bin_run[0]), bin_run, own_script):
+            return R_INLINE
     spans: list[str | None] = list(words) if words and len(words) == len(tokens) else []
     for idx, token in enumerate(tokens):
         word = spans[idx] if spans else None

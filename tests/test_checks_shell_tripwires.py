@@ -251,8 +251,13 @@ class TestRound3WorkerHygiene:
             assert not decide(_b(agent, command), CFG).allow, (agent, command)
 
     def test_runner_forms_still_allowed(self) -> None:
-        for command in ("python3 -m pytest -q", "node t.js", "uv run pytest"):
+        for command in ("python3 -m pytest -q", "node --test t.js", "uv run pytest"):
             assert decide(_b("coder", command), CFG).allow, command
+
+    def test_node_runs_only_its_test_runner(self) -> None:
+        # 0164: node's runner row is --test; a script or an option first stays an interpreter.
+        for command in ("node t.js", "node -e 1", "node --inspect --test t.js"):
+            assert evaluate(HOOK, _b("coder", command)) == shell.R_INLINE, command
 
 
 class TestQuotedHygiene:

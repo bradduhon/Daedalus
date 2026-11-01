@@ -1,0 +1,34 @@
+{
+  "shell.R_DEV_SERVER": {
+    "failure": "0164: a coder starts a dev server such as vite, vite dev or pnpm dev, which listens on a port and never exits, where the operator hosts the site and the verify step names the URL",
+    "premise_test": "tests/test_confine.py::test_a_dev_server_is_refused_bare_and_wrapped"
+  },
+  "shell.R_VITEST_WATCH": {
+    "failure": "0164: a coder runs vitest without run, which starts watch mode and holds the coder's turn open forever",
+    "premise_test": "tests/test_confine.py::test_a_watch_mode_is_refused_bare_and_wrapped"
+  },
+  "shell.R_TSC": {
+    "failure": "0164: a coder runs tsc in watch mode, or emits files where the type check is the only tsc form a coder needs",
+    "premise_test": "tests/test_confine.py::test_a_watch_mode_is_refused_bare_and_wrapped"
+  },
+  "shell.R_TERRAFORM_MUTATE": {
+    "failure": "0158: a coder or the terraform reviewer runs terraform apply, destroy, import, state or taint, bare or under the kernel wrapper, and changes infrastructure or state",
+    "premise_test": "tests/test_confine.py::test_a_terraform_state_change_is_refused_bare_and_wrapped"
+  },
+  "jail.R_PACKAGE_INSTALL": {
+    "failure": "0164: an agent runs pnpm, npm, yarn or bun install, add, update, i or ci, which reaches the package registry and writes a package store outside the unit worktree",
+    "premise_test": "tests/test_checks_network_tools.py::test_a_package_install_is_refused_as_operator_run"
+  },
+  "jail.R_PACKAGE_DOWNLOAD": {
+    "failure": "0164: a coder runs pnpm dlx, yarn dlx, bunx, npm exec or npx -y, which downloads a package the project does not pin and runs it",
+    "premise_test": "tests/test_checks_network_tools.py::test_a_download_and_run_tool_is_refused_for_the_operator"
+  },
+  "shell.R_TERRAFORM_OPERATOR": {
+    "failure": "0164: a coder runs a terraform subcommand other than validate and fmt -check, such as init, plan or console, which reaches providers, state or the network",
+    "premise_test": "tests/test_confine.py::test_any_other_terraform_form_is_the_operators"
+  },
+  "shell.R_WATCH": {
+    "failure": "0164: a coder passes a watch option to node --test or a package script, and the command never exits",
+    "premise_test": "tests/test_confine.py::test_a_watch_mode_is_refused_bare_and_wrapped"
+  }
+}

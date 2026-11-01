@@ -29,7 +29,12 @@ You are off the network. Bash runs read-only inspection, the git reads `diff`, `
 module folder with `-chdir=` (0132):
 `terraform -chdir=<absolute module folder> fmt -check` and
 `terraform -chdir=<absolute module folder> validate`. The folder lies inside the project.
-The hook refuses every other form, and refuses both while `features.terraform_tools` is false.
+Run each one under the kernel wrapper, which keeps its writes in a unit worktree and opens no
+network socket: `<plugin root>/scripts/daedalus_confine.py --unit <unit worktree> -- terraform
+-chdir=<absolute module folder> validate`, the unit worktree a folder under
+`<repo>/.claude/worktrees/` (0164). The hook admits that wrapped form and the two bare forms
+above, refuses every other form, and refuses all of them while `features.terraform_tools` is
+false.
 It refuses `validate` unless `features.terraform_validate` is true (0158), because validate
 starts the provider programs under `.terraform/providers`.
 Never run `init`, `plan`, `apply`, `destroy`, `import`, `state`, `taint`, `refresh` or any

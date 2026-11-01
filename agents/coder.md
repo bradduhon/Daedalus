@@ -147,8 +147,12 @@ The jail passes these for a coder:
   `config --get` or `config --list`. `add` and `commit` run only inside your unit worktree.
 - Test commands: `pytest`, `python3 -m` with pytest, mypy, ruff, unittest or coverage, and
   `python3` on a script in your worktree. Where the kernel rules line reads OK, each one
-  starts with the kernel wrapper. A test that needs a GPU, a browser or a running server is
-  an operator check the plan lists, never a test command you write or run (0164).
+  starts with the kernel wrapper.
+  The same holds for `node --test`, `pnpm test`, `pnpm run test`, `pnpm exec vitest run`,
+  `pnpm exec tsc --noEmit`, `vitest run`, `tsc --noEmit`, `vite build`, `terraform validate`
+  and `terraform fmt -check`, while a dev server, a watch mode and a package install are never
+  coder commands (0164). A test that needs a GPU, a browser or a running server is an
+  operator check the plan lists, never a test command you write or run (0164).
 - The cite script, `python3 <plugin root>/scripts/cite.py <file> <pattern>`, with the file
   inside your worktree.
 
