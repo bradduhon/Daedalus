@@ -1531,11 +1531,11 @@ def _task_issues(summary: str) -> list[str]:
 
 
 def issue_lines(summary: str) -> list[str]:
-    # Work-order line 24: Closes for landed work, Refs when the record says partial.
-    closed = list(dict.fromkeys([*_task_issues(summary), *_CLOSES.findall(summary)]))
-    partial = list(dict.fromkeys(_REFS.findall(summary)))
-    lines = [f"{'Refs' if n in partial else 'Closes'} #{n}" for n in closed]
-    return lines + [f"Refs #{n}" for n in partial if n not in closed]
+    # Work-order line 24: Closes only from a closing keyword; any other mention, partial too, Refs.
+    partial = _REFS.findall(summary)
+    closed = [n for n in dict.fromkeys(_CLOSES.findall(summary)) if n not in partial]
+    mentioned = dict.fromkeys([*_task_issues(summary), *partial])
+    return [f"Closes #{n}" for n in closed] + [f"Refs #{n}" for n in mentioned if n not in closed]
 
 
 def pr_body(repo: Path, train_id: str) -> list[str]:

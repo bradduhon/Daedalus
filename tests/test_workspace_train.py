@@ -1242,9 +1242,11 @@ def test_plain_release_skips_an_unchanged_version_and_takes_base_only_with_notes
             (f"Closes {HASH}12. Fixes {HASH}13.",),
             ["Closes 12", "Closes 13"],
         ),
-        ("finish issues 54, 24 and 130", (), ["Closes 54", "Closes 24", "Closes 130"]),
+        ("finish issues 54, 24 and 130", (), ["Refs 54", "Refs 24", "Refs 130"]),
+        ("start after issue 54 lands", (), ["Refs 54"]),
         (f"start {HASH}61 (partial {HASH}61)", (), ["Refs 61"]),
-        ("fix issue 9", (f"Refs {HASH}40",), ["Closes 9", "Refs 40"]),
+        ("fix issue 9", (f"Refs {HASH}40", f"Closes {HASH}9"), ["Closes 9", "Refs 40"]),
+        ("tidy the wording", (f"Fixes {HASH}7", f"partial {HASH}7"), ["Refs 7"]),
         ("tidy the wording", (), []),
     ],
 )
