@@ -204,7 +204,7 @@ Read the catalog once first with `/daedalus:catalog`. A one-line task needs no f
 
 ### Starting from an idea
 
-With only an idea and no spec, type `/daedalus:brainstorm` and the idea, or the path of a notes file. The planner agent answers in numbered rounds. Each round lists contradictions, gaps and proposals, each tied to a sentence you wrote. Each item arrives as a question with the planner's options. Type your answer or pick one. When the idea settles, the planner writes a spec draft under `docs/.tmp/daedalus/brainstorm-<YYYYMMDD>/`. Move it to where your project keeps its specs, and say the spec stands. The same planner then cuts the plan, as in the next section.
+With only an idea and no spec, type `/daedalus:brainstorm` and the idea, or the path of a notes file. The planner agent asks you one question at a time. Each question comes with a proposal you can accept, and sometimes a few other ways. Pick one, or choose Other and type your own answer. Your answer shapes the next question. When the idea settles, the planner asks if it can write the design. It writes a spec draft under `docs/.tmp/daedalus/brainstorm-<YYYYMMDD>/`. Move it to where your project keeps its specs, and say it stands. The same planner then cuts the plan, as in the next section.
 
 ### Splitting the work first
 
