@@ -35,6 +35,8 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"brief-check"}
         # prepush-2026-10-27 finding 6: the pack check before the first framework specialist.
         | {"packs"}
+        # 0192: the asset pathspec tail the judges' diff lines carry.
+        | {"assets"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir", "--check-tools"}),

@@ -28,17 +28,19 @@ Every file and setting daedalus reads, with the smallest example that works. `/d
   "max_concurrent_builders": 5,
   "audit_retention_days": null,
   "wrapper_read_roots": ["~/.local/share/pnpm/store", "~/.nvm"],
-  "agent_models": { "coder": "sonnet", "auditor": "opus" }
+  "coder_models": { "default": "sonnet", "control_path": "opus", "escalated": "opus" },
+  "agent_models": { "planner": "sonnet", "auditor": "opus" }
 }
 ```
 
-Every key in this file is a row of the generated key reference in the plugin [README](../README.md#key-reference): what it governs, its type, its allowed values, its default and an example. The doctor checks `ledger`, `standing_rules`, `standards_sources`, `policy` and `audit_retention_days` **(checked)**. A key set to `null` counts as absent (0076). Six notes the table has no room for:
+Every key in this file is a row of the generated key reference in the plugin [README](../README.md#key-reference): what it governs, its type, its allowed values, its default and an example. The doctor checks `ledger`, `standing_rules`, `standards_sources`, `policy` and `audit_retention_days` **(checked)**, and prints one line with the three `coder_models` models when that key is set. A key set to `null` counts as absent (0076). Seven notes the table has no room for:
 
 - `ledger`: with no ledger declared and none found, the Build Train stops and asks before creating one.
 - `standing_rules`: the file `scripts/standing_rules.py` writes from the ledger (see the standing-rules backfill file below). The plan and brainstorm skills hand its path to the planner. The doctor prints `OK` when the file exists, `OPT` when the key is absent, and `MISS` when the key names no file.
 - `standards_sources`: with none declared, the Standards Packet is empty, the auditor judges against the spec only, and the doctor offers the baseline pack on an `OPT` line.
 - `audit_retention_days`: a whole number of at least 90 (AU-11). When a new session writes its first record, each older log is deleted under its own lock, and one `AuditRotation` record in the new session's chain names every deleted session with its final seq and hash (AU-9(4)). A log named on a summary's `Session <id>:` line, a log changed since an unmerged train started, the current session's log, and a log another session holds are kept. Any read or parse error deletes nothing.
-- `agent_models`: an object from an agent name the catalog lists to `sonnet`, `opus`, `haiku` or `fable`. For example, `"agent_models": { "coder": "sonnet" }` runs the coding agent on sonnet while every other agent keeps the model its agent file names. An unknown agent name or model refuses the config with a `Next:` line naming the key. The names `nist-specialist` and `cis-specialist` are no longer catalog agents, so a config that still names either is refused; rename the key to `framework-specialist`, the one agent that replaced both. Six agents took the name of the phase they serve in this release (agents named by phase, 0190): the coder, the auditor, the releaser, the comparer, and the writer, which does the work of two former agents. A config, a priorities block or a train definition that still uses one of their old names reads it as the new name for this release only. The health check (`/daedalus:doctor`) prints one line for each old name it finds, naming the new name to write in its place. Run `python3 scripts/catalog.py table --repo <repo>` from the plugin folder to see the model each agent runs on.
+- `coder_models`: picks the model for each coding agent a run starts. A unit runs on the `default` model, sonnet unless you change it. A unit that changes a file under `agents/`, `skills/`, `hooks/` or `scripts/checks/`, or one of the three jail files, runs on the `control_path` model. The folder names count in any project, not only in this plugin. When the checker rejects a unit once, the same coding agent fixes it. When the checker rejects it a second time, a fresh coding agent on the `escalated` model takes the unit over with the checker's findings, and the run goes on. A third rejection comes to you as a question. Each start of a coding agent passes this model, so it comes before `agent_models.coder` and the coder agent file. The token report shows the model of every row and, per model, how many units the checker rejected.
+- `agent_models`: an object from an agent name the catalog lists to `sonnet`, `opus`, `haiku` or `fable`. For example, `"agent_models": { "planner": "sonnet" }` runs the planner on sonnet while every other agent keeps the model its agent file names. Inside a run, the coding agent's model comes from `coder_models`, so `agent_models.coder` only sets the coder started outside a run. An unknown agent name or model refuses the config with a `Next:` line naming the key. The names `nist-specialist` and `cis-specialist` are no longer catalog agents, so a config that still names either is refused; rename the key to `framework-specialist`, the one agent that replaced both. Six agents took the name of the phase they serve in this release (agents named by phase, 0190): the coder, the auditor, the releaser, the comparer, and the writer, which does the work of two former agents. A config, a priorities block or a train definition that still uses one of their old names reads it as the new name for this release only. The health check (`/daedalus:doctor`) prints one line for each old name it finds, naming the new name to write in its place. Run `python3 scripts/catalog.py table --repo <repo>` from the plugin folder to see the model each agent runs on.
 - `wrapper_read_roots`: folders outside the project that a coder's test runner needs, such as the pnpm package store and a Node.js install. The kernel wrapper lets a runner such as `pnpm test`, `vitest run` or `node --test` read those folders and run programs from them, and never write there; any other command gets no such grant. A `~/` path is expanded to your home folder. A path that holds or sits inside a credential store, such as `~/.ssh` or `~/.aws`, refuses the config with a `Next:` line (0164). Installing packages stays with you: a coder's `pnpm install`, `npm ci` or `yarn add` is refused.
 
 ### Ledger formats
@@ -130,9 +132,14 @@ Each CSV line becomes one control: its `id` and `refs.cis` are the CIS id, its `
 
 ### Framework control packs
 
-A pack is a folder holding `pack.json` and `controls.json`. The folder name is the pack id. Daedalus ships two packs under `<plugin>/packs/frameworks/`: `aws-default` and `nist-distilled`.
+A pack is a folder holding `pack.json` and `controls.json`. The folder name is the pack id. Daedalus ships four packs under `<plugin>/packs/frameworks/`:
 
-`pack.json` is one JSON object with exactly these keys:
+- `aws-default`: AWS hardening controls. It is read by default.
+- `nist-distilled`: a NIST SP 800-53 checklist. It is read by default.
+- `stripe-default`: Stripe key handling, webhook signatures and server-set prices. It is read by default, but only when a change touches a path its triggers name: a file with `stripe` in its name, a `.env` file, `package.json` or an npm lockfile.
+- `cost-tier`: cost rules for Terraform on AWS, such as service-default keys, on-demand tables and log retention. It is off by default. To read it, add `"packs": ["cost-tier"]` to the `frameworks` block.
+
+`pack.json` is one JSON object with these keys:
 
 - `id`: the pack name, lowercase letters, digits and dashes, 1 to 40 characters.
 - `version`: three dot-separated numbers, such as `1.0.0`.
@@ -140,11 +147,15 @@ A pack is a folder holding `pack.json` and `controls.json`. The folder name is t
 - `license`: one line, such as `GPL-3.0-or-later`, `public domain (17 U.S.C. 105)` or `operator-licensed, ids only`.
 - `pinned_on`: the `YYYY-MM-DD` date the pack was written.
 - `sha256`: the 64 lowercase hex SHA-256 of `controls.json`.
+- `default` (optional, shipped packs only): `false` keeps a shipped pack off until `frameworks.packs` names it. Absent means `true`.
+- `triggers` (optional, shipped packs only): a list of 1 to 32 path globs, such as `**/*stripe*`. The audit reads the pack only when a changed path matches one, and then it asks the framework specialist even when no unit touched IAM, keys or infrastructure. Matching ignores letter case, and a leading `**/` also matches a file at the project root. Absent means the pack is read whenever the specialist runs.
+
+A pack under `frameworks.pack_dir` that holds `default` or `triggers` fails its check.
 
 `controls.json` is `{"schema": "daedalus-controls/1", "controls": [...]}`. Each control holds:
 
 - `id` (required): unique in the pack, such as `AWS-IAM-1`.
-- `service` (required): one of `iam`, `s3`, `kms`, `cloudtrail`, `vpc`, `lambda`, `dynamodb`, `apigateway`, `ec2`, `ecs`, `ecr`, `logs` or `any`.
+- `service` (required): one of `iam`, `s3`, `kms`, `cloudtrail`, `vpc`, `lambda`, `dynamodb`, `apigateway`, `ec2`, `ecs`, `ecr`, `logs`, `payments` or `any`.
 - `title` (required): one line in the pack author's words.
 - `statement`, `look_for` and `verify` (required unless `maps_to` is set): the requirement in the author's words, what in a diff shows the control met or broken, and one read-only command that tests the control against the tree.
 - `live_check` (optional): one read-only cloud command for the operator to run.
@@ -163,7 +174,8 @@ To build a pack from a NIST catalog, download the catalog with the refresh scrip
 The `frameworks` block of `service-manifest.json` picks the packs a train reads:
 
 - `frameworks.pack_dir`: a project-relative folder; each subfolder of it holding `pack.json` is one pack. A linked subfolder is skipped.
-- `frameworks.default_packs`: `true` (the default) also reads the shipped packs; `false` reads only the packs under `frameworks.pack_dir`.
+- `frameworks.default_packs`: `true` (the default) also reads the shipped packs that are on by default; `false` reads only the packs under `frameworks.pack_dir` and the packs `frameworks.packs` names.
+- `frameworks.packs`: a list of shipped pack ids to read even though they are off by default, such as `["cost-tier"]`. An id Daedalus does not ship stops the train, and the doctor names it.
 
 With no `frameworks` block, only the shipped packs are read. The manifest reader refuses any other key in the block.
 
@@ -181,8 +193,10 @@ The doctor prints one line per pack, after the framework cache lines:
 Example:
 ```json
 { "manifest_version": 1, "service_name": "my-service", "purpose": "One sentence.",
-  "stack": { "language": "python", "runtime": "python3.12", "package_registries": ["pypi.org"],
-             "unit_test_cmd": "pytest -q", "typecheck_cmd": null, "lint_cmd": "ruff check .", "build_cmd": null },
+  "stack": { "language": "python", "runtime": "python3.12", "package_registries": ["pypi.org", "registry.npmjs.org"],
+             "package_manager": "pnpm",
+             "unit_test_cmd": ["pytest -q", "pnpm vitest run"], "typecheck_cmd": ["mypy src", "pnpm tsc --noEmit"],
+             "lint_cmd": "ruff check .", "build_cmd": null },
   "entrypoints": { "handlers": "src/handlers/", "models": "src/models/", "infra": "infra/", "contracts": "contracts/" },
   "exposure_and_traits": { "is_public": false, "has_website": false, "operator_panel_integrated": false,
                             "contains_customer_data": false, "touches_key_material": false,
@@ -191,9 +205,12 @@ Example:
   "trains_dir": null,
   "frameworks": { "pack_dir": "compliance/packs", "default_packs": true },
   "jail_narrowing": { "forbidden_extensions": [], "forbidden_paths": [] },
+  "assets": { "roots": ["assets/", "public/models/"], "extensions": [".glb", ".gltf", ".png", ".ktx2", ".wav", ".ogg", ".wgsl", ".spv"],
+              "max_bytes": 1048576 },
+  "dev_server": { "url": "http://localhost:5173", "check": "the scene loads and the player can move" },
   "upstream_dependencies": [], "downstream_dependencies": [] }
 ```
-The manifest reader checks `jail_narrowing`, `features`, `trains_dir`, `frameworks`, the three stack commands and the `ledger` block; each of those keys is a row of the generated key reference in the plugin [README](../README.md#key-reference). The reader refuses an unknown key inside `jail_narrowing`, `features` or `frameworks`, except the dropped `features.github` key: a manifest that still carries it loads with any value, the key changes nothing, and the doctor prints one `OPT` line naming it (0172). The doctor's two gh lines are a `MISS` in repository scope and `OPT` in folder scope (0074). The `frameworks` keys are described under "Framework control packs" above. The keys below describe the project for the people and agents who read the file. No reader checks them, so a wrong value is never refused.
+The manifest reader checks `jail_narrowing`, `features`, `trains_dir`, `frameworks`, the three stack commands, `stack.package_manager`, `assets`, `dev_server` and the `ledger` block; each of those keys is a row of the generated key reference in the plugin [README](../README.md#key-reference). The reader refuses an unknown key inside `jail_narrowing`, `features`, `frameworks`, `assets` or `dev_server`, except the dropped `features.github` key: a manifest that still carries it loads with any value, the key changes nothing, and the doctor prints one `OPT` line naming it (0172). The doctor's two gh lines are a `MISS` in repository scope and `OPT` in folder scope (0074). The `frameworks` keys are described under "Framework control packs" above. The keys below describe the project for the people and agents who read the file. No reader checks them, so a wrong value is never refused.
 
 | Key | What it governs | Type | Allowed values | Default | Example |
 |---|---|---|---|---|---|
@@ -215,6 +232,12 @@ The manifest reader checks `jail_narrowing`, `features`, `trains_dir`, `framewor
 | `downstream_dependencies` | The services that call this project; no Daedalus code reads it yet | list | Service names or objects of your choosing | none | `[]` |
 
 `jail_narrowing` adds paths a coder may not write (0054-DAE-PLT). Each `forbidden_paths` entry is relative to the repository root, uses forward slashes, and holds no leading slash, `..` or glob characters. An entry ending in a slash covers that folder and everything under it; an entry without one names one file. Each `forbidden_extensions` entry starts with a dot and covers every file name ending in it. Matching ignores case. The jail reads this file from the main checkout, never from a coder's worktree. A manifest that is not valid JSON, or whose `jail_narrowing` has the wrong shape, refuses every coder write until it is fixed, and the doctor reports it as a `MISS`. When the file is present, the doctor's line counts the entries: `OK   service-manifest.json: jail_narrowing <n> paths, <m> extensions`. When `stack.typecheck_cmd` is declared, the doctor prints it on an `OPT` line and does not run it; it runs the command only when you pass `--run-typecheck` to `daedalus_doctor.py` yourself, because that flag executes a command the repository chose (0076).
+
+Stack commands as lists. Each of `unit_test_cmd`, `typecheck_cmd` and `lint_cmd` takes one command or a list of commands, so a Python and TypeScript project can declare `["pytest -q", "pnpm vitest run"]`. A coder may run each entry exactly as written. An empty list, or a list holding anything but non-empty strings, is refused. The doctor prints one `OPT` typecheck line per declared typecheck command. `stack.package_manager` names `pnpm`, `npm`, `yarn`, `pip` or `uv`, and the doctor prints it on its stack line: `OK   stack: package manager pnpm; commands: 2 unit test, 2 typecheck, 1 lint`. `stack.build_cmd` stays unchecked, and no coder runs it.
+
+Asset files. The `assets` block keeps models, textures, sounds and shader binaries out of the diffs the verifier, the auditor and the framework specialist read, and out of the secret scan. `roots` names asset folders and `extensions` names asset file endings. A file with a source ending, such as `.py`, `.ts`, `.js`, `.json`, `.env`, `.sh` or `.md`, is never kept out, wherever it sits and however large it is. An `extensions` entry with a source ending is refused. `max_bytes` lists each kept-out asset file larger than it by name and size, so the judges know it changed. Each run prints the exclusion with `daedalus_train.py assets --repo <repo> --base <sha> --tip <branch>`: `Assets: none`, or `Assets: -- . ':(exclude)assets/' ...` and an `Assets log-opts:` line for the secret scan. Then come one `Over size: <file> (<n> bytes)` line per large asset file and one `Asset root source: <file>` line per source file under an asset root. The judges copy those lines, so nobody composes the exclusion by hand. Keep source files out of asset folders. A source file under a root stays in every diff, the auditor reports a change to it as a finding, and the doctor prints one `OPT  asset root source file <path>` line for each one it finds.
+
+Operator checks and the dev server. A coder never starts a dev server and never writes a test that needs a GPU or a browser. The plan lists such checks on the unit's line as `operator_checks: the scene loads; the player can move`, at most ten. Set `dev_server` to the site you host on your own machine: its `url` must be `http` or `https` on `localhost` or `127.0.0.1`, and `check` says what to look at. After the verifier passes a unit, the session asks you each check in plain words: open the url, do the check, and answer pass, fail or skip. It also asks the `dev_server` check when the unit changes web code. A fail goes back to the unit's coder as a fix. A skip is recorded with your reason. Daedalus never starts, polls or fetches the site. The doctor prints `OK   dev server: <url>; the verify step asks you to open it and check: <check>` when the key is set.
 
 A later Daedalus release reads missing exposure flags as the stricter value. Coders cannot edit this file (enforced for file tools and the common copy/edit commands; a script the coder writes and runs is not blocked yet). In that later release, a change to it goes through contract-spec and the ledger.
 

@@ -1,0 +1,50 @@
+{
+  "schema": "daedalus-controls/1",
+  "controls": [
+    {
+      "id": "STRIPE-1",
+      "service": "payments",
+      "title": "No Stripe secret, restricted or webhook key is committed",
+      "statement": "No Stripe secret key, restricted key or webhook signing secret (the sk_live_, sk_test_, rk_live_, rk_test_ and whsec_ prefixes) appears in source or committed config. The server reads each key from its environment at run time or from a secret store. A key in a committed file fails, because anyone with read access to the repository or its history can charge, refund or read customer data with it.",
+      "look_for": "A literal value after one of the five prefixes in code, config, tests, fixtures or docs; a key passed as a default value to an environment lookup.",
+      "verify": "rg -n '(sk|rk)_(live|test)_[0-9A-Za-z]|whsec_[0-9A-Za-z]' .",
+      "refs": {"nist": ["IA-5", "SC-28"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "STRIPE-2",
+      "service": "payments",
+      "title": "Every .env file is git-ignored and only .env.example is committed",
+      "statement": "Every .env file is listed in .gitignore and absent from the tree. A committed .env.example holds variable names only, each with an empty value or a placeholder that is not a key. A tracked .env file, or a .env.example holding a real value, fails, because the keys in it reach every clone.",
+      "look_for": "No .env line in .gitignore; a .env or .env.<name> file in git ls-files; a value after the equals sign in .env.example that carries a Stripe key prefix.",
+      "verify": "rg -n '^/?[.]env' -g '.gitignore' .",
+      "refs": {"nist": ["IA-5", "CM-6"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "STRIPE-3",
+      "service": "payments",
+      "title": "Webhook handlers verify the Stripe signature before reading the event",
+      "statement": "Every Stripe webhook handler verifies the Stripe-Signature header with constructEvent (Node) or Webhook.construct_event (Python) against the raw request body, before it reads any field of the event. A handler that parses the body first, or skips the check, fails, because anyone who finds the endpoint can then forge a paid event.",
+      "look_for": "A webhook route that reads req.body or request.json before the signature check; a body parser that consumes the raw body before constructEvent; a handler with no signature check.",
+      "verify": "rg -ni 'constructEvent|construct_event|stripe-signature|webhook' -g '*.ts' -g '*.js' -g '*.mjs' -g '*.py' .",
+      "refs": {"nist": ["SI-10", "SC-8"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "STRIPE-4",
+      "service": "payments",
+      "title": "Only the publishable key reaches client code",
+      "statement": "Client code holds only the publishable key (the pk_ prefix). A secret or restricted key prefix in client source, or a secret key exposed through a client build variable (VITE_, NEXT_PUBLIC_, REACT_APP_ or PUBLIC_), fails, because every visitor can read the shipped bundle.",
+      "look_for": "A secret key prefix in browser code; a client build variable whose name holds SECRET; a server key imported into a module the client bundle includes.",
+      "verify": "rg -n '(sk|rk)_(live|test)_|(VITE|NEXT_PUBLIC|REACT_APP|PUBLIC)_[A-Z0-9_]*SECRET' -g '*.ts' -g '*.tsx' -g '*.js' -g '*.jsx' -g '*.vue' -g '*.svelte' -g '*.html' .",
+      "refs": {"nist": ["AC-6", "SC-12"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "STRIPE-5",
+      "service": "payments",
+      "title": "The server sets every amount and currency",
+      "statement": "The amount and currency of every charge, payment intent or checkout session come from the server's own catalog or from Stripe price ids. An amount, unit_amount or currency taken from the client request fails, because a player can then pay any price for any item.",
+      "look_for": "unit_amount, amount or currency read from req.body, request.json or a query string; price_data built from client input instead of a server-side lookup.",
+      "verify": "rg -n 'unit_amount|price_data|amount *:|currency *:|(body|json|query)[^a-z]{0,4}(amount|price|currency)' -g '*.ts' -g '*.js' -g '*.mjs' -g '*.py' .",
+      "refs": {"nist": ["SI-10"], "cis": [], "asvs": []}
+    }
+  ]
+}

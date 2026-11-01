@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import daedalus_confine  # noqa: E402
-from lib import git, inventory, packs  # noqa: E402
+from lib import assets, git, inventory, packs  # noqa: E402
 from lib.agent_aliases import OLD_NAMES, renamed_line  # noqa: E402
 from lib.audit import (  # noqa: E402
     DataDirError,
@@ -26,12 +26,14 @@ from lib.audit import (  # noqa: E402
     project_data_dir,
     project_root,
 )
+from lib.coder_model import TIERS  # noqa: E402
 from lib.config import Config, ConfigError, load_config, standing_rules_path  # noqa: E402
 from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
 from lib.manifest import (  # noqa: E402
     Features,
     ManifestError,
     PrioritiesError,
+    declared_commands,
     retired_features,
     scope_kind,
 )
@@ -170,6 +172,8 @@ def _framework_lines() -> Iterator[tuple[bool, str]]:
 
 
 PACK_DIR_NEXT = "create it or remove frameworks.pack_dir from service-manifest.json"
+# 0192: a frameworks.packs id must be a folder under <plugin>/packs/frameworks.
+PACK_NAMED_NEXT = "name a pack listed in the README section on control packs, or remove the id"
 # prepush-2026-10-27: an unreadable pack folder is a MISS line, never a crash.
 PACK_READ_NEXT = "make the pack folders readable to you, or fix frameworks.pack_dir"
 PACK_SHIPPED_NEXT = "reinstall the Daedalus plugin; a shipped pack is never edited in place"
@@ -237,6 +241,9 @@ def _pack_checks(repo: Path, today: date) -> Iterator[tuple[bool, str]]:
     try:
         yield from _pack_dir_check(repo)
         folders = packs.pack_folders(repo)
+        for ident in packs.unknown_named(repo):
+            line = f"frameworks.packs names {ident}, which Daedalus does not ship"
+            yield False, _printable(f"MISS framework packs: {line}. Next: {PACK_NAMED_NEXT}")
     except ManifestError:
         return  # 0054: the manifest line already reports the refusal as a MISS.
     except OSError as exc:
@@ -471,6 +478,10 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
         return
     if cfg_path.exists():
         yield True, "OK   config.json"
+        if _json_keys(cfg_path, "coder_models"):
+            # 0187: one line naming the coder's model for each of the three tiers.
+            tiers = ", ".join(f"{tier} {config.coder_models[tier]}" for tier in TIERS)
+            yield True, f"OK   coder_models: {tiers}"
     else:
         # spec 9, 0076: config.json is optional; absence means the defaults.
         yield _opt(
@@ -578,16 +589,90 @@ def _priorities_check(repo: Path) -> Iterator[tuple[bool, str]]:
     yield _check(True, f"priorities: {' > '.join(declared.drivers)}, {rules}", "", "")
 
 
-def _typecheck_check(repo: Path, run: bool = False) -> Iterator[tuple[bool, str]]:
-    # 38, 0076: the declared typecheck_cmd runs only on --run-typecheck, argv only, bounded;
-    # no line when none is declared.
+def _plural(count: int, word: str) -> str:
+    return f"{count} {word}{'' if count == 1 else 's'}"
+
+
+def _stack_check(repo: Path) -> Iterator[tuple[bool, str]]:
+    # 0192: one line naming the package manager and the declared command counts; none undeclared.
     try:
         manifest = load_manifest(repo)
     except ManifestError:
         return
-    command = manifest.typecheck_cmd if manifest is not None else None
-    if command is None:
+    if manifest is None or not (manifest.package_manager or declared_commands(manifest)):
         return
+    manager = manifest.package_manager or "none declared"
+    labels = {"unit_test_cmd": "unit test", "typecheck_cmd": "typecheck", "lint_cmd": "lint"}
+    counts = ", ".join(
+        f"{len(getattr(manifest, key) or ())} {label}" for key, label in labels.items()
+    )
+    yield True, f"OK   stack: package manager {manager}; commands: {counts}"
+
+
+def _dev_server_check(repo: Path) -> Iterator[tuple[bool, str]]:
+    # 0164: the site the operator hosts; the doctor never starts or fetches it.
+    try:
+        manifest = load_manifest(repo)
+    except ManifestError:
+        return
+    server = manifest.dev_server if manifest is not None else None
+    if server is not None:
+        yield (
+            True,
+            (
+                f"OK   dev server: {server.url}; the verify step asks you to open it and check: "
+                f"{server.check}"
+            ),
+        )
+
+
+def _assets_check(repo: Path) -> Iterator[tuple[bool, str]]:
+    # 0192: the asset exclusion, and one warning line per source file under an asset root.
+    try:
+        manifest = load_manifest(repo)
+    except ManifestError:
+        return
+    declared = manifest.assets if manifest is not None else None
+    if declared is None or not assets.declared(declared):
+        return
+    size = declared.max_bytes
+    cap = f", asset files over {size} bytes listed by name" if size is not None else ""
+    yield (
+        True,
+        (
+            f"OK   assets: {_plural(len(declared.roots), 'root')}, "
+            f"{_plural(len(declared.extensions), 'ending')}{cap}, kept out of the judges' diffs "
+            "and the secret scan; source files never are"
+        ),
+    )
+    found = assets.sources_in_roots(project_root(str(repo)), declared)
+    for path in found[: assets.MAX_SOURCE_LINES]:
+        # 0128: the file stays in every diff; the auditor treats a changed one as a finding.
+        yield _opt(
+            False,
+            f"asset root source file {path}",
+            "a source file under an asset root keeps that root in every diff, and the auditor "
+            "treats a change to it as a finding",
+            "move it out of the asset root, or narrow assets.roots in service-manifest.json",
+        )
+    if len(found) > assets.MAX_SOURCE_LINES:
+        more = len(found) - assets.MAX_SOURCE_LINES
+        yield True, f"OPT  asset roots: {_plural(more, 'more source file')} not listed"
+
+
+def _typecheck_check(repo: Path, run: bool = False) -> Iterator[tuple[bool, str]]:
+    # 38, 0076, 0192: each declared typecheck_cmd runs only on --run-typecheck, argv only,
+    # bounded; no line when none is declared.
+    try:
+        manifest = load_manifest(repo)
+    except ManifestError:
+        return
+    commands = manifest.typecheck_cmd if manifest is not None else None
+    for command in commands or ():
+        yield from _typecheck_one(repo, command, run)
+
+
+def _typecheck_one(repo: Path, command: str, run: bool) -> Iterator[tuple[bool, str]]:
     name = f"typecheck ({command})"
     # 0076: the doctor runs no repository-declared command unless --run-typecheck is passed
     # (audit round 4).
@@ -714,7 +799,10 @@ def _repo_checks(
     yield from _retired_key_check(repo)
     yield from _old_agent_name_check(repo)
     yield from _priorities_check(repo)
+    yield from _stack_check(repo)
     yield from _typecheck_check(repo, run_typecheck)
+    yield from _dev_server_check(repo)
+    yield from _assets_check(repo)
     yield _opt(
         (repo / "contracts").is_dir(),
         "contracts/",

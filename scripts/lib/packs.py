@@ -5,6 +5,7 @@
 # packs only through load_pack, pack_problems and pack_folders.
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import re
@@ -25,6 +26,9 @@ SCHEMA = "daedalus-controls/1"
 FRAMEWORKS_DIR = PACKS_DIR / "frameworks"
 NIST_IDS = PACKS_DIR.parent / "tests" / "fixtures" / "nist-control-ids.txt"
 PACK_KEYS = ("id", "version", "source", "license", "pinned_on", "sha256")
+# 0192: both optional; absent default is true, absent triggers applies whenever the judge runs.
+OPTIONAL_PACK_KEYS = ("default", "triggers")
+TRIGGERS_MAX = 32
 CONTROLS_KEYS = ("schema", "controls")
 CONTROL_KEYS = (
     "id",
@@ -54,6 +58,8 @@ SERVICES = (
     "ecs",
     "ecr",
     "logs",
+    # 0192: the Stripe pack's controls; they judge payment code and its key handling only.
+    "payments",
     "any",
 )
 SHIPPED_LICENSE = "GPL-3.0-or-later"
@@ -107,6 +113,8 @@ class Pack:
     pinned_on: str
     sha256: str
     controls: tuple[Control, ...]
+    default: bool = True
+    triggers: tuple[str, ...] | None = None
 
 
 def digest(data: bytes) -> str:
@@ -162,8 +170,20 @@ def _nist_ids() -> frozenset[str] | None:
 def _meta_problems(meta: object) -> list[str]:
     if not isinstance(meta, dict):
         return ["pack.json is not a JSON object"]
-    out = _keys("pack.json", meta, PACK_KEYS)
+    out = _keys("pack.json", meta, PACK_KEYS + OPTIONAL_PACK_KEYS)
     out += [f"pack.json lacks the key {key!r}" for key in PACK_KEYS if key not in meta]
+    if "default" in meta and not isinstance(meta["default"], bool):
+        out.append("pack.json default must be true or false")
+    triggers = meta.get("triggers")
+    if "triggers" in meta and not (
+        isinstance(triggers, list)
+        and 1 <= len(triggers) <= TRIGGERS_MAX
+        and all(_line(t, TITLE_MAX) for t in triggers)
+    ):
+        out.append(
+            f"pack.json triggers must be a list of 1 to {TRIGGERS_MAX} path globs, each one "
+            f"printable line of 1 to {TITLE_MAX} characters"
+        )
     checks: tuple[tuple[str, Callable[[object], object], str], ...] = (
         ("id", lambda v: isinstance(v, str) and PACK_ID.fullmatch(v), "[a-z0-9-]{1,40}"),
         ("version", lambda v: isinstance(v, str) and VERSION.fullmatch(v), "x.y.z numbers"),
@@ -234,16 +254,17 @@ def _control_problems(
         if key in item and not _line(item[key], limit):
             out.append(f"{where} {key} must be one printable line of 1 to {limit} characters")
     verify = item.get("verify")
+    # 0192: a path outside the tree is named beside any jail refusal of the same verify.
+    outside = _outside_paths(verify) if isinstance(verify, str) and _line(verify, LINE_MAX) else []
     refused = jail.rg_reason(verify, root) if isinstance(verify, str) else None
     if refused is not None and _line(verify, LINE_MAX):
         # 113: pack text is data; a verify the specialist's jail refuses never reaches it.
         out.append(f"{where} verify is refused by the framework specialist's jail: {refused}")
-    elif isinstance(verify, str) and _line(verify, LINE_MAX):
-        out += [
-            f"{where} verify searches {path!r} outside the project tree; name . or a relative "
-            "path without .."
-            for path in _outside_paths(verify)
-        ]
+    out += [
+        f"{where} verify searches {path!r} outside the project tree; name . or a relative "
+        "path without .."
+        for path in outside
+    ]
     if mapped and not (isinstance(item["maps_to"], str) and CONTROL_ID.fullmatch(item["maps_to"])):
         out.append(f"{where} maps_to must be a control id")
     statement = item.get("statement")
@@ -368,7 +389,16 @@ def _checked(folder: Path, known: Collection[str] | None) -> tuple[object, bytes
         return meta, b"", problems
     scope = neighbour_ids(folder) if known is None else known
     root = project_root(folder)
-    return meta, controls_raw, content_problems(meta, controls_raw, scope, root)
+    out = content_problems(meta, controls_raw, scope, root)
+    shipped = folder.resolve().parent == FRAMEWORKS_DIR.resolve()
+    if not shipped and isinstance(meta, dict):
+        # 0192: default and triggers steer only the shipped packs; a project pack never has them.
+        out += [
+            f"pack.json {key} applies only to a pack Daedalus ships; remove it from this pack"
+            for key in OPTIONAL_PACK_KEYS
+            if key in meta
+        ]
+    return meta, controls_raw, out
 
 
 def pack_problems(folder: Path, known: Collection[str] | None = None) -> list[str]:
@@ -409,16 +439,60 @@ def load_pack(folder: Path, known: Collection[str] | None = None) -> Pack:
         meta["pinned_on"],
         meta["sha256"],
         controls,
+        meta.get("default", True),
+        tuple(meta["triggers"]) if "triggers" in meta else None,
     )
+
+
+def _meta(folder: Path) -> dict[str, object]:
+    # 0192: an unreadable pack.json reads as {}, so the pack stays listed and fails its check.
+    raw, _ = read_capped(folder / PACK_FILE)
+    meta = _parse(PACK_FILE, raw)[0] if raw is not None else None
+    return meta if isinstance(meta, dict) else {}
 
 
 def pack_folders(repo: Path) -> list[Path]:
     # Pin F1 -> F3, 0157 (12.1): the declared packs, then the shipped ones unless turned off.
+    # 0192: a shipped pack whose pack.json says default false is read only when named.
     manifest = load_manifest(repo)
     frameworks = manifest.frameworks if manifest is not None else None
+    named = set(frameworks.packs) if frameworks is not None else set()
+    on = frameworks is None or frameworks.default_packs
     out: list[Path] = []
     if frameworks is not None and frameworks.pack_dir is not None:
         out += _pack_subfolders(project_root(repo) / frameworks.pack_dir)
-    if frameworks is None or frameworks.default_packs:
-        out += _pack_subfolders(FRAMEWORKS_DIR)
+    for folder in _pack_subfolders(FRAMEWORKS_DIR):
+        if folder.name in named or (on and _meta(folder).get("default", True) is not False):
+            out.append(folder)
     return out
+
+
+def unknown_named(repo: Path) -> list[str]:
+    # 0192: frameworks.packs ids that name no shipped pack.
+    manifest = load_manifest(repo)
+    named = manifest.frameworks.packs if manifest is not None else ()
+    shipped = {folder.name for folder in _pack_subfolders(FRAMEWORKS_DIR)}
+    return [ident for ident in named if ident not in shipped]
+
+
+def trigger_match(pattern: str, path: str) -> bool:
+    # 0192: case folded; fnmatch's * crosses /, so a leading **/ also matches at the root.
+    path, pattern = path.casefold(), pattern.casefold()
+    return fnmatch.fnmatchcase(path, pattern) or (
+        pattern.startswith("**/") and fnmatch.fnmatchcase(path, pattern[3:])
+    )
+
+
+def select_packs(folders: Iterable[Path], changed: Iterable[str]) -> tuple[list[Path], list[Path]]:
+    # 0192: (packs for the judge, the packs a trigger matched); an untriggered pack always goes.
+    paths = list(changed)
+    chosen: list[Path] = []
+    matched: list[Path] = []
+    for folder in folders:
+        triggers = _meta(folder).get("triggers")
+        if not isinstance(triggers, list):
+            chosen.append(folder)
+        elif any(trigger_match(str(t), p) for t in triggers for p in paths):
+            chosen.append(folder)
+            matched.append(folder)
+    return chosen, matched

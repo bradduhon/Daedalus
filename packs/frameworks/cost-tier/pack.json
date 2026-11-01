@@ -1,0 +1,9 @@
+{
+  "id": "cost-tier",
+  "version": "1.0.0",
+  "source": "daedalus",
+  "license": "GPL-3.0-or-later",
+  "pinned_on": "2026-10-31",
+  "sha256": "7e703af9557636b100beeeacccb057bf0d77a305a99f8284ad81b0d2b62721ca",
+  "default": false
+}

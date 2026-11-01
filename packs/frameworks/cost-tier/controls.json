@@ -1,0 +1,77 @@
+{
+  "schema": "daedalus-controls/1",
+  "controls": [
+    {
+      "id": "COST-KMS-1",
+      "service": "kms",
+      "title": "Infrastructure at rest uses the AWS service-default key",
+      "statement": "Infrastructure at rest (Terraform state, DynamoDB, S3, SQS, CloudWatch Logs and Secrets Manager) is encrypted with the AWS service-default key, AWS-owned or aws/<service> managed. A customer-managed key on infrastructure fails unless its resource carries a rationale comment naming cross-account access or a service-principal publisher that needs one, because each such key adds a monthly charge and a key policy to keep right.",
+      "look_for": "An aws_kms_key, kms_key_id, kms_master_key_id or kms_key_arn on an infrastructure resource with no rationale comment beside it; sse_algorithm aws:kms with a customer key on a bucket that holds no product key material.",
+      "verify": "rg -n 'aws_kms_key\"|kms_master_key_id|kms_key_id|kms_key_arn|aws:kms|KmsMasterKeyId|KMSMasterKeyID' -g '*.tf' -g '*.tfvars' -g '*.json' -g '*.yaml' -g '*.yml' .",
+      "refs": {"nist": ["SC-12", "SC-28"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "COST-KMS-2",
+      "service": "kms",
+      "title": "Product keys are customer-managed, multi-Region and rotated",
+      "statement": "A product key (key material the product creates or manages for its customers) is a customer-managed key with multi_region = true, enable_key_rotation = true and an explicit key policy. A product key on an AWS-managed key, without rotation, without a key policy, or shared with an infrastructure resource fails, because the two key classes then share one blast radius and one access policy.",
+      "look_for": "A product key resource missing multi_region, enable_key_rotation or a key policy; one aws_kms_key referenced by both a product resource and an infrastructure resource.",
+      "verify": "rg -n 'aws_kms_key\"|aws_kms_replica_key|multi_region|enable_key_rotation|aws_kms_key_policy|EnableKeyRotation|MultiRegion' -g '*.tf' -g '*.tfvars' -g '*.json' -g '*.yaml' -g '*.yml' .",
+      "refs": {"nist": ["SC-12"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "COST-S3-1",
+      "service": "s3",
+      "title": "Buckets use SSE-S3 with the bucket key left on",
+      "statement": "Buckets are encrypted with SSE-S3 (sse_algorithm AES256) unless the COST-KMS-1 exception applies. A bucket on a customer-managed key without that rationale comment fails, and bucket_key_enabled = false fails, because each turns every object request into a billed KMS call.",
+      "look_for": "sse_algorithm aws:kms with no COST-KMS-1 rationale comment; bucket_key_enabled = false; BucketKeyEnabled false.",
+      "verify": "rg -n 'sse_algorithm|bucket_key_enabled|BucketKeyEnabled|SSEAlgorithm' -g '*.tf' -g '*.tfvars' -g '*.json' -g '*.yaml' -g '*.yml' .",
+      "refs": {"nist": ["SC-28"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "COST-COMPUTE-1",
+      "service": "any",
+      "title": "Compute runs on arm64 and paid capacity carries a rationale",
+      "statement": "Lambda functions and container tasks choose arm64 where the runtime allows. An x86_64 architecture without a stated runtime reason fails, and provisioned concurrency or reserved capacity without a rationale comment fails, because each costs more for the same work and reserved capacity bills while idle.",
+      "look_for": "architectures x86_64 or no architectures on a Lambda; cpu_architecture X86_64 on a task definition; provisioned_concurrent_executions or reserved capacity with no rationale comment.",
+      "verify": "rg -n 'architectures|cpu_architecture|x86_64|X86_64|arm64|ARM64|provisioned_concurrent|reserved_concurrent_executions|ProvisionedConcurrency' -g '*.tf' -g '*.tfvars' -g '*.json' -g '*.yaml' -g '*.yml' .",
+      "refs": {"nist": ["CM-6"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "COST-DATA-1",
+      "service": "dynamodb",
+      "title": "DynamoDB tables are on-demand by default",
+      "statement": "DynamoDB tables use on-demand capacity (billing_mode PAY_PER_REQUEST). A provisioned table without a rationale comment, or without autoscaling on its read and write capacity, fails, because fixed capacity bills while idle and throttles past its limit.",
+      "look_for": "billing_mode PROVISIONED or absent with read_capacity and write_capacity set; a provisioned table with no aws_appautoscaling_target or no rationale comment.",
+      "verify": "rg -n 'billing_mode|PAY_PER_REQUEST|PROVISIONED|read_capacity|write_capacity|aws_appautoscaling_target|BillingMode' -g '*.tf' -g '*.tfvars' -g '*.json' -g '*.yaml' -g '*.yml' .",
+      "refs": {"nist": ["CM-6"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "COST-NET-1",
+      "service": "vpc",
+      "title": "No NAT gateway, interface endpoint or load balancer without a rationale",
+      "statement": "A NAT gateway, an interface VPC endpoint or a load balancer carries a rationale comment, and S3 and DynamoDB are reached through gateway endpoints. One without the comment fails, because each bills by the hour whether or not traffic flows, and a NAT gateway also bills per gigabyte for traffic a free gateway endpoint carries.",
+      "look_for": "aws_nat_gateway, vpc_endpoint_type Interface, aws_lb, aws_alb or aws_elb with no rationale comment; S3 or DynamoDB traffic routed through a NAT gateway with no gateway endpoint.",
+      "verify": "rg -n 'aws_nat_gateway|vpc_endpoint_type|aws_vpc_endpoint\"|aws_lb\"|aws_alb\"|aws_elb\"|NatGateway|ElasticLoadBalancing' -g '*.tf' -g '*.tfvars' -g '*.json' -g '*.yaml' -g '*.yml' .",
+      "refs": {"nist": ["CM-6", "SC-7"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "COST-LOG-1",
+      "service": "logs",
+      "title": "Every log group sets a retention",
+      "statement": "Every CloudWatch log group sets retention_in_days to a value above 0. A log group with no retention, or with 0 (never expire), fails, because its storage then grows and bills without end.",
+      "look_for": "aws_cloudwatch_log_group without retention_in_days; retention_in_days = 0; a Lambda or service that creates its own log group with no managed log group beside it.",
+      "verify": "rg -n 'aws_cloudwatch_log_group|retention_in_days|RetentionInDays' -g '*.tf' -g '*.tfvars' -g '*.json' -g '*.yaml' -g '*.yml' .",
+      "refs": {"nist": ["AU-11"], "cis": [], "asvs": []}
+    },
+    {
+      "id": "COST-TF-1",
+      "service": "any",
+      "title": "Terraform state is in S3 with S3 native locking",
+      "statement": "The state backend is S3 with use_lockfile = true and no DynamoDB lock table. A backend with a dynamodb_table, or without use_lockfile, fails, because the lock table is a second resource to pay for and keep, and without either lock two applies can corrupt the state.",
+      "look_for": "backend s3 without use_lockfile = true; dynamodb_table in a backend block; a local or other backend for shared state.",
+      "verify": "rg -n 'backend \"|use_lockfile|dynamodb_table' -g '*.tf' -g '*.tfvars' -g '*.json' -g '*.yaml' -g '*.yml' .",
+      "refs": {"nist": ["CM-6"], "cis": [], "asvs": []}
+    }
+  ]
+}

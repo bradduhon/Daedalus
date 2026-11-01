@@ -28,7 +28,8 @@ an OWASP file, and you never fetch or write (0157).
 
 ## Phase 0: Pack integrity (mandatory)
 1. For each folder on the `Packs:` line, Read `<folder>/pack.json`. It is one JSON object with
-   `id`, `version`, `source`, `license`, `pinned_on` and `sha256`.
+   `id`, `version`, `source`, `license`, `pinned_on` and `sha256`. Its optional `default` and
+   `triggers` keys were applied when the line was printed; ignore them (0192).
 2. Run `sha256sum <folder>/controls.json` and compare with that `sha256`. Read
    `<folder>/controls.json`; its `schema` must be `daedalus-controls/1` and `controls` a list.
 3. On a missing file, a hash mismatch, a wrong schema or a `maps_to` that names no control in
@@ -38,7 +39,9 @@ an OWASP file, and you never fetch or write (0157).
 5. No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already returns stderr.
 
 ## Method
-1. Read the diff given (`git diff <base>...<branch>`), or the spec when no diff is given.
+1. Read the diff given (`git diff <base>...<branch>`), or the spec when no diff is given. With
+   an `Assets: <tail>` line in the prompt, end the diff command with that tail exactly as given
+   (0192); it drops only asset files such as models, textures and sounds.
 2. List each changed resource or code path: IAM and key policies, network rules, logging,
    encryption settings, OS and container definitions, and the code paths that handle tenant
    data, keys and audit records.

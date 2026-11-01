@@ -145,6 +145,11 @@ ledger and the `jail_narrowing` paths). The orchestrator checks every need befor
 wave starts. Take the tools from the declared commands and the map; a unit that needs nothing
 carries no `needs:` field.
 
+The `operator_checks:` field is optional (0164, 0192). Anything that needs a GPU, a browser or
+a running server goes there as plain-words checks separated by semicolons, at most ten, such as
+`operator_checks: the scene loads; the player can move`, and never in a coder test command; the
+verify phase asks the operator each one.
+
 Below the block, every unit has one requirement section in this shape (pin REQ -> VER):
 
     ### A1: <the unit's title>
