@@ -231,7 +231,9 @@ _GLOBAL_VALUED: dict[str, frozenset[str]] = {
     "poetry": frozenset({"-C", "--directory", "-P", "--project"}),
     "composer": frozenset({"-d", "--working-dir"}),
     "go": frozenset({"-C"}),
-    **{name: shell._JS_VALUED for name in ("pnpm", "yarn", "bun")},
+    **{name: shell._JS_VALUED for name in ("yarn", "bun")},
+    # 0196: pnpm's --workspace is a flag, so it never swallows the verb after it.
+    "pnpm": shell._JS_VALUED - {"--workspace"},
     # 0196: npm's -w is --workspace; pnpm's -w is a flag, so it stays npm only.
     "npm": shell._JS_VALUED | {"-w"},
 }
@@ -414,6 +416,8 @@ def _js_install(name: str, args: list[str]) -> InstallForm | None:
         return InstallForm(name, name, _frozen_flags(args, required, extras))
     words = _unvalued(args, _GLOBAL_VALUED[name])
     for pos, arg in enumerate(words):
+        if arg == "--":
+            continue  # 0196: a -- before any script or exec verb ends no scan.
         if (arg in _EXEC_VERBS or arg in _SCRIPT_VERBS) and not _option_value(words, pos):
             return None
         if arg == "audit" and "fix" in words[pos + 1 :]:

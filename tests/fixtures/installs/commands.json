@@ -176,5 +176,9 @@
   {"command": "npm -w run install left-pad", "kind": "refused"},
   {"command": "yarn --cache-folder run add three", "kind": "refused"},
   {"command": "pnpm -w add x", "kind": "refused"},
-  {"command": "pnpm exec vitest run", "kind": "none"}
+  {"command": "pnpm exec vitest run", "kind": "none"},
+  {"command": "npm -- install left-pad", "kind": "refused"},
+  {"command": "pnpm --workspace add left-pad", "kind": "refused"},
+  {"command": "yarn --workspace foo add x", "kind": "refused"},
+  {"command": "npm run -- install", "kind": "none"}
 ]
