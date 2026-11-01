@@ -363,12 +363,22 @@ def _hook_failure_check() -> Iterator[tuple[bool, str]]:
         )
 
 
+def _operator_next(cause: str) -> str:
+    # 106: the confine text addresses a coder; the doctor's reader is the operator.
+    return cause.replace(
+        "Next: commit WIP and yield with this line; the operator boots", "Next: boot"
+    ).replace(
+        "Next: commit WIP and yield with this line; the operator reruns the doctor and fixes",
+        "Next: rerun the doctor and fix",
+    )
+
+
 def _kernel_rules_check() -> tuple[bool, str]:
     # 0048, 106: the probe the confine check reads; MISS with its cause where it refuses tests.
     support = daedalus_confine.kernel_support()
     cause = daedalus_confine.unusable(support)
     if cause is not None:
-        return False, f"MISS kernel rules: {cause}"
+        return False, f"MISS kernel rules: {_operator_next(cause)}"
     return True, (
         f"OK   kernel rules: Landlock ABI {support.abi} and the seccomp socket filter on "
         f"{support.arch}; coder test commands run under the kernel wrapper"

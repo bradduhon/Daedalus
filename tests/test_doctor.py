@@ -1632,7 +1632,14 @@ def test_kernel_rules_line_reports_the_probe(monkeypatch: pytest.MonkeyPatch) ->
         monkeypatch.setattr(daedalus_confine, "kernel_support", lambda s=refused: s)
         cause = daedalus_confine.unusable(refused)
         assert cause is not None and "Next: " in cause
-        assert daedalus_doctor._kernel_rules_check() == (False, f"MISS kernel rules: {cause}")
+        ok, line = daedalus_doctor._kernel_rules_check()
+        assert (ok, line.split("Next: ")[0]) == (
+            False,
+            f"MISS kernel rules: {cause.split('Next: ')[0]}",
+        )
+        assert "commit WIP" not in line and (
+            "Next: boot" in line or "Next: rerun the doctor" in line
+        )
     on = daedalus_confine.Support("x86_64", 3, True)
     monkeypatch.setattr(daedalus_confine, "kernel_support", lambda: on)
     assert daedalus_doctor._kernel_rules_check() == (
@@ -1653,7 +1660,10 @@ def test_the_doctor_prints_this_kernels_probe(tmp_path: Path) -> None:
             f"{support.arch}; coder test commands run under the kernel wrapper"
         ]
     else:
-        assert kernel == [f"MISS kernel rules: {daedalus_confine.unusable(support)}"]
+        cause = daedalus_confine.unusable(support)
+        assert cause is not None
+        assert kernel == [f"MISS kernel rules: {daedalus_doctor._operator_next(cause)}"]
+        assert "commit WIP" not in kernel[0]
 
 
 def test_no_version_tag_line_outside_a_repository(tmp_path: Path) -> None:
