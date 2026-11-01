@@ -8,7 +8,9 @@ from typing import Any
 
 import pytest
 from lib.manifest import (
+    RELEASE_AGE_DEFAULT,
     Assets,
+    Dependencies,
     DevServer,
     Features,
     Manifest,
@@ -301,3 +303,43 @@ def test_folder_prefix_and_exact_match(rel: str, hit: bool) -> None:
 )
 def test_extension_match(rel: str, hit: bool) -> None:
     assert extension_hit(Manifest((), (".pem", ".tar.gz")), rel) is hit
+
+
+def test_the_release_age_defaults_to_seven_days(tmp_path: Path) -> None:
+    # 0197: absent block or key reads the default, and no reason is needed at or above it.
+    _write(tmp_path, {})
+    loaded = load(tmp_path)
+    assert loaded is not None and loaded.dependencies == Dependencies((), RELEASE_AGE_DEFAULT, None)
+    assert RELEASE_AGE_DEFAULT == 7
+    _write(tmp_path, {"dependencies": {"minimum_release_age_days": 30}})
+    loaded = load(tmp_path)
+    assert loaded is not None and loaded.dependencies.minimum_release_age_days == 30
+
+
+@pytest.mark.parametrize(
+    ("block", "ok"),
+    [
+        ({"minimum_release_age_days": 7}, True),
+        ({"minimum_release_age_days": 0, "minimum_release_age_reason": "a" * 20}, True),
+        ({"minimum_release_age_days": 6}, False),
+        ({"minimum_release_age_days": 6, "minimum_release_age_reason": "a" * 19}, False),
+        ({"minimum_release_age_days": 6, "minimum_release_age_reason": " " * 25}, False),
+        ({"minimum_release_age_days": -1, "minimum_release_age_reason": "a" * 20}, False),
+        ({"minimum_release_age_days": True}, False),
+        ({"minimum_release_age_days": "7"}, False),
+        ({"minimum_release_age_days": 8, "minimum_release_age_reason": 5}, False),
+        ({"minimum_release_age_days": 8, "minimum_release_age_reason": "two\nlines"}, False),
+    ],
+)
+def test_a_release_age_below_the_default_needs_a_reason(
+    tmp_path: Path, block: dict[str, object], ok: bool
+) -> None:
+    # 0197: the floor is 0; below 7 needs a reason of 20 characters; the refusal names 0197.
+    _write(tmp_path, {"dependencies": block})
+    if ok:
+        assert load(tmp_path) is not None
+        return
+    with pytest.raises(ManifestError, match="dependencies.minimum_release_age") as caught:
+        load(tmp_path)
+    if block.get("minimum_release_age_days") == 6:
+        assert "(0197)" in str(caught.value)

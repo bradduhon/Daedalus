@@ -30,6 +30,7 @@ from lib.coder_model import TIERS  # noqa: E402
 from lib.config import Config, ConfigError, load_config, standing_rules_path  # noqa: E402
 from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
 from lib.manifest import (  # noqa: E402
+    RELEASE_AGE_DEFAULT,
     Features,
     ManifestError,
     PrioritiesError,
@@ -660,6 +661,22 @@ def _assets_check(repo: Path) -> Iterator[tuple[bool, str]]:
         yield True, f"OPT  asset roots: {_plural(more, 'more source file')} not listed"
 
 
+def _dependencies_check(repo: Path) -> Iterator[tuple[bool, str]]:
+    # 0196, 0197: the enabled installs and the release age; a bad block is the manifest's MISS.
+    try:
+        manifest = load_manifest(repo)
+    except ManifestError:
+        return
+    if manifest is None:
+        return
+    deps = manifest.dependencies
+    installs = ", ".join(deps.installs) or "none"
+    age = f"minimum release age {_plural(deps.minimum_release_age_days, 'day')}"
+    if deps.minimum_release_age_days < RELEASE_AGE_DEFAULT:
+        age += f", lowered from {RELEASE_AGE_DEFAULT}: {deps.minimum_release_age_reason}"
+    yield True, f"OK   dependencies: frozen installs {installs}; {age}"
+
+
 def _typecheck_check(repo: Path, run: bool = False) -> Iterator[tuple[bool, str]]:
     # 38, 0076, 0192: each declared typecheck_cmd runs only on --run-typecheck, argv only,
     # bounded; no line when none is declared.
@@ -803,6 +820,7 @@ def _repo_checks(
     yield from _typecheck_check(repo, run_typecheck)
     yield from _dev_server_check(repo)
     yield from _assets_check(repo)
+    yield from _dependencies_check(repo)
     yield _opt(
         (repo / "contracts").is_dir(),
         "contracts/",

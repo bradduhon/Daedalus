@@ -181,10 +181,18 @@ PACKAGE_MANAGERS = ("pnpm", "npm", "yarn", "pip", "uv")
 INSTALL_ECOSYSTEMS = ("npm", "python", "cargo", "go")
 
 
+# 0197: the release age floor; a lower value needs a reason of at least this many characters.
+RELEASE_AGE_DEFAULT = 7
+RELEASE_AGE_REASON_MIN = 20
+
+
 @dataclass(frozen=True)
 class Dependencies:
     # 0196: the ecosystems the coder's frozen install is enabled for; none by default.
     installs: tuple[str, ...] = ()
+    # 0197: the youngest a resolved version may be, in days, and why it sits below the default.
+    minimum_release_age_days: int = RELEASE_AGE_DEFAULT
+    minimum_release_age_reason: str | None = None
 
 
 DEPENDENCIES_KEYS = tuple(f.name for f in fields(Dependencies))
@@ -656,7 +664,7 @@ def _assets(target: Path, raw: dict[str, object]) -> Assets:
 
 
 def _dependencies(target: Path, raw: dict[str, object]) -> Dependencies:
-    # 0196: unknown keys are refused; each ecosystem named once.
+    # 0196, 0197: unknown keys are refused; each ecosystem named once; a lowered age has a reason.
     block = raw.get("dependencies", {})
     if not isinstance(block, dict):
         raise _key_error(target, "dependencies", "must be an object")
@@ -676,7 +684,25 @@ def _dependencies(target: Path, raw: dict[str, object]) -> Dependencies:
             "dependencies.installs",
             f"must be a list naming each of {names} at most once (0196)",
         )
-    return Dependencies(tuple(map(str, installs)))
+    days = block.get("minimum_release_age_days", RELEASE_AGE_DEFAULT)
+    if isinstance(days, bool) or not isinstance(days, int) or days < 0:
+        raise _key_error(
+            target, "dependencies.minimum_release_age_days", "must be a whole number of 0 or more"
+        )
+    reason = block.get("minimum_release_age_reason")
+    if reason is not None and (not isinstance(reason, str) or not reason.isprintable()):
+        raise _key_error(
+            target, "dependencies.minimum_release_age_reason", "must be null or one printable line"
+        )
+    if days < RELEASE_AGE_DEFAULT and len((reason or "").strip()) < RELEASE_AGE_REASON_MIN:
+        raise _key_error(
+            target,
+            "dependencies.minimum_release_age_days",
+            f"is below {RELEASE_AGE_DEFAULT} days, which needs a "
+            f"dependencies.minimum_release_age_reason of at least {RELEASE_AGE_REASON_MIN} "
+            "characters (0197)",
+        )
+    return Dependencies(tuple(map(str, installs)), days, reason)
 
 
 def _local_url(url: object) -> bool:

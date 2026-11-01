@@ -29,10 +29,10 @@ No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already retu
 Never run a package manager: no install, update, audit or resolve command of any ecosystem.
 
 Inputs: the diff base, the branch, the repository path, the changed dependency files, a line
-`Web lookup: on` or `Web lookup: off`, and, when the project supplies one, an
-`Advisory export: <path>` line naming a file of advisories it exported.
+`Web lookup: on` or `Web lookup: off`, a line `Minimum release age: <days>`, and, when the
+project supplies one, an `Advisory export: <path>` line naming a file of advisories it exported.
 When the dispatch carries a `Rulebook: <path>` line, Read that file and judge its rows beside
-the rows below, with the same rubric (0189).
+the rows below, with the same rubric (0189). A dispatch carries one such line per ecosystem.
 
 ## Method
 1. Run `git -C <repo> diff <diff base>...<branch> -- <each changed dependency file>` and read
@@ -41,11 +41,11 @@ the rows below, with the same rubric (0189).
    version, and its source (the registry, a git URL, a URL or a local path).
 3. Give each row below PASS, FAIL or N/A for every listed dependency, with `file:line`.
 4. Advisories. With `Web lookup: on`, ask for the advisories of one dependency at a time:
-   reply `[STATUS: YIELD_WEB] <ecosystem> <name> <version> security advisories`, alone as the
-   last line. You are resumed with `RESUME. Research payload:` and the facts; cite each
-   advisory id and its URL from the payload. With `Web lookup: off`, judge from the lockfile
-   and the advisory export alone; with neither, DEP-5 is N/A with the reason
-   `web lookup off and no advisory export`.
+   reply `[STATUS: YIELD_WEB] <ecosystem> <name> <version> security advisories and publish date`,
+   alone as the last line. You are resumed with `RESUME. Research payload:` and the facts; cite
+   each advisory id and its URL, and the version's publish date, from the payload. With
+   `Web lookup: off`, judge from the lockfile and the advisory export alone; with neither,
+   DEP-5 and DEP-8 are N/A with the reason `web lookup off and no advisory export` (0196).
 
 ## Rows
 - DEP-1: each new or changed dependency resolves to one exact version in the lockfile.
@@ -58,6 +58,10 @@ the rows below, with the same rubric (0189).
   would resolve is a FAIL; the operator decides whether it is kept and tracked.
 - DEP-7: the license each new dependency declares, read from its manifest or lock entry; an
   absent or ambiguous license is a FAIL.
+- DEP-8: each resolved version the diff adds or changes, in every ecosystem, carries its publish
+  date and its source, the research payload or the advisory export; a version published fewer
+  days ago than `Minimum release age` is a FAIL naming the date it comes of age, a held-back
+  security fix included; with no date source the row is N/A (0197).
 
 ## Rubric
 - FAIL means the diff contradicts the row; give the `file:line` and the evidence.

@@ -35,6 +35,8 @@ from lib.manifest import (
     PACKAGE_MANAGERS,
     PRIORITY_ROWS,
     REASONS,
+    RELEASE_AGE_DEFAULT,
+    RELEASE_AGE_REASON_MIN,
     STACK_KEYS,
     SURFACE,
     TEXT_MAX,
@@ -468,6 +470,24 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         + " at most once; `npm` covers npm, pnpm, yarn and bun, `python` covers pip and uv",
         "`[]`: no agent runs any install",
         '`["npm", "python"]`',
+    ),
+    (MANIFEST_FILE, "dependencies.minimum_release_age_days"): KeyRow(
+        "The youngest a package version a change adds or updates may be, in days since it was "
+        "published; the dependency auditor fails a younger version. A security fix this holds "
+        "back is tracked as a risk, never exempted silently",
+        "integer",
+        f"A whole number of 0 or more; below {RELEASE_AGE_DEFAULT} it needs "
+        "`dependencies.minimum_release_age_reason`, else the manifest is refused",
+        f"`{RELEASE_AGE_DEFAULT}`",
+        "`14`",
+    ),
+    (MANIFEST_FILE, "dependencies.minimum_release_age_reason"): KeyRow(
+        f"Why the project sets the release age below {RELEASE_AGE_DEFAULT} days; the doctor "
+        "prints it",
+        "string or null",
+        f"One printable line of at least {RELEASE_AGE_REASON_MIN} characters, or `null`",
+        "`null`: no reason, so the age may not go below the default",
+        '`"internal registry mirrors with its own quarantine"`',
     ),
     (MANIFEST_FILE, "dev_server.url"): KeyRow(
         "The address of the site you host on your own machine for testing; the verify step "
