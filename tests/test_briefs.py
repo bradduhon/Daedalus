@@ -296,9 +296,48 @@ ASK_BAD_LINES = [
 
 def test_ask_problems_reads_every_reader_field_at_plain() -> None:
     assert ask_problems(ASK_GOOD) == []
+    assert ask_problems("What I take you to want: A game about load_chunks.\nQuestion: Ok?") == [
+        "What I take you to want carries the snake_case token load_chunks"
+    ]
     assert [f"question: {line}" for line in ask_problems(ASK_BAD)] == ASK_BAD_LINES
     assert ask_problems("Heard: Nothing yet.") == ["the question holds no Question: line"]
     assert ask_problems("Question: Ready?\nWhy:") == ["Why is empty"]
+
+
+QUOTE = "a big map with secrets hidden in every single wall of the whole wide world"
+
+
+@pytest.mark.parametrize(
+    "quoted",
+    [f'"{QUOTE}"', f"\u201c{QUOTE}\u201d", f"'I don't want {QUOTE}'", f"\u2018{QUOTE}\u2019"],
+)
+def test_context_skips_the_operators_quote_only_beside_its_own_text(quoted: str) -> None:
+    # 0200: the quote is theirs; a Context of nothing but the quote reports it.
+    own = f"Question: Ready?\nContext: This picks the map size. You wrote: {quoted}."
+    assert ask_problems(own) == []
+    only = f"Question: Ready?\nContext: You wrote: {quoted}."
+    assert ask_problems(only) == ["Context is only a quotation"]
+
+
+def test_a_quote_outside_context_is_checked_like_any_text() -> None:
+    text = f'Question: Ready?\nWhy: You wrote: "{QUOTE}".'
+    assert [line.split(" over")[0] for line in ask_problems(text)] == [
+        "Why sentence has 17 words,"
+    ]
+
+
+def test_a_label_shaped_line_inside_context_is_checked() -> None:
+    # 0200: only Rests on and the status line end a field in a question file.
+    text = "\n".join(
+        [
+            "Context: This picks the map size.",
+            "Note: the load_chunks call is slow.",
+            "Question: Ready?",
+            "Rests on: src/map/load.py:12",
+            "[STATUS: ASK] n=1",
+        ]
+    )
+    assert ask_problems(text) == ["Context carries the snake_case token load_chunks"]
 
 
 @pytest.mark.parametrize("literacy", ["expert", "standard", None])

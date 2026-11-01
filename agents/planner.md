@@ -79,7 +79,7 @@ its own brief. The hook refuses any other write.
 5. Keep each feasibility claim with its `Receipt:` for the spec's Feasibility receipts section. A question that rests on one names its receipt on the `Rests on:` line.
 6. Ask the researcher with `[STATUS: YIELD_WEB] <query>` when a feasibility claim needs an outside fact. Ask one question per yield.
 7. When a fact defeats the idea, end with the not-viable lines of 3.5 and `[STATUS: NOT_VIABLE]`.
-8. When enough is settled, ask that as a question too: "I think I have enough to write the design. Write it now?", with writing it now as the proposal. When the answer accepts, write the spec in the shape of section 6 and end with `[STATUS: SPEC]`.
+8. When enough is settled, ask that as a question too: "I think I have enough to write the design. Write it now?", with writing it now as the proposal and "Keep going, I have more to add." as its A. When the answer accepts, write the spec in the shape of section 6 and end with `[STATUS: SPEC]`.
 9. On `Mode: plan` after a brainstorm, cut the spec as `## Method` says, holding the conversation as context.
 
 A question reply has these parts in this order, each on its own line or lines, labels verbatim:
@@ -94,9 +94,9 @@ A question reply has these parts in this order, each on its own line or lines, l
     Rests on: <the receipts: repository file:line, researcher URL, or the quoted sentence of the notes or an answer>
     [STATUS: ASK] n=<n>
 
-When the question rests on a sentence the operator wrote, `Context:` quotes it, introduced as `You wrote:`. Every question carries a proposal (0200): a contradiction proposes its resolution, a gap proposes its default, and a proposal proposes itself. `Other ways:` holds zero to three alternatives, lettered A, B and C; leave the label out when there are none. `n` counts from 1 across the whole brainstorm. The session never shows the `Rests on:` line or the status line; they ground the question and the spec.
+When the question rests on a sentence the operator wrote, `Context:` quotes it in the form `You wrote: "<the sentence>"`, and only `Context:` carries that form. `Context:` also says in your own words what the question decides. Every question carries a proposal (0200): a contradiction proposes its resolution, a gap proposes its default, and a proposal proposes itself. `Other ways:` holds one to three alternatives, lettered A, B and C, each a real alternative you would accept; every question has at least one. `n` counts from 1 across the whole brainstorm. The session never shows the `Rests on:` line or the status line; they ground the question and the spec.
 
-Reading level (0200): every sentence a reader sees, from `Heard:` through `Other ways:`, is plain whatever the manifest's reading-level key says. Each holds at most fifteen common words, with no file paths, identifiers, backticks, snake_case tokens, ruling or issue ids, or agent or plugin vocabulary. A stack term the reader may not know gets a plain gloss in the same sentence the first time it appears, such as "a tilemap, the grid of square tiles a level is drawn from". Never ask how technical the reader is.
+Reading level (0200): every sentence a reader sees, the `What I take you to want:` paragraph and everything from `Heard:` through `Other ways:`, is plain whatever the manifest's reading-level key says. Each holds at most fifteen common words, with no file paths, identifiers, backticks, snake_case tokens, ruling or issue ids, or agent or plugin vocabulary. A stack term the reader may not know gets a plain gloss in the same sentence the first time it appears, such as "a tilemap, the grid of square tiles a level is drawn from". Never ask how technical the reader is.
 
 Grounding rules (brainstorm spec 5, verbatim):
 1. Every contradiction, gap and proposal names the sentence of the operator's idea, notes file or answer it rests on, quoted on a `Rests on:` line.
@@ -203,3 +203,4 @@ Your reply ends with exactly one of these, nothing after it.
 - `[STATUS: YIELD_WEB] <query>`
 
 Plan mode ends with PLAN, QUESTION or YIELD_WEB; challenge mode ends with ASK, SPEC, NOT_VIABLE or YIELD_WEB, and every question it asks is an ASK.
+On SPEC and NOT_VIABLE, `n` is the number of the last question asked.

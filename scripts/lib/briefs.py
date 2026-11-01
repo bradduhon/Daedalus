@@ -39,11 +39,23 @@ _LOCAL_URL = re.compile(
 )
 _EDGE = ".,;:!?\"'()[]"
 # 0200: the reader text of one brainstorm question; Other ways lines are lettered A to C.
-ASK_FIELDS = ("Heard:", "Context:", "Question:", "Proposal:", "Why:")
+ASK_FIELDS = (
+    "What I take you to want:",
+    "Heard:",
+    "Context:",
+    "Question:",
+    "Proposal:",
+    "Why:",
+)
 ASK_ALTERNATIVES = "Other ways:"
+# 0200: only these end a field; any other label-shaped line is reader text and is checked.
+ASK_ENDS = ("Rests on:", "[STATUS:")
 _LETTERED = re.compile(r"([A-Z])[.)]\s+(.*)")
-# 0200: the operator's own quoted sentence is theirs, so the plain check skips it.
-_THEIR_WORDS = re.compile(r'You wrote:\s*"[^"]*"\.?')
+# 0200: Context's quote of the operator is theirs; an apostrophe before a letter stays inside.
+_THEIR_WORDS = re.compile(
+    "You wrote:\\s*(?:\"[^\"]*\"|\u201c[^\u201d]*\u201d|'(?:[^']|'(?=\\w))*'"
+    "|\u2018(?:[^\u2019]|\u2019(?=\\w))*\u2019)\\.?"
+)
 
 
 class BriefError(ValueError):
@@ -145,7 +157,7 @@ def _ask_fields(text: str) -> list[tuple[str, str]]:
             mode = "field"
         elif lettered is not None:
             out.append((f"Other way {lettered[1]}", [lettered[2]]))
-        elif _LABEL.match(line) and not line.startswith("You wrote:"):
+        elif line.startswith(ASK_ENDS):
             mode = ""
         elif line and out and mode:
             out[-1][1].append(line)
@@ -159,9 +171,13 @@ def ask_problems(text: str) -> list[str]:
     if not any(where == "Question" for where, _ in fields):
         problems.append("the question holds no Question: line")
     for where, value in fields:
-        mine = " ".join(_THEIR_WORDS.sub(" ", value).split())
-        if mine or not value:
-            problems.extend(_value_problems(where, mine, PLAIN, SENTENCE_LIMITS[PLAIN]))
+        if where == "Context":
+            mine = " ".join(_THEIR_WORDS.sub(" ", value).split())
+            if value and not mine:
+                problems.append("Context is only a quotation")
+                continue
+            value = mine
+        problems.extend(_value_problems(where, value, PLAIN, SENTENCE_LIMITS[PLAIN]))
     return problems
 
 

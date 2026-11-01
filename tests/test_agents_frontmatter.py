@@ -163,8 +163,11 @@ def test_planner_challenge_mode_section_holds_the_steps_and_grounding_rules() ->
     )
     for rule in (
         "Every question carries a proposal (0200)",
-        "`Other ways:` holds zero to three alternatives, lettered A, B and C",
-        "introduced as `You wrote:`",
+        "`Other ways:` holds one to three alternatives, lettered A, B and C",
+        "every question has at least one.",
+        '"Keep going, I have more to add." as its A.',
+        'quotes it in the form `You wrote: "<the sentence>"`, and only `Context:` carries',
+        "the `What I take you to want:` paragraph and everything from `Heard:` through",
         "is plain whatever the manifest's reading-level key says",
         "at most fifteen common words",
         "gets a plain gloss in the same sentence the first time it appears",
@@ -197,6 +200,7 @@ def test_planner_status_contract_names_each_modes_lines() -> None:
         "Plan mode ends with PLAN, QUESTION or YIELD_WEB; challenge mode ends with ASK, SPEC, "
         "NOT_VIABLE or YIELD_WEB, and every question it asks is an ASK." in contract.splitlines()
     )
+    assert "On SPEC and NOT_VIABLE, `n` is the number of the last question asked." in contract
 
 
 def test_planner_hooks_admit_the_brainstorm_spec_only(tmp_path: Path) -> None:

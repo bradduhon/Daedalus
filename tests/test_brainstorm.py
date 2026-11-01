@@ -138,15 +138,21 @@ ASK_LOOP = (
     "The question tool is the channel, never a paraphrase.",
     "Do not summarise, reorder or reword the planner's text.",
     "When the reply holds a `What I take you to want:` paragraph, print it once, as written",
-    "Check that the reply holds a `Proposal:` line.",
-    '`SendMessage(planner, "FIX n=<n>: every question carries a proposal")` once',
-    "A second reply with no `Proposal:` line stops the skill. Next: rerun `/daedalus:brainstorm`",
-    "to `<folder>/ask-<n>.md` with the Write tool",
+    "Check that the reply holds a `Proposal:` line and at least one `Other ways:` line.",
+    '`SendMessage(planner, "FIX n=<n>: every question carries a proposal and at least one other '
+    'way")` once',
+    "A second reply that misses either stops the skill. Next: rerun `/daedalus:brainstorm`",
+    "to `<folder>/ask-<n>.md` with the Write tool: the `What I take you to want:` paragraph when "
+    "the reply holds one, then the planner's `Heard:` line through its `Other ways:` lines",
     "Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py ask-check --repo <repo> "
     "--file <folder>/ask-<n>.md`.",
     "Exit 0 prints `question ok`.",
     '`SendMessage(planner, "REWORD n=<n>: <the check\'s question: lines>")` once',
     "A second failure on the same question asks it anyway.",
+    "Exit 1 with no `question:` line means the file itself failed (missing, too large or "
+    "unreadable), never the wording: write the file again once and rerun the check, and a second "
+    "such failure stops the skill with the check's `Next:` line.",
+    "The check runs in the main session only and reads any file the session names.",
     "One AskUserQuestion call with exactly one question, multiSelect false.",
     "The header is `Question <n>`.",
     '"Pick an answer, or choose Other and type your own."',
@@ -156,7 +162,7 @@ ASK_LOOP = (
     "Then one choice per `Other ways:` line, in the planner's order: the label is the letter and "
     "the line's first clause, cut to five words, and the description is the line's sentence "
     "verbatim.",
-    "At most four choices, so at most three alternatives",
+    "Two to four choices, so one to three alternatives",
     "No other generic choice of any kind: the tool's own Other box is the only way to type an "
     "answer.",
     '"The design draft is at <path>. Does it say what you want?"',
@@ -172,7 +178,8 @@ ANSWER_LOOP = (
     "`<letter>: <the alternative's sentence verbatim>` for an alternative, or the operator's "
     "typed text as typed.",
     "Never paraphrase an answer and never answer for the operator.",
-    "An empty pick asks the same question once more, alone, with the framing sentence "
+    "An empty pick asks the same question once more, alone, with the same choices and the "
+    "framing sentence "
     '"Choose Other and type your answer, or pick a choice."; a second empty pick is relayed as '
     "`no answer`.",
     "`the spec stands` starts the hand-off (step 11), and `stop` ends the skill (step 12)",
@@ -217,9 +224,21 @@ def test_opening_check_ask_and_choices_run_in_order() -> None:
     assert "a spelled-out proposal to accept or an answer to type" in head
 
 
+# 0200: a generic choice label of any kind; the tool's Other box is the only free text.
+GENERIC = re.compile(r"Reply|own words|Skip|Accept as proposed|Type my own")
+
+
+def test_choices_paragraph_offers_no_generic_choice() -> None:
+    choices = _flat(_step(_text(), 6)).split("- Choices.", 1)[1].split("Then relay", 1)[0]
+    assert "`Accept: <the proposal's first clause" in choices
+    assert not GENERIC.search(choices), GENERIC.search(choices)
+    assert GENERIC.search("`Reply in my words`") and GENERIC.search("`Skip this item`")
+
+
 def test_literacy_is_always_plain_and_never_asked() -> None:
     flat = _flat(_text())
-    assert "the planner's text included, is plain, whatever `docs.literacy`" in flat
+    assert "every question this skill puts to the operator is plain, the planner's text " in flat
+    assert "The one exception is a not-viable reply, which prints as written with its " in flat
     assert "never asks the operator how technical to be" in flat
     assert "never the planner's text" not in flat
 
@@ -283,6 +302,8 @@ def test_skill_writes_no_file_and_names_its_stops() -> None:
         "the operator says stop",
         "misses its receipt or its nearest version twice",
         "a reply ends off contract",
+        "a question reply misses its `Proposal:` line or its `Other ways:` line twice",
+        "the plain check fails on the question file itself twice",
         "a hook refuses the planner's write",
         "the plan validator fails twice at hand-off",
     ):
