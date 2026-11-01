@@ -30,17 +30,17 @@ R_CONFINE_UNIT = (
 
 
 def _declared_tests(cwd: str) -> frozenset[tuple[str, ...]]:
-    # 0048: each segment of the manifest's unit_test_cmd, bar its cd; an unusable one adds none.
+    # 0048, 0192: each segment of each unit_test_cmd entry, bar its cd; an unusable one adds none.
     if not os.path.isabs(cwd):
         return frozenset()
     loaded = jail._manifest_at(os.path.realpath(str(project_root(Path(cwd)))))
-    command = None if isinstance(loaded, str) else loaded.unit_test_cmd
-    chain = shell.worker_parse(command) if command else None
-    if chain is None:
-        return frozenset()
-    return frozenset(
-        tuple(s) for s in chain.segments if s and shell._base(s[0]) not in jail.DIR_CHANGE_CMDS
-    )
+    commands = () if isinstance(loaded, str) else loaded.unit_test_cmd or ()
+    found: set[tuple[str, ...]] = set()
+    for command in commands:
+        chain = shell.worker_parse(command)
+        segments = chain.segments if chain is not None else []
+        found |= {tuple(s) for s in segments if s and shell._base(s[0]) not in jail.DIR_CHANGE_CMDS}
+    return frozenset(found)
 
 
 def _is_test(segment: list[str], base: str, cwd: str) -> bool:

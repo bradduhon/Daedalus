@@ -82,7 +82,8 @@ def test_agent_models_row_closes_the_config_section() -> None:
     models = KEY_ROWS[(CONFIG_FILE, "agent_models")]
     assert models.kind == "object" and models.default.startswith("`{}`")
     assert '`"sonnet"`, `"opus"`, `"haiku"` or `"fable"`' in models.values
-    assert models.example == '`{"coder": "sonnet"}`'
+    # 0187: inside a run coder_models sets the coder, so the example names another agent.
+    assert models.example == '`{"planner": "sonnet"}`'
 
 
 def test_github_key_has_no_row() -> None:
@@ -97,7 +98,15 @@ def test_reader_keys_follow_the_reader_dataclasses() -> None:
     from dataclasses import fields
 
     from lib.config import Config
-    from lib.manifest import DOCS_KEYS, FEATURE_KEYS, FRAMEWORKS_KEYS, PRIORITY_ROWS, Manifest
+    from lib.manifest import (
+        ASSETS_KEYS,
+        DEV_SERVER_KEYS,
+        DOCS_KEYS,
+        FEATURE_KEYS,
+        FRAMEWORKS_KEYS,
+        PRIORITY_ROWS,
+        Manifest,
+    )
 
     tops = {key.split(".", 1)[0].removesuffix("[]") for key in config_keys()}
     assert tops == {f.name for f in fields(Config)}
@@ -108,7 +117,11 @@ def test_reader_keys_follow_the_reader_dataclasses() -> None:
     # 0129: priorities is a nested block too; its rows are priorities.<field> keys.
     assert {f"priorities.{row}" for row in PRIORITY_ROWS} <= set(manifest_keys())
     assert {f"frameworks.{k}" for k in FRAMEWORKS_KEYS} <= set(manifest_keys())
-    nested = {"features", "docs", "priorities", "frameworks"}
+    # 0192, 0164: assets and dev_server are nested blocks; stack.package_manager is a leaf.
+    assert {f"assets.{k}" for k in ASSETS_KEYS} <= set(manifest_keys())
+    assert {f"dev_server.{k}" for k in DEV_SERVER_KEYS} <= set(manifest_keys())
+    assert "stack.package_manager" in manifest_keys()
+    nested = {"features", "docs", "priorities", "frameworks", "assets", "dev_server"}
     assert {f.name for f in fields(Manifest)} - nested <= leaves
 
 

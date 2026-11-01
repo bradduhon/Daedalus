@@ -179,7 +179,7 @@ def test_trains_dir_outside_the_project_is_refused(tmp_path: Path, value: object
 def test_unit_test_cmd_is_read_from_the_manifest_stack(tmp_path: Path) -> None:
     _write(tmp_path, {"stack": {"language": "python", "unit_test_cmd": "pytest -q"}})
     loaded = load(tmp_path)
-    assert loaded is not None and loaded.unit_test_cmd == "pytest -q"
+    assert loaded is not None and loaded.unit_test_cmd == ("pytest -q",)
     _write(tmp_path, {"stack": {"unit_test_cmd": None}})
     assert load(tmp_path) == Manifest()
 
