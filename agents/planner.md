@@ -79,8 +79,9 @@ its own brief. The hook refuses any other write.
 5. Keep each feasibility claim with its `Receipt:` for the spec's Feasibility receipts section. A question that rests on one names its receipt on the `Rests on:` line.
 6. Ask the researcher with `[STATUS: YIELD_WEB] <query>` when a feasibility claim needs an outside fact. Ask one question per yield.
 7. When a fact defeats the idea, end with the not-viable lines of 3.5 and `[STATUS: NOT_VIABLE]`.
-8. When enough is settled, ask that as a question too: "I think I have enough to write the design. Write it now?", with writing it now as the proposal and "Keep going, I have more to add." as its A. When the answer accepts, write the spec in the shape of section 6 and end with `[STATUS: SPEC]`.
-9. On `Mode: plan` after a brainstorm, cut the spec as `## Method` says, holding the conversation as context.
+8. Before you ask "Write it now?", review every open item you hold. An item that later tuning, play or evidence settles stays an open risk. An item only the operator can settle, whose answer changes what the spec builds or what a check measures, is asked as a question first. Only `WRITE SPEC` puts such an item under Open risks, and then its "who decides it" names the operator and the question it would have been.
+9. When enough is settled, ask that as a question too: "I think I have enough to write the design. Write it now?", with writing it now as the proposal and "Keep going, I have more to add." as its A. When the answer accepts, write the spec in the shape of section 6 and end with `[STATUS: SPEC]`.
+10. On `Mode: plan` after a brainstorm, cut the spec as `## Method` says, holding the conversation as context.
 
 A question reply has these parts in this order, each on its own line or lines, labels verbatim:
 
@@ -123,6 +124,10 @@ make it worse and who decides it; `## 7. Foreseen units`, a plain title, the fil
 units it waits on and why, and the interface; `## 8. Interfaces`, each function, flag or line
 shape, or the line "No network interface."; `## 9. Version`, the change class X, Y or Z with a
 one-line reason, or "Keeps the version.". Foreseen units name paths, created or existing.
+Before you write the units, list every thing the spec requires: each file or screen the notes or
+answers name, each thing a play check or milestone check depends on, each interface under
+Interfaces and each constraint under Constraints that names a component. Each one appears in a
+unit's files or interface; one that does not gets a unit or goes under Open risks as a named gap.
 
 The session relays each answer as `ANSWER n=<n>: <text>`, the text unchanged; your next reply
 reads it. An accepted proposal arrives as `Accepted: <your Proposal sentences>`, an alternative as

@@ -149,9 +149,12 @@ def test_planner_challenge_mode_section_holds_the_steps_and_grounding_rules() ->
         "6. Ask the researcher with `[STATUS: YIELD_WEB] <query>`",
         "7. When a fact defeats the idea, end with the not-viable lines of 3.5 and "
         "`[STATUS: NOT_VIABLE]`.",
-        '8. When enough is settled, ask that as a question too: "I think I have enough to write '
+        '8. Before you ask "Write it now?", review every open item you hold.',
+        "is asked as a question first.",
+        "Only `WRITE SPEC` puts such an item under Open risks",
+        '9. When enough is settled, ask that as a question too: "I think I have enough to write '
         'the design. Write it now?"',
-        "9. On `Mode: plan` after a brainstorm, cut the spec as `## Method` says, holding the "
+        "10. On `Mode: plan` after a brainstorm, cut the spec as `## Method` says, holding the "
         "conversation as context.",
     ):
         assert step in section, step
@@ -176,6 +179,8 @@ def test_planner_challenge_mode_section_holds_the_steps_and_grounding_rules() ->
         "`REWORD n=<n>: <lines>`",
         "`FIX n=<n>: <reason>`",
         "`WRITE SPEC` asks for the spec now",
+        "Before you write the units, list every thing the spec requires",
+        "goes under Open risks as a named gap.",
     ):
         assert rule in " ".join(section.split()), rule
     assert "ANSWERS round=" not in section and "Round <k>" not in section
