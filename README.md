@@ -134,7 +134,7 @@ The push run commits, pushes and opens the pull request for a finished build run
 
 It first checks that the build run's audit log holds an approved security verdict for that train. When `features.secrets_scan` is `true` in `service-manifest.json`, it also scans the commits for secrets with gitleaks before the push. Your repository needs a GitHub remote named `origin`, and `gh` must be signed in to it.
 
-The push agent, the releaser, pushes the branch and watches CI. If the build run used a branch in your Charter repository, the push agent also pushes that branch and opens its pull request after the code one. The Charter is a separate repository for your decisions and specs, named by the `charter_root` setting. If a commit landed on the train's branch after the audit, the push run adds one recovery audit round on the new tip before it pushes.
+The push agent, the releaser, pushes the branch and watches CI. The pull request body is the build run's summary, with a `Closes #<n>` line for each issue the run finished and a `Refs #<n>` line for each issue it did only in part. Merging the pull request then closes the finished issues. If the build run used a branch in your Charter repository, the push agent also pushes that branch and opens its pull request after the code one. The Charter is a separate repository for your decisions and specs, named by the `charter_root` setting. If a commit landed on the train's branch after the audit, the push run adds one recovery audit round on the new tip before it pushes.
 
 You review and merge. Once `gh pr view <url> --json state` shows the merge, delete the train branch from your own shell with `git branch -D daedalus/<train-id>`.
 
@@ -694,7 +694,7 @@ Daedalus/
 │   ├── daedalus_map.py              # the dependency map: imports, coverage, record readers, ownership, duplicates
 │   ├── daedalus_setup.py            # writes the missing starter files behind /daedalus:setup
 │   ├── daedalus_train.py            # the train runner: progress, choice, plan, verdict, exception
-│   ├── daedalus_workspace.py        # begin, lock, create, remove, finish, stop, resume, mark, unmark, release
+│   ├── daedalus_workspace.py        # begin, lock, create, remove, finish, stop, resume, mark, unmark, release, pr-body
 │   ├── enforce_agent_jail.py        # PreToolUse policy
 │   ├── freeze_sources.py            # freezes and verifies a document train's sources
 │   ├── handback_check.py            # SubagentStop check of a coder's receipts block

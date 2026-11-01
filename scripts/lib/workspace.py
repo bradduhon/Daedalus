@@ -9,6 +9,7 @@ import os
 import re
 import shlex
 import subprocess
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -1246,7 +1247,23 @@ _CLASS_LINE = re.compile(r"Version class: (\S+) ([XYZ]): (\S.*)")
 _MIGRATION_LINE = re.compile(r"Migration: \S.*")
 # 0068: GitHub's closing keywords, the ones that close an issue from a pull request body.
 _CLOSES = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?) #([0-9]+)\b", re.IGNORECASE)
+# Work-order line 24: a `Refs #N` or `partial #N` reference marks the issue as partly done.
+_REFS = re.compile(r"\b(?:refs?|partial(?:ly)?|part of) #([0-9]+)\b", re.IGNORECASE)
+_TASK_ISSUES = re.compile(
+    r"#([0-9]+)\b|\bissues? ((?:[0-9]+(?:, and |, | and ))*[0-9]+)\b", re.IGNORECASE
+)
 RELEASE_NOTES = "release-notes.md"
+PR_BODY = "pr-body.md"
+RELEASES_DIR = "releases"
+
+
+@dataclass(frozen=True)
+class _Source:
+    name: str
+    short: str
+
+
+_SUMMARY = _Source("the train summary", "the summary")
 
 
 def _release_train(repo: Path, merge_sha: str) -> str:
@@ -1260,7 +1277,14 @@ def _release_train(repo: Path, merge_sha: str) -> str:
     for found in train_state.TRAIN_ID.findall(subject):
         if train_state.state_path(repo, found).is_file():
             return str(found)
-    return _resume_train(repo)
+    try:
+        return _resume_train(repo)
+    except WorkspaceError as exc:
+        # 130: a plain-branch merge has no train; its pull request body is the notes source.
+        raise WorkspaceError(
+            f"no Daedalus train is recorded in {repo}, and no notes file was named. "
+            "Next: save the pull request body to a file, then rerun with --notes-file <path>."
+        ) from exc
 
 
 def _merge_commit(repo: Path, merge_sha: str, base: str) -> str:
@@ -1315,26 +1339,28 @@ def _moved(base: str | None, version: str) -> str | None:
     return None
 
 
-def _class_line(summary: str, version: str, moved: str | None) -> tuple[str, str]:
+def _class_line(
+    summary: str, version: str, moved: str | None, source: _Source = _SUMMARY
+) -> tuple[str, str]:
     # 0071: the summary's class line names the version, the digit that moved and a reason.
     found = next(
         (m for line in summary.splitlines() if (m := _CLASS_LINE.fullmatch(line.strip()))), None
     )
     if found is None:
         raise WorkspaceError(
-            f"the train summary has no version class line. Next: add the line {CLASS_SHAPE} "
-            "to the summary, then rerun."
+            f"{source.name} has no version class line. Next: add the line {CLASS_SHAPE} "
+            f"to {source.short}, then rerun."
         )
     named, letter, reason = found.groups()
     if named != version:
         raise WorkspaceError(
             f"the class line names version {named} but {VERSION_FILE} holds {version}. "
-            f"Next: correct the class line in the summary to {version}, then rerun."
+            f"Next: correct the class line in {source.short} to {version}, then rerun."
         )
     if moved is not None and letter != moved:
         raise WorkspaceError(
             f"the class line names {letter} but the {moved} digit moved. "
-            f"Next: correct the class line letter in the summary to {moved}, then rerun."
+            f"Next: correct the class line letter in {source.short} to {moved}, then rerun."
         )
     return letter, reason.strip()
 
@@ -1351,15 +1377,17 @@ def _section(summary: str, head: str) -> str:
     return "\n".join(body).strip() or "none"
 
 
-def _render_notes(summary: str, letter: str, reason: str) -> str:
+def _render_notes(
+    summary: str, letter: str, reason: str, source: _Source = _SUMMARY, task: str = "Task: none"
+) -> str:
     # 0065, 0068: notes carry no version literal; the tag and the release title carry it.
     lines = summary.splitlines()
-    task = next((line.strip() for line in lines if line.startswith("Task: ")), "Task: none")
+    task = next((line.strip() for line in lines if line.startswith("Task: ")), task)
     migration = [line.strip() for line in lines if _MIGRATION_LINE.fullmatch(line.strip())]
     if letter == "X" and not migration:
         raise WorkspaceError(
-            "the class line names X but the summary has no migration line. "
-            f"Next: add the line {MIGRATION_SHAPE} to the summary, then rerun."
+            f"the class line names X but {source.short} has no migration line. "
+            f"Next: add the line {MIGRATION_SHAPE} to {source.short}, then rerun."
         )
     issues = list(dict.fromkeys(_CLOSES.findall(summary)))
     closed = ", ".join(f"#{n}" for n in issues) or "none"
@@ -1370,7 +1398,7 @@ def _render_notes(summary: str, letter: str, reason: str) -> str:
     return "\n".join(parts) + "\n"
 
 
-def _scrub_check(repo: Path, text: str) -> None:
+def _scrub_check(repo: Path, text: str, source: _Source = _SUMMARY) -> None:
     # 0069: release notes become a public GitHub Release; the refusal names a count, never a term.
     try:
         terms = scrub.declared_terms(repo)
@@ -1380,32 +1408,79 @@ def _scrub_check(repo: Path, text: str) -> None:
     if hits:
         raise WorkspaceError(
             f"the release notes carry {hits} term(s) from the declared scrub file. "
-            "Next: remove those terms from the train summary, then rerun."
+            f"Next: remove those terms from {source.name}, then rerun."
         )
 
 
-def _write_notes(repo: Path, train_id: str, text: str) -> Path:
-    folder = repo / SUMMARY_DIR / train_id
+def _write_scratch(repo: Path, folders: tuple[str, ...], name: str, text: str) -> Path:
+    chain = [repo / "docs", repo / "docs" / ".tmp", repo / SUMMARY_DIR]
+    for part in folders:
+        chain.append(chain[-1] / part)
     try:
-        for part in (repo / "docs", repo / "docs" / ".tmp", repo / SUMMARY_DIR, folder):
+        for part in chain:
             atomic.refuse_links(part)
     except atomic.LinkRefused as exc:
         raise WorkspaceError(str(exc)) from exc
     _scratch(repo)
-    notes = folder / RELEASE_NOTES
+    target = chain[-1] / name
     try:
-        folder.mkdir(exist_ok=True)
-        atomic.write_atomic(notes, text, 0o644)
+        for part in chain[3:]:
+            part.mkdir(exist_ok=True)
+        atomic.write_atomic(target, text, 0o644)
     except OSError as exc:
         raise WorkspaceError(
-            f"cannot write {notes} ({exc}). Next: remove anything in its place, then rerun."
+            f"cannot write {target} ({exc}). Next: remove anything in its place, then rerun."
         ) from exc
-    return notes
+    return target
 
 
-def release(repo: Path, merge_sha: str) -> list[str]:
+def _write_notes(repo: Path, train_id: str, text: str) -> Path:
+    return _write_scratch(repo, (train_id,), RELEASE_NOTES, text)
+
+
+def _release_lines(repo: Path, version: str, letter: str, sha: str, notes: Path) -> list[str]:
+    tag, where = f"v{version}", shlex.quote(str(repo))
+    return [
+        f"release: {tag}, class {letter}, merge {sha}",
+        f"notes: {notes}",
+        "Run these three commands from the main session, in order; this script ran none of them:",
+        f"git -C {where} tag -a {tag} -m {tag} {sha}",
+        f"git -C {where} push origin {tag}",
+        f"gh release create {tag} --verify-tag --title {tag} "
+        f"--notes-file {shlex.quote(str(notes))}",
+    ]
+
+
+def _plain_release(repo: Path, merge_sha: str, notes_file: Path, base: str) -> list[str]:
+    # 130, 0163: a plain-branch merge has no train; the pull request body file is the notes source.
+    sha = _merge_commit(repo, merge_sha, base)
+    version = _merged_version(repo, sha)
+    before = _version_at(repo, f"{sha}^1")
+    if before == version:
+        return [f"release: skipped, {VERSION_FILE} is unchanged since the pull request base"]
+    try:
+        body = notes_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise WorkspaceError(
+            f"cannot read the notes file {notes_file} ({exc}). "
+            "Next: save the pull request body to that file, then rerun."
+        ) from exc
+    source = _Source(f"the notes file {notes_file}", "the notes file")
+    letter, reason = _class_line(body, version, _moved(before, version), source)
+    subject = _out(repo, "log", "-1", "--format=%s", sha, "--").strip()
+    text = _render_notes(body, letter, reason, source, f"Task: {subject}")
+    _scrub_check(repo, text, source)
+    notes = _write_scratch(repo, (RELEASES_DIR, f"v{version}"), RELEASE_NOTES, text)
+    return _release_lines(repo, version, letter, sha, notes)
+
+
+def release(
+    repo: Path, merge_sha: str, notes_file: Path | None = None, base: str = "main"
+) -> list[str]:
     # 0068: prints the tag and release commands for the main session and runs none of them.
     repo = repo.resolve()
+    if notes_file is not None:
+        return _plain_release(repo, merge_sha, notes_file, base)
     train_id = _release_train(repo, merge_sha)
     try:
         state = train_state.load(repo, train_id)
@@ -1444,16 +1519,45 @@ def release(repo: Path, merge_sha: str) -> list[str]:
         train_id,
         release={"merge_sha": sha, "outcome": "ready", "version": version, "notes": str(notes)},
     )
-    tag, where = f"v{version}", shlex.quote(str(repo))
-    return [
-        f"release: {tag}, class {letter}, merge {sha}",
-        f"notes: {notes}",
-        "Run these three commands from the main session, in order; this script ran none of them:",
-        f"git -C {where} tag -a {tag} -m {tag} {sha}",
-        f"git -C {where} push origin {tag}",
-        f"gh release create {tag} --verify-tag --title {tag} "
-        f"--notes-file {shlex.quote(str(notes))}",
-    ]
+    return _release_lines(repo, version, letter, sha, notes)
+
+
+def _task_issues(summary: str) -> list[str]:
+    task = next((ln.strip() for ln in summary.splitlines() if ln.startswith("Task: ")), "")
+    found: list[str] = []
+    for hashed, words in _TASK_ISSUES.findall(task):
+        found += [hashed] if hashed else re.findall(r"[0-9]+", words)
+    return found
+
+
+def issue_lines(summary: str) -> list[str]:
+    # Work-order line 24: Closes for landed work, Refs when the record says partial.
+    closed = list(dict.fromkeys([*_task_issues(summary), *_CLOSES.findall(summary)]))
+    partial = list(dict.fromkeys(_REFS.findall(summary)))
+    lines = [f"{'Refs' if n in partial else 'Closes'} #{n}" for n in closed]
+    return lines + [f"Refs #{n}" for n in partial if n not in closed]
+
+
+def pr_body(repo: Path, train_id: str) -> list[str]:
+    # Work-order line 24: the pull request body is the summary plus one Closes or Refs line each.
+    repo = repo.resolve()
+    if not train_state.TRAIN_ID.fullmatch(train_id):
+        raise WorkspaceError(
+            f"{train_id!r} is not a run id (YYYYMMDD-HHMMSS). "
+            "Next: pass the run id from the summary file name."
+        )
+    summary_path = repo / SUMMARY_DIR / f"{train_id}-summary.md"
+    try:
+        summary = summary_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise WorkspaceError(
+            f"cannot read the train summary {summary_path} ({exc}). "
+            "Next: restore the summary the Build Train wrote, then rerun."
+        ) from exc
+    lines = issue_lines(summary)
+    text = summary.rstrip("\n") + "\n" + ("\n" + "\n".join(lines) + "\n" if lines else "")
+    body = _write_scratch(repo, (train_id,), PR_BODY, text)
+    return [f"body: {body}", f"issues: {', '.join(lines) or 'none'}"]
 
 
 def _resume_target(repo: Path, branch: str, start: str | None = None) -> bool:

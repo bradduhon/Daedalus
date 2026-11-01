@@ -363,7 +363,9 @@ The train stops, with a `Next:` line, when any of these fails:
 
 ### What the releaser does
 
-The releaser is the agent that pushes. It commits any staged result. With the secret scan on, it then scans the commits since the base with `gitleaks detect --redact`. It pushes the branch with `git push -u origin daedalus/<train-id>` and opens the pull request with the build run's summary as its body. When a pull request for the branch is already open, it updates that body instead. The jail lets it push only a named branch to `origin`. It can never push `main` or `master`, never force a push, and never merge.
+The releaser is the agent that pushes. It commits any staged result. With the secret scan on, it then scans the commits since the base with `gitleaks detect --redact`. It pushes the branch with `git push -u origin daedalus/<train-id>` and opens the pull request with the build run's summary as its body, plus the issue lines below. When a pull request for the branch is already open, it updates that body instead. The jail lets it push only a named branch to `origin`. It can never push `main` or `master`, never force a push, and never merge.
+
+Before the releaser starts, the push run copies the summary to `docs/.tmp/daedalus/<train-id>/pr-body.md`. It adds one line for each issue the run names. An issue the run finished gets `Closes #<n>`, so merging the pull request closes it. An issue the run did only in part gets `Refs #<n>`, so it stays open. A `#<n>` or `issue <n>` on the summary's `Task:` line counts as finished. So does a `Closes #<n>` or `Fixes #<n>` in the summary. A `Refs #<n>` or `partial #<n>` in the summary marks the issue as partly done.
 
 Then it watches the GitHub Actions runs for the pushed commit and reports each conclusion. Only `success`, `skipped` and `neutral` let the train go on. Every `skipped` or `neutral` result is named in your checklist, even when a later run succeeded. Any other conclusion, including `startup_failure` or one Daedalus does not know, stops the train. Its log lines are added to the summary under `## CI` and shown to you. Fix the failure through `/daedalus:run`; the push run never fixes CI.
 
@@ -384,6 +386,14 @@ The train ends with the pull request URLs and a numbered list:
 5. Run `/daedalus:audit-report <session>` to read this session's audit log.
 
 With a Charter branch, item 6 covers the Charter pull request. You review and merge it after the code pull request and check it is merged the same way. The item's last step switches the Charter back and deletes its branch with `git branch -D`. The list ends with a note that a later Daedalus release adds the Execution Train readiness checklist: the manual drills and boundary checks before production.
+
+### Releasing a plain-branch merge
+
+A pull request you merged from an ordinary branch has no build run and no summary. To publish a release for it, save the pull request's body to a file. The body must hold the line `Version class: <version> <X, Y or Z>: <one-line reason>`. With X it must also hold `Migration: <what an operator edits>`. Then run:
+
+    python3 <plugin>/scripts/daedalus_workspace.py release --repo <repo> --merge-sha <merge sha> --notes-file <body file>
+
+Add `--base <branch>` when the pull request merged into a branch other than `main`. The command reads the version from the `VERSION` file at the merge commit. It writes the release notes to `docs/.tmp/daedalus/releases/v<version>/release-notes.md`. Then it prints the tag, tag push and release commands, the same three a build run's release prints. It runs none of them. When `VERSION` did not change, it prints `release: skipped` and writes nothing. Without `--notes-file`, in a repository with no build run recorded, it stops with a `Next:` line that names the flag.
 
 ### What BLOCKED means
 
