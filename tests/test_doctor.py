@@ -1445,6 +1445,38 @@ def test_the_dev_server_line_names_the_url_and_the_check(tmp_path: Path) -> None
     assert _manifest_lines(tmp_path, {"dev_server": None}, "_dev_server_check") == []
 
 
+@pytest.mark.parametrize(
+    ("block", "line"),
+    [
+        ({}, "OK   dependencies: frozen installs none; minimum release age 7 days"),
+        (
+            {"installs": ["npm", "python"], "minimum_release_age_days": 14},
+            "OK   dependencies: frozen installs npm, python; minimum release age 14 days",
+        ),
+        (
+            {"minimum_release_age_days": 1, "minimum_release_age_reason": "x" * 20},
+            "OK   dependencies: frozen installs none; minimum release age 1 day, lowered from "
+            "7: " + "x" * 20,
+        ),
+    ],
+)
+def test_the_dependencies_line_names_installs_and_the_release_age(
+    tmp_path: Path, block: dict[str, object], line: str
+) -> None:
+    # 0196, 0197: one line; a lowered age prints its reason.
+    assert _manifest_lines(tmp_path, {"dependencies": block}, "_dependencies_check") == [line]
+
+
+def test_a_lowered_release_age_without_a_reason_is_the_manifest_miss(tmp_path: Path) -> None:
+    import daedalus_doctor
+
+    block = {"minimum_release_age_days": 3, "minimum_release_age_reason": "too short"}
+    (tmp_path / "service-manifest.json").write_text(json.dumps({"dependencies": block}))
+    ok, line = daedalus_doctor._manifest_check(tmp_path)
+    assert not ok and line.startswith("MISS service-manifest.json:") and "(0197)" in line
+    assert list(daedalus_doctor._dependencies_check(tmp_path)) == []
+
+
 def test_the_doctor_lists_the_new_manifest_lines_in_a_full_run(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _git_repo(repo)

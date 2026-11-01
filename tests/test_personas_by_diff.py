@@ -192,7 +192,9 @@ def test_dependency_auditor_asks_for_advisories_only_through_a_web_yield() -> No
         "dependency manifest or a lockfile",
         "You are off the network.",
         "`Web lookup: off`",
-        "`[STATUS: YIELD_WEB] <ecosystem> <name> <version> security advisories`",
+        "`[STATUS: YIELD_WEB] <ecosystem> <name> <version> security advisories and publish date`",
+        "`Minimum release age: <days>`",
+        "DEP-5 and DEP-8 are N/A with the reason `web lookup off and no advisory export`",
         "Never run a package manager",
     ):
         assert phrase in text, phrase
@@ -200,6 +202,21 @@ def test_dependency_auditor_asks_for_advisories_only_through_a_web_yield() -> No
 
 # 0189, 0192: the npm rows live in a rulebook file the audit dispatch names, never the agent body.
 NPM_RULEBOOK = REPO_ROOT / "packs" / "dependencies" / "npm.md"
+PY_RULEBOOK = REPO_ROOT / "packs" / "dependencies" / "python.md"
+# 0196: each rulebook, its row prefix and count, and phrases its rows must carry.
+RULEBOOKS = (
+    (NPM_RULEBOOK, "NPM", 4, ("`git+`", "`file:`", "`postinstall`", "`minimumReleaseAge`")),
+    (PY_RULEBOOK, "PY", 6, ("`git+`", "`--hash", "`exclude-newer`", "`cmdclass`", "typosquat")),
+)
+# 0192, 0196: the paths that name each rulebook in the audit dispatch.
+RULEBOOK_PATHS = (
+    ("npm.md", ("`package.json`", "`package-lock.json`", "`pnpm-lock.yaml`", "`yarn.lock`")),
+    (
+        "python.md",
+        ("`pyproject.toml`", "`requirements*.txt`", "`uv.lock`", "`poetry.lock`", "`pdm.lock`")
+        + ("`setup.py`", "`setup.cfg`"),
+    ),
+)
 RULE_ROW = re.compile(r"^- (DEP-[A-Z0-9-]+): (\S.*)$")
 
 
@@ -208,17 +225,20 @@ def _rule_rows(text: str) -> list[str]:
     return [m.group(1) for line in rows.splitlines() if (m := RULE_ROW.match(line))]
 
 
-def test_npm_rulebook_parses_to_the_row_shape_the_auditor_judges() -> None:
+@pytest.mark.parametrize(("book", "tag", "count", "phrases"), RULEBOOKS)
+def test_each_rulebook_parses_to_the_row_shape_the_auditor_judges(
+    book: Path, tag: str, count: int, phrases: tuple[str, ...]
+) -> None:
     agent_rows = _rule_rows((AGENTS / "dependency-auditor.md").read_text(encoding="utf-8"))
-    assert agent_rows == [f"DEP-{n}" for n in range(1, 8)]
-    text = NPM_RULEBOOK.read_text(encoding="utf-8")
+    assert agent_rows == [f"DEP-{n}" for n in range(1, 9)]
+    text = book.read_text(encoding="utf-8")
     assert text.startswith("<!-- Copyright (c) 2026 Brad Duhon.")
-    assert _rule_rows(text) == [f"DEP-NPM-{n}" for n in range(1, 5)]
+    assert _rule_rows(text) == [f"DEP-{tag}-{n}" for n in range(1, count + 1)]
     body = text.split("\n## Rows\n", 1)[1]
-    assert all(line.startswith("- DEP-NPM-") for line in body.strip().splitlines())
-    for phrase in ("`git+`", "`file:`", "`postinstall`", "`minimumReleaseAge`"):
+    assert all(line.startswith(f"- DEP-{tag}-") for line in body.strip().splitlines())
+    for phrase in (*phrases, "DEP-8"):
         assert phrase in text, phrase
-    assert "DEP-NPM" not in (AGENTS / "dependency-auditor.md").read_text(encoding="utf-8")
+    assert f"DEP-{tag}" not in (AGENTS / "dependency-auditor.md").read_text(encoding="utf-8")
     assert "When the dispatch carries a `Rulebook: <path>` line, Read that file" in _flat(
         AGENTS / "dependency-auditor.md"
     )
@@ -231,6 +251,58 @@ def test_audit_dispatch_names_the_npm_rulebook_when_an_npm_file_changed() -> Non
         "`Rulebook: ${CLAUDE_PLUGIN_ROOT}/packs/dependencies/npm.md` when the diff names "
         "`package.json`, `package-lock.json`, `pnpm-lock.yaml` or `yarn.lock`"
     ) in step
+
+
+@pytest.mark.parametrize(("book", "paths"), RULEBOOK_PATHS)
+def test_audit_dispatch_names_each_rulebook_for_its_manifest_paths(
+    book: str, paths: tuple[str, ...]
+) -> None:
+    # 0192, 0196: each path both starts the auditor and names its rulebook.
+    text = _phase("audit").split("When the diff names a dependency manifest", 1)[1]
+    step = " ".join(text.split("\n", 1)[0].split())
+    trigger, clause = step.split("dispatch `dependency-auditor`", 1)
+    named = clause.split(f"packs/dependencies/{book}` when the diff names ", 1)[1]
+    named = named.split("`Rulebook:")[0]
+    for path in paths:
+        assert path.replace("*", "") in trigger.replace("*", ""), path
+        assert path in named, (book, path)
+
+
+def test_the_auditor_files_each_blocking_compliance_line_as_a_failing_test() -> None:
+    # 0196: the auditor takes the line as an input and never closes it with a no-test line.
+    text = (AGENTS / "auditor.md").read_text(encoding="utf-8")
+    inputs = " ".join(text.split("Inputs:", 1)[1].split("## Procedure", 1)[0].split())
+    assert "`Blocking compliance: <row> N/A <reason>` line per row (0196)" in inputs
+    step = text.split("5. **Compliance**", 1)[1].split("\n## ", 1)[0]
+    step = " ".join(step.split())
+    for phrase in (
+        "Each `Blocking compliance:` line is a blocking compliance finding filed by Finding format",
+        "`round<n>/test_compliance_<row>_unjudged.py`, never a `no-test:` line",
+        "names the row, the reason and the two ways to clear it",
+        "turn on `features.dependency_web_lookup`",
+        "name an `Advisory export:` file in the task",
+        "a re-dispatched dependency auditor no longer marks the row N/A",
+    ):
+        assert phrase in step, phrase
+
+
+def test_audit_dispatch_carries_the_release_age_and_blocks_an_unjudged_row() -> None:
+    # 0196, 0197: an N/A on DEP-5 or DEP-8 is a failing test put to the operator, never a pass.
+    text = " ".join(_phase("audit").split())
+    assert "`Minimum release age: <days>` with the manifest's" in text
+    assert "`dependencies.minimum_release_age_days` (`7` when absent, 0197)" in text
+    gate = text.split("Unjudged advisories or release age (0196, 0197).", 1)[1].split(" - ", 1)[0]
+    for phrase in (
+        "An N/A on either is never a pass",
+        "it is a blocking finding",
+        "`Blocking compliance: <row> N/A <the auditor's reason>`",
+        "test_compliance_<row>_unjudged.py",
+        "turn on `features.dependency_web_lookup`",
+        "name an `Advisory export:` file",
+        "one question per row",
+    ):
+        assert phrase in gate, phrase
+    assert "each `Blocking compliance:` line of step 1" in text
 
 
 def test_dependency_auditor_may_read_the_npm_rulebook(jail_fakes: None) -> None:

@@ -48,6 +48,8 @@ def _is_test(segment: list[str], base: str, cwd: str) -> bool:
     # 0048, Plan 6 section 10.3: a runner the runner check accepts, a worktree file run by its
     # path, or a segment of the declared unit_test_cmd.
     tokens = shell.strip_wrappers(segment) or segment
+    if jail.install_form(tokens) is not None:
+        return False  # 0196: network_tools admits only the frozen install, which needs the network.
     if shell._tester_runner_ok(shell._base(tokens[0]), tokens, lambda _: True):
         return True
     word = tokens[0]

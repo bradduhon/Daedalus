@@ -12,6 +12,7 @@ from lib import jail, shell
 from tests.adversarial.corpus import (
     DEV_SERVERS,
     GAME_RUNNERS,
+    INSTALL_GATE_CMDS,
     INTERPRETER_BINS,
     PACKAGE_DOWNLOADS,
     PACKAGE_INSTALL_CMDS,
@@ -145,13 +146,14 @@ def _confine_live(monkeypatch: pytest.MonkeyPatch) -> None:
     + TERRAFORM_MUTATIONS
     + TERRAFORM_OPERATOR_FORMS
     + PACKAGE_INSTALL_CMDS
+    + INSTALL_GATE_CMDS
     + PACKAGE_DOWNLOADS,
 )
 def test_the_kernel_wrapper_admits_no_dev_server_watch_mode_state_change_or_install(
     command: str,
 ) -> None:
     # 0164, 0158: refused bare and wrapped, with the ruling named unless a wrapper word leads.
-    markers = () if command.split()[0] in shell.WORKER_WRAPPERS else ("0164)", "(0158)")
+    markers = () if command.split()[0] in shell.WORKER_WRAPPERS else ("0164)", "(0158)", "(0196)")
     for form in (command, f"{shell.CONFINE_PATH} --unit {WT} -- {command}"):
         assert_denied(_b("coder", f"cd {WT} && {form}"), *markers)
 

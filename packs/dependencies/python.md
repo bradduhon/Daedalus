@@ -1,0 +1,13 @@
+<!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
+
+# Python rulebook for the dependency auditor (0189, 0196, 0197)
+
+The audit phase names this file in the dependency auditor's dispatch when the merged diff changes `pyproject.toml`, a `requirements*.txt` file, `uv.lock`, `poetry.lock`, `pdm.lock`, `setup.py` or `setup.cfg`. Judge these rows beside DEP-1 to DEP-8, with the same rubric: PASS, FAIL or N/A per changed dependency, with `file:line`.
+
+## Rows
+- DEP-PY-1: a lockfile or hash file (`uv.lock`, `poetry.lock`, `pdm.lock`, or a requirements file whose every entry carries `--hash` lines) is committed beside each changed `pyproject.toml` or requirements input, and the diff changes it in step: every dependency added, removed or re-ranged has its lock entry change in the same diff. A manifest change with no lock change, or two lockfiles of different tools for one project, is a FAIL.
+- DEP-PY-2: no dependency source is `git+`, a plain `http:` or `https:` URL, a `file:` URL or a local path in place of a registry version, in a requirements line, a `[tool.uv.sources]` or `[tool.poetry.dependencies]` entry or a lock entry. Such a source is a FAIL, because it skips the registry's hash and can change under the same name.
+- DEP-PY-3: every pinned entry carries its hashes where the tool emits them: `--hash=sha256:` lines in a requirements file, and the `hash` or `hashes` field of a `uv.lock`, `poetry.lock` or `pdm.lock` entry. A pinned entry without one is a FAIL.
+- DEP-PY-4: an install hook or build backend the diff newly introduces is a FAIL unless the diff names why: a `setup.py` with a custom `cmdclass` or other code that runs at install time, or a new `[build-system] requires` entry. A build backend runs code on every machine that installs the project. Poetry runs it on `poetry install` too, which is why the jail admits no poetry install form (0196).
+- DEP-PY-5: when the tool has a release-age cooldown setting, such as uv `exclude-newer` in `pyproject.toml` or `uv.toml`, give one PASS line that names the setting and its value and states both sides of the trade; with no cooldown set, the row is N/A. The cooldown keeps out a version published minutes ago by a hijacked account and holds back a security fix newer than it. DEP-8 is the row that judges each version's age against the manifest's minimum release age.
+- DEP-PY-6: a new package whose name is within one edit (one letter added, removed, changed or two letters swapped, with `-`, `_` and `.` read as the same) of one of the 200 most downloaded PyPI packages, and is not that package, is a FAIL unless the diff names why. Such a name is the usual shape of a typosquat.

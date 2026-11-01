@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import glob as _glob
+import itertools
 import os
 import re
 import subprocess
@@ -167,70 +168,461 @@ NETWORK_TOOLS = frozenset(
 )
 # 0164: a package install reaches the registry and writes a store outside the worktree.
 PACKAGE_INSTALLS = frozenset({"pnpm", "npm", "yarn", "bun"})
-# 0164: install, ci and update verbs with the npm aliases and misspellings npm accepts.
+# 0164, 0196: install, ci, update and resolve verbs with the npm aliases and misspellings.
 INSTALL_VERBS = frozenset(
     {"install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal"}
     | {"isntall", "add", "ci", "clean-install", "ic", "install-clean", "isntall-clean"}
     | {"install-test", "it", "install-ci-test", "cit", "update", "up", "upgrade", "udpate"}
-    | {"fetch", "import"}
+    | {"fetch", "import", "dedupe", "ddp", "link", "ln"}
 )
 _SCRIPT_VERBS = frozenset({"run", "run-script", "rum", "urn", "test", "t", "tst", "--"})
 _EXEC_VERBS = frozenset({"exec", "x", "dlx"})
 _COREPACK_VERBS = frozenset({"install", "prepare", "use", "up", "enable"})
+# 0196: the one frozen, scripts-off install per manager: its verbs, required flag sets, extras.
+_NPM_CI = frozenset({"ci", "clean-install", "ic", "install-clean", "isntall-clean"})
+_FrozenRow = tuple[frozenset[str], tuple[frozenset[str], ...], frozenset[str]]
+_JS_FROZEN: dict[str, _FrozenRow] = {
+    "npm": (
+        _NPM_CI,
+        (frozenset({"--ignore-scripts"}),),
+        frozenset({"--no-audit", "--no-fund", "--prefer-offline", "--offline", "--silent"}),
+    ),
+    "pnpm": (
+        frozenset({"install", "i"}),
+        (frozenset({"--frozen-lockfile", "--ignore-scripts"}),),
+        frozenset({"--offline", "--prefer-offline", "--silent"}),
+    ),
+    "yarn": (
+        frozenset({"install", ""}),
+        (
+            frozenset({"--immutable", "--mode=skip-build"}),
+            frozenset({"--frozen-lockfile", "--ignore-scripts"}),
+        ),
+        frozenset({"--offline", "--silent", "--non-interactive"}),
+    ),
+    "bun": (
+        frozenset({"install", "i"}),
+        (frozenset({"--frozen-lockfile", "--ignore-scripts"}),),
+        frozenset({"--silent", "--no-progress"}),
+    ),
+}
+_PIP = re.compile(r"pip(?:3(?:\.\d+)?)?")
+_PIP_VERBS = frozenset({"install", "download", "wheel"})
+_PIP_EXTRAS = frozenset({"--no-deps", "-q", "--quiet", "--no-input", "--disable-pip-version-check"})
+_UV_SYNC_EXTRAS = frozenset(
+    {"--no-install-project", "--no-dev", "--all-extras", "--offline", "-q", "--quiet"}
+)
+_UV_FROZEN = (frozenset({"--frozen", "--no-build"}),)
+_UV_PIP_EXTRAS = frozenset({"--offline", "-q", "--quiet"})
+_UV_PIP_FROZEN = (frozenset({"--require-hashes", "--no-build"}),)
+# 0196: yarn options whose value is the next word; the value is never a verb.
+_YARN_COMMANDS = INSTALL_VERBS | _SCRIPT_VERBS | {"exec", "dlx", "create", "workspace"}
+# 0196: each manager's global options whose value is the next word, and words that end the verb.
+_GLOBAL_VALUED: dict[str, frozenset[str]] = {
+    "uv": frozenset(
+        {"--directory", "--project", "--cache-dir", "--config-file", "--color", "--python"}
+        | {"--allow-insecure-host"}
+    ),
+    "pip": frozenset(
+        {"--timeout", "--cache-dir", "--proxy", "--retries", "--index-url", "--log", "--python"}
+        | {"--extra-index-url", "--trusted-host"}
+    ),
+    "cargo": frozenset({"--color", "--config", "-Z", "--manifest-path", "--target-dir"}),
+    "poetry": frozenset({"-C", "--directory", "-P", "--project"}),
+    "composer": frozenset({"-d", "--working-dir"}),
+    "go": frozenset({"-C"}),
+    "deno": frozenset({"--config", "-c", "--import-map", "--lock", "--cert"}),
+    **{name: shell._JS_VALUED for name in ("yarn", "bun")},
+    # 0196: pnpm's --workspace is a flag, so it never swallows the verb after it.
+    "pnpm": shell._JS_VALUED - {"--workspace"},
+    # 0196: npm's -w is --workspace; pnpm's -w is a flag, so it stays npm only.
+    "npm": shell._JS_VALUED | {"-w"},
+}
+_VERB_STOPS: dict[str, frozenset[str]] = {
+    "uv": frozenset({"run"}),
+    "cargo": frozenset({"run", "test", "bench"}),
+    "poetry": frozenset({"run"}),
+    "composer": frozenset({"run", "run-script", "exec"}),
+    "go": frozenset({"run", "test", "build", "vet", "generate", "tool"}),
+}
+_CARGO_VERBS = frozenset({"add", "install", "update", "generate-lockfile"})
+_CARGO_EXTRAS = frozenset(
+    {"--offline", "--release", "-q", "--quiet", "--workspace", "--all-targets"}
+)
+_CARGO_LOCKS = (frozenset({"--locked"}), frozenset({"--frozen"}))
+# 0196: managers with no frozen, scripts-off form the jail accepts; poetry runs build scripts.
+_NO_FROZEN: dict[str, frozenset[str]] = {
+    "poetry": frozenset({"add", "install", "update", "lock", "sync"}),
+    "pdm": frozenset({"add", "install", "update", "lock", "sync"}),
+    "pipenv": frozenset({"install", "update", "upgrade", "lock", "sync"}),
+    "pipx": frozenset({"install", "inject", "upgrade", "upgrade-all", "reinstall"}),
+    "deno": frozenset({"install", "add"}),
+    "gem": frozenset({"install", "update", "fetch"}),
+    "bundle": frozenset({"install", "update", "add", "lock"}),
+    "bundler": frozenset({"install", "update", "add", "lock"}),
+    "composer": frozenset(
+        {"install", "i", "update", "u", "upgrade", "require", "create-project", "reinstall"}
+    ),
+}
+# 0196: the ecosystem each frozen form belongs to, as service-manifest.json names it.
+_ECOSYSTEM = {
+    "npm": "npm",
+    "pnpm": "npm",
+    "yarn": "npm",
+    "bun": "npm",
+    "pip": "python",
+    "uv": "python",
+    "cargo": "cargo",
+    "go": "go",
+}
+FROZEN_EXAMPLES = {
+    "npm": "npm ci --ignore-scripts",
+    "pnpm": "pnpm install --frozen-lockfile --ignore-scripts",
+    "yarn": "yarn install --immutable --mode=skip-build",
+    "bun": "bun install --frozen-lockfile --ignore-scripts",
+    "pip": "python3 -m pip install --require-hashes --only-binary=:all: -r requirements.txt",
+    "uv": "uv sync --frozen --no-build",
+    "cargo": "cargo fetch --locked",
+    "go": "go mod download",
+}
 R_PACKAGE_INSTALL = (
-    "a package install reaches the package registry and writes a package store outside your "
-    "unit worktree, so the operator runs it from their own shell (0164). Next: yield the "
-    "install command for the operator to run, then rerun your tests."
+    "{what} is a package install, which resolves versions from a registry and can run install "
+    "scripts before any judge reads the diff, so the jail refuses it for every agent "
+    "(0196, 0164). Next: run the frozen form ({frozen}) with the ecosystem enabled in "
+    "service-manifest.json (dependencies.installs, coder only), or yield the install command "
+    "for the operator to run."
+)
+# 0196: a yarn refusal also names the admitted way to run a script.
+R_YARN_SCRIPT = " Or run a script as `yarn run <script>`."
+R_PACKAGE_INSTALL_OPERATOR = (
+    "{what} is a package install with no frozen, scripts-off form the jail accepts, so the jail "
+    "refuses it for every agent (0196). Next: yield the install command for the operator to "
+    "run, then rerun your tests."
 )
 R_PACKAGE_DOWNLOAD = (
-    "pnpm dlx, yarn dlx, bunx, npm exec and npx -y download a package and run it, so the "
-    "operator decides what joins the project (0164). Next: yield the package name for the "
-    "operator to add as a dev dependency, then run it through the project's own bin."
+    "{what} downloads a package and runs it, which resolves a version from a registry and runs "
+    "its code before any judge reads the diff, so the jail refuses it for every agent "
+    "(0196, 0164). Next: run the installed binary instead ({installed}), or yield the package "
+    "name for the operator to add as a dev dependency."
 )
+# 0196: the installed-binary forms each launcher family names in its refusal.
+JS_INSTALLED = (
+    "pnpm exec <bin>, npm exec --no-install <bin>, yarn run <bin>, bun run <bin> or "
+    "node_modules/.bin/<bin>"
+)
+PY_INSTALLED = ".venv/bin/<bin> or python3 -m <module>"
+DENO_INSTALLED = "deno run on a file in the project"
+_REMOTE = ("http://", "https://", "npm:", "jsr:")
+_UV_WITH = ("--with", "--with-requirements", "--with-editable")
 
 
 def _positional(args: list[str]) -> str:
     return next((arg for arg in args if not arg.startswith("-")), "")
 
 
-def package_install(segment: list[str]) -> bool:
-    # 0164: an install verb after pnpm, npm, yarn, bun or corepack, before any script verb,
-    # looking past exec into the command it runs; bare yarn installs too.
-    for idx, token in enumerate(segment):
-        name, args = os.path.basename(token), segment[idx + 1 :]
-        if name == "corepack" and _positional(args) in _COREPACK_VERBS:
-            return True
-        if name not in PACKAGE_INSTALLS:
-            continue
-        if name == "yarn" and all(a.startswith("-") for a in args):
-            return True
-        for pos, arg in enumerate(args):
-            if arg in _EXEC_VERBS:
-                return package_install(args[pos + 1 :])
-            if arg in _SCRIPT_VERBS:
+@dataclass(frozen=True)
+class InstallForm:
+    # 0196: a refused install; frozen marks the form a coder runs once its ecosystem is on.
+    manager: str
+    what: str
+    frozen: bool = False
+
+
+def _frozen_flags(
+    rest: list[str], required: tuple[frozenset[str], ...], extras: frozenset[str]
+) -> bool:
+    # 0196: one required set present, and no word outside it and the harmless extras.
+    words = set(rest)
+    return any(need <= words and words <= need | extras for need in required)
+
+
+def _local_file(value: str) -> bool:
+    return bool(value) and not value.startswith(("-", "git+")) and "://" not in value
+
+
+def _without(args: list[str], *verbs: str) -> list[str]:
+    rest = list(args)
+    for verb in verbs:
+        rest.remove(verb)
+    return rest
+
+
+def _pip_frozen(rest: list[str]) -> bool:
+    # 0196: --require-hashes, --only-binary :all: and -r files; no package, source or sdist.
+    hashes, binary, files, i = False, False, 0, 0
+    while i < len(rest):
+        arg = rest[i]
+        value = None
+        if arg in {"-r", "--requirement"}:
+            value = rest[i + 1] if i + 1 < len(rest) else ""
+            i += 1
+        elif arg.startswith("--requirement="):
+            value = arg.split("=", 1)[1]
+        elif arg.startswith("-r") and len(arg) > 2:
+            value = arg[2:]
+        elif arg == "--require-hashes":
+            hashes = True
+        elif arg == "--only-binary=:all:":
+            binary = True
+        elif arg == "--only-binary" and rest[i + 1 : i + 2] == [":all:"]:
+            binary = True
+            i += 1
+        elif arg not in _PIP_EXTRAS:
+            return False
+        if value is not None:
+            if not _local_file(value):
                 return False
-            if arg in INSTALL_VERBS:
-                return True
+            files += 1
+        i += 1
+    return hashes and binary and files > 0
+
+
+def _unvalued(args: list[str], valued: frozenset[str]) -> list[str]:
+    # 0196: the words left once each valued option and its value are dropped.
+    out: list[str] = []
+    skip = False
+    for arg in args:
+        if not skip and arg not in valued:
+            out.append(arg)
+        skip = not skip and arg in valued
+    return out
+
+
+def _yarn_options_only(args: list[str]) -> bool:
+    # 0196: a --option without = takes the next word as its value unless that word is a verb.
+    skip, prev = False, ""
+    for arg in args:
+        if skip and (prev in shell._JS_VALUED or arg not in _YARN_COMMANDS):
+            skip = False
+            continue
+        if not arg.startswith("-"):
+            return False
+        skip = arg in shell._JS_VALUED or (arg.startswith("--") and "=" not in arg)
+        prev = arg
+    return True
+
+
+def _option_value(words: list[str], pos: int) -> bool:
+    # 0196: the word may be the value of an option written without =, long or short.
+    before = words[pos - 1] if pos else ""
+    if before == "--" or "=" in before:
         return False
-    return False
+    return before.startswith("--") or (len(before) == 2 and before[0] == "-")
 
 
-def package_download(segment: list[str]) -> bool:
-    # 0164: a download-and-run form; bare npx of a project bin stays a runner.
+def _js_install(name: str, args: list[str]) -> InstallForm | None:
+    # 0164: an install verb before any script or exec verb; bare yarn installs too.
+    verbs, required, extras = _JS_FROZEN[name]
+    if name == "yarn" and _yarn_options_only(args):
+        return InstallForm(name, name, _frozen_flags(args, required, extras))
+    words = _unvalued(args, _GLOBAL_VALUED[name])
+    for pos, arg in enumerate(words):
+        if arg == "--":
+            continue  # 0196: a -- before any script or exec verb ends no scan.
+        if (arg in _EXEC_VERBS or arg in _SCRIPT_VERBS) and not _option_value(words, pos):
+            return None
+        if arg == "audit" and "fix" in words[pos + 1 :]:
+            return InstallForm(name, f"{name} audit fix")
+        if arg in INSTALL_VERBS:
+            # 0196: the frozen form is judged on the raw words, so no leading option is admitted.
+            frozen = args[:1] == [arg] and arg in verbs
+            frozen = frozen and _frozen_flags(args[1:], required, extras)
+            return InstallForm(name, f"{name} {arg}", frozen)
+    return None
+
+
+def _verbs_in(name: str, args: list[str]) -> list[str]:
+    # 0196: positional words past the manager's valued options, up to a word that runs other code.
+    head = args[: args.index("--")] if "--" in args else args
+    kept = _unvalued(head, _GLOBAL_VALUED.get(name, frozenset()))
+    stops = _VERB_STOPS.get(name, frozenset())
+    words: list[str] = []
+    for at, word in enumerate(kept):
+        before = kept[at - 1] if at else ""
+        if word[:1] == "-":
+            continue
+        # 0196: a stop word right after a --option without = may be that option's value.
+        if word in stops and not (before.startswith("--") and "=" not in before):
+            break
+        words.append(word)
+    return words
+
+
+def _pip_install(label: str, args: list[str]) -> InstallForm | None:
+    verb = next((w for w in _verbs_in("pip", args) if w in _PIP_VERBS), "")
+    if not verb:
+        return None
+    frozen = args[:1] == ["install"] and _pip_frozen(args[1:])
+    return InstallForm("pip", f"{label} {verb}", frozen)
+
+
+def _uv_install(args: list[str]) -> InstallForm | None:
+    # 0196: add, lock and pip install resolve; sync and pip sync pass frozen with --no-build.
+    words = _verbs_in("uv", args)
+    at = next((i for i, w in enumerate(words) if w in {"add", "lock", "sync", "tool", "pip"}), -1)
+    head, sub = (words[at:] + ["", ""])[:2] if at >= 0 else ("", "")
+    if head in {"add", "lock"} or (head == "tool" and sub in {"install", "upgrade"}):
+        return InstallForm("uv", f"uv {head}")
+    if head == "sync":
+        frozen = args[:1] == ["sync"] and _frozen_flags(args[1:], _UV_FROZEN, _UV_SYNC_EXTRAS)
+        return InstallForm("uv", "uv sync", frozen)
+    if head != "pip" or sub not in {"install", "sync", "compile"}:
+        return None
+    if args[:2] != ["pip", sub]:
+        return InstallForm("uv", f"uv pip {sub}")
+    rest = args[2:]
+    files = [a for a in rest if not a.startswith("-")]
+    flags = [a for a in rest if a.startswith("-")]
+    frozen = (
+        sub == "sync"
+        and bool(files)
+        and all(_local_file(f) for f in files)
+        and _frozen_flags(flags, _UV_PIP_FROZEN, _UV_PIP_EXTRAS)
+    )
+    return InstallForm("uv", f"uv pip {sub}", frozen)
+
+
+def _cargo_install(args: list[str]) -> InstallForm | None:
+    # 0196: a +toolchain word may lead the frozen form; no option may.
+    words = [w for w in _verbs_in("cargo", args) if not w.startswith("+")]
+    verb = next((w for w in words if w in _CARGO_VERBS | {"fetch", "build"}), "")
+    if verb in _CARGO_VERBS:
+        return InstallForm("cargo", f"cargo {verb}")
+    if verb:
+        lead = 1 if args[:1] and args[0].startswith("+") else 0
+        frozen = args[lead : lead + 1] == [verb] and _frozen_flags(
+            args[lead + 1 :], _CARGO_LOCKS, _CARGO_EXTRAS
+        )
+        return InstallForm("cargo", f"cargo {verb}", frozen)
+    return None
+
+
+def _go_install(args: list[str]) -> InstallForm | None:
+    words = _verbs_in("go", args)
+    at = next((i for i, w in enumerate(words) if w in {"get", "install", "mod", "work"}), -1)
+    head, sub = (words[at:] + ["", ""])[:2] if at >= 0 else ("", "")
+    if head in {"get", "install"}:
+        return InstallForm("go", f"go {head}")
+    if (head, sub) in {("mod", "tidy"), ("work", "sync")}:
+        return InstallForm("go", f"go {head} {sub}")
+    if (head, sub) == ("mod", "download"):
+        frozen = args[:2] == ["mod", "download"] and set(args[2:]) <= {"-x", "-json"}
+        return InstallForm("go", "go mod download", frozen)
+    return None
+
+
+def _install_at(name: str, args: list[str], head: bool) -> InstallForm | None:
+    # 0164, 0196: the install one command word starts, judged on the words after it.
+    if name == "corepack" and _positional(args) in _COREPACK_VERBS:
+        return InstallForm(name, f"corepack {_positional(args)}")
+    if name in PACKAGE_INSTALLS:
+        return _js_install(name, args)
+    if _PIP.fullmatch(name):
+        return _pip_install(name, args)
+    if name.startswith("python") and "-m" in args:
+        at = args.index("-m")
+        if all(a.startswith("-") for a in args[:at]) and args[at + 1 : at + 2] == ["pip"]:
+            return _pip_install(f"{name} -m pip", args[at + 2 :])
+    if name == "uv":
+        return _uv_install(args)
+    if name == "cargo":
+        return _cargo_install(args)
+    if name == "go":
+        return _go_install(args)
+    if name == "terraform" and _positional(args) == "init":
+        if any(a.lstrip("-") in {"upgrade", "upgrade=true"} for a in args):
+            return InstallForm(name, "terraform init -upgrade")
+        return None
+    if name in {"bundle", "bundler"} and head and all(a.startswith("-") for a in args):
+        return InstallForm(name, name)
+    verbs = _NO_FROZEN.get(name)
+    verb = next((w for w in _verbs_in(name, args) if w in verbs), "") if verbs else ""
+    return InstallForm(name, f"{name} {verb}") if verb else None
+
+
+def install_form(segment: list[str]) -> InstallForm | None:
+    # 0164, 0196: the first install any command word of the segment starts; frozen only at its head.
     for idx, token in enumerate(segment):
-        name, args = os.path.basename(token), segment[idx + 1 :]
-        head = args[: args.index("--")] if "--" in args else args
-        if name == "bunx":
-            return True
-        if name in {"pnpm", "yarn"} and "dlx" in head:
-            return True
-        if name == "bun" and _positional(head) == "x":
-            return True
-        if name == "npm" and _positional(head) in {"exec", "x"}:
-            return True
-        if name == "npx" and any(a == "-y" or a.startswith("--yes") for a in args):
-            return True
-    return False
+        found = _install_at(os.path.basename(token), segment[idx + 1 :], idx == 0)
+        if found is not None:
+            return found if idx == 0 else InstallForm(found.manager, found.what)
+    return None
+
+
+def install_reason(segment: list[str], installs: Callable[[], frozenset[str]]) -> str | None:
+    # 0196: refused for every agent; the frozen form passes when installs() names its ecosystem.
+    found = install_form(segment)
+    if found is None:
+        return None
+    if found.frozen and _ECOSYSTEM.get(found.manager) in installs():
+        return None
+    example = FROZEN_EXAMPLES.get(found.manager)
+    if example is None:
+        return R_PACKAGE_INSTALL_OPERATOR.format(what=found.what)
+    reason = R_PACKAGE_INSTALL.format(what=found.what, frozen=example)
+    return reason + R_YARN_SCRIPT if found.manager == "yarn" else reason
+
+
+def coder_installs(cwd: str) -> frozenset[str]:
+    # 0196: the ecosystems the main checkout's manifest enables; an unusable manifest enables none.
+    if not os.path.isabs(cwd):
+        return frozenset()
+    manifest = _manifest_at(os.path.realpath(str(project_root(cwd))))
+    return frozenset() if isinstance(manifest, str) else frozenset(manifest.dependencies.installs)
+
+
+def _no_install(opts: list[str]) -> bool:
+    # 0196: npx and npm exec run only an installed bin with --no-install and no yes flag.
+    yes = any(a == "-y" or (a.startswith("--yes") and a != "--yes=false") for a in opts)
+    return "--no-install" in opts and not yes
+
+
+def _leading_opts(args: list[str]) -> list[str]:
+    return list(itertools.takewhile(lambda a: a.startswith("-") and a != "--", args))
+
+
+def _download_at(name: str, args: list[str]) -> tuple[str, str] | None:
+    # 0164, 0196: the launcher a command word starts and the installed form its refusal names.
+    head = args[: args.index("--")] if "--" in args else args
+    head = _unvalued(head, _GLOBAL_VALUED.get(name, frozenset()))
+    words = [a for a in head if not a.startswith("-")]
+    if name in {"bunx", "pnpx"}:
+        return name, JS_INSTALLED
+    if name in PACKAGE_INSTALLS and _positional(head) == "create":
+        return f"{name} create", JS_INSTALLED
+    if name == "npm" and words[:1] == ["init"] and words[1:2]:
+        return "npm init <initializer>", JS_INSTALLED
+    if name in {"pnpm", "yarn"} and "dlx" in head:
+        return f"{name} dlx", JS_INSTALLED
+    if name == "bun" and _positional(head) == "x":
+        return "bun x", JS_INSTALLED
+    if name == "npm" and _positional(head) in {"exec", "x"}:
+        verb = _positional(head)
+        at = args.index(verb)
+        if not _no_install(args[:at] + _leading_opts(args[at + 1 :])):
+            return f"npm {verb}", JS_INSTALLED
+    if name == "npx" and not _no_install(_leading_opts(args)):
+        return "npx", JS_INSTALLED
+    if name == "uvx":
+        return "uvx", PY_INSTALLED
+    if name == "uv" and words[:2] == ["tool", "run"]:
+        return "uv tool run", PY_INSTALLED
+    if name == "uv" and words[:1] == ["run"] and any(a.startswith(_UV_WITH) for a in head):
+        return "uv run --with", PY_INSTALLED
+    if name == "pipx" and _positional(args) == "run":
+        return "pipx run", PY_INSTALLED
+    if name == "deno" and words[:1] == ["run"] and words[1:2] and words[1].startswith(_REMOTE):
+        return "deno run on a remote module", DENO_INSTALLED
+    return None
+
+
+def download_reason(segment: list[str]) -> str | None:
+    # 0164, 0196: any command word of the segment that downloads a package and runs it.
+    for idx, token in enumerate(segment):
+        found = _download_at(os.path.basename(token), segment[idx + 1 :])
+        if found is not None:
+            return R_PACKAGE_DOWNLOAD.format(what=found[0], installed=found[1])
+    return None
 
 
 R_NESTED_CLAUDE = (

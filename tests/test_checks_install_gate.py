@@ -1,0 +1,148 @@
+# Copyright (c) 2026 Brad Duhon.
+# SPDX-License-Identifier: GPL-3.0-or-later
+# 0196: the network_tools install class over the rows in tests/fixtures/installs.
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+from checks import confine
+from lib import jail, shell
+from lib.manifest import INSTALL_ECOSYSTEMS, ManifestError
+from lib.manifest import load as load_manifest
+
+from tests.conftest import REPO_ROOT
+from tests.hook_chain import evaluate
+from tests.payloads import _b, _cwd
+
+pytestmark = pytest.mark.usefixtures("jail_fakes")
+HOOK = "network_tools"
+ROWS: list[dict[str, str]] = json.loads(
+    (REPO_ROOT / "tests" / "fixtures" / "installs" / "commands.json").read_text(encoding="utf-8")
+)
+JUDGES = ("dependency-auditor", "verifier", "terraform-reviewer")
+
+
+def _repo(tmp_path: Path, installs: list[str] | None) -> Path:
+    # 0196: a project root whose manifest lists installs, or carries no dependencies block.
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    doc: dict[str, Any] = {"manifest_version": 1}
+    if installs is not None:
+        doc["dependencies"] = {"installs": installs}
+    (repo / "service-manifest.json").write_text(json.dumps(doc), encoding="utf-8")
+    return repo
+
+
+def _judge(agent: str, command: str, repo: Path) -> str | None:
+    return evaluate(HOOK, _cwd(_b(agent, command), repo))
+
+
+def test_the_fixture_covers_every_manager_and_kind() -> None:
+    commands = [row["command"] for row in ROWS]
+    assert len(commands) >= 40 and len(set(commands)) == len(commands)
+    words = {shell._base(c.split()[0]) for c in commands} | {w for c in commands for w in c.split()}
+    managers = {"pip", "pip3", "python3", "uv", "poetry", "npm", "pnpm", "yarn", "bun", "cargo"}
+    assert managers | {"go", "gem", "bundle", "composer", "terraform", "pdm", "pipx"} <= words
+    kinds = {"frozen", "refused", "operator", "launcher", "none"}
+    assert {row["kind"] for row in ROWS} == kinds
+    # 0196 addendum: each launcher in its refused and its installed-binary shape.
+    launchers = {"npx", "exec", "dlx", "bunx", "x", "uvx", "tool", "pipx", "deno"}
+    seen = {w for row in ROWS if row["kind"] == "launcher" for w in row["command"].split()}
+    assert launchers <= seen
+    allowed = ("npx --no-install", "npm exec --no-install", "pnpm exec", "yarn run", "bun run")
+    for form in (*allowed, "node_modules/.bin/", ".venv/bin/", "python3 -m", "deno run main"):
+        none = [row["command"] for row in ROWS if row["kind"] == "none"]
+        assert any(command.startswith(form) for command in none), form
+    assert {row["ecosystem"] for row in ROWS if row["kind"] == "frozen"} == set(INSTALL_ECOSYSTEMS)
+
+
+@pytest.mark.parametrize("row", ROWS, ids=[row["command"] for row in ROWS])
+def test_the_install_class_judges_each_fixture_row(row: dict[str, str], tmp_path: Path) -> None:
+    # 0196: refused for every agent; a coder's frozen form passes only with its ecosystem listed.
+    command, kind = row["command"], row["kind"]
+    every = _repo(tmp_path / "every", list(INSTALL_ECOSYSTEMS))
+    other = [e for e in INSTALL_ECOSYSTEMS if e != row.get("ecosystem")]
+    for repo in (every, _repo(tmp_path / "none", None), _repo(tmp_path / "other", other)):
+        for agent in ("coder", *JUDGES):
+            got = _judge(agent, command, repo)
+            if kind == "none" or (kind == "frozen" and agent == "coder" and repo == every):
+                assert got is None, (agent, repo.parent.name, command, got)
+                continue
+            assert got is not None and "(0196" in got, (agent, command, got)
+            if kind == "launcher":
+                assert "downloads a package and runs it" in got, (command, got)
+                assert "Next: run the installed binary instead (" in got, (command, got)
+            elif kind == "operator":
+                assert got.startswith(shell._base(command.split()[0])), (command, got)
+                assert "no frozen, scripts-off form" in got, (command, got)
+            else:
+                assert "Next: run the frozen form (" in got, (command, got)
+                assert "with the ecosystem enabled in service-manifest.json" in got
+
+
+@pytest.mark.parametrize(
+    "row", [r for r in ROWS if r["kind"] == "frozen"], ids=lambda r: r["command"]
+)
+def test_a_frozen_form_chained_with_another_install_refuses(
+    row: dict[str, str], tmp_path: Path
+) -> None:
+    # 0196: every segment is judged, and a frozen form behind a prefix word is never the exception.
+    repo = _repo(tmp_path, list(INSTALL_ECOSYSTEMS))
+    command = row["command"]
+    assert _judge("coder", command, repo) is None
+    for chained in (f"{command} && npm install left-pad", f"pip install x; {command}"):
+        assert _judge("coder", chained, repo) is not None, chained
+    assert _judge("coder", f"cd {repo} && {command}", repo) is None
+    for prefixed in (f"FOO=1 {command}", f"pnpm exec {command}"):
+        assert _judge("coder", prefixed, repo) is not None, prefixed
+
+
+def test_the_refusal_names_what_and_the_frozen_form() -> None:
+    reason = jail.install_reason(["pip", "install", "requests"], frozenset)
+    assert reason is not None and reason.startswith("pip install is a package install")
+    assert jail.FROZEN_EXAMPLES["pip"] in reason and "(0196, 0164)" in reason
+    reason = jail.install_reason(["cargo", "build"], frozenset)
+    assert reason is not None and "(cargo fetch --locked)" in reason
+
+
+def test_a_yarn_refusal_names_the_script_form() -> None:
+    # 0196: only yarn refusals carry the script form.
+    reason = jail.install_reason(["yarn", "--silent", "build"], frozenset)
+    assert reason is not None and reason.endswith(jail.R_YARN_SCRIPT)
+    other = jail.install_reason(["npm", "install"], frozenset)
+    assert other is not None and jail.R_YARN_SCRIPT not in other
+
+
+def test_an_unusable_manifest_enables_no_install(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "service-manifest.json").write_text('{"dependencies": {"installs": ["ruby"]}}')
+    with pytest.raises(ManifestError, match="dependencies.installs"):
+        load_manifest(repo)
+    assert _judge("coder", "npm ci --ignore-scripts", repo) is not None
+
+
+@pytest.mark.parametrize(
+    "block",
+    [[], {"installs": "npm"}, {"installs": ["npm", "npm"]}, {"installs": [1]}, {"install": []}],
+)
+def test_the_installs_key_refuses_a_bad_shape(block: object, tmp_path: Path) -> None:
+    (tmp_path / "service-manifest.json").write_text(json.dumps({"dependencies": block}))
+    with pytest.raises(ManifestError, match="dependencies"):
+        load_manifest(tmp_path)
+
+
+def test_the_installs_key_reads_in_order(tmp_path: Path) -> None:
+    (tmp_path / "service-manifest.json").write_text('{"dependencies": {"installs": ["go", "npm"]}}')
+    loaded = load_manifest(tmp_path)
+    assert loaded is not None and loaded.dependencies.installs == ("go", "npm")
+
+
+def test_the_kernel_wrapper_check_leaves_an_admitted_install_bare() -> None:
+    # 0196: the frozen form needs the registry, so the confine check never wraps it.
+    for command in ("pnpm install --frozen-lockfile --ignore-scripts", "uv sync --frozen"):
+        assert not confine._is_test(command.split(), "/", "/"), command
+    assert confine._is_test(["pnpm", "test"], "/", "/")

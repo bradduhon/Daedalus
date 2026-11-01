@@ -177,6 +177,25 @@ DEV_SERVER_KEYS = tuple(f.name for f in fields(DevServer))
 DEV_SERVER_HOSTS = ("localhost", "127.0.0.1")
 # 0192: the package managers a stack may name; anything else is refused.
 PACKAGE_MANAGERS = ("pnpm", "npm", "yarn", "pip", "uv")
+# 0196: the ecosystems whose frozen, scripts-off install a coder may run when listed.
+INSTALL_ECOSYSTEMS = ("npm", "python", "cargo", "go")
+
+
+# 0197: the release age floor; a lower value needs a reason of at least this many characters.
+RELEASE_AGE_DEFAULT = 7
+RELEASE_AGE_REASON_MIN = 20
+
+
+@dataclass(frozen=True)
+class Dependencies:
+    # 0196: the ecosystems the coder's frozen install is enabled for; none by default.
+    installs: tuple[str, ...] = ()
+    # 0197: the youngest a resolved version may be, in days, and why it sits below the default.
+    minimum_release_age_days: int = RELEASE_AGE_DEFAULT
+    minimum_release_age_reason: str | None = None
+
+
+DEPENDENCIES_KEYS = tuple(f.name for f in fields(Dependencies))
 
 
 @dataclass(frozen=True)
@@ -195,6 +214,7 @@ class Manifest:
     frameworks: Frameworks = field(default_factory=Frameworks)
     assets: Assets = field(default_factory=Assets)
     dev_server: DevServer | None = None
+    dependencies: Dependencies = field(default_factory=Dependencies)
 
 
 # 0073, B2: the stack keys that hold a command the coder may run verbatim.
@@ -643,6 +663,48 @@ def _assets(target: Path, raw: dict[str, object]) -> Assets:
     return Assets(tuple(map(str, roots)), tuple(map(str, extensions)), size)
 
 
+def _dependencies(target: Path, raw: dict[str, object]) -> Dependencies:
+    # 0196, 0197: unknown keys are refused; each ecosystem named once; a lowered age has a reason.
+    block = raw.get("dependencies", {})
+    if not isinstance(block, dict):
+        raise _key_error(target, "dependencies", "must be an object")
+    unknown = sorted(str(key) for key in set(block) - set(DEPENDENCIES_KEYS))
+    if unknown:
+        known = ", ".join(DEPENDENCIES_KEYS)
+        raise _key_error(target, "dependencies", f"has unknown keys {unknown} (known: {known})")
+    installs = block.get("installs", [])
+    if (
+        not isinstance(installs, list)
+        or not all(isinstance(e, str) and e in INSTALL_ECOSYSTEMS for e in installs)
+        or len(set(installs)) != len(installs)
+    ):
+        names = ", ".join(INSTALL_ECOSYSTEMS)
+        raise _key_error(
+            target,
+            "dependencies.installs",
+            f"must be a list naming each of {names} at most once (0196)",
+        )
+    days = block.get("minimum_release_age_days", RELEASE_AGE_DEFAULT)
+    if isinstance(days, bool) or not isinstance(days, int) or days < 0:
+        raise _key_error(
+            target, "dependencies.minimum_release_age_days", "must be a whole number of 0 or more"
+        )
+    reason = block.get("minimum_release_age_reason")
+    if reason is not None and (not isinstance(reason, str) or not reason.isprintable()):
+        raise _key_error(
+            target, "dependencies.minimum_release_age_reason", "must be null or one printable line"
+        )
+    if days < RELEASE_AGE_DEFAULT and len((reason or "").strip()) < RELEASE_AGE_REASON_MIN:
+        raise _key_error(
+            target,
+            "dependencies.minimum_release_age_days",
+            f"is below {RELEASE_AGE_DEFAULT} days, which needs a "
+            f"dependencies.minimum_release_age_reason of at least {RELEASE_AGE_REASON_MIN} "
+            "characters (0197)",
+        )
+    return Dependencies(tuple(map(str, installs)), days, reason)
+
+
 def _local_url(url: object) -> bool:
     # 0164: http or https on this machine, a port of 1 to 65535 or none, no user part.
     if not isinstance(url, str) or not url.isprintable() or any(c.isspace() for c in url):
@@ -713,6 +775,7 @@ def load(repo: Path) -> Manifest | None:
         frameworks=_frameworks(target, raw),
         assets=_assets(target, raw),
         dev_server=_dev_server(target, raw),
+        dependencies=_dependencies(target, raw),
     )
 
 

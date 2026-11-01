@@ -241,7 +241,7 @@ GAME_RUNNERS = (
     "tsc --noEmit",
     "tsc -p tsconfig.json --noEmit",
     "vite build",
-    "npx vitest run",
+    "npx --no-install vitest run",
     "timeout 120 pnpm test",
     # 0164 fix round: pnpm wraps like npm; terraform's allowlisted fmt forms.
     "pnpm run build",
@@ -278,7 +278,7 @@ DEV_SERVERS = (
     "pnpm preview",
     "pnpm exec vite",
     "pnpm vite serve",
-    "npx vite",
+    "npx --no-install vite",
     "npm run dev",
     "npm start",
     "timeout 60 vite dev",
@@ -300,7 +300,7 @@ WATCH_MODES = (
     "vitest dev",
     "vitest run --watch",
     "pnpm exec vitest",
-    "npx vitest",
+    "npx --no-install vitest",
     "tsc --watch",
     "tsc -w",
     "tsc --noEmit --watch",
@@ -388,6 +388,12 @@ PACKAGE_DOWNLOADS = (
     "npx -y cowsay",
     "npx --yes cowsay",
     "npx --yes=true vitest run",
+    "npx vitest run",
+    "npx --no-install --yes cowsay",
+    "uvx ruff",
+    "uv tool run ruff",
+    "pipx run black",
+    "deno run https://deno.land/std/x.ts",
 )
 # 0164: package installs stay with the operator, through any wrapper.
 PACKAGE_INSTALL_CMDS = (
@@ -428,6 +434,20 @@ PACKAGE_INSTALL_CMDS = (
     "yarn upgrade",
     "pnpm fetch",
     "pnpm import",
+)
+# 0196: installs of the other managers; refused bare and wrapped for every agent.
+INSTALL_GATE_CMDS = (
+    "pip install requests",
+    "python3 -m pip install -r requirements.txt",
+    "uv add httpx",
+    "uv sync",
+    "poetry install",
+    "cargo add serde",
+    "go get golang.org/x/text",
+    "gem install rails",
+    "bundle install",
+    "composer require monolog/monolog",
+    "terraform init -upgrade",
 )
 # H2, issue 87: Python run inside the wrapper; each opens an AF_UNIX socket() the filter refuses.
 UNIX_SOCKETS = (

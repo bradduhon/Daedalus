@@ -100,6 +100,7 @@ def test_reader_keys_follow_the_reader_dataclasses() -> None:
     from lib.config import Config
     from lib.manifest import (
         ASSETS_KEYS,
+        DEPENDENCIES_KEYS,
         DEV_SERVER_KEYS,
         DOCS_KEYS,
         FEATURE_KEYS,
@@ -121,7 +122,10 @@ def test_reader_keys_follow_the_reader_dataclasses() -> None:
     assert {f"assets.{k}" for k in ASSETS_KEYS} <= set(manifest_keys())
     assert {f"dev_server.{k}" for k in DEV_SERVER_KEYS} <= set(manifest_keys())
     assert "stack.package_manager" in manifest_keys()
+    # 0196: dependencies is a nested block too.
+    assert {f"dependencies.{k}" for k in DEPENDENCIES_KEYS} <= set(manifest_keys())
     nested = {"features", "docs", "priorities", "frameworks", "assets", "dev_server"}
+    nested.add("dependencies")
     assert {f.name for f in fields(Manifest)} - nested <= leaves
 
 
