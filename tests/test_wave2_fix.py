@@ -356,8 +356,8 @@ def test_a_priorities_yield_names_the_operator_as_its_answerer(tmp_path: Path) -
         f"- u2: YIELD_STANDARDS {question} (answered by operator)"
     ]
     assert train_summary._ANSWERERS[train_summary.PRIORITIES_YIELD] == ("operator",)
-    # 0129: the other standards questions still go to the specialist.
-    assert "(answered by standards-rules-specialist)" in _section(_text(tmp_path), "Yields")[0]
+    # 0129, 0186: the other standards questions the orchestrator answers from the standards skill.
+    assert "(answered by orchestrator)" in _section(_text(tmp_path), "Yields")[0]
 
 
 def test_the_yield_table_routes_priorities_rule_yields_to_the_operator() -> None:
@@ -366,7 +366,7 @@ def test_the_yield_table_routes_priorities_rule_yields_to_the_operator() -> None
     row = next(ln.strip() for ln in recipe.splitlines() if "| `[STATUS: YIELD_STANDARDS]" in ln)
     assert "A question that starts `priorities rule <n>:` is a surfaced default" in row
     assert "it goes to the operator as a decision brief" in row
-    assert "never to the standards specialist" in row
+    assert "never to the standards skill" in row
     rules = (REPO_ROOT / "agents" / "orchestrator.md").read_text(encoding="utf-8")
     assert "put it to the operator as a `then surface` decision brief" in rules
 

@@ -53,7 +53,7 @@ class TestNoShellAgents:
     def test_only_researcher_may_fetch(self) -> None:
         assert decide(_t("web-researcher", "WebFetch"), CFG).allow
         assert decide(_t("web-researcher", "WebSearch"), CFG).allow
-        assert not decide(_t("standards-rules-specialist", "WebFetch"), CFG).allow
+        assert not decide(_t("planner", "WebFetch"), CFG).allow
         assert not decide(_t("framework-specialist", "WebFetch"), CFG).allow
 
 

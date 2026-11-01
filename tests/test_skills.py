@@ -122,6 +122,14 @@ def _orchestrator() -> str:
     return ORCHESTRATOR.read_text(encoding="utf-8")
 
 
+# 0186: the standards method the plan, build, audit and document phases load.
+STANDARDS_SKILL = REPO_ROOT / "skills" / "plan" / "standards" / "SKILL.md"
+
+
+def _standards_skill() -> str:
+    return STANDARDS_SKILL.read_text(encoding="utf-8")
+
+
 def _run_phase(name: str) -> str:
     # 0060: the orchestrator writes the plugin root out in full; its hook refuses the variable.
     text = (REPO_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
@@ -181,21 +189,18 @@ def test_build_train_probes_the_ledger_and_asks() -> None:
     assert "append_ledger.py --probe" in pre
 
 
-def test_build_train_hands_the_pack_path_to_the_standards_specialist() -> None:
-    # 0019: a declared pack has no path in config.json; begin prints it, every dispatch carries it.
+def test_build_train_hands_the_pack_path_to_the_standards_skill() -> None:
+    # 0019: a declared pack has no path in config.json; begin prints it, the first read takes it.
     relay, text = _run_skill(), _recipe()
     # 0174: the run entry points at the orchestrator's State Block shape in place of a copy.
     assert "    standards packs: <name> at <path>, or none declared\n" in text
     assert "`agents/orchestrator.md` shows their shape" in relay
     assert "The first six lines of the **State Block** are begin's output" in relay
     assert "The first six lines come from your brief." in text
-    dispatch = next(
-        ln for ln in _rules().splitlines() if "standards-rules-specialist dispatch" in ln
-    )
-    assert "the `standards packs:` line" in dispatch
+    first = next(ln for ln in _rules().splitlines() if ln.startswith("- Standards (0186): "))
+    assert "the `standards packs:` line" in first
     assert "the `standards packs:` line" in _phase_step("plan", 12)
-    agent = (REPO_ROOT / "agents" / "standards-rules-specialist.md").read_text(encoding="utf-8")
-    assert "`standards packs:` line" in agent
+    assert "`standards packs:` line" in _standards_skill()
 
 
 def test_build_train_routes_every_yield_and_the_contradiction_stop() -> None:
@@ -379,18 +384,50 @@ def test_build_train_keeps_personas_warm() -> None:
     assert "The auditor stays warm only after its first verdict" in roster
     assert "goes to that coder by SendMessage as a resume" in roster
     assert "A cold coder starts only when no warm coder built a dependency of the unit." in roster
-    cold = next(ln for ln in rules.splitlines() if "standards-rules-specialist dispatch" in ln)
-    assert cold.startswith("- The first standards-rules-specialist dispatch of a train carries")
-    assert "Every later standards question resumes that same specialist by SendMessage" in cold
+    # 0186: no agent holds the standards; the orchestrator rereads changed rule files itself.
+    standards = next(ln for ln in rules.splitlines() if ln.startswith("- Standards (0186): "))
+    assert "no agent holds the standards" in standards
+    assert "Every later standards question reads again the rule files changed" in standards
 
 
-def test_build_train_dispatches_the_standards_specialist_once() -> None:
-    # 0059, C2, C3: one first dispatch; the State Block records its handle.
+def test_every_phase_loads_the_standards_skill_in_place_of_a_dispatch() -> None:
+    # 0186: the plan, build, audit and document phases follow one skill; the State Block keeps the
+    # time of the last read.
     text = _recipe()
-    assert _PHASE_DISPATCH.findall(text).count("standards-rules-specialist") == 1
-    assert "    standards specialist: <agent handle>  last read: <UTC time>" in text
+    assert "standards-rules-specialist" not in text
+    assert not (REPO_ROOT / "agents" / "standards-rules-specialist.md").exists()
+    assert "    standards last read: <UTC time>   (or: standards last read: pending)" in text
     seed = text.split("**State Block**", 1)[1].split("\n\n", 2)[1].splitlines()
-    assert seed[6].startswith("    standards specialist: ")
+    assert seed[6].startswith("    standards last read: ")
+    path = "`<plugin root>/skills/plan/standards/SKILL.md`"
+    assert path in _phase_step("plan", 12)
+    assert path in _phase_row("build", "STATUS: YIELD_STANDARDS]")
+    assert path in _phase_step("audit", 2)
+    document = (REPO_ROOT / "skills" / "document" / "SKILL.md").read_text(encoding="utf-8")
+    step10 = document.split("\n10. Freeze.", 1)[1].split("\n11. ", 1)[0]
+    assert "`${CLAUDE_PLUGIN_ROOT}/skills/plan/standards/SKILL.md`" in step10
+    assert "`<plugin root>/skills/plan/standards/SKILL.md`" in _rules()
+
+
+def test_standards_skill_keeps_the_method_and_its_receipt_forms() -> None:
+    # 0186: nested, so out of the slash menu; the rule ids and reply forms of the agent survive.
+    assert STANDARDS_SKILL not in SKILLS
+    fields, body = _split(STANDARDS_SKILL)
+    assert fields.get("name") == "standards" and fields.get("description")
+    assert body.splitlines()[0] == COPYRIGHT
+    assert "\u2013" not in body and "\u2014" not in body
+    flat = " ".join(body.split())
+    assert "Read this skill first and follow it yourself" in flat
+    for rule_id in ("0005-DAE-PLT", "§6.6", "(0019)", "(0129, 0137)", "(0031)"):
+        assert rule_id in flat, rule_id
+    assert "under 300 words" in flat
+    assert "An auditor brief ends with the rule list, nothing after it." in flat
+    forms = body.split("\n## Receipt forms\n", 1)[1]
+    assert forms.endswith(
+        "- `## Standards Packet`\n"
+        "- `[STANDARDS: CONTRADICTION] <spec ref> vs <source:line>`\n"
+        "- `[STATUS: STANDARD] <answer>`\n"
+    )
 
 
 def test_build_train_asks_each_contradiction_as_a_brief() -> None:
@@ -404,7 +441,7 @@ def test_build_train_asks_each_contradiction_as_a_brief() -> None:
         "`Follow Plugin`",
         "`Follow Plugin + amend global`",
         "(Recommended)",
-        "a `RECHECK.` message: one line per pick",
+        "re-checks by the standards skill, with one line per pick",
         "a plain question ending in `?`",
         "No tracked-risk issue is filed.",
         "A plugin agent never makes this edit.",
@@ -417,15 +454,16 @@ def test_build_train_asks_each_contradiction_as_a_brief() -> None:
     assert "Next: reword the task, or change the standard in its source" not in text
 
 
-def test_build_train_resumes_the_specialist_with_changed_rule_files() -> None:
-    # 0059, C5: the coder yield route and the auditor brief resume the warm specialist.
+def test_build_train_rereads_changed_rule_files_from_the_standards_skill() -> None:
+    # 0059, C5, 0186: the coder yield route and the auditor brief reread changed rule files.
     route = _phase_row("build", "STATUS: YIELD_STANDARDS]")
-    resume = "Resume the warm standards specialist with the question and the rule files changed"
-    assert resume in route and "since its last read" in route
+    answer = "answer the question yourself, after reading the rule files changed"
+    assert answer in route and "since its last read" in route
     step3 = _phase_step("audit", 2)
-    assert step3.startswith("Auditor brief. Resume the warm standards specialist with")
+    assert step3.startswith("Auditor brief. Load the standards skill")
     assert "the rule files changed since its last read" in step3
     assert "resumes the same auditor with the same items" in _phase_step("audit", 5)
+    assert "find <source path> -type f -newermt '<last read>'" in _standards_skill()
 
 
 def test_build_train_summary_carries_rulings_and_deviations() -> None:
@@ -907,7 +945,7 @@ def test_relay_passes_a_recorded_plan_to_the_orchestrator() -> None:
     assert "a `Plan: <path>` line when the operator named a plan file" in brief
     phase1 = " ".join(_phase_step("plan", 11).split())
     assert "the brainstorm hand-off wrote, dispatches no planner" in phase1
-    assert "That plan file is the spec the standards specialist reads in step 12" in phase1
+    assert "That plan file is the spec the standards step reads in step 12" in phase1
     run = _run_skill()
     assert "so the prompt carries `Plan: <path>`" in run and "`Spec: <path>`" in run
     step10 = (REPO_ROOT / "skills" / "plan" / "SKILL.md").read_text(encoding="utf-8")

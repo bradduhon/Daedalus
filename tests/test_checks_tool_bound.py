@@ -56,7 +56,7 @@ class TestConductor:
 
 
 class TestNoShellAgents:
-    @pytest.mark.parametrize("agent", ["web-researcher", "standards-rules-specialist"])
+    @pytest.mark.parametrize("agent", ["web-researcher"])
     def test_blocks_bash_and_writes(self, agent: str) -> None:
         assert not decide(_b(agent, "ls"), CFG).allow
         assert not decide(_w(agent, f"{CWD}/docs/x.md"), CFG).allow

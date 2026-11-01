@@ -28,7 +28,7 @@ Asset exclusion (0192). Before the first judge, run `python3 ${CLAUDE_PLUGIN_ROO
 
 ### Auditor rounds
 
-2. Auditor brief. Resume the warm standards specialist with the units and their changed files and the rule files changed since its last read; it returns the rules each unit is judged against.
+2. Auditor brief. Load the standards skill (`${CLAUDE_PLUGIN_ROOT}/skills/plan/standards/SKILL.md`) and write the brief yourself from the units and their changed files and the rule files changed since its last read: the rules each unit is judged against (0186).
 3. The audit worktree (0109, 0112). Before the first round, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py create --repo <repo> --name <train-id>-audit --base daedalus/<train-id>`; it prints the worktree path, which the orchestrator records. Before each later round, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_workspace.py refresh --repo <repo> --name <train-id>-audit` and check that it prints the same path. The refresh is a fast-forward: it moves the audit branch `daedalus-unit/<train-id>-audit` to `daedalus/<train-id>` with `git merge --ff-only`, after adding the worktree again when a finish removed it. It never discards a commit: a diverged or dirty audit worktree exits 1 with a `Next:` line naming `git -C <path> status`; stop and show its output.
 4. Reachability pass, before round 1 (full procedure only). For each new file, flag, subcommand, input source or agent instruction the merged diff adds, write one `Reachable: <it> -> <older rule or gate> <file>:<line>` line per older rule or gate it feeds or relies on, from the map's security records and `git -C <repo> grep -n <name> daedalus/<train-id>`. Hunt list: for each unit touching a jail, gate, parser or agent instruction, write one or two `Hunt: can <attacker input> reach <protected thing> after <unit>?` lines from its requirements and its verifier table, where attacker input is anything a coder can commit or a project ships. Every lead held becomes a `Hunt:` line, which the auditor answers with a test or a reproduction; never mark a lead optional or the auditor's to drop.
 5. Dispatch `auditor` with: the diff base `<base sha>`, the recorded base sha, and the one branch `daedalus/<train-id>`, so the diff is the merged integration tip the release phase pushes; the run's own commits on that branch (the `Lock contract` and `Revise contract` commits and a repo-local pick commit, by sha); the unit ids with their changed files; the two packet lines with the packet_version; the auditor brief; the `Reachable:` and `Hunt:` lines; the compliance reports and each `Blocking compliance:` line of step 1; the round number `<n>` and its findings file `<repo>/docs/.tmp/daedalus/<train-id>/audit/round<n>/findings.txt`; and the line `Worktree: <audit worktree path>`.
@@ -84,7 +84,7 @@ Asset exclusion (0192). Before the first judge, run `python3 ${CLAUDE_PLUGIN_ROO
 
 - auditor, which judges the merged tip in the audit worktree (step 5).
 - framework-specialist, dependency-auditor and terraform-reviewer, the compliance judges (step 1).
-- standards-rules-specialist, for the auditor brief (step 2).
+- No agent for the auditor brief: the orchestrator writes it from the standards skill (step 2).
 - web-researcher, for a judge's or the auditor's web question (steps 1 and 5).
 - charter-docs, for the ledger step and the exemption ruling (steps 8 and 9).
 

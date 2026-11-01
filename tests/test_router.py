@@ -269,10 +269,6 @@ DENIALS = {
     "framework-specialist": (_input("framework-specialist", command="curl x"), "network_tools"),
     "web-researcher": (_input("web-researcher", command="ls"), "tool_bound"),
     "planner": (_input("planner", command="ls"), "tool_bound"),
-    "standards-rules-specialist": (
-        _input("standards-rules-specialist", "WebFetch", url="https://x"),
-        "tool_bound",
-    ),
     "releaser": (
         _input("daedalus:releaser", command="gh pr merge 3"),
         "gh_classes",

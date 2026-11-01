@@ -576,7 +576,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         '`"/work/decisions/policy"`',
     ),
     (CONFIG_FILE, "standards_sources[].kind"): KeyRow(
-        "What one source of your standards is; the standards specialist reads only these "
+        "What one source of your standards is; the run reads only these "
         "entries; see the requirements page, the section on standards_sources kinds",
         "string",
         '`"rules-dir"` (a folder of rule files), `"file"` (one file) or `"pack"` (a pack '

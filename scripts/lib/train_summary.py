@@ -68,6 +68,7 @@ _LEDGER_PATH = re.compile(r"ledger: (.+?) \(")
 _DISPATCH_TOOLS = ("Agent", "Task", "SendMessage")
 _REFUSALS = ("block", "ask")
 OPERATOR, PRIORITIES_YIELD = "operator", "YIELD_STANDARDS priorities"
+ORCHESTRATOR = "orchestrator"
 # 0156, 0182: the Contract line in words when no packet was locked.
 CONTRACT_SKIPPED = (
     "Contract: none. This plan changes at most 3 files and declares no contract, "
@@ -80,7 +81,8 @@ _ANSWERERS: dict[str, tuple[str, ...]] = {
     "YIELD_CONTRACT": ("contract-spec",),
     # 0157: one framework specialist answers every compliance topic.
     "YIELD_COMPLIANCE": ("framework-specialist",),
-    "YIELD_STANDARDS": ("standards-rules-specialist",),
+    # 0186: the orchestrator answers a standards yield itself from the standards skill.
+    "YIELD_STANDARDS": (ORCHESTRATOR,),
     # 0129, 0137: a `priorities rule <n>:` yield is a surfaced default the operator answers.
     PRIORITIES_YIELD: (OPERATOR,),
 }
@@ -372,8 +374,8 @@ def _yield_row(
     kind = asked.group(1)
     surfaced = kind == "YIELD_STANDARDS" and _PRIORITIES_RULE.match(asked.group(2))
     want = _ANSWERERS[PRIORITIES_YIELD] if surfaced else _ANSWERERS.get(kind, ())
-    if want == (OPERATOR,):
-        return unit or "", kind, asked.group(2), OPERATOR
+    if want in ((OPERATOR,), (ORCHESTRATOR,)):
+        return unit or "", kind, asked.group(2), want[0]
     answer = next((r.agent for r in found if r.seq > reply.seq and r.agent in want), None)
     return unit or "", kind, asked.group(2), answer or "no answer recorded"
 

@@ -88,7 +88,6 @@ WRITER_ROOT_TYPES = {writer_mode.DERIVED: DOC}
 # Plan 11 A: the Build Train phase an agent type works in when its prompt names none.
 BUILD_PHASES = {
     "planner": "1",
-    "standards-rules-specialist": "1",
     "contract-spec": "1",
     "charter-docs": "1",
     "coder": "2",

@@ -69,7 +69,6 @@ def test_document_skill_holds_the_recipe_the_stub_dropped() -> None:
 def test_recipe_dispatches_only_catalog_agents() -> None:
     names = set(_AGENT_REF.findall(_derived_raw()))
     assert names == {
-        "standards-rules-specialist",
         "writer",
         "verifier",
         "comparer",

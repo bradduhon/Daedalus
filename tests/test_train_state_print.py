@@ -112,7 +112,8 @@ RECORDS: list[dict[str, object]] = [
     _handback(1, "coder", COMPLETE, "c1"),
     _pre(2, "coder", "Bash", "c2", command=f"git -C {U2} commit -m 'WIP: yield'"),
     _stop(3, "coder", f"[STATUS: YIELD_STANDARDS] which rule covers {REPO}/scripts/x.py?", "c2"),
-    _stop(4, "standards-rules-specialist", "[STATUS: STANDARD] python.md:10", "s1"),
+    # 0186: the orchestrator reads the rule file itself from the standards skill.
+    _pre(4, "orchestrator", "Read", "o1", file_path=f"{REPO}/.claude/rules/python.md"),
     _stop(5, "framework-specialist", "[STATUS: COMPLIANCE] AU-9 PASS, AU-3 PASS", "n1"),
     _pre(6, "orchestrator", "Agent", "o1", prompt=f"Check it.\nUnit worktree: {U1}\nGo."),
     _stop(
@@ -247,8 +248,7 @@ def test_verification_lists_one_verdict_per_verified_unit(tmp_path: Path) -> Non
 
 def test_yields_name_the_unit_kind_question_and_answerer(tmp_path: Path) -> None:
     assert _section(_text(tmp_path), "Yields") == [
-        "- u2: YIELD_STANDARDS which rule covers scripts/x.py? "
-        "(answered by standards-rules-specialist)"
+        "- u2: YIELD_STANDARDS which rule covers scripts/x.py? (answered by orchestrator)"
     ]
     assert _section(_text(tmp_path, records=RECORDS[:1]), "Yields") == ["none"]
 
@@ -336,7 +336,7 @@ def test_audit_log_names_the_running_session_first_and_its_totals(tmp_path: Path
     ]
     assert re.findall(r"^Session ([\w-]+):", text, re.MULTILINE)[0] == "sess-push"
     assert "### Audit totals, session sess-a" in rows
-    assert "| SubagentStop | 4 |" in rows and "skipped fork stops: 0" in rows
+    assert "| SubagentStop | 3 |" in rows and "skipped fork stops: 0" in rows
 
 
 # W3.2 allow-list: the six known spellings of a path outside the repo and the Charter, and the

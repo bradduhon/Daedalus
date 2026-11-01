@@ -29,7 +29,6 @@ Dispatch an agent as `daedalus:<name>`. Its tools are the only tools it is offer
 | orchestrator | dispatcher | fable | Agent, Bash, Edit, Glob, Grep, Read, SendMessage, Write | Runs one Build Train from its plan to the audited integration tip. | `[STATUS: ANNOUNCE] size=<size> phases=<list>`; `[STATUS: DECISION] brief=<path> questions=<n>`; `[STATUS: EXCEPTION] ledger_id=<id>`; `[STATUS: TRAIN_COMPLETE] summary=<path> audit_log=<path> tip=<40 hex>`; `[STATUS: STOP] reason=<what happened> next=<next action>` | context, clarification, plan, implementation, audit |
 | planner | shaper | opus | Glob, Grep, Read, Write | Cuts a design spec into work units that coders can build in parallel. | `[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>`; `[STATUS: QUESTION] <what the task leaves open>`; `[STATUS: ASK] n=<n>`; `[STATUS: SPEC] n=<n> path=<path> open=<m>`; `[STATUS: NOT_VIABLE] n=<n> <the blocking fact in one line>`; `[STATUS: YIELD_WEB] <query>` | clarification, plan |
 | releaser | mover | opus | Bash, Glob, Grep, Read | GitHub specialist for the Push Train. | `[STATUS: PUSHED] branch=<b> pr=<url>`; `[STATUS: CI] run=<id> conclusion=<text>`; `[STATUS: BLOCKED] <precondition that failed>` | commit, release |
-| standards-rules-specialist | finder | sonnet | Glob, Grep, Read | Adopts the project's declared standards. | `## Standards Packet`; `[STANDARDS: CONTRADICTION] <spec ref> vs <source:line>`; `[STATUS: STANDARD] <answer>` | clarification, plan |
 | terraform-reviewer | judge | sonnet | Bash, Glob, Grep, Read | Read-only judge of the .tf and .tfvars changes a train makes. | `[STATUS: COMPLIANCE] <PASS/FAIL list with rule ids and file:line, warnings included>` | audit |
 | verifier | judge | opus | Bash, Glob, Grep, Read | Adversarial read-only verifier of one unit's diff against its brief. | `[VERDICT: VERIFIED] claims=<n>`; `[VERDICT: REFUTED] <rows>` | implementation |
 | web-researcher | finder | haiku | Read, WebFetch, WebSearch | Fast external documentation lookup on Haiku. | `[STATUS: RESEARCH] <payload under 300 words with URLs>` | context |
@@ -37,6 +36,8 @@ Dispatch an agent as `daedalus:<name>`. Its tools are the only tools it is offer
 <!-- end generated -->
 
 The Phases column is guidance for your choice of agent, never a gate on which agent a phase may use (0089). Permission stays with the hooks.
+
+The project standards have no agent (0186). The session running the phase follows the standards skill, `${CLAUDE_PLUGIN_ROOT}/skills/plan/standards/SKILL.md`, itself: it writes the Standards Packet, answers a coder's standards question, writes the auditor brief and flags each contradiction between the task and a standard.
 
 ## The seven phase skills
 
@@ -52,7 +53,7 @@ Every body of work passes through phases, each open inside (0089). Each phase is
 | document | Public docs mode is the docs writer stage: the writer updates the four public docs in its own worktree, and the verifier checks each of its claims in a claims pass. Derived document mode, started with `/daedalus:run doc`, freezes the sources, derives with a receipt on every value and builds the change gate against a baseline. | Public docs: docs commits past the audited tip pass only with a docs record naming the tip they end at verified, or every refuted claim exempted; that tip is the current tip, or the commit below one ledger-only commit on top of them. Derived documents: the verifier's verdict and every change-log row agreed by the operator; no hook checks them. |
 | release | `/daedalus:run push` runs in the main session. The releaser alone pushes and opens pull requests. The operator merges. | A pull request the releaser opened on the audited tip, and the operator's merge. Only the releaser pushes, and no agent merges; the operator's merge has no hook. |
 
-Clarification and context have no skill of their own. Put each fork to the operator the moment it appears; standards and contract questions go to their specialists. Every ruling the operator made is in the ledger, captured in the session it was made; your duty, no hook checks it. Reading the task, the code and the rulings overlaps every phase, and a yield in the middle of a build is context work.
+Clarification and context have no skill of their own. Put each fork to the operator the moment it appears; a standards question follows the standards skill, and a contract question goes to contract-spec. Every ruling the operator made is in the ledger, captured in the session it was made; your duty, no hook checks it. Reading the task, the code and the rulings overlaps every phase, and a yield in the middle of a build is context work.
 
 ## The phase word map
 
