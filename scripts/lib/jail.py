@@ -221,6 +221,7 @@ _YARN_COMMANDS = INSTALL_VERBS | _SCRIPT_VERBS | {"exec", "dlx", "create", "work
 _GLOBAL_VALUED: dict[str, frozenset[str]] = {
     "uv": frozenset(
         {"--directory", "--project", "--cache-dir", "--config-file", "--color", "--python"}
+        | {"--allow-insecure-host"}
     ),
     "pip": frozenset(
         {"--timeout", "--cache-dir", "--proxy", "--retries", "--index-url", "--log", "--python"}
@@ -286,6 +287,8 @@ R_PACKAGE_INSTALL = (
     "service-manifest.json (dependencies.installs, coder only), or yield the install command "
     "for the operator to run."
 )
+# 0196: a yarn refusal also names the admitted way to run a script.
+R_YARN_SCRIPT = " Or run a script as `yarn run <script>`."
 R_PACKAGE_INSTALL_OPERATOR = (
     "{what} is a package install with no frozen, scripts-off form the jail accepts, so the jail "
     "refuses it for every agent (0196). Next: yield the install command for the operator to "
@@ -382,14 +385,15 @@ def _unvalued(args: list[str], valued: frozenset[str]) -> list[str]:
 
 def _yarn_options_only(args: list[str]) -> bool:
     # 0196: a --option without = takes the next word as its value unless that word is a verb.
-    skip = False
+    skip, prev = False, ""
     for arg in args:
-        if skip and arg not in _YARN_COMMANDS:
+        if skip and (prev in shell._JS_VALUED or arg not in _YARN_COMMANDS):
             skip = False
             continue
         if not arg.startswith("-"):
             return False
-        skip = arg.startswith("--") and "=" not in arg
+        skip = arg in shell._JS_VALUED or (arg.startswith("--") and "=" not in arg)
+        prev = arg
     return True
 
 
@@ -398,14 +402,16 @@ def _js_install(name: str, args: list[str]) -> InstallForm | None:
     verbs, required, extras = _JS_FROZEN[name]
     if name == "yarn" and _yarn_options_only(args):
         return InstallForm(name, name, _frozen_flags(args, required, extras))
-    for pos, arg in enumerate(args):
+    words = _unvalued(args, shell._JS_VALUED)
+    for pos, arg in enumerate(words):
         if arg in _EXEC_VERBS or arg in _SCRIPT_VERBS:
             return None
-        if arg == "audit" and "fix" in args[pos + 1 :]:
+        if arg == "audit" and "fix" in words[pos + 1 :]:
             return InstallForm(name, f"{name} audit fix")
         if arg in INSTALL_VERBS:
-            rest = args[pos + 1 :]
-            frozen = pos == 0 and arg in verbs and _frozen_flags(rest, required, extras)
+            # 0196: the frozen form is judged on the raw words, so no leading option is admitted.
+            frozen = args[:1] == [arg] and arg in verbs
+            frozen = frozen and _frozen_flags(args[1:], required, extras)
             return InstallForm(name, f"{name} {arg}", frozen)
     return None
 
@@ -413,9 +419,18 @@ def _js_install(name: str, args: list[str]) -> InstallForm | None:
 def _verbs_in(name: str, args: list[str]) -> list[str]:
     # 0196: positional words past the manager's valued options, up to a word that runs other code.
     head = args[: args.index("--")] if "--" in args else args
-    words = [a for a in _unvalued(head, _GLOBAL_VALUED.get(name, frozenset())) if a[:1] != "-"]
+    kept = _unvalued(head, _GLOBAL_VALUED.get(name, frozenset()))
     stops = _VERB_STOPS.get(name, frozenset())
-    return list(itertools.takewhile(lambda w: w not in stops, words))
+    words: list[str] = []
+    for at, word in enumerate(kept):
+        before = kept[at - 1] if at else ""
+        if word[:1] == "-":
+            continue
+        # 0196: a stop word right after a --option without = may be that option's value.
+        if word in stops and not (before.startswith("--") and "=" not in before):
+            break
+        words.append(word)
+    return words
 
 
 def _pip_install(label: str, args: list[str]) -> InstallForm | None:
@@ -529,7 +544,8 @@ def install_reason(segment: list[str], installs: Callable[[], frozenset[str]]) -
     example = FROZEN_EXAMPLES.get(found.manager)
     if example is None:
         return R_PACKAGE_INSTALL_OPERATOR.format(what=found.what)
-    return R_PACKAGE_INSTALL.format(what=found.what, frozen=example)
+    reason = R_PACKAGE_INSTALL.format(what=found.what, frozen=example)
+    return reason + R_YARN_SCRIPT if found.manager == "yarn" else reason
 
 
 def coder_installs(cwd: str) -> frozenset[str]:

@@ -108,6 +108,14 @@ def test_the_refusal_names_what_and_the_frozen_form() -> None:
     assert reason is not None and "(cargo fetch --locked)" in reason
 
 
+def test_a_yarn_refusal_names_the_script_form() -> None:
+    # 0196: only yarn refusals carry the script form.
+    reason = jail.install_reason(["yarn", "--silent", "build"], frozenset)
+    assert reason is not None and reason.endswith(jail.R_YARN_SCRIPT)
+    other = jail.install_reason(["npm", "install"], frozenset)
+    assert other is not None and jail.R_YARN_SCRIPT not in other
+
+
 def test_an_unusable_manifest_enables_no_install(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

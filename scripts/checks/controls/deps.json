@@ -14,5 +14,9 @@
   "premise.fetching_test_runners": {
     "failure": "0196: uv run <command>, cargo test and go test can resolve and fetch packages, and are left to the kernel wrapper's socket filter; on a kernel without the wrapper these commands fetch bare",
     "premise_test": "tests/test_confine.py::test_a_socket_is_refused_and_socketpair_and_netlink_open"
+  },
+  "jail.R_YARN_SCRIPT": {
+    "failure": "0196: a coder refused on a yarn form such as yarn --silent build is never told that yarn run <script> is the admitted way to run a script, and retries install variants",
+    "premise_test": "tests/test_checks_install_gate.py::test_a_yarn_refusal_names_the_script_form"
   }
 }

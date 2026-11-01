@@ -165,5 +165,11 @@
   {"command": "cargo +stable fetch --locked", "kind": "frozen", "ecosystem": "cargo"},
   {"command": "uv run pytest -k add", "kind": "none"},
   {"command": "cargo test add", "kind": "none"},
-  {"command": "yarn --silent test", "kind": "none"}
+  {"command": "yarn --silent test", "kind": "none"},
+  {"command": "npm --prefix run install left-pad", "kind": "refused"},
+  {"command": "pnpm --dir test add x", "kind": "refused"},
+  {"command": "bun --cwd run add x", "kind": "refused"},
+  {"command": "yarn --cwd run add three", "kind": "refused"},
+  {"command": "uv --allow-insecure-host run add httpx", "kind": "refused"},
+  {"command": "uv --unlisted-option run add httpx", "kind": "refused"}
 ]
