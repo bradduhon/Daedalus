@@ -557,6 +557,18 @@ def test_a_declared_non_runner_test_command_needs_the_wrapper(
 
 
 @pytest.mark.usefixtures("kernel")
+def test_each_entry_of_a_declared_test_command_list_needs_the_wrapper(tmp_path: Path) -> None:
+    # 0048, 0192: a Python and TypeScript stack lists two test commands; both are test commands.
+    declared = ["make test", "tox -e py312"]
+    repo, wt = _narrowed_repo(tmp_path, json.dumps({"stack": {"unit_test_cmd": declared}}))
+    for entry in declared:
+        bare = _cwd(_b("coder", f"cd {wt} && {entry}"), repo)
+        assert evaluate("confine", bare) == load("confine").R_CONFINE, entry
+        command = f"cd {wt} && {shell.CONFINE_PATH} --unit {wt} -- {entry}"
+        assert evaluate("confine", _cwd(_b("coder", command), repo)) is None, entry
+
+
+@pytest.mark.usefixtures("kernel")
 @pytest.mark.parametrize(
     "command",
     [

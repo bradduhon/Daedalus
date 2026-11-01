@@ -16,6 +16,8 @@ from lib.config import (
     StandardsSource,
 )
 from lib.manifest import (
+    ASSETS_KEYS,
+    DEV_SERVER_KEYS,
     DOCS_KEYS,
     DRIVERS,
     FEATURE_KEYS,
@@ -28,11 +30,13 @@ from lib.manifest import (
     NARROWING_KEYS,
     NOT_OVERRIDABLE,
     NOTE_MAX,
+    PACKAGE_MANAGERS,
     PRIORITY_ROWS,
     REASONS,
-    STACK_COMMANDS,
+    STACK_KEYS,
     SURFACE,
     TEXT_MAX,
+    Assets,
     Docs,
     Features,
     Manifest,
@@ -40,9 +44,9 @@ from lib.manifest import (
 
 MANIFEST_FILE = MANIFEST_NAME
 CONFIG_FILE = ".claude/daedalus/config.json"
-# 0054, 0073, B2: the JSON object each flat Manifest field is read from.
+# 0054, 0073, B2, 0192: the JSON object each flat Manifest field is read from.
 _MANIFEST_PARENT = {key: "jail_narrowing" for key in NARROWING_KEYS} | {
-    key: "stack" for key in STACK_COMMANDS
+    key: "stack" for key in STACK_KEYS
 }
 # 0158: opt-in feature switches setup never writes; each reads false until the operator sets it.
 SETUP_OMITS = frozenset({"terraform_validate"})
@@ -67,6 +71,10 @@ def manifest_keys() -> tuple[str, ...]:
             keys.extend(f"priorities.{row}" for row in PRIORITY_ROWS)
         elif item.name == "frameworks":
             keys.extend(f"frameworks.{key}" for key in FRAMEWORKS_KEYS)
+        elif item.name == "assets":
+            keys.extend(f"assets.{key}" for key in ASSETS_KEYS)
+        elif item.name == "dev_server":
+            keys.extend(f"dev_server.{key}" for key in DEV_SERVER_KEYS)
         elif item.name in _MANIFEST_PARENT:
             keys.append(f"{_MANIFEST_PARENT[item.name]}.{item.name}")
         else:
@@ -102,6 +110,9 @@ def starter_manifest() -> dict[str, object]:
         elif item.name in ("priorities", "frameworks"):
             # 0129, 0157: no priorities or frameworks key; absent is none declared, shipped packs.
             continue
+        elif item.name == "assets":
+            # 0192, 0076: every key present and empty, so the key reference explains each one.
+            doc["assets"] = {f.name: _json(getattr(Assets(), f.name)) for f in fields(Assets)}
         elif item.name in _MANIFEST_PARENT:
             parent = _MANIFEST_PARENT[item.name]
             doc[parent] = block = blocks.setdefault(parent, {})
@@ -166,7 +177,11 @@ _LEDGER_SEQUENCE = KeyRow(
     "Required once the block exists",
     '`"last-row-id"`',
 )
-_COMMAND_VALUES = "A non-empty command string, or `null`"
+_COMMAND_VALUES = (
+    "A non-empty command string, a non-empty list of non-empty command strings run one after "
+    "another, or `null`"
+)
+_COMMAND_KIND = "string, list of strings or null"
 _DRIVER_NAMES = ", ".join(f"`{driver}`" for driver in DRIVERS)
 # 0134: the docs.literacy values the key reference and the setup command show.
 LITERACY_EXAMPLES = (
@@ -263,28 +278,36 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         '`"trains"`',
     ),
     (MANIFEST_FILE, "stack.unit_test_cmd"): KeyRow(
-        "The command that runs the project's unit tests; a coding agent may run it exactly as "
+        "The commands that run the project's unit tests; a coding agent may run each exactly as "
         "written, as one command",
-        "string or null",
+        _COMMAND_KIND,
         _COMMAND_VALUES,
         "`null`: no declared command",
-        '`"pytest -q"`',
+        '`["pytest -q", "pnpm vitest run"]`',
     ),
     (MANIFEST_FILE, "stack.typecheck_cmd"): KeyRow(
-        "The command that type-checks the project; a coding agent may run it exactly as "
+        "The commands that type-check the project; a coding agent may run each exactly as "
         "written, as one command",
-        "string or null",
+        _COMMAND_KIND,
         _COMMAND_VALUES,
         "`null`: no declared command",
-        '`"mypy src"`',
+        '`["mypy src", "pnpm tsc --noEmit"]`',
     ),
     (MANIFEST_FILE, "stack.lint_cmd"): KeyRow(
-        "The command that lints the project; a coding agent may run it exactly as written, as "
+        "The commands that lint the project; a coding agent may run each exactly as written, as "
         "one command",
-        "string or null",
+        _COMMAND_KIND,
         _COMMAND_VALUES,
         "`null`: no declared command",
         '`"ruff check ."`',
+    ),
+    (MANIFEST_FILE, "stack.package_manager"): KeyRow(
+        "The package manager the project installs with; the doctor prints it on its stack line",
+        "string or null",
+        ", ".join(f'`"{name}"`' for name in PACKAGE_MANAGERS[:-1])
+        + f' or `"{PACKAGE_MANAGERS[-1]}"`, or `null`; any other name is refused',
+        "`null`: none declared",
+        '`"pnpm"`',
     ),
     (MANIFEST_FILE, "docs.literacy"): KeyRow(
         "How plainly the docs writer writes the public docs at the end of a Build Train, as a "
@@ -387,6 +410,52 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`true` or `false`; `false` reads only the packs under `frameworks.pack_dir`",
         "`true`: the shipped packs are read",
         "`false`",
+    ),
+    (MANIFEST_FILE, "assets.roots"): KeyRow(
+        "Folders of asset files, such as models, textures, sounds and shaders, kept out of the "
+        "diffs the verifier and the auditor read and out of the secret scan. A source file "
+        "inside one, such as a `.py` or `.ts` file, is never kept out, and the doctor and the "
+        "auditor report it",
+        "list of strings",
+        "Project-relative folder paths of letters, digits, dots, dashes, underscores and "
+        "slashes, without a leading slash, `..` or glob characters",
+        "`[]`: no folder is kept out",
+        '`["assets/", "public/models/"]`',
+    ),
+    (MANIFEST_FILE, "assets.extensions"): KeyRow(
+        "File endings kept out of those diffs and the secret scan wherever the file sits; "
+        "matching keeps case",
+        "list of strings",
+        "Endings that each start with a dot and hold only letters, digits, dots, dashes and "
+        "underscores; a source ending such as `.py`, `.ts`, `.json` or `.env` is refused",
+        "`[]`: no ending is kept out",
+        '`[".glb", ".png", ".wav"]`',
+    ),
+    (MANIFEST_FILE, "assets.max_bytes"): KeyRow(
+        "The size above which a kept-out asset file is listed by name and size, so the judges "
+        "know it changed; it never keeps out a file that is not an asset",
+        "integer or null",
+        "A whole number of at least 1, or `null`",
+        "`null`: no asset file is listed by size",
+        "`1048576`",
+    ),
+    (MANIFEST_FILE, "dev_server.url"): KeyRow(
+        "The address of the site you host on your own machine for testing; the verify step "
+        "asks you to open it, and Daedalus never starts, polls or fetches it",
+        "string",
+        # 0065: the loopback address reads as a version literal, so the row names it in words.
+        "An `http` or `https` address on `localhost` or the IPv4 loopback address, with any "
+        "port; any other host is refused",
+        "`dev_server: null`: no site is named",
+        '`"http://localhost:5173"`',
+    ),
+    (MANIFEST_FILE, "dev_server.check"): KeyRow(
+        "What you check on that site after a unit that changes web code; your answer of pass, "
+        "fail or skip goes into the unit's evidence",
+        "string",
+        "One printable line of plain words",
+        "Required once the block exists",
+        '`"the scene loads and the player can move"`',
     ),
     (MANIFEST_FILE, "ledger.path"): KeyRow(
         "Where rulings are appended, declared for everyone who works on the project; it wins "

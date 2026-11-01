@@ -137,7 +137,8 @@ def test_key_reference_rows_cover_the_three_keys_in_order() -> None:
         "features.dependency_web_lookup",
         "features.terraform_tools",
     )
-    assert keys.index("docs.literacy") == keys.index("stack.lint_cmd") + 1
+    # 0192: the package manager row sits between the stack commands and the docs block.
+    assert keys.index("docs.literacy") == keys.index("stack.package_manager") + 1
     for key in ("features.dependency_web_lookup", "features.terraform_tools", "docs.literacy"):
         assert (MANIFEST_FILE, key) in KEY_ROWS, key
 
