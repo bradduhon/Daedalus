@@ -146,12 +146,17 @@ ROUND_LOOP = (
     "Each description is the option's full text verbatim.",
     "its label ends with `(Recommended)`",
     "`Accept as proposed`, whose description is the item's proposal sentence verbatim",
-    '`Reply in my words`, whose description is "Type your answer in the box."',
+    '`Reply in my words`, whose description is "Choose Other and type your answer."',
+    "The re-ask offers the planner's lettered options when it has them, else `Accept as proposed`",
+    '`Skip this item` (description: "Sends no answer for this item.")',
+    "A second empty pick, or `Skip this item`, is relayed as `no answer` for that item.",
     "The operator's typed text is always an answer.",
     "A pick of `Reply in my words` with no typed text asks that item again, alone",
     '"Choose Other and type your answer."',
     "When fewer items are found than `items=<m>` on a ROUND line says, print the reply as written",
-    "ask one free-text question for the whole round with the two generic choices",
+    "ask one free-text question for the whole round with the choices `Reply in my words` and "
+    '`Stop the round` (description: "Ends the brainstorm and keeps the draft.")',
+    "`Stop the round` runs step 12.",
     "relay the typed text as a single answer",
     "At most four questions go in one AskUserQuestion call.",
     "Ask consecutive calls in item order until every item is asked.",
@@ -172,7 +177,11 @@ ANSWER_LOOP = (
     "`Reply in my words` is never relayed; only the typed text that follows it is.",
     "When either phrase follows an answered item, first send the answered items as one "
     "`ANSWERS round=<k>` message and read the planner's reply",
-    "Then run step 11 for `the spec stands`, or step 12 for `stop`, so the draft reflects those",
+    "A QUESTION reply is asked once and its answer relayed as a single answer.",
+    "A NOT_VIABLE reply runs step 9.",
+    'Unless a SPEC line came back, send `SendMessage(planner, "WRITE SPEC round=<k>")` and read '
+    "its reply. Then run step 11 for `the spec stands`, or step 12 for `stop`, so the draft "
+    "reflects those answers.",
 )
 
 
@@ -230,6 +239,7 @@ def test_cost_pause_every_ten_rounds_never_ends_the_brainstorm() -> None:
 def test_hand_off_verifies_repository_receipts_then_resumes_the_same_planner() -> None:
     step11 = _flat(_step(_text(), 11).split("\n12. ", 1)[0])
     assert '`SendMessage(planner, "WRITE SPEC round=<k>")`' in step11
+    assert "and no SPEC reply was already read in step 7: send" in step11
     assert MODEL.format(agent="verifier") in step11
     assert "first line is `CLAIMS MODE.`" in step11
     assert "one `Claim: <repo>/<file>:<line>" in step11
