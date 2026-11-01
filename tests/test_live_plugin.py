@@ -19,7 +19,7 @@ FIXTURE = REPO_ROOT / "tests" / "fixtures" / "live-agent"
 RECEIPT_NAME = "2026-10-14-live-plugin.md"
 APPENDED = "## Appended results"
 WORKER_TOOLS = ["--allowedTools", "Bash(echo *)", "Agent", "SendMessage"]
-PROBE = "daedalus-probe:repo-coder"
+PROBE = "daedalus-probe:coder"
 TRAIN = "20261015-000000"
 RECORD_KEYS = (
     "event",
@@ -196,7 +196,7 @@ def test_train_made_worktree_keeps_root_log_and_jail(live_repo: Path) -> None:
             results[target] = _jail_hook(payload)
         assert results[good].returncode == 0, results[good].stderr
         assert results[bad].returncode == 2, results[bad].stderr
-        assert results[bad].stderr.startswith("daedalus-jail[repo-coder]:"), results[bad].stderr
+        assert results[bad].stderr.startswith("daedalus-jail[coder]:"), results[bad].stderr
         log = live_repo / ".claude" / "daedalus" / "audit" / f"{session}.jsonl"
         assert log.is_file() and not (wt / ".claude" / "daedalus").exists()
         recs = audit_records(log)
@@ -253,7 +253,7 @@ def test_coder_write_outside_its_worktree_is_refused_through_the_router(live_rep
     good, bad = results.values()
     assert good.returncode == 0, good.stderr
     assert bad.returncode == 2, bad.stderr
-    assert bad.stderr.startswith("daedalus-jail[repo-coder]: unit_writes: "), bad.stderr
+    assert bad.stderr.startswith("daedalus-jail[coder]: unit_writes: "), bad.stderr
     log = live_repo / ".claude" / "daedalus" / "audit" / f"{session}.jsonl"
     recs = audit_records(log)
     for r in recs:

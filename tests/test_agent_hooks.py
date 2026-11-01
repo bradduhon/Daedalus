@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 
 import pytest
 from lib import agent_files, gh_policy, hook_io, router
@@ -19,6 +20,12 @@ SHAPES: dict[str, list[str | list[str]]] = json.loads(
     (CHECKS / "shapes.json").read_text(encoding="utf-8")
 )
 LOADED: dict[str, AgentFile] = agent_files.load_all(AGENTS)
+# 0190: one entry per effective chain; a writer kind is labelled as the catalog matrix labels it.
+CHAINED: dict[str, AgentFile] = {
+    f"{name} ({mode})" if mode else name: replace(agent, hooks=chain, modes=())
+    for name, agent in LOADED.items()
+    for mode, chain in agent.chains().items()
+}
 # 0044: flags that grant rather than narrow, and the one shape that may carry each.
 WIDENING = {"--web": "finder", "--gh": "mover", "--conductor": "mover"}
 
@@ -64,7 +71,7 @@ def _shape_scripts(shape: str) -> set[str]:
 
 def test_every_agent_has_shape_and_hooks() -> None:
     assert set(LOADED) == {p.stem for p in AGENTS.glob("*.md")}
-    for name, agent in LOADED.items():
+    for name, agent in CHAINED.items():
         assert agent.shape in SHAPES, name
         assert agent.hooks, name
         assert len({hook.script for hook in agent.hooks}) == len(agent.hooks), name
@@ -86,13 +93,13 @@ def test_every_hooks_block_carries_the_router_comment() -> None:
 
 
 def test_every_named_hook_is_a_shipped_script() -> None:
-    for name, agent in LOADED.items():
+    for name, agent in CHAINED.items():
         for hook in agent.hooks:
             assert (CHECKS / f"{hook.script}.py").is_file(), (name, hook.script)
 
 
 def test_every_hook_script_is_named_by_a_shape_list_or_an_agent() -> None:
-    named = {hook.script for agent in LOADED.values() for hook in agent.hooks}
+    named = {hook.script for agent in CHAINED.values() for hook in agent.hooks}
     for shape in SHAPES:
         named |= _shape_scripts(shape)
     # 0136, D.5: the router names its every-agent checks; agent files name doc_outputs.
@@ -104,14 +111,14 @@ def test_every_hook_script_is_named_by_a_shape_list_or_an_agent() -> None:
 
 def test_hook_tools_intersect_agent_tools() -> None:
     # 0039: a hook for a tool the agent's frontmatter does not grant is a dead hook.
-    for name, agent in LOADED.items():
+    for name, agent in CHAINED.items():
         for hook in agent.hooks:
             assert _applies(hook.script, agent), (name, hook.script)
 
 
 def test_agent_carries_every_applicable_hook_of_its_shape() -> None:
     # 0044: one-of groups pick exactly one member; extra hooks outside the list only narrow.
-    for name, agent in LOADED.items():
+    for name, agent in CHAINED.items():
         for entry in SHAPES[agent.shape]:
             if isinstance(entry, list):
                 members = [_entry(text) for text in entry]
@@ -125,7 +132,7 @@ def test_agent_carries_every_applicable_hook_of_its_shape() -> None:
 
 
 def test_flags_are_declared_by_the_hook() -> None:
-    for name, agent in LOADED.items():
+    for name, agent in CHAINED.items():
         for hook in agent.hooks:
             module = load(hook.script)
             parsed = hook_io._parse(list(hook.flags), module.PARSER)
@@ -133,9 +140,9 @@ def test_flags_are_declared_by_the_hook() -> None:
 
 
 def test_only_a_finder_may_carry_web() -> None:
-    carriers = {n for n, a in LOADED.items() for h in a.hooks if "--web" in _flag_map(h.flags)}
+    carriers = {n for n, a in CHAINED.items() for h in a.hooks if "--web" in _flag_map(h.flags)}
     assert carriers == {"web-researcher"}
-    for name, agent in LOADED.items():
+    for name, agent in CHAINED.items():
         for hook in agent.hooks:
             for flag in set(_flag_map(hook.flags)) & set(WIDENING):
                 assert agent.shape == WIDENING[flag], (name, hook)
@@ -146,7 +153,7 @@ def test_only_a_producer_writes_and_only_a_finder_fetches() -> None:
     # spec 3.1: a shaper writes too; its shape list binds it to root_writes --touch scratch.
     # 0060, 0109: a dispatcher writes scratch; a judge writes only through the audit class.
     writes = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
-    for name, agent in LOADED.items():
+    for name, agent in CHAINED.items():
         if agent.shape == "judge" and agent.tools & writes:
             assert not agent.tools & {"MultiEdit", "NotebookEdit"}, name
             hooks = [h for h in agent.hooks if h.script in {"root_writes", "unit_writes"}]
@@ -161,7 +168,7 @@ def test_only_the_auditor_writes_as_a_judge() -> None:
     # 0109: the audit write class belongs to the security auditor; the verifier stays read-only.
     judges = {n for n, a in LOADED.items() if a.shape == "judge"}
     writers = {n for n in judges if LOADED[n].tools & {"Write", "Edit"}}
-    assert writers == {"security-auditor"}
+    assert writers == {"auditor"}
     assert "verifier" in judges and not _carried(LOADED["verifier"], _entry("root_writes"))
 
 
@@ -169,20 +176,20 @@ def test_test_runner_grants_follow_the_two_judges() -> None:
     # 0109, spec 5: the auditor runs audit tests, the verifier reruns a unit's tests.
     runners = {
         name: _flag_map(hook.flags).get("--test-runner")
-        for name, agent in LOADED.items()
+        for name, agent in CHAINED.items()
         for hook in agent.hooks
         if hook.script == "read_only_bash" and "--test-runner" in _flag_map(hook.flags)
     }
-    assert runners == {"security-auditor": {"audit"}, "verifier": {"unit"}}
+    assert runners == {"auditor": {"audit"}, "verifier": {"unit"}}
 
 
 def test_agent_files_match_the_parity_chains() -> None:
     # 0044: tests/hook_chain.py is the data the parity test runs; it equals the agent files.
-    got = {n: tuple((h.script, h.flags) for h in a.hooks) for n, a in LOADED.items()}
+    got = {n: tuple((h.script, h.flags) for h in a.hooks) for n, a in CHAINED.items()}
     assert got == CHAINS
 
 
-CONDUCTOR = AGENTS / "pr-train-conductor.md"
+CONDUCTOR = AGENTS / "releaser.md"
 _GH = re.compile(r"`gh ([a-z]+) ([a-z]+)`")
 
 

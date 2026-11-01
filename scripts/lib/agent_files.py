@@ -20,7 +20,10 @@ _TOP_KEYS = (
     "shape",
     "phases",
     "hooks",
+    "modes",
 )
+# 0190: the two indented blocks; modes holds per-mode hooks the router adds to the hooks block.
+_BLOCK_KEYS = ("hooks", "modes")
 _REQUIRED = ("name", "description", "tools", "model")
 # 0089, spec 9.1: phase affinities, in phase order; commit and release together are one phase.
 PHASES = ("context", "clarification", "plan", "implementation", "audit", "commit", "release")
@@ -32,6 +35,8 @@ _INDICATORS = frozenset("&*!|>{}[]\"'%@`#,?:-")
 _EVENT = "  PreToolUse:"
 _ITEM = "    - hooks:"
 _ENTRY = re.compile(r'        - \{type: command, command: "([^"\\]*)"\}')
+_MODE = re.compile(r"  ([a-z][a-z-]*):")
+_MODE_ENTRY = re.compile(r'    - \{type: command, command: "([^"\\]*)"\}')
 _COMMAND = re.compile(
     r"python3 \$\{CLAUDE_PLUGIN_ROOT\}/scripts/checks/([a-z][a-z_]*)\.py"
     # spec 3.1, 0152: a flag value may carry `*` (a --name glob) and, after its first character,
@@ -63,6 +68,13 @@ class AgentFile:
     status_lines: tuple[str, ...]
     description: str
     phases: tuple[str, ...]
+    modes: tuple[tuple[str, tuple[Hook, ...]], ...] = ()
+
+    def chains(self) -> dict[str, tuple[Hook, ...]]:
+        # 0190: one effective chain per mode, the hooks block first; "" names a modeless agent.
+        if not self.modes:
+            return {"": self.hooks}
+        return {mode: self.hooks + extra for mode, extra in self.modes}
 
 
 def _read(path: Path) -> list[str]:
@@ -134,8 +146,8 @@ def _refuse(path: Path, line: str, why: str) -> AgentFileError:
     )
 
 
-def _hook(path: Path, line: str) -> Hook:
-    entry = _ENTRY.fullmatch(line)
+def _hook(path: Path, line: str, form: re.Pattern[str] = _ENTRY) -> Hook:
+    entry = form.fullmatch(line)
     if entry is None:
         raise _refuse(path, line, 'is not a `{type: command, command: "..."}` entry')
     command = _COMMAND.fullmatch(entry.group(1))
@@ -158,10 +170,28 @@ def _hooks(path: Path, block: list[str]) -> tuple[Hook, ...]:
     return tuple(_hook(path, line) for line in block[2:])
 
 
+def _modes(path: Path, block: list[str]) -> tuple[tuple[str, tuple[Hook, ...]], ...]:
+    # 0190: `  <mode>:` lines, each followed by at least one `    - {...}` entry; names unique.
+    out: list[tuple[str, list[Hook]]] = []
+    for line in block:
+        head = _MODE.fullmatch(line)
+        if head is not None:
+            if head.group(1) in {name for name, _ in out}:
+                raise _refuse(path, line, "repeats a mode")
+            out.append((head.group(1), []))
+        elif not out:
+            raise _refuse(path, line, "is a modes entry before any `  <mode>:` line")
+        else:
+            out[-1][1].append(_hook(path, line, _MODE_ENTRY))
+    if not out or any(not hooks for _, hooks in out):
+        raise _refuse(path, "modes:", "holds a mode with no hook entries")
+    return tuple((name, tuple(hooks)) for name, hooks in out)
+
+
 def _scalar(path: Path, line: str, key: str, value: str) -> str:
-    if key == "hooks":
+    if key in _BLOCK_KEYS:
         if value:
-            raise _refuse(path, line, "carries a value on the hooks key")
+            raise _refuse(path, line, f"carries a value on the {key} key")
         return value
     if not value or value[0] in _INDICATORS:
         raise _refuse(path, line, "is not a plain one-line scalar")
@@ -213,21 +243,21 @@ def _status_lines(path: Path, body: list[str]) -> tuple[str, ...]:
 def load(path: Path) -> AgentFile:
     lines, end = _lines(path)
     fields: dict[str, str] = {}
-    block: list[str] = []
-    in_block = False
+    blocks: dict[str, list[str]] = {key: [] for key in _BLOCK_KEYS}
+    in_block = ""
     for line in lines[1:end]:
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         if line[0] in " \t":
             if not in_block:
-                raise _refuse(path, line, "is indented outside the hooks block")
-            block.append(line)
+                raise _refuse(path, line, "is indented outside the hooks and modes blocks")
+            blocks[in_block].append(line)
             continue
         key, value = _pair(path, line)
         if key not in _TOP_KEYS or key in fields:
             raise _refuse(path, line, "is an unknown or repeated key")
         fields[key] = value if key == "phases" else _scalar(path, line, key, value)
-        in_block = key == "hooks"
+        in_block = key if key in _BLOCK_KEYS else ""
     missing = [key for key in _REQUIRED if key not in fields]
     if missing:
         raise AgentFileError(
@@ -235,7 +265,10 @@ def load(path: Path) -> AgentFile:
         )
     if fields["name"] != path.stem:
         raise _refuse(path, f"name: {fields['name']}", f"differs from the file name {path.stem}")
-    hooks = _hooks(path, block) if "hooks" in fields else ()
+    hooks = _hooks(path, blocks["hooks"]) if "hooks" in fields else ()
+    modes = _modes(path, blocks["modes"]) if "modes" in fields else ()
+    if modes and not hooks:
+        raise _refuse(path, "modes:", "has no hooks block to add its hooks to")
     if "disallowedTools" in fields:
         _tools(path, "disallowedTools", fields["disallowedTools"])
     return AgentFile(
@@ -247,6 +280,7 @@ def load(path: Path) -> AgentFile:
         status_lines=_status_lines(path, lines[end + 1 :]),
         description=fields["description"],
         phases=_phases(path, fields["phases"]) if "phases" in fields else (),
+        modes=modes,
     )
 
 

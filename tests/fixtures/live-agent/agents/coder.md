@@ -1,5 +1,5 @@
 ---
-name: repo-coder
+name: coder
 description: Runs the command and the file write its prompt names, or one echo. Used only by tests.
 tools: Bash, Write
 model: haiku

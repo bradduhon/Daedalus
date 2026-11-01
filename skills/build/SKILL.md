@@ -1,6 +1,6 @@
 ---
 name: build
-description: The build phase of a run. Gives each work unit of the recorded plan to a repo-coder in its own worktree, briefed by file with the two packet lines, routes every coder question through one place, sends each finished unit to the verify phase, and merges the verified units in recorded order. Writes no code itself and never pushes.
+description: The build phase of a run. Gives each work unit of the recorded plan to a coder in its own worktree, briefed by file with the two packet lines, routes every coder question through one place, sends each finished unit to the verify phase, and merges the verified units in recorded order. Writes no code itself and never pushes.
 ---
 <!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
 
@@ -23,7 +23,7 @@ The build phase runs one coder per unit in its own worktree, briefed by file wit
 
    Ask once per wave, never once per unit.
 4. Brief by file (0083). Write the unit's brief file at `<repo>/docs/.tmp/daedalus/<train-id>/briefs/<unit-slug>.md`, holding: the two packet lines, then the `Pick ledger ids:` line from the plan phase, then the line `Worktree: <path>` naming its working directory, the unit's requirement section of the plan verbatim (pin REQ -> VER: from its `### <unit id>: <title>` heading through its last numbered requirement) with its scope and acceptance tests, the line `Priorities: the ## Priorities section of <standards packet path>` (0129, 0137), and this reminder: "Work only in <path>: every file path and every git pathspec you use is absolute or goes through `git -C <path>`. When blocked, commit WIP and return one `[STATUS: YIELD_*]` line; you will be resumed with the answer." The coder boots empty, so the brief holds everything.
-5. Dispatch. Print the dispatch as three lines, `Dispatch: repo-coder`, `Prompt file: <brief path>` and `Expect: <the five reply lines of the coder's status contract>`. Before each cold coder dispatch, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py model --repo <repo> --agent repo-coder` and pass its word as `model:` (spec 4). Then dispatch `repo-coder` with a prompt naming the brief path, the same `Worktree: <path>` line, and "Read the brief first; it names the Contract and Standards packet files with their sha256; refuse to start when a hash does not match." The hook refuses a coder dispatch whose prompt names no single `Worktree:` line of a recorded unit, or that comes before the recorded plan.
+5. Dispatch. Print the dispatch as three lines, `Dispatch: coder`, `Prompt file: <brief path>` and `Expect: <the five reply lines of the coder's status contract>`. Before each cold coder dispatch, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py model --repo <repo> --agent coder` and pass its word as `model:` (spec 4). Then dispatch `coder` with a prompt naming the brief path, the same `Worktree: <path>` line, and "Read the brief first; it names the Contract and Standards packet files with their sha256; refuse to start when a hash does not match." The hook refuses a coder dispatch whose prompt names no single `Worktree:` line of a recorded unit, or that comes before the recorded plan.
    - A warm resume goes to the coder that built the unit's dependency, by the orchestrator's message, with the new unit's brief file and its `Worktree: <path>` line. The hook rebinds the coder to the new unit as the message goes out (spec 8), and refuses a resume that names a unit already dispatched or a coder that holds no unit.
 6. Route every yield. Read the last line of every coder reply and route it:
 
@@ -58,7 +58,7 @@ The build phase runs one coder per unit in its own worktree, briefed by file wit
 
 ## Agents it uses
 
-- repo-coder, one per unit in its own worktree (steps 4 and 5).
+- coder, one per unit in its own worktree (steps 4 and 5).
 - web-researcher, for a coder's web question (step 6).
 - On a yield (step 6): contract-spec for a contract, framework-specialist for compliance, standards-rules-specialist for a standard.
 

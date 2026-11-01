@@ -104,7 +104,7 @@ def test_every_manifest_example_key_has_a_row() -> None:
 
 def test_readme_outside_train_claim_matches_the_jail() -> None:
     # B8: catalog agents keep their hooks outside a train; the main session is asked, not refused.
-    assert policed_outside_train("daedalus:repo-coder")
+    assert policed_outside_train("daedalus:coder")
     stale = (
         "Outside a train, the hooks refuse only reads and searches of credential files",
         "for every agent and the main session",

@@ -14,7 +14,7 @@
      "scope": {"told": "none", "touch": ["contracts"], "reply": ["exit 0"]},
      "proof": {"script": "daedalus_workspace.py lock --repo {repo} --version {packet_version}", "exit": {"0": "pass", "1": "stopped"}, "records": ["lock_sha"]},
      "on_fail": {"stopped": "stop: Next: follow the line the lock step printed"}},
-    {"id": "code", "gate": "build", "agent": "repo-coder",
+    {"id": "code", "gate": "build", "agent": "coder",
      "scope": {"told": "tests/fixtures/trains/valid/code.md", "touch": ["unit-src-tests"], "reply": ["[STATUS: COMPLETE]", "[STATUS: YIELD_CONTRACT]"]},
      "proof": {"script": "daedalus_train.py check-reply --stage code", "exit": {"0": "pass", "1": "off-contract"}, "records": ["unit_reply"]},
      "on_fail": {"[STATUS: YIELD_CONTRACT]": "back:contract"}}

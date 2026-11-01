@@ -109,7 +109,7 @@ def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | Non
             if record is None:
                 return (
                     f"unit {unit_name} was never dispatched in train {train_id}. "
-                    "Next: dispatch a repo-coder with one Worktree: line naming it."
+                    "Next: dispatch a coder with one Worktree: line naming it."
                 )
             if record.get("finished"):
                 return f"unit {unit_name} is merged and finished (0121). {WRITE_NEXT}"

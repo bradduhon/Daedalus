@@ -25,15 +25,15 @@ def test_the_agent_file_model_applies_with_no_override_or_config() -> None:
 
 
 def test_config_agent_models_wins_over_the_agent_file() -> None:
-    config = Config(agent_models={"repo-coder": "sonnet"})
-    assert agent_files.load(AGENTS / "repo-coder.md").model == "opus"
-    assert resolve("repo-coder", config) == "sonnet"
+    config = Config(agent_models={"coder": "sonnet"})
+    assert agent_files.load(AGENTS / "coder.md").model == "opus"
+    assert resolve("coder", config) == "sonnet"
     assert resolve("planner", config) == "opus"
 
 
 def test_the_override_wins_over_config_and_the_agent_file() -> None:
-    config = Config(agent_models={"repo-coder": "sonnet"})
-    assert resolve("repo-coder", config, "haiku") == "haiku"
+    config = Config(agent_models={"coder": "sonnet"})
+    assert resolve("coder", config, "haiku") == "haiku"
     assert resolve("planner", Config(), override="fable") == "fable"
 
 

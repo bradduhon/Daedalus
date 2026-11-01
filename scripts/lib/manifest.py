@@ -9,6 +9,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Literal
 
+from lib.agent_aliases import current as current_name
 from lib.project_root import in_git_work_tree, project_root
 from lib.train_scope import KNOWN_AGENTS
 
@@ -101,7 +102,7 @@ PRIORITY_ROWS = (
 )
 MAX_RULES, MAX_PRINCIPLES, NOTE_MAX, TEXT_MAX = 32, 64, 200, 300
 PRINCIPLE_ID = re.compile(r"P[0-9]+")
-NOT_OVERRIDABLE = "security-auditor"
+NOT_OVERRIDABLE = "auditor"
 R_PRIORITIES = (
     "{target} {key} {detail} (0129). Next: correct {key} against its row in the key reference, "
     "then rerun."
@@ -447,13 +448,17 @@ def _overrides(target: Path, value: object) -> tuple[tuple[str, tuple[str, ...]]
     if not isinstance(value, dict):
         raise _bad(target, row, "agents must be an object keyed by agent name")
     out: list[tuple[str, tuple[str, ...]]] = []
-    for name, entry in value.items():
+    for raw_name, entry in value.items():
+        # 0190: an old agent name reads as its new name for one release; the doctor warns.
+        name = current_name(str(raw_name))
         if name == NOT_OVERRIDABLE:
             raise _bad(target, row, f"names {NOT_OVERRIDABLE}, whose ranking no project overrides")
         if name not in KNOWN_AGENTS - {"main"}:
             raise _bad(target, row, f"names {name!r}, which is not a Daedalus agent file name")
+        if name in {done for done, _ in out}:
+            raise _bad(target, row, f"names {name} twice, under its old and new names")
         body = _object(target, entry, row, {"drivers"}, {"drivers"})
-        out.append((str(name), _ranking(target, body["drivers"], row)))
+        out.append((name, _ranking(target, body["drivers"], row)))
     return tuple(out)
 
 

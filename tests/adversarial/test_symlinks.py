@@ -91,7 +91,7 @@ def test_link_onto_the_reply_key_is_denied(tmp_path: Path, agent: str) -> None:
         assert_denied(hook_input, REPLY_KEY, CREDENTIAL)
 
 
-@pytest.mark.parametrize("agent", ("repo-coder", "security-auditor", "charter-docs"))
+@pytest.mark.parametrize("agent", ("coder", "auditor", "charter-docs"))
 def test_link_onto_the_versioned_claude_binary_is_denied(
     fake_claude: Path, tmp_path: Path, agent: str
 ) -> None:
@@ -118,7 +118,7 @@ def test_link_onto_claude_inside_the_worktree_is_denied(fake_claude: Path, tmp_p
     (wt / "bin").mkdir()
     (wt / "bin" / "run").symlink_to(wt / "c")
     for command in (f"{wt}/c -p hi", f"cd {wt} && ./c -p hi", f"{wt}/bin/run -p hi"):
-        assert_denied(_cwd(_b("repo-coder", command), repo), NESTED)
+        assert_denied(_cwd(_b("coder", command), repo), NESTED)
 
 
 def test_coder_write_through_a_worktree_link_is_denied(
@@ -133,16 +133,16 @@ def test_coder_write_through_a_worktree_link_is_denied(
     (wt / "k").symlink_to(cred_home / ".ssh")
     (wt / "up").symlink_to(repo)
     for hook_input in (
-        _w("repo-coder", f"{wt}/out/a.py"),
-        _w("repo-coder", f"{wt}/up/service-manifest.json", "Edit"),
-        _b("repo-coder", f"tee {wt}/out/a.py"),
-        _b("repo-coder", f"cp {wt}/README.md {wt}/up/src/a.py"),
-        _b("repo-coder", f"echo x > {wt}/out/a.py"),
+        _w("coder", f"{wt}/out/a.py"),
+        _w("coder", f"{wt}/up/service-manifest.json", "Edit"),
+        _b("coder", f"tee {wt}/out/a.py"),
+        _b("coder", f"cp {wt}/README.md {wt}/up/src/a.py"),
+        _b("coder", f"echo x > {wt}/out/a.py"),
     ):
         assert_denied(_cwd(hook_input, repo), OUTSIDE)
     for hook_input in (
-        _w("repo-coder", f"{wt}/k/authorized_keys"),
-        _b("repo-coder", f"tee {wt}/k/authorized_keys"),
+        _w("coder", f"{wt}/k/authorized_keys"),
+        _b("coder", f"tee {wt}/k/authorized_keys"),
     ):
         assert_denied(_cwd(hook_input, repo), CREDENTIAL, OUTSIDE)
 

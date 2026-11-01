@@ -14,13 +14,13 @@ from tests.conftest import git, write_train_marker
 
 UNIT_TRAIN = "20261015-120000"
 BASH_AGENTS = [
-    "repo-coder",
+    "coder",
     "charter-docs",
-    "security-auditor",
+    "auditor",
     "framework-specialist",
-    "pr-train-conductor",
+    "releaser",
 ]
-PIPE_ALLOWED = {"security-auditor", "framework-specialist"}
+PIPE_ALLOWED = {"auditor", "framework-specialist"}
 SEPARATORS = [
     "git diff & git diff",
     "git diff\ngit diff",

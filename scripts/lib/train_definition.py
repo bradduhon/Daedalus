@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 from lib import agent_files
+from lib.agent_aliases import current as current_name
 from lib.human_text import MIN_WORDS, plain_words
 from lib.manifest import FEATURE_KEYS, SCOPE_KINDS, repo_relative
 from lib.narrow import integer
@@ -122,7 +123,21 @@ def load(path: Path) -> Definition:
         raise DefinitionError(f"{path} is not valid JSON ({exc})") from exc
     if not isinstance(raw, dict):
         raise DefinitionError(f"{path} is not a JSON object")
-    return Definition(path, raw)
+    return Definition(path, _current_names(raw))
+
+
+def _current_names(raw: dict[str, object]) -> dict[str, object]:
+    # 0190: old agent names in stages and consults read as their new names for one release.
+    stages = raw.get("stages")
+    for stage in stages if isinstance(stages, list) else []:
+        if isinstance(stage, dict) and isinstance(stage.get("agent"), str):
+            stage["agent"] = current_name(stage["agent"])
+    consults = raw.get("consults")
+    if isinstance(consults, dict):
+        for gate, names in consults.items():
+            if isinstance(names, list):
+                consults[gate] = [current_name(n) if isinstance(n, str) else n for n in names]
+    return raw
 
 
 def _strings_only(value: object, allow_empty: bool = False) -> bool:
@@ -166,8 +181,10 @@ def _agent_path(name: str, plugin_root: Path) -> Path | None:
 def touch_grants(agent: agent_files.AgentFile) -> frozenset[str]:
     # spec 3.4 check 5: root_writes --touch classes, unit-src-tests for unit_writes, else none.
     granted: set[str] = set()
-    scripts = {hook.script for hook in agent.hooks}
-    for hook in agent.hooks:
+    # 0190: a writer's grants are those of every mode it may be dispatched in.
+    hooks = {hook for chain in agent.chains().values() for hook in chain}
+    scripts = {hook.script for hook in hooks}
+    for hook in hooks:
         flags = list(hook.flags)
         if hook.script == "root_writes" and "--touch" in flags[:-1]:
             granted.update(flags[flags.index("--touch") + 1].split(","))

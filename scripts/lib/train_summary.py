@@ -332,11 +332,11 @@ def _gather(logs: Sequence[SessionLog], units: Sequence[dict[str, object]]) -> _
         for reply in found:
             line, where = reply.last, _source(reply, log)
             done = _COMPLETE.search(line)
-            if reply.agent == "repo-coder" and done:
+            if reply.agent == "coder" and done:
                 packet, files, tests = done.group(2), done.group(3), done.group(4)
                 facts.complete[done.group(1)] = (packet, files, tests, where)
             asked = _YIELD.match(line)
-            if reply.agent == "repo-coder" and asked:
+            if reply.agent == "coder" and asked:
                 facts.yields.append((*_yield_row(records, found, reply, asked, paths), where))
             listed = _COMPLIANCE.match(line)
             if reply.agent in _COMPLIANCE_AGENTS and listed:
@@ -672,7 +672,7 @@ def _paragraph(logs: Sequence[SessionLog], seq: int, session: str) -> tuple[str,
             kept = [ln for ln in raw.splitlines() if not ln.strip().startswith("[VERDICT:")]
             paragraphs = "\n".join(kept).split("\n\n")
             body = next((" ".join(p.split()) for p in paragraphs if p.strip()), "")
-            return body, f"the security-auditor reply at seq {seq} of session {log.session}"
+            return body, f"the auditor reply at seq {seq} of session {log.session}"
     return "", ""
 
 

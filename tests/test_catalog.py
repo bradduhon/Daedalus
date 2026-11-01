@@ -186,10 +186,10 @@ def test_table_without_a_config_is_unchanged_by_the_default_config() -> None:
 
 def test_table_with_a_config_prints_the_effective_model() -> None:
     # spec 4: agent_models replaces only the Model cell of the agents it names.
-    config = Config(agent_models={"repo-coder": "sonnet", "web-researcher": "fable"})
+    config = Config(agent_models={"coder": "sonnet", "web-researcher": "fable"})
     plain, effective = catalog.table(AGENTS), catalog.table(AGENTS, config)
     files = _model_cells(plain)
-    assert files["repo-coder"] == "opus" and files["web-researcher"] == "haiku"
+    assert files["coder"] == "opus" and files["web-researcher"] == "haiku"
     assert _model_cells(effective) == files | config.agent_models
     changed = [a != b for a, b in zip(plain.splitlines(), effective.splitlines(), strict=True)]
     assert sum(changed) == 2
@@ -228,15 +228,13 @@ def test_matrix_changes_when_an_agent_file_changes(tmp_path: Path) -> None:
     scratch = tmp_path / "agents"
     shutil.copytree(AGENTS, scratch)
     assert catalog.matrix(scratch) == _readme_block()
-    coder = scratch / "repo-coder.md"
+    coder = scratch / "coder.md"
     text = coder.read_text(encoding="utf-8")
     assert "git_grammar.py --allow coder" in text
     coder.write_text(text.replace("git_grammar.py --allow coder", "git_grammar.py --allow docs"))
     changed = catalog.matrix(scratch)
     assert changed != _readme_block()
-    assert (
-        "| repo-coder | producer | credential_paths, workspace_integrity, tool_bound, " in changed
-    )
+    assert "| coder | producer | credential_paths, workspace_integrity, tool_bound, " in changed
     assert ", git_push, git_grammar --allow docs, unit_writes," in changed
 
 
@@ -244,7 +242,7 @@ def test_no_agent_file_passes_no_pipes() -> None:
     # B1: the pipe flag is deleted; the matrix shows shell_tripwires bare for every agent.
     out = catalog.matrix(AGENTS)
     assert "--no-pipes" not in out and "--no-pipes" not in _readme_block()
-    for name in ("repo-coder", "charter-docs", "pr-train-conductor"):
+    for name in ("coder", "charter-docs", "releaser"):
         row = next(r for r in out.splitlines() if r.startswith(f"| {name} |"))
         assert ", shell_tripwires, network_tools" in row, name
 
@@ -254,7 +252,13 @@ def test_matrix_shape() -> None:
     rows = out.splitlines()
     assert rows[:2] == ["| Agent | Shape | Hooks |", "|---|---|---|"]
     names = [row.split(" | ", 1)[0].removeprefix("| ") for row in rows[2:]]
-    assert names == sorted(p.stem for p in AGENTS.glob("*.md"))
+    # 0190: a writer kind gets its own row, labelled with the kind.
+    labels = [
+        f"{name} ({mode})" if mode else name
+        for name, agent in sorted(agent_files.load_all(AGENTS).items())
+        for mode in agent.chains()
+    ]
+    assert names == labels and "writer (derived)" in labels
     assert out.endswith("|\n") and not out.endswith("\n\n")
 
 

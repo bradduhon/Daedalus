@@ -1,5 +1,5 @@
 ---
-name: security-auditor
+name: auditor
 description: Adversarial pre-commit security and contract verifier. Runs at the end of every Build Train before local commits are finalized.
 tools: Read, Grep, Glob, Bash, Write, Edit
 disallowedTools: MultiEdit, NotebookEdit, WebFetch, WebSearch, Agent, Task, SendMessage

@@ -17,7 +17,7 @@ SHELL_AGENTS = tuple(
     agent for agent, chain in CHAINS.items() if any(s == "shell_tripwires" for s, _ in chain)
 )
 # shell_tripwires names the nested session for these; the others refuse by their grammar.
-NAMED = ("repo-coder", "security-auditor", "framework-specialist", "charter-docs")
+NAMED = ("coder", "auditor", "framework-specialist", "charter-docs")
 BY_NAME = (
     "claude -p hi",
     "claude",

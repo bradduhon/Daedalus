@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lib import git
+from lib.agent_aliases import current as current_name
 from lib.agent_models import MODELS
 from lib.audit import check_project_data_dir
 from lib.project_root import in_git_work_tree
@@ -153,8 +154,11 @@ def _agent_models(raw: dict[str, object]) -> dict[str, str]:
             'Next: write agent_models as {"<agent>": "<model>"}, or remove it.'
         )
     agents = KNOWN_AGENTS - {"main"}
+    out: dict[str, str] = {}
     for name, model in value.items():
-        if name not in agents:
+        # 0190: an old agent name keys its new name for one release; the doctor warns.
+        new = current_name(str(name))
+        if new not in agents:
             raise ConfigError(
                 f"config.json agent_models names {name!r}, which is not a catalog agent. "
                 "Next: key agent_models by an agent name the catalog lists, one of "
@@ -165,7 +169,13 @@ def _agent_models(raw: dict[str, object]) -> dict[str, str]:
                 f"config.json agent_models.{name} is {model!r}. "
                 f"Next: set agent_models.{name} to one of {', '.join(MODELS)}."
             )
-    return {str(name): str(model) for name, model in value.items()}
+        if out.get(new, model) != model:
+            raise ConfigError(
+                f"config.json agent_models gives {new} two models under its old and new names. "
+                "Next: delete one of the two entries, so that one model is left for it."
+            )
+        out[new] = str(model)
+    return out
 
 
 def _ledger(raw: object) -> LedgerDecl:

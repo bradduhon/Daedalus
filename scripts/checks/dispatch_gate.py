@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0060: the orchestrator's Agent and SendMessage calls meet the coder dispatch and plan gates.
-# 0134: a docs-writer dispatch names the train's <train-id>-docstage worktree and binds it alone.
+# 0134: a public docs writer names the train's <train-id>-docstage worktree and binds it alone.
 # A resume handing a coder another unit's Worktree: line rebinds it here (0086, spec 8).
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lib import dispatch_binding, hook_io, jail  # noqa: E402
+from lib.agent_aliases import OLD_NAMES  # noqa: E402
 from lib.agent_models import MODELS  # noqa: E402
 from lib.train_scope import KNOWN_AGENTS  # noqa: E402
 
@@ -19,10 +20,14 @@ TOOLS: frozenset[str] = dispatch_binding.DISPATCH_TOOLS | dispatch_binding.RESUM
 FLAGS: dict[str, hook_io.Flag] = {}
 PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
 # 0001, 0060: the train never pushes, and one train runs one orchestrator.
-NEVER_STARTED = frozenset({"orchestrator", "pr-train-conductor"})
+NEVER_STARTED = frozenset({"orchestrator", "releaser"})
 R_FOREIGN_AGENT = (
     "the orchestrator starts only Daedalus catalog agents, named daedalus:<name> (0060). "
     "Next: start an agent the catalog lists, by its daedalus: name."
+)
+R_OLD_NAME = (
+    "agent {old} was renamed to {new} (0190), and no agent file carries the old name. "
+    "Next: start daedalus:{new}."
 )
 R_NEVER_STARTED = (
     "the orchestrator starts no {agent}: a Build Train never pushes and runs one orchestrator "
@@ -38,6 +43,8 @@ R_MODEL = (
 def _start_reason(tool_input: dict[str, object]) -> str | None:
     raw = hook_io.text(tool_input, "subagent_type")
     agent = jail.normalize_agent(raw)
+    if agent != raw and agent in OLD_NAMES:
+        return R_OLD_NAME.format(old=agent, new=OLD_NAMES[agent])
     if agent == raw or agent not in KNOWN_AGENTS - {"main"}:
         return R_FOREIGN_AGENT
     if agent in NEVER_STARTED:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# RCP, 0128: the check on a repo-coder's COMPLETE reply, before any verifier runs. It reads the
+# RCP, 0128: the check on a coder's COMPLETE reply, before any verifier runs. It reads the
 # SubagentStop reply and, by the operator's pick 4 of train 20261026-002310, the message of a
 # PreToolUse SubagentHandback call. Pin RCP -> VER: the receipts block sits directly above the
 # COMPLETE line. A yield, another agent's reply and an empty reply pass; a check that cannot run
@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-CODER = "repo-coder"
+CODER = "coder"
 RECEIPTS = "## Receipts"
 # Pin RCP -> VER: the only five line shapes the block holds, by kind.
 SHAPES: dict[str, re.Pattern[str]] = {

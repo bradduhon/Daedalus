@@ -14,7 +14,7 @@ from tests.hook_chain import load, run_script
 MALFORMED = "{}"
 
 
-def _case(tool: str, cwd: Path, agent: str = "repo-coder", **fields: str) -> dict[str, object]:
+def _case(tool: str, cwd: Path, agent: str = "coder", **fields: str) -> dict[str, object]:
     return {"tool_name": tool, "tool_input": dict(fields), "cwd": str(cwd), "agent_type": agent}
 
 
@@ -80,8 +80,8 @@ def test_root_writes_standalone_matches_imported(tmp_path: Path) -> None:
 
 
 def test_read_only_bash_standalone_matches_imported(tmp_path: Path) -> None:
-    allow = _case("Bash", tmp_path, "security-auditor", command="ls")
-    deny = _case("Bash", tmp_path, "security-auditor", command="rm x")
+    allow = _case("Bash", tmp_path, "auditor", command="ls")
+    deny = _case("Bash", tmp_path, "auditor", command="rm x")
     _check("read_only_bash", allow, deny, "--git", "read-only")
 
 

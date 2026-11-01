@@ -161,7 +161,7 @@ def main_warning(stdout: str) -> str:
 def append_handback(
     make_input: Callable[..., dict[str, Any]],
     message: str,
-    agent_type: str = "daedalus:security-auditor",
+    agent_type: str = "daedalus:auditor",
     **extra: Any,
 ) -> None:
     # W1.4: one auditor SubagentHandback appended through the hook writer.

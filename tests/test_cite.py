@@ -83,7 +83,7 @@ def test_a_pattern_that_looks_like_a_flag_is_a_pattern(tmp_path: Path) -> None:
 
 @pytest.mark.usefixtures("jail_fakes")
 class TestCoderAdmission:
-    # RCP, requirement 4: the plugin's own cite.py, a file in the unit worktree, for repo-coders.
+    # RCP, requirement 4: the plugin's own cite.py, a file in the unit worktree, for coders.
     def test_the_coder_runs_the_plugin_cite(self) -> None:
         for command in (
             f"python3 {CITE} {WT}/scripts/a.py check",
@@ -91,7 +91,7 @@ class TestCoderAdmission:
             f"python3 {CITE} {WT}/a.md '${{CLAUDE_PLUGIN_ROOT}}'",
             f"python3 {CITE} {WT}/scripts/a.py x | head",
         ):
-            assert decide(_b("repo-coder", command), CFG).allow, command
+            assert decide(_b("coder", command), CFG).allow, command
 
     def test_the_coder_cites_a_relative_file_after_cd(self, tmp_path: Path) -> None:
         repo, wt = _unit_repo(tmp_path / "repo")
@@ -99,8 +99,8 @@ class TestCoderAdmission:
             f"cd {wt} && python3 {CITE} scripts/a.py x",
             f"cd {wt}/scripts && python3 {CITE} a.py x",
         ):
-            assert decide(_cwd(_b("repo-coder", command), repo), CFG).allow, command
-        got = evaluate(HOOK, _cwd(_b("repo-coder", f"cd /tmp && python3 {CITE} a.py x"), repo))
+            assert decide(_cwd(_b("coder", command), repo), CFG).allow, command
+        got = evaluate(HOOK, _cwd(_b("coder", f"cd /tmp && python3 {CITE} a.py x"), repo))
         assert got == shell.R_INLINE
 
     @pytest.mark.parametrize(
@@ -121,13 +121,13 @@ class TestCoderAdmission:
         ],
     )
     def test_other_forms_are_refused(self, command: str) -> None:
-        assert evaluate(HOOK, _b("repo-coder", command)) == shell.R_INLINE, command
+        assert evaluate(HOOK, _b("coder", command)) == shell.R_INLINE, command
 
     def test_the_hygiene_check_still_judges_the_pattern(self) -> None:
-        got = evaluate(HOOK, _b("repo-coder", f'python3 {CITE} {WT}/a.py "$HOME"'))
+        got = evaluate(HOOK, _b("coder", f'python3 {CITE} {WT}/a.py "$HOME"'))
         assert got == shell.R_HYGIENE
 
-    @pytest.mark.parametrize("agent", ["charter-docs", "pr-train-conductor"])
+    @pytest.mark.parametrize("agent", ["charter-docs", "releaser"])
     def test_other_workers_are_refused(self, agent: str) -> None:
         got = evaluate(HOOK, _b(agent, f"python3 {CITE} {WT}/a.py x"))
         assert got == shell.R_INLINE

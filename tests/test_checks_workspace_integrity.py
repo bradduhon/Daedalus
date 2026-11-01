@@ -28,7 +28,7 @@ HOOK = "workspace_integrity"
 class TestRegressionToolsAndCwd:
     @pytest.mark.parametrize("cwd", ["", "relative/repo"])
     def test_missing_cwd_fails_closed(self, cwd: str) -> None:
-        for agent in ("repo-coder",):
+        for agent in ("coder",):
             for hook_input in (_b(agent, "git status"), _w(agent, f"{CWD}/src/a.py")):
                 hook_input["cwd"] = cwd
                 d = decide(hook_input, CFG)
@@ -39,8 +39,8 @@ class TestRound3DotGitWrites:
     @pytest.mark.parametrize(
         ("agent", "path"),
         [
-            ("repo-coder", f"{CWD}/src/../.git/config"),
-            ("repo-coder", f"{CWD}/src/.git/config"),
+            ("coder", f"{CWD}/src/../.git/config"),
+            ("coder", f"{CWD}/src/.git/config"),
             ("charter-docs", "/work/Charter/.git/config"),
             ("contract-spec", f"{CWD}/contracts/.git/x"),
         ],
@@ -55,7 +55,7 @@ class TestFinalDataDir:
     def _env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", DATA)
 
-    @pytest.mark.parametrize("agent", ["repo-coder", "charter-docs", "contract-spec"])
+    @pytest.mark.parametrize("agent", ["coder", "charter-docs", "contract-spec"])
     @pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
     def test_tool_writes_block_for_every_agent(self, agent: str | None, tool: str) -> None:
         d = decide(_w(agent, f"{DATA}/config.json", tool), CFG)
@@ -66,7 +66,7 @@ class TestProjectDataDir:
     # 0010: <repo>/.claude/daedalus is written by hooks only and never committed.
     P = f"{CWD}/.claude/daedalus"
 
-    @pytest.mark.parametrize("agent", ["repo-coder", "charter-docs", "contract-spec"])
+    @pytest.mark.parametrize("agent", ["coder", "charter-docs", "contract-spec"])
     @pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
     def test_tool_writes_block_for_every_agent(self, agent: str | None, tool: str) -> None:
         d = decide(_w(agent, f"{self.P}/config.json", tool), CFG)
@@ -81,22 +81,22 @@ class TestProjectDataDir:
             "tool_name": "Write",
             "tool_input": {"file_path": f"{repo_cwd}/.claude/daedalus/config.json"},
             "cwd": str(wt),
-            "agent_type": "repo-coder",
+            "agent_type": "coder",
         }
         assert not decide(hook_input, CFG).allow
 
 
 def test_workspace_integrity_judges_the_hook_alone() -> None:
-    assert evaluate(HOOK, _w("repo-coder", f"{CWD}/.git/config")) == jail.R_DOTGIT
-    assert evaluate(HOOK, _w("repo-coder", f"{CWD}/.claude/daedalus/x")) == jail.R_DATA_DIR
-    assert evaluate(HOOK, {**_b("repo-coder", "ls"), "cwd": "rel"}) == jail.R_NO_CWD
-    assert evaluate(HOOK, _w("repo-coder", f"{CWD}/.gitignore")) is None
+    assert evaluate(HOOK, _w("coder", f"{CWD}/.git/config")) == jail.R_DOTGIT
+    assert evaluate(HOOK, _w("coder", f"{CWD}/.claude/daedalus/x")) == jail.R_DATA_DIR
+    assert evaluate(HOOK, {**_b("coder", "ls"), "cwd": "rel"}) == jail.R_NO_CWD
+    assert evaluate(HOOK, _w("coder", f"{CWD}/.gitignore")) is None
     # issue 75: a Bash write into the data folder is refused here too.
-    assert evaluate(HOOK, _b("repo-coder", "touch .claude/daedalus/x")) == jail.R_DATA_DIR
-    assert evaluate(HOOK, _b("repo-coder", "ls .claude/daedalus")) is None
+    assert evaluate(HOOK, _b("coder", "touch .claude/daedalus/x")) == jail.R_DATA_DIR
+    assert evaluate(HOOK, _b("coder", "ls .claude/daedalus")) is None
 
 
-@pytest.mark.parametrize("agent", ["repo-coder", "security-auditor", "orchestrator"])
+@pytest.mark.parametrize("agent", ["coder", "auditor", "orchestrator"])
 @pytest.mark.parametrize(
     "command",
     [

@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 0135, D.5: doc-deriver and change-logger write only under the active document train's
+# 0135, D.5, 0190: a derived writer and the comparer write only under the active document train's
 # output_dir, and never to a source its frozen sources file lists.
 from __future__ import annotations
 

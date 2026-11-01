@@ -21,8 +21,11 @@ AGENTS_DIR = Path(__file__).resolve().parents[1] / "agents"
 def matrix(agents_dir: Path) -> str:
     rows = ["| Agent | Shape | Hooks |", "|---|---|---|"]
     for name, agent in sorted(agent_files.load_all(agents_dir).items()):
-        hooks = ", ".join(" ".join((hook.script, *hook.flags)) for hook in agent.hooks)
-        rows.append(f"| {name} | {agent.shape} | {hooks} |")
+        # 0190: one row per mode, so each row is the whole chain that mode runs.
+        for mode, chain in agent.chains().items():
+            hooks = ", ".join(" ".join((hook.script, *hook.flags)) for hook in chain)
+            label = f"{name} ({mode})" if mode else name
+            rows.append(f"| {label} | {agent.shape} | {hooks} |")
     return "\n".join(rows) + "\n"
 
 

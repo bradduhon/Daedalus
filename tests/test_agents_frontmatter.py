@@ -16,9 +16,9 @@ from tests.conftest import REPO_ROOT
 
 AGENTS = REPO_ROOT / "agents"
 EXPECTED_MODEL = {
-    "repo-coder": "opus",
-    "security-auditor": "opus",
-    "pr-train-conductor": "opus",
+    "coder": "opus",
+    "auditor": "opus",
+    "releaser": "opus",
     "contract-spec": "sonnet",
     "charter-docs": "sonnet",
     "framework-specialist": "sonnet",
@@ -29,18 +29,17 @@ EXPECTED_MODEL = {
     "verifier": "opus",
     "dependency-auditor": "sonnet",
     "terraform-reviewer": "sonnet",
-    "docs-writer": "opus",
-    "doc-deriver": "opus",
-    "change-logger": "opus",
+    "writer": "opus",
+    "comparer": "opus",
 }
 # 0089: phase affinities guide the session's choice of agent; they never gate a phase.
 EXPECTED_PHASES = {
-    "repo-coder": ("implementation",),
-    "security-auditor": ("audit",),
+    "coder": ("implementation",),
+    "auditor": ("audit",),
     "contract-spec": ("clarification", "plan"),
     "standards-rules-specialist": ("clarification", "plan"),
     "charter-docs": ("clarification", "commit", "release"),
-    "pr-train-conductor": ("commit", "release"),
+    "releaser": ("commit", "release"),
     "framework-specialist": ("clarification", "audit"),
     "web-researcher": ("context",),
     "planner": ("clarification", "plan"),
@@ -48,9 +47,8 @@ EXPECTED_PHASES = {
     "verifier": ("implementation",),
     "dependency-auditor": ("audit",),
     "terraform-reviewer": ("audit",),
-    "docs-writer": ("audit",),
-    "doc-deriver": ("implementation",),
-    "change-logger": ("implementation",),
+    "writer": ("implementation", "audit"),
+    "comparer": ("implementation",),
 }
 # 0060: the orchestrator alone dispatches; the dispatch hook refuses a Task call by name.
 DISPATCHER_TOOLS = {"orchestrator": {"Agent", "SendMessage"}}
@@ -212,10 +210,10 @@ def test_frontmatter_matches_rulings(name: str) -> None:
     assert not alias & disallowed, f"{path}: Task disallowed removes the granted Agent tool"
 
 
-def test_repo_coder_works_in_the_train_made_worktree() -> None:
+def test_coder_works_in_the_train_made_worktree() -> None:
     # 0022: the Build Train makes the worktree; Claude Code isolation is off.
-    assert "isolation" not in frontmatter(AGENTS / "repo-coder.md")
-    text = (AGENTS / "repo-coder.md").read_text()
+    assert "isolation" not in frontmatter(AGENTS / "coder.md")
+    text = (AGENTS / "coder.md").read_text()
     assert "`Worktree: <path>`" in text
     assert '`git -C <path> add -A && git -C <path> commit -m "WIP: yield"`' in text
     assert "`git add -A && git commit" not in text
@@ -223,14 +221,14 @@ def test_repo_coder_works_in_the_train_made_worktree() -> None:
     assert "Every file path and every git pathspec you use is absolute" in text
 
 
-def test_repo_coder_reads_the_packets_by_hash() -> None:
+def test_coder_reads_the_packets_by_hash() -> None:
     # 0083: the brief names both packet files with their sha256; COMPLETE echoes 12 hex of each.
-    text = " ".join((AGENTS / "repo-coder.md").read_text().split())
+    text = " ".join((AGENTS / "coder.md").read_text().split())
     assert "`Contract: <path> sha256=<hex>`" in text
     assert "`Standards: <path> sha256=<hex>`" in text
     assert "refuse to start when a hash does not match" in text
     assert "the injected Locked Contract Packet" not in text
-    complete = load(AGENTS / "repo-coder.md").status_lines[-1]
+    complete = load(AGENTS / "coder.md").status_lines[-1]
     assert complete.endswith(" contract=<12 hex> standards=<12 hex>")
     # pin C1 -> C5: two optional fields may trail the standards hash, in this order.
     item = text.split("## Status contract", 1)[1].split("- `[STATUS: COMPLETE]", 1)[1]
@@ -239,9 +237,9 @@ def test_repo_coder_reads_the_packets_by_hash() -> None:
     assert "and always ending with ` turns=<n>` (item 15)" in item
 
 
-def test_repo_coder_runs_the_corpus_and_the_audit_tests() -> None:
+def test_coder_runs_the_corpus_and_the_audit_tests() -> None:
     # spec 3.2, 3.3: the corpus rule for check changes, the audit test run on a fix branch.
-    text = " ".join((AGENTS / "repo-coder.md").read_text().split())
+    text = " ".join((AGENTS / "coder.md").read_text().split())
     for path in ("`scripts/checks/`", "`scripts/lib/jail.py`", "`scripts/lib/shell.py`"):
         assert path in text, path
     assert "`scripts/enforce_agent_jail.py`" in text
@@ -251,9 +249,9 @@ def test_repo_coder_runs_the_corpus_and_the_audit_tests() -> None:
     assert "`pytest --basetemp` is refused" in text
 
 
-def test_repo_coder_yields_compliance_before_sensitive_code() -> None:
+def test_coder_yields_compliance_before_sensitive_code() -> None:
     # 0024: the compliance yield is expected before sensitive code, not only when blocked.
-    text = (AGENTS / "repo-coder.md").read_text()
+    text = (AGENTS / "coder.md").read_text()
     raw = text.split("Before writing code that touches", 1)[1].split("\n\n", 1)[0]
     paragraph = " ".join(raw.split())
     for topic in ("authentication", "IAM policy", "key material", "logging of request data"):
@@ -264,9 +262,9 @@ def test_repo_coder_yields_compliance_before_sensitive_code() -> None:
     assert "even when you are not blocked" in paragraph
 
 
-def test_repo_coder_carries_the_code_hygiene_rule() -> None:
+def test_coder_carries_the_code_hygiene_rule() -> None:
     # 0036: reuse before writing is the coder's standing method, with the security exception.
-    text = " ".join((AGENTS / "repo-coder.md").read_text().split())
+    text = " ".join((AGENTS / "coder.md").read_text().split())
     assert "Reuse before writing." in text
     assert (
         "The one exception is security: never share or reuse code when doing so widens a"
@@ -294,8 +292,8 @@ def test_repo_coder_carries_the_code_hygiene_rule() -> None:
         "End the COMPLETE line with ` turns=<n>`, the turns this unit took",
     ],
 )
-def test_repo_coder_code_hygiene_carries_the_test_reuse_and_turn_rules(rule: str) -> None:
-    text = (AGENTS / "repo-coder.md").read_text()
+def test_coder_code_hygiene_carries_the_test_reuse_and_turn_rules(rule: str) -> None:
+    text = (AGENTS / "coder.md").read_text()
     hygiene = " ".join(text.split("## Code hygiene", 1)[1].split("\n## ", 1)[0].split())
     assert rule in hygiene
 
@@ -331,9 +329,7 @@ def test_every_persona_forbids_dashes(name: str) -> None:
     assert "U+2014" in text
 
 
-@pytest.mark.parametrize(
-    "name", ["repo-coder", "charter-docs", "pr-train-conductor", "docs-writer"]
-)
+@pytest.mark.parametrize("name", ["coder", "charter-docs", "releaser", "writer"])
 def test_committing_personas_forbid_attribution_trailers(name: str) -> None:
     text = (AGENTS / f"{name}.md").read_text()
     assert "Commit messages carry no Co-Authored-By or other attribution trailer." in text
@@ -432,14 +428,14 @@ def test_old_specialist_agents_are_gone() -> None:
 
 def test_conductor_lists_the_git_reads_the_jail_allows() -> None:
     # N9: matches TestLiveRunGrammar in tests/test_checks_git_grammar.py.
-    text = (AGENTS / "pr-train-conductor.md").read_text()
+    text = (AGENTS / "releaser.md").read_text()
     for read in ("`git status`", "`git log`", "`git diff`", "`git branch`"):
         assert read in text, read
     assert "`git rev-parse --abbrev-ref HEAD`" in text
     assert "refuses `git remote`, `git branch -vv`, and `@{u}`" in text
 
 
-AUDITOR = AGENTS / "security-auditor.md"
+AUDITOR = AGENTS / "auditor.md"
 AUDITOR_CLASSES = (
     "secrets",
     "auth weakening",
@@ -620,7 +616,7 @@ def test_auditor_grep_commands_pass_the_jail(monkeypatch: pytest.MonkeyPatch) ->
     for command in commands:
         concrete = command.replace("<diff base>", "daedalus/t1").replace("<branch>", "unit-a")
         payload: dict[str, object] = {
-            "agent_type": "security-auditor",
+            "agent_type": "auditor",
             "tool_name": "Bash",
             "tool_input": {"command": concrete},
             "cwd": "/work/repo",

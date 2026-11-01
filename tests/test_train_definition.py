@@ -275,7 +275,7 @@ def test_audit_writer_still_touches_none() -> None:
     from lib import agent_files
     from lib.train_definition import touch_grants
 
-    auditor = agent_files.load(REPO_ROOT / "agents" / "security-auditor.md")
+    auditor = agent_files.load(REPO_ROOT / "agents" / "auditor.md")
     assert touch_grants(auditor) == frozenset({"audit", "none"})
     spec = agent_files.load(REPO_ROOT / "agents" / "contract-spec.md")
     assert "none" not in touch_grants(spec)

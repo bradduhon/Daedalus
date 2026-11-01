@@ -21,7 +21,7 @@ from tests.payloads import _b, _cred, _w
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "credential_paths"
-CREDENTIAL_AGENTS = ["repo-coder", "security-auditor"]
+CREDENTIAL_AGENTS = ["coder", "auditor"]
 
 
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
@@ -97,9 +97,9 @@ def _bash_in(repo: Path, agent: str, command: str) -> dict[str, object]:
 def test_reply_key_wildcards_and_folder_reads_are_refused(tmp_path: Path, command: str) -> None:
     # SC-12: a read-only agent cannot reach the reply key by a wildcard or a folder read.
     repo = _key_repo(tmp_path)
-    reason = evaluate(HOOK, _bash_in(repo, "security-auditor", command))
+    reason = evaluate(HOOK, _bash_in(repo, "auditor", command))
     assert reason is not None and "Next:" in reason, command
-    d = decide(_bash_in(repo, "security-auditor", command), CFG)
+    d = decide(_bash_in(repo, "auditor", command), CFG)
     assert not d.allow, command
 
 
@@ -107,11 +107,11 @@ def test_grep_tool_on_the_data_folder_is_refused(tmp_path: Path) -> None:
     # SC-12: the Grep tool rooted at or inside .claude reads the key, so it is refused.
     repo = _key_repo(tmp_path)
     for path in (repo / ".claude" / "daedalus", repo / ".claude"):
-        hook_input = _cred("security-auditor", "Grep", cwd=str(repo), pattern=".", path=str(path))
+        hook_input = _cred("auditor", "Grep", cwd=str(repo), pattern=".", path=str(path))
         d = decide(hook_input, CFG)
         assert not d.allow and "contains the train's reply key. Next:" in str(d.reason)
     config = repo / ".claude" / "daedalus" / "config.json"
-    read = _cred("security-auditor", "Read", cwd=str(repo), file_path=str(config))
+    read = _cred("auditor", "Read", cwd=str(repo), file_path=str(config))
     assert decide(read, CFG).allow
 
 
@@ -132,14 +132,14 @@ def test_grep_glob_that_overrides_the_marker_is_refused(tmp_path: Path, glob: st
     for path in (None, str(repo)):
         tool_input = {"pattern": ".", "glob": glob} | ({"path": path} if path else {})
         case = {"tool_name": "Grep", "tool_input": tool_input, "cwd": str(repo)}
-        d = decide({**case, "agent_type": "security-auditor"}, CFG)
+        d = decide({**case, "agent_type": "auditor"}, CFG)
         assert not d.allow and "contains the train's reply key. Next:" in str(d.reason), glob
 
 
 def test_grep_glob_beside_the_reply_key_is_allowed(tmp_path: Path) -> None:
     repo = _key_repo(tmp_path)
     case = {"tool_name": "Grep", "tool_input": {"pattern": ".", "glob": "*.py"}}
-    assert evaluate(HOOK, {**case, "cwd": str(repo), "agent_type": "security-auditor"}) is None
+    assert evaluate(HOOK, {**case, "cwd": str(repo), "agent_type": "auditor"}) is None
 
 
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
@@ -262,7 +262,7 @@ BRACE_CLASS_TABLE = [
 def test_brace_class_table(cred_home: Path, form: str, template: str, refused: bool) -> None:
     command = template.format(home=cred_home)
     case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
-    reason = evaluate(HOOK, {**case, "agent_type": "security-auditor"})
+    reason = evaluate(HOOK, {**case, "agent_type": "auditor"})
     assert (reason is not None) == refused, (form, command, reason)
 
 
@@ -303,7 +303,7 @@ def test_grep_sequence_glob_naming_the_reply_key_is_refused(tmp_path: Path) -> N
     repo = _key_repo(tmp_path)
     tool_input = {"pattern": ".", "glob": "reply-hmac.{k..k}ey"}
     case = {"tool_name": "Grep", "tool_input": tool_input, "cwd": str(repo)}
-    reason = evaluate(HOOK, {**case, "agent_type": "security-auditor"})
+    reason = evaluate(HOOK, {**case, "agent_type": "auditor"})
     assert reason is not None and "contains the train's reply key" in reason
 
 
@@ -311,10 +311,10 @@ def test_dotglob_spellings_open_a_wildcard_into_a_store(cred_home: Path) -> None
     # issue 53: bash and zsh spellings alike; without one, * skips the dot folder.
     for command in ("cat ~/*/id_ed25519(D)", "setopt GLOB_DOTS && cat ~/*/id_ed25519"):
         case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
-        reason = evaluate(HOOK, {**case, "agent_type": "security-auditor"})
+        reason = evaluate(HOOK, {**case, "agent_type": "auditor"})
         assert reason is not None and "is a credential path" in reason, command
     case = {"tool_name": "Bash", "tool_input": {"command": "cat ~/*/id_ed25519"}, "cwd": CWD}
-    assert evaluate(HOOK, {**case, "agent_type": "security-auditor"}) is None
+    assert evaluate(HOOK, {**case, "agent_type": "auditor"}) is None
 
 
 @pytest.mark.parametrize("glob", ["{reply-hmac.key,x}", "*.{md,key}", "{reply-hmac.key}"])
@@ -322,21 +322,21 @@ def test_grep_brace_glob_naming_the_reply_key_is_refused(tmp_path: Path, glob: s
     # issue 53: each brace alternative is its own glob.
     repo = _key_repo(tmp_path)
     case = {"tool_name": "Grep", "tool_input": {"pattern": ".", "glob": glob}, "cwd": str(repo)}
-    reason = evaluate(HOOK, {**case, "agent_type": "security-auditor"})
+    reason = evaluate(HOOK, {**case, "agent_type": "auditor"})
     assert reason is not None and "contains the train's reply key" in reason, glob
 
 
 def test_grep_brace_glob_beside_the_reply_key_is_allowed(tmp_path: Path) -> None:
     repo = _key_repo(tmp_path)
     case = {"tool_name": "Grep", "tool_input": {"pattern": ".", "glob": "*.{py,md}"}}
-    assert evaluate(HOOK, {**case, "cwd": str(repo), "agent_type": "security-auditor"}) is None
+    assert evaluate(HOOK, {**case, "cwd": str(repo), "agent_type": "auditor"}) is None
 
 
 def test_double_star_into_a_credential_store_refuses_without_dotglob(cred_home: Path) -> None:
     # spec 8: ** over a home store refuses before the dot check; only the reply key relaxes it.
     for command in (f"cat {cred_home}/**/credentials", "cat ~/**/id_ed25519"):
         case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
-        reason = evaluate(HOOK, {**case, "agent_type": "security-auditor"})
+        reason = evaluate(HOOK, {**case, "agent_type": "auditor"})
         assert reason is not None and "is a credential path" in reason, command
 
 
@@ -356,7 +356,7 @@ def test_project_reads_beside_the_reply_key_are_allowed(
 ) -> None:
     # SC-12: the refusal stays on the key; ordinary searches of the project still run.
     repo = _key_repo(tmp_path)
-    case = {**hook_input, "cwd": str(repo), "agent_type": "security-auditor"}
+    case = {**hook_input, "cwd": str(repo), "agent_type": "auditor"}
     assert evaluate(HOOK, case) is None, hook_input
 
 
@@ -388,7 +388,7 @@ def test_grep_regex_and_project_globs_are_allowed(cred_home: Path, agent: str | 
         assert decide(hook_input, CFG).allow, hook_input
 
 
-@pytest.mark.parametrize("agent", ["repo-coder"])
+@pytest.mark.parametrize("agent", ["coder"])
 @pytest.mark.parametrize(
     "command",
     [
@@ -435,10 +435,10 @@ def test_symlink_into_a_credential_store_is_refused(cred_home: Path) -> None:
     (cred_home / ".ssh").mkdir()
     (cred_home / "keys").symlink_to(cred_home / ".ssh")
     path = str(cred_home / "keys" / "id_ed25519")
-    assert decide(_cred("repo-coder", "Read", file_path=path), CFG).reason == _refusal(path)
+    assert decide(_cred("coder", "Read", file_path=path), CFG).reason == _refusal(path)
 
 
-@pytest.mark.parametrize("agent", ["repo-coder"])
+@pytest.mark.parametrize("agent", ["coder"])
 @pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
 def test_write_into_a_credential_store_is_refused(
     cred_home: Path, agent: str | None, tool: str
@@ -467,7 +467,7 @@ def test_grep_rooted_at_home_or_an_ancestor_is_refused(cred_home: Path, agent: s
     assert decide(ok, CFG).allow
 
 
-@pytest.mark.parametrize("agent", ["security-auditor"])
+@pytest.mark.parametrize("agent", ["auditor"])
 @pytest.mark.parametrize(
     "command",
     [
@@ -488,9 +488,9 @@ def test_issue30_unmodelled_copiers_reading_home_are_refused(
 
 def test_credential_paths_judges_the_hook_alone(cred_home: Path) -> None:
     key = str(cred_home / ".ssh" / "id_ed25519")
-    assert evaluate(HOOK, _cred("repo-coder", "Read", file_path=key)) == _refusal(key)
-    assert evaluate(HOOK, _cred("repo-coder", "Read", file_path=f"{CWD}/a.py")) is None
-    assert "credential path" in str(evaluate(HOOK, _b("repo-coder", "cat ~/.aws/config")))
+    assert evaluate(HOOK, _cred("coder", "Read", file_path=key)) == _refusal(key)
+    assert evaluate(HOOK, _cred("coder", "Read", file_path=f"{CWD}/a.py")) is None
+    assert "credential path" in str(evaluate(HOOK, _b("coder", "cat ~/.aws/config")))
 
 
 def test_credential_paths_fixture_decisions(cred_home: Path) -> None:

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import freeze_sources
 import pytest
-from lib import agent_files, router
+from lib import agent_files, router, writer_mode
 from lib.agent_files import Hook
 
 from tests.conftest import REPO_ROOT, write_folder_run, write_train_marker
@@ -19,8 +19,10 @@ from tests.conftest import REPO_ROOT, write_folder_run, write_train_marker
 DOCUMENT = REPO_ROOT / "skills" / "document" / "SKILL.md"
 DOC_TRAIN = REPO_ROOT / "skills" / "doc-train" / "SKILL.md"
 ROUND = REPO_ROOT / "skills" / "round" / "SKILL.md"
-DERIVER = REPO_ROOT / "agents" / "doc-deriver.md"
-LOGGER = REPO_ROOT / "agents" / "change-logger.md"
+WRITER = REPO_ROOT / "agents" / "writer.md"
+# 0190: the derived kind skill holds the method the doc-deriving agent body held.
+DERIVER = REPO_ROOT / "skills" / "document" / "kinds" / "derived" / "SKILL.md"
+LOGGER = REPO_ROOT / "agents" / "comparer.md"
 STAGES = ("Preconditions", "Freeze", "Derive", "Verify", "Change gate", "Docs writer", "Present")
 FIRST_STEP = 9
 _AGENT_REF = re.compile(r"Agent\(`([a-z-]+)`\)")
@@ -68,14 +70,13 @@ def test_recipe_dispatches_only_catalog_agents() -> None:
     names = set(_AGENT_REF.findall(_derived_raw()))
     assert names == {
         "standards-rules-specialist",
-        "doc-deriver",
+        "writer",
         "verifier",
-        "change-logger",
-        "docs-writer",
+        "comparer",
     }
     for name in names:
         assert (REPO_ROOT / "agents" / f"{name}.md").is_file(), name
-    assert "Agent(`docs-writer`)" in _stage("Docs writer")
+    assert "Agent(`writer`)" in _stage("Docs writer")
 
 
 def test_recipe_names_the_priorities_section_for_every_agent() -> None:
@@ -133,23 +134,20 @@ def test_recipe_never_pushes_or_stages() -> None:
     assert not re.search(r"`git (add|commit|push) ", text)
 
 
-def _hooks(path: Path) -> tuple[Hook, ...]:
-    return agent_files.load(path).hooks
-
-
-@pytest.mark.parametrize("path", [DERIVER, LOGGER], ids=lambda p: p.stem)
-def test_document_agents_read_only_and_write_only_output(path: Path) -> None:
+@pytest.mark.parametrize(("path", "mode"), [(WRITER, "derived"), (LOGGER, "")], ids=["w", "c"])
+def test_document_agents_read_only_and_write_only_output(path: Path, mode: str) -> None:
     # D.5: the read-only Bash check and the document outputs check, git and gh never granted.
     agent = agent_files.load(path)
     assert agent.shape == "producer" and agent.model == "opus"
-    assert Hook("read_only_bash", ()) in agent.hooks
-    assert Hook("doc_outputs", ()) in agent.hooks
-    assert Hook("git_grammar", ()) in agent.hooks
-    assert not {"unit_writes", "root_writes", "gh_classes"} & {h.script for h in agent.hooks}
+    hooks = agent.chains()[mode]
+    assert Hook("read_only_bash", ()) in hooks
+    assert Hook("doc_outputs", ()) in hooks
+    assert Hook("git_grammar", ()) in hooks
+    assert not {"unit_writes", "root_writes", "gh_classes"} & {h.script for h in hooks}
     assert "Write" in agent.tools and not {"WebFetch", "WebSearch"} & agent.tools
 
 
-def test_change_logger_diffs_two_baselines() -> None:
+def test_comparer_diffs_two_baselines() -> None:
     # 0136 item 7: no deriver, two baseline aliases, frozen with --baselines-only.
     text = _text(LOGGER)
     assert "`freeze_sources.py --baselines-only`" in text
@@ -182,11 +180,18 @@ def doc_repo(git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _call(repo: Path, agent: str, tool: str, **fields: str) -> tuple[bool, str | None, str]:
     payload = {"agent_type": f"daedalus:{agent}", "tool_name": tool, "tool_input": fields}
-    return router.route({**payload, "cwd": str(repo)}, REPO_ROOT)
+    return router.route({**payload, "cwd": str(repo), "agent_id": f"{agent}-1"}, REPO_ROOT)
 
 
-@pytest.mark.parametrize("agent", ["doc-deriver", "change-logger"])
+def _dispatched(repo: Path, agent: str) -> None:
+    # 0190: a writer's calls route only after its dispatch recorded the derived kind.
+    if agent == "writer":
+        assert writer_mode.record_dispatch(repo, TRAIN, writer_mode.DERIVED) is None
+
+
+@pytest.mark.parametrize("agent", ["writer", "comparer"])
 def test_routed_document_agent_writes_only_in_the_output_folder(doc_repo: Path, agent: str) -> None:
+    _dispatched(doc_repo, agent)
     inside = str(doc_repo / "private" / "out" / "doc.md")
     assert _call(doc_repo, agent, "Write", file_path=inside, content="x") == (True, None, "")
     allow, _, hook = _call(doc_repo, agent, "Write", file_path=str(doc_repo / "a.md"), content="x")
@@ -198,7 +203,7 @@ def test_routed_document_agent_writes_only_in_the_output_folder(doc_repo: Path, 
     assert _call(doc_repo, agent, "Bash", command=f"wc -l {source}")[0]
 
 
-@pytest.mark.parametrize("agent", ["doc-deriver", "change-logger"])
+@pytest.mark.parametrize("agent", ["writer", "comparer"])
 def test_document_agents_write_into_a_folder_runs_output_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str
 ) -> None:
@@ -211,6 +216,7 @@ def test_document_agents_write_into_a_folder_runs_output_folder(
     monkeypatch.chdir(root)
     source = ["--source", "A=baseline:base.sent-2026-10-01.md"]
     assert freeze_sources.main(["--train", TRAIN, "--output-dir", str(out), *source]) == 0
+    _dispatched(root, agent)
     assert _call(root, agent, "Write", file_path=f"{out}/doc.md", content="x") == (True, None, "")
     # (c) a path outside output_dir and (d) a link under it that resolves outside.
     outside = tmp_path.resolve() / "outside"

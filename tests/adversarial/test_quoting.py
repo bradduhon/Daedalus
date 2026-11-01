@@ -99,16 +99,16 @@ def test_quoted_claude_word_is_denied(agent: str, command: str) -> None:
 
 @pytest.mark.parametrize("command", CODER_WORDS)
 def test_quoted_network_or_push_word_is_denied_to_the_coder(command: str) -> None:
-    assert_denied(_b("repo-coder", command))
+    assert_denied(_b("coder", command))
 
 
 @pytest.mark.parametrize("command", NESTED_WORDS[:5])
 def test_quoted_claude_word_names_the_nested_session(command: str) -> None:
-    assert_denied(_b("repo-coder", command), NESTED)
+    assert_denied(_b("coder", command), NESTED)
 
 
 # prepush2-2026-10-27 items 1 and 2: the three read-only agents that search with rg.
-RG_READERS = ("security-auditor", "verifier", "framework-specialist")
+RG_READERS = ("auditor", "verifier", "framework-specialist")
 
 
 @pytest.mark.parametrize("agent", RG_READERS)

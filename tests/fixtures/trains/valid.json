@@ -37,7 +37,7 @@
     {
       "id": "code",
       "gate": "build",
-      "agent": "repo-coder",
+      "agent": "coder",
       "repeat": "per-unit",
       "parallel": true,
       "scope": {

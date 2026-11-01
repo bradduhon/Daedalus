@@ -33,12 +33,12 @@ from tests.test_operator_gates import GATE_KEY, exempt_round
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "git_push"
-C = "pr-train-conductor"
+C = "releaser"
 
 
-def test_bare_repo_coder_unchanged() -> None:
-    assert decide(_b("repo-coder", "pytest -q"), CFG).allow
-    assert not decide(_b("repo-coder", "git push origin x"), CFG).allow
+def test_bare_coder_unchanged() -> None:
+    assert decide(_b("coder", "pytest -q"), CFG).allow
+    assert not decide(_b("coder", "git push origin x"), CFG).allow
 
 
 class TestRound3ConductorPushGrammar:
@@ -51,7 +51,7 @@ class TestRound3ConductorPushGrammar:
         ],
     )
     def test_allowed(self, command: str) -> None:
-        assert decide(_b("pr-train-conductor", command), CFG).allow
+        assert decide(_b("releaser", command), CFG).allow
 
     @pytest.mark.parametrize(
         "command",
@@ -74,11 +74,11 @@ class TestRound3ConductorPushGrammar:
         ],
     )
     def test_blocked(self, command: str) -> None:
-        d = decide(_b("pr-train-conductor", command), CFG)
+        d = decide(_b("releaser", command), CFG)
         assert not d.allow and "Next:" in d.reason, command
 
     def test_grammar_reason(self) -> None:
-        d = decide(_b("pr-train-conductor", "git push origin feat/x extra"), CFG)
+        d = decide(_b("releaser", "git push origin feat/x extra"), CFG)
         assert d.reason and "one named branch to origin" in d.reason
 
 
@@ -94,14 +94,14 @@ class TestFinalRemotePlumbing:
             "git credential-cache exit",
         ],
     )
-    def test_repo_coder_blocks(self, command: str) -> None:
-        assert not decide(_b("repo-coder", command), CFG).allow, command
+    def test_coder_blocks(self, command: str) -> None:
+        assert not decide(_b("coder", command), CFG).allow, command
 
 
 def test_git_push_judges_the_hook_alone() -> None:
-    assert evaluate(HOOK, _b("repo-coder", "git fetch")) == jail.R_REMOTE_GIT
-    assert evaluate(HOOK, _b("repo-coder", "git stash push -m x")) is None
-    assert evaluate(HOOK, _b("repo-coder", "find . -exec git push {} +")) == jail.R_REMOTE_GIT
+    assert evaluate(HOOK, _b("coder", "git fetch")) == jail.R_REMOTE_GIT
+    assert evaluate(HOOK, _b("coder", "git stash push -m x")) is None
+    assert evaluate(HOOK, _b("coder", "find . -exec git push {} +")) == jail.R_REMOTE_GIT
     assert evaluate(HOOK, _b(C, f"git push origin {TRAIN_BRANCH}"), "--conductor") is None
     assert evaluate(HOOK, _b(C, "git push origin x y"), "--conductor") == jail.R_CONDUCTOR_PUSH
     assert evaluate(HOOK, _b(C, "git push origin feat/x")) == jail.R_REMOTE_GIT

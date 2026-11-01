@@ -36,7 +36,7 @@ def test_a_dispatched_unit_runs_and_its_stacked_unit_waits(repo: Path, plugin: P
     outcome = train_runner.progress(repo)
     assert outcome.code == 0, outcome.lines
     assert _unit_lines(outcome) == [
-        "A1 first piece: running (repo-coder)",
+        "A1 first piece: running (coder)",
         "A2 second piece: waiting on A1",
         "a3: queued",
     ]
@@ -52,7 +52,7 @@ def test_a_retired_unit_is_done_and_the_warm_unit_runs(repo: Path, plugin: Path)
     assert outcome.code == 0, outcome.lines
     assert _unit_lines(outcome) == [
         "A1 first piece: done",
-        "A2 second piece: running (repo-coder)",
+        "A2 second piece: running (coder)",
         "a3: queued",
     ]
     text = "\n".join(outcome.lines)
@@ -85,9 +85,9 @@ def test_a_finished_mark_wins_over_a_runner_dispatch_record(repo: Path, plugin: 
     # spec 4: _done reads finished before the dispatch status and before retired_to.
     train = _hand_driven(repo, plugin)
     name = f"{train}-a1"
-    dispatch = {"unit": name, "agent": "repo-coder", "status": train_runner.DISPATCHED}
+    dispatch = {"unit": name, "agent": "coder", "status": train_runner.DISPATCHED}
     train_state.update(repo, train, dispatches=[dispatch])
-    assert _unit_lines(train_runner.progress(repo))[0] == "A1 first piece: running (repo-coder)"
+    assert _unit_lines(train_runner.progress(repo))[0] == "A1 first piece: running (coder)"
     assert unit_binding.mark_finished(repo, train, name) is None
     assert _unit_lines(train_runner.progress(repo))[0] == "A1 first piece: done"
 

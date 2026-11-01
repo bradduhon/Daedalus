@@ -56,7 +56,7 @@ def _code_stage(per_unit: bool = False, yield_route: str | None = None) -> dict[
     stage: dict[str, Any] = {
         "id": "code",
         "gate": "build",
-        "agent": "repo-coder",
+        "agent": "coder",
         "scope": {
             "told": "trains/t/code.md" if per_unit else "trains/t/solo.md",
             "touch": ["unit-src-tests"],
@@ -214,7 +214,7 @@ def _prompt(outcome: train_runner.Outcome) -> list[Path]:
 
 
 def _reply(
-    repo: Path, brief: Path, text: str, agent: str = "repo-coder", agent_id: str = "a1"
+    repo: Path, brief: Path, text: str, agent: str = "coder", agent_id: str = "a1"
 ) -> dict[str, Any]:
     train_runner.reply_path(brief).write_text(text, encoding="utf-8")
     return _agent_stop(repo, agent, text, agent_id)
@@ -321,7 +321,7 @@ def test_step_prints_dispatch_prompt_and_expect_for_an_agent_stage(
     train = str(_state(repo)["train_id"])
     brief = repo / "docs" / ".tmp" / "daedalus" / train / "briefs" / "code-1.md"
     assert outcome.lines[1:] == [
-        "Dispatch: repo-coder",
+        "Dispatch: coder",
         f"Prompt file: {brief}",
         "Expect: [STATUS: COMPLETE] or [STATUS: YIELD_CONTRACT]",
     ]
@@ -384,11 +384,11 @@ def test_check_reply_hash_mismatch_stops(repo: Path, plugin: Path) -> None:
     _write_train(plugin, [_code_stage()], ("repository",))
     _started(repo, plugin)
     (brief,) = _prompt(_step(repo, plugin))
-    _agent_stop(repo, "repo-coder", COMPLETE)
+    _agent_stop(repo, "coder", COMPLETE)
     train_runner.reply_path(brief).write_text(COMPLETE.replace("b", "c", 1))
     outcome = _check(repo, plugin, "code")
     assert outcome.code == 1
-    assert "does not match what repo-coder returned" in outcome.lines[0]
+    assert "does not match what coder returned" in outcome.lines[0]
     assert outcome.lines[-1].startswith("Next: the saved reply differs")
     assert _step(repo, plugin).code == 1
 
@@ -412,7 +412,7 @@ def test_check_reply_fails_closed_on_any_read_error(repo: Path, plugin: Path, da
         log.write_text(log.read_text().replace('"seq":2', '"seq":9', 1))
     outcome = train_runner.check_reply(repo, "code", plugin)
     assert outcome.code == 1, outcome.lines
-    assert "does not match what repo-coder returned" in outcome.lines[0]
+    assert "does not match what coder returned" in outcome.lines[0]
     assert _state(repo)["halted"]
 
 
@@ -443,17 +443,17 @@ def test_stage_printed_agent_is_allowed_through_the_gate(repo: Path, plugin: Pat
 
     _write_train(plugin, [_probe_stage(), _code_stage()], ("repository",))
     _started(repo, plugin)
-    call = _agent_call(repo, "daedalus:repo-coder")
+    call = _agent_call(repo, "daedalus:coder")
     tool_input = call["tool_input"]
     assert isinstance(tool_input, dict)
     before = _step_reason(tool_input, str(repo))
-    assert before is not None and "did not print a dispatch of repo-coder for stage probe" in before
+    assert before is not None and "did not print a dispatch of coder for stage probe" in before
     assert not decide(call, Config()).allow
     _step(repo, plugin)
     printed = _step(repo, plugin)
-    assert "Dispatch: repo-coder" in printed.lines
+    assert "Dispatch: coder" in printed.lines
     assert _step_reason(tool_input, str(repo)) is None
-    assert _step_reason({**tool_input, "subagent_type": "repo-coder"}, str(repo)) is not None
+    assert _step_reason({**tool_input, "subagent_type": "coder"}, str(repo)) is not None
 
 
 def test_consult_agent_of_the_current_gate_is_allowed(repo: Path, plugin: Path) -> None:
@@ -593,7 +593,7 @@ def test_parallel_stage_dispatches_up_to_the_configured_concurrency(
     briefs = _prompt(outcome)
     assert [b.name for b in briefs] == ["code-1.md", "code-2.md"]
     assert [line for line in outcome.lines if line.startswith("Dispatch: ")] == [
-        "Dispatch: repo-coder"
+        "Dispatch: coder"
     ] * 2
     train = str(_state(repo)["train_id"])
     unit_path = repo / ".claude" / "worktrees" / f"{train}-u1"
@@ -613,7 +613,7 @@ def test_next_queued_unit_starts_when_one_returns(repo: Path, plugin: Path) -> N
     assert checked.code == 0, checked.lines
     train = str(_state(repo)["train_id"])
     assert checked.lines[0] == f"stage code for unit {train}-u1: [STATUS: COMPLETE], pass."
-    assert checked.lines[1] == "Dispatch: repo-coder", "u3 builds on no unit, so it starts cold"
+    assert checked.lines[1] == "Dispatch: coder", "u3 builds on no unit, so it starts cold"
     (third,) = _prompt(checked)
     assert third.name == "code-3.md" and f"{train}-u3" in third.read_text()
     for n, brief in enumerate((briefs[1], third), start=2):
@@ -632,24 +632,24 @@ def test_stacked_unit_resumes_the_coder_that_built_its_base(repo: Path, plugin: 
     _units(repo, ["u1", "u2", "u3"], stacked={"u2": "u1", "u3": "u1"})
     first = _step(repo, plugin)
     (brief,) = _prompt(first)
-    assert "Dispatch: repo-coder" in first.lines, "no coder built a base yet, so u1 starts cold"
+    assert "Dispatch: coder" in first.lines, "no coder built a base yet, so u1 starts cold"
     _reply(repo, brief, COMPLETE, agent_id="coder-a")
     checked = _check(repo, plugin, "code")
     assert checked.code == 0, checked.lines
     train = str(_state(repo)["train_id"])
     u2_path = repo / ".claude" / "worktrees" / f"{train}-u2"
-    assert checked.lines[1] == f"Resume: repo-coder coder-a in worktree {u2_path}"
+    assert checked.lines[1] == f"Resume: coder coder-a in worktree {u2_path}"
     assert not [line for line in checked.lines if line.startswith("Dispatch: ")]
     (second,) = _prompt(checked)
     assert second.read_text().startswith(f"Worktree: {u2_path}\n")
     assert unit_binding.claim(repo, train, "coder-a", f"{train}-u2") is None
     assert _step(repo, plugin).code == 4, "u3 waits for coder-a, which is busy on u2"
-    refused = decide(_agent_call(repo, "daedalus:repo-coder"), Config())
-    assert not refused.allow, "a resume is no fresh Agent dispatch of repo-coder"
+    refused = decide(_agent_call(repo, "daedalus:coder"), Config())
+    assert not refused.allow, "a resume is no fresh Agent dispatch of coder"
     _reply(repo, second, COMPLETE + " u2", agent_id="coder-a")
     again = _check(repo, plugin, "code")
     u3_path = repo / ".claude" / "worktrees" / f"{train}-u3"
-    assert again.lines[1] == f"Resume: repo-coder coder-a in worktree {u3_path}"
+    assert again.lines[1] == f"Resume: coder coder-a in worktree {u3_path}"
 
 
 def test_concurrency_defaults_to_five_and_refuses_zero(
@@ -687,10 +687,10 @@ def test_check_reply_refuses_an_older_reply_when_a_newer_one_waits(
     _started(repo, plugin)
     (brief,) = _prompt(_step(repo, plugin))
     _reply(repo, brief, COMPLETE)
-    _agent_stop(repo, "repo-coder", "Second thoughts.\n[STATUS: YIELD_CONTRACT] which field?")
+    _agent_stop(repo, "coder", "Second thoughts.\n[STATUS: YIELD_CONTRACT] which field?")
     outcome = _check(repo, plugin, "code")
     assert outcome.code == 1, outcome.lines
-    assert "a newer unread repo-coder stop record" in outcome.lines[0]
+    assert "a newer unread coder stop record" in outcome.lines[0]
     assert _state(repo)["halted"]
 
 
@@ -701,12 +701,12 @@ def test_check_reply_refuses_more_replies_than_open_dispatches(repo: Path, plugi
     _units(repo, ["u1", "u2"])
     briefs = _prompt(_step(repo, plugin))
     assert len(briefs) == 2
-    _agent_stop(repo, "repo-coder", "A stray coder.\n[STATUS: COMPLETE] branch=x")
+    _agent_stop(repo, "coder", "A stray coder.\n[STATUS: COMPLETE] branch=x")
     _reply(repo, briefs[0], COMPLETE, agent_id="coder-1")
-    _agent_stop(repo, "repo-coder", COMPLETE + " u2", agent_id="coder-2")
+    _agent_stop(repo, "coder", COMPLETE + " u2", agent_id="coder-2")
     outcome = _check(repo, plugin, "code")
     assert outcome.code == 1, outcome.lines
-    assert "3 unread repo-coder stop records for 2 open dispatch(es)" in outcome.lines[0]
+    assert "3 unread coder stop records for 2 open dispatch(es)" in outcome.lines[0]
 
 
 def test_reply_value_that_reads_as_an_option_is_refused(repo: Path, plugin: Path) -> None:
@@ -813,7 +813,7 @@ def _audit_stage() -> dict[str, Any]:
     return {
         "id": "audit",
         "gate": "merge",
-        "agent": "security-auditor",
+        "agent": "auditor",
         "scope": {
             "told": "trains/t/solo.md",
             "touch": ["none"],
@@ -877,7 +877,7 @@ def test_progress_names_the_unit_a_waiting_unit_waits_on(repo: Path, plugin: Pat
     outcome = train_runner.progress(repo)
     assert outcome.lines == [
         "Phase: build (weight: not chosen)",
-        "A1 first piece: running (repo-coder)",
+        "A1 first piece: running (coder)",
         "A2 second piece: waiting on A1",
         "Choices: none",
         "Open: none",
@@ -1084,7 +1084,7 @@ def test_contract_reads_the_manifest_protected_paths(repo: Path, plugin: Path) -
         (
             "CONTROL_PATHS",
             plan_record.CONTROL_PATHS,
-            ("agents/security-auditor.md", "agents/orchestrator.md"),
+            ("agents/auditor.md", "agents/orchestrator.md"),
         ),
     ],
 )
@@ -1120,7 +1120,7 @@ def test_check_reply_records_an_approved_verdict_with_the_tip(repo: Path, plugin
     tip = _integration(repo)
     _step(repo, plugin)
     (brief,) = _prompt(_step(repo, plugin))
-    record = _reply(repo, brief, _verdict("APPROVED"), agent="security-auditor")
+    record = _reply(repo, brief, _verdict("APPROVED"), agent="auditor")
     outcome = _check(repo, plugin, "audit")
     assert outcome.code == 0, outcome.lines
     assert _state(repo)["verdict"] == {
@@ -1137,7 +1137,7 @@ def test_check_reply_records_a_rejected_verdict(repo: Path, plugin: Path) -> Non
     first_tip = _integration(repo)
     _step(repo, plugin)
     (brief,) = _prompt(_step(repo, plugin))
-    record = _reply(repo, brief, _verdict("REJECTED"), agent="security-auditor")
+    record = _reply(repo, brief, _verdict("REJECTED"), agent="auditor")
     routed = _check(repo, plugin, "audit")
     assert routed.code == 2, routed.lines
     assert _state(repo)["verdict"] == {
@@ -1155,7 +1155,7 @@ def test_check_reply_records_a_rejected_verdict(repo: Path, plugin: Path) -> Non
     assert moved != first_tip
     _step(repo, plugin)
     (again,) = _prompt(_step(repo, plugin))
-    second = _reply(repo, again, _verdict("APPROVED"), agent="security-auditor")
+    second = _reply(repo, again, _verdict("APPROVED"), agent="auditor")
     assert _check(repo, plugin, "audit").code == 0
     assert _state(repo)["verdict"] == {
         "status": "approved",
@@ -1206,7 +1206,7 @@ def test_dispatch_prompt_is_three_lines(repo: Path, plugin: Path) -> None:
     assert outcome.code == 0, outcome.lines
     (brief,) = _prompt(outcome)
     assert outcome.lines[1:] == [
-        "Dispatch: repo-coder",
+        "Dispatch: coder",
         f"Prompt file: {brief}",
         "Expect: [STATUS: COMPLETE] or [STATUS: YIELD_CONTRACT]",
     ]
@@ -1273,9 +1273,9 @@ def test_verdict_records_the_newest_matching_auditor_stop(
     _started(repo, plugin)
     _marked(repo)
     tip = _integration(repo)
-    _agent_stop(repo, "security-auditor", _verdict(status.upper(), tip), "aud-1")
-    newest = _agent_stop(repo, "security-auditor", _verdict(status.upper(), tip), "aud-1")
-    _agent_stop(repo, "repo-coder", COMPLETE, "coder-1")
+    _agent_stop(repo, "auditor", _verdict(status.upper(), tip), "aud-1")
+    newest = _agent_stop(repo, "auditor", _verdict(status.upper(), tip), "aud-1")
+    _agent_stop(repo, "coder", COMPLETE, "coder-1")
     # 67, 0133: a rejection always carries its finding list, so it prints the round record.
     listed = _findings(repo, 1, A) if status == "rejected" else None
     outcome = _verdict_call(repo, status, 1, tip=tip, findings=listed)
@@ -1292,7 +1292,7 @@ def test_verdict_with_no_auditor_stop_refuses(repo: Path, plugin: Path) -> None:
     _started(repo, plugin)
     _marked(repo)
     tip = _integration(repo)
-    _agent_stop(repo, "repo-coder", _verdict("APPROVED", tip), "coder-1")
+    _agent_stop(repo, "coder", _verdict("APPROVED", tip), "coder-1")
     refused = _verdict_call(repo, "approved", 1, tip=tip)
     assert refused.code == 1 and NEVER_TYPED in refused.lines[0]
     assert "verdict" not in _state(repo)
@@ -1303,7 +1303,7 @@ def test_verdict_with_the_other_verdict_refuses(repo: Path, plugin: Path) -> Non
     _started(repo, plugin)
     _marked(repo)
     tip = _integration(repo)
-    _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("REJECTED", tip), "aud-1")
     refused = _verdict_call(repo, "approved", 1, tip=tip)
     assert refused.code == 1 and NEVER_TYPED in refused.lines[0]
     assert "verdict" not in _state(repo)
@@ -1314,8 +1314,8 @@ def test_verdict_seq_must_name_the_matching_auditor_stop(repo: Path, plugin: Pat
     _started(repo, plugin)
     _marked(repo)
     tip = _integration(repo)
-    auditor = _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
-    coder = _agent_stop(repo, "repo-coder", _verdict("APPROVED", tip), "coder-1")
+    auditor = _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-1")
+    coder = _agent_stop(repo, "coder", _verdict("APPROVED", tip), "coder-1")
     refused = _verdict_call(repo, "approved", 1, int(coder["seq"]), tip)
     assert refused.code == 1 and NEVER_TYPED in refused.lines[0]
     assert "verdict" not in _state(repo)
@@ -1331,16 +1331,16 @@ def test_verdict_reads_only_the_newest_auditor_stop(repo: Path, plugin: Path) ->
     _started(repo, plugin)
     _marked(repo)
     tip = _integration(repo)
-    older = _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
-    _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
+    older = _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("REJECTED", tip), "aud-1")
     refused = _verdict_call(repo, "approved", 1, tip=tip)
     assert refused.code == 1 and NEVER_TYPED in refused.lines[0]
     assert "carries [VERDICT: REJECTED], not [VERDICT: APPROVED]" in refused.lines[0]
     stale = _verdict_call(repo, "approved", 1, int(older["seq"]), tip)
     assert stale.code == 1 and f"seq {older['seq']} is not the newest" in stale.lines[0]
     assert "verdict" not in _state(repo)
-    first = _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
-    again = _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
+    first = _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-1")
+    again = _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-1")
     older_approved = _verdict_call(repo, "approved", 1, int(first["seq"]), tip)
     assert older_approved.code == 1 and "is not the newest" in older_approved.lines[0]
     passed = _verdict_call(repo, "approved", 1, tip=tip)
@@ -1354,7 +1354,7 @@ def test_verdict_cli_finds_the_seq_itself(repo: Path, plugin: Path) -> None:
     _started(repo, plugin)
     _marked(repo)
     tip = _integration(repo)
-    stop = _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
+    stop = _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-1")
     argv = [sys.executable, str(SCRIPTS_DIR / "daedalus_train.py"), "verdict", "--repo"]
     argv += [str(repo), "--status", "approved", "--round", "1"]
     # pin C3 -> C5: an approval without --tip refuses before any record is read.
@@ -1375,7 +1375,7 @@ def test_verdict_refuses_an_unknown_status_a_bad_round_and_no_branch(
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
     _marked(repo)
-    _agent_stop(repo, "security-auditor", _verdict("APPROVED", "a" * 40), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("APPROVED", "a" * 40), "aud-1")
     no_branch = _verdict_call(repo, "approved", 1, tip="a" * 40)
     assert no_branch.code == 1 and "integration branch" in no_branch.lines[0]
     tip = _integration(repo)
@@ -1405,7 +1405,7 @@ def _handback(repo: Path, message: str) -> dict[str, Any]:
         tool_input={"message": message},
         tool_response={"success": True},
         agent_id="aud-1",
-        agent_type="daedalus:security-auditor",
+        agent_type="daedalus:auditor",
     )
 
 
@@ -1424,7 +1424,7 @@ def test_verdict_finds_train_a_verdict_in_the_hand_back_and_the_push_gate_passes
     untipped = _verdict_call(repo, "approved", 1, tip=tip)
     assert untipped.code == 1 and "verdict names tip none, not --tip" in untipped.lines[0]
     named = _handback(repo, f"[VERDICT: APPROVED] tip={tip}")
-    _agent_stop(repo, "security-auditor", "Sent the round 4 verdict.", "aud-1")
+    _agent_stop(repo, "auditor", "Sent the round 4 verdict.", "aud-1")
     passed = _verdict_call(repo, "approved", None, tip=tip)
     assert passed.code == 0, passed.lines
     record = {"status": "approved", "tip": tip, "round": 1, "seq": named["seq"]}
@@ -1455,7 +1455,7 @@ def test_verdict_newer_rejection_in_a_hand_back_wins(repo: Path, plugin: Path) -
     tip = _integration(repo)
     replay_auditor(repo, SESSION)
     rejection = _handback(repo, "[VERDICT: REJECTED] a.py:1 high")
-    _agent_stop(repo, "security-auditor", "Sent the round 4 verdict.", "aud-1")
+    _agent_stop(repo, "auditor", "Sent the round 4 verdict.", "aud-1")
     refused = _verdict_call(repo, "approved", 1, tip=tip)
     assert refused.code == 1
     assert "carries [VERDICT: REJECTED], not [VERDICT: APPROVED]" in refused.lines[0]
@@ -1470,13 +1470,13 @@ def test_verdict_ignores_an_auditor_stop_before_start_seq(repo: Path, plugin: Pa
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
     tip = _integration(repo)
-    _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-0")
+    _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-0")
     no_start = _verdict_call(repo, "approved", 1, tip=tip)
     assert no_start.code == 1 and "records no start_seq" in no_start.lines[0]
     start = _marked(repo)
     refused = _verdict_call(repo, "approved", 1, tip=tip)
     assert refused.code == 1 and NEVER_TYPED in refused.lines[0]
-    assert f"holds no daedalus:security-auditor reply after seq {start}" in refused.lines[0]
+    assert f"holds no daedalus:auditor reply after seq {start}" in refused.lines[0]
     assert "verdict" not in _state(repo)
 
 
@@ -1490,7 +1490,7 @@ def _findings(repo: Path, round_: int, *lines: str) -> Path:
 
 
 def _rejected_round(repo: Path, tip: str, round_: int, *lines: str) -> Any:
-    _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("REJECTED", tip), "aud-1")
     return _verdict_call(
         repo, "rejected", round_, tip=tip, findings=_findings(repo, round_, *lines)
     )
@@ -1528,7 +1528,7 @@ def test_findings_must_be_the_round_file_and_match_the_status(repo: Path, plugin
     _started(repo, plugin)
     _marked(repo)
     tip = _integration(repo)
-    _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("REJECTED", tip), "aud-1")
     elsewhere = repo / "findings.txt"
     elsewhere.write_text(A + "\n", encoding="utf-8")
     wrong = _verdict_call(repo, "rejected", 1, tip=tip, findings=elsewhere)
@@ -1540,7 +1540,7 @@ def test_findings_must_be_the_round_file_and_match_the_status(repo: Path, plugin
     bad = _verdict_call(repo, "rejected", 1, tip=tip, findings=_findings(repo, 1, "x | y"))
     assert bad.code == 1 and "Next: " in bad.lines[0]
     assert "verdict" not in _state(repo)
-    _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-1")
     listed = _verdict_call(repo, "approved", 1, tip=tip, findings=_findings(repo, 1, A))
     assert listed.code == 1 and "the approved round 1 lists 1 findings" in listed.lines[0]
     relative = (
@@ -1558,10 +1558,10 @@ def test_tip_must_be_the_auditor_tip_and_the_integration_tip(repo: Path, plugin:
     _started(repo, plugin)
     _marked(repo)
     tip = _integration(repo)
-    _agent_stop(repo, "security-auditor", _verdict("APPROVED", "b" * 40), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("APPROVED", "b" * 40), "aud-1")
     other = _verdict_call(repo, "approved", 1, tip=tip)
     assert other.code == 1 and f"names tip {'b' * 40}, not --tip {tip}" in other.lines[0]
-    _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-1")
     (repo / "src.py").write_text("x\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "after the audit")
@@ -1583,16 +1583,16 @@ def test_model_prints_the_effective_model_inside_and_outside_a_train(
     repo: Path, plugin: Path
 ) -> None:
     # spec 4, pin C3 -> C5: the model word alone, from the override, config, then agent file.
-    outside = _train_cli(repo, "model", "--repo", str(repo), "--agent", "repo-coder")
+    outside = _train_cli(repo, "model", "--repo", str(repo), "--agent", "coder")
     assert (outside.returncode, outside.stdout) == (0, "opus\n"), outside.stderr
-    _config(repo, {"agent_models": {"repo-coder": "sonnet"}})
-    configured = _train_cli(repo, "model", "--repo", str(repo), "--agent", "repo-coder")
+    _config(repo, {"agent_models": {"coder": "sonnet"}})
+    configured = _train_cli(repo, "model", "--repo", str(repo), "--agent", "coder")
     assert configured.stdout == "sonnet\n"
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
-    inside = _train_cli(repo, "model", "--repo", str(repo), "--agent", "repo-coder")
+    inside = _train_cli(repo, "model", "--repo", str(repo), "--agent", "coder")
     assert (inside.returncode, inside.stdout) == (0, "sonnet\n")
-    argv = ("model", "--repo", str(repo), "--agent", "repo-coder", "--override", "haiku")
+    argv = ("model", "--repo", str(repo), "--agent", "coder", "--override", "haiku")
     assert _train_cli(repo, *argv).stdout == "haiku\n"
     assert _train_cli(repo, "model", "--repo", str(repo), "--agent", "planner").stdout == "opus\n"
 
@@ -1606,9 +1606,9 @@ def test_model_refuses_an_unknown_agent_or_model(repo: Path, extra: tuple[str, .
 
 
 def test_model_reports_a_bad_config(repo: Path) -> None:
-    _config(repo, {"agent_models": {"repo-coder": "gpt-4"}})
-    done = _train_cli(repo, "model", "--repo", str(repo), "--agent", "repo-coder")
-    assert done.returncode == 1 and "agent_models.repo-coder" in done.stdout
+    _config(repo, {"agent_models": {"coder": "gpt-4"}})
+    done = _train_cli(repo, "model", "--repo", str(repo), "--agent", "coder")
+    assert done.returncode == 1 and "agent_models.coder" in done.stdout
 
 
 def test_a_repo_outside_the_working_directory_root_is_refused(repo: Path, plain: Path) -> None:
@@ -1724,13 +1724,13 @@ def test_verdict_derives_the_round_from_audit_rounds(repo: Path, plugin: Path) -
     # 67, spec 3.1: one more than the highest recorded round, else 1; --round may be left out.
     tip = _audit_train(repo, plugin)
     assert train_runner.derived_round(_state(repo)) == 1
-    _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("REJECTED", tip), "aud-1")
     first = _verdict_call(repo, "rejected", None, tip=tip, findings=_findings(repo, 1, A, B))
     assert first.lines == ["recorded rejected round=1 findings=2"]
-    _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("REJECTED", tip), "aud-1")
     second = _verdict_call(repo, "rejected", 2, tip=tip, findings=_findings(repo, 2, A))
     assert second.lines == ["recorded rejected round=2 findings=1"]
-    _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-1")
     approved = _verdict_call(repo, "approved", None, tip=tip)
     assert approved.lines == [f"Verdict approved recorded on tip {tip[:12]} (round 3)"]
     assert train_state.record(_state(repo), "audit_rounds")["3"] == {}
@@ -1762,7 +1762,7 @@ def test_a_state_from_before_d1_takes_the_next_round(repo: Path, plugin: Path) -
     train = str(_state(repo)["train_id"])
     verdict = {"status": "approved", "tip": tip, "round": 3, "seq": 1}
     train_state.update(repo, train, verdict=verdict, audit_rounds={"1": {}, "2": {}})
-    _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("REJECTED", tip), "aud-1")
     stale = _verdict_call(repo, "rejected", 3, tip=tip, findings=_findings(repo, 3, A))
     assert stale.code == 1 and "--round 3 is not round 4" in stale.lines[0]
     passed = _verdict_call(repo, "rejected", 4, tip=tip, findings=_findings(repo, 4, A))
@@ -1773,7 +1773,7 @@ def test_a_state_from_before_d1_takes_the_next_round(repo: Path, plugin: Path) -
 
 def test_a_differing_round_is_refused_naming_both_numbers(repo: Path, plugin: Path) -> None:
     tip = _audit_train(repo, plugin)
-    _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-1")
     refused = _verdict_call(repo, "approved", 2, tip=tip)
     assert refused.code == 1
     assert refused.lines == [
@@ -1786,7 +1786,7 @@ def test_a_differing_round_is_refused_naming_both_numbers(repo: Path, plugin: Pa
 def test_a_rejection_without_findings_is_refused_naming_the_path(repo: Path, plugin: Path) -> None:
     # 67: a rejection always carries its list, so the stall word prints on every rejection.
     tip = _audit_train(repo, plugin)
-    _agent_stop(repo, "security-auditor", _verdict("REJECTED", tip), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("REJECTED", tip), "aud-1")
     refused = _verdict_call(repo, "rejected", 1, tip=tip)
     want = repo / "docs" / ".tmp" / "daedalus" / str(_state(repo)["train_id"]) / "audit"
     path = want / "round1" / "findings.txt"
@@ -1795,7 +1795,7 @@ def test_a_rejection_without_findings_is_refused_naming_the_path(repo: Path, plu
         f"Next: have the auditor write {path}, then rerun verdict with --findings {path}."
     )
     assert "verdict" not in _state(repo)
-    approval = _agent_stop(repo, "security-auditor", _verdict("APPROVED", tip), "aud-1")
+    approval = _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-1")
     passed = _verdict_call(repo, "approved", 1, tip=tip)
     assert passed.code == 0, passed.lines
     assert _state(repo)["verdict"] == {
@@ -1846,11 +1846,11 @@ def test_reaudit_admits_one_recovery_round_on_a_moved_tip(repo: Path, plugin: Pa
     assert outcome.lines == [f"reaudit round=2 tip={moved}"]
     state = _state(repo)
     assert state["reaudit"] == {"judged": tip, "tip": moved, "round": 2}
-    assert train_runner.allowed_dispatch(state)[0] == {"security-auditor"}
+    assert train_runner.allowed_dispatch(state)[0] == {"auditor"}
     again = train_runner.reaudit(repo)
     assert again.code == 1 and f"already ran on tip {moved[:12]}" in again.lines[0]
     assert "Next:" in again.lines[0]
-    _agent_stop(repo, "security-auditor", _verdict("APPROVED", moved), "aud-1")
+    _agent_stop(repo, "auditor", _verdict("APPROVED", moved), "aud-1")
     recorded = _verdict_call(repo, "approved", 2, tip=moved)
     assert recorded.lines == [f"Verdict approved recorded on tip {moved[:12]} (round 2)"]
     assert train_runner.allowed_dispatch(_state(repo))[0] == set()
@@ -1981,7 +1981,7 @@ def test_summary_writes_the_file_from_state_after_its_own_bash_record(
     _started(repo, plugin)
     train = train_state.active_train(repo)
     script = SCRIPTS_DIR / "daedalus_train.py"
-    coder = {"agent_id": "c1", "agent_type": "daedalus:repo-coder"}
+    coder = {"agent_id": "c1", "agent_type": "daedalus:coder"}
     for command, who in (
         ("ls", {}),
         (f"python3 {script}  summary --repo {repo}", {}),
@@ -2011,7 +2011,7 @@ def test_summary_withholds_a_log_path_and_still_writes(repo: Path, plugin: Path)
     # W3.2: an audit log record cannot be edited, so its refused path prints as the marker.
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
-    _agent_stop(repo, "repo-coder", "[STATUS: YIELD_WEB] fields at https://x.io/docs/hooks")
+    _agent_stop(repo, "coder", "[STATUS: YIELD_WEB] fields at https://x.io/docs/hooks")
     _record(repo, tool_input={"command": _summary_cmd(repo)})
     assert train_runner.summary(repo).code == 0
     text = _summary_file(repo).read_text(encoding="utf-8")

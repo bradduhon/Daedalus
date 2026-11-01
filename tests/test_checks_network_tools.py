@@ -22,7 +22,7 @@ pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "network_tools"
 
 
-class TestRepoCoder:
+class TestCoder:
     @pytest.mark.parametrize(
         "command",
         [
@@ -41,11 +41,11 @@ class TestRepoCoder:
         ],
     )
     def test_remote_and_network_blocked(self, command: str) -> None:
-        assert not decide(_b("repo-coder", command), CFG).allow
+        assert not decide(_b("coder", command), CFG).allow
 
     def test_no_web_tools(self) -> None:
-        assert not decide(_t("repo-coder", "WebFetch"), CFG).allow
-        assert not decide(_t("repo-coder", "WebSearch"), CFG).allow
+        assert not decide(_t("coder", "WebFetch"), CFG).allow
+        assert not decide(_t("coder", "WebSearch"), CFG).allow
 
 
 class TestNoShellAgents:
@@ -57,12 +57,12 @@ class TestNoShellAgents:
 
 
 class TestRound3WorkerHygiene:
-    def test_repo_coder_hidden_network_and_remote(self) -> None:
+    def test_coder_hidden_network_and_remote(self) -> None:
         for command in ("find . -exec curl x {} +", "find . -exec git push origin x {} +"):
-            assert not decide(_b("repo-coder", command), CFG).allow, command
+            assert not decide(_b("coder", command), CFG).allow, command
 
 
-@pytest.mark.parametrize("agent", ["repo-coder", "security-auditor", "charter-docs"])
+@pytest.mark.parametrize("agent", ["coder", "auditor", "charter-docs"])
 def test_claude_by_real_path_is_refused(fake_claude: Path, tmp_path: Path, agent: str) -> None:
     # issue 55: the versioned file, a link to it, or node running it, whatever the word says.
     link = tmp_path.resolve() / "c"
@@ -81,20 +81,20 @@ def test_other_paths_beside_claude_pass(fake_claude: Path, tmp_path: Path) -> No
     other = fake_claude.parent / "tool"
     other.write_text("#!/bin/sh\n")
     for command in (f"{other} -x", f"cat {fake_claude.parent}/notes", "ls /usr/bin"):
-        assert evaluate(HOOK, _b("repo-coder", command)) is None, command
+        assert evaluate(HOOK, _b("coder", command)) is None, command
 
 
 def test_network_tools_judges_the_hook_alone() -> None:
-    assert evaluate(HOOK, _t("repo-coder", "WebFetch")) == jail.R_WEB_RESEARCHER_ONLY
-    assert evaluate(HOOK, _t("repo-coder", "WebFetch"), "--web") is None
-    assert evaluate(HOOK, _t("repo-coder", "WebSearch"), "--gh") == jail.R_CONDUCTOR_WEB
-    assert evaluate(HOOK, _b("repo-coder", "curl x")) == jail.R_NETWORK
-    assert evaluate(HOOK, _b("repo-coder", "gh pr list")) == jail.R_NETWORK
-    assert evaluate(HOOK, _b("repo-coder", "gh pr list"), "--gh") is None
-    assert evaluate(HOOK, _b("repo-coder", "curl x"), "--gh") == jail.R_NETWORK
+    assert evaluate(HOOK, _t("coder", "WebFetch")) == jail.R_WEB_RESEARCHER_ONLY
+    assert evaluate(HOOK, _t("coder", "WebFetch"), "--web") is None
+    assert evaluate(HOOK, _t("coder", "WebSearch"), "--gh") == jail.R_CONDUCTOR_WEB
+    assert evaluate(HOOK, _b("coder", "curl x")) == jail.R_NETWORK
+    assert evaluate(HOOK, _b("coder", "gh pr list")) == jail.R_NETWORK
+    assert evaluate(HOOK, _b("coder", "gh pr list"), "--gh") is None
+    assert evaluate(HOOK, _b("coder", "curl x"), "--gh") == jail.R_NETWORK
     # spec 8: rg, grep and jq arguments and commit messages are exempt words.
-    assert evaluate(HOOK, _b("repo-coder", "rg curl src")) is None
-    assert evaluate(HOOK, _b("repo-coder", "git commit -m 'fix curl'")) is None
+    assert evaluate(HOOK, _b("coder", "rg curl src")) is None
+    assert evaluate(HOOK, _b("coder", "git commit -m 'fix curl'")) is None
 
 
 def test_network_tools_fixture_decisions() -> None:

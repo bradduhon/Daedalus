@@ -16,7 +16,7 @@ from tests.hook_chain import (
     unknown_flag_denies,
 )
 
-CONDUCTOR = "pr-train-conductor"
+CONDUCTOR = "releaser"
 
 
 class Row(NamedTuple):

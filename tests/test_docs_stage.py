@@ -386,7 +386,7 @@ def test_the_catalog_names_the_writer_stage_and_its_verifier_pass() -> None:
     doc_row = catalog.split("| document |", 1)[1].split("| release |", 1)[0]
     assert "Public docs mode is the docs writer stage" in doc_row and "claims pass" in doc_row
     rule = catalog.split("- Docs writer stage (0131, 0134):", 1)[1].split(" - ", 1)[0]
-    for part in ("docs-writer", "the verifier checks its claims in a claims pass", "--gate docs"):
+    for part in ("writer", "the verifier checks its claims in a claims pass", "--gate docs"):
         assert part in rule, part
     assert "docs verdict recorded status=<s> tip=<12 hex>" in catalog
 

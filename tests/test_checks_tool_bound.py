@@ -25,10 +25,10 @@ HOOK = "tool_bound"
 
 def test_every_block_reason_has_next() -> None:
     cases = [
-        _w("security-auditor", f"{CWD}/src/a.py"),
+        _w("auditor", f"{CWD}/src/a.py"),
         _b("web-researcher", "ls"),
-        _w("repo-coder", f"{CWD}/infra/a.tf"),
-        _b("repo-coder", "git push origin x"),
+        _w("coder", f"{CWD}/infra/a.tf"),
+        _b("coder", "git push origin x"),
     ]
     for hook_input in cases:
         d = decide(hook_input, CFG)
@@ -36,15 +36,15 @@ def test_every_block_reason_has_next() -> None:
 
 
 def test_workers_cannot_spawn_agents() -> None:
-    assert not decide(_t("repo-coder", "Agent"), CFG).allow
+    assert not decide(_t("coder", "Agent"), CFG).allow
 
 
 def test_workers_cannot_send_messages() -> None:
-    assert not decide(_t("repo-coder", "SendMessage"), CFG).allow
+    assert not decide(_t("coder", "SendMessage"), CFG).allow
 
 
 class TestReadOnlyAgents:
-    @pytest.mark.parametrize("agent", ["security-auditor", "framework-specialist"])
+    @pytest.mark.parametrize("agent", ["auditor", "framework-specialist"])
     def test_no_writes(self, agent: str) -> None:
         for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
             assert not decide(_w(agent, f"{CWD}/docs/x.md", tool), CFG).allow
@@ -52,7 +52,7 @@ class TestReadOnlyAgents:
 
 class TestConductor:
     def test_no_writes(self) -> None:
-        assert not decide(_w("pr-train-conductor", f"{CWD}/docs/x.md"), CFG).allow
+        assert not decide(_w("releaser", f"{CWD}/docs/x.md"), CFG).allow
 
 
 class TestNoShellAgents:
@@ -91,12 +91,12 @@ def test_tool_bound_judges_the_hook_alone() -> None:
     assert evaluate(HOOK, _t("verifier", "Write")) == jail.R_TOOL
     assert evaluate(HOOK, _t("framework-specialist", "Glob")) == jail.R_TOOL
     assert evaluate(HOOK, _t("web-researcher", "WebFetch")) is None
-    assert evaluate(HOOK, _t("daedalus:repo-coder", "Edit")) is None
+    assert evaluate(HOOK, _t("daedalus:coder", "Edit")) is None
 
 
-@pytest.mark.parametrize("agent", ["main", "mystery", "../agents/repo-coder", "Repo-Coder", ""])
+@pytest.mark.parametrize("agent", ["main", "mystery", "../agents/coder", "Repo-Coder", ""])
 def test_tool_bound_denies_an_agent_without_a_file(agent: str) -> None:
-    reason = evaluate(HOOK, {**_t("repo-coder", "Read"), "agent_type": agent})
+    reason = evaluate(HOOK, {**_t("coder", "Read"), "agent_type": agent})
     assert reason is not None and "is missing" in reason and "Next:" in reason, reason
 
 

@@ -45,7 +45,7 @@ plugin = runner_tests.plugin
 repo = runner_tests.repo
 __all__ = ["trees"]
 
-CODER = "daedalus:repo-coder"
+CODER = "daedalus:coder"
 LEDGER = "docs/decisions.md"
 LEDGER_DECL = {
     "path": LEDGER,
@@ -65,7 +65,11 @@ def _flat(rel: str) -> str:
 def test_the_docs_stage_worktree_is_named_docstage() -> None:
     assert dispatch_binding.docs_unit(TRAIN) == f"{TRAIN}-docstage"
     assert train_state.DOCS_SUFFIX == dispatch_binding.DOCS_SUFFIX == "-docstage"
-    for rel in ("skills/document/SKILL.md", "skills/catalog/SKILL.md", "agents/docs-writer.md"):
+    for rel in (
+        "skills/document/SKILL.md",
+        "skills/catalog/SKILL.md",
+        "skills/document/kinds/public-docs/SKILL.md",
+    ):
         text = _flat(rel)
         assert "<train-id>-docstage" in text, rel
         assert "<train-id>-docs`" not in text and "<train-id>-docs " not in text, rel
@@ -106,7 +110,7 @@ def test_a_bound_coder_resume_onto_the_docstage_worktree_is_refused(
     move = {**_dispatch(repo_cwd, ""), "tool_name": "SendMessage"}
     move["tool_input"] = {"to": "coder-1", "message": f"Again.\nWorktree: {docs}"}
     refused = decide(move, Config())
-    assert not refused.allow and "takes only the docs-writer" in str(refused.reason)
+    assert not refused.allow and "takes only the writer" in str(refused.reason)
     assert dispatch_binding.record_dispatch(repo_cwd, TRAIN, "u1") is None
     assert dispatch_binding.claim(repo_cwd, TRAIN, "coder-2", "u1") is None
     stay = {**move, "tool_input": {"to": "coder-2", "message": f"Again.\nWorktree: {unit}"}}
@@ -145,7 +149,7 @@ def test_plan_validation_reserves_the_docstage_slug(
         ("git -C {docs} commit --amend -m 'Describe it'", False),
     ],
 )
-def test_docs_writer_commit_takes_only_a_message(
+def test_public_docs_writer_commit_takes_only_a_message(
     repo_cwd: Path, trees: tuple[Path, Path], command: str, allowed: bool
 ) -> None:
     _bound_writer(repo_cwd)
@@ -153,7 +157,7 @@ def test_docs_writer_commit_takes_only_a_message(
     reason = evaluate("unit_writes", _writer(repo_cwd, "Bash", command=text), "--docs")
     assert (reason is None) is allowed, reason
     if not allowed:
-        assert str(reason).startswith("the docs-writer commits only what it staged"), reason
+        assert str(reason).startswith("the writer commits only what it staged"), reason
 
 
 # Requirement 4: a docs-only commit keeps each doc a regular non-executable file.
@@ -347,7 +351,7 @@ def test_dispatch_binding_imports_the_one_docs_list() -> None:
 def test_a_priorities_yield_names_the_operator_as_its_answerer(tmp_path: Path) -> None:
     question = "priorities rule 2: keep the cheaper default or the secure one?"
     records = list(RECORDS)
-    records[2] = _stop(3, "repo-coder", f"[STATUS: YIELD_STANDARDS] {question}", "c2")
+    records[2] = _stop(3, "coder", f"[STATUS: YIELD_STANDARDS] {question}", "c2")
     assert _section(_text(tmp_path, records=records), "Yields") == [
         f"- u2: YIELD_STANDARDS {question} (answered by operator)"
     ]

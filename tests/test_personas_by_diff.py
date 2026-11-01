@@ -30,6 +30,7 @@ from tests.hook_chain import first_deny
 from tests.test_train_state_print import NOTES, RECORDS, REPO, STATE, TRAIN, _section, _stop
 
 AGENTS = REPO_ROOT / "agents"
+PUBLIC_DOCS_KIND = REPO_ROOT / "skills" / "document" / "kinds" / "public-docs" / "SKILL.md"
 JUDGES = ("dependency-auditor", "terraform-reviewer")
 FOUR_DOCS = (
     "`README.md`",
@@ -207,19 +208,21 @@ def test_terraform_reviewer_checks_the_binary_before_any_tool_run() -> None:
     assert "Never run `init`, `plan`, `apply`" in text
 
 
-def test_docs_writer_edits_only_the_four_docs_and_claims_each_passage() -> None:
-    writer = load(AGENTS / "docs-writer.md")
-    coder = load(AGENTS / "repo-coder.md")
+def test_public_docs_writer_edits_only_the_four_docs_and_claims_each_passage() -> None:
+    writer = load(AGENTS / "writer.md")
+    coder = load(AGENTS / "coder.md")
     # 0134: the coder's list, with the write check narrowed by --docs (JAIL).
     narrowed = tuple(
         Hook(h.script, ("--docs",)) if h.script == "unit_writes" else h for h in coder.hooks
     )
-    assert writer.shape == "producer" and writer.hooks == narrowed
-    assert writer.status_lines == (
+    # 0190: the public docs kind of the writer runs that list; its kind skill holds the method.
+    assert writer.shape == "producer" and writer.chains()["public-docs"] == narrowed
+    assert writer.status_lines[:2] == (
         "[STATUS: DOCS_WRITTEN] branch=<b> commit=<40 hex> claims=<n>",
         "[STATUS: DOCS_UNCHANGED] reason=<why no passage needed an edit>",
     )
-    text = _flat(AGENTS / "docs-writer.md")
+    text = _flat(PUBLIC_DOCS_KIND)
+    assert all(f"`{line}`" in text for line in writer.status_lines[:2])
     scope = text[text.index("## Scope") : text.index("## Method")]
     for doc in FOUR_DOCS:
         assert doc in scope, doc
@@ -303,7 +306,7 @@ def test_documentation_stage_sits_directly_before_recovery() -> None:
     for phrase in (
         "after the security verdict record",
         "--name <train-id>-docstage --base daedalus/<train-id>",
-        "dispatch `docs-writer`",
+        "dispatch `writer`",
         "the hand-back summary of every unit whose agent changed something",
         "the line `Worktree: <docs worktree path>`",
         "the first line `CLAIMS MODE.`",

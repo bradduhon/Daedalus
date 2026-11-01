@@ -51,9 +51,9 @@ class TestReadOnlyAgents:
             "gpg --list-keys",
         ]
         for command in ok:
-            assert decide(_b("security-auditor", command), CFG).allow, command
+            assert decide(_b("auditor", command), CFG).allow, command
         for command in bad:
-            assert not decide(_b("security-auditor", command), CFG).allow, command
+            assert not decide(_b("auditor", command), CFG).allow, command
 
     def test_specialists_read_only_set(self) -> None:
         assert decide(_b("framework-specialist", "sha256sum controls.json"), CFG).allow
@@ -62,7 +62,7 @@ class TestReadOnlyAgents:
         assert not decide(_b("framework-specialist", "git checkout x"), CFG).allow
 
 
-READ_ONLY_AGENTS = ("security-auditor", "framework-specialist")
+READ_ONLY_AGENTS = ("auditor", "framework-specialist")
 
 
 class TestSpecialistPipes:
@@ -122,7 +122,7 @@ class TestRegressionReadOnly:
         ],
     )
     def test_auditor_blocked(self, command: str) -> None:
-        assert not decide(_b("security-auditor", command), CFG).allow, command
+        assert not decide(_b("auditor", command), CFG).allow, command
 
     def test_auditor_branch_reads_allowed(self) -> None:
         for command in (
@@ -131,7 +131,7 @@ class TestRegressionReadOnly:
             "git branch -v",
             "/usr/bin/cat x",
         ):
-            assert decide(_b("security-auditor", command), CFG).allow, command
+            assert decide(_b("auditor", command), CFG).allow, command
 
     @pytest.mark.parametrize("agent", ["framework-specialist"])
     def test_specialists_blocked(self, agent: str) -> None:
@@ -141,11 +141,11 @@ class TestRegressionReadOnly:
 
 class TestRound3Breakage:
     def test_quoted_filters_allowed(self) -> None:
-        assert decide(_b("security-auditor", "jq '.[] | .name' x.json"), CFG).allow
-        assert decide(_b("security-auditor", "rg 'foo|bar' src"), CFG).allow
+        assert decide(_b("auditor", "jq '.[] | .name' x.json"), CFG).allow
+        assert decide(_b("auditor", "rg 'foo|bar' src"), CFG).allow
         assert decide(_b("framework-specialist", "jq -r '.controls[] | .id' c.json"), CFG).allow
-        assert decide(_b("security-auditor", "grep -n 'a;b' x"), CFG).allow
-        assert decide(_b("security-auditor", "grep -n '$x' src"), CFG).allow
+        assert decide(_b("auditor", "grep -n 'a;b' x"), CFG).allow
+        assert decide(_b("auditor", "grep -n '$x' src"), CFG).allow
 
 
 class TestRound3SortPytestGitleaks:
@@ -161,7 +161,7 @@ class TestRound3SortPytestGitleaks:
         ],
     )
     def test_sort_denies(self, command: str) -> None:
-        assert not decide(_b("security-auditor", command), CFG).allow, command
+        assert not decide(_b("auditor", command), CFG).allow, command
 
 
 def test_read_only_bash_judges_the_hook_alone() -> None:
@@ -217,7 +217,7 @@ GIT_ROWS = [
 
 @pytest.mark.parametrize(("allowed", "refused"), GIT_ROWS)
 def test_read_only_grant_git_rows(allowed: str, refused: str) -> None:
-    for agent in ("security-auditor", "verifier"):
+    for agent in ("auditor", "verifier"):
         assert decide(_b(agent, allowed), CFG).allow, (agent, allowed)
         assert evaluate(HOOK, _b(agent, allowed), "--git", "read-only") is None, allowed
         refusal = evaluate(HOOK, _b(agent, refused), "--git", "read-only")
@@ -244,7 +244,7 @@ TRAIN_C_GIT_ROWS = [
 
 @pytest.mark.parametrize(("allowed", "refused"), TRAIN_C_GIT_ROWS)
 def test_read_only_grant_train_c_git_rows(allowed: str, refused: str) -> None:
-    for agent in ("security-auditor", "verifier"):
+    for agent in ("auditor", "verifier"):
         assert decide(_b(agent, allowed), CFG).allow, (agent, allowed)
         refusal = evaluate(HOOK, _b(agent, refused), "--git", "read-only")
         assert refusal == jail.R_AUDITOR_BASH, (agent, refused)
@@ -353,8 +353,8 @@ def test_audit_test_run_admits_the_audit_folder_and_the_corpus(tmp_path: Path) -
         f"python3 -m pytest {tree}/tests/adversarial -q -k quoting",
         f"python3 -m pytest {audit}/round2 {tree}/tests/adversarial/test_globs.py -q | tail -n 5",
     ):
-        assert evaluate(HOOK, _rb(repo, "security-auditor", command), *AUDIT) is None, command
-        assert decide(_rb(repo, "security-auditor", command), CFG).allow, command
+        assert evaluate(HOOK, _rb(repo, "auditor", command), *AUDIT) is None, command
+        assert decide(_rb(repo, "auditor", command), CFG).allow, command
 
 
 def test_audit_test_run_refuses_other_paths(tmp_path: Path) -> None:
@@ -382,7 +382,7 @@ def test_audit_test_run_refuses_other_paths(tmp_path: Path) -> None:
         f"python -m pytest {audit}/x.py -q",
         "python3 -m pytest -q",
     ):
-        assert evaluate(HOOK, _rb(repo, "security-auditor", command), *AUDIT) == want, command
+        assert evaluate(HOOK, _rb(repo, "auditor", command), *AUDIT) == want, command
 
 
 def test_test_run_outside_a_train_is_refused(tmp_path: Path) -> None:
@@ -391,7 +391,7 @@ def test_test_run_outside_a_train_is_refused(tmp_path: Path) -> None:
     command = f"python3 -m pytest {audit}/x.py -q"
     for runner, flags in (("audit", AUDIT), ("unit", UNIT)):
         want = read_only_bash().R_TEST_RUN_NO_TRAIN.format(runner=runner)
-        assert evaluate(HOOK, _rb(repo, "security-auditor", command), *flags) == want
+        assert evaluate(HOOK, _rb(repo, "auditor", command), *flags) == want
 
 
 def test_pytest_without_the_runner_grant_is_refused(tmp_path: Path) -> None:
@@ -441,7 +441,7 @@ def test_unit_test_run_without_train_state_is_refused(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("agent", "flags"),
     [
-        ("security-auditor", AUDIT),
+        ("auditor", AUDIT),
         ("daedalus:verifier", UNIT),
         ("framework-specialist", ("--git", "specialist")),
         ("x", ()),
@@ -513,7 +513,7 @@ def test_audit_test_run_still_reads_the_audit_worktree_corpus(tmp_path: Path) ->
     repo = _train_repo(tmp_path)
     _, tree = _audit_units(repo, flagged=True)
     command = f"python3 -m pytest {tree}/tests/adversarial -q --rootdir {tree}"
-    assert evaluate(HOOK, _rb(repo, "security-auditor", command), *AUDIT) is None
+    assert evaluate(HOOK, _rb(repo, "auditor", command), *AUDIT) is None
 
 
 def test_a_rewritten_search_word_or_rg_program_option_names_its_reason() -> None:
