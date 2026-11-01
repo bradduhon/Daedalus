@@ -26,6 +26,7 @@ from lib import (
 )
 from lib.audit import SESSION_ID, DataDirError, cache_dir_or_probe, ensure_project_data_dir
 from lib.audit_proof import SUMMARY_DIR
+from lib.coder_model import REFUTED_PREFIX
 from lib.config import Config, ConfigError, load_config
 from lib.ledger import LedgerError, read_sequence, resolve_ledger
 from lib.train_state import TRAIN_ID as _TRAIN_ID
@@ -1062,15 +1063,30 @@ def _worktree_lines(record: dict[str, object]) -> list[str]:
     return [line for line in text.splitlines() if line.startswith(_UNIT_LINE)]
 
 
+def _anchors(records: list[dict[str, object]], worktree: Path) -> list[int]:
+    line = f"{_UNIT_LINE}{worktree}"
+    return [i for i, r in enumerate(records) if line in _worktree_lines(r)]
+
+
 def unit_verified(records: list[dict[str, object]], worktree: Path) -> bool:
     # 0121: ordered match, one verifier at a time; the window runs from the newest dispatch
     # naming the worktree to the next dispatch naming any worktree.
-    line = f"{_UNIT_LINE}{worktree}"
-    anchors = [i for i, r in enumerate(records) if line in _worktree_lines(r)]
+    anchors = _anchors(records, worktree)
     if not anchors:
         return False
+    last = _verdict_line(records, anchors[-1])
+    return last is not None and VERIFIED_LINE.fullmatch(last) is not None
+
+
+def unit_refutations(records: list[dict[str, object]], worktree: Path) -> int:
+    # 0187: one refutation per verifier window on the worktree whose verdict line is REFUTED.
+    lines = (_verdict_line(records, i) for i in _anchors(records, worktree))
+    return sum(1 for last in lines if last is not None and last.startswith(REFUTED_PREFIX))
+
+
+def _verdict_line(records: list[dict[str, object]], anchor: int) -> str | None:
     window: list[dict[str, object]] = []
-    for record in records[anchors[-1] + 1 :]:
+    for record in records[anchor + 1 :]:
         if _worktree_lines(record):
             break
         window.append(record)
@@ -1087,9 +1103,9 @@ def unit_verified(records: list[dict[str, object]], worktree: Path) -> bool:
             replies.append(audit_proof.handback_message(r))
     texts = [reply for reply in replies if isinstance(reply, str)]
     if not texts:
-        return False
+        return None
     last = [text.strip() for text in texts[-1].splitlines() if text.strip()]
-    return bool(last) and VERIFIED_LINE.fullmatch(last[-1]) is not None
+    return last[-1] if last else None
 
 
 def _audit_records(repo: Path, state: dict[str, object]) -> list[dict[str, object]]:

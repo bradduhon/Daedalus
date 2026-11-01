@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import train_state, unit_binding, workspace
+from lib import train_runner, train_state, unit_binding, workspace
 from lib.config import PACKS_DIR
 from lib.workspace import (
     WorkspaceError,
@@ -1819,3 +1819,118 @@ def test_folder_stop_cli_clears_the_marker_with_no_git_step(plain: Path, tmp_pat
     lines = done.stdout.splitlines()
     assert "folder scope: no worktrees or branches to restore" in lines
     assert lines[-1] == "Next: review" and not train_marker(plain).exists()
+
+
+# 0187, issue 115: the coder model per unit dispatch, the refutation count and the hand-over.
+def _model_train(
+    repo: Path, u1_files: str = "u1.txt", block: str | None = None
+) -> tuple[str, Path, Path]:
+    train, u1, u2 = _wave_train(repo)
+    state = train_state.load(repo, train)
+    plan = Path(str(train_state.record(state, train_state.PLAN)["path"]))
+    text = block or PLAN_BLOCK.replace("files: u1.txt", f"files: {u1_files}")
+    plan.write_text(f"# plan\n\n{text}")
+    digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+    train_state.update(repo, train, **{train_state.PLAN: {"path": str(plan), "sha256": digest}})
+    _hook_record(repo, hook_event_name="SessionStart")
+    return train, u1, u2
+
+
+def _refute(repo: Path, unit: Path, times: int) -> None:
+    for n in range(times):
+        _dispatch(repo, unit, "Agent" if n == 0 else "SendMessage")
+        _verifier_stop(repo, REFUTED_REPLY)
+
+
+def _coders(repo: Path, train: str, name: str) -> list[dict[str, object]]:
+    unit = next(u for u in train_state.units(train_state.load(repo, train)) if u["name"] == name)
+    coders = unit.get("coders", [])
+    assert isinstance(coders, list)
+    return coders
+
+
+def test_unit_refutations_counts_each_refuted_verifier_window(repo: Path) -> None:
+    train, u1, u2 = _model_train(repo)
+    _refute(repo, u1, 2)
+    _dispatch(repo, u1, "SendMessage")
+    _verifier_stop(repo, VERIFIED_REPLY)
+    _dispatch(repo, u2)
+    _verifier_stop(repo, VERIFIED_REPLY)
+    records = workspace._audit_records(repo, train_state.load(repo, train))
+    assert workspace.unit_refutations(records, u1) == 2
+    assert workspace.unit_refutations(records, u2) == 0
+    assert workspace.unit_verified(records, u1) is True
+
+
+def test_coder_model_records_the_default_then_escalates_on_the_second_refutation(
+    repo: Path,
+) -> None:
+    train, u1, _ = _model_train(repo)
+    name = f"{train}-u1"
+    assert unit_binding.record_dispatch(repo, train, name) is None
+    assert unit_binding.claim(repo, train, "agent-sonnet", name) is None
+    first = train_runner.coder_model(repo, "U1")
+    assert (first.code, first.lines) == (0, ["sonnet", "coder U1: sonnet (default)"])
+    _refute(repo, u1, 1)
+    # 0187: the first refutation goes back warm, so the tier and the binding stay.
+    assert train_runner.coder_model(repo, "u1").lines[0] == "sonnet"
+    assert _bindings(repo, train)[name] == {"agent_id": "agent-sonnet"}
+    _refute(repo, u1, 1)
+    second = train_runner.coder_model(repo, "U1")
+    assert second.lines == ["opus", "coder U1: opus (second refutation)"]
+    freed = {"agent_id": None, "released": True, "retired": ["agent-sonnet"]}
+    assert _bindings(repo, train)[name] == freed
+    assert train_runner.coder_model(repo, "U1").lines == second.lines
+    assert [c["reason"] for c in _coders(repo, train, name)] == ["default", "second refutation"]
+    # issue 115: one fresh coder takes the unit; the retired coder can no longer write in it.
+    assert unit_binding.record_dispatch(repo, train, name) is None
+    assert unit_binding.record_dispatch(repo, train, name) is not None
+    refused = unit_binding.claim(repo, train, "agent-sonnet", name)
+    assert refused is not None and "second refutation" in refused
+    assert unit_binding.claim(repo, train, "agent-opus", name) is None
+
+
+def test_coder_model_takes_the_control_path_tier_from_the_config(repo: Path) -> None:
+    train, _, _ = _model_train(repo, "u1.txt, hooks/pre_commit.py")
+    outcome = train_runner.coder_model(repo, "U1")
+    assert outcome.lines == ["opus", "coder U1: opus (control path hooks/pre_commit.py)"]
+    config = repo / ".claude" / "daedalus" / "config.json"
+    config.write_text(json.dumps({"coder_models": {"control_path": "fable"}}))
+    assert train_runner.coder_model(repo, "U1").lines[0] == "fable"
+    assert train_runner.coder_model(repo, "U2").lines == ["sonnet", "coder U2: sonnet (default)"]
+
+
+@pytest.mark.parametrize(
+    ("unit", "text"),
+    [("U9", "the recorded plan names no unit U9"), ("U3", "records no worktree for unit U3")],
+)
+def test_coder_model_refuses_a_unit_the_train_does_not_hold(
+    repo: Path, unit: str, text: str
+) -> None:
+    # U3 is planned with no worktree; U9 is not planned at all.
+    three = "unit: U3 | title: three | files: u3.txt | base: integration\n```\n\n"
+    block = PLAN_BLOCK.replace("```\n\n", three, 1) + "\n### U3: three\n\nRequirements:\n1. Go.\n"
+    _model_train(repo, block=block)
+    outcome = train_runner.coder_model(repo, unit)
+    assert outcome.code == 1 and text in outcome.lines[0] and "Next:" in outcome.lines[0]
+
+
+def test_model_unit_flag_takes_the_coder_only(repo: Path) -> None:
+    _model_train(repo)
+    argv = [sys.executable, str(SCRIPTS_DIR / "daedalus_train.py"), "model", "--repo", str(repo)]
+    done = subprocess.run(
+        [*argv, "--agent", "planner", "--unit", "U1"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=repo,
+    )
+    assert done.returncode == 1 and "model --unit picks a coder's model" in done.stdout
+    ok = subprocess.run(
+        [*argv, "--agent", "coder", "--unit", "U1"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=repo,
+    )
+    assert (ok.returncode, ok.stdout) == (0, "sonnet\ncoder U1: sonnet (default)\n"), ok.stderr

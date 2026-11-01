@@ -26,6 +26,7 @@ from lib.audit import (  # noqa: E402
     project_data_dir,
     project_root,
 )
+from lib.coder_model import TIERS  # noqa: E402
 from lib.config import Config, ConfigError, load_config, standing_rules_path  # noqa: E402
 from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
 from lib.manifest import (  # noqa: E402
@@ -471,6 +472,10 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
         return
     if cfg_path.exists():
         yield True, "OK   config.json"
+        if _json_keys(cfg_path, "coder_models"):
+            # 0187: one line naming the coder's model for each of the three tiers.
+            tiers = ", ".join(f"{tier} {config.coder_models[tier]}" for tier in TIERS)
+            yield True, f"OK   coder_models: {tiers}"
     else:
         # spec 9, 0076: config.json is optional; absence means the defaults.
         yield _opt(

@@ -690,5 +690,5 @@ def test_token_totals_follow_the_totals_section(
     out = _token_report(cwd, tmp_path).stdout
     assert out.index("skipped fork stops:") < out.index("## Token economy")
     run = "| Build Train | 20261015-120000 |"
-    assert f"{run} total | 1 agents | 0 units, 0 rounds | 1 | 0 | 7 | 0 | 0 | 0m05s |" in out
-    assert f"{run} mean | per unit | 0 units | none | none | none | none | none | none |" in out
+    assert f"{run} total | 1 agents | - | 0 units, 0 rounds | 1 | 0 | 7 | 0 | 0 | 0m05s |" in out
+    assert f"{run} mean | per unit | - | 0 units | none | none | none | none | none | none |" in out

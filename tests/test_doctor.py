@@ -856,6 +856,26 @@ def test_config_standing_rules_line(
         assert lines[0].endswith(str(repo.resolve() / "docs" / "standing-rules.md"))
 
 
+@pytest.mark.parametrize(
+    ("doc", "want"),
+    [
+        ({}, []),
+        (
+            {"coder_models": {"default": "haiku"}},
+            ["OK   coder_models: default haiku, control_path opus, escalated opus"],
+        ),
+    ],
+)
+def test_config_coder_models_line(tmp_path: Path, doc: dict[str, object], want: list[str]) -> None:
+    # 0187: one line naming the three tiers, only when the key is set.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    (_data(repo) / "config.json").write_text(json.dumps(doc))
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
+    lines = [line for line in result.stdout.splitlines() if line[5:].startswith("coder_models:")]
+    assert lines == want, result.stdout
+
+
 def test_train_marker_absent_is_ok_none(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _git_repo(repo)
