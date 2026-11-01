@@ -154,9 +154,12 @@ ROUND_LOOP = (
     "A pick of `Reply in my words` with no typed text asks that item again, alone",
     '"Choose Other and type your answer."',
     "When fewer items are found than `items=<m>` on a ROUND line says, print the reply as written",
-    "ask one free-text question for the whole round with the choices `Reply in my words` and "
-    '`Stop the round` (description: "Ends the brainstorm and keeps the draft.")',
+    "ask one free-text question for the whole round with the choices `Reply in my words` "
+    '(description: "Choose Other and type your answer.") and `Stop the round` (description: '
+    '"Ends the brainstorm and keeps the draft.")',
     "`Stop the round` runs step 12.",
+    "An empty pick in this fallback re-asks it once with `Stop the round` as the second choice, "
+    "and a second empty pick runs step 12; the item re-ask below does not apply here.",
     "relay the typed text as a single answer",
     "At most four questions go in one AskUserQuestion call.",
     "Ask consecutive calls in item order until every item is asked.",
@@ -176,12 +179,13 @@ ANSWER_LOOP = (
     "A picked `Accept as proposed` is relayed as its label.",
     "`Reply in my words` is never relayed; only the typed text that follows it is.",
     "When either phrase follows an answered item, first send the answered items as one "
-    "`ANSWERS round=<k>` message and read the planner's reply",
-    "A QUESTION reply is asked once and its answer relayed as a single answer.",
-    "A NOT_VIABLE reply runs step 9.",
-    'Unless a SPEC line came back, send `SendMessage(planner, "WRITE SPEC round=<k>")` and read '
-    "its reply. Then run step 11 for `the spec stands`, or step 12 for `stop`, so the draft "
-    "reflects those answers.",
+    "`ANSWERS round=<k>` message.",
+    "Read every reply after the relay by these rules, asking none of its items, until a SPEC "
+    'line comes back: a ROUND reply gets `SendMessage(planner, "WRITE SPEC round=<k>")`, a '
+    "YIELD_WEB runs step 8, a QUESTION is asked and its answer relayed as a single answer, a "
+    "NOT_VIABLE runs step 9, and anything else stops as step 6 says.",
+    "Then run step 11 for `the spec stands`, or step 12 for `stop`, so the draft reflects those "
+    "answers.",
 )
 
 
