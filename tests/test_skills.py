@@ -236,11 +236,15 @@ def test_build_train_resolves_the_packs_for_the_framework_specialist() -> None:
     assert "Resolve the pack folders and run the pack check (step 9)." in _phase_row(
         "build", "STATUS: YIELD_COMPLIANCE]"
     )
+    audit = _phase_step("audit", 1)
     assert (
-        "run the pack check (`python3 <plugin root>/scripts/daedalus_train.py packs --repo "
-        "<repo>`, the build phase's step 9) on the merged tree, then dispatch one "
-        "`framework-specialist` on the merged diff"
-    ) in _phase_step("audit", 1)
+        "Run the pack check with the merged range (`python3 <plugin root>/scripts/"
+        "daedalus_train.py packs --repo <repo> --diff <base sha>...daedalus/<train-id>`, the "
+        "build phase's step 9) on the merged tree."
+    ) in audit
+    # 0192: a pack's triggers start the specialist even when no infrastructure changed.
+    assert "dispatch one `framework-specialist` on the merged diff" in audit
+    assert "dispatch the specialist anyway with the `Triggered:` folders" in audit
     assert "before that first dispatch" not in text
     assert "A non-zero exit stops the run and shows its lines" in text
     assert "Every compliance topic goes to `framework-specialist`" in text

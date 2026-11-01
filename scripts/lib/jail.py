@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import glob as _glob
 import os
 import re
 import subprocess
@@ -22,20 +23,30 @@ from lib.config import (
 )
 from lib.credential_paths import (
     CREDENTIAL_TOOLS,
+    ENV_IGNORE_FILES,
     IGNORE_FILES,
     R_BRACE_UNJUDGED,
     R_CREDENTIAL,
     R_CREDENTIAL_TREE,
+    R_ENV_FILE,
+    R_ENV_FILE_TREE,
+    R_ENV_WALK_CAP,
+    R_ENV_WHITELIST_WRITE,
     R_IGNORE_WHITELIST,
     R_REPLY_KEY,
     R_REPLY_KEY_TREE,
     REPLY_KEY_NAME,
+    env_file_hit,
+    env_roots,
+    env_walk,
+    env_whitelist_reason,
     glob_patterns,
     glob_reaches,
     ignore_whitelist,
     key_roots,
     path_reason,
     reply_key_hit,
+    whitelists_env,
 )
 from lib.credential_paths import CUT as _CUT
 from lib.credential_paths import LIT as _LIT
@@ -1594,10 +1605,14 @@ def _tree_reason(
     roots: list[str],
     command: str,
     keys: tuple[str, ...] = (),
+    env_files: tuple[str, ...] = (),
 ) -> str | None:
     dotglob = _dotglob_on(command)
     # SC-12: reply key roots let a dot folder hide them from **; credential stores do not.
-    pairs = [(root, False) for root in roots] + [(key, True) for key in keys]
+    pairs = [(root, False, R_CREDENTIAL_TREE) for root in roots]
+    pairs += [(key, True, R_CREDENTIAL_TREE) for key in keys]
+    # 0192: a .env file is a dot file, so rg's default skip hides it like the reply key.
+    pairs += [(env, True, R_ENV_FILE_TREE) for env in env_files]
     for k, (words, (name, at, paths)) in enumerate(parsed):
         if at < 0:
             continue
@@ -1612,14 +1627,44 @@ def _tree_reason(
             for text, _ in _expand_word(words[i], envs[k]):
                 targets += [t for t in (_anchor(text, b) for b in bases or [""]) if t]
         for target in targets:
-            for root, dots_hide in pairs:
+            for root, dots_hide, reason in pairs:
                 rest = _store_rest(target, root, True, dotglob, dots_hide)
                 # spec 8, SC-12: rg skips hidden dirs unless a flag or a whitelist glob reaches one.
                 shown = hidden or glob_reaches(globs, rest or [])
                 if rest is not None and (shown or not any(p.startswith(".") for p in rest)):
-                    return R_CREDENTIAL_TREE.format(path=target)
+                    return reason.format(path=target)
                 if rest is not None and name == "rg" and ignore_whitelist(root):
                     return R_IGNORE_WHITELIST.format(path=target)
+            walked = _env_walk_reason(target, hidden, globs, name == "rg", dotglob)
+            if walked:
+                return walked
+    return None
+
+
+def _env_walk_reason(
+    target: str, hidden: bool, globs: list[str], rg: bool, dotglob: bool
+) -> str | None:
+    # 0192, issue 152: a folder read reaches a nested .env file when it shows dot files or a
+    # glob names one; a glob operand walks each match. Plain rg reaches one only through a
+    # `!` line in an ignore file, so it reads the ignore files instead.
+    if not (hidden or globs or rg):
+        return None
+    globbed = bool(_GLOB_CHARS & set(target))
+    folders = _glob.glob(target, include_hidden=dotglob) if globbed else [target]
+    for folder in (f for f in folders if os.path.isdir(f)):
+        if rg:
+            listed = env_whitelist_reason(folder)
+            if listed:
+                return listed
+        if not (hidden or globs):
+            continue
+        found = env_walk(folder)
+        if found is None:
+            return R_ENV_WALK_CAP.format(path=folder)
+        for env in found:
+            rest = os.path.relpath(env, os.path.realpath(folder)).split(os.sep)
+            if hidden or glob_reaches(globs, rest):
+                return R_ENV_FILE_TREE.format(path=folder)
     return None
 
 
@@ -1675,6 +1720,11 @@ def _bash_credential_reason(
                 break
         texts = [t for t, _ in _expand_word(target, envs[k])] if target else envs[k]["HOME"]
         bases += [b for b in (_anchor(t, cwd) for t in texts) if b]
+    # 0192: a command naming an ignore file and carrying a `!` line that reaches a .env name.
+    words_all = [_clean(w) for s in segments for w in s]
+    named = [w for w in words_all if os.path.basename(w) in ENV_IGNORE_FILES]
+    if named and (whitelists_env(command) or any(whitelists_env(w) for w in words_all)):
+        return R_ENV_WHITELIST_WRITE.format(path=named[0])
     absolute: list[str] = []
     relative: list[str] = []
     unresolved = ""
@@ -1693,8 +1743,12 @@ def _bash_credential_reason(
             return R_REPLY_KEY.format(path=target)
         if _credential_hit(target, roots, True, dotglob):
             return R_CREDENTIAL.format(path=target)
+        if env_file_hit(target) or _credential_hit(target, list(env_files), True, dotglob, True):
+            return R_ENV_FILE.format(path=target)
         return None
 
+    # 0192: the .env files beside every folder the command starts in or moves to.
+    env_files = tuple(env_roots(*bases))
     # spec 8: spelled-out paths first, so the message names the path the command wrote.
     for cand in absolute:
         reason = hit(os.path.normpath(cand))
@@ -1711,7 +1765,7 @@ def _bash_credential_reason(
             reason = hit(os.path.normpath(os.path.join(base, cand)))
             if reason:
                 return reason
-    return _tree_reason(parsed, envs, bases, roots, command, keys)
+    return _tree_reason(parsed, envs, bases, roots, command, keys, env_files)
 
 
 def _credential_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | None:

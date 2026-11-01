@@ -17,7 +17,9 @@ from tests.conftest import CFG
 from tests.hook_chain import decide
 from tests.test_checks_credential_paths import _bash_in, _key_repo
 
-SHIPPED = {"aws-default": 34, "nist-distilled": 27}
+SHIPPED = {"aws-default": 34, "nist-distilled": 27, "stripe-default": 5, "cost-tier": 8}
+# 0192: cost-tier is off until frameworks.packs names it.
+OFF_BY_DEFAULT = {"cost-tier"}
 AWS_ID = re.compile(r"AWS-([A-Z0-9]+)-[0-9]+")
 
 
@@ -85,7 +87,7 @@ def test_frameworks_folder_holds_no_standards_pack() -> None:
 def test_aws_default_controls_name_their_service_verify_and_nist_ids() -> None:
     pack = load_pack(packs.FRAMEWORKS_DIR / "aws-default")
     services = {control.service for control in pack.controls}
-    assert services == set(packs.SERVICES) - {"any"}
+    assert services == set(packs.SERVICES) - {"any", "payments"}
     for control in pack.controls:
         match = AWS_ID.fullmatch(control.id)
         assert match and match.group(1) == control.service.upper(), control.id
@@ -460,7 +462,7 @@ def _manifest(repo: Path, frameworks: object) -> None:
 
 
 def _shipped() -> list[Path]:
-    return [packs.FRAMEWORKS_DIR / name for name in sorted(SHIPPED)]
+    return [packs.FRAMEWORKS_DIR / name for name in sorted(set(SHIPPED) - OFF_BY_DEFAULT)]
 
 
 def test_pack_folders_reads_the_shipped_packs_with_no_folder_named(repo_cwd: Path) -> None:
@@ -511,3 +513,215 @@ def test_train_packs_prints_the_checked_folders_or_stops(
     _manifest(repo_cwd, {"pack_dir": "absent", "default_packs": False})
     assert daedalus_train.main(run) == 1
     assert capsys.readouterr().out.startswith("No control pack was found")
+
+
+# 0192: the default and triggers keys of pack.json, and the two game stack packs.
+
+
+def test_a_default_false_pack_is_read_only_when_named(repo_cwd: Path) -> None:
+    cost = packs.FRAMEWORKS_DIR / "cost-tier"
+    assert load_pack(cost).default is False
+    assert cost not in pack_folders(repo_cwd)
+    _manifest(repo_cwd, {"packs": ["cost-tier"]})
+    assert pack_folders(repo_cwd) == sorted([*_shipped(), cost])
+    _manifest(repo_cwd, {"packs": ["cost-tier"], "default_packs": False})
+    assert pack_folders(repo_cwd) == [cost]
+    assert packs.unknown_named(repo_cwd) == []
+    _manifest(repo_cwd, {"packs": ["no-such-pack"]})
+    assert packs.unknown_named(repo_cwd) == ["no-such-pack"]
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "want"),
+    [
+        ("default", "no", "pack.json default must be true or false"),
+        ("triggers", [], "pack.json triggers must be a list of 1 to 32 path globs"),
+        ("triggers", "**/*stripe*", "pack.json triggers must be a list"),
+        ("triggers", ["ok", 3], "pack.json triggers must be a list"),
+        ("triggers", ["x\ny"], "pack.json triggers must be a list"),
+    ],
+)
+def test_a_bad_default_or_triggers_value_is_a_problem(
+    tmp_path: Path, key: str, value: object, want: str
+) -> None:
+    folder = _make(tmp_path / "p")
+    meta = json.loads((folder / "pack.json").read_text(encoding="utf-8"))
+    (folder / "pack.json").write_text(json.dumps({**meta, key: value}), encoding="utf-8")
+    assert want in _problems(folder)
+
+
+def _as_shipped(monkeypatch: pytest.MonkeyPatch, folder: Path) -> Path:
+    # 0192: default and triggers load only from the shipped folder, so tests stand one up.
+    folder.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(packs, "FRAMEWORKS_DIR", folder)
+    return folder
+
+
+def test_default_and_triggers_load_and_absent_reads_as_on_with_no_triggers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipped = _as_shipped(monkeypatch, tmp_path / "shipped")
+    plain = load_pack(_make(shipped / "plain"), known=())
+    assert (plain.default, plain.triggers) == (True, None)
+    folder = _make(shipped / "trig", default=False, triggers=["**/*stripe*"])
+    pack = load_pack(folder, known=())
+    assert (pack.default, pack.triggers) == (False, ("**/*stripe*",))
+
+
+@pytest.mark.parametrize(("key", "value"), [("default", True), ("triggers", ["**/*.py"])])
+def test_a_project_pack_with_default_or_triggers_is_refused(
+    tmp_path: Path, key: str, value: object
+) -> None:
+    folder = _make(tmp_path / "compliance" / "p")
+    meta = json.loads((folder / "pack.json").read_text(encoding="utf-8"))
+    (folder / "pack.json").write_text(json.dumps({**meta, key: value}), encoding="utf-8")
+    want = f"pack.json {key} applies only to a pack Daedalus ships; remove it from this pack"
+    assert pack_problems(folder, known=()) == [want]
+    with pytest.raises(PackError, match="applies only to a pack Daedalus ships"):
+        load_pack(folder, known=())
+
+
+@pytest.mark.parametrize(
+    ("path", "hit"),
+    [
+        ("stripe.ts", True),
+        ("src/payments/stripe-webhook.ts", True),
+        (".env", True),
+        ("apps/web/.env.local", True),
+        ("package.json", True),
+        ("apps/web/pnpm-lock.yaml", True),
+        ("src/main.ts", False),
+        ("infra/main.tf", False),
+        (".env.example", True),
+        ("src/StripeClient.ts", True),
+        ("apps/web/.ENV.Local", True),
+        ("Package.JSON", True),
+    ],
+)
+def test_the_stripe_triggers_match_the_game_stack_paths(path: str, hit: bool) -> None:
+    folder = packs.FRAMEWORKS_DIR / "stripe-default"
+    chosen, matched = packs.select_packs([folder], [path])
+    assert (folder in chosen, folder in matched) == (hit, hit), path
+
+
+def test_a_pack_with_triggers_is_named_only_when_a_path_matches(tmp_path: Path) -> None:
+    plain = _make(tmp_path / "plain")
+    trig = _make(tmp_path / "trig", triggers=["**/*stripe*", "docs/*.md"])
+    assert packs.select_packs([plain, trig], ["src/a.py"]) == ([plain], [])
+    assert packs.select_packs([plain, trig], ["src/stripe.py"]) == ([plain, trig], [trig])
+    assert packs.select_packs([plain, trig], ["docs/a.md"]) == ([plain, trig], [trig])
+    assert packs.select_packs([trig], []) == ([], [])
+    assert packs.trigger_match("**/*STRIPE*", "src/StripeClient.ts")
+
+
+def test_train_packs_with_a_diff_prints_the_triggered_packs(
+    repo_cwd: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import daedalus_train
+
+    from tests.conftest import git
+
+    monkeypatch.chdir(repo_cwd)
+    shipped = _as_shipped(monkeypatch, tmp_path / "shipped")
+    plain = _make(shipped / "plain")
+    trig = _make(shipped / "trig", triggers=["**/*stripe*"])
+    _make(shipped / "off", default=False)
+    git(repo_cwd, "commit", "-q", "--allow-empty", "-m", "base")
+    (repo_cwd / "main.py").write_text("x\n", encoding="utf-8")
+    git(repo_cwd, "add", "-A")
+    git(repo_cwd, "commit", "-q", "-m", "plain change")
+    run = ["packs", "--repo", str(repo_cwd), "--diff", "HEAD^...HEAD"]
+    assert daedalus_train.main(run) == 0
+    assert capsys.readouterr().out == f"Packs: {plain}\nTriggered: none\n"
+    (repo_cwd / "src").mkdir()
+    (repo_cwd / "src" / "stripe.ts").write_text("x\n", encoding="utf-8")
+    git(repo_cwd, "add", "-A")
+    git(repo_cwd, "commit", "-q", "-m", "stripe change")
+    assert daedalus_train.main(run) == 0
+    assert capsys.readouterr().out == f"Packs: {plain}, {trig}\nTriggered: {trig}\n"
+    for bad in ("--output", "HEAD"):
+        assert daedalus_train.main(["packs", "--repo", str(repo_cwd), f"--diff={bad}"]) == 1
+        assert "is not a <base>...<branch> range" in capsys.readouterr().out
+    assert daedalus_train.main(["packs", "--repo", str(repo_cwd), "--diff", "nope...HEAD"]) == 1
+    assert "git diff --name-only nope...HEAD failed" in capsys.readouterr().out
+
+
+def test_train_packs_with_a_diff_and_no_pack_goes_on_but_a_broken_pack_stops(
+    repo_cwd: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 0192: default_packs false and no project pack must not stop a docs-only audit.
+    import daedalus_train
+
+    from tests.conftest import git
+
+    monkeypatch.chdir(repo_cwd)
+    _manifest(repo_cwd, {"default_packs": False})
+    git(repo_cwd, "add", "-A")
+    git(repo_cwd, "commit", "-q", "-m", "base")
+    (repo_cwd / "README.md").write_text("x\n", encoding="utf-8")
+    git(repo_cwd, "add", "-A")
+    git(repo_cwd, "commit", "-q", "-m", "docs change")
+    run = ["packs", "--repo", str(repo_cwd), "--diff", "HEAD^...HEAD"]
+    assert daedalus_train.main(run) == 0
+    assert capsys.readouterr().out == "Packs: none\nTriggered: none\n"
+    assert daedalus_train.main(["packs", "--repo", str(repo_cwd)]) == 1
+    assert capsys.readouterr().out.startswith("No control pack was found")
+    bad = _make(repo_cwd / "packs" / "bad", version="1.0")
+    _manifest(repo_cwd, {"pack_dir": "packs", "default_packs": False})
+    assert daedalus_train.main(run) == 1
+    assert capsys.readouterr().out.startswith(f"pack {bad.name}: pack.json version must be")
+
+
+def test_train_packs_stops_on_a_named_pack_daedalus_does_not_ship(
+    repo_cwd: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import daedalus_train
+
+    monkeypatch.chdir(repo_cwd)
+    _manifest(repo_cwd, {"packs": ["no-such-pack"]})
+    assert daedalus_train.main(["packs", "--repo", str(repo_cwd)]) == 1
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == (
+        "pack no-such-pack: frameworks.packs names no-such-pack, which is not a pack Daedalus ships"
+    )
+
+
+def test_stripe_and_cost_controls_name_their_ids_services_and_rg_verify() -> None:
+    stripe = load_pack(packs.FRAMEWORKS_DIR / "stripe-default")
+    assert [c.id for c in stripe.controls] == [f"STRIPE-{n}" for n in range(1, 6)]
+    assert {c.service for c in stripe.controls} == {"payments"}
+    cost = load_pack(packs.FRAMEWORKS_DIR / "cost-tier")
+    assert [c.id for c in cost.controls] == [
+        "COST-KMS-1",
+        "COST-KMS-2",
+        "COST-S3-1",
+        "COST-COMPUTE-1",
+        "COST-DATA-1",
+        "COST-NET-1",
+        "COST-LOG-1",
+        "COST-TF-1",
+    ]
+    for control in (*stripe.controls, *cost.controls):
+        assert control.statement and "fails" in control.statement, control.id
+        assert control.look_for and control.refs.nist, control.id
+        assert control.verify and control.verify.startswith("rg -n"), control.id
+    for control in cost.controls:
+        globs = re.findall(r"-g '([^']+)'", control.verify or "")
+        assert globs == ["*.tf", "*.tfvars", "*.json", "*.yaml", "*.yml"], control.id
+
+
+@pytest.mark.usefixtures("jail_fakes")
+def test_every_shipped_verify_command_passes_the_jail_beside_an_env_file(tmp_path: Path) -> None:
+    # 0192: the .env deny leaves each shipped verify open in a project holding .env files.
+    repo = _key_repo(tmp_path)
+    for name in (".env", ".env.local"):
+        (repo / name).write_text("STRIPE_SECRET_KEY=placeholder\n", encoding="utf-8")
+    refused = [
+        ident
+        for ident, command in _verify_commands()
+        if not decide(_bash_in(repo, "framework-specialist", command), CFG).allow
+    ]
+    assert refused == []

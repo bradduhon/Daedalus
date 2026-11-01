@@ -31,6 +31,8 @@ Never run a package manager: no install, update, audit or resolve command of any
 Inputs: the diff base, the branch, the repository path, the changed dependency files, a line
 `Web lookup: on` or `Web lookup: off`, and, when the project supplies one, an
 `Advisory export: <path>` line naming a file of advisories it exported.
+When the dispatch carries a `Rulebook: <path>` line, Read that file and judge its rows beside
+the rows below, with the same rubric (0189).
 
 ## Method
 1. Run `git -C <repo> diff <diff base>...<branch> -- <each changed dependency file>` and read
