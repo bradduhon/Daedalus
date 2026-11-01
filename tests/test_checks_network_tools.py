@@ -100,18 +100,19 @@ def test_network_tools_judges_the_hook_alone() -> None:
 
 @pytest.mark.parametrize("command", PACKAGE_INSTALL_CMDS)
 def test_a_package_install_is_refused_as_operator_run(command: str) -> None:
-    # 0164: the install reaches the registry and writes a store outside the worktree.
+    # 0164, 0196: the install reaches the registry; test_checks_install_gate.py holds the rest.
     for form in (command, f"{shell.CONFINE_PATH} --unit /w -- {command}"):
-        assert evaluate(HOOK, _b("coder", form)) == jail.R_PACKAGE_INSTALL, form
-    assert "the operator runs it" in jail.R_PACKAGE_INSTALL and "(0164)" in jail.R_PACKAGE_INSTALL
+        got = evaluate(HOOK, _b("coder", form))
+        assert got is not None and "is a package install" in got and "(0196" in got, form
 
 
 @pytest.mark.parametrize("command", PACKAGE_DOWNLOADS)
 def test_a_download_and_run_tool_is_refused_for_the_operator(command: str) -> None:
-    # 0164: dlx, bunx, npm exec and npx -y fetch a package the project does not pin.
+    # 0164, 0196: a launcher fetches a package the project does not pin, then runs it.
     for form in (command, f"{shell.CONFINE_PATH} --unit /w -- {command}"):
-        assert evaluate(HOOK, _b("coder", form)) == jail.R_PACKAGE_DOWNLOAD, form
-    assert "operator" in jail.R_PACKAGE_DOWNLOAD and "(0164)" in jail.R_PACKAGE_DOWNLOAD
+        got = evaluate(HOOK, _b("coder", form))
+        assert got is not None and "downloads a package and runs it" in got, form
+        assert "(0196, 0164)" in got and "Next: run the installed binary instead (" in got
 
 
 @pytest.mark.parametrize(
@@ -119,7 +120,8 @@ def test_a_download_and_run_tool_is_refused_for_the_operator(command: str) -> No
     [
         "pnpm run install",
         "pnpm exec vitest run",
-        "npx vitest run",
+        "npx --no-install vitest run",
+        "npm exec --no-install vitest run",
         "pnpm exec node --test",
         "pnpm test",
         "pnpm run test",

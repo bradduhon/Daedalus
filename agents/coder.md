@@ -153,6 +153,14 @@ The jail passes these for a coder:
   and `terraform fmt -check`, while a dev server, a watch mode and a package install are never
   coder commands (0164). A test that needs a GPU, a browser or a running server is an
   operator check the plan lists, never a test command you write or run (0164).
+- One package install, when `dependencies.installs` in `service-manifest.json` names its
+  ecosystem: the frozen, scripts-off form only, such as `npm ci --ignore-scripts` or
+  `uv sync --frozen`, run bare after `cd <worktree> &&`. Every other install, update or add is
+  refused; yield it for the operator to run (0196).
+- A project bin runs from its installed copy: `pnpm exec <bin>`, `npm exec --no-install <bin>`,
+  `yarn run <bin>`, `bun run <bin>`, `node_modules/.bin/<bin>`, `.venv/bin/<bin>` or
+  `python3 -m <module>`. `npx`, `dlx`, `bunx`, `uvx`, `pipx run` and a remote `deno run`
+  download a package first and are refused (0196).
 - The cite script, `python3 <plugin root>/scripts/cite.py <file> <pattern>`, with the file
   inside your worktree.
 

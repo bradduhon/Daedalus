@@ -177,6 +177,17 @@ DEV_SERVER_KEYS = tuple(f.name for f in fields(DevServer))
 DEV_SERVER_HOSTS = ("localhost", "127.0.0.1")
 # 0192: the package managers a stack may name; anything else is refused.
 PACKAGE_MANAGERS = ("pnpm", "npm", "yarn", "pip", "uv")
+# 0196: the ecosystems whose frozen, scripts-off install a coder may run when listed.
+INSTALL_ECOSYSTEMS = ("npm", "python", "cargo", "go")
+
+
+@dataclass(frozen=True)
+class Dependencies:
+    # 0196: the ecosystems the coder's frozen install is enabled for; none by default.
+    installs: tuple[str, ...] = ()
+
+
+DEPENDENCIES_KEYS = tuple(f.name for f in fields(Dependencies))
 
 
 @dataclass(frozen=True)
@@ -195,6 +206,7 @@ class Manifest:
     frameworks: Frameworks = field(default_factory=Frameworks)
     assets: Assets = field(default_factory=Assets)
     dev_server: DevServer | None = None
+    dependencies: Dependencies = field(default_factory=Dependencies)
 
 
 # 0073, B2: the stack keys that hold a command the coder may run verbatim.
@@ -643,6 +655,30 @@ def _assets(target: Path, raw: dict[str, object]) -> Assets:
     return Assets(tuple(map(str, roots)), tuple(map(str, extensions)), size)
 
 
+def _dependencies(target: Path, raw: dict[str, object]) -> Dependencies:
+    # 0196: unknown keys are refused; each ecosystem named once.
+    block = raw.get("dependencies", {})
+    if not isinstance(block, dict):
+        raise _key_error(target, "dependencies", "must be an object")
+    unknown = sorted(str(key) for key in set(block) - set(DEPENDENCIES_KEYS))
+    if unknown:
+        known = ", ".join(DEPENDENCIES_KEYS)
+        raise _key_error(target, "dependencies", f"has unknown keys {unknown} (known: {known})")
+    installs = block.get("installs", [])
+    if (
+        not isinstance(installs, list)
+        or not all(isinstance(e, str) and e in INSTALL_ECOSYSTEMS for e in installs)
+        or len(set(installs)) != len(installs)
+    ):
+        names = ", ".join(INSTALL_ECOSYSTEMS)
+        raise _key_error(
+            target,
+            "dependencies.installs",
+            f"must be a list naming each of {names} at most once (0196)",
+        )
+    return Dependencies(tuple(map(str, installs)))
+
+
 def _local_url(url: object) -> bool:
     # 0164: http or https on this machine, a port of 1 to 65535 or none, no user part.
     if not isinstance(url, str) or not url.isprintable() or any(c.isspace() for c in url):
@@ -713,6 +749,7 @@ def load(repo: Path) -> Manifest | None:
         frameworks=_frameworks(target, raw),
         assets=_assets(target, raw),
         dev_server=_dev_server(target, raw),
+        dependencies=_dependencies(target, raw),
     )
 
 

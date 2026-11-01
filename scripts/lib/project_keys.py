@@ -17,11 +17,13 @@ from lib.config import (
 )
 from lib.manifest import (
     ASSETS_KEYS,
+    DEPENDENCIES_KEYS,
     DEV_SERVER_KEYS,
     DOCS_KEYS,
     DRIVERS,
     FEATURE_KEYS,
     FRAMEWORKS_KEYS,
+    INSTALL_ECOSYSTEMS,
     LITERACY_LEVELS,
     LITERACY_PROFILE,
     MANIFEST_NAME,
@@ -37,6 +39,7 @@ from lib.manifest import (
     SURFACE,
     TEXT_MAX,
     Assets,
+    Dependencies,
     Docs,
     Features,
     Manifest,
@@ -75,6 +78,8 @@ def manifest_keys() -> tuple[str, ...]:
             keys.extend(f"assets.{key}" for key in ASSETS_KEYS)
         elif item.name == "dev_server":
             keys.extend(f"dev_server.{key}" for key in DEV_SERVER_KEYS)
+        elif item.name == "dependencies":
+            keys.extend(f"dependencies.{key}" for key in DEPENDENCIES_KEYS)
         elif item.name in _MANIFEST_PARENT:
             keys.append(f"{_MANIFEST_PARENT[item.name]}.{item.name}")
         else:
@@ -113,6 +118,11 @@ def starter_manifest() -> dict[str, object]:
         elif item.name == "assets":
             # 0192, 0076: every key present and empty, so the key reference explains each one.
             doc["assets"] = {f.name: _json(getattr(Assets(), f.name)) for f in fields(Assets)}
+        elif item.name == "dependencies":
+            # 0196: every key present at its default, so the key reference explains each one.
+            doc["dependencies"] = {
+                f.name: _json(getattr(Dependencies(), f.name)) for f in fields(Dependencies)
+            }
         elif item.name in _MANIFEST_PARENT:
             parent = _MANIFEST_PARENT[item.name]
             doc[parent] = block = blocks.setdefault(parent, {})
@@ -447,6 +457,17 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "A whole number of at least 1, or `null`",
         "`null`: no asset file is listed by size",
         "`1048576`",
+    ),
+    (MANIFEST_FILE, "dependencies.installs"): KeyRow(
+        "The ecosystems whose frozen, scripts-off install a coding agent may run, such as "
+        "`npm ci --ignore-scripts` or `uv sync --frozen`; every other install, update, add or "
+        "resolve command stays refused for every agent, and no other agent gets this exception",
+        "list of strings",
+        "Each of "
+        + ", ".join(f"`{name}`" for name in INSTALL_ECOSYSTEMS)
+        + " at most once; `npm` covers npm, pnpm, yarn and bun, `python` covers pip and uv",
+        "`[]`: no agent runs any install",
+        '`["npm", "python"]`',
     ),
     (MANIFEST_FILE, "dev_server.url"): KeyRow(
         "The address of the site you host on your own machine for testing; the verify step "

@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0044: refuses web tools without --web, and network commands in Bash; --gh exempts gh.
+# 0196: every package install is refused; a coder's frozen form passes when the manifest lists it.
 from __future__ import annotations
 
 import argparse
@@ -29,6 +30,11 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     cwd = hook_io.text(hook_input, "cwd")
     bases = shell.chain_bases(chain, cwd, jail.DIR_CHANGE_CMDS) or [cwd] * len(chain.segments)
     banned = jail.NETWORK_TOOLS - {"gh"} if gh else jail.NETWORK_TOOLS
+    coder = hook_io.agent(hook_input) == "coder"
+
+    def installs() -> frozenset[str]:
+        return jail.coder_installs(cwd) if coder else frozenset()
+
     for segment, base in zip(chain.segments, bases, strict=True):
         if not segment:
             continue
@@ -37,10 +43,12 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
         if banned & words:
             return jail.R_NETWORK
         judged = [t for i, t in enumerate(segment) if i not in exempt]
-        if jail.package_install(judged):
-            return jail.R_PACKAGE_INSTALL
-        if jail.package_download(judged):
-            return jail.R_PACKAGE_DOWNLOAD
+        install = jail.install_reason(judged, installs)
+        if install:
+            return install
+        download = jail.download_reason(judged)
+        if download:
+            return download
         # issue 55: a link or versioned path to the claude binary, by its real file.
         if shell.runs_claude(segment, base):
             return shell.R_CLAUDE_PATH
