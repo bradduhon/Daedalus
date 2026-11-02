@@ -12,7 +12,6 @@ from tests.conftest import REPO_ROOT
 LEGAL = REPO_ROOT / "skills" / "document" / "kinds" / "legal" / "SKILL.md"
 DOCUMENT = REPO_ROOT / "skills" / "document" / "SKILL.md"
 WRITER = REPO_ROOT / "agents" / "writer.md"
-COMPARER = REPO_ROOT / "agents" / "comparer.md"
 HOWTO = REPO_ROOT / "docs" / "howto" / "README.md"
 LEGAL_PATH = "${CLAUDE_PLUGIN_ROOT}/skills/document/kinds/legal/SKILL.md"
 FIRST_LINE = (
@@ -56,11 +55,30 @@ def test_writer_never_recommends_or_advises_and_says_so_first() -> None:
     assert f"every output starts with this line, unchanged: {FIRST_LINE}" in text
 
 
-def test_redline_mode_uses_the_comparer_row_shape() -> None:
-    columns = "`| # | Where | Baseline says | Derived says | Why | Status |`"
-    assert columns in _text()
-    assert columns in " ".join(COMPARER.read_text(encoding="utf-8").split())
-    assert "with the counterparty's draft as the baseline" in _text()
+def _howto_contract_section() -> str:
+    howto = HOWTO.read_text(encoding="utf-8")
+    start = howto.index("### Writing a contract document")
+    end = howto.find("\n#", start + 1)
+    return howto[start : end if end != -1 else len(howto)]
+
+
+def test_every_draft_ends_with_a_references_section() -> None:
+    text = _text()
+    assert "every draft ends with a final section titled `References`" in text
+    assert "`<clause number>: <source alias>:<line or range> <tag>`" in text
+    assert "The References section is the receipt surface the verifier reads in claims mode" in text
+
+
+def test_no_change_table_in_the_kind_skill_or_the_howto() -> None:
+    assert "change table" not in LEGAL.read_text(encoding="utf-8").lower()
+    assert "change table" not in _howto_contract_section().lower()
+    assert "ends with a references section" in _howto_contract_section()
+
+
+def test_document_phase_skips_the_comparer_for_the_legal_kind() -> None:
+    assert "the document phase skips the change gate for a legal document" in _text()
+    document = " ".join(DOCUMENT.read_text(encoding="utf-8").split())
+    assert "Skipped when the step 11 brief names the legal kind skill" in document
 
 
 def test_defined_terms_and_values_carry_counting_receipts() -> None:
