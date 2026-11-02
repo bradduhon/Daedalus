@@ -128,10 +128,6 @@ def _other_train(repo: Path, path: Path, train: str) -> str | None:
     return None
 
 
-def _digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def _plan_defect(repo: Path, train: str, state: dict[str, object]) -> str | None:
     # spec 4.1, 0086: the hash covers the raw file bytes; validate runs at the train's builder cap.
     record = state.get("plan")
@@ -146,18 +142,19 @@ def _plan_defect(repo: Path, train: str, state: dict[str, object]) -> str | None
     other = _other_train(repo, path, train)
     if other is not None:
         return f"the plan {raw} sits under train {other}, not train {train}."
+    # issue 105: one read; the hash and the parse cover the same bytes.
     try:
-        before = _digest(path)
-        plan = plan_record.load(path)
-        after = _digest(path)
-    except (OSError, plan_record.PlanError) as exc:
+        data = path.read_bytes()
+        text = data.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
         return f"the plan file {raw} could not be read ({exc})."
-    if before != sha or after != sha:
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != sha:
         return (
-            f"the plan file {raw} hashes to {after}, not {sha}; it changed after it was recorded."
+            f"the plan file {raw} hashes to {digest}, not {sha}; it changed after it was recorded."
         )
     cap = integer(state, "max_concurrent_builders", DEFAULT_MAX_CONCURRENT_BUILDERS)
-    defects = plan_record.validate(plan, cap)
+    defects = plan_record.validate(plan_record.loads(text), cap)
     if defects:
         return f"the plan {raw} has {len(defects)} defect(s): {' '.join(defects)}"
     return None
