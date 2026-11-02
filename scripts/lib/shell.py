@@ -1754,9 +1754,9 @@ def _worker_hygiene(
         return R_ENV
     if runs_claude(tokens, base):
         return R_CLAUDE_PATH
-    wraps = own_script is not None or agent == "terraform-reviewer"
+    wraps = own_script is not None or agent == "auditor"
     if wraps and _base(tokens[0]) == CONFINE:
-        # 0048, 0158: a coder's or the terraform reviewer's wrapped command is judged as if bare.
+        # 0048, 0158: a coder's or the auditor's wrapped terraform command is judged as if bare.
         split = confine_split(tokens)
         if split is None or not confine_wrapper(tokens[0], base):
             return R_CONFINE_FORM

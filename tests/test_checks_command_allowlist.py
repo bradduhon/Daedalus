@@ -686,7 +686,7 @@ def test_brief_check_is_the_orchestrators_train_subcommand() -> None:
 
 
 def test_packs_is_the_orchestrators_train_subcommand() -> None:
-    # prepush-2026-10-27 finding 6: the pack check runs before any framework specialist.
+    # prepush-2026-10-27 finding 6: the pack check runs before any frameworks rulebook.
     module = load(HOOK)
     assert "packs" in module.TRAIN_SCRIPTS["daedalus_train.py"]
     command = f"python3 {SCRIPTS}/daedalus_train.py packs --repo {CWD}"
@@ -926,18 +926,19 @@ def test_orchestrator_refusal_names_the_new_scripts() -> None:
 
 
 # 0158, 0159-DAE-PLT: validate starts provider programs, so it runs only on its own switch.
-TF_ALLOW = ("--allow", "terraform,inspect")
+TF_ALLOW = ("--git", "read-only", "--test-runner", "audit", "--terraform")
+TF_HOOK = "read_only_bash"
 VALIDATE_NEXT = "set features.terraform_validate to true in service-manifest.json"
 
 
 def _tf_payload(repo: Path, command: str) -> dict[str, Any]:
-    hook_input = _b("daedalus:terraform-reviewer", command)
+    hook_input = _b("daedalus:auditor", command)
     hook_input["cwd"] = str(repo)
     return hook_input
 
 
 def _tf_call(repo: Path, command: str) -> str | None:
-    return evaluate(HOOK, _tf_payload(repo, command), *TF_ALLOW)
+    return evaluate(TF_HOOK, _tf_payload(repo, command), *TF_ALLOW)
 
 
 def _plant_provider(repo: Path) -> Path:
@@ -1064,14 +1065,15 @@ def test_wrapped_terraform_names_one_unit_worktree_and_the_plugin_wrapper(tmp_pa
     )
 
 
-def test_the_wrapper_admits_only_terraform_for_the_reviewer_and_nothing_for_others(
+def test_the_wrapper_admits_only_terraform_for_the_auditor_and_nothing_for_others(
     tmp_path: Path,
 ) -> None:
-    # 0158: the wrapper adds no grant; its command meets the reviewer's terraform forms.
+    # 0158, 0186: the wrapper adds no grant; its command meets the auditor's terraform forms.
     repo, wt, wrap = _wrapped_tf(tmp_path, {"terraform_validate": True})
     for inner in ("python3 -c 1", "bash -c ls", f"cat {wt}/README.md", "terraform plan"):
         assert not decide(_tf_payload(repo, f"{wrap} {inner}"), Config()).allow, inner
-    for agent in ("auditor", "verifier", "releaser"):
+    assert decide(_tf_payload(repo, f"{wrap} terraform validate"), Config()).allow
+    for agent in ("verifier", "releaser", "orchestrator"):
         hook_input = _tf_payload(repo, f"{wrap} terraform validate")
         hook_input["agent_type"] = agent
         assert not decide(hook_input, Config()).allow, agent

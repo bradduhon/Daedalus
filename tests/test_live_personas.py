@@ -56,9 +56,13 @@ HELLO_TEST = (
     "def test_hello() -> None:\n"
     '    assert hello("x") == "hello x"\n'
 )
+# 0186: the frameworks rulebook in compliance-question mode, on a pack folder that is absent.
 SPECIALIST_TASK = (
-    "Phase 0 only.\nPacks: /nonexistent/packs/aws-default\nVerify the pack and report."
+    "Mode: compliance-question\nPacks: /nonexistent/packs/aws-default\n"
+    f"Rulebook: {REPO_ROOT / 'packs' / 'judges' / 'frameworks.md'}\n"
+    "Question: which controls bind a new IAM role? Run Phase 0 first and report."
 )
+JUDGES = REPO_ROOT / "packs" / "judges"
 pytestmark = pytest.mark.live
 
 
@@ -245,10 +249,10 @@ def test_coder(live_repo: Path) -> None:
     _check(run, "coder", ("[STATUS: COMPLETE]",))
 
 
-def test_framework_specialist_without_its_pack(live_repo: Path) -> None:
-    name = "framework-specialist"
-    run = _persona(name, SPECIALIST_TASK, ["Read", "Grep", "Bash"], live_repo)
-    _check(run, name, ("[STATUS: PACK_INVALID]",))
+def test_frameworks_rulebook_without_its_pack(live_repo: Path) -> None:
+    run = _persona("auditor", SPECIALIST_TASK, ["Read", "Grep", "Bash"], live_repo)
+    _check(run, "auditor", ("[STATUS: COMPLIANCE]",))
+    assert "PACK_INVALID" in run.result.stdout
 
 
 def test_auditor(live_repo: Path) -> None:
@@ -326,34 +330,37 @@ def test_auditor_files_a_planted_defect_as_a_failing_test(live_repo: Path) -> No
     assert result.returncode != 0, "the audit test passes on the judged tip"
 
 
-def test_dependency_auditor(live_repo: Path) -> None:
-    # 0132: off the network with the lookup off, it judges the lockfile and lists PASS/FAIL.
+def test_dependencies_rulebook(live_repo: Path) -> None:
+    # 0132, 0186: off the network with the lookup off, the auditor judges the lockfile rows.
     (live_repo / "requirements.txt").write_text("requests==2.32.3\n", encoding="utf-8")
     _git(live_repo, "add", "requirements.txt")
     _git(live_repo, "commit", "-q", "-m", "Add requests")
     task = (
         f"Diff base: HEAD~1\nBranch: HEAD\nRepo: {live_repo}\n"
-        "Changed dependency files: requirements.txt\nWeb lookup: off\n"
-        "Judge the change by your method and end with your status line."
+        f"Rulebook: {JUDGES / 'dependencies.md'}\n"
+        "Changed dependency files: requirements.txt\nWeb lookup: off\nMinimum release age: 7\n"
+        "Judge only that rulebook's rows and end with your verdict line."
     )
-    run = _persona("dependency-auditor", task, ["Read", "Bash", "Grep", "Glob"], live_repo)
-    _check(run, "dependency-auditor", ("[STATUS: COMPLIANCE]",))
+    run = _persona("auditor", task, ["Read", "Bash", "Grep", "Glob"], live_repo)
+    _check(run, "auditor", ("[VERDICT:",))
+    assert "## Compliance" in run.result.stdout
     assert "DEP-5" in run.result.stdout
 
 
-def test_terraform_reviewer(live_repo: Path) -> None:
-    # 0132: TF-0 records the binary check; a missing or refused run is a warning, never a FAIL.
+def test_terraform_rulebook(live_repo: Path) -> None:
+    # 0132, 0186: TF-0 records the binary check; a missing or refused run is a WARN, never a FAIL.
     tf = 'variable "region" {\n  type = string\n}\n'
     (live_repo / "main.tf").write_text(tf, encoding="utf-8")
     _git(live_repo, "add", "main.tf")
     _git(live_repo, "commit", "-q", "-m", "Add main.tf")
     task = (
         f"Diff base: HEAD~1\nBranch: HEAD\nRepo: {live_repo}\n"
+        f"Rulebook: {JUDGES / 'terraform.md'}\n"
         "Changed Terraform files: main.tf\nTerraform tools: on\n"
-        "Review the change by your method and end with your status line."
+        "Judge only that rulebook's rows and end with your verdict line."
     )
-    run = _persona("terraform-reviewer", task, ["Read", "Bash", "Grep", "Glob"], live_repo)
-    _check(run, "terraform-reviewer", ("[STATUS: COMPLIANCE]",), block_ok=True)
+    run = _persona("auditor", task, ["Read", "Bash", "Grep", "Glob"], live_repo)
+    _check(run, "auditor", ("[VERDICT:",), block_ok=True)
     assert "TF-0" in run.result.stdout
     assert "TF-1 FAIL" not in run.result.stdout and "TF-2 FAIL" not in run.result.stdout
 

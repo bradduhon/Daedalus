@@ -44,7 +44,7 @@ def test_workers_cannot_send_messages() -> None:
 
 
 class TestReadOnlyAgents:
-    @pytest.mark.parametrize("agent", ["auditor", "framework-specialist"])
+    @pytest.mark.parametrize("agent", ["auditor", "verifier"])
     def test_no_writes(self, agent: str) -> None:
         for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
             assert not decide(_w(agent, f"{CWD}/docs/x.md", tool), CFG).allow
@@ -89,7 +89,7 @@ def test_only_the_orchestrator_may_start_and_resume_agents(tool: str) -> None:
 
 def test_tool_bound_judges_the_hook_alone() -> None:
     assert evaluate(HOOK, _t("verifier", "Write")) == jail.R_TOOL
-    assert evaluate(HOOK, _t("framework-specialist", "Glob")) == jail.R_TOOL
+    assert evaluate(HOOK, _t("web-researcher", "Glob")) == jail.R_TOOL
     assert evaluate(HOOK, _t("web-researcher", "WebFetch")) is None
     assert evaluate(HOOK, _t("daedalus:coder", "Edit")) is None
 

@@ -129,11 +129,12 @@ def test_every_shipped_verify_command_passes_the_jail_beside_a_reply_key(tmp_pat
     refused = [
         ident
         for ident, command in _verify_commands()
-        if not decide(_bash_in(repo, "framework-specialist", command), CFG).allow
+        if not decide(_bash_in(repo, "auditor", command), CFG).allow
     ]
     assert refused == []
-    for bad in ("grep -rn x .", "rg -n --hidden x .", "rg -nu x .", "git grep -n x"):
-        assert not decide(_bash_in(repo, "framework-specialist", bad), CFG).allow, bad
+    # 0186: the auditor's read-only git grant admits git grep, which reads tracked files only.
+    for bad in ("grep -rn x .", "rg -n --hidden x .", "rg -nu x ."):
+        assert not decide(_bash_in(repo, "auditor", bad), CFG).allow, bad
 
 
 def test_every_shipped_verify_pattern_compiles() -> None:
@@ -354,7 +355,7 @@ def test_a_nist_ref_holding_a_list_is_a_problem_not_a_crash(tmp_path: Path) -> N
     assert _problems(folder) == "control X-1 refs.nist must be a list of ids"
 
 
-# 113, prepush-2026-10-27 finding 2: verify commands the specialist's jail refuses.
+# 113, prepush-2026-10-27 finding 2: verify commands the auditor's jail refuses.
 HOSTILE_VERIFY = (
     "rg --ignore-file /tmp/ig -n BEGIN .",
     "rg --ignore-file=/tmp/ig -n BEGIN .",
@@ -376,7 +377,7 @@ def test_a_verify_the_specialists_jail_refuses_is_a_pack_problem(
 ) -> None:
     folder = _make(tmp_path / "p", [_control(verify=command)])
     found = _problems(folder)
-    assert found.startswith("control X-1 verify is refused by the framework specialist's jail: ")
+    assert found.startswith("control X-1 verify is refused by the auditor's jail: ")
     with pytest.raises(PackError):
         load_pack(folder, known=())
 
@@ -508,7 +509,7 @@ def test_train_packs_prints_the_checked_folders_or_stops(
     _make(repo_cwd / "packs" / "two", [_control(verify="rg --ignore-file /tmp/x -n . .")])
     assert daedalus_train.main(run) == 1
     out = capsys.readouterr().out.splitlines()
-    assert out[0].startswith("pack two: control X-1 verify is refused by the framework")
+    assert out[0].startswith("pack two: control X-1 verify is refused by the auditor's jail")
     assert out[-1].startswith("Next: run /daedalus:doctor and fix each pack it names")
     _manifest(repo_cwd, {"pack_dir": "absent", "default_packs": False})
     assert daedalus_train.main(run) == 1
@@ -722,6 +723,6 @@ def test_every_shipped_verify_command_passes_the_jail_beside_an_env_file(tmp_pat
     refused = [
         ident
         for ident, command in _verify_commands()
-        if not decide(_bash_in(repo, "framework-specialist", command), CFG).allow
+        if not decide(_bash_in(repo, "auditor", command), CFG).allow
     ]
     assert refused == []

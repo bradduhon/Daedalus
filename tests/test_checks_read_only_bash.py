@@ -56,13 +56,16 @@ class TestReadOnlyAgents:
             assert not decide(_b("auditor", command), CFG).allow, command
 
     def test_specialists_read_only_set(self) -> None:
-        assert decide(_b("framework-specialist", "sha256sum controls.json"), CFG).allow
-        assert decide(_b("framework-specialist", "git diff main...b | head"), CFG).allow
-        assert not decide(_b("framework-specialist", "curl https://nist.gov"), CFG).allow
-        assert not decide(_b("framework-specialist", "git checkout x"), CFG).allow
+        # 0186: no agent file carries the specialist grant now; the read check still judges it.
+        assert evaluate(HOOK, _b("x", "sha256sum controls.json"), *SPECIALIST) is None
+        assert evaluate(HOOK, _b("x", "git diff main...b | head"), *SPECIALIST) is None
+        assert evaluate(HOOK, _b("x", "curl https://nist.gov"), *SPECIALIST) is not None
+        assert evaluate(HOOK, _b("x", "git checkout x"), *SPECIALIST) is not None
+        assert decide(_b("auditor", "sha256sum controls.json"), CFG).allow
 
 
-READ_ONLY_AGENTS = ("auditor", "framework-specialist")
+READ_ONLY_AGENTS = ("auditor",)
+SPECIALIST = ("--git", "specialist")
 
 
 class TestSpecialistPipes:
@@ -133,17 +136,16 @@ class TestRegressionReadOnly:
         ):
             assert decide(_b("auditor", command), CFG).allow, command
 
-    @pytest.mark.parametrize("agent", ["framework-specialist"])
-    def test_specialists_blocked(self, agent: str) -> None:
+    def test_specialists_blocked(self) -> None:
         for command in ("find . -delete", "sort -o out x", "git diff --output=f", "git branch"):
-            assert not decide(_b(agent, command), CFG).allow, (agent, command)
+            assert evaluate(HOOK, _b("x", command), *SPECIALIST) is not None, command
 
 
 class TestRound3Breakage:
     def test_quoted_filters_allowed(self) -> None:
         assert decide(_b("auditor", "jq '.[] | .name' x.json"), CFG).allow
         assert decide(_b("auditor", "rg 'foo|bar' src"), CFG).allow
-        assert decide(_b("framework-specialist", "jq -r '.controls[] | .id' c.json"), CFG).allow
+        assert decide(_b("auditor", "jq -r '.controls[] | .id' c.json"), CFG).allow
         assert decide(_b("auditor", "grep -n 'a;b' x"), CFG).allow
         assert decide(_b("auditor", "grep -n '$x' src"), CFG).allow
 
@@ -179,7 +181,8 @@ def test_read_only_bash_judges_the_hook_alone() -> None:
 def test_read_only_bash_declares_the_test_runner_flag() -> None:
     # 0109: the flag 0051 reserved now carries the audit and unit test runs.
     flags = load(HOOK).FLAGS
-    assert set(flags) == {"--git", "--test-runner"}
+    # 0186, 0188: --terraform adds the terraform class for the auditor alone.
+    assert set(flags) == {"--git", "--test-runner", "--terraform"}
     assert flags["--test-runner"].values == {"audit", "unit"}
     bad = run_script(HOOK, payload("Bash", command="ls"), "--test-runner", "all")
     assert bad["decision"] == "deny" and bad["reason"].startswith("hook read_only_bash failed")
@@ -400,7 +403,7 @@ def test_pytest_without_the_runner_grant_is_refused(tmp_path: Path) -> None:
     audit, _ = _places(repo)
     command = f"python3 -m pytest {audit}/x.py -q"
     assert evaluate(HOOK, _rb(repo, "x", command), "--git", "read-only") == jail.R_AUDITOR_BASH
-    assert not decide(_rb(repo, "framework-specialist", command), CFG).allow
+    assert evaluate(HOOK, _rb(repo, "x", command), *SPECIALIST) is not None
 
 
 def test_unit_test_run_admits_only_a_recorded_unit_worktree(tmp_path: Path) -> None:
@@ -443,7 +446,7 @@ def test_unit_test_run_without_train_state_is_refused(tmp_path: Path) -> None:
     [
         ("auditor", AUDIT),
         ("daedalus:verifier", UNIT),
-        ("framework-specialist", ("--git", "specialist")),
+        ("judge", ("--git", "specialist")),
         ("x", ()),
     ],
 )

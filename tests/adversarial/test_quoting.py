@@ -108,7 +108,7 @@ def test_quoted_claude_word_names_the_nested_session(command: str) -> None:
 
 
 # prepush2-2026-10-27 items 1 and 2: the three read-only agents that search with rg.
-RG_READERS = ("auditor", "verifier", "framework-specialist")
+RG_READERS = ("auditor", "verifier")
 
 
 @pytest.mark.parametrize("agent", RG_READERS)

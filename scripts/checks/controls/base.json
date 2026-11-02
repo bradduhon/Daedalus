@@ -272,7 +272,7 @@
     "premise_test": "tests/test_checks_read_only_bash.py::test_read_only_bash_fixture_decisions"
   },
   "jail.R_SPECIALIST_BASH": {
-    "failure": "0024: a framework specialist changes the tree it is judging",
+    "failure": "0024: a read-only judge changes the tree it is judging",
     "premise_test": "tests/test_checks_read_only_bash.py::test_read_only_bash_judges_the_hook_alone"
   },
   "jail.R_RG_REACH": {
@@ -288,7 +288,7 @@
     "premise_test": "tests/test_checks_read_only_bash.py::test_a_rewritten_search_word_or_rg_program_option_names_its_reason"
   },
   "jail.R_RG_ONE": {
-    "failure": "issue 113: a pack verify that is not one plain rg search runs another command through the framework specialist",
+    "failure": "issue 113: a pack verify that is not one plain rg search runs another command through the auditor",
     "premise_test": "tests/test_framework_packs.py::test_a_verify_the_specialists_jail_refuses_is_a_pack_problem"
   },
   "jail.R_CONDUCTOR_BASH": {

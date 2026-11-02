@@ -60,7 +60,7 @@ class TestRound3WorkerGitGrammar:
             ("auditor", "git ls-files --others"),
             ("auditor", "git rev-parse --git-path x"),
             ("auditor", "git grep --open-files-in-pager x"),
-            ("framework-specialist", "git log --exec x"),
+            ("auditor", "git log --exec x"),
             # Round 4: `git commit -am x` flipped to allowed by ruling (see TestRound4Breakage).
             ("charter-docs", "git commit -F /etc/passwd"),
             ("charter-docs", "git commit --amend -m x"),
@@ -120,7 +120,7 @@ class TestRound4Breakage:
             ("auditor", "git log -G pattern"),
             ("auditor", "git log --author=brad"),
             ("auditor", "git diff --word-diff --color=never"),
-            ("framework-specialist", "git log -n5 --all"),
+            ("auditor", "git log -n5 --all"),
             ("charter-docs", "git diff --cached"),
             ("charter-docs", "git log --oneline -3"),
             ("charter-docs", "git status --porcelain"),

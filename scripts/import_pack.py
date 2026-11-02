@@ -36,7 +36,7 @@ BENCHMARK_MAX = 80
 CIS_COLUMNS = ["cis_id", "control_id"]
 # 2.5: an OSCAL catalog carries no diff hint or command, so these two are the importer's own.
 OSCAL_LOOK_FOR = "Code or configuration the statement governs; judge the diff against it."
-# 113, prepush-2026-10-27: one rg search the specialist's jail admits, for code citing the id.
+# 113, prepush-2026-10-27: one rg search the auditor's jail admits, for code citing the id.
 OSCAL_VERIFY = "rg -n -F {id} ."
 _PARAM = re.compile(r"\{\{\s*insert:\s*param,\s*([A-Za-z0-9_.-]+)\s*\}\}")
 R_OUTSIDE = (

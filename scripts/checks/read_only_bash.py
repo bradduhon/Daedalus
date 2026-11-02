@@ -23,6 +23,8 @@ RUNNERS = frozenset({"audit", "unit"})
 FLAGS: dict[str, hook_io.Flag] = {
     "--git": hook_io.Flag(values=frozenset(shell.GIT_SETS)),
     "--test-runner": hook_io.Flag(values=RUNNERS),
+    # 0186, 0188: the terraform rulebook's two checks, bare or wrapped, under their manifest gates.
+    "--terraform": hook_io.Flag(),
 }
 PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
 PYTEST = ("python3", "-m", "pytest")
@@ -37,7 +39,8 @@ R_TEST_RUN_NO_TRAIN = (
 )
 R_CD_CHAIN = (
     "a read chain changes folder only with one leading cd <absolute path> joined by &&, and no "
-    "git command or test run follows it (spec 7.1). Next: drop the cd and pass absolute paths."
+    "git command, test run or terraform check follows it (spec 7.1, 0188). Next: drop the cd "
+    "and pass absolute paths."
 )
 # spec 7.1: read-only flags jail._GIT_GRAMMAR lacks, judged as a stand-in flag its row admits,
 # so a flag that takes a value still swallows the same next token.
@@ -220,18 +223,35 @@ def _moves(chain: shell.WorkerChain) -> bool:
 
 
 def _cd_reason(chain: shell.WorkerChain, cwd: str) -> str | None:
-    # spec 7.1: `cd <folder> && <reads>`; git -C and the test-run bounds are judged against cwd.
+    # spec 7.1: `cd <folder> && <reads>`; git -C, test-run and terraform bounds are judged on cwd.
     if shell.chain_bases(chain, cwd, jail.DIR_CHANGE_CMDS) is None:
         return R_CD_CHAIN
     later = [s for s in chain.segments[1:] if s]
-    if any(shell._cmd_name(s) == "git" or _pytest_args(s) is not None for s in later):
+    if any(
+        shell._cmd_name(s) == "git" or _pytest_args(s) is not None or _terraform_form(s)
+        for s in later
+    ):
         return R_CD_CHAIN
     return None
+
+
+def _terraform_reason(tokens: list[str], cwd: str) -> str | None:
+    # 0186, 0188: the command_allowlist terraform class verbatim; no other form widens.
+    from checks.command_allowlist import terraform_reason, wrapped_terraform_reason
+
+    if tokens[:1] == ["terraform"]:
+        return terraform_reason(tokens, cwd)
+    return wrapped_terraform_reason(tokens, cwd)
+
+
+def _terraform_form(tokens: list[str]) -> bool:
+    return bool(tokens) and (tokens[0] == "terraform" or shell._base(tokens[0]) == shell.CONFINE)
 
 
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
     grant: str | None = flags.git
     runner: str | None = flags.test_runner
+    terraform: bool = flags.terraform
     cwd = hook_io.text(hook_input, "cwd")
     chain = shell.worker_parse(hook_io.text(hook_io.tool_input(hook_input), "command"))
     if chain is None:
@@ -257,6 +277,11 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
             continue
         if i and _show_sed(chain.segments[i - 1], chain.seps[i - 1], tokens, subs):
             continue
+        if terraform and _terraform_form(tokens):
+            reason = _terraform_reason(tokens, cwd)
+            if reason is None:
+                continue
+            return reason
         if runner is not None and tokens and _pytest_args(tokens) is not None:
             reason = _test_run_reason(tokens, runner, cwd)
             if reason is None:

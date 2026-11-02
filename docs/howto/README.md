@@ -286,7 +286,7 @@ A coding agent that is stuck commits its work in progress and asks a question. D
 |---|---|---|
 | `YIELD_WEB` | It needs external documentation. | web-researcher, from official docs, with URLs |
 | `YIELD_CONTRACT` | The contract does not cover what it found. Other affected agents are put on hold. | contract-spec, with a new packet_version sent to every affected agent; a train that skipped the contract stops instead, with `Next: rerun the train with a plan that declares the contract` |
-| `YIELD_COMPLIANCE` | It has a security control question. | framework-specialist, with pack control ids from the shipped packs or your own |
+| `YIELD_COMPLIANCE` | It has a security control question. | auditor, with pack control ids from the shipped packs or your own |
 | `YIELD_STANDARDS` | It has a question about one of your standards. | the orchestrator itself, with the source and line |
 
 The scope of each unit comes from the recorded plan and the contract.
@@ -295,7 +295,7 @@ The scope of each unit comes from the recorded plan and the contract.
 
 Once every unit is complete, the train merges each unit into the local integration branch `daedalus/<train-id>` with `--no-ff`, so each unit stays visible in the history. A merge conflict stops the train. The merge is aborted, and the repository stays on `daedalus/<train-id>` with the merges that completed. The stop names the conflicting files. Merge that unit there by hand and run the merge step again, which skips units already merged. Or rerun the train with units that do not share files.
 
-The summary records the policy gate as `[POLICY: none declared]` or `[POLICY: declared, gate not yet shipped]`. A later Daedalus release adds the gate itself. If a unit touched IAM, KMS, mTLS, key custody or infrastructure config, the framework specialist checks the merged diff against the control packs. Those are your `frameworks.pack_dir` packs, and the shipped AWS and NIST packs unless `frameworks.default_packs` is `false`. A change to a Stripe file, a `.env` file, `package.json` or an npm lockfile also gets the check, against the shipped Stripe pack. The cost-tier pack joins only when `frameworks.packs` names it.
+The summary records the policy gate as `[POLICY: none declared]` or `[POLICY: declared, gate not yet shipped]`. A later Daedalus release adds the gate itself. The security auditor always checks the merged diff against the control packs. Those are your `frameworks.pack_dir` packs, and the shipped AWS and NIST packs unless `frameworks.default_packs` is `false`. The shipped Stripe pack joins only for a change to a Stripe file, a `.env` file, `package.json` or an npm lockfile. The cost-tier pack joins only when `frameworks.packs` names it.
 
 Then the security auditor judges the merged integration tip against the train's base, so its verdict names the commit the push run pushes. It judges against the contract, your standards and the compliance reports. It treats anything a coder can commit or a project ships as attacker input, so a finding that needs a planted file still counts. Besides its pattern searches, it lists every option, config file and environment setting of each tool a jail rule allows. It feeds each new parser or loader wrong types, nested lists, and unreadable or linked folders. It reads every change to an agent or skill file in full, removed lines included.
 
@@ -331,7 +331,7 @@ The train writes `docs/.tmp/daedalus/<train-id>-summary.md`. The push run uses t
 - one row per unit: branch, packet, files, tests
 - each verified unit's last verifier verdict line, followed by `corrected=<k>`, the number of the coder's receipts the verifier corrected, when the reply carries that count
 - every yield and who answered it
-- the compliance results, the dependency auditor's and the Terraform reviewer's included
+- the compliance results, the auditor's dependency and Terraform rows included
 - the audit verdict on the merged integration tip and its round count, or each exempted finding with its ledger id and how it is tracked
 - the docs verdict on the tip the docs stage merged, with each exempted docs claim, or `Docs: not run`
 - the blocks the hooks made, sorted into friction (work the agent's job needed) and habit (a reach outside the job)

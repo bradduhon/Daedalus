@@ -54,7 +54,7 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("tool_bound", ()),
         ("shell_tripwires", ()),
         ("network_tools", ()),
-        ("read_only_bash", ("--git", "read-only", "--test-runner", "audit")),
+        ("read_only_bash", ("--git", "read-only", "--test-runner", "audit", "--terraform")),
         ("gh_classes", ()),
         ("root_writes", ("--touch", "audit")),
     ),
@@ -65,15 +65,6 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("shell_tripwires", ()),
         ("network_tools", ()),
         ("read_only_bash", ("--git", "read-only", "--test-runner", "unit")),
-        ("gh_classes", ()),
-    ),
-    "framework-specialist": (
-        ("credential_paths", ()),
-        ("workspace_integrity", ()),
-        ("tool_bound", ()),
-        ("shell_tripwires", ()),
-        ("network_tools", ()),
-        ("read_only_bash", ("--git", "specialist")),
         ("gh_classes", ()),
     ),
     "web-researcher": (
@@ -112,26 +103,6 @@ CHAINS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("root_writes", ("--touch", "scratch", "--ledger-guard")),
         ("gh_classes", ()),
         ("dispatch_gate", ()),
-    ),
-    # 0132: the two diff-content judges carry the verifier's read-only list without a test run.
-    "dependency-auditor": (
-        ("credential_paths", ()),
-        ("workspace_integrity", ()),
-        ("tool_bound", ()),
-        ("shell_tripwires", ()),
-        ("network_tools", ()),
-        ("read_only_bash", ("--git", "read-only")),
-        ("gh_classes", ()),
-    ),
-    # 0132: the reviewer's Bash is the inspect read set plus the two terraform forms.
-    "terraform-reviewer": (
-        ("credential_paths", ()),
-        ("workspace_integrity", ()),
-        ("tool_bound", ()),
-        ("shell_tripwires", ()),
-        ("network_tools", ()),
-        ("command_allowlist", ("--allow", "terraform,inspect")),
-        ("gh_classes", ()),
     ),
     # 0134, 0190: the public docs writer has the coder's list, its write check narrowed by --docs.
     "writer (public-docs)": (

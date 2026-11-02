@@ -258,8 +258,8 @@ def _control_problems(
     outside = _outside_paths(verify) if isinstance(verify, str) and _line(verify, LINE_MAX) else []
     refused = jail.rg_reason(verify, root) if isinstance(verify, str) else None
     if refused is not None and _line(verify, LINE_MAX):
-        # 113: pack text is data; a verify the specialist's jail refuses never reaches it.
-        out.append(f"{where} verify is refused by the framework specialist's jail: {refused}")
+        # 113, 0186: pack text is data; a verify the auditor's jail refuses never reaches it.
+        out.append(f"{where} verify is refused by the auditor's jail: {refused}")
     out += [
         f"{where} verify searches {path!r} outside the project tree; name . or a relative "
         "path without .."

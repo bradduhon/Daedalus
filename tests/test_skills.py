@@ -223,18 +223,18 @@ def test_build_train_writes_summary_under_docs_tmp() -> None:
     assert "/daedalus:audit-report" in _run_skill()
 
 
-def test_build_train_resolves_the_packs_for_the_framework_specialist() -> None:
-    # 0157: Read and Glob resolve the pack folders; no cache path reaches a specialist.
+def test_build_train_resolves_the_packs_for_the_frameworks_rulebook() -> None:
+    # 0157, 0186: Read and Glob resolve the pack folders; no cache path reaches the auditor.
     text = _recipe()
     assert "Glob `<plugin root>/packs/frameworks/*/pack.json`" in text
     assert "Glob `<repo>/<pack_dir>/*/pack.json`" in text
     assert "`Packs: <absolute pack folder>[, <absolute pack folder>...]`" in text
     assert "<that path>/frameworks" not in text and "CACHE_INVALID" not in text
     assert "Unless `frameworks.default_packs` is `false`" in text
-    # prepush2-2026-10-27 item 5: the packs step runs before every specialist dispatch or resume.
+    # prepush2-2026-10-27 item 5: the packs step runs before every compliance question.
     # 0165: the build phase's pack check runs for the yield route and the audit's merged diff.
     assert (
-        "Before every framework-specialist dispatch or resume, run `python3 "
+        "Before every compliance-question dispatch or resume, run `python3 "
         "<plugin root>/scripts/daedalus_train.py packs --repo <repo>`. It checks the hash and "
         "format of every pack the run reads, a pack a merged unit changed included"
     ) in text
@@ -247,14 +247,17 @@ def test_build_train_resolves_the_packs_for_the_framework_specialist() -> None:
         "daedalus_train.py packs --repo <repo> --diff <base sha>...daedalus/<train-id>`, the "
         "build phase's step 9) on the merged tree."
     ) in audit
-    # 0192: a pack's triggers start the specialist even when no infrastructure changed.
-    assert "dispatch one `framework-specialist` on the merged diff" in audit
-    assert "dispatch the specialist anyway with the `Triggered:` folders" in audit
+    # 0157, 0192: the frameworks rulebook rides every round; a pack's triggers pick its packs.
+    assert "add `Rulebook: <plugin root>/packs/judges/frameworks.md` and the printed" in audit
+    assert "is on that line only when a changed path matches one (0192)" in audit
+    assert "framework-specialist" not in audit
     assert "before that first dispatch" not in text
     assert "A non-zero exit stops the run and shows its lines" in text
-    assert "Every compliance topic goes to `framework-specialist`" in text
+    assert "Every compliance topic goes to `auditor` (0186)" in text
+    assert "the first line `Mode: compliance-question`" in text
     assert (
-        "A `[STATUS: PACK_INVALID] <pack id>: <problem>` reply stops the run and shows that "
+        "A `[STATUS: COMPLIANCE] PACK_INVALID <pack id>: <problem>` reply stops the run and "
+        "shows that "
         'line, with "Next: run `/daedalus:doctor` and fix the pack <pack id> it names'
     ) in text
 
@@ -358,13 +361,10 @@ def test_build_train_reads_the_auditor_verdict_first() -> None:
         "question, routed by the audit phase's step 5."
     ) in _rules()
     step3 = " ".join(_phase_step("audit", 5).split())
-    assert "An auditor reply `[STATUS: YIELD_WEB] <query>` routes as a judge's does in step 1" in (
-        step3
-    )
+    assert "An auditor reply `[STATUS: YIELD_WEB] <query>` is a tool surface question" in step3
     assert (
-        "With web lookup off, resume the auditor to list the tool's surface from the sources the "
-        "jail admits reading and close the lead with a `no-test:` line naming what it could not "
-        "see."
+        "list the tool's surface from the sources the jail admits reading and close the lead "
+        "with a `no-test:` line naming what you could not see"
     ) in step3
     assert (
         'SendMessage(auditor, "RESUME. Research payload: the text between the two marker '
@@ -1040,7 +1040,7 @@ def test_build_train_audits_from_the_integration_branch() -> None:
     assert "the merged integration tip the release phase pushes" in dispatch
     assert text.index("daedalus_workspace.py finish") < text.index("Dispatch `auditor`")
     step2 = _phase_step("audit", 1)
-    assert "(`git diff <base sha>...daedalus/<train-id>`" in step2
+    assert "`git -C <repo> diff --name-only <base sha>...daedalus/<train-id>`" in step2
     auditor = (REPO_ROOT / "agents" / "auditor.md").read_text(encoding="utf-8")
     assert "For each branch run `git diff <diff base>...<branch>`" in auditor
     inputs = " ".join(auditor.split("Inputs:", 1)[1].split("## Procedure", 1)[0].split())
@@ -2083,11 +2083,11 @@ ASSETS_CMD = (
 def test_audit_judges_read_the_merged_diff_without_the_asset_files() -> None:
     # 0192: one assets run; every content diff and stat carries the tail, a name list never.
     text = " ".join((REPO_ROOT / "skills" / "audit" / "SKILL.md").read_text("utf-8").split())
-    intro = _section(text, "Asset exclusion (0192).", "### Compliance judges")
+    intro = _section(text, "Asset exclusion (0192).", "### Compliance rulebooks")
     assert f"Before the first judge, run {ASSETS_CMD}." in intro
     assert "every content diff and `--stat` command of this phase ends with it" in intro
     assert "a `--name-only` list never carries it" in intro
-    assert "the framework specialist's and the auditor's, carries the `Assets:`" in intro
+    assert "Every auditor dispatch carries the `Assets:`" in intro
     # H1, 0128: a source ending is never excluded; a source file under a root is a finding.
     assert "A file with a source ending is never excluded." in intro
     assert "Run it again before each later auditor round" in intro
@@ -2103,7 +2103,7 @@ def test_audit_judges_read_the_merged_diff_without_the_asset_files() -> None:
     auditor = " ".join((REPO_ROOT / "agents" / "auditor.md").read_text("utf-8").split())
     assert "the stat command ends with its tail" in auditor
     assert "the name list never carries the tail" in auditor
-    specialist = (REPO_ROOT / "agents" / "framework-specialist.md").read_text("utf-8")
+    specialist = (REPO_ROOT / "packs" / "judges" / "frameworks.md").read_text("utf-8")
     assert "end the diff command with that tail exactly as given" in " ".join(specialist.split())
 
 

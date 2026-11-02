@@ -39,7 +39,7 @@ LEDGER = "ledger"
 LEDGER_PENDING = "Ledger ids: pending"
 _SESSION_ID = re.compile(r"[A-Za-z0-9_-]+")
 NO_NOTES = "not recorded (no summary notes file)"
-NOT_RUN = "not run (no IAM, KMS, mTLS, key custody or infrastructure change)"
+NOT_RUN = "not run (no rulebook was named)"
 NOTE_FIELDS = ("Task", "Codes", "Migration")
 NOTE_SECTIONS = ("Rulings", "Blocks", "Waived")
 _CODES = re.compile(r"--repo [A-Za-z0-9]{1,16} --type [A-Za-z0-9]{1,16}")
@@ -60,6 +60,8 @@ _COMPLETE = re.compile(
 )
 _YIELD = re.compile(r"\[STATUS: (YIELD_[A-Z]+)\]\s*(.*)")
 _COMPLIANCE = re.compile(r"\[STATUS: COMPLIANCE\]\s*(.*)")
+# 0186: agents/auditor.md Rulebooks, the section right before the closing verdict line.
+_COMPLIANCE_HEADING = "## Compliance"
 _VERIFIER = re.compile(r"\[VERDICT: (VERIFIED|REFUTED)\]\s*(.*)")
 # 0127: agents/verifier.md status contract, the line directly above the closing verdict.
 _CORRECTED = re.compile(r"corrected=([0-9]+)")
@@ -68,7 +70,7 @@ _LEDGER_PATH = re.compile(r"ledger: (.+?) \(")
 _DISPATCH_TOOLS = ("Agent", "Task", "SendMessage")
 _REFUSALS = ("block", "ask")
 OPERATOR, PRIORITIES_YIELD = "operator", "YIELD_STANDARDS priorities"
-ORCHESTRATOR = "orchestrator"
+ORCHESTRATOR, AUDITOR_AGENT = "orchestrator", "auditor"
 # 0156, 0182: the Contract line in words when no packet was locked.
 CONTRACT_SKIPPED = (
     "Contract: none. This plan changes at most 3 files and declares no contract, "
@@ -79,19 +81,13 @@ _PRIORITIES_RULE = re.compile(r"priorities rule [0-9]+:")
 _ANSWERERS: dict[str, tuple[str, ...]] = {
     "YIELD_WEB": ("web-researcher",),
     "YIELD_CONTRACT": ("contract-spec",),
-    # 0157: one framework specialist answers every compliance topic.
-    "YIELD_COMPLIANCE": ("framework-specialist",),
+    # 0157, 0186: the auditor answers every compliance topic in compliance-question mode.
+    "YIELD_COMPLIANCE": (AUDITOR_AGENT,),
     # 0186: the orchestrator answers a standards yield itself from the standards skill.
     "YIELD_STANDARDS": (ORCHESTRATOR,),
     # 0129, 0137: a `priorities rule <n>:` yield is a surfaced default the operator answers.
     PRIORITIES_YIELD: (OPERATOR,),
 }
-# 0132: the two diff-content judges list into Compliance too, never into the audit gate.
-_COMPLIANCE_AGENTS = (
-    "framework-specialist",
-    "dependency-auditor",
-    "terraform-reviewer",
-)
 _CELL_CHARS = 300
 _PARAGRAPH_CHARS = 600
 
@@ -328,6 +324,7 @@ def _gather(logs: Sequence[SessionLog], units: Sequence[dict[str, object]]) -> _
 
     facts = _Facts()
     paths = _unit_paths(units)
+    rulebooks: tuple[str, str, str] | None = None
     for log in logs:
         records = list(log.records)
         found = replies(records)
@@ -341,8 +338,11 @@ def _gather(logs: Sequence[SessionLog], units: Sequence[dict[str, object]]) -> _
             if reply.agent == "coder" and asked:
                 facts.yields.append((*_yield_row(records, found, reply, asked, paths), where))
             listed = _COMPLIANCE.match(line)
-            if reply.agent in _COMPLIANCE_AGENTS and listed:
+            if reply.agent == AUDITOR_AGENT and listed:
                 facts.compliance.append((reply.agent, listed.group(1), where))
+            section = _compliance_rows(reply) if reply.agent == AUDITOR_AGENT else ""
+            if section:
+                rulebooks = (reply.agent, section, where)
             judged = _VERIFIER.match(line)
             if reply.agent == "verifier" and judged:
                 unit = _verified_unit(records, reply.seq, paths)
@@ -351,7 +351,23 @@ def _gather(logs: Sequence[SessionLog], units: Sequence[dict[str, object]]) -> _
         for record in records:
             if record.get("event") == "PreToolUse" and record.get("decision") in _REFUSALS:
                 facts.blocks[(_hook_of(dict(record)), _agent(record) or "main")] += 1
+    # 0186: the latest judged round's rulebook rows, after every compliance-question answer.
+    if rulebooks is not None:
+        facts.compliance.append(rulebooks)
     return facts
+
+
+def _compliance_rows(reply: Reply) -> str:
+    # 0186: the rows under `## Compliance` up to the closing verdict line, joined by "; ".
+    rows = reply.rows
+    if _COMPLIANCE_HEADING not in rows:
+        return ""
+    picked: list[str] = []
+    for row in rows[rows.index(_COMPLIANCE_HEADING) + 1 :]:
+        if row.startswith(("[VERDICT:", "## ")):
+            break
+        picked.append(row.removeprefix("- "))
+    return "; ".join(picked)
 
 
 def _yield_row(

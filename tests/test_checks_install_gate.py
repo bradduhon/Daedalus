@@ -22,7 +22,7 @@ HOOK = "network_tools"
 ROWS: list[dict[str, str]] = json.loads(
     (REPO_ROOT / "tests" / "fixtures" / "installs" / "commands.json").read_text(encoding="utf-8")
 )
-JUDGES = ("dependency-auditor", "verifier", "terraform-reviewer")
+JUDGES = ("auditor", "verifier")
 
 
 def _repo(tmp_path: Path, installs: list[str] | None) -> Path:
