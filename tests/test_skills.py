@@ -822,7 +822,10 @@ def test_push_train_uses_the_conductor_push_grammar_and_scan() -> None:
     assert "git push -u origin" in text
     assert "gitleaks detect" in text
     assert "gitleaks version" in text
-    assert "--body-file <repo>/docs/.tmp/daedalus/<train-id>-summary.md" in text
+    # Work-order line 24: the body is the summary plus its Closes and Refs lines.
+    assert "--body-file <repo>/docs/.tmp/daedalus/<train-id>/pr-body.md" in text
+    assert "--body-file <repo>/docs/.tmp/daedalus/<train-id>-summary.md" not in text
+    assert "daedalus_workspace.py pr-body --repo <repo> --train <train-id>`" in text
 
 
 def test_push_train_proves_live_hooks_with_the_script() -> None:
@@ -871,6 +874,9 @@ def test_push_skill_hand_off_names_the_release_step() -> None:
     # 0068, 0071, 0075: the hand-off names the release step; the main session alone publishes.
     hand_off = _release().split("## Hand-off", 1)[1]
     assert RELEASE_CMD in hand_off
+    # 130: a plain-branch merge names its pull request body file instead of a summary.
+    assert RELEASE_CMD.replace("<merge sha>`", "<merge sha> --notes-file <body file>`") in hand_off
+    assert "docs/.tmp/daedalus/releases/v<version>/release-notes.md" in hand_off
     assert "After the operator reports the merge" in hand_off
     assert "`Version class: <version> <X, Y or Z>: <one-line reason>`" in hand_off
     assert "`Migration: <what an operator edits>`" in hand_off
@@ -1135,7 +1141,7 @@ def test_push_train_dispatch_pins_flags_and_paths() -> None:
     # issue 13: the Charter pull request has one command per title.
     assert len(paths) == 5
     for path in paths:
-        assert path.startswith("<repo>/docs/.tmp/daedalus/<train-id>-"), path
+        assert path.startswith("<repo>/docs/.tmp/daedalus/<train-id>"), path
 
 
 def test_push_train_routes_ci_without_waiting() -> None:

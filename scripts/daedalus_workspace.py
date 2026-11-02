@@ -20,6 +20,7 @@ from lib.workspace import (  # noqa: E402
     lock,
     mark_train,
     merge,
+    pr_body,
     refresh,
     release,
     remove,
@@ -32,8 +33,8 @@ from lib.workspace import (  # noqa: E402
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Daedalus worktrees and train state: create, remove, refresh, mark, unmark, "
-        "begin, lock, stop, finish, merge, resume, release. Exit 0 done, 1 stopped with a Next "
-        "line, 3 ledger question."
+        "begin, lock, stop, finish, merge, resume, release, pr-body. Exit 0 done, 1 stopped with "
+        "a Next line, 3 ledger question."
     )
     sub = parser.add_subparsers(dest="action", required=True)
     make = sub.add_parser("create")
@@ -73,6 +74,12 @@ def main(argv: list[str]) -> int:
     publish = sub.add_parser("release")
     publish.add_argument("--repo", type=Path, required=True)
     publish.add_argument("--merge-sha", dest="merge_sha", required=True)
+    # 130: a plain-branch merge names its pull request body file and the branch it merged into.
+    publish.add_argument("--notes-file", dest="notes_file", type=Path)
+    publish.add_argument("--base")
+    body = sub.add_parser("pr-body")
+    body.add_argument("--repo", type=Path, required=True)
+    body.add_argument("--train", required=True)
     again = sub.add_parser("refresh")
     again.add_argument("--repo", type=Path, required=True)
     again.add_argument("--name", required=True)
@@ -81,6 +88,8 @@ def main(argv: list[str]) -> int:
         parser.error("lock --no-contract takes no --version; there is no packet to version")
     if args.action == "begin" and (args.scope == "folder") != (args.out is not None):
         parser.error("begin takes --out with --scope folder only, and --scope folder needs --out")
+    if args.action == "release" and args.base is not None and args.notes_file is None:
+        parser.error("release takes --base with --notes-file only; a train records its own base")
     repo = args.repo.resolve()
     # pin C3 -> C4, issue 63: --repo is the project root of the working directory, or nothing runs.
     refusal = repo_refusal(args.repo, Path.cwd())
@@ -117,7 +126,10 @@ def main(argv: list[str]) -> int:
         elif args.action == "resume":
             print("\n".join(resume(repo)))
         elif args.action == "release":
-            print("\n".join(release(repo, args.merge_sha)))
+            notes = None if args.notes_file is None else args.notes_file.resolve()
+            print("\n".join(release(repo, args.merge_sha, notes, args.base or "main")))
+        elif args.action == "pr-body":
+            print("\n".join(pr_body(repo, args.train)))
     except LedgerQuestion as exc:
         # 0004: exit 3 hands the ledger question to the operator; nothing was written.
         print(exc)

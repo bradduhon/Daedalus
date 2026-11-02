@@ -334,8 +334,18 @@ FILES: tuple[Entry, ...] = (
     ),
     Entry(
         f"{_SCRATCH}/<train-id>/release-notes.md",
-        f"{_WS}:_write_notes",
+        f"{_WS}:_write_scratch",
         "the release step runs",
+    ),
+    Entry(
+        f"{_SCRATCH}/releases/v<version>/release-notes.md",
+        f"{_WS}:_write_scratch",
+        "the release step runs with --notes-file for a plain-branch merge (issue 130)",
+    ),
+    Entry(
+        f"{_SCRATCH}/<train-id>/pr-body.md",
+        f"{_WS}:_write_scratch",
+        "the release phase builds the pull request body before the push",
     ),
     Entry(
         f"{_FRAMEWORKS}/<file>",

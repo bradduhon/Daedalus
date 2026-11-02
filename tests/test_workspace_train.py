@@ -1137,6 +1137,143 @@ def test_release_compares_against_the_merge_parent_when_main_moved(repo: Path) -
     assert done.stdout.splitlines()[0] == f"release: v1.1.1, class Z, merge {bumped}"
 
 
+def _plain_merge(repo: Path, merged_version: str = "1.1.0") -> str:
+    # 130: a plain-branch merge records no train state and writes no summary.
+    (repo / "VERSION").write_text("1.0.0\n")
+    _commit_all(repo, "base")
+    (repo / "src.txt").write_text("change\n")
+    (repo / "VERSION").write_text(f"{merged_version}\n")
+    _commit_all(repo, f"Add the plain change ({HASH}7)")
+    return _ok(repo, "rev-parse", "HEAD")
+
+
+def _body_file(tmp_path: Path, *lines: str) -> Path:
+    body = tmp_path / "pr-body.md"
+    body.write_text("\n".join(["Adds the plain change.", *lines]) + "\n", encoding="utf-8")
+    return body
+
+
+def _plain_notes(repo: Path, version: str = "1.1.0") -> Path:
+    return repo / "docs" / ".tmp" / "daedalus" / "releases" / f"v{version}" / "release-notes.md"
+
+
+def test_plain_release_takes_the_notes_file_and_prints_the_three_commands(
+    repo: Path, tmp_path: Path
+) -> None:
+    sha = _plain_merge(repo)
+    body = _body_file(tmp_path, "Version class: 1.1.0 Y: adds the plain change", f"Closes {HASH}7")
+    done = _cli("release", "--repo", str(repo), "--merge-sha", sha, "--notes-file", str(body))
+    assert done.returncode == 0, done.stderr
+    notes = _plain_notes(repo)
+    lines = done.stdout.splitlines()
+    assert lines[:2] == [f"release: v1.1.0, class Y, merge {sha}", f"notes: {notes}"]
+    assert lines[-3:] == [
+        f"git -C {repo} tag -a v1.1.0 -m v1.1.0 {sha}",
+        f"git -C {repo} push origin v1.1.0",
+        f"gh release create v1.1.0 --verify-tag --title v1.1.0 --notes-file {notes}",
+    ]
+    text = notes.read_text(encoding="utf-8")
+    assert text.startswith(
+        f"Task: Add the plain change ({HASH}7)\nClass: Y, adds the plain change\n"
+    )
+    assert text.split("## Closed issues\n", 1)[1].strip() == f"{HASH}7"
+    assert "1.1.0" not in text
+    assert _ok(repo, "tag", "--list") == ""
+    assert not (repo / ".claude" / "daedalus" / "trains").exists()
+
+
+def test_plain_release_without_a_notes_file_names_the_flag(repo: Path) -> None:
+    sha = _plain_merge(repo)
+    refused = _release(repo, sha)
+    assert refused.returncode == 1
+    assert "no Daedalus train is recorded" in refused.stderr
+    assert "Next: save the pull request body to a file, then rerun with --notes-file <path>." in (
+        refused.stderr
+    )
+    assert not _plain_notes(repo).exists()
+
+
+def test_plain_release_refuses_a_notes_file_without_a_class_line(
+    repo: Path, tmp_path: Path
+) -> None:
+    sha = _plain_merge(repo, merged_version="2.0.0")
+    body = _body_file(tmp_path)
+    args = ("release", "--repo", str(repo), "--merge-sha", sha, "--notes-file", str(body))
+    refused = _cli(*args)
+    assert refused.returncode == 1
+    assert f"the notes file {body} has no version class line" in refused.stderr
+    assert "to the notes file, then rerun." in refused.stderr
+    _body_file(tmp_path, "Version class: 2.0.0 X: renames a manifest key")
+    refused = _cli(*args)
+    assert refused.returncode == 1
+    assert "the notes file has no migration line" in refused.stderr
+    assert not _plain_notes(repo, "2.0.0").exists()
+
+
+def test_plain_release_skips_an_unchanged_version_and_takes_base_only_with_notes(
+    repo: Path, tmp_path: Path
+) -> None:
+    sha = _plain_merge(repo, merged_version="1.0.0")
+    body = _body_file(tmp_path)
+    done = _cli(
+        "release",
+        "--repo",
+        str(repo),
+        "--merge-sha",
+        sha,
+        "--notes-file",
+        str(body),
+        "--base",
+        "main",
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == [
+        "release: skipped, VERSION is unchanged since the pull request base"
+    ]
+    refused = _cli("release", "--repo", str(repo), "--merge-sha", sha, "--base", "main")
+    assert refused.returncode == 2 and "--base with --notes-file only" in refused.stderr
+
+
+@pytest.mark.parametrize(
+    ("task", "extra", "expected"),
+    [
+        (
+            "add the release step",
+            (f"Closes {HASH}12. Fixes {HASH}13.",),
+            ["Closes 12", "Closes 13"],
+        ),
+        ("finish issues 54, 24 and 130", (), ["Refs 54", "Refs 24", "Refs 130"]),
+        ("start after issue 54 lands", (), ["Refs 54"]),
+        (f"start {HASH}61 (partial {HASH}61)", (), ["Refs 61"]),
+        ("fix issue 9", (f"Refs {HASH}40", f"Closes {HASH}9"), ["Closes 9", "Refs 40"]),
+        ("tidy the wording", (f"Fixes {HASH}7", f"partial {HASH}7"), ["Refs 7"]),
+        ("tidy the wording", (), []),
+    ],
+)
+def test_issue_lines_close_landed_work_and_refer_partial_work(
+    task: str, extra: tuple[str, ...], expected: list[str]
+) -> None:
+    summary = "\n".join([f"{HASH} Run {TRAIN}", f"Task: {task}", "## Units", *extra]) + "\n"
+    wanted = [line.replace(" ", f" {HASH}") for line in expected]
+    assert workspace.issue_lines(summary) == wanted
+
+
+def test_pr_body_is_the_summary_with_one_closes_line_per_issue(repo: Path) -> None:
+    _summary(repo, f"Refs {HASH}40")
+    summary = (repo / "docs" / ".tmp" / "daedalus" / f"{TRAIN}-summary.md").read_text("utf-8")
+    done = _cli("pr-body", "--repo", str(repo), "--train", TRAIN)
+    assert done.returncode == 0, done.stderr
+    body = repo / "docs" / ".tmp" / "daedalus" / TRAIN / "pr-body.md"
+    assert done.stdout.splitlines() == [
+        f"body: {body}",
+        f"issues: Closes {HASH}12, Closes {HASH}13, Refs {HASH}40",
+    ]
+    tail = f"\nCloses {HASH}12\nCloses {HASH}13\nRefs {HASH}40\n"
+    assert body.read_text("utf-8") == summary + tail
+    refused = _cli("pr-body", "--repo", str(repo), "--train", "../x")
+    assert refused.returncode == 1 and "is not a run id" in refused.stderr
+
+
 # 0121, 0118: the per-wave merge subcommand and its verified-unit rule.
 SESSION = "sess-merge"
 PLAN_BLOCK = (

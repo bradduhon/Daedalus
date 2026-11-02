@@ -40,8 +40,9 @@ No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already retu
    `git -C <charter_root> push -u origin daedalus/<train-id>` and one
    `gh pr create --repo <charter slug> --head daedalus/<train-id>`; no other command takes
    `-C <charter_root>` or `--repo` (0078).
-4. `gh pr create` (or `gh pr edit`) with the Build Train summary as the body: pass the summary
-   file path given in your prompt with `--body-file`; it must be under `docs/.tmp/` or `/tmp`.
+4. `gh pr create` (or `gh pr edit`) with the run's pull request body, the summary plus its
+   `Closes #<n>` and `Refs #<n>` lines: pass the body file path given in your prompt with
+   `--body-file`; it must be under `docs/.tmp/` or `/tmp`.
    The hook refuses `gh pr create` and `gh pr edit` without `--body-file`
    and with `--body` or `-b`, and refuses `gh pr edit` with any flag but `--body-file`.
 5. `gh run watch` each triggered workflow. Report each run's conclusion verbatim.
