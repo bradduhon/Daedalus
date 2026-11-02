@@ -289,6 +289,13 @@ def _plugin_root_check() -> tuple[bool, str]:
     return True, f"OK   plugin root: {Path(__file__).resolve().parent.parent}"
 
 
+RUN_MODE = (
+    "OK   run mode: the main session runs each run itself by default, since it already relays "
+    "every decision and is the one context a resumed session brings back (0208); "
+    "/daedalus:run unattended <task> starts the orchestrator agent for a run with no decisions"
+)
+
+
 def scope(repo: Path) -> str:
     # 0074: the manifest's own detector; a refused manifest falls back to detection alone.
     try:
@@ -895,6 +902,7 @@ def checks(repo: Path, run_typecheck: bool = False) -> Iterator[tuple[bool, str]
     yield _marker_check(repo)
     yield _cache_check()
     yield _plugin_root_check()
+    yield True, RUN_MODE
     yield from _framework_lines()
     yield from _pack_lines(repo)
     yield _gitleaks_check(repo, scope_name)

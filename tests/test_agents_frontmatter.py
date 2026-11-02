@@ -23,7 +23,7 @@ EXPECTED_MODEL = {
     "charter-docs": "sonnet",
     "web-researcher": "haiku",
     "planner": "opus",
-    "orchestrator": "fable",
+    "orchestrator": "opus",
     "verifier": "opus",
     "writer": "opus",
     "comparer": "opus",

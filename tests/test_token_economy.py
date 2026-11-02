@@ -390,3 +390,54 @@ def test_a_root_writer_roots_a_document_run_only_in_its_derived_kind(
     runs, _ = te.session_runs(SESSION, repo, [])
     [run] = [r for r in runs if any(row.agent == "writer" for row in r.rows)]
     assert run.run_type == run_type
+
+
+def test_budget_lines_sum_coder_and_verifier_tokens_per_unit() -> None:
+    # 0209: a unit's tokens are its coder and verifier rows; an auditor round never counts.
+    run = te.Run(te.BUILD, TRAIN)
+    for agent, label, kind, tokens in (
+        ("coder", "a1", "unit", [10, 20, 30, 40]),
+        ("verifier", "a1", "unit", [1, 1, 1, 1]),
+        ("coder", "a2", "unit", [1, 1, 1, 1]),
+        ("auditor", "1", "round", [500, 500, 500, 500]),
+    ):
+        usage = te.Usage(turns=1, tokens=tokens)
+        run.rows.append(te.Row(agent, te.BUILD, TRAIN, "2", agent, label, kind, usage, None))
+    assert te.unit_totals(run) == {"a1": 104, "a2": 4}
+    assert te.budget_lines([run], 100) == (
+        ["over budget: unit a1 104 tokens, budget 100", "budget: 1/2 units over"],
+        1,
+    )
+    assert te.budget_lines([run], 104) == (["budget: 0/2 units over"], 0)
+    assert te.budget_lines([run], None) == ([], 0)
+
+
+def _gate(tmp_path: Path, budget: object) -> subprocess.CompletedProcess[str]:
+    data = tmp_path / "repo" / ".claude" / "daedalus"
+    data.mkdir(parents=True, exist_ok=True)
+    (data / "config.json").write_text(json.dumps({"unit_token_budget": budget}))
+    return subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "token_economy.py"), "report"]
+        + ["--session", SESSION, "--gate"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tmp_path / "repo",
+    )
+
+
+def test_the_gate_exits_one_only_when_a_unit_is_over_budget(home: Path, tmp_path: Path) -> None:
+    # 0209: the report always prints; --gate fails on an over-budget unit, never while it is off.
+    _train(home)
+    over = _gate(tmp_path, 100)
+    assert over.returncode == 1, over.stderr
+    assert over.stdout.splitlines()[-2:] == [
+        "over budget: unit a1 141 tokens, budget 100",
+        "budget: 1/2 units over",
+    ]
+    under = _gate(tmp_path, 1000)
+    assert (under.returncode, under.stdout.splitlines()[-1]) == (0, "budget: 0/2 units over")
+    off = _gate(tmp_path, None)
+    assert off.returncode == 0 and "budget:" not in off.stdout
+    bad = _gate(tmp_path, 0)
+    assert bad.returncode == 1 and "unit_token_budget must be a whole number" in bad.stderr

@@ -639,6 +639,14 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`[]`: the wrapper reads only the project, the system folders and Python",
         '`["~/.local/share/pnpm/store", "~/.nvm"]`',
     ),
+    (CONFIG_FILE, "unit_token_budget"): KeyRow(
+        "The most tokens one unit may spend, its coding and checking agents together. The token "
+        "report lists every unit over it, and its gate form fails the audit phase's budget check",
+        "integer or null",
+        "A whole number of at least 1, or `null`; `true` and `false` are refused",
+        "`null`: no budget, and the gate never fails",
+        "`4000000`",
+    ),
     (CONFIG_FILE, "coder_models"): KeyRow(
         "Which model a coding agent runs on for one unit. `default` is for most units. "
         "`control_path` is for a unit that changes a file under `agents/`, `skills/`, `hooks/` "

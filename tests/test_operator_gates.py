@@ -413,7 +413,7 @@ def test_the_orchestrator_frontmatter_and_status_contract_are_unchanged() -> Non
         "return; hands each operator decision to the main session, never pushes and never "
         "merges into main."
     ) in head
-    assert "model: fable" in head and "shape: dispatcher" in head
+    assert "model: opus" in head and "shape: dispatcher" in head
     contract = recipe.split("## Status contract\n", 1)[1].splitlines()
     assert contract[1:6] == [
         "- `[STATUS: ANNOUNCE] size=<size> phases=<list>`",

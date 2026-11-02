@@ -28,6 +28,7 @@ Every file and setting daedalus reads, with the smallest example that works. `/d
   "max_concurrent_builders": 5,
   "audit_retention_days": null,
   "wrapper_read_roots": ["~/.local/share/pnpm/store", "~/.nvm"],
+  "unit_token_budget": null,
   "coder_models": { "default": "sonnet", "control_path": "opus", "escalated": "opus" },
   "agent_models": { "planner": "sonnet", "auditor": "opus" }
 }

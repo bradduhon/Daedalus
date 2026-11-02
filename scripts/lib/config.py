@@ -85,6 +85,8 @@ class Config:
     max_concurrent_builders: int = DEFAULT_MAX_CONCURRENT_BUILDERS
     audit_retention_days: int | None = None
     wrapper_read_roots: tuple[str, ...] = field(default_factory=tuple)
+    # 0209: total tokens per unit, coders plus verifiers; None leaves the gate off.
+    unit_token_budget: int | None = None
     # 0187: the coder's model per tier, passed per dispatch; agent_models stays the fallback.
     coder_models: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CODER_MODELS))
     agent_models: dict[str, str] = field(default_factory=dict)
@@ -134,6 +136,19 @@ def _retention_days(raw: dict[str, object]) -> int | None:
             f"config.json audit_retention_days must be a whole number of at least "
             f"{AUDIT_RETENTION_FLOOR_DAYS} (got {value!r}). Next: set it to "
             f"{AUDIT_RETENTION_FLOOR_DAYS} or more, or to null to keep every audit log."
+        )
+    return value
+
+
+def _unit_budget(raw: dict[str, object]) -> int | None:
+    # 0209: null or absent leaves the token budget gate off; a number is whole and positive.
+    value = raw.get("unit_token_budget")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ConfigError(
+            f"config.json unit_token_budget must be a whole number of at least 1 (got {value!r}). "
+            "Next: set it to a token count, or to null to leave the budget gate off."
         )
     return value
 
@@ -480,6 +495,7 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
         max_concurrent_builders=_max_builders(raw),
         audit_retention_days=_retention_days(raw),
         wrapper_read_roots=_wrapper_read_roots(raw, target.parent.parent),
+        unit_token_budget=_unit_budget(raw),
         coder_models=_coder_models(raw),
         agent_models=_agent_models(raw),
     )

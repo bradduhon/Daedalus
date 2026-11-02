@@ -103,6 +103,45 @@ def judge(hook_input: dict[str, object]) -> str | None:
     return f"Daedalus hand-back check: {problem}. Next: end the reply with {SHAPE}."
 
 
+def digest_output(hook_input: dict[str, object]) -> dict[str, object] | None:
+    # 0205: a passing hand-back of a listed agent goes out as its digest; the report stays on disk.
+    from lib import reply_digest
+    from lib.audit import project_root
+    from lib.train_state import active_train
+
+    message, cwd = _reply(hook_input), hook_input.get("cwd")
+    fields = hook_input.get("tool_input")
+    if hook_input.get("hook_event_name") != "PreToolUse" or not isinstance(fields, dict):
+        return None
+    if not isinstance(message, str) or not isinstance(cwd, str) or not Path(cwd).is_absolute():
+        return None
+    repo = project_root(cwd)
+    train = active_train(repo)
+    agent_id = hook_input.get("agent_id")
+    if train is None:
+        return None
+    short = reply_digest.digest(
+        _agent(hook_input), message, repo, train, agent_id if isinstance(agent_id, str) else ""
+    )
+    if short is None:
+        return None
+    # 0205: allow only carries updatedInput; a deny from any other hook still wins.
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "permissionDecisionReason": "Daedalus reply digest (0205)",
+            "updatedInput": {**fields, "message": short},
+        }
+    }
+
+
+def _emit_digest(hook_input: dict[str, object]) -> None:
+    out = digest_output(hook_input)
+    if out is not None:
+        print(json.dumps(out))
+
+
 def main() -> int:
     try:
         from lib.project_root import train_marked
@@ -117,6 +156,8 @@ def main() -> int:
             hook_io.emit(reason)  # RCP: the PreToolUse deny shape the checks share.
         elif reason is not None:
             print(json.dumps({"decision": "block", "reason": reason}))
+        else:
+            _emit_digest(payload)
     except Exception as exc:  # noqa: BLE001
         # RCP: a broken check never stalls a train; the verifier still judges the unit.
         print(f"daedalus-handback-check: {exc}", file=sys.stderr)

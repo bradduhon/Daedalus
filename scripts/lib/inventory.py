@@ -212,6 +212,11 @@ FILES: tuple[Entry, ...] = (
         "the train runner dispatches a stage; the folder its reply lands in",
     ),
     Entry(
+        f"{_SCRATCH}/<train-id>/evidence/replies/<agent>-<agent id>-<UTC stamp>.md",
+        "scripts/lib/reply_digest.py:digest",
+        "a coder, verifier, contract-spec or charter-docs hands back in a run (0205)",
+    ),
+    Entry(
         f"{_TRAINS}/",
         "scripts/lib/train_state.py:_state_dir",
         "the first train state or unit binding write",

@@ -1663,9 +1663,10 @@ def test_build_train_admits_the_ledger_resume_as_a_resume() -> None:
     step9 = _section(text, "## Relay", "## Recovery").split("\n9. ", 1)[1].split("\n10. ", 1)[0]
     assert step9.startswith("If SendMessage to the orchestrator fails, never start a second")
     assert (
-        "The one exception is the ledger resume below, after its `resume` command printed its "
-        "line: that orchestrator resumes the stopped run for one step, not a second run."
+        "The exceptions are the ledger resume below, after its `resume` command printed its "
+        "line, which resumes the stopped run for one step, not a second run;"
     ) in step9
+    assert "a fresh orchestrator started from the state file at a checkpoint" in step9
 
 
 def test_build_train_precondition_stops_on_stale_agents() -> None:
