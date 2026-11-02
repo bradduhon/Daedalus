@@ -191,6 +191,6 @@ def test_planner_write_leaving_a_folder_runs_output_folder_is_denied(
     # issue 48: the output folder grant takes the planner's two shapes only, after normalising.
     root, out = folder_run
     write = _cred("planner", "Write", str(root), file_path=template.format(out=out), content="x")
-    assert_denied(write, "writes are limited to scratch")
+    assert_denied(write, "is outside the repository. Next: write under")
     plan = _cred("planner", "Write", str(root), file_path=f"{out}/plan-x.md", content="x")
     assert decide(plan, CFG).allow

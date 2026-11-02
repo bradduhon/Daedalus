@@ -58,12 +58,19 @@ def _roots(classes: tuple[str, ...], cwd: str, config: Config) -> list[str]:
     return roots
 
 
-def _reason(classes: tuple[str, ...], path: str) -> str:
+def _reason(classes: tuple[str, ...], path: str, cwd: str, roots: list[str]) -> str:
     named = frozenset(classes)
     if named == {"contracts", "charter-specs"}:
         return jail.R_CONTRACT_SPEC_WRITE
     if named == {"charter", "docs"}:
         return jail.R_CHARTER_DOCS_WRITE
+    if roots and os.path.isabs(cwd) and not shell._under(path, str(project_root(cwd))):
+        # 173: a target outside the repository names the allowed root, never itself.
+        allowed = " or ".join(roots)
+        return (
+            f"writes are limited to {allowed}; {path} is outside the repository. "
+            f"Next: write under {allowed}."
+        )
     listed = ", ".join(sorted(named)) or "no path class"
     return f"writes are limited to {listed}: {path}. Next: write there."
 
@@ -141,14 +148,14 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
                 return reason
         if _allowed(path, roots, name, sub) or _granted(path, out, name, sub):
             return None
-        return _reason(classes, path)
+        return _reason(classes, path, cwd, roots)
     segments = shell.worker_segments(hook_io.text(hook_io.tool_input(hook_input), "command"))
     if segments is None:
         return shell.R_UNSUPPORTED
     for segment in filter(None, segments):
         for target in jail._coder_write_targets(segment, cwd):
             if not (_allowed(target, roots, name, sub) or _granted(target, out, name, sub)):
-                return _reason(classes, target)
+                return _reason(classes, target, cwd, roots)
     return None
 
 

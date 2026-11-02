@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import daedalus_confine  # noqa: E402
-from checks import command_allowlist  # noqa: E402
+from checks import command_allowlist, shell_tripwires  # noqa: E402
 from lib import hook_io, jail, shell  # noqa: E402
 from lib.project_root import project_root  # noqa: E402
 
@@ -50,7 +50,10 @@ def _is_test(segment: list[str], base: str, cwd: str) -> bool:
     tokens = shell.strip_wrappers(segment) or segment
     if jail.install_form(tokens) is not None:
         return False  # 0196: network_tools admits only the frozen install, which needs the network.
-    if shell._tester_runner_ok(shell._base(tokens[0]), tokens, lambda _: True):
+    # 104: a python3 script counts only inside a unit worktree, the runner check's own test.
+    if shell._tester_runner_ok(
+        shell._base(tokens[0]), tokens, shell_tripwires._own_script(cwd, base)
+    ):
         return True
     word = tokens[0]
     if "/" in word and os.path.isabs(cwd) and jail._in_unit_worktree(shell._abs(word, base), cwd):
