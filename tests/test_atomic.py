@@ -112,6 +112,23 @@ def test_create_once_never_follows_a_link(tmp_path: Path) -> None:
     assert not (tmp_path / "elsewhere.json").exists() and link.is_symlink()
 
 
+def test_create_once_without_hard_links_writes_whole_and_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 79: a mount that refuses os.link still gets the whole file, at its mode, created once.
+    def refuse(_src: object, _dst: object) -> None:
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(atomic.os, "link", refuse)
+    target = tmp_path / "config.json"
+    atomic.create_once(target, '{"a": 1}\n', 0o640)
+    assert target.read_text(encoding="utf-8") == '{"a": 1}\n' and _mode(target) == 0o640
+    assert _leftovers(tmp_path) == []
+    with pytest.raises(FileExistsError):
+        atomic.create_once(target, "theirs", 0o600)
+    assert target.read_text(encoding="utf-8") == '{"a": 1}\n' and _leftovers(tmp_path) == []
+
+
 def test_refuse_links_passes_a_plain_path_and_a_missing_one(tmp_path: Path) -> None:
     atomic.refuse_links(tmp_path)
     atomic.refuse_links(tmp_path / "missing")

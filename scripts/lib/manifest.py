@@ -607,6 +607,14 @@ def _stack_commands(
                 f"stack.{key}",
                 "must be null, a non-empty string, or a non-empty list of non-empty strings",
             )
+        # 93: a line break or other control character could forge a line wherever it prints.
+        if commands is not None and not all(cmd.isprintable() for cmd in commands):
+            raise _key_error(
+                target,
+                f"stack.{key}",
+                "holds a control character, such as a line break; each command must be one "
+                "printable line (93)",
+            )
         out[key] = commands
     manager = stack.get("package_manager")
     if manager is not None and manager not in PACKAGE_MANAGERS:

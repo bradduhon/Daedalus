@@ -191,7 +191,7 @@ _LEDGER_SEQUENCE = KeyRow(
 )
 _COMMAND_VALUES = (
     "A non-empty command string, a non-empty list of non-empty command strings run one after "
-    "another, or `null`"
+    "another, or `null`; a command holding a line break or other control character is refused"
 )
 _COMMAND_KIND = "string, list of strings or null"
 _DRIVER_NAMES = ", ".join(f"`{driver}`" for driver in DRIVERS)
@@ -322,13 +322,18 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         '`"pnpm"`',
     ),
     (MANIFEST_FILE, "docs.literacy"): KeyRow(
-        "How plainly the docs writer writes the public docs at the end of a Build Train, as a "
-        "reader level or a voice profile the project declares; a brief may override it",
+        "How plainly Daedalus writes for people, as a reader level or a voice profile the "
+        "project declares. The docs writer writes the public docs at the end of a run at this "
+        "level, and a brief may override it. The orchestrator's decision briefs and the "
+        "questions the plan and verify phases put to you are written at this level, and the "
+        "decision brief check holds each brief to it, reading a voice profile as `plain`. "
+        "Brainstorm questions are always plain, whatever this key says",
         "string or null",
         ", ".join(f"`{example}`" for example in LITERACY_EXAMPLES[:-1])
         + f" or `{LITERACY_EXAMPLES[-1]}`, a project-relative path to the profile file without "
         "a leading slash, `..` or glob characters",
-        "`null`: the writer keeps the register the public docs already use",
+        "`null`: the writer keeps the register the public docs already use; decision briefs are "
+        "written and checked at `plain`, and the plan and verify questions are written at `plain`",
         f"`{LITERACY_EXAMPLES[0]}`",
     ),
     (MANIFEST_FILE, "priorities.drivers"): KeyRow(

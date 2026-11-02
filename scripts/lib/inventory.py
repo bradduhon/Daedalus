@@ -121,6 +121,12 @@ FILES: tuple[Entry, ...] = (
         "every atomic write; the caller's own row names the target",
     ),
     Entry(
+        "<target each caller names>",
+        "scripts/lib/atomic.py:_create_excl",
+        "a create-once write on a mount that refuses hard links; the caller's own row names "
+        "the target",
+    ),
+    Entry(
         f"{_DATA}/",
         "scripts/lib/audit.py:ensure_project_data_dir",
         "a hook records an event while a train runs, or a ledger entry is appended",

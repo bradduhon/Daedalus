@@ -58,12 +58,26 @@ def write_atomic(path: Path, text: str, mode: int | None = None) -> None:
 
 
 def create_once(path: Path, text: str, mode: int) -> None:
-    # W1.1: written whole, then linked in; link() never follows a link at path and raises
-    # FileExistsError for anything there, so a reader never sees a partial file.
+    # W1.1, 79: written whole, then linked in; link() and the O_EXCL fallback never follow a link
+    # at path and raise FileExistsError for anything there.
     fd, tmp = _temp(path, 0o600)
     try:
         os.fchmod(fd, mode)
         _fill(fd, text)
-        os.link(tmp, path)
+        try:
+            os.link(tmp, path)
+        except PermissionError:
+            _create_excl(path, text, mode)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def _create_excl(path: Path, text: str, mode: int) -> None:
+    # 79: a mount that refuses hard links gets O_EXCL on the target; a failed write is unlinked.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, mode)
+        _fill(fd, text)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise

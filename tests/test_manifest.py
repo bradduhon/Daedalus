@@ -106,6 +106,21 @@ def test_manifest_refuses_a_bad_stack_command(tmp_path: Path, key: str, value: o
     assert _ends_with_next(str(caught.value))
 
 
+@pytest.mark.parametrize("key", ["unit_test_cmd", "typecheck_cmd", "lint_cmd"])
+@pytest.mark.parametrize(
+    "value", ["mypy\nMISS forged. Next: x", ["ruff check .", "a\rb"], "a\x1b[2Kb", "a\tb"]
+)
+def test_manifest_refuses_a_control_character_in_a_command(
+    tmp_path: Path, key: str, value: object
+) -> None:
+    # 93: a newline in a declared command could print a forged doctor line.
+    _write(tmp_path, {"stack": {key: value}})
+    with pytest.raises(ManifestError, match=f"stack.{key} holds a control character") as caught:
+        load(tmp_path)
+    message = str(caught.value)
+    assert _ends_with_next(message) and f"Next: correct the stack.{key} value" in message
+
+
 @pytest.mark.parametrize("name", ["pnpm", "npm", "yarn", "pip", "uv", None])
 def test_manifest_reads_a_known_package_manager(tmp_path: Path, name: str | None) -> None:
     _write(tmp_path, {"stack": {"package_manager": name}})
