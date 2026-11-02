@@ -365,11 +365,9 @@ def _hook_failure_check() -> Iterator[tuple[bool, str]]:
 
 def _operator_next(cause: str) -> str:
     # 106: the confine text addresses a coder; the doctor's reader is the operator.
-    return cause.replace(
-        "Next: commit WIP and yield with this line; the operator boots", "Next: boot"
-    ).replace(
-        "Next: commit WIP and yield with this line; the operator reruns the doctor and fixes",
-        "Next: rerun the doctor and fix",
+    return cause.replace("commit WIP and yield with this line; the operator boots", "boot").replace(
+        "commit WIP and yield with this line; the operator reruns the doctor and fixes",
+        "rerun the doctor and fix",
     )
 
 
