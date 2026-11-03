@@ -176,3 +176,22 @@ def mark_finished(repo: Path, train_id: str, unit: str) -> str | None:
     except TrainStateError as exc:
         return str(exc)
     return None
+
+
+def bound_units(repo: Path, train_id: str) -> dict[str, str]:
+    # issue 181: read-only map of coder agent id to unit name, a retired coder after the holder.
+    try:
+        units = _read(bindings_path(repo, train_id))
+    except TrainStateError:
+        return {}
+    bound: dict[str, str] = {}
+    for name, rec in units.items():
+        holder = rec.get("agent_id")
+        if isinstance(holder, str) and holder:
+            bound[holder] = name
+    for name, rec in units.items():
+        retired = rec.get("retired")
+        for agent_id in retired if isinstance(retired, list) else []:
+            if isinstance(agent_id, str) and agent_id:
+                bound.setdefault(agent_id, name)
+    return bound

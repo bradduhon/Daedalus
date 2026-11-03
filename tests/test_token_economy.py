@@ -441,3 +441,63 @@ def test_the_gate_exits_one_only_when_a_unit_is_over_budget(home: Path, tmp_path
     assert off.returncode == 0 and "budget:" not in off.stdout
     bad = _gate(tmp_path, 0)
     assert bad.returncode == 1 and "unit_token_budget must be a whole number" in bad.stderr
+
+
+def _main_session(home: Path) -> Path:
+    # 0208, issue 181: the main session starts the coders and the verifier itself, no orchestrator.
+    repo = home.parents[2] / "repo"
+    trains = repo / ".claude" / "daedalus" / "trains"
+    trains.mkdir(parents=True, exist_ok=True)
+    units = {f"{TRAIN}-a2": {"agent_id": "mc2"}, f"{TRAIN}-a9": {"retired": ["mc2", "old"]}}
+    (trains / f"{TRAIN}.bindings.json").write_text(json.dumps({"units": units}))
+    coder = [
+        _prompt("01:00.000", f"Brief: b.md\nWorktree: /r/.claude/worktrees/{TRAIN}-a1"),
+        _reply("01:10.000", "c1", 40),
+        _reply("01:20.000", "c2", 60),
+    ]
+    _agent(home, "mc1", "daedalus:coder", coder, description="Coder: A1")
+    unbound = [_prompt("03:00.000", f"Brief: /r/docs/.tmp/daedalus/{TRAIN}/briefs/a2.md")]
+    unbound.append(_reply("03:10.000", "d1", 20))
+    _agent(home, "mc2", "daedalus:coder", unbound, description="Coder: A2")
+    verifier = [
+        _prompt("02:00.000", f"Branch: daedalus-unit/{TRAIN}-a1\nDiff base: abc"),
+        _reply("02:10.000", "v1", 5),
+        _prompt("04:00.000", f"Next unit, same rules.\nBranch: daedalus-unit/{TRAIN}-a2"),
+        _reply("04:10.000", "v2", 3),
+    ]
+    _agent(home, "mv", "daedalus:verifier", verifier, description="Verifier: A1")
+    gp = [_prompt("05:00.000", f"Review daedalus/{TRAIN}"), _reply("05:05.000", "g", 8)]
+    _agent(home, "gp", "general-purpose", gp)
+    return repo
+
+
+def test_main_session_agents_open_the_train_they_name(home: Path) -> None:
+    # 0208, issue 181: a parentless coder and verifier naming a train id are its Build Train rows.
+    runs, _ = te.session_runs(SESSION, _main_session(home), [])
+    run, session = runs
+    assert (run.run_type, run.run_id) == (te.BUILD, TRAIN)
+    rows = {(r.agent_id, r.label) for r in run.rows}
+    assert rows == {("mc1", "a1"), ("mc2", "a2"), ("mv", "a1"), ("mv", "a2")}
+    assert {(r.phase, r.kind) for r in run.rows} == {("2", "unit")}
+    assert [r.agent_id for r in session.rows] == ["gp"]
+    head = f"| Build Train | {TRAIN} | mean | per unit | - | 2 units |"
+    assert te.mean_row(run, "unit") == head + " 2 | 3 | 60 | 15 | 0 | 0m15s |"
+    lines = te.render(runs, f"session {SESSION}", 100).splitlines()
+    assert f"turns per coder unit: 2 (target {te.CODER_TURN_TARGET})" in lines
+    assert lines[-2:] == ["over budget: unit a1 141 tokens, budget 100", "budget: 1/2 units over"]
+
+
+def test_a_reused_verifier_yields_one_row_per_unit(home: Path) -> None:
+    # issue 181: a warm verifier keeps the per-unit split read_segments makes on its prompts.
+    runs, _ = te.session_runs(SESSION, _main_session(home), [])
+    checks = {r.label: r for r in runs[0].rows if r.agent == te.VERIFIER}
+    assert sorted(checks) == ["a1", "a2"]
+    assert [checks[u].usage.tokens[1] for u in ("a1", "a2")] == [5, 3]
+    assert {r.agent_id for r in checks.values()} == {"mv"}
+
+
+def test_bindings_name_a_unit_no_prompt_names(home: Path) -> None:
+    # issue 181: the holder wins over a retired entry; a missing bindings file names nothing.
+    repo = _main_session(home)
+    assert te.unit_binding.bound_units(repo, TRAIN) == {"mc2": f"{TRAIN}-a2", "old": f"{TRAIN}-a9"}
+    assert te.unit_binding.bound_units(repo, "20261016-120000") == {}

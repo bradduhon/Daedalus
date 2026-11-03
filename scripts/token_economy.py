@@ -10,13 +10,13 @@ import json
 import os
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import writer_mode  # noqa: E402
+from lib import unit_binding, writer_mode  # noqa: E402
 from lib.agent_aliases import current as current_name  # noqa: E402
 from lib.agent_models import MODELS  # noqa: E402
 from lib.audit import (  # noqa: E402
@@ -98,6 +98,8 @@ BUILD_PHASES = {
 }
 UNIT_AGENTS = frozenset({CODER, VERIFIER})
 ROUND_AGENTS = frozenset({"auditor"})
+# 0208, issue 181: agents the main session starts for a train; one naming a train id opens its run.
+MAIN_SESSION_TYPES = frozenset({CODER, VERIFIER, "auditor", "contract-spec", "charter-docs"})
 _UNIT = re.compile(rf"(?:worktrees|daedalus-unit)/{TRAIN_ID.pattern}-([a-z0-9][a-z0-9-]*)")
 _ROUND = re.compile(r"\bround (\d+)\b", re.IGNORECASE)
 _PHASE = re.compile(r"\bPhase (\d+)\b")
@@ -431,7 +433,20 @@ def _phase(run_type: str, agent_type: str, prompt: str) -> str | None:
     return match.group(1) if match else BUILD_PHASES.get(agent_type)
 
 
-def build_runs(agents: list[Agent], session: str, kinds: dict[str, str] | None = None) -> list[Run]:
+def _bound_label(agent: Agent, key: tuple[str, str], bound: dict[str, tuple[str, str]]) -> Agent:
+    # issue 181: the train's bindings file names the unit when no prompt of the agent does.
+    train, unit = bound.get(agent.agent_id, (None, None))
+    if unit is None or train != key[1] or all(seg.label for seg in agent.segments):
+        return agent
+    return replace(agent, segments=[replace(s, label=s.label or unit) for s in agent.segments])
+
+
+def build_runs(
+    agents: list[Agent],
+    session: str,
+    kinds: dict[str, str] | None = None,
+    bound: dict[str, tuple[str, str]] | None = None,
+) -> list[Run]:
     # Plan 11 A: a run is a root agent's whole tree; an unclassed root joins a run it names.
     # 0190: kinds maps a writer's agent id to the kind its dispatch bound, from the writer record.
     by_id = {a.agent_id: a for a in agents}
@@ -448,8 +463,13 @@ def build_runs(agents: list[Agent], session: str, kinds: dict[str, str] | None =
     for agent in agents:
         key = owners.get(agent.agent_id)
         named = _named_id(agent)
-        if key is None and agent.plugin and agent.parent is None and named in ids:
-            key = ids[named]
+        if key is None and agent.plugin and agent.parent is None and named is not None:
+            if named in ids:
+                key = ids[named]
+            elif agent.agent_type in MAIN_SESSION_TYPES:
+                key = (BUILD, named)
+            if key is not None and key[0] == BUILD:
+                agent = _bound_label(agent, key, bound or {})
         run = runs.setdefault(key or (SESSION, session), Run(*(key or (SESSION, session))))
         _add_rows(run, agent)
     # 0163: the session group prints after the runs it sits beside.
@@ -686,7 +706,18 @@ def session_runs(
     files = transcript_files(session, root)
     types = audit_types(_audit_records(root, session) if records is None else records)
     kinds = writer_mode.bound_kinds(root)
-    return build_runs(load_agents(files, types), session, kinds), len(files)
+    agents = load_agents(files, types)
+    return build_runs(agents, session, kinds, bound_units(root, agents)), len(files)
+
+
+def bound_units(root: Path, agents: list[Agent]) -> dict[str, tuple[str, str]]:
+    # issue 181: agent id to (train id, unit) from the bindings of each train a root agent names.
+    trains = {n for a in agents if a.parent is None and (n := _named_id(a)) is not None}
+    bound: dict[str, tuple[str, str]] = {}
+    for train in sorted(trains):
+        for agent_id, unit in unit_binding.bound_units(root, train).items():
+            bound.setdefault(agent_id, (train, unit.removeprefix(f"{train}-")))
+    return bound
 
 
 def _merge(runs: list[Run]) -> list[Run]:
