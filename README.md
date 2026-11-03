@@ -663,6 +663,7 @@ Daedalus/
 │   ├── lib/project_keys.py          # every manifest and config key, its reference row, and the starter files
 │   ├── lib/project_root.py          # finds the project root
 │   ├── lib/redact.py                # secret masking for audit records
+│   ├── lib/reply_digest.py          # saves a hand-back as a report file and builds its digest
 │   ├── lib/repo_root.py             # finds a train marker before other lib modules load
 │   ├── lib/router.py                # runs each agent's calls through its hooks
 │   ├── lib/scrub.py                 # reads the declared scrub file's terms
