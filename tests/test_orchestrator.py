@@ -262,6 +262,8 @@ MAIN_ONLY = (
     "daedalus_train.py writer-clear",
     # issue 48, 0173: plan step 2 runs it outside a run only; the run entry set the scope.
     "daedalus_doctor.py --print-scope",
+    # 0209: the token budget gate; the main session runs it in unattended mode.
+    "token_economy.py report",
 )
 
 
@@ -533,6 +535,7 @@ def test_glue_holds_the_new_sections_in_order() -> None:
         "## Sizing",
         "## Announce and go",
         "## Phases",
+        "## Wave checkpoints",
         "## Named compositions",
         "## Folder scope",
         "## Summary notes and completion",

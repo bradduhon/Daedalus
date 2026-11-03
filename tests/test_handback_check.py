@@ -295,8 +295,16 @@ def test_the_script_denies_a_handback_in_a_train(tmp_path: Path) -> None:
             "permissionDecisionReason": handback_check.judge(call),
         }
     }
-    whole = _handback(CODER_MESSAGE, cwd=str(tmp_path))
-    assert _run(json.dumps(whole)).stdout == ""
+    # 0205: a passing hand-back in a run goes out as its digest, the whole reply saved on disk.
+    assert _run(json.dumps(_handback(CODER_MESSAGE, cwd=str(tmp_path)))).stdout == ""
+    long = _reply(*["The unit wired the check into the hand-back path."] * 12, CODER_MESSAGE)
+    out = json.loads(_run(json.dumps(_handback(long, cwd=str(tmp_path)))).stdout)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    short = out["hookSpecificOutput"]["updatedInput"]["message"]
+    report = Path(short.splitlines()[0].split()[1])
+    assert report.read_text(encoding="utf-8") == long
+    assert report.parent == tmp_path / "docs/.tmp/daedalus/20261026-002310/evidence/replies"
+    assert short.splitlines()[2:] == CODER_MESSAGE.splitlines()[2:]
 
 
 def test_the_script_steps_aside_on_a_handback_outside_a_train(tmp_path: Path) -> None:

@@ -191,6 +191,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     where = report.add_mutually_exclusive_group()
     where.add_argument("--out")
     where.add_argument("--save", action="store_true")
+    # 0209: exit 1 when a unit is over the unit_token_budget of config.json.
+    report.add_argument("--gate", action="store_true")
     history = sub.add_parser("history", allow_abbrev=False)
     for each in (report, history):
         each.add_argument("--cwd", "--repo", dest="cwd", default=os.getcwd())
@@ -624,6 +626,34 @@ def refuted_lines(runs: list[Run]) -> list[str]:
     ]
 
 
+def unit_totals(run: Run) -> dict[str, int]:
+    # 0209: a unit's tokens are the four counts of every coder and verifier row on it.
+    totals: dict[str, int] = {}
+    for row in run.rows:
+        if row.kind == "unit" and row.agent in UNIT_AGENTS:
+            totals[str(row.label)] = totals.get(str(row.label), 0) + sum(row.usage.tokens)
+    return totals
+
+
+def budget_lines(runs: list[Run], budget: int | None) -> tuple[list[str], int]:
+    # 0209: one line per unit over the budget, then the count; no lines while the budget is off.
+    if budget is None:
+        return [], 0
+    counted = [(run, totals) for run in runs if (totals := unit_totals(run))]
+    many = len(counted) > 1
+    lines: list[str] = []
+    units = 0
+    for run, totals in counted:
+        where = f" in {run.run_type} {run.run_id}" if many else ""
+        for label, total in sorted(totals.items()):
+            units += 1
+            if total > budget:
+                lines.append(
+                    f"over budget: unit {label} {total:,} tokens, budget {budget:,}{where}"
+                )
+    return [*lines, f"budget: {len(lines)}/{units} units over"], len(lines)
+
+
 def detail_row(row: Row) -> str:
     cells: list[object] = [row.run_type, row.run_id, row.phase, row.agent, row.model or NO_MODEL]
     cells += [row.label, *_numbers(row.usage), duration(row.usage.seconds)]
@@ -680,16 +710,18 @@ LEGEND = (
     "The mean per unit counts coders only. Run type session holds the agents the main session "
     "started outside any run; its rows carry the agent id. The model cell is the model the "
     "agent's transcript names, - on a total or mean row. A refuted line counts, per coder model, "
-    "the units a verifier refuted while a coder on that model held them."
+    "the units a verifier refuted while a coder on that model held them. With "
+    "unit_token_budget set, an over budget line names each unit whose coder and verifier "
+    "tokens together pass it, and a budget line counts them."
 )
 
 
-def render(runs: list[Run], source: str) -> str:
+def render(runs: list[Run], source: str, budget: int | None = None) -> str:
     lines = ["# Token economy", "", f"source: {source}", "", LEGEND, "", *header()]
     for run in runs:
         lines += [detail_row(row) for row in run.rows]
         lines += [totals_row(run), mean_row(run, "unit"), mean_row(run, "round")]
-    after = [*turn_lines(runs), *refuted_lines(runs)]
+    after = [*turn_lines(runs), *refuted_lines(runs), *budget_lines(runs, budget)[0]]
     lines += ["", *after] if after else []
     return "\n".join(lines) + "\n"
 
@@ -726,6 +758,18 @@ def _run_sessions(root: Path, run_id: str) -> list[str]:
 
 
 def report(root: Path, session: str | None, run_id: str | None) -> str:
+    runs, source = report_runs(root, session, run_id)
+    return render(runs, source, _budget(root))
+
+
+def _budget(root: Path) -> int | None:
+    try:
+        return load_config(str(root)).unit_token_budget
+    except ConfigError as exc:
+        raise TokenError(str(exc)) from exc
+
+
+def report_runs(root: Path, session: str | None, run_id: str | None) -> tuple[list[Run], str]:
     if session is not None:
         runs, files = session_runs(_session_arg(session), root)
         if not files:
@@ -733,7 +777,7 @@ def report(root: Path, session: str | None, run_id: str | None) -> str:
                 f"no agent transcript names session {session} under {projects_dir()}. "
                 "Next: check the session id; Claude Code removes old transcripts."
             )
-        return render(_merge(runs), f"session {session}")
+        return _merge(runs), f"session {session}"
     assert run_id is not None
     sessions = _run_sessions(root, run_id)
     picked: list[Run] = []
@@ -745,7 +789,7 @@ def report(root: Path, session: str | None, run_id: str | None) -> str:
             f"(sessions {', '.join(sessions)}). Next: check the run id; Claude Code removes "
             "old transcripts."
         )
-    return render(_merge(picked), f"run {run_id}, sessions {', '.join(sessions)}")
+    return _merge(picked), f"run {run_id}, sessions {', '.join(sessions)}"
 
 
 def _charter(root: Path) -> Path | None:
@@ -838,13 +882,16 @@ def main(argv: list[str]) -> int:
                 "--save writes one run's table and needs a run id, not a session id. "
                 "Next: pass --run with the train id, or name a file with --out."
             )
-        text = report(root, args.session, args.run)
+        runs, source = report_runs(root, args.session, args.run)
+        budget = _budget(root)
+        text = render(runs, source, budget)
         out = str(saved_path(root, args.run)) if args.save else args.out
         if out is None:
             sys.stdout.write(text)
         else:
             print(f"wrote {_write(text, out, args.cwd)}")
-        return 0
+        # 0209: the gate fails on any unit over budget; a budget left off never fails it.
+        return 1 if args.gate and budget_lines(runs, budget)[1] else 0
     except TokenError as exc:
         print(f"token_economy: {exc}", file=sys.stderr)
         return 1
