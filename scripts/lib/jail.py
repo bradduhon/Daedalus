@@ -1311,9 +1311,8 @@ def _read_only_segment(
         return not rg_program(args)
     if name not in READ_ONLY_WRITE_OPTS:
         return True
-    # P1, issue 204: a $ or backtick word may expand to a write option or a second operand;
-    # so may a glob leading with - or a glob char, and any glob in uniq; expansion_opaque judges
-    # the unquoted words, find's included, where the raw command is known.
+    # P1, issue 204: $, a backtick, a leading glob or any uniq glob may become a write option or
+    # operand; expansion_opaque judges unquoted words where the raw command is known.
     if any(
         set("$`") & set(arg)
         or name != "find"

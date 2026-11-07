@@ -58,8 +58,8 @@ def test_a_quoted_brace_or_glob_is_one_literal_word(marked_repo: Path, command: 
     assert not shell.expansion_opaque(command), command
     decision = jail.decide(_cred("Explore", "Bash", str(marked_repo), command=command), CFG)
     assert decision.allow and not decision.warn, (command, decision.reason)
-    # O4: worker hygiene still refuses a brace inside double quotes to Daedalus agents.
-    if '"' not in command:
+    # O4, prepush2: hygiene and the search glob rule still judge Daedalus agents' other rows.
+    if '"' not in command and command.split()[0] in shell.READ_ONLY_WRITE_OPTS:
         decision = decide(_b("auditor", command), CFG)
         assert decision.allow and not decision.warn, (command, decision.reason)
 

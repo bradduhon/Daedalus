@@ -158,8 +158,13 @@ A1_EXPANSION = (
     "uniq $X",
     'sort "$O" in',
     "sort `x` in",
+    "{u,}niq in out",
+    '"$V" in out',
 )
 A1_EXPANSION_ADMITTED = (
+    "grep -n sort src/*.py",
+    "rg file src/*",
+    'grep -rn "find" *.md',
     "uniq '{a,b}'",
     'uniq "{a,b}"',
     "sort '{-o,out}' in",

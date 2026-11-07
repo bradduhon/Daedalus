@@ -1936,11 +1936,24 @@ def expansion_opaque(command: str) -> bool:
     )
     for raw in _raw_segments(command):
         words = _raw_words(raw)
-        if any(_base(_unquoted(w)) in READ_ONLY_WRITE_OPTS for w in words) and (
-            procsub or any(_unquoted_expansion(w) or set("$`") & set(_unsingled(w)) for w in words)
-        ):
+        plain = [_unquoted(w) for w in words]
+        rest = strip_wrappers(plain)
+        if rest is None:  # issue 76: a wrapper option off its row leaves the verb unknown.
+            writes = any(_base(p) in READ_ONLY_WRITE_OPTS for p in plain)
+        elif not rest:
+            continue
+        elif _expands(head := words[len(words) - len(rest)]):
+            return True  # P1: an expansion in the command-name position hides the verb.
+        else:
+            writes = _base(_unquoted(head)) in READ_ONLY_WRITE_OPTS
+        if writes and (procsub or any(_expands(w) for w in words)):
             return True
     return False
+
+
+def _expands(word: str) -> bool:
+    # 0084: the shell may split this raw word or turn it into an option before the command runs.
+    return _unquoted_expansion(word) or bool(set("$`") & set(_unsingled(word)))
 
 
 def _hygiene_bad(token: str, word: str | None) -> bool:
