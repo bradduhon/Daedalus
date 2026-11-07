@@ -88,6 +88,7 @@ from lib.shell import (
     R_STASH_UNTRACKED,
     READ_ONLY_CMDS,
     READ_ONLY_GIT,
+    READ_ONLY_WRITE_OPTS,
     WRAPPER_CHDIR,
     WRAPPER_WRITES,
     WrapperOption,
@@ -106,6 +107,8 @@ from lib.shell import (
     chain_bases,
     env_split_values,
     runs_claude,
+    scan_options,
+    split_options,
     strip_wrappers,
     tokenize,
     unwrap,
@@ -1303,24 +1306,30 @@ def _read_only_segment(
         return _git_grammar_ok(tokens, git_subcommands, cwd, charter)
     if name not in READ_ONLY_CMDS:
         return False
-    if name == "find":
-        return not any(arg in _FIND_DENY or arg.startswith("-fprint") for arg in args)
-    if name == "sort":
-        return not any(
-            _long_matches(arg, "--output", 1)
-            or _long_matches(arg, "--compress-program", 2)
-            or _long_matches(arg, "--temporary-directory", 1)
-            or {"o", "T"} & _short_flags(arg)
-            for arg in args
-        )
     if name == "rg":
         return not rg_program(args)
+    if name not in READ_ONLY_WRITE_OPTS:
+        return True
+    # P1, issue 204: a $ or backtick word may expand to a write option or a second operand;
+    # so may a glob leading with - or a glob char, and any glob in uniq. find globs are patterns.
+    if any(
+        set("$`") & set(arg)
+        or name != "find"
+        and _GLOB_CHARS & set(arg)
+        and (name == "uniq" or arg[:1] == "-" or arg[:1] in _GLOB_CHARS)
+        for arg in args
+    ):
+        return False
+    if name == "find" and any(arg in _FIND_DENY for arg in args):
+        return False
+    scan = scan_options(name, args)
+    if READ_ONLY_WRITE_OPTS[name] & set(scan.options):
+        return False
     if name == "uniq":
-        # 8.5: uniq writes its second positional operand.
-        return len([arg for arg in args if not arg.startswith("-")]) <= 1
-    if name == "file":
-        return not any(arg == "--compile" or "C" in _short_flags(arg) for arg in args)
-    return True
+        # 8.5, P2: uniq writes its second operand; an option off its row may hide one more.
+        return len(scan.operands) + scan.off <= 1
+    # P2: an option off a write verb's row may be a write option the table does not know.
+    return name == "find" or not scan.off
 
 
 R_LEDGER_ARGS = (
@@ -2459,10 +2468,12 @@ def _moved_segment(
         return verb, False
     if _INTERPRETER.fullmatch(_base(verb)) and "-m" in clean[at + 1 :]:
         return f"{verb} -m", False
-    # issue 188: uniq writes its second operand, which the base read grammar admits.
-    operands = [w for w in clean[at + 1 :] if w == "-" or not w.startswith("-")]
-    if _base(verb) == "uniq" and len(operands) > 1 and not os.path.isabs(operands[1]):
-        return operands[1], False
+    if _base(verb) == "uniq":
+        # issue 188, 204: uniq writes its second operand, which the base read grammar admits.
+        args = [clean[i] for i in range(at + 1, len(clean)) if i not in redirects]
+        operands = split_options("uniq", args)[0]
+        if len(operands) > 1 and not os.path.isabs(operands[1]):
+            return operands[1], False
     named, plain = False, False
     for i in range(at + 1, len(words)):
         alts = _expand_word(words[i], env) if i not in redirects else []

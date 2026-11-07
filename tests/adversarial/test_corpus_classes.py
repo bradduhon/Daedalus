@@ -13,9 +13,9 @@ from tests.adversarial.corpus import CLASSES
 HERE = Path(__file__).resolve().parent
 
 
-def test_the_seven_classes_are_named() -> None:
-    # issue 76: wrapper_options joined the six classes of spec 3.7.
-    assert len(CLASSES) == len(set(CLASSES)) == 7
+def test_each_bypass_class_is_named_once() -> None:
+    # issue 76, 204: wrapper_options and operand_grammar joined the six classes of spec 3.7.
+    assert len(CLASSES) == len(set(CLASSES)) == 8
 
 
 @pytest.mark.parametrize("name", CLASSES)

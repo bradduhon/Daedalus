@@ -37,6 +37,7 @@ class TestReadOnlyAgents:
             "find . -name '*.py' | wc -l",
             "git branch -a",
             "stat x",
+            "uniq -f 1 in",
         ]
         bad = [
             "git diff | tee out.txt",
@@ -119,6 +120,8 @@ class TestRegressionReadOnly:
             "git -c diff.external=x diff",
             "git -C . checkout main",
             "uniq in out",
+            "uniq - out",
+            "uniq -- in out",
             "file -C -m x",
             "./cat x",
             "/tmp/cat x",

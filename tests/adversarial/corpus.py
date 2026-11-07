@@ -8,8 +8,11 @@ from __future__ import annotations
 import shlex
 from typing import Any
 
+from lib import jail
+from lib.jail import normalize_agent
+
 from tests.conftest import CFG
-from tests.hook_chain import decide
+from tests.hook_chain import CHAINS, decide
 from tests.payloads import _cred
 
 CLASSES = (
@@ -20,6 +23,7 @@ CLASSES = (
     "path_traversal",
     "nested_sessions",
     "wrapper_options",
+    "operand_grammar",
 )
 # spec 3.3: the agents whose Bash grammar is widest; credential reads judge them all.
 READERS = ("coder", "auditor", "verifier")
@@ -87,6 +91,73 @@ H1_WRAPPERS_OFF_ROW = (
     "nsenter --wd={repo} touch x",
     "ionice --frobnicate touch {repo}/x",
     "taskset touch {repo}/x",
+)
+# issue 204 (unit A1): the reproduction rows, verbatim.
+A1_ISSUE_204 = ("uniq - out", "uniq in out", "uniq -c in out")
+# issue 107 (unit A1): the reproduction row, verbatim; <file> lies in a repository a train marks.
+A1_ISSUE_107 = "flock <file> <command>"
+# P1 to P4, P9 (unit A1): read verbs that write through an option or an operand, per rule.
+A1_READ_P1 = ("uniq -c *", "uniq in a*", "sort $O in", "sort * in", "file -b $X", "find . $P out")
+A1_READ_P2 = (
+    "sort -o out in",
+    "sort -oout in",
+    "sort -uo out in",
+    "sort -uoout in",
+    "sort --output=out in",
+    "sort --output out in",
+    "sort --out out in",
+    "sort -T /tmp in",
+    "sort --temporary-directory=/tmp in",
+    "sort --temp /tmp in",
+    "sort --compress-program=gzip in",
+    "sort --compress gzip in",
+    "sort --frobnicate in",
+    "find . -fprint out",
+    "find . -fprint0 out",
+    "find . -fprintf out %p",
+    "find . -fls out",
+    "find . -fprint=out",
+    "file -C -m x",
+    "file -bC x",
+    "file --compile x",
+    "file --comp x",
+    "uniq -f 1 in out",
+    "uniq -f1 in out",
+    "uniq -cf1 in out",
+    "uniq --skip-fields=1 in out",
+    "uniq --skip-f 1 in out",
+    "uniq --frobnicate in",
+    "uniq -Q in",
+)
+A1_READ_P3 = ("uniq -- in out", "uniq -- -c out", "uniq -c - out")
+A1_READ_P4 = (
+    "uniq in out -c",
+    "uniq in -f 1 out",
+    "sort in -o out",
+    "sort in --output=out",
+    "sort in -uo out",
+    "file x -C",
+)
+A1_READ_P9 = ("flock l cat x", "time -o t cat x")
+A1_READ_ADMITTED = ("uniq -c in", "uniq -f 1 in", "sort -u in", "sort -t, -k2,2n in", "file -b x")
+# P1 to P4, P9 (unit A1): wrapper files named in {repo}, a repository a train marks.
+A1_WRAPPER_ROWS = (
+    "flock {repo}/* true",
+    "flock {repo}/l? true",
+    "flock -w 5 {repo}/l true",
+    "flock -w5 {repo}/l true",
+    "flock -xw 5 {repo}/l true",
+    "flock --wait=5 {repo}/l true",
+    "flock --tim 5 {repo}/l true",
+    "unshare --mount={repo}/ns true",
+    "unshare --net={repo}/ns true",
+    "flock -- {repo}/l true",
+    "flock -x -- {repo}/l true",
+    "flock {repo}/l -c true",
+    "flock -n {repo}/l -c 'true'",
+    "flock {repo}/l true",
+    "flock -x {repo}/l true",
+    "flock --timeout=5 -- {repo}/l true",
 )
 # issue 83 (unit H1): {other}/deep links to {repo}/sub, so deep/.. is {repo} on disk.
 H1_SYMLINK = ("touch {other}/deep/../x", "mkdir {other}/deep/../y", "rm -rf {other}/deep/../x")
@@ -202,7 +273,10 @@ PREPUSH2_ARCHIVE_WRITES = (
 
 def assert_denied(hook_input: dict[str, Any], *markers: str) -> None:
     # pin C1 -> C6: a deny through tests/hook_chain.py, never a warning; a marker names the finding.
-    d = decide(hook_input, CFG)
+    # issue 107: an agent with no hook chain is one Daedalus did not start, judged by lib.jail.
+    agent = normalize_agent(str(hook_input.get("agent_type") or "main"))
+    chained = agent in CHAINS or any(key.startswith(f"{agent} (") for key in CHAINS)
+    d = decide(hook_input, CFG) if chained else jail.decide(hook_input, CFG)
     reason = str(d.reason)
     assert not d.allow and not d.warn, (hook_input, reason)
     assert not markers or any(m in reason for m in markers), (hook_input, reason)

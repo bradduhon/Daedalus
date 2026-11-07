@@ -32,6 +32,147 @@ READ_ONLY_CMDS = frozenset(
         "uniq",
     }
 )
+
+
+def _row(
+    plain: str, valued: str, long_plain: str = "", long_valued: str = ""
+) -> tuple[frozenset[str], frozenset[str]]:
+    # P2: (no-argument options, one-argument options) from short letters and long names.
+    def spell(letters: str, names: str) -> frozenset[str]:
+        return frozenset({f"-{c}" for c in letters} | {f"--{n}" for n in names.split()})
+
+    return spell(plain, long_plain), spell(valued, long_valued)
+
+
+_HELP = " help version"
+# P2: the one option table split_options reads; a long option taking an optional =x is plain.
+OPTION_TABLE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "cat": _row(
+        "AbeEnstTuv",
+        "",
+        "show-all number-nonblank show-ends number squeeze-blank show-tabs show-nonprinting"
+        + _HELP,
+    ),
+    "rg": _row(
+        "0.abcFhHiIlLnNopPqsSuUvVwxz",
+        "efmABCgtTjMrEd",
+        "hidden follow no-ignore count files-with-matches line-number ignore-case json" + _HELP,
+        "regexp file max-count context after-context before-context glob iglob type type-not"
+        " threads replace encoding pre pre-glob ignore-file hostname-bin hyperlink-format"
+        " max-depth max-filesize sort sortr colors type-add engine",
+    ),
+    "grep": _row(
+        "EFGPiyvwxcLloqsbHhnTZzUraIR",
+        "efmABCdD",
+        "extended-regexp fixed-strings basic-regexp perl-regexp ignore-case no-ignore-case"
+        " invert-match word-regexp line-regexp count color colour files-without-match"
+        " files-with-matches only-matching quiet silent no-messages byte-offset with-filename"
+        " no-filename line-number line-buffered initial-tab null null-data text recursive"
+        " dereference-recursive" + _HELP,
+        "regexp file max-count after-context before-context context label include exclude"
+        " exclude-from exclude-dir binary-files devices",
+    ),
+    "ls": _row(
+        "aAbBcCdDfFgGhHiklLmnNopqQrRsStuUvxXZ1",
+        "ITw",
+        "all almost-all author escape ignore-backups classify color hyperlink directory dired"
+        " file-type full-time group-directories-first no-group human-readable si dereference"
+        " dereference-command-line dereference-command-line-symlink-to-dir inode kibibytes"
+        " literal numeric-uid-gid hide-control-chars show-control-chars quote-name recursive"
+        " reverse size zero context" + _HELP,
+        "block-size format hide ignore indicator-style quoting-style sort time time-style"
+        " tabsize width",
+    ),
+    # P2: jq's --arg, --argjson, --slurpfile and --rawfile take two words; one is stripped.
+    "jq": _row(
+        "nrjacCsSeh",
+        "fL",
+        "null-input raw-input slurp raw-output join-output ascii-output compact-output"
+        " color-output monochrome-output sort-keys exit-status tab seq stream stream-errors"
+        " args jsonargs raw-output0 unbuffered" + _HELP,
+        "from-file indent arg argjson slurpfile rawfile",
+    ),
+    "head": _row(
+        "qvz0123456789", "nc", "quiet silent verbose zero-terminated" + _HELP, "lines bytes"
+    ),
+    "tail": _row(
+        "fFqvz0123456789",
+        "ncs",
+        "follow retry quiet silent verbose zero-terminated" + _HELP,
+        "lines bytes pid sleep-interval max-unchanged-stats",
+    ),
+    "wc": _row("clmwL", "", "bytes chars lines words max-line-length" + _HELP, "files0-from total"),
+    "sha256sum": _row(
+        "bctwz",
+        "",
+        "binary check tag text ignore-missing quiet status strict warn zero" + _HELP,
+    ),
+    "file": _row(
+        "bcCdE0hiklLnNprsSvzZ",
+        "efFmP",
+        "brief checking-printout compile debug extension no-dereference mime mime-type"
+        " mime-encoding keep-going list dereference no-buffer no-pad print0 preserve-date raw"
+        " special-files no-sandbox uncompress uncompress-noreport apple" + _HELP,
+        "exclude exclude-quiet files-from separator magic-file parameter",
+    ),
+    "stat": _row("LftZ", "c", "dereference file-system terse" + _HELP, "format printf cached"),
+    "sort": _row(
+        "bcCdfghimMnrRsuVz",
+        "kSotTy",
+        "ignore-leading-blanks dictionary-order ignore-case general-numeric-sort"
+        " ignore-nonprinting month-sort human-numeric-sort numeric-sort random-sort reverse"
+        " version-sort check merge stable unique zero-terminated debug" + _HELP,
+        "key output buffer-size field-separator temporary-directory random-source sort"
+        " parallel batch-size compress-program files0-from",
+    ),
+    "uniq": _row(
+        "0123456789Dcdiuz",
+        "fsw",
+        "all-repeated group count repeated ignore-case unique zero-terminated" + _HELP,
+        "skip-fields skip-chars check-chars",
+    ),
+    # P2: find's predicates are whole words matched by their longest table prefix.
+    "find": (
+        frozenset(
+            {"-H", "-L", "-P", "-O", "-print", "-print0", "-ls", "-prune", "-quit", "-true"}
+            | {"-false", "-empty", "-depth", "-mount", "-xdev", "-follow", "-noleaf"}
+            | {"-daystart", "-nouser", "-nogroup", "-readable", "-writable", "-executable"}
+            | {"-not", "-a", "-o", "-and", "-or", "-help", "-version"}
+        ),
+        frozenset(
+            {"-D", "-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename"}
+            | {"-regex", "-iregex", "-regextype", "-lname", "-ilname", "-type", "-xtype"}
+            | {"-size", "-perm", "-user", "-group", "-uid", "-gid", "-newer", "-anewer"}
+            | {"-cnewer", "-samefile", "-inum", "-links", "-mtime", "-mmin", "-atime"}
+            | {"-amin", "-ctime", "-cmin", "-used", "-maxdepth", "-mindepth", "-printf"}
+            | {"-fprint", "-fprint0", "-fprintf", "-fls", "-fstype", "-context"}
+            | {"-files0-from"}
+        ),
+    ),
+    # pin A1 -> A3: shell variable builtins and git commit, stripped before a pathspec scan.
+    "export": _row("fnp", ""),
+    "declare": _row("aAfFgiIlnrtuxp", ""),
+    "typeset": _row("aAfFgiIlnrtuxp", ""),
+    "git commit": _row(
+        "aipsnvqzeo",
+        "mFCct",
+        "all patch signoff no-signoff no-verify verify verbose no-verbose quiet dry-run short"
+        " branch porcelain long null amend no-edit edit allow-empty allow-empty-message"
+        " include only no-post-rewrite reset-author status no-status gpg-sign no-gpg-sign"
+        " untracked-files pathspec-file-nul ahead-behind no-ahead-behind interactive",
+        "message file reuse-message reedit-message fixup squash author date template cleanup"
+        " pathspec-from-file trailer",
+    ),
+}
+# P2: commands whose options are whole single-dash words, never getopt clusters.
+WORD_OPTION_CMDS = frozenset({"find"})
+# issue 204: the read verbs' options that write a file; uniq writes its second operand instead.
+READ_ONLY_WRITE_OPTS: dict[str, frozenset[str]] = {
+    "sort": frozenset({"-o", "--output", "-T", "--temporary-directory", "--compress-program"}),
+    "find": frozenset({"-fprint", "-fprint0", "-fprintf", "-fls"}),
+    "file": frozenset({"-C", "--compile"}),
+    "uniq": frozenset(),
+}
 # spec 6: grep, worktree and merge-base pass only the read forms of their grammar rows.
 READ_ONLY_GIT = frozenset(
     {"diff", "log", "show", "status", "rev-parse", "ls-files", "branch"}
@@ -165,8 +306,15 @@ R_ENV_SPLIT = (
 CONFINE = "daedalus_confine.py"
 # issue 76: options that move the working folder before the wrapped command runs.
 WRAPPER_CHDIR = frozenset({("env", "-C"), ("env", "--chdir"), ("sudo", "-D"), ("sudo", "--chdir")})
-# issue 76: options whose value is a file the wrapper itself writes.
-WRAPPER_WRITES = frozenset({("time", "-o"), ("time", "--output")})
+# issue 107: the option slot of a wrapper operand that names a file the wrapper creates.
+WRAPPER_FILE = "<file operand>"
+# issue 76, 107: options and operands whose value is a file the wrapper itself writes.
+# P9 sweep: unshare's --<ns>=file persists a namespace by a bind mount on that file.
+WRAPPER_WRITES = frozenset(
+    {("time", "-o"), ("time", "--output"), ("flock", WRAPPER_FILE)}
+    | {("unshare", f"--{ns}") for ns in ("mount", "uts", "ipc", "net", "pid", "user")}
+    | {("unshare", "--cgroup"), ("unshare", "--time")}
+)
 # issue 76: the one duration regex, timeout's first operand.
 DURATION: re.Pattern[str] = re.compile(r"[\d.]+[smhd]?")
 # issue 82: the operand a wrapper reads before its command; None never matches (chroot re-roots).
@@ -924,6 +1072,60 @@ def _cluster(
     return "", len(token)
 
 
+class OptionScan(NamedTuple):
+    # P2 to P4: operands in order, the canonical options met, and whether one was off the table.
+    operands: list[str]
+    options: list[str]
+    off: bool
+
+
+def scan_options(name: str, args: list[str]) -> OptionScan:
+    # P2 to P4 by OPTION_TABLE; find's predicates are whole single-dash words, never clusters.
+    no_arg, with_arg = OPTION_TABLE.get(name, (frozenset(), frozenset()))
+    row = no_arg | with_arg
+    words = name in WORD_OPTION_CMDS
+    operands: list[str] = []
+    options: list[str] = []
+    off = False
+    i = 0
+    while i < len(args):
+        word = args[i]
+        i += 1
+        if word == "--" and not words:
+            operands += args[i:]
+            break
+        if word == "-" or not word.startswith("-"):
+            operands.append(word)
+            continue
+        if words:
+            key = max((o for o in row if word.startswith(o)), key=len, default="")
+            attached = len(word) > len(key)
+        elif word.startswith("--"):
+            key = _long_option(word.split("=", 1)[0], row)
+            attached = "=" in word
+        else:
+            cluster = _cluster(word, no_arg, with_arg)
+            if cluster is None:
+                off = True
+                continue
+            letter, cut = cluster
+            options += ["-" + ch for ch in word[1:cut]]
+            i += 1 if letter and cut == len(word) else 0
+            continue
+        if key not in row:
+            off = True
+            continue
+        options.append(key)
+        i += 1 if key in with_arg and not attached else 0
+    return OptionScan(operands, options, off)
+
+
+def split_options(name: str, args: list[str]) -> tuple[list[str], bool]:
+    # pin A1 -> A2: the operands left after P2 to P4, and True when an option was off the table.
+    scan = scan_options(name, args)
+    return scan.operands, scan.off
+
+
 def strip_wrappers(tokens: list[str]) -> list[str] | None:
     # issue 76: the tokens from the wrapped command on; None when an option is off WRAPPER_OPTS.
     return _strip_wrappers(tokens, [])
@@ -956,7 +1158,8 @@ def _strip_wrappers(
             elif not token.startswith("-") or token == "-" and name != "env":
                 break
             elif key in no_arg and ("=" not in token or key.startswith("--")):
-                pass
+                if "=" in token and (name, key) in WRAPPER_WRITES:
+                    found.append(WrapperOption(name, key, offset + i, spelled + "="))
             elif key in with_arg and "=" in token and key.startswith("--"):
                 # audit round 2: only getopt_long strips = (--chdir=v); a short -C=v keeps it,
                 # so it falls through to _cluster, which reads its value as =v.
@@ -985,6 +1188,9 @@ def _strip_wrappers(
             operand = WRAPPER_OPERAND[name]
             if i >= len(tokens) or operand is None or not operand.fullmatch(tokens[i]):
                 return None
+            # issue 107, P9: flock creates its file operand; a numeric fd operand is no path.
+            if (name, WRAPPER_FILE) in WRAPPER_WRITES and not tokens[i].isdigit():
+                found.append(WrapperOption(name, WRAPPER_FILE, offset + i, ""))
             i += 1
             if name == "flock" and tokens[i : i + 1] and tokens[i].split("=")[0] in FLOCK_BODY:
                 return None
