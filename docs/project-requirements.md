@@ -48,7 +48,7 @@ Every key in this file is a row of the generated key reference in the plugin [RE
 
 The Build Train appends rulings to your ledger with `append_ledger.py`, in one of two formats.
 
-`markdown-table-row`: a table whose header has an `Id` cell, with a separator row directly under it. Column 1 is `Id` and column 2 is `Date`; the remaining columns are yours. The sequence is the leading number of the last row's id (`last-row-id`), and the default id scheme is `{seq:04d}-{repo}-{type}`.
+`markdown-table-row`: a table whose header has an `Id` cell, with a separator row directly under it. Column 1 is `Id` and column 2 is `Date`; the remaining columns are yours. The sequence is the highest leading number of any `Id` cell in any such table (`last-row-id`), so an index table above the log does not change it. The new row goes at the end of the table that holds that number; when two tables hold it, the one with more rows takes the row. The default id scheme is `{seq:04d}-{repo}-{type}`. In either format, an append whose new id already appears anywhere in the file as a whole word is refused, and the file is left unchanged; the `Next:` line names the id and the line it first appears on.
 ```markdown
 | Id | Date | Ruling | Supersedes | Follow-ups |
 |---|---|---|---|---|
@@ -62,6 +62,18 @@ The Build Train appends rulings to your ledger with `append_ledger.py`, in one o
 Seven.
 ```
 To keep the sequence in frontmatter instead, start the file with a `---` block holding `sequence_id: 7` and set `sequence_source` to `frontmatter:sequence_id`. The `---` must be the file's first line; a heading ledger with anything above it is not read as frontmatter.
+
+A `ledger` block, in config.json or in the manifest, may also name the branch its ledger is written on:
+```json
+"ledger": {
+  "path": "docs/decisions.md",
+  "format": "markdown-table-row",
+  "id_scheme": "{seq:04d}-{repo}-{type}",
+  "sequence_source": "last-row-id",
+  "branch": "main"
+}
+```
+With `branch` set, `append_ledger.py` reads the branch of the checkout that holds the ledger file from its `HEAD` file, and runs no git command. In a linked worktree it follows the `.git` file to the worktree's own folder. When that checkout is on another branch or on a detached HEAD, the append and the `--probe` exit 1. The `Next:` line names both branches and the checkout. Daedalus never switches the branch for you. A `branch` beside a ledger path holding `<charter_root>` is refused when the config loads: a run branches the Charter repository to `daedalus/<train-id>`, so every append there would be refused. Leave `branch` out, or set it to `null`, to write on whatever branch the checkout is on.
 
 ### standards_sources kinds
 

@@ -98,6 +98,9 @@ _LEDGER = {
         {"ledger": {**_LEDGER, "format": ["markdown-table-row"]}},
         {"ledger": {**_LEDGER, "id_scheme": 7}},
         {"ledger": {**_LEDGER, "sequence_source": None}},
+        {"ledger": {**_LEDGER, "branch": 5}},
+        {"ledger": {**_LEDGER, "branch": ""}},
+        {"ledger": {**_LEDGER, "branch": "two words"}},
         {"policy": {"engine": 3, "path": "/p"}},
         {"policy": {"engine": "conftest", "path": []}},
         {"standards_sources": [{"kind": 1, "path": []}]},
@@ -113,6 +116,28 @@ def test_wrong_typed_values_raise_config_error(project_data: Path, doc: dict[str
     with pytest.raises(ConfigError) as info:
         load_config(str(project_data.parents[1]))
     assert "Next:" in str(info.value)
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"), [({}, None), ({"branch": None}, None), ({"branch": "main"}, "main")]
+)
+def test_ledger_branch_parses(
+    project_data: Path, extra: dict[str, object], expected: str | None
+) -> None:
+    # issue 186: optional; absent and null read as no branch.
+    (project_data / "config.json").write_text(json.dumps({"ledger": {**_LEDGER, **extra}}))
+    cfg = load_config(str(project_data.parents[1]))
+    assert cfg.ledger is not None and cfg.ledger.branch == expected
+
+
+def test_ledger_branch_beside_charter_root_refused(project_data: Path) -> None:
+    # issue 186: a run branches the Charter to daedalus/<train-id>, so the pin could never hold.
+    doc = {"ledger": {**_LEDGER, "path": "<charter_root>/decision-log.md", "branch": "main"}}
+    (project_data / "config.json").write_text(json.dumps(doc))
+    with pytest.raises(ConfigError) as info:
+        load_config(str(project_data.parents[1]))
+    assert "branches the Charter repository to daedalus/<train-id>" in str(info.value)
+    assert "Next: remove ledger.branch" in str(info.value)
 
 
 def test_directory_at_config_path_raises(project_data: Path) -> None:

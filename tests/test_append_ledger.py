@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from lib.audit import project_data_dir
 
-from tests.conftest import SCRIPTS_DIR, run_cli
+from tests.conftest import SCRIPTS_DIR, git, run_cli
 from tests.test_ledger import FIX
 
 SCRIPT = SCRIPTS_DIR / "append_ledger.py"
@@ -102,6 +102,73 @@ def test_row_lands_after_table_not_at_eof(table_repo: Path) -> None:
         "",
         "Trailing prose.",
     ]
+
+
+@pytest.mark.parametrize("index_id", ["0001-TST-PLT", "0002-TST-PLT"])
+def test_append_lands_in_the_main_log_below_an_index(table_repo: Path, index_id: str) -> None:
+    # issue 186: the highest id across Id tables, and on a tie the table with more rows.
+    ledger = table_repo / "docs" / "decisions.md"
+    index = f"| Id | Name |\n|---|---|\n| {index_id} | Index row |\n\n"
+    ledger.write_text(index + ledger.read_text(encoding="utf-8"), encoding="utf-8")
+    out = _append(table_repo, 2, _entry(table_repo, "Third ruling. | None. | None"))
+    assert out.returncode == 0, out.stderr
+    text = ledger.read_text(encoding="utf-8")
+    assert text.startswith(index)
+    assert text.splitlines()[-1] == f"| 0003-TST-PLT | {TODAY} | Third ruling. | None. | None |"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "\nA note names 0003-TST-PLT ahead of time.\n",
+        "\n| Id | Name |\n|---|---|\n| x | 0003-TST-PLT |\n",
+    ],
+)
+def test_append_of_an_id_already_in_the_file_refused(table_repo: Path, extra: str) -> None:
+    # issue 186: refused under the lock before any write, naming the id and its first line.
+    ledger = table_repo / "docs" / "decisions.md"
+    ledger.write_text(ledger.read_text(encoding="utf-8") + extra, encoding="utf-8")
+    before = ledger.read_bytes()
+    line = next(n for n, row in enumerate(before.decode().splitlines(), 1) if "0003-TST" in row)
+    out = _append(table_repo, 2, _entry(table_repo, "Third ruling. | None. | None"))
+    assert out.returncode == 1, out.stdout
+    assert f"Next: fix the numbering where 0003-TST-PLT first appears, {ledger} line {line}," in (
+        out.stderr
+    )
+    assert ledger.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("worktree", "branch", "code"),
+    [(False, "main", 0), (False, "release", 1), (True, "side", 0), (True, "main", 1)],
+)
+def test_branch_pinned_ledger_writes_only_on_its_branch(
+    table_repo: Path, tmp_path: Path, worktree: bool, branch: str, code: int
+) -> None:
+    # issue 186: HEAD is read from the checkout holding the ledger, a linked worktree included.
+    checkout = table_repo
+    if worktree:
+        git(table_repo, "add", "docs")
+        git(table_repo, "commit", "-q", "-m", "ledger")
+        checkout = tmp_path.resolve() / "side"
+        git(table_repo, "worktree", "add", "-q", "-b", "side", str(checkout))
+    ledger = checkout / "docs" / "decisions.md"
+    decl = {"path": str(ledger), "format": "markdown-table-row", "branch": branch}
+    decl |= {"id_scheme": "{seq:04d}-{repo}-{type}", "sequence_source": "last-row-id"}
+    config = project_data_dir(str(table_repo)) / "config.json"
+    config.write_text(json.dumps({"ledger": decl}), "utf-8")
+    before = ledger.read_bytes()
+    probe = _run(table_repo, "--probe")
+    out = _append(table_repo, 2, _entry(table_repo, "Third ruling. | None. | None"))
+    assert (probe.returncode, out.returncode) == (code, code), out.stderr
+    if code:
+        have = "side" if worktree else "main"
+        for done in (probe, out):
+            assert (
+                f"Next: switch the checkout {checkout} from branch {have} to branch {branch}"
+                in (done.stderr)
+            )
+        assert ledger.read_bytes() == before
 
 
 def test_crlf_ledger_keeps_crlf(table_repo: Path) -> None:
