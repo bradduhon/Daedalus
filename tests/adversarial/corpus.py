@@ -433,6 +433,8 @@ A3_RULE_ROWS = (
     ("P10", "set -a; GIT_ICASE_PATHSPECS+=1; git add NOTES/a.md"),
     ("P10", "set -a; declare GIT_ICASE_PATHSPECS=1; git add NOTES/a.md"),
     ("P10", "export GIT_ICASE_PATHSPECS+=1; git add NOTES/a.md"),
+    ("P10", "GIT_ICASE_PATHSPECS+=1 git add NOTES/a.md"),
+    ("P10", "GIT_ICASE_PATHSPECS[0]=1 git add NOTES/a.md"),
     # fix round 1 (R6, R7, designs 3 to 5): code bash runs inside a read or a message.
     ("P11", "git log `git add ':(icase)NOTES/a.md'`"),
     ("P11", "git log -- \"$(git add ':(icase)NOTES/a.md')\""),
@@ -502,9 +504,13 @@ A3_ADMITTED = (
     "cat <<E\ndon't\nE\ngit log -- ':(icase)NOTES'",
     'export "PATH"=/x; git add NOTES/a.md',
 )
-# design 2 (unit A3 fix round 1): an appending prefix; the coder's own hooks pass it (finding),
-# so only the excluded roots check the router runs after them refuses it.
-A3_APPEND_PREFIX = "GIT_ICASE_PATHSPECS+=1 git add NOTES/a.md"
+# issue 121 (unit A3 fix round 2): an appending or array-element prefix is an env assignment.
+A3_APPEND_ENV = (
+    "PATH+=:/tmp/x python3 -m pytest -q",
+    "LD_PRELOAD+=/tmp/x.so python3 -m pytest -q",
+    "GIT_ICASE_PATHSPECS+=1 git add X",
+    "A[0]=1 git status",
+)
 # design 6 (unit A3 fix round 1): a judged git call fed paths the jail cannot see.
 A3_UNSEEN = (
     "echo ':(icase)NOTES/a.md' | xargs git add",

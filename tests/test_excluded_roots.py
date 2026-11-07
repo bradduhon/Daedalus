@@ -21,7 +21,7 @@ from lib.config import (
     root_ignored,
 )
 
-from tests.adversarial.corpus import A3_APPEND_PREFIX, A3_RULE_ROWS, A3_UNSEEN, H1_ICASE
+from tests.adversarial.corpus import A3_RULE_ROWS, A3_UNSEEN, H1_ICASE
 from tests.conftest import git, main_warning, write_train_marker
 from tests.hook_chain import load
 
@@ -33,7 +33,6 @@ ICASE_REFUSED = tuple(
             *H1_ICASE,
             "export GIT_ICASE_PATHSPECS=1 && git add NOTES/a.md",
             *(form for _, form in A3_RULE_ROWS),
-            A3_APPEND_PREFIX,
         )
     )
 )

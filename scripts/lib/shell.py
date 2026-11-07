@@ -392,8 +392,9 @@ _RESERVED = frozenset(
     | {"until", "for", "case", "esac", "select", "function", "coproc", "[[", "time"}
 )
 _TRUSTED_BIN = frozenset({"/bin", "/usr/bin", "/usr/local/bin", "/sbin", "/usr/sbin"})
-_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_SAFE_ENV = re.compile(r"^(?:CI|NODE_ENV|TZ|LANG|LC_ALL|PYTHONDONTWRITEBYTECODE)=")
+# issue 121: the one assignment word, NAME=, NAME+= or NAME[...]= and NAME[...]+=.
+_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
+_SAFE_ENV = re.compile(r"^(?:CI|NODE_ENV|TZ|LANG|LC_ALL|PYTHONDONTWRITEBYTECODE)\+?=")
 _GIT_CONFIG_DENY = re.compile(
     r"remote\..+\.(?:mirror|push)|push\.default|protocol\.(?:.+\.)?allow|core\.hookspath"
     r"|core\.fsmonitor|core\.pager|core\.sshcommand|diff\.external|alias\..*",

@@ -1844,10 +1844,12 @@ def _bash_env(segments: list[list[str]]) -> list[dict[str, list[str]]]:
         changed: dict[str, list[str] | None] = {}
         for i, word in enumerate(words):
             name, eq, value = word.partition("=")
-            if eq and _ASSIGN.match(word) and name != "HOME":
+            key = re.split(r"[\[+]", name, maxsplit=1)[0]
+            if eq and _ASSIGN.match(word) and key != "HOME":
                 bound = _expand_word(value, env)
-                unknown = any(u for _, u in bound)
-                changed[name] = None if unknown else [t for t, _ in bound]
+                # issue 121: an append or an array element leaves the value unknown.
+                unknown = key != name or any(u for _, u in bound)
+                changed[key] = None if unknown else [t for t, _ in bound]
             if clean[i] == "for" and i + 1 < len(words):
                 loop = [x for w in words[i + 3 :] for x in _expand_word(w, env)]
                 listed = i + 2 < len(words) and clean[i + 2] == "in"
@@ -2901,7 +2903,6 @@ _ICASE_ENV = "GIT_ICASE_PATHSPECS"
 # issue 121 (P10): builtins whose operands set a variable; export always exports, -x or set -a
 # makes the rest export.
 _SETTERS = frozenset({"export", "declare", "typeset", "local", "readonly"})
-_ASSIGN_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")
 _GIT_WORD = re.compile(r"\bgit\b")
 # issue 121: nesting of substitutions and heredoc bodies walked before a text is judged whole.
 _TEXT_DEPTH = 6
@@ -3048,8 +3049,9 @@ def _icase_on(raw: str) -> bool:
     if _expands(raw if cut < 0 else raw[:cut]):
         return True
     name, eq, value = _unquoted(raw).partition("=")
-    if eq and name.endswith("+"):
-        return name[:-1] == _ICASE_ENV
+    base = re.split(r"[\[+]", name, maxsplit=1)[0]
+    if eq and base != name:
+        return base == _ICASE_ENV  # an append or an array element may leave it on.
     if name != _ICASE_ENV:
         return False
     return not eq or _expands(raw[cut + 1 :]) or value.lower() not in _FALSE | {""}
@@ -3072,7 +3074,7 @@ def _icase_exports(
 ) -> tuple[bool, bool]:
     # issue 121 (P10, R1, R2): (this segment exports GIT_ICASE_PATHSPECS to later ones, it turns
     # allexport on); options are read after quote removal, names by _icase_on.
-    if all(_ASSIGN_WORD.match(t) for t in tokens):
+    if all(_ASSIGN.match(t) for t in tokens):
         return allexport and any(_icase_on(w) for w in own), False
     name, args = command_family(tokens[0]), heads[1:]
     if _expands(heads[0]):
