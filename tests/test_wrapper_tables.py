@@ -306,7 +306,9 @@ def test_a_cluster_letter_off_the_row_is_refused(command: str) -> None:
         ("flock /m/l true", "/c", ["/m/l"]),
         ("flock -w 5 l true", "/c", ["/c/l"]),
         ("flock --timeout=5 -- /m/l true", "/c", ["/m/l"]),
-        ("flock 9 true", "/c", []),
+        ("flock 9 true", "/c", ["/c/9"]),
+        ("flock 9", "/c", []),
+        ("flock -u 9", "/c", []),
         ("unshare --mount=/m/ns true", "/c", ["/m/ns"]),
     ],
 )

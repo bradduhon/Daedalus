@@ -1188,8 +1188,9 @@ def _strip_wrappers(
             operand = WRAPPER_OPERAND[name]
             if i >= len(tokens) or operand is None or not operand.fullmatch(tokens[i]):
                 return None
-            # issue 107, P9: flock creates its file operand; a numeric fd operand is no path.
-            if (name, WRAPPER_FILE) in WRAPPER_WRITES and not tokens[i].isdigit():
+            # issue 107, P9: flock creates its file operand; only a lone numeric one is an fd.
+            fd = tokens[i].isdigit() and i + 1 == len(tokens)
+            if (name, WRAPPER_FILE) in WRAPPER_WRITES and not fd:
                 found.append(WrapperOption(name, WRAPPER_FILE, offset + i, ""))
             i += 1
             if name == "flock" and tokens[i : i + 1] and tokens[i].split("=")[0] in FLOCK_BODY:

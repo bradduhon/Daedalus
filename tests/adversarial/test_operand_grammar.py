@@ -64,8 +64,21 @@ def test_a_coder_creates_no_flock_file_outside_its_worktree() -> None:
     )
 
 
-def test_a_numeric_flock_fd_is_no_write(marked_repo: Path, other_repo: Path) -> None:
-    # P9: flock 9 names a file descriptor, never a path.
-    assert jail._bash_write_dirs("flock 9 true", str(other_repo)) == []
-    decision = jail.decide(_cred("Explore", "Bash", str(other_repo), command="flock 9 true"), CFG)
+@pytest.mark.parametrize("command", ["flock 9", "flock -u 9"])
+def test_a_lone_numeric_flock_fd_is_no_write(
+    marked_repo: Path, other_repo: Path, command: str
+) -> None:
+    # P9: with no command after it, a numeric operand names a file descriptor, never a path.
+    assert jail._bash_write_dirs(command, str(other_repo)) == []
+    decision = jail.decide(_cred("Explore", "Bash", str(other_repo), command=command), CFG)
     assert decision.allow and not decision.warn, decision.reason
+
+
+@pytest.mark.parametrize("command", ["flock 9 true", "flock -x 9 true", "flock 9 -c true"])
+def test_a_numeric_flock_operand_before_a_command_is_a_file(
+    marked_repo: Path, command: str
+) -> None:
+    # P9: flock 9 true creates the file 9 (orchestrator probe, run 20261107-145205).
+    assert f"{marked_repo}/9" in jail._bash_write_dirs(command, str(marked_repo))
+    hook_input = _cred("Explore", "Bash", str(marked_repo), command=command)
+    assert_denied(hook_input, "read-only while", "shell -c body")
