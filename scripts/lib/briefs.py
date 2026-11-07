@@ -18,6 +18,15 @@ PLAIN, STANDARD, EXPERT = "plain", "standard", "expert"
 SENTENCE_LIMITS: dict[str, int | None] = {PLAIN: 15, STANDARD: 22, EXPERT: None}
 FIELDS = ("Question:", "Context:")
 OPTIONS = "Options:"
+# 0211: one Ref: line directly under an option holds its ids and paths, never checked.
+REF = "Ref:"
+# 0211: a security or infrastructure question carries these lines, checked for presence only.
+SAFETY_LINES = ("Access impact:", "Change nature:", "Rollback:")
+_SECURITY = re.compile(
+    r"\b(?:key polic(?:y|ies)|polic(?:y|ies)|permissions?|roles?|grants?"
+    r"|access boundar(?:y|ies)|apply order)\b",
+    re.IGNORECASE,
+)
 # 0153: a brief file is a few short sections; a larger file is refused, not read.
 MAX_BRIEF_BYTES = 64 * 1024
 SCRATCH = Path("docs") / ".tmp" / "daedalus"
@@ -63,7 +72,9 @@ class BriefError(ValueError):
 
 
 def level_of(literacy: str | None) -> str:
-    # 0153: absent, a profile: value and any unknown word read as plain, the strictest level.
+    # 0211: absent reads standard; 0153: a profile: value and an unknown word read plain.
+    if literacy is None:
+        return STANDARD
     if literacy in (STANDARD, EXPERT):
         return literacy
     return PLAIN
@@ -71,6 +82,7 @@ def level_of(literacy: str | None) -> str:
 
 def _fields(text: str) -> list[tuple[str, str]]:
     # 0153: one (where, text) pair per Question:, Context: and option label; no descriptions.
+    # 0211: a Ref: line is skipped; a second one under one option yields ("Ref", label).
     out: list[tuple[str, list[str]]] = []
     mode = ""
     for raw in text.splitlines():
@@ -81,9 +93,14 @@ def _fields(text: str) -> list[tuple[str, str]]:
             mode = "field"
         elif line.startswith(OPTIONS):
             mode = "options"
-        elif mode == "options" and line.startswith("- "):
+        elif mode in ("options", "option", "ref") and line.startswith("- "):
             # 0153: ids may trail in the description after the label's first colon.
             out.append(("Option label", [line[2:].split(":", 1)[0].strip()]))
+            mode = "option"
+        elif mode == "option" and line.startswith(REF):
+            mode = "ref"
+        elif mode == "ref" and line.startswith(REF):
+            out.append(("Ref", [out[-1][1][0]]))
         elif (
             mode == "field" and line and not line.startswith(("#", "- ")) and not _LABEL.match(line)
         ):
@@ -122,7 +139,44 @@ def brief_problems(text: str, level: str) -> list[str]:
     if not any(where == "Question" for where, _ in fields):
         problems.append("the brief holds no Question: line")
     for where, value in fields:
+        if where == "Ref":
+            problems.append(f"Option label {value} has a second Ref: line; keep one per option")
+            continue
         problems.extend(_value_problems(where, value, level, limit))
+    problems.extend(_safety_problems(text))
+    return problems
+
+
+def _sections(text: str) -> list[list[str]]:
+    # 0211: one line list per ## section; text above the first heading is its own section.
+    sections: list[list[str]] = [[]]
+    for raw in text.splitlines():
+        if raw.strip().startswith("## "):
+            sections.append([])
+        sections[-1].append(raw.strip())
+    return sections
+
+
+def _safety_problems(text: str) -> list[str]:
+    # 0211: a question naming access or apply order says what breaks and how to undo it.
+    problems: list[str] = []
+    for lines in _sections(text):
+        named = (
+            _SECURITY.search(value)
+            for where, value in _fields("\n".join(lines))
+            if where in ("Question", "Context")
+        )
+        hit = next((match for match in named if match is not None), None)
+        if hit is None:
+            continue
+        missing = [
+            label
+            for label in SAFETY_LINES
+            if not any(line.startswith(label) and line[len(label) :].strip() for line in lines)
+        ]
+        if missing:
+            head = lines[0][3:].strip() if lines[0].startswith("## ") else "The brief"
+            problems.append(f"{head} names {hit[0]} and lacks {', '.join(missing)}")
     return problems
 
 
@@ -204,7 +258,7 @@ def ask_file_problems(question: Path) -> list[str]:
 
 
 def brief_file_problems(repo: Path, brief: Path) -> tuple[str, list[str]]:
-    # 0153: the level from docs.literacy (absent reads plain) and the brief's problem lines.
+    # 0153, 0211: the level from docs.literacy (absent reads standard) and the problem lines.
     root = os.path.realpath(repo / SCRATCH)
     real = os.path.realpath(brief)
     if os.path.commonpath([root, real]) != root or not os.path.isfile(real):

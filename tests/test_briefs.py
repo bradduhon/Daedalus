@@ -86,7 +86,8 @@ def test_profile_and_unknown_levels_judge_as_plain() -> None:
     for level in ("profile:docs/voice.md", "", "loud", "PLAIN"):
         assert level_of(level) == "plain", level
         assert brief_problems(long_brief, level) == brief_problems(long_brief, "plain"), level
-    assert level_of(None) == "plain"
+    # 0211: only the absent key moved; a profile still reads plain.
+    assert level_of(None) == "standard"
 
 
 @pytest.mark.parametrize(
@@ -117,6 +118,70 @@ def test_token_rules_read_context_and_labels_but_not_descriptions() -> None:
     assert brief_problems(context, "plain") == ["Context carries the word docs/x.md with a slash"]
     label = _brief().replace("- Drop it: drops it.", f"- Drop {ISSUE}: drops it (0153-DAE-PLT).")
     assert brief_problems(label, "plain") == [f"Option label carries the issue number {ISSUE}"]
+
+
+def test_one_ref_line_per_option_is_skipped_and_a_second_fails() -> None:
+    # 0211: the Ref: line holds ids and paths; later option labels are still read.
+    ref = f"  Ref: docs/x.md:12, {ISSUE}, 0211-DAE-PLT, lock_sha"
+    one = _brief().replace("- Drop it: drops it.", f"- Drop it: drops it.\n{ref}")
+    assert brief_problems(one, "plain") == []
+    two = one.replace(ref, f"{ref}\n{ref}")
+    assert brief_problems(two, "plain") == [
+        "Option label Drop it has a second Ref: line; keep one per option"
+    ]
+    after = (
+        _brief()
+        .replace("- Drop it: drops it.", f"- Drop {ISSUE}: drops it.")
+        .replace("- Keep it (Recommended): keeps it.", "- Keep it (Recommended): keeps it.\n" + ref)
+    )
+    assert brief_problems(after, "plain") == [f"Option label carries the issue number {ISSUE}"]
+
+
+SAFETY = (
+    "Access impact: The `deploy` role gains s3:PutObject on docs/x.md.",
+    "Change nature: A new grant on one bucket.",
+    f"Rollback: Remove the grant ({ISSUE}, lock_sha).",
+)
+
+
+@pytest.mark.parametrize(
+    ("question", "context", "word"),
+    [
+        ("Should the deploy role write the bucket?", "", "role"),
+        ("Who may change the key policy?", "", "key policy"),
+        ("Should we add the permission now?", "", "permission"),
+        ("Which one goes first?", "The apply order changes for two stacks.", "apply order"),
+        ("Should it move?", "Grants on the access boundary widen.", "Grants"),
+    ],
+)
+def test_a_security_question_needs_access_change_and_rollback_lines(
+    question: str, context: str, word: str
+) -> None:
+    # 0211: presence only; the three lines' text is never token-checked.
+    bare = _brief(question, context)
+    lacks = f"Question 1 names {word} and lacks"
+    assert brief_problems(bare, "standard") == [
+        f"{lacks} Access impact:, Change nature:, Rollback:"
+    ]
+    partial = bare.replace("Options:", "\n".join(SAFETY[:2]) + "\nOptions:")
+    assert brief_problems(partial, "expert") == [f"{lacks} Rollback:"]
+    empty = bare.replace("Options:", "\n".join([*SAFETY[:2], "Rollback:"]) + "\nOptions:")
+    assert brief_problems(empty, "standard") == [f"{lacks} Rollback:"]
+    full = bare.replace("Options:", "\n".join(SAFETY) + "\nOptions:")
+    for level in ("plain", "standard", "expert"):
+        assert brief_problems(full, level) == [], level
+
+
+def test_the_safety_lines_are_judged_per_section() -> None:
+    # 0211: one section's lines never cover another section's security question.
+    full = _brief("Should the role move?").replace("Options:", "\n".join(SAFETY) + "\nOptions:")
+    second = _brief("Should the grant stay?").replace("Question 1", "Question 2")
+    assert brief_problems(f"{full}\n{second}", "standard") == [
+        "Question 2 names grant and lacks Access impact:, Change nature:, Rollback:"
+    ]
+    assert brief_problems("Question: Should the role move?", "standard") == [
+        "The brief names role and lacks Access impact:, Change nature:, Rollback:"
+    ]
 
 
 def test_context_continuation_lines_join_the_field() -> None:
@@ -189,8 +254,8 @@ def _write(repo: Path, text: str) -> Path:
 @pytest.mark.parametrize(
     ("literacy", "manifest", "level"),
     [
-        (None, False, "plain"),
-        (None, True, "plain"),
+        (None, False, "standard"),
+        (None, True, "standard"),
         ("plain", True, "plain"),
         ("standard", True, "standard"),
         ("expert", True, "expert"),
@@ -230,13 +295,14 @@ def test_brief_check_command(
     good = _write(repo, GOOD)
     assert daedalus_train.main(["brief-check", "--repo", str(repo), "--brief", str(good)]) == 0
     assert capsys.readouterr().out == "brief ok\n"
-    bad = _write(repo, _brief("Should lock_sha move?", LONG))
+    bad = _write(repo, _brief("Should lock_sha move?", LONGER))
     assert daedalus_train.main(["brief-check", "--repo", str(repo), "--brief", str(bad)]) == 1
     out = capsys.readouterr().out.splitlines()
+    # 0211: an absent docs.literacy checks at standard.
     assert out == [
         "brief: Question carries the snake_case token lock_sha",
-        f"brief: Context sentence has 18 words, over 15 at plain: {LONG}",
-        "Next: rewrite each named question, context sentence or option label at the plain "
+        f"brief: Context sentence has 27 words, over 22 at standard: {LONGER}",
+        "Next: rewrite each named question, context sentence or option label at the standard "
         "level, then run brief-check again.",
     ]
     outside = repo / "x.md"
@@ -390,4 +456,12 @@ def test_recipes_name_the_check_and_the_literacy_rule() -> None:
     ):
         flat = " ".join(path.read_text(encoding="utf-8").split())
         assert "`docs.literacy` from `<repo>/service-manifest.json`" in flat, path
-        assert "`plain` when the file or key is absent" in flat, path
+        assert "`standard` when the file or key is absent" in flat, path
+    # 0211: the main session carries the three safety lines and each Ref: line.
+    run = " ".join((REPO_ROOT / "skills" / "run" / "SKILL.md").read_text("utf-8").split())
+    assert "`Access impact:`, `Change nature:` and `Rollback:` lines go into its context" in run
+    assert "An option's `Ref:` line stays in that option's description" in run
+    flat = " ".join(orchestrator.split())
+    for phrase in ("`Access impact:`", "`Change nature:`", "`Rollback:`", "one `Ref:` line"):
+        assert phrase in decisions, phrase
+    assert "no count caps it" in flat and "Each option says what breaks" in flat
