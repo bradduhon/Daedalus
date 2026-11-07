@@ -96,6 +96,30 @@ def test_a_script_shim_gets_no_grant_and_the_wrapper_refuses_with_one_line(
     assert "name it in the shim manager" in err[0]
 
 
+def _granted_shim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, root: str) -> Path:
+    # 184: a `#!` terraform under a root the wrapper already grants; returns the repo.
+    repo, _ = _unit(tmp_path)
+    folder = repo / "bin" if root == "repo" else tmp_path / "granted" / "bin"
+    folder.mkdir(parents=True)
+    (folder / "terraform").write_text(FAKE, encoding="utf-8")
+    (folder / "terraform").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{folder}:/usr/bin:/bin")
+    if root == "system":
+        system = (*daedalus_confine.SYSTEM_RO, str(folder.parent))
+        monkeypatch.setattr(daedalus_confine, "SYSTEM_RO", system)
+    return repo
+
+
+@pytest.mark.parametrize("root", ["system", "read root", "repo"])
+def test_a_shim_under_a_granted_root_runs_as_before_with_no_grant_and_no_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, root: str
+) -> None:
+    # 184: the shebang refusal applies only where a grant would be added.
+    repo = _granted_shim(tmp_path, monkeypatch, root)
+    extra = (str(tmp_path / "granted"),) if root == "read root" else ()
+    assert daedalus_confine.terraform_binary(["terraform", "validate"], str(repo), extra) is None
+
+
 def _data(tmp: Path, module: Path) -> Path:
     digest = hashlib.sha256(os.path.realpath(module).encode()).hexdigest()[:16]
     return tmp / "tf-data" / digest
@@ -137,3 +161,21 @@ def test_the_wrapper_runs_a_home_bin_terraform_with_its_data_folder_in_tmp(
     assert done.returncode == 0, done.stderr
     tmp = Path(daedalus_confine._private_tmp(str(unit.resolve())))
     assert done.stdout.splitlines()[-1] == str(_data(tmp, unit))
+
+
+@pytest.mark.skipif(
+    not daedalus_confine.kernel_support().ok, reason="this kernel cannot hold the rules"
+)
+def test_the_wrapper_runs_a_shim_under_a_granted_root_through_execvp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 184: a `#!` terraform inside the repo's granted entries runs as base ran it.
+    repo = _granted_shim(tmp_path, monkeypatch, "repo")
+    unit = (repo / ".claude" / "worktrees" / "u1").resolve()
+    argv = [sys.executable, str(shell.CONFINE_PATH), "--unit", str(unit), "--", "terraform"]
+    argv.append("TF_DATA_DIR")
+    env = {**os.environ, "PATH": f"{repo / 'bin'}:/usr/bin:/bin"}
+    done = subprocess.run(argv, capture_output=True, text=True, check=False, cwd=unit, env=env)
+    assert done.returncode == 0, done.stderr
+    tmp = Path(daedalus_confine._private_tmp(str(unit)))
+    assert done.stdout.splitlines()[-1] == f"tf_data={_data(tmp, unit)} args=TF_DATA_DIR"

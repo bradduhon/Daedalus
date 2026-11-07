@@ -339,8 +339,9 @@ def read_roots(repo: str, command: list[str]) -> tuple[str, ...]:
         raise Refusal(f"the operator config could not be read ({exc}). {NEXT_PROBE}") from exc
 
 
-def terraform_binary(command: list[str], repo: str) -> str | None:
-    # 184: the one terraform file the session PATH names; None when absent, relative or guarded.
+def terraform_binary(command: list[str], repo: str, extra: tuple[str, ...] = ()) -> str | None:
+    # 184: the one terraform file the session PATH names; None when absent, relative, guarded
+    # or already under a grant, where it runs exactly as without this lookup.
     found = shutil.which("terraform") if command[:1] == ["terraform"] else None
     if found is None or not os.path.isabs(found):
         return None
@@ -348,7 +349,8 @@ def terraform_binary(command: list[str], repo: str) -> str | None:
     guarded = [*credential_roots(), os.path.join(repo, ".claude")]
     if any(shell._under(real, g) or shell._under(g, real) for g in guarded):
         return None
-    if not os.path.isfile(real):
+    granted = [*_interpreter_paths(), *SYSTEM_RO, *extra, repo]
+    if any(shell._under(real, os.path.realpath(g)) for g in granted) or not os.path.isfile(real):
         return None
     try:
         with open(real, "rb") as handle:
@@ -467,7 +469,7 @@ def main(argv: list[str]) -> int:
     try:
         unit, repo = _unit(split[0])
         extra = read_roots(repo, split[1])
-        binary = terraform_binary(split[1], repo)
+        binary = terraform_binary(split[1], repo, extra)
         rules = rule_set(unit, repo, _private_tmp(unit), support, extra, binary)
         apply(rules)
     except Refusal as exc:
