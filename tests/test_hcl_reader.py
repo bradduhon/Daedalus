@@ -117,6 +117,9 @@ def test_substitute_replaces_only_mapped_names() -> None:
         ("[for s in var.l : s]", (), ("[for s in var.l : s]",)),
         ("[var.a, 3]", (), ("var.a", "3")),
         ('["s3:Get", local.x, "${var.y}"]', ("s3:Get",), ("local.x", '"${var.y}"')),
+        ('["a"] == x ? ["b"] : ["*"]', (), ('["a"] == x ? ["b"] : ["*"]',)),
+        ('["s3:Get"], ["*"]', (), ('["s3:Get"], ["*"]',)),
+        ('["a", "*"][1]', (), ('["a", "*"][1]',)),
     ],
 )
 def test_list_parts_split_literals_from_unresolved(

@@ -458,7 +458,7 @@ def list_parts(source: str, line: int = 1) -> tuple[tuple[str, ...], tuple[str, 
         or (len(toks) == 1 and first in _LITERALS)
     ):
         raise HclError(toks[0].line, f"expected a list, found {source[:40]!r}")
-    if first != "[" or source[toks[-1].start : toks[-1].end] != "]":
+    if first != "[" or not _one_bracket(source, toks):
         return (), (source,)
     if len(toks) > 1 and toks[1].kind == IDENT and source[toks[1].start : toks[1].end] == "for":
         return (), (source,)
@@ -484,6 +484,20 @@ def list_parts(source: str, line: int = 1) -> tuple[tuple[str, ...], tuple[str, 
         tuple(text for text, literal in items if literal),
         tuple(text for text, literal in items if not literal),
     )
+
+
+def _one_bracket(source: str, toks: Sequence[Token]) -> bool:
+    # 0212: True only when the bracket opened by the first token closes at the last token.
+    depth = 0
+    for index, tok in enumerate(toks):
+        src = source[tok.start : tok.end]
+        if tok.kind == PUNCT and src in _OPEN:
+            depth += 1
+        elif tok.kind == PUNCT and src in _CLOSE:
+            depth -= 1
+        if depth <= 0 and index < len(toks) - 1:
+            return False
+    return depth == 0
 
 
 def _item(source: str, group: Sequence[Token], line: int) -> tuple[str, bool]:
