@@ -2907,7 +2907,7 @@ _SETTERS = frozenset({"export", "declare", "typeset", "local", "readonly"})
 _GIT_WORD = re.compile(r"\bgit\b")
 # issue 121: nesting of substitutions and heredoc bodies walked before a text is judged whole.
 _TEXT_DEPTH = 6
-# issue 121 (G1): raw constructs the quote model may misread; any one makes a text not plainly simple.
+# issue 121 (G1): raw constructs the quote model may misread; any one makes a text not simple.
 _NOT_SIMPLE_RAW = re.compile(r"\$\(|`|\$'|\$\"|<\(|>\(|<<<|\$\{[^}]*=")
 _NOT_SIMPLE_WORD = re.compile(
     r"(?<![\w.-])(?:eval|source|xargs|read|mapfile|readarray|declare|typeset|local|readonly|set"
