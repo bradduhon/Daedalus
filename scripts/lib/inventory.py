@@ -71,6 +71,11 @@ FILES: tuple[Entry, ...] = (
         "a command runs under the kernel wrapper; an empty config home",
     ),
     Entry(
+        f"{_CONFINE}/tf-data/<16 hex>/",
+        "scripts/daedalus_confine.py:_tool_env",
+        "terraform runs under the kernel wrapper; one data folder per -chdir folder, init empties",
+    ),
+    Entry(
         "<repo>/<--out>/map.md",
         "scripts/daedalus_map.py:main",
         "you run daedalus_map.py without --check; the --out folder is created first",

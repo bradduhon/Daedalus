@@ -357,6 +357,25 @@ TERRAFORM_OPERATOR_FORMS = (
     "terraform fmt -check -check",
     "terraform version",
     "terraform",
+    # 184: near misses of the one init form fail its shape, bare and wrapped.
+    "terraform init -backend=false -input=false -lockfile=readonly",
+    "terraform -chdir=. init -backend=false -input=false",
+    "terraform -chdir=. init -backend=false -input=false -lockfile=readonly x",
+    "terraform -chdir=. init -input=false -backend=false -lockfile=readonly",
+    "terraform -chdir=. init -backend=true -input=false -lockfile=readonly",
+)
+# 184: the one init form, admitted wrapped with features.terraform_validate on; {module} is a
+# module folder inside the project; the near misses stay refused bare and wrapped.
+TERRAFORM_INIT_FORM = (
+    "terraform -chdir={module} init -backend=false -input=false -lockfile=readonly"
+)
+TERRAFORM_INIT_MISSES = (
+    "terraform -chdir={module} init -backend=false -input=false -lockfile=readonly -upgrade",
+    "terraform -chdir={module} init -backend=false -input=false -upgrade",
+    "terraform -chdir={module} init -backend=false -input=false",
+    "terraform -chdir={module} init -backend=false -input=false -lockfile=readonly x",
+    "terraform -chdir={module} init",
+    "terraform init -backend=false -input=false -lockfile=readonly",
 )
 # 0164: a package manager running an interpreter meets the interpreter rule.
 INTERPRETER_BINS = (

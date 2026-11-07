@@ -23,6 +23,7 @@ from tests.adversarial.corpus import (
     CONFINE_RUNNERS,
     DEV_SERVERS,
     INTERPRETER_BINS,
+    TERRAFORM_INIT_FORM,
     TERRAFORM_MUTATIONS,
     TERRAFORM_OPERATOR_FORMS,
     UNIX_SOCKETS,
@@ -411,8 +412,16 @@ def test_terraform_checks_need_the_wrapper_and_validate_its_switch(tmp_path: Pat
         wrapped = _cwd(_b("coder", f"cd {wt} && {wrap} {inner}"), repo)
         assert evaluate("confine", wrapped) is None, inner
         assert decide(wrapped, CFG).allow, decide(wrapped, CFG).reason
+    # 184: the init form runs wrapped only; bare it meets the terraform class's refusal.
+    init = TERRAFORM_INIT_FORM.format(module=module)
+    bare = _cwd(_b("coder", f"cd {wt} && {init}"), repo)
+    assert evaluate("confine", bare) == load("command_allowlist").R_TERRAFORM
+    assert not decide(bare, CFG).allow
+    wrapped = _cwd(_b("coder", f"cd {wt} && {wrap} {init}"), repo)
+    assert evaluate("confine", wrapped) is None
+    assert decide(wrapped, CFG).allow, decide(wrapped, CFG).reason
     (repo / "service-manifest.json").write_text("{}", encoding="utf-8")
-    for command in ("terraform validate", f"{wrap} terraform validate"):
+    for command in ("terraform validate", f"{wrap} terraform validate", f"{wrap} {init}"):
         reason = str(evaluate("confine", _cwd(_b("coder", f"cd {wt} && {command}"), repo)))
         assert reason.startswith("features.terraform_validate is not true"), command
     off = {"features": {"terraform_tools": False}}

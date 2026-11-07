@@ -80,14 +80,16 @@ R_TERRAFORM = (
     "the terraform class runs only `terraform fmt -check` and `terraform validate`, each with an "
     "optional -chdir=<absolute folder inside the project> (0132), and validate only while "
     "features.terraform_validate is true (0158); either may run under the kernel wrapper with "
-    "--unit naming a unit worktree (0164). Next: send one of those forms; "
-    "init, plan, apply and every other subcommand stay with the operator."
+    "--unit naming a unit worktree (0164). Under that wrapper alone, and only while validate "
+    "is on, `terraform -chdir=<that folder> init -backend=false -input=false "
+    "-lockfile=readonly` runs too (184). Next: send one of those forms; "
+    "every other init, plan, apply and every other subcommand stay with the operator."
 )
 R_TERRAFORM_VALIDATE_OFF = (
     "features.terraform_validate is not true in {manifest}, so the terraform class refuses "
-    "`terraform validate`, which would start the provider programs under .terraform/providers "
-    "(0158). Next: judge the files by reading them and mark the validate check N/A, or ask the "
-    "operator to set features.terraform_validate to true in service-manifest.json."
+    "`terraform validate` and its wrapped init form, which would start the provider programs "
+    "under .terraform/providers (0158, 184). Next: judge the files by reading them and mark "
+    "the validate check N/A, or ask the operator to set features.terraform_validate to true in service-manifest.json."
 )
 R_TERRAFORM_OFF = (
     "features.terraform_tools is false in {manifest}, so the terraform class runs nothing "
@@ -98,15 +100,17 @@ R_TERRAFORM_MANIFEST = (
 )
 
 
-def terraform_reason(segment: list[str], cwd: str) -> str | None:
+def terraform_reason(segment: list[str], cwd: str, wrapped: bool = False) -> str | None:
     # 0132: None admits the segment; a refusal names the form or the manifest switch.
     if segment[:1] != ["terraform"]:
         return R_TERRAFORM  # 0132: the binary on PATH only, never a path to another binary.
+    # 184: the init form only under the kernel wrapper, which keeps its data folder in tmp.
+    init = wrapped and shell.terraform_init(segment[1:])
     rest = segment[1:]
     chdir = rest[0].removeprefix("-chdir=") if rest[:1] and rest[0].startswith("-chdir=") else None
     if chdir is not None:
         rest = rest[1:]
-    if tuple(rest) not in TERRAFORM_FORMS or not os.path.isabs(cwd):
+    if (tuple(rest) not in TERRAFORM_FORMS and not init) or not os.path.isabs(cwd):
         return R_TERRAFORM
     root = os.path.realpath(project_root(cwd))
     if chdir is not None:
@@ -120,7 +124,8 @@ def terraform_reason(segment: list[str], cwd: str) -> str | None:
     if loaded is not None and loaded.features.terraform_tools is False:
         return R_TERRAFORM_OFF.format(manifest=manifest_path(Path(root)))
     # 0159-DAE-PLT: validate off by default - deviation from the global Terraform rule
-    if rest == ["validate"] and (loaded is None or loaded.features.terraform_validate is not True):
+    validate = rest == ["validate"] or init
+    if validate and (loaded is None or loaded.features.terraform_validate is not True):
         return R_TERRAFORM_VALIDATE_OFF.format(manifest=manifest_path(Path(root)))
     return None
 
@@ -134,7 +139,7 @@ def wrapped_terraform_reason(segment: list[str], cwd: str) -> str | None:
     parts = jail._unit_parts(unit, cwd) if os.path.isabs(unit) else None
     if parts is None or len(parts) != 1:
         return R_TERRAFORM
-    return terraform_reason(inner, cwd)
+    return terraform_reason(inner, cwd, wrapped=True)
 
 
 def _reason(allowed: frozenset[str]) -> str:

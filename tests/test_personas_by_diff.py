@@ -277,8 +277,14 @@ def test_the_auditor_files_each_unjudged_row_as_a_failing_test() -> None:
         "turn on `features.dependency_web_lookup`",
         "name an `Advisory export:` file in the task",
         "clears only when a later round no longer marks the row N/A",
+        # 184: a TF-0 FAIL blocks the same way and names its own two ways to clear it.
+        "`round<n>/test_compliance_tf0_unjudged.py`",
+        "put terraform on the session PATH, or set `features.terraform_tools` to false",
+        "clears only when a later round no longer marks TF-0 FAIL (184)",
     ):
         assert phrase in step, phrase
+    assert "a TF-0 FAIL, the binary missing with the tools on, is one such FAIL row" in inputs
+    assert "`Terraform binary: present|missing`" in inputs
 
 
 def test_audit_dispatch_carries_the_release_age_and_blocks_an_unjudged_row() -> None:
@@ -317,11 +323,23 @@ def test_terraform_rulebook_checks_the_binary_before_any_tool_run() -> None:
     binary = text.index("## Binary check (before any tool run)")
     method = text.index("## Method")
     assert binary < method
-    assert "-maxdepth 1 -name terraform`" in text[binary:method]
-    assert "A missing binary is a warning, never a FAIL" in text[binary:method]
+    # 184: the dispatch's binary line replaces the folder search; a miss is a blocking FAIL.
+    check = text[binary:method]
+    assert "`find " not in text and "-maxdepth" not in text
+    assert "read the dispatch's `Terraform binary:` line" in check
+    for phrase in (
+        "write TF-0 as `FAIL terraform binary missing: fmt -check and validate not run; put "
+        "terraform on the session PATH, or set features.terraform_tools to false in "
+        "service-manifest.json`",
+        "`round<n>/test_compliance_tf0_unjudged.py`, whose failure message names those two ways",
+    ):
+        assert phrase in check, phrase
     for phrase in ("`terraform fmt -check`", "`terraform validate`", "`Terraform tools: off`"):
         assert phrase in text, phrase
-    assert "Never run `init`, `plan`, `apply`" in text
+    assert "Never run `plan`, `apply`" in text
+    run = text[method:]
+    assert "init -backend=false -input=false -lockfile=readonly` and then `terraform" in run
+    assert "with the same `-chdir` folder (184). Never run validate bare." in run
     rows = [
         line.split(":", 1)[0] for line in TERRAFORM.read_text().splitlines() if line[:5] == "- TF-"
     ]
@@ -426,7 +444,10 @@ def test_audit_step_1_adds_each_rulebook_by_diff_content() -> None:
         "`.tf` or `.tfvars`",
         "`features.dependency_web_lookup` is `false`",
         "`features.terraform_tools` is `false`",
-        "The auditor checks for the terraform binary itself.",
+        # 184: the session PATH lookup feeds the auditor's binary line.
+        "daedalus_doctor.py --check-tools terraform --repo <repo>`",
+        "add `Terraform binary: present` when it prints `OK`",
+        "`Terraform binary: missing` when it prints `MISS` (184)",
         "one decision question per finding",
     ):
         assert phrase in flat, phrase

@@ -12,6 +12,7 @@ import errno
 import hashlib
 import os
 import platform
+import shutil
 import site
 import socket
 import stat
@@ -70,6 +71,7 @@ DEVICES_RW = ("/dev/null",)
 # 0048: git exits 128 on an unreadable user config, so it reads an empty one in the temp folder.
 GIT_CONFIG = "gitconfig"
 XDG_CONFIG = "config"
+TF_DATA = "tf-data"
 HIDDEN = (".claude/daedalus", f"{UNIT_WORKTREES}")
 NEXT_FORM = CONFINE_NEXT
 KERNEL_NEED = (
@@ -332,14 +334,32 @@ def read_roots(repo: str, command: list[str]) -> tuple[str, ...]:
         raise Refusal(f"the operator config could not be read ({exc}). {NEXT_PROBE}") from exc
 
 
+def terraform_binary(command: list[str], repo: str) -> str | None:
+    # 184: the one terraform file the session PATH names; None when absent, relative or guarded.
+    found = shutil.which("terraform") if command[:1] == ["terraform"] else None
+    if found is None or not os.path.isabs(found):
+        return None
+    real = os.path.realpath(found)
+    guarded = [*credential_roots(), os.path.join(repo, ".claude")]
+    if any(shell._under(real, g) or shell._under(g, real) for g in guarded):
+        return None
+    return real if os.path.isfile(real) else None
+
+
 def rule_set(
-    unit: str, repo: str, tmp: str, support: Support, extra: tuple[str, ...] = ()
+    unit: str,
+    repo: str,
+    tmp: str,
+    support: Support,
+    extra: tuple[str, ...] = (),
+    binary: str | None = None,
 ) -> RuleSet:
     assert support.arch is not None
     stores = credential_roots()
     dot = os.path.join(repo, ".claude")
     ro: list[str] = []
-    for path in [*_interpreter_paths(), *SYSTEM_RO, *extra]:
+    # 184: a resolved binary is one file, never its folder.
+    for path in [*_interpreter_paths(), *SYSTEM_RO, *extra, *([binary] if binary else [])]:
         real = os.path.realpath(path)
         # 0048, Plan 6 section 10.1: no grant holds a credential store or sits inside one.
         if any(shell._under(real, s) or shell._under(s, real) for s in stores):
@@ -386,16 +406,34 @@ def apply(rules: RuleSet) -> None:
     _install_filter(libc, ARCHES[rules.arch])
 
 
-def _tool_env(tmp: str) -> dict[str, str]:
+def tf_data_dir(tmp: str, command: list[str]) -> str:
+    # 184: <tmp>/tf-data/<16 hex of the -chdir folder>, so validate finds what init wrote.
+    first = command[1] if len(command) > 1 else ""
+    folder = first.removeprefix("-chdir=") if first.startswith("-chdir=") else "."
+    digest = hashlib.sha256(os.path.realpath(folder).encode()).hexdigest()[:16]
+    return os.path.join(tmp, TF_DATA, digest)
+
+
+def _tool_env(tmp: str, command: list[str]) -> dict[str, str]:
     # 0048: an empty git config written fresh each run and an empty config home, both in tmp.
     config = os.path.join(tmp, GIT_CONFIG)
     os.close(os.open(config, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600))
     xdg = os.path.join(tmp, XDG_CONFIG)
-    try:
-        os.mkdir(xdg, 0o700)
-    except FileExistsError:
-        pass
-    return {"TMPDIR": tmp, "GIT_CONFIG_GLOBAL": config, "XDG_CONFIG_HOME": xdg}
+    env = {"TMPDIR": tmp, "GIT_CONFIG_GLOBAL": config, "XDG_CONFIG_HOME": xdg}
+    folders = [xdg]
+    # 184: the caller's TF_DATA_DIR never holds; the init form starts from an empty folder.
+    data = tf_data_dir(tmp, command) if command[:1] == ["terraform"] else ""
+    if data:
+        env["TF_DATA_DIR"] = data
+        folders += [os.path.dirname(data), data]
+        if shell.terraform_init(command[1:]) and os.path.lexists(data):
+            shutil.rmtree(data)
+    for folder in folders:
+        try:
+            os.mkdir(folder, 0o700)
+        except FileExistsError:
+            pass
+    return env
 
 
 def _refuse(text: str) -> int:
@@ -414,17 +452,23 @@ def main(argv: list[str]) -> int:
     try:
         unit, repo = _unit(split[0])
         extra = read_roots(repo, split[1])
-        rules = rule_set(unit, repo, _private_tmp(unit), support, extra)
+        binary = terraform_binary(split[1], repo)
+        rules = rule_set(unit, repo, _private_tmp(unit), support, extra, binary)
         apply(rules)
     except Refusal as exc:
         return _refuse(str(exc))
     except OSError as exc:
         return _refuse(f"the kernel refused a rule ({exc}); {KERNEL_NEED}. {NEXT_PROBE}")
-    os.environ.update(_tool_env(rules.tmp))
-    print(rules.line(), flush=True)
     command = split[1]
     try:
-        os.execvp(command[0], command)
+        os.environ.update(_tool_env(rules.tmp, command))
+    except OSError as exc:
+        return _refuse(
+            f"the tool folders in {rules.tmp} could not be prepared ({exc}). {NEXT_PROBE}"
+        )
+    print(rules.line(), flush=True)
+    try:
+        os.execvp(binary or command[0], command)
     except OSError as exc:
         print(f"daedalus_confine: cannot run {command[0]}: {exc.strerror}", file=sys.stderr)
     return 127

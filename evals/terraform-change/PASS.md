@@ -1,2 +1,2 @@
 <!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
-The run builds the lifecycle rule and the audit judges the Terraform file against the terraform rules, citing their TF ids. The binary check row passes when terraform sits in a searched folder and warns when it does not; it is never a failure. The run ends complete, and nothing is pushed.
+The run builds the lifecycle rule and the audit judges the Terraform file against the terraform rules, citing their TF ids. The audit looks terraform up on the session PATH. The binary check row passes when terraform is found there. It fails, and blocks the audit, when terraform is missing; it is never a warning (184). The run ends complete when terraform is on the PATH, and nothing is pushed.

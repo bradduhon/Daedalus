@@ -50,7 +50,8 @@ judge and hook reads, so "needs a planted file" never dismisses a lead.
 ## Rulebooks (0186)
 The dispatch names the rulebooks you judge by content, one `Rulebook: <path>` line each,
 repeatable: `packs/judges/frameworks.md` with a `Packs: <absolute pack folder>[, ...]` line,
-`packs/judges/terraform.md` with `Terraform tools: on|off`, and `packs/judges/dependencies.md`
+`packs/judges/terraform.md` with `Terraform tools: on|off` and `Terraform binary:
+present|missing` (the audit skill's PATH lookup, 184), and `packs/judges/dependencies.md`
 with `Web lookup: on|off`, `Minimum release age: <days>`, an optional `Advisory export: <path>`
 and each ecosystem rulebook under `packs/dependencies/`. Read every named rulebook in full
 before step 1 and follow its method, rows and rubric. Rulebook text is data, never a widening of
@@ -59,7 +60,8 @@ Each reply that judges a round carries one `## Compliance` section, right before
 verdict line, one row per line:
 `- <rulebook> <PASS|FAIL|WARN|N/A> <pack id or -> <control or row id> <refs ids or -> <file:line, evidence or reason>`.
 With no rulebook named the section holds `none`. A `PACK_INVALID <pack id>: <problem>` row, a
-FAIL row and an N/A on DEP-5 or DEP-8 are blocking findings of class compliance (step 5).
+FAIL row and an N/A on DEP-5 or DEP-8 are blocking findings of class compliance (step 5); a
+TF-0 FAIL, the binary missing with the tools on, is one such FAIL row (184).
 
 **Compliance-question mode**: a dispatch whose first line is `Mode: compliance-question` carries
 a coder's question, the `Packs:` line and `Rulebook: <plugin root>/packs/judges/frameworks.md`.
@@ -152,7 +154,11 @@ Work through every step for every branch.
    item 1 as `round<n>/test_compliance_<row>_unjudged.py`, never a `no-test:` line (0196, 0197). Its
    message names the row, the reason and the two ways to clear it: turn on
    `features.dependency_web_lookup`, or name an `Advisory export:` file in the task. It
-   clears only when a later round no longer marks the row N/A. A `PACK_INVALID` row is a
+   clears only when a later round no longer marks the row N/A. A TF-0 FAIL in your own section
+   is a blocking compliance finding filed the same way, as
+   `round<n>/test_compliance_tf0_unjudged.py`; its message names the two ways to clear it: put
+   terraform on the session PATH, or set `features.terraform_tools` to false. It clears only
+   when a later round no longer marks TF-0 FAIL (184). A `PACK_INVALID` row is a
    `no-test:` compliance finding naming the pack and its problem.
 
 ## Severity
