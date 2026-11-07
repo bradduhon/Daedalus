@@ -230,7 +230,7 @@ The orchestrator ends each reply with one of four status lines, and your session
 
 - `[STATUS: DECISION]`: your session asks you the brief's questions and sends your answers back.
 - `[STATUS: EXCEPTION]`: you exempted every finding of the last audit round. Your session records one exemption per finding, each with its ruling and how you chose to track it.
-- `[STATUS: STOP]`: your session runs the stop command and shows its `Next:` line. Say continue to resume.
+- `[STATUS: STOP]`: your session runs the stop command and shows its `Next:` line. Say continue to resume. To go on with the stopped run later, type `/daedalus:run continue`. Your session runs `daedalus_workspace.py resume`, which marks the run active again. Then it checks that the hooks are writing this session's audit log, and goes on where the stop left off. When the resume command exits 1, your session stops and shows its `Next:` line.
 - `[STATUS: TRAIN_COMPLETE]`: your session shows the summary path and the audit log path, then ends the train. "Recovering a train" below covers a commit that lands after that.
 
 ### Before anything is built
@@ -291,11 +291,21 @@ A coding agent that is stuck commits its work in progress and asks a question. D
 
 The scope of each unit comes from the recorded plan and the contract.
 
+### When a unit is rejected
+
+The verifier checks each finished unit against its brief. A unit can also fail a check your session asks you to do by hand, such as opening a page in your browser. Each time the verifier rejects a unit, or you answer Fail, your session records it on the unit:
+
+    python3 <plugin>/scripts/daedalus_train.py refuted --repo <repo> --unit <unit id>
+
+For a check you failed, it adds `--operator-check "<check text>"`. The command prints `refuted <unit id>: <count>`, the number of rejections the unit has had. A repeated call on the same rejection counts it once. The first rejection goes back to the unit's coding agent for one fix. The second goes to a fresh coding agent on the `escalated` model of the `coder_models` setting, and the run goes on. The coding agent that held the unit can no longer take any unit freed this way. The third rejection comes to you as a question. A non-zero exit stops the run and shows the command's `Next:` line.
+
 ### The security gate
 
 Once every unit is complete, the train merges each unit into the local integration branch `daedalus/<train-id>` with `--no-ff`, so each unit stays visible in the history. A merge conflict stops the train. The merge is aborted, and the repository stays on `daedalus/<train-id>` with the merges that completed. The stop names the conflicting files. Merge that unit there by hand and run the merge step again, which skips units already merged. Or rerun the train with units that do not share files.
 
 The summary records the policy gate as `[POLICY: none declared]` or `[POLICY: declared, gate not yet shipped]`. A later Daedalus release adds the gate itself. The security auditor always checks the merged diff against the control packs. Those are your `frameworks.pack_dir` packs, and the shipped AWS and NIST packs unless `frameworks.default_packs` is `false`. The shipped Stripe pack joins only for a change to a Stripe file, a `.env` file, `package.json` or an npm lockfile. The cost-tier pack joins only when `frameworks.packs` names it.
+
+When the change touches a `.tf` or `.tfvars` file, the train looks for `terraform` on your session's PATH. If it is missing and `features.terraform_tools` is not `false`, the auditor files a blocking finding. To clear it, put terraform on your PATH, or set `features.terraform_tools` to `false` in `service-manifest.json`. The kernel wrapper runs the terraform your PATH names. A terraform script shim outside the folders the wrapper already grants, such as one in your home folder, is refused with one line. Put the real binary's folder first on your PATH instead.
 
 Then the security auditor judges the merged integration tip against the train's base, so its verdict names the commit the push run pushes. It judges against the contract, your standards and the compliance reports. It treats anything a coder can commit or a project ships as attacker input, so a finding that needs a planted file still counts. Besides its pattern searches, it lists every option, config file and environment setting of each tool a jail rule allows. It feeds each new parser or loader wrong types, nested lists, and unreadable or linked folders. It reads every change to an agent or skill file in full, removed lines included.
 
