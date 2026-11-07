@@ -520,6 +520,13 @@ A3_RULE_ROWS = (
     ("P11", "P\\ATH=. git log -- ':(icase)NOTES'"),
     ("P11", "GIT_EXEC_PATH=. git log -- ':(icase)NOTES'"),
     ("P11", "echo ${PATH}; git commit -m ':i: fix' -- src/a.md"),
+    # fix round 10 (U3): any unquoted expansion makes a text not plainly simple.
+    ("P11", "V=PA; unset ${V}TH; git log -- ':(icase)NOTES'"),
+    ("P11", "V=PA; getopts a ${V}TH; git log -- ':(icase)NOTES'"),
+    ("P11", "V=PA; export ${V}TH=.; git log -- ':(icase)NOTES'"),
+    ("P11", "git log -n \"$N\" -- ':(icase)x'"),
+    ("P11", 'git commit -m "fix $x :i:" -- src/a.md'),
+    ("P11", "git log -- ':(icase)NOTES' {a,b}"),
     ("P11", "trap \"git add ':(icase)NOTES/a.md'\" EXIT"),
     ("P11", "command_not_found_handle() { git add ':(icase)NOTES/a.md'; }; gti"),
     # fix round 3 (G1 refined): a bare delimiter whose body bash may expand is not plainly simple.
@@ -648,6 +655,11 @@ A3_ADMITTED = (
     # fix round 9 (U2): PATH inside a literal message names no folder git runs from.
     "git commit -m 'fix PATH docs :i:' -- src/a.md",
     "git commit -F - <<'EOF'\nfix PATH :i: docs\nEOF",
+    # fix round 10 (U3): no expansion, or a $ only inside single quotes or a quoted heredoc.
+    "git log -n 5 -- ':(icase)x'",
+    "V=PA; git log -- ':(icase)x'",
+    "git commit -m 'fix $x :i:' -- src/a.md",
+    "git commit -F - <<'EOF'\nfix $x :i:\nEOF",
 )
 # issue 121 (unit A3 fix round 2): an appending or array-element prefix is an env assignment.
 A3_APPEND_ENV = (

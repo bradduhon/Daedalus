@@ -3455,9 +3455,9 @@ def _sources(raw: str) -> bool:
     return False
 
 
-def _simple_code(command: str) -> str | None:
-    # issue 121 (G1): the command outside heredoc bodies when it is plainly simple, else None: no
-    # construct the quote model may misread, every heredoc top level, plain and literal.
+def _simple_code(command: str, expansions: bool = False) -> str | None:
+    # issue 121 (G1, U3): the command outside heredoc bodies when it is plainly simple, else None:
+    # no misread construct, every heredoc top level and literal, no expansion unless allowed.
     if _NOT_SIMPLE_RAW.search(command):
         return None
     code: list[str] = []
@@ -3496,6 +3496,8 @@ def _simple_code(command: str) -> str | None:
             rest = rest[end:]
     joined = "".join(code)
     if _NOT_SIMPLE_WORD.search(_normalised(joined)) or _FOREIGN_GIT.search(_normalised(joined)):
+        return None
+    if not expansions and _expanding(joined, masked=True):
         return None
     if any(_sources(joined[a:b]) for a, b in segment_spans(joined)):
         return None
@@ -3625,13 +3627,21 @@ def _foreign_icase(command: str) -> str | None:
     return _spec(hit) if _foreign_git(command) else None
 
 
+def _expanding(text: str, masked: bool = False) -> bool:
+    # issue 121 (F2, U3): a $ or backtick, a process substitution or a brace list; masked reads
+    # quote_walk spans, so single-quoted text, and any quoted brace or ( ), is literal.
+    single = _masked(text, True) if masked else text
+    every = _masked(text, False) if masked else text
+    return bool(
+        re.search(r"[$`]", single) or re.search(r"[<>]\(", every) or _BRACE_LIST.search(every)
+    )
+
+
 def _expansion_unseen(command: str) -> bool:
     # issue 121 (F2, R3): an unquoted expansion with a judged git subcommand or a built command
     # or git subcommand word; a text not plainly simple counts any $, backtick, brace list or word.
-    code = _simple_code(command)
-    single = command if code is None else _masked(code, True)
-    every = command if code is None else _masked(code, False)
-    if not (re.search(r"[$`]", single) or re.search(r"[<>]\(", every) or _BRACE_LIST.search(every)):
+    code = _simple_code(command, expansions=True)
+    if not (_expanding(command) if code is None else _expanding(code, masked=True)):
         return False
     if code is None and _JUDGED_GIT_WORD.search(_normalised(command)):
         return True
