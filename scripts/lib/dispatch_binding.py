@@ -596,19 +596,6 @@ def _binding(entry: dict[str, object], now: bool) -> RunBinding | None:
     )
 
 
-def session_repos(session: object) -> list[str]:
-    # issue 188: repos of this session's bindings whose marker still names their train.
-    path = run_store(session)
-    if path is None or not path.is_file():
-        return []
-    repos: list[str] = []
-    for entry in _load_runs(path) or []:
-        repo = str(entry["repo"])
-        if repo not in repos and active_train(Path(repo)) == entry["train_id"]:
-            repos.append(repo)
-    return repos
-
-
 def _held_run(entries: list[dict[str, object]], agent_id: str) -> dict[str, object] | None:
     return next((e for e in entries if e.get("agent_id") == agent_id), None)
 

@@ -235,15 +235,13 @@ def test_unknown_agent_refused_only_in_a_train(
     run_script: Any, hook_input: Any, repo_cwd: Path
 ) -> None:
     # 0023, 0035: a foreign agent is not routed; lib.jail refuses it only while a train runs.
-    payload = hook_input(agent_type="ghost", tool_input={"command": "touch .claude/x"})
+    payload = hook_input(agent_type="ghost", tool_input={"command": "touch x"})
     assert run_script("enforce_agent_jail.py", payload).returncode == 0
     write_train_marker(repo_cwd)
     result = run_script("enforce_agent_jail.py", payload)
-    # 0100, issue 188: during a train a write under .claude/ is what blocks.
-    assert result.returncode == 2 and "may not write under" in result.stderr
+    # 0100: a foreign agent reads during a train; a write is what blocks.
+    assert result.returncode == 2 and "read-only while" in result.stderr
     assert "no binding exists" not in result.stderr
-    project = hook_input(agent_type="ghost", tool_input={"command": "touch notes.md"})
-    assert run_script("enforce_agent_jail.py", project).returncode == 0
 
 
 def test_daedalus_agent_routed_outside_a_train(run_script: Any, hook_input: Any) -> None:

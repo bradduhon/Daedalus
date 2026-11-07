@@ -349,7 +349,7 @@ def _last_record(project_data: Path) -> dict[str, Any]:
     ("agent", "tool", "tool_input", "prefix"),
     [
         (None, "Bash", {"command": "git clean -fdx"}, "jail: "),
-        ("Explore", "Write", {"file_path": ".claude/notes.md", "content": "x"}, "jail: "),
+        ("Explore", "Write", {"file_path": "notes.md", "content": "x"}, "jail: "),
     ],
 )
 def test_main_block_reason_carries_a_prefix(

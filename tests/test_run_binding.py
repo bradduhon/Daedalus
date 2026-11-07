@@ -15,7 +15,7 @@ from lib.workspace import mark_train
 
 from tests.conftest import CFG, audit_records, git
 from tests.hook_chain import judge
-from tests.jail_cases import _git_init, _refusal
+from tests.jail_cases import _git_init
 from tests.payloads import _cred
 from tests.test_dispatch_binding import seed_plan
 
@@ -104,7 +104,10 @@ def test_a_relative_write_of_a_moved_agent_is_refused(two_runs: Any, run_script:
     (_, wt_a, _), (repo_b, _, _) = two_runs
     (repo_b / "README.md").write_text("x\n", encoding="utf-8")
     bash = ["touch rel.txt", "echo x > out.txt", "cd sub", "git commit -m x"]
-    bash += ["python3 -m pytest tests", "ls", "cat README.md", "git status", "./run.sh"]
+    bash += ["python3 -m pytest tests", "cat README.md", "./run.sh", "rm -rf .cl*"]
+    # issue 188: output options and in-script writes fail the base read grammar.
+    bash += ["sort -o out /etc/hosts", "uniq - out", "sed 'w out' /etc/hosts"]
+    bash += ["awk '{print > \"out\"}' /etc/hosts", f"git -C {wt_a} log --output=x"]
     calls = [("Bash", {"command": command}) for command in bash]
     calls += [("Grep", {"pattern": "x"}), ("Glob", {"pattern": "*.py"})]
     calls.append(("Read", {"file_path": "README.md"}))
@@ -112,7 +115,8 @@ def test_a_relative_write_of_a_moved_agent_is_refused(two_runs: Any, run_script:
         result = run_script("enforce_agent_jail.py", _call(repo_b, tool, "agent-a", **tool_input))
         assert result.returncode == 2, tool_input
         assert "Next: name every path as an absolute path" in result.stderr, tool_input
-    for command in (f"cd {wt_a} && python3 -m pytest tests -q", f"git -C {wt_a} status", "echo hi"):
+    allowed = (f"cd {wt_a} && python3 -m pytest tests -q", f"git -C {wt_a} status", "ls")
+    for command in (*allowed, "git status"):
         payload = _call(repo_b, "Bash", "agent-a", command=command)
         assert "name every path" not in run_script("enforce_agent_jail.py", payload).stderr
     assert jail.relative_write(f"touch {wt_a}/x 2>&1 > /dev/null") is None
@@ -141,34 +145,6 @@ def test_the_credential_check_also_runs_at_the_payload_cwd(
     assert result.returncode == 2 and "credential path" in result.stderr, result.stderr
 
 
-def test_a_foreign_removal_of_a_bound_run_is_refused_from_anywhere(
-    two_runs: Any, run_script: Run, tmp_path: Path
-) -> None:
-    # issue 188: the session's run bindings name the repos a foreign removal may not reach.
-    (repo_a, _, _), _ = two_runs
-    plain = _git_init(tmp_path / "plain")
-    for command in (f"rm -rf {tmp_path}", f"rm -r {repo_a}", f"find {tmp_path} -delete"):
-        payload = {**_call(plain, "Bash", command=command), "agent_type": "general-purpose"}
-        result = run_script("enforce_agent_jail.py", {**payload, "agent_id": "f1"})
-        assert result.returncode == 2 and "may not write under" in result.stderr, command
-    payload = {**_call(plain, "Bash", command=f"rm -rf {plain}/x"), "agent_id": "f1"}
-    result = run_script("enforce_agent_jail.py", {**payload, "agent_type": "general-purpose"})
-    assert result.returncode == 0, result.stderr
-
-
-def test_a_fed_remover_below_the_root_is_refused(two_runs: Any) -> None:
-    # issue 188: xargs or parallel feeding a remover from below a marked root.
-    (_, _, brief), _ = two_runs
-    below = str(brief.parent)
-    for command in ("ls | xargs rm -rf", "ls | parallel rm", "find . | xargs mv -t /tmp"):
-        payload = {
-            **_cred("general-purpose", "Bash", below, command=command),
-            "session_id": SESSION,
-        }
-        d = jail.decide(payload, CFG)
-        assert not d.allow and "may not write under" in str(d.reason), command
-
-
 def test_an_unbound_daedalus_agent_is_judged_by_its_payload_cwd(
     two_runs: Any, run_script: Run
 ) -> None:
@@ -176,7 +152,7 @@ def test_an_unbound_daedalus_agent_is_judged_by_its_payload_cwd(
     _, (repo_b, _, _) = two_runs
     payload = _call(repo_b, "Bash", "agent-z", command="touch rel.txt")
     result = run_script("enforce_agent_jail.py", payload)
-    assert "name every path you write" not in result.stderr
+    assert "name every path" not in result.stderr
     rows = [r for r in audit_records(audit.log_path(SESSION, str(repo_b))) if r["agent_id"]]
     row = [r for r in rows if r["agent_id"] == "agent-z"][-1]
     assert (row["cwd"], row["payload_cwd"], row["binding"]) == (str(repo_b), None, None)
@@ -249,26 +225,6 @@ def test_run_bindings_are_refused_to_agents(
             ("Bash", {"command": f"echo x > {store}"}),
         ):
             assert not judge(_cred(agent, tool, cwd, **tool_input), CFG).allow, (agent, tool)
-
-
-def test_a_foreign_agent_follows_the_host_outside_claude(
-    marked_repo: Path, other_repo: Path, cred_home: Path
-) -> None:
-    # issue 188: a general-purpose agent with a run active writes the project, not .claude/.
-    cwd, agent = str(marked_repo), "general-purpose"
-    for tool, tool_input in (
-        ("Write", {"file_path": f"{cwd}/notes.md"}),
-        ("Bash", {"command": "gh issue list"}),
-        ("Bash", {"command": f"git -C {other_repo} commit -m x"}),
-        ("Bash", {"command": "python3 tools/report.py"}),
-    ):
-        d = jail.decide(_cred(agent, tool, cwd, **tool_input), CFG)
-        assert d.allow, (tool_input, d.reason)
-    d = jail.decide(_cred(agent, "Write", cwd, file_path=f"{cwd}/.claude/settings.json"), CFG)
-    assert not d.allow and "may not write under" in str(d.reason)
-    key = str(cred_home / ".ssh" / "id_ed25519")
-    d = jail.decide(_cred(agent, "Read", cwd, file_path=key), CFG)
-    assert not d.allow and d.reason == _refusal(key)
 
 
 def test_the_audit_record_carries_null_binding_fields() -> None:

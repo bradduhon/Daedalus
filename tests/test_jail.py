@@ -84,80 +84,13 @@ def test_namespaced_boundary_tester_is_refused() -> None:
     assert d.reason == jail.R_UNKNOWN.format(agent="boundary-tester")
 
 
-CLAUDE_READ_ROWS = (
-    "cat .claude/settings.json",
-    "ls .claude/worktrees",
-    "git log -- .claude",
-    "find .claude -name x",
-)
-
-
-def _claude_forms(repo: Path, other: Path) -> list[tuple[str, str, dict[str, str]]]:
-    # issue 188: (cwd, tool, input) for each spelling of a write under the run's .claude/.
-    claude, wt = repo / ".claude", repo / ".claude" / "worktrees" / "u1"
-    wt.mkdir(parents=True, exist_ok=True)
-    (other / "link").symlink_to(claude)
-    (other / "hard").mkdir()
-    here, there, inside = str(repo), str(other), str(wt)
-    bash = [
-        "touch .claude/x",
-        "cd .claude && touch x",
-        f"git -C {wt} commit -m x",
-        "ln .claude/settings.json /tmp/z",
-        "cp -l .claude/settings.json z",
-        "mv .claude/settings.json z",
-        "rm .claude/settings.json",
-        f"rm -r {repo}",
-        "git clean -fdX",
-        "git stash -u",
-        "git stash --all",
-        "git checkout -- .",
-        "git reset --hard",
-        "find . -delete",
-        f"rsync -a --delete {other}/hard/ {repo}/",
-        "python3 -c \"open('.claude/x', 'w')\"",
-        "node -e \"require('fs').rmSync('.claude', {recursive: true})\"",
-        "perl -e 'unlink q(.claude/x)'",
-        f"python3 {claude}/x.py",
-        "curl -o .claude/x https://example.com",
-        "curl -o.claude/x https://example.com",
-        "wget -O .claude/x https://example.com",
-        "tar -C .claude -xf a.tar",
-        "unzip -d .claude a.zip",
-        "sort -o .claude/x y",
-        "git clone https://example.com/r .claude/r",
-        f"git worktree add {claude}/worktrees/z",
-        "git worktree remove .claude/worktrees/u1",
-        "ls | xargs rm",
-        "ls | parallel rm",
-        "find . -name x | xargs -0 rm -rf",
-    ]
-    forms = [(here, "Write", {"file_path": f"{claude}/settings.json"})]
-    forms.append((here, "Write", {"file_path": f"{wt}/x"}))
-    forms += [(here, "Bash", {"command": command}) for command in bash]
-    forms.append((there, "Bash", {"command": f"touch {other}/link/x"}))
-    forms.append((there, "Bash", {"command": f"python3 -c \"open('{claude}/x', 'w')\""}))
-    forms += [(inside, "Bash", {"command": c}) for c in ("touch x", "python3 x.py")]
-    return forms
-
-
-def test_foreign_agent_write_under_claude_is_refused(marked_repo: Path, other_repo: Path) -> None:
-    # 0100, issue 188 (AC-3, AC-6): a foreign agent writes the project; .claude/ stays refused.
-    repo = str(marked_repo)
-    marker = str(train_marker(marked_repo))
-    assert decide(_cred("mystery", "Write", repo, file_path=f"{repo}/notes.md"), CFG).allow
-    assert decide(_cred("mystery", "Bash", repo, command="touch notes.md"), CFG).allow
-    # issue 188: only the FOREIGN_CLAUDE_READS verbs may name the folder.
-    for command in CLAUDE_READ_ROWS:
-        verb = " ".join(command.split()[:2]) if command.startswith("git") else command.split()[0]
-        assert verb in jail.FOREIGN_CLAUDE_READS, command
-        assert decide(_cred("mystery", "Bash", repo, command=command), CFG).allow, command
-    for cwd, tool, tool_input in _claude_forms(marked_repo, other_repo):
-        d = decide(_cred("mystery", tool, cwd, **tool_input), CFG)
-        reason = str(d.reason)
-        assert not d.allow and not d.warn, (cwd, tool_input, reason)
-        assert f"may not write under {repo}/.claude while {marker} exists" in reason, reason
-        assert f"unmark --repo {repo} and retry." in reason and reason.endswith("."), reason
+def test_unknown_agent_fails_closed(tmp_path: Path) -> None:
+    # 0023, 0100: a foreign agent's writes are refused only while a train is active.
+    (tmp_path / ".claude" / "daedalus").mkdir(parents=True)
+    (tmp_path / ".claude" / "daedalus" / "train.active").write_text("20261015-120000\n")
+    payload = {**_b("mystery", "touch x"), "cwd": str(tmp_path)}
+    d = decide(payload, CFG)
+    assert not d.allow and "read-only while" in d.reason and d.reason.endswith(".")
 
 
 def test_unknown_agent_refusal_names_the_marker_and_unmark(tmp_path: Path) -> None:
@@ -165,7 +98,7 @@ def test_unknown_agent_refusal_names_the_marker_and_unmark(tmp_path: Path) -> No
     marker = tmp_path / ".claude" / "daedalus" / "train.active"
     marker.parent.mkdir(parents=True)
     marker.write_text("20261015-120000\n")
-    payload = {**_b("Explore", "touch .claude/x"), "cwd": str(tmp_path)}
+    payload = {**_b("Explore", "touch x"), "cwd": str(tmp_path)}
     reason = str(decide(payload, CFG).reason)
     assert str(marker) in reason and len(reason.splitlines()) == 2
     unmark = "scripts/daedalus_workspace.py unmark --repo " + str(tmp_path) + " "
@@ -266,13 +199,12 @@ def test_empty_or_unknown_daedalus_name_fails_closed(agent: str) -> None:
 
 @pytest.mark.parametrize("agent", ["otherplugin:coder", "daedalus-x:coder"])
 def test_foreign_namespace_fails_closed_only_during_a_train(agent: str, tmp_path: Path) -> None:
-    payload = {**_b(agent, "touch .claude/x"), "cwd": str(tmp_path)}
+    payload = {**_b(agent, "pytest -q"), "cwd": str(tmp_path)}
     assert decide(payload, CFG).allow
     (tmp_path / ".claude" / "daedalus").mkdir(parents=True)
     (tmp_path / ".claude" / "daedalus" / "train.active").write_text("20261015-120000\n")
     d = decide(payload, CFG)
-    assert not d.allow and "may not write under" in d.reason
-    assert decide({**_b(agent, "pytest -q"), "cwd": str(tmp_path)}, CFG).allow
+    assert not d.allow and "read-only while" in d.reason
 
 
 def test_namespaced_unknown_reason_names_normalized_agent() -> None:
@@ -421,9 +353,7 @@ def test_main_and_foreign_agents_carry_only_the_read_deny_outside_a_train(
     read = decide(_cred(agent, "Read", cwd, file_path=f"{cred_home}/.ssh/id_ed25519"), CFG)
     assert not read.allow and "credential path" in str(read.reason)
     _train(other_repo)
-    # issue 188: in a train the project write passes; data folder, clean and store reads refuse.
-    assert decide(payloads[0], CFG).allow == (agent is not None)
-    for payload in payloads[1:]:
+    for payload in payloads:
         assert not decide(payload, CFG).allow, payload
 
 
@@ -1201,16 +1131,15 @@ def test_unknown_agent_passes_through_without_a_train(train_cwd: Path) -> None:
 def test_unknown_agent_fails_closed_during_a_train(train_cwd: Path) -> None:
     _mark(train_cwd)
     cwd = str(train_cwd)
-    # 0100, issue 188: reads and project writes pass; writes under .claude/ refuse.
+    # 0100: reads pass; writes refuse.
     assert decide(_cred("Explore", "Bash", cwd, command="ls"), CFG).allow
-    assert decide(_cred("Explore", "Bash", cwd, command="touch x"), CFG).allow
     for payload in (
-        _cred("Explore", "Bash", cwd, command="touch .claude/x"),
-        _cred("Explore", "Write", cwd, file_path=f"{cwd}/.claude/notes.md"),
-        _cred("otherplugin:coder", "Bash", cwd, command="touch .claude/x"),
+        _cred("Explore", "Bash", cwd, command="touch x"),
+        _cred("Explore", "Write", cwd, file_path=f"{cwd}/notes.md"),
+        _cred("otherplugin:coder", "Bash", cwd, command="touch x"),
     ):
         d = decide(payload, CFG)
-        assert not d.allow and "may not write under" in str(d.reason), payload
+        assert not d.allow and "read-only while" in str(d.reason), payload
 
 
 def test_unknown_agent_without_an_absolute_cwd_fails_closed() -> None:
@@ -1554,11 +1483,11 @@ def test_issue30_main_plain_commands_pass_during_a_train(marked_repo: Path, comm
 def test_issue30_unknown_agent_refused_writing_into_a_marked_repo(
     marked_repo: Path, other_repo: Path, tool_input: dict[str, str]
 ) -> None:
-    # 0023, issue 188: the marker is read from the repository the call writes into.
-    filled = {k: v.format(repo=marked_repo / ".claude") for k, v in tool_input.items()}
+    # 0023: the marker is read from the repository the call writes into, not only the cwd.
+    filled = {k: v.format(repo=marked_repo) for k, v in tool_input.items()}
     tool = "Bash" if "command" in filled else "Write"
     d = decide(_cred("Explore", tool, str(other_repo), **filled), CFG)
-    assert not d.allow and "may not write under" in str(d.reason), filled
+    assert not d.allow and "read-only while" in str(d.reason), filled
     assert str(train_marker(marked_repo)) in str(d.reason)
 
 
@@ -1769,7 +1698,7 @@ def test_coder_claude_is_refused(command: str) -> None:
 
 def test_foreign_agent_claude_is_refused_during_a_train(marked_repo: Path) -> None:
     d = decide(_cred("Explore", "Bash", str(marked_repo), command="claude -p hi"), CFG)
-    assert not d.allow and not d.warn and d.reason == jail.R_NESTED_CLAUDE, d
+    assert not d.allow and not d.warn and "read-only while" in str(d.reason), d
 
 
 @pytest.mark.parametrize(
@@ -1802,18 +1731,16 @@ class TestForeignDocumentationAgent:
         for command in ("cat README.md | head", "git log --oneline -3 | head", "ls docs"):
             assert decide(_cred(self.AGENT, "Bash", cwd, command=command), CFG).allow, command
 
-    def test_writes_under_claude_during_a_train_are_refused(self, train_cwd: Path) -> None:
-        # issue 188: project writes and scripts pass; .claude/ writes and mentions refuse.
+    def test_writes_and_scripts_during_a_train_are_refused(self, train_cwd: Path) -> None:
         _mark(train_cwd)
         cwd = str(train_cwd)
-        for command in ("echo $HOME", "cat README.md | tee notes.md"):
-            assert decide(_cred(self.AGENT, "Bash", cwd, command=command), CFG).allow, command
         for command in (
-            f"python3 {cwd}/scripts/x.py --out {cwd}/.claude/daedalus/train.active",
-            "cat README.md | tee .claude/notes.md",
+            f"python3 {cwd}/scripts/daedalus_workspace.py unmark --repo {cwd}",
+            "echo $CLAUDE_PLUGIN_ROOT",
+            "cat README.md | tee notes.md",
         ):
             d = decide(_cred(self.AGENT, "Bash", cwd, command=command), CFG)
-            assert not d.allow and "may not write under" in str(d.reason), command
+            assert not d.allow and "read-only while" in str(d.reason), command
 
 
 class TestGlobDotsAndBraces:
@@ -1871,7 +1798,7 @@ FOREIGN = ["Explore", "general-purpose", "otherplugin:reader"]
         "git log --oneline -5 | head -2",
         "git diff --stat",
         "git status --short && git show --stat",
-        "cat .claude/daedalus/config.json",
+        "jq . .claude/daedalus/config.json",
         "find . -name '*.py' | sort",
     ],
 )
@@ -1883,9 +1810,9 @@ def test_foreign_agent_read_only_bash_is_allowed_during_a_train(
 
 
 @pytest.mark.parametrize("agent", FOREIGN)
-def test_foreign_agent_follows_the_host_outside_claude(marked_repo: Path, agent: str) -> None:
-    # issue 188: writes, dispatch and web calls outside .claude/ are left to the host.
+def test_foreign_agent_write_is_refused_during_a_train(marked_repo: Path, agent: str) -> None:
     cwd = str(marked_repo)
+    marker = str(train_marker(marked_repo))
     payloads = [
         _cred(agent, "Write", cwd, file_path=f"{cwd}/notes.md"),
         _cred(agent, "Edit", cwd, file_path=f"{cwd}/docs/.tmp/daedalus/x.md"),
@@ -1902,11 +1829,14 @@ def test_foreign_agent_follows_the_host_outside_claude(marked_repo: Path, agent:
         _cred(agent, "Bash", cwd, command="sort -o out x"),
         _cred(agent, "Bash", cwd, command="python3 x.py"),
         _cred(agent, "Bash", cwd, command="curl https://example.com"),
+        _cred(agent, "Bash", cwd, command="ls | xargs rm"),
         _cred(agent, "Bash", cwd, command="git log --output=x"),
     ]
     for payload in payloads:
         d = decide(payload, CFG)
-        assert d.allow and not d.warn, (payload, d.reason)
+        reason = str(d.reason)
+        assert not d.allow, payload
+        assert "read-only while" in reason and marker in reason, (payload, reason)
 
 
 @pytest.mark.parametrize("agent", FOREIGN)
@@ -1922,13 +1852,9 @@ def test_foreign_agent_follows_the_host_outside_claude(marked_repo: Path, agent:
         "git log | git push",
     ],
 )
-def test_foreign_agent_git_follows_the_host(marked_repo: Path, agent: str, command: str) -> None:
-    # 0028, issue 188: push stays with the releaser; other git outside .claude/ is the host's.
+def test_foreign_agent_git_push_is_refused(marked_repo: Path, agent: str, command: str) -> None:
     d = decide(_cred(agent, "Bash", str(marked_repo), command=command), CFG)
-    if "push" in command:
-        assert not d.allow and "git push runs only in the Push Train" in str(d.reason), d
-    else:
-        assert d.allow, (agent, command, d.reason)
+    assert not d.allow, (agent, command)
 
 
 # O5: coder git reads widen; --output is refused on every subcommand.
@@ -2196,10 +2122,7 @@ def test_a_foreign_agent_cannot_plant_a_fifo_in_a_marked_repo(
     marked_repo: Path, other_repo: Path
 ) -> None:
     # issue 75: the write target names the marked repo, and the data folder is refused outright.
-    for command in (
-        f"mkfifo {marked_repo}/.claude/x",
-        f"mkfifo {marked_repo}/.claude/daedalus/s.lock",
-    ):
+    for command in (f"mkfifo {marked_repo}/x", f"mkfifo {marked_repo}/.claude/daedalus/s.lock"):
         d = decide(_cred("Explore", "Bash", str(other_repo), command=command), CFG)
         assert not d.allow and not d.warn, command
 
@@ -2295,10 +2218,9 @@ def test_a_body_within_the_depth_cap_is_walked(marked_repo: Path, other_repo: Pa
 def test_a_runner_wrapper_cannot_hide_a_write(
     marked_repo: Path, other_repo: Path, form: str
 ) -> None:
-    # issue 82, 188: each row reaches the wrapped write under .claude/; an option off its row
-    # reads every word.
-    d = _foreign(other_repo, form.format(repo=marked_repo / ".claude"))
-    assert not d.allow and not d.warn and "may not write under" in str(d.reason), (form, d.reason)
+    # issue 82: each row reaches the wrapped write; an option off its row reads every word.
+    d = _foreign(other_repo, form.format(repo=marked_repo))
+    assert not d.allow and not d.warn and "read-only while" in str(d.reason), (form, d.reason)
 
 
 @pytest.mark.parametrize("form", H1_WRAPPERS)
@@ -2317,13 +2239,11 @@ def deep_link(marked_repo: Path, other_repo: Path) -> Path:
 
 @pytest.mark.parametrize("form", H1_SYMLINK)
 def test_dot_dot_after_a_link_resolves_on_disk(
-    marked_repo: Path, other_repo: Path, form: str
+    deep_link: Path, marked_repo: Path, other_repo: Path, form: str
 ) -> None:
-    # issue 83, 188: the text says other/x; the kernel writes marked/.claude/x.
-    (marked_repo / ".claude" / "sub").mkdir()
-    (other_repo / "deep").symlink_to(marked_repo / ".claude" / "sub")
+    # issue 83: the text says other/x; the kernel writes marked/x.
     d = _foreign(other_repo, form.format(other=other_repo))
-    assert not d.allow and not d.warn and "may not write under" in str(d.reason), (form, d.reason)
+    assert not d.allow and not d.warn and "read-only while" in str(d.reason), (form, d.reason)
 
 
 def test_anchor_resolves_the_existing_prefix(

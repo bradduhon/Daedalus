@@ -6,7 +6,6 @@ from __future__ import annotations
 import importlib
 import json
 import os
-import re
 import shlex
 import sys
 import time
@@ -57,7 +56,6 @@ R_RELATIVE = (
 _TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
 _MANIFEST = "service-manifest.json"
 _DATA_DIR = Path(".claude") / "daedalus"
-_SESSION = re.compile(r"[A-Za-z0-9_-]+")
 
 
 def _inline_git_root(path: str) -> Path | None:
@@ -317,15 +315,6 @@ def _moved_reason(payload: dict[str, object], cwd: str, judged: str, repo: str) 
     return None if path is None else R_RELATIVE.format(repo=repo, cwd=cwd, path=path)
 
 
-def _session_runs(payload: dict[str, object]) -> bool:
-    # issue 188, 0035/0043 exception: inline audit.SESSION_ID check, as lib may not load here.
-    root = os.environ.get("CLAUDE_PLUGIN_DATA") or ""
-    session = payload.get("session_id")
-    if not os.path.isabs(root) or not isinstance(session, str) or not _SESSION.fullmatch(session):
-        return False
-    return os.path.lexists(os.path.join(root, "run-bindings", f"{session}.json"))
-
-
 def _record_run(payload: dict[str, object], agent: str) -> None:
     # issue 188: best effort; an unrecorded dispatch leaves its agent judged by the payload cwd.
     from lib.dispatch_binding import record_run_dispatch
@@ -437,8 +426,6 @@ def main() -> int:
             named = _names_marked_repo(tool_name, named_input, cwd)
         except Exception:  # noqa: BLE001
             named = True  # issue 30: unsure means the full jail judges the call.
-        # issue 188: a run bound in this session sends a foreign call to the full jail.
-        named = named or (not main_session and _session_runs(payload))
         if not policed_outside_train(agent) and not named:
             try:
                 return _fast_path(payload, agent, cwd)

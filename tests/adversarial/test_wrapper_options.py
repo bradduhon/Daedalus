@@ -118,12 +118,10 @@ def test_a_foreign_agent_cannot_hide_a_write_behind_a_wrapper_option(
     other_repo: Path,  # noqa: F811
     form: str,
 ) -> None:
-    # issue 188: each write aims under the marked repo's .claude/, the folder still refused.
-    claude = form.replace("../marked", "../marked/.claude")
-    command = claude.format(repo=marked_repo / ".claude", other=other_repo)
+    command = form.format(repo=marked_repo, other=other_repo)
     d = jail.decide(_cred("Explore", "Bash", str(other_repo), command=command), CFG)
     assert not d.allow and not d.warn, (command, d.reason)
-    assert "may not write under" in str(d.reason), (command, d.reason)
+    assert "read-only while" in str(d.reason), (command, d.reason)
 
 
 @pytest.mark.parametrize("form", ALL)

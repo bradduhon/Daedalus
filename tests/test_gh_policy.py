@@ -156,13 +156,8 @@ def test_default_deny(train_repo: Path, agent: str, command: str) -> None:
 def test_conductor_allowlist(train_repo: Path, command: str) -> None:
     d = decide(_bash(train_repo, "releaser", command), Config())
     assert d.allow, d.reason
-    # issue 188: a foreign agent runs the main session's gh reads; pull request writes stay out.
-    foreign = decide(_bash(train_repo, "general-purpose", command), Config())
-    if command.split()[1:3] in (["pr", "create"], ["pr", "edit"]):
-        reason = _reason(train_repo, "general-purpose", command)
-        assert "(0028)" in reason and "Next: only the Push Train's releaser runs gh." in reason
-    else:
-        assert foreign.allow, (command, foreign.reason)
+    reason = _reason(train_repo, "general-purpose", command)
+    assert "(0028)" in reason and "Next: only the Push Train's releaser runs gh." in reason
     assert _denying_hook(train_repo, "coder", command) == "network_tools"
 
 
