@@ -124,6 +124,26 @@ def test_refuted_records_each_reply_once_and_refuses_one_not_refuted(
     assert _unit(repo, f"{train}-u1")["refutations"] == [seq]
 
 
+def test_a_refuted_verdict_then_an_operator_check_fail_reach_the_escalated_tier(
+    repo: Path,  # noqa: F811
+    plugin: Path,  # noqa: F811
+) -> None:
+    train, unit = _unit_train(repo, plugin)
+    _verifier_dispatch(repo, unit)
+    _agent_stop(repo, "verifier", REFUTED_REPLY)
+    assert train_runner.refuted(repo, "U1").lines == ["refuted U1: 1"]
+    # The fix pass verifies; the operator then fails its check, which has no verifier reply.
+    verified = _agent_stop(repo, "verifier", VERIFIED_REPLY)["seq"]
+    argv = ("refuted", "--repo", str(repo), "--unit", "U1", "--operator-check", "Scene loads")
+    for _ in range(2):
+        done = _train_cli(repo, *argv)
+        assert (done.returncode, done.stdout) == (0, "refuted U1: 2\n"), done.stderr
+    key = f"operator check after seq {verified}: Scene loads"
+    assert _unit(repo, f"{train}-u1")["refutations"][1] == key
+    escalated = train_runner.coder_model(repo, "U1")
+    assert escalated.lines == ["opus", "coder U1: opus (second refutation)"]
+
+
 def test_refuted_is_the_orchestrators_train_subcommand() -> None:
     command = f"python3 {REPO_ROOT / 'scripts'}/daedalus_train.py refuted --repo {CWD} --unit U1"
     assert decide(_b("orchestrator", command), CFG).allow

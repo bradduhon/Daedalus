@@ -1468,10 +1468,11 @@ _REFUTED_NEXT = (
 )
 
 
-def _refutation_seqs(unit: dict[str, object]) -> list[int]:
+def _refutation_seqs(unit: dict[str, object]) -> list[int | str]:
+    # issue 187: an int is a verifier reply's seq; a string keys one operator-check Fail.
     raw = unit.get(REFUTATIONS)
     items = raw if isinstance(raw, list) else []
-    return [s for s in items if isinstance(s, int) and not isinstance(s, bool)]
+    return [s for s in items if isinstance(s, str | int) and not isinstance(s, bool)]
 
 
 def _newest_verifier_reply(
@@ -1510,9 +1511,15 @@ def _newest_verifier_reply(
     return chosen[0], lines[-1]
 
 
-def refuted(cwd: Path, unit_id: str) -> Outcome:
-    # issue 187: one refutation per REFUTED verifier reply, keyed by its audit seq, on the unit.
+def refuted(cwd: Path, unit_id: str, operator_check: str | None = None) -> Outcome:
+    # issue 187: one refutation per REFUTED verifier reply, keyed by its audit seq, on the unit;
+    # an operator-check Fail is keyed by its check text and the newest verifier reply's seq.
     def edit(repo: Path, train_id: str) -> list[str]:
+        check = (
+            None
+            if operator_check is None
+            else _one_line("operator-check", operator_check, "refuted")
+        )
         try:
             state = train_state.load(repo, train_id)
             records = workspace._audit_records(repo, state)
@@ -1520,25 +1527,30 @@ def refuted(cwd: Path, unit_id: str) -> Outcome:
             raise RunnerError(str(exc)) from exc
         unit = _unit_record(state, train_id, unit_id)
         reply = _newest_verifier_reply(records, Path(str(unit["path"])))
-        if reply is None:
+        key: int | str
+        if check is not None:
+            key = f"operator check after seq {reply[0] if reply else 0}: {check}"
+        elif reply is None:
             raise RunnerError(
                 f"the audit log holds no verifier reply on unit {unit_id} since its newest "
                 f"Unit worktree: dispatch. {_REFUTED_NEXT}"
             )
-        seq, last = reply
-        if not last.startswith(coder_model_lib.REFUTED_PREFIX):
+        elif not reply[1].startswith(coder_model_lib.REFUTED_PREFIX):
             raise RunnerError(
-                f"the newest verifier reply on unit {unit_id}, at seq {seq}, does not end with "
-                f"{coder_model_lib.REFUTED_PREFIX}, so no refutation is recorded. {_REFUTED_NEXT}"
+                f"the newest verifier reply on unit {unit_id}, at seq {reply[0]}, does not end "
+                f"with {coder_model_lib.REFUTED_PREFIX}, so no refutation is recorded. "
+                f"{_REFUTED_NEXT}"
             )
+        else:
+            key = reply[0]
 
         def add(state: dict[str, object]) -> None:
             raw = state.get("units")
             for each in raw if isinstance(raw, list) else []:
                 if isinstance(each, dict) and each.get("name") == unit["name"]:
                     seqs = _refutation_seqs(each)
-                    # issue 187: a repeated call on the same reply records nothing new.
-                    each[REFUTATIONS] = seqs if seq in seqs else [*seqs, seq]
+                    # issue 187: a repeated call on the same reply or Fail records nothing new.
+                    each[REFUTATIONS] = seqs if key in seqs else [*seqs, key]
 
         after = train_state.change(repo, train_id, add)
         count = len(_refutation_seqs(_unit_record(after, train_id, unit_id)))
