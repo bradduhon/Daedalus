@@ -24,21 +24,29 @@ SESSION = "s188"
 Run = Callable[[str, dict[str, Any]], Any]
 
 
-def _run_repo(path: Path) -> tuple[Path, Path, Path]:
-    # issue 188: a repo with one recorded unit, a recorded plan and the coder's brief.
+def _run_units(path: Path, names: tuple[str, ...]) -> tuple[Path, list[tuple[Path, Path]]]:
+    # issue 188: a repo with recorded units, a recorded plan and one coder brief per unit.
     repo = _git_init(path)
     git(repo, "commit", "-q", "--allow-empty", "-m", "init")
-    wt = repo / ".claude" / "worktrees" / "u1"
-    git(repo, "worktree", "add", "-q", "-b", "daedalus-unit/u1", str(wt))
-    (repo / ".claude" / "daedalus").mkdir(exist_ok=True)
-    unit = {"name": "u1", "branch": "daedalus-unit/u1", "path": str(wt)}
-    train_state.save(repo, TRAIN, {"train_id": TRAIN, "units": [unit]})
+    (repo / ".claude" / "daedalus").mkdir(parents=True)
+    (repo / "docs" / ".tmp" / "daedalus" / TRAIN / "briefs").mkdir(parents=True)
+    units, made = [], []
+    for name in names:
+        wt = repo / ".claude" / "worktrees" / name
+        git(repo, "worktree", "add", "-q", "-b", f"daedalus-unit/{name}", str(wt))
+        units.append({"name": name, "branch": f"daedalus-unit/{name}", "path": str(wt)})
+        brief = repo / "docs" / ".tmp" / "daedalus" / TRAIN / "briefs" / f"{name}.md"
+        brief.write_text(f"Worktree: {wt}\n", encoding="utf-8")
+        made.append((wt.resolve(), brief))
+    train_state.save(repo, TRAIN, {"train_id": TRAIN, "units": units})
     mark_train(repo, TRAIN)
     seed_plan(repo, TRAIN)
-    brief = repo / "docs" / ".tmp" / "daedalus" / TRAIN / "briefs" / "u1.md"
-    brief.parent.mkdir(parents=True)
-    brief.write_text(f"Worktree: {wt}\n", encoding="utf-8")
-    return repo, wt.resolve(), brief
+    return repo, made
+
+
+def _run_repo(path: Path) -> tuple[Path, Path, Path]:
+    repo, ((wt, brief),) = _run_units(path, ("u1",))
+    return repo, wt, brief
 
 
 def _call(cwd: Path, tool: str, agent: str | None = None, **tool_input: Any) -> dict[str, Any]:
@@ -210,10 +218,34 @@ def test_the_sole_pending_entry_is_claimed_without_a_path(tmp_path: Path, run_sc
     assert bound is not None and bound.claim == "sole" and bound.repo == str(a[0])
 
 
+def test_two_same_run_coders_bind_the_run_root_and_keep_their_units(
+    tmp_path: Path, plugin_data: Path, run_script: Run
+) -> None:
+    # issue 188, issue 29: parallel coders of one run bind its root; unit_binding owns each unit.
+    repo, ((wt1, brief1), (wt2, brief2)) = _run_units(tmp_path / "a", ("u1", "u2"))
+    away = _run_repo(tmp_path / "b")[0]
+    _dispatch(run_script, repo, wt1, brief1)
+    _dispatch(run_script, repo, wt2, brief2)
+    for agent, brief in (("agent-1", brief1), ("agent-2", brief2)):
+        first = run_script(
+            "enforce_agent_jail.py", _call(away, "Read", agent, file_path=str(brief))
+        )
+        assert first.returncode == 0, first.stderr
+    entries = json.loads(_store(plugin_data).read_text(encoding="utf-8"))["entries"]
+    bound = [(e["agent_id"], e["worktree"], e["claim"]) for e in entries]
+    assert bound == [("agent-1", None, "run"), ("agent-2", None, "run")]
+    assert _write(run_script, away, "agent-1", wt1 / "x.py").returncode == 0
+    assert _write(run_script, away, "agent-2", wt2 / "x.py").returncode == 0
+    assert _write(run_script, away, "agent-1", wt2 / "y.py").returncode == 2
+    assert _write(run_script, away, "agent-2", wt1 / "y.py").returncode == 2
+    rows = [r for r in audit_records(audit.log_path(SESSION, str(repo))) if r["agent_id"]]
+    assert {r["cwd"] for r in rows if r["payload_cwd"] == str(away)} == {str(repo)}, rows
+
+
 def test_two_pending_entries_of_one_type_bind_neither(
     tmp_path: Path, plugin_data: Path, run_script: Run
 ) -> None:
-    # issue 188: the path a first call names never picks a run; both agents keep the payload cwd.
+    # issue 188: coders of two runs dispatched together bind neither; both keep the payload cwd.
     a, b = _run_repo(tmp_path / "a"), _run_repo(tmp_path / "b")
     (repo_a, _, _), (repo_b, wt_b, brief_b) = a, b
     _dispatch(run_script, *a)

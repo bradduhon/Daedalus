@@ -415,6 +415,7 @@ def _binding_reason(hook_input: dict[str, object], cwd: str, units: set[str]) ->
 RUN_BINDINGS = "run-bindings"
 RUN_SCHEMA = 1
 CLAIM_SOLE = "sole"
+CLAIM_RUN = "run"
 _RUN_CAP = 256
 _DISPATCHER = "orchestrator"
 
@@ -476,7 +477,7 @@ def _entry_ok(entry: object) -> bool:
         and isinstance(train, str)
         and TRAIN_ID.fullmatch(train) is not None
         and (agent_id is None or isinstance(agent_id, str))
-        and entry.get("claim") in (None, CLAIM_SOLE)
+        and entry.get("claim") in (None, CLAIM_SOLE, CLAIM_RUN)
         and isinstance(created, int | float)
         and not isinstance(created, bool)
     )
@@ -583,8 +584,8 @@ def _held_run(entries: list[dict[str, object]], agent_id: str) -> dict[str, obje
 
 
 def bound_run(hook_input: dict[str, object]) -> RunBinding | None:
-    # issue 188: the agent's run; its first call claims the pending entry of its type only when
-    # it is the sole one in the session. A claim never moves.
+    # issue 188: the agent's run; its first call claims a pending entry of its type only when
+    # every candidate shares one repo and train. A claim never moves.
     agent_id = hook_input.get("agent_id")
     raw = str(hook_input.get("agent_type") or "")
     path = run_store(hook_input.get("session_id"))
@@ -610,10 +611,15 @@ def bound_run(hook_input: dict[str, object]) -> RunBinding | None:
             key=lambda e: float(str(e["created"])),
         )
         pending = [e for e in pending if _live(e)]
-        if len(pending) != 1:
-            return None  # issue 188: two candidates bind neither; never chosen by an agent path.
+        runs = {(e["repo"], e["train_id"]) for e in pending}
+        if len(runs) != 1:
+            return None  # issue 188: candidates of two runs bind neither; never by an agent path.
+        if len(pending) > 1:
+            # issue 188, issue 29: same-run candidates bind the run root; unit_binding owns units.
+            for entry in pending:
+                entry["worktree"], entry["claim"] = None, CLAIM_RUN
         chosen = pending[0]
         chosen["agent_id"] = agent_id
-        chosen["claim"] = CLAIM_SOLE
+        chosen["claim"] = chosen.get("claim") or CLAIM_SOLE
         _save_runs(path, entries)
     return _binding(chosen, True)
