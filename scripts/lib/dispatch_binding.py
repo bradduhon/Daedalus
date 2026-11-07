@@ -416,6 +416,16 @@ RUN_BINDINGS = "run-bindings"
 RUN_SCHEMA = 1
 CLAIM_SOLE = "sole"
 CLAIM_RUN = "run"
+R_STORE_MALFORMED = (
+    "the run binding store {path} is malformed, so every agent of this session is judged by its "
+    "payload cwd (issue 188). Next: the operator deletes {path}; no stop or unmark step clears it"
+)
+
+
+class RunStoreError(Exception):
+    """issue 188: a malformed run binding store, left as it is."""
+
+
 _RUN_CAP = 256
 _DISPATCHER = "orchestrator"
 
@@ -563,7 +573,10 @@ def record_run_dispatch(hook_input: dict[str, object]) -> None:
     if worktree is not None and not _live(entry):
         entry["worktree"] = None
     with _run_lock(path):
-        _save_runs(path, [*(_load_runs(path) or []), entry])
+        entries = _load_runs(path)
+        if entries is None:
+            raise RunStoreError(R_STORE_MALFORMED.format(path=path))  # issue 188: never rewritten.
+        _save_runs(path, [*entries, entry])
 
 
 def _binding(entry: dict[str, object], now: bool) -> RunBinding | None:

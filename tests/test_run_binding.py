@@ -182,9 +182,37 @@ def test_the_store_is_private_and_a_claim_never_moves(
     assert bound is not None and bound.repo == str(repo_a) and not bound.claimed_now
 
 
-@pytest.mark.parametrize(
-    "text", ["not json", '{"version": 2, "entries": []}', '{"version": 1, "entries": [{}]}']
+_OLD_ENTRY = {"agent_type": "coder", "repo": "/x", "worktree": None, "train_id": TRAIN}
+_OLD_FORMAT = json.dumps(
+    {"version": 1, "entries": [{**_OLD_ENTRY, "agent_id": "a", "claim": "path", "created": 1}]}
 )
+MALFORMED = [
+    "not json",
+    '{"version": 2, "entries": []}',
+    '{"version": 1, "entries": [{}]}',
+    _OLD_FORMAT,
+]
+
+
+@pytest.mark.parametrize("text", MALFORMED)
+def test_a_malformed_store_survives_a_dispatch_and_binds_nothing(
+    tmp_path: Path, plugin_data: Path, run_script: Run, text: str
+) -> None:
+    # issue 188: a dispatch never rewrites a malformed store; it notes the store instead.
+    repo, wt, brief = _run_repo(tmp_path / "a")
+    store = _store(plugin_data)
+    store.parent.mkdir(mode=0o700)
+    store.write_text(text, encoding="utf-8")
+    payload = _call(repo, "Agent", subagent_type="daedalus:coder", prompt=f"Worktree: {wt}\n")
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 0 and "the operator deletes" in result.stderr, result.stderr
+    assert store.read_text(encoding="utf-8") == text
+    assert (
+        dispatch_binding.bound_run(_call(tmp_path, "Read", "agent-a", file_path=str(brief))) is None
+    )
+
+
+@pytest.mark.parametrize("text", MALFORMED)
 def test_a_malformed_store_applies_no_binding(two_runs: Any, plugin_data: Path, text: str) -> None:
     # issue 188: malformed input falls back to the payload cwd.
     (_, _, brief), _ = two_runs
