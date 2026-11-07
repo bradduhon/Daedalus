@@ -99,6 +99,10 @@
     "failure": "0088: a coder starts before the train's plan validates and builds work no plan covers",
     "premise_test": "tests/test_dispatch_binding.py::test_a_missing_plan_file_is_refused"
   },
+  "dispatch_binding.R_STORE_MALFORMED": {
+    "failure": "issue 188: a malformed run binding store is rewritten by the next dispatch, and that dispatch then binds",
+    "premise_test": "tests/test_run_binding.py::test_a_malformed_store_survives_a_dispatch_and_binds_nothing"
+  },
   "gh_policy.R_VERDICT": {
     "failure": "spec 4.2: a push or pull request ships a tip the security audit never approved",
     "premise_test": "tests/test_checks_git_push.py::test_push_with_no_verdict_is_refused"
