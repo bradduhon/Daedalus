@@ -315,6 +315,33 @@ A2_FIX3_UNMARKED = (
     "sh //dev/stdin <<< 'touch {repo}/x'",
     "bash -c -- 'touch {repo}/x'",
 )
+# fix round 4 (unit A2): stdin fed to a group, subshell or bare exec; a script under a cd move.
+A2_FIX4_RUN = (
+    ("shell", "{{ bash; }} <<< 'touch {repo}/x'"),
+    ("shell", "( bash ) <<< 'touch {repo}/x'"),
+    ("shell", "exec <<< 'touch {repo}/x'; bash"),
+    ("shell", "( exec bash ) <<< 'touch {repo}/x'"),
+    ("shell", "( python3 ) <<< 'import os'"),
+    ("shell", "{{ python3; }} < {repo}/code.py"),
+    ("shell", "cd /dev && bash stdin <<< 'touch {repo}/x'"),
+    ("shell", "cd /proc/self/fd && bash 0 <<< 'touch {repo}/x'"),
+    ("shell", "pushd /dev && bash ./stdin <<< 'touch {repo}/x'"),
+    ("shell", "cd ~/../../dev && bash stdin <<< 'touch {repo}/x'"),
+    ("inline", "cd /dev && python3 stdin"),
+)
+# fix round 4 (unit A2): every here-string and heredoc body is walked, from an unmarked folder.
+A2_FIX4_UNMARKED = (
+    "{{ bash; }} <<< 'touch {repo}/x'",
+    "( bash ) <<< 'touch {repo}/x'",
+    "exec <<< 'touch {repo}/x'; bash",
+    "( exec bash ) <<< 'touch {repo}/x'",
+    "( bash ) <<'E'\ntouch {repo}/x\nE",
+    "cd /dev && bash stdin <<< 'touch {repo}/x'",
+    "cd /proc/self/fd && bash 0 <<< 'touch {repo}/x'",
+    "pushd /dev && bash ./stdin <<< 'touch {repo}/x'",
+)
+# fix round 4 (unit A2): a here-string or heredoc read by a plain command, with no write.
+A2_FIX4_ADMITTED = ('grep foo <<< "bar"', "cat <<'E'\nhello world\nE")
 # fix round 3 (unit A2): a script operand, a script named by php -f, or no stdin fed: no body.
 A2_FIX3_ADMITTED = (
     "node --no-warnings app.js",

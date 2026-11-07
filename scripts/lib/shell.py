@@ -381,6 +381,8 @@ INLINE_FLAGS: dict[str, frozenset[str]] = {
 INTERPRETERS = frozenset(INLINE_FLAGS) - {"shell"}
 # P7, A2 fix round 3: an option whose value is the script file (php -f <file>).
 SCRIPT_FLAGS: dict[str, frozenset[str]] = {"php": frozenset({"-f"})}
+# A2 fix round 4: a relative script that may be a stream once an opaque cd moved the folder.
+_STDIN_TAIL = re.compile(r"(?:^|/)(?:stdin|fd/\d+)$|^(?:dev|proc)(?:/|$)")
 # 8.5 ruling A, issue 116: first tokens a worker may never run, read through command_family.
 WORKER_WRAPPERS = (
     frozenset(WRAPPER_OPTS) | frozenset({"eval", "source", ".", "python3"}) | _SHELLS | INTERPRETERS
@@ -1299,12 +1301,16 @@ def _env_split(args: list[str]) -> list[str]:
     return []
 
 
-def stdin_script(word: str) -> bool:
-    # P6, P7, A2 fix round 3: - or a normalised path under /dev/ or /proc/ reads a stream; a
-    # relative path that climbs (../dev/stdin) may reach the root, so it counts too.
+def stdin_script(word: str, base: str | None = "") -> bool:
+    # P6, P7, fix rounds 3-4: - or a path under /dev/ or /proc/ after joining base and normpath;
+    # base "" knows no folder (a climbing path counts), None follows an opaque cd (a stdin tail).
     if word == "-":
         return True
+    if base and word[:1] != "~" and not _expands(word):
+        word = os.path.join(base, word)
     path = os.path.normpath(word)
+    if base is None and not os.path.isabs(path) and _STDIN_TAIL.search(path):
+        return True
     if not path.startswith(("/", "../")):
         return False
     parts = [p for p in path.split("/") if p not in {"", ".."}]
@@ -1404,7 +1410,9 @@ def _flag_value(family: str, args: list[str], flags: frozenset[str], end: int) -
     return ""
 
 
-def _stdin_body(body: BodyScan, stdin: bool, reads: bool, fed: bool) -> str | None:
+def _stdin_body(
+    body: BodyScan, stdin: bool, reads: bool, fed: bool, base: str | None = ""
+) -> str | None:
     # P6, P7: at the command word, "" for a stdin-like script, an expanding word in an option
     # position, or no script operand while stdin is fed (fix round 3); else no body.
     if not stdin or {"--version", "--help"} & set(body.scan.options):
@@ -1413,7 +1421,7 @@ def _stdin_body(body: BodyScan, stdin: bool, reads: bool, fed: bool) -> str | No
         return ""
     if body.module:
         return None
-    if body.script is not None and stdin_script(body.script):
+    if body.script is not None and stdin_script(body.script, base):
         return ""
     return "" if fed and (body.script is None or body.scan.off) else None
 
@@ -1424,7 +1432,9 @@ def _inline_code(tokens: list[str], family: str) -> str | None:
     return _flag_value(family, tokens[1:], INLINE_FLAGS[family], body.end) if body.hit else None
 
 
-def interpreter_code(tokens: list[str], stdin: bool = False, fed: bool = False) -> str | None:
+def interpreter_code(
+    tokens: list[str], stdin: bool = False, fed: bool = False, base: str | None = ""
+) -> str | None:
     # P7, issue 116: an interpreter's inline code; with stdin (the command word's position), ""
     # for code read from a stream (fed: a pipe or < feeds it) or an expanding flag word.
     family = command_family(tokens[0]) if tokens else ""
@@ -1433,7 +1443,7 @@ def interpreter_code(tokens: list[str], stdin: bool = False, fed: bool = False) 
     code = _inline_code(tokens, family)
     if code is not None:
         return code
-    return _stdin_body(_body_scan(family, tokens[1:]), stdin, False, fed)
+    return _stdin_body(_body_scan(family, tokens[1:]), stdin, False, fed, base)
 
 
 def shell_tokens(tokens: list[str]) -> list[str] | None:
@@ -1443,7 +1453,7 @@ def shell_tokens(tokens: list[str]) -> list[str] | None:
     return tokens if tokens and command_family(tokens[0]) in _SHELLS else None
 
 
-def _shell_code(tokens: list[str], stdin: bool = False) -> str | None:
+def _shell_code(tokens: list[str], stdin: bool = False, base: str | None = "") -> str | None:
     # P6, issue 116: a shell's -c string (its first operand, or the word after -c past an
     # off-table option); with stdin, "" for a string read from a stream; else _FALLBACK.
     args = tokens[1:]
@@ -1455,7 +1465,7 @@ def _shell_code(tokens: list[str], stdin: bool = False) -> str | None:
     if body.scan.off:
         return _FALLBACK
     # fix round 3: a shell with no script reads its inherited stdin, so it counts as fed.
-    return _stdin_body(body, stdin, "-s" in body.scan.options, True)
+    return _stdin_body(body, stdin, "-s" in body.scan.options, True, base)
 
 
 def _segment_reason(segment: list[str], depth: int, main: bool) -> str | None:

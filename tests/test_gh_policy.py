@@ -598,6 +598,7 @@ INLINE_RUNS = (
     "python3 /dev/stdin",
     # A2 fix round 3: a normalised stdin path, and a -- that -X consumes.
     "python3 /dev/./stdin",
+    "cd /dev && echo x | python3 stdin",
     "python3 -X -- -c \"import os; os.system('gh issue delete 3')\"",
     # A2 fix round 1, rows 5 and 8: an off-table node option, and tmux, which is no shell.
     "node --title t -e \"require('child_process').execSync('gh issue delete 3')\"",
