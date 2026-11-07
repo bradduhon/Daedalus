@@ -2915,8 +2915,11 @@ _NOT_SIMPLE_WORD = re.compile(
     r"|(?:^|[;&|(){}\n])\s*(?:\w+=\S*\s+)*(?:(?:command|builtin|exec|nice|nohup|then|do|else)\s+)*"
     r"\.\s"
 )
-# issue 121 (G1): the one heredoc a plainly simple text may hold, its delimiter a quoted plain word.
-_SIMPLE_HEREDOC = re.compile(r"<<(-?)[ \t]*(['\"])([A-Za-z_][A-Za-z0-9_]*)\2(?=[\s;&|<>)]|$)")
+# issue 121 (G1): the heredoc a plainly simple text may hold, its delimiter a plain word, quoted
+# or bare; a bare one's body must hold no $, backtick or backslash.
+_SIMPLE_HEREDOC = re.compile(
+    r"<<(-?)[ \t]*(?:(['\"])([A-Za-z_][A-Za-z0-9_]*)\2|([A-Za-z_][A-Za-z0-9_]*))(?=[\s;&|<>)]|$)"
+)
 # issue 121 (G1, G4): words judged in a text that is not plainly simple, as the base judged it.
 _JUDGED_WORD = re.compile(r"\b(?:add|stage|commit|update-index|stash)\b")
 _SYNTH = re.compile(r"[$`{*?\[]|(?<![\w.-])(?:eval|source|alias|xargs)(?![\w-])|(?:^|[\s;&|(])\.\s")
@@ -3407,13 +3410,13 @@ def _unset_only(tokens: list[str]) -> bool:
 
 def _plainly_simple(command: str) -> bool:
     # issue 121 (G1): no construct the quote model may misread, and every heredoc at top level
-    # with a quoted plain delimiter; only such a text may exempt a read or a message.
+    # with a plain delimiter and a literal body; only such a text may exempt a read or a message.
     if _NOT_SIMPLE_RAW.search(command):
         return False
     code: list[str] = []
     rest, depth = command, 0
     while rest:
-        pending: list[tuple[bool, str]] = []
+        pending: list[tuple[bool, str, bool]] = []
         cut, quote = len(rest), ""
         for lex in quote_walk(rest):
             char, at = lex.text, lex.at
@@ -3433,13 +3436,17 @@ def _plainly_simple(command: str) -> bool:
                 doc = _SIMPLE_HEREDOC.match(rest, at)
                 if doc is None or depth != 0:
                     return False
-                pending.append((doc.group(1) == "-", doc.group(3)))
+                bare = doc.group(4) is not None
+                pending.append((doc.group(1) == "-", doc.group(4) or doc.group(3), bare))
         if quote or (pending and depth != 0):
             return False
         code.append(rest[:cut])
         rest = rest[cut:]
-        for dash, word in pending:
-            rest = rest[_heredoc_end(rest, word, dash) :]
+        for dash, word, bare in pending:
+            end = _heredoc_end(rest, word, dash)
+            if bare and set("$`\\") & set(rest[:end]):
+                return False
+            rest = rest[end:]
     return not _NOT_SIMPLE_WORD.search(_normalised("".join(code)))
 
 

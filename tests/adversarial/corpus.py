@@ -371,10 +371,9 @@ H1_ICASE = (
 A3_ISSUE_121_ADMITTED = (
     'git log -- ":(icase)README.md"',
     'git grep -n foo -- ":(icase)scripts"',
-)
-# G1 (fix round 3): an unquoted heredoc delimiter is not plainly simple, so its body is judged.
-A3_ISSUE_121_REFUSED = (
     "git commit -F - <<EOF\nfix :i: spelling\nEOF",
+)
+A3_ISSUE_121_REFUSED = (
     "export GIT_ICASE_PATHSPECS=1; git add Private/x",
     "export GIT_ICASE_PATHSPECS=1 && git add Private/x",
     "GIT_ICASE_PATHSPECS=1 git add Private/x",
@@ -474,11 +473,22 @@ A3_RULE_ROWS = (
     ("P10", "eval export GIT_ICASE_PATHSPECS=1; git add NOTES/a.md"),
     ("P10", "set -a; printf -v GIT_ICASE_PATHSPECS 1; git add NOTES/a.md"),
     ("P10", "set -a; : ${GIT_ICASE_PATHSPECS:=1}; git add NOTES/a.md"),
+    # fix round 3 (G1 refined): a bare delimiter whose body bash may expand is not plainly simple.
+    *(
+        ("P11", head + "".join(f"\n{tab}{line}" for line in (body, "EOF")))
+        for head, tab in (
+            ("git commit -F - <<EOF", ""),
+            ("cat <<EOF | git commit -F -", ""),
+            ("git commit --file=- <<-EOF", "\t"),
+        )
+        for body in (
+            "fix :i: $(git add ':(icase)NOTES/a.md')",
+            "fix :i: `git add ':(icase)NOTES/a.md'`",
+            "fix :i: $GIT_X",
+            "fix :i: \\x",
+        )
+    ),
     # fix round 3 (G1, G3): forms the earlier rounds admitted that are not plainly simple.
-    ("P11", "git commit -F - <<EOF\nfix :i: spelling\nEOF"),
-    ("P11", "git commit --file=- <<-EOF\n\tfix :i: spelling\n\tEOF"),
-    ("P11", "cat <<EOF | git commit -F -\nfix :i: spelling\nEOF"),
-    ("P11", "cat <<EOF | git commit --file=-\nfix :(icase) spelling\nEOF"),
     ("P11", "git commit -F - <<\\EOF\nfix :i: $(git add ':(icase)NOTES/a.md')\nEOF"),
     ("P11", "git log -- ':(icase)NOTES' $(git add NOTES/a.md)"),
     ("P11", "git commit -m 'fix :(icase) spelling' $(true)"),
@@ -527,7 +537,7 @@ A3_RULE_ROWS = (
             "(cat <<'E'\nx\nE\n)",
             "{ cat <<'E'\nx\nE\n}",
             "echo $(cat <<'E'\nx\nE\n)",
-            "cat <<E\nx\nE",
+            "cat <<E\n\\x\nE",
             'cat <<"E\\OF"\nx\nE\\OF',
             "cat <<'E'O\nx\nEO",
             "cat <<E''\nx\nE",
@@ -558,6 +568,10 @@ A3_ADMITTED = (
     "git commit -F - <<'EOF'\nfix :i: spelling\nEOF",
     "cat <<E\ndon't\nE\ngit log -- ':(icase)NOTES'",
     'export "PATH"=/x; git add NOTES/a.md',
+    # fix round 3 (G1 refined): a bare plain delimiter with a body bash leaves literal.
+    "git commit --file=- <<-EOF\n\tfix :i: spelling\n\tEOF",
+    "cat <<EOF | git commit -F -\nfix :i: spelling\nEOF",
+    "cat <<EOF | git commit --file=-\nfix :(icase) spelling\nEOF",
     # fix round 3 (G2, G3): quoted plain delimiters, a piped message, and an unset alone.
     "cat <<'E' | git commit -F -\nfix :i: spelling\nE",
     'cat <<"E" | git commit --file=-\nfix :(icase) spelling\nE',
