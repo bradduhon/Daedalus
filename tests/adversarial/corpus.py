@@ -482,6 +482,11 @@ A3_RULE_ROWS = (
     ("P11", "nice -n 1 . ./f; git log -- ':(icase)NOTES'"),
     ("P11", "{ . ./f; }; git log -- ':(icase)NOTES'"),
     ("P11", "(. ./f); git log -- ':(icase)NOTES'"),
+    # fix round 5 (R1): . or source past a leading redirection.
+    ("P11", "2>/dev/null . ./f; git log -- ':(icase)NOTES'"),
+    ("P11", "</dev/null . ./f; git log -- ':(icase)NOTES'"),
+    ("P11", ">x source ./f; git log -- ':(icase)NOTES'"),
+    ("P11", "A=1 2>/dev/null . ./f; git log -- ':(icase)NOTES'"),
     ("P11", "trap \"git add ':(icase)NOTES/a.md'\" EXIT"),
     ("P11", "command_not_found_handle() { git add ':(icase)NOTES/a.md'; }; gti"),
     # fix round 3 (G1 refined): a bare delimiter whose body bash may expand is not plainly simple.
@@ -591,6 +596,11 @@ A3_ADMITTED = (
     "unset GIT_ICASE_PATHSPECS; git add NOTES/a.md",
     "unset GIT_ICASE_PATHSPECS\ngit add NOTES/a.md",
     "git commit -m 'fix :i: spelling' -- src/a.md\ngit log -- ':(icase)NOTES'",
+    # fix round 5 (R3): an expansion beside a judged word that is no git subcommand.
+    'grep -n commit "$F"',
+    'ls "$D"/stage',
+    'git log --grep add -n "$N"',
+    'git stash list | head -n "$N"',
 )
 # issue 121 (unit A3 fix round 2): an appending or array-element prefix is an env assignment.
 A3_APPEND_ENV = (

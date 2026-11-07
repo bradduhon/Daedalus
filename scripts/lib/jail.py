@@ -3473,7 +3473,37 @@ def _simple_code(command: str) -> str | None:
     joined = "".join(code)
     if _NOT_SIMPLE_WORD.search(_normalised(joined)):
         return None
-    return None if any(_sources(joined[a:b]) for a, b in segment_spans(joined)) else joined
+    if any(_sources(joined[a:b]) for a, b in segment_spans(joined)):
+        return None
+    heads = _heads(joined)
+    return None if any(h is None or h[0] in {".", "source"} for h in heads) else joined
+
+
+def _heads(code: str) -> list[list[str] | None]:
+    # issue 121 (F1 R1, F2 R3): per segment, the command word and its operands past redirections,
+    # assignments, control words and wrappers, or None when opaque; reuses _command_at.
+    out: list[list[str] | None] = []
+    for seg in _shell_scan(code):
+        skip = {i for i, w in enumerate(seg.words) if w.startswith(_REDIRECT)}
+        clean = [_clean(w) for w in seg.words]
+        at = _command_at(clean, skip)
+        if at == _OPAQUE:
+            out.append(None)
+        elif at is not None:
+            out.append([w for i, w in enumerate(clean) if i >= at and i not in skip])
+    return out
+
+
+def _judged_heads(code: str) -> bool:
+    # issue 121 (F2 R3): some segment's command word is git and its subcommand a judged one.
+    for head in _heads(code):
+        if head is None:
+            return True
+        if command_family(head[0]) == "git":
+            sub, rest, _ = _git_split(["git", *head[1:]])
+            if sub is not None and _judged_git(sub, rest):
+                return True
+    return False
 
 
 def _plainly_simple(command: str) -> bool:
@@ -3508,14 +3538,16 @@ def _built_head(raw: str) -> bool:
 
 
 def _expansion_unseen(command: str) -> bool:
-    # issue 121 (F2): an unquoted expansion with a judged git word or a built command or git
-    # subcommand word; a text not plainly simple counts any $, backtick or brace list.
+    # issue 121 (F2, R3): an unquoted expansion with a judged git subcommand or a built command
+    # or git subcommand word; a text not plainly simple counts any $, backtick, brace list or word.
     code = _simple_code(command)
     single = command if code is None else _masked(code, True)
     every = command if code is None else _masked(code, False)
     if not (re.search(r"[$`]", single) or re.search(r"[<>]\(", every) or _BRACE_LIST.search(every)):
         return False
-    if _JUDGED_GIT_WORD.search(_normalised(command)):
+    if code is None and _JUDGED_GIT_WORD.search(_normalised(command)):
+        return True
+    if code is not None and _judged_heads(code):
         return True
     text = command if code is None else code
     return any(_built_head(text[a:b]) for a, b in segment_spans(text))
