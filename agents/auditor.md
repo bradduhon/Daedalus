@@ -186,7 +186,9 @@ broken, not the one case. The test asserts it at every enforcement point that ho
    A test on Terraform files puts `<plugin root>/scripts` on `sys.path` and imports
    `lib.hcl_reader`, the built-in Terraform reader (0212): `parse` for blocks and
    `policy_statements` for IAM policy document statements. Never extract HCL blocks with a
-   regex.
+   regex. List fields hold only literal strings; references, calls and `${}` templates sit in
+   the `unresolved_` fields. Before it judges actions or resources, the test calls
+   `require_literal` on each statement, or fails when `has_unresolved` is true.
 2. **Run it in the reply that files it**:
    `python3 -m pytest <test file> -q -p no:cacheprovider --rootdir <audit worktree>`, with an
    absolute path or node id under the round folder, and paste the failing line. It fails on
