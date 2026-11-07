@@ -30,6 +30,8 @@ RETIRED_ROUND_BUDGET = "audit_round_budget"
 AUDIT_RETENTION_FLOOR_DAYS = 90
 LEDGER_FORMATS = ("markdown-table-row", "heading-entry")
 LEDGER_FIELDS = ("path", "format", "id_scheme", "sequence_source")
+# issue 186: the ledger block's optional keys; absent or null reads as not declared.
+LEDGER_OPTIONAL = ("branch",)
 PACKS_DIR = Path(__file__).resolve().parents[2] / "packs"
 _PACK_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 
@@ -44,6 +46,7 @@ class LedgerDecl:
     format: str
     id_scheme: str
     sequence_source: str
+    branch: str | None = None
 
 
 @dataclass(frozen=True)
@@ -268,6 +271,25 @@ def _coder_models(raw: dict[str, object]) -> dict[str, str]:
     return out
 
 
+def ledger_branch(block: dict[str, object], path: str, where: str) -> str | None:
+    # issue 186: one reader for both files; a run branches the Charter, so no pin under it.
+    value = block.get("branch")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.isprintable() or value.split() != [value]:
+        raise ConfigError(
+            f"{where} ledger.branch must be a branch name with no spaces (got {value!r}). "
+            "Next: set ledger.branch to a branch such as main, or remove it."
+        )
+    if "<charter_root>" in path:
+        raise ConfigError(
+            f"{where} sets ledger.branch beside a ledger path under <charter_root>. A run "
+            "branches the Charter repository to daedalus/<train-id>, so every append would be "
+            "refused. Next: remove ledger.branch, or name a ledger outside <charter_root>."
+        )
+    return value
+
+
 def _ledger(raw: object) -> LedgerDecl:
     if not isinstance(raw, dict):
         raise ConfigError(
@@ -284,7 +306,8 @@ def _ledger(raw: object) -> LedgerDecl:
             f"config.json ledger.format must be one of {LEDGER_FORMATS}. "
             "Next: pick the one matching your ledger file."
         )
-    return LedgerDecl(Path(path), fmt, id_scheme, sequence_source)
+    branch = ledger_branch(raw, path, "config.json")
+    return LedgerDecl(Path(path), fmt, id_scheme, sequence_source, branch)
 
 
 def _policy(raw: object) -> PolicyDecl:

@@ -164,6 +164,11 @@ The jail passes these for the verifier:
 - One test run: `python3 -m pytest <absolute paths under the unit worktree> -q`, with
   `-p no:cacheprovider`, `--rootdir <unit worktree>` and `-k <expr>` as the only other options.
   It needs an active train and never reads the audit worktree.
+  A test on Terraform files imports `lib.hcl_reader` from `<plugin root>/scripts`, the
+  built-in Terraform reader (0212). Never extract HCL blocks with a regex; a test the diff
+  adds that does is a `code` refutation. Before it judges actions or resources, such a test
+  calls `require_literal` on each statement, or fails when `has_unresolved` is true; one
+  that judges them without either is a `code` refutation too.
 - Pipes between commands that each pass, and the `git show` to `sed -n` pipe above.
 - One leading `cd <absolute path> &&` before reads, when no git command or test run follows it.
 

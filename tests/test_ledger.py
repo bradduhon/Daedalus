@@ -168,10 +168,22 @@ def test_second_table_does_not_change_sequence(tmp_path: Path) -> None:
     assert read_sequence(led) == 2
 
 
-def test_table_rows_stop_at_first_non_pipe_line(tmp_path: Path) -> None:
-    text = "| Id | Date |\n|---|---|\n| 0003-A | d |\n\n| 0099-B | d |\n"
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("| Id | Date |\n|---|---|\n| 0003-A | d |\n\n| 0099-B | d |\n", 3),
+        # issue 186: a short Id index above the main log; the log's highest id is the sequence.
+        (
+            "| Id | Name |\n|---|---|\n| 0001-A | first |\n\n"
+            "| Id | Date |\n|---|---|\n| 0001-A | d |\n| 0002-A | d |\n| 0009-A | d |\n",
+            9,
+        ),
+    ],
+)
+def test_table_rows_stop_at_first_non_pipe_line(tmp_path: Path, text: str, expected: int) -> None:
     (tmp_path / "d.md").write_text(text, encoding="utf-8")
-    assert read_sequence(_led(tmp_path / "d.md", "markdown-table-row", "{seq}", "last-row-id")) == 3
+    led = _led(tmp_path / "d.md", "markdown-table-row", "{seq}", "last-row-id")
+    assert read_sequence(led) == expected
 
 
 @pytest.mark.parametrize("header", ["|Id|Date|", "| ID | Date |"])
@@ -218,12 +230,38 @@ def test_bad_id_scheme_raises_ledger_error(tmp_path: Path, scheme: str) -> None:
             "id_scheme": "{seq}",
             "sequence_source": "frontmatter:",
         },
+        # issue 186: a branch pin beside <charter_root> is refused in the manifest as in the config.
+        {
+            "path": "<charter_root>/x.md",
+            "format": "heading-entry",
+            "id_scheme": "{seq}",
+            "sequence_source": "last-row-id",
+            "branch": "main",
+        },
+        {
+            "path": "x.md",
+            "format": "heading-entry",
+            "id_scheme": "{seq}",
+            "sequence_source": "last-row-id",
+            "branch": "two words",
+        },
     ],
 )
 def test_malformed_manifest_block_raises(repo: Path, ledger: object) -> None:
     _write_manifest(repo, ledger)
     with pytest.raises(LedgerError, match="Next:"):
         resolve_ledger(str(repo), Config())
+
+
+@pytest.mark.parametrize(("extra", "expected"), [({}, None), ({"branch": "main"}, "main")])
+def test_manifest_ledger_branch_is_read(
+    repo: Path, extra: dict[str, str], expected: str | None
+) -> None:
+    # issue 186: the manifest block carries the optional branch through to the resolved ledger.
+    block = {"path": "x.md", "format": "heading-entry", "id_scheme": "{seq}"}
+    _write_manifest(repo, {**block, "sequence_source": "last-row-id", **extra})
+    led = resolve_ledger(str(repo), Config())
+    assert led is not None and led.branch == expected
 
 
 def test_invalid_manifest_json_raises(repo: Path) -> None:

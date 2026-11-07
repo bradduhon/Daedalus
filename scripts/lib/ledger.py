@@ -9,7 +9,14 @@ from pathlib import Path
 
 from lib.agent_files import FRONTMATTER_KEY, parse_frontmatter
 from lib.audit import project_root
-from lib.config import LEDGER_FIELDS, LEDGER_FORMATS, Config, LedgerDecl
+from lib.config import (
+    LEDGER_FIELDS,
+    LEDGER_FORMATS,
+    Config,
+    ConfigError,
+    LedgerDecl,
+    ledger_branch,
+)
 from lib.manifest import MANIFEST_NAME, ManifestError, read_raw
 
 # 0004: convention probe order, tried under repo_root then charter_root.
@@ -48,6 +55,7 @@ class ResolvedLedger:
     id_scheme: str
     sequence_source: str
     origin: str
+    branch: str | None = None
 
 
 def _resolve_path(raw: str, repo_root: Path, charter_root: Path | None) -> Path:
@@ -81,7 +89,11 @@ def _manifest_decl(repo_root: Path) -> LedgerDecl | None:
             "Next: declare all four ledger fields in the manifest."
         )
     path, format_, id_scheme, sequence_source = strings
-    return LedgerDecl(Path(path), format_, id_scheme, sequence_source)
+    try:
+        branch = ledger_branch(block, path, str(target)) if isinstance(block, dict) else None
+    except ConfigError as exc:
+        raise LedgerError(str(exc)) from exc
+    return LedgerDecl(Path(path), format_, id_scheme, sequence_source, branch)
 
 
 def _validate(decl: LedgerDecl, where: str) -> None:
@@ -112,37 +124,66 @@ def _id_column(lines: list[str], i: int) -> int | None:
     return cells.index("id") if "id" in cells else None
 
 
-def id_table_span(lines: list[str]) -> tuple[int, int, int] | None:
-    # 0004: (header index, Id column, index past the table's last pipe line).
-    for i in range(len(lines)):
+Span = tuple[int, int, int]
+
+
+def id_table_spans(lines: list[str]) -> list[Span]:
+    # 0004, issue 186: per Id table, (header index, Id column, index past its last pipe line).
+    out: list[Span] = []
+    i = 0
+    while i < len(lines):
         column = _id_column(lines, i)
         if column is None:
+            i += 1
             continue
         end = i + 2
         while end < len(lines) and lines[end].startswith("|"):
             end += 1
-        return i, column, end
-    return None
+        out.append((i, column, end))
+        i = end
+    return out
+
+
+def id_table_span(lines: list[str]) -> Span | None:
+    spans = id_table_spans(lines)
+    return spans[0] if spans else None
+
+
+def _span_rows(lines: list[str], span: Span) -> list[str]:
+    start, _column, end = span
+    return [row for row in lines[start + 2 : end] if not _SEPARATOR.match(row)]
 
 
 def _id_table_rows(lines: list[str]) -> list[list[str]]:
-    out: list[list[str]] = []
-    for i in range(len(lines)):
-        if _id_column(lines, i) is None:
-            continue
-        end = i + 2
-        while end < len(lines) and lines[end].startswith("|"):
-            end += 1
-        out.append([row for row in lines[i + 2 : end] if not _SEPARATOR.match(row)])
-    return out
+    return [_span_rows(lines, span) for span in id_table_spans(lines)]
 
 
 def _id_table(lines: list[str]) -> tuple[int, list[str]] | None:
     span = id_table_span(lines)
-    if span is None:
-        return None
-    start, column, end = span
-    return column, [row for row in lines[start + 2 : end] if not _SEPARATOR.match(row)]
+    return None if span is None else (span[1], _span_rows(lines, span))
+
+
+def _span_ids(lines: list[str], span: Span) -> list[int]:
+    column = span[1]
+    out: list[int] = []
+    for row in _span_rows(lines, span):
+        cells = split_row(row)
+        match = _LEADING_INT.match(cells[column].strip()) if column < len(cells) else None
+        if match is not None:
+            out.append(int(match.group()))
+    return out
+
+
+def highest_id_table(lines: list[str]) -> tuple[Span, int] | None:
+    # issue 186: the Id table holding the highest id and that id; more rows wins a tie.
+    best: tuple[Span, int] | None = None
+    rank = (-1, -1)
+    for span in id_table_spans(lines):
+        ids = _span_ids(lines, span)
+        if ids and (max(ids), len(_span_rows(lines, span))) > rank:
+            rank = (max(ids), len(_span_rows(lines, span)))
+            best = (span, rank[0])
+    return best
 
 
 def _infer(path: Path) -> ResolvedLedger | None:
@@ -171,7 +212,9 @@ def resolve_ledger(cwd: str, config: Config) -> ResolvedLedger | None:
         if decl is not None:
             _validate(decl, where)
             path = _resolve_path(str(decl.path), repo_root, charter_root)
-            return ResolvedLedger(path, decl.format, decl.id_scheme, decl.sequence_source, origin)
+            return ResolvedLedger(
+                path, decl.format, decl.id_scheme, decl.sequence_source, origin, decl.branch
+            )
     roots = [repo_root] + ([charter_root] if charter_root is not None else [])
     for root in roots:
         for name in PROBE_NAMES:
@@ -181,16 +224,6 @@ def resolve_ledger(cwd: str, config: Config) -> ResolvedLedger | None:
                 if found is not None:
                     return found
     return None
-
-
-def _leading_int(token: str, ledger: ResolvedLedger) -> int:
-    match = _LEADING_INT.match(token.strip())
-    if match is None:
-        raise LedgerError(
-            f"{ledger.path} last id {token!r} has no leading integer. "
-            "Next: fix the last entry id or declare a frontmatter sequence_source."
-        )
-    return int(match.group())
 
 
 def _last_table_id(lines: list[str], ledger: ResolvedLedger) -> int:
@@ -213,9 +246,13 @@ def _last_table_id(lines: list[str], ledger: ResolvedLedger) -> int:
         raise LedgerError(
             f"{ledger.path} has no table rows. Next: add a header, separator and first row."
         )
-    column, rows = table
-    cells = split_row(rows[-1])
-    return _leading_int(cells[column] if column < len(cells) else "", ledger)
+    found = highest_id_table(lines)
+    if found is None:
+        raise LedgerError(
+            f"{ledger.path} has no Id cell with a leading integer. "
+            "Next: fix the entry ids or declare a frontmatter sequence_source."
+        )
+    return found[1]
 
 
 def _last_heading_id(lines: list[str], ledger: ResolvedLedger) -> int:

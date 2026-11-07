@@ -10,6 +10,7 @@ from lib.agent_models import MODELS
 from lib.config import (
     AUDIT_RETENTION_FLOOR_DAYS,
     LEDGER_FIELDS,
+    LEDGER_OPTIONAL,
     Config,
     LedgerDecl,
     PolicyDecl,
@@ -86,7 +87,7 @@ def manifest_keys() -> tuple[str, ...]:
             keys.append(f"{_MANIFEST_PARENT[item.name]}.{item.name}")
         else:
             keys.append(item.name)
-    keys.extend(f"{MANIFEST_LEDGER}.{key}" for key in LEDGER_FIELDS)
+    keys.extend(f"{MANIFEST_LEDGER}.{key}" for key in (*LEDGER_FIELDS, *LEDGER_OPTIONAL))
     return tuple(keys)
 
 
@@ -188,6 +189,15 @@ _LEDGER_SEQUENCE = KeyRow(
     '`"last-row-id"` or `"frontmatter:<key>"`',
     "Required once the block exists",
     '`"last-row-id"`',
+)
+_LEDGER_BRANCH = KeyRow(
+    "The branch the ledger's checkout must be on; an append or a probe on any other branch, or "
+    "on a detached HEAD, is refused, and Daedalus never switches the branch itself",
+    "string or null",
+    "A branch name with no spaces; refused beside a ledger path holding `<charter_root>`, "
+    "because a run branches that repository as `daedalus/<train-id>`",
+    "Absent or `null`: the ledger is written on whatever branch its checkout is on",
+    '`"main"`',
 )
 _COMMAND_VALUES = (
     "A non-empty command string, a non-empty list of non-empty command strings run one after "
@@ -333,7 +343,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         + f" or `{LITERACY_EXAMPLES[-1]}`, a project-relative path to the profile file without "
         "a leading slash, `..` or glob characters",
         "`null`: the writer keeps the register the public docs already use; decision briefs are "
-        "written and checked at `plain`, and the plan and verify questions are written at `plain`",
+        "written and checked at `standard`, and the plan and verify questions are written at "
+        "`standard`",
         f"`{LITERACY_EXAMPLES[0]}`",
     ),
     (MANIFEST_FILE, "priorities.drivers"): KeyRow(
@@ -524,6 +535,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     (MANIFEST_FILE, "ledger.format"): _LEDGER_FORMAT,
     (MANIFEST_FILE, "ledger.id_scheme"): _LEDGER_ID_SCHEME,
     (MANIFEST_FILE, "ledger.sequence_source"): _LEDGER_SEQUENCE,
+    (MANIFEST_FILE, "ledger.branch"): _LEDGER_BRANCH,
     (CONFIG_FILE, "charter_root"): KeyRow(
         "The repository where your decisions and specs live; the contract and ledger agents "
         "may write there, and a Build Train branches it as `daedalus/<train-id>`",
@@ -566,6 +578,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     (CONFIG_FILE, "ledger.format"): _LEDGER_FORMAT,
     (CONFIG_FILE, "ledger.id_scheme"): _LEDGER_ID_SCHEME,
     (CONFIG_FILE, "ledger.sequence_source"): _LEDGER_SEQUENCE,
+    (CONFIG_FILE, "ledger.branch"): _LEDGER_BRANCH,
     (CONFIG_FILE, "policy.engine"): KeyRow(
         "The tool for a deterministic policy check on infrastructure changes; no train runs it yet",
         "string",

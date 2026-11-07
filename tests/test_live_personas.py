@@ -348,7 +348,7 @@ def test_dependencies_rulebook(live_repo: Path) -> None:
 
 
 def test_terraform_rulebook(live_repo: Path) -> None:
-    # 0132, 0186: TF-0 records the binary check; a missing or refused run is a WARN, never a FAIL.
+    # 0132, 0186, 184: TF-0 records the dispatch's binary line; a refused run is a WARN.
     tf = 'variable "region" {\n  type = string\n}\n'
     (live_repo / "main.tf").write_text(tf, encoding="utf-8")
     _git(live_repo, "add", "main.tf")

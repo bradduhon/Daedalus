@@ -11,6 +11,7 @@ import pytest
 from lib import jail, shell
 from lib.config import Config
 
+from tests.adversarial.corpus import TERRAFORM_INIT_FORM, TERRAFORM_INIT_MISSES
 from tests.conftest import CFG, CWD, REPO_ROOT, TRAIN_BRANCH, write_train_marker
 from tests.hook_chain import (
     decide,
@@ -1018,7 +1019,13 @@ def _wrapped_tf(tmp_path: Path, block: dict[str, object] | None) -> tuple[Path, 
 
 
 @pytest.mark.parametrize(
-    "inner", ["terraform validate", "terraform fmt -check", "terraform -chdir={wt} validate"]
+    "inner",
+    [
+        "terraform validate",
+        "terraform fmt -check",
+        "terraform -chdir={wt} validate",
+        TERRAFORM_INIT_FORM.replace("{module}", "{wt}"),
+    ],
 )
 def test_wrapped_terraform_passes_both_checks_when_validate_is_on(
     tmp_path: Path, inner: str
@@ -1035,11 +1042,26 @@ def test_wrapped_validate_waits_for_its_switch_and_fmt_check_does_not(
     tmp_path: Path, block: dict[str, object] | None
 ) -> None:
     # 0159: the bare form keeps its deviation row; the wrapped form meets the same switch.
-    repo, _, wrap = _wrapped_tf(tmp_path, block)
-    for command in ("terraform validate", f"{wrap} terraform validate"):
+    repo, wt, wrap = _wrapped_tf(tmp_path, block)
+    init = f"{wrap} {TERRAFORM_INIT_FORM.format(module=wt)}"
+    for command in ("terraform validate", f"{wrap} terraform validate", init):
         reason = _tf_call(repo, command)
         assert reason is not None and reason.startswith("features.terraform_validate is not true")
+        assert not decide(_tf_payload(repo, command), Config()).allow, command
     assert _tf_call(repo, f"{wrap} terraform fmt -check") is None
+
+
+@pytest.mark.parametrize("command", [TERRAFORM_INIT_FORM, *TERRAFORM_INIT_MISSES])
+def test_terraform_init_is_refused_bare_and_its_near_misses_wrapped_too(
+    tmp_path: Path, command: str
+) -> None:
+    # 184: the init form runs only wrapped; a near miss of its shape is refused either way.
+    repo, wt, wrap = _wrapped_tf(tmp_path, {"terraform_validate": True})
+    bare = command.format(module=wt)
+    forms = [bare] if command == TERRAFORM_INIT_FORM else [bare, f"{wrap} {bare}"]
+    for form in forms:
+        assert _tf_call(repo, form) == load(HOOK).R_TERRAFORM, form
+        assert not decide(_tf_payload(repo, form), Config()).allow, form
 
 
 @pytest.mark.parametrize(

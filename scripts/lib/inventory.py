@@ -71,6 +71,11 @@ FILES: tuple[Entry, ...] = (
         "a command runs under the kernel wrapper; an empty config home",
     ),
     Entry(
+        f"{_CONFINE}/tf-data/<16 hex>/",
+        "scripts/daedalus_confine.py:_tool_env",
+        "terraform runs under the kernel wrapper; one data folder per -chdir folder, init empties",
+    ),
+    Entry(
         "<repo>/<--out>/map.md",
         "scripts/daedalus_map.py:main",
         "you run daedalus_map.py without --check; the --out folder is created first",
@@ -225,6 +230,21 @@ FILES: tuple[Entry, ...] = (
         f"{_TRAINS}/<train-id>.lock",
         "scripts/lib/train_state.py:locked_file",
         "each train state change",
+    ),
+    Entry(
+        "<cache>/run-bindings/",
+        "scripts/lib/dispatch_binding.py:_run_lock",
+        "the first Daedalus agent dispatch of a session during a run",
+    ),
+    Entry(
+        "<cache>/run-bindings/<session-id>.lock",
+        "scripts/lib/dispatch_binding.py:_run_lock",
+        "each run binding change",
+    ),
+    Entry(
+        "<cache>/run-bindings/<session-id>.json",
+        "scripts/lib/dispatch_binding.py:_save_runs",
+        "each Daedalus agent dispatch during a run, and each agent's first call",
     ),
     Entry(
         f"{_TRAINS}/<train-id>.bindings.lock",

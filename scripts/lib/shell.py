@@ -1390,6 +1390,8 @@ TERRAFORM_MUTATE = frozenset(
     {"apply", "destroy", "import", "state", "taint", "untaint", "force-unlock", "refresh"}
 )
 TERRAFORM_FMT_FLAGS = frozenset({"-check", "-recursive"})
+# 184: the one init form, after -chdir=<folder>; its data folder sits in the wrapper's tmp.
+TERRAFORM_INIT = ("init", "-backend=false", "-input=false", "-lockfile=readonly")
 _JS_TOOLS = frozenset({"vite", "vitest", "tsc", "node"})
 # 0164: package managers that run a project script or a bin, and their exec verbs.
 JS_LAUNCHERS = frozenset({"pnpm", "npm", "npx", "yarn", "bun"})
@@ -1423,9 +1425,11 @@ R_TERRAFORM_MUTATE = (
 )
 R_TERRAFORM_OPERATOR = (
     "a coder runs only `terraform validate` and `terraform fmt -check`, the latter with "
-    "-recursive and one folder inside your unit worktree at most, each under the kernel "
-    "wrapper; init, plan and every other subcommand or fmt form stay with the operator "
-    "(0158, 0164). Next: send one of those two forms, or yield the command to the operator."
+    "-recursive and one folder inside your unit worktree at most, and `terraform "
+    "-chdir=<folder> init -backend=false -input=false -lockfile=readonly` (184), each under the "
+    "kernel wrapper; plan, every other init form and every other subcommand or fmt form stay "
+    "with the operator (0158, 0164). Next: send one of those three forms, or yield the command "
+    "to the operator."
 )
 R_WATCH = (
     "a watch option keeps the command running and never exits (0164). "
@@ -1488,10 +1492,20 @@ def js_inner(tokens: list[str]) -> list[str] | None:
     return tokens or None
 
 
+def terraform_init(args: list[str]) -> bool:
+    # 184: exactly `-chdir=<folder> init -backend=false -input=false -lockfile=readonly`.
+    return (
+        len(args) == 1 + len(TERRAFORM_INIT)
+        and args[0].startswith("-chdir=")
+        and args[0] != "-chdir="
+        and tuple(args[1:]) == TERRAFORM_INIT
+    )
+
+
 def terraform_check(args: list[str]) -> tuple[str, ...] | None:
     # 0158, 0164: the coder's terraform allowlist; the fmt folder operands, or None when refused.
     rest = args[1:] if args[:1] and args[0].startswith("-chdir=") else args
-    if rest == ["validate"]:
+    if rest == ["validate"] or terraform_init(args):
         return ()
     if rest[:1] != ["fmt"]:
         return None

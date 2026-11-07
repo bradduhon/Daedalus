@@ -35,6 +35,7 @@ from lib.train_runner import (  # noqa: E402
     record_ledger,
     record_plan,
     record_verdict,
+    refuted,
     resume,
     start,
     state_lines,
@@ -49,7 +50,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
         "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
-        "brief-check, ask-check, packs, writer-clear, assets. "
+        "brief-check, ask-check, packs, writer-clear, assets, refuted. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -115,6 +116,12 @@ def _parser() -> argparse.ArgumentParser:
     model.add_argument("--override")
     # 0187: --unit picks the coder's model from coder_models and records it on the unit.
     model.add_argument("--unit")
+    # issue 187: one REFUTED verifier reply recorded on the unit the model command reads.
+    refute = sub.add_parser("refuted")
+    refute.add_argument("--repo", type=Path, required=True)
+    refute.add_argument("--unit", required=True)
+    # issue 187: an operator-check Fail counts as one refutation, keyed by its check text.
+    refute.add_argument("--operator-check", dest="operator_check")
     # 0153, 0157 (12.5): a decision brief checked at the manifest literacy level.
     brief = sub.add_parser("brief-check")
     brief.add_argument("--repo", type=Path, required=True)
@@ -340,6 +347,8 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return summary(repo)
     if args.action == "model":
         return _model(repo, args.agent, args.override, args.unit)
+    if args.action == "refuted":
+        return refuted(repo, args.unit, args.operator_check)
     if args.action == "brief-check":
         return _brief_check(repo, args.brief)
     if args.action == "ask-check":

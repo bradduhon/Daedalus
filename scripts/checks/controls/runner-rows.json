@@ -16,7 +16,7 @@
     "premise_test": "tests/test_confine.py::test_a_terraform_state_change_is_refused_bare_and_wrapped"
   },
   "shell.R_TERRAFORM_OPERATOR": {
-    "failure": "0164: a coder runs a terraform subcommand other than validate and fmt -check, such as init, plan or console, which reaches providers, state or the network",
+    "failure": "0164: a coder runs a terraform subcommand other than validate, fmt -check and the one init form `terraform -chdir=<folder> init -backend=false -input=false -lockfile=readonly` (184), such as plan, console or any other init, which reaches providers, state or the network",
     "premise_test": "tests/test_confine.py::test_any_other_terraform_form_is_the_operators"
   },
   "shell.R_WATCH": {

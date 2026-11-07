@@ -23,6 +23,7 @@ from lib.ledger import (  # noqa: E402
     ResolvedLedger,
     body_cell_problem,
     format_entry,
+    highest_id_table,
     id_table_span,
     next_id,
     read_sequence,
@@ -30,6 +31,7 @@ from lib.ledger import (  # noqa: E402
     split_row,
 )
 from lib.project_root import project_root  # noqa: E402
+from lib.repo_root import checkout_git_dir  # noqa: E402
 
 # 22: the --help text, kept below the future import as a plain string.
 DESCRIPTION = (
@@ -37,7 +39,9 @@ DESCRIPTION = (
     "--probe prints the resolved ledger and its sequence. An append checks --expected-seq "
     "against the ledger under the lock and exits 2 on a mismatch, 1 on any other error. "
     "A table row's Supersedes and Ruling cells are checked when the header has the column "
-    "(0090, 0094); rows already in the ledger are never re-checked."
+    "(0090, 0094); rows already in the ledger are never re-checked. The next id follows the "
+    "highest id of any Id table, and an id already in the ledger is refused. A declared "
+    "ledger.branch refuses the append and the probe on any other branch (issue 186)."
 )
 NONE_FOUND = (
     "ledger: none declared and none found. "
@@ -156,7 +160,9 @@ def _table_body(entry: str, header: str, id_scheme: str) -> str:
 
 def _table_text(lines: list[str], ledger: ResolvedLedger, entry: str, ids: _Ids) -> str:
     bare = "".join(lines).splitlines()
-    span = id_table_span(bare)
+    # issue 186: the row joins the table holding the highest id; a lone empty table takes it.
+    found = highest_id_table(bare)
+    span = found[0] if found is not None else id_table_span(bare)
     if span is None:
         raise AppendError(f"{ledger.path} has no Id table. Next: add a header and separator row.")
     start, column, end = span
@@ -219,6 +225,41 @@ def _bump_frontmatter(lines: list[str], key: str, seq: int, ledger: ResolvedLedg
     )
 
 
+def _refuse_duplicate(text: str, new_id: str, ledger: ResolvedLedger) -> None:
+    # issue 186: an id already anywhere in the ledger, as a whole word, is never written again.
+    match = re.search(rf"(?<!\w){re.escape(new_id)}(?!\w)", text)
+    if match is None:
+        return
+    line = text.count("\n", 0, match.start()) + 1
+    raise AppendError(
+        f"{ledger.path} already holds the id {new_id}, so the append would write it twice. "
+        f"Next: fix the numbering where {new_id} first appears, {ledger.path} line {line}, "
+        "from your own shell, then probe and retry."
+    )
+
+
+def _require_branch(ledger: ResolvedLedger) -> None:
+    # issue 186, 0069: HEAD is read from the filesystem, never by git; never switched.
+    if ledger.branch is None:
+        return
+    found = checkout_git_dir(os.path.dirname(os.path.realpath(ledger.path)))
+    checkout, gitdir = found if found is not None else (Path(ledger.path).parent, None)
+    try:
+        head = (gitdir / "HEAD").read_text(encoding="utf-8").strip() if gitdir else ""
+    except (OSError, UnicodeDecodeError):
+        head = ""
+    prefix = "ref: refs/heads/"
+    have = head.removeprefix(prefix) if head.startswith(prefix) else None
+    if have == ledger.branch:
+        return
+    shown = f"branch {have}" if have else "a detached or unreadable HEAD"
+    raise AppendError(
+        f"ledger {ledger.path} is written only on branch {ledger.branch}, and its checkout is "
+        f"on {shown}. Next: switch the checkout {checkout} from {shown} to branch "
+        f"{ledger.branch} from your own shell, then rerun; Daedalus never switches it."
+    )
+
+
 def _require_git(path: str) -> None:
     # M6, 0077: the owner resolves as the jail resolves it; a non-git root is refused.
     if root_info(str(project_root(Path(path))))[1] != "git":
@@ -277,6 +318,9 @@ def _append(args: argparse.Namespace, ledger: ResolvedLedger) -> str:
                 "Next: make the ledger file readable UTF-8 text."
             ) from exc
         bom = "\ufeff" if raw.startswith("\ufeff") else ""
+        _refuse_duplicate(
+            raw.removeprefix(bom), next_id(ledger, ids.seq, ids.repo, ids.type_), ledger
+        )
         lines = raw.removeprefix(bom).splitlines(keepends=True)
         if ledger.format == "markdown-table-row":
             text = _table_text(lines, ledger, entry, ids)
@@ -291,6 +335,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse(sys.argv[1:] if argv is None else argv)
     try:
         ledger = _resolve(args.cwd)
+        if ledger is not None:
+            _require_branch(ledger)
         if args.probe:
             if ledger is None:
                 print(NONE_FOUND)

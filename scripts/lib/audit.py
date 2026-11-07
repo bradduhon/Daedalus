@@ -324,6 +324,7 @@ def build_record(
     event = hook_input.get("hook_event_name")
     tool_name = hook_input.get("tool_name")
     tool_input = hook_input.get("tool_input")
+    payload_cwd, binding = hook_input.get("payload_cwd"), hook_input.get("binding")
     # 8.2: Read logs its path only; mutating tools log full input.
     if tool_name == "Read" and isinstance(tool_input, dict):
         tool_input = {"file_path": tool_input.get("file_path")}
@@ -351,6 +352,9 @@ def build_record(
         "agent_type": hook_input.get("agent_type")
         or (None if hook_input.get("agent_id") else "main"),
         "cwd": hook_input.get("cwd"),
+        # issue 188, AU-3: the host's own cwd when a run binding moved cwd; null otherwise.
+        "payload_cwd": payload_cwd if isinstance(payload_cwd, str) else None,
+        "binding": binding if isinstance(binding, dict) else None,
         "tool_name": tool_name,
         "tool_use_id": hook_input.get("tool_use_id"),
         "tool_input": redact(tool_input),
@@ -498,8 +502,11 @@ def audit_append(
     reason: str | None = None,
     judge_ms: float | None = None,
 ) -> dict[str, object] | None:
+    from lib.project_root import record_cwd
+
     # 0035: no train marker means no train runs here; lexists, as the jail judges a train.
-    cwd = _require_cwd(hook_input.get("cwd"))
+    # 188: root and log follow record_cwd; the record keeps the payload's own cwd.
+    cwd = _require_cwd(record_cwd(hook_input))
     if not os.path.lexists(project_root(cwd) / TRAIN_MARKER):
         return None
     path, lock = _session_file(hook_input.get("session_id"), cwd)
