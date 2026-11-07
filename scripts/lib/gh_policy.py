@@ -320,57 +320,10 @@ def _push_reason(agent: str) -> str | None:
     return f"git push runs only in the Push Train's releaser (0028, 0030). Next: {PUSH_NEXT}."
 
 
-_HEREDOC = re.compile(r"(<<-?[ \t]*(['\"]?)(\w+)\2[^\n]*)\n.*?\n[ \t]*\3[ \t]*(?=\n|$)", re.DOTALL)
-_WRAPPERS = r"(?:env|command|exec|nice|nohup|timeout|time|xargs|sudo)"
-_WRAP_OPTS = r"(?:\s+(?:-\S+(?:\s+[^\s-]\S*)?|\w+=\S*|\d+[smhd]?))*"
-_GH_COMMAND = re.compile(
-    r"(?:^|[;&|(){`\n]|\$\(|\s-exec(?:dir)?)\s*(?:"
-    + _WRAPPERS
-    + _WRAP_OPTS
-    + r"\s+)*(?:[\w./-]*/)?gh(?![\w.-])"
-)
-
-
-def _span_end(text: str, i: int, close: str) -> int:
-    # Index of the unescaped close character after i, or the end of the text.
-    while i < len(text) and text[i] != close:
-        i += 2 if text[i] == "\\" else 1
-    return min(i, len(text))
-
-
-def _unquoted(command: str) -> str:
-    # issue 211: drop heredoc bodies and quoted spans; $(...) and backticks in double quotes run.
-    text = _HEREDOC.sub(r"\1", command)
-    out: list[str] = []
-    i = 0
-    while i < len(text):
-        ch = text[i]
-        if ch == "'":
-            i = _span_end(text, i + 1, "'") + 1
-            out.append("Q")
-        elif ch == '"':
-            end = _span_end(text, i + 1, '"')
-            inner = text[i + 1 : end]
-            runs = re.findall(r"\$\((?:[^()]|\([^()]*\))*\)|`[^`]*`", inner)
-            out.append("Q" + "".join(f";{run};" for run in runs))
-            i = end + 1
-        else:
-            out.append(ch)
-            i += 2 if ch == "\\" else 1
-            if ch == "\\" and i <= len(text):
-                out.append(text[i - 1 : i])
-    return "".join(out)
-
-
-def _gh_in_command_position(command: str) -> bool:
-    return _GH_COMMAND.search(_unquoted(command)) is not None
-
-
 def _fallback_reason(agent: str, command: str) -> str | None:
     if agent == "main" and command.strip() == "gh auth status":
         return None
-    # issue 211: the bare main session is warned only for gh in command position.
-    if _GH_WORD.search(command) and (agent != "main" or _gh_in_command_position(command)):
+    if _GH_WORD.search(command):
         return (
             "this command could not be parsed and names gh, so it is refused (0028). "
             f"Next: run one plain gh command; {CLASS_NEXT['default-deny']}."

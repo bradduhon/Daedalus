@@ -349,6 +349,7 @@ def test_git_push_only_for_the_conductor(train_repo: Path) -> None:
         "cd x && gh pr merge 5",
         "sudo -u root gh pr merge 5",
         "find . -exec gh pr merge 5 ;",
+        'python3 -c \'import subprocess; subprocess.run(["gh", "pr", "merge", "5"])\'',
         "echo `date`; gh pr merge 5",
         "eval 'gh pr merge 5'",
     ],
@@ -365,49 +366,6 @@ def test_regex_fallback_without_segments() -> None:
         assert reason is not None and "Next:" in reason, command
     assert gh_reason("main", "echo `date`", None) is None
     assert gh_reason("releaser", "git push origin x", None) is None
-
-
-QUOTED_GH = [
-    "sed -i 's/a/gh side/' f.txt",
-    'echo "gh issue delete 3" > f.txt',
-    "cat <<'EOF' > f.txt\ngh issue delete 3\nEOF",
-    "cat <<EOF\nrun gh pr merge 5\nEOF",
-    "echo x; echo 'it''s gh' \"gh\"",
-    'python3 -c \'import subprocess; subprocess.run(["gh", "pr", "merge", "5"])\'',
-]
-POSITIONED_GH = [
-    "x; gh issue delete 3",
-    "x && gh issue delete 3",
-    "x | gh issue delete 3",
-    "echo $(gh issue delete 3)",
-    'echo "$(gh issue delete 3)"',
-    "x\n/usr/bin/gh issue delete 3",
-    "env FOO=1 gh issue delete 3",
-    "sudo -u root gh issue delete 3",
-    "timeout 5 ./gh issue delete 3",
-    "cat <<EOF\nx\nEOF\ngh issue delete 3",
-]
-
-
-@pytest.mark.parametrize("command", QUOTED_GH)
-def test_gh_fallback_ignores_quoted_text_for_main(command: str) -> None:
-    # issue 211: unparsed text holding gh only in quotes or a heredoc draws no main warning.
-    assert gh_reason("main", command, None) is None, command
-
-
-@pytest.mark.parametrize("command", POSITIONED_GH)
-def test_gh_fallback_warns_main_for_command_position(command: str) -> None:
-    reason = gh_reason("main", command, None)
-    assert reason is not None and "Next:" in reason, command
-
-
-@pytest.mark.parametrize("agent", ["releaser", "general-purpose"])
-@pytest.mark.parametrize("command", QUOTED_GH)
-def test_gh_fallback_keeps_the_base_text_for_agents(agent: str, command: str) -> None:
-    assert gh_reason(agent, command, None) == (
-        "this command could not be parsed and names gh, so it is refused (0028). "
-        "Next: run one plain gh command; only the Push Train's releaser runs gh."
-    )
 
 
 @pytest.fixture
