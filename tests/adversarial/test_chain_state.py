@@ -89,3 +89,27 @@ def test_the_issue_rows_and_the_admitted_forms(
 def test_a_value_git_reads_as_false_leaves_icase_off(word: str, on: bool) -> None:
     # issue 121: git reads empty, 0, false, no and off as off (probed); an opaque name may be on.
     assert jail._icase_on(word) is on
+
+
+@pytest.mark.parametrize(
+    ("command", "simple"),
+    (
+        ('git log -- ":(icase)x"', True),
+        ("git commit -F - <<'EOF'\nfix :i: don't # read\nEOF\ngit status", True),
+        ('cat <<"E" | git commit -F -\nx\nE', True),
+        ("(cd a && git add b); git log", True),
+        ("git add . && git commit -m 'fix #1'", True),
+        ("git commit -F - <<EOF\nx\nEOF", False),
+        ("git commit -F - <<'EOF' x\ny\nEOF", True),
+        ("git commit -F - <<'E'O\nx\nEO", False),
+        ("cat <<'E' | (git commit -F -\nx\nE\n)", False),
+        ("echo a # b", False),
+        ("echo a; . ./x", False),
+        ("printf -v V x", False),
+        ("echo 'unclosed", False),
+        ("bash -c 'export V=1'", False),
+    ),
+)
+def test_only_a_plainly_simple_text_may_exempt_a_span(command: str, simple: bool) -> None:
+    # issue 121 (G1): the gate before any read or message span is exempted.
+    assert jail._plainly_simple(command) is simple

@@ -50,7 +50,7 @@ SHARED = frozenset(
     | {"READ_ONLY_WRITE_OPTS", "scan_options", "split_options", "expansion_opaque"}
     | {"command_family", "interpreter_code", "shell_tokens", "stdin_script", "INTERPRETERS"}
     | {"_expands", "flag_span", "fed_tokens"}
-    | {"CHAR", "_flag_value", "_raw_words", "_unquoted", "segment_spans"}
+    | {"CHAR", "CLOSE", "_flag_value", "_raw_words", "_unquoted", "segment_spans"}
 )
 
 

@@ -81,6 +81,7 @@ from lib.shell import (
     _SHELLS,
     _VALUE_LONG_NEXT,
     CHAR,
+    CLOSE,
     FLOCK_BODY,
     GIT_PLUMBING_REMOTE,
     INTERPRETERS,
@@ -2906,6 +2907,21 @@ _SETTERS = frozenset({"export", "declare", "typeset", "local", "readonly"})
 _GIT_WORD = re.compile(r"\bgit\b")
 # issue 121: nesting of substitutions and heredoc bodies walked before a text is judged whole.
 _TEXT_DEPTH = 6
+# issue 121 (G1): raw constructs the quote model may misread; any one makes a text not plainly simple.
+_NOT_SIMPLE_RAW = re.compile(r"\$\(|`|\$'|\$\"|<\(|>\(|<<<|\$\{[^}]*=")
+_NOT_SIMPLE_WORD = re.compile(
+    r"(?<![\w.-])(?:eval|source|xargs|read|mapfile|readarray|declare|typeset|local|readonly|set"
+    r"|shopt|export|env|alias|function)(?![\w-])|\bprintf\b[^;&|\n]*\s-[A-Za-z]*v|\(\s*\)"
+    r"|(?:^|[;&|(){}\n])\s*(?:\w+=\S*\s+)*(?:(?:command|builtin|exec|nice|nohup|then|do|else)\s+)*"
+    r"\.\s"
+)
+# issue 121 (G1): the one heredoc a plainly simple text may hold, its delimiter a quoted plain word.
+_SIMPLE_HEREDOC = re.compile(r"<<(-?)[ \t]*(['\"])([A-Za-z_][A-Za-z0-9_]*)\2(?=[\s;&|<>)]|$)")
+# issue 121 (G1, G4): words judged in a text that is not plainly simple, as the base judged it.
+_JUDGED_WORD = re.compile(r"\b(?:add|stage|commit|update-index|stash)\b")
+_SYNTH = re.compile(r"[$`{*?\[]|(?<![\w.-])(?:eval|source|alias|xargs)(?![\w-])|(?:^|[\s;&|(])\.\s")
+_XARGS = re.compile(r"(?<![\w.-])xargs(?![\w.-])")
+_SHELL_WORD = re.compile(r"(?<![\w.-])(?:" + "|".join(sorted(_SHELLS)) + r")(?![\w.-])")
 R_EXCLUDED_UNSEEN = (
     "git stages, commits or stashes paths it reads through {source}, which the jail cannot see, "
     "so they may name a file in an excluded root (issue 121). Next: name each path on the git "
@@ -3051,7 +3067,8 @@ def _icase_on(raw: str) -> bool:
     name, eq, value = _unquoted(raw).partition("=")
     base = re.split(r"[\[+]", name, maxsplit=1)[0]
     if eq and base != name:
-        return base == _ICASE_ENV  # an append or an array element may leave it on.
+        # issue 121: an append or an array element may leave it on.
+        return base == _ICASE_ENV
     if name != _ICASE_ENV:
         return False
     return not eq or _expands(raw[cut + 1 :]) or value.lower() not in _FALSE | {""}
@@ -3355,12 +3372,15 @@ def _text_segment(raw: str) -> _Part:
     shell = shell_tokens(rest)
     code = _shell_code(shell) if shell else None
     body = code if code and code != _FALLBACK else None
+    if rest and not opaque and _unset_only(rest):
+        return _Part(_TextScan(), [], plain, None)
     if rest and not opaque and command_family(rest[0]) == "git":
         sub, args, _ = _git_split(["git", *rest[1:]])
         at = len(words) - len(args) - 1
         literal = sub is not None and not _expands(words[at])
         if literal and not _judged_git(sub, args):
-            return _Part(_TextScan(), [], plain, None)
+            # issue 121 (G3): a read's own naming of the icase variable still counts later.
+            return _Part(_TextScan(), [w for w in plain[: at + 1] if _ICASE_ENV in w], plain, None)
         scan = _TextScan(True, setter, _unseen_paths(plain[:lead], args))
         if literal and sub == "commit":
             return _Part(scan, plain[: at + 1] + split_options("git commit", args)[0], plain, None)
@@ -3374,13 +3394,98 @@ def _spec(match: re.Match[str] | None) -> str | None:
     return None if match is None else match.group(0).strip(" \t'\"=")
 
 
+def _normalised(text: str) -> str:
+    # issue 121 (G3): the text with its quote marks and backslashes removed.
+    return re.sub(r"[\\'\"]", "", text)
+
+
+def _unset_only(tokens: list[str]) -> bool:
+    # issue 121 (G3): a plain unset of variables, whose naming of the icase variable sets nothing.
+    names = tokens[1:]
+    return command_family(tokens[0]) == "unset" and all(t == "-v" or t[:1] != "-" for t in names)
+
+
+def _plainly_simple(command: str) -> bool:
+    # issue 121 (G1): no construct the quote model may misread, and every heredoc at top level
+    # with a quoted plain delimiter; only such a text may exempt a read or a message.
+    if _NOT_SIMPLE_RAW.search(command):
+        return False
+    code: list[str] = []
+    rest, depth = command, 0
+    while rest:
+        pending: list[tuple[bool, str]] = []
+        cut, quote = len(rest), ""
+        for lex in quote_walk(rest):
+            char, at = lex.text, lex.at
+            quote = lex.quote if lex.kind != CLOSE else ""
+            if lex.quote or lex.kind != CHAR:
+                continue
+            start = at == 0 or rest[at - 1] in " \t\n;&|(){}"
+            if char == "#" and start:
+                return False
+            if char == "\n" and pending:
+                cut = at + 1
+                break
+            depth += {"(": 1, ")": -1}.get(char, 0)
+            if char in "{}" and start and rest[at + 1 : at + 2] in {"", " ", "\t", "\n", ";"}:
+                depth += 1 if char == "{" else -1
+            if rest.startswith("<<", at) and rest[at - 1 : at] != "<":
+                doc = _SIMPLE_HEREDOC.match(rest, at)
+                if doc is None or depth != 0:
+                    return False
+                pending.append((doc.group(1) == "-", doc.group(3)))
+        if quote or (pending and depth != 0):
+            return False
+        code.append(rest[:cut])
+        rest = rest[cut:]
+        for dash, word in pending:
+            rest = rest[_heredoc_end(rest, word, dash) :]
+    return not _NOT_SIMPLE_WORD.search(_normalised("".join(code)))
+
+
+def _xargs_runs(text: str) -> bool:
+    # issue 121 (G4): xargs with a judged git subcommand or a shell after it, read conservatively.
+    found = _XARGS.search(text)
+    tail = "" if found is None else text[found.end() :]
+    judged = bool(_JUDGED_WORD.search(tail) or _SYNTH.search(tail))
+    return bool(_SHELL_WORD.search(tail) or (_GIT_WORD.search(tail) and judged))
+
+
+def _base_scan(command: str) -> _TextScan:
+    # issue 97, 121 (G1, G4): a text not plainly simple, judged raw as the base judged it; a word
+    # the shell may build stands for a judged git subcommand.
+    texts = (command, _normalised(command))
+    hit = next((m for t in texts if (m := _ICASE_TEXT.search(t))), None)
+    judged = any(
+        _SYNTH.search(t) or (_GIT_WORD.search(t) and _JUDGED_WORD.search(t)) for t in texts
+    )
+    unseen = "xargs" if any(_xargs_runs(t) for t in texts) else None
+    return _TextScan(judged, _spec(hit), unseen)
+
+
+def _icase_mentions(segment: list[str], tokens: list[str]) -> tuple[bool, bool]:
+    # issue 121 (G3): (the icase variable is named before this segment's git subcommand, it is
+    # named in this segment outside a commit message); a plain unset names it for nothing.
+    if tokens and _unset_only(tokens):
+        return False, False
+    if not tokens or command_family(tokens[0]) != "git" or _expands(tokens[0]):
+        return False, any(_ICASE_ENV in w for w in segment)
+    sub, args, _ = _git_split(["git", *tokens[1:]])
+    head = segment[: len(segment) - len(args)]
+    rest = split_options("git commit", args)[0] if sub == "commit" else args
+    named = any(_ICASE_ENV in w for w in head)
+    return named, named or any(_ICASE_ENV in w for w in rest)
+
+
 def _icase_scan(command: str, depth: int = 0) -> _TextScan:
-    # issue 97, 121 (P10, P11, R6, R7): judge what bash runs; reads and literal messages are
-    # skipped, and every substitution, shell body and non-message heredoc is judged on its own.
+    # issue 97, 121 (P10, P11, R6, R7, G1): judge what bash runs; in a plainly simple text reads
+    # and literal messages are skipped, and every inner command is judged on its own.
     if depth > _TEXT_DEPTH:
         return _TextScan(True, _spec(_ICASE_TEXT.search(_unquoted(command))))
     text, bodies = _heredocs(command)
     kept, words, scan = list(text), [], _TextScan()
+    if not _plainly_simple(command):
+        scan = _base_scan(command)
     for start, end in segment_spans(text):
         part = _text_segment(text[start:end])
         scan = _merge(scan, part.scan)
@@ -3436,11 +3541,17 @@ def excluded_root_reason(
     # 0136, D.5: git staging, commit, update-index and stash, gh and redirects into a root;
     # issue 121 (P10, design 6): an export, set -a or declare -x of the icase variable reaches
     # later segments, and a judged git call fed paths through xargs or stdin is refused.
+    if not _plainly_simple(command):
+        pre = _base_scan(command)
+        if pre.unseen is not None and roots():
+            return R_EXCLUDED_UNSEEN.format(source=pre.unseen)
+        if pre.judged and pre.hit is not None and roots():
+            return R_EXCLUDED_ICASE.format(spec=pre.hit)
     chain = worker_parse(command)
     bases = None if chain is None else chain_bases(chain, cwd, DIR_CHANGE_CMDS)
     if chain is None or bases is None:
         return _excluded_text(command, cwd, roots, writes)
-    exported = allexport = False
+    exported = allexport = mentioned = False
     for raw, typed, segment, base in zip(
         chain.raws, chain.tokens, chain.segments, bases, strict=True
     ):
@@ -3462,14 +3573,16 @@ def excluded_root_reason(
         lead = segment[: len(segment) - len(tokens)]
         prefix = list(zip(lead, own, strict=False))
         icase = unseen = None
+        before, said = _icase_mentions(segment, tokens)
         if git:
-            icase = _icase_git(prefix, tokens, heads, exported)
+            icase = _icase_git(prefix, tokens, heads, exported or mentioned or before)
             unseen = _unseen_git(lead, tokens, heads)
         elif texty:
             scan = _icase_scan(" ".join(own))
-            icase, unseen = _text_spec(scan, exported), scan.unseen
+            icase, unseen = _text_spec(scan, exported or mentioned), scan.unseen
         more, setall = _icase_exports(own, tokens, heads, allexport)
         exported, allexport = exported or more, allexport or setall
+        mentioned = mentioned or said
         reason: str | None = None
         if icase is not None and roots():
             reason = R_EXCLUDED_ICASE.format(spec=icase)
