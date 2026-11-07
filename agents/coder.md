@@ -149,8 +149,9 @@ The jail passes these for a coder:
   `python3` on a script in your worktree. Where the kernel rules line reads OK, each one
   starts with the kernel wrapper.
   The same holds for `node --test`, `pnpm test`, `pnpm run test`, `pnpm exec vitest run`,
-  `pnpm exec tsc --noEmit`, `vitest run`, `tsc --noEmit`, `vite build`, `terraform validate`
-  and `terraform fmt -check`, while a dev server, a watch mode and a package install are never
+  `pnpm exec tsc --noEmit`, `vitest run`, `tsc --noEmit`, `vite build`, `terraform validate`,
+  `terraform fmt -check` and, under the wrapper only, `terraform -chdir=<folder> init
+  -backend=false -input=false -lockfile=readonly` (184), while a dev server, a watch mode and a package install are never
   coder commands (0164). A test that needs a GPU, a browser or a running server is an
   operator check the plan lists, never a test command you write or run (0164).
 - One package install, when `dependencies.installs` in `service-manifest.json` names its

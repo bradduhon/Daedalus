@@ -62,7 +62,7 @@ def _is_test(segment: list[str], base: str, cwd: str) -> bool:
     return tuple(tokens) in declared or tuple(segment) in declared
 
 
-def _terraform_reason(tokens: list[str], base: str, cwd: str) -> str | None:
+def _terraform_reason(tokens: list[str], base: str, cwd: str, wrapped: bool) -> str | None:
     # 0158, 0159: a coder's allowlisted form meets the terraform class's switches, its fmt
     # folder sits in a unit worktree; runner_refusal has refused every other form.
     tokens = shell.strip_wrappers(tokens) or tokens
@@ -74,8 +74,10 @@ def _terraform_reason(tokens: list[str], base: str, cwd: str) -> str | None:
         if not os.path.isabs(cwd) or jail._unit_parts(target, cwd) is None:
             return shell.R_TERRAFORM_OPERATOR
     chdir = [tokens[1]] if tokens[1].startswith("-chdir=") else []
-    form = ["validate"] if "validate" in tokens else ["fmt", "-check"]
-    return command_allowlist.terraform_reason([tokens[0], *chdir, *form], cwd)
+    # 184: the init form meets the same switches, and only wrapped.
+    init = list(shell.TERRAFORM_INIT) if shell.terraform_init(tokens[1:]) else []
+    form = init or (["validate"] if "validate" in tokens else ["fmt", "-check"])
+    return command_allowlist.terraform_reason([tokens[0], *chdir, *form], cwd, wrapped)
 
 
 def _wrapped_reason(segment: list[str], base: str, cwd: str) -> str | None:
@@ -102,7 +104,9 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
         split = shell.confine_split(segment) if shell._base(segment[0]) == shell.CONFINE else None
         inner = split[1] if split else segment
         # 0164: a dev server, watch mode or terraform state change is refused wrapped or bare.
-        refused = shell.runner_refusal(inner) or _terraform_reason(inner, base, cwd)
+        refused = shell.runner_refusal(inner) or _terraform_reason(
+            inner, base, cwd, split is not None
+        )
         if refused:
             return refused
         if shell._base(segment[0]) == shell.CONFINE:

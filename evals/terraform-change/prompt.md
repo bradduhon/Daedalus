@@ -1,6 +1,6 @@
 ---
 name: "terraform-change"
-description: "A Terraform change runs the terraform rulebook; a terraform binary the check cannot find is a warning, never a failure."
+description: "A Terraform change runs the terraform rulebook; a terraform binary missing from the session PATH is a blocking failure, never a warning."
 tags: ["orchestrator", "coder", "verifier", "auditor", "fold-judges", "fold-orchestrator", "model-coder"]
 runs: 2
 max_turns: 150
