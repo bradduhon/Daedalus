@@ -510,6 +510,16 @@ A3_RULE_ROWS = (
     ("P11", "env PATH=. git log -- ':(icase)NOTES'"),
     ("P11", "./git commit -m ':i: fix' -- src/a.md"),
     ("P11", "bin/git log -- ':(icase)NOTES'"),
+    # fix round 9 (U2): PATH or GIT_EXEC_PATH named anywhere outside a message.
+    ("P11", "unset PATH; git log -- ':(icase)NOTES'"),
+    ("P11", "printf -v PATH .; git log -- ':(icase)NOTES'"),
+    ("P11", "read PATH < f; git log -- ':(icase)NOTES'"),
+    ("P11", "mapfile PATH < f; git log -- ':(icase)NOTES'"),
+    ("P11", "declare PATH=.; git log -- ':(icase)NOTES'"),
+    ("P11", "PA''TH=. git log -- ':(icase)NOTES'"),
+    ("P11", "P\\ATH=. git log -- ':(icase)NOTES'"),
+    ("P11", "GIT_EXEC_PATH=. git log -- ':(icase)NOTES'"),
+    ("P11", "echo ${PATH}; git commit -m ':i: fix' -- src/a.md"),
     ("P11", "trap \"git add ':(icase)NOTES/a.md'\" EXIT"),
     ("P11", "command_not_found_handle() { git add ':(icase)NOTES/a.md'; }; gti"),
     # fix round 3 (G1 refined): a bare delimiter whose body bash may expand is not plainly simple.
@@ -635,6 +645,9 @@ A3_ADMITTED = (
     # fix round 8 (U1): git in a trusted bin folder is the system git.
     "/usr/bin/git log -- ':(icase)x'",
     "/usr/bin/git commit -m ':i: fix' -- src/a.md",
+    # fix round 9 (U2): PATH inside a literal message names no folder git runs from.
+    "git commit -m 'fix PATH docs :i:' -- src/a.md",
+    "git commit -F - <<'EOF'\nfix PATH :i: docs\nEOF",
 )
 # issue 121 (unit A3 fix round 2): an appending or array-element prefix is an env assignment.
 A3_APPEND_ENV = (

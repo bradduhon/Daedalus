@@ -2916,12 +2916,14 @@ _NOT_SIMPLE_WORD = re.compile(
     r"|shopt|export|env|alias|function|trap|command_not_found_handle)(?![\w-])"
     r"|\bprintf\b[^;&|\n]*\s-[A-Za-z]*v|\(\s*\)"
 )
-# issue 121 (U1): what may rebind the word git: hash, enable, alias, a PATH change, a function,
-# source or command -p; each also makes a text not plainly simple.
+# issue 121 (U1): what may rebind the word git: hash, enable, alias, a function, source or
+# command -p; each also makes a text not plainly simple (U2 reads PATH apart).
 _FOREIGN_GIT = re.compile(
-    r"(?<![\w.-])(?:hash|enable|alias|unalias|source|function)(?![\w-])|(?<![\w$])PATH\+?="
-    r"|\bexport\s+PATH\b|\(\s*\)|\bcommand(?:\s+-[A-Za-z]+)*?\s+-[A-Za-z]*p"
+    r"(?<![\w.-])(?:hash|enable|alias|unalias|source|function)(?![\w-])"
+    r"|\(\s*\)|\bcommand(?:\s+-[A-Za-z]+)*?\s+-[A-Za-z]*p"
 )
+# issue 121 (U2): the variables that choose which git runs, as whole words.
+_RUNS_GIT_WORD = re.compile(r"(?<![A-Za-z0-9_])(?:PATH|GIT_EXEC_PATH)(?![A-Za-z0-9_])")
 # issue 121 (U1): a word naming git through a folder, read in a text that is not plainly simple.
 _GIT_PATH = re.compile(r"(?<![\w.-])\S*/git(?![\w.-])")
 # issue 121 (F1): words that may stand before a command word; . or source after them sources.
@@ -3568,11 +3570,39 @@ def _built_head(raw: str) -> bool:
     return sub is not None and (unknown or _expands(words[len(words) - len(args) - 1]))
 
 
+def _path_unsafe() -> bool:
+    # issue 121 (U2): the hook's own PATH holds ., an empty or a relative entry, so a bare git
+    # may resolve to a planted file; never a PATH value read from the command.
+    return any(not os.path.isabs(entry) for entry in os.environ.get("PATH", "").split(":"))
+
+
+def _names_path(command: str) -> bool:
+    # issue 121 (U2): PATH or GIT_EXEC_PATH named after quote removal, outside a literal commit
+    # message (-m or -F value, message heredoc body); a text not plainly simple has none.
+    if _simple_code(command) is None:
+        return bool(_RUNS_GIT_WORD.search(_normalised(command)))
+    text, bodies = _heredocs(command)
+    if any(not b.message and _RUNS_GIT_WORD.search(_normalised(b.text)) for b in bodies):
+        return True
+    for start, end in segment_spans(text):
+        words = _raw_words(text[start:end])
+        plain = [_unquoted(w) for w in words]
+        rest = strip_wrappers(plain) or []
+        if rest and command_family(rest[0]) == "git":
+            sub, args, globals_ = _git_split(["git", *rest[1:]])
+            if sub == "commit" and git_globals_known(globals_):
+                at = len(words) - len(args) - 1
+                plain = plain[: at + 1] + split_options("git commit", args)[0]
+        if any(_RUNS_GIT_WORD.search(w) for w in plain):
+            return True
+    return False
+
+
 def _foreign_git(command: str) -> bool:
     # issue 121 (U1): the word git here may not run the system git: a rebinding construct, or a
     # git command word that is no bare git and no path in a trusted bin folder (8.5, _cmd_name).
     text = _normalised(command)
-    if _FOREIGN_GIT.search(text):
+    if _FOREIGN_GIT.search(text) or _path_unsafe() or _names_path(command):
         return True
     code = _simple_code(command)
     if code is None:

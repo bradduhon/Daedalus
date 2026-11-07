@@ -115,3 +115,27 @@ def test_a_value_git_reads_as_false_leaves_icase_off(word: str, on: bool) -> Non
 def test_only_a_plainly_simple_text_may_exempt_a_span(command: str, simple: bool) -> None:
     # issue 121 (G1): the gate before any read or message span is exempted.
     assert jail._plainly_simple(command) is simple
+
+
+@pytest.mark.parametrize(
+    ("path", "refused"),
+    (
+        (".:/usr/bin", True),
+        ("/usr/bin::/bin", True),
+        ("/usr/bin:bin", True),
+        ("/usr/bin:/bin", False),
+        (None, False),
+    ),
+)
+def test_an_inherited_path_with_a_relative_entry_drops_the_read_exemption(
+    repo: Path,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    path: str | None,
+    refused: bool,
+) -> None:
+    # issue 121 (U2): a bare git may resolve through ., an empty or a relative PATH entry.
+    if path is not None:
+        monkeypatch.setenv("PATH", path)
+    command = "git log -- ':(icase)NOTES'"
+    got = jail.excluded_root_reason(command, str(repo), _roots(str(repo / "notes")))
+    assert (got is not None and got.startswith(ICASE)) if refused else got is None, (path, got)
