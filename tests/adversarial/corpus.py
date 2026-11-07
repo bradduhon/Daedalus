@@ -415,6 +415,35 @@ A3_RULE_ROWS = (
     ("P10", "export GIT_ICASE_PATHSPECS=1; bash -c 'git add NOTES/a.md'"),
     ("P10", "git -c core.ignorecase=false --icase-pathspecs add NOTES/a.md"),
     ("P10", "git --icase-pathspecs add NOTES/a.md"),
+    # fix round 1 (R1, design 1): names read after quote and backslash removal, or opaque.
+    ("P10", "(export GIT_ICASE_PATH''SPECS=1; git add NOTES/a.md)"),
+    ("P10", "export G\\IT_ICASE_PATHSPECS=1\ngit add NOTES/a.md"),
+    ("P10", "export GIT_ICASE_PATH''SPECS=1; git add NOTES/a.md"),
+    ("P10", "G\\IT_ICASE_PATHSPECS=1 git add NOTES/a.md"),
+    ("P10", "env ${N}=1 git add NOTES/a.md"),
+    ("P10", "readonly ${N}=1; git add NOTES/a.md"),
+    ("P10", "local -x GIT_ICASE_PATHSPECS=1; git add NOTES/a.md"),
+    # fix round 1 (R2, design 2): option spellings after quote removal, allexport and +=.
+    ("P10", 'declare "-x" GIT_ICASE_PATHSPECS=1; git add NOTES/a.md'),
+    ("P10", "set '-a'; GIT_ICASE_PATHSPECS=1; git add NOTES/a.md"),
+    ("P10", 'set -o "allexport"; GIT_ICASE_PATHSPECS=1; git add NOTES/a.md'),
+    ("P10", "set -ea; GIT_ICASE_PATHSPECS=1; git add NOTES/a.md"),
+    ("P10", "shopt -so allexport; GIT_ICASE_PATHSPECS=1; git add NOTES/a.md"),
+    ("P10", "shopt -s -o allexport; GIT_ICASE_PATHSPECS=1; git add NOTES/a.md"),
+    ("P10", "set -a; GIT_ICASE_PATHSPECS+=1; git add NOTES/a.md"),
+    ("P10", "set -a; declare GIT_ICASE_PATHSPECS=1; git add NOTES/a.md"),
+    ("P10", "export GIT_ICASE_PATHSPECS+=1; git add NOTES/a.md"),
+    # fix round 1 (R6, R7, designs 3 to 5): code bash runs inside a read or a message.
+    ("P11", "git log `git add ':(icase)NOTES/a.md'`"),
+    ("P11", "git log -- \"$(git add ':(icase)NOTES/a.md')\""),
+    ("P11", "git status <(git add ':(icase)NOTES/a.md')"),
+    ("P11", "git commit -F - <<EOF\n$(git add ':(icase)NOTES/a.md')\nEOF"),
+    ("P11", "git commit -F - <<EOF\n`git add ':(icase)NOTES/a.md'`\nEOF"),
+    ("P11", "git commit -m \"$(git add ':(icase)NOTES/a.md')\""),
+    ("P11", "cat <<EOF | git commit -F -\n$(git add ':(icase)NOTES/a.md')\nEOF"),
+    ("P11", "cat <<E\ndon't\nE\ngit log -- \"$(git add ':(icase)NOTES/a.md')\""),
+    ("P11", "git add :\\(icase\\)NOTES/a.md $(true)"),
+    ("P11", "(git add ':(ic''ase)NOTES/a.md')"),
     ("P11", "git add ':(icase)NOTES/a.md'"),
     ("P11", "git commit -m -- ':(icase)NOTES/a.md'"),
     ("P11", "git commit -F -- ':(icase)NOTES/a.md'"),
@@ -463,6 +492,31 @@ A3_ADMITTED = (
     "GIT_ICASE_PATHSPECS= git add NOTES/a.md",
     "declare GIT_ICASE_PATHSPECS=1; git add NOTES/a.md",
     "export PATH=$PATH:/x; git add NOTES/a.md",
+    # fix round 1 (designs 4, 5): literal messages, a piped one included.
+    "cat <<EOF | git commit -F -\nfix :i: spelling\nEOF",
+    "cat <<EOF | git commit --file=-\nfix :(icase) spelling\nEOF",
+    "git commit -m ':(icase) note' $(true)",
+    "git commit -F - <<'EOF'\nfix :i: spelling\nEOF",
+    "git commit -F - <<\\EOF\nfix :i: $(git add ':(icase)NOTES/a.md')\nEOF",
+    "git log -- ':(icase)x' `git status`",
+    "cat <<E\ndon't\nE\ngit log -- ':(icase)NOTES'",
+    'export "PATH"=/x; git add NOTES/a.md',
+)
+# design 2 (unit A3 fix round 1): an appending prefix; the coder's own hooks pass it (finding),
+# so only the excluded roots check the router runs after them refuses it.
+A3_APPEND_PREFIX = "GIT_ICASE_PATHSPECS+=1 git add NOTES/a.md"
+# design 6 (unit A3 fix round 1): a judged git call fed paths the jail cannot see.
+A3_UNSEEN = (
+    "echo ':(icase)NOTES/a.md' | xargs git add",
+    "echo notes/a.md | xargs git add",
+    "xargs -a list git add",
+    "echo x | xargs {git,} add",
+    "git add --pathspec-from-file=list",
+    "git stash push --pathspec-from-file list",
+    "git commit --pathspec-fr=list",
+    "git add --pathspec-from-file=- < list",
+    "git update-index --stdin < list",
+    "git update-index --index-info < list",
 )
 # SC-12 (fix round 1, finding 1): an rg whitelist glob reaches the hidden .claude folder.
 FIX1_RG_GLOBS = (

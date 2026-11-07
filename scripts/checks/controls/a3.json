@@ -1,0 +1,6 @@
+{
+  "jail.R_EXCLUDED_UNSEEN": {
+    "failure": "issue 121: git add, commit, stash or update-index takes its paths through xargs, --pathspec-from-file or --stdin, so a file in an excluded root is staged while the command line names none",
+    "premise_test": "tests/test_excluded_roots.py::test_a_judged_git_call_fed_unseen_paths_is_refused"
+  }
+}

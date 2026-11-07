@@ -21,7 +21,7 @@ from lib.config import (
     root_ignored,
 )
 
-from tests.adversarial.corpus import A3_RULE_ROWS, H1_ICASE
+from tests.adversarial.corpus import A3_APPEND_PREFIX, A3_RULE_ROWS, A3_UNSEEN, H1_ICASE
 from tests.conftest import git, main_warning, write_train_marker
 from tests.hook_chain import load
 
@@ -33,6 +33,7 @@ ICASE_REFUSED = tuple(
             *H1_ICASE,
             "export GIT_ICASE_PATHSPECS=1 && git add NOTES/a.md",
             *(form for _, form in A3_RULE_ROWS),
+            A3_APPEND_PREFIX,
         )
     )
 )
@@ -363,6 +364,23 @@ def test_check_refuses_an_icase_pathspec(
     monkeypatch.setattr(hook_io, "hook_config", lambda cwd: _config(repo))
     got = load("excluded_roots").decide(_payload("daedalus:coder", repo, command), [])
     assert not got.allow and "letter case" in str(got.reason), command
+
+
+@pytest.mark.parametrize("command", A3_UNSEEN)
+def test_a_judged_git_call_fed_unseen_paths_is_refused(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    # issue 121 (design 6): xargs, --pathspec-from-file and --stdin hide the paths, so a declared
+    # root refuses the call for every routed agent and warns the main session; no root, it passes.
+    unseen = jail.R_EXCLUDED_UNSEEN.split("{source}")[0]
+    got = jail.excluded_root_reason(command, str(repo), _roots(str(repo / "notes")))
+    assert got is not None and got.startswith(unseen), (command, got)
+    assert jail.excluded_root_reason(command, str(repo), _roots()) is None, command
+    monkeypatch.setattr(hook_io, "hook_config", lambda cwd: _config(repo))
+    checked = load("excluded_roots").decide(_payload("daedalus:coder", repo, command), [])
+    assert not checked.allow and unseen in str(checked.reason), command
+    warned = jail.decide(_payload("main", repo, command), _config(repo))
+    assert warned.warn and unseen in str(warned.reason), command
 
 
 @pytest.mark.parametrize(
