@@ -89,7 +89,8 @@ R_TERRAFORM_VALIDATE_OFF = (
     "features.terraform_validate is not true in {manifest}, so the terraform class refuses "
     "`terraform validate` and its wrapped init form, which would start the provider programs "
     "under .terraform/providers (0158, 184). Next: judge the files by reading them and mark "
-    "the validate check N/A, or ask the operator to set features.terraform_validate to true in service-manifest.json."
+    "the validate check N/A, or ask the operator to set features.terraform_validate to true "
+    "in service-manifest.json."
 )
 R_TERRAFORM_OFF = (
     "features.terraform_tools is false in {manifest}, so the terraform class runs nothing "
