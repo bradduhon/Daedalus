@@ -296,6 +296,34 @@ A2_PROGRAM_ARGS = (
 )
 # P7 (unit A2): a module or a script run is never an inline body.
 A2_ADMITTED = ("python3 -m pytest -q", "python3 scripts/x.py")
+# fix round 3 (unit A2): a normalised stdin path, and a -- a valued option consumes.
+A2_FIX3_RUN = (
+    ("shell", "bash /dev/./stdin <<< 'touch {repo}/x'"),
+    ("shell", "source /proc/thread-self/fd/0 <<< 'touch {repo}/x'"),
+    ("shell", "sh //dev/stdin <<< 'touch {repo}/x'"),
+    ("shell", "bash ../../../../../../../../dev/stdin <<< 'touch {repo}/x'"),
+    ("inline", "python3 /dev/./stdin"),
+    ("inline", "python3 /proc/thread-self/fd/0 <<< 'import os'"),
+    ("inline", "php -f /dev/stdin <<< 'x'"),
+    ("inline", "python3 -X -- -c 'import os'"),
+    ("inline", "echo 'import os' | node --no-warnings"),
+)
+# fix round 3 (unit A2): the readable forms, run from an unmarked folder into {repo}.
+A2_FIX3_UNMARKED = (
+    "bash /dev/./stdin <<< 'touch {repo}/x'",
+    "source /proc/thread-self/fd/0 <<< 'touch {repo}/x'",
+    "sh //dev/stdin <<< 'touch {repo}/x'",
+    "bash -c -- 'touch {repo}/x'",
+)
+# fix round 3 (unit A2): a script operand, a script named by php -f, or no stdin fed: no body.
+A2_FIX3_ADMITTED = (
+    "node --no-warnings app.js",
+    "node --enable-source-maps dist/app.js",
+    "perl -Mstrict script.pl",
+    "php -f script.php",
+    "python3 -V",
+    "node -v",
+)
 # issue 83 (unit H1): {other}/deep links to {repo}/sub, so deep/.. is {repo} on disk.
 H1_SYMLINK = ("touch {other}/deep/../x", "mkdir {other}/deep/../y", "rm -rf {other}/deep/../x")
 # issue 97 (unit H1): an icase pathspec names notes/a.md under another case; notes is excluded.

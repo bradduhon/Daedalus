@@ -11,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 from lib import dispatch_binding, hook_io, shell
 from lib.audit import _git_env, project_data_dir, project_root
@@ -111,6 +112,7 @@ from lib.shell import (
     command_family,
     env_split_values,
     expansion_opaque,
+    fed_tokens,
     flag_span,
     interpreter_code,
     runs_claude,
@@ -1724,17 +1726,24 @@ def _gitleaks_ok(tokens: list[str]) -> bool:
 
 
 def _shell_words(command: str) -> list[list[str]]:
-    return [words for words, _ in _shell_scan(command)]
+    return [segment.words for segment in _shell_scan(command)]
 
 
-def _shell_scan(command: str) -> list[tuple[list[str], frozenset[int]]]:
+class ScanSegment(NamedTuple):
+    # issue 116: a segment's words, the indices a <<< here-string feeds, and whether a pipe or a
+    # < redirect on fd 0 feeds its stdin (fix round 3).
+    words: list[str]
+    heres: frozenset[int]
+    fed: bool
+
+
+def _shell_scan(command: str) -> list[ScanSegment]:
     # spec 8: single-quoted or escaped $ is literal; quote edges end a variable name.
-    # issue 116: each segment's words with the indices of the words a <<< here-string feeds.
-    segments: list[tuple[list[str], frozenset[int]]] = []
+    segments: list[ScanSegment] = []
     words: list[str] = []
     heres: set[int] = set()
     cur: list[str] = []
-    started, redirect, quote, op, fd_in = False, False, "", "", True
+    started, redirect, quote, op, fd_in, fed = False, False, "", "", True, False
     i, n = 0, len(command)
 
     def end_word() -> None:
@@ -1778,6 +1787,7 @@ def _shell_scan(command: str) -> list[tuple[list[str], frozenset[int]]]:
             end_word()
             if not redirect:
                 op, fd_in = "", fd in {"", "0"} or not fd.isdigit()
+                fed = fed or (c == "<" and fd_in)
             op += c
             redirect = True
             while i + 1 < n and command[i + 1] in "&>":
@@ -1786,16 +1796,19 @@ def _shell_scan(command: str) -> list[tuple[list[str], frozenset[int]]]:
         elif c.isspace() or c in ";&|()`":
             end_word()
             if c not in " \t" and words:
-                segments.append((list(words), frozenset(heres)))
+                segments.append(ScanSegment(list(words), frozenset(heres), fed))
                 words.clear()
                 heres.clear()
+                fed = False
+            if c == "|" and "|" not in command[i - 1 : i] + command[i + 1 : i + 2]:
+                fed = True  # fix round 3: a pipe (never ||) feeds the next segment's stdin.
         else:
             cur.append(c)
             started = True
         i += 1
     end_word()
     if words:
-        segments.append((words, frozenset(heres)))
+        segments.append(ScanSegment(words, frozenset(heres), fed))
     return segments
 
 
@@ -2283,11 +2296,11 @@ def _policy_segments(command: str, depth: int = 0) -> list[list[str]] | None:
     # 0028: see gh and git push through wrappers and shell -c bodies; None means regex fallback.
     if depth > 3:
         return None
-    parsed = tokenize(command)
+    parsed = fed_tokens(command)
     if parsed is None:
         return None
     flat: list[list[str]] = []
-    for segment in parsed:
+    for segment, fed in parsed:
         tokens = strip_wrappers(segment)
         if tokens is None:
             return None
@@ -2306,7 +2319,7 @@ def _policy_segments(command: str, depth: int = 0) -> list[list[str]] | None:
             flat += inner
             continue
         # R-extra-1, P7: only an inline body is unwalkable; a script or -m module is plain.
-        inline = interpreter_code(tokens, stdin=True) is not None
+        inline = interpreter_code(tokens, stdin=True, fed=fed) is not None
         if name not in {"gh", "git"} and (inline or {"gh", "git"} & {_base(t) for t in tokens}):
             return None
         flat.append(tokens)
@@ -2367,7 +2380,9 @@ def _expanding_lead(raws: list[str]) -> int | None:
     return lead if any(_raw_expands(raws[j]) for j in range(start + 1, stop)) else None
 
 
-def _hidden_bodies(words: list[str], heres: list[str] | None = None) -> list[tuple[str, str]]:
+def _hidden_bodies(
+    words: list[str], heres: list[str] | None = None, fed: bool = False
+) -> list[tuple[str, str]]:
     # issue 80, 81, 116: (finding, command string) per env -S value, shell or flock -c body,
     # shell reading stdin (its here-string, else "") and inline interpreter body ("", unwalked).
     found = [(R_ENV_SPLIT, value) for value in env_split_values(words)]
@@ -2393,19 +2408,18 @@ def _hidden_bodies(words: list[str], heres: list[str] | None = None) -> list[tup
             body = (heres[0] if heres else "") if stdin_script(operand) else body
         if body is not None:
             found.append((R_SHELL_BODY, body))
-        if stdin and interpreter_code(words[at:], stdin=True) is not None:
+        if stdin and interpreter_code(words[at:], stdin=True, fed=fed or bool(heres)) is not None:
             found.append((R_INLINE_BODY, ""))
     return found
 
 
-def _segment_bodies(
-    words: list[str], heres: frozenset[int], texts: list[str] | None = None
-) -> list[tuple[str, str]]:
+def _segment_bodies(segment: ScanSegment, texts: list[str] | None = None) -> list[tuple[str, str]]:
     # issue 116: one _shell_scan segment's hidden bodies; texts are its words as expanded.
+    words, heres, fed = segment
     shown = texts if texts is not None else [_clean(w) for w in words]
     keep = [i for i, w in enumerate(words) if not w.startswith(_REDIRECT)]
     plain = [shown[i] for i in keep]
-    found = _hidden_bodies(plain, [_clean(shown[i]) for i in sorted(heres)])
+    found = _hidden_bodies(plain, [_clean(shown[i]) for i in sorted(heres)], fed)
     raws = [words[i] for i in keep]
     lead = _expanding_lead(raws)
     if lead is not None:
@@ -2422,8 +2436,8 @@ def _segment_bodies(
 
 def _hidden_reason(command: str) -> str | None:
     # issue 80, 81, 116: the first hidden body in any segment, refused while a train runs.
-    for words, heres in _shell_scan(command):
-        hidden = [reason for reason, _ in _segment_bodies(words, heres) if reason]
+    for segment in _shell_scan(command):
+        hidden = [reason for reason, _ in _segment_bodies(segment) if reason]
         if hidden:
             return hidden[0]
     return None
@@ -2431,8 +2445,8 @@ def _hidden_reason(command: str) -> str | None:
 
 def _body_past_cap(command: str, depth: int = 0) -> bool:
     # issue 81: a body nested past _BODY_DEPTH is never walked, so the call is judged in a train.
-    for words, heres in _shell_scan(command):
-        for _, body in _segment_bodies(words, heres):
+    for segment in _shell_scan(command):
+        for _, body in _segment_bodies(segment):
             if depth >= _BODY_DEPTH or _body_past_cap(body, depth + 1):
                 return True
     return False
@@ -2441,7 +2455,7 @@ def _body_past_cap(command: str, depth: int = 0) -> bool:
 def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
     # issue 30: redirects, write operands, cd targets and git -C name the repos a command acts on.
     scanned = _shell_scan(command)
-    segments = [words for words, _ in scanned]
+    segments = [segment.words for segment in scanned]
     envs = _bash_env(segments)
     found: list[str] = []
     for k, words in enumerate(segments):
@@ -2477,7 +2491,7 @@ def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
         found += [t for t in (_anchor(p, base or cwd) for p in acts) if t]
         if depth < _BODY_DEPTH:
             # issue 80, 81, 116: a hidden body's own targets name the repo, so a train scopes it.
-            for _, body in _segment_bodies(words, scanned[k][1], texts):
+            for _, body in _segment_bodies(scanned[k], texts):
                 found += _bash_write_dirs(body, base or cwd, depth + 1)
     return found
 

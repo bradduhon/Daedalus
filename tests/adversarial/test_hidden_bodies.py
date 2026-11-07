@@ -14,6 +14,9 @@ from tests.adversarial.corpus import (
     A2_FIX1_RUN,
     A2_FIX1_UNMARKED,
     A2_FIX2_RUN,
+    A2_FIX3_ADMITTED,
+    A2_FIX3_RUN,
+    A2_FIX3_UNMARKED,
     A2_ISSUE_81,
     A2_ISSUE_116,
     A2_PROBE,
@@ -95,7 +98,7 @@ def test_a_body_past_the_depth_cap_is_refused(other_repo: Path, form: str) -> No
     assert_denied(_foreign(other_repo, command), jail.R_SHELL_BODY, shell.R_ENV_SPLIT)
 
 
-@pytest.mark.parametrize("command", A2_ADMITTED + A2_PROGRAM_ARGS)
+@pytest.mark.parametrize("command", A2_ADMITTED + A2_PROGRAM_ARGS + A2_FIX3_ADMITTED)
 def test_program_arguments_after_the_script_are_no_body(marked_repo: Path, command: str) -> None:
     # A2 spec correction: the scan ends at -m <module> or the script; later words are its own.
     assert jail._hidden_reason(command) is None, command
@@ -104,7 +107,7 @@ def test_program_arguments_after_the_script_are_no_body(marked_repo: Path, comma
     assert d.reason not in FINDINGS.values(), (command, d.reason)
 
 
-@pytest.mark.parametrize(("finding", "form"), A2_FIX1_RUN + A2_FIX2_RUN)
+@pytest.mark.parametrize(("finding", "form"), A2_FIX1_RUN + A2_FIX2_RUN + A2_FIX3_RUN)
 def test_a_fix_round_form_is_refused_in_a_run(marked_repo: Path, finding: str, form: str) -> None:
     # fix round 1: fd-prefixed stdin, raw expansions, off-table options, eval and source.
     command = form.format(repo=marked_repo)
@@ -112,7 +115,7 @@ def test_a_fix_round_form_is_refused_in_a_run(marked_repo: Path, finding: str, f
     assert_denied(_foreign(marked_repo, command), FINDINGS[finding])
 
 
-@pytest.mark.parametrize("form", A2_FIX1_UNMARKED)
+@pytest.mark.parametrize("form", A2_FIX1_UNMARKED + A2_FIX3_UNMARKED)
 def test_a_fix_round_form_from_an_unmarked_folder_is_refused(
     marked_repo: Path, other_repo: Path, form: str
 ) -> None:
@@ -122,7 +125,7 @@ def test_a_fix_round_form_from_an_unmarked_folder_is_refused(
     assert_denied(_foreign(other_repo, command), jail.R_SHELL_BODY)
 
 
-@pytest.mark.parametrize("command", A2_ADMITTED)
+@pytest.mark.parametrize("command", A2_ADMITTED + A2_FIX3_ADMITTED)
 def test_a_module_or_script_run_is_no_body(other_repo: Path, command: str) -> None:
     # P7: python3 -m <module> and python3 <script path> are plain segments.
     tokens = shlex.split(command)

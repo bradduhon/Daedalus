@@ -49,7 +49,7 @@ SHARED = frozenset(
     | {"env_split_values", "R_ENV_SPLIT", "FLOCK_BODY"}
     | {"READ_ONLY_WRITE_OPTS", "scan_options", "split_options", "expansion_opaque"}
     | {"command_family", "interpreter_code", "shell_tokens", "stdin_script", "INTERPRETERS"}
-    | {"_expands", "flag_span"}
+    | {"_expands", "flag_span", "fed_tokens"}
 )
 
 

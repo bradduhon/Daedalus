@@ -583,12 +583,22 @@ def test_issue_create_refusal_text_is_the_base_text(train_repo: Path, agent: str
 
 
 # R-extra-1 (unit A2): a script or module run is parsed; an inline body keeps the fallback.
-PARSED_RUNS = ('python3 scripts/t.py choice --chose "cut the gh admission"', "python3 -m pytest -q")
+PARSED_RUNS = (
+    'python3 scripts/t.py choice --chose "cut the gh admission"',
+    "python3 -m pytest -q",
+    # A2 fix round 3: a script operand, php -f, or no stdin fed is no body.
+    "node --no-warnings app.js",
+    "php -f script.php",
+    "python3 -V",
+)
 INLINE_RUNS = (
     "python3 -c \"import os; os.system('gh issue delete 3')\"",
     "echo x | python3",
     "python3 - <<'PY'\nimport os\nos.system('gh issue delete 3')\nPY",
     "python3 /dev/stdin",
+    # A2 fix round 3: a normalised stdin path, and a -- that -X consumes.
+    "python3 /dev/./stdin",
+    "python3 -X -- -c \"import os; os.system('gh issue delete 3')\"",
     # A2 fix round 1, rows 5 and 8: an off-table node option, and tmux, which is no shell.
     "node --title t -e \"require('child_process').execSync('gh issue delete 3')\"",
     "tmux new-session -d gh issue delete 3",
