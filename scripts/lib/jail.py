@@ -2911,10 +2911,11 @@ _TEXT_DEPTH = 6
 _NOT_SIMPLE_RAW = re.compile(r"\$\(|`|\$'|\$\"|<\(|>\(|<<<|\$\{[^}]*=")
 _NOT_SIMPLE_WORD = re.compile(
     r"(?<![\w.-])(?:eval|source|xargs|read|mapfile|readarray|declare|typeset|local|readonly|set"
-    r"|shopt|export|env|alias|function)(?![\w-])|\bprintf\b[^;&|\n]*\s-[A-Za-z]*v|\(\s*\)"
-    r"|(?:^|[;&|(){}\n])\s*(?:\w+=\S*\s+)*(?:(?:command|builtin|exec|nice|nohup|then|do|else)\s+)*"
-    r"\.\s"
+    r"|shopt|export|env|alias|function|trap|command_not_found_handle)(?![\w-])"
+    r"|\bprintf\b[^;&|\n]*\s-[A-Za-z]*v|\(\s*\)"
 )
+# issue 121 (F1): words that may stand before a command word; . or source after them sources.
+_LEADERS = _CONTROL_WORDS | {"time", "(", "-p", "--"}
 # issue 121 (G1): the heredoc a plainly simple text may hold, its delimiter a plain word, quoted
 # or bare; a bare one's body must hold no $, backtick or backslash.
 _SIMPLE_HEREDOC = re.compile(
@@ -2937,6 +2938,11 @@ _EXCLUDED_GIT = frozenset({"add", "stage", "commit", "update-index", "stash"})
 _STASH_READS = frozenset({"list", "show", "pop", "apply", "drop", "clear", "branch", "create"})
 _EXCLUDED_WORDS = re.compile(r"\bgit\b[^;&|]*\b(?:add|stage|commit|update-index|stash)\b|\bgh\b")
 _EXCLUDED_WRITES = re.compile(r">|\btee\b")
+# issue 121 (F2): a judged git subcommand as a whole word, and an unquoted brace list or sequence.
+_JUDGED_GIT_WORD = re.compile(
+    r"(?<![\w-])(?:" + "|".join(sorted(map(re.escape, _EXCLUDED_GIT))) + r")(?![\w-])"
+)
+_BRACE_LIST = re.compile(r"\{[^\s{}]*(?:,|\.\.)[^\s{}]*\}")
 ExcludedRoots = Callable[[], tuple[ExcludedRoot, ...]]
 
 
@@ -3408,11 +3414,28 @@ def _unset_only(tokens: list[str]) -> bool:
     return command_family(tokens[0]) == "unset" and all(t == "-v" or t[:1] != "-" for t in names)
 
 
-def _plainly_simple(command: str) -> bool:
-    # issue 121 (G1): no construct the quote model may misread, and every heredoc at top level
-    # with a plain delimiter and a literal body; only such a text may exempt a read or a message.
+def _sources(raw: str) -> bool:
+    # issue 121 (F1): the command word past control words, time, assignments and wrappers is .
+    # or source, or a wrapper the jail cannot read hides it.
+    words = [_unquoted(w) for w in _raw_words(raw)]
+    while words:
+        if words[0] in _LEADERS or _ASSIGN.match(words[0]):
+            words = words[1:]
+            continue
+        rest = strip_wrappers(words)
+        if rest is None:
+            return True
+        if len(rest) == len(words):
+            return words[0] in {".", "source"}
+        words = rest
+    return False
+
+
+def _simple_code(command: str) -> str | None:
+    # issue 121 (G1): the command outside heredoc bodies when it is plainly simple, else None: no
+    # construct the quote model may misread, every heredoc top level, plain and literal.
     if _NOT_SIMPLE_RAW.search(command):
-        return False
+        return None
     code: list[str] = []
     rest, depth = command, 0
     while rest:
@@ -3425,7 +3448,7 @@ def _plainly_simple(command: str) -> bool:
                 continue
             start = at == 0 or rest[at - 1] in " \t\n;&|(){}"
             if char == "#" and start:
-                return False
+                return None
             if char == "\n" and pending:
                 cut = at + 1
                 break
@@ -3435,19 +3458,67 @@ def _plainly_simple(command: str) -> bool:
             if rest.startswith("<<", at) and rest[at - 1 : at] != "<":
                 doc = _SIMPLE_HEREDOC.match(rest, at)
                 if doc is None or depth != 0:
-                    return False
+                    return None
                 bare = doc.group(4) is not None
                 pending.append((doc.group(1) == "-", doc.group(4) or doc.group(3), bare))
         if quote or (pending and depth != 0):
-            return False
+            return None
         code.append(rest[:cut])
         rest = rest[cut:]
         for dash, word, bare in pending:
             end = _heredoc_end(rest, word, dash)
             if bare and set("$`\\") & set(rest[:end]):
-                return False
+                return None
             rest = rest[end:]
-    return not _NOT_SIMPLE_WORD.search(_normalised("".join(code)))
+    joined = "".join(code)
+    if _NOT_SIMPLE_WORD.search(_normalised(joined)):
+        return None
+    return None if any(_sources(joined[a:b]) for a, b in segment_spans(joined)) else joined
+
+
+def _plainly_simple(command: str) -> bool:
+    return _simple_code(command) is not None
+
+
+def _masked(code: str, double: bool) -> str:
+    # issue 121 (F2): code with escapes and single-quoted text, or every quoted text, as x.
+    return "".join(
+        lex.text
+        if lex.kind == CHAR and (not lex.quote or (double and lex.quote == '"'))
+        else "x" * len(lex.text)
+        for lex in quote_walk(code)
+    )
+
+
+def _built_head(raw: str) -> bool:
+    # issue 121 (F2): the segment's command word, or its git subcommand word, is built by the shell.
+    words = _raw_words(raw)
+    rest = strip_wrappers([_unquoted(w) for w in words])
+    if rest is None:
+        return True
+    lead = len(words) - len(rest)
+    if not rest:
+        return False
+    if _expands(words[lead]):
+        return True
+    if command_family(rest[0]) != "git":
+        return False
+    sub, args, _ = _git_split(["git", *rest[1:]])
+    return sub is not None and _expands(words[len(words) - len(args) - 1])
+
+
+def _expansion_unseen(command: str) -> bool:
+    # issue 121 (F2): an unquoted expansion with a judged git word or a built command or git
+    # subcommand word; a text not plainly simple counts any $, backtick or brace list.
+    code = _simple_code(command)
+    single = command if code is None else _masked(code, True)
+    every = command if code is None else _masked(code, False)
+    if not (re.search(r"[$`]", single) or re.search(r"[<>]\(", every) or _BRACE_LIST.search(every)):
+        return False
+    if _JUDGED_GIT_WORD.search(_normalised(command)):
+        return True
+    text = command if code is None else code
+    return any(_built_head(text[a:b]) for a, b in segment_spans(text))
 
 
 def _xargs_runs(text: str) -> bool:
@@ -3545,6 +3616,14 @@ def _excluded_names(command: str, cwd: str, roots: ExcludedRoots, writes: bool) 
 def excluded_root_reason(
     command: str, cwd: str, roots: ExcludedRoots, writes: bool = True
 ) -> str | None:
+    # 0136, D.5, issue 121 (F2): the checks below, then an expansion beside a judged git word.
+    reason = _excluded_reason(command, cwd, roots, writes)
+    if reason is None and _expansion_unseen(command) and roots():
+        return R_EXCLUDED_UNSEEN.format(source="a shell expansion")
+    return reason
+
+
+def _excluded_reason(command: str, cwd: str, roots: ExcludedRoots, writes: bool) -> str | None:
     # 0136, D.5: git staging, commit, update-index and stash, gh and redirects into a root;
     # issue 121 (P10, design 6): an export, set -a or declare -x of the icase variable reaches
     # later segments, and a judged git call fed paths through xargs or stdin is refused.

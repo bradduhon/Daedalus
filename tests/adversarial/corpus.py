@@ -473,6 +473,17 @@ A3_RULE_ROWS = (
     ("P10", "eval export GIT_ICASE_PATHSPECS=1; git add NOTES/a.md"),
     ("P10", "set -a; printf -v GIT_ICASE_PATHSPECS 1; git add NOTES/a.md"),
     ("P10", "set -a; : ${GIT_ICASE_PATHSPECS:=1}; git add NOTES/a.md"),
+    # fix round 4 (F1, F3): . or source after a control word, a prefix or a wrapper; a trap string.
+    ("P11", "! . ./f; git log -- ':(icase)NOTES'"),
+    ("P11", "time . ./f; git log -- ':(icase)NOTES'"),
+    ("P11", "if false; then :; elif . ./f; then git log -- ':(icase)NOTES'; fi"),
+    ("P11", "while . ./f; do git log -- ':(icase)NOTES'; done"),
+    ("P11", "X=1 . ./f; git log -- ':(icase)NOTES'"),
+    ("P11", "nice -n 1 . ./f; git log -- ':(icase)NOTES'"),
+    ("P11", "{ . ./f; }; git log -- ':(icase)NOTES'"),
+    ("P11", "(. ./f); git log -- ':(icase)NOTES'"),
+    ("P11", "trap \"git add ':(icase)NOTES/a.md'\" EXIT"),
+    ("P11", "command_not_found_handle() { git add ':(icase)NOTES/a.md'; }; gti"),
     # fix round 3 (G1 refined): a bare delimiter whose body bash may expand is not plainly simple.
     *(
         ("P11", head + "".join(f"\n{tab}{line}" for line in (body, "EOF")))
@@ -563,7 +574,7 @@ A3_ADMITTED = (
     "git commit -m GIT_ICASE_PATHSPECS=1; git add NOTES/a.md",
     "git commit -F ':(icase)msg'",
     "export git_icase_pathspecs=1; git add NOTES/a.md",
-    "export PATH=$PATH:/x; git add NOTES/a.md",
+    "export PATH=/x:/y; git add NOTES/a.md",
     # fix round 1 (designs 4, 5): literal messages, a piped one included.
     "git commit -F - <<'EOF'\nfix :i: spelling\nEOF",
     "cat <<E\ndon't\nE\ngit log -- ':(icase)NOTES'",
@@ -607,6 +618,19 @@ A3_UNSEEN = (
     "echo x | /usr/bin/xargs git add",
     "echo x | nice x''args git add",
     "echo x | xargs echo\ngit commit -m ':i: fix' -- src/a.md",
+    # fix round 4 (F2): an unquoted expansion beside a judged git word or a built command word.
+    'G=git; echo notes/a.md | xargs --max-args=1 "$G" add',
+    "X=xar; echo notes/a.md | ${X}gs git add",
+    'S=SPECS; eval "export GIT_ICASE_PATH${S}=1"; git add NOTES/a.md',
+    "S=SPECS; set -a; printf -v GIT_ICASE_PATH$S 1; git add NOTES/a.md",
+    "O=icase-pathspecs; git --$O add NOTES/a.md",
+    'X=ase; git add ":(ic$X)NOTES/a.md"',
+    'git add "$F"',
+    "git add $(cat list)",
+    "git a{d,}d notes/a.md",
+    "git add <(cat list)",
+    'C="git add notes/a.md"; $C',
+    "git $S notes/a.md",
 )
 # SC-12 (fix round 1, finding 1): an rg whitelist glob reaches the hidden .claude folder.
 FIX1_RG_GLOBS = (
