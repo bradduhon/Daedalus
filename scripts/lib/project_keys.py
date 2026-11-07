@@ -333,7 +333,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         + f" or `{LITERACY_EXAMPLES[-1]}`, a project-relative path to the profile file without "
         "a leading slash, `..` or glob characters",
         "`null`: the writer keeps the register the public docs already use; decision briefs are "
-        "written and checked at `plain`, and the plan and verify questions are written at `plain`",
+        "written and checked at `standard`, and the plan and verify questions are written at "
+        "`standard`",
         f"`{LITERACY_EXAMPLES[0]}`",
     ),
     (MANIFEST_FILE, "priorities.drivers"): KeyRow(
