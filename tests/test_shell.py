@@ -50,6 +50,8 @@ SHARED = frozenset(
     | {"READ_ONLY_WRITE_OPTS", "scan_options", "split_options", "expansion_opaque"}
     | {"command_family", "interpreter_code", "shell_tokens", "stdin_script", "INTERPRETERS"}
     | {"_expands", "flag_span", "fed_tokens"}
+    | {"CHAR", "CLOSE", "_flag_value", "_raw_words", "_unquoted", "segment_spans"}
+    | {"git_globals_known", "_TRUSTED_BIN"}
 )
 
 
@@ -197,9 +199,9 @@ def test_quote_walk_marks_spans_escapes_and_quote_marks() -> None:
 
 
 def test_no_quote_loop_outside_the_walker() -> None:
-    # issue 76: the six old loops read quote_walk; none keeps its own quote state.
+    # issue 76, 121: the six old loops read quote_walk (segment_spans now holds _raw_segments').
     tree = _tree("shell.py")
-    users = {"_scan", "_quote_spans", "_raw_segments", "_unquoted_expansion", "_raw_words"}
+    users = {"_scan", "_quote_spans", "segment_spans", "_unquoted_expansion", "_raw_words"}
     users |= {"_unsingled"}
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in users:

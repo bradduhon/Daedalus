@@ -392,16 +392,52 @@ _RESERVED = frozenset(
     | {"until", "for", "case", "esac", "select", "function", "coproc", "[[", "time"}
 )
 _TRUSTED_BIN = frozenset({"/bin", "/usr/bin", "/usr/local/bin", "/sbin", "/usr/sbin"})
-_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_SAFE_ENV = re.compile(r"^(?:CI|NODE_ENV|TZ|LANG|LC_ALL|PYTHONDONTWRITEBYTECODE)=")
+# issue 121: the one assignment word, NAME=, NAME+= or NAME[...]= and NAME[...]+=.
+_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
+_SAFE_ENV = re.compile(r"^(?:CI|NODE_ENV|TZ|LANG|LC_ALL|PYTHONDONTWRITEBYTECODE)\+?=")
 _GIT_CONFIG_DENY = re.compile(
     r"remote\..+\.(?:mirror|push)|push\.default|protocol\.(?:.+\.)?allow|core\.hookspath"
     r"|core\.fsmonitor|core\.pager|core\.sshcommand|diff\.external|alias\..*",
     re.I,
 )
 _GIT_GLOBAL_WITH_ARG = frozenset(
-    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
+    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--attr-source"}
+    | {"--shallow-file"}
 )
+# issue 121 (S2): git's global options that take no separate value, and the =value spellings.
+GIT_GLOBAL_FLAGS = frozenset(
+    {"-p", "--paginate", "-P", "--no-pager", "--bare", "--no-replace-objects", "--no-lazy-fetch"}
+    | {"--no-optional-locks", "--no-advice", "--literal-pathspecs", "--glob-pathspecs"}
+    | {"--no-literal-pathspecs"}
+    | {"--noglob-pathspecs", "--icase-pathspecs", "--exec-path", "--html-path", "--man-path"}
+    | {"--info-path", "-v", "--version", "-h", "--help"}
+)
+GIT_GLOBAL_EQ = (
+    "--git-dir=",
+    "--work-tree=",
+    "--namespace=",
+    "--config-env=",
+    "--attr-source=",
+    "--exec-path=",
+    "--list-cmds=",
+    "--super-prefix=",
+)
+
+
+def git_globals_known(globals_: list[str]) -> bool:
+    # issue 121 (S2): every global option before the subcommand is one git's tables name.
+    i = 0
+    while i < len(globals_):
+        token = globals_[i]
+        if token in _GIT_GLOBAL_WITH_ARG:
+            i += 2
+        elif token in GIT_GLOBAL_FLAGS or token.startswith(GIT_GLOBAL_EQ):
+            i += 1
+        else:
+            return False
+    return True
+
+
 _PUSH_FORBIDDEN = (
     "--force",
     "--force-with-lease",
@@ -1016,17 +1052,18 @@ def _normalize(text: str, placeholder: bool) -> str:
     return text
 
 
+def segment_spans(text: str) -> list[tuple[int, int]]:
+    # issue 121: (start, end) of each raw segment, split at unquoted ; & | newline and parens.
+    cuts = [
+        lex.at
+        for lex in quote_walk(text)
+        if lex.kind == CHAR and not lex.quote and lex.text in ";&|\n\r()"
+    ]
+    return [(a + 1, b) for a, b in itertools.pairwise([-1, *cuts, len(text)])]
+
+
 def _raw_segments(text: str) -> list[str]:
-    segments: list[str] = []
-    buf: list[str] = []
-    for lex in quote_walk(text):
-        if lex.kind == CHAR and not lex.quote and lex.text in ";&|\n\r()":
-            segments.append("".join(buf))
-            buf = []
-        else:
-            buf.append(lex.text)
-    segments.append("".join(buf))
-    return segments
+    return [text[a:b] for a, b in segment_spans(text)]
 
 
 def _word_parts(token: str) -> set[str]:
