@@ -19,6 +19,7 @@ from lib.gh_policy import (
     gh_reason,
     verdict_reason,
 )
+from lib.train_scope import KNOWN_AGENTS
 
 from tests.conftest import REPO_ROOT
 from tests.conftest import git as _git
@@ -525,3 +526,37 @@ def test_bundled_short_flags_are_refused_in_a_train(train_repo: Path, agent: str
     for command in ("gh pr view -cw 3", "gh pr create -dH feat/x --title t --body-file x.md"):
         assert R_GH_BUNDLE in _reason(train_repo, agent, command), (agent, command)
     assert classify(shlex.split("gh pr view -cw 3"))[0] == "default-deny"
+
+
+ISSUE_WRITES = [
+    "gh issue create --body-file f",
+    "gh issue comment 5 --body-file f",
+    "gh issue create --title delete --body-file f",
+    "gh issue create -t 'pr create' -b x -l tracked-risk",
+    "gh issue create -tx --label=bug --repo o/r",
+    "gh issue comment 5 -b 'pr merge' -R o/r",
+]
+
+
+@pytest.mark.parametrize("command", ISSUE_WRITES)
+def test_main_issue_writes_pass_without_a_warning(train_repo: Path, command: str) -> None:
+    # issue 211, P12: the bare main session files and comments on issues with no gh warning.
+    d = decide(_bash(train_repo, "main", command), Config())
+    assert d.allow and not d.warn and not d.reason, d
+    assert classify(shlex.split(command))[0] == "allow"
+
+
+@pytest.mark.parametrize("command", ["gh issue comment 3 --delete-last", "gh issue delete 3"])
+def test_main_issue_delete_keeps_its_warning(train_repo: Path, command: str) -> None:
+    # P12: only create and comment are admitted; the delete class stays.
+    d = decide(_bash(train_repo, "main", command), Config())
+    assert d.warn and "delete command" in str(d.reason), d
+
+
+@pytest.mark.parametrize(
+    "command", ["gh issue create --body-file f", "gh issue comment 5 --body-file f"]
+)
+@pytest.mark.parametrize("agent", sorted(KNOWN_AGENTS - {"main"}) + ["general-purpose"])
+def test_agents_stay_refused_issue_writes(train_repo: Path, agent: str, command: str) -> None:
+    # issue 211: every Daedalus agent and a foreign agent keeps today's refusal.
+    _reason(train_repo, agent, command)

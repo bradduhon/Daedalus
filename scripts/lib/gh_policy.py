@@ -19,7 +19,8 @@ CONDUCTOR_GH = frozenset(
 )
 ALLOWED_0028 = CONDUCTOR_GH | {("auth", "status"), ("issue", "view"), ("issue", "list")}
 # B7: main reads during a train; pull request writes stay with the conductor.
-MAIN_GH = ALLOWED_0028 - {("pr", "create"), ("pr", "edit")}
+MAIN_ISSUE_WRITES = frozenset({("issue", "create"), ("issue", "comment")})  # issue 211, P12
+MAIN_GH = (ALLOWED_0028 - {("pr", "create"), ("pr", "edit")}) | MAIN_ISSUE_WRITES
 R_VERDICT = (
     "{what} needs an approved audit verdict on the tip of {branch}, or on its parent when the "
     "tip only adds the ledger commit; {detail} (spec 4.2, 3.5). "
@@ -95,6 +96,12 @@ _GH_VALUES: dict[tuple[str, ...], tuple[frozenset[str], frozenset[str]]] = {
         | {"--search", "--state", "--mention", "--app"},
     ),
     ("auth", "status"): (frozenset("h"), frozenset({"--hostname"})),
+    ("issue", "create"): (
+        frozenset("tbFalmpTR"),
+        frozenset({"--title", "--body", "--body-file", "--label", "--assignee", "--milestone"})
+        | {"--project", "--template", "--repo"},
+    ),
+    ("issue", "comment"): (frozenset("bFR"), frozenset({"--body", "--body-file", "--repo"})),
 }
 R_GH_BUNDLE = (
     "gh flags the jail cannot pair with their values are refused: a bundle of short flags in "
@@ -255,7 +262,7 @@ def classify(tokens: list[str]) -> tuple[str, str]:
         return "admin", detail
     if (cmd, sub) == ("pr", "edit") and not _body_only_edit(parsed):
         return "default-deny", detail
-    if (cmd, sub) in ALLOWED_0028:
+    if (cmd, sub) in ALLOWED_0028 | MAIN_ISSUE_WRITES:
         return "allow", detail
     return "default-deny", detail
 
