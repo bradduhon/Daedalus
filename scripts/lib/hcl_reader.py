@@ -3,8 +3,8 @@
 # 0212: the stdlib-only Terraform reader finding tests import; regex extraction is banned.
 # parse() returns blocks with attributes as source text; policy_statements() reads the
 # aws_iam_policy_document statements. Bad input raises HclError naming the line, never a part.
-# List fields hold decoded string literals only; every reference, call or template item sits
-# in the matching unresolved_* tuple, and require_literal() raises when any is present.
+# List fields hold decoded string literals only; every reference, call or template, list item
+# or scalar, sits in the matching unresolved_* tuple, and require_literal() raises on any.
 from __future__ import annotations
 
 import bisect
@@ -60,6 +60,7 @@ class Block:
 @dataclass(frozen=True)
 class Principal:
     type: str | None
+    unresolved_type: tuple[str, ...]
     identifiers: tuple[str, ...]
     unresolved_identifiers: tuple[str, ...]
     dynamic: bool
@@ -68,7 +69,9 @@ class Principal:
 @dataclass(frozen=True)
 class Condition:
     test: str | None
+    unresolved_test: tuple[str, ...]
     variable: str | None
+    unresolved_variable: tuple[str, ...]
     values: tuple[str, ...]
     unresolved_values: tuple[str, ...]
     dynamic: bool
@@ -78,7 +81,9 @@ class Condition:
 class Statement:
     document: str
     sid: str | None
+    unresolved_sid: tuple[str, ...]
     effect: str | None
+    unresolved_effect: tuple[str, ...]
     actions: tuple[str, ...]
     unresolved_actions: tuple[str, ...]
     not_actions: tuple[str, ...]
@@ -95,13 +100,24 @@ class Statement:
     def unresolved_fields(self) -> list[tuple[str, tuple[str, ...]]]:
         """Each field holding a non-literal item, with the source text of those items."""
         fields = [
+            ("sid", self.unresolved_sid),
+            ("effect", self.unresolved_effect),
             ("actions", self.unresolved_actions),
             ("not_actions", self.unresolved_not_actions),
             ("resources", self.unresolved_resources),
             ("not_resources", self.unresolved_not_resources),
         ]
-        fields += [("principals.identifiers", p.unresolved_identifiers) for p in self.principals]
-        fields += [("condition.values", c.unresolved_values) for c in self.conditions]
+        for p in self.principals:
+            fields += [
+                ("principals.type", p.unresolved_type),
+                ("principals.identifiers", p.unresolved_identifiers),
+            ]
+        for c in self.conditions:
+            fields += [
+                ("condition.test", c.unresolved_test),
+                ("condition.variable", c.unresolved_variable),
+                ("condition.values", c.unresolved_values),
+            ]
         return [(name, items) for name, items in fields if items]
 
     @property
@@ -523,10 +539,16 @@ def _children(block: Block, kind: str) -> list[tuple[Block, bool]]:
     return found
 
 
-def _optional(block: Block, name: str) -> str | None:
+def _optional(block: Block, name: str) -> tuple[str | None, tuple[str, ...]]:
+    # 0212: (value, ()) for a template-free quoted string; (source text, (source,)) otherwise.
     if name not in block.attributes:
-        return None
-    return scalar_value(block.attributes[name], block.attribute_lines[name])
+        return None, ()
+    source, line = block.attributes[name], block.attribute_lines[name]
+    value = scalar_value(source, line)
+    toks = _value_tokens(source, line)
+    if len(toks) == 1 and toks[0].kind == STRING and not _decode_parts(source, line)[1]:
+        return value, ()
+    return value, (source,)
 
 
 def _listed(block: Block, name: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -540,7 +562,8 @@ def require_literal(statement: Statement) -> Statement:
     if not isinstance(statement, Statement):
         raise HclError(1, f"expected a Statement, found {type(statement).__name__}")
     for field, items in statement.unresolved_fields():
-        label = statement.sid or statement.document
+        label = statement.document if statement.unresolved_sid else statement.sid
+        label = label or statement.document
         raise HclError(
             statement.line, f"{field} of statement {label} is not a literal: {items[0][:40]!r}"
         )
@@ -559,22 +582,25 @@ def policy_statements(blocks: Sequence[Block], name: str | None = None) -> list[
             continue
         for stmt, dynamic in _children(block, "statement"):
             principals = tuple(
-                Principal(_optional(p, "type"), *_listed(p, "identifiers"), dyn)
+                Principal(*_optional(p, "type"), *_listed(p, "identifiers"), dyn)
                 for p, dyn in _children(stmt, "principals")
             )
             conditions = tuple(
                 Condition(
-                    _optional(c, "test"), _optional(c, "variable"), *_listed(c, "values"), dyn
+                    *_optional(c, "test"), *_optional(c, "variable"), *_listed(c, "values"), dyn
                 )
                 for c, dyn in _children(stmt, "condition")
             )
+            sid, effect = _optional(stmt, "sid"), _optional(stmt, "effect")
             actions, not_actions = _listed(stmt, "actions"), _listed(stmt, "not_actions")
             resources, not_resources = _listed(stmt, "resources"), _listed(stmt, "not_resources")
             found.append(
                 Statement(
                     document=block.labels[1],
-                    sid=_optional(stmt, "sid"),
-                    effect=_optional(stmt, "effect"),
+                    sid=sid[0],
+                    unresolved_sid=sid[1],
+                    effect=effect[0],
+                    unresolved_effect=effect[1],
                     actions=actions[0],
                     unresolved_actions=actions[1],
                     not_actions=not_actions[0],

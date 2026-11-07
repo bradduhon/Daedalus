@@ -84,6 +84,7 @@ def test_dynamic_statement_is_returned_and_marked() -> None:
     (cond,) = dyn.conditions
     assert cond.dynamic and cond.unresolved_values == ("condition.value.account",)
     assert cond.variable == "aws:SourceAccount" and cond.test == "condition.value.test"
+    assert (cond.unresolved_variable, cond.unresolved_test) == ((), ("condition.value.test",))
     assert found[2].not_actions == ("iam:*",)
     assert found[2].not_resources == ("arn:aws:iam::*:role/x",)
 
@@ -129,29 +130,42 @@ def test_list_parts_split_literals_from_unresolved(
         assert list_value(source) == literals
 
 
-# 0212: the audit round 1 cases; a non-literal actions value never reads as a narrow list.
+LITERAL_POLICY = (
+    'data "aws_iam_policy_document" "p" {\n  statement {\n    effect = "Allow"\n'
+    '    actions = ["s3:GetObject"]\n    resources = ["arn:aws:s3:::b/*"]\n'
+    '    condition {\n      test = "StringEquals"\n      variable = "aws:SourceAccount"\n'
+    '      values = ["111122223333"]\n    }\n  }\n}\n'
+)
+
+
+# 0212: the audit round 1 actions cases plus scalar references; each one fails closed.
 @pytest.mark.parametrize(
-    ("actions", "unresolved"),
+    ("old", "new", "field", "unresolved"),
     [
-        ("local.all", ("local.all",)),
-        ('concat(["s3:GetObject"], ["*"])', ('concat(["s3:GetObject"], ["*"])',)),
-        ('["s3:Get", local.x]', ("local.x",)),
-        ('["s3:GetObject"]', ()),
+        ('["s3:GetObject"]', "local.all", "actions", ("local.all",)),
+        (
+            '["s3:GetObject"]',
+            'concat(["s3:GetObject"], ["*"])',
+            "actions",
+            ('concat(["s3:GetObject"], ["*"])',),
+        ),
+        ('["s3:GetObject"]', '["s3:Get", local.x]', "actions", ("local.x",)),
+        ('"Allow"', "var.effect", "effect", ("var.effect",)),
+        ('"StringEquals"', "local.op", "condition.test", ("local.op",)),
+        ('"aws:SourceAccount"', '"${var.key}"', "condition.variable", ('"${var.key}"',)),
+        ("", "", None, ()),
     ],
 )
-def test_require_literal_fails_closed_on_unresolved_actions(
-    actions: str, unresolved: tuple[str, ...]
+def test_require_literal_fails_closed_on_unresolved_fields(
+    old: str, new: str, field: str | None, unresolved: tuple[str, ...]
 ) -> None:
-    text = (
-        'data "aws_iam_policy_document" "p" {\n  statement {\n    effect = "Allow"\n'
-        f'    actions = {actions}\n    resources = ["arn:aws:s3:::b/*"]\n  }}\n}}\n'
-    )
+    text = LITERAL_POLICY.replace(old, new, 1) if old else LITERAL_POLICY
     (stmt,) = policy_statements(parse(text))
-    assert stmt.unresolved_actions == unresolved
+    assert stmt.unresolved_fields() == ([(field, unresolved)] if field else [])
     assert set(stmt.actions) <= {"s3:Get", "s3:GetObject"}
-    assert stmt.has_unresolved is bool(unresolved)
-    if unresolved:
-        with pytest.raises(HclError, match="^line 2: actions of statement p is not a literal"):
+    assert stmt.has_unresolved is bool(field)
+    if field:
+        with pytest.raises(HclError, match=f"^line 2: {field} of statement p is not a literal"):
             require_literal(stmt)
     else:
         assert require_literal(stmt) is stmt
