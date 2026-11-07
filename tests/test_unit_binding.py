@@ -251,6 +251,20 @@ def test_released_unit_binds_the_first_coder_not_retired_from_it(
     assert "second refutation" in str(claim(repo_cwd, TRAIN, "a-1", "u1"))
 
 
+def test_released_unit_refuses_a_coder_retired_from_another_unit(
+    repo_cwd: Path, project_data: Path
+) -> None:
+    # issue 187: a coder retired from u2 never takes released u1; a coder retired nowhere does.
+    train_state.save(repo_cwd, TRAIN, {"train_id": TRAIN})
+    for unit, coder in (("u1", "a-1"), ("u2", "a-2")):
+        assert record_dispatch(repo_cwd, TRAIN, unit) is None
+        assert claim(repo_cwd, TRAIN, coder, unit) is None
+        assert release(repo_cwd, TRAIN, unit) is None
+    refused = claim(repo_cwd, TRAIN, "a-2", "u1")
+    assert refused is not None and "second refutation" in refused and "Next:" in refused
+    assert claim(repo_cwd, TRAIN, "a-3", "u1") is None
+
+
 def test_symlinked_bindings_file_fails_closed(
     repo_cwd: Path, project_data: Path, tmp_path: Path
 ) -> None:

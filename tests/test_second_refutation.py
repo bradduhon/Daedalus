@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# issue 187: each REFUTED verifier reply counts once on its unit; the second frees the unit.
+# 0187: each REFUTED verifier reply counts once on its unit; the second frees the unit.
 from __future__ import annotations
 
 from functools import partial
@@ -35,7 +35,7 @@ DIGEST = "[VERDICT: REFUTED] row 1\ncorrected=0\n[VERDICT: REFUTED] row 1\nrepor
 
 
 def _unit_train(repo: Path, plugin: Path) -> tuple[str, Path]:
-    # A main-session run with unit u1 in its worktree, a recorded plan and an audit session.
+    # 0187: a main-session run with unit u1 in its worktree, a recorded plan and an audit session.
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
     _integration(repo)
@@ -52,7 +52,7 @@ def _unit_train(repo: Path, plugin: Path) -> tuple[str, Path]:
 
 
 def _verifier_dispatch(repo: Path, unit: Path) -> None:
-    # The main session's dispatch carries no agent_type; the Unit worktree line opens a window.
+    # 0187: a main-session dispatch has no agent_type; its Unit worktree line opens a window.
     prompt = f"Check every claim.\nUnit worktree: {unit}\n"
     _record(
         repo, tool_name="Agent", tool_input={"subagent_type": "daedalus:verifier", "prompt": prompt}
@@ -75,7 +75,7 @@ def test_two_refutations_in_one_window_escalate_and_free_the_unit(
     _verifier_dispatch(repo, unit)
     _agent_stop(repo, "verifier", REFUTED_REPLY)
     assert train_runner.refuted(repo, "U1").lines == ["refuted U1: 1"]
-    # The warm resume names no worktree; the second reply is a hand-back, then a digest stop.
+    # 0187: the warm resume names no worktree; the second reply is a hand-back, then a digest.
     _record(repo, tool_name="SendMessage", tool_input={"to": "a1", "message": "Check the fix."})
     maker = partial(dict, session_id=SESSION, cwd=str(repo), tool_use_id="toolu_hb")
     append_handback(maker, REFUTED_REPLY, "daedalus:verifier")
@@ -87,8 +87,8 @@ def test_two_refutations_in_one_window_escalate_and_free_the_unit(
     assert second.lines == ["opus", "coder U1: opus (second refutation)"]
     freed = {"agent_id": None, "released": True, "retired": ["agent-sonnet"]}
     assert unit_binding._read(unit_binding.bindings_path(repo, train))[name] == freed
-    # A cold coder dispatch from the main session runs with a warning and records no dispatch,
-    # so the coder's first write binds the still released unit.
+    # 0187: a main-session cold coder dispatch warns and records nothing, so the coder's
+    # first write binds the still released unit.
     prompt = f"The verifier refuted this unit twice.\nWorktree: {unit}\n"
     tool_input = {"description": "unit", "prompt": prompt, "subagent_type": "daedalus:coder"}
     dispatch = {"tool_name": "Agent", "tool_input": tool_input, "cwd": str(repo)}
@@ -132,7 +132,7 @@ def test_a_refuted_verdict_then_an_operator_check_fail_reach_the_escalated_tier(
     _verifier_dispatch(repo, unit)
     _agent_stop(repo, "verifier", REFUTED_REPLY)
     assert train_runner.refuted(repo, "U1").lines == ["refuted U1: 1"]
-    # The fix pass verifies; the operator then fails its check, which has no verifier reply.
+    # 0187: the fix pass verifies; the operator then fails its check, which has no verifier reply.
     verified = _agent_stop(repo, "verifier", VERIFIED_REPLY)["seq"]
     argv = ("refuted", "--repo", str(repo), "--unit", "U1", "--operator-check", "Scene loads")
     for _ in range(2):
