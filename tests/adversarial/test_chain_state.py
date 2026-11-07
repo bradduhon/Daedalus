@@ -98,7 +98,7 @@ def test_a_value_git_reads_as_false_leaves_icase_off(word: str, on: bool) -> Non
         ("git commit -F - <<'EOF'\nfix :i: don't # read\nEOF\ngit status", True),
         ('cat <<"E" | git commit -F -\nx\nE', True),
         ("(cd a && git add b); git log", True),
-        ("git add . && git commit -m 'fix #1'", True),
+        ("git add . && git commit -m 'fix #a'", True),
         ("git commit -F - <<EOF\nx\nEOF", False),
         ("git commit -F - <<'EOF' x\ny\nEOF", True),
         ("git commit -F - <<'E'O\nx\nEO", False),
