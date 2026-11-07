@@ -11,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 from lib import dispatch_binding, hook_io, shell
 from lib.audit import _git_env, project_data_dir, project_root
@@ -57,6 +58,7 @@ from lib.credential_paths import clean as _clean
 from lib.credential_paths import credential_hit as _credential_hit
 from lib.credential_paths import credential_roots as _credential_roots
 from lib.credential_paths import dotglob_on as _dotglob_on
+from lib.credential_paths import expand_braces as _expand_braces
 from lib.credential_paths import expand_word as _expand_word
 from lib.credential_paths import store_rest as _store_rest
 from lib.credential_paths import tilde as _tilde
@@ -79,6 +81,7 @@ from lib.shell import (
     _VALUE_LONG_NEXT,
     FLOCK_BODY,
     GIT_PLUMBING_REMOTE,
+    INTERPRETERS,
     R_CLEAN,
     R_DATA_DIR_GIT,
     R_DEFAULT_BRANCH,
@@ -96,6 +99,7 @@ from lib.shell import (
     _base,
     _cmd_name,
     _command_reason,
+    _expands,
     _git_split,
     _long_matches,
     _names_project_data,
@@ -105,11 +109,17 @@ from lib.shell import (
     _short_flags,
     _under,
     chain_bases,
+    command_family,
     env_split_values,
     expansion_opaque,
+    fed_tokens,
+    flag_span,
+    interpreter_code,
     runs_claude,
     scan_options,
+    shell_tokens,
     split_options,
+    stdin_script,
     strip_wrappers,
     tokenize,
     unwrap,
@@ -852,7 +862,8 @@ R_CREDENTIAL_PARAM = (
     "Next: spell the path out"
 )
 # issue 76: time is not here; its WRAPPER_OPTS row reads its options.
-_CONTROL_WORDS = frozenset({"!", "do", "then", "else", "elif", "while", "until", "if"})
+# A2 fix round 4: a brace group's { and } are read past, so its inner command word is read.
+_CONTROL_WORDS = frozenset({"!", "do", "then", "else", "elif", "while", "until", "if", "{", "}"})
 _BINDERS = frozenset({"read", "mapfile", "readarray", "getopts", "select"})
 # issue 76: _command_at's answer when a wrapper option is off shell.WRAPPER_OPTS.
 _OPAQUE = -1
@@ -1716,18 +1727,40 @@ def _gitleaks_ok(tokens: list[str]) -> bool:
 
 
 def _shell_words(command: str) -> list[list[str]]:
+    return [segment.words for segment in _shell_scan(command)]
+
+
+class ScanSegment(NamedTuple):
+    # issue 116: a segment's words, the indices a <<< here-string feeds, and whether a pipe or a
+    # < redirect on fd 0 feeds its stdin (fix round 3).
+    words: list[str]
+    heres: frozenset[int]
+    fed: bool
+    # fix round 4: every here-string on any fd, and whether a < redirect on fd 0 is attached.
+    strings: frozenset[int] = frozenset()
+    redirected: bool = False
+
+
+def _shell_scan(command: str) -> list[ScanSegment]:
     # spec 8: single-quoted or escaped $ is literal; quote edges end a variable name.
-    segments: list[list[str]] = []
+    segments: list[ScanSegment] = []
     words: list[str] = []
+    heres: set[int] = set()
+    strings: set[int] = set()
     cur: list[str] = []
-    started, redirect, quote = False, False, ""
+    started, redirect, quote, op, fd_in, fed = False, False, "", "", True, False
+    redirected = False
     i, n = 0, len(command)
 
     def end_word() -> None:
-        nonlocal cur, started, redirect
+        nonlocal cur, started, redirect, op
         if cur or started:
+            if redirect and op == "<<<":
+                strings.add(len(words))
+            if redirect and op == "<<<" and fd_in:
+                heres.add(len(words))
             words.append((_REDIRECT if redirect else "") + "".join(cur))
-            redirect = False
+            redirect, op = False, ""
         cur, started = [], False
 
     while i < n:
@@ -1755,22 +1788,39 @@ def _shell_words(command: str) -> list[list[str]]:
             cur.append(_LIT if command[i] == "$" else command[i])
             started = True
         elif c in "<>":
+            fd = "".join(cur) if not redirect else ""
+            if fd.isdigit():
+                # issue 116 (fix round 1, row 1): a digit word glued to < or > is its fd.
+                cur, started = [], False
             end_word()
+            if not redirect:
+                op, fd_in = "", fd in {"", "0"} or not fd.isdigit()
+                redirected = redirected or (c == "<" and fd_in)
+                fed = fed or redirected
+            op += c
             redirect = True
             while i + 1 < n and command[i + 1] in "&>":
                 i += 1
+                op += command[i]
         elif c.isspace() or c in ";&|()`":
             end_word()
             if c not in " \t" and words:
-                segments.append(list(words))
+                segments.append(
+                    ScanSegment(list(words), frozenset(heres), fed, frozenset(strings), redirected)
+                )
                 words.clear()
+                heres.clear()
+                strings.clear()
+                fed = redirected = False
+            if c == "|" and "|" not in command[i - 1 : i] + command[i + 1 : i + 2]:
+                fed = True  # fix round 3: a pipe (never ||) feeds the next segment's stdin.
         else:
             cur.append(c)
             started = True
         i += 1
     end_word()
     if words:
-        segments.append(words)
+        segments.append(ScanSegment(words, frozenset(heres), fed, frozenset(strings), redirected))
     return segments
 
 
@@ -2254,31 +2304,59 @@ def _credential_reason(tool: str, tool_input: dict[str, object], cwd: str) -> st
     return path_reason(tool, tool_input, cwd)
 
 
-def _policy_segments(command: str, depth: int = 0) -> list[list[str]] | None:
+def _chain_folders(segments: list[list[str]], cwd: str | None) -> list[str | None]:
+    # A2 fix round 4: each segment's folder after earlier cd, pushd and popd; None once a move
+    # is opaque. cwd "" knows no folder, so a relative move from it is opaque too.
+    folder = cwd
+    out: list[str | None] = []
+    for words in segments:
+        out.append(folder)
+        plain = [_clean(w) for w in words if not w.startswith(_REDIRECT)]
+        at = _command_at(plain, set())
+        if at is None or at < 0 or _base(plain[at]) not in {"cd", "pushd", "popd"}:
+            continue
+        name = _base(plain[at])
+        args = [w for w in plain[at + 1 :] if w[:1] != "-"]
+        target = args[0] if args and name != "popd" else ""
+        if not target or target[:1] == "~" or _expands(target):
+            folder = None
+        elif os.path.isabs(target) or folder:
+            folder = os.path.normpath(os.path.join(folder or "/", target))
+        else:
+            folder = None
+    return out
+
+
+def _policy_segments(command: str, depth: int = 0, cwd: str | None = "") -> list[list[str]] | None:
     # 0028: see gh and git push through wrappers and shell -c bodies; None means regex fallback.
     if depth > 3:
         return None
-    parsed = tokenize(command)
+    parsed = fed_tokens(command)
     if parsed is None:
         return None
+    folders = _chain_folders([segment for segment, _ in parsed], cwd)
     flat: list[list[str]] = []
-    for segment in parsed:
+    for (segment, fed), folder in zip(parsed, folders, strict=True):
         tokens = strip_wrappers(segment)
         if tokens is None:
             return None
         if not tokens:
             continue
         name = _base(tokens[0])
-        if name in _SHELLS or name == "eval":
-            code = " ".join(tokens[1:]) if name == "eval" else _shell_code(tokens)
-            if code == _FALLBACK:
-                return None
-            inner = _policy_segments(code, depth + 1) if code else []
+        shell = shell_tokens(tokens)
+        if shell is not None or name == "eval":
+            # P6: a -c body is walked; a string read from stdin or hidden by an expansion is not.
+            code = " ".join(tokens[1:]) if shell is None else _shell_code(shell, True, folder)
+            if code is None:
+                continue
+            walk = code and code != _FALLBACK
+            inner = _policy_segments(code, depth + 1, folder) if walk else None
             if inner is None:
                 return None
             flat += inner
             continue
-        inline = name.startswith("python") or name in {"perl", "ruby", "node"}
+        # R-extra-1, P7: only an inline body is unwalkable; a script or -m module is plain.
+        inline = interpreter_code(tokens, stdin=True, fed=fed, base=folder) is not None
         if name not in {"gh", "git"} and (inline or {"gh", "git"} & {_base(t) for t in tokens}):
             return None
         flat.append(tokens)
@@ -2289,7 +2367,7 @@ def _gh_gate(agent: str, cwd: str, command: str) -> str | None:
     # 0035: outside a train, main and unknown agents skip the whole gate, deny classes included.
     if not allowlist_applies(agent, cwd, command):
         return None
-    return gh_reason(agent, command, _policy_segments(command))
+    return gh_reason(agent, command, _policy_segments(command, cwd=cwd))
 
 
 def _train_active(cwd: str) -> bool:
@@ -2300,50 +2378,137 @@ def _train_active(cwd: str) -> bool:
 _TARGET_CAP = 8
 _GIT_DIR_OPTS = ("--git-dir=", "--work-tree=")
 R_SHELL_BODY = (
-    "a shell -c body is one command string the jail does not walk for what it writes "
-    "(issue 81). Next: run the command directly, without bash -c, sh -c or flock -c."
+    "a shell -c body, or a shell command string read from a pipe, stdin, a here-string or a "
+    "heredoc, is one string the jail does not walk for what it writes (issue 81, 116). "
+    "Next: run the command directly, without bash -c, sh -c, flock -c or a shell reading stdin."
+)
+R_INLINE_BODY = (
+    "an inline interpreter body (python -c, perl -e, ruby -e, node -e, php -r, or code read "
+    "from a pipe, - or a here-string) is code the jail cannot walk for what it writes "
+    "(issue 116). Next: save the code as a script file and run it by its path."
 )
 _BODY_DEPTH = 3
 
 
-def _shell_body(words: list[str]) -> str | None:
-    # issue 81: the -c body of a shell; past an unknown long flag, the word after a c flag.
-    code = _shell_code(words)
-    if code != _FALLBACK:
-        return code
-    flags = [k for k, w in enumerate(words) if w[:1] in "-+" and w[1:2] != "-" and "c" in w[1:]]
-    return (words[flags[0] + 1 : flags[0] + 2] or [""])[0] if flags else None
+def _shell_body(words: list[str], stdin: bool = False, base: str | None = "") -> str | None:
+    # issue 81, 116: the -c body of a shell; past an off-table option with no -c, unread.
+    code = _shell_code(words, stdin, base)
+    return ("" if stdin else None) if code == _FALLBACK else code
 
 
-def _hidden_bodies(words: list[str]) -> list[tuple[str, str]]:
-    # issue 80, 81: (finding, command string) for each env -S value and shell or flock -c body.
+def _raw_expands(word: str) -> bool:
+    # fix round 1, row 3: A1's _expands on a _shell_scan word, its quoted spans re-quoted.
+    parts = word.replace(_REDIRECT, "").replace(_LIT, "_").split(_CUT)
+    safe = [p.replace('"', "_").replace("'", "_").replace("\\", "_") for p in parts]
+    return _expands("".join(f'"{p}"' if k % 2 else p for k, p in enumerate(safe)))
+
+
+def _expanding_lead(raws: list[str]) -> int | None:
+    # fix round 1, rows 2-3: the command word's index when it expands, or when a shell or
+    # interpreter has one in an option position (flag_span); read raw, never one alternative.
+    clean = [_clean(w) for w in raws]
+    lead = _command_at(clean, set())
+    if lead is None or lead < 0:
+        return None
+    if _raw_expands(raws[lead]):
+        return lead
+    start = lead + 1 if command_family(clean[lead]) == "busybox" else lead
+    stop = start + 1 + flag_span(clean[start:])
+    return lead if any(_raw_expands(raws[j]) for j in range(start + 1, stop)) else None
+
+
+def _hidden_bodies(
+    words: list[str], heres: list[str] | None = None, fed: bool = False, base: str | None = ""
+) -> list[tuple[str, str]]:
+    # issue 80, 81, 116: (finding, command string) per env -S value, shell or flock -c body,
+    # shell reading stdin (its here-string, else "") and inline interpreter body ("", unwalked).
     found = [(R_ENV_SPLIT, value) for value in env_split_values(words)]
+    options: list[WrapperOption] = []
+    lead = _command_at(words, set(), options)
+    if base:
+        base = _moved_base(words, options, base)  # fix round 4: env -C and sudo -D move it.
+    if lead is not None and lead >= 0 and command_family(words[lead]) == "busybox":
+        lead += 1  # P6: busybox sh reads as a bare sh.
     for at, word in enumerate(words):
         name = _base(word)
-        body = _shell_body(words[at:]) if name in _SHELLS else None
+        stdin = at == lead
+        is_shell = command_family(name) in _SHELLS
+        body = _shell_body(words[at:], stdin, base) if is_shell else None
+        if stdin and body == "" and heres:
+            body = heres[0]
         if name == "flock" and (
             hits := [k for k in range(at + 1, len(words)) if words[k].split("=")[0] in FLOCK_BODY]
         ):
             _, eq, value = words[hits[0]].partition("=")
             body = value if eq else (words[hits[0] + 1 : hits[0] + 2] or [""])[0]
+        if stdin and name == "eval":
+            body = " ".join(words[at + 1 :])  # fix round 1, row 7: eval's words are one body.
+        if stdin and name in {"source", "."}:
+            # fix round 1, row 7: a sourced stream is a body; a sourced file path is a script.
+            operand = next((w for w in words[at + 1 :] if w[:1] != "-" or w == "-"), "-")
+            body = (heres[0] if heres else "") if stdin_script(operand, base) else body
         if body is not None:
             found.append((R_SHELL_BODY, body))
+        code = interpreter_code(words[at:], True, fed or bool(heres), base) if stdin else None
+        if code is not None:
+            found.append((R_INLINE_BODY, ""))
     return found
 
 
-def _hidden_reason(command: str) -> str | None:
-    # issue 80, 81: the first env -S or -c body in any segment, refused while a train runs.
-    for words in _shell_words(command):
-        hidden = _hidden_bodies([_clean(w) for w in words if not w.startswith(_REDIRECT)])
+def _segment_bodies(
+    segment: ScanSegment, texts: list[str] | None = None, base: str | None = ""
+) -> list[tuple[str, str]]:
+    # issue 116: one _shell_scan segment's hidden bodies; texts are its words as expanded.
+    words, heres, fed = segment.words, segment.heres, segment.fed
+    shown = texts if texts is not None else [_clean(w) for w in words]
+    keep = [i for i, w in enumerate(words) if not w.startswith(_REDIRECT)]
+    plain = [shown[i] for i in keep]
+    found = _hidden_bodies(plain, [_clean(shown[i]) for i in sorted(heres)], fed, base)
+    # fix round 4, design A: every here-string is walked, whatever command or group reads it.
+    found += [("", _clean(shown[i])) for i in sorted(segment.strings)]
+    raws = [words[i] for i in keep]
+    lead = _expanding_lead(raws)
+    if lead is not None:
+        # fix round 1, rows 2-3: a shell or interpreter body is unread, so refused in a run;
+        # each plain word after the command word is walked ("" marks a walk with no finding).
+        word = _clean(raws[lead])
+        fams = {command_family(a) for a in _expand_braces(word) or [word]}
+        fams.add(command_family(plain[lead]))
+        if fams & (_SHELLS | INTERPRETERS | {"eval", "source", "."}):
+            found.append((R_INLINE_BODY if fams & INTERPRETERS else R_SHELL_BODY, ""))
+        found += [("", w) for w in plain[lead + 1 :] if w and w[:1] != "-"]
+    return found
+
+
+def _lead_word(segment: ScanSegment) -> str | None:
+    # fix round 4: a segment's command word past control words and wrappers; "" when opaque.
+    plain = [_clean(w) for w in segment.words if not w.startswith(_REDIRECT)]
+    at = _command_at(plain, set())
+    return None if at is None else plain[at] if at >= 0 else ""
+
+
+def _hidden_reason(command: str, cwd: str | None = "") -> str | None:
+    # issue 80, 81, 116: the first hidden body in any segment, refused while a train runs.
+    segments = _shell_scan(command)
+    folders = _chain_folders([s.words for s in segments], cwd)
+    for segment, folder in zip(segments, folders, strict=True):
+        hidden = [reason for reason, _ in _segment_bodies(segment, None, folder) if reason]
         if hidden:
-            return hidden[0][0]
+            return hidden[0]
+    # fix round 4, design B: stdin fed to a group, subshell or bare exec while code runs.
+    leads = [_lead_word(s) for s in segments]
+    runners = _SHELLS | INTERPRETERS | {"busybox", "eval", "source", "."}
+    if any(lead and command_family(lead) in runners for lead in leads) and any(
+        s.redirected and lead is None for s, lead in zip(segments, leads, strict=True)
+    ):
+        return R_SHELL_BODY
     return None
 
 
 def _body_past_cap(command: str, depth: int = 0) -> bool:
     # issue 81: a body nested past _BODY_DEPTH is never walked, so the call is judged in a train.
-    for words in _shell_words(command):
-        for _, body in _hidden_bodies([_clean(w) for w in words if not w.startswith(_REDIRECT)]):
+    for segment in _shell_scan(command):
+        for _, body in _segment_bodies(segment):
             if depth >= _BODY_DEPTH or _body_past_cap(body, depth + 1):
                 return True
     return False
@@ -2351,7 +2516,9 @@ def _body_past_cap(command: str, depth: int = 0) -> bool:
 
 def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
     # issue 30: redirects, write operands, cd targets and git -C name the repos a command acts on.
-    segments = _shell_words(command)
+    scanned = _shell_scan(command)
+    segments = [segment.words for segment in scanned]
+    folders = _chain_folders(segments, cwd)
     envs = _bash_env(segments)
     found: list[str] = []
     for k, words in enumerate(segments):
@@ -2366,7 +2533,8 @@ def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
         )
         base = _moved_base(texts, options, cwd)
         acts = [base] if base is not None and base != cwd else []
-        if at == _OPAQUE or base is None:
+        plain_raw = [w for i, w in enumerate(words) if i not in redirects]
+        if at == _OPAQUE or base is None or _expanding_lead(plain_raw) is not None:
             picks += _opaque_targets(texts, _opaque_words(clean, redirects), cwd)
         elif at is not None:
             name = _base(clean[at])
@@ -2385,9 +2553,8 @@ def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
         found += [t for t in (_anchor(p, cwd) for p in picks) if t]
         found += [t for t in (_anchor(p, base or cwd) for p in acts) if t]
         if depth < _BODY_DEPTH:
-            # issue 80, 81: a hidden body's own targets name the repo, so a train scopes the call.
-            plain = [texts[i] for i in range(len(words)) if i not in redirects]
-            for _, body in _hidden_bodies(plain):
+            # issue 80, 81, 116: a hidden body's own targets name the repo, so a train scopes it.
+            for _, body in _segment_bodies(scanned[k], texts, folders[k]):
                 found += _bash_write_dirs(body, base or cwd, depth + 1)
     return found
 
@@ -2573,7 +2740,7 @@ def _unknown_decision(
     # issue 81: a body past the walk's cap may name any repo, so it fails closed.
     if repo is None and not (command and _body_past_cap(command)):
         return _allow()
-    hidden = _hidden_reason(command) if command else None
+    hidden = _hidden_reason(command, cwd) if command else None
     if hidden is not None or repo is None:
         return _block(hidden or R_SHELL_BODY)
     if tool == "Bash" and _foreign_read_ok(command, cwd, charter):
@@ -2948,7 +3115,7 @@ def excluded_root_reason(
             reason = _excluded_git(tokens, base, roots)
         elif name == "gh" or (name == "tee" and writes):
             reason = _excluded_named(name, tokens[1:], base, roots)
-        elif name in _SHELLS or {"git", "gh"} & {_base(t) for t in tokens}:
+        elif shell_tokens(tokens) is not None or {"git", "gh"} & {_base(t) for t in tokens}:
             reason = _excluded_text(" ".join(tokens), base, roots, writes)
         if reason is not None:
             return reason

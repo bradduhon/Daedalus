@@ -7,11 +7,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import router
+from lib import jail, router
 from lib.config import Config
 from lib.gh_policy import (
     CONDUCTOR_GH,
     R_GH_BUNDLE,
+    _fallback_reason,
     allowlist_applies,
     classify,
     conductor_gh_refusal,
@@ -579,3 +580,40 @@ def test_issue_create_refusal_text_is_the_base_text(train_repo: Path, agent: str
         "gh issue create is a default-deny command, refused while a train runs and to every "
         "Daedalus agent (0028, 0035). Next: only the Push Train's releaser runs gh."
     )
+
+
+# R-extra-1 (unit A2): a script or module run is parsed; an inline body keeps the fallback.
+PARSED_RUNS = (
+    'python3 scripts/t.py choice --chose "cut the gh admission"',
+    "python3 -m pytest -q",
+    # A2 fix round 3: a script operand, php -f, or no stdin fed is no body.
+    "node --no-warnings app.js",
+    "php -f script.php",
+    "python3 -V",
+)
+INLINE_RUNS = (
+    "python3 -c \"import os; os.system('gh issue delete 3')\"",
+    "echo x | python3",
+    "python3 - <<'PY'\nimport os\nos.system('gh issue delete 3')\nPY",
+    "python3 /dev/stdin",
+    # A2 fix round 3: a normalised stdin path, and a -- that -X consumes.
+    "python3 /dev/./stdin",
+    "cd /dev && echo x | python3 stdin",
+    "python3 -X -- -c \"import os; os.system('gh issue delete 3')\"",
+    # A2 fix round 1, rows 5 and 8: an off-table node option, and tmux, which is no shell.
+    "node --title t -e \"require('child_process').execSync('gh issue delete 3')\"",
+    "tmux new-session -d gh issue delete 3",
+)
+
+
+@pytest.mark.parametrize("agent", ["main", "orchestrator"])
+def test_a_script_run_reaches_the_parsed_gh_path(train_repo: Path, agent: str) -> None:
+    # R-extra-2, P7: no unparsed-gh warning or refusal for a script or module run.
+    for command in PARSED_RUNS:
+        assert jail._policy_segments(command) == [shlex.split(command)], command
+        assert jail._gh_gate(agent, str(train_repo), command) is None, command
+    for command in INLINE_RUNS:
+        assert jail._policy_segments(command) is None, command
+        want = _fallback_reason(agent, command)
+        assert jail._gh_gate(agent, str(train_repo), command) == want, command
+    assert decide(_bash(train_repo, "main", PARSED_RUNS[0]), Config()).allow

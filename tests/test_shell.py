@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import shlex
+from pathlib import Path
 
 import pytest
 from lib import jail, shell
@@ -47,6 +48,8 @@ SHARED = frozenset(
     | {"worker_parse", "chain_bases"}
     | {"env_split_values", "R_ENV_SPLIT", "FLOCK_BODY"}
     | {"READ_ONLY_WRITE_OPTS", "scan_options", "split_options", "expansion_opaque"}
+    | {"command_family", "interpreter_code", "shell_tokens", "stdin_script", "INTERPRETERS"}
+    | {"_expands", "flag_span", "fed_tokens"}
 )
 
 
@@ -259,7 +262,11 @@ def test_git_sets_name_the_moved_lists() -> None:
         ("nice env -i env -S 'a b'", ["a b"]),
         ("env -uS rm x", []),
         ("env -CS rm x", []),
-        ("env FOO=1 -S x", []),
+        ("env FOO=1 -S x", ["x"]),
+        ("env -a x -S 'touch y'", ["touch y"]),
+        ("env --argv0 x -u A B=1 --split-string=y", ["y"]),
+        ("env -ax -iS y", ["y"]),
+        ("env {-S,x}", [""]),
         ("env -- -S x", []),
         ("env - -S x", []),
         ("env -i rm x", []),
@@ -267,8 +274,38 @@ def test_git_sets_name_the_moved_lists() -> None:
     ],
 )
 def test_env_split_values_reads_getopt_forms(command: str, want: list[str]) -> None:
-    # issue 80: -S in a cluster or a long prefix is found; a value or a plain word is not.
+    # issue 80, 116 (P8): -S in a cluster or long prefix is found; a value or plain word is not.
     assert shell.env_split_values(shlex.split(command)) == want
+
+
+@pytest.mark.parametrize(
+    ("word", "want"),
+    [
+        ("/usr/bin/bash", "bash"),
+        ("./bash", "bash"),
+        ("python3.12", "python"),
+        ("python3", "python"),
+        ("perl5.36.0", "perl"),
+        ("node18", "node"),
+        ("sha256sum", "sha256sum"),
+        ("7z", "7z"),
+    ],
+)
+def test_command_family_strips_the_path_and_folds_the_version(word: str, want: str) -> None:
+    # pin A2 -> A3, P5: a path or versioned name reads as its family.
+    assert shell.command_family(word) == want
+
+
+def test_every_host_shell_entry_is_a_listed_shell_or_a_named_non_shell() -> None:
+    # P6, fix round 1: the list is static; a new /etc/shells entry fails here, never widens.
+    path = Path("/etc/shells")
+    if not path.is_file():
+        pytest.skip("no /etc/shells on this host")
+    lines = (line.strip() for line in path.read_text(encoding="utf-8").splitlines())
+    names = {shell.command_family(line) for line in lines if line.startswith("/")}
+    assert names <= shell._SHELLS | shell.NOT_SHELLS, names - shell._SHELLS - shell.NOT_SHELLS
+    assert not shell._SHELLS & shell.NOT_SHELLS
+    assert {"rbash", "mksh", "ash", "ksh93"} <= shell._SHELLS <= shell.WORKER_WRAPPERS
 
 
 @pytest.mark.parametrize(

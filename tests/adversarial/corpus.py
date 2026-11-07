@@ -24,6 +24,7 @@ CLASSES = (
     "nested_sessions",
     "wrapper_options",
     "operand_grammar",
+    "hidden_bodies",
 )
 # spec 3.3: the agents whose Bash grammar is widest; credential reads judge them all.
 READERS = ("coder", "auditor", "verifier")
@@ -190,6 +191,165 @@ A1_WRAPPER_ROWS = (
     "flock {repo}/l true",
     "flock -x {repo}/l true",
     "flock --timeout=5 -- {repo}/l true",
+)
+# issue 116 (unit A2): the reproduction rows, verbatim; the first five are the probe's rows.
+A2_ISSUE_116 = (
+    'rbash -c "touch x"',
+    'echo "touch x" | bash',
+    'bash <<< "touch x"',
+    'python3 -c "import os"',
+    'env -a x -S "touch y"',
+    'bash -c "touch x"',
+)
+A2_PROBE = A2_ISSUE_116[:5]
+# issue 81 (unit A2): the reproduction rows, verbatim.
+A2_ISSUE_81 = ("bash -c '<body>'", "sh -c")
+# P5 to P8 (unit A2): (rule, family, finding, form); {repo} is a repository a train marks.
+A2_RULE_ROWS = (
+    ("P5", "shell", "shell", "/usr/bin/rbash -c 'touch {repo}/x'"),
+    ("P5", "shell", "shell", "A=1 nice -n 5 nohup ./bash -c 'touch {repo}/x'"),
+    ("P5", "interpreter", "inline", "nice -n 5 timeout 5 /usr/bin/python3.12 -c 'import os'"),
+    ("P5", "interpreter", "inline", "A=1 stdbuf -o L ./perl5.36 -e 1"),
+    ("P5", "env", "env", "timeout 5 nice env -a x -S 'touch {repo}/y'"),
+    ("P6", "shell", "shell", "echo 'touch {repo}/x' | rbash -s"),
+    ("P6", "shell", "shell", "bash -xc 'touch {repo}/x'"),
+    ("P6", "shell", "shell", "bash --login -c 'touch {repo}/x'"),
+    ("P6", "shell", "shell", "bash <<< 'touch {repo}/x'"),
+    ("P6", "shell", "shell", "bash /dev/stdin <<< 'touch {repo}/x'"),
+    ("P6", "shell", "shell", "cat x | bash -"),
+    ("P6", "shell", "shell", "busybox sh -c 'touch {repo}/x'"),
+    ("P6", "shell", "shell", "busybox sh <<< 'touch {repo}/x'"),
+    ("P6", "shell", "shell", "bash <(echo touch {repo}/x)"),
+    ("P6", "shell", "shell", "sh <<EOF\ntouch {repo}/x\nEOF"),
+    ("P6", "shell", "shell", "bash {{-c,x}} 'touch {repo}/x'"),
+    ("P6", "shell", "shell", "mksh -ec 'touch {repo}/x'"),
+    ("P6", "interpreter", "shell", "python3 scripts/x.py | bash"),
+    ("P6", "env", "shell", "env -i bash <<< 'touch {repo}/x'"),
+    ("P7", "interpreter", "inline", "python3 -c 'import os'"),
+    ("P7", "interpreter", "inline", "python -Bc 'import os'"),
+    ("P7", "interpreter", "inline", "python3 -W ignore -c 'import os'"),
+    ("P7", "interpreter", "inline", "perl -e 'print 1'"),
+    ("P7", "interpreter", "inline", "perl -E 'say 1'"),
+    ("P7", "interpreter", "inline", "ruby -e 'p 1'"),
+    ("P7", "interpreter", "inline", "node -e 1"),
+    ("P7", "interpreter", "inline", "node --eval=1"),
+    ("P7", "interpreter", "inline", "node -r x -p 1"),
+    ("P7", "interpreter", "inline", "node --print 1"),
+    ("P7", "interpreter", "inline", "php -r 'echo 1;'"),
+    ("P7", "interpreter", "inline", "echo 'import os' | python3"),
+    ("P7", "interpreter", "inline", "python3 - <<< 'import os'"),
+    ("P7", "interpreter", "inline", "python3 /dev/stdin"),
+    ("P7", "interpreter", "inline", "python3 {{-c,x}} 'import os'"),
+    ("P7", "shell", "shell", "bash -c \"python3 -c 'import os'\""),
+    ("P7", "env", "inline", "env -i python3 -c 'import os'"),
+    ("P8", "env", "env", "env -a x -S 'touch {repo}/y'"),
+    ("P8", "env", "env", "env --argv0 x -S 'touch {repo}/y'"),
+    ("P8", "env", "env", "env -u A -a x -C /tmp -S'touch {repo}/y'"),
+    ("P8", "env", "env", "env A=1 -S 'touch {repo}/y'"),
+    ("P8", "env", "env", "env --argv0=x --split-string='touch {repo}/y'"),
+    ("P8", "env", "env", "env -ia x -S 'touch {repo}/y'"),
+    ("P8", "env", "env", "env {{-S,x}} 'touch {repo}/y'"),
+    ("P8", "shell", "shell", "bash -c \"env -a x -S 'touch {repo}/y'\""),
+    ("P8", "interpreter", "env", "env -a x -S \"python3 -c 'import os'\""),
+)
+# fix round 1 (unit A2): (finding, form) per verifier row; refused to a foreign agent in a run.
+A2_FIX1_RUN = (
+    ("shell", "bash 0<<<'touch {repo}/x'"),
+    ("shell", "sh 0<'{repo}/s'"),
+    ("shell", "bash {{,-c}} 'touch {repo}/x'"),
+    ("shell", "{{,bash}} -c 'touch {repo}/x'"),
+    ("shell", "bash ${{E:--c}} 'touch {repo}/x'"),
+    ("inline", "node --title t -e 'require(1)'"),
+    ("inline", "python3 --frobnicate x -c 'import os'"),
+    ("shell", "bash --frobnicate x -c 'touch {repo}/x'"),
+    ("shell", "eval 'touch {repo}/x'"),
+    ("shell", ". /dev/stdin <<< 'touch {repo}/x'"),
+    ("shell", "source /dev/fd/0 <<< 'touch {repo}/x'"),
+    ("shell", ". <(echo touch {repo}/x)"),
+    ("shell", "source /proc/self/fd/3"),
+)
+# fix round 1 (unit A2): the readable forms, run from an unmarked folder into {repo}.
+A2_FIX1_UNMARKED = (
+    "bash 0<<<'touch {repo}/x'",
+    "bash {{,-c}} 'touch {repo}/x'",
+    "{{,bash}} -c 'touch {repo}/x'",
+    "bash ${{E:--c}} 'touch {repo}/x'",
+    "bash --frobnicate x -c 'touch {repo}/x'",
+    "eval 'touch {repo}/x'",
+    ". /dev/stdin <<< 'touch {repo}/x'",
+)
+# A2 spec correction: an inline flag among the program's own options, off-table ones included.
+A2_FIX2_RUN = (
+    ("inline", "node --title t -e x"),
+    ("inline", "node --title build.js -e x"),
+    ("inline", "node --frobnicate t -e x"),
+    ("inline", "python3 -I -c x"),
+    ("inline", "python3 -Ic x"),
+)
+# A2 spec correction: words after -m <module> or the script belong to the program.
+A2_PROGRAM_ARGS = (
+    "python3 -m pytest -c pytest.ini -q",
+    "python3 scripts/x.py -c foo",
+    "node build.js -e prod",
+    "perl script.pl -e x",
+    "bash script.sh -c x",
+)
+# P7 (unit A2): a module or a script run is never an inline body.
+A2_ADMITTED = ("python3 -m pytest -q", "python3 scripts/x.py")
+# fix round 3 (unit A2): a normalised stdin path, and a -- a valued option consumes.
+A2_FIX3_RUN = (
+    ("shell", "bash /dev/./stdin <<< 'touch {repo}/x'"),
+    ("shell", "source /proc/thread-self/fd/0 <<< 'touch {repo}/x'"),
+    ("shell", "sh //dev/stdin <<< 'touch {repo}/x'"),
+    ("shell", "bash ../../../../../../../../dev/stdin <<< 'touch {repo}/x'"),
+    ("inline", "python3 /dev/./stdin"),
+    ("inline", "python3 /proc/thread-self/fd/0 <<< 'import os'"),
+    ("inline", "php -f /dev/stdin <<< 'x'"),
+    ("inline", "python3 -X -- -c 'import os'"),
+    ("inline", "echo 'import os' | node --no-warnings"),
+)
+# fix round 3 (unit A2): the readable forms, run from an unmarked folder into {repo}.
+A2_FIX3_UNMARKED = (
+    "bash /dev/./stdin <<< 'touch {repo}/x'",
+    "source /proc/thread-self/fd/0 <<< 'touch {repo}/x'",
+    "sh //dev/stdin <<< 'touch {repo}/x'",
+    "bash -c -- 'touch {repo}/x'",
+)
+# fix round 4 (unit A2): stdin fed to a group, subshell or bare exec; a script under a cd move.
+A2_FIX4_RUN = (
+    ("shell", "{{ bash; }} <<< 'touch {repo}/x'"),
+    ("shell", "( bash ) <<< 'touch {repo}/x'"),
+    ("shell", "exec <<< 'touch {repo}/x'; bash"),
+    ("shell", "( exec bash ) <<< 'touch {repo}/x'"),
+    ("shell", "( python3 ) <<< 'import os'"),
+    ("shell", "{{ python3; }} < {repo}/code.py"),
+    ("shell", "cd /dev && bash stdin <<< 'touch {repo}/x'"),
+    ("shell", "cd /proc/self/fd && bash 0 <<< 'touch {repo}/x'"),
+    ("shell", "pushd /dev && bash ./stdin <<< 'touch {repo}/x'"),
+    ("shell", "cd ~/../../dev && bash stdin <<< 'touch {repo}/x'"),
+    ("inline", "cd /dev && python3 stdin"),
+)
+# fix round 4 (unit A2): every here-string and heredoc body is walked, from an unmarked folder.
+A2_FIX4_UNMARKED = (
+    "{{ bash; }} <<< 'touch {repo}/x'",
+    "( bash ) <<< 'touch {repo}/x'",
+    "exec <<< 'touch {repo}/x'; bash",
+    "( exec bash ) <<< 'touch {repo}/x'",
+    "( bash ) <<'E'\ntouch {repo}/x\nE",
+    "cd /dev && bash stdin <<< 'touch {repo}/x'",
+    "cd /proc/self/fd && bash 0 <<< 'touch {repo}/x'",
+    "pushd /dev && bash ./stdin <<< 'touch {repo}/x'",
+)
+# fix round 4 (unit A2): a here-string or heredoc read by a plain command, with no write.
+A2_FIX4_ADMITTED = ('grep foo <<< "bar"', "cat <<'E'\nhello world\nE")
+# fix round 3 (unit A2): a script operand, a script named by php -f, or no stdin fed: no body.
+A2_FIX3_ADMITTED = (
+    "node --no-warnings app.js",
+    "node --enable-source-maps dist/app.js",
+    "perl -Mstrict script.pl",
+    "php -f script.php",
+    "python3 -V",
+    "node -v",
 )
 # issue 83 (unit H1): {other}/deep links to {repo}/sub, so deep/.. is {repo} on disk.
 H1_SYMLINK = ("touch {other}/deep/../x", "mkdir {other}/deep/../y", "rm -rf {other}/deep/../x")

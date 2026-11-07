@@ -95,7 +95,9 @@ def test_stdbuf_has_its_row_and_worker_wrappers_are_unchanged() -> None:
     assert {"-i", "-o", "-e", "--input", "--output", "--error"} <= shell.WRAPPER_OPTS["stdbuf"][1]
     # pin U2 -> E6, issue 82: the kernel wrapper's row and the runner wrapper rows since a83accf.
     runners = {"setsid", "chroot", "ionice", "taskset", "flock", "unshare", "chrt", "nsenter"}
-    assert shell.WORKER_WRAPPERS == OLD_WORKER_WRAPPERS | {shell.CONFINE} | runners
+    # issue 116: every shell name and the php interpreter joined the set.
+    new = {shell.CONFINE, "php"} | runners | shell._SHELLS
+    assert shell.WORKER_WRAPPERS == OLD_WORKER_WRAPPERS | new
     assert shell.WRAPPER_OPTS.keys() <= shell.WORKER_WRAPPERS
     assert shell.WRAPPER_OPTS[shell.CONFINE] == (frozenset({"--"}), frozenset({"--unit"}))
 
