@@ -79,6 +79,7 @@ from lib.shell import (
     _PROJECT_DATA,
     _REPO_SCRIPTS,
     _SHELLS,
+    _TRUSTED_BIN,
     _VALUE_LONG_NEXT,
     CHAR,
     CLOSE,
@@ -2915,6 +2916,14 @@ _NOT_SIMPLE_WORD = re.compile(
     r"|shopt|export|env|alias|function|trap|command_not_found_handle)(?![\w-])"
     r"|\bprintf\b[^;&|\n]*\s-[A-Za-z]*v|\(\s*\)"
 )
+# issue 121 (U1): what may rebind the word git: hash, enable, alias, a PATH change, a function,
+# source or command -p; each also makes a text not plainly simple.
+_FOREIGN_GIT = re.compile(
+    r"(?<![\w.-])(?:hash|enable|alias|unalias|source|function)(?![\w-])|(?<![\w$])PATH\+?="
+    r"|\bexport\s+PATH\b|\(\s*\)|\bcommand(?:\s+-[A-Za-z]+)*?\s+-[A-Za-z]*p"
+)
+# issue 121 (U1): a word naming git through a folder, read in a text that is not plainly simple.
+_GIT_PATH = re.compile(r"(?<![\w.-])\S*/git(?![\w.-])")
 # issue 121 (F1): words that may stand before a command word; . or source after them sources.
 _LEADERS = _CONTROL_WORDS | {"time", "(", "-p", "--"}
 _FD_NAME = re.compile(r"^\{[A-Za-z_][A-Za-z0-9_]*\}$")
@@ -3484,7 +3493,7 @@ def _simple_code(command: str) -> str | None:
                 return None
             rest = rest[end:]
     joined = "".join(code)
-    if _NOT_SIMPLE_WORD.search(_normalised(joined)):
+    if _NOT_SIMPLE_WORD.search(_normalised(joined)) or _FOREIGN_GIT.search(_normalised(joined)):
         return None
     if any(_sources(joined[a:b]) for a, b in segment_spans(joined)):
         return None
@@ -3557,6 +3566,33 @@ def _built_head(raw: str) -> bool:
     sub, args, globals_ = _git_split(["git", *rest[1:]])
     unknown = not git_globals_known(globals_)
     return sub is not None and (unknown or _expands(words[len(words) - len(args) - 1]))
+
+
+def _foreign_git(command: str) -> bool:
+    # issue 121 (U1): the word git here may not run the system git: a rebinding construct, or a
+    # git command word that is no bare git and no path in a trusted bin folder (8.5, _cmd_name).
+    text = _normalised(command)
+    if _FOREIGN_GIT.search(text):
+        return True
+    code = _simple_code(command)
+    if code is None:
+        dot = re.search(r"(?:^|[\s;&|(){}])\.\s", text)
+        paths = [m.group(0) for m in _GIT_PATH.finditer(text)]
+        return bool(dot) or any(os.path.dirname(p) not in _TRUSTED_BIN for p in paths)
+    return any(
+        h is not None and command_family(h[0]) == "git" and _cmd_name([h[0]]) != "git"
+        for h in _heads(code)
+    )
+
+
+def _foreign_icase(command: str) -> str | None:
+    # issue 121 (U1): with git possibly rebound, an icase spelling beside a git word is judged
+    # as the base judged it, reads and literal messages included.
+    texts = (command, _normalised(command))
+    hit = next((m for t in texts if (m := _ICASE_TEXT.search(t))), None)
+    if hit is None or not any(_GIT_WORD.search(t) for t in texts):
+        return None
+    return _spec(hit) if _foreign_git(command) else None
 
 
 def _expansion_unseen(command: str) -> bool:
@@ -3670,7 +3706,11 @@ def _excluded_names(command: str, cwd: str, roots: ExcludedRoots, writes: bool) 
 def excluded_root_reason(
     command: str, cwd: str, roots: ExcludedRoots, writes: bool = True
 ) -> str | None:
-    # 0136, D.5, issue 121 (F2): the checks below, then an expansion beside a judged git word.
+    # 0136, D.5, issue 121 (U1, F2): a git that may be rebound, the checks below, then an
+    # expansion beside a judged git word.
+    foreign = _foreign_icase(command)
+    if foreign is not None and roots():
+        return R_EXCLUDED_ICASE.format(spec=foreign)
     reason = _excluded_reason(command, cwd, roots, writes)
     if reason is None and _expansion_unseen(command) and roots():
         return R_EXCLUDED_UNSEEN.format(source="a shell expansion")

@@ -496,6 +496,20 @@ A3_RULE_ROWS = (
     # fix round 7 (T1, T2): a value-taking global git takes, and a glob-built subcommand.
     ("P11", "git --shallow-file x add ':(icase)NOTES/a.md'"),
     ("P11", "git [a]dd ':(icase)NOTES/a.md'"),
+    # fix round 8 (U1): a git word that may not run the system git gets no read or message exemption.
+    ("P11", "./git log -- ':(icase)NOTES'"),
+    ("P11", "hash -p ./x git; git log -- ':(icase)NOTES'"),
+    ("P11", "PATH=. git log -- ':(icase)NOTES'"),
+    ("P11", "alias git=./x; git log -- ':(icase)NOTES'"),
+    ("P11", "export PATH=.:$PATH; git log -- ':(icase)NOTES'"),
+    ("P11", "/tmp/git log -- ':(icase)NOTES'"),
+    ("P11", "PATH+=:. git log -- ':(icase)NOTES'"),
+    ("P11", "enable -f ./x.so git; git log -- ':(icase)NOTES'"),
+    ("P11", "unalias git; git log -- ':(icase)NOTES'"),
+    ("P11", "command -p git log -- ':(icase)NOTES'"),
+    ("P11", "env PATH=. git log -- ':(icase)NOTES'"),
+    ("P11", "./git commit -m ':i: fix' -- src/a.md"),
+    ("P11", "bin/git log -- ':(icase)NOTES'"),
     ("P11", "trap \"git add ':(icase)NOTES/a.md'\" EXIT"),
     ("P11", "command_not_found_handle() { git add ':(icase)NOTES/a.md'; }; gti"),
     # fix round 3 (G1 refined): a bare delimiter whose body bash may expand is not plainly simple.
@@ -618,6 +632,9 @@ A3_ADMITTED = (
     # fix round 7 (T2): [ and [[ are a test, no glob.
     "[ -f x ] && git log -- ':(icase)x'",
     "[[ -n x ]] && git commit -m ':i: fix' -- src/a.md",
+    # fix round 8 (U1): git in a trusted bin folder is the system git.
+    "/usr/bin/git log -- ':(icase)x'",
+    "/usr/bin/git commit -m ':i: fix' -- src/a.md",
 )
 # issue 121 (unit A3 fix round 2): an appending or array-element prefix is an env assignment.
 A3_APPEND_ENV = (
