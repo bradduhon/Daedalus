@@ -114,11 +114,13 @@ def test_unknown_agent_blocks_during_a_train(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
     (project_data / "train.active").write_text("20261015-120000\n")
-    # 0100: a foreign agent reads during a train; its writes block.
+    # 0100, issue 188: a foreign agent writes the project during a train; .claude/ blocks.
     assert run_script("enforce_agent_jail.py", hook_input(agent_type="ghost")).returncode == 0
     payload = hook_input(agent_type="ghost", tool_input={"command": "touch x"})
+    assert run_script("enforce_agent_jail.py", payload).returncode == 0
+    payload = hook_input(agent_type="ghost", tool_input={"command": "touch .claude/x"})
     result = run_script("enforce_agent_jail.py", payload)
-    assert result.returncode == 2 and "read-only while" in result.stderr
+    assert result.returncode == 2 and "may not write under" in result.stderr
 
 
 def test_unknown_agent_passes_without_a_train(

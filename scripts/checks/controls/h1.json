@@ -4,7 +4,7 @@
     "premise_test": "tests/test_jail.py::test_env_split_string_hiding_a_write_is_refused_reproduction"
   },
   "jail.R_SHELL_BODY": {
-    "failure": "issue 81: a bash -c, sh -c or flock -c body runs a command string whose write targets the jail never walks, so a write into a train's repository goes unseen",
+    "failure": "issue 81: a bash -c, sh -c or flock -c body runs a command string whose write targets the jail never walks, so a write under a run repository's .claude/ folder goes unseen (issue 188)",
     "premise_test": "tests/test_jail.py::test_a_shell_body_is_refused_to_a_foreign_agent_in_a_train"
   },
   "jail.R_EXCLUDED_ICASE": {

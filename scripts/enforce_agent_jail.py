@@ -46,6 +46,11 @@ _LOAD_WARN = (
 _AUDIT_WARN = "auditing is down: the audit log cannot be written, so this {tool} call is unrecorded"
 _CONFIG_WARN = "the project config failed to load, so this {tool} call runs unjudged during a train"
 _JUDGE_WARN = "the jail failed while judging this {tool} call, so it runs unjudged during a train"
+R_RELATIVE = (
+    "this agent's run is in {repo}, while its shell still runs in {cwd}, so the relative path "
+    "{path} would land outside the run (issue 188). Next: name every path you write, redirect "
+    "to or cd into as an absolute path."
+)
 
 
 _TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
@@ -267,6 +272,50 @@ def _hook_failed(
     return _alert(agent, text)
 
 
+def _bind_run(payload: dict[str, object], agent: str) -> tuple[dict[str, object], str | None]:
+    # issue 188: a bound Daedalus agent is judged in its own run, wherever the session moved.
+    try:
+        from lib.train_scope import policed_outside_train
+
+        if not policed_outside_train(agent) or not payload.get("agent_id"):
+            return payload, None
+        from lib.dispatch_binding import bound_run
+        from lib.jail import relative_write
+        from lib.shell import _under
+
+        bound = bound_run(payload)
+    except Exception:  # noqa: BLE001
+        return payload, None  # issue 188: no binding, so the payload cwd judges as before.
+    if bound is None:
+        return payload, None
+    cwd = payload.get("cwd")
+    if isinstance(cwd, str) and os.path.isabs(cwd) and _under(cwd, bound.repo):
+        return ({**payload, "binding": bound.record()} if bound.claimed_now else payload), None
+    judged = bound.worktree or bound.repo
+    moved = {**payload, "cwd": judged, "payload_cwd": cwd, "binding": bound.record()}
+    raw_input = payload.get("tool_input")
+    command = raw_input.get("command") if isinstance(raw_input, dict) else None
+    if payload.get("tool_name") != "Bash" or not isinstance(command, str):
+        return moved, None
+    try:
+        path = relative_write(command)
+    except Exception:  # noqa: BLE001
+        path = command  # issue 188: an unreadable command fails closed.
+    if path is None:
+        return moved, None
+    return moved, R_RELATIVE.format(repo=bound.repo, cwd=cwd, path=path)
+
+
+def _record_run(payload: dict[str, object], agent: str) -> None:
+    # issue 188: best effort; an unrecorded dispatch leaves its agent judged by the payload cwd.
+    from lib.dispatch_binding import record_run_dispatch
+
+    try:
+        record_run_dispatch(payload)
+    except Exception as exc:  # noqa: BLE001
+        _note(agent, f"the run binding was not recorded ({exc}).")
+
+
 def _judge(payload: dict[str, object], agent: str) -> int:
     from lib.audit import audit_append
     from lib.config import Config, load_config
@@ -319,6 +368,8 @@ def _judge(payload: dict[str, object], agent: str) -> int:
     if record is not None and record.get("root_source") == "cwd-fallback":
         _warn_fallback(str(payload.get("cwd")))
     if allow:
+        if payload.get("tool_name") in ("Agent", "Task"):
+            _record_run(payload, agent)
         return 0
     if warn:
         # Main never prompted (amends 0105, 0106): allow with context, never ask, for main.
@@ -345,6 +396,9 @@ def main() -> int:
         return _block(agent, "hook input has no tool_name string.")
     if "tool_input" in payload and not isinstance(payload["tool_input"], dict):
         return _block(agent, "hook input tool_input is not an object.")
+    payload, relative = _bind_run(payload, agent)
+    if relative is not None:
+        return _record_and_block(payload, agent, relative)
     cwd = payload.get("cwd")
     main_session = _bare_main(payload)
     train_marked, lib_error = _marker_finder()
@@ -358,7 +412,9 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             return _load_failed(exc, in_train, main_session, tool_name)
         try:
-            named = _names_marked_repo(tool_name, payload.get("tool_input") or {}, cwd)
+            raw_input = payload.get("tool_input")
+            named_input = raw_input if isinstance(raw_input, dict) else {}
+            named = _names_marked_repo(tool_name, named_input, cwd)
         except Exception:  # noqa: BLE001
             named = True  # issue 30: unsure means the full jail judges the call.
         if not policed_outside_train(agent) and not named:

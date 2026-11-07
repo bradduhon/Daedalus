@@ -284,7 +284,10 @@ def conductor_gh_refusal() -> str:
 def _allowed(agent: str) -> frozenset[tuple[str, str]]:
     if agent == CONDUCTOR:
         return CONDUCTOR_GH
-    return MAIN_GH if agent == "main" else frozenset()
+    # issue 188: a foreign agent in a marked repo reads as main does; Daedalus workers run none.
+    from lib.train_scope import KNOWN_AGENTS
+
+    return MAIN_GH if agent == "main" or agent not in KNOWN_AGENTS else frozenset()
 
 
 def _gh_reason(agent: str, tokens: list[str]) -> str | None:

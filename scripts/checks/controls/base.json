@@ -308,8 +308,8 @@
     "premise_test": "tests/test_jail.py::test_namespaced_boundary_tester_is_refused"
   },
   "jail.R_UNKNOWN_TRAIN": {
-    "failure": "0100: a foreign agent writes, dispatches or fetches while a train runs",
-    "premise_test": "tests/test_jail.py::test_unknown_agent_fails_closed"
+    "failure": "issue 188: a foreign agent writes under the run repository's .claude/ folder (train worktrees, hooks, settings, plugin state) while a run is active (0100; AC-3, AC-6, SA-11)",
+    "premise_test": "tests/test_jail.py::test_foreign_agent_write_under_claude_is_refused"
   },
   "jail.R_MAIN_TRAIN_WARN": {
     "failure": "0105: a main-session write in a repository with an active train leaves a dirty tree or lands on the integration branch",

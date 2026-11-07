@@ -227,6 +227,21 @@ FILES: tuple[Entry, ...] = (
         "each train state change",
     ),
     Entry(
+        "<cache>/run-bindings/",
+        "scripts/lib/dispatch_binding.py:_run_lock",
+        "the first Daedalus agent dispatch of a session during a run",
+    ),
+    Entry(
+        "<cache>/run-bindings/<session-id>.lock",
+        "scripts/lib/dispatch_binding.py:_run_lock",
+        "each run binding change",
+    ),
+    Entry(
+        "<cache>/run-bindings/<session-id>.json",
+        "scripts/lib/dispatch_binding.py:_save_runs",
+        "each Daedalus agent dispatch during a run, and each agent's first call",
+    ),
+    Entry(
         f"{_TRAINS}/<train-id>.bindings.lock",
         "scripts/lib/train_state.py:locked_file",
         "each unit binding change",

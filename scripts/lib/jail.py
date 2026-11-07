@@ -102,6 +102,7 @@ from lib.shell import (
     _quote_spans,
     _shell_code,
     _short_flags,
+    _stash_untracked,
     _under,
     chain_bases,
     env_split_values,
@@ -777,11 +778,11 @@ R_WEB_RESEARCHER_ONLY = (
 R_UNKNOWN = (
     "unknown agent_type '{agent}', fail closed. Next: add the agent to the jail before using it."
 )
-# 0100: one line of rule, then the unmark line for a marker a dead train left.
+# 0100, issue 188: one line of rule, then the unmark line for a marker a dead train left.
 R_UNKNOWN_TRAIN = (
-    "unknown agent_type '{agent}' is read-only while {marker} exists: Bash runs read-only "
-    "inspection and git reads, pipes allowed; Write, Edit, dispatch and web tools are refused "
-    "(0100).\n" + UNMARK_NEXT
+    "unknown agent_type '{agent}' may not write under {repo}/.claude while {marker} exists: "
+    "that folder holds the run's worktrees, hooks, settings and plugin state, so write "
+    "outside it (0100, issue 188).\n" + UNMARK_NEXT
 )
 # Main never prompted (amends 0106): the plain-words warnings sent into the main session's context.
 WARN_DOTGIT = (
@@ -881,6 +882,13 @@ _DATA_DIR_WRITE = re.compile(
     r"|\bgit\b[^;&|\n]*\s(?:init|clone)\b"
 )
 _DEVNULL = re.compile(r"\d?>&\d|&?\d?>>?\s*/dev/null")
+# issue 188: operands these remove or replace whole; cp and install only when recursive.
+_TREE_WRITERS = frozenset({"rm", "rmdir", "unlink", "shred", "rsync", "chmod", "chown", "chgrp"})
+_COPIERS = frozenset({"cp", "install"})
+_RECURSIVE = re.compile(r"-[a-zA-Z]*[rRa][a-zA-Z]*|--recursive|--archive")
+_INTERPRETER = re.compile(r"python[\d.]*|perl|ruby|node|nodejs|deno|bun|php")
+_CLAUDE_PATH = re.compile(r"[~/][^\s'\"(),;]*?\.claude(?![\w.-])")
+_FD_WORD = re.compile(r"&?\d+|&?-")
 _CD_TARGET = re.compile(r"(?:^|[;&|(\s])(?:cd|pushd)\s+([^\s;&|)]+)")
 _DAEDALUS_WORD = re.compile(r"(?<![\w.-])daedalus(?![\w-])")
 _GIT_INDEX_WRITE = re.compile(r"\bgit\b[^;&|]*\b(?:add|stage|commit|update-index)\b")
@@ -2334,8 +2342,34 @@ def _body_past_cap(command: str, depth: int = 0) -> bool:
     return False
 
 
-def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
+def _tree_targets(name: str, args: list[str], base: str, piped: bool) -> list[str]:
+    # issue 188: operands a command may remove or replace whole; a folder above .claude/ counts.
+    ops: list[str] = []
+    if name == "git":
+        sub, git_args, globals_ = _git_split(["git", *args])
+        home = _git_dir(globals_, base)
+        hard = sub == "reset" and bool({"--hard", "--merge", "--keep"} & set(git_args))
+        if sub == "clean" or hard or (sub == "stash" and _stash_untracked(git_args)):
+            return [home]
+        if sub in {"checkout", "restore"}:
+            return [_abs(a, home) for a in git_args if not a.startswith("-")]
+        return []
+    # issue 188: names piped in through xargs land in base; only a recursive form takes a folder.
+    fed = ["."] if piped and any(_RECURSIVE.fullmatch(a) for a in args) else []
+    if name == "find" and _FIND_DENY & set(args):
+        ops = list(itertools.takewhile(lambda a: a[:1] not in {"-", "(", "!"}, args)) or ["."]
+    elif name in _TREE_WRITERS or (name in _COPIERS and any(_RECURSIVE.fullmatch(a) for a in args)):
+        ops = [a for a in _write_operands(name, args) if a != "-"] or fed
+    elif name == "mv":
+        ops = [a for a in _write_operands(name, args) if a != "-"][:-1] or fed
+    return [os.path.normpath(_abs(a, base)) for a in ops]
+
+
+def _bash_write_dirs(
+    command: str, cwd: str, depth: int = 0, trees: list[str] | None = None
+) -> list[str]:
     # issue 30: redirects, write operands, cd targets and git -C name the repos a command acts on.
+    # issue 188: trees, when given, collects the operands _tree_targets names.
     segments = _shell_words(command)
     envs = _bash_env(segments)
     found: list[str] = []
@@ -2352,10 +2386,15 @@ def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
         base = _moved_base(texts, options, cwd)
         acts = [base] if base is not None and base != cwd else []
         if at == _OPAQUE or base is None:
-            picks += _opaque_targets(texts, _opaque_words(clean, redirects), cwd)
+            opaque = _opaque_targets(texts, _opaque_words(clean, redirects), cwd)
+            picks += opaque
+            if trees is not None:
+                trees += [cwd, *opaque]
         elif at is not None:
             name = _base(clean[at])
             args = [texts[i] for i in range(at + 1, len(words)) if i not in redirects]
+            if trees is not None:
+                trees += _tree_targets(name, args, base, "xargs" in clean[:at])
             if name in {"cd", "pushd"}:
                 acts += [a for a in args if not a.startswith("-")][:1]
             elif name == "git":
@@ -2373,7 +2412,7 @@ def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
             # issue 80, 81: a hidden body's own targets name the repo, so a train scopes the call.
             plain = [texts[i] for i in range(len(words)) if i not in redirects]
             for _, body in _hidden_bodies(plain):
-                found += _bash_write_dirs(body, base or cwd, depth + 1)
+                found += _bash_write_dirs(body, base or cwd, depth + 1, trees)
     return found
 
 
@@ -2386,10 +2425,26 @@ def _write_dirs(tool: str, tool_input: dict[str, object], cwd: str) -> list[str]
     return []
 
 
-def _marked_repo(cwd: str, tool: str, tool_input: dict[str, object]) -> Path | None:
-    # 0023, issue 30: a train in the cwd repo or in any repo the call writes into counts.
+def _claude_root(path: str) -> Path | None:
+    # issue 188: the marked repository whose .claude/ folder holds path, as written or as resolved.
+    try:
+        forms = dict.fromkeys((os.path.normpath(path), os.path.realpath(path)))
+    except ValueError:
+        return None
+    for form in forms:
+        parts = Path(form).parts
+        for i, part in enumerate(parts):
+            if part == ".claude" and i and os.path.lexists(train_marker(Path(*parts[:i]))):
+                return Path(*parts[:i])
+    return None
+
+
+def _marked_repos(cwd: str, tool: str, tool_input: dict[str, object]) -> list[Path]:
+    # 0023, issue 30, 188: each marked repo of the cwd or a write target, by .claude/ or by root.
     seen: set[str] = set()
+    found: list[Path] = []
     for path in [cwd, *_write_dirs(tool, tool_input, cwd)]:
+        held = _claude_root(path) if os.path.isabs(path) else None
         while path and not os.path.isdir(path) and os.path.dirname(path) != path:
             path = os.path.dirname(path)
         if not os.path.isabs(path) or path in seen:
@@ -2398,17 +2453,108 @@ def _marked_repo(cwd: str, tool: str, tool_input: dict[str, object]) -> Path | N
         if len(seen) > _TARGET_CAP:
             break
         root = project_root(path)
-        if os.path.lexists(train_marker(root)):
+        for repo in (held, root if os.path.lexists(train_marker(root)) else None):
+            if repo is not None and repo not in found:
+                found.append(repo)
+    return found
+
+
+def _marked_repo(cwd: str, tool: str, tool_input: dict[str, object]) -> Path | None:
+    # 0023, issue 30: a train in the cwd repo or in any repo the call writes into counts.
+    found = _marked_repos(cwd, tool, tool_input)
+    return found[0] if found else None
+
+
+def _holds_claude(path: str, repos: list[Path]) -> bool:
+    # issue 188: path is a marked repo's .claude/ folder or one of the folders above it.
+    return any(_under(str(repo / ".claude"), path) for repo in repos)
+
+
+def _interpreter_claude(command: str, cwd: str, marked: Path | None) -> Path | None:
+    # issue 188: an interpreter that names .claude in a marked repo, or a marked .claude by path.
+    for words in _shell_words(command):
+        clean = [_clean(w) for w in words]
+        at = _command_at(clean, set())
+        if at is None or at == _OPAQUE or not _INTERPRETER.fullmatch(_base(clean[at])):
+            continue
+        rest = clean[at + 1 :]
+        if marked is not None and any(".claude" in word for word in rest):
+            return marked
+        for word in rest:
+            hits = [_tilde(hit, str(Path.home())) for hit in _CLAUDE_PATH.findall(word)]
+            anchored = _anchor(word, cwd) if not word.startswith("-") else None
+            for hit in [*hits, *([anchored] if anchored else [])]:
+                root = _claude_root(hit)
+                if root is not None:
+                    return root
+    return None
+
+
+def _claude_hit(
+    tool: str, tool_input: dict[str, object], cwd: str, repos: list[Path]
+) -> Path | None:
+    # issue 188: the marked repo whose .claude/ folder this call writes, removes or runs code in.
+    if tool in WRITE_TOOLS:
+        raw = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+        return _claude_root(_abs(raw, cwd)) if raw else None
+    if tool != "Bash":
+        return None
+    command = str(tool_input.get("command") or "")
+    trees: list[str] = []
+    for target in _bash_write_dirs(command, cwd, trees=trees):
+        if (root := _claude_root(target)) is not None:
             return root
+    for target in trees:
+        root = _claude_root(target)
+        if root is not None or _holds_claude(target, repos):
+            return root or repos[0]
+    return _interpreter_claude(command, cwd, repos[0])
+
+
+def _unknown_train(agent: str, repo: Path) -> str:
+    return R_UNKNOWN_TRAIN.format(agent=agent, marker=train_marker(repo), repo=repo)
+
+
+def relative_write(command: str) -> str | None:
+    # issue 188: the first redirect, folder change or write operand that names a relative path.
+    segments = _shell_words(command)
+    envs = _bash_env(segments)
+    for k, words in enumerate(segments):
+        clean = [_clean(w) for w in words]
+        texts = [(_expand_word(w, envs[k]) or [("", False)])[0][0] for w in words]
+        redirects = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
+        for i in sorted(redirects):
+            if texts[i] and not os.path.isabs(texts[i]) and not _FD_WORD.fullmatch(texts[i]):
+                return texts[i]
+        # issue 188: the fd number of 2>&1 reads as a word before its redirect, never a path.
+        redirects |= {i for i in range(len(words)) if words[i].isdigit() and i + 1 in redirects}
+        options: list[WrapperOption] = []
+        at = _command_at(clean, redirects, options)
+        moved = _option_values(texts, options, WRAPPER_CHDIR)
+        if (rel := next((m for m in moved if not os.path.isabs(m)), None)) is not None:
+            return rel
+        if at is None or at == _OPAQUE:
+            continue
+        segment = [texts[i] for i in range(at, len(words)) if i not in redirects]
+        if _base(segment[0]) in {"cd", "pushd"}:
+            dest = [a for a in segment[1:] if not a.startswith("-")][:1]
+            if dest and not os.path.isabs(dest[0]):
+                return dest[0]
+            continue
+        found = _cd_relative_target(segment, "/")
+        if found is not None:
+            return found
     return None
 
 
 def _train_scoped(cwd: str, tool: str, tool_input: dict[str, object]) -> bool:
     # 0035: an unknown repo (no absolute cwd) is judged as if a train runs there.
+    command = str(tool_input.get("command") or "") if tool == "Bash" else ""
     return (
         not os.path.isabs(cwd)
         or _marked_repo(cwd, tool, tool_input) is not None
-        or (tool == "Bash" and _body_past_cap(str(tool_input.get("command") or "")))
+        or (bool(command) and _body_past_cap(command))
+        or (bool(command) and _interpreter_claude(command, cwd, None) is not None)
     )
 
 
@@ -2433,7 +2579,8 @@ def _unknown_decision(
     tool_input: dict[str, object],
     charter: str | None = None,
 ) -> Decision:
-    # 0023, 0100: a foreign agent reads only while a train is active; a daedalus name never acts.
+    # 0023, 0100, issue 188: in a train a foreign agent never writes under .claude/; host rules
+    # judge the rest. A daedalus name never acts.
     if _ours(raw_agent):
         return _block(R_UNKNOWN.format(agent=agent))
     if not os.path.isabs(cwd):
@@ -2445,16 +2592,26 @@ def _unknown_decision(
     command = str(tool_input.get("command") or "") if tool == "Bash" else ""
     if command and (_data_dir_write(command) or _cd_data_dir_git(command)):
         return _block(R_DATA_DIR)
-    repo = _marked_repo(cwd, tool, tool_input)
+    repos = _marked_repos(cwd, tool, tool_input)
     # issue 81: a body past the walk's cap may name any repo, so it fails closed.
-    if repo is None and not (command and _body_past_cap(command)):
-        return _allow()
+    if not repos and not (command and _body_past_cap(command)):
+        named = _interpreter_claude(command, cwd, None) if command else None
+        return _allow() if named is None else _block(_unknown_train(agent, named))
     hidden = _hidden_reason(command) if command else None
-    if hidden is not None or repo is None:
+    if hidden is not None or not repos:
         return _block(hidden or R_SHELL_BODY)
-    if tool == "Bash" and _foreign_read_ok(command, cwd, charter):
-        return _allow()
-    return _block(R_UNKNOWN_TRAIN.format(agent=agent, marker=train_marker(repo), repo=repo))
+    # audit A7-1, issue 188: a nested claude session would act as the operator, past this rule.
+    if command and _nested_claude(command, cwd):
+        return _block(R_NESTED_CLAUDE)
+    # 0053, issue 188: .git holds the run's worktree records and hooks, so it stays refused.
+    if tool in WRITE_TOOLS and integrity_reason(tool, tool_input, cwd) == R_DOTGIT:
+        return _block(R_DOTGIT)
+    # issue 188: a shell started inside a marked .claude/ folder only reads.
+    inside = _claude_root(cwd) if tool == "Bash" else None
+    if inside is not None and not _foreign_read_ok(command, cwd, charter):
+        return _block(_unknown_train(agent, inside))
+    hit = _claude_hit(tool, tool_input, cwd, repos)
+    return _allow() if hit is None else _block(_unknown_train(agent, hit))
 
 
 def normalize_agent(agent_type: str) -> str:
