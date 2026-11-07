@@ -493,6 +493,9 @@ A3_RULE_ROWS = (
     ("P11", "git --attr-source HEAD add ':(icase)NOTES/a.md'"),
     ("P11", "git --frobnicate add ':(icase)NOTES/a.md'"),
     ("P11", "git --frobnicate HEAD add ':(icase)NOTES/a.md'"),
+    # fix round 7 (T1, T2): a value-taking global git takes, and a glob-built subcommand.
+    ("P11", "git --shallow-file x add ':(icase)NOTES/a.md'"),
+    ("P11", "git [a]dd ':(icase)NOTES/a.md'"),
     ("P11", "trap \"git add ':(icase)NOTES/a.md'\" EXIT"),
     ("P11", "command_not_found_handle() { git add ':(icase)NOTES/a.md'; }; gti"),
     # fix round 3 (G1 refined): a bare delimiter whose body bash may expand is not plainly simple.
@@ -612,6 +615,9 @@ A3_ADMITTED = (
     "git -c a=b log -- ':(icase)NOTES'",
     "git --git-dir=.git --work-tree . log -- ':(icase)NOTES'",
     "git --no-pager --attr-source HEAD log -- ':(icase)NOTES'",
+    # fix round 7 (T2): [ and [[ are a test, no glob.
+    "[ -f x ] && git log -- ':(icase)x'",
+    "[[ -n x ]] && git commit -m ':i: fix' -- src/a.md",
 )
 # issue 121 (unit A3 fix round 2): an appending or array-element prefix is an env assignment.
 A3_APPEND_ENV = (
@@ -653,6 +659,7 @@ A3_UNSEEN = (
     'C="git add notes/a.md"; $C',
     "git $S notes/a.md",
     'git --attr-source HEAD add "$F"',
+    'git [a]dd "$F"',
 )
 # SC-12 (fix round 1, finding 1): an rg whitelist glob reaches the hidden .claude folder.
 FIX1_RG_GLOBS = (

@@ -402,11 +402,13 @@ _GIT_CONFIG_DENY = re.compile(
 )
 _GIT_GLOBAL_WITH_ARG = frozenset(
     {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--attr-source"}
+    | {"--shallow-file"}
 )
 # issue 121 (S2): git's global options that take no separate value, and the =value spellings.
 GIT_GLOBAL_FLAGS = frozenset(
     {"-p", "--paginate", "-P", "--no-pager", "--bare", "--no-replace-objects", "--no-lazy-fetch"}
     | {"--no-optional-locks", "--no-advice", "--literal-pathspecs", "--glob-pathspecs"}
+    | {"--no-literal-pathspecs"}
     | {"--noglob-pathspecs", "--icase-pathspecs", "--exec-path", "--html-path", "--man-path"}
     | {"--info-path", "-v", "--version", "-h", "--help"}
 )

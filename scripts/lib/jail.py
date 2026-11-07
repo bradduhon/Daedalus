@@ -2925,7 +2925,9 @@ _SIMPLE_HEREDOC = re.compile(
 )
 # issue 121 (G1, G4): words judged in a text that is not plainly simple, as the base judged it.
 _JUDGED_WORD = re.compile(r"\b(?:add|stage|commit|update-index|stash)\b")
-_SYNTH = re.compile(r"[$`{*?\[]|(?<![\w.-])(?:eval|source|alias|xargs)(?![\w-])|(?:^|[\s;&|(])\.\s")
+_SYNTH = re.compile(
+    r"[$`{*?]|\[[^\s\]]*\]|(?<![\w.-])(?:eval|source|alias|xargs)(?![\w-])|(?:^|[\s;&|(])\.\s"
+)
 _XARGS = re.compile(r"(?<![\w.-])xargs(?![\w.-])")
 _SHELL_WORD = re.compile(r"(?<![\w.-])(?:" + "|".join(sorted(_SHELLS)) + r")(?![\w.-])")
 R_EXCLUDED_UNSEEN = (
@@ -3167,20 +3169,25 @@ def _icase_git(
 
 def _excluded_git(tokens: list[str], base: str, roots: ExcludedRoots) -> str | None:
     sub, args, globals_ = _git_split(tokens)
-    if sub is None or not _judged_git(sub, args):
+    # issue 121 (S2, T1): a global outside git's tables leaves the subcommand unknown, so judged.
+    unknown = sub is not None and not git_globals_known(globals_)
+    if sub is None or not (unknown or _judged_git(sub, args)):
         return None
     where = _git_dir(globals_, base)
     tree = _work_tree(where)
     active = _active_roots(roots(), tree)
     if not active:
         return None
-    what = f"git {sub}"
+    what = "git" if unknown else f"git {sub}"
     hit = _root_of(where, active)
     if hit is not None:
         return R_EXCLUDED_PATH.format(what=what, path=where, root=hit.path)
-    paths, flags = _git_parts(sub, args)
-    whole, force = _whole_tree(sub, flags)
-    stages = sub in {"add", "stage", "stash"}
+    if unknown:
+        paths, whole, force, stages = [w for w in (sub, *args) if w[:1] != "-"], False, False, True
+    else:
+        paths, flags = _git_parts(sub, args)
+        whole, force = _whole_tree(sub, flags)
+        stages = sub in {"add", "stage", "stash"}
     spans = [tree] if whole else []
     for raw in paths:
         for cand in _candidates(raw):
@@ -3542,7 +3549,8 @@ def _built_head(raw: str) -> bool:
     lead = len(words) - len(rest)
     if not rest:
         return False
-    if _expands(words[lead]):
+    # issue 121 (T2): [ and [[ are the test builtin and keyword; a glob needs a closing ].
+    if words[lead] not in {"[", "[[", "]", "]]"} and _expands(words[lead]):
         return True
     if command_family(rest[0]) != "git":
         return False

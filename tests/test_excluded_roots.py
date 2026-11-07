@@ -138,6 +138,8 @@ def test_root_ignored_asks_git_check_ignore(repo: Path) -> None:
         "git update-index --add private/a.md",
         "git stash push -- private/a.md",
         "git add ':(top)private/a.md'",
+        "git --shallow-file x add private/a.md",
+        "git --frobnicate x add private/a.md",
         "cd {repo} && git add private/a.md",
         "gh pr create --title t --body-file private/a.md",
         "gh api repos/o/r/issues -F body=@private/a.md",
