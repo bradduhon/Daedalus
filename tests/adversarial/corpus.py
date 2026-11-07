@@ -496,7 +496,7 @@ A3_RULE_ROWS = (
     # fix round 7 (T1, T2): a value-taking global git takes, and a glob-built subcommand.
     ("P11", "git --shallow-file x add ':(icase)NOTES/a.md'"),
     ("P11", "git [a]dd ':(icase)NOTES/a.md'"),
-    # fix round 8 (U1): a git word that may not run the system git gets no read or message exemption.
+    # fix round 8 (U1): a git that may not be the system git gets no read or message exemption.
     ("P11", "./git log -- ':(icase)NOTES'"),
     ("P11", "hash -p ./x git; git log -- ':(icase)NOTES'"),
     ("P11", "PATH=. git log -- ':(icase)NOTES'"),
