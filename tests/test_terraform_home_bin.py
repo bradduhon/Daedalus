@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -16,13 +17,15 @@ from lib import shell
 from tests.test_confine import ON, _unit
 
 FAKE = '#!/bin/sh\necho "tf_data=$TF_DATA_DIR args=$*"\n'
+# 184: a compiled stand-in; printenv prints the one variable its argument names.
+ELF = "/usr/bin/printenv"
 
 
 def _home_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
-    # 184: a fake terraform the session PATH names, behind a link as tfenv and asdf leave it.
-    real = tmp_path / "home" / ".tfenv" / "versions" / "1.9.0" / "terraform"
+    # 184: a compiled fake terraform the session PATH names through a symlinked binary.
+    real = tmp_path / "home" / "opt" / "terraform-1.9.0" / "terraform"
     real.parent.mkdir(parents=True)
-    real.write_text(FAKE, encoding="utf-8")
+    shutil.copy(ELF, real)
     real.chmod(0o755)
     folder = tmp_path / "home" / ".local" / "bin"
     folder.mkdir(parents=True)
@@ -70,6 +73,29 @@ def test_no_grant_for_another_command_a_miss_a_relative_path_or_a_guarded_folder
     assert daedalus_confine.terraform_binary(command, str(repo)) is None
 
 
+def test_a_script_shim_gets_no_grant_and_the_wrapper_refuses_with_one_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 184: shims are unsupported by design; the refusal names the two ways past it.
+    folder, _ = _home_bin(tmp_path, monkeypatch)
+    repo, unit = _unit(tmp_path)
+    (folder / "terraform").unlink()
+    (folder / "terraform").write_text(FAKE, encoding="utf-8")
+    (folder / "terraform").chmod(0o755)
+    with pytest.raises(daedalus_confine.Refusal) as caught:
+        daedalus_confine.terraform_binary(["terraform", "validate"], str(repo))
+    assert str(caught.value) == daedalus_confine.R_TERRAFORM_SHIM.format(path=folder / "terraform")
+    monkeypatch.setattr(daedalus_confine, "kernel_support", lambda: ON)
+    applied: list[object] = []
+    monkeypatch.setattr(daedalus_confine, "apply", applied.append)
+    assert daedalus_confine.main(["--unit", str(unit), "--", "terraform", "validate"]) == 1
+    err = capsys.readouterr().err.strip().splitlines()
+    assert err == [f"daedalus_confine: {caught.value}"] and applied == []
+    for words in ("is a script shim", "put the real terraform binary's folder first on PATH"):
+        assert words in err[0], words
+    assert "name it in the shim manager" in err[0]
+
+
 def _data(tmp: Path, module: Path) -> Path:
     digest = hashlib.sha256(os.path.realpath(module).encode()).hexdigest()[:16]
     return tmp / "tf-data" / digest
@@ -103,12 +129,11 @@ def test_the_wrapper_runs_a_home_bin_terraform_with_its_data_folder_in_tmp(
 ) -> None:
     folder, _ = _home_bin(tmp_path, monkeypatch)
     _, unit = _unit(tmp_path)
+    # 184: with no -chdir the data folder keys on the working folder, the unit worktree here.
     argv = [sys.executable, str(shell.CONFINE_PATH), "--unit", str(unit), "--", "terraform"]
-    argv += [f"-chdir={unit}", "validate"]
+    argv.append("TF_DATA_DIR")
     env = {**os.environ, "PATH": f"{folder}:/usr/bin:/bin", "TF_DATA_DIR": "/elsewhere"}
     done = subprocess.run(argv, capture_output=True, text=True, check=False, cwd=unit, env=env)
     assert done.returncode == 0, done.stderr
     tmp = Path(daedalus_confine._private_tmp(str(unit.resolve())))
-    assert done.stdout.splitlines()[-1] == (
-        f"tf_data={_data(tmp, unit)} args=-chdir={unit} validate"
-    )
+    assert done.stdout.splitlines()[-1] == str(_data(tmp, unit))

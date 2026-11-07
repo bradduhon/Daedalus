@@ -82,6 +82,11 @@ NEXT_KERNEL = (
     "Next: commit WIP and yield with this line; the operator boots a kernel with Landlock "
     "enabled (landlock in the lsm= list) and reruns the doctor."
 )
+R_TERRAFORM_SHIM = (
+    "the terraform on PATH ({path}) is a script shim, which the kernel wrapper does not run "
+    "(184). Next: put the real terraform binary's folder first on PATH, or name it in the "
+    "shim manager."
+)
 NEXT_PROBE = (
     "Next: commit WIP and yield with this line; the operator reruns the doctor and fixes the "
     "cause it names."
@@ -343,7 +348,17 @@ def terraform_binary(command: list[str], repo: str) -> str | None:
     guarded = [*credential_roots(), os.path.join(repo, ".claude")]
     if any(shell._under(real, g) or shell._under(g, real) for g in guarded):
         return None
-    return real if os.path.isfile(real) else None
+    if not os.path.isfile(real):
+        return None
+    try:
+        with open(real, "rb") as handle:
+            shim = handle.read(2) == b"#!"
+    except OSError:
+        return None
+    # 184: a script shim needs its interpreter and its real binary; the grant is one file only.
+    if shim:
+        raise Refusal(R_TERRAFORM_SHIM.format(path=found))
+    return real
 
 
 def rule_set(
