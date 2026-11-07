@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 from pathlib import Path
 
 from lib.repo_root import TRAIN_MARKER, git_root
@@ -39,6 +40,42 @@ def repo_refusal(given: Path, cwd: Path) -> str | None:
         f"--repo {given} is not the project root of the working directory ({root}). "
         f"Next: run the command from {given}, or pass --repo {root}."
     )
+
+
+def effective_cwd(payload: dict[str, object]) -> object:
+    # 188: a bare main session's leading `cd <abs dir> &&` or `;` moves its record; no agent's.
+    cwd = payload.get("cwd")
+    if payload.get("agent_id") or str(payload.get("agent_type") or "main") != "main":
+        return cwd
+    tool_input = payload.get("tool_input")
+    if payload.get("tool_name") != "Bash" or not isinstance(tool_input, dict):
+        return cwd
+    command = tool_input.get("command")
+    if not isinstance(command, str):
+        return cwd
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        # 188: three tokens only, so a later unbalanced quote never decides the folder.
+        words = [lexer.get_token() for _ in range(3)]
+    except ValueError:
+        return cwd
+    target = words[1]
+    if words[0] != "cd" or words[2] not in ("&&", ";") or not isinstance(target, str):
+        return cwd
+    if not os.path.isabs(target) or not os.path.isdir(target):
+        return cwd
+    return os.path.normpath(target)
+
+
+def record_cwd(payload: dict[str, object]) -> object:
+    # 188: the effective folder only adds a destination; an unmarked one never drops a record.
+    cwd = payload.get("cwd")
+    moved = effective_cwd(payload)
+    if moved is not cwd and isinstance(moved, str):
+        if os.path.lexists(project_root(Path(moved)) / TRAIN_MARKER):
+            return moved
+    return cwd
 
 
 def train_marked(cwd: object) -> bool:
