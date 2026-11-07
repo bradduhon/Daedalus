@@ -20,7 +20,7 @@ CONDUCTOR_GH = frozenset(
 ALLOWED_0028 = CONDUCTOR_GH | {("auth", "status"), ("issue", "view"), ("issue", "list")}
 # B7: main reads during a train; pull request writes stay with the conductor.
 MAIN_ISSUE_WRITES = frozenset({("issue", "create"), ("issue", "comment")})  # issue 211, P12
-MAIN_GH = (ALLOWED_0028 - {("pr", "create"), ("pr", "edit")}) | MAIN_ISSUE_WRITES
+MAIN_GH = ALLOWED_0028 - {("pr", "create"), ("pr", "edit")}
 R_VERDICT = (
     "{what} needs an approved audit verdict on the tip of {branch}, or on its parent when the "
     "tip only adds the ledger commit; {detail} (spec 4.2, 3.5). "
@@ -262,7 +262,7 @@ def classify(tokens: list[str]) -> tuple[str, str]:
         return "admin", detail
     if (cmd, sub) == ("pr", "edit") and not _body_only_edit(parsed):
         return "default-deny", detail
-    if (cmd, sub) in ALLOWED_0028 | MAIN_ISSUE_WRITES:
+    if (cmd, sub) in ALLOWED_0028:
         return "allow", detail
     return "default-deny", detail
 
@@ -298,6 +298,9 @@ def _gh_reason(agent: str, tokens: list[str]) -> str | None:
     if gh_args(tokens[1:]) is None:
         return R_GH_BUNDLE
     klass, detail = classify(tokens)
+    # issue 211, P12: classify keeps these default-deny; only the bare main session passes.
+    if agent == "main" and klass == "default-deny" and tuple(detail.split()) in MAIN_ISSUE_WRITES:
+        return None
     if klass == "allow" and tuple(detail.split()) in _allowed(agent):
         return None
     if klass == "allow":

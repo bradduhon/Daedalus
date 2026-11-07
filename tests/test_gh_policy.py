@@ -528,6 +528,16 @@ def test_bundled_short_flags_are_refused_in_a_train(train_repo: Path, agent: str
     assert classify(shlex.split("gh pr view -cw 3"))[0] == "default-deny"
 
 
+ISSUE_211_ROWS = (
+    "during run 20261107-012956 every gh issue create from the main session drew a jail warning "
+    "that gh is default-deny and only the releaser runs gh. The main session is never blocked, "
+    "so the call ran, but the warning is noise on a legitimate step: the tracking rule requires "
+    "tracked-risk issues before the pull request, so the main session must file them during "
+    "the run.",
+    "admit gh issue create and gh issue comment for the bare main session in the gh class "
+    "policy and drop the warning for them. Agents stay refused. Add a test that main is "
+    "admitted and every Daedalus agent is still refused.",
+)
 ISSUE_WRITES = [
     "gh issue create --body-file f",
     "gh issue comment 5 --body-file f",
@@ -540,10 +550,10 @@ ISSUE_WRITES = [
 
 @pytest.mark.parametrize("command", ISSUE_WRITES)
 def test_main_issue_writes_pass_without_a_warning(train_repo: Path, command: str) -> None:
-    # issue 211, P12: the bare main session files and comments on issues with no gh warning.
+    # issue 211, P12: ISSUE_211_ROWS holds the reproduction; main gets no gh warning.
     d = decide(_bash(train_repo, "main", command), Config())
     assert d.allow and not d.warn and not d.reason, d
-    assert classify(shlex.split(command))[0] == "allow"
+    assert classify(shlex.split(command))[0] == "default-deny"
 
 
 @pytest.mark.parametrize("command", ["gh issue comment 3 --delete-last", "gh issue delete 3"])
@@ -560,3 +570,12 @@ def test_main_issue_delete_keeps_its_warning(train_repo: Path, command: str) -> 
 def test_agents_stay_refused_issue_writes(train_repo: Path, agent: str, command: str) -> None:
     # issue 211: every Daedalus agent and a foreign agent keeps today's refusal.
     _reason(train_repo, agent, command)
+
+
+@pytest.mark.parametrize("agent", ["releaser", "general-purpose"])
+def test_issue_create_refusal_text_is_the_base_text(train_repo: Path, agent: str) -> None:
+    # issue 211: the agent refusal for gh issue create stays byte-identical to the base.
+    assert _reason(train_repo, agent, "gh issue create --body-file f") == (
+        "gh issue create is a default-deny command, refused while a train runs and to every "
+        "Daedalus agent (0028, 0035). Next: only the Push Train's releaser runs gh."
+    )
