@@ -106,6 +106,7 @@ from lib.shell import (
     _under,
     chain_bases,
     env_split_values,
+    expansion_opaque,
     runs_claude,
     scan_options,
     split_options,
@@ -1311,7 +1312,8 @@ def _read_only_segment(
     if name not in READ_ONLY_WRITE_OPTS:
         return True
     # P1, issue 204: a $ or backtick word may expand to a write option or a second operand;
-    # so may a glob leading with - or a glob char, and any glob in uniq. find globs are patterns.
+    # so may a glob leading with - or a glob char, and any glob in uniq; expansion_opaque judges
+    # the unquoted words, find's included, where the raw command is known.
     if any(
         set("$`") & set(arg)
         or name != "find"
@@ -2543,7 +2545,7 @@ def _ours(raw_agent: str) -> bool:
 def _foreign_read_ok(command: str, cwd: str, charter: str | None) -> bool:
     # 0100: the auditor's per-segment read-only class, pipes included; no env-prefix strip.
     segments = tokenize(command)
-    if not segments:
+    if not segments or expansion_opaque(command):
         return False
     return all(_read_only_segment(s, READ_ONLY_GIT, cwd, charter) for s in segments)
 

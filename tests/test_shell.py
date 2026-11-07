@@ -46,7 +46,7 @@ SHARED = frozenset(
     | {"WrapperOption", "WRAPPER_CHDIR", "WRAPPER_WRITES"}
     | {"worker_parse", "chain_bases"}
     | {"env_split_values", "R_ENV_SPLIT", "FLOCK_BODY"}
-    | {"READ_ONLY_WRITE_OPTS", "scan_options", "split_options"}
+    | {"READ_ONLY_WRITE_OPTS", "scan_options", "split_options", "expansion_opaque"}
 )
 
 

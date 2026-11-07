@@ -140,6 +140,33 @@ A1_READ_P4 = (
 )
 A1_READ_P9 = ("flock l cat x", "time -o t cat x")
 A1_READ_ADMITTED = ("uniq -c in", "uniq -f 1 in", "sort -u in", "sort -t, -k2,2n in", "file -b x")
+# P1 (unit A1, fix round 1): an unquoted word the shell splits or turns into an option.
+A1_EXPANSION = (
+    "uniq {in,out}",
+    "uniq x{a,b}",
+    "uniq {1..3}",
+    "sort {-o,out} in",
+    "sort -{o,x}out in",
+    "file {-C,-m,x}",
+    "find . {-fprint,out}",
+    "find . -name *.py",
+    "uniq *",
+    "uniq ~/in",
+    "sort ~ in",
+    "uniq in <(cat x)",
+    "sort -m <(cat x) in",
+    "uniq $X",
+    'sort "$O" in',
+    "sort `x` in",
+)
+A1_EXPANSION_ADMITTED = (
+    "uniq '{a,b}'",
+    'uniq "{a,b}"',
+    "sort '{-o,out}' in",
+    "find . -name '*.py'",
+    "find . -name '{a,b}.py'",
+    "uniq '~/in'",
+)
 # P1 to P4, P9 (unit A1): wrapper files named in {repo}, a repository a train marks.
 A1_WRAPPER_ROWS = (
     "flock {repo}/* true",

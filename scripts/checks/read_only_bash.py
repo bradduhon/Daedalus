@@ -271,6 +271,8 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
         name = shell._cmd_name(tokens)
         if name in shell.SEARCH_CMDS and shell.search_opaque(chain.raws[i]):
             return jail.R_RG_OPAQUE
+        if name in shell.READ_ONLY_WRITE_OPTS and shell.expansion_opaque(chain.raws[i]):
+            return shell.R_READ_EXPANSION
         if name == "rg" and jail.rg_program(tokens[1:]):
             return jail.R_RG_PROGRAM
         if (i == 0 and moved) or read_segment_ok(tokens, subs, cwd, charter):

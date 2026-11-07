@@ -1920,6 +1920,29 @@ def search_opaque(command: str) -> bool:
     return False
 
 
+R_READ_EXPANSION = (
+    "uniq, sort, file and find can write a file, and this call holds a word the shell expands "
+    "before the command runs (a brace list, ~, a glob, $, a backtick or <(...)), so it may turn "
+    "into a write option or an output operand the jail never saw (issue 204). Next: quote the "
+    "word or name each path literally."
+)
+
+
+def expansion_opaque(command: str) -> bool:
+    # P1, 0084, issue 204: a read verb that can write sits beside a word the shell may split.
+    bare = [lex for lex in quote_walk(command) if lex.kind == CHAR and not lex.quote]
+    procsub = any(
+        a.text in "<>" and b.text == "(" and b.at == a.at + 1 for a, b in itertools.pairwise(bare)
+    )
+    for raw in _raw_segments(command):
+        words = _raw_words(raw)
+        if any(_base(_unquoted(w)) in READ_ONLY_WRITE_OPTS for w in words) and (
+            procsub or any(_unquoted_expansion(w) or set("$`") & set(_unsingled(w)) for w in words)
+        ):
+            return True
+    return False
+
+
 def _hygiene_bad(token: str, word: str | None) -> bool:
     # O4: judge the raw span when it is known, else the shlex token as before.
     text = token if word is None else _unsingled(word)

@@ -10,6 +10,8 @@ import pytest
 from lib import jail, shell
 
 from tests.adversarial.corpus import (
+    A1_EXPANSION,
+    A1_EXPANSION_ADMITTED,
     A1_ISSUE_107,
     A1_ISSUE_204,
     A1_READ_ADMITTED,
@@ -38,6 +40,28 @@ def test_a_read_verb_never_writes_through_an_option_or_operand(command: str) -> 
     tokens = shlex.split(command)
     if tokens[0] in shell.READ_ONLY_CMDS:
         assert not jail._read_only_segment(tokens, frozenset(), "/c", None), command
+
+
+@pytest.mark.parametrize("command", A1_EXPANSION)
+def test_an_expanding_word_beside_a_writing_read_verb_is_refused(
+    marked_repo: Path, command: str
+) -> None:
+    # P1, 0084: refused to a read-only agent and to an agent Daedalus did not start.
+    assert_denied(_b("auditor", command))
+    foreign = _cred("Explore", "Bash", str(marked_repo), command=command)
+    assert_denied(foreign, "read-only while", "could be a credential path")
+    assert shell.expansion_opaque(command), command
+
+
+@pytest.mark.parametrize("command", A1_EXPANSION_ADMITTED)
+def test_a_quoted_brace_or_glob_is_one_literal_word(marked_repo: Path, command: str) -> None:
+    assert not shell.expansion_opaque(command), command
+    decision = jail.decide(_cred("Explore", "Bash", str(marked_repo), command=command), CFG)
+    assert decision.allow and not decision.warn, (command, decision.reason)
+    # O4: worker hygiene still refuses a brace inside double quotes to Daedalus agents.
+    if '"' not in command:
+        decision = decide(_b("auditor", command), CFG)
+        assert decision.allow and not decision.warn, (command, decision.reason)
 
 
 @pytest.mark.parametrize("command", A1_READ_ADMITTED)
