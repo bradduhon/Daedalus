@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import re
 import shlex
 import sys
 import time
@@ -47,15 +48,16 @@ _AUDIT_WARN = "auditing is down: the audit log cannot be written, so this {tool}
 _CONFIG_WARN = "the project config failed to load, so this {tool} call runs unjudged during a train"
 _JUDGE_WARN = "the jail failed while judging this {tool} call, so it runs unjudged during a train"
 R_RELATIVE = (
-    "this agent's run is in {repo}, while its shell still runs in {cwd}, so the relative path "
-    "{path} would land outside the run (issue 188). Next: name every path you write, redirect "
-    "to or cd into as an absolute path."
+    "this agent's run is in {repo}, while its shell and search tools still start in {cwd}, so "
+    "{path} would resolve outside the run (issue 188). Next: name every path as an absolute "
+    "path, or start the command with cd <your worktree> &&."
 )
 
 
 _TRAIN_MARKER = Path(".claude") / "daedalus" / "train.active"
 _MANIFEST = "service-manifest.json"
 _DATA_DIR = Path(".claude") / "daedalus"
+_SESSION = re.compile(r"[A-Za-z0-9_-]+")
 
 
 def _inline_git_root(path: str) -> Path | None:
@@ -274,13 +276,15 @@ def _hook_failed(
 
 def _bind_run(payload: dict[str, object], agent: str) -> tuple[dict[str, object], str | None]:
     # issue 188: a bound Daedalus agent is judged in its own run, wherever the session moved.
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not os.path.isabs(cwd):
+        return payload, None  # issue 188: R_NO_CWD as on base, before any rebinding.
     try:
         from lib.train_scope import policed_outside_train
 
         if not policed_outside_train(agent) or not payload.get("agent_id"):
             return payload, None
         from lib.dispatch_binding import bound_run
-        from lib.jail import relative_write
         from lib.shell import _under
 
         bound = bound_run(payload)
@@ -288,22 +292,38 @@ def _bind_run(payload: dict[str, object], agent: str) -> tuple[dict[str, object]
         return payload, None  # issue 188: no binding, so the payload cwd judges as before.
     if bound is None:
         return payload, None
-    cwd = payload.get("cwd")
-    if isinstance(cwd, str) and os.path.isabs(cwd) and _under(cwd, bound.repo):
+    if _under(cwd, bound.repo):
         return ({**payload, "binding": bound.record()} if bound.claimed_now else payload), None
     judged = bound.worktree or bound.repo
     moved = {**payload, "cwd": judged, "payload_cwd": cwd, "binding": bound.record()}
-    raw_input = payload.get("tool_input")
-    command = raw_input.get("command") if isinstance(raw_input, dict) else None
-    if payload.get("tool_name") != "Bash" or not isinstance(command, str):
-        return moved, None
     try:
-        path = relative_write(command)
-    except Exception:  # noqa: BLE001
-        path = command  # issue 188: an unreadable command fails closed.
-    if path is None:
-        return moved, None
-    return moved, R_RELATIVE.format(repo=bound.repo, cwd=cwd, path=path)
+        return moved, _moved_reason(payload, cwd, judged, bound.repo)
+    except Exception as exc:  # noqa: BLE001
+        # issue 188: an unreadable call fails closed.
+        return moved, R_RELATIVE.format(repo=bound.repo, cwd=cwd, path=f"<unread: {exc}>")
+
+
+def _moved_reason(payload: dict[str, object], cwd: str, judged: str, repo: str) -> str | None:
+    # issue 188: the credential check at the host's own cwd, then absolute paths for everything.
+    from lib.jail import _credential_reason, moved_relative
+
+    tool = str(payload.get("tool_name"))
+    raw_input = payload.get("tool_input")
+    tool_input: dict[str, object] = raw_input if isinstance(raw_input, dict) else {}
+    found = _credential_reason(tool, tool_input, cwd)
+    if found is not None:
+        return found
+    path = moved_relative(tool, tool_input, (cwd, judged), judged)
+    return None if path is None else R_RELATIVE.format(repo=repo, cwd=cwd, path=path)
+
+
+def _session_runs(payload: dict[str, object]) -> bool:
+    # issue 188, 0035/0043 exception: inline audit.SESSION_ID check, as lib may not load here.
+    root = os.environ.get("CLAUDE_PLUGIN_DATA") or ""
+    session = payload.get("session_id")
+    if not os.path.isabs(root) or not isinstance(session, str) or not _SESSION.fullmatch(session):
+        return False
+    return os.path.lexists(os.path.join(root, "run-bindings", f"{session}.json"))
 
 
 def _record_run(payload: dict[str, object], agent: str) -> None:
@@ -417,6 +437,8 @@ def main() -> int:
             named = _names_marked_repo(tool_name, named_input, cwd)
         except Exception:  # noqa: BLE001
             named = True  # issue 30: unsure means the full jail judges the call.
+        # issue 188: a run bound in this session sends a foreign call to the full jail.
+        named = named or (not main_session and _session_runs(payload))
         if not policed_outside_train(agent) and not named:
             try:
                 return _fast_path(payload, agent, cwd)

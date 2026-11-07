@@ -102,14 +102,71 @@ def test_each_coder_writes_only_in_its_own_run(two_runs: Any, run_script: Run) -
 def test_a_relative_write_of_a_moved_agent_is_refused(two_runs: Any, run_script: Run) -> None:
     # issue 188: the shell still runs in the session folder, so a relative target is refused.
     (_, wt_a, _), (repo_b, _, _) = two_runs
-    for command in ("touch rel.txt", "echo x > out.txt", "cd sub", "git commit -m x"):
-        result = run_script(
-            "enforce_agent_jail.py", _call(repo_b, "Bash", "agent-a", command=command)
-        )
-        assert result.returncode == 2, command
-        assert "Next: name every path you write, redirect to or cd into" in result.stderr, command
+    (repo_b / "README.md").write_text("x\n", encoding="utf-8")
+    bash = ["touch rel.txt", "echo x > out.txt", "cd sub", "git commit -m x"]
+    bash += ["python3 -m pytest tests", "ls", "cat README.md", "git status", "./run.sh"]
+    calls = [("Bash", {"command": command}) for command in bash]
+    calls += [("Grep", {"pattern": "x"}), ("Glob", {"pattern": "*.py"})]
+    calls.append(("Read", {"file_path": "README.md"}))
+    for tool, tool_input in calls:
+        result = run_script("enforce_agent_jail.py", _call(repo_b, tool, "agent-a", **tool_input))
+        assert result.returncode == 2, tool_input
+        assert "Next: name every path as an absolute path" in result.stderr, tool_input
+    for command in (f"cd {wt_a} && python3 -m pytest tests -q", f"git -C {wt_a} status", "echo hi"):
+        payload = _call(repo_b, "Bash", "agent-a", command=command)
+        assert "name every path" not in run_script("enforce_agent_jail.py", payload).stderr
     assert jail.relative_write(f"touch {wt_a}/x 2>&1 > /dev/null") is None
     assert jail.relative_write(f"cd {wt_a} && ls") is None
+
+
+@pytest.mark.parametrize("cwd", ["", "rel/dir"])
+def test_a_missing_cwd_keeps_the_base_refusal(two_runs: Any, run_script: Run, cwd: str) -> None:
+    # issue 188: no absolute payload cwd is refused as on base, before any rebinding.
+    (_, wt_a, _), _ = two_runs
+    results = []
+    for agent in ("agent-a", "agent-z"):
+        payload = {**_call(wt_a, "Write", agent, file_path=f"{wt_a}/x.py"), "cwd": cwd}
+        results.append(run_script("enforce_agent_jail.py", payload))
+    assert [r.returncode for r in results] == [2, 2]
+    assert results[0].stderr == results[1].stderr and "absolute cwd" in results[0].stderr
+
+
+def test_the_credential_check_also_runs_at_the_payload_cwd(
+    two_runs: Any, run_script: Run, cred_home: Path
+) -> None:
+    # issue 188: a pathless Grep from a credential folder is refused as the host would search it.
+    (cred_home / ".ssh").mkdir()
+    payload = _call(cred_home / ".ssh", "Grep", "agent-a", pattern="x")
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 2 and "credential path" in result.stderr, result.stderr
+
+
+def test_a_foreign_removal_of_a_bound_run_is_refused_from_anywhere(
+    two_runs: Any, run_script: Run, tmp_path: Path
+) -> None:
+    # issue 188: the session's run bindings name the repos a foreign removal may not reach.
+    (repo_a, _, _), _ = two_runs
+    plain = _git_init(tmp_path / "plain")
+    for command in (f"rm -rf {tmp_path}", f"rm -r {repo_a}", f"find {tmp_path} -delete"):
+        payload = {**_call(plain, "Bash", command=command), "agent_type": "general-purpose"}
+        result = run_script("enforce_agent_jail.py", {**payload, "agent_id": "f1"})
+        assert result.returncode == 2 and "may not write under" in result.stderr, command
+    payload = {**_call(plain, "Bash", command=f"rm -rf {plain}/x"), "agent_id": "f1"}
+    result = run_script("enforce_agent_jail.py", {**payload, "agent_type": "general-purpose"})
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_fed_remover_below_the_root_is_refused(two_runs: Any) -> None:
+    # issue 188: xargs or parallel feeding a remover from below a marked root.
+    (_, _, brief), _ = two_runs
+    below = str(brief.parent)
+    for command in ("ls | xargs rm -rf", "ls | parallel rm", "find . | xargs mv -t /tmp"):
+        payload = {
+            **_cred("general-purpose", "Bash", below, command=command),
+            "session_id": SESSION,
+        }
+        d = jail.decide(payload, CFG)
+        assert not d.allow and "may not write under" in str(d.reason), command
 
 
 def test_an_unbound_daedalus_agent_is_judged_by_its_payload_cwd(

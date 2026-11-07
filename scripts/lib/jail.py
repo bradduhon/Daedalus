@@ -889,6 +889,20 @@ _RECURSIVE = re.compile(r"-[a-zA-Z]*[rRa][a-zA-Z]*|--recursive|--archive")
 _INTERPRETER = re.compile(r"python[\d.]*|perl|ruby|node|nodejs|deno|bun|php")
 _CLAUDE_PATH = re.compile(r"[~/][^\s'\"(),;]*?\.claude(?![\w.-])")
 _FD_WORD = re.compile(r"&?\d+|&?-")
+# issue 188: the only verbs a foreign agent may aim at a marked .claude/ folder; tests read it.
+FOREIGN_CLAUDE_READS = frozenset(
+    {"cat", "head", "tail", "less", "ls", "stat", "file", "wc", "grep", "rg", "find"}
+    | {"git status", "git log", "git diff", "git show", "git ls-files", "git rev-parse"}
+)
+# issue 188: verbs that read no folder when they name no path, for a moved bound agent.
+CWD_FREE = frozenset(
+    {"echo", "printf", "true", "false", "date", "sleep", "whoami", "id", "uname"}
+    | {"cat", "head", "tail", "wc", "sort", "uniq", "cut", "tr", "jq", "awk", "sed", "tee"}
+)
+_FEEDERS = frozenset({"xargs", "parallel"})
+_FED_REMOVERS = frozenset({"rm", "mv", "cp", "find"})
+_CD_LEAD = re.compile(r"\s*cd\s+(/\S+)\s*&&")
+_CHDIR_WORD = re.compile(r"(?:^|[\s;&|(])(?:cd|pushd|popd)(?=[\s;&|)]|$)")
 _CD_TARGET = re.compile(r"(?:^|[;&|(\s])(?:cd|pushd)\s+([^\s;&|)]+)")
 _DAEDALUS_WORD = re.compile(r"(?<![\w.-])daedalus(?![\w-])")
 _GIT_INDEX_WRITE = re.compile(r"\bgit\b[^;&|]*\b(?:add|stage|commit|update-index)\b")
@@ -2501,14 +2515,134 @@ def _claude_hit(
         return None
     command = str(tool_input.get("command") or "")
     trees: list[str] = []
-    for target in _bash_write_dirs(command, cwd, trees=trees):
+    for target in [*_bash_write_dirs(command, cwd, trees=trees), *trees]:
         if (root := _claude_root(target)) is not None:
             return root
-    for target in trees:
-        root = _claude_root(target)
-        if root is not None or _holds_claude(target, repos):
-            return root or repos[0]
-    return _interpreter_claude(command, cwd, repos[0])
+    return (
+        _tree_hit(command, cwd, repos)
+        or _claude_token_hit(command, cwd)
+        or _interpreter_claude(command, cwd, repos[0])
+    )
+
+
+def _claude_read(tokens: list[str]) -> bool:
+    # issue 188: the segment's verb is on FOREIGN_CLAUDE_READS; find only without its deny forms.
+    name = _base(tokens[0])
+    if name == "git":
+        return f"git {_git_split(tokens)[0]}" in FOREIGN_CLAUDE_READS
+    if name == "find" and _FIND_DENY & set(tokens):
+        return False
+    return name in FOREIGN_CLAUDE_READS
+
+
+def _claude_token_hit(command: str, cwd: str) -> Path | None:
+    # issue 188: any word or option value of a non-read verb that resolves under a marked .claude/.
+    segments = _shell_words(command)
+    envs = _bash_env(segments)
+    home = str(Path.home())
+    for k, words in enumerate(segments):
+        clean = [_clean(w) for w in words]
+        texts = [(_expand_word(w, envs[k]) or [("", False)])[0][0] for w in words]
+        redirects = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
+        at = _command_at(clean, redirects)
+        if at is not None and at != _OPAQUE and _claude_read(clean[at:]):
+            continue
+        for value in _opaque_values(texts, set(range(len(words)))):
+            hits = [_anchor(value, cwd), *(_tilde(h, home) for h in _CLAUDE_PATH.findall(value))]
+            for hit in hits:
+                if hit and (root := _claude_root(hit)) is not None:
+                    return root
+    return None
+
+
+def _fed_remover(command: str) -> bool:
+    # issue 188: xargs or parallel feeding rm, mv, cp or find takes names the jail never sees.
+    for words in _shell_words(command):
+        clean = [_base(_clean(w)) for w in words]
+        fed = [i for i, word in enumerate(clean) if word in _FEEDERS]
+        if fed and _FED_REMOVERS & set(clean[fed[0] + 1 :]):
+            return True
+    return False
+
+
+def _tree_hit(command: str, cwd: str, repos: list[Path]) -> Path | None:
+    # issue 188: a removal aimed at a run repo or a folder above it, or names fed to a remover.
+    if not repos or not command:
+        return None
+    if _fed_remover(command):
+        return repos[0]
+    trees: list[str] = []
+    _bash_write_dirs(command, cwd, trees=trees)
+    return next((r for t in trees for r in repos if _under(str(r / ".claude"), t)), None)
+
+
+def _stored_repos(hook_input: dict[str, object]) -> list[Path]:
+    # issue 188: the repos of this session's live run bindings.
+    return [Path(r) for r in dispatch_binding.session_repos(hook_input.get("session_id"))]
+
+
+def moved_relative(
+    tool: str, tool_input: dict[str, object], cwds: tuple[str, str], judged: str
+) -> str | None:
+    # issue 188: what a moved bound agent names relatively or leaves to its shell's folder.
+    if tool in {"Grep", "Glob"} and not os.path.isabs(str(tool_input.get("path") or "")):
+        return f"{tool} with no absolute path"
+    for key in ("file_path", "notebook_path", "path"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value and not os.path.isabs(value):
+            return value
+    if tool != "Bash":
+        return None
+    command = str(tool_input.get("command") or "")
+    lead = _CD_LEAD.match(command)
+    if lead and os.path.normpath(lead.group(1)) == os.path.normpath(judged):
+        if len(_CHDIR_WORD.findall(command)) == 1:
+            return None  # issue 188: the shell starts in the judged folder itself.
+    found = relative_write(command)
+    if found is not None:
+        return found
+    segments = _shell_words(command)
+    envs = _bash_env(segments)
+    for k, words in enumerate(segments):
+        found = _moved_segment(words, envs[k], cwds)
+        if found is not None:
+            return found
+    return None
+
+
+def _moved_segment(
+    words: list[str], env: dict[str, list[str]], cwds: tuple[str, str]
+) -> str | None:
+    # issue 188: a relative verb, a module run, a relative or unknown word, or no path at all.
+    clean = [_clean(w) for w in words]
+    redirects = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
+    at = _command_at(clean, redirects)
+    if at is None:
+        return None
+    if at == _OPAQUE:
+        return " ".join(clean)
+    verb = clean[at]
+    if "/" in verb and not os.path.isabs(verb):
+        return verb
+    if _INTERPRETER.fullmatch(_base(verb)) and "-m" in clean[at + 1 :]:
+        return f"{verb} -m"
+    named = False
+    for i in range(at + 1, len(words)):
+        alts = _expand_word(words[i], env) if i not in redirects else []
+        if any(unknown for _, unknown in alts):
+            return clean[i]
+        text = alts[0][0] if alts else ""
+        if text.startswith("-"):
+            text = text.split("=", 1)[1] if "=" in text else ""
+        if not text:
+            continue
+        if os.path.isabs(text):
+            named = True
+            continue
+        here = any(os.path.lexists(os.path.join(c, text)) for c in cwds)
+        if "/" in text or set("*?[") & set(text) or text in {".", ".."} or here:
+            return text
+    return None if named or _base(verb) in CWD_FREE else verb
 
 
 def _unknown_train(agent: str, repo: Path) -> str:
@@ -2578,6 +2712,7 @@ def _unknown_decision(
     tool: str,
     tool_input: dict[str, object],
     charter: str | None = None,
+    stored: list[Path] | None = None,
 ) -> Decision:
     # 0023, 0100, issue 188: in a train a foreign agent never writes under .claude/; host rules
     # judge the rest. A daedalus name never acts.
@@ -2592,13 +2727,15 @@ def _unknown_decision(
     command = str(tool_input.get("command") or "") if tool == "Bash" else ""
     if command and (_data_dir_write(command) or _cd_data_dir_git(command)):
         return _block(R_DATA_DIR)
-    repos = _marked_repos(cwd, tool, tool_input)
+    found = _marked_repos(cwd, tool, tool_input)
+    repos = [*found, *(r for r in stored or [] if r not in found)]
     # issue 81: a body past the walk's cap may name any repo, so it fails closed.
-    if not repos and not (command and _body_past_cap(command)):
+    if not found and not (command and _body_past_cap(command)):
         named = _interpreter_claude(command, cwd, None) if command else None
+        named = named or _tree_hit(command, cwd, repos)
         return _allow() if named is None else _block(_unknown_train(agent, named))
     hidden = _hidden_reason(command) if command else None
-    if hidden is not None or not repos:
+    if hidden is not None or not found:
         return _block(hidden or R_SHELL_BODY)
     # audit A7-1, issue 188: a nested claude session would act as the operator, past this rule.
     if command and _nested_claude(command, cwd):
@@ -2639,6 +2776,11 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
         return Decision(reason is None, reason, agent)
     # 0035: outside a train, main and foreign agents carry only the read deny above.
     if not policed_outside_train(raw_agent) and not _train_scoped(cwd, tool, tool_input):
+        # issue 188: a foreign removal aimed at a bound run repo, from any folder.
+        stored = _stored_repos(hook_input) if not operator and tool == "Bash" else []
+        hit = _tree_hit(str(tool_input.get("command") or ""), cwd, stored) if stored else None
+        if hit is not None and os.path.isabs(cwd):
+            return _with_agent(_block(_unknown_train(agent, hit)), agent)
         # 0130, D.5: main is warned here only when the hook calls the jail, during a train.
         roots = _main_excluded(tool, tool_input, cwd, config) if operator else _allow()
         return _with_agent(roots, agent)
@@ -2665,7 +2807,8 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
         decision = _block(gh)
     else:
         charter = str(config.charter_root) if config.charter_root else None
-        decision = _unknown_decision(raw_agent, agent, cwd, tool, tool_input, charter)
+        stored = _stored_repos(hook_input) if tool == "Bash" else []
+        decision = _unknown_decision(raw_agent, agent, cwd, tool, tool_input, charter, stored)
     return _with_agent(decision, agent)
 
 

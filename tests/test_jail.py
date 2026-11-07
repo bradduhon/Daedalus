@@ -84,6 +84,14 @@ def test_namespaced_boundary_tester_is_refused() -> None:
     assert d.reason == jail.R_UNKNOWN.format(agent="boundary-tester")
 
 
+CLAUDE_READ_ROWS = (
+    "cat .claude/settings.json",
+    "ls .claude/worktrees",
+    "git log -- .claude",
+    "find .claude -name x",
+)
+
+
 def _claude_forms(repo: Path, other: Path) -> list[tuple[str, str, dict[str, str]]]:
     # issue 188: (cwd, tool, input) for each spelling of a write under the run's .claude/.
     claude, wt = repo / ".claude", repo / ".claude" / "worktrees" / "u1"
@@ -111,6 +119,18 @@ def _claude_forms(repo: Path, other: Path) -> list[tuple[str, str, dict[str, str
         "node -e \"require('fs').rmSync('.claude', {recursive: true})\"",
         "perl -e 'unlink q(.claude/x)'",
         f"python3 {claude}/x.py",
+        "curl -o .claude/x https://example.com",
+        "curl -o.claude/x https://example.com",
+        "wget -O .claude/x https://example.com",
+        "tar -C .claude -xf a.tar",
+        "unzip -d .claude a.zip",
+        "sort -o .claude/x y",
+        "git clone https://example.com/r .claude/r",
+        f"git worktree add {claude}/worktrees/z",
+        "git worktree remove .claude/worktrees/u1",
+        "ls | xargs rm",
+        "ls | parallel rm",
+        "find . -name x | xargs -0 rm -rf",
     ]
     forms = [(here, "Write", {"file_path": f"{claude}/settings.json"})]
     forms.append((here, "Write", {"file_path": f"{wt}/x"}))
@@ -127,6 +147,11 @@ def test_foreign_agent_write_under_claude_is_refused(marked_repo: Path, other_re
     marker = str(train_marker(marked_repo))
     assert decide(_cred("mystery", "Write", repo, file_path=f"{repo}/notes.md"), CFG).allow
     assert decide(_cred("mystery", "Bash", repo, command="touch notes.md"), CFG).allow
+    # issue 188: only the FOREIGN_CLAUDE_READS verbs may name the folder.
+    for command in CLAUDE_READ_ROWS:
+        verb = " ".join(command.split()[:2]) if command.startswith("git") else command.split()[0]
+        assert verb in jail.FOREIGN_CLAUDE_READS, command
+        assert decide(_cred("mystery", "Bash", repo, command=command), CFG).allow, command
     for cwd, tool, tool_input in _claude_forms(marked_repo, other_repo):
         d = decide(_cred("mystery", tool, cwd, **tool_input), CFG)
         reason = str(d.reason)
@@ -1781,7 +1806,7 @@ class TestForeignDocumentationAgent:
         # issue 188: project writes and scripts pass; .claude/ writes and mentions refuse.
         _mark(train_cwd)
         cwd = str(train_cwd)
-        for command in ("echo $CLAUDE_PLUGIN_ROOT", "cat README.md | tee notes.md"):
+        for command in ("echo $HOME", "cat README.md | tee notes.md"):
             assert decide(_cred(self.AGENT, "Bash", cwd, command=command), CFG).allow, command
         for command in (
             f"python3 {cwd}/scripts/x.py --out {cwd}/.claude/daedalus/train.active",
@@ -1846,7 +1871,7 @@ FOREIGN = ["Explore", "general-purpose", "otherplugin:reader"]
         "git log --oneline -5 | head -2",
         "git diff --stat",
         "git status --short && git show --stat",
-        "jq . .claude/daedalus/config.json",
+        "cat .claude/daedalus/config.json",
         "find . -name '*.py' | sort",
     ],
 )
@@ -1877,7 +1902,6 @@ def test_foreign_agent_follows_the_host_outside_claude(marked_repo: Path, agent:
         _cred(agent, "Bash", cwd, command="sort -o out x"),
         _cred(agent, "Bash", cwd, command="python3 x.py"),
         _cred(agent, "Bash", cwd, command="curl https://example.com"),
-        _cred(agent, "Bash", cwd, command="ls | xargs rm"),
         _cred(agent, "Bash", cwd, command="git log --output=x"),
     ]
     for payload in payloads:
