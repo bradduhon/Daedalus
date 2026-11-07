@@ -57,6 +57,7 @@ from lib.credential_paths import clean as _clean
 from lib.credential_paths import credential_hit as _credential_hit
 from lib.credential_paths import credential_roots as _credential_roots
 from lib.credential_paths import dotglob_on as _dotglob_on
+from lib.credential_paths import expand_braces as _expand_braces
 from lib.credential_paths import expand_word as _expand_word
 from lib.credential_paths import store_rest as _store_rest
 from lib.credential_paths import tilde as _tilde
@@ -79,6 +80,7 @@ from lib.shell import (
     _VALUE_LONG_NEXT,
     FLOCK_BODY,
     GIT_PLUMBING_REMOTE,
+    INTERPRETERS,
     R_CLEAN,
     R_DATA_DIR_GIT,
     R_DEFAULT_BRANCH,
@@ -96,6 +98,7 @@ from lib.shell import (
     _base,
     _cmd_name,
     _command_reason,
+    _expands,
     _git_split,
     _long_matches,
     _names_project_data,
@@ -113,6 +116,7 @@ from lib.shell import (
     scan_options,
     shell_tokens,
     split_options,
+    stdin_script,
     strip_wrappers,
     tokenize,
     unwrap,
@@ -1729,13 +1733,13 @@ def _shell_scan(command: str) -> list[tuple[list[str], frozenset[int]]]:
     words: list[str] = []
     heres: set[int] = set()
     cur: list[str] = []
-    started, redirect, quote, op = False, False, "", ""
+    started, redirect, quote, op, fd_in = False, False, "", "", True
     i, n = 0, len(command)
 
     def end_word() -> None:
         nonlocal cur, started, redirect, op
         if cur or started:
-            if redirect and op == "<<<":
+            if redirect and op == "<<<" and fd_in:
                 heres.add(len(words))
             words.append((_REDIRECT if redirect else "") + "".join(cur))
             redirect, op = False, ""
@@ -1766,8 +1770,14 @@ def _shell_scan(command: str) -> list[tuple[list[str], frozenset[int]]]:
             cur.append(_LIT if command[i] == "$" else command[i])
             started = True
         elif c in "<>":
+            fd = "".join(cur) if not redirect else ""
+            if fd.isdigit():
+                # issue 116 (fix round 1, row 1): a digit word glued to < or > is its fd.
+                cur, started = [], False
             end_word()
-            op = op + c if redirect else c
+            if not redirect:
+                op, fd_in = "", fd in {"", "0"} or not fd.isdigit()
+            op += c
             redirect = True
             while i + 1 < n and command[i + 1] in "&>":
                 i += 1
@@ -2330,12 +2340,34 @@ _BODY_DEPTH = 3
 
 
 def _shell_body(words: list[str], stdin: bool = False) -> str | None:
-    # issue 81, 116: the -c body of a shell; past an unknown long flag, the word after a c flag.
+    # issue 81, 116: the -c body of a shell; past an off-table option with no -c, unread.
     code = _shell_code(words, stdin)
-    if code != _FALLBACK:
-        return code
-    flags = [k for k, w in enumerate(words) if w[:1] in "-+" and w[1:2] != "-" and "c" in w[1:]]
-    return (words[flags[0] + 1 : flags[0] + 2] or [""])[0] if flags else ("" if stdin else None)
+    return ("" if stdin else None) if code == _FALLBACK else code
+
+
+def _raw_expands(word: str) -> bool:
+    # fix round 1, row 3: A1's _expands on a _shell_scan word, its quoted spans re-quoted.
+    parts = word.replace(_REDIRECT, "").replace(_LIT, "_").split(_CUT)
+    safe = [p.replace('"', "_").replace("'", "_").replace("\\", "_") for p in parts]
+    return _expands("".join(f'"{p}"' if k % 2 else p for k, p in enumerate(safe)))
+
+
+def _expanding_lead(raws: list[str]) -> int | None:
+    # fix round 1, rows 2-3: the command word's index when it expands, or when a shell or
+    # interpreter has an expanding word before --; read raw, never one brace alternative.
+    clean = [_clean(w) for w in raws]
+    lead = _command_at(clean, set())
+    if lead is None or lead < 0:
+        return None
+    if _raw_expands(raws[lead]):
+        return lead
+    start = lead + 1 if command_family(clean[lead]) == "busybox" else lead
+    family = command_family(clean[start]) if start < len(clean) else ""
+    if family not in _SHELLS | INTERPRETERS:
+        return None
+    rest = clean[start + 1 :]
+    stop = start + 1 + (rest.index("--") if "--" in rest else len(rest))
+    return lead if any(_raw_expands(raws[j]) for j in range(start + 1, stop)) else None
 
 
 def _hidden_bodies(words: list[str], heres: list[str] | None = None) -> list[tuple[str, str]]:
@@ -2356,6 +2388,12 @@ def _hidden_bodies(words: list[str], heres: list[str] | None = None) -> list[tup
         ):
             _, eq, value = words[hits[0]].partition("=")
             body = value if eq else (words[hits[0] + 1 : hits[0] + 2] or [""])[0]
+        if stdin and name == "eval":
+            body = " ".join(words[at + 1 :])  # fix round 1, row 7: eval's words are one body.
+        if stdin and name in {"source", "."}:
+            # fix round 1, row 7: a sourced stream is a body; a sourced file path is a script.
+            operand = next((w for w in words[at + 1 :] if w[:1] != "-" or w == "-"), "-")
+            body = (heres[0] if heres else "") if stdin_script(operand) else body
         if body is not None:
             found.append((R_SHELL_BODY, body))
         if stdin and interpreter_code(words[at:], stdin=True) is not None:
@@ -2368,16 +2406,29 @@ def _segment_bodies(
 ) -> list[tuple[str, str]]:
     # issue 116: one _shell_scan segment's hidden bodies; texts are its words as expanded.
     shown = texts if texts is not None else [_clean(w) for w in words]
-    plain = [shown[i] for i, w in enumerate(words) if not w.startswith(_REDIRECT)]
-    return _hidden_bodies(plain, [_clean(shown[i]) for i in sorted(heres)])
+    keep = [i for i, w in enumerate(words) if not w.startswith(_REDIRECT)]
+    plain = [shown[i] for i in keep]
+    found = _hidden_bodies(plain, [_clean(shown[i]) for i in sorted(heres)])
+    raws = [words[i] for i in keep]
+    lead = _expanding_lead(raws)
+    if lead is not None:
+        # fix round 1, rows 2-3: a shell or interpreter body is unread, so refused in a run;
+        # each plain word after the command word is walked ("" marks a walk with no finding).
+        word = _clean(raws[lead])
+        fams = {command_family(a) for a in _expand_braces(word) or [word]}
+        fams.add(command_family(plain[lead]))
+        if fams & (_SHELLS | INTERPRETERS | {"eval", "source", "."}):
+            found.append((R_INLINE_BODY if fams & INTERPRETERS else R_SHELL_BODY, ""))
+        found += [("", w) for w in plain[lead + 1 :] if w and w[:1] != "-"]
+    return found
 
 
 def _hidden_reason(command: str) -> str | None:
     # issue 80, 81, 116: the first hidden body in any segment, refused while a train runs.
     for words, heres in _shell_scan(command):
-        hidden = _segment_bodies(words, heres)
+        hidden = [reason for reason, _ in _segment_bodies(words, heres) if reason]
         if hidden:
-            return hidden[0][0]
+            return hidden[0]
     return None
 
 
@@ -2408,7 +2459,8 @@ def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
         )
         base = _moved_base(texts, options, cwd)
         acts = [base] if base is not None and base != cwd else []
-        if at == _OPAQUE or base is None:
+        plain_raw = [w for i, w in enumerate(words) if i not in redirects]
+        if at == _OPAQUE or base is None or _expanding_lead(plain_raw) is not None:
             picks += _opaque_targets(texts, _opaque_words(clean, redirects), cwd)
         elif at is not None:
             name = _base(clean[at])

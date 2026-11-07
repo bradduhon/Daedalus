@@ -48,7 +48,8 @@ SHARED = frozenset(
     | {"worker_parse", "chain_bases"}
     | {"env_split_values", "R_ENV_SPLIT", "FLOCK_BODY"}
     | {"READ_ONLY_WRITE_OPTS", "scan_options", "split_options", "expansion_opaque"}
-    | {"command_family", "interpreter_code", "shell_tokens"}
+    | {"command_family", "interpreter_code", "shell_tokens", "stdin_script", "INTERPRETERS"}
+    | {"_expands"}
 )
 
 
@@ -295,13 +296,16 @@ def test_command_family_strips_the_path_and_folds_the_version(word: str, want: s
     assert shell.command_family(word) == want
 
 
-def test_probe_shells_adds_listed_names_and_keeps_the_fixed_ones(tmp_path: Path) -> None:
-    # P6, issue 116: /etc/shells extends the list; a missing file leaves the fixed names.
-    listed = tmp_path / "shells"
-    listed.write_text("# /etc/shells: valid login shells\n/bin/rbash\n/usr/bin/fish\n\n")
-    assert shell.probe_shells(str(listed)) == shell._FIXED_SHELLS | {"fish"}
-    assert shell.probe_shells(str(tmp_path / "missing")) == shell._FIXED_SHELLS
-    assert {"rbash", "mksh", "ash"} <= shell._SHELLS <= shell.WORKER_WRAPPERS
+def test_every_host_shell_entry_is_a_listed_shell_or_a_named_non_shell() -> None:
+    # P6, fix round 1: the list is static; a new /etc/shells entry fails here, never widens.
+    path = Path("/etc/shells")
+    if not path.is_file():
+        pytest.skip("no /etc/shells on this host")
+    lines = (line.strip() for line in path.read_text(encoding="utf-8").splitlines())
+    names = {shell.command_family(line) for line in lines if line.startswith("/")}
+    assert names <= shell._SHELLS | shell.NOT_SHELLS, names - shell._SHELLS - shell.NOT_SHELLS
+    assert not shell._SHELLS & shell.NOT_SHELLS
+    assert {"rbash", "mksh", "ash", "ksh93"} <= shell._SHELLS <= shell.WORKER_WRAPPERS
 
 
 @pytest.mark.parametrize(

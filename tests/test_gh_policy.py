@@ -589,6 +589,9 @@ INLINE_RUNS = (
     "echo x | python3",
     "python3 - <<'PY'\nimport os\nos.system('gh issue delete 3')\nPY",
     "python3 /dev/stdin",
+    # A2 fix round 1, rows 5 and 8: an off-table node option, and tmux, which is no shell.
+    "node --title t -e \"require('child_process').execSync('gh issue delete 3')\"",
+    "tmux new-session -d gh issue delete 3",
 )
 
 

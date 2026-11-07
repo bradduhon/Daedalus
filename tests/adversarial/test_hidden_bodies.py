@@ -11,6 +11,8 @@ from lib import jail, shell
 
 from tests.adversarial.corpus import (
     A2_ADMITTED,
+    A2_FIX1_RUN,
+    A2_FIX1_UNMARKED,
     A2_ISSUE_81,
     A2_ISSUE_116,
     A2_PROBE,
@@ -89,6 +91,24 @@ def test_a_body_past_the_depth_cap_is_refused(other_repo: Path, form: str) -> No
     command = _nest(form, f"touch {other_repo}/x", jail._BODY_DEPTH + 1)
     assert jail._body_past_cap(command)
     assert_denied(_foreign(other_repo, command), jail.R_SHELL_BODY, shell.R_ENV_SPLIT)
+
+
+@pytest.mark.parametrize(("finding", "form"), A2_FIX1_RUN)
+def test_a_fix_round_form_is_refused_in_a_run(marked_repo: Path, finding: str, form: str) -> None:
+    # fix round 1: fd-prefixed stdin, raw expansions, off-table options, eval and source.
+    command = form.format(repo=marked_repo)
+    assert jail._hidden_reason(command) == FINDINGS[finding], command
+    assert_denied(_foreign(marked_repo, command), FINDINGS[finding])
+
+
+@pytest.mark.parametrize("form", A2_FIX1_UNMARKED)
+def test_a_fix_round_form_from_an_unmarked_folder_is_refused(
+    marked_repo: Path, other_repo: Path, form: str
+) -> None:
+    # fix round 1, issue 81: the walk reads the body, so the write into {repo} scopes the call.
+    command = form.format(repo=marked_repo)
+    assert str(marked_repo / "x") in jail._bash_write_dirs(command, str(other_repo)), command
+    assert_denied(_foreign(other_repo, command), jail.R_SHELL_BODY)
 
 
 @pytest.mark.parametrize("command", A2_ADMITTED)

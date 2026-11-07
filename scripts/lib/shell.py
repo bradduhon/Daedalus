@@ -45,6 +45,10 @@ def _row(
 
 
 _HELP = " help version"
+_SHELL_ARG_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
+_SHELL_LONG_FLAGS = frozenset(
+    {"--login", "--norc", "--noprofile", "--posix", "--restricted", "--verbose", "--noediting"}
+)
 # P2: the one option table split_options reads; a long option taking an optional =x is plain.
 OPTION_TABLE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "cat": _row(
@@ -149,6 +153,28 @@ OPTION_TABLE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
             | {"-files0-from"}
         ),
     ),
+    # pin A1 -> A2, P6, P7: shells (by family) and interpreters; a shell's -c takes no value.
+    "shell": (
+        frozenset({f"-{c}" for c in "abcefhiklmnprstuvxBCEHPT"})
+        | _SHELL_LONG_FLAGS
+        | frozenset({"--help", "--version", "--debugger", "--dump-strings", "--dump-po-strings"}),
+        frozenset({o for o in _SHELL_ARG_OPTS if o[0] == "-"}),
+    ),
+    "python": _row("bBdEhiIOPqsSuvVx", "cmWXQ", _HELP, "check-hash-based-pycs"),
+    "perl": _row("acFhilnpsStTuUvwWX0xdDCMm", "eEI", _HELP),
+    "ruby": _row(
+        "acdhlnpsSvwWyU0xKTF",
+        "eIrCE",
+        "verbose yydebug disable-gems enable-gems jit" + _HELP,
+        "encoding external-encoding internal-encoding",
+    ),
+    "node": _row(
+        "hivc",
+        "eprC",
+        "test check interactive inspect inspect-brk watch" + _HELP,
+        "eval print require import loader experimental-loader conditions input-type title env-file",
+    ),
+    "php": _row("aCFhHilmnqsvwe", "rBREcdzftS", _HELP),
     # pin A1 -> A3: shell variable builtins and git commit, stripped before a pathspec scan.
     "export": _row("fnp", ""),
     "declare": _row("aAfFgiIlnrtuxp", ""),
@@ -336,49 +362,32 @@ def command_family(word: str) -> str:
     return _VERSION_TAIL.sub("", base) or base
 
 
-_FIXED_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh", "mksh", "ash", "rbash"})
-
-
-def probe_shells(path: str = "/etc/shells") -> frozenset[str]:
-    # P6, issue 116: the fixed names plus each base name the file lists; unreadable adds none.
-    try:
-        text = Path(path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return _FIXED_SHELLS
-    lines = (line.strip() for line in text.splitlines())
-    return _FIXED_SHELLS | {command_family(line) for line in lines if line.startswith("/")} - {""}
-
-
-_SHELLS = probe_shells()
-# P7: per family, (inline-code letters, inline-code long options, options taking a value).
-INTERPRETERS: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
-    "python": ("c", frozenset(), frozenset({"-W", "-X", "--check-hash-based-pycs"})),
-    "perl": ("eE", frozenset(), frozenset({"-I"})),
-    "ruby": ("e", frozenset(), frozenset({"-I", "-r", "-C", "-E", "--encoding"})),
-    "node": (
-        "ep",
-        frozenset({"--eval", "--print"}),
-        frozenset({"-r", "--require", "--import", "--loader", "-C", "--conditions"})
-        | frozenset({"--input-type", "--experimental-loader"}),
-    ),
-    "php": ("r", frozenset(), frozenset({"-c", "-d", "-z"})),
+# P6, fix round 1: a static shell family list; busybox sh reads as sh through shell_tokens.
+_SHELLS = frozenset(
+    {"bash", "sh", "dash", "zsh", "ksh", "ksh93", "mksh", "ash", "rbash", "yash", "posh"}
+    | {"fish", "csh", "tcsh"}
+)
+# fix round 1: /etc/shells entries that are no shell; any other unlisted entry fails a test.
+NOT_SHELLS = frozenset({"tmux", "screen", "git-shell", "nologin", "false"})
+# P6, P7: the OPTION_TABLE row of each family, and the options that carry inline code.
+INLINE_FLAGS: dict[str, frozenset[str]] = {
+    "shell": frozenset({"-c"}),
+    "python": frozenset({"-c"}),
+    "perl": frozenset({"-e", "-E"}),
+    "ruby": frozenset({"-e"}),
+    "node": frozenset({"-e", "-p", "--eval", "--print"}),
+    "php": frozenset({"-r", "-B", "-R", "-E"}),
 }
-# P6, P7: a script operand that reads the command string from stdin.
-STDIN_SCRIPTS = frozenset({"-", "/dev/stdin"})
+INTERPRETERS = frozenset(INLINE_FLAGS) - {"shell"}
+# P6, P7: a script operand that reads the command string from stdin or an inherited fd.
+_STDIN_SCRIPT = re.compile(r"-|/dev/stdin|/dev/fd/\d+|/proc/self/fd/\d+")
 # 8.5 ruling A, issue 116: first tokens a worker may never run, read through command_family.
 WORKER_WRAPPERS = (
-    frozenset(WRAPPER_OPTS)
-    | frozenset({"eval", "source", ".", "python3"})
-    | _SHELLS
-    | frozenset(INTERPRETERS)
+    frozenset(WRAPPER_OPTS) | frozenset({"eval", "source", ".", "python3"}) | _SHELLS | INTERPRETERS
 )
 _RESERVED = frozenset(
     {"{", "}", "(", ")", "!", "if", "then", "else", "elif", "fi", "do", "done", "while"}
     | {"until", "for", "case", "esac", "select", "function", "coproc", "[[", "time"}
-)
-_SHELL_ARG_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
-_SHELL_LONG_FLAGS = frozenset(
-    {"--login", "--norc", "--noprofile", "--posix", "--restricted", "--verbose", "--noediting"}
 )
 _TRUSTED_BIN = frozenset({"/bin", "/usr/bin", "/usr/local/bin", "/sbin", "/usr/sbin"})
 _ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -1279,52 +1288,73 @@ def _env_split(args: list[str]) -> list[str]:
     return []
 
 
-_NO_BODY = frozenset({"--version", "--help"})
+def stdin_script(word: str) -> bool:
+    # P6, P7: -, /dev/stdin, /dev/fd/N or /proc/self/fd/N names a string read from a stream.
+    return bool(_STDIN_SCRIPT.fullmatch(word))
 
 
-def _inline_code(tokens: list[str], family: str) -> tuple[str | None, int]:
-    # P7: (the inline-code option's value or None, the first operand's index); -1 when python -m
-    # names a module or the call only prints a version or help.
-    letters, longs, valued = INTERPRETERS[family]
-    i = 1
-    while i < len(tokens):
-        token = tokens[i]
-        key, eq, value = token.partition("=")
-        if key in longs:
-            return (value if eq else (tokens[i + 1 : i + 2] or [""])[0]), i
-        if token in _NO_BODY:
-            return None, -1
-        if token == "--":
-            return None, i + 1
-        if token == "-" or not token.startswith("-"):
-            return None, i
-        if token.startswith("--"):
-            i += 2 if key in valued and not eq else 1
-            continue
-        for at, ch in enumerate(token[1:], start=2):
-            if ch in letters:
-                return token[at:] or (tokens[i + 1 : i + 2] or [""])[0], i
-            if family == "python" and ch == "m":
-                return None, -1
-            if "-" + ch in valued:
-                i += 0 if token[at:] else 1
-                break
-        i += 1
-    return None, i
+def _before_dashes(args: list[str]) -> list[str]:
+    return args[: args.index("--")] if "--" in args else args
+
+
+def _body_scan(family: str, args: list[str]) -> tuple[bool, OptionScan]:
+    # P6, P7 (fix round 1, row 4): an inline flag anywhere before --, read by scan_options; an
+    # off-table option never ends the scan, and an off-table cluster holding a flag letter counts.
+    if family == "shell":
+        plus = {k + 1 for k, w in enumerate(args) if w in _SHELL_ARG_OPTS and w[0] == "+"}
+        args = [w for k, w in enumerate(args) if w[:1] != "+" and k not in plus]
+    scan = scan_options(family, args)
+    flags = INLINE_FLAGS[family]
+    letters = {flag[1] for flag in flags if flag[1] != "-"}
+    words = _before_dashes(args)
+    clusters = (w for w in words if w[:1] == "-" and w[1:2] != "-")
+    hit = bool(flags & set(scan.options)) or (scan.off and any(letters & set(w) for w in clusters))
+    return hit, scan
+
+
+def _flag_value(args: list[str], flags: frozenset[str]) -> str:
+    # P7: the code an inline flag carries, attached, after = or as the next word.
+    for k, word in enumerate(_before_dashes(args)):
+        key, eq, value = word.partition("=")
+        if word[:2] == "--" and _long_option(key, flags) in flags:
+            return value if eq else (args[k + 1 : k + 2] or [""])[0]
+        if word[:1] == "-" and word[1:2] != "-":
+            for at, ch in enumerate(word[1:], start=2):
+                if "-" + ch in flags:
+                    return word[at:] or (args[k + 1 : k + 2] or [""])[0]
+    return ""
+
+
+def _stdin_body(scan: OptionScan, args: list[str], stdin: bool, reads: bool) -> str | None:
+    # P6, P7: at the command word, "" for a string read from a stream or behind an expanding word.
+    if not stdin or {"--version", "--help"} & set(scan.options):
+        return None
+    if reads or any(_expands(w) for w in _before_dashes(args)):
+        return ""
+    return "" if not scan.operands or stdin_script(scan.operands[0]) else None
+
+
+def _inline_code(tokens: list[str], family: str) -> str | None:
+    # P7: the inline code of an interpreter segment, or None when it carries no inline flag.
+    hit, _ = _body_scan(family, tokens[1:])
+    return _flag_value(tokens[1:], INLINE_FLAGS[family]) if hit else None
 
 
 def interpreter_code(tokens: list[str], stdin: bool = False) -> str | None:
     # P7, issue 116: an interpreter's inline code; with stdin (the command word's position), ""
-    # for code read from stdin, -, /dev/stdin, or an expanding word that may be the code flag.
+    # for code read from a stream or an expanding word that may be the code flag.
     family = command_family(tokens[0]) if tokens else ""
     if family not in INTERPRETERS:
         return None
-    code, at = _inline_code(tokens, family)
-    if code is not None or not stdin or at < 0:
+    code = _inline_code(tokens, family)
+    if code is not None:
         return code
-    if any(_expands(t) for t in tokens[1 : at + 1]):
-        return ""
-    return "" if at >= len(tokens) or tokens[at] in STDIN_SCRIPTS else None
+    args = tokens[1:]
+    scan = scan_options(family, args)
+    if family == "python" and "-m" in scan.options:
+        # P7: python3 -m <module> runs a module, never a body, bar an expanding word.
+        return "" if stdin and any(_expands(w) for w in _before_dashes(args)) else None
+    return _stdin_body(scan, args, stdin, False)
 
 
 def shell_tokens(tokens: list[str]) -> list[str] | None:
@@ -1335,38 +1365,17 @@ def shell_tokens(tokens: list[str]) -> list[str] | None:
 
 
 def _shell_code(tokens: list[str], stdin: bool = False) -> str | None:
-    # P6, issue 116: the -c value, alone or clustered; with stdin (the command word's position),
-    # "" for a string read from stdin (-s, -, /dev/stdin, no script) or behind an expanding word.
-    i = 1
-    has_c = has_s = False
-    while i < len(tokens):
-        token = tokens[i]
-        if stdin and not has_c and _expands(token):
-            return ""
-        if token == "--":
-            i += 1
-            break
-        if token in _SHELL_ARG_OPTS:
-            i += 2
-            continue
-        if token in _NO_BODY:
-            return None
-        if token.startswith("--"):
-            if token not in _SHELL_LONG_FLAGS:
-                return _FALLBACK
-            i += 1
-            continue
-        if token[:1] in {"-", "+"} and len(token) > 1:
-            has_c = has_c or "c" in token[1:]
-            has_s = has_s or (token[0] == "-" and "s" in token[1:])
-            i += 1
-            continue
-        break
-    if has_c:
-        return tokens[i] if i < len(tokens) else ""
-    if not stdin:
-        return None
-    return "" if has_s or i >= len(tokens) or tokens[i] in STDIN_SCRIPTS else None
+    # P6, issue 116: a shell's -c string (its first operand, or the word after -c past an
+    # off-table option); with stdin, "" for a string read from a stream; else _FALLBACK.
+    args = tokens[1:]
+    hit, scan = _body_scan("shell", args)
+    if hit and scan.off:
+        return _flag_value(args, INLINE_FLAGS["shell"])
+    if hit:
+        return scan.operands[0] if scan.operands else ""
+    if scan.off:
+        return _FALLBACK
+    return _stdin_body(scan, args, stdin, "-s" in scan.options)
 
 
 def _segment_reason(segment: list[str], depth: int, main: bool) -> str | None:

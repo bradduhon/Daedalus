@@ -252,6 +252,32 @@ A2_RULE_ROWS = (
     ("P8", "shell", "shell", "bash -c \"env -a x -S 'touch {repo}/y'\""),
     ("P8", "interpreter", "env", "env -a x -S \"python3 -c 'import os'\""),
 )
+# fix round 1 (unit A2): (finding, form) per verifier row; refused to a foreign agent in a run.
+A2_FIX1_RUN = (
+    ("shell", "bash 0<<<'touch {repo}/x'"),
+    ("shell", "sh 0<'{repo}/s'"),
+    ("shell", "bash {{,-c}} 'touch {repo}/x'"),
+    ("shell", "{{,bash}} -c 'touch {repo}/x'"),
+    ("shell", "bash ${{E:--c}} 'touch {repo}/x'"),
+    ("inline", "node --title t -e 'require(1)'"),
+    ("inline", "python3 --frobnicate x -c 'import os'"),
+    ("shell", "bash --frobnicate x -c 'touch {repo}/x'"),
+    ("shell", "eval 'touch {repo}/x'"),
+    ("shell", ". /dev/stdin <<< 'touch {repo}/x'"),
+    ("shell", "source /dev/fd/0 <<< 'touch {repo}/x'"),
+    ("shell", ". <(echo touch {repo}/x)"),
+    ("shell", "source /proc/self/fd/3"),
+)
+# fix round 1 (unit A2): the readable forms, run from an unmarked folder into {repo}.
+A2_FIX1_UNMARKED = (
+    "bash 0<<<'touch {repo}/x'",
+    "bash {{,-c}} 'touch {repo}/x'",
+    "{{,bash}} -c 'touch {repo}/x'",
+    "bash ${{E:--c}} 'touch {repo}/x'",
+    "bash --frobnicate x -c 'touch {repo}/x'",
+    "eval 'touch {repo}/x'",
+    ". /dev/stdin <<< 'touch {repo}/x'",
+)
 # P7 (unit A2): a module or a script run is never an inline body.
 A2_ADMITTED = ("python3 -m pytest -q", "python3 scripts/x.py")
 # issue 83 (unit H1): {other}/deep links to {repo}/sub, so deep/.. is {repo} on disk.
