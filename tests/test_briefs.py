@@ -11,6 +11,7 @@ import daedalus_train
 import pytest
 from lib.briefs import (
     MAX_BRIEF_BYTES,
+    SECURITY_WORDS,
     BriefError,
     ask_file_problems,
     ask_problems,
@@ -152,6 +153,9 @@ SAFETY = (
         ("Should we add the permission now?", "", "permission"),
         ("Which one goes first?", "The apply order changes for two stacks.", "apply order"),
         ("Should it move?", "Grants on the access boundary widen.", "Grants"),
+        ("Should the firewall stay open?", "", "firewall"),
+        ("Who holds the encryption key?", "", "encryption key"),
+        ("Should it move?", "The deploy secrets rotate weekly.", "secrets"),
     ],
 )
 def test_a_security_question_needs_access_change_and_rollback_lines(
@@ -170,6 +174,14 @@ def test_a_security_question_needs_access_change_and_rollback_lines(
     full = bare.replace("Options:", "\n".join(SAFETY) + "\nOptions:")
     for level in ("plain", "standard", "expert"):
         assert brief_problems(full, level) == [], level
+
+
+@pytest.mark.parametrize("word", SECURITY_WORDS)
+def test_every_security_word_asks_for_the_safety_lines(word: str) -> None:
+    # 0211: the one named list is the whole match; each word, in any case, is caught whole.
+    assert brief_problems(_brief(f"Should the {word.upper()} change now?"), "expert") == [
+        f"Question 1 names {word.upper()} and lacks Access impact:, Change nature:, Rollback:"
+    ]
 
 
 def test_the_safety_lines_are_judged_per_section() -> None:

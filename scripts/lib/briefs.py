@@ -22,9 +22,19 @@ OPTIONS = "Options:"
 REF = "Ref:"
 # 0211: a security or infrastructure question carries these lines, checked for presence only.
 SAFETY_LINES = ("Access impact:", "Change nature:", "Rollback:")
+# 0211: a Question or Context naming any of these is a security or infrastructure question.
+SECURITY_WORDS = (
+    *("policy", "policies", "key policy", "key policies", "trust policy", "trust policies"),
+    *("permission", "permissions", "role", "roles", "grant", "grants", "granted", "granting"),
+    *("access", "accesses", "accessed", "access boundary", "access boundaries"),
+    *("boundary", "boundaries", "apply", "applies", "applied", "applying", "apply order"),
+    *("IAM", "ACL", "ACLs", "firewall", "firewalls", "security group", "security groups"),
+    *("network rule", "network rules", "encryption key", "encryption keys", "KMS"),
+    *("secret", "secrets", "credential", "credentials"),
+)
+# 0211: longest first, so a phrase wins over the word it starts with.
 _SECURITY = re.compile(
-    r"\b(?:key polic(?:y|ies)|polic(?:y|ies)|permissions?|roles?|grants?"
-    r"|access boundar(?:y|ies)|apply order)\b",
+    r"\b(?:" + "|".join(map(re.escape, sorted(SECURITY_WORDS, key=len, reverse=True))) + r")\b",
     re.IGNORECASE,
 )
 # 0153: a brief file is a few short sections; a larger file is refused, not read.
