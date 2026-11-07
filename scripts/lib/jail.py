@@ -105,10 +105,13 @@ from lib.shell import (
     _short_flags,
     _under,
     chain_bases,
+    command_family,
     env_split_values,
     expansion_opaque,
+    interpreter_code,
     runs_claude,
     scan_options,
+    shell_tokens,
     split_options,
     strip_wrappers,
     tokenize,
@@ -1716,18 +1719,26 @@ def _gitleaks_ok(tokens: list[str]) -> bool:
 
 
 def _shell_words(command: str) -> list[list[str]]:
+    return [words for words, _ in _shell_scan(command)]
+
+
+def _shell_scan(command: str) -> list[tuple[list[str], frozenset[int]]]:
     # spec 8: single-quoted or escaped $ is literal; quote edges end a variable name.
-    segments: list[list[str]] = []
+    # issue 116: each segment's words with the indices of the words a <<< here-string feeds.
+    segments: list[tuple[list[str], frozenset[int]]] = []
     words: list[str] = []
+    heres: set[int] = set()
     cur: list[str] = []
-    started, redirect, quote = False, False, ""
+    started, redirect, quote, op = False, False, "", ""
     i, n = 0, len(command)
 
     def end_word() -> None:
-        nonlocal cur, started, redirect
+        nonlocal cur, started, redirect, op
         if cur or started:
+            if redirect and op == "<<<":
+                heres.add(len(words))
             words.append((_REDIRECT if redirect else "") + "".join(cur))
-            redirect = False
+            redirect, op = False, ""
         cur, started = [], False
 
     while i < n:
@@ -1756,21 +1767,24 @@ def _shell_words(command: str) -> list[list[str]]:
             started = True
         elif c in "<>":
             end_word()
+            op = op + c if redirect else c
             redirect = True
             while i + 1 < n and command[i + 1] in "&>":
                 i += 1
+                op += command[i]
         elif c.isspace() or c in ";&|()`":
             end_word()
             if c not in " \t" and words:
-                segments.append(list(words))
+                segments.append((list(words), frozenset(heres)))
                 words.clear()
+                heres.clear()
         else:
             cur.append(c)
             started = True
         i += 1
     end_word()
     if words:
-        segments.append(words)
+        segments.append((words, frozenset(heres)))
     return segments
 
 
@@ -2269,16 +2283,19 @@ def _policy_segments(command: str, depth: int = 0) -> list[list[str]] | None:
         if not tokens:
             continue
         name = _base(tokens[0])
-        if name in _SHELLS or name == "eval":
-            code = " ".join(tokens[1:]) if name == "eval" else _shell_code(tokens)
-            if code == _FALLBACK:
-                return None
-            inner = _policy_segments(code, depth + 1) if code else []
+        shell = shell_tokens(tokens)
+        if shell is not None or name == "eval":
+            # P6: a -c body is walked; a string read from stdin or hidden by an expansion is not.
+            code = " ".join(tokens[1:]) if shell is None else _shell_code(shell, stdin=True)
+            if code is None:
+                continue
+            inner = _policy_segments(code, depth + 1) if code and code != _FALLBACK else None
             if inner is None:
                 return None
             flat += inner
             continue
-        inline = name.startswith("python") or name in {"perl", "ruby", "node"}
+        # R-extra-1, P7: only an inline body is unwalkable; a script or -m module is plain.
+        inline = interpreter_code(tokens, stdin=True) is not None
         if name not in {"gh", "git"} and (inline or {"gh", "git"} & {_base(t) for t in tokens}):
             return None
         flat.append(tokens)
@@ -2300,27 +2317,40 @@ def _train_active(cwd: str) -> bool:
 _TARGET_CAP = 8
 _GIT_DIR_OPTS = ("--git-dir=", "--work-tree=")
 R_SHELL_BODY = (
-    "a shell -c body is one command string the jail does not walk for what it writes "
-    "(issue 81). Next: run the command directly, without bash -c, sh -c or flock -c."
+    "a shell -c body, or a shell command string read from a pipe, stdin, a here-string or a "
+    "heredoc, is one string the jail does not walk for what it writes (issue 81, 116). "
+    "Next: run the command directly, without bash -c, sh -c, flock -c or a shell reading stdin."
+)
+R_INLINE_BODY = (
+    "an inline interpreter body (python -c, perl -e, ruby -e, node -e, php -r, or code read "
+    "from a pipe, - or a here-string) is code the jail cannot walk for what it writes "
+    "(issue 116). Next: save the code as a script file and run it by its path."
 )
 _BODY_DEPTH = 3
 
 
-def _shell_body(words: list[str]) -> str | None:
-    # issue 81: the -c body of a shell; past an unknown long flag, the word after a c flag.
-    code = _shell_code(words)
+def _shell_body(words: list[str], stdin: bool = False) -> str | None:
+    # issue 81, 116: the -c body of a shell; past an unknown long flag, the word after a c flag.
+    code = _shell_code(words, stdin)
     if code != _FALLBACK:
         return code
     flags = [k for k, w in enumerate(words) if w[:1] in "-+" and w[1:2] != "-" and "c" in w[1:]]
-    return (words[flags[0] + 1 : flags[0] + 2] or [""])[0] if flags else None
+    return (words[flags[0] + 1 : flags[0] + 2] or [""])[0] if flags else ("" if stdin else None)
 
 
-def _hidden_bodies(words: list[str]) -> list[tuple[str, str]]:
-    # issue 80, 81: (finding, command string) for each env -S value and shell or flock -c body.
+def _hidden_bodies(words: list[str], heres: list[str] | None = None) -> list[tuple[str, str]]:
+    # issue 80, 81, 116: (finding, command string) per env -S value, shell or flock -c body,
+    # shell reading stdin (its here-string, else "") and inline interpreter body ("", unwalked).
     found = [(R_ENV_SPLIT, value) for value in env_split_values(words)]
+    lead = _command_at(words, set())
+    if lead is not None and lead >= 0 and command_family(words[lead]) == "busybox":
+        lead += 1  # P6: busybox sh reads as a bare sh.
     for at, word in enumerate(words):
         name = _base(word)
-        body = _shell_body(words[at:]) if name in _SHELLS else None
+        stdin = at == lead
+        body = _shell_body(words[at:], stdin) if command_family(name) in _SHELLS else None
+        if stdin and body == "" and heres:
+            body = heres[0]
         if name == "flock" and (
             hits := [k for k in range(at + 1, len(words)) if words[k].split("=")[0] in FLOCK_BODY]
         ):
@@ -2328,13 +2358,24 @@ def _hidden_bodies(words: list[str]) -> list[tuple[str, str]]:
             body = value if eq else (words[hits[0] + 1 : hits[0] + 2] or [""])[0]
         if body is not None:
             found.append((R_SHELL_BODY, body))
+        if stdin and interpreter_code(words[at:], stdin=True) is not None:
+            found.append((R_INLINE_BODY, ""))
     return found
 
 
+def _segment_bodies(
+    words: list[str], heres: frozenset[int], texts: list[str] | None = None
+) -> list[tuple[str, str]]:
+    # issue 116: one _shell_scan segment's hidden bodies; texts are its words as expanded.
+    shown = texts if texts is not None else [_clean(w) for w in words]
+    plain = [shown[i] for i, w in enumerate(words) if not w.startswith(_REDIRECT)]
+    return _hidden_bodies(plain, [_clean(shown[i]) for i in sorted(heres)])
+
+
 def _hidden_reason(command: str) -> str | None:
-    # issue 80, 81: the first env -S or -c body in any segment, refused while a train runs.
-    for words in _shell_words(command):
-        hidden = _hidden_bodies([_clean(w) for w in words if not w.startswith(_REDIRECT)])
+    # issue 80, 81, 116: the first hidden body in any segment, refused while a train runs.
+    for words, heres in _shell_scan(command):
+        hidden = _segment_bodies(words, heres)
         if hidden:
             return hidden[0][0]
     return None
@@ -2342,8 +2383,8 @@ def _hidden_reason(command: str) -> str | None:
 
 def _body_past_cap(command: str, depth: int = 0) -> bool:
     # issue 81: a body nested past _BODY_DEPTH is never walked, so the call is judged in a train.
-    for words in _shell_words(command):
-        for _, body in _hidden_bodies([_clean(w) for w in words if not w.startswith(_REDIRECT)]):
+    for words, heres in _shell_scan(command):
+        for _, body in _segment_bodies(words, heres):
             if depth >= _BODY_DEPTH or _body_past_cap(body, depth + 1):
                 return True
     return False
@@ -2351,7 +2392,8 @@ def _body_past_cap(command: str, depth: int = 0) -> bool:
 
 def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
     # issue 30: redirects, write operands, cd targets and git -C name the repos a command acts on.
-    segments = _shell_words(command)
+    scanned = _shell_scan(command)
+    segments = [words for words, _ in scanned]
     envs = _bash_env(segments)
     found: list[str] = []
     for k, words in enumerate(segments):
@@ -2385,9 +2427,8 @@ def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
         found += [t for t in (_anchor(p, cwd) for p in picks) if t]
         found += [t for t in (_anchor(p, base or cwd) for p in acts) if t]
         if depth < _BODY_DEPTH:
-            # issue 80, 81: a hidden body's own targets name the repo, so a train scopes the call.
-            plain = [texts[i] for i in range(len(words)) if i not in redirects]
-            for _, body in _hidden_bodies(plain):
+            # issue 80, 81, 116: a hidden body's own targets name the repo, so a train scopes it.
+            for _, body in _segment_bodies(words, scanned[k][1], texts):
                 found += _bash_write_dirs(body, base or cwd, depth + 1)
     return found
 
@@ -2948,7 +2989,7 @@ def excluded_root_reason(
             reason = _excluded_git(tokens, base, roots)
         elif name == "gh" or (name == "tee" and writes):
             reason = _excluded_named(name, tokens[1:], base, roots)
-        elif name in _SHELLS or {"git", "gh"} & {_base(t) for t in tokens}:
+        elif shell_tokens(tokens) is not None or {"git", "gh"} & {_base(t) for t in tokens}:
             reason = _excluded_text(" ".join(tokens), base, roots, writes)
         if reason is not None:
             return reason

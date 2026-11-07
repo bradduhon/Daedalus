@@ -236,10 +236,10 @@ WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         frozenset({"-u", "-g", "-h", "-p", "-C", "-U", "-D", "-r", "-t", "--chdir"}),
     ),
     "doas": (frozenset({"-n", "-s"}), frozenset({"-u", "-C"})),
-    # issue 80: -S and --split-string stay off this row; env_split_values finds them to refuse.
+    # issue 80, 116 (P8): -S and --split-string stay off this row; env_split_values finds them.
     "env": (
         frozenset({"-i", "--ignore-environment", "-0", "--null", "-"}),
-        frozenset({"-u", "--unset", "-C", "--chdir"}),
+        frozenset({"-u", "--unset", "-C", "--chdir", "-a", "--argv0"}),
     ),
     "nice": (frozenset(), frozenset({"-n", "--adjustment"})),
     "nohup": (frozenset(), frozenset()),
@@ -327,16 +327,55 @@ WRAPPER_OPERAND: dict[str, re.Pattern[str] | None] = {
 }
 # issue 82: flock runs a shell body after its file operand; the jail never walks one.
 FLOCK_BODY = frozenset({"-c", "--command"})
-# 8.5 ruling A: first tokens a worker may never run, bar the allowlisted test runner forms.
-WORKER_WRAPPERS = frozenset(WRAPPER_OPTS) | frozenset(
-    {"eval", "source", ".", "sh", "bash", "zsh", "dash", "ksh", "python", "python3"}
-    | {"node", "perl", "ruby"}
+_VERSION_TAIL = re.compile(r"(?<=[A-Za-z])[-.]?\d+(?:\.\d+)*$")
+
+
+def command_family(word: str) -> str:
+    # pin A2 -> A3, P5: base name, path stripped, trailing version folded (python3.12: python).
+    base = os.path.basename(word)
+    return _VERSION_TAIL.sub("", base) or base
+
+
+_FIXED_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh", "mksh", "ash", "rbash"})
+
+
+def probe_shells(path: str = "/etc/shells") -> frozenset[str]:
+    # P6, issue 116: the fixed names plus each base name the file lists; unreadable adds none.
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return _FIXED_SHELLS
+    lines = (line.strip() for line in text.splitlines())
+    return _FIXED_SHELLS | {command_family(line) for line in lines if line.startswith("/")} - {""}
+
+
+_SHELLS = probe_shells()
+# P7: per family, (inline-code letters, inline-code long options, options taking a value).
+INTERPRETERS: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
+    "python": ("c", frozenset(), frozenset({"-W", "-X", "--check-hash-based-pycs"})),
+    "perl": ("eE", frozenset(), frozenset({"-I"})),
+    "ruby": ("e", frozenset(), frozenset({"-I", "-r", "-C", "-E", "--encoding"})),
+    "node": (
+        "ep",
+        frozenset({"--eval", "--print"}),
+        frozenset({"-r", "--require", "--import", "--loader", "-C", "--conditions"})
+        | frozenset({"--input-type", "--experimental-loader"}),
+    ),
+    "php": ("r", frozenset(), frozenset({"-c", "-d", "-z"})),
+}
+# P6, P7: a script operand that reads the command string from stdin.
+STDIN_SCRIPTS = frozenset({"-", "/dev/stdin"})
+# 8.5 ruling A, issue 116: first tokens a worker may never run, read through command_family.
+WORKER_WRAPPERS = (
+    frozenset(WRAPPER_OPTS)
+    | frozenset({"eval", "source", ".", "python3"})
+    | _SHELLS
+    | frozenset(INTERPRETERS)
 )
 _RESERVED = frozenset(
     {"{", "}", "(", ")", "!", "if", "then", "else", "elif", "fi", "do", "done", "while"}
     | {"until", "for", "case", "esac", "select", "function", "coproc", "[[", "time"}
 )
-_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
 _SHELL_ARG_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
 _SHELL_LONG_FLAGS = frozenset(
     {"--login", "--norc", "--noprofile", "--posix", "--restricted", "--verbose", "--noediting"}
@@ -987,7 +1026,7 @@ def _segment_views(raw: str) -> list[list[str]]:
             _ASSIGN.match(tokens[0])
             or tokens[0] in _RESERVED
             or tokens[0].startswith("-")
-            or _word_parts(tokens[0]) & WORKER_WRAPPERS
+            or {command_family(part) for part in _word_parts(tokens[0])} & WORKER_WRAPPERS
             or ("timeout" in wrapper and DURATION.fullmatch(tokens[0]))
         ):
             if _word_parts(tokens[0]) & WRAPPER_OPTS.keys():
@@ -1210,12 +1249,20 @@ def env_split_values(tokens: list[str]) -> list[str]:
 
 
 def _env_split(args: list[str]) -> list[str]:
-    # issue 80: getopt order; an unknown letter or option is read past, so -S behind it is found.
+    # issue 80, 116 (P8): getopt order past values and NAME=VALUE words; an unknown letter is
+    # read past, so -S behind it is found; an expanding word may be -S, so it is an unread body.
     with_arg = WRAPPER_OPTS["env"][1]
     i = 0
-    while i < len(args) and args[i].startswith("-") and args[i] not in {"-", "--"}:
+    while i < len(args) and args[i] not in {"-", "--"}:
         token = args[i]
         later = args[i + 1 : i + 2] or [""]
+        if _expands(token):
+            return [""]
+        if _ASSIGN.match(token):
+            i += 1
+            continue
+        if not token.startswith("-"):
+            break
         if token.startswith("--"):
             key, eq, value = token.partition("=")
             if "--split-string".startswith(key):
@@ -1232,43 +1279,78 @@ def _env_split(args: list[str]) -> list[str]:
     return []
 
 
-def _inline_code(tokens: list[str], letters: str, longs: frozenset[str]) -> str | None:
+_NO_BODY = frozenset({"--version", "--help"})
+
+
+def _inline_code(tokens: list[str], family: str) -> tuple[str | None, int]:
+    # P7: (the inline-code option's value or None, the first operand's index); -1 when python -m
+    # names a module or the call only prints a version or help.
+    letters, longs, valued = INTERPRETERS[family]
     i = 1
     while i < len(tokens):
         token = tokens[i]
+        key, eq, value = token.partition("=")
+        if key in longs:
+            return (value if eq else (tokens[i + 1 : i + 2] or [""])[0]), i
+        if token in _NO_BODY:
+            return None, -1
         if token == "--":
-            i += 1
-            break
-        if token.split("=", 1)[0] in longs:
-            return token.split("=", 1)[1] if "=" in token else (tokens[i + 1 : i + 2] or [""])[0]
+            return None, i + 1
+        if token == "-" or not token.startswith("-"):
+            return None, i
         if token.startswith("--"):
-            i += 1
+            i += 2 if key in valued and not eq else 1
             continue
-        if token.startswith("-") and len(token) > 1:
-            group = token[1:]
-            hit = next((idx for idx, ch in enumerate(group) if ch in letters), None)
-            if hit is not None:
-                rest = group[hit + 1 :]
-                return rest or (tokens[i + 1 : i + 2] or [""])[0]
-            if "m" in group and letters == "c":
-                return None
-            i += 1
-            continue
-        break
-    return None
+        for at, ch in enumerate(token[1:], start=2):
+            if ch in letters:
+                return token[at:] or (tokens[i + 1 : i + 2] or [""])[0], i
+            if family == "python" and ch == "m":
+                return None, -1
+            if "-" + ch in valued:
+                i += 0 if token[at:] else 1
+                break
+        i += 1
+    return None, i
 
 
-def _shell_code(tokens: list[str]) -> str | None:
+def interpreter_code(tokens: list[str], stdin: bool = False) -> str | None:
+    # P7, issue 116: an interpreter's inline code; with stdin (the command word's position), ""
+    # for code read from stdin, -, /dev/stdin, or an expanding word that may be the code flag.
+    family = command_family(tokens[0]) if tokens else ""
+    if family not in INTERPRETERS:
+        return None
+    code, at = _inline_code(tokens, family)
+    if code is not None or not stdin or at < 0:
+        return code
+    if any(_expands(t) for t in tokens[1 : at + 1]):
+        return ""
+    return "" if at >= len(tokens) or tokens[at] in STDIN_SCRIPTS else None
+
+
+def shell_tokens(tokens: list[str]) -> list[str] | None:
+    # P6, issue 116: the words from a shell command word on; busybox sh reads as a bare sh.
+    if tokens and command_family(tokens[0]) == "busybox":
+        tokens = tokens[1:]
+    return tokens if tokens and command_family(tokens[0]) in _SHELLS else None
+
+
+def _shell_code(tokens: list[str], stdin: bool = False) -> str | None:
+    # P6, issue 116: the -c value, alone or clustered; with stdin (the command word's position),
+    # "" for a string read from stdin (-s, -, /dev/stdin, no script) or behind an expanding word.
     i = 1
-    has_c = False
+    has_c = has_s = False
     while i < len(tokens):
         token = tokens[i]
+        if stdin and not has_c and _expands(token):
+            return ""
         if token == "--":
             i += 1
             break
         if token in _SHELL_ARG_OPTS:
             i += 2
             continue
+        if token in _NO_BODY:
+            return None
         if token.startswith("--"):
             if token not in _SHELL_LONG_FLAGS:
                 return _FALLBACK
@@ -1276,12 +1358,15 @@ def _shell_code(tokens: list[str]) -> str | None:
             continue
         if token[:1] in {"-", "+"} and len(token) > 1:
             has_c = has_c or "c" in token[1:]
+            has_s = has_s or (token[0] == "-" and "s" in token[1:])
             i += 1
             continue
         break
-    if not has_c:
+    if has_c:
+        return tokens[i] if i < len(tokens) else ""
+    if not stdin:
         return None
-    return tokens[i] if i < len(tokens) else ""
+    return "" if has_s or i >= len(tokens) or tokens[i] in STDIN_SCRIPTS else None
 
 
 def _segment_reason(segment: list[str], depth: int, main: bool) -> str | None:
@@ -1303,17 +1388,14 @@ def _segment_reason(segment: list[str], depth: int, main: bool) -> str | None:
     name = _base(tokens[0])
     if set("${") & set(tokens[0]):
         return _FALLBACK if main else R_VARIABLE
-    if name in _SHELLS:
-        code = _shell_code(tokens)
+    shell = shell_tokens(tokens)
+    if shell is not None:
+        code = _shell_code(shell)
         if code == _FALLBACK:
             return _FALLBACK
         return _command_reason(code, depth + 1, main) if code else None
-    if name.startswith("python"):
-        code = _inline_code(tokens, "c", frozenset())
-        return _command_reason(code, depth + 1, main) if code else None
-    if name in {"perl", "ruby", "node"}:
-        letters = "ep" if name == "node" else "eE"
-        code = _inline_code(tokens, letters, frozenset({"--eval", "--print"}))
+    if command_family(name) in INTERPRETERS:
+        code = interpreter_code(tokens)
         return _command_reason(code, depth + 1, main) if code else None
     if name == "eval":
         return _command_reason(" ".join(tokens[1:]), depth + 1, main)
@@ -2049,7 +2131,7 @@ def _worker_hygiene(
         ledger = train_script_ok(tokens)
     if agent == "coder" and own_script is not None and _is_cite(tokens, own_script):
         ledger = True  # RCP, 0128: the coder's citation helper; its hygiene check still runs.
-    is_wrapper = name in WORKER_WRAPPERS or name.startswith("python")
+    is_wrapper = command_family(name) in WORKER_WRAPPERS or name.startswith("python")
     if (
         agent == "charter-docs"
         and name == "python3"
@@ -2062,7 +2144,7 @@ def _worker_hygiene(
     bin_run = js_inner(tokens)
     if bin_run and _base(bin_run[0]) == "bun" and bun_inline(bin_run):
         return R_INLINE
-    if bin_run and _base(bin_run[0]) in WORKER_WRAPPERS:
+    if bin_run and command_family(bin_run[0]) in WORKER_WRAPPERS:
         if not _tester_runner_ok(_base(bin_run[0]), bin_run, own_script):
             return R_INLINE
     spans: list[str | None] = list(words) if words and len(words) == len(tokens) else []

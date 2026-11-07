@@ -16,6 +16,7 @@ from lib.workspace import train_marker
 
 from tests import hook_chain
 from tests.adversarial.corpus import (
+    A2_RULE_ROWS,
     H1_DEEP_BODY,
     H1_ENV_SPLIT,
     H1_SHELL_BODY,
@@ -367,6 +368,10 @@ def test_main_and_foreign_agents_carry_only_the_read_deny_outside_a_train(
         "echo x > /tmp/f",
         "python3 -c 'print(1)'",
         "bash -c 'echo hi > /tmp/f'",
+        # issue 116: the new shell and interpreter forms stay main-exempt (0106).
+        "rbash -c 'echo hi > /tmp/f'",
+        "python3.12 -c 'print(1)'",
+        "bash <<< 'echo hi'",
         "git status & wait",
         "echo `date`",
         "$EDITOR notes.md",
@@ -2167,6 +2172,16 @@ def test_a_shell_body_is_refused_to_a_foreign_agent_in_a_train(
         d = _foreign(cwd, form.format(repo=marked_repo))
         assert not d.allow and not d.warn and d.reason == jail.R_SHELL_BODY, (form, cwd)
         assert "Next: run the command directly" in str(d.reason)
+
+
+@pytest.mark.parametrize("form", [row[3] for row in A2_RULE_ROWS if row[2] == "inline"])
+def test_an_inline_body_is_refused_to_a_foreign_agent_in_a_train(
+    marked_repo: Path, other_repo: Path, form: str
+) -> None:
+    # issue 116 (P7): refused while a train runs; outside one it passes as today.
+    d = _foreign(marked_repo, form.format(repo=marked_repo))
+    assert not d.allow and not d.warn and d.reason == jail.R_INLINE_BODY, (form, d.reason)
+    assert _foreign(other_repo, form.format(repo=other_repo)).allow, form
 
 
 @pytest.mark.parametrize("form", H1_ENV_SPLIT + H1_SHELL_BODY)

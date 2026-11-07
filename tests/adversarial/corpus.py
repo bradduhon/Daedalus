@@ -24,6 +24,7 @@ CLASSES = (
     "nested_sessions",
     "wrapper_options",
     "operand_grammar",
+    "hidden_bodies",
 )
 # spec 3.3: the agents whose Bash grammar is widest; credential reads judge them all.
 READERS = ("coder", "auditor", "verifier")
@@ -191,6 +192,68 @@ A1_WRAPPER_ROWS = (
     "flock -x {repo}/l true",
     "flock --timeout=5 -- {repo}/l true",
 )
+# issue 116 (unit A2): the reproduction rows, verbatim; the first five are the probe's rows.
+A2_ISSUE_116 = (
+    'rbash -c "touch x"',
+    'echo "touch x" | bash',
+    'bash <<< "touch x"',
+    'python3 -c "import os"',
+    'env -a x -S "touch y"',
+    'bash -c "touch x"',
+)
+A2_PROBE = A2_ISSUE_116[:5]
+# issue 81 (unit A2): the reproduction rows, verbatim.
+A2_ISSUE_81 = ("bash -c '<body>'", "sh -c")
+# P5 to P8 (unit A2): (rule, family, finding, form); {repo} is a repository a train marks.
+A2_RULE_ROWS = (
+    ("P5", "shell", "shell", "/usr/bin/rbash -c 'touch {repo}/x'"),
+    ("P5", "shell", "shell", "A=1 nice -n 5 nohup ./bash -c 'touch {repo}/x'"),
+    ("P5", "interpreter", "inline", "nice -n 5 timeout 5 /usr/bin/python3.12 -c 'import os'"),
+    ("P5", "interpreter", "inline", "A=1 stdbuf -o L ./perl5.36 -e 1"),
+    ("P5", "env", "env", "timeout 5 nice env -a x -S 'touch {repo}/y'"),
+    ("P6", "shell", "shell", "echo 'touch {repo}/x' | rbash -s"),
+    ("P6", "shell", "shell", "bash -xc 'touch {repo}/x'"),
+    ("P6", "shell", "shell", "bash --login -c 'touch {repo}/x'"),
+    ("P6", "shell", "shell", "bash <<< 'touch {repo}/x'"),
+    ("P6", "shell", "shell", "bash /dev/stdin <<< 'touch {repo}/x'"),
+    ("P6", "shell", "shell", "cat x | bash -"),
+    ("P6", "shell", "shell", "busybox sh -c 'touch {repo}/x'"),
+    ("P6", "shell", "shell", "busybox sh <<< 'touch {repo}/x'"),
+    ("P6", "shell", "shell", "bash <(echo touch {repo}/x)"),
+    ("P6", "shell", "shell", "sh <<EOF\ntouch {repo}/x\nEOF"),
+    ("P6", "shell", "shell", "bash {{-c,x}} 'touch {repo}/x'"),
+    ("P6", "shell", "shell", "mksh -ec 'touch {repo}/x'"),
+    ("P6", "interpreter", "shell", "python3 scripts/x.py | bash"),
+    ("P6", "env", "shell", "env -i bash <<< 'touch {repo}/x'"),
+    ("P7", "interpreter", "inline", "python3 -c 'import os'"),
+    ("P7", "interpreter", "inline", "python -Bc 'import os'"),
+    ("P7", "interpreter", "inline", "python3 -W ignore -c 'import os'"),
+    ("P7", "interpreter", "inline", "perl -e 'print 1'"),
+    ("P7", "interpreter", "inline", "perl -E 'say 1'"),
+    ("P7", "interpreter", "inline", "ruby -e 'p 1'"),
+    ("P7", "interpreter", "inline", "node -e 1"),
+    ("P7", "interpreter", "inline", "node --eval=1"),
+    ("P7", "interpreter", "inline", "node -r x -p 1"),
+    ("P7", "interpreter", "inline", "node --print 1"),
+    ("P7", "interpreter", "inline", "php -r 'echo 1;'"),
+    ("P7", "interpreter", "inline", "echo 'import os' | python3"),
+    ("P7", "interpreter", "inline", "python3 - <<< 'import os'"),
+    ("P7", "interpreter", "inline", "python3 /dev/stdin"),
+    ("P7", "interpreter", "inline", "python3 {{-c,x}} 'import os'"),
+    ("P7", "shell", "shell", "bash -c \"python3 -c 'import os'\""),
+    ("P7", "env", "inline", "env -i python3 -c 'import os'"),
+    ("P8", "env", "env", "env -a x -S 'touch {repo}/y'"),
+    ("P8", "env", "env", "env --argv0 x -S 'touch {repo}/y'"),
+    ("P8", "env", "env", "env -u A -a x -C /tmp -S'touch {repo}/y'"),
+    ("P8", "env", "env", "env A=1 -S 'touch {repo}/y'"),
+    ("P8", "env", "env", "env --argv0=x --split-string='touch {repo}/y'"),
+    ("P8", "env", "env", "env -ia x -S 'touch {repo}/y'"),
+    ("P8", "env", "env", "env {{-S,x}} 'touch {repo}/y'"),
+    ("P8", "shell", "shell", "bash -c \"env -a x -S 'touch {repo}/y'\""),
+    ("P8", "interpreter", "env", "env -a x -S \"python3 -c 'import os'\""),
+)
+# P7 (unit A2): a module or a script run is never an inline body.
+A2_ADMITTED = ("python3 -m pytest -q", "python3 scripts/x.py")
 # issue 83 (unit H1): {other}/deep links to {repo}/sub, so deep/.. is {repo} on disk.
 H1_SYMLINK = ("touch {other}/deep/../x", "mkdir {other}/deep/../y", "rm -rf {other}/deep/../x")
 # issue 97 (unit H1): an icase pathspec names notes/a.md under another case; notes is excluded.

@@ -14,8 +14,8 @@ HERE = Path(__file__).resolve().parent
 
 
 def test_each_bypass_class_is_named_once() -> None:
-    # issue 76, 204: wrapper_options and operand_grammar joined the six classes of spec 3.7.
-    assert len(CLASSES) == len(set(CLASSES)) == 8
+    # issue 76, 204, 116: wrapper_options, operand_grammar and hidden_bodies joined spec 3.7's six.
+    assert len(CLASSES) == len(set(CLASSES)) == 9
 
 
 @pytest.mark.parametrize("name", CLASSES)
