@@ -8,9 +8,11 @@ from lib.hcl_reader import (
     MAX_DEPTH,
     Block,
     HclError,
+    list_parts,
     list_value,
     parse,
     policy_statements,
+    require_literal,
     string_value,
     substitute,
 )
@@ -51,13 +53,22 @@ def test_condition_values_keep_interpolations_intact() -> None:
     first = policy_statements(parse(POLICY), name="read")[0]
     assert (first.sid, first.effect, first.dynamic) == ("ReadOwnPrefix", "Allow", False)
     assert first.actions == ("s3:GetObject", "s3:ListBucket")
-    assert first.resources == ('arn:aws:s3:::${var.bucket}/${lookup(local.m, "k", "}")}/*',)
-    assert [(p.type, p.identifiers) for p in first.principals] == [
-        ("AWS", ("aws_iam_role.app.arn",))
+    assert (first.resources, first.unresolved_resources) == (
+        (),
+        ('"arn:aws:s3:::${var.bucket}/${lookup(local.m, "k", "}")}/*"',),
+    )
+    assert [(p.type, p.identifiers, p.unresolved_identifiers) for p in first.principals] == [
+        ("AWS", (), ("aws_iam_role.app.arn",))
     ]
     (cond,) = first.conditions
     assert (cond.test, cond.variable) == ("StringLike", "s3:prefix")
-    assert cond.values == ("home/$${aws:username}/*", "${var.env}-%{ if var.x }a%{ endif }")
+    assert cond.values == ("home/$${aws:username}/*",)
+    assert cond.unresolved_values == ('"${var.env}-%{ if var.x }a%{ endif }"',)
+    assert [f for f, _ in first.unresolved_fields()] == [
+        "resources",
+        "principals.identifiers",
+        "condition.values",
+    ]
 
 
 def test_dynamic_statement_is_returned_and_marked() -> None:
@@ -68,9 +79,10 @@ def test_dynamic_statement_is_returned_and_marked() -> None:
         ("other", False),
     ]
     dyn = found[1]
-    assert (dyn.actions, dyn.resources) == (("statement.value.actions",), ("*",))
+    assert (dyn.actions, dyn.unresolved_actions) == ((), ("statement.value.actions",))
+    assert dyn.resources == ("*",)
     (cond,) = dyn.conditions
-    assert cond.dynamic and cond.values == ("condition.value.account",)
+    assert cond.dynamic and cond.unresolved_values == ("condition.value.account",)
     assert cond.variable == "aws:SourceAccount" and cond.test == "condition.value.test"
     assert found[2].not_actions == ("iam:*",)
     assert found[2].not_resources == ("arn:aws:iam::*:role/x",)
@@ -94,18 +106,57 @@ def test_substitute_replaces_only_mapped_names() -> None:
 
 
 @pytest.mark.parametrize(
-    ("source", "expected"),
+    ("source", "literals", "unresolved"),
     [
-        ('["a", "b",]', ("a", "b")),
-        ('["x\\"y", "\\u0041"]', ('x"y', "A")),
-        ("var.list", ("var.list",)),
-        ('concat(["a"], var.b)', ('concat(["a"], var.b)',)),
-        ("[for s in var.l : s]", ("[for s in var.l : s]",)),
-        ("[var.a, 3]", ("var.a", "3")),
+        ('["a", "b",]', ("a", "b"), ()),
+        ('["x\\"y", "\\u0041"]', ('x"y', "A"), ()),
+        ('["$${aws:username}"]', ("$${aws:username}",), ()),
+        ("var.list", (), ("var.list",)),
+        ('concat(["a"], var.b)', (), ('concat(["a"], var.b)',)),
+        ("[for s in var.l : s]", (), ("[for s in var.l : s]",)),
+        ("[var.a, 3]", (), ("var.a", "3")),
+        ('["s3:Get", local.x, "${var.y}"]', ("s3:Get",), ("local.x", '"${var.y}"')),
     ],
 )
-def test_list_value_items(source: str, expected: tuple[str, ...]) -> None:
-    assert list_value(source) == expected
+def test_list_parts_split_literals_from_unresolved(
+    source: str, literals: tuple[str, ...], unresolved: tuple[str, ...]
+) -> None:
+    assert list_parts(source) == (literals, unresolved)
+    if unresolved:
+        with pytest.raises(HclError, match="^line 1: list item is not a literal"):
+            list_value(source)
+    else:
+        assert list_value(source) == literals
+
+
+# 0212: the audit round 1 cases; a non-literal actions value never reads as a narrow list.
+@pytest.mark.parametrize(
+    ("actions", "unresolved"),
+    [
+        ("local.all", ("local.all",)),
+        ('concat(["s3:GetObject"], ["*"])', ('concat(["s3:GetObject"], ["*"])',)),
+        ('["s3:Get", local.x]', ("local.x",)),
+        ('["s3:GetObject"]', ()),
+    ],
+)
+def test_require_literal_fails_closed_on_unresolved_actions(
+    actions: str, unresolved: tuple[str, ...]
+) -> None:
+    text = (
+        'data "aws_iam_policy_document" "p" {\n  statement {\n    effect = "Allow"\n'
+        f'    actions = {actions}\n    resources = ["arn:aws:s3:::b/*"]\n  }}\n}}\n'
+    )
+    (stmt,) = policy_statements(parse(text))
+    assert stmt.unresolved_actions == unresolved
+    assert set(stmt.actions) <= {"s3:Get", "s3:GetObject"}
+    assert stmt.has_unresolved is bool(unresolved)
+    if unresolved:
+        with pytest.raises(HclError, match="^line 2: actions of statement p is not a literal"):
+            require_literal(stmt)
+    else:
+        assert require_literal(stmt) is stmt
+    with pytest.raises(HclError, match="^line 1: expected a Statement"):
+        require_literal(text)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -217,6 +268,7 @@ def test_guidance_names_the_reader_and_bans_regex(path: str) -> None:
     assert "`<plugin root>/scripts`" in text
     assert "Never extract HCL blocks with a regex" in text
     assert "(0212)" in text
+    assert "calls `require_literal` on each statement, or fails when `has_unresolved`" in text
 
 
 def test_audit_skill_bullet_sits_under_step_five() -> None:

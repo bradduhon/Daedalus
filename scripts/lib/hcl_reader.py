@@ -3,6 +3,8 @@
 # 0212: the stdlib-only Terraform reader finding tests import; regex extraction is banned.
 # parse() returns blocks with attributes as source text; policy_statements() reads the
 # aws_iam_policy_document statements. Bad input raises HclError naming the line, never a part.
+# List fields hold decoded string literals only; every reference, call or template item sits
+# in the matching unresolved_* tuple, and require_literal() raises when any is present.
 from __future__ import annotations
 
 import bisect
@@ -59,6 +61,7 @@ class Block:
 class Principal:
     type: str | None
     identifiers: tuple[str, ...]
+    unresolved_identifiers: tuple[str, ...]
     dynamic: bool
 
 
@@ -67,6 +70,7 @@ class Condition:
     test: str | None
     variable: str | None
     values: tuple[str, ...]
+    unresolved_values: tuple[str, ...]
     dynamic: bool
 
 
@@ -76,13 +80,33 @@ class Statement:
     sid: str | None
     effect: str | None
     actions: tuple[str, ...]
+    unresolved_actions: tuple[str, ...]
     not_actions: tuple[str, ...]
+    unresolved_not_actions: tuple[str, ...]
     resources: tuple[str, ...]
+    unresolved_resources: tuple[str, ...]
     not_resources: tuple[str, ...]
+    unresolved_not_resources: tuple[str, ...]
     principals: tuple[Principal, ...]
     conditions: tuple[Condition, ...]
     dynamic: bool
     line: int
+
+    def unresolved_fields(self) -> list[tuple[str, tuple[str, ...]]]:
+        """Each field holding a non-literal item, with the source text of those items."""
+        fields = [
+            ("actions", self.unresolved_actions),
+            ("not_actions", self.unresolved_not_actions),
+            ("resources", self.unresolved_resources),
+            ("not_resources", self.unresolved_not_resources),
+        ]
+        fields += [("principals.identifiers", p.unresolved_identifiers) for p in self.principals]
+        fields += [("condition.values", c.unresolved_values) for c in self.conditions]
+        return [(name, items) for name, items in fields if items]
+
+    @property
+    def has_unresolved(self) -> bool:
+        return bool(self.unresolved_fields())
 
 
 class _Scanner:
@@ -326,15 +350,21 @@ class _Parser:
 
 
 def _label(src: str, line: int) -> str:
-    value = _decode(src, line)
-    if "${" in value.replace("$${", "") or "%{" in value.replace("%%{", ""):
+    value, templated = _decode_parts(src, line)
+    if templated:
         raise HclError(line, "a block label cannot hold a template")
     return value
 
 
 def _decode(src: str, line: int) -> str:
+    return _decode_parts(src, line)[0]
+
+
+def _decode_parts(src: str, line: int) -> tuple[str, bool]:
     # 0212: escapes decode; templates and $${ stay literal so substitute() sees them whole.
+    # The flag is True when a live ${ or %{ template remains; an escaped $${ is not one.
     scan, out, i, end = _Scanner(src, line), [], 1, len(src) - 1
+    templated = False
     while i < end:
         ch = src[i]
         if ch == "\\":
@@ -353,10 +383,11 @@ def _decode(src: str, line: int) -> str:
             stop = scan.template_end(i, 1)
             out.append(src[i:stop])
             i = stop
+            templated = True
         else:
             out.append(ch)
             i += 1
-    return "".join(out)
+    return "".join(out), templated
 
 
 def parse(text: str) -> list[Block]:
@@ -391,7 +422,16 @@ def scalar_value(source: str, line: int = 1) -> str:
 
 
 def list_value(source: str, line: int = 1) -> tuple[str, ...]:
-    # 0212: a reference or call is one item of source text; a scalar or nested list raises.
+    """A list of string literals, decoded; any reference, call or template item raises."""
+    literals, unresolved = list_parts(source, line)
+    if unresolved:
+        raise HclError(line, f"list item is not a literal: {unresolved[0][:40]!r}")
+    return literals
+
+
+def list_parts(source: str, line: int = 1) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    # 0212: (decoded literals, source text of each non-literal item or the whole non-list value).
+    # A scalar, object, heredoc or nested list raises HclError.
     toks = _value_tokens(source, line)
     if not toks:
         raise HclError(line, "empty list value")
@@ -403,10 +443,10 @@ def list_value(source: str, line: int = 1) -> tuple[str, ...]:
     ):
         raise HclError(toks[0].line, f"expected a list, found {source[:40]!r}")
     if first != "[" or source[toks[-1].start : toks[-1].end] != "]":
-        return (source,)
+        return (), (source,)
     if len(toks) > 1 and toks[1].kind == IDENT and source[toks[1].start : toks[1].end] == "for":
-        return (source,)
-    items: list[str] = []
+        return (), (source,)
+    items: list[tuple[str, bool]] = []
     group: list[Token] = []
     depth = 0
     for tok in toks[1:-1]:
@@ -424,17 +464,23 @@ def list_value(source: str, line: int = 1) -> tuple[str, ...]:
         group.append(tok)
     if group:
         items.append(_item(source, group, group[0].line))
-    return tuple(items)
+    return (
+        tuple(text for text, literal in items if literal),
+        tuple(text for text, literal in items if not literal),
+    )
 
 
-def _item(source: str, group: Sequence[Token], line: int) -> str:
+def _item(source: str, group: Sequence[Token], line: int) -> tuple[str, bool]:
+    # 0212: (decoded value, True) for a template-free string; (source text, False) otherwise.
     if not group:
         raise HclError(line, "empty list item")
+    text = source[group[0].start : group[-1].end]
     if len(group) == 1 and group[0].kind == STRING:
-        return _decode(source[group[0].start : group[0].end], group[0].line)
+        value, templated = _decode_parts(text, group[0].line)
+        return (text, False) if templated else (value, True)
     if group[0].kind == HEREDOC:
         raise HclError(group[0].line, "heredoc in a list of strings")
-    return source[group[0].start : group[-1].end]
+    return text, False
 
 
 def substitute(value: str, mapping: Mapping[str, str]) -> str:
@@ -483,10 +529,22 @@ def _optional(block: Block, name: str) -> str | None:
     return scalar_value(block.attributes[name], block.attribute_lines[name])
 
 
-def _listed(block: Block, name: str) -> tuple[str, ...]:
+def _listed(block: Block, name: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     if name not in block.attributes:
-        return ()
-    return list_value(block.attributes[name], block.attribute_lines[name])
+        return (), ()
+    return list_parts(block.attributes[name], block.attribute_lines[name])
+
+
+def require_literal(statement: Statement) -> Statement:
+    """The statement unchanged; raises HclError naming the field and line of any non-literal."""
+    if not isinstance(statement, Statement):
+        raise HclError(1, f"expected a Statement, found {type(statement).__name__}")
+    for field, items in statement.unresolved_fields():
+        label = statement.sid or statement.document
+        raise HclError(
+            statement.line, f"{field} of statement {label} is not a literal: {items[0][:40]!r}"
+        )
+    return statement
 
 
 def policy_statements(blocks: Sequence[Block], name: str | None = None) -> list[Statement]:
@@ -501,22 +559,30 @@ def policy_statements(blocks: Sequence[Block], name: str | None = None) -> list[
             continue
         for stmt, dynamic in _children(block, "statement"):
             principals = tuple(
-                Principal(_optional(p, "type"), _listed(p, "identifiers"), dyn)
+                Principal(_optional(p, "type"), *_listed(p, "identifiers"), dyn)
                 for p, dyn in _children(stmt, "principals")
             )
             conditions = tuple(
-                Condition(_optional(c, "test"), _optional(c, "variable"), _listed(c, "values"), dyn)
+                Condition(
+                    _optional(c, "test"), _optional(c, "variable"), *_listed(c, "values"), dyn
+                )
                 for c, dyn in _children(stmt, "condition")
             )
+            actions, not_actions = _listed(stmt, "actions"), _listed(stmt, "not_actions")
+            resources, not_resources = _listed(stmt, "resources"), _listed(stmt, "not_resources")
             found.append(
                 Statement(
                     document=block.labels[1],
                     sid=_optional(stmt, "sid"),
                     effect=_optional(stmt, "effect"),
-                    actions=_listed(stmt, "actions"),
-                    not_actions=_listed(stmt, "not_actions"),
-                    resources=_listed(stmt, "resources"),
-                    not_resources=_listed(stmt, "not_resources"),
+                    actions=actions[0],
+                    unresolved_actions=actions[1],
+                    not_actions=not_actions[0],
+                    unresolved_not_actions=not_actions[1],
+                    resources=resources[0],
+                    unresolved_resources=resources[1],
+                    not_resources=not_resources[0],
+                    unresolved_not_resources=not_resources[1],
                     principals=principals,
                     conditions=conditions,
                     dynamic=dynamic,
