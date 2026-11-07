@@ -120,6 +120,7 @@ from lib.shell import (
     expansion_opaque,
     fed_tokens,
     flag_span,
+    git_globals_known,
     interpreter_code,
     quote_walk,
     runs_claude,
@@ -2916,6 +2917,7 @@ _NOT_SIMPLE_WORD = re.compile(
 )
 # issue 121 (F1): words that may stand before a command word; . or source after them sources.
 _LEADERS = _CONTROL_WORDS | {"time", "(", "-p", "--"}
+_FD_NAME = re.compile(r"^\{[A-Za-z_][A-Za-z0-9_]*\}$")
 # issue 121 (G1): the heredoc a plainly simple text may hold, its delimiter a plain word, quoted
 # or bare; a bare one's body must hold no $, backtick or backslash.
 _SIMPLE_HEREDOC = re.compile(
@@ -3131,9 +3133,10 @@ def _unseen_paths(lead: list[str], args: list[str]) -> str | None:
 
 def _unseen_git(lead: list[str], tokens: list[str], heads: list[str]) -> str | None:
     # issue 121 (design 6): _unseen_paths for a judged git segment, an opaque subcommand included.
-    sub, args, _ = _git_split(["git", *tokens[1:]])
+    sub, args, globals_ = _git_split(["git", *tokens[1:]])
     at = len(tokens) - len(args) - 1
-    if sub is None or not (_expands(heads[at]) or _judged_git(sub, args)):
+    unknown = _expands(heads[at]) or not git_globals_known(globals_)
+    if sub is None or not (unknown or _judged_git(sub, args)):
         return None
     return _unseen_paths(lead, args)
 
@@ -3145,7 +3148,8 @@ def _icase_git(
     # assignments, its global option and a chain export included; -c never relaxes it.
     sub, args, globals_ = _git_split(["git", *tokens[1:]])
     at = len(tokens) - len(args) - 1
-    opaque = sub is not None and _expands(heads[at])
+    # issue 121 (S2): a global option outside git's tables makes the subcommand unknown, so judged.
+    opaque = sub is not None and (_expands(heads[at]) or not git_globals_known(globals_))
     if not (opaque or _judged_git(sub, args)):
         return None
     spellings = [_unquoted(w) for tok, w in prefix if _ASSIGN.match(tok) and _icase_on(w)]
@@ -3222,8 +3226,10 @@ def _stdin_message(text: str) -> bool:
     rest = strip_wrappers([_unquoted(w) for w in _raw_words(text)])
     if not rest or command_family(rest[0]) != "git":
         return False
-    sub, args, _ = _git_split(["git", *rest[1:]])
+    sub, args, globals_ = _git_split(["git", *rest[1:]])
     if sub != "commit" or any(a.startswith("--pathspec") for a in args):
+        return False
+    if not git_globals_known(globals_):
         return False
     return stdin_script(_flag_value("git commit", args, frozenset({"-F", "--file"}), len(args)))
 
@@ -3384,9 +3390,9 @@ def _text_segment(raw: str) -> _Part:
     if rest and not opaque and _unset_only(rest):
         return _Part(_TextScan(), [], plain, None)
     if rest and not opaque and command_family(rest[0]) == "git":
-        sub, args, _ = _git_split(["git", *rest[1:]])
+        sub, args, globals_ = _git_split(["git", *rest[1:]])
         at = len(words) - len(args) - 1
-        literal = sub is not None and not _expands(words[at])
+        literal = sub is not None and not _expands(words[at]) and git_globals_known(globals_)
         if literal and not _judged_git(sub, args):
             # issue 121 (G3): a read's own naming of the icase variable still counts later.
             return _Part(_TextScan(), [w for w in plain[: at + 1] if _ICASE_ENV in w], plain, None)
@@ -3475,6 +3481,8 @@ def _simple_code(command: str) -> str | None:
         return None
     if any(_sources(joined[a:b]) for a, b in segment_spans(joined)):
         return None
+    if any(_built_head(joined[a:b]) for a, b in segment_spans(joined)):
+        return None
     heads = _heads(joined)
     return None if any(h is None or h[0] in {".", "source"} for h in heads) else joined
 
@@ -3486,6 +3494,8 @@ def _heads(code: str) -> list[list[str] | None]:
     for seg in _shell_scan(code):
         skip = {i for i, w in enumerate(seg.words) if w.startswith(_REDIRECT)}
         clean = [_clean(w) for w in seg.words]
+        # issue 121 (S1): a {name} word before a redirect is its fd (bash 4.1+), no command word.
+        skip |= {i for i, w in enumerate(clean) if i + 1 in skip and _FD_NAME.match(w)}
         at = _command_at(clean, skip)
         if at == _OPAQUE:
             out.append(None)
@@ -3500,8 +3510,9 @@ def _judged_heads(code: str) -> bool:
         if head is None:
             return True
         if command_family(head[0]) == "git":
-            sub, rest, _ = _git_split(["git", *head[1:]])
-            if sub is not None and _judged_git(sub, rest):
+            sub, rest, globals_ = _git_split(["git", *head[1:]])
+            known = git_globals_known(globals_)
+            if sub is not None and (not known or _judged_git(sub, rest)):
                 return True
     return False
 
@@ -3523,6 +3534,8 @@ def _masked(code: str, double: bool) -> str:
 def _built_head(raw: str) -> bool:
     # issue 121 (F2): the segment's command word, or its git subcommand word, is built by the shell.
     words = _raw_words(raw)
+    while words and _unquoted(words[0]) in _LEADERS:
+        words = words[1:]
     rest = strip_wrappers([_unquoted(w) for w in words])
     if rest is None:
         return True
@@ -3533,8 +3546,9 @@ def _built_head(raw: str) -> bool:
         return True
     if command_family(rest[0]) != "git":
         return False
-    sub, args, _ = _git_split(["git", *rest[1:]])
-    return sub is not None and _expands(words[len(words) - len(args) - 1])
+    sub, args, globals_ = _git_split(["git", *rest[1:]])
+    unknown = not git_globals_known(globals_)
+    return sub is not None and (unknown or _expands(words[len(words) - len(args) - 1]))
 
 
 def _expansion_unseen(command: str) -> bool:

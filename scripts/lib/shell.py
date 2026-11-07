@@ -401,8 +401,41 @@ _GIT_CONFIG_DENY = re.compile(
     re.I,
 )
 _GIT_GLOBAL_WITH_ARG = frozenset(
-    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
+    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--attr-source"}
 )
+# issue 121 (S2): git's global options that take no separate value, and the =value spellings.
+GIT_GLOBAL_FLAGS = frozenset(
+    {"-p", "--paginate", "-P", "--no-pager", "--bare", "--no-replace-objects", "--no-lazy-fetch"}
+    | {"--no-optional-locks", "--no-advice", "--literal-pathspecs", "--glob-pathspecs"}
+    | {"--noglob-pathspecs", "--icase-pathspecs", "--exec-path", "--html-path", "--man-path"}
+    | {"--info-path", "-v", "--version", "-h", "--help"}
+)
+GIT_GLOBAL_EQ = (
+    "--git-dir=",
+    "--work-tree=",
+    "--namespace=",
+    "--config-env=",
+    "--attr-source=",
+    "--exec-path=",
+    "--list-cmds=",
+    "--super-prefix=",
+)
+
+
+def git_globals_known(globals_: list[str]) -> bool:
+    # issue 121 (S2): every global option before the subcommand is one git's tables name.
+    i = 0
+    while i < len(globals_):
+        token = globals_[i]
+        if token in _GIT_GLOBAL_WITH_ARG:
+            i += 2
+        elif token in GIT_GLOBAL_FLAGS or token.startswith(GIT_GLOBAL_EQ):
+            i += 1
+        else:
+            return False
+    return True
+
+
 _PUSH_FORBIDDEN = (
     "--force",
     "--force-with-lease",
