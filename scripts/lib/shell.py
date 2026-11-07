@@ -1016,17 +1016,18 @@ def _normalize(text: str, placeholder: bool) -> str:
     return text
 
 
+def segment_spans(text: str) -> list[tuple[int, int]]:
+    # issue 121: (start, end) of each raw segment, split at unquoted ; & | newline and parens.
+    cuts = [
+        lex.at
+        for lex in quote_walk(text)
+        if lex.kind == CHAR and not lex.quote and lex.text in ";&|\n\r()"
+    ]
+    return [(a + 1, b) for a, b in itertools.pairwise([-1, *cuts, len(text)])]
+
+
 def _raw_segments(text: str) -> list[str]:
-    segments: list[str] = []
-    buf: list[str] = []
-    for lex in quote_walk(text):
-        if lex.kind == CHAR and not lex.quote and lex.text in ";&|\n\r()":
-            segments.append("".join(buf))
-            buf = []
-        else:
-            buf.append(lex.text)
-    segments.append("".join(buf))
-    return segments
+    return [text[a:b] for a, b in segment_spans(text)]
 
 
 def _word_parts(token: str) -> set[str]:

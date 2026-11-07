@@ -21,11 +21,21 @@ from lib.config import (
     root_ignored,
 )
 
-from tests.adversarial.corpus import H1_ICASE
+from tests.adversarial.corpus import A3_RULE_ROWS, H1_ICASE
 from tests.conftest import git, main_warning, write_train_marker
 from tests.hook_chain import load
 
 TRAIN = "20261031-120000"
+# issue 97, 121: the H1 icase rows, a chain export, and every P10 and P11 row of unit A3.
+ICASE_REFUSED = tuple(
+    dict.fromkeys(
+        (
+            *H1_ICASE,
+            "export GIT_ICASE_PATHSPECS=1 && git add NOTES/a.md",
+            *(form for _, form in A3_RULE_ROWS),
+        )
+    )
+)
 
 
 @pytest.fixture
@@ -336,7 +346,7 @@ def test_hook_gives_no_warning_outside_a_train(
     assert _hook(repo, "git add notes/a.md", monkeypatch, capsys) == (0, "")
 
 
-@pytest.mark.parametrize("command", H1_ICASE)
+@pytest.mark.parametrize("command", ICASE_REFUSED)
 def test_an_icase_pathspec_is_refused_while_a_root_is_declared(repo: Path, command: str) -> None:
     # issue 97: git would match notes/a.md in any case; the spelled path never names the root.
     got = jail.excluded_root_reason(command, str(repo), _roots(str(repo / "notes")))
@@ -345,7 +355,7 @@ def test_an_icase_pathspec_is_refused_while_a_root_is_declared(repo: Path, comma
     assert jail.excluded_root_reason(command, str(repo), _roots()) is None, command
 
 
-@pytest.mark.parametrize("command", H1_ICASE)
+@pytest.mark.parametrize("command", ICASE_REFUSED)
 def test_check_refuses_an_icase_pathspec(
     repo: Path, command: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -376,9 +386,15 @@ def test_icase_spec_reads_the_long_and_short_magic(spec: str, icase: bool) -> No
 
 
 def test_case_exact_pathspecs_and_reads_still_pass(repo: Path) -> None:
-    # issue 97: an exact-case pathspec outside the root, and a message naming icase, pass.
+    # issue 97, 121: an exact-case pathspec outside the root, an icase message and a read pass.
     roots = _roots(str(repo / "notes"))
-    for command in ("git add ':(top)src/a.md'", "git commit -m ':(icase) note'", "git status"):
+    for command in (
+        "git add ':(top)src/a.md'",
+        "git commit -m ':(icase) note'",
+        "git status",
+        'git log -- ":(icase)notes"',
+        'git diff -- ":i:NOTES"',
+    ):
         assert jail.excluded_root_reason(command, str(repo), roots) is None, command
 
 

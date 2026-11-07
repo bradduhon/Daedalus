@@ -72,6 +72,7 @@ from lib.shell import (
     _ASSIGN,
     _DEFAULT_BRANCHES,
     _FALLBACK,
+    _FALSE,
     _FIND_DENY,
     _GLOB_CHARS,
     _HOME,
@@ -79,6 +80,7 @@ from lib.shell import (
     _REPO_SCRIPTS,
     _SHELLS,
     _VALUE_LONG_NEXT,
+    CHAR,
     FLOCK_BODY,
     GIT_PLUMBING_REMOTE,
     INTERPRETERS,
@@ -100,14 +102,17 @@ from lib.shell import (
     _cmd_name,
     _command_reason,
     _expands,
+    _flag_value,
     _git_split,
     _long_matches,
     _names_project_data,
     _pathspecs,
     _quote_spans,
+    _raw_words,
     _shell_code,
     _short_flags,
     _under,
+    _unquoted,
     chain_bases,
     command_family,
     env_split_values,
@@ -115,8 +120,10 @@ from lib.shell import (
     fed_tokens,
     flag_span,
     interpreter_code,
+    quote_walk,
     runs_claude,
     scan_options,
+    segment_spans,
     shell_tokens,
     split_options,
     stdin_script,
@@ -2884,11 +2891,19 @@ R_EXCLUDED_ICASE = (
     "root under another spelling (issue 97). Next: spell each path in its exact case, without "
     ":(icase), the short :i: form, --icase-pathspecs or GIT_ICASE_PATHSPECS."
 )
-# issue 97: the icase spellings an unparsed command may carry.
+# issue 97, 121: the icase spellings an unparsed command may carry; git reads the last two exactly.
 _ICASE_TEXT = re.compile(
-    r":\([^)]*\bicase\b|(?:^|[\s'\"=]):[^\s:(]*i[^\s:]*:|--icase-pathspecs|GIT_ICASE_PATHSPECS",
+    r":\([^)]*\bicase\b|(?:^|[\s'\"=]):[^\s:(]*i[^\s:]*:"
+    r"|(?-i:--icase-pathspecs|GIT_ICASE_PATHSPECS)",
     re.I,
 )
+_ICASE_ENV = "GIT_ICASE_PATHSPECS"
+# issue 121 (P10): builtins whose operands may export a variable to the rest of the chain.
+_EXPORTERS = frozenset({"export", "declare", "typeset"})
+_VAR_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_GIT_WORD = re.compile(r"\bgit\b")
+# issue 121 (P11): a heredoc operator, its - form and its delimiter word as typed.
+_HEREDOC = re.compile(r"<<(-?)[ \t]*((?:'[^'\n]*'|\"[^\"\n]*\"|\\.|[^\s;&|<>()'\"\\])+)")
 WARN_EXCLUDED_FAILED = "The excluded folders could not be resolved, so this command went unchecked."
 _EXCLUDED_GIT = frozenset({"add", "stage", "commit", "update-index", "stash"})
 _STASH_READS = frozenset({"list", "show", "pop", "apply", "drop", "clear", "branch", "create"})
@@ -3013,19 +3028,77 @@ def _icase_spec(spec: str) -> bool:
     return spec.startswith(":") and ":" in spec[1:] and "i" in spec[1:].split(":", 1)[0].lower()
 
 
-def _icase_git(segment: list[str], tokens: list[str]) -> str | None:
-    # issue 97: the icase pathspec, global option or environment variable a git call carries.
-    sub, args, globals_ = _git_split(tokens)
-    env = [w for w in segment if w.split("=", 1)[0] == "GIT_ICASE_PATHSPECS" and "=" in w]
-    spellings = env + [g for g in globals_ if g == "--icase-pathspecs"]
-    paths = _git_parts(sub or "", args)[0]
+def _judged_git(sub: str | None, args: list[str]) -> bool:
+    # D.5, issue 121 (P11): the git subcommands the excluded roots check judges; reads never.
+    return sub in _EXCLUDED_GIT and not (sub == "stash" and bool(args) and args[0] in _STASH_READS)
+
+
+def _icase_on(raw: str) -> bool:
+    # issue 121 (P10): NAME[=VALUE] as typed may turn icase on; an opaque name may be the variable,
+    # and git reads an empty, 0, false, no or off value as off.
+    name, eq, value = raw.partition("=")
+    if not _VAR_NAME.fullmatch(name):
+        return True
+    if name != _ICASE_ENV:
+        return False
+    return not eq or _expands(value) or _unquoted(value).lower() not in _FALSE | {""}
+
+
+def _allexport(args: list[str]) -> bool:
+    # issue 121 (P10): set -a, set -o allexport, or an option word the shell expands.
+    return any(
+        _expands(w) or (w[:1] == "-" and w[1:2] != "-" and "a" in w) or w == "allexport"
+        for w in args
+    )
+
+
+def _icase_exports(
+    own: list[str], tokens: list[str], heads: list[str], allexport: bool
+) -> tuple[bool, bool]:
+    # issue 121 (P10): (this segment exports GIT_ICASE_PATHSPECS to later ones, it runs set -a);
+    # words are as typed, so a quoted or expanding name stays opaque.
+    if not tokens:
+        return allexport and any(_icase_on(w) for w in own), False
+    name, args = command_family(tokens[0]), heads[1:]
+    if _expands(heads[0]):
+        named = [w for w in args if _unquoted(w) == _ICASE_ENV or (w[:1] != "-" and "=" in w)]
+        return any(_icase_on(w) for w in named), _allexport(args)
+    if name == "set":
+        return False, _allexport(args)
+    if name not in _EXPORTERS:
+        return False, False
+    operands, off = split_options(name, args)
+    exports = name == "export" or off or allexport or any(_expands(w) for w in args)
+    exports = exports or "-x" in scan_options(name, args).options
+    return exports and any(_icase_on(w) for w in operands), False
+
+
+def _icase_git(
+    prefix: list[tuple[str, str]], tokens: list[str], heads: list[str], exported: bool
+) -> str | None:
+    # issue 97, 121 (P10, P11): the icase spelling a judged git call carries, its prefix
+    # assignments, its global option and a chain export included; -c never relaxes it.
+    sub, args, globals_ = _git_split(["git", *tokens[1:]])
+    at = len(tokens) - len(args) - 1
+    opaque = sub is not None and _expands(heads[at])
+    if not (opaque or _judged_git(sub, args)):
+        return None
+    spellings = [_unquoted(w) for tok, w in prefix if _ASSIGN.match(tok) and _icase_on(w)]
+    spellings += [_ICASE_ENV] if exported else []
+    spellings += [g for g in globals_ if g == "--icase-pathspecs"]
+    if opaque:
+        paths = tokens[at:]
+    elif sub == "commit":
+        paths = split_options("git commit", args)[0]  # pin A1 -> A3: a message is no pathspec.
+    else:
+        paths = _git_parts(sub or "", args)[0]
     spellings += [p for p in paths for c in _candidates(p) if _icase_spec(c)]
     return spellings[0] if spellings else None
 
 
 def _excluded_git(tokens: list[str], base: str, roots: ExcludedRoots) -> str | None:
     sub, args, globals_ = _git_split(tokens)
-    if sub not in _EXCLUDED_GIT or (sub == "stash" and args[:1] and args[0] in _STASH_READS):
+    if sub is None or not _judged_git(sub, args):
         return None
     where = _git_dir(globals_, base)
     tree = _work_tree(where)
@@ -3079,13 +3152,111 @@ def _excluded_named(what: str, tokens: list[str], base: str, roots: ExcludedRoot
     return None
 
 
+def _stdin_message(text: str) -> bool:
+    # issue 121 (P11): text runs git commit taking its message, and no pathspec, from stdin.
+    rest = strip_wrappers([_unquoted(w) for w in _raw_words(text)])
+    if not rest or command_family(rest[0]) != "git":
+        return False
+    sub, args, _ = _git_split(["git", *rest[1:]])
+    if sub != "commit" or any(a.startswith("--pathspec") for a in args):
+        return False
+    return stdin_script(_flag_value("git commit", args, frozenset({"-F", "--file"}), len(args)))
+
+
+def _heredoc_end(text: str, word: str, dash: bool) -> int:
+    # issue 121: the index past a heredoc body's delimiter line, or the end when none closes it.
+    at = 0
+    while at < len(text):
+        stop = text.find("\n", at) + 1 or len(text)
+        line = text[at:stop].rstrip("\n")
+        if (line.lstrip("\t") if dash else line) == word:
+            return stop
+        at = stop
+    return len(text)
+
+
+def _cut_messages(command: str) -> str:
+    # issue 121 (P11): the text with each heredoc body cut that git commit -F - reads as its
+    # message; a heredoc inside ( ) or $( ) and every other body stay, judged as text.
+    out: list[str] = []
+    rest = command
+    while rest:
+        pending: list[tuple[bool, str, int, int, int]] = []
+        seps: list[int] = []
+        depth, cut = 0, len(rest)
+        for lex in quote_walk(rest):
+            char, at = lex.text, lex.at
+            if lex.quote or lex.kind != CHAR:
+                continue
+            seps += [at] if char in ";&|\n()" else []
+            if char == "\n" and pending:
+                cut = at + 1
+                break
+            depth += {"(": 1, ")": -1}.get(char, 0)
+            doc = _HEREDOC.match(rest, at) if char == "<" and depth == 0 else None
+            if doc and rest[at - 1 : at] != "<" and not rest.startswith("<<<", at):
+                begin = seps[-1] + 1 if seps else 0
+                pending.append((doc.group(1) == "-", _unquoted(doc.group(2)), begin, at, doc.end()))
+        out.append(rest[:cut])
+        line, rest = rest[:cut], rest[cut:]
+        for dash, word, begin, op, past in pending:
+            stop = min((k for k in seps if k >= past), default=cut)
+            end = _heredoc_end(rest, word, dash)
+            message = _stdin_message(line[begin:op] + " " + line[past:stop])
+            out.append("" if message else rest[:end])
+            rest = rest[end:]
+    return "".join(out)
+
+
+def _text_segment(raw: str) -> tuple[bool, list[str] | None]:
+    # issue 121 (P11): (the segment may run a judged git subcommand, the words that stand for it);
+    # a git read gives none, a commit its pathspecs and the words before them, else None keeps raw.
+    words = _raw_words(raw)
+    plain = [_unquoted(w) for w in words]
+    rest = strip_wrappers(plain) or []
+    lead = len(words) - len(rest) if rest else -1
+    if rest and not _expands(words[lead]) and command_family(rest[0]) == "git":
+        sub, args, _ = _git_split(["git", *rest[1:]])
+        at = len(words) - len(args) - 1
+        if sub is None or _expands(words[at]):
+            return True, None
+        if not _judged_git(sub, args):
+            return False, []
+        if sub == "commit":
+            return True, plain[: at + 1] + split_options("git commit", args)[0]
+        return True, None
+    opaque = lead >= 0 and _expands(words[lead])
+    return opaque or any(_GIT_WORD.search(p) for p in plain), None
+
+
+def _icase_text(command: str, exported: bool = False) -> str | None:
+    # issue 97, 121 (P10, P11): an icase spelling outside git reads and commit messages, or a
+    # chain export, while some segment may run a judged git subcommand (an opaque one may).
+    text = _cut_messages(command)
+    kept, stand_ins, judged = list(text), [], False
+    for start, end in segment_spans(text):
+        may, words = _text_segment(text[start:end])
+        judged = judged or may
+        if words is not None:
+            kept[start:end] = " " * (end - start)
+            stand_ins += words
+    hit = _ICASE_TEXT.search("".join(kept) + "\n" + "\n".join(stand_ins))
+    if not judged or not (exported or hit):
+        return None
+    return _ICASE_ENV if hit is None else hit.group(0).strip(" \t'\"=")
+
+
 def _excluded_text(command: str, cwd: str, roots: ExcludedRoots, writes: bool) -> str | None:
     # D.5: an unparsed command is judged on its text, the roots named as written or from cwd.
+    icase = _icase_text(command)
+    if icase is not None and roots():
+        return R_EXCLUDED_ICASE.format(spec=icase)
+    return _excluded_names(command, cwd, roots, writes)
+
+
+def _excluded_names(command: str, cwd: str, roots: ExcludedRoots, writes: bool) -> str | None:
     if not (_EXCLUDED_WORDS.search(command) or (writes and _EXCLUDED_WRITES.search(command))):
         return None
-    icase = _ICASE_TEXT.search(command)
-    if icase and re.search(r"\bgit\b", command) and roots():
-        return R_EXCLUDED_ICASE.format(spec=icase.group(0).strip(" \t'\"="))
     for root in _active_roots(roots(), _work_tree(cwd)):
         rel = os.path.relpath(root.path, cwd)
         names = [root.path] + ([rel] if not rel.startswith("..") and rel != "." else [])
@@ -3097,26 +3268,45 @@ def _excluded_text(command: str, cwd: str, roots: ExcludedRoots, writes: bool) -
 def excluded_root_reason(
     command: str, cwd: str, roots: ExcludedRoots, writes: bool = True
 ) -> str | None:
-    # 0136, D.5: git staging, commit, update-index and stash, gh and redirects into a root.
+    # 0136, D.5: git staging, commit, update-index and stash, gh and redirects into a root;
+    # issue 121 (P10): an export, set -a or declare -x of the icase variable reaches later segments.
     chain = worker_parse(command)
     bases = None if chain is None else chain_bases(chain, cwd, DIR_CHANGE_CMDS)
     if chain is None or bases is None:
         return _excluded_text(command, cwd, roots, writes)
-    for segment, base in zip(chain.segments, bases, strict=True):
+    exported = allexport = False
+    for raw, typed, segment, base in zip(
+        chain.raws, chain.tokens, chain.segments, bases, strict=True
+    ):
+        words = _raw_words(raw)
         tokens = strip_wrappers(segment) if segment else []
-        if tokens is None:
+        if tokens is None or len(words) != len(typed):
             return _excluded_text(command, cwd, roots, writes)
-        name = _base(tokens[0]) if tokens else ""
-        icase = _icase_git(segment, tokens) if name == "git" else None
+        own = words[len(words) - len(segment) :]
+        heads = own[len(own) - len(tokens) :]
+        name = command_family(tokens[0]) if tokens else ""
+        opaque = bool(heads) and _expands(heads[0])
+        git = name == "git" and not opaque
+        named = not git and (name == "gh" or (name == "tee" and writes))
+        texty = not (git or named) and (
+            opaque
+            or shell_tokens(tokens) is not None
+            or bool({"git", "gh"} & {command_family(t) for t in tokens})
+        )
+        prefix = list(zip(segment[: len(segment) - len(tokens)], own, strict=False))
+        icase = _icase_git(prefix, tokens, heads, exported) if git else None
+        icase = _icase_text(" ".join(own), exported) if texty else icase
+        more, setall = _icase_exports(own, tokens, heads, allexport)
+        exported, allexport = exported or more, allexport or setall
         reason: str | None = None
         if icase is not None and roots():
             reason = R_EXCLUDED_ICASE.format(spec=icase)
-        elif name == "git":
-            reason = _excluded_git(tokens, base, roots)
-        elif name == "gh" or (name == "tee" and writes):
+        elif git:
+            reason = _excluded_git(["git", *tokens[1:]], base, roots)
+        elif named:
             reason = _excluded_named(name, tokens[1:], base, roots)
-        elif shell_tokens(tokens) is not None or {"git", "gh"} & {_base(t) for t in tokens}:
-            reason = _excluded_text(" ".join(tokens), base, roots, writes)
+        elif texty:
+            reason = _excluded_names(" ".join(tokens), base, roots, writes)
         if reason is not None:
             return reason
     return None
