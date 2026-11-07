@@ -9,7 +9,14 @@ from typing import Any
 import pytest
 from lib import jail, train_state
 from lib.config import Config
-from lib.unit_binding import bindings_path, claim, mark_finished, rebind, record_dispatch
+from lib.unit_binding import (
+    bindings_path,
+    claim,
+    mark_finished,
+    rebind,
+    record_dispatch,
+    release,
+)
 from lib.workspace import create, mark_train
 
 from tests.conftest import git as _git
@@ -224,6 +231,24 @@ def test_library_refusals_carry_next(repo_cwd: Path, project_data: Path) -> None
         assert reason is not None and "Next:" in reason
     assert claim(repo_cwd, TRAIN, "a-1", "u1") is None
     assert "Next:" in str(record_dispatch(repo_cwd, TRAIN, "u1"))
+
+
+def test_released_unit_binds_the_first_coder_not_retired_from_it(
+    repo_cwd: Path, project_data: Path
+) -> None:
+    # issue 187: no new dispatch record is needed; every retired coder stays refused.
+    train_state.save(repo_cwd, TRAIN, {"train_id": TRAIN})
+    assert record_dispatch(repo_cwd, TRAIN, "u1") is None
+    assert claim(repo_cwd, TRAIN, "a-1", "u1") is None
+    assert release(repo_cwd, TRAIN, "u1") is None
+    refused = claim(repo_cwd, TRAIN, "a-1", "u1")
+    assert refused is not None and "second refutation" in refused and "Next:" in refused
+    assert claim(repo_cwd, TRAIN, "a-2", "u1") is None
+    data = json.loads(bindings_path(repo_cwd, TRAIN).read_text(encoding="utf-8"))
+    assert data == {"units": {"u1": {"agent_id": "a-2", "retired": ["a-1"]}}}
+    assert claim(repo_cwd, TRAIN, "a-2", "u1") is None
+    assert "belongs to coder a-2" in str(claim(repo_cwd, TRAIN, "a-3", "u1"))
+    assert "second refutation" in str(claim(repo_cwd, TRAIN, "a-1", "u1"))
 
 
 def test_symlinked_bindings_file_fails_closed(

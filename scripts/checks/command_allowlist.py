@@ -35,6 +35,8 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"packs"}
         # 0192: the asset pathspec tail the judges' diff lines carry.
         | {"assets"}
+        # issue 187: the refutation record the model command reads before a fresh coder.
+        | {"refuted"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir", "--check-tools"}),
@@ -47,7 +49,8 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
 # 0060: the inspect class is the auditor's read-only set plus the unit-descent check.
 INSPECT_GIT = shell.READ_ONLY_GIT | {"merge-base"}
 R_ORCHESTRATOR_BASH = (
-    "the orchestrator's Bash runs only daedalus_train.py with its train subcommands and ledger, "
+    "the orchestrator's Bash runs only daedalus_train.py with its train subcommands, refuted "
+    "and ledger, "
     "daedalus_workspace.py create, lock, refresh and finish, daedalus_doctor.py "
     "--print-cache-dir and --check-tools, audit_report.py, validate_plan.py, daedalus_map.py "
     "--repo and freeze_sources.py --train, --baselines-only or --verify by their absolute "

@@ -32,6 +32,7 @@ from lib import coder_model as coder_model_lib
 from lib.audit import ReplyKeyError, message_hmac, reply_key
 from lib.audit_proof import (
     AUDITOR,
+    HANDBACK,
     R_BOTH_VERDICTS,
     SUMMARY_DIR,
     TIP,
@@ -43,6 +44,7 @@ from lib.audit_proof import (
     docs_findings_path,
     docs_keys,
     findings_path,
+    handback_message,
     hooks_live,
     ledger_parent,
     live_log,
@@ -1429,8 +1431,10 @@ def coder_model(cwd: Path, unit_id: str) -> Outcome:
                 "Next: pass a unit id the recorded plan names."
             )
         unit = _unit_record(state, train_id, unit_id)
-        refuted = workspace.unit_refutations(records, Path(str(unit["path"])))
-        tier, reason = coder_model_lib.coder_tier(planned.files, plan_record.CONTROL_PATHS, refuted)
+        # issue 187: the recorded refutations count too, where one log window holds two replies.
+        counted = workspace.unit_refutations(records, Path(str(unit["path"])))
+        times = max(len(_refutation_seqs(unit)), counted)
+        tier, reason = coder_model_lib.coder_tier(planned.files, plan_record.CONTROL_PATHS, times)
         entry: dict[str, object] = {"model": models[tier], "tier": tier, "reason": reason}
         prior = _objects(unit, CODERS)
         # 0187: a repeated call records nothing new and never frees the unit twice.
@@ -1455,6 +1459,92 @@ def coder_model(cwd: Path, unit_id: str) -> Outcome:
 
 def _coder_line(unit_id: str, entry: dict[str, object]) -> str:
     return f"coder {unit_id}: {entry['model']} ({entry['reason']})"
+
+
+REFUTATIONS = "refutations"
+_REFUTED_NEXT = (
+    "Next: run refuted only on a unit whose verifier just replied [VERDICT: REFUTED], "
+    "after that reply is in the audit log."
+)
+
+
+def _refutation_seqs(unit: dict[str, object]) -> list[int]:
+    raw = unit.get(REFUTATIONS)
+    items = raw if isinstance(raw, list) else []
+    return [s for s in items if isinstance(s, int) and not isinstance(s, bool)]
+
+
+def _newest_verifier_reply(
+    records: list[dict[str, object]], worktree: Path
+) -> tuple[int, str] | None:
+    # issue 187: seq and last line of the newest verifier reply in the worktree's newest window;
+    # a hand-back wins over the digest stop the same verifier ends that turn with.
+    anchors = workspace._anchors(records, worktree)
+    if not anchors:
+        return None
+    replies: list[tuple[int, str, object, str]] = []
+    for record in records[anchors[-1] + 1 :]:
+        if workspace._worktree_lines(record):
+            break
+        agent = record.get("agent_type")
+        if not isinstance(agent, str) or agent.rpartition(":")[2] != workspace.VERIFIER:
+            continue
+        event = record.get("event")
+        if event == "SubagentStop":
+            text = record.get("last_message_tail")
+        elif event == "PostToolUse" and record.get("tool_name") == HANDBACK:
+            text = handback_message(record)
+        else:
+            continue
+        seq = record.get("seq")
+        if isinstance(text, str) and text.strip() and isinstance(seq, int):
+            replies.append((seq, str(event), record.get("agent_id"), text))
+    if not replies:
+        return None
+    chosen = replies[-1]
+    if len(replies) > 1 and chosen[1] == "SubagentStop":
+        before = replies[-2]
+        if before[1] == "PostToolUse" and before[2] == chosen[2]:
+            chosen = before
+    lines = [line.strip() for line in chosen[3].splitlines() if line.strip()]
+    return chosen[0], lines[-1]
+
+
+def refuted(cwd: Path, unit_id: str) -> Outcome:
+    # issue 187: one refutation per REFUTED verifier reply, keyed by its audit seq, on the unit.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        try:
+            state = train_state.load(repo, train_id)
+            records = workspace._audit_records(repo, state)
+        except workspace.WorkspaceError as exc:
+            raise RunnerError(str(exc)) from exc
+        unit = _unit_record(state, train_id, unit_id)
+        reply = _newest_verifier_reply(records, Path(str(unit["path"])))
+        if reply is None:
+            raise RunnerError(
+                f"the audit log holds no verifier reply on unit {unit_id} since its newest "
+                f"Unit worktree: dispatch. {_REFUTED_NEXT}"
+            )
+        seq, last = reply
+        if not last.startswith(coder_model_lib.REFUTED_PREFIX):
+            raise RunnerError(
+                f"the newest verifier reply on unit {unit_id}, at seq {seq}, does not end with "
+                f"{coder_model_lib.REFUTED_PREFIX}, so no refutation is recorded. {_REFUTED_NEXT}"
+            )
+
+        def add(state: dict[str, object]) -> None:
+            raw = state.get("units")
+            for each in raw if isinstance(raw, list) else []:
+                if isinstance(each, dict) and each.get("name") == unit["name"]:
+                    seqs = _refutation_seqs(each)
+                    # issue 187: a repeated call on the same reply records nothing new.
+                    each[REFUTATIONS] = seqs if seq in seqs else [*seqs, seq]
+
+        after = train_state.change(repo, train_id, add)
+        count = len(_refutation_seqs(_unit_record(after, train_id, unit_id)))
+        return [f"refuted {unit_id}: {count}"]
+
+    return _recorded(cwd, edit)
 
 
 def _exemption_args(ledger_id: str, finding: str, tracking: str, other: str | None) -> None:

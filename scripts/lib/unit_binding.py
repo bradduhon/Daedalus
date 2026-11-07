@@ -143,7 +143,8 @@ def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | Non
                     f"(0086). {WRITE_NEXT}"
                 )
             retired = record.get("retired")
-            if record.get("released") or (isinstance(retired, list) and agent_id in retired):
+            # issue 187: a released unit takes the first coder that is not retired from it.
+            if isinstance(retired, list) and agent_id in retired:
                 return (
                     f"unit {unit_name} goes to a fresh coder after its second refutation "
                     f"(0187). {WRITE_NEXT}"
@@ -160,6 +161,7 @@ def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | Non
                     f"{WRITE_NEXT}"
                 )
             record["agent_id"] = agent_id
+            record.pop("released", None)
             train_state._write(path, {"units": units})
     except TrainStateError as exc:
         return str(exc)
