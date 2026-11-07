@@ -2313,9 +2313,9 @@ def _chain_folders(segments: list[list[str]], cwd: str | None) -> list[str | Non
         out.append(folder)
         plain = [_clean(w) for w in words if not w.startswith(_REDIRECT)]
         at = _command_at(plain, set())
-        name = _base(plain[at]) if at is not None and at >= 0 else ""
-        if name not in {"cd", "pushd", "popd"}:
+        if at is None or at < 0 or _base(plain[at]) not in {"cd", "pushd", "popd"}:
             continue
+        name = _base(plain[at])
         args = [w for w in plain[at + 1 :] if w[:1] != "-"]
         target = args[0] if args and name != "popd" else ""
         if not target or target[:1] == "~" or _expands(target):
