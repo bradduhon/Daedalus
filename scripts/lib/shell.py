@@ -1297,19 +1297,53 @@ def _before_dashes(args: list[str]) -> list[str]:
     return args[: args.index("--")] if "--" in args else args
 
 
-def _body_scan(family: str, args: list[str]) -> tuple[bool, OptionScan]:
-    # P6, P7 (fix round 1, row 4): an inline flag anywhere before --, read by scan_options; an
-    # off-table option never ends the scan, and an off-table cluster holding a flag letter counts.
-    if family == "shell":
-        plus = {k + 1 for k, w in enumerate(args) if w in _SHELL_ARG_OPTS and w[0] == "+"}
-        args = [w for k, w in enumerate(args) if w[:1] != "+" and k not in plus]
-    scan = scan_options(family, args)
+class BodyScan(NamedTuple):
+    # A2 spec correction: the program's own options, its script word, and the flag-bearing span.
+    hit: bool
+    scan: OptionScan
+    script: str | None
+    module: bool
+    span: list[str]
+
+
+def _option_end(family: str, words: list[str]) -> tuple[int, bool]:
+    # A2 spec correction: the scan ends at python's -m <module> or the script operand, the first
+    # word scan_options leaves after its row's valued options; (that index, whether -m ended it).
+    for k in range(len(words)):
+        scan = scan_options(family, words[: k + 1])
+        if family == "python" and "-m" in scan.options:
+            return (k + 2 if words[k].endswith("m") else k + 1), True
+        if scan.operands:
+            return k, False
+    return len(words), False
+
+
+def _body_scan(family: str, args: list[str]) -> BodyScan:
+    # P6, P7: an inline flag among the program's own options, read by scan_options; an option
+    # off the table before the script keeps the scan conservative up to --, clusters included.
+    words = ["-" + w[1:] if family == "shell" and w[:1] == "+" else w for w in args]
+    head = _before_dashes(words)
+    cut, module = _option_end(family, head)
+    scan = scan_options(family, head[:cut])
     flags = INLINE_FLAGS[family]
-    letters = {flag[1] for flag in flags if flag[1] != "-"}
-    words = _before_dashes(args)
-    clusters = (w for w in words if w[:1] == "-" and w[1:2] != "-")
-    hit = bool(flags & set(scan.options)) or (scan.off and any(letters & set(w) for w in clusters))
-    return hit, scan
+    if scan.off:
+        letters = {flag[1] for flag in flags if flag[1] != "-"}
+        clusters = (w for w in head if w[:1] == "-" and w[1:2] != "-")
+        wide = set(scan_options(family, head).options)
+        hit = bool(flags & wide) or any(letters & set(w) for w in clusters)
+        return BodyScan(hit, scan, None, module, args[: len(head)])
+    after = args[len(head) + 1 :] if cut == len(head) else args[cut:]
+    script = None if module or not after else after[0]
+    span = args[:cut] if module else args[: cut + 1]
+    return BodyScan(bool(flags & set(scan.options)), scan, script, module, span)
+
+
+def flag_span(tokens: list[str]) -> int:
+    # rows 2-3, A2 spec correction: how many words after a shell or interpreter name may hold
+    # an inline flag, so an expansion there may be one; 0 for any other command.
+    family = command_family(tokens[0]) if tokens else ""
+    key = "shell" if family in _SHELLS else family
+    return len(_body_scan(key, tokens[1:]).span) if key in INLINE_FLAGS else 0
 
 
 def _flag_value(args: list[str], flags: frozenset[str]) -> str:
@@ -1325,18 +1359,21 @@ def _flag_value(args: list[str], flags: frozenset[str]) -> str:
     return ""
 
 
-def _stdin_body(scan: OptionScan, args: list[str], stdin: bool, reads: bool) -> str | None:
-    # P6, P7: at the command word, "" for a string read from a stream or behind an expanding word.
-    if not stdin or {"--version", "--help"} & set(scan.options):
+def _stdin_body(body: BodyScan, stdin: bool, reads: bool) -> str | None:
+    # P6, P7: at the command word, "" for a string read from a stream or behind an expanding
+    # word in an option position; python3 -m <module> and a script path are no body.
+    if not stdin or {"--version", "--help"} & set(body.scan.options):
         return None
-    if reads or any(_expands(w) for w in _before_dashes(args)):
+    if reads or any(_expands(w) for w in body.span):
         return ""
-    return "" if not scan.operands or stdin_script(scan.operands[0]) else None
+    if body.module:
+        return None
+    return "" if body.script is None or stdin_script(body.script) else None
 
 
 def _inline_code(tokens: list[str], family: str) -> str | None:
     # P7: the inline code of an interpreter segment, or None when it carries no inline flag.
-    hit, _ = _body_scan(family, tokens[1:])
+    hit = _body_scan(family, tokens[1:]).hit
     return _flag_value(tokens[1:], INLINE_FLAGS[family]) if hit else None
 
 
@@ -1346,15 +1383,10 @@ def interpreter_code(tokens: list[str], stdin: bool = False) -> str | None:
     family = command_family(tokens[0]) if tokens else ""
     if family not in INTERPRETERS:
         return None
-    code = _inline_code(tokens, family)
-    if code is not None:
-        return code
-    args = tokens[1:]
-    scan = scan_options(family, args)
-    if family == "python" and "-m" in scan.options:
-        # P7: python3 -m <module> runs a module, never a body, bar an expanding word.
-        return "" if stdin and any(_expands(w) for w in _before_dashes(args)) else None
-    return _stdin_body(scan, args, stdin, False)
+    body = _body_scan(family, tokens[1:])
+    if body.hit:
+        return _flag_value(tokens[1:], INLINE_FLAGS[family])
+    return _stdin_body(body, stdin, False)
 
 
 def shell_tokens(tokens: list[str]) -> list[str] | None:
@@ -1368,14 +1400,14 @@ def _shell_code(tokens: list[str], stdin: bool = False) -> str | None:
     # P6, issue 116: a shell's -c string (its first operand, or the word after -c past an
     # off-table option); with stdin, "" for a string read from a stream; else _FALLBACK.
     args = tokens[1:]
-    hit, scan = _body_scan("shell", args)
-    if hit and scan.off:
+    body = _body_scan("shell", args)
+    if body.hit and body.scan.off:
         return _flag_value(args, INLINE_FLAGS["shell"])
-    if hit:
-        return scan.operands[0] if scan.operands else ""
-    if scan.off:
+    if body.hit:
+        return body.script or ""
+    if body.scan.off:
         return _FALLBACK
-    return _stdin_body(scan, args, stdin, "-s" in scan.options)
+    return _stdin_body(body, stdin, "-s" in body.scan.options)
 
 
 def _segment_reason(segment: list[str], depth: int, main: bool) -> str | None:

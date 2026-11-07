@@ -111,6 +111,7 @@ from lib.shell import (
     command_family,
     env_split_values,
     expansion_opaque,
+    flag_span,
     interpreter_code,
     runs_claude,
     scan_options,
@@ -2354,7 +2355,7 @@ def _raw_expands(word: str) -> bool:
 
 def _expanding_lead(raws: list[str]) -> int | None:
     # fix round 1, rows 2-3: the command word's index when it expands, or when a shell or
-    # interpreter has an expanding word before --; read raw, never one brace alternative.
+    # interpreter has one in an option position (flag_span); read raw, never one alternative.
     clean = [_clean(w) for w in raws]
     lead = _command_at(clean, set())
     if lead is None or lead < 0:
@@ -2362,11 +2363,7 @@ def _expanding_lead(raws: list[str]) -> int | None:
     if _raw_expands(raws[lead]):
         return lead
     start = lead + 1 if command_family(clean[lead]) == "busybox" else lead
-    family = command_family(clean[start]) if start < len(clean) else ""
-    if family not in _SHELLS | INTERPRETERS:
-        return None
-    rest = clean[start + 1 :]
-    stop = start + 1 + (rest.index("--") if "--" in rest else len(rest))
+    stop = start + 1 + flag_span(clean[start:])
     return lead if any(_raw_expands(raws[j]) for j in range(start + 1, stop)) else None
 
 

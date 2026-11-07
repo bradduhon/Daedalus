@@ -278,6 +278,22 @@ A2_FIX1_UNMARKED = (
     "eval 'touch {repo}/x'",
     ". /dev/stdin <<< 'touch {repo}/x'",
 )
+# A2 spec correction: an inline flag among the program's own options, off-table ones included.
+A2_FIX2_RUN = (
+    ("inline", "node --title t -e x"),
+    ("inline", "node --title build.js -e x"),
+    ("inline", "node --frobnicate t -e x"),
+    ("inline", "python3 -I -c x"),
+    ("inline", "python3 -Ic x"),
+)
+# A2 spec correction: words after -m <module> or the script belong to the program.
+A2_PROGRAM_ARGS = (
+    "python3 -m pytest -c pytest.ini -q",
+    "python3 scripts/x.py -c foo",
+    "node build.js -e prod",
+    "perl script.pl -e x",
+    "bash script.sh -c x",
+)
 # P7 (unit A2): a module or a script run is never an inline body.
 A2_ADMITTED = ("python3 -m pytest -q", "python3 scripts/x.py")
 # issue 83 (unit H1): {other}/deep links to {repo}/sub, so deep/.. is {repo} on disk.

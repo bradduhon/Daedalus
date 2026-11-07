@@ -2199,9 +2199,7 @@ def test_hidden_bodies_nest_and_find_their_targets(marked_repo: Path, other_repo
     nested = f"env -S \"bash -c 'touch {marked_repo}/x'\""
     assert str(marked_repo / "x") in jail._bash_write_dirs(nested, str(other_repo))
     assert jail._hidden_reason(f"echo a; sh -c 'touch {marked_repo}/x'") == jail.R_SHELL_BODY
-    # A2 fix round 1, row 4: a -c anywhere before -- marks a body, whatever precedes it.
-    assert jail._hidden_reason("bash script.sh -c x") == jail.R_SHELL_BODY
-    assert jail._hidden_reason("bash script.sh x") is None
+    assert jail._hidden_reason("bash script.sh -c x") is None
     assert jail._hidden_reason("bash --version") is None
     assert jail._hidden_reason("flock /tmp/l touch x") is None
     assert jail._hidden_reason("flock /tmp/l --command=true") == jail.R_SHELL_BODY
