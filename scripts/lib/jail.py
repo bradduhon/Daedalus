@@ -3497,7 +3497,7 @@ def _simple_code(command: str, expansions: bool = False) -> str | None:
     joined = "".join(code)
     if _NOT_SIMPLE_WORD.search(_normalised(joined)) or _FOREIGN_GIT.search(_normalised(joined)):
         return None
-    if not expansions and _expanding(joined, masked=True):
+    if not expansions and _expanding(joined, masked=True, globs=True):
         return None
     if any(_sources(joined[a:b]) for a, b in segment_spans(joined)):
         return None
@@ -3627,13 +3627,18 @@ def _foreign_icase(command: str) -> str | None:
     return _spec(hit) if _foreign_git(command) else None
 
 
-def _expanding(text: str, masked: bool = False) -> bool:
-    # issue 121 (F2, U3): a $ or backtick, a process substitution or a brace list; masked reads
+def _expanding(text: str, masked: bool = False, globs: bool = False) -> bool:
+    # issue 121 (F2, U3): a $ or backtick, a process substitution or a brace list, and with globs
+    # an unquoted * or ? or a [ closed in its word (a lone [ or [[ is a test, T2); masked reads
     # quote_walk spans, so single-quoted text, and any quoted brace or ( ), is literal.
     single = _masked(text, True) if masked else text
     every = _masked(text, False) if masked else text
+    globbed = globs and bool(re.search(r"[*?]|\[[^\s\]]*\]", every))
     return bool(
-        re.search(r"[$`]", single) or re.search(r"[<>]\(", every) or _BRACE_LIST.search(every)
+        globbed
+        or re.search(r"[$`]", single)
+        or re.search(r"[<>]\(", every)
+        or _BRACE_LIST.search(every)
     )
 
 
