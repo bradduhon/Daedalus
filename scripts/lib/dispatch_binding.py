@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -22,7 +21,7 @@ from lib.audit_proof import SUMMARY_DIR
 from lib.config import DEFAULT_MAX_CONCURRENT_BUILDERS
 from lib.narrow import integer
 from lib.project_root import project_root
-from lib.shell import _abs, _base, _git_split, _under
+from lib.shell import _abs, _base, _git_split
 from lib.train_scope import policed_outside_train
 from lib.train_state import DOCS_SUFFIX as DOCS_SUFFIX
 from lib.train_state import TRAIN_ID, TrainStateError, active_train, is_audit_unit
@@ -415,8 +414,7 @@ def _binding_reason(hook_input: dict[str, object], cwd: str, units: set[str]) ->
 # issue 188: run bindings, one store per session under the plugin data folder, never per cwd.
 RUN_BINDINGS = "run-bindings"
 RUN_SCHEMA = 1
-CLAIM_PATH = "path"
-CLAIM_OLDEST = "oldest"
+CLAIM_SOLE = "sole"
 _RUN_CAP = 256
 _DISPATCHER = "orchestrator"
 
@@ -478,7 +476,7 @@ def _entry_ok(entry: object) -> bool:
         and isinstance(train, str)
         and TRAIN_ID.fullmatch(train) is not None
         and (agent_id is None or isinstance(agent_id, str))
-        and entry.get("claim") in (None, CLAIM_PATH, CLAIM_OLDEST)
+        and entry.get("claim") in (None, CLAIM_SOLE)
         and isinstance(created, int | float)
         and not isinstance(created, bool)
     )
@@ -567,22 +565,6 @@ def record_run_dispatch(hook_input: dict[str, object]) -> None:
         _save_runs(path, [*(_load_runs(path) or []), entry])
 
 
-def _first_path(tool_input: dict[str, object]) -> str | None:
-    # issue 188: the first absolute path a call names; a coder's brief read gives its repo.
-    for key in ("file_path", "notebook_path", "path"):
-        value = tool_input.get(key)
-        if isinstance(value, str) and os.path.isabs(value):
-            return value
-    command = tool_input.get("command")
-    if not isinstance(command, str):
-        return None
-    try:
-        words = shlex.split(command)
-    except ValueError:
-        return None
-    return next((w.rpartition("=")[2] for w in words if os.path.isabs(w.rpartition("=")[2])), None)
-
-
 def _binding(entry: dict[str, object], now: bool) -> RunBinding | None:
     if not _live(entry):
         return None  # issue 188: a stale binding is ignored.
@@ -591,7 +573,7 @@ def _binding(entry: dict[str, object], now: bool) -> RunBinding | None:
         str(entry["repo"]),
         str(worktree) if worktree is not None else None,
         str(entry["train_id"]),
-        str(entry.get("claim") or CLAIM_OLDEST),
+        str(entry.get("claim") or CLAIM_SOLE),
         now,
     )
 
@@ -601,8 +583,8 @@ def _held_run(entries: list[dict[str, object]], agent_id: str) -> dict[str, obje
 
 
 def bound_run(hook_input: dict[str, object]) -> RunBinding | None:
-    # issue 188: the agent's run; its first call claims the oldest pending entry of its type,
-    # preferring one whose repo holds the call's first absolute path. A claim never moves.
+    # issue 188: the agent's run; its first call claims the pending entry of its type only when
+    # it is the sole one in the session. A claim never moves.
     agent_id = hook_input.get("agent_id")
     raw = str(hook_input.get("agent_type") or "")
     path = run_store(hook_input.get("session_id"))
@@ -616,9 +598,6 @@ def bound_run(hook_input: dict[str, object]) -> RunBinding | None:
     held = _held_run(entries, agent_id)
     if held is not None:
         return _binding(held, False)
-    raw_input = hook_input.get("tool_input")
-    tool_input: dict[str, object] = raw_input if isinstance(raw_input, dict) else {}
-    first = _first_path(tool_input)
     with _run_lock(path):
         entries = _load_runs(path)
         if entries is None:
@@ -631,11 +610,10 @@ def bound_run(hook_input: dict[str, object]) -> RunBinding | None:
             key=lambda e: float(str(e["created"])),
         )
         pending = [e for e in pending if _live(e)]
-        if not pending:
-            return None
-        by_path = [e for e in pending if first is not None and _under(first, str(e["repo"]))]
-        chosen = by_path[0] if by_path else pending[0]
+        if len(pending) != 1:
+            return None  # issue 188: two candidates bind neither; never chosen by an agent path.
+        chosen = pending[0]
         chosen["agent_id"] = agent_id
-        chosen["claim"] = CLAIM_PATH if by_path else CLAIM_OLDEST
+        chosen["claim"] = CLAIM_SOLE
         _save_runs(path, entries)
     return _binding(chosen, True)

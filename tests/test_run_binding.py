@@ -66,12 +66,11 @@ def _dispatch(run_script: Run, repo: Path, wt: Path, brief: Path) -> None:
 def two_runs(
     tmp_path: Path, run_script: Run
 ) -> tuple[tuple[Path, Path, Path], tuple[Path, Path, Path]]:
-    # issue 188: one coder per run; each first reads its brief while the session sits elsewhere.
+    # issue 188: one coder per run, each dispatched alone and first reading its brief elsewhere.
     a, b = _run_repo(tmp_path / "a"), _run_repo(tmp_path / "b")
-    _dispatch(run_script, *a)
-    _dispatch(run_script, *b)
-    for agent, (_, _, brief), away in (("agent-a", a, b[0]), ("agent-b", b, a[0])):
-        payload = _call(away, "Read", agent, file_path=str(brief))
+    for agent, run, away in (("agent-a", a, b[0]), ("agent-b", b, a[0])):
+        _dispatch(run_script, *run)
+        payload = _call(away, "Read", agent, file_path=str(run[2]))
         result = run_script("enforce_agent_jail.py", payload)
         assert result.returncode == 0, result.stderr
     return a, b
@@ -96,7 +95,7 @@ def test_each_coder_writes_only_in_its_own_run(two_runs: Any, run_script: Run) -
     moved = [r for r in rows if r["agent_id"] == "agent-a" and r["payload_cwd"] == str(repo_b)]
     assert moved and all(r["cwd"] == str(wt_a) for r in moved), rows
     claim = moved[0]["binding"]
-    assert claim == {"train_id": TRAIN, "repo": str(repo_a), "worktree": str(wt_a), "claim": "path"}
+    assert claim == {"train_id": TRAIN, "repo": str(repo_a), "worktree": str(wt_a), "claim": "sole"}
 
 
 def test_a_relative_write_of_a_moved_agent_is_refused(two_runs: Any, run_script: Run) -> None:
@@ -202,15 +201,51 @@ def test_a_bad_session_id_has_no_store(plugin_data: Path) -> None:
     assert dispatch_binding.run_store("ok-1") == _store(plugin_data).with_name("ok-1.json")
 
 
-def test_the_oldest_pending_entry_is_claimed_without_a_path(
-    tmp_path: Path, run_script: Run
-) -> None:
-    # issue 188: a first call naming no path in a run repo takes the oldest entry of its type.
+def test_the_sole_pending_entry_is_claimed_without_a_path(tmp_path: Path, run_script: Run) -> None:
+    # issue 188: a first call naming no path in a run repo takes the one entry of its type.
     a = _run_repo(tmp_path / "a")
     _dispatch(run_script, *a)
     hook = _call(tmp_path, "Bash", "agent-q", command="ls")
     bound = dispatch_binding.bound_run(hook)
-    assert bound is not None and bound.claim == "oldest" and bound.repo == str(a[0])
+    assert bound is not None and bound.claim == "sole" and bound.repo == str(a[0])
+
+
+def test_two_pending_entries_of_one_type_bind_neither(
+    tmp_path: Path, plugin_data: Path, run_script: Run
+) -> None:
+    # issue 188: the path a first call names never picks a run; both agents keep the payload cwd.
+    a, b = _run_repo(tmp_path / "a"), _run_repo(tmp_path / "b")
+    (repo_a, _, _), (repo_b, wt_b, brief_b) = a, b
+    _dispatch(run_script, *a)
+    _dispatch(run_script, *b)
+    first = run_script(
+        "enforce_agent_jail.py", _call(repo_a, "Read", "agent-a", file_path=str(brief_b))
+    )
+    assert first.returncode == 0, first.stderr
+    assert _write(run_script, repo_a, "agent-a", wt_b / "x.py").returncode == 2
+    assert (
+        dispatch_binding.bound_run(_call(repo_b, "Read", "agent-b", file_path=str(brief_b))) is None
+    )
+    entries = json.loads(_store(plugin_data).read_text(encoding="utf-8"))["entries"]
+    assert [(e["agent_id"], e["claim"]) for e in entries] == [(None, None), (None, None)]
+
+
+def test_pending_entries_of_different_types_each_bind(tmp_path: Path, plugin_data: Path) -> None:
+    # issue 188: the sole-entry rule counts pending entries of the calling agent's type only.
+    (repo_a, wt_a, _), (repo_b, _, _) = _run_repo(tmp_path / "a"), _run_repo(tmp_path / "b")
+    for repo, subagent, prompt in (
+        (repo_a, "daedalus:coder", f"Worktree: {wt_a}\n"),
+        (repo_b, "daedalus:verifier", "Check unit u1.\n"),
+    ):
+        tool_input = {"subagent_type": subagent, "prompt": prompt}
+        dispatch_binding.record_run_dispatch(_call(repo, "Agent", **tool_input))
+    for agent, agent_type, repo in (
+        ("agent-c", "daedalus:coder", repo_a),
+        ("agent-v", "daedalus:verifier", repo_b),
+    ):
+        hook = {**_call(tmp_path, "Bash", agent, command="ls"), "agent_type": agent_type}
+        bound = dispatch_binding.bound_run(hook)
+        assert bound is not None and (bound.repo, bound.claim) == (str(repo), "sole"), agent
 
 
 def test_run_bindings_are_refused_to_agents(
