@@ -651,6 +651,7 @@ Daedalus/
 │   ├── lib/dispatch_binding.py      # coder dispatch, warm rebind and first-write claim
 │   ├── lib/fetch.py                 # GitHub-only download, size cap and cache lock for refreshes
 │   ├── lib/gh_policy.py             # the gh commands each agent may run
+│   ├── lib/hcl_reader.py            # the built-in Terraform reader finding tests import
 │   ├── lib/git.py                   # the one git runner: timeout and redirect scrub
 │   ├── lib/hook_io.py               # hook input and output for the check scripts
 │   ├── lib/human_text.py            # counts the plain words in operator lines

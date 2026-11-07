@@ -183,6 +183,10 @@ broken, not the one case. The test asserts it at every enforcement point that ho
    Its docstring is the finding line. The test reaches the code under test through pytest's
    rootdir (`request.config.rootpath`), never a fixed worktree path, so the same file runs
    against the audit worktree and against a coder's fix worktree.
+   A test on Terraform files puts `<plugin root>/scripts` on `sys.path` and imports
+   `lib.hcl_reader`, the built-in Terraform reader (0212): `parse` for blocks and
+   `policy_statements` for IAM policy document statements. Never extract HCL blocks with a
+   regex.
 2. **Run it in the reply that files it**:
    `python3 -m pytest <test file> -q -p no:cacheprovider --rootdir <audit worktree>`, with an
    absolute path or node id under the round folder, and paste the failing line. It fails on
