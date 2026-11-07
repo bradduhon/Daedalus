@@ -12,11 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 def main() -> int:
     try:
-        from lib.project_root import effective_cwd, train_marked
+        from lib.project_root import record_cwd, train_marked
 
         payload = json.loads(sys.stdin.read() or "{}")
-        # 188: a main-session `cd <repo> && ...` is gated and logged in the folder it moves to.
-        cwd = effective_cwd(payload) if isinstance(payload, dict) else None
+        # 188: a main-session `cd <marked repo> && ...` is gated and logged in that repo.
+        cwd = record_cwd(payload) if isinstance(payload, dict) else None
         # 0035: no train marker, no record; the audit modules are not even imported.
         if not train_marked(cwd):
             return 0

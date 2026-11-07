@@ -165,20 +165,27 @@ def test_hook_rotation_record_passes_the_chain_check(
 
 
 @pytest.mark.parametrize(
-    ("caller", "lands_in_b"),
-    [({}, True), ({"agent_id": "a1", "agent_type": "daedalus:coder"}, False)],
+    ("caller", "target", "lands_in_b"),
+    [
+        ({}, "marked_repo", True),
+        ({"agent_id": "a1", "agent_type": "daedalus:coder"}, "marked_repo", False),
+        ({}, "other_repo", False),
+    ],
 )
 def test_main_cd_records_in_the_repo_it_moves_into(
     run_script: Any,
     project_data: Path,
     hook_input: Any,
-    marked_repo: Path,
+    request: pytest.FixtureRequest,
     caller: dict[str, Any],
+    target: str,
     lands_in_b: bool,
 ) -> None:
-    # 188: main's `cd <repo B> && ...` from repo A logs in B; an agent's call stays in its own cwd.
+    # 188: main's `cd <marked repo B> && ...` from repo A logs in B; an agent's call, or a cd
+    # into an unmarked folder, stays in repo A's chain.
     from lib import audit
 
+    marked_repo: Path = request.getfixturevalue(target)
     repo_a = project_data.parent.parent
     write_train_marker(repo_a)
     command = (

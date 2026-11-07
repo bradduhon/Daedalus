@@ -68,6 +68,16 @@ def effective_cwd(payload: dict[str, object]) -> object:
     return os.path.normpath(target)
 
 
+def record_cwd(payload: dict[str, object]) -> object:
+    # 188: the effective folder only adds a destination; an unmarked one never drops a record.
+    cwd = payload.get("cwd")
+    moved = effective_cwd(payload)
+    if moved is not cwd and isinstance(moved, str):
+        if os.path.lexists(project_root(Path(moved)) / TRAIN_MARKER):
+            return moved
+    return cwd
+
+
 def train_marked(cwd: object) -> bool:
     # 0035: no absolute cwd means the repo is unknown, so the hook acts as if a train runs.
     if not isinstance(cwd, str) or not os.path.isabs(cwd):

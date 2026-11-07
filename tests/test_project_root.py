@@ -415,6 +415,29 @@ def test_effective_cwd_follows_only_a_main_leading_cd(
     assert effective_cwd(payload) == (str(other) if moves else payload["cwd"])
 
 
+@pytest.mark.parametrize(
+    ("target", "overrides", "moves"),
+    [
+        ("marked_repo", {}, True),
+        ("other_repo", {}, False),
+        ("marked_repo", {"agent_id": "a1"}, False),
+    ],
+)
+def test_record_cwd_moves_only_into_a_marked_repo(
+    hook_input: Any,
+    request: pytest.FixtureRequest,
+    target: str,
+    overrides: dict[str, Any],
+    moves: bool,
+) -> None:
+    # 188: the effective folder adds a marked destination; an unmarked one keeps the payload cwd.
+    from lib.project_root import record_cwd
+
+    folder: Path = request.getfixturevalue(target)
+    payload = hook_input(tool_input={"command": f"cd {folder} && ls"}, **overrides)
+    assert record_cwd(payload) == (str(folder) if moves else payload["cwd"])
+
+
 @pytest.mark.parametrize("tool_input", [None, "cd /", {"command": None}, {}])
 def test_effective_cwd_keeps_cwd_for_an_unreadable_command(
     hook_input: Any, tool_input: Any

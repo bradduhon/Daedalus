@@ -498,11 +498,11 @@ def audit_append(
     reason: str | None = None,
     judge_ms: float | None = None,
 ) -> dict[str, object] | None:
-    from lib.project_root import effective_cwd
+    from lib.project_root import record_cwd
 
     # 0035: no train marker means no train runs here; lexists, as the jail judges a train.
-    # 188: root and log follow the effective folder; the record keeps the payload's own cwd.
-    cwd = _require_cwd(effective_cwd(hook_input))
+    # 188: root and log follow record_cwd; the record keeps the payload's own cwd.
+    cwd = _require_cwd(record_cwd(hook_input))
     if not os.path.lexists(project_root(cwd) / TRAIN_MARKER):
         return None
     path, lock = _session_file(hook_input.get("session_id"), cwd)
