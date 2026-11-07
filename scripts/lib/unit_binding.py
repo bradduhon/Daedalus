@@ -124,6 +124,14 @@ def rebind(repo: Path, train_id: str, agent_id: str, from_unit: str, to_unit: st
     return None
 
 
+def _retired_anywhere(units: dict[str, dict[str, object]], agent_id: str) -> bool:
+    for rec in units.values():
+        retired = rec.get("retired")
+        if isinstance(retired, list) and agent_id in retired:
+            return True
+    return False
+
+
 def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | None:
     try:
         with _locked(repo, train_id) as path:
@@ -143,7 +151,9 @@ def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | Non
                     f"(0086). {WRITE_NEXT}"
                 )
             retired = record.get("retired")
-            if record.get("released") or (isinstance(retired, list) and agent_id in retired):
+            # issue 187: a released unit takes the first coder retired from no unit at all.
+            mine_retired = isinstance(retired, list) and agent_id in retired
+            if mine_retired or (record.get("released") and _retired_anywhere(units, agent_id)):
                 return (
                     f"unit {unit_name} goes to a fresh coder after its second refutation "
                     f"(0187). {WRITE_NEXT}"
@@ -160,6 +170,7 @@ def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | Non
                     f"{WRITE_NEXT}"
                 )
             record["agent_id"] = agent_id
+            record.pop("released", None)
             train_state._write(path, {"units": units})
     except TrainStateError as exc:
         return str(exc)
