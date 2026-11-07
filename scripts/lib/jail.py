@@ -881,6 +881,11 @@ _DATA_DIR_WRITE = re.compile(
     r"|\bgit\b[^;&|\n]*\s(?:init|clone)\b"
 )
 _DEVNULL = re.compile(r"\d?>&\d|&?\d?>>?\s*/dev/null")
+# issue 188: the moved bound agent rule; module runs, fd words and the cd start form.
+_INTERPRETER = re.compile(r"python[\d.]*|perl|ruby|node|nodejs|deno|bun|php")
+_FD_WORD = re.compile(r"&?\d+|&?-")
+_CD_LEAD = re.compile(r"\s*cd\s+(/\S+)\s*&&")
+_CHDIR_WORD = re.compile(r"(?:^|[\s;&|(])(?:cd|pushd|popd)(?=[\s;&|)]|$)")
 _CD_TARGET = re.compile(r"(?:^|[;&|(\s])(?:cd|pushd)\s+([^\s;&|)]+)")
 _DAEDALUS_WORD = re.compile(r"(?<![\w.-])daedalus(?![\w-])")
 _GIT_INDEX_WRITE = re.compile(r"\bgit\b[^;&|]*\b(?:add|stage|commit|update-index)\b")
@@ -2400,6 +2405,113 @@ def _marked_repo(cwd: str, tool: str, tool_input: dict[str, object]) -> Path | N
         root = project_root(path)
         if os.path.lexists(train_marker(root)):
             return root
+    return None
+
+
+def moved_relative(
+    tool: str, tool_input: dict[str, object], cwds: tuple[str, str], judged: str
+) -> str | None:
+    # issue 188: what a moved bound agent names relatively or leaves to its shell's folder.
+    if tool in {"Grep", "Glob"} and not os.path.isabs(str(tool_input.get("path") or "")):
+        return f"{tool} with no absolute path"
+    for key in ("file_path", "notebook_path", "path"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value and not os.path.isabs(value):
+            return value
+    if tool != "Bash":
+        return None
+    command = str(tool_input.get("command") or "")
+    lead = _CD_LEAD.match(command)
+    if lead and os.path.normpath(lead.group(1)) == os.path.normpath(judged):
+        if len(_CHDIR_WORD.findall(command)) == 1:
+            return None  # issue 188: the shell starts in the judged folder itself.
+    found = relative_write(command)
+    if found is not None:
+        return found
+    segments = _shell_words(command)
+    envs = _bash_env(segments)
+    loose = False
+    for k, words in enumerate(segments):
+        found, plain = _moved_segment(words, envs[k], cwds)
+        if found is not None:
+            return found
+        loose = loose or plain
+    # issue 188: a segment with a bare word or no absolute path runs only as a base read.
+    if loose and not _foreign_read_ok(command, judged, None):
+        return "a command that is not a read and does not name every path absolutely"
+    return None
+
+
+def _moved_segment(
+    words: list[str], env: dict[str, list[str]], cwds: tuple[str, str]
+) -> tuple[str | None, bool]:
+    # issue 188: (refused word, needs the read grammar); a relative verb, a module run, a
+    # relative or unknown word refuse; a bare word or no absolute path needs the read grammar.
+    clean = [_clean(w) for w in words]
+    redirects = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
+    at = _command_at(clean, redirects)
+    if at is None:
+        return None, False
+    if at == _OPAQUE:
+        return " ".join(clean), False
+    verb = clean[at]
+    if "/" in verb and not os.path.isabs(verb):
+        return verb, False
+    if _INTERPRETER.fullmatch(_base(verb)) and "-m" in clean[at + 1 :]:
+        return f"{verb} -m", False
+    # issue 188: uniq writes its second operand, which the base read grammar admits.
+    operands = [w for w in clean[at + 1 :] if w == "-" or not w.startswith("-")]
+    if _base(verb) == "uniq" and len(operands) > 1 and not os.path.isabs(operands[1]):
+        return operands[1], False
+    named, plain = False, False
+    for i in range(at + 1, len(words)):
+        alts = _expand_word(words[i], env) if i not in redirects else []
+        if any(unknown for _, unknown in alts):
+            return clean[i], False
+        text = alts[0][0] if alts else ""
+        if text.startswith("-"):
+            text = text.split("=", 1)[1] if "=" in text else ""
+        if not text:
+            continue
+        if os.path.isabs(text):
+            named = True
+            continue
+        here = any(os.path.lexists(os.path.join(c, text)) for c in cwds)
+        if "/" in text or set("*?[") & set(text) or text in {".", ".."} or here:
+            return text, False
+        plain = True
+    return None, plain or not named
+
+
+def relative_write(command: str) -> str | None:
+    # issue 188: the first redirect, folder change or write operand that names a relative path.
+    segments = _shell_words(command)
+    envs = _bash_env(segments)
+    for k, words in enumerate(segments):
+        clean = [_clean(w) for w in words]
+        texts = [(_expand_word(w, envs[k]) or [("", False)])[0][0] for w in words]
+        redirects = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
+        for i in sorted(redirects):
+            if texts[i] and not os.path.isabs(texts[i]) and not _FD_WORD.fullmatch(texts[i]):
+                return texts[i]
+        # issue 188: the fd number of 2>&1 reads as a word before its redirect, never a path.
+        redirects |= {i for i in range(len(words)) if words[i].isdigit() and i + 1 in redirects}
+        options: list[WrapperOption] = []
+        at = _command_at(clean, redirects, options)
+        moved = _option_values(texts, options, WRAPPER_CHDIR)
+        if (rel := next((m for m in moved if not os.path.isabs(m)), None)) is not None:
+            return rel
+        if at is None or at == _OPAQUE:
+            continue
+        segment = [texts[i] for i in range(at, len(words)) if i not in redirects]
+        if _base(segment[0]) in {"cd", "pushd"}:
+            dest = [a for a in segment[1:] if not a.startswith("-")][:1]
+            if dest and not os.path.isabs(dest[0]):
+                return dest[0]
+            continue
+        found = _cd_relative_target(segment, "/")
+        if found is not None:
+            return found
     return None
 
 
