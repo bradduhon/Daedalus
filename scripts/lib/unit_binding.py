@@ -23,11 +23,11 @@ def _locked(repo: Path, train_id: str) -> AbstractContextManager[Path]:
     return train_state.locked_file(repo, path, f"{train_id}.bindings.lock", "unit binding lock")
 
 
-def _read(path: Path) -> dict[str, dict[str, object]]:
+def _load(path: Path) -> tuple[dict[str, dict[str, object]], list[str]]:
     try:
         data: object = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return {}
+        return {}, []
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise TrainStateError(
             f"{path} is not readable JSON ({exc}). Next: stop the train and start a new one."
@@ -35,8 +35,29 @@ def _read(path: Path) -> dict[str, dict[str, object]]:
     units: object = data.get("units") if isinstance(data, dict) else None
     if not isinstance(units, dict) or not all(isinstance(v, dict) for v in units.values()):
         raise TrainStateError(f"{path} has no units object. Next: stop the train and start anew.")
+    top: object = data.get("retired", []) if isinstance(data, dict) else []
+    if not isinstance(top, list) or not all(isinstance(a, str) for a in top):
+        raise TrainStateError(
+            f"{path} has a retired entry that is not a list of coder ids. "
+            "Next: stop the train and start anew."
+        )
     # issue 51: rebuilt as typed dicts so the untyped json value stops at this reader.
-    return {str(name): {str(k): v for k, v in rec.items()} for name, rec in units.items()}
+    typed = {str(name): {str(k): v for k, v in rec.items()} for name, rec in units.items()}
+    # issue 187: the train-wide set also folds in per-unit lists, so an old file keeps them.
+    retired = list(top)
+    for rec in typed.values():
+        old = rec.get("retired")
+        retired += [a for a in old if isinstance(a, str) and a] if isinstance(old, list) else []
+    return typed, list(dict.fromkeys(retired))
+
+
+def _read(path: Path) -> dict[str, dict[str, object]]:
+    return _load(path)[0]
+
+
+def _save(path: Path, units: dict[str, dict[str, object]], retired: list[str]) -> None:
+    # issue 187: every write carries the train-wide retired set, so a rebind never drops it.
+    train_state._write(path, {"units": units, **({"retired": retired} if retired else {})})
 
 
 def _held(units: dict[str, dict[str, object]], unit_name: str) -> str | None:
@@ -66,12 +87,12 @@ def held_reason(repo: Path, train_id: str, unit_name: str) -> str | None:
 def record_dispatch(repo: Path, train_id: str, unit_name: str) -> str | None:
     try:
         with _locked(repo, train_id) as path:
-            units = _read(path)
+            units, retired = _load(path)
             held = _held(units, unit_name)
             if held is not None:
                 return held
             units[unit_name] = {"agent_id": None, **_retired(units.get(unit_name, {}))}
-            train_state._write(path, {"units": units})
+            _save(path, units, retired)
     except TrainStateError as exc:
         return str(exc)
     return None
@@ -86,15 +107,16 @@ def release(repo: Path, train_id: str, unit_name: str) -> str | None:
     # 0187, issue 115: a second refutation frees the unit for one fresh coder; the old one retires.
     try:
         with _locked(repo, train_id) as path:
-            units = _read(path)
+            units, everywhere = _load(path)
             record = units.get(unit_name, {})
             old = record.get("retired")
             retired = [a for a in old if isinstance(a, str)] if isinstance(old, list) else []
             holder = record.get("agent_id")
-            if isinstance(holder, str) and holder and holder not in retired:
-                retired.append(holder)
+            if isinstance(holder, str) and holder:
+                retired += [] if holder in retired else [holder]
+                everywhere += [] if holder in everywhere else [holder]
             units[unit_name] = {"agent_id": None, "released": True, "retired": retired}
-            train_state._write(path, {"units": units})
+            _save(path, units, everywhere)
     except TrainStateError as exc:
         return str(exc)
     return None
@@ -104,7 +126,7 @@ def rebind(repo: Path, train_id: str, agent_id: str, from_unit: str, to_unit: st
     # 0086: a returned coder resumes on the unit stacked on its own; its old unit closes.
     try:
         with _locked(repo, train_id) as path:
-            units = _read(path)
+            units, retired = _load(path)
             if to_unit in units:
                 return (
                     f"unit {to_unit} was already dispatched (0086). "
@@ -118,24 +140,16 @@ def rebind(repo: Path, train_id: str, agent_id: str, from_unit: str, to_unit: st
                 )
             units[from_unit] = {"agent_id": None, "retired_to": to_unit}
             units[to_unit] = {"agent_id": agent_id}
-            train_state._write(path, {"units": units})
+            _save(path, units, retired)
     except TrainStateError as exc:
         return str(exc)
     return None
 
 
-def _retired_anywhere(units: dict[str, dict[str, object]], agent_id: str) -> bool:
-    for rec in units.values():
-        retired = rec.get("retired")
-        if isinstance(retired, list) and agent_id in retired:
-            return True
-    return False
-
-
 def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | None:
     try:
         with _locked(repo, train_id) as path:
-            units = _read(path)
+            units, everywhere = _load(path)
             record = units.get(unit_name)
             if record is None:
                 return (
@@ -153,7 +167,7 @@ def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | Non
             retired = record.get("retired")
             # issue 187: a released unit takes the first coder retired from no unit at all.
             mine_retired = isinstance(retired, list) and agent_id in retired
-            if mine_retired or (record.get("released") and _retired_anywhere(units, agent_id)):
+            if mine_retired or (record.get("released") and agent_id in everywhere):
                 return (
                     f"unit {unit_name} goes to a fresh coder after its second refutation "
                     f"(0187). {WRITE_NEXT}"
@@ -171,7 +185,7 @@ def claim(repo: Path, train_id: str, agent_id: str, unit_name: str) -> str | Non
                 )
             record["agent_id"] = agent_id
             record.pop("released", None)
-            train_state._write(path, {"units": units})
+            _save(path, units, everywhere)
     except TrainStateError as exc:
         return str(exc)
     return None
@@ -181,9 +195,9 @@ def mark_finished(repo: Path, train_id: str, unit: str) -> str | None:
     # spec 4, 0121: finish and merge mark each merged unit; claim refuses it, progress reads done.
     try:
         with _locked(repo, train_id) as path:
-            units = _read(path)
+            units, retired = _load(path)
             units[unit] = {**units.get(unit, {"agent_id": None}), "finished": True}
-            train_state._write(path, {"units": units})
+            _save(path, units, retired)
     except TrainStateError as exc:
         return str(exc)
     return None

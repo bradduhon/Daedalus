@@ -245,7 +245,7 @@ def test_released_unit_binds_the_first_coder_not_retired_from_it(
     assert refused is not None and "second refutation" in refused and "Next:" in refused
     assert claim(repo_cwd, TRAIN, "a-2", "u1") is None
     data = json.loads(bindings_path(repo_cwd, TRAIN).read_text(encoding="utf-8"))
-    assert data == {"units": {"u1": {"agent_id": "a-2", "retired": ["a-1"]}}}
+    assert data == {"units": {"u1": {"agent_id": "a-2", "retired": ["a-1"]}}, "retired": ["a-1"]}
     assert claim(repo_cwd, TRAIN, "a-2", "u1") is None
     assert "belongs to coder a-2" in str(claim(repo_cwd, TRAIN, "a-3", "u1"))
     assert "second refutation" in str(claim(repo_cwd, TRAIN, "a-1", "u1"))
@@ -263,6 +263,34 @@ def test_released_unit_refuses_a_coder_retired_from_another_unit(
     refused = claim(repo_cwd, TRAIN, "a-2", "u1")
     assert refused is not None and "second refutation" in refused and "Next:" in refused
     assert claim(repo_cwd, TRAIN, "a-3", "u1") is None
+
+
+@pytest.mark.parametrize("old_file", [False, True])
+def test_retired_coder_stays_refused_after_a_rebind_rewrites_its_unit(
+    repo_cwd: Path, project_data: Path, old_file: bool
+) -> None:
+    # issue 187: a-1 retires from u1, a-2 takes u1 then rebinds to u3; released u2 refuses a-1.
+    train_state.save(repo_cwd, TRAIN, {"train_id": TRAIN})
+    if old_file:
+        # issue 187: a file written before the train-wide set holds only the per-unit list.
+        old = {"units": {"u1": {"agent_id": "a-2", "retired": ["a-1"]}}}
+        bindings_path(repo_cwd, TRAIN).write_text(json.dumps(old), encoding="utf-8")
+    else:
+        assert record_dispatch(repo_cwd, TRAIN, "u1") is None
+        assert claim(repo_cwd, TRAIN, "a-1", "u1") is None
+        assert release(repo_cwd, TRAIN, "u1") is None
+        assert claim(repo_cwd, TRAIN, "a-2", "u1") is None
+    assert rebind(repo_cwd, TRAIN, "a-2", "u1", "u3") is None
+    assert record_dispatch(repo_cwd, TRAIN, "u2") is None
+    assert claim(repo_cwd, TRAIN, "a-4", "u2") is None
+    assert release(repo_cwd, TRAIN, "u2") is None
+    for coder in ("a-1", "a-4"):
+        refused = claim(repo_cwd, TRAIN, coder, "u2")
+        assert refused is not None and "second refutation" in refused and "Next:" in refused
+    data = json.loads(bindings_path(repo_cwd, TRAIN).read_text(encoding="utf-8"))
+    assert data["retired"] == ["a-1", "a-4"]
+    assert data["units"]["u1"] == {"agent_id": None, "retired_to": "u3"}
+    assert claim(repo_cwd, TRAIN, "a-5", "u2") is None
 
 
 def test_symlinked_bindings_file_fails_closed(
@@ -284,6 +312,8 @@ def test_symlinked_bindings_file_fails_closed(
         ("[]", "has no units object"),
         ('{"units": []}', "has no units object"),
         ('{"units": {"u1": "a-1"}}', "has no units object"),
+        ('{"units": {}, "retired": "a-1"}', "retired entry"),
+        ('{"units": {}, "retired": [1]}', "retired entry"),
     ],
 )
 def test_malformed_bindings_file_keeps_its_refusal(
