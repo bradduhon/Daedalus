@@ -19,6 +19,7 @@ CONDUCTOR_GH = frozenset(
 )
 ALLOWED_0028 = CONDUCTOR_GH | {("auth", "status"), ("issue", "view"), ("issue", "list")}
 # B7: main reads during a train; pull request writes stay with the conductor.
+MAIN_ISSUE_WRITES = frozenset({("issue", "create"), ("issue", "comment")})  # issue 211, P12
 MAIN_GH = ALLOWED_0028 - {("pr", "create"), ("pr", "edit")}
 R_VERDICT = (
     "{what} needs an approved audit verdict on the tip of {branch}, or on its parent when the "
@@ -95,6 +96,12 @@ _GH_VALUES: dict[tuple[str, ...], tuple[frozenset[str], frozenset[str]]] = {
         | {"--search", "--state", "--mention", "--app"},
     ),
     ("auth", "status"): (frozenset("h"), frozenset({"--hostname"})),
+    ("issue", "create"): (
+        frozenset("tbFalmpTR"),
+        frozenset({"--title", "--body", "--body-file", "--label", "--assignee", "--milestone"})
+        | {"--project", "--template", "--repo"},
+    ),
+    ("issue", "comment"): (frozenset("bFR"), frozenset({"--body", "--body-file", "--repo"})),
 }
 R_GH_BUNDLE = (
     "gh flags the jail cannot pair with their values are refused: a bundle of short flags in "
@@ -291,6 +298,9 @@ def _gh_reason(agent: str, tokens: list[str]) -> str | None:
     if gh_args(tokens[1:]) is None:
         return R_GH_BUNDLE
     klass, detail = classify(tokens)
+    # issue 211, P12: classify keeps these default-deny; only the bare main session passes.
+    if agent == "main" and klass == "default-deny" and tuple(detail.split()) in MAIN_ISSUE_WRITES:
+        return None
     if klass == "allow" and tuple(detail.split()) in _allowed(agent):
         return None
     if klass == "allow":
