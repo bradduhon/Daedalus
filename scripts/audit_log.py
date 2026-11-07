@@ -12,10 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 def main() -> int:
     try:
-        from lib.project_root import train_marked
+        from lib.project_root import effective_cwd, train_marked
 
         payload = json.loads(sys.stdin.read() or "{}")
-        cwd = payload.get("cwd") if isinstance(payload, dict) else None
+        # 188: a main-session `cd <repo> && ...` is gated and logged in the folder it moves to.
+        cwd = effective_cwd(payload) if isinstance(payload, dict) else None
         # 0035: no train marker, no record; the audit modules are not even imported.
         if not train_marked(cwd):
             return 0
@@ -23,7 +24,7 @@ def main() -> int:
 
         record = audit_append(payload)
         if record is not None and record.get("root_source") == "cwd-fallback":
-            reason = root_info(payload["cwd"])[2]
+            reason = root_info(str(cwd))[2]
             print(f"daedalus-audit: project root fell back to cwd ({reason})", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001
         # 8.4: logging failures never block a non-mutating event; the jail blocks.

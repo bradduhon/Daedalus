@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from tests.conftest import SCRIPTS_DIR, audit_records, write_train_marker
+from tests.conftest import SCRIPTS_DIR, audit_records, run_cli, write_train_marker
 
 _PYCACHE = shutil.ignore_patterns("__pycache__")
 
@@ -162,6 +162,44 @@ def test_hook_rotation_record_passes_the_chain_check(
         check=False,
     )
     assert check.returncode == 0 and check.stdout.startswith("OK: 2 records, chain intact")
+
+
+@pytest.mark.parametrize(
+    ("caller", "lands_in_b"),
+    [({}, True), ({"agent_id": "a1", "agent_type": "daedalus:coder"}, False)],
+)
+def test_main_cd_records_in_the_repo_it_moves_into(
+    run_script: Any,
+    project_data: Path,
+    hook_input: Any,
+    marked_repo: Path,
+    caller: dict[str, Any],
+    lands_in_b: bool,
+) -> None:
+    # 188: main's `cd <repo B> && ...` from repo A logs in B; an agent's call stays in its own cwd.
+    from lib import audit
+
+    repo_a = project_data.parent.parent
+    write_train_marker(repo_a)
+    command = (
+        f"cd {marked_repo} && python3 /p/scripts/verify_audit_chain.py --hooks-live "
+        f"--repo {marked_repo}"
+    )
+    pre = hook_input(tool_input={"command": command}, **caller)
+    record = audit.audit_append(pre)
+    assert record is not None and record["cwd"] == str(repo_a)
+    post = hook_input(hook_event_name="PostToolUse", tool_input={"command": command}, **caller)
+    assert run_script("audit_log.py", post).returncode == 0
+    home, away = (marked_repo, repo_a) if lands_in_b else (repo_a, marked_repo)
+    log = home / ".claude" / "daedalus" / "audit" / "sess-test.jsonl"
+    rows = audit_records(log)
+    assert [r["event"] for r in rows] == ["PreToolUse", "PostToolUse"]
+    assert {r["cwd"] for r in rows} == {str(repo_a)}
+    assert {r["project_root"] for r in rows} == {str(home)}
+    assert not (away / ".claude" / "daedalus" / "audit").exists()
+    live = run_cli("verify_audit_chain.py", "--hooks-live", "--repo", str(marked_repo))
+    assert (live.returncode == 0) is lands_in_b, live.stdout
+    assert live.stdout.startswith("OK hooks live: session sess-test" if lands_in_b else "NOT LIVE")
 
 
 def _stop(hook_input: Any, **extra: Any) -> dict[str, Any]:
