@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import jail
+from lib import jail, shell
 
 from tests.conftest import CFG, write_train_marker
 from tests.hook_chain import (
@@ -37,6 +37,7 @@ class TestReadOnlyAgents:
             "find . -name '*.py' | wc -l",
             "git branch -a",
             "stat x",
+            "uniq -f 1 in",
         ]
         bad = [
             "git diff | tee out.txt",
@@ -119,6 +120,8 @@ class TestRegressionReadOnly:
             "git -c diff.external=x diff",
             "git -C . checkout main",
             "uniq in out",
+            "uniq - out",
+            "uniq -- in out",
             "file -C -m x",
             "./cat x",
             "/tmp/cat x",
@@ -527,4 +530,9 @@ def test_a_rewritten_search_word_or_rg_program_option_names_its_reason() -> None
     for command in ("rg --hostname-bin=/tmp/x -n x src", "rg --pre /tmp/x x src"):
         assert evaluate(HOOK, _b("x", command), *ro) == jail.R_RG_PROGRAM, command
     for command in ("rg -n 'a$' src", "rg -g '*.{tf,yml}' x src", "rg -n x src/*.py"):
+        assert evaluate(HOOK, _b("x", command), *ro) is None, command
+    # issue 204, P1: a read verb that can write beside a word the shell expands.
+    for command in ("uniq {in,out}", "sort {-o,out} in", "file ~/x", "find . -name *.py"):
+        assert evaluate(HOOK, _b("x", command), *ro) == shell.R_READ_EXPANSION, command
+    for command in ("uniq '{a,b}'", "find . -name '*.py'", "sort -u in"):
         assert evaluate(HOOK, _b("x", command), *ro) is None, command

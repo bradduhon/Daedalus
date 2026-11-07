@@ -46,6 +46,7 @@ SHARED = frozenset(
     | {"WrapperOption", "WRAPPER_CHDIR", "WRAPPER_WRITES"}
     | {"worker_parse", "chain_bases"}
     | {"env_split_values", "R_ENV_SPLIT", "FLOCK_BODY"}
+    | {"READ_ONLY_WRITE_OPTS", "scan_options", "split_options", "expansion_opaque"}
 )
 
 
@@ -283,6 +284,60 @@ def test_env_split_is_a_worker_finding(command: str, want: str) -> None:
     assert shell._segment_reason(shlex.split(command), 0, main=False) == want
     assert shell._segment_reason(shlex.split("env -S 'touch /x'"), 0, main=True) == shell._FALLBACK
     assert "Next: write the command without env -S" in shell.R_ENV_SPLIT
+
+
+@pytest.mark.parametrize(
+    ("name", "command", "operands", "off"),
+    [
+        ("uniq", "-f 1 in", ["in"], False),
+        ("uniq", "-f1 in", ["in"], False),
+        ("uniq", "-cf1 in", ["in"], False),
+        ("uniq", "-cf 1 in", ["in"], False),
+        ("uniq", "--skip-fields=1 in", ["in"], False),
+        ("uniq", "--skip-fields 1 in", ["in"], False),
+        ("uniq", "--skip-f 1 in", ["in"], False),
+        ("uniq", "--skip 1 in", ["1", "in"], True),
+        ("uniq", "-Q in", ["in"], True),
+        ("uniq", "- out", ["-", "out"], False),
+        ("uniq", "-- -c out", ["-c", "out"], False),
+        ("uniq", "in out -c", ["in", "out"], False),
+        ("uniq", "in -f 1 out", ["in", "out"], False),
+        ("sort", "-uo out in", ["in"], False),
+        ("find", ". -name x -fprint out", ["."], False),
+        # pin A1 -> A3: one row each for the shell variable builtins and git commit.
+        ("export", "-n X=1", ["X=1"], False),
+        ("declare", "-rx Y=2", ["Y=2"], False),
+        ("typeset", "-p", [], False),
+        ("git commit", "-am msg -- a.py", ["a.py"], False),
+        ("git commit", "--message=m -F f -t t b.py", ["b.py"], False),
+    ],
+)
+def test_split_options_strips_each_valued_option_form(
+    name: str, command: str, operands: list[str], off: bool
+) -> None:
+    # P2 to P4: separate, attached, clustered, =, long separate and prefix; - and -- are operands.
+    assert shell.split_options(name, shlex.split(command)) == (operands, off)
+
+
+@pytest.mark.parametrize(
+    ("name", "command", "options"),
+    [
+        ("sort", "-uo out in", ["-u", "-o"]),
+        ("sort", "in --out=f", ["--output"]),
+        ("file", "-bC x", ["-b", "-C"]),
+        ("find", ". -fprintfout %p", ["-fprintf"]),
+        ("find", ". -name -fprint", ["-name"]),
+    ],
+)
+def test_scan_options_names_each_option_met(name: str, command: str, options: list[str]) -> None:
+    assert shell.scan_options(name, shlex.split(command)).options == options
+
+
+def test_each_read_verb_has_an_option_row() -> None:
+    # issue 204: the read verbs' write options sit on their own rows.
+    assert shell.READ_ONLY_CMDS <= shell.OPTION_TABLE.keys()
+    for name, writes in shell.READ_ONLY_WRITE_OPTS.items():
+        assert writes <= shell.OPTION_TABLE[name][0] | shell.OPTION_TABLE[name][1], name
 
 
 RUNNERS = ("setsid", "chroot", "ionice", "taskset", "flock", "unshare", "chrt", "nsenter")

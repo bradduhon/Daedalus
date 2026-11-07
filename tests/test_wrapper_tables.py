@@ -189,7 +189,25 @@ def test_unwrap_reports_the_options_it_passed() -> None:
     ]
     chdir = {("env", "-C"), ("env", "--chdir"), ("sudo", "-D"), ("sudo", "--chdir")}
     assert chdir == shell.WRAPPER_CHDIR
-    assert {("time", "-o"), ("time", "--output")} == shell.WRAPPER_WRITES
+    assert {("time", "-o"), ("time", "--output"), ("flock", shell.WRAPPER_FILE)} <= (
+        shell.WRAPPER_WRITES
+    )
+
+
+# P9: the sweep's no-write rows; nohup writes nohup.out only when stdout is a terminal.
+NO_WRITE_WRAPPERS = frozenset(
+    {"sudo", "doas", "env", "nice", "nohup", "stdbuf", "timeout", "exec", "command", "builtin"}
+    | {"xargs", "daedalus_confine.py", "setsid", "chroot", "ionice", "taskset", "chrt"}
+    | {"nsenter"}
+)
+
+
+def test_every_wrapper_row_has_a_write_decision() -> None:
+    # P9: a new WRAPPER_OPTS row names its writes in WRAPPER_WRITES or joins the no-write set.
+    writers = {name for name, _ in shell.WRAPPER_WRITES}
+    assert writers <= shell.WRAPPER_OPTS.keys()
+    for name in shell.WRAPPER_OPTS:
+        assert (name in writers) != (name in NO_WRITE_WRAPPERS), name
 
 
 @pytest.mark.parametrize(
@@ -284,6 +302,14 @@ def test_a_cluster_letter_off_the_row_is_refused(command: str) -> None:
         ("env -C=/../../m rm x", "/c/o", ["/c/m", "/c/m/x"]),
         ("sudo -D=/m rm x", "/c/o", ["/c/o/=/m", "/c/o/=/m/x"]),
         ("time -o=/../../t rm x", "/c/o", ["/c/t", "/c/o/x"]),
+        # issue 107, P9: flock's file operand and unshare's namespace file are writes.
+        ("flock /m/l true", "/c", ["/m/l"]),
+        ("flock -w 5 l true", "/c", ["/c/l"]),
+        ("flock --timeout=5 -- /m/l true", "/c", ["/m/l"]),
+        ("flock 9 true", "/c", ["/c/9"]),
+        ("flock 9", "/c", []),
+        ("flock -u 9", "/c", []),
+        ("unshare --mount=/m/ns true", "/c", ["/m/ns"]),
     ],
 )
 def test_write_dirs_follow_the_wrapper_folder(command: str, cwd: str, want: list[str]) -> None:
