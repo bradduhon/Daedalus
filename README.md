@@ -642,6 +642,7 @@ Daedalus/
 │   ├── checks/unit_writes.py        # the coder writes only in its own unit worktree
 │   ├── checks/workspace_integrity.py # refuses writes into .git and the data folder
 │   ├── lib/__init__.py
+│   ├── lib/admit.py                 # admits a parsed command only in a shape its agent's tables list
 │   ├── lib/agent_aliases.py         # old agent names read as their new names, one release
 │   ├── lib/agent_files.py           # reads agent files and their hooks blocks
 │   ├── lib/agent_models.py          # the model each agent runs on: override, config, agent file
