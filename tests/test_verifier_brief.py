@@ -334,7 +334,7 @@ def test_verify_skill_carries_the_verifier_step_and_claims_mode() -> None:
     assert "stops the run" not in step5
     assert "exempt it` pick at a later refutation" in text.split("## Evidence that ends it", 1)[1]
     evidence = text.split("## Evidence that ends it", 1)[1].split("## Agents it uses", 1)[0]
-    assert "(scripts/lib/workspace.py:1073, :1226; scripts/lib/train_runner.py:1724)" in evidence
+    assert "(scripts/lib/workspace.py:1082, :1261; scripts/lib/train_runner.py:1691)" in evidence
     assert "REFUTED with every row exempted against that reply" in evidence
 
 

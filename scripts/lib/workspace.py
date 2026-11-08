@@ -944,6 +944,15 @@ def finish(repo: Path) -> list[str]:
                 "rerun the train, and if it repeats, file an issue with the train summary."
             )
     _skip_scope(repo, state, merging, str(lock_sha), integration)
+    # 234: every unit finish would merge passes the merge step's verdict gate before any merge.
+    pending = [
+        unit
+        for unit in merging
+        if _run(repo, "merge-base", "--is-ancestor", str(unit["branch"]), integration).returncode
+    ]
+    records = _audit_records(repo, state) if pending else []
+    for unit in pending:
+        require_verified(repo, records, unit, _unit_label(train_id, str(unit["name"])))
     _git(repo, "switch", "-q", integration)
     lines = _merge_all(repo, state, train_id, merging)
     _finished(repo, train_id, merging)
@@ -1118,7 +1127,17 @@ def _verdict_line(records: list[dict[str, object]], anchor: int) -> str | None:
 
 
 def newest_verdict(records: list[dict[str, object]], anchor: int) -> tuple[object, str] | None:
-    # 229: the audit seq and verdict line of the window's newest string reply; the one reader.
+    # 229: the audit seq and verdict line of the window's newest string reply.
+    reply = newest_reply(records, anchor)
+    if reply is None or reply[1] is None:
+        return None
+    return reply[0], reply[1]
+
+
+def newest_reply(
+    records: list[dict[str, object]], anchor: int
+) -> tuple[object, str | None, str] | None:
+    # 235: seq, verdict line (None when malformed) and text of the window's newest reply.
     window: list[dict[str, object]] = []
     for record in records[anchor + 1 :]:
         if _worktree_lines(record):
@@ -1126,24 +1145,31 @@ def newest_verdict(records: list[dict[str, object]], anchor: int) -> tuple[objec
         window.append(record)
     # 0121: a verifier's reply sits in its stop tail or its hand-back call; the newest
     # string reply decides, so a null-tail stop after a hand-back does not override it.
-    replies: list[tuple[object, object]] = []
+    texts: list[tuple[object, object, object, str]] = []
     for r in window:
         agent = r.get("agent_type")
         if not isinstance(agent, str) or agent.rpartition(":")[2] != VERIFIER:
             continue
+        reply: object = None
         if r.get("event") == "SubagentStop":
-            replies.append((r.get("seq"), r.get("last_message_tail")))
+            reply = r.get("last_message_tail")
         elif r.get("event") == "PostToolUse" and r.get("tool_name") == audit_proof.HANDBACK:
-            replies.append((r.get("seq"), audit_proof.handback_message(r)))
-    texts = [(seq, reply) for seq, reply in replies if isinstance(reply, str)]
+            reply = audit_proof.handback_message(r)
+        if isinstance(reply, str):
+            texts.append((r.get("seq"), r.get("event"), r.get("agent_id"), reply))
     if not texts:
         return None
-    seq, text = texts[-1]
+    seq, event, agent_id, text = texts[-1]
+    # 235, 187: the hand-back is the reply; the same verifier's later stop tail is a digest.
+    if event == "SubagentStop" and len(texts) > 1:
+        prior = texts[-2]
+        if prior[1] == "PostToolUse" and isinstance(agent_id, str) and prior[2] == agent_id:
+            seq, text = prior[0], prior[3]
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     # 222, agents/verifier.md:148: the first and last lines are one verdict line, else none.
     if len(lines) < 2 or lines[0] != lines[-1] or not lines[-1].startswith(_VERDICT_OPEN):
-        return None
-    return seq, lines[-1]
+        return seq, None, text
+    return seq, lines[-1], text
 
 
 def _audit_records(repo: Path, state: dict[str, object]) -> list[dict[str, object]]:
@@ -1221,15 +1247,22 @@ def _wave(
                 "Next: create the unit worktree with daedalus_workspace.py create first."
             )
         records = _audit_records(repo, state) if records is None else records
-        exempt = train_state.record(unit, UNIT_EXEMPTIONS)
-        tip = unit_tip(repo, unit) if exempt else None
-        if not unit_verified(records, Path(str(unit["path"])), exempt, tip):
-            raise WorkspaceError(
-                f"unit {uid} has no recorded verifier verdict {VERIFIED} for its worktree "
-                f"{unit['path']}. Next: {VERIFY_NEXT}"
-            )
+        require_verified(repo, records, unit, uid)
         wave.append(unit)
     return wave
+
+
+def require_verified(
+    repo: Path, records: list[dict[str, object]], unit: dict[str, object], uid: str
+) -> None:
+    # 234: the one verdict gate merge and finish share; an exemption binds to the unit tip.
+    exempt = train_state.record(unit, UNIT_EXEMPTIONS)
+    tip = unit_tip(repo, unit) if exempt else None
+    if not unit_verified(records, Path(str(unit["path"])), exempt, tip):
+        raise WorkspaceError(
+            f"unit {uid} has no recorded verifier verdict {VERIFIED} for its worktree "
+            f"{unit['path']}. Next: {VERIFY_NEXT}"
+        )
 
 
 def merge(repo: Path, ids: list[str]) -> list[str]:

@@ -58,7 +58,7 @@ The build phase runs one coder per unit in its own worktree, briefed by file wit
 
 - Every unit returned `[STATUS: COMPLETE]` on its recorded branch, and merged.
 - Hooks: the dispatch gate refuses a coder with no single `Worktree:` line of a recorded unit (scripts/lib/dispatch_binding.py:31-34, :172), and the unit write check keeps writes inside the worktree (scripts/checks/unit_writes.py:150).
-- The merge itself has no hook; the finish script refuses an unverified unit (scripts/lib/workspace.py:1062).
+- The merge itself has no hook; the finish script refuses an unverified unit (scripts/lib/workspace.py:1255, :955).
 
 ## Agents it uses
 

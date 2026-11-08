@@ -50,7 +50,7 @@ The verifier judges each unit's diff against its brief, never against the coder'
 
 ## Evidence that ends it
 
-- Unit mode: a `[VERDICT: VERIFIED]` verdict per unit, or every refuted row exempted by the operator's `Skip, track or exempt it` pick at a later refutation, recorded as the per-finding prompt records an exemption (0161). Each operator check of the unit has an `operator check` evidence row with the url, the check text and a pass or skip answer (0164). No hook at dispatch. The merge step (`daedalus_workspace.py merge`) refuses a unit unless its newest verifier reply is VERIFIED, or is REFUTED with every row exempted against that reply at the unit branch tip (scripts/lib/workspace.py:1073, :1226; scripts/lib/train_runner.py:1724); this is a script refusal, not a hook.
+- Unit mode: a `[VERDICT: VERIFIED]` verdict per unit, or every refuted row exempted by the operator's `Skip, track or exempt it` pick at a later refutation, recorded as the per-finding prompt records an exemption (0161). Each operator check of the unit has an `operator check` evidence row with the url, the check text and a pass or skip answer (0164). No hook at dispatch. The merge step (`daedalus_workspace.py merge`) refuses a unit unless its newest verifier reply is VERIFIED, or is REFUTED with every row exempted against that reply at the unit branch tip (scripts/lib/workspace.py:1082, :1261; scripts/lib/train_runner.py:1691); this is a script refusal, not a hook.
 - Claims mode: a `[VERDICT: VERIFIED]` verdict over the claims, or every refuted row exempted by the operator. For claims over the public docs, the docs record (scripts/lib/train_runner.py:1902) and the push proof's docs rule (scripts/lib/audit_proof.py:703, :740) apply.
 
 ## Agents it uses
