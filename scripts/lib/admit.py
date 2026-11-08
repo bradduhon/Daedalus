@@ -12,6 +12,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
 from lib import gh_policy, jail, shell
+from lib.manifest import Manifest, declared_commands
 from lib.shparse import (
     Arith,
     Assignment,
@@ -31,6 +32,8 @@ from lib.shparse import (
     Tilde,
     Word,
     opaque,
+    parse,
+    walk,
 )
 from lib.train_scope import KNOWN_AGENTS
 
@@ -120,6 +123,8 @@ class Role:
     docs_reads: bool = False
     # 228 S3: the orchestrator's train scripts and its date -u and sed -n inspection rows.
     train: bool = False
+    # 228 S3c: the coder rows: sed, frozen installs, path and declared commands, the exit echo.
+    coder: bool = False
 
 
 class _Off(Exception):
@@ -186,11 +191,12 @@ def role_for(agent: str) -> Role:
     git_read = (shell.READ_ONLY_GIT, _read_git())
     worker = Role(
         agent,
-        commands=shell.READ_ONLY_CMDS | jail.CODER_WRITE_CMDS,
+        commands=shell.READ_ONLY_CMDS | jail.CODER_WRITE_CMDS | shell.CODER_BUILTINS,
         git=(shell.CODER_GIT, jail._GIT_GRAMMAR),
         runner="coder",
         wrappers=frozenset({shell.CONFINE}),
         read_only=False,
+        coder=True,
     )
     roles: dict[str, Role] = {
         "coder": worker,
@@ -288,10 +294,17 @@ def _expands(word: Word) -> bool:
     return any(isinstance(p, Glob | Tilde) for p in word.parts)
 
 
-def _forbidden(word: Word, loose: list[Span] | None = None) -> None:
+def _status(part: Param) -> bool:
+    # 228 S3c: the exit status spelled $?, two characters; ${?} and every other name refuse.
+    return part.name == "?" and part.span[1] - part.span[0] == 2
+
+
+def _forbidden(word: Word, loose: list[Span] | None = None, status: bool = False) -> None:
     # 228 S2 rule 3: no substitution, arithmetic, brace list or parameter in an admitted word.
     # 228 S2 ruling: loose collects a main-session parameter, judged once the shape is known.
     for part in word.parts:
+        if isinstance(part, Param) and status and _status(part):
+            continue
         if isinstance(part, Param) and loose is not None:
             loose.append(part.span)
             continue
@@ -325,12 +338,16 @@ class _Judge:
         self.cwd = cwd
         # 228 S3: the folder later commands run in, moved by one leading cd.
         self.base = cwd
+        # 228 S3c, O6: a leading cd moves every later command only when each join is &&.
+        self.joined = True
+        self._declared: frozenset[tuple[str, ...]] | None = None
 
     # -- script and pipelines ----------------------------------------------------------------
     def script(self, script: Script) -> list[AdmittedCommand]:
         holes = opaque(script)
         if holes:
             raise _Off(holes[0].span, f"the parser could not bound this text ({holes[0].why})")
+        self.joined = set(script.separators) - {""} <= {"&&"}
         out: list[AdmittedCommand] = []
         for idx, item in enumerate(script.items):
             sep = script.separators[idx] if idx < len(script.separators) else ""
@@ -400,8 +417,10 @@ class _Judge:
         c = _Cmd(cmd.span, piped)
         for assign in cmd.assignments:
             self.assignment(assign, c)
-        for word in cmd.words:
-            _forbidden(word, c.loose if self.role.main else None)
+        # 228 S3c: the coder's echo admits $? in an operand, the exit echo, and no other parameter.
+        echo = self.role.coder and bool(cmd.words) and _bare(cmd.words[0]) == "echo"
+        for pos, word in enumerate(cmd.words):
+            _forbidden(word, c.loose if self.role.main else None, echo and pos > 0)
         for redirect in cmd.redirects:
             self.redirect(redirect, c)
         if not cmd.words and self.role.main and cmd.assignments and not cmd.redirects:
@@ -416,8 +435,12 @@ class _Judge:
         name = _bare(head)
         if name is None:
             raise _Off(head.span, "a command word must be one unquoted literal word")
+        if self._declared_form(words):
+            self.declared_row(c, words)
+            return c.frozen()
         if "/" in name and os.path.dirname(name) not in shell._TRUSTED_BIN:
-            raise _Off(head.span, f"{name} is named by a path outside the trusted bin folders")
+            if self._path_word(c, name, words):
+                return c.frozen()
         c.word = Typed(name, head.span)
         c.family = shell.command_family(name)
         self.dispatch(c, words)
@@ -456,6 +479,9 @@ class _Judge:
             return
         if redirect.op == ">" and redirect.fd in (None, 1, 2) and dest == "/dev/null":
             return
+        # 228 S3c: the coder's &>/dev/null, both streams to /dev/null and no other target.
+        if self.role.coder and redirect.op == "&>" and redirect.fd is None and dest == "/dev/null":
+            return
         raise _Off(redirect.span, "an agent's only redirects are 2>&1, >/dev/null and 2>/dev/null")
 
     def _main_redirect(self, redirect: Redirect, dest: str | None, c: _Cmd) -> None:
@@ -482,6 +508,8 @@ class _Judge:
     # -- wrappers ----------------------------------------------------------------------------
     def unwrap(self, words: list[Word], c: _Cmd) -> list[Word]:
         while words:
+            if self._declared_form(words):
+                return words  # 228 S3c, B2: a declared command keeps its own wrappers verbatim.
             name = _bare(words[0])
             family = shell.command_family(name) if name else ""
             if family == "xargs":
@@ -613,6 +641,10 @@ class _Judge:
                 raise _Off(c.span, "gitleaks runs only as detect --redact with a /tmp report")
             for word in words[1:]:
                 c.add("text", _word_text(word))
+        elif family == "sed" and role.coder:
+            self.sed_edit(c, words, literals)
+        elif role.coder and self._frozen(literals):
+            self.install(c, words)
         elif family == "sed" and role.read_only and not role.main:
             self.sed_print(c, words, literals)
         elif role.train and family in ("python", "date"):
@@ -637,6 +669,162 @@ class _Judge:
             out.append(lit)
         return out
 
+    # -- the coder's manifest rows (228 S3c) -------------------------------------------------
+    def declared(self) -> frozenset[tuple[str, ...]]:
+        # B2, 0192: each command of each declared stack entry as parsed literal words, bar a cd.
+        if self._declared is None:
+            found: set[tuple[str, ...]] = set()
+            loaded = _manifest(self.cwd)
+            for command in declared_commands(loaded) if loaded is not None else ():
+                for cmd, _ in walk(parse(command)):
+                    toks = [w.literal for w in cmd.words]
+                    if toks and toks[0] is not None and None not in toks:
+                        if shell.command_family(toks[0]) not in jail.DIR_CHANGE_CMDS:
+                            found.add(tuple(t for t in toks if t is not None))
+            self._declared = frozenset(found)
+        return self._declared
+
+    def _declared_form(self, words: list[Word]) -> bool:
+        # 228 S3c: the parsed words equal a declared command, run here or in a unit worktree.
+        toks = [w.literal for w in words]
+        if not self.role.coder or None in toks or tuple(toks) not in self.declared():
+            return False
+        moved = self.base != self.cwd
+        return not moved or (self.joined and jail._unit_parts(self.base, self.cwd) is not None)
+
+    def declared_row(self, c: _Cmd, words: list[Word]) -> None:
+        # B2, 228 S3c: a declared command runs verbatim; the runner and install refusals hold.
+        toks = [w.literal or "" for w in words]
+        reason = (
+            shell.runner_refusal(toks)
+            or jail.download_reason(toks)
+            or jail.install_reason(toks, self._installs)
+        )
+        if reason is not None:
+            raise _Off(c.span, reason)
+        c.word = Typed(toks[0], words[0].span)
+        c.family = shell.command_family(toks[0])
+        for word in words[1:]:
+            c.add("text", _word_text(word))
+
+    def _path_word(self, c: _Cmd, name: str, words: list[Word]) -> bool:
+        # 228 S3c: a unit worktree file runs as a script under the kernel wrapper (0048); a
+        # declared executable runs by its family row (False), issue 55.
+        head = words[0]
+        off = _Off(head.span, f"{name} is named by a path outside the trusted bin folders")
+        if not self.role.coder or not os.path.isabs(self.cwd):
+            raise off
+        if not os.path.isabs(name) and self.base != self.cwd and not self.joined:
+            raise _Off(head.span, f"{name} is relative after a cd the chain does not follow")
+        full = os.path.normpath(os.path.join(self.base, name))
+        root = os.path.realpath(str(jail.project_root(self.cwd)))
+        tools = {os.path.realpath(os.path.join(root, t[0])) for t in self.declared() if "/" in t[0]}
+        if os.path.realpath(full) in tools:
+            return False
+        if not jail._in_unit_worktree(full, self.cwd):
+            raise off
+        if not _confined(c):
+            raise _Off(
+                head.span, f"{name} is a unit worktree file; it runs under the kernel wrapper"
+            )
+        c.word = Typed(name, head.span)
+        c.family = shell.command_family(name)
+        c.typed.setdefault("script", []).append(Typed(name, head.span))
+        for word in words[1:]:
+            if _expands(word):
+                raise _Off(word.span, f"a glob or ~ in an argument of {name}")
+            c.add("text", _word_text(word))
+        return True
+
+    def _installs(self) -> frozenset[str]:
+        # 0196: the ecosystems the main checkout's manifest enables; an unusable one enables none.
+        loaded = _manifest(self.cwd)
+        return frozenset(loaded.dependencies.installs) if loaded is not None else frozenset()
+
+    def _frozen(self, literals: list[str | None]) -> bool:
+        # 0196, 228 S3c: a frozen install form at the head, its ecosystem enabled.
+        toks = [lit for lit in literals if lit is not None]
+        if len(toks) != len(literals):
+            return False
+        form = jail.install_form(toks)
+        return (
+            form is not None and form.frozen and jail.install_reason(toks, self._installs) is None
+        )
+
+    def install(self, c: _Cmd, words: list[Word]) -> None:
+        for word in words[1:]:
+            text = word.literal or ""
+            if text.startswith("-"):
+                c.options.append(Typed(text, word.span))
+            else:
+                c.add("text", Typed(text, word.span))
+
+    def sed_edit(self, c: _Cmd, words: list[Word], literals: list[str | None]) -> None:
+        # 228 S3c: sed with a print or s script; -i[SUFFIX] files and their backups are writes.
+        toks = self._all_literal(words, literals)
+        plain, _ = shell.OPTION_TABLE["sed"]
+        scripts: list[Typed] = []
+        suffix: str | None = None
+        at = c.span
+        dashed = False
+        i = 1
+        while i < len(toks) and toks[i].startswith("-") and toks[i] != "-":
+            tok, span = toks[i], words[i].span
+            i += 1
+            if tok == "--":
+                dashed = True
+                break
+            c.options.append(Typed(tok.split("=", 1)[0], span))
+            name, eq, value = tok.partition("=")
+            if name == "--in-place":
+                suffix, at = value, span
+            elif name in ("--expression", "--line-length"):
+                if not eq:
+                    value, i = self._sed_value(words, toks, i, name)
+                if name == "--expression":
+                    scripts.append(Typed(value, span))
+            elif name.startswith("--"):
+                if eq or name not in plain:
+                    raise _Off(span, f"the option {name} is not on the coder's sed row")
+            else:
+                for k in range(1, len(tok)):
+                    letter, rest = "-" + tok[k], tok[k + 1 :]
+                    if letter == "-i":
+                        suffix, at = rest, span
+                        break
+                    if letter in ("-e", "-l"):
+                        value, i = (rest, i) if rest else self._sed_value(words, toks, i, letter)
+                        scripts += [Typed(value, span)] if letter == "-e" else []
+                        break
+                    if letter not in plain:
+                        raise _Off(span, f"the option {letter} is not on the coder's sed row")
+        operands = list(zip(words[i:], toks[i:], strict=True))
+        late = None if dashed else next((w for w, t in operands if t.startswith("-")), None)
+        if late is not None:
+            raise _Off(late.span, "GNU sed reads an option after its operands; put options first")
+        if not scripts and operands:
+            word, text = operands.pop(0)
+            scripts.append(Typed(text, word.span))
+        if not scripts or not operands:
+            raise _Off(c.span, "sed takes a script and at least one file")
+        for script in scripts:
+            if not (shell._SED_PRINT.fullmatch(script.text) or shell.sed_substitute(script.text)):
+                raise _Off(script.span, "a sed script here is line-range p or one s command")
+            c.add("text", script)
+        if suffix is not None and ("/" in suffix or "*" in suffix):
+            raise _Off(at, f"the sed backup suffix {suffix} places a file elsewhere")
+        for word, text in operands:
+            c.add("read" if suffix is None else "write", Typed(text, word.span))
+            if suffix:
+                c.add("write", Typed(text + suffix, word.span))
+
+    def _sed_value(
+        self, words: list[Word], toks: list[str], i: int, option: str
+    ) -> tuple[str, int]:
+        if i >= len(toks):
+            raise _Off(words[i - 1].span, f"sed {option} needs a value")
+        return toks[i], i + 1
+
     def _ledger(self, literals: list[str | None]) -> bool:
         if any(lit is None for lit in literals):
             return False
@@ -656,6 +844,8 @@ class _Judge:
             operands = words[1:-1]
         else:
             met, operands = self.options(c, key, words[1:], stop)
+        if key in shell.OPTION_NEEDED and (not met or "--" in [w.literal for w in words[1:]]):
+            raise _Off(words[0].span, f"{key} runs only with options from its row, and no --")
         if key in shell.NAME_OPERAND_CMDS:
             for word in operands:
                 name = (word.literal or "").split("=", 1)[0]
@@ -752,6 +942,9 @@ class _Judge:
                 if _expands(words[i]):
                     raise _Off(words[i].span, f"a glob or ~ in the value of {name}")
                 value = _word_text(words[i])
+            allowed = shell.OPTION_VALUES.get(f"{key} {name}")
+            if allowed is not None and value.text not in allowed:
+                raise _Off(value.span, f"{key} {name} takes only {', '.join(sorted(allowed))}")
             self._typed(c, key, kind, value, name)
         return i
 
@@ -770,6 +963,8 @@ class _Judge:
                 raise _Off(word.span, f"a glob or ~ in a {key} {kind} operand")
             if _leading_glob(word) and _dangerous(key):
                 raise _Off(word.span, f"a leading expansion may become a {key} option")
+            if key in shell.HOST_OPERAND_CMDS and _remote(word):
+                raise _Off(word.span, f"{key} reads {word.raw} as a remote host:path operand")
             self._typed(c, key, kind, _word_text(word), "")
 
     def _typed(self, c: _Cmd, key: str, kind: str, value: Typed, option: str) -> None:
@@ -835,10 +1030,14 @@ class _Judge:
             check = grammar.get(sub)
             if check is not None and not check(toks, self.cwd):
                 raise self._blame(c, sub, args, toks, check)
-        elif not jail._git_grammar_ok(
-            ["git", *kept, sub, *toks], subs, self.cwd, None, dict(grammar)
-        ):
-            check = grammar.get(sub)
+            return
+        rows = dict(grammar)
+        if c.git_dir is not None and rows.get(sub) is jail._pathspec_ok:
+            # 228 S3c: the restore and checkout row resolves its pathspecs under the -C folder.
+            folder = c.git_dir.text
+            rows[sub] = lambda a, cwd: jail._pathspec_ok(a, cwd, folder)
+        if not jail._git_grammar_ok(["git", *kept, sub, *toks], subs, self.cwd, None, rows):
+            check = rows.get(sub)
             if check is None:
                 raise _Off(words[i].span, f"git {sub} has no grammar row for {role.name}")
             if check(toks, self.cwd):
@@ -1047,7 +1246,8 @@ class _Judge:
         toks = self._all_literal(words, literals)
         family = c.family
         toks[0] = "python3" if family == "python" else family
-        if not shell._tester_runner_ok(family, toks, lambda _: True):
+        npm_exec = self.role.coder and _npm_exec(toks)
+        if not npm_exec and not shell._tester_runner_ok(family, toks, lambda _: True):
             raise _Off(c.span, f"{c.word.text if c.word else family} is not a test-runner form")
         reason = (
             shell.runner_refusal(toks)
@@ -1094,6 +1294,36 @@ def _exclude_tail(sub: str, word: Word) -> bool:
     prefix = next((p for p in _EXCLUDE_PREFIXES if text.startswith(p)), None)
     path = text[len(prefix) :] if prefix is not None else ""
     return bool(path) and not path.startswith((":", "(", "!"))
+
+
+def _manifest(cwd: str) -> Manifest | None:
+    # 0054, 228 S3c: the main checkout's manifest; an unusable or relative one declares nothing.
+    if not os.path.isabs(cwd):
+        return None
+    loaded = jail._manifest_at(os.path.realpath(str(jail.project_root(cwd))))
+    return None if isinstance(loaded, str) else loaded
+
+
+def _remote(word: Word) -> bool:
+    # 228 S3c, SS-4: a colon before the first slash is host:path; a glob or ~ first is unknown.
+    for part in word.parts:
+        if not isinstance(part, Literal):
+            return True
+        for ch in part.text:
+            if ch == "/":
+                return False
+            if ch == ":":
+                return True
+    return False
+
+
+def _npm_exec(toks: list[str]) -> bool:
+    # 228 S3c: npm exec --no-install <bin> runs an installed bin; npm parses a later option as its
+    # own (--yes downloads), so any option after the bin needs a -- before the bin.
+    rest = toks[3:]
+    if toks[:3] != ["npm", "exec", "--no-install"] or not rest:
+        return False
+    return (rest[0] == "--" and len(rest) > 1) or not any(t.startswith("-") for t in rest)
 
 
 def _no_installs() -> frozenset[str]:

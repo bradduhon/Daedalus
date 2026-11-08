@@ -3,6 +3,7 @@
 # issue 204, 107: a read verb or wrapper never writes a file through an option value or operand.
 from __future__ import annotations
 
+import json
 import shlex
 from pathlib import Path
 
@@ -21,11 +22,14 @@ from tests.adversarial.corpus import (
     A1_READ_P4,
     A1_READ_P9,
     A1_WRAPPER_ROWS,
+    S3C_HUNT,
+    S3C_HUNT_DECLARED,
     assert_denied,
 )
-from tests.conftest import CFG
+from tests.conftest import CFG, CWD, WT
 from tests.hook_chain import decide
-from tests.payloads import _b, _cred
+from tests.jail_cases import _narrowed_repo
+from tests.payloads import _b, _cred, _cwd
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 READ_ROWS = A1_ISSUE_204 + A1_READ_P1 + A1_READ_P2 + A1_READ_P3 + A1_READ_P4 + A1_READ_P9
@@ -107,3 +111,29 @@ def test_a_numeric_flock_operand_before_a_command_is_a_file(
     hook_input = _cred("Explore", "Bash", str(marked_repo), command=command)
     assert_denied(hook_input, "read-only while")
     assert "Refused: " in str(jail.decide(hook_input, CFG).reason)
+
+
+@pytest.mark.parametrize(
+    ("row", "kind", "form"), S3C_HUNT, ids=[f"{r[0]}-{r[1]}" for r in S3C_HUNT]
+)
+def test_a_hunt_form_beside_a_coder_table_row_is_refused(row: str, kind: str, form: str) -> None:
+    # 228 S3c, shell-semantics pack: each class against each coder row S3c added stays refused.
+    command = form.format(wt=WT, repo=CWD, conf=shell.CONFINE_PATH)
+    assert_denied(_b("coder", command))
+
+
+@pytest.mark.parametrize(
+    ("row", "kind", "form"), S3C_HUNT_DECLARED, ids=[f"{r[0]}-{r[1]}" for r in S3C_HUNT_DECLARED]
+)
+def test_a_hunt_form_beside_a_declared_or_install_row_is_refused(
+    row: str, kind: str, form: str, tmp_path: Path
+) -> None:
+    # 228 S3c: the manifest declares the command and enables every install ecosystem.
+    doc = {
+        "stack": {"unit_test_cmd": "bash scripts/test.sh"},
+        "dependencies": {"installs": ["npm", "python", "cargo", "go"]},
+    }
+    repo, wt = _narrowed_repo(tmp_path, json.dumps(doc))
+    assert decide(_cwd(_b("coder", "bash scripts/test.sh"), repo), CFG).allow
+    assert decide(_cwd(_b("coder", "npm ci --ignore-scripts"), repo), CFG).allow
+    assert_denied(_cwd(_b("coder", form.format(wt=wt, repo=repo)), repo))

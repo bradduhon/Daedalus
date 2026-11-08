@@ -50,8 +50,6 @@ from tests.jail_cases import _narrowed_repo
 from tests.payloads import _b, _cwd
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
-# 228 S3b: a form the grammar refuses that the deleted coder reader admitted; a table row fixes it.
-GAP = pytest.mark.xfail(strict=True, reason="228 S3b table gap: off the coder's table")
 OFF_ROWS = "is not a test-runner form"
 PROBE = daedalus_confine.kernel_support
 LIVE = PROBE().ok
@@ -790,8 +788,8 @@ def test_unwrapped_test_command_is_refused_when_the_kernel_holds_rules(command: 
         # A2 spec correction: program arguments after -m <module> or the script are no body.
         f"cd {WT} && {WRAP} python3 -m pytest -c pytest.ini -q",
         f"cd {WT} && {WRAP} python3 {WT}/scripts/catalog.py -c foo",
-        pytest.param(f"cd {WT} && {WRAP} ./scripts/run.sh", marks=GAP),
-        pytest.param(f"cd {WT} && {WRAP} {WT}/scripts/run.sh", marks=GAP),
+        f"cd {WT} && {WRAP} ./scripts/run.sh",
+        f"cd {WT} && {WRAP} {WT}/scripts/run.sh",
     ],
 )
 def test_the_wrapped_form_passes_the_whole_coder_chain(command: str) -> None:

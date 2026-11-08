@@ -25,8 +25,6 @@ from tests.payloads import _b, _cwd, _w
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "unit_writes"
-# 228 S3b: a form the grammar refuses that the deleted coder reader admitted; a table row fixes it.
-GAP = pytest.mark.xfail(strict=True, reason="228 S3b table gap: off the coder's table")
 # 228 S3b: the grammar's refusal names the word, option or redirect off the coder's table.
 NAMED = "Refused: "
 
@@ -92,6 +90,7 @@ class TestFinalCoderWriteTargets:
         "command",
         [
             "cp src/a.py docs/project-requirements.md",
+            "sed -i s/a/b/ contracts/openapi.yaml",
             "tee service-manifest.json",
             "mv src/a.py /tmp/a.py",
             "ln -s /etc/passwd src/p",
@@ -99,6 +98,7 @@ class TestFinalCoderWriteTargets:
             "truncate -s 0 service-manifest.json",
             "rsync -a src/ ../other/",
             "cp --target-directory=docs/x src/a.py",
+            "sed -i.bak -e s/a/b/ docs/x.md",
             "cp src/../infra/a.tf src/a.tf",
         ],
     )
@@ -113,13 +113,13 @@ class TestFinalCoderWriteTargets:
         "command",
         [
             "cp .claude/worktrees/u1/src/a.py .claude/worktrees/u1/src/b.py",
-            pytest.param("sed -i s/a/b/ .claude/worktrees/u1/src/a.py", marks=GAP),
+            "sed -i s/a/b/ .claude/worktrees/u1/src/a.py",
             "tee .claude/worktrees/u1/tests/out.txt",
             "mv .claude/worktrees/u1/src/a.py .claude/worktrees/u1/tests/a.py",
             "install -m 644 .claude/worktrees/u1/src/a.py .claude/worktrees/u1/src/b.py",
             "truncate -s 0 .claude/worktrees/u1/tests/out.txt",
-            pytest.param("sed -n 1p docs/x.md", marks=GAP),
-            pytest.param("sed --in-place=.bak s/a/b/ .claude/worktrees/u1/src/a.py", marks=GAP),
+            "sed -n 1p docs/x.md",
+            "sed --in-place=.bak s/a/b/ .claude/worktrees/u1/src/a.py",
         ],
     )
     def test_allowed(self, command: str) -> None:
@@ -129,10 +129,12 @@ class TestFinalCoderWriteTargets:
         "command",
         [
             "cp src/a.py src/b.py",
+            "sed -i s/a/b/ src/a.py",
             "tee tests/out.txt",
             "mv .claude/worktrees/u1/src/a.py tests/a.py",
             "install -m 644 src/a.py src/b.py",
             "truncate -s 0 tests/out.txt",
+            "sed --in-place=.bak s/a/b/ src/a.py",
         ],
     )
     def test_main_checkout_blocked(self, command: str) -> None:
@@ -142,20 +144,10 @@ class TestFinalCoderWriteTargets:
             command
         )
 
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "dd of=contracts/x.yaml",
-            "sed -i s/a/b/ contracts/openapi.yaml",
-            "sed -i.bak -e s/a/b/ docs/x.md",
-            "sed -i s/a/b/ src/a.py",
-            "sed --in-place=.bak s/a/b/ src/a.py",
-        ],
-    )
-    def test_a_writer_off_the_table_is_refused_by_name(self, command: str) -> None:
-        # 228 S3b: dd and sed are off the coder's table, refused before any write target.
-        d = decide(_b("coder", command), CFG)
-        assert not d.allow and NAMED in str(d.reason), command
+    def test_a_writer_off_the_table_is_refused_by_name(self) -> None:
+        # 228 S3b: dd is off the coder's table, refused before any write target.
+        d = decide(_b("coder", "dd of=contracts/x.yaml"), CFG)
+        assert not d.allow and NAMED in str(d.reason)
 
 
 class TestProjectDataDir:
@@ -225,12 +217,13 @@ def test_coder_builtin_protected_paths_are_refused(rel: str) -> None:
     "command",
     [
         f"cp {WT}/src/a.py {WT}/contracts/openapi.yaml",
+        f"sed -i s/a/b/ {WT}/.github/workflows/ci.yml",
         f"rm -r {WT}/.github",
         f"cp {WT}/src/a {WT}/.github/CODEOWNERS",
         f"mv {WT}/contracts {WT}/c2",
         f"truncate -s 0 {WT}/service-manifest.json",
         f"tee {WT}/.git",
-        pytest.param(f"git -C {WT} restore -- contracts/openapi.yaml", marks=GAP),
+        f"git -C {WT} restore -- contracts/openapi.yaml",
         f"git restore -- {WT}/.claude/settings.json",
     ],
 )
@@ -284,9 +277,8 @@ def test_coder_plain_unit_worktree_bash_write_still_allowed() -> None:
     assert decide(_b("coder", f"tee {WT}/src/a.py"), CFG).allow
 
 
-@GAP
-def test_coder_set_e_table_gap() -> None:
-    # 228 S3b: set is off the coder's table.
+def test_coder_set_e_allowed() -> None:
+    # 228 S3c: set -e is on the coder's set row.
     assert decide(_b("coder", "set -e"), CFG).allow
 
 
@@ -351,7 +343,7 @@ def test_coder_relative_write_after_cd_is_refused(command: str) -> None:
     "command",
     [
         f"cd {WT} && tee {WT}/src/a.py",
-        pytest.param(f"cd /tmp && git -C {WT} restore -- src/a.py", marks=GAP),
+        f"cd /tmp && git -C {WT} restore -- src/a.py",
         f"cd {WT} && python3 -m pytest -q",
     ],
 )

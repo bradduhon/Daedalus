@@ -322,7 +322,20 @@ OPTION_TABLE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     # 228 S2 ruling: the main session's builtins; [ takes no options, its words are operands.
     "unset": _row("fvn", ""),
     "[": (frozenset(), frozenset()),
+    # 228 S3c: the coder's builtins; printf -v, set -a and set +o stay off their rows (SS-1).
+    "echo": _row("neE", ""),
+    "printf": _row("", ""),
+    "true": _row("", ""),
+    "set": _row("eu", "o"),
 }
+# 228 S3c: words on the coder's command table beside READ_ONLY_CMDS and CODER_WRITE_CMDS.
+CODER_BUILTINS = frozenset({"echo", "printf", "true", "set"})
+# 228 S3c: a valued option that admits only these values, keyed "<name> <option>".
+OPTION_VALUES: dict[str, frozenset[str]] = {"set -o": frozenset({"pipefail"})}
+# 228 S3c: commands admitted only with at least one option and no `--`.
+OPTION_NEEDED = frozenset({"set"})
+# 228 S3c, SS-4: commands whose operand is remote when a colon precedes its first slash.
+HOST_OPERAND_CMDS = frozenset({"rsync"})
 # P2: commands whose options are whole single-dash words, never getopt clusters.
 WORD_OPTION_CMDS = frozenset({"find"})
 # 228 S2 ruling: builtins on the main session's table only; agents keep refusing them.
@@ -397,6 +410,10 @@ OPERAND_TYPES: dict[str, tuple[str, ...]] = {
     "export": ("text", "text*"),
     "unset": ("text", "text*"),
     "[": ("text*",),
+    "echo": ("text*",),
+    "printf": ("text", "text*"),
+    "true": (),
+    "set": (),
     "git commit": ("pathspec*",),
     "git add": ("pathspec*",),
     "git restore": ("pathspec*",),
@@ -2020,6 +2037,17 @@ _SED_PRINT = re.compile(
     rf"(?:{_SED_ADDR}(?:,{_SED_ADDR})?)?p(?:;(?:{_SED_ADDR}(?:,{_SED_ADDR})?)?p)*"
 )
 _READ_PATH_DENY = frozenset("*?[]{}$~\\")
+# 228 S3c, SS-3: the coder's sed s shape; no e, w or r flag and no second command.
+_SED_DELIMS = frozenset("/|#,:@")
+_SED_FLAGS = frozenset("giIp0123456789")
+
+
+def sed_substitute(script: str) -> bool:
+    # 228 S3c: exactly three delimiters, so sed either reads these parts or fails to parse.
+    if len(script) < 4 or script[0] != "s" or script[1] not in _SED_DELIMS or "\n" in script:
+        return False
+    delim = script[1]
+    return script.count(delim) == 3 and set(script[script.rindex(delim) + 1 :]) <= _SED_FLAGS
 
 
 def _unquoted_expansion(raw: str) -> bool:

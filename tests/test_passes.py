@@ -440,7 +440,7 @@ def test_corpus_row_a_coder_write_is_admitted_exactly_once(marked_repo: Path) ->
     _run(marked_repo)
     first = _coder(marked_repo, command)
     assert first is not None and first[0] == "shell_tripwires", first
-    assert "Refused: sed is not on the coder command table" in first[1]
+    assert "Refused: perl is not on the coder command table" in first[1]
     _grant(marked_repo, command, agent=agent)
     assert _coder(marked_repo, command) is None
     again = _coder(marked_repo, command)

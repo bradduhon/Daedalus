@@ -98,9 +98,8 @@ def test_or_chain_is_allowed_to_workers() -> None:
     assert not d.allow and _coder_refused(d.reason, jail.R_CODER_GIT), d.reason
 
 
-@GAP
-def test_coder_or_true_table_gap() -> None:
-    # 228 S3b: true is off the coder's command table.
+def test_coder_or_true_allowed() -> None:
+    # 228 S3c: true is on the coder's command table, with no option and no operand.
     assert evaluate(HOOK, _b("coder", "ls || true")) is None
 
 
@@ -282,8 +281,8 @@ class TestQuotedHygiene:
     @pytest.mark.parametrize(
         "command",
         [
-            pytest.param(f"sed -n '$p' {WT}/src/a.py", marks=GAP),
-            pytest.param("printf '%s ${x} {a,b} ~ \\n'", marks=GAP),
+            f"sed -n '$p' {WT}/src/a.py",
+            "printf '%s ${x} {a,b} ~ \\n'",
             f"cat '{WT}/a\\b'",
             "git log --format='%H ${x}'",
         ],
@@ -422,7 +421,6 @@ class TestDeclaredCommands:
         repo, _ = _narrowed_repo(tmp_path, json.dumps({"stack": self.STACK}))
         return repo
 
-    @GAP
     def test_declared_unit_test_cmd_runs_verbatim(self, tmp_path: Path) -> None:
         # B2: the manifest's command runs as one segment, exactly as declared.
         repo = self._repo(tmp_path)
@@ -435,7 +433,6 @@ class TestDeclaredCommands:
             got = evaluate(HOOK, _cwd(_b("coder", command), repo))
             assert _coder_refused(got, shell.R_INLINE), command
 
-    @GAP
     def test_declared_typecheck_cmd_runs_verbatim(self, tmp_path: Path) -> None:
         repo = self._repo(tmp_path)
         assert decide(_cwd(_b("coder", "python3 -X dev -m mypy src"), repo), CFG).allow
@@ -464,9 +461,9 @@ class TestDeclaredCommands:
         for command in ("bash scripts/web-test.sh -x", "bash scripts/tsc.sh"):
             got = evaluate(HOOK, _cwd(_b("coder", command), repo))
             assert _coder_refused(got, shell.R_INLINE), command
-        # 228 S3b table gap: bash is off the coder's table, so each declared entry refuses too.
+        # 228 S3c: each declared entry is admitted as its parsed words.
         for command in (*stack["unit_test_cmd"], *stack["typecheck_cmd"]):
-            assert not decide(_cwd(_b("coder", command), repo), CFG).allow, command
+            assert decide(_cwd(_b("coder", command), repo), CFG).allow, command
 
 
 class TestNestedClaudeAndPathCommands:
@@ -505,13 +502,12 @@ class TestNestedClaudeAndPathCommands:
         for command in (f"{repo}/.venv/bin/pip install x", f"{repo}/.venv/bin/python -c 1"):
             got = evaluate(HOOK, _cwd(_b("coder", command), repo))
             assert _coder_refused(got, shell.R_UNTRUSTED_PATH), command
-        # 228 S3b table gap: a declared executable by path is outside the trusted bin folders.
-        for command in (
-            f"cd {wt} && {repo}/.venv/bin/pytest -q tests/test_a.py",
-            f"cd {wt} && {repo}/.venv/bin/ruff check scripts",
-        ):
-            got = evaluate(HOOK, _cwd(_b("coder", command), repo))
-            assert _coder_refused(got, shell.R_UNTRUSTED_PATH), command
+        # 228 S3c: a declared executable runs by its family row; ruff has none on the table.
+        command = f"cd {wt} && {repo}/.venv/bin/pytest -q tests/test_a.py"
+        assert evaluate(HOOK, _cwd(_b("coder", command), repo)) is None
+        command = f"cd {wt} && {repo}/.venv/bin/ruff check scripts"
+        got = evaluate(HOOK, _cwd(_b("coder", command), repo))
+        assert _coder_refused(got, shell.R_UNTRUSTED_PATH), command
 
 
 @pytest.mark.parametrize(
@@ -646,7 +642,6 @@ def test_worker_trap_getopts_printf_v_refused(agent: str, command: str) -> None:
     assert not decide(_b(agent, command), CFG).allow, (agent, command)
 
 
-@GAP
 def test_coder_plain_printf_allowed() -> None:
     assert decide(_b("coder", "printf 'x y'"), CFG).allow
 
@@ -672,7 +667,7 @@ def test_stderr_dup_is_a_noop(command: str) -> None:
     "command",
     [
         "git status >/dev/null",
-        pytest.param("ls &>/dev/null", marks=GAP),
+        "ls &>/dev/null",
         "ls > /dev/null",
         "ls 1>/dev/null",
     ],
@@ -745,10 +740,8 @@ DASH_GREP = f'grep -rnP "\\x{{2013}}|\\x{{2014}}" {WT}/scripts {WT}/tests'
     "command",
     [
         DASH_GREP,
-        pytest.param(f'{DASH_GREP}; echo "dash-grep exit $?"', marks=GAP),
-        pytest.param(
-            f"cd {WT} && grep -n -v '^[ -~]*$' scripts/a.py tests/b.py; echo exit=$?", marks=GAP
-        ),
+        f'{DASH_GREP}; echo "dash-grep exit $?"',
+        f"cd {WT} && grep -n -v '^[ -~]*$' scripts/a.py tests/b.py; echo exit=$?",
         f"cd {WT} && python3 -m pytest tests/adversarial -q 2>&1 | tail -2 && {DASH_GREP}",
     ],
 )
@@ -768,12 +761,17 @@ def test_coder_dash_grep_write_forms_are_refused() -> None:
 
 @pytest.mark.parametrize(
     "command",
-    ['echo "$HOME"', 'echo "${?}"', 'echo "$$?"', 'echo "\\$?"', "echo ~/x$?", "cat x$?"],
+    ['echo "$HOME"', 'echo "${?}"', 'echo "$$?"', "echo ~/x$?", "cat x$?"],
 )
 def test_exit_echo_admits_only_the_exit_status(command: str) -> None:
-    # 228 S3b: a parameter is refused where it sits; an escaped $? leaves echo, off the table.
+    # 228 S3b: a parameter is refused where it sits; 228 S3c: only echo's $? is admitted.
     got = evaluate(HOOK, _b("coder", command))
     assert _coder_refused(got, shell.R_HYGIENE, jail.R_CODER_TABLE), (command, got)
+
+
+def test_an_escaped_exit_status_is_echo_text() -> None:
+    # 228 S3c: a quoted \$ is a literal dollar sign, so echo prints the two characters.
+    assert evaluate(HOOK, _b("coder", 'echo "\\$?"')) is None
 
 
 def test_exit_echo_is_the_coders_alone() -> None:
@@ -788,7 +786,7 @@ def test_an_archive_tool_names_its_reason(agent: str, command: str) -> None:
     assert _judged(agent, evaluate(HOOK, _b(agent, command)), shell.R_ARCHIVE)
 
 
-@pytest.mark.parametrize("command", ["echo hi", f"cd {WT} && true", "printf x"])
+@pytest.mark.parametrize("command", ["whoami", f"cd {WT} && uname", "tr a b"])
 def test_an_off_table_coder_word_names_itself(command: str) -> None:
     # 228 S3b, SA-5: a word off the coder's table is refused by name, with the grant route next.
     got = evaluate(HOOK, _b("coder", command))

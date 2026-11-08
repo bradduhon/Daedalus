@@ -155,7 +155,7 @@ def _chain_refuses_naming_the_ruling(command: str) -> None:
         "pnpm run install",
         "pnpm exec vitest run",
         "npx --no-install vitest run",
-        pytest.param("npm exec --no-install vitest run", marks=GAP),
+        "npm exec --no-install vitest run",
         "pnpm exec node --test",
         "pnpm test",
         "pnpm run test",

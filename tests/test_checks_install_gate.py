@@ -26,11 +26,9 @@ JUDGES = ("auditor", "verifier")
 # 228 S3b: no-install rows off the coder's command table or runner rows; the S3b return names them.
 CODER_OFF_TABLE = frozenset(
     {"terraform init", "terraform init -upgrade=false", "pnpm -- dev", "npm init -y"}
-    | {"npm exec --no-install vitest run", "npm exec --no-install -- eslint ."}
     | {"node_modules/.bin/eslint .", ".venv/bin/ruff check ."}
     | {"deno run main.ts", "deno run --config cfg.json main.ts"}
 )
-GAP = pytest.mark.xfail(strict=True, reason="228 S3b table gap: no frozen install row")
 
 
 def _repo(tmp_path: Path, installs: list[str] | None) -> Path:
@@ -74,9 +72,10 @@ def test_the_install_class_judges_each_fixture_row(row: dict[str, str], tmp_path
     every = _repo(tmp_path / "every", list(INSTALL_ECOSYSTEMS))
     other = [e for e in INSTALL_ECOSYSTEMS if e != row.get("ecosystem")]
     for repo in (every, _repo(tmp_path / "none", None), _repo(tmp_path / "other", other)):
-        # 228 S3b: the coder's grammar admits no install and names the word it refused.
+        # 228 S3c: the coder's frozen row admits the form with its ecosystem listed, else names it.
         got = _judge("coder", command, repo)
-        if kind == "none" and command not in CODER_OFF_TABLE:
+        frozen = kind == "frozen" and repo == every
+        if (kind == "none" and command not in CODER_OFF_TABLE) or frozen:
             assert got is None, (repo.parent.name, command, got)
         else:
             assert got is not None and "Refused: " in got, (repo.parent.name, command, got)
@@ -112,10 +111,9 @@ def test_a_frozen_form_chained_with_another_install_refuses(
         assert _judge("coder", prefixed, repo) is not None, prefixed
 
 
-@GAP
 @pytest.mark.parametrize("command", ["npm ci --ignore-scripts", "cargo fetch --locked"])
 def test_a_coders_frozen_form_runs_with_its_ecosystem_listed(command: str, tmp_path: Path) -> None:
-    # 0196, 228 S3b: the frozen form is on no coder table row yet; a row with a test fixes it.
+    # 0196, 228 S3c: the coder's frozen install row, admitted with its ecosystem enabled.
     repo = _repo(tmp_path, list(INSTALL_ECOSYSTEMS))
     assert _judge("coder", command, repo) is None
     assert _judge("coder", f"cd {repo} && {command}", repo) is None

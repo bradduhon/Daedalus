@@ -12,7 +12,7 @@ from lib import shell, shparse
 from lib.admit import Admitted, Refusal, _allocate, admit, role_for
 from lib.jail import CODER_WRITE_CMDS
 
-from tests.conftest import REPO_ROOT, WT
+from tests.conftest import CWD, REPO_ROOT, WT
 
 WRAP = f"{shell.CONFINE_PATH} --unit {WT} --"
 
@@ -99,7 +99,7 @@ HUNT = (
     ("NAME=value prefix", "GIT_DIR=/x git status", "GIT_DIR=/x"),
     ("export earlier", "export X=1; cat x", "export"),
     ("declare -x earlier", "declare -x X=1; cat x", "declare"),
-    ("set -a earlier", "set -a; cat x", "set"),
+    ("set -a earlier", "set -a; cat x", "-a"),
     ("subshell", "(touch x)", "(touch x)"),
     ("brace group", "{ touch x; }", "{ touch x; }"),
     ("pipe into the command", "cat x | tee y", "tee y"),
@@ -338,3 +338,50 @@ def test_a_stream_script_path_is_refused_beside_a_file_script(command: str, wrap
     assert "a stream under /dev or /proc" in got.reason, got
     admitted("coder", f"{wrap}python3 scripts/x.py")
     admitted("main", command)
+
+
+@pytest.mark.parametrize(
+    "command", ["set -e", "set -o pipefail", "set -euo pipefail", "set -eu -o pipefail", "set -u"]
+)
+def test_the_coder_set_row_admits_its_strict_forms(command: str) -> None:
+    # 228 S3c: set -e, -u and -o pipefail in any split; AC-2 siblings sit in the hunt rows.
+    assert admitted("coder", command).commands[0].family == "set"
+
+
+@pytest.mark.parametrize(
+    ("command", "quoted"),
+    [("set -a", "-a"), ("set +e", "set"), ("set -o xtrace", "xtrace"), ("set -- a", "set")],
+)
+def test_the_coder_set_row_refuses_every_other_form(command: str, quoted: str) -> None:
+    assert refused("coder", command).text == quoted
+
+
+def test_a_sed_backup_suffix_is_a_typed_write_beside_its_file() -> None:
+    # 228 S3c: -i.bak writes the file and file.bak, both judged by unit_writes.
+    cmd = admitted("coder", f"sed -i.bak s/a/b/ {WT}/src/a.py").commands[0]
+    assert [w.text for w in cmd.writes] == [f"{WT}/src/a.py", f"{WT}/src/a.py.bak"]
+    assert [t.text for t in cmd.texts] == ["s/a/b/"] and not cmd.reads
+
+
+def test_a_sed_print_names_its_files_as_reads() -> None:
+    cmd = admitted("coder", f"sed -n 1,5p {WT}/src/a.py").commands[0]
+    assert [r.text for r in cmd.reads] == [f"{WT}/src/a.py"] and not cmd.writes
+
+
+def test_the_exit_echo_admits_only_dollar_question() -> None:
+    # 228 S3c: one token apart, ${?} and $$ refuse at the parameter.
+    assert admitted("coder", "echo exit=$?").commands[0].texts[0].text == "exit=$?"
+    assert refused("coder", "echo exit=${?}").text == "${?}"
+    assert refused("coder", "echo exit=$$").text == "$$"
+    assert refused("auditor", "echo exit=$?").text == "$?"
+
+
+@pytest.mark.usefixtures("jail_fakes")
+def test_git_dash_c_restore_types_its_folder_and_pathspecs() -> None:
+    # 228 S3c: the restore row resolves src/a.py under the -C folder, which git_dir carries.
+    got = judge("coder", f"git -C {WT} restore -- src/a.py", CWD)
+    assert isinstance(got, Admitted), got
+    cmd = got.commands[0]
+    assert cmd.git_dir is not None and cmd.git_dir.text == WT
+    assert [p.text for p in cmd.pathspecs] == ["src/a.py"]
+    assert isinstance(judge("coder", f"git -C {WT}/.. restore -- src/a.py", CWD), Refusal)
