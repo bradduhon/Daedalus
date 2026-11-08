@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from tests.adversarial.corpus import (
+    CODER_REFUSED,
     CREDENTIAL,
     NESTED,
     OUTSIDE,
@@ -109,7 +110,9 @@ def test_link_onto_the_versioned_claude_binary_is_denied(
         f"nohup {hop} -p hi",
         f"node {link}",
     ):
-        assert_denied(_b(agent, command), NESTED)
+        # 228 S3b: the coder grammar refuses a wrapper or node by name before what it runs.
+        wrapped = agent == "coder" and command.split()[0] in {"timeout", "nohup", "node"}
+        assert_denied(_b(agent, command), *((CODER_REFUSED,) if wrapped else (NESTED,)))
 
 
 def test_link_onto_claude_inside_the_worktree_is_denied(fake_claude: Path, tmp_path: Path) -> None:
@@ -137,9 +140,10 @@ def test_coder_write_through_a_worktree_link_is_denied(
         _w("coder", f"{wt}/up/service-manifest.json", "Edit"),
         _b("coder", f"tee {wt}/out/a.py"),
         _b("coder", f"cp {wt}/README.md {wt}/up/src/a.py"),
-        _b("coder", f"echo x > {wt}/out/a.py"),
     ):
         assert_denied(_cwd(hook_input, repo), OUTSIDE)
+    # 228 S3b: an agent's redirect to a file is no admitted shape; the refusal names it.
+    assert_denied(_cwd(_b("coder", f"echo x > {wt}/out/a.py"), repo), CODER_REFUSED)
     for hook_input in (
         _w("coder", f"{wt}/k/authorized_keys"),
         _b("coder", f"tee {wt}/k/authorized_keys"),

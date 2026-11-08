@@ -78,6 +78,8 @@ class AdmittedCommand:
     script: Typed | None = None
     cd_target: Typed | None = None
     git_dir: Typed | None = None
+    # 228 S3b: the kernel wrapper's --unit folder, which the confine check bounds.
+    unit: Typed | None = None
 
 
 @dataclass(frozen=True)
@@ -142,6 +144,7 @@ class _Cmd:
     git_dir: Typed | None = None
     git_read: bool = False
     loose: list[Span] = field(default_factory=list)
+    unit: Typed | None = None
 
     def add(self, kind: str, item: Typed) -> None:
         self.typed.setdefault(kind, []).append(item)
@@ -166,6 +169,7 @@ class _Cmd:
             script=one.get("script"),
             cd_target=self.cd_target,
             git_dir=self.git_dir,
+            unit=self.unit,
         )
 
 
@@ -510,7 +514,8 @@ class _Judge:
             or not shell.confine_wrapper(name, self.cwd)
         ):
             raise _Off(words[0].span, "the kernel wrapper runs in one form only (0048)")
-        c.add("read", _word_text(words[2]))
+        c.unit = _word_text(words[2])
+        c.add("read", c.unit)
         return words[4:]
 
     def _wrapper(self, words: list[Word], c: _Cmd) -> list[Word]:
@@ -848,7 +853,7 @@ class _Judge:
         kept: list[str] = []
         icase = False
         config: Span | None = None
-        base = self.cwd
+        base = self.base  # 228 S3b: a relative -C after the leading cd runs from its folder.
         i = 1
         while i < len(words) and (words[i].literal or "").startswith("-"):
             text = words[i].literal or ""

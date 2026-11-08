@@ -34,6 +34,8 @@ REPLY_KEY = "the train's reply key"
 NESTED = "nested session"
 OUTSIDE = "outside your unit worktree"
 PROTECTED = "protected path"
+# 228 S3b: a coder refusal names the word, option or construct off its table at its span.
+CODER_REFUSED = "Refused: "
 
 
 # 233: a refused write a sealed pass admits exactly once, then refused again; (agent, form).
@@ -1197,3 +1199,7 @@ UNUSABLE_KERNEL = (
 def assert_store_read_denied(agent: str, template: str, **fields: object) -> None:
     # W1.4: the one body of every "Bash read into a credential store is denied" row.
     assert_denied(_cred(agent, "Bash", command=template.format(**fields)), CREDENTIAL)
+
+
+# 228 S3b, 233: a coder write off its table a sealed pass admits exactly once; (agent, form).
+S3B_CODER_PASS_ONCE = ("coder", "sed -i s/a/b/ {repo}/notes.txt")
