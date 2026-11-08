@@ -35,6 +35,8 @@ CODER_PATH = {
 
 def _names(path: Path, functions: tuple[str, ...]) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
+    defined = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    assert set(functions) <= defined, (path.name, set(functions) - defined)
     found: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name in functions:
