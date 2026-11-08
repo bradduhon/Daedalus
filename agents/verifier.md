@@ -38,7 +38,7 @@ the changed hunks and the importer lines to read first, an `Open: <path>[, ...]`
 once every file to open, an `Assets: <tail>` line and its `Over size:` lines when the project
 keeps asset files out of the diff, and the coder's `[STATUS: COMPLETE]` reply with the
 `## Receipts` block above it. A prompt whose first line is `CLAIMS MODE.` follows the Claims
-mode section instead.
+mode section instead. A prompt whose first line is `ROWS MODE.` follows the Rows mode section.
 
 ## Procedure
 1. Read the brief, the packets, the full diff and the named ranges: first open every path of
@@ -155,6 +155,10 @@ A refuted row is `<class> | <claim> | <verdict> | <branch quote> | <brief quote>
 `<class>` is `code` or `scope`, rows joined by `; `.
 - `[VERDICT: VERIFIED] claims=<n>` then `<the per-claim table>` then `corrected=<k>` then `[VERDICT: VERIFIED] claims=<n>`
 - `[VERDICT: REFUTED] <rows>` then `<the per-claim table>` then `corrected=<k>` then `[VERDICT: REFUTED] <rows>`
+- `[ROWS] n=<count>` then `<one row per line>` then `[ROWS] n=<count>`
+
+In rows mode the first and last line is `[ROWS] n=<count>`, where `<count>` is the number of
+rows between them, and the reply carries no verdict and no `corrected=<k>` line.
 
 ## What the jail passes and refuses
 The jail passes these for the verifier:
@@ -172,6 +176,8 @@ The jail passes these for the verifier:
 - Pipes between commands that each pass, and the `git show` to `sed -n` pipe above.
 - One leading `cd <absolute path> &&` before reads, when no git command or test run follows it.
 
+Rows mode runs no test, and no git command beyond the reads above.
+
 The jail refuses these:
 - Write, Edit, MultiEdit and NotebookEdit.
 - Git writes, such as `add`, `commit`, `stash`, `restore`, `checkout`, `merge` and `config`,
@@ -183,3 +189,17 @@ The jail refuses these:
   run above is reproduced.
 - `find` with `-delete` or `-exec`, `sort -o`, and grouping, subshells, substitution or
   background `&`.
+
+## Rows mode
+A prompt whose first line is `ROWS MODE.` names one unit before its coder starts (0228). It
+carries a `Unit worktree:` line, a `Brief:` line, a `Spec:` line, a `Packs:` line and a
+`Base: <lock sha>` line. No code is built yet. Skip the Procedure except the requirement list
+of step 2, and run no command.
+1. Read the brief, each file of the `Spec:` line and each file of the `Packs:` line. Read the
+   brief's requirements as step 2 lists claims: each numbered line is one requirement.
+2. For each requirement, write the admitted forms first: each form the requirement says is
+   allowed, as the agent and folder it runs as.
+3. Then write the refused forms: each hiding form of the brief's `Hunt:` line, and each class
+   the shell-semantics pack names, applied to that requirement.
+4. Write one row per form: `<req n> | <agent> | <admitted|refused> | <command>`.
+5. Reply with the `[ROWS] n=<count>` line pair of the status contract and the rows between.
