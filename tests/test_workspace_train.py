@@ -1999,6 +1999,172 @@ def test_unit_refutations_counts_each_refuted_verifier_window(repo: Path) -> Non
     assert workspace.unit_verified(records, u1) is True
 
 
+# 222: a reply's first and last lines must be one verdict line, else it is no verdict at all.
+TWO_VERDICTS = (
+    "[VERDICT: REFUTED] code | a | wrong | x | y\n| claim | result |\n"
+    "corrected=0\n[VERDICT: VERIFIED] claims=20\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("reply", "verified", "refuted"),
+    [
+        (TWO_VERDICTS, False, 0),
+        ("[VERDICT: VERIFIED] claims=3\n| claim | result |\ncorrected=0\n", False, 0),
+        ("[VERDICT: REFUTED] row 1\n| claim | result |\ncorrected=0\n", False, 0),
+        ("[VERDICT: VERIFIED] claims=5\n| claim |\n[VERDICT: VERIFIED] claims=20\n", False, 0),
+        ("[VERDICT: VERIFIED] claims=3\n", False, 0),
+        (VERIFIED_REPLY, True, 0),
+        (REFUTED_REPLY, False, 1),
+    ],
+    ids=[
+        "two-verdicts",
+        "verified-only-first",
+        "refuted-only-first",
+        "last-is-another-units-verdict",
+        "one-line",
+        "well-formed-verified",
+        "well-formed-refuted",
+    ],
+)
+def test_unit_verified_reads_only_a_reply_whose_first_and_last_lines_agree(
+    repo: Path, reply: str, verified: bool, refuted: int
+) -> None:
+    train, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    _verifier_stop(repo, reply)
+    records = workspace._audit_records(repo, train_state.load(repo, train))
+    assert workspace.unit_verified(records, u1) is verified
+    assert workspace.unit_refutations(records, u1) == refuted
+
+
+def test_merge_refuses_a_unit_whose_window_holds_a_two_verdict_reply(repo: Path) -> None:
+    _, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    _verifier_handback(repo, TWO_VERDICTS)
+    _null_stop(repo)
+    _refused(repo, ["U1"], "no recorded verifier verdict")
+    assert u1.exists()
+
+
+# 229, 0161: a unit merges once every row of its newest REFUTED verdict carries an exemption.
+LEDGER_ID = "0229-DAE-PLT"
+TWO_ROWS = "[VERDICT: REFUTED] code | a | wrong | x | y; scope | b | added | z | w"
+TWO_ROW_REPLY = f"{TWO_ROWS}\n| claim | result |\ncorrected=0\n{TWO_ROWS}\n"
+
+
+def _exempt(repo: Path, row: int, unit: str = "U1") -> train_runner.Outcome:
+    return train_runner.record_unit_exception(repo, LEDGER_ID, unit, row, "issue")
+
+
+def _gate(repo: Path, train: str, unit: Path) -> bool:
+    state = train_state.load(repo, train)
+    record = next(u for u in train_state.units(state) if u["path"] == str(unit))
+    records = workspace._audit_records(repo, state)
+    exempt = train_state.record(record, workspace.UNIT_EXEMPTIONS)
+    return workspace.unit_verified(records, unit, exempt, workspace.unit_tip(repo, record))
+
+
+def _refuted_unit(repo: Path, reply: str = TWO_ROW_REPLY) -> tuple[str, Path]:
+    train, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    _verifier_stop(repo, reply)
+    return train, u1
+
+
+def test_a_fully_exempted_unit_verifies_and_merges(repo: Path) -> None:
+    train, u1 = _refuted_unit(repo)
+    assert _exempt(repo, 2).lines == ["exemption recorded unit=U1 row=2/2 remaining=1"]
+    assert _gate(repo, train, u1) is False
+    assert _exempt(repo, 1).lines == ["exemption recorded unit=U1 row=1/2 remaining=0"]
+    assert _gate(repo, train, u1) is True
+    assert workspace.merge(repo, ["U1"])[0] == f"merged 1 units into daedalus/{train}"
+
+
+def test_a_partly_exempted_unit_does_not_merge(repo: Path) -> None:
+    _, u1 = _refuted_unit(repo)
+    assert _exempt(repo, 1).code == 0
+    _refused(repo, ["U1"], "no recorded verifier verdict")
+    assert u1.exists()
+
+
+def test_an_exemption_on_an_older_reply_does_not_count_after_a_newer_refuted(repo: Path) -> None:
+    train, u1 = _refuted_unit(repo)
+    assert _exempt(repo, 1).code == 0 and _exempt(repo, 2).code == 0
+    _dispatch(repo, u1, "SendMessage")
+    _verifier_stop(repo, TWO_ROW_REPLY)
+    assert _gate(repo, train, u1) is False
+    _refused(repo, ["U1"], "no recorded verifier verdict")
+
+
+def test_an_exemption_does_not_count_after_a_later_commit_on_the_unit(repo: Path) -> None:
+    train, u1 = _refuted_unit(repo)
+    assert _exempt(repo, 1).code == 0 and _exempt(repo, 2).code == 0
+    (u1 / "later.txt").write_text("y\n")
+    _commit_all(u1, "later")
+    assert _gate(repo, train, u1) is False
+
+
+def test_rows_joined_without_the_space_take_no_exemption(repo: Path) -> None:
+    line = "[VERDICT: REFUTED] code | a | wrong | x | y;scope | b | added | z | w"
+    train, u1 = _refuted_unit(repo, f"{line}\n| claim |\n{line}\n")
+    refused = _exempt(repo, 1)
+    assert refused.code == 1 and "does not join its rows" in refused.lines[0]
+    state = train_state.load(repo, train)
+    record = next(u for u in train_state.units(state) if u["path"] == str(u1))
+    records = workspace._audit_records(repo, state)
+    seq = workspace.newest_verdict(records, workspace._anchors(records, u1)[-1])
+    assert seq is not None
+    tip = workspace.unit_tip(repo, record)
+    forged = {str(seq[0]): {"1": {"ledger_id": LEDGER_ID, "tip": tip, "tracking": "issue"}}}
+    assert workspace.unit_verified(records, u1, forged, tip) is False
+
+
+@pytest.mark.parametrize(
+    ("reply", "row", "text"),
+    [
+        (TWO_ROW_REPLY, 0, "outside the 2 refuted rows"),
+        (TWO_ROW_REPLY, -1, "outside the 2 refuted rows"),
+        (TWO_ROW_REPLY, 3, "outside the 2 refuted rows"),
+        (VERIFIED_REPLY, 1, "is not [VERDICT: REFUTED]"),
+        (f"{TWO_ROWS}\n| claim |\ncorrected=0\n", 1, "holds no verifier verdict"),
+        (f"{TWO_ROWS}\n| claim |\n[VERDICT: VERIFIED] claims=2\n", 1, "holds no verifier verdict"),
+    ],
+    ids=["row-zero", "row-negative", "row-past-count", "verified", "only-first", "two-verdicts"],
+)
+def test_unit_exception_refuses_and_records_nothing(
+    repo: Path, reply: str, row: int, text: str
+) -> None:
+    train, u1 = _refuted_unit(repo, reply)
+    refused = _exempt(repo, row)
+    assert refused.code == 1 and text in refused.lines[0] and "Next:" in refused.lines[0]
+    state = train_state.load(repo, train)
+    record = next(u for u in train_state.units(state) if u["path"] == str(u1))
+    assert workspace.UNIT_EXEMPTIONS not in record
+
+
+def test_unit_exception_refuses_a_duplicate_row(repo: Path) -> None:
+    _refuted_unit(repo)
+    assert _exempt(repo, 1).code == 0
+    again = train_runner.record_unit_exception(repo, "0230-DAE-PLT", "U1", 1, "local")
+    assert again.code == 1 and "already carries an exemption" in again.lines[0]
+
+
+def test_exception_command_line_takes_unit_or_finding_never_both() -> None:
+    import daedalus_train
+
+    parser = daedalus_train._parser()
+    head = ["exception", "--repo", "/r", "--ledger-id", LEDGER_ID, "--tracking", "issue"]
+    args = parser.parse_args([*head, "--unit", "U1", "--row", "2"])
+    assert (args.unit, args.row, args.finding) == ("U1", 2, None)
+    for argv in ([*head, "--unit", "U1", "--finding", "F-1", "--row", "1"], head):
+        with pytest.raises(SystemExit):
+            parser.parse_args(argv)
+    for extra in (["--unit", "U1"], ["--finding", "F-1", "--row", "1"]):
+        outcome = daedalus_train._dispatch(parser.parse_args([*head, *extra]))
+        assert outcome.code == 1 and "--row goes with --unit" in outcome.lines[0]
+
+
 def test_coder_model_records_the_default_then_escalates_on_the_second_refutation(
     repo: Path,
 ) -> None:

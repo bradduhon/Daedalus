@@ -1559,13 +1559,14 @@ def refuted(cwd: Path, unit_id: str, operator_check: str | None = None) -> Outco
     return _recorded(cwd, edit)
 
 
-def _exemption_args(ledger_id: str, finding: str, tracking: str, other: str | None) -> None:
+def _exemption_args(ledger_id: str, finding: str | None, tracking: str, other: str | None) -> None:
     if not _LEDGER_ID.fullmatch(ledger_id):
         raise RunnerError(
             f"ledger id {ledger_id!r} is not a ledger id such as 0101-DAE-PLT. "
             "Next: rerun exception with the id charter-docs returned."
         )
-    if not finding.strip() or not finding.isprintable():
+    # 229: the verify-phase form names a unit and a row instead of a finding.
+    if finding is not None and (not finding.strip() or not finding.isprintable()):
         raise RunnerError(
             "--finding must name one finding id of the rejected round. "
             "Next: rerun exception with a finding id from the round's findings file."
@@ -1685,6 +1686,82 @@ def record_exception(
                 f"exemption recorded finding={finding} round={round_} ledger={ledger_id} "
                 f"tracking={tracking} remaining={left}"
             )
+
+        train_state.change(repo, train_id, change)
+        return out
+
+    return _recorded(cwd, edit)
+
+
+def _refuted_reply(
+    records: list[dict[str, object]], unit: dict[str, object], unit_id: str
+) -> tuple[int, list[str]]:
+    # 229: the seq and rows of the unit's newest verifier reply, read by the merge gate's reader.
+    anchors = workspace._anchors(records, Path(str(unit["path"])))
+    reply = workspace.newest_verdict(records, anchors[-1]) if anchors else None
+    seq, line = reply if reply is not None else (None, "")
+    if not isinstance(seq, int) or isinstance(seq, bool):
+        raise RunnerError(
+            f"the audit log holds no verifier verdict on unit {unit_id} since its newest "
+            "Unit worktree: dispatch. Next: run exception --unit only on a unit whose newest "
+            "verifier reply is [VERDICT: REFUTED]."
+        )
+    if not line.startswith(coder_model_lib.REFUTED_PREFIX):
+        raise RunnerError(
+            f"the newest verifier verdict on unit {unit_id}, at seq {seq}, is not "
+            f"{coder_model_lib.REFUTED_PREFIX}, so it has no row to exempt. Next: merge the "
+            "unit if it is verified, or send it to the verifier again."
+        )
+    rows = workspace.refuted_rows(line)
+    if not rows:
+        raise RunnerError(
+            f"the refuted verdict on unit {unit_id}, at seq {seq}, does not join its rows "
+            "with '; ' as the verifier contract says. Next: send the unit to the verifier again."
+        )
+    return seq, rows
+
+
+def record_unit_exception(
+    cwd: Path, ledger_id: str, unit_id: str, row: int, tracking: str, other: str | None = None
+) -> Outcome:
+    # 229, 0161: one exemption per refuted row of the unit's newest verifier reply, by its seq.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        _exemption_args(ledger_id, None, tracking, other)
+        try:
+            state = train_state.load(repo, train_id)
+            records = workspace._audit_records(repo, state)
+            unit = _unit_record(state, train_id, unit_id)
+            seq, rows = _refuted_reply(records, unit, unit_id)
+            tip = workspace.unit_tip(repo, unit)
+        except workspace.WorkspaceError as exc:
+            raise RunnerError(str(exc)) from exc
+        if not 1 <= row <= len(rows):
+            raise RunnerError(
+                f"--row {row} is outside the {len(rows)} refuted rows of unit {unit_id}. "
+                f"Next: rerun exception with a row from 1 to {len(rows)}."
+            )
+        out: list[str] = []
+
+        def change(state: dict[str, object]) -> None:
+            raw = state.get("units")
+            for each in raw if isinstance(raw, list) else []:
+                if not isinstance(each, dict) or each.get("name") != unit["name"]:
+                    continue
+                exemptions = train_state.record(each, workspace.UNIT_EXEMPTIONS)
+                granted = train_state.record(exemptions, str(seq))
+                if str(row) in granted:
+                    raise RunnerError(
+                        f"row {row} of the refuted verdict at seq {seq} on unit {unit_id} "
+                        "already carries an exemption. Next: record the next row; one "
+                        "exemption stands per row."
+                    )
+                granted[str(row)] = _exemption_entry(ledger_id, tip, tracking, other)
+                exemptions[str(seq)] = granted
+                each[workspace.UNIT_EXEMPTIONS] = exemptions
+                left = len([n for n in range(1, len(rows) + 1) if str(n) not in granted])
+                out.append(
+                    f"exemption recorded unit={unit_id} row={row}/{len(rows)} remaining={left}"
+                )
 
         train_state.change(repo, train_id, change)
         return out

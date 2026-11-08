@@ -1030,6 +1030,7 @@ VERIFIED = "[VERDICT: VERIFIED] claims=<n>"
 # 0121, agents/verifier.md:156: the verifier's closing line, after its corrected=<k> line.
 VERIFIED_LINE = re.compile(r"\[VERDICT: VERIFIED\] claims=[0-9]+")
 VERIFIER = "verifier"
+_VERDICT_OPEN = "[VERDICT: "
 _UNIT_LINE = "Unit worktree: "
 _DISPATCH_TOOLS = ("Agent", "SendMessage")
 # 101, skills/build/SKILL.md:32: the relay's begin marker; a payload can forge the end marker.
@@ -1069,14 +1070,29 @@ def _anchors(records: list[dict[str, object]], worktree: Path) -> list[int]:
     return [i for i, r in enumerate(records) if line in _worktree_lines(r)]
 
 
-def unit_verified(records: list[dict[str, object]], worktree: Path) -> bool:
+def unit_verified(
+    records: list[dict[str, object]],
+    worktree: Path,
+    exemptions: dict[str, object] | None = None,
+    tip: str | None = None,
+) -> bool:
     # 0121: ordered match, one verifier at a time; the window runs from the newest dispatch
     # naming the worktree to the next dispatch naming any worktree.
     anchors = _anchors(records, worktree)
     if not anchors:
         return False
-    last = _verdict_line(records, anchors[-1])
-    return last is not None and VERIFIED_LINE.fullmatch(last) is not None
+    reply = newest_verdict(records, anchors[-1])
+    if reply is None:
+        return False
+    seq, last = reply
+    if VERIFIED_LINE.fullmatch(last) is not None:
+        return True
+    # 229, 0161: a REFUTED reply passes once every row carries an exemption keyed to that reply.
+    rows = refuted_rows(last)
+    if not rows or tip is None or not isinstance(seq, int) or isinstance(seq, bool):
+        return False
+    granted = train_state.record(exemptions or {}, str(seq))
+    return all(audit_proof._exempt(granted.get(str(n)), tip) for n in range(1, len(rows) + 1))
 
 
 def unit_refutations(records: list[dict[str, object]], worktree: Path) -> int:
@@ -1085,7 +1101,24 @@ def unit_refutations(records: list[dict[str, object]], worktree: Path) -> int:
     return sum(1 for last in lines if last is not None and last.startswith(REFUTED_PREFIX))
 
 
+def refuted_rows(line: str) -> list[str] | None:
+    # 229, agents/verifier.md:155: rows joined by "; "; a bare ";" leaves the row count unknown.
+    if not line.startswith(REFUTED_PREFIX):
+        return None
+    body = line.removeprefix(REFUTED_PREFIX).strip()
+    rows = [row.strip() for row in body.split("; ")] if body else []
+    if any(not row or ";" in row for row in rows):
+        return None
+    return rows
+
+
 def _verdict_line(records: list[dict[str, object]], anchor: int) -> str | None:
+    reply = newest_verdict(records, anchor)
+    return None if reply is None else reply[1]
+
+
+def newest_verdict(records: list[dict[str, object]], anchor: int) -> tuple[object, str] | None:
+    # 229: the audit seq and verdict line of the window's newest string reply; the one reader.
     window: list[dict[str, object]] = []
     for record in records[anchor + 1 :]:
         if _worktree_lines(record):
@@ -1093,20 +1126,24 @@ def _verdict_line(records: list[dict[str, object]], anchor: int) -> str | None:
         window.append(record)
     # 0121: a verifier's reply sits in its stop tail or its hand-back call; the newest
     # string reply decides, so a null-tail stop after a hand-back does not override it.
-    replies: list[object] = []
+    replies: list[tuple[object, object]] = []
     for r in window:
         agent = r.get("agent_type")
         if not isinstance(agent, str) or agent.rpartition(":")[2] != VERIFIER:
             continue
         if r.get("event") == "SubagentStop":
-            replies.append(r.get("last_message_tail"))
+            replies.append((r.get("seq"), r.get("last_message_tail")))
         elif r.get("event") == "PostToolUse" and r.get("tool_name") == audit_proof.HANDBACK:
-            replies.append(audit_proof.handback_message(r))
-    texts = [reply for reply in replies if isinstance(reply, str)]
+            replies.append((r.get("seq"), audit_proof.handback_message(r)))
+    texts = [(seq, reply) for seq, reply in replies if isinstance(reply, str)]
     if not texts:
         return None
-    last = [text.strip() for text in texts[-1].splitlines() if text.strip()]
-    return last[-1] if last else None
+    seq, text = texts[-1]
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    # 222, agents/verifier.md:148: the first and last lines are one verdict line, else none.
+    if len(lines) < 2 or lines[0] != lines[-1] or not lines[-1].startswith(_VERDICT_OPEN):
+        return None
+    return seq, lines[-1]
 
 
 def _audit_records(repo: Path, state: dict[str, object]) -> list[dict[str, object]]:
@@ -1128,6 +1165,15 @@ VERIFY_NEXT = (
     "run the verifier step on that unit worktree, as the orchestrator recipe describes, "
     "then rerun the merge."
 )
+
+
+# 229: unit record {"exemptions": {"<reply seq>": {"<row>": {ledger_id, tip, tracking[, other]}}}}.
+UNIT_EXEMPTIONS = "exemptions"
+
+
+def unit_tip(repo: Path, unit: dict[str, object]) -> str:
+    # 229: an exemption binds to the unit branch tip, so a later commit on the unit voids it.
+    return _out(repo, "rev-parse", "--verify", f"refs/heads/{unit['branch']}").strip()
 
 
 def _plan_ids(state: dict[str, object]) -> set[str]:
@@ -1175,7 +1221,9 @@ def _wave(
                 "Next: create the unit worktree with daedalus_workspace.py create first."
             )
         records = _audit_records(repo, state) if records is None else records
-        if not unit_verified(records, Path(str(unit["path"]))):
+        exempt = train_state.record(unit, UNIT_EXEMPTIONS)
+        tip = unit_tip(repo, unit) if exempt else None
+        if not unit_verified(records, Path(str(unit["path"])), exempt, tip):
             raise WorkspaceError(
                 f"unit {uid} has no recorded verifier verdict {VERIFIED} for its worktree "
                 f"{unit['path']}. Next: {VERIFY_NEXT}"
