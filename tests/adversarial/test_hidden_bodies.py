@@ -20,6 +20,9 @@ from tests.adversarial.corpus import (
     A2_FIX4_ADMITTED,
     A2_FIX4_RUN,
     A2_FIX4_UNMARKED,
+    A2_FIX5_ADMITTED,
+    A2_FIX5_OPAQUE,
+    A2_FIX5_UNMARKED,
     A2_ISSUE_81,
     A2_ISSUE_116,
     A2_PROBE,
@@ -31,6 +34,8 @@ from tests.conftest import CFG
 from tests.payloads import _b, _cred
 
 FINDINGS = {"shell": jail.R_SHELL_BODY, "inline": jail.R_INLINE_BODY, "env": shell.R_ENV_SPLIT}
+# fix1-a2: a heredoc line's $1 is also judged at the top level, as a credential path.
+CREDENTIAL_PARAM = "could be a credential path"
 # issue 81: one body form per walked kind; {cmd} is the quoted inner command.
 BODY_FORMS = ("bash -c {cmd}", "sh -c {cmd}", "bash <<< {cmd}", "env -S {cmd}")
 
@@ -118,14 +123,31 @@ def test_a_fix_round_form_is_refused_in_a_run(marked_repo: Path, finding: str, f
     assert_denied(_foreign(marked_repo, command), FINDINGS[finding])
 
 
-@pytest.mark.parametrize("form", A2_FIX1_UNMARKED + A2_FIX3_UNMARKED + A2_FIX4_UNMARKED)
+@pytest.mark.parametrize(
+    "form", A2_FIX1_UNMARKED + A2_FIX3_UNMARKED + A2_FIX4_UNMARKED + A2_FIX5_UNMARKED
+)
 def test_a_fix_round_form_from_an_unmarked_folder_is_refused(
     marked_repo: Path, other_repo: Path, form: str
 ) -> None:
     # fix round 1, issue 81: the walk reads the body, so the write into {repo} scopes the call.
     command = form.format(repo=marked_repo)
     assert str(marked_repo / "x") in jail._bash_write_dirs(command, str(other_repo)), command
-    assert_denied(_foreign(other_repo, command), jail.R_SHELL_BODY)
+    assert_denied(_foreign(other_repo, command), jail.R_SHELL_BODY, CREDENTIAL_PARAM)
+
+
+@pytest.mark.parametrize(
+    ("form", "opaque"), [(f, True) for f in A2_FIX5_OPAQUE] + [(f, False) for f in A2_FIX5_ADMITTED]
+)
+def test_a_run_body_writing_through_an_unresolved_word_fails_closed(
+    other_repo: Path, form: str, opaque: bool
+) -> None:
+    # fix1-a2 (issue 81): such a body may name any repo; a read or a cat heredoc is no write.
+    command = form.format()
+    assert jail._body_past_cap(command, cwd=str(other_repo)) is opaque, command
+    decision = jail.decide(_foreign(other_repo, command), CFG)
+    assert decision.allow is not opaque, (command, decision.reason)
+    if opaque:
+        assert_denied(_foreign(other_repo, command), jail.R_SHELL_BODY, CREDENTIAL_PARAM)
 
 
 @pytest.mark.parametrize("command", A2_FIX4_ADMITTED)

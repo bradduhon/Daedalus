@@ -127,6 +127,7 @@ from lib.shell import (
     runs_claude,
     scan_options,
     segment_spans,
+    shell_params,
     shell_tokens,
     split_options,
     stdin_script,
@@ -1335,7 +1336,7 @@ def _read_only_segment(
     # P1, issue 204: $, a backtick, a leading glob or any uniq glob may become a write option or
     # operand; expansion_opaque judges unquoted words where the raw command is known.
     if any(
-        set("$`") & set(arg)
+        _TOKEN_EXPANSION.search(arg)
         or name != "find"
         and _GLOB_CHARS & set(arg)
         and (name == "uniq" or arg[:1] == "-" or arg[:1] in _GLOB_CHARS)
@@ -1354,6 +1355,8 @@ def _read_only_segment(
     return name == "find" or not scan.off
 
 
+# fix1-a2: a $ that opens an expansion, or a backtick; a lone $ (from '$') is literal.
+_TOKEN_EXPANSION = re.compile(r"\$[\w{(@*#?!$-]|`")
 R_LEDGER_ARGS = (
     "append_ledger takes only --probe, or --expected-seq, --entry-file, --repo and --type "
     "once each with a value. Next: run append_ledger from the repo whose ledger you are "
@@ -1834,12 +1837,21 @@ def _shell_scan(command: str) -> list[ScanSegment]:
     return segments
 
 
-def _bash_env(segments: list[list[str]]) -> list[dict[str, list[str]]]:
-    # spec 8: assignments and for-loops bind, read and friends unbind, HOME stays real.
+def _base_env() -> dict[str, list[str]]:
+    # spec 8: the hook's own environment, HOME real, the plugin folders defaulted.
     env = {k: [v] for k, v in os.environ.items()}
     env["HOME"] = [str(Path.home())]
     env.setdefault("CLAUDE_PLUGIN_ROOT", [os.path.dirname(_REPO_SCRIPTS)])
     env.setdefault("CLAUDE_PLUGIN_DATA", [env["HOME"][0] + _DATA_DIR_DEFAULT])
+    return env
+
+
+def _bash_env(
+    segments: list[list[str]], start: dict[str, list[str]] | None = None
+) -> list[dict[str, list[str]]]:
+    # spec 8: assignments and for-loops bind, read and friends unbind, HOME stays real; fix1-a2:
+    # start is the env a body inherits from its outer walk.
+    env = dict(start) if start is not None else _base_env()
     envs: list[dict[str, list[str]]] = []
     changes: list[dict[str, list[str] | None]] = []
     for words in segments:
@@ -2429,12 +2441,20 @@ def _expanding_lead(raws: list[str]) -> int | None:
     return lead if any(_raw_expands(raws[j]) for j in range(start + 1, stop)) else None
 
 
+class Hidden(NamedTuple):
+    # fix1-a2 (issue 81): a body's finding, its text, and its shell's $0 on (None inherits the
+    # outer ones, () leaves them unknown).
+    reason: str
+    body: str
+    params: tuple[str, ...] | None = None
+
+
 def _hidden_bodies(
     words: list[str], heres: list[str] | None = None, fed: bool = False, base: str | None = ""
-) -> list[tuple[str, str]]:
+) -> list[Hidden]:
     # issue 80, 81, 116: (finding, command string) per env -S value, shell or flock -c body,
     # shell reading stdin (its here-string, else "") and inline interpreter body ("", unwalked).
-    found = [(R_ENV_SPLIT, value) for value in env_split_values(words)]
+    found = [Hidden(R_ENV_SPLIT, value) for value in env_split_values(words)]
     options: list[WrapperOption] = []
     lead = _command_at(words, set(), options)
     if base:
@@ -2446,6 +2466,7 @@ def _hidden_bodies(
         stdin = at == lead
         is_shell = command_family(name) in _SHELLS
         body = _shell_body(words[at:], stdin, base) if is_shell else None
+        params = shell_params(words[at:]) if is_shell else None
         if stdin and body == "" and heres:
             body = heres[0]
         if name == "flock" and (
@@ -2453,23 +2474,29 @@ def _hidden_bodies(
         ):
             _, eq, value = words[hits[0]].partition("=")
             body = value if eq else (words[hits[0] + 1 : hits[0] + 2] or [""])[0]
+            params = ("sh",)  # fix1-a2: flock runs sh -c <body> with no further words.
         if stdin and name == "eval":
             body = " ".join(words[at + 1 :])  # fix round 1, row 7: eval's words are one body.
         if stdin and name in {"source", "."}:
             # fix round 1, row 7: a sourced stream is a body; a sourced file path is a script.
-            operand = next((w for w in words[at + 1 :] if w[:1] != "-" or w == "-"), "-")
-            body = (heres[0] if heres else "") if stdin_script(operand, base) else body
+            operands = [w for w in words[at + 1 :] if w[:1] != "-" or w == "-"]
+            body = (
+                (heres[0] if heres else "")
+                if stdin_script(operands[0] if operands else "-", base)
+                else body
+            )
+            params = () if len(operands) > 1 else None  # fix1-a2: words past the file rebind $1.
         if body is not None:
-            found.append((R_SHELL_BODY, body))
+            found.append(Hidden(R_SHELL_BODY, body, params))
         code = interpreter_code(words[at:], True, fed or bool(heres), base) if stdin else None
         if code is not None:
-            found.append((R_INLINE_BODY, ""))
+            found.append(Hidden(R_INLINE_BODY, ""))
     return found
 
 
 def _segment_bodies(
     segment: ScanSegment, texts: list[str] | None = None, base: str | None = ""
-) -> list[tuple[str, str]]:
+) -> list[Hidden]:
     # issue 116: one _shell_scan segment's hidden bodies; texts are its words as expanded.
     words, heres, fed = segment.words, segment.heres, segment.fed
     shown = texts if texts is not None else [_clean(w) for w in words]
@@ -2477,7 +2504,7 @@ def _segment_bodies(
     plain = [shown[i] for i in keep]
     found = _hidden_bodies(plain, [_clean(shown[i]) for i in sorted(heres)], fed, base)
     # fix round 4, design A: every here-string is walked, whatever command or group reads it.
-    found += [("", _clean(shown[i])) for i in sorted(segment.strings)]
+    found += [Hidden("", _clean(shown[i])) for i in sorted(segment.strings)]
     raws = [words[i] for i in keep]
     lead = _expanding_lead(raws)
     if lead is not None:
@@ -2487,8 +2514,8 @@ def _segment_bodies(
         fams = {command_family(a) for a in _expand_braces(word) or [word]}
         fams.add(command_family(plain[lead]))
         if fams & (_SHELLS | INTERPRETERS | {"eval", "source", "."}):
-            found.append((R_INLINE_BODY if fams & INTERPRETERS else R_SHELL_BODY, ""))
-        found += [("", w) for w in plain[lead + 1 :] if w and w[:1] != "-"]
+            found.append(Hidden(R_INLINE_BODY if fams & INTERPRETERS else R_SHELL_BODY, ""))
+        found += [Hidden("", w) for w in plain[lead + 1 :] if w and w[:1] != "-"]
     return found
 
 
@@ -2504,7 +2531,7 @@ def _hidden_reason(command: str, cwd: str | None = "") -> str | None:
     segments = _shell_scan(command)
     folders = _chain_folders([s.words for s in segments], cwd)
     for segment, folder in zip(segments, folders, strict=True):
-        hidden = [reason for reason, _ in _segment_bodies(segment, None, folder) if reason]
+        hidden = [h.reason for h in _segment_bodies(segment, None, folder) if h.reason]
         if hidden:
             return hidden[0]
     # fix round 4, design B: stdin fed to a group, subshell or bare exec while code runs.
@@ -2517,58 +2544,143 @@ def _hidden_reason(command: str, cwd: str | None = "") -> str | None:
     return None
 
 
-def _body_past_cap(command: str, depth: int = 0) -> bool:
-    # issue 81: a body nested past _BODY_DEPTH is never walked, so the call is judged in a train.
+def _body_past_cap(command: str, depth: int = 0, cwd: str = "/") -> bool:
+    # issue 81, fix1-a2: a body past _BODY_DEPTH, or a run body writing through a $ word the walk
+    # cannot resolve, may name any repo, so the call is judged in a train.
+    if depth == 0 and _write_walk(command, cwd if os.path.isabs(cwd) else "/")[1]:
+        return True
     for segment in _shell_scan(command):
-        for _, body in _segment_bodies(segment):
-            if depth >= _BODY_DEPTH or _body_past_cap(body, depth + 1):
+        for hidden in _segment_bodies(segment):
+            if depth >= _BODY_DEPTH or _body_past_cap(hidden.body, depth + 1):
                 return True
     return False
 
 
+_UNRESOLVED = "\x03"  # fix1-a2: marks a word a run body's walk could not resolve.
+_PARAM_NAME = re.compile(r"[0-9]+|[@*#]")
+
+
+def _inner_env(
+    prior: dict[str, list[str]], words: list[str], params: tuple[str, ...] | None
+) -> dict[str, list[str]]:
+    # fix1-a2 (issue 81): a body sees the chain's env before its segment, the segment's own
+    # NAME=value prefixes, then its shell's $0 on; () unbinds them, None keeps the outer ones.
+    clean = [_clean(w) for w in words]
+    at = _command_at(clean, {i for i, w in enumerate(words) if w.startswith(_REDIRECT)})
+    stop = at if at is not None and at >= 0 else len(words)
+    prefix = [w for w in words[:stop] if _ASSIGN.match(w)]
+    env = _bash_env([prefix], prior)[0] if prefix else dict(prior)
+    if params is None:
+        return env
+    env = {k: v for k, v in env.items() if not _PARAM_NAME.fullmatch(k)}
+    if params:
+        env.update({str(n): [p] for n, p in enumerate(params)})
+        env["@"] = env["*"] = list(params[1:]) or [""]
+        env["#"] = [str(len(params) - 1)]
+    return env
+
+
+def _segment_targets(words: list[str], texts: list[str], cwd: str) -> tuple[list[str], str | None]:
+    # issue 30, 76: one segment's anchored write targets, and the folder its command runs in.
+    clean = [_clean(w) for w in words]
+    redirects = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
+    options: list[WrapperOption] = []
+    at = _command_at(clean, redirects, options)
+    # issue 76: redirects and the wrapper's own output open in cwd; the command's in base.
+    picks = [texts[i] for i in sorted(redirects)] + _option_values(texts, options, WRAPPER_WRITES)
+    base = _moved_base(texts, options, cwd)
+    acts = [base] if base is not None and base != cwd else []
+    plain_raw = [w for i, w in enumerate(words) if i not in redirects]
+    if at == _OPAQUE or base is None or _expanding_lead(plain_raw) is not None:
+        picks += _opaque_targets(texts, _opaque_words(clean, redirects), cwd)
+    elif at is not None:
+        name = _base(clean[at])
+        args = [texts[i] for i in range(at + 1, len(words)) if i not in redirects]
+        if name in {"cd", "pushd"}:
+            acts += [a for a in args if not a.startswith("-")][:1]
+        elif name == "git":
+            sub, _, globals_ = _git_split(["git", *args])
+            # spec 6: worktree reads by name only after its grammar; add and remove act on -C.
+            if sub not in READ_ONLY_GIT or sub == "worktree":
+                pairs = zip(globals_, globals_[1:], strict=False)
+                acts += [value for flag, value in pairs if flag == "-C"]
+                acts += [g.split("=", 1)[1] for g in globals_ if g.startswith(_GIT_DIR_OPTS)]
+        elif name in CODER_WRITE_CMDS or (name in {"sed", "perl"} and _in_place(name, args)):
+            acts += [a for a in _write_operands(name, args) if a != "-"]
+    found = [t for t in (_anchor(p, cwd) for p in picks) if t]
+    found += [t for t in (_anchor(p, base or cwd) for p in acts) if t]
+    return found, base
+
+
 def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
     # issue 30: redirects, write operands, cd targets and git -C name the repos a command acts on.
+    return _write_walk(command, cwd, depth)[0]
+
+
+def _write_walk(
+    command: str,
+    cwd: str,
+    depth: int = 0,
+    start: dict[str, list[str]] | None = None,
+    run: bool = False,
+) -> tuple[list[str], bool]:
+    # issue 30, 81, fix1-a2: the targets of every expansion alternative, and whether a body a
+    # shell runs (run) writes through a word the walk cannot resolve.
     scanned = _shell_scan(command)
     segments = [segment.words for segment in scanned]
     folders = _chain_folders(segments, cwd)
-    envs = _bash_env(segments)
+    envs = _bash_env(segments, start)
+    priors = [start if start is not None else _base_env(), *envs[:-1]]
     found: list[str] = []
+    opaque = False
+    walked: set[tuple[str, str, str, tuple[str, ...] | None]] = set()
     for k, words in enumerate(segments):
-        clean = [_clean(w) for w in words]
-        texts = [(_expand_word(w, envs[k]) or [("", False)])[0][0] for w in words]
-        redirects = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
-        options: list[WrapperOption] = []
-        at = _command_at(clean, redirects, options)
-        # issue 76: redirects and the wrapper's own output open in cwd; the command's in base.
-        picks = [texts[i] for i in sorted(redirects)] + _option_values(
-            texts, options, WRAPPER_WRITES
-        )
-        base = _moved_base(texts, options, cwd)
-        acts = [base] if base is not None and base != cwd else []
-        plain_raw = [w for i, w in enumerate(words) if i not in redirects]
-        if at == _OPAQUE or base is None or _expanding_lead(plain_raw) is not None:
-            picks += _opaque_targets(texts, _opaque_words(clean, redirects), cwd)
-        elif at is not None:
-            name = _base(clean[at])
-            args = [texts[i] for i in range(at + 1, len(words)) if i not in redirects]
-            if name in {"cd", "pushd"}:
-                acts += [a for a in args if not a.startswith("-")][:1]
-            elif name == "git":
-                sub, _, globals_ = _git_split(["git", *args])
-                # spec 6: worktree reads by name only after its grammar; add and remove act on -C.
-                if sub not in READ_ONLY_GIT or sub == "worktree":
-                    pairs = zip(globals_, globals_[1:], strict=False)
-                    acts += [value for flag, value in pairs if flag == "-C"]
-                    acts += [g.split("=", 1)[1] for g in globals_ if g.startswith(_GIT_DIR_OPTS)]
-            elif name in CODER_WRITE_CMDS or (name in {"sed", "perl"} and _in_place(name, args)):
-                acts += [a for a in _write_operands(name, args) if a != "-"]
-        found += [t for t in (_anchor(p, cwd) for p in picks) if t]
-        found += [t for t in (_anchor(p, base or cwd) for p in acts) if t]
-        if depth < _BODY_DEPTH:
+        alts = [_expand_word(w, envs[k]) or [("", False)] for w in words]
+        for j in range(max(len(a) for a in alts)):
+            picked = [a[min(j, len(a) - 1)] for a in alts]
+            texts = [t + _UNRESOLVED if u and run else t for t, u in picked]
+            targets, base = _segment_targets(words, texts, cwd)
+            opaque = opaque or any(_UNRESOLVED in t for t in targets)
+            found += [t.replace(_UNRESOLVED, "") for t in targets]
+            if depth >= _BODY_DEPTH:
+                continue
+            inner_cwd = (base or cwd).replace(_UNRESOLVED, "")
             # issue 80, 81, 116: a hidden body's own targets name the repo, so a train scopes it.
-            for _, body in _segment_bodies(scanned[k], texts, folders[k]):
-                found += _bash_write_dirs(body, base or cwd, depth + 1)
-    return found
+            for hidden in _segment_bodies(scanned[k], texts, folders[k]):
+                key = (inner_cwd, *hidden)
+                if key in walked:
+                    continue
+                walked.add(key)
+                opaque = opaque or (bool(hidden.reason) and _UNRESOLVED in hidden.body)
+                env = _inner_env(priors[k], words, hidden.params)
+                body = hidden.body.replace(_UNRESOLVED, "")
+                more, hid = _write_walk(body, inner_cwd, depth + 1, env, bool(hidden.reason))
+                found += more
+                opaque = opaque or hid
+    for doc in _heredocs(command)[1] if depth < _BODY_DEPTH else []:
+        more, hid = _heredoc_walk(doc, cwd, depth, start)
+        found += more
+        opaque = opaque or hid
+    return found, opaque
+
+
+def _heredoc_walk(
+    doc: _Body, cwd: str, depth: int, start: dict[str, list[str]] | None
+) -> tuple[list[str], bool]:
+    # fix1-a2 (issue 81): a heredoc a shell reads is walked as a run body, bound as a -c body is;
+    # an unquoted one was expanded by the outer shell, so the reader's $0 on are not bound.
+    owner = _shell_scan(doc.own)
+    if not owner:
+        return [], False
+    lead = [s.words for s in _shell_scan(doc.before)]
+    prior = _bash_env(lead, start)[-1] if lead else (start or _base_env())
+    words = owner[0].words
+    texts = [(_expand_word(w, prior) or [("", False)])[0][0] for w in words]
+    for hidden in _segment_bodies(owner[0], texts, cwd):
+        if hidden.reason == R_SHELL_BODY and not hidden.body:
+            env = _inner_env(prior, words, hidden.params if doc.quoted else None)
+            return _write_walk(doc.text, cwd, depth + 1, env, True)
+    return [], False
 
 
 def _write_dirs(tool: str, tool_input: dict[str, object], cwd: str) -> list[str]:
@@ -2711,7 +2823,7 @@ def _train_scoped(cwd: str, tool: str, tool_input: dict[str, object]) -> bool:
     return (
         not os.path.isabs(cwd)
         or _marked_repo(cwd, tool, tool_input) is not None
-        or (tool == "Bash" and _body_past_cap(str(tool_input.get("command") or "")))
+        or (tool == "Bash" and _body_past_cap(str(tool_input.get("command") or ""), cwd=cwd))
     )
 
 
@@ -2750,7 +2862,7 @@ def _unknown_decision(
         return _block(R_DATA_DIR)
     repo = _marked_repo(cwd, tool, tool_input)
     # issue 81: a body past the walk's cap may name any repo, so it fails closed.
-    if repo is None and not (command and _body_past_cap(command)):
+    if repo is None and not (command and _body_past_cap(command, cwd=cwd)):
         return _allow()
     hidden = _hidden_reason(command, cwd) if command else None
     if hidden is not None or repo is None:
@@ -3283,6 +3395,9 @@ class _Body(NamedTuple):
     text: str
     quoted: bool
     message: bool
+    # fix1-a2 (issue 81): the segment that reads the body, and the text before that segment.
+    own: str = ""
+    before: str = ""
 
 
 def _heredocs(command: str) -> tuple[str, list[_Body]]:
@@ -3315,7 +3430,9 @@ def _heredocs(command: str) -> tuple[str, list[_Body]]:
             end = _heredoc_end(rest, _unquoted(word), dash)
             own = line[begin:op] + " " + line[past:stop]
             message = _stdin_message(own) or _piped_message(line, seps, own, stop)
-            bodies.append(_Body(rest[:end], bool(set("'\"\\") & set(word)), message))
+            quoted = bool(set("'\"\\") & set(word))
+            before = "".join(out[:-1]) + line[:begin]
+            bodies.append(_Body(rest[:end], quoted, message, own, before))
             rest = rest[end:]
     return "".join(out), bodies
 
