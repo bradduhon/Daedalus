@@ -249,7 +249,9 @@ def test_daedalus_agent_routed_outside_a_train(run_script: Any, hook_input: Any)
     payload = hook_input(agent_type="daedalus:coder", tool_input={"command": "git push o x"})
     result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2
-    assert result.stderr.startswith("daedalus-jail[coder]: git_push: no remote git")
+    # 228 S3b: push is off the coder grammar, so the first coder check refuses it by name.
+    assert result.stderr.startswith("daedalus-jail[coder]: shell_tripwires: coder git is limited")
+    assert "Refused: git push is not in the coder git grammar" in result.stderr
     ghost = hook_input(agent_type="daedalus:mystery", tool_input={"command": "ls"})
     result = run_script("enforce_agent_jail.py", ghost)
     want = "daedalus-jail[mystery]: router: no binding exists for agent 'mystery'"
@@ -258,7 +260,8 @@ def test_daedalus_agent_routed_outside_a_train(run_script: Any, hook_input: Any)
 
 # 0044: one fixture input per agent file and the hook its chain names as the first deny.
 DENIALS = {
-    "coder": (_input("coder", command="git push origin x"), "git_push"),
+    # 228 S3b: push is off the coder grammar; the first coder check refuses it.
+    "coder": (_input("coder", command="git push origin x"), "shell_tripwires"),
     "contract-spec": (_input("contract-spec", "Write", file_path=f"{CWD}/src/a.py"), "root_writes"),
     "charter-docs": (_input("charter-docs", command="ls"), "command_allowlist"),
     "auditor": (

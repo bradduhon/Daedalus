@@ -154,7 +154,9 @@ def test_public_docs_writer_commit_takes_only_a_message(
     reason = evaluate("unit_writes", _writer(repo_cwd, "Bash", command=text), "--docs")
     assert (reason is None) is allowed, reason
     if not allowed:
-        assert str(reason).startswith("the writer commits only what it staged"), reason
+        # 228 S3b: --all, a pathspec and --amend off the coder grammar are refused by name first.
+        named = str(reason).startswith("the writer commits only what it staged")
+        assert named or "Refused: git commit " in str(reason), reason
 
 
 # Requirement 4: a docs-only commit keeps each doc a regular non-executable file.

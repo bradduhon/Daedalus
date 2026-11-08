@@ -71,6 +71,7 @@ _DISPATCH_TOOLS = ("Agent", "Task", "SendMessage")
 _REFUSALS = ("block", "ask")
 OPERATOR, PRIORITIES_YIELD = "operator", "YIELD_STANDARDS priorities"
 ORCHESTRATOR, AUDITOR_AGENT = "orchestrator", "auditor"
+MAIN_SESSION = "main session"
 # 0156, 0182: the Contract line in words when no packet was locked.
 CONTRACT_SKIPPED = (
     "Contract: none. This plan changes at most 3 files and declares no contract, "
@@ -87,6 +88,8 @@ _ANSWERERS: dict[str, tuple[str, ...]] = {
     "YIELD_STANDARDS": (ORCHESTRATOR,),
     # 0129, 0137: a `priorities rule <n>:` yield is a surfaced default the operator answers.
     PRIORITIES_YIELD: (OPERATOR,),
+    # 233, 228 S3b: the main session puts a grant to the operator and writes the pass.
+    "YIELD_GRANT": (MAIN_SESSION,),
 }
 _CELL_CHARS = 300
 _PARAGRAPH_CHARS = 600
@@ -390,7 +393,7 @@ def _yield_row(
     kind = asked.group(1)
     surfaced = kind == "YIELD_STANDARDS" and _PRIORITIES_RULE.match(asked.group(2))
     want = _ANSWERERS[PRIORITIES_YIELD] if surfaced else _ANSWERERS.get(kind, ())
-    if want in ((OPERATOR,), (ORCHESTRATOR,)):
+    if want in ((OPERATOR,), (ORCHESTRATOR,), (MAIN_SESSION,)):
         return unit or "", kind, asked.group(2), want[0]
     answer = next((r.agent for r in found if r.seq > reply.seq and r.agent in want), None)
     return unit or "", kind, asked.group(2), answer or "no answer recorded"

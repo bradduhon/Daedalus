@@ -165,7 +165,7 @@
   },
   "jail.R_BASH_OUTSIDE": {
     "failure": "0054: a coder's Bash write lands outside its unit worktree",
-    "premise_test": "tests/test_checks_unit_writes.py::test_redirect_to_a_path_is_judged_as_a_write"
+    "premise_test": "tests/test_checks_unit_writes.py::TestFinalCoderWriteTargets::test_main_checkout_blocked"
   },
   "jail.R_ROUTE_NEXT": {
     "failure": "0054: a coder changes a protected path that only contract-spec or charter-docs may change",

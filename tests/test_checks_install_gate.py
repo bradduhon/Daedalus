@@ -23,6 +23,12 @@ ROWS: list[dict[str, str]] = json.loads(
     (REPO_ROOT / "tests" / "fixtures" / "installs" / "commands.json").read_text(encoding="utf-8")
 )
 JUDGES = ("auditor", "verifier")
+# 228 S3b: no-install rows off the coder's command table or runner rows; the S3b return names them.
+CODER_OFF_TABLE = frozenset(
+    {"terraform init", "terraform init -upgrade=false", "pnpm -- dev", "npm init -y"}
+    | {"node_modules/.bin/eslint .", ".venv/bin/ruff check ."}
+    | {"deno run main.ts", "deno run --config cfg.json main.ts"}
+)
 
 
 def _repo(tmp_path: Path, installs: list[str] | None) -> Path:
@@ -66,9 +72,16 @@ def test_the_install_class_judges_each_fixture_row(row: dict[str, str], tmp_path
     every = _repo(tmp_path / "every", list(INSTALL_ECOSYSTEMS))
     other = [e for e in INSTALL_ECOSYSTEMS if e != row.get("ecosystem")]
     for repo in (every, _repo(tmp_path / "none", None), _repo(tmp_path / "other", other)):
-        for agent in ("coder", *JUDGES):
+        # 228 S3c: the coder's frozen row admits the form with its ecosystem listed, else names it.
+        got = _judge("coder", command, repo)
+        frozen = kind == "frozen" and repo == every
+        if (kind == "none" and command not in CODER_OFF_TABLE) or frozen:
+            assert got is None, (repo.parent.name, command, got)
+        else:
+            assert got is not None and "Refused: " in got, (repo.parent.name, command, got)
+        for agent in JUDGES:
             got = _judge(agent, command, repo)
-            if kind == "none" or (kind == "frozen" and agent == "coder" and repo == every):
+            if kind == "none":
                 assert got is None, (agent, repo.parent.name, command, got)
                 continue
             assert got is not None and "(0196" in got, (agent, command, got)
@@ -92,12 +105,18 @@ def test_a_frozen_form_chained_with_another_install_refuses(
     # 0196: every segment is judged, and a frozen form behind a prefix word is never the exception.
     repo = _repo(tmp_path, list(INSTALL_ECOSYSTEMS))
     command = row["command"]
-    assert _judge("coder", command, repo) is None
     for chained in (f"{command} && npm install left-pad", f"pip install x; {command}"):
         assert _judge("coder", chained, repo) is not None, chained
-    assert _judge("coder", f"cd {repo} && {command}", repo) is None
     for prefixed in (f"FOO=1 {command}", f"pnpm exec {command}"):
         assert _judge("coder", prefixed, repo) is not None, prefixed
+
+
+@pytest.mark.parametrize("command", ["npm ci --ignore-scripts", "cargo fetch --locked"])
+def test_a_coders_frozen_form_runs_with_its_ecosystem_listed(command: str, tmp_path: Path) -> None:
+    # 0196, 228 S3c: the coder's frozen install row, admitted with its ecosystem enabled.
+    repo = _repo(tmp_path, list(INSTALL_ECOSYSTEMS))
+    assert _judge("coder", command, repo) is None
+    assert _judge("coder", f"cd {repo} && {command}", repo) is None
 
 
 def test_the_refusal_names_what_and_the_frozen_form() -> None:
@@ -141,8 +160,11 @@ def test_the_installs_key_reads_in_order(tmp_path: Path) -> None:
     assert loaded is not None and loaded.dependencies.installs == ("go", "npm")
 
 
-def test_the_kernel_wrapper_check_leaves_an_admitted_install_bare() -> None:
-    # 0196: the frozen form needs the registry, so the confine check never wraps it.
+def test_the_kernel_wrapper_check_never_admits_an_install() -> None:
+    # 0196, 228 S3b: the confine check refuses an install by its grammar, never as a test.
+    flags = confine.PARSER.parse_args([])
     for command in ("pnpm install --frozen-lockfile --ignore-scripts", "uv sync --frozen"):
-        assert not confine._is_test(command.split(), "/", "/"), command
-    assert confine._is_test(["pnpm", "test"], "/", "/")
+        got = confine.judge(_b("coder", command), flags)
+        assert got is not None and "Refused: " in got, command
+    got = confine.judge(_b("coder", "pnpm test"), flags)
+    assert got is not None and "Refused: " not in got

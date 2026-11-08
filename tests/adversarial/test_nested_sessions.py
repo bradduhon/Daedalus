@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.adversarial.corpus import NESTED, assert_denied
+from tests.adversarial.corpus import CODER_REFUSED, NESTED, assert_denied
 from tests.hook_chain import CHAINS
 from tests.payloads import _b
 
@@ -79,7 +79,9 @@ def test_claude_by_versioned_or_real_path_is_denied(
 @pytest.mark.parametrize("agent", NAMED)
 @pytest.mark.parametrize("command", ("claude -p hi", "env claude -p hi", "nohup claude -p hi"))
 def test_claude_by_name_refusal_names_the_nested_session(agent: str, command: str) -> None:
-    assert_denied(_b(agent, command), NESTED)
+    # 228 S3b: the coder grammar refuses a leading wrapper by name before the word it runs.
+    wrapped = agent == "coder" and not command.startswith("claude")
+    assert_denied(_b(agent, command), *((CODER_REFUSED,) if wrapped else (NESTED,)))
 
 
 @pytest.mark.parametrize("agent", NAMED)
