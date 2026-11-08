@@ -555,10 +555,14 @@ def _ignore_text_problem(path: str, rel: list[str] | None) -> bool:
     return whitelists_env(data.decode("utf-8", "replace"), rel)
 
 
+def _env_or_ignore_name(name: str) -> bool:
+    return name in ENV_IGNORE_FILES or env_name(name)
+
+
 def env_whitelist_reason(folder: str) -> str | None:
     # 0192: every ignore file under folder and on the way down to it, read for a `!` line that
     # reaches a .env name, when a .env file sits where that ignore file applies.
-    found = _walk(folder, lambda name: name in ENV_IGNORE_FILES or env_name(name))
+    found = _walk(folder, _env_or_ignore_name)
     if found is None:
         return R_ENV_WALK_CAP.format(path=folder)
     envs = [p for p in found if env_name(os.path.basename(p))]
@@ -618,11 +622,32 @@ def env_walk(folder: str) -> list[str] | None:
     return _walk(folder, env_name)
 
 
+# suite-cleanup: one walk per folder, filter, caps and folder stamp in a process; tests clear it.
+WALK_MEMO: dict[tuple[object, ...], list[str] | None] = {}
+WALK_MEMO_MAX = 256
+
+
 def _walk(folder: str, want: Callable[[str], bool]) -> list[str] | None:
     # 0192, issue 152: the files under folder whose name want admits; None past the cap.
+    real = os.path.realpath(folder)
+    try:
+        info = os.stat(real)
+        stamp: tuple[int, int] | None = (info.st_mtime_ns, info.st_size)
+    except OSError:
+        stamp = None
+    key = (real, want, stamp, ENV_WALK_ENTRIES, ENV_WALK_DEPTH)
+    if key not in WALK_MEMO:
+        if len(WALK_MEMO) >= WALK_MEMO_MAX:
+            WALK_MEMO.clear()
+        WALK_MEMO[key] = _walk_tree(real, want)
+    found = WALK_MEMO[key]
+    return None if found is None else list(found)
+
+
+def _walk_tree(real: str, want: Callable[[str], bool]) -> list[str] | None:
     found: list[str] = []
     seen = 0
-    pending = [(os.path.realpath(folder), 0)]
+    pending = [(real, 0)]
     while pending:
         here, depth = pending.pop()
         try:

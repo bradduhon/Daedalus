@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -721,6 +722,34 @@ def test_env_walk_skips_git_and_node_modules_and_refuses_past_its_cap(
     assert credential_paths.env_walk(str(root)) is None
     reason = evaluate(HOOK, _bash_in(root, "auditor", "grep -r x ."))
     assert reason is not None and "cannot rule out a .env file" in reason
+
+
+def test_env_walk_walks_a_folder_once_per_filter_and_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # suite-cleanup: a repeated walk is read from the memo; a changed cap walks again.
+    from lib import credential_paths
+
+    walked: list[str] = []
+    real_walk = credential_paths._walk_tree
+
+    def counted(real: str, want: Callable[[str], bool]) -> list[str] | None:
+        walked.append(real)
+        return real_walk(real, want)
+
+    monkeypatch.setattr(credential_paths, "_walk_tree", counted)
+    root = tmp_path.resolve() / "walk"
+    (root / "a").mkdir(parents=True)
+    (root / "a" / ".env").write_text("x\n", encoding="utf-8")
+    for _ in range(3):
+        assert credential_paths.env_walk(str(root)) == [str(root / "a" / ".env")]
+    assert walked == [str(root)]
+    assert credential_paths.env_whitelist_reason(str(root)) is None
+    assert credential_paths.env_whitelist_reason(str(root)) is None
+    assert walked == [str(root)] * 2
+    monkeypatch.setattr(credential_paths, "ENV_WALK_ENTRIES", 1)
+    assert credential_paths.env_walk(str(root)) is None
+    assert walked == [str(root)] * 3
 
 
 @pytest.mark.parametrize("name", [".ENV", ".Env.local", ".env.LOCAL"])

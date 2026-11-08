@@ -309,6 +309,16 @@ def _fresh_project_root() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _fresh_env_walks() -> Iterator[None]:
+    # suite-cleanup: the .env walk memo lives per process; each test walks a cold tree.
+    from lib import credential_paths
+
+    credential_paths.WALK_MEMO.clear()
+    yield
+    credential_paths.WALK_MEMO.clear()
+
+
+@pytest.fixture(autouse=True)
 def _kernel_rules_off(monkeypatch: pytest.MonkeyPatch) -> None:
     # 0048, issue 86: no live probe in-process, and the test chain judges the coder without the
     # confine check, which never steps aside; tests/test_confine.py restores both.
