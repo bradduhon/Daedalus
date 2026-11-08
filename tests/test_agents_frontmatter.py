@@ -823,3 +823,32 @@ def test_a_unit_needs_scope_and_hunt_only_when_it_touches_a_listed_file(
     assert listed == HUNT_FILES
     got = any(f.startswith(p) if p.endswith("/") else f == p for f in files for p in listed)
     assert got is needs
+
+
+# 227 part 2: the coder method packs reach a unit of the class by the brief's `Packs:` line.
+PACK_FILES = (
+    "packs/coder/secure-architecture/rules.md",
+    "packs/coder/adversarial-coding/rules.md",
+)
+
+
+def test_coder_reads_the_packs_as_method_and_names_the_ids() -> None:
+    text = (AGENTS / "coder.md").read_text()
+    section = _build_step(text, "## Build only the ask (227)", "\n## ")
+    for sentence in (
+        "Read every file on the brief's `Packs:` line before the first edit.",
+        "Apply each rule as method, never as a reason to change what the brief asks.",
+        "Name in the ledger notes the rule ids applied and any declined with its reason, in the"
+        " shape `packs: SA-1 SA-4 AC-1 AC-4; declined AC-5 (no nesting in this unit)`.",
+    ):
+        assert sentence in section, sentence
+    assert section.index("The hunt list, one list") < section.index("`Packs:` line")
+
+
+def test_verify_skill_judges_pack_ids_as_receipts() -> None:
+    text = " ".join(VERIFY_SKILL.read_text().split())
+    hunt = text.split("Hunt pass (227).", 1)[1].split("- The hunt list: ", 1)[0]
+    assert (
+        "The coder's pack ids are receipts, not claims; judge the diff; a rule the coder names"
+        " and did not follow is a `code` row only when a brief requirement is unmet because of it."
+    ) in hunt

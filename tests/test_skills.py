@@ -2127,3 +2127,33 @@ def test_release_scans_for_secrets_without_the_asset_files() -> None:
     assert '`"<base>..<branch> -- . :(exclude)assets/"`, run it exactly as given (0192)' in (
         releaser
     )
+
+
+CODER_PACKS = (
+    "<plugin root>/packs/coder/secure-architecture/rules.md",
+    "<plugin root>/packs/coder/adversarial-coding/rules.md",
+)
+
+
+def _build_step4() -> str:
+    text = (REPO_ROOT / "skills" / "build" / "SKILL.md").read_text()
+    return " ".join(text.split("4. Brief by file", 1)[1].split("5. Dispatch.", 1)[0].split())
+
+
+def test_build_skill_gives_a_class_unit_the_packs_line_after_hunt() -> None:
+    # 227 part 2: the `Packs:` bullet follows the `Hunt:` bullet and names both packs in full.
+    step4 = _build_step4()
+    bullet = step4.split("- Coder packs (227). ", 1)[1]
+    assert step4.index("- Hunt: ") < step4.index("- Coder packs (227). ")
+    assert "one line directly after the `Hunt:` line" in bullet
+    assert f"`Packs: {CODER_PACKS[0]}, {CODER_PACKS[1]}`" in bullet
+    assert "written with the plugin root out in full" in bullet
+    for path in CODER_PACKS:
+        assert (REPO_ROOT / path.removeprefix("<plugin root>/")).is_file(), path
+
+
+def test_build_skill_gives_no_packs_line_outside_the_class() -> None:
+    bullet = _build_step4().split("- Coder packs (227). ", 1)[1]
+    assert (
+        "A unit outside the class carries no `Packs:` line unless its plan line names a pack."
+    ) in bullet
