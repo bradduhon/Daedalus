@@ -41,13 +41,8 @@ def _within_bound(call: Callable[[], object]) -> BaseException | object:
     return box[0]
 
 
-@pytest.fixture
-def repo(project_data: Path) -> Path:
-    return project_data.parent.parent
-
-
-def _trains(repo: Path) -> Path:
-    folder = repo / train_state.STATE_DIR
+def _trains(data_repo: Path) -> Path:
+    folder = data_repo / train_state.STATE_DIR
     folder.mkdir(mode=0o700, exist_ok=True)
     return folder
 
@@ -71,25 +66,25 @@ def test_locked_refuses_a_fifo(tmp_path: Path) -> None:
     assert isinstance(_within_bound(enter), locks.LockRefused)
 
 
-def test_train_state_lock_refuses_a_fifo(repo: Path) -> None:
-    os.mkfifo(_trains(repo) / f"{TRAIN}.lock")
-    found = _within_bound(lambda: train_state.save(repo, TRAIN, {"train_id": TRAIN}))
+def test_train_state_lock_refuses_a_fifo(data_repo: Path) -> None:
+    os.mkfifo(_trains(data_repo) / f"{TRAIN}.lock")
+    found = _within_bound(lambda: train_state.save(data_repo, TRAIN, {"train_id": TRAIN}))
     assert isinstance(found, train_state.TrainStateError)
     assert "is not a regular file" in str(found) and "Next:" in str(found)
-    assert not train_state.state_path(repo, TRAIN).exists()
+    assert not train_state.state_path(data_repo, TRAIN).exists()
 
 
-def test_bindings_lock_refuses_a_fifo(repo: Path) -> None:
-    os.mkfifo(_trains(repo) / f"{TRAIN}.bindings.lock")
-    found = _within_bound(lambda: unit_binding.record_dispatch(repo, TRAIN, f"{TRAIN}-u1"))
+def test_bindings_lock_refuses_a_fifo(data_repo: Path) -> None:
+    os.mkfifo(_trains(data_repo) / f"{TRAIN}.bindings.lock")
+    found = _within_bound(lambda: unit_binding.record_dispatch(data_repo, TRAIN, f"{TRAIN}-u1"))
     assert isinstance(found, str) and "is not a regular file" in found and "Next:" in found
-    found = _within_bound(lambda: unit_binding.mark_finished(repo, TRAIN, f"{TRAIN}-u1"))
+    found = _within_bound(lambda: unit_binding.mark_finished(data_repo, TRAIN, f"{TRAIN}-u1"))
     assert isinstance(found, str) and "is not a regular file" in found
 
 
-def test_audit_lock_refuses_a_fifo(repo: Path, hook_input: Any) -> None:
-    write_train_marker(repo)
-    folder = repo / ".claude" / "daedalus" / "audit"
+def test_audit_lock_refuses_a_fifo(data_repo: Path, hook_input: Any) -> None:
+    write_train_marker(data_repo)
+    folder = data_repo / ".claude" / "daedalus" / "audit"
     folder.mkdir(mode=0o700)
     os.mkfifo(folder / "sess-test.lock")
     found = _within_bound(lambda: audit.audit_append(hook_input()))

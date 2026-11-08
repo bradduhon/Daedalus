@@ -21,15 +21,8 @@ from tests.conftest import (
     append_handback,
     audit_records,
     replay_auditor,
-    write_train_marker,
 )
 from tests.test_operator_gates import GATE_KEY, exempt_round
-
-
-@pytest.fixture
-def project_data(project_data: Path, repo_cwd: Path) -> Path:
-    write_train_marker(repo_cwd)
-    return project_data
 
 
 def _verify(*args: Path | str) -> subprocess.CompletedProcess[str]:
@@ -41,7 +34,7 @@ def _verify(*args: Path | str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _write_chain(project_data: Path, hook_input: Any, n: int) -> Path:
+def _write_chain(marked_data: Path, hook_input: Any, n: int) -> Path:
     for i in range(n):
         audit.audit_append(hook_input(tool_use_id=f"t{i}"))
     return audit.log_path("sess-test", hook_input()["cwd"])
@@ -54,12 +47,12 @@ def _held(path: Path) -> Any:
 
 
 def test_verify_chain_takes_the_audit_lock(
-    project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    marked_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch, capsys: Any
 ) -> None:
     # issue 10: a held lock is waited for, then refused at a bounded deadline with a Next line.
     import verify_audit_chain
 
-    path = _write_chain(project_data, hook_input, 2)
+    path = _write_chain(marked_data, hook_input, 2)
     monkeypatch.setattr(audit, "LOCK_TIMEOUT_S", 0.2)
     handle = _held(path)
     try:
@@ -89,10 +82,10 @@ def _read_with(reader: str, path: Path) -> int:
 
 @pytest.mark.parametrize("reader", ["verify", "report", "proof"])
 def test_readers_wait_for_a_held_lock_and_do_not_read_a_partial_line(
-    project_data: Path, hook_input: Any, reader: str
+    marked_data: Path, hook_input: Any, reader: str
 ) -> None:
     # issue 10: a reader that meets an append in flight waits for it, never for half a line.
-    path = _write_chain(project_data, hook_input, 3)
+    path = _write_chain(marked_data, hook_input, 3)
     text = path.read_text(encoding="utf-8")
     cut = len(text) - 40
     handle = _held(path)
@@ -113,13 +106,13 @@ def test_readers_wait_for_a_held_lock_and_do_not_read_a_partial_line(
 
 
 def test_hooks_live_read_and_hook_appends_do_not_deadlock(
-    project_data: Path, hook_input: Any, repo_cwd: Path
+    marked_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
     # issue 10: the runner's hooks-live read and hook appends serialize; neither waits forever.
     from lib.audit_proof import hooks_live, read_chain
     from lib.train_runner import STEP_NEEDLE
 
-    path = _write_chain(project_data, hook_input, 1)
+    path = _write_chain(marked_data, hook_input, 1)
 
     def appends() -> None:
         for i in range(30):
@@ -138,15 +131,15 @@ def test_hooks_live_read_and_hook_appends_do_not_deadlock(
         fcntl.flock(free, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
-def test_intact_chain_verifies(project_data: Path, hook_input: Any) -> None:
-    path = _write_chain(project_data, hook_input, 50)
+def test_intact_chain_verifies(marked_data: Path, hook_input: Any) -> None:
+    path = _write_chain(marked_data, hook_input, 50)
     result = _verify(path)
     assert result.returncode == 0
     assert result.stdout.startswith("OK: 50 records, chain intact, head=")
 
 
-def test_tampered_record_is_detected_at_its_line(project_data: Path, hook_input: Any) -> None:
-    path = _write_chain(project_data, hook_input, 50)
+def test_tampered_record_is_detected_at_its_line(marked_data: Path, hook_input: Any) -> None:
+    path = _write_chain(marked_data, hook_input, 50)
     lines = path.read_text().splitlines()
     rec = json.loads(lines[24])
     rec["tool_input"]["command"] = "rm -rf /"
@@ -157,8 +150,8 @@ def test_tampered_record_is_detected_at_its_line(project_data: Path, hook_input:
     assert result.stdout.startswith("BROKEN line 25: hash mismatch")
 
 
-def test_deleted_record_breaks_sequence(project_data: Path, hook_input: Any) -> None:
-    path = _write_chain(project_data, hook_input, 10)
+def test_deleted_record_breaks_sequence(marked_data: Path, hook_input: Any) -> None:
+    path = _write_chain(marked_data, hook_input, 10)
     lines = path.read_text().splitlines()
     del lines[4]
     path.write_text("\n".join(lines) + "\n")
@@ -167,8 +160,8 @@ def test_deleted_record_breaks_sequence(project_data: Path, hook_input: Any) -> 
     assert "BROKEN line 5: seq 6 != 5" in result.stdout
 
 
-def test_empty_file_is_ok_zero(project_data: Path) -> None:
-    path = project_data / "empty.jsonl"
+def test_empty_file_is_ok_zero(marked_data: Path) -> None:
+    path = marked_data / "empty.jsonl"
     path.write_text("")
     result = _verify(path)
     assert result.returncode == 0
@@ -233,14 +226,14 @@ def test_directory_path_is_broken_with_next(tmp_path: Path) -> None:
     assert "Traceback" not in result.stderr
 
 
-def test_cli_hooks_live_fails_outside_a_hooked_session(project_data: Path, repo_cwd: Path) -> None:
+def test_cli_hooks_live_fails_outside_a_hooked_session(marked_data: Path, repo_cwd: Path) -> None:
     result = _verify("--hooks-live", "--repo", repo_cwd)
     assert result.returncode == 1
     assert result.stdout.startswith("NOT LIVE:") and "Next:" in result.stdout
 
 
 def test_cli_hooks_live_passes_on_its_own_record(
-    project_data: Path, hook_input: Any, repo_cwd: Path
+    marked_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
     command = f"python3 x/verify_audit_chain.py --hooks-live --repo {repo_cwd}"
     audit.audit_append(hook_input(tool_input={"command": command}))
@@ -259,7 +252,7 @@ def _live_in_process(repo: Path, hook_input: Any, capsys: Any) -> tuple[int, lis
 
 
 def test_hooks_live_names_agent_files_changed_after_the_first_record(
-    project_data: Path,
+    marked_data: Path,
     hook_input: Any,
     repo_cwd: Path,
     tmp_path: Path,
@@ -319,7 +312,7 @@ def _summary_written(hook_input: Any, repo_cwd: Path) -> None:
 
 
 def test_cli_hooks_live_records_start_seq_once(
-    project_data: Path, hook_input: Any, repo_cwd: Path
+    marked_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
     result = _hooks_live_start(hook_input, repo_cwd)
     assert result.returncode == 0, result.stdout
@@ -331,7 +324,7 @@ def test_cli_hooks_live_records_start_seq_once(
 
 
 def test_cli_approved_passes_on_train_a_and_refuses_without_its_hand_back(
-    project_data: Path, hook_input: Any, repo_cwd: Path
+    marked_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
     # issue 57: --approved finds Train A's hand-back; 59: its line names no tip, so it refuses.
     assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
@@ -362,7 +355,7 @@ def test_cli_approved_passes_on_train_a_and_refuses_without_its_hand_back(
 
 
 def test_cli_approved_ignores_a_verdict_before_start_seq(
-    project_data: Path, hook_input: Any, repo_cwd: Path
+    marked_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
     # issue 57: an approval logged before this train's hooks-live belongs to an earlier train.
     replay_auditor(repo_cwd, "sess-test")
@@ -403,7 +396,7 @@ def _approved_train(hook_input: Any, repo_cwd: Path, verdict: str) -> None:
     _summary_written(hook_input, repo_cwd)
 
 
-def test_cli_approved_round_trip(project_data: Path, hook_input: Any, repo_cwd: Path) -> None:
+def test_cli_approved_round_trip(marked_data: Path, hook_input: Any, repo_cwd: Path) -> None:
     tip = _tip(repo_cwd)
     _approved_train(hook_input, repo_cwd, f"[VERDICT: APPROVED] tip={tip} ok")
     _judge(repo_cwd, tip, seq=2)
@@ -416,7 +409,7 @@ def test_cli_approved_round_trip(project_data: Path, hook_input: Any, repo_cwd: 
 
 
 def test_cli_approved_prints_the_exemption_path(
-    project_data: Path, hook_input: Any, repo_cwd: Path
+    marked_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
     # 62, 0133: a rejected round whose every finding is exempted passes, and says so.
     tip = _tip(repo_cwd)
@@ -437,12 +430,12 @@ def test_cli_approved_prints_the_exemption_path(
 
 
 def test_second_hooks_live_in_a_new_session_moves_the_bound(
-    project_data: Path, hook_input: Any, repo_cwd: Path
+    marked_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
     # issue 60: a train resumed in a new session bounds its verdict search in that session's log.
     from lib import train_runner
 
-    _write_chain(project_data, hook_input, 20)
+    _write_chain(marked_data, hook_input, 20)
     assert _hooks_live_start(hook_input, repo_cwd).returncode == 0
     first = train_state.load(repo_cwd, APPROVED_TRAIN)
     assert (first["start_seq"], first["audit_session"]) == (21, "sess-test")
@@ -477,7 +470,7 @@ def test_second_hooks_live_in_a_new_session_moves_the_bound(
 
 
 def test_cli_approved_failure_exits_one_with_next(
-    project_data: Path, hook_input: Any, repo_cwd: Path
+    marked_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
     _approved_train(hook_input, repo_cwd, "[VERDICT: REJECTED] a.py:1 high")
     result = _verify("--approved", "20261016-120000", "--repo", repo_cwd)

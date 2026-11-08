@@ -16,12 +16,6 @@ from tests.conftest import git, write_train_marker
 BEGIN = {"command": "python3 /p/scripts/daedalus_workspace.py begin --repo /r"}
 
 
-@pytest.fixture
-def project_data(project_data: Path, repo_cwd: Path) -> Path:
-    write_train_marker(repo_cwd)
-    return project_data
-
-
 _git = partial(git, check=False)
 
 
@@ -252,7 +246,7 @@ def test_exact_marker_is_accepted(repo_cwd: Path, hook_input: Any, content: str)
 
 
 def test_tracked_check_runs_once_per_process(
-    project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
+    marked_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[list[str]] = []
     real = subprocess.run
@@ -268,7 +262,7 @@ def test_tracked_check_runs_once_per_process(
 
 
 def test_record_carries_project_root_and_git_source(
-    repo_cwd: Path, project_data: Path, hook_input: Any
+    repo_cwd: Path, marked_data: Path, hook_input: Any
 ) -> None:
     rec = audit.audit_append(hook_input())
     assert rec is not None
@@ -286,7 +280,7 @@ def test_record_marks_cwd_fallback(tmp_path: Path, hook_input: Any) -> None:
     assert (plain / ".claude" / "daedalus" / "audit" / "sess-test.jsonl").exists()
 
 
-def test_root_fields_are_hashed(project_data: Path, hook_input: Any) -> None:
+def test_root_fields_are_hashed(marked_data: Path, hook_input: Any) -> None:
     rec = audit.audit_append(hook_input())
     assert rec is not None
     assert audit.record_hash(rec) == rec["hash"]
@@ -295,7 +289,7 @@ def test_root_fields_are_hashed(project_data: Path, hook_input: Any) -> None:
 
 
 def test_ls_files_failure_names_the_layout_not_history(
-    repo_cwd: Path, project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
+    repo_cwd: Path, marked_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     real = subprocess.run
 

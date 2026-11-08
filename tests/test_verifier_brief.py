@@ -11,6 +11,7 @@ from lib.train_summary import Reply
 from lib.workspace import VERIFIED_LINE
 
 from tests.conftest import REPO_ROOT
+from tests.helpers import flatten
 from tests.test_train_state_print import RECORDS, _section, _stop, _text
 
 VERIFIER = REPO_ROOT / "agents" / "verifier.md"
@@ -27,12 +28,8 @@ HOOKS = (
 )
 
 
-def _flat(text: str) -> str:
-    return " ".join(text.split())
-
-
 def _body(head: str, end: str) -> str:
-    return _flat(VERIFIER.read_text(encoding="utf-8")).split(head, 1)[1].split(end, 1)[0]
+    return flatten(VERIFIER.read_text(encoding="utf-8")).split(head, 1)[1].split(end, 1)[0]
 
 
 def test_frontmatter_keeps_its_tools_model_and_hooks() -> None:
@@ -199,7 +196,7 @@ def test_claims_mode_checks_attachment_beside_existence() -> None:
     assert "existence (its definition) and attachment (a caller on the path it governs)" in mode
     assert "existence alone is OVERSTATED" in mode
     kind = REPO_ROOT / "skills" / "document" / "kinds" / "public-docs" / "SKILL.md"
-    writer = _flat(kind.read_text(encoding="utf-8"))
+    writer = flatten(kind.read_text(encoding="utf-8"))
     assert "carries a receipt that includes the caller grep" in writer
 
 
@@ -220,7 +217,7 @@ def test_orchestrator_sends_the_brief_and_counts_only_code_and_scope_rows() -> N
         phase2.split("### Unit mode", 1)[0]
         + phase2.split("### Unit mode", 1)[1].split("### Claims mode", 1)[0]
     )
-    step = _flat(phase2)
+    step = flatten(phase2)
     assert (
         "The verifier judges each unit's diff against its brief, never against the coder's "
         "report (0128)" in step
@@ -311,7 +308,7 @@ VERIFY_SKILL = REPO_ROOT / "skills" / "verify" / "SKILL.md"
 
 def test_verify_skill_carries_the_verifier_step_and_claims_mode() -> None:
     # spec 3.4, 0127, 0128: the verify phase holds the verifier step, its routes and claims mode.
-    text = _flat(VERIFY_SKILL.read_text(encoding="utf-8"))
+    text = flatten(VERIFY_SKILL.read_text(encoding="utf-8"))
     method = text.split("## What the phase does well", 1)[1].split("## Evidence that ends it", 1)[0]
     assert "never against the coder's report (0128)" in method
     assert "The coder's report is receipts only" in method
@@ -354,7 +351,7 @@ def test_the_verifier_opens_the_named_set_in_one_turn_and_never_searches_for_it(
         in step1
     )
     assert "search only for an importer the map's `fan_in` names" in step1
-    step = _flat(VERIFY_SKILL.read_text(encoding="utf-8"))
+    step = flatten(VERIFY_SKILL.read_text(encoding="utf-8"))
     assert (
         "Then build the `Open:` line (item 15), which names once, as absolute paths, every file "
         "the verifier opens" in step
@@ -372,7 +369,7 @@ def test_the_verifier_opens_the_named_set_in_one_turn_and_never_searches_for_it(
 
 def test_the_read_line_and_the_full_diff_carry_the_asset_tail() -> None:
     # 0192: the session prints the tail once; the Read line and the verifier's diff copy it.
-    step = _flat(VERIFY_SKILL.read_text(encoding="utf-8"))
+    step = flatten(VERIFY_SKILL.read_text(encoding="utf-8"))
     assert (
         "first run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py assets --repo <repo> "
         "--base <lock sha> --tip <b>`" in step
@@ -398,7 +395,7 @@ def test_the_read_line_and_the_full_diff_carry_the_asset_tail() -> None:
 
 def test_the_verify_step_asks_the_operator_each_check_and_never_fetches_the_site() -> None:
     # 0164, 0192: operator checks and the dev server check become pass, fail or skip questions.
-    text = _flat(VERIFY_SKILL.read_text(encoding="utf-8"))
+    text = flatten(VERIFY_SKILL.read_text(encoding="utf-8"))
     route = text.split(" 5. Route the verdict.", 1)[1].split("### Claims mode", 1)[0]
     checks = route.split("- Operator checks (0164, 0192).", 1)[1]
     for part in (
@@ -427,7 +424,7 @@ def test_the_verify_step_asks_the_operator_each_check_and_never_fetches_the_site
 
 def test_the_second_refutation_escalates_and_the_third_reaches_the_operator() -> None:
     # 0187, issue 115: a fresh coder on the escalated model takes the second refutation.
-    text = _flat(VERIFY_SKILL.read_text(encoding="utf-8"))
+    text = flatten(VERIFY_SKILL.read_text(encoding="utf-8"))
     nxt = text.split("## Suggested next", 1)[1]
     assert (
         "the first time on its own for one fix pass, the second time by a fresh coder on the "

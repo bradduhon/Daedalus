@@ -8,8 +8,13 @@ from pathlib import Path
 import pytest
 from lib import jail, shell
 
-from tests.adversarial.corpus import PACKAGE_DOWNLOADS, PACKAGE_INSTALL_CMDS
-from tests.conftest import CFG
+from tests.adversarial.corpus import (
+    PACKAGE_DOWNLOADS,
+    PACKAGE_INSTALL_CMDS,
+    assert_denied,
+)
+from tests.conftest import CFG, WT
+from tests.helpers import RULING_MARKERS
 from tests.hook_chain import (
     decide,
     evaluate,
@@ -104,6 +109,7 @@ def test_a_package_install_is_refused_as_operator_run(command: str) -> None:
     for form in (command, f"{shell.CONFINE_PATH} --unit /w -- {command}"):
         got = evaluate(HOOK, _b("coder", form))
         assert got is not None and "is a package install" in got and "(0196" in got, form
+    _chain_refuses_naming_the_ruling(command)
 
 
 @pytest.mark.parametrize("command", PACKAGE_DOWNLOADS)
@@ -113,6 +119,15 @@ def test_a_download_and_run_tool_is_refused_for_the_operator(command: str) -> No
         got = evaluate(HOOK, _b("coder", form))
         assert got is not None and "downloads a package and runs it" in got, form
         assert "(0196, 0164)" in got and "Next: run the installed binary instead (" in got
+    _chain_refuses_naming_the_ruling(command)
+
+
+def _chain_refuses_naming_the_ruling(command: str) -> None:
+    # 0164, 0196: the whole coder chain in its unit worktree, bare and wrapped; a WORKER_WRAPPERS
+    # word may be refused first, without a ruling.
+    markers = () if command.split()[0] in shell.WORKER_WRAPPERS else RULING_MARKERS
+    for form in (command, f"{shell.CONFINE_PATH} --unit {WT} -- {command}"):
+        assert_denied(_b("coder", f"cd {WT} && {form}"), *markers)
 
 
 @pytest.mark.parametrize(

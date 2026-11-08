@@ -13,6 +13,7 @@ import pytest
 from lib.human_text import DROP_SPANS, EDGE, MIN_WORDS, plain_words
 
 from tests.conftest import REPO_ROOT
+from tests.helpers import phase_text
 
 SKILLS = sorted((REPO_ROOT / "skills").glob("*/SKILL.md"))
 # 0174: the retired train commands ship one release as stubs that print the new command.
@@ -130,21 +131,9 @@ def _standards_skill() -> str:
     return STANDARDS_SKILL.read_text(encoding="utf-8")
 
 
-def _run_phase(name: str) -> str:
-    # 0060: the orchestrator writes the plugin root out in full; its hook refuses the variable.
-    text = (REPO_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
-    return orchestrated(text).replace("${CLAUDE_PLUGIN_ROOT}", "<plugin root>")
-
-
-def orchestrated(text: str) -> str:
-    # 0135, 0174: derived document mode runs in the main session, never in the orchestrator.
-    head, derived, tail = text.partition("### Derived document mode\n")
-    return head + "## " + tail.split("\n## ", 1)[1] if derived else text
-
-
 def _recipe() -> str:
     # 0165: the recipe is the orchestrator's glue plus the phase skills it runs.
-    return "\n".join([_orchestrator(), *(_run_phase(name) for name in RUN_PHASES)])
+    return "\n".join([_orchestrator(), *(phase_text(name) for name in RUN_PHASES)])
 
 
 def _rules() -> str:
@@ -488,7 +477,7 @@ def test_build_train_records_picks_before_any_coder() -> None:
 
 def test_build_train_hands_coders_the_pick_ledger_ids() -> None:
     # 0057, 0083, C10: the ids line follows the two packet lines and precedes the worktree line.
-    phase2 = _run_phase("build")
+    phase2 = phase_text("build")
     brief = phase2.split("holding: the two packet lines", 1)[1]
     assert brief.index("`Pick ledger ids:`") < brief.index("`Worktree: <path>`")
     assert brief.index("`Worktree: <path>`") < brief.index("dispatch `coder`")
@@ -520,7 +509,7 @@ def test_build_train_has_no_unit_cap_or_warm_roster_line() -> None:
         "Each coder is warm for its own unit only.",
     ):
         assert gone not in text, gone
-    phase2 = _run_phase("build")
+    phase2 = phase_text("build")
     assert "`max_concurrent_builders`" in phase2
     assert "one per unit line of its plan block" in phase2
 
@@ -589,7 +578,7 @@ def test_fix_briefs_carry_audit_tests_and_the_tip() -> None:
 def test_complete_check_requires_adversarial_pass_for_jail_check_units() -> None:
     # spec 3.3: the reply check reads the unit's changed files from git diff --name-only.
     jail = "   - Jail check units (spec 3.3)."
-    complete = next(ln for ln in _run_phase("build").splitlines() if ln.startswith(jail))
+    complete = next(ln for ln in phase_text("build").splitlines() if ln.startswith(jail))
     assert "`git diff --name-only <lock sha>...<b>`" in complete
     for path in (
         "`scripts/checks/`",
@@ -747,7 +736,7 @@ def test_build_train_records_choices_plan_packets_and_controls() -> None:
     assert "the jail blocks writes under `src/` and `tests/` for you" not in text + relay
     assert "it never blocks the main session" in relay and "unit worktrees" in relay
     assert "`/daedalus:plan <spec path>`" in _orchestrator()
-    phase1 = " ".join(_run_phase("plan").split())
+    phase1 = " ".join(phase_text("plan").split())
     assert PLUGIN + "daedalus_train.py plan --repo <repo> --path <path>`" in phase1
     assert "it is `<repo>/docs/.tmp/daedalus/<train-id>/plan.md`" in _phase_step("plan", 3)
     assert "`wire: none`" in phase1 and "validate-only" in phase1
@@ -757,13 +746,13 @@ def test_build_train_records_choices_plan_packets_and_controls() -> None:
     assert "`<repo>/docs/.tmp/daedalus/<train-id>/standards-packet.md`" in phase1
     assert "`Contract: <contract path> sha256=<hex>`" in phase1
     assert "`Standards: <standards path> sha256=<hex>`" in phase1
-    phase2 = " ".join(_run_phase("build").split())
+    phase2 = " ".join(phase_text("build").split())
     for line in ("`Dispatch: coder`", "`Prompt file: <brief path>`", "`Expect: "):
         assert line in phase2, line
     complete = _phase_row("build", "STATUS: COMPLETE]")
     assert "contract=<12 hex> standards=<12 hex>`" in complete
     assert "Compare its `contract=` and `standards=` values" in _phase_step("build", 7)
-    phase3 = " ".join(_run_phase("audit").split())
+    phase3 = " ".join(phase_text("audit").split())
     controls = PLUGIN + "audit_report.py --repo <repo> --session <id> --controls`"
     assert controls in phase3
     assert phase3.index(controls) < phase3.index("Run the summary command now")
@@ -790,7 +779,7 @@ def test_build_train_records_choices_plan_packets_and_controls() -> None:
 
 def test_build_train_phase1_has_no_branch_switch() -> None:
     # 0024, C11: the lock script owns every branch move in the plan phase.
-    phase1 = _run_phase("plan")
+    phase1 = phase_text("plan")
     assert "git switch" not in phase1 and "git checkout" not in phase1
 
 
@@ -930,14 +919,14 @@ def _section(text: str, head: str, nxt: str) -> str:
 
 def _phase_step(name: str, first: int, last: int | None = None) -> str:
     # 0165: steps <first> to <last> of a phase skill the orchestrator reads and runs.
-    body = _run_phase(name).split(f"\n{first}. ", 1)[1]
+    body = phase_text(name).split(f"\n{first}. ", 1)[1]
     end = first if last is None else last
     return re.split(rf"\n(?:{end + 1}\. |#)", body, maxsplit=1)[0]
 
 
 def _phase_row(name: str, status: str) -> str:
     # 0165: one row of a phase skill's reply table, by its status line.
-    return next(ln.strip() for ln in _run_phase(name).splitlines() if f"| `[{status}" in ln)
+    return next(ln.strip() for ln in phase_text(name).splitlines() if f"| `[{status}" in ln)
 
 
 def test_relay_passes_a_recorded_plan_to_the_orchestrator() -> None:
@@ -961,7 +950,7 @@ def test_relay_passes_a_recorded_plan_to_the_orchestrator() -> None:
 def test_build_train_saves_and_commits_the_contract() -> None:
     # 0011: lock commits the packet (test_lock_* set); the summary records path and version.
     text = _recipe()
-    phase1 = _run_phase("plan")
+    phase1 = phase_text("plan")
     assert '"Save the packet to <contract path>, then end the reply with the packet."' in phase1
     assert "The lock script owns this commit; contract-spec never commits." in phase1
     lock = (
@@ -972,7 +961,7 @@ def test_build_train_saves_and_commits_the_contract() -> None:
     assert phase1.index("Dispatch `contract-spec`") < phase1.index(lock)
     assert "`contract unchanged, no commit`" in phase1
     assert "git commit" not in phase1 and "git switch -c" not in phase1
-    phase2 = _run_phase("build")
+    phase2 = phase_text("build")
     assert '"Save the revised packet to <contract path>, overwriting it,' in phase2
     assert "which commits `Revise contract <name> v<N>`" in phase2
     assert "       Contract: contracts/<name>.md v<packet_version>\n" in text
@@ -1011,7 +1000,7 @@ def test_build_train_branches_the_charter_in_preconditions() -> None:
     pre = _section(_run_skill(), "## Preconditions", "## Relay")
     assert BEGIN in pre
     assert "branches a declared Charter" in pre
-    phase3 = _run_phase("audit")
+    phase3 = phase_text("audit")
     assert "switch -c" not in phase3
     assert "it is empty when the contract commit landed" in phase3
     # R4-M3: the howto says where the Charter branch comes from.
@@ -1266,7 +1255,7 @@ def test_build_train_requires_the_reported_branch_to_be_the_created_one() -> Non
 
 
 def test_build_train_creates_each_coder_worktree() -> None:
-    phase2 = _run_phase("build")
+    phase2 = phase_text("build")
     assert (
         PLUGIN + "daedalus_workspace.py create --repo <repo> "
         "--name <train-id>-<unit-slug> --base daedalus/<train-id>`"

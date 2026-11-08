@@ -22,6 +22,7 @@ from lib.config import ConfigError, load_config
 from tests.adversarial.corpus import (
     CONFINE_RUNNERS,
     DEV_SERVERS,
+    GAME_RUNNERS,
     INTERPRETER_BINS,
     TERRAFORM_INIT_FORM,
     TERRAFORM_MUTATIONS,
@@ -33,6 +34,7 @@ from tests.adversarial.corpus import (
     assert_denied,
 )
 from tests.conftest import CFG, CWD, WT
+from tests.helpers import RULING_MARKERS
 from tests.hook_chain import (
     CHAINS,
     decide,
@@ -328,16 +330,25 @@ def test_each_new_runner_needs_the_wrapper(command: str) -> None:
     # 0048, issue 91: bare, the runner is refused; wrapped, the confine check passes it.
     bare = _b("coder", f"cd {WT} && {command}")
     assert evaluate("confine", bare) == load("confine").R_CONFINE
-    assert_denied(bare)
-    assert evaluate("confine", _b("coder", f"cd {WT} && {WRAP} {command}")) is None
+    wrapped = _b("coder", f"cd {WT} && {WRAP} {command}")
+    assert evaluate("confine", wrapped) is None
+    if command not in GAME_RUNNERS or command.split()[0] in shell.WORKER_WRAPPERS:
+        assert_denied(bare)
+        return
+    # 0164: the game rows must admit; the whole chain refuses them bare and admits them wrapped.
+    assert_denied(bare, "kernel wrapper")
+    decision = decide(wrapped, CFG)
+    assert decision.allow and not decision.warn, (command, decision.reason)
 
 
 def _refused_bare_and_wrapped(command: str, reason: str) -> None:
     # 0164: through a WORKER_WRAPPERS word, the chain may refuse the wrapper first.
-    marker = () if command.split()[0] in shell.WORKER_WRAPPERS else (reason,)
+    lead = command.split()[0] in shell.WORKER_WRAPPERS
     for form in (f"cd {WT} && {command}", f"cd {WT} && {WRAP} {command}"):
         assert evaluate("confine", _b("coder", form)) == reason, form
-        assert_denied(_b("coder", form), *marker)
+        assert_denied(_b("coder", form), *(() if lead else (reason,)))
+        # 0164, 0158, 0196: the chain's refusal names its ruling.
+        assert_denied(_b("coder", form), *(() if lead else RULING_MARKERS))
 
 
 @pytest.mark.usefixtures("kernel")

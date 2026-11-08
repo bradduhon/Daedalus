@@ -5,13 +5,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from lib import train_runner, train_state, unit_binding
 
 from tests import test_train_runner as runner_tests
 from tests.test_train_runner import _plan, _probe_stage, _started, _state, _units, _write_train
 
 # The runner tests' fixtures: a temp HOME, a plugin root and a one-commit repository.
-_isolated_env = runner_tests._isolated_env
+pytestmark = pytest.mark.usefixtures("isolated_env")
 plugin = runner_tests.plugin
 repo = runner_tests.repo
 

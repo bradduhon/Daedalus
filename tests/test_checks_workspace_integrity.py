@@ -50,11 +50,8 @@ class TestRound3DotGitWrites:
         assert not d.allow and ".git/" in d.reason
 
 
+@pytest.mark.usefixtures("fake_plugin_data_env")
 class TestFinalDataDir:
-    @pytest.fixture(autouse=True)
-    def _env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", DATA)
-
     @pytest.mark.parametrize("agent", ["coder", "charter-docs", "contract-spec"])
     @pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
     def test_tool_writes_block_for_every_agent(self, agent: str | None, tool: str) -> None:

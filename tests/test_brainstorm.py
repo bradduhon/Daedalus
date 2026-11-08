@@ -9,6 +9,7 @@ import re
 import pytest
 
 from tests.conftest import REPO_ROOT
+from tests.helpers import flatten
 
 BRAINSTORM = REPO_ROOT / "skills" / "brainstorm" / "SKILL.md"
 PLAN = REPO_ROOT / "skills" / "plan" / "SKILL.md"
@@ -56,10 +57,6 @@ def _text() -> str:
 
 def _step(text: str, n: int) -> str:
     return text.split(f"\n{n}. ", 1)[1].split(f"\n{n + 1}. ", 1)[0]
-
-
-def _flat(text: str) -> str:
-    return " ".join(text.split())
 
 
 def test_dispatches_only_its_three_agents_through_the_model_subcommand() -> None:
@@ -111,7 +108,7 @@ def test_stops_on_empty_arguments_outside_a_repo_and_on_a_train_marker() -> None
 
 
 def test_same_day_draft_asks_each_time_with_continue_first() -> None:
-    step4 = _flat(_step(_text(), 4))
+    step4 = flatten(_step(_text(), 4))
     assert "`<repo>/docs/.tmp/daedalus/brainstorm-<YYYYMMDD>`" in step4
     assert "Each time `<folder>/spec.md` already exists, ask the operator" in step4
     keep = step4.index("`Continue from the draft (Recommended)`")
@@ -122,12 +119,12 @@ def test_same_day_draft_asks_each_time_with_continue_first() -> None:
 def test_folder_run_writes_the_spec_and_plan_into_out() -> None:
     # issue 48: the planner's hook admits its shapes in a folder run's <out>, so no copy step.
     text = _text()
-    step2, step4 = _flat(_step(text, 2)), _flat(_step(text, 4))
+    step2, step4 = flatten(_step(text, 2)), flatten(_step(text, 4))
     assert "In a folder run, take `<repo>`, `<train-id>` and `<out>`" in step2
     assert "and skip step 3" in step2
     assert "Next: run `/daedalus:run brainstorm` with the idea" in step2
     assert "the spec is written to `<out>/brainstorm-<YYYYMMDD>/spec.md`" in step4
-    handoff = _flat(text.split("### Hand-off: the spec stands", 1)[1])
+    handoff = flatten(text.split("### Hand-off: the spec stands", 1)[1])
     assert "In a folder run it is `<out>/plan-<YYYYMMDD>.md`." in handoff
     assert "with Read and Write" not in text
 
@@ -202,21 +199,21 @@ GONE = (
 @pytest.mark.parametrize("phrase", ASK_LOOP)
 def test_ask_loop_puts_one_question_at_a_time_through_the_question_tool(phrase: str) -> None:
     # 0199: one question per call; 0200: Accept spells out the proposal it accepts.
-    assert phrase in _flat(_step(_text(), 6)), phrase
+    assert phrase in flatten(_step(_text(), 6)), phrase
 
 
 @pytest.mark.parametrize("phrase", ANSWER_LOOP)
 def test_each_answer_goes_back_alone_and_unchanged(phrase: str) -> None:
-    assert phrase in _flat(_step(_text(), 7)), phrase
+    assert phrase in flatten(_step(_text(), 7)), phrase
 
 
 @pytest.mark.parametrize("phrase", GONE)
 def test_the_round_shape_is_gone(phrase: str) -> None:
-    assert phrase not in _flat(_text()), phrase
+    assert phrase not in flatten(_text()), phrase
 
 
 def test_opening_check_ask_and_choices_run_in_order() -> None:
-    step6 = _flat(_step(_text(), 6))
+    step6 = flatten(_step(_text(), 6))
     order = ("Opening.", "Proposal. Check", "Plain check.", "One question.", "Choices.")
     assert [step6.index(part) for part in order] == sorted(step6.index(part) for part in order)
     head = _text().split("\n---", 1)[0]
@@ -229,14 +226,14 @@ GENERIC = re.compile(r"Reply|own words|Skip|Accept as proposed|Type my own")
 
 
 def test_choices_paragraph_offers_no_generic_choice() -> None:
-    choices = _flat(_step(_text(), 6)).split("- Choices.", 1)[1].split("Then relay", 1)[0]
+    choices = flatten(_step(_text(), 6)).split("- Choices.", 1)[1].split("Then relay", 1)[0]
     assert "`Accept: <the proposal's first clause" in choices
     assert not GENERIC.search(choices), GENERIC.search(choices)
     assert GENERIC.search("`Reply in my words`") and GENERIC.search("`Skip this item`")
 
 
 def test_literacy_is_always_plain_and_never_asked() -> None:
-    flat = _flat(_text())
+    flat = flatten(_text())
     assert "every question this skill puts to the operator is plain, the planner's text " in flat
     assert "The one exception is a not-viable reply, which prints as written with its " in flat
     assert "never asks the operator how technical to be" in flat
@@ -256,7 +253,7 @@ def test_web_route_resumes_the_planner_inside_the_marker_lines_with_no_cap() -> 
 
 
 def test_not_viable_checks_both_lines_and_sends_one_fix() -> None:
-    step9 = _flat(_step(_text(), 9))
+    step9 = flatten(_step(_text(), 9))
     assert (
         "a `Not viable:` line carrying a `Receipt:`, and a `Nearest viable version:` line" in step9
     )
@@ -270,7 +267,7 @@ def test_not_viable_checks_both_lines_and_sends_one_fix() -> None:
 
 
 def test_cost_pause_every_thirty_questions_never_ends_the_brainstorm() -> None:
-    step10 = _flat(_step(_text(), 10))
+    step10 = flatten(_step(_text(), 10))
     assert "After every thirty questions with no `[STATUS: SPEC]` line" in step10
     assert '"Thirty questions have passed without a design draft. Keep going?"' in step10
     assert step10.index("`Continue (Recommended)`") < step10.index("`Stop here`")
@@ -278,7 +275,7 @@ def test_cost_pause_every_thirty_questions_never_ends_the_brainstorm() -> None:
 
 
 def test_hand_off_verifies_repository_receipts_then_resumes_the_same_planner() -> None:
-    step11 = _flat(_step(_text(), 11).split("\n12. ", 1)[0])
+    step11 = flatten(_step(_text(), 11).split("\n12. ", 1)[0])
     assert '`SendMessage(planner, "WRITE SPEC")`' in step11
     assert "and no SPEC reply was already read in step 7: send" in step11
     assert MODEL.format(agent="verifier") in step11
@@ -297,7 +294,7 @@ def test_hand_off_verifies_repository_receipts_then_resumes_the_same_planner() -
 def test_skill_writes_no_file_and_names_its_stops() -> None:
     text = _text()
     assert "writes no file but one question file per question" in text
-    stops = _flat(text.split("\n12. ", 1)[1])
+    stops = flatten(text.split("\n12. ", 1)[1])
     for stop in (
         "the operator says stop",
         "misses its receipt or its nearest version twice",
@@ -312,7 +309,7 @@ def test_skill_writes_no_file_and_names_its_stops() -> None:
 
 def test_plan_skill_routes_yield_web_and_accepts_the_plan_hand_off() -> None:
     text = PLAN.read_text(encoding="utf-8")
-    step1, step5, step6 = _step(text, 1), _step(text, 5), _flat(_step(text, 6))
+    step1, step5, step6 = _step(text, 1), _step(text, 5), flatten(_step(text, 6))
     assert "A `Mode: plan` hand-off from the brainstorm skill" in step1
     assert "`[STATUS: YIELD_WEB] <query>`." in step5
     assert "the line `Mode: plan` and then the prompt lines above. No second planner" in step5

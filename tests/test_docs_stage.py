@@ -19,6 +19,7 @@ from lib.audit_proof import (
 from tests import test_train_runner as runner_tests
 from tests.conftest import REPO_ROOT
 from tests.conftest import git as _git
+from tests.helpers import flatten_file
 from tests.test_operator_gates import KEY_A
 from tests.test_train_runner import (
     A,
@@ -32,7 +33,7 @@ from tests.test_train_runner import (
 from tests.test_train_state_print import STATE, TIP, _section, _text
 
 # 0131: the runner tests' fixtures, a temp HOME, a plugin root and a one-commit repository.
-_isolated_env = runner_tests._isolated_env
+pytestmark = pytest.mark.usefixtures("isolated_env")
 plugin = runner_tests.plugin
 repo = runner_tests.repo
 
@@ -347,10 +348,6 @@ def test_the_audit_section_names_the_docs_verdict(tmp_path: Path) -> None:
 # Requirements 2 and 5: the recipe, the catalog and the Push Train.
 
 
-def _flat(rel: str) -> str:
-    return " ".join((REPO_ROOT / rel).read_text(encoding="utf-8").split())
-
-
 def test_the_documentation_stage_records_the_docs_verdict() -> None:
     # 0165: the documentation stage is the document phase skill's public docs mode.
     doc = (REPO_ROOT / "skills" / "document" / "SKILL.md").read_text(encoding="utf-8")
@@ -381,7 +378,7 @@ def test_the_documentation_stage_records_the_docs_verdict() -> None:
 
 
 def test_the_catalog_names_the_writer_stage_and_its_verifier_pass() -> None:
-    catalog = _flat("skills/catalog/SKILL.md")
+    catalog = flatten_file(REPO_ROOT / "skills/catalog/SKILL.md")
     # 0165: the docs writer stage is the document phase skill's row of the catalog table.
     doc_row = catalog.split("| document |", 1)[1].split("| release |", 1)[0]
     assert "Public docs mode is the docs writer stage" in doc_row and "claims pass" in doc_row
@@ -393,7 +390,7 @@ def test_the_catalog_names_the_writer_stage_and_its_verifier_pass() -> None:
 
 def test_the_push_train_carries_no_docs_precondition() -> None:
     # 0174: the release phase holds the push recipe; the push-train skill is a stub.
-    push = _flat("skills/release/SKILL.md")
+    push = flatten_file(REPO_ROOT / "skills/release/SKILL.md")
     preconditions = push.split("## Recovery round", 1)[0]
     assert "--gate docs" not in push and "docs_verdict" not in push
     step9 = preconditions.split(" 9. ", 1)[1].split(" 10. ", 1)[0]

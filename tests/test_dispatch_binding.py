@@ -16,6 +16,7 @@ from lib.workspace import create, mark_train
 
 from tests.conftest import git as _git
 from tests.conftest import main_warning
+from tests.helpers import sha256_hex, strip_unit_audit
 from tests.hook_chain import judge as decide
 from tests.test_train_runner import swap_later_reads
 
@@ -25,10 +26,6 @@ CODER = "daedalus:coder"
 PLANS = Path(__file__).resolve().parent / "fixtures" / "plans"
 VALID = PLANS / "valid.md"
 NEXT = "Next: run /daedalus:plan"
-
-
-def _sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def plan_file(repo: Path, folder: str, source: Path = VALID) -> Path:
@@ -45,7 +42,7 @@ def record_plan(repo: Path, train: str, path: str, sha256: object) -> None:
 def seed_plan(repo: Path, train: str, source: Path = VALID) -> Path:
     # spec 4.1: a coder dispatch during a train needs this record; A4 writes it in a live train.
     path = plan_file(repo, train, source)
-    record_plan(repo, train, str(path), _sha(path))
+    record_plan(repo, train, str(path), sha256_hex(path))
     return path
 
 
@@ -114,7 +111,7 @@ def test_plan_hash_is_over_the_file_bytes(repo_cwd: Path, unit: Path) -> None:
     block = text[text.index("```plan") : text.rindex("```") + 3]
     record_plan(repo_cwd, TRAIN, str(path), hashlib.sha256(block.encode()).hexdigest())
     _refused(repo_cwd, unit, "changed after it was recorded")
-    record_plan(repo_cwd, TRAIN, str(path), _sha(path))
+    record_plan(repo_cwd, TRAIN, str(path), sha256_hex(path))
     _ok(repo_cwd, unit)
 
 
@@ -237,13 +234,13 @@ def test_a_plan_recorded_in_another_trains_state_is_refused(repo_cwd: Path, unit
 
 def test_a_plan_file_under_another_train_id_is_refused(repo_cwd: Path, unit: Path) -> None:
     other = plan_file(repo_cwd, OTHER)
-    record_plan(repo_cwd, TRAIN, str(other), _sha(other))
+    record_plan(repo_cwd, TRAIN, str(other), sha256_hex(other))
     _refused(repo_cwd, unit, f"train {OTHER}")
     relative = f"docs/.tmp/daedalus/{OTHER}/plan.md"
-    record_plan(repo_cwd, TRAIN, relative, _sha(other))
+    record_plan(repo_cwd, TRAIN, relative, sha256_hex(other))
     _refused(repo_cwd, unit, f"train {OTHER}")
     dotted = repo_cwd / "docs" / ".tmp" / "daedalus" / TRAIN / ".." / OTHER / "plan.md"
-    record_plan(repo_cwd, TRAIN, str(dotted), _sha(other))
+    record_plan(repo_cwd, TRAIN, str(dotted), sha256_hex(other))
     _refused(repo_cwd, unit, f"train {OTHER}")
 
 
@@ -252,7 +249,7 @@ def test_a_link_to_another_trains_plan_is_refused(repo_cwd: Path, unit: Path) ->
     link = repo_cwd / "docs" / ".tmp" / "daedalus" / TRAIN / "plan.md"
     link.parent.mkdir(parents=True)
     link.symlink_to(other)
-    record_plan(repo_cwd, TRAIN, str(link), _sha(other))
+    record_plan(repo_cwd, TRAIN, str(link), sha256_hex(other))
     _refused(repo_cwd, unit, f"train {OTHER}")
 
 
@@ -282,7 +279,7 @@ def test_a_malformed_plan_record_is_refused(repo_cwd: Path, unit: Path, record: 
 
 def test_a_relative_plan_path_resolves_from_the_repo(repo_cwd: Path, unit: Path) -> None:
     path = plan_file(repo_cwd, TRAIN)
-    record_plan(repo_cwd, TRAIN, f"docs/.tmp/daedalus/{TRAIN}/plan.md", _sha(path))
+    record_plan(repo_cwd, TRAIN, f"docs/.tmp/daedalus/{TRAIN}/plan.md", sha256_hex(path))
     _ok(repo_cwd, unit)
 
 
@@ -307,13 +304,7 @@ def _audit_tree(repo: Path, flagged: bool) -> Path:
     # spec 4: create flags the audit unit; a state written before D2 carries only its name.
     tree = create(repo, f"{TRAIN}-audit", f"daedalus/{TRAIN}")
     if not flagged:
-
-        def strip(state: dict[str, object]) -> None:
-            state["units"] = [
-                {k: v for k, v in u.items() if k != "audit"} for u in train_state.units(state)
-            ]
-
-        train_state.change(repo, TRAIN, strip)
+        train_state.change(repo, TRAIN, strip_unit_audit)
     jail._registered_worktrees.cache_clear()
     return tree
 

@@ -27,6 +27,7 @@ from lib.project_keys import (
 from lib.train_summary import SessionLog, parse_notes, render
 
 from tests.conftest import CFG, CWD, REPO_ROOT
+from tests.helpers import flatten_file, write_manifest
 from tests.hook_chain import first_deny
 from tests.test_train_state_print import NOTES, RECORDS, REPO, STATE, TRAIN, _section, _stop
 
@@ -50,14 +51,6 @@ VERIFIER_DESCRIPTION = (
 )
 
 
-def _write(repo: Path, payload: object) -> None:
-    (repo / "service-manifest.json").write_text(json.dumps(payload), encoding="utf-8")
-
-
-def _flat(path: Path) -> str:
-    return " ".join(path.read_text(encoding="utf-8").split())
-
-
 # Manifest keys (requirement 4).
 
 
@@ -75,7 +68,7 @@ def test_persona_switches_follow_ledger_in_the_feature_list() -> None:
 def test_persona_switch_reads_true_false_or_null(
     tmp_path: Path, key: str, value: bool | None
 ) -> None:
-    _write(tmp_path, {"features": {key: value}})
+    write_manifest(tmp_path, {"features": {key: value}})
     loaded = load_manifest(tmp_path)
     assert loaded is not None and getattr(loaded.features, key) is value
 
@@ -85,7 +78,7 @@ def test_persona_switch_reads_true_false_or_null(
 def test_persona_switch_refuses_a_value_outside_its_type(
     tmp_path: Path, key: str, value: object
 ) -> None:
-    _write(tmp_path, {"features": {key: value}})
+    write_manifest(tmp_path, {"features": {key: value}})
     with pytest.raises(ManifestError, match=f"features.{key} must be true, false or null"):
         load_manifest(tmp_path)
 
@@ -94,13 +87,13 @@ def test_persona_switch_refuses_a_value_outside_its_type(
     "value", [None, *LITERACY_LEVELS, "profile:docs/voice.md", "profile:voice.md"]
 )
 def test_docs_literacy_reads_a_level_a_profile_or_null(tmp_path: Path, value: str | None) -> None:
-    _write(tmp_path, {"docs": {"literacy": value}})
+    write_manifest(tmp_path, {"docs": {"literacy": value}})
     loaded = load_manifest(tmp_path)
     assert loaded is not None and loaded.docs == Docs(value)
 
 
 def test_absent_docs_block_reads_null_literacy(tmp_path: Path) -> None:
-    _write(tmp_path, {})
+    write_manifest(tmp_path, {})
     loaded = load_manifest(tmp_path)
     assert loaded is not None and loaded.docs == Docs() and loaded.docs.literacy is None
 
@@ -122,7 +115,7 @@ def test_absent_docs_block_reads_null_literacy(tmp_path: Path) -> None:
     ],
 )
 def test_docs_literacy_refuses_any_other_value(tmp_path: Path, value: object) -> None:
-    _write(tmp_path, {"docs": {"literacy": value}})
+    write_manifest(tmp_path, {"docs": {"literacy": value}})
     with pytest.raises(ManifestError, match="docs.literacy must be null") as caught:
         load_manifest(tmp_path)
     assert str(caught.value).count("Next:") == 1
@@ -130,7 +123,7 @@ def test_docs_literacy_refuses_any_other_value(tmp_path: Path, value: object) ->
 
 @pytest.mark.parametrize("payload", [{"docs": []}, {"docs": "plain"}, {"docs": {"voice": "x"}}])
 def test_docs_block_refuses_a_wrong_shape_or_unknown_key(tmp_path: Path, payload: object) -> None:
-    _write(tmp_path, payload)
+    write_manifest(tmp_path, payload)
     with pytest.raises(ManifestError, match=r"docs (must be an object|has unknown keys)"):
         load_manifest(tmp_path)
 
@@ -155,7 +148,7 @@ def test_starter_manifest_writes_the_docs_block_and_every_example_loads(tmp_path
     assert isinstance(features, dict)
     assert features["dependency_web_lookup"] is False and features["terraform_tools"] is False
     for example in LITERACY_EXAMPLES:
-        _write(tmp_path, {"docs": {"literacy": json.loads(example)}})
+        write_manifest(tmp_path, {"docs": {"literacy": json.loads(example)}})
         loaded = load_manifest(tmp_path)
         assert loaded is not None and loaded.docs.literacy == json.loads(example)
 
@@ -180,7 +173,7 @@ def test_auditor_widens_reads_only_by_the_terraform_class() -> None:
 def test_dependencies_rulebook_asks_for_advisories_only_through_a_web_yield() -> None:
     auditor = load(AGENTS / "auditor.md")
     assert "[STATUS: YIELD_WEB] <query>" in auditor.status_lines
-    text = _flat(DEPENDENCIES)
+    text = flatten_file(DEPENDENCIES)
     for phrase in (
         "dependency manifest or a lockfile",
         "never write, fetch or install",
@@ -234,7 +227,7 @@ def test_each_rulebook_parses_to_the_row_shape_the_auditor_judges(
         assert phrase in text, phrase
     assert f"DEP-{tag}" not in DEPENDENCIES.read_text(encoding="utf-8")
     assert "one `Rulebook: <path>` line per ecosystem under `packs/dependencies/`. Read each" in (
-        _flat(DEPENDENCIES)
+        flatten_file(DEPENDENCIES)
     )
 
 
@@ -319,7 +312,7 @@ def test_auditor_may_read_each_rulebook(jail_fakes: None, book: Path) -> None:
 
 
 def test_terraform_rulebook_checks_the_binary_before_any_tool_run() -> None:
-    text = _flat(TERRAFORM)
+    text = flatten_file(TERRAFORM)
     binary = text.index("## Binary check (before any tool run)")
     method = text.index("## Method")
     assert binary < method
@@ -347,7 +340,7 @@ def test_terraform_rulebook_checks_the_binary_before_any_tool_run() -> None:
 
 
 def test_frameworks_rulebook_keeps_the_pack_check_method_and_rubric() -> None:
-    text = _flat(FRAMEWORKS)
+    text = flatten_file(FRAMEWORKS)
     order = [text.index(h) for h in ("## Phase 0: Pack integrity", "## Method", "## Rubric")]
     assert order == sorted(order)
     for phrase in (
@@ -375,7 +368,7 @@ def test_public_docs_writer_edits_only_the_four_docs_and_claims_each_passage() -
         "[STATUS: DOCS_WRITTEN] branch=<b> commit=<40 hex> claims=<n>",
         "[STATUS: DOCS_UNCHANGED] reason=<why no passage needed an edit>",
     )
-    text = _flat(PUBLIC_DOCS_KIND)
+    text = flatten_file(PUBLIC_DOCS_KIND)
     assert all(f"`{line}`" in text for line in writer.status_lines[:2])
     scope = text[text.index("## Scope") : text.index("## Method")]
     for doc in FOUR_DOCS:

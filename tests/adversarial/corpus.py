@@ -453,15 +453,14 @@ A2_FIX3_ADMITTED = (
 # issue 83 (unit H1): {other}/deep links to {repo}/sub, so deep/.. is {repo} on disk.
 H1_SYMLINK = ("touch {other}/deep/../x", "mkdir {other}/deep/../y", "rm -rf {other}/deep/../x")
 # issue 97 (unit H1): an icase pathspec names notes/a.md under another case; notes is excluded.
+# suite-cleanup: `git add ':(icase)NOTES/a.md'` and `git --icase-pathspecs add` are A3_RULE_ROWS.
 H1_ICASE = (
-    "git add ':(icase)NOTES/a.md'",
     "git add ':(top,icase)Notes/a.md'",
     "git add ':(ICASE)nOtes'",
     "git commit -m m -- ':(icase)NOTES/a.md'",
     "git stash push -- ':(icase)notes'",
     "git add ':i:NOTES/a.md'",
     "git add ':/i:NOTES'",
-    "git --icase-pathspecs add NOTES/a.md",
     "GIT_ICASE_PATHSPECS=1 git add NOTES/a.md",
     "git add ':(icase)NOTES/a.md' $(true)",
 )

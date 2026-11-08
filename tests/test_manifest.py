@@ -22,16 +22,12 @@ from lib.manifest import (
 )
 
 from tests.conftest import REPO_ROOT
+from tests.helpers import ends_with_next
 
 
 def _write(repo: Path, payload: Any) -> None:
     text = payload if isinstance(payload, str) else json.dumps(payload)
     (repo / "service-manifest.json").write_text(text, encoding="utf-8")
-
-
-def _ends_with_next(message: str) -> bool:
-    head, sep, tail = message.rpartition(". Next: ")
-    return bool(head and sep and tail.endswith(".")) and message.count("Next:") == 1
 
 
 def test_valid_manifest_loads(tmp_path: Path) -> None:
@@ -103,7 +99,7 @@ def test_manifest_refuses_a_bad_stack_command(tmp_path: Path, key: str, value: o
     _write(tmp_path, {"stack": {key: value}})
     with pytest.raises(ManifestError, match=f"stack.{key}") as caught:
         load(tmp_path)
-    assert _ends_with_next(str(caught.value))
+    assert ends_with_next(str(caught.value))
 
 
 @pytest.mark.parametrize("key", ["unit_test_cmd", "typecheck_cmd", "lint_cmd"])
@@ -118,7 +114,7 @@ def test_manifest_refuses_a_control_character_in_a_command(
     with pytest.raises(ManifestError, match=f"stack.{key} holds a control character") as caught:
         load(tmp_path)
     message = str(caught.value)
-    assert _ends_with_next(message) and f"Next: correct the stack.{key} value" in message
+    assert ends_with_next(message) and f"Next: correct the stack.{key} value" in message
 
 
 @pytest.mark.parametrize("name", ["pnpm", "npm", "yarn", "pip", "uv", None])
@@ -134,7 +130,7 @@ def test_manifest_refuses_an_unknown_package_manager(tmp_path: Path, name: objec
     _write(tmp_path, {"stack": {"package_manager": name}})
     with pytest.raises(ManifestError, match="stack.package_manager") as caught:
         load(tmp_path)
-    assert _ends_with_next(str(caught.value))
+    assert ends_with_next(str(caught.value))
 
 
 def test_manifest_reads_the_assets_block(tmp_path: Path) -> None:
@@ -191,7 +187,7 @@ def test_manifest_refuses_a_bad_assets_block(tmp_path: Path, block: object, key:
     _write(tmp_path, {"assets": block})
     with pytest.raises(ManifestError, match=f"{key} ") as caught:
         load(tmp_path)
-    assert _ends_with_next(str(caught.value))
+    assert ends_with_next(str(caught.value))
 
 
 @pytest.mark.parametrize(
@@ -244,7 +240,7 @@ def test_manifest_refuses_a_bad_dev_server(tmp_path: Path, block: object, key: s
     _write(tmp_path, {"dev_server": block})
     with pytest.raises(ManifestError, match=f"{key} ") as caught:
         load(tmp_path)
-    assert _ends_with_next(str(caught.value))
+    assert ends_with_next(str(caught.value))
 
 
 def test_missing_manifest_is_none(tmp_path: Path) -> None:
@@ -255,7 +251,7 @@ def test_malformed_json_raises(tmp_path: Path) -> None:
     _write(tmp_path, "{ not json")
     with pytest.raises(ManifestError, match="could not be read as JSON") as caught:
         load(tmp_path)
-    assert _ends_with_next(str(caught.value))
+    assert ends_with_next(str(caught.value))
 
 
 @pytest.mark.parametrize(
@@ -287,7 +283,7 @@ def test_wrong_shape_raises_with_next(tmp_path: Path, payload: Any) -> None:
     _write(tmp_path, payload)
     with pytest.raises(ManifestError) as caught:
         load(tmp_path)
-    assert _ends_with_next(str(caught.value)), str(caught.value)
+    assert ends_with_next(str(caught.value)), str(caught.value)
 
 
 @pytest.mark.parametrize(

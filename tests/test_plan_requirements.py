@@ -14,6 +14,7 @@ from lib.plan_record import is_need, load, ownership_defects, read_ownership, va
 
 from tests import test_dispatch_binding as binding
 from tests.conftest import REPO_ROOT, fake_bin, run_cli
+from tests.helpers import flatten_file
 from tests.hook_chain import judge as decide
 from tests.test_plan_record import checkout_file, requirement_sections
 
@@ -277,10 +278,6 @@ def test_coder_dispatch_with_a_plan_without_sections_is_refused(
     assert d.allow, d.reason
 
 
-def _flat(path: Path) -> str:
-    return " ".join(path.read_text(encoding="utf-8").split())
-
-
 def test_orchestrator_copies_sections_and_checks_needs_per_wave() -> None:
     # 0165: the build phase skill the orchestrator runs holds the brief and needs steps.
     text = (REPO_ROOT / "skills" / "build" / "SKILL.md").read_text(encoding="utf-8")
@@ -295,7 +292,7 @@ def test_orchestrator_copies_sections_and_checks_needs_per_wave() -> None:
 
 
 def test_planner_reads_the_map_and_writes_sections_and_needs() -> None:
-    planner = _flat(REPO_ROOT / "agents" / "planner.md")
+    planner = flatten_file(REPO_ROOT / "agents" / "planner.md")
     for rule in (
         "Read the dependency map first when the brief names it",
         "Give each test module to one unit.",
@@ -309,25 +306,25 @@ def test_planner_reads_the_map_and_writes_sections_and_needs() -> None:
 
 
 def test_plan_skill_table_lists_needs() -> None:
-    skill = _flat(REPO_ROOT / "skills" / "plan" / "SKILL.md")
+    skill = flatten_file(REPO_ROOT / "skills" / "plan" / "SKILL.md")
     assert "| Shares files with | Needs | Version line |" in skill
     assert "Needs lists the unit line's `needs:` values (0128)" in skill
 
 
 def test_gpu_browser_and_server_work_is_an_operator_check_never_a_coder_test() -> None:
     # 0164, 0192: the planner, the plan skill and the coder each say it once.
-    planner = _flat(REPO_ROOT / "agents" / "planner.md")
+    planner = flatten_file(REPO_ROOT / "agents" / "planner.md")
     assert (
         "Anything that needs a GPU, a browser or a running server goes there as plain-words "
         "checks separated by semicolons, at most ten" in planner
     )
     assert "and never in a coder test command" in planner
-    skill = _flat(REPO_ROOT / "skills" / "plan" / "SKILL.md")
+    skill = flatten_file(REPO_ROOT / "skills" / "plan" / "SKILL.md")
     assert (
         "put anything that needs a GPU, a browser or a running server in the unit's "
         "`operator_checks:` field, never in a coder test command (0164)" in skill
     )
-    coder = _flat(REPO_ROOT / "agents" / "coder.md")
+    coder = flatten_file(REPO_ROOT / "agents" / "coder.md")
     assert (
         "A test that needs a GPU, a browser or a running server is an operator check the plan "
         "lists, never a test command you write or run (0164)." in coder
