@@ -205,12 +205,24 @@ def _expand_alt(word: str, env: dict[str, list[str]]) -> list[tuple[str, bool]]:
         pos = match.end()
     home = env["HOME"][0]
     out: list[tuple[str, bool]] = []
+    quoted = _quoted_dollar(word)
     for text, unresolved in results:
         text += word[pos:]
-        unresolved = unresolved or "${" in text
+        unresolved = unresolved or quoted or "${" in text
         text = clean(text)
         out.append((tilde(text, home), unresolved))
     return out
+
+
+def _quoted_dollar(word: str) -> bool:
+    # fix1-a2: an unquoted $ right before an opening quote mark is $'..' or $"..", never literal.
+    cuts = 0
+    for i, char in enumerate(word):
+        if char == CUT:
+            cuts += 1
+        elif char == "$" and word[i + 1 : i + 2] == CUT and cuts % 2 == 0:
+            return True
+    return False
 
 
 def anchor(text: str, base: str) -> str | None:

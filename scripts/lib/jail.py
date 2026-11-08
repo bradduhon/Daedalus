@@ -2624,8 +2624,8 @@ def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
 
 
 def _rebinds(words: list[str]) -> bool:
-    # fix1-a2 (R1): shift, set with an operand, getopts, read or mapfile naming a positional, or
-    # an unknown command word.
+    # fix1-a2 (R1): shift, set with an operand, getopts, read or mapfile naming a positional,
+    # eval, source or ., or an unknown command word; builtin and command are read past.
     clean = [_clean(w) for w in words if not w.startswith(_REDIRECT)]
     at = _command_at(clean, set())
     if at is None:
@@ -2633,11 +2633,32 @@ def _rebinds(words: list[str]) -> bool:
     if at < 0:
         return True
     name, args = _base(clean[at]), clean[at + 1 :]
-    if name in {"shift", "getopts"}:
+    while name in {"builtin", "command"}:
+        args = list(itertools.dropwhile(lambda a: a[:1] == "-", args))
+        if not args:
+            return False
+        name, args = _base(args[0]), args[1:]
+    if name in {"shift", "getopts", "eval", "source", "."}:
         return True
     if name == "set":
-        return any(a == "--" or a[:1] not in {"-", "+"} for a in args)
+        return _set_operands(args)
     return name in {"read", "mapfile", "readarray"} and any(_PARAM_NAME.fullmatch(a) for a in args)
+
+
+def _set_operands(args: list[str]) -> bool:
+    # fix1-a2 (R1): set rebinds on --, on - with operands after it, or on a bare word; -o and +o
+    # (alone or ending a cluster) take the next word as their value.
+    skip = False
+    for k, arg in enumerate(args):
+        if skip:
+            skip = False
+        elif arg == "--" or (arg == "-" and k + 1 < len(args)):
+            return True
+        elif arg[:1] in {"-", "+"} and len(arg) > 1:
+            skip = "o" in arg[1:]
+        elif arg != "-":
+            return True
+    return False
 
 
 def _drop_positionals(segments: list[list[str]], envs: list[dict[str, list[str]]]) -> None:
@@ -2667,6 +2688,11 @@ def _write_walk(
 ) -> tuple[list[str], bool]:
     # issue 30, 81, fix1-a2: the targets of every expansion alternative, and whether a body a
     # shell runs (run) writes through a word the walk cannot resolve.
+    subs = _substitutions(command) if run else []
+    for inner in subs:
+        # fix1-a2 (R2): a run body's substitution is an unresolved part of its own word.
+        for form in (f"$({inner})", f"`{inner}`", f"<({inner})", f">({inner})"):
+            command = command.replace(form, _UNRESOLVED)
     scanned = _shell_scan(command)
     segments = [segment.words for segment in scanned]
     folders = _chain_folders(segments, cwd)
@@ -2675,8 +2701,7 @@ def _write_walk(
         _drop_positionals(segments, envs)
     priors = [start if start is not None else _base_env(), *envs[:-1]]
     found: list[str] = []
-    # fix1-a2 (R2): a run body's $( ), backtick or <( ) output is never read as literal text.
-    opaque = run and bool(_substitutions(command))
+    opaque = False
     walked: set[tuple[str, str, str, tuple[str, ...] | None]] = set()
     for k, words in enumerate(segments):
         alts = [_expand_word(w, envs[k]) or [("", False)] for w in words]
@@ -2701,6 +2726,10 @@ def _write_walk(
                 more, hid = _write_walk(body, inner_cwd, depth + 1, env, bool(hidden.reason))
                 found += more
                 opaque = opaque or hid
+    for inner in subs if depth < _BODY_DEPTH else []:
+        more, hid = _write_walk(inner, cwd, depth + 1, start, True)
+        found += more
+        opaque = opaque or hid
     for doc in _heredocs(command)[1] if depth < _BODY_DEPTH else []:
         more, hid = _heredoc_walk(doc, cwd, depth, start, run)
         found += more

@@ -23,6 +23,7 @@ from tests.adversarial.corpus import (
     A2_FIX5_ADMITTED,
     A2_FIX5_OPAQUE,
     A2_FIX5_UNMARKED,
+    A2_FIX6_ADMITTED_MARKED,
     A2_ISSUE_81,
     A2_ISSUE_116,
     A2_PROBE,
@@ -157,6 +158,16 @@ def test_an_unresolved_body_write_with_no_train_anywhere_is_admitted(
     assert not jail._body_past_cap(command), command
     assert jail.decide(_foreign(other_repo, command), CFG).allow, command
     assert jail.decide(_b(None, command), CFG).allow, command
+
+
+@pytest.mark.parametrize("form", A2_FIX6_ADMITTED_MARKED)
+def test_a_body_that_writes_only_outside_a_marked_repo_is_admitted(
+    marked_repo: Path, other_repo: Path, form: str
+) -> None:
+    # fix1-a2 (R1, R2): set -o values and substitutions off the write positions bind nothing.
+    command = form.format(repo=marked_repo)
+    decision = jail.decide(_foreign(other_repo, command), CFG)
+    assert decision.allow, (command, decision.reason)
 
 
 @pytest.mark.parametrize("command", A2_FIX4_ADMITTED)

@@ -399,6 +399,26 @@ A2_FIX5_OPAQUE = (
     "M={repo} sh -c 'cd $DAEDALUS_UNSET_FIX5 && touch x'",
     "sh <<'E'\ntouch \"$1\" {repo}/x\nE",
     'sh -s <<E\ntouch "$(echo {repo})/x"\nE',
+    "sh -c 'eval set -- {repo}/x; touch \"$1\"'",
+    'sh -c \'eval "set -- {repo}/x"; touch "$1"\'',
+    "bash -c 'eval set -- {repo}/x; touch \"$1\"' _ /tmp/a",
+    "sh -c 'builtin set -- {repo}/x; touch \"$1\"' _ /tmp/a",
+    "sh -c 'command set -- {repo}/x; touch \"$1\"' _ /tmp/a",
+    "sh -c '. /dev/null; touch \"$1\"' _ /tmp/a {repo}/x",
+    "sh -c 'set -o pipefail -- {repo}/x; touch \"$1\"'",
+    "sh -c 'set -euo pipefail {repo}/x; touch \"$1\"' _ /tmp/a",
+    "sh -c 'touch $\"{repo}/x\"'",
+    "sh -c $'touch {repo}/x'",
+    "sh -c 'x=$(echo {repo}); touch \"$x/y\"'",
+    "sh -c 'touch `echo {repo}`/x'",
+)
+# fix1-a2: with a train marked elsewhere, a body that only reads the marked repo or writes a
+# resolved path outside it is judged as on 1ba48d0.
+A2_FIX6_ADMITTED_MARKED = (
+    "sh -c 'set -o pipefail; touch \"$1\"' _ /tmp/fix6/x",
+    'bash -c \'set -euo pipefail; grep -n x "$1"; touch "$2"\' _ {repo}/README.md /tmp/fix6.r',
+    "bash -c 'x=$(date); echo \"$x\" > /tmp/fix6.log; grep -n foo {repo}/a.py'",
+    "bash -c 'echo \"$(date)\"; grep -n foo {repo}/a.py'",
 )
 # fix1-a2 (0035): with no train marker anywhere, these act exactly as on the audited tip 1ba48d0.
 A2_FIX5_ADMITTED = (
