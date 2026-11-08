@@ -1205,6 +1205,7 @@ def assert_store_read_denied(agent: str, template: str, **fields: object) -> Non
 # marked repo, filled by str.replace, so every other brace is verbatim.
 P3_MEASURE_A2 = (
     # 0229: 0224 judge by own repo, from an unmarked folder a refused shape runs; verifier: refused.
+    # 231 (the cross-repo case) flips these to refuse when it lands.
     ("Explore", "unmarked", "admit", "bash 0<<<'touch {repo}/x'"),  # A2-1
     ("Explore", "unmarked", "admit", "bash {,-c} 'touch {repo}/x'"),  # A2-2
     ("Explore", "unmarked", "admit", "{,bash} -c 'touch {repo}/x'"),  # A2-3
@@ -1217,10 +1218,12 @@ P3_MEASURE_A2 = (
         "node --title t -e \"require('child_process').execSync('gh issue delete 3')\"",
     ),  # A2-6
     # 0229: 0224 judge by own repo, from an unmarked folder a refused shape runs; verifier: refused.
+    # 231 (the cross-repo case) flips these to refuse when it lands.
     ("Explore", "unmarked", "admit", "eval 'touch {repo}/x'"),  # A2-8
     ("Explore", "unmarked", "admit", ". /dev/stdin <<< 'touch {repo}/x'"),  # A2-9
     ("orchestrator", "marked", "refuse", "tmux new-session -d gh issue delete 3"),  # A2-10
     # 0229: 0224 judge by own repo, from an unmarked folder a refused shape runs; verifier: refused.
+    # 231 (the cross-repo case) flips these to refuse when it lands.
     ("Explore", "unmarked", "admit", "bash /dev/./stdin <<< 'touch {repo}/x'"),  # A2-11
     ("Explore", "unmarked", "admit", "source /proc/thread-self/fd/0 <<< 'touch {repo}/x'"),  # A2-12
     ("Explore", "marked", "refuse", "python3 /dev/./stdin"),  # A2-13
@@ -1238,6 +1241,7 @@ P3_MEASURE_A2 = (
     ("Explore", "marked", "refuse", "python3 -V"),  # A2-19
     ("Explore", "marked", "refuse", "node -v"),  # A2-20
     # 0229: 0224 judge by own repo, from an unmarked folder a refused shape runs; verifier: refused.
+    # 231 (the cross-repo case) flips these to refuse when it lands.
     ("Explore", "unmarked", "admit", "{ bash; } <<< 'touch {repo}/x'"),  # A2-21
     ("Explore", "unmarked", "admit", "( bash ) <<< 'touch {repo}/x'"),  # A2-22
     ("Explore", "unmarked", "admit", "exec <<< 'touch {repo}/x'; bash"),  # A2-23
