@@ -184,53 +184,13 @@ ADMITTED: list[Row] = [
     *_rows("A3_ISSUE_121_ADMITTED", ("main",), C.A3_ISSUE_121_ADMITTED, False),
     *_rows("A3_ADMITTED", ("main",), C.A3_ADMITTED, False),
 ]
-# 228 S2: the main session's issue 121 rows admit refuses; each awaits a ruling, none is widened.
-_MAGIC = (
-    'git log -- ":(icase)README.md"',
-    'git grep -n foo -- ":(icase)scripts"',
-    'git log -- ":(icase)x"',
-    'git grep -n foo -- ":(icase)x"',
-    'git diff -- ":i:NOTES"',
-    "git show HEAD -- ':(icase)NOTES'",
-    "git status -- ':(icase)NOTES'",
-    "git ls-files ':(icase)NOTES'",
-    "git stash show -- ':(icase)NOTES'",
-    "cat <<E\ndon't\nE\ngit log -- ':(icase)NOTES'",
-    "git commit -m 'fix :i: spelling' -- src/a.md\ngit log -- ':(icase)NOTES'",
-    "git -C . log -- ':(icase)NOTES'",
-    "git --git-dir=.git --work-tree . log -- ':(icase)NOTES'",
-    "git --no-pager --attr-source HEAD log -- ':(icase)NOTES'",
-    "/usr/bin/git log -- ':(icase)x'",
-    "git log -n 5 -- ':(icase)x'",
-    "git -c a=b log -- ':(icase)NOTES'",
-)
-_SHELL_STATE = (
-    "GIT_ICASE_PATHSPECS=1 git log -- NOTES",
-    "export GIT_ICASE_PATHSPECS=1; git log -- NOTES",
-    "export git_icase_pathspecs=1; git add NOTES/a.md",
-    "export PATH=/x:/y; git add NOTES/a.md",
-    'export "PATH"=/x; git add NOTES/a.md',
-    "unset GIT_ICASE_PATHSPECS; git add NOTES/a.md",
-    "unset GIT_ICASE_PATHSPECS\ngit add NOTES/a.md",
-    "[ -f x ] && git log -- ':(icase)x'",
-    "[[ -n x ]] && git commit -m ':i: fix' -- src/a.md",
-    "V=PA; git log -- ':(icase)x'",
-)
-_PIPED_MESSAGE = (
-    "cat <<EOF | git commit -F -\nfix :i: spelling\nEOF",
-    "cat <<EOF | git commit --file=-\nfix :(icase) spelling\nEOF",
-    "cat <<'E' | git commit -F -\nfix :i: spelling\nE",
-    'cat <<"E" | git commit --file=-\nfix :(icase) spelling\nE',
-    "cat <<'E' | git commit -F -\nfix :i: don't # read set\nE",
-)
-_PARAMETER = (
-    'grep -n commit "$F"',
-    'ls "$D"/stage',
-    'git log --grep add -n "$N"',
-    'git stash list | head -n "$N"',
-)
+# 228 S2 ruling (main session reads and builtins): the rows admit still refuses.
+# [[ is Opaque in the parser; git log --grep <value> is off jail._GIT_GRAMMAR's log row.
 TABLE_GAPS: frozenset[tuple[str, str]] = frozenset(
-    ("main", c) for c in (*_MAGIC, *_SHELL_STATE, *_PIPED_MESSAGE, *_PARAMETER)
+    {
+        ("main", "[[ -n x ]] && git commit -m ':i: fix' -- src/a.md"),
+        ("main", 'git log --grep add -n "$N"'),
+    }
 )
 
 

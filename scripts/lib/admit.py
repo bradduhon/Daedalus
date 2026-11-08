@@ -135,6 +135,8 @@ class _Cmd:
     subcommand: Typed | None = None
     cd_target: Typed | None = None
     git_dir: Typed | None = None
+    git_read: bool = False
+    loose: list[Span] = field(default_factory=list)
 
     def add(self, kind: str, item: Typed) -> None:
         self.typed.setdefault(kind, []).append(item)
@@ -215,7 +217,10 @@ def role_for(agent: str) -> Role:
         subs = shell.CODER_GIT | shell.CONDUCTOR_GIT | shell.CHARTER_DOCS_GIT | shell.READ_ONLY_GIT
         return Role(
             "main",
-            commands=shell.READ_ONLY_CMDS | jail.CODER_WRITE_CMDS | frozenset(shell.DOCS_READS),
+            commands=shell.READ_ONLY_CMDS
+            | jail.CODER_WRITE_CMDS
+            | frozenset(shell.DOCS_READS)
+            | shell.MAIN_BUILTINS,
             git=(subs, {**jail._CONDUCTOR_GRAMMAR, **_read_git()}),
             gh="main",
             runner="coder",
@@ -260,16 +265,20 @@ def _bare(word: Word) -> str | None:
 
 def _leading_glob(word: Word) -> bool:
     # 228 S2, P1: an expansion at word start; kept off rows that write through an option.
-    return bool(word.parts) and isinstance(word.parts[0], Glob | Tilde)
+    return bool(word.parts) and isinstance(word.parts[0], Glob | Tilde | Param)
 
 
 def _expands(word: Word) -> bool:
     return any(isinstance(p, Glob | Tilde) for p in word.parts)
 
 
-def _forbidden(word: Word) -> None:
+def _forbidden(word: Word, loose: list[Span] | None = None) -> None:
     # 228 S2 rule 3: no substitution, arithmetic, brace list or parameter in an admitted word.
+    # 228 S2 ruling: loose collects a main-session parameter, judged once the shape is known.
     for part in word.parts:
+        if isinstance(part, Param) and loose is not None:
+            loose.append(part.span)
+            continue
         if isinstance(part, CommandSub):
             raise _Off(part.span, "a command substitution, $( ) or a backtick, is not admitted")
         if isinstance(part, ProcSub):
@@ -347,10 +356,21 @@ class _Judge:
             if isinstance(node, Opaque):
                 raise _Off(node.span, f"the parser could not bound this text ({node.why})")
             done = self.command(node, pos > 0)
-            if pos and (done.family not in shell.READ_ONLY_CMDS or done.writes or done.script):
+            message = pos == 1 and len(item.commands) == 2 and self._piped_message(out[0], done)
+            filters = done.family in shell.READ_ONLY_CMDS and not (done.writes or done.script)
+            if pos and not (filters or message):
                 raise _Off(node.span, f"{done.word.text} after a pipe is not a read filter")
             out.append(done)
         return out
+
+    def _piped_message(self, first: AdmittedCommand, second: AdmittedCommand) -> bool:
+        # 228 S2 ruling: main pipes a cat heredoc, and nothing else, into git commit -F -.
+        if not self.role.main or first.family != "cat" or first.reads or first.options:
+            return False
+        commit = second.subcommand is not None and second.subcommand.text == "commit"
+        stdin = "-" in {t.text for t in second.reads}
+        flag = {t.text for t in second.options} & {"-F", "--file"}
+        return second.family == "git" and commit and stdin and bool(flag) and not second.writes
 
     # -- one simple command ------------------------------------------------------------------
     def command(self, cmd: Command, piped: bool) -> AdmittedCommand:
@@ -358,9 +378,14 @@ class _Judge:
         for assign in cmd.assignments:
             self.assignment(assign, c)
         for word in cmd.words:
-            _forbidden(word)
+            _forbidden(word, c.loose if self.role.main else None)
         for redirect in cmd.redirects:
             self.redirect(redirect, c)
+        if not cmd.words and self.role.main and cmd.assignments and not cmd.redirects:
+            # 228 S2 ruling: a bare assignment sets a shell variable for the main session.
+            first = cmd.assignments[0]
+            c.word, c.family = Typed(first.name, first.span), "assignment"
+            return c.frozen()
         if not cmd.words:
             raise _Off(cmd.span, "an assignment or redirect with no command is not admitted")
         words = self.unwrap(list(cmd.words), c)
@@ -373,12 +398,17 @@ class _Judge:
         c.word = Typed(name, head.span)
         c.family = shell.command_family(name)
         self.dispatch(c, words)
+        if c.loose and not _reads_only(c):
+            raise _Off(c.loose[0], "a main-session prefix or parameter rides only a read command")
         return c.frozen()
 
     def assignment(self, assign: Assignment, c: _Cmd) -> None:
         # 228 S2 rule 3: only the safe prefixes, and a parameter only inside their value.
-        if assign.subscript is not None or not shell._SAFE_ENV.match(f"{assign.name}{assign.op}"):
+        safe = shell._SAFE_ENV.match(f"{assign.name}{assign.op}") is not None
+        if assign.subscript is not None or not (safe or self.role.main):
             raise _Off(assign.span, f"the prefix {assign.name}{assign.op} is not a safe name")
+        if not safe:
+            c.loose.append(assign.span)
         for part in assign.value.parts:
             if isinstance(part, Literal) and part.quoted not in ("$'", '$"'):
                 continue
@@ -590,7 +620,19 @@ class _Judge:
         key = c.family
         if key not in shell.OPTION_TABLE:
             raise _Off(words[0].span, f"{key} has no row in the option table")
-        met, operands = self.options(c, key, words[1:], stop)
+        if key in shell.OPERAND_ONLY_CMDS:
+            # 228 S2 ruling: the test builtin's words are all operands, closed by a literal ].
+            if words[-1].literal != "]":
+                raise _Off(words[-1].span, f"{key} closes with a literal ]")
+            met: list[str] = []
+            operands = words[1:-1]
+        else:
+            met, operands = self.options(c, key, words[1:], stop)
+        if key in shell.NAME_OPERAND_CMDS:
+            for word in operands:
+                name = (word.literal or "").split("=", 1)[0]
+                if not (name.isascii() and name.isidentifier()):
+                    raise _Off(word.span, f"{key} takes NAME or NAME=value operands")
         self.operands(c, key, met, operands)
 
     def options(
@@ -696,11 +738,10 @@ class _Judge:
             raise _Off(span, f"{key} takes operands by its row {row}, not {len(operands)}")
         for word, slot in zip(operands, slots, strict=True):
             kind = slot.rstrip("*?")
-            if _expands(word):
-                if kind != "read" or not slot.endswith("*"):
-                    raise _Off(word.span, f"a glob or ~ in a {key} {kind} operand")
-                if _leading_glob(word) and _dangerous(key):
-                    raise _Off(word.span, f"a leading glob or ~ may become a {key} option")
+            if _expands(word) and (kind != "read" or not slot.endswith("*")):
+                raise _Off(word.span, f"a glob or ~ in a {key} {kind} operand")
+            if _leading_glob(word) and _dangerous(key):
+                raise _Off(word.span, f"a leading expansion may become a {key} option")
             self._typed(c, key, kind, _word_text(word), "")
 
     def _typed(self, c: _Cmd, key: str, kind: str, value: Typed, option: str) -> None:
@@ -720,13 +761,18 @@ class _Judge:
         if role.git is None:
             raise _Off(words[0].span, f"git is not on the {role.name} table")
         subs, grammar = role.git
-        i, kept, icase = self._git_globals(c, words)
+        i, kept, icase, config = self._git_globals(c, words)
         if i >= len(words) or words[i].literal is None:
             raise _Off(words[0].span, "git needs a literal subcommand")
         sub = words[i].literal or ""
         c.subcommand = Typed(sub, words[i].span)
         args = words[i + 1 :]
         reads = sub in shell.READ_ONLY_GIT
+        stash_read = sub == "stash" and [w.literal for w in args[:1]] in (["show"], ["list"])
+        c.git_read = reads or stash_read
+        main_read = role.main and c.git_read
+        if config is not None and not main_read:
+            raise _Off(config, f"git -c and --config-env are refused on git {sub}")
         if icase and not reads:
             raise _Off(
                 words[0].span, f"--icase-pathspecs and --glob-pathspecs only on a read, not {sub}"
@@ -752,7 +798,9 @@ class _Judge:
             self.operands(c, "git commit", met, operands)
             return
         # 228 S2: operands first, so a magic pathspec is named before the grammar row.
-        self._git_operands(c, sub, args, toks)
+        self._git_operands(c, sub, args, toks, magic=main_read)
+        if main_read and stash_read:
+            return
         if role.main:
             check = grammar.get(sub)
             if check is not None and not check(toks, self.cwd):
@@ -769,17 +817,22 @@ class _Judge:
                 )
             raise self._blame(c, sub, args, toks, check)
 
-    def _git_globals(self, c: _Cmd, words: list[Word]) -> tuple[int, list[str], bool]:
+    def _git_globals(self, c: _Cmd, words: list[Word]) -> tuple[int, list[str], bool, Span | None]:
         # 228 S2: every global option on git's table with its arity; -c and its kin are refused.
+        # 228 S2 ruling: the main session's -c and --config-env wait for a read subcommand.
         kept: list[str] = []
         icase = False
+        config: Span | None = None
         base = self.cwd
         i = 1
         while i < len(words) and (words[i].literal or "").startswith("-"):
             text = words[i].literal or ""
             span = words[i].span
-            if text in _REFUSED_GIT_GLOBALS or text.startswith(("--config-env=", "--exec-path=")):
+            setting = text in _REFUSED_GIT_GLOBALS or text.startswith("--config-env=")
+            if text.startswith("--exec-path=") or (setting and not self.role.main):
                 raise _Off(span, f"git {text.split('=')[0]} is refused")
+            if setting and config is None:
+                config = span
             if text in shell._GIT_GLOBAL_WITH_ARG:
                 if i + 1 >= len(words) or words[i + 1].literal is None:
                     raise _Off(span, f"git {text} needs one literal value")
@@ -800,7 +853,7 @@ class _Judge:
                 i += 1
                 continue
             raise _Off(span, f"the git global option {text} is not on git's table")
-        return i, kept, icase
+        return i, kept, icase, config
 
     def _blame(
         self,
@@ -831,7 +884,9 @@ class _Judge:
             else:
                 c.add("text", Typed(tok, word.span))
 
-    def _git_operands(self, c: _Cmd, sub: str, args: list[Word], toks: list[str]) -> None:
+    def _git_operands(
+        self, c: _Cmd, sub: str, args: list[Word], toks: list[str], magic: bool = False
+    ) -> None:
         row = shell.OPERAND_TYPES.get(f"git {sub}", ("text*",))
         kind = row[0].rstrip("*?") if row else "text"
         valued = shell.OPTION_TABLE["git commit"][1] | shell._COMMIT_WITH_ARG
@@ -856,7 +911,7 @@ class _Judge:
                     types = shell.OPTION_VALUE_TYPES.get("git commit", {}).get(name, ("text",))
                     c.add(types[0] if sub == "commit" else "text", Typed(attached, word.span))
                 continue
-            if tok.startswith(":"):
+            if tok.startswith(":") and not magic:
                 raise _Off(word.span, f"the pathspec magic {tok} is not admitted")
             c.add("pathspec" if after else kind, _word_text(word))
 
@@ -929,7 +984,7 @@ class _Judge:
         reason = (
             shell.runner_refusal(toks)
             or jail.download_reason(toks)
-            or jail.install_reason(toks, frozenset[str])
+            or jail.install_reason(toks, _no_installs)
         )
         if reason is not None:
             raise _Off(c.span, reason)
@@ -950,6 +1005,18 @@ class _Judge:
         if family in shell._SHELLS or family in shell.INTERPRETERS or family in ("node", "bun"):
             if family not in shell.TEST_RUNNERS or not shell._tester_runner_ok(family, inner):
                 raise _Off(c.span, f"{c.family} runs {inner[0]} outside a test-runner form")
+
+
+def _no_installs() -> frozenset[str]:
+    # 228 S2: admit refuses every install; the manifest-enabled frozen form is the later check's.
+    return frozenset()
+
+
+def _reads_only(c: _Cmd) -> bool:
+    # 228 S2 ruling: a READ_ONLY_CMDS word or a read-only git form, with no write and no script.
+    if c.typed.get("write") or c.typed.get("script"):
+        return False
+    return c.family in shell.READ_ONLY_CMDS or (c.family == "git" and c.git_read)
 
 
 def _confined(c: _Cmd) -> bool:

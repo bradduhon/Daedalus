@@ -251,3 +251,51 @@ def test_no_consumer_imports_admit_before_unit_s3() -> None:
             if isinstance(node, ast.Import) and any(a.name.endswith("admit") for a in node.names):
                 users.append(str(path))
     assert not users, users
+
+
+# 228 S2 ruling: (shape, main admits, main refuses, agent, agent refuses); agents are unchanged.
+MAIN_SHAPES = (
+    (
+        "magic on a read",
+        "git log -- ':(icase)x'",
+        "git add ':(icase)x'",
+        "coder",
+        "git log -- ':x'",
+    ),
+    ("-c on a read", "git -c a=b log", "git -c a=b add x", "auditor", "git -c a=b log"),
+    (
+        "stash read",
+        "git stash show -- ':x'",
+        "git stash push -- ':x'",
+        "coder",
+        "git stash list -x",
+    ),
+    ("export", "export X=1 Y", "export 1X=2", "coder", "export X=1"),
+    ("unset", "unset X Y", "unset -Q X", "coder", "unset X"),
+    ("test builtin", "[ -f x ]", "[ -f x", "auditor", "[ -f x ]"),
+    ("prefix on a read", "V=1 git log", "V=1 touch x", "coder", "V=1 git log"),
+    ("bare assignment", "V=1", "V=$(x)", "coder", "V=1"),
+    (
+        "piped message",
+        "cat <<'E' | git commit -F -\nm\nE",
+        "cat x | git commit -F -",
+        "coder",
+        "cat <<'E' | git commit -F -\nm\nE",
+    ),
+    ("parameter on a read", 'grep x "$F"', 'touch "$F"', "coder", 'grep x "$F"'),
+    ("parameter at a write option", 'grep -n "$N" x', 'sort "$X" in', "auditor", 'sort "$X" in'),
+)
+
+
+@pytest.mark.parametrize(("shape", "good", "bad", "agent", "agent_bad"), MAIN_SHAPES)
+def test_a_main_session_shape_stays_off_the_agent_tables(
+    shape: str, good: str, bad: str, agent: str, agent_bad: str
+) -> None:
+    admitted("main", good)
+    refused("main", bad)
+    refused(agent, agent_bad)
+
+
+def test_a_main_session_parameter_is_typed_not_literal() -> None:
+    read = admitted("main", 'grep x "$F"').commands[0].reads[0]
+    assert (read.text, read.glob) == ('"$F"', True)

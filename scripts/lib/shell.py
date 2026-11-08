@@ -317,9 +317,17 @@ OPTION_TABLE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "vitest": _row("", ""),
     "vite": _row("", ""),
     "tsc": (frozenset({"--noEmit", "--pretty", "--incremental"}), frozenset({"-p", "--project"})),
+    # 228 S2 ruling: the main session's builtins; [ takes no options, its words are operands.
+    "unset": _row("fvn", ""),
+    "[": (frozenset(), frozenset()),
 }
 # P2: commands whose options are whole single-dash words, never getopt clusters.
 WORD_OPTION_CMDS = frozenset({"find"})
+# 228 S2 ruling: builtins on the main session's table only; agents keep refusing them.
+MAIN_BUILTINS = frozenset({"export", "unset", "["})
+# 228 S2: commands whose every word is an operand, and commands whose operands are NAME[=value].
+OPERAND_ONLY_CMDS = frozenset({"["})
+NAME_OPERAND_CMDS = frozenset({"export", "unset"})
 # 228 S2: operand types per OPTION_TABLE key, from read, write, text, subcommand, pathspec,
 # module, script; `*` repeats, `?` is optional. A "<name> <option>" key replaces the row when met.
 OPERAND_TYPES: dict[str, tuple[str, ...]] = {
@@ -384,6 +392,9 @@ OPERAND_TYPES: dict[str, tuple[str, ...]] = {
     "pytest": ("read*",),
     **{name: ("text*",) for name in ("make", "tox", "nox", "just", "npx", "uv", "go", "cargo")},
     **{name: ("text*",) for name in ("pnpm", "yarn", "bun", "npm", "vitest", "vite", "tsc")},
+    "export": ("text", "text*"),
+    "unset": ("text", "text*"),
+    "[": ("text*",),
     "git commit": ("pathspec*",),
     "git add": ("pathspec*",),
     "git restore": ("pathspec*",),
