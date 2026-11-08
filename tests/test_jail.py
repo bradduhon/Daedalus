@@ -2203,7 +2203,7 @@ def test_hidden_bodies_nest_and_find_their_targets(marked_repo: Path, other_repo
     assert jail._hidden_reason("bash --version") is None
     assert jail._hidden_reason("flock /tmp/l touch x") is None
     assert jail._hidden_reason("flock /tmp/l --command=true") == jail.R_SHELL_BODY
-    assert jail._hidden_bodies(["bash", "--frob", "-c"]) == [(jail.R_SHELL_BODY, "")]
+    assert jail._hidden_bodies(["bash", "--frob", "-c"]) == [(jail.R_SHELL_BODY, "", ())]
 
 
 @pytest.mark.parametrize("form", H1_DEEP_BODY)

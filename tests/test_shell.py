@@ -52,6 +52,7 @@ SHARED = frozenset(
     | {"_expands", "flag_span", "fed_tokens"}
     | {"CHAR", "CLOSE", "_flag_value", "_raw_words", "_unquoted", "segment_spans"}
     | {"git_globals_known", "_TRUSTED_BIN"}
+    | {"shell_params"}
 )
 
 

@@ -20,6 +20,10 @@ from tests.adversarial.corpus import (
     A2_FIX4_ADMITTED,
     A2_FIX4_RUN,
     A2_FIX4_UNMARKED,
+    A2_FIX5_ADMITTED,
+    A2_FIX5_OPAQUE,
+    A2_FIX5_UNMARKED,
+    A2_FIX6_ADMITTED_MARKED,
     A2_ISSUE_81,
     A2_ISSUE_116,
     A2_PROBE,
@@ -31,6 +35,8 @@ from tests.conftest import CFG
 from tests.payloads import _b, _cred
 
 FINDINGS = {"shell": jail.R_SHELL_BODY, "inline": jail.R_INLINE_BODY, "env": shell.R_ENV_SPLIT}
+# fix1-a2: a heredoc line's $1 is also judged at the top level, as a credential path.
+CREDENTIAL_PARAM = "could be a credential path"
 # issue 81: one body form per walked kind; {cmd} is the quoted inner command.
 BODY_FORMS = ("bash -c {cmd}", "sh -c {cmd}", "bash <<< {cmd}", "env -S {cmd}")
 
@@ -118,14 +124,50 @@ def test_a_fix_round_form_is_refused_in_a_run(marked_repo: Path, finding: str, f
     assert_denied(_foreign(marked_repo, command), FINDINGS[finding])
 
 
-@pytest.mark.parametrize("form", A2_FIX1_UNMARKED + A2_FIX3_UNMARKED + A2_FIX4_UNMARKED)
+@pytest.mark.parametrize(
+    "form", A2_FIX1_UNMARKED + A2_FIX3_UNMARKED + A2_FIX4_UNMARKED + A2_FIX5_UNMARKED
+)
 def test_a_fix_round_form_from_an_unmarked_folder_is_refused(
     marked_repo: Path, other_repo: Path, form: str
 ) -> None:
     # fix round 1, issue 81: the walk reads the body, so the write into {repo} scopes the call.
     command = form.format(repo=marked_repo)
     assert str(marked_repo / "x") in jail._bash_write_dirs(command, str(other_repo)), command
-    assert_denied(_foreign(other_repo, command), jail.R_SHELL_BODY)
+    assert_denied(_foreign(other_repo, command), jail.R_SHELL_BODY, CREDENTIAL_PARAM)
+
+
+@pytest.mark.parametrize("form", A2_FIX5_OPAQUE)
+def test_a_run_body_writing_through_an_unresolved_word_names_every_piece(
+    marked_repo: Path, other_repo: Path, form: str
+) -> None:
+    # fix1-a2 (R1 to R3): the unresolved write makes each piece of the text a target, so a
+    # marked repository the command names refuses it from an unmarked folder.
+    command = form.format(repo=marked_repo)
+    dirs = jail._bash_write_dirs(command, str(other_repo))
+    assert any(d == str(marked_repo) or d.startswith(f"{marked_repo}/") for d in dirs), command
+    assert not jail._body_past_cap(command)
+    assert_denied(_foreign(other_repo, command), jail.R_SHELL_BODY, CREDENTIAL_PARAM)
+
+
+@pytest.mark.parametrize("command", A2_FIX5_ADMITTED)
+def test_an_unresolved_body_write_with_no_train_anywhere_is_admitted(
+    other_repo: Path, command: str
+) -> None:
+    # fix1-a2 (0035): with no train marker on this machine, foreign agents and main act as on
+    # the audited tip 1ba48d0.
+    assert not jail._body_past_cap(command), command
+    assert jail.decide(_foreign(other_repo, command), CFG).allow, command
+    assert jail.decide(_b(None, command), CFG).allow, command
+
+
+@pytest.mark.parametrize("form", A2_FIX6_ADMITTED_MARKED)
+def test_a_body_that_writes_only_outside_a_marked_repo_is_admitted(
+    marked_repo: Path, other_repo: Path, form: str
+) -> None:
+    # fix1-a2 (R1, R2): set -o values and substitutions off the write positions bind nothing.
+    command = form.format(repo=marked_repo)
+    decision = jail.decide(_foreign(other_repo, command), CFG)
+    assert decision.allow, (command, decision.reason)
 
 
 @pytest.mark.parametrize("command", A2_FIX4_ADMITTED)

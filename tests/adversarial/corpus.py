@@ -141,7 +141,15 @@ A1_READ_P4 = (
     "file x -C",
 )
 A1_READ_P9 = ("flock l cat x", "time -o t cat x")
-A1_READ_ADMITTED = ("uniq -c in", "uniq -f 1 in", "sort -u in", "sort -t, -k2,2n in", "file -b x")
+A1_READ_ADMITTED = (
+    "uniq -c in",
+    "uniq -f 1 in",
+    "sort -u in",
+    "sort -t, -k2,2n in",
+    "file -b x",
+    "sort -t'$' -k2 in",
+    "sort -t '$' in",
+)
 # P1 (unit A1, fix round 1): an unquoted word the shell splits or turns into an option.
 A1_EXPANSION = (
     "uniq {in,out}",
@@ -162,6 +170,7 @@ A1_EXPANSION = (
     "sort `x` in",
     "{u,}niq in out",
     '"$V" in out',
+    'sort -t"$X" -o out in',
 )
 A1_EXPANSION_ADMITTED = (
     "grep -n sort src/*.py",
@@ -343,6 +352,95 @@ A2_FIX4_UNMARKED = (
 )
 # fix round 4 (unit A2): a here-string or heredoc read by a plain command, with no write.
 A2_FIX4_ADMITTED = ('grep foo <<< "bar"', "cat <<'E'\nhello world\nE")
+# fix1-a2 (issue 81): a body's $0, $1, $@ and the outer prefixes, exports and chain bind its words.
+A2_FIX5_UNMARKED = (
+    "sh -c 'touch \"$1\"' _ {repo}/x",
+    "sh -c 'touch \"$0\"' {repo}/x",
+    "bash -c 'touch \"$@\"' _ {repo}/x",
+    "M={repo} bash -c 'touch $M/x'",
+    "export M={repo}; bash -c 'touch $M/x'",
+    "M={repo} bash <<< 'touch $M/x'",
+    "sh -s {repo}/x <<< 'touch \"$1\"'",
+    "env M={repo} bash -c 'touch $M/x'",
+    'sh -c \'sh -c "touch \\"\\$1\\"" _ "$1"\' _ {repo}/x',
+    "M=\"{repo}\" bash -c 'touch $M/x'",
+    "declare -x M={repo}; bash -c 'touch $M/x'",
+    "set -a; M={repo}; bash -c 'touch $M/x'",
+    "sh -c 'touch \"${{1}}\"' _ {repo}/x",
+    "bash -c 'touch \"${{@:1}}\"' _ {repo}/x",
+    "bash -c 'touch \"$@\"' _ /tmp/a {repo}/x",
+    "bash -c 'touch \"$*\"' _ {repo}/x",
+    "sh -s {repo}/x <<'E'\ntouch \"$1\"\nE",
+    "cd /dev && bash stdin {repo}/x <<< 'touch \"$1\"'",
+    "M={repo} sh <<< 'sh -c \"touch \\$M/x\"'",
+    "sh -s {repo}/x <<E\ntouch \\$1\nE",
+    'sh -s {repo}/x <<E\ntouch "\\$1"\nE',
+    "M={repo} sh <<E\ntouch \\$M/x\nE",
+    "M={repo}; sh <<E\ntouch $M/x\nE",
+    "bash -c 'sh -s \"$1\" <<E\ntouch \\$1\nE' _ {repo}/x",
+)
+# fix1-a2 (issue 81): a run body writing through a word the walk cannot resolve fails closed.
+A2_FIX5_OPAQUE = (
+    "sh -c 'shift; touch \"$1\"' _ a {repo}/x",
+    "bash -c 'shift; touch \"$1\"' _ /tmp/a {repo}/x",
+    "sh -c 'set -- {repo}/x; touch \"$1\"'",
+    "bash -c 'set -- {repo}/x; touch \"$1\"' _ /tmp/a",
+    "bash -c 'set {repo}/x; touch \"$1\"' _ /tmp/a",
+    "sh -c 'getopts a o; touch \"$1\"' _ /tmp/a {repo}/x",
+    "sh -c 'while true; do touch \"$1\"; shift; done' _ /tmp/a {repo}/x",
+    "sh -c 'touch \"$(echo {repo})/x\"'",
+    "sh -c 'touch $(echo {repo})/x'",
+    "sh -c 'touch \"`echo {repo}`/x\"'",
+    "sh -c 'touch \"$((1))\" {repo}/x'",
+    "sh -c 'touch \"${{!1}}\"' _ {repo}/x",
+    "sh -c 'touch \"$1\"' {repo}/x",
+    "bash -c 'bash -c \"touch \\$1\"' {repo}/x",
+    "bash --frob -c 'touch \"$1\"' _ {repo}/x",
+    "M={repo} sh -c 'cd $DAEDALUS_UNSET_FIX5 && touch x'",
+    "sh <<'E'\ntouch \"$1\" {repo}/x\nE",
+    'sh -s <<E\ntouch "$(echo {repo})/x"\nE',
+    "sh -c 'eval set -- {repo}/x; touch \"$1\"'",
+    'sh -c \'eval "set -- {repo}/x"; touch "$1"\'',
+    "bash -c 'eval set -- {repo}/x; touch \"$1\"' _ /tmp/a",
+    "sh -c 'builtin set -- {repo}/x; touch \"$1\"' _ /tmp/a",
+    "sh -c 'command set -- {repo}/x; touch \"$1\"' _ /tmp/a",
+    "sh -c '. /dev/null; touch \"$1\"' _ /tmp/a {repo}/x",
+    "sh -c 'set -o pipefail -- {repo}/x; touch \"$1\"'",
+    "sh -c 'set -euo pipefail {repo}/x; touch \"$1\"' _ /tmp/a",
+    "sh -c 'touch $\"{repo}/x\"'",
+    "sh -c $'touch {repo}/x'",
+    "sh -c 'x=$(echo {repo}); touch \"$x/y\"'",
+    "sh -c 'touch `echo {repo}`/x'",
+    "sh -c '$(echo touch) {repo}/x'",
+    "sh -c '\"$C\" {repo}/x' _",
+    "sh -c '`echo touch` {repo}/x'",
+    "bash -c '$(echo set) -- {repo}/x; touch \"$1\"' _ /tmp/a",
+    'sh -c \'x=$"{repo}"; touch "$x"/a\'',
+    'sh -c "x=\\$\'{repo}\'; touch \\"\\$x\\"/a"',
+    "sh -c 'x=$(echo {repo}); touch \"$x/a\"'",
+    'sh -c \'export x=$"{repo}"; touch "$x"/a\'',
+    "export M=$\"{repo}\"; bash -c 'touch $M/x'",
+)
+# fix1-a2: with a train marked elsewhere, a body that only reads the marked repo or writes a
+# resolved path outside it is judged as on 1ba48d0.
+A2_FIX6_ADMITTED_MARKED = (
+    "sh -c 'set -o pipefail; touch \"$1\"' _ /tmp/fix6/x",
+    'bash -c \'set -euo pipefail; grep -n x "$1"; touch "$2"\' _ {repo}/README.md /tmp/fix6.r',
+    "bash -c 'x=$(date); echo \"$x\" > /tmp/fix6.log; grep -n foo {repo}/a.py'",
+    "bash -c 'echo \"$(date)\"; grep -n foo {repo}/a.py'",
+)
+# fix1-a2 (0035): with no train marker anywhere, these act exactly as on the audited tip 1ba48d0.
+A2_FIX5_ADMITTED = (
+    "sh -c 'touch \"$x\"'",
+    "bash -c 'cp \"$@\" d' _ a b",
+    "bash -c 'echo \"$1\"' _ x",
+    "sh -c 'cat \"$DAEDALUS_UNSET_FIX5\"'",
+    "cat <<'E' > /tmp/fix5.sh\necho hi > \"$1\"\nE",
+    "bash -c 'touch $DAEDALUS_UNSET_FIX5/x'",
+    "bash -c 'while read f; do rm \"$f\"; done' < list",
+    "sh -c 'shift; touch \"$1\"' _ a b",
+    "sh -c 'touch \"$(date +%s)\"'",
+)
 # fix round 3 (unit A2): a script operand, a script named by php -f, or no stdin fed: no body.
 A2_FIX3_ADMITTED = (
     "node --no-warnings app.js",

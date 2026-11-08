@@ -1505,6 +1505,23 @@ def _shell_code(tokens: list[str], stdin: bool = False, base: str | None = "") -
     return _stdin_body(body, stdin, "-s" in body.scan.options, True, base)
 
 
+def shell_params(tokens: list[str]) -> tuple[str, ...]:
+    # fix1-a2 (issue 81): a shell's $0, $1 and on as bash binds them past a -c string, -s or a
+    # script operand; () when an option off the table leaves them unknown.
+    args = tokens[1:]
+    words = ["-" + w[1:] if w[:1] == "+" else w for w in args]
+    cut, _, dashes = _option_end("shell", words)
+    scan = scan_options("shell", words[:cut])
+    if scan.off:
+        return ()
+    rest = args[cut + 1 :] if dashes else args[cut:]
+    if INLINE_FLAGS["shell"] & set(scan.options):
+        return (*(rest[1:2] or tokens[:1]), *rest[2:])
+    if "-s" in scan.options or not rest:
+        return (tokens[0], *rest)
+    return tuple(rest)
+
+
 def _segment_reason(segment: list[str], depth: int, main: bool) -> str | None:
     if depth > 3:
         return R_UNSUPPORTED
