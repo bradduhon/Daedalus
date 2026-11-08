@@ -319,6 +319,8 @@ class _Judge:
     def __init__(self, role: Role, cwd: str) -> None:
         self.role = role
         self.cwd = cwd
+        # 228 S3: the folder later commands run in, moved by one leading cd.
+        self.base = cwd
 
     # -- script and pipelines ----------------------------------------------------------------
     def script(self, script: Script) -> list[AdmittedCommand]:
@@ -356,6 +358,7 @@ class _Judge:
         if path is None or not os.path.isabs(path):
             raise _Off(target.span, "a leading cd takes one absolute path")
         word = Typed("cd", cmd.words[0].span)
+        self.base = path
         return AdmittedCommand(word, "cd", cmd.span, cd_target=Typed(path, target.span))
 
     def pipeline(self, item: Pipeline) -> list[AdmittedCommand]:
@@ -771,6 +774,8 @@ class _Judge:
         script = kind == "script" and not self.role.main
         if script and (option or self.role.read_only or key not in _RUNNERS):
             raise _Off(value.span, f"{what} runs a program or inline code")
+        if script and _stream_path(value.text, self.base):
+            raise _Off(value.span, f"{what} runs {value.text}, a stream under /dev or /proc")
         if kind == "pathspec" and value.text.startswith(":"):
             raise _Off(value.span, f"the pathspec magic {value.text} is not admitted")
         c.add(kind, value)
@@ -1063,6 +1068,13 @@ class _Judge:
         if family in shell._SHELLS or family in shell.INTERPRETERS or family in ("node", "bun"):
             if family not in shell.TEST_RUNNERS or not shell._tester_runner_ok(family, inner):
                 raise _Off(c.span, f"{c.family} runs {inner[0]} outside a test-runner form")
+
+
+def _stream_path(text: str, base: str) -> bool:
+    # 228 S3: a script path resolving under /dev or /proc is a stream; normpath folds . and ..
+    path = "/" + os.path.normpath(os.path.join(base if os.path.isabs(base) else "/", text))
+    path = "/" + path.lstrip("/")
+    return any(path == root or path.startswith(root + "/") for root in ("/dev", "/proc"))
 
 
 def _exclude_tail(sub: str, word: Word) -> bool:

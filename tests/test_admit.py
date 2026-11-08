@@ -306,3 +306,27 @@ def test_a_main_session_shape_stays_off_the_agent_tables(
 def test_a_main_session_parameter_is_typed_not_literal() -> None:
     read = admitted("main", 'grep x "$F"').commands[0].reads[0]
     assert (read.text, read.glob) == ('"$F"', True)
+
+
+# 228 S3: a script path under /dev or /proc runs a stream; normalised, so . and .. cannot hide it.
+STREAM_FORMS = (
+    "python3 /dev/stdin",
+    "python3 /dev/fd/0",
+    "python3 /proc/self/fd/0",
+    "python3 /dev/./stdin",
+    "python3 /dev/fd/../stdin",
+    "python3 //dev/stdin",
+    "python3 ../../../../../../../../dev/stdin",
+    "cd /dev && python3 stdin",
+    "cd /proc/self && python3 fd/0",
+)
+
+
+@pytest.mark.parametrize("command", STREAM_FORMS)
+@pytest.mark.parametrize("wrap", ["", f"{WRAP} "])
+def test_a_stream_script_path_is_refused_beside_a_file_script(command: str, wrap: str) -> None:
+    lead, _, run = command.rpartition("&& ")
+    got = refused("coder", f"{lead}{'&& ' if lead else ''}{wrap}{run}")
+    assert "a stream under /dev or /proc" in got.reason, got
+    admitted("coder", f"{wrap}python3 scripts/x.py")
+    admitted("main", command)
