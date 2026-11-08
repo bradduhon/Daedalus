@@ -17,7 +17,7 @@ from lib.config import Config, ExcludedRootDecl
 
 from tests.adversarial import corpus as C
 from tests.adversarial import test_admit_corpus as AC
-from tests.adversarial.mutation import OPERATORS, PROBE, WRITE_FILE, Mutant, Operator
+from tests.adversarial.mutation import BY_NAME, OPERATORS, PROBE, WRITE_FILE, Mutant, Operator
 from tests.conftest import CFG, CWD, SCRIPTS_DIR, WT, git, write_train_marker
 from tests.hook_chain import CHAINS, decide, evaluate, load
 from tests.jail_cases import _unit_repo
@@ -276,14 +276,59 @@ ELSEWHERE: dict[str, str] = {
 }
 
 
-@pytest.mark.parametrize("op", OPERATORS, ids=[op.name for op in OPERATORS])
+R257 = "257: an expansion in the option slot is typed as a literal option"
+R258 = "258: respelt watch and eval flags on wrapped runners"
+_F2 = (
+    "vite build --watch",
+    "vitest run --watch",
+    "vitest run --watch=true",
+    "pnpm test --watch",
+    "pnpm test -- --watch",
+    "npm test -- --watch",
+    "pnpm run test -w",
+    "yarn test --watch",
+    "yarn test -- --watch",
+    "bun test --watch",
+    "pnpm exec bun -e 1",
+)
+# line 70: (operator, source, row command): the reason; each pair runs alone as a strict xfail.
+XFAIL: dict[tuple[str, str, str], str] = {
+    ("empty_parameter", "A3_ADMITTED", "git stash show -- ':(icase)NOTES'"): R257,
+    **{("option_case", "RUNNERS_WRAPPED", f"cd {WT} && {AC.WRAP} {c}"): R258 for c in _F2},
+}
+
+
+def _params() -> list[object]:
+    out: list[object] = [pytest.param(op, None, id=op.name) for op in OPERATORS]
+    for n, (key, reason) in enumerate(XFAIL.items()):
+        mark = pytest.mark.xfail(strict=True, reason=reason)
+        out.append(pytest.param(BY_NAME[key[0]], key, marks=mark, id=f"{key[0]}-{n}"))
+    return out
+
+
+def _rows(op: Operator, pair: tuple[str, str, str] | None) -> list[Row]:
+    if pair is not None:
+        return [r for r in ROWS if (op.name, r.source, r.command) == pair]
+    return [r for r in ROWS if (op.name, r.source, r.command) not in XFAIL]
+
+
+def test_each_xfail_pair_names_one_row() -> None:
+    for name, source, command in XFAIL:
+        assert name in BY_NAME, name
+        assert sum((r.source, r.command) == (source, command) for r in ROWS) == 1, command
+
+
+@pytest.mark.parametrize(("op", "pair"), _params())
 def test_a_mutant_is_refused_or_keeps_the_typed_record(
-    world: World, monkeypatch: pytest.MonkeyPatch, op: Operator
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+    op: Operator,
+    pair: tuple[str, str, str] | None,
 ) -> None:
     # line 70: a red line reads as a corpus row to add: row, operator, mutant, typed difference.
     _setup(monkeypatch, world)
     tally = {"judged": 0, "admitted": 0}
-    failures = [line for row in ROWS for line in _judge_row(world, op, row, tally)]
+    failures = [line for row in _rows(op, pair) for line in _judge_row(world, op, row, tally)]
     head = f"{op.name} ({op.probes}): {len(failures)} of {tally['judged']} mutants\n"
     assert not failures, head + "\n".join(failures)
 

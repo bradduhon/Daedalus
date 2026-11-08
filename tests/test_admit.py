@@ -245,6 +245,8 @@ def test_only_the_switched_consumers_import_admit() -> None:
         REPO_ROOT / "scripts" / "checks" / "command_allowlist.py",
         REPO_ROOT / "tests" / "test_admit.py",
         REPO_ROOT / "tests" / "adversarial" / "test_admit_corpus.py",
+        # line 70: the mutation harness compares admit's typed records.
+        REPO_ROOT / "tests" / "adversarial" / "test_mutations.py",
         # 228 S3b: the coder's four checks and their tests.
         REPO_ROOT / "scripts" / "checks" / "confine.py",
         REPO_ROOT / "scripts" / "checks" / "network_tools.py",
