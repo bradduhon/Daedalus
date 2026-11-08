@@ -136,6 +136,7 @@ This section binds a unit whose `files:` list holds any of: `scripts/checks/` (a
 `scripts/lib/dispatch_binding.py`.
 - Build only what the brief names. A construct the brief does not name is refused where the check fails closed and left as it is everywhere else.
 - Never fill a gap on your own judgement. Report it: `- deviation gap | <form> | not in the brief`.
+- A jail refusal on a form your work legitimately needs is a `YIELD_GRANT`, never a workaround: commit WIP and return `[STATUS: YIELD_GRANT] <exact command> | <why>` (233).
 - Never change a refusal text, a table or a list every agent reads unless the brief names it.
 - Never add a quote model, a normaliser or a parser of your own. Use the helper that exists.
 - Self-hunt before COMPLETE. For each requirement, build hiding forms from the hunt list below. Prove each is refused by a test row in `tests/adversarial/` or the unit's tests.
@@ -208,4 +209,5 @@ under the `## Receipts` block of step 6; a yield line needs no block.
 - `[STATUS: YIELD_CONTRACT] <mismatch>`
 - `[STATUS: YIELD_COMPLIANCE] <question>`
 - `[STATUS: YIELD_STANDARDS] <question>`
+- `[STATUS: YIELD_GRANT] <exact command> | <why>`
 - `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>`, optionally followed by ` adversarial=pass` and then ` audit_tests=pass`, then ` hunt=<n>` on a unit the build-only-the-ask section binds (227), and always ending with ` turns=<n>` (item 15)

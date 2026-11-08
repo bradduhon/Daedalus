@@ -261,6 +261,8 @@ MAIN_ONLY = (
     "daedalus_train.py reaudit",
     # 0190: the operator's writer queue clear runs from the main session only.
     "daedalus_train.py writer-clear",
+    # 233: the sealed one-time pass is the operator's grant, written by the main session.
+    "daedalus_train.py grant",
     # issue 48, 0173: plan step 2 runs it outside a run only; the run entry set the scope.
     "daedalus_doctor.py --print-scope",
     # 0209: the token budget gate; the main session runs it in unattended mode.
