@@ -303,6 +303,9 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
             if mismatch is not None:
                 return mismatch
             continue
+        if "inspect" in allowed and name in shell.READ_ONLY_WRITE_OPTS:
+            if shell.expansion_opaque(raw):  # issue 204, P1: the read verbs that can write.
+                return shell.R_READ_EXPANSION
         if "inspect" in allowed and _inspect_ok(segment, cwd):
             continue
         return _reason(allowed)

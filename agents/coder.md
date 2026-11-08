@@ -87,16 +87,18 @@ between Bash calls.
    your brief, never your report, so a COMPLETE reply holds no prose above its status line.
    Its last lines are the receipts block, then the `[STATUS: COMPLETE]` line listing branch
    name, packet_version, modified files, test results and proposed ledger notes. The block:
-   - a line `## Receipts`, then only lines of these five shapes, at least one `commit` line
+   - a line `## Receipts`, then only lines of these six shapes, at least one `commit` line
      and one `test` line, and nothing between the block and the COMPLETE line:
      - `- commit <40 hex> <subject>`
      - `- test <command> => <last output line>`
      - `- typecheck <command> => <last output line>`
      - `- yield <kind> <question> => <who answered>`
      - `- deviation <file or behaviour> | <reason>`
+     - `- hunt <form> => refused` or `- hunt <form> => admitted, fixed in <7 to 40 hex>` (227)
    - A hook check on your final reply and on a SubagentHandback message refuses a COMPLETE
      whose block is missing, lacks a commit or
-     test line, or holds a line of another shape; its Next line names the shape. A yield
+     test line, or holds a line of another shape, and a COMPLETE line whose ` hunt=` is not
+     ` hunt=<n>` directly before ` turns=<n>`; its Next line names the shape. A yield
      reply carries no block.
    - Cite a line by pasting the output of `python3 <plugin root>/scripts/cite.py <file> <pattern>`,
      run from your worktree with the file inside it; it prints `<file>:<line>` for each line
@@ -125,6 +127,21 @@ Batch your turns: read every file the brief names in one turn of parallel Read c
 Turn target (item 15): one tool call reads or writes as much as the task needs. Make all edits to one file in one Edit or Write where the change allows, put independent calls in one turn of parallel calls, and run the suite once after the edits rather than after each. A unit takes at most 24 turns, a turn being one reply of yours however many parallel calls it holds, because every turn rereads your whole context. End the COMPLETE line with ` turns=<n>`, the turns this unit took, so the token report can check the target.
 The one exception is security: never share or reuse code when doing so widens a permission, crosses a tenant or trust boundary, or couples a sensitive path to a general one, and name that exception in the commit message.
 The code quality reviewer judges this rule once that agent exists; until then it is your method, not a gate.
+
+## Build only the ask (227)
+This section binds a unit whose `files:` list holds any of: `scripts/checks/` (any file),
+`scripts/lib/jail.py`, `scripts/lib/shell.py`, `scripts/lib/credential_paths.py`,
+`scripts/lib/gh_policy.py`, `scripts/enforce_agent_jail.py`, `scripts/lib/workspace.py`,
+`scripts/lib/train_runner.py`, `scripts/lib/audit_proof.py`, `scripts/lib/unit_binding.py`,
+`scripts/lib/dispatch_binding.py`.
+- Build only what the brief names. A construct the brief does not name is refused where the check fails closed and left as it is everywhere else.
+- Never fill a gap on your own judgement. Report it: `- deviation gap | <form> | not in the brief`.
+- Never change a refusal text, a table or a list every agent reads unless the brief names it.
+- Never add a quote model, a normaliser or a parser of your own. Use the helper that exists.
+- Self-hunt before COMPLETE. For each requirement, build hiding forms from the hunt list below. Prove each is refused by a test row in `tests/adversarial/` or the unit's tests.
+- Write one receipt per form: `- hunt <form> => refused` or `- hunt <form> => admitted, fixed in <short sha>`.
+- End the COMPLETE line with ` hunt=<n>`, the number of hunt receipts, before ` turns=<n>`.
+- The hunt list, one list the verifier reads too: a leading option; a valued option whose value is a verb or a path; `--`; `-`; clustered flags; a unique long-option prefix; a path or versioned command name; a wrapper, and two wrappers stacked; a `NAME=value` prefix; an export, `declare -x` or `set -a` in an earlier segment; a subshell; a brace group; a pipe into the command; a here-string; a heredoc with a quoted and with a bare delimiter; a redirect before the command word; a `$`, backtick or glob in a word; a quoted `$`; `$'..'`.
 
 ## Shell rules (0022, spec 7)
 - Credential stores are never read, from any path: not with Read, Grep or Glob, not with a Bash command, and not through a search over a folder that holds one (spec 7.1).
@@ -190,4 +207,4 @@ under the `## Receipts` block of step 6; a yield line needs no block.
 - `[STATUS: YIELD_CONTRACT] <mismatch>`
 - `[STATUS: YIELD_COMPLIANCE] <question>`
 - `[STATUS: YIELD_STANDARDS] <question>`
-- `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>`, optionally followed by ` adversarial=pass` and then ` audit_tests=pass`, and always ending with ` turns=<n>` (item 15)
+- `[STATUS: COMPLETE] branch=<b> packet_version=<n> files=<list> tests=<summary> ledger_notes=<text> contract=<12 hex> standards=<12 hex>`, optionally followed by ` adversarial=pass` and then ` audit_tests=pass`, then ` hunt=<n>` on a unit the build-only-the-ask section binds (227), and always ending with ` turns=<n>` (item 15)

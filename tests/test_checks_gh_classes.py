@@ -209,12 +209,15 @@ def test_gh_classes_judges_the_hook_alone() -> None:
     assert "not on the coder gh list" in str(evaluate(HOOK, _b("coder", "gh pr view 1")))
 
 
-def test_charter_docs_ledger_value_naming_git_push_is_refused_by_gh_classes() -> None:
-    # 0044 parity: the gh gate's text fallback refuses `git push` inside an argument value.
+def test_charter_docs_ledger_value_naming_git_push_is_parsed_by_gh_classes() -> None:
+    # 0044 parity, R-extra-1 (unit A2): a script run is a parsed segment; one quoted value
+    # naming git push is an argument, never a push, so the text fallback no longer reads it.
     args = '--expected-seq 2 --entry-file docs/.tmp/e.md --repo DAE --type "git push"'
     hook_input = _b("charter-docs", f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}")
-    assert first_deny(hook_input, CFG) == (HOOK, str(evaluate(HOOK, hook_input)))
-    assert "git push runs only in the Push Train's releaser" in str(evaluate(HOOK, hook_input))
+    assert evaluate(HOOK, hook_input) is None
+    assert first_deny(hook_input, CFG) is None
+    inline = _b("charter-docs", "python3 -c \"import os; os.system('git push')\"")
+    assert "git push runs only in the Push Train's releaser" in str(evaluate(HOOK, inline))
 
 
 def test_gh_classes_fixture_decisions() -> None:
