@@ -152,6 +152,16 @@ FILES: tuple[Entry, ...] = (
         "the first agent reply recorded during a train; no agent may read it",
     ),
     Entry(
+        f"{_DATA}/grants/",
+        "scripts/lib/passes.py:write_pass",
+        "the main session grants a sealed one-time pass with daedalus_train.py grant (233)",
+    ),
+    Entry(
+        f"{_DATA}/grants/<sha256>.json",
+        "scripts/lib/passes.py:write_pass",
+        "the main session grants a sealed one-time pass; the matching call deletes it (233)",
+    ),
+    Entry(
         f"{_AUDIT}/",
         "scripts/lib/audit.py:audit_append",
         "a hook records an event while a train runs",

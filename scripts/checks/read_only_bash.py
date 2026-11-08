@@ -14,7 +14,7 @@ from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lib import hook_io, jail, shell, train_state  # noqa: E402
+from lib import hook_io, jail, passes, shell, train_state  # noqa: E402
 from lib.admit import Admitted, Refusal, Role, admit_role  # noqa: E402
 from lib.audit import project_root  # noqa: E402
 from lib.shparse import Script, parse, walk  # noqa: E402
@@ -295,6 +295,10 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
         if args is not None and any(a.startswith("--basetemp") for a in args):
             return jail.R_BASETEMP_AGENT.format(agent=agent)
     got = admit_role(script, role(agent, grant, runner, terraform), cwd, text=command)
+    if isinstance(got, Refusal) and passes.pass_admits(
+        project_root(cwd), agent, command, cwd, hook_input
+    ):
+        return None  # 233: a sealed pass for this exact call, consumed and recorded.
     if isinstance(got, Refusal):
         return _refusal(script, got, grant, runner, (terraform, cwd))
     return _later((script, command), got, grant, runner, (terraform, cwd))

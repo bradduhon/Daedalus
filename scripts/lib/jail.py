@@ -13,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, TypeGuard
 
-from lib import dispatch_binding, hook_io, shell, shparse
+from lib import dispatch_binding, hook_io, passes, shell, shparse
 from lib.audit import _git_env, project_data_dir, project_root
 from lib.audit_proof import SUMMARY_DIR
 from lib.config import (
@@ -2617,11 +2617,21 @@ def _ours(raw_agent: str) -> bool:
     return bool(sep) and prefix in (*AGENT_NAMESPACES, TEST_NAMESPACE)
 
 
-def _foreign_bash(command: str, cwd: str, repo: Path, agent: str, charter: str | None) -> Decision:
+def _foreign_bash(
+    command: str,
+    cwd: str,
+    repo: Path,
+    agent: str,
+    charter: str | None,
+    hook_input: dict[str, object],
+) -> Decision:
     # 0100, 228 S3: a foreign agent's Bash in a run is admitted as a read, else refused at its span.
     got = _admission(command, "foreign", cwd)[1]
     train = R_UNKNOWN_TRAIN.format(agent=agent, marker=train_marker(repo), repo=repo)
     refused = _refused(got)
+    raw_agent = hook_io.raw_agent(hook_input)
+    if refused is not None and passes.pass_admits(repo, raw_agent, command, cwd, hook_input):
+        return _allow()  # 233: a sealed pass for this exact call, consumed and recorded.
     if refused is not None:
         return _block(refusal_text(refused, train))
     outside = git_dir_outside(got, cwd, charter) if _passed(got) else None
@@ -2634,7 +2644,8 @@ def _unknown_decision(
     cwd: str,
     tool: str,
     tool_input: dict[str, object],
-    charter: str | None = None,
+    charter: str | None,
+    hook_input: dict[str, object],
 ) -> Decision:
     # 0023, 0100: a foreign agent reads only while a train is active; a daedalus name never acts.
     if _ours(raw_agent):
@@ -2653,7 +2664,7 @@ def _unknown_decision(
     if repo is None:
         return _allow()
     if tool == "Bash":
-        return _foreign_bash(command, cwd, repo, agent, charter)
+        return _foreign_bash(command, cwd, repo, agent, charter, hook_input)
     return _block(R_UNKNOWN_TRAIN.format(agent=agent, marker=train_marker(repo), repo=repo))
 
 
@@ -2708,7 +2719,7 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
         decision = _block(gh)
     else:
         charter = str(config.charter_root) if config.charter_root else None
-        decision = _unknown_decision(raw_agent, agent, cwd, tool, tool_input, charter)
+        decision = _unknown_decision(raw_agent, agent, cwd, tool, tool_input, charter, hook_input)
     return _with_agent(decision, agent)
 
 

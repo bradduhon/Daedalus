@@ -19,6 +19,8 @@ from lib.config import ConfigError, load_config  # noqa: E402
 from lib.git import GitTimeout  # noqa: E402
 from lib.manifest import Assets, ManifestError  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
+from lib.passes import PassError, write_pass  # noqa: E402
+from lib.passes import load as load_pass  # noqa: E402
 from lib.project_root import project_root, repo_refusal  # noqa: E402
 from lib.train_runner import (  # noqa: E402
     EXIT_OK,
@@ -51,7 +53,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
         "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
-        "brief-check, ask-check, packs, writer-clear, assets, refuted. "
+        "brief-check, ask-check, packs, writer-clear, assets, refuted, grant. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -147,7 +149,30 @@ def _parser() -> argparse.ArgumentParser:
     tail.add_argument("--repo", type=Path, required=True)
     tail.add_argument("--base", required=True)
     tail.add_argument("--tip", required=True)
+    # 233: the main session's sealed one-time pass; the command text comes from a file only.
+    grant = sub.add_parser("grant")
+    grant.add_argument("--repo", type=Path, required=True)
+    grant.add_argument("--agent", required=True)
+    grant.add_argument("--cwd", required=True)
+    grant.add_argument("--reason", required=True)
+    grant.add_argument("--ledger-id", dest="ledger_id", required=True)
+    grant.add_argument("--command-file", dest="command_file", type=Path, required=True)
     return parser
+
+
+def _grant(repo: Path, args: argparse.Namespace) -> Outcome:
+    # 233: read whole and undecoded by newline, so the digest is over the exact command.
+    try:
+        command = args.command_file.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return Outcome(EXIT_STOP, [f"grant: the command file could not be read ({exc})."])
+    try:
+        path = write_pass(repo, args.agent, command, args.cwd, args.reason, args.ledger_id)
+    except PassError as exc:
+        return Outcome(EXIT_STOP, [f"grant: {exc}"])
+    written = load_pass(path)
+    expires = written.expires if written is not None else "unknown"
+    return Outcome(EXIT_OK, [f"pass written sha256={path.stem[:12]} expires={expires}"])
 
 
 PACKS_NEXT = "Next: run /daedalus:doctor and fix each pack it names, then run /daedalus:run again."
@@ -376,6 +401,8 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return _writer_clear(repo)
     if args.action == "assets":
         return _assets(repo, args.base, args.tip)
+    if args.action == "grant":
+        return _grant(repo, args)
     if args.action == "check-reply":
         return check_reply(repo, args.stage)
     if args.action == "state":

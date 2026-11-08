@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lib import hook_io, jail, shell  # noqa: E402
+from lib import hook_io, jail, passes, shell  # noqa: E402
 from lib.admit import Admitted, Refusal, Role, admit_role, role_for  # noqa: E402
 from lib.audit import project_root  # noqa: E402
 from lib.manifest import ManifestError, manifest_path  # noqa: E402
@@ -332,6 +332,11 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     cwd = hook_io.text(hook_input, "cwd")
     script = parse(command)
     got = admit_role(script, _role(allowed), cwd, text=command)
+    agent = hook_io.agent(hook_input)
+    if isinstance(got, Refusal) and passes.pass_admits(
+        project_root(cwd), agent, command, cwd, hook_input
+    ):
+        return None  # 233: a sealed pass for this exact call, consumed and recorded.
     if isinstance(got, Refusal):
         return _refusal(script, got, allowed, cwd)
     return _later(script, command, got, allowed, cwd)
