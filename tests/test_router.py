@@ -268,9 +268,10 @@ DENIALS = {
     "verifier": (_input("verifier", "Write", file_path=f"{CWD}/docs/x.md"), "tool_bound"),
     "web-researcher": (_input("web-researcher", command="ls"), "tool_bound"),
     "planner": (_input("planner", command="ls"), "tool_bound"),
+    # 228 S3: the allowlist admits by the gh class table now, so it is the first deny.
     "releaser": (
         _input("daedalus:releaser", command="gh pr merge 3"),
-        "gh_classes",
+        "command_allowlist",
     ),
     "orchestrator": (
         _input("daedalus:orchestrator", "Agent", subagent_type="general-purpose", prompt="x"),
