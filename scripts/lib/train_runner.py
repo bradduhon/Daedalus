@@ -32,7 +32,6 @@ from lib import coder_model as coder_model_lib
 from lib.audit import ReplyKeyError, message_hmac, reply_key
 from lib.audit_proof import (
     AUDITOR,
-    HANDBACK,
     R_BOTH_VERDICTS,
     SUMMARY_DIR,
     TIP,
@@ -44,7 +43,6 @@ from lib.audit_proof import (
     docs_findings_path,
     docs_keys,
     findings_path,
-    handback_message,
     hooks_live,
     ledger_parent,
     live_log,
@@ -1475,42 +1473,6 @@ def _refutation_seqs(unit: dict[str, object]) -> list[int | str]:
     return [s for s in items if isinstance(s, str | int) and not isinstance(s, bool)]
 
 
-def _newest_verifier_reply(
-    records: list[dict[str, object]], worktree: Path
-) -> tuple[int, str] | None:
-    # issue 187: seq and last line of the newest verifier reply in the worktree's newest window;
-    # a hand-back wins over the digest stop the same verifier ends that turn with.
-    anchors = workspace._anchors(records, worktree)
-    if not anchors:
-        return None
-    replies: list[tuple[int, str, object, str]] = []
-    for record in records[anchors[-1] + 1 :]:
-        if workspace._worktree_lines(record):
-            break
-        agent = record.get("agent_type")
-        if not isinstance(agent, str) or agent.rpartition(":")[2] != workspace.VERIFIER:
-            continue
-        event = record.get("event")
-        if event == "SubagentStop":
-            text = record.get("last_message_tail")
-        elif event == "PostToolUse" and record.get("tool_name") == HANDBACK:
-            text = handback_message(record)
-        else:
-            continue
-        seq = record.get("seq")
-        if isinstance(text, str) and text.strip() and isinstance(seq, int):
-            replies.append((seq, str(event), record.get("agent_id"), text))
-    if not replies:
-        return None
-    chosen = replies[-1]
-    if len(replies) > 1 and chosen[1] == "SubagentStop":
-        before = replies[-2]
-        if before[1] == "PostToolUse" and before[2] == chosen[2]:
-            chosen = before
-    lines = [line.strip() for line in chosen[3].splitlines() if line.strip()]
-    return chosen[0], lines[-1]
-
-
 def refuted(cwd: Path, unit_id: str, operator_check: str | None = None) -> Outcome:
     # issue 187: one refutation per REFUTED verifier reply, keyed by its audit seq, on the unit;
     # an operator-check Fail is keyed by its check text and the newest verifier reply's seq.
@@ -1526,23 +1488,28 @@ def refuted(cwd: Path, unit_id: str, operator_check: str | None = None) -> Outco
         except workspace.WorkspaceError as exc:
             raise RunnerError(str(exc)) from exc
         unit = _unit_record(state, train_id, unit_id)
-        reply = _newest_verifier_reply(records, Path(str(unit["path"])))
+        # 235: the one reader exception --unit and the merge gate use, so all key one seq.
+        anchors = workspace._anchors(records, Path(str(unit["path"])))
+        reply = workspace.newest_reply(records, anchors[-1]) if anchors else None
+        raw = reply[0] if reply is not None else None
+        seq = raw if isinstance(raw, int) and not isinstance(raw, bool) else None
+        line = reply[1] if reply is not None else None
         key: int | str
         if check is not None:
-            key = f"operator check after seq {reply[0] if reply else 0}: {check}"
-        elif reply is None:
+            key = f"operator check after seq {seq if seq is not None else 0}: {check}"
+        elif seq is None:
             raise RunnerError(
                 f"the audit log holds no verifier reply on unit {unit_id} since its newest "
                 f"Unit worktree: dispatch. {_REFUTED_NEXT}"
             )
-        elif not reply[1].startswith(coder_model_lib.REFUTED_PREFIX):
+        elif line is None or not line.startswith(coder_model_lib.REFUTED_PREFIX):
             raise RunnerError(
-                f"the newest verifier reply on unit {unit_id}, at seq {reply[0]}, does not end "
+                f"the newest verifier reply on unit {unit_id}, at seq {seq}, does not end "
                 f"with {coder_model_lib.REFUTED_PREFIX}, so no refutation is recorded. "
                 f"{_REFUTED_NEXT}"
             )
         else:
-            key = reply[0]
+            key = seq
 
         def add(state: dict[str, object]) -> None:
             raw = state.get("units")
