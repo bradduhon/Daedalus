@@ -22,6 +22,7 @@ from lib.config import ConfigError, load_config
 from tests.adversarial.corpus import (
     CONFINE_RUNNERS,
     DEV_SERVERS,
+    GAME_RUNNERS,
     INTERPRETER_BINS,
     RULING_MARKERS,
     TERRAFORM_INIT_FORM,
@@ -329,8 +330,15 @@ def test_each_new_runner_needs_the_wrapper(command: str) -> None:
     # 0048, issue 91: bare, the runner is refused; wrapped, the confine check passes it.
     bare = _b("coder", f"cd {WT} && {command}")
     assert evaluate("confine", bare) == load("confine").R_CONFINE
-    assert_denied(bare)
-    assert evaluate("confine", _b("coder", f"cd {WT} && {WRAP} {command}")) is None
+    wrapped = _b("coder", f"cd {WT} && {WRAP} {command}")
+    assert evaluate("confine", wrapped) is None
+    if command not in GAME_RUNNERS or command.split()[0] in shell.WORKER_WRAPPERS:
+        assert_denied(bare)
+        return
+    # 0164: the game rows must admit; the whole chain refuses them bare and admits them wrapped.
+    assert_denied(bare, "kernel wrapper")
+    decision = decide(wrapped, CFG)
+    assert decision.allow and not decision.warn, (command, decision.reason)
 
 
 def _refused_bare_and_wrapped(command: str, reason: str) -> None:
