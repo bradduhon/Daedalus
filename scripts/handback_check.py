@@ -17,21 +17,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 CODER = "coder"
 RECEIPTS = "## Receipts"
-# Pin RCP -> VER: the only five line shapes the block holds, by kind.
+# Pin RCP -> VER: the only six line shapes the block holds, by kind.
 SHAPES: dict[str, re.Pattern[str]] = {
     "commit": re.compile(r"- commit [0-9a-f]{40} .*\S"),
     "test": re.compile(r"- test \S.* => .*\S"),
     "typecheck": re.compile(r"- typecheck \S.* => .*\S"),
     "yield": re.compile(r"- yield \S+ \S.* => .*\S"),
     "deviation": re.compile(r"- deviation \S.* \| .*\S"),
+    # 227: a self-hunt receipt; the outcome is refused or a fix commit of 7 to 40 hex.
+    "hunt": re.compile(r"- hunt \S.* => (?:refused|admitted, fixed in [0-9a-f]{7,40})"),
 }
 REQUIRED = ("commit", "test")
+# 227: a ` hunt=<n>` field sits directly before the closing ` turns=<n>`.
+_HUNT_FIELD = re.compile(r"(?<!\S)hunt=")
+_HUNT_TAIL = re.compile(r" hunt=([0-9]+) turns=[0-9]+\Z")
 SHAPE = (
     "a line `## Receipts`, then only lines `- commit <40 hex> <subject>`, "
     "`- test <command> => <last output line>`, `- typecheck <command> => <last output line>`, "
-    "`- yield <kind> <question> => <who answered>` and "
-    "`- deviation <file or behaviour> | <reason>`, "
-    "with at least one commit line and one test line, and the COMPLETE line unchanged"
+    "`- yield <kind> <question> => <who answered>`, "
+    "`- deviation <file or behaviour> | <reason>` and "
+    "`- hunt <form> => refused` or `- hunt <form> => admitted, fixed in <7 to 40 hex>`, "
+    "with at least one commit line and one test line, and the COMPLETE line unchanged "
+    "but for ` hunt=<n>` directly before its closing ` turns=<n>`"
 )
 SHOWN_CHARS = 120
 
@@ -47,20 +54,30 @@ def receipts_problem(reply: str) -> str | None:
     lines = [line.rstrip() for line in reply.rstrip().splitlines()]
     if not lines or not lines[-1].strip().startswith(COMPLETE_LINE):
         return None
-    body = lines[:-1]
+    body, status = lines[:-1], lines[-1].strip()
+    tail = _HUNT_TAIL.search(status)
+    hunts = _HUNT_FIELD.findall(status)
+    if hunts and (len(hunts) > 1 or tail is None):
+        return "the COMPLETE line carries `hunt=` other than as ` hunt=<n>` before ` turns=<n>`"
     if RECEIPTS not in body:
         return f"the COMPLETE reply has no `{RECEIPTS}` line above its status line"
     block = body[len(body) - body[::-1].index(RECEIPTS) :]
-    kinds: set[str] = set()
+    kinds: list[str] = []
     for line in block:
         kind = _kind(line)
         if kind is None:
             shown = line if len(line) <= SHOWN_CHARS else line[:SHOWN_CHARS] + "..."
             return f"the receipts block holds a line of another shape: {shown!r}"
-        kinds.add(kind)
+        kinds.append(kind)
     missing = [kind for kind in REQUIRED if kind not in kinds]
     if missing:
         return "the receipts block has no " + " and no ".join(missing) + " line"
+    # 227: a hunt count equals the hunt receipts; no field leaves the count to the build skill.
+    if tail is not None and int(tail.group(1)) != kinds.count("hunt"):
+        return (
+            f"the COMPLETE line carries hunt={int(tail.group(1))} "
+            f"but the receipts block holds {kinds.count('hunt')} hunt lines"
+        )
     return None
 
 

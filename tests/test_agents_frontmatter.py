@@ -260,6 +260,9 @@ def test_coder_reads_the_packets_by_hash() -> None:
     assert "optionally followed by ` adversarial=pass` and then ` audit_tests=pass`" in item
     # item 15: the turn count closes the line after the optional fields.
     assert "and always ending with ` turns=<n>` (item 15)" in item
+    # 227: the hunt count sits after ` audit_tests=pass` and before ` turns=<n>`.
+    assert "` audit_tests=pass`, then ` hunt=<n>` on a unit" in item
+    assert item.index("` hunt=<n>`") < item.index("` turns=<n>`")
 
 
 def test_coder_runs_the_corpus_and_the_audit_tests() -> None:
@@ -692,3 +695,131 @@ def test_every_agent_carries_the_human_text_rule(name: str) -> None:
     text = (AGENTS / f"{name}.md").read_text()
     assert HUMAN_TEXT_RULE in text
     assert text.index(HUMAN_TEXT_RULE) < text.index("## Status contract")
+
+
+# 227: the build-only-the-ask file list and hunt list, as issue 227 names them.
+HUNT_FILES = (
+    "scripts/checks/",
+    "scripts/lib/jail.py",
+    "scripts/lib/shell.py",
+    "scripts/lib/credential_paths.py",
+    "scripts/lib/gh_policy.py",
+    "scripts/enforce_agent_jail.py",
+    "scripts/lib/workspace.py",
+    "scripts/lib/train_runner.py",
+    "scripts/lib/audit_proof.py",
+    "scripts/lib/unit_binding.py",
+    "scripts/lib/dispatch_binding.py",
+)
+HUNT_FORMS = frozenset(
+    {
+        "a leading option",
+        "a valued option whose value is a verb or a path",
+        "`--`",
+        "`-`",
+        "clustered flags",
+        "a unique long-option prefix",
+        "a path or versioned command name",
+        "a wrapper, and two wrappers stacked",
+        "a `NAME=value` prefix",
+        "an export, `declare -x` or `set -a` in an earlier segment",
+        "a subshell",
+        "a brace group",
+        "a pipe into the command",
+        "a here-string",
+        "a heredoc with a quoted and with a bare delimiter",
+        "a redirect before the command word",
+        "a `$`, backtick or glob in a word",
+        "a quoted `$`",
+        "`$'..'`",
+    }
+)
+BUILD_SKILL = REPO_ROOT / "skills" / "build" / "SKILL.md"
+VERIFY_SKILL = REPO_ROOT / "skills" / "verify" / "SKILL.md"
+# 227: the line each file opens its hunt list with.
+HUNT_PREFIX = {
+    AGENTS / "coder.md": "- The hunt list, one list the verifier reads too: ",
+    BUILD_SKILL: "- Hunt: ",
+    VERIFY_SKILL: "- The hunt list: ",
+}
+
+
+def _hunt_forms(path: Path) -> frozenset[str]:
+    prefix = HUNT_PREFIX[path]
+    lines = [line.strip() for line in path.read_text().splitlines()]
+    found = [line for line in lines if line.startswith(prefix)]
+    assert len(found) == 1, path
+    return frozenset(found[0].removeprefix(prefix).removesuffix(".").split("; "))
+
+
+def _build_step(text: str, start: str, end: str) -> str:
+    return " ".join(text.split(start, 1)[1].split(end, 1)[0].split())
+
+
+def test_coder_carries_the_build_only_the_ask_section() -> None:
+    text = (AGENTS / "coder.md").read_text()
+    assert text.index("## Code hygiene") < text.index("## Build only the ask (227)")
+    assert text.index("## Build only the ask (227)") < text.index("## Shell rules")
+    section = _build_step(text, "## Build only the ask (227)", "\n## ")
+    for path in HUNT_FILES:
+        assert f"`{path}`" in section, path
+    for rule in (
+        "Build only what the brief names.",
+        "`- deviation gap | <form> | not in the brief`",
+        "Never change a refusal text, a table or a list every agent reads unless the brief"
+        " names it.",
+        "Never add a quote model, a normaliser or a parser of your own.",
+        "`- hunt <form> => refused` or `- hunt <form> => admitted, fixed in <short sha>`",
+        "End the COMPLETE line with ` hunt=<n>`, the number of hunt receipts, before ` turns=<n>`.",
+    ):
+        assert rule in section, rule
+    assert _hunt_forms(AGENTS / "coder.md") == HUNT_FORMS
+    receipts = _build_step(text, "6. Finish with receipts", "## Project priorities")
+    assert "only lines of these six shapes" in receipts
+    assert "`- hunt <form> => admitted, fixed in <7 to 40 hex>`" in receipts
+
+
+def test_build_skill_carries_the_scope_and_hunt_lines_and_the_step_7_check() -> None:
+    text = BUILD_SKILL.read_text()
+    step4 = _build_step(text, "4. Brief by file", "5. Dispatch.")
+    for path in HUNT_FILES:
+        assert f"`{path}`" in step4, path
+    assert "two lines directly after the `Worktree:` line" in step4
+    assert (
+        "`Scope: only what this brief names; anything it does not name is left as it is,"
+        " fail closed`"
+    ) in step4
+    assert "The second is the `Hunt:` line below, copied in full and never pointed at" in step4
+    assert _hunt_forms(BUILD_SKILL) == HUNT_FORMS
+    step7 = _build_step(text, "7. Check each COMPLETE line", "8. A coder that")
+    hunt = step7.split("Build-only-the-ask units (227).", 1)[1]
+    assert "the line must carry ` hunt=<n>`" in hunt
+    assert "add ` hunt=<n>` before ` turns=<n>`" in hunt
+    assert "A second COMPLETE on the unit without it stops the run" in hunt
+
+
+def test_verify_skill_hunt_forms_equal_the_coder_files() -> None:
+    assert _hunt_forms(VERIFY_SKILL) == _hunt_forms(AGENTS / "coder.md")
+    text = " ".join(VERIFY_SKILL.read_text().split())
+    assert "Run a hunt pass in round one." in text
+    assert "Report every form that lets a write pass as a `code` row." in text
+
+
+@pytest.mark.parametrize(
+    ("files", "needs"),
+    [
+        (("scripts/checks/x.py",), True),
+        (("scripts/lib/dispatch_binding.py", "README.md"), True),
+        (("scripts/lib/jailx.py", "scripts/checksum.py", "agents/coder.md"), False),
+        (("README.md",), False),
+    ],
+)
+def test_a_unit_needs_scope_and_hunt_only_when_it_touches_a_listed_file(
+    files: tuple[str, ...], needs: bool
+) -> None:
+    # 227: the class is the build skill's step 4 list; a folder entry matches any file under it.
+    step4 = _build_step(BUILD_SKILL.read_text(), "Build-only-the-ask units (227).", "- Hunt: ")
+    listed = tuple(re.findall(r"`(scripts/[^`]+)`", step4))
+    assert listed == HUNT_FILES
+    got = any(f.startswith(p) if p.endswith("/") else f == p for f in files for p in listed)
+    assert got is needs
