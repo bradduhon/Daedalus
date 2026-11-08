@@ -594,10 +594,17 @@ def _merges(repo: Path, ref: str) -> list[str]:
     return _ok(repo, "log", "--merges", "--reverse", "--format=%s", ref).splitlines()
 
 
+def _verified(repo: Path, train: str, *units: Path) -> None:
+    # 234: finish merges a unit only past the verdict gate, so each unit gets a VERIFIED reply.
+    train_state.update(repo, train, audit_session=SESSION)
+    for unit in units:
+        _dispatch(repo, unit)
+        _verifier_stop(repo, VERIFIED_REPLY)
+
+
 def test_finish_merges_every_unit_in_order(repo: Path) -> None:
     train = _locked_train(repo)
-    _built(repo, train, "u1")
-    _built(repo, train, "u2")
+    _verified(repo, train, _built(repo, train, "u1"), _built(repo, train, "u2"))
     lines = finish(repo)
     assert lines[0] == f"merged 2 units into daedalus/{train}"
     assert _merges(repo, f"daedalus/{train}") == [
@@ -639,8 +646,8 @@ def test_finish_refuses_a_unit_not_descending_from_the_lock(repo: Path) -> None:
 def test_finish_aborts_and_stays_on_the_train_branch(repo: Path) -> None:
     # issue 95: a failed merge keeps the repository on daedalus/<train-id> with earlier merges.
     train = _locked_train(repo)
-    _built(repo, train, "u1", "shared.txt", "one\n")
-    _built(repo, train, "u2", "shared.txt", "two\n")
+    one = _built(repo, train, "u1", "shared.txt", "one\n")
+    _verified(repo, train, one, _built(repo, train, "u2", "shared.txt", "two\n"))
     with pytest.raises(WorkspaceError) as info:
         finish(repo)
     message = str(info.value)
@@ -671,6 +678,7 @@ def test_finish_after_a_revise_takes_a_unit_built_on_the_first_lock(repo: Path) 
     assert lock(repo, "contracts/api.md", 2)[0] == f"lock: {v1}"
     tip = _ok(repo, "rev-parse", f"daedalus/{train}")
     assert _git(repo, "merge-base", "--is-ancestor", tip, f"daedalus-unit/{train}-u2").returncode
+    _verified(repo, train, u2)
     lines = finish(repo)
     assert lines[0] == f"merged 1 units into daedalus/{train}"
     assert _merges(repo, f"daedalus/{train}") == [
@@ -684,6 +692,7 @@ def test_finish_after_a_revise_takes_a_unit_built_on_the_first_lock(repo: Path) 
 def test_finish_tears_down_and_marks_merged(repo: Path) -> None:
     train = _locked_train(repo)
     unit = _built(repo, train, "u1")
+    _verified(repo, train, unit)
     lines = finish(repo)
     assert not unit.exists() and f"removed {unit}" in lines
     assert train_state.load(repo, train)["merged"] is True
@@ -731,7 +740,7 @@ def test_finish_and_resume_cli_exit_codes(repo: Path) -> None:
     refused = _cli("finish", "--repo", str(repo))
     assert refused.returncode == 1 and "Next:" in refused.stderr
     (repo / "stray.txt").unlink()
-    _built(repo, train, "u1")
+    _verified(repo, train, _built(repo, train, "u1"))
     done = _cli("finish", "--repo", str(repo))
     assert done.returncode == 0, done.stderr
     assert done.stdout.splitlines()[0] == f"merged 1 units into daedalus/{train}"
@@ -744,7 +753,7 @@ def test_finish_and_resume_cli_exit_codes(repo: Path) -> None:
 # 0112, pin C4 -> C5: the audit worktree refresh fast-forwards and never discards a commit.
 def _audited(repo: Path) -> tuple[str, Path]:
     train = _locked_train(repo)
-    _built(repo, train, "u1")
+    _verified(repo, train, _built(repo, train, "u1"))
     finish(repo)
     return train, create(repo, workspace.audit_unit(train), f"daedalus/{train}")
 
@@ -768,7 +777,7 @@ def test_second_finish_neither_merges_nor_keeps_the_audit_worktree(repo: Path) -
     train, audit = _audited(repo)
     (audit / "audit-only.txt").write_text("x\n")
     _commit_all(audit, "audit scratch commit")
-    _built(repo, train, "fix1-u1", "fix.txt")
+    _verified(repo, train, _built(repo, train, "fix1-u1", "fix.txt"))
     lines = finish(repo)
     # 0121: u1 is already on the integration branch, so the second finish skips it.
     assert lines[:2] == [
@@ -782,7 +791,7 @@ def test_second_finish_neither_merges_nor_keeps_the_audit_worktree(repo: Path) -
 
 def test_refresh_readds_a_worktree_a_finish_removed(repo: Path) -> None:
     train, audit = _audited(repo)
-    _built(repo, train, "fix1-u1", "fix.txt")
+    _verified(repo, train, _built(repo, train, "fix1-u1", "fix.txt"))
     finish(repo)
     assert not audit.exists()
     assert workspace.refresh(repo, f"{train}-audit") == audit
@@ -794,7 +803,7 @@ def test_refresh_readds_a_worktree_a_finish_removed(repo: Path) -> None:
 
 def test_refresh_creates_the_audit_branch_when_absent(repo: Path) -> None:
     train = _locked_train(repo)
-    _built(repo, train, "u1")
+    _verified(repo, train, _built(repo, train, "u1"))
     finish(repo)
     audit = workspace.refresh(repo, f"{train}-audit")
     assert _tip(audit) == _tip(repo, f"daedalus/{train}")
@@ -1441,10 +1450,11 @@ def test_merge_refuses_a_chain_broken_log(repo: Path) -> None:
 
 
 def test_finish_after_a_wave_merge_skips_the_merged_unit(repo: Path) -> None:
-    train, u1, _ = _wave_train(repo)
+    train, u1, u2 = _wave_train(repo)
     _dispatch(repo, u1)
     _verifier_stop(repo, VERIFIED_REPLY)
     workspace.merge(repo, ["U1"])
+    _verified(repo, train, u2)
     lines = finish(repo)
     assert lines[:2] == [
         f"merged 1 units into daedalus/{train}",
@@ -1513,7 +1523,7 @@ def test_finish_refuses_a_skipped_train_past_its_one_file(
 def test_finish_merges_a_skipped_train_writing_only_its_one_file(repo: Path) -> None:
     # prepush-2026-10-27 finding 4: the one unit writing the plan's one file still merges.
     train = _skipped_train(repo)
-    _built(repo, train, "u1")
+    _verified(repo, train, _built(repo, train, "u1"))
     assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
     assert (repo / "u1.txt").is_file()
 
@@ -1531,6 +1541,7 @@ def test_finish_of_a_three_file_skip_takes_a_subset_of_its_files(
     if extra:
         (unit / extra).write_text("x\n")
     _commit_all(unit, "more files")
+    _verified(repo, train, unit)
     base = _ok(repo, "rev-parse", f"daedalus/{train}")
     if not said:
         assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
@@ -1547,9 +1558,9 @@ def test_finish_of_a_skipped_train_judges_only_the_unmerged_fix_unit(
 ) -> None:
     # prepush2-2026-10-27 item 6: the merged unit is not counted; the fix keeps to the one file.
     train = _skipped_train(repo)
-    _built(repo, train, "u1")
+    _verified(repo, train, _built(repo, train, "u1"))
     finish(repo)
-    _built(repo, train, "fix1-u1", name, text="fixed\n")
+    _verified(repo, train, _built(repo, train, "fix1-u1", name, text="fixed\n"))
     base = _ok(repo, "rev-parse", f"daedalus/{train}")
     if not said:
         lines = finish(repo)
@@ -1744,7 +1755,7 @@ def test_refresh_flags_an_audit_unit_recorded_before_the_flag(repo: Path) -> Non
 
 def test_finish_skips_a_flagged_audit_unit_by_its_flag(repo: Path) -> None:
     train = _locked_train(repo)
-    _built(repo, train, "u1")
+    _verified(repo, train, _built(repo, train, "u1"))
     probe = _built(repo, train, "probe", "probe.txt")
     train_state.mark_audit(repo, train, f"{train}-probe")
     lines = finish(repo)
@@ -1755,8 +1766,7 @@ def test_finish_skips_a_flagged_audit_unit_by_its_flag(repo: Path) -> None:
 
 def test_finish_marks_every_merged_unit_finished(repo: Path) -> None:
     train = _locked_train(repo)
-    _built(repo, train, "u1")
-    _built(repo, train, "u2")
+    _verified(repo, train, _built(repo, train, "u1"), _built(repo, train, "u2"))
     create(repo, workspace.audit_unit(train), f"daedalus/{train}")
     finish(repo)
     bound = _bindings(repo, train)
@@ -2163,6 +2173,178 @@ def test_exception_command_line_takes_unit_or_finding_never_both() -> None:
     for extra in (["--unit", "U1"], ["--finding", "F-1", "--row", "1"]):
         outcome = daedalus_train._dispatch(parser.parse_args([*head, *extra]))
         assert outcome.code == 1 and "--row goes with --unit" in outcome.lines[0]
+
+
+# 234: finish passes every unit it would merge through the merge step's verdict gate first.
+def _finish_refused(repo: Path, train: str, unit: Path, name: str) -> None:
+    base = _ok(repo, "rev-parse", f"daedalus/{train}")
+    with pytest.raises(WorkspaceError) as info:
+        finish(repo)
+    assert str(info.value) == (
+        f"unit {name} has no recorded verifier verdict {workspace.VERIFIED} for its worktree "
+        f"{unit}. Next: {workspace.VERIFY_NEXT}"
+    )
+    assert _ok(repo, "rev-parse", f"daedalus/{train}") == base
+    assert _merges(repo, f"daedalus/{train}") == [] and unit.exists()
+    assert train_state.load(repo, train)["merged"] is not True
+
+
+@pytest.mark.parametrize("reply", [None, REFUTED_REPLY], ids=["no-reply", "refuted"])
+def test_finish_refuses_when_one_unit_is_not_verified_and_merges_nothing(
+    repo: Path, reply: str | None
+) -> None:
+    train = _locked_train(repo)
+    u1, u2 = _built(repo, train, "u1"), _built(repo, train, "u2")
+    _verified(repo, train, u1)
+    _dispatch(repo, u2)
+    if reply is not None:
+        _verifier_stop(repo, reply)
+    _finish_refused(repo, train, u2, "u2")
+    assert u1.exists()
+
+
+def _u2(repo: Path, train: str) -> Path:
+    return Path(str(_recorded(repo, train, f"{train}-u2")["path"]))
+
+
+def test_finish_merges_a_unit_whose_refuted_rows_are_all_exempted_at_its_tip(repo: Path) -> None:
+    train, u1 = _refuted_unit(repo)
+    assert _exempt(repo, 1).code == 0 and _exempt(repo, 2).code == 0
+    _verified(repo, train, _u2(repo, train))
+    assert finish(repo)[0] == f"merged 2 units into daedalus/{train}"
+    assert not u1.exists() and (repo / "u1.txt").is_file()
+
+
+def test_finish_refuses_a_partly_exempted_unit(repo: Path) -> None:
+    train, u1 = _refuted_unit(repo)
+    assert _exempt(repo, 1).code == 0
+    _verified(repo, train, _u2(repo, train))
+    _finish_refused(repo, train, u1, "u1")
+
+
+def test_finish_refuses_an_exemption_bound_to_the_integration_tip(repo: Path) -> None:
+    # 234, 229: an exemption binds to the unit branch tip, never the integration tip.
+    train, u1 = _refuted_unit(repo)
+    records = workspace._audit_records(repo, train_state.load(repo, train))
+    reply = workspace.newest_verdict(records, workspace._anchors(records, u1)[-1])
+    assert reply is not None
+    tip = _ok(repo, "rev-parse", f"daedalus/{train}")
+    assert tip != workspace.unit_tip(repo, _recorded(repo, train, f"{train}-u1"))
+    entry = {"ledger_id": LEDGER_ID, "tip": tip, "tracking": "issue"}
+
+    def forge(state: dict[str, object]) -> None:
+        for unit in train_state.units(state):
+            if unit["name"] == f"{train}-u1":
+                unit[workspace.UNIT_EXEMPTIONS] = {str(reply[0]): {"1": entry, "2": entry}}
+
+    train_state.change(repo, train, forge)
+    _verified(repo, train, _u2(repo, train))
+    _finish_refused(repo, train, u1, "u1")
+
+
+def test_finish_skips_the_audit_unit_without_judging_it(repo: Path) -> None:
+    train = _locked_train(repo)
+    _verified(repo, train, _built(repo, train, "u1"))
+    audit = create(repo, workspace.audit_unit(train), f"daedalus/{train}")
+    _dispatch(repo, audit)
+    _verifier_stop(repo, REFUTED_REPLY)
+    assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
+    assert f"Merge audit for train {train}" not in _merges(repo, f"daedalus/{train}")
+
+
+def test_finish_with_only_the_audit_unit_refuses_without_a_verdict_read(repo: Path) -> None:
+    train = _locked_train(repo)
+    create(repo, workspace.audit_unit(train), f"daedalus/{train}")
+    with pytest.raises(WorkspaceError) as info:
+        finish(repo)
+    assert str(info.value).startswith(f"train {train} has no locked contract or no recorded units")
+    assert "verifier verdict" not in str(info.value)
+
+
+# 235: refuted, exception --unit and the merge gate read a verifier's reply through one reader.
+def _handback_seq(repo: Path, train: str) -> int:
+    records = workspace._audit_records(repo, train_state.load(repo, train))
+    seqs = [
+        r["seq"]
+        for r in records
+        if r.get("event") == "PostToolUse" and r.get("tool_name") == "SubagentHandback"
+    ]
+    assert len(seqs) == 1 and isinstance(seqs[0], int)
+    return seqs[0]
+
+
+def test_a_handback_then_a_stop_tail_keys_one_seq_in_refuted_exception_and_merge(
+    repo: Path,
+) -> None:
+    train, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    _verifier_handback(repo, TWO_ROW_REPLY)
+    _verifier_stop(repo, VERIFIED_REPLY)
+    seq = _handback_seq(repo, train)
+    records = workspace._audit_records(repo, train_state.load(repo, train))
+    newest = workspace.newest_verdict(records, workspace._anchors(records, u1)[-1])
+    assert newest == (seq, TWO_ROWS)
+    assert train_runner.refuted(repo, "U1").lines == ["refuted U1: 1"]
+    assert _recorded(repo, train, f"{train}-u1")[train_runner.REFUTATIONS] == [seq]
+    assert _exempt(repo, 1).code == 0 and _exempt(repo, 2).code == 0
+    assert list(_recorded(repo, train, f"{train}-u1")[workspace.UNIT_EXEMPTIONS]) == [str(seq)]
+    assert _gate(repo, train, u1) is True
+    assert workspace.merge(repo, ["U1"])[0] == f"merged 1 units into daedalus/{train}"
+
+
+@pytest.mark.parametrize(
+    ("handback", "tail", "agent_id", "merges"),
+    [
+        (REFUTED_REPLY, VERIFIED_REPLY, "agent-verifier", False),
+        (VERIFIED_REPLY, REFUTED_REPLY, "agent-verifier", True),
+        (REFUTED_REPLY, VERIFIED_REPLY, "agent-other", True),
+    ],
+    ids=["refuted-handback-wins", "verified-handback-wins", "another-verifiers-stop-is-newest"],
+)
+def test_the_handback_wins_over_the_same_verifiers_later_stop_tail(
+    repo: Path, handback: str, tail: str, agent_id: str, merges: bool
+) -> None:
+    _, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    _verifier_handback(repo, handback)
+    _hook_record(
+        repo,
+        hook_event_name="SubagentStop",
+        agent_id=agent_id,
+        agent_type="daedalus:verifier",
+        last_assistant_message=tail,
+    )
+    if merges:
+        assert workspace.merge(repo, ["U1"])[0].startswith("merged 1 units")
+    else:
+        _refused(repo, ["U1"], "no recorded verifier verdict")
+
+
+def test_refuted_reads_a_handback_past_a_null_tail_stop(repo: Path) -> None:
+    train, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    _verifier_handback(repo, TWO_ROW_REPLY)
+    _null_stop(repo)
+    assert train_runner.refuted(repo, "U1").lines == ["refuted U1: 1"]
+    seq = _handback_seq(repo, train)
+    assert _recorded(repo, train, f"{train}-u1")[train_runner.REFUTATIONS] == [seq]
+
+
+def test_an_empty_window_gives_no_reply_to_refuted_exception_merge_or_finish(repo: Path) -> None:
+    train, u1, u2 = _wave_train(repo)
+    _dispatch(repo, u1)
+    refused = train_runner.refuted(repo, "U1")
+    assert refused.code == 1 and "holds no verifier reply" in refused.lines[0]
+    assert "holds no verifier verdict" in _exempt(repo, 1).lines[0]
+    _refused(repo, ["U1"], "no recorded verifier verdict")
+    _verified(repo, train, u2)
+    _finish_refused(repo, train, u1, "u1")
+
+
+def test_the_second_verifier_reply_reader_is_gone() -> None:
+    name = "_newest_" + "verifier_reply"
+    hits = [p for p in SCRIPTS_DIR.rglob("*.py") if name in p.read_text(encoding="utf-8")]
+    assert hits == []
 
 
 def test_coder_model_records_the_default_then_escalates_on_the_second_refutation(
