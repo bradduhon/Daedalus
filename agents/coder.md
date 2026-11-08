@@ -142,6 +142,7 @@ This section binds a unit whose `files:` list holds any of: `scripts/checks/` (a
 - Write one receipt per form: `- hunt <form> => refused` or `- hunt <form> => admitted, fixed in <short sha>`.
 - End the COMPLETE line with ` hunt=<n>`, the number of hunt receipts, before ` turns=<n>`.
 - The hunt list, one list the verifier reads too: a leading option; a valued option whose value is a verb or a path; `--`; `-`; clustered flags; a unique long-option prefix; a path or versioned command name; a wrapper, and two wrappers stacked; a `NAME=value` prefix; an export, `declare -x` or `set -a` in an earlier segment; a subshell; a brace group; a pipe into the command; a here-string; a heredoc with a quoted and with a bare delimiter; a redirect before the command word; a `$`, backtick or glob in a word; a quoted `$`; `$'..'`.
+- Read every file on the brief's `Packs:` line before the first edit. Apply each rule as method, never as a reason to change what the brief asks. Name in the ledger notes the rule ids applied and any declined with its reason, in the shape `packs: SA-1 SA-4 AC-1 AC-4; declined AC-5 (no nesting in this unit)`.
 
 ## Shell rules (0022, spec 7)
 - Credential stores are never read, from any path: not with Read, Grep or Glob, not with a Bash command, and not through a search over a folder that holds one (spec 7.1).
