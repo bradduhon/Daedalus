@@ -2229,13 +2229,14 @@ def test_verify_unit_mode_runs_the_rows_file_in_place_of_the_hunt() -> None:
 
 
 def test_build_skill_runs_rows_mode_after_the_packs_line() -> None:
-    # 0228: a class unit gets its rows before step 5, and the coder never edits them.
+    # 0228, 0230: a class unit gets its rows before its coder dispatch, from the dispatch lines.
     step4 = _build_step4()
     assert step4.index("- Coder packs (227). ") < step4.index("- Rows (0228). ")
     bullet = step4.split("- Rows (0228). ", 1)[1]
     for sentence in (
-        "For a unit of the class, run the verify phase's rows mode",
-        "before step 5.",
+        "For a unit of the class, the dispatch call ends its line with `rows=needed`",
+        "Run the verify phase's rows mode",
+        "with those lines pasted unchanged, before the coder dispatch of step 5.",
         "It adds the `Rows:` line to the brief directly after the `Packs:` line.",
         "The coder never edits the rows file.",
     ):

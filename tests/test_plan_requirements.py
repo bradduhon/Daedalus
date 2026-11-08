@@ -288,7 +288,7 @@ def test_orchestrator_copies_sections_and_checks_needs_per_wave() -> None:
     assert check in phase2 and "`MISS tool <name>`" in phase2
     assert "Before the first dispatch of each wave" in phase2
     assert "Ask once per wave, never once per unit" in phase2
-    assert phase2.index(check) < phase2.index("Write the unit's brief file")
+    assert phase2.index(check) < phase2.index("writes the unit's brief file")
 
 
 def test_planner_reads_the_map_and_writes_sections_and_needs() -> None:
