@@ -144,7 +144,7 @@ from lib.train_state import active_train
 from lib.workspace import UNMARK_NEXT, train_marker
 
 if TYPE_CHECKING:
-    from lib.admit import Admitted, Refusal
+    from lib.admit import Admitted, AdmittedCommand, Refusal
 
 WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 WEB_TOOLS = frozenset({"WebFetch", "WebSearch"})
@@ -589,14 +589,6 @@ def install_reason(segment: list[str], installs: Callable[[], frozenset[str]]) -
     return reason + R_YARN_SCRIPT if found.manager == "yarn" else reason
 
 
-def coder_installs(cwd: str) -> frozenset[str]:
-    # 0196: the ecosystems the main checkout's manifest enables; an unusable manifest enables none.
-    if not os.path.isabs(cwd):
-        return frozenset()
-    manifest = _manifest_at(os.path.realpath(str(project_root(cwd))))
-    return frozenset() if isinstance(manifest, str) else frozenset(manifest.dependencies.installs)
-
-
 def _no_install(opts: list[str]) -> bool:
     # 0196: npx and npm exec run only an installed bin with --no-install and no yes flag.
     yes = any(a == "-y" or (a.startswith("--yes") and a != "--yes=false") for a in opts)
@@ -714,6 +706,11 @@ R_CODER_GIT = (
     "restore/checkout -- <unit worktree paths>, "
     "worktree list; --output is refused on every subcommand. "
     "Next: use those only; the trains handle the rest."
+)
+# 228 S3b: the coder's refusal for a word, option or form off its table with no older constant.
+R_CODER_TABLE = (
+    "the coder's Bash runs only the commands, options and forms on its table (228). Next: send "
+    "a form on the table, or yield [STATUS: YIELD_GRANT] <exact command> | <why> (233)."
 )
 R_DATA_DIR = (
     "the plugin data directory is written by hooks only. "
@@ -1581,24 +1578,6 @@ def _coder_write_targets(segment: list[str], cwd: str) -> list[str]:
     return [_abs(a, cwd) for a in _write_operands(name, args) if a != "-"]
 
 
-def _coder_bash_reason(
-    segment: list[str], cwd: str, boundary: Callable[[], CoderBoundary | str]
-) -> str | None:
-    name = _base(segment[0])
-    args = segment[1:]
-    if name in CODER_WRITE_CMDS or (name in {"sed", "perl"} and _in_place(name, args)):
-        suffix = _backup_suffix(name, args)
-        if suffix is not None:
-            return R_BASH_OUTSIDE.format(suffix)
-    for target in _coder_write_targets(segment, cwd):
-        if not _in_unit_worktree(target, cwd):
-            return R_BASH_OUTSIDE.format(target)
-        reason = _coder_write_reason(target, cwd, boundary())
-        if reason:
-            return reason
-    return None
-
-
 def _cd_relative_target(segment: list[str], cwd: str) -> str | None:
     # 0022: after cd, relative operands resolve against the hook cwd, not the shell's.
     name = _base(segment[0])
@@ -2178,10 +2157,15 @@ def _env_walk_reason(
 
 def rg_reason(command: str, cwd: str) -> str | None:
     # 113, 0186: the frameworks rulebook's rg judgement as one call; packs.py judges verifies by it.
-    chain = shell.worker_parse(command)
-    if chain is None or len(chain.tokens) != 1 or chain.tokens[0][:1] != ["rg"]:
+    # 228 S3b: one plain command from the one parse; any construct, prefix or redirect is R_RG_ONE.
+    script = shparse.parse(command)
+    item = script.items[0] if len(script.items) == 1 else None
+    cmds = [cmd for cmd, _ in shparse.walk(script)]
+    cmd = cmds[0] if len(cmds) == 1 and isinstance(item, Pipeline) else None
+    plain = cmd is not None and not (cmd.assignments or cmd.redirects or shparse.opaque(script))
+    tokens = literal_tokens(cmd) if plain else []
+    if tokens[:1] != ["rg"] or (isinstance(item, Pipeline) and (item.negated or item.timed)):
         return R_RG_ONE
-    tokens = chain.tokens[0]
     if rg_program(tokens[1:]):
         return R_RG_PROGRAM
     if shell.search_opaque(command):
@@ -2423,6 +2407,145 @@ def rewritten(word: Word | None) -> bool:
 
 def literal_tokens(cmd: Command | None) -> list[str]:
     return [w.literal if w.literal is not None else w.raw for w in cmd.words] if cmd else []
+
+
+@dataclass(frozen=True)
+class CoderCall:
+    # 228 S3b: one parse and one coder admission per hook call; passed marks a consumed pass.
+    script: shparse.Script
+    command: str
+    cwd: str
+    agent: str
+    got: Admitted | Refusal
+    passed: bool
+
+
+# 228 S3b, 233: the last call judged; the router hands every check the same hook input object.
+_CODER_CALL: list[tuple[dict[str, object], CoderCall]] = []
+
+
+def coder_call(hook_input: dict[str, object]) -> CoderCall:
+    # 228 S3b, 233: the coder's four checks share one answer, so one pass admits the call once.
+    from lib.admit import Refusal, admit_role, role_for  # 228 S3: admit imports this module.
+
+    command = hook_io.text(hook_io.tool_input(hook_input), "command")
+    cwd = hook_io.text(hook_input, "cwd")
+    agent = hook_io.agent(hook_input)
+    for held, call in _CODER_CALL:
+        if held is hook_input and (call.command, call.cwd, call.agent) == (command, cwd, agent):
+            return call
+    script = shparse.parse(command)
+    got = admit_role(script, role_for("coder"), cwd, text=command)
+    passed = (
+        isinstance(got, Refusal)
+        and os.path.isabs(cwd)
+        and passes.pass_admits(project_root(cwd), agent, command, cwd, hook_input)
+    )
+    call = CoderCall(script, command, cwd, agent, got, passed)
+    _CODER_CALL[:] = [(hook_input, call)]
+    return call
+
+
+def coder_refusal(call: CoderCall) -> str | None:
+    # 228 S3b: None when admitted or a pass admitted it; else the kept constant, then the grammar.
+    refused = _refused(call.got)
+    if refused is None or call.passed:
+        return None
+    return refusal_text(refused, coder_constant(call.script, refused, call.cwd))
+
+
+# 228 S3b, SA-7: the constant each refused class showed the coder before, by command word.
+_CODER_CONSTANTS: tuple[tuple[frozenset[str], str], ...] = (
+    (NETWORK_TOOLS - {"claude"}, R_NETWORK),
+    (shell.ARCHIVE_CMDS, shell.R_ARCHIVE),
+    (shell.SHELL_VAR_CMDS | {"set"}, shell.R_SHELL_VARS),
+    (shell.SHELL_STATE_CMDS, shell.R_SHELL_STATE),
+    (shell.WORKER_WRAPPERS, shell.R_INLINE),
+    (frozenset({"find"}), shell.R_FIND_WRITE),
+    (frozenset({"rsync"}), shell.R_RSYNC_REMOTE),
+)
+_CONSTRUCT_PARTS = (shparse.CommandSub, shparse.ProcSub, shparse.Arith, shparse.Opaque)
+_HYGIENE_PARTS = (Param, shparse.BraceList, Tilde)
+
+
+def _parse_base(script: Script, cwd: str) -> str:
+    # 228 S3b: the folder a leading `cd <absolute path> &&` moves to, read from the parse.
+    first = script.items[0] if script.items else None
+    cmd = first.commands[0] if isinstance(first, Pipeline) and len(first.commands) == 1 else None
+    words = [w.literal for w in cmd.words] if isinstance(cmd, Command) else []
+    joined = script.separators[:1] == ["&&"] and len(script.items) > 1
+    if joined and len(words) == 2 and words[0] == "cd" and os.path.isabs(words[1] or ""):
+        return str(words[1])
+    return cwd if os.path.isabs(cwd) else "/"
+
+
+def coder_constant(script: Script, refused: Refusal, cwd: str) -> str | None:
+    # 228 S3b: the class of the refused node, read from the parse: a prefix, a redirect, a
+    # construct, an expansion, then the command word; never the command text.
+    if "Next:" in refused.reason:
+        return None  # 228 S3b: the grammar quoted a kept constant (0164, 0196) as its reason.
+    cmd = refused_command(script, refused)
+    start, _ = refused.span
+    if cmd is None or any(r.span[0] <= start < r.span[1] for r in cmd.redirects):
+        return shell.R_UNSUPPORTED
+    if any(a.span[0] <= start < a.span[1] for a in cmd.assignments):
+        return shell.R_ENV
+    word = refused_word(cmd, refused)
+    parts = word.parts if word is not None else []
+    if any(isinstance(p, _CONSTRUCT_PARTS) for p in parts):
+        return shell.R_UNSUPPORTED
+    dollar = any(isinstance(p, Literal) and p.quoted in ("$'", '$"') for p in parts)
+    hygiene = dollar or any(isinstance(p, _HYGIENE_PARTS) for p in parts)
+    if hygiene and word is not None and word is not cmd.words[0]:
+        return shell.R_HYGIENE
+    head = cmd.words[0].literal if cmd.words else None
+    if head is None:
+        return shell.R_VARIABLE if cmd.words else shell.R_ENV
+    family = shell.command_family(head)
+    if family == "claude" or shell.runs_claude([head], _parse_base(script, cwd)):
+        return shell.R_CLAUDE_PATH
+    if family == shell.CONFINE:
+        return shell.R_CONFINE_FORM
+    if "/" in head and os.path.dirname(head) not in shell._TRUSTED_BIN:
+        return shell.R_UNTRUSTED_PATH
+    named = next((c for names, c in _CODER_CONSTANTS if family in names), None)
+    return named or (R_CODER_GIT if family == "git" else R_CODER_TABLE)
+
+
+def lead_cd(got: Admitted) -> tuple[AdmittedCommand | None, tuple[AdmittedCommand, ...]]:
+    # 228 S3b: the one leading cd admit allows, apart from the commands after it.
+    first = got.commands[0] if got.commands else None
+    if first is not None and first.family == "cd" and first.cd_target is not None:
+        return first, got.commands[1:]
+    return None, got.commands
+
+
+def coder_base(call: CoderCall, got: Admitted) -> str:
+    # 228 S3b, O6: replaces chain_bases; a leading cd moves the rest only when every join is &&.
+    lead, _ = lead_cd(got)
+    joins = set(call.script.separators) - {""}
+    if lead is None or lead.cd_target is None or not joins <= {"&&"}:
+        return call.cwd
+    return os.path.normpath(lead.cd_target.text)
+
+
+def admitted_words(script: shparse.Script, done: AdmittedCommand) -> list[Word]:
+    # 228 S3b: the parsed words of an admitted command from its command word on, past wrappers.
+    cmd = next((c for c, _ in shparse.walk(script) if c.span == done.span), None)
+    words = list(cmd.words) if cmd is not None else []
+    at = next((i for i, w in enumerate(words) if w.span == done.word.span), len(words))
+    return words[at:]
+
+
+def admitted_tokens(script: shparse.Script, done: AdmittedCommand) -> list[str]:
+    return [w.literal if w.literal is not None else w.raw for w in admitted_words(script, done)]
+
+
+def claude_word(done: AdmittedCommand, base: str) -> bool:
+    # issue 55, 228 S3b: the wrapper, the command word or node's script runs the claude binary.
+    words = [w.text for w in done.wrappers[:1]] + [done.word.text]
+    words += [done.script.text] if done.family == "node" and done.script else []
+    return any(shell.runs_claude([w], base) for w in words)
 
 
 def _scope_paths(command: str, cwd: str) -> tuple[str, ...]:

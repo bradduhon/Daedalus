@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import audit, jail, passes
+from lib import audit, jail, passes, train_summary
 
-from tests.adversarial.corpus import S2B_PASS_ONCE
+from tests.adversarial.corpus import S2B_PASS_ONCE, S3B_CODER_PASS_ONCE
 from tests.conftest import CFG, SCRIPTS_DIR, run_cli
 from tests.helpers import phase_text
 from tests.hook_chain import first_deny
@@ -387,8 +387,12 @@ def test_the_build_phase_routes_a_grant_yield() -> None:
         assert part in row, part
     assert (
         "`python3 <plugin root>/scripts/daedalus_train.py grant --repo <repo> --agent coder "
-        '--cwd <the coder\'s working folder> --reason "<why>" --ledger-id <ID> --command-file '
-        "<that file>`"
+        '--cwd <repo> --reason "<why>" --ledger-id <ID> --command-file <that file>`'
+    ) in row
+    # 228 S3b: the coder's hook calls carry the main checkout, so the pass is sealed to it.
+    assert (
+        "`--cwd` is the main checkout because the coder's shell starts there and its hook calls "
+        "carry that folder."
     ) in row
     assert "The orchestrator never runs it." in row
     assert "`pass written sha256=<12 hex> expires=<timestamp>`" in row
@@ -422,3 +426,44 @@ def test_corpus_row_an_allowlist_agent_is_admitted_exactly_once(marked_repo: Pat
     denied = first_deny(hook, CFG)
     assert denied is not None and denied[0] == "command_allowlist", denied
     assert len(_consumed(marked_repo)) == 1
+
+
+def _coder(repo: Path, command: str) -> tuple[str, str] | None:
+    # 228 S3b: a fresh payload per call, as the router hands each hook call its own.
+    return first_deny(_hook(repo, command, agent_type="daedalus:coder"), CFG)
+
+
+def test_corpus_row_a_coder_write_is_admitted_exactly_once(marked_repo: Path) -> None:
+    # 233, 228 S3b: all four coder checks share one pass; refused, admitted once, refused again.
+    agent, form = S3B_CODER_PASS_ONCE
+    command = form.format(repo=marked_repo)
+    _run(marked_repo)
+    first = _coder(marked_repo, command)
+    assert first is not None and first[0] == "shell_tripwires", first
+    assert "Refused: perl is not on the coder command table" in first[1]
+    _grant(marked_repo, command, agent=agent)
+    assert _coder(marked_repo, command) is None
+    again = _coder(marked_repo, command)
+    assert again is not None and again[0] == "shell_tripwires", again
+    assert len(_consumed(marked_repo)) == 1
+
+
+def test_a_coder_pass_admits_only_its_folder(marked_repo: Path) -> None:
+    # 233, 228 S3b: the pass is sealed to the main checkout the coder's hook calls carry.
+    command = S3B_CODER_PASS_ONCE[1].format(repo=marked_repo)
+    _run(marked_repo)
+    _grant(marked_repo, command, agent="coder")
+    moved = _hook(marked_repo, command, agent_type="daedalus:coder")
+    moved["cwd"] = str(marked_repo / ".claude")
+    assert first_deny(moved, CFG) is not None
+    assert _coder(marked_repo, command) is None
+
+
+def test_a_grant_yield_names_the_main_session_as_its_answerer() -> None:
+    # 233, 228 S3b: the main session asks the operator and writes the pass.
+    assert train_summary._ANSWERERS["YIELD_GRANT"] == (train_summary.MAIN_SESSION,)
+    asked = train_summary._YIELD.match("[STATUS: YIELD_GRANT] sed -i x | the fix needs it")
+    assert asked is not None
+    reply = train_summary.Reply(seq=1, agent="coder", agent_id="c1", text=asked.group(0))
+    row = train_summary._yield_row([], [reply], reply, asked, [])
+    assert row == ("", "YIELD_GRANT", "sed -i x | the fix needs it", "main session")

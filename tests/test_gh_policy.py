@@ -115,6 +115,7 @@ def _reason(repo: Path, agent: str, command: str) -> str:
 
 
 def _denying_hook(repo: Path, agent: str, command: str) -> str:
+    # 228 S3b: a coder's gh or git push is off its grammar, so shell_tripwires denies it first.
     allow, reason, hook = router.route(_bash(repo, agent, command), REPO_ROOT)
     assert not allow and reason, (agent, command)
     return hook
@@ -160,7 +161,7 @@ def test_conductor_allowlist(train_repo: Path, command: str) -> None:
     assert d.allow, d.reason
     reason = _reason(train_repo, "general-purpose", command)
     assert "(0028)" in reason and "Next: only the Push Train's releaser runs gh." in reason
-    assert _denying_hook(train_repo, "coder", command) == "network_tools"
+    assert _denying_hook(train_repo, "coder", command) == "shell_tripwires"
 
 
 EDIT_NEXT = "edit only the body with --body-file; the operator changes anything else on the PR"
@@ -258,7 +259,7 @@ def test_pr_create_follows_the_same_gate(repo_cwd: Path) -> None:
     d = decide(_bash(repo_cwd, "releaser", command), Config())
     assert d.allow, d.reason
     assert "(0028)" in _reason(repo_cwd, "general-purpose", command)
-    assert _denying_hook(repo_cwd, "coder", command) == "network_tools"
+    assert _denying_hook(repo_cwd, "coder", command) == "shell_tripwires"
 
 
 def test_verdict_reason_reads_the_judged_tip_rule(repo_cwd: Path) -> None:
@@ -324,8 +325,8 @@ def test_pr_create_without_head_off_the_train_branch_is_refused(repo_cwd: Path) 
 
 def test_coder_gh_and_git_push_refused(train_repo: Path) -> None:
     for command in ("gh pr view 3", "gh auth status"):
-        assert _denying_hook(train_repo, "coder", command) == "network_tools", command
-    assert _denying_hook(train_repo, "coder", "git push origin feat/x") == "git_push"
+        assert _denying_hook(train_repo, "coder", command) == "shell_tripwires", command
+    assert _denying_hook(train_repo, "coder", "git push origin feat/x") == "shell_tripwires"
 
 
 def test_git_push_only_for_the_conductor(train_repo: Path) -> None:
@@ -409,8 +410,8 @@ def test_marker_brings_back_the_gate(plain_repo: Path, agent: str) -> None:
 def test_daedalus_agents_gated_outside_a_train(plain_repo: Path) -> None:
     # 0035: a Daedalus agent meets the gh gate with or without a train.
     _class_refused(plain_repo, "releaser", "gh pr merge 5", "merge", MERGE_NEXT)
-    assert _denying_hook(plain_repo, "coder", "gh pr merge 5") == "network_tools"
-    assert _denying_hook(plain_repo, "coder", "git push origin feat/x") == "git_push"
+    assert _denying_hook(plain_repo, "coder", "gh pr merge 5") == "shell_tripwires"
+    assert _denying_hook(plain_repo, "coder", "git push origin feat/x") == "shell_tripwires"
 
 
 def test_main_push_into_a_train_repo_from_elsewhere(train_repo: Path, tmp_path: Path) -> None:

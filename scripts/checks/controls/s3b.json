@@ -1,0 +1,6 @@
+{
+  "jail.R_CODER_TABLE": {
+    "failure": "issue 228: a coder runs a word, option or form off its command table, which no check after admission models",
+    "premise_test": "tests/test_checks_shell_tripwires.py::test_an_off_table_coder_word_names_itself"
+  }
+}

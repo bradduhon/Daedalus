@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 from lib import controls, dispatch_binding, jail, shell
+from lib.admit import Admitted, admit_role, role_for
+from lib.shparse import parse
 
 from tests.conftest import CWD, REPO_ROOT, WT
 from tests.hook_chain import evaluate, load
@@ -179,7 +181,9 @@ def test_git_without_a_grant_is_refused() -> None:
 
 def test_find_that_writes_is_refused() -> None:
     for command in ("find . -delete", "find . -exec ls {} +", f"find . -fprint {WT}/x"):
-        assert evaluate("shell_tripwires", _b("coder", command)) == shell.R_FIND_WRITE, command
+        # 228 S3b: -delete and -exec are off the find row; the kept constant leads the refusal.
+        got = str(evaluate("shell_tripwires", _b("coder", command)))
+        assert got.startswith(shell.R_FIND_WRITE), command
 
 
 def test_coder_write_without_an_id_is_refused(
@@ -192,6 +196,9 @@ def test_coder_write_without_an_id_is_refused(
 
 def test_basetemp_root_is_unseen_by_the_write_checks() -> None:
     # issue 56: red here means the write checks now judge the temp root and R_BASETEMP can retire.
-    for segment in (["pytest", "--basetemp=/tmp/x"], ["pytest", "--basetemp", "/tmp/x"]):
-        assert jail._coder_bash_reason(segment, CWD, lambda: "") is None, segment
+    # 228 S3b: the coder grammar types no write for it, admitted or not.
+    for command in ("pytest --basetemp=/tmp/x", "pytest --basetemp /tmp/x"):
+        got = admit_role(parse(command), role_for("coder"), CWD, text=command)
+        writes = got.writes if isinstance(got, Admitted) else ()
+        assert all("/tmp/x" not in w.text for w in writes), command
     assert evaluate("unit_writes", _b("coder", "pytest --basetemp=/tmp/x")) == jail.R_BASETEMP

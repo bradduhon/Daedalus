@@ -182,6 +182,7 @@ class TestFinalCoderGitAllowlist:
             "git stash pop",
             "git restore -- .claude/worktrees/u1/src/a.py",
             "git checkout -- .claude/worktrees/u1/tests/test_a.py .claude/worktrees/u1/src/b.py",
+            # 228 S3c: the restore row resolves a relative pathspec under its git -C folder.
             "git -C .claude/worktrees/u1 restore -- src/a.py",
             "git branch",
             "git branch --show-current",

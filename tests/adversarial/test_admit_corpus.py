@@ -135,8 +135,17 @@ def _tf_folder(command: str, done: Admitted) -> bool:
     return cmd.family == "terraform" and bool(cmd.reads or cmd.cd_target)
 
 
+def _builtin_commit(command: str, done: Admitted) -> bool:
+    # 228 S3c friction fix (R9): true and set -e lead; the 225 rows judge the :i: message text.
+    lead, commit = (done.commands + (None, None))[:2]
+    sub = commit.subcommand.text if commit is not None and commit.subcommand else ""
+    builtin = lead is not None and lead.family in shell.CODER_BUILTINS
+    return len(done.commands) == 2 and builtin and sub == "commit" and not commit.pathspecs[1:]
+
+
 # 228 S2: refused rows admit admits by shape; the later check named reads the typed operand.
 LATER: dict[str, tuple[str, Callable[[str, Admitted], bool]]] = {
+    "A3_RULE_ROWS": ("the 225 rows judge a commit message after a coder builtin", _builtin_commit),
     "FIX1_RG_GLOBS": ("the credential check reads the rg glob values", _rg_globs),
     "PREPUSH_IGNORE_SEARCHES": ("the credential check reads ignore files under the root", _rg_root),
     "PREPUSH_IGNORE_WRITES": ("the protected-path check reads the write path", _tee_path),

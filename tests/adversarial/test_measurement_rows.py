@@ -24,9 +24,6 @@ XFAIL: dict[str, str] = {
     "git commit -m 'fix :(icase) in local env' -- src/a.md": (
         "225: a literal -m message holding :(icase)"
     ),
-    "[ -f x ] && git log -- ':(icase)x'": (
-        "228 S3b: the coder's checks do not run parse then admit yet; [ is off the table"
-    ),
 }
 
 

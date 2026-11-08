@@ -177,7 +177,8 @@ def test_public_docs_writer_bash_writes_stay_on_the_public_docs(
     reason = evaluate("unit_writes", _writer(repo_cwd, "Bash", command=text), "--docs")
     assert (reason is None) is allowed, reason
     if not allowed:
-        assert "(0134)" in str(reason), reason
+        # 228 S3b: restore and stash off the coder grammar are refused by name first.
+        assert "(0134)" in str(reason) or "Refused: git " in str(reason), reason
 
 
 # Requirement 3: the auditor's terraform class admits fmt -check and validate only.

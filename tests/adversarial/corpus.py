@@ -35,6 +35,8 @@ REPLY_KEY = "the train's reply key"
 NESTED = "nested session"
 OUTSIDE = "outside your unit worktree"
 PROTECTED = "protected path"
+# 228 S3b: a coder refusal names the word, option or construct off its table at its span.
+CODER_REFUSED = "Refused: "
 
 
 # 233: a refused write a sealed pass admits exactly once, then refused again; (agent, form).
@@ -1366,6 +1368,123 @@ P3_MEASURE_A3 = (
     ("coder", "unit", "refuse", "V=PA; getopts a ${V}TH; git log -- ':(icase)NOTES'"),  # A3-62
 )
 
+
+# 228 S3b, 233: a coder write off its table a sealed pass admits exactly once; (agent, form).
+# 228 S3c: perl -i stays off the coder table while sed -i has a row.
+S3B_CODER_PASS_ONCE = ("coder", "perl -pi -e s/a/b/ {repo}/notes.txt")
+
+
+# 228 S3c hunt: (row, class, form) per coder table row S3c added, one refused form per class of
+# the shell-semantics pack; {wt} is a unit worktree, {repo} its main checkout, {conf} the wrapper.
+S3C_HUNT = (
+    ("echo", "valued option path", "echo --output={wt}/x hi"),
+    ("echo", "clustered flag", "echo -nev x"),
+    ("echo", "expansion", 'echo "exit=$PATH"'),
+    ("echo", "expansion", "echo exit=${{?}}"),
+    ("echo", "glob", "echo *"),
+    ("echo", "tilde", "echo ~"),
+    ("echo", "wrapper", "nice echo exit=$?"),
+    ("echo", "cd not followed", "cd /tmp; echo x"),
+    ("printf", "valued option path", "printf -v {wt}/x y"),
+    ("printf", "clustered flag", "printf -vPATH y"),
+    ("printf", "expansion", 'printf %s "$HOME"'),
+    ("printf", "glob", "printf %s *"),
+    ("printf", "tilde", "printf %s ~"),
+    ("printf", "wrapper", "timeout 5 printf x"),
+    ("printf", "cd not followed", "cd /tmp || printf x"),
+    ("true", "valued option path", "true -o {wt}/x"),
+    ("true", "clustered flag", "true -ab"),
+    ("true", "expansion", "true $X"),
+    ("true", "glob", "true *"),
+    ("true", "tilde", "true ~"),
+    ("true", "wrapper", "nohup true"),
+    ("true", "cd not followed", "cd /tmp; true"),
+    ("set", "valued option path", "set -o {wt}/x"),
+    ("set", "clustered flag", "set -euao pipefail"),
+    ("set", "expansion", 'set -o "$O"'),
+    ("set", "glob", "set -o pipefai?"),
+    ("set", "tilde", "set -e ~"),
+    ("set", "wrapper", "env set -e"),
+    ("set", "cd not followed", "cd /tmp; set -e"),
+    ("sed -n", "valued option path", "sed -n -f {wt}/s.sed {wt}/a.py"),
+    ("sed -n", "clustered flag", "sed -nf{wt}/s.sed {wt}/a.py"),
+    ("sed -n", "expansion", 'sed -n "$P" {wt}/a.py'),
+    ("sed -n", "glob", "sed -n 1p {wt}/*.py"),
+    ("sed -n", "tilde", "sed -n 1p ~/a.py"),
+    ("sed -n", "wrapper", "nice sed -n 1p {wt}/a.py"),
+    ("sed -n", "cd not followed", "cd {wt}; sed -n 1p a.py"),
+    ("sed -i", "valued option path", "sed --in-place={repo}/ s/a/b/ {wt}/a.py"),
+    ("sed -i", "clustered flag", "sed -si../../x s/a/b/ {wt}/a.py"),
+    ("sed -i", "expansion", 'sed -i s/a/b/ "$F"'),
+    ("sed -i", "glob", "sed -i s/a/b/ {wt}/*.py"),
+    ("sed -i", "tilde", "sed -i s/a/b/ ~/a.py"),
+    ("sed -i", "wrapper", "timeout 5 sed -i s/a/b/ {wt}/a.py"),
+    ("sed -i", "cd not followed", "cd /tmp && sed -i s/a/b/ a.py"),
+    ("sed -i", "script body", "sed -i s/a/b/e {wt}/a.py"),
+    ("sed -i", "script body", "sed -i 's/a/b/w {repo}/x' {wt}/a.py"),
+    ("sed -i", "script body", "sed -n 1e {wt}/a.py"),
+    ("sed -i", "option after operand", "sed s/a/b/ {repo}/a.py -i"),
+    ("sed -i", "backup glob", "sed -i'*' s/a/b/ {wt}/a.py"),
+    ("npm exec", "valued option path", "npm --prefix {repo} exec --no-install vitest run"),
+    ("npm exec", "clustered flag", "npm exec --no-install vitest -yq"),
+    ("npm exec", "expansion", "npm exec --no-install $B run"),
+    ("npm exec", "glob", "npm exec --no-install vit* run"),
+    ("npm exec", "tilde", "npm exec --no-install ~/vitest run"),
+    ("npm exec", "wrapper", "nice npm exec --no-install vitest run"),
+    ("npm exec", "cd not followed", "cd /tmp; npm exec --no-install vitest run"),
+    ("npm exec", "download flag", "npm exec --no-install vitest --yes"),
+    ("&>/dev/null", "valued option path", "ls &>{wt}/x"),
+    ("&>/dev/null", "clustered flag", "ls &>>/dev/null"),
+    ("&>/dev/null", "expansion", "ls &>$N"),
+    ("&>/dev/null", "glob", "ls &>/dev/nul?"),
+    ("&>/dev/null", "tilde", "ls &>~/x"),
+    ("&>/dev/null", "wrapper", "nice ls &>/dev/null"),
+    ("&>/dev/null", "cd not followed", "cd /tmp; ls &>/dev/null"),
+    ("path script", "valued option path", "{conf} --unit={wt} -- {wt}/run.sh"),
+    ("path script", "clustered flag", "{conf} -u{wt} -- {wt}/run.sh"),
+    ("path script", "expansion", "{conf} --unit {wt} -- {wt}/$X.sh"),
+    ("path script", "glob", "{conf} --unit {wt} -- {wt}/r*.sh"),
+    ("path script", "tilde", "{conf} --unit {wt} -- ~/run.sh"),
+    ("path script", "wrapper", "nice {wt}/run.sh"),
+    ("path script", "wrapper", "{wt}/run.sh"),
+    ("path script", "cd not followed", "cd {wt} && ls || {conf} --unit {wt} -- ./run.sh"),
+    ("path script", "traversal", "{conf} --unit {wt} -- {wt}/../../../run.sh"),
+    ("git -C restore", "valued option path", "git -C {repo} restore -- src/a.py"),
+    ("git -C restore", "clustered flag", "git -C {wt} restore -sHEAD -- src/a.py"),
+    ("git -C restore", "expansion", 'git -C {wt} restore -- "$F"'),
+    ("git -C restore", "glob", "git -C {wt} restore -- src/*.py"),
+    ("git -C restore", "tilde", "git -C ~ restore -- src/a.py"),
+    ("git -C restore", "wrapper", "nice git -C {wt} restore -- src/a.py"),
+    ("git -C restore", "cd not followed", "cd /tmp && git -C .claude/worktrees/u1 restore -- a.py"),
+    ("git -C restore", "traversal", "git -C {wt} restore -- ../../../src/a.py"),
+    ("git -C restore", "chained -C", "git -C {wt} -C ../.. restore -- src/a.py"),
+    ("rsync host", "valued option path", "rsync --rsync-path={wt}/x {wt}/a {wt}/b"),
+    ("rsync host", "clustered flag", "rsync -avze ssh {wt}/a {wt}/b"),
+    ("rsync host", "expansion", "rsync {wt}/a $H:x"),
+    ("rsync host", "glob", "rsync h*:x {wt}/b"),
+    ("rsync host", "tilde", "rsync ~h:x {wt}/b"),
+    ("rsync host", "wrapper", "nice rsync {wt}/a host:x"),
+    ("rsync host", "cd not followed", "cd /tmp; rsync a host:x"),
+)
+# 228 S3c hunt: rows judged in a repository whose manifest declares `bash scripts/test.sh` and
+# enables every install ecosystem; {wt} is its unit worktree.
+S3C_HUNT_DECLARED = (
+    ("declared", "valued option path", "bash --rcfile {repo}/x scripts/test.sh"),
+    ("declared", "clustered flag", "bash -ex scripts/test.sh"),
+    ("declared", "expansion", "bash scripts/$T.sh"),
+    ("declared", "glob", "bash scripts/test.s?"),
+    ("declared", "tilde", "bash ~/scripts/test.sh"),
+    ("declared", "wrapper", "nice bash scripts/test.sh"),
+    ("declared", "cd not followed", "cd /tmp && bash scripts/test.sh"),
+    ("declared", "cd not followed", "cd {wt} || bash scripts/test.sh"),
+    ("frozen install", "valued option path", "npm ci --ignore-scripts --prefix {repo}/x"),
+    ("frozen install", "clustered flag", "npm ci --ignore-scripts -dd"),
+    ("frozen install", "expansion", "npm ci --ignore-scripts $X"),
+    ("frozen install", "glob", "npm ci --ignore-scripts *"),
+    ("frozen install", "tilde", "npm ci --ignore-scripts ~"),
+    ("frozen install", "wrapper", "nice npm ci --ignore-scripts"),
+    ("frozen install", "cd not followed", "cd /tmp; npm ci --ignore-scripts"),
+)
 # 0230: the verifier's claims call; {claims} is the plugin script, {wt} a unit worktree.
 CLAIMS_ADMITTED = (
     "python3 {claims} --worktree {wt} --branch daedalus-unit/u1 --ranges scripts/a.py:1-9",

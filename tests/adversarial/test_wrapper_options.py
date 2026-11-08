@@ -10,6 +10,7 @@ import pytest
 from lib import jail, shell
 
 from tests.adversarial.corpus import (
+    CODER_REFUSED,
     INSTALL_GATE_CMDS,
     INTERPRETER_BINS,
     TERRAFORM_MUTATIONS,
@@ -143,7 +144,9 @@ def test_the_kernel_wrapper_admits_no_dev_server_watch_mode_state_change_or_inst
     command: str,
 ) -> None:
     # 0164, 0158: refused bare and wrapped, with the ruling named unless a wrapper word leads.
+    # 228 S3b: an install off the coder's runner rows is refused by its command word instead.
     markers = () if command.split()[0] in shell.WORKER_WRAPPERS else RULING_MARKERS
+    markers = markers and (*markers, CODER_REFUSED)
     for form in (command, f"{shell.CONFINE_PATH} --unit {WT} -- {command}"):
         assert_denied(_b("coder", f"cd {WT} && {form}"), *markers)
 
