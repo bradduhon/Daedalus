@@ -1,0 +1,429 @@
+{
+ "group": "operators",
+ "bash": "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)",
+ "prefix": "bash -c 'printf \"%s\\0\" \"$#\" \"$@\"' _ ",
+ "name0": "probe0",
+ "positional": [
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+  "elf"
+ ],
+ "home": "/nonexistent/hdir",
+ "users": {
+  "root": "/root"
+ },
+ "vars": {
+  "x": "vx",
+  "s": "a b"
+ },
+ "seeds": {
+  "a1": "A1\n",
+  "a2": "A2\n",
+  "bb": "BB\n",
+  ".h": "H\n"
+ },
+ "cases": [
+  {
+   "name": "semicolon",
+   "kind": "run",
+   "text": "p a; p b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "and",
+   "kind": "run",
+   "text": "p a && p b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "and-fail",
+   "kind": "run",
+   "text": "f a && p b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "or",
+   "kind": "run",
+   "text": "p a || p b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "or-fail",
+   "kind": "run",
+   "text": "f a || p b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "and-or",
+   "kind": "run",
+   "text": "p a && f b || p c",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ],
+     [
+      "c",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "pipe",
+   "kind": "run",
+   "text": "p a | p b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "pipe-stderr",
+   "kind": "run",
+   "text": "p a |& p b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "background",
+   "kind": "run",
+   "text": "p a & p b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "b",
+      ""
+     ],
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "newline",
+   "kind": "run",
+   "text": "p a\np b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "newline-after-and",
+   "kind": "run",
+   "text": "p a &&\n\np b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "newline-after-pipe",
+   "kind": "run",
+   "text": "p a |\np b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "negation",
+   "kind": "run",
+   "text": "! f a && p b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "double-negation",
+   "kind": "run",
+   "text": "! ! p a && p b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "time",
+   "kind": "run",
+   "text": "time p a; p b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "echo-pipe",
+   "kind": "run",
+   "text": "echo a b | p c",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "c",
+      "a b\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "double-semicolon",
+   "kind": "run",
+   "text": "p a;; p b",
+   "opaque": ";; outside case",
+   "answer": {
+    "status": 2,
+    "syntax_error": true,
+    "records": [],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "amp-semicolon",
+   "kind": "run",
+   "text": "p a & ; p b",
+   "opaque": "unexpected",
+   "answer": {
+    "status": 2,
+    "syntax_error": true,
+    "records": [],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "dangling-pipe",
+   "kind": "run",
+   "text": "p a |",
+   "opaque": "missing command after |",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "continued-operator",
+   "kind": "run",
+   "text": "p a &\\\n& p b",
+   "opaque": "line continuation inside an operator",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  }
+ ]
+}

@@ -678,6 +678,7 @@ Daedalus/
 │   ├── lib/router.py                # runs each agent's calls through its hooks
 │   ├── lib/scrub.py                 # reads the declared scrub file's terms
 │   ├── lib/shell.py                 # the shell model the jail and checks share
+│   ├── lib/shparse.py               # parses one Bash command into nodes with spans
 │   ├── lib/train_definition.py      # loads and validates train definitions
 │   ├── lib/train_runner.py          # the train state machine behind daedalus_train.py
 │   ├── lib/train_scope.py           # the train scope the jail's entry script reads first

@@ -1,0 +1,388 @@
+{
+ "group": "redirects",
+ "bash": "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)",
+ "prefix": "bash -c 'printf \"%s\\0\" \"$#\" \"$@\"' _ ",
+ "name0": "probe0",
+ "positional": [
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+  "elf"
+ ],
+ "home": "/nonexistent/hdir",
+ "users": {
+  "root": "/root"
+ },
+ "vars": {
+  "x": "vx",
+  "s": "a b"
+ },
+ "seeds": {
+  "a1": "A1\n",
+  "a2": "A2\n",
+  "bb": "BB\n",
+  ".h": "H\n"
+ },
+ "cases": [
+  {
+   "name": "out",
+   "kind": "run",
+   "text": "p a >x",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "x": ""
+    }
+   }
+  },
+  {
+   "name": "append",
+   "kind": "run",
+   "text": "p a >>x",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "x": ""
+    }
+   }
+  },
+  {
+   "name": "clobber",
+   "kind": "run",
+   "text": "p a >|x",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "x": ""
+    }
+   }
+  },
+  {
+   "name": "stderr",
+   "kind": "run",
+   "text": "p a 2>y",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "y": ""
+    }
+   }
+  },
+  {
+   "name": "both",
+   "kind": "run",
+   "text": "p a &>z",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "z": ""
+    }
+   }
+  },
+  {
+   "name": "both-append",
+   "kind": "run",
+   "text": "p a &>>z",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "z": ""
+    }
+   }
+  },
+  {
+   "name": "space-before-fd",
+   "kind": "run",
+   "text": "p a 2 >y",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      "2",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "y": ""
+    }
+   }
+  },
+  {
+   "name": "dup",
+   "kind": "run",
+   "text": "p a 2>&1 >&2",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "named-fd",
+   "kind": "run",
+   "text": "{fd}>x p a \"$fd\"",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      "",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "x": ""
+    }
+   }
+  },
+  {
+   "name": "named-fd-after",
+   "kind": "run",
+   "text": "p a {fd}>x",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "x": ""
+    }
+   }
+  },
+  {
+   "name": "named-fd-spaced",
+   "kind": "run",
+   "text": "p {fd} >x",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "{fd}",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "x": ""
+    }
+   }
+  },
+  {
+   "name": "input",
+   "kind": "run",
+   "text": "p <a1",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "A1\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "read-write",
+   "kind": "run",
+   "text": "p a <>w",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "w": ""
+    }
+   }
+  },
+  {
+   "name": "digit-before-amp",
+   "kind": "run",
+   "text": "p 2&>x",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "2",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "x": ""
+    }
+   }
+  },
+  {
+   "name": "glued",
+   "kind": "run",
+   "text": "p a>x b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "x": ""
+    }
+   }
+  },
+  {
+   "name": "high-fd",
+   "kind": "run",
+   "text": "p a 10>x",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "x": ""
+    }
+   }
+  },
+  {
+   "name": "spaced-target",
+   "kind": "run",
+   "text": "p a > x",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "x": ""
+    }
+   }
+  },
+  {
+   "name": "missing-target",
+   "kind": "run",
+   "text": "p a >",
+   "opaque": "missing target",
+   "answer": {
+    "status": 2,
+    "syntax_error": true,
+    "records": [],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "group-redirect",
+   "kind": "run",
+   "text": "{ p a; } >x",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "x": ""
+    }
+   }
+  }
+ ]
+}
