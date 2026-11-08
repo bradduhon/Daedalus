@@ -126,8 +126,10 @@ def test_a_relative_write_of_a_moved_agent_is_refused(two_runs: Any, run_script:
     for command in (*allowed, "git status"):
         payload = _call(repo_b, "Bash", "agent-a", command=command)
         assert "name every path" not in run_script("enforce_agent_jail.py", payload).stderr
-    assert jail.relative_write(f"touch {wt_a}/x 2>&1 > /dev/null") is None
-    assert jail.relative_write(f"cd {wt_a} && ls") is None
+    # 228 S3: the parse reads 2>&1 as a fd and /dev/null as absolute; a leading cd starts there.
+    for command in (f"touch {wt_a}/x 2>&1 > /dev/null", f"cd {wt_a} && ls"):
+        cwds = (str(repo_b), str(wt_a))
+        assert jail.moved_relative("Bash", {"command": command}, cwds, str(wt_a)) is None
 
 
 @pytest.mark.parametrize("cwd", ["", "rel/dir"])

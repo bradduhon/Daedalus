@@ -192,9 +192,13 @@ def test_the_main_session_reads_and_writes_through_literal_redirects() -> None:
 
 def test_roles_follow_the_jail_tables() -> None:
     assert role_for("Explore").name == "foreign"
-    assert role_for("orchestrator").commands == frozenset()
+    # 228 S3: the orchestrator's row is command_allowlist's train,inspect class.
+    assert role_for("orchestrator").commands == shell.READ_ONLY_CMDS
+    assert role_for("orchestrator").train and role_for("planner").commands == frozenset()
     assert role_for("coder").git is not None and role_for("coder").git[0] == shell.CODER_GIT
-    refused("orchestrator", "cat x")
+    admitted("orchestrator", "cat x")
+    refused("orchestrator", "touch x")
+    refused("planner", "cat x")
     refused("comparer", "git log")
     admitted("Explore", "git log --oneline")
     refused("Explore", "touch x")
@@ -231,10 +235,13 @@ def test_every_table_row_has_operand_types() -> None:
             assert set(types) <= set(KINDS), (key, option)
 
 
-def test_no_consumer_imports_admit_before_unit_s3() -> None:
-    # 228 S2: S3 switches the consumers deliberately; until then only admit and its tests read it.
+def test_only_the_switched_consumers_import_admit() -> None:
+    # 228 S3: the jail's decision paths and the two Bash checks read admit; S4 adds the rest.
     allowed = {
         REPO_ROOT / "scripts" / "lib" / "admit.py",
+        REPO_ROOT / "scripts" / "lib" / "jail.py",
+        REPO_ROOT / "scripts" / "checks" / "read_only_bash.py",
+        REPO_ROOT / "scripts" / "checks" / "command_allowlist.py",
         REPO_ROOT / "tests" / "test_admit.py",
         REPO_ROOT / "tests" / "adversarial" / "test_admit_corpus.py",
     }

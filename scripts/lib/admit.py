@@ -113,6 +113,8 @@ class Role:
     gitleaks: bool = False
     push: bool = False
     docs_reads: bool = False
+    # 228 S3: the orchestrator's train scripts and its date -u and sed -n inspection rows.
+    train: bool = False
 
 
 class _Off(Exception):
@@ -212,6 +214,8 @@ def role_for(agent: str) -> Role:
             gitleaks=True,
             push=True,
         ),
+        # 228 S3: command_allowlist --allow train,inspect (0060, spec 7.1).
+        "orchestrator": Role("orchestrator", read.commands, git_read, train=True),
     }
     if agent == "main":
         subs = shell.CODER_GIT | shell.CONDUCTOR_GIT | shell.CHARTER_DOCS_GIT | shell.READ_ONLY_GIT
@@ -241,8 +245,13 @@ def role_for(agent: str) -> Role:
 
 def admit(script: Script, agent: str, cwd: str, *, text: str) -> Admitted | Refusal:
     # 228 S2: text is the command the script was parsed from; spans index it (R6).
+    return admit_role(script, role_for(agent), cwd, text=text)
+
+
+def admit_role(script: Script, role: Role, cwd: str, *, text: str) -> Admitted | Refusal:
+    # 228 S3: a check whose hook flags name its grant judges by the Role those flags build.
     try:
-        return Admitted(tuple(_Judge(role_for(agent), cwd).script(script)))
+        return Admitted(tuple(_Judge(role, cwd).script(script)))
     except _Off as off:
         start, end = off.span
         digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
@@ -589,6 +598,8 @@ class _Judge:
                 raise _Off(c.span, "gitleaks runs only as detect --redact with a /tmp report")
             for word in words[1:]:
                 c.add("text", _word_text(word))
+        elif role.train and family in ("python", "date", "sed"):
+            self.train(c, words, literals)
         elif role.runner in ("audit", "unit") and family == "python":
             self.test_run(c, words, literals)
         elif role.runner == "coder" and family in _RUNNERS:
@@ -952,6 +963,23 @@ class _Judge:
         for word, tok in zip(words[1:], toks[1:], strict=True):
             if tok in paths:
                 c.add("read", Typed(tok, word.span))
+
+    def train(self, c: _Cmd, words: list[Word], literals: list[str | None]) -> None:
+        # 0060, spec 7.1: a train script by its plugin path, date -u, or sed -n line ranges.
+        from checks.command_allowlist import date_ok, sed_print_ok, train_script_ok
+
+        toks = self._all_literal(words, literals)
+        if c.family == "python" and train_script_ok(toks):
+            c.typed.setdefault("script", []).append(_word_text(words[1]))
+            kinds = ("text",) * (len(words) - 2)
+        elif c.family == "date" and date_ok(toks):
+            kinds = ("text",) * (len(words) - 1)
+        elif c.family == "sed" and sed_print_ok(toks):
+            kinds = ("text", "text") + ("read",) * (len(words) - 3)
+        else:
+            raise _Off(words[0].span, f"{toks[0]} is off the {self.role.name} train rows (0060)")
+        for word, kind in zip(words[len(words) - len(kinds) :], kinds, strict=True):
+            c.add(kind, _word_text(word))
 
     def test_run(self, c: _Cmd, words: list[Word], literals: list[str | None]) -> None:
         # 0109: the read-only roles' one pytest form; the train's path bounds are the check's.

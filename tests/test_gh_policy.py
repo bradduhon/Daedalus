@@ -610,10 +610,10 @@ INLINE_RUNS = (
 def test_a_script_run_reaches_the_parsed_gh_path(train_repo: Path, agent: str) -> None:
     # R-extra-2, P7: no unparsed-gh warning or refusal for a script or module run.
     for command in PARSED_RUNS:
-        assert jail._policy_segments(command) == [shlex.split(command)], command
+        assert jail._plain_segments(command) == [shlex.split(command)], command
         assert jail._gh_gate(agent, str(train_repo), command) is None, command
     for command in INLINE_RUNS:
-        assert jail._policy_segments(command) is None, command
+        assert jail._plain_segments(command) is None, command
         want = _fallback_reason(agent, command)
         assert jail._gh_gate(agent, str(train_repo), command) == want, command
     assert decide(_bash(train_repo, "main", PARSED_RUNS[0]), Config()).allow

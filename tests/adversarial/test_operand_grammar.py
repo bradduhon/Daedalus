@@ -39,7 +39,7 @@ def test_a_read_verb_never_writes_through_an_option_or_operand(command: str) -> 
     assert_denied(_b("auditor", command))
     tokens = shlex.split(command)
     if tokens[0] in shell.READ_ONLY_CMDS:
-        assert not jail._read_only_segment(tokens, frozenset(), "/c", None), command
+        assert not jail.admitted(command, "comparer", "/c"), command
 
 
 @pytest.mark.parametrize("command", A1_EXPANSION)
@@ -50,12 +50,12 @@ def test_an_expanding_word_beside_a_writing_read_verb_is_refused(
     assert_denied(_b("auditor", command))
     foreign = _cred("Explore", "Bash", str(marked_repo), command=command)
     assert_denied(foreign, "read-only while", "could be a credential path")
-    assert shell.expansion_opaque(command), command
+    assert not jail.admitted(command, "comparer", str(marked_repo)), command
 
 
 @pytest.mark.parametrize("command", A1_EXPANSION_ADMITTED)
 def test_a_quoted_brace_or_glob_is_one_literal_word(marked_repo: Path, command: str) -> None:
-    assert not shell.expansion_opaque(command), command
+    assert jail.admitted(command, "foreign", str(marked_repo)), command
     decision = jail.decide(_cred("Explore", "Bash", str(marked_repo), command=command), CFG)
     assert decision.allow and not decision.warn, (command, decision.reason)
     # O4, prepush2: hygiene and the search glob rule still judge Daedalus agents' other rows.
@@ -76,7 +76,7 @@ def test_a_wrapper_file_in_a_marked_repository_is_a_write(
 ) -> None:
     # P9, issue 107: the lock or namespace file joins the write accounting beside time -o.
     command = form.format(repo=marked_repo)
-    targets = jail._bash_write_dirs(command, str(other_repo))
+    targets = jail._scope_paths(command, str(other_repo)) or ()
     assert any(t.startswith(f"{marked_repo}/") for t in targets), (command, targets)
     hook_input = _cred("Explore", "Bash", str(other_repo), command=command)
     assert_denied(hook_input, "read-only while", "shell -c body")
@@ -93,7 +93,9 @@ def test_a_lone_numeric_flock_fd_is_no_write(
     marked_repo: Path, other_repo: Path, command: str
 ) -> None:
     # P9: with no command after it, a numeric operand names a file descriptor, never a path.
-    assert jail._bash_write_dirs(command, str(other_repo)) == []
+    assert not [
+        t for t in jail._scope_paths(command, str(other_repo)) or () if str(marked_repo) in t
+    ]
     decision = jail.decide(_cred("Explore", "Bash", str(other_repo), command=command), CFG)
     assert decision.allow and not decision.warn, decision.reason
 
@@ -103,6 +105,6 @@ def test_a_numeric_flock_operand_before_a_command_is_a_file(
     marked_repo: Path, command: str
 ) -> None:
     # P9: flock 9 true creates the file 9 (orchestrator probe, run 20261107-145205).
-    assert f"{marked_repo}/9" in jail._bash_write_dirs(command, str(marked_repo))
+    assert f"{marked_repo}/9" in (jail._scope_paths(command, str(marked_repo)) or ())
     hook_input = _cred("Explore", "Bash", str(marked_repo), command=command)
     assert_denied(hook_input, "read-only while", "shell -c body")

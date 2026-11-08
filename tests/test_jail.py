@@ -47,6 +47,11 @@ def _warns(d: jail.Decision, path: str) -> bool:
     return d.warn and not d.allow and d.reason == want
 
 
+def _runs(d: jail.Decision) -> bool:
+    # 228 S3, 0105, 0106: main is never blocked; a command off its table runs with a warning.
+    return d.allow or (d.warn and "The jail's finding: " in str(d.reason))
+
+
 def _main_warns(d: jail.Decision, warning: str | None = None) -> bool:
     # Main never prompted (amends 0106): warned, never blocked; the warning leads the text.
     reason = str(d.reason)
@@ -290,6 +295,28 @@ def test_universal_tripwire_regressions(command: str) -> None:
         assert _main_warns(d) and "Next:" in str(d.reason), (agent, command)
 
 
+@pytest.mark.parametrize(
+    ("command", "admitted"),
+    [
+        ("git status", True),
+        ("git status; ( git status )", False),
+        ("cat a.md", True),
+        ("cat a.md | sh", False),
+        ("touch build/x", True),
+        ("touch a.md b.md{1,2}", False),
+    ],
+)
+def test_main_warns_naming_the_refusal_of_an_unadmitted_command(
+    command: str, admitted: bool
+) -> None:
+    # 228 S3, 0105, 0106: main meets the same grammar; off its table it runs with the warning.
+    d = decide(_b(None, command), CFG)
+    if admitted:
+        assert d.allow and not d.warn, (command, d.reason)
+    else:
+        assert _main_warns(d, jail.WARN_COMMAND) and "Refused: " in str(d.reason), d.reason
+
+
 def test_main_ordinary_commands_still_allowed() -> None:
     for command in (
         "rm -rf build",
@@ -298,7 +325,7 @@ def test_main_ordinary_commands_still_allowed() -> None:
         "git log | head",
         "bash -c 'git status'",
     ):
-        assert decide(_b(None, command), CFG).allow, command
+        assert _runs(decide(_b(None, command), CFG)), command
 
 
 @pytest.mark.parametrize(
@@ -379,7 +406,7 @@ def test_main_and_foreign_agents_carry_only_the_read_deny_outside_a_train(
     ],
 )
 def test_main_exempt_from_construct_limits(command: str) -> None:
-    assert decide(_b(None, command), CFG).allow, command
+    assert _runs(decide(_b(None, command), CFG)), command
 
 
 @pytest.mark.parametrize(
@@ -415,7 +442,7 @@ def test_main_tripwires_hold_without_tokenizer(command: str) -> None:
 class TestRegressionCharterDocs:
     def test_main_append_cwd_allowed(self) -> None:
         command = "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/append_ledger.py --probe --cwd /x"
-        assert decide(_b("main", command), Config()).allow
+        assert _runs(decide(_b("main", command), Config()))
 
 
 class TestRegressionToolsAndCwd:
@@ -547,7 +574,7 @@ class TestRound3MainHardened:
         ],
     )
     def test_allowed(self, command: str) -> None:
-        assert decide(_b(None, command), CFG).allow, command
+        assert _runs(decide(_b(None, command), CFG)), command
 
 
 class TestRound4MainFallback:
@@ -623,7 +650,7 @@ class TestRound4MainFallback:
         ],
     )
     def test_allowed(self, command: str) -> None:
-        assert decide(_b(None, command), CFG).allow, command
+        assert _runs(decide(_b(None, command), CFG)), command
 
     def test_fallback_asymmetry_for_main_word_in_branch(self) -> None:
         # Kept as ruled: the fallback over-blocks a main word inside a branch name.
@@ -671,7 +698,7 @@ class TestRound5BraceFallback:
         ],
     )
     def test_allowed(self, command: str) -> None:
-        assert decide(_b(None, command), CFG).allow, command
+        assert _runs(decide(_b(None, command), CFG)), command
 
 
 # Final whole-branch review fixes (I1, I3, I4, I7, m4).
@@ -926,7 +953,7 @@ class TestProjectDataDir:
         ],
     )
     def test_review_benign_commands_allowed_for_main(self, command: str) -> None:
-        assert decide(_b(None, command), CFG).allow, command
+        assert _runs(decide(_b(None, command), CFG)), command
 
 
 class TestFinalSubagentAsMain:
@@ -1467,7 +1494,7 @@ def test_issue30_main_shell_syntax_passes_outside_a_train(other_repo: Path, comm
 )
 def test_issue30_main_plain_commands_pass_during_a_train(marked_repo: Path, command: str) -> None:
     d = decide(_cred(None, "Bash", str(marked_repo), command=command), CFG)
-    assert d.allow, (command, d.reason)
+    assert _runs(d), (command, d.reason)
 
 
 @pytest.mark.parametrize(
@@ -1478,7 +1505,6 @@ def test_issue30_main_plain_commands_pass_during_a_train(marked_repo: Path, comm
         {"command": "touch {repo}/x"},
         {"command": "echo hi > {repo}/x"},
         {"command": "git -C {repo} commit -m x"},
-        {"command": "cd {repo} && ls"},
         {"command": "sed -i s/a/b/ {repo}/x"},
     ],
 )
@@ -1491,6 +1517,19 @@ def test_issue30_unknown_agent_refused_writing_into_a_marked_repo(
     d = decide(_cred("Explore", tool, str(other_repo), **filled), CFG)
     assert not d.allow and "read-only while" in str(d.reason), filled
     assert str(train_marker(marked_repo)) in str(d.reason)
+
+
+def test_a_leading_cd_into_a_marked_repo_before_a_read_is_admitted(
+    marked_repo: Path, other_repo: Path
+) -> None:
+    # 228 S3 friction fix: one leading cd <absolute path> && before a read is an admitted shape.
+    command = f"cd {marked_repo} && ls"
+    assert jail._marked_repo(str(other_repo), "Bash", {"command": command}) == marked_repo
+    assert decide(_cred("Explore", "Bash", str(other_repo), command=command), CFG).allow
+    d = decide(
+        _cred("Explore", "Bash", str(other_repo), command=f"cd {marked_repo} && touch x"), CFG
+    )
+    assert not d.allow and "read-only while" in str(d.reason), d.reason
 
 
 def test_issue30_unknown_agent_reads_a_marked_repo_from_elsewhere(
@@ -1713,7 +1752,7 @@ def test_main_claude_is_warned(command: str) -> None:
 
 def test_main_mentions_of_claude_pass() -> None:
     for command in ("ls .claude", "cat ~/.claude/CLAUDE.md", "echo claude-code", "git log"):
-        assert decide(_b(None, command), CFG).allow, command
+        assert _runs(decide(_b(None, command), CFG)), command
 
 
 def test_main_versioned_claude_path_is_warned(fake_claude: Path) -> None:
@@ -1767,7 +1806,7 @@ class TestGlobDotsAndBraces:
         ["setopt nomatch; cat ~/*/id_ed25519", "cat ~/{x,y}/id_ed25519", "cat ~/*/x(N)"],
     )
     def test_main_sibling_reads_are_allowed(self, cred_home: Path, command: str) -> None:
-        assert decide(_b(None, command), CFG).allow, command
+        assert _runs(decide(_b(None, command), CFG)), command
 
 
 # Main never prompted (amends 0106): the dispatch that skips a train invariant is warned.
@@ -2084,10 +2123,10 @@ def test_git_read_rows_keep_worktree_writes_train_scoped(
     assert {"grep", "worktree", "merge-base"} <= shell.READ_ONLY_GIT
     reads = (f"git -C {marked_repo} grep -n x", f"git -C {marked_repo} merge-base a b")
     for command in reads:
-        assert jail._bash_write_dirs(command, str(other_repo)) == [], command
+        assert jail._scope_paths(command, str(other_repo)) == (), command
     for sub in ("worktree add /tmp/x", "worktree list"):
-        found = jail._bash_write_dirs(f"git -C {marked_repo} {sub}", str(other_repo))
-        assert found == [str(marked_repo)], sub
+        found = jail._scope_paths(f"git -C {marked_repo} {sub}", str(other_repo)) or ()
+        assert str(marked_repo) in found, sub
     assert (
         jail._marked_repo(
             str(other_repo), "Bash", {"command": f"git -C {marked_repo} worktree add /tmp/x"}
@@ -2136,7 +2175,7 @@ def test_env_split_string_hiding_a_write_is_refused_reproduction(
     command = f"env -S 'touch {marked_repo}/x'"
     d = decide(_cred("Explore", "Bash", str(other_repo), command=command), CFG)
     assert not d.allow and not d.warn, d.reason
-    assert d.reason == shell.R_ENV_SPLIT
+    assert str(d.reason).startswith(shell.R_ENV_SPLIT)
 
 
 def _foreign(cwd: Path, command: str) -> jail.Decision:
@@ -2150,7 +2189,10 @@ def test_env_split_string_is_refused_to_a_foreign_agent_in_a_train(
     # issue 80: from the train's repo or another one, the -S value's own targets scope the call.
     for cwd in (marked_repo, other_repo):
         d = _foreign(cwd, form.format(repo=marked_repo))
-        assert not d.allow and not d.warn and d.reason == shell.R_ENV_SPLIT, (form, cwd)
+        assert not d.allow and not d.warn and str(d.reason).startswith(shell.R_ENV_SPLIT), (
+            form,
+            cwd,
+        )
         assert "Next: write the command without env -S" in str(d.reason)
 
 
@@ -2167,7 +2209,10 @@ def test_a_shell_body_is_refused_to_a_foreign_agent_in_a_train(
     # issue 81: the body's own targets scope the call, then the body itself is refused.
     for cwd in (marked_repo, other_repo):
         d = _foreign(cwd, form.format(repo=marked_repo))
-        assert not d.allow and not d.warn and d.reason == jail.R_SHELL_BODY, (form, cwd)
+        assert not d.allow and not d.warn and str(d.reason).startswith(jail.R_SHELL_BODY), (
+            form,
+            cwd,
+        )
         assert "Next: run the command directly" in str(d.reason)
 
 
@@ -2177,7 +2222,10 @@ def test_an_inline_body_is_refused_to_a_foreign_agent_in_a_train(
 ) -> None:
     # issue 116 (P7): refused while a train runs; outside one it passes as today.
     d = _foreign(marked_repo, form.format(repo=marked_repo))
-    assert not d.allow and not d.warn and d.reason == jail.R_INLINE_BODY, (form, d.reason)
+    assert not d.allow and not d.warn and str(d.reason).startswith(jail.R_INLINE_BODY), (
+        form,
+        d.reason,
+    )
     assert _foreign(other_repo, form.format(repo=other_repo)).allow, form
 
 
@@ -2185,44 +2233,45 @@ def test_an_inline_body_is_refused_to_a_foreign_agent_in_a_train(
 def test_hidden_bodies_pass_outside_a_train_and_for_main(
     marked_repo: Path, other_repo: Path, form: str
 ) -> None:
-    # 0035, issue 80, 81: no train, no refusal; main stays exempt from construct limits (0106).
+    # 0035, issue 80, 81: no train, no refusal; main is never blocked (0106, 228 S3).
     assert _foreign(other_repo, form.format(repo=other_repo)).allow, form
     command = form.format(repo=marked_repo).replace("rm -rf", "touch")
-    assert decide(_cred(None, "Bash", str(marked_repo), command=command), CFG).allow, form
+    assert _runs(decide(_cred(None, "Bash", str(marked_repo), command=command), CFG)), form
 
 
 def test_hidden_bodies_nest_and_find_their_targets(marked_repo: Path, other_repo: Path) -> None:
-    # issue 80, 81: a body inside a body is walked to the depth cap.
+    # issue 80, 81, 228 S3: a body inside a body names its paths to the depth cap, and each
+    # refused body keeps its finding.
     nested = f"env -S \"bash -c 'touch {marked_repo}/x'\""
-    assert str(marked_repo / "x") in jail._bash_write_dirs(nested, str(other_repo))
-    assert jail._hidden_reason(f"echo a; sh -c 'touch {marked_repo}/x'") == jail.R_SHELL_BODY
-    assert jail._hidden_reason("bash script.sh -c x") is None
-    assert jail._hidden_reason("bash --version") is None
-    assert jail._hidden_reason("flock /tmp/l touch x") is None
-    assert jail._hidden_reason("flock /tmp/l --command=true") == jail.R_SHELL_BODY
-    assert jail._hidden_bodies(["bash", "--frob", "-c"]) == [(jail.R_SHELL_BODY, "", ())]
+    assert str(marked_repo / "x") in (jail._scope_paths(nested, str(other_repo)) or ())
+    bodies = (f"echo a; sh -c 'touch {marked_repo}/x'", "flock /tmp/l --command=true")
+    for command in (*bodies, "bash --frob -c"):
+        assert str(_foreign(marked_repo, command).reason).startswith(jail.R_SHELL_BODY), command
+    for command in ("bash script.sh -c x", "bash --version", "flock /tmp/l touch x"):
+        reason = str(_foreign(marked_repo, command).reason)
+        assert not reason.startswith(jail.R_SHELL_BODY), (command, reason)
 
 
 @pytest.mark.parametrize("form", H1_DEEP_BODY)
 def test_a_body_past_the_depth_cap_fails_closed(
     marked_repo: Path, other_repo: Path, form: str
 ) -> None:
-    # issue 81: past the cap no target is walked, so the call is judged as if a train runs.
+    # issue 81, 228 S3: past the cap no path is read, so the call is judged as if a train runs.
     for repo in (marked_repo, other_repo):
         command = form.format(repo=repo)
-        assert jail._body_past_cap(command), command
+        assert jail._past_cap(command, str(other_repo)), command
         d = _foreign(other_repo, command)
         hidden = (jail.R_SHELL_BODY, shell.R_ENV_SPLIT)
-        assert not d.allow and not d.warn and d.reason in hidden, (command, d.reason)
+        assert not d.allow and not d.warn and str(d.reason).startswith(hidden), command
     assert jail._train_scoped(str(other_repo), "Bash", {"command": form.format(repo=other_repo)})
 
 
 def test_a_body_within_the_depth_cap_is_walked(marked_repo: Path, other_repo: Path) -> None:
-    # issue 81: three levels are walked for targets; outside a train they pass.
+    # issue 81, 228 S3: three levels are read for paths; outside a train they pass.
     inside = nest_bodies(f"touch {marked_repo}/x", 3)
-    assert not jail._body_past_cap(inside)
-    assert str(marked_repo / "x") in jail._bash_write_dirs(inside, str(other_repo))
-    assert _foreign(other_repo, inside).reason == jail.R_SHELL_BODY
+    assert not jail._past_cap(inside, str(other_repo))
+    assert str(marked_repo / "x") in (jail._scope_paths(inside, str(other_repo)) or ())
+    assert str(_foreign(other_repo, inside).reason).startswith(jail.R_SHELL_BODY)
     assert _foreign(other_repo, nest_bodies(f"touch {other_repo}/x", 3)).allow
 
 
@@ -2286,9 +2335,12 @@ ASSET_LOG_OPTS = "-- . :(exclude)assets/ :(exclude)*.glb :(exclude)web/big.bin"
         ("orchestrator", f"git -C {CWD} diff --stat abc123...daedalus/t {ASSET_TAIL}"),
     ],
 )
-def test_exclude_magic_is_admitted_on_a_readers_git_diff_and_log(agent: str, command: str) -> None:
-    # 0192: the read-only checks admit the pathspec as is; no widening was needed.
-    assert hook_chain.first_deny(_b(agent, command), CFG) is None, command
+def test_exclude_magic_on_a_readers_git_diff_and_log_is_a_table_gap(
+    agent: str, command: str
+) -> None:
+    # 0192, 228 S3 table gap: the grammar admits no pathspec magic; the read check names it.
+    denied = hook_chain.first_deny(_b(agent, command), CFG)
+    assert denied is not None and ":(exclude)assets/" in denied[1], (command, denied)
 
 
 def test_exclude_magic_stays_refused_on_a_coder_write_path() -> None:

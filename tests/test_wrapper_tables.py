@@ -316,7 +316,10 @@ def test_a_cluster_letter_off_the_row_is_refused(command: str) -> None:
 )
 def test_write_dirs_follow_the_wrapper_folder(command: str, cwd: str, want: list[str]) -> None:
     # issue 76: relative operands resolve in the folder the wrapper moves to; redirects in cwd.
-    assert jail._bash_write_dirs(command, cwd) == want
+    # 228 S3: an admitted row scopes by exactly these; an unadmitted one by every fragment.
+    got = jail._scope_paths(command, cwd) or ()
+    exact = jail.admitted(command, "main", cwd)
+    assert list(got) == want if exact else set(want) <= set(got), (command, got)
 
 
 def test_gh_tables_are_supersets_of_both_old_tables() -> None:
