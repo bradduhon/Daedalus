@@ -133,7 +133,7 @@ This section binds a unit whose `files:` list holds any of: `scripts/checks/` (a
 `scripts/lib/jail.py`, `scripts/lib/shell.py`, `scripts/lib/credential_paths.py`,
 `scripts/lib/gh_policy.py`, `scripts/enforce_agent_jail.py`, `scripts/lib/workspace.py`,
 `scripts/lib/train_runner.py`, `scripts/lib/audit_proof.py`, `scripts/lib/unit_binding.py`,
-`scripts/lib/dispatch_binding.py`.
+`scripts/lib/dispatch_binding.py`, `scripts/lib/shparse.py` or `scripts/lib/admit.py` (0226: the parser and the grammar are the class's core).
 - Build only what the brief names. A construct the brief does not name is refused where the check fails closed and left as it is everywhere else.
 - Never fill a gap on your own judgement. Report it: `- deviation gap | <form> | not in the brief`.
 - Never change a refusal text, a table or a list every agent reads unless the brief names it.
