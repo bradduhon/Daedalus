@@ -633,6 +633,7 @@ def test_verifier_body_names_the_seven_verdicts_and_its_reply_lines() -> None:
     assert load(VERIFIER).status_lines == (
         "[VERDICT: VERIFIED] claims=<n>",
         "[VERDICT: REFUTED] <rows>",
+        "[ROWS] n=<count>",
     )
     contract = text.split("## Status contract", 1)[1]
     assert "starts with exactly one of these verdict lines as its first line" in contract
@@ -710,6 +711,8 @@ HUNT_FILES = (
     "scripts/lib/audit_proof.py",
     "scripts/lib/unit_binding.py",
     "scripts/lib/dispatch_binding.py",
+    "scripts/lib/shparse.py",
+    "scripts/lib/admit.py",
 )
 HUNT_FORMS = frozenset(
     {
@@ -852,3 +855,50 @@ def test_verify_skill_judges_pack_ids_as_receipts() -> None:
         "The coder's pack ids are receipts, not claims; judge the diff; a rule the coder names"
         " and did not follow is a `code` row only when a brief requirement is unmet because of it."
     ) in hunt
+
+
+def test_coder_binds_the_whole_unit_to_a_pack_on_the_packs_line() -> None:
+    # 0226: a declined pack rule carries its reason; "outside this unit" is no reason in class.
+    text = (AGENTS / "coder.md").read_text()
+    section = _build_step(text, "## Build only the ask (227)", "\n## ")
+    assert (
+        "A pack on the `Packs:` line binds the whole unit. A rule you decline carries, in the"
+        ' ledger notes, the reason it cannot apply to this unit; "outside this unit" is not a'
+        " reason when the unit's files are in the pack's class."
+    ) in section
+
+
+def test_verifier_rows_mode_writes_rows_and_runs_nothing() -> None:
+    # 0228: rows mode follows claims mode, reads the brief alone and replies with the ROWS pair.
+    text = VERIFIER.read_text()
+    # 0228: last in the file, so the workspace.py cites of the contract lines stay true.
+    assert text.index("## What the jail passes and refuses") < text.index("## Rows mode")
+    rows = _build_step(text, "## Rows mode", "\0")
+    for item in (
+        "A prompt whose first line is `ROWS MODE.` names one unit before its coder starts",
+        "Skip the Procedure except the requirement list of step 2, and run no command.",
+        "Read the brief's requirements as step 2 lists claims",
+        "write the admitted forms first",
+        "each hiding form of the brief's `Hunt:` line, and each class the shell-semantics pack"
+        " names",
+        "Write one row per form: `<req n> | <agent> | <admitted|refused> | <command>`.",
+    ):
+        assert item in rows, item
+    flat = " ".join(text.split())
+    assert "A prompt whose first line is `ROWS MODE.` follows the Rows mode section." in flat
+    contract = flat.split("## Status contract", 1)[1].split("## What the jail", 1)[0]
+    assert "In rows mode the first and last line is `[ROWS] n=<count>`" in contract
+    assert "- `[ROWS] n=<count>` then `<one row per line>` then `[ROWS] n=<count>`" in contract
+    jail = flat.split("## What the jail passes and refuses", 1)[1]
+    assert "Rows mode runs no test, and no git command beyond the reads above." in jail
+
+
+def test_coder_builds_until_every_row_passes() -> None:
+    # 0228: the rows file is the unit's gate; a wrong row is a question, never an edit.
+    section = _build_step((AGENTS / "coder.md").read_text(), "## Build only the ask (227)", "\n## ")
+    assert (
+        "A brief with a `Rows:` line names the unit's gate (0228): build until every row passes,"
+        " never edit, delete or skip a row, and report the rows file's test line in the"
+        " receipts; a row you believe wrong is a `YIELD_STANDARDS` question with the row"
+        " quoted, never a change."
+    ) in section
