@@ -1,0 +1,521 @@
+{
+ "group": "expansions",
+ "bash": "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)",
+ "prefix": "bash -c 'printf \"%s\\0\" \"$#\" \"$@\"' _ ",
+ "name0": "probe0",
+ "positional": [
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+  "elf"
+ ],
+ "home": "/nonexistent/hdir",
+ "users": {
+  "root": "/root"
+ },
+ "vars": {
+  "x": "vx",
+  "s": "a b"
+ },
+ "seeds": {
+  "a1": "A1\n",
+  "a2": "A2\n",
+  "bb": "BB\n",
+  ".h": "H\n"
+ },
+ "cases": [
+  {
+   "name": "positional",
+   "kind": "words",
+   "text": "$1 $2 ${10} $10 ${11}",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "one",
+     "two",
+     "ten",
+     "one0",
+     "elf"
+    ],
+    "meta": {
+     "$": "4030637",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "specials",
+   "kind": "words",
+   "text": "$# $0 \"$@\" $@ \"$*\" $* $? $- $$ $!",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "11",
+     "probe0",
+     "one",
+     "two",
+     "three",
+     "four",
+     "five",
+     "six",
+     "seven",
+     "eight",
+     "nine",
+     "ten",
+     "elf",
+     "one",
+     "two",
+     "three",
+     "four",
+     "five",
+     "six",
+     "seven",
+     "eight",
+     "nine",
+     "ten",
+     "elf",
+     "one two three four five six seven eight nine ten elf",
+     "one",
+     "two",
+     "three",
+     "four",
+     "five",
+     "six",
+     "seven",
+     "eight",
+     "nine",
+     "ten",
+     "elf",
+     "0",
+     "hBc",
+     "4030638"
+    ],
+    "meta": {
+     "$": "4030638",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "vars",
+   "kind": "words",
+   "text": "$x ${x} ${x:-d} ${u:-d} ${u-d} ${x:+y} ${#x} $s \"$s\"",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "vx",
+     "vx",
+     "vx",
+     "d",
+     "d",
+     "y",
+     "2",
+     "a",
+     "b",
+     "a b"
+    ],
+    "meta": {
+     "$": "4030639",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "arith",
+   "kind": "words",
+   "text": "$((1+2)) $((2*(3+4)))",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "3",
+     "14"
+    ],
+    "meta": {
+     "$": "4030640",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "arith-before-command-sub",
+   "kind": "words",
+   "text": "$( (echo a) ) $((echo b) )",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a",
+     "b"
+    ],
+    "meta": {
+     "$": "4030641",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "command-sub",
+   "kind": "words",
+   "text": "$(echo x) \"$(echo \"a b\")\" `echo c`",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "x",
+     "a b",
+     "c"
+    ],
+    "meta": {
+     "$": "4030646",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "legacy-arith",
+   "kind": "words",
+   "text": "$[1+1]",
+   "opaque": "legacy arithmetic",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "2"
+    ],
+    "meta": {
+     "$": "4030650",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "indirect",
+   "kind": "words",
+   "text": "${!x}",
+   "opaque": "indirect or unknown",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [],
+    "meta": {
+     "$": "4030651",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "op-with-quote",
+   "kind": "words",
+   "text": "\"${x:-\"a b\"}\"",
+   "opaque": "expansion inside a parameter operator",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "vx"
+    ],
+    "meta": {
+     "$": "4030652",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "op-with-tilde",
+   "kind": "words",
+   "text": "${u:-~}",
+   "opaque": "expansion inside a parameter operator",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "/nonexistent/hdir"
+    ],
+    "meta": {
+     "$": "4030653",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "brace-close-first",
+   "kind": "words",
+   "text": "${u-{}x}",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "{x}"
+    ],
+    "meta": {
+     "$": "4030654",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "braces",
+   "kind": "words",
+   "text": "{a,b}c {1..3} {a} {} {a,\"b c\"} a{,b} {a..c} {1..5..2} {x,{y,z}}",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "ac",
+     "bc",
+     "1",
+     "2",
+     "3",
+     "{a}",
+     "{}",
+     "a",
+     "b c",
+     "a",
+     "ab",
+     "a",
+     "b",
+     "c",
+     "1",
+     "3",
+     "5",
+     "x",
+     "y",
+     "z"
+    ],
+    "meta": {
+     "$": "4030655",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "braces-more",
+   "kind": "words",
+   "text": "{01..03} {c..a} {a,b {a..} {a,b}{c,d}",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "01",
+     "02",
+     "03",
+     "c",
+     "b",
+     "a",
+     "{a,b",
+     "{a..}",
+     "ac",
+     "ad",
+     "bc",
+     "bd"
+    ],
+    "meta": {
+     "$": "4030656",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "braces-quoted",
+   "kind": "words",
+   "text": "\"{a,b}\" \\{a,b} {a\\,b} {$x,b}",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "{a,b}",
+     "{a,b}",
+     "{a,b}",
+     "vx",
+     "b"
+    ],
+    "meta": {
+     "$": "4030657",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "brace-with-command-sub",
+   "kind": "words",
+   "text": "{a,$(echo b)}",
+   "opaque": "brace with a substitution",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a",
+     "b"
+    ],
+    "meta": {
+     "$": "4030658",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "globs",
+   "kind": "words",
+   "text": "a* ?b [ab]1 [!a]1 x*",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a1",
+     "a2",
+     "bb",
+     "a1",
+     "[!a]1",
+     "x*"
+    ],
+    "meta": {
+     "$": "4030660",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "glob-quoted",
+   "kind": "words",
+   "text": "\"a*\" a\\* [ x]",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a*",
+     "a*",
+     "[",
+     "x]"
+    ],
+    "meta": {
+     "$": "4030661",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "glob-all",
+   "kind": "words",
+   "text": "*",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a1",
+     "a2",
+     "bb"
+    ],
+    "meta": {
+     "$": "4030662",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "tilde",
+   "kind": "words",
+   "text": "~ ~/a ~root ~\"root\" ~nosuch x~",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "/nonexistent/hdir",
+     "/nonexistent/hdir/a",
+     "/root",
+     "~root",
+     "~nosuch",
+     "x~"
+    ],
+    "meta": {
+     "$": "4030663",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "tilde-assignment-shaped",
+   "kind": "words",
+   "text": "a=~/x a=x:~/y a+=~ \"a\"=~ a=b=~ =~ b:~/y",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a=/nonexistent/hdir/x",
+     "a=x:/nonexistent/hdir/y",
+     "a+=/nonexistent/hdir",
+     "a=~",
+     "a=b=~",
+     "=~",
+     "b:~/y"
+    ],
+    "meta": {
+     "$": "4030664",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "tilde-unusual",
+   "kind": "words",
+   "text": "~a*",
+   "opaque": "tilde with an unusual prefix",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "~a*"
+    ],
+    "meta": {
+     "$": "4030665",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "process-sub",
+   "kind": "words",
+   "text": "<(true) a>(true) 2>(true)",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "/dev/fd/63",
+     "a/dev/fd/62",
+     "2/dev/fd/61"
+    ],
+    "meta": {
+     "$": "4030666",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "assignment-tilde",
+   "kind": "run",
+   "text": "v=~/a:~/b; p \"$v\"",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "/nonexistent/hdir/a:/nonexistent/hdir/b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  }
+ ]
+}

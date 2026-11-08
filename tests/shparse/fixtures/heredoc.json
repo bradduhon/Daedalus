@@ -1,0 +1,482 @@
+{
+ "group": "heredoc",
+ "bash": "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)",
+ "prefix": "bash -c 'printf \"%s\\0\" \"$#\" \"$@\"' _ ",
+ "name0": "probe0",
+ "positional": [
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+  "elf"
+ ],
+ "home": "/nonexistent/hdir",
+ "users": {
+  "root": "/root"
+ },
+ "vars": {
+  "x": "vx",
+  "s": "a b"
+ },
+ "seeds": {
+  "a1": "A1\n",
+  "a2": "A2\n",
+  "bb": "BB\n",
+  ".h": "H\n"
+ },
+ "cases": [
+  {
+   "name": "plain",
+   "kind": "run",
+   "text": "p <<E\nbody\nE",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "body\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "unquoted-expands",
+   "kind": "run",
+   "text": "p <<E\n$1 \\$1 ${x}\nE",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "one $1 vx\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "unquoted-backtick",
+   "kind": "run",
+   "text": "p <<E\n`p q`\nE",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "q",
+      ""
+     ],
+     [
+      "\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "single-quoted",
+   "kind": "run",
+   "text": "p <<'E'\n$1 \\$1\nE",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "$1 \\$1\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "double-quoted",
+   "kind": "run",
+   "text": "p <<\"E\"\n$1\nE",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "$1\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "backslash-quoted",
+   "kind": "run",
+   "text": "p <<\\E\n$1\nE",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "$1\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "backslash-inside",
+   "kind": "run",
+   "text": "p <<E\\OF\n$1\nEOF",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "$1\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "double-backslash",
+   "kind": "run",
+   "text": "p <<\"E\\OF\"\nline\nEOF\nE\\OF",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "line\nEOF\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "dash-tabs",
+   "kind": "run",
+   "text": "p <<-E\n\tx\n\t\ty\n\tE",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "x\ny\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "tab-without-dash",
+   "kind": "run",
+   "text": "p <<E\n\tE\nE",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "\tE\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "in-subshell",
+   "kind": "run",
+   "text": "(p <<E\ninner\nE\n)",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "inner\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "in-group",
+   "kind": "run",
+   "text": "{ p <<E\ninner\nE\n}",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "inner\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "in-command-sub",
+   "kind": "run",
+   "text": "p \"$(p <<E\ninner\nE\n)\"",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "inner\n"
+     ],
+     [
+      "",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "in-command-sub-unquoted",
+   "kind": "run",
+   "text": "p $(p <<E\ninner\nE\n)",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "inner\n"
+     ],
+     [
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "two-on-a-line",
+   "kind": "run",
+   "text": "p <<E; p <<F\na\nE\nb\nF",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a\n"
+     ],
+     [
+      "b\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "before-pipe",
+   "kind": "run",
+   "text": "p <<E | p b\nx\nE",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "x\n"
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "before-and-newline",
+   "kind": "run",
+   "text": "p <<E &&\nx\nE\np b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "x\n"
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "quote-spans-newline",
+   "kind": "run",
+   "text": "p <<E; p 'a\nb'\nbody\nE",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "body\n"
+     ],
+     [
+      "a\nb",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "newline-in-command-sub",
+   "kind": "run",
+   "text": "p <<E; p $(p a\np b)\nbody\nE",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "body\n"
+     ],
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ],
+     [
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "even-backslashes",
+   "kind": "run",
+   "text": "p <<E\na\\\\\nE",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a\\\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "odd-backslashes",
+   "kind": "run",
+   "text": "p <<E\na\\\\\\\nE\nE",
+   "opaque": "line continuation in an unquoted heredoc",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a\\E\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "delimiter-glued-paren",
+   "kind": "run",
+   "text": "p $(p <<E\nx\nE)",
+   "opaque": "unclosed $(",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "x\n"
+     ],
+     [
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "missing-delimiter",
+   "kind": "run",
+   "text": "p <<E\nbody",
+   "opaque": "missing heredoc delimiter line",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "body\nwait\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "here-string",
+   "kind": "run",
+   "text": "p <<<'hi' ; p 0<<<x",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "hi\n"
+     ],
+     [
+      "x\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "in-case",
+   "kind": "run",
+   "text": "case a in a) p <<E;; esac\nx\nE",
+   "opaque": "heredoc body after a case",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "x\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  }
+ ]
+}

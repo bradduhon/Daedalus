@@ -1,0 +1,648 @@
+{
+ "group": "hunt",
+ "bash": "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)",
+ "prefix": "bash -c 'printf \"%s\\0\" \"$#\" \"$@\"' _ ",
+ "name0": "probe0",
+ "positional": [
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+  "elf"
+ ],
+ "home": "/nonexistent/hdir",
+ "users": {
+  "root": "/root"
+ },
+ "vars": {
+  "x": "vx",
+  "s": "a b"
+ },
+ "seeds": {
+  "a1": "A1\n",
+  "a2": "A2\n",
+  "bb": "BB\n",
+  ".h": "H\n"
+ },
+ "cases": [
+  {
+   "name": "quote-in-delimiter",
+   "kind": "run",
+   "text": "p <<E'F'\n$1\nEF",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "$1\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "comment-char-in-word",
+   "kind": "run",
+   "text": "p a#b #c",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a#b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "brace-glued-to-word",
+   "kind": "run",
+   "text": "p }a {a; { p b;}",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "}a",
+      "{a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "space-before-fd",
+   "kind": "run",
+   "text": "p a 2 >y 3>z",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      "2",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "y": "",
+     "z": ""
+    }
+   }
+  },
+  {
+   "name": "command-sub-in-double",
+   "kind": "run",
+   "text": "p \"$(p a)b\"",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "backtick-in-command-sub",
+   "kind": "run",
+   "text": "p $(p `p a`)",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      ""
+     ],
+     [
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "amp-redirect-after-word",
+   "kind": "run",
+   "text": "p a&>x",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "x": ""
+    }
+   }
+  },
+  {
+   "name": "pipe-amp",
+   "kind": "run",
+   "text": "p a|&p b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "double-semicolon",
+   "kind": "run",
+   "text": "p a ;; p b",
+   "opaque": ";; outside case",
+   "answer": {
+    "status": 2,
+    "syntax_error": true,
+    "records": [],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "newline-in-single",
+   "kind": "run",
+   "text": "p 'a\nb'",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a\nb",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "continuation-before-fd",
+   "kind": "run",
+   "text": "p a 2\\\n>y",
+   "opaque": "line continuation before a redirect",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "y": ""
+    }
+   }
+  },
+  {
+   "name": "continuation-after-dollar",
+   "kind": "words",
+   "text": "$\\\nx",
+   "opaque": "line continuation after $",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "vx"
+    ],
+    "meta": {
+     "$": "4030719",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "subscript-with-blank",
+   "kind": "run",
+   "text": "a[x y]=1 p",
+   "opaque": "subscript with blanks",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "array-assignment",
+   "kind": "run",
+   "text": "a=(1 2) p",
+   "opaque": "array assignment",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "backtick-backslash",
+   "kind": "words",
+   "text": "`echo a\\`echo b\\``",
+   "opaque": "backslash inside backticks",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "ab"
+    ],
+    "meta": {
+     "$": "4030726",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "unclosed-paren",
+   "kind": "run",
+   "text": "(p a",
+   "opaque": "unclosed (",
+   "answer": {
+    "status": 2,
+    "syntax_error": true,
+    "records": [],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "unclosed-command-sub",
+   "kind": "words",
+   "text": "$(echo a",
+   "opaque": "unclosed $(",
+   "answer": {
+    "status": 2,
+    "syntax_error": false,
+    "argv": [],
+    "meta": {}
+   }
+  },
+  {
+   "name": "arith-for",
+   "kind": "run",
+   "text": "for ((i=0;i<1;i++)); do p a; done",
+   "opaque": "arithmetic for loop",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "quote-nest",
+   "kind": "run",
+   "text": "p \"a'b\" 'c\"d' $'\\''",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a'b",
+      "c\"d",
+      "'",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "escaped-newline-in-double",
+   "kind": "run",
+   "text": "p \"a\\\nb\"",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "ab",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "escaped-blank",
+   "kind": "run",
+   "text": "p a\\ b a\"  \"b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a b",
+      "a  b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "glued-and-or",
+   "kind": "run",
+   "text": "p a&&f b||p c",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ],
+     [
+      "c",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "reserved-as-condition-args",
+   "kind": "run",
+   "text": "if p then; then p fi; fi",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "then",
+      ""
+     ],
+     [
+      "fi",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "reserved-in-for-list",
+   "kind": "run",
+   "text": "for v in do done; do p $v; done",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "do",
+      ""
+     ],
+     [
+      "done",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "delimiter-trailing-blank",
+   "kind": "run",
+   "text": "p <<E\nx\nE \nE",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "x\nE \n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "delimiter-as-prefix",
+   "kind": "run",
+   "text": "p <<E\nEE\nE",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "EE\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "partly-quoted-delimiter",
+   "kind": "run",
+   "text": "p <<E\"F\"G\n$1\nEFG",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "$1\n"
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "hash-after-dollar",
+   "kind": "words",
+   "text": "$# ${#} a$#b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "11",
+     "11",
+     "a11b"
+    ],
+    "meta": {
+     "$": "4030769",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "hash-in-brace",
+   "kind": "words",
+   "text": "{a,#b}",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a",
+     "#b"
+    ],
+    "meta": {
+     "$": "4030770",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "open-brace-glued-paren",
+   "kind": "run",
+   "text": "{(p a);}",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "named-fd-quoted",
+   "kind": "run",
+   "text": "p \"{fd}\">x",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "{fd}",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "x": ""
+    }
+   }
+  },
+  {
+   "name": "named-fd-bad-name",
+   "kind": "run",
+   "text": "p {1x}>x",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "{1x}",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "x": ""
+    }
+   }
+  },
+  {
+   "name": "arith-nested-parens",
+   "kind": "words",
+   "text": "$(( (1+2)*3 ))",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "9"
+    ],
+    "meta": {
+     "$": "4030781",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "command-sub-of-subshells",
+   "kind": "words",
+   "text": "$((echo a);(echo b))",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a",
+     "b"
+    ],
+    "meta": {
+     "$": "4030782",
+     "-": "hBc"
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,279 @@
+{
+ "group": "splitting",
+ "bash": "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)",
+ "prefix": "bash -c 'printf \"%s\\0\" \"$#\" \"$@\"' _ ",
+ "name0": "probe0",
+ "positional": [
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+  "elf"
+ ],
+ "home": "/nonexistent/hdir",
+ "users": {
+  "root": "/root"
+ },
+ "vars": {
+  "x": "vx",
+  "s": "a b"
+ },
+ "seeds": {
+  "a1": "A1\n",
+  "a2": "A2\n",
+  "bb": "BB\n",
+  ".h": "H\n"
+ },
+ "cases": [
+  {
+   "name": "blanks",
+   "kind": "words",
+   "text": "a  b\t\tc",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a",
+     "b",
+     "c"
+    ],
+    "meta": {
+     "$": "4030206",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "continuation-in-word",
+   "kind": "words",
+   "text": "a\\\nb c",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "ab",
+     "c"
+    ],
+    "meta": {
+     "$": "4030207",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "continuation-between",
+   "kind": "words",
+   "text": "a \\\n b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a",
+     "b"
+    ],
+    "meta": {
+     "$": "4030208",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "comment-at-word-start",
+   "kind": "words",
+   "text": "a #b c",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a"
+    ],
+    "meta": {
+     "$": "4030209",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "hash-inside-word",
+   "kind": "words",
+   "text": "a#b c#",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a#b",
+     "c#"
+    ],
+    "meta": {
+     "$": "4030210",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "hash-escaped",
+   "kind": "words",
+   "text": "\\#a '#b' \"#c\" $'#d'",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "#a",
+     "#b",
+     "#c",
+     "#d"
+    ],
+    "meta": {
+     "$": "4030211",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "hash-after-continuation",
+   "kind": "words",
+   "text": "x\\\n#y",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "x#y"
+    ],
+    "meta": {
+     "$": "4030212",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "meta-semicolon",
+   "kind": "run",
+   "text": "p a;p b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "meta-pipe",
+   "kind": "run",
+   "text": "p a|p b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "meta-amp",
+   "kind": "run",
+   "text": "p a&p b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "b",
+      ""
+     ],
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "meta-redirect",
+   "kind": "run",
+   "text": "p a>x",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {
+     "x": ""
+    }
+   }
+  },
+  {
+   "name": "meta-paren",
+   "kind": "run",
+   "text": "p a;(p b)",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "comment-after-separator",
+   "kind": "run",
+   "text": "p a;#p b\np c",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "c",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  }
+ ]
+}

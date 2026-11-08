@@ -1,0 +1,300 @@
+{
+ "group": "quotes",
+ "bash": "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)",
+ "prefix": "bash -c 'printf \"%s\\0\" \"$#\" \"$@\"' _ ",
+ "name0": "probe0",
+ "positional": [
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+  "elf"
+ ],
+ "home": "/nonexistent/hdir",
+ "users": {
+  "root": "/root"
+ },
+ "vars": {
+  "x": "vx",
+  "s": "a b"
+ },
+ "seeds": {
+  "a1": "A1\n",
+  "a2": "A2\n",
+  "bb": "BB\n",
+  ".h": "H\n"
+ },
+ "cases": [
+  {
+   "name": "backslash",
+   "kind": "words",
+   "text": "a\\ b \\$x \\\\ \\' \\\"",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a b",
+     "$x",
+     "\\",
+     "'",
+     "\""
+    ],
+    "meta": {
+     "$": "4030190",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "backslash-glob",
+   "kind": "words",
+   "text": "a\\* \\[a]",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a*",
+     "[a]"
+    ],
+    "meta": {
+     "$": "4030191",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "single",
+   "kind": "words",
+   "text": "'a b' 'it'\\''s' '$x' '\\n'",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a b",
+     "it's",
+     "$x",
+     "\\n"
+    ],
+    "meta": {
+     "$": "4030192",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "single-newline",
+   "kind": "words",
+   "text": "'a\nb' c",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a\nb",
+     "c"
+    ],
+    "meta": {
+     "$": "4030193",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "double",
+   "kind": "words",
+   "text": "\"a b\" \"\\$x \\\" \\\\ \\a\" \"x$1y\"",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a b",
+     "$x \" \\ \\a",
+     "xoney"
+    ],
+    "meta": {
+     "$": "4030194",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "double-dollar-quotes",
+   "kind": "words",
+   "text": "\"$'x'\" \"a$\"x\"\"",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "$'x'",
+     "a$x"
+    ],
+    "meta": {
+     "$": "4030195",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "ansi-c",
+   "kind": "words",
+   "text": "$'a\\tb' $'\\x41\\101\\u00e9' $'a\\'b' $'\\cA\\e\\z'",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a\tb",
+     "AAé",
+     "a'b",
+     "\u0001\u001b\\z"
+    ],
+    "meta": {
+     "$": "4030196",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "ansi-c-more",
+   "kind": "words",
+   "text": "$'\\c?' $'\\x4' $'\\u' $'\\?\\\"'",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "",
+     "\u0004",
+     "\\u",
+     "?\""
+    ],
+    "meta": {
+     "$": "4030197",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "ansi-c-nul",
+   "kind": "words",
+   "text": "$'a\\0b'",
+   "opaque": "NUL, raw byte",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a"
+    ],
+    "meta": {
+     "$": "4030198",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "ansi-c-raw-byte",
+   "kind": "words",
+   "text": "$'\\x80'",
+   "opaque": "NUL, raw byte",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "\\x80"
+    ],
+    "meta": {
+     "$": "4030199",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "locale",
+   "kind": "words",
+   "text": "$\"x y\" $\"a$1\"",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "x y",
+     "aone"
+    ],
+    "meta": {
+     "$": "4030200",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "mixed",
+   "kind": "words",
+   "text": "a'b'\"c\"$'d'$\"e\"\\f",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "abcdef"
+    ],
+    "meta": {
+     "$": "4030201",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "trailing-backslash",
+   "kind": "words",
+   "text": "a\\",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "a\\"
+    ],
+    "meta": {
+     "$": "4030202",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "unterminated-single",
+   "kind": "words",
+   "text": "'abc",
+   "opaque": "unterminated single quote",
+   "answer": {
+    "status": 2,
+    "syntax_error": false,
+    "argv": [],
+    "meta": {}
+   }
+  },
+  {
+   "name": "unterminated-double",
+   "kind": "words",
+   "text": "\"abc",
+   "opaque": "unterminated double quote",
+   "answer": {
+    "status": 2,
+    "syntax_error": false,
+    "argv": [],
+    "meta": {}
+   }
+  },
+  {
+   "name": "unterminated-ansi",
+   "kind": "words",
+   "text": "$'abc",
+   "opaque": "unterminated $'",
+   "answer": {
+    "status": 2,
+    "syntax_error": false,
+    "argv": [],
+    "meta": {}
+   }
+  }
+ ]
+}

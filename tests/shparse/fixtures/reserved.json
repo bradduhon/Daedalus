@@ -1,0 +1,453 @@
+{
+ "group": "reserved",
+ "bash": "GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)",
+ "prefix": "bash -c 'printf \"%s\\0\" \"$#\" \"$@\"' _ ",
+ "name0": "probe0",
+ "positional": [
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+  "elf"
+ ],
+ "home": "/nonexistent/hdir",
+ "users": {
+  "root": "/root"
+ },
+ "vars": {
+  "x": "vx",
+  "s": "a b"
+ },
+ "seeds": {
+  "a1": "A1\n",
+  "a2": "A2\n",
+  "bb": "BB\n",
+  ".h": "H\n"
+ },
+ "cases": [
+  {
+   "name": "reserved-as-args",
+   "kind": "words",
+   "text": "if then fi { } done do esac",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "argv": [
+     "if",
+     "then",
+     "fi",
+     "{",
+     "}",
+     "done",
+     "do",
+     "esac"
+    ],
+    "meta": {
+     "$": "4030345",
+     "-": "hBc"
+    }
+   }
+  },
+  {
+   "name": "if",
+   "kind": "run",
+   "text": "if p a; then p b; fi",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "if-elif-else",
+   "kind": "run",
+   "text": "if f a; then p b; elif f c; then p d; else p e; fi",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "c",
+      ""
+     ],
+     [
+      "e",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "group",
+   "kind": "run",
+   "text": "{ p a; p b; }",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "group-glued-close",
+   "kind": "run",
+   "text": "{ p a;}",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "group-close-is-arg",
+   "kind": "run",
+   "text": "{ p a}; }",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a}",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "group-unclosed",
+   "kind": "run",
+   "text": "{ p a }",
+   "opaque": "expected }",
+   "answer": {
+    "status": 2,
+    "syntax_error": true,
+    "records": [],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "subshell",
+   "kind": "run",
+   "text": "( p a ); (p b)",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "for",
+   "kind": "run",
+   "text": "for v in a b; do p $v; done",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "for-newline",
+   "kind": "run",
+   "text": "for v in a b\ndo p $v\ndone",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "while",
+   "kind": "run",
+   "text": "while f a; do p b; done",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "until",
+   "kind": "run",
+   "text": "until p a; do p b; done",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "brace-command-word",
+   "kind": "run",
+   "text": "{p,a}",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "reserved-after-assignment",
+   "kind": "run",
+   "text": "v=1 p if",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "if",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "stray-close",
+   "kind": "run",
+   "text": "p a; }",
+   "opaque": "unexpected }",
+   "answer": {
+    "status": 2,
+    "syntax_error": true,
+    "records": [],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "stray-fi",
+   "kind": "run",
+   "text": "p a; fi",
+   "opaque": "unexpected fi",
+   "answer": {
+    "status": 2,
+    "syntax_error": true,
+    "records": [],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "function",
+   "kind": "run",
+   "text": "g() { p a \"$1\"; }; g b",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "function-keyword",
+   "kind": "run",
+   "text": "function g { p a; }; g",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "case",
+   "kind": "run",
+   "text": "case a in a) p 1;; *) p 2;; esac; p 3",
+   "opaque": "case clause",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "1",
+      ""
+     ],
+     [
+      "3",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "conditional",
+   "kind": "run",
+   "text": "[[ a == a ]] && p b",
+   "opaque": "conditional command",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "arith-command",
+   "kind": "run",
+   "text": "(( 1 )) && p b",
+   "opaque": "arithmetic command",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "b",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "coproc",
+   "kind": "run",
+   "text": "coproc p a </dev/null",
+   "opaque": "coproc",
+   "answer": {
+    "status": 0,
+    "syntax_error": false,
+    "records": [
+     [
+      "a",
+      ""
+     ]
+    ],
+    "stdout": "",
+    "files": {}
+   }
+  },
+  {
+   "name": "negation-after-pipe",
+   "kind": "run",
+   "text": "p a | ! p b",
+   "opaque": "unexpected !",
+   "answer": {
+    "status": 2,
+    "syntax_error": true,
+    "records": [],
+    "stdout": "",
+    "files": {}
+   }
+  }
+ ]
+}
