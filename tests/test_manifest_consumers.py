@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from lib import train_runner
 
 from tests import test_train_runner as runner_tests
@@ -24,7 +25,7 @@ from tests.test_train_runner import (
 )
 
 # The runner tests' fixtures: a temp HOME, a plugin root and a one-commit repository.
-_isolated_env = runner_tests._isolated_env
+pytestmark = pytest.mark.usefixtures("isolated_env")
 plugin = runner_tests.plugin
 repo = runner_tests.repo
 PROJECT_TEMPLATE = "Project brief for train {train_id}.\n"

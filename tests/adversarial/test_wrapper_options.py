@@ -12,12 +12,12 @@ from lib import jail, shell
 from tests.adversarial.corpus import (
     INSTALL_GATE_CMDS,
     INTERPRETER_BINS,
-    RULING_MARKERS,
     TERRAFORM_MUTATIONS,
     TERRAFORM_OPERATOR_FORMS,
     assert_denied,
 )
 from tests.conftest import CFG, WT
+from tests.helpers import RULING_MARKERS
 from tests.hook_chain import load
 from tests.payloads import _b, _cred
 

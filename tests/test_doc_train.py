@@ -14,6 +14,7 @@ from lib import agent_files, router, writer_mode
 from lib.agent_files import Hook
 
 from tests.conftest import REPO_ROOT, write_folder_run, write_train_marker
+from tests.helpers import flatten_file
 
 # 0174: the doc-train skill is a stub; derived document mode of the document skill holds the recipe.
 DOCUMENT = REPO_ROOT / "skills" / "document" / "SKILL.md"
@@ -27,10 +28,6 @@ STAGES = ("Preconditions", "Freeze", "Derive", "Verify", "Change gate", "Docs wr
 FIRST_STEP = 9
 _AGENT_REF = re.compile(r"Agent\(`([a-z-]+)`\)")
 TRAIN = "20261026-030405"
-
-
-def _text(path: Path) -> str:
-    return " ".join(path.read_text(encoding="utf-8").split())
 
 
 def _derived_raw() -> str:
@@ -148,7 +145,7 @@ def test_document_agents_read_only_and_write_only_output(path: Path, mode: str) 
 
 def test_comparer_diffs_two_baselines() -> None:
     # 0136 item 7: no deriver, two baseline aliases, frozen with --baselines-only.
-    text = _text(LOGGER)
+    text = flatten_file(LOGGER)
     assert "`freeze_sources.py --baselines-only`" in text
     assert "When the manifest carries two `baseline` aliases, no deriver ran" in text
     assert "Never `agreed` without a citation." in text
@@ -156,7 +153,7 @@ def test_comparer_diffs_two_baselines() -> None:
 
 
 def test_deriver_returns_claims_for_the_verifier() -> None:
-    text = _text(DERIVER)
+    text = flatten_file(DERIVER)
     assert "`Claim: <output path>:<line> <claim> | receipt: <alias>:<line or range>`" in text
     assert "`## Priorities` section (0137)" in text
 
@@ -238,7 +235,7 @@ def test_document_agents_write_into_a_folder_runs_output_folder(
 
 def test_round_skill_logs_holds_and_flips_on_the_operators_word() -> None:
     # 0136 item 1, D.8: the bookkeeping half of correspondence; never drafts or sends.
-    text = _text(ROUND)
+    text = flatten_file(ROUND)
     for action in ("`inbound`", "`draft`", "`edit`", "`sent`"):
         assert f"{action}:" in text, action
     assert "the text verbatim inside a fenced block, unchanged" in text

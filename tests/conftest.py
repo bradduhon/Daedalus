@@ -296,6 +296,37 @@ def plugin_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
+@pytest.fixture
+def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 0020: a temp HOME keeps the operator's settings and plugin cache out of these tests.
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
+    for key in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{key}_NAME", "t")
+        monkeypatch.setenv(f"GIT_{key}_EMAIL", "t@example.invalid")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "commit.gpgsign")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
+
+
+@pytest.fixture
+def fake_plugin_data_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 0044: CLAUDE_PLUGIN_DATA names the fake data folder the jail cases judge writes against.
+    from tests.jail_cases import DATA
+
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", DATA)
+
+
+@pytest.fixture
+def plain(tmp_path: Path) -> Path:
+    # issue 48: a folder with no .git and no manifest is folder scope (0074).
+    root = tmp_path.resolve() / "plain"
+    root.mkdir()
+    return root
+
+
 @pytest.fixture(autouse=True)
 def _fresh_project_root() -> Iterator[None]:
     # 0010: root_info and the tracked-file check are cached per process; tests need them cold.
@@ -354,6 +385,18 @@ def project_data(repo_cwd: Path) -> Path:
     data = repo_cwd / ".claude" / "daedalus"
     data.mkdir(parents=True)
     return data
+
+
+@pytest.fixture
+def marked_data(project_data: Path, repo_cwd: Path) -> Path:
+    # 0035: the data folder of a repo whose train marker is present.
+    write_train_marker(repo_cwd)
+    return project_data
+
+
+@pytest.fixture
+def data_repo(project_data: Path) -> Path:
+    return project_data.parent.parent
 
 
 @pytest.fixture

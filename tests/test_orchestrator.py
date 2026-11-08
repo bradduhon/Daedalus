@@ -16,10 +16,11 @@ from lib.workspace import create, mark_train
 
 from tests.conftest import CWD, REPO_ROOT, TRAIN_BRANCH
 from tests.conftest import git as _git
+from tests.helpers import phase_text
 from tests.hook_chain import evaluate, load
 from tests.hook_chain import judge as decide
 from tests.test_dispatch_binding import TRAIN, seed_plan
-from tests.test_skills import HAND_WRITES, orchestrated
+from tests.test_skills import HAND_WRITES
 
 ORCHESTRATOR = "daedalus:orchestrator"
 AGENT_FILE = REPO_ROOT / "agents" / "orchestrator.md"
@@ -267,14 +268,8 @@ MAIN_ONLY = (
 )
 
 
-def _phase_text(name: str) -> str:
-    # 0060: the orchestrator writes the plugin root out in full; its hook refuses the variable.
-    text = (REPO_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
-    return orchestrated(text).replace("${CLAUDE_PLUGIN_ROOT}", "<plugin root>")
-
-
 def _phase_step(name: str, first: int, last: int | None = None) -> str:
-    body = _phase_text(name).split(f"\n{first}. ", 1)[1]
+    body = phase_text(name).split(f"\n{first}. ", 1)[1]
     end = first if last is None else last
     return re.split(rf"\n(?:{end + 1}\. |#)", body, maxsplit=1)[0]
 
@@ -293,7 +288,7 @@ INSPECT = [
 def _recipe_commands() -> list[str]:
     text = AGENT_FILE.read_text(encoding="utf-8").split("\n---\n", 1)[1]
     # 0165: the commands of every phase skill the orchestrator runs pass its hooks too.
-    text = "\n".join([text, *(_phase_text(name) for name in RUN_PHASES)])
+    text = "\n".join([text, *(phase_text(name) for name in RUN_PHASES)])
     # The rules line names the template `python3 <plugin root>/scripts/<script>` itself.
     found = [
         m.replace("<plugin root>", str(REPO_ROOT))

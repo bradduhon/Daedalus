@@ -24,6 +24,7 @@ from lib.manifest import load as load_manifest
 from tests import test_train_runner as runner_tests
 from tests.conftest import REPO_ROOT
 from tests.conftest import git as _git
+from tests.helpers import flatten_file
 from tests.hook_chain import evaluate
 from tests.hook_chain import judge as decide
 from tests.test_dispatch_binding import TRAIN, VALID, seed_plan
@@ -40,7 +41,7 @@ from tests.test_train_runner import _config, _integration, _state
 from tests.test_train_state_print import RECORDS, _section, _stop, _text
 
 # 0131: the runner tests' fixtures, a temp HOME, a plugin root and a one-commit repository.
-_isolated_env = runner_tests._isolated_env
+pytestmark = pytest.mark.usefixtures("isolated_env")
 plugin = runner_tests.plugin
 repo = runner_tests.repo
 __all__ = ["trees"]
@@ -55,10 +56,6 @@ LEDGER_DECL = {
 }
 
 
-def _flat(rel: str) -> str:
-    return " ".join((REPO_ROOT / rel).read_text(encoding="utf-8").split())
-
-
 # Requirement 1: the docs stage worktree is <train-id>-docstage everywhere.
 
 
@@ -70,7 +67,7 @@ def test_the_docs_stage_worktree_is_named_docstage() -> None:
         "skills/catalog/SKILL.md",
         "skills/document/kinds/public-docs/SKILL.md",
     ):
-        text = _flat(rel)
+        text = flatten_file(REPO_ROOT / rel)
         assert "<train-id>-docstage" in text, rel
         assert "<train-id>-docs`" not in text and "<train-id>-docs " not in text, rel
 
@@ -399,7 +396,7 @@ def test_the_orchestrator_bash_rules_name_the_new_train_scripts() -> None:
 
 
 def test_setup_step_two_covers_the_literacy_line() -> None:
-    step = _flat("skills/setup/SKILL.md").split(" 2. ", 1)[1].split(" 3. ", 1)[0]
+    step = flatten_file(REPO_ROOT / "skills/setup/SKILL.md").split(" 2. ", 1)[1].split(" 3. ", 1)[0]
     assert "Each line names one file" in step
     assert "`docs.literacy: null; examples: <examples>`" in step
 

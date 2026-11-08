@@ -349,7 +349,7 @@ def test_hook_gives_no_warning_outside_a_train(
 
 
 @pytest.mark.parametrize("command", ICASE_REFUSED)
-def test_an_icase_pathspec_is_refused_by_the_jail_and_the_check(
+def test_an_icase_pathspec_is_refused_while_a_root_is_declared(
     repo: Path, command: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # issue 97: git would match notes/a.md in any case; the spelled path never names the root.

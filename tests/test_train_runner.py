@@ -20,7 +20,10 @@ from lib.train_runner import STEP_NEEDLE
 
 from tests.conftest import REPO_ROOT, SCRIPTS_DIR, replay_auditor
 from tests.conftest import git as _git
+from tests.helpers import sha256_hex
 
+# 0020: a temp HOME and git identity for every test here.
+pytestmark = pytest.mark.usefixtures("isolated_env")
 SESSION = "sess-run"
 # 0024: the probe script prints a record line and exits with the code it is given.
 PROBE = (
@@ -90,21 +93,6 @@ def _definition(stages: list[dict[str, Any]], scopes: tuple[str, ...]) -> dict[s
     }
 
 
-@pytest.fixture(autouse=True)
-def _isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # 0020: a temp HOME keeps the operator's settings and plugin cache out of these tests.
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
-    for key in ("AUTHOR", "COMMITTER"):
-        monkeypatch.setenv(f"GIT_{key}_NAME", "t")
-        monkeypatch.setenv(f"GIT_{key}_EMAIL", "t@example.invalid")
-    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
-    monkeypatch.setenv("GIT_CONFIG_KEY_0", "commit.gpgsign")
-    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
-
-
 @pytest.fixture
 def plugin(tmp_path: Path) -> Path:
     # 0032: a plugin root with the real agents and a scripts folder holding only the probe.
@@ -132,13 +120,6 @@ def repo(tmp_path: Path) -> Path:
     (root / "README.md").write_text("r\n")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "init")
-    return root
-
-
-@pytest.fixture
-def plain(tmp_path: Path) -> Path:
-    root = tmp_path.resolve() / "plain"
-    root.mkdir()
     return root
 
 
@@ -789,10 +770,6 @@ def _packets(repo: Path) -> tuple[Path, Path]:
     return contract, standards
 
 
-def _hex(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def _integration(repo: Path) -> str:
     _git(repo, "branch", "-f", f"daedalus/{_state(repo)['train_id']}", "HEAD")
     return _tip(repo)
@@ -949,7 +926,7 @@ def test_plan_records_path_and_sha256(repo: Path, plugin: Path) -> None:
     missing = train_runner.record_plan(repo, repo / "nope.md")
     assert missing.code == 1 and "Next:" in missing.lines[0]
     path = _plan(repo)
-    assert _state(repo)["plan"] == {"path": str(path.resolve()), "sha256": _hex(path)}
+    assert _state(repo)["plan"] == {"path": str(path.resolve()), "sha256": sha256_hex(path)}
     path.write_text(PLAN + "\nedited\n", encoding="utf-8")
     refused = _step(repo, plugin)
     assert refused.code == 1 and "changed after it was recorded" in refused.lines[-1]
@@ -1224,8 +1201,8 @@ def test_brief_carries_the_plan_section_and_both_packet_hashes(repo: Path, plugi
     head = f"Worktree: {unit_path}\nBuild unit {train}-a1 for train {train}.\n"
     assert text.startswith(head)
     lines = text.splitlines()
-    assert f"Contract: {contract} sha256={_hex(contract)}" in lines
-    assert f"Standards: {standards} sha256={_hex(standards)}" in lines
+    assert f"Contract: {contract} sha256={sha256_hex(contract)}" in lines
+    assert f"Standards: {standards} sha256={sha256_hex(standards)}" in lines
     assert "Pick ledger ids: pick 1 = 0101-DAE-PLT" in lines
     assert A1_SECTION in text and "### Unit A2" not in text
     assert CONTRACT not in text and "- a rule" not in text
@@ -1239,8 +1216,8 @@ def test_brief_carries_the_plan_section_and_both_packet_hashes(repo: Path, plugi
     ]
     assert order == sorted(order) and len(order) == 5
     (entry,) = _state(repo)["dispatches"]  # type: ignore[misc]
-    assert entry["contract_sha256"] == _hex(contract)
-    assert entry["standards_sha256"] == _hex(standards)
+    assert entry["contract_sha256"] == sha256_hex(contract)
+    assert entry["standards_sha256"] == sha256_hex(standards)
 
 
 def test_dispatch_prompt_is_three_lines(repo: Path, plugin: Path) -> None:
@@ -1263,7 +1240,7 @@ def test_complete_with_wrong_packet_hash_is_refused(repo: Path, plugin: Path, ca
     _started(repo, plugin)
     contract, standards = _packets(repo)
     (brief,) = _prompt(_step(repo, plugin))
-    c, s = _hex(contract)[:12], _hex(standards)[:12]
+    c, s = sha256_hex(contract)[:12], sha256_hex(standards)[:12]
     tail = {
         "contract": f" contract={'0' * 12} standards={s}",
         "standards": f" contract={c} standards={'f' * 12}",

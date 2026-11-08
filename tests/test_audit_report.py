@@ -15,14 +15,7 @@ import pytest
 from audit_report import md_escape
 from lib import audit, controls
 
-from tests.conftest import SCRIPTS_DIR, write_train_marker
-
-
-@pytest.fixture
-def project_data(project_data: Path, repo_cwd: Path) -> Path:
-    write_train_marker(repo_cwd)
-    return project_data
-
+from tests.conftest import SCRIPTS_DIR
 
 BLOCK_PUSH = (
     "the operator merges; never push to the default branch (0001). "
@@ -43,7 +36,7 @@ def _report(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[
 
 
 def test_audit_report_takes_the_audit_lock(
-    project_data: Path,
+    marked_data: Path,
     hook_input: Any,
     repo_cwd: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -136,7 +129,7 @@ def _synthetic_chain(hook_input: Any) -> Path:
     return audit.log_path("sess-test", hook_input()["cwd"])
 
 
-def test_report_renders_every_section(project_data: Path, hook_input: Any) -> None:
+def test_report_renders_every_section(marked_data: Path, hook_input: Any) -> None:
     path = _synthetic_chain(hook_input)
     assert len(path.read_text().splitlines()) == 30
     result = _report("--cwd", hook_input()["cwd"])
@@ -158,20 +151,20 @@ def test_report_renders_every_section(project_data: Path, hook_input: Any) -> No
     assert "| PostToolUse | 10 |" in out
 
 
-def test_report_head_matches_verifier(project_data: Path, hook_input: Any) -> None:
+def test_report_head_matches_verifier(marked_data: Path, hook_input: Any) -> None:
     path = _synthetic_chain(hook_input)
     tail = json.loads(path.read_text().splitlines()[-1])
     out = _report("--cwd", hook_input()["cwd"], "--session", "sess-test").stdout
     assert f"head={tail['hash']}\n" in out
 
 
-def test_open_subagent_shows_open(project_data: Path, hook_input: Any) -> None:
+def test_open_subagent_shows_open(marked_data: Path, hook_input: Any) -> None:
     _subagent(hook_input, "SubagentStart", "a9", "coder")
     out = _report("--cwd", hook_input()["cwd"]).stdout
     assert "| a9 | coder | 1 | open |  |" in out
 
 
-def test_tampered_record_exits_one(project_data: Path, hook_input: Any) -> None:
+def test_tampered_record_exits_one(marked_data: Path, hook_input: Any) -> None:
     path = _synthetic_chain(hook_input)
     lines = path.read_text().splitlines()
     rec = json.loads(lines[11])
@@ -184,14 +177,14 @@ def test_tampered_record_exits_one(project_data: Path, hook_input: Any) -> None:
     assert result.stdout == ""
 
 
-def test_missing_session_exits_one(project_data: Path, hook_input: Any) -> None:
+def test_missing_session_exits_one(marked_data: Path, hook_input: Any) -> None:
     _synthetic_chain(hook_input)
     result = _report("--cwd", hook_input()["cwd"], "--session", "nosuch")
     assert result.returncode == 1
     assert "Next: list" in result.stderr
 
 
-def test_invalid_session_id_exits_one(project_data: Path, hook_input: Any) -> None:
+def test_invalid_session_id_exits_one(marked_data: Path, hook_input: Any) -> None:
     _synthetic_chain(hook_input)
     result = _report("--cwd", hook_input()["cwd"], "--session", "../sess-test")
     assert result.returncode == 1
@@ -212,7 +205,7 @@ def test_non_git_cwd_exits_one(tmp_path: Path) -> None:
     assert "is not inside a git repository. Next:" in result.stderr
 
 
-def test_default_session_is_newest(project_data: Path, hook_input: Any) -> None:
+def test_default_session_is_newest(marked_data: Path, hook_input: Any) -> None:
     audit.audit_append(hook_input(session_id="older"))
     old = audit.log_path("older", hook_input()["cwd"])
     os.utime(old, (1_000_000, 1_000_000))
@@ -221,7 +214,7 @@ def test_default_session_is_newest(project_data: Path, hook_input: Any) -> None:
     assert "session: newer\n" in out
 
 
-def test_out_writes_file_atomically(project_data: Path, hook_input: Any, tmp_path: Path) -> None:
+def test_out_writes_file_atomically(marked_data: Path, hook_input: Any, tmp_path: Path) -> None:
     _synthetic_chain(hook_input)
     target = tmp_path / "report.md"
     result = _report("--cwd", hook_input()["cwd"], "--out", str(target))
@@ -231,7 +224,7 @@ def test_out_writes_file_atomically(project_data: Path, hook_input: Any, tmp_pat
     assert sorted(p.name for p in tmp_path.iterdir() if "report" in p.name) == ["report.md"]
 
 
-def test_default_cwd_is_process_cwd(project_data: Path, hook_input: Any) -> None:
+def test_default_cwd_is_process_cwd(marked_data: Path, hook_input: Any) -> None:
     _synthetic_chain(hook_input)
     result = _report(cwd=Path(hook_input()["cwd"]))
     assert result.returncode == 0, result.stderr
@@ -245,7 +238,7 @@ def _row_columns(row: str) -> int:
     return len(re.findall(r"(?<!\\)\|", row)) - 1
 
 
-def test_agent_text_renders_inert(project_data: Path, hook_input: Any) -> None:
+def test_agent_text_renders_inert(marked_data: Path, hook_input: Any) -> None:
     _subagent(hook_input, "SubagentStart", "a1", "coder")
     _block(hook_input, "a1", "coder", f"{INJECTION} [STATUS: BLOCKED]")
     _subagent(
@@ -266,7 +259,7 @@ def test_agent_text_renders_inert(project_data: Path, hook_input: Any) -> None:
     assert "\\!\\[t\\]\\(http://evil/x.png\\)" in status[0]
 
 
-def test_out_inside_data_dir_is_refused(project_data: Path, hook_input: Any) -> None:
+def test_out_inside_data_dir_is_refused(marked_data: Path, hook_input: Any) -> None:
     log = _synthetic_chain(hook_input)
     before = log.read_bytes()
     repo = Path(hook_input()["cwd"])
@@ -278,8 +271,8 @@ def test_out_inside_data_dir_is_refused(project_data: Path, hook_input: Any) -> 
     assert not (log.parent / "x.jsonl").exists()
 
 
-def test_invalid_utf8_is_broken(project_data: Path, hook_input: Any) -> None:
-    audit_dir = project_data / "audit"
+def test_invalid_utf8_is_broken(marked_data: Path, hook_input: Any) -> None:
+    audit_dir = marked_data / "audit"
     audit_dir.mkdir()
     (audit_dir / "bad.jsonl").write_bytes(b"\xff\xfe\n")
     result = _report("--cwd", hook_input()["cwd"])
@@ -287,8 +280,8 @@ def test_invalid_utf8_is_broken(project_data: Path, hook_input: Any) -> None:
     assert "BROKEN:" in result.stderr and "is not valid UTF-8. Next: keep the file" in result.stderr
 
 
-def test_empty_log_renders(project_data: Path, hook_input: Any) -> None:
-    audit_dir = project_data / "audit"
+def test_empty_log_renders(marked_data: Path, hook_input: Any) -> None:
+    audit_dir = marked_data / "audit"
     audit_dir.mkdir()
     (audit_dir / "empty.jsonl").write_bytes(b"")
     result = _report("--cwd", hook_input()["cwd"])
@@ -297,7 +290,7 @@ def test_empty_log_renders(project_data: Path, hook_input: Any) -> None:
     assert f"head={'0' * 64}\n" in result.stdout
 
 
-def test_session_start_only_renders(project_data: Path, hook_input: Any) -> None:
+def test_session_start_only_renders(marked_data: Path, hook_input: Any) -> None:
     bare = {"tool_name": None, "tool_input": None, "tool_use_id": None}
     audit.audit_append(hook_input(hook_event_name="SessionStart", source="startup", **bare))
     result = _report("--cwd", hook_input()["cwd"])
@@ -306,7 +299,7 @@ def test_session_start_only_renders(project_data: Path, hook_input: Any) -> None
     assert "| SessionStart | 1 |" in result.stdout
 
 
-def test_no_subagent_stop_renders_open(project_data: Path, hook_input: Any) -> None:
+def test_no_subagent_stop_renders_open(marked_data: Path, hook_input: Any) -> None:
     _subagent(hook_input, "SubagentStart", "a1", "coder")
     for i, tool in enumerate(("Write", "Edit")):
         audit.audit_append(
@@ -320,7 +313,7 @@ def test_no_subagent_stop_renders_open(project_data: Path, hook_input: Any) -> N
 
 
 def test_totals_count_skipped_fork_stops(
-    project_data: Path, hook_input: Any, tmp_path: Path
+    marked_data: Path, hook_input: Any, tmp_path: Path
 ) -> None:
     # 0114: the counter beside the log feeds one totals line; no counter reads 0.
     audit.audit_append(hook_input())
@@ -334,7 +327,7 @@ def test_totals_count_skipped_fork_stops(
     assert "| SubagentStop |" not in result.stdout
 
 
-def test_two_resumes_of_one_agent_show_as_two_rows(project_data: Path, hook_input: Any) -> None:
+def test_two_resumes_of_one_agent_show_as_two_rows(marked_data: Path, hook_input: Any) -> None:
     # 0114: rows key on the start record; a stop with no start since the last stop is a resume.
     _subagent(hook_input, "SubagentStart", "a1", "coder")
     _subagent(hook_input, "SubagentStop", "a1", "coder", last_assistant_message="first")
@@ -348,15 +341,13 @@ def test_two_resumes_of_one_agent_show_as_two_rows(project_data: Path, hook_inpu
     assert "| a1 | coder | 5 | open |  |" in out
 
 
-def test_stop_with_no_earlier_record_keeps_a_dash_start(
-    project_data: Path, hook_input: Any
-) -> None:
+def test_stop_with_no_earlier_record_keeps_a_dash_start(marked_data: Path, hook_input: Any) -> None:
     _subagent(hook_input, "SubagentStop", "a7", "verifier", last_assistant_message="done")
     out = _report("--cwd", hook_input()["cwd"]).stdout
     assert "| a7 | verifier | - | 1 | done |" in out
 
 
-def test_symlinked_out_is_refused(project_data: Path, hook_input: Any, tmp_path: Path) -> None:
+def test_symlinked_out_is_refused(marked_data: Path, hook_input: Any, tmp_path: Path) -> None:
     _synthetic_chain(hook_input)
     outside = tmp_path / "outside.md"
     outside.write_text("keep me\n")
@@ -370,7 +361,7 @@ def test_symlinked_out_is_refused(project_data: Path, hook_input: Any, tmp_path:
 
 
 def test_dangling_symlink_out_is_refused(
-    project_data: Path, hook_input: Any, tmp_path: Path
+    marked_data: Path, hook_input: Any, tmp_path: Path
 ) -> None:
     _synthetic_chain(hook_input)
     missing = tmp_path / "missing.md"
@@ -385,7 +376,7 @@ def test_dangling_symlink_out_is_refused(
 
 
 def test_out_into_another_repos_data_dir_is_refused(
-    project_data: Path, hook_input: Any, tmp_path: Path
+    marked_data: Path, hook_input: Any, tmp_path: Path
 ) -> None:
     _synthetic_chain(hook_input)
     other = tmp_path / "other"
@@ -400,7 +391,7 @@ def test_out_into_another_repos_data_dir_is_refused(
 
 
 def test_symlink_to_dir_with_trailing_slash_is_refused(
-    project_data: Path, hook_input: Any, tmp_path: Path
+    marked_data: Path, hook_input: Any, tmp_path: Path
 ) -> None:
     _synthetic_chain(hook_input)
     target_dir = tmp_path / "realdir"
@@ -415,7 +406,7 @@ def test_symlink_to_dir_with_trailing_slash_is_refused(
 
 
 def test_file_with_trailing_slash_is_refused(
-    project_data: Path, hook_input: Any, tmp_path: Path
+    marked_data: Path, hook_input: Any, tmp_path: Path
 ) -> None:
     _synthetic_chain(hook_input)
     existing = tmp_path / "existing.md"
@@ -427,7 +418,7 @@ def test_file_with_trailing_slash_is_refused(
 
 
 def test_symlink_to_dir_with_dot_is_refused(
-    project_data: Path, hook_input: Any, tmp_path: Path
+    marked_data: Path, hook_input: Any, tmp_path: Path
 ) -> None:
     _synthetic_chain(hook_input)
     target_dir = tmp_path / "dotdir"
@@ -441,7 +432,7 @@ def test_symlink_to_dir_with_dot_is_refused(
     assert list(target_dir.iterdir()) == []
 
 
-def test_file_with_dot_is_refused(project_data: Path, hook_input: Any, tmp_path: Path) -> None:
+def test_file_with_dot_is_refused(marked_data: Path, hook_input: Any, tmp_path: Path) -> None:
     _synthetic_chain(hook_input)
     plain = tmp_path / "plain.txt"
     plain.write_text("keep me\n")
@@ -450,9 +441,7 @@ def test_file_with_dot_is_refused(project_data: Path, hook_input: Any, tmp_path:
     assert plain.read_bytes() == b"keep me\n"
 
 
-def test_dot_and_dotdot_out_are_refused(
-    project_data: Path, hook_input: Any, tmp_path: Path
-) -> None:
+def test_dot_and_dotdot_out_are_refused(marked_data: Path, hook_input: Any, tmp_path: Path) -> None:
     _synthetic_chain(hook_input)
     work = tmp_path / "work"
     work.mkdir()
@@ -463,7 +452,7 @@ def test_dot_and_dotdot_out_are_refused(
     assert list(work.iterdir()) == []
 
 
-def test_fifo_out_is_refused(project_data: Path, hook_input: Any, tmp_path: Path) -> None:
+def test_fifo_out_is_refused(marked_data: Path, hook_input: Any, tmp_path: Path) -> None:
     _synthetic_chain(hook_input)
     fifo = tmp_path / "pipe"
     os.mkfifo(fifo)
@@ -473,7 +462,7 @@ def test_fifo_out_is_refused(project_data: Path, hook_input: Any, tmp_path: Path
     assert fifo.is_fifo()
 
 
-def test_case_folded_data_dir_is_refused(project_data: Path, hook_input: Any) -> None:
+def test_case_folded_data_dir_is_refused(marked_data: Path, hook_input: Any) -> None:
     _synthetic_chain(hook_input)
     repo = Path(hook_input()["cwd"])
     (repo / ".CLAUDE" / "Daedalus").mkdir(parents=True)
@@ -484,7 +473,7 @@ def test_case_folded_data_dir_is_refused(project_data: Path, hook_input: Any) ->
 
 
 def test_trailing_backslash_is_a_filename(
-    project_data: Path, hook_input: Any, tmp_path: Path
+    marked_data: Path, hook_input: Any, tmp_path: Path
 ) -> None:
     _synthetic_chain(hook_input)
     target = tmp_path / "x.md\\"
@@ -494,7 +483,7 @@ def test_trailing_backslash_is_a_filename(
     target.unlink()
 
 
-def test_dash_out_is_refused(project_data: Path, hook_input: Any) -> None:
+def test_dash_out_is_refused(marked_data: Path, hook_input: Any) -> None:
     _synthetic_chain(hook_input)
     repo = Path(hook_input()["cwd"])
     result = _report("--out", "-", cwd=repo)
@@ -504,7 +493,7 @@ def test_dash_out_is_refused(project_data: Path, hook_input: Any) -> None:
 
 
 def test_out_under_a_file_says_not_a_directory(
-    project_data: Path, hook_input: Any, tmp_path: Path
+    marked_data: Path, hook_input: Any, tmp_path: Path
 ) -> None:
     _synthetic_chain(hook_input)
     blocker = tmp_path / "plain"
@@ -557,7 +546,7 @@ def _controls_chain(hook_input: Any, monkeypatch: pytest.MonkeyPatch) -> str:
 
 
 def test_controls_counts_blocks_per_hook(
-    project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
+    marked_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo = _controls_chain(hook_input, monkeypatch)
     result = _report("--repo", repo, "--session", "sess-test", "--controls")
@@ -573,7 +562,7 @@ def test_controls_counts_blocks_per_hook(
 
 
 def test_controls_prints_one_failure_line_per_blocking_hook(
-    project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
+    marked_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # pin B2 -> B6: the row's failure for a known hook, failure: none for an unprefixed reason.
     repo = _controls_chain(hook_input, monkeypatch)
@@ -596,7 +585,7 @@ def test_controls_prints_one_failure_line_per_blocking_hook(
 
 
 def test_controls_seconds_to_next_allowed_call(
-    project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
+    marked_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo = _controls_chain(hook_input, monkeypatch)
     out = _report("--repo", repo, "--controls").stdout
@@ -606,7 +595,7 @@ def test_controls_seconds_to_next_allowed_call(
 
 
 def test_controls_seconds_to_first_write_per_agent(
-    project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
+    marked_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo = _controls_chain(hook_input, monkeypatch)
     out = _report("--repo", repo, "--controls").stdout
@@ -614,7 +603,7 @@ def test_controls_seconds_to_first_write_per_agent(
     assert "| a2 | auditor | none |" in out
 
 
-def test_controls_shows_ask_as_its_own_row(project_data: Path, hook_input: Any) -> None:
+def test_controls_shows_ask_as_its_own_row(marked_data: Path, hook_input: Any) -> None:
     # 0105: an ask decision is counted beside, not inside, the same hook's blocks.
     for i, decision in enumerate(("ask", "block", "ask")):
         audit.audit_append(
@@ -626,7 +615,7 @@ def test_controls_shows_ask_as_its_own_row(project_data: Path, hook_input: Any) 
 
 
 def test_summary_carries_the_controls_table(
-    project_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
+    marked_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo = _controls_chain(hook_input, monkeypatch)
     out = _report("--repo", repo).stdout
@@ -635,16 +624,16 @@ def test_summary_carries_the_controls_table(
 
 
 def test_containment_error_names_the_matched_path(
-    project_data: Path, hook_input: Any, tmp_path: Path
+    marked_data: Path, hook_input: Any, tmp_path: Path
 ) -> None:
     _synthetic_chain(hook_input)
     repo = Path(hook_input()["cwd"])
     link = tmp_path / "into-data"
-    link.symlink_to(project_data / "audit")
+    link.symlink_to(marked_data / "audit")
     result = _report("--cwd", str(repo), "--out", str(link / "x.md"))
     assert result.returncode == 1
-    assert f"--out {project_data / 'audit' / 'x.md'} is inside" in result.stderr
-    assert not (project_data / "audit" / "x.md").exists()
+    assert f"--out {marked_data / 'audit' / 'x.md'} is inside" in result.stderr
+    assert not (marked_data / "audit" / "x.md").exists()
 
 
 def _token_report(cwd: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
@@ -660,7 +649,7 @@ def _token_report(cwd: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
 
 
 def test_no_transcript_prints_one_token_line(
-    project_data: Path, hook_input: Any, tmp_path: Path
+    marked_data: Path, hook_input: Any, tmp_path: Path
 ) -> None:
     _synthetic_chain(hook_input)
     result = _token_report(hook_input()["cwd"], tmp_path)
@@ -671,7 +660,7 @@ def test_no_transcript_prints_one_token_line(
 
 
 def test_token_totals_follow_the_totals_section(
-    project_data: Path, hook_input: Any, tmp_path: Path
+    marked_data: Path, hook_input: Any, tmp_path: Path
 ) -> None:
     _synthetic_chain(hook_input)
     cwd = hook_input()["cwd"]

@@ -11,10 +11,10 @@ from lib import jail, shell
 from tests.adversarial.corpus import (
     PACKAGE_DOWNLOADS,
     PACKAGE_INSTALL_CMDS,
-    RULING_MARKERS,
     assert_denied,
 )
 from tests.conftest import CFG, WT
+from tests.helpers import RULING_MARKERS
 from tests.hook_chain import (
     decide,
     evaluate,

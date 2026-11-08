@@ -28,7 +28,10 @@ from lib.workspace import (
 
 from tests.conftest import SCRIPTS_DIR, git
 from tests.conftest import workspace_cli as _cli
+from tests.helpers import strip_unit_audit
 
+# 0020: a temp HOME and git identity for every test here.
+pytestmark = pytest.mark.usefixtures("isolated_env")
 LEDGER = "| Id | Date | Ruling | Supersedes | Follow-ups |\n|---|---|---|---|---|\n"
 _git = partial(git, check=False)
 
@@ -46,21 +49,6 @@ def _commit_all(repo: Path, message: str) -> None:
 
 def _head(repo: Path) -> str:
     return _ok(repo, "rev-parse", "--abbrev-ref", "HEAD")
-
-
-@pytest.fixture(autouse=True)
-def _isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # 0020: a temp HOME keeps the operator's settings and plugin cache out of these tests.
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
-    for key in ("AUTHOR", "COMMITTER"):
-        monkeypatch.setenv(f"GIT_{key}_NAME", "t")
-        monkeypatch.setenv(f"GIT_{key}_EMAIL", "t@example.invalid")
-    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
-    monkeypatch.setenv("GIT_CONFIG_KEY_0", "commit.gpgsign")
-    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
 
 
 @pytest.fixture
@@ -1742,12 +1730,7 @@ def test_refresh_flags_an_audit_unit_recorded_before_the_flag(repo: Path) -> Non
     train, audit = _audited(repo)
     workspace.remove(repo, f"{train}-audit")
 
-    def strip(state: dict[str, object]) -> None:
-        state["units"] = [
-            {k: v for k, v in u.items() if k != "audit"} for u in train_state.units(state)
-        ]
-
-    train_state.change(repo, train, strip)
+    train_state.change(repo, train, strip_unit_audit)
     assert train_state.is_audit_unit(_recorded(repo, train, f"{train}-audit"))
     assert workspace.refresh(repo, f"{train}-audit") == audit
     assert _recorded(repo, train, f"{train}-audit")["audit"] is True
@@ -1853,14 +1836,6 @@ def test_remove_leaves_an_unlocked_worktree_path_alone_when_another_is_locked(
     workspace.remove(repo, f"{train}-u1")
     assert not u1.exists() and u2.is_dir()
     assert "locked" in _ok(repo, "worktree", "list", "--porcelain")
-
-
-@pytest.fixture
-def plain(tmp_path: Path) -> Path:
-    # issue 48: a folder with no .git and no manifest is folder scope (0074).
-    root = tmp_path.resolve() / "plain"
-    root.mkdir()
-    return root
 
 
 def test_folder_begin_cli_records_the_scope_and_the_output_folder(

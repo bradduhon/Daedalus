@@ -17,6 +17,7 @@ from lib.project_keys import CONFIG_FILE, KEY_ROWS, config_keys
 
 from tests import test_train_runner as runner_tests
 from tests.conftest import REPO_ROOT
+from tests.helpers import flatten_file
 from tests.test_train_runner import (
     A,
     B,
@@ -33,7 +34,7 @@ from tests.test_train_runner import (
 from tests.test_train_state_print import STATE, TIP, _section, _text
 
 # 0133: the runner tests' fixtures, a temp HOME, a plugin root and a one-commit repository.
-_isolated_env = runner_tests._isolated_env
+pytestmark = pytest.mark.usefixtures("isolated_env")
 plugin = runner_tests.plugin
 repo = runner_tests.repo
 
@@ -72,10 +73,6 @@ def exempt_round(repo: Path, train: str, tip: str, tracking: str = "issue") -> N
         audit_rounds={"1": {GATE_KEY: {"severity": "high", "class": "scope"}}},
         exemptions={"1": {GATE_KEY: entry}},
     )
-
-
-def _flat(path: Path) -> str:
-    return " ".join(path.read_text(encoding="utf-8").split())
 
 
 def _prompt(text: str) -> str:
@@ -472,7 +469,7 @@ def test_the_catalog_carries_the_same_per_finding_prompt() -> None:
 
 def test_the_relays_record_per_finding_exemptions() -> None:
     # Requirements 7 and 14: one exception call per finding, and the tracking answer's trail.
-    build = _flat(REPO_ROOT / "skills" / "run" / "SKILL.md")
+    build = flatten_file(REPO_ROOT / "skills" / "run" / "SKILL.md")
     route = build.split("- `[STATUS: EXCEPTION] ledger_id=<id>`:", 1)[1].split(" - `[STATUS:", 1)[0]
     assert (
         "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py exception --repo <repo> "
@@ -482,7 +479,7 @@ def test_the_relays_record_per_finding_exemptions() -> None:
     assert "for `Skip it` (`dropped`) or `Exempt it` (`local`)" in route
     assert "`Deviation:` line naming the finding and its exemption row" in route
     assert "binds the ruling to the integration tip" not in route
-    push = _flat(REPO_ROOT / "skills" / "release" / "SKILL.md")
+    push = flatten_file(REPO_ROOT / "skills" / "release" / "SKILL.md")
     step9 = push.split(" 9. ", 1)[1].split(" 10. ", 1)[0]
     assert "a rejected round on the current tip whose every finding carries the operator's" in step9
     assert "four-field tracked-risk issue is filed before the pull request opens" in step9
@@ -501,7 +498,7 @@ def test_the_round_budget_is_gone_from_the_prose() -> None:
         "skills/run/SKILL.md",
         "skills/release/SKILL.md",
     ):
-        text = _flat(REPO_ROOT / rel)
+        text = flatten_file(REPO_ROOT / rel)
         assert "audit_round_budget" not in text, rel
         assert not re.search(r"\bround budget (runs|ran) out\b", text), rel
 

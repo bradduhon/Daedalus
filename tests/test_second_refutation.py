@@ -7,6 +7,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+import pytest
 from lib import jail, train_runner, train_state, unit_binding, workspace
 from lib.config import Config
 
@@ -24,12 +25,13 @@ from tests.test_train_runner import (
     _train_cli,
     _write_train,
 )
-from tests.test_train_runner import _isolated_env as _isolated_env  # noqa: F401
 from tests.test_train_runner import plugin as plugin  # noqa: F401
 from tests.test_train_runner import repo as repo  # noqa: F401
 from tests.test_unit_binding import _ok, _refused, _write
 from tests.test_workspace_train import PLAN_BLOCK, REFUTED_REPLY, VERIFIED_REPLY
 
+# 0020: a temp HOME and git identity for every test here.
+pytestmark = pytest.mark.usefixtures("isolated_env")
 # agents/verifier.md, 0205: a run's stop tail is a digest whose last line names the saved report.
 DIGEST = "[VERDICT: REFUTED] row 1\ncorrected=0\n[VERDICT: REFUTED] row 1\nreport: replies/v.md"
 

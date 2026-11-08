@@ -24,7 +24,6 @@ from tests.adversarial.corpus import (
     DEV_SERVERS,
     GAME_RUNNERS,
     INTERPRETER_BINS,
-    RULING_MARKERS,
     TERRAFORM_INIT_FORM,
     TERRAFORM_MUTATIONS,
     TERRAFORM_OPERATOR_FORMS,
@@ -35,6 +34,7 @@ from tests.adversarial.corpus import (
     assert_denied,
 )
 from tests.conftest import CFG, CWD, WT
+from tests.helpers import RULING_MARKERS
 from tests.hook_chain import (
     CHAINS,
     decide,

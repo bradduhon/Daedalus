@@ -21,25 +21,17 @@ from lib.manifest import (
 from lib.project_keys import KEY_ROWS, MANIFEST_FILE, manifest_keys, starter_manifest
 
 from tests.conftest import SCRIPTS_DIR
+from tests.helpers import ends_with_next, write_manifest
 
 NARROWING = {"forbidden_paths": ["infra/"], "forbidden_extensions": [".pem"]}
 
 
-def _write(repo: Path, payload: object) -> None:
-    (repo / "service-manifest.json").write_text(json.dumps(payload), encoding="utf-8")
-
-
-def _ends_with_next(message: str) -> bool:
-    head, sep, tail = message.rpartition(". Next: ")
-    return bool(head and sep and tail.endswith(".")) and message.count("Next:") == 1
-
-
 def _refused(repo: Path, payload: object) -> str:
-    _write(repo, payload)
+    write_manifest(repo, payload)
     with pytest.raises(ManifestError) as caught:
         load(repo)
     message = str(caught.value)
-    assert _ends_with_next(message), message
+    assert ends_with_next(message), message
     return message
 
 
@@ -63,7 +55,7 @@ def test_absent_manifest_gives_every_feature_its_default(tmp_path: Path) -> None
 
 
 def test_absent_features_object_gives_every_feature_its_default(tmp_path: Path) -> None:
-    _write(tmp_path, {"manifest_version": 1})
+    write_manifest(tmp_path, {"manifest_version": 1})
     loaded = load(tmp_path)
     assert loaded is not None
     assert loaded.features == Features(scope=None, secrets_scan=False, scrub_file=None)
@@ -98,7 +90,7 @@ def test_absent_features_object_gives_every_feature_its_default(tmp_path: Path) 
 def test_each_feature_key_reads_its_values(
     tmp_path: Path, block: dict[str, object], want: Features
 ) -> None:
-    _write(tmp_path, {"features": block})
+    write_manifest(tmp_path, {"features": block})
     loaded = load(tmp_path)
     assert loaded is not None and loaded.features == want
 
@@ -106,7 +98,7 @@ def test_each_feature_key_reads_its_values(
 @pytest.mark.parametrize("value", [True, False, None, "yes", 1, {}])
 def test_retired_github_key_loads_and_is_ignored(tmp_path: Path, value: object) -> None:
     # 0172: a manifest still carrying github loads with any value; the key changes nothing.
-    _write(tmp_path, {"features": {"secrets_scan": True, "github": value}})
+    write_manifest(tmp_path, {"features": {"secrets_scan": True, "github": value}})
     loaded = load(tmp_path)
     assert loaded is not None and loaded.features == Features(secrets_scan=True)
     assert manifest.retired_features(tmp_path) == ("github",)
@@ -150,9 +142,9 @@ def test_scrub_file_outside_the_project_is_refused(tmp_path: Path, scrub: str) -
 
 
 def test_jail_narrowing_unchanged_beside_features(tmp_path: Path) -> None:
-    _write(tmp_path, {"jail_narrowing": NARROWING})
+    write_manifest(tmp_path, {"jail_narrowing": NARROWING})
     alone = load(tmp_path)
-    _write(tmp_path, {"jail_narrowing": NARROWING, "features": {"secrets_scan": True}})
+    write_manifest(tmp_path, {"jail_narrowing": NARROWING, "features": {"secrets_scan": True}})
     beside = load(tmp_path)
     assert alone is not None and beside is not None
     assert (beside.forbidden_paths, beside.forbidden_extensions) == (("infra/",), (".pem",))
@@ -164,10 +156,10 @@ def test_jail_narrowing_unchanged_beside_features(tmp_path: Path) -> None:
 
 
 def test_trains_dir_is_read_from_the_manifest(tmp_path: Path) -> None:
-    _write(tmp_path, {"trains_dir": "ops/trains"})
+    write_manifest(tmp_path, {"trains_dir": "ops/trains"})
     loaded = load(tmp_path)
     assert loaded is not None and loaded.trains_dir == "ops/trains"
-    _write(tmp_path, {})
+    write_manifest(tmp_path, {})
     assert load(tmp_path) == Manifest()
 
 
@@ -177,10 +169,10 @@ def test_trains_dir_outside_the_project_is_refused(tmp_path: Path, value: object
 
 
 def test_unit_test_cmd_is_read_from_the_manifest_stack(tmp_path: Path) -> None:
-    _write(tmp_path, {"stack": {"language": "python", "unit_test_cmd": "pytest -q"}})
+    write_manifest(tmp_path, {"stack": {"language": "python", "unit_test_cmd": "pytest -q"}})
     loaded = load(tmp_path)
     assert loaded is not None and loaded.unit_test_cmd == ("pytest -q",)
-    _write(tmp_path, {"stack": {"unit_test_cmd": None}})
+    write_manifest(tmp_path, {"stack": {"unit_test_cmd": None}})
     assert load(tmp_path) == Manifest()
 
 
@@ -232,7 +224,7 @@ def test_project_files_resolve_from_the_project_root_only(
     project, home, plugin = (tmp_path / name for name in ("project", "home", "plugin"))
     for root, scope in ((project, "folder"), (home, "repository"), (plugin, "repository")):
         (root / ".claude" / "daedalus").mkdir(parents=True)
-        _write(root, {"features": {"scope": scope}, "trains_dir": f"{root.name}-trains"})
+        write_manifest(root, {"features": {"scope": scope}, "trains_dir": f"{root.name}-trains"})
         config = {"charter_root": str(root / "Charter")}
         (root / ".claude" / "daedalus" / "config.json").write_text(json.dumps(config))
     monkeypatch.setenv("HOME", str(home))
@@ -247,7 +239,7 @@ def test_project_files_resolve_from_the_project_root_only(
 
 
 def test_absent_frameworks_block_reads_the_shipped_packs(tmp_path: Path) -> None:
-    _write(tmp_path, {})
+    write_manifest(tmp_path, {})
     loaded = load(tmp_path)
     assert loaded is not None and loaded.frameworks == Frameworks(None, True)
     assert FRAMEWORKS_KEYS == ("pack_dir", "default_packs", "packs")
@@ -267,7 +259,7 @@ def test_absent_frameworks_block_reads_the_shipped_packs(tmp_path: Path) -> None
 def test_each_frameworks_key_reads_its_values(
     tmp_path: Path, block: dict[str, object], want: Frameworks
 ) -> None:
-    _write(tmp_path, {"frameworks": block})
+    write_manifest(tmp_path, {"frameworks": block})
     loaded = load(tmp_path)
     assert loaded is not None and loaded.frameworks == want
 
@@ -317,14 +309,14 @@ def test_terraform_validate_reads_false_when_absent(tmp_path: Path) -> None:
     assert Features().terraform_validate is False
     assert manifest.features(tmp_path).terraform_validate is False
     for payload in ({}, {"features": {}}, {"features": {"terraform_tools": True}}):
-        _write(tmp_path, payload)
+        write_manifest(tmp_path, payload)
         loaded = load(tmp_path)
         assert loaded is not None and loaded.features.terraform_validate is False, payload
 
 
 @pytest.mark.parametrize("value", [True, False])
 def test_terraform_validate_reads_its_boolean(tmp_path: Path, value: bool) -> None:
-    _write(tmp_path, {"features": {"terraform_validate": value}})
+    write_manifest(tmp_path, {"features": {"terraform_validate": value}})
     loaded = load(tmp_path)
     assert loaded is not None and loaded.features == Features(terraform_validate=value)
 

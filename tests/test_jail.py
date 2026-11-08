@@ -696,11 +696,8 @@ class TestFinalRemotePlumbing:
         assert decide(_b(None, "git commit -m 'credential fix' > /dev/null"), CFG).allow
 
 
+@pytest.mark.usefixtures("fake_plugin_data_env")
 class TestFinalDataDir:
-    @pytest.fixture(autouse=True)
-    def _env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", DATA)
-
     @pytest.mark.parametrize("agent", [None])
     @pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
     def test_tool_writes_block_for_every_agent(self, agent: str | None, tool: str) -> None:
