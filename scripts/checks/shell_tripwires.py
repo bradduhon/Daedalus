@@ -41,8 +41,9 @@ def _coder_hygiene(call: jail.CoderCall, done: AdmittedCommand, base: str) -> st
         reason = shell._git_reason(tokens, [], main=False)
     elif done.family == "rm":
         reason = shell._rm_reason(tokens[1:])
-    if reason is not None:
-        return shell.R_UNSUPPORTED if reason == shell._FALLBACK else reason
+    # 228 S3b: every admitted word is literal, so a $ or { the fallback flags is plain text.
+    if reason is not None and reason != shell._FALLBACK:
+        return reason
     own = _own_script(call.cwd, base)
     # B2, 104, RCP: a python script runs from a unit worktree, or is the citation helper.
     script = done.script.text if done.family == "python" and done.script else None

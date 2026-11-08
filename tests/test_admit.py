@@ -152,7 +152,8 @@ def test_the_leading_cd_and_git_folder_are_typed() -> None:
     got = admitted("coder", "cd /work && git -C sub status")
     assert got.commands[0].cd_target is not None and got.commands[0].cd_target.text == "/work"
     git = got.commands[1]
-    assert git.git_dir is not None and git.git_dir.text == f"{WT}/sub"
+    # 228 S3b: a relative -C joins the folder the leading cd moved to.
+    assert git.git_dir is not None and git.git_dir.text == "/work/sub"
     assert git.subcommand is not None and git.subcommand.text == "status"
 
 
@@ -244,6 +245,13 @@ def test_only_the_switched_consumers_import_admit() -> None:
         REPO_ROOT / "scripts" / "checks" / "command_allowlist.py",
         REPO_ROOT / "tests" / "test_admit.py",
         REPO_ROOT / "tests" / "adversarial" / "test_admit_corpus.py",
+        # 228 S3b: the coder's four checks and their tests.
+        REPO_ROOT / "scripts" / "checks" / "confine.py",
+        REPO_ROOT / "scripts" / "checks" / "network_tools.py",
+        REPO_ROOT / "scripts" / "checks" / "shell_tripwires.py",
+        REPO_ROOT / "scripts" / "checks" / "unit_writes.py",
+        REPO_ROOT / "tests" / "test_controls.py",
+        REPO_ROOT / "tests" / "test_coder_admission.py",
     }
     users: list[str] = []
     for path in [*REPO_ROOT.glob("scripts/**/*.py"), *REPO_ROOT.glob("tests/**/*.py")]:

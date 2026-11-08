@@ -2201,7 +2201,8 @@ def test_env_split_string_is_refused_to_a_foreign_agent_in_a_train(
 @pytest.mark.parametrize("form", H1_ENV_SPLIT)
 def test_env_split_string_is_refused_to_a_worker(form: str) -> None:
     # issue 80: the worker's shell model names env -S before its wrapper refusal.
-    assert_denied(_b("coder", form.format(repo=WT)), "env -S")
+    # 228 S3b: the coder grammar refuses the env or nice wrapper by name first.
+    assert_denied(_b("coder", form.format(repo=WT)), "env -S", "Refused: the wrapper")
 
 
 @pytest.mark.parametrize("form", H1_SHELL_BODY)

@@ -85,7 +85,8 @@ def test_block_exits_two_with_message_and_logs_block(
     result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 2
     # 0044: the router prefixes the denying hook's name in stderr and in the record.
-    want = "git_push: no remote git operations in the Build Train."
+    # 228 S3b: push is off the coder grammar, so shell_tripwires is the denying hook.
+    want = "shell_tripwires: coder git is limited to add, commit"
     assert result.stderr.startswith(f"daedalus-jail[coder]: {want}")
     assert "Next:" in result.stderr
     rec = audit_records(project_data / "audit" / "sess-test.jsonl")[-1]

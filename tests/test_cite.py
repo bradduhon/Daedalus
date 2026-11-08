@@ -121,11 +121,12 @@ class TestCoderAdmission:
         ],
     )
     def test_other_forms_are_refused(self, command: str) -> None:
-        assert evaluate(HOOK, _b("coder", command)) == shell.R_INLINE, command
+        # 228 S3b: the kept constant leads, then the grammar's reason when admission refused.
+        assert str(evaluate(HOOK, _b("coder", command))).startswith(shell.R_INLINE), command
 
     def test_the_hygiene_check_still_judges_the_pattern(self) -> None:
         got = evaluate(HOOK, _b("coder", f'python3 {CITE} {WT}/a.py "$HOME"'))
-        assert got == shell.R_HYGIENE
+        assert str(got).startswith(shell.R_HYGIENE)
 
     @pytest.mark.parametrize("agent", ["charter-docs", "releaser"])
     def test_other_workers_are_refused(self, agent: str) -> None:
