@@ -710,6 +710,8 @@ HUNT_FILES = (
     "scripts/lib/audit_proof.py",
     "scripts/lib/unit_binding.py",
     "scripts/lib/dispatch_binding.py",
+    "scripts/lib/shparse.py",
+    "scripts/lib/admit.py",
 )
 HUNT_FORMS = frozenset(
     {
