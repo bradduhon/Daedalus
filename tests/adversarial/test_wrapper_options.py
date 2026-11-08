@@ -10,15 +10,12 @@ import pytest
 from lib import jail, shell
 
 from tests.adversarial.corpus import (
-    DEV_SERVERS,
     GAME_RUNNERS,
     INSTALL_GATE_CMDS,
     INTERPRETER_BINS,
-    PACKAGE_DOWNLOADS,
-    PACKAGE_INSTALL_CMDS,
+    RULING_MARKERS,
     TERRAFORM_MUTATIONS,
     TERRAFORM_OPERATOR_FORMS,
-    WATCH_MODES,
     assert_denied,
 )
 from tests.conftest import CFG, WT
@@ -139,21 +136,14 @@ def _confine_live(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("_confine_live")
-@pytest.mark.parametrize(
-    "command",
-    DEV_SERVERS
-    + WATCH_MODES
-    + TERRAFORM_MUTATIONS
-    + TERRAFORM_OPERATOR_FORMS
-    + PACKAGE_INSTALL_CMDS
-    + INSTALL_GATE_CMDS
-    + PACKAGE_DOWNLOADS,
-)
+# suite-cleanup: the dev server, watch, terraform, package install and download rows run in
+# tests/test_confine.py and tests/test_checks_network_tools.py with the same assertion.
+@pytest.mark.parametrize("command", INSTALL_GATE_CMDS)
 def test_the_kernel_wrapper_admits_no_dev_server_watch_mode_state_change_or_install(
     command: str,
 ) -> None:
     # 0164, 0158: refused bare and wrapped, with the ruling named unless a wrapper word leads.
-    markers = () if command.split()[0] in shell.WORKER_WRAPPERS else ("0164)", "(0158)", "(0196)")
+    markers = () if command.split()[0] in shell.WORKER_WRAPPERS else RULING_MARKERS
     for form in (command, f"{shell.CONFINE_PATH} --unit {WT} -- {command}"):
         assert_denied(_b("coder", f"cd {WT} && {form}"), *markers)
 

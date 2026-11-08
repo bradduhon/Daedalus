@@ -1028,6 +1028,8 @@ WATCH_MODES = (
     "bun --hot run x.ts",
     "tsc --noEmit --noEmit false",
 )
+# 0164, 0158, 0196: a coder chain refusal of these rows names one of its rulings.
+RULING_MARKERS = ("0164)", "(0158)", "(0196)")
 # 0164: what each watch row is refused with.
 WATCH_REASONS = {"tsc": "R_TSC", "vitest": "R_VITEST_WATCH"}
 TERRAFORM_MUTATIONS = (
