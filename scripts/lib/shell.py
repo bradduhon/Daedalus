@@ -2202,7 +2202,17 @@ def command_path(word: str, base: str) -> str:
     # issue 55: the real file a command word runs; a bare name resolves through PATH.
     if "/" in word:
         return os.path.realpath(_abs(word, base))
-    return os.path.realpath(shutil.which(word) or word)
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        return os.path.realpath(shutil.which(word) or word)
+    return _path_lookup(word, os.environ.get("PATH"), cwd)
+
+
+@lru_cache(maxsize=4096)
+def _path_lookup(word: str, search_path: str | None, cwd: str) -> str:
+    # suite-cleanup: memoised per process; PATH and cwd are in the key, so a change looks up again.
+    return os.path.realpath(shutil.which(word, path=search_path) or word)
 
 
 @lru_cache(maxsize=4)

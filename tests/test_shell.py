@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import ast
+import os
 import shlex
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -540,3 +542,43 @@ def test_under_holds_every_path_under_the_filesystem_root() -> None:
     # 0164: "/" plus os.sep once matched nothing, so "/" slipped past every overlap guard.
     assert shell._under("/srv/x/.ssh", "/") and shell._under("/", "/")
     assert shell._under("/a/b", "/a/") and not shell._under("/ab", "/a")
+
+
+@pytest.fixture
+def which_calls(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[list[str | None]]:
+    # suite-cleanup: records the PATH of each shutil.which call; folders a and b hold probe-cmd.
+    shell._path_lookup.cache_clear()
+    calls: list[str | None] = []
+    real_which = shell.shutil.which
+
+    def counted(word: str, mode: int = os.F_OK | os.X_OK, path: str | None = None) -> str | None:
+        calls.append(path)
+        return real_which(word, mode, path)
+
+    monkeypatch.setattr(shell.shutil, "which", counted)
+    for name in ("a", "b"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "probe-cmd").write_text("#!/bin/sh\n", encoding="utf-8")
+        (tmp_path / name / "probe-cmd").chmod(0o755)
+    yield calls
+    shell._path_lookup.cache_clear()
+
+
+def test_command_path_looks_a_word_up_once_per_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, which_calls: list[str | None]
+) -> None:
+    # suite-cleanup: two calls under one PATH reach shutil.which once.
+    monkeypatch.setenv("PATH", str(tmp_path / "a"))
+    for _ in range(2):
+        assert shell.command_path("probe-cmd", "/") == str(tmp_path / "a" / "probe-cmd")
+    assert which_calls == [str(tmp_path / "a")]
+
+
+def test_command_path_looks_again_when_path_changes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, which_calls: list[str | None]
+) -> None:
+    # suite-cleanup: PATH is read into the key, so a second PATH value misses the cache.
+    for name in ("a", "b"):
+        monkeypatch.setenv("PATH", str(tmp_path / name))
+        assert shell.command_path("probe-cmd", "/") == str(tmp_path / name / "probe-cmd")
+    assert which_calls == [str(tmp_path / "a"), str(tmp_path / "b")]
