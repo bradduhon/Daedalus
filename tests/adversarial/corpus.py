@@ -36,6 +36,10 @@ OUTSIDE = "outside your unit worktree"
 PROTECTED = "protected path"
 
 
+# 233: a refused write a sealed pass admits exactly once, then refused again; (agent, form).
+S2B_PASS_ONCE = ("verifier", "sort -o {repo}/out.txt {repo}/in.txt")
+
+
 # issue 80 (unit H1): env -S hides a write inside one word; {repo} is a repository a train marks.
 H1_ENV_SPLIT = (
     "env -S 'touch {repo}/x'",

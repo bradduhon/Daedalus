@@ -107,6 +107,8 @@ def test_table_shape() -> None:
         agent = loaded[cells[0]]
         assert cells[1:4] == [agent.shape, agent.model, ", ".join(sorted(agent.tools))]
         assert agent.description.startswith(cells[4].removesuffix("."))
+        # 233: a reply line holding `|` is escaped in its table cell.
+        cells = [cell.replace("\\|", "|") for cell in cells]
         assert cells[5] == "; ".join(f"`{line}`" for line in agent.status_lines)
         assert cells[6] == ", ".join(agent.phases)
     assert out.endswith("|\n") and not out.endswith("\n\n")
