@@ -2162,3 +2162,99 @@ def test_build_skill_hands_the_shell_semantics_pack_to_its_class_only() -> None:
     ):
         assert f"`{name}`" in bullet, name
     assert (REPO_ROOT / path.removeprefix("<plugin root>/")).is_file()
+
+
+def _flat(path: Path) -> str:
+    return " ".join(path.read_text(encoding="utf-8").split())
+
+
+def _verify_rows_mode() -> str:
+    return _flat(_phase_skill("verify")).split("### Rows mode", 1)[1].split("### Unit mode", 1)[0]
+
+
+def test_verify_skill_runs_rows_mode_before_the_coder() -> None:
+    # 0228: the verifier writes the rows from the brief alone, before the coder starts.
+    text = _flat(_phase_skill("verify"))
+    assert text.index("### Rows mode") < text.index("### Unit mode")
+    rows = _verify_rows_mode()
+    for item in (
+        "once per unit of the build-only-the-ask class",
+        "before its coder is dispatched",
+        "A unit outside the class skips it.",
+        "Run the model command for the verifier as unit mode does (step 4).",
+        "the first line `ROWS MODE.`",
+        "the line `Unit worktree: <unit worktree path>`",
+        "the line `Brief: <brief path>`",
+        "the line `Spec: <each path the brief's Contract line names>`",
+        "the line `Packs: <the brief's Packs: line>`",
+        "the line `Base: <lock sha>`, the tree the rows are judged against",
+        "Each row is one line `<req n> | <agent> | <admitted|refused> | <command>`.",
+        "Reply with `[ROWS] n=<count>` as your first and last line and the rows between.",
+    ):
+        assert item in rows, item
+
+
+def test_verify_skill_has_the_main_session_write_and_commit_the_rows() -> None:
+    # 0228: the verifier cannot write, so the main session writes the rows file.
+    rows = _verify_rows_mode()
+    for item in (
+        "The orchestrator hands the rows text back, and the main session writes the file.",
+        "`<unit worktree>/tests/adversarial/test_<unit-slug>_rows.py`",
+        "one case per row with the row text as its id",
+        "`assert_denied` of `tests/adversarial/corpus.py`",
+        "`decide(<hook input>, CFG).allow` from `tests/hook_chain.py`",
+        "with the subject `Add the verifier's rows for <unit id> (0228)`",
+        "adds the line `Rows: <that path>` to the brief file, directly after the `Packs:` line",
+        "A reply whose first and last lines differ, or that reads `n=0`, is off its contract:"
+        " stop and show its last 10 lines.",
+    ):
+        assert item in rows, item
+    for path in ("corpus.py", "test_brace_glob.py"):
+        assert (REPO_ROOT / "tests" / "adversarial" / path).is_file(), path
+    assert (REPO_ROOT / "tests" / "hook_chain.py").is_file()
+
+
+def test_verify_unit_mode_runs_the_rows_file_in_place_of_the_hunt() -> None:
+    # 0228: the post-build pass judges the rows' result and hunts only over a changed row.
+    unit = _flat(_phase_skill("verify")).split("### Unit mode", 1)[1].split("### Claims mode")[0]
+    assert (
+        "For a unit with a `Rows:` line, run the rows file as the one test run and judge each"
+        " row's result; hunt again only over a row the coder's diff changed or deleted, and a"
+        " changed or deleted row is a `scope` refutation unless the brief names it."
+    ) in unit
+    assert "A unit without a `Rows:` line keeps the hunt pass as before." in unit
+    assert "the rows pass below when it carries a `Rows:` line, else the hunt pass below" in unit
+    opened = unit.split("Then build the `Open:` line", 1)[1].split("4. Dispatch.", 1)[0]
+    assert "the rows file of the brief's `Rows:` line" in opened
+
+
+def test_build_skill_runs_rows_mode_after_the_packs_line() -> None:
+    # 0228: a class unit gets its rows before step 5, and the coder never edits them.
+    step4 = _build_step4()
+    assert step4.index("- Coder packs (227). ") < step4.index("- Rows (0228). ")
+    bullet = step4.split("- Rows (0228). ", 1)[1]
+    for sentence in (
+        "For a unit of the class, run the verify phase's rows mode",
+        "before step 5.",
+        "It adds the `Rows:` line to the brief directly after the `Packs:` line.",
+        "The coder never edits the rows file.",
+    ):
+        assert sentence in bullet, sentence
+
+
+def test_build_skill_routes_a_unit_without_green_rows_as_refuted() -> None:
+    # 0228: step 7 checks the coder's test line for the rows file before the verifier runs.
+    text = _flat(REPO_ROOT / "skills" / "build" / "SKILL.md")
+    step7 = text.split("7. Check each COMPLETE line", 1)[1].split("8. A coder that", 1)[0]
+    hunt, rows, hand = (
+        step7.index("- Build-only-the-ask units (227)."),
+        step7.index("- Rows (0228). "),
+        step7.index("- Then hand the unit to the verify phase"),
+    )
+    assert hunt < rows < hand
+    check = step7[rows:hand]
+    assert (
+        "For a unit with a `Rows:` line, the coder's receipts carry a `- test` line for that"
+        " rows file with zero failures."
+    ) in check
+    assert 'routed as a REFUTED with one `code` row "rows file not green"' in check
