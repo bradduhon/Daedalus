@@ -24,6 +24,8 @@ TEST = "- test python3 -m pytest -q => 3 passed in 0.10s"
 TYPECHECK = "- typecheck python3 -m mypy scripts => Success: no issues found in 9 source files"
 YIELD = "- yield COMPLIANCE may the check log replies => orchestrator"
 DEVIATION = "- deviation .venv absent | ran python3 -m pytest -q"
+HUNT = "- hunt a leading option => refused"
+HUNT_FIXED = "- hunt a here-string => admitted, fixed in 0123abc"
 
 
 def _reply(*lines: str) -> str:
@@ -51,6 +53,16 @@ def _stop(reply: object, agent: str | None = "daedalus:coder", **extra: object) 
         ("Done.", "", "## Receipts", COMMIT, TEST, TYPECHECK, YIELD, DEVIATION, COMPLETE),
         ("## Receipts", TEST, COMMIT, f"{COMMIT} two", TEST, COMPLETE + " adversarial=pass"),
         ("## Receipts", "- note x", "## Receipts", COMMIT, TEST, COMPLETE),
+        # 227: hunt receipts of both outcomes, and ` hunt=<n>` before the closing ` turns=<n>`.
+        ("## Receipts", COMMIT, TEST, HUNT, HUNT_FIXED, COMPLETE + " hunt=2 turns=9"),
+        (
+            "## Receipts",
+            COMMIT,
+            TEST,
+            HUNT,
+            COMPLETE + " adversarial=pass audit_tests=pass hunt=1 turns=12",
+        ),
+        ("## Receipts", COMMIT, TEST, f"- hunt `a => b` => admitted, fixed in {SHA}", COMPLETE),
     ],
 )
 def test_a_whole_block_passes(lines: tuple[str, ...]) -> None:
@@ -93,12 +105,45 @@ def test_a_block_without_a_commit_or_test_line_is_refused(
         "- deviation a.py reason without a bar",
         "- claim scripts/a.py:3 adds the check",
         "* commit " + SHA + " star bullet",
+        # 227: a hunt line in another shape.
+        "- hunt a subshell => admitted",
+        "- hunt a subshell => passed",
+        "- hunt a subshell",
+        "- hunt => refused",
+        "- hunt a subshell => refused, mostly",
+        "- hunt a subshell => admitted, fixed in 0123ab",
+        "- hunt a subshell => admitted, fixed in 0123ABC",
+        f"- hunt a subshell => admitted, fixed in {SHA}0",
+        "- hunt  a subshell => refused",
+        "- hunts a subshell => refused",
     ],
 )
 def test_text_between_the_header_and_the_lines_is_refused(between: str) -> None:
     reply = _reply("## Receipts", between, COMMIT, TEST, COMPLETE)
     got = handback_check.receipts_problem(reply)
     assert got == f"the receipts block holds a line of another shape: {between.rstrip()!r}"
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        " hunt=2",  # no closing turns=<n>
+        " turns=9 hunt=2",
+        " hunt=2 adversarial=pass turns=9",
+        " hunt=two turns=9",
+        " hunt= turns=9",
+        " hunt=2 hunt=2 turns=9",
+        " hunt=-1 turns=9",
+        " hunt=2 turns=9 x",
+    ],
+)
+def test_a_hunt_field_out_of_place_is_refused(tail: str) -> None:
+    # 227: ` hunt=<n>` sits directly before the closing ` turns=<n>`, once.
+    reply = _reply("## Receipts", COMMIT, TEST, HUNT, COMPLETE + tail)
+    assert handback_check.receipts_problem(reply) == (
+        "the COMPLETE line carries `hunt=` other than as ` hunt=<n>` before ` turns=<n>`"
+    )
+    assert handback_check.judge(_stop(reply)) is not None
 
 
 def test_text_between_the_block_and_the_complete_line_is_refused() -> None:
@@ -137,7 +182,12 @@ def test_the_refusal_carries_one_next_line_naming_the_shape() -> None:
     assert got.startswith("Daedalus hand-back check: the COMPLETE reply has no `## Receipts`")
     assert got.count("Next:") == 1 and "\n" not in got
     assert got.endswith(f"Next: end the reply with {handback_check.SHAPE}.")
-    for shape in ("- commit <40 hex> <subject>", "- deviation <file or behaviour> | <reason>"):
+    for shape in (
+        "- commit <40 hex> <subject>",
+        "- deviation <file or behaviour> | <reason>",
+        "- hunt <form> => admitted, fixed in <7 to 40 hex>",
+        "` hunt=<n>` directly before its closing ` turns=<n>`",
+    ):
         assert shape in got
 
 
