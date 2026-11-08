@@ -759,6 +759,9 @@ def test_unwrapped_test_command_is_refused_when_the_kernel_holds_rules(command: 
         f"cd {WT} && {WRAP} python3 -m pytest tests -q 2>&1 | tail -3",
         f"cd {WT}/tests && {WRAP} python3 -m pytest -q",
         f"cd {WT} && {WRAP} python3 {WT}/scripts/catalog.py matrix",
+        # A2 spec correction: program arguments after -m <module> or the script are no body.
+        f"cd {WT} && {WRAP} python3 -m pytest -c pytest.ini -q",
+        f"cd {WT} && {WRAP} python3 {WT}/scripts/catalog.py -c foo",
         f"cd {WT} && {WRAP} ./scripts/run.sh",
         f"cd {WT} && {WRAP} {WT}/scripts/run.sh",
     ],

@@ -75,7 +75,10 @@ R_IGNORE_WHITELIST = (
     "Next: search a folder that holds neither, or name the files you need"
 )
 _GLOB_START = re.compile(r"[*?\[{]")
-VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*|[0-9]+)[^}]*\}|\$([A-Za-z_][A-Za-z0-9_]*|[0-9])")
+# fix1-a2 (issue 81): $@, $* and $# are parameters too, so a body walk can bind them.
+VAR = re.compile(
+    r"\$\{([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#])[^}]*\}|\$([A-Za-z_][A-Za-z0-9_]*|[0-9@*#])"
+)
 _UNQUOTE = re.compile(r"[\"'\\]")
 # spec 8: lexer marks for a literal $, a quote edge that ends a name, and a redirect target.
 LIT, CUT, REDIRECT = "\x00", "\x01", "\x02"
@@ -106,7 +109,8 @@ def _brace_group(text: str) -> tuple[str, list[str], str] | None:
         # audit B4 round 3: ${...} is a parameter, never a brace group, as in bash.
         if param:
             param += {"{": 1, "}": -1}.get(char, 0)
-        elif char == "{" and depth == 0 and text[i - 1 : i] == "$":
+        elif char == "{" and depth == 0 and text[i - 1 : i] in {"$", LIT}:
+            # fix1-a2: a quoted ${...} (its $ marked LIT) stays one parameter for the body walk.
             param = 1
         elif char == "{":
             if depth == 0:
@@ -207,6 +211,18 @@ def _expand_alt(word: str, env: dict[str, list[str]]) -> list[tuple[str, bool]]:
         text = clean(text)
         out.append((tilde(text, home), unresolved))
     return out
+
+
+def quoted_dollar(word: str) -> bool:
+    # fix1-a2: an unquoted $ right before an opening quote mark is $'..' or $"..", never literal;
+    # the body walk reads such a word as unresolved in a write position.
+    cuts = 0
+    for i, char in enumerate(word):
+        if char == CUT:
+            cuts += 1
+        elif char == "$" and word[i + 1 : i + 2] == CUT and cuts % 2 == 0:
+            return True
+    return False
 
 
 def anchor(text: str, base: str) -> str | None:

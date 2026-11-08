@@ -32,6 +32,173 @@ READ_ONLY_CMDS = frozenset(
         "uniq",
     }
 )
+
+
+def _row(
+    plain: str, valued: str, long_plain: str = "", long_valued: str = ""
+) -> tuple[frozenset[str], frozenset[str]]:
+    # P2: (no-argument options, one-argument options) from short letters and long names.
+    def spell(letters: str, names: str) -> frozenset[str]:
+        return frozenset({f"-{c}" for c in letters} | {f"--{n}" for n in names.split()})
+
+    return spell(plain, long_plain), spell(valued, long_valued)
+
+
+_HELP = " help version"
+_SHELL_ARG_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
+_SHELL_LONG_FLAGS = frozenset(
+    {"--login", "--norc", "--noprofile", "--posix", "--restricted", "--verbose", "--noediting"}
+)
+# P2: the one option table split_options reads; a long option taking an optional =x is plain.
+OPTION_TABLE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "cat": _row(
+        "AbeEnstTuv",
+        "",
+        "show-all number-nonblank show-ends number squeeze-blank show-tabs show-nonprinting"
+        + _HELP,
+    ),
+    "rg": _row(
+        "0.abcFhHiIlLnNopPqsSuUvVwxz",
+        "efmABCgtTjMrEd",
+        "hidden follow no-ignore count files-with-matches line-number ignore-case json" + _HELP,
+        "regexp file max-count context after-context before-context glob iglob type type-not"
+        " threads replace encoding pre pre-glob ignore-file hostname-bin hyperlink-format"
+        " max-depth max-filesize sort sortr colors type-add engine",
+    ),
+    "grep": _row(
+        "EFGPiyvwxcLloqsbHhnTZzUraIR",
+        "efmABCdD",
+        "extended-regexp fixed-strings basic-regexp perl-regexp ignore-case no-ignore-case"
+        " invert-match word-regexp line-regexp count color colour files-without-match"
+        " files-with-matches only-matching quiet silent no-messages byte-offset with-filename"
+        " no-filename line-number line-buffered initial-tab null null-data text recursive"
+        " dereference-recursive" + _HELP,
+        "regexp file max-count after-context before-context context label include exclude"
+        " exclude-from exclude-dir binary-files devices",
+    ),
+    "ls": _row(
+        "aAbBcCdDfFgGhHiklLmnNopqQrRsStuUvxXZ1",
+        "ITw",
+        "all almost-all author escape ignore-backups classify color hyperlink directory dired"
+        " file-type full-time group-directories-first no-group human-readable si dereference"
+        " dereference-command-line dereference-command-line-symlink-to-dir inode kibibytes"
+        " literal numeric-uid-gid hide-control-chars show-control-chars quote-name recursive"
+        " reverse size zero context" + _HELP,
+        "block-size format hide ignore indicator-style quoting-style sort time time-style"
+        " tabsize width",
+    ),
+    # P2: jq's --arg, --argjson, --slurpfile and --rawfile take two words; one is stripped.
+    "jq": _row(
+        "nrjacCsSeh",
+        "fL",
+        "null-input raw-input slurp raw-output join-output ascii-output compact-output"
+        " color-output monochrome-output sort-keys exit-status tab seq stream stream-errors"
+        " args jsonargs raw-output0 unbuffered" + _HELP,
+        "from-file indent arg argjson slurpfile rawfile",
+    ),
+    "head": _row(
+        "qvz0123456789", "nc", "quiet silent verbose zero-terminated" + _HELP, "lines bytes"
+    ),
+    "tail": _row(
+        "fFqvz0123456789",
+        "ncs",
+        "follow retry quiet silent verbose zero-terminated" + _HELP,
+        "lines bytes pid sleep-interval max-unchanged-stats",
+    ),
+    "wc": _row("clmwL", "", "bytes chars lines words max-line-length" + _HELP, "files0-from total"),
+    "sha256sum": _row(
+        "bctwz",
+        "",
+        "binary check tag text ignore-missing quiet status strict warn zero" + _HELP,
+    ),
+    "file": _row(
+        "bcCdE0hiklLnNprsSvzZ",
+        "efFmP",
+        "brief checking-printout compile debug extension no-dereference mime mime-type"
+        " mime-encoding keep-going list dereference no-buffer no-pad print0 preserve-date raw"
+        " special-files no-sandbox uncompress uncompress-noreport apple" + _HELP,
+        "exclude exclude-quiet files-from separator magic-file parameter",
+    ),
+    "stat": _row("LftZ", "c", "dereference file-system terse" + _HELP, "format printf cached"),
+    "sort": _row(
+        "bcCdfghimMnrRsuVz",
+        "kSotTy",
+        "ignore-leading-blanks dictionary-order ignore-case general-numeric-sort"
+        " ignore-nonprinting month-sort human-numeric-sort numeric-sort random-sort reverse"
+        " version-sort check merge stable unique zero-terminated debug" + _HELP,
+        "key output buffer-size field-separator temporary-directory random-source sort"
+        " parallel batch-size compress-program files0-from",
+    ),
+    "uniq": _row(
+        "0123456789Dcdiuz",
+        "fsw",
+        "all-repeated group count repeated ignore-case unique zero-terminated" + _HELP,
+        "skip-fields skip-chars check-chars",
+    ),
+    # P2: find's predicates are whole words matched by their longest table prefix.
+    "find": (
+        frozenset(
+            {"-H", "-L", "-P", "-O", "-print", "-print0", "-ls", "-prune", "-quit", "-true"}
+            | {"-false", "-empty", "-depth", "-mount", "-xdev", "-follow", "-noleaf"}
+            | {"-daystart", "-nouser", "-nogroup", "-readable", "-writable", "-executable"}
+            | {"-not", "-a", "-o", "-and", "-or", "-help", "-version"}
+        ),
+        frozenset(
+            {"-D", "-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename"}
+            | {"-regex", "-iregex", "-regextype", "-lname", "-ilname", "-type", "-xtype"}
+            | {"-size", "-perm", "-user", "-group", "-uid", "-gid", "-newer", "-anewer"}
+            | {"-cnewer", "-samefile", "-inum", "-links", "-mtime", "-mmin", "-atime"}
+            | {"-amin", "-ctime", "-cmin", "-used", "-maxdepth", "-mindepth", "-printf"}
+            | {"-fprint", "-fprint0", "-fprintf", "-fls", "-fstype", "-context"}
+            | {"-files0-from"}
+        ),
+    ),
+    # pin A1 -> A2, P6, P7: shells (by family) and interpreters; a shell's -c takes no value.
+    "shell": (
+        frozenset({f"-{c}" for c in "abcefhiklmnprstuvxBCEHPT"})
+        | _SHELL_LONG_FLAGS
+        | frozenset({"--help", "--version", "--debugger", "--dump-strings", "--dump-po-strings"}),
+        frozenset({o for o in _SHELL_ARG_OPTS if o[0] == "-"}),
+    ),
+    "python": _row("bBdEhiIOPqsSuvVx", "cmWXQ", _HELP, "check-hash-based-pycs"),
+    "perl": _row("acFhilnpsStTuUvwWX0xdDCMm", "eEI", _HELP),
+    "ruby": _row(
+        "acdhlnpsSvwWyU0xKTF",
+        "eIrCE",
+        "verbose yydebug disable-gems enable-gems jit" + _HELP,
+        "encoding external-encoding internal-encoding",
+    ),
+    "node": _row(
+        "hivc",
+        "eprC",
+        "test check interactive inspect inspect-brk watch" + _HELP,
+        "eval print require import loader experimental-loader conditions input-type title env-file",
+    ),
+    "php": _row("aCFhHilmnqsvwe", "rBREcdzftS", _HELP),
+    # pin A1 -> A3: shell variable builtins and git commit, stripped before a pathspec scan.
+    "export": _row("fnp", ""),
+    "declare": _row("aAfFgiIlnrtuxp", ""),
+    "typeset": _row("aAfFgiIlnrtuxp", ""),
+    "git commit": _row(
+        "aipsnvqzeo",
+        "mFCct",
+        "all patch signoff no-signoff no-verify verify verbose no-verbose quiet dry-run short"
+        " branch porcelain long null amend no-edit edit allow-empty allow-empty-message"
+        " include only no-post-rewrite reset-author status no-status gpg-sign no-gpg-sign"
+        " untracked-files pathspec-file-nul ahead-behind no-ahead-behind interactive",
+        "message file reuse-message reedit-message fixup squash author date template cleanup"
+        " pathspec-from-file trailer",
+    ),
+}
+# P2: commands whose options are whole single-dash words, never getopt clusters.
+WORD_OPTION_CMDS = frozenset({"find"})
+# issue 204: the read verbs' options that write a file; uniq writes its second operand instead.
+READ_ONLY_WRITE_OPTS: dict[str, frozenset[str]] = {
+    "sort": frozenset({"-o", "--output", "-T", "--temporary-directory", "--compress-program"}),
+    "find": frozenset({"-fprint", "-fprint0", "-fprintf", "-fls"}),
+    "file": frozenset({"-C", "--compile"}),
+    "uniq": frozenset(),
+}
 # spec 6: grep, worktree and merge-base pass only the read forms of their grammar rows.
 READ_ONLY_GIT = frozenset(
     {"diff", "log", "show", "status", "rev-parse", "ls-files", "branch"}
@@ -95,10 +262,10 @@ WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         frozenset({"-u", "-g", "-h", "-p", "-C", "-U", "-D", "-r", "-t", "--chdir"}),
     ),
     "doas": (frozenset({"-n", "-s"}), frozenset({"-u", "-C"})),
-    # issue 80: -S and --split-string stay off this row; env_split_values finds them to refuse.
+    # issue 80, 116 (P8): -S and --split-string stay off this row; env_split_values finds them.
     "env": (
         frozenset({"-i", "--ignore-environment", "-0", "--null", "-"}),
-        frozenset({"-u", "--unset", "-C", "--chdir"}),
+        frozenset({"-u", "--unset", "-C", "--chdir", "-a", "--argv0"}),
     ),
     "nice": (frozenset(), frozenset({"-n", "--adjustment"})),
     "nohup": (frozenset(), frozenset()),
@@ -165,8 +332,15 @@ R_ENV_SPLIT = (
 CONFINE = "daedalus_confine.py"
 # issue 76: options that move the working folder before the wrapped command runs.
 WRAPPER_CHDIR = frozenset({("env", "-C"), ("env", "--chdir"), ("sudo", "-D"), ("sudo", "--chdir")})
-# issue 76: options whose value is a file the wrapper itself writes.
-WRAPPER_WRITES = frozenset({("time", "-o"), ("time", "--output")})
+# issue 107: the option slot of a wrapper operand that names a file the wrapper creates.
+WRAPPER_FILE = "<file operand>"
+# issue 76, 107: options and operands whose value is a file the wrapper itself writes.
+# P9 sweep: unshare's --<ns>=file persists a namespace by a bind mount on that file.
+WRAPPER_WRITES = frozenset(
+    {("time", "-o"), ("time", "--output"), ("flock", WRAPPER_FILE)}
+    | {("unshare", f"--{ns}") for ns in ("mount", "uts", "ipc", "net", "pid", "user")}
+    | {("unshare", "--cgroup"), ("unshare", "--time")}
+)
 # issue 76: the one duration regex, timeout's first operand.
 DURATION: re.Pattern[str] = re.compile(r"[\d.]+[smhd]?")
 # issue 82: the operand a wrapper reads before its command; None never matches (chroot re-roots).
@@ -179,31 +353,91 @@ WRAPPER_OPERAND: dict[str, re.Pattern[str] | None] = {
 }
 # issue 82: flock runs a shell body after its file operand; the jail never walks one.
 FLOCK_BODY = frozenset({"-c", "--command"})
-# 8.5 ruling A: first tokens a worker may never run, bar the allowlisted test runner forms.
-WORKER_WRAPPERS = frozenset(WRAPPER_OPTS) | frozenset(
-    {"eval", "source", ".", "sh", "bash", "zsh", "dash", "ksh", "python", "python3"}
-    | {"node", "perl", "ruby"}
+_VERSION_TAIL = re.compile(r"(?<=[A-Za-z])[-.]?\d+(?:\.\d+)*$")
+
+
+def command_family(word: str) -> str:
+    # pin A2 -> A3, P5: base name, path stripped, trailing version folded (python3.12: python).
+    base = os.path.basename(word)
+    return _VERSION_TAIL.sub("", base) or base
+
+
+# P6, fix round 1: a static shell family list; busybox sh reads as sh through shell_tokens.
+_SHELLS = frozenset(
+    {"bash", "sh", "dash", "zsh", "ksh", "ksh93", "mksh", "ash", "rbash", "yash", "posh"}
+    | {"fish", "csh", "tcsh"}
+)
+# fix round 1: /etc/shells entries that are no shell; any other unlisted entry fails a test.
+NOT_SHELLS = frozenset({"tmux", "screen", "git-shell", "nologin", "false"})
+# P6, P7: the OPTION_TABLE row of each family, and the options that carry inline code.
+INLINE_FLAGS: dict[str, frozenset[str]] = {
+    "shell": frozenset({"-c"}),
+    "python": frozenset({"-c"}),
+    "perl": frozenset({"-e", "-E"}),
+    "ruby": frozenset({"-e"}),
+    "node": frozenset({"-e", "-p", "--eval", "--print"}),
+    "php": frozenset({"-r", "-B", "-R", "-E"}),
+}
+INTERPRETERS = frozenset(INLINE_FLAGS) - {"shell"}
+# P7, A2 fix round 3: an option whose value is the script file (php -f <file>).
+SCRIPT_FLAGS: dict[str, frozenset[str]] = {"php": frozenset({"-f"})}
+# A2 fix round 4: a relative script that may be a stream once an opaque cd moved the folder.
+_STDIN_TAIL = re.compile(r"(?:^|/)(?:stdin|fd/\d+)$|^(?:dev|proc)(?:/|$)")
+# 8.5 ruling A, issue 116: first tokens a worker may never run, read through command_family.
+WORKER_WRAPPERS = (
+    frozenset(WRAPPER_OPTS) | frozenset({"eval", "source", ".", "python3"}) | _SHELLS | INTERPRETERS
 )
 _RESERVED = frozenset(
     {"{", "}", "(", ")", "!", "if", "then", "else", "elif", "fi", "do", "done", "while"}
     | {"until", "for", "case", "esac", "select", "function", "coproc", "[[", "time"}
 )
-_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
-_SHELL_ARG_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
-_SHELL_LONG_FLAGS = frozenset(
-    {"--login", "--norc", "--noprofile", "--posix", "--restricted", "--verbose", "--noediting"}
-)
 _TRUSTED_BIN = frozenset({"/bin", "/usr/bin", "/usr/local/bin", "/sbin", "/usr/sbin"})
-_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_SAFE_ENV = re.compile(r"^(?:CI|NODE_ENV|TZ|LANG|LC_ALL|PYTHONDONTWRITEBYTECODE)=")
+# issue 121: the one assignment word, NAME=, NAME+= or NAME[...]= and NAME[...]+=.
+_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
+_SAFE_ENV = re.compile(r"^(?:CI|NODE_ENV|TZ|LANG|LC_ALL|PYTHONDONTWRITEBYTECODE)\+?=")
 _GIT_CONFIG_DENY = re.compile(
     r"remote\..+\.(?:mirror|push)|push\.default|protocol\.(?:.+\.)?allow|core\.hookspath"
     r"|core\.fsmonitor|core\.pager|core\.sshcommand|diff\.external|alias\..*",
     re.I,
 )
 _GIT_GLOBAL_WITH_ARG = frozenset(
-    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
+    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--attr-source"}
+    | {"--shallow-file"}
 )
+# issue 121 (S2): git's global options that take no separate value, and the =value spellings.
+GIT_GLOBAL_FLAGS = frozenset(
+    {"-p", "--paginate", "-P", "--no-pager", "--bare", "--no-replace-objects", "--no-lazy-fetch"}
+    | {"--no-optional-locks", "--no-advice", "--literal-pathspecs", "--glob-pathspecs"}
+    | {"--no-literal-pathspecs"}
+    | {"--noglob-pathspecs", "--icase-pathspecs", "--exec-path", "--html-path", "--man-path"}
+    | {"--info-path", "-v", "--version", "-h", "--help"}
+)
+GIT_GLOBAL_EQ = (
+    "--git-dir=",
+    "--work-tree=",
+    "--namespace=",
+    "--config-env=",
+    "--attr-source=",
+    "--exec-path=",
+    "--list-cmds=",
+    "--super-prefix=",
+)
+
+
+def git_globals_known(globals_: list[str]) -> bool:
+    # issue 121 (S2): every global option before the subcommand is one git's tables name.
+    i = 0
+    while i < len(globals_):
+        token = globals_[i]
+        if token in _GIT_GLOBAL_WITH_ARG:
+            i += 2
+        elif token in GIT_GLOBAL_FLAGS or token.startswith(GIT_GLOBAL_EQ):
+            i += 1
+        else:
+            return False
+    return True
+
+
 _PUSH_FORBIDDEN = (
     "--force",
     "--force-with-lease",
@@ -574,6 +808,15 @@ def tokenize(command: str) -> list[list[str]] | None:
     return None if scanned is None else _tokens(scanned[0])
 
 
+def fed_tokens(command: str) -> list[tuple[list[str], bool]] | None:
+    # P7, A2 fix round 3: tokenize's segments, each with whether a pipe feeds its stdin.
+    scanned = _scan(command)
+    parsed = None if scanned is None else _tokens(scanned[0])
+    if scanned is None or parsed is None:
+        return None
+    return [(tokens, k > 0 and scanned[1][k - 1] == "|") for k, tokens in enumerate(parsed)]
+
+
 class WorkerChain(NamedTuple):
     # O3: raws, seps and tokens align; segments drop the _SAFE_ENV prefix of each.
     raws: list[str]
@@ -809,17 +1052,18 @@ def _normalize(text: str, placeholder: bool) -> str:
     return text
 
 
+def segment_spans(text: str) -> list[tuple[int, int]]:
+    # issue 121: (start, end) of each raw segment, split at unquoted ; & | newline and parens.
+    cuts = [
+        lex.at
+        for lex in quote_walk(text)
+        if lex.kind == CHAR and not lex.quote and lex.text in ";&|\n\r()"
+    ]
+    return [(a + 1, b) for a, b in itertools.pairwise([-1, *cuts, len(text)])]
+
+
 def _raw_segments(text: str) -> list[str]:
-    segments: list[str] = []
-    buf: list[str] = []
-    for lex in quote_walk(text):
-        if lex.kind == CHAR and not lex.quote and lex.text in ";&|\n\r()":
-            segments.append("".join(buf))
-            buf = []
-        else:
-            buf.append(lex.text)
-    segments.append("".join(buf))
-    return segments
+    return [text[a:b] for a, b in segment_spans(text)]
 
 
 def _word_parts(token: str) -> set[str]:
@@ -839,7 +1083,7 @@ def _segment_views(raw: str) -> list[list[str]]:
             _ASSIGN.match(tokens[0])
             or tokens[0] in _RESERVED
             or tokens[0].startswith("-")
-            or _word_parts(tokens[0]) & WORKER_WRAPPERS
+            or {command_family(part) for part in _word_parts(tokens[0])} & WORKER_WRAPPERS
             or ("timeout" in wrapper and DURATION.fullmatch(tokens[0]))
         ):
             if _word_parts(tokens[0]) & WRAPPER_OPTS.keys():
@@ -924,6 +1168,62 @@ def _cluster(
     return "", len(token)
 
 
+class OptionScan(NamedTuple):
+    # P2 to P4: operands in order, the canonical options met, and whether one was off the table.
+    operands: list[str]
+    options: list[str]
+    off: bool
+    # A2 fix round 3: the index of the -- no option consumed, or -1.
+    dashes: int = -1
+
+
+def scan_options(name: str, args: list[str]) -> OptionScan:
+    # P2 to P4 by OPTION_TABLE; find's predicates are whole single-dash words, never clusters.
+    no_arg, with_arg = OPTION_TABLE.get(name, (frozenset(), frozenset()))
+    row = no_arg | with_arg
+    words = name in WORD_OPTION_CMDS
+    operands: list[str] = []
+    options: list[str] = []
+    off = False
+    i = 0
+    while i < len(args):
+        word = args[i]
+        i += 1
+        if word == "--" and not words:
+            operands += args[i:]
+            return OptionScan(operands, options, off, i - 1)
+        if word == "-" or not word.startswith("-"):
+            operands.append(word)
+            continue
+        if words:
+            key = max((o for o in row if word.startswith(o)), key=len, default="")
+            attached = len(word) > len(key)
+        elif word.startswith("--"):
+            key = _long_option(word.split("=", 1)[0], row)
+            attached = "=" in word
+        else:
+            cluster = _cluster(word, no_arg, with_arg)
+            if cluster is None:
+                off = True
+                continue
+            letter, cut = cluster
+            options += ["-" + ch for ch in word[1:cut]]
+            i += 1 if letter and cut == len(word) else 0
+            continue
+        if key not in row:
+            off = True
+            continue
+        options.append(key)
+        i += 1 if key in with_arg and not attached else 0
+    return OptionScan(operands, options, off)
+
+
+def split_options(name: str, args: list[str]) -> tuple[list[str], bool]:
+    # pin A1 -> A2: the operands left after P2 to P4, and True when an option was off the table.
+    scan = scan_options(name, args)
+    return scan.operands, scan.off
+
+
 def strip_wrappers(tokens: list[str]) -> list[str] | None:
     # issue 76: the tokens from the wrapped command on; None when an option is off WRAPPER_OPTS.
     return _strip_wrappers(tokens, [])
@@ -956,7 +1256,8 @@ def _strip_wrappers(
             elif not token.startswith("-") or token == "-" and name != "env":
                 break
             elif key in no_arg and ("=" not in token or key.startswith("--")):
-                pass
+                if "=" in token and (name, key) in WRAPPER_WRITES:
+                    found.append(WrapperOption(name, key, offset + i, spelled + "="))
             elif key in with_arg and "=" in token and key.startswith("--"):
                 # audit round 2: only getopt_long strips = (--chdir=v); a short -C=v keeps it,
                 # so it falls through to _cluster, which reads its value as =v.
@@ -985,6 +1286,10 @@ def _strip_wrappers(
             operand = WRAPPER_OPERAND[name]
             if i >= len(tokens) or operand is None or not operand.fullmatch(tokens[i]):
                 return None
+            # issue 107, P9: flock creates its file operand; only a lone numeric one is an fd.
+            fd = tokens[i].isdigit() and i + 1 == len(tokens)
+            if (name, WRAPPER_FILE) in WRAPPER_WRITES and not fd:
+                found.append(WrapperOption(name, WRAPPER_FILE, offset + i, ""))
             i += 1
             if name == "flock" and tokens[i : i + 1] and tokens[i].split("=")[0] in FLOCK_BODY:
                 return None
@@ -1003,12 +1308,20 @@ def env_split_values(tokens: list[str]) -> list[str]:
 
 
 def _env_split(args: list[str]) -> list[str]:
-    # issue 80: getopt order; an unknown letter or option is read past, so -S behind it is found.
+    # issue 80, 116 (P8): getopt order past values and NAME=VALUE words; an unknown letter is
+    # read past, so -S behind it is found; an expanding word may be -S, so it is an unread body.
     with_arg = WRAPPER_OPTS["env"][1]
     i = 0
-    while i < len(args) and args[i].startswith("-") and args[i] not in {"-", "--"}:
+    while i < len(args) and args[i] not in {"-", "--"}:
         token = args[i]
         later = args[i + 1 : i + 2] or [""]
+        if _expands(token):
+            return [""]
+        if _ASSIGN.match(token):
+            i += 1
+            continue
+        if not token.startswith("-"):
+            break
         if token.startswith("--"):
             key, eq, value = token.partition("=")
             if "--split-string".startswith(key):
@@ -1025,56 +1338,188 @@ def _env_split(args: list[str]) -> list[str]:
     return []
 
 
-def _inline_code(tokens: list[str], letters: str, longs: frozenset[str]) -> str | None:
-    i = 1
-    while i < len(tokens):
-        token = tokens[i]
-        if token == "--":
-            i += 1
-            break
-        if token.split("=", 1)[0] in longs:
-            return token.split("=", 1)[1] if "=" in token else (tokens[i + 1 : i + 2] or [""])[0]
-        if token.startswith("--"):
-            i += 1
-            continue
-        if token.startswith("-") and len(token) > 1:
-            group = token[1:]
-            hit = next((idx for idx, ch in enumerate(group) if ch in letters), None)
-            if hit is not None:
-                rest = group[hit + 1 :]
-                return rest or (tokens[i + 1 : i + 2] or [""])[0]
-            if "m" in group and letters == "c":
-                return None
-            i += 1
-            continue
-        break
-    return None
+def stdin_script(word: str, base: str | None = "") -> bool:
+    # P6, P7, fix rounds 3-4: - or a path under /dev/ or /proc/ after joining base and normpath;
+    # base "" knows no folder (a climbing path counts), None follows an opaque cd (a stdin tail).
+    if word == "-":
+        return True
+    if base and word[:1] != "~" and not _expands(word):
+        word = os.path.join(base, word)
+    path = os.path.normpath(word)
+    if base is None and not os.path.isabs(path) and _STDIN_TAIL.search(path):
+        return True
+    if not path.startswith(("/", "../")):
+        return False
+    parts = [p for p in path.split("/") if p not in {"", ".."}]
+    return parts[:1] in (["dev"], ["proc"])
 
 
-def _shell_code(tokens: list[str]) -> str | None:
-    i = 1
-    has_c = False
-    while i < len(tokens):
-        token = tokens[i]
-        if token == "--":
-            i += 1
-            break
-        if token in _SHELL_ARG_OPTS:
-            i += 2
+class BodyScan(NamedTuple):
+    # A2 spec correction: the program's own options, its script word, the flag-bearing span,
+    # and the index the inline-flag scan ends at.
+    hit: bool
+    scan: OptionScan
+    script: str | None
+    module: bool
+    span: list[str]
+    end: int
+
+
+def _awaits(family: str, words: list[str]) -> bool:
+    # A2 fix round 3: the last option of words still takes the next word as its value.
+    before = scan_options(family, words)
+    after = scan_options(family, [*words, "-"])
+    return before.dashes < 0 and len(after.operands) == len(before.operands)
+
+
+def _option_end(family: str, words: list[str]) -> tuple[int, bool, bool]:
+    # A2 spec correction: the scan ends at python's -m <module>, an unconsumed --, or the script
+    # operand; (that index, whether -m ended it, whether -- did). Values are consumed first.
+    for k in range(len(words)):
+        scan = scan_options(family, words[: k + 1])
+        if family == "python" and "-m" in scan.options:
+            return (k + 2 if words[k].endswith("m") else k + 1), True, False
+        if scan.dashes >= 0:
+            return k, False, True
+        if scan.operands:
+            return k, False, False
+    return len(words), False, False
+
+
+def _off_end(family: str, words: list[str]) -> int:
+    # A2 fix round 3: past an off-table option, the first -- no option, known or not, may take.
+    for k, word in enumerate(words):
+        if word != "--" or _awaits(family, words[:k]):
             continue
-        if token.startswith("--"):
-            if token not in _SHELL_LONG_FLAGS:
-                return _FALLBACK
-            i += 1
+        if not (k and scan_options(family, words[k - 1 : k]).off):
+            return k
+    return len(words)
+
+
+def _body_scan(family: str, args: list[str]) -> BodyScan:
+    # P6, P7: an inline flag among the program's own options, read by scan_options; an option
+    # off the table keeps the flag scan conservative up to --, and the script is always kept.
+    words = ["-" + w[1:] if family == "shell" and w[:1] == "+" else w for w in args]
+    cut, module, dashes = _option_end(family, words)
+    scan = scan_options(family, words[:cut])
+    flags = INLINE_FLAGS[family]
+    rest = args[cut + 1 :] if dashes else args[cut:]
+    script = None if module or not rest else rest[0]
+    named = SCRIPT_FLAGS.get(family, frozenset())
+    if script is None and not module and named & set(scan.options):
+        script = _flag_value(family, args, named, cut)
+    if scan.off:
+        end = _off_end(family, words)
+        letters = {flag[1] for flag in flags if flag[1] != "-"}
+        clusters = (w for w in words[:end] if w[:1] == "-" and w[1:2] != "-")
+        wide = set(scan_options(family, words[:end]).options)
+        hit = bool(flags & wide) or any(letters & set(w) for w in clusters)
+        return BodyScan(hit, scan, script, module, args[:end], end)
+    span = args[:cut] if module else args[: cut + 1 + dashes]
+    return BodyScan(bool(flags & set(scan.options)), scan, script, module, span, cut)
+
+
+def flag_span(tokens: list[str]) -> int:
+    # rows 2-3, A2 spec correction: how many words after a shell or interpreter name may hold
+    # an inline flag, so an expansion there may be one; 0 for any other command.
+    family = command_family(tokens[0]) if tokens else ""
+    key = "shell" if family in _SHELLS else family
+    return len(_body_scan(key, tokens[1:]).span) if key in INLINE_FLAGS else 0
+
+
+def _flag_value(family: str, args: list[str], flags: frozenset[str], end: int) -> str:
+    # P7: the value of the first flag in an option position before end, attached, after = or as
+    # the next word; a word a valued option consumes is skipped (fix round 3).
+    with_arg = OPTION_TABLE[family][1]
+    for k, word in enumerate(args[:end]):
+        if k and _awaits(family, args[:k]):
             continue
-        if token[:1] in {"-", "+"} and len(token) > 1:
-            has_c = has_c or "c" in token[1:]
-            i += 1
-            continue
-        break
-    if not has_c:
+        key, eq, value = word.partition("=")
+        later = (args[k + 1 : k + 2] or [""])[0]
+        if word[:2] == "--" and _long_option(key, flags) in flags:
+            return value if eq else later
+        if word[:1] == "-" and word[1:2] not in {"", "-"}:
+            for at, ch in enumerate(word[1:], start=2):
+                if "-" + ch in flags:
+                    return word[at:] or later
+                if "-" + ch in with_arg:
+                    break
+    return ""
+
+
+def _stdin_body(
+    body: BodyScan, stdin: bool, reads: bool, fed: bool, base: str | None = ""
+) -> str | None:
+    # P6, P7: at the command word, "" for a stdin-like script, an expanding word in an option
+    # position, or no script operand while stdin is fed (fix round 3); else no body.
+    if not stdin or {"--version", "--help"} & set(body.scan.options):
         return None
-    return tokens[i] if i < len(tokens) else ""
+    if reads or any(_expands(w) for w in body.span):
+        return ""
+    if body.module:
+        return None
+    if body.script is not None and stdin_script(body.script, base):
+        return ""
+    return "" if fed and (body.script is None or body.scan.off) else None
+
+
+def _inline_code(tokens: list[str], family: str) -> str | None:
+    # P7: the inline code of an interpreter segment, or None when it carries no inline flag.
+    body = _body_scan(family, tokens[1:])
+    return _flag_value(family, tokens[1:], INLINE_FLAGS[family], body.end) if body.hit else None
+
+
+def interpreter_code(
+    tokens: list[str], stdin: bool = False, fed: bool = False, base: str | None = ""
+) -> str | None:
+    # P7, issue 116: an interpreter's inline code; with stdin (the command word's position), ""
+    # for code read from a stream (fed: a pipe or < feeds it) or an expanding flag word.
+    family = command_family(tokens[0]) if tokens else ""
+    if family not in INTERPRETERS:
+        return None
+    code = _inline_code(tokens, family)
+    if code is not None:
+        return code
+    return _stdin_body(_body_scan(family, tokens[1:]), stdin, False, fed, base)
+
+
+def shell_tokens(tokens: list[str]) -> list[str] | None:
+    # P6, issue 116: the words from a shell command word on; busybox sh reads as a bare sh.
+    if tokens and command_family(tokens[0]) == "busybox":
+        tokens = tokens[1:]
+    return tokens if tokens and command_family(tokens[0]) in _SHELLS else None
+
+
+def _shell_code(tokens: list[str], stdin: bool = False, base: str | None = "") -> str | None:
+    # P6, issue 116: a shell's -c string (its first operand, or the word after -c past an
+    # off-table option); with stdin, "" for a string read from a stream; else _FALLBACK.
+    args = tokens[1:]
+    body = _body_scan("shell", args)
+    if body.hit and body.scan.off:
+        return _flag_value("shell", args, INLINE_FLAGS["shell"], body.end)
+    if body.hit:
+        return body.script or ""
+    if body.scan.off:
+        return _FALLBACK
+    # fix round 3: a shell with no script reads its inherited stdin, so it counts as fed.
+    return _stdin_body(body, stdin, "-s" in body.scan.options, True, base)
+
+
+def shell_params(tokens: list[str]) -> tuple[str, ...]:
+    # fix1-a2 (issue 81): a shell's $0, $1 and on as bash binds them past a -c string, -s or a
+    # script operand; () when an option off the table leaves them unknown.
+    args = tokens[1:]
+    words = ["-" + w[1:] if w[:1] == "+" else w for w in args]
+    cut, _, dashes = _option_end("shell", words)
+    scan = scan_options("shell", words[:cut])
+    if scan.off:
+        return ()
+    rest = args[cut + 1 :] if dashes else args[cut:]
+    if INLINE_FLAGS["shell"] & set(scan.options):
+        return (*(rest[1:2] or tokens[:1]), *rest[2:])
+    if "-s" in scan.options or not rest:
+        return (tokens[0], *rest)
+    return tuple(rest)
 
 
 def _segment_reason(segment: list[str], depth: int, main: bool) -> str | None:
@@ -1096,17 +1541,14 @@ def _segment_reason(segment: list[str], depth: int, main: bool) -> str | None:
     name = _base(tokens[0])
     if set("${") & set(tokens[0]):
         return _FALLBACK if main else R_VARIABLE
-    if name in _SHELLS:
-        code = _shell_code(tokens)
+    shell = shell_tokens(tokens)
+    if shell is not None:
+        code = _shell_code(shell)
         if code == _FALLBACK:
             return _FALLBACK
         return _command_reason(code, depth + 1, main) if code else None
-    if name.startswith("python"):
-        code = _inline_code(tokens, "c", frozenset())
-        return _command_reason(code, depth + 1, main) if code else None
-    if name in {"perl", "ruby", "node"}:
-        letters = "ep" if name == "node" else "eE"
-        code = _inline_code(tokens, letters, frozenset({"--eval", "--print"}))
+    if command_family(name) in INTERPRETERS:
+        code = interpreter_code(tokens)
         return _command_reason(code, depth + 1, main) if code else None
     if name == "eval":
         return _command_reason(" ".join(tokens[1:]), depth + 1, main)
@@ -1713,6 +2155,42 @@ def search_opaque(command: str) -> bool:
     return False
 
 
+R_READ_EXPANSION = (
+    "uniq, sort, file and find can write a file, and this call holds a word the shell expands "
+    "before the command runs (a brace list, ~, a glob, $, a backtick or <(...)), so it may turn "
+    "into a write option or an output operand the jail never saw (issue 204). Next: quote the "
+    "word or name each path literally."
+)
+
+
+def expansion_opaque(command: str) -> bool:
+    # P1, 0084, issue 204: a read verb that can write sits beside a word the shell may split.
+    bare = [lex for lex in quote_walk(command) if lex.kind == CHAR and not lex.quote]
+    procsub = any(
+        a.text in "<>" and b.text == "(" and b.at == a.at + 1 for a, b in itertools.pairwise(bare)
+    )
+    for raw in _raw_segments(command):
+        words = _raw_words(raw)
+        plain = [_unquoted(w) for w in words]
+        rest = strip_wrappers(plain)
+        if rest is None:  # issue 76: a wrapper option off its row leaves the verb unknown.
+            writes = any(_base(p) in READ_ONLY_WRITE_OPTS for p in plain)
+        elif not rest:
+            continue
+        elif _expands(head := words[len(words) - len(rest)]):
+            return True  # P1: an expansion in the command-name position hides the verb.
+        else:
+            writes = _base(_unquoted(head)) in READ_ONLY_WRITE_OPTS
+        if writes and (procsub or any(_expands(w) for w in words)):
+            return True
+    return False
+
+
+def _expands(word: str) -> bool:
+    # 0084: the shell may split this raw word or turn it into an option before the command runs.
+    return _unquoted_expansion(word) or bool(set("$`") & set(_unsingled(word)))
+
+
 def _hygiene_bad(token: str, word: str | None) -> bool:
     # O4: judge the raw span when it is known, else the shlex token as before.
     text = token if word is None else _unsingled(word)
@@ -1806,7 +2284,7 @@ def _worker_hygiene(
         ledger = train_script_ok(tokens)
     if agent == "coder" and own_script is not None and _is_cite(tokens, own_script):
         ledger = True  # RCP, 0128: the coder's citation helper; its hygiene check still runs.
-    is_wrapper = name in WORKER_WRAPPERS or name.startswith("python")
+    is_wrapper = command_family(name) in WORKER_WRAPPERS or name.startswith("python")
     if (
         agent == "charter-docs"
         and name == "python3"
@@ -1819,7 +2297,7 @@ def _worker_hygiene(
     bin_run = js_inner(tokens)
     if bin_run and _base(bin_run[0]) == "bun" and bun_inline(bin_run):
         return R_INLINE
-    if bin_run and _base(bin_run[0]) in WORKER_WRAPPERS:
+    if bin_run and command_family(bin_run[0]) in WORKER_WRAPPERS:
         if not _tester_runner_ok(_base(bin_run[0]), bin_run, own_script):
             return R_INLINE
     spans: list[str | None] = list(words) if words and len(words) == len(tokens) else []

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import shlex
+from pathlib import Path
 
 import pytest
 from lib import jail, shell
@@ -46,6 +47,12 @@ SHARED = frozenset(
     | {"WrapperOption", "WRAPPER_CHDIR", "WRAPPER_WRITES"}
     | {"worker_parse", "chain_bases"}
     | {"env_split_values", "R_ENV_SPLIT", "FLOCK_BODY"}
+    | {"READ_ONLY_WRITE_OPTS", "scan_options", "split_options", "expansion_opaque"}
+    | {"command_family", "interpreter_code", "shell_tokens", "stdin_script", "INTERPRETERS"}
+    | {"_expands", "flag_span", "fed_tokens"}
+    | {"CHAR", "CLOSE", "_flag_value", "_raw_words", "_unquoted", "segment_spans"}
+    | {"git_globals_known", "_TRUSTED_BIN"}
+    | {"shell_params"}
 )
 
 
@@ -193,9 +200,9 @@ def test_quote_walk_marks_spans_escapes_and_quote_marks() -> None:
 
 
 def test_no_quote_loop_outside_the_walker() -> None:
-    # issue 76: the six old loops read quote_walk; none keeps its own quote state.
+    # issue 76, 121: the six old loops read quote_walk (segment_spans now holds _raw_segments').
     tree = _tree("shell.py")
-    users = {"_scan", "_quote_spans", "_raw_segments", "_unquoted_expansion", "_raw_words"}
+    users = {"_scan", "_quote_spans", "segment_spans", "_unquoted_expansion", "_raw_words"}
     users |= {"_unsingled"}
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in users:
@@ -258,7 +265,11 @@ def test_git_sets_name_the_moved_lists() -> None:
         ("nice env -i env -S 'a b'", ["a b"]),
         ("env -uS rm x", []),
         ("env -CS rm x", []),
-        ("env FOO=1 -S x", []),
+        ("env FOO=1 -S x", ["x"]),
+        ("env -a x -S 'touch y'", ["touch y"]),
+        ("env --argv0 x -u A B=1 --split-string=y", ["y"]),
+        ("env -ax -iS y", ["y"]),
+        ("env {-S,x}", [""]),
         ("env -- -S x", []),
         ("env - -S x", []),
         ("env -i rm x", []),
@@ -266,8 +277,38 @@ def test_git_sets_name_the_moved_lists() -> None:
     ],
 )
 def test_env_split_values_reads_getopt_forms(command: str, want: list[str]) -> None:
-    # issue 80: -S in a cluster or a long prefix is found; a value or a plain word is not.
+    # issue 80, 116 (P8): -S in a cluster or long prefix is found; a value or plain word is not.
     assert shell.env_split_values(shlex.split(command)) == want
+
+
+@pytest.mark.parametrize(
+    ("word", "want"),
+    [
+        ("/usr/bin/bash", "bash"),
+        ("./bash", "bash"),
+        ("python3.12", "python"),
+        ("python3", "python"),
+        ("perl5.36.0", "perl"),
+        ("node18", "node"),
+        ("sha256sum", "sha256sum"),
+        ("7z", "7z"),
+    ],
+)
+def test_command_family_strips_the_path_and_folds_the_version(word: str, want: str) -> None:
+    # pin A2 -> A3, P5: a path or versioned name reads as its family.
+    assert shell.command_family(word) == want
+
+
+def test_every_host_shell_entry_is_a_listed_shell_or_a_named_non_shell() -> None:
+    # P6, fix round 1: the list is static; a new /etc/shells entry fails here, never widens.
+    path = Path("/etc/shells")
+    if not path.is_file():
+        pytest.skip("no /etc/shells on this host")
+    lines = (line.strip() for line in path.read_text(encoding="utf-8").splitlines())
+    names = {shell.command_family(line) for line in lines if line.startswith("/")}
+    assert names <= shell._SHELLS | shell.NOT_SHELLS, names - shell._SHELLS - shell.NOT_SHELLS
+    assert not shell._SHELLS & shell.NOT_SHELLS
+    assert {"rbash", "mksh", "ash", "ksh93"} <= shell._SHELLS <= shell.WORKER_WRAPPERS
 
 
 @pytest.mark.parametrize(
@@ -283,6 +324,60 @@ def test_env_split_is_a_worker_finding(command: str, want: str) -> None:
     assert shell._segment_reason(shlex.split(command), 0, main=False) == want
     assert shell._segment_reason(shlex.split("env -S 'touch /x'"), 0, main=True) == shell._FALLBACK
     assert "Next: write the command without env -S" in shell.R_ENV_SPLIT
+
+
+@pytest.mark.parametrize(
+    ("name", "command", "operands", "off"),
+    [
+        ("uniq", "-f 1 in", ["in"], False),
+        ("uniq", "-f1 in", ["in"], False),
+        ("uniq", "-cf1 in", ["in"], False),
+        ("uniq", "-cf 1 in", ["in"], False),
+        ("uniq", "--skip-fields=1 in", ["in"], False),
+        ("uniq", "--skip-fields 1 in", ["in"], False),
+        ("uniq", "--skip-f 1 in", ["in"], False),
+        ("uniq", "--skip 1 in", ["1", "in"], True),
+        ("uniq", "-Q in", ["in"], True),
+        ("uniq", "- out", ["-", "out"], False),
+        ("uniq", "-- -c out", ["-c", "out"], False),
+        ("uniq", "in out -c", ["in", "out"], False),
+        ("uniq", "in -f 1 out", ["in", "out"], False),
+        ("sort", "-uo out in", ["in"], False),
+        ("find", ". -name x -fprint out", ["."], False),
+        # pin A1 -> A3: one row each for the shell variable builtins and git commit.
+        ("export", "-n X=1", ["X=1"], False),
+        ("declare", "-rx Y=2", ["Y=2"], False),
+        ("typeset", "-p", [], False),
+        ("git commit", "-am msg -- a.py", ["a.py"], False),
+        ("git commit", "--message=m -F f -t t b.py", ["b.py"], False),
+    ],
+)
+def test_split_options_strips_each_valued_option_form(
+    name: str, command: str, operands: list[str], off: bool
+) -> None:
+    # P2 to P4: separate, attached, clustered, =, long separate and prefix; - and -- are operands.
+    assert shell.split_options(name, shlex.split(command)) == (operands, off)
+
+
+@pytest.mark.parametrize(
+    ("name", "command", "options"),
+    [
+        ("sort", "-uo out in", ["-u", "-o"]),
+        ("sort", "in --out=f", ["--output"]),
+        ("file", "-bC x", ["-b", "-C"]),
+        ("find", ". -fprintfout %p", ["-fprintf"]),
+        ("find", ". -name -fprint", ["-name"]),
+    ],
+)
+def test_scan_options_names_each_option_met(name: str, command: str, options: list[str]) -> None:
+    assert shell.scan_options(name, shlex.split(command)).options == options
+
+
+def test_each_read_verb_has_an_option_row() -> None:
+    # issue 204: the read verbs' write options sit on their own rows.
+    assert shell.READ_ONLY_CMDS <= shell.OPTION_TABLE.keys()
+    for name, writes in shell.READ_ONLY_WRITE_OPTS.items():
+        assert writes <= shell.OPTION_TABLE[name][0] | shell.OPTION_TABLE[name][1], name
 
 
 RUNNERS = ("setsid", "chroot", "ionice", "taskset", "flock", "unshare", "chrt", "nsenter")

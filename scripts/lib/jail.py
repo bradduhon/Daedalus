@@ -11,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 from lib import dispatch_binding, hook_io, shell
 from lib.audit import _git_env, project_data_dir, project_root
@@ -57,7 +58,9 @@ from lib.credential_paths import clean as _clean
 from lib.credential_paths import credential_hit as _credential_hit
 from lib.credential_paths import credential_roots as _credential_roots
 from lib.credential_paths import dotglob_on as _dotglob_on
+from lib.credential_paths import expand_braces as _expand_braces
 from lib.credential_paths import expand_word as _expand_word
+from lib.credential_paths import quoted_dollar as _quoted_dollar
 from lib.credential_paths import store_rest as _store_rest
 from lib.credential_paths import tilde as _tilde
 from lib.credential_paths import unjudged_root as _unjudged_root
@@ -70,15 +73,20 @@ from lib.shell import (
     _ASSIGN,
     _DEFAULT_BRANCHES,
     _FALLBACK,
+    _FALSE,
     _FIND_DENY,
     _GLOB_CHARS,
     _HOME,
     _PROJECT_DATA,
     _REPO_SCRIPTS,
     _SHELLS,
+    _TRUSTED_BIN,
     _VALUE_LONG_NEXT,
+    CHAR,
+    CLOSE,
     FLOCK_BODY,
     GIT_PLUMBING_REMOTE,
+    INTERPRETERS,
     R_CLEAN,
     R_DATA_DIR_GIT,
     R_DEFAULT_BRANCH,
@@ -88,6 +96,7 @@ from lib.shell import (
     R_STASH_UNTRACKED,
     READ_ONLY_CMDS,
     READ_ONLY_GIT,
+    READ_ONLY_WRITE_OPTS,
     WRAPPER_CHDIR,
     WRAPPER_WRITES,
     WrapperOption,
@@ -95,17 +104,34 @@ from lib.shell import (
     _base,
     _cmd_name,
     _command_reason,
+    _expands,
+    _flag_value,
     _git_split,
     _long_matches,
     _names_project_data,
     _pathspecs,
     _quote_spans,
+    _raw_words,
     _shell_code,
     _short_flags,
     _under,
+    _unquoted,
     chain_bases,
+    command_family,
     env_split_values,
+    expansion_opaque,
+    fed_tokens,
+    flag_span,
+    git_globals_known,
+    interpreter_code,
+    quote_walk,
     runs_claude,
+    scan_options,
+    segment_spans,
+    shell_params,
+    shell_tokens,
+    split_options,
+    stdin_script,
     strip_wrappers,
     tokenize,
     unwrap,
@@ -848,7 +874,8 @@ R_CREDENTIAL_PARAM = (
     "Next: spell the path out"
 )
 # issue 76: time is not here; its WRAPPER_OPTS row reads its options.
-_CONTROL_WORDS = frozenset({"!", "do", "then", "else", "elif", "while", "until", "if"})
+# A2 fix round 4: a brace group's { and } are read past, so its inner command word is read.
+_CONTROL_WORDS = frozenset({"!", "do", "then", "else", "elif", "while", "until", "if", "{", "}"})
 _BINDERS = frozenset({"read", "mapfile", "readarray", "getopts", "select"})
 # issue 76: _command_at's answer when a wrapper option is off shell.WRAPPER_OPTS.
 _OPAQUE = -1
@@ -1303,26 +1330,34 @@ def _read_only_segment(
         return _git_grammar_ok(tokens, git_subcommands, cwd, charter)
     if name not in READ_ONLY_CMDS:
         return False
-    if name == "find":
-        return not any(arg in _FIND_DENY or arg.startswith("-fprint") for arg in args)
-    if name == "sort":
-        return not any(
-            _long_matches(arg, "--output", 1)
-            or _long_matches(arg, "--compress-program", 2)
-            or _long_matches(arg, "--temporary-directory", 1)
-            or {"o", "T"} & _short_flags(arg)
-            for arg in args
-        )
     if name == "rg":
         return not rg_program(args)
+    if name not in READ_ONLY_WRITE_OPTS:
+        return True
+    # P1, issue 204: $, a backtick, a leading glob or any uniq glob may become a write option or
+    # operand; expansion_opaque judges unquoted words where the raw command is known.
+    if any(
+        _TOKEN_EXPANSION.search(arg)
+        or name != "find"
+        and _GLOB_CHARS & set(arg)
+        and (name == "uniq" or arg[:1] == "-" or arg[:1] in _GLOB_CHARS)
+        for arg in args
+    ):
+        return False
+    if name == "find" and any(arg in _FIND_DENY for arg in args):
+        return False
+    scan = scan_options(name, args)
+    if READ_ONLY_WRITE_OPTS[name] & set(scan.options):
+        return False
     if name == "uniq":
-        # 8.5: uniq writes its second positional operand.
-        return len([arg for arg in args if not arg.startswith("-")]) <= 1
-    if name == "file":
-        return not any(arg == "--compile" or "C" in _short_flags(arg) for arg in args)
-    return True
+        # 8.5, P2: uniq writes its second operand; an option off its row may hide one more.
+        return len(scan.operands) + scan.off <= 1
+    # P2: an option off a write verb's row may be a write option the table does not know.
+    return name == "find" or not scan.off
 
 
+# fix1-a2: a $ that opens an expansion, or a backtick; a lone $ (from '$') is literal.
+_TOKEN_EXPANSION = re.compile(r"\$[\w{(@*#?!$-]|`")
 R_LEDGER_ARGS = (
     "append_ledger takes only --probe, or --expected-seq, --entry-file, --repo and --type "
     "once each with a value. Next: run append_ledger from the repo whose ledger you are "
@@ -1706,18 +1741,40 @@ def _gitleaks_ok(tokens: list[str]) -> bool:
 
 
 def _shell_words(command: str) -> list[list[str]]:
+    return [segment.words for segment in _shell_scan(command)]
+
+
+class ScanSegment(NamedTuple):
+    # issue 116: a segment's words, the indices a <<< here-string feeds, and whether a pipe or a
+    # < redirect on fd 0 feeds its stdin (fix round 3).
+    words: list[str]
+    heres: frozenset[int]
+    fed: bool
+    # fix round 4: every here-string on any fd, and whether a < redirect on fd 0 is attached.
+    strings: frozenset[int] = frozenset()
+    redirected: bool = False
+
+
+def _shell_scan(command: str) -> list[ScanSegment]:
     # spec 8: single-quoted or escaped $ is literal; quote edges end a variable name.
-    segments: list[list[str]] = []
+    segments: list[ScanSegment] = []
     words: list[str] = []
+    heres: set[int] = set()
+    strings: set[int] = set()
     cur: list[str] = []
-    started, redirect, quote = False, False, ""
+    started, redirect, quote, op, fd_in, fed = False, False, "", "", True, False
+    redirected = False
     i, n = 0, len(command)
 
     def end_word() -> None:
-        nonlocal cur, started, redirect
+        nonlocal cur, started, redirect, op
         if cur or started:
+            if redirect and op == "<<<":
+                strings.add(len(words))
+            if redirect and op == "<<<" and fd_in:
+                heres.add(len(words))
             words.append((_REDIRECT if redirect else "") + "".join(cur))
-            redirect = False
+            redirect, op = False, ""
         cur, started = [], False
 
     while i < n:
@@ -1745,31 +1802,64 @@ def _shell_words(command: str) -> list[list[str]]:
             cur.append(_LIT if command[i] == "$" else command[i])
             started = True
         elif c in "<>":
+            fd = "".join(cur) if not redirect else ""
+            if fd.isdigit():
+                # issue 116 (fix round 1, row 1): a digit word glued to < or > is its fd.
+                cur, started = [], False
             end_word()
+            if not redirect:
+                op, fd_in = "", fd in {"", "0"} or not fd.isdigit()
+                redirected = redirected or (c == "<" and fd_in)
+                fed = fed or redirected
+            op += c
             redirect = True
             while i + 1 < n and command[i + 1] in "&>":
                 i += 1
+                op += command[i]
         elif c.isspace() or c in ";&|()`":
             end_word()
             if c not in " \t" and words:
-                segments.append(list(words))
+                segments.append(
+                    ScanSegment(list(words), frozenset(heres), fed, frozenset(strings), redirected)
+                )
                 words.clear()
+                heres.clear()
+                strings.clear()
+                fed = redirected = False
+            if c == "|" and "|" not in command[i - 1 : i] + command[i + 1 : i + 2]:
+                fed = True  # fix round 3: a pipe (never ||) feeds the next segment's stdin.
         else:
             cur.append(c)
             started = True
         i += 1
     end_word()
     if words:
-        segments.append(words)
+        segments.append(ScanSegment(words, frozenset(heres), fed, frozenset(strings), redirected))
     return segments
 
 
-def _bash_env(segments: list[list[str]]) -> list[dict[str, list[str]]]:
-    # spec 8: assignments and for-loops bind, read and friends unbind, HOME stays real.
+def _base_env() -> dict[str, list[str]]:
+    # spec 8: the hook's own environment, HOME real, the plugin folders defaulted.
     env = {k: [v] for k, v in os.environ.items()}
     env["HOME"] = [str(Path.home())]
     env.setdefault("CLAUDE_PLUGIN_ROOT", [os.path.dirname(_REPO_SCRIPTS)])
     env.setdefault("CLAUDE_PLUGIN_DATA", [env["HOME"][0] + _DATA_DIR_DEFAULT])
+    return env
+
+
+def _built_value(value: str) -> bool:
+    # fix1-a2 (design 2): a value built by $'..', $"..", a substitution or the unresolved mark.
+    text = _clean(value.replace(_LIT, "_"))
+    built = _UNRESOLVED in value or value.endswith("$") or bool(_substitutions(text))
+    return built or _quoted_dollar(value)
+
+
+def _bash_env(
+    segments: list[list[str]], start: dict[str, list[str]] | None = None, strict: bool = False
+) -> list[dict[str, list[str]]]:
+    # spec 8: assignments and for-loops bind, read and friends unbind, HOME stays real; fix1-a2:
+    # start is the env a body inherits; strict (a body's env) binds a built value as unknown.
+    env = dict(start) if start is not None else _base_env()
     envs: list[dict[str, list[str]]] = []
     changes: list[dict[str, list[str] | None]] = []
     for words in segments:
@@ -1777,10 +1867,13 @@ def _bash_env(segments: list[list[str]]) -> list[dict[str, list[str]]]:
         changed: dict[str, list[str] | None] = {}
         for i, word in enumerate(words):
             name, eq, value = word.partition("=")
-            if eq and _ASSIGN.match(word) and name != "HOME":
+            key = re.split(r"[\[+]", name, maxsplit=1)[0]
+            if eq and _ASSIGN.match(word) and key != "HOME":
                 bound = _expand_word(value, env)
-                unknown = any(u for _, u in bound)
-                changed[name] = None if unknown else [t for t, _ in bound]
+                # issue 121: an append or an array element leaves the value unknown.
+                unknown = key != name or any(u for _, u in bound)
+                unknown = unknown or (strict and _built_value(value))
+                changed[key] = None if unknown else [t for t, _ in bound]
             if clean[i] == "for" and i + 1 < len(words):
                 loop = [x for w in words[i + 3 :] for x in _expand_word(w, env)]
                 listed = i + 2 < len(words) and clean[i + 2] == "in"
@@ -2244,31 +2337,59 @@ def _credential_reason(tool: str, tool_input: dict[str, object], cwd: str) -> st
     return path_reason(tool, tool_input, cwd)
 
 
-def _policy_segments(command: str, depth: int = 0) -> list[list[str]] | None:
+def _chain_folders(segments: list[list[str]], cwd: str | None) -> list[str | None]:
+    # A2 fix round 4: each segment's folder after earlier cd, pushd and popd; None once a move
+    # is opaque. cwd "" knows no folder, so a relative move from it is opaque too.
+    folder = cwd
+    out: list[str | None] = []
+    for words in segments:
+        out.append(folder)
+        plain = [_clean(w) for w in words if not w.startswith(_REDIRECT)]
+        at = _command_at(plain, set())
+        if at is None or at < 0 or _base(plain[at]) not in {"cd", "pushd", "popd"}:
+            continue
+        name = _base(plain[at])
+        args = [w for w in plain[at + 1 :] if w[:1] != "-"]
+        target = args[0] if args and name != "popd" else ""
+        if not target or target[:1] == "~" or _expands(target):
+            folder = None
+        elif os.path.isabs(target) or folder:
+            folder = os.path.normpath(os.path.join(folder or "/", target))
+        else:
+            folder = None
+    return out
+
+
+def _policy_segments(command: str, depth: int = 0, cwd: str | None = "") -> list[list[str]] | None:
     # 0028: see gh and git push through wrappers and shell -c bodies; None means regex fallback.
     if depth > 3:
         return None
-    parsed = tokenize(command)
+    parsed = fed_tokens(command)
     if parsed is None:
         return None
+    folders = _chain_folders([segment for segment, _ in parsed], cwd)
     flat: list[list[str]] = []
-    for segment in parsed:
+    for (segment, fed), folder in zip(parsed, folders, strict=True):
         tokens = strip_wrappers(segment)
         if tokens is None:
             return None
         if not tokens:
             continue
         name = _base(tokens[0])
-        if name in _SHELLS or name == "eval":
-            code = " ".join(tokens[1:]) if name == "eval" else _shell_code(tokens)
-            if code == _FALLBACK:
-                return None
-            inner = _policy_segments(code, depth + 1) if code else []
+        shell = shell_tokens(tokens)
+        if shell is not None or name == "eval":
+            # P6: a -c body is walked; a string read from stdin or hidden by an expansion is not.
+            code = " ".join(tokens[1:]) if shell is None else _shell_code(shell, True, folder)
+            if code is None:
+                continue
+            walk = code and code != _FALLBACK
+            inner = _policy_segments(code, depth + 1, folder) if walk else None
             if inner is None:
                 return None
             flat += inner
             continue
-        inline = name.startswith("python") or name in {"perl", "ruby", "node"}
+        # R-extra-1, P7: only an inline body is unwalkable; a script or -m module is plain.
+        inline = interpreter_code(tokens, stdin=True, fed=fed, base=folder) is not None
         if name not in {"gh", "git"} and (inline or {"gh", "git"} & {_base(t) for t in tokens}):
             return None
         flat.append(tokens)
@@ -2279,7 +2400,7 @@ def _gh_gate(agent: str, cwd: str, command: str) -> str | None:
     # 0035: outside a train, main and unknown agents skip the whole gate, deny classes included.
     if not allowlist_applies(agent, cwd, command):
         return None
-    return gh_reason(agent, command, _policy_segments(command))
+    return gh_reason(agent, command, _policy_segments(command, cwd=cwd))
 
 
 def _train_active(cwd: str) -> bool:
@@ -2290,96 +2411,375 @@ def _train_active(cwd: str) -> bool:
 _TARGET_CAP = 8
 _GIT_DIR_OPTS = ("--git-dir=", "--work-tree=")
 R_SHELL_BODY = (
-    "a shell -c body is one command string the jail does not walk for what it writes "
-    "(issue 81). Next: run the command directly, without bash -c, sh -c or flock -c."
+    "a shell -c body, or a shell command string read from a pipe, stdin, a here-string or a "
+    "heredoc, is one string the jail does not walk for what it writes (issue 81, 116). "
+    "Next: run the command directly, without bash -c, sh -c, flock -c or a shell reading stdin."
+)
+R_INLINE_BODY = (
+    "an inline interpreter body (python -c, perl -e, ruby -e, node -e, php -r, or code read "
+    "from a pipe, - or a here-string) is code the jail cannot walk for what it writes "
+    "(issue 116). Next: save the code as a script file and run it by its path."
 )
 _BODY_DEPTH = 3
 
 
-def _shell_body(words: list[str]) -> str | None:
-    # issue 81: the -c body of a shell; past an unknown long flag, the word after a c flag.
-    code = _shell_code(words)
-    if code != _FALLBACK:
-        return code
-    flags = [k for k, w in enumerate(words) if w[:1] in "-+" and w[1:2] != "-" and "c" in w[1:]]
-    return (words[flags[0] + 1 : flags[0] + 2] or [""])[0] if flags else None
+def _shell_body(words: list[str], stdin: bool = False, base: str | None = "") -> str | None:
+    # issue 81, 116: the -c body of a shell; past an off-table option with no -c, unread.
+    code = _shell_code(words, stdin, base)
+    return ("" if stdin else None) if code == _FALLBACK else code
 
 
-def _hidden_bodies(words: list[str]) -> list[tuple[str, str]]:
-    # issue 80, 81: (finding, command string) for each env -S value and shell or flock -c body.
-    found = [(R_ENV_SPLIT, value) for value in env_split_values(words)]
+def _raw_expands(word: str) -> bool:
+    # fix round 1, row 3: A1's _expands on a _shell_scan word, its quoted spans re-quoted;
+    # fix1-a2: the unresolved mark of a run body's substitution counts as an expansion.
+    if _UNRESOLVED in word:
+        return True
+    parts = word.replace(_REDIRECT, "").replace(_LIT, "_").split(_CUT)
+    safe = [p.replace('"', "_").replace("'", "_").replace("\\", "_") for p in parts]
+    return _expands("".join(f'"{p}"' if k % 2 else p for k, p in enumerate(safe)))
+
+
+def _expanding_lead(raws: list[str]) -> int | None:
+    # fix round 1, rows 2-3: the command word's index when it expands, or when a shell or
+    # interpreter has one in an option position (flag_span); read raw, never one alternative.
+    clean = [_clean(w) for w in raws]
+    lead = _command_at(clean, set())
+    if lead is None or lead < 0:
+        return None
+    if _raw_expands(raws[lead]):
+        return lead
+    start = lead + 1 if command_family(clean[lead]) == "busybox" else lead
+    stop = start + 1 + flag_span(clean[start:])
+    return lead if any(_raw_expands(raws[j]) for j in range(start + 1, stop)) else None
+
+
+class Hidden(NamedTuple):
+    # fix1-a2 (issue 81): a body's finding, its text, and its shell's $0 on (None inherits the
+    # outer ones, () leaves them unknown).
+    reason: str
+    body: str
+    params: tuple[str, ...] | None = None
+
+
+def _hidden_bodies(
+    words: list[str], heres: list[str] | None = None, fed: bool = False, base: str | None = ""
+) -> list[Hidden]:
+    # issue 80, 81, 116: (finding, command string) per env -S value, shell or flock -c body,
+    # shell reading stdin (its here-string, else "") and inline interpreter body ("", unwalked).
+    found = [Hidden(R_ENV_SPLIT, value) for value in env_split_values(words)]
+    options: list[WrapperOption] = []
+    lead = _command_at(words, set(), options)
+    if base:
+        base = _moved_base(words, options, base)  # fix round 4: env -C and sudo -D move it.
+    if lead is not None and lead >= 0 and command_family(words[lead]) == "busybox":
+        lead += 1  # P6: busybox sh reads as a bare sh.
     for at, word in enumerate(words):
         name = _base(word)
-        body = _shell_body(words[at:]) if name in _SHELLS else None
+        stdin = at == lead
+        is_shell = command_family(name) in _SHELLS
+        body = _shell_body(words[at:], stdin, base) if is_shell else None
+        params = shell_params(words[at:]) if is_shell else None
+        if stdin and body == "" and heres:
+            body = heres[0]
         if name == "flock" and (
             hits := [k for k in range(at + 1, len(words)) if words[k].split("=")[0] in FLOCK_BODY]
         ):
             _, eq, value = words[hits[0]].partition("=")
             body = value if eq else (words[hits[0] + 1 : hits[0] + 2] or [""])[0]
+            params = ("sh",)  # fix1-a2: flock runs sh -c <body> with no further words.
+        if stdin and name == "eval":
+            body = " ".join(words[at + 1 :])  # fix round 1, row 7: eval's words are one body.
+        if stdin and name in {"source", "."}:
+            # fix round 1, row 7: a sourced stream is a body; a sourced file path is a script.
+            operands = [w for w in words[at + 1 :] if w[:1] != "-" or w == "-"]
+            body = (
+                (heres[0] if heres else "")
+                if stdin_script(operands[0] if operands else "-", base)
+                else body
+            )
+            params = () if len(operands) > 1 else None  # fix1-a2: words past the file rebind $1.
         if body is not None:
-            found.append((R_SHELL_BODY, body))
+            found.append(Hidden(R_SHELL_BODY, body, params))
+        code = interpreter_code(words[at:], True, fed or bool(heres), base) if stdin else None
+        if code is not None:
+            found.append(Hidden(R_INLINE_BODY, ""))
     return found
 
 
-def _hidden_reason(command: str) -> str | None:
-    # issue 80, 81: the first env -S or -c body in any segment, refused while a train runs.
-    for words in _shell_words(command):
-        hidden = _hidden_bodies([_clean(w) for w in words if not w.startswith(_REDIRECT)])
+def _segment_bodies(
+    segment: ScanSegment, texts: list[str] | None = None, base: str | None = ""
+) -> list[Hidden]:
+    # issue 116: one _shell_scan segment's hidden bodies; texts are its words as expanded.
+    words, heres, fed = segment.words, segment.heres, segment.fed
+    shown = texts if texts is not None else [_clean(w) for w in words]
+    keep = [i for i, w in enumerate(words) if not w.startswith(_REDIRECT)]
+    plain = [shown[i] for i in keep]
+    found = _hidden_bodies(plain, [_clean(shown[i]) for i in sorted(heres)], fed, base)
+    # fix round 4, design A: every here-string is walked, whatever command or group reads it.
+    found += [Hidden("", _clean(shown[i])) for i in sorted(segment.strings)]
+    raws = [words[i] for i in keep]
+    lead = _expanding_lead(raws)
+    if lead is not None:
+        # fix round 1, rows 2-3: a shell or interpreter body is unread, so refused in a run;
+        # each plain word after the command word is walked ("" marks a walk with no finding).
+        word = _clean(raws[lead])
+        fams = {command_family(a) for a in _expand_braces(word) or [word]}
+        fams.add(command_family(plain[lead]))
+        if fams & (_SHELLS | INTERPRETERS | {"eval", "source", "."}):
+            found.append(Hidden(R_INLINE_BODY if fams & INTERPRETERS else R_SHELL_BODY, ""))
+        found += [Hidden("", w) for w in plain[lead + 1 :] if w and w[:1] != "-"]
+    return found
+
+
+def _lead_word(segment: ScanSegment) -> str | None:
+    # fix round 4: a segment's command word past control words and wrappers; "" when opaque.
+    plain = [_clean(w) for w in segment.words if not w.startswith(_REDIRECT)]
+    at = _command_at(plain, set())
+    return None if at is None else plain[at] if at >= 0 else ""
+
+
+def _hidden_reason(command: str, cwd: str | None = "") -> str | None:
+    # issue 80, 81, 116: the first hidden body in any segment, refused while a train runs.
+    segments = _shell_scan(command)
+    folders = _chain_folders([s.words for s in segments], cwd)
+    for segment, folder in zip(segments, folders, strict=True):
+        hidden = [h.reason for h in _segment_bodies(segment, None, folder) if h.reason]
         if hidden:
-            return hidden[0][0]
+            return hidden[0]
+    # fix round 4, design B: stdin fed to a group, subshell or bare exec while code runs.
+    leads = [_lead_word(s) for s in segments]
+    runners = _SHELLS | INTERPRETERS | {"busybox", "eval", "source", "."}
+    if any(lead and command_family(lead) in runners for lead in leads) and any(
+        s.redirected and lead is None for s, lead in zip(segments, leads, strict=True)
+    ):
+        return R_SHELL_BODY
     return None
 
 
 def _body_past_cap(command: str, depth: int = 0) -> bool:
     # issue 81: a body nested past _BODY_DEPTH is never walked, so the call is judged in a train.
-    for words in _shell_words(command):
-        for _, body in _hidden_bodies([_clean(w) for w in words if not w.startswith(_REDIRECT)]):
-            if depth >= _BODY_DEPTH or _body_past_cap(body, depth + 1):
+    for segment in _shell_scan(command):
+        for hidden in _segment_bodies(segment):
+            if depth >= _BODY_DEPTH or _body_past_cap(hidden.body, depth + 1):
                 return True
     return False
 
 
+_UNRESOLVED = "\x03"  # fix1-a2: marks a word a run body's walk could not resolve.
+_PARAM_NAME = re.compile(r"[0-9]+|[@*#]")
+
+
+def _inner_env(
+    prior: dict[str, list[str]], words: list[str], params: tuple[str, ...] | None
+) -> dict[str, list[str]]:
+    # fix1-a2 (issue 81): a body sees the chain's env before its segment, the segment's own
+    # NAME=value prefixes, then its shell's $0 on; () unbinds them, None keeps the outer ones.
+    clean = [_clean(w) for w in words]
+    at = _command_at(clean, {i for i, w in enumerate(words) if w.startswith(_REDIRECT)})
+    stop = at if at is not None and at >= 0 else len(words)
+    prefix = [w for w in words[:stop] if _ASSIGN.match(w)]
+    env = _bash_env([prefix], prior, True)[0] if prefix else dict(prior)
+    if params is None:
+        return env
+    env = {k: v for k, v in env.items() if not _PARAM_NAME.fullmatch(k)}
+    if params:
+        env.update({str(n): [p] for n, p in enumerate(params)})
+        env["@"] = env["*"] = list(params[1:]) or [""]
+        env["#"] = [str(len(params) - 1)]
+    return env
+
+
+def _segment_targets(words: list[str], texts: list[str], cwd: str) -> tuple[list[str], str | None]:
+    # issue 30, 76: one segment's anchored write targets, and the folder its command runs in.
+    clean = [_clean(w) for w in words]
+    redirects = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
+    options: list[WrapperOption] = []
+    at = _command_at(clean, redirects, options)
+    # issue 76: redirects and the wrapper's own output open in cwd; the command's in base.
+    picks = [texts[i] for i in sorted(redirects)] + _option_values(texts, options, WRAPPER_WRITES)
+    base = _moved_base(texts, options, cwd)
+    acts = [base] if base is not None and base != cwd else []
+    plain_raw = [w for i, w in enumerate(words) if i not in redirects]
+    if at == _OPAQUE or base is None or _expanding_lead(plain_raw) is not None:
+        picks += _opaque_targets(texts, _opaque_words(clean, redirects), cwd)
+    elif at is not None:
+        name = _base(clean[at])
+        args = [texts[i] for i in range(at + 1, len(words)) if i not in redirects]
+        if name in {"cd", "pushd"}:
+            acts += [a for a in args if not a.startswith("-")][:1]
+        elif name == "git":
+            sub, _, globals_ = _git_split(["git", *args])
+            # spec 6: worktree reads by name only after its grammar; add and remove act on -C.
+            if sub not in READ_ONLY_GIT or sub == "worktree":
+                pairs = zip(globals_, globals_[1:], strict=False)
+                acts += [value for flag, value in pairs if flag == "-C"]
+                acts += [g.split("=", 1)[1] for g in globals_ if g.startswith(_GIT_DIR_OPTS)]
+        elif name in CODER_WRITE_CMDS or (name in {"sed", "perl"} and _in_place(name, args)):
+            acts += [a for a in _write_operands(name, args) if a != "-"]
+    found = [t for t in (_anchor(p, cwd) for p in picks) if t]
+    found += [t for t in (_anchor(p, base or cwd) for p in acts) if t]
+    return found, base
+
+
+_PIECE_CUT = re.compile(r"[\s;&|()<>`$={}]+")
+
+
 def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
     # issue 30: redirects, write operands, cd targets and git -C name the repos a command acts on.
-    segments = _shell_words(command)
-    envs = _bash_env(segments)
-    found: list[str] = []
-    for k, words in enumerate(segments):
-        clean = [_clean(w) for w in words]
-        texts = [(_expand_word(w, envs[k]) or [("", False)])[0][0] for w in words]
-        redirects = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
-        options: list[WrapperOption] = []
-        at = _command_at(clean, redirects, options)
-        # issue 76: redirects and the wrapper's own output open in cwd; the command's in base.
-        picks = [texts[i] for i in sorted(redirects)] + _option_values(
-            texts, options, WRAPPER_WRITES
-        )
-        base = _moved_base(texts, options, cwd)
-        acts = [base] if base is not None and base != cwd else []
-        if at == _OPAQUE or base is None:
-            picks += _opaque_targets(texts, _opaque_words(clean, redirects), cwd)
-        elif at is not None:
-            name = _base(clean[at])
-            args = [texts[i] for i in range(at + 1, len(words)) if i not in redirects]
-            if name in {"cd", "pushd"}:
-                acts += [a for a in args if not a.startswith("-")][:1]
-            elif name == "git":
-                sub, _, globals_ = _git_split(["git", *args])
-                # spec 6: worktree reads by name only after its grammar; add and remove act on -C.
-                if sub not in READ_ONLY_GIT or sub == "worktree":
-                    pairs = zip(globals_, globals_[1:], strict=False)
-                    acts += [value for flag, value in pairs if flag == "-C"]
-                    acts += [g.split("=", 1)[1] for g in globals_ if g.startswith(_GIT_DIR_OPTS)]
-            elif name in CODER_WRITE_CMDS or (name in {"sed", "perl"} and _in_place(name, args)):
-                acts += [a for a in _write_operands(name, args) if a != "-"]
-        found += [t for t in (_anchor(p, cwd) for p in picks) if t]
-        found += [t for t in (_anchor(p, base or cwd) for p in acts) if t]
-        if depth < _BODY_DEPTH:
-            # issue 80, 81: a hidden body's own targets name the repo, so a train scopes the call.
-            plain = [texts[i] for i in range(len(words)) if i not in redirects]
-            for _, body in _hidden_bodies(plain):
-                found += _bash_write_dirs(body, base or cwd, depth + 1)
+    # fix1-a2 (0035): a run body's unresolved write makes every piece of the text an opaque target.
+    found, opaque = _write_walk(command, cwd, depth)
+    if opaque:
+        cut = _PIECE_CUT.split(re.sub(r"[\"'\\]", "", command))
+        pieces = list(dict.fromkeys(p for p in cut if p))
+        found += _opaque_targets(pieces, set(range(len(pieces))), cwd)
     return found
+
+
+def _rebinds(words: list[str]) -> bool:
+    # fix1-a2 (R1): shift, set with an operand, getopts, read or mapfile naming a positional,
+    # eval, source or ., or an unknown command word; builtin and command are read past.
+    raws = [w for w in words if not w.startswith(_REDIRECT)]
+    clean = [_clean(w) for w in raws]
+    at = _command_at(clean, set())
+    if at is None:
+        return False
+    if at < 0 or _expanding_lead(raws) is not None:
+        return True  # fix1-a2 (design 1): a built command word may be set or shift.
+    name, args = _base(clean[at]), clean[at + 1 :]
+    while name in {"builtin", "command"}:
+        args = list(itertools.dropwhile(lambda a: a[:1] == "-", args))
+        if not args:
+            return False
+        name, args = _base(args[0]), args[1:]
+    if name in {"shift", "getopts", "eval", "source", "."}:
+        return True
+    if name == "set":
+        return _set_operands(args)
+    return name in {"read", "mapfile", "readarray"} and any(_PARAM_NAME.fullmatch(a) for a in args)
+
+
+def _set_operands(args: list[str]) -> bool:
+    # fix1-a2 (R1): set rebinds on --, on - with operands after it, or on a bare word; -o and +o
+    # (alone or ending a cluster) take the next word as their value.
+    skip = False
+    for k, arg in enumerate(args):
+        if skip:
+            skip = False
+        elif arg == "--" or (arg == "-" and k + 1 < len(args)):
+            return True
+        elif arg[:1] in {"-", "+"} and len(arg) > 1:
+            skip = "o" in arg[1:]
+        elif arg != "-":
+            return True
+    return False
+
+
+def _drop_positionals(segments: list[list[str]], envs: list[dict[str, list[str]]]) -> None:
+    # fix1-a2 (R1): after a rebind, or anywhere in a body with a loop, $0 on are unknown.
+    hits = [k for k, words in enumerate(segments) if _rebinds(words)]
+    if not hits:
+        return
+    looped = any(words and _clean(words[0]) == "do" for words in segments)
+    for env in envs[0 if looped else hits[0] + 1 :]:
+        for key in [k for k in env if _PARAM_NAME.fullmatch(k)]:
+            del env[key]
+
+
+def _heredoc_text(text: str, env: dict[str, list[str]]) -> list[tuple[str, bool]]:
+    # fix1-a2 (R3): an unquoted heredoc as bash hands it on: $ words expanded in the outer env,
+    # \$ to $, \\ to \ and \` to a backtick.
+    held = text.replace("\\\\", "\x04").replace("\\$", _LIT).replace("\\`", "`")
+    return [(t.replace("\x04", "\\"), u) for t, u in _expand_word(held, env) or [(text, True)]]
+
+
+def _write_walk(
+    command: str,
+    cwd: str,
+    depth: int = 0,
+    start: dict[str, list[str]] | None = None,
+    run: bool = False,
+) -> tuple[list[str], bool]:
+    # issue 30, 81, fix1-a2: the targets of every expansion alternative, and whether a body a
+    # shell runs (run) writes through a word the walk cannot resolve.
+    subs = _substitutions(command) if run else []
+    for inner in subs:
+        # fix1-a2 (R2): a run body's substitution is an unresolved part of its own word.
+        for form in (f"$({inner})", f"`{inner}`", f"<({inner})", f">({inner})"):
+            command = command.replace(form, _UNRESOLVED)
+    scanned = _shell_scan(command)
+    segments = [segment.words for segment in scanned]
+    folders = _chain_folders(segments, cwd)
+    envs = _bash_env(segments, start, run)
+    if run:
+        _drop_positionals(segments, envs)
+    body_envs = envs if run else _bash_env(segments, start, True)
+    priors = [start if start is not None else _base_env(), *body_envs[:-1]]
+    found: list[str] = []
+    opaque = False
+    walked: set[tuple[str, str, str, tuple[str, ...] | None]] = set()
+    for k, words in enumerate(segments):
+        alts = [_expand_word(w, envs[k]) or [("", False)] for w in words]
+        for j in range(max(len(a) for a in alts)):
+            picked = [a[min(j, len(a) - 1)] for a in alts]
+            hidden_q = [run and _quoted_dollar(w) for w in words]
+            texts = [
+                t + _UNRESOLVED if run and (u or q) else t
+                for (t, u), q in zip(picked, hidden_q, strict=True)
+            ]
+            targets, base = _segment_targets(words, texts, cwd)
+            opaque = opaque or any(_UNRESOLVED in t for t in targets)
+            found += [t.replace(_UNRESOLVED, "") for t in targets]
+            if depth >= _BODY_DEPTH:
+                continue
+            inner_cwd = (base or cwd).replace(_UNRESOLVED, "")
+            # issue 80, 81, 116: a hidden body's own targets name the repo, so a train scopes it.
+            for hidden in _segment_bodies(scanned[k], texts, folders[k]):
+                key = (inner_cwd, *hidden)
+                if key in walked:
+                    continue
+                walked.add(key)
+                opaque = opaque or (bool(hidden.reason) and _UNRESOLVED in hidden.body)
+                env = _inner_env(priors[k], words, hidden.params)
+                body = hidden.body.replace(_UNRESOLVED, "")
+                more, hid = _write_walk(body, inner_cwd, depth + 1, env, bool(hidden.reason))
+                found += more
+                opaque = opaque or hid
+    for inner in subs if depth < _BODY_DEPTH else []:
+        more, hid = _write_walk(inner, cwd, depth + 1, start, True)
+        found += more
+        opaque = opaque or hid
+    for doc in _heredocs(command)[1] if depth < _BODY_DEPTH else []:
+        more, hid = _heredoc_walk(doc, cwd, depth, start, run)
+        found += more
+        opaque = opaque or hid
+    return found, opaque
+
+
+def _heredoc_walk(
+    doc: _Body, cwd: str, depth: int, start: dict[str, list[str]] | None, run: bool
+) -> tuple[list[str], bool]:
+    # fix1-a2 (issue 81, R3): a heredoc a shell reads is walked as a run body with the reader's
+    # $0 on bound; an unquoted one is first expanded as bash expands it for the reader.
+    owner = _shell_scan(doc.own)
+    if not owner:
+        return [], False
+    lead = [s.words for s in _shell_scan(doc.before)]
+    prior = _bash_env(lead, start, True)[-1] if lead else (start or _base_env())
+    words = owner[0].words
+    texts = [(_expand_word(w, prior) or [("", False)])[0][0] for w in words]
+    for hidden in _segment_bodies(owner[0], texts, cwd):
+        if hidden.reason == R_SHELL_BODY and not hidden.body:
+            env = _inner_env(prior, words, hidden.params)
+            found: list[str] = []
+            opaque = False
+            for text, unknown in (
+                [(doc.text, False)] if doc.quoted else _heredoc_text(doc.text, prior)
+            ):
+                more, hid = _write_walk(text, cwd, depth + 1, env, True)
+                found += more
+                opaque = opaque or hid or (unknown and run)
+            return found, opaque
+    return [], False
 
 
 def _write_dirs(tool: str, tool_input: dict[str, object], cwd: str) -> list[str]:
@@ -2459,10 +2859,12 @@ def _moved_segment(
         return verb, False
     if _INTERPRETER.fullmatch(_base(verb)) and "-m" in clean[at + 1 :]:
         return f"{verb} -m", False
-    # issue 188: uniq writes its second operand, which the base read grammar admits.
-    operands = [w for w in clean[at + 1 :] if w == "-" or not w.startswith("-")]
-    if _base(verb) == "uniq" and len(operands) > 1 and not os.path.isabs(operands[1]):
-        return operands[1], False
+    if _base(verb) == "uniq":
+        # issue 188, 204: uniq writes its second operand, which the base read grammar admits.
+        args = [clean[i] for i in range(at + 1, len(clean)) if i not in redirects]
+        operands = split_options("uniq", args)[0]
+        if len(operands) > 1 and not os.path.isabs(operands[1]):
+            return operands[1], False
     named, plain = False, False
     for i in range(at + 1, len(words)):
         alts = _expand_word(words[i], env) if i not in redirects else []
@@ -2532,7 +2934,7 @@ def _ours(raw_agent: str) -> bool:
 def _foreign_read_ok(command: str, cwd: str, charter: str | None) -> bool:
     # 0100: the auditor's per-segment read-only class, pipes included; no env-prefix strip.
     segments = tokenize(command)
-    if not segments:
+    if not segments or expansion_opaque(command):
         return False
     return all(_read_only_segment(s, READ_ONLY_GIT, cwd, charter) for s in segments)
 
@@ -2561,7 +2963,7 @@ def _unknown_decision(
     # issue 81: a body past the walk's cap may name any repo, so it fails closed.
     if repo is None and not (command and _body_past_cap(command)):
         return _allow()
-    hidden = _hidden_reason(command) if command else None
+    hidden = _hidden_reason(command, cwd) if command else None
     if hidden is not None or repo is None:
         return _block(hidden or R_SHELL_BODY)
     if tool == "Bash" and _foreign_read_ok(command, cwd, charter):
@@ -2705,16 +3107,68 @@ R_EXCLUDED_ICASE = (
     "root under another spelling (issue 97). Next: spell each path in its exact case, without "
     ":(icase), the short :i: form, --icase-pathspecs or GIT_ICASE_PATHSPECS."
 )
-# issue 97: the icase spellings an unparsed command may carry.
+# issue 97, 121: the icase spellings an unparsed command may carry; git reads the last two exactly.
 _ICASE_TEXT = re.compile(
-    r":\([^)]*\bicase\b|(?:^|[\s'\"=]):[^\s:(]*i[^\s:]*:|--icase-pathspecs|GIT_ICASE_PATHSPECS",
+    r":\([^)]*\bicase\b|(?:^|[\s'\"=]):[^\s:(]*i[^\s:]*:"
+    r"|(?-i:--icase-pathspecs|GIT_ICASE_PATHSPECS)",
     re.I,
 )
+_ICASE_ENV = "GIT_ICASE_PATHSPECS"
+# issue 121 (P10): builtins whose operands set a variable; export always exports, -x or set -a
+# makes the rest export.
+_SETTERS = frozenset({"export", "declare", "typeset", "local", "readonly"})
+_GIT_WORD = re.compile(r"\bgit\b")
+# issue 121: nesting of substitutions and heredoc bodies walked before a text is judged whole.
+_TEXT_DEPTH = 6
+# issue 121 (G1): raw constructs the quote model may misread; any one makes a text not simple.
+_NOT_SIMPLE_RAW = re.compile(r"\$\(|`|\$'|\$\"|<\(|>\(|<<<|\$\{[^}]*=")
+_NOT_SIMPLE_WORD = re.compile(
+    r"(?<![\w.-])(?:eval|source|xargs|read|mapfile|readarray|declare|typeset|local|readonly|set"
+    r"|shopt|export|env|alias|function|trap|command_not_found_handle)(?![\w-])"
+    r"|\bprintf\b[^;&|\n]*\s-[A-Za-z]*v|\(\s*\)"
+)
+# issue 121 (U1): what may rebind the word git: hash, enable, alias, a function, source or
+# command -p; each also makes a text not plainly simple (U2 reads PATH apart).
+_FOREIGN_GIT = re.compile(
+    r"(?<![\w.-])(?:hash|enable|alias|unalias|source|function)(?![\w-])"
+    r"|\(\s*\)|\bcommand(?:\s+-[A-Za-z]+)*?\s+-[A-Za-z]*p"
+)
+# issue 121 (U2): the variables that choose which git runs, as whole words.
+_RUNS_GIT_WORD = re.compile(r"(?<![A-Za-z0-9_])(?:PATH|GIT_EXEC_PATH)(?![A-Za-z0-9_])")
+# issue 121 (U1): a word naming git through a folder, read in a text that is not plainly simple.
+_GIT_PATH = re.compile(r"(?<![\w.-])\S*/git(?![\w.-])")
+# issue 121 (F1): words that may stand before a command word; . or source after them sources.
+_LEADERS = _CONTROL_WORDS | {"time", "(", "-p", "--"}
+_FD_NAME = re.compile(r"^\{[A-Za-z_][A-Za-z0-9_]*\}$")
+# issue 121 (G1): the heredoc a plainly simple text may hold, its delimiter a plain word, quoted
+# or bare; a bare one's body must hold no $, backtick or backslash.
+_SIMPLE_HEREDOC = re.compile(
+    r"<<(-?)[ \t]*(?:(['\"])([A-Za-z_][A-Za-z0-9_]*)\2|([A-Za-z_][A-Za-z0-9_]*))(?=[\s;&|<>)]|$)"
+)
+# issue 121 (G1, G4): words judged in a text that is not plainly simple, as the base judged it.
+_JUDGED_WORD = re.compile(r"\b(?:add|stage|commit|update-index|stash)\b")
+_SYNTH = re.compile(
+    r"[$`{*?]|\[[^\s\]]*\]|(?<![\w.-])(?:eval|source|alias|xargs)(?![\w-])|(?:^|[\s;&|(])\.\s"
+)
+_XARGS = re.compile(r"(?<![\w.-])xargs(?![\w.-])")
+_SHELL_WORD = re.compile(r"(?<![\w.-])(?:" + "|".join(sorted(_SHELLS)) + r")(?![\w.-])")
+R_EXCLUDED_UNSEEN = (
+    "git stages, commits or stashes paths it reads through {source}, which the jail cannot see, "
+    "so they may name a file in an excluded root (issue 121). Next: name each path on the git "
+    "command line."
+)
+# issue 121 (P11): a heredoc operator, its - form and its delimiter word as typed.
+_HEREDOC = re.compile(r"<<(-?)[ \t]*((?:'[^'\n]*'|\"[^\"\n]*\"|\\.|[^\s;&|<>()'\"\\])+)")
 WARN_EXCLUDED_FAILED = "The excluded folders could not be resolved, so this command went unchecked."
 _EXCLUDED_GIT = frozenset({"add", "stage", "commit", "update-index", "stash"})
 _STASH_READS = frozenset({"list", "show", "pop", "apply", "drop", "clear", "branch", "create"})
 _EXCLUDED_WORDS = re.compile(r"\bgit\b[^;&|]*\b(?:add|stage|commit|update-index|stash)\b|\bgh\b")
 _EXCLUDED_WRITES = re.compile(r">|\btee\b")
+# issue 121 (F2): a judged git subcommand as a whole word, and an unquoted brace list or sequence.
+_JUDGED_GIT_WORD = re.compile(
+    r"(?<![\w-])(?:" + "|".join(sorted(map(re.escape, _EXCLUDED_GIT))) + r")(?![\w-])"
+)
+_BRACE_LIST = re.compile(r"\{[^\s{}]*(?:,|\.\.)[^\s{}]*\}")
 ExcludedRoots = Callable[[], tuple[ExcludedRoot, ...]]
 
 
@@ -2834,32 +3288,128 @@ def _icase_spec(spec: str) -> bool:
     return spec.startswith(":") and ":" in spec[1:] and "i" in spec[1:].split(":", 1)[0].lower()
 
 
-def _icase_git(segment: list[str], tokens: list[str]) -> str | None:
-    # issue 97: the icase pathspec, global option or environment variable a git call carries.
-    sub, args, globals_ = _git_split(tokens)
-    env = [w for w in segment if w.split("=", 1)[0] == "GIT_ICASE_PATHSPECS" and "=" in w]
-    spellings = env + [g for g in globals_ if g == "--icase-pathspecs"]
-    paths = _git_parts(sub or "", args)[0]
+def _judged_git(sub: str | None, args: list[str]) -> bool:
+    # D.5, issue 121 (P11): the git subcommands the excluded roots check judges; reads never.
+    return sub in _EXCLUDED_GIT and not (sub == "stash" and bool(args) and args[0] in _STASH_READS)
+
+
+def _icase_on(raw: str) -> bool:
+    # issue 121 (P10, R1): NAME[+]=VALUE as typed may turn icase on, the name read after quote
+    # removal; a name the shell expands is opaque, += appends, and git reads "", 0, false as off.
+    cut = raw.find("=")
+    if _expands(raw if cut < 0 else raw[:cut]):
+        return True
+    name, eq, value = _unquoted(raw).partition("=")
+    base = re.split(r"[\[+]", name, maxsplit=1)[0]
+    if eq and base != name:
+        # issue 121: an append or an array element may leave it on.
+        return base == _ICASE_ENV
+    if name != _ICASE_ENV:
+        return False
+    return not eq or _expands(raw[cut + 1 :]) or value.lower() not in _FALSE | {""}
+
+
+def _allexport(args: list[str]) -> bool:
+    # issue 121 (R2): set -a (any cluster holding a), set -o allexport or shopt -so allexport,
+    # read after quote removal; an option word the shell expands may be either.
+    for raw in args:
+        word = _unquoted(raw)
+        if _expands(raw) or word == "allexport":
+            return True
+        if word[:1] == "-" and word[1:2] != "-" and "a" in word:
+            return True
+    return False
+
+
+def _icase_exports(
+    own: list[str], tokens: list[str], heads: list[str], allexport: bool
+) -> tuple[bool, bool]:
+    # issue 121 (P10, R1, R2): (this segment exports GIT_ICASE_PATHSPECS to later ones, it turns
+    # allexport on); options are read after quote removal, names by _icase_on.
+    if all(_ASSIGN.match(t) for t in tokens):
+        return allexport and any(_icase_on(w) for w in own), False
+    name, args = command_family(tokens[0]), heads[1:]
+    if _expands(heads[0]):
+        named = [w for w in heads if _unquoted(w) == _ICASE_ENV or (w[:1] != "-" and "=" in w)]
+        return any(_icase_on(w) for w in named), _allexport(args)
+    if name in {"set", "shopt"}:
+        return False, _allexport(args)
+    if name not in _SETTERS:
+        return False, False
+    operands, off = split_options(name, tokens[1:])
+    exports = name == "export" or off or allexport or any(_expands(w) for w in args)
+    exports = exports or "-x" in scan_options(name, tokens[1:]).options
+    named = [w for w, t in zip(args, tokens[1:], strict=True) if t in operands or _expands(w)]
+    return exports and any(_icase_on(w) for w in named), False
+
+
+def _unseen_paths(lead: list[str], args: list[str]) -> str | None:
+    # issue 121 (design 6): how a judged git call takes paths the jail cannot read, if it does.
+    if any(command_family(w) == "xargs" for w in lead):
+        return "xargs"
+    for arg in args:
+        if _long_matches(arg, "--pathspec-from-file", 11):
+            return "--pathspec-from-file"
+        if _long_matches(arg, "--stdin", 3) or _long_matches(arg, "--index-info", 7):
+            return arg.split("=", 1)[0]
+    return None
+
+
+def _unseen_git(lead: list[str], tokens: list[str], heads: list[str]) -> str | None:
+    # issue 121 (design 6): _unseen_paths for a judged git segment, an opaque subcommand included.
+    sub, args, globals_ = _git_split(["git", *tokens[1:]])
+    at = len(tokens) - len(args) - 1
+    unknown = _expands(heads[at]) or not git_globals_known(globals_)
+    if sub is None or not (unknown or _judged_git(sub, args)):
+        return None
+    return _unseen_paths(lead, args)
+
+
+def _icase_git(
+    prefix: list[tuple[str, str]], tokens: list[str], heads: list[str], exported: bool
+) -> str | None:
+    # issue 97, 121 (P10, P11): the icase spelling a judged git call carries, its prefix
+    # assignments, its global option and a chain export included; -c never relaxes it.
+    sub, args, globals_ = _git_split(["git", *tokens[1:]])
+    at = len(tokens) - len(args) - 1
+    # issue 121 (S2): a global option outside git's tables makes the subcommand unknown, so judged.
+    opaque = sub is not None and (_expands(heads[at]) or not git_globals_known(globals_))
+    if not (opaque or _judged_git(sub, args)):
+        return None
+    spellings = [_unquoted(w) for tok, w in prefix if _ASSIGN.match(tok) and _icase_on(w)]
+    spellings += [_ICASE_ENV] if exported else []
+    spellings += [g for g in globals_ if g == "--icase-pathspecs"]
+    if opaque:
+        paths = tokens[at:]
+    elif sub == "commit":
+        paths = split_options("git commit", args)[0]  # pin A1 -> A3: a message is no pathspec.
+    else:
+        paths = _git_parts(sub or "", args)[0]
     spellings += [p for p in paths for c in _candidates(p) if _icase_spec(c)]
     return spellings[0] if spellings else None
 
 
 def _excluded_git(tokens: list[str], base: str, roots: ExcludedRoots) -> str | None:
     sub, args, globals_ = _git_split(tokens)
-    if sub not in _EXCLUDED_GIT or (sub == "stash" and args[:1] and args[0] in _STASH_READS):
+    # issue 121 (S2, T1): a global outside git's tables leaves the subcommand unknown, so judged.
+    unknown = sub is not None and not git_globals_known(globals_)
+    if sub is None or not (unknown or _judged_git(sub, args)):
         return None
     where = _git_dir(globals_, base)
     tree = _work_tree(where)
     active = _active_roots(roots(), tree)
     if not active:
         return None
-    what = f"git {sub}"
+    what = "git" if unknown else f"git {sub}"
     hit = _root_of(where, active)
     if hit is not None:
         return R_EXCLUDED_PATH.format(what=what, path=where, root=hit.path)
-    paths, flags = _git_parts(sub, args)
-    whole, force = _whole_tree(sub, flags)
-    stages = sub in {"add", "stage", "stash"}
+    if unknown:
+        paths, whole, force, stages = [w for w in (sub, *args) if w[:1] != "-"], False, False, True
+    else:
+        paths, flags = _git_parts(sub, args)
+        whole, force = _whole_tree(sub, flags)
+        stages = sub in {"add", "stage", "stash"}
     spans = [tree] if whole else []
     for raw in paths:
         for cand in _candidates(raw):
@@ -2900,13 +3450,512 @@ def _excluded_named(what: str, tokens: list[str], base: str, roots: ExcludedRoot
     return None
 
 
+def _stdin_message(text: str) -> bool:
+    # issue 121 (P11): text runs git commit taking its message, and no pathspec, from stdin.
+    rest = strip_wrappers([_unquoted(w) for w in _raw_words(text)])
+    if not rest or command_family(rest[0]) != "git":
+        return False
+    sub, args, globals_ = _git_split(["git", *rest[1:]])
+    if sub != "commit" or any(a.startswith("--pathspec") for a in args):
+        return False
+    if not git_globals_known(globals_):
+        return False
+    return stdin_script(_flag_value("git commit", args, frozenset({"-F", "--file"}), len(args)))
+
+
+def _heredoc_end(text: str, word: str, dash: bool) -> int:
+    # issue 121: the index past a heredoc body's delimiter line, or the end when none closes it.
+    at = 0
+    while at < len(text):
+        stop = text.find("\n", at) + 1 or len(text)
+        line = text[at:stop].rstrip("\n")
+        if (line.lstrip("\t") if dash else line) == word:
+            return stop
+        at = stop
+    return len(text)
+
+
+def _piped_message(line: str, seps: list[int], own: str, stop: int) -> bool:
+    # issue 121 (design 5): a bare or cat segment whose pipe runs straight into git commit -F -.
+    if line[stop : stop + 1] != "|" or line[stop + 1 : stop + 2] == "|":
+        return False
+    rest = strip_wrappers([_unquoted(w) for w in _raw_words(own)])
+    if rest is None or (rest and command_family(rest[0]) != "cat"):
+        return False
+    if any(a != "-" and a[:1] != "-" for a in (rest or [""])[1:]):
+        return False
+    after = stop + 2 if line[stop + 1 : stop + 2] == "&" else stop + 1
+    end = min((k for k in seps if k >= after), default=len(line))
+    return _stdin_message(line[after:end])
+
+
+class _Body(NamedTuple):
+    # issue 121 (R7): a heredoc body, whether its delimiter was quoted, whether it is a message.
+    text: str
+    quoted: bool
+    message: bool
+    # fix1-a2 (issue 81): the segment that reads the body, and the text before that segment.
+    own: str = ""
+    before: str = ""
+
+
+def _heredocs(command: str) -> tuple[str, list[_Body]]:
+    # issue 121 (R7, P11): the command with every heredoc body taken out, and the bodies; a
+    # heredoc inside ( ) or $( ) is not recognised, so its body stays in the command.
+    out: list[str] = []
+    bodies: list[_Body] = []
+    rest = command
+    while rest:
+        pending: list[tuple[bool, str, int, int, int]] = []
+        seps: list[int] = []
+        depth, cut = 0, len(rest)
+        for lex in quote_walk(rest):
+            char, at = lex.text, lex.at
+            if lex.quote or lex.kind != CHAR:
+                continue
+            seps += [at] if char in ";&|\n()" else []
+            if char == "\n" and pending:
+                cut = at + 1
+                break
+            depth += {"(": 1, ")": -1}.get(char, 0)
+            doc = _HEREDOC.match(rest, at) if char == "<" and depth == 0 else None
+            if doc and rest[at - 1 : at] != "<" and not rest.startswith("<<<", at):
+                begin = seps[-1] + 1 if seps else 0
+                pending.append((doc.group(1) == "-", doc.group(2), begin, at, doc.end()))
+        out.append(rest[:cut])
+        line, rest = rest[:cut], rest[cut:]
+        for dash, word, begin, op, past in pending:
+            stop = min((k for k in seps if k >= past), default=cut)
+            end = _heredoc_end(rest, _unquoted(word), dash)
+            own = line[begin:op] + " " + line[past:stop]
+            message = _stdin_message(own) or _piped_message(line, seps, own, stop)
+            quoted = bool(set("'\"\\") & set(word))
+            before = "".join(out[:-1]) + line[:begin]
+            bodies.append(_Body(rest[:end], quoted, message, own, before))
+            rest = rest[end:]
+    return "".join(out), bodies
+
+
+def _closing(text: str, at: int, close: str) -> int:
+    # issue 121 (R6): the index of the ) or backtick closing a substitution opened before at.
+    depth, quote = 0, ""
+    while at < len(text):
+        char = text[at]
+        if quote:
+            quote = "" if char == quote else quote
+            at += 1 if char == "\\" and quote == '"' else 0
+        elif char == "\\":
+            at += 1
+        elif char == close and depth == 0:
+            return at
+        elif close == ")" and char in "'\"":
+            quote = char
+        elif close == ")" and char in "()":
+            depth += 1 if char == "(" else -1
+        at += 1
+    return len(text)
+
+
+def _substitutions(text: str, literal_quotes: bool = False) -> list[str]:
+    # issue 121 (R6, R7): the inner command of each $( ), backtick and unquoted <( ) or >( ) bash
+    # runs; a heredoc body (literal_quotes) reads its quote marks as plain text.
+    out: list[str] = []
+    at, quote = 0, ""
+    while at < len(text):
+        char, pair = text[at], text[at : at + 2]
+        if quote == "'":
+            quote = "" if char == "'" else quote
+        elif char == "\\":
+            at += 1
+        elif char in "'\"" and not literal_quotes and (not quote or char == quote):
+            quote = "" if quote else char
+        elif (
+            char == "`" or pair == "$(" or (pair in {"<(", ">("} and not (quote or literal_quotes))
+        ):
+            start = at + (1 if char == "`" else 2)
+            at = _closing(text, start, "`" if char == "`" else ")")
+            out.append(text[start:at])
+        at += 1
+    return out
+
+
+class _TextScan(NamedTuple):
+    # issue 121: some segment may run a judged git subcommand; the first icase spelling or opaque
+    # setter; how a judged call takes paths the jail cannot see.
+    judged: bool = False
+    hit: str | None = None
+    unseen: str | None = None
+
+
+def _merge(one: _TextScan, two: _TextScan) -> _TextScan:
+    return _TextScan(one.judged or two.judged, one.hit or two.hit, one.unseen or two.unseen)
+
+
+def _opaque_setter(words: list[str], plain: list[str], lead: int) -> bool:
+    # issue 121 (R1): an assignment, env or setter-builtin word whose name the shell expands.
+    if any("=" in w and _expands(w.split("=", 1)[0]) for w in words[: lead + 1]):
+        return True
+    if lead >= len(plain) or command_family(plain[lead]) not in _SETTERS:
+        return False
+    return any(_expands(w.split("=", 1)[0]) for w in words[lead + 1 :] if _unquoted(w)[:1] != "-")
+
+
+class _Part(NamedTuple):
+    # issue 121 (P11): one text segment's scan, the words standing for it (None keeps it whole,
+    # [] blanks a read), its words after quote removal and a shell -c body to walk.
+    scan: _TextScan
+    stand_ins: list[str] | None
+    plain: list[str]
+    body: str | None
+
+
+def _text_segment(raw: str) -> _Part:
+    # issue 121 (P11, R1, design 6): a git read stands for nothing, a commit for its pathspecs
+    # and the words before them; names are read after quote and backslash removal.
+    words = _raw_words(raw)
+    plain = [_unquoted(w) for w in words]
+    rest = strip_wrappers(plain) or []
+    lead = len(words) - len(rest)
+    opaque = bool(rest) and _expands(words[lead])
+    setter = _ICASE_ENV if _opaque_setter(words, plain, lead) else None
+    shell = shell_tokens(rest)
+    code = _shell_code(shell) if shell else None
+    body = code if code and code != _FALLBACK else None
+    if rest and not opaque and _unset_only(rest):
+        return _Part(_TextScan(), [], plain, None)
+    if rest and not opaque and command_family(rest[0]) == "git":
+        sub, args, globals_ = _git_split(["git", *rest[1:]])
+        at = len(words) - len(args) - 1
+        literal = sub is not None and not _expands(words[at]) and git_globals_known(globals_)
+        if literal and not _judged_git(sub, args):
+            # issue 121 (G3): a read's own naming of the icase variable still counts later.
+            return _Part(_TextScan(), [w for w in plain[: at + 1] if _ICASE_ENV in w], plain, None)
+        scan = _TextScan(True, setter, _unseen_paths(plain[:lead], args))
+        if literal and sub == "commit":
+            return _Part(scan, plain[: at + 1] + split_options("git commit", args)[0], plain, None)
+        return _Part(scan, None, plain, None)
+    xargs = opaque and any(command_family(p) == "xargs" for p in plain[:lead])
+    may = opaque or any(_GIT_WORD.search(p) for p in plain)
+    return _Part(_TextScan(may, setter, "xargs" if xargs else None), None, plain, body)
+
+
+def _spec(match: re.Match[str] | None) -> str | None:
+    return None if match is None else match.group(0).strip(" \t'\"=")
+
+
+def _normalised(text: str) -> str:
+    # issue 121 (G3): the text with its quote marks and backslashes removed.
+    return re.sub(r"[\\'\"]", "", text)
+
+
+def _unset_only(tokens: list[str]) -> bool:
+    # issue 121 (G3): a plain unset of variables, whose naming of the icase variable sets nothing.
+    names = tokens[1:]
+    return command_family(tokens[0]) == "unset" and all(t == "-v" or t[:1] != "-" for t in names)
+
+
+def _sources(raw: str) -> bool:
+    # issue 121 (F1): the command word past control words, time, assignments and wrappers is .
+    # or source, or a wrapper the jail cannot read hides it.
+    words = [_unquoted(w) for w in _raw_words(raw)]
+    while words:
+        if words[0] in _LEADERS or _ASSIGN.match(words[0]):
+            words = words[1:]
+            continue
+        rest = strip_wrappers(words)
+        if rest is None:
+            return True
+        if len(rest) == len(words):
+            return words[0] in {".", "source"}
+        words = rest
+    return False
+
+
+def _simple_code(command: str, expansions: bool = False) -> str | None:
+    # issue 121 (G1, U3): the command outside heredoc bodies when it is plainly simple, else None:
+    # no misread construct, every heredoc top level and literal, no expansion unless allowed.
+    if _NOT_SIMPLE_RAW.search(command):
+        return None
+    code: list[str] = []
+    rest, depth = command, 0
+    while rest:
+        pending: list[tuple[bool, str, bool]] = []
+        cut, quote = len(rest), ""
+        for lex in quote_walk(rest):
+            char, at = lex.text, lex.at
+            quote = lex.quote if lex.kind != CLOSE else ""
+            if lex.quote or lex.kind != CHAR:
+                continue
+            start = at == 0 or rest[at - 1] in " \t\n;&|(){}"
+            if char == "#" and start:
+                return None
+            if char == "\n" and pending:
+                cut = at + 1
+                break
+            depth += {"(": 1, ")": -1}.get(char, 0)
+            if char in "{}" and start and rest[at + 1 : at + 2] in {"", " ", "\t", "\n", ";"}:
+                depth += 1 if char == "{" else -1
+            if rest.startswith("<<", at) and rest[at - 1 : at] != "<":
+                doc = _SIMPLE_HEREDOC.match(rest, at)
+                if doc is None or depth != 0:
+                    return None
+                bare = doc.group(4) is not None
+                pending.append((doc.group(1) == "-", doc.group(4) or doc.group(3), bare))
+        if quote or (pending and depth != 0):
+            return None
+        code.append(rest[:cut])
+        rest = rest[cut:]
+        for dash, word, bare in pending:
+            end = _heredoc_end(rest, word, dash)
+            if bare and set("$`\\") & set(rest[:end]):
+                return None
+            rest = rest[end:]
+    joined = "".join(code)
+    if _NOT_SIMPLE_WORD.search(_normalised(joined)) or _FOREIGN_GIT.search(_normalised(joined)):
+        return None
+    if not expansions and _expanding(joined, masked=True, globs=True):
+        return None
+    if any(_sources(joined[a:b]) for a, b in segment_spans(joined)):
+        return None
+    if any(_built_head(joined[a:b]) for a, b in segment_spans(joined)):
+        return None
+    heads = _heads(joined)
+    return None if any(h is None or h[0] in {".", "source"} for h in heads) else joined
+
+
+def _heads(code: str) -> list[list[str] | None]:
+    # issue 121 (F1 R1, F2 R3): per segment, the command word and its operands past redirections,
+    # assignments, control words and wrappers, or None when opaque; reuses _command_at.
+    out: list[list[str] | None] = []
+    for seg in _shell_scan(code):
+        skip = {i for i, w in enumerate(seg.words) if w.startswith(_REDIRECT)}
+        clean = [_clean(w) for w in seg.words]
+        # issue 121 (S1): a {name} word before a redirect is its fd (bash 4.1+), no command word.
+        skip |= {i for i, w in enumerate(clean) if i + 1 in skip and _FD_NAME.match(w)}
+        at = _command_at(clean, skip)
+        if at == _OPAQUE:
+            out.append(None)
+        elif at is not None:
+            out.append([w for i, w in enumerate(clean) if i >= at and i not in skip])
+    return out
+
+
+def _judged_heads(code: str) -> bool:
+    # issue 121 (F2 R3): some segment's command word is git and its subcommand a judged one.
+    for head in _heads(code):
+        if head is None:
+            return True
+        if command_family(head[0]) == "git":
+            sub, rest, globals_ = _git_split(["git", *head[1:]])
+            known = git_globals_known(globals_)
+            if sub is not None and (not known or _judged_git(sub, rest)):
+                return True
+    return False
+
+
+def _plainly_simple(command: str) -> bool:
+    return _simple_code(command) is not None
+
+
+def _masked(code: str, double: bool) -> str:
+    # issue 121 (F2): code with escapes and single-quoted text, or every quoted text, as x.
+    return "".join(
+        lex.text
+        if lex.kind == CHAR and (not lex.quote or (double and lex.quote == '"'))
+        else "x" * len(lex.text)
+        for lex in quote_walk(code)
+    )
+
+
+def _built_head(raw: str) -> bool:
+    # issue 121 (F2): the segment's command word, or its git subcommand word, is built by the shell.
+    words = _raw_words(raw)
+    while words and _unquoted(words[0]) in _LEADERS:
+        words = words[1:]
+    rest = strip_wrappers([_unquoted(w) for w in words])
+    if rest is None:
+        return True
+    lead = len(words) - len(rest)
+    if not rest:
+        return False
+    # issue 121 (T2): [ and [[ are the test builtin and keyword; a glob needs a closing ].
+    if words[lead] not in {"[", "[[", "]", "]]"} and _expands(words[lead]):
+        return True
+    if command_family(rest[0]) != "git":
+        return False
+    sub, args, globals_ = _git_split(["git", *rest[1:]])
+    unknown = not git_globals_known(globals_)
+    return sub is not None and (unknown or _expands(words[len(words) - len(args) - 1]))
+
+
+def _path_unsafe() -> bool:
+    # issue 121 (U2): the hook's own PATH holds ., an empty or a relative entry, so a bare git
+    # may resolve to a planted file; never a PATH value read from the command.
+    return any(not os.path.isabs(entry) for entry in os.environ.get("PATH", "").split(":"))
+
+
+def _names_path(command: str) -> bool:
+    # issue 121 (U2): PATH or GIT_EXEC_PATH named after quote removal, outside a literal commit
+    # message (-m or -F value, message heredoc body); a text not plainly simple has none.
+    if _simple_code(command) is None:
+        return bool(_RUNS_GIT_WORD.search(_normalised(command)))
+    text, bodies = _heredocs(command)
+    if any(not b.message and _RUNS_GIT_WORD.search(_normalised(b.text)) for b in bodies):
+        return True
+    for start, end in segment_spans(text):
+        words = _raw_words(text[start:end])
+        plain = [_unquoted(w) for w in words]
+        rest = strip_wrappers(plain) or []
+        if rest and command_family(rest[0]) == "git":
+            sub, args, globals_ = _git_split(["git", *rest[1:]])
+            if sub == "commit" and git_globals_known(globals_):
+                at = len(words) - len(args) - 1
+                plain = plain[: at + 1] + split_options("git commit", args)[0]
+        if any(_RUNS_GIT_WORD.search(w) for w in plain):
+            return True
+    return False
+
+
+def _foreign_git(command: str) -> bool:
+    # issue 121 (U1): the word git here may not run the system git: a rebinding construct, or a
+    # git command word that is no bare git and no path in a trusted bin folder (8.5, _cmd_name).
+    text = _normalised(command)
+    if _FOREIGN_GIT.search(text) or _path_unsafe() or _names_path(command):
+        return True
+    code = _simple_code(command)
+    if code is None:
+        dot = re.search(r"(?:^|[\s;&|(){}])\.\s", text)
+        paths = [m.group(0) for m in _GIT_PATH.finditer(text)]
+        return bool(dot) or any(os.path.dirname(p) not in _TRUSTED_BIN for p in paths)
+    return any(
+        h is not None and command_family(h[0]) == "git" and _cmd_name([h[0]]) != "git"
+        for h in _heads(code)
+    )
+
+
+def _foreign_icase(command: str) -> str | None:
+    # issue 121 (U1): with git possibly rebound, an icase spelling beside a git word is judged
+    # as the base judged it, reads and literal messages included.
+    texts = (command, _normalised(command))
+    hit = next((m for t in texts if (m := _ICASE_TEXT.search(t))), None)
+    if hit is None or not any(_GIT_WORD.search(t) for t in texts):
+        return None
+    return _spec(hit) if _foreign_git(command) else None
+
+
+def _expanding(text: str, masked: bool = False, globs: bool = False) -> bool:
+    # issue 121 (F2, U3): a $ or backtick, a process substitution or a brace list, and with globs
+    # an unquoted * or ? or a [ closed in its word (a lone [ or [[ is a test, T2); masked reads
+    # quote_walk spans, so single-quoted text, and any quoted brace or ( ), is literal.
+    single = _masked(text, True) if masked else text
+    every = _masked(text, False) if masked else text
+    globbed = globs and bool(re.search(r"[*?]|\[[^\s\]]*\]", every))
+    return bool(
+        globbed
+        or re.search(r"[$`]", single)
+        or re.search(r"[<>]\(", every)
+        or _BRACE_LIST.search(every)
+    )
+
+
+def _expansion_unseen(command: str) -> bool:
+    # issue 121 (F2, R3): an unquoted expansion with a judged git subcommand or a built command
+    # or git subcommand word; a text not plainly simple counts any $, backtick, brace list or word.
+    code = _simple_code(command, expansions=True)
+    if not (_expanding(command) if code is None else _expanding(code, masked=True)):
+        return False
+    if code is None and _JUDGED_GIT_WORD.search(_normalised(command)):
+        return True
+    if code is not None and _judged_heads(code):
+        return True
+    text = command if code is None else code
+    return any(_built_head(text[a:b]) for a, b in segment_spans(text))
+
+
+def _xargs_runs(text: str) -> bool:
+    # issue 121 (G4): xargs with a judged git subcommand or a shell after it, read conservatively.
+    found = _XARGS.search(text)
+    tail = "" if found is None else text[found.end() :]
+    judged = bool(_JUDGED_WORD.search(tail) or _SYNTH.search(tail))
+    return bool(_SHELL_WORD.search(tail) or (_GIT_WORD.search(tail) and judged))
+
+
+def _base_scan(command: str) -> _TextScan:
+    # issue 97, 121 (G1, G4): a text not plainly simple, judged raw as the base judged it; a word
+    # the shell may build stands for a judged git subcommand.
+    texts = (command, _normalised(command))
+    hit = next((m for t in texts if (m := _ICASE_TEXT.search(t))), None)
+    judged = any(
+        _SYNTH.search(t) or (_GIT_WORD.search(t) and _JUDGED_WORD.search(t)) for t in texts
+    )
+    unseen = "xargs" if any(_xargs_runs(t) for t in texts) else None
+    return _TextScan(judged, _spec(hit), unseen)
+
+
+def _icase_mentions(segment: list[str], tokens: list[str]) -> tuple[bool, bool]:
+    # issue 121 (G3): (the icase variable is named before this segment's git subcommand, it is
+    # named in this segment outside a commit message); a plain unset names it for nothing.
+    if tokens and _unset_only(tokens):
+        return False, False
+    if not tokens or command_family(tokens[0]) != "git" or _expands(tokens[0]):
+        return False, any(_ICASE_ENV in w for w in segment)
+    sub, args, _ = _git_split(["git", *tokens[1:]])
+    head = segment[: len(segment) - len(args)]
+    rest = split_options("git commit", args)[0] if sub == "commit" else args
+    named = any(_ICASE_ENV in w for w in head)
+    return named, named or any(_ICASE_ENV in w for w in rest)
+
+
+def _icase_scan(command: str, depth: int = 0) -> _TextScan:
+    # issue 97, 121 (P10, P11, R6, R7, G1): judge what bash runs; in a plainly simple text reads
+    # and literal messages are skipped, and every inner command is judged on its own.
+    if depth > _TEXT_DEPTH:
+        return _TextScan(True, _spec(_ICASE_TEXT.search(_unquoted(command))))
+    text, bodies = _heredocs(command)
+    kept, words, scan = list(text), [], _TextScan()
+    if not _plainly_simple(command):
+        scan = _base_scan(command)
+    for start, end in segment_spans(text):
+        part = _text_segment(text[start:end])
+        scan = _merge(scan, part.scan)
+        if part.stand_ins is not None:
+            kept[start:end] = " " * (end - start)
+        words += part.plain if part.stand_ins is None else part.stand_ins
+        if part.body is not None:
+            scan = _merge(scan, _icase_scan(part.body, depth + 1))
+    found = _ICASE_TEXT.search("".join(kept))
+    found = found or next((m for w in words if (m := _ICASE_TEXT.search(w))), None)
+    scan = _merge(scan, _TextScan(hit=_spec(found)))
+    inner = _substitutions(text)
+    for body in bodies:
+        inner += [] if body.quoted else _substitutions(body.text, literal_quotes=True)
+        scan = scan if body.message else _merge(scan, _icase_scan(body.text, depth + 1))
+    for code in inner:
+        scan = _merge(scan, _icase_scan(code, depth + 1))
+    return scan
+
+
+def _text_spec(scan: _TextScan, exported: bool) -> str | None:
+    # issue 121 (P10, P11): the icase refusal's spelling once some segment may run judged git.
+    if not scan.judged or not (exported or scan.hit):
+        return None
+    return scan.hit or _ICASE_ENV
+
+
 def _excluded_text(command: str, cwd: str, roots: ExcludedRoots, writes: bool) -> str | None:
     # D.5: an unparsed command is judged on its text, the roots named as written or from cwd.
+    scan = _icase_scan(command)
+    icase = _text_spec(scan, False)
+    if icase is not None and roots():
+        return R_EXCLUDED_ICASE.format(spec=icase)
+    if scan.unseen is not None and roots():
+        return R_EXCLUDED_UNSEEN.format(source=scan.unseen)
+    return _excluded_names(command, cwd, roots, writes)
+
+
+def _excluded_names(command: str, cwd: str, roots: ExcludedRoots, writes: bool) -> str | None:
     if not (_EXCLUDED_WORDS.search(command) or (writes and _EXCLUDED_WRITES.search(command))):
         return None
-    icase = _ICASE_TEXT.search(command)
-    if icase and re.search(r"\bgit\b", command) and roots():
-        return R_EXCLUDED_ICASE.format(spec=icase.group(0).strip(" \t'\"="))
     for root in _active_roots(roots(), _work_tree(cwd)):
         rel = os.path.relpath(root.path, cwd)
         names = [root.path] + ([rel] if not rel.startswith("..") and rel != "." else [])
@@ -2918,26 +3967,74 @@ def _excluded_text(command: str, cwd: str, roots: ExcludedRoots, writes: bool) -
 def excluded_root_reason(
     command: str, cwd: str, roots: ExcludedRoots, writes: bool = True
 ) -> str | None:
-    # 0136, D.5: git staging, commit, update-index and stash, gh and redirects into a root.
+    # 0136, D.5, issue 121 (U1, F2): a git that may be rebound, the checks below, then an
+    # expansion beside a judged git word.
+    foreign = _foreign_icase(command)
+    if foreign is not None and roots():
+        return R_EXCLUDED_ICASE.format(spec=foreign)
+    reason = _excluded_reason(command, cwd, roots, writes)
+    if reason is None and _expansion_unseen(command) and roots():
+        return R_EXCLUDED_UNSEEN.format(source="a shell expansion")
+    return reason
+
+
+def _excluded_reason(command: str, cwd: str, roots: ExcludedRoots, writes: bool) -> str | None:
+    # 0136, D.5: git staging, commit, update-index and stash, gh and redirects into a root;
+    # issue 121 (P10, design 6): an export, set -a or declare -x of the icase variable reaches
+    # later segments, and a judged git call fed paths through xargs or stdin is refused.
+    if not _plainly_simple(command):
+        pre = _base_scan(command)
+        if pre.unseen is not None and roots():
+            return R_EXCLUDED_UNSEEN.format(source=pre.unseen)
+        if pre.judged and pre.hit is not None and roots():
+            return R_EXCLUDED_ICASE.format(spec=pre.hit)
     chain = worker_parse(command)
     bases = None if chain is None else chain_bases(chain, cwd, DIR_CHANGE_CMDS)
     if chain is None or bases is None:
         return _excluded_text(command, cwd, roots, writes)
-    for segment, base in zip(chain.segments, bases, strict=True):
+    exported = allexport = mentioned = False
+    for raw, typed, segment, base in zip(
+        chain.raws, chain.tokens, chain.segments, bases, strict=True
+    ):
+        words = _raw_words(raw)
         tokens = strip_wrappers(segment) if segment else []
-        if tokens is None:
+        if tokens is None or len(words) != len(typed):
             return _excluded_text(command, cwd, roots, writes)
-        name = _base(tokens[0]) if tokens else ""
-        icase = _icase_git(segment, tokens) if name == "git" else None
+        own = words[len(words) - len(segment) :]
+        heads = own[len(own) - len(tokens) :]
+        name = command_family(tokens[0]) if tokens else ""
+        opaque = bool(heads) and _expands(heads[0])
+        git = name == "git" and not opaque
+        named = not git and (name == "gh" or (name == "tee" and writes))
+        texty = not (git or named) and (
+            opaque
+            or shell_tokens(tokens) is not None
+            or bool({"git", "gh"} & {command_family(t) for t in tokens})
+        )
+        lead = segment[: len(segment) - len(tokens)]
+        prefix = list(zip(lead, own, strict=False))
+        icase = unseen = None
+        before, said = _icase_mentions(segment, tokens)
+        if git:
+            icase = _icase_git(prefix, tokens, heads, exported or mentioned or before)
+            unseen = _unseen_git(lead, tokens, heads)
+        elif texty:
+            scan = _icase_scan(" ".join(own))
+            icase, unseen = _text_spec(scan, exported or mentioned), scan.unseen
+        more, setall = _icase_exports(own, tokens, heads, allexport)
+        exported, allexport = exported or more, allexport or setall
+        mentioned = mentioned or said
         reason: str | None = None
         if icase is not None and roots():
             reason = R_EXCLUDED_ICASE.format(spec=icase)
-        elif name == "git":
-            reason = _excluded_git(tokens, base, roots)
-        elif name == "gh" or (name == "tee" and writes):
+        elif unseen is not None and roots():
+            reason = R_EXCLUDED_UNSEEN.format(source=unseen)
+        elif git:
+            reason = _excluded_git(["git", *tokens[1:]], base, roots)
+        elif named:
             reason = _excluded_named(name, tokens[1:], base, roots)
-        elif name in _SHELLS or {"git", "gh"} & {_base(t) for t in tokens}:
-            reason = _excluded_text(" ".join(tokens), base, roots, writes)
+        elif texty:
+            reason = _excluded_names(" ".join(tokens), base, roots, writes)
         if reason is not None:
             return reason
     return None

@@ -1,0 +1,6 @@
+{
+  "shell.R_READ_EXPANSION": {
+    "failure": "issue 204: uniq, sort, file or find beside a word the shell expands (a brace list, ~, a glob, $, a backtick or process substitution) turns into a write option or an output operand the read grammar never saw, so a read-only agent writes a file",
+    "premise_test": "tests/test_checks_read_only_bash.py::test_a_rewritten_search_word_or_rg_program_option_names_its_reason"
+  }
+}

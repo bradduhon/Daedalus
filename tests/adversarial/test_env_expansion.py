@@ -6,15 +6,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from lib import shell
 
 from tests.adversarial.corpus import (
+    A3_APPEND_ENV,
     CREDENTIAL,
     OUTSIDE,
     READERS,
     assert_denied,
     assert_store_read_denied,
 )
-from tests.conftest import WT
+from tests.conftest import CFG, WT
+from tests.hook_chain import decide
 from tests.payloads import _b, _cred
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
@@ -88,6 +91,19 @@ def test_expanded_coder_write_outside_the_worktree_is_denied(
     template: str,
 ) -> None:
     assert_denied(_b("coder", template.format(wt=WT)))
+
+
+@pytest.mark.parametrize("command", A3_APPEND_ENV)
+def test_an_appending_or_element_assignment_prefix_is_refused(command: str) -> None:
+    # issue 121: NAME+= and NAME[...]= are env assignments, judged as NAME= is.
+    assert_denied(_cred("coder", "Bash", WT, command=command), shell.R_ENV)
+
+
+def test_a_safe_name_appends_as_it_assigns() -> None:
+    # issue 121: TZ+= on a safe name passes exactly where TZ= does.
+    assign = decide(_cred("coder", "Bash", WT, command="TZ=x python3 -m pytest -q"), CFG)
+    append = decide(_cred("coder", "Bash", WT, command="TZ+=x python3 -m pytest -q"), CFG)
+    assert assign.allow and append.allow, (assign.reason, append.reason)
 
 
 @pytest.mark.parametrize("path", ("~/.bashrc", "~/x.txt", "$HOME/x.txt"))

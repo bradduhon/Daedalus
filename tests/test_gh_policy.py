@@ -7,11 +7,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import router
+from lib import jail, router
 from lib.config import Config
 from lib.gh_policy import (
     CONDUCTOR_GH,
     R_GH_BUNDLE,
+    _fallback_reason,
     allowlist_applies,
     classify,
     conductor_gh_refusal,
@@ -19,6 +20,7 @@ from lib.gh_policy import (
     gh_reason,
     verdict_reason,
 )
+from lib.train_scope import KNOWN_AGENTS
 
 from tests.conftest import REPO_ROOT
 from tests.conftest import git as _git
@@ -525,3 +527,93 @@ def test_bundled_short_flags_are_refused_in_a_train(train_repo: Path, agent: str
     for command in ("gh pr view -cw 3", "gh pr create -dH feat/x --title t --body-file x.md"):
         assert R_GH_BUNDLE in _reason(train_repo, agent, command), (agent, command)
     assert classify(shlex.split("gh pr view -cw 3"))[0] == "default-deny"
+
+
+ISSUE_211_ROWS = (
+    "during run 20261107-012956 every gh issue create from the main session drew a jail warning "
+    "that gh is default-deny and only the releaser runs gh. The main session is never blocked, "
+    "so the call ran, but the warning is noise on a legitimate step: the tracking rule requires "
+    "tracked-risk issues before the pull request, so the main session must file them during "
+    "the run.",
+    "admit gh issue create and gh issue comment for the bare main session in the gh class "
+    "policy and drop the warning for them. Agents stay refused. Add a test that main is "
+    "admitted and every Daedalus agent is still refused.",
+)
+ISSUE_WRITES = [
+    "gh issue create --body-file f",
+    "gh issue comment 5 --body-file f",
+    "gh issue create --title delete --body-file f",
+    "gh issue create -t 'pr create' -b x -l tracked-risk",
+    "gh issue create -tx --label=bug --repo o/r",
+    "gh issue comment 5 -b 'pr merge' -R o/r",
+]
+
+
+@pytest.mark.parametrize("command", ISSUE_WRITES)
+def test_main_issue_writes_pass_without_a_warning(train_repo: Path, command: str) -> None:
+    # issue 211, P12: ISSUE_211_ROWS holds the reproduction; main gets no gh warning.
+    d = decide(_bash(train_repo, "main", command), Config())
+    assert d.allow and not d.warn and not d.reason, d
+    assert classify(shlex.split(command))[0] == "default-deny"
+
+
+@pytest.mark.parametrize("command", ["gh issue comment 3 --delete-last", "gh issue delete 3"])
+def test_main_issue_delete_keeps_its_warning(train_repo: Path, command: str) -> None:
+    # P12: only create and comment are admitted; the delete class stays.
+    d = decide(_bash(train_repo, "main", command), Config())
+    assert d.warn and "delete command" in str(d.reason), d
+
+
+@pytest.mark.parametrize(
+    "command", ["gh issue create --body-file f", "gh issue comment 5 --body-file f"]
+)
+@pytest.mark.parametrize("agent", sorted(KNOWN_AGENTS - {"main"}) + ["general-purpose"])
+def test_agents_stay_refused_issue_writes(train_repo: Path, agent: str, command: str) -> None:
+    # issue 211: every Daedalus agent and a foreign agent keeps today's refusal.
+    _reason(train_repo, agent, command)
+
+
+@pytest.mark.parametrize("agent", ["releaser", "general-purpose"])
+def test_issue_create_refusal_text_is_the_base_text(train_repo: Path, agent: str) -> None:
+    # issue 211: the agent refusal for gh issue create stays byte-identical to the base.
+    assert _reason(train_repo, agent, "gh issue create --body-file f") == (
+        "gh issue create is a default-deny command, refused while a train runs and to every "
+        "Daedalus agent (0028, 0035). Next: only the Push Train's releaser runs gh."
+    )
+
+
+# R-extra-1 (unit A2): a script or module run is parsed; an inline body keeps the fallback.
+PARSED_RUNS = (
+    'python3 scripts/t.py choice --chose "cut the gh admission"',
+    "python3 -m pytest -q",
+    # A2 fix round 3: a script operand, php -f, or no stdin fed is no body.
+    "node --no-warnings app.js",
+    "php -f script.php",
+    "python3 -V",
+)
+INLINE_RUNS = (
+    "python3 -c \"import os; os.system('gh issue delete 3')\"",
+    "echo x | python3",
+    "python3 - <<'PY'\nimport os\nos.system('gh issue delete 3')\nPY",
+    "python3 /dev/stdin",
+    # A2 fix round 3: a normalised stdin path, and a -- that -X consumes.
+    "python3 /dev/./stdin",
+    "cd /dev && echo x | python3 stdin",
+    "python3 -X -- -c \"import os; os.system('gh issue delete 3')\"",
+    # A2 fix round 1, rows 5 and 8: an off-table node option, and tmux, which is no shell.
+    "node --title t -e \"require('child_process').execSync('gh issue delete 3')\"",
+    "tmux new-session -d gh issue delete 3",
+)
+
+
+@pytest.mark.parametrize("agent", ["main", "orchestrator"])
+def test_a_script_run_reaches_the_parsed_gh_path(train_repo: Path, agent: str) -> None:
+    # R-extra-2, P7: no unparsed-gh warning or refusal for a script or module run.
+    for command in PARSED_RUNS:
+        assert jail._policy_segments(command) == [shlex.split(command)], command
+        assert jail._gh_gate(agent, str(train_repo), command) is None, command
+    for command in INLINE_RUNS:
+        assert jail._policy_segments(command) is None, command
+        want = _fallback_reason(agent, command)
+        assert jail._gh_gate(agent, str(train_repo), command) == want, command
+    assert decide(_bash(train_repo, "main", PARSED_RUNS[0]), Config()).allow
