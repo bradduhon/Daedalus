@@ -353,6 +353,7 @@ ENTRY = f"{CWD}/docs/.tmp/daedalus/20261018-234006/entry.md"
         "ls docs/.tmp/daedalus",
         "ls -la /work/Charter",
         "diff docs/a.md /work/Charter/a.md",
+        "sed -n 1,20p docs/decisions.md",
         "cat docs/a.md && git status",
     ],
 )
@@ -467,9 +468,10 @@ def test_charter_docs_quoted_sed_write_is_refused_by_the_script_grammar() -> Non
     hook, reason = first_deny(_b("charter-docs", "sed -n '1p;w/tmp/x' docs/a.md"), CFG)
     assert hook == HOOK and _starts(reason, jail.R_DOCS_BASH)
     assert "sed -n" in jail.R_DOCS_BASH
-    # 228 S3 table gap: the sed row types its first operand as a script, refused to a read role.
-    gap = evaluate(HOOK, _b("charter-docs", "sed -n '1p;2p' docs/a.md"), *flags)
-    assert _starts(gap, jail.R_DOCS_BASH)
+    # 228 S3 row 2: sed -n <print script> <read path> is a charter-docs read again.
+    assert evaluate(HOOK, _b("charter-docs", "sed -n '1p;2p' docs/a.md"), *flags) is None
+    other = evaluate(HOOK, _b("charter-docs", "sed -n -e 1p docs/a.md"), *flags)
+    assert _starts(other, jail.R_DOCS_BASH) and "Refused: " in str(other)
 
 
 @pytest.mark.parametrize(

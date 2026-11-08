@@ -279,11 +279,12 @@ INSPECT = [
     f"git -C {CWD} rev-parse daedalus/t",
     "git -C /work/Charter status --porcelain",
     f"sha256sum {CWD}/contracts/c.md {CWD}/docs/.tmp/daedalus/t/standards-packet.md",
+    "find /work/rules -type f -newermt '2026-10-19 12:00'",
     f"cat {CWD}/.claude/daedalus/config.json",
     "git diff abc123...daedalus/t --stat",
 ]
-# 228 S3 table gap: find's row lists no -newermt, so the grammar refuses this inspection read.
-INSPECT_GAPS = ["find /work/rules -type f -newermt '2026-10-19 12:00'"]
+# 228 S3 row 3: -newermt is on the find row; a neighbour off it stays refused.
+INSPECT_REFUSED = ["find /work/rules -type f -newerat '2026-10-19 12:00'"]
 
 
 def _recipe_commands() -> list[str]:
@@ -320,9 +321,9 @@ def test_recipe_commands_pass_the_orchestrator_hooks() -> None:
     for command in [*commands, *INSPECT]:
         payload = _call("Bash", CWD, command=command)
         assert router.route(payload, REPO_ROOT) == (True, None, ""), command
-    for command in INSPECT_GAPS:
+    for command in INSPECT_REFUSED:
         allow, reason, hook = router.route(_call("Bash", CWD, command=command), REPO_ROOT)
-        assert not allow and hook == "command_allowlist" and "-newermt" in str(reason), command
+        assert not allow and hook == "command_allowlist" and "-newerat" in str(reason), command
 
 
 def test_recipe_runs_the_refresh_and_model_subcommands() -> None:

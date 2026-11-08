@@ -220,10 +220,10 @@ GIT_ROWS = [
     ("git worktree list", "git worktree add /tmp/x"),
     ("git worktree list --porcelain", "git worktree remove x"),
     ("git merge-base --is-ancestor main HEAD", "git merge-base --output=x main HEAD"),
-    ("git show HEAD:a.py | grep -n x", "sed -n 10,40p scripts/a.py"),
-    ("git show HEAD:a.py | head -n 40", "git show HEAD:a.py | sed -n 1w/tmp/x"),
-    ("git show main:a.py | head", "git show HEAD:a.py | sed 1,2p"),
-    ("git show HEAD:a.py | tail -n 5", "git log | sed -n 1p"),
+    ("git show HEAD:scripts/a.py | sed -n 10,40p", "sed -n 10,40p scripts/a.py"),
+    ("git show HEAD:a.py | sed -n 1p", "git show HEAD:a.py | sed -n 1w/tmp/x"),
+    ("git show main:a.py | sed -n '5,9p' | head", "git show HEAD:a.py | sed 1,2p"),
+    ("git show HEAD:a.py | grep -n x", "git log | sed -n -e 1p"),
     ("git -C .claude/worktrees/u1 grep -n x", "git show HEAD:a.py ; sed -n 1p"),
 ]
 
@@ -237,19 +237,25 @@ def test_read_only_grant_git_rows(allowed: str, refused: str) -> None:
         assert _starts(refusal, jail.R_AUDITOR_BASH), (agent, refused)
 
 
-# 228 S3 table gaps: rows the deleted walkers admitted that the grammar refuses, kept refused
-# until the main session rules a table row (sed is no read filter, 2>/dev/null no agent redirect).
-TABLE_GAPS = (
-    "git show HEAD:scripts/a.py | sed -n 10,40p",
-    "git show main:a.py | sed -n '5,9p' | head",
-    "find /x -maxdepth 6 -iname frameworks -type d 2>/dev/null | head",
-)
+# 228 S3 rows 1 to 4: each closed table row, one admitted form and its refused neighbour.
+CLOSED_ROWS = [
+    ("find /x -maxdepth 6 -iname f -type d 2>/dev/null | head", "find /x -name f 2>/tmp/e | head"),
+    ("cat a 2>/dev/null", "cat a 1>/dev/null 2>/tmp/e"),
+    ("git log | sed -n 1,5p", "git log | sed -n 1,5p a.py"),
+    ("find /x -newermt '2026-10-19 12:00'", "find /x -newerat '2026-10-19 12:00'"),
+    ("git diff a...b -- . ':(exclude)assets/'", "git diff a...b -- . ':(icase)assets/'"),
+    ("git log -p a..b -- . ':!web/big.bin'", "git log -p a..b -- . ':!'*.bin"),
+    ("git show a -- ':(exclude)x'", "git show a -- ':(exclude,icase)x'"),
+]
 
 
-@pytest.mark.parametrize("command", TABLE_GAPS)
-def test_a_table_gap_is_refused_and_named(command: str) -> None:
-    refusal = evaluate(HOOK, _b("auditor", command), "--git", "read-only")
-    assert _starts(refusal, jail.R_AUDITOR_BASH) and "Refused: " in str(refusal), command
+@pytest.mark.parametrize(("allowed", "refused"), CLOSED_ROWS)
+def test_a_closed_table_row_is_admitted_beside_its_refused_neighbour(
+    allowed: str, refused: str
+) -> None:
+    assert evaluate(HOOK, _b("auditor", allowed), "--git", "read-only") is None, allowed
+    refusal = evaluate(HOOK, _b("auditor", refused), "--git", "read-only")
+    assert _starts(refusal, jail.R_AUDITOR_BASH) and "Refused: " in str(refusal), refused
 
 
 def test_specialist_grant_gains_no_git_row() -> None:

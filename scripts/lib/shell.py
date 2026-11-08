@@ -151,6 +151,8 @@ OPTION_TABLE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
             | {"-amin", "-ctime", "-cmin", "-used", "-maxdepth", "-mindepth", "-printf"}
             | {"-fprint", "-fprint0", "-fprintf", "-fls", "-fstype", "-context"}
             | {"-files0-from"}
+            # 228 S3 row 3: -newermt takes a date, a text value.
+            | {"-newermt"}
         ),
     ),
     # pin A1 -> A2, P6, P7: shells (by family) and interpreters; a shell's -c takes no value.
