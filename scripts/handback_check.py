@@ -30,7 +30,7 @@ SHAPES: dict[str, re.Pattern[str]] = {
 REQUIRED = ("commit", "test")
 # 227: a ` hunt=<n>` field sits directly before the closing ` turns=<n>`.
 _HUNT_FIELD = re.compile(r"(?<!\S)hunt=")
-_HUNT_TAIL = re.compile(r" hunt=[0-9]+ turns=[0-9]+\Z")
+_HUNT_TAIL = re.compile(r" hunt=([0-9]+) turns=[0-9]+\Z")
 SHAPE = (
     "a line `## Receipts`, then only lines `- commit <40 hex> <subject>`, "
     "`- test <command> => <last output line>`, `- typecheck <command> => <last output line>`, "
@@ -55,22 +55,29 @@ def receipts_problem(reply: str) -> str | None:
     if not lines or not lines[-1].strip().startswith(COMPLETE_LINE):
         return None
     body, status = lines[:-1], lines[-1].strip()
+    tail = _HUNT_TAIL.search(status)
     hunts = _HUNT_FIELD.findall(status)
-    if hunts and (len(hunts) > 1 or not _HUNT_TAIL.search(status)):
+    if hunts and (len(hunts) > 1 or tail is None):
         return "the COMPLETE line carries `hunt=` other than as ` hunt=<n>` before ` turns=<n>`"
     if RECEIPTS not in body:
         return f"the COMPLETE reply has no `{RECEIPTS}` line above its status line"
     block = body[len(body) - body[::-1].index(RECEIPTS) :]
-    kinds: set[str] = set()
+    kinds: list[str] = []
     for line in block:
         kind = _kind(line)
         if kind is None:
             shown = line if len(line) <= SHOWN_CHARS else line[:SHOWN_CHARS] + "..."
             return f"the receipts block holds a line of another shape: {shown!r}"
-        kinds.add(kind)
+        kinds.append(kind)
     missing = [kind for kind in REQUIRED if kind not in kinds]
     if missing:
         return "the receipts block has no " + " and no ".join(missing) + " line"
+    # 227: a hunt count equals the hunt receipts; no field leaves the count to the build skill.
+    if tail is not None and int(tail.group(1)) != kinds.count("hunt"):
+        return (
+            f"the COMPLETE line carries hunt={int(tail.group(1))} "
+            f"but the receipts block holds {kinds.count('hunt')} hunt lines"
+        )
     return None
 
 

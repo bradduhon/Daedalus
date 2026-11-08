@@ -146,6 +146,28 @@ def test_a_hunt_field_out_of_place_is_refused(tail: str) -> None:
     assert handback_check.judge(_stop(reply)) is not None
 
 
+@pytest.mark.parametrize(
+    ("hunts", "field", "problem"),
+    [
+        ((HUNT, HUNT_FIXED), 2, None),
+        ((), 0, None),
+        ((HUNT,), 2, "the COMPLETE line carries hunt=2 but the receipts block holds 1 hunt lines"),
+        (
+            (HUNT, HUNT_FIXED),
+            1,
+            "the COMPLETE line carries hunt=1 but the receipts block holds 2 hunt lines",
+        ),
+        ((), 1, "the COMPLETE line carries hunt=1 but the receipts block holds 0 hunt lines"),
+    ],
+)
+def test_the_hunt_count_equals_the_hunt_lines(
+    hunts: tuple[str, ...], field: int, problem: str | None
+) -> None:
+    # 227: ` hunt=<n>` counts the block's hunt receipts.
+    reply = _reply("## Receipts", COMMIT, TEST, *hunts, COMPLETE + f" hunt={field} turns=4")
+    assert handback_check.receipts_problem(reply) == problem
+
+
 def test_text_between_the_block_and_the_complete_line_is_refused() -> None:
     reply = _reply("## Receipts", COMMIT, TEST, "", "Thanks.", COMPLETE)
     assert handback_check.receipts_problem(reply) == (

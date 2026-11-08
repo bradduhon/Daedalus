@@ -503,15 +503,16 @@ A unit line may also carry `needs: <tool or protected path>[, ...]`. It lists th
 
 ### The receipts check
 
-`scripts/handback_check.py` runs on every SubagentStop and on every `SubagentHandback` tool call, during a train only. It judges only a coder's reply whose last line is `[STATUS: COMPLETE]`. Directly above that line it expects a `## Receipts` line, followed only by lines of five shapes:
+`scripts/handback_check.py` runs on every SubagentStop and on every `SubagentHandback` tool call, during a train only. It judges only a coder's reply whose last line is `[STATUS: COMPLETE]`. Directly above that line it expects a `## Receipts` line, followed only by lines of six shapes:
 
 - `- commit <40 hex> <subject>`
 - `- test <command> => <last output line>`
 - `- typecheck <command> => <last output line>`
 - `- yield <kind> <question> => <who answered>`
 - `- deviation <file or behaviour> | <reason>`
+- `- hunt <form> => refused` or `- hunt <form> => admitted, fixed in <7 to 40 hex>`
 
-At least one commit line and one test line must be there. A reply in another shape goes back to the coder with one `Next:` line naming the shape, before the verifier sees it. A check that cannot run never blocks the coder, and the verifier still judges the unit. `scripts/cite.py` prints the `file:line` of each line holding a fixed string, so a coder can paste a citation instead of retyping it.
+At least one commit line and one test line must be there. A COMPLETE line that carries ` hunt=<n>` must place it directly before ` turns=<n>`, and n must equal the number of hunt lines in the block (227). A reply in another shape goes back to the coder with one `Next:` line naming the shape, before the verifier sees it. A check that cannot run never blocks the coder, and the verifier still judges the unit. `scripts/cite.py` prints the `file:line` of each line holding a fixed string, so a coder can paste a citation instead of retyping it.
 
 ### The verifier
 
