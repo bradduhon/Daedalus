@@ -67,7 +67,10 @@ RETIRED = (
     "_fragments _word_pieces _split_values _SCOPE_DEPTH _CUT_MARK _BODY_CHARS _past_cap "
     "_TARGET_CAP _body_constant _command_body _runs_body _option_body _stdin_operand "
     "_runner_family _STDIN_OPS _NO_BODY _STDIN_FILES _BODY_RUNNERS _piped "
-    "R_SHELL_BODY R_INLINE_BODY"
+    "R_SHELL_BODY R_INLINE_BODY "
+    # 228 S3b: the coder checks' readers the parse then admit_role replaced.
+    "_coder_bash_reason coder_installs declared_segments exit_echo_ok _declared_tools "
+    "_followed_bases _docs_segment_reason _script_unit _path_trusted"
 ).split()
 
 

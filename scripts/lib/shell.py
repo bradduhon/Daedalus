@@ -9,7 +9,7 @@ import os
 import re
 import shlex
 import shutil
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator
 from functools import lru_cache
 from pathlib import Path
 from typing import NamedTuple
@@ -1173,16 +1173,6 @@ def chain_bases(chain: WorkerChain, cwd: str, dir_cmds: frozenset[str]) -> list[
     if chain.seps[:1] not in ([], ["&&"]) or not set(chain.seps) <= joins:
         return None
     return [cwd] + [os.path.normpath(head[1])] * (count - 1)
-
-
-def declared_segments(commands: Iterable[str]) -> frozenset[tuple[str, ...]]:
-    # B2: a declared stack command that parses to one segment runs verbatim.
-    out: set[tuple[str, ...]] = set()
-    for command in commands:
-        chain = worker_parse(command)
-        if chain is not None and len(chain.segments) == 1 and chain.segments[0]:
-            out.add(tuple(chain.segments[0]))
-    return frozenset(out)
 
 
 def split_pipeline(command: str) -> list[str] | None:
@@ -2511,32 +2501,18 @@ def runs_claude(tokens: list[str], base: str) -> bool:
     )
 
 
-def _path_trusted(
-    word: str, base: str, own_script: Callable[[str], bool], tools: frozenset[str]
-) -> bool:
-    # issue 55: a path command word sits in a system bin folder, a unit worktree or the manifest.
-    if "/" not in word:
-        return True
-    full = os.path.normpath(_abs(word, base))
-    trusted_bin = os.path.isabs(full) and os.path.dirname(full) in _TRUSTED_BIN
-    return trusted_bin or own_script(word) or os.path.realpath(full) in tools
-
-
 def _worker_hygiene(
     tokens: list[str],
     agent: str,
     words: list[str] | None = None,
-    own_script: Callable[[str], bool] | None = None,
     base: str = "",
-    tools: frozenset[str] = frozenset(),
 ) -> str | None:
     if _ASSIGN.match(tokens[0]):
         return R_ENV
     if runs_claude(tokens, base):
         return R_CLAUDE_PATH
-    wraps = own_script is not None or agent == "auditor"
-    if wraps and _base(tokens[0]) == CONFINE:
-        # 0048, 0158: a coder's or the auditor's wrapped terraform command is judged as if bare.
+    if agent == "auditor" and _base(tokens[0]) == CONFINE:
+        # 0048, 0158: the auditor's wrapped terraform command is judged as if bare.
         split = confine_split(tokens)
         if split is None or not confine_wrapper(tokens[0], base):
             return R_CONFINE_FORM
@@ -2545,10 +2521,7 @@ def _worker_hygiene(
         if _hygiene_bad(tokens[2], aligned[2] if aligned else None):
             return R_HYGIENE
         inner = aligned[cut:] if aligned else None
-        return _worker_hygiene(split[1], agent, inner, own_script, base, tools)
-    # issue 55: own_script marks the coder, the one worker whose path commands are judged here.
-    if own_script is not None and not _path_trusted(tokens[0], base, own_script, tools):
-        return R_UNTRUSTED_PATH
+        return _worker_hygiene(split[1], agent, inner, base)
     name = _base(tokens[0])
     inner = strip_wrappers(tokens) or tokens
     if {name, _base(inner[0])} & ARCHIVE_CMDS:
@@ -2570,8 +2543,6 @@ def _worker_hygiene(
         from checks.command_allowlist import train_script_ok
 
         ledger = train_script_ok(tokens)
-    if agent == "coder" and own_script is not None and _is_cite(tokens, own_script):
-        ledger = True  # RCP, 0128: the coder's citation helper; its hygiene check still runs.
     is_wrapper = command_family(name) in WORKER_WRAPPERS or name.startswith("python")
     if (
         agent == "charter-docs"
@@ -2579,14 +2550,14 @@ def _worker_hygiene(
         and "CLAUDE_PLUGIN_ROOT" in (tokens[1] if len(tokens) > 1 else "")
     ):
         return R_LEDGER_LITERAL
-    if is_wrapper and not ledger and not _tester_runner_ok(name, tokens, own_script):
+    if is_wrapper and not ledger and not _tester_runner_ok(name, tokens):
         return R_INLINE
     # 0164: pnpm exec node -e, npx node <file> and the like meet the interpreter rule too.
     bin_run = js_inner(tokens)
     if bin_run and _base(bin_run[0]) == "bun" and bun_inline(bin_run):
         return R_INLINE
     if bin_run and command_family(bin_run[0]) in WORKER_WRAPPERS:
-        if not _tester_runner_ok(_base(bin_run[0]), bin_run, own_script):
+        if not _tester_runner_ok(_base(bin_run[0]), bin_run):
             return R_INLINE
     spans: list[str | None] = list(words) if words and len(words) == len(tokens) else []
     for idx, token in enumerate(tokens):
