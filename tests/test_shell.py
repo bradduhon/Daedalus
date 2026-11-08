@@ -55,7 +55,6 @@ SHARED = frozenset(
     | {"_expands"}
     | {"CHAR", "CLOSE", "_flag_value", "_raw_words", "_unquoted", "segment_spans"}
     | {"git_globals_known", "_TRUSTED_BIN"}
-    | {"INLINE_FLAGS", "_STDIN_TAIL"}
 )
 # 228 S3: the readers the one parse replaced; no file under scripts/ may name one again.
 RETIRED = (
@@ -64,7 +63,10 @@ RETIRED = (
     "_set_operands _drop_positionals _heredoc_text _raw_expands _expanding_lead _lead_word "
     "_moved_segment _UNRESOLVED _PIECE_CUT _PARAM_NAME _TOKEN_EXPANSION _read_only_segment "
     "read_segment_ok relative_write _foreign_read_ok _shell_body _BODY_DEPTH _built_value "
-    "fed_tokens expansion_opaque shell_params flag_span"
+    "fed_tokens expansion_opaque shell_params flag_span "
+    "_fragments _word_pieces _split_values _SCOPE_DEPTH _CUT_MARK _BODY_CHARS _past_cap "
+    "_TARGET_CAP _body_constant _command_body _runs_body _option_body _stdin_operand "
+    "_runner_family _STDIN_OPS _NO_BODY _STDIN_FILES _BODY_RUNNERS _piped"
 ).split()
 
 

@@ -74,12 +74,13 @@ def test_a_read_verb_with_one_input_is_admitted(command: str) -> None:
 def test_a_wrapper_file_in_a_marked_repository_is_a_write(
     marked_repo: Path, other_repo: Path, form: str
 ) -> None:
-    # P9, issue 107: the lock or namespace file joins the write accounting beside time -o.
+    # P9, issue 107, 0224: the wrapper row is unadmitted for an agent, so it scopes nothing
+    # from elsewhere; in its own repo the grammar refuses it and names the wrapper.
     command = form.format(repo=marked_repo)
-    targets = jail._scope_paths(command, str(other_repo)) or ()
-    assert any(t.startswith(f"{marked_repo}/") for t in targets), (command, targets)
-    hook_input = _cred("Explore", "Bash", str(other_repo), command=command)
-    assert_denied(hook_input, "read-only while", "shell -c body")
+    assert jail._scope_paths(command, str(other_repo)) == (), command
+    hook_input = _cred("Explore", "Bash", str(marked_repo), command=command)
+    assert_denied(hook_input, "read-only while")
+    assert "Refused: " in str(jail.decide(hook_input, CFG).reason)
 
 
 def test_a_coder_creates_no_flock_file_outside_its_worktree() -> None:
@@ -93,9 +94,7 @@ def test_a_lone_numeric_flock_fd_is_no_write(
     marked_repo: Path, other_repo: Path, command: str
 ) -> None:
     # P9: with no command after it, a numeric operand names a file descriptor, never a path.
-    assert not [
-        t for t in jail._scope_paths(command, str(other_repo)) or () if str(marked_repo) in t
-    ]
+    assert not [t for t in jail._scope_paths(command, str(other_repo)) if str(marked_repo) in t]
     decision = jail.decide(_cred("Explore", "Bash", str(other_repo), command=command), CFG)
     assert decision.allow and not decision.warn, decision.reason
 
@@ -105,6 +104,6 @@ def test_a_numeric_flock_operand_before_a_command_is_a_file(
     marked_repo: Path, command: str
 ) -> None:
     # P9: flock 9 true creates the file 9 (orchestrator probe, run 20261107-145205).
-    assert f"{marked_repo}/9" in (jail._scope_paths(command, str(marked_repo)) or ())
     hook_input = _cred("Explore", "Bash", str(marked_repo), command=command)
-    assert_denied(hook_input, "read-only while", "shell -c body")
+    assert_denied(hook_input, "read-only while")
+    assert "Refused: " in str(jail.decide(hook_input, CFG).reason)

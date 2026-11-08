@@ -10,7 +10,6 @@ from tests.conftest import CFG, REPO_ROOT
 from tests.hook_chain import (
     decide,
     evaluate,
-    first_deny,
     internal_error_denies,
     payload,
     run_script,
@@ -210,12 +209,13 @@ def test_gh_classes_judges_the_hook_alone() -> None:
 
 
 def test_charter_docs_ledger_value_naming_git_push_is_parsed_by_gh_classes() -> None:
-    # 0044 parity, R-extra-1 (unit A2): a script run is a parsed segment; one quoted value
-    # naming git push is an argument, never a push, so the text fallback no longer reads it.
+    # 0044 parity, 228 S3: an interpreter head takes the text fallback, so a value naming git
+    # push is read as one; a value that names no push passes.
     args = '--expected-seq 2 --entry-file docs/.tmp/e.md --repo DAE --type "git push"'
     hook_input = _b("charter-docs", f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}")
-    assert evaluate(HOOK, hook_input) is None
-    assert first_deny(hook_input, CFG) is None
+    assert "git push runs only in the Push Train's releaser" in str(evaluate(HOOK, hook_input))
+    plain = _b("charter-docs", f"python3 {REPO_ROOT}/scripts/append_ledger.py {args[:-11]} PLT")
+    assert evaluate(HOOK, plain) is None
     inline = _b("charter-docs", "python3 -c \"import os; os.system('git push')\"")
     assert "git push runs only in the Push Train's releaser" in str(evaluate(HOOK, inline))
 

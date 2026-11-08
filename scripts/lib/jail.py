@@ -77,20 +77,16 @@ from lib.shell import (
     _PROJECT_DATA,
     _REPO_SCRIPTS,
     _SHELLS,
-    _STDIN_TAIL,
     _TRUSTED_BIN,
     _VALUE_LONG_NEXT,
     CHAR,
     CLOSE,
-    FLOCK_BODY,
     GIT_PLUMBING_REMOTE,
-    INLINE_FLAGS,
     INTERPRETERS,
     R_CLEAN,
     R_DATA_DIR_GIT,
     R_DEFAULT_BRANCH,
     R_DESTRUCTIVE,
-    R_ENV_SPLIT,
     R_FORCE_PUSH,
     R_STASH_UNTRACKED,
     READ_ONLY_CMDS,
@@ -129,12 +125,8 @@ from lib.shell import (
     worker_parse,
 )
 from lib.shparse import (
-    BraceList,
     Command,
-    Control,
-    Heredoc,
     Literal,
-    Opaque,
     Param,
     Pipeline,
     Redirect,
@@ -2295,17 +2287,20 @@ def _credential_reason(tool: str, tool_input: dict[str, object], cwd: str) -> st
 
 def _plain_segments(command: str) -> list[list[str]] | None:
     # 0028, 228 S3: each parsed command's literal words past its wrappers; None (the regex
-    # fallback) when the parse is opaque, a word expands, or a shell or interpreter runs a body.
+    # fallback) on an opaque parse, an expanding word, env -S, or a shell or interpreter head.
     script = shparse.parse(command)
     if shparse.opaque(script):
         return None
     flat: list[list[str]] = []
-    piped = _piped(script)
     for cmd, _ in shparse.walk(script):
         words = [w.literal for w in cmd.words]
         literal = [w for w in words if w is not None]
-        tokens = strip_wrappers(literal) if len(literal) == len(words) else None
-        if tokens is None or _command_body(cmd, any(cmd is c for c in piped)) is not None:
+        if len(literal) != len(words) or env_split_values(literal):
+            return None
+        tokens = strip_wrappers(literal)
+        if tokens and command_family(tokens[0]) == "busybox":
+            tokens = tokens[1:]
+        if tokens is None or (tokens and command_family(tokens[0]) in _BODY_HEADS):
             return None
         if not tokens:
             continue
@@ -2314,11 +2309,6 @@ def _plain_segments(command: str) -> list[list[str]] | None:
             return None
         flat.append(tokens)
     return flat
-
-
-def _piped(script: Script) -> list[Command | Control | Opaque]:
-    # 228 S3: every command a pipe feeds, its stdin a stream another command writes.
-    return [c for p in shparse.nodes(script) if isinstance(p, Pipeline) for c in p.commands[1:]]
 
 
 def _gh_gate(agent: str, cwd: str, command: str) -> str | None:
@@ -2333,9 +2323,8 @@ def _train_active(cwd: str) -> bool:
     return os.path.lexists(train_marker(project_root(cwd)))
 
 
-# 228 S3: literal fragments an unadmitted command may name; past it the call fails closed.
-_TARGET_CAP = 96
 _GIT_DIR_OPTS = ("--git-dir=", "--work-tree=")
+# 228 S3: kept for the controls registry (h1.json, a2.json); no jail decision path shows them.
 R_SHELL_BODY = (
     "a shell -c body, or a shell command string read from a pipe, stdin, a here-string or a "
     "heredoc, is one string the jail does not walk for what it writes (issue 81, 116). "
@@ -2346,11 +2335,8 @@ R_INLINE_BODY = (
     "from a pipe, - or a here-string) is code the jail cannot walk for what it writes "
     "(issue 116). Next: save the code as a script file and run it by its path."
 )
-_BODY_RUNNERS = frozenset({"eval", "source", ".", "busybox"})
-# 228 S3: an unadmitted command's literal text is re-parsed this deep for the paths it names.
-_SCOPE_DEPTH = 3
-_CUT_MARK = "\x00"
-_BODY_CHARS = frozenset(" \t\n;&|()<>$`'\"\\")
+# 228 S3: a head that runs a string as code; the gh gate reads such a command by its text.
+_BODY_HEADS = _SHELLS | INTERPRETERS | {"eval", "source", ".", "busybox"}
 
 
 def _admission(command: str, agent: str, cwd: str) -> tuple[Script, Admitted | Refusal]:
@@ -2430,148 +2416,11 @@ def literal_tokens(cmd: Command | None) -> list[str]:
     return [w.literal if w.literal is not None else w.raw for w in cmd.words] if cmd else []
 
 
-def _body_constant(script: Script, refusal: Refusal) -> str | None:
-    # 228 S3: a refused shell, interpreter or env -S command keeps the finding agents read today.
-    commands = [cmd for cmd, _ in shparse.walk(script)]
-    held = refused_command(script, refusal)
-    start = next((k for k, cmd in enumerate(commands) if cmd is held), 0)
-    for node in shparse.nodes(script):
-        # fix round 4, design B: stdin fed to a group or subshell that runs a shell or code.
-        if isinstance(node, Control) and any(r.op in _STDIN_OPS for r in node.redirects):
-            inner = [c for c in shparse.nodes(node) if isinstance(c, Command)]
-            if any(_runner_family(c) for c in inner):
-                return R_SHELL_BODY
-    piped = _piped(script)
-    for cmd in commands[start:]:
-        found = _command_body(cmd, any(cmd is c for c in piped))
-        if found is not None:
-            return found
-    return None
-
-
-_STDIN_OPS = frozenset({"<", "<<", "<<-", "<<<"})
-_NO_BODY = frozenset({"-V", "-v", "--version", "-h", "--help"})
-
-
-def _runner_family(cmd: Command) -> str:
-    # 228 S3: the shell, interpreter or eval family a command runs, past its wrappers.
-    words = literal_tokens(cmd)
-    rest = strip_wrappers(words) or words
-    lead = 1 if rest[:1] and command_family(rest[0]) == "busybox" else 0
-    head = cmd.words[len(cmd.words) - len(rest) + lead] if len(rest) > lead else None
-    names = [head.literal] if head is not None and head.literal is not None else []
-    for part in head.parts if head is not None and head.literal is None else []:
-        names += [i.literal for i in part.items if i.literal] if isinstance(part, BraceList) else []
-    for name in names:
-        family = command_family(name or "")
-        if family in _SHELLS or family in INTERPRETERS or family in _BODY_RUNNERS:
-            return "shell" if family in _SHELLS else family
-    return ""
-
-
-def _command_body(cmd: Command, piped: bool) -> str | None:
-    words = literal_tokens(cmd)
-    if not words:
-        return None
-    env = command_family(words[0]) == "env"
-    if env_split_values(words) or (env and any(w.literal is None for w in cmd.words)):
-        return R_ENV_SPLIT
-    if command_family(words[0]) == "flock" and any(w.split("=")[0] in FLOCK_BODY for w in words):
-        return R_SHELL_BODY
-    family = _runner_family(cmd)
-    if not family:
-        return None
-    rest = strip_wrappers(words) or words
-    tail = cmd.words[len(cmd.words) - len(rest) + 1 :]
-    if rest[:1] and command_family(rest[0]) == "busybox":
-        tail = tail[1:]
-    if cmd.words and cmd.words[0].literal is None and family != "busybox":
-        return R_INLINE_BODY if family in INTERPRETERS else R_SHELL_BODY
-    fed = piped or any(r.op in _STDIN_OPS for r in cmd.redirects)
-    if family == "eval" or _runs_body(tail, family, fed):
-        return R_INLINE_BODY if family in INTERPRETERS else R_SHELL_BODY
-    return None
-
-
-def _runs_body(words: list[Word], family: str, fed: bool) -> bool:
-    # 228 S3: an inline-code flag or an expanding word, a stdin operand, or no operand; past an
-    # option off the row the next word may be its value, so the scan reads on for a code flag.
-    row = "" if family in {"source", "."} else family
-    flags = INLINE_FLAGS.get(row, frozenset()) | ({"-s"} if row == "shell" else set())
-    plain, valued = shell.OPTION_TABLE.get(row, (frozenset(), frozenset()))
-    scripts = shell.SCRIPT_FLAGS.get(row, frozenset())
-    texts = [w.literal for w in words]
-    unknown = operand = False
-    i = 0
-    while i < len(texts):
-        text = texts[i]
-        if text is None:
-            return True
-        if text in _NO_BODY or (row == "python" and text == "-m"):
-            return False
-        if (text == "-" or not text.startswith("-")) and not unknown:
-            return _stdin_operand(text, fed)
-        if text in scripts:
-            nxt = texts[i + 1] if i + 1 < len(texts) else "-"
-            return nxt is None or _stdin_operand(nxt, fed)
-        verdict = _option_body(text, flags, plain, valued, row) if text[:1] == "-" else ""
-        if verdict == "body":
-            return True
-        unknown = unknown or verdict == "unknown"
-        operand = operand or text[:1] != "-"
-        i += 2 if verdict == "value" else 1
-    return not unknown or (fed and not operand)
-
-
-def _option_body(
-    text: str, flags: frozenset[str], plain: frozenset[str], valued: frozenset[str], row: str
-) -> str:
-    # 228 S3: "body" on a code flag, "value" when the next word is the option's value,
-    # "unknown" off the row; getopt reads a short cluster letter by letter.
-    if text.startswith("--"):
-        name = text.split("=", 1)[0]
-        if name in flags:
-            return "body"
-        if name == "--" or name in plain:
-            return ""
-        if name in valued:
-            return "" if "=" in text else "value"
-        return "unknown" if row else ""
-    for k in range(1, len(text)):
-        letter = f"-{text[k]}"
-        if letter in flags:
-            return "body"
-        if letter in valued:
-            return "value" if k == len(text) - 1 else ""
-        if row and letter not in plain:
-            return "unknown"
-    return ""
-
-
-def _stdin_operand(text: str, fed: bool) -> bool:
-    # 228 S3: - or a stdin file; a relative operand fed a stream may name one after a cd.
-    stdin = os.path.normpath(os.path.join("/", text)).lstrip("/")
-    return (
-        text == "-"
-        or stdin in _STDIN_FILES
-        or bool(_STDIN_TAIL.search(text))
-        or (fed and not os.path.isabs(text))
-    )
-
-
-_STDIN_FILES = frozenset({"dev/stdin", "dev/fd/0", "proc/self/fd/0", "proc/thread-self/fd/0"})
-
-
-def _scope_paths(command: str, cwd: str) -> tuple[str, ...] | None:
-    # 0023, issue 30, 228 S3: an admitted command's typed writes, folders and git dirs; an
-    # unadmitted one names every literal fragment, and None past _SCOPE_DEPTH fails closed.
+def _scope_paths(command: str, cwd: str) -> tuple[str, ...]:
+    # 0023, 0224, 228 S3: an admitted command's typed writes, folders and git dirs; an
+    # unadmitted one is judged by its own repo alone, its text never read.
     script, got = _admission(command, "main", cwd)
-    if _passed(got):
-        return tuple(_admitted_targets(script, got, cwd))
-    texts = _fragments(command, 0)
-    if texts is None or len(texts) > _TARGET_CAP:
-        return None
-    return tuple(_opaque_targets(texts, set(range(len(texts))), cwd))
+    return tuple(_admitted_targets(script, got, cwd)) if _passed(got) else ()
 
 
 def _admitted_targets(script: Script, got: Admitted, cwd: str) -> list[str]:
@@ -2601,70 +2450,18 @@ def _admitted_targets(script: Script, got: Admitted, cwd: str) -> list[str]:
     return [t for t in dict.fromkeys(found) if t]
 
 
-def _fragments(text: str, depth: int) -> list[str] | None:
-    # 228 S3: every literal piece of every word, heredoc and opaque span; a piece holding shell
-    # syntax is parsed one level deeper, None past _SCOPE_DEPTH.
-    script = shparse.parse(text)
-    out: list[str] = []
-    for node in shparse.nodes(script):
-        if isinstance(node, Word):
-            pieces = _word_pieces(node)
-        elif isinstance(node, Heredoc):
-            pieces = [node.body]
-        elif isinstance(node, Opaque):
-            held = text[node.span[0] : node.span[1]]
-            out += "".join(" " if ch in _BODY_CHARS else ch for ch in held).split()
-            continue
-        else:
-            continue
-        for piece in pieces:
-            if not (_BODY_CHARS & set(piece)) or piece == text:
-                out += _split_values(piece)
-                continue
-            inner = _fragments(piece, depth + 1) if depth < _SCOPE_DEPTH else None
-            if inner is None:
-                return None
-            out += inner
-    return list(dict.fromkeys(p for p in out if p))
-
-
-def _word_pieces(word: Word) -> list[str]:
-    # 228 S3: the literal runs of a word; ~ and $HOME read as home, any other expansion cuts.
-    text = ""
-    for part in word.parts:
-        if isinstance(part, Literal):
-            text += part.text
-        elif isinstance(part, Tilde):
-            text += os.path.expanduser(f"~{part.user}")
-        elif isinstance(part, Param) and part.name == "HOME" and not part.op:
-            text += str(Path.home())
-        else:
-            text += _CUT_MARK
-    pieces = text.split(_CUT_MARK)
-    # 228 S3: $D/x may join D's value, so a piece after a cut is also read as relative.
-    return pieces + [p.lstrip("/") for p in pieces[1:] if p.startswith("/")]
-
-
-def _split_values(piece: str) -> list[str]:
-    # 228 S3: a NAME=value, a key:value or a list a,b may hold a path after its separator.
-    out = [piece]
-    for sep in "=:,":
-        out += [p for t in list(out) for p in t.split(sep)[1:]]
-    return out
-
-
 def _write_dirs(tool: str, tool_input: dict[str, object], cwd: str) -> list[str]:
     if tool in WRITE_TOOLS:
         raw = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
         return [_abs(raw, cwd)] if raw else []
     if tool == "Bash":
-        return list(_scope_paths(str(tool_input.get("command") or ""), cwd) or ())
+        return list(_scope_paths(str(tool_input.get("command") or ""), cwd))
     return []
 
 
 def _marked_repo(cwd: str, tool: str, tool_input: dict[str, object]) -> Path | None:
     # 0023, issue 30: a train in the cwd repo or in any repo the call writes into counts.
-    # 228 S3: every named folder is read; _scope_paths bounds the count and fails closed past it.
+    # 0224, 228 S3: the cwd and the admitted targets only; every one is read, none past a cap.
     seen: set[str] = set()
     for path in [cwd, *_write_dirs(tool, tool_input, cwd)]:
         while path and not os.path.isdir(path) and os.path.dirname(path) != path:
@@ -2725,6 +2522,21 @@ def _starts_in(script: Script, commands: list[Command], judged: str) -> bool:
     return len(moves) == 1 and os.path.normpath(words[1]) == os.path.normpath(judged)
 
 
+def _home_word(word: Word) -> str | None:
+    # issue 188, 228 S3: all Literal parts, or a leading ~ or bare $HOME then Literals; else None.
+    head, rest = (word.parts[0], word.parts[1:]) if word.parts else (None, [])
+    if not all(isinstance(p, Literal) for p in rest):
+        return None
+    tail = "".join(p.text for p in rest if isinstance(p, Literal))
+    if isinstance(head, Literal) or head is None:
+        return (head.text if head is not None else "") + tail
+    if isinstance(head, Tilde):
+        return os.path.expanduser(f"~{head.user}") + tail
+    if isinstance(head, Param) and head.name == "HOME" and not head.op:
+        return str(Path.home()) + tail
+    return None
+
+
 def _relative_word(cmd: Command, cwds: tuple[str, str]) -> tuple[str | None, bool]:
     # issue 188, 228 S3: (refused word, needs the read grammar) for one parsed command: a
     # relative redirect, folder, verb, write operand or module run, or an expanding word.
@@ -2740,10 +2552,10 @@ def _relative_word(cmd: Command, cwds: tuple[str, str]) -> tuple[str | None, boo
             return target, False
     texts: list[str] = []
     for word in cmd.words:
-        pieces = _word_pieces(word)
-        if len(pieces) != 1:
+        text = _home_word(word)
+        if text is None:
             return word.raw, False
-        texts.append(pieces[0])
+        texts.append(text)
     unwrapped = unwrap(texts) if texts else ([], [])
     if unwrapped is None:
         return " ".join(texts), False
@@ -2788,16 +2600,7 @@ def _relative_word(cmd: Command, cwds: tuple[str, str]) -> tuple[str | None, boo
 
 def _train_scoped(cwd: str, tool: str, tool_input: dict[str, object]) -> bool:
     # 0035: an unknown repo (no absolute cwd) is judged as if a train runs there.
-    return (
-        not os.path.isabs(cwd)
-        or _marked_repo(cwd, tool, tool_input) is not None
-        or (tool == "Bash" and _past_cap(str(tool_input.get("command") or ""), cwd))
-    )
-
-
-def _past_cap(command: str, cwd: str) -> bool:
-    # issue 81, 228 S3: text nested past _SCOPE_DEPTH may name any repo, so the call is scoped.
-    return bool(command) and _scope_paths(command, cwd) is None
+    return not os.path.isabs(cwd) or _marked_repo(cwd, tool, tool_input) is not None
 
 
 def _ours(raw_agent: str) -> bool:
@@ -2805,22 +2608,15 @@ def _ours(raw_agent: str) -> bool:
     return bool(sep) and prefix in (*AGENT_NAMESPACES, TEST_NAMESPACE)
 
 
-def _foreign_bash(
-    command: str, cwd: str, repo: Path | None, agent: str, charter: str | None
-) -> Decision:
+def _foreign_bash(command: str, cwd: str, repo: Path, agent: str, charter: str | None) -> Decision:
     # 0100, 228 S3: a foreign agent's Bash in a run is admitted as a read, else refused at its span.
-    script, got = _admission(command, "foreign", cwd)
-    train = None
-    if repo is not None:
-        train = R_UNKNOWN_TRAIN.format(agent=agent, marker=train_marker(repo), repo=repo)
+    got = _admission(command, "foreign", cwd)[1]
+    train = R_UNKNOWN_TRAIN.format(agent=agent, marker=train_marker(repo), repo=repo)
     refused = _refused(got)
-    if refused is None:
-        outside = git_dir_outside(got, cwd, charter) if _passed(got) else None
-        if train is not None and outside is None:
-            return _allow()
-        return _block(f"{train or R_SHELL_BODY} {outside or ''}".strip())
-    constant = _body_constant(script, refused) or train or R_SHELL_BODY
-    return _block(refusal_text(refused, constant))
+    if refused is not None:
+        return _block(refusal_text(refused, train))
+    outside = git_dir_outside(got, cwd, charter) if _passed(got) else None
+    return _allow() if outside is None else _block(f"{train} {outside}")
 
 
 def _unknown_decision(
@@ -2844,10 +2640,10 @@ def _unknown_decision(
     if command and (_data_dir_write(command) or _cd_data_dir_git(command)):
         return _block(R_DATA_DIR)
     repo = _marked_repo(cwd, tool, tool_input)
-    # issue 81: text past the scope cap may name any repo, so it fails closed.
-    if repo is None and not _past_cap(command, cwd):
+    # 0224: judged by its own repo; a command's text never scopes the call.
+    if repo is None:
         return _allow()
-    if tool == "Bash" or repo is None:
+    if tool == "Bash":
         return _foreign_bash(command, cwd, repo, agent, charter)
     return _block(R_UNKNOWN_TRAIN.format(agent=agent, marker=train_marker(repo), repo=repo))
 

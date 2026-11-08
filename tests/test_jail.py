@@ -1503,9 +1503,7 @@ def test_issue30_main_plain_commands_pass_during_a_train(marked_repo: Path, comm
         {"file_path": "{repo}/notes.md"},
         {"file_path": "{repo}/new/dir/notes.md"},
         {"command": "touch {repo}/x"},
-        {"command": "echo hi > {repo}/x"},
         {"command": "git -C {repo} commit -m x"},
-        {"command": "sed -i s/a/b/ {repo}/x"},
     ],
 )
 def test_issue30_unknown_agent_refused_writing_into_a_marked_repo(
@@ -1517,6 +1515,13 @@ def test_issue30_unknown_agent_refused_writing_into_a_marked_repo(
     d = decide(_cred("Explore", tool, str(other_repo), **filled), CFG)
     assert not d.allow and "read-only while" in str(d.reason), filled
     assert str(train_marker(marked_repo)) in str(d.reason)
+
+
+@pytest.mark.parametrize("command", ["echo hi > {repo}/x", "sed -i s/a/b/ {repo}/x"])
+def test_an_unadmitted_write_is_refused_in_its_own_repo(marked_repo: Path, command: str) -> None:
+    # 0224, 228 S3: main admits no typed write here, so the call is judged by its own repo.
+    filled = command.format(repo=marked_repo)
+    _run_refused(_foreign(marked_repo, filled))
 
 
 def test_a_leading_cd_into_a_marked_repo_before_a_read_is_admitted(
@@ -2124,15 +2129,13 @@ def test_git_read_rows_keep_worktree_writes_train_scoped(
     reads = (f"git -C {marked_repo} grep -n x", f"git -C {marked_repo} merge-base a b")
     for command in reads:
         assert jail._scope_paths(command, str(other_repo)) == (), command
-    for sub in ("worktree add /tmp/x", "worktree list"):
-        found = jail._scope_paths(f"git -C {marked_repo} {sub}", str(other_repo)) or ()
-        assert str(marked_repo) in found, sub
-    assert (
-        jail._marked_repo(
-            str(other_repo), "Bash", {"command": f"git -C {marked_repo} worktree add /tmp/x"}
-        )
-        == marked_repo
-    )
+    listed = f"git -C {marked_repo} worktree list"
+    assert str(marked_repo) in jail._scope_paths(listed, str(other_repo))
+    assert jail._marked_repo(str(other_repo), "Bash", {"command": listed}) == marked_repo
+    # 0224: worktree add is off the read grammar, so it scopes nothing; its own repo refuses it.
+    added = f"git -C {marked_repo} worktree add /tmp/x"
+    assert jail._scope_paths(added, str(other_repo)) == ()
+    _run_refused(_foreign(marked_repo, added), "`add`")
 
 
 @pytest.mark.parametrize(
@@ -2171,29 +2174,28 @@ def test_a_foreign_agent_cannot_plant_a_fifo_in_a_marked_repo(
 def test_env_split_string_hiding_a_write_is_refused_reproduction(
     marked_repo: Path, other_repo: Path
 ) -> None:
-    # issue 80: env -S packs the write into one word; the marked repo must still be found.
+    # issue 80, 228 S3: env -S packs the write into one word; its own repo refuses the wrapper.
     command = f"env -S 'touch {marked_repo}/x'"
-    d = decide(_cred("Explore", "Bash", str(other_repo), command=command), CFG)
-    assert not d.allow and not d.warn, d.reason
-    assert str(d.reason).startswith(shell.R_ENV_SPLIT)
+    _run_refused(_foreign(marked_repo, command), "`env`")
 
 
 def _foreign(cwd: Path, command: str) -> jail.Decision:
     return decide(_cred("Explore", "Bash", str(cwd), command=command), CFG)
 
 
+def _run_refused(d: jail.Decision, word: str = "") -> None:
+    # 228 S3: the R_UNKNOWN_TRAIN text first, then the grammar's refusal naming its word.
+    reason = str(d.reason)
+    assert not d.allow and not d.warn, reason
+    assert "read-only while" in reason and ", at `" in reason and word in reason, reason
+
+
 @pytest.mark.parametrize("form", H1_ENV_SPLIT)
 def test_env_split_string_is_refused_to_a_foreign_agent_in_a_train(
     marked_repo: Path, other_repo: Path, form: str
 ) -> None:
-    # issue 80: from the train's repo or another one, the -S value's own targets scope the call.
-    for cwd in (marked_repo, other_repo):
-        d = _foreign(cwd, form.format(repo=marked_repo))
-        assert not d.allow and not d.warn and str(d.reason).startswith(shell.R_ENV_SPLIT), (
-            form,
-            cwd,
-        )
-        assert "Next: write the command without env -S" in str(d.reason)
+    # issue 80, 228 S3, 0224: judged by its own repo; the refusal names the refused word.
+    _run_refused(_foreign(marked_repo, form.format(repo=marked_repo)))
 
 
 @pytest.mark.parametrize("form", H1_ENV_SPLIT)
@@ -2206,14 +2208,8 @@ def test_env_split_string_is_refused_to_a_worker(form: str) -> None:
 def test_a_shell_body_is_refused_to_a_foreign_agent_in_a_train(
     marked_repo: Path, other_repo: Path, form: str
 ) -> None:
-    # issue 81: the body's own targets scope the call, then the body itself is refused.
-    for cwd in (marked_repo, other_repo):
-        d = _foreign(cwd, form.format(repo=marked_repo))
-        assert not d.allow and not d.warn and str(d.reason).startswith(jail.R_SHELL_BODY), (
-            form,
-            cwd,
-        )
-        assert "Next: run the command directly" in str(d.reason)
+    # issue 81, 228 S3, 0224: judged by its own repo; the refusal names the refused word.
+    _run_refused(_foreign(marked_repo, form.format(repo=marked_repo)))
 
 
 @pytest.mark.parametrize("form", [row[3] for row in A2_RULE_ROWS if row[2] == "inline"])
@@ -2221,11 +2217,7 @@ def test_an_inline_body_is_refused_to_a_foreign_agent_in_a_train(
     marked_repo: Path, other_repo: Path, form: str
 ) -> None:
     # issue 116 (P7): refused while a train runs; outside one it passes as today.
-    d = _foreign(marked_repo, form.format(repo=marked_repo))
-    assert not d.allow and not d.warn and str(d.reason).startswith(jail.R_INLINE_BODY), (
-        form,
-        d.reason,
-    )
+    _run_refused(_foreign(marked_repo, form.format(repo=marked_repo)))
     assert _foreign(other_repo, form.format(repo=other_repo)).allow, form
 
 
@@ -2240,38 +2232,34 @@ def test_hidden_bodies_pass_outside_a_train_and_for_main(
 
 
 def test_hidden_bodies_nest_and_find_their_targets(marked_repo: Path, other_repo: Path) -> None:
-    # issue 80, 81, 228 S3: a body inside a body names its paths to the depth cap, and each
-    # refused body keeps its finding.
+    # issue 80, 81, 228 S3, 0224: a body scopes nothing; in its own repo each is refused and
+    # the refusal names its first word off the table.
     nested = f"env -S \"bash -c 'touch {marked_repo}/x'\""
-    assert str(marked_repo / "x") in (jail._scope_paths(nested, str(other_repo)) or ())
-    bodies = (f"echo a; sh -c 'touch {marked_repo}/x'", "flock /tmp/l --command=true")
-    for command in (*bodies, "bash --frob -c"):
-        assert str(_foreign(marked_repo, command).reason).startswith(jail.R_SHELL_BODY), command
-    for command in ("bash script.sh -c x", "bash --version", "flock /tmp/l touch x"):
-        reason = str(_foreign(marked_repo, command).reason)
-        assert not reason.startswith(jail.R_SHELL_BODY), (command, reason)
+    assert jail._scope_paths(nested, str(other_repo)) == ()
+    _run_refused(_foreign(marked_repo, nested), "`env`")
+    _run_refused(_foreign(marked_repo, f"echo a; sh -c 'touch {marked_repo}/x'"), "`echo`")
+    for command in ("bash --frob -c", "bash script.sh -c x", "bash --version"):
+        _run_refused(_foreign(marked_repo, command), "`bash`")
+    for command in ("flock /tmp/l --command=true", "flock /tmp/l touch x"):
+        _run_refused(_foreign(marked_repo, command), "`flock`")
 
 
 @pytest.mark.parametrize("form", H1_DEEP_BODY)
 def test_a_body_past_the_depth_cap_fails_closed(
     marked_repo: Path, other_repo: Path, form: str
 ) -> None:
-    # issue 81, 228 S3: past the cap no path is read, so the call is judged as if a train runs.
-    for repo in (marked_repo, other_repo):
-        command = form.format(repo=repo)
-        assert jail._past_cap(command, str(other_repo)), command
-        d = _foreign(other_repo, command)
-        hidden = (jail.R_SHELL_BODY, shell.R_ENV_SPLIT)
-        assert not d.allow and not d.warn and str(d.reason).startswith(hidden), command
-    assert jail._train_scoped(str(other_repo), "Bash", {"command": form.format(repo=other_repo)})
+    # issue 81, 228 S3, 0224: no depth is walked; a deep body is refused in its own repo.
+    command = form.format(repo=marked_repo)
+    assert jail._scope_paths(command, str(other_repo)) == ()
+    _run_refused(_foreign(marked_repo, command))
 
 
 def test_a_body_within_the_depth_cap_is_walked(marked_repo: Path, other_repo: Path) -> None:
-    # issue 81, 228 S3: three levels are read for paths; outside a train they pass.
+    # issue 81, 228 S3, 0224: no level is read for paths; a train refuses the body in its own
+    # repo, and outside a train it passes.
     inside = nest_bodies(f"touch {marked_repo}/x", 3)
-    assert not jail._past_cap(inside, str(other_repo))
-    assert str(marked_repo / "x") in (jail._scope_paths(inside, str(other_repo)) or ())
-    assert str(_foreign(other_repo, inside).reason).startswith(jail.R_SHELL_BODY)
+    assert jail._scope_paths(inside, str(other_repo)) == ()
+    _run_refused(_foreign(marked_repo, inside))
     assert _foreign(other_repo, nest_bodies(f"touch {other_repo}/x", 3)).allow
 
 
@@ -2279,9 +2267,8 @@ def test_a_body_within_the_depth_cap_is_walked(marked_repo: Path, other_repo: Pa
 def test_a_runner_wrapper_cannot_hide_a_write(
     marked_repo: Path, other_repo: Path, form: str
 ) -> None:
-    # issue 82: each row reaches the wrapped write; an option off its row reads every word.
-    d = _foreign(other_repo, form.format(repo=marked_repo))
-    assert not d.allow and not d.warn and "read-only while" in str(d.reason), (form, d.reason)
+    # issue 82, 228 S3, 0224: judged by its own repo, the wrapper is refused and named.
+    _run_refused(_foreign(marked_repo, form.format(repo=marked_repo)))
 
 
 @pytest.mark.parametrize("form", H1_WRAPPERS)
@@ -2335,12 +2322,27 @@ ASSET_LOG_OPTS = "-- . :(exclude)assets/ :(exclude)*.glb :(exclude)web/big.bin"
         ("orchestrator", f"git -C {CWD} diff --stat abc123...daedalus/t {ASSET_TAIL}"),
     ],
 )
-def test_exclude_magic_on_a_readers_git_diff_and_log_is_a_table_gap(
-    agent: str, command: str
-) -> None:
-    # 0192, 228 S3 table gap: the grammar admits no pathspec magic; the read check names it.
-    denied = hook_chain.first_deny(_b(agent, command), CFG)
-    assert denied is not None and ":(exclude)assets/" in denied[1], (command, denied)
+def test_exclude_magic_is_admitted_on_a_readers_git_diff_and_log(agent: str, command: str) -> None:
+    # 0192, 0225: the exclude tail row admits the pathspec on a read subcommand.
+    assert hook_chain.first_deny(_b(agent, command), CFG) is None, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git diff a...b -- . ':(icase)assets/'",
+        "git diff a...b -- . ':(exclude,icase)assets/'",
+        "git diff a...b -- . ':(top)x'",
+        'git diff a...b -- . ":(exclude)$X"',
+        "git diff a...b -- . ':(exclude)'*.glb",
+        "git worktree list ':(exclude)x'",
+    ],
+)
+def test_other_pathspec_magic_stays_refused_to_a_reader(command: str) -> None:
+    # 0225: only :(exclude) or :! then a literal path, on diff, log, show, status or ls-files.
+    assert hook_chain.first_deny(_b("auditor", command), CFG) is not None, command
+    refusal = hook_chain.evaluate("read_only_bash", _b("auditor", command), "--git", "read-only")
+    assert str(refusal).startswith(jail.R_AUDITOR_BASH) and "Refused: " in str(refusal), refusal
 
 
 def test_exclude_magic_stays_refused_on_a_coder_write_path() -> None:

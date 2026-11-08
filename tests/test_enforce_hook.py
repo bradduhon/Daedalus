@@ -842,11 +842,12 @@ def test_main_writing_into_another_repos_train_is_judged(
     subprocess.run(["git", "init", "-q", str(marked)], check=True)
     (marked / ".claude" / "daedalus").mkdir(parents=True)
     _in_train(marked / ".claude" / "daedalus")
-    command = f"git -C {marked} clean -fdx"
+    command = f"git -C {marked} push origin main"
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": command}))
     # Main never prompted (amends 0106): judged by the full jail, which warns main.
+    # 0224: an admitted git -C names the folder; git clean is off main's table, so it scopes none.
     assert result.returncode == 0
-    assert "git clean" in main_warning(result.stdout)
+    assert "default branch" in main_warning(result.stdout)
 
 
 def test_fast_path_imports_only_the_standard_library_modules(repo_cwd: Path) -> None:
