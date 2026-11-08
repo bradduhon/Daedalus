@@ -411,6 +411,15 @@ A2_FIX5_OPAQUE = (
     "sh -c $'touch {repo}/x'",
     "sh -c 'x=$(echo {repo}); touch \"$x/y\"'",
     "sh -c 'touch `echo {repo}`/x'",
+    "sh -c '$(echo touch) {repo}/x'",
+    "sh -c '\"$C\" {repo}/x' _",
+    "sh -c '`echo touch` {repo}/x'",
+    "bash -c '$(echo set) -- {repo}/x; touch \"$1\"' _ /tmp/a",
+    'sh -c \'x=$"{repo}"; touch "$x"/a\'',
+    'sh -c "x=\\$\'{repo}\'; touch \\"\\$x\\"/a"',
+    "sh -c 'x=$(echo {repo}); touch \"$x/a\"'",
+    'sh -c \'export x=$"{repo}"; touch "$x"/a\'',
+    "export M=$\"{repo}\"; bash -c 'touch $M/x'",
 )
 # fix1-a2: with a train marked elsewhere, a body that only reads the marked repo or writes a
 # resolved path outside it is judged as on 1ba48d0.

@@ -1847,11 +1847,18 @@ def _base_env() -> dict[str, list[str]]:
     return env
 
 
+def _built_value(value: str) -> bool:
+    # fix1-a2 (design 2): a value built by $'..', $"..", a substitution or the unresolved mark.
+    text = _clean(value.replace(_LIT, "_"))
+    built = _UNRESOLVED in value or value.endswith("$") or bool(_substitutions(text))
+    return built or _quoted_dollar(value)
+
+
 def _bash_env(
-    segments: list[list[str]], start: dict[str, list[str]] | None = None
+    segments: list[list[str]], start: dict[str, list[str]] | None = None, strict: bool = False
 ) -> list[dict[str, list[str]]]:
     # spec 8: assignments and for-loops bind, read and friends unbind, HOME stays real; fix1-a2:
-    # start is the env a body inherits from its outer walk.
+    # start is the env a body inherits; strict (a body's env) binds a built value as unknown.
     env = dict(start) if start is not None else _base_env()
     envs: list[dict[str, list[str]]] = []
     changes: list[dict[str, list[str] | None]] = []
@@ -1865,6 +1872,7 @@ def _bash_env(
                 bound = _expand_word(value, env)
                 # issue 121: an append or an array element leaves the value unknown.
                 unknown = key != name or any(u for _, u in bound)
+                unknown = unknown or (strict and _built_value(value))
                 changed[key] = None if unknown else [t for t, _ in bound]
             if clean[i] == "for" and i + 1 < len(words):
                 loop = [x for w in words[i + 3 :] for x in _expand_word(w, env)]
@@ -2422,7 +2430,10 @@ def _shell_body(words: list[str], stdin: bool = False, base: str | None = "") ->
 
 
 def _raw_expands(word: str) -> bool:
-    # fix round 1, row 3: A1's _expands on a _shell_scan word, its quoted spans re-quoted.
+    # fix round 1, row 3: A1's _expands on a _shell_scan word, its quoted spans re-quoted;
+    # fix1-a2: the unresolved mark of a run body's substitution counts as an expansion.
+    if _UNRESOLVED in word:
+        return True
     parts = word.replace(_REDIRECT, "").replace(_LIT, "_").split(_CUT)
     safe = [p.replace('"', "_").replace("'", "_").replace("\\", "_") for p in parts]
     return _expands("".join(f'"{p}"' if k % 2 else p for k, p in enumerate(safe)))
@@ -2567,7 +2578,7 @@ def _inner_env(
     at = _command_at(clean, {i for i, w in enumerate(words) if w.startswith(_REDIRECT)})
     stop = at if at is not None and at >= 0 else len(words)
     prefix = [w for w in words[:stop] if _ASSIGN.match(w)]
-    env = _bash_env([prefix], prior)[0] if prefix else dict(prior)
+    env = _bash_env([prefix], prior, True)[0] if prefix else dict(prior)
     if params is None:
         return env
     env = {k: v for k, v in env.items() if not _PARAM_NAME.fullmatch(k)}
@@ -2627,12 +2638,13 @@ def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
 def _rebinds(words: list[str]) -> bool:
     # fix1-a2 (R1): shift, set with an operand, getopts, read or mapfile naming a positional,
     # eval, source or ., or an unknown command word; builtin and command are read past.
-    clean = [_clean(w) for w in words if not w.startswith(_REDIRECT)]
+    raws = [w for w in words if not w.startswith(_REDIRECT)]
+    clean = [_clean(w) for w in raws]
     at = _command_at(clean, set())
     if at is None:
         return False
-    if at < 0:
-        return True
+    if at < 0 or _expanding_lead(raws) is not None:
+        return True  # fix1-a2 (design 1): a built command word may be set or shift.
     name, args = _base(clean[at]), clean[at + 1 :]
     while name in {"builtin", "command"}:
         args = list(itertools.dropwhile(lambda a: a[:1] == "-", args))
@@ -2697,10 +2709,11 @@ def _write_walk(
     scanned = _shell_scan(command)
     segments = [segment.words for segment in scanned]
     folders = _chain_folders(segments, cwd)
-    envs = _bash_env(segments, start)
+    envs = _bash_env(segments, start, run)
     if run:
         _drop_positionals(segments, envs)
-    priors = [start if start is not None else _base_env(), *envs[:-1]]
+    body_envs = envs if run else _bash_env(segments, start, True)
+    priors = [start if start is not None else _base_env(), *body_envs[:-1]]
     found: list[str] = []
     opaque = False
     walked: set[tuple[str, str, str, tuple[str, ...] | None]] = set()
@@ -2751,7 +2764,7 @@ def _heredoc_walk(
     if not owner:
         return [], False
     lead = [s.words for s in _shell_scan(doc.before)]
-    prior = _bash_env(lead, start)[-1] if lead else (start or _base_env())
+    prior = _bash_env(lead, start, True)[-1] if lead else (start or _base_env())
     words = owner[0].words
     texts = [(_expand_word(w, prior) or [("", False)])[0][0] for w in words]
     for hidden in _segment_bodies(owner[0], texts, cwd):
