@@ -455,3 +455,15 @@ def test_constants_match_the_recipe_text() -> None:
     listed = _skill_line("build", r"files list may hold any of ([^\n]+?) \(0226\)")
     named = re.findall(r"`([^`]+)`", listed)
     assert tuple(named) == train_runner.CLASS_FILES
+
+
+def test_the_recipe_steps_make_one_call_each() -> None:
+    build, verify = phase_text("build"), phase_text("verify")
+    plugin = "python3 <plugin root>/scripts/daedalus_train.py"
+    assert f"`{plugin} dispatch --repo <repo> --unit <unit id>`" in build
+    assert f"`{plugin} finish-unit --repo <repo> --unit <unit id>`" in build
+    assert f"`{plugin} route --repo <repo> --unit <unit id> --verdict REFUTED --rows <n>`" in build
+    assert f"`{plugin} route --repo <repo> --unit <unit id> --verdict REFUTED`" in verify
+    assert f"`{plugin} route --repo <repo> --unit <unit id> --verdict VERIFIED`" in verify
+    for text in (build, verify):
+        assert "State Block row" in text
