@@ -349,22 +349,19 @@ def test_hook_gives_no_warning_outside_a_train(
 
 
 @pytest.mark.parametrize("command", ICASE_REFUSED)
-def test_an_icase_pathspec_is_refused_while_a_root_is_declared(repo: Path, command: str) -> None:
-    # issue 97: git would match notes/a.md in any case; the spelled path never names the root.
-    got = jail.excluded_root_reason(command, str(repo), _roots(str(repo / "notes")))
-    assert got is not None and got.startswith(jail.R_EXCLUDED_ICASE.split("{spec}")[0]), command
-    assert "Next: spell each path in its exact case" in got
-    assert jail.excluded_root_reason(command, str(repo), _roots()) is None, command
-
-
-@pytest.mark.parametrize("command", ICASE_REFUSED)
-def test_check_refuses_an_icase_pathspec(
+def test_an_icase_pathspec_is_refused_by_the_jail_and_the_check(
     repo: Path, command: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # issue 97: git would match notes/a.md in any case; the spelled path never names the root.
+    got = jail.excluded_root_reason(command, str(repo), _roots(str(repo / "notes")))
+    icase = jail.R_EXCLUDED_ICASE.split("{spec}")[0]
+    assert got is not None and got.startswith(icase), ("jail", command)
+    assert "Next: spell each path in its exact case" in got, ("jail", command)
+    assert jail.excluded_root_reason(command, str(repo), _roots()) is None, ("jail", command)
     # issue 97: judge in checks/excluded_roots.py meets the shared rule for every routed agent.
     monkeypatch.setattr(hook_io, "hook_config", lambda cwd: _config(repo))
-    got = load("excluded_roots").decide(_payload("daedalus:coder", repo, command), [])
-    assert not got.allow and "letter case" in str(got.reason), command
+    checked = load("excluded_roots").decide(_payload("daedalus:coder", repo, command), [])
+    assert not checked.allow and "letter case" in str(checked.reason), ("check", command)
 
 
 @pytest.mark.parametrize("command", A3_UNSEEN)
