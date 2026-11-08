@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0048: a coder's test command starts with the kernel wrapper. Issue 86: on a kernel where the
 # doctor's probe finds no Landlock, no seccomp filter or an error, the test command is refused.
+# 228 S3b: the call is admitted on its parse; the checks below read the Admitted record.
 from __future__ import annotations
 
 import argparse
@@ -14,7 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import daedalus_confine  # noqa: E402
 from checks import command_allowlist, shell_tripwires  # noqa: E402
 from lib import hook_io, jail, shell  # noqa: E402
+from lib.admit import Admitted, AdmittedCommand  # noqa: E402
 from lib.project_root import project_root  # noqa: E402
+from lib.shparse import parse, walk  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset({"Bash"})
 FLAGS: dict[str, hook_io.Flag] = {}
@@ -28,91 +31,79 @@ R_CONFINE_UNIT = (
     f"from inside that worktree (0048). Next: cd <your unit worktree> && {shell.CONFINE_PATH} "
     "--unit <that worktree> -- <the command>."
 )
+# 228 S3b: the families admit hands to its runner and terraform rows; each one is a test command.
+_TEST_FAMILIES = frozenset(shell.TEST_RUNNERS) | {"npm", "python"}
 
 
 def _declared_tests(cwd: str) -> frozenset[tuple[str, ...]]:
-    # 0048, 0192: each segment of each unit_test_cmd entry, bar its cd; an unusable one adds none.
+    # 0048, 0192, 228 S3b: each command of each unit_test_cmd entry as parsed words, bar its cd.
     if not os.path.isabs(cwd):
         return frozenset()
     loaded = jail._manifest_at(os.path.realpath(str(project_root(Path(cwd)))))
     commands = () if isinstance(loaded, str) else loaded.unit_test_cmd or ()
     found: set[tuple[str, ...]] = set()
     for command in commands:
-        chain = shell.worker_parse(command)
-        segments = chain.segments if chain is not None else []
-        found |= {tuple(s) for s in segments if s and shell._base(s[0]) not in jail.DIR_CHANGE_CMDS}
+        for cmd, _ in walk(parse(command)):
+            tokens = jail.literal_tokens(cmd)
+            if tokens and shell.command_family(tokens[0]) not in jail.DIR_CHANGE_CMDS:
+                found.add(tuple(tokens))
     return frozenset(found)
 
 
-def _is_test(segment: list[str], base: str, cwd: str) -> bool:
-    # 0048, Plan 6 section 10.3: a runner the runner check accepts, a worktree file run by its
-    # path, or a segment of the declared unit_test_cmd.
-    tokens = shell.strip_wrappers(segment) or segment
-    if jail.install_form(tokens) is not None:
-        return False  # 0196: network_tools admits only the frozen install, which needs the network.
+def _is_test(done: AdmittedCommand, tokens: list[str], base: str, cwd: str) -> bool:
+    # 0048, Plan 6 section 10.3: a runner row admit accepted, or a declared unit_test_cmd.
     # 104: a python3 script counts only inside a unit worktree, the runner check's own test.
-    if shell._tester_runner_ok(
-        shell._base(tokens[0]), tokens, shell_tripwires._own_script(cwd, base)
+    script = done.script.text if done.family == "python" and done.script else None
+    if done.family in _TEST_FAMILIES and (
+        script is None or shell_tripwires._own_script(cwd, base)(script)
     ):
         return True
-    word = tokens[0]
-    if "/" in word and os.path.isabs(cwd) and jail._in_unit_worktree(shell._abs(word, base), cwd):
-        return True
-    declared = _declared_tests(cwd)
-    return tuple(tokens) in declared or tuple(segment) in declared
+    return tuple(tokens) in _declared_tests(cwd)
 
 
-def _terraform_reason(tokens: list[str], base: str, cwd: str, wrapped: bool) -> str | None:
-    # 0158, 0159: a coder's allowlisted form meets the terraform class's switches, its fmt
-    # folder sits in a unit worktree; runner_refusal has refused every other form.
-    tokens = shell.strip_wrappers(tokens) or tokens
-    paths = shell.terraform_check(tokens[1:]) if shell._base(tokens[0]) == "terraform" else None
-    if paths is None:
+def _terraform_reason(done: AdmittedCommand, base: str, cwd: str) -> str | None:
+    # 0158, 0159: a coder's admitted form meets the terraform class's switches, its fmt
+    # folder sits in a unit worktree; admit has refused every other form.
+    if done.family != "terraform" or done.subcommand is None:
         return None
-    for path in paths:
+    for path in (r.text for r in done.reads if r != done.unit):
         target = shell._abs(path, base)
         if not os.path.isabs(cwd) or jail._unit_parts(target, cwd) is None:
             return shell.R_TERRAFORM_OPERATOR
-    chdir = [tokens[1]] if tokens[1].startswith("-chdir=") else []
+    chdir = [f"-chdir={done.cd_target.text}"] if done.cd_target is not None else []
+    sub = done.subcommand.text
     # 184: the init form meets the same switches, and only wrapped.
-    init = list(shell.TERRAFORM_INIT) if shell.terraform_init(tokens[1:]) else []
-    form = init or (["validate"] if "validate" in tokens else ["fmt", "-check"])
-    return command_allowlist.terraform_reason([tokens[0], *chdir, *form], cwd, wrapped)
+    form = list(shell.TERRAFORM_INIT) if sub == "init" else [sub] if sub == "validate" else []
+    form = form or ["fmt", "-check"]
+    wrapped = done.unit is not None
+    return command_allowlist.terraform_reason([done.word.text, *chdir, *form], cwd, wrapped)
 
 
-def _wrapped_reason(segment: list[str], base: str, cwd: str) -> str | None:
-    split = shell.confine_split(segment)
-    if split is None or not shell.confine_wrapper(segment[0], base):
-        return shell.R_CONFINE_FORM
-    unit = split[0]
+def _wrapped_reason(unit: str, base: str, cwd: str) -> str | None:
     parts = jail._unit_parts(unit, cwd) if os.path.isabs(unit) and os.path.isabs(cwd) else None
     inside = shell._under(os.path.realpath(base), os.path.realpath(unit))
     return None if parts is not None and len(parts) == 1 and inside else R_CONFINE_UNIT
 
 
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
-    chain = shell.worker_parse(hook_io.text(hook_io.tool_input(hook_input), "command"))
-    if chain is None:
-        return shell.R_UNSUPPORTED
-    cwd = hook_io.text(hook_input, "cwd")
+    call = jail.coder_call(hook_input)
+    got = call.got
+    if not isinstance(got, Admitted):
+        return jail.coder_refusal(call)
+    cwd = call.cwd
     # 0048, issue 86: an unusable kernel refuses every test command, wrapped or bare.
     kernel = daedalus_confine.unusable(daedalus_confine.kernel_support())
-    bases = shell.chain_bases(chain, cwd, jail.DIR_CHANGE_CMDS) or [cwd] * len(chain.segments)
-    for segment, base in zip(chain.segments, bases, strict=True):
-        if not segment:
-            continue
-        split = shell.confine_split(segment) if shell._base(segment[0]) == shell.CONFINE else None
-        inner = split[1] if split else segment
-        # 0164: a dev server, watch mode or terraform state change is refused wrapped or bare.
-        refused = shell.runner_refusal(inner) or _terraform_reason(
-            inner, base, cwd, split is not None
-        )
+    base = jail.coder_base(call, got)
+    _, commands = jail.lead_cd(got)
+    for done in commands:
+        refused = _terraform_reason(done, base, cwd)
         if refused:
             return refused
-        if shell._base(segment[0]) == shell.CONFINE:
-            reason = _wrapped_reason(segment, base, cwd) or kernel
+        if done.unit is not None:
+            reason = _wrapped_reason(done.unit.text, base, cwd) or kernel
         else:
-            reason = (kernel or R_CONFINE) if _is_test(segment, base, cwd) else None
+            tokens = jail.admitted_tokens(call.script, done)
+            reason = (kernel or R_CONFINE) if _is_test(done, tokens, base, cwd) else None
         if reason:
             return reason
     return None
