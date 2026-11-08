@@ -15,7 +15,9 @@ from typing import NamedTuple
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lib import hook_io, jail, shell, train_state  # noqa: E402
+from lib.admit import Admitted, Refusal, Role, admit_role  # noqa: E402
 from lib.audit import project_root  # noqa: E402
+from lib.shparse import Script, parse, walk  # noqa: E402
 from lib.workspace import WORKTREES_DIR, audit_unit, worktree_path  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset({"Bash"})
@@ -70,13 +72,6 @@ READ_GIT_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
     "grep": _grep_ok,
     "branch": _branch_ok,
 }
-
-
-def read_segment_ok(tokens: list[str], subs: frozenset[str], cwd: str, charter: str | None) -> bool:
-    # spec 7.1: jail's read set plus the Train C git rows; command_allowlist judges inspect by it.
-    if shell._cmd_name(tokens) == "git":
-        return jail._git_grammar_ok(tokens, subs, cwd, charter, READ_GIT_GRAMMAR)
-    return jail._read_only_segment(tokens, subs, cwd, charter)
 
 
 R_TEST_RUN_AUDIT = (
@@ -206,35 +201,6 @@ def _test_run_reason(tokens: list[str], runner: str, cwd: str) -> str | None:
     return R_TEST_RUN.format(runner=runner, where=where, rootdir=rootdir)
 
 
-def _show_sed(prev: list[str], sep: str, tokens: list[str], subs: frozenset[str]) -> bool:
-    # spec 6: `git show <rev>:<path> | sed -n <range>p`; this sed reads the pipe and prints only.
-    return (
-        "show" in subs
-        and sep == "|"
-        and shell._git_subcommand(prev) == "show"
-        and len(tokens) == 3
-        and tokens[:2] == ["sed", "-n"]
-        and shell._SED_PRINT.fullmatch(tokens[2]) is not None
-    )
-
-
-def _moves(chain: shell.WorkerChain) -> bool:
-    return any(s and shell._base(s[0]) in jail.DIR_CHANGE_CMDS for s in chain.segments)
-
-
-def _cd_reason(chain: shell.WorkerChain, cwd: str) -> str | None:
-    # spec 7.1: `cd <folder> && <reads>`; git -C, test-run and terraform bounds are judged on cwd.
-    if shell.chain_bases(chain, cwd, jail.DIR_CHANGE_CMDS) is None:
-        return R_CD_CHAIN
-    later = [s for s in chain.segments[1:] if s]
-    if any(
-        shell._cmd_name(s) == "git" or _pytest_args(s) is not None or _terraform_form(s)
-        for s in later
-    ):
-        return R_CD_CHAIN
-    return None
-
-
 def _terraform_reason(tokens: list[str], cwd: str) -> str | None:
     # 0186, 0188: the command_allowlist terraform class verbatim; no other form widens.
     from checks.command_allowlist import terraform_reason, wrapped_terraform_reason
@@ -248,49 +214,90 @@ def _terraform_form(tokens: list[str]) -> bool:
     return bool(tokens) and (tokens[0] == "terraform" or shell._base(tokens[0]) == shell.CONFINE)
 
 
+def role(agent: str, grant: str | None, runner: str | None, terraform: bool) -> Role:
+    # 228 S3: the hook flags name the grant; admit judges by the read Role they build.
+    git = (shell.GIT_SETS[grant], READ_GIT_GRAMMAR) if grant else None
+    wrappers = frozenset({shell.CONFINE}) if terraform else frozenset()
+    return Role(
+        agent, shell.READ_ONLY_CMDS, git, runner=runner, terraform=terraform, wrappers=wrappers
+    )
+
+
+def _refusal(
+    script: Script, refused: Refusal, grant: str | None, runner: str | None, flags: tuple[bool, str]
+) -> str:
+    # 228 S3: the grammar's refusal under the constant this check showed for its class (SA-7).
+    terraform, cwd = flags
+    cmd = jail.refused_command(script, refused)
+    tokens = jail.literal_tokens(cmd)
+    name = shell.command_family(tokens[0]) if tokens else ""
+    word = jail.refused_word(cmd, refused)
+    constant: str | None = None
+    if terraform and _terraform_form(tokens):
+        constant = _terraform_reason(tokens, cwd)
+    elif runner is not None and tokens and _pytest_args(tokens) is not None:
+        constant = _test_run_reason(tokens, runner, cwd)
+    elif name in shell.SEARCH_CMDS and jail.rewritten(word):
+        constant = jail.R_RG_OPAQUE
+    elif name == "rg" and jail.rg_program(tokens[1:]):
+        constant = jail.R_RG_PROGRAM
+    elif name in shell.READ_ONLY_WRITE_OPTS and jail.rewritten(word):
+        constant = shell.R_READ_EXPANSION
+    elif name in jail.DIR_CHANGE_CMDS:
+        constant = R_CD_CHAIN
+    return jail.refusal_text(refused, constant or _reason(grant))
+
+
+def _later(
+    parsed: tuple[Script, str],
+    got: Admitted,
+    grant: str | None,
+    runner: str | None,
+    flags: tuple[bool, str],
+) -> str | None:
+    # 228 S3: the checks that read the Admitted record: the cd chain, git -C, rg programs,
+    # the test run's train bounds and the terraform class's manifest gates.
+    terraform, cwd = flags
+    script, command = parsed
+    by_span = {cmd.span: cmd for cmd, _ in walk(script)}
+    commands = list(got.commands)
+    moved = bool(commands) and commands[0].family == "cd"
+    for done in commands[1:] if moved else commands:
+        tokens = jail.literal_tokens(by_span.get(done.span))
+        quoted = command[done.span[0] : done.span[1]]
+        if moved and (done.family in {"git", "terraform"} or done.module or done.wrappers):
+            return jail.refused_at(R_CD_CHAIN, f"{done.word.text} after a leading cd", quoted)
+        options = [o.text for o in done.options]
+        if done.family == "rg" and jail.rg_program(options):
+            return jail.refused_at(jail.R_RG_PROGRAM, "an rg option runs a program", quoted)
+        if terraform and _terraform_form(tokens):
+            reason = _terraform_reason(tokens, cwd)
+        elif runner is not None and done.module is not None:
+            reason = _test_run_reason(tokens, runner, cwd)
+        else:
+            continue
+        if reason is not None:
+            return jail.refused_at(reason, "the run is off its bounds", quoted)
+    outside = jail.git_dir_outside(got, cwd, hook_io.hook_charter(cwd))
+    return None if outside is None else f"{_reason(grant)} {outside}"
+
+
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
     grant: str | None = flags.git
     runner: str | None = flags.test_runner
     terraform: bool = flags.terraform
     cwd = hook_io.text(hook_input, "cwd")
-    chain = shell.worker_parse(hook_io.text(hook_io.tool_input(hook_input), "command"))
-    if chain is None:
-        return shell.R_UNSUPPORTED
+    command = hook_io.text(hook_io.tool_input(hook_input), "command")
     agent = hook_io.agent(hook_input)
-    for tokens in chain.segments:
-        args = _pytest_args(tokens) if tokens else None
+    script = parse(command)
+    for cmd, _ in walk(script):
+        args = _pytest_args(jail.literal_tokens(cmd)) if cmd.words else None
         if args is not None and any(a.startswith("--basetemp") for a in args):
             return jail.R_BASETEMP_AGENT.format(agent=agent)
-    moved = _moves(chain)
-    if moved and (reason := _cd_reason(chain, cwd)) is not None:
-        return reason
-    subs = shell.GIT_SETS[grant] if grant else frozenset()
-    charter = hook_io.hook_charter(cwd)
-    for i, tokens in enumerate(chain.segments):
-        # prepush2-2026-10-27: a rewritten word or a program option refuses whatever the target.
-        name = shell._cmd_name(tokens)
-        if name in shell.SEARCH_CMDS and shell.search_opaque(chain.raws[i]):
-            return jail.R_RG_OPAQUE
-        if name in shell.READ_ONLY_WRITE_OPTS and shell.expansion_opaque(chain.raws[i]):
-            return shell.R_READ_EXPANSION
-        if name == "rg" and jail.rg_program(tokens[1:]):
-            return jail.R_RG_PROGRAM
-        if (i == 0 and moved) or read_segment_ok(tokens, subs, cwd, charter):
-            continue
-        if i and _show_sed(chain.segments[i - 1], chain.seps[i - 1], tokens, subs):
-            continue
-        if terraform and _terraform_form(tokens):
-            reason = _terraform_reason(tokens, cwd)
-            if reason is None:
-                continue
-            return reason
-        if runner is not None and tokens and _pytest_args(tokens) is not None:
-            reason = _test_run_reason(tokens, runner, cwd)
-            if reason is None:
-                continue
-            return reason
-        return _reason(grant)
-    return None
+    got = admit_role(script, role(agent, grant, runner, terraform), cwd, text=command)
+    if isinstance(got, Refusal):
+        return _refusal(script, got, grant, runner, (terraform, cwd))
+    return _later((script, command), got, grant, runner, (terraform, cwd))
 
 
 decide, main = hook_io.entrypoint(judge, TOOLS, PARSER)
