@@ -2315,7 +2315,27 @@ def _gh_gate(agent: str, cwd: str, command: str) -> str | None:
     # 0035: outside a train, main and unknown agents skip the whole gate, deny classes included.
     if not allowlist_applies(agent, cwd, command):
         return None
-    return gh_reason(agent, command, _plain_segments(command))
+    return gh_reason(agent, command, _admitted_segments(command, cwd, {"gh", "git"}))
+
+
+def _admitted_segments(
+    command: str, cwd: str, families: frozenset[str] | set[str] | None = None
+) -> list[list[str]] | None:
+    # 228 S3: an admitted command has no body, so its parsed commands are every command it runs;
+    # a refused one keeps the _plain_segments reader and its text fallback.
+    script, got = _admission(command, "main", cwd)
+    if not _passed(got):
+        return _plain_segments(command)
+    parsed = {cmd.span: cmd for cmd, _ in shparse.walk(script)}
+    out: list[list[str]] = []
+    for done in got.commands:
+        cmd = parsed.get(done.span)
+        if cmd is None or (families is not None and done.family not in families):
+            continue
+        # 228 S3: from the command word on, past the wrappers admit read.
+        words = [w for w in cmd.words if w.span[0] >= done.word.span[0]]
+        out.append([w.literal if w.literal is not None else w.raw for w in words])
+    return out
 
 
 def _train_active(cwd: str) -> bool:
@@ -2759,8 +2779,8 @@ def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision
 
 
 def _nested_claude(command: str, cwd: str) -> bool:
-    # audit A7-1, issue 55, 228 S3: through wrappers and links; the regex on a body or expansion.
-    segments = _plain_segments(command)
+    # audit A7-1, issue 55, 228 S3: an admitted command's own words; refused, the old reader.
+    segments = _admitted_segments(command, cwd)
     if segments is None:
         return bool(_CLAUDE_WORD.search(command))
     return any(seg and runs_claude(seg, cwd) for seg in segments)

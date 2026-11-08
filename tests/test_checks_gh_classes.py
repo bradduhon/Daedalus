@@ -10,6 +10,7 @@ from tests.conftest import CFG, REPO_ROOT
 from tests.hook_chain import (
     decide,
     evaluate,
+    first_deny,
     internal_error_denies,
     payload,
     run_script,
@@ -209,13 +210,12 @@ def test_gh_classes_judges_the_hook_alone() -> None:
 
 
 def test_charter_docs_ledger_value_naming_git_push_is_parsed_by_gh_classes() -> None:
-    # 0044 parity, 228 S3: an interpreter head takes the text fallback, so a value naming git
-    # push is read as one; a value that names no push passes.
+    # 0044 parity, R-extra-1 (unit A2): a script run is a parsed segment; one quoted value
+    # naming git push is an argument, never a push, so the text fallback no longer reads it.
     args = '--expected-seq 2 --entry-file docs/.tmp/e.md --repo DAE --type "git push"'
     hook_input = _b("charter-docs", f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}")
-    assert "git push runs only in the Push Train's releaser" in str(evaluate(HOOK, hook_input))
-    plain = _b("charter-docs", f"python3 {REPO_ROOT}/scripts/append_ledger.py {args[:-11]} PLT")
-    assert evaluate(HOOK, plain) is None
+    assert evaluate(HOOK, hook_input) is None
+    assert first_deny(hook_input, CFG) is None
     inline = _b("charter-docs", "python3 -c \"import os; os.system('git push')\"")
     assert "git push runs only in the Push Train's releaser" in str(evaluate(HOOK, inline))
 
@@ -234,3 +234,25 @@ def test_gh_classes_fixture_decisions() -> None:
 
 def test_gh_classes_internal_error_denies_and_names_the_hook() -> None:
     internal_error_denies(HOOK, payload("Bash", agent=C, command="gh run list"), "--conductor")
+
+
+# 228 S3 hunt: a refused command keeps the gh gate's text fallback, and the role's chain
+# names the refused word; an admitted command's gh words are read from the parse.
+GH_HUNT = (
+    ("tmux new-session -d gh issue delete 3", "tmux"),
+    ("python3 -c 'import os; os.system(\"gh issue delete 3\")'", "python3"),
+)
+
+
+@pytest.mark.parametrize(("command", "word"), GH_HUNT)
+@pytest.mark.parametrize(
+    ("agent", "allow"),
+    [("orchestrator", "train,inspect"), ("charter-docs", "append_ledger,git,read")],
+)
+def test_a_gh_word_hidden_in_a_refused_command_is_refused_and_named(
+    agent: str, allow: str, command: str, word: str
+) -> None:
+    assert "names gh" in str(evaluate(HOOK, _b(agent, command)))
+    assert first_deny(_b(agent, command), CFG) is not None, (agent, command)
+    named = evaluate("command_allowlist", _b(agent, command), "--allow", allow)
+    assert f"`{word}`" in str(named) and "Refused: " in str(named), named

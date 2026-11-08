@@ -608,12 +608,14 @@ INLINE_RUNS = (
 
 @pytest.mark.parametrize("agent", ["main", "orchestrator"])
 def test_a_script_run_reaches_the_parsed_gh_path(train_repo: Path, agent: str) -> None:
-    # 228 S3: any interpreter head takes the text fallback now; a run naming gh is read by it.
-    for command in PARSED_RUNS + INLINE_RUNS:
-        assert jail._plain_segments(command) is None, command
+    # R-extra-2, P7, 228 S3: no unparsed-gh warning or refusal for a script or module run.
+    cwd = str(train_repo)
+    for command in PARSED_RUNS:
+        # 228 S3: node is off main's table, so its run takes the refused path's reader.
+        want = [shlex.split(command)] if jail.admitted(command, "main", cwd) else None
+        assert jail._admitted_segments(command, cwd) == want, command
+        assert jail._gh_gate(agent, cwd, command) is None, command
+    for command in INLINE_RUNS:
         want = _fallback_reason(agent, command)
-        assert jail._gh_gate(agent, str(train_repo), command) == want, command
-    assert _fallback_reason(agent, PARSED_RUNS[0]) is not None
-    assert all(_fallback_reason(agent, c) is None for c in PARSED_RUNS[1:])
-    d = decide(_bash(train_repo, "main", PARSED_RUNS[1]), Config())
-    assert d.allow, d.reason
+        assert jail._gh_gate(agent, cwd, command) == want, command
+    assert decide(_bash(train_repo, "main", PARSED_RUNS[0]), Config()).allow
