@@ -34,6 +34,7 @@ from lib.train_runner import (  # noqa: E402
     record_exception,
     record_ledger,
     record_plan,
+    record_unit_exception,
     record_verdict,
     refuted,
     resume,
@@ -89,7 +90,11 @@ def _parser() -> argparse.ArgumentParser:
     waive = sub.add_parser("exception")
     waive.add_argument("--repo", type=Path, required=True)
     waive.add_argument("--ledger-id", dest="ledger_id", required=True)
-    waive.add_argument("--finding", required=True)
+    # 229: the verify-phase form names a unit and one row of its newest refuted verdict.
+    target = waive.add_mutually_exclusive_group(required=True)
+    target.add_argument("--finding")
+    target.add_argument("--unit")
+    waive.add_argument("--row", type=int)
     waive.add_argument("--tracking", required=True)
     waive.add_argument("--other")
     judged = sub.add_parser("verdict")
@@ -288,6 +293,18 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "contract":
         return contract(repo)
     if args.action == "exception":
+        if (args.unit is None) != (args.row is None):
+            return Outcome(
+                EXIT_STOP,
+                [
+                    "--row goes with --unit and --unit needs --row. Next: rerun exception with "
+                    "--unit <unit id> --row <n>, or with --finding alone."
+                ],
+            )
+        if args.unit is not None:
+            return record_unit_exception(
+                repo, args.ledger_id, args.unit, args.row, args.tracking, args.other
+            )
         return record_exception(repo, args.ledger_id, args.finding, args.tracking, args.other)
     if args.action == "verdict":
         if args.gate == "docs":
