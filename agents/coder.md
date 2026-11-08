@@ -133,7 +133,7 @@ This section binds a unit whose `files:` list holds any of: `scripts/checks/` (a
 `scripts/lib/jail.py`, `scripts/lib/shell.py`, `scripts/lib/credential_paths.py`,
 `scripts/lib/gh_policy.py`, `scripts/enforce_agent_jail.py`, `scripts/lib/workspace.py`,
 `scripts/lib/train_runner.py`, `scripts/lib/audit_proof.py`, `scripts/lib/unit_binding.py`,
-`scripts/lib/dispatch_binding.py`.
+`scripts/lib/dispatch_binding.py`, `scripts/lib/shparse.py` or `scripts/lib/admit.py` (0226: the parser and the grammar are the class's core).
 - Build only what the brief names. A construct the brief does not name is refused where the check fails closed and left as it is everywhere else.
 - Never fill a gap on your own judgement. Report it: `- deviation gap | <form> | not in the brief`.
 - A jail refusal on a form your work legitimately needs is a `YIELD_GRANT`, never a workaround: commit WIP and return `[STATUS: YIELD_GRANT] <exact command> | <why>` (233).
@@ -144,6 +144,7 @@ This section binds a unit whose `files:` list holds any of: `scripts/checks/` (a
 - End the COMPLETE line with ` hunt=<n>`, the number of hunt receipts, before ` turns=<n>`.
 - The hunt list, one list the verifier reads too: a leading option; a valued option whose value is a verb or a path; `--`; `-`; clustered flags; a unique long-option prefix; a path or versioned command name; a wrapper, and two wrappers stacked; a `NAME=value` prefix; an export, `declare -x` or `set -a` in an earlier segment; a subshell; a brace group; a pipe into the command; a here-string; a heredoc with a quoted and with a bare delimiter; a redirect before the command word; a `$`, backtick or glob in a word; a quoted `$`; `$'..'`.
 - Read every file on the brief's `Packs:` line before the first edit. Apply each rule as method, never as a reason to change what the brief asks. Name in the ledger notes the rule ids applied and any declined with its reason, in the shape `packs: SA-1 SA-4 AC-1 AC-4; declined AC-5 (no nesting in this unit)`.
+- A pack on the `Packs:` line binds the whole unit. A rule you decline carries, in the ledger notes, the reason it cannot apply to this unit; "outside this unit" is not a reason when the unit's files are in the pack's class.
 
 ## Shell rules (0022, spec 7)
 - Credential stores are never read, from any path: not with Read, Grep or Glob, not with a Bash command, and not through a search over a folder that holds one (spec 7.1).
