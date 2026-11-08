@@ -10,7 +10,11 @@ import pytest
 from tests.conftest import REPO_ROOT
 
 CODER_PACKS = REPO_ROOT / "packs" / "coder"
-PACK_PREFIX = {"secure-architecture": "SA", "adversarial-coding": "AC"}
+PACK_PREFIX = {
+    "secure-architecture": "SA",
+    "adversarial-coding": "AC",
+    "shell-semantics": "SS",
+}
 COPYRIGHT = (REPO_ROOT / "packs" / "baseline" / "rules.md").read_text().splitlines()[0]
 MAX_ROWS = 8
 FORBIDDEN = (
@@ -67,7 +71,7 @@ def _problems(text: str, prefix: str) -> list[str]:
     return problems
 
 
-def test_the_coder_packs_are_the_two_named_files() -> None:
+def test_the_coder_packs_are_the_kept_named_files() -> None:
     found = sorted(p.relative_to(CODER_PACKS).as_posix() for p in CODER_PACKS.rglob("*.md"))
     assert found == sorted(f"{name}/rules.md" for name in PACK_PREFIX)
 

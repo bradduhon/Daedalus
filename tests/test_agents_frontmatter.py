@@ -852,3 +852,14 @@ def test_verify_skill_judges_pack_ids_as_receipts() -> None:
         "The coder's pack ids are receipts, not claims; judge the diff; a rule the coder names"
         " and did not follow is a `code` row only when a brief requirement is unmet because of it."
     ) in hunt
+
+
+def test_coder_binds_the_whole_unit_to_a_pack_on_the_packs_line() -> None:
+    # 0226: a declined pack rule carries its reason; "outside this unit" is no reason in class.
+    text = (AGENTS / "coder.md").read_text()
+    section = _build_step(text, "## Build only the ask (227)", "\n## ")
+    assert (
+        "A pack on the `Packs:` line binds the whole unit. A rule you decline carries, in the"
+        ' ledger notes, the reason it cannot apply to this unit; "outside this unit" is not a'
+        " reason when the unit's files are in the pack's class."
+    ) in section

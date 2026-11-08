@@ -2146,3 +2146,19 @@ def test_build_skill_gives_no_packs_line_outside_the_class() -> None:
     assert (
         "A unit outside the class carries no `Packs:` line unless its plan line names a pack."
     ) in bullet
+
+
+def test_build_skill_hands_the_shell_semantics_pack_to_its_class_only() -> None:
+    # 0226: the class pack rides the `Packs:` line only for the shell and check files.
+    bullet = _build_step4().split("- Coder packs (227). ", 1)[1]
+    path = "<plugin root>/packs/coder/shell-semantics/rules.md"
+    assert f"the line also carries `{path}`" in bullet
+    for name in (
+        "scripts/lib/jail.py",
+        "scripts/lib/shell.py",
+        "scripts/lib/shparse.py",
+        "scripts/lib/admit.py",
+        "scripts/checks/",
+    ):
+        assert f"`{name}`" in bullet, name
+    assert (REPO_ROOT / path.removeprefix("<plugin root>/")).is_file()
