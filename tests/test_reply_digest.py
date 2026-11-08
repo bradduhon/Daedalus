@@ -42,6 +42,21 @@ def test_a_verifier_reply_keeps_its_verdict_and_corrected_lines(
     assert report == folder / "verifier-a1c64c2e-20261102T010203000000Z.md"
 
 
+@pytest.mark.parametrize("verdict", [VERIFIED, REFUTED, "[ROWS] n=40"])
+def test_a_verifier_digest_keeps_the_key_line_second(tmp_path: Path, verdict: str) -> None:
+    # 0231: the merge gate reads the unit key from the line after the opening line.
+    key = "Unit worktree: /repo/.claude/worktrees/t-u1"
+    message = "\n".join([verdict, key, *TABLE, "corrected=0", verdict])
+    short = _digest(tmp_path, "verifier", message)
+    if verdict.startswith("[ROWS]"):
+        assert short is None
+        return
+    assert short is not None
+    lines = short.splitlines()
+    assert lines[:2] == [verdict, key] and lines[3:] == ["corrected=0", verdict]
+    assert lines[2].startswith("report: ")
+
+
 def test_a_contract_spec_reply_keeps_the_heading_and_version(tmp_path: Path) -> None:
     packet = ["## Locked Contract Packet", "- **packet_version**: 5", *TABLE]
     short = _digest(tmp_path, "contract-spec", "\n".join(["Saved.", *packet]))

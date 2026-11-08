@@ -1036,7 +1036,7 @@ def _merge_all(
 
 
 VERIFIED = "[VERDICT: VERIFIED] claims=<n>"
-# 0121, agents/verifier.md:156: the verifier's closing line, after its corrected=<k> line.
+# 0121, agents/verifier.md:159: the verifier's closing line, after its corrected=<k> line.
 VERIFIED_LINE = re.compile(r"\[VERDICT: VERIFIED\] claims=[0-9]+")
 VERIFIER = "verifier"
 _VERDICT_OPEN = "[VERDICT: "
@@ -1085,12 +1085,8 @@ def unit_verified(
     exemptions: dict[str, object] | None = None,
     tip: str | None = None,
 ) -> bool:
-    # 0121: ordered match, one verifier at a time; the window runs from the newest dispatch
-    # naming the worktree to the next dispatch naming any worktree.
-    anchors = _anchors(records, worktree)
-    if not anchors:
-        return False
-    reply = newest_verdict(records, anchors[-1])
+    # 0231: the unit's own newest reply, selected by its key line, never by window position.
+    reply = newest_verdict(records, worktree)
     if reply is None:
         return False
     seq, last = reply
@@ -1105,13 +1101,18 @@ def unit_verified(
 
 
 def unit_refutations(records: list[dict[str, object]], worktree: Path) -> int:
-    # 0187: one refutation per verifier window on the worktree whose verdict line is REFUTED.
-    lines = (_verdict_line(records, i) for i in _anchors(records, worktree))
-    return sum(1 for last in lines if last is not None and last.startswith(REFUTED_PREFIX))
+    # 0187, 0231: one refutation per dispatch naming the worktree whose keyed reply is REFUTED.
+    anchors = _anchors(records, worktree)
+    count = 0
+    for start, stop in zip(anchors, [*anchors[1:], len(records)], strict=False):
+        reply = _pick(_keyed_replies(records, worktree, start, stop))
+        if reply is not None and reply[1] is not None and reply[1].startswith(REFUTED_PREFIX):
+            count += 1
+    return count
 
 
 def refuted_rows(line: str) -> list[str] | None:
-    # 229, agents/verifier.md:155: rows joined by "; "; a bare ";" leaves the row count unknown.
+    # 229, agents/verifier.md:158: rows joined by "; "; a bare ";" leaves the row count unknown.
     if not line.startswith(REFUTED_PREFIX):
         return None
     body = line.removeprefix(REFUTED_PREFIX).strip()
@@ -1121,32 +1122,38 @@ def refuted_rows(line: str) -> list[str] | None:
     return rows
 
 
-def _verdict_line(records: list[dict[str, object]], anchor: int) -> str | None:
-    reply = newest_verdict(records, anchor)
-    return None if reply is None else reply[1]
-
-
-def newest_verdict(records: list[dict[str, object]], anchor: int) -> tuple[object, str] | None:
-    # 229: the audit seq and verdict line of the window's newest string reply.
-    reply = newest_reply(records, anchor)
+def newest_verdict(records: list[dict[str, object]], worktree: Path) -> tuple[object, str] | None:
+    # 229: the audit seq and verdict line of the unit's newest keyed reply.
+    reply = newest_reply(records, worktree)
     if reply is None or reply[1] is None:
         return None
     return reply[0], reply[1]
 
 
 def newest_reply(
-    records: list[dict[str, object]], anchor: int
+    records: list[dict[str, object]], worktree: Path
 ) -> tuple[object, str | None, str] | None:
-    # 235: seq, verdict line (None when malformed) and text of the window's newest reply.
-    window: list[dict[str, object]] = []
-    for record in records[anchor + 1 :]:
-        if _worktree_lines(record):
-            break
-        window.append(record)
-    # 0121: a verifier's reply sits in its stop tail or its hand-back call; the newest
-    # string reply decides, so a null-tail stop after a hand-back does not override it.
+    # 0231: the newest verifier reply whose second line names the worktree, after the newest
+    # dispatch naming it; a reply keyed to any other path is never a candidate.
+    anchors = _anchors(records, worktree)
+    if not anchors:
+        return None
+    return _pick(_keyed_replies(records, worktree, anchors[-1], len(records)))
+
+
+def _reply_key(text: str) -> str | None:
+    # 0231, agents/verifier.md:149: the key is the line directly after the opening line.
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[1] if len(lines) > 1 else None
+
+
+def _keyed_replies(
+    records: list[dict[str, object]], worktree: Path, start: int, stop: int
+) -> list[tuple[object, object, object, str]]:
+    # 0121: a verifier's reply sits in its stop tail or its hand-back call.
+    key = f"{_UNIT_LINE}{worktree}"
     texts: list[tuple[object, object, object, str]] = []
-    for r in window:
+    for r in records[start + 1 : stop]:
         agent = r.get("agent_type")
         if not isinstance(agent, str) or agent.rpartition(":")[2] != VERIFIER:
             continue
@@ -1155,8 +1162,15 @@ def newest_reply(
             reply = r.get("last_message_tail")
         elif r.get("event") == "PostToolUse" and r.get("tool_name") == audit_proof.HANDBACK:
             reply = audit_proof.handback_message(r)
-        if isinstance(reply, str):
+        if isinstance(reply, str) and _reply_key(reply) == key:
             texts.append((r.get("seq"), r.get("event"), r.get("agent_id"), reply))
+    return texts
+
+
+def _pick(
+    texts: list[tuple[object, object, object, str]],
+) -> tuple[object, str | None, str] | None:
+    # 235: seq, verdict line (None when malformed) and text of the newest keyed reply.
     if not texts:
         return None
     seq, event, agent_id, text = texts[-1]

@@ -28,7 +28,7 @@ from tests.test_train_runner import (
 from tests.test_train_runner import plugin as plugin  # noqa: F401
 from tests.test_train_runner import repo as repo  # noqa: F401
 from tests.test_unit_binding import _ok, _refused, _write
-from tests.test_workspace_train import PLAN_BLOCK, REFUTED_REPLY, VERIFIED_REPLY
+from tests.test_workspace_train import PLAN_BLOCK, REFUTED_REPLY, VERIFIED_REPLY, keyed
 
 # 0020: a temp HOME and git identity for every test here.
 pytestmark = pytest.mark.usefixtures("isolated_env")
@@ -75,13 +75,13 @@ def test_two_refutations_in_one_window_escalate_and_free_the_unit(
     assert unit_binding.claim(repo, train, "agent-sonnet", name) is None
     assert train_runner.coder_model(repo, "U1").lines[0] == "sonnet"
     _verifier_dispatch(repo, unit)
-    _agent_stop(repo, "verifier", REFUTED_REPLY)
+    _agent_stop(repo, "verifier", keyed(REFUTED_REPLY, unit))
     assert train_runner.refuted(repo, "U1").lines == ["refuted U1: 1"]
     # 0187: the warm resume names no worktree; the second reply is a hand-back, then a digest.
     _record(repo, tool_name="SendMessage", tool_input={"to": "a1", "message": "Check the fix."})
     maker = partial(dict, session_id=SESSION, cwd=str(repo), tool_use_id="toolu_hb")
-    append_handback(maker, REFUTED_REPLY, "daedalus:verifier")
-    _agent_stop(repo, "verifier", DIGEST)
+    append_handback(maker, keyed(REFUTED_REPLY, unit), "daedalus:verifier")
+    _agent_stop(repo, "verifier", keyed(DIGEST, unit))
     assert train_runner.refuted(repo, "U1").lines == ["refuted U1: 2"]
     records = workspace._audit_records(repo, _state(repo))
     assert workspace.unit_refutations(records, unit) < 2
@@ -114,12 +114,12 @@ def test_refuted_records_each_reply_once_and_refuses_one_not_refuted(
     assert none.returncode == 1 and "holds no verifier reply" in none.stdout
     assert "Next:" in none.stdout
     _verifier_dispatch(repo, unit)
-    seq = _agent_stop(repo, "verifier", REFUTED_REPLY)["seq"]
+    seq = _agent_stop(repo, "verifier", keyed(REFUTED_REPLY, unit))["seq"]
     for _ in range(2):
         done = _train_cli(repo, *argv)
         assert (done.returncode, done.stdout) == (0, "refuted u1: 1\n"), done.stderr
     assert _unit(repo, f"{train}-u1")["refutations"] == [seq]
-    _agent_stop(repo, "verifier", VERIFIED_REPLY)
+    _agent_stop(repo, "verifier", keyed(VERIFIED_REPLY, unit))
     refused = _train_cli(repo, *argv)
     assert refused.returncode == 1 and "does not end with [VERDICT: REFUTED]" in refused.stdout
     assert "Next:" in refused.stdout
@@ -132,10 +132,10 @@ def test_a_refuted_verdict_then_an_operator_check_fail_reach_the_escalated_tier(
 ) -> None:
     train, unit = _unit_train(repo, plugin)
     _verifier_dispatch(repo, unit)
-    _agent_stop(repo, "verifier", REFUTED_REPLY)
+    _agent_stop(repo, "verifier", keyed(REFUTED_REPLY, unit))
     assert train_runner.refuted(repo, "U1").lines == ["refuted U1: 1"]
     # 0187: the fix pass verifies; the operator then fails its check, which has no verifier reply.
-    verified = _agent_stop(repo, "verifier", VERIFIED_REPLY)["seq"]
+    verified = _agent_stop(repo, "verifier", keyed(VERIFIED_REPLY, unit))["seq"]
     argv = ("refuted", "--repo", str(repo), "--unit", "U1", "--operator-check", "Scene loads")
     for _ in range(2):
         done = _train_cli(repo, *argv)

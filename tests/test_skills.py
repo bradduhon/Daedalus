@@ -624,6 +624,12 @@ def test_catalog_names_the_rebind_rule_and_the_verifier_step() -> None:
     assert "a recipe the main session drives by hand cold-dispatches each new unit" in rules
     assert "`[VERDICT: REFUTED] <rows>` sends the coder one FIX pass" in rules
     assert "fast-forwards the audit branch" in rules and "` adversarial=pass`" in rules
+    # 0231: one verifier per unit, warm only for that unit's fix pass.
+    assert (
+        "One verifier per unit (0231): each unit gets a fresh verifier, which stays warm only "
+        "for a fix pass on the same unit."
+    ) in rules
+    assert "stays warm across units" not in catalog
 
 
 def test_push_train_proof_names_the_exemption_path() -> None:
@@ -2285,6 +2291,12 @@ def test_verify_skill_dispatches_one_verifier_per_unit() -> None:
         assert sentence in unit, sentence
     assert "The first time, run" not in unit
     assert "every later unit goes to it" not in unit
+    # 0231: the route step expects the key line the merge gate selects by.
+    assert (
+        "The reply's second line is the key line `Unit worktree: <unit worktree path>`, copied "
+        "from the dispatch; a reply without it, or naming another worktree, counts as no reply "
+        "for any unit and is off its contract the same way (0231)."
+    ) in unit
 
 
 def test_verify_rows_mode_verifier_is_the_units_verifier() -> None:
