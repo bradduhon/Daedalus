@@ -100,6 +100,7 @@ between Bash calls.
      test line, or holds a line of another shape, and a COMPLETE line whose ` hunt=` is not
      ` hunt=<n>` directly before ` turns=<n>`; its Next line names the shape. A yield
      reply carries no block.
+   - Run every suite command in the foreground, never as a background task, so the main session is woken once; a background suite wakes it twice.
    - Cite a line by pasting the output of `python3 <plugin root>/scripts/cite.py <file> <pattern>`,
      run from your worktree with the file inside it; it prints `<file>:<line>` for each line
      holding the fixed string, so a citation is never retyped.
