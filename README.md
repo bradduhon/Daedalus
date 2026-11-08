@@ -694,6 +694,7 @@ Daedalus/
 │   ├── audit_report.py              # digest of a verified session log
 │   ├── catalog.py                   # prints the agent table and hooks matrix
 │   ├── cite.py                      # prints file:line for each line holding a fixed string
+│   ├── daedalus_claims.py           # prints the verifier's claim ranges from a branch in one call (0230)
 │   ├── daedalus_confine.py          # kernel wrapper: a coder's test command stays in its worktree, no network
 │   ├── daedalus_doctor.py           # first-run check behind /daedalus:doctor
 │   ├── daedalus_map.py              # the dependency map: imports, coverage, record readers, ownership, duplicates

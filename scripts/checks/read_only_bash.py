@@ -218,8 +218,16 @@ def role(agent: str, grant: str | None, runner: str | None, terraform: bool) -> 
     # 228 S3: the hook flags name the grant; admit judges by the read Role they build.
     git = (shell.GIT_SETS[grant], READ_GIT_GRAMMAR) if grant else None
     wrappers = frozenset({shell.CONFINE}) if terraform else frozenset()
+    # 0230: the unit test-runner grant is the verifier's; it carries the claims call too.
+    claims = runner == "unit"
     return Role(
-        agent, shell.READ_ONLY_CMDS, git, runner=runner, terraform=terraform, wrappers=wrappers
+        agent,
+        shell.READ_ONLY_CMDS,
+        git,
+        runner=runner,
+        terraform=terraform,
+        wrappers=wrappers,
+        claims=claims,
     )
 
 

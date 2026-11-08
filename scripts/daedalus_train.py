@@ -30,6 +30,8 @@ from lib.train_runner import (  # noqa: E402
     choice,
     coder_model,
     contract,
+    dispatch_unit,
+    finish_unit,
     progress,
     reaudit,
     record_docs_verdict,
@@ -40,6 +42,7 @@ from lib.train_runner import (  # noqa: E402
     record_verdict,
     refuted,
     resume,
+    route_unit,
     start,
     state_lines,
     step,
@@ -53,7 +56,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
         "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
-        "brief-check, ask-check, packs, writer-clear, assets, refuted, grant. "
+        "brief-check, ask-check, packs, writer-clear, assets, refuted, grant, dispatch, route, "
+        "finish-unit. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -157,6 +161,22 @@ def _parser() -> argparse.ArgumentParser:
     grant.add_argument("--reason", required=True)
     grant.add_argument("--ledger-id", dest="ledger_id", required=True)
     grant.add_argument("--command-file", dest="command_file", type=Path, required=True)
+    # 0230: the composed record calls; each prints one line for the State Block row.
+    send = sub.add_parser("dispatch")
+    send.add_argument("--repo", type=Path, required=True)
+    send.add_argument("--unit", required=True)
+    send.add_argument("--warm")
+    routed = sub.add_parser("route")
+    routed.add_argument("--repo", type=Path, required=True)
+    routed.add_argument("--unit", required=True)
+    routed.add_argument("--verdict", choices=("VERIFIED", "REFUTED"), required=True)
+    routed.add_argument("--rows", type=int)
+    done = sub.add_parser("finish-unit")
+    done.add_argument("--repo", type=Path, required=True)
+    done.add_argument("--unit", required=True)
+    done.add_argument("--next", dest="next_unit")
+    done.add_argument("--warm")
+    done.add_argument("--note", action="append", default=[])
     return parser
 
 
@@ -403,6 +423,12 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return _assets(repo, args.base, args.tip)
     if args.action == "grant":
         return _grant(repo, args)
+    if args.action == "dispatch":
+        return dispatch_unit(repo, args.unit, args.warm)
+    if args.action == "route":
+        return route_unit(repo, args.unit, args.verdict, args.rows)
+    if args.action == "finish-unit":
+        return finish_unit(repo, args.unit, args.next_unit, args.note, args.warm)
     if args.action == "check-reply":
         return check_reply(repo, args.stage)
     if args.action == "state":

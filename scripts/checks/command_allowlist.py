@@ -39,6 +39,8 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"assets"}
         # issue 187: the refutation record the model command reads before a fresh coder.
         | {"refuted"}
+        # 0230: the composed record calls, each no wider than the calls this table admits.
+        | {"dispatch", "route", "finish-unit"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir", "--check-tools"}),

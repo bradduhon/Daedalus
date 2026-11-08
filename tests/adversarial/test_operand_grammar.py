@@ -22,12 +22,14 @@ from tests.adversarial.corpus import (
     A1_READ_P4,
     A1_READ_P9,
     A1_WRAPPER_ROWS,
+    CLAIMS_ADMITTED,
+    CLAIMS_REFUSED,
     S3C_HUNT,
     S3C_HUNT_DECLARED,
     assert_denied,
 )
-from tests.conftest import CFG, CWD, WT
-from tests.hook_chain import decide
+from tests.conftest import CFG, CWD, SCRIPTS_DIR, WT
+from tests.hook_chain import decide, evaluate
 from tests.jail_cases import _narrowed_repo
 from tests.payloads import _b, _cred, _cwd
 
@@ -137,3 +139,28 @@ def test_a_hunt_form_beside_a_declared_or_install_row_is_refused(
     assert decide(_cwd(_b("coder", "bash scripts/test.sh"), repo), CFG).allow
     assert decide(_cwd(_b("coder", "npm ci --ignore-scripts"), repo), CFG).allow
     assert_denied(_cwd(_b("coder", form.format(wt=wt, repo=repo)), repo))
+
+
+def _claims(form: str) -> str:
+    return form.format(claims=SCRIPTS_DIR / "daedalus_claims.py", wt=WT)
+
+
+@pytest.mark.parametrize("form", CLAIMS_ADMITTED)
+def test_the_verifier_claims_call_is_admitted_in_its_one_form(form: str) -> None:
+    # 0230: the verifier's claims printer, three options once each in order.
+    decision = decide(_b("verifier", _claims(form)), CFG)
+    assert decision.allow and not decision.warn, decision.reason
+
+
+@pytest.mark.parametrize("form", CLAIMS_REFUSED)
+def test_the_claims_call_one_token_off_its_form_is_refused(form: str) -> None:
+    # 0230: a write-shaped option, a moved option or an off-table value refuses the verifier.
+    assert_denied(_b("verifier", _claims(form)))
+    # 0230: the read check's own row refuses it too, not only the tripwires before it.
+    flags = ("--git", "read-only", "--test-runner", "unit")
+    assert evaluate("read_only_bash", _b("verifier", _claims(form)), *flags) is not None
+
+
+@pytest.mark.parametrize("agent", ["coder", "auditor", "comparer", "orchestrator"])
+def test_the_claims_call_is_the_verifier_s_alone(agent: str) -> None:
+    assert_denied(_b(agent, _claims(CLAIMS_ADMITTED[0])))

@@ -2032,6 +2032,47 @@ def _is_cite(tokens: list[str], own_script: Callable[[str], bool]) -> bool:
     return len(tokens) == 4 and _is_plugin_script(tokens, "cite.py") and own_script(tokens[2])
 
 
+CLAIMS_SCRIPT = "daedalus_claims.py"
+# 0230: the claims call's three options, each once, in this order, each with one value.
+CLAIMS_OPTIONS = ("--worktree", "--branch", "--ranges")
+_CLAIMS_BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
+
+
+def claims_ranges(value: str) -> list[tuple[str, int, int]] | None:
+    # 0230: <file>:<first>-<last>[,...]; a relative file with no .., lines from 1, first <= last.
+    out: list[tuple[str, int, int]] = []
+    for part in value.split(","):
+        file, _, span = part.rpartition(":")
+        first, dash, last = span.partition("-")
+        digits = all(n.isascii() and n.isdigit() for n in (first, last))
+        if not (file and dash and digits) or file.startswith(("/", "-")):
+            return None
+        if ".." in file.split("/") or not 1 <= int(first) <= int(last):
+            return None
+        out.append((file, int(first), int(last)))
+    return out
+
+
+def claims_branch_ok(branch: str) -> bool:
+    # 0230: a ref name or sha; never an option, a <rev>:<path> or a range.
+    return _CLAIMS_BRANCH.fullmatch(branch) is not None and ".." not in branch
+
+
+def claims_ok(tokens: list[str]) -> bool:
+    # 0230: python3 <plugin>/scripts/daedalus_claims.py --worktree <abs> --branch <b> --ranges <r>.
+    if len(tokens) != 8 or not _is_plugin_script(tokens, CLAIMS_SCRIPT):
+        return False
+    if tuple(tokens[2::2]) != CLAIMS_OPTIONS:
+        return False
+    worktree, branch, ranges = tokens[3::2]
+    return (
+        os.path.isabs(worktree)
+        and ".." not in worktree.split("/")
+        and claims_branch_ok(branch)
+        and claims_ranges(ranges) is not None
+    )
+
+
 _SED_ADDR = r"(?:\d+|\$|/[^/\\]*/)"
 _SED_PRINT = re.compile(
     rf"(?:{_SED_ADDR}(?:,{_SED_ADDR})?)?p(?:;(?:{_SED_ADDR}(?:,{_SED_ADDR})?)?p)*"
@@ -2571,6 +2612,8 @@ def _worker_hygiene(
         from checks.command_allowlist import train_script_ok
 
         ledger = train_script_ok(tokens)
+    if agent == "verifier" and claims_ok(tokens):
+        ledger = True  # 0230: the verifier's claims printer; its hygiene check still runs.
     is_wrapper = command_family(name) in WORKER_WRAPPERS or name.startswith("python")
     if (
         agent == "charter-docs"
