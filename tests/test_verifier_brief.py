@@ -77,7 +77,7 @@ def test_procedure_takes_its_claims_from_the_brief_not_the_report() -> None:
     assert "The full diff is a required read for every unit" in step1
     assert "The `Read:` ranges guide your attention and never bound it" in step1
     assert "Without a `Read:` line, read the full diff instead." not in procedure
-    assert "each range of the `Read:` line through the `git show` pipe of step 3" in step1
+    assert "every range of the `Read:` line through one claims call of step 3" in step1
     assert "Open another file only to settle a named claim" in step1
     assert "list each extra file in the verdict's receipts" in step1
     assert "then the full diff. Read all of it." not in procedure
@@ -452,3 +452,51 @@ def test_a_local_url_is_the_one_slash_word_a_decision_brief_may_carry() -> None:
     ):
         problems = brief_problems(f"Question: Open {url} now?", "plain")
         assert any("with a slash" in p for p in problems), url
+
+
+def test_the_verifier_prints_its_claims_in_one_call_and_runs_in_the_foreground() -> None:
+    # 0230: one claims call per claims list; every command in the foreground.
+    head = _body("You are the Verifier.", "Inputs:")
+    assert (
+        "Run the test run and every other command in the foreground, never as a background task,"
+        " so the reply is one turn and the main session is woken once." in head
+    )
+    step3 = _body("3. Print every range you judge", "4. Class every claim")
+    assert "in one call per claims list, the script of the prompt's `Claims:` line" in step3
+    assert (
+        "`python3 <plugin root>/scripts/daedalus_claims.py --worktree <unit worktree> --branch"
+        " <branch> --ranges <file>:<first>-<last>[,...]`" in step3
+    )
+    assert "heads it `== <file>:<first>-<last> ==`" in step3
+    assert "call it again only for ranges you find while judging" in step3
+    jail = _body("The jail passes these for the verifier:", "The jail refuses these:")
+    assert "its three options once each in that order and no other word" in jail
+
+
+def test_a_rows_unit_runs_the_rows_file_alone() -> None:
+    # 0230: the rows file is the one test run; the full suite is judged from the receipts.
+    step5 = _body("5. Receipts (pin RCP -> VER)", "6. Clause numbers")
+    assert (
+        "On a unit whose brief carries a `Rows:` line, the one test run is the rows file alone;"
+        " the full suite is the coder's receipt, judged from the receipts block and never rerun."
+        " A unit without a `Rows:` line keeps the run above." in step5
+    )
+    skill = flatten(VERIFY_SKILL.read_text(encoding="utf-8"))
+    rows = skill.split("Rows pass (0228).", 1)[1].split("Hunt pass (227).", 1)[0]
+    assert (
+        "On a unit with a `Rows:` line the test run is the rows file alone: the full suite is the"
+        " coder's receipt, judged from the receipts block and never rerun by the verifier." in rows
+    )
+    assert "as your one test run, in the foreground, and judge each row's result" in rows
+    dispatch = skill.split("4. Dispatch.", 1)[1].split("Rows pass (0228).", 1)[0]
+    assert "the line `Claims: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_claims.py`" in dispatch
+
+
+def test_the_coder_runs_its_suite_in_the_foreground() -> None:
+    # 0230: a background suite wakes the main session twice.
+    coder = flatten((REPO_ROOT / "agents" / "coder.md").read_text(encoding="utf-8"))
+    step6 = coder.split("6. Finish with receipts", 1)[1].split("## Project priorities", 1)[0]
+    assert (
+        "Run every suite command in the foreground, never as a background task, so the main"
+        " session is woken once; a background suite wakes it twice." in step6
+    )

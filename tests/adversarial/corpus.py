@@ -1365,3 +1365,33 @@ P3_MEASURE_A3 = (
     ("coder", "unit", "refuse", "V=PA; unset ${V}TH; git log -- ':(icase)NOTES'"),  # A3-61
     ("coder", "unit", "refuse", "V=PA; getopts a ${V}TH; git log -- ':(icase)NOTES'"),  # A3-62
 )
+
+# 0230: the verifier's claims call; {claims} is the plugin script, {wt} a unit worktree.
+CLAIMS_ADMITTED = (
+    "python3 {claims} --worktree {wt} --branch daedalus-unit/u1 --ranges scripts/a.py:1-9",
+    "python3 {claims} --worktree {wt} --branch 0f97338 --ranges a.py:3-3,b/c.md:10-40",
+)
+# 0230: one token off the admitted form, a write-shaped option first.
+CLAIMS_REFUSED = (
+    "python3 {claims} --worktree {wt} --branch b --ranges a.py:1-2 --out /tmp/x",
+    "python3 {claims} --worktree {wt} --branch b --output=/tmp/x --ranges a.py:1-2",
+    "python3 {claims} --worktree {wt} --branch b --ranges a.py:1-2 | tee /tmp/x",
+    "python3 {claims} --worktree={wt} --branch b --ranges a.py:1-2",
+    "python3 {claims} --branch b --worktree {wt} --ranges a.py:1-2",
+    "python3 {claims} --worktree {wt} --branch --output --ranges a.py:1-2",
+    "python3 {claims} --worktree {wt} --branch b:a.py --ranges a.py:1-2",
+    "python3 {claims} --worktree {wt} --branch b --ranges /etc/passwd:1-2",
+    "python3 {claims} --worktree {wt} --branch b --ranges ../a.py:1-2",
+    "python3 {claims} --worktree {wt} --branch b --ranges a.py:0-2",
+    "python3 {claims} --worktree {wt} --branch b --ranges 'a.py:1-2;touch x'",
+    "python3 {claims} --worktree {wt} --branch b --ranges a*.py:1-2",
+    "python3 {claims} --worktree {wt} --branch $B --ranges a.py:1-2",
+    "python3 {claims} --worktree {wt}/.. --branch b --ranges a.py:1-2",
+    "python3 {claims} --worktree /tmp --branch b --ranges a.py:1-2",
+    "python3 -I {claims} --worktree {wt} --branch b --ranges a.py:1-2",
+    "python {claims} --worktree {wt} --branch b --ranges a.py:1-2",
+    "python3 /tmp/daedalus_claims.py --worktree {wt} --branch b --ranges a.py:1-2",
+    "timeout 9 python3 {claims} --worktree {wt} --branch b --ranges a.py:1-2",
+    "python3 {claims} --worktree {wt} --branch b --ranges a.py:1-2 &",
+    "true\npython3 {claims} --worktree {wt} --branch b --ranges a.py:1-2 --out x",
+)

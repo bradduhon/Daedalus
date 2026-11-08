@@ -118,6 +118,8 @@ class Role:
     docs_reads: bool = False
     # 228 S3: the orchestrator's train scripts and its date -u and sed -n inspection rows.
     train: bool = False
+    # 0230: the verifier's claims printer, daedalus_claims.py in its one form.
+    claims: bool = False
 
 
 class _Off(Exception):
@@ -192,7 +194,7 @@ def role_for(agent: str) -> Role:
         "coder": worker,
         "writer": worker,
         "writer (public-docs)": worker,
-        "verifier": Role("verifier", read.commands, git_read, runner="unit"),
+        "verifier": Role("verifier", read.commands, git_read, runner="unit", claims=True),
         "auditor": Role(
             "auditor",
             read.commands,
@@ -612,6 +614,8 @@ class _Judge:
             self.sed_print(c, words, literals)
         elif role.train and family in ("python", "date"):
             self.train(c, words, literals)
+        elif role.claims and family == "python" and _claims_script(literals):
+            self.claims(c, words, literals)
         elif role.runner in ("audit", "unit") and family == "python":
             self.test_run(c, words, literals)
         elif role.runner == "coder" and family in _RUNNERS:
@@ -1016,6 +1020,21 @@ class _Judge:
         for word in operands:
             c.add("read", _word_text(word))
 
+    def claims(self, c: _Cmd, words: list[Word], literals: list[str | None]) -> None:
+        # 0230: the one claims form; its worktree is bound as a git -C folder is.
+        toks = self._all_literal(words, literals)
+        if not shell.claims_ok(toks):
+            raise _Off(
+                c.span,
+                "daedalus_claims.py runs only as --worktree <absolute path> --branch <branch> "
+                "--ranges <file>:<first>-<last>[,...] (0230)",
+            )
+        c.typed.setdefault("script", []).append(_word_text(words[1]))
+        for option, value in zip(words[2::2], words[3::2], strict=True):
+            c.options.append(_word_text(option))
+            c.add("text", _word_text(value))
+        c.git_dir = Typed(os.path.normpath(toks[3]), words[3].span)
+
     def test_run(self, c: _Cmd, words: list[Word], literals: list[str | None]) -> None:
         # 0109: the read-only roles' one pytest form; the train's path bounds are the check's.
         from checks.read_only_bash import PYTEST, Bound, _test_run_ok
@@ -1075,6 +1094,12 @@ def _stream_path(text: str, base: str) -> bool:
     path = "/" + os.path.normpath(os.path.join(base if os.path.isabs(base) else "/", text))
     path = "/" + path.lstrip("/")
     return any(path == root or path.startswith(root + "/") for root in ("/dev", "/proc"))
+
+
+def _claims_script(literals: list[str | None]) -> bool:
+    # 0230: python3 and the plugin's own daedalus_claims.py, by its real path.
+    head = [t for t in literals[:2] if t is not None]
+    return len(head) == 2 and shell._is_plugin_script(head, shell.CLAIMS_SCRIPT)
 
 
 def _exclude_tail(sub: str, word: Word) -> bool:
