@@ -60,6 +60,7 @@ from lib.credential_paths import credential_roots as _credential_roots
 from lib.credential_paths import dotglob_on as _dotglob_on
 from lib.credential_paths import expand_braces as _expand_braces
 from lib.credential_paths import expand_word as _expand_word
+from lib.credential_paths import quoted_dollar as _quoted_dollar
 from lib.credential_paths import store_rest as _store_rest
 from lib.credential_paths import tilde as _tilde
 from lib.credential_paths import unjudged_root as _unjudged_root
@@ -2707,7 +2708,11 @@ def _write_walk(
         alts = [_expand_word(w, envs[k]) or [("", False)] for w in words]
         for j in range(max(len(a) for a in alts)):
             picked = [a[min(j, len(a) - 1)] for a in alts]
-            texts = [t + _UNRESOLVED if u and run else t for t, u in picked]
+            hidden_q = [run and _quoted_dollar(w) for w in words]
+            texts = [
+                t + _UNRESOLVED if run and (u or q) else t
+                for (t, u), q in zip(picked, hidden_q, strict=True)
+            ]
             targets, base = _segment_targets(words, texts, cwd)
             opaque = opaque or any(_UNRESOLVED in t for t in targets)
             found += [t.replace(_UNRESOLVED, "") for t in targets]
