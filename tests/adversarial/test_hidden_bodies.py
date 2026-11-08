@@ -135,19 +135,28 @@ def test_a_fix_round_form_from_an_unmarked_folder_is_refused(
     assert_denied(_foreign(other_repo, command), jail.R_SHELL_BODY, CREDENTIAL_PARAM)
 
 
-@pytest.mark.parametrize(
-    ("form", "opaque"), [(f, True) for f in A2_FIX5_OPAQUE] + [(f, False) for f in A2_FIX5_ADMITTED]
-)
-def test_a_run_body_writing_through_an_unresolved_word_fails_closed(
-    other_repo: Path, form: str, opaque: bool
+@pytest.mark.parametrize("form", A2_FIX5_OPAQUE)
+def test_a_run_body_writing_through_an_unresolved_word_names_every_piece(
+    marked_repo: Path, other_repo: Path, form: str
 ) -> None:
-    # fix1-a2 (issue 81): such a body may name any repo; a read or a cat heredoc is no write.
-    command = form.format()
-    assert jail._body_past_cap(command, cwd=str(other_repo)) is opaque, command
-    decision = jail.decide(_foreign(other_repo, command), CFG)
-    assert decision.allow is not opaque, (command, decision.reason)
-    if opaque:
-        assert_denied(_foreign(other_repo, command), jail.R_SHELL_BODY, CREDENTIAL_PARAM)
+    # fix1-a2 (R1 to R3): the unresolved write makes each piece of the text a target, so a
+    # marked repository the command names refuses it from an unmarked folder.
+    command = form.format(repo=marked_repo)
+    dirs = jail._bash_write_dirs(command, str(other_repo))
+    assert any(d == str(marked_repo) or d.startswith(f"{marked_repo}/") for d in dirs), command
+    assert not jail._body_past_cap(command)
+    assert_denied(_foreign(other_repo, command), jail.R_SHELL_BODY, CREDENTIAL_PARAM)
+
+
+@pytest.mark.parametrize("command", A2_FIX5_ADMITTED)
+def test_an_unresolved_body_write_with_no_train_anywhere_is_admitted(
+    other_repo: Path, command: str
+) -> None:
+    # fix1-a2 (0035): with no train marker on this machine, foreign agents and main act as on
+    # the audited tip 1ba48d0.
+    assert not jail._body_past_cap(command), command
+    assert jail.decide(_foreign(other_repo, command), CFG).allow, command
+    assert jail.decide(_b(None, command), CFG).allow, command
 
 
 @pytest.mark.parametrize("command", A2_FIX4_ADMITTED)

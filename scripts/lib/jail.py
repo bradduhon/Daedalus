@@ -2544,11 +2544,8 @@ def _hidden_reason(command: str, cwd: str | None = "") -> str | None:
     return None
 
 
-def _body_past_cap(command: str, depth: int = 0, cwd: str = "/") -> bool:
-    # issue 81, fix1-a2: a body past _BODY_DEPTH, or a run body writing through a $ word the walk
-    # cannot resolve, may name any repo, so the call is judged in a train.
-    if depth == 0 and _write_walk(command, cwd if os.path.isabs(cwd) else "/")[1]:
-        return True
+def _body_past_cap(command: str, depth: int = 0) -> bool:
+    # issue 81: a body nested past _BODY_DEPTH is never walked, so the call is judged in a train.
     for segment in _shell_scan(command):
         for hidden in _segment_bodies(segment):
             if depth >= _BODY_DEPTH or _body_past_cap(hidden.body, depth + 1):
@@ -2612,9 +2609,53 @@ def _segment_targets(words: list[str], texts: list[str], cwd: str) -> tuple[list
     return found, base
 
 
+_PIECE_CUT = re.compile(r"[\s;&|()<>`$={}]+")
+
+
 def _bash_write_dirs(command: str, cwd: str, depth: int = 0) -> list[str]:
     # issue 30: redirects, write operands, cd targets and git -C name the repos a command acts on.
-    return _write_walk(command, cwd, depth)[0]
+    # fix1-a2 (0035): a run body's unresolved write makes every piece of the text an opaque target.
+    found, opaque = _write_walk(command, cwd, depth)
+    if opaque:
+        cut = _PIECE_CUT.split(re.sub(r"[\"'\\]", "", command))
+        pieces = list(dict.fromkeys(p for p in cut if p))
+        found += _opaque_targets(pieces, set(range(len(pieces))), cwd)
+    return found
+
+
+def _rebinds(words: list[str]) -> bool:
+    # fix1-a2 (R1): shift, set with an operand, getopts, read or mapfile naming a positional, or
+    # an unknown command word.
+    clean = [_clean(w) for w in words if not w.startswith(_REDIRECT)]
+    at = _command_at(clean, set())
+    if at is None:
+        return False
+    if at < 0:
+        return True
+    name, args = _base(clean[at]), clean[at + 1 :]
+    if name in {"shift", "getopts"}:
+        return True
+    if name == "set":
+        return any(a == "--" or a[:1] not in {"-", "+"} for a in args)
+    return name in {"read", "mapfile", "readarray"} and any(_PARAM_NAME.fullmatch(a) for a in args)
+
+
+def _drop_positionals(segments: list[list[str]], envs: list[dict[str, list[str]]]) -> None:
+    # fix1-a2 (R1): after a rebind, or anywhere in a body with a loop, $0 on are unknown.
+    hits = [k for k, words in enumerate(segments) if _rebinds(words)]
+    if not hits:
+        return
+    looped = any(words and _clean(words[0]) == "do" for words in segments)
+    for env in envs[0 if looped else hits[0] + 1 :]:
+        for key in [k for k in env if _PARAM_NAME.fullmatch(k)]:
+            del env[key]
+
+
+def _heredoc_text(text: str, env: dict[str, list[str]]) -> list[tuple[str, bool]]:
+    # fix1-a2 (R3): an unquoted heredoc as bash hands it on: $ words expanded in the outer env,
+    # \$ to $, \\ to \ and \` to a backtick.
+    held = text.replace("\\\\", "\x04").replace("\\$", _LIT).replace("\\`", "`")
+    return [(t.replace("\x04", "\\"), u) for t, u in _expand_word(held, env) or [(text, True)]]
 
 
 def _write_walk(
@@ -2630,9 +2671,12 @@ def _write_walk(
     segments = [segment.words for segment in scanned]
     folders = _chain_folders(segments, cwd)
     envs = _bash_env(segments, start)
+    if run:
+        _drop_positionals(segments, envs)
     priors = [start if start is not None else _base_env(), *envs[:-1]]
     found: list[str] = []
-    opaque = False
+    # fix1-a2 (R2): a run body's $( ), backtick or <( ) output is never read as literal text.
+    opaque = run and bool(_substitutions(command))
     walked: set[tuple[str, str, str, tuple[str, ...] | None]] = set()
     for k, words in enumerate(segments):
         alts = [_expand_word(w, envs[k]) or [("", False)] for w in words]
@@ -2658,17 +2702,17 @@ def _write_walk(
                 found += more
                 opaque = opaque or hid
     for doc in _heredocs(command)[1] if depth < _BODY_DEPTH else []:
-        more, hid = _heredoc_walk(doc, cwd, depth, start)
+        more, hid = _heredoc_walk(doc, cwd, depth, start, run)
         found += more
         opaque = opaque or hid
     return found, opaque
 
 
 def _heredoc_walk(
-    doc: _Body, cwd: str, depth: int, start: dict[str, list[str]] | None
+    doc: _Body, cwd: str, depth: int, start: dict[str, list[str]] | None, run: bool
 ) -> tuple[list[str], bool]:
-    # fix1-a2 (issue 81): a heredoc a shell reads is walked as a run body, bound as a -c body is;
-    # an unquoted one was expanded by the outer shell, so the reader's $0 on are not bound.
+    # fix1-a2 (issue 81, R3): a heredoc a shell reads is walked as a run body with the reader's
+    # $0 on bound; an unquoted one is first expanded as bash expands it for the reader.
     owner = _shell_scan(doc.own)
     if not owner:
         return [], False
@@ -2678,8 +2722,16 @@ def _heredoc_walk(
     texts = [(_expand_word(w, prior) or [("", False)])[0][0] for w in words]
     for hidden in _segment_bodies(owner[0], texts, cwd):
         if hidden.reason == R_SHELL_BODY and not hidden.body:
-            env = _inner_env(prior, words, hidden.params if doc.quoted else None)
-            return _write_walk(doc.text, cwd, depth + 1, env, True)
+            env = _inner_env(prior, words, hidden.params)
+            found: list[str] = []
+            opaque = False
+            for text, unknown in (
+                [(doc.text, False)] if doc.quoted else _heredoc_text(doc.text, prior)
+            ):
+                more, hid = _write_walk(text, cwd, depth + 1, env, True)
+                found += more
+                opaque = opaque or hid or (unknown and run)
+            return found, opaque
     return [], False
 
 
@@ -2823,7 +2875,7 @@ def _train_scoped(cwd: str, tool: str, tool_input: dict[str, object]) -> bool:
     return (
         not os.path.isabs(cwd)
         or _marked_repo(cwd, tool, tool_input) is not None
-        or (tool == "Bash" and _body_past_cap(str(tool_input.get("command") or ""), cwd=cwd))
+        or (tool == "Bash" and _body_past_cap(str(tool_input.get("command") or "")))
     )
 
 
@@ -2862,7 +2914,7 @@ def _unknown_decision(
         return _block(R_DATA_DIR)
     repo = _marked_repo(cwd, tool, tool_input)
     # issue 81: a body past the walk's cap may name any repo, so it fails closed.
-    if repo is None and not (command and _body_past_cap(command, cwd=cwd)):
+    if repo is None and not (command and _body_past_cap(command)):
         return _allow()
     hidden = _hidden_reason(command, cwd) if command else None
     if hidden is not None or repo is None:

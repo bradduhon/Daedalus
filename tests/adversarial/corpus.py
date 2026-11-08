@@ -373,23 +373,44 @@ A2_FIX5_UNMARKED = (
     "sh -s {repo}/x <<'E'\ntouch \"$1\"\nE",
     "cd /dev && bash stdin {repo}/x <<< 'touch \"$1\"'",
     "M={repo} sh <<< 'sh -c \"touch \\$M/x\"'",
+    "sh -s {repo}/x <<E\ntouch \\$1\nE",
+    'sh -s {repo}/x <<E\ntouch "\\$1"\nE',
+    "M={repo} sh <<E\ntouch \\$M/x\nE",
+    "M={repo}; sh <<E\ntouch $M/x\nE",
+    "bash -c 'sh -s \"$1\" <<E\ntouch \\$1\nE' _ {repo}/x",
 )
 # fix1-a2 (issue 81): a run body writing through a word the walk cannot resolve fails closed.
 A2_FIX5_OPAQUE = (
-    "bash -c 'touch $DAEDALUS_UNSET_FIX5/x'",
-    "sh -c 'touch \"$1\"'",
-    "bash -c 'bash -c \"touch \\$1\"'",
-    "bash --frob -c 'touch \"$1\"' _ x",
-    "bash -c 'while read f; do rm \"$f\"; done' < list",
-    "sh <<'E'\ntouch \"$1\"\nE",
-    "bash -c 'cd $DAEDALUS_UNSET_FIX5 && touch x'",
-    "bash -c 'echo hi > \"${{!n}}\"'",
+    "sh -c 'shift; touch \"$1\"' _ a {repo}/x",
+    "bash -c 'shift; touch \"$1\"' _ /tmp/a {repo}/x",
+    "sh -c 'set -- {repo}/x; touch \"$1\"'",
+    "bash -c 'set -- {repo}/x; touch \"$1\"' _ /tmp/a",
+    "bash -c 'set {repo}/x; touch \"$1\"' _ /tmp/a",
+    "sh -c 'getopts a o; touch \"$1\"' _ /tmp/a {repo}/x",
+    "sh -c 'while true; do touch \"$1\"; shift; done' _ /tmp/a {repo}/x",
+    "sh -c 'touch \"$(echo {repo})/x\"'",
+    "sh -c 'touch $(echo {repo})/x'",
+    "sh -c 'touch \"`echo {repo}`/x\"'",
+    "sh -c 'touch \"$((1))\" {repo}/x'",
+    "sh -c 'touch \"${{!1}}\"' _ {repo}/x",
+    "sh -c 'touch \"$1\"' {repo}/x",
+    "bash -c 'bash -c \"touch \\$1\"' {repo}/x",
+    "bash --frob -c 'touch \"$1\"' _ {repo}/x",
+    "M={repo} sh -c 'cd $DAEDALUS_UNSET_FIX5 && touch x'",
+    "sh <<'E'\ntouch \"$1\" {repo}/x\nE",
+    'sh -s <<E\ntouch "$(echo {repo})/x"\nE',
 )
-# fix1-a2: a body that reads or echoes an unresolved word, or a heredoc only cat reads, is no write.
+# fix1-a2 (0035): with no train marker anywhere, these act exactly as on the audited tip 1ba48d0.
 A2_FIX5_ADMITTED = (
+    "sh -c 'touch \"$x\"'",
+    "bash -c 'cp \"$@\" d' _ a b",
     "bash -c 'echo \"$1\"' _ x",
     "sh -c 'cat \"$DAEDALUS_UNSET_FIX5\"'",
     "cat <<'E' > /tmp/fix5.sh\necho hi > \"$1\"\nE",
+    "bash -c 'touch $DAEDALUS_UNSET_FIX5/x'",
+    "bash -c 'while read f; do rm \"$f\"; done' < list",
+    "sh -c 'shift; touch \"$1\"' _ a b",
+    "sh -c 'touch \"$(date +%s)\"'",
 )
 # fix round 3 (unit A2): a script operand, a script named by php -f, or no stdin fed: no body.
 A2_FIX3_ADMITTED = (
