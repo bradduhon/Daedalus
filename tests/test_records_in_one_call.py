@@ -4,17 +4,18 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import audit, train_runner, train_state, workspace
+from lib import audit, train_runner, train_state, unit_binding, workspace
 
 from tests.conftest import REPO_ROOT, git
 from tests.helpers import phase_text
-from tests.test_workspace_train import LEDGER
+from tests.test_workspace_train import LEDGER, REFUTED_REPLY, VERIFIED_REPLY
 
 pytestmark = pytest.mark.usefixtures("isolated_env")
 SESSION = "sess-fold"
@@ -223,6 +224,76 @@ def test_dispatch_of_a_unit_outside_the_class_prints_one_line(tmp_path: Path) ->
     assert _snapshot(seq) == _snapshot(one)
     shape = rf"dispatch U2: model=sonnet worktree={one}/\S+-u2 brief=\S+/briefs/u2\.md rows=none"
     assert len(lines) == 1 and re.fullmatch(shape, lines[0]), lines
+
+
+def _routed_pair(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    seq, one = _pair(tmp_path)
+    for root in (seq, one):
+        _ok(train_runner.dispatch_unit(root, "U1"))
+        assert unit_binding.record_dispatch(root, TRAIN, f"{TRAIN}-u1") is None
+        assert unit_binding.claim(root, TRAIN, "agent-opus", f"{TRAIN}-u1") is None
+    return seq, one, _built(seq, "U1"), _built(one, "U1")
+
+
+@pytest.mark.usefixtures("fixed")
+def test_route_leaves_what_refuted_model_and_choice_leave(tmp_path: Path) -> None:
+    seq, one, seq_path, one_path = _routed_pair(tmp_path)
+    fix = ("a fix pass by unit U1's own coder", "a fresh coder")
+    fix_cost = "one warm fix pass; the coder keeps its context"
+    fresh = (
+        "a fresh coder on the escalated model for unit U1",
+        "another fix pass by its own coder",
+    )
+    fresh_cost = "the fresh coder reads the brief, the unit's commits and the verifier's rows"
+    for count, (chose, cost, word) in enumerate(
+        [(fix, fix_cost, "fix"), (fresh, fresh_cost, "fresh")], start=1
+    ):
+        _verdict(seq, seq_path, REFUTED_REPLY)
+        _verdict(one, one_path, REFUTED_REPLY)
+        assert _ok(train_runner.refuted(seq, "U1")) == [f"refuted U1: {count}"]
+        _ok(train_runner.coder_model(seq, "U1"))
+        _ok(train_runner.choice(seq, chose[0], chose[1], cost))
+        line = _ok(train_runner.route_unit(one, "U1", "REFUTED"))
+        assert line == [f"route U1: {word} model=opus refutations={count} checks=0"]
+        assert _snapshot(seq) == _snapshot(one)
+    # verify step 5: the third refutation goes to the operator, with no choice recorded.
+    _verdict(one, one_path, REFUTED_REPLY)
+    before = _snapshot(one)
+    line = _ok(train_runner.route_unit(one, "U1", "REFUTED"))
+    assert line == ["route U1: operator model=opus refutations=3 checks=0"]
+    after = _snapshot(one)
+    state = f".claude/daedalus/trains/{TRAIN}.json"
+    assert {k for k in before if before[k] != after[k]} == {state}
+    unit = train_state.units(train_state.load(one, TRAIN))[0]
+    assert len(unit["refutations"]) == 3 and len(unit["coders"]) == 2  # type: ignore[arg-type]
+
+
+@pytest.mark.usefixtures("fixed")
+def test_route_of_a_red_rows_file_records_a_fix_pass_and_no_refutation(tmp_path: Path) -> None:
+    seq, one, _, _ = _routed_pair(tmp_path)
+    _ok(train_runner.coder_model(seq, "U1"))
+    chose = "a fix pass by unit U1's own coder on 2 failing rows"
+    cost = "one warm fix pass before any verifier turn"
+    _ok(train_runner.choice(seq, chose, "a verifier dispatch", cost))
+    line = _ok(train_runner.route_unit(one, "U1", "REFUTED", rows=2))
+    assert line == ["route U1: fix model=opus refutations=0 checks=0"]
+    assert _snapshot(seq) == _snapshot(one)
+    assert train_state.units(train_state.load(one, TRAIN))[0].get("refutations") is None
+
+
+@pytest.mark.usefixtures("fixed")
+def test_route_verified_lists_the_operator_checks(tmp_path: Path) -> None:
+    root = _fixture(tmp_path / "repo")
+    manifest = {"dev_server": {"url": "http://localhost:5173", "check": "The scene loads"}}
+    (root / "service-manifest.json").write_text(json.dumps(manifest))
+    _ok(train_runner.dispatch_unit(root, "U2"))
+    _verdict(root, _built(root, "U2"), VERIFIED_REPLY)
+    lines = _ok(train_runner.route_unit(root, "U2", "VERIFIED"))
+    assert lines == [
+        "route U2: verified model=sonnet refutations=0 checks=2",
+        "operator check | http://localhost:5173 | The page shows the title",
+        "operator check | http://localhost:5173 | The scene loads",
+    ]
 
 
 def test_constants_match_the_recipe_text() -> None:

@@ -1583,6 +1583,8 @@ ROWS_ASK = (
     "one line `<req n> | <agent> | <admitted|refused> | <command>`. Run nothing; no code is "
     "built yet. Reply with `[ROWS] n=<count>` as your first and last line and the rows between."
 )
+_WEB_TOOLS = frozenset({"vitest", "tsc"})
+_WEB_SUFFIXES = (".ts", ".tsx", ".html")
 
 
 def _norm(name: str) -> str:
@@ -1771,6 +1773,92 @@ def dispatch_unit(cwd: Path, unit_id: str, warm: str | None = None) -> Outcome:
             raise RunnerError(str(exc)) from exc
 
     return _with_next(_recorded(cwd, edit), "dispatch")
+
+
+def _operator_checks(repo: Path, planned: plan_record.Unit) -> list[str]:
+    # 0164, 0192: one check per plan entry, plus the dev_server check on a web unit.
+    try:
+        loaded = manifest.load(repo)
+    except manifest.ManifestError as exc:
+        raise RunnerError(str(exc)) from exc
+    server = loaded.dev_server if loaded is not None else None
+    url = server.url if server is not None else "none"
+    checks = [f"operator check | {url} | {text}" for text in planned.operator_checks]
+    if server is None or loaded is None:
+        return checks
+    words = {w for cmd in manifest.declared_commands(loaded) for w in cmd.split()}
+    web = any(f.casefold().endswith(_WEB_SUFFIXES) for f in planned.files)
+    if web or words & _WEB_TOOLS:
+        checks.append(f"operator check | {server.url} | {server.check}")
+    return checks
+
+
+def _last_model(unit: dict[str, object]) -> str:
+    prior = _objects(unit, CODERS)
+    return _text(prior[-1], "model") if prior else "none"
+
+
+def _route_lines(
+    repo: Path, train_id: str, unit_id: str, verdict: str, rows: int | None
+) -> list[str]:
+    state = train_state.load(repo, train_id)
+    _, planned = _planned(state, unit_id)
+    unit = _unit_record(state, train_id, planned.id)
+    if verdict == "VERIFIED":
+        if rows is not None:
+            raise RunnerError(
+                "--rows goes with --verdict REFUTED, a rows file the coder's receipts show "
+                "failing. Next: rerun route without --rows for a verified unit."
+            )
+        records = workspace._audit_records(repo, state)
+        if not workspace.unit_verified(records, Path(str(unit["path"]))):
+            raise RunnerError(
+                f"the newest verifier reply on unit {planned.id} is not "
+                f"{workspace.VERIFIED}. Next: route the verdict the verifier gave."
+            )
+        checks = _operator_checks(repo, planned)
+        count = len(_refutation_seqs(unit))
+        head = f"route {planned.id}: verified model={_last_model(unit)} refutations={count}"
+        return [f"{head} checks={len(checks)}", *checks]
+    if rows is not None:
+        # build step 7, 0228: a red rows file is a fix pass before any verifier reply exists.
+        if rows < 1:
+            raise RunnerError(
+                "--rows counts the failing rows of the rows file and must be 1 or more. Next: "
+                "a green rows file needs no route; dispatch the verifier."
+            )
+        count = len(_refutation_seqs(unit))
+        route = "fix"
+        chose = f"a fix pass by unit {planned.id}'s own coder on {rows} failing rows"
+        over, cost = "a verifier dispatch", "one warm fix pass before any verifier turn"
+    else:
+        count = int(_sub(refuted(repo, planned.id))[0].rsplit(": ", 1)[1])
+        route = {1: "fix", 2: "fresh"}.get(count, "operator")
+        if route == "fix":
+            chose = f"a fix pass by unit {planned.id}'s own coder"
+            over, cost = "a fresh coder", "one warm fix pass; the coder keeps its context"
+        else:
+            chose = f"a fresh coder on the escalated model for unit {planned.id}"
+            over = "another fix pass by its own coder"
+            cost = "the fresh coder reads the brief, the unit's commits and the verifier's rows"
+    # verify step 5: a third refutation is the operator's; no choice, no model record, no release.
+    if route == "operator":
+        model = _last_model(_unit_record(train_state.load(repo, train_id), train_id, planned.id))
+    else:
+        model = _sub(coder_model(repo, planned.id))[0]
+        _sub(choice(repo, chose, over, cost))
+    return [f"route {planned.id}: {route} model={model} refutations={count} checks=0"]
+
+
+def route_unit(cwd: Path, unit_id: str, verdict: str, rows: int | None = None) -> Outcome:
+    # 0230: verify step 5 and build step 7's rows check, records and next route in one call.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        try:
+            return _route_lines(repo, train_id, unit_id, verdict, rows)
+        except workspace.WorkspaceError as exc:
+            raise RunnerError(str(exc)) from exc
+
+    return _with_next(_recorded(cwd, edit), "route")
 
 
 def _exemption_args(ledger_id: str, finding: str | None, tracking: str, other: str | None) -> None:
