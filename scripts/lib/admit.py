@@ -48,6 +48,9 @@ _ICASE_GLOBALS = frozenset({"--icase-pathspecs", "--glob-pathspecs"})
 # 228 S2: scheduling wrappers an agent may put inside the kernel wrapper, never bare (8.5 A).
 _CONFINED_WRAPPERS = frozenset({"timeout", "nice", "nohup", "stdbuf", "ionice", "taskset", "chrt"})
 _REFUSED_GIT_GLOBALS = frozenset({"-c", "--config-env", "--exec-path="})
+# 0225: the exclude tail row; the read subcommands it rides and its two literal prefixes.
+_EXCLUDE_SUBS = frozenset({"diff", "log", "show", "status", "ls-files"})
+_EXCLUDE_PREFIXES = (":(exclude)", ":!")
 
 
 @dataclass(frozen=True)
@@ -113,6 +116,8 @@ class Role:
     gitleaks: bool = False
     push: bool = False
     docs_reads: bool = False
+    # 228 S3: the orchestrator's train scripts and its date -u and sed -n inspection rows.
+    train: bool = False
 
 
 class _Off(Exception):
@@ -212,6 +217,8 @@ def role_for(agent: str) -> Role:
             gitleaks=True,
             push=True,
         ),
+        # 228 S3: command_allowlist --allow train,inspect (0060, spec 7.1).
+        "orchestrator": Role("orchestrator", read.commands, git_read, train=True),
     }
     if agent == "main":
         subs = shell.CODER_GIT | shell.CONDUCTOR_GIT | shell.CHARTER_DOCS_GIT | shell.READ_ONLY_GIT
@@ -241,8 +248,13 @@ def role_for(agent: str) -> Role:
 
 def admit(script: Script, agent: str, cwd: str, *, text: str) -> Admitted | Refusal:
     # 228 S2: text is the command the script was parsed from; spans index it (R6).
+    return admit_role(script, role_for(agent), cwd, text=text)
+
+
+def admit_role(script: Script, role: Role, cwd: str, *, text: str) -> Admitted | Refusal:
+    # 228 S3: a check whose hook flags name its grant judges by the Role those flags build.
     try:
-        return Admitted(tuple(_Judge(role_for(agent), cwd).script(script)))
+        return Admitted(tuple(_Judge(role, cwd).script(script)))
     except _Off as off:
         start, end = off.span
         digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
@@ -307,6 +319,8 @@ class _Judge:
     def __init__(self, role: Role, cwd: str) -> None:
         self.role = role
         self.cwd = cwd
+        # 228 S3: the folder later commands run in, moved by one leading cd.
+        self.base = cwd
 
     # -- script and pipelines ----------------------------------------------------------------
     def script(self, script: Script) -> list[AdmittedCommand]:
@@ -344,6 +358,7 @@ class _Judge:
         if path is None or not os.path.isabs(path):
             raise _Off(target.span, "a leading cd takes one absolute path")
         word = Typed("cd", cmd.words[0].span)
+        self.base = path
         return AdmittedCommand(word, "cd", cmd.span, cd_target=Typed(path, target.span))
 
     def pipeline(self, item: Pipeline) -> list[AdmittedCommand]:
@@ -357,7 +372,11 @@ class _Judge:
                 raise _Off(node.span, f"the parser could not bound this text ({node.why})")
             done = self.command(node, pos > 0)
             message = pos == 1 and len(item.commands) == 2 and self._piped_message(out[0], done)
-            filters = done.family in shell.READ_ONLY_CMDS and not (done.writes or done.script)
+            # 228 S3 row 2: a read role's admitted sed -n is a read filter too.
+            reader = done.family in shell.READ_ONLY_CMDS or (
+                done.family == "sed" and self.role.read_only and not self.role.main
+            )
+            filters = reader and not (done.writes or done.script)
             if pos and not (filters or message):
                 raise _Off(node.span, f"{done.word.text} after a pipe is not a read filter")
             out.append(done)
@@ -424,16 +443,16 @@ class _Judge:
         if self.role.main:
             self._main_redirect(redirect, dest, c)
             return
-        # 228 S2 rule 5: an agent's only redirects are 2>&1 and >/dev/null.
+        # 228 S2 rule 5, S3 row 1: an agent's only redirects are 2>&1, >/dev/null, 2>/dev/null.
         if redirect.op in ("<<", "<<-", "<<<"):
             raise _Off(
                 redirect.span, "a heredoc or here-string is not admitted for an agent; use Write"
             )
         if redirect.op == ">&" and redirect.fd == 2 and dest == "1":
             return
-        if redirect.op == ">" and redirect.fd in (None, 1) and dest == "/dev/null":
+        if redirect.op == ">" and redirect.fd in (None, 1, 2) and dest == "/dev/null":
             return
-        raise _Off(redirect.span, "an agent's only redirects are 2>&1 and >/dev/null")
+        raise _Off(redirect.span, "an agent's only redirects are 2>&1, >/dev/null and 2>/dev/null")
 
     def _main_redirect(self, redirect: Redirect, dest: str | None, c: _Cmd) -> None:
         # 228 S2: the main session writes and reads files through literal redirect targets.
@@ -589,6 +608,10 @@ class _Judge:
                 raise _Off(c.span, "gitleaks runs only as detect --redact with a /tmp report")
             for word in words[1:]:
                 c.add("text", _word_text(word))
+        elif family == "sed" and role.read_only and not role.main:
+            self.sed_print(c, words, literals)
+        elif role.train and family in ("python", "date"):
+            self.train(c, words, literals)
         elif role.runner in ("audit", "unit") and family == "python":
             self.test_run(c, words, literals)
         elif role.runner == "coder" and family in _RUNNERS:
@@ -751,6 +774,8 @@ class _Judge:
         script = kind == "script" and not self.role.main
         if script and (option or self.role.read_only or key not in _RUNNERS):
             raise _Off(value.span, f"{what} runs a program or inline code")
+        if script and _stream_path(value.text, self.base):
+            raise _Off(value.span, f"{what} runs {value.text}, a stream under /dev or /proc")
         if kind == "pathspec" and value.text.startswith(":"):
             raise _Off(value.span, f"the pathspec magic {value.text} is not admitted")
         c.add(kind, value)
@@ -911,8 +936,14 @@ class _Judge:
                     types = shell.OPTION_VALUE_TYPES.get("git commit", {}).get(name, ("text",))
                     c.add(types[0] if sub == "commit" else "text", Typed(attached, word.span))
                 continue
-            if tok.startswith(":") and not magic:
-                raise _Off(word.span, f"the pathspec magic {tok} is not admitted")
+            # 0225: a quoted lead part counts; ':(exclude)'*.glb is magic too.
+            lead = word.parts[0] if word.parts else None
+            colon = isinstance(lead, Literal) and lead.text.startswith(":")
+            if (tok.startswith(":") or colon) and not magic:
+                if not _exclude_tail(sub, word):
+                    raise _Off(word.span, f"the pathspec magic {tok} is not admitted")
+                c.add("pathspec", _word_text(word))
+                continue
             c.add("pathspec" if after else kind, _word_text(word))
 
     # -- gh, terraform and the runners -------------------------------------------------------
@@ -952,6 +983,38 @@ class _Judge:
         for word, tok in zip(words[1:], toks[1:], strict=True):
             if tok in paths:
                 c.add("read", Typed(tok, word.span))
+
+    def train(self, c: _Cmd, words: list[Word], literals: list[str | None]) -> None:
+        # 0060, spec 7.1: a train script by its plugin path, or date -u.
+        from checks.command_allowlist import date_ok, train_script_ok
+
+        toks = self._all_literal(words, literals)
+        if c.family == "python" and train_script_ok(toks):
+            c.typed.setdefault("script", []).append(_word_text(words[1]))
+            kinds = ("text",) * (len(words) - 2)
+        elif c.family == "date" and date_ok(toks):
+            kinds = ("text",) * (len(words) - 1)
+        else:
+            raise _Off(words[0].span, f"{toks[0]} is off the {self.role.name} train rows (0060)")
+        for word, kind in zip(words[len(words) - len(kinds) :], kinds, strict=True):
+            c.add(kind, _word_text(word))
+
+    def sed_print(self, c: _Cmd, words: list[Word], literals: list[str | None]) -> None:
+        # 228 S3 row 2: sed -n <print script>; read paths only for charter-docs and inspect.
+        toks = self._all_literal(words, literals)
+        if toks[1:2] != ["-n"] or len(toks) < 3 or not shell._SED_PRINT.fullmatch(toks[2]):
+            raise _Off(c.span, "sed runs only as sed -n <line ranges>p for a read role")
+        operands = words[3:]
+        reads = self.role.docs_reads or self.role.train
+        if (operands and not reads) or (not operands and not c.piped):
+            raise _Off(c.span, "sed -n reads a pipe here, or a file for charter-docs and inspect")
+        bad = next((w for w in operands if (w.literal or "-").startswith("-")), None)
+        if bad is not None:
+            raise _Off(bad.span, "sed -n takes no option after its script")
+        c.options.append(Typed("-n", words[1].span))
+        c.add("text", _word_text(words[2]))
+        for word in operands:
+            c.add("read", _word_text(word))
 
     def test_run(self, c: _Cmd, words: list[Word], literals: list[str | None]) -> None:
         # 0109: the read-only roles' one pytest form; the train's path bounds are the check's.
@@ -1005,6 +1068,27 @@ class _Judge:
         if family in shell._SHELLS or family in shell.INTERPRETERS or family in ("node", "bun"):
             if family not in shell.TEST_RUNNERS or not shell._tester_runner_ok(family, inner):
                 raise _Off(c.span, f"{c.family} runs {inner[0]} outside a test-runner form")
+
+
+def _stream_path(text: str, base: str) -> bool:
+    # 228 S3: a script path resolving under /dev or /proc is a stream; normpath folds . and ..
+    path = "/" + os.path.normpath(os.path.join(base if os.path.isabs(base) else "/", text))
+    path = "/" + path.lstrip("/")
+    return any(path == root or path.startswith(root + "/") for root in ("/dev", "/proc"))
+
+
+def _exclude_tail(sub: str, word: Word) -> bool:
+    # 0225, 228 S3 row 4: :(exclude) or :! then a literal path, on a read subcommand only.
+    text = word.literal
+    if (
+        sub not in _EXCLUDE_SUBS
+        or text is None
+        or not all(isinstance(p, Literal) for p in word.parts)
+    ):
+        return False
+    prefix = next((p for p in _EXCLUDE_PREFIXES if text.startswith(p)), None)
+    path = text[len(prefix) :] if prefix is not None else ""
+    return bool(path) and not path.startswith((":", "(", "!"))
 
 
 def _no_installs() -> frozenset[str]:

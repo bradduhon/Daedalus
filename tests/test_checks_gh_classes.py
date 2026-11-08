@@ -234,3 +234,25 @@ def test_gh_classes_fixture_decisions() -> None:
 
 def test_gh_classes_internal_error_denies_and_names_the_hook() -> None:
     internal_error_denies(HOOK, payload("Bash", agent=C, command="gh run list"), "--conductor")
+
+
+# 228 S3 hunt: a refused command keeps the gh gate's text fallback, and the role's chain
+# names the refused word; an admitted command's gh words are read from the parse.
+GH_HUNT = (
+    ("tmux new-session -d gh issue delete 3", "tmux"),
+    ("python3 -c 'import os; os.system(\"gh issue delete 3\")'", "python3"),
+)
+
+
+@pytest.mark.parametrize(("command", "word"), GH_HUNT)
+@pytest.mark.parametrize(
+    ("agent", "allow"),
+    [("orchestrator", "train,inspect"), ("charter-docs", "append_ledger,git,read")],
+)
+def test_a_gh_word_hidden_in_a_refused_command_is_refused_and_named(
+    agent: str, allow: str, command: str, word: str
+) -> None:
+    assert "names gh" in str(evaluate(HOOK, _b(agent, command)))
+    assert first_deny(_b(agent, command), CFG) is not None, (agent, command)
+    named = evaluate("command_allowlist", _b(agent, command), "--allow", allow)
+    assert f"`{word}`" in str(named) and "Refused: " in str(named), named

@@ -192,9 +192,13 @@ def test_the_main_session_reads_and_writes_through_literal_redirects() -> None:
 
 def test_roles_follow_the_jail_tables() -> None:
     assert role_for("Explore").name == "foreign"
-    assert role_for("orchestrator").commands == frozenset()
+    # 228 S3: the orchestrator's row is command_allowlist's train,inspect class.
+    assert role_for("orchestrator").commands == shell.READ_ONLY_CMDS
+    assert role_for("orchestrator").train and role_for("planner").commands == frozenset()
     assert role_for("coder").git is not None and role_for("coder").git[0] == shell.CODER_GIT
-    refused("orchestrator", "cat x")
+    admitted("orchestrator", "cat x")
+    refused("orchestrator", "touch x")
+    refused("planner", "cat x")
     refused("comparer", "git log")
     admitted("Explore", "git log --oneline")
     refused("Explore", "touch x")
@@ -231,10 +235,13 @@ def test_every_table_row_has_operand_types() -> None:
             assert set(types) <= set(KINDS), (key, option)
 
 
-def test_no_consumer_imports_admit_before_unit_s3() -> None:
-    # 228 S2: S3 switches the consumers deliberately; until then only admit and its tests read it.
+def test_only_the_switched_consumers_import_admit() -> None:
+    # 228 S3: the jail's decision paths and the two Bash checks read admit; S4 adds the rest.
     allowed = {
         REPO_ROOT / "scripts" / "lib" / "admit.py",
+        REPO_ROOT / "scripts" / "lib" / "jail.py",
+        REPO_ROOT / "scripts" / "checks" / "read_only_bash.py",
+        REPO_ROOT / "scripts" / "checks" / "command_allowlist.py",
         REPO_ROOT / "tests" / "test_admit.py",
         REPO_ROOT / "tests" / "adversarial" / "test_admit_corpus.py",
     }
@@ -299,3 +306,27 @@ def test_a_main_session_shape_stays_off_the_agent_tables(
 def test_a_main_session_parameter_is_typed_not_literal() -> None:
     read = admitted("main", 'grep x "$F"').commands[0].reads[0]
     assert (read.text, read.glob) == ('"$F"', True)
+
+
+# 228 S3: a script path under /dev or /proc runs a stream; normalised, so . and .. cannot hide it.
+STREAM_FORMS = (
+    "python3 /dev/stdin",
+    "python3 /dev/fd/0",
+    "python3 /proc/self/fd/0",
+    "python3 /dev/./stdin",
+    "python3 /dev/fd/../stdin",
+    "python3 //dev/stdin",
+    "python3 ../../../../../../../../dev/stdin",
+    "cd /dev && python3 stdin",
+    "cd /proc/self && python3 fd/0",
+)
+
+
+@pytest.mark.parametrize("command", STREAM_FORMS)
+@pytest.mark.parametrize("wrap", ["", f"{WRAP} "])
+def test_a_stream_script_path_is_refused_beside_a_file_script(command: str, wrap: str) -> None:
+    lead, _, run = command.rpartition("&& ")
+    got = refused("coder", f"{lead}{'&& ' if lead else ''}{wrap}{run}")
+    assert "a stream under /dev or /proc" in got.reason, got
+    admitted("coder", f"{wrap}python3 scripts/x.py")
+    admitted("main", command)

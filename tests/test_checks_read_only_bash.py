@@ -26,6 +26,11 @@ pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "read_only_bash"
 
 
+def _starts(got: str | None, want: str) -> bool:
+    # 228 S3: a refusal keeps its constant verbatim, then names what was off the table.
+    return got is not None and got.startswith(want)
+
+
 class TestReadOnlyAgents:
     def test_auditor_read_only_pipelines_including_two_pipes(self) -> None:
         ok = [
@@ -75,7 +80,7 @@ class TestSpecialistPipes:
     @pytest.mark.parametrize(
         "command",
         [
-            "find /x -maxdepth 6 -iname frameworks -type d 2>/dev/null | head",
+            "find /x -maxdepth 6 -iname frameworks -type d | head",
             "jq -r '.controls[] | .id' c.json | sort | head",
             "cat c.json | jq .a | wc -l",
         ],
@@ -172,9 +177,11 @@ class TestRound3SortPytestGitleaks:
 def test_read_only_bash_judges_the_hook_alone() -> None:
     ro = ("--git", "read-only")
     assert evaluate(HOOK, _b("x", "git log | head"), *ro) is None
-    assert evaluate(HOOK, _b("x", "git push"), *ro) == jail.R_AUDITOR_BASH
+    assert _starts(evaluate(HOOK, _b("x", "git push"), *ro), jail.R_AUDITOR_BASH)
     assert evaluate(HOOK, _b("x", "git log"), "--git", "specialist") is None
-    assert evaluate(HOOK, _b("x", "git status"), "--git", "specialist") == jail.R_SPECIALIST_BASH
+    assert _starts(
+        evaluate(HOOK, _b("x", "git status"), "--git", "specialist"), jail.R_SPECIALIST_BASH
+    )
     want = "Bash is limited to read-only inspection and git add, commit, diff, log, status."
     assert str(evaluate(HOOK, _b("x", "git push"), "--git", "docs")).startswith(want)
     assert evaluate(HOOK, _b("x", "cat x")) is None
@@ -195,11 +202,11 @@ def test_read_only_bash_fixture_decisions() -> None:
     log = payload("Bash", command="git log --oneline -3 | head")
     assert run_script(HOOK, log, "--git", "read-only") == {"decision": "allow", "reason": ""}
     rm = payload("Bash", command="rm x")
-    want = {"decision": "deny", "reason": jail.R_AUDITOR_BASH}
-    assert run_script(HOOK, rm, "--git", "read-only") == want
+    got = run_script(HOOK, rm, "--git", "read-only")
+    assert got["decision"] == "deny" and _starts(got["reason"], jail.R_AUDITOR_BASH)
     status = payload("Bash", command="git status")
-    want = {"decision": "deny", "reason": jail.R_SPECIALIST_BASH}
-    assert run_script(HOOK, status, "--git", "specialist") == want
+    got = run_script(HOOK, status, "--git", "specialist")
+    assert got["decision"] == "deny" and _starts(got["reason"], jail.R_SPECIALIST_BASH)
 
 
 def test_read_only_bash_internal_error_denies_and_names_the_hook() -> None:
@@ -216,7 +223,7 @@ GIT_ROWS = [
     ("git show HEAD:scripts/a.py | sed -n 10,40p", "sed -n 10,40p scripts/a.py"),
     ("git show HEAD:a.py | sed -n 1p", "git show HEAD:a.py | sed -n 1w/tmp/x"),
     ("git show main:a.py | sed -n '5,9p' | head", "git show HEAD:a.py | sed 1,2p"),
-    ("git show HEAD:a.py | grep -n x", "git log | sed -n 1p"),
+    ("git show HEAD:a.py | grep -n x", "git log | sed -n -e 1p"),
     ("git -C .claude/worktrees/u1 grep -n x", "git show HEAD:a.py ; sed -n 1p"),
 ]
 
@@ -227,13 +234,36 @@ def test_read_only_grant_git_rows(allowed: str, refused: str) -> None:
         assert decide(_b(agent, allowed), CFG).allow, (agent, allowed)
         assert evaluate(HOOK, _b(agent, allowed), "--git", "read-only") is None, allowed
         refusal = evaluate(HOOK, _b(agent, refused), "--git", "read-only")
-        assert refusal == jail.R_AUDITOR_BASH, (agent, refused)
+        assert _starts(refusal, jail.R_AUDITOR_BASH), (agent, refused)
+
+
+# 228 S3 rows 1 to 4: each closed table row, one admitted form and its refused neighbour.
+CLOSED_ROWS = [
+    ("find /x -maxdepth 6 -iname f -type d 2>/dev/null | head", "find /x -name f 2>/tmp/e | head"),
+    ("cat a 2>/dev/null", "cat a 1>/dev/null 2>/tmp/e"),
+    ("git log | sed -n 1,5p", "git log | sed -n 1,5p a.py"),
+    ("find /x -newermt '2026-10-19 12:00'", "find /x -newerat '2026-10-19 12:00'"),
+    ("git diff a...b -- . ':(exclude)assets/'", "git diff a...b -- . ':(icase)assets/'"),
+    ("git log -p a..b -- . ':!web/big.bin'", "git log -p a..b -- . ':!'*.bin"),
+    ("git show a -- ':(exclude)x'", "git show a -- ':(exclude,icase)x'"),
+]
+
+
+@pytest.mark.parametrize(("allowed", "refused"), CLOSED_ROWS)
+def test_a_closed_table_row_is_admitted_beside_its_refused_neighbour(
+    allowed: str, refused: str
+) -> None:
+    assert evaluate(HOOK, _b("auditor", allowed), "--git", "read-only") is None, allowed
+    refusal = evaluate(HOOK, _b("auditor", refused), "--git", "read-only")
+    assert _starts(refusal, jail.R_AUDITOR_BASH) and "Refused: " in str(refusal), refused
 
 
 def test_specialist_grant_gains_no_git_row() -> None:
     # spec 6: only the read-only grant widens; the specialist set stays diff, show and log.
     for command in ("git grep x", "git worktree list", "git merge-base main HEAD"):
-        assert evaluate(HOOK, _b("x", command), "--git", "specialist") == jail.R_SPECIALIST_BASH
+        assert _starts(
+            evaluate(HOOK, _b("x", command), "--git", "specialist"), jail.R_SPECIALIST_BASH
+        )
 
 
 # spec 7.1: the Train C read rows of the read-only grant, one allow and one nearest-write refusal.
@@ -253,7 +283,7 @@ def test_read_only_grant_train_c_git_rows(allowed: str, refused: str) -> None:
     for agent in ("auditor", "verifier"):
         assert decide(_b(agent, allowed), CFG).allow, (agent, allowed)
         refusal = evaluate(HOOK, _b(agent, refused), "--git", "read-only")
-        assert refusal == jail.R_AUDITOR_BASH, (agent, refused)
+        assert _starts(refusal, jail.R_AUDITOR_BASH), (agent, refused)
 
 
 @pytest.mark.parametrize(
@@ -269,7 +299,7 @@ def test_read_only_grant_train_c_git_rows(allowed: str, refused: str) -> None:
 )
 def test_a_stand_in_flag_swallows_the_same_token(command: str) -> None:
     # spec 7.1: a value-taking flag before a new flag still takes it, so the next one is judged.
-    assert evaluate(HOOK, _b("x", command), "--git", "read-only") == jail.R_AUDITOR_BASH
+    assert _starts(evaluate(HOOK, _b("x", command), "--git", "read-only"), jail.R_AUDITOR_BASH)
 
 
 def test_specialist_grant_gains_only_the_log_rows() -> None:
@@ -277,7 +307,7 @@ def test_specialist_grant_gains_only_the_log_rows() -> None:
     spec = ("--git", "specialist")
     assert evaluate(HOOK, _b("x", "git log --graph --first-parent a..b"), *spec) is None
     for command in ("git grep -P x HEAD", "git branch --list 'daedalus*'"):
-        assert evaluate(HOOK, _b("x", command), *spec) == jail.R_SPECIALIST_BASH, command
+        assert _starts(evaluate(HOOK, _b("x", command), *spec), jail.R_SPECIALIST_BASH), command
 
 
 SPECIALIST_CD = "cd /tmp/nist && jq -r '[.. | objects | select(.id?)] | .[] | .id' catalog.json"
@@ -306,7 +336,7 @@ def test_specialist_cd_then_read_is_allowed(agent: str) -> None:
 )
 def test_cd_before_git_or_a_test_run_is_refused(command: str) -> None:
     reason = evaluate(HOOK, _b("x", command), "--git", "read-only", "--test-runner", "audit")
-    assert reason == load(HOOK).R_CD_CHAIN, command
+    assert _starts(reason, load(HOOK).R_CD_CHAIN), command
 
 
 def test_cd_into_a_credential_store_is_still_refused(cred_home: Path, tmp_path: Path) -> None:
@@ -323,7 +353,7 @@ def test_cd_into_a_credential_store_is_still_refused(cred_home: Path, tmp_path: 
 def test_auditor_sed_on_a_file_stays_refused() -> None:
     # spec 6: sed reads behind git show only; Train C seq 2016 reads line ranges with Read.
     command = "sed -n '325,345p;480,600p' /work/repo/scripts/lib/shell.py"
-    assert evaluate(HOOK, _b("x", command), "--git", "read-only") == jail.R_AUDITOR_BASH
+    assert _starts(evaluate(HOOK, _b("x", command), "--git", "read-only"), jail.R_AUDITOR_BASH)
 
 
 TRAIN = "20261017-120000"
@@ -388,7 +418,7 @@ def test_audit_test_run_refuses_other_paths(tmp_path: Path) -> None:
         f"python -m pytest {audit}/x.py -q",
         "python3 -m pytest -q",
     ):
-        assert evaluate(HOOK, _rb(repo, "auditor", command), *AUDIT) == want, command
+        assert _starts(evaluate(HOOK, _rb(repo, "auditor", command), *AUDIT), want), command
 
 
 def test_test_run_outside_a_train_is_refused(tmp_path: Path) -> None:
@@ -397,7 +427,7 @@ def test_test_run_outside_a_train_is_refused(tmp_path: Path) -> None:
     command = f"python3 -m pytest {audit}/x.py -q"
     for runner, flags in (("audit", AUDIT), ("unit", UNIT)):
         want = read_only_bash().R_TEST_RUN_NO_TRAIN.format(runner=runner)
-        assert evaluate(HOOK, _rb(repo, "auditor", command), *flags) == want
+        assert _starts(evaluate(HOOK, _rb(repo, "auditor", command), *flags), want)
 
 
 def test_pytest_without_the_runner_grant_is_refused(tmp_path: Path) -> None:
@@ -405,7 +435,9 @@ def test_pytest_without_the_runner_grant_is_refused(tmp_path: Path) -> None:
     repo = _train_repo(tmp_path)
     audit, _ = _places(repo)
     command = f"python3 -m pytest {audit}/x.py -q"
-    assert evaluate(HOOK, _rb(repo, "x", command), "--git", "read-only") == jail.R_AUDITOR_BASH
+    assert _starts(
+        evaluate(HOOK, _rb(repo, "x", command), "--git", "read-only"), jail.R_AUDITOR_BASH
+    )
     assert evaluate(HOOK, _rb(repo, "x", command), *SPECIALIST) is not None
 
 
@@ -434,7 +466,7 @@ def test_unit_test_run_admits_only_a_recorded_unit_worktree(tmp_path: Path) -> N
         f"python3 -m pytest {tmp_path}/elsewhere/tests -q",
         f"python3 -m pytest {audit}/x.py -q",
     ):
-        assert evaluate(HOOK, _rb(repo, "verifier", command), *UNIT) == want, command
+        assert _starts(evaluate(HOOK, _rb(repo, "verifier", command), *UNIT), want), command
 
 
 def test_unit_test_run_without_train_state_is_refused(tmp_path: Path) -> None:
@@ -466,7 +498,7 @@ def test_basetemp_is_refused_by_name_for_every_agent(
         "pytest --basetemp /tmp/x",
         "git log | python3 -m pytest -q --basetemp=x",
     ):
-        assert evaluate(HOOK, _rb(repo, agent, command), *flags) == want, command
+        assert _starts(evaluate(HOOK, _rb(repo, agent, command), *flags), want), command
     assert f"for {name}:" in want and "Next: drop --basetemp" in want
     grep = "grep -n -e --basetemp scripts/lib/jail.py"
     assert evaluate(HOOK, _rb(repo, agent, grep), *flags) is None
@@ -500,7 +532,7 @@ def test_unit_test_run_on_the_audit_worktree_is_refused(tmp_path: Path, flagged:
         f"python3 -m pytest {tree}/tests/adversarial/test_x.py::test_y -q --rootdir {tree}",
         f"python3 -m pytest {unit}/tests -q --rootdir {tree}",
     ):
-        assert evaluate(HOOK, _rb(repo, "verifier", command), *UNIT) == want, command
+        assert _starts(evaluate(HOOK, _rb(repo, "verifier", command), *UNIT), want), command
         assert not decide(_rb(repo, "verifier", command), CFG).allow, command
     assert "Next: run the tests under the unit worktree you verify" in want
 
@@ -526,13 +558,52 @@ def test_a_rewritten_search_word_or_rg_program_option_names_its_reason() -> None
     # prepush2-2026-10-27 items 1 and 2: the read check alone refuses both, whatever the target.
     ro = ("--git", "read-only")
     for command in ("rg $'-uu' -l x src", 'grep $"-r" x src', "rg {-uu,} x src", "rg x *"):
-        assert evaluate(HOOK, _b("x", command), *ro) == jail.R_RG_OPAQUE, command
+        assert _starts(evaluate(HOOK, _b("x", command), *ro), jail.R_RG_OPAQUE), command
     for command in ("rg --hostname-bin=/tmp/x -n x src", "rg --pre /tmp/x x src"):
-        assert evaluate(HOOK, _b("x", command), *ro) == jail.R_RG_PROGRAM, command
+        assert _starts(evaluate(HOOK, _b("x", command), *ro), jail.R_RG_PROGRAM), command
     for command in ("rg -n 'a$' src", "rg -g '*.{tf,yml}' x src", "rg -n x src/*.py"):
         assert evaluate(HOOK, _b("x", command), *ro) is None, command
     # issue 204, P1: a read verb that can write beside a word the shell expands.
     for command in ("uniq {in,out}", "sort {-o,out} in", "file ~/x", "find . -name *.py"):
-        assert evaluate(HOOK, _b("x", command), *ro) == shell.R_READ_EXPANSION, command
+        assert _starts(evaluate(HOOK, _b("x", command), *ro), shell.R_READ_EXPANSION), command
     for command in ("uniq '{a,b}'", "find . -name '*.py'", "sort -u in"):
         assert evaluate(HOOK, _b("x", command), *ro) is None, command
+
+
+# 228 S3 hunt (coder file list): a read verb hiding a write or a program in each form; the
+# grammar refuses each for the read checks and names the word, option or construct.
+HUNT_READ = (
+    "sort -o /tmp/x a",
+    "sort -uo/tmp/x a",
+    "sort --outp=/tmp/x a",
+    "sort -o -- a",
+    "uniq a /tmp/x",
+    "/usr/bin/sort -o /tmp/x a",
+    "nice sort -o /tmp/x a",
+    "nice timeout 5 sort -o /tmp/x a",
+    "LC_ALL=C sort -o /tmp/x a",
+    "export X=-o; sort $X /tmp/x a",
+    "( sort -o /tmp/x a )",
+    "{ sort -o /tmp/x a; }",
+    "cat a | sort -o /tmp/x",
+    "sort -o /tmp/x <<< a",
+    "cat <<'E'\nx\nE",
+    "cat <<E\nx\nE",
+    ">/tmp/x cat a",
+    "sort $X a",
+    'sort "$X" a',
+    "sort `echo -o` /tmp/x a",
+    "sort {-o,/tmp/x} a",
+    "sort $'-o' /tmp/x a",
+    "rg --pre /tmp/x token .",
+    "rg $'-uu' token .",
+)
+
+
+@pytest.mark.parametrize("command", HUNT_READ)
+@pytest.mark.parametrize("flags", [("--git", "read-only"), ()])
+def test_a_hunt_form_is_refused_by_the_read_check_and_named(
+    command: str, flags: tuple[str, ...]
+) -> None:
+    refusal = evaluate(HOOK, _b("auditor", command), *flags)
+    assert refusal is not None and "Refused: " in refusal, (command, refusal)

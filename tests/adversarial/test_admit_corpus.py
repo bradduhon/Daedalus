@@ -185,12 +185,9 @@ ADMITTED: list[Row] = [
     *_rows("A3_ADMITTED", ("main",), C.A3_ADMITTED, False),
 ]
 # 228 S2 ruling (main session reads and builtins): the rows admit still refuses.
-# [[ is Opaque in the parser; git log --grep <value> is off jail._GIT_GRAMMAR's log row.
+# [[ is Opaque in the parser; 228 S3 closed the git log --grep <value> row.
 TABLE_GAPS: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("main", "[[ -n x ]] && git commit -m ':i: fix' -- src/a.md"),
-        ("main", 'git log --grep add -n "$N"'),
-    }
+    {("main", "[[ -n x ]] && git commit -m ':i: fix' -- src/a.md")}
 )
 
 

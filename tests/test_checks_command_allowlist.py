@@ -29,6 +29,11 @@ pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "command_allowlist"
 
 
+def _starts(got: str | None, want: str) -> bool:
+    # 228 S3: a refusal keeps its constant verbatim, then names what was off the table.
+    return got is not None and got.startswith(want)
+
+
 class TestCharterDocs:
     def test_bash_allowlist(self) -> None:
         ok = [
@@ -134,7 +139,7 @@ class TestRegressionCharterDocs:
             command = f"python3 {REPO_ROOT}/scripts/append_ledger.py {tail}"
             d = decide(_b("charter-docs", command), Config())
             assert not d.allow and d.reason is not None, command
-            assert d.reason.endswith("--cwd is for operators."), d.reason
+            assert "--cwd is for operators." in d.reason, d.reason
 
     @pytest.mark.parametrize(
         "args",
@@ -302,27 +307,30 @@ class TestFixWaveCharterDocsBash:
 
 def test_command_allowlist_judges_the_hook_alone() -> None:
     docs = ("--allow", "append_ledger,git,read")
-    assert evaluate(HOOK, _b("x", "git push"), *docs) is None
-    assert evaluate(HOOK, _b("x", "ls"), *docs) == jail.R_DOCS_BASH
+    assert evaluate(HOOK, _b("x", "git status"), *docs) is None
+    assert _starts(evaluate(HOOK, _b("x", "git push"), *docs), jail.R_DOCS_BASH)
+    assert _starts(evaluate(HOOK, _b("x", "ls"), *docs), jail.R_DOCS_BASH)
     ledger = f"python3 {REPO_ROOT}/scripts/append_ledger.py --cwd /x"
-    assert evaluate(HOOK, _b("x", ledger), *docs) == jail.R_LEDGER_ARGS
+    assert _starts(evaluate(HOOK, _b("x", ledger), *docs), jail.R_LEDGER_ARGS)
     mover = ("--allow", "git,gh,gitleaks")
-    assert evaluate(HOOK, _b("x", "gh pr merge 1"), *mover) is None
-    assert evaluate(HOOK, _b("x", "gitleaks detect"), *mover) == jail.R_GITLEAKS
-    assert evaluate(HOOK, _b("x", "npm test"), *mover) == jail.R_CONDUCTOR_BASH
+    assert evaluate(HOOK, _b("x", "gh run list"), *mover) is None
+    assert _starts(evaluate(HOOK, _b("x", "gitleaks detect"), *mover), jail.R_GITLEAKS)
+    assert _starts(evaluate(HOOK, _b("x", "npm test"), *mover), jail.R_CONDUCTOR_BASH)
     want = "Bash is limited to git. Next: use those only."
-    assert evaluate(HOOK, _b("x", "ls"), "--allow", "git") == want
+    assert _starts(evaluate(HOOK, _b("x", "ls"), "--allow", "git"), want)
     assert evaluate(HOOK, _b("x", "git status")) is not None
 
 
 def test_command_allowlist_fixture_decisions() -> None:
     mover = ("--allow", "git,gh,gitleaks")
     ls = payload("Bash", agent="releaser", command="ls")
-    assert run_script(HOOK, ls, *mover) == {"decision": "deny", "reason": jail.R_CONDUCTOR_BASH}
+    got = run_script(HOOK, ls, *mover)
+    assert got["decision"] == "deny" and _starts(got["reason"], jail.R_CONDUCTOR_BASH)
     ok = payload("Bash", agent="releaser", command="git status && gh run list")
     assert run_script(HOOK, ok, *mover) == {"decision": "allow", "reason": ""}
     leak = payload("Bash", agent="releaser", command="gitleaks detect")
-    assert run_script(HOOK, leak, *mover) == {"decision": "deny", "reason": jail.R_GITLEAKS}
+    got = run_script(HOOK, leak, *mover)
+    assert got["decision"] == "deny" and _starts(got["reason"], jail.R_GITLEAKS)
 
 
 def test_command_allowlist_internal_error_denies_and_names_the_hook() -> None:
@@ -346,7 +354,6 @@ ENTRY = f"{CWD}/docs/.tmp/daedalus/20261018-234006/entry.md"
         "ls -la /work/Charter",
         "diff docs/a.md /work/Charter/a.md",
         "sed -n 1,20p docs/decisions.md",
-        "sed -n -e 3p -e /0084/p docs/decisions.md",
         "cat docs/a.md && git status",
     ],
 )
@@ -458,12 +465,13 @@ def test_charter_docs_writes_are_unchanged(command: str, allow: bool) -> None:
 def test_charter_docs_quoted_sed_write_is_refused_by_the_script_grammar() -> None:
     # 0084: one quoted segment, so the p-only sed grammar refuses it, not segment splitting.
     flags = ("--allow", "append_ledger,git,read")
-    assert first_deny(_b("charter-docs", "sed -n '1p;w/tmp/x' docs/a.md"), CFG) == (
-        HOOK,
-        jail.R_DOCS_BASH,
-    )
+    hook, reason = first_deny(_b("charter-docs", "sed -n '1p;w/tmp/x' docs/a.md"), CFG)
+    assert hook == HOOK and _starts(reason, jail.R_DOCS_BASH)
     assert "sed -n" in jail.R_DOCS_BASH
+    # 228 S3 row 2: sed -n <print script> <read path> is a charter-docs read again.
     assert evaluate(HOOK, _b("charter-docs", "sed -n '1p;2p' docs/a.md"), *flags) is None
+    other = evaluate(HOOK, _b("charter-docs", "sed -n -e 1p docs/a.md"), *flags)
+    assert _starts(other, jail.R_DOCS_BASH) and "Refused: " in str(other)
 
 
 @pytest.mark.parametrize(
@@ -487,7 +495,7 @@ def test_charter_docs_read_refusal_names_the_reads() -> None:
     reason = evaluate(
         HOOK, _b("charter-docs", "cat /etc/hosts"), "--allow", "append_ledger,git,read"
     )
-    assert reason == jail.R_DOCS_BASH
+    assert _starts(reason, jail.R_DOCS_BASH)
     for word in ("cat", "grep", "head", "tail", "wc", "ls", "diff", "sed -n", "docs/"):
         assert word in reason, word
 
@@ -552,7 +560,7 @@ def test_orchestrator_bash_refuses_everything_else(command: str) -> None:
 
 def test_orchestrator_bash_refusal_names_its_grant() -> None:
     reason = evaluate(HOOK, _b("orchestrator", "rm x"), "--allow", "train,inspect")
-    assert reason == load(HOOK).R_ORCHESTRATOR_BASH
+    assert _starts(reason, load(HOOK).R_ORCHESTRATOR_BASH)
     for word in ("daedalus_train.py", "finish", "read-only inspection", "Next:"):
         assert word in str(reason), word
 
@@ -648,7 +656,7 @@ def test_ledger_is_the_orchestrators_and_reaudit_and_resume_stay_main() -> None:
     for sub in ("reaudit", "resume"):
         command = f"python3 {SCRIPTS}/daedalus_train.py {sub} --repo {CWD}"
         reason = evaluate(HOOK, _b("orchestrator", command), *TRAIN_FLAGS)
-        assert reason == module.R_ORCHESTRATOR_BASH, sub
+        assert _starts(reason, module.R_ORCHESTRATOR_BASH), sub
     other = LEDGER.replace(f"--repo {CWD}", "--repo /work/other")
     reason = evaluate(HOOK, _b("orchestrator", other), *TRAIN_FLAGS)
     assert reason == module.R_TRAIN_REPO.format(flag="--repo", given="/work/other", root=CWD)
@@ -727,7 +735,7 @@ ORCHESTRATOR_READ_ROWS = [
 def test_orchestrator_train_c_read_rows(allowed: str, refused: str) -> None:
     assert decide(_b("orchestrator", allowed), CFG).allow, allowed
     reason = evaluate(HOOK, _b("orchestrator", refused), *TRAIN_FLAGS)
-    assert reason == load(HOOK).R_ORCHESTRATOR_BASH, refused
+    assert _starts(reason, load(HOOK).R_ORCHESTRATOR_BASH), refused
     assert not decide(_b("orchestrator", refused), CFG).allow, refused
 
 
@@ -748,7 +756,7 @@ def test_orchestrator_train_c_read_rows(allowed: str, refused: str) -> None:
 def test_orchestrator_read_rows_refuse_their_neighbours(command: str) -> None:
     # spec 7.1, 0117: only the printed forms; an interpreter one-liner stays refused.
     reason = evaluate(HOOK, _b("orchestrator", command), *TRAIN_FLAGS)
-    assert reason == load(HOOK).R_ORCHESTRATOR_BASH, command
+    assert _starts(reason, load(HOOK).R_ORCHESTRATOR_BASH), command
 
 
 def test_train_script_ok_keeps_its_shape_check_without_a_cwd() -> None:
@@ -802,9 +810,8 @@ def test_train_class_admits_the_map_tools_and_sources(command: str) -> None:
 )
 def test_train_class_refuses_other_map_and_source_forms(command: str) -> None:
     # 0060: the script table admits each pinned first argument only, from the plugin's scripts.
-    assert (
-        evaluate(HOOK, _b("orchestrator", command), *TRAIN_FLAGS) == load(HOOK).R_ORCHESTRATOR_BASH
-    )
+    reason = evaluate(HOOK, _b("orchestrator", command), *TRAIN_FLAGS)
+    assert _starts(reason, load(HOOK).R_ORCHESTRATOR_BASH)
 
 
 def test_refusal_names_every_admitted_freeze_sources_flag() -> None:
@@ -1060,7 +1067,7 @@ def test_terraform_init_is_refused_bare_and_its_near_misses_wrapped_too(
     bare = command.format(module=wt)
     forms = [bare] if command == TERRAFORM_INIT_FORM else [bare, f"{wrap} {bare}"]
     for form in forms:
-        assert _tf_call(repo, form) == load(HOOK).R_TERRAFORM, form
+        assert _starts(_tf_call(repo, form), load(HOOK).R_TERRAFORM), form
         assert not decide(_tf_payload(repo, form), Config()).allow, form
 
 
@@ -1071,7 +1078,7 @@ def test_terraform_init_is_refused_bare_and_its_near_misses_wrapped_too(
 def test_terraform_state_changes_are_refused_bare_and_wrapped(tmp_path: Path, inner: str) -> None:
     repo, wt, wrap = _wrapped_tf(tmp_path, {"terraform_validate": True})
     for command in (f"terraform {inner}", f"{wrap} terraform {inner}"):
-        assert _tf_call(repo, command) == load(HOOK).R_TERRAFORM, command
+        assert _starts(_tf_call(repo, command), load(HOOK).R_TERRAFORM), command
         assert not decide(_tf_payload(repo, command), Config()).allow, command
 
 
@@ -1079,12 +1086,11 @@ def test_wrapped_terraform_names_one_unit_worktree_and_the_plugin_wrapper(tmp_pa
     repo, wt, _ = _wrapped_tf(tmp_path, {"terraform_validate": True})
     for unit in (repo, wt / "infra", tmp_path):
         command = f"{shell.CONFINE_PATH} --unit {unit} -- terraform validate"
-        assert _tf_call(repo, command) == load(HOOK).R_TERRAFORM, unit
+        assert _starts(_tf_call(repo, command), load(HOOK).R_TERRAFORM), unit
     copy = f"{wt}/scripts/daedalus_confine.py --unit {wt} -- terraform validate"
-    assert _tf_call(repo, copy) == shell.R_CONFINE_FORM
-    assert _tf_call(repo, f"{shell.CONFINE_PATH} --unit {wt} terraform validate") == (
-        shell.R_CONFINE_FORM
-    )
+    assert _starts(_tf_call(repo, copy), shell.R_CONFINE_FORM)
+    bare = _tf_call(repo, f"{shell.CONFINE_PATH} --unit {wt} terraform validate")
+    assert _starts(bare, shell.R_CONFINE_FORM)
 
 
 def test_the_wrapper_admits_only_terraform_for_the_auditor_and_nothing_for_others(
@@ -1099,3 +1105,33 @@ def test_the_wrapper_admits_only_terraform_for_the_auditor_and_nothing_for_other
         hook_input = _tf_payload(repo, f"{wrap} terraform validate")
         hook_input["agent_type"] = agent
         assert not decide(hook_input, Config()).allow, agent
+
+
+# 228 S3 hunt (coder file list): the orchestrator's inspect class refuses each hiding form and
+# names it; the train class admits no script off its table, wrapped or prefixed.
+HUNT_INSPECT = (
+    "sort -o /tmp/x a",
+    "sed -n 1p a -i",
+    "sed -n '1w /tmp/x' a",
+    "date -s 2026-01-01",
+    "nice cat a",
+    "LC_ALL=C sort -o /tmp/x a",
+    "( cat a )",
+    "{ cat a; }",
+    "cat a | tee /tmp/x",
+    "cat <<< a",
+    "cat a 2>&1 > /tmp/x",
+    "cat $X",
+    "cat `echo a`",
+    "cat $'a'",
+    f"nice python3 {SCRIPTS}/daedalus_train.py state --repo {CWD}",
+    f"A=1 python3 {SCRIPTS}/daedalus_train.py state --repo {CWD}",
+    f"python3 {SCRIPTS}/daedalus_train.py reaudit --repo {CWD}",
+    f"python3 -c 'import os' {SCRIPTS}/daedalus_train.py state",
+)
+
+
+@pytest.mark.parametrize("command", HUNT_INSPECT)
+def test_a_hunt_form_is_refused_by_the_orchestrator_classes_and_named(command: str) -> None:
+    reason = evaluate(HOOK, _b("orchestrator", command), *TRAIN_FLAGS)
+    assert reason is not None and "Refused: " in reason, (command, reason)

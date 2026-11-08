@@ -151,6 +151,8 @@ OPTION_TABLE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
             | {"-amin", "-ctime", "-cmin", "-used", "-maxdepth", "-mindepth", "-printf"}
             | {"-fprint", "-fprint0", "-fprintf", "-fls", "-fstype", "-context"}
             | {"-files0-from"}
+            # 228 S3 row 3: -newermt takes a date, a text value.
+            | {"-newermt"}
         ),
     ),
     # pin A1 -> A2, P6, P7: shells (by family) and interpreters; a shell's -c takes no value.
@@ -1141,15 +1143,6 @@ def tokenize(command: str) -> list[list[str]] | None:
     return None if scanned is None else _tokens(scanned[0])
 
 
-def fed_tokens(command: str) -> list[tuple[list[str], bool]] | None:
-    # P7, A2 fix round 3: tokenize's segments, each with whether a pipe feeds its stdin.
-    scanned = _scan(command)
-    parsed = None if scanned is None else _tokens(scanned[0])
-    if scanned is None or parsed is None:
-        return None
-    return [(tokens, k > 0 and scanned[1][k - 1] == "|") for k, tokens in enumerate(parsed)]
-
-
 class WorkerChain(NamedTuple):
     # O3: raws, seps and tokens align; segments drop the _SAFE_ENV prefix of each.
     raws: list[str]
@@ -1752,14 +1745,6 @@ def _body_scan(family: str, args: list[str]) -> BodyScan:
     return BodyScan(bool(flags & set(scan.options)), scan, script, module, span, cut)
 
 
-def flag_span(tokens: list[str]) -> int:
-    # rows 2-3, A2 spec correction: how many words after a shell or interpreter name may hold
-    # an inline flag, so an expansion there may be one; 0 for any other command.
-    family = command_family(tokens[0]) if tokens else ""
-    key = "shell" if family in _SHELLS else family
-    return len(_body_scan(key, tokens[1:]).span) if key in INLINE_FLAGS else 0
-
-
 def _flag_value(family: str, args: list[str], flags: frozenset[str], end: int) -> str:
     # P7: the value of the first flag in an option position before end, attached, after = or as
     # the next word; a word a valued option consumes is skipped (fix round 3).
@@ -1836,23 +1821,6 @@ def _shell_code(tokens: list[str], stdin: bool = False, base: str | None = "") -
         return _FALLBACK
     # fix round 3: a shell with no script reads its inherited stdin, so it counts as fed.
     return _stdin_body(body, stdin, "-s" in body.scan.options, True, base)
-
-
-def shell_params(tokens: list[str]) -> tuple[str, ...]:
-    # fix1-a2 (issue 81): a shell's $0, $1 and on as bash binds them past a -c string, -s or a
-    # script operand; () when an option off the table leaves them unknown.
-    args = tokens[1:]
-    words = ["-" + w[1:] if w[:1] == "+" else w for w in args]
-    cut, _, dashes = _option_end("shell", words)
-    scan = scan_options("shell", words[:cut])
-    if scan.off:
-        return ()
-    rest = args[cut + 1 :] if dashes else args[cut:]
-    if INLINE_FLAGS["shell"] & set(scan.options):
-        return (*(rest[1:2] or tokens[:1]), *rest[2:])
-    if "-s" in scan.options or not rest:
-        return (tokens[0], *rest)
-    return tuple(rest)
 
 
 def _segment_reason(segment: list[str], depth: int, main: bool) -> str | None:
@@ -2494,29 +2462,6 @@ R_READ_EXPANSION = (
     "into a write option or an output operand the jail never saw (issue 204). Next: quote the "
     "word or name each path literally."
 )
-
-
-def expansion_opaque(command: str) -> bool:
-    # P1, 0084, issue 204: a read verb that can write sits beside a word the shell may split.
-    bare = [lex for lex in quote_walk(command) if lex.kind == CHAR and not lex.quote]
-    procsub = any(
-        a.text in "<>" and b.text == "(" and b.at == a.at + 1 for a, b in itertools.pairwise(bare)
-    )
-    for raw in _raw_segments(command):
-        words = _raw_words(raw)
-        plain = [_unquoted(w) for w in words]
-        rest = strip_wrappers(plain)
-        if rest is None:  # issue 76: a wrapper option off its row leaves the verb unknown.
-            writes = any(_base(p) in READ_ONLY_WRITE_OPTS for p in plain)
-        elif not rest:
-            continue
-        elif _expands(head := words[len(words) - len(rest)]):
-            return True  # P1: an expansion in the command-name position hides the verb.
-        else:
-            writes = _base(_unquoted(head)) in READ_ONLY_WRITE_OPTS
-        if writes and (procsub or any(_expands(w) for w in words)):
-            return True
-    return False
 
 
 def _expands(word: str) -> bool:

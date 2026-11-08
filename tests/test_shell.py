@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 import shlex
 from collections.abc import Iterator
 from pathlib import Path
@@ -49,13 +50,35 @@ SHARED = frozenset(
     | {"WrapperOption", "WRAPPER_CHDIR", "WRAPPER_WRITES"}
     | {"worker_parse", "chain_bases"}
     | {"env_split_values", "R_ENV_SPLIT", "FLOCK_BODY"}
-    | {"READ_ONLY_WRITE_OPTS", "scan_options", "split_options", "expansion_opaque"}
+    | {"READ_ONLY_WRITE_OPTS", "scan_options", "split_options"}
     | {"command_family", "interpreter_code", "shell_tokens", "stdin_script", "INTERPRETERS"}
-    | {"_expands", "flag_span", "fed_tokens"}
+    | {"_expands"}
     | {"CHAR", "CLOSE", "_flag_value", "_raw_words", "_unquoted", "segment_spans"}
     | {"git_globals_known", "_TRUSTED_BIN"}
-    | {"shell_params"}
 )
+# 228 S3: the readers the one parse replaced; no file under scripts/ may name one again.
+RETIRED = (
+    "_bash_write_dirs _write_walk _segment_targets _inner_env _heredoc_walk _chain_folders "
+    "_hidden_bodies _segment_bodies _hidden_reason _body_past_cap _policy_segments _rebinds "
+    "_set_operands _drop_positionals _heredoc_text _raw_expands _expanding_lead _lead_word "
+    "_moved_segment _UNRESOLVED _PIECE_CUT _PARAM_NAME _TOKEN_EXPANSION _read_only_segment "
+    "read_segment_ok relative_write _foreign_read_ok _shell_body _BODY_DEPTH _built_value "
+    "fed_tokens expansion_opaque shell_params flag_span "
+    "_fragments _word_pieces _split_values _SCOPE_DEPTH _CUT_MARK _BODY_CHARS _past_cap "
+    "_TARGET_CAP _body_constant _command_body _runs_body _option_body _stdin_operand "
+    "_runner_family _STDIN_OPS _NO_BODY _STDIN_FILES _BODY_RUNNERS _piped "
+    "R_SHELL_BODY R_INLINE_BODY"
+).split()
+
+
+def test_no_retired_reader_is_named_under_scripts() -> None:
+    hits = [
+        f"{path.relative_to(SCRIPTS_DIR)}:{name}"
+        for path in sorted(SCRIPTS_DIR.rglob("*.py"))
+        for name in RETIRED
+        if re.search(rf"(?<!\w){re.escape(name)}(?!\w)", path.read_text(encoding="utf-8"))
+    ]
+    assert hits == [], hits
 
 
 def _tree(name: str) -> ast.Module:

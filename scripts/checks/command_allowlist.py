@@ -6,15 +6,17 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from checks.read_only_bash import read_segment_ok  # noqa: E402
 from lib import hook_io, jail, shell  # noqa: E402
+from lib.admit import Admitted, Refusal, Role, admit_role, role_for  # noqa: E402
 from lib.audit import project_root  # noqa: E402
 from lib.manifest import ManifestError, manifest_path  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
+from lib.shparse import Script, parse, walk  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset({"Bash"})
 NAMES = frozenset({"append_ledger", "git", "gh", "gitleaks", "read", "train", "inspect"})
@@ -46,8 +48,6 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
     "daedalus_map.py": frozenset({"--repo"}),
     "freeze_sources.py": frozenset({"--train", "--verify", "--baselines-only"}),
 }
-# 0060: the inspect class is the auditor's read-only set plus the unit-descent check.
-INSPECT_GIT = shell.READ_ONLY_GIT | {"merge-base"}
 R_ORCHESTRATOR_BASH = (
     "the orchestrator's Bash runs only daedalus_train.py with its train subcommands, refuted "
     "and ledger, "
@@ -257,16 +257,6 @@ def sed_print_ok(segment: list[str]) -> bool:
     )
 
 
-def _inspect_ok(segment: list[str], cwd: str) -> bool:
-    # 0060, spec 7.1: the auditor's read set, the merge-base check, date -u and sed -n ranges.
-    charter = hook_io.hook_charter(cwd)
-    return (
-        read_segment_ok(segment, INSPECT_GIT, cwd, charter)
-        or date_ok(segment)
-        or sed_print_ok(segment)
-    )
-
-
 def _read_roots(cwd: str) -> tuple[list[str], str]:
     # 0084: the read class reaches the charter root and the project's docs/, scratch included.
     base = str(project_root(cwd))
@@ -275,41 +265,76 @@ def _read_roots(cwd: str) -> tuple[list[str], str]:
     return roots, base
 
 
+def _role(allowed: frozenset[str]) -> Role:
+    # 228 S3: the allow names select the admit Role whose tables they name, and no more.
+    if allowed & {"train", "inspect"}:
+        return role_for("orchestrator")
+    if allowed & {"append_ledger", "read"}:
+        return role_for("charter-docs")
+    if allowed & {"git", "gh", "gitleaks"}:
+        conductor = role_for("releaser")
+        git = conductor.git if "git" in allowed else None
+        gh = conductor.gh if "gh" in allowed else None
+        return replace(conductor, git=git, gh=gh, gitleaks="gitleaks" in allowed)
+    return Role("command_allowlist")
+
+
+def _refusal(script: Script, refused: Refusal, allowed: frozenset[str], cwd: str) -> str:
+    # 228 S3: the grammar's refusal under the constant this check showed for its class (SA-7).
+    cmd = jail.refused_command(script, refused)
+    tokens = jail.literal_tokens(cmd)
+    name = shell.command_family(tokens[0]) if tokens else ""
+    constant = _reason(allowed)
+    if name == "gh" and "gh" in allowed and cmd is not None and refused.span == cmd.span:
+        return refused.reason  # 0028: the gh class table's own text, as gh_classes shows it.
+    push = name == "git" and _role(allowed).push and shell._git_subcommand(tokens) == "push"
+    if push and os.path.isabs(cwd):
+        charter = hook_io.hook_charter(cwd)
+        constant = jail._conductor_push_reason(tokens, cwd, charter) or constant
+    elif "append_ledger" in allowed and tokens and shell._is_append_ledger(tokens):
+        constant = jail.R_LEDGER_ARGS
+    elif "gitleaks" in allowed and name == "gitleaks":
+        constant = jail.R_GITLEAKS
+    elif "inspect" in allowed and name in shell.READ_ONLY_WRITE_OPTS:
+        if jail.rewritten(jail.refused_word(cmd, refused)):
+            constant = shell.R_READ_EXPANSION
+    return jail.refusal_text(refused, constant)
+
+
+def _later(
+    script: Script, command: str, got: Admitted, allowed: frozenset[str], cwd: str
+) -> str | None:
+    # 228 S3: the checks that read the Admitted record: the train repo and map folders, the
+    # charter-docs read roots and the inspect class's git -C bounds.
+    by_span = {cmd.span: cmd for cmd, _ in walk(script)}
+    for done in got.commands:
+        tokens = jail.literal_tokens(by_span.get(done.span))
+        quoted = command[done.span[0] : done.span[1]]
+        if done.script is not None and train_script_ok(tokens):
+            mismatch = train_repo_reason(tokens, cwd) or map_out_reason(tokens, cwd)
+            if mismatch is not None:
+                return mismatch
+        elif "read" in allowed and done.family in shell.DOCS_READS:
+            roots, base = _read_roots(cwd)
+            if not shell.docs_read_ok(tokens, quoted, roots, cwd, base):
+                return jail.refused_at(
+                    _reason(allowed), "a read outside docs/ and the charter", quoted
+                )
+    if "inspect" in allowed:
+        outside = jail.git_dir_outside(got, cwd, hook_io.hook_charter(cwd))
+        return None if outside is None else f"{_reason(allowed)} {outside}"
+    return None
+
+
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
     allowed: frozenset[str] = frozenset(flags.allow or ())
     command = hook_io.text(hook_io.tool_input(hook_input), "command")
-    chain = shell.worker_parse(command)
-    if chain is None:
-        return shell.R_UNSUPPORTED
     cwd = hook_io.text(hook_input, "cwd")
-    for segment, raw in zip(chain.segments, chain.raws, strict=True):
-        if "append_ledger" in allowed and shell._is_append_ledger(segment):
-            if not jail._ledger_args_ok(segment):
-                return jail.R_LEDGER_ARGS
-            continue
-        name = shell._cmd_name(segment)
-        if name in {"git", "gh"} and name in allowed:
-            continue  # 0044: git_grammar and gh_classes judge their arguments.
-        if name == "gitleaks" and name in allowed:
-            if not jail._gitleaks_ok(segment):
-                return jail.R_GITLEAKS
-            continue
-        if "read" in allowed and name in shell.DOCS_READS:
-            roots, base = _read_roots(cwd)
-            if shell.docs_read_ok(segment, raw, roots, cwd, base):
-                continue
-        if "train" in allowed and train_script_ok(segment):
-            mismatch = train_repo_reason(segment, cwd) or map_out_reason(segment, cwd)
-            if mismatch is not None:
-                return mismatch
-            continue
-        if "inspect" in allowed and name in shell.READ_ONLY_WRITE_OPTS:
-            if shell.expansion_opaque(raw):  # issue 204, P1: the read verbs that can write.
-                return shell.R_READ_EXPANSION
-        if "inspect" in allowed and _inspect_ok(segment, cwd):
-            continue
-        return _reason(allowed)
-    return None
+    script = parse(command)
+    got = admit_role(script, _role(allowed), cwd, text=command)
+    if isinstance(got, Refusal):
+        return _refusal(script, got, allowed, cwd)
+    return _later(script, command, got, allowed, cwd)
 
 
 decide, main = hook_io.entrypoint(judge, TOOLS, PARSER)
