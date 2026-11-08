@@ -1,6 +1,0 @@
-{
-  "jail.R_INLINE_BODY": {
-    "failure": "issue 116: python -c, perl -e, ruby -e, node -e, php -r or an interpreter reading a pipe, - or a here-string runs code whose writes the jail never walks, so a write into a train's repository goes unseen",
-    "premise_test": "tests/test_jail.py::test_an_inline_body_is_refused_to_a_foreign_agent_in_a_train"
-  }
-}

@@ -66,7 +66,8 @@ RETIRED = (
     "fed_tokens expansion_opaque shell_params flag_span "
     "_fragments _word_pieces _split_values _SCOPE_DEPTH _CUT_MARK _BODY_CHARS _past_cap "
     "_TARGET_CAP _body_constant _command_body _runs_body _option_body _stdin_operand "
-    "_runner_family _STDIN_OPS _NO_BODY _STDIN_FILES _BODY_RUNNERS _piped"
+    "_runner_family _STDIN_OPS _NO_BODY _STDIN_FILES _BODY_RUNNERS _piped "
+    "R_SHELL_BODY R_INLINE_BODY"
 ).split()
 
 

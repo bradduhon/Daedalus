@@ -2344,17 +2344,6 @@ def _train_active(cwd: str) -> bool:
 
 
 _GIT_DIR_OPTS = ("--git-dir=", "--work-tree=")
-# 228 S3: kept for the controls registry (h1.json, a2.json); no jail decision path shows them.
-R_SHELL_BODY = (
-    "a shell -c body, or a shell command string read from a pipe, stdin, a here-string or a "
-    "heredoc, is one string the jail does not walk for what it writes (issue 81, 116). "
-    "Next: run the command directly, without bash -c, sh -c, flock -c or a shell reading stdin."
-)
-R_INLINE_BODY = (
-    "an inline interpreter body (python -c, perl -e, ruby -e, node -e, php -r, or code read "
-    "from a pipe, - or a here-string) is code the jail cannot walk for what it writes "
-    "(issue 116). Next: save the code as a script file and run it by its path."
-)
 # 228 S3: a head that runs a string as code; the gh gate reads such a command by its text.
 _BODY_HEADS = _SHELLS | INTERPRETERS | {"eval", "source", ".", "busybox"}
 
