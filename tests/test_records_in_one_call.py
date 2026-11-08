@@ -11,10 +11,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import audit, train_runner, train_state, unit_binding, workspace
+from lib import audit, jail, train_runner, train_state, unit_binding, workspace
+from lib.train_summary import parse_notes
 
-from tests.conftest import REPO_ROOT, git
+from tests.conftest import CFG, CWD, REPO_ROOT, git, run_cli
 from tests.helpers import phase_text
+from tests.hook_chain import decide
+from tests.payloads import _b
 from tests.test_workspace_train import LEDGER, REFUTED_REPLY, VERIFIED_REPLY
 
 pytestmark = pytest.mark.usefixtures("isolated_env")
@@ -294,6 +297,153 @@ def test_route_verified_lists_the_operator_checks(tmp_path: Path) -> None:
         "operator check | http://localhost:5173 | The page shows the title",
         "operator check | http://localhost:5173 | The scene loads",
     ]
+
+
+@pytest.mark.usefixtures("fixed")
+def test_finish_unit_leaves_what_finish_notes_and_the_next_dispatch_leave(
+    tmp_path: Path,
+) -> None:
+    seq, one = _pair(tmp_path)
+    for root in (seq, one):
+        _ok(train_runner.dispatch_unit(root, "U1"))
+        _verdict(root, _built(root, "U1"), VERIFIED_REPLY)
+    workspace.finish(seq)
+    notes = "## Rulings\n" + NOTES[0] + "\n## Blocks\n" + NOTES[1] + "\n"
+    (_scratch(seq) / "summary-notes.md").write_text(notes, encoding="utf-8")
+    warm = ("a warm resume of coder agent-u1 for unit U2, serial after U1", "a cold coder")
+    _hand_dispatch(seq, "U2", warm, "the coder keeps the context of the unit it built", None)
+    lines = _ok(train_runner.finish_unit(one, "u1", "U2", NOTES, "agent-u1"))
+    assert _snapshot(seq) == _snapshot(one)
+    shape = rf"finish u1: merged={HEX40} next=U2 dispatch U2: model=sonnet \S+ \S+ rows=none"
+    assert len(lines) == 1 and re.fullmatch(shape, lines[0]), lines
+    sha = git(one, "rev-parse", f"daedalus/{TRAIN}").stdout.strip()
+    assert f"merged={sha} " in lines[0]
+
+
+@pytest.mark.usefixtures("fixed")
+def test_finish_unit_merges_one_unit_while_another_still_builds(tmp_path: Path) -> None:
+    root = _fixture(tmp_path / "repo")
+    _ok(train_runner.dispatch_unit(root, "U1"))
+    _ok(train_runner.dispatch_unit(root, "U2"))
+    _verdict(root, _built(root, "U1"), VERIFIED_REPLY)
+    u2 = _built(root, "U2")
+    line = _ok(train_runner.finish_unit(root, "U1"))
+    assert re.fullmatch(rf"finish U1: merged={HEX40} next=none", line[0]), line
+    assert u2.is_dir() and train_state.load(root, TRAIN)["merged"] is False
+
+
+@pytest.mark.usefixtures("fixed")
+def test_finish_unit_refreshes_a_recorded_audit_worktree(tmp_path: Path) -> None:
+    root = _fixture(tmp_path / "repo")
+    audit_path = workspace.create(root, f"{TRAIN}-audit", f"daedalus/{TRAIN}")
+    _ok(train_runner.dispatch_unit(root, "U1"))
+    _verdict(root, _built(root, "U1"), VERIFIED_REPLY)
+    line = _ok(train_runner.finish_unit(root, "U1"))
+    sha = line[0].split("merged=")[1].split()[0]
+    assert git(audit_path, "rev-parse", "HEAD").stdout.strip() == sha
+
+
+@pytest.mark.usefixtures("fixed")
+def test_finish_unit_refuses_a_fix_unit_while_another_waits(tmp_path: Path) -> None:
+    # 0121: a fix unit is outside the plan, so it merges only by the finish, last of its round.
+    root = _fixture(tmp_path / "repo")
+    _ok(train_runner.dispatch_unit(root, "U1"))
+    _built(root, "U1")
+    fix = workspace.create(root, f"{TRAIN}-fix1-u1", f"daedalus/{TRAIN}")
+    (fix / "f.txt").write_text("f\n")
+    git(fix, "add", "-A")
+    git(fix, "commit", "-q", "-m", "fix")
+    refused = train_runner.finish_unit(root, "fix1-u1")
+    assert refused.code == 1 and "not a unit of the recorded plan, and u1" in refused.lines[0]
+    assert "Next:" in refused.lines[0] and fix.is_dir()
+
+
+@pytest.mark.usefixtures("fixed")
+def test_dispatch_refuses_a_unit_that_already_merged(tmp_path: Path) -> None:
+    root = _fixture(tmp_path / "repo")
+    _ok(train_runner.dispatch_unit(root, "U1"))
+    _verdict(root, _built(root, "U1"), VERIFIED_REPLY)
+    _ok(train_runner.finish_unit(root, "U1"))
+    again = train_runner.dispatch_unit(root, "U1")
+    assert again.code == 1 and "is gone" in again.lines[0] and "Next:" in again.lines[0]
+
+
+def test_notes_land_in_their_section_of_an_existing_file(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    path = root / "docs" / ".tmp" / "daedalus" / TRAIN / "summary-notes.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("Task: t\n## Blocks\nFriction: none\n\n## Waived\nNone.\n")
+    placed = train_runner._note_lines(NOTES)
+    train_runner._append_notes(root, TRAIN, placed)
+    text = path.read_text()
+    assert text == (
+        f"Task: t\n## Rulings\n{NOTES[0]}\n## Blocks\nFriction: none\n{NOTES[1]}\n\n"
+        "## Waived\nNone.\n"
+    )
+    assert parse_notes(text, "notes").sections["Rulings"] == [NOTES[0]]
+    with pytest.raises(train_runner.RunnerError, match="Next:"):
+        train_runner._note_lines(["Summary: anything"])
+
+
+def _cli(root: Path, *args: str) -> tuple[int, str]:
+    done = run_cli("daedalus_train.py", *args, "--repo", str(root), cwd=root)
+    return done.returncode, done.stdout
+
+
+@pytest.mark.usefixtures("fixed")
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("dispatch", "--unit", "U9"),
+        ("route", "--unit", "U1", "--verdict", "VERIFIED"),
+        ("route", "--unit", "U1", "--verdict", "REFUTED"),
+        ("route", "--unit", "U1", "--verdict", "REFUTED", "--rows", "0"),
+        ("finish-unit", "--unit", "U1"),
+        ("finish-unit", "--unit", "U1", "--warm", "agent-u1"),
+        ("finish-unit", "--unit", "U1", "--note", "Summary: x"),
+    ],
+)
+def test_a_refused_composed_call_exits_1_with_a_next_line(
+    tmp_path: Path, args: tuple[str, ...]
+) -> None:
+    root = _fixture(tmp_path / "repo")
+    _ok(train_runner.dispatch_unit(root, "U1"))
+    _built(root, "U1")
+    code, out = _cli(root, *args)
+    assert code == 1 and "Next:" in out, out
+
+
+SUBCOMMANDS = (
+    "dispatch --unit U1",
+    "route --unit U1 --verdict REFUTED",
+    "finish-unit --unit U1 --next U2",
+)
+REFUSED = (
+    "auditor",
+    "charter-docs",
+    "coder",
+    "comparer",
+    "contract-spec",
+    "planner",
+    "releaser",
+    "verifier",
+    "web-researcher",
+    "writer",
+)
+
+
+@pytest.mark.parametrize("sub", SUBCOMMANDS)
+def test_the_main_session_and_the_orchestrator_alone_run_the_composed_calls(
+    marked_repo: Path, sub: str
+) -> None:
+    # 0230: admitted where choice and model are, refused for every other agent class.
+    script = f"python3 {REPO_ROOT}/scripts/daedalus_train.py"
+    for form in (sub, "choice --chose a --over b --cost c", "model --agent coder --unit U1"):
+        assert jail.admitted(f"{script} {form} --repo {marked_repo}", "main", str(marked_repo))
+        assert decide(_b("orchestrator", f"{script} {form} --repo {CWD}"), CFG).allow, form
+    command = f"{script} {sub} --repo {CWD}"
+    for agent in REFUSED:
+        assert not decide(_b(agent, command), CFG).allow, agent
 
 
 def test_constants_match_the_recipe_text() -> None:

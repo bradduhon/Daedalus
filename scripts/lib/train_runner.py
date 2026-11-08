@@ -84,8 +84,11 @@ from lib.train_definition import (
 from lib.train_summary import (
     LEDGER,
     LEDGER_PENDING,
+    NOTE_SECTIONS,
     SummaryError,
     first_session,
+    notes_path,
+    parse_notes,
     write_summary,
 )
 
@@ -1585,6 +1588,8 @@ ROWS_ASK = (
 )
 _WEB_TOOLS = frozenset({"vitest", "tsc"})
 _WEB_SUFFIXES = (".ts", ".tsx", ".html")
+_NOTE_SECTION = {"Deviation": "Rulings", "Friction": "Blocks", "Habit": "Blocks"}
+_NOTE_MAX = 600
 
 
 def _norm(name: str) -> str:
@@ -1859,6 +1864,141 @@ def route_unit(cwd: Path, unit_id: str, verdict: str, rows: int | None = None) -
             raise RunnerError(str(exc)) from exc
 
     return _with_next(_recorded(cwd, edit), "route")
+
+
+def _note_lines(notes: list[str]) -> list[tuple[str, str]]:
+    placed: list[tuple[str, str]] = []
+    for note in notes:
+        text = note.strip()
+        kind = text.partition(": ")[0]
+        if (
+            kind not in _NOTE_SECTION
+            or not text.partition(": ")[2].strip()
+            or len(text) > _NOTE_MAX
+            or not text.isprintable()
+        ):
+            raise RunnerError(
+                f"--note {note[:60]!r} is not one printable `Deviation: `, `Friction: ` or "
+                f"`Habit: ` line of at most {_NOTE_MAX} characters. Next: rerun finish-unit "
+                "with notes in those shapes."
+            )
+        placed.append((_NOTE_SECTION[kind], text))
+    return placed
+
+
+def _append_notes(repo: Path, train_id: str, placed: list[tuple[str, str]]) -> None:
+    # 0230: each note lands at the end of its notes section; the summary's reader checks it first.
+    path = notes_path(repo, train_id)
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RunnerError(
+            f"cannot read {path} ({exc}). Next: save it as UTF-8, then rerun."
+        ) from exc
+    for section, text in placed:
+        heads = [i for i, ln in enumerate(lines) if ln.strip().startswith("## ")]
+        names = [lines[i].strip()[3:].strip() for i in heads]
+        if section in names:
+            at = heads[names.index(section)]
+            later = [i for i in heads if i > at]
+            end = later[0] if later else len(lines)
+            while end > at + 1 and not lines[end - 1].strip():
+                end -= 1
+            lines.insert(end, text)
+            continue
+        order = NOTE_SECTIONS.index(section)
+        after = [i for i, n in zip(heads, names, strict=True) if n in NOTE_SECTIONS[order + 1 :]]
+        at = after[0] if after else len(lines)
+        lines[at:at] = [f"## {section}", text]
+    body = "\n".join(lines) + "\n"
+    try:
+        parse_notes(body, path.relative_to(repo).as_posix())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic.write_atomic(path, body)
+    except SummaryError as exc:
+        raise RunnerError(str(exc)) from exc
+    except OSError as exc:
+        raise RunnerError(
+            f"cannot write {path} ({exc}). Next: make it writable, then rerun."
+        ) from exc
+
+
+def _finish_lines(
+    repo: Path,
+    train_id: str,
+    unit_id: str,
+    next_unit: str | None,
+    notes: list[str],
+    warm: str | None = None,
+) -> list[str]:
+    # 0230: build step 10 and audit step 3 for one unit; finish when no other unit is pending.
+    if warm is not None and next_unit is None:
+        raise RunnerError(
+            "--warm names the coder for the --next unit, and this call passed no --next. "
+            "Next: rerun finish-unit with --next <unit id>, or without --warm."
+        )
+    placed = _note_lines(notes)
+    state = train_state.load(repo, train_id)
+    unit = _unit_record(state, train_id, unit_id)
+    integration = f"daedalus/{train_id}"
+
+    def pending(u: dict[str, object]) -> bool:
+        tip = workspace._run(repo, "merge-base", "--is-ancestor", str(u["branch"]), integration)
+        return tip.returncode != 0
+
+    others = [
+        u
+        for u in train_state.units(state)
+        if not train_state.is_audit_unit(u) and u.get("name") != unit["name"] and pending(u)
+    ]
+    label = workspace._unit_label(train_id, str(unit["name"]))
+    planned = {u.id.casefold() for u in workspace._recorded_plan(state).units}
+    if others and label.casefold() not in planned:
+        # 0121: a one-unit merge takes plan units only; a fix unit merges by the finish.
+        waiting = ", ".join(workspace._unit_label(train_id, str(u["name"])) for u in others)
+        raise RunnerError(
+            f"unit {unit_id} is not a unit of the recorded plan, and {waiting} still waits to "
+            "merge. Next: run finish-unit once every unit outside the plan is verified, on the "
+            "last of them."
+        )
+    try:
+        if others:
+            workspace.merge(repo, [label])
+        else:
+            workspace.finish(repo)
+        audit_name = workspace.audit_unit(train_id)
+        if any(u.get("name") == audit_name for u in train_state.units(state)):
+            workspace.refresh(repo, audit_name)
+        sha = workspace._out(repo, "rev-parse", "--verify", f"refs/heads/{integration}").strip()
+    except workspace.WorkspaceError as exc:
+        raise RunnerError(str(exc)) from exc
+    if placed:
+        _append_notes(repo, train_id, placed)
+    line = f"finish {unit_id}: merged={sha} next={next_unit or 'none'}"
+    if next_unit is None:
+        return [line]
+    try:
+        follow = _unit_dispatch(repo, train_id, next_unit, warm)
+    except (RunnerError, train_state.TrainStateError, workspace.WorkspaceError) as exc:
+        raise RunnerError(f"{line}\n{exc}") from exc
+    return [f"{line} {follow[0]}", *follow[1:]]
+
+
+def finish_unit(
+    cwd: Path,
+    unit_id: str,
+    next_unit: str | None = None,
+    notes: list[str] | None = None,
+    warm: str | None = None,
+) -> Outcome:
+    # 0230: merge, audit worktree refresh, summary notes and the next dispatch in one call.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        try:
+            return _finish_lines(repo, train_id, unit_id, next_unit, notes or [], warm)
+        except workspace.WorkspaceError as exc:
+            raise RunnerError(str(exc)) from exc
+
+    return _with_next(_recorded(cwd, edit), "finish-unit")
 
 
 def _exemption_args(ledger_id: str, finding: str | None, tracking: str, other: str | None) -> None:

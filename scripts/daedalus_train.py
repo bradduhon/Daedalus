@@ -31,6 +31,7 @@ from lib.train_runner import (  # noqa: E402
     coder_model,
     contract,
     dispatch_unit,
+    finish_unit,
     progress,
     reaudit,
     record_docs_verdict,
@@ -55,7 +56,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
         "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
-        "brief-check, ask-check, packs, writer-clear, assets, refuted, grant, dispatch, route. "
+        "brief-check, ask-check, packs, writer-clear, assets, refuted, grant, dispatch, route, "
+        "finish-unit. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -169,6 +171,12 @@ def _parser() -> argparse.ArgumentParser:
     routed.add_argument("--unit", required=True)
     routed.add_argument("--verdict", choices=("VERIFIED", "REFUTED"), required=True)
     routed.add_argument("--rows", type=int)
+    done = sub.add_parser("finish-unit")
+    done.add_argument("--repo", type=Path, required=True)
+    done.add_argument("--unit", required=True)
+    done.add_argument("--next", dest="next_unit")
+    done.add_argument("--warm")
+    done.add_argument("--note", action="append", default=[])
     return parser
 
 
@@ -419,6 +427,8 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return dispatch_unit(repo, args.unit, args.warm)
     if args.action == "route":
         return route_unit(repo, args.unit, args.verdict, args.rows)
+    if args.action == "finish-unit":
+        return finish_unit(repo, args.unit, args.next_unit, args.note, args.warm)
     if args.action == "check-reply":
         return check_reply(repo, args.stage)
     if args.action == "state":
