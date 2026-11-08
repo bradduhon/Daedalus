@@ -4,16 +4,17 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 import pytest
 from lib import jail, shell
-from lib.admit import Admitted, admit_role, role_for
+from lib.admit import Admitted, AdmittedCommand, Typed, admit_role, role_for
 from lib.shparse import parse
 
 from tests.conftest import CFG, CWD, SCRIPTS_DIR, WT
-from tests.hook_chain import decide, evaluate
-from tests.jail_cases import _unit_repo
+from tests.hook_chain import decide, evaluate, load
+from tests.jail_cases import _narrowed_repo, _unit_repo
 from tests.payloads import _b, _cwd
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
@@ -31,6 +32,8 @@ CODER_PATH = {
     "checks/shell_tripwires.py": ("_coder_reason", "_coder_hygiene"),
     "lib/jail.py": ("coder_call", "coder_refusal", "coder_constant", "lead_cd", "coder_base"),
 }
+# 228 S3d: confine's frozen install test reads the admitted tokens, never a refused text (0196).
+ADMITTED_TOKEN_READERS = {"checks/confine.py": {"install_form"}}
 
 
 def _names(path: Path, functions: tuple[str, ...]) -> set[str]:
@@ -52,7 +55,7 @@ def _names(path: Path, functions: tuple[str, ...]) -> set[str]:
 def test_the_coder_path_reads_no_retired_reader(module: str) -> None:
     # 228 S3b, SA-4: the checks read the parse and the Admitted record, never the command text.
     hits = _names(SCRIPTS_DIR / module, CODER_PATH[module]) & RETIRED_READERS
-    assert hits == set(), (module, hits)
+    assert hits == ADMITTED_TOKEN_READERS.get(module, set()), (module, hits)
 
 
 def test_a_relative_git_folder_after_the_leading_cd_runs_from_its_folder() -> None:
@@ -144,3 +147,45 @@ def test_an_expanding_write_operand_is_refused_by_name(command: str) -> None:
     # SS-4: a glob, ~ or parameter in a write operand is unknown until the shell builds it.
     got = str(evaluate("unit_writes", _b("coder", command)))
     assert "Refused: " in got, (command, got)
+
+
+def _typed(text: str, start: int = 0) -> Typed:
+    return Typed(text, (start, start + len(text)))
+
+
+def _done(tokens: list[str], script: str | None = None) -> AdmittedCommand:
+    # 228 S3d: the typed record admit hands confine; a script word at 0 is S3c's path word.
+    line = " ".join(tokens)
+    typed = None if script is None else _typed(script, line.index(script))
+    word = _typed(tokens[0])
+    return AdmittedCommand(word, shell.command_family(tokens[0]), (0, len(line)), script=typed)
+
+
+def test_confine_is_test_reads_the_typed_record_branch_by_branch(tmp_path: Path) -> None:
+    # 228 S3d: frozen install never, declared yes, path word yes, worktree python script yes,
+    # a runner only with its test verb.
+    repo, wt = _narrowed_repo(tmp_path, json.dumps({"stack": {"unit_test_cmd": "make test"}}))
+    is_test = load("confine")._is_test
+    frozen = jail.FROZEN_EXAMPLES
+    rows: dict[str, tuple[list[str], str | None, bool]] = {
+        **{f"frozen {m}": (form.split(), None, False) for m, form in frozen.items()},
+        "declared": (["make", "test"], None, True),
+        "path word": (["./scripts/run.sh"], "./scripts/run.sh", True),
+        "worktree script": (["python3", "tests/run_tests.py"], "tests/run_tests.py", True),
+        "main checkout script": (["python3", f"{repo}/x.py"], f"{repo}/x.py", False),
+        "npm test": (["npm", "test"], None, True),
+        "npm --version": (["npm", "--version"], None, False),
+        "npm ls": (["npm", "ls"], None, False),
+        "pnpm test": (["pnpm", "test"], None, True),
+        "cargo test": (["cargo", "test"], None, True),
+        "cargo build": (["cargo", "build"], None, False),
+        "go test": (["go", "test", "./..."], None, True),
+        "go vet": (["go", "vet", "./..."], None, False),
+        "uv run": (["uv", "run", "pytest"], None, True),
+        "uv pip list": (["uv", "pip", "list"], None, False),
+        "pytest": (["pytest", "-q"], None, True),
+        "python -m pytest": (["python3", "-m", "pytest", "-q"], None, True),
+        "python -X dev -m mypy": (["python3", "-X", "dev", "-m", "mypy"], None, False),
+    }
+    got = {k: is_test(_done(t, s), t, str(wt), str(repo)) for k, (t, s, _) in rows.items()}
+    assert got == {k: want for k, (_, _, want) in rows.items()}

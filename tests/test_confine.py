@@ -16,8 +16,9 @@ from types import SimpleNamespace
 
 import daedalus_confine
 import pytest
-from lib import shell
+from lib import jail, shell
 from lib.config import ConfigError, load_config
+from lib.manifest import INSTALL_ECOSYSTEMS
 
 from tests.adversarial.corpus import (
     CONFINE_RUNNERS,
@@ -579,6 +580,27 @@ def test_a_runner_name_without_its_test_verb_needs_no_wrapper(command: str) -> N
     # 228 S3b: off the runner rows these are refused by name, a table gap; never as a test.
     got = evaluate("confine", _b("coder", f"cd {WT} && {command}"))
     assert got is None or (not got.startswith(load("confine").R_CONFINE) and "Refused: " in got)
+
+
+@pytest.mark.usefixtures("kernel")
+def test_every_frozen_install_runs_bare_with_its_ecosystem_enabled(tmp_path: Path) -> None:
+    # 228 S3d, 0196: a frozen install needs the network, so the wrapper never takes it.
+    doc = {"dependencies": {"installs": list(INSTALL_ECOSYSTEMS)}}
+    repo, wt = _narrowed_repo(tmp_path, json.dumps(doc))
+    for form in jail.FROZEN_EXAMPLES.values():
+        bare = _cwd(_b("coder", f"cd {wt} && {form}"), repo)
+        assert evaluate("confine", bare) is None, form
+        assert decide(bare, CFG).allow, (form, decide(bare, CFG).reason)
+
+
+@pytest.mark.usefixtures("kernel")
+def test_a_declared_typecheck_command_runs_bare(tmp_path: Path) -> None:
+    # 228 S3d: a declared stack command that is no unit_test_cmd entry is no test command.
+    stack = {"unit_test_cmd": "pytest -q", "typecheck_cmd": "python3 -X dev -m mypy scripts"}
+    repo, wt = _narrowed_repo(tmp_path, json.dumps({"stack": stack}))
+    bare = _cwd(_b("coder", f"cd {wt} && python3 -X dev -m mypy scripts"), repo)
+    assert evaluate("confine", bare) is None
+    assert decide(bare, CFG).allow, decide(bare, CFG).reason
 
 
 class _Libc:

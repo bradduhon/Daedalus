@@ -31,8 +31,6 @@ R_CONFINE_UNIT = (
     f"from inside that worktree (0048). Next: cd <your unit worktree> && {shell.CONFINE_PATH} "
     "--unit <that worktree> -- <the command>."
 )
-# 228 S3b: the families admit hands to its runner and terraform rows; each one is a test command.
-_TEST_FAMILIES = frozenset(shell.TEST_RUNNERS) | {"npm", "python"}
 
 
 def _declared_tests(cwd: str) -> frozenset[tuple[str, ...]]:
@@ -51,14 +49,18 @@ def _declared_tests(cwd: str) -> frozenset[tuple[str, ...]]:
 
 
 def _is_test(done: AdmittedCommand, tokens: list[str], base: str, cwd: str) -> bool:
-    # 0048, Plan 6 section 10.3: a runner row admit accepted, or a declared unit_test_cmd.
-    # 104: a python3 script counts only inside a unit worktree, the runner check's own test.
-    script = done.script.text if done.family == "python" and done.script else None
-    if done.family in _TEST_FAMILIES and (
-        script is None or shell_tripwires._own_script(cwd, base)(script)
-    ):
+    # 0048, Plan 6 section 10.3: a declared unit_test_cmd, a worktree file by its path, a
+    # worktree python script (104), or a runner with its test verb.
+    form = jail.install_form(tokens)
+    if form is not None and form.frozen:
+        return False  # 228 S3d: 0196 frozen install needs the network, so never wrapped.
+    if tuple(tokens) in _declared_tests(cwd):
         return True
-    return tuple(tokens) in _declared_tests(cwd)
+    if done.script is not None and done.script.span == done.word.span:
+        return True  # 228 S3d: the path word S3c typed as a script runs under the wrapper (0048).
+    if done.family == "python" and done.script is not None:
+        return shell_tripwires._own_script(cwd, base)(done.script.text)
+    return shell._tester_runner_ok(done.family, tokens)
 
 
 def _terraform_reason(done: AdmittedCommand, base: str, cwd: str) -> str | None:

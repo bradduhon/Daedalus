@@ -27,8 +27,6 @@ from tests.payloads import _b, _t
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "network_tools"
-# 228 S3b: a form the grammar refuses that the deleted coder reader admitted; a table row fixes it.
-GAP = pytest.mark.xfail(strict=True, reason="228 S3b table gap: off the coder's table")
 
 
 def _coder_refused(got: str | None, *constants: str) -> bool:
@@ -166,13 +164,18 @@ def _chain_refuses_naming_the_ruling(command: str) -> None:
         "npm run install",
         "yarn test",
         "bun test",
-        pytest.param("npm --version", marks=GAP),
         "git commit -m 'npm install'",
         "rg 'pnpm add' src",
     ],
 )
 def test_any_other_package_manager_verb_is_no_network_tool(command: str) -> None:
     assert evaluate(HOOK, _b("coder", command)) is None, command
+
+
+def test_npm_version_is_off_the_coder_table_and_no_network_tool() -> None:
+    # 228 S3d: no coder row admits npm --version; admission names it, never the network rule.
+    got = str(evaluate(HOOK, _b("coder", "npm --version")))
+    assert "Refused: npm is not a test-runner form" in got and jail.R_NETWORK not in got, got
 
 
 def test_network_tools_fixture_decisions() -> None:

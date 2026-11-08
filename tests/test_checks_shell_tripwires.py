@@ -31,8 +31,6 @@ from tests.payloads import _b, _cwd
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "shell_tripwires"
 WORKERS = ("coder", "releaser", "charter-docs")
-# 228 S3b: a form the grammar refuses that the deleted coder reader admitted; a table row fixes it.
-GAP = pytest.mark.xfail(strict=True, reason="228 S3b table gap: off the coder's table")
 
 
 def _coder_refused(got: str | None, *constants: str) -> bool:
@@ -483,17 +481,17 @@ class TestNestedClaudeAndPathCommands:
             got = evaluate(HOOK, _cwd(_b("coder", command), repo))
             assert _coder_refused(got, shell.R_CLAUDE_PATH), (command, got)
 
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "/usr/bin/cat x",
-            pytest.param(f"{WT}/scripts/run.sh", marks=GAP),
-            pytest.param(f"cd {WT} && ./scripts/run.sh", marks=GAP),
-            "ls x",
-        ],
-    )
+    @pytest.mark.parametrize("command", ["/usr/bin/cat x", "ls x"])
     def test_coder_path_command_in_a_trusted_place_is_allowed(self, command: str) -> None:
         assert evaluate(HOOK, _b("coder", command)) is None, command
+
+    def test_coder_worktree_file_run_bare_is_refused_by_name(self, tmp_path: Path) -> None:
+        # 228 S3d: admission refuses a unit worktree file run bare and names the wrapper (0048).
+        repo, wt = _unit_repo(tmp_path / "repo")
+        for command in (f"{wt}/scripts/run.sh", f"cd {wt} && ./scripts/run.sh"):
+            got = evaluate(HOOK, _cwd(_b("coder", command), repo))
+            assert _coder_refused(got, shell.R_UNTRUSTED_PATH), (command, got)
+            assert "is a unit worktree file; it runs under the kernel wrapper" in str(got), got
 
     def test_declared_executables_run_by_absolute_path(self, tmp_path: Path) -> None:
         # issue 55: the manifest's own pytest and ruff, anchored at the project root, are trusted.
