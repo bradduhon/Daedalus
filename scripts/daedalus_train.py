@@ -30,6 +30,7 @@ from lib.train_runner import (  # noqa: E402
     choice,
     coder_model,
     contract,
+    dispatch_unit,
     progress,
     reaudit,
     record_docs_verdict,
@@ -53,7 +54,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
         "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
-        "brief-check, ask-check, packs, writer-clear, assets, refuted, grant. "
+        "brief-check, ask-check, packs, writer-clear, assets, refuted, grant, dispatch. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -157,6 +158,11 @@ def _parser() -> argparse.ArgumentParser:
     grant.add_argument("--reason", required=True)
     grant.add_argument("--ledger-id", dest="ledger_id", required=True)
     grant.add_argument("--command-file", dest="command_file", type=Path, required=True)
+    # 0230: the composed record calls; each prints one line for the State Block row.
+    send = sub.add_parser("dispatch")
+    send.add_argument("--repo", type=Path, required=True)
+    send.add_argument("--unit", required=True)
+    send.add_argument("--warm")
     return parser
 
 
@@ -403,6 +409,8 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return _assets(repo, args.base, args.tip)
     if args.action == "grant":
         return _grant(repo, args)
+    if args.action == "dispatch":
+        return dispatch_unit(repo, args.unit, args.warm)
     if args.action == "check-reply":
         return check_reply(repo, args.stage)
     if args.action == "state":

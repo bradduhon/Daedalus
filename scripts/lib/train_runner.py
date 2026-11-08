@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from lib import (
+    atomic,
     audit_rounds,
     git,
     manifest,
@@ -80,7 +81,13 @@ from lib.train_definition import (
     DefinitionError,
     Origin,
 )
-from lib.train_summary import LEDGER, LEDGER_PENDING, SummaryError, first_session, write_summary
+from lib.train_summary import (
+    LEDGER,
+    LEDGER_PENDING,
+    SummaryError,
+    first_session,
+    write_summary,
+)
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 MODE_DEFINED = "defined"
@@ -1524,6 +1531,246 @@ def refuted(cwd: Path, unit_id: str, operator_check: str | None = None) -> Outco
         return [f"refuted {unit_id}: {count}"]
 
     return _recorded(cwd, edit)
+
+
+# 0230: the build step 4 class list; a folder entry ends in a slash.
+CLASS_FILES = (
+    "scripts/checks/",
+    "scripts/lib/jail.py",
+    "scripts/lib/shell.py",
+    "scripts/lib/credential_paths.py",
+    "scripts/lib/gh_policy.py",
+    "scripts/enforce_agent_jail.py",
+    "scripts/lib/workspace.py",
+    "scripts/lib/train_runner.py",
+    "scripts/lib/audit_proof.py",
+    "scripts/lib/unit_binding.py",
+    "scripts/lib/dispatch_binding.py",
+    "scripts/lib/shparse.py",
+    "scripts/lib/admit.py",
+)
+# 0226: the shell-semantics pack goes only to these files.
+SHELL_PACK_FILES = (
+    "scripts/checks/",
+    "scripts/lib/jail.py",
+    "scripts/lib/shell.py",
+    "scripts/lib/shparse.py",
+    "scripts/lib/admit.py",
+)
+CODER_PACKS = ("secure-architecture", "adversarial-coding")
+SHELL_PACK = "shell-semantics"
+SCOPE_LINE = (
+    "Scope: only what this brief names; anything it does not name is left as it is, fail closed"
+)
+HUNT_LINE = (
+    "Hunt: a leading option; a valued option whose value is a verb or a path; `--`; `-`; "
+    "clustered flags; a unique long-option prefix; a path or versioned command name; a wrapper, "
+    "and two wrappers stacked; a `NAME=value` prefix; an export, `declare -x` or `set -a` in an "
+    "earlier segment; a subshell; a brace group; a pipe into the command; a here-string; a "
+    "heredoc with a quoted and with a bare delimiter; a redirect before the command word; a `$`, "
+    "backtick or glob in a word; a quoted `$`; `$'..'`."
+)
+REMINDER = (
+    "Work only in {path}: every file path and every git pathspec you use is absolute or goes "
+    "through `git -C {path}`. When blocked, commit WIP and return one `[STATUS: YIELD_*]` line; "
+    "you will be resumed with the answer."
+)
+ROWS_ASK = (
+    "Read the brief, the spec and the packs. For each numbered requirement, write the rows a "
+    "correct build must pass: admitted rows (the forms the requirement says are allowed, each as "
+    "the agent and folder it runs as) and refused rows (every hiding form from the hunt list and "
+    "from each class the shell-semantics pack names, applied to that requirement). Each row is "
+    "one line `<req n> | <agent> | <admitted|refused> | <command>`. Run nothing; no code is "
+    "built yet. Reply with `[ROWS] n=<count>` as your first and last line and the rows between."
+)
+
+
+def _norm(name: str) -> str:
+    return posixpath.normpath(name) + ("/" if name.endswith("/") else "")
+
+
+def _hits(files: tuple[str, ...], listed: tuple[str, ...]) -> bool:
+    # 0230: a folder entry covers every file under it; a file entry matches itself only.
+    for name in (_norm(f) for f in files):
+        for entry in listed:
+            if name == entry or (entry.endswith("/") and name.startswith(entry)):
+                return True
+            if entry.endswith("/") and name == entry.rstrip("/"):
+                return True
+    return False
+
+
+def _section_verbatim(text: str, uid: str) -> str | None:
+    # 0230, pin REQ -> VER: the section from its heading to the next heading, as plan_record cuts.
+    lines = text.splitlines()
+    fenced, start = False, None
+    for i, line in enumerate(lines):
+        if line.strip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if start is not None and _HEADING.match(line):
+            return "\n".join(lines[start:i]).rstrip()
+        head = plan_record._HEADING.fullmatch(line.rstrip())
+        if start is None and head is not None and head.group(1) == uid:
+            start = i
+    return None if start is None else "\n".join(lines[start:]).rstrip()
+
+
+def _brief_packets(repo: Path, train_id: str, state: dict[str, object]) -> tuple[list[str], Path]:
+    # 0083, plan step 15: Contract (or none on a skip), Standards, then the pick line.
+    contract = _text(state, "contract_path")
+    if contract:
+        digest = _sha256(_read_packet(Path(contract), "Locked Contract Packet"))
+        first = f"Contract: {contract} sha256={digest}"
+    elif state.get(train_state.CONTRACT_SKIP) is True:
+        first = "Contract: none"
+    else:
+        raise RunnerError(
+            f"train {train_id} has no locked contract and no contract skip. Next: lock the "
+            "contract with daedalus_workspace.py lock (the plan phase), then rerun dispatch."
+        )
+    standards = _scratch(repo, train_id) / STANDARDS_FILE
+    data = _read_packet(standards, "Standards Packet")
+    picks = [
+        line.strip()
+        for line in data.decode("utf-8", errors="replace").splitlines()
+        if line.startswith(PICK_LINE)
+    ]
+    lines = [first, f"Standards: {standards} sha256={_sha256(data)}"]
+    return [*lines, picks[-1] if picks else f"{PICK_LINE} none"], standards
+
+
+def _sub(outcome: Outcome) -> list[str]:
+    # 0230: a composed record call stops the whole call on its first refusal, Next line kept.
+    if outcome.code != EXIT_OK:
+        raise RunnerError("\n".join(outcome.lines))
+    return outcome.lines
+
+
+def _planned(state: dict[str, object], unit_id: str) -> tuple[plan_record.Plan, plan_record.Unit]:
+    plan = workspace._recorded_plan(state)
+    found = next((u for u in plan.units if u.id.casefold() == unit_id.casefold()), None)
+    if found is None:
+        raise RunnerError(
+            f"the recorded plan names no unit {unit_id}. Next: pass a unit id the recorded plan "
+            "names."
+        )
+    return plan, found
+
+
+def _order(plan: plan_record.Plan, planned: plan_record.Unit) -> str:
+    # build step 1: a serial edge into the unit, or a unit base, makes it wait; else parallel.
+    after = sorted(
+        {e.source for e in plan.edges if e.kind == plan_record.SERIAL and e.target == planned.id}
+        | ({planned.base} if planned.base in {u.id for u in plan.units} else set())
+    )
+    return f"serial after {', '.join(after)}" if after else "parallel"
+
+
+def _unit_dispatch(repo: Path, train_id: str, unit_id: str, warm: str | None) -> list[str]:
+    # 0230: build steps 1, 2, 4 and 5 for one unit in one call; the recipe decided warm or cold.
+    state = train_state.load(repo, train_id)
+    plan, planned = _planned(state, unit_id)
+    slug = planned.id.lower()
+    if not workspace._NAME.fullmatch(slug):
+        raise RunnerError(
+            f"unit id {planned.id} does not make a worktree name of lowercase letters, digits "
+            "and hyphens. Next: rename the unit in the plan, then rerun dispatch."
+        )
+    coder = None if warm is None else _one_line("warm", warm, "dispatch")
+    text = _plan_text(state, check=True) or ""
+    section = _section_verbatim(text, planned.id)
+    if section is None:
+        raise RunnerError(
+            f"the plan has no `### {planned.id}: <title>` section. Next: add the unit's "
+            "requirement section, record the plan again, then rerun dispatch."
+        )
+    packets, standards = _brief_packets(repo, train_id, state)
+    rows = _hits(planned.files, CLASS_FILES)
+    lock = _text(state, "lock_sha")
+    if rows and not lock:
+        raise RunnerError(
+            f"train {train_id} records no lock sha for the rows-mode Base line. Next: lock the "
+            "contract (the plan phase), then rerun dispatch."
+        )
+    name = f"{train_id}-{slug}"
+    recorded = next((u for u in train_state.units(state) if u.get("name") == name), None)
+    path = (
+        Path(str(recorded["path"]))
+        if recorded is not None
+        else workspace.create(repo, name, f"daedalus/{train_id}")
+    )
+    if not path.is_dir():
+        raise RunnerError(
+            f"unit {planned.id} is recorded, and its worktree {path} is gone, so it merged or "
+            "was removed. Next: dispatch a unit that has not merged."
+        )
+    model = _sub(coder_model(repo, planned.id))[0]
+    head = [*packets, f"Worktree: {path}"]
+    if rows:
+        packs = [*CODER_PACKS, *((SHELL_PACK,) if _hits(planned.files, SHELL_PACK_FILES) else ())]
+        listed = ", ".join(str(PLUGIN_ROOT / "packs" / "coder" / p / "rules.md") for p in packs)
+        head += [SCOPE_LINE, HUNT_LINE, f"Packs: {listed}"]
+    tail = f"Priorities: the ## Priorities section of {standards}"
+    body = "\n\n".join(["\n".join(head), section, tail, REMINDER.format(path=path)]) + "\n"
+    brief = _scratch(repo, train_id) / "briefs" / f"{slug}.md"
+    # 0228: an existing brief is kept, so the Rows line the main session added stays.
+    if not brief.exists():
+        try:
+            brief.parent.mkdir(parents=True, exist_ok=True)
+            atomic.write_atomic(brief, body)
+        except OSError as exc:
+            raise RunnerError(
+                f"cannot write the brief {brief} ({exc}). Next: make {brief.parent} writable, "
+                "then rerun dispatch."
+            ) from exc
+    order = _order(plan, planned)
+    if coder is None:
+        chose, over = f"a cold coder for unit {planned.id}, {order}", "a warm resume"
+        cost = "the coder reads its brief and files from empty"
+    else:
+        chose, over = (
+            f"a warm resume of coder {coder} for unit {planned.id}, {order}",
+            "a cold coder",
+        )
+        cost = "the coder keeps the context of the unit it built"
+    _sub(choice(repo, chose, over, cost))
+    line = f"dispatch {planned.id}: model={model} worktree={path} brief={brief} "
+    lines = [line + f"rows={'needed' if rows else 'none'}"]
+    if rows:
+        brief_text = brief.read_text(encoding="utf-8")
+        packs_line = next(ln for ln in brief_text.splitlines() if ln.startswith("Packs: "))
+        spec = packets[0].removeprefix("Contract: ").split(" sha256=")[0]
+        lines += [
+            "ROWS MODE.",
+            f"Unit worktree: {path}",
+            f"Brief: {brief}",
+            f"Spec: {spec}",
+            packs_line,
+            f"Base: {lock}",
+            ROWS_ASK,
+        ]
+    return lines
+
+
+def _with_next(outcome: Outcome, verb: str) -> Outcome:
+    # 0230: every refusal of a composed call ends with a Next line, as every subcommand does.
+    if outcome.code != EXIT_OK and not any("Next:" in line for line in outcome.lines):
+        outcome.lines.append(f"Next: fix the cause named above, then rerun {verb}.")
+    return outcome
+
+
+def dispatch_unit(cwd: Path, unit_id: str, warm: str | None = None) -> Outcome:
+    # 0230: choice, worktree, model and brief for one unit dispatch; one line for the State Block.
+    def edit(repo: Path, train_id: str) -> list[str]:
+        try:
+            return _unit_dispatch(repo, train_id, unit_id, warm)
+        except workspace.WorkspaceError as exc:
+            raise RunnerError(str(exc)) from exc
+
+    return _with_next(_recorded(cwd, edit), "dispatch")
 
 
 def _exemption_args(ledger_id: str, finding: str | None, tracking: str, other: str | None) -> None:
