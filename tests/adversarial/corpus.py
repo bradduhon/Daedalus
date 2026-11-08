@@ -26,6 +26,7 @@ CLASSES = (
     "operand_grammar",
     "hidden_bodies",
     "chain_state",
+    "measurement_rows",
 )
 # spec 3.3: the agents whose Bash grammar is widest; credential reads judge them all.
 READERS = ("coder", "auditor", "verifier")
@@ -1197,3 +1198,170 @@ UNUSABLE_KERNEL = (
 def assert_store_read_denied(agent: str, template: str, **fields: object) -> None:
     # W1.4: the one body of every "Bash read into a credential store is denied" row.
     assert_denied(_cred(agent, "Bash", command=template.format(**fields)), CREDENTIAL)
+
+
+# 0229: the 2026-11-08 pack measurement rows; (agent, folder, verdict, form), the json id trailing.
+# folder: unmarked, marked (a run marker) or unit (a coder worktree, root notes); {repo} is the
+# marked repo, filled by str.replace, so every other brace is verbatim.
+P3_MEASURE_A2 = (
+    # 0229: 0224 judge by own repo, from an unmarked folder a refused shape runs; verifier: refused.
+    # 231 (the cross-repo case) flips these to refuse when it lands.
+    ("Explore", "unmarked", "admit", "bash 0<<<'touch {repo}/x'"),  # A2-1
+    ("Explore", "unmarked", "admit", "bash {,-c} 'touch {repo}/x'"),  # A2-2
+    ("Explore", "unmarked", "admit", "{,bash} -c 'touch {repo}/x'"),  # A2-3
+    ("Explore", "unmarked", "admit", "bash ${E:--c} 'touch {repo}/x'"),  # A2-4
+    ("Explore", "marked", "refuse", "node --title t -e CODE"),  # A2-5
+    (
+        "orchestrator",
+        "marked",
+        "refuse",
+        "node --title t -e \"require('child_process').execSync('gh issue delete 3')\"",
+    ),  # A2-6
+    # 0229: 0224 judge by own repo, from an unmarked folder a refused shape runs; verifier: refused.
+    # 231 (the cross-repo case) flips these to refuse when it lands.
+    ("Explore", "unmarked", "admit", "eval 'touch {repo}/x'"),  # A2-8
+    ("Explore", "unmarked", "admit", ". /dev/stdin <<< 'touch {repo}/x'"),  # A2-9
+    ("orchestrator", "marked", "refuse", "tmux new-session -d gh issue delete 3"),  # A2-10
+    # 0229: 0224 judge by own repo, from an unmarked folder a refused shape runs; verifier: refused.
+    # 231 (the cross-repo case) flips these to refuse when it lands.
+    ("Explore", "unmarked", "admit", "bash /dev/./stdin <<< 'touch {repo}/x'"),  # A2-11
+    ("Explore", "unmarked", "admit", "source /proc/thread-self/fd/0 <<< 'touch {repo}/x'"),  # A2-12
+    ("Explore", "marked", "refuse", "python3 /dev/./stdin"),  # A2-13
+    (
+        "orchestrator",
+        "marked",
+        "refuse",
+        "python3 -X -- -c \"import os; os.system('gh issue delete 3')\"",
+    ),  # A2-14
+    # 0229: 0221 admit known shapes, a program run is no read in a run; verifier: admitted.
+    ("Explore", "marked", "refuse", "node --no-warnings app.js"),  # A2-15
+    ("Explore", "marked", "refuse", "node --enable-source-maps dist/app.js"),  # A2-16
+    ("Explore", "marked", "refuse", "perl -Mstrict script.pl"),  # A2-17
+    ("Explore", "marked", "refuse", "php -f script.php"),  # A2-18
+    ("Explore", "marked", "refuse", "python3 -V"),  # A2-19
+    ("Explore", "marked", "refuse", "node -v"),  # A2-20
+    # 0229: 0224 judge by own repo, from an unmarked folder a refused shape runs; verifier: refused.
+    # 231 (the cross-repo case) flips these to refuse when it lands.
+    ("Explore", "unmarked", "admit", "{ bash; } <<< 'touch {repo}/x'"),  # A2-21
+    ("Explore", "unmarked", "admit", "( bash ) <<< 'touch {repo}/x'"),  # A2-22
+    ("Explore", "unmarked", "admit", "exec <<< 'touch {repo}/x'; bash"),  # A2-23
+    ("Explore", "unmarked", "admit", "cd /dev && bash stdin <<< 'touch {repo}/x'"),  # A2-24
+)
+P3_MEASURE_A3 = (
+    ("coder", "unit", "refuse", "(export GIT_ICASE_PATH''SPECS=1; git add NOTES/a.md)"),  # A3-1
+    ("coder", "unit", "refuse", "export G\\IT_ICASE_PATHSPECS=1\ngit add NOTES/a.md"),  # A3-2
+    ("coder", "unit", "refuse", 'declare "-x" GIT_ICASE_PATHSPECS=1; git add NOTES/a.md'),  # A3-3
+    ("coder", "unit", "refuse", "set '-a'; GIT_ICASE_PATHSPECS=1; git add NOTES/a.md"),  # A3-4
+    (
+        "coder",
+        "unit",
+        "refuse",
+        'set -o "allexport"; GIT_ICASE_PATHSPECS=1; git add NOTES/a.md',
+    ),  # A3-5
+    (
+        "coder",
+        "unit",
+        "refuse",
+        "shopt -so allexport; GIT_ICASE_PATHSPECS=1; git add NOTES/a.md",
+    ),  # A3-6
+    ("coder", "unit", "refuse", "set -a; GIT_ICASE_PATHSPECS+=1; git add NOTES/a.md"),  # A3-7
+    ("coder", "unit", "refuse", "git log `git add ':(icase)NOTES/a.md'`"),  # A3-8
+    ("coder", "unit", "refuse", "git log -- \"$(git add ':(icase)NOTES/a.md')\""),  # A3-9
+    (
+        "coder",
+        "unit",
+        "refuse",
+        "git commit -F - <<EOF\n$(git add ':(icase)NOTES/a.md')\nEOF",
+    ),  # A3-10
+    ("coder", "unit", "refuse", "git commit -m \"$(git add ':(icase)NOTES/a.md')\""),  # A3-11
+    # 0229: 0221 admit known shapes, no heredoc for an agent; verifier: admitted.
+    ("coder", "unit", "refuse", "cat <<EOF | git commit -F -\nfix :i: spelling\nEOF"),  # A3-12
+    ("coder", "unit", "refuse", "echo ':(icase)NOTES/a.md' | xargs git add"),  # A3-13
+    ("coder", "unit", "refuse", "echo notes/a.md | xargs git add"),  # A3-14
+    ("coder", "unit", "refuse", "git log $'a\\'' \"$(git add ':(icase)NOTES/a.md')\""),  # A3-15
+    (
+        "coder",
+        "unit",
+        "refuse",
+        "true # don't\necho 'x; git log -- ' $(git add \":(icase)NOTES/a.md\") ''",
+    ),  # A3-16
+    (
+        "coder",
+        "unit",
+        "refuse",
+        "(cat <<E\n'\nE\n) ; echo 'x; git log -- ' $(git add \":(icase)NOTES/a.md\") ''",
+    ),  # A3-17
+    (
+        "coder",
+        "unit",
+        "refuse",
+        "git commit -F - <<\"E\\OF\"\nmsg\nE\\OF\ngit add ':(icase)NOTES/a.md'",
+    ),  # A3-18
+    ("coder", "unit", "refuse", "echo notes/a.md | xargs --max-args=1 git add"),  # A3-19
+    ("coder", "unit", "refuse", "echo notes/a.md | xargs -l git add"),  # A3-20
+    (
+        "coder",
+        "unit",
+        "refuse",
+        "echo ':(icase)NOTES/a.md' | xargs sh -c 'git add \"$@\"' _",
+    ),  # A3-21
+    ("coder", "unit", "refuse", "eval export GIT_ICASE_PATHSPECS=1; git add NOTES/a.md"),  # A3-22
+    (
+        "coder",
+        "unit",
+        "refuse",
+        "set -a; printf -v GIT_ICASE_PATHSPECS 1; git add NOTES/a.md",
+    ),  # A3-23
+    ("coder", "unit", "refuse", "set -a; : ${GIT_ICASE_PATHSPECS:=1}; git add NOTES/a.md"),  # A3-24
+    ("coder", "unit", "refuse", "! . ./f; git log -- ':(icase)NOTES'"),  # A3-26
+    ("coder", "unit", "refuse", "time . ./f; git log -- ':(icase)NOTES'"),  # A3-27
+    ("coder", "unit", "refuse", 'G=git; echo notes/a.md | xargs --max-args=1 "$G" add'),  # A3-28
+    ("coder", "unit", "refuse", "X=xar; echo notes/a.md | ${X}gs git add"),  # A3-29
+    (
+        "coder",
+        "unit",
+        "refuse",
+        'S=SPECS; eval "export GIT_ICASE_PATH${S}=1"; git add NOTES/a.md',
+    ),  # A3-30
+    (
+        "coder",
+        "unit",
+        "refuse",
+        "S=SPECS; set -a; printf -v GIT_ICASE_PATH$S 1; git add NOTES/a.md",
+    ),  # A3-31
+    ("coder", "unit", "admit", "git commit -m 'read :i: docs' -- src/a.md"),  # A3-32
+    ("coder", "unit", "admit", "git commit -m 'fix :(icase) in local env' -- src/a.md"),  # A3-33
+    # 0229: 0225 exclude tail row, an icase pathspec on git log refuses agents; verifier: admitted.
+    ("coder", "unit", "refuse", "git add src/set/a.md && git log -- ':(icase)x'"),  # A3-34
+    ("coder", "unit", "refuse", "trap \"git add ':(icase)NOTES/a.md'\" EXIT"),  # A3-35
+    ("coder", "unit", "refuse", "O=icase-pathspecs; git --$O add NOTES/a.md"),  # A3-36
+    ("coder", "unit", "refuse", 'X=ase; git add ":(ic$X)NOTES/a.md"'),  # A3-37
+    ("coder", "unit", "refuse", "2>/dev/null . ./f; git log -- ':(icase)NOTES'"),  # A3-38
+    ("coder", "unit", "refuse", "</dev/null . ./f; git log -- ':(icase)NOTES'"),  # A3-39
+    ("coder", "unit", "refuse", "git add ~+/notes/a.md"),  # A3-40
+    ("coder", "unit", "refuse", "true\ngit add no?es/a.md"),  # A3-41
+    # 0229: 0221 admit known shapes, a parameter in an operand refuses an agent; verifier: admitted.
+    ("coder", "unit", "refuse", 'grep -n commit "$F"'),  # A3-42
+    ("coder", "unit", "refuse", 'ls "$D"/stage'),  # A3-43
+    ("coder", "unit", "refuse", 'git log --grep add -n "$N"'),  # A3-44
+    ("coder", "unit", "refuse", 'git stash list | head -n "$N"'),  # A3-45
+    ("coder", "unit", "refuse", "{fd}>x . ./f; git log -- ':(icase)NOTES'"),  # A3-46
+    ("coder", "unit", "refuse", "git --attr-source HEAD add ':(icase)NOTES/a.md'"),  # A3-47
+    ("coder", "unit", "refuse", 'git --attr-source HEAD add "$F"'),  # A3-48
+    # 0229: 0221 admit known shapes, a substitution or export refuses an agent; verifier: admitted.
+    ("coder", "unit", "refuse", 'grep -rn commit "$(git rev-parse --show-toplevel)"'),  # A3-49
+    ("coder", "unit", "refuse", "ls $(pwd)/stage"),  # A3-50
+    ("coder", "unit", "refuse", 'export N=5; git log --grep add -n "$N"'),  # A3-51
+    ("coder", "unit", "refuse", "git --shallow-file x add notes/a.md"),  # A3-52
+    # 0229: 0221 and 0225, a test builtin and an icase pathspec refuse an agent; verifier: admitted.
+    ("coder", "unit", "refuse", "[ -f x ] && git log -- ':(icase)x'"),  # A3-53
+    ("coder", "unit", "refuse", "[[ -n x ]] && git commit -m ':i: fix' -- src/a.md"),  # A3-54
+    ("coder", "unit", "refuse", "./git log -- ':(icase)NOTES'"),  # A3-55
+    ("coder", "unit", "refuse", "hash -p ./x git; git log -- ':(icase)NOTES'"),  # A3-56
+    ("coder", "unit", "refuse", "PATH=. git log -- ':(icase)NOTES'"),  # A3-57
+    ("coder", "unit", "refuse", "unset PATH; git log -- ':(icase)NOTES'"),  # A3-58
+    ("coder", "unit", "refuse", "printf -v PATH .; git log -- ':(icase)NOTES'"),  # A3-59
+    ("coder", "unit", "refuse", "read PATH < f; git log -- ':(icase)NOTES'"),  # A3-60
+    ("coder", "unit", "refuse", "V=PA; unset ${V}TH; git log -- ':(icase)NOTES'"),  # A3-61
+    ("coder", "unit", "refuse", "V=PA; getopts a ${V}TH; git log -- ':(icase)NOTES'"),  # A3-62
+)
