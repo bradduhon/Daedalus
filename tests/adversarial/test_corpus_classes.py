@@ -41,4 +41,5 @@ def test_each_class_has_a_module_with_denial_tests(name: str) -> None:
 def test_no_module_outside_the_classes() -> None:
     names = {path.stem.removeprefix("test_") for path in HERE.glob("test_*.py")}
     # 228 S2: admit_corpus runs every class's rows through admit; it is no class of its own.
-    assert names - {"corpus_classes", "admit_corpus"} == set(CLASSES)
+    # line 70: mutations mutates every class's rows; it is no class of its own either.
+    assert names - {"corpus_classes", "admit_corpus", "mutations"} == set(CLASSES)
