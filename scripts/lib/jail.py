@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, TypeGuard
@@ -2299,7 +2299,19 @@ def _gh_gate(agent: str, cwd: str, command: str) -> str | None:
     # 0035: outside a train, main and unknown agents skip the whole gate, deny classes included.
     if not allowlist_applies(agent, cwd, command):
         return None
-    return gh_reason(agent, command, _admitted_segments(command, cwd, {"gh", "git"}))
+    from lib.admit import admit_role, role_for  # 228 S3: admit imports this module.
+
+    # 228 S4: main's grammar with the agent's gh class; the policy reads the typed triple.
+    script = shparse.parse(command)
+    got = admit_role(script, replace(role_for("main"), gh=agent), cwd, text=command)
+    if _passed(got):
+        return gh_reason(agent, got)
+    refused = _refused(got)
+    if refused is None or refused.family != "gh":
+        return None  # 228 S4: no gh call the parse shows; the agent's own grammar refuses it.
+    cmd = refused_command(script, refused)
+    # 0028: a class refusal spans the whole call and is shown as the class table words it.
+    return refused.reason if cmd is not None and refused.span == cmd.span else refusal_text(refused)
 
 
 def _admitted_segments(
@@ -2328,7 +2340,7 @@ def _train_active(cwd: str) -> bool:
 
 
 _GIT_DIR_OPTS = ("--git-dir=", "--work-tree=")
-# 228 S3: a head that runs a string as code; the gh gate reads such a command by its text.
+# 228 S3: a head that runs a string as code; the nested-session tripwire reads it by its text.
 _BODY_HEADS = _SHELLS | INTERPRETERS | {"eval", "source", ".", "busybox"}
 
 

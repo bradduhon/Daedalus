@@ -216,8 +216,10 @@ def test_charter_docs_ledger_value_naming_git_push_is_parsed_by_gh_classes() -> 
     hook_input = _b("charter-docs", f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}")
     assert evaluate(HOOK, hook_input) is None
     assert first_deny(hook_input, CFG) is None
+    # 228 S4: the inline body is off the table; gh_classes reads no text, the chain refuses it.
     inline = _b("charter-docs", "python3 -c \"import os; os.system('git push')\"")
-    assert "git push runs only in the Push Train's releaser" in str(evaluate(HOOK, inline))
+    assert evaluate(HOOK, inline) is None
+    assert first_deny(inline, CFG) is not None
 
 
 def test_gh_classes_fixture_decisions() -> None:
@@ -236,8 +238,8 @@ def test_gh_classes_internal_error_denies_and_names_the_hook() -> None:
     internal_error_denies(HOOK, payload("Bash", agent=C, command="gh run list"), "--conductor")
 
 
-# 228 S3 hunt: a refused command keeps the gh gate's text fallback, and the role's chain
-# names the refused word; an admitted command's gh words are read from the parse.
+# 228 S3 hunt, S4: a refused command's text is never read by the gh gate; the role's chain
+# refuses it and names the refused word. An admitted command's gh call is read typed.
 GH_HUNT = (
     ("tmux new-session -d gh issue delete 3", "tmux"),
     ("python3 -c 'import os; os.system(\"gh issue delete 3\")'", "python3"),
@@ -252,7 +254,7 @@ GH_HUNT = (
 def test_a_gh_word_hidden_in_a_refused_command_is_refused_and_named(
     agent: str, allow: str, command: str, word: str
 ) -> None:
-    assert "names gh" in str(evaluate(HOOK, _b(agent, command)))
+    assert evaluate(HOOK, _b(agent, command)) is None
     assert first_deny(_b(agent, command), CFG) is not None, (agent, command)
     named = evaluate("command_allowlist", _b(agent, command), "--allow", allow)
     assert f"`{word}`" in str(named) and "Refused: " in str(named), named

@@ -83,6 +83,9 @@ class AdmittedCommand:
     git_dir: Typed | None = None
     # 228 S3b: the kernel wrapper's --unit folder, which the confine check bounds.
     unit: Typed | None = None
+    # 228 S4: a git read, which excluded roots skip; gh's words with each flag paired to its value.
+    git_read: bool = False
+    gh: gh_policy.GhArgs | None = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,8 @@ class Refusal:
     text: str
     reason: str
     sha256: str
+    # 228 S4: the family of the command under judgment when it refused; "" before its word.
+    family: str = ""
 
 
 @dataclass(frozen=True)
@@ -152,6 +157,7 @@ class _Cmd:
     git_read: bool = False
     loose: list[Span] = field(default_factory=list)
     unit: Typed | None = None
+    gh: gh_policy.GhArgs | None = None
 
     def add(self, kind: str, item: Typed) -> None:
         self.typed.setdefault(kind, []).append(item)
@@ -177,6 +183,8 @@ class _Cmd:
             cd_target=self.cd_target,
             git_dir=self.git_dir,
             unit=self.unit,
+            git_read=self.git_read,
+            gh=self.gh,
         )
 
 
@@ -265,12 +273,13 @@ def admit(script: Script, agent: str, cwd: str, *, text: str) -> Admitted | Refu
 
 def admit_role(script: Script, role: Role, cwd: str, *, text: str) -> Admitted | Refusal:
     # 228 S3: a check whose hook flags name its grant judges by the Role those flags build.
+    judge = _Judge(role, cwd)
     try:
-        return Admitted(tuple(_Judge(role, cwd).script(script)))
+        return Admitted(tuple(judge.script(script)))
     except _Off as off:
         start, end = off.span
         digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
-        return Refusal(off.span, text[start:end], off.reason, digest)
+        return Refusal(off.span, text[start:end], off.reason, digest, judge.family)
 
 
 def _word_text(word: Word) -> Typed:
@@ -343,6 +352,8 @@ class _Judge:
         # 228 S3c, O6: a leading cd moves every later command only when each join is &&.
         self.joined = True
         self._declared: frozenset[tuple[str, ...]] | None = None
+        # 228 S4: the family of the command under judgment, carried onto a Refusal.
+        self.family = ""
 
     # -- script and pipelines ----------------------------------------------------------------
     def script(self, script: Script) -> list[AdmittedCommand]:
@@ -417,6 +428,7 @@ class _Judge:
     # -- one simple command ------------------------------------------------------------------
     def command(self, cmd: Command, piped: bool) -> AdmittedCommand:
         c = _Cmd(cmd.span, piped)
+        self.family = ""
         for assign in cmd.assignments:
             self.assignment(assign, c)
         # 228 S3c: the coder's echo admits $? in an operand, the exit echo, and no other parameter.
@@ -444,7 +456,7 @@ class _Judge:
             if self._path_word(c, name, words):
                 return c.frozen()
         c.word = Typed(name, head.span)
-        c.family = shell.command_family(name)
+        c.family = self.family = shell.command_family(name)
         self.dispatch(c, words)
         if c.loose and not _reads_only(c):
             raise _Off(c.loose[0], "a main-session prefix or parameter rides only a read command")
@@ -1159,11 +1171,14 @@ class _Judge:
         if self.role.gh is None:
             raise _Off(words[0].span, f"gh is not on the {self.role.name} table")
         toks = self._all_literal(words, literals)
-        reason = gh_policy._gh_reason(self.role.gh, ["gh", *toks[1:]])
+        # 228 S4: the one pflag typing of the call; the class policy reads it, never the words.
+        parsed = gh_policy.gh_args(toks[1:])
+        if parsed is None:
+            raise _Off(c.span, gh_policy.R_GH_BUNDLE)
+        reason = gh_policy.class_reason(self.role.gh, parsed)
         if reason is not None:
             raise _Off(c.span, reason)
-        parsed = gh_policy.gh_args(toks[1:])
-        assert parsed is not None
+        c.gh = parsed
         lead = words[1 : 1 + min(2, len(parsed.words))]
         if lead:
             c.subcommand = Typed(" ".join(parsed.words[:2]), (lead[0].span[0], lead[-1].span[1]))

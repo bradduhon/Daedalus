@@ -12,7 +12,6 @@ from lib.config import Config
 from lib.gh_policy import (
     CONDUCTOR_GH,
     R_GH_BUNDLE,
-    _fallback_reason,
     allowlist_applies,
     classify,
     conductor_gh_refusal,
@@ -114,6 +113,11 @@ def _reason(repo: Path, agent: str, command: str) -> str:
     return str(d.reason)
 
 
+def _classify(command: str) -> tuple[str, str]:
+    # 228 S4: the class reads gh_args' typed triple, never the words.
+    return classify(gh_args(shlex.split(command)[1:]))
+
+
 def _denying_hook(repo: Path, agent: str, command: str) -> str:
     # 228 S3b: a coder's gh or git push is off its grammar, so shell_tripwires denies it first.
     allow, reason, hook = router.route(_bash(repo, agent, command), REPO_ROOT)
@@ -178,7 +182,7 @@ EDIT_NEXT = "edit only the body with --body-file; the operator changes anything 
 )
 def test_conductor_may_edit_its_pr_body(train_repo: Path, command: str) -> None:
     # K1: body-only pr edit is on the conductor's list.
-    assert classify(shlex.split(command)) == ("allow", "pr edit")
+    assert _classify(command) == ("allow", "pr edit")
     d = decide(_bash(train_repo, "releaser", command), Config())
     assert d.allow, d.reason
 
@@ -188,7 +192,7 @@ def test_pr_edit_inline_body_passes_policy_then_the_file_rule(
     train_repo: Path, command: str
 ) -> None:
     # K1: the policy allows the body flags; the conductor's file-only body rule still refuses.
-    assert classify(shlex.split(command)) == ("allow", "pr edit")
+    assert _classify(command) == ("allow", "pr edit")
     assert "only from --body-file" in _reason(train_repo, "releaser", command)
 
 
@@ -209,7 +213,7 @@ def test_pr_edit_inline_body_passes_policy_then_the_file_rule(
 )
 def test_conductor_pr_edit_other_flags_refused(train_repo: Path, command: str) -> None:
     # K1: anything beyond the body is default-deny with its own Next line.
-    assert classify(shlex.split(command)) == ("default-deny", "pr edit")
+    assert _classify(command) == ("default-deny", "pr edit")
     _class_refused(train_repo, "releaser", command, "default-deny", EDIT_NEXT)
 
 
@@ -356,18 +360,31 @@ def test_git_push_only_for_the_conductor(train_repo: Path) -> None:
         "eval 'gh pr merge 5'",
     ],
 )
-def test_main_regex_fallback_refuses_hidden_gh(train_repo: Path, command: str) -> None:
+def test_main_hidden_gh_is_warned_by_class_or_by_its_grammar(
+    train_repo: Path, command: str
+) -> None:
+    # 228 S4: a wrapper main admits reaches the gh class; any other form is off main's table
+    # and warns with the grammar's refusal naming its word; no text fallback reads it.
     reason = _reason(train_repo, "main", command)
-    assert "(0028" in reason and "Next:" in reason, reason
+    assert "(0028" in reason or "Refused: " in reason, reason
+    assert "Next:" in reason or "at `" in reason, reason
 
 
-def test_regex_fallback_without_segments() -> None:
-    assert gh_reason("main", "gh auth status", None) is None
-    for command in ("gh pr view 3 $(x)", "x; /usr/bin/gh repo delete", "git -C . push origin x"):
-        reason = gh_reason("main", command, None)
-        assert reason is not None and "Next:" in reason, command
-    assert gh_reason("main", "echo `date`", None) is None
-    assert gh_reason("releaser", "git push origin x", None) is None
+def test_gh_reason_reads_the_admitted_record(train_repo: Path) -> None:
+    # 228 S4: the gh class and the push rule read the typed record; a refused call has none.
+    rows = (
+        ("main", "gh auth status", None),
+        ("main", "git -C . push origin x", "(0028, 0030)"),
+        ("releaser", "git push origin x", None),
+        ("main", "ls", None),
+    )
+    for agent, command, want in rows:
+        got = jail._admission(command, "main", str(train_repo))[1]
+        assert jail._passed(got), command
+        reason = gh_reason(agent, got)
+        assert reason is None if want is None else want in str(reason), (command, reason)
+    for command in ("gh pr view 3 $(x)", "x; /usr/bin/gh repo delete"):
+        assert not jail.admitted(command, "main", str(train_repo)), command
 
 
 @pytest.fixture
@@ -456,7 +473,7 @@ def test_allowlist_applies(plain_repo: Path) -> None:
     ],
 )
 def test_classify(command: str, klass: str) -> None:
-    assert classify(shlex.split(command))[0] == klass
+    assert _classify(command)[0] == klass
 
 
 def test_conductor_gh_refusal_names_only_the_built_set() -> None:
@@ -527,7 +544,7 @@ def test_bundled_short_flags_are_refused_in_a_train(train_repo: Path, agent: str
     # issue 76: a bundle the tables cannot split fails closed for every gated agent.
     for command in ("gh pr view -cw 3", "gh pr create -dH feat/x --title t --body-file x.md"):
         assert R_GH_BUNDLE in _reason(train_repo, agent, command), (agent, command)
-    assert classify(shlex.split("gh pr view -cw 3"))[0] == "default-deny"
+    assert _classify("gh pr view -cw 3")[0] == "default-deny"
 
 
 ISSUE_211_ROWS = (
@@ -555,7 +572,7 @@ def test_main_issue_writes_pass_without_a_warning(train_repo: Path, command: str
     # issue 211, P12: ISSUE_211_ROWS holds the reproduction; main gets no gh warning.
     d = decide(_bash(train_repo, "main", command), Config())
     assert d.allow and not d.warn and not d.reason, d
-    assert classify(shlex.split(command))[0] == "default-deny"
+    assert _classify(command)[0] == "default-deny"
 
 
 @pytest.mark.parametrize("command", ["gh issue comment 3 --delete-last", "gh issue delete 3"])
@@ -617,6 +634,6 @@ def test_a_script_run_reaches_the_parsed_gh_path(train_repo: Path, agent: str) -
         assert jail._admitted_segments(command, cwd) == want, command
         assert jail._gh_gate(agent, cwd, command) is None, command
     for command in INLINE_RUNS:
-        want = _fallback_reason(agent, command)
-        assert jail._gh_gate(agent, cwd, command) == want, command
+        # 228 S4: an inline body shows no gh call to the parse; the gate reads none of its text.
+        assert jail._gh_gate(agent, cwd, command) is None, command
     assert decide(_bash(train_repo, "main", PARSED_RUNS[0]), Config()).allow

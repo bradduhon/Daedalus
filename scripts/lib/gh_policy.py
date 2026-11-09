@@ -5,11 +5,14 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from lib import train_state, workspace
 from lib.audit import project_root
 from lib.audit_proof import exemption_problem, integration_tip, tip_admits
+
+if TYPE_CHECKING:
+    from lib.admit import Admitted
 
 CONDUCTOR = "releaser"
 # 0028: the allowed list intersected with the conductor's set; K1: pr edit changes the body only.
@@ -135,11 +138,8 @@ _ADMIN_MUTATION = re.compile(
     r"\b(?:update|create|archive|unarchive)Repository\w*|\b\w*BranchProtectionRule\b"
     r"|\b\w*Ruleset\b|\b\w*Collaborator\w*|\b\w*DeployKey\b"
 )
-# 0028: tokenizer refusal for main; a gh word or a git push anywhere is refused.
-_GH_WORD = re.compile(r"(?<![\w.-])(?:[\w./-]*/)?gh(?![\w.-])")
-_GIT_PUSH = re.compile(
-    r"(?<![\w.-])(?:[\w./-]*/)?git(?:\s+(?:-[Cc]\s+\S+|-\S+))*\s+[\"']?push(?![\w-])"
-)
+# 228 S4: the flags that make a gh call delete; pr close also deletes with its -d.
+_DELETE_FLAGS = frozenset({"--delete-branch", "--delete-last", "--cleanup-tag"})
 
 
 def gh_args(args: list[str]) -> GhArgs | None:
@@ -240,10 +240,9 @@ def _body_only_edit(parsed: GhArgs) -> bool:
     )
 
 
-def classify(tokens: list[str]) -> tuple[str, str]:
-    # 0028: merge, delete and admin are refused for everyone; everything off the list is denied.
-    args = tokens[1:]
-    parsed = gh_args(args)
+def classify(parsed: GhArgs | None) -> tuple[str, str]:
+    # 0028, 228 S4: merge, delete and admin are refused for everyone; everything off the list is
+    # denied. Reads the (subcommand, action, flags) triple of gh_args, never the words.
     if parsed is None:
         return "default-deny", "(flags without their values)"
     words = parsed.words
@@ -253,9 +252,8 @@ def classify(tokens: list[str]) -> tuple[str, str]:
     detail = " ".join(w for w in (cmd, sub) if w) or "(no subcommand)"
     if "merge" in cmd or "merge" in sub:
         return "merge", detail
-    deleting = any(
-        a.split("=", 1)[0] in {"--delete-branch", "--delete-last", "--cleanup-tag"} for a in args
-    ) or ((cmd, sub) == ("pr", "close") and any(re.fullmatch(r"-[a-zA-Z]*d", a) for a in args))
+    names = {flag.name for flag in parsed.flags}
+    deleting = bool(names & _DELETE_FLAGS) or ((cmd, sub) == ("pr", "close") and "-d" in names)
     if sub.startswith("delete") or deleting:
         return "delete", detail
     if cmd in ADMIN_COMMANDS or (cmd == "repo" and sub in ADMIN_REPO):
@@ -294,10 +292,9 @@ def _allowed(agent: str) -> frozenset[tuple[str, str]]:
     return MAIN_GH if agent == "main" else frozenset()
 
 
-def _gh_reason(agent: str, tokens: list[str]) -> str | None:
-    if gh_args(tokens[1:]) is None:
-        return R_GH_BUNDLE
-    klass, detail = classify(tokens)
+def class_reason(agent: str, parsed: GhArgs) -> str | None:
+    # 0028, 228 S4: the agent's class verdict on a typed gh call; admit refuses a bundle first.
+    klass, detail = classify(parsed)
     # issue 211, P12: classify keeps these default-deny; only the bare main session passes.
     if agent == "main" and klass == "default-deny" and tuple(detail.split()) in MAIN_ISSUE_WRITES:
         return None
@@ -320,33 +317,14 @@ def _push_reason(agent: str) -> str | None:
     return f"git push runs only in the Push Train's releaser (0028, 0030). Next: {PUSH_NEXT}."
 
 
-def _fallback_reason(agent: str, command: str) -> str | None:
-    if agent == "main" and command.strip() == "gh auth status":
-        return None
-    if _GH_WORD.search(command):
-        return (
-            "this command could not be parsed and names gh, so it is refused (0028). "
-            f"Next: run one plain gh command; {CLASS_NEXT['default-deny']}."
-        )
-    if _GIT_PUSH.search(command):
-        return _push_reason(agent)
-    return None
-
-
-def gh_reason(agent: str, command: str, segments: list[list[str]] | None) -> str | None:
-    # 0028: every gh and git push segment; None segments means the regex fallback.
-    if segments is None:
-        return _fallback_reason(agent, command)
-    from lib.shell import _git_subcommand
-
-    for tokens in segments:
-        name = os.path.basename(tokens[0]) if tokens else ""
-        if name == "gh":
-            reason = _gh_reason(agent, tokens)
-        elif name == "git" and _git_subcommand(tokens) == "push":
-            reason = _push_reason(agent)
-        else:
-            reason = None
+def gh_reason(agent: str, got: Admitted) -> str | None:
+    # 0028, 228 S4: each admitted gh call's typed triple and each admitted git push.
+    for done in got.commands:
+        reason: str | None = None
+        if done.family == "gh" and done.gh is not None:
+            reason = class_reason(agent, done.gh)
+        elif done.family == "git" and done.subcommand is not None:
+            reason = _push_reason(agent) if done.subcommand.text == "push" else None
         if reason:
             return reason
     return None
