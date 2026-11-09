@@ -15,10 +15,6 @@
     "failure": "0136: git add -A, git add ., git commit -a or git stash -u runs in a tree holding an excluded root git does not ignore, so the whole folder is staged without being named",
     "premise_test": "tests/test_excluded_roots.py::test_a_whole_tree_command_refuses_a_root_git_does_not_ignore"
   },
-  "jail.R_EXCLUDED_TEXT": {
-    "failure": "0136: a command the parser cannot split hides a path inside an excluded root behind substitution or grouping, so the path checks never see it",
-    "premise_test": "tests/test_excluded_roots.py::test_an_unparsed_command_is_judged_on_its_text"
-  },
   "doc_outputs.R_NO_TRAIN": {
     "failure": "0135: a document agent writes while no train is active, so no output folder bounds its writes",
     "premise_test": "tests/test_freeze_sources.py::test_doc_outputs_refuses_without_a_train_or_its_manifest"

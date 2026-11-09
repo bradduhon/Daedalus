@@ -334,7 +334,6 @@ def test_main_ordinary_commands_still_allowed() -> None:
         "git push origin feature/x",
         "git push -u origin feature/x",
         "git push -u origin feature/x 2>/dev/null",
-        "git push origin $REF",
         "git push origin feature/main-fix",
         "git push origin feat > log",
     ],
@@ -344,6 +343,13 @@ def test_main_git_push_refused_during_a_train(marked_repo: Path, command: str) -
     d = decide(_cred(None, "Bash", str(marked_repo), command=command), CFG)
     assert _main_warns(d, jail.WARN_TRAIN_PUSH), (command, d.reason)
     assert "(0028, 0030)" in str(d.reason), command
+
+
+def test_main_unadmitted_push_is_warned_with_the_grammar_refusal(marked_repo: Path) -> None:
+    # 228 S4: no text fallback; the refused push warns main naming the word off its table.
+    d = decide(_cred(None, "Bash", str(marked_repo), command="git push origin $REF"), CFG)
+    assert d.warn and not d.allow and str(d.reason).startswith(jail.WARN_COMMAND), d.reason
+    assert "at `$REF`" in str(d.reason), d.reason
 
 
 @pytest.mark.parametrize(

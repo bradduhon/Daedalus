@@ -254,6 +254,8 @@ def test_only_the_switched_consumers_import_admit() -> None:
         REPO_ROOT / "scripts" / "checks" / "unit_writes.py",
         REPO_ROOT / "tests" / "test_controls.py",
         REPO_ROOT / "tests" / "test_coder_admission.py",
+        # 228 S4: the gh policy reads the Admitted record's typed gh calls.
+        REPO_ROOT / "scripts" / "lib" / "gh_policy.py",
     }
     users: list[str] = []
     for path in [*REPO_ROOT.glob("scripts/**/*.py"), *REPO_ROOT.glob("tests/**/*.py")]:
