@@ -1327,33 +1327,27 @@ def _ledger_args_ok(tokens: list[str]) -> bool:
     return seen == _LEDGER_VALUE_FLAGS
 
 
-def _gh_allowed(tokens: list[str]) -> bool:
-    words = _gh_words(tokens)
+def _gh_allowed(parsed: GhArgs) -> bool:
+    words = parsed.words[:2]
     return len(words) == 2 and words[1] in GH_ALLOWED.get(words[0], frozenset())
 
 
 _GH_PR_WRITES = frozenset({"create", "edit", "comment"})
 
 
-def _gh_words(tokens: list[str]) -> list[str]:
-    # issue 76: gh_policy's parse; a segment it refuses has no command path, so nothing is allowed.
-    parsed = gh_args(tokens[1:])
-    return [] if parsed is None else parsed.words[:2]
+def _gh_flags(parsed: GhArgs, *names: str) -> list[GhFlag]:
+    # 228 tail: the admitted call's typed triple, gh_policy's one pflag typing (S4).
+    return [f for f in parsed.flags if f.name in names]
 
 
-def _gh_flags(tokens: list[str], *names: str) -> list[GhFlag]:
-    parsed = gh_args(tokens[1:])
-    return [] if parsed is None else [f for f in parsed.flags if f.name in names]
-
-
-def _gh_pr_write(tokens: list[str]) -> bool:
-    words = _gh_words(tokens)
+def _gh_pr_write(parsed: GhArgs) -> bool:
+    words = parsed.words[:2]
     return words[:1] == ["pr"] and words[1:2] != [] and words[1] in _GH_PR_WRITES
 
 
-def _gh_repo_flag(tokens: list[str]) -> bool:
+def _gh_repo_flag(parsed: GhArgs) -> bool:
     # I7: reads may name another repo; pr writes stay in the current one.
-    return _gh_pr_write(tokens) and bool(_gh_flags(tokens, "-R", "--repo"))
+    return _gh_pr_write(parsed) and bool(_gh_flags(parsed, "-R", "--repo"))
 
 
 # 0078: gh's [HOST/]OWNER/REPO from an https, ssh or scp-form origin URL.
@@ -1384,20 +1378,18 @@ def _charter_slug(charter: str) -> str | None:
     return _remote_slug(out.stdout) if out.returncode == 0 else None
 
 
-def _gh_flag_values(tokens: list[str], long: str, short: str) -> list[str] | None:
+def _gh_flag_values(parsed: GhArgs, long: str, short: str) -> list[str] | None:
     # 0078: `--x v`, `--x=v` and `-X v` only; an attached or bundled short form fails closed.
-    if gh_args(tokens[1:]) is None:
-        return None
-    found = _gh_flags(tokens, long, f"-{short}")
+    found = _gh_flags(parsed, long, f"-{short}")
     return None if any(f.attached for f in found) else [f.value or "" for f in found]
 
 
-def _charter_pr_create_ok(tokens: list[str], cwd: str, charter: str | None) -> bool:
+def _charter_pr_create_ok(parsed: GhArgs, cwd: str, charter: str | None) -> bool:
     # 0078: one gh pr create on the declared charter root's origin, for this train's branch.
-    if charter is None or _gh_words(tokens) != ["pr", "create"]:
+    if charter is None or parsed.words[:2] != ["pr", "create"]:
         return False
-    repos = _gh_flag_values(tokens, "--repo", "R")
-    heads = _gh_flag_values(tokens, "--head", "H")
+    repos = _gh_flag_values(parsed, "--repo", "R")
+    heads = _gh_flag_values(parsed, "--head", "H")
     if repos is None or heads is None or len(repos) != 1 or len(heads) != 1:
         return False
     branch = _train_branch(cwd)
@@ -1406,10 +1398,10 @@ def _charter_pr_create_ok(tokens: list[str], cwd: str, charter: str | None) -> b
     return repos[0] == _charter_slug(_abs(charter, cwd))
 
 
-def _gh_body_file_ok(tokens: list[str], cwd: str) -> bool:
-    if not _gh_pr_write(tokens):
+def _gh_body_file_ok(parsed: GhArgs, cwd: str) -> bool:
+    if not _gh_pr_write(parsed):
         return True
-    for flag in _gh_flags(tokens, "--body-file", "-F"):
+    for flag in _gh_flags(parsed, "--body-file", "-F"):
         value = flag.value or ""
         # I7: stdin (-) and relative-to-elsewhere paths fail; realpath under the two homes only.
         if value in {"", "-"} or not (
@@ -1419,12 +1411,12 @@ def _gh_body_file_ok(tokens: list[str], cwd: str) -> bool:
     return True
 
 
-def _gh_write_reason(tokens: list[str]) -> str | None:
-    if not _gh_pr_write(tokens):
+def _gh_write_reason(parsed: GhArgs) -> str | None:
+    if not _gh_pr_write(parsed):
         return None
-    if _gh_flags(tokens, "--body", "-b") or not _gh_flags(tokens, "--body-file", "-F"):
+    if _gh_flags(parsed, "--body", "-b") or not _gh_flags(parsed, "--body-file", "-F"):
         return R_BODY_INLINE
-    if _gh_words(tokens)[1] == "edit" and _gh_flags(tokens, "--base", "-B"):
+    if parsed.words[1] == "edit" and _gh_flags(parsed, "--base", "-B"):
         return R_EDIT_BASE
     return None
 
