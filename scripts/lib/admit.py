@@ -305,6 +305,15 @@ def _expands(word: Word) -> bool:
     return any(isinstance(p, Glob | Tilde) for p in word.parts)
 
 
+def _unknown(word: Word) -> Typed:
+    # 257: a word after a built option is typed unknown; the option may consume or reread it.
+    return Typed(word.raw, word.span, glob=True)
+
+
+def _first(built: int | None, operands: list[Word], rest: list[Word]) -> int:
+    return len(operands) + len(rest) if built is None else built
+
+
 def _built_option(word: Word) -> bool:
     # 257: a word led by a literal - holding a parameter, or an expansion before its first =,
     # is an option the shell builds; a glob in a literal option's attached value is no name.
@@ -872,8 +881,9 @@ class _Judge:
                 raise _Off(words[-1].span, f"{key} closes with a literal ]")
             met: list[str] = []
             operands = words[1:-1]
+            built = len(operands)
         else:
-            met, operands = self.options(c, key, words[1:], stop)
+            met, operands, built = self.options(c, key, words[1:], stop)
         if key in shell.OPTION_NEEDED and (not met or "--" in [w.literal for w in words[1:]]):
             raise _Off(words[0].span, f"{key} runs only with options from its row, and no --")
         if key in shell.NAME_OPERAND_CMDS:
@@ -881,32 +891,36 @@ class _Judge:
                 name = (word.literal or "").split("=", 1)[0]
                 if not (name.isascii() and name.isidentifier()):
                     raise _Off(word.span, f"{key} takes NAME or NAME=value operands")
-        self.operands(c, key, met, operands)
+        self.operands(c, key, met, operands, built)
 
     def options(
         self, c: _Cmd, key: str, words: list[Word], stop: bool
-    ) -> tuple[list[str], list[Word]]:
+    ) -> tuple[list[str], list[Word], int]:
+        # 257: the third value is the index of the first operand after a built option.
         plain, valued = shell.OPTION_TABLE[key]
         whole = key in shell.WORD_OPTION_CMDS
         stops = _PROGRAM_STOPS.get(key, frozenset())
         met: list[str] = []
         operands: list[Word] = []
+        built: int | None = None
         i = 0
         while i < len(words):
             word = words[i]
             text = word.literal
             if _built_option(word):
                 self.opaque_option(c, word)
+                built = len(operands) if built is None else built
                 i += 1
                 continue
             if text is None or text == "-" or not text.startswith("-"):
                 if stop:
-                    return met, operands + words[i:]
+                    return met, operands + words[i:], _first(built, operands, words[i:])
                 operands.append(word)
                 i += 1
                 continue
             if text == "--" and not whole:
-                return met, operands + words[i + 1 :]
+                rest = words[i + 1 :]
+                return met, operands + rest, _first(built, operands, rest)
             if whole or text.startswith("--"):
                 name, eq, attached = (text, "", "") if whole else text.partition("=")
                 if name not in plain | valued:
@@ -920,8 +934,8 @@ class _Judge:
             else:
                 i = self._cluster(c, key, words, i, plain, valued, met)
             if met and met[-1] in stops:
-                return met, operands + words[i:]
-        return met, operands
+                return met, operands + words[i:], _first(built, operands, words[i:])
+        return met, operands, _first(built, operands, [])
 
     def _cluster(
         self,
@@ -988,7 +1002,7 @@ class _Judge:
             self._typed(c, key, kind, value, name)
         return i
 
-    def operands(self, c: _Cmd, key: str, met: list[str], operands: list[Word]) -> None:
+    def operands(self, c: _Cmd, key: str, met: list[str], operands: list[Word], built: int) -> None:
         row = next(
             (shell.OPERAND_TYPES[f"{key} {m}"] for m in met if f"{key} {m}" in shell.OPERAND_TYPES),
             shell.OPERAND_TYPES.get(key, ("text*",)),
@@ -997,7 +1011,7 @@ class _Judge:
         if slots is None:
             span = operands[-1].span if operands else c.span
             raise _Off(span, f"{key} takes operands by its row {row}, not {len(operands)}")
-        for word, slot in zip(operands, slots, strict=True):
+        for n, (word, slot) in enumerate(zip(operands, slots, strict=True)):
             kind = slot.rstrip("*?")
             if _expands(word) and (kind != "read" or not slot.endswith("*")):
                 raise _Off(word.span, f"a glob or ~ in a {key} {kind} operand")
@@ -1005,7 +1019,8 @@ class _Judge:
                 raise _Off(word.span, f"a leading expansion may become a {key} option")
             if key in shell.HOST_OPERAND_CMDS and _remote(word):
                 raise _Off(word.span, f"{key} reads {word.raw} as a remote host:path operand")
-            self._typed(c, key, kind, _word_text(word), "")
+            value = _unknown(word) if n >= built else _word_text(word)
+            self._typed(c, key, kind, value, "")
 
     def _typed(self, c: _Cmd, key: str, kind: str, value: Typed, option: str) -> None:
         what = f"{key} {option}".strip()
@@ -1059,8 +1074,8 @@ class _Judge:
             return
         if role.main and sub == "commit":
             # 228 S2: the main session's commit reads the "git commit" option row.
-            met, operands = self.options(c, "git commit", args, False)
-            self.operands(c, "git commit", met, operands)
+            met, operands, built = self.options(c, "git commit", args, False)
+            self.operands(c, "git commit", met, operands, built)
             return
         # 228 S2: operands first, so a magic pathspec is named before the grammar row.
         self._git_operands(c, sub, args, toks, magic=main_read)
@@ -1160,6 +1175,7 @@ class _Judge:
         kind = row[0].rstrip("*?") if row else "text"
         valued = shell.OPTION_TABLE["git commit"][1] | shell._COMMIT_WITH_ARG
         after = False
+        built = False
         skip = False
         prev = ""
         for word, tok in zip(args, toks, strict=True):
@@ -1173,6 +1189,7 @@ class _Judge:
                 continue
             if not after and _built_option(word):
                 self.opaque_option(c, word)
+                built = True
                 continue
             if not after and tok.startswith("-") and tok != "-":
                 c.options.append(Typed(tok, word.span))
@@ -1186,12 +1203,14 @@ class _Judge:
             # 0225: a quoted lead part counts; ':(exclude)'*.glb is magic too.
             lead = word.parts[0] if word.parts else None
             colon = isinstance(lead, Literal) and lead.text.startswith(":")
-            if (tok.startswith(":") or colon) and not magic:
-                if not _exclude_tail(sub, word):
-                    raise _Off(word.span, f"the pathspec magic {tok} is not admitted")
-                c.add("pathspec", _word_text(word))
+            spec = (tok.startswith(":") or colon) and not magic
+            if spec and not _exclude_tail(sub, word):
+                raise _Off(word.span, f"the pathspec magic {tok} is not admitted")
+            if built:
+                # 257: a built option may be --, so the word is an unknown pathspec.
+                c.add("pathspec", _unknown(word))
                 continue
-            c.add("pathspec" if after else kind, _word_text(word))
+            c.add("pathspec" if after or spec else kind, _word_text(word))
 
     # -- gh, terraform and the runners -------------------------------------------------------
     def gh(self, c: _Cmd, words: list[Word], literals: list[str | None]) -> None:

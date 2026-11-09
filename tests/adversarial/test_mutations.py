@@ -271,12 +271,9 @@ ELSEWHERE: dict[str, str] = {
     "PREPUSH_IGNORE_SEARCHES": "refused beside ignore files over a key (test_hidden_bodies)",
     "TERRAFORM_INIT_FORM": "needs a manifest that turns terraform validate on (test_confine)",
     "A3_ADMITTED": "main judged with an excluded roots config (test_chain_state)",
-    "P3_MEASURE 53": "xfail on main, issue 225 (test_measurement_rows XFAIL)",
-    "P3_MEASURE 54": "xfail on main, issue 225 (test_measurement_rows XFAIL)",
 }
 
 
-R257 = "257: an expansion in the option slot is typed as a literal option"
 R258 = "258: respelt watch and eval flags on wrapped runners"
 _F2 = (
     "vite build --watch",
@@ -292,8 +289,8 @@ _F2 = (
     "pnpm exec bun -e 1",
 )
 # line 70: (operator, source, row command): the reason; each pair runs alone as a strict xfail.
+# 257 closed by unit S4: its empty_parameter pair now runs as a plain case.
 XFAIL: dict[tuple[str, str, str], str] = {
-    ("empty_parameter", "A3_ADMITTED", "git stash show -- ':(icase)NOTES'"): R257,
     **{("option_case", "RUNNERS_WRAPPED", f"cd {WT} && {AC.WRAP} {c}"): R258 for c in _F2},
 }
 
