@@ -290,7 +290,7 @@ def test_guidance_names_the_reader_and_bans_regex(path: str) -> None:
 
 def test_audit_skill_bullet_sits_under_step_five() -> None:
     text = (REPO_ROOT / "skills/audit/SKILL.md").read_text(encoding="utf-8")
-    step = text.split("\n5. Dispatch `auditor`", 1)[1].split("\n### Short form", 1)[0]
+    step = text.split("\n5. Choose the auditor's model", 1)[1].split("\n### Short form", 1)[0]
     assert "\n   - Finding tests on Terraform files (0212)." in step
 
 
