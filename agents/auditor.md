@@ -4,6 +4,7 @@ description: Adversarial pre-commit security and contract verifier. Runs at the 
 tools: Read, Grep, Glob, Bash, Write, Edit
 disallowedTools: MultiEdit, NotebookEdit, WebFetch, WebSearch, Agent, Task, SendMessage
 model: opus
+prefer: fable
 shape: judge
 phases: [implementation, audit]
 # 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).
