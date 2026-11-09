@@ -116,7 +116,6 @@ def test_one_wrapper_table_and_one_duration_regex() -> None:
     # pin U2 -> U4: lib.shell owns them; lib.jail keeps no second copy.
     assert not {"_DURATION", "_RUN_WRAPPERS", "_WRAPPER_VALUES"} & _assigned("jail.py")
     assert not {"_WRAPPER_OPTS", "_DURATION"} & _assigned("shell.py")
-    assert jail.strip_wrappers is shell.strip_wrappers
     for good in ("5", "1.5", "2m", "10s", "1h", "3d"):
         assert shell.DURATION.fullmatch(good), good
     for bad in ("KILL", "-5", "5x", ""):
@@ -238,22 +237,10 @@ def test_an_ambiguous_or_unknown_long_option_is_refused(command: str) -> None:
     assert shell.strip_wrappers(shlex.split(command)) is None
 
 
-def test_opaque_values_take_the_value_inside_an_option_word() -> None:
-    # issue 76, audit round 1: --x=v, -X=v and every suffix of a short cluster may name a folder.
-    words = ["env", "--zz=/m", "-Q/n", "-R=o", "rm", "x"]
-    assert jail._opaque_values(words, set(range(len(words)))) == [
-        "env",
-        "/m",
-        "/n",
-        "n",
-        "o",
-        "=o",
-        "rm",
-        "x",
-    ]
-    assert "/m/x" in jail._opaque_targets(words, set(range(len(words))), "/c")
-    cluster = ["env", "-iZQ/p", "rm", "x"]
-    assert "/p/x" in jail._opaque_targets(cluster, set(range(len(cluster))), "/c")
+def test_an_option_off_a_wrapper_row_is_refused_by_every_grammar() -> None:
+    # issue 76, 228 tail: no typed path is read past an unknown wrapper option; admit refuses it.
+    for command in ("env --zz=/m rm x", "env -Q/n rm x", "env -iZQ/p rm x"):
+        assert not jail.admitted(command, "main", "/c"), command
 
 
 @pytest.mark.parametrize(

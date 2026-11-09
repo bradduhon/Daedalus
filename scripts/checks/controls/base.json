@@ -403,17 +403,9 @@
     "failure": "0001: an agent pushes to the default branch and skips the operator's merge",
     "premise_test": "tests/test_checks_shell_tripwires.py::TestRegressionConductor::test_default_branch_reason"
   },
-  "shell.R_BRACE_PUSH": {
-    "failure": "0001: brace expansion hides a force flag or refspec in a push from the jail",
-    "premise_test": "tests/test_jail.py::TestRound4MainFallback::test_blocked"
-  },
   "shell.R_GIT_CONFIG_KEY": {
     "failure": "0001: a git -c key changes push, hook or ssh behavior and runs code the grammar passed as plain git",
     "premise_test": "tests/test_jail.py::TestRound4MainFallback::test_blocked"
-  },
-  "shell.R_XARGS": {
-    "failure": "0001: xargs feeds git push, commit or clean arguments the jail never sees",
-    "premise_test": "tests/test_jail.py::TestRound3MainHardened::test_blocked"
   },
   "shell.R_GIT_PLUMBING": {
     "failure": "0001: git transport plumbing such as send-pack pushes past the push grammar",

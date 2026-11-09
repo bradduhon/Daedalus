@@ -76,10 +76,8 @@ from lib.shell import (
     _HOME,
     _PROJECT_DATA,
     _REPO_SCRIPTS,
-    _SHELLS,
     _VALUE_LONG_NEXT,
     GIT_PLUMBING_REMOTE,
-    INTERPRETERS,
     R_CLEAN,
     R_DATA_DIR_GIT,
     R_DEFAULT_BRANCH,
@@ -99,11 +97,7 @@ from lib.shell import (
     _quote_spans,
     _short_flags,
     _under,
-    command_family,
-    env_split_values,
-    runs_claude,
     split_options,
-    strip_wrappers,
     unwrap,
 )
 from lib.shparse import (
