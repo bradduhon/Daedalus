@@ -587,7 +587,7 @@ def _verified(repo: Path, train: str, *units: Path) -> None:
     train_state.update(repo, train, audit_session=SESSION)
     for unit in units:
         _dispatch(repo, unit)
-        _verifier_stop(repo, VERIFIED_REPLY)
+        _verifier_stop(repo, VERIFIED_REPLY, unit)
 
 
 def test_finish_merges_every_unit_in_order(repo: Path) -> None:
@@ -660,7 +660,7 @@ def test_finish_after_a_revise_takes_a_unit_built_on_the_first_lock(repo: Path) 
     train, u1, u2 = _wave_train(repo)
     v1 = train_state.load(repo, train)["lock_sha"]
     _dispatch(repo, u1)
-    _verifier_stop(repo, VERIFIED_REPLY)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
     workspace.merge(repo, ["U1"])
     _contract(repo, text="packet v2\n")
     assert lock(repo, "contracts/api.md", 2)[0] == f"lock: {v1}"
@@ -1304,13 +1304,27 @@ def _dispatch(repo: Path, unit: Path, tool: str = "Agent") -> None:
     )
 
 
-def _verifier_stop(repo: Path, reply: str, agent_type: str = "daedalus:verifier") -> None:
+def keyed(reply: str, unit: Path | None) -> str:
+    # 0231: the verifier's second line echoes the prompt's Unit worktree: line; None leaves none.
+    if unit is None:
+        return reply
+    first, _, rest = reply.partition("\n")
+    return f"{first}\nUnit worktree: {unit}\n{rest}"
+
+
+def _verifier_stop(
+    repo: Path,
+    reply: str,
+    unit: Path | None,
+    agent_type: str = "daedalus:verifier",
+    agent_id: str = "agent-verifier",
+) -> None:
     _hook_record(
         repo,
         hook_event_name="SubagentStop",
-        agent_id="agent-verifier",
+        agent_id=agent_id,
         agent_type=agent_type,
-        last_assistant_message=reply,
+        last_assistant_message=keyed(reply, unit),
     )
 
 
@@ -1337,7 +1351,7 @@ def _bindings(repo: Path, train: str) -> dict[str, Any]:
 def test_merge_takes_a_verified_unit_and_leaves_the_train_open(repo: Path) -> None:
     train, u1, u2 = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_stop(repo, VERIFIED_REPLY)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
     lines = workspace.merge(repo, ["U1"])
     assert lines[0] == f"merged 1 units into daedalus/{train}"
     assert f"removed {u1}" in lines and not u1.exists() and u2.exists()
@@ -1351,9 +1365,9 @@ def test_merge_takes_a_verified_unit_and_leaves_the_train_open(repo: Path) -> No
 def test_merge_cli_takes_a_resumed_verifier_and_lowercase_ids(repo: Path) -> None:
     train, u1, u2 = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_stop(repo, REFUTED_REPLY)
+    _verifier_stop(repo, REFUTED_REPLY, u1)
     _dispatch(repo, u1, "SendMessage")
-    _verifier_stop(repo, VERIFIED_REPLY)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
     done = _cli("merge", "--repo", str(repo), "--units", "u1")
     assert done.returncode == 0, done.stderr
     assert done.stdout.splitlines()[0] == f"merged 1 units into daedalus/{train}"
@@ -1368,7 +1382,7 @@ def _refused(repo: Path, ids: list[str], text: str) -> None:
 def test_merge_refuses_a_refuted_unit(repo: Path) -> None:
     _, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_stop(repo, REFUTED_REPLY)
+    _verifier_stop(repo, REFUTED_REPLY, u1)
     _refused(repo, ["U1"], "no recorded verifier verdict")
     assert u1.exists()
 
@@ -1376,7 +1390,9 @@ def test_merge_refuses_a_refuted_unit(repo: Path) -> None:
 def test_merge_refuses_a_bare_verdict_with_no_claims_count(repo: Path) -> None:
     _, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_stop(repo, "[VERDICT: VERIFIED] claims=3\n| claim | result |\n[VERDICT: VERIFIED]\n")
+    _verifier_stop(
+        repo, "[VERDICT: VERIFIED] claims=3\n| claim | result |\n[VERDICT: VERIFIED]\n", u1
+    )
     _refused(repo, ["U1"], "no recorded verifier verdict")
 
 
@@ -1390,14 +1406,14 @@ def test_merge_refuses_a_stop_that_answered_another_unit(repo: Path) -> None:
     _, u1, u2 = _wave_train(repo)
     _dispatch(repo, u1)
     _dispatch(repo, u2)
-    _verifier_stop(repo, VERIFIED_REPLY)
+    _verifier_stop(repo, VERIFIED_REPLY, u2)
     _refused(repo, ["U1"], "no recorded verifier verdict")
 
 
 def test_merge_refuses_a_later_dispatch_with_no_later_stop(repo: Path) -> None:
     _, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_stop(repo, VERIFIED_REPLY)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
     _dispatch(repo, u1, "SendMessage")
     _refused(repo, ["U1"], "no recorded verifier verdict")
 
@@ -1407,7 +1423,7 @@ def test_merge_refuses_a_verdict_forged_in_a_write(repo: Path) -> None:
     _dispatch(repo, u1)
     forged = {"file_path": str(u1 / "notes.md"), "content": VERIFIED_REPLY}
     _hook_record(repo, hook_event_name="PreToolUse", tool_name="Write", tool_input=forged)
-    _verifier_stop(repo, VERIFIED_REPLY, agent_type="daedalus:coder")
+    _verifier_stop(repo, VERIFIED_REPLY, u1, agent_type="daedalus:coder")
     _refused(repo, ["U1"], "no recorded verifier verdict")
 
 
@@ -1415,14 +1431,14 @@ def test_merge_refuses_a_unit_the_plan_does_not_name(repo: Path) -> None:
     train, _, _ = _wave_train(repo)
     u3 = _built(repo, train, "u3")
     _dispatch(repo, u3)
-    _verifier_stop(repo, VERIFIED_REPLY)
+    _verifier_stop(repo, VERIFIED_REPLY, u3)
     _refused(repo, ["U3"], "the plan names no unit U3")
 
 
 def test_merge_refuses_a_dirty_integration_worktree(repo: Path) -> None:
     _, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_stop(repo, VERIFIED_REPLY)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
     (repo / "stray.txt").write_text("x\n")
     _refused(repo, ["U1"], "has changes: stray.txt")
     assert u1.exists()
@@ -1431,7 +1447,7 @@ def test_merge_refuses_a_dirty_integration_worktree(repo: Path) -> None:
 def test_merge_refuses_a_chain_broken_log(repo: Path) -> None:
     _, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_stop(repo, VERIFIED_REPLY)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
     log = repo / ".claude" / "daedalus" / "audit" / f"{SESSION}.jsonl"
     log.write_text(log.read_text(encoding="utf-8").replace("claims=3", "claims=9"))
     _refused(repo, ["U1"], "the audit log could not be read")
@@ -1440,7 +1456,7 @@ def test_merge_refuses_a_chain_broken_log(repo: Path) -> None:
 def test_finish_after_a_wave_merge_skips_the_merged_unit(repo: Path) -> None:
     train, u1, u2 = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_stop(repo, VERIFIED_REPLY)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
     workspace.merge(repo, ["U1"])
     _verified(repo, train, u2)
     lines = finish(repo)
@@ -1574,7 +1590,7 @@ def test_finish_refuses_a_skipped_train_whose_wave_merge_carried_an_extra_file(
     (u1 / "extra.txt").write_text("x\n")
     _commit_all(u1, "extra file")
     _dispatch(repo, u1)
-    _verifier_stop(repo, VERIFIED_REPLY)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
     assert workspace.merge(repo, ["U1"])[0] == f"merged 1 units into daedalus/{train}"
     base = _ok(repo, "rev-parse", f"daedalus/{train}")
     with pytest.raises(WorkspaceError) as info:
@@ -1585,30 +1601,35 @@ def test_finish_refuses_a_skipped_train_whose_wave_merge_carried_an_extra_file(
 
 
 def _verifier_handback(
-    repo: Path, message: str, agent_type: str = "daedalus:verifier", event: str = "PostToolUse"
+    repo: Path,
+    message: str,
+    unit: Path | None,
+    agent_type: str = "daedalus:verifier",
+    event: str = "PostToolUse",
+    agent_id: str = "agent-verifier",
 ) -> None:
     # 0121: the live shape; the reply rides the hand-back call and the stop after it has no tail.
     _hook_record(
         repo,
         hook_event_name=event,
-        agent_id="agent-verifier",
+        agent_id=agent_id,
         agent_type=agent_type,
         tool_name="SubagentHandback",
-        tool_input={"message": message},
+        tool_input={"message": keyed(message, unit)},
         tool_use_id="toolu_handback",
     )
 
 
-def _null_stop(repo: Path, agent_type: str = "daedalus:verifier") -> None:
-    _hook_record(
-        repo, hook_event_name="SubagentStop", agent_id="agent-verifier", agent_type=agent_type
-    )
+def _null_stop(
+    repo: Path, agent_type: str = "daedalus:verifier", agent_id: str = "agent-verifier"
+) -> None:
+    _hook_record(repo, hook_event_name="SubagentStop", agent_id=agent_id, agent_type=agent_type)
 
 
 def test_merge_takes_a_verifier_that_ends_on_a_handback(repo: Path) -> None:
     train, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_handback(repo, VERIFIED_REPLY)
+    _verifier_handback(repo, VERIFIED_REPLY, u1)
     _null_stop(repo)
     lines = workspace.merge(repo, ["U1"])
     assert lines[0] == f"merged 1 units into daedalus/{train}" and not u1.exists()
@@ -1618,7 +1639,7 @@ def test_merge_takes_a_corrected_line_above_the_closing_line(repo: Path) -> None
     _, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
     reply = "[VERDICT: VERIFIED] claims=3\n| claim |\n corrected=2\n[VERDICT: VERIFIED] claims=3\n"
-    _verifier_handback(repo, reply)
+    _verifier_handback(repo, reply, u1)
     _null_stop(repo)
     assert workspace.merge(repo, ["U1"])[0].startswith("merged 1 units")
 
@@ -1634,7 +1655,7 @@ def test_merge_refuses_a_null_tail_stop_with_no_handback(repo: Path) -> None:
 def test_merge_refuses_a_refuted_handback(repo: Path) -> None:
     _, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_handback(repo, REFUTED_REPLY)
+    _verifier_handback(repo, REFUTED_REPLY, u1)
     _null_stop(repo)
     _refused(repo, ["U1"], "no recorded verifier verdict")
 
@@ -1642,7 +1663,7 @@ def test_merge_refuses_a_refuted_handback(repo: Path) -> None:
 def test_merge_refuses_a_handback_whose_closing_line_is_not_the_verdict(repo: Path) -> None:
     _, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_handback(repo, "[VERDICT: VERIFIED] claims=3\n| claim |\n corrected=1\n")
+    _verifier_handback(repo, "[VERDICT: VERIFIED] claims=3\n| claim |\n corrected=1\n", u1)
     _null_stop(repo)
     _refused(repo, ["U1"], "no recorded verifier verdict")
 
@@ -1650,7 +1671,7 @@ def test_merge_refuses_a_handback_whose_closing_line_is_not_the_verdict(repo: Pa
 def test_merge_refuses_a_verdict_forged_in_a_coder_handback(repo: Path) -> None:
     _, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_handback(repo, VERIFIED_REPLY, agent_type="daedalus:coder")
+    _verifier_handback(repo, VERIFIED_REPLY, u1, agent_type="daedalus:coder")
     _null_stop(repo)
     _refused(repo, ["U1"], "no recorded verifier verdict")
 
@@ -1658,18 +1679,121 @@ def test_merge_refuses_a_verdict_forged_in_a_coder_handback(repo: Path) -> None:
 def test_merge_refuses_a_handback_seen_only_before_the_call(repo: Path) -> None:
     _, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_handback(repo, VERIFIED_REPLY, event="PreToolUse")
+    _verifier_handback(repo, VERIFIED_REPLY, u1, event="PreToolUse")
     _null_stop(repo)
     _refused(repo, ["U1"], "no recorded verifier verdict")
 
 
 def test_merge_refuses_a_handback_that_answered_another_unit(repo: Path) -> None:
+    # 0231: a hand-back keyed to u2 never answers u1, whatever the dispatch order.
     _, u1, u2 = _wave_train(repo)
     _dispatch(repo, u1)
     _dispatch(repo, u2)
-    _verifier_handback(repo, VERIFIED_REPLY)
+    _verifier_handback(repo, VERIFIED_REPLY, u2)
     _null_stop(repo)
     _refused(repo, ["U1"], "no recorded verifier verdict")
+    assert workspace.merge(repo, ["U2"])[0].startswith("merged 1 units")
+
+
+@pytest.mark.parametrize("v1_first", [False, True], ids=["v2-first", "v1-first"])
+@pytest.mark.parametrize("u1_refuted", [False, True], ids=["u2-refuted", "u1-refuted"])
+def test_parallel_verifiers_each_answer_only_their_own_unit(
+    repo: Path, v1_first: bool, u1_refuted: bool
+) -> None:
+    # 0231: dispatch u1, dispatch u2; each verdict counts only for the unit its key line names.
+    train, u1, u2 = _wave_train(repo)
+    _dispatch(repo, u1)
+    _dispatch(repo, u2)
+    one, two = (REFUTED_REPLY, VERIFIED_REPLY) if u1_refuted else (VERIFIED_REPLY, REFUTED_REPLY)
+    replies = [(two, u2, "agent-v2"), (one, u1, "agent-v1")]
+    for reply, unit, agent in replies[::-1] if v1_first else replies:
+        _verifier_handback(repo, reply, unit, agent_id=agent)
+        _null_stop(repo, agent_id=agent)
+    records = workspace._audit_records(repo, train_state.load(repo, train))
+    assert workspace.unit_verified(records, u1) is not u1_refuted
+    assert workspace.unit_verified(records, u2) is u1_refuted
+    assert workspace.unit_refutations(records, u1) == int(u1_refuted)
+    assert workspace.unit_refutations(records, u2) == int(not u1_refuted)
+
+
+@pytest.mark.parametrize("key", [None, "third"], ids=["no-key-line", "third-worktree"])
+def test_an_unkeyed_or_foreign_keyed_reply_is_no_reply_for_any_unit(
+    repo: Path, key: str | None
+) -> None:
+    # 0231: a reply off its key contract answers neither unit, so both stay unverified.
+    train, u1, u2 = _wave_train(repo)
+    _dispatch(repo, u1)
+    _dispatch(repo, u2)
+    _verifier_handback(repo, VERIFIED_REPLY, None if key is None else u1.parent / key)
+    _null_stop(repo)
+    records = workspace._audit_records(repo, train_state.load(repo, train))
+    for unit in (u1, u2):
+        assert workspace.newest_reply(records, unit) is None
+        assert workspace.unit_verified(records, unit) is False
+    _refused(repo, ["U1"], "no recorded verifier verdict")
+    _refused(repo, ["U2"], "no recorded verifier verdict")
+
+
+def test_a_fix_pass_reply_keyed_to_u1_is_u1s_newest_past_u2s_dispatch(repo: Path) -> None:
+    # 0231: v1 refutes u1, u2 is dispatched, then v1 answers u1's fix pass.
+    train, u1, u2 = _wave_train(repo)
+    _dispatch(repo, u1)
+    _verifier_handback(repo, REFUTED_REPLY, u1, agent_id="agent-v1")
+    _dispatch(repo, u2)
+    _dispatch(repo, u1, "SendMessage")
+    _verifier_handback(repo, VERIFIED_REPLY, u1, agent_id="agent-v1")
+    records = workspace._audit_records(repo, train_state.load(repo, train))
+    assert workspace.unit_verified(records, u1) is True
+    assert workspace.unit_refutations(records, u1) == 1
+    assert workspace.newest_reply(records, u2) is None
+
+
+def test_an_unkeyed_reply_after_a_new_dispatch_leaves_no_older_verdict_standing(
+    repo: Path,
+) -> None:
+    # 0231: an off-contract reply to a newer dispatch never revives the unit's older VERIFIED.
+    train, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    _verifier_handback(repo, VERIFIED_REPLY, u1)
+    _dispatch(repo, u1, "SendMessage")
+    _verifier_handback(repo, REFUTED_REPLY, None)
+    records = workspace._audit_records(repo, train_state.load(repo, train))
+    assert workspace.unit_verified(records, u1) is False
+    _refused(repo, ["U1"], "no recorded verifier verdict")
+
+
+def test_a_rows_mode_reply_keyed_to_u1_is_not_a_verdict(repo: Path) -> None:
+    # 0228, 0231: the rows reply carries the key line and never stands as a verdict.
+    train, u1, _ = _wave_train(repo)
+    _dispatch(repo, u1)
+    _verifier_handback(repo, "[ROWS] n=1\n1 | coder | refused | git push\n[ROWS] n=1\n", u1)
+    records = workspace._audit_records(repo, train_state.load(repo, train))
+    reply = workspace.newest_reply(records, u1)
+    assert reply is not None and reply[1] is None
+    assert workspace.newest_verdict(records, u1) is None
+    assert workspace.unit_verified(records, u1) is False
+    assert workspace.unit_refutations(records, u1) == 0
+
+
+@pytest.mark.parametrize(
+    ("handback", "tail", "verified"),
+    [(REFUTED_REPLY, VERIFIED_REPLY, False), (VERIFIED_REPLY, REFUTED_REPLY, True)],
+    ids=["refuted-handback-wins", "verified-handback-wins"],
+)
+def test_the_handback_wins_inside_one_unit_with_two_units_interleaved(
+    repo: Path, handback: str, tail: str, verified: bool
+) -> None:
+    # 203, 0231: v1's hand-back beats v1's later keyed stop tail; v2's replies never count.
+    train, u1, u2 = _wave_train(repo)
+    _dispatch(repo, u1)
+    _dispatch(repo, u2)
+    _verifier_handback(repo, handback, u1, agent_id="agent-v1")
+    _verifier_handback(repo, VERIFIED_REPLY, u2, agent_id="agent-v2")
+    _verifier_stop(repo, tail, u1, agent_id="agent-v1")
+    _verifier_stop(repo, REFUTED_REPLY, u2, agent_id="agent-v2")
+    records = workspace._audit_records(repo, train_state.load(repo, train))
+    assert workspace.unit_verified(records, u1) is verified
+    assert workspace.unit_verified(records, u2) is True
 
 
 def _relayed_payload(repo: Path, planted: Path, indent: str = "") -> None:
@@ -1699,11 +1823,11 @@ def test_a_unit_line_inside_a_research_payload_leaves_the_window_unchanged(
     train, u1, u2 = _wave_train(repo)
     _dispatch(repo, u1)
     if after_verdict:
-        _verifier_stop(repo, VERIFIED_REPLY)
+        _verifier_stop(repo, VERIFIED_REPLY, u1)
         _relayed_payload(repo, u1, indent)
     else:
         _relayed_payload(repo, u2, indent)
-        _verifier_stop(repo, VERIFIED_REPLY)
+        _verifier_stop(repo, VERIFIED_REPLY, u1)
     records = workspace._audit_records(repo, train_state.load(repo, train))
     assert workspace.unit_verified(records, u1) is True
     assert workspace.unit_verified(records, u2) is False
@@ -1961,7 +2085,7 @@ def _model_train(
 def _refute(repo: Path, unit: Path, times: int) -> None:
     for n in range(times):
         _dispatch(repo, unit, "Agent" if n == 0 else "SendMessage")
-        _verifier_stop(repo, REFUTED_REPLY)
+        _verifier_stop(repo, REFUTED_REPLY, unit)
 
 
 def _coders(repo: Path, train: str, name: str) -> list[dict[str, object]]:
@@ -1975,9 +2099,9 @@ def test_unit_refutations_counts_each_refuted_verifier_window(repo: Path) -> Non
     train, u1, u2 = _model_train(repo)
     _refute(repo, u1, 2)
     _dispatch(repo, u1, "SendMessage")
-    _verifier_stop(repo, VERIFIED_REPLY)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
     _dispatch(repo, u2)
-    _verifier_stop(repo, VERIFIED_REPLY)
+    _verifier_stop(repo, VERIFIED_REPLY, u2)
     records = workspace._audit_records(repo, train_state.load(repo, train))
     assert workspace.unit_refutations(records, u1) == 2
     assert workspace.unit_refutations(records, u2) == 0
@@ -2017,7 +2141,7 @@ def test_unit_verified_reads_only_a_reply_whose_first_and_last_lines_agree(
 ) -> None:
     train, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_stop(repo, reply)
+    _verifier_stop(repo, reply, u1)
     records = workspace._audit_records(repo, train_state.load(repo, train))
     assert workspace.unit_verified(records, u1) is verified
     assert workspace.unit_refutations(records, u1) == refuted
@@ -2026,7 +2150,7 @@ def test_unit_verified_reads_only_a_reply_whose_first_and_last_lines_agree(
 def test_merge_refuses_a_unit_whose_window_holds_a_two_verdict_reply(repo: Path) -> None:
     _, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_handback(repo, TWO_VERDICTS)
+    _verifier_handback(repo, TWO_VERDICTS, u1)
     _null_stop(repo)
     _refused(repo, ["U1"], "no recorded verifier verdict")
     assert u1.exists()
@@ -2053,7 +2177,7 @@ def _gate(repo: Path, train: str, unit: Path) -> bool:
 def _refuted_unit(repo: Path, reply: str = TWO_ROW_REPLY) -> tuple[str, Path]:
     train, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_stop(repo, reply)
+    _verifier_stop(repo, reply, u1)
     return train, u1
 
 
@@ -2077,7 +2201,7 @@ def test_an_exemption_on_an_older_reply_does_not_count_after_a_newer_refuted(rep
     train, u1 = _refuted_unit(repo)
     assert _exempt(repo, 1).code == 0 and _exempt(repo, 2).code == 0
     _dispatch(repo, u1, "SendMessage")
-    _verifier_stop(repo, TWO_ROW_REPLY)
+    _verifier_stop(repo, TWO_ROW_REPLY, u1)
     assert _gate(repo, train, u1) is False
     _refused(repo, ["U1"], "no recorded verifier verdict")
 
@@ -2098,7 +2222,7 @@ def test_rows_joined_without_the_space_take_no_exemption(repo: Path) -> None:
     state = train_state.load(repo, train)
     record = next(u for u in train_state.units(state) if u["path"] == str(u1))
     records = workspace._audit_records(repo, state)
-    seq = workspace.newest_verdict(records, workspace._anchors(records, u1)[-1])
+    seq = workspace.newest_verdict(records, u1)
     assert seq is not None
     tip = workspace.unit_tip(repo, record)
     forged = {str(seq[0]): {"1": {"ledger_id": LEDGER_ID, "tip": tip, "tracking": "issue"}}}
@@ -2173,7 +2297,7 @@ def test_finish_refuses_when_one_unit_is_not_verified_and_merges_nothing(
     _verified(repo, train, u1)
     _dispatch(repo, u2)
     if reply is not None:
-        _verifier_stop(repo, reply)
+        _verifier_stop(repo, reply, u2)
     _finish_refused(repo, train, u2, "u2")
     assert u1.exists()
 
@@ -2201,7 +2325,7 @@ def test_finish_refuses_an_exemption_bound_to_the_integration_tip(repo: Path) ->
     # 234, 229: an exemption binds to the unit branch tip, never the integration tip.
     train, u1 = _refuted_unit(repo)
     records = workspace._audit_records(repo, train_state.load(repo, train))
-    reply = workspace.newest_verdict(records, workspace._anchors(records, u1)[-1])
+    reply = workspace.newest_verdict(records, u1)
     assert reply is not None
     tip = _ok(repo, "rev-parse", f"daedalus/{train}")
     assert tip != workspace.unit_tip(repo, _recorded(repo, train, f"{train}-u1"))
@@ -2222,7 +2346,7 @@ def test_finish_skips_the_audit_unit_without_judging_it(repo: Path) -> None:
     _verified(repo, train, _built(repo, train, "u1"))
     audit = create(repo, workspace.audit_unit(train), f"daedalus/{train}")
     _dispatch(repo, audit)
-    _verifier_stop(repo, REFUTED_REPLY)
+    _verifier_stop(repo, REFUTED_REPLY, audit)
     assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
     assert f"Merge audit for train {train}" not in _merges(repo, f"daedalus/{train}")
 
@@ -2253,11 +2377,11 @@ def test_a_handback_then_a_stop_tail_keys_one_seq_in_refuted_exception_and_merge
 ) -> None:
     train, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_handback(repo, TWO_ROW_REPLY)
-    _verifier_stop(repo, VERIFIED_REPLY)
+    _verifier_handback(repo, TWO_ROW_REPLY, u1)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
     seq = _handback_seq(repo, train)
     records = workspace._audit_records(repo, train_state.load(repo, train))
-    newest = workspace.newest_verdict(records, workspace._anchors(records, u1)[-1])
+    newest = workspace.newest_verdict(records, u1)
     assert newest == (seq, TWO_ROWS)
     assert train_runner.refuted(repo, "U1").lines == ["refuted U1: 1"]
     assert _recorded(repo, train, f"{train}-u1")[train_runner.REFUTATIONS] == [seq]
@@ -2281,13 +2405,13 @@ def test_the_handback_wins_over_the_same_verifiers_later_stop_tail(
 ) -> None:
     _, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_handback(repo, handback)
+    _verifier_handback(repo, handback, u1)
     _hook_record(
         repo,
         hook_event_name="SubagentStop",
         agent_id=agent_id,
         agent_type="daedalus:verifier",
-        last_assistant_message=tail,
+        last_assistant_message=keyed(tail, u1),
     )
     if merges:
         assert workspace.merge(repo, ["U1"])[0].startswith("merged 1 units")
@@ -2298,7 +2422,7 @@ def test_the_handback_wins_over_the_same_verifiers_later_stop_tail(
 def test_refuted_reads_a_handback_past_a_null_tail_stop(repo: Path) -> None:
     train, u1, _ = _wave_train(repo)
     _dispatch(repo, u1)
-    _verifier_handback(repo, TWO_ROW_REPLY)
+    _verifier_handback(repo, TWO_ROW_REPLY, u1)
     _null_stop(repo)
     assert train_runner.refuted(repo, "U1").lines == ["refuted U1: 1"]
     seq = _handback_seq(repo, train)

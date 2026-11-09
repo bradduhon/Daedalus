@@ -342,7 +342,7 @@ def test_recipe_names_the_verifier_step_and_the_one_pass_rule() -> None:
     assert step.startswith("When it runs (spec 5). Once per unit, after its `[STATUS: COMPLETE]`")
     assert "passes the branch, packet, descent and jail check rows" in step
     assert "and before the build phase's finish merges it" in step
-    assert "Dispatch `verifier` with:" in step and "The verifier stays warm (0086)" in step
+    assert "Dispatch `verifier` with:" in step and "One verifier per unit (0231" in step
     assert "`[VERDICT: VERIFIED] claims=<n>` or `[VERDICT: REFUTED] <rows>`" in step
     # 0086: a resume's Worktree: line rebinds a coder, so the verifier gets a Unit worktree: line.
     assert "the line `Unit worktree: <unit worktree path>`" in step

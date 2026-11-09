@@ -138,6 +138,21 @@ def test_wrong_receipts_are_corrected_and_counted_above_the_closing_line() -> No
     )
 
 
+def test_every_reply_shape_carries_the_unit_key_line_second() -> None:
+    # 0231: the merge gate selects a unit's reply by the key line after the opening line.
+    contract = _body("## Status contract", "\0")
+    assert (
+        "The second line is the key line `Unit worktree: <path>`, the prompt's "
+        "`Unit worktree:` line copied verbatim, or `Unit worktree: none` when the prompt has "
+        "none (0231)." in contract
+    )
+    assert "matches no dispatched unit, counts as no reply for any unit." in contract
+    lines = VERIFIER.read_text(encoding="utf-8").splitlines()
+    shapes = [ln for ln in lines if ln.startswith(("- `[VERDICT: ", "- `[ROWS] "))]
+    assert len(shapes) == 3
+    assert all(ln.split(" then ")[1] == "`Unit worktree: <path>`" for ln in shapes)
+
+
 def test_a_verified_reply_with_a_corrected_line_still_ends_on_the_merge_line() -> None:
     # VER 3: the merge proof keeps matching the closing line (scripts/lib/workspace.py).
     reply = Reply(
@@ -332,7 +347,7 @@ def test_verify_skill_carries_the_verifier_step_and_claims_mode() -> None:
     assert "stops the run" not in step5
     assert "exempt it` pick at a later refutation" in text.split("## Evidence that ends it", 1)[1]
     evidence = text.split("## Evidence that ends it", 1)[1].split("## Agents it uses", 1)[0]
-    assert "(scripts/lib/workspace.py:1082, :1261; scripts/lib/train_runner.py:1691)" in evidence
+    assert "(scripts/lib/workspace.py:1082, :1275; scripts/lib/train_runner.py:1691)" in evidence
     assert "REFUTED with every row exempted against that reply" in evidence
 
 

@@ -1498,9 +1498,8 @@ def refuted(cwd: Path, unit_id: str, operator_check: str | None = None) -> Outco
         except workspace.WorkspaceError as exc:
             raise RunnerError(str(exc)) from exc
         unit = _unit_record(state, train_id, unit_id)
-        # 235: the one reader exception --unit and the merge gate use, so all key one seq.
-        anchors = workspace._anchors(records, Path(str(unit["path"])))
-        reply = workspace.newest_reply(records, anchors[-1]) if anchors else None
+        # 235, 0231: the one keyed reader exception --unit and the merge gate use.
+        reply = workspace.newest_reply(records, Path(str(unit["path"])))
         raw = reply[0] if reply is not None else None
         seq = raw if isinstance(raw, int) and not isinstance(raw, bool) else None
         line = reply[1] if reply is not None else None
@@ -2139,8 +2138,7 @@ def _refuted_reply(
     records: list[dict[str, object]], unit: dict[str, object], unit_id: str
 ) -> tuple[int, list[str]]:
     # 229: the seq and rows of the unit's newest verifier reply, read by the merge gate's reader.
-    anchors = workspace._anchors(records, Path(str(unit["path"])))
-    reply = workspace.newest_verdict(records, anchors[-1]) if anchors else None
+    reply = workspace.newest_verdict(records, Path(str(unit["path"])))
     seq, line = reply if reply is not None else (None, "")
     if not isinstance(seq, int) or isinstance(seq, bool):
         raise RunnerError(

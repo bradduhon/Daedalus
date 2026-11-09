@@ -624,6 +624,12 @@ def test_catalog_names_the_rebind_rule_and_the_verifier_step() -> None:
     assert "a recipe the main session drives by hand cold-dispatches each new unit" in rules
     assert "`[VERDICT: REFUTED] <rows>` sends the coder one FIX pass" in rules
     assert "fast-forwards the audit branch" in rules and "` adversarial=pass`" in rules
+    # 0231: one verifier per unit, warm only for that unit's fix pass.
+    assert (
+        "One verifier per unit (0231): each unit gets a fresh verifier, which stays warm only "
+        "for a fix pass on the same unit."
+    ) in rules
+    assert "stays warm across units" not in catalog
 
 
 def test_push_train_proof_names_the_exemption_path() -> None:
@@ -2259,3 +2265,78 @@ def test_build_skill_routes_a_unit_without_green_rows_as_refuted() -> None:
         " rows file with zero failures."
     ) in check
     assert 'routed as a REFUTED with one `code` row "rows file not green"' in check
+
+
+def _verify_unit_mode() -> str:
+    return _flat(_phase_skill("verify")).split("### Unit mode", 1)[1].split("### Claims mode")[0]
+
+
+def test_verify_skill_dispatches_one_verifier_per_unit() -> None:
+    # 0231: a fresh verifier per unit, in parallel under the builders cap.
+    unit = _verify_unit_mode()
+    for sentence in (
+        "4. Dispatch. Each unit gets a fresh verifier (0231).",
+        "A unit with a `Rows:` line goes to the verifier rows mode started for it, by the"
+        " orchestrator's message.",
+        "Before each fresh dispatch, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py"
+        " model --repo <repo> --agent verifier`",
+        "One verifier per unit (0231, amends 0086): a later unit never goes to an earlier unit's"
+        " verifier.",
+        "The verifiers run in parallel, up to `max_concurrent_builders` coders plus verifiers at"
+        " once, the same cap the build phase's step 1 uses.",
+        "The verifier stays warm only for a fix pass on the same unit: after a `FIX.` round, the"
+        " unit's next verdict goes to the verifier that refuted it, by the orchestrator's message"
+        " with the same items.",
+    ):
+        assert sentence in unit, sentence
+    assert "The first time, run" not in unit
+    assert "every later unit goes to it" not in unit
+    # 0231: the route step expects the key line the merge gate selects by.
+    assert (
+        "The reply's second line is the key line `Unit worktree: <unit worktree path>`, copied "
+        "from the dispatch; a reply without it, or naming another worktree, counts as no reply "
+        "for any unit and is off its contract the same way (0231)."
+    ) in unit
+
+
+def test_verify_rows_mode_verifier_is_the_units_verifier() -> None:
+    # 0231: the rows verifier judges the same unit's diff later.
+    assert (
+        "The verifier this dispatch starts is the unit's verifier from rows mode on, and it later"
+        " judges the unit's diff (0231)."
+    ) in _verify_rows_mode()
+    uses = _flat(_phase_skill("verify")).split("## Agents it uses", 1)[1].split("## ", 1)[0]
+    assert "verifier, one per unit from rows mode through its fix passes" in uses
+    assert "warm across rows mode, units" not in uses
+
+
+def test_verify_skill_keeps_stays_warm_only_in_the_fix_pass_sentence() -> None:
+    # 0231: the warm rule survives only for a fix pass on the same unit.
+    text = _flat(_phase_skill("verify"))
+    assert text.count("stays warm") == 1
+    sentence = text.split("stays warm", 1)[1].split(". ", 1)[0]
+    assert sentence.startswith(" only for a fix pass on the same unit")
+
+
+def test_build_schedule_shares_the_cap_with_verifiers() -> None:
+    # 0231: coders and verifiers share max_concurrent_builders.
+    text = _flat(REPO_ROOT / "skills" / "build" / "SKILL.md")
+    step1 = text.split("1. Schedule.", 1)[1].split("2. ", 1)[0]
+    assert (
+        "At most `max_concurrent_builders` coders plus verifiers run at once (the config setting,"
+        " default 5, 0231). A verifier counts from its dispatch to its verdict."
+    ) in step1
+    hand = text.split("- Then hand the unit to the verify phase", 1)[1].split("8. ", 1)[0]
+    assert "The unit gets its own verifier, inside the cap of step 1 (0231)." in hand
+
+
+def test_orchestrator_keeps_one_verifier_per_unit() -> None:
+    # 0231: the warm rule's verifier exception and the State Block's verifier column.
+    roster = _rules().split("- Warm dispatch (0086): ", 1)[1].split("\n", 1)[0]
+    assert (
+        "The verifier is one per unit (0231): each unit gets a fresh verifier, run in parallel"
+        " inside the build phase's cap, and that verifier stays warm only for a fix pass on its"
+        " own unit."
+    ) in roster
+    row = next(ln for ln in _orchestrator().splitlines() if ln.strip().startswith("units: "))
+    assert row.rstrip().endswith("| verifier <agent id, or pending>")

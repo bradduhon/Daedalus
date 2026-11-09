@@ -18,7 +18,7 @@ from tests.conftest import CFG, CWD, REPO_ROOT, git, run_cli
 from tests.helpers import phase_text
 from tests.hook_chain import decide
 from tests.payloads import _b
-from tests.test_workspace_train import LEDGER, REFUTED_REPLY, VERIFIED_REPLY
+from tests.test_workspace_train import LEDGER, REFUTED_REPLY, VERIFIED_REPLY, keyed
 
 pytestmark = pytest.mark.usefixtures("isolated_env")
 SESSION = "sess-fold"
@@ -177,7 +177,7 @@ def _verdict(root: Path, path: Path, reply: str) -> None:
         hook_event_name="SubagentStop",
         agent_id="agent-verifier",
         agent_type="daedalus:verifier",
-        last_assistant_message=reply,
+        last_assistant_message=keyed(reply, path),
     )
 
 

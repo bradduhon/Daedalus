@@ -146,19 +146,23 @@ Human-facing text (0031): Text a human reads names each item in words: a short l
 
 ## Status contract
 Your reply starts with exactly one of these verdict lines as its first line and ends with the
-same verdict line, alone, as its last line. `claims=<n>` counts every claim step 2 listed, or
+same verdict line, alone, as its last line. The second line is the key line
+`Unit worktree: <path>`, the prompt's `Unit worktree:` line copied verbatim, or
+`Unit worktree: none` when the prompt has none (0231). A reply without the key line, or whose
+path matches no dispatched unit, counts as no reply for any unit. `claims=<n>` counts every claim step 2 listed, or
 in claims mode every claim checked this round. The line directly above the closing verdict
 line reads `corrected=<k>`, the number of receipts step 5 or step 6 corrected, `corrected=0`
 when none. A correction is a table row `corrected | <receipt> | <verdict> | <branch quote> | <receipt quote>`
 and never enters the verdict line (0127). REFUTED needs at least one `code` or `scope` row.
 A refuted row is `<class> | <claim> | <verdict> | <branch quote> | <brief quote>`, where
 `<class>` is `code` or `scope`, rows joined by `; `.
-- `[VERDICT: VERIFIED] claims=<n>` then `<the per-claim table>` then `corrected=<k>` then `[VERDICT: VERIFIED] claims=<n>`
-- `[VERDICT: REFUTED] <rows>` then `<the per-claim table>` then `corrected=<k>` then `[VERDICT: REFUTED] <rows>`
-- `[ROWS] n=<count>` then `<one row per line>` then `[ROWS] n=<count>`
+- `[VERDICT: VERIFIED] claims=<n>` then `Unit worktree: <path>` then `<the per-claim table>` then `corrected=<k>` then `[VERDICT: VERIFIED] claims=<n>`
+- `[VERDICT: REFUTED] <rows>` then `Unit worktree: <path>` then `<the per-claim table>` then `corrected=<k>` then `[VERDICT: REFUTED] <rows>`
+- `[ROWS] n=<count>` then `Unit worktree: <path>` then `<one row per line>` then `[ROWS] n=<count>`
 
 In rows mode the first and last line is `[ROWS] n=<count>`, where `<count>` is the number of
-rows between them, and the reply carries no verdict and no `corrected=<k>` line.
+rows between the key line and the closing line, and the reply carries no verdict and no
+`corrected=<k>` line.
 
 ## What the jail passes and refuses
 The jail passes these for the verifier:

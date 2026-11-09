@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0205 (digest returns): a hand-back of a listed agent is saved whole under the run's
 # evidence/replies folder and reaches its caller as a short keyed digest of fixed lines.
-# The digest keeps every line a route or a record reads: the verifier's two verdict lines
-# and its corrected line, the coder's receipts block and COMPLETE line, contract-spec's
-# packet_version line and charter-docs' status line. Anything else passes unchanged.
+# The digest keeps every line a route or a record reads: the verifier's two verdict lines,
+# its Unit worktree: key line and its corrected line, the coder's receipts block and
+# COMPLETE line, contract-spec's packet_version line and charter-docs' status line.
+# Anything else passes unchanged.
 from __future__ import annotations
 
 import hashlib
@@ -20,6 +21,7 @@ RECEIPTS = "## Receipts"
 PACKET = "## Locked Contract Packet"
 COMPLETE = "[STATUS: COMPLETE]"
 VERDICT = "[VERDICT: "
+UNIT_KEY = "Unit worktree: "
 _CORRECTED = re.compile(r"corrected=[0-9]+")
 _VERSION = re.compile(r".*packet_version\W*[0-9]+.*")
 _SAFE = re.compile(r"[^A-Za-z0-9]")
@@ -41,7 +43,9 @@ def kept_lines(agent: str, message: str) -> list[str] | None:
         if not (body[0].startswith(VERDICT) and last.startswith(VERDICT)) or len(body) < 2:
             return None
         corrected = [body[-2]] if len(body) > 2 and _CORRECTED.fullmatch(body[-2]) else []
-        return [body[0], *corrected, last]
+        # 0231: the key line rides as the second line, where the merge gate reads it.
+        key = [body[1]] if len(body) > 2 and body[1].startswith(UNIT_KEY) else []
+        return [body[0], *key, *corrected, last]
     if agent == "coder":
         if not last.startswith(COMPLETE) or RECEIPTS not in lines:
             return None
@@ -69,7 +73,8 @@ def digest(
     path = folder / f"{agent}-{_SAFE.sub('', agent_id) or 'none'}-{stamp}.md"
     line = report_line(path, message)
     if agent == "verifier":
-        short = "\n".join([kept[0], line, *kept[1:]])
+        keys = kept[1:2] if kept[1].startswith(UNIT_KEY) else []
+        short = "\n".join([kept[0], *keys, line, *kept[1 + len(keys) :]])
     else:
         short = "\n".join([line, "", *kept] if agent == "coder" else [line, *kept])
     if len(short) >= len(message):

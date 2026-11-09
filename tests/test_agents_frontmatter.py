@@ -637,6 +637,7 @@ def test_verifier_body_names_the_seven_verdicts_and_its_reply_lines() -> None:
     )
     contract = text.split("## Status contract", 1)[1]
     assert "starts with exactly one of these verdict lines as its first line" in contract
+    assert "The second line is the key line `Unit worktree: <path>`" in contract
 
 
 def test_auditor_grep_commands_pass_the_jail(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -888,7 +889,10 @@ def test_verifier_rows_mode_writes_rows_and_runs_nothing() -> None:
     assert "A prompt whose first line is `ROWS MODE.` follows the Rows mode section." in flat
     contract = flat.split("## Status contract", 1)[1].split("## What the jail", 1)[0]
     assert "In rows mode the first and last line is `[ROWS] n=<count>`" in contract
-    assert "- `[ROWS] n=<count>` then `<one row per line>` then `[ROWS] n=<count>`" in contract
+    assert (
+        "- `[ROWS] n=<count>` then `Unit worktree: <path>` then `<one row per line>` then "
+        "`[ROWS] n=<count>`"
+    ) in contract
     jail = flat.split("## What the jail passes and refuses", 1)[1]
     assert "Rows mode runs no test, and no git command beyond the reads above." in jail
 

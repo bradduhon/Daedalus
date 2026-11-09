@@ -69,7 +69,7 @@ def _verifier_says(repo: Path, worktree: Path, line: str) -> None:
     # 0121: a claims-mode dispatch naming the docs worktree, then the verifier's reply.
     prompt = f"CLAIMS MODE.\nClaim: {CLAIM} a claim\nUnit worktree: {worktree}"
     _record(repo, tool_name="Agent", tool_input={"subagent_type": "verifier", "prompt": prompt})
-    _agent_stop(repo, "verifier", f"{line}\nrows\n{line}", "ver-1")
+    _agent_stop(repo, "verifier", f"{line}\nUnit worktree: {worktree}\nrows\n{line}", "ver-1")
 
 
 def _claims(repo: Path, *keys: str) -> Path:
