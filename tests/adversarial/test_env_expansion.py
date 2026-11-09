@@ -6,21 +6,50 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from lib import shell
+from lib import jail, shell
+from lib.admit import LOOKUP_VARS, Refusal
 
 from tests.adversarial.corpus import (
     A3_APPEND_ENV,
     CREDENTIAL,
+    LOOKUP_262,
+    LOOKUP_262_ADMITTED,
     OUTSIDE,
     READERS,
     assert_denied,
     assert_store_read_denied,
 )
-from tests.conftest import CFG, WT
+from tests.conftest import CFG, CWD, WT
 from tests.hook_chain import decide
 from tests.payloads import _b, _cred
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
+LOOKUP_AGENTS = ("coder", "verifier", "auditor", "orchestrator", "charter-docs", "releaser")
+
+
+@pytest.mark.parametrize("form", LOOKUP_262)
+def test_main_is_warned_naming_the_lookup_variable(form: str) -> None:
+    # 262, SS-2: the write changes what a later command word runs; main is warned, never refused.
+    got = jail._admission(form, "main", CWD)[1]
+    assert isinstance(got, Refusal) and "changes which program" in got.reason, (form, got)
+    assert any(name in got.reason for name in LOOKUP_VARS), (form, got.reason)
+    d = jail.decide(_b(None, form), CFG)
+    assert d.allow is False and d.warn and got.reason in str(d.reason), (form, d.reason)
+
+
+@pytest.mark.parametrize("agent", (*LOOKUP_AGENTS, "foreign"))
+@pytest.mark.parametrize("form", LOOKUP_262)
+def test_every_agent_refuses_a_lookup_variable_write_already(agent: str, form: str) -> None:
+    # 262: no agent table admits the prefix, the builtin or the default-assigning expansion.
+    assert isinstance(jail._admission(form, agent, WT)[1], Refusal), (agent, form)
+
+
+@pytest.mark.parametrize("form", LOOKUP_262_ADMITTED)
+def test_a_lookup_variable_read_or_message_stays_admitted_for_main(form: str) -> None:
+    # 262, AC-2: one token from a refused row; no value changes, so main's grammar admits it.
+    assert jail.admitted(form, "main", CWD), form
+
+
 STORE_READS = (
     "cat ~/.ssh/id_ed25519",
     "cat $HOME/.aws/credentials",
