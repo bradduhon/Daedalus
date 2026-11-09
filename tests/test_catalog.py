@@ -105,7 +105,9 @@ def test_table_shape() -> None:
         cells = row.removeprefix("| ").removesuffix(" |").split(" | ")
         assert len(cells) == 7, row
         agent = loaded[cells[0]]
-        assert cells[1:4] == [agent.shape, agent.model, ", ".join(sorted(agent.tools))]
+        # 0217: a preferring agent's cell names the preference beside the model.
+        model = f"{agent.model}, prefers {agent.prefer}" if agent.prefer else agent.model
+        assert cells[1:4] == [agent.shape, model, ", ".join(sorted(agent.tools))]
         assert agent.description.startswith(cells[4].removesuffix("."))
         # 233: a reply line holding `|` is escaped in its table cell.
         cells = [cell.replace("\\|", "|") for cell in cells]
@@ -119,7 +121,7 @@ def test_table_job_is_the_first_sentence() -> None:
     assert catalog.job("One sentence only.") == "One sentence only."
     assert catalog.job("No period") == "No period"
     planner = next(r for r in catalog.table(AGENTS).splitlines() if r.startswith("| planner |"))
-    assert "| shaper | opus | Glob, Grep, Read, Write |" in planner
+    assert "| shaper | opus, prefers fable | Glob, Grep, Read, Write |" in planner
     assert "`[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>`" in planner
     assert planner.endswith("| clarification, plan |")
 

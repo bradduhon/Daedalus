@@ -318,7 +318,7 @@ def _model(repo: Path, agent: str, override: str | None, unit: str | None = None
             )
         return coder_model(repo, unit)
     try:
-        return Outcome(EXIT_OK, [resolve(agent, load_config(cwd=str(repo)), override)])
+        return Outcome(EXIT_OK, [resolve(agent, load_config(cwd=str(repo)), override, repo=repo)])
     except (AgentModelError, ConfigError, DataDirError) as exc:
         return Outcome(EXIT_STOP, [str(exc)])
 

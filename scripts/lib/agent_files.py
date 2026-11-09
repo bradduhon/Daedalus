@@ -21,7 +21,10 @@ _TOP_KEYS = (
     "phases",
     "hooks",
     "modes",
+    "prefer",
 )
+# 0217: the one model an agent file may prefer over its model line when the session has it.
+PREFERRED = ("fable",)
 # 0190: the two indented blocks; modes holds per-mode hooks the router adds to the hooks block.
 _BLOCK_KEYS = ("hooks", "modes")
 _REQUIRED = ("name", "description", "tools", "model")
@@ -69,6 +72,7 @@ class AgentFile:
     description: str
     phases: tuple[str, ...]
     modes: tuple[tuple[str, tuple[Hook, ...]], ...] = ()
+    prefer: str | None = None
 
     def chains(self) -> dict[str, tuple[Hook, ...]]:
         # 0190: one effective chain per mode, the hooks block first; "" names a modeless agent.
@@ -221,6 +225,16 @@ def _phases(path: Path, value: str) -> tuple[str, ...]:
     return items
 
 
+def preference(path: Path, value: str | None) -> str | None:
+    # 0217: absent is no preference; any value off PREFERRED is refused by name.
+    if value is None or value in PREFERRED:
+        return value
+    raise AgentFileError(
+        f"{path} frontmatter line 'prefer: {value}' names a model Daedalus does not prefer. "
+        f"Next: set prefer to {' or '.join(PREFERRED)}, or remove the line."
+    )
+
+
 def _status_lines(path: Path, body: list[str]) -> tuple[str, ...]:
     if _STATUS_HEADING not in body:
         return ()
@@ -281,6 +295,7 @@ def load(path: Path) -> AgentFile:
         description=fields["description"],
         phases=_phases(path, fields["phases"]) if "phases" in fields else (),
         modes=modes,
+        prefer=preference(path, fields.get("prefer")),
     )
 
 

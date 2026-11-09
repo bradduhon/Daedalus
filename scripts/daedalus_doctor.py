@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import daedalus_confine  # noqa: E402
-from lib import assets, git, inventory, packs  # noqa: E402
+from lib import agent_files, agent_models, assets, fable, git, inventory, packs  # noqa: E402
 from lib.agent_aliases import OLD_NAMES, renamed_line  # noqa: E402
 from lib.audit import (  # noqa: E402
     DataDirError,
@@ -527,6 +527,44 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
         yield True, "OK   policy declared"
     else:
         yield True, "OK   policy: not declared (optional)"
+    yield _fable_check(data.parent.parent, config)
+
+
+FABLE_NEXT = (
+    "set fable_available to true in .claude/daedalus/config.json when your plan offers Fable"
+)
+_FABLE_STATES = {
+    fable.BY_CONFIG: "available by config",
+    fable.BY_SESSION: "seen in this session",
+    fable.OFF_BY_CONFIG: "off by config",
+    fable.NOT_AVAILABLE: "not seen in this session",
+}
+
+
+def _runs_on(root: Path, config: Config) -> str:
+    # 0217: each preferring agent with the model the model command prints for it.
+    groups: dict[str, list[str]] = {}
+    try:
+        for name, agent in sorted(agent_files.load_all(agent_models.AGENTS_DIR).items()):
+            if agent.prefer is not None:
+                model = agent_models.resolve(name, config, repo=root)
+                groups.setdefault(model, []).append(name)
+    except (agent_files.AgentFileError, agent_models.AgentModelError):
+        return "the agents that prefer it keep their own model"
+    parts = [
+        f"{' and '.join(names)} {'run' if len(names) > 1 else 'runs'} on {model}"
+        for model, names in groups.items()
+    ]
+    return ", ".join(parts) or "no agent prefers it"
+
+
+def _fable_check(root: Path, config: Config) -> tuple[bool, str]:
+    # 0217: one line naming where Fable availability came from; OPT when absent, never a MISS.
+    state = fable.availability(config, root)
+    detail = f"{_FABLE_STATES[state]}, so {_runs_on(root, config)}"
+    if state in (fable.BY_CONFIG, fable.BY_SESSION):
+        return True, f"OK   fable: {detail}"
+    return _opt(False, "fable", detail, FABLE_NEXT)
 
 
 def _is_repo(repo: Path) -> bool:

@@ -684,6 +684,15 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`{}`: every agent runs on its agent file's model",
         '`{"planner": "sonnet"}`',
     ),
+    (CONFIG_FILE, "fable_available"): KeyRow(
+        "Whether your plan offers the Fable model. When it does, the planner and the auditor run "
+        "on Fable unless `agent_models` names them; every other agent keeps its own model",
+        "boolean or null",
+        "`true`, `false` or `null`; any other value is refused",
+        "`null`: Fable is used only when a running train's audit log shows this session "
+        "started on it",
+        "`true`",
+    ),
 }
 REFERENCE_HEADER = (
     "Key",
