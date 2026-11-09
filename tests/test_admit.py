@@ -265,6 +265,7 @@ def test_only_the_switched_consumers_import_admit() -> None:
         REPO_ROOT / "tests" / "test_checks_credential_paths.py",
         REPO_ROOT / "tests" / "adversarial" / "corpus.py",
         REPO_ROOT / "tests" / "adversarial" / "test_env_expansion.py",
+        REPO_ROOT / "tests" / "test_tail_hunt.py",
     }
     users: list[str] = []
     for path in [*REPO_ROOT.glob("scripts/**/*.py"), *REPO_ROOT.glob("tests/**/*.py")]:
