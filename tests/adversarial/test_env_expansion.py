@@ -71,7 +71,6 @@ STORE_READS = (
     "pushd ~ && cat .ssh/id_ed25519",
     "ls ~/.config/gh",
     "head -c 10 ~/.claude/.credentials.json",
-    "cp --target-directory=~/.ssh/x a",
     "grep -rn key ~/.aws",
     "grep -R BEGIN ~/.config",
     "rg --hidden BEGIN ~",
@@ -91,6 +90,13 @@ CODER_WRITES = (
     "tee $TMPDIR/x",
     "cd ~ && tee x.txt",
 )
+
+
+@pytest.mark.parametrize("agent", READERS)
+def test_an_option_tilde_is_literal_and_the_write_still_refused(agent: str) -> None:
+    # 228 tail friction fix (marker only), SS-4: bash leaves ~ after --target-directory= literal
+    # (probed: bash -c printf), so no store is named; each agent's write check still refuses.
+    assert_denied(_b(agent, "cp --target-directory=~/.ssh/x a"))
 
 
 @pytest.mark.parametrize("agent", READERS)

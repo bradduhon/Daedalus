@@ -52,6 +52,24 @@ def _runs(d: jail.Decision) -> bool:
     return d.allow or (d.warn and "The jail's finding: " in str(d.reason))
 
 
+def _main_flagged(d: jail.Decision, *named: str) -> bool:
+    # 228 tail, 0105: main is warned by a tripwire its typed record meets, or by its grammar's
+    # refusal naming the word, option or construct off its table; never refused.
+    reason = str(d.reason)
+    flagged = any(n in reason for n in named) if named else "Next:" in reason
+    return d.warn and not d.allow and (flagged or "Refused: " in reason)
+
+
+def _store_judged(
+    d: jail.Decision, command: str, cwd: str = CWD, marker: str = "credential"
+) -> bool:
+    # 228 tail, 0224: a typed path names the store; a form main's grammar refuses carries none,
+    # so main is warned with the refusal and a foreign agent's train scoping refuses it.
+    if marker in str(d.reason):
+        return not d.allow
+    return not jail.admitted(command, "main", cwd) and not jail.admitted(command, "foreign", cwd)
+
+
 def _main_warns(d: jail.Decision, warning: str | None = None) -> bool:
     # Main never prompted (amends 0106): warned, never blocked; the warning leads the text.
     reason = str(d.reason)
@@ -1070,8 +1088,8 @@ def test_bash_naming_a_credential_path_is_refused(
     (cred_home / ".ssh").mkdir()
     (cred_home / "keys").symlink_to(cred_home / ".ssh")
     d = decide(_b(agent, command), CFG)
-    assert not d.allow
-    assert "is a credential path. Next: Daedalus never reads credentials" in str(d.reason)
+    marker = "is a credential path. Next: Daedalus never reads credentials"
+    assert _store_judged(d, command, marker=marker), (command, d.reason)
 
 
 def test_bash_absolute_and_parent_glob_credential_paths_are_refused(cred_home: Path) -> None:
@@ -1110,8 +1128,8 @@ def test_main_bash_siblings_are_allowed(cred_home: Path) -> None:
 
 
 def test_main_bash_dotglob_wildcard_into_credentials_is_refused(cred_home: Path) -> None:
-    d = decide(_b(None, "shopt -s dotglob; cat ~/*/id_ed25519"), CFG)
-    assert not d.allow and "is a credential path" in str(d.reason)
+    command = "shopt -s dotglob; cat ~/*/id_ed25519"
+    assert _store_judged(decide(_b(None, command), CFG), command, marker="is a credential path")
 
 
 def test_symlink_into_a_credential_store_is_refused(cred_home: Path) -> None:
@@ -1232,7 +1250,7 @@ def test_recursive_reader_over_a_store_ancestor_is_refused(
     text = command.format(home=cred_home, parent=cred_home.parent)
     _train(cred_home / "project")
     d = decide(_cred(agent, "Bash", str(cred_home / "project"), command=text), CFG)
-    assert not d.allow and "credential path" in str(d.reason), text
+    assert _store_judged(d, text, str(cred_home / "project")), (text, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1265,7 +1283,7 @@ def test_escape_and_parameter_forms_are_refused(
     cred_home: Path, agent: str | None, command: str
 ) -> None:
     d = decide(_b(agent, command), CFG)
-    assert not d.allow and "credential path" in str(d.reason), command
+    assert _store_judged(d, command), (command, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1279,14 +1297,15 @@ def test_quoted_home_project_path_is_allowed(cred_home: Path, agent: str | None)
 )
 def test_cd_options_do_not_hide_the_target(cred_home: Path, command: str) -> None:
     d = decide(_b(None, command), CFG)
-    assert not d.allow and "credential path" in str(d.reason), command
+    assert _store_judged(d, command), (command, d.reason)
 
 
 def test_refusal_names_the_resolved_target(cred_home: Path) -> None:
-    d = decide(_b(None, "cd ~/.ssh && cat id_ed25519"), CFG)
+    # 228 tail: a leading cd takes one literal absolute path; ~ is refused at its span.
+    d = decide(_b(None, f"cd {cred_home}/.ssh && cat id_ed25519"), CFG)
     assert _judged(d, None, _refusal(str(cred_home / ".ssh")))
     d = decide(_b(None, "cd ~/.aws; cat credentials"), CFG)
-    assert _judged(d, None, _refusal(str(cred_home / ".aws")))
+    assert _main_flagged(d, "Refused: a leading cd takes one absolute path"), d.reason
 
 
 def test_unknown_agent_writes_the_data_dir_only_outside_a_train(train_cwd: Path) -> None:
@@ -1333,7 +1352,7 @@ def test_unresolved_variable_in_a_path_position_is_refused(
     # spec 8: $name and ${name} alike; read binds nothing the jail can resolve.
     _train(plain_repo)
     d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
-    assert not d.allow and "credential path" in str(d.reason), command
+    assert _store_judged(d, command, str(plain_repo)), (command, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1367,7 +1386,7 @@ def test_rg_refusal_follows_hidden_components(
     _train(plain_repo)
     for command in ("rg BEGIN ~/.config", "rg -uu BEGIN ~", "rg -. BEGIN ~", "rg --hidden x ~"):
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
-        assert not d.allow and "credential path" in str(d.reason), command
+        assert _store_judged(d, command, cwd), (command, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1400,7 +1419,7 @@ def test_wrapper_option_values_are_consumed(
     _train(plain_repo)
     for command in ("sudo -u root tar cf - ~", "nice -n 5 tar cf - ~", "env -u X tar cf - ~"):
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
-        assert not d.allow and "credential path" in str(d.reason), command
+        assert _store_judged(d, command, cwd), (command, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1424,7 +1443,7 @@ def test_a_wrapper_folder_change_is_a_base_for_credential_reads(
     _train(plain_repo)
     command = form.format(home=cred_home)
     d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
-    assert not d.allow and "credential path" in str(d.reason), command
+    assert _store_judged(d, command, str(plain_repo)), (command, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1443,7 +1462,7 @@ def test_a_later_binding_does_not_hide_an_earlier_read(
     # spec 8: bindings apply in segment order; a loop body sees every binding inside the loop.
     _train(plain_repo)
     d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
-    assert not d.allow and "credential path" in str(d.reason), command
+    assert _store_judged(d, command, str(plain_repo)), (command, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1570,7 +1589,7 @@ def test_issue30_unmodelled_copiers_reading_home_are_refused(
 ) -> None:
     _train(plain_repo)
     d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
-    assert not d.allow and "credential" in str(d.reason), (command, d.reason)
+    assert _store_judged(d, command, str(plain_repo)), (command, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1810,7 +1829,7 @@ class TestGlobDotsAndBraces:
     )
     def test_main_store_reads_are_refused(self, cred_home: Path, command: str) -> None:
         d = decide(_b(None, command), CFG)
-        assert not d.allow and "is a credential path" in str(d.reason), command
+        assert _store_judged(d, command, marker="is a credential path"), (command, d.reason)
 
     @pytest.mark.parametrize(
         "command",

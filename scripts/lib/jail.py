@@ -27,7 +27,6 @@ from lib.credential_paths import (
     CREDENTIAL_TOOLS,
     ENV_IGNORE_FILES,
     IGNORE_FILES,
-    R_BRACE_UNJUDGED,
     R_CREDENTIAL,
     R_CREDENTIAL_TREE,
     R_ENV_FILE,
@@ -57,12 +56,15 @@ from lib.credential_paths import anchor as _anchor
 from lib.credential_paths import clean as _clean
 from lib.credential_paths import credential_hit as _credential_hit
 from lib.credential_paths import credential_roots as _credential_roots
-from lib.credential_paths import dotglob_on as _dotglob_on
-from lib.credential_paths import expand_word as _expand_word
 from lib.credential_paths import store_rest as _store_rest
-from lib.credential_paths import tilde as _tilde
-from lib.credential_paths import unjudged_root as _unjudged_root
-from lib.gh_policy import CONDUCTOR_GH, GhFlag, _push_reason, allowlist_applies, gh_args, gh_reason
+from lib.gh_policy import (
+    CONDUCTOR_GH,
+    GhArgs,
+    GhFlag,
+    _push_reason,
+    allowlist_applies,
+    gh_reason,
+)
 from lib.ledger import LedgerError, resolve_ledger
 from lib.manifest import Manifest, ManifestError, extension_hit, path_hit
 from lib.manifest import load as load_manifest
@@ -846,7 +848,6 @@ R_ROUTED = (
     "{agent} is judged by the router, not lib.jail.decide. "
     "Next: route the call through scripts/enforce_agent_jail.py."
 )
-_CREDENTIAL_PART = re.compile(r"[=:,]")
 R_CREDENTIAL_PARAM = (
     "{path} could be a credential path; the jail cannot resolve its variable. "
     "Next: spell the path out"
@@ -854,7 +855,6 @@ R_CREDENTIAL_PARAM = (
 # issue 76: time is not here; its WRAPPER_OPTS row reads its options.
 # A2 fix round 4: a brace group's { and } are read past, so its inner command word is read.
 _CONTROL_WORDS = frozenset({"!", "do", "then", "else", "elif", "while", "until", "if", "{", "}"})
-_BINDERS = frozenset({"read", "mapfile", "readarray", "getopts", "select"})
 # issue 76: _command_at's answer when a wrapper option is off shell.WRAPPER_OPTS.
 _OPAQUE = -1
 _GREPS = frozenset({"grep", "egrep", "fgrep"})
@@ -1768,71 +1768,6 @@ def _base_env() -> dict[str, list[str]]:
     return env
 
 
-def _bash_env(segments: list[list[str]]) -> list[dict[str, list[str]]]:
-    # spec 8: assignments and for-loops bind, read and friends unbind, HOME stays real.
-    env = _base_env()
-    envs: list[dict[str, list[str]]] = []
-    changes: list[dict[str, list[str] | None]] = []
-    for words in segments:
-        clean = [_clean(w) for w in words]
-        changed: dict[str, list[str] | None] = {}
-        for i, word in enumerate(words):
-            name, eq, value = word.partition("=")
-            key = re.split(r"[\[+]", name, maxsplit=1)[0]
-            if eq and _ASSIGN.match(word) and key != "HOME":
-                bound = _expand_word(value, env)
-                # issue 121: an append or an array element leaves the value unknown.
-                unknown = key != name or any(u for _, u in bound)
-                changed[key] = None if unknown else [t for t, _ in bound]
-            if clean[i] == "for" and i + 1 < len(words):
-                loop = [x for w in words[i + 3 :] for x in _expand_word(w, env)]
-                listed = i + 2 < len(words) and clean[i + 2] == "in"
-                ok = listed and not any(u for _, u in loop)
-                changed[clean[i + 1]] = [t for t, _ in loop] if ok else None
-            if clean[i] in _BINDERS:
-                for later in clean[i + 1 :]:
-                    if not later.startswith("-"):
-                        changed[later] = None
-            for key, values in changed.items():
-                if values is None:
-                    env.pop(key, None)
-                else:
-                    env[key] = values
-        # spec 8: a binding applies from its own segment onward, never to earlier segments.
-        envs.append(dict(env))
-        changes.append(changed)
-    _loop_union(segments, envs, changes)
-    return envs
-
-
-def _loop_union(
-    segments: list[list[str]],
-    envs: list[dict[str, list[str]]],
-    changes: list[dict[str, list[str] | None]],
-) -> None:
-    # spec 8: a later iteration sees every binding in its loop, header included.
-    opened: list[int] = []
-    for k, words in enumerate(segments):
-        first = _clean(words[0])
-        if first == "do":
-            head = k - 1 if k and _clean(segments[k - 1][0]) in {"for", "while", "until"} else k
-            opened.append(head)
-        if first != "done" or not opened:
-            continue
-        span = range(opened.pop(), k + 1)
-        merged: dict[str, list[str] | None] = {}
-        for j in span:
-            for key, values in changes[j].items():
-                prior = merged.get(key, [])
-                merged[key] = None if values is None or prior is None else [*prior, *values]
-        for j in span:
-            for key, values in merged.items():
-                if values is None:
-                    envs[j].pop(key, None)
-                else:
-                    envs[j][key] = list(dict.fromkeys([*envs[j].get(key, []), *values]))
-
-
 def _command_at(
     clean: list[str], skip: set[int], options: list[WrapperOption] | None = None
 ) -> int | None:
@@ -1863,42 +1798,10 @@ def _opaque_words(clean: list[str], skip: set[int]) -> set[int]:
     return {i for i, word in enumerate(clean) if word and i not in skip}
 
 
-def _opaque_values(texts: list[str], indices: set[int]) -> list[str]:
-    # issue 76: each plain word, plus an option word's value (--x=v, -X=v), as a path.
-    # audit round 1: a short cluster's value may start at any letter (-iC/x), so every suffix.
-    values: list[str] = []
-    for i in sorted(indices):
-        word = texts[i]
-        if not word.startswith("-"):
-            values.append(word)
-            continue
-        if "=" in word:
-            values.append(word.split("=", 1)[1])
-        if not word.startswith("--"):
-            values += [word[k:] for k in range(2, len(word))]
-    return list(dict.fromkeys(v for v in values if v))
-
-
-def _opaque_targets(texts: list[str], indices: set[int], cwd: str) -> list[str]:
-    # issue 76: any value may be a folder the command moves to, so each is also a base.
-    values = _opaque_values(texts, indices)
-    bases = [cwd, *(b for b in (_anchor(v, cwd) for v in values) if b)]
-    found = (_anchor(v, base) for v in values for base in dict.fromkeys(bases))
-    return list(dict.fromkeys(t for t in found if t))
-
-
 def _option_values(
     texts: list[str], options: list[WrapperOption], kinds: frozenset[tuple[str, str]]
 ) -> list[str]:
     return [texts[o.at][len(o.prefix) :] for o in options if (o.wrapper, o.option) in kinds]
-
-
-def _moved_base(texts: list[str], options: list[WrapperOption], cwd: str) -> str | None:
-    # issue 76: env -C, env --chdir and sudo -D move the command's folder, each from the last.
-    base: str | None = cwd
-    for value in _option_values(texts, options, WRAPPER_CHDIR):
-        base = _anchor(value, base) if base is not None else None
-    return base
 
 
 def _search_paths(name: str, clean: list[str], args: list[int]) -> set[int]:
@@ -1959,31 +1862,32 @@ def _path_positions(words: list[str]) -> tuple[str, int, set[int]]:
     return name, at, paths
 
 
-def _tree_reader(
-    name: str, clean: list[str], at: int, ops: list[int], command: str
-) -> tuple[bool, list[int], bool] | None:
-    # spec 8: (sees hidden dirs, operand indices, reads the cwd when no operand is given).
-    args = clean[at + 1 :]
-    longs = {a.split("=", 1)[0] for a in args if a.startswith("--")}
-    short = {c for a in args if a.startswith("-") and not a.startswith("--") for c in a[1:]}
+def _typed_tree(
+    done: AdmittedCommand, rg_config: bool, rewritten: bool
+) -> tuple[bool, bool] | None:
+    # spec 8, 228 tail: (sees hidden dirs, reads its folder when no read operand is typed) for a
+    # command that walks a tree, from its typed options; a word the shell builds is opaque.
+    name, ops = done.family, bool(done.reads)
+    longs = {o.text.split("=", 1)[0] for o in done.options if o.text.startswith("--")}
+    short = {c for o in done.options if o.text[:1] == "-" != o.text[1:2] for c in o.text[1:]}
+    opaque = rewritten or any(o.glob for o in done.options)
     if name in _GREPS:
-        on = bool({"r", "R"} & short or {"--recursive", "--dereference-recursive"} & longs)
-        on = on or any(a.startswith("--directories=recurse") for a in args)
-        on = on or shell.search_opaque(command)
-        return (True, ops, not ops) if on else None
+        on = bool({"r", "R", "d"} & short or {"--recursive", "--dereference-recursive"} & longs)
+        on = on or "--directories" in longs or opaque
+        return (True, not ops) if on else None
     if name == "rg":
-        return rg_reaches_hidden(args, command), ops, not ops
+        return rg_reaches_hidden([o.text for o in done.options], opaque or rg_config), not ops
     if name == "find":
-        on = bool({"-exec", "-execdir", "-ok", "-okdir"} & set(args)) or "xargs" in command
-        return (True, ops, not ops) if on else None
+        on = bool({"-exec", "-execdir", "-ok", "-okdir"} & {o.text for o in done.options})
+        return (True, not ops) if on or opaque else None
     if name in {"tar", "rsync", "bsdtar", "7z", "7za", "7zr", "7zz", "pax"}:
-        return True, ops, False
+        return True, False
     if name == "scp" and "r" in short:
-        return True, ops, False
-    if name == "cp" and ({"r", "R", "a"} & short or {"--recursive", "--archive"} & longs):
-        return True, ops, False
+        return True, False
+    if name == "cp" and ({"r", "R", "a"} & short or {"--recursive", "--archive"} & longs or opaque):
+        return True, False
     if name == "zip" and ({"r", "R"} & short or "--recurse-paths" in longs):
-        return True, ops, False
+        return True, False
     return None
 
 
@@ -2028,8 +1932,8 @@ def _rg_short_letters(arg: str) -> set[str]:
     return letters
 
 
-def rg_reaches_hidden(args: list[str], command: str) -> bool:
-    # 113: a config file can add any flag, so its variable anywhere in the command fails closed.
+def rg_reaches_hidden(args: list[str], unseen: bool) -> bool:
+    # 113, 228 tail: unseen is a word the shell rewrites or a config file variable the parse typed.
     longs = {a.split("=", 1)[0] for a in args if a.startswith("--")}
     short = {
         c
@@ -2037,8 +1941,7 @@ def rg_reaches_hidden(args: list[str], command: str) -> bool:
         if a.startswith("-") and not a.startswith("--")
         for c in _rg_short_letters(a)
     }
-    reach = bool(_RG_REACH_SHORT & short or _RG_REACH_LONGS & longs)
-    return reach or _RG_CONFIG_ENV in command or shell.search_opaque(command)
+    return unseen or bool(_RG_REACH_SHORT & short or _RG_REACH_LONGS & longs)
 
 
 def _rg_globs(args: list[str]) -> list[str]:
@@ -2066,34 +1969,27 @@ def _rg_globs(args: list[str]) -> list[str]:
     return [p for raw in raws for p in glob_patterns(raw)]
 
 
+class _Tree(NamedTuple):
+    # spec 8, 228 tail: one admitted command that walks a tree, from its typed record.
+    name: str
+    hidden: bool
+    targets: list[str]
+    globs: list[str]
+
+
 def _tree_reason(
-    parsed: list[tuple[list[str], tuple[str, int, set[int]]]],
-    envs: list[dict[str, list[str]]],
-    bases: list[str],
+    trees: list[_Tree],
     roots: list[str],
-    command: str,
-    keys: tuple[str, ...] = (),
-    env_files: tuple[str, ...] = (),
+    keys: tuple[str, ...],
+    env_files: tuple[str, ...],
+    dotglob: bool,
 ) -> str | None:
-    dotglob = _dotglob_on(command)
     # SC-12: reply key roots let a dot folder hide them from **; credential stores do not.
     pairs = [(root, False, R_CREDENTIAL_TREE) for root in roots]
     pairs += [(key, True, R_CREDENTIAL_TREE) for key in keys]
     # 0192: a .env file is a dot file, so rg's default skip hides it like the reply key.
     pairs += [(env, True, R_ENV_FILE_TREE) for env in env_files]
-    for k, (words, (name, at, paths)) in enumerate(parsed):
-        if at < 0:
-            continue
-        ops = [i for i in sorted(paths) if not words[i].startswith(_REDIRECT)]
-        found = _tree_reader(name, [_clean(w) for w in words], at, ops, command)
-        if found is None:
-            continue
-        hidden, ops, implicit = found
-        globs = _rg_globs([_clean(w) for w in words[at + 1 :]]) if name == "rg" else []
-        targets = list(bases) if implicit else []
-        for i in ops:
-            for text, _ in _expand_word(words[i], envs[k]):
-                targets += [t for t in (_anchor(text, b) for b in bases or [""]) if t]
+    for name, hidden, targets, globs in trees:
         for target in targets:
             for root, dots_hide, reason in pairs:
                 rest = _store_rest(target, root, True, dotglob, dots_hide)
@@ -2149,65 +2045,123 @@ def rg_reason(command: str, cwd: str) -> str | None:
         return R_RG_ONE
     if rg_program(tokens[1:]):
         return R_RG_PROGRAM
-    if shell.search_opaque(command):
+    if cmd is not None and any(search_rewritten(w) for w in cmd.words):
         return R_RG_OPAQUE
-    if rg_reaches_hidden(tokens[1:], command):
+    if rg_reaches_hidden(tokens[1:], False):
         return R_RG_REACH
     # 113: judged against the reply key's fixed place, whether or not one exists yet.
     if glob_reaches(_rg_globs(tokens[1:]), [".claude", "daedalus", REPLY_KEY_NAME]):
         return R_REPLY_KEY_TREE.format(path=cwd)
-    return _credential_reason("Bash", {"command": command}, cwd)
+    # 228 tail: the auditor's own grammar; a verify it refuses has no typed path to judge.
+    got = _admission(command, "auditor", cwd)[1]
+    refused = _refused(got)
+    if refused is not None:
+        return refusal_text(refused)
+    return _credential_reason("Bash", {"command": command}, cwd, got)
+
+
+class _Typed(NamedTuple):
+    # 228 tail: one admitted command's credential view: its folders and its typed paths.
+    bases: tuple[str, ...]
+    paths: list[str | None]
+    raws: list[str]
+
+
+def _typed_names(got: Admitted) -> set[str]:
+    # 228 tail, SS-1: every name an admitted command assigns, exports or unsets.
+    names = {a.text.split("=", 1)[0].removesuffix("+") for c in got.commands for a in c.assignments}
+    for done in got.commands:
+        if done.family in shell.NAME_OPERAND_CMDS:
+            names |= {t.text.split("=", 1)[0] for t in done.texts}
+    return names
+
+
+def _typed_path(
+    typed: Typed, words: dict[tuple[int, int], Word], text: str, env: dict[str, str]
+) -> str | None:
+    # 228 tail, SS-4: a literal typed path as typed; else built from its parsed parts, a parameter
+    # only when the hook's environment binds it and no admitted command names it; else None.
+    word = words.get(typed.span) if typed.glob else None
+    if word is None:
+        return typed.text
+    out = ""
+    for k, part in enumerate(word.parts):
+        if isinstance(part, Literal):
+            out += part.text
+        elif isinstance(part, Tilde) and k == 0:
+            out += env["HOME"] if not part.user else os.path.expanduser(f"~{part.user}")
+        elif isinstance(part, shparse.Glob):
+            out += text[part.span[0] : part.span[1]]
+        elif isinstance(part, Param) and not part.op and part.name in env:
+            out += env[part.name]
+        else:
+            return None
+    return out
+
+
+def _typed_view(
+    script: Script, command: str, got: Admitted, cwd: str
+) -> tuple[list[_Typed], list[_Tree], list[str]]:
+    # 228 tail, spec 8: each admitted command's typed reads, writes, script, cd target and git
+    # folder; relative ones open in the shell's folder and in the command's own.
+    names = _typed_names(got)
+    env = {k: v[0] for k, v in _base_env().items() if k not in names or k == "HOME"}
+    words = {n.span: n for n in shparse.nodes(script) if isinstance(n, Word)}
+    rg_config = _RG_CONFIG_ENV in names
+    base = cwd
+    views: list[_Typed] = []
+    trees: list[_Tree] = []
+    texts: list[str] = []
+    for done in got.commands:
+        here = base
+        if done.cd_target is not None:
+            here = _abs(_typed_path(done.cd_target, words, command, env) or "", base)
+            base = here if done.family == "cd" else base
+        typed = [*done.reads, *done.writes, done.script, done.git_dir, done.cd_target]
+        found = [t for t in typed if t is not None]
+        paths = [_typed_path(t, words, command, env) for t in found]
+        views.append(_Typed((base, here), paths, [t.text for t in found]))
+        texts += [t.text for t in done.texts]
+        # prepush2-2026-10-27: a search word bash rewrites may become a reach flag.
+        search = done.family in shell.SEARCH_CMDS
+        rewritten = search and any(search_rewritten(w) for w in admitted_words(script, done))
+        tree = _typed_tree(done, rg_config, rewritten)
+        if tree is not None:
+            reads = [_typed_path(t, words, command, env) for t in done.reads]
+            targets = [_anchor(r, here) for r in reads if r is not None]
+            targets += [here] if tree[1] else []
+            globs = _rg_globs(admitted_tokens(script, done)[1:]) if done.family == "rg" else []
+            trees.append(_Tree(done.family, tree[0], [t for t in targets if t], globs))
+    return views, trees, texts
 
 
 def _bash_credential_reason(
-    command: str, cwd: str, roots: list[str], keys: tuple[str, ...] = ()
+    command: str,
+    cwd: str,
+    roots: list[str],
+    keys: tuple[str, ...] = (),
+    got: Admitted | Refusal | None = None,
 ) -> str | None:
-    segments = _shell_words(command)
-    envs = _bash_env(segments)
-    dotglob = _dotglob_on(command)
-    parsed = [(words, _path_positions(words)) for words in segments]
-    bases = [cwd] if os.path.isabs(cwd) else []
-    for k, (words, (name, at, _)) in enumerate(parsed):
-        # issue 76: a wrapper that changes folder is a base for relative paths, like cd.
-        moves: list[WrapperOption] = []
-        clean = [_clean(w) for w in words]
-        redirects = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
-        found_at = _command_at(clean, redirects, moves)
-        texts = [(_expand_word(w, envs[k]) or [("", False)])[0][0] for w in words]
-        moved = [_moved_base(texts, moves, cwd)] if os.path.isabs(cwd) else []
-        if found_at == _OPAQUE and os.path.isabs(cwd):
-            values = _opaque_values(texts, _opaque_words(clean, redirects))
-            moved += [_anchor(v, cwd) for v in values]
-        bases += [b for b in dict.fromkeys(moved) if b is not None and b not in bases]
-        if name not in {"cd", "pushd"}:
-            continue
-        # spec 8: the first non-option argument is the target; a bare cd goes home.
-        target, options = None, True
-        for word in words[at + 1 :]:
-            if options and _clean(word) == "--":
-                options = False
-            elif not (options and _clean(word).startswith("-")):
-                target = word
-                break
-        texts = [t for t, _ in _expand_word(target, envs[k])] if target else envs[k]["HOME"]
-        bases += [b for b in (_anchor(t, cwd) for t in texts) if b]
+    # spec 8, 228 tail: an admitted command's typed paths, never its text; a refused one is
+    # judged by its standing folder alone (0224) and its refusal names the word off the table.
+    script = shparse.parse(command)
+    judged = _admission(command, "main", cwd)[1] if got is None else got
+    if not _passed(judged):
+        inside = os.path.isabs(cwd) and _credential_hit(cwd, roots, False)
+        return R_CREDENTIAL.format(path=cwd) if inside else None
+    views, trees, texts = _typed_view(script, command, judged, cwd)
+    names = _typed_names(judged)
+    dotglob = "GLOBIGNORE" in names
+    bases = [b for v in views for b in v.bases if os.path.isabs(b)]
     # 0192: a command naming an ignore file and carrying a `!` line that reaches a .env name.
-    words_all = [_clean(w) for s in segments for w in s]
-    named = [w for w in words_all if os.path.basename(w) in ENV_IGNORE_FILES]
-    if named and (whitelists_env(command) or any(whitelists_env(w) for w in words_all)):
+    named = [p for v in views for p in v.paths if p and os.path.basename(p) in ENV_IGNORE_FILES]
+    if named and any(whitelists_env(t) for t in texts):
         return R_ENV_WHITELIST_WRITE.format(path=named[0])
-    absolute: list[str] = []
-    relative: list[str] = []
-    unresolved = ""
-    for k, (words, (_, _, paths)) in enumerate(parsed):
-        env = envs[k]
-        for i, word in enumerate(words):
-            for text, unknown in _expand_word(word, env):
-                if unknown and i in paths and not unresolved:
-                    unresolved = _clean(word)
-                parts = [_tilde(p, env["HOME"][0]) for p in _CREDENTIAL_PART.split(text)[1:] if p]
-                for cand in [text, *parts]:
-                    (absolute if os.path.isabs(cand) else relative).append(cand)
+    absolute = [p for v in views for p in v.paths if p is not None and os.path.isabs(p)]
+    unresolved = next(
+        (r for v in views for p, r in zip(v.paths, v.raws, strict=True) if p is None), ""
+    )
+    relative = [(p, v.bases) for v in views for p in v.paths if p and not os.path.isabs(p)]
 
     def hit(target: str) -> str | None:
         if reply_key_hit(target) or _credential_hit(target, list(keys), True, dotglob, True):
@@ -2227,53 +2181,25 @@ def _bash_credential_reason(
             return reason
     if unresolved:
         return R_CREDENTIAL_PARAM.format(path=unresolved)
-    # audit B4 round 3: an unexpanded brace word whose alternative starts its own path.
-    unjudged = next((w for s in segments for w in map(_clean, s) if _unjudged_root(w)), "")
-    if unjudged:
-        return R_BRACE_UNJUDGED.format(path=unjudged)
-    for cand in relative:
-        for base in bases:
+    for cand, folders in relative:
+        for base in dict.fromkeys(b for b in (cwd, *folders) if os.path.isabs(b)):
             reason = hit(os.path.normpath(os.path.join(base, cand)))
             if reason:
                 return reason
-    return _tree_reason(parsed, envs, bases, roots, command, keys, env_files)
+    return _tree_reason(trees, roots, keys, env_files, dotglob)
 
 
-def _credential_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | None:
+def _credential_reason(
+    tool: str, tool_input: dict[str, object], cwd: str, got: Admitted | Refusal | None = None
+) -> str | None:
     if tool == "Bash":
         command = str(tool_input.get("command") or "")
         # SC-12: the reply key joins as its own roots, so globs and folder reads of it refuse.
         keys = tuple(key_roots(cwd))
-        return _bash_credential_reason(command, cwd, _credential_roots(), keys)
+        return _bash_credential_reason(command, cwd, _credential_roots(), keys, got)
     if tool not in CREDENTIAL_TOOLS and tool not in WRITE_TOOLS:
         return None
     return path_reason(tool, tool_input, cwd)
-
-
-def _plain_segments(command: str) -> list[list[str]] | None:
-    # 0028, 228 S3: each parsed command's literal words past its wrappers; None (the regex
-    # fallback) on an opaque parse, an expanding word, env -S, or a shell or interpreter head.
-    script = shparse.parse(command)
-    if shparse.opaque(script):
-        return None
-    flat: list[list[str]] = []
-    for cmd, _ in shparse.walk(script):
-        words = [w.literal for w in cmd.words]
-        literal = [w for w in words if w is not None]
-        if len(literal) != len(words) or env_split_values(literal):
-            return None
-        tokens = strip_wrappers(literal)
-        if tokens and command_family(tokens[0]) == "busybox":
-            tokens = tokens[1:]
-        if tokens is None or (tokens and command_family(tokens[0]) in _BODY_HEADS):
-            return None
-        if not tokens:
-            continue
-        name = _base(tokens[0])
-        if name not in {"gh", "git"} and {"gh", "git"} & {_base(t) for t in tokens}:
-            return None
-        flat.append(tokens)
-    return flat
 
 
 def _gh_gate(agent: str, cwd: str, command: str) -> str | None:
@@ -2396,6 +2322,22 @@ def rewritten(word: Word | None) -> bool:
         word.literal is None
         or any(isinstance(p, Literal) and p.quoted in ("$'", '$"') for p in word.parts)
     )
+
+
+def search_rewritten(word: Word) -> bool:
+    # prepush2-2026-10-27, 228 tail: a search word bash rewrites ($'-uu', $X, {-u,}, a brace) or
+    # a glob that may match a planted file named like a flag, read from its parsed parts.
+    parts = word.parts
+    if not all(isinstance(p, Literal | shparse.Glob | Tilde) for p in parts):
+        return True
+    if any(isinstance(p, Literal) and p.quoted in ("$'", '$"') for p in parts):
+        return True
+    if any(isinstance(p, Literal) and not p.quoted and set("{}") & set(p.text) for p in parts):
+        return True
+    if not any(isinstance(p, shparse.Glob) for p in parts):
+        return False
+    lead = parts[0]
+    return isinstance(lead, shparse.Glob) or (isinstance(lead, Literal) and lead.text[:1] == "-")
 
 
 def literal_tokens(cmd: Command | None) -> list[str]:

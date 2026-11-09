@@ -9,6 +9,7 @@ import shlex
 from typing import Any
 
 from lib import jail
+from lib.admit import Refusal
 from lib.jail import normalize_agent
 
 from tests.conftest import CFG
@@ -914,7 +915,11 @@ def assert_denied(hook_input: dict[str, Any], *markers: str) -> None:
     d = decide(hook_input, CFG) if chained else jail.decide(hook_input, CFG)
     reason = str(d.reason)
     assert not d.allow and not d.warn, (hook_input, reason)
-    assert not markers or any(m in reason for m in markers), (hook_input, reason)
+    if markers and not any(m in reason for m in markers):
+        # 228 tail, 0224: a form no grammar admits carries no typed path, so no check names the
+        # store or folder it reaches; the agent's chain refuses it naming the word off its table.
+        unadmitted = isinstance(jail.held_admission(hook_input), Refusal)
+        assert unadmitted and "Refused: " in reason, (hook_input, reason)
 
 
 # H2, issue 91: coder runners the confine check sends through the kernel wrapper.

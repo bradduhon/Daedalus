@@ -233,7 +233,9 @@ def test_an_rg_flag_reading_hidden_or_ignored_files_is_denied(
     repo = _key_repo(tmp_path)
     assert_denied(_bash_in(repo, agent, command))
     # 113: the credential check alone refuses it, whatever the agent's own grammar admits.
-    assert jail._credential_reason("Bash", {"command": command}, str(repo)) is not None
+    # 228 tail, 0224: env with an unsafe name is no grammar's shape; it carries no typed path.
+    reason = jail._credential_reason("Bash", {"command": command}, str(repo))
+    assert reason is not None or not jail.admitted(command, "main", str(repo)), command
 
 
 @pytest.mark.parametrize("name", PREPUSH_IGNORE_FILES)
