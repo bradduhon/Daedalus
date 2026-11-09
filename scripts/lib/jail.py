@@ -92,7 +92,6 @@ from lib.shell import (
     WrapperOption,
     _abs,
     _base,
-    _command_reason,
     _git_split,
     _long_matches,
     _names_project_data,
@@ -630,7 +629,6 @@ R_NESTED_CLAUDE = (
     "claude starts a nested session the jail cannot attribute to an agent (audit A7-1). "
     "Next: run it from your own shell."
 )
-_CLAUDE_WORD = re.compile(r"(?:^|[\s;&|(/'\"`])claude(?=[\s;&|)'\"`]|$)")
 # 0028: the conductor's gh set lives in lib.gh_policy.
 GH_ALLOWED = {cmd: frozenset(sub for c, sub in CONDUCTOR_GH if c == cmd) for cmd, _ in CONDUCTOR_GH}
 _BRANCH_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
@@ -2221,34 +2219,12 @@ def _gh_gate(agent: str, cwd: str, command: str) -> str | None:
     return refused.reason if cmd is not None and refused.span == cmd.span else refusal_text(refused)
 
 
-def _admitted_segments(
-    command: str, cwd: str, families: frozenset[str] | set[str] | None = None
-) -> list[list[str]] | None:
-    # 228 S3: an admitted command has no body, so its parsed commands are every command it runs;
-    # a refused one keeps the _plain_segments reader and its text fallback.
-    script, got = _admission(command, "main", cwd)
-    if not _passed(got):
-        return _plain_segments(command)
-    parsed = {cmd.span: cmd for cmd, _ in shparse.walk(script)}
-    out: list[list[str]] = []
-    for done in got.commands:
-        cmd = parsed.get(done.span)
-        if cmd is None or (families is not None and done.family not in families):
-            continue
-        # 228 S3: from the command word on, past the wrappers admit read.
-        words = [w for w in cmd.words if w.span[0] >= done.word.span[0]]
-        out.append([w.literal if w.literal is not None else w.raw for w in words])
-    return out
-
-
 def _train_active(cwd: str) -> bool:
     # 0023: existence only; a symlinked or unreadable marker still counts as an active train.
     return os.path.lexists(train_marker(project_root(cwd)))
 
 
 _GIT_DIR_OPTS = ("--git-dir=", "--work-tree=")
-# 228 S3: a head that runs a string as code; the nested-session tripwire reads it by its text.
-_BODY_HEADS = _SHELLS | INTERPRETERS | {"eval", "source", ".", "busybox"}
 
 
 def _admission(command: str, agent: str, cwd: str) -> tuple[Script, Admitted | Refusal]:
@@ -2415,8 +2391,18 @@ def _parse_base(script: Script, cwd: str) -> str:
 
 
 def coder_constant(script: Script, refused: Refusal, cwd: str) -> str | None:
-    # 228 S3b: the class of the refused node, read from the parse: a prefix, a redirect, a
-    # construct, an expansion, then the command word; never the command text.
+    constant = refusal_constant(script, refused, cwd)
+    if constant is not None or "Next:" in refused.reason:
+        return constant
+    cmd = refused_command(script, refused)
+    head = cmd.words[0].literal if cmd is not None and cmd.words else None
+    git = head is not None and shell.command_family(head) == "git"
+    return R_CODER_GIT if git else R_CODER_TABLE
+
+
+def refusal_constant(script: Script, refused: Refusal, cwd: str) -> str | None:
+    # 228 S3b, tail: the class of the refused node, read from the parse: a prefix, a redirect, a
+    # construct, an expansion, then the command word; never the command text. None: no class.
     if "Next:" in refused.reason:
         return None  # 228 S3b: the grammar quoted a kept constant (0164, 0196) as its reason.
     cmd = refused_command(script, refused)
@@ -2456,11 +2442,15 @@ def lead_cd(got: Admitted) -> tuple[AdmittedCommand | None, tuple[AdmittedComman
 
 
 def coder_base(call: CoderCall, got: Admitted) -> str:
-    # 228 S3b, O6: replaces chain_bases; a leading cd moves the rest only when every join is &&.
+    return admitted_base(call.script, got, call.cwd)
+
+
+def admitted_base(script: Script, got: Admitted, cwd: str) -> str:
+    # 228 S3b, O6: a leading cd moves the rest only when every join is &&.
     lead, _ = lead_cd(got)
-    joins = set(call.script.separators) - {""}
+    joins = set(script.separators) - {""}
     if lead is None or lead.cd_target is None or not joins <= {"&&"}:
-        return call.cwd
+        return cwd
     return os.path.normpath(lead.cd_target.text)
 
 
@@ -2817,14 +2807,7 @@ def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision
     if integrity is not None:
         return _main_warn(WARN_DATA_DIR, integrity)
     if tool == "Bash":
-        # 8.5, 0106: main meets the tripwires first, as warnings; regex fallback on no tokens.
-        reason = _command_reason(command) or _gh_gate("main", cwd, command)
-        reason = reason or (R_NESTED_CLAUDE if _nested_claude(command, cwd) else None)
-        if reason:
-            return _tripwire_warn(reason)
-        # 228 S3, 0105, 0106: a command off main's table warns with the refusal, never blocks.
-        refused = _refused(_admission(command, "main", cwd)[1])
-        return _allow() if refused is None else _main_warn(WARN_COMMAND, refusal_text(refused))
+        return _main_bash(command, cwd)
     train = _main_write_train(path, cwd) if is_write else None
     if train is not None:
         return _warn(R_MAIN_TRAIN_WARN.format(train=train, path=path))
@@ -2836,12 +2819,40 @@ def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision
     return _allow()
 
 
-def _nested_claude(command: str, cwd: str) -> bool:
-    # audit A7-1, issue 55, 228 S3: an admitted command's own words; refused, the old reader.
-    segments = _admitted_segments(command, cwd)
-    if segments is None:
-        return bool(_CLAUDE_WORD.search(command))
-    return any(seg and runs_claude(seg, cwd) for seg in segments)
+def _main_bash(command: str, cwd: str) -> Decision:
+    # 0105, 0106, 228 tail: main is admitted by its own grammar and warned, never refused; a
+    # tripwire reads the typed record, a refused command is warned with the grammar's refusal.
+    script, got = _admission(command, "main", cwd)
+    commands = got.commands if _passed(got) else ()
+    base = admitted_base(script, got, cwd) if _passed(got) else cwd
+    for done in commands:
+        # audit A7-1, issue 55: the typed command word, its wrappers and node's script.
+        reason = R_NESTED_CLAUDE if claude_word(done, base) else admitted_tripwire(script, done)
+        if reason:
+            return _tripwire_warn(reason)
+    reason = _gh_gate("main", cwd, command)
+    if reason:
+        return _tripwire_warn(reason)
+    refused = _refused(got)
+    # audit A7-1, issue 55: the refused word runs the claude binary by name, link or path.
+    claude = refused is not None and (
+        refused.family == "claude" or refusal_constant(script, refused, cwd) == shell.R_CLAUDE_PATH
+    )
+    if refused is not None and claude:
+        return _main_warn(WARN_NESTED_CLAUDE, refusal_text(refused, R_NESTED_CLAUDE))
+    if refused is not None:
+        return _main_warn(WARN_COMMAND, refusal_text(refused))
+    return _allow()
+
+
+def admitted_tripwire(script: Script, done: AdmittedCommand) -> str | None:
+    # 8.5, 228 tail: the git and rm tripwires an admitted command meets, on its parsed words.
+    tokens = admitted_tokens(script, done)
+    if done.family == "git":
+        return shell._git_reason(tokens, [a.text for a in done.assignments])
+    if done.family == "rm":
+        return shell._rm_reason(tokens[1:])
+    return None
 
 
 # 0136, D.5: the excluded roots rule; checks/excluded_roots.py and the main session share it.

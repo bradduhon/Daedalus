@@ -176,8 +176,7 @@ def test_a_here_string_read_by_a_plain_command_is_admitted(
 
 @pytest.mark.parametrize("command", A2_ADMITTED + A2_FIX3_ADMITTED)
 def test_a_module_or_script_run_is_no_body(other_repo: Path, command: str) -> None:
-    # P7, 228 S3: an interpreter head takes the gh gate's text fallback; it runs unscoped.
-    assert jail._plain_segments(command) is None
+    # P7, 228 tail: an interpreter run outside a train runs unscoped; no text reader remains.
     assert jail.decide(_foreign(other_repo, command), CFG).allow
     assert jail.decide(_b(None, command), CFG).allow
 
