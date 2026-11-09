@@ -75,7 +75,6 @@ from lib.shell import (
     _DEFAULT_BRANCHES,
     _GLOB_CHARS,
     _HOME,
-    _PROJECT_DATA,
     _REPO_SCRIPTS,
     _VALUE_LONG_NEXT,
     GIT_PLUMBING_REMOTE,
@@ -95,7 +94,6 @@ from lib.shell import (
     _long_matches,
     _names_project_data,
     _pathspecs,
-    _quote_spans,
     _short_flags,
     _under,
     split_options,
@@ -871,19 +869,10 @@ _PATH_CMDS = (
 _PATH_OPTION = re.compile(r"--?[\w-]*(?:dir|file|path|target|output|input|config|key|root)", re.I)
 _DATA_DIR_DEFAULT = "/.claude/plugins/data/daedalus"
 UNIT_WORKTREES = ".claude/worktrees"
-_DATA_DIR_WRITE = re.compile(
-    r">|(?:^|[\s;&|(/])(?:tee|rm|mv|cp|truncate|touch|ln|mkdir|chmod|chown|install|rmdir"
-    r"|mkfifo|mknod|shred)"
-    r"(?=[\s;&|)]|$)"
-    r"|\bsed\b[^;&|\n]*\s(?:-[a-zA-Z]*i|--in-place)|\bpython[\d.]*\b[^;&|\n]*\s-[a-zA-Z]*c"
-    r"|\bgit\b[^;&|\n]*\s(?:init|clone)\b"
-)
-_DEVNULL = re.compile(r"\d?>&\d|&?\d?>>?\s*/dev/null")
 # issue 188: the moved bound agent rule; module runs, fd words and the cd start form.
 _INTERPRETER = re.compile(r"python[\d.]*|perl|ruby|node|nodejs|deno|bun|php")
-_CD_TARGET = re.compile(r"(?:^|[;&|(\s])(?:cd|pushd)\s+([^\s;&|)]+)")
-_DAEDALUS_WORD = re.compile(r"(?<![\w.-])daedalus(?![\w-])")
-_GIT_INDEX_WRITE = re.compile(r"\bgit\b[^;&|]*\b(?:add|stage|commit|update-index)\b")
+# 266: the git subcommands that write the index, which the data folder check judges.
+_INDEX_WRITES = frozenset({"add", "stage", "commit", "update-index"})
 
 
 @dataclass(frozen=True)
@@ -1547,48 +1536,89 @@ def _cd_relative_target(segment: list[str], cwd: str) -> str | None:
     return next((a for a in operands if not os.path.isabs(a)), None)
 
 
-def _data_dir_markers() -> list[str]:
-    markers = [f"~{_DATA_DIR_DEFAULT}", f"{_HOME}{_DATA_DIR_DEFAULT}"]
-    markers += [f"$HOME{_DATA_DIR_DEFAULT}", f"${{HOME}}{_DATA_DIR_DEFAULT}"]
-    markers += ["$CLAUDE_PLUGIN_DATA", "${CLAUDE_PLUGIN_DATA}", _PROJECT_DATA]
-    env = os.environ.get("CLAUDE_PLUGIN_DATA")
-    if env:
-        markers.append(os.path.normpath(env))
-    return markers
+def _data_dir_target(path: str, cwd: str) -> bool:
+    # 0010, 266: a typed path under a data folder, by its spelled name or through a link.
+    norm = os.path.normpath(path)
+    default = f"{_HOME}{_DATA_DIR_DEFAULT}"
+    return any(_data_dir_path(p, cwd) or _under(p, default) for p in (norm, os.path.realpath(norm)))
 
 
-def _normalize_paths(command: str) -> str:
-    # 0010: `.claude//daedalus` and `./.claude/./daedalus` must match the marker too.
-    text = re.sub(r"/{2,}", "/", command)
-    prev = None
-    while prev != text:
-        prev, text = text, re.sub(r"(^|[\s/'\"=])\./", r"\1", text)
-    return text
+def _data_dir_reach(path: str | None, folder: str, cwd: str) -> bool:
+    # 266: a literal path under a data folder; a wildcard one whose fixed head could reach one.
+    if path is None:
+        return True  # 266: a part the hook cannot resolve fails closed.
+    full = os.path.normpath(_abs(path, folder))
+    cut = min((full.index(c) for c in _GLOB_CHARS if c in full), default=-1)
+    if cut < 0:
+        return _data_dir_target(full, cwd)
+    head = full[:cut]
+    dirs = [str(project_data_dir(d)) for d in (folder, cwd) if os.path.isabs(d)]
+    dirs += [f"{_HOME}{_DATA_DIR_DEFAULT}", os.environ.get("CLAUDE_PLUGIN_DATA") or ""]
+    dirs = [os.path.normpath(d) for d in dirs if os.path.isabs(d)]
+    named = _names_project_data(head.rsplit(os.sep, 1)[0])
+    return named or any(d.startswith(head) or head.startswith(d + os.sep) for d in dirs)
 
 
-def _cd_into_claude(command: str) -> bool:
-    for target in _CD_TARGET.findall(command):
-        norm = os.path.normpath(target.strip("'\""))
-        # 0010: cd into the data dir itself (or below it) needs no further daedalus mention.
-        if _names_project_data(norm):
-            return True
-        if os.path.basename(norm) == ".claude" and _DAEDALUS_WORD.search(command):
-            return True
-    return False
+def _git_dir_values(done: AdmittedCommand) -> list[str]:
+    # 266: a --git-dir or --work-tree value, joined, or the typed read right after the option.
+    items = sorted([*done.options, *done.reads, *done.texts, *done.pathspecs], key=lambda t: t.span)
+    out: list[str] = []
+    for at, item in enumerate(items):
+        key, eq, value = item.text.partition("=")
+        if item not in done.options or key not in {"--git-dir", "--work-tree"}:
+            continue
+        later = items[at + 1] if at + 1 < len(items) else None
+        out += [value] if eq else [later.text] if later in done.reads else []
+    return out
 
 
-def _cd_data_dir_git(command: str) -> bool:
-    return _cd_into_claude(command) and bool(_GIT_INDEX_WRITE.search(command))
+def _index_reason(done: AdmittedCommand, here: str, cwd: str) -> str | None:
+    # 0010, 266: an index write from a folder the command moved to (cd, -C, --git-dir or
+    # --work-tree) that sits in a data folder, or names a pathspec under one from there.
+    git_cwd = _abs(done.git_dir.text, here) if done.git_dir is not None else here
+    moved = [_abs(v, here) for v in _git_dir_values(done)]
+    moved += [git_cwd] if git_cwd != cwd else []
+    if not moved:
+        return None
+    if any(_data_dir_target(folder, cwd) for folder in moved):
+        return R_DATA_DIR_GIT
+    reach = any(_data_dir_reach(p.text, git_cwd, cwd) for p in done.pathspecs)
+    return R_DATA_DIR_GIT if reach else None
 
 
-def _data_dir_write(command: str) -> bool:
-    normalized = _normalize_paths(command)
-    named = any(marker in normalized for marker in _data_dir_markers())
-    if not (named or _cd_into_claude(normalized)):
-        return False
-    # I4: quoted spans collapse first so a jq filter's `>` reads as data, not a redirect.
-    unquoted = _quote_spans(normalized.replace("$'", "'").replace('$"', '"'))
-    return bool(_DATA_DIR_WRITE.search(_DEVNULL.sub(" ", unquoted)))
+def _data_dir_bash(command: str, cwd: str, agent: str) -> str | None:
+    # 0010, 266: each command the role admits, by its typed writes, link sources and git
+    # folders; a refused one is judged by its standing folder alone (0224), its text unread.
+    script, got = _admission(command, agent, cwd)
+    if not _passed(got):
+        return R_DATA_DIR if _data_dir_target(cwd, cwd) else None
+    redirects = {n.target.span for n in shparse.nodes(script) if isinstance(n, Redirect)}
+    words = {n.span: n for n in shparse.nodes(script) if isinstance(n, Word)}
+    env = {"HOME": _HOME}
+    base, index = cwd, None
+    for done in got.commands:
+        if done.family == "cd" and done.cd_target is not None:
+            base = _abs(done.cd_target.text, base)
+            continue
+        here = _abs(done.cd_target.text, base) if done.cd_target is not None else base
+        for write in done.writes:
+            folders = (cwd, base) if write.span in redirects else (cwd, base, here)
+            if any(
+                _data_dir_reach(_typed_path(write, words, command, env), f, cwd) for f in folders
+            ):
+                return R_DATA_DIR
+        # 266: a link's source; a later write through the link lands in the data folder.
+        links = [_abs(w.text, here) for w in done.writes] if done.family == "ln" else []
+        sources = done.reads if done.family == "ln" else ()
+        for source in sources:
+            path = _typed_path(source, words, command, env)
+            folders = (here, *links, *(os.path.dirname(link) for link in links))
+            if any(_data_dir_reach(path, f, cwd) for f in folders):
+                return R_DATA_DIR
+        sub = done.subcommand.text if done.subcommand is not None else ""
+        if index is None and done.family == "git" and sub in _INDEX_WRITES:
+            index = _index_reason(done, here, cwd)
+    return index
 
 
 def _data_dir_path(path: str, cwd: str) -> bool:
@@ -2813,7 +2843,7 @@ def _unknown_decision(
     if tool in WRITE_TOOLS and _data_dir_path(_abs(raw_path, cwd), cwd):
         return _block(R_DATA_DIR)
     command = str(tool_input.get("command") or "") if tool == "Bash" else ""
-    if command and (_data_dir_write(command) or _cd_data_dir_git(command)):
+    if command and _data_dir_bash(command, cwd, "foreign"):
         return _block(R_DATA_DIR)
     repo = _marked_repo(cwd, tool, tool_input)
     # 0224: judged by its own repo; a command's text never scopes the call.
@@ -2883,18 +2913,16 @@ def _with_agent(decision: Decision, agent: str) -> Decision:
     return Decision(decision.allow, decision.reason, agent, decision.warn)
 
 
-def integrity_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | None:
+def integrity_reason(tool: str, tool_input: dict[str, object], cwd: str, agent: str) -> str | None:
     # 0053, issue 75: no absolute cwd, a write into .git or the data folder, Bash included.
+    # 266: a Bash call is judged on the typed record of the caller's own role.
     is_write = tool in WRITE_TOOLS
     if not (is_write or tool == "Bash"):
         return None
     if not os.path.isabs(cwd):
         return R_NO_CWD
     if not is_write:
-        command = str(tool_input.get("command") or "")
-        if _data_dir_write(command):
-            return R_DATA_DIR
-        return R_DATA_DIR_GIT if _cd_data_dir_git(command) else None
+        return _data_dir_bash(str(tool_input.get("command") or ""), cwd, agent)
     path = _abs(str(tool_input.get("file_path") or tool_input.get("notebook_path") or ""), cwd)
     if ".git" in path.split(os.sep) or ".git" in os.path.normpath(path).split(os.sep):
         return R_DOTGIT
@@ -2907,7 +2935,7 @@ def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision
     raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
     is_write = tool in WRITE_TOOLS
     path = _abs(raw_path, cwd)
-    integrity = integrity_reason(tool, tool_input, cwd)
+    integrity = integrity_reason(tool, tool_input, cwd, "main")
     if integrity == R_NO_CWD:
         return _main_warn(WARN_NO_CWD, R_NO_CWD)
     if integrity == R_DOTGIT:

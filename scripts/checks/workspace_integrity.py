@@ -20,7 +20,8 @@ PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
 def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | None:
     tool = hook_io.text(hook_input, "tool_name")
     cwd = hook_io.text(hook_input, "cwd")
-    return jail.integrity_reason(tool, hook_io.tool_input(hook_input), cwd)
+    agent = hook_io.agent(hook_input)
+    return jail.integrity_reason(tool, hook_io.tool_input(hook_input), cwd, agent)
 
 
 decide, main = hook_io.entrypoint(judge, TOOLS, PARSER)

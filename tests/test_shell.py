@@ -107,12 +107,6 @@ RE_SUBJECTS: dict[str, dict[str, str]] = {
         "_REMOTE_URL": "the output of git remote get-url",
         "_flags_ok": "an admitted git option against its grammar row pattern",
         "_gitleaks_ok": "an admitted gitleaks option",
-        "_CD_TARGET": "command text, the data folder check (gap: integrity_reason)",
-        "_DAEDALUS_WORD": "command text, the data folder check (gap: integrity_reason)",
-        "_DATA_DIR_WRITE": "command text, the data folder check (gap: integrity_reason)",
-        "_DEVNULL": "command text, the data folder check (gap: integrity_reason)",
-        "_GIT_INDEX_WRITE": "command text, the data folder check (gap: integrity_reason)",
-        "_normalize_paths": "command text, the data folder check (gap: integrity_reason)",
     },
     "lib/shell.py": {
         "DURATION": "a timeout duration word",
