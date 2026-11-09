@@ -1534,21 +1534,6 @@ def _backup_suffix(name: str, args: list[str]) -> str | None:
     return None
 
 
-def _coder_write_targets(segment: list[str], cwd: str) -> list[str]:
-    # 0054: file operands of a write command, and git restore or checkout pathspecs.
-    name = _base(segment[0])
-    args = segment[1:]
-    if name == "git":
-        sub, git_args, globals_ = _git_split(segment)
-        if sub not in {"restore", "checkout"} or git_args[:1] != ["--"]:
-            return []
-        base = _git_dir(globals_, cwd)
-        return [_abs(a, base) for a in git_args[1:]]
-    if name not in CODER_WRITE_CMDS and not (name in {"sed", "perl"} and _in_place(name, args)):
-        return []
-    return [_abs(a, cwd) for a in _write_operands(name, args) if a != "-"]
-
-
 def _cd_relative_target(segment: list[str], cwd: str) -> str | None:
     # 0022: after cd, relative operands resolve against the hook cwd, not the shell's.
     name = _base(segment[0])
@@ -2163,7 +2148,7 @@ def _bash_credential_reason(
         return None
 
     # 0192: the .env files beside every folder the command starts in or moves to.
-    env_files = tuple(env_roots(*bases))
+    env_files = tuple(env_roots(*dict.fromkeys([cwd, *bases])))
     # spec 8: spelled-out paths first, so the message names the path the command wrote.
     for cand in absolute:
         reason = hit(os.path.normpath(cand))
@@ -2415,14 +2400,15 @@ def refusal_constant(script: Script, refused: Refusal, cwd: str) -> str | None:
     if head is None:
         return shell.R_VARIABLE if cmd.words else shell.R_ENV
     family = shell.command_family(head)
-    if family == "claude" or shell.runs_claude([head], _parse_base(script, cwd)):
+    # issue 55, 228 tail: the head, or the word refused after a wrapper, runs the claude binary.
+    words = [head] + ([word.literal] if word is not None and word.literal else [])
+    if family == "claude" or any(shell.runs_claude([w], _parse_base(script, cwd)) for w in words):
         return shell.R_CLAUDE_PATH
     if family == shell.CONFINE:
         return shell.R_CONFINE_FORM
     if "/" in head and os.path.dirname(head) not in shell._TRUSTED_BIN:
         return shell.R_UNTRUSTED_PATH
-    named = next((c for names, c in _CODER_CONSTANTS if family in names), None)
-    return named or (R_CODER_GIT if family == "git" else R_CODER_TABLE)
+    return next((c for names, c in _CODER_CONSTANTS if family in names), None)
 
 
 def lead_cd(got: Admitted) -> tuple[AdmittedCommand | None, tuple[AdmittedCommand, ...]]:
@@ -2497,6 +2483,25 @@ def _admitted_targets(script: Script, got: Admitted, cwd: str) -> list[str]:
             opts = [o.text for o in cmd.options if o.text.startswith(_GIT_DIR_OPTS)]
             found += [_anchor(o.split("=", 1)[1], here) for o in opts]
     return [t for t in dict.fromkeys(found) if t]
+
+
+def admitted_writes(script: Script, got: Admitted, cwd: str) -> list[str]:
+    # 0054, 228 tail: typed write paths and git restore or checkout pathspecs; a redirect opens
+    # in the shell's folder, an operand in the command's own.
+    redirects = {n.target.span for n in shparse.nodes(script) if isinstance(n, Redirect)}
+    base = cwd
+    out: list[str] = []
+    for done in got.commands:
+        if done.family == "cd" and done.cd_target is not None:
+            base = _abs(done.cd_target.text, base)
+            continue
+        here = _abs(done.cd_target.text, base) if done.cd_target is not None else base
+        out += [_abs(w.text, base if w.span in redirects else here) for w in done.writes]
+        sub = done.subcommand.text if done.subcommand is not None else ""
+        if done.family == "git" and sub in {"restore", "checkout"}:
+            folder = done.git_dir.text if done.git_dir is not None else here
+            out += [_abs(p.text, folder) for p in done.pathspecs]
+    return [os.path.normpath(p) for p in dict.fromkeys(out)]
 
 
 def _write_dirs(tool: str, tool_input: dict[str, object], cwd: str) -> list[str]:

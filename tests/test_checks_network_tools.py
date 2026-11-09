@@ -87,8 +87,15 @@ def test_claude_by_real_path_is_refused(fake_claude: Path, tmp_path: Path, agent
         f"node {link}",
     ):
         got = evaluate(HOOK, _b(agent, command))
+        if agent != "coder" and command.startswith("node "):
+            # 228 tail: node off a test-runner form is refused before its script is read; the
+            # agent's chain refuses it at the node word.
+            assert got is None and not decide(_b(agent, command), CFG).allow, (agent, got)
+            continue
         if agent != "coder":
-            assert got == shell.R_CLAUDE_PATH, (agent, command)
+            # 228 tail: a command no grammar admits is named by its refusal at the word.
+            claude = got == shell.R_CLAUDE_PATH or _coder_refused(got, shell.R_CLAUDE_PATH)
+            assert claude, (agent, command, got)
             continue
         # 228 S3b: the coder grammar refuses a wrapper or node by name before what it runs.
         assert _coder_refused(got, shell.R_CLAUDE_PATH, shell.R_INLINE), (command, got)
@@ -110,7 +117,7 @@ def test_network_tools_judges_the_hook_alone() -> None:
     assert _coder_refused(evaluate(HOOK, _b("coder", "curl x")), jail.R_NETWORK)
     assert _coder_refused(evaluate(HOOK, _b("coder", "gh pr list")), jail.R_NETWORK)
     assert evaluate(HOOK, _b("coder", "gh pr list"), "--gh") is None
-    assert evaluate(HOOK, _b("coder", "curl x"), "--gh") == jail.R_NETWORK
+    assert _coder_refused(evaluate(HOOK, _b("coder", "curl x"), "--gh"), jail.R_NETWORK)
     # spec 8: rg, grep and jq arguments and commit messages are exempt words.
     assert evaluate(HOOK, _b("coder", "rg curl src")) is None
     assert evaluate(HOOK, _b("coder", "git commit -m 'fix curl'")) is None

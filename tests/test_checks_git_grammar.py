@@ -304,23 +304,31 @@ def test_coder_plain_git_status_in_unit_worktree_allowed() -> None:
     assert decide(_b("coder", f"git -C {WT} status"), CFG).allow
 
 
+def _named(got: str | None, constant: str) -> bool:
+    # 228 tail: an admitted record's constant, or a refusal under it naming its span.
+    return got == constant or str(got).startswith(f"{constant} Refused: ")
+
+
 def test_git_grammar_judges_the_hook_alone() -> None:
     coder = ("--allow", "coder")
-    assert evaluate(HOOK, _b("coder", "git merge x"), *coder) == jail.R_CODER_GIT
+    assert _named(evaluate(HOOK, _b("coder", "git merge x"), *coder), jail.R_CODER_GIT)
     assert evaluate(HOOK, _b("coder", "git status && ls -la"), *coder) is None
-    assert evaluate(HOOK, _b("charter-docs", "git add -A"), "--allow", "docs") == jail.R_DOCS_BASH
+    got = evaluate(HOOK, _b("charter-docs", "git add -A"), "--allow", "docs")
+    assert _named(got, jail.R_DOCS_BASH)
     conductor = ("--allow", "conductor")
     assert evaluate(HOOK, _b("releaser", "git push origin x"), *conductor) is None
-    assert evaluate(HOOK, _b("x", "git fetch"), *conductor) == jail.R_CONDUCTOR_BASH
-    assert evaluate(HOOK, _b("x", "git add x"), "--allow", "read-only") == jail.R_AUDITOR_BASH
-    assert evaluate(HOOK, _b("x", "git branch"), "--allow", "specialist") == jail.R_SPECIALIST_BASH
+    assert _named(evaluate(HOOK, _b("x", "git fetch"), *conductor), jail.R_CONDUCTOR_BASH)
+    got = evaluate(HOOK, _b("x", "git add x"), "--allow", "read-only")
+    assert _named(got, jail.R_AUDITOR_BASH)
+    got = evaluate(HOOK, _b("x", "git branch"), "--allow", "specialist")
+    assert _named(got, jail.R_SPECIALIST_BASH)
     assert evaluate(HOOK, _b("x", "git status")) is not None
 
 
 def test_git_grammar_fixture_decisions() -> None:
     merge = payload("Bash", command="git merge x")
-    want = {"decision": "deny", "reason": jail.R_CODER_GIT}
-    assert run_script(HOOK, merge, "--allow", "coder") == want
+    got = run_script(HOOK, merge, "--allow", "coder")
+    assert got["decision"] == "deny" and _named(got["reason"], jail.R_CODER_GIT)
     status = payload("Bash", command="git status")
     assert run_script(HOOK, status, "--allow", "coder") == {"decision": "allow", "reason": ""}
     bad = run_script(HOOK, status, "--allow", "everything")
@@ -502,8 +510,11 @@ CONDUCTOR = ("--allow", "conductor")
 
 @pytest.mark.parametrize("command", CONDUCTOR_COMMIT_ALL)
 def test_conductor_commit_refuses_every_all_files_spelling(command: str) -> None:
-    # issue 2: the hook names staging by path; the whole chain refuses too.
-    assert evaluate(HOOK, _b(C, command), *CONDUCTOR) == jail.R_CONDUCTOR_COMMIT_ALL, command
+    # issue 2: the hook names staging by path; the whole chain refuses too. 228 tail: a form no
+    # grammar admits is refused under the conductor's text, naming the option off its row.
+    got = evaluate(HOOK, _b(C, command), *CONDUCTOR)
+    named = got == jail.R_CONDUCTOR_COMMIT_ALL or _named(got, jail.R_CONDUCTOR_BASH)
+    assert named, (command, got)
     assert not decide(_b(C, command), CFG).allow, command
 
 
@@ -524,7 +535,7 @@ def test_conductor_commit_admits_a_staged_commit(command: str) -> None:
     "command", ["git commit --amend -m x", "git commit -m x -S", "git commit --message=x"]
 )
 def test_conductor_commit_other_forms_keep_the_grammar_text(command: str) -> None:
-    assert evaluate(HOOK, _b(C, command), *CONDUCTOR) == jail.R_CONDUCTOR_BASH, command
+    assert _named(evaluate(HOOK, _b(C, command), *CONDUCTOR), jail.R_CONDUCTOR_BASH), command
 
 
 @pytest.mark.parametrize(

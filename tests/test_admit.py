@@ -256,6 +256,15 @@ def test_only_the_switched_consumers_import_admit() -> None:
         REPO_ROOT / "tests" / "test_coder_admission.py",
         # 228 S4: the gh policy reads the Admitted record's typed gh calls.
         REPO_ROOT / "scripts" / "lib" / "gh_policy.py",
+        # 228 tail: the last chain-parser readers, and the tests of their typed records.
+        REPO_ROOT / "scripts" / "checks" / "git_push.py",
+        REPO_ROOT / "scripts" / "checks" / "git_grammar.py",
+        REPO_ROOT / "scripts" / "checks" / "root_writes.py",
+        REPO_ROOT / "scripts" / "checks" / "doc_outputs.py",
+        REPO_ROOT / "scripts" / "checks" / "gh_classes.py",
+        REPO_ROOT / "tests" / "test_checks_credential_paths.py",
+        REPO_ROOT / "tests" / "adversarial" / "corpus.py",
+        REPO_ROOT / "tests" / "adversarial" / "test_env_expansion.py",
     }
     users: list[str] = []
     for path in [*REPO_ROOT.glob("scripts/**/*.py"), *REPO_ROOT.glob("tests/**/*.py")]:

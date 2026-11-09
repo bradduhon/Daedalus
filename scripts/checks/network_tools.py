@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lib import hook_io, jail, shell  # noqa: E402
 from lib.admit import Admitted  # noqa: E402
+from lib.shparse import parse  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset({"Bash"} | jail.WEB_TOOLS)
 FLAGS: dict[str, hook_io.Flag] = {"--web": hook_io.Flag(), "--gh": hook_io.Flag()}
@@ -40,30 +41,33 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     # 0044: --gh is the conductor's flag; the coder's agent file never sets it.
     if hook_io.agent(hook_input) == CODER and not gh:
         return _coder_reason(hook_input)
-    chain = shell.worker_parse(hook_io.text(hook_io.tool_input(hook_input), "command"))
-    if chain is None:
-        return shell.R_UNSUPPORTED
-    cwd = hook_io.text(hook_input, "cwd")
-    bases = shell.chain_bases(chain, cwd, jail.DIR_CHANGE_CMDS) or [cwd] * len(chain.segments)
     banned = jail.NETWORK_TOOLS - {"gh"} if gh else jail.NETWORK_TOOLS
+    return _worker_reason(hook_input, banned)
 
-    for segment, base in zip(chain.segments, bases, strict=True):
-        if not segment:
-            continue
-        exempt = shell._exempt_indices(segment)
-        words = {shell._base(t) for i, t in enumerate(segment) if i not in exempt}
-        if banned & words:
+
+def _worker_reason(hook_input: dict[str, object], banned: frozenset[str]) -> str | None:
+    # 228 tail: the admission the agent's chain judged; a refused command by its typed family.
+    got = jail.held_admission(hook_input)
+    command = hook_io.text(hook_io.tool_input(hook_input), "command")
+    cwd = hook_io.text(hook_input, "cwd")
+    script = parse(command)
+    if not isinstance(got, Admitted):
+        if got.family in banned:
+            return jail.refusal_text(got, jail.R_NETWORK)
+        # issue 55: a refused command word that runs the claude binary by link or path.
+        claude = jail.refusal_constant(script, got, cwd) == shell.R_CLAUDE_PATH
+        return jail.refusal_text(got, shell.R_CLAUDE_PATH) if claude else None
+    base = jail.admitted_base(script, got, cwd)
+    for done in jail.lead_cd(got)[1]:
+        if {done.family, *(shell.command_family(w.text) for w in done.wrappers)} & banned:
             return jail.R_NETWORK
-        judged = [t for i, t in enumerate(segment) if i not in exempt]
+        tokens = jail.admitted_tokens(script, done)
         # 0196: the frozen form was the coder's alone; every other agent's install refuses.
-        install = jail.install_reason(judged, frozenset)
-        if install:
-            return install
-        download = jail.download_reason(judged)
-        if download:
-            return download
+        reason = jail.install_reason(tokens, frozenset) or jail.download_reason(tokens)
+        if reason:
+            return reason
         # issue 55: a link or versioned path to the claude binary, by its real file.
-        if shell.runs_claude(segment, base):
+        if jail.claude_word(done, base):
             return shell.R_CLAUDE_PATH
     return None
 

@@ -113,6 +113,8 @@ class Refusal:
     sha256: str
     # 228 S4: the family of the command under judgment when it refused; "" before its word.
     family: str = ""
+    # 228 tail: a refused git command's literal subcommand; "" before it is read.
+    subcommand: str = ""
 
 
 @dataclass(frozen=True)
@@ -283,7 +285,7 @@ def admit_role(script: Script, role: Role, cwd: str, *, text: str) -> Admitted |
     except _Off as off:
         start, end = off.span
         digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
-        return Refusal(off.span, text[start:end], off.reason, digest, judge.family)
+        return Refusal(off.span, text[start:end], off.reason, digest, judge.family, judge.sub)
 
 
 def _word_text(word: Word) -> Typed:
@@ -387,8 +389,9 @@ class _Judge:
         # 228 S3c, O6: a leading cd moves every later command only when each join is &&.
         self.joined = True
         self._declared: frozenset[tuple[str, ...]] | None = None
-        # 228 S4: the family of the command under judgment, carried onto a Refusal.
+        # 228 S4, tail: the family and git subcommand under judgment, carried onto a Refusal.
         self.family = ""
+        self.sub = ""
 
     # -- script and pipelines ----------------------------------------------------------------
     def script(self, script: Script) -> list[AdmittedCommand]:
@@ -463,7 +466,7 @@ class _Judge:
     # -- one simple command ------------------------------------------------------------------
     def command(self, cmd: Command, piped: bool) -> AdmittedCommand:
         c = _Cmd(cmd.span, piped)
-        self.family = ""
+        self.family = self.sub = ""
         for assign in cmd.assignments:
             self.assignment(assign, c)
         # 228 S3c: the coder's echo admits $? in an operand, the exit echo, and no other parameter.
@@ -1061,7 +1064,7 @@ class _Judge:
         i, kept, icase, config = self._git_globals(c, words)
         if i >= len(words) or words[i].literal is None:
             raise _Off(words[0].span, "git needs a literal subcommand")
-        sub = words[i].literal or ""
+        sub = self.sub = words[i].literal or ""
         c.subcommand = Typed(sub, words[i].span)
         args = words[i + 1 :]
         reads = sub in shell.READ_ONLY_GIT

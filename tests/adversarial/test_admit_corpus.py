@@ -145,8 +145,8 @@ def _builtin_commit(command: str, done: Admitted) -> bool:
 
 # 228 S2: refused rows admit admits by shape; the later check named reads the typed operand.
 LATER: dict[str, tuple[str, Callable[[str, Admitted], bool]]] = {
-    # 228 S4: S4_TYPED_PASS_225; git_grammar refuses the newline these rows carry.
-    "A3_RULE_ROWS": ("the 225 rows: git_grammar refuses the newline", _builtin_commit),
+    # 228 S4, tail: S4_TYPED_PASS_225, a friction fix; no reader refuses their newline now.
+    "A3_RULE_ROWS": ("the 225 rows: admitted, a newline is a separator", _builtin_commit),
     "FIX1_RG_GLOBS": ("the credential check reads the rg glob values", _rg_globs),
     "PREPUSH_IGNORE_SEARCHES": ("the credential check reads ignore files under the root", _rg_root),
     "PREPUSH_IGNORE_WRITES": ("the protected-path check reads the write path", _tee_path),

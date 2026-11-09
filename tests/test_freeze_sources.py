@@ -237,7 +237,9 @@ def test_doc_outputs_admits_only_the_output_folder(repo: Path) -> None:
     got = check.decide(_doc_input(repo, "Edit", file_path=outside), [])
     want = check.R_OUTSIDE.format(out=f"{repo}/private/package/", path=outside)
     assert got.reason == want
-    assert not check.decide(_doc_input(repo, "Bash", command=f"echo x > {outside}"), []).allow
+    # 228 tail: a typed write operand or redirect target; echo > x is no grammar's shape.
+    for command in (f"tee {outside}", f"cat a.md > {outside}"):
+        assert not check.decide(_doc_input(repo, "Bash", command=command), []).allow, command
 
 
 def test_doc_outputs_refuses_a_manifest_source(repo: Path) -> None:

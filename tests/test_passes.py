@@ -422,7 +422,10 @@ def test_corpus_row_an_allowlist_agent_is_admitted_exactly_once(marked_repo: Pat
     hook = _hook(marked_repo, command, agent_type="daedalus:orchestrator")
     assert first_deny(hook, CFG) is not None
     _grant(marked_repo, command, agent="orchestrator")
-    assert first_deny(hook, CFG) is None
+    # 228 tail: the pass admits the grammar's refusal once; the typed sort -o write still meets
+    # root_writes, which the old chain parser never read as a write.
+    after = first_deny(hook, CFG)
+    assert after is not None and after[0] == "root_writes", after
     denied = first_deny(hook, CFG)
     assert denied is not None and denied[0] == "command_allowlist", denied
     assert len(_consumed(marked_repo)) == 1
