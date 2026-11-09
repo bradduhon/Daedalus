@@ -80,6 +80,8 @@ In a new repository, the `config.json`, `service-manifest.json`, `contracts/` an
 
 If the features object of your `service-manifest.json` still has a `github` key, the doctor prints one `OPT` line saying the key does nothing.
 
+The `fable` line reads `OPT` until `fable_available` is `true` in `config.json` or a running train's audit log shows the session started on Fable. Until then the planner and the auditor run on their own model.
+
 If your project is a plain folder and not a git repository, Daedalus works in folder scope. Only a repository can be pushed, so the doctor marks the `git repository` line and the two gh lines `OPT`. When the secret scan is on, the gitleaks line reads `OPT` too.
 
 [docs/project-requirements.md](docs/project-requirements.md) lists every file Daedalus expects, says what each is for, and gives a small example of each.
@@ -658,6 +660,7 @@ Daedalus/
 │   ├── lib/controls.py              # loads the controls fragments
 │   ├── lib/credential_paths.py      # the credential-path deny every agent meets
 │   ├── lib/dispatch_binding.py      # coder dispatch, warm rebind and first-write claim
+│   ├── lib/fable.py                 # whether Fable is available: config first, then the session record
 │   ├── lib/fetch.py                 # GitHub-only download, size cap and cache lock for refreshes
 │   ├── lib/gh_policy.py             # the gh commands each agent may run
 │   ├── lib/hcl_reader.py            # the built-in Terraform reader finding tests import
