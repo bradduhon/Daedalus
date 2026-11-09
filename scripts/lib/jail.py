@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import fnmatch
 import glob as _glob
 import itertools
 import os
@@ -68,7 +69,7 @@ from lib.gh_policy import (
 from lib.ledger import LedgerError, resolve_ledger
 from lib.manifest import Manifest, ManifestError, extension_hit, path_hit
 from lib.manifest import load as load_manifest
-from lib.repo_root import git_root
+from lib.repo_root import checkout_git_dir, git_root
 from lib.shell import (
     _ASSIGN,
     _DEFAULT_BRANCHES,
@@ -2068,11 +2069,112 @@ def _typed_path(
     return out
 
 
+class _Spec(NamedTuple):
+    # 228 tail: a git pathspec or show <rev>:<path>, as the absolute path git matches it at.
+    path: str | None
+    raw: str
+    fold: bool
+    wild: bool
+    top: str
+
+
+_SPEC_SHORT = {"/": "top", "!": "exclude", "^": "exclude"}
+_SPEC_NOWILD = frozenset({"--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs"})
+_REV_PATH_SUBS = frozenset({"show", "cat-file"})
+
+
+def _pathspec_magic(text: str) -> tuple[set[str], str]:
+    # 228 tail: git's long :(a,b) and short :/ :! :^ magic, split from the path it applies to.
+    if text.startswith(":("):
+        close = text.find(")")
+        if close < 0:
+            return set(), text
+        return {w.split(":", 1)[0].strip() for w in text[2:close].split(",")}, text[close + 1 :]
+    if not text.startswith(":"):
+        return set(), text
+    i, magic = 1, set()
+    while i < len(text) and text[i] in _SPEC_SHORT:
+        magic.add(_SPEC_SHORT[text[i]])
+        i += 1
+    return magic, text[i + 1 :] if text[i : i + 1] == ":" else text[i:]
+
+
+def _git_specs(
+    script: Script,
+    done: AdmittedCommand,
+    words: dict[tuple[int, int], Word],
+    command: str,
+    env: dict[str, str],
+    here: str,
+) -> list[_Spec]:
+    # 228 tail: each typed pathspec, and a show or cat-file <rev>:<path>, under git's folder.
+    if done.family != "git":
+        return []
+    folder = here
+    if done.git_dir is not None:
+        folder = _abs(_typed_path(done.git_dir, words, command, env) or "", here)
+    found = checkout_git_dir(folder) if os.path.isabs(folder) else None
+    top = str(found[0]) if found else folder
+    toks = set(admitted_tokens(script, done))
+    out: list[_Spec] = []
+    for typed in done.pathspecs:
+        text = _typed_path(typed, words, command, env)
+        if text is None:
+            out.append(_Spec(None, typed.text, False, False, top))
+            continue
+        magic, rest = _pathspec_magic(text)
+        if "exclude" in magic:
+            continue
+        base = top if "top" in magic else folder
+        wild = not (magic & {"literal", "glob"} or toks & _SPEC_NOWILD)
+        fold = "icase" in magic or "--icase-pathspecs" in toks
+        out.append(_Spec(os.path.normpath(_abs(rest, base)), typed.text, fold, wild, top))
+    if (done.subcommand.text if done.subcommand else "") in _REV_PATH_SUBS:
+        for typed in done.texts:
+            rev, colon, path = typed.text.partition(":")
+            path = path[2:] if not rev and path[1:2] == ":" and path[:1] in "0123" else path
+            if colon and path and not typed.text.startswith("-"):
+                # 228 tail: a tree path is from the top, unless it opens with ./ or ../ (git show).
+                base = folder if path.startswith(("./", "../")) else top
+                out.append(_Spec(os.path.normpath(_abs(path, base)), typed.text, False, False, top))
+    return out
+
+
+_SPEC_WALK_CAP = 256
+
+
+def _store_names(real: str) -> list[str] | None:
+    # 228 tail: the store and every name below it; None past the cap, which reads as a match.
+    names = [real]
+    for folder, dirs, files in os.walk(real):
+        names += [os.path.join(folder, n) for n in (*dirs, *files)]
+        if len(names) > _SPEC_WALK_CAP:
+            return None
+    return names
+
+
+def _spec_reaches(spec: _Spec, stores: list[str]) -> str | None:
+    # 228 tail: git's * and ? cross /, and icase folds case; git matches nothing outside its tree.
+    assert spec.path is not None
+    fold = str.casefold if spec.fold else str
+    pat = fold(spec.path)
+    for store in stores:
+        real = os.path.realpath(store)
+        if not shell._under(real, spec.top):
+            continue
+        if pat == fold(real) or pat.startswith(fold(real).rstrip(os.sep) + os.sep):
+            return store
+        names = _store_names(real) if spec.wild else []
+        if names is None or any(fnmatch.fnmatchcase(fold(n), pat) for n in names):
+            return store
+    return None
+
+
 def _typed_view(
     script: Script, command: str, got: Admitted, cwd: str
-) -> tuple[list[_Typed], list[_Tree], list[str]]:
-    # 228 tail, spec 8: each admitted command's typed reads, writes, script, cd target and git
-    # folder; relative ones open in the shell's folder and in the command's own.
+) -> tuple[list[_Typed], list[_Tree], list[str], list[_Spec]]:
+    # 228 tail, spec 8: each admitted command's typed reads, writes, script, cd target, git
+    # folder and pathspecs; relative ones open in the shell's folder and in the command's own.
     names = _typed_names(got)
     env = {k: v[0] for k, v in _base_env().items() if k not in names or k == "HOME"}
     words = {n.span: n for n in shparse.nodes(script) if isinstance(n, Word)}
@@ -2081,6 +2183,7 @@ def _typed_view(
     views: list[_Typed] = []
     trees: list[_Tree] = []
     texts: list[str] = []
+    specs: list[_Spec] = []
     for done in got.commands:
         here = base
         if done.cd_target is not None:
@@ -2090,6 +2193,7 @@ def _typed_view(
         found = [t for t in typed if t is not None]
         paths = [_typed_path(t, words, command, env) for t in found]
         views.append(_Typed((base, here), paths, [t.text for t in found]))
+        specs += _git_specs(script, done, words, command, env, here)
         texts += [t.text for t in done.texts]
         # prepush2-2026-10-27: a search word bash rewrites may become a reach flag.
         search = done.family in shell.SEARCH_CMDS
@@ -2101,7 +2205,7 @@ def _typed_view(
             targets += [here] if tree[1] else []
             globs = _rg_globs(admitted_tokens(script, done)[1:]) if done.family == "rg" else []
             trees.append(_Tree(done.family, tree[0], [t for t in targets if t], globs))
-    return views, trees, texts
+    return views, trees, texts, specs
 
 
 def _bash_credential_reason(
@@ -2118,7 +2222,7 @@ def _bash_credential_reason(
     if not _passed(judged):
         inside = os.path.isabs(cwd) and _credential_hit(cwd, roots, False)
         return R_CREDENTIAL.format(path=cwd) if inside else None
-    views, trees, texts = _typed_view(script, command, judged, cwd)
+    views, trees, texts, specs = _typed_view(script, command, judged, cwd)
     names = _typed_names(judged)
     dotglob = "GLOBIGNORE" in names
     bases = [b for v in views for b in v.bases if os.path.isabs(b)]
@@ -2142,7 +2246,7 @@ def _bash_credential_reason(
         return None
 
     # 0192: the .env files beside every folder the command starts in or moves to.
-    env_files = tuple(env_roots(*dict.fromkeys([cwd, *bases])))
+    env_files = tuple(env_roots(*dict.fromkeys([cwd, *bases, *(s.top for s in specs)])))
     # spec 8: spelled-out paths first, so the message names the path the command wrote.
     for cand in absolute:
         reason = hit(os.path.normpath(cand))
@@ -2155,6 +2259,19 @@ def _bash_credential_reason(
             reason = hit(os.path.normpath(os.path.join(base, cand)))
             if reason:
                 return reason
+    # 228 tail: a git pathspec or <rev>:<path> names its store as a file operand does.
+    for spec in specs:
+        if spec.path is None:
+            return R_CREDENTIAL_PARAM.format(path=spec.raw)
+        reason = hit(spec.path)
+        if reason:
+            return reason
+        store = _spec_reaches(spec, [*keys, *roots, *env_files])
+        if store is None:
+            continue
+        if store in keys:
+            return R_REPLY_KEY.format(path=spec.raw)
+        return (R_CREDENTIAL if store in roots else R_ENV_FILE).format(path=spec.raw)
     return _tree_reason(trees, roots, keys, env_files, dotglob)
 
 

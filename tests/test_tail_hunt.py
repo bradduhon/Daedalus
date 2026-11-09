@@ -11,7 +11,7 @@ from lib import jail
 from lib.admit import Refusal
 
 from tests.conftest import CFG, CWD
-from tests.hook_chain import decide
+from tests.hook_chain import CHAINS, decide, first_deny
 from tests.payloads import _b
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
@@ -80,6 +80,89 @@ MAIN_HUNT = (
     ("claude by path", "/usr/bin/claude", "WARN_NESTED_CLAUDE"),
     ("claude in a body", "bash -c 'claude -p hi'", "WARN_COMMAND"),
 )
+
+
+# (form, what names it); the stores sit in {home}, the shell starts in the repo {home}/repo
+# holding a .env. "grammar": main's grammar refuses it; "credential": the typed check names it.
+PATHSPEC_HUNT = (
+    ("git add ~/.aws/credentials", "grammar"),
+    ("git add -- ~/.ssh/id_rsa", "grammar"),
+    ("git -C ~/.ssh add id_rsa", "grammar"),
+    ("git add ':(top)../.ssh/id_rsa'", "grammar"),
+    ("git diff --no-index /dev/null ~/.aws/credentials", "grammar"),
+    ("git show HEAD:.env", "credential"),
+    ("git add {home}/.aws/credentials", "credential"),
+    ("git add -- ../.ssh/id_rsa", "credential"),
+    ("git -C {home}/.ssh add id_rsa", "credential"),
+    ("git log -- {home}/.ssh/id_rsa", "credential"),
+    ("git diff -- ../.aws/credentials", "credential"),
+    ("git log -p -- .env", "credential"),
+    ("git grep KEY -- .env", "credential"),
+    ("git log -p -- '*.en?'", "credential"),
+    ("git log -- ':(icase).ENV'", "credential"),
+    ("git log -- ':(top).env'", "credential"),
+    ("git show :.env", "credential"),
+    ("git show HEAD:../.ssh/id_rsa", "credential"),
+)
+# 228 tail: pathspecs that name no store stay as they were; a folder pathspec is no tree read.
+PATHSPEC_KEPT = (
+    "git add .",
+    "git log -- src",
+    "git diff -- ':(exclude).env'",
+    "git log -- ':(literal)*.en?'",
+    "git show HEAD:src/a.py",
+    "git commit -m 'fix: .env loader'",
+)
+ROLES = sorted({key.split(" (")[0] for key in CHAINS})
+
+
+@pytest.fixture
+def spec_repo(cred_home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    repo = cred_home / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".env").write_text("KEY=1\n")
+    (cred_home / ".ssh").mkdir()
+    (cred_home / ".aws").mkdir()
+    monkeypatch.setattr(jail, "_train_scoped", lambda cwd, tool, tool_input: True)
+    return repo
+
+
+def _spec_payload(command: str, repo: Path, agent: str | None) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "cwd": str(repo),
+    }
+    return {**payload, "agent_type": agent} if agent else payload
+
+
+@pytest.mark.parametrize(("template", "named_by"), PATHSPEC_HUNT)
+def test_a_store_named_as_a_git_pathspec_is_warned_for_main_and_refused_for_agents(
+    spec_repo: Path, template: str, named_by: str
+) -> None:
+    # 228 tail: a grammar row is refused before the typed check; an admitted one is named by it.
+    command = _form(template, spec_repo.parent)
+    got = jail._admission(command, "main", str(spec_repo))[1]
+    reason = jail._credential_reason("Bash", {"command": command}, str(spec_repo))
+    assert isinstance(got, Refusal) == (named_by == "grammar"), (command, got)
+    assert (reason is not None) == (named_by == "credential"), (command, reason)
+    d = jail.decide(_spec_payload(command, spec_repo, None), CFG)
+    assert d.warn and not d.allow, (command, d.reason)
+    assert (reason or "Refused: ") in str(d.reason), (command, d.reason)
+    for role in ROLES:
+        deny = first_deny(_spec_payload(command, spec_repo, role), CFG)
+        assert deny is not None, (role, command)
+        assert (deny[0] == "credential_paths") == (named_by == "credential"), (role, command, deny)
+
+
+@pytest.mark.parametrize("command", PATHSPEC_KEPT)
+def test_a_pathspec_naming_no_store_is_not_a_credential_hit(spec_repo: Path, command: str) -> None:
+    assert jail._credential_reason("Bash", {"command": command}, str(spec_repo)) is None, command
+    d = jail.decide(_spec_payload(command, spec_repo, None), CFG)
+    assert d.allow and not d.warn, (command, d.reason)
+    for role in ROLES:
+        deny = first_deny(_spec_payload(command, spec_repo, role), CFG)
+        assert deny is None or deny[0] != "credential_paths", (role, command, deny)
 
 
 def _form(template: str, home: Path) -> str:
