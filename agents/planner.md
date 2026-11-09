@@ -4,6 +4,7 @@ description: Cuts a design spec into work units that coders can build in paralle
 tools: Read, Grep, Glob, Write
 disallowedTools: Edit, MultiEdit, NotebookEdit, Bash, WebFetch, WebSearch, Agent, Task, SendMessage
 model: opus
+prefer: fable
 shape: shaper
 phases: [clarification, plan]
 # 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).

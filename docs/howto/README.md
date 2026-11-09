@@ -53,6 +53,7 @@ Here is the output of a real run in a new repository with one empty commit, no `
     OPT  standing_rules: not declared. Next: set standing_rules in .claude/daedalus/config.json to the standing-rules file, so the planner reads it
     OPT  standards_sources: no standards file or pack is declared. Next: to adopt the shipped baseline pack, add {"kind": "pack", "name": "baseline"} to standards_sources in .claude/daedalus/config.json
     OK   policy: not declared (optional)
+    OPT  fable: not seen in this session, so auditor and planner run on opus. Next: set fable_available to true in .claude/daedalus/config.json when your plan offers Fable
     OK   train marker: none
     OK   cache dir: CLAUDE_PLUGIN_DATA=<cache>
     OK   plugin root: <plugin>
@@ -85,6 +86,7 @@ Some lines need a word of explanation:
 - In a new repository, the `config.json`, `service-manifest.json`, `contracts/` and `.gitleaks.toml` lines read `OPT` until you add those files. The `Next:` lines for the first two say to run `/daedalus:setup`, which writes a starter copy of each. `docs/project-requirements.md` has an example of every file.
 - The `standing_rules` line reads `OPT` until `config.json` names a standing-rules file, the rules every plan must satisfy, which the planner reads.
 - The `standards_sources` line reads `OPT` until you declare a standards source. Its `Next:` offers the baseline pack that ships with Daedalus. Taking it is your choice.
+- The `fable` line says which model the planner and the auditor run on: Fable when `fable_available` is `true` in `config.json` or a running train's audit log shows this session started on Fable, and their own model otherwise.
 - `train marker: none` means no train is running in this repository.
 - `priorities: none declared` means the manifest has no `priorities` block. With one, the line prints the ranking and the number of rules.
 - The `kernel rules` line says whether this kernel can hold the kernel wrapper's rules, which keep a coder's test command inside its worktree and off the network. On a kernel that cannot, the line is a `MISS` that names the cause and gives a `Next:` step, and the doctor fails. Coder test commands are refused on that kernel, wrapped or bare.

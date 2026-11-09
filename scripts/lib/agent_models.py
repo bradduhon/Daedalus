@@ -1,13 +1,14 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # spec 4: the one place the model order lives: the override, then config agent_models, then
-# the agent file's model line. Config is a type only here, since lib.config imports MODELS.
+# the agent file's prefer line when Fable is available (0217), then its model line.
+# Config is a type only here, since lib.config imports MODELS.
 from __future__ import annotations
 
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from lib import agent_files
+from lib import agent_files, fable
 from lib.agent_aliases import current as current_name
 
 if TYPE_CHECKING:
@@ -22,7 +23,12 @@ class AgentModelError(ValueError):
 
 
 def resolve(
-    name: str, config: Config, override: str | None = None, *, agents_dir: Path = AGENTS_DIR
+    name: str,
+    config: Config,
+    override: str | None = None,
+    *,
+    agents_dir: Path = AGENTS_DIR,
+    repo: Path | None = None,
 ) -> str:
     name = current_name(name)  # 0190: an old agent name reads as its new name for one release.
     path = agents_dir / f"{name}.md"
@@ -41,4 +47,12 @@ def resolve(
     configured = config.agent_models.get(name)
     if configured is not None:
         return configured
-    return agent_files.frontmatter(path)["model"]
+    fields = agent_files.frontmatter(path)
+    try:
+        prefer = agent_files.preference(path, fields.get("prefer"))
+    except agent_files.AgentFileError as exc:
+        raise AgentModelError(str(exc)) from exc
+    # 0217: a preferred model only when Fable is available; else the file's model line.
+    if prefer is not None and fable.available(config, repo):
+        return prefer
+    return fields["model"]

@@ -37,6 +37,8 @@ _OPEN_TOKEN = re.compile(r"^[A-Za-z0-9._~+/=-]{16,}")
 LOCK_TIMEOUT_S = 5.0
 # W1.1: the one session id pattern; audit_report and the skipped-round record import it.
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]+")
+# 0217: the model id forms a SessionStart record keeps, such as claude-fable-5 or a [1m] suffix.
+MODEL_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}(?:\[[a-z0-9]{1,8}\])?")
 
 
 class AuditCorruptError(RuntimeError):
@@ -376,6 +378,10 @@ def build_record(
         # pin D3 -> D1: stop records only; a hand-back stop has no reply, so the list is empty.
         lines = _verdict_lines(last) if isinstance(last, str) else []
         record.update(verdict_lines=lines, verdict_line_count=len(lines))
+    if event == "SessionStart":
+        # 0217: the hook input's model id when it has model-id form; null when absent or not.
+        model = hook_input.get("model")
+        record["model"] = model if isinstance(model, str) and MODEL_ID.fullmatch(model) else None
     return record
 
 

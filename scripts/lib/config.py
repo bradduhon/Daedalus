@@ -92,6 +92,8 @@ class Config:
     unit_token_budget: int | None = None
     # 0187: the coder's model per tier, passed per dispatch; agent_models stays the fallback.
     coder_models: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CODER_MODELS))
+    # 0217: true or false settles Fable for the preferring agents; None leaves it to the session.
+    fable_available: bool | None = None
     agent_models: dict[str, str] = field(default_factory=dict)
 
 
@@ -199,6 +201,18 @@ def _agent_models(raw: dict[str, object]) -> dict[str, str]:
             )
         out[new] = str(model)
     return out
+
+
+def _fable_available(raw: dict[str, object]) -> bool | None:
+    # 0217: only the two JSON booleans or null; a string or a number is refused by name.
+    value = raw.get("fable_available")
+    if value is None or isinstance(value, bool):
+        return value
+    raise ConfigError(
+        f"config.json fable_available must be true, false or null (got {value!r}). "
+        "Next: set fable_available to true when your plan offers Fable, to false to keep "
+        "the planner and the auditor on their default model, or remove it."
+    )
 
 
 def _expand_root(entry: str) -> str:
@@ -520,5 +534,6 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
         wrapper_read_roots=_wrapper_read_roots(raw, target.parent.parent),
         unit_token_budget=_unit_budget(raw),
         coder_models=_coder_models(raw),
+        fable_available=_fable_available(raw),
         agent_models=_agent_models(raw),
     )

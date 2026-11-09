@@ -610,6 +610,10 @@ def test_dispatch_sites_resolve_models_through_the_model_subcommand() -> None:
     assert model.format(root=plugin, agent="planner") in step5
     assert "adding `--override <override>`" in step5 and "`model: <that word>`" in step5
     assert "`--model <value>`" in plan.split("\n1. ", 1)[1].split("\n2. ", 1)[0]
+    # 0217: the main-session audit asks for the auditor's model before its dispatch.
+    audit = _phase_step("audit", 5)
+    assert model.format(root="<plugin root>", agent="auditor") in audit
+    assert audit.index("--agent auditor") < audit.index("Dispatch `auditor` with `model:")
 
 
 def test_catalog_names_the_rebind_rule_and_the_verifier_step() -> None:
@@ -1035,7 +1039,8 @@ def test_build_train_audits_from_the_integration_branch() -> None:
     # spec 8: audit after finish; the auditor judges the merged tip against the train's base.
     text = _recipe()
     step3 = _phase_step("audit", 5)
-    dispatch = step3.split("Dispatch `auditor` with:", 1)[1].split("\n", 1)[0]
+    dispatch = step3.split("Dispatch `auditor` with `model: <that word>` and:", 1)[1]
+    dispatch = dispatch.split("\n", 1)[0]
     assert dispatch.startswith(" the diff base `<base sha>`, the recorded base sha")
     assert "the one branch `daedalus/<train-id>`" in dispatch
     assert "the merged integration tip the release phase pushes" in dispatch

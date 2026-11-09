@@ -241,6 +241,7 @@ def test_absent_scaffolds_are_opt_and_pass(tmp_path: Path) -> None:
         "config.json",
         "standing_rules",
         "standards_sources",
+        "fable",
         "service-manifest.json",
         "contracts/",
         ".gitleaks.toml",

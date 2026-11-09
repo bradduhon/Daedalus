@@ -35,7 +35,7 @@ def job(description: str) -> str:
     return f"{head}." if sep else description
 
 
-def table(agents_dir: Path, config: Config | None = None) -> str:
+def table(agents_dir: Path, config: Config | None = None, repo: Path | None = None) -> str:
     # spec 4, pin C2 -> C1: with a config the Model cell is the effective model, else the file's.
     rows = [
         "| Agent | Shape | Model | Tools | Job | Reply lines | Phases |",
@@ -44,7 +44,11 @@ def table(agents_dir: Path, config: Config | None = None) -> str:
     for name, agent in sorted(agent_files.load_all(agents_dir).items()):
         model = agent.model
         if config is not None:
-            model = agent_models.resolve(name, config, agents_dir=agents_dir)
+            model = agent_models.resolve(name, config, agents_dir=agents_dir, repo=repo)
+        pinned = config is not None and name in config.agent_models
+        if agent.prefer is not None and model != agent.prefer and not pinned:
+            # 0217: a preference the resolve did not take shows beside the model.
+            model = f"{model}, prefers {agent.prefer}"
         cells = (
             name,
             agent.shape,
@@ -59,8 +63,9 @@ def table(agents_dir: Path, config: Config | None = None) -> str:
 
 
 def _table(args: argparse.Namespace) -> str:
-    config = load_config(cwd=str(args.repo.resolve())) if args.repo is not None else None
-    return table(args.agents_dir, config)
+    repo = args.repo.resolve() if args.repo is not None else None
+    config = load_config(cwd=str(repo)) if repo is not None else None
+    return table(args.agents_dir, config, repo)
 
 
 COMMANDS: dict[str, Callable[[argparse.Namespace], str]] = {
