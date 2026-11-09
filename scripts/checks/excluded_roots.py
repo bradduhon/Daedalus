@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 0136, D.5: no git staging, commit, update-index or stash, gh or redirect names an excluded root.
+# 0136, D.5, 228 S4: no git call that is no read, gh value or typed write names an excluded root.
 # lib.router runs this for every routed agent after its own hooks; main meets it in lib.jail.
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from lib import hook_io, jail, writer_mode  # noqa: E402
 TOOLS: frozenset[str] = frozenset({"Bash"})
 FLAGS: dict[str, hook_io.Flag] = {}
 PARSER = hook_io.build_parser(Path(__file__).stem, FLAGS)
-# D.5, 0190: the comparer and a derived writer write outputs under a root; their redirects pass.
+# D.5, 0190: the comparer and a derived writer write outputs under a root; their writes pass.
 REDIRECT_WRITERS = frozenset({"comparer"})
 
 
@@ -31,10 +31,10 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     cwd = hook_io.text(hook_input, "cwd")
     if not os.path.isabs(cwd):
         return jail.R_NO_CWD
-    command = hook_io.text(hook_io.tool_input(hook_input), "command")
     roots = jail.excluded_roots_for(cwd, lambda: hook_io.hook_config(cwd))
     writes = not _redirects_pass(hook_input)
-    return jail.excluded_root_reason(command, cwd, roots, writes)
+    # 228 S4: the admission the agent's chain judged, read as its typed record.
+    return jail.excluded_root_reason(jail.held_admission(hook_input), cwd, roots, writes)
 
 
 decide, main = hook_io.entrypoint(judge, TOOLS, PARSER)

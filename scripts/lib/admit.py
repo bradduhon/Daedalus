@@ -305,6 +305,20 @@ def _expands(word: Word) -> bool:
     return any(isinstance(p, Glob | Tilde) for p in word.parts)
 
 
+def _built_option(word: Word) -> bool:
+    # 257: a word led by a literal - holding a parameter, or an expansion before its first =,
+    # is an option the shell builds; a glob in a literal option's attached value is no name.
+    lead = word.parts[0] if word.parts else None
+    if word.literal is not None or not (isinstance(lead, Literal) and lead.text.startswith("-")):
+        return False
+    named = ""
+    for part in word.parts:
+        if isinstance(part, Param) or (not isinstance(part, Literal) and "=" not in named):
+            return True
+        named += part.text if isinstance(part, Literal) else ""
+    return False
+
+
 def _status(part: Param) -> bool:
     # 228 S3c: the exit status spelled $?, two characters; ${?} and every other name refuse.
     return part.name == "?" and part.span[1] - part.span[0] == 2
@@ -881,6 +895,10 @@ class _Judge:
         while i < len(words):
             word = words[i]
             text = word.literal
+            if _built_option(word):
+                self.opaque_option(c, word)
+                i += 1
+                continue
             if text is None or text == "-" or not text.startswith("-"):
                 if stop:
                     return met, operands + words[i:]
@@ -931,6 +949,12 @@ class _Judge:
                 return self._values(c, key, letter, words, i, rest if rest else None) + 1
             raise _Off(span, f"the option {letter} is not on the {key} row")
         return i + 1
+
+    def opaque_option(self, c: _Cmd, word: Word) -> None:
+        # 257: refused for an agent; main's is typed opaque, never a literal option.
+        if not self.role.main:
+            raise _Off(word.span, f"the option {word.raw} is built by expansion, not a literal")
+        c.options.append(Typed(word.raw, word.span, glob=True))
 
     def _met(self, c: _Cmd, key: str, name: str, span: Span, met: list[str]) -> None:
         if name in shell.READ_ONLY_WRITE_OPTS.get(key, frozenset()) and not self.role.main:
@@ -1146,6 +1170,9 @@ class _Judge:
                 continue
             if not after and tok == "--":
                 after = True
+                continue
+            if not after and _built_option(word):
+                self.opaque_option(c, word)
                 continue
             if not after and tok.startswith("-") and tok != "-":
                 c.options.append(Typed(tok, word.span))

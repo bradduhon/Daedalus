@@ -21,21 +21,13 @@ from lib.config import (
     root_ignored,
 )
 
-from tests.adversarial.corpus import A3_RULE_ROWS, A3_UNSEEN, H1_ICASE
+from tests.adversarial.corpus import A3_UNSEEN, H1_ICASE
 from tests.conftest import git, main_warning, write_train_marker
 from tests.hook_chain import load
 
 TRAIN = "20261031-120000"
-# issue 97, 121: the H1 icase rows, a chain export, and every P10 and P11 row of unit A3.
-ICASE_REFUSED = tuple(
-    dict.fromkeys(
-        (
-            *H1_ICASE,
-            "export GIT_ICASE_PATHSPECS=1 && git add NOTES/a.md",
-            *(form for _, form in A3_RULE_ROWS),
-        )
-    )
-)
+# issue 97, 121: the H1 icase rows and a chain export; the A3 rows are test_chain_state's.
+ICASE_REFUSED = (*H1_ICASE, "export GIT_ICASE_PATHSPECS=1 && git add NOTES/a.md")
 
 
 @pytest.fixture
@@ -57,6 +49,14 @@ def _write_config(repo: Path, roots: list[dict[str, str]]) -> None:
 def _roots(*paths: str, ignored: bool | None = None) -> jail.ExcludedRoots:
     found = tuple(ExcludedRoot(p, ignored) for p in paths)
     return lambda: found
+
+
+def _reason(
+    command: str, cwd: str, roots: jail.ExcludedRoots, writes: bool = True, agent: str = "main"
+) -> str | None:
+    # 228 S4: the check reads the admission its caller holds; main's grammar is the widest.
+    got = jail._admission(command, agent, cwd)[1]
+    return jail.excluded_root_reason(got, cwd, roots, writes)
 
 
 def test_excluded_roots_key_reads_paths_and_gitignore(repo: Path) -> None:
@@ -131,27 +131,42 @@ def test_root_ignored_asks_git_check_ignore(repo: Path) -> None:
     [
         "git add private/a.md",
         "git -C private add a.md",
-        "git stage ./private/a.md",
-        "git add -f private",
         "git commit -m fix private/a.md",
         "git commit -F private/a.md",
-        "git update-index --add private/a.md",
-        "git stash push -- private/a.md",
-        "git add ':(top)private/a.md'",
+        "git commit --file=private/a.md",
         "git --shallow-file x add private/a.md",
-        "git --frobnicate x add private/a.md",
+        "git --work-tree=private add a.md",
         "cd {repo} && git add private/a.md",
-        "gh pr create --title t --body-file private/a.md",
-        "gh api repos/o/r/issues -F body=@private/a.md",
-        "echo x > private/out.md",
-        "cat src/a.md | tee -a {repo}/private/out.md",
+        "env -C private git add a.md",
+        "gh issue create --title t --body-file private/a.md",
+        "gh issue comment 5 -F private/a.md",
+        "cat src/a.md > private/out.md",
+        "tee -a {repo}/private/out.md",
     ],
 )
 def test_a_command_naming_a_path_under_a_root_is_refused(repo: Path, command: str) -> None:
-    got = jail.excluded_root_reason(
-        command.format(repo=repo), str(repo), _roots(str(repo / "private"))
-    )
+    # 228 S4: each row is admitted by main's grammar and refused on its typed record.
+    got = _reason(command.format(repo=repo), str(repo), _roots(str(repo / "private")))
     assert got is not None and "excluded root" in got and str(repo / "private") in got, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git add private/a.md",
+        "git -C private add a.md",
+        "git commit -m m -- private/a.md",
+        "touch private/x",
+        "cp src/a.md private/x",
+        "sed -i s/a/b/ private/a.md",
+        "mkdir private/d",
+    ],
+)
+def test_a_coder_write_into_a_root_is_refused_on_its_typed_record(repo: Path, command: str) -> None:
+    # 228 S4: every typed write path is judged, not only redirects and tee; git by its pathspecs.
+    assert jail.admitted(command, "coder", str(repo)), command
+    got = _reason(command, str(repo), _roots(str(repo / "private")), agent="coder")
+    assert got is not None and str(repo / "private") in got, command
 
 
 @pytest.mark.parametrize(
@@ -173,7 +188,7 @@ def test_a_command_naming_a_path_under_a_root_is_refused(repo: Path, command: st
 )
 def test_other_commands_pass_an_ignored_root(repo: Path, command: str) -> None:
     roots = _roots(str(repo / "private"), ignored=True)
-    assert jail.excluded_root_reason(command, str(repo), roots) is None, command
+    assert _reason(command, str(repo), roots) is None, command
 
 
 @pytest.mark.parametrize(
@@ -183,19 +198,44 @@ def test_other_commands_pass_an_ignored_root(repo: Path, command: str) -> None:
         "git add --all",
         "git add .",
         "git commit -am m",
-        "git stash -u",
+        "git commit --all -m m",
         "git add 'no*'",
     ],
 )
 def test_a_whole_tree_command_refuses_a_root_git_does_not_ignore(repo: Path, command: str) -> None:
-    got = jail.excluded_root_reason(command, str(repo), _roots(str(repo / "notes")))
+    got = _reason(command, str(repo), _roots(str(repo / "notes")))
     assert got == jail.R_EXCLUDED_TREE.format(what=f"git {command.split()[1]}", root=repo / "notes")
 
 
-@pytest.mark.parametrize("command", ["git add -A -f", "git stash --all", "git add -f ."])
-def test_a_forced_whole_tree_command_refuses_an_ignored_root(repo: Path, command: str) -> None:
-    roots = _roots(str(repo / "private"), ignored=True)
-    assert jail.excluded_root_reason(command, str(repo), roots) is not None, command
+# 228 S4: forms no role's grammar admits; each is judged by its folder alone, never its text.
+UNADMITTED = (
+    "git stash -u",
+    "git add -A -f",
+    "git stash --all",
+    "git add -f .",
+    "git add -f private",
+    "git stage ./private/a.md",
+    "git update-index --add private/a.md",
+    "git stash push -- private/a.md",
+    "git add ':(top)private/a.md'",
+    "git --frobnicate x add private/a.md",
+    "git add $(ls private)",
+    "echo x > private/out.md",
+    "cat src/a.md | tee -a private/out.md",
+)
+
+
+@pytest.mark.parametrize("command", UNADMITTED)
+def test_a_refused_command_is_judged_by_its_folder_alone(repo: Path, command: str) -> None:
+    # 0224, 228 S4: no typed operand exists, so the root it names is never read from its text;
+    # the same command run from inside the root is refused with the standing folder named.
+    roots = _roots(str(repo / "private"))
+    for agent in ("main", "coder"):
+        assert not jail.admitted(command, agent, str(repo)), (agent, command)
+    assert _reason(command, str(repo), roots) is None, command
+    inside = str(repo / "private")
+    want = jail.R_EXCLUDED_STANDING.format(path=inside, root=inside)
+    assert _reason(command, inside, roots) == want, command
 
 
 def test_a_repository_inside_a_root_is_its_own_repo(repo: Path) -> None:
@@ -204,9 +244,9 @@ def test_a_repository_inside_a_root_is_its_own_repo(repo: Path) -> None:
     nested.mkdir()
     git(nested, "init", "-q", "-b", "main")
     roots = _roots(str(repo / "private"))
-    assert jail.excluded_root_reason(f"git -C {nested} add -A", str(repo), roots) is None
-    assert jail.excluded_root_reason("git add a.md", str(nested), roots) is None
-    assert jail.excluded_root_reason(f"git add {nested}/a.md", str(repo), roots) is not None
+    assert _reason(f"git -C {nested} add -A", str(repo), roots) is None
+    assert _reason("git add a.md", str(nested), roots) is None
+    assert _reason(f"git add {nested}/a.md", str(repo), roots) is not None
 
 
 def test_a_linked_worktree_meets_each_root_at_its_own_path(repo: Path) -> None:
@@ -214,21 +254,15 @@ def test_a_linked_worktree_meets_each_root_at_its_own_path(repo: Path) -> None:
     git(repo, "worktree", "add", "-q", str(tree))
     (tree / "notes").mkdir(exist_ok=True)
     roots = _roots(str(repo / "notes"))
-    got = jail.excluded_root_reason(f"git -C {tree} add notes/a.md", str(repo), roots)
+    got = _reason(f"git -C {tree} add notes/a.md", str(repo), roots)
     assert got is not None and str(tree / "notes") in got
 
 
 def test_redirects_pass_for_the_document_writers(repo: Path) -> None:
     roots = _roots(str(repo / "private"))
-    assert jail.excluded_root_reason("echo x > private/o.md", str(repo), roots, False) is None
-    assert jail.excluded_root_reason("git add private/o.md", str(repo), roots, False) is not None
-
-
-def test_an_unparsed_command_is_judged_on_its_text(repo: Path) -> None:
-    roots = _roots(str(repo / "private"))
-    got = jail.excluded_root_reason("git add $(ls private)", str(repo), roots)
-    assert got == jail.R_EXCLUDED_TEXT.format(root=repo / "private")
-    assert jail.excluded_root_reason("ls $(pwd)", str(repo), roots) is None
+    assert _reason("cat src/a.md > private/o.md", str(repo), roots, False) is None
+    assert _reason("cat src/a.md > private/o.md", str(repo), roots) is not None
+    assert _reason("git add private/o.md", str(repo), roots, False) is not None
 
 
 def test_roots_resolve_only_when_a_command_reaches_git_gh_or_a_redirect(repo: Path) -> None:
@@ -238,7 +272,7 @@ def test_roots_resolve_only_when_a_command_reaches_git_gh_or_a_redirect(repo: Pa
         calls.append(1)
         return ()
 
-    assert jail.excluded_root_reason("ls -la && cat src/a.md", str(repo), roots) is None
+    assert _reason("ls -la && cat src/a.md", str(repo), roots) is None
     assert calls == []
 
 
@@ -263,17 +297,18 @@ def test_check_refuses_staging_an_excluded_root(
     got = check.decide(_payload("daedalus:coder", repo, "git add notes/a.md"), [])
     assert not got.allow and str(repo / "notes") in str(got.reason)
     assert check.decide(_payload("daedalus:coder", repo, "git add src/a.md"), []).allow
-    # 0190: a derived writer's redirect passes, as the doc-deriving agent's did; public docs never.
+    # 0190, 228 S4: a derived writer's typed write passes, as the doc-deriving agent's did;
+    # public docs never.
     write_train_marker(repo, TRAIN)
     for agent_id, kind in (
         ("w-derived", writer_mode.DERIVED),
         ("w-public", writer_mode.PUBLIC_DOCS),
     ):
         assert writer_mode.record_dispatch(repo, TRAIN, kind) is None
-        writer = {**_payload("daedalus:writer", repo, "echo x > notes/b.md"), "agent_id": agent_id}
+        writer = {**_payload("daedalus:writer", repo, "touch notes/b.md"), "agent_id": agent_id}
         assert writer_mode.kind_of(writer) == (kind, None)
         assert check.decide(writer, []).allow is (kind == writer_mode.DERIVED), kind
-    assert not check.decide(_payload("daedalus:coder", repo, "echo x > notes/b.md"), []).allow
+    assert not check.decide(_payload("daedalus:coder", repo, "touch notes/b.md"), []).allow
 
 
 def test_check_refuses_without_an_absolute_cwd() -> None:
@@ -352,28 +387,38 @@ def test_hook_gives_no_warning_outside_a_train(
 def test_an_icase_pathspec_is_refused_while_a_root_is_declared(
     repo: Path, command: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # issue 97: git would match notes/a.md in any case; the spelled path never names the root.
-    got = jail.excluded_root_reason(command, str(repo), _roots(str(repo / "notes")))
+    # issue 97, 228 S4: every icase spelling is off the coder's table, refused at its span. Main
+    # admits only the export, which the typed reader refuses while a root is declared.
+    refused = jail._refused(jail._admission(command, "coder", str(repo))[1])
+    assert refused is not None and refused.text in command, command
+    got = _reason(command, str(repo), _roots(str(repo / "notes")))
+    if not jail.admitted(command, "main", str(repo)):
+        assert got is None, command
+        return
     icase = jail.R_EXCLUDED_ICASE.split("{spec}")[0]
     assert got is not None and got.startswith(icase), ("jail", command)
     assert "Next: spell each path in its exact case" in got, ("jail", command)
-    assert jail.excluded_root_reason(command, str(repo), _roots()) is None, ("jail", command)
-    # issue 97: judge in checks/excluded_roots.py meets the shared rule for every routed agent.
+    assert _reason(command, str(repo), _roots()) is None, ("jail", command)
+    # 228 S4: the check types a call the coder's grammar refuses by main's, so it meets the rule.
     monkeypatch.setattr(hook_io, "hook_config", lambda cwd: _config(repo))
     checked = load("excluded_roots").decide(_payload("daedalus:coder", repo, command), [])
     assert not checked.allow and "letter case" in str(checked.reason), ("check", command)
 
 
-@pytest.mark.parametrize("command", A3_UNSEEN)
+# issue 121 (design 6), 228 S4: main admits a commit whose pathspecs come from a file.
+UNSEEN_TYPED = ("git commit --pathspec-from-file=list", "git commit -F - --pathspec-from-file=-")
+
+
+@pytest.mark.parametrize("command", UNSEEN_TYPED)
 def test_a_judged_git_call_fed_unseen_paths_is_refused(
     repo: Path, monkeypatch: pytest.MonkeyPatch, command: str
 ) -> None:
-    # issue 121 (design 6): xargs, --pathspec-from-file and --stdin hide the paths, so a declared
-    # root refuses the call for every routed agent and warns the main session; no root, it passes.
+    # issue 121 (design 6), 228 S4: the typed option hides the paths, so a declared root refuses
+    # the call for every routed agent and warns the main session; no root, it passes.
     unseen = jail.R_EXCLUDED_UNSEEN.split("{source}")[0]
-    got = jail.excluded_root_reason(command, str(repo), _roots(str(repo / "notes")))
+    got = _reason(command, str(repo), _roots(str(repo / "notes")))
     assert got is not None and got.startswith(unseen), (command, got)
-    assert jail.excluded_root_reason(command, str(repo), _roots()) is None, command
+    assert _reason(command, str(repo), _roots()) is None, command
     monkeypatch.setattr(hook_io, "hook_config", lambda cwd: _config(repo))
     checked = load("excluded_roots").decide(_payload("daedalus:coder", repo, command), [])
     assert not checked.allow and unseen in str(checked.reason), command
@@ -381,24 +426,11 @@ def test_a_judged_git_call_fed_unseen_paths_is_refused(
     assert warned.warn and unseen in str(warned.reason), command
 
 
-@pytest.mark.parametrize(
-    ("spec", "icase"),
-    [
-        (":(icase)a", True),
-        (":(top, icase)a", True),
-        (":(icase", True),
-        (":i:a", True),
-        (":/I:a", True),
-        (":(top)a", False),
-        (":(icasefold)a", False),
-        (":/:a", False),
-        (":!a", False),
-        (":/icase-dir/a", False),
-        ("icase", False),
-    ],
-)
-def test_icase_spec_reads_the_long_and_short_magic(spec: str, icase: bool) -> None:
-    assert jail._icase_spec(spec) is icase
+@pytest.mark.parametrize("command", A3_UNSEEN)
+def test_an_unseen_path_feed_is_off_every_table(repo: Path, command: str) -> None:
+    # 228 S4: xargs, stdin feeds, bodies and built words are shapes no role admits.
+    for agent in ("coder", "verifier", "main"):
+        assert not jail.admitted(command, agent, str(repo)), (agent, command)
 
 
 def test_case_exact_pathspecs_and_reads_still_pass(repo: Path) -> None:
@@ -411,7 +443,7 @@ def test_case_exact_pathspecs_and_reads_still_pass(repo: Path) -> None:
         'git log -- ":(icase)notes"',
         'git diff -- ":i:NOTES"',
     ):
-        assert jail.excluded_root_reason(command, str(repo), roots) is None, command
+        assert _reason(command, str(repo), roots) is None, command
 
 
 def test_main_session_is_warned_when_roots_cannot_resolve(repo: Path) -> None:

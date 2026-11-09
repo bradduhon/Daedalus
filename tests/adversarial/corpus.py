@@ -1514,3 +1514,105 @@ CLAIMS_REFUSED = (
     "python3 {claims} --worktree {wt} --branch b --ranges a.py:1-2 &",
     "true\npython3 {claims} --worktree {wt} --branch b --ranges a.py:1-2 --out x",
 )
+
+
+# 228 S4, 225: A3_RULE_ROWS coder admission admits and the typed reader passes, a -m value being
+# text; git_grammar still refuses the newline, so the coder's chain verdict is unchanged.
+S4_TYPED_PASS_225 = (
+    "true # c\ngit commit -m ':i: fix' -- src/a.md",
+    "set -e\ngit commit -m ':i: fix' -- src/a.md",
+)
+# 228 S4: A3_RULE_ROWS main's grammar admits whose typed record names no path in a root, a read
+# or a literal message; main loses the text scan's warning on these (the PATH rows are a gap).
+S4_MAIN_TYPED_PASS = (
+    "PATH=. git log -- ':(icase)NOTES'",
+    "PATH+=:. git log -- ':(icase)NOTES'",
+    "command -p git log -- ':(icase)NOTES'",
+    "unset PATH; git log -- ':(icase)NOTES'",
+    "GIT_EXEC_PATH=. git log -- ':(icase)NOTES'",
+    "git log -n \"$N\" -- ':(icase)x'",
+    "git commit -F - <<EOF\nfix :i: \\x\nEOF",
+    "cat <<EOF | git commit -F -\nfix :i: \\x\nEOF",
+    "git commit --file=- <<-EOF\n\tfix :i: \\x\n\tEOF",
+    "git commit -F - <<\\EOF\nfix :i: $(git add ':(icase)NOTES/a.md')\nEOF",
+    "export V=x\ngit commit -m ':i: fix' -- src/a.md",
+    "cat <<< x\ngit commit -m ':i: fix' -- src/a.md",
+    "cat <<E\n\\x\nE\ngit commit -m ':i: fix' -- src/a.md",
+    "cat <<\"E\\OF\"\nx\nE\\OF\ngit commit -m ':i: fix' -- src/a.md",
+    "cat <<'E'O\nx\nEO\ngit commit -m ':i: fix' -- src/a.md",
+    "cat <<E''\nx\nE\ngit commit -m ':i: fix' -- src/a.md",
+    "cat <<\\E\nx\nE\ngit commit -m ':i: fix' -- src/a.md",
+)
+# 228 S4: one row per issue the unit closes; (issue, agent, form, the grammar's refusal reason).
+# {wt} is a unit worktree with notes and src; a coder's refusal names the word off its table.
+S4_ISSUE_ROWS = (
+    (
+        "223",
+        "coder",
+        "tmux new-session -d 'touch {wt}/x'",
+        "tmux is not on the coder command table",
+    ),
+    (
+        "223",
+        "verifier",
+        "awk 'BEGIN{system(\"touch x\")}'",
+        "awk is not on the verifier command table",
+    ),
+    ("223", "foreign", "git -c alias.x='!touch x' x", "git -c is refused"),
+    (
+        "225",
+        "coder",
+        "git add src/set/a.md && git log -- ':(icase)x'",
+        "the pathspec magic :(icase)x is not admitted",
+    ),
+    ("226", "coder", "git add ~+/notes/a.md", "a glob or ~ in git add, which writes"),
+    ("226", "coder", "true\ngit add no?es/a.md", "a glob or ~ in git add, which writes"),
+    ("230", "coder", "git mv notes/a.md x", "git mv is not in the coder git grammar"),
+    ("230", "coder", "git notes add -F notes/a.md", "git notes is not in the coder git grammar"),
+    (
+        "230",
+        "main",
+        "git hash-object -w notes/a.md",
+        "git hash-object is not in the main git grammar",
+    ),
+    ("231", "foreign", "sh -c 'touch \"$(cat p)/x\"'", "sh is not on the foreign command table"),
+)
+# 257: an option the shell builds; agents refuse it at its span, main types it opaque.
+S4_BUILT_OPTION = tuple(
+    (agent, f"git {sub} {option} ':(icase)NOTES'")
+    for agent in ("coder", "verifier", "auditor", "orchestrator", "foreign", "main")
+    for sub in ("stash show", "log")
+    for option in ("--$X", "-${X}-", "--${X:-}")
+)
+# 228 S4 hunt: (class, agent, form) the typed reader refuses while notes is excluded; {wt} is
+# the coder's unit worktree.
+S4_HUNT = (
+    ("-C folder", "main", "git -C notes add a.md"),
+    ("-C chain", "main", "git -C notes -C .. add notes/a.md"),
+    ("leading cd", "main", "cd {wt}/notes && git add a.md"),
+    ("wrapper chdir", "main", "env -C notes git add a.md"),
+    ("work tree", "main", "git --work-tree=notes add a.md"),
+    ("work tree", "main", "git --work-tree notes add a.md"),
+    ("file value", "main", "git commit --file=notes/a.md"),
+    ("file value", "main", "git commit -Fnotes/a.md"),
+    ("file value", "main", "git commit -F notes/a.md -- src/a.md"),
+    ("traversal", "main", "git add ./src/../notes/a.md"),
+    ("folder", "main", "git add notes"),
+    ("git glob", "main", "git add 'n*'"),
+    ("git glob", "main", "git add 'notes/[a]*'"),
+    ("whole tree", "main", "git commit --all -m m"),
+    ("separator", "main", "git add src/a.md\ngit add notes/a.md"),
+    ("separator", "main", "git add src/a.md || git add notes/a.md"),
+    ("redirect", "main", "cat src/a.md >> notes/x"),
+    ("redirect", "main", "cat src/a.md > ./notes/../notes/x"),
+    ("write operand", "main", "tee notes/x"),
+    ("gh value", "main", "gh issue comment 5 --body-file=notes/a.md"),
+    ("export", "main", "GIT_ICASE_PATHSPECS=1; git add NOTES/a.md"),
+    ("from file", "main", "git commit --pathspec-from-file=list"),
+    ("built option", "main", "git stash show --$X ':(icase)NOTES'"),
+    ("-C folder", "coder", "git -C notes add a.md"),
+    ("write operand", "coder", "touch notes/x"),
+    ("write operand", "coder", "cp src/a.md notes/x"),
+    ("in place", "coder", "sed -i s/a/b/ notes/a.md"),
+    ("whole tree", "coder", "git add ."),
+)

@@ -19,12 +19,8 @@ from tests.payloads import _cred
 
 Row = tuple[str, str, str, str]
 # 0229: rows main judges against the spec; the reason leads with the owning issue, else gap.
-XFAIL: dict[str, str] = {
-    "git commit -m 'read :i: docs' -- src/a.md": "225: a literal -m message holding :i:",
-    "git commit -m 'fix :(icase) in local env' -- src/a.md": (
-        "225: a literal -m message holding :(icase)"
-    ),
-}
+# 228 S4: A3-32 and A3-33 pass, a -m value being text (225); no row is expected to fail.
+XFAIL: dict[str, str] = {}
 
 
 def _params(rows: Iterable[Row]) -> list[object]:

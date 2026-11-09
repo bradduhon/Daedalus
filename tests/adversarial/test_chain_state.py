@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# issue 121 (P10, P11): git letter-case matching is judged across the whole chain, only for the
-# subcommands the excluded roots check judges, and never inside a commit message.
+# issue 121, 228 S4: the excluded roots check reads the Admitted record; an icase export, a body,
+# a magic pathspec and a built word are each a shape off the agent's table, refused at its span.
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,19 +14,31 @@ from tests.adversarial.corpus import (
     A3_ISSUE_121_ADMITTED,
     A3_ISSUE_121_REFUSED,
     A3_RULE_ROWS,
+    CODER_REFUSED,
+    S4_BUILT_OPTION,
+    S4_HUNT,
+    S4_ISSUE_ROWS,
+    S4_MAIN_TYPED_PASS,
+    S4_TYPED_PASS_225,
     assert_denied,
 )
-from tests.conftest import WT
+from tests.conftest import CFG, WT, write_train_marker
 from tests.payloads import _cred
 from tests.test_excluded_roots import _config, _payload, _roots, repo  # noqa: F401
 
 ICASE = jail.R_EXCLUDED_ICASE.split("{spec}")[0]
-# issue 121: (root, command, refused); the issue's rows name Private, the corpus rows NOTES.
+UNSEEN = jail.R_EXCLUDED_UNSEEN.split("{source}")[0]
+# issue 121: (root, command, outcome); the issue's rows name Private, the corpus rows NOTES.
 OUTCOMES = (
-    *(("private", c, False) for c in A3_ISSUE_121_ADMITTED),
-    *(("private", c, True) for c in A3_ISSUE_121_REFUSED),
-    *(("notes", c, False) for c in A3_ADMITTED),
+    *(("private", c, "pass") for c in A3_ISSUE_121_ADMITTED),
+    *(("private", c, "refuse") for c in A3_ISSUE_121_REFUSED),
+    *(("notes", c, "pass") for c in A3_ADMITTED),
 )
+
+
+def _reason(command: str, cwd: Path, root: str, agent: str = "main") -> str | None:
+    got = jail._admission(command, agent, str(cwd))[1]
+    return jail.excluded_root_reason(got, str(cwd), _roots(str(cwd / root)))
 
 
 def test_each_rule_has_a_refused_row_in_the_git_family() -> None:
@@ -41,107 +53,108 @@ def test_a_chain_state_row_is_refused(
     rule: str,
     form: str,
 ) -> None:
-    # P10, P11: refused for icase while a root is declared, the main session is warned with it,
-    # and a coder in its unit worktree is denied (its own hooks refuse first; 0136 adds the check).
-    got = jail.excluded_root_reason(form, str(repo), _roots(str(repo / "notes")))
-    assert got is not None and got.startswith(ICASE), (rule, form, got)
+    # P10, P11, 228 S4: the coder's grammar refuses the row at its span; the 225 rows it admits
+    # pass the typed reader and git_grammar refuses their newline. Main's admitted rows meet the
+    # typed reader, and its refused rows warn during a train.
+    coder = _cred("coder", "Bash", WT, command=form)
+    if form in S4_TYPED_PASS_225:
+        assert_denied(coder)
+        assert _reason(form, repo, "notes", "coder") is None, form
+    else:
+        assert_denied(coder, CODER_REFUSED)
+    got = _reason(form, repo, "notes")
+    if jail.admitted(form, "main", str(repo)):
+        want = form in S4_MAIN_TYPED_PASS
+        assert (got is None) if want else str(got).startswith((ICASE, UNSEEN)), (form, got)
+        return
+    assert got is None, (form, got)
+    write_train_marker(repo)
     warned = jail.decide(_payload("main", repo, form), _config(repo))
-    assert warned.warn and ICASE in str(warned.reason), (form, warned.reason)
-    assert_denied(_cred("coder", "Bash", WT, command=form))
+    assert warned.warn and "Refused: " in str(warned.reason), (form, warned.reason)
 
 
-@pytest.mark.parametrize(("root", "command", "refused"), OUTCOMES)
+@pytest.mark.parametrize(("root", "command", "outcome"), OUTCOMES)
 def test_the_issue_rows_and_the_admitted_forms(
     repo: Path,  # noqa: F811
     root: str,
     command: str,
-    refused: bool,
+    outcome: str,
 ) -> None:
-    # issue 121: reads and commit messages pass; an export or a prefix before git add is refused.
-    got = jail.excluded_root_reason(command, str(repo), _roots(str(repo / root)))
-    passed = got is None
-    assert (not passed and str(got).startswith(ICASE)) if refused else passed, (command, got)
+    # issue 121, 228 S4: reads and messages pass; an export before git add refuses on the typed
+    # record; a prefix on git add is off main's table, so only its folder is judged.
+    got = _reason(command, repo, root)
+    if outcome == "pass":
+        assert got is None, (command, got)
+    elif jail.admitted(command, "main", str(repo)):
+        assert str(got).startswith(ICASE), (command, got)
+    else:
+        assert got is None, (command, got)
 
 
-@pytest.mark.parametrize(
-    ("word", "on"),
-    (
-        ("GIT_ICASE_PATHSPECS=1", True),
-        ("GIT_ICASE_PATHSPECS=yes", True),
-        ("GIT_ICASE_PATHSPECS=00", True),
-        ('GIT_ICASE_PATHSPECS="$X"', True),
-        ("GIT_ICASE_PATHSPECS", True),
-        ('"$V"=1', True),
-        ("{GIT_ICASE_PATHSPECS,X}=1", True),
-        ("GIT_ICASE_PATH''SPECS=1", True),
-        ("G\\IT_ICASE_PATHSPECS=1", True),
-        ("GIT_ICASE_PATHSPECS+=0", True),
-        ("${N}=1", True),
-        ('"PATH"=x', False),
-        ("GIT_ICASE_PATHSPECS=0", False),
-        ("GIT_ICASE_PATHSPECS=FALSE", False),
-        ("GIT_ICASE_PATHSPECS=off", False),
-        ("GIT_ICASE_PATHSPECS=", False),
-        ("git_icase_pathspecs=1", False),
-        ("PATH=$PATH:/x", False),
-    ),
-)
-def test_a_value_git_reads_as_false_leaves_icase_off(word: str, on: bool) -> None:
-    # issue 121: git reads empty, 0, false, no and off as off (probed); an opaque name may be on.
-    assert jail._icase_on(word) is on
+@pytest.mark.parametrize(("issue", "agent", "form", "reason"), S4_ISSUE_ROWS)
+def test_an_issue_row_is_unadmitted_and_its_refusal_names_why(
+    issue: str, agent: str, form: str, reason: str
+) -> None:
+    # 228 S4: issues 223, 225, 226, 230 and 231 close on these rows; each names its word.
+    command = form.replace("{wt}", WT)
+    refused = jail._refused(jail._admission(command, agent, WT)[1])
+    assert refused is not None and refused.reason == reason, (issue, command, refused)
+    assert refused.text and refused.text in command, (issue, refused)
+    if agent not in ("main", "foreign"):
+        assert_denied(_cred(agent, "Bash", WT, command=command))
 
 
-@pytest.mark.parametrize(
-    ("command", "simple"),
-    (
-        ('git log -- ":(icase)x"', True),
-        ("git commit -F - <<'EOF'\nfix :i: don't # read\nEOF\ngit status", True),
-        ('cat <<"E" | git commit -F -\nx\nE', True),
-        ("(cd a && git add b); git log", True),
-        ("git add . && git commit -m 'fix #a'", True),
-        ("git commit -F - <<EOF\nx\nEOF", True),
-        ('git log -n "$N" -- x', False),
-        ("git commit -m 'a $x'", True),
-        ("git add a{b,c}", False),
-        ("ls a?", False),
-        ("ls a[b]", False),
-        ("[ -f x ] && ls 'a*'", True),
-        ("git commit -F - <<EOF\n$x\nEOF", False),
-        ("git commit -F - <<EOF\n\\x\nEOF", False),
-        ("git commit -F - <<'EOF' x\ny\nEOF", True),
-        ("git commit -F - <<'E'O\nx\nEO", False),
-        ("cat <<'E' | (git commit -F -\nx\nE\n)", False),
-        ("echo a # b", False),
-        ("echo a; . ./x", False),
-        ("printf -v V x", False),
-        ("echo 'unclosed", False),
-        ("bash -c 'export V=1'", False),
-    ),
-)
-def test_only_a_plainly_simple_text_may_exempt_a_span(command: str, simple: bool) -> None:
-    # issue 121 (G1): the gate before any read or message span is exempted.
-    assert jail._plainly_simple(command) is simple
-
-
-@pytest.mark.parametrize(
-    ("path", "refused"),
-    (
-        (".:/usr/bin", True),
-        ("/usr/bin::/bin", True),
-        ("/usr/bin:bin", True),
-        ("/usr/bin:/bin", False),
-        (None, False),
-    ),
-)
-def test_an_inherited_path_with_a_relative_entry_drops_the_read_exemption(
+def test_a_225_message_passes_the_typed_reader(
     repo: Path,  # noqa: F811
-    monkeypatch: pytest.MonkeyPatch,
-    path: str | None,
-    refused: bool,
 ) -> None:
-    # issue 121 (U2): a bare git may resolve through ., an empty or a relative PATH entry.
-    if path is not None:
-        monkeypatch.setenv("PATH", path)
-    command = "git log -- ':(icase)NOTES'"
-    got = jail.excluded_root_reason(command, str(repo), _roots(str(repo / "notes")))
-    assert (got is not None and got.startswith(ICASE)) if refused else got is None, (path, got)
+    # 225: a -m value is text, never a pathspec, so its icase spelling and gate word pass; the
+    # measurement rows A3-32 and A3-33 run the same forms through a unit worktree's chain.
+    for form in ("git commit -m 'fix :(icase) in local env' -- src/a.md", *S4_TYPED_PASS_225):
+        assert jail.admitted(form, "coder", str(repo)), form
+        assert _reason(form, repo, "notes", "coder") is None, form
+
+
+def test_231_stays_open_outside_a_marked_repo(
+    marked_repo: Path,
+    other_repo: Path,
+) -> None:
+    # 0224, 231: unadmitted, yet from an unmarked folder it runs; the cross-repo case is 231's.
+    assert marked_repo.is_dir()
+    command = "sh -c 'touch \"$(cat p)/x\"'"
+    hook_input = _cred("general-purpose", "Bash", str(other_repo), command=command)
+    assert jail.decide(hook_input, CFG).allow
+    assert not jail.admitted(command, "foreign", str(other_repo))
+
+
+@pytest.mark.parametrize(("agent", "form"), S4_BUILT_OPTION)
+def test_a_built_option_is_refused_or_typed_opaque(
+    repo: Path,  # noqa: F811
+    agent: str,
+    form: str,
+) -> None:
+    # 257: an agent's grammar refuses the built option at its span; main's types it opaque and
+    # the reader refuses the git call while a root is declared, never reading it as an option.
+    got = jail._admission(form, agent, str(repo))[1]
+    refused = jail._refused(got)
+    if agent != "main":
+        assert refused is not None and refused.text in form and "$" in refused.text, refused
+        return
+    if refused is not None:
+        assert "$" in refused.text, refused
+        return
+    assert any(o.glob for c in got.commands for o in c.options), form
+    assert str(_reason(form, repo, "notes")).startswith(UNSEEN), form
+
+
+@pytest.mark.parametrize(("klass", "agent", "form"), S4_HUNT)
+def test_a_hunt_form_is_refused_on_its_typed_record(
+    repo: Path,  # noqa: F811
+    klass: str,
+    agent: str,
+    form: str,
+) -> None:
+    # 228 S4 hunt: each hiding form against a declared root, read from the Admitted record.
+    command = form.replace("{wt}", str(repo))
+    assert jail.admitted(command, agent, str(repo)), (klass, command)
+    got = _reason(command, repo, "notes", agent)
+    assert got is not None and ("excluded root" in got or got.startswith((ICASE, UNSEEN))), got
