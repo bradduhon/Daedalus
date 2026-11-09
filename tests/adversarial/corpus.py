@@ -1584,6 +1584,8 @@ S4_BUILT_OPTION = tuple(
     for sub in ("stash show", "log")
     for option in ("--$X", "-${X}-", "--${X:-}")
 )
+# 257: (agent, form, pathspec raw); main types the operand after a built option unknown.
+S4_BUILT_OPERAND = (("main", "git stash show --$X ':(icase)NOTES'", "':(icase)NOTES'"),)
 # 228 S4 hunt: (class, agent, form) the typed reader refuses while notes is excluded; {wt} is
 # the coder's unit worktree.
 S4_HUNT = (

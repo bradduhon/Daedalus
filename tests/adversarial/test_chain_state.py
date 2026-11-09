@@ -15,6 +15,7 @@ from tests.adversarial.corpus import (
     A3_ISSUE_121_REFUSED,
     A3_RULE_ROWS,
     CODER_REFUSED,
+    S4_BUILT_OPERAND,
     S4_BUILT_OPTION,
     S4_HUNT,
     S4_ISSUE_ROWS,
@@ -143,6 +144,21 @@ def test_a_built_option_is_refused_or_typed_opaque(
         assert "$" in refused.text, refused
         return
     assert any(o.glob for c in got.commands for o in c.options), form
+    assert str(_reason(form, repo, "notes")).startswith(UNSEEN), form
+
+
+@pytest.mark.parametrize(("agent", "form", "raw"), S4_BUILT_OPERAND)
+def test_an_operand_after_a_built_option_is_typed_unknown(
+    repo: Path,  # noqa: F811
+    agent: str,
+    form: str,
+    raw: str,
+) -> None:
+    # 257: the pathspec slot keeps the operand with the unknown mark; the reader fails closed.
+    got = jail._admission(form, agent, str(repo))[1]
+    assert jail._refused(got) is None, form
+    specs = [(p.text, p.glob) for c in got.commands for p in c.pathspecs]
+    assert specs == [(raw, True)], specs
     assert str(_reason(form, repo, "notes")).startswith(UNSEEN), form
 
 
