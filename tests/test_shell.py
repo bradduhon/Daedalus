@@ -87,7 +87,9 @@ RETIRED = (
     "opaque_word _raw_words _hygiene_bad _worker_hygiene _RESERVED _HYGIENE_CHARS "
     "_plain_segments _admitted_segments _BODY_HEADS _CLAUDE_WORD _nested_claude _bash_env "
     "_loop_union _opaque_values _opaque_targets _moved_base _tree_reader _gh_words "
-    "_CREDENTIAL_PART _BINDERS _coder_write_targets"
+    "_CREDENTIAL_PART _BINDERS _coder_write_targets "
+    # 228 tail: the credential module's command-text readers no caller reached.
+    "dotglob_on expand_word _DOTS_QUALIFIER _DOTGLOB_WORDS"
 ).split()
 # 228 tail: names another module defines for its own use, so the grep above cannot list them;
 # the import test below proves no module reaches the retired lib.shell ones.
