@@ -54,7 +54,7 @@ SHARED = frozenset(
     | {"command_family", "interpreter_code", "shell_tokens", "stdin_script", "INTERPRETERS"}
     | {"_expands"}
     | {"CHAR", "CLOSE", "_flag_value", "_raw_words", "_unquoted", "segment_spans"}
-    | {"git_globals_known", "_TRUSTED_BIN"}
+    | {"_TRUSTED_BIN"}
 )
 # 228 S3: the readers the one parse replaced; no file under scripts/ may name one again.
 RETIRED = (
@@ -70,7 +70,20 @@ RETIRED = (
     "R_SHELL_BODY R_INLINE_BODY "
     # 228 S3b: the coder checks' readers the parse then admit_role replaced.
     "_coder_bash_reason coder_installs declared_segments exit_echo_ok _declared_tools "
-    "_followed_bases _docs_segment_reason _script_unit _path_trusted"
+    "_followed_bases _docs_segment_reason _script_unit _path_trusted "
+    # 228 S4: the excluded roots and gh text readers the Admitted record replaced. A name another
+    # module defines for its own use (_merge, _spec, _sources, _HEREDOC...) is not listed.
+    "_icase_scan _simple_code _plainly_simple _base_scan _foreign_git _expansion_unseen "
+    "_heredocs _substitutions _closing _ICASE_TEXT _excluded_text _TextScan _segment_units "
+    "_NOT_SIMPLE_RAW _NOT_SIMPLE_WORD _FOREIGN_GIT _SYNTH _JUDGED_WORD R_EXCLUDED_TEXT "
+    "_BRACE_LIST _Body _EXCLUDED_GIT _EXCLUDED_WORDS _EXCLUDED_WRITES _GIT_PATH _GIT_WORD "
+    "_JUDGED_GIT_WORD _LEADERS _Part _RUNS_GIT_WORD _SETTERS _SHELL_WORD _SIMPLE_HEREDOC "
+    "_STASH_READS _TEXT_DEPTH _XARGS _allexport _built_head _excluded_names _excluded_reason "
+    "_expanding _foreign_icase _git_parts _heads _heredoc_end _icase_exports _icase_git "
+    "_icase_mentions _icase_on _icase_spec _judged_git _judged_heads _masked _names_path "
+    "_normalised _opaque_setter _path_unsafe _stdin_message _text_segment "
+    "_text_spec _unseen_git _unseen_paths _unset_only _xargs_runs _excluded_named "
+    "git_globals_known _GH_WORD _GIT_PUSH _fallback_reason _gh_reason"
 ).split()
 
 

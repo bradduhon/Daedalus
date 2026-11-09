@@ -21,7 +21,6 @@ from lib.audit_proof import SUMMARY_DIR
 from lib.config import DEFAULT_MAX_CONCURRENT_BUILDERS
 from lib.narrow import integer
 from lib.project_root import project_root
-from lib.shell import _abs, _base, _git_split
 from lib.train_scope import policed_outside_train
 from lib.train_state import DOCS_SUFFIX as DOCS_SUFFIX
 from lib.train_state import TRAIN_ID, TrainStateError, active_train, is_audit_unit
@@ -371,26 +370,6 @@ def _resume_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     if not held:
         return R_RESUME_UNBOUND.format(coder=coder, train=train, unit=unit)
     return rebind(repo, train, coder, held[0], unit)
-
-
-def _segment_units(segment: list[str], cwd: str) -> set[str]:
-    from lib.jail import CODER_WRITE_CMDS, _git_dir, _in_place, _unit_parts, _write_operands
-
-    name = _base(segment[0])
-    targets: list[str] = []
-    if name == "git":
-        sub, args, globals_ = _git_split(segment)
-        if sub in _UNIT_GIT_WRITES:
-            base = _git_dir(globals_, cwd)
-            targets = [base, *(_abs(a, base) for a in args[1:] if args[:1] == ["--"])]
-    elif name in CODER_WRITE_CMDS or (name in {"sed", "perl"} and _in_place(name, segment[1:])):
-        targets = [_abs(a, cwd) for a in _write_operands(name, segment[1:]) if a != "-"]
-    units: set[str] = set()
-    for target in targets:
-        parts = _unit_parts(target, cwd)
-        if parts is not None:
-            units.add(parts[0])
-    return units
 
 
 def _binding_reason(hook_input: dict[str, object], cwd: str, units: set[str]) -> str | None:

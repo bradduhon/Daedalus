@@ -776,20 +776,6 @@ GIT_GLOBAL_EQ = (
 )
 
 
-def git_globals_known(globals_: list[str]) -> bool:
-    # issue 121 (S2): every global option before the subcommand is one git's tables name.
-    i = 0
-    while i < len(globals_):
-        token = globals_[i]
-        if token in _GIT_GLOBAL_WITH_ARG:
-            i += 2
-        elif token in GIT_GLOBAL_FLAGS or token.startswith(GIT_GLOBAL_EQ):
-            i += 1
-        else:
-            return False
-    return True
-
-
 _PUSH_FORBIDDEN = (
     "--force",
     "--force-with-lease",
