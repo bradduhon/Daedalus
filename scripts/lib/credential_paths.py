@@ -84,20 +84,11 @@ _UNQUOTE = re.compile(r"[\"'\\]")
 LIT, CUT, REDIRECT = "\x00", "\x01", "\x02"
 _EXPANSION_CAP = 16
 _HOME_ROOTED = ("/", "~", "$HOME", "${HOME")
-# issue 53: zsh's (D) qualifier; option names fold case and underscores (GLOB_DOTS, globdots).
-_DOTS_QUALIFIER = re.compile(r"\([^()\s]*D[^()\s]*\)")
-_DOTGLOB_WORDS = ("dotglob", "globignore", "globdots")
 _ROOTED_ALT = re.compile(r"[{,][/~$]")
 R_BRACE_UNJUDGED = (
     "{path} has a brace group the jail does not expand (a sequence or more than 16 "
     "alternatives) and an alternative that starts its own path. Next: name each path you need"
 )
-
-
-def dotglob_on(command: str) -> bool:
-    # issue 53: bash dotglob or GLOBIGNORE, zsh globdots or (D); any one lets a wildcard match dots.
-    folded = command.replace("_", "").lower()
-    return any(w in folded for w in _DOTGLOB_WORDS) or bool(_DOTS_QUALIFIER.search(command))
 
 
 def _brace_group(text: str) -> tuple[str, list[str], str] | None:
@@ -184,12 +175,6 @@ def tilde(text: str, home: str) -> str:
     if text == "~" or text.startswith("~/"):
         return home + text[1:]
     return os.path.expanduser(text) if text.startswith("~") else text
-
-
-def expand_word(word: str, env: dict[str, list[str]]) -> list[tuple[str, bool]]:
-    # audit B4 round 3: bash order, braces first, then tilde and parameters per alternative;
-    # an unexpanded brace word stays whole for the store match's * fallback.
-    return [x for alt in expand_braces(word) or [word] for x in _expand_alt(alt, env)]
 
 
 def _expand_alt(word: str, env: dict[str, list[str]]) -> list[tuple[str, bool]]:

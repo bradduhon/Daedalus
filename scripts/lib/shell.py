@@ -4,14 +4,11 @@
 # It imports nothing from lib.jail.
 from __future__ import annotations
 
-import itertools
 import os
 import re
-import shlex
 import shutil
 from collections.abc import Callable, Iterator
 from functools import lru_cache
-from pathlib import Path
 from typing import NamedTuple
 
 READ_ONLY_CMDS = frozenset(
@@ -420,8 +417,10 @@ OPERAND_TYPES: dict[str, tuple[str, ...]] = {
     "git checkout": ("pathspec*",),
     "git status": ("pathspec*",),
     "git ls-files": ("pathspec*",),
-    **{f"git {sub}": ("text*",) for sub in ("log", "diff", "show", "grep", "blame", "branch")},
-    **{f"git {sub}": ("text*",) for sub in ("rev-parse", "merge-base", "worktree", "stash")},
+    # 228 tail: git reads a revision or a path from the same slot; a pattern is judged as one too.
+    **{f"git {sub}": ("pathspec*",) for sub in ("log", "diff", "show", "grep", "blame")},
+    **{f"git {sub}": ("text*",) for sub in ("branch", "rev-parse", "merge-base", "worktree")},
+    "git stash": ("text*",),
     "git config": ("text*",),
     "git merge": ("text*",),
     "git push": ("text", "text"),
@@ -614,7 +613,7 @@ WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         frozenset({"-u", "-g", "-h", "-p", "-C", "-U", "-D", "-r", "-t", "--chdir"}),
     ),
     "doas": (frozenset({"-n", "-s"}), frozenset({"-u", "-C"})),
-    # issue 80, 116 (P8): -S and --split-string stay off this row; env_split_values finds them.
+    # issue 80, 116 (P8): -S and --split-string stay off this row, so admit refuses them.
     "env": (
         frozenset({"-i", "--ignore-environment", "-0", "--null", "-"}),
         frozenset({"-u", "--unset", "-C", "--chdir", "-a", "--argv0"}),
@@ -676,11 +675,6 @@ WRAPPER_OPTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         frozenset({"-t", "--target", "-S", "--setuid", "-G", "--setgid"}),
     ),
 }
-# issue 80: env -S and --split-string pack a whole command into one word.
-R_ENV_SPLIT = (
-    "env -S and --split-string pack a whole command into one word, so the jail cannot see what "
-    "it runs or writes (issue 80). Next: write the command without env -S, one word per argument."
-)
 CONFINE = "daedalus_confine.py"
 # issue 76: options that move the working folder before the wrapped command runs.
 WRAPPER_CHDIR = frozenset({("env", "-C"), ("env", "--chdir"), ("sudo", "-D"), ("sudo", "--chdir")})
@@ -714,7 +708,7 @@ def command_family(word: str) -> str:
     return _VERSION_TAIL.sub("", base) or base
 
 
-# P6, fix round 1: a static shell family list; busybox sh reads as sh through shell_tokens.
+# P6, fix round 1: a static shell family list; no table admits a shell word.
 _SHELLS = frozenset(
     {"bash", "sh", "dash", "zsh", "ksh", "ksh93", "mksh", "ash", "rbash", "yash", "posh"}
     | {"fish", "csh", "tcsh"}
@@ -731,17 +725,9 @@ INLINE_FLAGS: dict[str, frozenset[str]] = {
     "php": frozenset({"-r", "-B", "-R", "-E"}),
 }
 INTERPRETERS = frozenset(INLINE_FLAGS) - {"shell"}
-# P7, A2 fix round 3: an option whose value is the script file (php -f <file>).
-SCRIPT_FLAGS: dict[str, frozenset[str]] = {"php": frozenset({"-f"})}
-# A2 fix round 4: a relative script that may be a stream once an opaque cd moved the folder.
-_STDIN_TAIL = re.compile(r"(?:^|/)(?:stdin|fd/\d+)$|^(?:dev|proc)(?:/|$)")
 # 8.5 ruling A, issue 116: first tokens a worker may never run, read through command_family.
 WORKER_WRAPPERS = (
     frozenset(WRAPPER_OPTS) | frozenset({"eval", "source", ".", "python3"}) | _SHELLS | INTERPRETERS
-)
-_RESERVED = frozenset(
-    {"{", "}", "(", ")", "!", "if", "then", "else", "elif", "fi", "do", "done", "while"}
-    | {"until", "for", "case", "esac", "select", "function", "coproc", "[[", "time"}
 )
 _TRUSTED_BIN = frozenset({"/bin", "/usr/bin", "/usr/local/bin", "/sbin", "/usr/sbin"})
 # issue 121: the one assignment word, NAME=, NAME+= or NAME[...]= and NAME[...]+=.
@@ -790,11 +776,9 @@ _PUSH_ARG_OPTS = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "
 _SIGNABLE_GIT = frozenset({"commit", "merge", "rebase", "cherry-pick", "revert", "am", "pull"})
 _FIND_DENY = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls"})
 _FALSE = frozenset({"false", "0", "no", "off"})
-_HYGIENE_CHARS = frozenset("${}\\")
 _DEFAULT_BRANCHES = frozenset({"main", "master"})
 # 8.5, F1: the plugin's scripts dir; append_ledger.py runs only by this absolute path.
 _REPO_SCRIPTS = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-_FALLBACK = "\x00fallback"
 # F1, O7: the variable is empty in agent Bash, so the literal form never reaches the script.
 R_LEDGER_LITERAL = (
     "${CLAUDE_PLUGIN_ROOT} is empty in agent Bash. "
@@ -855,17 +839,9 @@ R_DEFAULT_BRANCH = (
     "the operator merges; never push to the default branch (0001). "
     "Next: push the unit branch instead."
 )
-R_BRACE_PUSH = (
-    "brace expansion in a git push hides the flags and refspec from the jail. "
-    "Next: spell the push out literally."
-)
 R_GIT_CONFIG_KEY = (
     "git -c keys that change push, hook, pager, ssh, protocol, or alias behavior are not "
     "permitted. Next: run git without that -c."
-)
-R_XARGS = (
-    "xargs feeding git push/commit/tag/clean hides the arguments from the jail. "
-    "Next: run the git command directly."
 )
 R_GIT_PLUMBING = (
     "git transport plumbing and credential helpers are not run from a session. "
@@ -901,88 +877,9 @@ _GLOB_CHARS = frozenset("*?[")
 _STASH_WITH_ARG = frozenset({"-m", "--message", "--pathspec-from-file"})
 
 
-def _prefix_re(canonical: str, min_chars: int) -> str:
-    base = canonical[: 2 + min_chars]
-    tail = ""
-    for char in reversed(canonical[2 + min_chars :]):
-        tail = f"(?:{re.escape(char)}{tail})?"
-    return re.escape(base) + tail + r"(?![A-Za-z-])"
-
-
-_S = r"[^;&|\n()]"
-_W = r"[\s,\[\]{}]"
 _HOME = os.path.normpath(os.path.expanduser("~"))
-_HOME_PARENTS = [p for p in map(str, Path(_HOME).parents) if p != "/"]
-# N4: the home dir's literal ancestors; empty when home sits directly under /.
-_HOME_UP = "|".join(re.escape(p) + r"/?\*?" for p in _HOME_PARENTS) or r"(?!)"
 # N5: --m is git's unique prefix of --mirror; every other forbidden option needs 2 chars.
 _PUSH_MIN = {"--mirror": 1}
-_PUSH_FORCE_ALT = "|".join(_prefix_re(c, _PUSH_MIN.get(c, 2)) for c in _PUSH_FORBIDDEN)
-_PUSH_ALL_ALT = "|".join(_prefix_re(c, 2) for c in _PUSH_ALL)
-_REGEX_TRIPWIRES: tuple[tuple[re.Pattern[str], str], ...] = (
-    (
-        re.compile(
-            rf"\bgit\b{_S}*?{_W}push\b{_S}*?(?:{_W}(?:{_PUSH_FORCE_ALT}|-[a-zA-Z]*[fd][a-zA-Z]*\b)"
-            rf"|(?:^|[\s,:=\-]|\$\{{)[+:])"
-        ),
-        R_FORCE_PUSH,
-    ),
-    # 0001: any main/master word blocks here, so feature/main-fix over-blocks in the fallback
-    # only; the tokenized path judges the destination's last component and allows it.
-    (
-        re.compile(
-            rf"\bgit\b{_S}*?{_W}push\b{_S}*?(?:{_W}(?:{_PUSH_ALL_ALT})|\*|\b(?i:main|master)\b)"
-        ),
-        R_DEFAULT_BRANCH,
-    ),
-    # I1: anchored to the subcommand slot so commit messages naming these words still pass.
-    (
-        re.compile(
-            r"\bgit(?:\s+(?:-[Cc]\s+\S+|--(?:git-dir|work-tree|namespace|config-env)\s+\S+|-\S+))*"
-            r"\s+(?:send-pack|http-push|receive-pack|upload-pack|fetch-pack|credential)"
-            r"(?![A-Za-z])"
-        ),
-        R_GIT_PLUMBING,
-    ),
-    (
-        re.compile(
-            rf"\bgit\b{_S}*?{_W}-c{_W}+(?:remote\.\S+\.(?:mirror|push)|push\.default"
-            r"|protocol\.(?:\S+\.)?allow|core\.(?:hookspath|fsmonitor|pager|sshcommand)"
-            r"|diff\.external|alias\.)",
-            re.I,
-        ),
-        R_GIT_CONFIG_KEY,
-    ),
-    (re.compile(rf"\bgit\b{_S}*?{_W}clean\b"), R_CLEAN),
-    (
-        re.compile(
-            rf"\brm\b(?={_S}*{_W}(?:-[a-zA-Z]*[rR]|--r[a-z]*\b))"
-            rf"(?={_S}*{_W}(?:/+\.*\*?|(?:~|{re.escape(_HOME)})(?:/\.\.)*/?\*?|{_HOME_UP})"
-            r"(?:[\s;&|),\]]|$))"
-        ),
-        R_DESTRUCTIVE,
-    ),
-    (re.compile(rf"\bmkfs\b|\bdd\b{_S}*{_W}if="), R_DESTRUCTIVE),
-    (
-        re.compile(
-            rf"\bgit\b{_S}*?{_W}(?:commit|merge|rebase|cherry-pick|revert|am|pull)\b"
-            rf"{_S}*?{_W}(?:-[a-zA-Z]*S|{_prefix_re('--gpg-sign', 2)})"
-        ),
-        R_SIGN,
-    ),
-    (re.compile(r"gpgsign\s*=\s*(?!(?:false|0|no|off)\b)", re.I), R_SIGN),
-    (re.compile(r"GIT_CONFIG_\w+=\S*sign", re.I), R_SIGN),
-    (
-        re.compile(
-            rf"\bgit\b{_S}*?{_W}tag\b{_S}*?{_W}(?:-[a-zA-Z]*[su]\b"
-            rf"|{_prefix_re('--sign', 2)}|{_prefix_re('--local-user', 2)})"
-        ),
-        R_SIGN,
-    ),
-    (re.compile(r"(?:^|[\s;&|({/,\[])gpg2?(?=[\s;&|)},\]]|$)"), R_SIGN),
-    (re.compile(rf"ssh-keygen\b{_S}*-Y{_W}*sign\b"), R_SIGN),
-    (re.compile(rf"\bxargs\b{_S}*\bgit\b{_S}*{_W}(?:push|commit|tag|clean)\b"), R_XARGS),
-)
 
 
 def _under(path: str, root: str) -> bool:
@@ -994,50 +891,6 @@ def _under(path: str, root: str) -> bool:
 
 def _abs(path: str, cwd: str) -> str:
     return path if os.path.isabs(path) else os.path.join(cwd, path)
-
-
-_REDIRECT_END = frozenset(" \t;&|<>()\n\r")
-# O3: a write target the jail can judge as one literal path.
-_REDIRECT_DENY = frozenset("'\"\\$`*?[]{}~")
-REDIRECT_SEP = ">"
-
-
-def _fd_word(buf: list[str]) -> str | None:
-    # O3: a bare 1 or 2 word before > is the fd; any other number is refused.
-    text = "".join(buf)
-    word = "" if not text or text[-1] in " \t" else text.split()[-1]
-    if word in {"1", "2"}:
-        return word
-    return None if word.isdigit() else ""
-
-
-def _redirect(command: str, i: int, fd: str) -> tuple[int, str | None] | None:
-    # O3: i sits on >; the index past the target and a tee stand-in, or None for a no-op.
-    append = command.startswith(">>", i)
-    i += 2 if append else 1
-    if command[i : i + 1] in {"&", "|"}:
-        dup = fd == "2" and not append and command.startswith("&1", i)
-        return (i + 2, None) if dup and command[i + 2 : i + 3] in _REDIRECT_END | {""} else None
-    while command[i : i + 1] in {" ", "\t"}:
-        i += 1
-    start = i
-    while i < len(command) and command[i] not in _REDIRECT_END:
-        i += 1
-    target = command[start:i]
-    # O3: a leading - would read as a tee option and hide the target.
-    if not target or target.startswith("-") or _REDIRECT_DENY & set(target):
-        return None
-    if target == "/dev/null":
-        return i, None
-    return i, f"tee -a {target}" if append else f"tee {target}"
-
-
-def _flush(raws: list[str], seps: list[str], buf: list[str], pending: list[str]) -> None:
-    raws.append("".join(buf))
-    for stand_in in pending:
-        seps.append(REDIRECT_SEP)
-        raws.append(stand_in)
-    pending.clear()
 
 
 CHAR, ESCAPE, OPEN, CLOSE = "char", "escape", "open", "close"
@@ -1071,125 +924,6 @@ def quote_walk(text: str) -> Iterator[Lexeme]:
         else:
             yield Lexeme(i, char, quote, CHAR)
             i += 1
-
-
-def _unclosed(last: Lexeme | None) -> bool:
-    return last is not None and bool(last.quote) and last.kind != CLOSE
-
-
-def _scan(command: str, redirects: bool = False) -> tuple[list[str], list[str]] | None:
-    # O3: redirects=True is the worker parse; a write redirect becomes a tee segment after its own.
-    raws: list[str] = []
-    seps: list[str] = []
-    buf: list[str] = []
-    pending: list[str] = []
-    skip = 0
-    last: Lexeme | None = None
-    for last in quote_walk(command):
-        at, chunk, quote, kind = last
-        if at < skip:
-            continue
-        if kind == ESCAPE and chunk[1:] in {"\n", "\r"}:
-            return None
-        if quote == '"' and kind == CHAR and (chunk == "`" or command.startswith("$(", at)):
-            return None
-        if quote or kind != CHAR:
-            buf.append(chunk)
-            continue
-        if redirects and (chunk == ">" or command.startswith("&>", at)):
-            fd = "&" if chunk == "&" else _fd_word(buf)
-            if fd is None:
-                return None
-            if fd in {"1", "2"}:
-                buf.pop()
-            step = _redirect(command, at + 1 if fd == "&" else at, fd)
-            if step is None:
-                return None
-            skip, stand_in = step
-            pending.extend([stand_in] if stand_in else [])
-            continue
-        if chunk in "\n\r`<>()" or command.startswith(("$(", "|&"), at):
-            return None
-        pair = command[at : at + 2]
-        if pair in {"&&", "||"} or chunk in "|;":
-            _flush(raws, seps, buf, pending)
-            seps.append(pair if pair in {"&&", "||"} else chunk)
-            buf = []
-            skip = at + len(seps[-1])
-            continue
-        if chunk == "&":
-            return None
-        buf.append(chunk)
-    if _unclosed(last):
-        return None
-    _flush(raws, seps, buf, pending)
-    return raws, seps
-
-
-def _tokens(raws: list[str]) -> list[list[str]] | None:
-    segments: list[list[str]] = []
-    for raw in raws:
-        try:
-            tokens = shlex.split(raw)
-        except ValueError:
-            return None
-        if not tokens or tokens[0] in _RESERVED:
-            return None
-        if tokens[0].startswith("(") or tokens[0].endswith(")"):
-            return None
-        segments.append(tokens)
-    return segments
-
-
-def tokenize(command: str) -> list[list[str]] | None:
-    scanned = _scan(command)
-    return None if scanned is None else _tokens(scanned[0])
-
-
-class WorkerChain(NamedTuple):
-    # O3: raws, seps and tokens align; segments drop the _SAFE_ENV prefix of each.
-    raws: list[str]
-    seps: list[str]
-    tokens: list[list[str]]
-    segments: list[list[str]]
-
-
-def worker_parse(command: str) -> WorkerChain | None:
-    scanned = _scan(command, redirects=True)
-    tokens = None if scanned is None else _tokens(scanned[0])
-    if scanned is None or tokens is None:
-        return None
-    segments = [list(itertools.dropwhile(_SAFE_ENV.match, s)) for s in tokens]
-    return WorkerChain(scanned[0], scanned[1], tokens, segments)
-
-
-def chain_bases(chain: WorkerChain, cwd: str, dir_cmds: frozenset[str]) -> list[str] | None:
-    # O6: each segment's working folder; one absolute cd heading an && chain moves the rest.
-    moves = [i for i, s in enumerate(chain.segments) if s and _base(s[0]) in dir_cmds]
-    count = len(chain.segments)
-    if not moves:
-        return [cwd] * count
-    head = chain.segments[0]
-    if moves != [0] or len(head) != 2 or head[0] != "cd" or not os.path.isabs(head[1]):
-        return None
-    joins = {"&&", "|", REDIRECT_SEP}
-    if chain.seps[:1] not in ([], ["&&"]) or not set(chain.seps) <= joins:
-        return None
-    return [cwd] + [os.path.normpath(head[1])] * (count - 1)
-
-
-def split_pipeline(command: str) -> list[str] | None:
-    """Thin wrapper over the scanner: raw stages of a pure `|` pipeline, else None."""
-    scanned = _scan(command)
-    if scanned is None or tokenize(command) is None or any(sep != "|" for sep in scanned[1]):
-        return None
-    return [raw.strip() for raw in scanned[0]]
-
-
-def worker_segments(command: str) -> list[list[str]] | None:
-    # 0044, O3: the worker parse's segments; a write redirect is a tee segment.
-    chain = worker_parse(command)
-    return None if chain is None else chain.segments
 
 
 def _base(token: str) -> str:
@@ -1345,8 +1079,6 @@ def _rm_reason(args: list[str]) -> str | None:
             targets.append(arg)
     if recursive and any(_rm_target_dangerous(t) for t in targets):
         return R_DESTRUCTIVE
-    if any("{" in a for a in args) or any(set("${}") & set(t) for t in targets):
-        return _FALLBACK
     return None
 
 
@@ -1357,97 +1089,6 @@ def _quote_spans(text: str) -> str:
         for lex in quote_walk(text)
         if not lex.quote or lex.kind == OPEN
     )
-
-
-def _normalize(text: str, placeholder: bool) -> str:
-    text = text.replace("${IFS}", " ").replace("$IFS", " ")
-    text = text.replace("${HOME}", "~").replace("$HOME", "~")
-    if placeholder:
-        text = _quote_spans(text.replace("$'", "'").replace('$"', '"'))
-    for token in ("$'", '$"', "${", "$(", ")", "'", '"', "\\"):
-        text = text.replace(token, "")
-    for char in "{},":
-        text = text.replace(char, " ")
-    return text
-
-
-def segment_spans(text: str) -> list[tuple[int, int]]:
-    # issue 121: (start, end) of each raw segment, split at unquoted ; & | newline and parens.
-    cuts = [
-        lex.at
-        for lex in quote_walk(text)
-        if lex.kind == CHAR and not lex.quote and lex.text in ";&|\n\r()"
-    ]
-    return [(a + 1, b) for a, b in itertools.pairwise([-1, *cuts, len(text)])]
-
-
-def _raw_segments(text: str) -> list[str]:
-    return [text[a:b] for a, b in segment_spans(text)]
-
-
-def _word_parts(token: str) -> set[str]:
-    return {_base(part) for part in re.split(r"[{},]", token)}
-
-
-def _segment_views(raw: str) -> list[list[str]]:
-    text = raw.replace("${HOME}", "~").replace("$HOME", "~")
-    views: list[list[str]] = []
-    for view in (text, _quote_spans(text.replace("$'", "'").replace('$"', '"'))):
-        for token in ("$'", '$"', "${", "$(", "'", '"', "\\"):
-            view = view.replace(token, "")
-        tokens = view.split()
-        with_arg: frozenset[str] = frozenset()
-        wrapper: set[str] = set()
-        while tokens and (
-            _ASSIGN.match(tokens[0])
-            or tokens[0] in _RESERVED
-            or tokens[0].startswith("-")
-            or {command_family(part) for part in _word_parts(tokens[0])} & WORKER_WRAPPERS
-            or ("timeout" in wrapper and DURATION.fullmatch(tokens[0]))
-        ):
-            if _word_parts(tokens[0]) & WRAPPER_OPTS.keys():
-                wrapper = _word_parts(tokens[0]) & WRAPPER_OPTS.keys()
-                with_arg = WRAPPER_OPTS[min(wrapper)][1]
-            tokens = tokens[2:] if tokens[0] in with_arg else tokens[1:]
-        views.append(tokens)
-    return views
-
-
-_RM_RECURSIVE = re.compile(r"(?:^|[{,])(?:-[{},A-Za-z]*[rR]|--[{},]*r)")
-
-
-def _raw_segment_reason(raw: str) -> str | None:
-    for tokens in _segment_views(raw):
-        if not tokens:
-            continue
-        words = _word_parts(tokens[0])
-        rest = tokens[1:]
-        if "rm" in words and any(_RM_RECURSIVE.search(t) for t in rest):
-            targets = [t for t in rest if not t.startswith("-")]
-            if "{" in raw or any(_rm_target_dangerous(t) for t in targets):
-                return R_DESTRUCTIVE
-        if "git" in words:
-            i = 0
-            while i < len(rest) and rest[i].startswith("-"):
-                i += 2 if rest[i] in _GIT_GLOBAL_WITH_ARG else 1
-            if i < len(rest) and "push" in _word_parts(rest[i]) and "{" in raw:
-                return R_BRACE_PUSH
-    return None
-
-
-def _regex_tripwire(command: str) -> str | None:
-    text = command.replace("\\\r\n", "").replace("\\\n", "")
-    # Round 5: braces and ~/.. are judged on raw segments before normalization erases them.
-    for raw in _raw_segments(text):
-        reason = _raw_segment_reason(raw)
-        if reason:
-            return reason
-    # N3: quotes deleted (catches split words) and quoted spans as one char (keeps segments whole).
-    for normalized in (_normalize(text, False), _normalize(text, True)):
-        for pattern, reason in _REGEX_TRIPWIRES:
-            if pattern.search(normalized):
-                return reason
-    return None
 
 
 class WrapperOption(NamedTuple):
@@ -1617,7 +1258,7 @@ def _strip_wrappers(
 
 
 def env_split_values(tokens: list[str]) -> list[str]:
-    # issue 80: the value of each env -S or --split-string, in clusters and long prefixes too.
+    # issue 80: the value of each env -S or --split-string; 228 tail: no caller, guardrails row.
     return [
         v
         for at, word in enumerate(tokens)
@@ -1657,210 +1298,8 @@ def _env_split(args: list[str]) -> list[str]:
     return []
 
 
-def stdin_script(word: str, base: str | None = "") -> bool:
-    # P6, P7, fix rounds 3-4: - or a path under /dev/ or /proc/ after joining base and normpath;
-    # base "" knows no folder (a climbing path counts), None follows an opaque cd (a stdin tail).
-    if word == "-":
-        return True
-    if base and word[:1] != "~" and not _expands(word):
-        word = os.path.join(base, word)
-    path = os.path.normpath(word)
-    if base is None and not os.path.isabs(path) and _STDIN_TAIL.search(path):
-        return True
-    if not path.startswith(("/", "../")):
-        return False
-    parts = [p for p in path.split("/") if p not in {"", ".."}]
-    return parts[:1] in (["dev"], ["proc"])
-
-
-class BodyScan(NamedTuple):
-    # A2 spec correction: the program's own options, its script word, the flag-bearing span,
-    # and the index the inline-flag scan ends at.
-    hit: bool
-    scan: OptionScan
-    script: str | None
-    module: bool
-    span: list[str]
-    end: int
-
-
-def _awaits(family: str, words: list[str]) -> bool:
-    # A2 fix round 3: the last option of words still takes the next word as its value.
-    before = scan_options(family, words)
-    after = scan_options(family, [*words, "-"])
-    return before.dashes < 0 and len(after.operands) == len(before.operands)
-
-
-def _option_end(family: str, words: list[str]) -> tuple[int, bool, bool]:
-    # A2 spec correction: the scan ends at python's -m <module>, an unconsumed --, or the script
-    # operand; (that index, whether -m ended it, whether -- did). Values are consumed first.
-    for k in range(len(words)):
-        scan = scan_options(family, words[: k + 1])
-        if family == "python" and "-m" in scan.options:
-            return (k + 2 if words[k].endswith("m") else k + 1), True, False
-        if scan.dashes >= 0:
-            return k, False, True
-        if scan.operands:
-            return k, False, False
-    return len(words), False, False
-
-
-def _off_end(family: str, words: list[str]) -> int:
-    # A2 fix round 3: past an off-table option, the first -- no option, known or not, may take.
-    for k, word in enumerate(words):
-        if word != "--" or _awaits(family, words[:k]):
-            continue
-        if not (k and scan_options(family, words[k - 1 : k]).off):
-            return k
-    return len(words)
-
-
-def _body_scan(family: str, args: list[str]) -> BodyScan:
-    # P6, P7: an inline flag among the program's own options, read by scan_options; an option
-    # off the table keeps the flag scan conservative up to --, and the script is always kept.
-    words = ["-" + w[1:] if family == "shell" and w[:1] == "+" else w for w in args]
-    cut, module, dashes = _option_end(family, words)
-    scan = scan_options(family, words[:cut])
-    flags = INLINE_FLAGS[family]
-    rest = args[cut + 1 :] if dashes else args[cut:]
-    script = None if module or not rest else rest[0]
-    named = SCRIPT_FLAGS.get(family, frozenset())
-    if script is None and not module and named & set(scan.options):
-        script = _flag_value(family, args, named, cut)
-    if scan.off:
-        end = _off_end(family, words)
-        letters = {flag[1] for flag in flags if flag[1] != "-"}
-        clusters = (w for w in words[:end] if w[:1] == "-" and w[1:2] != "-")
-        wide = set(scan_options(family, words[:end]).options)
-        hit = bool(flags & wide) or any(letters & set(w) for w in clusters)
-        return BodyScan(hit, scan, script, module, args[:end], end)
-    span = args[:cut] if module else args[: cut + 1 + dashes]
-    return BodyScan(bool(flags & set(scan.options)), scan, script, module, span, cut)
-
-
-def _flag_value(family: str, args: list[str], flags: frozenset[str], end: int) -> str:
-    # P7: the value of the first flag in an option position before end, attached, after = or as
-    # the next word; a word a valued option consumes is skipped (fix round 3).
-    with_arg = OPTION_TABLE[family][1]
-    for k, word in enumerate(args[:end]):
-        if k and _awaits(family, args[:k]):
-            continue
-        key, eq, value = word.partition("=")
-        later = (args[k + 1 : k + 2] or [""])[0]
-        if word[:2] == "--" and _long_option(key, flags) in flags:
-            return value if eq else later
-        if word[:1] == "-" and word[1:2] not in {"", "-"}:
-            for at, ch in enumerate(word[1:], start=2):
-                if "-" + ch in flags:
-                    return word[at:] or later
-                if "-" + ch in with_arg:
-                    break
-    return ""
-
-
-def _stdin_body(
-    body: BodyScan, stdin: bool, reads: bool, fed: bool, base: str | None = ""
-) -> str | None:
-    # P6, P7: at the command word, "" for a stdin-like script, an expanding word in an option
-    # position, or no script operand while stdin is fed (fix round 3); else no body.
-    if not stdin or {"--version", "--help"} & set(body.scan.options):
-        return None
-    if reads or any(_expands(w) for w in body.span):
-        return ""
-    if body.module:
-        return None
-    if body.script is not None and stdin_script(body.script, base):
-        return ""
-    return "" if fed and (body.script is None or body.scan.off) else None
-
-
-def _inline_code(tokens: list[str], family: str) -> str | None:
-    # P7: the inline code of an interpreter segment, or None when it carries no inline flag.
-    body = _body_scan(family, tokens[1:])
-    return _flag_value(family, tokens[1:], INLINE_FLAGS[family], body.end) if body.hit else None
-
-
-def interpreter_code(
-    tokens: list[str], stdin: bool = False, fed: bool = False, base: str | None = ""
-) -> str | None:
-    # P7, issue 116: an interpreter's inline code; with stdin (the command word's position), ""
-    # for code read from a stream (fed: a pipe or < feeds it) or an expanding flag word.
-    family = command_family(tokens[0]) if tokens else ""
-    if family not in INTERPRETERS:
-        return None
-    code = _inline_code(tokens, family)
-    if code is not None:
-        return code
-    return _stdin_body(_body_scan(family, tokens[1:]), stdin, False, fed, base)
-
-
-def shell_tokens(tokens: list[str]) -> list[str] | None:
-    # P6, issue 116: the words from a shell command word on; busybox sh reads as a bare sh.
-    if tokens and command_family(tokens[0]) == "busybox":
-        tokens = tokens[1:]
-    return tokens if tokens and command_family(tokens[0]) in _SHELLS else None
-
-
-def _shell_code(tokens: list[str], stdin: bool = False, base: str | None = "") -> str | None:
-    # P6, issue 116: a shell's -c string (its first operand, or the word after -c past an
-    # off-table option); with stdin, "" for a string read from a stream; else _FALLBACK.
-    args = tokens[1:]
-    body = _body_scan("shell", args)
-    if body.hit and body.scan.off:
-        return _flag_value("shell", args, INLINE_FLAGS["shell"], body.end)
-    if body.hit:
-        return body.script or ""
-    if body.scan.off:
-        return _FALLBACK
-    # fix round 3: a shell with no script reads its inherited stdin, so it counts as fed.
-    return _stdin_body(body, stdin, "-s" in body.scan.options, True, base)
-
-
-def _segment_reason(segment: list[str], depth: int, main: bool) -> str | None:
-    if depth > 3:
-        return R_UNSUPPORTED
-    if any(_base(t) == "xargs" for t in segment):
-        rest = segment[[_base(t) for t in segment].index("xargs") + 1 :]
-        if any(_base(t) == "git" for t in rest) and {"push", "commit", "tag", "clean"} & set(rest):
-            return R_XARGS
-    if not main and env_split_values(segment):
-        # issue 80: workers only, main stays exempt from construct limits; a tripwire names itself.
-        return _regex_tripwire(" ".join(segment)) or R_ENV_SPLIT
-    assigns: list[str] = []
-    tokens = _strip_wrappers(segment, assigns)
-    if tokens is None:
-        return _FALLBACK
-    if not tokens:
-        return None
-    name = _base(tokens[0])
-    if set("${") & set(tokens[0]):
-        return _FALLBACK if main else R_VARIABLE
-    shell = shell_tokens(tokens)
-    if shell is not None:
-        code = _shell_code(shell)
-        if code == _FALLBACK:
-            return _FALLBACK
-        return _command_reason(code, depth + 1, main) if code else None
-    if command_family(name) in INTERPRETERS:
-        code = interpreter_code(tokens)
-        return _command_reason(code, depth + 1, main) if code else None
-    if name == "eval":
-        return _command_reason(" ".join(tokens[1:]), depth + 1, main)
-    if name == "git":
-        return _git_reason(tokens, assigns, main)
-    if name == "rm":
-        return _rm_reason(tokens[1:])
-    if name.startswith("mkfs") or (name == "dd" and any(t.startswith("if=") for t in tokens)):
-        return R_DESTRUCTIVE
-    if name in {"gpg", "gpg2"}:
-        return R_SIGN
-    if name == "ssh-keygen" and any(t.startswith("-Y") for t in tokens):
-        if "sign" in tokens or "-Ysign" in tokens:
-            return R_SIGN
-    return None
-
-
-def _git_reason(tokens: list[str], assigns: list[str], main: bool) -> str | None:
+def _git_reason(tokens: list[str], assigns: list[str]) -> str | None:
+    # 228 tail: tokens are an admitted git command's parsed words, so every word is literal.
     sub, args, globals_ = _git_split(tokens)
     if _gpgsign_override(globals_):
         return R_SIGN
@@ -1868,12 +1307,6 @@ def _git_reason(tokens: list[str], assigns: list[str], main: bool) -> str | None
         return R_GIT_CONFIG_KEY
     if any(a.split("=", 1)[0].startswith("GIT_CONFIG_") and "sign" in a.lower() for a in assigns):
         return R_SIGN
-    if sub is not None and set("${") & set(sub):
-        return _FALLBACK if main else R_VARIABLE
-    if sub in {"push", "commit", "tag", "clean"} and any(
-        set("${}") & set(arg) for arg in args + globals_
-    ):
-        return _FALLBACK
     if sub in GIT_PLUMBING_REMOTE:
         return R_GIT_PLUMBING
     if sub in {"add", "stage", "commit", "update-index"}:
@@ -1901,21 +1334,6 @@ def _git_reason(tokens: list[str], assigns: list[str], main: bool) -> str | None
         for arg in args
     ):
         return R_SIGN
-    return None
-
-
-def _command_reason(command: str, depth: int = 0, main: bool = True) -> str | None:
-    if depth > 3:
-        return R_UNSUPPORTED
-    segments = tokenize(command)
-    if segments is None:
-        return _regex_tripwire(command)
-    for segment in segments:
-        reason = _segment_reason(segment, depth, main)
-        if reason == _FALLBACK:
-            return _regex_tripwire(command)
-        if reason:
-            return reason
     return None
 
 
@@ -2082,6 +1500,18 @@ def _unquoted_expansion(raw: str) -> bool:
     return any(
         lex.kind == CHAR and not lex.quote and lex.text in "*?[{~$" for lex in quote_walk(raw)
     )
+
+
+def _unsingled(word: str) -> str:
+    # O4: the characters of a raw word the shell may still expand; single-quoted spans drop out.
+    return "".join(
+        lex.text for lex in quote_walk(word) if lex.quote != "'" and lex.kind not in {OPEN, CLOSE}
+    )
+
+
+def _expands(word: str) -> bool:
+    # 0084: the shell may split this raw word or turn it into an option before the command runs.
+    return _unquoted_expansion(word) or bool(set("$`") & set(_unsingled(word)))
 
 
 def _docs_read_split(name: str, args: list[str]) -> tuple[set[str], list[str], list[str]] | None:
@@ -2441,65 +1871,7 @@ def _rsync_remote(args: list[str]) -> bool:
     return False
 
 
-def _raw_words(raw: str) -> list[str]:
-    # O4: the shell words of one raw segment with their quotes kept, aligned with shlex.split.
-    words: list[str] = []
-    buf: list[str] = []
-    for lex in quote_walk(raw):
-        if lex.kind == CHAR and not lex.quote and lex.text in " \t":
-            if buf:
-                words.append("".join(buf))
-                buf = []
-        else:
-            buf.append(lex.text)
-    if buf:
-        words.append("".join(buf))
-    return words
-
-
-def _unsingled(word: str) -> str:
-    # O4: the characters of a raw word the shell may still expand; single-quoted spans drop out.
-    return "".join(
-        lex.text for lex in quote_walk(word) if lex.quote != "'" and lex.kind not in {OPEN, CLOSE}
-    )
-
-
-def _unquoted(word: str) -> str:
-    return "".join(
-        lex.text[1:] if lex.kind == ESCAPE else lex.text
-        for lex in quote_walk(word)
-        if lex.kind not in {OPEN, CLOSE}
-    )
-
-
-def opaque_word(word: str) -> bool:
-    # prepush2-2026-10-27: bash rewrites the word ($'-uu', $X, {-u,}, a leading glob) unseen.
-    if set("$`") & set(_unsingled(word)):
-        return True
-    bare = [lex for lex in quote_walk(word) if lex.kind == CHAR and not lex.quote]
-    if any(lex.text in "{}" for lex in bare):
-        return True
-    if not any(lex.text in _GLOB_CHARS for lex in bare):
-        return False
-    # prepush2-2026-10-27: a glob can expand to a planted file named like a flag.
-    lead = next((lex for lex in quote_walk(word) if lex.kind not in {OPEN, CLOSE}), None)
-    leading = lead is not None and lead in bare and lead.text in _GLOB_CHARS
-    return _unquoted(word).startswith("-") or leading
-
-
 SEARCH_CMDS = frozenset({"rg", "grep", "egrep", "fgrep"})
-
-
-def search_opaque(command: str) -> bool:
-    # prepush2-2026-10-27: a search segment holding a word bash rewrites may hide a reach flag.
-    for raw in _raw_segments(command):
-        words = _raw_words(raw)
-        if any(_base(_unquoted(w)) in SEARCH_CMDS for w in words) and any(
-            opaque_word(w) for w in words
-        ):
-            return True
-    return False
-
 
 R_READ_EXPANSION = (
     "uniq, sort, file and find can write a file, and this call holds a word the shell expands "
@@ -2507,18 +1879,6 @@ R_READ_EXPANSION = (
     "into a write option or an output operand the jail never saw (issue 204). Next: quote the "
     "word or name each path literally."
 )
-
-
-def _expands(word: str) -> bool:
-    # 0084: the shell may split this raw word or turn it into an option before the command runs.
-    return _unquoted_expansion(word) or bool(set("$`") & set(_unsingled(word)))
-
-
-def _hygiene_bad(token: str, word: str | None) -> bool:
-    # O4: judge the raw span when it is known, else the shlex token as before.
-    text = token if word is None else _unsingled(word)
-    lead = token if word is None else word
-    return bool(_HYGIENE_CHARS & set(text)) or lead.startswith("~")
 
 
 def command_path(word: str, base: str) -> str:
@@ -2554,78 +1914,3 @@ def runs_claude(tokens: list[str], base: str) -> bool:
     return any(
         _base(w) == "claude" or (real is not None and command_path(w, base) == real) for w in words
     )
-
-
-def _worker_hygiene(
-    tokens: list[str],
-    agent: str,
-    words: list[str] | None = None,
-    base: str = "",
-) -> str | None:
-    if _ASSIGN.match(tokens[0]):
-        return R_ENV
-    if runs_claude(tokens, base):
-        return R_CLAUDE_PATH
-    if agent == "auditor" and _base(tokens[0]) == CONFINE:
-        # 0048, 0158: the auditor's wrapped terraform command is judged as if bare.
-        split = confine_split(tokens)
-        if split is None or not confine_wrapper(tokens[0], base):
-            return R_CONFINE_FORM
-        cut = len(tokens) - len(split[1])
-        aligned = list(words) if words and len(words) == len(tokens) else []
-        if _hygiene_bad(tokens[2], aligned[2] if aligned else None):
-            return R_HYGIENE
-        inner = aligned[cut:] if aligned else None
-        return _worker_hygiene(split[1], agent, inner, base)
-    name = _base(tokens[0])
-    inner = strip_wrappers(tokens) or tokens
-    if {name, _base(inner[0])} & ARCHIVE_CMDS:
-        return R_ARCHIVE
-    allexport = any(re.fullmatch(r"-[a-zA-Z]*a[a-zA-Z]*|allexport", t) for t in tokens[1:])
-    if name in SHELL_VAR_CMDS or (name == "set" and allexport):
-        return R_SHELL_VARS
-    if name in SHELL_STATE_CMDS or (name == "printf" and any(t.startswith("-v") for t in tokens)):
-        return R_SHELL_STATE
-    if name == "rsync" and _rsync_remote(tokens[1:]):
-        return R_RSYNC_REMOTE
-    if name == "find" and any(a in _FIND_DENY or a.startswith("-fprint") for a in tokens[1:]):
-        return R_FIND_WRITE
-    exempt = _exempt_indices(tokens)
-    ledger = agent == "charter-docs" and _is_append_ledger(tokens)
-    if ledger:
-        exempt.add(1)
-    if agent == "orchestrator" and name == "python3":  # 0060, pin B6 -> B4: security exception.
-        from checks.command_allowlist import train_script_ok
-
-        ledger = train_script_ok(tokens)
-    if agent == "verifier" and claims_ok(tokens):
-        ledger = True  # 0230: the verifier's claims printer; its hygiene check still runs.
-    is_wrapper = command_family(name) in WORKER_WRAPPERS or name.startswith("python")
-    if (
-        agent == "charter-docs"
-        and name == "python3"
-        and "CLAUDE_PLUGIN_ROOT" in (tokens[1] if len(tokens) > 1 else "")
-    ):
-        return R_LEDGER_LITERAL
-    if is_wrapper and not ledger and not _tester_runner_ok(name, tokens):
-        return R_INLINE
-    # 0164: pnpm exec node -e, npx node <file> and the like meet the interpreter rule too.
-    bin_run = js_inner(tokens)
-    if bin_run and _base(bin_run[0]) == "bun" and bun_inline(bin_run):
-        return R_INLINE
-    if bin_run and command_family(bin_run[0]) in WORKER_WRAPPERS:
-        if not _tester_runner_ok(_base(bin_run[0]), bin_run):
-            return R_INLINE
-    spans: list[str | None] = list(words) if words and len(words) == len(tokens) else []
-    for idx, token in enumerate(tokens):
-        word = spans[idx] if spans else None
-        if idx not in exempt and _hygiene_bad(token, word):
-            return R_HYGIENE
-    sub, args, globals_ = _git_split(tokens)
-    if _git_config_override(globals_):
-        return R_GIT_CONFIG
-    if sub == "config":
-        flags = [a for a in args if a.startswith("-")]
-        if flags not in (["--get"], ["--list"]):
-            return R_GIT_CONFIG
-    return None

@@ -19,42 +19,34 @@ from tests.conftest import SCRIPTS_DIR
 MOVED = frozenset(
     {"READ_ONLY_CMDS", "READ_ONLY_GIT", "SPECIALIST_GIT", "CHARTER_DOCS_GIT", "CONDUCTOR_GIT"}
     | {"CODER_GIT", "GIT_PLUMBING_REMOTE", "SHELL_VAR_CMDS", "SHELL_STATE_CMDS"}
-    | {"WORKER_WRAPPERS", "_VALUE_LONG_NEXT", "_RESERVED", "_SHELLS", "_SHELL_ARG_OPTS"}
+    | {"WORKER_WRAPPERS", "_VALUE_LONG_NEXT", "_SHELLS", "_SHELL_ARG_OPTS"}
     | {"_SHELL_LONG_FLAGS", "_TRUSTED_BIN", "_ASSIGN", "_SAFE_ENV"}
     | {"_GIT_CONFIG_DENY", "_GIT_GLOBAL_WITH_ARG", "_PUSH_FORBIDDEN", "_PUSH_ALL"}
-    | {"_PUSH_ARG_OPTS", "_SIGNABLE_GIT", "_FIND_DENY", "_FALSE", "_HYGIENE_CHARS"}
-    | {"_DEFAULT_BRANCHES", "_REPO_SCRIPTS", "_FALLBACK", "_PROJECT_DATA", "_GLOB_CHARS"}
-    | {"_STASH_WITH_ARG", "_S", "_W", "_HOME", "_HOME_PARENTS", "_HOME_UP", "_PUSH_MIN"}
-    | {"_PUSH_FORCE_ALT", "_PUSH_ALL_ALT", "_REGEX_TRIPWIRES", "_RM_RECURSIVE"}
+    | {"_PUSH_ARG_OPTS", "_SIGNABLE_GIT", "_FIND_DENY", "_FALSE"}
+    | {"_DEFAULT_BRANCHES", "_REPO_SCRIPTS", "_PROJECT_DATA", "_GLOB_CHARS"}
+    | {"_STASH_WITH_ARG", "_HOME", "_PUSH_MIN"}
     | {"_COMMIT_WITH_ARG", "R_LEDGER_LITERAL", "R_UNSUPPORTED", "R_INLINE", "R_GIT_CONFIG"}
     | {"R_ENV", "R_SHELL_VARS", "R_SHELL_STATE", "R_RSYNC_REMOTE", "R_FIND_WRITE"}
     | {"R_HYGIENE", "R_VARIABLE", "R_FORCE_PUSH", "R_CLEAN", "R_STASH_UNTRACKED"}
-    | {"R_DESTRUCTIVE", "R_SIGN", "R_DEFAULT_BRANCH", "R_BRACE_PUSH", "R_GIT_CONFIG_KEY"}
-    | {"R_XARGS", "R_GIT_PLUMBING", "R_DATA_DIR_GIT", "_prefix_re", "_under", "_abs"}
-    | {"_scan", "tokenize", "split_pipeline", "_base", "_cmd_name", "_short_flags"}
+    | {"R_DESTRUCTIVE", "R_SIGN", "R_DEFAULT_BRANCH", "R_GIT_CONFIG_KEY"}
+    | {"R_GIT_PLUMBING", "R_DATA_DIR_GIT", "_under", "_abs"}
+    | {"_base", "_cmd_name", "_short_flags"}
     | {"_long_matches", "_git_split", "_git_subcommand", "_git_config_override"}
     | {"_config_settings", "_gpgsign_override", "_config_key_denied", "_push_parts"}
     | {"_push_destination", "_push_to_default", "_rm_target_dangerous", "_rm_reason"}
-    | {"_quote_spans", "_normalize", "_raw_segments", "_word_parts", "_segment_views"}
-    | {"_raw_segment_reason", "_regex_tripwire", "_strip_wrappers", "_inline_code"}
-    | {"_shell_code", "_segment_reason", "_git_reason", "_command_reason"}
+    | {"_quote_spans", "_strip_wrappers", "_git_reason"}
     | {"_names_project_data", "_force_add", "_pathspecs", "_git_data_dir_reason"}
     | {"_stash_untracked", "_tester_runner_ok", "_exempt_indices", "_rsync_remote"}
-    | {"_is_append_ledger", "_worker_hygiene"}
+    | {"_is_append_ledger"}
 )
 # 0044: lib.jail imports from lib.shell only the names it uses.
 JAIL_PASSTHROUGH: frozenset[str] = frozenset()
 # issue 55, issue 76: helpers born in lib.shell that lib.jail shares rather than copies.
 SHARED = frozenset(
     {"runs_claude", "WRAPPER_OPTS", "DURATION", "strip_wrappers", "quote_walk", "unwrap"}
-    | {"WrapperOption", "WRAPPER_CHDIR", "WRAPPER_WRITES"}
-    | {"worker_parse", "chain_bases"}
-    | {"env_split_values", "R_ENV_SPLIT", "FLOCK_BODY"}
+    | {"WrapperOption", "WRAPPER_CHDIR", "WRAPPER_WRITES", "FLOCK_BODY"}
     | {"READ_ONLY_WRITE_OPTS", "scan_options", "split_options"}
-    | {"command_family", "interpreter_code", "shell_tokens", "stdin_script", "INTERPRETERS"}
-    | {"_expands"}
-    | {"CHAR", "CLOSE", "_flag_value", "_raw_words", "_unquoted", "segment_spans"}
-    | {"_TRUSTED_BIN"}
+    | {"command_family", "INTERPRETERS", "CHAR", "CLOSE", "_TRUSTED_BIN"}
 )
 # 228 S3: the readers the one parse replaced; no file under scripts/ may name one again.
 RETIRED = (
@@ -83,8 +75,60 @@ RETIRED = (
     "_icase_mentions _icase_on _icase_spec _judged_git _judged_heads _masked _names_path "
     "_normalised _opaque_setter _path_unsafe _stdin_message _text_segment "
     "_text_spec _unseen_git _unseen_paths _unset_only _xargs_runs _excluded_named "
-    "git_globals_known _GH_WORD _GIT_PUSH _fallback_reason _gh_reason"
+    "git_globals_known _GH_WORD _GIT_PUSH _fallback_reason _gh_reason "
+    # 228 tail: the chain parser, the regex fallback, the text walkers and their callers' readers.
+    "worker_parse worker_segments WorkerChain chain_bases _raw_segments segment_spans "
+    "_regex_tripwire _FALLBACK split_pipeline _fd_word _unclosed _REDIRECT_END _REDIRECT_DENY "
+    "REDIRECT_SEP _REGEX_TRIPWIRES _HOME_UP _HOME_PARENTS _PUSH_FORCE_ALT _PUSH_ALL_ALT "
+    "_prefix_re _RM_RECURSIVE _raw_segment_reason _segment_views _word_parts _command_reason "
+    "_segment_reason _shell_code interpreter_code shell_tokens _inline_code _body_scan "
+    "_stdin_body _flag_value _option_end _off_end BodyScan stdin_script _STDIN_TAIL "
+    "SCRIPT_FLAGS R_ENV_SPLIT R_XARGS R_BRACE_PUSH search_opaque "
+    "opaque_word _raw_words _hygiene_bad _worker_hygiene _RESERVED _HYGIENE_CHARS "
+    "_plain_segments _admitted_segments _BODY_HEADS _CLAUDE_WORD _nested_claude _bash_env "
+    "_loop_union _opaque_values _opaque_targets _moved_base _tree_reader _gh_words "
+    "_CREDENTIAL_PART _BINDERS _coder_write_targets "
+    # 228 tail: the credential module's command-text readers no caller reached.
+    "dotglob_on expand_word _DOTS_QUALIFIER _DOTGLOB_WORDS"
 ).split()
+# 228 tail: names another module defines for its own use, so the grep above cannot list them;
+# the import test below proves no module reaches the retired lib.shell ones.
+RETIRED_SHELL_IMPORTS = frozenset({"tokenize", "_scan", "_tokens", "_flush", "_redirect"})
+RETIRED_SHELL_IMPORTS |= {"_normalize", "_unquoted", "_awaits"}
+# 228 tail, SA-4: every re use left in the jail's modules, by top-level name, with the one
+# subject it reads; a command-text subject is a named gap outside this unit's files.
+RE_SUBJECTS: dict[str, dict[str, str]] = {
+    "lib/jail.py": {
+        "_BRANCH_NAME": "the branch operand of an admitted conductor push",
+        "_INTERPRETER": "a parsed command word, moved_relative (issue 188)",
+        "_MODE": "a chmod mode operand of an admitted write",
+        "_PATH_OPTION": "an option word of a packs.py verify, _path_positions (gap: packs.py)",
+        "_PIP": "an installer word of an admitted command",
+        "_REMOTE_URL": "the output of git remote get-url",
+        "_flags_ok": "an admitted git option against its grammar row pattern",
+        "_gitleaks_ok": "an admitted gitleaks option",
+        "_CD_TARGET": "command text, the data folder check (gap: integrity_reason)",
+        "_DAEDALUS_WORD": "command text, the data folder check (gap: integrity_reason)",
+        "_DATA_DIR_WRITE": "command text, the data folder check (gap: integrity_reason)",
+        "_DEVNULL": "command text, the data folder check (gap: integrity_reason)",
+        "_GIT_INDEX_WRITE": "command text, the data folder check (gap: integrity_reason)",
+        "_normalize_paths": "command text, the data folder check (gap: integrity_reason)",
+    },
+    "lib/shell.py": {
+        "DURATION": "a timeout duration word",
+        "WRAPPER_OPERAND": "a wrapper's operand word",
+        "_ASSIGN": "one parsed word, an assignment shape",
+        "_CLAIMS_BRANCH": "the --branch value of the claims call",
+        "_GIT_CONFIG_DENY": "a git -c key of an admitted read",
+        "_SAFE_ENV": "an assignment prefix name",
+        "_SED_PRINT": "a sed script operand",
+        "_VERSION_TAIL": "a command word's version suffix",
+        "_rsync_remote": "an rsync operand",
+        "_strip_wrappers": "a nice priority word",
+    },
+    "lib/admit.py": {},
+    "checks/read_only_bash.py": {"_GREP_PERL": "a grep option word"},
+}
 
 
 def test_no_retired_reader_is_named_under_scripts() -> None:
@@ -95,6 +139,46 @@ def test_no_retired_reader_is_named_under_scripts() -> None:
         if re.search(rf"(?<!\w){re.escape(name)}(?!\w)", path.read_text(encoding="utf-8"))
     ]
     assert hits == [], hits
+
+
+def test_no_module_imports_a_retired_shell_reader() -> None:
+    # 228 tail: no module under scripts/ reaches worker_parse, tokenize or a retired lib.shell
+    # reader, by import or as an attribute of the shell module.
+    retired = RETIRED_SHELL_IMPORTS | {"worker_parse", "worker_segments", "split_pipeline"}
+    hits: list[str] = []
+    for path in sorted(SCRIPTS_DIR.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.module in {"lib.shell", "shell"}:
+                hits += [f"{path.name}:{a.name}" for a in node.names if a.name in retired]
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+                if node.value.id == "shell" and node.attr in retired:
+                    hits.append(f"{path.name}:shell.{node.attr}")
+    assert hits == [], hits
+
+
+def _re_users(module: ast.Module) -> set[str]:
+    found: set[str] = set()
+    for top in module.body:
+        names: list[str] = []
+        if isinstance(top, ast.FunctionDef | ast.ClassDef):
+            names = [top.name]
+        elif isinstance(top, ast.Assign):
+            names = [t.id for t in top.targets if isinstance(t, ast.Name)]
+        elif isinstance(top, ast.AnnAssign) and isinstance(top.target, ast.Name):
+            names = [top.target.id]
+        for node in ast.walk(top):
+            func = node.func if isinstance(node, ast.Call) else None
+            if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                if func.value.id == "re":
+                    found |= set(names or ["<module>"])
+    return found
+
+
+@pytest.mark.parametrize("module", sorted(RE_SUBJECTS))
+def test_every_re_use_in_a_jail_module_names_a_non_command_subject(module: str) -> None:
+    # 228 tail, R5: each re call's top-level home is listed with its subject; a new one fails.
+    tree = ast.parse((SCRIPTS_DIR / module).read_text(encoding="utf-8"))
+    assert _re_users(tree) == set(RE_SUBJECTS[module]), module
 
 
 def _tree(name: str) -> ast.Module:
@@ -143,85 +227,6 @@ def test_shell_imports_nothing_from_jail() -> None:
             assert all(a.name != "lib.jail" for a in node.names)
 
 
-@pytest.mark.parametrize(
-    ("command", "want"),
-    [
-        ("CI=1 LANG=C pytest -q", [["pytest", "-q"]]),
-        ("TZ=UTC git log && ls", [["git", "log"], ["ls"]]),
-        ("PATH=/tmp npm test", [["PATH=/tmp", "npm", "test"]]),
-        ("CI=1", [[]]),
-        ("git diff | head", [["git", "diff"], ["head"]]),
-        ("ls > f", [["ls"], ["tee", "f"]]),
-        ("echo $(id)", None),
-    ],
-)
-def test_worker_segments_drops_only_the_safe_env_prefix(
-    command: str, want: list[list[str]] | None
-) -> None:
-    assert shell.worker_segments(command) == want
-
-
-@pytest.mark.parametrize(
-    ("command", "want"),
-    [
-        ("pytest -q 2>&1", [["pytest", "-q"]]),
-        ("git diff 2>/dev/null | head", [["git", "diff"], ["head"]]),
-        ("ls >/dev/null && ls &>/dev/null", [["ls"], ["ls"]]),
-        ("ls 1> /dev/null 2>&1", [["ls"]]),
-        ("echo '>' \">\" a\\>b", [["echo", ">", ">", "a>b"]]),
-    ],
-)
-def test_stderr_dup_is_a_noop(command: str, want: list[list[str]]) -> None:
-    # O3: discards and the stderr dup leave no segment behind.
-    assert shell.worker_segments(command) == want
-
-
-@pytest.mark.parametrize(
-    ("command", "want"),
-    [
-        ("ls > f", [["ls"], ["tee", "f"]]),
-        ("ls >> /x/f && git diff", [["ls"], ["tee", "-a", "/x/f"], ["git", "diff"]]),
-        ("ls 2>f", [["ls"], ["tee", "f"]]),
-        ("ls &>f", [["ls"], ["tee", "f"]]),
-        ("echo x2>f", [["echo", "x2"], ["tee", "f"]]),
-    ],
-)
-def test_redirect_to_a_path_is_judged_as_a_write(command: str, want: list[list[str]]) -> None:
-    # O3: a redirect target is a tee stand-in, so every write check judges it.
-    chain = shell.worker_parse(command)
-    assert chain is not None and chain.segments == want
-    assert ">" in chain.seps and len(chain.raws) == len(chain.segments)
-
-
-def test_strict_parse_still_refuses_redirects() -> None:
-    # O3: the main session's parse is unchanged.
-    for command in ("ls > f", "ls 2>&1", "ls >/dev/null"):
-        assert shell.tokenize(command) is None, command
-        assert shell._scan(command) is None, command
-
-
-@pytest.mark.parametrize(
-    ("command", "want"),
-    [
-        ("cd /w && tee a | head", ["/c", "/w", "/w"]),
-        ("tee a && ls", ["/c", "/c"]),
-        ("cd /w && echo x > a", ["/c", "/w", "/w"]),
-        ("cd /w", ["/c"]),
-        ("cd /w; tee a", None),
-        ("cd /w || tee a", None),
-        ("cd /w | tee a", None),
-        ("cd w && tee a", None),
-        ("cd /w && cd /v && tee a", None),
-        ("ls && cd /w && tee a", None),
-        ("cd -P /w && tee a", None),
-    ],
-)
-def test_chain_bases_follow_one_absolute_cd(command: str, want: list[str] | None) -> None:
-    chain = shell.worker_parse(command)
-    assert chain is not None
-    assert shell.chain_bases(chain, "/c", jail.DIR_CHANGE_CMDS) == want
-
-
 def test_quote_walk_marks_spans_escapes_and_quote_marks() -> None:
     # issue 76: one quote model; a backslash pairs outside single quotes only.
     got = [(lex.text, lex.quote, lex.kind) for lex in shell.quote_walk('a\'b\\\'"c\\""\\d')]
@@ -241,10 +246,9 @@ def test_quote_walk_marks_spans_escapes_and_quote_marks() -> None:
 
 
 def test_no_quote_loop_outside_the_walker() -> None:
-    # issue 76, 121: the six old loops read quote_walk (segment_spans now holds _raw_segments').
+    # issue 76, 121, 228 tail: the loops that remain read quote_walk.
     tree = _tree("shell.py")
-    users = {"_scan", "_quote_spans", "segment_spans", "_unquoted_expansion", "_raw_words"}
-    users |= {"_unsingled"}
+    users = {"_quote_spans", "_unquoted_expansion", "_unsingled"}
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in users:
             source = ast.unparse(node)
@@ -253,28 +257,18 @@ def test_no_quote_loop_outside_the_walker() -> None:
 
 
 @pytest.mark.parametrize(
-    ("text", "spans", "segments", "words", "unsingled", "expands"),
+    ("text", "spans", "expands"),
     [
-        ("a 'b c' d", "a Q d", ["a 'b c' d"], ["a", "'b c'", "d"], "a  d", False),
-        ('x "a\\"b" *', "x Q *", ['x "a\\"b" *'], ["x", '"a\\"b"', "*"], 'x a\\"b *', True),
-        ('"\\"" *', "Q *", ['"\\"" *'], ['"\\""', "*"], '\\" *', True),
-        ("a;b|'c;d'", "a;b|Q", ["a", "b", "'c;d'"], ["a;b|'c;d'"], "a;b|", False),
-        ("e\\ f '$x'", "e\\ f Q", ["e\\ f '$x'"], ["e\\ f", "'$x'"], "e\\ f ", False),
-        ("'unclosed", "Q", ["'unclosed"], ["'unclosed"], "", False),
+        ("a 'b c' d", "a Q d", False),
+        ('x "a\\"b" *', "x Q *", True),
+        ('"\\"" *', "Q *", True),
+        ("a;b|'c;d'", "a;b|Q", False),
+        ("e\\ f '$x'", "e\\ f Q", False),
+        ("'unclosed", "Q", False),
     ],
 )
-def test_walker_consumers_share_one_quote_model(
-    text: str,
-    spans: str,
-    segments: list[str],
-    words: list[str],
-    unsingled: str,
-    expands: bool,
-) -> None:
+def test_walker_consumers_share_one_quote_model(text: str, spans: str, expands: bool) -> None:
     assert shell._quote_spans(text) == spans
-    assert shell._raw_segments(text) == segments
-    assert shell._raw_words(text) == words
-    assert shell._unsingled(text) == unsingled
     assert shell._unquoted_expansion(text) is expands
 
 
@@ -286,40 +280,6 @@ def test_git_sets_name_the_moved_lists() -> None:
         "specialist": shell.SPECIALIST_GIT,
         "read-only": shell.READ_ONLY_GIT,
     }
-
-
-@pytest.mark.parametrize(
-    ("command", "want"),
-    [
-        ("env -S 'touch /x'", ["touch /x"]),
-        ("env -S'touch /x'", ["touch /x"]),
-        ("env --split-string='touch /x'", ["touch /x"]),
-        ("env --split-string 'touch /x'", ["touch /x"]),
-        ("env --s='a b'", ["a b"]),
-        ("env -iS 'a b'", ["a b"]),
-        ("env -i0vS 'a b'", ["a b"]),
-        ("env -u HOME -S 'a b'", ["a b"]),
-        ("env --unset HOME --split-string 'a b'", ["a b"]),
-        ("env -C /tmp -S 'a b'", ["a b"]),
-        ("env --frobnicate -S 'a b'", ["a b"]),
-        ("env -S", [""]),
-        ("nice env -i env -S 'a b'", ["a b"]),
-        ("env -uS rm x", []),
-        ("env -CS rm x", []),
-        ("env FOO=1 -S x", ["x"]),
-        ("env -a x -S 'touch y'", ["touch y"]),
-        ("env --argv0 x -u A B=1 --split-string=y", ["y"]),
-        ("env -ax -iS y", ["y"]),
-        ("env {-S,x}", [""]),
-        ("env -- -S x", []),
-        ("env - -S x", []),
-        ("env -i rm x", []),
-        ("git commit -m 'env -S x'", []),
-    ],
-)
-def test_env_split_values_reads_getopt_forms(command: str, want: list[str]) -> None:
-    # issue 80, 116 (P8): -S in a cluster or long prefix is found; a value or plain word is not.
-    assert shell.env_split_values(shlex.split(command)) == want
 
 
 @pytest.mark.parametrize(
@@ -350,21 +310,6 @@ def test_every_host_shell_entry_is_a_listed_shell_or_a_named_non_shell() -> None
     assert names <= shell._SHELLS | shell.NOT_SHELLS, names - shell._SHELLS - shell.NOT_SHELLS
     assert not shell._SHELLS & shell.NOT_SHELLS
     assert {"rbash", "mksh", "ash", "ksh93"} <= shell._SHELLS <= shell.WORKER_WRAPPERS
-
-
-@pytest.mark.parametrize(
-    ("command", "want"),
-    [
-        ("env -S 'touch /x'", shell.R_ENV_SPLIT),
-        ("env -S 'git push --force'", shell.R_FORCE_PUSH),
-        ("nice env --split-string='rm -rf /'", shell.R_DESTRUCTIVE),
-    ],
-)
-def test_env_split_is_a_worker_finding(command: str, want: str) -> None:
-    # issue 80: workers meet env -S by name; main stays exempt from construct limits.
-    assert shell._segment_reason(shlex.split(command), 0, main=False) == want
-    assert shell._segment_reason(shlex.split("env -S 'touch /x'"), 0, main=True) == shell._FALLBACK
-    assert "Next: write the command without env -S" in shell.R_ENV_SPLIT
 
 
 @pytest.mark.parametrize(

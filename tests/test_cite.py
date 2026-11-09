@@ -131,4 +131,7 @@ class TestCoderAdmission:
     @pytest.mark.parametrize("agent", ["charter-docs", "releaser"])
     def test_other_workers_are_refused(self, agent: str) -> None:
         got = evaluate(HOOK, _b(agent, f"python3 {CITE} {WT}/a.py x"))
-        assert got == shell.R_INLINE
+        # 228 tail: refused under the shell class, or left to charter-docs' own python row check.
+        named = got == shell.R_INLINE or str(got).startswith(f"{shell.R_INLINE} Refused: ")
+        assert named or (agent == "charter-docs" and got is None), got
+        assert not decide(_b(agent, f"python3 {CITE} {WT}/a.py x"), CFG).allow

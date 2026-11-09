@@ -908,7 +908,8 @@ def _retired_ask(case: str, repo: Path, home: Path) -> tuple[str, dict[str, str]
         ),
         "git write": ("Write", {"file_path": dotgit}, jail.WARN_DOTGIT.format(path=dotgit)),
         "credential read": ("Read", {"file_path": f"{home}/.ssh/id_ed25519"}, jail.WARN_CREDENTIAL),
-        "force push": ("Bash", {"command": "git push --force origin f/x"}, jail.WARN_FORCE_PUSH),
+        # 228 tail: a push off main's grammar is warned with the refusal at its span.
+        "force push": ("Bash", {"command": "git push --force origin f/x"}, jail.WARN_COMMAND),
         "recursive delete": ("Bash", {"command": "rm -rf /"}, jail.WARN_DELETE),
         "push during a train": (
             "Bash",

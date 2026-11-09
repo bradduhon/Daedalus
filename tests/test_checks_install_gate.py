@@ -13,8 +13,8 @@ from lib import jail, shell
 from lib.manifest import INSTALL_ECOSYSTEMS, ManifestError
 from lib.manifest import load as load_manifest
 
-from tests.conftest import REPO_ROOT
-from tests.hook_chain import evaluate
+from tests.conftest import CFG, REPO_ROOT
+from tests.hook_chain import decide, evaluate
 from tests.payloads import _b, _cwd
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
@@ -84,7 +84,13 @@ def test_the_install_class_judges_each_fixture_row(row: dict[str, str], tmp_path
             if kind == "none":
                 assert got is None, (agent, repo.parent.name, command, got)
                 continue
-            assert got is not None and "(0196" in got, (agent, command, got)
+            if got is None:
+                # 228 tail: no grammar admits the install, so its words are never read again;
+                # the agent's own read check refuses it naming the word off its table.
+                chain = decide(_cwd(_b(agent, command), repo), CFG)
+                assert not chain.allow and "Refused: " in str(chain.reason), (agent, command)
+                continue
+            assert "(0196" in got, (agent, command, got)
             if kind == "launcher":
                 assert "downloads a package and runs it" in got, (command, got)
                 assert "Next: run the installed binary instead (" in got, (command, got)

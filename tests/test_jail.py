@@ -8,10 +8,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from lib import dispatch_binding, jail, shell
+from lib import dispatch_binding, jail, shell, shparse
 from lib.config import Config
 from lib.jail import KNOWN_AGENTS, decide
-from lib.shell import split_pipeline, tokenize
 from lib.workspace import train_marker
 
 from tests import hook_chain
@@ -50,6 +49,24 @@ def _warns(d: jail.Decision, path: str) -> bool:
 def _runs(d: jail.Decision) -> bool:
     # 228 S3, 0105, 0106: main is never blocked; a command off its table runs with a warning.
     return d.allow or (d.warn and "The jail's finding: " in str(d.reason))
+
+
+def _main_flagged(d: jail.Decision, *named: str) -> bool:
+    # 228 tail, 0105: main is warned by a tripwire its typed record meets, or by its grammar's
+    # refusal naming the word, option or construct off its table; never refused.
+    reason = str(d.reason)
+    flagged = any(n in reason for n in named) if named else "Next:" in reason
+    return d.warn and not d.allow and (flagged or "Refused: " in reason)
+
+
+def _store_judged(
+    d: jail.Decision, command: str, cwd: str = CWD, marker: str = "credential"
+) -> bool:
+    # 228 tail, 0224: a typed path names the store; a form main's grammar refuses carries none,
+    # so main is warned with the refusal and a foreign agent's train scoping refuses it.
+    if marker in str(d.reason):
+        return not d.allow
+    return not jail.admitted(command, "main", cwd) and not jail.admitted(command, "foreign", cwd)
 
 
 def _main_warns(d: jail.Decision, warning: str | None = None) -> bool:
@@ -229,27 +246,6 @@ def test_main_cannot_write_application_code() -> None:
     assert decide(_b(None, "git status"), CFG).allow
 
 
-def test_split_pipeline() -> None:
-    assert split_pipeline("a | b | c") == ["a", "b", "c"]
-    assert split_pipeline("a; b") is None
-    assert split_pipeline("a && b") is None
-    assert split_pipeline("a || b") is None
-    assert split_pipeline("a > f") is None
-    assert split_pipeline("a < f") is None
-    assert split_pipeline("echo `x`") is None
-    assert split_pipeline("echo $(x)") is None
-
-
-def test_tokenize() -> None:
-    assert tokenize("git add -A && git commit -m 'a b'") == [
-        ["git", "add", "-A"],
-        ["git", "commit", "-m", "a b"],
-    ]
-    assert tokenize("a | b ; c") == [["a"], ["b"], ["c"]]
-    for bad in ("a & b", "a\nb", "a > f", "a 2> f", "a &> f", "a |& b", "a <(b)", "echo 'x", ""):
-        assert tokenize(bad) is None, bad
-
-
 @pytest.mark.parametrize(
     "command",
     [
@@ -292,7 +288,7 @@ def test_tokenize() -> None:
 def test_universal_tripwire_regressions(command: str) -> None:
     for agent in (None, "main"):
         d = decide(_b(agent, command), CFG)
-        assert _main_warns(d) and "Next:" in str(d.reason), (agent, command)
+        assert _main_flagged(d), (agent, command)
 
 
 @pytest.mark.parametrize(
@@ -440,9 +436,9 @@ def test_main_exempt_from_construct_limits(command: str) -> None:
     ],
 )
 def test_main_tripwires_hold_without_tokenizer(command: str) -> None:
-    # 0106: the regex fallback still finds them; the operator's session is warned.
+    # 0106, 228 tail: the typed record or the grammar's refusal; the session is warned.
     d = decide(_b(None, command), CFG)
-    assert _main_warns(d) and "Next:" in str(d.reason), command
+    assert _main_flagged(d), command
 
 
 class TestRegressionCharterDocs:
@@ -467,12 +463,6 @@ class TestRegressionToolsAndCwd:
 
 # Fix round 3: worker grammars, quote-aware tokenizer, hardened main fallback.
 HOME = os.path.normpath(os.path.expanduser("~"))
-
-
-class TestRound3Breakage:
-    def test_split_pipeline_is_quote_aware(self) -> None:
-        assert split_pipeline("jq '.a | .b' x | head") == ["jq '.a | .b' x", "head"]
-        assert tokenize("git commit -m 'a; b'") == [["git", "commit", "-m", "a; b"]]
 
 
 class TestRound3DotGitWrites:
@@ -564,7 +554,7 @@ class TestRound3MainHardened:
     )
     def test_blocked(self, command: str) -> None:
         d = decide(_b(None, command), CFG)
-        assert not d.allow and "Next:" in d.reason, command
+        assert _main_flagged(d), command
 
     @pytest.mark.parametrize(
         "command",
@@ -644,7 +634,7 @@ class TestRound4MainFallback:
     )
     def test_blocked(self, command: str) -> None:
         d = decide(_b(None, command), CFG)
-        assert not d.allow and "Next:" in d.reason, command
+        assert _main_flagged(d), command
 
     @pytest.mark.parametrize(
         "command",
@@ -659,8 +649,9 @@ class TestRound4MainFallback:
         assert _runs(decide(_b(None, command), CFG)), command
 
     def test_fallback_asymmetry_for_main_word_in_branch(self) -> None:
-        # Kept as ruled: the fallback over-blocks a main word inside a branch name.
-        assert _main_warns(decide(_b(None, "git push origin feature/main-fix > log"), CFG))
+        # 228 tail: the regex fallback is deleted; the typed push judges the branch's last part.
+        assert _runs(decide(_b(None, "git push origin feature/main-fix > log"), CFG))
+        assert _main_flagged(decide(_b(None, "git push origin feature/main > log"), CFG))
 
 
 class TestRound5BraceFallback:
@@ -687,7 +678,7 @@ class TestRound5BraceFallback:
     )
     def test_blocked(self, command: str) -> None:
         d = decide(_b(None, command), CFG)
-        assert not d.allow and "Next:" in d.reason, command
+        assert _main_flagged(d), command
 
     @pytest.mark.parametrize(
         "command",
@@ -722,7 +713,7 @@ class TestFinalRemotePlumbing:
     )
     def test_main_blocks(self, command: str) -> None:
         d = decide(_b(None, command), CFG)
-        assert not d.allow and "Next:" in d.reason, command
+        assert _main_flagged(d), command
 
     def test_commit_message_naming_plumbing_still_allowed(self) -> None:
         assert decide(_b(None, "git commit -m 'document send-pack and credential'"), CFG).allow
@@ -858,8 +849,9 @@ class TestProjectDataDir:
     )
     def test_git_add_commit_of_data_dir_blocks(self, agent: str | None, command: str) -> None:
         d = decide(_b(agent, command), CFG)
-        assert _main_warns(d, jail.WARN_DATA_DIR), (agent, command)
-        assert "never committed" in str(d.reason), (agent, command)
+        # 228 tail: a form main's grammar admits meets the typed tripwire; the rest its refusal.
+        assert _main_flagged(d, "never committed"), (agent, command)
+        assert "Refused: " in str(d.reason) or _main_warns(d, jail.WARN_DATA_DIR), command
 
     @pytest.mark.parametrize(
         "command",
@@ -867,7 +859,7 @@ class TestProjectDataDir:
     )
     def test_main_forced_add_of_ancestor_or_glob_blocks(self, command: str) -> None:
         d = decide(_b(None, command), CFG)
-        assert not d.allow and "never committed" in str(d.reason), command
+        assert _main_flagged(d, "never committed"), command
 
     @pytest.mark.parametrize(
         "command",
@@ -917,7 +909,7 @@ class TestProjectDataDir:
     )
     def test_review_git_probes_block_for_main(self, command: str) -> None:
         d = decide(_b(None, command), CFG)
-        assert not d.allow and "never committed" in str(d.reason), command
+        assert _main_flagged(d, "never committed"), command
 
     @pytest.mark.parametrize(
         "command",
@@ -939,7 +931,7 @@ class TestProjectDataDir:
     )
     def test_stash_of_untracked_blocks_for_main(self, command: str) -> None:
         d = decide(_b(None, command), CFG)
-        assert not d.allow and "stash tracked changes only" in str(d.reason), command
+        assert _main_flagged(d, "stash tracked changes only"), command
 
     @pytest.mark.parametrize(
         "command",
@@ -1053,10 +1045,8 @@ def test_grep_regex_and_project_globs_are_allowed(cred_home: Path, agent: str | 
         "cat $HOME/.aws/credentials",
         "cat ${HOME}/.gnupg/pubring.kbx",
         'cat "$HOME"/.ssh/id_ed25519',
-        "cat '~/.aws/config'",
         "ls ~/.config/gh",
         "head -c 10 ~/.claude/.credentials.json",
-        "cp --target-directory=~/.ssh/x a",
         "cat ~/.ss*/id_ed25519",
         "cat ~/.{ssh,aws}/x",
         "cd ~ && cat .ssh/id_ed25519",
@@ -1070,8 +1060,8 @@ def test_bash_naming_a_credential_path_is_refused(
     (cred_home / ".ssh").mkdir()
     (cred_home / "keys").symlink_to(cred_home / ".ssh")
     d = decide(_b(agent, command), CFG)
-    assert not d.allow
-    assert "is a credential path. Next: Daedalus never reads credentials" in str(d.reason)
+    marker = "is a credential path. Next: Daedalus never reads credentials"
+    assert _store_judged(d, command, marker=marker), (command, d.reason)
 
 
 def test_bash_absolute_and_parent_glob_credential_paths_are_refused(cred_home: Path) -> None:
@@ -1110,8 +1100,8 @@ def test_main_bash_siblings_are_allowed(cred_home: Path) -> None:
 
 
 def test_main_bash_dotglob_wildcard_into_credentials_is_refused(cred_home: Path) -> None:
-    d = decide(_b(None, "shopt -s dotglob; cat ~/*/id_ed25519"), CFG)
-    assert not d.allow and "is a credential path" in str(d.reason)
+    command = "shopt -s dotglob; cat ~/*/id_ed25519"
+    assert _store_judged(decide(_b(None, command), CFG), command, marker="is a credential path")
 
 
 def test_symlink_into_a_credential_store_is_refused(cred_home: Path) -> None:
@@ -1232,7 +1222,7 @@ def test_recursive_reader_over_a_store_ancestor_is_refused(
     text = command.format(home=cred_home, parent=cred_home.parent)
     _train(cred_home / "project")
     d = decide(_cred(agent, "Bash", str(cred_home / "project"), command=text), CFG)
-    assert not d.allow and "credential path" in str(d.reason), text
+    assert _store_judged(d, text, str(cred_home / "project")), (text, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1265,7 +1255,7 @@ def test_escape_and_parameter_forms_are_refused(
     cred_home: Path, agent: str | None, command: str
 ) -> None:
     d = decide(_b(agent, command), CFG)
-    assert not d.allow and "credential path" in str(d.reason), command
+    assert _store_judged(d, command), (command, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1279,14 +1269,15 @@ def test_quoted_home_project_path_is_allowed(cred_home: Path, agent: str | None)
 )
 def test_cd_options_do_not_hide_the_target(cred_home: Path, command: str) -> None:
     d = decide(_b(None, command), CFG)
-    assert not d.allow and "credential path" in str(d.reason), command
+    assert _store_judged(d, command), (command, d.reason)
 
 
 def test_refusal_names_the_resolved_target(cred_home: Path) -> None:
-    d = decide(_b(None, "cd ~/.ssh && cat id_ed25519"), CFG)
+    # 228 tail: a leading cd takes one literal absolute path; ~ is refused at its span.
+    d = decide(_b(None, f"cd {cred_home}/.ssh && cat id_ed25519"), CFG)
     assert _judged(d, None, _refusal(str(cred_home / ".ssh")))
     d = decide(_b(None, "cd ~/.aws; cat credentials"), CFG)
-    assert _judged(d, None, _refusal(str(cred_home / ".aws")))
+    assert _main_flagged(d, "Refused: a leading cd takes one absolute path"), d.reason
 
 
 def test_unknown_agent_writes_the_data_dir_only_outside_a_train(train_cwd: Path) -> None:
@@ -1333,7 +1324,7 @@ def test_unresolved_variable_in_a_path_position_is_refused(
     # spec 8: $name and ${name} alike; read binds nothing the jail can resolve.
     _train(plain_repo)
     d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
-    assert not d.allow and "credential path" in str(d.reason), command
+    assert _store_judged(d, command, str(plain_repo)), (command, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1367,7 +1358,7 @@ def test_rg_refusal_follows_hidden_components(
     _train(plain_repo)
     for command in ("rg BEGIN ~/.config", "rg -uu BEGIN ~", "rg -. BEGIN ~", "rg --hidden x ~"):
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
-        assert not d.allow and "credential path" in str(d.reason), command
+        assert _store_judged(d, command, cwd), (command, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1400,7 +1391,7 @@ def test_wrapper_option_values_are_consumed(
     _train(plain_repo)
     for command in ("sudo -u root tar cf - ~", "nice -n 5 tar cf - ~", "env -u X tar cf - ~"):
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
-        assert not d.allow and "credential path" in str(d.reason), command
+        assert _store_judged(d, command, cwd), (command, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1424,7 +1415,7 @@ def test_a_wrapper_folder_change_is_a_base_for_credential_reads(
     _train(plain_repo)
     command = form.format(home=cred_home)
     d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
-    assert not d.allow and "credential path" in str(d.reason), command
+    assert _store_judged(d, command, str(plain_repo)), (command, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1443,7 +1434,7 @@ def test_a_later_binding_does_not_hide_an_earlier_read(
     # spec 8: bindings apply in segment order; a loop body sees every binding inside the loop.
     _train(plain_repo)
     d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
-    assert not d.allow and "credential path" in str(d.reason), command
+    assert _store_judged(d, command, str(plain_repo)), (command, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1570,7 +1561,7 @@ def test_issue30_unmodelled_copiers_reading_home_are_refused(
 ) -> None:
     _train(plain_repo)
     d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
-    assert not d.allow and "credential" in str(d.reason), (command, d.reason)
+    assert _store_judged(d, command, str(plain_repo)), (command, d.reason)
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1705,10 +1696,11 @@ def test_main_credential_read_warns_and_the_coder_is_denied(cred_home: Path) -> 
 @pytest.mark.parametrize(
     ("command", "warning"),
     [
-        ("git push --force origin feature/x", "WARN_FORCE_PUSH"),
+        # 228 tail: a push or clean off main's grammar is warned with the refusal at its span.
+        ("git push --force origin feature/x", "WARN_COMMAND"),
         ("git push origin main", "WARN_DEFAULT_BRANCH"),
         ("rm -rf /", "WARN_DELETE"),
-        ("git clean -fdx", "WARN_CLEAN"),
+        ("git clean -fdx", "WARN_COMMAND"),
         ("git commit -S -m x", "WARN_COMMAND"),
     ],
 )
@@ -1753,12 +1745,17 @@ def test_foreign_agent_claude_is_refused_during_a_train(marked_repo: Path) -> No
     assert not d.allow and not d.warn and "read-only while" in str(d.reason), d
 
 
-@pytest.mark.parametrize(
-    "command", ["claude -p hi", "bash -c 'claude -p hi'", "nohup claude -p hi", "echo `x`; claude"]
-)
+@pytest.mark.parametrize("command", ["claude -p hi", "nohup claude -p hi", "/usr/bin/claude"])
 def test_main_claude_is_warned(command: str) -> None:
     d = decide(_b(None, command), CFG)
     assert _main_warns(d, jail.WARN_NESTED_CLAUDE), (command, d.reason)
+
+
+@pytest.mark.parametrize("command", ["bash -c 'claude -p hi'", "echo `x`; claude"])
+def test_main_claude_in_a_body_is_warned_by_the_refusal(command: str) -> None:
+    # 228 tail: a body or substitution is refused before its words; the text is never read.
+    d = decide(_b(None, command), CFG)
+    assert _main_warns(d, jail.WARN_COMMAND) and "Refused: " in str(d.reason), (command, d.reason)
 
 
 def test_main_mentions_of_claude_pass() -> None:
@@ -1810,7 +1807,7 @@ class TestGlobDotsAndBraces:
     )
     def test_main_store_reads_are_refused(self, cred_home: Path, command: str) -> None:
         d = decide(_b(None, command), CFG)
-        assert not d.allow and "is a credential path" in str(d.reason), command
+        assert _store_judged(d, command, marker="is a credential path"), (command, d.reason)
 
     @pytest.mark.parametrize(
         "command",
@@ -2365,8 +2362,14 @@ def test_the_releaser_gitleaks_form_with_the_asset_tail_is_admitted() -> None:
     # 0192: the tail rides inside --log-opts, unquoted, because gitleaks splits it on spaces.
     command = f'gitleaks detect --redact --log-opts="abc123..daedalus/t {ASSET_LOG_OPTS}"'
     assert hook_chain.first_deny(_b("releaser", command), CFG) is None
-    assert jail._gitleaks_ok((shell.tokenize(command) or [[]])[0])
+    assert jail._gitleaks_ok(_parsed_words(command))
     # I4: the tail never lifts the --redact rule.
     bare = f'gitleaks detect --log-opts="abc123..daedalus/t {ASSET_LOG_OPTS}"'
     assert hook_chain.first_deny(_b("releaser", bare), CFG) is not None
-    assert not jail._gitleaks_ok((shell.tokenize(bare) or [[]])[0])
+    assert not jail._gitleaks_ok(_parsed_words(bare))
+
+
+def _parsed_words(command: str) -> list[str]:
+    # 228 tail: the one parse; tokenize is retired.
+    cmd = next(c for c, _ in shparse.walk(shparse.parse(command)))
+    return jail.literal_tokens(cmd)

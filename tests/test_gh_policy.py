@@ -629,9 +629,6 @@ def test_a_script_run_reaches_the_parsed_gh_path(train_repo: Path, agent: str) -
     # R-extra-2, P7, 228 S3: no unparsed-gh warning or refusal for a script or module run.
     cwd = str(train_repo)
     for command in PARSED_RUNS:
-        # 228 S3: node is off main's table, so its run takes the refused path's reader.
-        want = [shlex.split(command)] if jail.admitted(command, "main", cwd) else None
-        assert jail._admitted_segments(command, cwd) == want, command
         assert jail._gh_gate(agent, cwd, command) is None, command
     for command in INLINE_RUNS:
         # 228 S4: an inline body shows no gh call to the parse; the gate reads none of its text.

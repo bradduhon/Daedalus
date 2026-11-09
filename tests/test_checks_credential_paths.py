@@ -8,6 +8,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from lib import jail
+from lib.admit import Refusal
 
 from tests.conftest import CFG, CWD
 from tests.hook_chain import (
@@ -23,6 +25,25 @@ from tests.payloads import _b, _cred, _w
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "credential_paths"
 CREDENTIAL_AGENTS = ["coder", "auditor"]
+
+
+def _denied(hook_input: dict[str, object], marker: str) -> None:
+    # 228 tail: the hook names the store from a typed path; a form no grammar admits carries no
+    # typed path (0224), so the agent's chain refuses it naming the word off its table.
+    reason = evaluate(HOOK, hook_input)
+    if reason is not None:
+        assert marker in reason, (hook_input, reason)
+        return
+    assert isinstance(jail.held_admission(hook_input), Refusal), hook_input
+    d = decide(hook_input, CFG)
+    assert not d.allow and "Refused: " in str(d.reason), (hook_input, d.reason)
+
+
+def _main_warned(command: str, marker: str) -> None:
+    # 228 tail, 0105: main is warned, by the store's name or by its grammar's refusal.
+    d = jail.decide(_b(None, command), CFG)
+    reason = str(d.reason)
+    assert not d.allow and d.warn and (marker in reason or "Refused: " in reason), command
 
 
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
@@ -148,8 +169,7 @@ def test_brace_alternative_naming_a_store_is_refused(cred_home: Path, agent: str
     # issue 53: the shell spells out {.ssh,x}; a wildcard reading would skip the dot folder.
     for command in (f"grep -rn key {cred_home}/{{.ssh,x}}", f"cat {cred_home}/{{x,.aws}}/config"):
         case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
-        reason = evaluate(HOOK, {**case, "agent_type": agent})
-        assert reason is not None and "credential path" in reason, command
+        _denied({**case, "agent_type": agent}, "credential path")
 
 
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
@@ -184,17 +204,12 @@ def test_re_rooted_brace_alternative_is_refused(cred_home: Path, agent: str, tem
     # begins with /, ~ or $HOME is its own root; the matcher joins it under cwd and misses.
     command = template.format(home=cred_home)
     case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
-    reason = evaluate(HOOK, {**case, "agent_type": agent})
-    assert reason is not None and "credential path" in reason, command
+    _denied({**case, "agent_type": agent}, "credential path")
 
 
 @pytest.mark.parametrize("template", RE_ROOTED_READS)
 def test_main_re_rooted_brace_alternative_is_refused(cred_home: Path, template: str) -> None:
-    from lib.jail import decide as jail_decide
-
-    command = template.format(home=cred_home)
-    d = jail_decide(_b(None, command), CFG)
-    assert not d.allow and "credential path" in str(d.reason), command
+    _main_warned(template.format(home=cred_home), "credential path")
 
 
 @pytest.mark.parametrize("agent", [None, *CREDENTIAL_AGENTS])
@@ -225,7 +240,9 @@ def test_unexpanded_brace_with_a_rooted_alternative_is_refused(
     ):
         d = judge(case, CFG)
         reason = str(d.reason)
-        assert not d.allow and ("does not expand" in reason or "credential path" in reason), case
+        # 228 tail: a Bash brace list is refused by every grammar, which names it.
+        named = ("does not expand", "credential path", "brace expansion { , } is not admitted")
+        assert not d.allow and any(n in reason for n in named), case
     d = judge(_cred(agent, "Glob", pattern=f"{{x,{cred_home}/.s{{s..s}}h}}/*"), CFG)
     assert not d.allow and "does not expand" in str(d.reason)
 
@@ -263,8 +280,10 @@ BRACE_CLASS_TABLE = [
 def test_brace_class_table(cred_home: Path, form: str, template: str, refused: bool) -> None:
     command = template.format(home=cred_home)
     case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
-    reason = evaluate(HOOK, {**case, "agent_type": "auditor"})
-    assert (reason is not None) == refused, (form, command, reason)
+    if refused:
+        _denied({**case, "agent_type": "auditor"}, "credential path")
+    else:
+        assert evaluate(HOOK, {**case, "agent_type": "auditor"}) is None, (form, command)
 
 
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
@@ -275,17 +294,12 @@ def test_sequence_brace_naming_a_store_is_refused(
     # audit B4 round 1: bash expands {s..s} to s, so the read reaches ~/.ssh.
     command = template.format(home=cred_home)
     case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
-    reason = evaluate(HOOK, {**case, "agent_type": agent})
-    assert reason is not None and "is a credential path" in reason, command
+    _denied({**case, "agent_type": agent}, "is a credential path")
 
 
 @pytest.mark.parametrize("template", SEQUENCE_READS)
 def test_main_sequence_brace_naming_a_store_is_refused(cred_home: Path, template: str) -> None:
-    from lib.jail import decide as jail_decide
-
-    command = template.format(home=cred_home)
-    d = jail_decide(_b(None, command), CFG)
-    assert not d.allow and "is a credential path" in str(d.reason), command
+    _main_warned(template.format(home=cred_home), "is a credential path")
 
 
 @pytest.mark.parametrize("agent", [None, *CREDENTIAL_AGENTS])
@@ -312,8 +326,7 @@ def test_dotglob_spellings_open_a_wildcard_into_a_store(cred_home: Path) -> None
     # issue 53: bash and zsh spellings alike; without one, * skips the dot folder.
     for command in ("cat ~/*/id_ed25519(D)", "setopt GLOB_DOTS && cat ~/*/id_ed25519"):
         case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD}
-        reason = evaluate(HOOK, {**case, "agent_type": "auditor"})
-        assert reason is not None and "is a credential path" in reason, command
+        _denied({**case, "agent_type": "auditor"}, "is a credential path")
     case = {"tool_name": "Bash", "tool_input": {"command": "cat ~/*/id_ed25519"}, "cwd": CWD}
     assert evaluate(HOOK, {**case, "agent_type": "auditor"}) is None
 
@@ -397,10 +410,8 @@ def test_grep_regex_and_project_globs_are_allowed(cred_home: Path, agent: str | 
         "cat $HOME/.aws/credentials",
         "cat ${HOME}/.gnupg/pubring.kbx",
         'cat "$HOME"/.ssh/id_ed25519',
-        "cat '~/.aws/config'",
         "ls ~/.config/gh",
         "head -c 10 ~/.claude/.credentials.json",
-        "cp --target-directory=~/.ssh/x a",
         "cat ~/.ss*/id_ed25519",
         "cat ~/.{ssh,aws}/x",
         "cd ~ && cat .ssh/id_ed25519",
@@ -413,9 +424,13 @@ def test_bash_naming_a_credential_path_is_refused(
 ) -> None:
     (cred_home / ".ssh").mkdir()
     (cred_home / "keys").symlink_to(cred_home / ".ssh")
-    d = decide(_b(agent, command), CFG)
-    assert not d.allow
-    assert "is a credential path. Next: Daedalus never reads credentials" in str(d.reason)
+    _denied(_b(agent, command), "is a credential path. Next: Daedalus never reads credentials")
+
+
+@pytest.mark.parametrize("command", ["cat '~/.aws/config'", "cp --target-directory=~/.ssh/x a"])
+def test_a_quoted_or_option_tilde_stays_literal(cred_home: Path, command: str) -> None:
+    # 228 tail, SS-4: bash expands no ~ in quotes or after an option's =; probed with bash -c.
+    assert evaluate(HOOK, _b("coder", command)) is None, command
 
 
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
@@ -483,8 +498,7 @@ def test_issue30_unmodelled_copiers_reading_home_are_refused(
     cred_home: Path, plain_repo: Path, agent: str | None, command: str
 ) -> None:
     _train(plain_repo)
-    d = decide(_cred(agent, "Bash", str(plain_repo), command=command), CFG)
-    assert not d.allow and "credential" in str(d.reason), (command, d.reason)
+    _denied(_cred(agent, "Bash", str(plain_repo), command=command), "credential")
 
 
 def test_credential_paths_judges_the_hook_alone(cred_home: Path) -> None:
@@ -599,8 +613,7 @@ def test_env_file_writes_are_refused(tmp_path: Path, tool: str) -> None:
 def test_bash_reads_and_writes_of_env_files_are_refused(tmp_path: Path, command: str) -> None:
     repo = _env_repo(tmp_path)
     for agent in CREDENTIAL_AGENTS:
-        reason = evaluate(HOOK, _bash_in(repo, agent, command))
-        assert reason is not None and ".env deny" in reason, (agent, command, reason)
+        _denied(_bash_in(repo, agent, command), ".env deny")
         assert not decide(_bash_in(repo, agent, command), CFG).allow, (agent, command)
 
 
@@ -662,8 +675,7 @@ NESTED_REFUSED = [
 @pytest.mark.parametrize("command", NESTED_REFUSED)
 def test_a_folder_read_over_a_nested_env_file_is_refused(tmp_path: Path, command: str) -> None:
     repo = _nested_env_repo(tmp_path)
-    reason = evaluate(HOOK, _bash_in(repo, "auditor", command))
-    assert reason is not None and ".env deny" in reason, (command, reason)
+    _denied(_bash_in(repo, "auditor", command), ".env deny")
 
 
 @pytest.mark.parametrize("command", ["rg -n STRIPE .", "grep -r STRIPE src", "tar cf - src"])
@@ -818,9 +830,12 @@ def test_writing_an_env_whitelist_into_an_ignore_file_is_refused(tmp_path: Path,
         f"printf 'dist/\\n!.env.*\\n' > apps/web/{name}",
         f"cat >> {name} <<EOF\n!**/.env\nEOF",
     ):
-        reason = evaluate(HOOK, _bash_in(repo, "coder", command))
-        assert reason is not None and WHITELIST_WRITE in reason, command
+        _denied(_bash_in(repo, "coder", command), WHITELIST_WRITE)
     assert evaluate(HOOK, _bash_in(repo, "coder", f"echo '!build.log' >> {name}")) is None
+    # 228 tail: main's grammar admits the heredoc and here-string forms and types their text.
+    for command in (f"cat >> {name} <<EOF\n!**/.env\nEOF", f"tee {name} <<< '!.env'"):
+        d = jail.decide({**_bash_in(repo, "main", command), "agent_type": "main"}, CFG)
+        assert d.warn and WHITELIST_WRITE in str(d.reason), command
 
 
 ESCAPED = ["!\\.env", "!\\.e*", "!\\.env\\.local"]
@@ -846,8 +861,7 @@ def test_an_escaped_env_whitelist_is_refused_on_write(tmp_path: Path, line: str)
     path = str(repo / "apps" / "web" / ".rgignore")
     write = _cred("coder", "Write", cwd=str(repo), file_path=path, content=f"{line}\n")
     assert WHITELIST_WRITE in str(evaluate(HOOK, write)), line
-    reason = evaluate(HOOK, _bash_in(repo, "coder", f"echo '{line}' >> apps/web/.rgignore"))
-    assert reason is not None and WHITELIST_WRITE in reason, line
+    _denied(_bash_in(repo, "coder", f"echo '{line}' >> apps/web/.rgignore"), WHITELIST_WRITE)
     assert evaluate(HOOK, _bash_in(repo, "coder", "echo '!\\.env\\.example' >> .rgignore")) is None
 
 

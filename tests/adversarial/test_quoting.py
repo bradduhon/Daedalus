@@ -28,7 +28,6 @@ STORE_READS = (
     'cat "$HOME"/.ssh/id_ed25519',
     'cat "$HOME/.ssh/id_ed25519"',
     'cat "${{HOME}}/.aws/credentials"',
-    "cat '~/.aws/config'",
     'cat ~/".ssh"/id_ed25519',
     "cat ~/'.ssh'/id_ed25519",
     'cat ~/.s"s"h/id_ed25519',
@@ -36,7 +35,6 @@ STORE_READS = (
     r"cat ~/.s\sh/id_ed25519",
     r"cat ~/.ssh\/id_ed25519",
     r"cat $HOME/.s\sh/id_ed25519",
-    r"cat \~/.ssh/id_ed25519",
     'cat "{home}/.ssh/id_ed25519"',
     "cat '{home}/.aws/credentials'",
     'cat "{home}"/.gnupg/pubring.kbx',
@@ -84,6 +82,16 @@ def test_quoted_store_read_is_denied(
     assert_store_read_denied(agent, template, home=cred_home)
 
 
+@pytest.mark.parametrize("command", ["cat '~/.aws/config'", r"cat \~/.ssh/id_ed25519"])
+def test_a_quoted_tilde_reads_a_literal_relative_path(
+    cred_home: Path,  # noqa: F811
+    command: str,
+) -> None:
+    # 228 tail friction fix, spec R1 (quote removal) and SS-4: bash expands no quoted or escaped
+    # ~ (probed: bash -c printf), so the read is ./~/..., no store; the old text reader refused.
+    assert jail._credential_reason("Bash", {"command": command}, "/work/repo") is None
+
+
 @pytest.mark.parametrize("agent", READERS)
 @pytest.mark.parametrize("command", KEY_READS)
 def test_quoted_reply_key_read_is_denied(tmp_path: Path, agent: str, command: str) -> None:
@@ -128,9 +136,11 @@ def test_a_rewritten_search_word_counts_as_a_hidden_reach(
     tmp_path: Path, agent: str, command: str
 ) -> None:
     # prepush2-2026-10-27 item 1: the credential check alone refuses it beside the reply key.
+    # 228 tail, 0224: a word no grammar admits leaves no typed path; the grammar refuses it.
     repo = _key_repo(tmp_path)
     assert_denied(_bash_in(repo, agent, command))
-    assert jail._credential_reason("Bash", {"command": command}, str(repo)) is not None
+    reason = jail._credential_reason("Bash", {"command": command}, str(repo))
+    assert reason is not None or not jail.admitted(command, "main", str(repo)), command
 
 
 @pytest.mark.parametrize("command", [c for c in PREPUSH2_RG_OPAQUE if c.startswith("rg ")])

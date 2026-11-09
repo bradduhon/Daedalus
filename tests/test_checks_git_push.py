@@ -98,12 +98,20 @@ class TestFinalRemotePlumbing:
         assert not decide(_b("coder", command), CFG).allow, command
 
 
+def _named(got: str | None, constant: str) -> bool:
+    # 228 tail: an admitted record's constant, or a refusal under it naming its span.
+    return got == constant or str(got).startswith(f"{constant} Refused: ")
+
+
 def test_git_push_judges_the_hook_alone() -> None:
-    assert evaluate(HOOK, _b("coder", "git fetch")) == jail.R_REMOTE_GIT
+    assert _named(evaluate(HOOK, _b("coder", "git fetch")), jail.R_REMOTE_GIT)
     assert evaluate(HOOK, _b("coder", "git stash push -m x")) is None
-    assert evaluate(HOOK, _b("coder", "find . -exec git push {} +")) == jail.R_REMOTE_GIT
+    # 228 tail: find -exec runs a body no grammar admits; the coder's own check refuses it.
+    assert evaluate(HOOK, _b("coder", "find . -exec git push {} +")) is None
+    assert not decide(_b("coder", "find . -exec git push {} +"), CFG).allow
     assert evaluate(HOOK, _b(C, f"git push origin {TRAIN_BRANCH}"), "--conductor") is None
-    assert evaluate(HOOK, _b(C, "git push origin x y"), "--conductor") == jail.R_CONDUCTOR_PUSH
+    got = evaluate(HOOK, _b(C, "git push origin x y"), "--conductor")
+    assert _named(got, jail.R_CONDUCTOR_PUSH)
     assert evaluate(HOOK, _b(C, "git push origin feat/x")) == jail.R_REMOTE_GIT
 
 
@@ -114,8 +122,8 @@ def test_git_push_fixture_decisions(repo_cwd: Path) -> None:
     assert run_script(HOOK, push) == {"decision": "deny", "reason": jail.R_REMOTE_GIT}
     assert run_script(HOOK, push, "--conductor") == {"decision": "allow", "reason": ""}
     extra = payload("Bash", command="git push origin feat/x extra")
-    want = {"decision": "deny", "reason": jail.R_CONDUCTOR_PUSH}
-    assert run_script(HOOK, extra, "--conductor") == want
+    got = run_script(HOOK, extra, "--conductor")
+    assert got["decision"] == "deny" and _named(got["reason"], jail.R_CONDUCTOR_PUSH)
 
 
 def _conductor_push(repo: Path, branch: str = GATE_BRANCH) -> str | None:

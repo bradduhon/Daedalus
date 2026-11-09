@@ -9,6 +9,7 @@ import shlex
 from typing import Any
 
 from lib import jail
+from lib.admit import Refusal
 from lib.jail import normalize_agent
 
 from tests.conftest import CFG
@@ -727,11 +728,9 @@ A3_ADMITTED = (
     "git commit -m GIT_ICASE_PATHSPECS=1; git add NOTES/a.md",
     "git commit -F ':(icase)msg'",
     "export git_icase_pathspecs=1; git add NOTES/a.md",
-    "export PATH=/x:/y; git add NOTES/a.md",
     # fix round 1 (designs 4, 5): literal messages, a piped one included.
     "git commit -F - <<'EOF'\nfix :i: spelling\nEOF",
     "cat <<E\ndon't\nE\ngit log -- ':(icase)NOTES'",
-    'export "PATH"=/x; git add NOTES/a.md',
     # fix round 3 (G1 refined): a bare plain delimiter with a body bash leaves literal.
     "git commit --file=- <<-EOF\n\tfix :i: spelling\n\tEOF",
     "cat <<EOF | git commit -F -\nfix :i: spelling\nEOF",
@@ -916,7 +915,11 @@ def assert_denied(hook_input: dict[str, Any], *markers: str) -> None:
     d = decide(hook_input, CFG) if chained else jail.decide(hook_input, CFG)
     reason = str(d.reason)
     assert not d.allow and not d.warn, (hook_input, reason)
-    assert not markers or any(m in reason for m in markers), (hook_input, reason)
+    if markers and not any(m in reason for m in markers):
+        # 228 tail, 0224: a form no grammar admits carries no typed path, so no check names the
+        # store or folder it reaches; the agent's chain refuses it naming the word off its table.
+        unadmitted = isinstance(jail.held_admission(hook_input), Refusal)
+        assert unadmitted and "Refused: " in reason, (hook_input, reason)
 
 
 # H2, issue 91: coder runners the confine check sends through the kernel wrapper.
@@ -1517,19 +1520,18 @@ CLAIMS_REFUSED = (
 
 
 # 228 S4, 225: A3_RULE_ROWS coder admission admits and the typed reader passes, a -m value being
-# text; git_grammar still refuses the newline, so the coder's chain verdict is unchanged.
+# text. 228 tail friction fix: no reader refuses their newline, so a unit worktree admits them.
 S4_TYPED_PASS_225 = (
     "true # c\ngit commit -m ':i: fix' -- src/a.md",
     "set -e\ngit commit -m ':i: fix' -- src/a.md",
 )
+# 228 tail: git log's -n value sits in the typed pathspec slot, so the credential check refuses
+# its unresolved $N before the coder's grammar names the span.
+S4_PARAM_IN_PATHSPEC = ("git log -n \"$N\" -- ':(icase)x'",)
 # 228 S4: A3_RULE_ROWS main's grammar admits whose typed record names no path in a root, a read
-# or a literal message; main loses the text scan's warning on these (the PATH rows are a gap).
+# or a literal message; main loses the text scan's warning on these (262 moved the PATH rows).
 S4_MAIN_TYPED_PASS = (
-    "PATH=. git log -- ':(icase)NOTES'",
-    "PATH+=:. git log -- ':(icase)NOTES'",
     "command -p git log -- ':(icase)NOTES'",
-    "unset PATH; git log -- ':(icase)NOTES'",
-    "GIT_EXEC_PATH=. git log -- ':(icase)NOTES'",
     "git log -n \"$N\" -- ':(icase)x'",
     "git commit -F - <<EOF\nfix :i: \\x\nEOF",
     "cat <<EOF | git commit -F -\nfix :i: \\x\nEOF",
@@ -1543,6 +1545,30 @@ S4_MAIN_TYPED_PASS = (
     "cat <<E''\nx\nE\ngit commit -m ':i: fix' -- src/a.md",
     "cat <<\\E\nx\nE\ngit commit -m ':i: fix' -- src/a.md",
 )
+# 262 (228 tail): a write to an SS-2 lookup variable, by prefix, append, bare or exported
+# assignment, export -n, unset or a default-assigning expansion; main's whole command is opaque.
+LOOKUP_262 = (
+    "PATH=. git log -- ':(icase)NOTES'",
+    "PATH+=:. git log -- ':(icase)NOTES'",
+    "PATH=/x; git log",
+    "PATH=/x\ngit log",
+    "export PATH=/x:/y; git add NOTES/a.md",
+    'export "PATH"=/x; git add NOTES/a.md',
+    "export -n PATH; git log",
+    "export -fn PATH; git log",
+    "unset PATH; git log -- ':(icase)NOTES'",
+    "unset -v GIT_EXEC_PATH; git log",
+    "GIT_EXEC_PATH=. git log -- ':(icase)NOTES'",
+    "CDPATH=/x git status",
+    "ENV=/x git status",
+    "BASH_ENV=/x git status",
+    "LD_PRELOAD=/x.so git status",
+    "LD_LIBRARY_PATH=/x git status",
+    "cat ${PATH:=/x}",
+    "cat ${PATH=/x}",
+)
+# 262: lookup variable forms main's grammar keeps admitting; export alone changes no value.
+LOOKUP_262_ADMITTED = ("export PATH; git log", "cat ${PATH:-/x}", "git commit -m 'PATH=/x'")
 # 228 S4: one row per issue the unit closes; (issue, agent, form, the grammar's refusal reason).
 # {wt} is a unit worktree with notes and src; a coder's refusal names the word off its table.
 S4_ISSUE_ROWS = (

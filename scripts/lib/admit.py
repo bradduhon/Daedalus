@@ -54,6 +54,10 @@ _REFUSED_GIT_GLOBALS = frozenset({"-c", "--config-env", "--exec-path="})
 # 0225: the exclude tail row; the read subcommands it rides and its two literal prefixes.
 _EXCLUDE_SUBS = frozenset({"diff", "log", "show", "status", "ls-files"})
 _EXCLUDE_PREFIXES = (":(exclude)", ":!")
+# 262: SS-2 lookup variables; a write to one changes the program every later command word runs.
+LOOKUP_VARS = frozenset(
+    {"PATH", "GIT_EXEC_PATH", "CDPATH", "ENV", "BASH_ENV", "LD_PRELOAD", "LD_LIBRARY_PATH"}
+)
 
 
 @dataclass(frozen=True)
@@ -109,6 +113,8 @@ class Refusal:
     sha256: str
     # 228 S4: the family of the command under judgment when it refused; "" before its word.
     family: str = ""
+    # 228 tail: a refused git command's literal subcommand; "" before it is read.
+    subcommand: str = ""
 
 
 @dataclass(frozen=True)
@@ -279,7 +285,7 @@ def admit_role(script: Script, role: Role, cwd: str, *, text: str) -> Admitted |
     except _Off as off:
         start, end = off.span
         digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
-        return Refusal(off.span, text[start:end], off.reason, digest, judge.family)
+        return Refusal(off.span, text[start:end], off.reason, digest, judge.family, judge.sub)
 
 
 def _word_text(word: Word) -> Typed:
@@ -339,6 +345,9 @@ def _forbidden(word: Word, loose: list[Span] | None = None, status: bool = False
     for part in word.parts:
         if isinstance(part, Param) and status and _status(part):
             continue
+        lookup = isinstance(part, Param) and part.name in LOOKUP_VARS and loose is not None
+        if lookup and isinstance(part, Param) and part.op.startswith(("=", ":=")):
+            raise _Off(part.span, _lookup_reason(f"the default assignment to {part.name}"))
         if isinstance(part, Param) and loose is not None:
             loose.append(part.span)
             continue
@@ -358,6 +367,11 @@ def _forbidden(word: Word, loose: list[Span] | None = None, status: bool = False
             raise _Off(part.span, "$'...' and $\"...\" quoting is not admitted")
 
 
+def _lookup_reason(what: str) -> str:
+    # 262: names the variable; the command words after it are unknown, so the call is opaque.
+    return f"{what} changes which program a command word runs, so the whole command is opaque"
+
+
 def _dangerous(key: str) -> bool:
     # 228 S2: a row where an expanded "-x" could reach a write or a program option.
     values = shell.OPTION_VALUE_TYPES.get(key, {})
@@ -375,8 +389,9 @@ class _Judge:
         # 228 S3c, O6: a leading cd moves every later command only when each join is &&.
         self.joined = True
         self._declared: frozenset[tuple[str, ...]] | None = None
-        # 228 S4: the family of the command under judgment, carried onto a Refusal.
+        # 228 S4, tail: the family and git subcommand under judgment, carried onto a Refusal.
         self.family = ""
+        self.sub = ""
 
     # -- script and pipelines ----------------------------------------------------------------
     def script(self, script: Script) -> list[AdmittedCommand]:
@@ -451,7 +466,7 @@ class _Judge:
     # -- one simple command ------------------------------------------------------------------
     def command(self, cmd: Command, piped: bool) -> AdmittedCommand:
         c = _Cmd(cmd.span, piped)
-        self.family = ""
+        self.family = self.sub = ""
         for assign in cmd.assignments:
             self.assignment(assign, c)
         # 228 S3c: the coder's echo admits $? in an operand, the exit echo, and no other parameter.
@@ -490,6 +505,8 @@ class _Judge:
         safe = shell._SAFE_ENV.match(f"{assign.name}{assign.op}") is not None
         if assign.subscript is not None or not (safe or self.role.main):
             raise _Off(assign.span, f"the prefix {assign.name}{assign.op} is not a safe name")
+        if assign.name in LOOKUP_VARS:
+            raise _Off(assign.span, _lookup_reason(f"an assignment to {assign.name}"))
         if not safe:
             c.loose.append(assign.span)
         for part in assign.value.parts:
@@ -888,9 +905,12 @@ class _Judge:
             raise _Off(words[0].span, f"{key} runs only with options from its row, and no --")
         if key in shell.NAME_OPERAND_CMDS:
             for word in operands:
-                name = (word.literal or "").split("=", 1)[0]
+                name, eq, _ = (word.literal or "").partition("=")
                 if not (name.isascii() and name.isidentifier()):
                     raise _Off(word.span, f"{key} takes NAME or NAME=value operands")
+                # 262: unset, export -n and export NAME=value of a lookup variable.
+                if name in LOOKUP_VARS and (key == "unset" or eq or "-n" in met):
+                    raise _Off(word.span, _lookup_reason(f"{key} of {name}"))
         self.operands(c, key, met, operands, built)
 
     def options(
@@ -1044,7 +1064,7 @@ class _Judge:
         i, kept, icase, config = self._git_globals(c, words)
         if i >= len(words) or words[i].literal is None:
             raise _Off(words[0].span, "git needs a literal subcommand")
-        sub = words[i].literal or ""
+        sub = self.sub = words[i].literal or ""
         c.subcommand = Typed(sub, words[i].span)
         args = words[i + 1 :]
         reads = sub in shell.READ_ONLY_GIT

@@ -13,7 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import freeze_sources  # noqa: E402
 from lib import hook_io, jail, shell  # noqa: E402
+from lib.admit import Admitted  # noqa: E402
 from lib.audit import project_root  # noqa: E402
+from lib.shparse import parse  # noqa: E402
 from lib.train_state import active_train  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset(jail.WRITE_TOOLS | {"Bash"})
@@ -76,14 +78,15 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     if hook_io.text(hook_input, "tool_name") in jail.WRITE_TOOLS:
         target = shell._abs(hook_io.write_path(hook_input), cwd)
         return _reason(target, frozen, repo, boundary)
-    segments = shell.worker_segments(hook_io.text(hook_io.tool_input(hook_input), "command"))
-    if segments is None:
-        return shell.R_UNSUPPORTED
-    for segment in filter(None, segments):
-        for target in jail._coder_write_targets(segment, cwd):
-            reason = _reason(target, frozen, repo, boundary)
-            if reason:
-                return reason
+    # 228 tail: the admission the agent's chain judged; a refused one is its command check's.
+    got = jail.held_admission(hook_input)
+    if not isinstance(got, Admitted):
+        return None
+    script = parse(hook_io.text(hook_io.tool_input(hook_input), "command"))
+    for target in jail.admitted_writes(script, got, cwd):
+        reason = _reason(target, frozen, repo, boundary)
+        if reason:
+            return reason
     return None
 
 

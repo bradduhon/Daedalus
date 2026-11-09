@@ -39,7 +39,8 @@ def _coder_refused(got: str | None, *constants: str) -> bool:
 
 
 def _judged(agent: str, got: str | None, constant: str) -> bool:
-    return _coder_refused(got, constant) if agent == "coder" else got == constant
+    # 228 tail: every agent's grammar refusal now carries its class constant and its span.
+    return _coder_refused(got, constant) or (agent != "coder" and got == constant)
 
 
 @pytest.mark.parametrize(
@@ -68,6 +69,11 @@ def test_universal_tripwires_block_everyone(command: str) -> None:
 def test_separator_matrix_blocks(agent: str | None, command: str) -> None:
     # O3: a redirect to f is a write outside every agent's boundary; || is allowed below.
     d = decide(_b(agent, command), CFG)
+    # 228 tail, friction: a newline joins items as ; does and |& pipes as 2>&1 | does (spec, The
+    # admission: Items and Pipes); an agent whose own grammar admits the pair runs it.
+    if command in ("git diff\ngit diff", "git diff |& head") and d.allow:
+        assert jail.admitted(command, str(agent), CWD), (agent, command)
+        return
     assert not d.allow and "Next:" in d.reason, (agent, command)
 
 
@@ -192,6 +198,9 @@ class TestRegressionCharterDocs:
 class TestRegressionConductor:
     def test_default_branch_reason(self) -> None:
         d = decide(_b("releaser", "git push origin HEAD:main"), CFG)
+        # 228 tail: the push grammar refuses a refspec; the conductor's push reason names it.
+        assert not d.allow and d.reason and jail.R_CONDUCTOR_PUSH in d.reason
+        d = decide(_b("releaser", "git push origin main"), CFG)
         assert d.reason and "never push to the default branch (0001)" in d.reason
 
 
@@ -395,7 +404,8 @@ class TestLiveRunGrammar:
         ):
             assert evaluate(HOOK, _b("coder", command)) == shell.R_INLINE, command
         for agent in ("charter-docs", "releaser"):
-            assert evaluate(HOOK, _b(agent, f"python3 {WT}/x.py")) == shell.R_INLINE, agent
+            got = evaluate(HOOK, _b(agent, f"python3 {WT}/x.py"))
+            assert _judged(agent, got, shell.R_INLINE), agent
         repo, wt = _unit_repo(tmp_path / "repo")
         for command in (
             f"cd /tmp && python3 {wt.name}/x.py",
@@ -442,7 +452,9 @@ class TestDeclaredCommands:
         assert _coder_refused(got, shell.R_INLINE)
         # B2: the exemption is the coder's; other agents keep their grammar.
         got = evaluate(HOOK, _cwd(_b("charter-docs", command), repo))
-        assert got == shell.R_INLINE
+        # 228 tail: charter-docs has its own python row, so its command check names the refusal.
+        assert got is None or _judged("charter-docs", got, shell.R_INLINE), got
+        assert not decide(_cwd(_b("charter-docs", command), repo), CFG).allow
 
     def test_undeclared_repo_has_no_verbatim_commands(self, tmp_path: Path) -> None:
         repo, _ = _unit_repo(tmp_path / "repo")
@@ -569,10 +581,9 @@ class TestProjectDataDir:
     )
     def test_git_add_commit_of_data_dir_blocks(self, agent: str | None, command: str) -> None:
         d = decide(_b(agent, command), CFG)
-        # 228 S3b: the coder grammar refuses -f, stage, a commit pathspec and magic by name.
-        named = "never committed" in str(d.reason) or (
-            agent == "coder" and _coder_refused(d.reason, jail.R_CODER_GIT)
-        )
+        # 228 S3b, tail: each agent's grammar refuses -f, stage, a commit pathspec and magic by
+        # name; a refused command's paths are never read again.
+        named = "never committed" in str(d.reason) or "Refused: " in str(d.reason)
         assert not d.allow and named, (agent, command, d.reason)
 
 
@@ -711,7 +722,11 @@ def test_shell_tripwires_judges_the_hook_alone() -> None:
 def test_shell_tripwires_fixture_decisions() -> None:
     allow = {"decision": "allow", "reason": ""}
     force = payload("Bash", command="git push --force origin x", agent="releaser")
-    assert run_script(HOOK, force) == {"decision": "deny", "reason": shell.R_FORCE_PUSH}
+    # 228 tail: the releaser's push grammar refuses --force; its command check names it.
+    assert run_script(HOOK, force) == allow
+    assert jail.R_CONDUCTOR_PUSH in str(
+        decide(_b("releaser", "git push --force origin x"), CFG).reason
+    )
     got = run_script(HOOK, payload("Bash", command="git push --force origin x"))
     assert got["decision"] == "deny" and _coder_refused(got["reason"], jail.R_CODER_GIT)
     assert run_script(HOOK, payload("Bash", command="git log | head")) == allow
@@ -774,7 +789,7 @@ def test_an_escaped_exit_status_is_echo_text() -> None:
 
 def test_exit_echo_is_the_coders_alone() -> None:
     for agent in ("releaser", "charter-docs", "auditor", "orchestrator"):
-        assert evaluate(HOOK, _b(agent, 'echo "exit=$?"')) == shell.R_HYGIENE, agent
+        assert _judged(agent, evaluate(HOOK, _b(agent, 'echo "exit=$?"')), shell.R_HYGIENE), agent
 
 
 @pytest.mark.parametrize("agent", WORKERS_WITH_SHELL)

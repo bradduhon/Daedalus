@@ -406,8 +406,14 @@ def test_a_verify_searching_outside_the_tree_is_a_pack_problem(
 
 
 def test_a_verify_inside_the_tree_is_no_problem(tmp_path: Path) -> None:
-    for command in ("rg -n x src", "rg --files src", "rg -n x ./src", "rg -n '/api/..' ."):
+    for command in ("rg -n x src", "rg -n x ./src", "rg -n '/api/..' ."):
         assert pack_problems(_make(tmp_path / "p", [_control(verify=command)]), known=()) == []
+
+
+def test_a_verify_off_the_auditors_rg_row_is_a_pack_problem(tmp_path: Path) -> None:
+    # 228 tail: rg_reason reads the auditor's own grammar, which has no --files on its rg row.
+    found = _problems(_make(tmp_path / "p", [_control(verify="rg --files src")]))
+    assert "the option --files is not on the rg row" in found, found
 
 
 def test_a_plain_rg_verify_is_no_problem(tmp_path: Path) -> None:

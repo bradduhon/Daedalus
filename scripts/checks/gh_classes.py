@@ -9,7 +9,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lib import gh_policy, hook_io, jail, shell  # noqa: E402
+from lib import gh_policy, hook_io, jail  # noqa: E402
+from lib.admit import Admitted  # noqa: E402
+from lib.shparse import parse  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset({"Bash"})
 FLAGS: dict[str, hook_io.Flag] = {"--conductor": hook_io.Flag()}
@@ -24,26 +26,30 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     reason = jail._gh_gate(agent, cwd, command)
     if reason or not conductor:
         return reason
-    segments = shell.worker_segments(command)
-    if segments is None:
-        return shell.R_UNSUPPORTED
-    for segment in filter(None, segments):
-        if shell._cmd_name(segment) != "gh":
+    # 228 tail: the releaser's admitted gh calls, each by its typed triple; a refused command
+    # is its command check's, whose refusal names the word off its table.
+    got = jail.held_admission(hook_input)
+    if not isinstance(got, Admitted):
+        return None
+    script = parse(command)
+    for done in got.commands:
+        parsed = done.gh
+        if done.family != "gh" or parsed is None:
             continue
-        if jail._gh_repo_flag(segment):
+        if jail._gh_repo_flag(parsed):
             # 0078: the one -R form is gh pr create on the declared charter root's origin.
-            if not jail._charter_pr_create_ok(segment, cwd, hook_io.hook_charter(cwd)):
+            if not jail._charter_pr_create_ok(parsed, cwd, hook_io.hook_charter(cwd)):
                 return jail.R_CONDUCTOR_REPO
-        if not jail._gh_body_file_ok(segment, cwd):
+        if not jail._gh_body_file_ok(parsed, cwd):
             return jail.R_BODY_FILE
-        reason = jail._gh_write_reason(segment)
+        reason = jail._gh_write_reason(parsed)
         if reason:
             return reason
-        if not jail._gh_allowed(segment):
+        if not jail._gh_allowed(parsed):
             return gh_policy.conductor_gh_refusal()
         # spec 4.2: pr create meets the push's verdict gate, from the train branch only.
-        if gh_policy.classify(gh_policy.gh_args(segment[1:]))[1] == "pr create":
-            reason = gh_policy.pr_create_reason(segment, cwd)
+        if gh_policy.classify(parsed)[1] == "pr create":
+            reason = gh_policy.pr_create_reason(jail.admitted_tokens(script, done), cwd)
             if reason:
                 return reason
     return None
