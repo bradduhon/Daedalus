@@ -2130,7 +2130,7 @@ def _git_specs(
         fold = "icase" in magic or "--icase-pathspecs" in toks
         out.append(_Spec(os.path.normpath(_abs(rest, base)), typed.text, fold, wild, top))
     if (done.subcommand.text if done.subcommand else "") in _REV_PATH_SUBS:
-        for typed in done.texts:
+        for typed in (*done.texts, *done.pathspecs):
             rev, colon, path = typed.text.partition(":")
             path = path[2:] if not rev and path[1:2] == ":" and path[:1] in "0123" else path
             if colon and path and not typed.text.startswith("-"):

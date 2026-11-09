@@ -103,7 +103,15 @@ PATHSPEC_HUNT = (
     ("git log -- ':(top).env'", "credential"),
     ("git show :.env", "credential"),
     ("git show HEAD:../.ssh/id_rsa", "credential"),
+    # 228 tail: the operand slots these git reads share between a revision and a path.
+    ("git blame .env", "credential"),
+    ("git log -p .env", "credential"),
+    ("git diff HEAD {home}/.ssh/id_rsa", "credential"),
+    ("git show HEAD .env", "credential"),
+    ("git grep KEY ../.aws/credentials", "credential"),
 )
+# 228 tail: a source path in a retyped git read slot; the coder's whole chain admits it.
+CODER_KEPT = "git blame src/a.py"
 # 228 tail: pathspecs that name no store stay as they were; a folder pathspec is no tree read.
 PATHSPEC_KEPT = (
     "git add .",
@@ -112,6 +120,7 @@ PATHSPEC_KEPT = (
     "git log -- ':(literal)*.en?'",
     "git show HEAD:src/a.py",
     "git commit -m 'fix: .env loader'",
+    CODER_KEPT,
 )
 ROLES = sorted({key.split(" (")[0] for key in CHAINS})
 
@@ -163,6 +172,8 @@ def test_a_pathspec_naming_no_store_is_not_a_credential_hit(spec_repo: Path, com
     for role in ROLES:
         deny = first_deny(_spec_payload(command, spec_repo, role), CFG)
         assert deny is None or deny[0] != "credential_paths", (role, command, deny)
+        if command == CODER_KEPT and role == "coder":
+            assert deny is None, (role, command, deny)
 
 
 def _form(template: str, home: Path) -> str:

@@ -417,8 +417,10 @@ OPERAND_TYPES: dict[str, tuple[str, ...]] = {
     "git checkout": ("pathspec*",),
     "git status": ("pathspec*",),
     "git ls-files": ("pathspec*",),
-    **{f"git {sub}": ("text*",) for sub in ("log", "diff", "show", "grep", "blame", "branch")},
-    **{f"git {sub}": ("text*",) for sub in ("rev-parse", "merge-base", "worktree", "stash")},
+    # 228 tail: git reads a revision or a path from the same slot; a pattern is judged as one too.
+    **{f"git {sub}": ("pathspec*",) for sub in ("log", "diff", "show", "grep", "blame")},
+    **{f"git {sub}": ("text*",) for sub in ("branch", "rev-parse", "merge-base", "worktree")},
+    "git stash": ("text*",),
     "git config": ("text*",),
     "git merge": ("text*",),
     "git push": ("text", "text"),

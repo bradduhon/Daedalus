@@ -1525,6 +1525,9 @@ S4_TYPED_PASS_225 = (
     "true # c\ngit commit -m ':i: fix' -- src/a.md",
     "set -e\ngit commit -m ':i: fix' -- src/a.md",
 )
+# 228 tail: git log's -n value sits in the typed pathspec slot, so the credential check refuses
+# its unresolved $N before the coder's grammar names the span.
+S4_PARAM_IN_PATHSPEC = ("git log -n \"$N\" -- ':(icase)x'",)
 # 228 S4: A3_RULE_ROWS main's grammar admits whose typed record names no path in a root, a read
 # or a literal message; main loses the text scan's warning on these (262 moved the PATH rows).
 S4_MAIN_TYPED_PASS = (
