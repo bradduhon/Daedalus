@@ -749,14 +749,8 @@ class TestFinalDataDir:
     @pytest.mark.parametrize(
         "command",
         [
-            "echo {} > ~/.claude/plugins/data/daedalus-inline/config.json",
-            "tee $CLAUDE_PLUGIN_DATA/config.json",
-            "sed -i s/a/b/ ~/.claude/plugins/data/daedalus/config.json",
-            "rm ~/.claude/plugins/data/daedalus-inline/audit/s.jsonl",
             f"mv {DATA}/audit/s.jsonl /tmp/y",
-            "cp /tmp/f ${CLAUDE_PLUGIN_DATA}/config.json",
             f"truncate -s 0 {HOME}/.claude/plugins/data/daedalus/audit/s.jsonl",
-            "python3 -c 'open(1)' ~/.claude/plugins/data/daedalus",
             f"cd {DATA} && rm audit/s.jsonl",
         ],
     )
@@ -764,6 +758,25 @@ class TestFinalDataDir:
         d = decide(_b(None, command), CFG)
         assert _main_warns(d, jail.WARN_DATA_DIR), command
         assert "written by hooks only" in str(d.reason), command
+
+    @pytest.mark.parametrize(
+        ("command", "word"),
+        [
+            ("echo {} > ~/.claude/plugins/data/daedalus-inline/config.json", "a redirect"),
+            ("tee $CLAUDE_PLUGIN_DATA/config.json", "$CLAUDE_PLUGIN_DATA"),
+            ("sed -i s/a/b/ ~/.claude/plugins/data/daedalus/config.json", "-i"),
+            ("rm ~/.claude/plugins/data/daedalus-inline/audit/s.jsonl", "a glob or ~"),
+            ("cp /tmp/f ${CLAUDE_PLUGIN_DATA}/config.json", "a leading expansion"),
+            ("python3 -c 'open(1)' ~/.claude/plugins/data/daedalus", "a glob or ~"),
+        ],
+    )
+    def test_main_bash_writes_off_its_grammar_warn_the_refusal(
+        self, command: str, word: str
+    ) -> None:
+        # 266, 0224: no typed operand to judge, so main is warned with the word off its table.
+        d = decide(_b(None, command), CFG)
+        assert _main_warns(d, jail.WARN_COMMAND), (command, d.reason)
+        assert "Refused: " in str(d.reason) and word in str(d.reason), (command, d.reason)
 
     @pytest.mark.parametrize(
         "command",
@@ -804,12 +817,10 @@ class TestProjectDataDir:
     @pytest.mark.parametrize(
         "command",
         [
-            "echo {} > .claude/daedalus/config.json",
             f"tee {CWD}/.claude/daedalus/config.json",
             "rm .claude/daedalus/audit/s.jsonl",
             "mv .claude/daedalus /tmp/x",
             "cp /tmp/c.json .claude/daedalus/config.json",
-            "sed -i s/a/b/ .claude/daedalus/config.json",
             "truncate -s 0 .claude/daedalus/audit/s.jsonl",
         ],
     )
@@ -817,6 +828,25 @@ class TestProjectDataDir:
         d = decide(_b(None, command), CFG)
         assert _main_warns(d, jail.WARN_DATA_DIR), command
         assert "written by hooks only" in str(d.reason), command
+
+    @pytest.mark.parametrize(
+        ("command", "word"),
+        [
+            ("echo {} > .claude/daedalus/config.json", "echo"),
+            ("sed -i s/a/b/ .claude/daedalus/config.json", "-i"),
+            ("cd .claude && echo x > daedalus/audit/s.jsonl", "a leading cd"),
+            ("echo x > .claude//daedalus/audit/s.jsonl", "echo"),
+            ("echo x > ./.claude/./daedalus/audit/s.jsonl", "echo"),
+            ("cd /work/repo/.claude; rm daedalus/audit/s.jsonl", "cd"),
+        ],
+    )
+    def test_main_bash_writes_off_its_grammar_warn_the_refusal(
+        self, command: str, word: str
+    ) -> None:
+        # 266, 0224: no typed operand to judge, so main is warned with the word off its table.
+        d = decide(_b(None, command), CFG)
+        assert _main_warns(d, jail.WARN_COMMAND), (command, d.reason)
+        assert "Refused: " in str(d.reason) and word in str(d.reason), (command, d.reason)
 
     @pytest.mark.parametrize(
         "command",
@@ -876,15 +906,14 @@ class TestProjectDataDir:
     @pytest.mark.parametrize(
         "command",
         [
-            "cd .claude && echo x > daedalus/audit/s.jsonl",
-            "echo x > .claude//daedalus/audit/s.jsonl",
-            "echo x > ./.claude/./daedalus/audit/s.jsonl",
+            "touch .claude//daedalus/x",
+            "touch ./.claude/./daedalus/x",
+            "cd /work/repo/.claude && rm daedalus/audit/s.jsonl",
             "touch .claude/daedalus/x",
             "ln -sf /dev/null .claude/daedalus/config.json",
             "mkdir -p .claude/daedalus/audit",
             "chmod 777 .claude/daedalus",
             "install -m 600 /tmp/c .claude/daedalus/config.json",
-            "cd /work/repo/.claude; rm daedalus/audit/s.jsonl",
         ],
     )
     def test_review_write_probes_block_for_main(self, command: str) -> None:
@@ -1293,9 +1322,12 @@ def test_unknown_agent_writes_the_data_dir_only_outside_a_train(train_cwd: Path)
     for payload in payloads:
         assert decide(payload, CFG).allow, payload
     _mark(train_cwd)
-    for payload in payloads:
+    # 266, 0224: a Bash write is off the foreign table, so its refusal names the word instead.
+    for payload, named in zip(
+        payloads, ("data", "data", "Refused: tee", "Refused: rm"), strict=True
+    ):
         d = decide(payload, CFG)
-        assert not d.allow and "data" in str(d.reason), payload
+        assert not d.allow and named in str(d.reason), payload
 
 
 def test_unknown_agent_dotgit_write_is_refused_only_during_a_train(train_cwd: Path) -> None:
@@ -1566,18 +1598,19 @@ def test_issue30_unmodelled_copiers_reading_home_are_refused(
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
 @pytest.mark.parametrize(
-    "command",
+    ("command", "word"),
     [
-        "cd .claude/daedalus && git init",
-        "git -C .claude/daedalus init",
-        "git init .claude/daedalus",
+        ("cd .claude/daedalus && git init", "a leading cd"),
+        ("git -C .claude/daedalus init", "git init"),
+        ("git init .claude/daedalus", "git init"),
     ],
 )
 def test_issue30_git_init_in_the_data_dir_is_refused(
-    marked_repo: Path, agent: str | None, command: str
+    marked_repo: Path, agent: str | None, command: str, word: str
 ) -> None:
+    # 266, 0224: no grammar admits git init, so the refusal names the word off the table.
     d = decide(_cred(agent, "Bash", str(marked_repo), command=command), CFG)
-    assert not d.allow and "plugin data directory" in str(d.reason), (command, d.reason)
+    assert not d.allow and f"Refused: {word}" in str(d.reason), (command, d.reason)
 
 
 # 0099: main writes scratch only during a train.

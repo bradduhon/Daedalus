@@ -50,11 +50,7 @@ from lib.credential_paths import (
     reply_key_hit,
     whitelists_env,
 )
-from lib.credential_paths import CUT as _CUT
-from lib.credential_paths import LIT as _LIT
-from lib.credential_paths import REDIRECT as _REDIRECT
 from lib.credential_paths import anchor as _anchor
-from lib.credential_paths import clean as _clean
 from lib.credential_paths import credential_hit as _credential_hit
 from lib.credential_paths import credential_roots as _credential_roots
 from lib.credential_paths import store_rest as _store_rest
@@ -71,11 +67,9 @@ from lib.manifest import Manifest, ManifestError, extension_hit, path_hit
 from lib.manifest import load as load_manifest
 from lib.repo_root import checkout_git_dir, git_root
 from lib.shell import (
-    _ASSIGN,
     _DEFAULT_BRANCHES,
     _GLOB_CHARS,
     _HOME,
-    _PROJECT_DATA,
     _REPO_SCRIPTS,
     _VALUE_LONG_NEXT,
     GIT_PLUMBING_REMOTE,
@@ -85,7 +79,6 @@ from lib.shell import (
     R_DESTRUCTIVE,
     R_FORCE_PUSH,
     R_STASH_UNTRACKED,
-    READ_ONLY_CMDS,
     READ_ONLY_GIT,
     WRAPPER_CHDIR,
     WrapperOption,
@@ -95,7 +88,6 @@ from lib.shell import (
     _long_matches,
     _names_project_data,
     _pathspecs,
-    _quote_spans,
     _short_flags,
     _under,
     split_options,
@@ -845,11 +837,6 @@ R_CREDENTIAL_PARAM = (
     "{path} could be a credential path; the jail cannot resolve its variable. "
     "Next: spell the path out"
 )
-# issue 76: time is not here; its WRAPPER_OPTS row reads its options.
-# A2 fix round 4: a brace group's { and } are read past, so its inner command word is read.
-_CONTROL_WORDS = frozenset({"!", "do", "then", "else", "elif", "while", "until", "if", "{", "}"})
-# issue 76: _command_at's answer when a wrapper option is off shell.WRAPPER_OPTS.
-_OPAQUE = -1
 _GREPS = frozenset({"grep", "egrep", "fgrep"})
 # spec 8: short options whose value is the next word (or the rest of the cluster).
 _SEARCH_VALUES: dict[str, frozenset[str]] = {
@@ -860,30 +847,12 @@ _SEARCH_LONGS = frozenset(
     {"--regexp", "--file", "--max-count", "--context", "--after-context", "--before-context"}
     | {"--glob", "--type", "--type-not", "--threads", "--replace", "--encoding"}
 )
-_PATH_CMDS = (
-    READ_ONLY_CMDS
-    | CODER_WRITE_CMDS
-    | {"cd", "pushd", "source", ".", "less", "more", "base64", "xxd", "od", "strings"}
-    | {"tar", "zip", "unzip", "scp", "gzip", "gunzip", "zcat", "openssl", "ssh-keygen", "gpg"}
-    | {"egrep", "fgrep", "nl", "tac", "diff", "cmp"}
-    | {"bsdtar", "7z", "7za", "7zr", "7zz", "pax"}
-)
-_PATH_OPTION = re.compile(r"--?[\w-]*(?:dir|file|path|target|output|input|config|key|root)", re.I)
 _DATA_DIR_DEFAULT = "/.claude/plugins/data/daedalus"
 UNIT_WORKTREES = ".claude/worktrees"
-_DATA_DIR_WRITE = re.compile(
-    r">|(?:^|[\s;&|(/])(?:tee|rm|mv|cp|truncate|touch|ln|mkdir|chmod|chown|install|rmdir"
-    r"|mkfifo|mknod|shred)"
-    r"(?=[\s;&|)]|$)"
-    r"|\bsed\b[^;&|\n]*\s(?:-[a-zA-Z]*i|--in-place)|\bpython[\d.]*\b[^;&|\n]*\s-[a-zA-Z]*c"
-    r"|\bgit\b[^;&|\n]*\s(?:init|clone)\b"
-)
-_DEVNULL = re.compile(r"\d?>&\d|&?\d?>>?\s*/dev/null")
 # issue 188: the moved bound agent rule; module runs, fd words and the cd start form.
 _INTERPRETER = re.compile(r"python[\d.]*|perl|ruby|node|nodejs|deno|bun|php")
-_CD_TARGET = re.compile(r"(?:^|[;&|(\s])(?:cd|pushd)\s+([^\s;&|)]+)")
-_DAEDALUS_WORD = re.compile(r"(?<![\w.-])daedalus(?![\w-])")
-_GIT_INDEX_WRITE = re.compile(r"\bgit\b[^;&|]*\b(?:add|stage|commit|update-index)\b")
+# 266: the git subcommands that write the index, which the data folder check judges.
+_INDEX_WRITES = frozenset({"add", "stage", "commit", "update-index"})
 
 
 @dataclass(frozen=True)
@@ -1124,10 +1093,11 @@ _GIT_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
         a,
         frozenset({"--oneline", "--stat", "--name-only", "-p", "--no-merges", "--all"})
         | {"--pickaxe-regex", "--pickaxe-all"},
-        (*_FORMAT, "--grep=", "--author="),
+        (*_FORMAT, "--grep=", "--author=", "--max-count="),
         (r"-\d+", r"-n\d+", r"-[SG].+"),
         # 228 S3: --grep <value> as two words, beside the --grep=<value> prefix.
-        frozenset({"-n", "-S", "-G", "--grep"}),
+        # 266: --max-count in both forms, as -n is; admit types its value as text.
+        frozenset({"-n", "-S", "-G", "--grep", "--max-count"}),
     ),
     "diff": lambda a, _: _flags_ok(
         a,
@@ -1547,48 +1517,178 @@ def _cd_relative_target(segment: list[str], cwd: str) -> str | None:
     return next((a for a in operands if not os.path.isabs(a)), None)
 
 
-def _data_dir_markers() -> list[str]:
-    markers = [f"~{_DATA_DIR_DEFAULT}", f"{_HOME}{_DATA_DIR_DEFAULT}"]
-    markers += [f"$HOME{_DATA_DIR_DEFAULT}", f"${{HOME}}{_DATA_DIR_DEFAULT}"]
-    markers += ["$CLAUDE_PLUGIN_DATA", "${CLAUDE_PLUGIN_DATA}", _PROJECT_DATA]
-    env = os.environ.get("CLAUDE_PLUGIN_DATA")
-    if env:
-        markers.append(os.path.normpath(env))
-    return markers
+def _data_dir_target(path: str, cwd: str) -> bool:
+    # 0010, 266: a typed path under a data folder, by its spelled name or through a link.
+    norm = os.path.normpath(path)
+    default = f"{_HOME}{_DATA_DIR_DEFAULT}"
+    return any(_data_dir_path(p, cwd) or _under(p, default) for p in (norm, os.path.realpath(norm)))
 
 
-def _normalize_paths(command: str) -> str:
-    # 0010: `.claude//daedalus` and `./.claude/./daedalus` must match the marker too.
-    text = re.sub(r"/{2,}", "/", command)
-    prev = None
-    while prev != text:
-        prev, text = text, re.sub(r"(^|[\s/'\"=])\./", r"\1", text)
-    return text
+def _data_dirs(folder: str, cwd: str) -> list[str]:
+    # 266: the standing folder's project data folder, the command folder's where it exists, the
+    # default under HOME and CLAUDE_PLUGIN_DATA, each as spelled and through its links.
+    dirs = [str(project_data_dir(cwd))] if os.path.isabs(cwd) else []
+    there = project_data_dir(folder) if os.path.isabs(folder) else None
+    dirs += [str(there)] if there is not None and there.is_dir() else []
+    dirs += [f"{_HOME}{_DATA_DIR_DEFAULT}", os.environ.get("CLAUDE_PLUGIN_DATA") or ""]
+    dirs = [os.path.normpath(d) for d in dirs if os.path.isabs(d)]
+    return list(dict.fromkeys([*dirs, *(os.path.realpath(d) for d in dirs)]))
 
 
-def _cd_into_claude(command: str) -> bool:
-    for target in _CD_TARGET.findall(command):
-        norm = os.path.normpath(target.strip("'\""))
-        # 0010: cd into the data dir itself (or below it) needs no further daedalus mention.
-        if _names_project_data(norm):
+_UNDECIDED = frozenset("[{")
+
+
+def _wild_reach(parts: list[str], at: int, dirs: list[str], dots: bool) -> bool:
+    # 266: by component: the fixed ones before the first wildcard lead a data folder's path,
+    # and that wildcard can match its next component; a [ or { form fails closed.
+    fixed = parts[:at]
+    wild = parts[at]
+    found = [d.split(os.sep) for d in dirs]
+    # 266: another project's data folder right below, where one exists.
+    below = [[*fixed, ".claude", "daedalus"], [*fixed, "daedalus"]]
+    found += [c for c in below if c[-2] == ".claude" and os.path.isdir(os.sep.join(c))]
+    for comps in found:
+        if comps[: len(fixed)] != fixed or len(comps) == len(fixed):
+            continue
+        name = comps[len(fixed)]
+        if _UNDECIDED & set(wild):
             return True
-        if os.path.basename(norm) == ".claude" and _DAEDALUS_WORD.search(command):
+        lead = wild[: min((wild.index(c) for c in "*?" if c in wild), default=len(wild))]
+        if (lead or dots or not name.startswith(".")) and name.startswith(lead):
             return True
     return False
 
 
-def _cd_data_dir_git(command: str) -> bool:
-    return _cd_into_claude(command) and bool(_GIT_INDEX_WRITE.search(command))
+def _data_dir_reach(path: str | None, folder: str, cwd: str, dots: bool = False) -> bool:
+    # 266: a literal path under a data folder, or a wildcard path that can match one or a path
+    # inside one; dots is True where a leading wildcard matches a dot name (a git pathspec).
+    if path is None:
+        return True  # 266: a part the hook cannot resolve fails closed.
+    full = os.path.normpath(_abs(path, folder))
+    parts = full.split(os.sep)
+    at = next((i for i, p in enumerate(parts) if (_GLOB_CHARS | _UNDECIDED) & set(p)), -1)
+    if at < 0:
+        return _data_dir_target(full, cwd)
+    if _data_dir_target(os.sep.join(parts[:at]) or os.sep, cwd):
+        return True  # 266: the wildcard sits inside a data folder already.
+    real = os.path.realpath(os.sep.join(parts[:at]) or os.sep).split(os.sep)
+    dirs = _data_dirs(folder, cwd)
+    return any(
+        _wild_reach(p, len(p) - 1, dirs, dots) for p in ([*parts[: at + 1]], [*real, parts[at]])
+    )
 
 
-def _data_dir_write(command: str) -> bool:
-    normalized = _normalize_paths(command)
-    named = any(marker in normalized for marker in _data_dir_markers())
-    if not (named or _cd_into_claude(normalized)):
+def _data_dir_ancestor(path: str, folder: str, cwd: str) -> bool:
+    # 266: a proper ancestor of a data folder, spelled or through its links; a write to it
+    # reaches the folder, since a removal, move, merge or recursive change takes the folder too.
+    norm = os.path.normpath(path)
+    heads = {norm, os.path.realpath(norm)}
+    return any(
+        d.startswith(h.rstrip(os.sep) + os.sep) for h in heads for d in _data_dirs(folder, cwd)
+    )
+
+
+def _git_dir_values(done: AdmittedCommand) -> list[str]:
+    # 266: a --git-dir or --work-tree value, joined, or the typed read right after the option.
+    items = sorted([*done.options, *done.reads, *done.texts, *done.pathspecs], key=lambda t: t.span)
+    out: list[str] = []
+    for at, item in enumerate(items):
+        key, eq, value = item.text.partition("=")
+        if item not in done.options or key not in {"--git-dir", "--work-tree"}:
+            continue
+        later = items[at + 1] if at + 1 < len(items) else None
+        out += [value] if eq else [later.text] if later in done.reads else []
+    return out
+
+
+def _index_reason(done: AdmittedCommand, here: str, cwd: str) -> str | None:
+    # 0010, 266: an index write from a folder the command moved to (cd, -C, --git-dir or
+    # --work-tree) that sits in a data folder, or names a pathspec under one from there.
+    git_cwd = _abs(done.git_dir.text, here) if done.git_dir is not None else here
+    moved = [_abs(v, here) for v in _git_dir_values(done)]
+    moved += [git_cwd] if git_cwd != cwd else []
+    if not moved:
+        return None
+    if any(_data_dir_target(folder, cwd) for folder in moved):
+        return R_DATA_DIR_GIT
+    # 266: git's * matches a dot name, so a leading wildcard reaches .claude.
+    reach = any(_data_dir_reach(p.text, git_cwd, cwd, dots=True) for p in done.pathspecs)
+    return R_DATA_DIR_GIT if reach else None
+
+
+# 266: families whose write to a folder removes, moves or changes everything under it.
+_ANCESTOR_ALL = frozenset({"rm", "rmdir", "rsync", "chmod", "chown", "chgrp"})
+# 266: families that put a file inside their destination folder unless -T or --exchange.
+_ANCESTOR_SOURCES = frozenset({"mv", "cp", "ln", "install"})
+_WHOLE_TARGET = frozenset({"-T", "--no-target-directory", "--exchange"})
+_TARGET_DIR = frozenset({"-t", "--target-directory"})
+
+
+def _ancestor_writes(done: AdmittedCommand) -> list[Typed]:
+    # 266: the typed writes that take a folder whole: every write of a removing, moving or
+    # recursive family; for mv, cp, ln and install all but the destination they write into.
+    if done.family in _ANCESTOR_ALL:
+        return list(done.writes)
+    if done.family not in _ANCESTOR_SOURCES or not done.writes:
+        return []
+    names = {o.text.split("=", 1)[0] for o in done.options}
+    if names & _WHOLE_TARGET:
+        return list(done.writes)
+    marks = [o.span for o in done.options if o.text.split("=", 1)[0] in _TARGET_DIR]
+    writes = sorted(done.writes, key=lambda t: t.span)
+    after = [w for w in writes if marks and w.span >= marks[0]]
+    dest = after[0] if after else writes[-1]
+    return [w for w in writes if w is not dest]
+
+
+def _data_dir_holds(path: str | None, folder: str, cwd: str, whole: bool, family: str) -> bool:
+    # 266: a path in or reaching a data folder; when the write takes its folder whole, a literal
+    # proper ancestor too. A recursive rm of /, HOME or above is the delete tripwire's to name.
+    if _data_dir_reach(path, folder, cwd):
+        return True
+    full = os.path.normpath(_abs(path or "", folder))
+    if not whole or (_GLOB_CHARS | _UNDECIDED) & set(full):
         return False
-    # I4: quoted spans collapse first so a jq filter's `>` reads as data, not a redirect.
-    unquoted = _quote_spans(normalized.replace("$'", "'").replace('$"', '"'))
-    return bool(_DATA_DIR_WRITE.search(_DEVNULL.sub(" ", unquoted)))
+    if family == "rm" and shell._rm_target_dangerous(full):
+        return False
+    return _data_dir_ancestor(full, folder, cwd)
+
+
+def _data_dir_bash(command: str, cwd: str, agent: str) -> str | None:
+    # 0010, 266: each command the role admits, by its typed writes, link sources and git
+    # folders; a refused one is judged by its standing folder alone (0224), its text unread.
+    script, got = _admission(command, agent, cwd)
+    if not _passed(got):
+        return R_DATA_DIR if _data_dir_target(cwd, cwd) else None
+    redirects = {n.target.span for n in shparse.nodes(script) if isinstance(n, Redirect)}
+    words = {n.span: n for n in shparse.nodes(script) if isinstance(n, Word)}
+    env = {"HOME": _HOME}
+    base, index = cwd, None
+    for done in got.commands:
+        if done.family == "cd" and done.cd_target is not None:
+            base = _abs(done.cd_target.text, base)
+            continue
+        here = _abs(done.cd_target.text, base) if done.cd_target is not None else base
+        family = done.family
+        wholes = _ancestor_writes(done)
+        for write in done.writes:
+            opens = [cwd, base] if write.span in redirects else [cwd, base, here]
+            path = _typed_path(write, words, command, env)
+            whole = any(write is w for w in wholes)
+            if any(_data_dir_holds(path, f, cwd, whole, family) for f in opens):
+                return R_DATA_DIR
+        # 266: a link's source; a later write through the link lands in the data folder.
+        links = [_abs(w.text, here) for w in done.writes] if family == "ln" else []
+        sources = done.reads if family == "ln" else ()
+        for source in sources:
+            path = _typed_path(source, words, command, env)
+            folders = [here, *links, *(os.path.dirname(link) for link in links)]
+            if any(_data_dir_holds(path, f, cwd, True, family) for f in folders):
+                return R_DATA_DIR
+        sub = done.subcommand.text if done.subcommand is not None else ""
+        if index is None and done.family == "git" and sub in _INDEX_WRITES:
+            index = _index_reason(done, here, cwd)
+    return index
 
 
 def _data_dir_path(path: str, cwd: str) -> bool:
@@ -1631,104 +1731,6 @@ def _gitleaks_ok(tokens: list[str]) -> bool:
     return redacted
 
 
-def _shell_words(command: str) -> list[list[str]]:
-    return [segment.words for segment in _shell_scan(command)]
-
-
-class ScanSegment(NamedTuple):
-    # issue 116: a segment's words, the indices a <<< here-string feeds, and whether a pipe or a
-    # < redirect on fd 0 feeds its stdin (fix round 3).
-    words: list[str]
-    heres: frozenset[int]
-    fed: bool
-    # fix round 4: every here-string on any fd, and whether a < redirect on fd 0 is attached.
-    strings: frozenset[int] = frozenset()
-    redirected: bool = False
-
-
-def _shell_scan(command: str) -> list[ScanSegment]:
-    # spec 8: single-quoted or escaped $ is literal; quote edges end a variable name.
-    segments: list[ScanSegment] = []
-    words: list[str] = []
-    heres: set[int] = set()
-    strings: set[int] = set()
-    cur: list[str] = []
-    started, redirect, quote, op, fd_in, fed = False, False, "", "", True, False
-    redirected = False
-    i, n = 0, len(command)
-
-    def end_word() -> None:
-        nonlocal cur, started, redirect, op
-        if cur or started:
-            if redirect and op == "<<<":
-                strings.add(len(words))
-            if redirect and op == "<<<" and fd_in:
-                heres.add(len(words))
-            words.append((_REDIRECT if redirect else "") + "".join(cur))
-            redirect, op = False, ""
-        cur, started = [], False
-
-    while i < n:
-        c = command[i]
-        if quote == "'":
-            if c == "'":
-                quote = ""
-                cur.append(_CUT)
-            else:
-                cur.append(_LIT if c == "$" else c)
-        elif quote == '"':
-            if c == '"':
-                quote = ""
-                cur.append(_CUT)
-            elif c == "\\" and i + 1 < n:
-                i += 1
-                cur.append(_LIT if command[i] == "$" else command[i])
-            else:
-                cur.append(c)
-        elif c in "'\"":
-            quote, started = c, True
-            cur.append(_CUT)
-        elif c == "\\" and i + 1 < n:
-            i += 1
-            cur.append(_LIT if command[i] == "$" else command[i])
-            started = True
-        elif c in "<>":
-            fd = "".join(cur) if not redirect else ""
-            if fd.isdigit():
-                # issue 116 (fix round 1, row 1): a digit word glued to < or > is its fd.
-                cur, started = [], False
-            end_word()
-            if not redirect:
-                op, fd_in = "", fd in {"", "0"} or not fd.isdigit()
-                redirected = redirected or (c == "<" and fd_in)
-                fed = fed or redirected
-            op += c
-            redirect = True
-            while i + 1 < n and command[i + 1] in "&>":
-                i += 1
-                op += command[i]
-        elif c.isspace() or c in ";&|()`":
-            end_word()
-            if c not in " \t" and words:
-                segments.append(
-                    ScanSegment(list(words), frozenset(heres), fed, frozenset(strings), redirected)
-                )
-                words.clear()
-                heres.clear()
-                strings.clear()
-                fed = redirected = False
-            if c == "|" and "|" not in command[i - 1 : i] + command[i + 1 : i + 2]:
-                fed = True  # fix round 3: a pipe (never ||) feeds the next segment's stdin.
-        else:
-            cur.append(c)
-            started = True
-        i += 1
-    end_word()
-    if words:
-        segments.append(ScanSegment(words, frozenset(heres), fed, frozenset(strings), redirected))
-    return segments
-
-
 def _base_env() -> dict[str, list[str]]:
     # spec 8: the hook's own environment, HOME real, the plugin folders defaulted.
     env = {k: [v] for k, v in os.environ.items()}
@@ -1738,98 +1740,10 @@ def _base_env() -> dict[str, list[str]]:
     return env
 
 
-def _command_at(
-    clean: list[str], skip: set[int], options: list[WrapperOption] | None = None
-) -> int | None:
-    # spec 8, issue 76: past control words and assignments, then shell.unwrap; options collects.
-    places = [i for i, word in enumerate(clean) if word and i not in skip]
-    k = 0
-    while k < len(places):
-        word = clean[places[k]]
-        if word in _CONTROL_WORDS or _ASSIGN.match(word):
-            k += 1
-            continue
-        unwrapped = unwrap([clean[i] for i in places[k:]])
-        if unwrapped is None:
-            return _OPAQUE
-        rest, found = unwrapped
-        if options is not None:
-            options += [o._replace(at=places[k + o.at]) for o in found]
-        if not rest:
-            return None
-        if len(places) - len(rest) == k:
-            return places[k]
-        k = len(places) - len(rest)
-    return None
-
-
-def _opaque_words(clean: list[str], skip: set[int]) -> set[int]:
-    # issue 76: past an unknown wrapper option the command word is unknown; these words remain.
-    return {i for i, word in enumerate(clean) if word and i not in skip}
-
-
 def _option_values(
     texts: list[str], options: list[WrapperOption], kinds: frozenset[tuple[str, str]]
 ) -> list[str]:
     return [texts[o.at][len(o.prefix) :] for o in options if (o.wrapper, o.option) in kinds]
-
-
-def _search_paths(name: str, clean: list[str], args: list[int]) -> set[int]:
-    # spec 8: grep and rg take the first operand as the pattern unless -e or -f names it.
-    letters = _SEARCH_VALUES["rg" if name == "rg" else "grep"] if name != "jq" else frozenset()
-    paths: set[int] = set()
-    operands: list[int] = []
-    explicit, pending = False, ""
-    for i in args:
-        word = clean[i]
-        if pending:
-            if pending in {"f", "--file"}:
-                paths.add(i)
-            pending = ""
-        elif word.startswith("--"):
-            opt = word.split("=", 1)[0]
-            # prepush2-2026-10-27: rg --files takes no pattern, so every operand is a path.
-            explicit = explicit or opt in {"--regexp", "--file", "--files"}
-            if opt == "--file" and "=" in word:
-                paths.add(i)
-            elif "=" not in word and opt in _SEARCH_LONGS:
-                pending = opt
-        elif word.startswith("-") and len(word) > 1:
-            for j, ch in enumerate(word[1:]):
-                if ch in letters:
-                    explicit = explicit or ch in "ef"
-                    if j == len(word) - 2:
-                        pending = ch
-                    elif ch == "f":
-                        paths.add(i)
-                    break
-        else:
-            operands.append(i)
-    return paths | set(operands if explicit else operands[1:])
-
-
-def _path_positions(words: list[str]) -> tuple[str, int, set[int]]:
-    # spec 8: where an unresolved variable could name a file for a modeled reader or writer.
-    clean = [_clean(w) for w in words]
-    paths = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
-    at = _command_at(clean, paths)
-    if at == _OPAQUE:
-        return "", -1, paths | _opaque_words(clean, paths)
-    if at is None:
-        return "", -1, paths
-    name = _base(clean[at])
-    args = [i for i in range(at + 1, len(clean)) if i not in paths]
-    if name in _GREPS or name in {"rg", "jq"}:
-        return name, at, paths | _search_paths(name, clean, args)
-    if name == "find":
-        for i in args:
-            if clean[i].startswith(("-", "(", "!")):
-                break
-            paths.add(i)
-        return name, at, paths
-    if name in _PATH_CMDS:
-        paths |= {i for i in args if not clean[i].startswith("-") or _PATH_OPTION.match(clean[i])}
-    return name, at, paths
 
 
 def _typed_tree(
@@ -2813,7 +2727,7 @@ def _unknown_decision(
     if tool in WRITE_TOOLS and _data_dir_path(_abs(raw_path, cwd), cwd):
         return _block(R_DATA_DIR)
     command = str(tool_input.get("command") or "") if tool == "Bash" else ""
-    if command and (_data_dir_write(command) or _cd_data_dir_git(command)):
+    if command and _data_dir_bash(command, cwd, "foreign"):
         return _block(R_DATA_DIR)
     repo = _marked_repo(cwd, tool, tool_input)
     # 0224: judged by its own repo; a command's text never scopes the call.
@@ -2883,18 +2797,16 @@ def _with_agent(decision: Decision, agent: str) -> Decision:
     return Decision(decision.allow, decision.reason, agent, decision.warn)
 
 
-def integrity_reason(tool: str, tool_input: dict[str, object], cwd: str) -> str | None:
+def integrity_reason(tool: str, tool_input: dict[str, object], cwd: str, agent: str) -> str | None:
     # 0053, issue 75: no absolute cwd, a write into .git or the data folder, Bash included.
+    # 266: a Bash call is judged on the typed record of the caller's own role.
     is_write = tool in WRITE_TOOLS
     if not (is_write or tool == "Bash"):
         return None
     if not os.path.isabs(cwd):
         return R_NO_CWD
     if not is_write:
-        command = str(tool_input.get("command") or "")
-        if _data_dir_write(command):
-            return R_DATA_DIR
-        return R_DATA_DIR_GIT if _cd_data_dir_git(command) else None
+        return _data_dir_bash(str(tool_input.get("command") or ""), cwd, agent)
     path = _abs(str(tool_input.get("file_path") or tool_input.get("notebook_path") or ""), cwd)
     if ".git" in path.split(os.sep) or ".git" in os.path.normpath(path).split(os.sep):
         return R_DOTGIT
@@ -2907,7 +2819,7 @@ def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision
     raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
     is_write = tool in WRITE_TOOLS
     path = _abs(raw_path, cwd)
-    integrity = integrity_reason(tool, tool_input, cwd)
+    integrity = integrity_reason(tool, tool_input, cwd, "main")
     if integrity == R_NO_CWD:
         return _main_warn(WARN_NO_CWD, R_NO_CWD)
     if integrity == R_DOTGIT:

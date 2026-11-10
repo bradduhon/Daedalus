@@ -24,6 +24,8 @@ from tests.adversarial.corpus import (
     A1_WRAPPER_ROWS,
     CLAIMS_ADMITTED,
     CLAIMS_REFUSED,
+    GIT_LOG_COUNT_266,
+    GIT_LOG_COUNT_VALUE_266,
     S3C_HUNT,
     S3C_HUNT_DECLARED,
     assert_denied,
@@ -164,3 +166,28 @@ def test_the_claims_call_one_token_off_its_form_is_refused(form: str) -> None:
 @pytest.mark.parametrize("agent", ["coder", "auditor", "comparer", "orchestrator"])
 def test_the_claims_call_is_the_verifier_s_alone(agent: str) -> None:
     assert_denied(_b(agent, _claims(CLAIMS_ADMITTED[0])))
+
+
+def _log_record(agent: str, command: str) -> tuple[set[str], list[str]]:
+    got = jail._admission(command, agent, WT)[1]
+    assert jail._passed(got), (agent, command, got)
+    done = got.commands[-1]
+    return {t.text for t in done.texts}, [p.text for p in done.pathspecs]
+
+
+@pytest.mark.parametrize("agent", ["main", "coder", "auditor"])
+@pytest.mark.parametrize("form", GIT_LOG_COUNT_266)
+def test_a_git_log_count_is_text_and_the_path_after_it_a_pathspec(agent: str, form: str) -> None:
+    # 266: -n and --max-count, joined or apart, take their value; only the -- word is a pathspec.
+    texts, specs = _log_record(agent, form.format(path="src/a.py"))
+    assert "3" in texts and specs == ["src/a.py"], (form, texts, specs)
+    # 266: the pathspec slot is still judged, so a .env after the count is refused and named.
+    assert_denied(_b("coder", form.format(path=".env")), "is a .env file")
+
+
+@pytest.mark.parametrize("agent", ["main", "coder", "auditor"])
+@pytest.mark.parametrize("form", GIT_LOG_COUNT_VALUE_266)
+def test_a_word_in_the_git_log_count_slot_is_never_a_pathspec(agent: str, form: str) -> None:
+    # 266: git reads that word as the count and rejects a path; the typed record agrees.
+    texts, specs = _log_record(agent, form.format(path=".env"))
+    assert ".env" in texts and specs == [], (form, texts, specs)

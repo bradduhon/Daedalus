@@ -28,6 +28,8 @@ CLASSES = (
     "hidden_bodies",
     "chain_state",
     "measurement_rows",
+    # 266: writes into the data folder and pack verify paths, read from the typed record.
+    "data_folder",
 )
 # spec 3.3: the agents whose Bash grammar is widest; credential reads judge them all.
 READERS = ("coder", "auditor", "verifier")
@@ -1375,6 +1377,9 @@ P3_MEASURE_A3 = (
 # 228 S3b, 233: a coder write off its table a sealed pass admits exactly once; (agent, form).
 # 228 S3c: perl -i stays off the coder table while sed -i has a row.
 S3B_CODER_PASS_ONCE = ("coder", "perl -pi -e s/a/b/ {repo}/notes.txt")
+# 266, 0240: grant is the check. A passed coder write naming the data folder, judged by the
+# folder it stands in alone: none outside the data folder, R_DATA_DIR inside it.
+S3B_CODER_PASS_DATA_FOLDER = ("coder", "perl -pi -e s/a/b/ {repo}/.claude/daedalus/config.json")
 
 
 # 228 S3c hunt: (row, class, form) per coder table row S3c added, one refused form per class of
@@ -1525,9 +1530,121 @@ S4_TYPED_PASS_225 = (
     "true # c\ngit commit -m ':i: fix' -- src/a.md",
     "set -e\ngit commit -m ':i: fix' -- src/a.md",
 )
-# 228 tail: git log's -n value sits in the typed pathspec slot, so the credential check refuses
-# its unresolved $N before the coder's grammar names the span.
+# 266: git log's -n value is typed text, no longer a pathspec, so the credential check has no
+# unresolved path; the coder's grammar refuses the row and names $N (was R_CREDENTIAL_PARAM).
 S4_PARAM_IN_PATHSPEC = ("git log -n \"$N\" -- ':(icase)x'",)
+S4_PARAM_IN_PATHSPEC_REFUSAL = "Refused: the parameter expansion $N is not admitted, at `$N`."
+# 266: git log's count option in each spelling; the value is text, the word after -- a pathspec.
+GIT_LOG_COUNT_266 = (
+    "git log -n 3 -- {path}",
+    "git log -n3 -- {path}",
+    "git log --max-count 3 -- {path}",
+    "git log --max-count=3 -- {path}",
+)
+# 266: a path in the count slot is git's count, which git rejects; it is never a pathspec.
+GIT_LOG_COUNT_VALUE_266 = ("git log -n {path}", "git log --max-count {path}")
+# 266 hunt: (class, form, main, coder) for the data folder check on each role's typed record;
+# None means the check names nothing: the role refuses the form, or it writes no data folder.
+DATA_FOLDER_HUNT_266 = (
+    ("quoted path", "touch '.claude/daedalus/x'", "R_DATA_DIR", "R_DATA_DIR"),
+    ("quoted part", 'touch ".claude"/daedalus/x', "R_DATA_DIR", "R_DATA_DIR"),
+    (".. segment", "touch src/../.claude/daedalus/x", "R_DATA_DIR", "R_DATA_DIR"),
+    ("doubled slash", "touch .claude//daedalus/x", "R_DATA_DIR", "R_DATA_DIR"),
+    ("dot segments", "touch ./.claude/./daedalus/x", "R_DATA_DIR", "R_DATA_DIR"),
+    ("link source", "ln -s .claude/daedalus d", "R_DATA_DIR", "R_DATA_DIR"),
+    ("link source after cd", "cd {repo}/.claude && ln -s daedalus d", "R_DATA_DIR", "R_DATA_DIR"),
+    ("link source by link folder", "ln -s daedalus {repo}/.claude/d", "R_DATA_DIR", "R_DATA_DIR"),
+    ("git -C", "git -C .claude add daedalus", "R_DATA_DIR_GIT", "R_DATA_DIR_GIT"),
+    ("git -C inside", "git -C .claude/daedalus commit -m x", "R_DATA_DIR_GIT", "R_DATA_DIR_GIT"),
+    ("git wildcard pathspec", "git -C .claude add 'daed*'", "R_DATA_DIR_GIT", "R_DATA_DIR_GIT"),
+    ("--work-tree", "git --work-tree .claude/daedalus add x", "R_DATA_DIR_GIT", None),
+    ("--git-dir", "git --git-dir=.claude/daedalus/.git add x", "R_DATA_DIR_GIT", None),
+    ("GIT_DIR=", "GIT_DIR=.claude/daedalus git add x", None, None),
+    ("cd in a subshell", "(cd .claude && git add daedalus)", None, None),
+    ("cd then add", "cd {repo}/.claude && git add daedalus", "R_DATA_DIR_GIT", "R_DATA_DIR_GIT"),
+    ("cd then add all", "cd {repo}/.claude && git add -A", None, None),
+    ("redirect", "ls > .claude/daedalus/x", "R_DATA_DIR", None),
+    ("redirect fd 2", "ls 2> .claude/daedalus/x", "R_DATA_DIR", None),
+    ("redirect &>", "ls &> .claude/daedalus/x", "R_DATA_DIR", None),
+    ("redirect >|", "ls >| .claude/daedalus/x", "R_DATA_DIR", None),
+    ("tee", "tee .claude/daedalus/x", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tee after a pipe", "ls | tee .claude/daedalus/x", None, None),
+    ("here-doc into it", "cat <<EOF > .claude/daedalus/x\nbody\nEOF", "R_DATA_DIR", None),
+    ("here-doc body naming it", "cat <<EOF\n.claude/daedalus/x\nEOF", None, None),
+    ("cd then write", "cd {repo}/.claude && touch daedalus/x", "R_DATA_DIR", "R_DATA_DIR"),
+    ("wrapper chdir", "env -C {repo}/.claude touch daedalus/x", "R_DATA_DIR", None),
+    ("read out of it", "cp .claude/daedalus/config.json /tmp/x", None, None),
+    ("move out of it", "mv .claude/daedalus/x /tmp/x", "R_DATA_DIR", "R_DATA_DIR"),
+    ("add from the root", "git add .claude/daedalus/x", None, None),
+)
+# 266 fix 1: (class, form, main, coder); a write that takes an ancestor of the data folder
+# whole (remove, move, merge, recursive change) takes the folder too; one into it does not.
+ANCESTOR_WRITES_266 = (
+    ("remove", "rm -r -f .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("remove the parent", "rm -r -f ..", "R_DATA_DIR", "R_DATA_DIR"),
+    ("remove an empty folder", "rmdir .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("move away", "mv .claude /tmp/x", "R_DATA_DIR", "R_DATA_DIR"),
+    ("replace with -T", "mv -T /tmp/x .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("merge with -T", "cp -r -T src .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("merge a tree", "rsync -a src/ .claude/", "R_DATA_DIR", "R_DATA_DIR"),
+    ("recursive mode", "chmod -R 000 .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("link to it", "ln -s .claude d", "R_DATA_DIR", "R_DATA_DIR"),
+    ("sibling inside", "touch .claude/x", None, None),
+    ("touch the ancestor", "touch .claude", None, None),
+    ("make the ancestor", "mkdir -p .claude", None, None),
+    ("move into it", "mv /tmp/x .claude", None, None),
+    ("move into it with -t", "mv -t .claude /tmp/x", None, None),
+    ("copy into it", "cp x .claude", None, None),
+    ("link into it", "ln -s x .claude", None, None),
+)
+# 266 fix 2: wildcard write operands; every grammar refuses a glob in a write operand, so the
+# data folder check has no typed path (0224) and the role's own refusal names the glob.
+WILDCARD_WRITES_266 = (
+    "rm .*",
+    "touch .claude/dae*",
+    "rm -r -f .claude/*",
+    "rm -r -f .cl*",
+    "rm *.log",
+    "chmod 644 *",
+    "touch src/*.py",
+)
+# 266 fix 2: (path, shell glob named, git pathspec named) by component at the repo root.
+WILDCARD_REACH_266 = (
+    ("*.log", False, True),
+    ("*", False, True),
+    ("src/*.py", False, False),
+    ("?claude", False, True),
+    (".git/*", False, False),
+    ("src/[ab].py", False, False),
+    (".*", True, True),
+    (".claude/dae*", True, True),
+    (".claude/*", True, True),
+    (".cl*", True, True),
+    (".claude/[d]x", True, True),
+    ("{a,.claude}", True, True),
+    (".claude/daedalus/*", True, True),
+)
+# 266 hunt: (class, verify, outcome); "outside <path>" names the path, "refused <word>" fails the
+# pack with the word off the auditor's table, "ok" is no problem.
+PACK_VERIFY_HUNT_266 = (
+    ("quoted path", "rg -n x '/etc'", "outside /etc"),
+    (".. segment", "rg -n x src/../..", "outside src/../.."),
+    ("dot then ..", "rg -n x ./../x", "outside ./../x"),
+    ("doubled slash ..", "rg -n x .//..//", "outside .//..//"),
+    ("quoted tilde", "rg -n x '~'", "outside ~"),
+    ("glob path", "rg -n x /e*", "outside /e*"),
+    ("-- then path", "rg x -- /etc", "outside /etc"),
+    ("-f value", "rg -f /etc/hostname .", "outside /etc/hostname"),
+    ("--file= value", "rg --file=/etc/hostname .", "outside /etc/hostname"),
+    ("bare tilde", "rg -n x ~", "refused `~`"),
+    ("parameter", "rg -n x $HOME", "refused $HOME"),
+    ("redirect", "rg -n x . > /tmp/o", "refused > /tmp/o"),
+    ("here-string", "rg -f - . <<< x", "refused <<< x"),
+    ("leading cd", "cd /etc && rg -n x .", "outside /etc"),
+    ("subshell", "(rg -n x /etc)", "refused (rg -n x /etc)"),
+    ("pattern with ..", "rg -n '/api/..' .", "ok"),
+    ("pattern file inside", "rg -e x -f pats .", "ok"),
+)
 # 228 S4: A3_RULE_ROWS main's grammar admits whose typed record names no path in a root, a read
 # or a literal message; main loses the text scan's warning on these (262 moved the PATH rows).
 S4_MAIN_TYPED_PASS = (
