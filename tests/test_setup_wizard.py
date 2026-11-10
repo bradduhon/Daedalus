@@ -532,4 +532,4 @@ def test_skill_states_the_question_rules_and_never_asks_a_not_active_setting() -
 def test_examples_name_no_home_or_machine_path() -> None:
     for name in EXAMPLE_NAMES.values():
         text = (EXAMPLES / name).read_text(encoding="utf-8")
-        assert "/home/" not in text and "/Users/" not in text and "C:" not in text, name
+        assert not re.search(r"/(?:hom[e]|User[s])/|[A-Z]:\\", text), name

@@ -43,7 +43,7 @@ def parse(text: str) -> object:
 
 
 def read_text(path: Path, limit: int = MAX_BYTES) -> str:
-    # 0242: opened as operator_file opens it, never through a link and never blocking on a fifo.
+    # 0242: opened as the personal file's reader opens it: never through a link, never blocking.
     atomic.refuse_links(path)
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)

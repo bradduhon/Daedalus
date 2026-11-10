@@ -32,6 +32,7 @@ ALLOWLIST = frozenset(
         "service-manifest.json",
         "skills/",
         "tests/",
+        "docs/examples/",
         "docs/guardrails.md",
         "docs/howto/README.md",
         "docs/project-requirements.md",

@@ -53,6 +53,7 @@ TERRAFORM_DEPTH = 6
 TERRAFORM_ENDINGS = (".tf", ".tfvars")
 _SKIPPED_FOLDERS = frozenset({"node_modules"})
 SET_NEXT = "Next: correct the command as the line above says, then run it again."
+VALUE_NEXT = "Next: choose a value the key reference in the README allows, then set it again."
 
 
 class SetupStop(Exception):
@@ -333,7 +334,11 @@ def set_key(form: str, key: str, raw: str, repo: Path) -> int:
     try:
         _check(form, changed, path)
     except (ManifestError, ConfigError, OperatorError) as exc:
-        raise SetupStop(f"set refused, the file's own check refused the new value: {exc}") from exc
+        # 0242: the reader's own message, with a next step when the reader gave none.
+        tail = "" if "Next:" in str(exc) else f" {VALUE_NEXT}"
+        raise SetupStop(
+            f"set refused, the file's own check refused the new value: {exc}{tail}"
+        ) from exc
     try:
         settings_edit.write(path, before, text, limit)
     except settings_edit.EditError as exc:

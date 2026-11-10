@@ -209,6 +209,8 @@ def test_config_carries_the_validated_override(tmp_path: Path) -> None:
 def test_only_the_named_modules_mention_operator_file() -> None:
     # 0235: nothing reads the operator file yet beyond config, doctor, key rows and itself.
     allowed = {"config.py", "daedalus_doctor.py", "project_keys.py", "operator_file.py"}
+    # 0242: setup creates the file and checks a changed one with its validator; it acts on no value.
+    allowed.add("daedalus_setup.py")
     found = {
         path.name
         for path in (REPO_ROOT / "scripts").rglob("*.py")

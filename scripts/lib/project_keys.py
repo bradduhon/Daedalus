@@ -57,7 +57,7 @@ OPERATOR_FILE_NAME = "~/" + OPERATOR_FILE.as_posix()
 _MANIFEST_PARENT = {key: "jail_narrowing" for key in NARROWING_KEYS} | {
     key: "stack" for key in STACK_KEYS
 }
-# 0158: opt-in feature switches setup never writes; each reads false until the operator sets it.
+# 0158: opt-in switches the starter never writes; each reads false until the operator sets it.
 SETUP_OMITS = frozenset({"terraform_validate"})
 # 0004: lib.ledger reads a manifest ledger block with the config ledger's four fields.
 MANIFEST_LEDGER = "ledger"
@@ -374,7 +374,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "features.terraform_validate"): KeyRow(
         "Lets the auditor run `terraform validate`, which starts the provider "
-        "programs in a module's `.terraform` folder. Setup never writes it, and "
+        "programs in a module's `.terraform` folder. The starter manifest leaves it out, so "
+        "setup writes it only on your answer, and "
         "`features.terraform_tools` set to `false` still turns it off",
         "boolean",
         "`true` or `false`",
