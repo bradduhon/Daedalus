@@ -1583,17 +1583,15 @@ def _data_dir_bash(command: str, cwd: str, agent: str) -> str | None:
             continue
         here = _abs(done.cd_target.text, base) if done.cd_target is not None else base
         for write in done.writes:
-            folders = (cwd, base) if write.span in redirects else (cwd, base, here)
-            if any(
-                _data_dir_reach(_typed_path(write, words, command, env), f, cwd) for f in folders
-            ):
+            opens = [cwd, base] if write.span in redirects else [cwd, base, here]
+            if any(_data_dir_reach(_typed_path(write, words, command, env), f, cwd) for f in opens):
                 return R_DATA_DIR
         # 266: a link's source; a later write through the link lands in the data folder.
         links = [_abs(w.text, here) for w in done.writes] if done.family == "ln" else []
         sources = done.reads if done.family == "ln" else ()
         for source in sources:
             path = _typed_path(source, words, command, env)
-            folders = (here, *links, *(os.path.dirname(link) for link in links))
+            folders = [here, *links, *(os.path.dirname(link) for link in links)]
             if any(_data_dir_reach(path, f, cwd) for f in folders):
                 return R_DATA_DIR
         sub = done.subcommand.text if done.subcommand is not None else ""
