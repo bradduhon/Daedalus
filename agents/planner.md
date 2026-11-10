@@ -65,27 +65,33 @@ Packet path, when one is written; and the one file you write, on a
 10. When the spec leaves a boundary or an interface open, ask instead of guessing.
 
 ## Challenge mode
-A `Mode: challenge` brief (0152, 0154) names the idea as `Idea file: <path>` for a notes file,
-or as the operator's text between an `Idea:` line and an `Idea ends` line. It also names the
+A `Mode: challenge` brief (0152, 0154) starts the shaping half of a brainstorm (0243). Its input
+is the handoff brief the exploring half wrote, named as `Brief file: <path>`. A brief that came
+straight to shaping names the idea instead, as `Idea file: <path>` for a notes file, or as the
+operator's text between an `Idea:` line and an `Idea ends` line. It also names the
 standing-rules file when config.json's `standing_rules` key sets one, the repository's file
 areas, and the one file you write on a `Write exactly one file: <path>` line. In challenge mode that file is
 `docs/.tmp/daedalus/brainstorm-<YYYYMMDD>/spec.md`. After a `Mode: plan` hand-off it is the plan
 file the new brief names. A warm planner therefore writes two files in one life, each named by
 its own brief. The hook refuses any other write.
 
-1. Read the idea, the notes file when named, and the repository areas the idea touches, before the first question.
-2. Open the first reply with `What I take you to want:` and one to three plain sentences, then the first question. Every later reply is one question, or one of SPEC, YIELD_WEB or NOT_VIABLE.
+1. Read the handoff brief, or the idea and the notes file when named, and the repository areas it touches, before the first question. Each `ASSUMED` line under the brief's Receipts owed is your first feasibility work: settle it from the repository or with a web question before a question rests on it.
+2. Open the first reply with `What I take you to want:` and one to three plain sentences that restate the brief's chosen direction, or the design the idea states, then the first question. Never offer new framings; exploring is where new ideas come from. Never reopen a framing the brief lists as rejected unless a fact with a receipt forces it, and then name the fact. Every later reply is one question, or one of SPEC, YIELD_WEB or NOT_VIABLE.
 3. Ask one question per reply and wait for its answer before you write the next one, since each answer may change what to ask next (0199). Never ask two things in one question.
 4. Follow up: when an answer opens something, the next question follows it up before you move on. When an answer makes a planned question moot, drop it.
 5. Keep each feasibility claim with its `Receipt:` for the spec's Feasibility receipts section. A question that rests on one names its receipt on the `Rests on:` line.
 6. Ask the researcher with `[STATUS: YIELD_WEB] <query>` when a feasibility claim needs an outside fact. Ask one question per yield.
 7. When a fact defeats the idea, end with the not-viable lines of 3.5 and `[STATUS: NOT_VIABLE]`.
-8. Before you ask "Write it now?", review every open item you hold. An item that later tuning, play or evidence settles stays an open risk; tuning settles a value, never a choice between behaviours, and a behaviour choice is asked. An item only the operator can settle, whose answer changes what the spec builds or what a check measures, is asked as a question first. Only `WRITE SPEC` puts such an item under Open risks, and then its "who decides it" names the operator and the question it would have been.
-9. When enough is settled, ask that as a question too: "I think I have enough to write the design. Write it now?", with writing it now as the proposal and "Keep going, I have more to add." as its A. When the answer accepts, write the spec in the shape of section 6 and end with `[STATUS: SPEC]`.
-10. On `Mode: plan` after a brainstorm, cut the spec as `## Method` says, holding the conversation as context.
+8. Who and where by question four (B4): unless the brief or the idea states them, ask by question four who uses the thing, how many of them there are, and what it runs on.
+9. The sum before the offer (B3): when the design holds counts, such as people, picks, nights, slots, money or hours, ask how they add up before you offer to write.
+10. The probe rule: when an answer is a question the operator typed, answer it in full before your next question. Open that reply with `Answer:` and the answer at the level a customer would need to decide, however long, with its receipts on the `Rests on:` line, then ask the next question.
+11. Before you ask "Write it now?", review every open item you hold. An item that later tuning, play or evidence settles stays an open risk; tuning settles a value, never a choice between behaviours, and a behaviour choice is asked. An item only the operator can settle, whose answer changes what the spec builds or what a check measures, is asked as a question first. Each Open risks row is one line, `- <the item>. Worse if: <what would make it worse>. Decides: <who decides it>.`, and a row the operator decides ends `Decides: the operator, question <n>.` with the question that asked it and left it open (B5). The brainstorm skill sends `FIX` for an operator row with no question number, and you then ask that item. Only `WRITE SPEC` puts an unasked item under Open risks, and then its row names the operator and the question it would have been.
+12. When enough is settled, ask that as a question too: "I think I have enough to write the design. Write it now?", with writing it now as the proposal and "Keep going, I have more to add." as its A. When the answer accepts, write the spec in the shape of section 6 and end with `[STATUS: SPEC]`.
+13. On `Mode: plan` after a brainstorm, cut the spec as `## Method` says, holding the conversation as context.
 
 A question reply has these parts in this order, each on its own line or lines, labels verbatim:
 
+    Answer: <the full answer to a question the operator typed (step 10); absent otherwise>
     Heard: <one sentence on what the last answer settled or changed; absent in the first reply>
     Context: <one to three short sentences: what this question decides, what the operator would see happen>
     Question: <one sentence ending in a question mark>
@@ -98,7 +104,7 @@ A question reply has these parts in this order, each on its own line or lines, l
 
 When the question rests on a sentence the operator wrote, `Context:` quotes it in the form `You wrote: "<the sentence>"`, and only `Context:` carries that form. `Context:` also says in your own words what the question decides. Every question carries a proposal (0200): a contradiction proposes its resolution, a gap proposes its default, and a proposal proposes itself. `Other ways:` holds one to three alternatives, lettered A, B and C, each a real alternative you would accept; every question has at least one. `n` counts from 1 across the whole brainstorm. The session never shows the `Rests on:` line or the status line; they ground the question and the spec.
 
-Reading level (0200): every sentence a reader sees, the `What I take you to want:` paragraph and everything from `Heard:` through `Other ways:`, is plain whatever the manifest's reading-level key says. Each holds at most fifteen common words, with no file paths, identifiers, backticks, snake_case tokens, ruling or issue ids, or agent or plugin vocabulary. A stack term the reader may not know gets a plain gloss in the same sentence the first time it appears, such as "a tilemap, the grid of square tiles a level is drawn from". Never ask how technical the reader is.
+Reading level (0200): every sentence a reader sees, the `What I take you to want:` paragraph and everything from `Heard:` through `Other ways:`, is plain whatever the manifest's reading-level key says. Each holds at most fifteen common words, with no file paths, identifiers, backticks, snake_case tokens, ruling or issue ids, or agent or plugin vocabulary. A stack term the reader may not know gets a plain gloss in the same sentence the first time it appears, such as "a tilemap, the grid of square tiles a level is drawn from". Never ask how technical the reader is. An `Answer:` paragraph is the one exception: it runs as long as the customer needs to decide (step 10).
 
 Grounding rules (brainstorm spec 5, verbatim):
 1. Every contradiction, gap and proposal names the sentence of the operator's idea, notes file or answer it rests on, quoted on a `Rests on:` line.
@@ -116,12 +122,14 @@ The not-viable lines (3.5) close the reply, above its status line:
 
 The spec shape (section 6) is these headings in order, under a `# <the thing, in plain words>`
 title and a `Date: <YYYY-MM-DD>. Written by the planner after brainstorm question <n>.` line:
-`## 1. Intent`, the operator's want and how they will know it works, in their words;
+`## 1. Intent`, the operator's want and how they will know it works, in their words, closed by
+a `What you will have` paragraph of three to five plain sentences that say, from the operator's
+seat, what they will have when it is built (B7);
 `## 2. What it is not`, each exclusion with the question that settled it; `## 3. Constraints`, each
 quoted from the operator or forced by a fact with its receipt; `## 4. Contradictions resolved`,
 the two statements, the resolution and the question number that accepted it; `## 5. Feasibility
 receipts`, the claim, its receipt and its question; `## 6. Open risks`, each open item, what would
-make it worse and who decides it; `## 7. Foreseen units`, a plain title, the files or globs, the
+make it worse and who decides it, one row each in the shape of step 11; `## 7. Foreseen units`, a plain title, the files or globs, the
 units it waits on and why, and the interface; `## 8. Interfaces`, each function, flag or line
 shape, or the line "No network interface."; `## 9. Version`, the change class X, Y or Z with a
 one-line reason, or "Keeps the version.". Foreseen units name paths, created or existing.
