@@ -40,6 +40,7 @@ from lib.manifest import (  # noqa: E402
 )
 from lib.manifest import features as manifest_features  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
+from lib.operator_file import OperatorError, load_user, operator_path  # noqa: E402
 from lib.plan_record import is_need  # noqa: E402
 from lib.workspace import _BARE_VERSION, UNMARK_NEXT, VERSION_FILE, train_marker  # noqa: E402
 
@@ -567,6 +568,36 @@ def _fable_check(root: Path, config: Config) -> tuple[bool, str]:
     return _opt(False, "fable", detail, FABLE_NEXT)
 
 
+def _repo_config(repo: Path) -> Config | None:
+    # 0235: the override note needs the config only when it loads; any failure reads as none.
+    if _trust_error(repo) is not None:
+        return None
+    try:
+        return load_config(path=project_data_dir(str(repo)) / "config.json")
+    except ConfigError:
+        return None
+
+
+def _operator_check(config: Config | None) -> tuple[bool, str]:
+    # 0235: one line for the user-scope operator file; read only, never written or created.
+    path = operator_path()
+    try:
+        user = load_user()
+    except OperatorError as exc:
+        return False, f"MISS operator file: {exc}"
+    over = sorted(config.operator) if config is not None else []
+    note = f"; this repository overrides {', '.join(over)}" if over else ""
+    if not path.exists():
+        return True, f"OK   operator file: none at {path}, defaults apply{note}"
+    profile = [k for k in ("literacy", "dash_ban") if getattr(user, k) is not None]
+    keys = ", ".join(profile) or "none"
+    return (
+        True,
+        f"OK   operator file: {path} (main_refusals {len(user.main_refusals)}; "
+        f"profile keys set: {keys}){note}",
+    )
+
+
 def _is_repo(repo: Path) -> bool:
     inside = _git(repo, "rev-parse", "--is-inside-work-tree")
     return inside.returncode == 0 and inside.stdout.strip() == "true"
@@ -937,6 +968,7 @@ def checks(repo: Path, run_typecheck: bool = False) -> Iterator[tuple[bool, str]
     is_repo = _is_repo(repo)
     scope_name = scope(repo)
     yield from _data_checks(repo, is_repo)
+    yield _operator_check(_repo_config(repo))
     yield _marker_check(repo)
     yield _cache_check()
     yield _plugin_root_check()

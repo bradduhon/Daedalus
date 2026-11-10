@@ -89,6 +89,14 @@ def test_a_malformed_manifest_stops_start_before_the_lookup(repo: Path, plugin: 
     assert outcome.code == 1 and "trains_dir" in outcome.lines[0]
 
 
+@pytest.fixture(autouse=True)
+def _temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 0235: the doctor reads the operator file under HOME; a test never reaches the real one.
+    guard = tmp_path / "home-guard"
+    guard.mkdir()
+    monkeypatch.setenv("HOME", str(guard))
+
+
 def _doctor(root: Path, tmp_path: Path, *args: str, bins: tuple[str, ...] = ()) -> list[str]:
     env = dict(os.environ)
     env.pop("CLAUDE_PLUGIN_DATA", None)

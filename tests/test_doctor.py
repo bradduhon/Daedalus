@@ -22,6 +22,14 @@ SCAFFOLDS = ("service-manifest.json", "contracts/", ".gitleaks.toml")
 PROBE = daedalus_confine.kernel_support
 
 
+@pytest.fixture(autouse=True)
+def _temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 0235: the doctor reads the operator file under HOME; a test never reaches the real one.
+    guard = tmp_path / "home-guard"
+    guard.mkdir()
+    monkeypatch.setenv("HOME", str(guard))
+
+
 def _run(
     data_dir: Path | None,
     repo: Path,
@@ -1672,3 +1680,70 @@ def test_no_version_tag_line_outside_a_repository(tmp_path: Path) -> None:
     folder.mkdir()
     (folder / "VERSION").write_text("3.3.0\n", encoding="utf-8")
     assert _tag_lines(folder, tmp_path) == []
+
+
+def _operator_lines(
+    tmp_path: Path, body: str | None, override: object | None = None, config: str | None = ""
+) -> list[str]:
+    # 0235: a temp HOME carries the operator file; the real one is never read.
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    _commit_all_empty(repo)
+    home = tmp_path / "home"
+    (home / ".claude" / "daedalus").mkdir(parents=True)
+    if body is not None:
+        (home / ".claude" / "daedalus" / "operator.json").write_text(body, encoding="utf-8")
+    data = repo / ".claude" / "daedalus"
+    data.mkdir(parents=True)
+    (data / ".gitignore").write_text("*\n", encoding="utf-8")
+    if config == "":
+        config = json.dumps({} if override is None else {"operator": override})
+    if config is not None:
+        (data / "config.json").write_text(config)
+    result = _run(None, repo, path_env=_bins_with_git(tmp_path, "gitleaks", "gh"), home=home)
+    return [line for line in result.stdout.splitlines() if "operator file" in line]
+
+
+def test_operator_file_absent_line_names_the_path(tmp_path: Path) -> None:
+    path = tmp_path / "home" / ".claude" / "daedalus" / "operator.json"
+    assert _operator_lines(tmp_path, None) == [
+        f"OK   operator file: none at {path}, defaults apply"
+    ]
+
+
+def test_operator_file_valid_line_counts_refusals_and_profile_keys(tmp_path: Path) -> None:
+    path = tmp_path / "home" / ".claude" / "daedalus" / "operator.json"
+    body = json.dumps({"main_refusals": ["commit_on_main"], "profile": {"dash_ban": True}})
+    assert _operator_lines(tmp_path, body) == [
+        f"OK   operator file: {path} (main_refusals 1; profile keys set: dash_ban)"
+    ]
+
+
+def test_operator_file_malformed_line_is_a_miss_with_next(tmp_path: Path) -> None:
+    (line,) = _operator_lines(tmp_path, '{"profile": {"dash_ban": "yes"}}')
+    assert line.startswith("MISS operator file: ") and "profile.dash_ban" in line
+    assert "Next: " in line
+
+
+def test_operator_file_line_prints_when_config_is_absent(tmp_path: Path) -> None:
+    path = tmp_path / "home" / ".claude" / "daedalus" / "operator.json"
+    lines = _operator_lines(tmp_path, "{}", config=None)
+    assert lines == [f"OK   operator file: {path} (main_refusals 0; profile keys set: none)"]
+
+
+def test_operator_file_line_prints_when_config_is_malformed(tmp_path: Path) -> None:
+    path = tmp_path / "home" / ".claude" / "daedalus" / "operator.json"
+    lines = _operator_lines(tmp_path, "{}", config="{nope")
+    assert lines == [f"OK   operator file: {path} (main_refusals 0; profile keys set: none)"]
+
+
+def test_operator_file_line_prints_with_bad_config_operator_block(tmp_path: Path) -> None:
+    (line,) = _operator_lines(tmp_path, None, {"profile": {"dash_ban": "yes"}})
+    assert line.startswith("OK   operator file: none at ") and "overrides" not in line
+
+
+def test_operator_file_line_names_repository_overrides(tmp_path: Path) -> None:
+    override = {"main_refusals": [], "profile": {"literacy": "plain"}}
+    (line,) = _operator_lines(tmp_path, "{}", override)
+    tail = "(main_refusals 0; profile keys set: none); this repository overrides literacy, "
+    assert line.endswith(tail + "main_refusals")
