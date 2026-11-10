@@ -462,7 +462,7 @@ def _header(
     if charter is None:
         lines.append("charter: none (repo-local ledger)")
     else:
-        where = "ledger under charter_root" if under else "ledger repo-local"
+        where = "ledger under local_docs_folder" if under else "ledger repo-local"
         lines.append(
             f"charter: {charter.name}, branch daedalus/{train_id}, charter base: "
             f"{_text(state, 'charter_base') or 'none'} ({where})"

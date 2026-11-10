@@ -182,7 +182,7 @@ A plain folder with no git repository runs only plan, document in derived docume
 
 ## Summary notes and completion
 
-Summary notes. The summary lives at `<repo>/docs/.tmp/daedalus/<train-id>-summary.md`, first written at the audit phase's step 9 by the summary command, which writes every line of it (0046). The release phase passes this file to `gh pr create --body-file`, so it becomes a public pull request body; the command writes no absolute path: `<charter name>` is the last component of `charter_root`, and `<ledger repo name>` is the last component of the repo that holds the ledger. It reads the units, yields, compliance replies, verifier verdicts, audit verdict and rounds, blocks and audit totals from train state and the audit log. Only you know the task, the codes, the rulings, the sorted blocks and the exempted findings, so you write them to the summary notes file `<repo>/docs/.tmp/daedalus/<train-id>/summary-notes.md` before each summary command, in this shape:
+Summary notes. The summary lives at `<repo>/docs/.tmp/daedalus/<train-id>-summary.md`, first written at the audit phase's step 9 by the summary command, which writes every line of it (0046). The release phase passes this file to `gh pr create --body-file`, so it becomes a public pull request body; the command writes no absolute path: `<charter name>` is the last component of `local_docs_folder`, and `<ledger repo name>` is the last component of the repo that holds the ledger. It reads the units, yields, compliance replies, verifier verdicts, audit verdict and rounds, blocks and audit totals from train state and the audit log. Only you know the task, the codes, the rulings, the sorted blocks and the exempted findings, so you write them to the summary notes file `<repo>/docs/.tmp/daedalus/<train-id>/summary-notes.md` before each summary command, in this shape:
 
        Task: <the operator's words>
        Codes: --repo <R> --type <T>
@@ -202,12 +202,12 @@ Summary notes. The summary lives at `<repo>/docs/.tmp/daedalus/<train-id>-summar
        # Run <train-id>
        Task: <the operator's words>
        Base: <branch> @ <sha>. Integration branch: daedalus/<train-id>.
-       charter: <charter name>, branch daedalus/<train-id>, charter base: <recorded branch> (ledger under charter_root)
+       charter: <charter name>, branch daedalus/<train-id>, charter base: <recorded branch> (ledger under local_docs_folder)
          or: charter: <charter name>, branch daedalus/<train-id>, charter base: <recorded branch> (ledger repo-local)
          or: charter: none (repo-local ledger)
        Packet: v<n>. Ledger: <ledger repo name>/<ledger path relative to that repo>.
        Contract: contracts/<name>.md v<packet_version>
-         or, when charter_root is declared: Contract: <charter name>/specs/<name>.md v<packet_version>
+         or, when local_docs_folder is set: Contract: <charter name>/specs/<name>.md v<packet_version>
        Ledger ids: <ids> in commit <sha>.
          or, until charter-docs commits: Ledger ids: pending. Codes: --repo <R> --type <T>.
        [POLICY: none declared] or [POLICY: declared, gate not yet shipped]

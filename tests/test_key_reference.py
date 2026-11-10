@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -284,10 +285,44 @@ OLD_DOTTED = re.compile(
     r"|standards_sources|operator_signing_keys|profile\.(?:literacy|dash_ban)"
     r"|priorities\.(?:drivers|rules|principles|agents)|max_concurrent_builders"
     r"|frameworks\.(?:pack_dir|default_packs|packs)|assets\.(?:roots|extensions|max_bytes)"
+    r"|charter_root|excluded_roots|agent_models|fable_available|main_refusals|standing_rules"
 )
 PROSE = ("README.md", "docs/howto/README.md", "docs/project-requirements.md")
 # 0245: a run definition's when condition names a recorded feature field, never a settings key.
 DEFINITION_SYNTAX = "| `when` | A condition that skips the stage"
+# 0245: old names kept as internal identifiers or placeholders, cut from a text before the scan.
+ALLOWED_FORMS = (
+    "<charter_root>",  # path placeholder the skills and messages fill from local_docs_folder
+    "charter_root: ",  # State Block field and the begin command's line
+    "`charter_root`, `charter_base`",  # README list of train state fields
+    "declared_charter_root",  # premise test name in controls/base.json
+    "models.fable_available",  # the key itself, written with its group
+    '"fable_available"',  # the key inside the models group of a JSON example
+    "standing_rules.py",  # script name
+    "standing_rules: ",  # that script's message prefix
+    "standing_rules.AREAS",  # that script's area table
+    "agent_models.py",  # module name
+    "excluded_roots.py",  # hook script name
+    "checks/excluded_roots",  # hook source path in controls/src.json
+    "test_excluded_roots",  # test file name
+    "manifest.docs.literacy",  # attribute path an overlap row cites at its line
+)
+# 0245: whole string literals that are dict keys or state fields, never settings keys.
+INTERNAL_IDENTIFIERS = frozenset(
+    {
+        "charter_root",
+        "max_concurrent_builders",
+        "excluded_roots",
+        "main_refusals",
+        "fable_available",
+    }
+)
+
+
+def _old_names(text: str) -> list[str]:
+    for form in ALLOWED_FORMS:
+        text = text.replace(form, "")
+    return OLD_DOTTED.findall(text)
 
 
 def test_no_doc_skill_or_agent_names_an_old_key() -> None:
@@ -300,5 +335,40 @@ def test_no_doc_skill_or_agent_names_an_old_key() -> None:
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if line.startswith(DEFINITION_SYNTAX):
                 continue
-            found += [f"{path.relative_to(REPO_ROOT)}:{n}: {m}" for m in OLD_DOTTED.findall(line)]
+            found += [f"{path.relative_to(REPO_ROOT)}:{n}: {m}" for m in _old_names(line)]
+    assert found == []
+
+
+def _json_strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for k, v in value.items() for s in [k, *_json_strings(v)]]
+    if isinstance(value, list):
+        return [s for item in value for s in _json_strings(item)]
+    return []
+
+
+def _literals(path: Path) -> list[tuple[int, str]]:
+    text = path.read_text(encoding="utf-8")
+    if path.suffix == ".json":
+        return [(0, s) for s in _json_strings(json.loads(text))]
+    tree = ast.parse(text)
+    return [
+        (node.lineno, node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+
+
+def test_no_script_string_names_an_old_key() -> None:
+    # 0245: messages, rows and control texts under scripts/ use the new names too.
+    found = []
+    for path in sorted((REPO_ROOT / "scripts").rglob("*")):
+        if path.suffix not in (".py", ".json") or "__pycache__" in path.parts:
+            continue
+        for n, value in _literals(path):
+            if value in INTERNAL_IDENTIFIERS:
+                continue
+            found += [f"{path.relative_to(REPO_ROOT)}:{n}: {m}" for m in _old_names(value)]
     assert found == []

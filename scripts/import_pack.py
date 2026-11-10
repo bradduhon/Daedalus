@@ -41,7 +41,7 @@ OSCAL_VERIFY = "rg -n -F {id} ."
 _PARAM = re.compile(r"\{\{\s*insert:\s*param,\s*([A-Za-z0-9_.-]+)\s*\}\}")
 R_OUTSIDE = (
     "--out {out} is outside the project {repo}. Next: name a pack folder inside the project, "
-    "such as the folder frameworks.pack_dir names."
+    "such as the folder compliance_rules.folder names."
 )
 R_EXCLUDED = (
     "--out {out} is under the excluded root {root}, whose files never reach git. Next: name a "

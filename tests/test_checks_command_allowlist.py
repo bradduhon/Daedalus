@@ -960,7 +960,7 @@ def test_orchestrator_refusal_names_the_new_scripts() -> None:
 # 0158, 0159-DAE-PLT: validate starts provider programs, so it runs only on its own switch.
 TF_ALLOW = ("--git", "read-only", "--test-runner", "audit", "--terraform")
 TF_HOOK = "read_only_bash"
-VALIDATE_NEXT = "set features.terraform_validate to true in service-manifest.json"
+VALIDATE_NEXT = "set checks.terraform_validate to true in service-manifest.json"
 
 
 def _tf_payload(repo: Path, command: str) -> dict[str, Any]:
@@ -1009,9 +1009,9 @@ def test_terraform_validate_refused_unless_the_switch_is_true(
     for command in ("terraform validate", f"terraform -chdir={module} validate"):
         reason = _tf_call(repo_cwd, command)
         assert reason is not None, command
-        assert reason.startswith("features.terraform_validate is not true"), reason
+        assert reason.startswith("checks.terraform_validate is not true"), reason
         assert reason.count("Next:") == 1 and VALIDATE_NEXT in reason.split("Next:")[1], reason
-    # 0158: fmt -check stays under features.terraform_tools alone.
+    # 0158: fmt -check stays under checks.terraform_format alone.
     for command in ("terraform fmt -check", f"terraform -chdir={module} fmt -check"):
         assert _tf_call(repo_cwd, command) is None, command
 
@@ -1033,7 +1033,7 @@ def test_terraform_tools_off_outranks_the_validate_switch(repo_cwd: Path) -> Non
     _features(repo_cwd, {"terraform_format": False, "terraform_validate": True})
     for command in ("terraform validate", f"terraform -chdir={module} fmt -check"):
         reason = _tf_call(repo_cwd, command)
-        assert reason is not None and reason.startswith("features.terraform_tools is false")
+        assert reason is not None and reason.startswith("checks.terraform_format is false")
 
 
 def test_terraform_validate_refused_on_a_non_boolean_switch(repo_cwd: Path) -> None:
@@ -1077,7 +1077,7 @@ def test_wrapped_validate_waits_for_its_switch_and_fmt_check_does_not(
     init = f"{wrap} {TERRAFORM_INIT_FORM.format(module=wt)}"
     for command in ("terraform validate", f"{wrap} terraform validate", init):
         reason = _tf_call(repo, command)
-        assert reason is not None and reason.startswith("features.terraform_validate is not true")
+        assert reason is not None and reason.startswith("checks.terraform_validate is not true")
         assert not decide(_tf_payload(repo, command), Config()).allow, command
     assert _tf_call(repo, f"{wrap} terraform fmt -check") is None
 

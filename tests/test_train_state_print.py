@@ -161,7 +161,7 @@ def test_header_lines_come_from_state_and_the_notes(tmp_path: Path) -> None:
         "Task: build the summary command",
         f"Base: main @ {'a' * 40}. Integration branch: daedalus/{TRAIN}.",
         f"charter: private, branch daedalus/{TRAIN}, charter base: charter/inputs "
-        "(ledger under charter_root)",
+        "(ledger under local_docs_folder)",
         "Packet: v3. Ledger: private/decisions.md.",
         "Contract: private/specs/plan-8.md v3",
         f"Ledger ids: 0127-DAE-PLT,0128-DAE-PLT in commit {'c' * 40}.",

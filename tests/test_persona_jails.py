@@ -241,7 +241,7 @@ def test_terraform_class_refuses_both_checks_when_the_switch_is_off(repo_cwd: Pa
     manifest.write_text(json.dumps({"checks": {"terraform_format": False}}), encoding="utf-8")
     for command in ("terraform fmt -check", "terraform validate"):
         reason = evaluate(READS, _tf(repo_cwd, command), *ALLOW)
-        assert reason is not None and reason.startswith("features.terraform_tools is false")
+        assert reason is not None and reason.startswith("checks.terraform_format is false")
     on = {"terraform_format": True, "terraform_validate": True}
     manifest.write_text(json.dumps({"checks": on}), encoding="utf-8")
     assert evaluate(READS, _tf(repo_cwd, "terraform validate"), *ALLOW) is None

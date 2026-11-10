@@ -446,13 +446,13 @@ def test_terraform_checks_need_the_wrapper_and_validate_its_switch(tmp_path: Pat
     (repo / "service-manifest.json").write_text("{}", encoding="utf-8")
     for command in ("terraform validate", f"{wrap} terraform validate", f"{wrap} {init}"):
         reason = str(evaluate("confine", _cwd(_b("coder", f"cd {wt} && {command}"), repo)))
-        assert reason.startswith("features.terraform_validate is not true"), command
+        assert reason.startswith("checks.terraform_validate is not true"), command
     off = {"checks": {"terraform_format": False}}
     (repo / "service-manifest.json").write_text(json.dumps(off), encoding="utf-8")
     reason = str(
         evaluate("confine", _cwd(_b("coder", f"cd {wt} && {wrap} terraform fmt -check"), repo))
     )
-    assert reason.startswith("features.terraform_tools is false")
+    assert reason.startswith("checks.terraform_format is false")
 
 
 def _read_roots_repo(tmp_path: Path, roots: list[str]) -> tuple[Path, Path]:

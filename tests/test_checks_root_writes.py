@@ -60,22 +60,21 @@ class TestFixWaveLedgerResolution:
         assert decide(_wr(repo, repo / "docs" / "notes.md", tool), Config()).allow
 
     @pytest.mark.parametrize("tool", ["Write", "Edit"])
-    def test_probed_ledger_blocked(self, tmp_path: Path, tool: str) -> None:
-        # 0247: the jail still guards an unnamed docs/decisions.md by name; it fails safe.
+    def test_an_unnamed_decisions_file_is_writable(self, tmp_path: Path, tool: str) -> None:
+        # 0247: with no decisions file named, a docs/decisions.md is an ordinary doc.
         repo = _git_init(tmp_path / "repo")
         (repo / "docs").mkdir()
         (repo / "docs" / "decisions.md").write_text("| Id | Date |\n|---|---|\n")
-        d = decide(_wr(repo, repo / "docs" / "decisions.md", tool), Config())
-        assert not d.allow and d.reason is not None and "append_ledger.py" in d.reason
+        assert decide(_wr(repo, repo / "docs" / "decisions.md", tool), Config()).allow
 
-    def test_default_ledger_protected_beside_a_declared_one(self, tmp_path: Path) -> None:
-        # 0247: a named file is protected before it exists; the first append creates it.
+    def test_only_the_named_ledger_is_protected(self, tmp_path: Path) -> None:
+        # 0247: a named file is protected before it exists; docs/decisions.md beside it is not.
         repo = _git_init(tmp_path / "repo")
         (repo / "docs").mkdir()
         (repo / "docs" / "decisions.md").write_text("| Id | Date |\n|---|---|\n")
         manifest = {"docs": {"folder": "notes", "decisions_filename": "log.md"}}
         (repo / "service-manifest.json").write_text(json.dumps(manifest))
-        assert not decide(_wr(repo, repo / "docs" / "decisions.md"), Config()).allow
+        assert decide(_wr(repo, repo / "docs" / "decisions.md"), Config()).allow
         assert not decide(_wr(repo, repo / "notes" / "log.md"), Config()).allow
 
     def test_config_ledger_still_blocked(self, tmp_path: Path) -> None:

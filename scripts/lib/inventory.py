@@ -53,12 +53,12 @@ FILES: tuple[Entry, ...] = (
     Entry(
         "<charter_root>/reports/<date>-tokens-<run id>.md",
         "scripts/audit_report.py:_write_report",
-        "you run token_economy.py report --save and config.json declares charter_root",
+        "you run token_economy.py report --save and config.json sets local_docs_folder",
     ),
     Entry(
         f"{_SCRATCH}/<run id>/tokens.md",
         "scripts/audit_report.py:_write_report",
-        "you run token_economy.py report --save with no charter_root declared",
+        "you run token_economy.py report --save with no local_docs_folder set",
     ),
     Entry(
         f"{_CONFINE}/",
@@ -209,7 +209,7 @@ FILES: tuple[Entry, ...] = (
     Entry(
         f"{_AUDIT}/<session_id>.lock",
         "scripts/lib/audit.py:_try_lock",
-        "old audit logs are rotated out under audit_retention_days",
+        "old audit logs are rotated out under limits.log_retention_days",
     ),
     Entry(
         f"{_AUDIT}/<session_id>.skipped",
@@ -370,7 +370,7 @@ FILES: tuple[Entry, ...] = (
     Entry(
         _BRANCH,
         f"{_WS}:_charter_branch",
-        "a Build Train begins with charter_root set; the branch is made in the Charter",
+        "a Build Train begins with local_docs_folder set; the branch is made in the Charter",
     ),
     Entry(
         _BRANCH,

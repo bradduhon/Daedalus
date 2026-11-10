@@ -84,21 +84,21 @@ TERRAFORM_FORMS = (("fmt", "-check"), ("validate",))
 R_TERRAFORM = (
     "the terraform class runs only `terraform fmt -check` and `terraform validate`, each with an "
     "optional -chdir=<absolute folder inside the project> (0132), and validate only while "
-    "features.terraform_validate is true (0158); either may run under the kernel wrapper with "
+    "checks.terraform_validate is true (0158); either may run under the kernel wrapper with "
     "--unit naming a unit worktree (0164). Under that wrapper alone, and only while validate "
     "is on, `terraform -chdir=<that folder> init -backend=false -input=false "
     "-lockfile=readonly` runs too (184). Next: send one of those forms; "
     "every other init, plan, apply and every other subcommand stay with the operator."
 )
 R_TERRAFORM_VALIDATE_OFF = (
-    "features.terraform_validate is not true in {manifest}, so the terraform class refuses "
+    "checks.terraform_validate is not true in {manifest}, so the terraform class refuses "
     "`terraform validate` and its wrapped init form, which would start the provider programs "
     "under .terraform/providers (0158, 184). Next: judge the files by reading them and mark "
-    "the validate check N/A, or ask the operator to set features.terraform_validate to true "
+    "the validate check N/A, or ask the operator to set checks.terraform_validate to true "
     "in service-manifest.json."
 )
 R_TERRAFORM_OFF = (
-    "features.terraform_tools is false in {manifest}, so the terraform class runs nothing "
+    "checks.terraform_format is false in {manifest}, so the terraform class runs nothing "
     "(0132). Next: judge the Terraform files by reading them, and report the skipped checks."
 )
 R_TERRAFORM_MANIFEST = (

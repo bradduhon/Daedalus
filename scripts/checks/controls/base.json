@@ -241,7 +241,7 @@
   },
   "jail.R_LEDGER_DIRECT": {
     "failure": "0004: a direct edit of the ledger skips the sequence and lock checks append_ledger.py makes",
-    "premise_test": "tests/test_checks_root_writes.py::TestFixWaveLedgerResolution::test_default_ledger_protected_beside_a_declared_one"
+    "premise_test": "tests/test_checks_root_writes.py::TestFixWaveLedgerResolution::test_only_the_named_ledger_is_protected"
   },
   "jail.R_DOCS_BASH": {
     "failure": "0084: charter-docs runs a command outside its append, commit and read set",

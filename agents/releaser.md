@@ -36,7 +36,7 @@ No shell redirects (`>`, `<`, `2>&1`, `2>/dev/null`); the Bash tool already retu
 3. `git push -u origin <branch>`; the jail enforces this exact grammar: only `-u` or
    `--set-upstream` plus `origin <branch>`, no refspecs, no other flags, and never a push to
    `main` or `master`. `<branch>` is this train's `daedalus/<train-id>`, never `HEAD` (issue 11).
-   When charter_root is declared, the session may also hand you
+   When config.json sets local_docs_folder, the session may also hand you
    `git -C <charter_root> push -u origin daedalus/<train-id>` and one
    `gh pr create --repo <charter slug> --head daedalus/<train-id>`; no other command takes
    `-C <charter_root>` or `--repo` (0078).

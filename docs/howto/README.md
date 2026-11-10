@@ -50,7 +50,6 @@ Here is the output of a real run in a new repository with one empty commit, no `
     OK   audit log: off until a train runs here
     OPT  config.json: not present, defaults in use. Next: run the Daedalus setup skill (/daedalus:setup) to write a starter config.json
     OK   decisions: no decisions file named in docs.decisions_filename, none recorded
-    OPT  standing_rules: not declared. Next: set standing_rules in .claude/daedalus/config.json to the standing-rules file, so the planner reads it
     OPT  coding_rules: no rules folder, file or built-in set is declared. Next: to adopt the shipped baseline rules, add {"builtin": "baseline"} to coding_rules in .claude/daedalus/config.json
     OK   policy: not declared (optional)
     OPT  fable: not seen in this session, so auditor and planner run on opus. Next: set models.fable_available to true in .claude/daedalus/config.json when your plan offers Fable
@@ -67,7 +66,7 @@ Here is the output of a real run in a new repository with one empty commit, no `
     OK   git repository
     OK   clean working tree
     OPT  service-manifest.json: not found at repo root. Next: run the Daedalus setup skill (/daedalus:setup) to write a starter service-manifest.json
-    OK   priorities: none declared
+    OK   run_output_priority: none declared
     OPT  contracts/: directory missing. Next: mkdir contracts and add openapi.yaml or events/*.schema.json
     OPT  .gitleaks.toml: not found at repo root. Next: copy the baseline from docs/project-requirements.md
     daedalus doctor: all checks passed
@@ -84,7 +83,7 @@ The doctor exits 0 when every check passes and 1 otherwise. Its last line reads 
 Some lines need a word of explanation:
 
 - In a new repository, the `config.json`, `service-manifest.json`, `contracts/` and `.gitleaks.toml` lines read `OPT` until you add those files. The `Next:` lines for the first two say to run `/daedalus:setup`, which writes a starter copy of each. `docs/project-requirements.md` has an example of every file.
-- The `standing_rules` line reads `OPT` until `config.json` names a standing-rules file, the rules every plan must satisfy, which the planner reads.
+- When `docs.decisions_filename` names a decisions file, a `decisions in force` line follows it. It reads `OPT` until a `standing-rules.md` sits beside that file. That file holds the rules every plan must satisfy, and the planner reads it.
 - The `coding_rules` line reads `OPT` until you declare your coding rules. Its `Next:` offers the baseline rules that ship with Daedalus. Taking it is your choice.
 - The `fable` line says which model the planner and the auditor run on: Fable when `models.fable_available` is `true` in `config.json` or a running train's audit log shows this session started on Fable, and their own model otherwise.
 - `train marker: none` means no train is running in this repository.
@@ -168,7 +167,7 @@ For an intact log it prints `OK: <n> records, chain intact, head=<hash>`. Otherw
 
 ### Saving the report
 
-When the optional `<repo>/.claude/daedalus/config.json` sets `local_docs_folder` (the `<charter_root>` below), the skill asks whether to render the report again and save it to `<charter_root>/audit/<session>.md`. A live session gains a few records between the two renders, so the saved file can hold more than the screen showed. If `<charter_root>/audit` does not exist yet, the skill offers to create it. Say yes, and the file is written there for the charter-docs agent to commit in a later build run. Say no, or leave `charter_root` unset, and the digest stays on screen only.
+When the optional `<repo>/.claude/daedalus/config.json` sets `local_docs_folder` (the `<charter_root>` below), the skill asks whether to render the report again and save it to `<charter_root>/audit/<session>.md`. A live session gains a few records between the two renders, so the saved file can hold more than the screen showed. If `<charter_root>/audit` does not exist yet, the skill offers to create it. Say yes, and the file is written there for the charter-docs agent to commit in a later build run. Say no, or leave `local_docs_folder` unset, and the digest stays on screen only.
 
 You can also write the report yourself, from the repository directory. Create the folder first:
 
@@ -261,7 +260,7 @@ The start command prints the `cache:` line. In the block it keeps, the orchestra
 
 The train id is the UTC start time. The audit session id is the name of the newest log in `<repo>/.claude/daedalus/audit/`, without `.jsonl`. Keep it for the audit report. `seq` is the last ledger entry number. The codes on the full block's `codes:` line are the `--repo` and `--type` parts of the next ledger id. The train takes them from the first ledger id the Standards Packet cites. If it cites none, or its ids disagree, the train asks you once. A heading-entry ledger ignores the codes.
 
-The build run saves the Locked Contract Packet to a file, and the lock command commits it. Without `local_docs_folder`, the file is `contracts/<name>.md`, committed on the integration branch `daedalus/<train-id>` before any coder starts. With `local_docs_folder`, the file is `<charter_root>/specs/<name>.md`, committed on the Charter branch `daedalus/<train-id>` that the train creates in its checks. The Charter is a separate repository for your decisions and specs. Every contract revision is saved and committed again. Without `charter_root`, nothing is written to a Charter repository, and the ledger entry goes to this repository's own ledger.
+The build run saves the Locked Contract Packet to a file, and the lock command commits it. Without `local_docs_folder`, the file is `contracts/<name>.md`, committed on the integration branch `daedalus/<train-id>` before any coder starts. With `local_docs_folder`, the file is `<charter_root>/specs/<name>.md`, committed on the Charter branch `daedalus/<train-id>` that the train creates in its checks. The Charter is a separate repository for your decisions and specs. Every contract revision is saved and committed again. Without `local_docs_folder`, nothing is written to a Charter repository, and the ledger entry goes to this repository's own ledger.
 
 ### Standards and contract first
 
@@ -333,7 +332,7 @@ Once the train has created a Charter branch, it switches the Charter back to the
 The train writes `docs/.tmp/daedalus/<train-id>-summary.md`. The push run uses this file as the pull request body, so it holds no absolute path. It holds:
 
 - the task, the base commit and the integration branch
-- the Charter repository by directory name, with its `daedalus/<train-id>` branch and the branch it forked from when `charter_root` is declared, or `charter: none (repo-local ledger)`
+- the Charter repository by directory name, with its `daedalus/<train-id>` branch and the branch it forked from when `local_docs_folder` is set, or `charter: none (repo-local ledger)`
 - the packet version, the ledger path relative to its repository, and the contract file with its version on a `Contract:` line. A train that skipped the contract reads `Contract: none. This plan changes at most 3 files and declares no contract, so no contract was written.` A train that stopped before its lock reads `Contract: none. No contract was locked before the run stopped.`
 - the ledger entries added, on a `Ledger ids:` line. The train writes the summary before the ledger step with `Ledger ids: pending`, so a stop there still leaves a summary. The push run refuses a pending summary and names the ledger resume that finishes it. After the ledger commit and the approved verdict are recorded, the train rewrites the summary as its last step
 - the policy line

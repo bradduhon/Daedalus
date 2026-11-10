@@ -299,7 +299,7 @@ def test_build_train_summary_names_every_charter_form() -> None:
     text = _recipe()
     assert (
         "charter: <charter name>, branch daedalus/<train-id>, charter base: <recorded branch> "
-        "(ledger under charter_root)"
+        "(ledger under local_docs_folder)"
     ) in text
     assert (
         "charter: <charter name>, branch daedalus/<train-id>, charter base: <recorded branch> "
@@ -308,7 +308,7 @@ def test_build_train_summary_names_every_charter_form() -> None:
     assert "no charter branch" not in text
     assert "Ledger: <ledger repo name>/<ledger path relative to that repo>." in text
     # N2: the I2 sentence that defines <charter name>.
-    assert "`<charter name>` is the last component of `charter_root`" in text
+    assert "`<charter name>` is the last component of `local_docs_folder`" in text
 
 
 def test_build_train_summary_carries_no_absolute_path() -> None:
@@ -1072,7 +1072,7 @@ def test_push_train_hands_off_the_contract_commits() -> None:
     # 0011: the contract commits ride the pushed branches; no new conductor command.
     pt = _release()
     assert "the contract path and version from the `Contract:` line" in pt
-    assert "when the `charter:` line ends in `(ledger under charter_root)`" in pt
+    assert "when the `charter:` line ends in `(ledger under local_docs_folder)`" in pt
     hand_off = pt.split("## Hand-off", 1)[1]
     assert "its `Lock contract` and `Revise contract` commits are part of the diff" in hand_off
     assert "the contract commits are in this pull request" in hand_off
@@ -1083,7 +1083,7 @@ def test_push_train_names_the_charter_pull_request_by_its_content() -> None:
     # Ruling 3: title and body split on where the ledger lives.
     pt = _release()
     body = _section(pt, "## Charter branch", "## Hand-off")
-    ledger = body.split("(ledger under charter_root)`:", 1)[1].split("Otherwise:", 1)[0]
+    ledger = body.split("(ledger under local_docs_folder)`:", 1)[1].split("Otherwise:", 1)[0]
     assert "    Contract and ledger entries for run <train-id>.\n" in ledger
     other = body.split("Otherwise:", 1)[1]
     assert "    Contract for run <train-id>.\n" in other
@@ -1097,7 +1097,7 @@ def test_push_train_names_the_charter_pull_request_by_its_content() -> None:
     assert '--title "Run <train-id>: contract" --body-file' in second
     assert first.replace(": contract and ledger", ": contract") == second
     pick = body.split(first, 1)[0]
-    assert pick.rstrip().endswith("When it ends in `(ledger under charter_root)`:")
+    assert pick.rstrip().endswith("When it ends in `(ledger under local_docs_folder)`:")
     assert body.split(first, 1)[1].split(second, 1)[0].strip() == "Otherwise:"
 
 
@@ -1203,11 +1203,11 @@ def test_push_train_hands_the_charter_push_to_the_conductor() -> None:
     assert "open its pull request: `gh pr create" not in text
     assert "gh pr create" not in hand_off and "push -u origin" not in hand_off
     charter = _section(text, "## Charter branch", "## Hand-off")
-    push = "When charter_root is declared, run `git -C <charter_root> push -u origin "
+    push = "When config.json sets local_docs_folder, run `git -C <charter_root> push -u origin "
     assert push + "daedalus/<train-id>`." in charter
     for title in ("contract and ledger", "contract"):
         assert (
-            "When charter_root is declared, run `gh pr create --repo <charter slug> "
+            "When config.json sets local_docs_folder, run `gh pr create --repo <charter slug> "
             "--base <charter base> --head daedalus/<train-id> --title "
             f'"Run <train-id>: {title}" --body-file '
             "<repo>/docs/.tmp/daedalus/<train-id>-charter-pr.md`."

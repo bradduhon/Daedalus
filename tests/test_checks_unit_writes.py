@@ -448,7 +448,7 @@ def test_coder_cwd_inside_a_real_unit_worktree(tmp_path: Path) -> None:
 def test_coder_manifest_forbidden_path_is_refused(tmp_path: Path, rel: str) -> None:
     repo, wt = _narrowed_repo(tmp_path, json.dumps(NARROWING))
     target = f"{wt}/{rel}"
-    want = f"protected path (service-manifest.json jail_narrowing): {target}. Next:"
+    want = f"protected path (service-manifest.json prohibited_writes): {target}. Next:"
     d = decide(_cwd(_w("coder", target), repo), CFG)
     assert not d.allow and str(d.reason).startswith(want), d.reason
     d = decide(_cwd(_b("coder", f"tee {target}"), repo), CFG)
@@ -461,7 +461,7 @@ def test_coder_manifest_forbidden_extension_is_refused(tmp_path: Path) -> None:
     repo, wt = _narrowed_repo(tmp_path, json.dumps(NARROWING))
     for rel in ("keys/server.pem", "a.PEM"):
         target = f"{wt}/{rel}"
-        want = f"protected extension (service-manifest.json jail_narrowing): {target}. Next:"
+        want = f"protected file type (service-manifest.json prohibited_writes): {target}. Next:"
         d = decide(_cwd(_w("coder", target), repo), CFG)
         assert not d.allow and str(d.reason).startswith(want), d.reason
         d = decide(_cwd(_b("coder", f"cp {wt}/src/a {target}"), repo), CFG)
@@ -474,8 +474,9 @@ def test_coder_manifest_forbidden_extension_is_refused(tmp_path: Path) -> None:
     [
         "{ not json",
         "[]",
-        '{"jail_narrowing": []}',
-        '{"jail_narrowing": {"forbidden_paths": ["../x"]}}',
+        '{"prohibited_writes": []}',
+        '{"prohibited_writes": {"paths": ["../x"]}}',
+        '{"jail_narrowing": {"forbidden_paths": ["x/"]}}',
     ],
 )
 def test_coder_manifest_error_fails_closed(tmp_path: Path, manifest: str) -> None:

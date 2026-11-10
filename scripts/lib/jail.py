@@ -288,7 +288,7 @@ R_PACKAGE_INSTALL = (
     "{what} is a package install, which resolves versions from a registry and can run install "
     "scripts before any judge reads the diff, so the jail refuses it for every agent "
     "(0196, 0164). Next: run the frozen form ({frozen}) with the ecosystem enabled in "
-    "service-manifest.json (dependencies.installs, coder only), or yield the install command "
+    "service-manifest.json (packages.allowed_installers, coder only), or yield the install command "
     "for the operator to run."
 )
 # 0196: a yarn refusal also names the admitted way to run a script.
@@ -643,8 +643,10 @@ R_ROUTE_NEXT = (
     "Next: ask the orchestrating session to route this change to contract-spec or charter-docs."
 )
 R_PROTECTED_BUILTIN = "protected path (built in): {}. " + R_ROUTE_NEXT
-R_PROTECTED_PATH = "protected path (service-manifest.json jail_narrowing): {}. " + R_ROUTE_NEXT
-R_PROTECTED_EXT = "protected extension (service-manifest.json jail_narrowing): {}. " + R_ROUTE_NEXT
+R_PROTECTED_PATH = "protected path (service-manifest.json prohibited_writes): {}. " + R_ROUTE_NEXT
+R_PROTECTED_EXT = (
+    "protected file type (service-manifest.json prohibited_writes): {}. " + R_ROUTE_NEXT
+)
 R_CD_RELATIVE = (
     "a chain that changes directory may not use relative write paths or pathspecs: {}. "
     "Next: use absolute paths (or an absolute git -C) after cd."
@@ -666,7 +668,7 @@ R_CONDUCTOR_NO_TRAIN = (
     "Next: run /daedalus:run push, which marks the train before the push."
 )
 R_CONDUCTOR_CHARTER = (
-    "git -C reaches only the charter root .claude/daedalus/config.json declares, and only for "
+    "git -C reaches only the local_docs_folder .claude/daedalus/config.json declares, and only for "
     "the push of this train's branch (0078). "
     "Next: run the command in this repo without -C, or `git -C <charter_root> push -u origin "
     "daedalus/<train-id>`."
@@ -1397,16 +1399,14 @@ def _gh_write_reason(parsed: GhArgs) -> str | None:
 
 
 def _ledger_write_reason(path: str, cwd: str, config: Config) -> str | None:
-    # I1: protect the ledger append_ledger resolves (manifest, config, probe); fail closed.
+    # 0247: protect only the decisions file the manifest names; an unreadable manifest fails closed.
     try:
         resolved = resolve_ledger(cwd, config)
     except LedgerError as exc:
         return f"the ledger could not be resolved, so charter-docs writes fail closed: {exc}"
-    default = project_root(cwd) / "docs" / "decisions.md"
-    protected = {str(resolved.path)} if resolved is not None else set()
-    if default.is_file():
-        protected.add(str(default))
-    return R_LEDGER_DIRECT if any(_same_path(path, p) for p in protected) else None
+    if resolved is None:
+        return None
+    return R_LEDGER_DIRECT if _same_path(path, str(resolved.path)) else None
 
 
 def _same_path(target: str, protected: str) -> bool:
