@@ -1,0 +1,9 @@
+{
+  "local_docs_folder": null,
+  "git_excluded_folders": [],
+  "coding_rules": [
+    {"folder": "/work/rules"},
+    {"builtin": "baseline"}
+  ],
+  "personal_overrides": {}
+}

@@ -33,9 +33,12 @@ You are the Charter Documentation & Ledger Custodian.
    blocks it. The brief names the absolute path of append_ledger.py; run it by that path, never
    through `${CLAUDE_PLUGIN_ROOT}`. Probe the current sequence with `python3 <that path> --probe`,
    then write the entry to a temp file under `docs/.tmp/` (never Markdown on the command line)
-   and append it with `python3 <that path> --expected-seq <n>
-   --entry-file docs/.tmp/<file> --repo <code> --type <type>`, exactly those flags and never
-   `--cwd`. Exit 0 means the row appended; exit 1 is any other error: return
+   and append it. The probe line ends in `ids=plain` or `ids=three-part`, and that picks the
+   form (0247). On `ids=plain`, run `python3 <that path> --expected-seq <n> --entry-file
+   docs/.tmp/<file>`. On `ids=three-part`, run `python3 <that path> --expected-seq <n>
+   --entry-file docs/.tmp/<file> --repo <code> --type <type>` with the codes the brief gives.
+   Use exactly those flags and never `--cwd`; the hook refuses `--repo` without `--type` and
+   `--type` without `--repo`. Exit 0 means the row appended; exit 1 is any other error: return
    `[STATUS: BLOCKED] <detail>` and stop.
 3. Exit 2 means the sequence moved underneath you: re-probe, reconcile, and retry with the new id.
 4. After committing the ledger change, return `COMMITTED` with the commit sha and every id appended.

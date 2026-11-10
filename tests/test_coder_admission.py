@@ -164,7 +164,7 @@ def _done(tokens: list[str], script: str | None = None) -> AdmittedCommand:
 def test_confine_is_test_reads_the_typed_record_branch_by_branch(tmp_path: Path) -> None:
     # 228 S3d: frozen install never, declared yes, path word yes, worktree python script yes,
     # a runner only with its test verb.
-    repo, wt = _narrowed_repo(tmp_path, json.dumps({"stack": {"unit_test_cmd": "make test"}}))
+    repo, wt = _narrowed_repo(tmp_path, json.dumps({"commands": {"unit_test": "make test"}}))
     is_test = load("confine")._is_test
     frozen = jail.FROZEN_EXAMPLES
     rows: dict[str, tuple[list[str], str | None, bool]] = {

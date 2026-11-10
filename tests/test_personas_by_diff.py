@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from lib.agent_files import Hook, load
 from lib.manifest import (
+    CHECK_KEYS,
     FEATURE_KEYS,
     LITERACY_LEVELS,
     Docs,
@@ -54,45 +55,56 @@ VERIFIER_DESCRIPTION = (
 # Manifest keys (requirement 4).
 
 
-def test_persona_switches_follow_ledger_in_the_feature_list() -> None:
+def test_persona_switches_are_checks_in_the_feature_list() -> None:
+    # 0132, 0245: the file names the switches by what they check; the fields stay.
     assert FEATURE_KEYS[FEATURE_KEYS.index("ledger") + 1 :] == (
         "dependency_web_lookup",
         "terraform_tools",
         "terraform_validate",
     )
+    assert CHECK_KEYS["online_advisory_lookup"] == "dependency_web_lookup"
+    assert CHECK_KEYS["terraform_format"] == "terraform_tools"
     assert Features().dependency_web_lookup is None and Features().terraform_tools is None
 
 
-@pytest.mark.parametrize("key", ["dependency_web_lookup", "terraform_tools"])
+SWITCHES = {
+    "online_advisory_lookup": "dependency_web_lookup",
+    "terraform_format": "terraform_tools",
+}
+
+
+@pytest.mark.parametrize("key", list(SWITCHES))
 @pytest.mark.parametrize("value", [True, False, None])
 def test_persona_switch_reads_true_false_or_null(
     tmp_path: Path, key: str, value: bool | None
 ) -> None:
-    write_manifest(tmp_path, {"features": {key: value}})
+    write_manifest(tmp_path, {"checks": {key: value}})
     loaded = load_manifest(tmp_path)
-    assert loaded is not None and getattr(loaded.features, key) is value
+    assert loaded is not None and getattr(loaded.features, SWITCHES[key]) is value
 
 
-@pytest.mark.parametrize("key", ["dependency_web_lookup", "terraform_tools"])
+@pytest.mark.parametrize("key", list(SWITCHES))
 @pytest.mark.parametrize("value", ["off", 0, 1, [], {}])
 def test_persona_switch_refuses_a_value_outside_its_type(
     tmp_path: Path, key: str, value: object
 ) -> None:
-    write_manifest(tmp_path, {"features": {key: value}})
-    with pytest.raises(ManifestError, match=f"features.{key} must be true, false or null"):
+    write_manifest(tmp_path, {"checks": {key: value}})
+    with pytest.raises(ManifestError, match=f"checks.{key} must be true, false or null"):
         load_manifest(tmp_path)
 
 
 @pytest.mark.parametrize(
     "value", [None, *LITERACY_LEVELS, "profile:docs/voice.md", "profile:voice.md"]
 )
-def test_docs_literacy_reads_a_level_a_profile_or_null(tmp_path: Path, value: str | None) -> None:
-    write_manifest(tmp_path, {"docs": {"literacy": value}})
+def test_docs_reading_level_reads_a_level_a_profile_or_null(
+    tmp_path: Path, value: str | None
+) -> None:
+    write_manifest(tmp_path, {"docs": {"reading_level": value}})
     loaded = load_manifest(tmp_path)
     assert loaded is not None and loaded.docs == Docs(value)
 
 
-def test_absent_docs_block_reads_null_literacy(tmp_path: Path) -> None:
+def test_absent_docs_group_reads_null_reading_level(tmp_path: Path) -> None:
     write_manifest(tmp_path, {})
     loaded = load_manifest(tmp_path)
     assert loaded is not None and loaded.docs == Docs() and loaded.docs.literacy is None
@@ -114,41 +126,38 @@ def test_absent_docs_block_reads_null_literacy(tmp_path: Path) -> None:
         ["plain"],
     ],
 )
-def test_docs_literacy_refuses_any_other_value(tmp_path: Path, value: object) -> None:
-    write_manifest(tmp_path, {"docs": {"literacy": value}})
-    with pytest.raises(ManifestError, match="docs.literacy must be null") as caught:
+def test_docs_reading_level_refuses_any_other_value(tmp_path: Path, value: object) -> None:
+    write_manifest(tmp_path, {"docs": {"reading_level": value}})
+    with pytest.raises(ManifestError, match="docs.reading_level must be null") as caught:
         load_manifest(tmp_path)
     assert str(caught.value).count("Next:") == 1
 
 
-@pytest.mark.parametrize("payload", [{"docs": []}, {"docs": "plain"}, {"docs": {"voice": "x"}}])
-def test_docs_block_refuses_a_wrong_shape_or_unknown_key(tmp_path: Path, payload: object) -> None:
+@pytest.mark.parametrize(
+    "payload",
+    [{"docs": []}, {"docs": "plain"}, {"docs": {"voice": "x"}}, {"docs": {"literacy": None}}],
+)
+def test_docs_group_refuses_a_wrong_shape_or_unknown_key(tmp_path: Path, payload: object) -> None:
     write_manifest(tmp_path, payload)
     with pytest.raises(ManifestError, match=r"docs (must be an object|has unknown keys)"):
         load_manifest(tmp_path)
 
 
-def test_key_reference_rows_cover_the_three_keys_in_order() -> None:
+def test_key_reference_rows_cover_the_three_keys() -> None:
     keys = manifest_keys()
-    ledger = keys.index("features.ledger")
-    assert keys[ledger + 1 : ledger + 3] == (
-        "features.dependency_web_lookup",
-        "features.terraform_tools",
-    )
-    # 0192: the package manager row sits between the stack commands and the docs block.
-    assert keys.index("docs.literacy") == keys.index("stack.package_manager") + 1
-    for key in ("features.dependency_web_lookup", "features.terraform_tools", "docs.literacy"):
-        assert (MANIFEST_FILE, key) in KEY_ROWS, key
+    for key in ("checks.online_advisory_lookup", "checks.terraform_format", "docs.reading_level"):
+        assert key in keys and (MANIFEST_FILE, key) in KEY_ROWS, key
 
 
-def test_starter_manifest_writes_the_docs_block_and_every_example_loads(tmp_path: Path) -> None:
+def test_starter_manifest_writes_the_docs_group_and_every_example_loads(tmp_path: Path) -> None:
     starter = starter_manifest()
-    assert starter["docs"] == {"literacy": None}
-    features = starter["features"]
-    assert isinstance(features, dict)
-    assert features["dependency_web_lookup"] is False and features["terraform_tools"] is False
+    docs = starter["docs"]
+    assert isinstance(docs, dict) and docs["reading_level"] is None
+    checks = starter["checks"]
+    assert isinstance(checks, dict)
+    assert checks["online_advisory_lookup"] is True and checks["terraform_format"] is True
     for example in LITERACY_EXAMPLES:
-        write_manifest(tmp_path, {"docs": {"literacy": json.loads(example)}})
+        write_manifest(tmp_path, {"docs": {"reading_level": json.loads(example)}})
         loaded = load_manifest(tmp_path)
         assert loaded is not None and loaded.docs.literacy == json.loads(example)
 
@@ -267,12 +276,12 @@ def test_the_auditor_files_each_unjudged_row_as_a_failing_test() -> None:
         "Each N/A on DEP-5 or DEP-8 in your own section is a blocking compliance finding",
         "`round<n>/test_compliance_<row>_unjudged.py`, never a `no-test:` line",
         "names the row, the reason and the two ways to clear it",
-        "turn on `features.dependency_web_lookup`",
+        "turn on `checks.online_advisory_lookup`",
         "name an `Advisory export:` file in the task",
         "clears only when a later round no longer marks the row N/A",
         # 184: a TF-0 FAIL blocks the same way and names its own two ways to clear it.
         "`round<n>/test_compliance_tf0_unjudged.py`",
-        "put terraform on the session PATH, or set `features.terraform_tools` to false",
+        "put terraform on the session PATH, or set `checks.terraform_format` to false",
         "clears only when a later round no longer marks TF-0 FAIL (184)",
     ):
         assert phrase in step, phrase
@@ -284,14 +293,14 @@ def test_audit_dispatch_carries_the_release_age_and_blocks_an_unjudged_row() -> 
     # 0196, 0197: an N/A on DEP-5 or DEP-8 is a failing test put to the operator, never a pass.
     text = " ".join(_phase("audit").split())
     assert "`Minimum release age: <days>` with the manifest's" in text
-    assert "`dependencies.minimum_release_age_days` (`7` when absent, 0197)" in text
+    assert "`packages.minimum_age_days` (`7` when absent, 0197)" in text
     gate = text.split("Unjudged advisories or release age (0196, 0197).", 1)[1].split(" - ", 1)[0]
     for phrase in (
         "An N/A on DEP-5 or DEP-8 is never a pass",
         "it is a blocking finding",
         "The auditor files it in its own round",
         "test_compliance_<row>_unjudged.py",
-        "turn on `features.dependency_web_lookup`",
+        "turn on `checks.online_advisory_lookup`",
         "name an `Advisory export:` file",
         "one question per row",
     ):
@@ -322,7 +331,7 @@ def test_terraform_rulebook_checks_the_binary_before_any_tool_run() -> None:
     assert "read the dispatch's `Terraform binary:` line" in check
     for phrase in (
         "write TF-0 as `FAIL terraform binary missing: fmt -check and validate not run; put "
-        "terraform on the session PATH, or set features.terraform_tools to false in "
+        "terraform on the session PATH, or set checks.terraform_format to false in "
         "service-manifest.json`",
         "`round<n>/test_compliance_tf0_unjudged.py`, whose failure message names those two ways",
     ):
@@ -373,7 +382,7 @@ def test_public_docs_writer_edits_only_the_four_docs_and_claims_each_passage() -
     scope = text[text.index("## Scope") : text.index("## Method")]
     for doc in FOUR_DOCS:
         assert doc in scope, doc
-    assert "`docs.literacy`" in text and "unless the brief overrides it" in text
+    assert "`docs.reading_level`" in text and "unless the brief overrides it" in text
     assert "`Claim: <doc path>:<line> <what the passage now says> | receipt: <command>`" in text
     assert "hand-back summary" in text and "diff" in text
 
@@ -435,8 +444,8 @@ def test_audit_step_1_adds_each_rulebook_by_diff_content() -> None:
         DEPENDENCIES_LINE,
         "add `Rulebook: ${CLAUDE_PLUGIN_ROOT}/packs/judges/terraform.md`",
         "`.tf` or `.tfvars`",
-        "`features.dependency_web_lookup` is `false`",
-        "`features.terraform_tools` is `false`",
+        "`checks.online_advisory_lookup` is `false`",
+        "`checks.terraform_format` is `false`",
         # 184: the session PATH lookup feeds the auditor's binary line.
         "daedalus_doctor.py --check-tools terraform --repo <repo>`",
         "add `Terraform binary: present` when it prints `OK`",
@@ -465,7 +474,7 @@ def test_documentation_stage_sits_directly_before_recovery() -> None:
         "the line `Worktree: <docs worktree path>`",
         "the first line `CLAIMS MODE.`",
         "`Claim: <doc path>:<line> <claim>`",
-        "`docs.literacy`",
+        "`docs.reading_level`",
         f"one decision question per refuted claim with the options {PER_FINDING_RUN}",
     ):
         assert phrase in flat, phrase

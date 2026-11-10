@@ -5,95 +5,82 @@ Every file and setting daedalus reads, with the smallest example that works. `/d
 
 ## In the repo's `.claude/daedalus/` directory
 
-`<repo>` is the main working tree of the git repository you run Claude Code in; every worktree shares it (0010-DAE-PLT). The Build Train's start creates `<repo>/.claude/daedalus/` (mode 0700) and a `.gitignore` inside it holding `*`; until then no hook writes anything into the repository (0035-DAE-PLT). `config.json` is optional. Without it the defaults apply: no `charter_root`, no `standards_sources`, no `policy`, and the ledger probe below finds the ledger. Create it there from your own shell when you need any of those.
+`<repo>` is the main working tree of the git repository you run Claude Code in; every worktree shares it (0010-DAE-PLT). The Build Train's start creates `<repo>/.claude/daedalus/` (mode 0700) and a `.gitignore` inside it holding `*`; until then no hook writes anything into the repository (0035-DAE-PLT). `config.json` is optional. Without it the defaults apply: no `local_docs_folder`, no `coding_rules`, no `policy`, and the decisions file, when the manifest names one, lives in the project's docs folder. Create it there from your own shell when you need any of those.
 
 ### config.json, optional **(checked)**
 
 ```json
 {
-  "charter_root": "/absolute/path/to/your/decisions/repo",
-  "standing_rules": "standing-rules.md",
-  "ledger": {
-    "path": "/absolute/path/to/your/decisions/repo/decision-log.md",
-    "format": "markdown-table-row",
-    "id_scheme": "{seq:04d}-{repo}-{type}",
-    "sequence_source": "last-row-id"
-  },
-  "standards_sources": [
-    { "kind": "rules-dir", "path": "/absolute/path/to/rules" },
-    { "kind": "file", "path": "/absolute/path/to/repo/CLAUDE.md" }
+  "local_docs_folder": "/absolute/path/to/your/decisions/repo",
+  "git_excluded_folders": [{ "kind": "path", "path": "<repo_root>/private/" }],
+  "coding_rules": [
+    { "folder": "/absolute/path/to/rules" },
+    { "file": "/absolute/path/to/repo/CLAUDE.md" },
+    { "builtin": "baseline" }
   ],
-  "policy": { "engine": "conftest", "path": "/absolute/path/to/your/decisions/repo/policy" },
-  "operator_signing_keys": [],
-  "max_concurrent_builders": 5,
-  "audit_retention_days": null,
-  "wrapper_read_roots": ["~/.local/share/pnpm/store", "~/.nvm"],
-  "unit_token_budget": null,
-  "coder_models": { "default": "sonnet", "control_path": "opus", "escalated": "opus" },
-  "agent_models": { "planner": "sonnet", "auditor": "opus" }
+  "personal_overrides": {},
+  "models": {
+    "agents": { "planner": "sonnet", "auditor": "opus" },
+    "coder": "sonnet",
+    "plugin_file_coder": "opus",
+    "coder_after_rejection": "opus",
+    "fable_available": null
+  },
+  "limits": { "parallel_coders": 5, "task_tokens": null, "log_retention_days": null },
+  "test_readable_folders": ["~/.local/share/pnpm/store", "~/.nvm"],
+  "policy": { "engine": "conftest", "path": "/absolute/path/to/your/decisions/repo/policy" }
 }
 ```
 
-Every key in this file is a row of the generated key reference in the plugin [README](../README.md#key-reference): what it governs, its type, its allowed values, its default and an example. The doctor checks `ledger`, `standing_rules`, `standards_sources`, `policy` and `audit_retention_days` **(checked)**, and prints one line with the three `coder_models` models when that key is set. A key set to `null` counts as absent (0076). Seven notes the table has no room for:
+Every key in this file is a row of the generated key reference in the plugin [README](../README.md#key-reference): what it governs, whether it is a starter setting or an override, its type, its allowed values, its default and an example. `/daedalus:setup` writes the four starter keys; `models`, `limits`, `test_readable_folders` and `policy` are overrides, left out until you set one. The reader refuses an unknown key at every level and lists the valid names. The doctor checks `local_docs_folder`, `coding_rules`, `models`, `policy` and `personal_overrides`.
 
-- `ledger`: with no ledger declared and none found, the Build Train stops and asks before creating one.
-- `standing_rules`: the file `scripts/standing_rules.py` writes from the ledger (see the standing-rules backfill file below). The plan and brainstorm skills hand its path to the planner. The doctor prints `OK` when the file exists, `OPT` when the key is absent, and `MISS` when the key names no file.
-- `standards_sources`: with none declared, the Standards Packet is empty, the auditor judges against the spec only, and the doctor offers the baseline pack on an `OPT` line.
-- `audit_retention_days`: a whole number of at least 90 (AU-11). When a new session writes its first record, each older log is deleted under its own lock, and one `AuditRotation` record in the new session's chain names every deleted session with its final seq and hash (AU-9(4)). A log named on a summary's `Session <id>:` line, a log changed since an unmerged train started, the current session's log, and a log another session holds are kept. Any read or parse error deletes nothing.
-- `coder_models`: picks the model for each coding agent a run starts. A unit runs on the `default` model, sonnet unless you change it. A unit that changes a file under `agents/`, `skills/`, `hooks/` or `scripts/checks/`, or one of the three jail files, runs on the `control_path` model. The folder names count in any project, not only in this plugin. When the checker rejects a unit once, the same coding agent fixes it. When the checker rejects it a second time, a fresh coding agent on the `escalated` model takes the unit over with the checker's findings, and the run goes on. A third rejection comes to you as a question. Each start of a coding agent passes this model, so it comes before `agent_models.coder` and the coder agent file. The token report shows the model of every row and, per model, how many units the checker rejected.
-- `agent_models`: an object from an agent name the catalog lists to `sonnet`, `opus`, `haiku` or `fable`. For example, `"agent_models": { "planner": "sonnet" }` runs the planner on sonnet while every other agent keeps the model its agent file names. Inside a run, the coding agent's model comes from `coder_models`, so `agent_models.coder` only sets the coder started outside a run. An unknown agent name or model refuses the config with a `Next:` line naming the key. Run `python3 scripts/catalog.py table --repo <repo>` from the plugin folder to see the model each agent runs on.
-- `wrapper_read_roots`: folders outside the project that a coder's test runner needs, such as the pnpm package store and a Node.js install. The kernel wrapper lets a runner such as `pnpm test`, `vitest run` or `node --test` read those folders and run programs from them, and never write there; any other command gets no such grant. A `~/` path is expanded to your home folder. A path that holds or sits inside a credential store, such as `~/.ssh` or `~/.aws`, refuses the config with a `Next:` line (0164). Installing packages stays with you: a coder's `pnpm install`, `npm ci` or `yarn add` is refused.
+- `local_docs_folder`: an absolute path to a docs folder kept elsewhere on this machine, such as a clone of a separate decisions repository. When set, the decisions file the manifest names lives there instead of in the project's own docs folder. A relative path or a symlink is refused. A folder inside the project is allowed, such as a git-ignored clone.
+- `coding_rules`: with none declared, the Standards Packet is empty, the auditor judges against the spec only, and the doctor offers the baseline rules on an `OPT` line.
+- `limits.log_retention_days`: a whole number of at least 90 (AU-11). When a new session writes its first record, each older log is deleted under its own lock, and one `AuditRotation` record in the new session's chain names every deleted session with its final sha256 and record count. A log a running train still writes, or one a summary still names, is kept. `null`, the default, keeps every log.
+- `models.coder`, `models.plugin_file_coder` and `models.coder_after_rejection`: pick the model for each coding agent a run starts. A unit runs on `models.coder`, sonnet unless you change it. A unit that changes a file under `agents/`, `skills/`, `hooks/` or `scripts/checks/`, or one of the three jail files, runs on `models.plugin_file_coder`. A unit refused twice by its verifier goes to a fresh coding agent on `models.coder_after_rejection`.
+- `models.agents`: an object from an agent name the catalog lists to `sonnet`, `opus`, `haiku` or `fable`. For example, `"agents": { "planner": "sonnet" }` inside `models` runs the planner on sonnet while every other agent keeps the model its agent file names. Inside a run the coding agent takes its model from the `models.coder` keys instead.
+- `test_readable_folders`: folders outside the project that a coder's test runner needs, such as the pnpm package store and a Node.js install. The kernel wrapper lets a runner such as `pnpm test`, `vitest run` or `node --test` read those folders and run programs from them, and never write there; any other command gets no such grant. A `~/` path is expanded to your home folder. A path that holds or sits inside a credential store, such as `~/.ssh` or `~/.aws`, refuses the config with a `Next:` line (0164). Installing packages stays with you: a coder's `pnpm install`, `npm ci` or `yarn add` is refused.
 
-### Ledger formats
+### The decisions file
 
-The Build Train appends rulings to your ledger with `append_ledger.py`, in one of two formats.
+A run records decisions only in the file `docs.decisions_filename` names in `service-manifest.json` (0247). The file lives in the project's docs folder, `docs.folder`, or in `local_docs_folder` when this checkout's config sets it. Nothing is searched for by a usual name: with no file named, no decision is recorded, no step asks about one, and the audit phase ends with no ledger step. A named file that does not exist yet is created as a table on its first decision; its folder must already exist, or the append stops with a `Next:` line.
 
-`markdown-table-row`: a table whose header has an `Id` cell, with a separator row directly under it. Column 1 is `Id` and column 2 is `Date`; the remaining columns are yours. The sequence is the highest leading number of any `Id` cell in any such table (`last-row-id`), so an index table above the log does not change it. The new row goes at the end of the table that holds that number; when two tables hold it, the one with more rows takes the row. The default id scheme is `{seq:04d}-{repo}-{type}`. In either format, an append whose new id already appears anywhere in the file as a whole word is refused, and the file is left unchanged; the `Next:` line names the id and the line it first appears on.
+`append_ledger.py` reads the file's layout from the file itself, in one of two formats.
+
+`markdown-table-row`: a table whose header has an `Id` cell, with a separator row directly under it. Column 1 is `Id` and column 2 is `Date`; the remaining columns are yours. The sequence is the highest leading number of any `Id` cell in any such table (`last-row-id`), and the id pattern is `{seq:04d}-{repo}-{type}`. A new file is created as this table:
 ```markdown
 | Id | Date | Ruling | Supersedes | Follow-ups |
 |---|---|---|---|---|
 | 0001-SVC-PLT | 2026-01-01 | First ruling. | None | None |
 ```
 
-`heading-entry`: one `## Entry N` section per ruling, id scheme `{seq}`. The sequence is the `N` of the last `## Entry N` heading in the file (`last-row-id`):
+`heading-entry`: one `## Entry N` section per ruling, id pattern `{seq}`. The sequence is the `N` of the last `## Entry N` heading in the file (`last-row-id`):
 ```markdown
 ## Entry 7 - 2026-01-02T00:00:00Z
 
 Seven.
 ```
-To keep the sequence in frontmatter instead, start the file with a `---` block holding `sequence_id: 7` and set `sequence_source` to `frontmatter:sequence_id`. The `---` must be the file's first line; a heading ledger with anything above it is not read as frontmatter.
+A headings file that starts with a `---` block holding `sequence_id: 7` keeps its sequence there instead. The `---` must be the file's first line; a file with anything above it is not read as frontmatter.
 
-A `ledger` block, in config.json or in the manifest, may also name the branch its ledger is written on:
-```json
-"ledger": {
-  "path": "docs/decisions.md",
-  "format": "markdown-table-row",
-  "id_scheme": "{seq:04d}-{repo}-{type}",
-  "sequence_source": "last-row-id",
-  "branch": "main"
-}
-```
-With `branch` set, `append_ledger.py` reads the branch of the checkout that holds the ledger file from its `HEAD` file, and runs no git command. In a linked worktree it follows the `.git` file to the worktree's own folder. When that checkout is on another branch or on a detached HEAD, the append and the `--probe` exit 1. The `Next:` line names both branches and the checkout. Daedalus never switches the branch for you. A `branch` beside a ledger path holding `<charter_root>` is refused when the config loads: a run branches the Charter repository to `daedalus/<train-id>`, so every append there would be refused. Leave `branch` out, or set it to `null`, to write on whatever branch the checkout is on.
+`docs.git_branch`, an override, names the branch the decisions file is written on. With it set, `append_ledger.py` reads the branch of the checkout that holds the file from its `HEAD` file, and runs no git command. When that checkout is on another branch, the append and the probe stop with a `Next:` line naming both branches; Daedalus never switches it. It cannot be set together with `local_docs_folder`, because a run branches that folder.
 
-### standards_sources kinds
+### coding_rules entries
 
-Each entry has a `kind` and a `path`, except `pack`, which has a `name`. The run reads only these entries, and cites each rule as `source:line`.
+Each entry is an object holding exactly one key. The run reads only these entries, and cites each rule as `source:line`.
 
-- `rules-dir`: a directory of rule files. Example: `{ "kind": "rules-dir", "path": "/absolute/path/to/rules" }`
-- `file`: one file. Example: `{ "kind": "file", "path": "/work/my-service/CLAUDE.md" }`
-- `pack`: a rules pack shipped inside the plugin, resolved to `<plugin>/packs/<name>/`. Daedalus ships one, `baseline`: five baseline checks (no hardcoded secrets, no wildcard access grants, TLS 1.2 or newer, encryption at rest, no personal data or key material in logs) and the Daedalus cloud security standards (a role per workload, no public object storage, logging on every data store, scheduled rotation of customer-data keys, private networking for data stores, multi-factor sign-in for people). Each rule is one line in `packs/baseline/rules.md`, in Daedalus's own words, citing NIST SP 800-53 control ids and OWASP ASVS requirement ids. It applies only when you declare it: `{ "kind": "pack", "name": "baseline" }`. Any other name is refused with `Next: name the shipped baseline pack, "baseline".`
+- `folder`: a directory of rule files. Example: `{ "folder": "/absolute/path/to/rules" }`
+- `file`: one file. Example: `{ "file": "/work/my-service/CLAUDE.md" }`
+- `builtin`: a rule set shipped inside the plugin, resolved to `<plugin>/packs/<name>/`. Daedalus ships one, `baseline`: five baseline checks (no hardcoded secrets, no wildcard access grants, TLS 1.2 or newer, encryption at rest, no personal data or key material in logs) plus the Daedalus cloud security standards. Example: `{ "builtin": "baseline" }`
 
-### What the ledger probe detects
+### The decisions-in-force summary
+
+`standing-rules.md` beside the decisions file is the summary of decisions in force, which `scripts/standing_rules.py` writes from it (see the standing-rules backfill file below). The plan and brainstorm skills hand its path to the planner when it exists. When it is absent, the planner cites no standing rule and the doctor prints an `OPT` line naming the script.
+
+### What the probe prints
 
     python3 <plugin>/scripts/append_ledger.py --probe
 
-Run it from the repo. It resolves the ledger in this order and prints the first hit:
-
-1. A `ledger` block in `<repo>/service-manifest.json` (origin `manifest`).
-2. The `ledger` block in config.json (origin `config`).
-3. The first file found of `decision-log.md`, `docs/decisions.md`, `LEDGER.md`, under the repo root and then under `charter_root` (origin `probe`). A file with an `Id` table is read as `markdown-table-row`. Otherwise it is read as `heading-entry`, with `frontmatter:sequence_id` when its frontmatter holds `sequence_id`.
-
-A hit prints `ledger: <path> (<origin>, <format>, seq=<n>)`, for example `ledger: /work/my-service/docs/decisions.md (probe, markdown-table-row, seq=2)`. No hit prints `ledger: none declared and none found.` with a `Next:` line, and the Build Train asks you before creating one. Both exit 0. Exit 1 means the ledger was found but could not be read, for example an empty Id table above another table; the message ends with `Next:`. A file whose only Id table has a header and separator but no rows is a new ledger: it reads as `seq=0` and the first append writes `0001`.
+Run it from the repo. A named file prints `ledger: <path> (manifest, <format>, seq=<n>, ids=<shape>)`, for example `ledger: /work/my-service/docs/decisions.md (manifest, markdown-table-row, seq=2, ids=plain)`; a named file not written yet reads `seq=0, ids=plain`. The shape is `ids=plain` when the last id is a plain number such as 0002, and for an empty table, a heading-entry file or a file not written yet. It is `ids=three-part` when the last id carries a repository code and a type, such as 0002-SVC-PLT. An append to an `ids=plain` file takes no `--repo` and no `--type`; an append to an `ids=three-part` file takes both. No file named prints `decisions: no decisions file is named, so no decision is recorded.` with a `Next:` line.
 
 ## Machine caches
 
@@ -150,7 +137,7 @@ A pack is a folder holding `pack.json` and `controls.json`. The folder name is t
 - `aws-default`: AWS hardening controls. It is read by default.
 - `nist-distilled`: a NIST SP 800-53 checklist. It is read by default.
 - `stripe-default`: Stripe key handling, webhook signatures and server-set prices. It is read by default, but only when a change touches a path its triggers name: a file with `stripe` in its name, a `.env` file, `package.json` or an npm lockfile.
-- `cost-tier`: cost rules for Terraform on AWS, such as service-default keys, on-demand tables and log retention. It is off by default. To read it, add `"packs": ["cost-tier"]` to the `frameworks` block.
+- `cost-tier`: cost rules for Terraform on AWS, such as service-default keys, on-demand tables and log retention. It is off by default. To read it, add `"extra_builtin": ["cost-tier"]` to the `compliance_rules` group.
 
 `pack.json` is one JSON object with these keys:
 
@@ -160,10 +147,10 @@ A pack is a folder holding `pack.json` and `controls.json`. The folder name is t
 - `license`: one line, such as `GPL-3.0-or-later`, `public domain (17 U.S.C. 105)` or `operator-licensed, ids only`.
 - `pinned_on`: the `YYYY-MM-DD` date the pack was written.
 - `sha256`: the 64 lowercase hex SHA-256 of `controls.json`.
-- `default` (optional, shipped packs only): `false` keeps a shipped pack off until `frameworks.packs` names it. Absent means `true`.
+- `default` (optional, shipped packs only): `false` keeps a shipped pack off until `compliance_rules.extra_builtin` names it. Absent means `true`.
 - `triggers` (optional, shipped packs only): a list of 1 to 32 path globs, such as `**/*stripe*`. The audit reads the pack only when a changed path matches one, and then the auditor judges the change against it even when no unit touched IAM, keys or infrastructure. Matching ignores letter case, and a leading `**/` also matches a file at the project root. Absent means the pack is read whenever the specialist runs.
 
-A pack under `frameworks.pack_dir` that holds `default` or `triggers` fails its check.
+A pack under `compliance_rules.folder` that holds `default` or `triggers` fails its check.
 
 `controls.json` is `{"schema": "daedalus-controls/1", "controls": [...]}`. Each control holds:
 
@@ -184,19 +171,19 @@ To build a pack from a NIST catalog, download the catalog with the refresh scrip
 
 `--version <x.y.z>` sets the pack version; without it the importer uses the catalog's own version. Both importers refuse an `--out` outside the project or under an excluded root, and an `--out` folder name that is not a pack id. Each prints `wrote <pack folder> (<n> controls)`.
 
-The `frameworks` block of `service-manifest.json` picks the packs a train reads:
+The `compliance_rules` group of `service-manifest.json`, an override, picks the packs a train reads:
 
-- `frameworks.pack_dir`: a project-relative folder; each subfolder of it holding `pack.json` is one pack. A linked subfolder is skipped.
-- `frameworks.default_packs`: `true` (the default) also reads the shipped packs that are on by default; `false` reads only the packs under `frameworks.pack_dir` and the packs `frameworks.packs` names.
-- `frameworks.packs`: a list of shipped pack ids to read even though they are off by default, such as `["cost-tier"]`. An id Daedalus does not ship stops the train, and the doctor names it.
+- `compliance_rules.folder`: a project-relative folder; each subfolder of it holding `pack.json` is one pack. A linked subfolder is skipped.
+- `compliance_rules.use_builtin`: `true` (the default) also reads the shipped packs that are on by default; `false` reads only the packs under `compliance_rules.folder` and the packs `compliance_rules.extra_builtin` names.
+- `compliance_rules.extra_builtin`: a list of shipped pack ids to read even though they are off by default, such as `["cost-tier"]`. An id Daedalus does not ship stops the train, and the doctor names it.
 
-With no `frameworks` block, only the shipped packs are read. The manifest reader refuses any other key in the block.
+With no `compliance_rules` group, only the shipped packs are read. The manifest reader refuses any other key in the block.
 
 The doctor prints one line per pack, after the framework cache lines:
 
 - `OK   framework pack <id>: <version>, <n> controls` for a pack that loads.
 - `MISS framework pack <id>: <problem>. Next: <action>` for each problem; the run fails. For a pack built from a NIST catalog, the action is the two commands above.
-- `MISS framework packs: <pack_dir> is not a folder. Next: create it or remove frameworks.pack_dir from service-manifest.json`; the run fails.
+- `MISS framework packs: <folder> is not a folder. Next: create it or remove compliance_rules.folder from service-manifest.json`; the run fails.
 - `OLD  framework pack <id>: pinned <date> (<days> days). Next: <action>` once `pinned_on` is more than 90 days old. The action re-runs the importer, or updates the plugin for a shipped pack. The run still passes.
 
 ## In each target repository
@@ -205,65 +192,39 @@ The doctor prints one line per pack, after the framework cache lines:
 
 Example:
 ```json
-{ "manifest_version": 1, "service_name": "my-service", "purpose": "One sentence.",
-  "stack": { "language": "python", "runtime": "python3.12", "package_registries": ["pypi.org", "registry.npmjs.org"],
-             "package_manager": "pnpm",
-             "unit_test_cmd": ["pytest -q", "pnpm vitest run"], "typecheck_cmd": ["mypy src", "pnpm tsc --noEmit"],
-             "lint_cmd": "ruff check .", "build_cmd": null },
-  "entrypoints": { "handlers": "src/handlers/", "models": "src/models/", "infra": "infra/", "contracts": "contracts/" },
-  "exposure_and_traits": { "is_public": false, "has_website": false, "operator_panel_integrated": false,
-                            "contains_customer_data": false, "touches_key_material": false,
-                            "data_classification": "INTERNAL" },
-  "features": { "scope": null, "secrets_scan": false, "scrub_file": null, "ledger": null },
-  "trains_dir": null,
-  "frameworks": { "pack_dir": "compliance/packs", "default_packs": true },
-  "jail_narrowing": { "forbidden_extensions": [], "forbidden_paths": [] },
-  "assets": { "roots": ["assets/", "public/models/"], "extensions": [".glb", ".gltf", ".png", ".ktx2", ".wav", ".ogg", ".wgsl", ".spv"],
-              "max_bytes": 1048576 },
-  "dev_server": { "url": "http://localhost:5173", "check": "the scene loads and the player can move" },
-  "dependencies": { "installs": ["npm"] },
-  "upstream_dependencies": [], "downstream_dependencies": [] }
+{ "commands": { "unit_test": ["pytest -q", "pnpm vitest run"], "typecheck": ["mypy src", "pnpm tsc --noEmit"],
+                "lint": "ruff check ." },
+  "docs": { "folder": "docs", "decisions_filename": "decisions.md", "reading_level": "standard" },
+  "checks": { "secret_scan": false, "online_advisory_lookup": true, "terraform_format": true,
+              "terraform_validate": false },
+  "prohibited_writes": { "paths": [], "file_types": [] },
+  "code_review_exemptions": { "folders": ["assets/", "public/models/"],
+                              "file_types": [".glb", ".gltf", ".png", ".ktx2", ".wav", ".ogg", ".wgsl", ".spv"] },
+  "packages": { "allowed_installers": ["npm"] },
+  "local_testing": { "url": "http://localhost:5173", "instructions": "The scene loads and the player can move." },
+  "code_areas": { "handlers": "src/handlers/", "models": "src/models/", "infra": "infra/", "contracts": "contracts/" } }
 ```
-The manifest reader checks `jail_narrowing`, `features`, `trains_dir`, `frameworks`, the three stack commands, `stack.package_manager`, `assets`, `dev_server`, `dependencies` and the `ledger` block; each of those keys is a row of the generated key reference in the plugin [README](../README.md#key-reference). The reader refuses an unknown key inside `jail_narrowing`, `features`, `frameworks`, `assets`, `dev_server` or `dependencies`. The doctor's two gh lines are a `MISS` in repository scope and `OPT` in folder scope (0074). The `frameworks` keys are described under "Framework control packs" above. The keys below describe the project for the people and agents who read the file. No reader checks them, so a wrong value is never refused.
+This file holds only Daedalus's settings, so a key such as a service name, a purpose line or a language is refused (0248). Every key in this file is a row of the generated key reference in the plugin [README](../README.md#key-reference), marked starter or override. The manifest reader refuses an unknown key at the top level and inside every group, and names the valid keys; there is no alias for an old name. The doctor's two gh lines are a `MISS` in repository scope and `OPT` in folder scope (0074); scope is worked out from git, never read from this file. The `compliance_rules` keys are described under "Framework control packs" above, and the decisions keys under "The decisions file". `code_areas`, an override, names the project's file areas: `/daedalus:plan` pastes it into the planner's prompt, and the planner cuts units along these areas.
 
-| Key | What it governs | Type | Allowed values | Default | Example |
-|---|---|---|---|---|---|
-| `manifest_version` | The version of the manifest format; no Daedalus code reads it yet | integer | `1` | none | `1` |
-| `service_name` | The project's name, for people reading the manifest; no Daedalus code reads it yet | string | Any short name | none | `"my-service"` |
-| `purpose` | One sentence on what the project does; no Daedalus code reads it yet | string | One sentence | none | `"Serves the billing API."` |
-| `stack.language` | The project's main language; no Daedalus code reads it yet | string | Any language name | none | `"python"` |
-| `stack.runtime` | The runtime the project ships on; no Daedalus code reads it yet | string | Any runtime name | none | `"python3.12"` |
-| `stack.package_registries` | The registries the project installs packages from; no Daedalus code reads it yet | list of strings | Registry host names | none | `["pypi.org"]` |
-| `stack.build_cmd` | The command that builds the project; a coding agent never runs it, because only the test, typecheck and lint commands are run as declared | string or null | A command string, or `null` | none | `null` |
-| `entrypoints` | The project's file areas by name; `/daedalus:plan` pastes this block into the planner's prompt, and the planner cuts units along these areas | object of strings | Each key names an area, and each value is a project-relative path | Absent: the planner is told `none declared` | `{"handlers": "src/handlers/", "infra": "infra/"}` |
-| `exposure_and_traits.is_public` | Whether the project is reachable from the internet; no Daedalus code reads it yet | boolean | `true` or `false` | none | `false` |
-| `exposure_and_traits.has_website` | Whether the project serves a website; no Daedalus code reads it yet | boolean | `true` or `false` | none | `false` |
-| `exposure_and_traits.operator_panel_integrated` | Whether the project plugs into an operator panel; no Daedalus code reads it yet | boolean | `true` or `false` | none | `false` |
-| `exposure_and_traits.contains_customer_data` | Whether the project stores or handles customer data; no Daedalus code reads it yet | boolean | `true` or `false` | none | `false` |
-| `exposure_and_traits.touches_key_material` | Whether the project creates, holds or uses key material; no Daedalus code reads it yet | boolean | `true` or `false` | none | `false` |
-| `exposure_and_traits.data_classification` | The project's data classification label; no Daedalus code reads it yet | string | Your own classification labels | none | `"INTERNAL"` |
-| `upstream_dependencies` | The services this project calls; no Daedalus code reads it yet | list | Service names or objects of your choosing | none | `[]` |
-| `downstream_dependencies` | The services that call this project; no Daedalus code reads it yet | list | Service names or objects of your choosing | none | `[]` |
+`prohibited_writes` adds paths a coder may not write (0054-DAE-PLT). Each `paths` entry is relative to the repository root, uses forward slashes, and holds no leading slash, `..` or glob characters. An entry ending in a slash covers that folder and everything under it; an entry without one names one file. Each `file_types` entry starts with a dot and covers every file name ending in it. Matching ignores case. The jail reads this file from the main checkout, never from a coder's worktree. A manifest that is not valid JSON, or whose `prohibited_writes` has the wrong shape, refuses every coder write until it is fixed, and the doctor reports it as a `MISS`. When the file is present, the doctor's line counts the entries: `OK   service-manifest.json: prohibited_writes <n> paths, <m> file types`. When `commands.typecheck` is declared, the doctor prints it on an `OPT` line and does not run it; it runs the command only when you pass `--run-typecheck` to `daedalus_doctor.py` yourself, because that flag executes a command the repository chose (0076).
 
-`jail_narrowing` adds paths a coder may not write (0054-DAE-PLT). Each `forbidden_paths` entry is relative to the repository root, uses forward slashes, and holds no leading slash, `..` or glob characters. An entry ending in a slash covers that folder and everything under it; an entry without one names one file. Each `forbidden_extensions` entry starts with a dot and covers every file name ending in it. Matching ignores case. The jail reads this file from the main checkout, never from a coder's worktree. A manifest that is not valid JSON, or whose `jail_narrowing` has the wrong shape, refuses every coder write until it is fixed, and the doctor reports it as a `MISS`. When the file is present, the doctor's line counts the entries: `OK   service-manifest.json: jail_narrowing <n> paths, <m> extensions`. When `stack.typecheck_cmd` is declared, the doctor prints it on an `OPT` line and does not run it; it runs the command only when you pass `--run-typecheck` to `daedalus_doctor.py` yourself, because that flag executes a command the repository chose (0076).
+Commands as lists. Each of `commands.unit_test`, `commands.typecheck` and `commands.lint` takes one command or a list of commands, so a Python and TypeScript project can declare `["pytest -q", "pnpm vitest run"]`. A coder may run each entry exactly as written. An empty list, or a list holding anything but non-empty strings, is refused. The doctor prints one `OPT` typecheck line per declared typecheck command, and one line with the counts: `OK   commands: 2 unit test, 2 typecheck, 1 lint`.
 
-Stack commands as lists. Each of `unit_test_cmd`, `typecheck_cmd` and `lint_cmd` takes one command or a list of commands, so a Python and TypeScript project can declare `["pytest -q", "pnpm vitest run"]`. A coder may run each entry exactly as written. An empty list, or a list holding anything but non-empty strings, is refused. The doctor prints one `OPT` typecheck line per declared typecheck command. `stack.package_manager` names `pnpm`, `npm`, `yarn`, `pip` or `uv`, and the doctor prints it on its stack line: `OK   stack: package manager pnpm; commands: 2 unit test, 2 typecheck, 1 lint`. `stack.build_cmd` stays unchecked, and no coder runs it.
+Asset files. The `code_review_exemptions` group keeps models, textures, sounds and shader binaries out of the diffs the verifier and the auditor read, and out of the secret scan. `folders` names asset folders and `file_types` names asset file endings. A file with a source ending, such as `.py`, `.ts`, `.js`, `.json`, `.env`, `.sh` or `.md`, is never kept out, wherever it sits and however large it is. A `file_types` entry with a source ending is refused. `report_over_bytes`, an override, lists each kept-out asset file larger than it by name and size, so the judges know it changed. Each run prints the exclusion with `daedalus_train.py assets --repo <repo> --base <sha> --tip <branch>`: `Assets: none`, or `Assets: -- . ':(exclude)assets/' ...` and an `Assets log-opts:` line for the secret scan. Then come one `Over size: <file> (<n> bytes)` line per large asset file and one `Asset root source: <file>` line per source file under an asset folder. The judges copy those lines, so nobody composes the exclusion by hand. Keep source files out of asset folders. A source file under one stays in every diff, the auditor reports a change to it as a finding, and the doctor prints one `OPT  asset root source file <path>` line for each one it finds.
 
-Asset files. The `assets` block keeps models, textures, sounds and shader binaries out of the diffs the verifier and the auditor read, and out of the secret scan. `roots` names asset folders and `extensions` names asset file endings. A file with a source ending, such as `.py`, `.ts`, `.js`, `.json`, `.env`, `.sh` or `.md`, is never kept out, wherever it sits and however large it is. An `extensions` entry with a source ending is refused. `max_bytes` lists each kept-out asset file larger than it by name and size, so the judges know it changed. Each run prints the exclusion with `daedalus_train.py assets --repo <repo> --base <sha> --tip <branch>`: `Assets: none`, or `Assets: -- . ':(exclude)assets/' ...` and an `Assets log-opts:` line for the secret scan. Then come one `Over size: <file> (<n> bytes)` line per large asset file and one `Asset root source: <file>` line per source file under an asset root. The judges copy those lines, so nobody composes the exclusion by hand. Keep source files out of asset folders. A source file under a root stays in every diff, the auditor reports a change to it as a finding, and the doctor prints one `OPT  asset root source file <path>` line for each one it finds.
+Operator checks and the local site. A coder never starts a dev server and never writes a test that needs a GPU or a browser. The plan lists such checks on the unit's line as `operator_checks: the scene loads; the player can move`, at most ten. Set `local_testing` to the site you host on your own machine: its `url` must be `http` or `https` on `localhost` or `127.0.0.1`, and `instructions` says what to look at. Both members are required, so `/daedalus:setup` saves the group whole. After the verifier passes a unit, the session asks you each check in plain words: open the url, do the check, and answer pass, fail or skip. It also asks the `local_testing` check when the unit changes web code. A fail counts as one rejection of the unit, the same as a rejection by the checker, and the session records it with `daedalus_train.py refuted --repo <repo> --unit <unit id> --operator-check "<check text>"`. The first rejection goes back to the unit's coder as a fix, and later ones follow the `models.coder_after_rejection` note above. A skip is recorded with your reason. Daedalus never starts, polls or fetches the site. The doctor prints `OK   local_testing: <url>; the verify step asks you to open it and check: <instructions>` when the group is set.
 
-Operator checks and the dev server. A coder never starts a dev server and never writes a test that needs a GPU or a browser. The plan lists such checks on the unit's line as `operator_checks: the scene loads; the player can move`, at most ten. Set `dev_server` to the site you host on your own machine: its `url` must be `http` or `https` on `localhost` or `127.0.0.1`, and `check` says what to look at. After the verifier passes a unit, the session asks you each check in plain words: open the url, do the check, and answer pass, fail or skip. It also asks the `dev_server` check when the unit changes web code. A fail counts as one rejection of the unit, the same as a rejection by the checker, and the session records it with `daedalus_train.py refuted --repo <repo> --unit <unit id> --operator-check "<check text>"`. The first rejection goes back to the unit's coder as a fix, and later ones follow the `coder_models` note above. A skip is recorded with your reason. Daedalus never starts, polls or fetches the site. The doctor prints `OK   dev server: <url>; the verify step asks you to open it and check: <check>` when the key is set.
+Package installs. No agent runs a package install, update, add or resolve command: the jail refuses every one of them, for pip, uv, poetry, pdm, pipenv, pipx, npm, pnpm, yarn, bun, corepack, deno, cargo, go, gem, bundle, composer and `terraform init -upgrade` (0196). A coder may run one frozen, scripts-off install when `packages.allowed_installers` names its ecosystem. `npm` covers `npm ci --ignore-scripts`, `pnpm install --frozen-lockfile --ignore-scripts`, `yarn install --immutable --mode=skip-build` (or `yarn install --frozen-lockfile --ignore-scripts` for classic yarn) and `bun install --frozen-lockfile --ignore-scripts`. `python` covers `pip install --require-hashes --only-binary=:all: -r <file>` (or `--only-binary :all:`), the same through `python3 -m pip`, `uv sync --frozen --no-build` and `uv pip sync --require-hashes --no-build <file>`; the binary-only flags keep a source package's build script from running. `cargo` covers `cargo fetch --locked` and `cargo build --locked` (or `--frozen`), and `go` covers `go mod download`. The form must be the first word of its command, so a wrapper such as `pnpm exec` or a `VAR=value` prefix such as `GOFLAGS=-mod=mod` refuses it; the safe prefixes `CI`, `NODE_ENV`, `TZ`, `LANG`, `LC_ALL` and `PYTHONDONTWRITEBYTECODE` are allowed. Each form also admits a short list of extra flags, and any other flag refuses it: `npm ci` admits `--no-audit`, `--no-fund`, `--prefer-offline`, `--offline` and `--silent`; `pnpm install` admits `--offline`, `--prefer-offline` and `--silent`; `yarn install` admits `--offline`, `--silent` and `--non-interactive`; `bun install` admits `--silent` and `--no-progress`; `pip install` admits `--no-deps`, `-q`, `--quiet`, `--no-input` and `--disable-pip-version-check`; `uv sync` admits `--no-install-project`, `--no-dev`, `--all-extras`, `--offline`, `-q` and `--quiet`; `uv pip sync` admits `--offline`, `-q` and `--quiet`; `cargo fetch` and `cargo build` admit a leading `+toolchain` word, such as `+stable`, and `--offline`, `--release`, `-q`, `--quiet`, `--workspace` and `--all-targets`; `go mod download` admits `-x` and `-json`. poetry, pdm, pipenv, pipx, deno, gem, bundle and composer have no accepted form, so you run those yourself. The frozen form runs bare, never under the kernel wrapper, because it reaches the registry. Leave `allowed_installers` empty, the default, to keep every install with you. A command that downloads a package and runs it is refused the same way: `npx`, `pnpx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`, `bun x`, `npm create`, `npm init <initializer>`, `pnpm create`, `yarn create`, `bun create`, `uvx`, `uv tool run`, `uv run` with `--with`, `--with-requirements` or `--with-editable`, `pipx run` and `deno run` on a remote module. A plain `uv run <command>`, `cargo test` and `go test` can still resolve and fetch packages; they are test commands, so on a machine where the kernel rules line reads OK they run under the kernel wrapper, which opens no network socket. A coder runs a project tool from its installed copy instead: `pnpm exec <bin>`, `npm exec --no-install <bin>` (or `npx --no-install <bin>`), `yarn run <bin>`, `bun run <bin>`, `node_modules/.bin/<bin>`, `.venv/bin/<bin>` or `python3 -m <module>`.
 
-Package installs. No agent runs a package install, update, add or resolve command: the jail refuses every one of them, for pip, uv, poetry, pdm, pipenv, pipx, npm, pnpm, yarn, bun, corepack, deno, cargo, go, gem, bundle, composer and `terraform init -upgrade` (0196). A coder may run one frozen, scripts-off install when `dependencies.installs` names its ecosystem. `npm` covers `npm ci --ignore-scripts`, `pnpm install --frozen-lockfile --ignore-scripts`, `yarn install --immutable --mode=skip-build` (or `yarn install --frozen-lockfile --ignore-scripts` for classic yarn) and `bun install --frozen-lockfile --ignore-scripts`. `python` covers `pip install --require-hashes --only-binary=:all: -r <file>` (or `--only-binary :all:`), the same through `python3 -m pip`, `uv sync --frozen --no-build` and `uv pip sync --require-hashes --no-build <file>`; the binary-only flags keep a source package's build script from running. `cargo` covers `cargo fetch --locked` and `cargo build --locked` (or `--frozen`), and `go` covers `go mod download`. The form must be the first word of its command, so a wrapper such as `pnpm exec` or a `VAR=value` prefix such as `GOFLAGS=-mod=mod` refuses it; the safe prefixes `CI`, `NODE_ENV`, `TZ`, `LANG`, `LC_ALL` and `PYTHONDONTWRITEBYTECODE` are allowed. Each form also admits a short list of extra flags, and any other flag refuses it: `npm ci` admits `--no-audit`, `--no-fund`, `--prefer-offline`, `--offline` and `--silent`; `pnpm install` admits `--offline`, `--prefer-offline` and `--silent`; `yarn install` admits `--offline`, `--silent` and `--non-interactive`; `bun install` admits `--silent` and `--no-progress`; `pip install` admits `--no-deps`, `-q`, `--quiet`, `--no-input` and `--disable-pip-version-check`; `uv sync` admits `--no-install-project`, `--no-dev`, `--all-extras`, `--offline`, `-q` and `--quiet`; `uv pip sync` admits `--offline`, `-q` and `--quiet`; `cargo fetch` and `cargo build` admit a leading `+toolchain` word, such as `+stable`, and `--offline`, `--release`, `-q`, `--quiet`, `--workspace` and `--all-targets`; `go mod download` admits `-x` and `-json`. poetry, pdm, pipenv, pipx, deno, gem, bundle and composer have no accepted form, so you run those yourself. The frozen form runs bare, never under the kernel wrapper, because it reaches the registry. Leave `installs` empty, the default, to keep every install with you. A command that downloads a package and runs it is refused the same way: `npx`, `pnpx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`, `bun x`, `npm create`, `npm init <initializer>`, `pnpm create`, `yarn create`, `bun create`, `uvx`, `uv tool run`, `uv run` with `--with`, `--with-requirements` or `--with-editable`, `pipx run` and `deno run` on a remote module. A plain `uv run <command>`, `cargo test` and `go test` can still resolve and fetch packages; they are test commands, so on a machine where the kernel rules line reads OK they run under the kernel wrapper, which opens no network socket. A coder runs a project tool from its installed copy instead: `pnpm exec <bin>`, `npm exec --no-install <bin>` (or `npx --no-install <bin>`), `yarn run <bin>`, `bun run <bin>`, `node_modules/.bin/<bin>`, `.venv/bin/<bin>` or `python3 -m <module>`.
+Release age. The auditor reads the publish date of every package version a change adds or updates, in every ecosystem, and fails a version younger than `packages.minimum_age_days`, seven days by default (0197). The date comes from the registry through the web lookup, or from an advisory export you name in the task. With the lookup off and no export, the auditor cannot check advisories or ages, and the audit files that as a blocking finding and asks you how to clear it (0196). You may set the age as low as `0`, but any value below seven needs `packages.minimum_age_reason`, one line of at least twenty characters; without it the manifest reader and the doctor refuse the file. A security fix newer than the age still fails; track it as a risk and upgrade once it comes of age. The doctor prints `OK   packages: allowed installers <ecosystems or none>; minimum age <n> days`, with the reason when the age is lowered.
 
-Release age. The auditor reads the publish date of every package version a change adds or updates, in every ecosystem, and fails a version younger than `dependencies.minimum_release_age_days`, seven days by default (0197). The date comes from the registry through the web lookup, or from an advisory export you name in the task. With the lookup off and no export, the auditor cannot check advisories or ages, and the audit files that as a blocking finding and asks you how to clear it (0196). You may set the age as low as `0`, but any value below seven needs `dependencies.minimum_release_age_reason`, one line of at least twenty characters; without it the manifest reader and the doctor refuse the file. A security fix newer than the age still fails; track it as a risk and upgrade once it comes of age. The doctor prints `OK   dependencies: frozen installs <ecosystems or none>; minimum release age <n> days`, with the reason when the age is lowered.
-
-A later Daedalus release reads missing exposure flags as the stricter value. Coders cannot edit this file (enforced for file tools and the common copy/edit commands; a script the coder writes and runs is not blocked yet). In that later release, a change to it goes through contract-spec and the ledger.
+Coders cannot edit this file (enforced for file tools and the common copy/edit commands; a script the coder writes and runs is not blocked yet).
 
 ### contracts/ (directory), optional **(checked)**
 
 Holds your own interface files, such as `openapi.yaml`, `events/*.schema.json` and `errors.yaml`. May be empty to start; the doctor shows an `OPT` line while the folder is missing. Coders cannot write here (enforced for file tools and the common copy/edit commands; a script the coder writes and runs is not blocked yet).
 
-A Build Train writes its contract here only when config.json declares no `charter_root`; with `charter_root` the contract goes to `<charter_root>/specs/<name>.md` instead. The contract-spec agent saves the Locked Contract Packet to `contracts/<name>.md`, where `<name>` is a short name of lowercase letters, digits and hyphens. The lock command (`daedalus_workspace.py lock`) commits it on the integration branch `daedalus/<train-id>` as `Lock contract <name> v<packet_version>` before any coder starts. Each revision is committed as `Revise contract <name> v<N>`. The file holds the packet as contract-spec wrote it: `packet_version=<n>`, the target services, the wire contract and the ledger invariants.
+A Build Train writes its contract here only when config.json sets no `local_docs_folder`; with `local_docs_folder` (the `<charter_root>` here) the contract goes to `<charter_root>/specs/<name>.md` instead. The contract-spec agent saves the Locked Contract Packet to `contracts/<name>.md`, where `<name>` is a short name of lowercase letters, digits and hyphens. The lock command (`daedalus_workspace.py lock`) commits it on the integration branch `daedalus/<train-id>` as `Lock contract <name> v<packet_version>` before any coder starts. Each revision is committed as `Revise contract <name> v<N>`. The file holds the packet as contract-spec wrote it: `packet_version=<n>`, the target services, the wire contract and the ledger invariants.
 
 Read the contract during a train, but do not edit it. Every coder brief names the file with its sha256, and a coder refuses to start when the hash does not match. A coder that reports a different hash stops the train. A revision comes only from contract-spec, when a coder's contract question needs one.
 
@@ -274,7 +235,7 @@ Minimal:
 [extend]
 useDefault = true
 ```
-gitleaks reads this file, not Daedalus. The Push Train runs `gitleaks detect --redact --log-opts=<base sha>..daedalus/<train-id>` from the repository root, and gitleaks picks up `.gitleaks.toml` from the folder it scans. The scan runs only when `features.secrets_scan` is `true` in `service-manifest.json`; the Push Train then stops without the binary (0069-DAE-PLT). With the scan off, the default, the Push Train runs no scan and the doctor's gitleaks line is an `OPT` line. The doctor checks only that the file exists.
+gitleaks reads this file, not Daedalus. The Push Train runs `gitleaks detect --redact --log-opts=<base sha>..daedalus/<train-id>` from the repository root, and gitleaks picks up `.gitleaks.toml` from the folder it scans. The scan runs only when `checks.secret_scan` is `true` in `service-manifest.json`; the Push Train then stops without the binary (0069-DAE-PLT). With the scan off, the default, the Push Train runs no scan and the doctor's gitleaks line is an `OPT` line. The doctor checks only that the file exists.
 
 | Key | What it governs | Type | Allowed values | Default | Example |
 |---|---|---|---|---|---|
@@ -284,9 +245,9 @@ Every other key, such as your own rules or an allowlist for a known false positi
 
 ### Project train definitions
 
-When `service-manifest.json` sets `trains_dir` to a project-relative folder, a train named `<name>` is looked up first as `<trains_dir>/<name>.json`, then in the plugin's own `trains/` folder (0073-DAE-PLT). A project definition's brief templates resolve beside the definition file, and a definition whose real path leaves the project is refused. Check a definition with:
+When `service-manifest.json` sets `custom_workflows_folder`, an override, to a project-relative folder, a train named `<name>` is looked up first as `<custom_workflows_folder>/<name>.json`, then in the plugin's own `trains/` folder (0073-DAE-PLT). A project definition's brief templates resolve beside the definition file, and a definition whose real path leaves the project is refused. Check a definition with:
 
-    python3 <plugin>/scripts/validate_train.py <trains_dir>/<name>.json
+    python3 <plugin>/scripts/validate_train.py <custom_workflows_folder>/<name>.json
 
 Exit 0 prints `OK train <name> v<version>: <n> stages`. Exit 1 prints one defect line per failed check, each starting with its check number, and a `Next:` line. The train runner starts a definition with `python3 <plugin>/scripts/daedalus_train.py start --repo <repo> --train <name>`. The plugin repository's `tests/fixtures/trains/valid.json` is a complete example.
 
@@ -314,7 +275,7 @@ Each stage object holds `id`, `gate`, `agent`, `scope`, `proof` and `on_fail`, a
 | `proof` | The command that proves the stage passed | object | Exactly `script`, `exit` and `records`, below | see below |
 | `on_fail` | Where each failing outcome or reply line goes | object | Each key is a failing exit outcome or a reply line of the stage; each value is a route, below | `{"[STATUS: YIELD_WEB]": "consult:web-researcher"}` |
 | `verifies` | What the stage checks, in words | string | Non-empty text | `"the merged tip passes its tests"` |
-| `when` | A condition that skips the stage when it is off | string | `features.<name>` with a feature from the key reference, or a field an earlier stage records | `"features.ledger"` |
+| `when` | A condition that skips the stage when it is off | string | `features.<name>` with a field of the run's recorded features (`secrets_scan`, `scrub_file`, `ledger`, which is on when a decisions file is named, `dependency_web_lookup`, `terraform_tools` or `terraform_validate`), or a field an earlier stage records | `"features.ledger"` |
 | `repeat` | Runs the stage once for each unit of the recorded plan | string | `"per-unit"` | `"per-unit"` |
 | `parallel` | Runs the units of a `per-unit` stage at the same time | boolean | `true` or `false`; `true` needs `repeat` | `true` |
 
@@ -356,7 +317,7 @@ The eight area names, exactly as written: `composition and phases`, `planning an
 
 ### Coder write boundary
 
-A coder writes only inside its own unit worktree, which the Build Train creates at `<repo>/.claude/worktrees/<train-id>-<unit-slug>`. Inside it, every path is writable except the protected ones (0054-DAE-PLT): `contracts/`, `.github/` (workflows, CODEOWNERS, dependabot and templates), `.claude/`, `service-manifest.json`, the repository's own decision ledger when it lives inside the repository, and every `jail_narrowing` entry in `service-manifest.json`. A write to a folder that holds a protected path, such as `rm -r docs` when the ledger is `docs/decisions.md`, is refused too. A refused write names the path and says whether the rule is built in or comes from `jail_narrowing`.
+A coder writes only inside its own unit worktree, which the Build Train creates at `<repo>/.claude/worktrees/<train-id>-<unit-slug>`. Inside it, every path is writable except the protected ones (0054-DAE-PLT): `contracts/`, `.github/` (workflows, CODEOWNERS, dependabot and templates), `.claude/`, `service-manifest.json`, the repository's own decisions file when it lives inside the repository, and every `prohibited_writes` entry in `service-manifest.json`. A write to a folder that holds a protected path, such as `rm -r docs` when the ledger is `docs/decisions.md`, is refused too. A refused write names the path and says whether the rule is built in or comes from the service manifest's prohibited writes.
 
 ## Claude Code settings
 

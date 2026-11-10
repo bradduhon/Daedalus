@@ -77,7 +77,8 @@ def repo(git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     data = git_repo / ".claude" / "daedalus"
     data.mkdir(parents=True)
     roots = [{"kind": "path", "path": "<repo_root>/private/"}]
-    (data / "config.json").write_text(json.dumps({"excluded_roots": roots}), encoding="utf-8")
+    config = {"git_excluded_folders": roots}
+    (data / "config.json").write_text(json.dumps(config), encoding="utf-8")
     (git_repo / "private").mkdir()
     (git_repo / "catalog.json").write_text(json.dumps(CATALOG), encoding="utf-8")
     (git_repo / "map.csv").write_text("cis_id,control_id\n1.4,AWS-IAM-3\n1.5,AWS-IAM-5\n")
@@ -303,10 +304,12 @@ def test_out_through_a_link_outside_the_project_is_refused(
     assert "is outside the project" in _err(capsys)
 
 
-def test_unresolvable_excluded_roots_refuse(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_unresolvable_excluded_folders_refuse(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     (repo / ".claude" / "daedalus" / "config.json").write_text("{")
     assert _cis() == 1
-    assert "excluded_roots could not be resolved" in _err(capsys)
+    assert "git_excluded_folders could not be resolved" in _err(capsys)
 
 
 def test_a_linked_pack_folder_is_refused(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:

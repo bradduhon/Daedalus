@@ -80,7 +80,7 @@ def main(argv: list[str]) -> int:
     for name in COMMANDS:
         command = commands.add_parser(name)
         command.add_argument("--agents-dir", type=Path, default=AGENTS_DIR)
-    # spec 4: --repo reads that project's config, so the Model column shows agent_models.
+    # spec 4, 0245: --repo reads that project's config, so the Model column shows models.agents.
     commands.choices["table"].add_argument("--repo", type=Path)
     args = parser.parse_args(argv)
     try:

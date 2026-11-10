@@ -43,7 +43,7 @@ def repo(git_repo: Path) -> Path:
 
 def _write_config(repo: Path, roots: list[dict[str, str]]) -> None:
     data = repo / ".claude" / "daedalus" / "config.json"
-    data.write_text(json.dumps({"excluded_roots": roots}), encoding="utf-8")
+    data.write_text(json.dumps({"git_excluded_folders": roots}), encoding="utf-8")
 
 
 def _roots(*paths: str, ignored: bool | None = None) -> jail.ExcludedRoots:
@@ -82,7 +82,7 @@ def test_excluded_roots_key_reads_paths_and_gitignore(repo: Path) -> None:
 )
 def test_excluded_roots_key_refuses_a_bad_entry(repo: Path, value: object) -> None:
     data = repo / ".claude" / "daedalus" / "config.json"
-    data.write_text(json.dumps({"excluded_roots": value}), encoding="utf-8")
+    data.write_text(json.dumps({"git_excluded_folders": value}), encoding="utf-8")
     with pytest.raises(ConfigError, match="Next:"):
         load_config(str(repo))
 

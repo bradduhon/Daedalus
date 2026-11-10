@@ -458,8 +458,8 @@ def _meta(folder: Path) -> dict[str, object]:
 
 
 def pack_folders(repo: Path) -> list[Path]:
-    # Pin F1 -> F3, 0157 (12.1): the declared packs, then the shipped ones unless turned off.
-    # 0192: a shipped pack whose pack.json says default false is read only when named.
+    # 0157, 0245: compliance_rules.folder's packs, then the shipped ones unless use_builtin is off.
+    # 0192: a shipped pack whose pack.json says default false is read only via extra_builtin.
     manifest = load_manifest(repo)
     frameworks = manifest.frameworks if manifest is not None else None
     named = set(frameworks.packs) if frameworks is not None else set()
@@ -474,7 +474,7 @@ def pack_folders(repo: Path) -> list[Path]:
 
 
 def unknown_named(repo: Path) -> list[str]:
-    # 0192: frameworks.packs ids that name no shipped pack.
+    # 0192: compliance_rules.extra_builtin ids that name no shipped pack.
     manifest = load_manifest(repo)
     named = manifest.frameworks.packs if manifest is not None else ()
     shipped = {folder.name for folder in _pack_subfolders(FRAMEWORKS_DIR)}

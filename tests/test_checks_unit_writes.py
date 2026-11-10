@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 from lib import jail
-from lib.config import Config, LedgerDecl
+from lib.config import Config
 
 from tests.conftest import CFG, CWD, WT
 from tests.hook_chain import (
@@ -233,17 +233,16 @@ def test_coder_bash_writes_to_builtin_protected_paths_are_refused(command: str) 
 
 
 def test_coder_repo_local_ledger_in_worktree_is_refused() -> None:
-    # 0054: the ledger begin resolves, mapped into the worktree, is a built-in protected path.
-    decl = LedgerDecl(Path("docs/decisions.md"), "markdown-table-row", "{seq:04d}", "last-row-id")
-    cfg = Config(ledger=decl)
-    target = f"{WT}/docs/decisions.md"
+    # 0054, 0247: the named file in the project's own docs folder, mapped into the worktree.
+    cfg = Config()
+    target = f"{WT}/docs/decision-log.md"
     d = decide(_w("coder", target), cfg)
     assert not d.allow and str(d.reason).startswith(f"protected path (built in): {target}.")
     d = decide(_b("coder", f"rm -r {WT}/docs"), cfg)
     assert not d.allow and str(d.reason).startswith("protected path (built in):")
     assert decide(_w("coder", f"{WT}/docs/other.md"), cfg).allow
-    # 0054: a ledger outside the repo has no worktree copy to protect.
-    assert decide(_w("coder", f"{WT}/docs/decisions.md"), CFG).allow
+    # 0054: a decisions file in the local docs folder has no worktree copy to protect.
+    assert decide(_w("coder", f"{WT}/docs/decision-log.md"), CFG).allow
 
 
 def test_coder_restores_paths_inside_its_unit_worktree() -> None:
@@ -449,7 +448,7 @@ def test_coder_cwd_inside_a_real_unit_worktree(tmp_path: Path) -> None:
 def test_coder_manifest_forbidden_path_is_refused(tmp_path: Path, rel: str) -> None:
     repo, wt = _narrowed_repo(tmp_path, json.dumps(NARROWING))
     target = f"{wt}/{rel}"
-    want = f"protected path (service-manifest.json jail_narrowing): {target}. Next:"
+    want = f"protected path (service-manifest.json prohibited_writes): {target}. Next:"
     d = decide(_cwd(_w("coder", target), repo), CFG)
     assert not d.allow and str(d.reason).startswith(want), d.reason
     d = decide(_cwd(_b("coder", f"tee {target}"), repo), CFG)
@@ -462,7 +461,7 @@ def test_coder_manifest_forbidden_extension_is_refused(tmp_path: Path) -> None:
     repo, wt = _narrowed_repo(tmp_path, json.dumps(NARROWING))
     for rel in ("keys/server.pem", "a.PEM"):
         target = f"{wt}/{rel}"
-        want = f"protected extension (service-manifest.json jail_narrowing): {target}. Next:"
+        want = f"protected file type (service-manifest.json prohibited_writes): {target}. Next:"
         d = decide(_cwd(_w("coder", target), repo), CFG)
         assert not d.allow and str(d.reason).startswith(want), d.reason
         d = decide(_cwd(_b("coder", f"cp {wt}/src/a {target}"), repo), CFG)
@@ -475,8 +474,9 @@ def test_coder_manifest_forbidden_extension_is_refused(tmp_path: Path) -> None:
     [
         "{ not json",
         "[]",
-        '{"jail_narrowing": []}',
-        '{"jail_narrowing": {"forbidden_paths": ["../x"]}}',
+        '{"prohibited_writes": []}',
+        '{"prohibited_writes": {"paths": ["../x"]}}',
+        '{"jail_narrowing": {"forbidden_paths": ["x/"]}}',
     ],
 )
 def test_coder_manifest_error_fails_closed(tmp_path: Path, manifest: str) -> None:

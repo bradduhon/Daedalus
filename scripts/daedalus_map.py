@@ -84,7 +84,9 @@ R_PLAN = (
     "Next: pass the plan file the train recorded as --plan."
 )
 R_ROOTS = "The map could not resolve the project's excluded roots, so nothing was written: {error}"
-R_ROOTS_NEXT = "\nNext: fix excluded_roots in .claude/daedalus/config.json, then rerun the map."
+R_ROOTS_NEXT = (
+    "\nNext: fix git_excluded_folders in .claude/daedalus/config.json, then rerun the map."
+)
 
 
 class ImportRow(TypedDict):

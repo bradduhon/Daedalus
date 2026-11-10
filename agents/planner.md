@@ -24,9 +24,9 @@ mode or challenge mode (0152), and a brief with no `Mode:` line is plan mode. In
 never edit the spec.
 
 ## Your brief
-It names, each on its own line: the spec path; the standing-rules file path, when the
-`standing_rules` key of config.json sets one; `max_concurrent_builders: <n>`; the repository's
-file areas (the `entrypoints` block of `service-manifest.json`, or `none declared`); the dependency map's
+It names, each on its own line: the spec path; the standing-rules file path, when a
+decisions file is named and the summary beside it exists (0247); `limits.parallel_coders: <n>`; the repository's
+file areas (the `code_areas` block of `service-manifest.json`, or `none declared`); the dependency map's
 `map.md` and `map.json` paths, when the train wrote them with `daedalus_map.py`; the Standards
 Packet path, when one is written; and the one file you write, on a
 `Write exactly one file: <path>` line. Inside a train that file is
@@ -39,7 +39,7 @@ Packet path, when one is written; and the one file you write, on a
    Then read the spec, every file it cites as a receipt, and the code areas it changes, with
    Read, Grep and Glob, before you draw a boundary.
 2. Cut into bodies that touch non-overlapping file areas, so that as many units run at once as
-   `max_concurrent_builders` allows. Time and tokens decide the cut. A module with high fan-in
+   `limits.parallel_coders` allows. Time and tokens decide the cut. A module with high fan-in
    and the readers of a shared record stay with the unit that changes them, or get a pin.
 3. Give each test module to one unit. The map's coverage table names the modules that test the
    code a unit changes; new tests go in a new module that unit owns, and an existing module goes
@@ -57,7 +57,7 @@ Packet path, when one is written; and the one file you write, on a
    in the prose above the block.
 8. Compute the graph line: the unit count; the critical path, the longest serial chain counted
    in units; the width, the largest set of units with no serial path between them, capped at
-   `max_concurrent_builders`; and the overlap-only pairs.
+   `limits.parallel_coders`; and the overlap-only pairs.
 9. When the spec's Version section bumps the version, cut it into one unit whose files are the
    version sites that section names, and write one version line naming that unit (spec 3.4).
    When the spec has no Version section, or its Version section keeps the version, write no
@@ -69,7 +69,7 @@ A `Mode: challenge` brief (0152, 0154) starts the shaping half of a brainstorm (
 is the handoff brief the exploring half wrote, named as `Brief file: <path>`. A brief that came
 straight to shaping names the idea instead, as `Idea file: <path>` for a notes file, or as the
 operator's text between an `Idea:` line and an `Idea ends` line. It also names the
-standing-rules file when config.json's `standing_rules` key sets one, the repository's file
+standing-rules file when a decisions file is named and the summary beside it exists, the repository's file
 areas, and the one file you write on a `Write exactly one file: <path>` line. In challenge mode that file is
 `docs/.tmp/daedalus/brainstorm-<YYYYMMDD>/spec.md`. After a `Mode: plan` hand-off it is the plan
 file the new brief names. A warm planner therefore writes two files in one life, each named by
@@ -175,8 +175,8 @@ same path and reply again.
 The `needs:` field is optional. It lists, separated by commas, each tool the unit's build or
 tests run that the repository may lack (a name on PATH, such as `mypy`, or a repo-relative
 executable, such as `.venv/bin/ruff`), and each protected file the unit needs changed, which a
-coder cannot write (`contracts/`, `.github/`, `.claude/`, `service-manifest.json`, the decision
-ledger and the `jail_narrowing` paths). The orchestrator checks every need before the unit's
+coder cannot write (`contracts/`, `.github/`, `.claude/`, `service-manifest.json`, the decisions
+file and the `prohibited_writes` paths). The orchestrator checks every need before the unit's
 wave starts. Take the tools from the declared commands and the map; a unit that needs nothing
 carries no `needs:` field.
 

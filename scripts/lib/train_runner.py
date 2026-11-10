@@ -40,6 +40,7 @@ from lib.audit_proof import (
     VERDICT_BOTH,
     VERDICT_REJECTED,
     ProofError,
+    accepting_run,
     auditor_round,
     docs_findings_path,
     docs_keys,
@@ -173,7 +174,7 @@ def reply_path(brief: Path) -> Path:
 
 
 def _definition_file(root: Path, plugin_root: Path, name: str) -> tuple[Path, Origin]:
-    # issue 52, 0073: the manifest's trains_dir is searched before the plugin's own trains folder.
+    # issue 52, 0245: the manifest's custom_workflows_folder is searched before the plugin's own.
     loaded = manifest.load(root)
     folder = loaded.trains_dir if loaded is not None else None
     if folder is not None:
@@ -221,10 +222,10 @@ def _stages(defn: Definition) -> list[dict[str, object]]:
 
 
 def _feature_on(state: dict[str, object], key: str) -> bool:
-    # 0069: an absent ledger switch runs the ledger stages only when start found a ledger.
+    # 0247: the ledger stages run only when start resolved a named decisions file.
     value = _obj(state, "features").get(key)
     if key == "ledger" and value is None:
-        return _text(state, "ledger_line") not in ("", workspace.LEDGER_NONE, workspace.LEDGER_OFF)
+        return _text(state, "ledger_line") not in ("", workspace.LEDGER_NONE)
     return bool(value)
 
 
@@ -1112,8 +1113,8 @@ def start(cwd: Path, train: str, output: str | None, plugin_root: Path = PLUGIN_
             EXIT_STOP,
             [
                 f"train {defn.name} runs only in {' or '.join(scopes)} scope, and {root} is "
-                f"{kind} scope. Next: run it in a {scopes[0]} project, or set the scope key in "
-                "the features object of service-manifest.json."
+                f"{kind} scope. Next: run it in a {scopes[0]} project, a git repository for "
+                "repository scope and a plain folder for folder scope."
             ],
         )
     try:
@@ -1126,10 +1127,9 @@ def start(cwd: Path, train: str, output: str | None, plugin_root: Path = PLUGIN_
                 return Outcome(EXIT_ASK, [line.format(docs=docs) for line in OUTPUT_QUESTION])
             repo = root
             lines = workspace.begin_folder(root, features.ledger)
-    except workspace.LedgerQuestion as exc:
-        return Outcome(EXIT_ASK, str(exc).splitlines())
     except workspace.WorkspaceError as exc:
         return Outcome(EXIT_STOP, [str(exc)])
+    # 0072, 0245: config.json limits.parallel_coders caps the coders a stage runs at once.
     return _record_start(repo, defn, kind, features, output, config.max_concurrent_builders, lines)
 
 
@@ -2000,8 +2000,10 @@ def finish_unit(
     return _with_next(_recorded(cwd, edit), "finish-unit")
 
 
-def _exemption_args(ledger_id: str, finding: str | None, tracking: str, other: str | None) -> None:
-    if not _LEDGER_ID.fullmatch(ledger_id):
+def _exemption_args(
+    ledger_id: str | None, finding: str | None, tracking: str, other: str | None
+) -> None:
+    if ledger_id is not None and not _LEDGER_ID.fullmatch(ledger_id):
         raise RunnerError(
             f"ledger id {ledger_id!r} is not a ledger id such as 0101-DAE-PLT. "
             "Next: rerun exception with the id charter-docs returned."
@@ -2026,10 +2028,38 @@ def _exemption_args(ledger_id: str, finding: str | None, tracking: str, other: s
         _one_line("other", other, "exception")
 
 
+def _exemption_basis(
+    repo: Path, train_id: str, ledger_id: str | None, reason: str | None, finding: str
+) -> dict[str, str]:
+    # 0249: a ledger id binds the exemption, or with no decisions file the operator's reason does.
+    if (ledger_id is None) == (reason is None):
+        raise RunnerError(
+            "exception takes --ledger-id or --reason, one of the two. Next: rerun exception "
+            "with --ledger-id <the exemption ruling's id>, or with --reason <the operator's "
+            "words> when the service manifest names no decisions file."
+        )
+    if ledger_id is not None:
+        return {"ledger_id": ledger_id}
+    if accepting_run(repo, train_id) is None:
+        raise RunnerError(
+            "--reason stands in for a ledger id only when the service manifest names no "
+            "decisions file, and this one names a decisions file. Next: rerun exception with "
+            "--ledger-id <the exemption ruling's id> in place of --reason."
+        )
+    text = _one_line("reason", reason or "", "exception")
+    return {"finding": finding, "reason": text, "run_id": train_id}
+
+
+def _basis_words(basis: dict[str, str]) -> str:
+    if "ledger_id" in basis:
+        return f"ledger={basis['ledger_id']}"
+    return f"run={basis['run_id']} reason={basis['reason']}"
+
+
 def _exemption_entry(
-    ledger_id: str, tip: str, tracking: str, other: str | None
+    basis: dict[str, str], tip: str, tracking: str, other: str | None
 ) -> dict[str, object]:
-    entry: dict[str, object] = {"ledger_id": ledger_id, "tip": tip, "tracking": tracking}
+    entry: dict[str, object] = {**basis, "tip": tip, "tracking": tracking}
     if other is not None:
         entry["other"] = other.strip()
     return entry
@@ -2040,7 +2070,6 @@ def _docs_exemption(
     train_id: str,
     state: dict[str, object],
     current: str,
-    ledger_id: str,
     finding: str,
 ) -> tuple[dict[str, object], list[str]] | None:
     # 0131, 0133: a refuted docs claim's exemption lands in the docs record, bound to its tip.
@@ -2069,26 +2098,33 @@ def _docs_exemption(
 
 
 def record_exception(
-    cwd: Path, ledger_id: str, finding: str, tracking: str, other: str | None = None
+    cwd: Path,
+    ledger_id: str | None,
+    finding: str,
+    tracking: str,
+    other: str | None = None,
+    reason: str | None = None,
 ) -> Outcome:
     # 0133, 0139: one exemption per finding of the recorded rejected round, with its tracking.
     def edit(repo: Path, train_id: str) -> list[str]:
         _exemption_args(ledger_id, finding, tracking, other)
+        basis = _exemption_basis(repo, train_id, ledger_id, reason, finding)
+        bound = _basis_words(basis)
         current = _integration_tip(repo, train_id)
         out: list[str] = []
 
         def change(state: dict[str, object]) -> None:
-            docs = _docs_exemption(repo, train_id, state, current, ledger_id, finding)
+            docs = _docs_exemption(repo, train_id, state, current, finding)
             if docs is not None:
                 docs_record, keys = docs
                 granted = train_state.record(docs_record, "exemptions")
                 granted[finding] = _exemption_entry(
-                    ledger_id, _text(docs_record, "tip"), tracking, other
+                    basis, _text(docs_record, "tip"), tracking, other
                 )
                 docs_record["exemptions"] = granted
                 state[train_state.DOCS_VERDICT] = docs_record
                 out.append(
-                    f"exemption recorded finding={finding} gate=docs ledger={ledger_id} "
+                    f"exemption recorded finding={finding} gate=docs {bound} "
                     f"tracking={tracking} remaining={len([k for k in keys if k not in granted])}"
                 )
                 return
@@ -2119,12 +2155,12 @@ def record_exception(
                     f"finding {finding} of round {round_} already carries an exemption. "
                     "Next: record the next finding; one exemption stands per finding."
                 )
-            granted[finding] = _exemption_entry(ledger_id, judged, tracking, other)
+            granted[finding] = _exemption_entry(basis, judged, tracking, other)
             exemptions[str(round_)] = granted
             state[train_state.EXEMPTIONS] = exemptions
             left = len([key for key in keys if key not in granted])
             out.append(
-                f"exemption recorded finding={finding} round={round_} ledger={ledger_id} "
+                f"exemption recorded finding={finding} round={round_} {bound} "
                 f"tracking={tracking} remaining={left}"
             )
 
@@ -2162,11 +2198,18 @@ def _refuted_reply(
 
 
 def record_unit_exception(
-    cwd: Path, ledger_id: str, unit_id: str, row: int, tracking: str, other: str | None = None
+    cwd: Path,
+    ledger_id: str | None,
+    unit_id: str,
+    row: int,
+    tracking: str,
+    other: str | None = None,
+    reason: str | None = None,
 ) -> Outcome:
     # 229, 0161: one exemption per refuted row of the unit's newest verifier reply, by its seq.
     def edit(repo: Path, train_id: str) -> list[str]:
         _exemption_args(ledger_id, None, tracking, other)
+        basis = _exemption_basis(repo, train_id, ledger_id, reason, f"{unit_id} row {row}")
         try:
             state = train_state.load(repo, train_id)
             records = workspace._audit_records(repo, state)
@@ -2195,12 +2238,13 @@ def record_unit_exception(
                         "already carries an exemption. Next: record the next row; one "
                         "exemption stands per row."
                     )
-                granted[str(row)] = _exemption_entry(ledger_id, tip, tracking, other)
+                granted[str(row)] = _exemption_entry(basis, tip, tracking, other)
                 exemptions[str(seq)] = granted
                 each[workspace.UNIT_EXEMPTIONS] = exemptions
                 left = len([n for n in range(1, len(rows) + 1) if str(n) not in granted])
                 out.append(
                     f"exemption recorded unit={unit_id} row={row}/{len(rows)} remaining={left}"
+                    + ("" if "ledger_id" in basis else f" {_basis_words(basis)}")
                 )
 
         train_state.change(repo, train_id, change)

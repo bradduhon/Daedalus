@@ -63,7 +63,7 @@ def repo(tmp_path: Path) -> Path:
         "    a.helper()\n"
         "    os.environ.get(TOKEN_ENV)\n"
         '    print("[STATUS: COMPLETE] done")\n'
-        '    record = {"event": "SubagentStop", "charter_root": None}\n'
+        '    record = {"event": "SubagentStop", "local_docs_folder": None}\n'
         "    print(record)\n" + _BODY.format(name="tally"),
     )
     _write(
@@ -143,7 +143,7 @@ def test_readers_split_readers_writers_and_mentions(repo: Path) -> None:
     env = readers["MY_TOKEN"]
     assert env["kind"] == "env" and env["security"] is True
     assert env["readers"] == ["scripts/b.py:9"]
-    assert readers["charter_root"]["writers"] == ["scripts/b.py:11"]
+    assert readers["local_docs_folder"]["writers"] == ["scripts/b.py:11"]
     assert "[STATUS: HIDDEN]" not in readers
 
 
@@ -252,7 +252,7 @@ def test_excluded_roots_are_left_out_of_the_scan(repo: Path) -> None:
         {"kind": "path", "path": "<repo_root>/private/"},
         {"kind": "path", "path": "docs/inner"},
     ]
-    _write(repo, ".claude/daedalus/config.json", json.dumps({"excluded_roots": roots}))
+    _write(repo, ".claude/daedalus/config.json", json.dumps({"git_excluded_folders": roots}))
     _write(repo, "private/leak.py", 'print("[STATUS: PRIVATE]")\n')
     _write(repo, "docs/inner/notes.md", "Reply `[STATUS: INNER]` here.\n")
     _write(repo, "docs/kept.md", "Reply `[STATUS: KEPT]` here.\n")
@@ -266,7 +266,8 @@ def test_excluded_roots_are_left_out_of_the_scan(repo: Path) -> None:
 
 def test_unreadable_excluded_roots_exit_2_and_write_nothing(repo: Path) -> None:
     # 99: the walk fails closed when the excluded roots cannot be resolved.
-    _write(repo, ".claude/daedalus/config.json", json.dumps({"excluded_roots": "private/"}))
+    config = json.dumps({"git_excluded_folders": "private/"})
+    _write(repo, ".claude/daedalus/config.json", config)
     code, out = _map(repo)
     assert code == 2 and "excluded roots" in out and out.count("Next:") == 1, out
     assert not (repo / "out").exists()

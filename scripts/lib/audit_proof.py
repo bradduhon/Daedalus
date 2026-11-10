@@ -560,19 +560,39 @@ def docs_findings_path(repo: Path, train_id: str) -> Path:
     return repo / SUMMARY_DIR / train_id / "docs" / "findings.txt"
 
 
-def _exempt(entry: object, judged: str) -> bool:
+def no_decisions_file(repo: Path) -> bool:
+    # 0249: true only when the manifest names no decisions file; an unreadable one is false.
+    from lib.config import ConfigError, load_config
+    from lib.ledger import LedgerError, resolve_ledger
+
+    try:
+        return resolve_ledger(str(repo), load_config(cwd=str(repo))) is None
+    except (ConfigError, LedgerError, OSError, ValueError):
+        return False
+
+
+def accepting_run(repo: Path, train_id: str) -> str | None:
+    # 0249: the run id an accepted finding may carry in place of a ledger id, else None.
+    return train_id if no_decisions_file(repo) else None
+
+
+def _texted(entry: dict[str, object], key: str) -> bool:
+    value = entry.get(key)
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _exempt(entry: object, judged: str, run: str | None = None) -> bool:
     if not isinstance(entry, dict):
         return False
-    ledger_id, tracking, other = entry.get("ledger_id"), entry.get("tracking"), entry.get("other")
+    tracking = entry.get("tracking")
     # 0139: `other` holds the operator's own words, as the exception recorder requires.
-    worded = tracking != "other" or (isinstance(other, str) and bool(other.strip()))
-    return (
-        isinstance(ledger_id, str)
-        and bool(ledger_id)
-        and entry.get("tip") == judged
-        and tracking in train_state.TRACKING
-        and worded
-    )
+    worded = tracking != "other" or _texted(entry, "other")
+    # 0249: with no decisions file, the reason and this run's id stand in for a ledger id.
+    if "ledger_id" in entry:
+        basis = _texted(entry, "ledger_id")
+    else:
+        basis = run is not None and entry.get("run_id") == run and _texted(entry, "reason")
+    return basis and entry.get("tip") == judged and tracking in train_state.TRACKING and worded
 
 
 def round_keys(repo: Path, train_id: str, state: dict[str, object], round_: int) -> list[str]:
@@ -589,9 +609,9 @@ def docs_keys(repo: Path, train_id: str, state: dict[str, object]) -> list[str]:
     return sorted(set(listed) | set(train_state.record(docs, "findings")))
 
 
-def _unexempted(keys: list[str], exempt: dict[str, object], tip: str) -> list[str]:
+def _unexempted(keys: list[str], exempt: dict[str, object], tip: str, run: str | None) -> list[str]:
     # 0133: the one exemption check, shared by the security round and the docs record.
-    return [key for key in keys if not _exempt(exempt.get(key), tip)]
+    return [key for key in keys if not _exempt(exempt.get(key), tip, run)]
 
 
 def docs_problem(repo: Path, train_id: str, state: dict[str, object], current: str) -> str | None:
@@ -611,7 +631,8 @@ def docs_problem(repo: Path, train_id: str, state: dict[str, object], current: s
         return f"the refuted docs claim list is unreadable ({exc})"
     if not keys:
         return "the refuted docs record lists no claims"
-    missing = _unexempted(keys, train_state.record(docs, "exemptions"), current)
+    exempt = train_state.record(docs, "exemptions")
+    missing = _unexempted(keys, exempt, current, accepting_run(repo, train_id))
     if missing:
         return (
             f"refuted docs claim {missing[0]} has no exemption, "
@@ -768,7 +789,7 @@ def exemption_problem(
     if not keys:
         return f"the rejected round {round_} lists no findings"
     exempt = train_state.record(train_state.record(state, train_state.EXEMPTIONS), str(round_))
-    missing = _unexempted(keys, exempt, str(judged))
+    missing = _unexempted(keys, exempt, str(judged), accepting_run(repo, train_id))
     if missing:
         return (
             f"finding {missing[0]} of the rejected round {round_} has no exemption, "

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -23,8 +24,11 @@ MAIN_REFUSAL_CLASSES: tuple[str, ...] = (
     "credential_export",
     "credential_read",
 )
-TOP_KEYS = ("main_refusals", "profile")
-PROFILE_KEYS = ("literacy", "dash_ban")
+# 0245: the JSON names of the personal file, in key-table order.
+TOP_KEYS = ("hard_stops", "reading_level", "no_long_dashes", "guidance_source", "script_language")
+# 0244: where the guidance layer is read from; claude is the default.
+GUIDANCE_SOURCES = ("claude", "daedalus")
+_LANGUAGE = re.compile(r"[a-z][a-z0-9+#-]{0,31}")
 _NEXT = "Next: correct the value named, or remove it to use the defaults."
 
 
@@ -37,9 +41,13 @@ class Operator:
     main_refusals: tuple[str, ...] = ()
     literacy: str | None = None
     dash_ban: bool | None = None
+    guidance_source: str = "claude"
+    script_language: str | None = None
 
 
 OPERATOR_KEYS = tuple(f.name for f in fields(Operator))
+# 0245: each Operator field's JSON name, for lines a person reads.
+JSON_NAMES = dict(zip(OPERATOR_KEYS, TOP_KEYS, strict=True))
 
 
 def operator_path() -> Path:
@@ -62,29 +70,39 @@ def _refusals(value: object, where: str, key: str) -> tuple[str, ...]:
     return tuple(value)
 
 
-def _profile(value: object, where: str, prefix: str) -> dict[str, object]:
-    key = f"{prefix}profile"
-    if not isinstance(value, dict):
-        raise _fail(where, key, "must be an object")
-    unknown = sorted(str(k) for k in set(value) - set(PROFILE_KEYS))
-    if unknown:
-        raise _fail(where, key, f"has unknown keys {unknown} (known: {', '.join(PROFILE_KEYS)})")
+def _choices(raw: dict[str, object], where: str, prefix: str) -> dict[str, object]:
+    # 0245: null is the same as absent for every choice; a set value is checked by its type.
     out: dict[str, object] = {}
-    if "literacy" in value:
-        literacy = value["literacy"]
-        # 0134: the value set is the manifest docs.literacy one, imported, never copied.
+    literacy = raw.get("reading_level")
+    if literacy is not None:
+        # 0134: the value set is the manifest docs.reading_level one, imported, never copied.
         if not isinstance(literacy, str) or not _literacy_ok(literacy):
             levels = ", ".join(f'"{level}"' for level in LITERACY_LEVELS)
             raise _fail(
                 where,
-                f"{key}.literacy",
-                f"must be one of {levels}, or {LITERACY_PROFILE}<project-relative path>",
+                f"{prefix}reading_level",
+                f"must be null, one of {levels}, or {LITERACY_PROFILE}<project-relative path>",
             )
         out["literacy"] = literacy
-    if "dash_ban" in value:
-        if not isinstance(value["dash_ban"], bool):
-            raise _fail(where, f"{key}.dash_ban", "must be true or false")
-        out["dash_ban"] = value["dash_ban"]
+    dashes = raw.get("no_long_dashes")
+    if dashes is not None:
+        if not isinstance(dashes, bool):
+            raise _fail(where, f"{prefix}no_long_dashes", "must be true, false or null")
+        out["dash_ban"] = dashes
+    source = raw.get("guidance_source")
+    if source is not None:
+        if source not in GUIDANCE_SOURCES:
+            raise _fail(
+                where, f"{prefix}guidance_source", f"must be one of {', '.join(GUIDANCE_SOURCES)}"
+            )
+        out["guidance_source"] = source
+    language = raw.get("script_language")
+    if language is not None:
+        if not isinstance(language, str) or not _LANGUAGE.fullmatch(language):
+            raise _fail(
+                where, f"{prefix}script_language", "must be null or a lowercase language name"
+            )
+        out["script_language"] = language
     return out
 
 
@@ -100,10 +118,9 @@ def validate(raw: object, where: str, prefix: str = "") -> dict[str, object]:
             f"has unknown keys {unknown} (known: {', '.join(TOP_KEYS)})",
         )
     out: dict[str, object] = {}
-    if "main_refusals" in raw:
-        out["main_refusals"] = _refusals(raw["main_refusals"], where, f"{prefix}main_refusals")
-    if "profile" in raw:
-        out.update(_profile(raw["profile"], where, prefix))
+    if raw.get("hard_stops") is not None:
+        out["main_refusals"] = _refusals(raw["hard_stops"], where, f"{prefix}hard_stops")
+    out.update(_choices(raw, where, prefix))
     return out
 
 

@@ -28,6 +28,7 @@ from tests.adversarial.corpus import (
     GIT_LOG_COUNT_VALUE_266,
     GIT_LOG_SEARCH_269,
     GIT_LOG_SEARCH_VALUE_269,
+    LEDGER_CODES_0247,
     REFUSED_FIELDS_HUNT_269,
     S3C_HUNT,
     S3C_HUNT_DECLARED,
@@ -145,8 +146,8 @@ def test_a_hunt_form_beside_a_declared_or_install_row_is_refused(
 ) -> None:
     # 228 S3c: the manifest declares the command and enables every install ecosystem.
     doc = {
-        "stack": {"unit_test_cmd": "bash scripts/test.sh"},
-        "dependencies": {"installs": ["npm", "python", "cargo", "go"]},
+        "commands": {"unit_test": "bash scripts/test.sh"},
+        "packages": {"allowed_installers": ["npm", "python", "cargo", "go"]},
     }
     repo, wt = _narrowed_repo(tmp_path, json.dumps(doc))
     assert decide(_cwd(_b("coder", "bash scripts/test.sh"), repo), CFG).allow
@@ -238,6 +239,21 @@ def test_a_refused_fields_hunt_form_names_its_class(
     # 269: the check that owns the class names it, wherever it sits in the agent's chain.
     reasons = [evaluate(script, _b(agent, form), *flags) for script, flags in CHAINS[agent]]
     assert any(want in str(r) for r in reasons if r), (cls, reasons)
+
+
+@pytest.mark.parametrize(("cls", "args", "missing"), LEDGER_CODES_0247)
+def test_a_ledger_append_takes_both_codes_or_neither(
+    cls: str, args: str, missing: str | None
+) -> None:
+    # 0247: a plain-number file's append carries no codes; one code alone names the other.
+    command = f"python3 {SCRIPTS_DIR / 'append_ledger.py'} {args}"
+    got = decide(_b("charter-docs", command), CFG)
+    if missing is None:
+        assert got.allow, cls
+        return
+    assert_denied(_b("charter-docs", command))
+    assert got.reason is not None and jail.R_LEDGER_ARGS in got.reason, (cls, got.reason)
+    assert f"alone is missing {missing}" in got.reason, cls
 
 
 # 267: the readers whose git grammar admits content reads; each meets the credential check first.

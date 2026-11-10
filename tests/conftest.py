@@ -16,16 +16,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib.config import Config, LedgerDecl  # noqa: E402
+from lib.config import Config  # noqa: E402
+from lib.manifest import Docs  # noqa: E402
 
 # 0044: the fake repo the jail and hook-script cases share; it is not a real git repo.
 CWD = "/work/repo"
-CFG = Config(
-    charter_root=Path("/work/Charter"),
-    ledger=LedgerDecl(
-        Path("/work/Charter/decision-log.md"), "markdown-table-row", "{seq:04d}", "last-row-id"
-    ),
-)
+CFG = Config(charter_root=Path("/work/Charter"))
+# 0245, 0247: the fake repo's manifest names this decisions file in its local docs folder.
+CWD_DOCS = Docs(decisions_filename="decision-log.md")
 WT = f"{CWD}/.claude/worktrees/20261015-120000-u1"
 FAKE_UNITS = frozenset({f"{CWD}/.claude/worktrees/u1", WT})
 # issue 11: the integration branch of the train CWD stands in for.
@@ -35,8 +33,14 @@ TRAIN_BRANCH = "daedalus/20261015-120000"
 @pytest.fixture
 def jail_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     # 0022: CWD is not a real repo; register its fake unit worktrees, real repos query git.
-    from lib import dispatch_binding, gh_policy, hook_io, jail
+    from lib import dispatch_binding, gh_policy, hook_io, jail, ledger
 
+    real_docs = ledger._docs
+
+    def docs(repo_root: Path) -> Docs | None:
+        return CWD_DOCS if str(repo_root) == CWD else real_docs(repo_root)
+
+    monkeypatch.setattr(ledger, "_docs", docs)
     real = getattr(jail, "_registered_worktrees", None)
 
     def fake(repo: str) -> frozenset[str]:

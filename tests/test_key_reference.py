@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import ast
+import json
 import re
+from pathlib import Path
 
 from lib.project_keys import (
     CONFIG_FILE,
     KEY_ROWS,
     MANIFEST_FILE,
+    NOT_ACTIVE,
     OPERATOR_FILE_NAME,
     REFERENCE_HEADER,
     config_keys,
@@ -81,63 +85,293 @@ def test_reference_rows_name_their_file() -> None:
         assert not _VERSION.search(" ".join(cells)), key
 
 
-def test_agent_models_row_closes_the_config_section() -> None:
-    # 0110, spec 4: agent_models closes the config rows but the 0235 operator override.
+def test_models_agents_row_names_the_catalog_models() -> None:
+    # 0110, 0245: the per-agent model map is an override inside the models group.
     keys = [key for key, file, _ in _rows() if file == CONFIG_FILE]
-    assert keys[-2:] == ["agent_models", "operator"] and "audit_round_budget" not in keys
-    models = KEY_ROWS[(CONFIG_FILE, "agent_models")]
-    assert models.kind == "object" and models.default.startswith("`{}`")
+    assert "audit_round_budget" not in keys and "agent_models" not in keys
+    models = KEY_ROWS[(CONFIG_FILE, "models.agents")]
+    assert models.kind == "object" and models.default.startswith("`{}`") and models.override
     assert '`"sonnet"`, `"opus"`, `"haiku"` or `"fable"`' in models.values
-    # 0187: inside a run coder_models sets the coder, so the example names another agent.
+    # 0187: inside a run models.coder sets the coder, so the example names another agent.
     assert models.example == '`{"planner": "sonnet"}`'
 
 
-def test_github_key_has_no_row() -> None:
-    # 0172: the dropped github key has no key reference row; the switches follow features.ledger.
-    keys = [key for key, file, _ in _rows() if file == MANIFEST_FILE]
-    assert "features.github" not in keys
-    assert keys[keys.index("features.ledger") + 1] == "features.dependency_web_lookup"
+def test_no_row_keeps_a_cut_or_renamed_key() -> None:
+    # 0172, 0245, 0247: no old name has a row; the switches live in the checks group.
+    keys = {key for key, _, _ in _rows()}
+    assert not {k for k in keys if k.startswith(("features.", "stack.", "priorities."))}
+    for old in OLD_TOP_NAMES:
+        assert old not in keys and not any(k.startswith(old + ".") for k in keys), old
 
 
-def test_reader_keys_follow_the_reader_dataclasses() -> None:
-    # 0076: a field added to a reader adds a key, so the reference test sees it.
-    from dataclasses import fields
-
-    from lib.config import Config
+def test_reader_keys_follow_the_reader_tables() -> None:
+    # 0245: the readers' name tables are the one source of every key name.
+    from lib.config import CONFIG_KEYS, LIMIT_KEYS, MODEL_KEYS, RULE_SOURCE_KEYS
     from lib.manifest import (
-        ASSETS_KEYS,
-        DEPENDENCIES_KEYS,
-        DEV_SERVER_KEYS,
+        CHECK_KEYS,
+        COMMAND_KEYS,
+        COMPLIANCE_KEYS,
         DOCS_KEYS,
-        FEATURE_KEYS,
-        FRAMEWORKS_KEYS,
+        EXEMPTION_KEYS,
+        LOCAL_TESTING_KEYS,
+        PACKAGE_KEYS,
         PRIORITY_ROWS,
-        Manifest,
+        PROHIBITED_KEYS,
+        TOP_KEYS,
     )
+    from lib.operator_file import TOP_KEYS as OPERATOR_TOP_KEYS
 
-    tops = {key.split(".", 1)[0].removesuffix("[]") for key in config_keys()}
-    assert tops == {f.name for f in fields(Config)}
-    assert {f"features.{k}" for k in FEATURE_KEYS} <= set(manifest_keys())
-    # 0134: docs is a nested block like features, so its keys carry the block name.
-    assert {f"docs.{k}" for k in DOCS_KEYS} <= set(manifest_keys())
-    leaves = {key.rsplit(".", 1)[-1] for key in manifest_keys()}
-    # 0129: priorities is a nested block too; its rows are priorities.<field> keys.
-    assert {f"priorities.{row}" for row in PRIORITY_ROWS} <= set(manifest_keys())
-    assert {f"frameworks.{k}" for k in FRAMEWORKS_KEYS} <= set(manifest_keys())
-    # 0192, 0164: assets and dev_server are nested blocks; stack.package_manager is a leaf.
-    assert {f"assets.{k}" for k in ASSETS_KEYS} <= set(manifest_keys())
-    assert {f"dev_server.{k}" for k in DEV_SERVER_KEYS} <= set(manifest_keys())
-    assert "stack.package_manager" in manifest_keys()
-    # 0196: dependencies is a nested block too.
-    assert {f"dependencies.{k}" for k in DEPENDENCIES_KEYS} <= set(manifest_keys())
-    nested = {"features", "docs", "priorities", "frameworks", "assets", "dev_server"}
-    nested.add("dependencies")
-    assert {f.name for f in fields(Manifest)} - nested <= leaves
+    def tops(keys: tuple[str, ...]) -> set[str]:
+        return {key.split(".", 1)[0].removesuffix("[]") for key in keys}
+
+    assert tops(manifest_keys()) == set(TOP_KEYS)
+    assert tops(config_keys()) == set(CONFIG_KEYS)
+    assert set(operator_keys()) == set(OPERATOR_TOP_KEYS)
+    groups = {
+        "commands": COMMAND_KEYS,
+        "docs": DOCS_KEYS,
+        "checks": CHECK_KEYS,
+        "prohibited_writes": PROHIBITED_KEYS,
+        "code_review_exemptions": EXEMPTION_KEYS,
+        "packages": PACKAGE_KEYS,
+        "local_testing": LOCAL_TESTING_KEYS,
+        "compliance_rules": COMPLIANCE_KEYS,
+        "run_output_priority": PRIORITY_ROWS,
+    }
+    for group, names in groups.items():
+        want = {f"{group}.{name}" for name in names}
+        assert want == {k for k in manifest_keys() if k.startswith(group + ".")}, group
+    assert {f"models.{k}" for k in MODEL_KEYS} <= set(config_keys())
+    assert {f"limits.{k}" for k in LIMIT_KEYS} <= set(config_keys())
+    assert {f"coding_rules[].{k}" for k in RULE_SOURCE_KEYS} <= set(config_keys())
 
 
-def test_standing_rules_key_has_its_reference_row() -> None:
-    # 0090: the planner's locator key is documented in the config section of the README table.
-    assert "standing_rules" in config_keys()
-    rows = {(file, key): cells for key, file, cells in _rows()}
-    cells = rows[(CONFIG_FILE, "standing_rules")]
-    assert "charter_root" in cells[2] and cells[3].startswith("`null`")
+def test_every_named_reader_exists_and_names_the_key() -> None:
+    # 0242: a reader is a real file whose text names the key's last segment.
+    bad = []
+    for (file, key), row in KEY_ROWS.items():
+        leaf = key.rsplit(".", 1)[-1].removesuffix("[]")
+        for reader in row.readers:
+            path = REPO_ROOT / reader
+            if not path.is_file() or leaf not in path.read_text(encoding="utf-8"):
+                bad.append(f"{file} {key}: {reader}")
+    assert bad == []
+
+
+def test_every_affects_is_one_plain_sentence() -> None:
+    # 0242: the wizard puts affects into a question, so it holds no key name, path or id.
+    for (file, key), row in KEY_ROWS.items():
+        text = row.affects
+        assert text and text.endswith(".") and text[0].isupper(), (file, key)
+        assert not set(text) & set("`_/<>"), (file, key, text)
+        assert text.count(". ") == 0, (file, key, text)
+
+
+def test_a_key_without_readers_says_it_is_not_active() -> None:
+    # 0242: readers=() and the not-active opening go together, both ways.
+    for (file, key), row in KEY_ROWS.items():
+        assert (row.readers == ()) == row.affects.startswith(NOT_ACTIVE), (file, key)
+
+
+# 0245: spec section 1; plugin vocabulary never names a key.
+BANNED_WORDS = frozenset(
+    {"train", "jail", "wrapper", "unit", "ledger", "charter", "standing", "pack", "driver"}
+)
+# 0245: "unit test" is every developer's own term, so unit is allowed in that one name only.
+UNIT_TEST = "unit_test"
+OLD_TOP_NAMES = (
+    "features",
+    "stack",
+    "jail_narrowing",
+    "assets",
+    "dev_server",
+    "dependencies",
+    "frameworks",
+    "priorities",
+    "trains_dir",
+    "ledger",
+    "charter_root",
+    "standing_rules",
+    "excluded_roots",
+    "standards_sources",
+    "operator_signing_keys",
+    "max_concurrent_builders",
+    "audit_retention_days",
+    "wrapper_read_roots",
+    "unit_token_budget",
+    "coder_models",
+    "fable_available",
+    "agent_models",
+    "operator",
+    "main_refusals",
+    "profile",
+    "manifest_version",
+    "service_name",
+    "purpose",
+    "entrypoints",
+    "run_definitions_folder",
+)
+
+
+def _words(segment: str) -> list[str]:
+    return segment.removesuffix("[]").strip("<>").split("_")
+
+
+def test_every_key_name_follows_the_naming_rule() -> None:
+    # 0245: lowercase words of plain English, at most three per name, no plugin vocabulary.
+    bad = []
+    for file, key in KEY_ROWS:
+        segments = key.split(".")
+        group = segments[0]
+        for segment in segments:
+            words = _words(segment)
+            banned = BANNED_WORDS - ({"unit"} if segment == UNIT_TEST else set())
+            if not re.fullmatch(r"<?[a-z][a-z_]*(\[\])?>?", segment) or len(words) > 3:
+                bad.append((file, key, segment))
+            if banned & set(words):
+                bad.append((file, key, segment))
+            if segment != group and set(_words(group)) & set(words):
+                bad.append((file, key, segment))
+    assert bad == []
+
+
+def _settings_files() -> list[tuple[str, str]]:
+    # 0245: every tracked settings file in the repository, with the reader form it takes.
+    import subprocess
+
+    listed = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "ls-files", "*.json"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    out = []
+    for path in listed:
+        name = path.rsplit("/", 1)[-1]
+        if name == "service-manifest.json" or name.startswith("service-manifest."):
+            out.append((path, "manifest"))
+        elif path.startswith("evals/fixtures/") and name == "manifest.json":
+            out.append((path, "manifest"))
+        elif name == "daedalus-config.json" or (
+            path.startswith("docs/examples/") and name.startswith("config.")
+        ):
+            out.append((path, "config"))
+        elif path.startswith("docs/examples/") and name.startswith("operator."):
+            out.append((path, "operator"))
+    return out
+
+
+def test_every_tracked_settings_file_loads_through_its_reader(tmp_path: Path) -> None:
+    # 0245: each reader refuses an unknown key at every level, so no old name survives.
+    from lib.config import load_config
+    from lib.manifest import load as load_manifest
+    from lib.operator_file import validate
+
+    files = _settings_files()
+    assert len(files) >= 16, files
+    for path, form in files:
+        source = REPO_ROOT / path
+        if form == "manifest":
+            (tmp_path / "service-manifest.json").write_bytes(source.read_bytes())
+            assert load_manifest(tmp_path) is not None, path
+        elif form == "config":
+            load_config(path=source)
+        else:
+            validate(json.loads(source.read_text(encoding="utf-8")), path)
+
+
+OLD_DOTTED = re.compile(
+    r"features\.[a-z_]+|stack\.[a-z_]+_cmd|stack\.package_manager|docs\.literacy"
+    r"|jail_narrowing|dependencies\.installs|dependencies\.minimum_release_age\w*|dev_server\."
+    r"|trains_dir|wrapper_read_roots|unit_token_budget|coder_models|audit_retention_days"
+    r"|standards_sources|operator_signing_keys|profile\.(?:literacy|dash_ban)"
+    r"|priorities\.(?:drivers|rules|principles|agents)|max_concurrent_builders"
+    r"|frameworks\.(?:pack_dir|default_packs|packs)|assets\.(?:roots|extensions|max_bytes)"
+    r"|charter_root|excluded_roots|agent_models|fable_available|main_refusals|standing_rules"
+    r"|\bentrypoints\b|run_definitions_folder"
+)
+PROSE = ("README.md", "docs/howto/README.md", "docs/project-requirements.md")
+# 0245: a run definition's when condition names a recorded feature field, never a settings key.
+DEFINITION_SYNTAX = "| `when` | A condition that skips the stage"
+# 0245: old names kept as internal identifiers or placeholders, cut from a text before the scan.
+ALLOWED_FORMS = (
+    "<charter_root>",  # path placeholder the skills and messages fill from local_docs_folder
+    "charter_root: ",  # State Block field and the begin command's line
+    "`charter_root`, `charter_base`",  # README list of train state fields
+    "declared_charter_root",  # premise test name in controls/base.json
+    "models.fable_available",  # the key itself, written with its group
+    '"fable_available"',  # the key inside the models group of a JSON example
+    "standing_rules.py",  # script name
+    "standing_rules: ",  # that script's message prefix
+    "standing_rules.AREAS",  # that script's area table
+    "agent_models.py",  # module name
+    "excluded_roots.py",  # hook script name
+    "checks/excluded_roots",  # hook source path in controls/src.json
+    "test_excluded_roots",  # test file name
+    "manifest.docs.literacy",  # attribute path an overlap row cites at its line
+)
+# 0245: whole string literals that are dict keys or state fields, never settings keys.
+INTERNAL_IDENTIFIERS = frozenset(
+    {
+        "charter_root",
+        "max_concurrent_builders",
+        "excluded_roots",
+        "main_refusals",
+        "fable_available",
+    }
+)
+
+
+def _old_names(text: str) -> list[str]:
+    for form in ALLOWED_FORMS:
+        text = text.replace(form, "")
+    return OLD_DOTTED.findall(text)
+
+
+def test_no_doc_skill_or_agent_names_an_old_key() -> None:
+    # 0245: the README, the guides, every skill and agent file and the judge books use new names.
+    paths = [REPO_ROOT / p for p in PROSE]
+    for folder in ("skills", "agents", "packs"):
+        paths += sorted((REPO_ROOT / folder).rglob("*.md"))
+    found = []
+    for path in paths:
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if line.startswith(DEFINITION_SYNTAX):
+                continue
+            found += [f"{path.relative_to(REPO_ROOT)}:{n}: {m}" for m in _old_names(line)]
+    assert found == []
+
+
+def _json_strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for k, v in value.items() for s in [k, *_json_strings(v)]]
+    if isinstance(value, list):
+        return [s for item in value for s in _json_strings(item)]
+    return []
+
+
+def _literals(path: Path) -> list[tuple[int, str]]:
+    text = path.read_text(encoding="utf-8")
+    if path.suffix == ".json":
+        return [(0, s) for s in _json_strings(json.loads(text))]
+    tree = ast.parse(text)
+    return [
+        (node.lineno, node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+
+
+def test_no_script_string_names_an_old_key() -> None:
+    # 0245: messages, rows and control texts under scripts/ use the new names too.
+    found = []
+    for path in sorted((REPO_ROOT / "scripts").rglob("*")):
+        if path.suffix not in (".py", ".json") or "__pycache__" in path.parts:
+            continue
+        for n, value in _literals(path):
+            if value in INTERNAL_IDENTIFIERS:
+                continue
+            found += [f"{path.relative_to(REPO_ROOT)}:{n}: {m}" for m in _old_names(value)]
+    assert found == []

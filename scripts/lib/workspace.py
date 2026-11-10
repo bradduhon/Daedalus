@@ -29,7 +29,7 @@ from lib.audit import SESSION_ID, DataDirError, cache_dir_or_probe, ensure_proje
 from lib.audit_proof import SUMMARY_DIR
 from lib.coder_model import REFUTED_PREFIX
 from lib.config import Config, ConfigError, load_config
-from lib.ledger import LedgerError, read_sequence, resolve_ledger
+from lib.ledger import LedgerError, probe_line, read_sequence, resolve_ledger
 from lib.train_state import TRAIN_ID as _TRAIN_ID
 from lib.train_state import TRAIN_MARKER
 
@@ -289,17 +289,8 @@ def clear_train(repo: Path) -> Path:
 DIRTY_LIMIT = 10
 RERUN = "start the Build Train again (/daedalus:run)."
 CLEAN_NEXT = f"Next: commit or stash your changes from your own shell, then {RERUN}"
-LEDGER_NONE = "ledger: none declared and none found."
-LEDGER_OFF = "ledger: off in the service manifest."
-LEDGER_QUESTION = (
-    "This repo has no decision ledger. Options: name an existing file, or let Daedalus "
-    "create docs/decisions.md as a table. Which?"
-)
-LEDGER_TABLE = "| Id | Date | Ruling | Supersedes | Follow-ups |\n|---|---|---|---|---|"
-
-
-class LedgerQuestion(WorkspaceError):
-    pass
+# 0247: with no decisions file named, a run records no decisions and asks nothing about it.
+LEDGER_NONE = "decisions: none, no decisions file is named in the service manifest."
 
 
 def _out(repo: Path, *args: str) -> str:
@@ -349,19 +340,17 @@ def repo_root(cwd: Path) -> Path:
 
 
 def _ledger_line(repo: Path, config: Config, ledger_feature: bool | None) -> str:
-    # 0069: off resolves nothing; absent uses a found ledger and never asks; on asks when none.
+    # 0247: a named decisions file or none; nothing is searched for and nothing is asked.
     if ledger_feature is False:
-        return LEDGER_OFF
+        return LEDGER_NONE
     try:
         ledger = resolve_ledger(str(repo), config)
-        if ledger is None and ledger_feature is None:
-            return LEDGER_NONE
         if ledger is None:
-            raise LedgerQuestion(f"{LEDGER_NONE}\n{LEDGER_QUESTION}\n{LEDGER_TABLE}")
+            return LEDGER_NONE
         seq = read_sequence(ledger)
     except LedgerError as exc:
         raise WorkspaceError(str(exc)) from exc
-    return f"ledger: {ledger.path} ({ledger.origin}, {ledger.format}, seq={seq})"
+    return probe_line(ledger, seq)
 
 
 def _scratch(repo: Path) -> None:
@@ -437,7 +426,8 @@ def _open_train(repo: Path, train_id: str, state: dict[str, object]) -> None:
 
 def _config_lines(config: Config, cache: str | None) -> list[str]:
     policy = f"{config.policy.engine} {config.policy.path}" if config.policy else "none declared"
-    # 0019: a pack has no path in config.json; the standards skill reads it from this line.
+    # 0019, 0245: a coding_rules builtin has no path in config.json, unlike a folder or file
+    # entry; the standards skill reads its path from this line.
     packs = [f"{s.name} at {s.path}" for s in config.standards_sources if s.kind == "pack"]
     return [
         f"policy: {policy}  standards: {len(config.standards_sources)} sources",
@@ -952,7 +942,7 @@ def finish(repo: Path) -> list[str]:
     ]
     records = _audit_records(repo, state) if pending else []
     for unit in pending:
-        require_verified(repo, records, unit, _unit_label(train_id, str(unit["name"])))
+        require_verified(repo, train_id, records, unit, _unit_label(train_id, str(unit["name"])))
     _git(repo, "switch", "-q", integration)
     lines = _merge_all(repo, state, train_id, merging)
     _finished(repo, train_id, merging)
@@ -1084,6 +1074,7 @@ def unit_verified(
     worktree: Path,
     exemptions: dict[str, object] | None = None,
     tip: str | None = None,
+    run: str | None = None,
 ) -> bool:
     # 0231: the unit's own newest reply, selected by its key line, never by window position.
     reply = newest_verdict(records, worktree)
@@ -1097,7 +1088,7 @@ def unit_verified(
     if not rows or tip is None or not isinstance(seq, int) or isinstance(seq, bool):
         return False
     granted = train_state.record(exemptions or {}, str(seq))
-    return all(audit_proof._exempt(granted.get(str(n)), tip) for n in range(1, len(rows) + 1))
+    return all(audit_proof._exempt(granted.get(str(n)), tip, run) for n in range(1, len(rows) + 1))
 
 
 def unit_refutations(records: list[dict[str, object]], worktree: Path) -> int:
@@ -1208,6 +1199,7 @@ VERIFY_NEXT = (
 
 
 # 229: unit record {"exemptions": {"<reply seq>": {"<row>": {ledger_id, tip, tracking[, other]}}}}.
+# 0249: with no decisions file, finding, reason and run_id stand in place of ledger_id.
 UNIT_EXEMPTIONS = "exemptions"
 
 
@@ -1261,18 +1253,23 @@ def _wave(
                 "Next: create the unit worktree with daedalus_workspace.py create first."
             )
         records = _audit_records(repo, state) if records is None else records
-        require_verified(repo, records, unit, uid)
+        require_verified(repo, train_id, records, unit, uid)
         wave.append(unit)
     return wave
 
 
 def require_verified(
-    repo: Path, records: list[dict[str, object]], unit: dict[str, object], uid: str
+    repo: Path,
+    train_id: str,
+    records: list[dict[str, object]],
+    unit: dict[str, object],
+    uid: str,
 ) -> None:
     # 234: the one verdict gate merge and finish share; an exemption binds to the unit tip.
     exempt = train_state.record(unit, UNIT_EXEMPTIONS)
     tip = unit_tip(repo, unit) if exempt else None
-    if not unit_verified(records, Path(str(unit["path"])), exempt, tip):
+    run = audit_proof.accepting_run(repo, train_id) if exempt else None
+    if not unit_verified(records, Path(str(unit["path"])), exempt, tip, run):
         raise WorkspaceError(
             f"unit {uid} has no recorded verifier verdict {VERIFIED} for its worktree "
             f"{unit['path']}. Next: {VERIFY_NEXT}"

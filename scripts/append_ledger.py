@@ -26,27 +26,36 @@ from lib.ledger import (  # noqa: E402
     highest_id_table,
     id_table_span,
     next_id,
+    probe_line,
     read_sequence,
     resolve_ledger,
     split_row,
+    uses_codes,
 )
 from lib.project_root import project_root  # noqa: E402
 from lib.repo_root import checkout_git_dir  # noqa: E402
 
 # 22: the --help text, kept below the future import as a plain string.
 DESCRIPTION = (
-    "Append one entry to the declared or probed ledger under a lock (0004). "
-    "--probe prints the resolved ledger and its sequence. An append checks --expected-seq "
-    "against the ledger under the lock and exits 2 on a mismatch, 1 on any other error. "
-    "A table row's Supersedes and Ruling cells are checked when the header has the column "
-    "(0090, 0094); rows already in the ledger are never re-checked. The next id follows the "
-    "highest id of any Id table, and an id already in the ledger is refused. A declared "
-    "ledger.branch refuses the append and the probe on any other branch (issue 186)."
+    "Append one entry to the decisions file the service manifest names under a lock (0004, "
+    "0247). --probe prints the named decisions file, its layout, its sequence and its id shape "
+    "(ids=plain or ids=three-part), and appends "
+    "nothing. A named file that does not exist yet is created as a table on the first append. "
+    "An append checks --expected-seq against the file under the lock and exits 2 on a "
+    "mismatch, 1 on any other error. A table row's Supersedes and Ruling cells are checked when "
+    "the header has the column (0090, 0094); rows already in the file are never re-checked. The "
+    "next id follows the highest id of any Id table, in the shape of the last id: a plain "
+    "number keeps its width, and a number with a repository code and a type takes --repo and "
+    "--type, which a plain-number file refuses. An empty table or a new file starts at 0001. An "
+    "id already in the file is refused. A docs.git_branch refuses the append and the probe on "
+    "any other branch (issue 186)."
 )
 NONE_FOUND = (
-    "ledger: none declared and none found. "
-    "Next: declare a ledger block or create one (docs/project-requirements.md)"
+    "decisions: no decisions file is named, so no decision is recorded. "
+    "Next: set docs.decisions_filename in service-manifest.json to record decisions"
 )
+# 0247: the header a named decisions file is created with on its first decision.
+DEFAULT_TABLE = "| Id | Date | Ruling | Supersedes | Follow-ups |\n|---|---|---|---|---|\n"
 _CODE = re.compile(r"[A-Za-z0-9_-]+")
 _ENTRY_LINE = re.compile(r"^## Entry [0-9]")
 LOCK_TIMEOUT_S = 5.0
@@ -90,15 +99,13 @@ def _parse(argv: list[str]) -> argparse.Namespace:
             for flag, value in (
                 ("--expected-seq", args.expected_seq),
                 ("--entry-file", args.entry_file),
-                ("--repo", args.repo),
-                ("--type", args.type_),
             )
             if value is None
         ]
         if missing:
             parser.error(f"an append needs {', '.join(missing)}")
         for flag, value in (("--repo", args.repo), ("--type", args.type_)):
-            if not _CODE.fullmatch(value):
+            if value is not None and not _CODE.fullmatch(value):
                 parser.error(f"{flag} must match [A-Za-z0-9_-]+")
     args.cwd = os.path.abspath(args.cwd)
     if not os.path.isdir(args.cwd):
@@ -260,20 +267,57 @@ def _require_branch(ledger: ResolvedLedger) -> None:
     )
 
 
+def _require_codes(args: argparse.Namespace, ledger: ResolvedLedger) -> None:
+    # 0247: --repo and --type go only with ids that carry a repository code and a type.
+    given = [flag for flag, value in (("--repo", args.repo), ("--type", args.type_)) if value]
+    if uses_codes(ledger):
+        missing = sorted({"--repo", "--type"} - set(given))
+        if missing:
+            raise AppendError(
+                f"the ids of {ledger.path} carry a repository code and a type, so an append "
+                f"needs {' and '.join(missing)}. Next: pass both, as in --repo SVC --type PLT."
+            )
+        return
+    if given:
+        flags = " and ".join(given)
+        raise AppendError(
+            f"{flags} {'name' if len(given) > 1 else 'names'} a part of a three-part id, but the "
+            f"ids of {ledger.path} are plain numbers. Next: append again without {flags}, "
+            "since the next id is a plain number too."
+        )
+
+
 def _require_git(path: str) -> None:
     # M6, 0077: the owner resolves as the jail resolves it; a non-git root is refused.
     if root_info(str(project_root(Path(path))))[1] != "git":
         raise AppendError(
-            f"{path} is not inside a git repository. Next: run from the repo that declares "
-            "the ledger, or initialize the charter repo."
+            f"{path} is not inside a git repository. Next: run from the repo that names the "
+            "decisions file, or initialize the docs folder's own repository."
         )
+
+
+def _create_named(ledger: ResolvedLedger) -> None:
+    # 0247: the named file is created at its path with the default table, never a folder.
+    if os.path.lexists(ledger.path):
+        return
+    if not ledger.path.parent.is_dir():
+        raise AppendError(
+            f"the docs folder {ledger.path.parent} does not exist. Next: create the folder, or "
+            "correct docs.folder or local_docs_folder, then record the decision again."
+        )
+    _require_git(os.path.realpath(ledger.path.parent))
+    try:
+        atomic.create_once(ledger.path, DEFAULT_TABLE, 0o644)
+    except FileExistsError:
+        return
 
 
 def _lock_path(ledger: ResolvedLedger) -> Path:
     real = os.path.realpath(ledger.path)
     if not os.path.isfile(real):
         raise AppendError(
-            f"ledger {ledger.path} does not exist. Next: create it or fix the declared path."
+            f"decisions file {ledger.path} is not a file. Next: correct "
+            "docs.decisions_filename or move what sits at that path."
         )
     owner = str(project_root(Path(real).parent))
     _require_git(owner)
@@ -290,6 +334,7 @@ def _lock_path(ledger: ResolvedLedger) -> Path:
 def _append(args: argparse.Namespace, ledger: ResolvedLedger) -> str:
     entry = _read_entry(Path(args.cwd, args.entry_file))
     date = datetime.now(UTC).date().isoformat()
+    _create_named(ledger)
     lock = _lock_path(ledger)
     with ExitStack() as stack:
         try:
@@ -308,7 +353,7 @@ def _append(args: argparse.Namespace, ledger: ResolvedLedger) -> str:
                 f"sequence mismatch: ledger={current} expected={args.expected_seq}. "
                 "Next: re-read the ledger and retry with the current id."
             )
-        ids = _Ids(current + 1, args.repo, args.type_, date)
+        ids = _Ids(current + 1, args.repo or "", args.type_ or "", date)
         try:
             with open(ledger.path, encoding="utf-8", newline="") as fh:
                 raw = fh.read()
@@ -342,10 +387,11 @@ def main(argv: list[str] | None = None) -> int:
                 print(NONE_FOUND)
             else:
                 seq = read_sequence(ledger)
-                print(f"ledger: {ledger.path} ({ledger.origin}, {ledger.format}, seq={seq})")
+                print(probe_line(ledger, seq))
             return 0
         if ledger is None:
-            raise AppendError(NONE_FOUND.removeprefix("ledger: "))
+            raise AppendError(NONE_FOUND)
+        _require_codes(args, ledger)
         _require_git(args.cwd)
         print(f"appended {_append(args, ledger)}")
         return 0

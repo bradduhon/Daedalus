@@ -420,13 +420,13 @@ class TestLiveRunGrammar:
 
 class TestDeclaredCommands:
     STACK = {
-        "unit_test_cmd": "bash scripts/test.sh",
-        "typecheck_cmd": "python3 -X dev -m mypy src",
-        "lint_cmd": "env CI=1 ruff check .",
+        "unit_test": "bash scripts/test.sh",
+        "typecheck": "python3 -X dev -m mypy src",
+        "lint": "env CI=1 ruff check .",
     }
 
     def _repo(self, tmp_path: Path) -> Path:
-        repo, _ = _narrowed_repo(tmp_path, json.dumps({"stack": self.STACK}))
+        repo, _ = _narrowed_repo(tmp_path, json.dumps({"commands": self.STACK}))
         return repo
 
     def test_declared_unit_test_cmd_runs_verbatim(self, tmp_path: Path) -> None:
@@ -464,15 +464,15 @@ class TestDeclaredCommands:
     def test_each_entry_of_a_declared_command_list_runs_verbatim(self, tmp_path: Path) -> None:
         # 0192: a list declares each entry as its own verbatim command, and nothing more.
         stack = {
-            "unit_test_cmd": ["bash scripts/test.sh", "bash scripts/web-test.sh"],
-            "typecheck_cmd": ["python3 -X dev -m mypy src", "env CI=1 bash scripts/tsc.sh"],
+            "unit_test": ["bash scripts/test.sh", "bash scripts/web-test.sh"],
+            "typecheck": ["python3 -X dev -m mypy src", "env CI=1 bash scripts/tsc.sh"],
         }
-        repo, _ = _narrowed_repo(tmp_path, json.dumps({"stack": stack}))
+        repo, _ = _narrowed_repo(tmp_path, json.dumps({"commands": stack}))
         for command in ("bash scripts/web-test.sh -x", "bash scripts/tsc.sh"):
             got = evaluate(HOOK, _cwd(_b("coder", command), repo))
             assert _coder_refused(got, shell.R_INLINE), command
         # 228 S3c: each declared entry is admitted as its parsed words.
-        for command in (*stack["unit_test_cmd"], *stack["typecheck_cmd"]):
+        for command in (*stack["unit_test"], *stack["typecheck"]):
             assert decide(_cwd(_b("coder", command), repo), CFG).allow, command
 
 
@@ -507,8 +507,8 @@ class TestNestedClaudeAndPathCommands:
 
     def test_declared_executables_run_by_absolute_path(self, tmp_path: Path) -> None:
         # issue 55: the manifest's own pytest and ruff, anchored at the project root, are trusted.
-        stack = {"unit_test_cmd": ".venv/bin/pytest -q", "lint_cmd": ".venv/bin/ruff check ."}
-        repo, wt = _narrowed_repo(tmp_path, json.dumps({"stack": stack}))
+        stack = {"unit_test": ".venv/bin/pytest -q", "lint": ".venv/bin/ruff check ."}
+        repo, wt = _narrowed_repo(tmp_path, json.dumps({"commands": stack}))
         for command in (f"{repo}/.venv/bin/pip install x", f"{repo}/.venv/bin/python -c 1"):
             got = evaluate(HOOK, _cwd(_b("coder", command), repo))
             assert _coder_refused(got, shell.R_UNTRUSTED_PATH), command

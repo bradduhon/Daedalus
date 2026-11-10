@@ -176,7 +176,7 @@ Work through every step for every branch.
    status code and auth requirement matches exactly. Any unit built against a stale
    packet_version is REJECTED outright.
 4. **Scope**: any change to a protected path (`contracts/`, `.github/`, `.claude/`,
-   `service-manifest.json`, the decision ledger, or a `jail_narrowing` entry in
+   `service-manifest.json`, the decisions file, or a `prohibited_writes` entry in
    `service-manifest.json`) is REJECTED. The train's own commits the brief names are exempt:
    the contract file the Packet names, and the ledger rows of its pick commit.
 5. **Compliance**: judge every rulebook the dispatch names and write its rows in the
@@ -186,11 +186,11 @@ Work through every step for every branch.
    DEP-8 in your own section is a blocking compliance finding filed by Finding format
    item 1 as `round<n>/test_compliance_<row>_unjudged.py`, never a `no-test:` line (0196, 0197). Its
    message names the row, the reason and the two ways to clear it: turn on
-   `features.dependency_web_lookup`, or name an `Advisory export:` file in the task. It
+   `checks.online_advisory_lookup`, or name an `Advisory export:` file in the task. It
    clears only when a later round no longer marks the row N/A. A TF-0 FAIL in your own section
    is a blocking compliance finding filed the same way, as
    `round<n>/test_compliance_tf0_unjudged.py`; its message names the two ways to clear it: put
-   terraform on the session PATH, or set `features.terraform_tools` to false. It clears only
+   terraform on the session PATH, or set `checks.terraform_format` to false. It clears only
    when a later round no longer marks TF-0 FAIL (184). A `PACK_INVALID` row is a
    `no-test:` compliance finding naming the pack and its problem.
 

@@ -10,8 +10,9 @@ import pytest
 from lib import manifest
 from lib.config import load_config
 from lib.manifest import (
+    CHECK_KEYS,
+    COMPLIANCE_KEYS,
     FEATURE_KEYS,
-    FRAMEWORKS_KEYS,
     Features,
     Frameworks,
     Manifest,
@@ -23,7 +24,7 @@ from lib.project_keys import KEY_ROWS, MANIFEST_FILE, manifest_keys, starter_man
 from tests.conftest import SCRIPTS_DIR
 from tests.helpers import ends_with_next, write_manifest
 
-NARROWING = {"forbidden_paths": ["infra/"], "forbidden_extensions": [".pem"]}
+PROHIBITED = {"paths": ["infra/"], "file_types": [".pem"]}
 
 
 def _refused(repo: Path, payload: object) -> str:
@@ -35,112 +36,104 @@ def _refused(repo: Path, payload: object) -> str:
     return message
 
 
-def test_feature_keys_are_the_features_fields() -> None:
-    # 0132, 0172: the persona switches follow ledger; github was dropped.
-    assert FEATURE_KEYS == (
-        "scope",
-        "secrets_scan",
-        "scrub_file",
-        "ledger",
-        "dependency_web_lookup",
-        "terraform_tools",
+def test_the_checks_group_names_its_switches() -> None:
+    # 0245: the file names say what each switch checks; the internal fields stay.
+    assert tuple(CHECK_KEYS) == (
+        "secret_scan",
+        "online_advisory_lookup",
+        "terraform_format",
         "terraform_validate",
+        "release_banned_terms",
     )
+    assert set(CHECK_KEYS.values()) <= set(FEATURE_KEYS)
 
 
-def test_absent_manifest_gives_every_feature_its_default(tmp_path: Path) -> None:
+def test_absent_manifest_gives_every_check_its_default(tmp_path: Path) -> None:
     # 0069: no manifest is no feature; load stays None and the dataclass default is all off.
     assert load(tmp_path) is None
-    assert manifest.features(tmp_path) == Features(None, False, None, None)
+    assert manifest.features(tmp_path) == Features()
 
 
-def test_absent_features_object_gives_every_feature_its_default(tmp_path: Path) -> None:
-    write_manifest(tmp_path, {"manifest_version": 1})
+def test_absent_checks_group_gives_every_check_its_default(tmp_path: Path) -> None:
+    write_manifest(tmp_path, {})
     loaded = load(tmp_path)
-    assert loaded is not None
-    assert loaded.features == Features(scope=None, secrets_scan=False, scrub_file=None)
-    assert loaded.features.ledger is None
-    assert manifest.features(tmp_path) == loaded.features
+    assert loaded is not None and loaded.features == Features()
+    assert loaded.features.ledger is False and loaded.features.scope is None
+    write_manifest(tmp_path, {"checks": None})
+    assert load(tmp_path) == loaded
 
 
 @pytest.mark.parametrize(
     ("block", "want"),
     [
-        ({"scope": "repository"}, Features(scope="repository")),
-        ({"scope": "folder"}, Features(scope="folder")),
-        ({"scope": None}, Features()),
-        ({"secrets_scan": True}, Features(secrets_scan=True)),
-        ({"secrets_scan": False}, Features()),
-        ({"scrub_file": "docs/terms.txt"}, Features(scrub_file="docs/terms.txt")),
-        ({"scrub_file": None}, Features()),
-        ({"ledger": True}, Features(ledger=True)),
-        ({"ledger": False}, Features(ledger=False)),
-        ({"ledger": None}, Features()),
-        (
-            {
-                "scope": "folder",
-                "secrets_scan": True,
-                "scrub_file": "t.txt",
-                "ledger": False,
-            },
-            Features("folder", True, "t.txt", False),
-        ),
+        ({"secret_scan": True}, Features(secrets_scan=True)),
+        ({"secret_scan": False}, Features()),
+        ({"release_banned_terms": "docs/terms.txt"}, Features(scrub_file="docs/terms.txt")),
+        ({"release_banned_terms": None}, Features()),
+        ({"online_advisory_lookup": False}, Features(dependency_web_lookup=False)),
+        ({"terraform_format": True}, Features(terraform_tools=True)),
+        ({"terraform_validate": True}, Features(terraform_validate=True)),
     ],
 )
-def test_each_feature_key_reads_its_values(
+def test_each_check_reads_its_values(
     tmp_path: Path, block: dict[str, object], want: Features
 ) -> None:
-    write_manifest(tmp_path, {"features": block})
+    write_manifest(tmp_path, {"checks": block})
     loaded = load(tmp_path)
     assert loaded is not None and loaded.features == want
 
 
-def test_unknown_feature_key_is_refused(tmp_path: Path) -> None:
-    message = _refused(tmp_path, {"features": {"scope": "folder", "gitleaks": True}})
-    assert "gitleaks" in message
+@pytest.mark.parametrize(("filename", "on"), [("decisions.md", True), (None, False)])
+def test_the_ledger_switch_follows_the_decisions_filename(
+    tmp_path: Path, filename: str | None, on: bool
+) -> None:
+    # 0247: decisions are recorded exactly when a decisions file is named.
+    write_manifest(tmp_path, {"docs": {"decisions_filename": filename}})
+    loaded = load(tmp_path)
+    assert loaded is not None and loaded.features.ledger is on
 
 
-def test_the_dropped_github_key_is_an_unknown_key(tmp_path: Path) -> None:
-    # 0241: no dropped feature key loads; github meets the ordinary unknown-key refusal.
-    assert "github" in _refused(tmp_path, {"features": {"github": True}})
+@pytest.mark.parametrize("old", ["secrets_scan", "scope", "ledger", "github", "terraform_tools"])
+def test_an_old_check_name_is_refused_with_the_valid_names(tmp_path: Path, old: str) -> None:
+    # 0245: no alias; the refusal lists every valid name in the group.
+    message = _refused(tmp_path, {"checks": {old: True}})
+    assert f"checks has unknown keys ['{old}']" in message
+    assert "(known: " + ", ".join(CHECK_KEYS) + ")" in message
 
 
 @pytest.mark.parametrize(
     "block",
     [
-        {"scope": "repo"},
-        {"scope": ""},
-        {"scope": True},
-        {"secrets_scan": "yes"},
-        {"secrets_scan": None},
-        {"secrets_scan": 1},
-        {"ledger": "on"},
-        {"ledger": 0},
-        {"scrub_file": 3},
-        {"scrub_file": ["a"]},
+        {"secret_scan": "yes"},
+        {"secret_scan": None},
+        {"secret_scan": 1},
+        {"online_advisory_lookup": "on"},
+        {"terraform_format": 0},
+        {"release_banned_terms": 3},
+        {"release_banned_terms": ["a"]},
     ],
 )
-def test_bad_scope_value_is_refused(tmp_path: Path, block: dict[str, object]) -> None:
-    # 0073: a value outside the field's type is refused, as jail_narrowing refuses one.
-    _refused(tmp_path, {"features": block})
+def test_a_bad_check_value_is_refused(tmp_path: Path, block: dict[str, object]) -> None:
+    # 0073: a value outside the field's type is refused, as prohibited_writes refuses one.
+    _refused(tmp_path, {"checks": block})
 
 
-@pytest.mark.parametrize("payload", [{"features": []}, {"features": "on"}, {"features": 1}])
-def test_features_that_is_not_an_object_is_refused(tmp_path: Path, payload: object) -> None:
+@pytest.mark.parametrize("payload", [{"checks": []}, {"checks": "on"}, {"checks": 1}])
+def test_checks_that_is_not_an_object_is_refused(tmp_path: Path, payload: object) -> None:
     _refused(tmp_path, payload)
 
 
 @pytest.mark.parametrize(
     "scrub", ["/etc/terms.txt", "../terms.txt", "a/../../b", "a\\b", "*.txt", "", "./t.txt"]
 )
-def test_scrub_file_outside_the_project_is_refused(tmp_path: Path, scrub: str) -> None:
-    _refused(tmp_path, {"features": {"scrub_file": scrub}})
+def test_banned_terms_file_outside_the_project_is_refused(tmp_path: Path, scrub: str) -> None:
+    _refused(tmp_path, {"checks": {"release_banned_terms": scrub}})
 
 
-def test_jail_narrowing_unchanged_beside_features(tmp_path: Path) -> None:
-    write_manifest(tmp_path, {"jail_narrowing": NARROWING})
+def test_prohibited_writes_unchanged_beside_checks(tmp_path: Path) -> None:
+    write_manifest(tmp_path, {"prohibited_writes": PROHIBITED})
     alone = load(tmp_path)
-    write_manifest(tmp_path, {"jail_narrowing": NARROWING, "features": {"secrets_scan": True}})
+    write_manifest(tmp_path, {"prohibited_writes": PROHIBITED, "checks": {"secret_scan": True}})
     beside = load(tmp_path)
     assert alone is not None and beside is not None
     assert (beside.forbidden_paths, beside.forbidden_extensions) == (("infra/",), (".pem",))
@@ -148,11 +141,11 @@ def test_jail_narrowing_unchanged_beside_features(tmp_path: Path) -> None:
         beside.forbidden_paths,
         beside.forbidden_extensions,
     )
-    assert beside.features == Features(secrets_scan=True)
+    assert beside.features.secrets_scan is True
 
 
-def test_trains_dir_is_read_from_the_manifest(tmp_path: Path) -> None:
-    write_manifest(tmp_path, {"trains_dir": "ops/trains"})
+def test_custom_workflows_folder_is_read_from_the_manifest(tmp_path: Path) -> None:
+    write_manifest(tmp_path, {"custom_workflows_folder": "ops/trains"})
     loaded = load(tmp_path)
     assert loaded is not None and loaded.trains_dir == "ops/trains"
     write_manifest(tmp_path, {})
@@ -160,20 +153,22 @@ def test_trains_dir_is_read_from_the_manifest(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("value", ["/abs/trains", "../trains", "", 7, ["trains"]])
-def test_trains_dir_outside_the_project_is_refused(tmp_path: Path, value: object) -> None:
-    _refused(tmp_path, {"trains_dir": value})
+def test_custom_workflows_folder_outside_the_project_is_refused(
+    tmp_path: Path, value: object
+) -> None:
+    _refused(tmp_path, {"custom_workflows_folder": value})
 
 
-def test_unit_test_cmd_is_read_from_the_manifest_stack(tmp_path: Path) -> None:
-    write_manifest(tmp_path, {"stack": {"language": "python", "unit_test_cmd": "pytest -q"}})
+def test_unit_test_command_is_read_from_the_commands_group(tmp_path: Path) -> None:
+    write_manifest(tmp_path, {"commands": {"unit_test": "pytest -q"}})
     loaded = load(tmp_path)
     assert loaded is not None and loaded.unit_test_cmd == ("pytest -q",)
-    write_manifest(tmp_path, {"stack": {"unit_test_cmd": None}})
+    write_manifest(tmp_path, {"commands": {"unit_test": None}})
     assert load(tmp_path) == Manifest()
 
 
-@pytest.mark.parametrize("payload", [{"stack": []}, {"stack": {"unit_test_cmd": 5}}])
-def test_bad_stack_is_refused(tmp_path: Path, payload: object) -> None:
+@pytest.mark.parametrize("payload", [{"commands": []}, {"commands": {"unit_test": 5}}])
+def test_bad_commands_group_is_refused(tmp_path: Path, payload: object) -> None:
     _refused(tmp_path, payload)
 
 
@@ -218,115 +213,107 @@ def test_project_files_resolve_from_the_project_root_only(
                 offenders.append(f"{path.relative_to(SCRIPTS_DIR)}:{getattr(scope, 'lineno', 0)}")
     assert offenders == []
     project, home, plugin = (tmp_path / name for name in ("project", "home", "plugin"))
-    for root, scope in ((project, "folder"), (home, "repository"), (plugin, "repository")):
+    for root, scan in ((project, True), (home, False), (plugin, False)):
         (root / ".claude" / "daedalus").mkdir(parents=True)
-        write_manifest(root, {"features": {"scope": scope}, "trains_dir": f"{root.name}-trains"})
-        config = {"charter_root": str(root / "Charter")}
+        body = {"checks": {"secret_scan": scan}}
+        write_manifest(root, body | {"custom_workflows_folder": f"{root.name}-trains"})
+        config = {"local_docs_folder": str(root / "Charter")}
         (root / ".claude" / "daedalus" / "config.json").write_text(json.dumps(config))
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin))
     loaded = load(project)
     assert loaded is not None
-    assert (loaded.features.scope, loaded.trains_dir) == ("folder", "project-trains")
+    assert (loaded.features.secrets_scan, loaded.trains_dir) == (True, "project-trains")
     assert load_config(cwd=str(project)).charter_root == project / "Charter"
 
 
-# 0157: the frameworks block names the project's pack folder.
+# 0157, 0245: compliance_rules names the project's rulebook folder.
 
 
-def test_absent_frameworks_block_reads_the_shipped_packs(tmp_path: Path) -> None:
+def test_absent_compliance_rules_reads_the_builtin_rulebooks(tmp_path: Path) -> None:
     write_manifest(tmp_path, {})
     loaded = load(tmp_path)
     assert loaded is not None and loaded.frameworks == Frameworks(None, True)
-    assert FRAMEWORKS_KEYS == ("pack_dir", "default_packs", "packs")
+    assert COMPLIANCE_KEYS == ("folder", "use_builtin", "extra_builtin")
 
 
 @pytest.mark.parametrize(
     ("block", "want"),
     [
         ({}, Frameworks()),
-        ({"pack_dir": "compliance/packs"}, Frameworks("compliance/packs", True)),
-        ({"pack_dir": None, "default_packs": False}, Frameworks(None, False)),
-        ({"pack_dir": "packs/", "default_packs": True}, Frameworks("packs/", True)),
-        ({"packs": ["cost-tier"]}, Frameworks(None, True, ("cost-tier",))),
-        ({"packs": []}, Frameworks()),
+        ({"folder": "compliance/packs"}, Frameworks("compliance/packs", True)),
+        ({"folder": None, "use_builtin": False}, Frameworks(None, False)),
+        ({"folder": "packs/", "use_builtin": True}, Frameworks("packs/", True)),
+        ({"extra_builtin": ["cost-tier"]}, Frameworks(None, True, ("cost-tier",))),
+        ({"extra_builtin": []}, Frameworks()),
     ],
 )
-def test_each_frameworks_key_reads_its_values(
+def test_each_compliance_rules_key_reads_its_values(
     tmp_path: Path, block: dict[str, object], want: Frameworks
 ) -> None:
-    write_manifest(tmp_path, {"frameworks": block})
+    write_manifest(tmp_path, {"compliance_rules": block})
     loaded = load(tmp_path)
     assert loaded is not None and loaded.frameworks == want
 
 
-def test_unknown_frameworks_key_is_refused(tmp_path: Path) -> None:
-    message = _refused(tmp_path, {"frameworks": {"pack_dir": "p", "cache": "x"}})
-    known = "(known: pack_dir, default_packs, packs)"
-    assert f"frameworks has unknown keys ['cache'] {known}" in message
+@pytest.mark.parametrize("old", ["pack_dir", "default_packs", "packs"])
+def test_an_old_compliance_rules_key_is_refused(tmp_path: Path, old: str) -> None:
+    message = _refused(tmp_path, {"compliance_rules": {old: None}})
+    known = "(known: folder, use_builtin, extra_builtin)"
+    assert f"compliance_rules has unknown keys ['{old}'] {known}" in message
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"frameworks": []},
-        {"frameworks": "packs"},
-        {"frameworks": {"pack_dir": "/etc/packs"}},
-        {"frameworks": {"pack_dir": "../packs"}},
-        {"frameworks": {"pack_dir": "packs/*"}},
-        {"frameworks": {"pack_dir": 3}},
-        {"frameworks": {"default_packs": None}},
-        {"frameworks": {"default_packs": "yes"}},
-        {"frameworks": {"default_packs": 0}},
-        {"frameworks": {"packs": "cost-tier"}},
-        {"frameworks": {"packs": ["Cost_Tier"]}},
-        {"frameworks": {"packs": ["cost-tier", "cost-tier"]}},
-        {"frameworks": {"packs": [3]}},
+        {"compliance_rules": []},
+        {"compliance_rules": "packs"},
+        {"compliance_rules": {"folder": "/etc/packs"}},
+        {"compliance_rules": {"folder": "../packs"}},
+        {"compliance_rules": {"folder": "packs/*"}},
+        {"compliance_rules": {"folder": 3}},
+        {"compliance_rules": {"use_builtin": None}},
+        {"compliance_rules": {"use_builtin": "yes"}},
+        {"compliance_rules": {"use_builtin": 0}},
+        {"compliance_rules": {"extra_builtin": "cost-tier"}},
+        {"compliance_rules": {"extra_builtin": ["Cost_Tier"]}},
+        {"compliance_rules": {"extra_builtin": ["cost-tier", "cost-tier"]}},
+        {"compliance_rules": {"extra_builtin": [3]}},
     ],
 )
-def test_bad_frameworks_value_is_refused(tmp_path: Path, payload: object) -> None:
-    assert "frameworks" in _refused(tmp_path, payload)
+def test_bad_compliance_rules_value_is_refused(tmp_path: Path, payload: object) -> None:
+    assert "compliance_rules" in _refused(tmp_path, payload)
 
 
-def test_frameworks_keys_have_rows_and_setup_writes_no_block() -> None:
+def test_compliance_rules_keys_have_rows_and_are_overrides() -> None:
     keys = manifest_keys()
-    want = ("frameworks.pack_dir", "frameworks.default_packs", "frameworks.packs")
-    assert want == tuple(key for key in keys if key.startswith("frameworks."))
+    want = tuple(f"compliance_rules.{name}" for name in COMPLIANCE_KEYS)
+    assert want == tuple(key for key in keys if key.startswith("compliance_rules."))
     for key in want:
-        assert (MANIFEST_FILE, key) in KEY_ROWS, key
-    assert "frameworks" not in starter_manifest()
+        assert KEY_ROWS[(MANIFEST_FILE, key)].override, key
+    assert "compliance_rules" not in starter_manifest()
 
 
-# 0158: features.terraform_validate is an opt-in switch beside terraform_tools.
+# 0158: checks.terraform_validate is an opt-in switch beside terraform_format.
 
 
 def test_terraform_validate_reads_false_when_absent(tmp_path: Path) -> None:
-    # 0158: validate is opt-in; no key, no features object and no manifest all read false.
     assert Features().terraform_validate is False
     assert manifest.features(tmp_path).terraform_validate is False
-    for payload in ({}, {"features": {}}, {"features": {"terraform_tools": True}}):
+    for payload in ({}, {"checks": {}}, {"checks": {"terraform_format": True}}):
         write_manifest(tmp_path, payload)
         loaded = load(tmp_path)
         assert loaded is not None and loaded.features.terraform_validate is False, payload
 
 
-@pytest.mark.parametrize("value", [True, False])
-def test_terraform_validate_reads_its_boolean(tmp_path: Path, value: bool) -> None:
-    write_manifest(tmp_path, {"features": {"terraform_validate": value}})
-    loaded = load(tmp_path)
-    assert loaded is not None and loaded.features == Features(terraform_validate=value)
-
-
 @pytest.mark.parametrize("value", [None, "true", "on", 1, 0, [], {}])
 def test_terraform_validate_refuses_a_non_boolean(tmp_path: Path, value: object) -> None:
-    # 0158: true or false only; null is refused, unlike the true-false-null persona switches.
-    message = _refused(tmp_path, {"features": {"terraform_validate": value}})
-    assert "features.terraform_validate" in message and "must be true or false" in message
+    # 0158: true or false only; null is refused, unlike the true-false-null switches.
+    message = _refused(tmp_path, {"checks": {"terraform_validate": value}})
+    assert "checks.terraform_validate" in message and "must be true or false" in message
 
 
-def test_terraform_validate_has_a_row_and_setup_writes_no_value() -> None:
-    assert "features.terraform_validate" in manifest_keys()
-    row = KEY_ROWS[(MANIFEST_FILE, "features.terraform_validate")]
+def test_terraform_validate_has_a_row() -> None:
+    assert "checks.terraform_validate" in manifest_keys()
+    row = KEY_ROWS[(MANIFEST_FILE, "checks.terraform_validate")]
     assert row.kind == "boolean" and row.default.startswith("`false`")
-    features = starter_manifest()["features"]
-    assert isinstance(features, dict) and "terraform_validate" not in features

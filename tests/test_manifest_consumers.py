@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# issue 52: the readers of features.secrets_scan and trains_dir.
+# issue 52, 0245: the readers of checks.secret_scan and custom_workflows_folder.
 from __future__ import annotations
 
 import json
@@ -32,8 +32,8 @@ PROJECT_TEMPLATE = "Project brief for train {train_id}.\n"
 
 
 def _project_train(root: Path, folder: str = "ops/trains") -> Path:
-    # 0073: a project definition whose brief template sits beside it, under trains_dir.
-    (root / "service-manifest.json").write_text(json.dumps({"trains_dir": folder}))
+    # 0073: a project definition whose brief template sits beside it, under its folder.
+    (root / "service-manifest.json").write_text(json.dumps({"custom_workflows_folder": folder}))
     defn = root / folder / "t.json"
     template = defn.parent / "trains" / "t" / "solo.md"
     template.parent.mkdir(parents=True)
@@ -61,7 +61,8 @@ def test_project_brief_resolves_beside_its_definition(repo: Path, plugin: Path) 
 
 def test_trains_dir_without_the_name_falls_back_to_the_plugin(repo: Path, plugin: Path) -> None:
     path = _write_train(plugin, [_code_stage()], ("repository",))
-    (repo / "service-manifest.json").write_text(json.dumps({"trains_dir": "ops/trains"}))
+    body = {"custom_workflows_folder": "ops/trains"}
+    (repo / "service-manifest.json").write_text(json.dumps(body))
     subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "manifest"], check=True)
     _started(repo, plugin)
@@ -73,7 +74,7 @@ def test_trains_dir_definition_leaving_the_project_is_refused(
 ) -> None:
     outside = tmp_path / "outside.json"
     outside.write_text(json.dumps(_definition([_code_stage()], ("repository",))))
-    (repo / "service-manifest.json").write_text(json.dumps({"trains_dir": "ops"}))
+    (repo / "service-manifest.json").write_text(json.dumps({"custom_workflows_folder": "ops"}))
     (repo / "ops").mkdir()
     (repo / "ops" / "t.json").symlink_to(outside)
     outcome = train_runner.start(repo, "t", None, plugin)
@@ -84,9 +85,9 @@ def test_trains_dir_definition_leaving_the_project_is_refused(
 
 def test_a_malformed_manifest_stops_start_before_the_lookup(repo: Path, plugin: Path) -> None:
     _write_train(plugin, [_code_stage()], ("repository",))
-    (repo / "service-manifest.json").write_text(json.dumps({"trains_dir": "/abs"}))
+    (repo / "service-manifest.json").write_text(json.dumps({"custom_workflows_folder": "/abs"}))
     outcome = train_runner.start(repo, "t", None, plugin)
-    assert outcome.code == 1 and "trains_dir" in outcome.lines[0]
+    assert outcome.code == 1 and "custom_workflows_folder" in outcome.lines[0]
 
 
 @pytest.fixture(autouse=True)
@@ -107,15 +108,15 @@ def _doctor(root: Path, tmp_path: Path, *args: str, bins: tuple[str, ...] = ()) 
     return [str(done.returncode), *done.stdout.splitlines(), *done.stderr.splitlines()]
 
 
-def _features(root: Path, features: object) -> None:
+def _features(root: Path, checks: object) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    (root / "service-manifest.json").write_text(json.dumps({"features": features}))
+    (root / "service-manifest.json").write_text(json.dumps({"checks": checks}))
 
 
 def test_print_secrets_scan_reads_the_feature(tmp_path: Path) -> None:
     on, off, bare = tmp_path / "on", tmp_path / "off", tmp_path / "bare"
-    _features(on, {"secrets_scan": True})
-    _features(off, {"secrets_scan": False})
+    _features(on, {"secret_scan": True})
+    _features(off, {"secret_scan": False})
     bare.mkdir()
     assert _doctor(on, tmp_path, "--print-secrets-scan") == ["0", "secrets scan: on"]
     assert _doctor(off, tmp_path, "--print-secrets-scan") == ["0", "secrets scan: off"]
@@ -124,9 +125,9 @@ def test_print_secrets_scan_reads_the_feature(tmp_path: Path) -> None:
 
 def test_print_secrets_scan_refuses_a_malformed_manifest(tmp_path: Path) -> None:
     bad = tmp_path / "bad"
-    _features(bad, {"secrets_scan": "yes"})
+    _features(bad, {"secret_scan": "yes"})
     out = _doctor(bad, tmp_path, "--print-secrets-scan")
-    assert out[0] == "1" and "features.secrets_scan" in out[1] and "Next:" in out[1]
+    assert out[0] == "1" and "checks.secret_scan" in out[1] and "Next:" in out[1]
 
 
 def _gitleaks_line(lines: list[str]) -> str:
@@ -135,15 +136,16 @@ def _gitleaks_line(lines: list[str]) -> str:
 
 def test_doctor_gitleaks_line_follows_the_feature(tmp_path: Path) -> None:
     on, off, bad = tmp_path / "on", tmp_path / "off", tmp_path / "bad"
-    _features(on, {"secrets_scan": True, "scope": "repository"})
+    _features(on, {"secret_scan": True})
     _features(off, {})
-    _features(bad, {"secrets_scan": 1})
-    assert _gitleaks_line(_doctor(on, tmp_path)).startswith("MISS gitleaks on PATH: not found.")
+    _features(bad, {"secret_scan": 1})
     # 0074: in folder scope the Push Train never runs, so the scan's missing tool is optional.
-    _features(on, {"secrets_scan": True})
     assert _gitleaks_line(_doctor(on, tmp_path)).startswith(
         "OPT  gitleaks on PATH: not found, and this is folder scope"
     )
+    # 0245: scope is detected only; a git repository is repository scope.
+    subprocess.run(["git", "init", "-q", "-b", "main", str(on)], check=True)
+    assert _gitleaks_line(_doctor(on, tmp_path)).startswith("MISS gitleaks on PATH: not found.")
     assert _gitleaks_line(_doctor(off, tmp_path)).startswith("OPT  gitleaks on PATH: not found")
     # 0069: a refused manifest counts as scan on, so the missing tool is still a MISS.
     assert _gitleaks_line(_doctor(bad, tmp_path)).startswith("MISS gitleaks on PATH")

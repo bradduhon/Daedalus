@@ -187,8 +187,8 @@ def test_no_assets_block_runs_no_git(tmp_path: Path) -> None:
 
 
 def test_the_assets_subcommand_prints_the_tails_and_the_large_files(tmp_path: Path) -> None:
-    block = {"roots": ["assets/"], "extensions": [".glb"], "max_bytes": 100}
-    repo, base = _init(tmp_path, {"assets": block})
+    block = {"folders": ["assets/"], "file_types": [".glb"], "report_over_bytes": 100}
+    repo, base = _init(tmp_path, {"code_review_exemptions": block})
     _commit(repo, {"web/hero.glb": b"g" * 500, "src/main.py": b"print(1)\n"})
     done = run_cli(
         "daedalus_train.py",
@@ -210,7 +210,7 @@ def test_the_assets_subcommand_prints_the_tails_and_the_large_files(tmp_path: Pa
 
 
 def test_the_assets_subcommand_prints_none_without_a_block(tmp_path: Path) -> None:
-    repo, base = _init(tmp_path, {"manifest_version": 1})
+    repo, base = _init(tmp_path, {})
     done = run_cli(
         "daedalus_train.py",
         "assets",
@@ -226,7 +226,7 @@ def test_the_assets_subcommand_prints_none_without_a_block(tmp_path: Path) -> No
 
 
 def test_the_assets_subcommand_stops_on_a_bad_manifest(tmp_path: Path) -> None:
-    repo, base = _init(tmp_path, {"assets": {"extensions": [".py"]}})
+    repo, base = _init(tmp_path, {"code_review_exemptions": {"file_types": [".py"]}})
     done = run_cli(
         "daedalus_train.py",
         "assets",
@@ -239,7 +239,7 @@ def test_the_assets_subcommand_stops_on_a_bad_manifest(tmp_path: Path) -> None:
         cwd=repo,
     )
     assert done.returncode == 1 and done.stdout.startswith("assets: ")
-    assert "assets.extensions" in done.stdout and "Next:" in done.stdout
+    assert "code_review_exemptions.file_types" in done.stdout and "Next:" in done.stdout
 
 
 def test_the_orchestrator_may_run_the_assets_subcommand() -> None:
@@ -260,17 +260,18 @@ def test_the_doctor_warns_once_per_source_file_under_an_asset_root(tmp_path: Pat
     (tmp_path / "assets" / "hero.glb").write_bytes(b"x")
     (tmp_path / "assets" / "levels" / "one.json").write_text("{}", encoding="utf-8")
     (tmp_path / "assets" / "run.sh").write_text("", encoding="utf-8")
-    manifest = {"assets": {"roots": ["assets/"], "extensions": [".glb"], "max_bytes": 1048576}}
+    block = {"folders": ["assets/"], "file_types": [".glb"], "report_over_bytes": 1048576}
+    manifest = {"code_review_exemptions": block}
     (tmp_path / "service-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     lines = [line for _, line in daedalus_doctor._assets_check(tmp_path)]
     assert lines[0] == (
-        "OK   assets: 1 root, 1 ending, asset files over 1048576 bytes listed by name, kept out "
-        "of the judges' diffs and the secret scan; source files never are"
+        "OK   code_review_exemptions: 1 folder, 1 file type, asset files over 1048576 bytes "
+        "listed by name, kept out of the judges' diffs and the secret scan; source files never are"
     )
     assert lines[1:] == [
         f"OPT  asset root source file {rel}: a source file under an asset root keeps that root "
         "in every diff, and the auditor treats a change to it as a finding. Next: move it out "
-        "of the asset root, or narrow assets.roots in service-manifest.json"
+        "of the asset root, or narrow code_review_exemptions.folders in service-manifest.json"
         for rel in ("assets/levels/one.json", "assets/run.sh")
     ]
     assert all(ok for ok, _ in daedalus_doctor._assets_check(tmp_path))

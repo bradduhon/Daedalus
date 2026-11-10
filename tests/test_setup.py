@@ -11,9 +11,9 @@ from pathlib import Path
 import pytest
 from lib.config import Config, load_config
 from lib.ledger import resolve_ledger
-from lib.manifest import FEATURE_KEYS, Features, Manifest
+from lib.manifest import CHECK_KEYS, COMMAND_KEYS, Features, Manifest
 from lib.manifest import load as load_manifest
-from lib.project_keys import SETUP_OMITS, config_keys, manifest_keys
+from lib.project_keys import CONFIG_FILE, KEY_ROWS, MANIFEST_FILE, config_keys, manifest_keys
 
 from tests.conftest import SCRIPTS_DIR
 
@@ -49,10 +49,10 @@ def test_setup_writes_both_starter_files_when_missing(repo_cwd: Path) -> None:
     result = _setup(repo_cwd)
     assert result.returncode == 0, result.stderr
     manifest, config = _paths(repo_cwd)
-    # 0134: a new manifest is followed by the docs.literacy examples line.
+    # 0134, 0245: a new manifest is followed by the docs.reading_level examples line.
     assert result.stdout.splitlines() == [
         f"written: {manifest}",
-        'docs.literacy: null; examples: "plain", "standard", "expert", '
+        'docs.reading_level: null; examples: "plain", "standard", "expert", '
         '"profile:docs/voice-profile.md"',
         f"written: {config}",
     ]
@@ -81,59 +81,55 @@ def test_setup_never_overwrites_an_existing_file(repo_cwd: Path) -> None:
     assert config.read_bytes() == before
 
 
-def test_setup_starter_files_carry_every_reader_key_at_its_default(repo_cwd: Path) -> None:
+def _starters(file: str, keys: tuple[str, ...]) -> list[str]:
+    return [key for key in keys if not KEY_ROWS[(file, key)].override]
+
+
+def test_setup_starter_files_carry_every_starter_key_and_no_override(repo_cwd: Path) -> None:
+    # 0245: the starter files hold the starter keys; an override stays out until asked for.
     assert _setup(repo_cwd).returncode == 0
     manifest, config = _paths(repo_cwd)
     m_doc = json.loads(manifest.read_text(encoding="utf-8"))
     c_doc = json.loads(config.read_text(encoding="utf-8"))
-    # 0129, F.6, 0157: the starter leaves the priorities and frameworks blocks absent.
-    wanted = [k for k in manifest_keys() if not k.startswith(("priorities.", "frameworks."))]
-    # 0158: an opt-in switch stays unwritten.
-    wanted = [k for k in wanted if k.removeprefix("features.") not in SETUP_OMITS]
-    assert [k for k in wanted if not _present(m_doc, k)] == [] and "priorities" not in m_doc
-    assert "frameworks" not in m_doc
-    # 0235: the operator override is opt-in; the starter never writes it.
-    assert [k for k in config_keys() if k != "operator" and not _present(c_doc, k)] == []
+    m_keys = manifest_keys()
+    assert [k for k in _starters(MANIFEST_FILE, m_keys) if not _present(m_doc, k)] == []
+    c_keys = config_keys()
+    assert [k for k in _starters(CONFIG_FILE, c_keys) if not _present(c_doc, k)] == []
+    overrides = {
+        key.partition(".")[0].removesuffix("[]")
+        for file, keys in ((MANIFEST_FILE, m_keys), (CONFIG_FILE, c_keys))
+        for key in keys
+        if KEY_ROWS[(file, key)].override and "." not in key
+    }
+    assert overrides.isdisjoint(m_doc) and overrides.isdisjoint(c_doc)
     # 0072, 0076: the readers accept both files, and the config reads as the defaults.
     assert load_config(path=config) == Config()
     loaded = load_manifest(repo_cwd)
     assert loaded is not None
     assert loaded.forbidden_paths == () and loaded.forbidden_extensions == ()
     assert loaded.trains_dir is None and loaded.unit_test_cmd is None
-    assert c_doc["max_concurrent_builders"] == 5
-    # issue 50: the starter keeps every audit log.
-    assert "audit_retention_days" in c_doc and c_doc["audit_retention_days"] is None
-    # 0164: the kernel wrapper reads no folder outside the project until the operator names one.
-    assert c_doc["wrapper_read_roots"] == []
 
 
 def test_setup_starter_files_load_through_the_readers_at_their_defaults(repo_cwd: Path) -> None:
     # 0076: the jail loads the config on every hook; a starter it refused would deny every call.
     assert _setup(repo_cwd).returncode == 0
     assert load_config(cwd=str(repo_cwd)) == Config()
-    # 0076, 0132: the starter writes every switch false, the persona switches included.
-    off = Features(ledger=False, dependency_web_lookup=False, terraform_tools=False)
-    assert load_manifest(repo_cwd) == Manifest(features=off)
+    # 0245, 0247: no decisions file is named, so nothing is recorded.
+    want = Features(dependency_web_lookup=True, terraform_tools=True)
+    assert load_manifest(repo_cwd) == Manifest(features=want)
     assert resolve_ledger(str(repo_cwd), Config()) is None
 
 
-def test_setup_starter_manifest_has_every_feature_off(repo_cwd: Path) -> None:
-    assert _setup(repo_cwd).returncode == 0
-    manifest, _ = _paths(repo_cwd)
-    features = json.loads(manifest.read_text(encoding="utf-8"))["features"]
-    assert sorted(features) == sorted(set(FEATURE_KEYS) - SETUP_OMITS)
-    assert all(value in (False, None) for value in features.values()), features
-
-
-def test_setup_starter_manifest_writes_assets_empty_and_no_dev_server(repo_cwd: Path) -> None:
-    # 0192, 0076: assets with every key present and empty; dev_server and package manager null.
+def test_setup_starter_manifest_checks_and_groups(repo_cwd: Path) -> None:
+    # 0245: spec section 3; the opt-in validate switch is written false, the overrides are absent.
     assert _setup(repo_cwd).returncode == 0
     manifest, _ = _paths(repo_cwd)
     doc = json.loads(manifest.read_text(encoding="utf-8"))
-    assert doc["assets"] == {"roots": [], "extensions": [], "max_bytes": None}
-    assert doc["dev_server"] is None
-    assert doc["stack"]["package_manager"] is None
-    assert all(doc["stack"][key] is None for key in ("unit_test_cmd", "typecheck_cmd", "lint_cmd"))
+    assert set(doc["checks"]) == set(CHECK_KEYS) - {"release_banned_terms"}
+    assert doc["checks"]["secret_scan"] is False
+    assert doc["docs"] == {"folder": "docs", "decisions_filename": None, "reading_level": None}
+    assert doc["commands"] == {key: None for key in COMMAND_KEYS}
+    assert doc["run_output_priority"] is None and doc["local_testing"] is None
 
 
 def test_setup_refuses_a_parent_folder_that_holds_repositories(tmp_path: Path) -> None:

@@ -102,7 +102,7 @@ def test_planner_frontmatter_and_reply_lines() -> None:
         "Name every edge's kind",
         "Prefer an interface pin over a file overlap",
         "A pin is never an edge.",
-        "`max_concurrent_builders`",
+        "`limits.parallel_coders`",
         "`wire: none`",
     ):
         assert rule in text, rule

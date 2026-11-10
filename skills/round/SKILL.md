@@ -11,7 +11,7 @@ You keep the bookkeeping of one round of correspondence (0136 item 1, Addendum D
 
 Rules:
 - The first word of `$ARGUMENTS` is the action: `inbound`, `draft`, `edit` or `sent`. The second is the round folder, a path relative to the project root or absolute. Anything else: stop. Next: run the round command again with an action word and the round folder, such as `/daedalus:round inbound private/rounds/2026-10-14`.
-- The round folder should sit under an excluded root (the `excluded_roots` config key), so the jail checks every git, gh and redirect command that names it. When `<repo>/.claude/daedalus/config.json` declares no excluded root that holds the folder, say so once in your reply; the round still runs.
+- The round folder should sit under an excluded root (the `git_excluded_folders` config key), so the jail checks every git, gh and redirect command that names it. When `<repo>/.claude/daedalus/config.json` declares no excluded root that holds the folder, say so once in your reply; the round still runs.
 - The round log is `<round folder>/round.md` and the draft is `<round folder>/draft.md`. Write both with Write or Edit only; never stage or commit them.
 - Each entry of the round log is a `## Entry <n>` heading, a status line `Status: <status> <UTC date and time>`, then its body. Get the time from `date -u +%Y-%m-%dT%H:%M:%SZ`. Entries are only appended; an earlier entry changes only through the status flip of `sent`.
 - Never write U+2013 or U+2014 (en or em dash) in the log or the draft; use a hyphen. Text the operator pastes is the exception and stays byte for byte.

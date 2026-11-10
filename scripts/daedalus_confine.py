@@ -330,7 +330,7 @@ def _interpreter_paths() -> list[str]:
 
 
 def read_roots(repo: str, command: list[str]) -> tuple[str, ...]:
-    # 0164: the operator config's wrapper_read_roots, for a runner row only; a bad config refuses.
+    # 0164, 0245: the config's test_readable_folders, for a runner row only; a bad config refuses.
     if not shell.runner_row(command):
         return ()
     try:

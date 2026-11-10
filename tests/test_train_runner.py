@@ -123,8 +123,8 @@ def repo(tmp_path: Path) -> Path:
     return root
 
 
-def _manifest(root: Path, features: dict[str, object], commit: bool = False) -> None:
-    (root / "service-manifest.json").write_text(json.dumps({"features": features}))
+def _manifest(root: Path, body: dict[str, object], commit: bool = False) -> None:
+    (root / "service-manifest.json").write_text(json.dumps(body))
     if commit:
         _git(root, "add", "-A")
         _git(root, "commit", "-q", "-m", "manifest")
@@ -262,7 +262,7 @@ def test_start_runs_begin_and_records_the_definition_hash(repo: Path, plugin: Pa
         "scope": None,
         "secrets_scan": False,
         "scrub_file": None,
-        "ledger": None,
+        "ledger": False,
         "dependency_web_lookup": None,
         "terraform_tools": None,
         "terraform_validate": False,
@@ -502,48 +502,38 @@ def test_scope_kind_outside_the_definition_is_refused(plain: Path, plugin: Path)
     outcome = train_runner.start(plain, "t", "out", plugin)
     assert outcome.code == 1
     assert "runs only in repository scope" in outcome.lines[0]
-    assert "set the scope key in the features object of service-manifest.json" in outcome.lines[0]
+    assert "Next: run it in a repository project" in outcome.lines[0]
     _nothing_written(plain)
 
 
-def test_manifest_scope_overrides_detection(repo: Path, plain: Path, plugin: Path) -> None:
+def test_a_scope_key_in_the_manifest_is_refused(repo: Path, plugin: Path) -> None:
+    # 0245: scope is detected only; the old features.scope key is an unknown key.
     _write_train(plugin, [_probe_stage()], ("repository", "folder"))
-    _manifest(repo, {"scope": "folder"}, commit=True)
-    asked = train_runner.start(repo, "t", None, plugin)
-    assert asked.code == 3 and asked.lines[0].startswith("output: ")
-    _manifest(plain, {"scope": "repository"})
-    refused = train_runner.start(plain, "t", None, plugin)
-    assert refused.code == 1 and "is not inside a git work tree" in refused.lines[0]
-    _nothing_written(plain)
+    _manifest(repo, {"features": {"scope": "folder"}}, commit=True)
+    refused = train_runner.start(repo, "t", None, plugin)
+    assert refused.code == 1 and "has unknown keys ['features']" in refused.lines[0]
 
 
-@pytest.mark.parametrize(
-    ("ledger", "code", "line"),
-    [
-        (True, 3, workspace.LEDGER_NONE),
-        (None, 0, workspace.LEDGER_NONE),
-        (False, 0, workspace.LEDGER_OFF),
-    ],
-)
-def test_ledger_question_only_when_the_ledger_feature_is_on(
-    repo: Path, plugin: Path, ledger: bool | None, code: int, line: str
+@pytest.mark.parametrize(("named", "ledger"), [(None, False), ("decisions.md", True)])
+def test_start_never_asks_about_decisions(
+    repo: Path, plugin: Path, named: str | None, ledger: bool
 ) -> None:
+    # 0247: a named file or none; start records the answer and asks no question.
     _write_train(plugin, [_probe_stage()], ("repository",))
-    _manifest(repo, {} if ledger is None else {"ledger": ledger}, commit=True)
+    _manifest(repo, {"docs": {"decisions_filename": named}}, commit=True)
     outcome = train_runner.start(repo, "t", None, plugin)
-    assert outcome.code == code, outcome.lines
-    assert outcome.lines[1 if code == 0 else 0] == line
-    if code == 3:
-        assert workspace.LEDGER_QUESTION in outcome.lines
-        _nothing_written(repo)
-    else:
-        assert _state(repo)["ledger_line"] == line
+    assert outcome.code == 0, outcome.lines
+    want = workspace.LEDGER_NONE
+    if named is not None:
+        want = f"ledger: {repo / 'docs' / named} (manifest, markdown-table-row, seq=0, ids=plain)"
+    assert outcome.lines[1] == want and _state(repo)["ledger_line"] == want
+    assert _state(repo)["features"]["ledger"] is ledger  # type: ignore[index]
 
 
 def test_step_skips_a_stage_whose_feature_is_off(repo: Path, plugin: Path) -> None:
     stages = [_probe_stage(when="features.ledger"), _probe_stage() | {"id": "after"}]
     _write_train(plugin, stages, ("repository",))
-    _manifest(repo, {"ledger": False}, commit=True)
+    _manifest(repo, {"docs": {"decisions_filename": None}}, commit=True)
     _started(repo, plugin)
     outcome = _step(repo, plugin)
     assert "stage probe: skipped, features.ledger is off." in outcome.lines
@@ -566,7 +556,7 @@ def test_parallel_stage_dispatches_up_to_the_configured_concurrency(
     repo: Path, plugin: Path
 ) -> None:
     _write_train(plugin, [_code_stage(per_unit=True)], ("repository",))
-    _config(repo, {"max_concurrent_builders": 2})
+    _config(repo, {"limits": {"parallel_coders": 2}})
     _started(repo, plugin)
     _units(repo, ["u1", "u2", "u3"])
     outcome = _step(repo, plugin)
@@ -584,7 +574,7 @@ def test_parallel_stage_dispatches_up_to_the_configured_concurrency(
 
 def test_next_queued_unit_starts_when_one_returns(repo: Path, plugin: Path) -> None:
     _write_train(plugin, [_code_stage(per_unit=True)], ("repository",))
-    _config(repo, {"max_concurrent_builders": 2})
+    _config(repo, {"limits": {"parallel_coders": 2}})
     _started(repo, plugin)
     _units(repo, ["u1", "u2", "u3"])
     briefs = _prompt(_step(repo, plugin))
@@ -639,10 +629,10 @@ def test_concurrency_defaults_to_five_and_refuses_zero(
     _write_train(plugin, [_probe_stage()], ("repository", "folder"))
     _started(repo, plugin)
     assert _state(repo)["max_concurrent_builders"] == 5
-    _config(plain, {"max_concurrent_builders": 0})
+    _config(plain, {"limits": {"parallel_coders": 0}})
     refused = train_runner.start(plain, "t", "out", plugin)
     assert refused.code == 1
-    assert "max_concurrent_builders must be a whole number of at least 1" in refused.lines[0]
+    assert "limits.parallel_coders must be a whole number of at least 1" in refused.lines[0]
     _nothing_written(plain)
 
 
@@ -1048,11 +1038,11 @@ def test_contract_skip_row(repo: Path, plugin: Path, text: str, reason: str | No
 
 
 def test_contract_reads_the_manifest_protected_paths(repo: Path, plugin: Path) -> None:
-    # 0182, 0054: the jail_narrowing paths and extensions bind the skip as they bind a coder.
-    narrowing = {"forbidden_paths": ["infra/"], "forbidden_extensions": [".pem"]}
+    # 0182, 0054: the prohibited writes bind the skip as they bind a coder.
+    narrowing = {"paths": ["infra/"], "file_types": [".pem"]}
     _write_train(plugin, [_probe_stage()], ("repository",))
     _started(repo, plugin)
-    (repo / "service-manifest.json").write_text(json.dumps({"jail_narrowing": narrowing}))
+    (repo / "service-manifest.json").write_text(json.dumps({"prohibited_writes": narrowing}))
     for name in ("infra/main.tf", "certs/ca.pem"):
         outcome = _contract_run(repo, plugin, _files(f"a.py, {name}"))
         assert outcome.lines == [f"contract: required (unit touches a protected path: {name})"]
@@ -1607,7 +1597,7 @@ def test_model_prints_the_effective_model_inside_and_outside_a_train(
     # spec 4, pin C3 -> C5: the model word alone, from the override, config, then agent file.
     outside = _train_cli(repo, "model", "--repo", str(repo), "--agent", "coder")
     assert (outside.returncode, outside.stdout) == (0, "opus\n"), outside.stderr
-    _config(repo, {"agent_models": {"coder": "sonnet"}})
+    _config(repo, {"models": {"agents": {"coder": "sonnet"}}})
     configured = _train_cli(repo, "model", "--repo", str(repo), "--agent", "coder")
     assert configured.stdout == "sonnet\n"
     _write_train(plugin, [_probe_stage()], ("repository",))
@@ -1628,9 +1618,9 @@ def test_model_refuses_an_unknown_agent_or_model(repo: Path, extra: tuple[str, .
 
 
 def test_model_reports_a_bad_config(repo: Path) -> None:
-    _config(repo, {"agent_models": {"coder": "gpt-4"}})
+    _config(repo, {"models": {"agents": {"coder": "gpt-4"}}})
     done = _train_cli(repo, "model", "--repo", str(repo), "--agent", "coder")
-    assert done.returncode == 1 and "agent_models.coder" in done.stdout
+    assert done.returncode == 1 and "models.agents.coder" in done.stdout
 
 
 def test_a_repo_outside_the_working_directory_root_is_refused(repo: Path, plain: Path) -> None:

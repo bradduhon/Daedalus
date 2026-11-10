@@ -1,0 +1,38 @@
+{
+  "commands": {
+    "unit_test": ["python3 -m pytest -q"],
+    "typecheck": ["python3 -m mypy ."],
+    "lint": ["python3 -m ruff check ."]
+  },
+  "docs": {
+    "folder": "docs",
+    "decisions_filename": null,
+    "reading_level": "standard"
+  },
+  "checks": {
+    "secret_scan": false,
+    "online_advisory_lookup": true,
+    "terraform_format": true,
+    "terraform_validate": false
+  },
+  "prohibited_writes": {
+    "paths": ["infra/"],
+    "file_types": [".pem"]
+  },
+  "code_review_exemptions": {
+    "folders": [],
+    "file_types": []
+  },
+  "packages": {
+    "allowed_installers": []
+  },
+  "run_output_priority": {
+    "order": ["security", "trust", "operations", "cost"],
+    "rules": [],
+    "principles": []
+  },
+  "local_testing": {
+    "url": "http://localhost:5173",
+    "instructions": "The level loads and the player can move."
+  }
+}

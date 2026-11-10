@@ -37,6 +37,11 @@ FILES: tuple[Entry, ...] = (
     ),
     Entry(
         "<ledger file>",
+        "scripts/append_ledger.py:_create_named",
+        "the first decision is appended to a named decisions file that does not exist yet",
+    ),
+    Entry(
+        "<ledger file>",
         "scripts/append_ledger.py:_append",
         "an approved Build Train appends one row per ruling",
     ),
@@ -48,12 +53,12 @@ FILES: tuple[Entry, ...] = (
     Entry(
         "<charter_root>/reports/<date>-tokens-<run id>.md",
         "scripts/audit_report.py:_write_report",
-        "you run token_economy.py report --save and config.json declares charter_root",
+        "you run token_economy.py report --save and config.json sets local_docs_folder",
     ),
     Entry(
         f"{_SCRATCH}/<run id>/tokens.md",
         "scripts/audit_report.py:_write_report",
-        "you run token_economy.py report --save with no charter_root declared",
+        "you run token_economy.py report --save with no local_docs_folder set",
     ),
     Entry(
         f"{_CONFINE}/",
@@ -94,6 +99,31 @@ FILES: tuple[Entry, ...] = (
         f"{_DATA}/config.json",
         "scripts/daedalus_setup.py:_write_new",
         "you run /daedalus:setup and the file is missing",
+    ),
+    Entry(
+        "~/.claude/daedalus/",
+        "scripts/daedalus_setup.py:create_operator",
+        "you agree in /daedalus:setup to create the personal settings file; created 0700",
+    ),
+    Entry(
+        "~/.claude/daedalus/operator.json",
+        "scripts/daedalus_setup.py:_write_new",
+        "you agree in /daedalus:setup to create the personal settings file and it is missing",
+    ),
+    Entry(
+        "<repo>/service-manifest.json",
+        "scripts/lib/settings_edit.py:write",
+        "you answer a /daedalus:setup question; one setting changes and the rest stay",
+    ),
+    Entry(
+        f"{_DATA}/config.json",
+        "scripts/lib/settings_edit.py:write",
+        "you answer a /daedalus:setup question; one setting changes and the rest stay",
+    ),
+    Entry(
+        "~/.claude/daedalus/operator.json",
+        "scripts/lib/settings_edit.py:write",
+        "you answer a /daedalus:setup question; one setting changes and the rest stay",
     ),
     Entry(
         f"{_TRAINS}/",
@@ -179,7 +209,7 @@ FILES: tuple[Entry, ...] = (
     Entry(
         f"{_AUDIT}/<session_id>.lock",
         "scripts/lib/audit.py:_try_lock",
-        "old audit logs are rotated out under audit_retention_days",
+        "old audit logs are rotated out under limits.log_retention_days",
     ),
     Entry(
         f"{_AUDIT}/<session_id>.skipped",
@@ -340,7 +370,7 @@ FILES: tuple[Entry, ...] = (
     Entry(
         _BRANCH,
         f"{_WS}:_charter_branch",
-        "a Build Train begins with charter_root set; the branch is made in the Charter",
+        "a Build Train begins with local_docs_folder set; the branch is made in the Charter",
     ),
     Entry(
         _BRANCH,

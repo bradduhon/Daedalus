@@ -1,33 +1,26 @@
 {
-  "manifest_version": 1,
-  "service_name": "daedalus",
-  "purpose": "A Claude Code plugin: a catalog of scoped agents composed per body of work under a hook-enforced jail and a hash-chained audit log; the Build Train is one saved recipe over it.",
-  "stack": {
-    "language": "python",
-    "runtime": "python3.12",
-    "package_registries": ["pypi.org"],
-    "unit_test_cmd": "python3 -m pytest -q",
-    "typecheck_cmd": "python3 -m mypy scripts",
-    "lint_cmd": "python3 -m ruff check scripts tests",
-    "build_cmd": null
+  "commands": {
+    "unit_test": "python3 -m pytest -q",
+    "typecheck": "python3 -m mypy scripts",
+    "lint": "python3 -m ruff check scripts tests"
   },
-  "features": { "secrets_scan": true },
-  "entrypoints": {
+  "docs": {
+    "folder": "docs/private",
+    "decisions_filename": "decisions.md",
+    "reading_level": null
+  },
+  "checks": {
+    "secret_scan": true
+  },
+  "prohibited_writes": {
+    "paths": [],
+    "file_types": []
+  },
+  "code_areas": {
     "scripts": "scripts/",
     "lib": "scripts/lib/",
     "agents": "agents/",
     "hooks": "hooks/",
     "skills": "skills/"
-  },
-  "exposure_and_traits": {
-    "is_public": false,
-    "has_website": false,
-    "operator_panel_integrated": false,
-    "contains_customer_data": false,
-    "touches_key_material": false,
-    "data_classification": "INTERNAL"
-  },
-  "jail_narrowing": { "forbidden_extensions": [], "forbidden_paths": [] },
-  "upstream_dependencies": [],
-  "downstream_dependencies": []
+  }
 }

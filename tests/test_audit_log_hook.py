@@ -148,7 +148,7 @@ def test_hook_rotation_record_passes_the_chain_check(
     assert run_script("audit_log.py", old).returncode == 0
     stamp = 1_000_000_000
     os.utime(project_data / "audit" / "old-sess.jsonl", (stamp, stamp))
-    (project_data / "config.json").write_text(json.dumps({"audit_retention_days": 90}))
+    (project_data / "config.json").write_text(json.dumps({"limits": {"log_retention_days": 90}}))
     result = run_script("audit_log.py", hook_input(session_id="new-sess"))
     assert result.returncode == 0 and result.stderr == ""
     new = project_data / "audit" / "new-sess.jsonl"

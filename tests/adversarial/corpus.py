@@ -1626,6 +1626,13 @@ REFUSED_FIELDS_HUNT_269 = (
 )
 # 269: a path in the search value slot is the search text; it is never a pathspec.
 GIT_LOG_SEARCH_VALUE_269 = ("git log -S {path}", "git log -G {path}", "git log --grep {path}")
+# 0247: charter-docs append args, (class, args, missing flag); None is admitted.
+LEDGER_CODES_0247 = (
+    ("no codes", "--expected-seq 2 --entry-file docs/.tmp/e.md", None),
+    ("both codes", "--expected-seq 2 --entry-file docs/.tmp/e.md --repo BO --type PLT", None),
+    ("repo alone", "--expected-seq 2 --entry-file docs/.tmp/e.md --repo BO", "--type"),
+    ("type alone", "--expected-seq 2 --entry-file docs/.tmp/e.md --type PLT", "--repo"),
+)
 # 266 hunt: (class, form, main, coder) for the data folder check on each role's typed record;
 # None means the check names nothing: the role refuses the form, or it writes no data folder.
 DATA_FOLDER_HUNT_266 = (

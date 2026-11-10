@@ -164,7 +164,8 @@ def doc_repo(git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     data = git_repo / ".claude" / "daedalus"
     data.mkdir(parents=True)
     roots = [{"kind": "path", "path": "<repo_root>/private/"}]
-    (data / "config.json").write_text(json.dumps({"excluded_roots": roots}), encoding="utf-8")
+    config = {"git_excluded_folders": roots}
+    (data / "config.json").write_text(json.dumps(config), encoding="utf-8")
     monkeypatch.chdir(git_repo)
     source = ["--source", "A=baseline:private/base.sent-2026-10-01.md"]
     assert freeze_sources.main(["--train", TRAIN, "--output-dir", "private/out", *source]) == 0

@@ -23,7 +23,8 @@ AGENTS = REPO_ROOT / "agents"
 PREFERRING = ("auditor", "planner")
 FABLE_ID = "claude-fable-5"
 NEXT = (
-    "Next: set fable_available to true in .claude/daedalus/config.json when your plan offers Fable"
+    "Next: set models.fable_available to true in .claude/daedalus/config.json when your plan "
+    "offers Fable"
 )
 HookInput = Callable[..., dict[str, Any]]
 
@@ -147,7 +148,8 @@ def test_a_good_prefer_value_loads(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("value", [True, False, None])
 def test_fable_available_reads_true_false_or_null(project_data: Path, value: object) -> None:
-    (project_data / "config.json").write_text(json.dumps({"fable_available": value}))
+    body = {"models": {"fable_available": value}}
+    (project_data / "config.json").write_text(json.dumps(body))
     assert load_config(str(project_data.parents[1])).fable_available is value
     (project_data / "config.json").write_text("{}")
     assert load_config(str(project_data.parents[1])).fable_available is None
@@ -157,12 +159,14 @@ def test_fable_available_reads_true_false_or_null(project_data: Path, value: obj
 def test_a_bad_fable_available_value_fails_config_loading(
     project_data: Path, value: object
 ) -> None:
-    (project_data / "config.json").write_text(json.dumps({"fable_available": value}))
+    body = {"models": {"fable_available": value}}
+    (project_data / "config.json").write_text(json.dumps(body))
     with pytest.raises(ConfigError) as info:
         load_config(str(project_data.parents[1]))
     text = str(info.value)
-    assert f"config.json fable_available must be true, false or null (got {value!r})" in text
-    assert "Next: set fable_available to true when your plan offers Fable" in text
+    want = f"config.json models.fable_available must be true, false or null (got {value!r})"
+    assert want in text
+    assert "Next: set models.fable_available to true when your plan offers Fable" in text
 
 
 def test_session_start_record_keeps_a_model_id_and_nothing_else(hook_input: HookInput) -> None:
@@ -209,7 +213,7 @@ def _doctor_fable(tmp_path: Path, repo: Path) -> list[str]:
     ("doc", "want"),
     [
         (
-            {"fable_available": True},
+            {"models": {"fable_available": True}},
             "OK   fable: available by config, so auditor and planner run on fable",
         ),
         (
@@ -217,11 +221,11 @@ def _doctor_fable(tmp_path: Path, repo: Path) -> list[str]:
             "OPT  fable: not seen in this session, so auditor and planner run on opus. " + NEXT,
         ),
         (
-            {"fable_available": False},
+            {"models": {"fable_available": False}},
             "OPT  fable: off by config, so auditor and planner run on opus. " + NEXT,
         ),
         (
-            {"fable_available": True, "agent_models": {"planner": "sonnet"}},
+            {"models": {"fable_available": True, "agents": {"planner": "sonnet"}}},
             "OK   fable: available by config, so auditor runs on fable, planner runs on sonnet",
         ),
     ],

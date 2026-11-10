@@ -8,8 +8,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from lib.config import Config, LedgerDecl
+from lib.config import Config
 from lib.ledger import (
+    PLAIN_SCHEME,
+    TABLE_SCHEME,
     LedgerError,
     ResolvedLedger,
     format_entry,
@@ -31,113 +33,115 @@ def repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_config_block_resolves_placeholders(repo: Path) -> None:
-    cfg = Config(
-        charter_root=repo / "charter",
-        ledger=LedgerDecl(
-            Path("<charter_root>/decision-log.md"),
-            "markdown-table-row",
-            "{seq:04d}-{repo}-{type}",
-            "last-row-id",
-        ),
-    )
-    led = resolve_ledger(str(repo), cfg)
-    assert (
-        led is not None
-        and led.path == repo / "charter" / "decision-log.md"
-        and led.origin == "config"
-    )
+def _name(repo: Path, filename: str | None, **docs: object) -> None:
+    # 0245, 0247: the manifest's docs group names the decisions file, or names none.
+    body = {"docs": {"decisions_filename": filename, **docs}}
+    (repo / "service-manifest.json").write_text(json.dumps(body), encoding="utf-8")
 
 
-def test_manifest_override_wins(repo: Path) -> None:
-    shutil.copy(FIX / "manifest-override.json", repo / "service-manifest.json")
-    cfg = Config(ledger=LedgerDecl(Path("/elsewhere.md"), "heading-entry", "{seq}", "last-row-id"))
-    led = resolve_ledger(str(repo), cfg)
-    assert (
-        led is not None and led.origin == "manifest" and led.path == repo / "docs" / "decisions.md"
-    )
-    assert led.id_scheme == "{seq:04d}-X-{type}"
+def test_a_named_file_in_the_local_docs_folder(repo: Path) -> None:
+    # 0245: local_docs_folder wins over the project's own docs folder.
+    _name(repo, "decision-log.md")
+    led = resolve_ledger(str(repo), Config(charter_root=repo / "charter"))
+    assert led is not None and led.path == repo / "charter" / "decision-log.md"
+    assert led.origin == "manifest"
 
 
-def test_probe_finds_docs_decisions_table(repo: Path) -> None:
-    (repo / "docs").mkdir()
-    shutil.copy(FIX / "table.md", repo / "docs" / "decisions.md")
+def test_a_named_file_in_the_project_docs_folder(repo: Path) -> None:
+    _name(repo, "decisions.md", folder="notes")
     led = resolve_ledger(str(repo), Config())
-    assert led is not None and led.origin == "probe" and led.format == "markdown-table-row"
-    assert led.sequence_source == "last-row-id"
+    assert led is not None and led.path == repo / "notes" / "decisions.md"
 
 
-def test_probe_infers_heading_frontmatter(repo: Path) -> None:
-    shutil.copy(FIX / "heading.md", repo / "LEDGER.md")
-    led = resolve_ledger(str(repo), Config())
-    assert (
-        led is not None
-        and led.format == "heading-entry"
-        and led.sequence_source == "frontmatter:sequence_id"
-    )
-
-
-def test_nothing_declared_nothing_found_is_none(repo: Path) -> None:
-    assert resolve_ledger(str(repo), Config()) is None
-
-
-def test_manifest_null_ledger_block_means_not_declared(repo: Path) -> None:
-    # 0076: the setup starter writes "ledger": null; the probe still runs after it.
-    (repo / "service-manifest.json").write_text(json.dumps({"ledger": None}))
-    assert resolve_ledger(str(repo), Config()) is None
-    (repo / "docs").mkdir()
-    shutil.copy(FIX / "table.md", repo / "docs" / "decisions.md")
-    led = resolve_ledger(str(repo), Config())
-    assert led is not None and led.origin == "probe"
-
-
-def test_read_sequence_table_and_heading(repo: Path) -> None:
+def test_a_conventional_file_is_never_found_without_a_name(repo: Path) -> None:
+    # 0247: no name search; a docs/decisions.md the project never named is never used.
     (repo / "docs").mkdir()
     shutil.copy(FIX / "table.md", repo / "docs" / "decisions.md")
     shutil.copy(FIX / "heading.md", repo / "LEDGER.md")
-    table = resolve_ledger(str(repo), Config())
-    assert table is not None and read_sequence(table) == 2
-    heading = resolve_ledger(
-        str(repo),
-        Config(
-            ledger=LedgerDecl(
-                repo / "LEDGER.md", "heading-entry", "{seq}", "frontmatter:sequence_id"
-            )
-        ),
-    )
-    assert heading is not None and read_sequence(heading) == 7
+    assert resolve_ledger(str(repo), Config()) is None
+    _name(repo, None)
+    assert resolve_ledger(str(repo), Config()) is None
 
 
-def test_read_sequence_errors_carry_next(repo: Path) -> None:
-    led = resolve_ledger(
-        str(repo),
-        Config(
-            ledger=LedgerDecl(repo / "missing.md", "markdown-table-row", "{seq}", "last-row-id")
-        ),
-    )
-    assert led is not None
+def test_the_layout_is_read_from_a_table_file(repo: Path) -> None:
+    (repo / "docs").mkdir()
+    shutil.copy(FIX / "table.md", repo / "docs" / "decisions.md")
+    _name(repo, "decisions.md")
+    led = resolve_ledger(str(repo), Config())
+    assert led is not None and led.format == "markdown-table-row"
+    assert led.id_scheme == TABLE_SCHEME and led.sequence_source == "last-row-id"
+    assert read_sequence(led) == 2
+
+
+def test_the_layout_is_read_from_a_headings_file_with_frontmatter(repo: Path) -> None:
+    (repo / "docs").mkdir()
+    shutil.copy(FIX / "heading.md", repo / "docs" / "LEDGER.md")
+    _name(repo, "LEDGER.md")
+    led = resolve_ledger(str(repo), Config())
+    assert led is not None and led.format == "heading-entry"
+    assert led.sequence_source == "frontmatter:sequence_id" and read_sequence(led) == 7
+
+
+def test_a_named_file_not_yet_written_takes_the_default_table(repo: Path) -> None:
+    # 0247: the file is created on its first decision, so its sequence starts at 0.
+    _name(repo, "decisions.md")
+    led = resolve_ledger(str(repo), Config())
+    assert led is not None and not led.path.exists()
+    assert led.format == "markdown-table-row" and led.id_scheme == PLAIN_SCHEME
+    assert read_sequence(led) == 0
+    assert next_id(led, 1, "", "") == "0001"
+
+
+@pytest.mark.parametrize(
+    ("last", "scheme", "made"),
+    [
+        ("0007", "{seq:04d}", "0008"),
+        ("12", "{seq:02d}", "13"),
+        ("000099", "{seq:06d}", "000100"),
+        ("0007-SVC-PLT", TABLE_SCHEME, "0008-SVC-PLT"),
+    ],
+)
+def test_the_id_pattern_follows_the_last_row(repo: Path, last: str, scheme: str, made: str) -> None:
+    # 0247: digits keep their width; the three-part shape keeps the code and the type.
+    (repo / "docs").mkdir()
+    rows = f"| Id | Date |\n|---|---|\n| 0001 | d |\n| {last} | d |\n"
+    (repo / "docs" / "decisions.md").write_text(rows, encoding="utf-8")
+    _name(repo, "decisions.md")
+    led = resolve_ledger(str(repo), Config())
+    assert led is not None and led.id_scheme == scheme
+    assert next_id(led, read_sequence(led) + 1, "SVC", "PLT") == made
+
+
+@pytest.mark.parametrize("last", ["ADR-7", "0007-SVC", "7a", "0007-SVC-PLT-X", ""])
+def test_an_id_of_any_other_shape_is_refused_with_the_id(repo: Path, last: str) -> None:
+    (repo / "docs").mkdir()
+    rows = f"| Id | Date |\n|---|---|\n| {last} | d |\n"
+    (repo / "docs" / "decisions.md").write_text(rows, encoding="utf-8")
+    _name(repo, "decisions.md")
     with pytest.raises(LedgerError) as info:
-        read_sequence(led)
-    assert "Next:" in str(info.value)
+        resolve_ledger(str(repo), Config())
+    assert f"the last id {last!r} is neither a plain number" in str(info.value)
+    assert "Next: renumber that row" in str(info.value)
+
+
+def test_an_empty_table_numbers_plain(repo: Path) -> None:
+    (repo / "docs").mkdir()
+    (repo / "docs" / "decisions.md").write_text("| Id | Date |\n|---|---|\n", encoding="utf-8")
+    _name(repo, "decisions.md")
+    led = resolve_ledger(str(repo), Config())
+    assert led is not None and led.id_scheme == PLAIN_SCHEME and read_sequence(led) == 0
+
+
+def test_nothing_named_is_none(repo: Path) -> None:
+    assert resolve_ledger(str(repo), Config()) is None
 
 
 def test_format_entry_table_row_and_heading(repo: Path) -> None:
-    table = resolve_ledger(
-        str(repo),
-        Config(
-            ledger=LedgerDecl(
-                repo / "t.md", "markdown-table-row", "{seq:04d}-{repo}-{type}", "last-row-id"
-            )
-        ),
-    )
-    assert table is not None
+    table = _led(repo / "t.md", "markdown-table-row", "{seq:04d}-{repo}-{type}", "last-row-id")
     assert next_id(table, 3, "DAE", "PLT") == "0003-DAE-PLT"
     row = format_entry(table, 3, "DAE", "PLT", "2026-10-14", "Ruling text | None | None")
     assert row == "| 0003-DAE-PLT | 2026-10-14 | Ruling text | None | None |\n"
-    heading = resolve_ledger(
-        str(repo), Config(ledger=LedgerDecl(repo / "h.md", "heading-entry", "{seq}", "last-row-id"))
-    )
-    assert heading is not None
+    heading = _led(repo / "h.md", "heading-entry", "{seq}", "last-row-id")
     assert (
         format_entry(heading, 8, "BO", "PLT", "2026-10-14T00:00:00Z", "Eight.")
         == "\n\n## Entry 8 - 2026-10-14T00:00:00Z\n\nEight.\n"
@@ -145,12 +149,7 @@ def test_format_entry_table_row_and_heading(repo: Path) -> None:
 
 
 def _led(path: Path, fmt: str, scheme: str, source: str) -> ResolvedLedger:
-    return ResolvedLedger(path, fmt, scheme, source, "config")
-
-
-def _write_manifest(repo: Path, ledger: object) -> None:
-    payload = {"manifest_version": 1, "service_name": "x", "ledger": ledger}
-    (repo / "service-manifest.json").write_text(json.dumps(payload), encoding="utf-8")
+    return ResolvedLedger(path, fmt, scheme, source, "manifest")
 
 
 @pytest.mark.parametrize("body,date", [("line1\nline2 | x", "2026-10-14"), ("a", "2026\r-10")])
@@ -188,7 +187,9 @@ def test_table_rows_stop_at_first_non_pipe_line(tmp_path: Path, text: str, expec
 
 @pytest.mark.parametrize("header", ["|Id|Date|", "| ID | Date |"])
 def test_compact_and_upper_id_header_inferred_as_table(repo: Path, header: str) -> None:
-    (repo / "LEDGER.md").write_text(f"{header}\n|---|---|\n|0005-A|d|\n", encoding="utf-8")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "LEDGER.md").write_text(f"{header}\n|---|---|\n|0005|d|\n", encoding="utf-8")
+    _name(repo, "LEDGER.md")
     led = resolve_ledger(str(repo), Config())
     assert led is not None and led.format == "markdown-table-row"
     assert read_sequence(led) == 5
@@ -196,12 +197,16 @@ def test_compact_and_upper_id_header_inferred_as_table(repo: Path, header: str) 
 
 def test_horizontal_rules_are_not_frontmatter(repo: Path) -> None:
     text = "# Ledger\n\n---\nsequence_id: 99\n---\n\n## Entry 4 - d\n\nFour.\n"
-    (repo / "LEDGER.md").write_text(text, encoding="utf-8")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "LEDGER.md").write_text(text, encoding="utf-8")
+    _name(repo, "LEDGER.md")
     led = resolve_ledger(str(repo), Config())
     assert led is not None and led.sequence_source == "last-row-id"
     assert read_sequence(led) == 4
     with pytest.raises(LedgerError, match="Next:"):
-        read_sequence(_led(repo / "LEDGER.md", "heading-entry", "{seq}", "frontmatter:sequence_id"))
+        read_sequence(
+            _led(repo / "docs" / "LEDGER.md", "heading-entry", "{seq}", "frontmatter:sequence_id")
+        )
 
 
 def test_frontmatter_rejects_non_ascii_digits(tmp_path: Path) -> None:
@@ -217,71 +222,41 @@ def test_bad_id_scheme_raises_ledger_error(tmp_path: Path, scheme: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "ledger",
+    "docs",
     [
-        "not-an-object",
-        {"path": "x.md", "format": "markdown-table-row", "id_scheme": "{seq}"},
-        {"path": "", "format": "markdown-table-row", "id_scheme": "{seq}", "sequence_source": "x"},
-        {"path": "x.md", "format": "csv", "id_scheme": "{seq}", "sequence_source": "last-row-id"},
-        {"path": "x.md", "format": "heading-entry", "id_scheme": "{seq}", "sequence_source": "max"},
-        {
-            "path": "x.md",
-            "format": "heading-entry",
-            "id_scheme": "{seq}",
-            "sequence_source": "frontmatter:",
-        },
-        # issue 186: a branch pin beside <charter_root> is refused in the manifest as in the config.
-        {
-            "path": "<charter_root>/x.md",
-            "format": "heading-entry",
-            "id_scheme": "{seq}",
-            "sequence_source": "last-row-id",
-            "branch": "main",
-        },
-        {
-            "path": "x.md",
-            "format": "heading-entry",
-            "id_scheme": "{seq}",
-            "sequence_source": "last-row-id",
-            "branch": "two words",
-        },
+        {"decisions_filename": "sub/x.md"},
+        {"decisions_filename": ""},
+        {"decisions_filename": "x.md", "git_branch": "two words"},
+        {"ledger": {"path": "x.md"}},
     ],
 )
-def test_malformed_manifest_block_raises(repo: Path, ledger: object) -> None:
-    _write_manifest(repo, ledger)
+def test_a_malformed_docs_group_raises(repo: Path, docs: object) -> None:
+    (repo / "service-manifest.json").write_text(json.dumps({"docs": docs}), encoding="utf-8")
     with pytest.raises(LedgerError, match="Next:"):
         resolve_ledger(str(repo), Config())
 
 
-@pytest.mark.parametrize(("extra", "expected"), [({}, None), ({"branch": "main"}, "main")])
-def test_manifest_ledger_branch_is_read(
+@pytest.mark.parametrize(("extra", "expected"), [({}, None), ({"git_branch": "main"}, "main")])
+def test_the_docs_git_branch_is_read(
     repo: Path, extra: dict[str, str], expected: str | None
 ) -> None:
-    # issue 186: the manifest block carries the optional branch through to the resolved ledger.
-    block = {"path": "x.md", "format": "heading-entry", "id_scheme": "{seq}"}
-    _write_manifest(repo, {**block, "sequence_source": "last-row-id", **extra})
+    # issue 186: the manifest carries the optional branch through to the resolved file.
+    _name(repo, "x.md", **extra)
     led = resolve_ledger(str(repo), Config())
     assert led is not None and led.branch == expected
+
+
+def test_a_branch_pin_beside_a_local_docs_folder_is_refused(repo: Path) -> None:
+    # issue 186: a run branches the local docs folder, so the pin could never hold.
+    _name(repo, "x.md", git_branch="main")
+    with pytest.raises(LedgerError, match="Next: remove docs.git_branch"):
+        resolve_ledger(str(repo), Config(charter_root=repo / "charter"))
 
 
 def test_invalid_manifest_json_raises(repo: Path) -> None:
     (repo / "service-manifest.json").write_text("{ not json", encoding="utf-8")
     with pytest.raises(LedgerError, match="Next:"):
         resolve_ledger(str(repo), Config())
-
-
-def test_config_unknown_sequence_source_raises(repo: Path) -> None:
-    cfg = Config(ledger=LedgerDecl(repo / "t.md", "markdown-table-row", "{seq}", "max-id"))
-    with pytest.raises(LedgerError, match="Next:"):
-        resolve_ledger(str(repo), cfg)
-
-
-def test_missing_charter_root_raises(repo: Path) -> None:
-    decl = LedgerDecl(
-        Path("<charter_root>/decision-log.md"), "markdown-table-row", "{seq}", "last-row-id"
-    )
-    with pytest.raises(LedgerError, match="Next:"):
-        resolve_ledger(str(repo), Config(ledger=decl))
 
 
 def test_lone_table_with_no_rows_is_sequence_zero(tmp_path: Path) -> None:
@@ -328,13 +303,15 @@ def test_read_sequence_unknown_source_raises(tmp_path: Path) -> None:
         ),
         (
             "| Field | Type |\n|---|---|\n| id | int |\n| 2 | example |\n\n"
-            "| Id | Date |\n|---|---|\n| 0041-A | d |\n",
+            "| Id | Date |\n|---|---|\n| 0041 | d |\n",
             41,
         ),
     ],
 )
 def test_id_cell_in_body_row_is_not_a_header(repo: Path, text: str, expected: int) -> None:
-    (repo / "LEDGER.md").write_text(text, encoding="utf-8")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "LEDGER.md").write_text(text, encoding="utf-8")
+    _name(repo, "LEDGER.md")
     led = resolve_ledger(str(repo), Config())
     assert led is not None and led.format == "markdown-table-row"
     assert read_sequence(led) == expected
@@ -361,7 +338,9 @@ def test_sequence_reads_the_id_column(tmp_path: Path) -> None:
 
 
 def test_bom_does_not_hide_frontmatter(repo: Path) -> None:
-    (repo / "LEDGER.md").write_text("﻿---\nsequence_id: 12\n---\n", encoding="utf-8")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "LEDGER.md").write_text("﻿---\nsequence_id: 12\n---\n", encoding="utf-8")
+    _name(repo, "LEDGER.md")
     led = resolve_ledger(str(repo), Config())
     assert led is not None and led.sequence_source == "frontmatter:sequence_id"
     assert read_sequence(led) == 12
@@ -416,10 +395,3 @@ def test_unclosed_frontmatter_reads_as_absent(tmp_path: Path) -> None:
     led = _led(tmp_path / "h.md", "heading-entry", "{seq}", "frontmatter:sequence_id")
     with pytest.raises(LedgerError, match="missing or not an integer"):
         read_sequence(led)
-
-
-def test_frontmatter_source_key_follows_the_reader_key_form(repo: Path) -> None:
-    # W1.3: a key the shared reader would skip is refused when the ledger is declared.
-    cfg = Config(ledger=LedgerDecl(repo / "h.md", "heading-entry", "{seq}", "frontmatter:seq-id"))
-    with pytest.raises(LedgerError, match="frontmatter:<key>"):
-        resolve_ledger(str(repo), cfg)

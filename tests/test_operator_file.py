@@ -12,12 +12,14 @@ from lib import operator_file
 from lib.config import ConfigError, load_config
 from lib.operator_file import (
     MAIN_REFUSAL_CLASSES,
+    TOP_KEYS,
     Operator,
     OperatorError,
     load,
     load_user,
     operator_path,
 )
+from lib.project_keys import starter_operator
 
 from tests.conftest import REPO_ROOT
 
@@ -49,15 +51,25 @@ def test_valid_full_file(home: Path) -> None:
     _write(
         home,
         {
-            "main_refusals": ["commit_on_main", "credential_read"],
-            "profile": {"literacy": "plain", "dash_ban": True},
+            "hard_stops": ["commit_on_main", "credential_read"],
+            "reading_level": "plain",
+            "no_long_dashes": True,
+            "guidance_source": "daedalus",
+            "script_language": "python",
         },
     )
-    assert load_user() == Operator(("commit_on_main", "credential_read"), "plain", True)
+    want = Operator(("commit_on_main", "credential_read"), "plain", True, "daedalus", "python")
+    assert load_user() == want
 
 
-def test_profile_literacy_path_value_accepted(home: Path) -> None:
-    _write(home, {"profile": {"literacy": "profile:docs/voice.md"}})
+def test_the_starter_file_reads_as_the_defaults(home: Path) -> None:
+    # 0245: null is the same as absent for every choice.
+    _write(home, json.dumps(starter_operator()))
+    assert load_user() == Operator()
+
+
+def test_reading_level_path_value_accepted(home: Path) -> None:
+    _write(home, {"reading_level": "profile:docs/voice.md"})
     assert load_user().literacy == "profile:docs/voice.md"
 
 
@@ -89,7 +101,7 @@ def test_folder_refused(home: Path) -> None:
 
 
 def test_oversize_refused(home: Path) -> None:
-    _write(home, '{"main_refusals": [], "pad": "' + "x" * 70000 + '"}')
+    _write(home, '{"hard_stops": [], "pad": "' + "x" * 70000 + '"}')
     with pytest.raises(OperatorError, match="larger than 64 KiB"):
         load_user()
 
@@ -117,19 +129,18 @@ def test_not_an_object_refused(home: Path, body: object) -> None:
     ("body", "key"),
     [
         ({"nope": 1}, "nope"),
-        ({"profile": {"nope": 1}}, "nope"),
-        ({"main_refusals": ["rm_everything"]}, "rm_everything"),
-        ({"main_refusals": ["commit_on_main", "commit_on_main"]}, "twice"),
-        ({"main_refusals": "commit_on_main"}, "main_refusals"),
-        ({"main_refusals": True}, "main_refusals"),
-        ({"main_refusals": [True]}, "main_refusals"),
-        ({"profile": True}, "profile"),
-        ({"profile": {"literacy": True}}, "profile.literacy"),
-        ({"profile": {"literacy": None}}, "profile.literacy"),
-        ({"profile": {"literacy": "loud"}}, "profile.literacy"),
-        ({"profile": {"literacy": "profile:../x"}}, "profile.literacy"),
-        ({"profile": {"dash_ban": "yes"}}, "profile.dash_ban"),
-        ({"profile": {"dash_ban": 1}}, "profile.dash_ban"),
+        ({"hard_stops": ["rm_everything"]}, "rm_everything"),
+        ({"hard_stops": ["commit_on_main", "commit_on_main"]}, "twice"),
+        ({"hard_stops": "commit_on_main"}, "hard_stops"),
+        ({"hard_stops": True}, "hard_stops"),
+        ({"hard_stops": [True]}, "hard_stops"),
+        ({"reading_level": True}, "reading_level"),
+        ({"reading_level": "loud"}, "reading_level"),
+        ({"reading_level": "profile:../x"}, "reading_level"),
+        ({"no_long_dashes": "yes"}, "no_long_dashes"),
+        ({"no_long_dashes": 1}, "no_long_dashes"),
+        ({"guidance_source": "mine"}, "guidance_source"),
+        ({"script_language": "Python 3"}, "script_language"),
     ],
 )
 def test_each_refusal_names_the_file_and_key(home: Path, body: object, key: str) -> None:
@@ -139,8 +150,26 @@ def test_each_refusal_names_the_file_and_key(home: Path, body: object, key: str)
     assert str(path) in str(err.value) and key in str(err.value)
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"main_refusals": []},
+        {"profile": {"literacy": "plain"}},
+        {"profile": {"dash_ban": True}},
+        {"operator_profile": {}},
+    ],
+)
+def test_an_old_key_is_refused_with_the_valid_names(home: Path, body: object) -> None:
+    # 0245: no alias; the refusal lists every valid top-level name.
+    _write(home, body)
+    with pytest.raises(OperatorError) as err:
+        load_user()
+    assert f"has unknown keys [{next(iter(body))!r}]" in str(err.value)
+    assert "(known: " + ", ".join(TOP_KEYS) + ")" in str(err.value)
+
+
 def test_every_class_is_accepted(home: Path) -> None:
-    _write(home, {"main_refusals": list(MAIN_REFUSAL_CLASSES)})
+    _write(home, {"hard_stops": list(MAIN_REFUSAL_CLASSES)})
     assert load_user().main_refusals == MAIN_REFUSAL_CLASSES
 
 
@@ -156,40 +185,36 @@ def _repo(tmp_path: Path, override: object | None) -> Path:
     (repo / ".git").mkdir()
     if override is not None:
         (repo / ".claude" / "daedalus" / "config.json").write_text(
-            json.dumps({"operator": override})
+            json.dumps({"personal_overrides": override})
         )
     return repo
 
 
 def test_load_inherits_when_repo_sets_nothing(home: Path, tmp_path: Path) -> None:
-    _write(home, {"main_refusals": ["commit_on_main"], "profile": {"literacy": "plain"}})
+    _write(home, {"hard_stops": ["commit_on_main"], "reading_level": "plain"})
     assert load(_repo(tmp_path, None)) == Operator(("commit_on_main",), "plain", None)
 
 
 def test_load_replaces_per_key_and_lists_replace(home: Path, tmp_path: Path) -> None:
-    _write(
-        home,
-        {"main_refusals": ["commit_on_main", "credential_read"], "profile": {"dash_ban": True}},
-    )
-    repo = _repo(
-        tmp_path, {"main_refusals": ["redirect_to_file"], "profile": {"literacy": "expert"}}
-    )
+    _write(home, {"hard_stops": ["commit_on_main", "credential_read"], "no_long_dashes": True})
+    repo = _repo(tmp_path, {"hard_stops": ["redirect_to_file"], "reading_level": "expert"})
     assert load(repo) == Operator(("redirect_to_file",), "expert", True)
 
 
 def test_load_override_error_names_config_json_and_key(home: Path, tmp_path: Path) -> None:
-    repo = _repo(tmp_path, {"profile": {"dash_ban": "yes"}})
-    with pytest.raises(ConfigError, match=r"config\.json operator\.profile\.dash_ban"):
+    repo = _repo(tmp_path, {"no_long_dashes": "yes"})
+    with pytest.raises(ConfigError, match=r"config\.json personal_overrides\.no_long_dashes"):
         load(repo)
 
 
 @pytest.mark.parametrize(
     ("override", "key"),
     [
-        ("text", "operator"),
-        ({"x": 1}, "operator"),
-        ({"main_refusals": ["bogus"]}, "operator.main_refusals"),
-        ({"profile": {"literacy": 5}}, "operator.profile.literacy"),
+        ("text", "personal_overrides"),
+        ({"x": 1}, "personal_overrides"),
+        ({"hard_stops": ["bogus"]}, "personal_overrides.hard_stops"),
+        ({"reading_level": 5}, "personal_overrides.reading_level"),
+        ({"profile": {"literacy": "plain"}}, "personal_overrides"),
     ],
 )
 def test_bad_config_operator_block_raises_config_error(
@@ -201,7 +226,7 @@ def test_bad_config_operator_block_raises_config_error(
 
 
 def test_config_carries_the_validated_override(tmp_path: Path) -> None:
-    repo = _repo(tmp_path, {"main_refusals": ["commit_on_main"], "profile": {"dash_ban": False}})
+    repo = _repo(tmp_path, {"hard_stops": ["commit_on_main"], "no_long_dashes": False})
     cfg = load_config(path=repo / ".claude" / "daedalus" / "config.json")
     assert cfg.operator == {"main_refusals": ("commit_on_main",), "dash_ban": False}
 
@@ -209,6 +234,8 @@ def test_config_carries_the_validated_override(tmp_path: Path) -> None:
 def test_only_the_named_modules_mention_operator_file() -> None:
     # 0235: nothing reads the operator file yet beyond config, doctor, key rows and itself.
     allowed = {"config.py", "daedalus_doctor.py", "project_keys.py", "operator_file.py"}
+    # 0242: setup creates the file and checks a changed one with its validator; it acts on no value.
+    allowed.add("daedalus_setup.py")
     found = {
         path.name
         for path in (REPO_ROOT / "scripts").rglob("*.py")

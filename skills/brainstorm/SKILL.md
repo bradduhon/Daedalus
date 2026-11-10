@@ -11,7 +11,7 @@ Human-facing text (0031): Text a human reads names each item in words: a short l
 
 This skill is the brainstorm phase (0165). It runs in the main session before the orchestrator starts, outside an active run (0152) or inside a folder run the run entry started, and hands the orchestrator the plan path; the orchestrator never runs it (0179). It explores the idea with the operator itself, then dispatches the planner, the web researcher and, at the hand-off, the verifier, and nothing else. In shaping it relays one question at a time between the planner and the operator. It writes three kinds of file in its folder: the idea board, the handoff brief, and one question file per shaping question, which it checks for plain words. The planner writes the spec and later the plan.
 
-Literacy (0153, 0200): every question this skill puts to the operator is plain, the planner's text included, whatever `docs.literacy` in `<repo>/service-manifest.json` says. The skill checks the planner's text as step 6 says, and never asks the operator how technical to be. The one exception is a not-viable reply, which prints as written with its receipts (step 9).
+Literacy (0153, 0200): every question this skill puts to the operator is plain, the planner's text included, whatever `docs.reading_level` in `<repo>/service-manifest.json` says. The skill checks the planner's text as step 6 says, and never asks the operator how technical to be. The one exception is a not-viable reply, which prints as written with its receipts (step 9).
 
 ## What the phase does well
 
@@ -113,8 +113,8 @@ Accept runs step 5 with the brief as the planner's input. Keep exploring goes ba
 5. Shaping starts here, once the operator accepts a direction at the exit question or keeps their goal on the straight path. Choose the planner's model: run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py model --repo <repo> --agent planner`, adding `--override <override>` when step 1 set one. It prints one model word. Exit 1: stop and show its output; its `Next:` line is the next action. Dispatch `Agent(planner)` with `model: <that word>`; Claude Code loads it as `daedalus:planner`. Its prompt carries, each on its own line:
    - `Mode: challenge`;
    - `Brief file: <folder>/handoff.md` when the operator accepted a direction at the exit question. On the straight path, `Idea file: <notes>` when step 1 or step 4 set `<notes>`; otherwise `Idea:` on its own line, then the operator's `<idea>` verbatim, then a closing `Idea ends` line;
-   - the standing-rules file path, from the `standing_rules` key of `<repo>/.claude/daedalus/config.json`, read from its `charter_root` when one is set, else from `<repo>`; leave this line out when the key is absent or null;
-   - the repository's file areas: the `entrypoints` block of `<repo>/service-manifest.json`, pasted as it stands, or `none declared` when the file or block is absent;
+   - the standing-rules file path: `standing-rules.md` in the folder that holds the decisions file, the `local_docs_folder` of `<repo>/.claude/daedalus/config.json` when one is set, else the `docs.folder` of `<repo>/service-manifest.json` (0247); leave this line out when `docs.decisions_filename` names no file or that summary file is absent;
+   - the repository's file areas: the `code_areas` block of `<repo>/service-manifest.json`, pasted as it stands, or `none declared` when the file or block is absent;
    - `Write exactly one file: <folder>/spec.md`;
    - the grounding rules below, verbatim;
    - the conversation contract: each reply carries one question and ends with exactly one of `[STATUS: ASK] n=<n>`, `[STATUS: SPEC] n=<n> path=<path> open=<m>`, `[STATUS: NOT_VIABLE] n=<n> <the blocking fact in one line>` or `[STATUS: YIELD_WEB] <query>`; `[STATUS: QUESTION] <what the task leaves open>` stays for plan mode. After `Mode: plan` the plan reply `[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>` ends the work.

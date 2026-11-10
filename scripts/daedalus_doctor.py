@@ -25,10 +25,10 @@ from lib.audit import (  # noqa: E402
     project_data_dir,
     project_root,
 )
-from lib.coder_model import TIERS  # noqa: E402
-from lib.config import Config, ConfigError, load_config, standing_rules_path  # noqa: E402
-from lib.ledger import LedgerError, resolve_ledger  # noqa: E402
+from lib.config import CODER_KEYS, Config, ConfigError, load_config  # noqa: E402
+from lib.ledger import RULES_SUMMARY_NAME, LedgerError, resolve_ledger, rules_summary  # noqa: E402
 from lib.manifest import (  # noqa: E402
+    PRIORITY_WORDS,
     RELEASE_AGE_DEFAULT,
     Features,
     ManifestError,
@@ -38,7 +38,7 @@ from lib.manifest import (  # noqa: E402
 )
 from lib.manifest import features as manifest_features  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
-from lib.operator_file import OperatorError, load_user, operator_path  # noqa: E402
+from lib.operator_file import JSON_NAMES, OperatorError, load_user, operator_path  # noqa: E402
 from lib.plan_record import is_need  # noqa: E402
 from lib.workspace import _BARE_VERSION, UNMARK_NEXT, VERSION_FILE, train_marker  # noqa: E402
 
@@ -52,7 +52,8 @@ FOLDER_OFF = ", and this is folder scope, where the Push Train never runs (0074)
 CLAUDE_TIMEOUT_S = 10
 # 0122: code.claude.com/docs/en/hooks, Command hook fields: onFailure needs v2.1.295 or later.
 ON_FAILURE_MIN = (2, 1, 295)
-NO_LEDGER = "OK   ledger: none found (the Build Train asks before creating docs/decisions.md)"
+# 0247: no decisions file named means no decisions, and nothing asks to create one.
+NO_LEDGER = "OK   decisions: no decisions file named in docs.decisions_filename, none recorded"
 PROJECT_DATA_NEXT = "write a single line * to {marker}"
 IGNORE_NEXT = (
     "from your own shell, untrack it with git rm -r --cached .claude/daedalus, "
@@ -60,19 +61,15 @@ IGNORE_NEXT = (
 )
 DIRTY_LIMIT = 10
 PACK_OFFER = (
-    'to adopt the shipped baseline pack, add {"kind": "pack", "name": "baseline"} '
-    "to standards_sources in .claude/daedalus/config.json"
+    'to adopt the shipped baseline rules, add {"builtin": "baseline"} '
+    "to coding_rules in .claude/daedalus/config.json"
 )
 ENABLEMENT = ".claude/settings.json"
 ENABLEMENT_NEXT = f"commit {ENABLEMENT}; it holds the enabledPlugins entry /plugin install wrote"
 # 0076: the setup skill writes whichever starter file is missing; the doctor never writes one.
 SETUP_NEXT = "run the Daedalus setup skill (/daedalus:setup) to write a starter {name}"
 STANDING_NEXT = (
-    "set standing_rules in .claude/daedalus/config.json to the standing-rules file, "
-    "so the planner reads it"
-)
-STANDING_MISS_NEXT = (
-    "write it with scripts/standing_rules.py, or fix standing_rules in .claude/daedalus/config.json"
+    "write it beside the decisions file with scripts/standing_rules.py, so the planner reads it"
 )
 # 0095: a local clone added as a marketplace caches under its marketplace name.
 CACHE_NAMING = (
@@ -82,7 +79,7 @@ CACHE_NAMING = (
 )
 GITLEAKS_NEXT = "the Push Train scans commits with gitleaks; install it so the scan can run"
 SCAN_OFF_NEXT = (
-    "to scan pushes for secrets, set secrets_scan to true in the features object of "
+    "to scan pushes for secrets, set secret_scan to true in the checks object of "
     "service-manifest.json, then install gitleaks"
 )
 
@@ -170,11 +167,11 @@ def _framework_lines() -> Iterator[tuple[bool, str]]:
     yield from _framework_checks(cache, datetime.now(UTC).date())
 
 
-PACK_DIR_NEXT = "create it or remove frameworks.pack_dir from service-manifest.json"
-# 0192: a frameworks.packs id must be a folder under <plugin>/packs/frameworks.
+PACK_DIR_NEXT = "create it or remove compliance_rules.folder from service-manifest.json"
+# 0192: a compliance_rules.extra_builtin id must be a folder under <plugin>/packs/frameworks.
 PACK_NAMED_NEXT = "name a pack listed in the README section on control packs, or remove the id"
 # prepush-2026-10-27: an unreadable pack folder is a MISS line, never a crash.
-PACK_READ_NEXT = "make the pack folders readable to you, or fix frameworks.pack_dir"
+PACK_READ_NEXT = "make the pack folders readable to you, or fix compliance_rules.folder"
 PACK_SHIPPED_NEXT = "reinstall the Daedalus plugin; a shipped pack is never edited in place"
 PACK_SHIPPED_OLD_NEXT = "update the Daedalus plugin to a release with a newer shipped pack"
 # 0157 (spec 2.2 point 6): the one remaining refresh hint, in its full form.
@@ -246,7 +243,7 @@ def _pack_checks(repo: Path, today: date) -> Iterator[tuple[bool, str]]:
         yield from _pack_dir_check(repo)
         folders = packs.pack_folders(repo)
         for ident in packs.unknown_named(repo):
-            line = f"frameworks.packs names {ident}, which Daedalus does not ship"
+            line = f"compliance_rules.extra_builtin names {ident}, which Daedalus does not ship"
             yield False, _printable(f"MISS framework packs: {line}. Next: {PACK_NAMED_NEXT}")
     except ManifestError:
         return  # 0054: the manifest line already reports the refusal as a MISS.
@@ -468,25 +465,23 @@ def _marker_check(repo: Path) -> tuple[bool, str]:
     return True, line + UNMARK_NEXT.format(repo=root)
 
 
-def _ledger_probe(root: Path, config: Config) -> tuple[bool, str]:
-    # 0004: resolves manifest, config or convention ledger alike; LedgerError is a MISS.
+def _ledger_probe(root: Path, config: Config) -> Iterator[tuple[bool, str]]:
+    # 0247: only a named decisions file; its summary of decisions in force is read beside it.
     try:
         found = resolve_ledger(str(root), config)
     except LedgerError as exc:
-        return False, f"MISS ledger: {exc}"
+        yield False, f"MISS decisions: {exc}"
+        return
     if found is None:
-        return True, NO_LEDGER
-    return True, f"OK   ledger: {found.path} ({found.origin}, {found.format})"
-
-
-def _standing_rules_check(root: Path, config: Config) -> tuple[bool, str]:
-    # 0090: absent is optional; a declared path with no file is a MISS.
-    path = standing_rules_path(config, root)
-    if path is None:
-        return _opt(False, "standing_rules", "not declared", STANDING_NEXT)
-    if path.is_file():
-        return True, f"OK   standing_rules: {path}"
-    return False, f"MISS standing_rules: {path} is not a file. Next: {STANDING_MISS_NEXT}"
+        yield True, NO_LEDGER
+        return
+    state = "" if found.path.exists() else ", created with the first decision"
+    yield True, f"OK   decisions: {found.path} ({found.format}{state})"
+    summary = rules_summary(found)
+    if summary is None:
+        yield _opt(False, "decisions in force", f"no {RULES_SUMMARY_NAME}", STANDING_NEXT)
+    else:
+        yield True, f"OK   decisions in force: {summary}"
 
 
 def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
@@ -498,10 +493,12 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
         return
     if cfg_path.exists():
         yield True, "OK   config.json"
-        if _json_keys(cfg_path, "coder_models"):
+        if set(_json_keys(cfg_path, "models")) & set(CODER_KEYS):
             # 0187: one line naming the coder's model for each of the three tiers.
-            tiers = ", ".join(f"{tier} {config.coder_models[tier]}" for tier in TIERS)
-            yield True, f"OK   coder_models: {tiers}"
+            tiers = ", ".join(
+                f"{key} {config.coder_models[tier]}" for key, tier in CODER_KEYS.items()
+            )
+            yield True, f"OK   coder models: {tiers}"
     else:
         # spec 9, 0076: config.json is optional; absence means the defaults.
         yield _opt(
@@ -510,16 +507,16 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
             "not present, defaults in use",
             SETUP_NEXT.format(name="config.json"),
         )
-    yield _ledger_probe(data.parent.parent, config)
-    yield _standing_rules_check(data.parent.parent, config)
-    # spec 5: standards_sources and policy are optional; undeclared is not a miss.
+    yield from _ledger_probe(data.parent.parent, config)
+    # spec 5: coding_rules and policy are optional; undeclared is not a miss.
     if config.standards_sources:
-        yield True, "OK   standards_sources declared"
+        yield True, "OK   coding_rules declared"
     else:
-        # 0019: the baseline pack offer; optional, so it never fails the doctor.
+        # 0019: the baseline rules offer; optional, so it never fails the doctor.
         yield (
             True,
-            f"OPT  standards_sources: no standards file or pack is declared. Next: {PACK_OFFER}",
+            f"OPT  coding_rules: no rules folder, file or built-in set is declared. Next: "
+            f"{PACK_OFFER}",
         )
     if config.policy is not None:
         yield True, "OK   policy declared"
@@ -529,7 +526,7 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
 
 
 FABLE_NEXT = (
-    "set fable_available to true in .claude/daedalus/config.json when your plan offers Fable"
+    "set models.fable_available to true in .claude/daedalus/config.json when your plan offers Fable"
 )
 _FABLE_STATES = {
     fable.BY_CONFIG: "available by config",
@@ -582,16 +579,18 @@ def _operator_check(config: Config | None) -> tuple[bool, str]:
         user = load_user()
     except OperatorError as exc:
         return False, f"MISS operator file: {exc}"
-    over = sorted(config.operator) if config is not None else []
+    over = sorted(JSON_NAMES[k] for k in config.operator) if config is not None else []
     note = f"; this repository overrides {', '.join(over)}" if over else ""
     if not path.exists():
         return True, f"OK   operator file: none at {path}, defaults apply{note}"
-    profile = [k for k in ("literacy", "dash_ban") if getattr(user, k) is not None]
-    keys = ", ".join(profile) or "none"
+    chosen = [
+        JSON_NAMES[k] for k in ("literacy", "dash_ban", "script_language") if getattr(user, k)
+    ]
+    keys = ", ".join(chosen) or "none"
     return (
         True,
-        f"OK   operator file: {path} (main_refusals {len(user.main_refusals)}; "
-        f"profile keys set: {keys}){note}",
+        f"OK   operator file: {path} (hard_stops {len(user.main_refusals)}; "
+        f"guidance_source {user.guidance_source}; choices set: {keys}){note}",
     )
 
 
@@ -635,7 +634,7 @@ def _version_tag_check(repo: Path) -> Iterator[tuple[bool, str]]:
 
 
 def _manifest_check(repo: Path) -> tuple[bool, str]:
-    # 0054: the jail reads jail_narrowing from this file; a ManifestError is a MISS.
+    # 0054: the jail reads prohibited_writes from this file; a ManifestError is a MISS.
     try:
         manifest = load_manifest(repo)
     except ManifestError as exc:
@@ -649,7 +648,7 @@ def _manifest_check(repo: Path) -> tuple[bool, str]:
         )
     paths, extensions = len(manifest.forbidden_paths), len(manifest.forbidden_extensions)
     return True, (
-        f"OK   service-manifest.json: jail_narrowing {paths} paths, {extensions} extensions"
+        f"OK   service-manifest.json: prohibited_writes {paths} paths, {extensions} file types"
     )
 
 
@@ -658,11 +657,11 @@ def _priorities_check(repo: Path) -> Iterator[tuple[bool, str]]:
     try:
         manifest = load_manifest(repo)
     except PrioritiesError as exc:
-        row = f"priorities.{exc.row}" if exc.row else "priorities"
+        row = f"run_output_priority.{exc.row}" if exc.row else "run_output_priority"
         yield _check(
             False,
-            "priorities",
-            f"the block breaks key reference row {row}",
+            "run_output_priority",
+            f"the group breaks key reference row {row}",
             "correct that field against its row in the README key reference",
         )
         return
@@ -670,11 +669,13 @@ def _priorities_check(repo: Path) -> Iterator[tuple[bool, str]]:
         return  # 0054: the manifest line already reports the unreadable file.
     declared = manifest.priorities if manifest is not None else None
     if declared is None:
-        yield _check(True, "priorities: none declared", "", "")
+        yield _check(True, "run_output_priority: none declared", "", "")
         return
     count = len(declared.rules)
     rules = f"{count} rule{'' if count == 1 else 's'}"
-    yield _check(True, f"priorities: {' > '.join(declared.drivers)}, {rules}", "", "")
+    words = {driver: word for word, driver in PRIORITY_WORDS.items()}
+    order = " > ".join(words[driver] for driver in declared.drivers)
+    yield _check(True, f"run_output_priority: {order}, {rules}", "", "")
 
 
 def _plural(count: int, word: str) -> str:
@@ -682,19 +683,18 @@ def _plural(count: int, word: str) -> str:
 
 
 def _stack_check(repo: Path) -> Iterator[tuple[bool, str]]:
-    # 0192: one line naming the package manager and the declared command counts; none undeclared.
+    # 0192, 0245: one line with the declared command counts; none when no command is declared.
     try:
         manifest = load_manifest(repo)
     except ManifestError:
         return
-    if manifest is None or not (manifest.package_manager or declared_commands(manifest)):
+    if manifest is None or not declared_commands(manifest):
         return
-    manager = manifest.package_manager or "none declared"
     labels = {"unit_test_cmd": "unit test", "typecheck_cmd": "typecheck", "lint_cmd": "lint"}
     counts = ", ".join(
         f"{len(getattr(manifest, key) or ())} {label}" for key, label in labels.items()
     )
-    yield True, f"OK   stack: package manager {manager}; commands: {counts}"
+    yield True, f"OK   commands: {counts}"
 
 
 def _dev_server_check(repo: Path) -> Iterator[tuple[bool, str]]:
@@ -708,7 +708,7 @@ def _dev_server_check(repo: Path) -> Iterator[tuple[bool, str]]:
         yield (
             True,
             (
-                f"OK   dev server: {_escaped(server.url)}; the verify step asks you to open it "
+                f"OK   local_testing: {_escaped(server.url)}; the verify step asks you to open it "
                 f"and check: {_escaped(server.check)}"
             ),
         )
@@ -728,9 +728,9 @@ def _assets_check(repo: Path) -> Iterator[tuple[bool, str]]:
     yield (
         True,
         (
-            f"OK   assets: {_plural(len(declared.roots), 'root')}, "
-            f"{_plural(len(declared.extensions), 'ending')}{cap}, kept out of the judges' diffs "
-            "and the secret scan; source files never are"
+            f"OK   code_review_exemptions: {_plural(len(declared.roots), 'folder')}, "
+            f"{_plural(len(declared.extensions), 'file type')}{cap}, kept out of the judges' "
+            "diffs and the secret scan; source files never are"
         ),
     )
     found = assets.sources_in_roots(project_root(str(repo)), declared)
@@ -741,7 +741,8 @@ def _assets_check(repo: Path) -> Iterator[tuple[bool, str]]:
             f"asset root source file {path}",
             "a source file under an asset root keeps that root in every diff, and the auditor "
             "treats a change to it as a finding",
-            "move it out of the asset root, or narrow assets.roots in service-manifest.json",
+            "move it out of the asset root, or narrow code_review_exemptions.folders in "
+            "service-manifest.json",
         )
     if len(found) > assets.MAX_SOURCE_LINES:
         more = len(found) - assets.MAX_SOURCE_LINES
@@ -758,11 +759,12 @@ def _dependencies_check(repo: Path) -> Iterator[tuple[bool, str]]:
         return
     deps = manifest.dependencies
     installs = ", ".join(deps.installs) or "none"
-    age = f"minimum release age {_plural(deps.minimum_release_age_days, 'day')}"
+    age = f"minimum age {_plural(deps.minimum_release_age_days, 'day')}"
     if deps.minimum_release_age_days < RELEASE_AGE_DEFAULT:
+        # 0245: the doctor prints packages.minimum_age_reason beside a lowered age.
         reason = _escaped(deps.minimum_release_age_reason or "")
         age += f", lowered from {RELEASE_AGE_DEFAULT}: {reason}"
-    yield True, f"OK   dependencies: frozen installs {installs}; {age}"
+    yield True, f"OK   packages: allowed installers {installs}; {age}"
 
 
 def _typecheck_check(repo: Path, run: bool = False) -> Iterator[tuple[bool, str]]:
@@ -1010,7 +1012,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--run-typecheck",
         action="store_true",
-        help="run the stack.typecheck_cmd the repository declares in service-manifest.json;"
+        help="run the commands.typecheck the repository declares in service-manifest.json;"
         " this executes a command the repository chose",
     )
     parser.add_argument(

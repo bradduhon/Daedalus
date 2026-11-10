@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0187: the model tier of one coder dispatch, from the unit's files and its refutation count.
-# lib.config reads the coder_models key against TIERS; the train runner maps a tier to a model.
+# lib.config reads models.coder, plugin_file_coder and coder_after_rejection into TIERS.
 from __future__ import annotations
 
 import posixpath

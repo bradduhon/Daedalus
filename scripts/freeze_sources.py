@@ -64,7 +64,8 @@ R_OUTPUT_OUTSIDE = (
 )
 R_OUTPUT_PROTECTED = (
     "output folder {out} is or holds a protected path, such as .claude/, .github/, contracts/, "
-    "service-manifest.json, the ledger or a jail_narrowing entry (0054, D.5). Next: name a "
+    "service-manifest.json, the decisions file or a prohibited_writes entry (0054, D.5). Next: "
+    "name a "
     "folder that holds no protected path."
 )
 R_OUTPUT_UNCHECKED = (
@@ -245,7 +246,7 @@ def _roots(repo: Path) -> tuple[ExcludedRoot, ...]:
     try:
         roots = resolve_excluded_roots(load_config(str(repo)), repo)
     except (ConfigError, DataDirError) as exc:
-        raise SourcesError(f"excluded_roots could not be resolved: {exc}", EXIT_ROOT) from exc
+        raise SourcesError(f"git_excluded_folders could not be resolved: {exc}", EXIT_ROOT) from exc
     if in_git_work_tree(repo):
         for root in roots:
             inside = _under(root.path, str(repo)) and os.path.realpath(root.path) != str(repo)

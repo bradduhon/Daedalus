@@ -153,6 +153,34 @@ class TestRegressionCharterDocs:
         command = f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}"
         assert decide(_b("charter-docs", command), Config()).allow, command
 
+    @pytest.mark.parametrize(
+        ("args", "missing"),
+        [
+            ("--expected-seq 2 --entry-file docs/.tmp/e.md --repo BO", "--type"),
+            ("--expected-seq 2 --entry-file docs/.tmp/e.md --repo=BO", "--type"),
+            ("--expected-seq 2 --entry-file docs/.tmp/e.md --type PLT", "--repo"),
+            ("--type=PLT --entry-file=docs/.tmp/e.md --expected-seq=2", "--repo"),
+        ],
+    )
+    def test_a_half_coded_append_is_refused(self, args: str, missing: str) -> None:
+        # 0247: both codes or neither; the refusal names the flag one code alone is missing.
+        command = f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}"
+        d = decide(_b("charter-docs", command), Config())
+        assert not d.allow and d.reason is not None, command
+        assert d.reason.startswith(jail.R_LEDGER_ARGS) and f"alone is missing {missing}" in d.reason
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            "--expected-seq 2 --entry-file docs/.tmp/e.md",
+            "--entry-file=docs/.tmp/e.md --expected-seq=2",
+        ],
+    )
+    def test_an_append_with_no_codes_is_allowed(self, args: str) -> None:
+        # 0247: a plain-number decisions file takes neither code.
+        command = f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}"
+        assert decide(_b("charter-docs", command), Config()).allow, command
+
     def test_repo_scripts_ledger_allowed(self) -> None:
         args = "--expected-seq 2 --entry-file docs/.tmp/e.md --repo BO --type PLT"
         command = f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}"
@@ -212,7 +240,7 @@ class TestRound4Conductor:
 class TestFixWaveLedgerResolution:
     def test_append_ledger_cli_still_allowed(self, tmp_path: Path) -> None:
         repo = _git_init(tmp_path / "repo")
-        (repo / "service-manifest.json").write_text(json.dumps({"ledger": _MANIFEST_LEDGER}))
+        (repo / "service-manifest.json").write_text(json.dumps(_MANIFEST_LEDGER))
         args = "--expected-seq 1 --entry-file docs/.tmp/e.md --repo BO --type PLT"
         hook_input = _b("charter-docs", f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}")
         hook_input["cwd"] = str(repo)
@@ -960,7 +988,7 @@ def test_orchestrator_refusal_names_the_new_scripts() -> None:
 # 0158, 0159-DAE-PLT: validate starts provider programs, so it runs only on its own switch.
 TF_ALLOW = ("--git", "read-only", "--test-runner", "audit", "--terraform")
 TF_HOOK = "read_only_bash"
-VALIDATE_NEXT = "set features.terraform_validate to true in service-manifest.json"
+VALIDATE_NEXT = "set checks.terraform_validate to true in service-manifest.json"
 
 
 def _tf_payload(repo: Path, command: str) -> dict[str, Any]:
@@ -988,7 +1016,7 @@ def _plant_provider(repo: Path) -> Path:
 def _features(repo: Path, block: dict[str, object] | None) -> None:
     if block is not None:
         manifest = repo / "service-manifest.json"
-        manifest.write_text(json.dumps({"features": block}), encoding="utf-8")
+        manifest.write_text(json.dumps({"checks": block}), encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -997,8 +1025,8 @@ def _features(repo: Path, block: dict[str, object] | None) -> None:
         None,
         {},
         {"terraform_validate": False},
-        {"terraform_tools": True},
-        {"terraform_tools": None, "terraform_validate": False},
+        {"terraform_format": True},
+        {"terraform_format": None, "terraform_validate": False},
     ],
 )
 def test_terraform_validate_refused_unless_the_switch_is_true(
@@ -1009,9 +1037,9 @@ def test_terraform_validate_refused_unless_the_switch_is_true(
     for command in ("terraform validate", f"terraform -chdir={module} validate"):
         reason = _tf_call(repo_cwd, command)
         assert reason is not None, command
-        assert reason.startswith("features.terraform_validate is not true"), reason
+        assert reason.startswith("checks.terraform_validate is not true"), reason
         assert reason.count("Next:") == 1 and VALIDATE_NEXT in reason.split("Next:")[1], reason
-    # 0158: fmt -check stays under features.terraform_tools alone.
+    # 0158: fmt -check stays under checks.terraform_format alone.
     for command in ("terraform fmt -check", f"terraform -chdir={module} fmt -check"):
         assert _tf_call(repo_cwd, command) is None, command
 
@@ -1020,7 +1048,7 @@ def test_terraform_validate_admitted_when_the_switch_is_true(repo_cwd: Path) -> 
     module = _plant_provider(repo_cwd)
     for block in (
         {"terraform_validate": True},
-        {"terraform_tools": True, "terraform_validate": True},
+        {"terraform_format": True, "terraform_validate": True},
     ):
         _features(repo_cwd, block)
         for command in ("terraform validate", f"terraform -chdir={module} validate"):
@@ -1030,10 +1058,10 @@ def test_terraform_validate_admitted_when_the_switch_is_true(repo_cwd: Path) -> 
 
 def test_terraform_tools_off_outranks_the_validate_switch(repo_cwd: Path) -> None:
     module = _plant_provider(repo_cwd)
-    _features(repo_cwd, {"terraform_tools": False, "terraform_validate": True})
+    _features(repo_cwd, {"terraform_format": False, "terraform_validate": True})
     for command in ("terraform validate", f"terraform -chdir={module} fmt -check"):
         reason = _tf_call(repo_cwd, command)
-        assert reason is not None and reason.startswith("features.terraform_tools is false")
+        assert reason is not None and reason.startswith("checks.terraform_format is false")
 
 
 def test_terraform_validate_refused_on_a_non_boolean_switch(repo_cwd: Path) -> None:
@@ -1077,7 +1105,7 @@ def test_wrapped_validate_waits_for_its_switch_and_fmt_check_does_not(
     init = f"{wrap} {TERRAFORM_INIT_FORM.format(module=wt)}"
     for command in ("terraform validate", f"{wrap} terraform validate", init):
         reason = _tf_call(repo, command)
-        assert reason is not None and reason.startswith("features.terraform_validate is not true")
+        assert reason is not None and reason.startswith("checks.terraform_validate is not true")
         assert not decide(_tf_payload(repo, command), Config()).allow, command
     assert _tf_call(repo, f"{wrap} terraform fmt -check") is None
 

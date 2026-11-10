@@ -15,6 +15,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from lib.manifest import load as load_manifest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EVALS = REPO_ROOT / "evals"
@@ -236,13 +237,14 @@ def test_pass_rule(case: str) -> None:
 
 
 @pytest.mark.parametrize("case", CASES)
-def test_fixture(case: str) -> None:
+def test_fixture(case: str, tmp_path: Path) -> None:
     root = FIXTURES / case
     spec = json.loads((root / "fixture.json").read_text(encoding="utf-8"))
     assert set(spec) == {"git", "origin"} and isinstance(spec["git"], bool)
     assert spec["origin"] is None or str(spec["origin"]).startswith("https://example.invalid/")
-    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["features"]["scope"] == ("repository" if spec["git"] else "folder")
+    # 0245: scope is detected from git; the manifest loads through its reader.
+    (tmp_path / "service-manifest.json").write_bytes((root / "manifest.json").read_bytes())
+    assert load_manifest(tmp_path) is not None
     _, body = _split(EVALS / case / "prompt.md")
     for named in NAMED_INPUT.findall(body):
         assert (root / named).is_file(), (

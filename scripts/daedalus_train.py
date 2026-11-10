@@ -94,7 +94,9 @@ def _parser() -> argparse.ArgumentParser:
     # 0133, 0139: one exemption per finding, with how the operator chose to track it.
     waive = sub.add_parser("exception")
     waive.add_argument("--repo", type=Path, required=True)
-    waive.add_argument("--ledger-id", dest="ledger_id", required=True)
+    # 0249: --reason stands in for --ledger-id when the service manifest names no decisions file.
+    waive.add_argument("--ledger-id", dest="ledger_id")
+    waive.add_argument("--reason")
     # 229: the verify-phase form names a unit and one row of its newest refuted verdict.
     target = waive.add_mutually_exclusive_group(required=True)
     target.add_argument("--finding")
@@ -124,7 +126,8 @@ def _parser() -> argparse.ArgumentParser:
     model.add_argument("--repo", type=Path, required=True)
     model.add_argument("--agent", required=True)
     model.add_argument("--override")
-    # 0187: --unit picks the coder's model from coder_models and records it on the unit.
+    # 0187, 0245: --unit picks the coder's model from models.coder, plugin_file_coder or
+    # coder_after_rejection, and records it on the unit; models.agents is the fallback.
     model.add_argument("--unit")
     # issue 187: one REFUTED verifier reply recorded on the unit the model command reads.
     refute = sub.add_parser("refuted")
@@ -221,7 +224,8 @@ def _packs(repo: Path, diff: str | None = None) -> Outcome:
     except (ManifestError, OSError) as exc:
         return Outcome(EXIT_STOP, [f"packs: {exc}", PACKS_NEXT])
     problems += [
-        f"pack {ident}: frameworks.packs names {ident}, which is not a pack Daedalus ships"
+        f"pack {ident}: compliance_rules.extra_builtin names {ident}, which is not a pack "
+        "Daedalus ships"
         for ident in unknown
     ]
     if not folders and diff is not None and not problems:
@@ -347,9 +351,11 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
             )
         if args.unit is not None:
             return record_unit_exception(
-                repo, args.ledger_id, args.unit, args.row, args.tracking, args.other
+                repo, args.ledger_id, args.unit, args.row, args.tracking, args.other, args.reason
             )
-        return record_exception(repo, args.ledger_id, args.finding, args.tracking, args.other)
+        return record_exception(
+            repo, args.ledger_id, args.finding, args.tracking, args.other, args.reason
+        )
     if args.action == "verdict":
         if args.gate == "docs":
             if args.round_ is not None or args.seq is not None:

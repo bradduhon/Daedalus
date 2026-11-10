@@ -24,7 +24,7 @@
     "premise_test": "tests/test_persona_jails.py::test_terraform_class_refuses_every_other_form"
   },
   "command_allowlist.R_TERRAFORM_OFF": {
-    "failure": "0132: the auditor runs terraform while the project turned features.terraform_tools off",
+    "failure": "0132: the auditor runs terraform while the project turned checks.terraform_format off",
     "premise_test": "tests/test_persona_jails.py::test_terraform_class_refuses_both_checks_when_the_switch_is_off"
   },
   "command_allowlist.R_TERRAFORM_MANIFEST": {
@@ -32,7 +32,7 @@
     "premise_test": "tests/test_persona_jails.py::test_terraform_class_fails_closed_on_an_unreadable_manifest"
   },
   "command_allowlist.R_TERRAFORM_VALIDATE_OFF": {
-    "failure": "0158: the auditor runs terraform validate while features.terraform_validate is not true, so provider programs under .terraform/providers start unconfined",
+    "failure": "0158: the auditor runs terraform validate while checks.terraform_validate is not true, so provider programs under .terraform/providers start unconfined",
     "premise_test": "tests/test_checks_command_allowlist.py::test_terraform_validate_refused_unless_the_switch_is_true"
   }
 }

@@ -18,7 +18,7 @@ from tests.hook_chain import decide
 from tests.test_checks_credential_paths import _bash_in, _key_repo
 
 SHIPPED = {"aws-default": 34, "nist-distilled": 27, "stripe-default": 5, "cost-tier": 8}
-# 0192: cost-tier is off until frameworks.packs names it.
+# 0192: cost-tier is off until compliance_rules.extra_builtin names it.
 OFF_BY_DEFAULT = {"cost-tier"}
 AWS_ID = re.compile(r"AWS-([A-Z0-9]+)-[0-9]+")
 
@@ -482,7 +482,8 @@ def test_control_ids_skip_an_unreadable_pack(tmp_path: Path) -> None:
 
 
 def _manifest(repo: Path, frameworks: object) -> None:
-    doc = {} if frameworks is None else {"frameworks": frameworks}
+    # 0245: the compliance rules group of a manifest holding nothing else.
+    doc = {} if frameworks is None else {"compliance_rules": frameworks}
     (repo / "service-manifest.json").write_text(json.dumps(doc), encoding="utf-8")
 
 
@@ -503,16 +504,16 @@ def test_pack_folders_reads_the_declared_folder_then_the_shipped_packs(repo_cwd:
     (root / "empty").mkdir()
     (root / "notes.txt").write_text("x")
     os.symlink(one, root / "linked")
-    _manifest(repo_cwd, {"pack_dir": "compliance/packs"})
+    _manifest(repo_cwd, {"folder": "compliance/packs"})
     assert pack_folders(repo_cwd) == [one, two, *_shipped()]
-    _manifest(repo_cwd, {"pack_dir": "compliance/packs", "default_packs": False})
+    _manifest(repo_cwd, {"folder": "compliance/packs", "use_builtin": False})
     assert pack_folders(repo_cwd) == [one, two]
 
 
 def test_pack_folders_with_a_missing_declared_folder(repo_cwd: Path) -> None:
-    _manifest(repo_cwd, {"pack_dir": "absent", "default_packs": False})
+    _manifest(repo_cwd, {"folder": "absent", "use_builtin": False})
     assert pack_folders(repo_cwd) == []
-    _manifest(repo_cwd, {"pack_dir": "absent"})
+    _manifest(repo_cwd, {"folder": "absent"})
     assert pack_folders(repo_cwd) == _shipped()
 
 
@@ -527,7 +528,7 @@ def test_train_packs_prints_the_checked_folders_or_stops(
     monkeypatch.chdir(repo_cwd)
     run = ["packs", "--repo", str(repo_cwd)]
     one = _make(repo_cwd / "packs" / "one")
-    _manifest(repo_cwd, {"pack_dir": "packs", "default_packs": False})
+    _manifest(repo_cwd, {"folder": "packs", "use_builtin": False})
     assert daedalus_train.main(run) == 0
     assert capsys.readouterr().out == f"Packs: {one}\n"
     _make(repo_cwd / "packs" / "two", [_control(verify="rg --ignore-file /tmp/x -n . .")])
@@ -535,7 +536,7 @@ def test_train_packs_prints_the_checked_folders_or_stops(
     out = capsys.readouterr().out.splitlines()
     assert out[0].startswith("pack two: control X-1 verify is refused by the auditor's jail")
     assert out[-1].startswith("Next: run /daedalus:doctor and fix each pack it names")
-    _manifest(repo_cwd, {"pack_dir": "absent", "default_packs": False})
+    _manifest(repo_cwd, {"folder": "absent", "use_builtin": False})
     assert daedalus_train.main(run) == 1
     assert capsys.readouterr().out.startswith("No control pack was found")
 
@@ -547,12 +548,12 @@ def test_a_default_false_pack_is_read_only_when_named(repo_cwd: Path) -> None:
     cost = packs.FRAMEWORKS_DIR / "cost-tier"
     assert load_pack(cost).default is False
     assert cost not in pack_folders(repo_cwd)
-    _manifest(repo_cwd, {"packs": ["cost-tier"]})
+    _manifest(repo_cwd, {"extra_builtin": ["cost-tier"]})
     assert pack_folders(repo_cwd) == sorted([*_shipped(), cost])
-    _manifest(repo_cwd, {"packs": ["cost-tier"], "default_packs": False})
+    _manifest(repo_cwd, {"extra_builtin": ["cost-tier"], "use_builtin": False})
     assert pack_folders(repo_cwd) == [cost]
     assert packs.unknown_named(repo_cwd) == []
-    _manifest(repo_cwd, {"packs": ["no-such-pack"]})
+    _manifest(repo_cwd, {"extra_builtin": ["no-such-pack"]})
     assert packs.unknown_named(repo_cwd) == ["no-such-pack"]
 
 
@@ -677,13 +678,13 @@ def test_train_packs_with_a_diff_prints_the_triggered_packs(
 def test_train_packs_with_a_diff_and_no_pack_goes_on_but_a_broken_pack_stops(
     repo_cwd: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # 0192: default_packs false and no project pack must not stop a docs-only audit.
+    # 0192: use_builtin false and no project pack must not stop a docs-only audit.
     import daedalus_train
 
     from tests.conftest import git
 
     monkeypatch.chdir(repo_cwd)
-    _manifest(repo_cwd, {"default_packs": False})
+    _manifest(repo_cwd, {"use_builtin": False})
     git(repo_cwd, "add", "-A")
     git(repo_cwd, "commit", "-q", "-m", "base")
     (repo_cwd / "README.md").write_text("x\n", encoding="utf-8")
@@ -695,7 +696,7 @@ def test_train_packs_with_a_diff_and_no_pack_goes_on_but_a_broken_pack_stops(
     assert daedalus_train.main(["packs", "--repo", str(repo_cwd)]) == 1
     assert capsys.readouterr().out.startswith("No control pack was found")
     bad = _make(repo_cwd / "packs" / "bad", version="1.0")
-    _manifest(repo_cwd, {"pack_dir": "packs", "default_packs": False})
+    _manifest(repo_cwd, {"folder": "packs", "use_builtin": False})
     assert daedalus_train.main(run) == 1
     assert capsys.readouterr().out.startswith(f"pack {bad.name}: pack.json version must be")
 
@@ -706,11 +707,12 @@ def test_train_packs_stops_on_a_named_pack_daedalus_does_not_ship(
     import daedalus_train
 
     monkeypatch.chdir(repo_cwd)
-    _manifest(repo_cwd, {"packs": ["no-such-pack"]})
+    _manifest(repo_cwd, {"extra_builtin": ["no-such-pack"]})
     assert daedalus_train.main(["packs", "--repo", str(repo_cwd)]) == 1
     out = capsys.readouterr().out.splitlines()
     assert out[0] == (
-        "pack no-such-pack: frameworks.packs names no-such-pack, which is not a pack Daedalus ships"
+        "pack no-such-pack: compliance_rules.extra_builtin names no-such-pack, which is not a pack "
+        "Daedalus ships"
     )
 
 
