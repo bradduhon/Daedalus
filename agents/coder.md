@@ -91,6 +91,12 @@ between Bash calls.
      `Table diff: <table> | <added, widened, narrowed or removed> | <row> | <corpus row that pins it>`,
      or `Table diff: none`, written with a second `-m`. The auditor derives its own table and
      checks yours against it.
+   - **Refuted forms** (0229): on a unit with a changed file of that list, a `FIX.` message
+     that names a refuted form or an audit reproduction means one named row per form in the
+     matching module under `tests/adversarial/` in your worktree. Commit the rows before the
+     fix, run them there and record the failing run as a `- test` receipt, then fix until they
+     pass. A fix pass with no such row goes back to you. On any other unit, a refuted
+     requirement gets a failing test in the unit's own test file.
    - `pytest --basetemp` is refused; the default temp folder works.
 6. Finish with receipts, not narrative (0127, 0128). The verifier judges your diff against
    your brief, never your report, so a COMPLETE reply holds no prose above its status line.

@@ -241,6 +241,10 @@ broken, not the one case. The test asserts it at every enforcement point that ho
    `python3 -m pytest <audit worktree>/tests/adversarial -q -p no:cacheprovider --rootdir <audit worktree>`.
    A new spelling of a known bypass class is filed first as an audit test in the round folder,
    named for that class; the coder's fix adds it as a row of the matching module.
+   Refutations become corpus (0229): every reproduction you or the operator record on a file
+   of the table-diff list lands in `tests/adversarial/` as a named row before the fix is
+   accepted. In the next round, check that the row exists at `<tip>` and passes; a fix with
+   no such row is a blocking finding in the class of the one it fixes.
 A suggested fix may follow a finding as `Fix: <one line>`; the coder checks it against the
 test before acting on it, so the test, not the suggestion, defines done.
 
