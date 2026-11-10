@@ -7,6 +7,7 @@ import glob as _glob
 import itertools
 import os
 import re
+import shlex
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -37,8 +38,11 @@ from lib.credential_paths import (
     R_IGNORE_WHITELIST,
     R_REPLY_KEY,
     R_REPLY_KEY_TREE,
+    R_TRACKED_SECRET,
+    R_TRACKED_UNKNOWN,
     REPLY_KEY_NAME,
     env_file_hit,
+    env_name,
     env_roots,
     env_walk,
     env_whitelist_reason,
@@ -1087,6 +1091,14 @@ _FORMAT = ("--format=", "--pretty=")
 _STATUS_FLAGS = frozenset(
     {"--short", "--branch", "--porcelain", "--porcelain=v1", "--porcelain=v2", "--show-stash"}
 )
+# 267: the read options whose next word is their value; the grammar and the tracked check share it.
+_GIT_VALUED: dict[str, frozenset[str]] = {
+    # 228 S3: --grep <value> as two words, beside the --grep=<value> prefix.
+    # 266: --max-count in both forms, as -n is; admit types its value as text.
+    "log": frozenset({"-n", "-S", "-G", "--grep", "--max-count"}),
+    "grep": frozenset({"-e", "-A", "-B", "-C", "--max-depth"}),
+    "blame": frozenset({"-L"}),
+}
 _GIT_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
     "status": lambda a, _: _flags_ok(a, _STATUS_FLAGS, (), (r"-[sb]+",)),
     "log": lambda a, _: _flags_ok(
@@ -1095,9 +1107,7 @@ _GIT_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
         | {"--pickaxe-regex", "--pickaxe-all"},
         (*_FORMAT, "--grep=", "--author=", "--max-count="),
         (r"-\d+", r"-n\d+", r"-[SG].+"),
-        # 228 S3: --grep <value> as two words, beside the --grep=<value> prefix.
-        # 266: --max-count in both forms, as -n is; admit types its value as text.
-        frozenset({"-n", "-S", "-G", "--grep", "--max-count"}),
+        _GIT_VALUED["log"],
     ),
     "diff": lambda a, _: _flags_ok(
         a,
@@ -1117,14 +1127,14 @@ _GIT_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
         frozenset({"--cached", "--untracked", "--heading", "--break"}),
         (),
         (r"-[nilLwvcEFIhH]+", r"-[ABC]\d+"),
-        frozenset({"-e", "-A", "-B", "-C", "--max-depth"}),
+        _GIT_VALUED["grep"],
     ),
     "blame": lambda a, _: _flags_ok(
         a,
         frozenset({"-w", "-s", "-e", "-l", "--porcelain", "--line-porcelain"}),
         (),
         (r"-[CM]\d*", r"-L.+"),
-        frozenset({"-L"}),
+        _GIT_VALUED["blame"],
     ),
     "merge-base": lambda a, _: _flags_ok(
         a, frozenset({"--is-ancestor", "--all", "--octopus", "--independent", "--fork-point"})
@@ -1990,10 +2000,21 @@ class _Spec(NamedTuple):
     fold: bool
     wild: bool
     top: str
+    # 267: the operand word's span, a <rev>:<path> read, and wildcards off by literal magic.
+    span: tuple[int, int] = (0, 0)
+    blob: bool = False
+    literal: bool = False
+    # 267: an exclude pathspec, and whether it is literal enough to rescue a tracked secret.
+    exclude: bool = False
+    rescue: bool = False
 
 
 _SPEC_SHORT = {"/": "top", "!": "exclude", "^": "exclude"}
+# 267: an exclude rescues only as a typed literal path, exclude and top magic at most.
+_RESCUE_MAGIC = frozenset({"exclude", "top"})
+_SPEC_WILD = frozenset("*?[\\")
 _SPEC_NOWILD = frozenset({"--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs"})
+_SPEC_LITERAL = frozenset({"--literal-pathspecs", "--noglob-pathspecs"})
 _REV_PATH_SUBS = frozenset({"show", "cat-file"})
 
 
@@ -2024,34 +2045,54 @@ def _git_specs(
     # 228 tail: each typed pathspec, and a show or cat-file <rev>:<path>, under git's folder.
     if done.family != "git":
         return []
-    folder = here
-    if done.git_dir is not None:
-        folder = _abs(_typed_path(done.git_dir, words, command, env) or "", here)
-    found = checkout_git_dir(folder) if os.path.isabs(folder) else None
-    top = str(found[0]) if found else folder
+    folder, top = _git_folder(done, words, command, env, here)
     toks = set(admitted_tokens(script, done))
     out: list[_Spec] = []
     for typed in done.pathspecs:
         text = _typed_path(typed, words, command, env)
         if text is None:
-            out.append(_Spec(None, typed.text, False, False, top))
+            out.append(_Spec(None, typed.text, False, False, top, typed.span))
             continue
         magic, rest = _pathspec_magic(text)
-        if "exclude" in magic:
-            continue
         base = top if "top" in magic else folder
         wild = not (magic & {"literal", "glob"} or toks & _SPEC_NOWILD)
         fold = "icase" in magic or "--icase-pathspecs" in toks
-        out.append(_Spec(os.path.normpath(_abs(rest, base)), typed.text, fold, wild, top))
+        literal = "literal" in magic or bool(toks & _SPEC_LITERAL)
+        path = os.path.normpath(_abs(rest, base))
+        exclude = "exclude" in magic
+        # 267: --literal-pathspecs turns magic off, so the word is no exclude to git.
+        rescue = exclude and magic <= _RESCUE_MAGIC and not fold and not typed.glob
+        rescue = rescue and bool(rest) and not set(rest) & _SPEC_WILD
+        rescue = rescue and "--literal-pathspecs" not in toks
+        spec = _Spec(path, typed.text, fold, wild, top, typed.span, False, literal)
+        out.append(spec._replace(exclude=exclude, rescue=rescue))
     if (done.subcommand.text if done.subcommand else "") in _REV_PATH_SUBS:
         for typed in (*done.texts, *done.pathspecs):
+            if "exclude" in _pathspec_magic(typed.text)[0]:
+                continue  # 267: :(exclude)x and :!x leave a path out; neither names a blob.
             rev, colon, path = typed.text.partition(":")
             path = path[2:] if not rev and path[1:2] == ":" and path[:1] in "0123" else path
             if colon and path and not typed.text.startswith("-"):
                 # 228 tail: a tree path is from the top, unless it opens with ./ or ../ (git show).
                 base = folder if path.startswith(("./", "../")) else top
-                out.append(_Spec(os.path.normpath(_abs(path, base)), typed.text, False, False, top))
+                blob = os.path.normpath(_abs(path, base))
+                out.append(_Spec(blob, typed.text, False, False, top, typed.span, True, True))
     return out
+
+
+def _git_folder(
+    done: AdmittedCommand,
+    words: dict[tuple[int, int], Word],
+    command: str,
+    env: dict[str, str],
+    here: str,
+) -> tuple[str, str]:
+    # 228 tail, 267: the folder git runs in after -C, and the top of the checkout holding it.
+    folder = here
+    if done.git_dir is not None:
+        folder = _abs(_typed_path(done.git_dir, words, command, env) or "", here)
+    found = checkout_git_dir(folder) if os.path.isabs(folder) else None
+    return folder, str(found[0]) if found else folder
 
 
 _SPEC_WALK_CAP = 256
@@ -2084,9 +2125,246 @@ def _spec_reaches(spec: _Spec, stores: list[str]) -> str | None:
     return None
 
 
+class _GitRead(NamedTuple):
+    # 267: one admitted git command, the folder it runs in, its checkout top and its pathspecs.
+    done: AdmittedCommand
+    folder: str
+    top: str
+    specs: list[_Spec]
+
+
+# 267: options that make a read print file content or test it (pickaxe); log reads only by these.
+_PATCH_OPTS = frozenset(
+    {"-p", "--patch", "--word-diff", "--check", "--pickaxe-regex", "--pickaxe-all"}
+)
+_PATCH_PREFIXES = ("-U", "-S", "-G")
+# 267: names and line counts only; diff and show print no content with one and no patch option.
+_NAMES_OPTS = frozenset({"--name-only", "--name-status", "--stat", "--shortstat", "--numstat"})
+# 267: ls-files from the whole checkout; globals forwarded to it, any other global is dropped.
+_LS_FILES = ("ls-files", "-z", "-s", "--", ":/")
+_LS_GLOBALS = frozenset({"--git-dir", "--work-tree"})
+_LS_TIMEOUT = 5.0
+_SYMLINK_MODE = b"120000"
+# 267: a word holding one of these may be a revision, so its wildcard never makes it a path.
+_REV_CHARS = frozenset("^~:@{")
+
+
+def _git_tree_read(done: AdmittedCommand) -> tuple[bool, bool]:
+    # 267: (prints tree content under its paths, may print a <rev>:<path> blob); a built option
+    # could be -p, so it counts as one.
+    sub = done.subcommand.text if done.subcommand else ""
+    opts = {o.text for o in done.options}
+    patch = any(o.glob for o in done.options) or any(
+        t in _PATCH_OPTS or t.startswith(_PATCH_PREFIXES) for t in opts
+    )
+    if sub == "log":
+        return patch, False
+    if sub == "stash":
+        # 267: stash show prints a stat unless a patch option asks for content.
+        return patch and [t.text for t in done.texts[:1]] == ["show"], False
+    if sub in ("diff", "show"):
+        names = opts & (_NAMES_OPTS | ({"-s"} if sub == "show" else set()))
+        return patch or not names, sub == "show"
+    return sub in ("grep", "blame"), False
+
+
+def _operand_slots(
+    script: Script, done: AdmittedCommand
+) -> tuple[set[tuple[int, int]], set[tuple[int, int]], bool]:
+    # 267: the operand words that are an option's value or grep's pattern, those after --, and
+    # whether a -- splits revisions from paths.
+    sub = done.subcommand
+    words = admitted_words(script, done)
+    at = next((i for i, w in enumerate(words) if sub is not None and w.span == sub.span), None)
+    name = sub.text if sub is not None else ""
+    valued = _GIT_VALUED.get(name, frozenset())
+    # 267: git grep takes its first operand as the pattern unless -e names one.
+    pattern = name == "grep" and "-e" not in {o.text for o in done.options}
+    values: set[tuple[int, int]] = set()
+    after: set[tuple[int, int]] = set()
+    dashed = skip = opts_done = False
+    for word in words[at + 1 :] if at is not None else []:
+        lit = word.literal
+        if dashed:
+            after.add(word.span)
+        elif skip:
+            values.add(word.span)
+            skip = False
+        elif lit == "--" and pattern and not opts_done:
+            opts_done = True  # 267: grep drops one -- before its pattern; the next word is it.
+        elif lit == "--":
+            dashed = True
+        elif not opts_done and lit is not None and lit.startswith("-") and lit != "-":
+            skip = lit in valued
+        elif pattern:
+            values.add(word.span)
+            pattern = False
+    return values, after, dashed
+
+
+def _path_operand(spec: _Spec, after: set[tuple[int, int]], dashed: bool) -> bool:
+    # 267: after -- a word is a path; before it, a word on disk, or a wildcard no revision holds.
+    assert spec.path is not None
+    if spec.span in after:
+        return True
+    # 267: with a -- every word before it is a revision, a file of that name or not.
+    if dashed or spec.raw.startswith(":"):
+        return False
+    if os.path.lexists(spec.path):
+        return True
+    text = set(spec.raw)
+    return spec.wild and bool(text & _GLOB_CHARS) and not text & _REV_CHARS and ".." not in spec.raw
+
+
+def _spec_covers(spec: _Spec, secrets: list[str]) -> str | None:
+    # 267: a pathspec that is, holds, or by wildcard matches a tracked secret path.
+    assert spec.path is not None
+    real = spec._replace(
+        path=os.path.realpath(spec.path), top=os.path.realpath(spec.top), wild=not spec.literal
+    )
+    fold = str.casefold if spec.fold else str
+    held = fold(real.path or "").rstrip(os.sep) + os.sep
+    inside = next((s for s in secrets if fold(s).startswith(held)), None)
+    return inside or _spec_reaches(real, secrets)
+
+
+def _ls_globals(script: Script, done: AdmittedCommand) -> list[str]:
+    # 267: the typed --git-dir and --work-tree words before the subcommand, as git read them.
+    words = admitted_words(script, done)
+    out: list[str] = []
+    for i, word in enumerate(words[1:], 1):
+        if done.subcommand is not None and word.span == done.subcommand.span:
+            break
+        lit = word.literal or ""
+        name = lit.partition("=")[0]
+        if name in _LS_GLOBALS and "=" in lit:
+            out.append(lit)
+        elif name in _LS_GLOBALS and i + 1 < len(words):
+            out += [lit, words[i + 1].literal or ""]
+        elif lit == "--bare":
+            out.append(lit)
+    return out
+
+
+def tracked_secrets(
+    folder: str, globals_: list[str], hit: Callable[[str], str | None], roots: list[str]
+) -> list[str] | None:
+    # 267: the tracked paths hit refuses by name; [] outside any checkout, None when unread.
+    inside = bool(globals_) or (os.path.isabs(folder) and checkout_git_dir(folder) is not None)
+    if not inside:
+        return []
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    argv = ["git", "-c", "core.fsmonitor=false", *globals_, *_LS_FILES]
+    try:
+        done = subprocess.run(
+            argv,
+            cwd=folder,
+            capture_output=True,
+            timeout=_LS_TIMEOUT,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0 or (done.stdout and not done.stdout.endswith(b"\0")):
+        return None
+    base = os.path.realpath(folder)
+    found: list[str] = []
+    for entry in done.stdout.split(b"\0")[:-1]:
+        meta, tab, raw = entry.partition(b"\t")
+        if not tab or not raw:
+            return None
+        path = os.path.normpath(os.path.join(base, os.fsdecode(raw)))
+        name = os.path.basename(path)
+        # 267: hit judges each name; the cheap tests only skip names it cannot refuse.
+        maybe = env_name(name) or name == REPLY_KEY_NAME or meta.startswith(_SYMLINK_MODE)
+        maybe = maybe or any(path == r or path.startswith(r + os.sep) for r in roots)
+        if maybe and hit(path):
+            found.append(path)
+    return list(dict.fromkeys(found))
+
+
+def _tracked_reason(
+    script: Script,
+    gits: list[_GitRead],
+    names: set[str],
+    hit: Callable[[str], str | None],
+    roots: list[str],
+) -> str | None:
+    # 267, 0239: a content read with no path, or a path over a secret the checkout tracks.
+    for read in gits:
+        tree, blobs_too = _git_tree_read(read.done)
+        blobs = [s for s in read.specs if s.blob] if blobs_too else []
+        if not tree and not blobs:
+            continue
+        if any(n.startswith("GIT_") for n in names):
+            return R_TRACKED_UNKNOWN.format(path=read.folder)
+        secrets = tracked_secrets(read.folder, _ls_globals(script, read.done), hit, roots)
+        if secrets is None:
+            return R_TRACKED_UNKNOWN.format(path=read.folder)
+        if not secrets:
+            continue
+        values, after, dashed = _operand_slots(script, read.done)
+        blob_spans = {s.span for s in blobs}
+        paths: list[_Spec] = []
+        revs = False
+        for spec in read.specs:
+            if spec.blob or spec.exclude or spec.span in values or spec.span in blob_spans:
+                continue
+            if _path_operand(spec, after, dashed):
+                paths.append(spec)
+            else:
+                revs = True
+        sub = read.done.subcommand.text if read.done.subcommand else ""
+        # 267: a <rev>:<path> blob of a secret prints it whatever the excludes say.
+        for spec in blobs:
+            secret = _spec_covers(spec, secrets)
+            if secret is not None:
+                return _tracked_text(secret, read.top, None)
+        if sub == "grep" and not paths:
+            # 267: git grep with no path searches the folder it runs in, not the whole checkout.
+            paths = [_Spec(read.folder, ".", False, False, read.top, literal=True)]
+        whole = tree and not paths and (sub != "show" or revs or not blobs)
+        reached = [s for s in secrets if whole or any(_spec_covers(p, [s]) for p in paths)]
+        reached = reached if tree else []
+        excludes = [os.path.realpath(s.path or "") for s in read.specs if s.rescue]
+        left = [s for s in reached if not any(_contains_path(e, s) for e in excludes)]
+        if left:
+            return _tracked_text(left[0], read.top, sub)
+    return None
+
+
+# 267: the Next of R_TRACKED_SECRET; the exclude words where the agent grammar admits them.
+_TRACKED_NEXT_EXCLUDE = (
+    "add {word} after -- (add the -- first if the command has none) to leave the file out, or "
+    "ask the operator to untrack it"
+)
+_TRACKED_NEXT_PATHS = (
+    "name the paths you need after --, leaving out the file and any folder that holds it, or ask "
+    "the operator to untrack it"
+)
+
+
+def _contains_path(folder: str, path: str) -> bool:
+    return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
+
+
+def _tracked_text(secret: str, top: str, sub: str | None) -> str:
+    # 267: the exclude names the secret from the checkout top, the one top form 0225 admits.
+    from lib.admit import _EXCLUDE_SUBS  # 228 S3: admit imports this module.
+
+    if sub not in _EXCLUDE_SUBS:
+        return R_TRACKED_SECRET.format(path=secret, next=_TRACKED_NEXT_PATHS)
+    rel = os.path.relpath(secret, os.path.realpath(top))
+    word = shlex.quote(f":!/{rel}")
+    return R_TRACKED_SECRET.format(path=secret, next=_TRACKED_NEXT_EXCLUDE.format(word=word))
+
+
 def _typed_view(
     script: Script, command: str, got: Admitted, cwd: str
-) -> tuple[list[_Typed], list[_Tree], list[str], list[_Spec]]:
+) -> tuple[list[_Typed], list[_Tree], list[str], list[_Spec], list[_GitRead]]:
     # 228 tail, spec 8: each admitted command's typed reads, writes, script, cd target, git
     # folder and pathspecs; relative ones open in the shell's folder and in the command's own.
     names = _typed_names(got)
@@ -2098,6 +2376,7 @@ def _typed_view(
     trees: list[_Tree] = []
     texts: list[str] = []
     specs: list[_Spec] = []
+    gits: list[_GitRead] = []
     for done in got.commands:
         here = base
         if done.cd_target is not None:
@@ -2107,7 +2386,11 @@ def _typed_view(
         found = [t for t in typed if t is not None]
         paths = [_typed_path(t, words, command, env) for t in found]
         views.append(_Typed((base, here), paths, [t.text for t in found]))
-        specs += _git_specs(script, done, words, command, env, here)
+        own = _git_specs(script, done, words, command, env, here)
+        specs += own
+        if done.family == "git":
+            folder, top = _git_folder(done, words, command, env, here)
+            gits.append(_GitRead(done, folder, top, own))
         texts += [t.text for t in done.texts]
         # prepush2-2026-10-27: a search word bash rewrites may become a reach flag.
         search = done.family in shell.SEARCH_CMDS
@@ -2119,7 +2402,7 @@ def _typed_view(
             targets += [here] if tree[1] else []
             globs = _rg_globs(admitted_tokens(script, done)[1:]) if done.family == "rg" else []
             trees.append(_Tree(done.family, tree[0], [t for t in targets if t], globs))
-    return views, trees, texts, specs
+    return views, trees, texts, specs, gits
 
 
 def _bash_credential_reason(
@@ -2136,7 +2419,7 @@ def _bash_credential_reason(
     if not _passed(judged):
         inside = os.path.isabs(cwd) and _credential_hit(cwd, roots, False)
         return R_CREDENTIAL.format(path=cwd) if inside else None
-    views, trees, texts, specs = _typed_view(script, command, judged, cwd)
+    views, trees, texts, specs, gits = _typed_view(script, command, judged, cwd)
     names = _typed_names(judged)
     dotglob = "GLOBIGNORE" in names
     bases = [b for v in views for b in v.bases if os.path.isabs(b)]
@@ -2160,7 +2443,8 @@ def _bash_credential_reason(
         return None
 
     # 0192: the .env files beside every folder the command starts in or moves to.
-    env_files = tuple(env_roots(*dict.fromkeys([cwd, *bases, *(s.top for s in specs)])))
+    tops = [s.top for s in specs if not s.exclude]
+    env_files = tuple(env_roots(*dict.fromkeys([cwd, *bases, *tops])))
     # spec 8: spelled-out paths first, so the message names the path the command wrote.
     for cand in absolute:
         reason = hit(os.path.normpath(cand))
@@ -2175,6 +2459,8 @@ def _bash_credential_reason(
                 return reason
     # 228 tail: a git pathspec or <rev>:<path> names its store as a file operand does.
     for spec in specs:
+        if spec.exclude:
+            continue  # 267: an exclude names what git leaves out; only the tracked check reads it.
         if spec.path is None:
             return R_CREDENTIAL_PARAM.format(path=spec.raw)
         reason = hit(spec.path)
@@ -2186,7 +2472,8 @@ def _bash_credential_reason(
         if store in keys:
             return R_REPLY_KEY.format(path=spec.raw)
         return (R_CREDENTIAL if store in roots else R_ENV_FILE).format(path=spec.raw)
-    return _tree_reason(trees, roots, keys, env_files, dotglob)
+    tree = _tree_reason(trees, roots, keys, env_files, dotglob)
+    return tree or _tracked_reason(script, gits, names, hit, roots)
 
 
 def _credential_reason(
