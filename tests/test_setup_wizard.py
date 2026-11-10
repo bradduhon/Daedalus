@@ -5,7 +5,23 @@ from __future__ import annotations
 
 from collections import Counter
 
-from lib.project_keys import GROUPS, KEY_ROWS, reference_keys
+from lib.project_keys import GROUPS, KEY_ROWS, OVERLAPS, reference_keys
+
+from tests.conftest import REPO_ROOT
+
+
+def test_each_overlap_answer_rests_on_the_line_it_cites() -> None:
+    # 0242: a moved or changed line fails here, so the answer is reread before it ships.
+    assert [o.id for o in OVERLAPS] == ["ledger", "literacy", "operator"]
+    for overlap in OVERLAPS:
+        for path, line, words in overlap.sources:
+            text = (REPO_ROOT / path).read_text(encoding="utf-8").splitlines()[line - 1]
+            assert words in text, (overlap.id, path, line)
+
+
+def test_overlaps_with_no_deciding_code_say_so_in_future_tense() -> None:
+    literacy = next(o for o in OVERLAPS if o.id == "literacy")
+    assert "nothing reads it yet" in literacy.text and "will apply" in literacy.text
 
 
 def test_every_key_sits_in_exactly_one_group_of_its_file() -> None:

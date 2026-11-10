@@ -1054,6 +1054,43 @@ GROUPS: tuple[Group, ...] = (
         operator_keys(),
     ),
 )
+
+
+@dataclass(frozen=True)
+class Overlap:
+    id: str
+    text: str
+    # 0242: (path, line, words on that line) the answer rests on; a test rereads each line.
+    sources: tuple[tuple[str, int, str], ...]
+
+
+# 0242: which file wins where two files overlap; the describe output and the README share these.
+OVERLAPS: tuple[Overlap, ...] = (
+    Overlap(
+        "ledger",
+        "When the project's manifest and this checkout's config both name a decision ledger, "
+        "the manifest's ledger wins. The config's ledger is used only when the manifest names "
+        "none.",
+        (("scripts/lib/ledger.py", 206, "manifest wins, then config"),),
+    ),
+    Overlap(
+        "literacy",
+        "Today only the project's reading level changes how Daedalus writes. Your personal "
+        "reading level is checked but nothing reads it yet. Once it is read, it will apply "
+        "only to a project that sets no reading level of its own.",
+        (
+            ("scripts/lib/briefs.py", 281, "manifest.docs.literacy"),
+            ("scripts/lib/operator_file.py", 4, "no check or hook acts on it yet"),
+        ),
+    ),
+    Overlap(
+        "operator",
+        "A project's config can hold its own copy of any personal preference. A value set "
+        "there replaces your personal value for that project only, and the rest still come "
+        "from your personal file. Nothing acts on those values yet.",
+        (("scripts/lib/operator_file.py", 138, "a key the override sets replaces the base value"),),
+    ),
+)
 REFERENCE_HEADER = (
     "Key",
     "File",
