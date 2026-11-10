@@ -108,12 +108,13 @@ Size the effort before the first dispatch, from facts you can print (spec 4.2):
 
 | Size | When | Phases |
 |---|---|---|
-| small | one unit; at most 3 files and about 150 changed lines expected; no file under `scripts/checks/`, `agents/`, `skills/` or `hooks/`, and not `scripts/lib/jail.py`, `scripts/lib/shell.py` or `scripts/enforce_agent_jail.py`; no protected path; `contract: skip` | build, verify, audit in the short form; document only when the change touches what the four public docs describe |
+| small | one unit; at most 3 files and about 150 changed lines expected; no file under `scripts/checks/`, `agents/`, `skills/` or `hooks/`, and not `scripts/lib/jail.py`, `scripts/lib/shell.py` or `scripts/enforce_agent_jail.py`; no path of the table-diff list; no protected path; `contract: skip` | build, verify, audit in the short form; document only when the change touches what the four public docs describe |
 | medium | up to 4 units in one wave, or a small change that touches agent, skill or hook files; a contract may be needed | plan, build, verify, audit, document |
-| full | more than 4 units, more than one wave, any jail check file, a revised contract or a cross-module change | plan with the standards and contract stages, build, verify, audit with the reachability pass, document |
+| full | more than 4 units, more than one wave, any jail check file, a revised contract or a cross-module change | plan with the standards and contract stages, build, verify, audit with the reachability pass or in the table-diff form, document |
 
 - The small row is ruled (small change defined, 0175). The excluded paths are `CONTROL_PATHS` in `scripts/lib/plan_record.py`, and the protected paths are the build phase's protected-file list; the contract command checks both (contract skip widened, 0182). When a fact is unknown, take the larger size.
 - A small run skips the planner, never the records. Write the one-unit plan yourself at `<repo>/docs/.tmp/daedalus/<train-id>/plan.md`, with its `files:` list, no `pin:` line and a `wire: none` line. Then run the plan phase's steps 7 and 9 and its steps 11 to 15 on it: they validate and record the plan, settle the Standards Packet, print the contract line and lock. When the contract command prints `contract: required (<reason>)`, the run is not small: the reason names the small-row condition that failed (0182). Size it medium and announce again.
+- The table-diff list (audit by table diff, 0232) is any of `scripts/lib/jail.py`, `scripts/lib/admit.py`, `scripts/lib/shell.py`, `scripts/lib/shparse.py`, `scripts/lib/credential_paths.py`, `scripts/enforce_agent_jail.py`, a path under `scripts/checks/` or a path under `tests/adversarial/`. A change that names a path of it is never small. Size it medium or full by its units; its audit takes the table-diff form of the audit phase, and the announce line's reason ends `, so the audit takes the table-diff form`.
 - A size estimate never shrinks the audit by itself. The audit phase measures the merged diff before it takes the short form, and either check failing means the full procedure.
 
 ## Announce and go

@@ -13,7 +13,7 @@ import pytest
 from lib.human_text import DROP_SPANS, EDGE, MIN_WORDS, plain_words
 
 from tests.conftest import REPO_ROOT
-from tests.helpers import phase_text
+from tests.helpers import TABLE_DIFF_PATHS, phase_text, table_diff_list
 
 SKILLS = sorted((REPO_ROOT / "skills").glob("*/SKILL.md"))
 COPYRIGHT = "<!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->"
@@ -2092,6 +2092,38 @@ def test_audit_judges_read_the_merged_diff_without_the_asset_files() -> None:
     assert "the name list never carries the tail" in auditor
     specialist = (REPO_ROOT / "packs" / "judges" / "frameworks.md").read_text("utf-8")
     assert "end the diff command with that tail exactly as given" in " ".join(specialist.split())
+
+
+def test_audit_names_three_forms_and_the_table_diff_trigger() -> None:
+    # 0232: full, short and table-diff forms; the trigger is a file list the diff can test.
+    text = " ".join((REPO_ROOT / "skills" / "audit" / "SKILL.md").read_text("utf-8").split())
+    assert (
+        "in one of three forms: the full procedure, the short form for a small change, and"
+        " the table-diff form for a change to the jail or a command parser" in text
+    )
+    for path in TABLE_DIFF_PATHS:
+        assert (REPO_ROOT / path).exists(), path
+    form = _section(text, "### Table-diff form", "### A rejected round")
+    assert "Run `git diff --name-only <base sha>...daedalus/<train-id>`." in form
+    assert f"names any of {table_diff_list()}." in form
+    assert "Such a change never takes the short form." in form
+    assert "no path of the table-diff list below, and no protected path" in text
+    assert "Put a `Form: table diff` line in the auditor's dispatch of step 5." in form
+    assert "the short form and the table-diff form skip it" in text
+    for phrase in (
+        "The auditor runs the adversarial corpus on the merged tip in the audit worktree. "
+        "Every failing row is a blocking finding.",
+        "`Table diff: <table> | <added, widened, narrowed or removed> | <row> | <corpus row "
+        "that pins it>`",
+        "the role table and the option sets of `scripts/lib/admit.py`",
+        "`_GIT_GRAMMAR` in `scripts/lib/jail.py`, `READ_GIT_GRAMMAR` in "
+        "`scripts/checks/read_only_bash.py`",
+        "The auditor judges each added or widened row and names each removed row. An added or "
+        "widened row with no corpus row is a blocking finding.",
+        "is a claim to check, never the table: the auditor derives its own from the diff.",
+        "It drops the rank by readers, the reachable scope and the hunt lines.",
+    ):
+        assert phrase in form, phrase
 
 
 def test_release_scans_for_secrets_without_the_asset_files() -> None:

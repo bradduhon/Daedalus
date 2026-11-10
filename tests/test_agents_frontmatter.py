@@ -13,6 +13,7 @@ from lib.jail import WORKER_DENIED_TOOLS
 from lib.train_scope import KNOWN_AGENTS
 
 from tests.conftest import REPO_ROOT
+from tests.helpers import table_diff_list
 
 AGENTS = REPO_ROOT / "agents"
 EXPECTED_MODEL = {
@@ -130,9 +131,14 @@ def test_planner_challenge_mode_section_holds_the_steps_and_grounding_rules() ->
     assert text.index("\n## Challenge mode\n") < text.index("\n## The plan file\n")
     section = _planner_section("## Challenge mode")
     for step in (
-        "1. Read the idea, the notes file when named, and the repository areas the idea touches",
+        "1. Read the handoff brief, or the idea and the notes file when named, and the repository "
+        "areas it touches",
+        "Each `ASSUMED` line under the brief's Receipts owed is your first feasibility work",
         "2. Open the first reply with `What I take you to want:` and one to three plain "
-        "sentences, then the first question.",
+        "sentences that restate the brief's chosen direction, or the design the idea states, then "
+        "the first question.",
+        "Never offer new framings; exploring is where new ideas come from.",
+        "Never reopen a framing the brief lists as rejected unless a fact with a receipt forces it",
         "3. Ask one question per reply and wait for its answer before you write the next one",
         "Never ask two things in one question.",
         "4. Follow up: when an answer opens something, the next question follows it up",
@@ -141,17 +147,35 @@ def test_planner_challenge_mode_section_holds_the_steps_and_grounding_rules() ->
         "6. Ask the researcher with `[STATUS: YIELD_WEB] <query>`",
         "7. When a fact defeats the idea, end with the not-viable lines of 3.5 and "
         "`[STATUS: NOT_VIABLE]`.",
-        '8. Before you ask "Write it now?", review every open item you hold.',
+        "8. Who and where by question four (B4): unless the brief or the idea states them, ask by "
+        "question four who uses the thing, how many of them there are, and what it runs on.",
+        "9. The sum before the offer (B3): when the design holds counts",
+        "ask how they add up before you offer to write.",
+        "10. The probe rule: when an answer is a question the operator typed, answer it in full "
+        "before your next question.",
+        '11. Before you ask "Write it now?", review every open item you hold.',
         "is asked as a question first.",
-        "Only `WRITE SPEC` puts such an item under Open risks",
-        '9. When enough is settled, ask that as a question too: "I think I have enough to write '
+        "`- <the item>. Worse if: <what would make it worse>. Decides: <who decides it>.`",
+        "`Decides: the operator, question <n>.`",
+        "The brainstorm skill sends `FIX` for an operator row with no question number",
+        "Only `WRITE SPEC` puts an unasked item under Open risks",
+        '12. When enough is settled, ask that as a question too: "I think I have enough to write '
         'the design. Write it now?"',
-        "10. On `Mode: plan` after a brainstorm, cut the spec as `## Method` says, holding the "
+        "13. On `Mode: plan` after a brainstorm, cut the spec as `## Method` says, holding the "
         "conversation as context.",
     ):
         assert step in section, step
     # 0199, 0200: the question reply's labels in order, the plain rule and the relay lines.
-    labels = ("Heard:", "Context:", "Question:", "Proposal:", "Why:", "Other ways:", "Rests on:")
+    labels = (
+        "Answer:",
+        "Heard:",
+        "Context:",
+        "Question:",
+        "Proposal:",
+        "Why:",
+        "Other ways:",
+        "Rests on:",
+    )
     shape = section.split("labels verbatim:", 1)[1].split("[STATUS: ASK] n=<n>", 1)[0]
     assert [shape.index(f"    {label}") for label in labels] == sorted(
         shape.index(f"    {label}") for label in labels
@@ -173,6 +197,10 @@ def test_planner_challenge_mode_section_holds_the_steps_and_grounding_rules() ->
         "`WRITE SPEC` asks for the spec now",
         "Before you write the units, list every thing the spec requires",
         "goes under Open risks as a named gap.",
+        "starts the shaping half of a brainstorm (0243)",
+        "named as `Brief file: <path>`",
+        "closed by a `What you will have` paragraph of three to five plain sentences",
+        "An `Answer:` paragraph is the one exception",
     ):
         assert rule in " ".join(section.split()), rule
     assert "ANSWERS round=" not in section and "Round <k>" not in section
@@ -574,6 +602,35 @@ def test_auditor_short_form_measures_first_and_keeps_the_gate() -> None:
     ):
         assert phrase in short, phrase
     assert text.index("## Short form (0166, 0175)") < text.index("## Procedure")
+
+
+def test_auditor_judges_a_jail_change_by_table_diff() -> None:
+    # 0232: the suite plus a re-derived table diff; no free-form hunt in that form.
+    text = " ".join(AUDITOR.read_text().split())
+    form = text.split("## Table-diff form (0232)", 1)[1].split("## Procedure", 1)[0]
+    for phrase in (
+        "When the dispatch carries a `Form: table diff` line",
+        f"The table-diff list is any of {table_diff_list()}.",
+        "When the name list holds no path of it, take the full procedure and say so",
+        "Run the adversarial corpus on `<tip>` (Finding format item 5). Every failing row is a "
+        "blocking finding.",
+        "Derive the table diff yourself from the full diff of step 1",
+        "`Table diff: <table> | <added, widened, narrowed or removed> | <row> | <corpus row "
+        "that pins it>`",
+        "the role table and the option sets of `scripts/lib/admit.py`",
+        "Read the coder's `Table diff:` lines from `git log <diff base>..<branch>` as a claim, "
+        "never as the table.",
+        "Judge each added or widened row",
+        "Name each removed row. An added or widened row with no corpus row is a blocking finding",
+        "Run no free-form hunt: skip the rank by readers and the reachable scope",
+    ):
+        assert phrase in form, phrase
+    short = text.split("## Short form (0166, 0175)", 1)[1].split("## Table-diff form", 1)[0]
+    assert "no path of the table-diff list below" in short
+    coder = " ".join((AGENTS / "coder.md").read_text().split())
+    table = coder.split("**Table diff** (0232):", 1)[1].split("**Refuted forms**", 1)[0]
+    assert f"include any of {table_diff_list()}, the body of your last commit" in table
+    assert "The auditor derives its own table and checks yours against it." in table
 
 
 def test_auditor_keeps_the_phrases_later_units_read() -> None:
