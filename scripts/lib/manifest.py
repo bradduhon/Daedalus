@@ -761,7 +761,11 @@ def load(repo: Path) -> Manifest | None:
     raw = read_raw(repo)
     if raw is None:
         return None
-    target = manifest_path(repo)
+    return parse(raw, manifest_path(repo))
+
+
+def parse(raw: object, target: Path) -> Manifest:
+    # 0242: the one check of a parsed manifest; setup runs it on a changed document before writing.
     if not isinstance(raw, dict):
         raise ManifestError(
             f"{target} is not a JSON object. Next: start from the example in "

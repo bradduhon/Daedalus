@@ -620,6 +620,7 @@ Daedalus/
 │   ├── web-researcher.md
 │   └── writer.md
 ├── docs/
+│   ├── examples/                    # one filled-in copy of each settings file
 │   ├── guardrails.md                # each principle with its mechanism and test
 │   ├── howto/README.md              # operator guide
 │   └── project-requirements.md      # every file Daedalus reads, with examples
@@ -690,6 +691,7 @@ Daedalus/
 │   ├── lib/repo_root.py             # finds a train marker before other lib modules load
 │   ├── lib/router.py                # runs each agent's calls through its hooks
 │   ├── lib/scrub.py                 # reads the declared scrub file's terms
+│   ├── lib/settings_edit.py         # changes one key of a settings file in place
 │   ├── lib/shell.py                 # the shell model the jail and checks share
 │   ├── lib/shparse.py               # parses one Bash command into nodes with spans
 │   ├── lib/train_definition.py      # loads and validates train definitions
@@ -709,7 +711,7 @@ Daedalus/
 │   ├── daedalus_confine.py          # kernel wrapper: a coder's test command stays in its worktree, no network
 │   ├── daedalus_doctor.py           # first-run check behind /daedalus:doctor
 │   ├── daedalus_map.py              # the dependency map: imports, coverage, record readers, ownership, duplicates
-│   ├── daedalus_setup.py            # writes the missing starter files behind /daedalus:setup
+│   ├── daedalus_setup.py            # the settings wizard's describe, create and set forms
 │   ├── daedalus_train.py            # the train runner: progress, choice, plan, verdict, exception
 │   ├── daedalus_workspace.py        # begin, lock, create, remove, finish, stop, resume, mark, unmark, release, pr-body
 │   ├── enforce_agent_jail.py        # PreToolUse policy

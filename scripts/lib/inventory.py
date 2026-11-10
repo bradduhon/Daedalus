@@ -96,6 +96,31 @@ FILES: tuple[Entry, ...] = (
         "you run /daedalus:setup and the file is missing",
     ),
     Entry(
+        "~/.claude/daedalus/",
+        "scripts/daedalus_setup.py:create_operator",
+        "you agree in /daedalus:setup to create the personal settings file; created 0700",
+    ),
+    Entry(
+        "~/.claude/daedalus/operator.json",
+        "scripts/daedalus_setup.py:_write_new",
+        "you agree in /daedalus:setup to create the personal settings file and it is missing",
+    ),
+    Entry(
+        "<repo>/service-manifest.json",
+        "scripts/lib/settings_edit.py:write",
+        "you answer a /daedalus:setup question; one setting changes and the rest stay",
+    ),
+    Entry(
+        f"{_DATA}/config.json",
+        "scripts/lib/settings_edit.py:write",
+        "you answer a /daedalus:setup question; one setting changes and the rest stay",
+    ),
+    Entry(
+        "~/.claude/daedalus/operator.json",
+        "scripts/lib/settings_edit.py:write",
+        "you answer a /daedalus:setup question; one setting changes and the rest stay",
+    ),
+    Entry(
         f"{_TRAINS}/",
         "scripts/freeze_sources.py:freeze",
         "a document train freezes its sources",

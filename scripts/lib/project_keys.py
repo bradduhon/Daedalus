@@ -150,6 +150,50 @@ def starter_config() -> dict[str, object]:
     }
 
 
+def starter_operator() -> dict[str, object]:
+    # 0242: every setting at its off value; a profile key is off when absent, as null is refused.
+    return {"main_refusals": [], "profile": {}}
+
+
+@dataclass(frozen=True)
+class SettingsFile:
+    form: str
+    name: str
+    where: str
+    whose: str
+    shared: str
+    holds: str
+
+
+# 0242: the three files as the wizard and the README describe them, spec section 1.
+SETTINGS_FILES: tuple[SettingsFile, ...] = (
+    SettingsFile(
+        "manifest",
+        MANIFEST_FILE,
+        "the project root",
+        "the project",
+        "yes, git tracks it",
+        "what the project is and what it turns on",
+    ),
+    SettingsFile(
+        "config",
+        CONFIG_FILE,
+        "the .claude/daedalus folder in the project",
+        "this checkout on this machine",
+        "no, git ignores it",
+        "how Daedalus is wired up here",
+    ),
+    SettingsFile(
+        "operator",
+        OPERATOR_FILE_NAME,
+        "the .claude/daedalus folder in your home folder",
+        "you, across every project",
+        "no, it sits outside every project",
+        "your personal preferences",
+    ),
+)
+
+
 def operator_keys() -> tuple[str, ...]:
     # 0235: the operator file's keys as JSON paths, from operator_file's own tables.
     return ("main_refusals", *(f"profile.{key}" for key in PROFILE_KEYS))

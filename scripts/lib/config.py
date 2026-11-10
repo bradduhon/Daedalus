@@ -524,6 +524,11 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
         raise ConfigError(
             f"{target} is not valid JSON ({detail}). Next: fix the syntax or delete the file."
         ) from exc
+    return parse_config(raw, target)
+
+
+def parse_config(raw: object, target: Path) -> Config:
+    # 0242: the one check of a parsed config; setup runs it on a changed document before writing.
     if not isinstance(raw, dict):
         raise ConfigError(
             f"{target} must contain a JSON object. "
