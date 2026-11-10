@@ -1542,6 +1542,38 @@ GIT_LOG_COUNT_266 = (
     "git log --max-count 3 -- {path}",
     "git log --max-count=3 -- {path}",
 )
+# issue 188, 269: (class, form, named) for a bound agent whose shell stands outside its run; the
+# admitted record is judged, a refused one by its standing folder; None means it passes.
+MOVED_RELATIVE_269 = (
+    ("relative write", "touch rel.txt", "rel.txt"),
+    ("relative redirect", "ls > out.txt", "out.txt"),
+    ("relative output option", "sort -o out /etc/hosts", "out"),
+    ("uniq output", "uniq - out", "out"),
+    ("relative read", "cat README.md", "README.md"),
+    ("relative pathspec", "git log -- src", "src"),
+    ("relative -C", "git -C rel status", "rel"),
+    ("relative wrapper chdir", "env -C rel ls", "rel"),
+    ("git write in the shell's folder", "git commit -m x", "git commit without -C"),
+    ("module run", "python3 -m pytest tests", "not a read"),
+    ("script program", "sed 'w out' /etc/hosts", "not a read"),
+    ("bare runner", "make", "not a read"),
+    ("refused word", "cd sub", "off the jail's table"),
+    ("refused path word", "./run.sh", "off the jail's table"),
+    ("refused glob write", "rm -rf .cl*", "off the jail's table"),
+    ("refused option", "git -C {wt} log --output=x", "off the jail's table"),
+    ("substitution", "cat $(pwd)/x", "off the jail's table"),
+    ("absolute glob", "ls {wt}/*.py", "*.py"),
+    ("unbound parameter", "cat $FOO/x", "$FOO/x"),
+    ("start in the run", "cd {wt} && python3 -m pytest tests -q", None),
+    ("start in the run, then ;", "cd {wt} && touch x ; touch y", None),
+    ("absolute -C read", "git -C {wt} status", None),
+    ("absolute writes", "touch {wt}/x 2>&1 > /dev/null", None),
+    ("bare read", "ls", None),
+    ("git read", "git status", None),
+    ("home tilde", "cat ~/x", None),
+    ("home parameter", "cat $HOME/x", None),
+    ("absolute folder first", "cd /tmp && cat x", None),
+)
 # 266: a path in the count slot is git's count, which git rejects; it is never a pathspec.
 GIT_LOG_COUNT_VALUE_266 = ("git log -n {path}", "git log --max-count {path}")
 # 266 hunt: (class, form, main, coder) for the data folder check on each role's typed record;

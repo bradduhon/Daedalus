@@ -75,7 +75,6 @@ from lib.shell import (
     _GLOB_CHARS,
     _HOME,
     _REPO_SCRIPTS,
-    _VALUE_LONG_NEXT,
     GIT_PLUMBING_REMOTE,
     R_CLEAN,
     R_DATA_DIR_GIT,
@@ -84,21 +83,15 @@ from lib.shell import (
     R_FORCE_PUSH,
     R_STASH_UNTRACKED,
     READ_ONLY_GIT,
-    WRAPPER_CHDIR,
-    WrapperOption,
     _abs,
-    _base,
     _git_split,
     _long_matches,
     _names_project_data,
     _pathspecs,
     _short_flags,
     _under,
-    split_options,
-    unwrap,
 )
 from lib.shparse import (
-    Command,
     Literal,
     Param,
     Pipeline,
@@ -134,32 +127,6 @@ CODER_WRITE_CMDS = frozenset(
     | {"mkdir", "touch", "rm", "rmdir", "unlink", "chmod", "chown", "chgrp"}
     | {"mkfifo", "mknod", "shred"}
 )
-# 0022: options whose value is not a path; every other non-option operand is a path.
-_VALUE_OPTS: dict[str, frozenset[str]] = {
-    "install": frozenset({"-m", "-o", "-g", "-S"}),
-    "mkdir": frozenset({"-m"}),
-    "mkfifo": frozenset({"-m"}),
-    "mknod": frozenset({"-m"}),
-    "shred": frozenset({"-n", "-s"}),
-    "truncate": frozenset({"-s"}),
-    "touch": frozenset({"-d", "-t"}),
-    "cp": frozenset({"-S"}),
-    "mv": frozenset({"-S"}),
-    "ln": frozenset({"-S"}),
-    "rsync": frozenset({"-f"}),
-}
-# 0022: short options whose attached or following value is a path operand (-t<dir>).
-_PATH_OPTS: dict[str, frozenset[str]] = {
-    "cp": frozenset({"-t"}),
-    "mv": frozenset({"-t"}),
-    "install": frozenset({"-t"}),
-    "ln": frozenset({"-t"}),
-    "touch": frozenset({"-r"}),
-    "truncate": frozenset({"-r"}),
-    "rsync": frozenset({"-T"}),
-}
-_VALUE_LONG = _VALUE_LONG_NEXT | {"--preserve"}
-_MODE = re.compile(r"(?:[0-7]{3,4}|[ugoa]*[-+=][rwxXstugo]*)(?:,[ugoa]*[-+=][rwxXstugo]*)*")
 DIR_CHANGE_CMDS = frozenset({"cd", "pushd", "popd"})
 # audit A7-1: claude starts a nested session with no agent_id, which the jail would judge as main.
 NETWORK_TOOLS = frozenset(
@@ -853,8 +820,6 @@ _SEARCH_LONGS = frozenset(
 )
 _DATA_DIR_DEFAULT = "/.claude/plugins/data/daedalus"
 UNIT_WORKTREES = ".claude/worktrees"
-# issue 188: the moved bound agent rule; module runs, fd words and the cd start form.
-_INTERPRETER = re.compile(r"python[\d.]*|perl|ruby|node|nodejs|deno|bun|php")
 # 266: the git subcommands that write the index, which the data folder check judges.
 _INDEX_WRITES = frozenset({"add", "stage", "commit", "update-index"})
 
@@ -1419,79 +1384,6 @@ def _same_path(target: str, protected: str) -> bool:
     return os.path.realpath(target).casefold() == os.path.realpath(protected).casefold()
 
 
-def _in_place(name: str, args: list[str]) -> bool:
-    for arg in args:
-        if name == "sed" and (arg == "--in-place" or arg.startswith("--in-place=")):
-            return True
-        if arg.startswith("-") and not arg.startswith("--"):
-            group = arg[1:]
-            if name == "sed" and "i" in group.split("e")[0]:
-                return True
-            if name == "perl" and "i" in group:
-                return True
-    return False
-
-
-def _short_taker(arg: str, opts: frozenset[str]) -> tuple[str, str] | None:
-    # 0022: in a short group (-pm, -rt<dir>) the first value-taking letter consumes the rest.
-    if len(arg) < 2 or arg[0] != "-" or arg[1] == "-":
-        return None
-    for idx, char in enumerate(arg[1:], start=2):
-        if f"-{char}" in opts:
-            return f"-{char}", arg[idx:]
-    return None
-
-
-def _write_operands(name: str, args: list[str]) -> list[str]:
-    if name == "dd":
-        return [a.split("=", 1)[1] for a in args if a.startswith("of=")]
-    if name == "mknod":
-        # issue 75: NAME TYPE [MAJOR MINOR]; only NAME is a path.
-        return _write_operands("mkfifo", args)[:1]
-    values = _VALUE_OPTS.get(name, frozenset())
-    paths = _PATH_OPTS.get(name, frozenset())
-    operands: list[str] = []
-    script_given = False
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        if arg == "--":
-            operands += args[i + 1 :]
-            break
-        if name in {"sed", "perl"} and arg in {"-e", "-E", "-f"}:
-            script_given = True
-            i += 2
-            continue
-        taker = _short_taker(arg, values | paths)
-        if taker is not None:
-            flag, attached = taker
-            value = attached or (args[i + 1] if i + 1 < len(args) else "")
-            if flag in paths and value:
-                operands.append(value)
-            i += 1 if attached else 2
-            continue
-        if arg in _VALUE_LONG_NEXT:
-            i += 2
-            continue
-        if arg.startswith("--") and "=" in arg:
-            key, value = arg.split("=", 1)
-            if name not in {"sed", "perl"} and key not in _VALUE_LONG:
-                operands.append(value)
-        elif not arg.startswith("-") or arg == "-":
-            operands.append(arg)
-        i += 1
-    if not operands:
-        return operands
-    if name in {"sed", "perl"} and not script_given:
-        return operands[1:]
-    # 0022: the leading mode or owner is not a path; --reference replaces it.
-    if any(a.startswith("--reference") for a in args):
-        return operands
-    if (name == "chmod" and _MODE.fullmatch(operands[0])) or name in {"chown", "chgrp"}:
-        return operands[1:]
-    return operands
-
-
 def _backup_suffix(name: str, args: list[str]) -> str | None:
     # issue 30: a backup suffix with a slash places the backup outside the target's directory.
     if name not in {"cp", "mv", "install", "ln"}:
@@ -1507,24 +1399,6 @@ def _backup_suffix(name: str, args: list[str]) -> str | None:
         if value is not None and "/" in value:
             return f"backup suffix {value}"
     return None
-
-
-def _cd_relative_target(segment: list[str], cwd: str) -> str | None:
-    # 0022: after cd, relative operands resolve against the hook cwd, not the shell's.
-    name = _base(segment[0])
-    args = segment[1:]
-    if name == "git":
-        sub, git_args, globals_ = _git_split(segment)
-        dirs = [globals_[i + 1] for i in range(len(globals_) - 1) if globals_[i] == "-C"]
-        if sub in {"add", "commit"} and not dirs:
-            return f"git {sub} without -C"
-        if sub in {"restore", "checkout"} and not dirs:
-            dirs = [a for a in git_args if a != "--"]
-        return next((d for d in dirs if not os.path.isabs(d)), None)
-    if name not in CODER_WRITE_CMDS and not (name in {"sed", "perl"} and _in_place(name, args)):
-        return None
-    operands = [a for a in _write_operands(name, args) if a != "-"]
-    return next((a for a in operands if not os.path.isabs(a)), None)
 
 
 def _data_dir_target(path: str, cwd: str) -> bool:
@@ -1748,12 +1622,6 @@ def _base_env() -> dict[str, list[str]]:
     env.setdefault("CLAUDE_PLUGIN_ROOT", [os.path.dirname(_REPO_SCRIPTS)])
     env.setdefault("CLAUDE_PLUGIN_DATA", [env["HOME"][0] + _DATA_DIR_DEFAULT])
     return env
-
-
-def _option_values(
-    texts: list[str], options: list[WrapperOption], kinds: frozenset[tuple[str, str]]
-) -> list[str]:
-    return [texts[o.at][len(o.prefix) :] for o in options if (o.wrapper, o.option) in kinds]
 
 
 def _typed_tree(
@@ -2601,10 +2469,6 @@ def search_rewritten(word: Word) -> bool:
     return isinstance(lead, shparse.Glob) or (isinstance(lead, Literal) and lead.text[:1] == "-")
 
 
-def literal_tokens(cmd: Command | None) -> list[str]:
-    return [w.literal if w.literal is not None else w.raw for w in cmd.words] if cmd else []
-
-
 @dataclass(frozen=True)
 class CoderCall:
     # 228 S3b: one parse and one coder admission per hook call; passed marks a consumed pass.
@@ -2831,114 +2695,61 @@ def moved_relative(
     if tool != "Bash":
         return None
     command = str(tool_input.get("command") or "")
-    script = shparse.parse(command)
-    holes = shparse.opaque(script)
-    if holes:
-        return command[holes[0].span[0] : holes[0].span[1]]
-    commands = [cmd for cmd, _ in shparse.walk(script)]
-    if _starts_in(script, commands, judged):
+    script, got = _admission(command, "main", cwds[0])
+    if not _passed(got):
+        # 0224, 269: no typed operand, so the folder the shell stands in, outside the run, judges.
+        refused = _refused(got)
+        why = f"{refused.reason}, at `{refused.text}`" if refused is not None else "unread"
+        return f"a command off the jail's table ({why})"
+    if _starts_in(got, judged):
         return None  # issue 188: the shell starts in the judged folder itself.
-    loose = False
-    for cmd in commands:
-        found, plain = _relative_word(cmd, cwds)
-        if found is not None:
-            return found
-        loose = loose or plain
+    found, loose = _relative_word(script, got, command)
+    if found is not None:
+        return found
     # issue 188: a command with a bare word or no absolute path runs only as an admitted read.
     if loose and not admitted(command, "foreign", judged):
         return "a command that is not a read and does not name every path absolutely"
     return None
 
 
-def _starts_in(script: Script, commands: list[Command], judged: str) -> bool:
-    # issue 188, 228 S3: one leading `cd <judged> &&` and no other folder change.
-    head = script.items[0] if script.items else None
-    first = head.commands[0] if isinstance(head, Pipeline) and len(head.commands) == 1 else None
-    words = literal_tokens(first) if isinstance(first, Command) else []
-    if script.separators[:1] != ["&&"] or len(words) != 2 or words[0] != "cd":
-        return False
-    moves = [
-        c
-        for c in commands
-        if literal_tokens(c)[:1] and _base(literal_tokens(c)[0]) in {"cd", "pushd", "popd"}
-    ]
-    return len(moves) == 1 and os.path.normpath(words[1]) == os.path.normpath(judged)
+def _starts_in(got: Admitted, judged: str) -> bool:
+    # issue 188, 269: the one leading `cd <judged> &&` main's grammar admits; it allows no other.
+    lead, _ = lead_cd(got)
+    target = lead.cd_target if lead is not None else None
+    return target is not None and os.path.normpath(target.text) == os.path.normpath(judged)
 
 
-def _home_word(word: Word) -> str | None:
-    # issue 188, 228 S3: all Literal parts, or a leading ~ or bare $HOME then Literals; else None.
-    head, rest = (word.parts[0], word.parts[1:]) if word.parts else (None, [])
-    if not all(isinstance(p, Literal) for p in rest):
-        return None
-    tail = "".join(p.text for p in rest if isinstance(p, Literal))
-    if isinstance(head, Literal) or head is None:
-        return (head.text if head is not None else "") + tail
-    if isinstance(head, Tilde):
-        return os.path.expanduser(f"~{head.user}") + tail
-    if isinstance(head, Param) and head.name == "HOME" and not head.op:
-        return str(Path.home()) + tail
-    return None
-
-
-def _relative_word(cmd: Command, cwds: tuple[str, str]) -> tuple[str | None, bool]:
-    # issue 188, 228 S3: (refused word, needs the read grammar) for one parsed command: a
-    # relative redirect, folder, verb, write operand or module run, or an expanding word.
-    for redirect in cmd.redirects:
-        target = redirect.target.literal
-        if redirect.op in ("<<", "<<-"):
-            continue
-        if target is None:
-            return redirect.target.raw, False
-        if redirect.op in (">&", "<&") and (target.isdigit() or target == "-"):
-            continue
-        if not os.path.isabs(target):
-            return target, False
-    texts: list[str] = []
-    for word in cmd.words:
-        text = _home_word(word)
-        if text is None:
-            return word.raw, False
-        texts.append(text)
-    unwrapped = unwrap(texts) if texts else ([], [])
-    if unwrapped is None:
-        return " ".join(texts), False
-    rest, options = unwrapped
-    moved = _option_values(texts, options, WRAPPER_CHDIR)
-    if (rel := next((m for m in moved if not os.path.isabs(m)), None)) is not None:
-        return rel, False
-    if not rest:
-        return None, False
-    verb, args = rest[0], rest[1:]
-    if "/" in verb and not os.path.isabs(verb):
-        return verb, False
-    if _base(verb) in {"cd", "pushd"}:
-        dest = [a for a in args if not a.startswith("-")][:1]
-        if dest and not os.path.isabs(dest[0]):
-            return dest[0], False
-        return None, not dest
-    found = _cd_relative_target(rest, "/")
-    if found is not None:
-        return found, False
-    if _INTERPRETER.fullmatch(_base(verb)) and "-m" in args:
-        return f"{verb} -m", False
-    if _base(verb) == "uniq":
-        # issue 188, 204: uniq writes its second operand, which the read grammar admits.
-        operands = split_options("uniq", args)[0]
-        if len(operands) > 1 and not os.path.isabs(operands[1]):
-            return operands[1], False
-    named, plain = False, False
-    for arg in args:
-        text = (arg.split("=", 1)[1] if "=" in arg else "") if arg.startswith("-") else arg
-        if not text:
-            continue
-        if os.path.isabs(text):
-            named = True
-            continue
-        here = any(os.path.lexists(os.path.join(c, text)) for c in cwds)
-        if "/" in text or set("*?[") & set(text) or text in {".", ".."} or here:
-            return text, False
-        plain = True
-    return None, plain or not named
+def _relative_word(script: Script, got: Admitted, command: str) -> tuple[str | None, bool]:
+    # issue 188, 269: (relative path, needs the read grammar) from the admitted record: a typed
+    # path or folder not named absolutely, a git write in the shell's folder, a text word.
+    words = {n.span: n for n in shparse.nodes(script) if isinstance(n, Word)}
+    env = {"HOME": _HOME}
+    lead, _ = lead_cd(got)
+    # 269: after the leading cd a relative path resolves in its absolute folder, not the shell's.
+    base = lead.cd_target.text if lead is not None and lead.cd_target is not None else ""
+    loose = False
+    for done in got.commands:
+        if done.family == "cd":
+            continue  # 269: admit takes the leading cd with an absolute path only.
+        sub = done.subcommand.text if done.subcommand is not None else ""
+        if done.family == "git" and done.git_dir is None and not done.git_read:
+            return f"git {sub} without -C", False
+        # 269: -C is typed resolved; its spelled word is the admitted literal at its span.
+        spelled = words.get(done.git_dir.span) if done.git_dir is not None else None
+        if spelled is not None and not os.path.isabs(os.path.join(base, spelled.literal or "")):
+            return spelled.raw, False
+        paths = [done.cd_target] if done.cd_target else []
+        paths += [t for t in (*done.reads, *done.writes, *done.pathspecs) if t.text != "-"]
+        for typed in paths:
+            path = _typed_path(typed, words, command, env)
+            # 269: a glob word is never named whole, absolute or not, as before.
+            if path is None or (typed.glob and _GLOB_CHARS & set(path)):
+                return typed.text, False
+            if not os.path.isabs(os.path.join(base, path)):
+                return typed.text, False
+        texts = done.texts or done.script is not None or done.module is not None
+        loose = loose or bool(texts) or not (paths or spelled)
+    return None, loose
 
 
 def _train_scoped(cwd: str, tool: str, tool_input: dict[str, object]) -> bool:

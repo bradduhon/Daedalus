@@ -15,6 +15,7 @@ from tests.adversarial.corpus import (
     A3_ISSUE_121_REFUSED,
     A3_RULE_ROWS,
     CODER_REFUSED,
+    MOVED_RELATIVE_269,
     S4_BUILT_OPERAND,
     S4_BUILT_OPTION,
     S4_HUNT,
@@ -178,3 +179,18 @@ def test_a_hunt_form_is_refused_on_its_typed_record(
     assert jail.admitted(command, agent, str(repo)), (klass, command)
     got = _reason(command, repo, "notes", agent)
     assert got is not None and ("excluded root" in got or got.startswith((ICASE, UNSEEN))), got
+
+
+@pytest.mark.parametrize(("cls", "form", "named"), MOVED_RELATIVE_269)
+def test_a_moved_bound_agent_names_every_path_absolutely(
+    tmp_path: Path, cls: str, form: str, named: str | None
+) -> None:
+    # issue 188, 269: the admitted record's typed paths and folders, or the refused command's
+    # standing folder alone (0224); the shell stands in another repository than the run.
+    judged, standing = tmp_path / "run", tmp_path / "away"
+    judged.mkdir()
+    standing.mkdir()
+    command = form.replace("{wt}", str(judged))
+    cwds = (str(standing), str(judged))
+    got = jail.moved_relative("Bash", {"command": command}, cwds, str(judged))
+    assert got is None if named is None else got is not None and named in got, (cls, got)

@@ -106,8 +106,6 @@ RETIRED_SHELL_IMPORTS |= {"_normalize", "_unquoted", "_awaits"}
 RE_SUBJECTS: dict[str, dict[str, str]] = {
     "lib/jail.py": {
         "_BRANCH_NAME": "the branch operand of an admitted conductor push",
-        "_INTERPRETER": "a parsed command word, moved_relative (issue 188)",
-        "_MODE": "a chmod mode operand of an admitted write",
         "_PIP": "an installer word of an admitted command",
         "_REMOTE_URL": "the output of git remote get-url",
         "_flags_ok": "an admitted git option against its grammar row pattern",
