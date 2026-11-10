@@ -22,6 +22,7 @@ MAX_BYTES = 1_048_576
 BOARD = (
     "Goal as first stated",
     "Goal now",
+    "Framings",
     "Live",
     "Parked",
     "Retired",
@@ -55,9 +56,17 @@ _RECORD = re.compile(r"### Turn (\d+): (session|operator)\s*")
 _SENTENCE = re.compile(r"[^.!?]*[.!?]+[\"'”’)\]]*|[^.!?]+$")
 _QUOTED = re.compile(r"\"[^\"\n]*\"|“[^”\n]*”")
 _TRAILING = "\"'”’)] \t"
-_ORDINALS = ("one", "two", "three")
-_FRAMING = re.compile(r"\b(one|two|three)[,:]\s+(\w+)", re.IGNORECASE)
-_DENIES = frozenset({"drop", "deny", "denies", "without"})
+# 0243: the three framing lines of the board, in order; the denied premise is quoted, never empty.
+_FRAMINGS = (
+    ("Obvious", re.compile(r"Obvious: \S.*")),
+    ("Stranger", re.compile(r"Stranger: \S.*")),
+    ("Denies", re.compile(r"Denies [\"“]\s*[^\"”\s][^\"”]*[\"”]: \S.*")),
+)
+_FRAMING_SHAPES = (
+    "- Obvious: <sentence>",
+    "- Stranger: <sentence>",
+    '- Denies "<premise>": <sentence>',
+)
 _LIST_ITEM = re.compile(r"\s*(?:\d+[.)]|[-*•])\s+(.*)")
 _REQUIREMENT = re.compile(
     r"\b(must|shall|should|needs? to|has to|required|requirements?|acceptance)\b", re.IGNORECASE
@@ -151,11 +160,12 @@ def _has_receipt(item: str) -> bool:
 
 
 def board_problems(text: str) -> list[str]:
-    # 0243: spec 3 rule 10, the board's fixed headings, reasons and tested turns.
+    # 0243: spec 3 rules 4 and 10, the board's headings, framings, reasons and tested turns.
     parsed = _sections(text)
     problems = _heading_problems([name for name, _ in parsed], BOARD)
     sections = dict(parsed)
     problems += _goal_problems(sections)
+    problems += _framing_problems(sections)
     problems += _per_item(sections, "Retired", _has_reason, "gives no `Reason:`")
     problems += _per_item(sections, "Confirmed premises", _has_turn, "names no `turn <n>`")
     return problems
@@ -204,26 +214,18 @@ def _is_question(sentence: str) -> bool:
     return _QUOTED.sub("", sentence).rstrip(_TRAILING).endswith("?")
 
 
-def _opening_problems(n: int, text: str) -> list[str]:
-    # 0243: spec 3 rule 4, three framings, one denying a premise, no clarifying question.
-    problems: list[str] = []
-    framings = _FRAMING.findall(text)
-    seen = [word.lower() for word, _ in framings]
-    at = 0
-    for ordinal in _ORDINALS:
-        at = seen.index(ordinal, at) + 1 if ordinal in seen[at:] else -1
-        if at < 0:
-            problems.append(
-                f"turn {n}: the opening does not hold three framings numbered one, two and three"
-            )
-            break
-    if not any(first.lower() in _DENIES for _, first in framings):
-        problems.append(
-            f"turn {n}: no opening framing starts with drop, deny or without to deny a premise"
-        )
-    for sentence in _sentences(text):
-        if _is_question(sentence) and not sentence.lower().startswith("what if"):
-            problems.append(f"turn {n}: the opening asks a clarifying question: {sentence}")
+def _framing_problems(sections: dict[str, list[str]]) -> list[str]:
+    # 0243: the opening's framings live on the board, in their fixed line shapes.
+    if "Framings" not in sections:
+        return []
+    items, problems = _items("Framings", sections["Framings"])
+    if len(items) != len(_FRAMINGS):
+        problems.append(f"Framings holds {len(items)} lines; it holds exactly three")
+    for n, ((name, shape), item, want) in enumerate(
+        zip(_FRAMINGS, items, _FRAMING_SHAPES, strict=False), 1
+    ):
+        if not shape.fullmatch(item):
+            problems.append(f"Framings line {n} is not `{want}` ({name}): {item}")
     return problems
 
 
@@ -260,9 +262,7 @@ def turns_problems(text: str) -> list[str]:
             continue
         previous = records[n - 2] if n > 1 else ("", "")
         after = previous[0] == "operator" and previous[1].rstrip(_TRAILING).endswith("?")
-        if not opened:
-            problems += _opening_problems(n, body)
-            opened = True
+        opened = True
         problems += _turn_problems(n, body, after)
     if records and not opened:
         problems.append("the log holds no session turn")

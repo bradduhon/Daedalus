@@ -7,6 +7,11 @@ A planner agent that asks the user design questions until it has enough for a sp
 ## Goal now
 An agent that shows a confident first draft and lets the user correct it.
 
+## Framings
+- Obvious: Keep the questions but cap how many come in one turn.
+- Stranger: The agent shows a full draft design first and the user corrects it.
+- Denies "asks the user design questions": Two agents argue while the user watches and steps in.
+
 ## Live
 - Draft first, then the user corrects it.
 

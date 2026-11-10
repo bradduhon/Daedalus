@@ -78,14 +78,45 @@ BREAKS = (
         "faster than answers.",
         "Receipts owed item 2 carries no URL, no file:line and no ASSUMED",
     ),
-    # turns: the opening holds three framings, one denying a premise, no clarifying question.
-    ("turns", "three, drop the", "and also drop the", "three framings numbered one, two and three"),
-    ("turns", "three, drop the", "three, replace the", "starts with drop, deny or without"),
+    # board: three framings in their fixed shapes, the denied premise quoted and not empty.
+    ("board", "## Framings\n", "## Ideas\n", "the heading `## Framings` is missing"),
+    ("board", "- Obvious: Keep", "- Plain: Keep", "Framings line 1 is not `- Obvious: <sentence>`"),
+    (
+        "board",
+        "- Stranger: The",
+        "- Odd one: The",
+        "Framings line 2 is not `- Stranger: <sentence>`",
+    ),
+    (
+        "board",
+        'Denies "asks the user design questions":',
+        'Denies "":',
+        'Framings line 3 is not `- Denies "<premise>": <sentence>`',
+    ),
+    (
+        "board",
+        'Denies "asks the user design questions":',
+        "Denies asks the user design questions:",
+        "Framings line 3 is not",
+    ),
+    (
+        "board",
+        "- Stranger: The agent shows",
+        "Stranger line gone. The agent shows",
+        "holds 2 lines",
+    ),
+    # turns: the opening holds at most one question, and it is the last sentence.
     (
         "turns",
         "What if the first thing",
         "Who will use it? What if the first thing",
-        "the opening asks a clarifying question: Who will use it?",
+        "turn 2: holds 2 questions",
+    ),
+    (
+        "turns",
+        "wrong design?",
+        "wrong design? Think about it.",
+        "turn 2: the question is not the turn's last sentence",
     ),
     # no session turn holds more than one question.
     (

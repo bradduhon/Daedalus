@@ -22,7 +22,7 @@ The brainstorm phase turns an idea into a design spec in two halves (explore the
 1. Set `<override>` when `$ARGUMENTS` ends with `--model <value>`, and drop those two words. When the first word of what is left names a readable file, set `<notes>` to that file. Otherwise the whole text is `<idea>`. Empty arguments: stop. Next: run `/daedalus:brainstorm` with the idea in words or the path of a notes file.
 2. In a folder run, take `<repo>`, `<train-id>` and `<out>` from the State Block lines the folder begin printed (`${CLAUDE_PLUGIN_ROOT}/skills/run/SKILL.md`, Folder run section) and skip step 3. Otherwise set `<repo>` to the parent of the directory `git rev-parse --path-format=absolute --git-common-dir` prints (the main working tree). Not a repo: stop. Next: run `/daedalus:run brainstorm` with the idea, which opens a run in a plain folder, or run `/daedalus:brainstorm` inside the target repository with the idea in words or the path of a notes file.
 3. When `<repo>/.claude/daedalus/train.active` exists, a run is active and moves the scratch folder into its own: stop. Next: finish or stop the active run, then run `/daedalus:brainstorm` again.
-4. Set `<folder>` to `<repo>/docs/.tmp/daedalus/brainstorm-<YYYYMMDD>`, with today's UTC date. Each time `<folder>/spec.md` already exists, ask the operator one question (0154): "Today's brainstorm folder already holds a spec draft. Continue from that draft, or start a new folder?", with the options `Continue from the draft (Recommended)`, because a same-day restart is most often the same idea, and `Start a new folder`. Continue keeps `<folder>` and sets `<notes>` to `<folder>/spec.md` when the operator gave no notes file. A new folder sets `<folder>` to `<repo>/docs/.tmp/daedalus/brainstorm-<YYYYMMDD>-<k>`, with `<k>` the lowest number from 2 up whose folder holds no `spec.md`. In a folder run both folder names sit in the run's output folder `<out>/` in place of `<repo>/docs/.tmp/daedalus/`, so the spec is written to `<out>/brainstorm-<YYYYMMDD>/spec.md`; the planner's write hook admits that shape there (issue 48).
+4. Set `<folder>` to `<repo>/docs/.tmp/daedalus/brainstorm-<YYYYMMDD>`, with today's UTC date. Each time `<folder>` already holds a spec draft (`spec.md`), a handoff brief (`handoff.md`) or an idea board (`board.md`), ask the operator one question (0154): "Today's brainstorm folder already holds <the latest of those three, in words>. Continue from it, or start a new folder?", with the options `Continue from it (Recommended)`, because a same-day restart is most often the same idea, and `Start a new folder`. Continue keeps `<folder>` and, when the operator gave no notes file, picks up from the latest file. A spec draft sets `<notes>` to `<folder>/spec.md`, a resume that goes straight to shaping. A handoff brief resumes at the handoff: run its two checks, show it and ask the exit question again. A board resumes exploring with that board: read it, skip the opening move, and go on from its Goal now. A new folder sets `<folder>` to `<repo>/docs/.tmp/daedalus/brainstorm-<YYYYMMDD>-<k>`, with `<k>` the lowest number from 2 up whose folder holds none of the three files. In a folder run both folder names sit in the run's output folder `<out>/` in place of `<repo>/docs/.tmp/daedalus/`, so the spec is written to `<out>/brainstorm-<YYYYMMDD>/spec.md`; the planner's write hook admits that shape there (issue 48).
 
 ### Exploring
 
@@ -32,7 +32,7 @@ Count turns from 1 across the exploring: the idea is turn 1, your opening is tur
 
 #### Straight to shaping
 
-When the notes file already states a design, what to build and how it behaves, or the operator's words ask for a spec now, such as "just spec it", the operator has chosen. Run the opening move once anyway, so a wrong goal has one chance to be caught. When their reply keeps the goal, write no board and no brief, and go to step 5 with the notes file or the idea as its input. When their reply moves the goal, keep exploring.
+When the notes file already states a design, what to build and how it behaves, or the operator's words ask for a spec now, such as "just spec it", the operator has chosen. Run the opening move once anyway, so a wrong goal has one chance to be caught. When their reply keeps the goal, write no board and no brief, and go to step 5 with the notes file or the idea as its input. When their reply moves the goal, keep exploring. When `<notes>` is the day's spec draft, `<folder>/spec.md`, the brainstorm is a resume: go straight to step 5 and do not run the opening move again.
 
 #### How you think with the operator
 
@@ -51,7 +51,7 @@ When the notes file already states a design, what to build and how it behaves, o
 
 #### The opening move
 
-Your first reply to the idea gives three framings: the obvious one, a stranger one, and one that denies a premise the operator stated. Number them in words, one, two and three, each followed by a comma. Start the framing that denies a premise with drop, deny or without, then the premise it denies. Say which framing you find most interesting and why. Ask no clarifying question: a closing "What if" question is the most the opening holds. One worked example:
+Your first reply to the idea gives three framings: the obvious one, a stranger one, and one that denies a premise the operator stated. Give them in your own words, and record them on the board under `## Framings` as the board section says. Say which framing you find most interesting and why. Ask no clarifying question: a closing "What if" question is the most the opening holds. One worked example:
 
 > User: I want a planner agent that asks the user design questions until it has enough for a spec.
 >
@@ -59,10 +59,11 @@ Your first reply to the idea gives three framings: the obvious one, a stranger o
 
 #### The board
 
-Keep the idea board in `<folder>/board.md`. After each operator turn, the idea included, rewrite the whole file with the Write tool before you reply. Show it only when the operator asks for it, or at the handoff. Its headings are these `## ` lines, in this order:
+Keep the idea board in `<folder>/board.md`. Write it with the Write tool in the same turn as the opening. After that, rewrite the whole file with the Write tool only in a turn where something on it changed: an idea added, parked or retired, a tension opened or closed, a premise tested, or the goal moved. Rewrite it once more before the handoff. Show it only when the operator asks for it, or at the handoff. Its headings are these `## ` lines, in this order:
 
 - `## Goal as first stated`: one sentence, never changed after the first write.
 - `## Goal now`: one sentence. Equal to the first is allowed.
+- `## Framings`: the three framings of the opening, written with it and never rewritten after. Exactly three lines, in this order: `- Obvious: <one sentence>`, `- Stranger: <one sentence>` and `- Denies "<the operator's premise, quoted>": <one sentence>`. The handoff brief's rejected framings may cite them.
 - `## Live`: the ideas still in play, one `- ` line each.
 - `## Parked`: the ideas set aside for later.
 - `## Retired`: one `- <the idea>. Reason: <one line>` line each.
@@ -179,7 +180,7 @@ Grounding rules (carried verbatim to the planner):
 
 - Exploring ends when the operator accepts a direction at the exit question, after the board and handoff checks ran (scripts/brainstorm_check.py), or keeps their goal on the straight path.
 - The operator says the spec stands, the verifier checks its repository receipts, and the warm planner cuts the plan (step 11).
-- No hook checks the hand-off. The planner's one-file write grant is a hook (agents/planner.md:16).
+- No hook checks the hand-off. The planner's one-file write grant is a hook (agents/planner.md:17).
 
 ## Agents it uses
 

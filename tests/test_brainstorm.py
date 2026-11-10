@@ -110,10 +110,32 @@ def test_stops_on_empty_arguments_outside_a_repo_and_on_a_train_marker() -> None
 def test_same_day_draft_asks_each_time_with_continue_first() -> None:
     step4 = flatten(_step(_text(), 4))
     assert "`<repo>/docs/.tmp/daedalus/brainstorm-<YYYYMMDD>`" in step4
-    assert "Each time `<folder>/spec.md` already exists, ask the operator" in step4
-    keep = step4.index("`Continue from the draft (Recommended)`")
+    assert (
+        "Each time `<folder>` already holds a spec draft (`spec.md`), a handoff brief "
+        "(`handoff.md`) or an idea board (`board.md`), ask the operator" in step4
+    )
+    keep = step4.index("`Continue from it (Recommended)`")
     assert keep < step4.index("`Start a new folder`")
     assert "`<repo>/docs/.tmp/daedalus/brainstorm-<YYYYMMDD>-<k>`" in step4
+    assert "whose folder holds none of the three files" in step4
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        # 0243: a spec draft resumes shaping without a second opening move.
+        "A spec draft sets `<notes>` to `<folder>/spec.md`, a resume that goes straight to "
+        "shaping.",
+        "A handoff brief resumes at the handoff: run its two checks, show it and ask the exit "
+        "question again.",
+        "A board resumes exploring with that board: read it, skip the opening move, and go on "
+        "from its Goal now.",
+    ],
+)
+def test_same_day_continue_picks_up_from_each_file(case: str) -> None:
+    step4 = flatten(_step(_text(), 4))
+    assert "when the operator gave no notes file, picks up from the latest file" in step4
+    assert case in step4
 
 
 def test_folder_run_writes_the_spec_and_plan_into_out() -> None:
@@ -435,8 +457,12 @@ def test_opening_move_keeps_the_worked_example_and_the_checker_reads_it() -> Non
     section = _exploring().split("#### The opening move\n", 1)[1].split("\n#### ", 1)[0]
     assert f"> {EXAMPLE_USER}\n>\n> {EXAMPLE_SKILL}\n" in section
     flat = flatten(section)
-    assert "Number them in words, one, two and three, each followed by a comma." in flat
-    assert "Start the framing that denies a premise with drop, deny or without" in flat
+    assert (
+        "Give them in your own words, and record them on the board under `## Framings` as the "
+        "board section says." in flat
+    )
+    # 0243: no fixed wording in the prose; the framings are checked on the board instead.
+    assert "Number them in words" not in flat and "drop, deny or without" not in flat
     assert 'a closing "What if" question is the most the opening holds' in flat
     log = (
         f"### Turn 1: operator\n{EXAMPLE_USER.split(': ', 1)[1]}\n\n"
@@ -451,6 +477,10 @@ def test_straight_path_runs_the_opening_once_then_shapes() -> None:
     assert '"just spec it"' in flat
     assert "Run the opening move once anyway, so a wrong goal has one chance to be caught." in flat
     assert "write no board and no brief, and go to step 5 with the notes file or the idea" in flat
+    assert (
+        "When `<notes>` is the day's spec draft, `<folder>/spec.md`, the brainstorm is a resume: "
+        "go straight to step 5 and do not run the opening move again." in flat
+    )
 
 
 def _headings(block: str) -> tuple[str, ...]:
@@ -464,7 +494,19 @@ def test_board_and_brief_headings_match_the_checker() -> None:
     board = section.split("#### The board\n", 1)[1].split("\n#### ", 1)[0]
     brief = section.split("#### The handoff brief\n", 1)[1].split("Rewrite the board once", 1)[0]
     assert "`<folder>/board.md`" in board and "rewrite the whole file with the Write tool" in board
+    flat = flatten(board)
+    assert "Write it with the Write tool in the same turn as the opening." in flat
+    assert (
+        "only in a turn where something on it changed: an idea added, parked or retired, a "
+        "tension opened or closed, a premise tested, or the goal moved." in flat
+    )
+    assert "Rewrite it once more before the handoff." in flat
+    assert "before you reply" not in flat
     assert "Show it only when the operator asks for it, or at the handoff." in board
+    assert (
+        '`- Obvious: <one sentence>`, `- Stranger: <one sentence>` and `- Denies "<the '
+        "operator's premise, quoted>\": <one sentence>`" in flat
+    )
     assert _headings(board) == brainstorm_check.BOARD
     assert "`<folder>/handoff.md`" in brief
     assert _headings(brief) == brainstorm_check.HANDOFF
@@ -491,6 +533,17 @@ def test_handoff_runs_both_checks_then_asks_the_exit_question() -> None:
     )
     assert [brief.index(choice) for choice in order] == sorted(brief.index(c) for c in order)
     assert "Accept runs step 5 with the brief as the planner's input." in brief
+
+
+def test_evidence_cites_the_root_writes_line_and_the_catalog_names_the_exploring_exit() -> None:
+    evidence = _text().split("## Evidence that ends it", 1)[1].split("## Agents it uses", 1)[0]
+    cited = re.search(r"agents/planner\.md:(\d+)", evidence)
+    assert cited is not None
+    lines = (REPO_ROOT / "agents" / "planner.md").read_text(encoding="utf-8").splitlines()
+    assert "scripts/checks/root_writes.py" in lines[int(cited[1]) - 1]
+    catalog = (REPO_ROOT / "skills" / "catalog" / "SKILL.md").read_text(encoding="utf-8")
+    row = next(line for line in catalog.splitlines() if line.startswith("| brainstorm |"))
+    assert "Exploring ends when the operator accepts the handoff brief's direction" in row
 
 
 def test_dispatch_names_the_brief_and_the_spec_meets_the_open_risk_gate() -> None:
