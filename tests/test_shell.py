@@ -89,7 +89,13 @@ RETIRED = (
     "_loop_union _opaque_values _opaque_targets _moved_base _tree_reader _gh_words "
     "_CREDENTIAL_PART _BINDERS _coder_write_targets "
     # 228 tail: the credential module's command-text readers no caller reached.
-    "dotglob_on expand_word _DOTS_QUALIFIER _DOTGLOB_WORDS"
+    "dotglob_on expand_word _DOTS_QUALIFIER _DOTGLOB_WORDS "
+    # 266: the data folder regexes, the pack verify reader's walkers and the env -S parser.
+    # admit.py keeps its own _expands, so the grep cannot list that name.
+    "_DATA_DIR_WRITE _CD_TARGET _GIT_INDEX_WRITE _DAEDALUS_WORD _DEVNULL _normalize_paths "
+    "_cd_into_claude _cd_data_dir_git _data_dir_write _data_dir_markers _shell_words "
+    "_shell_scan ScanSegment _command_at _path_positions _PATH_OPTION _opaque_words "
+    "_search_paths _PATH_CMDS _CONTROL_WORDS _OPAQUE env_split_values _env_split _unsingled"
 ).split()
 # 228 tail: names another module defines for its own use, so the grep above cannot list them;
 # the import test below proves no module reaches the retired lib.shell ones.
@@ -121,6 +127,16 @@ RE_SUBJECTS: dict[str, dict[str, str]] = {
     },
     "lib/admit.py": {},
     "checks/read_only_bash.py": {"_GREP_PERL": "a grep option word"},
+    # 266: the modules this unit moved onto the parse; the verify reader reads no command by re.
+    "lib/packs.py": {
+        "CONTROL_ID": "a control, ref or maps_to id in controls.json",
+        "DAY": "the pinned_on date in pack.json",
+        "PACK_ID": "the id in pack.json",
+        "SHA256": "the sha256 in pack.json",
+        "VERSION": "the version in pack.json",
+    },
+    "checks/command_allowlist.py": {},
+    "checks/workspace_integrity.py": {},
 }
 
 
