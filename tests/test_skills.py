@@ -16,13 +16,6 @@ from tests.conftest import REPO_ROOT
 from tests.helpers import phase_text
 
 SKILLS = sorted((REPO_ROOT / "skills").glob("*/SKILL.md"))
-# 0174: the retired train commands ship one release as stubs that print the new command.
-STUBS = {
-    "build-train": "/daedalus:run <task>",
-    "push-train": "/daedalus:run push [<run id>]",
-    "doc-train": "/daedalus:run doc <what, sources, folder>",
-}
-WORKING_SKILLS = [p for p in SKILLS if p.parent.name not in STUBS]
 COPYRIGHT = "<!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->"
 _SCRIPT_REF = re.compile(r"\$\{?CLAUDE_PLUGIN_ROOT\}?/scripts/([^\s`\"')]+?\.py)")
 
@@ -43,27 +36,14 @@ def test_skills_exist() -> None:
         "doctor",
         "audit-report",
         "brainstorm",
-        "build-train",
-        "push-train",
     }
 
 
-STUB_GOES = "This stub goes in the release after 5.1.0 (old names stub one release, 0174)."
-
-
-@pytest.mark.parametrize(("name", "command"), sorted(STUBS.items()))
-def test_retired_train_skill_is_a_one_line_stub(name: str, command: str) -> None:
-    # 0174: one body line prints the new command and does nothing else; one line dates removal.
-    fields, body = _split(REPO_ROOT / "skills" / name / "SKILL.md")
-    assert set(fields) == {"name", "description"}
-    assert fields["name"] == name and "moved to /daedalus:run" in fields["description"]
-    lines = [ln for ln in body.splitlines()[1:] if ln.strip()]
-    printed = (
-        "Print this one line to the operator and do nothing else: "
-        f'"This command moved. Type {command} in its place."'
-    )
-    assert [ln for ln in lines if "/daedalus:run" in ln] == [printed]
-    assert lines == [printed, STUB_GOES]
+@pytest.mark.parametrize("name", ["build-train", "push-train", "doc-train"])
+def test_retired_train_commands_stay_gone(name: str) -> None:
+    # 0241: no folder and no skill name forwards a retired train command.
+    assert not (REPO_ROOT / "skills" / name).exists()
+    assert all(_split(path)[0].get("name") != name for path in SKILLS)
 
 
 @pytest.mark.parametrize("path", SKILLS, ids=lambda p: p.parent.name)
@@ -793,7 +773,7 @@ def test_build_train_phase1_has_no_branch_switch() -> None:
     assert "git switch" not in phase1 and "git checkout" not in phase1
 
 
-# 0174: the release phase holds the push recipe; the push-train skill is a stub.
+# 0174: the release phase holds the push recipe.
 RELEASE = REPO_ROOT / "skills" / "release" / "SKILL.md"
 
 
@@ -1365,7 +1345,7 @@ def test_skill_script_commands_are_allowed_for_main() -> None:
     root = str(REPO_ROOT)
     commands = [
         re.sub(r"<[^>]+>", "x", m.replace("${CLAUDE_PLUGIN_ROOT}", root).replace("<repo>", root))
-        for path in (REPO_ROOT / "skills" / n for n in ("build-train", "push-train", "release"))
+        for path in (REPO_ROOT / "skills" / n for n in ("release",))
         for m in _SKILL_SCRIPT.findall((path / "SKILL.md").read_text(encoding="utf-8"))
     ]
     assert len(commands) >= 4
@@ -1386,7 +1366,7 @@ def test_issue30_skill_script_commands_pass_for_main_during_a_train(
     root, repo = str(REPO_ROOT), str(repo_cwd)
     commands = [
         re.sub(r"<[^>]+>", "x", m.replace("${CLAUDE_PLUGIN_ROOT}", root).replace("<repo>", repo))
-        for path in (REPO_ROOT / "skills" / n for n in ("build-train", "push-train", "release"))
+        for path in (REPO_ROOT / "skills" / n for n in ("release",))
         for m in _SKILL_SCRIPT.findall((path / "SKILL.md").read_text(encoding="utf-8"))
     ]
     assert len(commands) >= 4
@@ -1599,7 +1579,7 @@ HUMAN_TEXT_RULE = (
 )
 
 
-@pytest.mark.parametrize("path", WORKING_SKILLS, ids=lambda p: p.parent.name)
+@pytest.mark.parametrize("path", SKILLS, ids=lambda p: p.parent.name)
 def test_operator_skills_carry_the_human_text_rule(path: Path) -> None:
     # 0031: every working skill speaks to the operator, so each carries the rule verbatim.
     assert HUMAN_TEXT_RULE in path.read_text(encoding="utf-8")
@@ -1753,7 +1733,7 @@ HAND_WRITES = re.compile(
 @pytest.mark.parametrize("name", ["run", "release", "catalog"])
 def test_no_recipe_writes_the_summary_by_hand(name: str) -> None:
     # W3.2: the summary command writes the train summary; the release phase's post-push CI and
-    # release lines stay outside the Recovery round this test reads (0174: the stubs moved here).
+    # release lines stay outside the Recovery round this test reads.
     text = (REPO_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
     if name == "release":
         text = _section(text, "## Recovery round", "## Push")
@@ -1852,7 +1832,7 @@ def test_release_names_the_conductor_as_the_only_pusher_and_the_operator_as_merg
     assert "only the releaser pushes (scripts/lib/gh_policy.py:307)" in evidence
     assert "No agent merges (scripts/lib/gh_policy.py:45)" in evidence
     assert "never in the orchestrator" in flat and "(agents/orchestrator.md:36)" in flat
-    # 0174: the release phase names the new command; the old one is a stub.
+    # 0241: the release phase names the new command; the old one is gone.
     assert "started with `/daedalus:run push`." in flat and "push-train" not in flat
 
 

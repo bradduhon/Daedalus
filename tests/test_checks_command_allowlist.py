@@ -605,7 +605,7 @@ def test_shell_exemption_is_the_orchestrators_alone() -> None:
         assert evaluate("shell_tripwires", _b(agent, command)) is not None, agent
 
 
-# issue 63, pin C3 -> C4: a train script's --repo or --cwd is the project root of the hook cwd.
+# issue 63, pin C3 -> C4: a train script's --repo is the project root of the hook cwd.
 TRAIN_FLAGS = ("--allow", "train,inspect")
 REFRESH = f"python3 {SCRIPTS}/daedalus_workspace.py refresh"
 
@@ -639,15 +639,7 @@ def test_train_script_repo_outside_the_project_root_is_refused(
     assert not decide(_b("orchestrator", f"{REFRESH} {args}"), CFG).allow
 
 
-def test_train_script_cwd_flag_is_judged_the_same_way() -> None:
-    report = f"python3 {SCRIPTS}/audit_report.py --cwd /work/other --session s"
-    reason = evaluate(HOOK, _b("orchestrator", report), *TRAIN_FLAGS)
-    assert reason == load(HOOK).R_TRAIN_REPO.format(flag="--cwd", given="/work/other", root=CWD)
-    ok = f"python3 {SCRIPTS}/audit_report.py --cwd {CWD} --session s"
-    assert evaluate(HOOK, _b("orchestrator", ok), *TRAIN_FLAGS) is None
-
-
-@pytest.mark.parametrize("args", ["--rep /work/other", "--re=/work/other", "--repo", "--cw /x"])
+@pytest.mark.parametrize("args", ["--rep /work/other", "--re=/work/other", "--repo"])
 def test_train_script_abbreviated_or_empty_repo_is_refused(args: str) -> None:
     command = f"python3 {SCRIPTS}/daedalus_train.py progress {args}"
     assert evaluate(HOOK, _b("orchestrator", command), *TRAIN_FLAGS) is not None, args

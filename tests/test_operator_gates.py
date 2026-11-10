@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from lib import audit_rounds, gh_policy, train_runner, train_state
 from lib.audit_proof import ProofError, findings_path, push_proof
-from lib.config import Config, ConfigError, load_config
+from lib.config import CONFIG_KEYS, Config, ConfigError, load_config
 from lib.project_keys import CONFIG_FILE, KEY_ROWS, config_keys
 
 from tests import test_train_runner as runner_tests
@@ -123,18 +123,16 @@ def test_the_stall_rule_and_its_budget_are_gone() -> None:
     assert audit_rounds.next_round({"1": {}, "2": {}}) == 3
 
 
-# Requirement 3: the config key is retired and refused with a Next line naming its removal.
-
-
 @pytest.mark.parametrize("value", [5, 1, None, "3"])
-def test_a_config_that_sets_the_round_budget_is_refused(tmp_path: Path, value: object) -> None:
+def test_the_round_budget_is_an_unknown_config_key(tmp_path: Path, value: object) -> None:
+    # 0241: audit_round_budget meets the ordinary unknown-key refusal; the key set is the table's.
+    assert set(CONFIG_KEYS) == {key.split(".")[0].split("[")[0] for key in config_keys()}
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"audit_round_budget": value}), encoding="utf-8")
     with pytest.raises(ConfigError) as info:
         load_config(path=path)
     text = str(info.value)
-    assert "sets audit_round_budget, which Daedalus removed" in text
-    assert "Next: delete the audit_round_budget line from .claude/daedalus/config.json." in text
+    assert f"{path} has unknown keys ['audit_round_budget']" in text and "Next: " in text
     path.write_text(json.dumps({"max_concurrent_builders": 2}), encoding="utf-8")
     assert load_config(path=path).max_concurrent_builders == 2
 

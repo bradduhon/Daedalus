@@ -43,7 +43,8 @@ def project_data(project_data: Path, repo_cwd: Path) -> Path:
     write_train_marker(repo_cwd)
     # 73: the proof anchors on the recorded verdict seq; refusal tests grade the turn before it.
     verdict = {"status": "approved", "tip": "0" * 40, "round": 1, "seq": 1}
-    train_state.save(repo_cwd, TRAIN, {"train_id": TRAIN, "start_seq": 0, "verdict": verdict})
+    bound = {"start_seq": 0, "audit_session": "sess-test", "audit_bounds": {"sess-test": 0}}
+    train_state.save(repo_cwd, TRAIN, {"train_id": TRAIN, **bound, "verdict": verdict})
     return project_data
 
 
@@ -418,7 +419,7 @@ _handback = partial(append_handback, tool_response={"success": True})
 
 
 def _start(repo_cwd: Path, seq: int) -> None:
-    train_state.update(repo_cwd, TRAIN, start_seq=seq)
+    train_state.update(repo_cwd, TRAIN, start_seq=seq, audit_bounds={"sess-test": seq})
 
 
 def test_approved_finds_the_verdict_in_the_auditor_hand_back(
@@ -696,7 +697,8 @@ def test_approved_reads_the_bound_of_the_summary_session(
 ) -> None:
     # issue 60: a push session's hooks-live moves start_seq, and the build session keeps its bound.
     tip = _judged(repo_cwd, seq=2)
-    train_state.save(repo_cwd, TRAIN, {**train_state.load(repo_cwd, TRAIN), "start_seq": None})
+    fresh = {k: v for k, v in train_state.load(repo_cwd, TRAIN).items() if "audit_" not in k}
+    train_state.save(repo_cwd, TRAIN, {**fresh, "start_seq": None})
     _bash(hook_input, "python3 /p/scripts/verify_audit_chain.py --hooks-live")
     train_state.mark_start(repo_cwd, TRAIN, 1, "sess-test")
     _train(hook_input, repo_cwd, f"[VERDICT: APPROVED] tip={tip}")

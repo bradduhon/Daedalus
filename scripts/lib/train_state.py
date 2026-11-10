@@ -201,17 +201,13 @@ def _bounds(state: dict[str, object]) -> dict[str, int]:
 
 
 def session_bound(state: dict[str, object], session: str) -> int | None:
-    # issue 60: a state from before audit_session keeps its one bound for every session.
-    if audit_session(state) is None:
-        return start_seq(state)
     return _bounds(state).get(session)
 
 
 def mark_start(repo: Path, train_id: str, seq: int, session: str | None = None) -> int:
     # issue 57: once per session; issue 60: a new session moves start_seq to its own bound.
     def edit(state: dict[str, object]) -> None:
-        legacy = audit_session(state) is None and start_seq(state) is not None
-        if session is None or legacy:
+        if session is None:
             if start_seq(state) is None:
                 state[START_SEQ] = seq
             return

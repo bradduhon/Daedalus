@@ -6,13 +6,14 @@
 from __future__ import annotations
 
 import shlex
+from pathlib import Path
 from typing import Any
 
 from lib import jail
 from lib.admit import Refusal
 from lib.jail import normalize_agent
 
-from tests.conftest import CFG
+from tests.conftest import CFG, git
 from tests.hook_chain import CHAINS, decide
 from tests.payloads import _cred
 
@@ -1761,3 +1762,193 @@ S4_HUNT = (
     ("in place", "coder", "sed -i s/a/b/ notes/a.md"),
     ("whole tree", "coder", "git add ."),
 )
+# 267: git reads that print tracked content; refused where the checkout tracks .env and
+# cfg/.env, admitted where it tracks none or only .env.example files.
+TRACKED_JUDGED_267 = (
+    "git log -p",
+    "git log -S KEY",
+    "git log -GKEY",
+    "git log -p HEAD",
+    "git grep KEY",
+    "git grep -l KEY",
+    "git grep -- KEY",
+    "git grep src",
+    "git show",
+    "git show HEAD",
+    "git show HEAD -- cfg",
+    "git show HEAD:cfg",
+    "git diff",
+    "git diff HEAD",
+    "git diff --cached",
+    "git blame -- cfg",
+    "git stash show -p",
+    "git log -p -- cfg",
+    "git grep KEY -- cfg",
+    "git log -p -- 'c*'",
+    "git log -p 'c*'",
+)
+# 267: reads that name no tracked secret, or print no content; admitted beside a tracked .env.
+TRACKED_KEPT_267 = (
+    "git log",
+    "git log --oneline",
+    "git log --grep KEY",
+    "git log -p -- src",
+    "git log -p src",
+    "git log -p -- 's*'",
+    "git grep KEY src",
+    "git grep -e KEY -- src",
+    "git -C src grep KEY",
+    "git show HEAD:src/a.py",
+    "git show -s HEAD",
+    "git diff --name-only",
+    "git diff -- src",
+    "git blame src/a.py",
+    "git status",
+    "git ls-files",
+)
+# 267 hunt: (class, checkout, form, outcome). tracked and unknown: the new check names it;
+# named: an older check names it; grammar: main refuses it; gap: admitted, a named residual.
+TRACKED_HUNT_267 = (
+    ("-C into a second checkout", "clean", "git -C vendor/other log -p", "tracked"),
+    ("standing checkout tracks none", "clean", "git log -p", "kept"),
+    ("--git-dir", "clean", "git --git-dir=vendor/other/.git log -p", "tracked"),
+    (
+        "--git-dir and --work-tree",
+        "clean",
+        "git --git-dir vendor/other/.git --work-tree vendor/other log -p",
+        "tracked",
+    ),
+    ("linked worktree", "linked", "git log -p", "tracked"),
+    ("submodule path", "super", "git -C mod log -p", "tracked"),
+    ("superproject over a submodule", "super", "git log -p", "kept"),
+    ("another branch, log", "branch", "git log -p other", "gap"),
+    ("another branch, diff", "branch", "git diff main other", "gap"),
+    ("another branch, show", "branch", "git show other:.env", "named"),
+    ("pathspec from a file", "secret", "git log -p --pathspec-from-file=list", "grammar"),
+    ("grep --no-index", "secret", "git grep --no-index KEY", "grammar"),
+    ("folder pathspec", "secret", "git log -p -- cfg", "tracked"),
+    ("rename, --follow", "renamed", "git log -p --follow -- conf.txt", "grammar"),
+    ("rename, whole history", "renamed", "git log -p", "gap"),
+    ("GIT_INDEX_FILE", "secret", "GIT_INDEX_FILE=/tmp/x git log -p", "unknown"),
+    ("quoted wildcard pathspec", "secret", "git log -p -- 'c*'", "tracked"),
+    ("quoted wildcard before --", "secret", "git log -p 'c*'", "tracked"),
+    ("wildcard in a revision", "secret", "git log -p 'HEAD^{/[i]}'", "tracked"),
+    ("stash show -p", "secret", "git stash show -p", "tracked"),
+    ("cat-file a blob", "secret", "git cat-file -p HEAD:.env", "grammar"),
+    ("blob diff", "secret", "git diff HEAD:.env HEAD:src/a.py", "tracked"),
+)
+# 267 fix 1: (class, checkout, form, agents, main). "single" tracks cfg/.env alone and a file
+# named main. kept: admitted by the grammar and the tracked check; tracked: refused by that
+# check; grammar: refused by the role's grammar; named: an older credential check names it.
+TRACKED_EXCLUDE_267 = (
+    ("diff rescued", "single", "git diff -- ':(exclude)cfg/.env'", "kept", "kept"),
+    ("diff of a revision rescued", "single", "git diff HEAD -- ':!cfg/.env'", "kept", "kept"),
+    ("show rescued", "single", "git show HEAD -- ':(exclude)cfg/.env'", "kept", "kept"),
+    ("log -p rescued", "single", "git log -p -- ':(exclude)cfg/.env'", "kept", "kept"),
+    ("grep rescued", "single", "git grep KEY -- ':(exclude)cfg/.env'", "grammar", "kept"),
+    ("top form rescued", "single", "git log -p -- ':!/cfg/.env'", "kept", "kept"),
+    ("folder exclude", "single", "git log -p -- ':(exclude)cfg'", "kept", "kept"),
+    ("wildcard exclude", "single", "git log -p -- ':(exclude)cfg/*'", "tracked", "tracked"),
+    ("icase exclude", "single", "git log -p -- ':(exclude,icase)cfg/.env'", "grammar", "tracked"),
+    ("exclude the shell builds", "single", 'git log -p -- ":(exclude)$F"', "grammar", "named"),
+    ("folder and its exclude", "single", "git log -p -- cfg ':(exclude)cfg/.env'", "kept", "kept"),
+    (
+        "other file excluded",
+        "single",
+        "git log -p -- ':(exclude)cfg/app.txt'",
+        "tracked",
+        "tracked",
+    ),
+    ("blob, excluded", "single", "git show HEAD:cfg -- ':(exclude)cfg/.env'", "tracked", "tracked"),
+    ("revision before --, file of that name", "single", "git log -p main --", "tracked", "tracked"),
+    (
+        "literal pathspecs turn excludes off",
+        "single",
+        "git --literal-pathspecs log -p -- ':(exclude)cfg/.env'",
+        "grammar",
+        "tracked",
+    ),
+    ("two secrets, one excluded", "secret", "git log -p -- ':(exclude).env'", "tracked", "tracked"),
+    (
+        "two secrets, both excluded",
+        "secret",
+        "git log -p -- ':(exclude).env' ':(exclude)cfg/.env'",
+        "kept",
+        "kept",
+    ),
+    (
+        "blob of the secret, excluded",
+        "secret",
+        "git show HEAD:.env -- ':(exclude).env'",
+        "named",
+        "named",
+    ),
+)
+# 267 fix 2: (form, outcome) beside tracked secrets; a stat prints names and counts only.
+TRACKED_STAT_267 = (
+    ("git diff --stat", "kept"),
+    ("git show --stat", "kept"),
+    ("git show --stat HEAD", "kept"),
+    ("git log --stat", "kept"),
+    ("git stash show", "kept"),
+    ("git log --stat -p", "tracked"),
+    ("git diff --stat -U3", "tracked"),
+    ("git diff --stat -p", "grammar"),
+)
+TRACKED_SECRET_267 = "this repository tracks"
+TRACKED_UNKNOWN_267 = "could not list"
+TRACKED_NEXT_267 = "Next: add "
+
+
+def _commit(repo: Path, files: dict[str, str], message: str = "c") -> None:
+    for name, body in files.items():
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text(body, encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", message)
+
+
+def _init(repo: Path, files: dict[str, str]) -> Path:
+    repo.mkdir(parents=True)
+    git(repo, "init", "-q", "-b", "main")
+    _commit(repo, files)
+    return repo
+
+
+def tracked_checkouts(root: Path) -> dict[str, Path]:
+    # 267: the checkouts the judged, kept and hunt rows run in, keyed by the row's checkout.
+    src = {"src/a.py": "x\n", "cfg/app.txt": "a\n"}
+    out = {
+        "secret": _init(root / "secret", {**src, ".env": "KEY=1\n", "cfg/.env": "KEY=2\n"}),
+        "single": _init(root / "single", {**src, "cfg/.env": "KEY=2\n", "main": "m\n"}),
+        "none": _init(root / "none", src),
+        "example": _init(
+            root / "example", {**src, ".env.example": "KEY=\n", "cfg/.env.example": "KEY=\n"}
+        ),
+        "clean": _init(root / "clean", {**src, ".gitignore": "vendor/\n"}),
+        "branch": _init(root / "branch", src),
+        "renamed": _init(root / "renamed", {**src, ".env": "KEY=1\n"}),
+    }
+    (out["none"] / ".env").write_text("KEY=untracked\n", encoding="utf-8")
+    _init(out["clean"] / "vendor" / "other", {**src, ".env": "KEY=1\n"})
+    git(out["secret"], "worktree", "add", "-q", str(root / "linked"))
+    out["linked"] = root / "linked"
+    module = _init(root / "module", {**src, ".env": "KEY=1\n"})
+    out["super"] = _init(root / "super", src)
+    git(
+        out["super"],
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        str(module),
+        "mod",
+    )
+    git(out["super"], "commit", "-q", "-m", "mod")
+    git(out["branch"], "switch", "-q", "-c", "other")
+    _commit(out["branch"], {".env": "KEY=1\n"})
+    git(out["branch"], "switch", "-q", "main")
+    git(out["renamed"], "mv", ".env", "conf.txt")
+    git(out["renamed"], "commit", "-q", "-m", "rename")
+    return out

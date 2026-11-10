@@ -389,7 +389,7 @@ def test_the_catalog_names_the_writer_stage_and_its_verifier_pass() -> None:
 
 
 def test_the_push_train_carries_no_docs_precondition() -> None:
-    # 0174: the release phase holds the push recipe; the push-train skill is a stub.
+    # 0174: the release phase holds the push recipe.
     push = flatten_file(REPO_ROOT / "skills/release/SKILL.md")
     preconditions = push.split("## Recovery round", 1)[0]
     assert "--gate docs" not in push and "docs_verdict" not in push

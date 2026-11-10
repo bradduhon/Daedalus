@@ -17,7 +17,6 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import unit_binding, writer_mode  # noqa: E402
-from lib.agent_aliases import current as current_name  # noqa: E402
 from lib.agent_models import MODELS  # noqa: E402
 from lib.audit import (  # noqa: E402
     SESSION_ID,
@@ -197,13 +196,13 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     report.add_argument("--gate", action="store_true")
     history = sub.add_parser("history", allow_abbrev=False)
     for each in (report, history):
-        each.add_argument("--cwd", "--repo", dest="cwd", default=os.getcwd())
+        each.add_argument("--repo", dest="cwd", default=os.getcwd())
     args = parser.parse_args(argv)
     args.cwd = os.path.abspath(args.cwd)
     if not os.path.isdir(args.cwd):
         parser.exit(
             1,
-            f"token_economy: --cwd {args.cwd} is not an existing directory. "
+            f"token_economy: --repo {args.cwd} is not an existing directory. "
             "Next: pass the repo directory whose runs you want to report.\n",
         )
     return args
@@ -384,8 +383,7 @@ def load_agents(files: list[Path], types: dict[str, str]) -> list[Agent]:
         meta = _meta(path)
         agent_id = path.stem.removeprefix("agent-")
         raw_type = types.get(agent_id) or meta.get("agentType") or "unknown"
-        # 0190: a run from before the rename reports its agents under their new names.
-        agent_type = current_name(str(raw_type).removeprefix(PREFIX))
+        agent_type = str(raw_type).removeprefix(PREFIX)
         if not _AGENT_TYPE.fullmatch(agent_type):
             agent_type = "unknown"
         parent = meta.get("parentAgentId")

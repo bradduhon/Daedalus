@@ -7,7 +7,7 @@ Daedalus is a Claude Code plugin. It gives your session a set of AI agents, each
 
 You start any piece of work with one command: `/daedalus:run` followed by your task. Daedalus sizes the task, tells you which phases it picked, and runs them. When the work is built and audited, `/daedalus:run push` pushes the branch and opens a pull request. No fixed recipe is required. You can run a phase on its own, and you can use the agents in any order.
 
-Daedalus calls a run that builds code a train. You will see that word in branch names, file names and messages. The old commands `/daedalus:build-train`, `/daedalus:push-train` and `/daedalus:doc-train` now only print the new command. The release after 5.1.0 removes them.
+Daedalus calls a run that builds code a train. You will see that word in branch names, file names and messages.
 
 Work moves through seven phases: brainstorm, plan, build, verify, audit, document and release. Each phase is a skill, and phases can overlap. Agent files name their phases with older words: context, clarification, plan, implementation, audit, and commit and release. The catalog maps each of those words to a phase skill.
 
@@ -77,8 +77,6 @@ The doctor checks every file and tool Daedalus needs. It prints one line per che
 - `OPT`: something optional is absent. Daedalus works without it, and an `OPT` line never fails the doctor.
 
 In a new repository, the `config.json`, `service-manifest.json`, `contracts/` and `.gitleaks.toml` lines read `OPT`. These are files your project writes about itself. Type `/daedalus:setup` to write starter copies of the first two. A build run and a push run both work without any of them.
-
-If the features object of your `service-manifest.json` still has a `github` key, the doctor prints one `OPT` line saying the key does nothing.
 
 The `fable` line reads `OPT` until `fable_available` is `true` in `config.json` or a running train's audit log shows the session started on Fable. Until then the planner and the auditor run on their own model.
 
@@ -652,7 +650,6 @@ Daedalus/
 │   ├── checks/workspace_integrity.py # refuses writes into .git and the data folder
 │   ├── lib/__init__.py
 │   ├── lib/admit.py                 # admits a parsed command only in a shape its agent's tables list
-│   ├── lib/agent_aliases.py         # old agent names read as their new names, one release
 │   ├── lib/agent_files.py           # reads agent files and their hooks blocks
 │   ├── lib/agent_models.py          # the model each agent runs on: override, config, agent file
 │   ├── lib/assets.py                # the asset exclusion the judges' diffs and the secret scan copy
@@ -728,14 +725,11 @@ Daedalus/
 │   ├── audit-report/SKILL.md        # /daedalus:audit-report
 │   ├── brainstorm/SKILL.md          # /daedalus:brainstorm, the brainstorm phase
 │   ├── build/SKILL.md               # /daedalus:build, the build phase
-│   ├── build-train/SKILL.md         # moved to /daedalus:run; prints the new command
 │   ├── catalog/SKILL.md             # /daedalus:catalog
-│   ├── doc-train/SKILL.md           # moved to /daedalus:run doc; prints the new command
 │   ├── document/SKILL.md            # the document phase, in two modes
 │   ├── document/kinds/              # the writer's kind skills: public docs and derived
 │   ├── doctor/SKILL.md              # /daedalus:doctor
 │   ├── plan/SKILL.md                # /daedalus:plan, the plan phase
-│   ├── push-train/SKILL.md          # moved to /daedalus:run push; prints the new command
 │   ├── release/SKILL.md             # the release phase, started by /daedalus:run push
 │   ├── round/SKILL.md               # /daedalus:round
 │   ├── run/SKILL.md                 # /daedalus:run, the one command that starts any run

@@ -3,10 +3,6 @@
     "failure": "0190: a writer dispatched with no Worktree: line takes the derived kind in a run that froze no sources, so it writes with no output folder or source list to hold it",
     "premise_test": "tests/test_persona_jails.py::test_a_writer_dispatch_with_no_worktree_line_needs_frozen_sources"
   },
-  "dispatch_gate.R_OLD_NAME": {
-    "failure": "0190: the orchestrator starts an agent by a name from before the rename, so a brief written for the old name reaches no agent file and the run stalls without saying why",
-    "premise_test": "tests/test_agent_aliases.py::test_the_orchestrator_is_told_the_new_name_of_an_old_agent"
-  },
   "router.R_NO_MODE": {
     "failure": "0190: an agent file carries modes the router cannot pick from, so a call would run the hooks block alone and skip the write check of every mode",
     "premise_test": "tests/test_writer_kinds.py::test_modes_on_any_agent_but_the_writer_refuse_every_call"
