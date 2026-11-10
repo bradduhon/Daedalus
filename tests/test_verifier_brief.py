@@ -448,6 +448,80 @@ def test_the_second_refutation_escalates_and_the_third_reaches_the_operator() ->
     )
 
 
+def test_the_catalog_and_build_skill_send_the_second_refutation_to_a_fresh_coder() -> None:
+    # Issue 256, 0187: the catalog row says what the build skill does; no stop on the second.
+    rules = flatten(CATALOG.read_text(encoding="utf-8")).split("## Composition rules", 1)[1]
+    rule = rules.split("- Verifier step (spec 5): ", 1)[1].split(" - ", 1)[0]
+    assert (
+        "a second REFUTED on the same unit goes to a fresh coder on the escalated model and the"
+        " run goes on (0187); a third goes to the operator." in rule
+    )
+    assert "stops the train" not in rule
+    build = flatten((REPO_ROOT / "skills" / "build" / "SKILL.md").read_text(encoding="utf-8"))
+    step5 = build.split("A second refutation (0187, issue 115).", 1)[1].split(" 6. ", 1)[0]
+    assert (
+        "When the verifier refutes the same unit a second time, the unit goes to a fresh coder"
+        " and the run goes on." in step5
+    )
+
+
+def test_refuted_jail_forms_become_corpus_rows_in_every_routing_place() -> None:
+    # 0229: the coder writes the row, the verifier checks it, the build skill refuses a fix
+    # pass without it, and the auditor's reproductions land the same way.
+    verify = flatten(VERIFY_SKILL.read_text(encoding="utf-8"))
+    route = verify.split("`[VERDICT: REFUTED] <rows>`: only rows", 1)[1]
+    for phrase in (
+        "Refutations become corpus (0229): before sending the `FIX.` message for a unit whose"
+        " diff names a path of the audit phase's table-diff list",
+        "record the unit branch head from `git -C <repo> rev-parse <b>` on its State Block row",
+        "The coder adds each refuted form as a named row under `tests/adversarial/` in its own"
+        " worktree, in a commit before its fix",
+        '"Refuted forms: check that each form you refuted has a named row under'
+        ' tests/adversarial, committed before the fix, failing at that commit and passing now."',
+        "On any other unit, a refuted requirement becomes a failing test in the unit's own test"
+        " file.",
+    ):
+        assert phrase in route, phrase
+    verifier = _body("## Refuted forms (0229)", "## What the jail passes and refuses")
+    for phrase in (
+        "A message carrying a `Refuted forms:` line, after your refutation of the same unit",
+        "A named row under `tests/adversarial/` holds the form with its expected verdict.",
+        "Its commit comes before the fix commit",
+        "A missing row, or a row first committed with the fix, is a `code` row.",
+    ):
+        assert phrase in verifier, phrase
+    build = flatten((REPO_ROOT / "skills" / "build" / "SKILL.md").read_text(encoding="utf-8"))
+    check = build.split("Refuted forms (0229).", 1)[1].split("Then hand the unit", 1)[0]
+    for phrase in (
+        "run `git diff --name-only <refuted head>...<b>`",
+        "When it names no path under `tests/adversarial/`, the fix pass added no row",
+        "A second COMPLETE on the unit without one stops the run",
+        "The same check runs on an audit fix unit",
+    ):
+        assert phrase in check, phrase
+    coder = flatten((REPO_ROOT / "agents" / "coder.md").read_text(encoding="utf-8"))
+    rows = coder.split("**Refuted forms** (0229):", 1)[1].split("`pytest --basetemp`", 1)[0]
+    for phrase in (
+        "one named row per form in the matching module under `tests/adversarial/` in your worktree",
+        "Commit the rows before the fix, run them there and record the failing run as a"
+        " `- test` receipt",
+        "On any other unit, a refuted requirement gets a failing test in the unit's own test file.",
+    ):
+        assert phrase in rows, phrase
+    auditor = flatten((REPO_ROOT / "agents" / "auditor.md").read_text(encoding="utf-8"))
+    item5 = auditor.split("5. **Extend the corpus, not the prose**", 1)[1].split("Return", 1)[0]
+    assert (
+        "every reproduction you or the operator record on a file of the table-diff list lands"
+        " in `tests/adversarial/` as a named row before the fix is accepted" in item5
+    )
+    audit = flatten((REPO_ROOT / "skills" / "audit" / "SKILL.md").read_text(encoding="utf-8"))
+    step8 = audit.split("8. Per-finding step.", 1)[1].split("### Verdict", 1)[0]
+    assert (
+        '"Add each reproduction as a named row of the matching module under'
+        ' `tests/adversarial/` in your worktree, in a commit before the fix."' in step8
+    )
+
+
 def test_a_local_url_is_the_one_slash_word_a_decision_brief_may_carry() -> None:
     # 0164: the dev server question names the site; any other slash word is still refused.
     from lib.briefs import brief_problems
