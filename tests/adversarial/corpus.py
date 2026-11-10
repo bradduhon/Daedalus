@@ -1525,9 +1525,19 @@ S4_TYPED_PASS_225 = (
     "true # c\ngit commit -m ':i: fix' -- src/a.md",
     "set -e\ngit commit -m ':i: fix' -- src/a.md",
 )
-# 228 tail: git log's -n value sits in the typed pathspec slot, so the credential check refuses
-# its unresolved $N before the coder's grammar names the span.
+# 266: git log's -n value is typed text, no longer a pathspec, so the credential check has no
+# unresolved path; the coder's grammar refuses the row and names $N (was R_CREDENTIAL_PARAM).
 S4_PARAM_IN_PATHSPEC = ("git log -n \"$N\" -- ':(icase)x'",)
+S4_PARAM_IN_PATHSPEC_REFUSAL = "Refused: the parameter expansion $N is not admitted, at `$N`."
+# 266: git log's count option in each spelling; the value is text, the word after -- a pathspec.
+GIT_LOG_COUNT_266 = (
+    "git log -n 3 -- {path}",
+    "git log -n3 -- {path}",
+    "git log --max-count 3 -- {path}",
+    "git log --max-count=3 -- {path}",
+)
+# 266: a path in the count slot is git's count, which git rejects; it is never a pathspec.
+GIT_LOG_COUNT_VALUE_266 = ("git log -n {path}", "git log --max-count {path}")
 # 228 S4: A3_RULE_ROWS main's grammar admits whose typed record names no path in a root, a read
 # or a literal message; main loses the text scan's warning on these (262 moved the PATH rows).
 S4_MAIN_TYPED_PASS = (

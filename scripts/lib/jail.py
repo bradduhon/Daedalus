@@ -1093,10 +1093,11 @@ _GIT_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
         a,
         frozenset({"--oneline", "--stat", "--name-only", "-p", "--no-merges", "--all"})
         | {"--pickaxe-regex", "--pickaxe-all"},
-        (*_FORMAT, "--grep=", "--author="),
+        (*_FORMAT, "--grep=", "--author=", "--max-count="),
         (r"-\d+", r"-n\d+", r"-[SG].+"),
         # 228 S3: --grep <value> as two words, beside the --grep=<value> prefix.
-        frozenset({"-n", "-S", "-G", "--grep"}),
+        # 266: --max-count in both forms, as -n is; admit types its value as text.
+        frozenset({"-n", "-S", "-G", "--grep", "--max-count"}),
     ),
     "diff": lambda a, _: _flags_ok(
         a,
