@@ -38,7 +38,7 @@ def test_a_data_folder_hunt_form_meets_the_typed_check(
     cls: str, form: str, main: str | None, coder: str | None
 ) -> None:
     # 266, 0224: each role's admitted record is judged; a refused form by its folder alone.
-    command = form.format(repo=CWD)
+    command = form.format(repo=CWD, home=jail._HOME)
     for agent, want in (("main", main), ("coder", coder)):
         got = jail.integrity_reason("Bash", {"command": command}, CWD, agent)
         assert got == _named(want), (cls, agent, command, got)

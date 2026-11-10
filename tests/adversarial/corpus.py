@@ -1680,9 +1680,25 @@ ANCESTOR_WRITES_266 = (
     ("copy into it", "cp x .claude", None, None),
     ("link into it", "ln -s x .claude", None, None),
 )
-# 269: (class, form, main, coder); a recursive cp merges its tree into a proper ancestor of the
-# data folder whole, -T or not; a mode or owner change of / without -R is left unnamed.
+# 269 fix 1: (class, form, main, coder); a recursive cp is named where its tree lands on the path
+# to the data folder, else it makes a sibling; {home} is the hook's HOME. A mode or owner change
+# of / without -R is left unnamed.
 ANCESTOR_WRITES_269 = (
+    ("folder into the root", "cp -r src .", None, None),
+    ("folder into HOME", "cp -r proj {home}", None, None),
+    ("folder into HOME by ~", "cp -r proj ~", None, None),
+    ("contents into the root", "cp -a src/. .", "R_DATA_DIR", "R_DATA_DIR"),
+    ("contents into HOME", "cp -r proj/. {home}", "R_DATA_DIR", "R_DATA_DIR"),
+    ("contents by ./.", "cp -r src/./. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("a .claude onto the root", "cp -r /tmp/.claude .", "R_DATA_DIR", "R_DATA_DIR"),
+    ("a .claude/ onto the root", "cp -r /tmp/.claude/ .", "R_DATA_DIR", "R_DATA_DIR"),
+    ("a daedalus into .claude", "cp -r x/daedalus .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("a daedalus by -t", "cp -r -t .claude x/daedalus", "R_DATA_DIR", "R_DATA_DIR"),
+    ("another name into .claude", "cp -r x/other .claude", None, None),
+    ("glob source", "cp -r src/* .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("glob source beside it", "cp -r src/* .claude/x", None, None),
+    (".. source", "cp -r src/.. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("plain daedalus file", "cp x/daedalus .claude", None, None),
     ("tree merge -r", "cp -r src/. .claude", "R_DATA_DIR", "R_DATA_DIR"),
     ("tree merge -R", "cp -R src/. .claude", "R_DATA_DIR", "R_DATA_DIR"),
     ("tree merge -a", "cp -a src/. .claude", "R_DATA_DIR", "R_DATA_DIR"),

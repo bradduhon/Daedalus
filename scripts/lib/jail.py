@@ -1506,7 +1506,7 @@ _ANCESTOR_ALL = frozenset({"rm", "rmdir", "rsync", "chmod", "chown", "chgrp"})
 _ANCESTOR_SOURCES = frozenset({"mv", "cp", "ln", "install"})
 _WHOLE_TARGET = frozenset({"-T", "--no-target-directory", "--exchange"})
 _TARGET_DIR = frozenset({"-t", "--target-directory"})
-# 269: a recursive cp merges its source tree into its destination, so it takes that whole too.
+# 269 fix 1: cp's recursive options; such a copy is judged by where its tree lands.
 _TREE_COPY = frozenset({"-r", "-R", "-a", "--recursive", "--archive"})
 # 269: a mode or owner change of HOME or above takes the data folder only with -R.
 _MODE_CHANGES = frozenset({"chmod", "chown", "chgrp"})
@@ -1521,13 +1521,49 @@ def _ancestor_writes(done: AdmittedCommand) -> list[Typed]:
     if done.family not in _ANCESTOR_SOURCES or not done.writes:
         return []
     names = {o.text.split("=", 1)[0] for o in done.options}
-    if names & _WHOLE_TARGET or (done.family == "cp" and names & _TREE_COPY):
+    if names & _WHOLE_TARGET:
         return list(done.writes)
+    dest = _destination(done)
+    return [w for w in done.writes if w is not dest]
+
+
+def _destination(done: AdmittedCommand) -> Typed | None:
+    # 266: the write a source lands in, the -t value or else the last write operand.
     marks = [o.span for o in done.options if o.text.split("=", 1)[0] in _TARGET_DIR]
     writes = sorted(done.writes, key=lambda t: t.span)
     after = [w for w in writes if marks and w.span >= marks[0]]
-    dest = after[0] if after else writes[-1]
-    return [w for w in writes if w is not dest]
+    return after[0] if after else writes[-1] if writes else None
+
+
+def _tree_copy_reaches(
+    done: AdmittedCommand, here: str, cwd: str, parsed: tuple[dict[tuple[int, int], Word], str]
+) -> bool:
+    # 269 fix 1: a recursive cp reaches a data folder only where its tree lands on the path to
+    # one: a contents copy (last component .) into a proper ancestor, or a source named as the
+    # next folder from the destination toward one. An unresolved source fails closed.
+    names = {o.text.split("=", 1)[0] for o in done.options}
+    dest = _destination(done)
+    if done.family != "cp" or not names & _TREE_COPY or names & _WHOLE_TARGET or dest is None:
+        return False
+    words, command = parsed
+    env = {"HOME": _HOME}
+    target = _typed_path(dest, words, command, env)
+    if target is None:
+        return True
+    full = os.path.normpath(_abs(target, here))
+    for source in done.reads:
+        path = _typed_path(source, words, command, env)
+        last = os.path.basename(path.rstrip("/")) if path is not None else ".."
+        if last == ".." or (_GLOB_CHARS | _UNDECIDED) & set(path or ""):
+            last = ""  # 269 fix 1: the hook cannot name what lands, so it judges a contents copy.
+        if last in ("", "."):
+            if _data_dir_ancestor(full, here, cwd):
+                return True
+            continue
+        landed = os.path.join(full, last)
+        if _data_dir_target(landed, cwd) or _data_dir_ancestor(landed, here, cwd):
+            return True
+    return False
 
 
 def _data_dir_holds(path: str | None, folder: str, cwd: str, whole: bool, home_named: bool) -> bool:
@@ -1574,6 +1610,8 @@ def _data_dir_bash(command: str, cwd: str, agent: str) -> str | None:
             whole = any(write is w for w in wholes)
             if any(_data_dir_holds(path, f, cwd, whole, home_named) for f in opens):
                 return R_DATA_DIR
+        if _tree_copy_reaches(done, here, cwd, (words, command)):
+            return R_DATA_DIR
         # 266: a link's source; a later write through the link lands in the data folder.
         links = [_abs(w.text, here) for w in done.writes] if family == "ln" else []
         sources = done.reads if family == "ln" else ()
