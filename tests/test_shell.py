@@ -257,7 +257,7 @@ def test_quote_walk_marks_spans_escapes_and_quote_marks() -> None:
 def test_no_quote_loop_outside_the_walker() -> None:
     # issue 76, 121, 228 tail: the loops that remain read quote_walk.
     tree = _tree("shell.py")
-    users = {"_quote_spans", "_unquoted_expansion"}
+    users = {"_quote_spans"}
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in users:
             source = ast.unparse(node)
@@ -266,19 +266,19 @@ def test_no_quote_loop_outside_the_walker() -> None:
 
 
 @pytest.mark.parametrize(
-    ("text", "spans", "expands"),
+    ("text", "spans"),
     [
-        ("a 'b c' d", "a Q d", False),
-        ('x "a\\"b" *', "x Q *", True),
-        ('"\\"" *', "Q *", True),
-        ("a;b|'c;d'", "a;b|Q", False),
-        ("e\\ f '$x'", "e\\ f Q", False),
-        ("'unclosed", "Q", False),
+        ("a 'b c' d", "a Q d"),
+        ('x "a\\"b" *', "x Q *"),
+        ('"\\"" *', "Q *"),
+        ("a;b|'c;d'", "a;b|Q"),
+        ("e\\ f '$x'", "e\\ f Q"),
+        ("'unclosed", "Q"),
     ],
 )
-def test_walker_consumers_share_one_quote_model(text: str, spans: str, expands: bool) -> None:
+def test_walker_consumers_share_one_quote_model(text: str, spans: str) -> None:
+    # 269: _unquoted_expansion went with the docs read text reader; _quote_spans keeps the model.
     assert shell._quote_spans(text) == spans
-    assert shell._unquoted_expansion(text) is expands
 
 
 def test_git_sets_name_the_moved_lists() -> None:
