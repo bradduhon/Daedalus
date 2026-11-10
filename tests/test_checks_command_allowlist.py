@@ -153,6 +153,34 @@ class TestRegressionCharterDocs:
         command = f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}"
         assert decide(_b("charter-docs", command), Config()).allow, command
 
+    @pytest.mark.parametrize(
+        ("args", "missing"),
+        [
+            ("--expected-seq 2 --entry-file docs/.tmp/e.md --repo BO", "--type"),
+            ("--expected-seq 2 --entry-file docs/.tmp/e.md --repo=BO", "--type"),
+            ("--expected-seq 2 --entry-file docs/.tmp/e.md --type PLT", "--repo"),
+            ("--type=PLT --entry-file=docs/.tmp/e.md --expected-seq=2", "--repo"),
+        ],
+    )
+    def test_a_half_coded_append_is_refused(self, args: str, missing: str) -> None:
+        # 0247: both codes or neither; the refusal names the flag one code alone is missing.
+        command = f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}"
+        d = decide(_b("charter-docs", command), Config())
+        assert not d.allow and d.reason is not None, command
+        assert d.reason.startswith(jail.R_LEDGER_ARGS) and f"alone is missing {missing}" in d.reason
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            "--expected-seq 2 --entry-file docs/.tmp/e.md",
+            "--entry-file=docs/.tmp/e.md --expected-seq=2",
+        ],
+    )
+    def test_an_append_with_no_codes_is_allowed(self, args: str) -> None:
+        # 0247: a plain-number decisions file takes neither code.
+        command = f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}"
+        assert decide(_b("charter-docs", command), Config()).allow, command
+
     def test_repo_scripts_ledger_allowed(self) -> None:
         args = "--expected-seq 2 --entry-file docs/.tmp/e.md --repo BO --type PLT"
         command = f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}"

@@ -26,6 +26,7 @@ from lib.ledger import (  # noqa: E402
     highest_id_table,
     id_table_span,
     next_id,
+    probe_line,
     read_sequence,
     resolve_ledger,
     split_row,
@@ -37,7 +38,8 @@ from lib.repo_root import checkout_git_dir  # noqa: E402
 # 22: the --help text, kept below the future import as a plain string.
 DESCRIPTION = (
     "Append one entry to the decisions file the service manifest names under a lock (0004, "
-    "0247). --probe prints the named decisions file, its layout and its sequence, and appends "
+    "0247). --probe prints the named decisions file, its layout, its sequence and its id shape "
+    "(ids=plain or ids=three-part), and appends "
     "nothing. A named file that does not exist yet is created as a table on the first append. "
     "An append checks --expected-seq against the file under the lock and exits 2 on a "
     "mismatch, 1 on any other error. A table row's Supersedes and Ruling cells are checked when "
@@ -385,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(NONE_FOUND)
             else:
                 seq = read_sequence(ledger)
-                print(f"ledger: {ledger.path} ({ledger.origin}, {ledger.format}, seq={seq})")
+                print(probe_line(ledger, seq))
             return 0
         if ledger is None:
             raise AppendError(NONE_FOUND)

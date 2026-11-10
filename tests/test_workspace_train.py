@@ -89,10 +89,8 @@ def test_begin_prints_the_state_block_seed(repo: Path) -> None:
     train = lines[0].split()[1]
     sha = _ok(repo, "rev-parse", "HEAD")
     assert lines[0] == f"train: {train}  base: main @ {sha}  audit session: pending"
-    assert (
-        lines[1]
-        == f"ledger: {repo / 'docs' / 'decisions.md'} (manifest, markdown-table-row, seq=0)"
-    )
+    named = repo / "docs" / "decisions.md"
+    assert lines[1] == f"ledger: {named} (manifest, markdown-table-row, seq=0, ids=plain)"
     assert lines[2] == "charter_root: none  charter base: none"
     assert lines[3] == "policy: none declared  standards: 0 sources"
     assert lines[4] == "cache: unresolved"
@@ -2050,7 +2048,8 @@ def test_folder_begin_with_a_named_decisions_file_asks_nothing(plain: Path, tmp_
     out = tmp_path / "outputs"
     result = _cli("begin", "--repo", str(plain), "--scope", "folder", "--out", str(out))
     assert result.returncode == 0, result.stderr
-    want = f"ledger: {plain / 'docs' / 'decisions.md'} (manifest, markdown-table-row, seq=0)"
+    named = plain / "docs" / "decisions.md"
+    want = f"ledger: {named} (manifest, markdown-table-row, seq=0, ids=plain)"
     assert result.stdout.splitlines()[1] == want
     assert out.is_dir() and not (plain / "docs" / "decisions.md").exists()
 

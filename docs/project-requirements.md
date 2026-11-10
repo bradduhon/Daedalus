@@ -80,7 +80,7 @@ Each entry is an object holding exactly one key. The run reads only these entrie
 
     python3 <plugin>/scripts/append_ledger.py --probe
 
-Run it from the repo. A named file prints `ledger: <path> (manifest, <format>, seq=<n>)`, for example `ledger: /work/my-service/docs/decisions.md (manifest, markdown-table-row, seq=2)`; a named file not written yet reads `seq=0`. No file named prints `decisions: no decisions file is named, so no decision is recorded.` with a `Next:` line.
+Run it from the repo. A named file prints `ledger: <path> (manifest, <format>, seq=<n>, ids=<shape>)`, for example `ledger: /work/my-service/docs/decisions.md (manifest, markdown-table-row, seq=2, ids=plain)`; a named file not written yet reads `seq=0, ids=plain`. The shape is `ids=plain` when the last id is a plain number such as 0002, and for an empty table, a heading-entry file or a file not written yet. It is `ids=three-part` when the last id carries a repository code and a type, such as 0002-SVC-PLT. An append to an `ids=plain` file takes no `--repo` and no `--type`; an append to an `ids=three-part` file takes both. No file named prints `decisions: no decisions file is named, so no decision is recorded.` with a `Next:` line.
 
 ## Machine caches
 

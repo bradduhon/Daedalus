@@ -69,7 +69,7 @@ def test_probe_reports_table_ledger(table_repo: Path) -> None:
     out = _run(table_repo, "--probe")
     ledger = table_repo / "docs" / "decisions.md"
     assert out.returncode == 0, out.stderr
-    assert out.stdout == f"ledger: {ledger} (manifest, markdown-table-row, seq=2)\n"
+    assert out.stdout == f"ledger: {ledger} (manifest, markdown-table-row, seq=2, ids=three-part)\n"
 
 
 def test_probe_reports_none(repo_cwd: Path) -> None:
@@ -95,7 +95,7 @@ def test_a_named_file_not_yet_written_is_created_as_a_table(repo_cwd: Path) -> N
     _name(repo_cwd, "decisions.md")
     ledger = repo_cwd / "docs" / "decisions.md"
     probe = _run(repo_cwd, "--probe")
-    assert probe.stdout == f"ledger: {ledger} (manifest, markdown-table-row, seq=0)\n"
+    assert probe.stdout == f"ledger: {ledger} (manifest, markdown-table-row, seq=0, ids=plain)\n"
     assert not ledger.exists()
     out = _plain(repo_cwd, 0, _entry(repo_cwd, "First ruling. | None. | None"))
     assert out.returncode == 0, out.stderr
@@ -270,7 +270,7 @@ def test_concurrent_appends_get_consecutive_ids(table_repo: Path) -> None:
         entry = _entry(table_repo, f"Worker {k}. | None. | None", f"w{k}.md")
         for _ in range(10):
             probe = _run(table_repo, "--probe")
-            match = re.search(r"seq=(\d+)\)", probe.stdout)
+            match = re.search(r"seq=(\d+),", probe.stdout)
             assert match is not None, probe.stdout
             out = _append(table_repo, int(match.group(1)), entry)
             if out.returncode != 2:
@@ -290,7 +290,7 @@ def _race(repos: list[Path], ledger: Path) -> list[str]:
         repo = repos[k % len(repos)]
         entry = _entry(repo, f"Worker {k}. | None. | None", f"w{k}.md")
         for _ in range(10):
-            match = re.search(r"seq=(\d+)\)", _run(repo, "--probe").stdout)
+            match = re.search(r"seq=(\d+),", _run(repo, "--probe").stdout)
             assert match is not None
             out = _append(repo, int(match.group(1)), entry)
             if out.returncode != 2:
@@ -484,7 +484,7 @@ def test_header_only_ledger_probes_seq_zero_and_appends_0001(repo_cwd: Path) -> 
     project_data_dir(str(repo_cwd)).mkdir(parents=True)
     out = _run(repo_cwd, "--probe")
     assert out.returncode == 0, out.stderr
-    assert out.stdout == f"ledger: {ledger} (manifest, markdown-table-row, seq=0)\n"
+    assert out.stdout == f"ledger: {ledger} (manifest, markdown-table-row, seq=0, ids=plain)\n"
     missing = _run(repo_cwd, "--expected-seq", "0", "--entry-file", "x.md", "--repo", "TST")
     assert missing.returncode == 1 and "--repo names a part of a three-part id" in missing.stderr
     out = _plain(repo_cwd, 0, _entry(repo_cwd, "First ruling. | None. | None\n"))
@@ -596,3 +596,62 @@ def test_cell_checks_skip_a_ledger_without_the_columns(repo_cwd: Path) -> None:
     project_data_dir(str(repo_cwd)).mkdir(parents=True)
     out = _plain(repo_cwd, 0, _entry(repo_cwd, "free text"))
     assert out.returncode == 0, out.stderr
+
+
+def _skill_forms() -> dict[str, str]:
+    # 0247: the two append forms the audit skill's charter-docs dispatch gives, keyed by id shape.
+    skill = (SCRIPTS_DIR.parent / "skills" / "audit" / "SKILL.md").read_text(encoding="utf-8")
+    found = re.findall(
+        r"When (?:its line|it) ends in `ids=([a-z-]+)`, append with `([^`]+)`", skill
+    )
+    return dict(found)
+
+
+@pytest.mark.parametrize(("shape", "fixture"), [("plain", None), ("three-part", "table.md")])
+def test_the_skill_form_for_each_id_shape_is_the_one_append_accepts(
+    repo_cwd: Path, shape: str, fixture: str | None
+) -> None:
+    from lib.config import Config
+
+    from tests.hook_chain import decide
+
+    forms = _skill_forms()
+    assert sorted(forms) == ["plain", "three-part"]
+    (repo_cwd / "docs").mkdir()
+    if fixture is not None:
+        shutil.copy(FIX / fixture, repo_cwd / "docs" / "decisions.md")
+    _name(repo_cwd, "decisions.md")
+    project_data_dir(str(repo_cwd)).mkdir(parents=True)
+    probe = _run(repo_cwd, "--probe")
+    seq = re.search(r"seq=(\d+), ids=([a-z-]+)\)", probe.stdout)
+    assert seq is not None and seq.group(2) == shape, probe.stdout
+    _entry(repo_cwd, "Recorded ruling. | None. | None")
+    values = {
+        "<append_ledger.py path>": str(SCRIPT),
+        "<seq>": seq.group(1),
+        "<entry file>": "docs/.tmp/e.md",
+        "<R>": "TST",
+        "<T>": "PLT",
+    }
+    for name, form in forms.items():
+        command = form
+        for key, value in values.items():
+            command = command.replace(key, value)
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "cwd": str(repo_cwd),
+            "agent_type": "charter-docs",
+        }
+        assert decide(payload, Config()).allow, command
+        out = subprocess.run(
+            [sys.executable, *command.split()[1:]],
+            capture_output=True,
+            text=True,
+            cwd=repo_cwd,
+            check=False,
+        )
+        if name == shape:
+            assert out.returncode == 0 and out.stdout.startswith("appended "), out.stderr
+        else:
+            assert out.returncode == 1 and "Next:" in out.stderr, out.stderr

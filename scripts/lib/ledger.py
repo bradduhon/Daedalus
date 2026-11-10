@@ -287,6 +287,12 @@ def uses_codes(ledger: ResolvedLedger) -> bool:
     return "{repo}" in ledger.id_scheme or "{type}" in ledger.id_scheme
 
 
+def probe_line(ledger: ResolvedLedger, seq: int) -> str:
+    # 0247: the id shape tells the appender whether to pass --repo and --type.
+    shape = "three-part" if uses_codes(ledger) else "plain"
+    return f"ledger: {ledger.path} ({ledger.origin}, {ledger.format}, seq={seq}, ids={shape})"
+
+
 def next_id(ledger: ResolvedLedger, seq: int, repo: str, type_: str) -> str:
     try:
         return ledger.id_scheme.format(seq=seq, repo=repo, type=type_)

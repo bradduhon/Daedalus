@@ -75,7 +75,7 @@ Rules for the whole train:
 Keep this **State Block** in your context. Print it only at a stop, at a resume, and in the summary; after each phase print the progress note instead. The first six lines come from your brief. The `standards last read:` line is the UTC time of your latest read by the standards skill, updated after every read:
 
     train: <train-id>  base: <branch> @ <sha>  audit session: <id>
-    ledger: <path> (<origin>, <format>, seq=<n>)
+    ledger: <path> (<origin>, <format>, seq=<n>, ids=<plain or three-part>)
     charter_root: <path or none>  charter base: <recorded branch or none>
     policy: <engine and path, or none declared>  standards: <n> sources
     packs: <absolute pack folder>[, <absolute pack folder>...] (or: packs: unresolved)

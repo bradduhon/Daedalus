@@ -29,7 +29,7 @@ from lib.audit import SESSION_ID, DataDirError, cache_dir_or_probe, ensure_proje
 from lib.audit_proof import SUMMARY_DIR
 from lib.coder_model import REFUTED_PREFIX
 from lib.config import Config, ConfigError, load_config
-from lib.ledger import LedgerError, read_sequence, resolve_ledger
+from lib.ledger import LedgerError, probe_line, read_sequence, resolve_ledger
 from lib.train_state import TRAIN_ID as _TRAIN_ID
 from lib.train_state import TRAIN_MARKER
 
@@ -350,7 +350,7 @@ def _ledger_line(repo: Path, config: Config, ledger_feature: bool | None) -> str
         seq = read_sequence(ledger)
     except LedgerError as exc:
         raise WorkspaceError(str(exc)) from exc
-    return f"ledger: {ledger.path} ({ledger.origin}, {ledger.format}, seq={seq})"
+    return probe_line(ledger, seq)
 
 
 def _scratch(repo: Path) -> None:

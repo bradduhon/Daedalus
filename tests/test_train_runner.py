@@ -525,7 +525,7 @@ def test_start_never_asks_about_decisions(
     assert outcome.code == 0, outcome.lines
     want = workspace.LEDGER_NONE
     if named is not None:
-        want = f"ledger: {repo / 'docs' / named} (manifest, markdown-table-row, seq=0)"
+        want = f"ledger: {repo / 'docs' / named} (manifest, markdown-table-row, seq=0, ids=plain)"
     assert outcome.lines[1] == want and _state(repo)["ledger_line"] == want
     assert _state(repo)["features"]["ledger"] is ledger  # type: ignore[index]
 

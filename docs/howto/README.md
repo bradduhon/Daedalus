@@ -250,7 +250,7 @@ The train creates `docs/.tmp/daedalus/` with a `*` marker, so git ignores its wo
 After the checks, your session prints the first six lines of the State Block, the train's status record. The orchestrator keeps the full block and prints it only at a stop, at a resume and in the summary. After each phase you see the progress note instead. The first lines, with example values:
 
     train: 20261014-153000  base: main @ 3f329dc  audit session: <session>
-    ledger: /work/my-service/docs/decisions.md (manifest, markdown-table-row, seq=12)
+    ledger: /work/my-service/docs/decisions.md (manifest, markdown-table-row, seq=12, ids=plain)
     charter_root: none  charter base: none
     policy: none declared  standards: 0 sources
     cache: unresolved

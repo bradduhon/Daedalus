@@ -1238,11 +1238,16 @@ def _reaches_charter(tokens: list[str], cwd: str, charter: str | None) -> bool:
 
 
 R_LEDGER_ARGS = (
-    "append_ledger takes only --probe, or --expected-seq, --entry-file, --repo and --type "
-    "once each with a value. Next: run append_ledger from the repo whose ledger you are "
-    "appending to; --cwd is for operators."
+    "append_ledger takes only --probe, or --expected-seq and --entry-file once each with a "
+    "value, plus --repo and --type together or not at all: --repo alone is missing --type, "
+    "and --type alone is missing --repo. Next: pass both when the --probe line reads "
+    "ids=three-part and neither when it reads ids=plain, and run append_ledger from the repo "
+    "whose ledger you are appending to; --cwd is for operators."
 )
 _LEDGER_VALUE_FLAGS = frozenset({"--expected-seq", "--entry-file", "--repo", "--type"})
+# 0247: a plain-number decisions file takes no codes; a three-part file takes both.
+_LEDGER_REQUIRED = frozenset({"--expected-seq", "--entry-file"})
+_LEDGER_CODES = frozenset({"--repo", "--type"})
 _LEDGER_SHELL_CHARS = frozenset("*?[{$`")
 
 
@@ -1266,7 +1271,7 @@ def _ledger_args_ok(tokens: list[str]) -> bool:
         if flag not in _LEDGER_VALUE_FLAGS or flag in seen or not value or value.startswith("-"):
             return False
         seen.add(flag)
-    return seen == _LEDGER_VALUE_FLAGS
+    return _LEDGER_REQUIRED <= seen and len(seen & _LEDGER_CODES) != 1
 
 
 def _gh_allowed(parsed: GhArgs) -> bool:
