@@ -542,6 +542,48 @@ def test_ask_check_reads_the_fixed_words_of_the_brief(
     assert "handoff brief" in capsys.readouterr().out
 
 
+# 0251: a setup question file in the layout the setup skill states; the skill and the check agree.
+SETUP_SKILL = REPO_ROOT / "skills" / "setup" / "SKILL.md"
+SETUP_ASK = "\n".join(
+    [
+        "Question: The reading level sets how plain the questions and docs are. It changes how "
+        "Daedalus writes to you. Nothing is set now. Pick an answer, or choose Other and type "
+        "your own.",
+        "Choices:",
+        "A. Plain level: Short sentences in common words. The repository holds no setting yet.",
+        "B. Standard level: Longer sentences, still with no file paths.",
+        "C. Expert level: No limit on sentence length.",
+    ]
+)
+
+
+def test_setup_skill_states_the_label_rules_the_check_reads() -> None:
+    flat = " ".join(SETUP_SKILL.read_text(encoding="utf-8").split())
+    assert (
+        "then a `Choices:` line and one `<letter>. <label>: <description>` line per choice. In "
+        "the file, the first choice's label is written without its `Accept:` prefix, and every "
+        "label is two to five words, written whole (0251)." in flat
+    )
+    assert (
+        "Each choice label is two to five words; for a one-word value, write the value and its "
+        'noun, such as "Plain level" (0251).' in flat
+    )
+    labels = [p for p in ask_problems(SETUP_ASK) if p.startswith("Choice ")]
+    assert labels == []
+    accept = SETUP_ASK.replace("A. Plain level:", "A. Accept: plain level:")
+    assert "Choice A label has 1 word, not 2 to 5: Accept" in ask_problems(accept)
+    one_word = SETUP_ASK.replace("B. Standard level:", "B. Standard:")
+    assert "Choice B label has 1 word, not 2 to 5: Standard" in ask_problems(one_word)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="0251: the setup question text ends in an instruction sentence, never a question mark",
+)
+def test_a_setup_question_file_passes_ask_check_whole() -> None:
+    assert ask_problems(SETUP_ASK) == []
+
+
 def test_recipes_name_the_check_and_the_literacy_rule() -> None:
     # 0153: the orchestrator checks each brief; every question writer reads docs.reading_level.
     orchestrator = (REPO_ROOT / "agents" / "orchestrator.md").read_text(encoding="utf-8")
