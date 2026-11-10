@@ -28,6 +28,8 @@ CLASSES = (
     "hidden_bodies",
     "chain_state",
     "measurement_rows",
+    # 266: writes into the data folder and pack verify paths, read from the typed record.
+    "data_folder",
 )
 # spec 3.3: the agents whose Bash grammar is widest; credential reads judge them all.
 READERS = ("coder", "auditor", "verifier")
@@ -1538,6 +1540,61 @@ GIT_LOG_COUNT_266 = (
 )
 # 266: a path in the count slot is git's count, which git rejects; it is never a pathspec.
 GIT_LOG_COUNT_VALUE_266 = ("git log -n {path}", "git log --max-count {path}")
+# 266 hunt: (class, form, main, coder) for the data folder check on each role's typed record;
+# None means the check names nothing: the role refuses the form, or it writes no data folder.
+DATA_FOLDER_HUNT_266 = (
+    ("quoted path", "touch '.claude/daedalus/x'", "R_DATA_DIR", "R_DATA_DIR"),
+    ("quoted part", 'touch ".claude"/daedalus/x', "R_DATA_DIR", "R_DATA_DIR"),
+    (".. segment", "touch src/../.claude/daedalus/x", "R_DATA_DIR", "R_DATA_DIR"),
+    ("doubled slash", "touch .claude//daedalus/x", "R_DATA_DIR", "R_DATA_DIR"),
+    ("dot segments", "touch ./.claude/./daedalus/x", "R_DATA_DIR", "R_DATA_DIR"),
+    ("link source", "ln -s .claude/daedalus d", "R_DATA_DIR", "R_DATA_DIR"),
+    ("link source after cd", "cd {repo}/.claude && ln -s daedalus d", "R_DATA_DIR", "R_DATA_DIR"),
+    ("link source by link folder", "ln -s daedalus {repo}/.claude/d", "R_DATA_DIR", "R_DATA_DIR"),
+    ("git -C", "git -C .claude add daedalus", "R_DATA_DIR_GIT", "R_DATA_DIR_GIT"),
+    ("git -C inside", "git -C .claude/daedalus commit -m x", "R_DATA_DIR_GIT", "R_DATA_DIR_GIT"),
+    ("git wildcard pathspec", "git -C .claude add 'daed*'", "R_DATA_DIR_GIT", "R_DATA_DIR_GIT"),
+    ("--work-tree", "git --work-tree .claude/daedalus add x", "R_DATA_DIR_GIT", None),
+    ("--git-dir", "git --git-dir=.claude/daedalus/.git add x", "R_DATA_DIR_GIT", None),
+    ("GIT_DIR=", "GIT_DIR=.claude/daedalus git add x", None, None),
+    ("cd in a subshell", "(cd .claude && git add daedalus)", None, None),
+    ("cd then add", "cd {repo}/.claude && git add daedalus", "R_DATA_DIR_GIT", "R_DATA_DIR_GIT"),
+    ("cd then add all", "cd {repo}/.claude && git add -A", None, None),
+    ("redirect", "ls > .claude/daedalus/x", "R_DATA_DIR", None),
+    ("redirect fd 2", "ls 2> .claude/daedalus/x", "R_DATA_DIR", None),
+    ("redirect &>", "ls &> .claude/daedalus/x", "R_DATA_DIR", None),
+    ("redirect >|", "ls >| .claude/daedalus/x", "R_DATA_DIR", None),
+    ("tee", "tee .claude/daedalus/x", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tee after a pipe", "ls | tee .claude/daedalus/x", None, None),
+    ("here-doc into it", "cat <<EOF > .claude/daedalus/x\nbody\nEOF", "R_DATA_DIR", None),
+    ("here-doc body naming it", "cat <<EOF\n.claude/daedalus/x\nEOF", None, None),
+    ("cd then write", "cd {repo}/.claude && touch daedalus/x", "R_DATA_DIR", "R_DATA_DIR"),
+    ("wrapper chdir", "env -C {repo}/.claude touch daedalus/x", "R_DATA_DIR", None),
+    ("read out of it", "cp .claude/daedalus/config.json /tmp/x", None, None),
+    ("move out of it", "mv .claude/daedalus/x /tmp/x", "R_DATA_DIR", "R_DATA_DIR"),
+    ("add from the root", "git add .claude/daedalus/x", None, None),
+)
+# 266 hunt: (class, verify, outcome); "outside <path>" names the path, "refused <word>" fails the
+# pack with the word off the auditor's table, "ok" is no problem.
+PACK_VERIFY_HUNT_266 = (
+    ("quoted path", "rg -n x '/etc'", "outside /etc"),
+    (".. segment", "rg -n x src/../..", "outside src/../.."),
+    ("dot then ..", "rg -n x ./../x", "outside ./../x"),
+    ("doubled slash ..", "rg -n x .//..//", "outside .//..//"),
+    ("quoted tilde", "rg -n x '~'", "outside ~"),
+    ("glob path", "rg -n x /e*", "outside /e*"),
+    ("-- then path", "rg x -- /etc", "outside /etc"),
+    ("-f value", "rg -f /etc/hostname .", "outside /etc/hostname"),
+    ("--file= value", "rg --file=/etc/hostname .", "outside /etc/hostname"),
+    ("bare tilde", "rg -n x ~", "refused `~`"),
+    ("parameter", "rg -n x $HOME", "refused $HOME"),
+    ("redirect", "rg -n x . > /tmp/o", "refused > /tmp/o"),
+    ("here-string", "rg -f - . <<< x", "refused <<< x"),
+    ("leading cd", "cd /etc && rg -n x .", "outside /etc"),
+    ("subshell", "(rg -n x /etc)", "refused (rg -n x /etc)"),
+    ("pattern with ..", "rg -n '/api/..' .", "ok"),
+    ("pattern file inside", "rg -e x -f pats .", "ok"),
+)
 # 228 S4: A3_RULE_ROWS main's grammar admits whose typed record names no path in a root, a read
 # or a literal message; main loses the text scan's warning on these (262 moved the PATH rows).
 S4_MAIN_TYPED_PASS = (
