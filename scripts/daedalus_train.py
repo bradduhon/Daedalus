@@ -94,7 +94,9 @@ def _parser() -> argparse.ArgumentParser:
     # 0133, 0139: one exemption per finding, with how the operator chose to track it.
     waive = sub.add_parser("exception")
     waive.add_argument("--repo", type=Path, required=True)
-    waive.add_argument("--ledger-id", dest="ledger_id", required=True)
+    # 0249: --reason stands in for --ledger-id when the service manifest names no decisions file.
+    waive.add_argument("--ledger-id", dest="ledger_id")
+    waive.add_argument("--reason")
     # 229: the verify-phase form names a unit and one row of its newest refuted verdict.
     target = waive.add_mutually_exclusive_group(required=True)
     target.add_argument("--finding")
@@ -349,9 +351,11 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
             )
         if args.unit is not None:
             return record_unit_exception(
-                repo, args.ledger_id, args.unit, args.row, args.tracking, args.other
+                repo, args.ledger_id, args.unit, args.row, args.tracking, args.other, args.reason
             )
-        return record_exception(repo, args.ledger_id, args.finding, args.tracking, args.other)
+        return record_exception(
+            repo, args.ledger_id, args.finding, args.tracking, args.other, args.reason
+        )
     if args.action == "verdict":
         if args.gate == "docs":
             if args.round_ is not None or args.seq is not None:

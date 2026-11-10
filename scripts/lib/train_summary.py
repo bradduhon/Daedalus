@@ -598,7 +598,11 @@ def _exempted(exempt: dict[str, object], repo: Path, charter: Path | None) -> li
         entry = _obj(exempt, key)
         where = f"the train state exemption of {key}"
         finding = _cell(key, repo, charter, "a train state finding key")
-        ledger = _cell(_text(entry, "ledger_id"), repo, charter, where)
+        # 0249: an accepted finding names its run in place of a ledger id.
+        bound = (
+            _text(entry, "ledger_id") if "ledger_id" in entry else f"run {_text(entry, 'run_id')}"
+        )
+        ledger = _cell(bound, repo, charter, where)
         tracking = _text(entry, "tracking")
         label = train_state.TRACKING.get(tracking, "not recorded")
         if tracking == "other":
@@ -609,6 +613,29 @@ def _exempted(exempt: dict[str, object], repo: Path, charter: Path | None) -> li
                 f"Deviation: finding {finding} exempted with no tracked issue ({label}), "
                 f"exemption row {ledger}."
             )
+    return lines
+
+
+def _accepted(state: dict[str, object], repo: Path, charter: Path | None) -> list[str]:
+    # 0249: findings accepted with no decisions file, each with the operator's reason.
+    rounds = train_state.record(state, train_state.EXEMPTIONS)
+    sources = [(f"round {key}", _obj(rounds, key)) for key in sorted(rounds)]
+    docs = train_state.record(state, train_state.DOCS_VERDICT)
+    sources.append(("docs", _obj(docs, "exemptions")))
+    for unit in train_state.units(state):
+        replies = train_state.record(unit, "exemptions")
+        sources += [(f"verify seq {key}", _obj(replies, key)) for key in sorted(replies)]
+    lines: list[str] = []
+    for where, granted in sources:
+        for key in sorted(granted):
+            entry = _obj(granted, key)
+            if "ledger_id" in entry:
+                continue
+            text = f"the train state exemption of {key}"
+            finding = _cell(_text(entry, "finding") or key, repo, charter, text)
+            reason = _cell(_text(entry, "reason"), repo, charter, text)
+            run = _cell(_text(entry, "run_id"), repo, charter, text)
+            lines.append(f"- Accepted {finding} ({where}) in run {run}: {reason}")
     return lines
 
 
@@ -716,7 +743,9 @@ def render(
     facts = _gather([*logs[1:], *logs[:1]], units)
     labels = {_text(u, "name"): _text(u, "name").removeprefix(f"{train_id}-") for u in units}
     lines = _header(repo, train_id, state, notes, policy_declared, version)
-    lines += ["## Rulings", *_noted(notes, "Rulings", "none", repo, charter)]
+    accepted = _accepted(state, repo, charter)
+    rulings = _noted(notes, "Rulings", "none", repo, charter)
+    lines += ["## Rulings", *([] if accepted and rulings == ["none"] else rulings), *accepted]
     lines += _priorities(repo, state, logs, charter)
     lines += _units(repo, train_id, units, facts)
     lines.append("## Verification")

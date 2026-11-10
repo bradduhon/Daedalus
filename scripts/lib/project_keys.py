@@ -1051,7 +1051,7 @@ OVERLAPS: tuple[Overlap, ...] = (
         "docs",
         "When this checkout's config names a docs folder kept elsewhere on this machine, the "
         "decisions file lives there, not in the project's own docs folder.",
-        (("scripts/lib/ledger.py", 61, "kept elsewhere on this machine wins"),),
+        (("scripts/lib/ledger.py", 65, "kept elsewhere on this machine wins"),),
         "config",
     ),
     Overlap(

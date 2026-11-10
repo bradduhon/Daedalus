@@ -19,6 +19,7 @@ TRAIN_ID = re.compile(r"[0-9]{8}-[0-9]{6}")
 LOCK_TIMEOUT_S = 5.0
 # 0085, 0089: plan {path, sha256}, verdict {status, tip, round, seq}.
 # 0133: exemptions {"<round>": {"<finding id>": {ledger_id, tip, tracking[, other]}}}.
+# 0249: with no decisions file, finding, reason and run_id stand in place of ledger_id.
 PLAN, CHOICES, VERDICT, EXEMPTIONS, PHASE, WEIGHT = (
     "plan",
     "choices",

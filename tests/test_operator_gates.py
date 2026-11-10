@@ -232,6 +232,10 @@ def test_exception_command_line_takes_finding_and_tracking() -> None:
         ["exception", "--repo", "/r", "--ledger-id", ID, "--finding", KEY_A, "--tracking", "local"]
     )
     assert (args.ledger_id, args.finding, args.tracking, args.other) == (ID, KEY_A, "local", None)
+    accepted = parser.parse_args(
+        ["exception", "--repo", "/r", "--reason", REASON, "--finding", KEY_A, "--tracking", "local"]
+    )
+    assert (accepted.ledger_id, accepted.reason) == (None, REASON)
     for missing in ("--finding", "--tracking"):
         argv = ["exception", "--repo", "/r", "--ledger-id", ID, "--finding", KEY_A]
         argv += ["--tracking", "issue"]
@@ -332,6 +336,130 @@ def test_an_other_exemption_with_words_passes_and_the_refusal_names_the_labels(
     entry = {"ledger_id": ID, "tip": tip, "tracking": "other", "other": "kept in team notes"}
     train_state.update(repo, train, exemptions={"1": {KEY_A: entry}})
     assert push_proof(repo, train).startswith("OK approved: every finding exempted")
+
+
+REASON = "the scope test reads a path the run never writes"
+
+
+def test_an_accepted_round_with_no_decisions_file_passes_the_push_proof(
+    repo: Path, plugin: Path
+) -> None:
+    # 0249: no decisions file, so each finding is accepted by its reason and the run finishes.
+    tip = _audit_train(repo, plugin)
+    train = str(_state(repo)["train_id"])
+    _rejected_round(repo, tip, 1, A, B)
+    first = train_runner.record_exception(repo, None, KEY_A, "issue", reason=REASON)
+    assert first.lines == [
+        f"exemption recorded finding={KEY_A} round=1 run={train} reason={REASON} "
+        "tracking=issue remaining=1"
+    ]
+    assert train_runner.record_exception(repo, None, KEY_B, "dropped", reason=" ok ").code == 0
+    assert _state(repo)["exemptions"] == {
+        "1": {
+            KEY_A: {
+                "finding": KEY_A,
+                "reason": REASON,
+                "run_id": train,
+                "tip": tip,
+                "tracking": "issue",
+            },
+            KEY_B: {
+                "finding": KEY_B,
+                "reason": "ok",
+                "run_id": train,
+                "tip": tip,
+                "tracking": "dropped",
+            },
+        }
+    }
+    ok = f"OK approved: every finding exempted, train {train}, round 1, integration tip {tip[:12]}"
+    assert push_proof(repo, train) == ok
+    assert gh_policy.verdict_reason(str(repo), "gh pr create") is None
+
+
+@pytest.mark.parametrize(
+    ("ledger", "reason", "why"),
+    [
+        (None, None, "exception takes --ledger-id or --reason, one of the two"),
+        (ID, REASON, "exception takes --ledger-id or --reason, one of the two"),
+        (None, "two\nlines", "--reason must be one printable line"),
+    ],
+)
+def test_the_exception_takes_one_basis(
+    repo: Path, plugin: Path, ledger: str | None, reason: str | None, why: str
+) -> None:
+    tip = _audit_train(repo, plugin)
+    _rejected_round(repo, tip, 1, A)
+    refused = train_runner.record_exception(repo, ledger, KEY_A, "issue", reason=reason)
+    assert refused.code == 1 and why in refused.lines[0] and "Next:" in refused.lines[0]
+    assert "exemptions" not in _state(repo)
+
+
+@pytest.mark.parametrize(
+    "planted",
+    [
+        {"finding": KEY_A, "reason": REASON, "run_id": "20260101-000000"},
+        {"finding": KEY_A, "reason": "  ", "run_id": None},
+        {"finding": KEY_A, "run_id": None},
+    ],
+)
+def test_an_accepted_record_binds_to_its_own_run(
+    repo: Path, plugin: Path, planted: dict[str, object]
+) -> None:
+    # 0249: another run's id, a blank reason or no reason never passes.
+    tip = _audit_train(repo, plugin)
+    train = str(_state(repo)["train_id"])
+    _rejected_round(repo, tip, 1, A)
+    entry = {**planted, "run_id": planted["run_id"] or train, "tip": tip, "tracking": "issue"}
+    train_state.update(repo, train, exemptions={"1": {KEY_A: entry}})
+    with pytest.raises(ProofError):
+        push_proof(repo, train)
+
+
+def test_a_named_decisions_file_still_takes_the_ledger_entry(repo: Path, plugin: Path) -> None:
+    # 0249: with a decisions file named, nothing changes; the reason form is refused.
+    from tests.conftest import run_cli
+    from tests.test_train_runner import _git, _integration, _manifest
+
+    _manifest(repo, {"docs": {"decisions_filename": "decisions.md"}}, commit=True)
+    tip = _audit_train(repo, plugin)
+    train = str(_state(repo)["train_id"])
+    _rejected_round(repo, tip, 1, A)
+    refused = train_runner.record_exception(repo, None, KEY_A, "issue", reason=REASON)
+    assert refused.code == 1 and "this one names a decisions file" in refused.lines[0]
+    entry = repo / "docs" / ".tmp" / "exempt.md"
+    entry.write_text("Exempt the scope finding. | None. | None", encoding="utf-8")
+    args = ("--expected-seq", "0", "--entry-file", str(entry), "--cwd", str(repo))
+    appended = run_cli("append_ledger.py", *args)
+    assert appended.returncode == 0 and appended.stdout.startswith("appended 0001"), appended
+    _git(repo, "add", "docs/decisions.md")
+    _git(repo, "commit", "-q", "-m", "Record the exemption ruling")
+    current = _integration(repo)
+    assert train_runner.record_exception(repo, "0001", KEY_A, "issue").code == 0
+    assert _state(repo)["exemptions"] == {
+        "1": {KEY_A: {"ledger_id": "0001", "tip": tip, "tracking": "issue"}}
+    }
+    ok = f"every finding exempted, train {train}, round 1, integration tip {current[:12]}"
+    assert push_proof(repo, train) == f"OK approved: {ok}"
+    planted = {"finding": KEY_A, "reason": REASON, "run_id": train, "tip": tip, "tracking": "issue"}
+    train_state.update(repo, train, exemptions={"1": {KEY_A: planted}})
+    with pytest.raises(ProofError):
+        push_proof(repo, train)
+
+
+def test_the_summary_lists_an_accepted_finding_under_the_rulings(tmp_path: Path) -> None:
+    # 0249: the operator's reason and the run id stand where a ledger id would.
+    state = copy.deepcopy(STATE)
+    state["verdict"] = {"status": "rejected", "tip": TIP, "round": 1, "seq": 9}
+    state["audit_rounds"] = {"1": {"a.py::t1": {"severity": "high"}}}
+    run = str(state["train_id"])
+    accepted = {"finding": "a.py::t1", "reason": REASON, "run_id": run, "tip": TIP}
+    state["exemptions"] = {"1": {"a.py::t1": {**accepted, "tracking": "dropped"}}}
+    text = _text(tmp_path, state)
+    rulings = _section(text, "Rulings")
+    assert f"- Accepted a.py::t1 (round 1) in run {run}: {REASON}" in rulings
+    audit = _section(text, "Audit")
+    assert f"- Exempted a.py::t1 (run {run}), tracking: Skip it" in audit
 
 
 def test_an_approved_verdict_still_takes_its_own_path(repo: Path, plugin: Path) -> None:

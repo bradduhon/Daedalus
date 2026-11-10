@@ -942,7 +942,7 @@ def finish(repo: Path) -> list[str]:
     ]
     records = _audit_records(repo, state) if pending else []
     for unit in pending:
-        require_verified(repo, records, unit, _unit_label(train_id, str(unit["name"])))
+        require_verified(repo, train_id, records, unit, _unit_label(train_id, str(unit["name"])))
     _git(repo, "switch", "-q", integration)
     lines = _merge_all(repo, state, train_id, merging)
     _finished(repo, train_id, merging)
@@ -1074,6 +1074,7 @@ def unit_verified(
     worktree: Path,
     exemptions: dict[str, object] | None = None,
     tip: str | None = None,
+    run: str | None = None,
 ) -> bool:
     # 0231: the unit's own newest reply, selected by its key line, never by window position.
     reply = newest_verdict(records, worktree)
@@ -1087,7 +1088,7 @@ def unit_verified(
     if not rows or tip is None or not isinstance(seq, int) or isinstance(seq, bool):
         return False
     granted = train_state.record(exemptions or {}, str(seq))
-    return all(audit_proof._exempt(granted.get(str(n)), tip) for n in range(1, len(rows) + 1))
+    return all(audit_proof._exempt(granted.get(str(n)), tip, run) for n in range(1, len(rows) + 1))
 
 
 def unit_refutations(records: list[dict[str, object]], worktree: Path) -> int:
@@ -1198,6 +1199,7 @@ VERIFY_NEXT = (
 
 
 # 229: unit record {"exemptions": {"<reply seq>": {"<row>": {ledger_id, tip, tracking[, other]}}}}.
+# 0249: with no decisions file, finding, reason and run_id stand in place of ledger_id.
 UNIT_EXEMPTIONS = "exemptions"
 
 
@@ -1251,18 +1253,23 @@ def _wave(
                 "Next: create the unit worktree with daedalus_workspace.py create first."
             )
         records = _audit_records(repo, state) if records is None else records
-        require_verified(repo, records, unit, uid)
+        require_verified(repo, train_id, records, unit, uid)
         wave.append(unit)
     return wave
 
 
 def require_verified(
-    repo: Path, records: list[dict[str, object]], unit: dict[str, object], uid: str
+    repo: Path,
+    train_id: str,
+    records: list[dict[str, object]],
+    unit: dict[str, object],
+    uid: str,
 ) -> None:
     # 234: the one verdict gate merge and finish share; an exemption binds to the unit tip.
     exempt = train_state.record(unit, UNIT_EXEMPTIONS)
     tip = unit_tip(repo, unit) if exempt else None
-    if not unit_verified(records, Path(str(unit["path"])), exempt, tip):
+    run = audit_proof.accepting_run(repo, train_id) if exempt else None
+    if not unit_verified(records, Path(str(unit["path"])), exempt, tip, run):
         raise WorkspaceError(
             f"unit {uid} has no recorded verifier verdict {VERIFIED} for its worktree "
             f"{unit['path']}. Next: {VERIFY_NEXT}"

@@ -2189,6 +2189,22 @@ def test_a_fully_exempted_unit_verifies_and_merges(repo: Path) -> None:
     assert workspace.merge(repo, ["U1"])[0] == f"merged 1 units into daedalus/{train}"
 
 
+def test_a_unit_accepted_with_no_decisions_file_merges(repo: Path) -> None:
+    # 0249: each row accepted by its reason, bound to this run, merges the unit.
+    train, u1 = _refuted_unit(repo)
+    (repo / "service-manifest.json").write_text("{}")
+    _commit_all(repo, "Name no decisions file")
+    for row in (1, 2):
+        out = train_runner.record_unit_exception(repo, None, "U1", row, "issue", reason="known")
+        assert out.lines[0].endswith(f"run={train} reason=known"), out.lines
+    state = train_state.load(repo, train)
+    record = next(u for u in train_state.units(state) if u["path"] == str(u1))
+    granted = next(iter(train_state.record(record, workspace.UNIT_EXEMPTIONS).values()))
+    assert granted["1"]["finding"] == "U1 row 1" and granted["1"]["run_id"] == train  # type: ignore[index]
+    assert _gate(repo, train, u1) is False  # 0249: the gate reads no run without its run id.
+    assert workspace.merge(repo, ["U1"])[0] == f"merged 1 units into daedalus/{train}"
+
+
 def test_a_partly_exempted_unit_does_not_merge(repo: Path) -> None:
     _, u1 = _refuted_unit(repo)
     assert _exempt(repo, 1).code == 0
