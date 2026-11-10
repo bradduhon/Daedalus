@@ -188,7 +188,7 @@ def _records(text: str) -> tuple[list[tuple[str, str]], list[str]]:
             records.append((record[2], []))
         elif records:
             records[-1][1].append(line)
-        elif line.strip() and not line.startswith("# "):
+        elif line.strip() and not line.startswith(("# ", "<!--")):
             problems.append(f"text before the first turn record: {line.strip()}")
     if not records:
         problems.append("the log holds no `### Turn <n>: <session|operator>` record")

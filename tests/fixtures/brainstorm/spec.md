@@ -1,3 +1,4 @@
+<!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
 # A planner that shows a draft first
 
 Date: 2026-11-09. Written by the planner after brainstorm question 6.
