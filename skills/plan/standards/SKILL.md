@@ -28,7 +28,7 @@ the packet.
    - one `rule <n>: <driver> vs <driver> for <reason>[,<reason>...] then <driver or surface>: <note>`
      line per rule, from its `between`, `reasons`, `outcome` and `note`, numbered from 1 in
      the group's order;
-   - one `principle <id> (<driver>): <text>` line per principle, from its `name`, `priority`
+   - one `principle <id> (<driver>): <text>` line per principle, from its `name`, `category`
      and `text`;
    - one `agent <name>: <driver> > <driver> > <driver> > <driver>` line per `agent_order` entry;
    - or, when the manifest has no `run_output_priority` group, the single line

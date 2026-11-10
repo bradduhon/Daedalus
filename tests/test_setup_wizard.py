@@ -102,7 +102,7 @@ def _files(doc: dict[str, object]) -> dict[str, dict[str, object]]:
     return {e["file"]: e for e in entries}
 
 
-SCAN = "checks.secret_scan_on_push"
+SCAN = "checks.secret_scan"
 
 
 def test_describe_lists_every_key_once_with_its_text_and_state(wizard: Path, home: Path) -> None:
@@ -218,7 +218,7 @@ def test_set_changes_one_key_and_keeps_every_other_byte(wizard: Path, home: Path
     assert result.returncode == 0, result.stdout
     assert result.stdout == f"changed: {path} {SCAN}: false -> true\n"
     assert path.read_text(encoding="utf-8") == before.replace(
-        '"secret_scan_on_push": false', '"secret_scan_on_push": true'
+        '"secret_scan": false', '"secret_scan": true'
     )
     assert stat.S_IMODE(path.stat().st_mode) == mode
     again = _set(wizard, home, "manifest", SCAN, "true")
@@ -249,10 +249,10 @@ def test_set_inserts_a_missing_key_at_its_indent_in_an_existing_group(
 ) -> None:
     manifest = _manifest(wizard)
     before = manifest.read_text(encoding="utf-8")
-    key, value = "checks.release_banned_terms_file", '"docs/terms.txt"'
+    key, value = "checks.release_banned_terms", '"docs/terms.txt"'
     assert _set(wizard, home, "manifest", key, value).returncode == 0
     after = manifest.read_text(encoding="utf-8")
-    added = ',\n    "release_banned_terms_file": "docs/terms.txt"'
+    added = ',\n    "release_banned_terms": "docs/terms.txt"'
     assert '"terraform_validate": false' + added + "\n  }" in after
     assert after.replace(added, "") == before
 
@@ -348,7 +348,7 @@ def test_set_refuses_valid_json_of_the_wrong_type(wizard: Path, home: Path) -> N
 @pytest.mark.parametrize(
     ("text", "why"),
     [
-        ('{"checks": {"secret_scan_on_push": false,}}\n', "not valid JSON"),
+        ('{"checks": {"secret_scan": false,}}\n', "not valid JSON"),
         ('{"checks": {}, "checks": {}}\n', "holds the key 'checks' twice"),
     ],
 )
@@ -360,11 +360,11 @@ def test_set_refuses_a_malformed_file(wizard: Path, home: Path, text: str, why: 
 
 def test_set_refuses_a_symlinked_file(wizard: Path, home: Path, tmp_path: Path) -> None:
     real = tmp_path / "real.json"
-    real.write_text('{"checks": {"secret_scan_on_push": false}}\n', encoding="utf-8")
+    real.write_text('{"checks": {"secret_scan": false}}\n', encoding="utf-8")
     _manifest(wizard).unlink()
     _manifest(wizard).symlink_to(real)
     assert "symlink" in _refused(_set(wizard, home, "manifest", SCAN, "true"))
-    assert real.read_text(encoding="utf-8") == '{"checks": {"secret_scan_on_push": false}}\n'
+    assert real.read_text(encoding="utf-8") == '{"checks": {"secret_scan": false}}\n'
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root writes into a read-only folder")
@@ -399,7 +399,7 @@ def test_a_second_set_that_lands_first_is_never_overwritten(
     assert "changed while this command ran" in capsys.readouterr().out
     doc = json.loads(_manifest(wizard).read_text(encoding="utf-8"))
     assert doc["docs"]["decisions_filename"] == "decisions.md"
-    assert doc["checks"]["secret_scan_on_push"] is False
+    assert doc["checks"]["secret_scan"] is False
 
 
 def test_a_changed_manifest_still_loads_in_the_doctor(wizard: Path, home: Path) -> None:
@@ -481,7 +481,7 @@ def test_day_one_keys_are_starter_group_keys_with_readers() -> None:
         "commands.lint",
         "docs.reading_level",
         "docs.decisions_filename",
-        "checks.secret_scan_on_push",
+        "checks.secret_scan",
         "checks.terraform_format",
     ]
 

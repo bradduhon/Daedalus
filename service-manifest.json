@@ -10,7 +10,7 @@
     "reading_level": null
   },
   "checks": {
-    "secret_scan_on_push": true
+    "secret_scan": true
   },
   "prohibited_writes": {
     "paths": [],

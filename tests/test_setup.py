@@ -125,8 +125,8 @@ def test_setup_starter_manifest_checks_and_groups(repo_cwd: Path) -> None:
     assert _setup(repo_cwd).returncode == 0
     manifest, _ = _paths(repo_cwd)
     doc = json.loads(manifest.read_text(encoding="utf-8"))
-    assert set(doc["checks"]) == set(CHECK_KEYS) - {"release_banned_terms_file"}
-    assert doc["checks"]["secret_scan_on_push"] is False
+    assert set(doc["checks"]) == set(CHECK_KEYS) - {"release_banned_terms"}
+    assert doc["checks"]["secret_scan"] is False
     assert doc["docs"] == {"folder": "docs", "decisions_filename": None, "reading_level": None}
     assert doc["commands"] == {key: None for key in COMMAND_KEYS}
     assert doc["run_output_priority"] is None and doc["local_testing"] is None

@@ -97,7 +97,7 @@ def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: P
     # 0069, issue 52: no manifest means the secret scan is off, so a missing gitleaks is optional.
     gitleaks = next(line for line in lines if "gitleaks on PATH" in line)
     assert gitleaks.startswith("OPT  gitleaks on PATH: not found, and the secret scan is off.")
-    assert "set secret_scan_on_push to true in the checks object" in gitleaks
+    assert "set secret_scan to true in the checks object" in gitleaks
     # 0172: a plain folder is folder scope, so both gh lines are optional.
     gh = [line for line in lines if line[5:].startswith("gh ")]
     assert len(gh) == 2 and all(line.startswith("OPT  gh ") for line in gh)
@@ -543,7 +543,7 @@ def test_gh_signed_out_is_a_miss(tmp_path: Path) -> None:
 FOLDER_OFF = ", and this is folder scope, where the Push Train never runs (0074)"
 
 
-@pytest.mark.parametrize("block", [None, {"secret_scan_on_push": False}])
+@pytest.mark.parametrize("block", [None, {"secret_scan": False}])
 def test_gh_lines_are_opt_in_folder_scope(tmp_path: Path, block: dict[str, object] | None) -> None:
     # 0172: in folder scope a missing or signed-out gh never fails the doctor.
     import daedalus_doctor
@@ -585,11 +585,11 @@ def test_refused_manifest_falls_back_to_the_detected_scope(tmp_path: Path) -> No
     # 0074: a manifest the reader refuses leaves scope to detection; its own line is the MISS.
     import daedalus_doctor
 
-    _features(tmp_path, {"secret_scan_on_push": "yes"})
+    _features(tmp_path, {"secret_scan": "yes"})
     assert daedalus_doctor.scope(tmp_path) == "folder"
     repo = tmp_path / "repo"
     _git_repo(repo)
-    _features(repo, {"secret_scan_on_push": "yes"})
+    _features(repo, {"secret_scan": "yes"})
     assert daedalus_doctor.scope(repo) == "repository"
 
 
@@ -597,7 +597,7 @@ def test_plain_folder_runs_the_folder_scope_checks(tmp_path: Path) -> None:
     # issue 48: a folder with no .git is folder scope; every git-dependent line is OPT, none MISS.
     folder = tmp_path / "plain"
     folder.mkdir()
-    _features(folder, {"secret_scan_on_push": True})
+    _features(folder, {"secret_scan": True})
     assert not (folder / ".git").exists()
     result = _run(None, folder, path_env=_bins(tmp_path), home=tmp_path / "home")
     lines = result.stdout.splitlines()
@@ -755,10 +755,7 @@ def test_an_old_config_key_is_the_config_miss(tmp_path: Path, old: str) -> None:
         ({}, []),
         (
             {"models": {"coder": "haiku"}},
-            [
-                "OK   coder models: coder haiku, coder_on_plugin_files opus, "
-                "coder_after_rejection opus"
-            ],
+            ["OK   coder models: coder haiku, plugin_file_coder opus, coder_after_rejection opus"],
         ),
     ],
 )

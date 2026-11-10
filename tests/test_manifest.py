@@ -71,10 +71,12 @@ def test_this_repos_manifest_loads(tmp_path: Path) -> None:
         "trains_dir",
         "ledger",
         "manifest_version",
+        "service_name",
+        "purpose",
     ],
 )
 def test_an_old_top_level_key_is_refused_with_the_valid_names(tmp_path: Path, old: str) -> None:
-    # 0245, 0241: no alias; the ordinary unknown-key refusal lists every valid name.
+    # 0245, 0241, 0248: the file holds only Daedalus's settings; the refusal lists every one.
     _write(tmp_path, {old: {}})
     with pytest.raises(ManifestError, match="has unknown keys") as caught:
         load(tmp_path)

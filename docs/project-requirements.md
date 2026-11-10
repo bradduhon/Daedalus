@@ -22,7 +22,7 @@ Every file and setting daedalus reads, with the smallest example that works. `/d
   "models": {
     "agents": { "planner": "sonnet", "auditor": "opus" },
     "coder": "sonnet",
-    "coder_on_plugin_files": "opus",
+    "plugin_file_coder": "opus",
     "coder_after_rejection": "opus",
     "fable_available": null
   },
@@ -37,7 +37,7 @@ Every key in this file is a row of the generated key reference in the plugin [RE
 - `local_docs_folder`: an absolute path to a docs folder kept elsewhere on this machine, such as a clone of a separate decisions repository. When set, the decisions file the manifest names lives there instead of in the project's own docs folder. A relative path or a symlink is refused. A folder inside the project is allowed, such as a git-ignored clone.
 - `coding_rules`: with none declared, the Standards Packet is empty, the auditor judges against the spec only, and the doctor offers the baseline rules on an `OPT` line.
 - `limits.log_retention_days`: a whole number of at least 90 (AU-11). When a new session writes its first record, each older log is deleted under its own lock, and one `AuditRotation` record in the new session's chain names every deleted session with its final sha256 and record count. A log a running train still writes, or one a summary still names, is kept. `null`, the default, keeps every log.
-- `models.coder`, `models.coder_on_plugin_files` and `models.coder_after_rejection`: pick the model for each coding agent a run starts. A unit runs on `models.coder`, sonnet unless you change it. A unit that changes a file under `agents/`, `skills/`, `hooks/` or `scripts/checks/`, or one of the three jail files, runs on `models.coder_on_plugin_files`. A unit refused twice by its verifier goes to a fresh coding agent on `models.coder_after_rejection`.
+- `models.coder`, `models.plugin_file_coder` and `models.coder_after_rejection`: pick the model for each coding agent a run starts. A unit runs on `models.coder`, sonnet unless you change it. A unit that changes a file under `agents/`, `skills/`, `hooks/` or `scripts/checks/`, or one of the three jail files, runs on `models.plugin_file_coder`. A unit refused twice by its verifier goes to a fresh coding agent on `models.coder_after_rejection`.
 - `models.agents`: an object from an agent name the catalog lists to `sonnet`, `opus`, `haiku` or `fable`. For example, `"agents": { "planner": "sonnet" }` inside `models` runs the planner on sonnet while every other agent keeps the model its agent file names. Inside a run the coding agent takes its model from the `models.coder` keys instead.
 - `test_readable_folders`: folders outside the project that a coder's test runner needs, such as the pnpm package store and a Node.js install. The kernel wrapper lets a runner such as `pnpm test`, `vitest run` or `node --test` read those folders and run programs from them, and never write there; any other command gets no such grant. A `~/` path is expanded to your home folder. A path that holds or sits inside a credential store, such as `~/.ssh` or `~/.aws`, refuses the config with a `Next:` line (0164). Installing packages stays with you: a coder's `pnpm install`, `npm ci` or `yarn add` is refused.
 
@@ -195,7 +195,7 @@ Example:
 { "commands": { "unit_test": ["pytest -q", "pnpm vitest run"], "typecheck": ["mypy src", "pnpm tsc --noEmit"],
                 "lint": "ruff check ." },
   "docs": { "folder": "docs", "decisions_filename": "decisions.md", "reading_level": "standard" },
-  "checks": { "secret_scan_on_push": false, "online_advisory_lookup": true, "terraform_format": true,
+  "checks": { "secret_scan": false, "online_advisory_lookup": true, "terraform_format": true,
               "terraform_validate": false },
   "prohibited_writes": { "paths": [], "file_types": [] },
   "code_review_exemptions": { "folders": ["assets/", "public/models/"],
@@ -204,7 +204,7 @@ Example:
   "local_testing": { "url": "http://localhost:5173", "instructions": "The scene loads and the player can move." },
   "entrypoints": { "handlers": "src/handlers/", "models": "src/models/", "infra": "infra/", "contracts": "contracts/" } }
 ```
-Every key in this file is a row of the generated key reference in the plugin [README](../README.md#key-reference), marked starter or override. The manifest reader refuses an unknown key at the top level and inside every group, and names the valid keys; there is no alias for an old name. The doctor's two gh lines are a `MISS` in repository scope and `OPT` in folder scope (0074); scope is worked out from git, never read from this file. The `compliance_rules` keys are described under "Framework control packs" above, and the decisions keys under "The decisions file". `entrypoints`, an override, names the project's file areas: `/daedalus:plan` pastes it into the planner's prompt, and the planner cuts units along these areas.
+This file holds only Daedalus's settings, so a key such as a service name, a purpose line or a language is refused (0248). Every key in this file is a row of the generated key reference in the plugin [README](../README.md#key-reference), marked starter or override. The manifest reader refuses an unknown key at the top level and inside every group, and names the valid keys; there is no alias for an old name. The doctor's two gh lines are a `MISS` in repository scope and `OPT` in folder scope (0074); scope is worked out from git, never read from this file. The `compliance_rules` keys are described under "Framework control packs" above, and the decisions keys under "The decisions file". `entrypoints`, an override, names the project's file areas: `/daedalus:plan` pastes it into the planner's prompt, and the planner cuts units along these areas.
 
 `prohibited_writes` adds paths a coder may not write (0054-DAE-PLT). Each `paths` entry is relative to the repository root, uses forward slashes, and holds no leading slash, `..` or glob characters. An entry ending in a slash covers that folder and everything under it; an entry without one names one file. Each `file_types` entry starts with a dot and covers every file name ending in it. Matching ignores case. The jail reads this file from the main checkout, never from a coder's worktree. A manifest that is not valid JSON, or whose `prohibited_writes` has the wrong shape, refuses every coder write until it is fixed, and the doctor reports it as a `MISS`. When the file is present, the doctor's line counts the entries: `OK   service-manifest.json: prohibited_writes <n> paths, <m> file types`. When `commands.typecheck` is declared, the doctor prints it on an `OPT` line and does not run it; it runs the command only when you pass `--run-typecheck` to `daedalus_doctor.py` yourself, because that flag executes a command the repository chose (0076).
 
@@ -235,7 +235,7 @@ Minimal:
 [extend]
 useDefault = true
 ```
-gitleaks reads this file, not Daedalus. The Push Train runs `gitleaks detect --redact --log-opts=<base sha>..daedalus/<train-id>` from the repository root, and gitleaks picks up `.gitleaks.toml` from the folder it scans. The scan runs only when `checks.secret_scan_on_push` is `true` in `service-manifest.json`; the Push Train then stops without the binary (0069-DAE-PLT). With the scan off, the default, the Push Train runs no scan and the doctor's gitleaks line is an `OPT` line. The doctor checks only that the file exists.
+gitleaks reads this file, not Daedalus. The Push Train runs `gitleaks detect --redact --log-opts=<base sha>..daedalus/<train-id>` from the repository root, and gitleaks picks up `.gitleaks.toml` from the folder it scans. The scan runs only when `checks.secret_scan` is `true` in `service-manifest.json`; the Push Train then stops without the binary (0069-DAE-PLT). With the scan off, the default, the Push Train runs no scan and the doctor's gitleaks line is an `OPT` line. The doctor checks only that the file exists.
 
 | Key | What it governs | Type | Allowed values | Default | Example |
 |---|---|---|---|---|---|

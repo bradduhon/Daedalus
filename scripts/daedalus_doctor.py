@@ -79,7 +79,7 @@ CACHE_NAMING = (
 )
 GITLEAKS_NEXT = "the Push Train scans commits with gitleaks; install it so the scan can run"
 SCAN_OFF_NEXT = (
-    "to scan pushes for secrets, set secret_scan_on_push to true in the checks object of "
+    "to scan pushes for secrets, set secret_scan to true in the checks object of "
     "service-manifest.json, then install gitleaks"
 )
 

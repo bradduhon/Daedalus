@@ -124,7 +124,7 @@ def _parser() -> argparse.ArgumentParser:
     model.add_argument("--repo", type=Path, required=True)
     model.add_argument("--agent", required=True)
     model.add_argument("--override")
-    # 0187, 0245: --unit picks the coder's model from models.coder, coder_on_plugin_files or
+    # 0187, 0245: --unit picks the coder's model from models.coder, plugin_file_coder or
     # coder_after_rejection, and records it on the unit; models.agents is the fallback.
     model.add_argument("--unit")
     # issue 187: one REFUTED verifier reply recorded on the unit the model command reads.

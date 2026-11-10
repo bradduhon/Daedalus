@@ -44,7 +44,7 @@ BLOCK: dict[str, Any] = {
         },
     ],
     "principles": [
-        {"name": "P1", "priority": "security", "text": "Each tenant keeps its own key."}
+        {"name": "P1", "category": "security", "text": "Each tenant keeps its own key."}
     ],
     "agent_order": {"coder": ["cost", "security", "operations", "trust"]},
 }
@@ -131,7 +131,8 @@ def test_absent_block_is_none_declared(tmp_path: Path) -> None:
         (_edited("rules", [BLOCK["rules"][0]] * 33), "rules[].outcome", "at most 32"),
         (_edited("principles/0/name", "p1"), "principles[].name", "P followed by digits"),
         (_edited("principles", [BLOCK["principles"][0]] * 2), "principles[].name", "unique"),
-        (_edited("principles/0/priority", "speed"), "principles[].priority", "one of"),
+        (_edited("principles/0/category", "speed"), "principles[].category", "one of"),
+        (_edited("principles/0/priority", "security"), "principles[].name", "unknown keys"),
         (_edited("principles/0/text", "x" * 301), "principles[].text", "1 to 300"),
         (_edited("principles/0/source", "docs/d.md"), "principles[].name", "unknown keys"),
         (_edited("agent_order", {"auditor": WORDS}), "agent_order.<name>", "no project overrides"),
@@ -173,7 +174,7 @@ def test_one_key_reference_row_per_field() -> None:
         "run_output_priority.rules[].outcome",
         "run_output_priority.rules[].note",
         "run_output_priority.principles[].name",
-        "run_output_priority.principles[].priority",
+        "run_output_priority.principles[].category",
         "run_output_priority.principles[].text",
         "run_output_priority.agent_order.<name>",
     ]

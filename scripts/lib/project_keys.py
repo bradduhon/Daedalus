@@ -247,7 +247,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         _LEDGER,
         override=True,
     ),
-    (MANIFEST_FILE, "checks.secret_scan_on_push"): KeyRow(
+    (MANIFEST_FILE, "checks.secret_scan"): KeyRow(
         "Turns on the push step's gitleaks scan of the commits a push sends; with the scan on, "
         "the push stops when gitleaks is missing or finds a secret, and the doctor's gitleaks "
         "line is a `MISS`",
@@ -290,7 +290,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "The audit may also run the Terraform validate check, which starts provider programs.",
         ("packs/judges/terraform.md",),
     ),
-    (MANIFEST_FILE, "checks.release_banned_terms_file"): KeyRow(
+    (MANIFEST_FILE, "checks.release_banned_terms"): KeyRow(
         "A file of terms, one per line, that the release step checks the release notes against; "
         "a hit stops the release and names how many terms it found, never the terms",
         "string or null",
@@ -450,7 +450,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "Agents cite the principle by this name when a decision rests on it.",
         (_STANDARDS,),
     ),
-    (MANIFEST_FILE, "run_output_priority.principles[].priority"): KeyRow(
+    (MANIFEST_FILE, "run_output_priority.principles[].category"): KeyRow(
         "The concern a principle serves",
         "string",
         f"One of {_PRIORITY_NAMES}",
@@ -788,7 +788,7 @@ _STARTER_MANIFEST: dict[str, object] = {
     "commands": {key: None for key in COMMAND_KEYS},
     "docs": {"folder": DOCS_DEFAULT_FOLDER, "decisions_filename": None, "reading_level": None},
     "checks": {
-        "secret_scan_on_push": False,
+        "secret_scan": False,
         "online_advisory_lookup": True,
         "terraform_format": True,
         "terraform_validate": False,
@@ -908,7 +908,7 @@ GROUPS: tuple[Group, ...] = (
         3,
         MANIFEST_FILE,
         _members(_M, "checks"),
-        ("checks.secret_scan_on_push", "checks.terraform_format"),
+        ("checks.secret_scan", "checks.terraform_format"),
     ),
     Group(
         "prohibited_writes",

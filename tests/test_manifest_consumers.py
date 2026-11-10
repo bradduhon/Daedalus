@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# issue 52, 0245: the readers of checks.secret_scan_on_push and run_definitions_folder.
+# issue 52, 0245: the readers of checks.secret_scan and run_definitions_folder.
 from __future__ import annotations
 
 import json
@@ -115,8 +115,8 @@ def _features(root: Path, checks: object) -> None:
 
 def test_print_secrets_scan_reads_the_feature(tmp_path: Path) -> None:
     on, off, bare = tmp_path / "on", tmp_path / "off", tmp_path / "bare"
-    _features(on, {"secret_scan_on_push": True})
-    _features(off, {"secret_scan_on_push": False})
+    _features(on, {"secret_scan": True})
+    _features(off, {"secret_scan": False})
     bare.mkdir()
     assert _doctor(on, tmp_path, "--print-secrets-scan") == ["0", "secrets scan: on"]
     assert _doctor(off, tmp_path, "--print-secrets-scan") == ["0", "secrets scan: off"]
@@ -125,9 +125,9 @@ def test_print_secrets_scan_reads_the_feature(tmp_path: Path) -> None:
 
 def test_print_secrets_scan_refuses_a_malformed_manifest(tmp_path: Path) -> None:
     bad = tmp_path / "bad"
-    _features(bad, {"secret_scan_on_push": "yes"})
+    _features(bad, {"secret_scan": "yes"})
     out = _doctor(bad, tmp_path, "--print-secrets-scan")
-    assert out[0] == "1" and "checks.secret_scan_on_push" in out[1] and "Next:" in out[1]
+    assert out[0] == "1" and "checks.secret_scan" in out[1] and "Next:" in out[1]
 
 
 def _gitleaks_line(lines: list[str]) -> str:
@@ -136,9 +136,9 @@ def _gitleaks_line(lines: list[str]) -> str:
 
 def test_doctor_gitleaks_line_follows_the_feature(tmp_path: Path) -> None:
     on, off, bad = tmp_path / "on", tmp_path / "off", tmp_path / "bad"
-    _features(on, {"secret_scan_on_push": True})
+    _features(on, {"secret_scan": True})
     _features(off, {})
-    _features(bad, {"secret_scan_on_push": 1})
+    _features(bad, {"secret_scan": 1})
     # 0074: in folder scope the Push Train never runs, so the scan's missing tool is optional.
     assert _gitleaks_line(_doctor(on, tmp_path)).startswith(
         "OPT  gitleaks on PATH: not found, and this is folder scope"

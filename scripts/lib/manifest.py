@@ -83,18 +83,18 @@ TOP_KEYS = (
 COMMAND_KEYS = {"unit_test": "unit_test_cmd", "typecheck": "typecheck_cmd", "lint": "lint_cmd"}
 DOCS_KEYS = ("folder", "decisions_filename", "reading_level", "git_branch")
 CHECK_KEYS = {
-    "secret_scan_on_push": "secrets_scan",
+    "secret_scan": "secrets_scan",
     "online_advisory_lookup": "dependency_web_lookup",
     "terraform_format": "terraform_tools",
     "terraform_validate": "terraform_validate",
-    "release_banned_terms_file": "scrub_file",
+    "release_banned_terms": "scrub_file",
 }
 PROHIBITED_KEYS = ("paths", "file_types")
 EXEMPTION_KEYS = ("folders", "file_types", "report_over_bytes")
 PACKAGE_KEYS = ("allowed_installers", "minimum_age_days", "minimum_age_reason")
 PRIORITY_KEYS = ("order", "rules", "principles", "agent_order")
 RULE_KEYS = ("between", "reasons", "outcome", "note")
-PRINCIPLE_KEYS = ("name", "priority", "text")
+PRINCIPLE_KEYS = ("name", "category", "text")
 LOCAL_TESTING_KEYS = ("url", "instructions")
 COMPLIANCE_KEYS = ("folder", "use_builtin", "extra_builtin")
 
@@ -137,7 +137,7 @@ PRIORITY_ROWS = (
     "rules[].outcome",
     "rules[].note",
     "principles[].name",
-    "principles[].priority",
+    "principles[].category",
     "principles[].text",
     "agent_order.<name>",
 )
@@ -339,14 +339,14 @@ def _narrowing(target: Path, raw: dict[str, object]) -> tuple[tuple[str, ...], t
 def _features(target: Path, raw: dict[str, object], docs: Docs) -> Features:
     # 0073, 0245: the checks group; a value outside its type is refused, never ignored.
     block = _group(target, raw, "checks", CHECK_KEYS)
-    secrets = block.get("secret_scan_on_push", False)
+    secrets = block.get("secret_scan", False)
     if not isinstance(secrets, bool):
-        raise _key_error(target, "checks.secret_scan_on_push", "must be true or false")
-    scrub = block.get("release_banned_terms_file")
+        raise _key_error(target, "checks.secret_scan", "must be true or false")
+    scrub = block.get("release_banned_terms")
     if scrub is not None and not (isinstance(scrub, str) and repo_relative(scrub)):
         raise _key_error(
             target,
-            "checks.release_banned_terms_file",
+            "checks.release_banned_terms",
             "must be null or a project-relative path without a leading slash, '..' or globs",
         )
     validate = block.get("terraform_validate", False)
@@ -537,9 +537,9 @@ def _principle(target: Path, value: object, seen: set[str]) -> Principle:
     if not isinstance(ident, str) or not PRINCIPLE_ID.fullmatch(ident) or ident in seen:
         raise _bad(target, "principles[].name", "must be P followed by digits, unique in the list")
     seen.add(ident)
-    driver = _priority(item["priority"])
+    driver = _priority(item["category"])
     if driver is None:
-        raise _bad(target, "principles[].priority", f"must be one of {_WORDS}")
+        raise _bad(target, "principles[].category", f"must be one of {_WORDS}")
     text = _line(target, item["text"], "principles[].text", TEXT_MAX)
     return Principle(ident, driver, text)
 

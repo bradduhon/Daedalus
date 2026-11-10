@@ -42,14 +42,14 @@ CONFIG_KEYS = (
 MODEL_KEYS = (
     "agents",
     "coder",
-    "coder_on_plugin_files",
+    "plugin_file_coder",
     "coder_after_rejection",
     "fable_available",
 )
 # 0245: each coder model key and the coder tier it sets.
 CODER_KEYS = {
     "coder": "default",
-    "coder_on_plugin_files": "control_path",
+    "plugin_file_coder": "control_path",
     "coder_after_rejection": "escalated",
 }
 LIMIT_KEYS = ("parallel_coders", "task_tokens", "log_retention_days")

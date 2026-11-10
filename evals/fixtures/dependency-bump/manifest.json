@@ -2,7 +2,7 @@
   "commands": { "unit_test": null, "typecheck": null, "lint": null },
   "docs": { "folder": "docs", "decisions_filename": null, "reading_level": null },
   "checks": {
-    "secret_scan_on_push": false,
+    "secret_scan": false,
     "online_advisory_lookup": false,
     "terraform_format": false,
     "terraform_validate": false

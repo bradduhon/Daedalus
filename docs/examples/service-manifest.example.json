@@ -10,7 +10,7 @@
     "reading_level": "standard"
   },
   "checks": {
-    "secret_scan_on_push": false,
+    "secret_scan": false,
     "online_advisory_lookup": true,
     "terraform_format": true,
     "terraform_validate": false

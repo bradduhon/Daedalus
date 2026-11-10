@@ -176,14 +176,8 @@ def test_a_key_without_readers_says_it_is_not_active() -> None:
 BANNED_WORDS = frozenset(
     {"train", "jail", "wrapper", "unit", "ledger", "charter", "standing", "pack", "driver"}
 )
-# 0245: spec section 4 names these as written, so the rule test lists them by name.
-NAMED_BY_THE_SPEC = {
-    "checks.secret_scan_on_push": "four words, named in spec section 4",
-    "checks.release_banned_terms_file": "four words, named in spec section 4",
-    "models.coder_on_plugin_files": "four words, named in spec section 4",
-    "commands.unit_test": "the word unit, named in spec section 4",
-    "run_output_priority.principles[].priority": "repeats its group word, spec section 4",
-}
+# 0245: "unit test" is every developer's own term, so unit is allowed in that one name only.
+UNIT_TEST = "unit_test"
 OLD_TOP_NAMES = (
     "features",
     "stack",
@@ -224,20 +218,18 @@ def test_every_key_name_follows_the_naming_rule() -> None:
     # 0245: lowercase words of plain English, at most three per name, no plugin vocabulary.
     bad = []
     for file, key in KEY_ROWS:
-        if key in NAMED_BY_THE_SPEC:
-            continue
         segments = key.split(".")
         group = segments[0]
         for segment in segments:
             words = _words(segment)
+            banned = BANNED_WORDS - ({"unit"} if segment == UNIT_TEST else set())
             if not re.fullmatch(r"<?[a-z][a-z_]*(\[\])?>?", segment) or len(words) > 3:
                 bad.append((file, key, segment))
-            if BANNED_WORDS & set(words):
+            if banned & set(words):
                 bad.append((file, key, segment))
             if segment != group and set(_words(group)) & set(words):
                 bad.append((file, key, segment))
     assert bad == []
-    assert set(NAMED_BY_THE_SPEC) <= {key for _, key in KEY_ROWS}
 
 
 def _settings_files() -> list[tuple[str, str]]:

@@ -39,11 +39,11 @@ def _refused(repo: Path, payload: object) -> str:
 def test_the_checks_group_names_its_switches() -> None:
     # 0245: the file names say what each switch checks; the internal fields stay.
     assert tuple(CHECK_KEYS) == (
-        "secret_scan_on_push",
+        "secret_scan",
         "online_advisory_lookup",
         "terraform_format",
         "terraform_validate",
-        "release_banned_terms_file",
+        "release_banned_terms",
     )
     assert set(CHECK_KEYS.values()) <= set(FEATURE_KEYS)
 
@@ -66,10 +66,10 @@ def test_absent_checks_group_gives_every_check_its_default(tmp_path: Path) -> No
 @pytest.mark.parametrize(
     ("block", "want"),
     [
-        ({"secret_scan_on_push": True}, Features(secrets_scan=True)),
-        ({"secret_scan_on_push": False}, Features()),
-        ({"release_banned_terms_file": "docs/terms.txt"}, Features(scrub_file="docs/terms.txt")),
-        ({"release_banned_terms_file": None}, Features()),
+        ({"secret_scan": True}, Features(secrets_scan=True)),
+        ({"secret_scan": False}, Features()),
+        ({"release_banned_terms": "docs/terms.txt"}, Features(scrub_file="docs/terms.txt")),
+        ({"release_banned_terms": None}, Features()),
         ({"online_advisory_lookup": False}, Features(dependency_web_lookup=False)),
         ({"terraform_format": True}, Features(terraform_tools=True)),
         ({"terraform_validate": True}, Features(terraform_validate=True)),
@@ -104,13 +104,13 @@ def test_an_old_check_name_is_refused_with_the_valid_names(tmp_path: Path, old: 
 @pytest.mark.parametrize(
     "block",
     [
-        {"secret_scan_on_push": "yes"},
-        {"secret_scan_on_push": None},
-        {"secret_scan_on_push": 1},
+        {"secret_scan": "yes"},
+        {"secret_scan": None},
+        {"secret_scan": 1},
         {"online_advisory_lookup": "on"},
         {"terraform_format": 0},
-        {"release_banned_terms_file": 3},
-        {"release_banned_terms_file": ["a"]},
+        {"release_banned_terms": 3},
+        {"release_banned_terms": ["a"]},
     ],
 )
 def test_a_bad_check_value_is_refused(tmp_path: Path, block: dict[str, object]) -> None:
@@ -127,15 +127,13 @@ def test_checks_that_is_not_an_object_is_refused(tmp_path: Path, payload: object
     "scrub", ["/etc/terms.txt", "../terms.txt", "a/../../b", "a\\b", "*.txt", "", "./t.txt"]
 )
 def test_banned_terms_file_outside_the_project_is_refused(tmp_path: Path, scrub: str) -> None:
-    _refused(tmp_path, {"checks": {"release_banned_terms_file": scrub}})
+    _refused(tmp_path, {"checks": {"release_banned_terms": scrub}})
 
 
 def test_prohibited_writes_unchanged_beside_checks(tmp_path: Path) -> None:
     write_manifest(tmp_path, {"prohibited_writes": PROHIBITED})
     alone = load(tmp_path)
-    write_manifest(
-        tmp_path, {"prohibited_writes": PROHIBITED, "checks": {"secret_scan_on_push": True}}
-    )
+    write_manifest(tmp_path, {"prohibited_writes": PROHIBITED, "checks": {"secret_scan": True}})
     beside = load(tmp_path)
     assert alone is not None and beside is not None
     assert (beside.forbidden_paths, beside.forbidden_extensions) == (("infra/",), (".pem",))
@@ -217,7 +215,7 @@ def test_project_files_resolve_from_the_project_root_only(
     project, home, plugin = (tmp_path / name for name in ("project", "home", "plugin"))
     for root, scan in ((project, True), (home, False), (plugin, False)):
         (root / ".claude" / "daedalus").mkdir(parents=True)
-        body = {"checks": {"secret_scan_on_push": scan}}
+        body = {"checks": {"secret_scan": scan}}
         write_manifest(root, body | {"run_definitions_folder": f"{root.name}-trains"})
         config = {"local_docs_folder": str(root / "Charter")}
         (root / ".claude" / "daedalus" / "config.json").write_text(json.dumps(config))

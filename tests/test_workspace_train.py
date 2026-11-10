@@ -1076,7 +1076,7 @@ def test_release_writes_no_changelog_file(repo: Path) -> None:
 
 def _scrub(repo: Path, *terms: str) -> None:
     (repo / "service-manifest.json").write_text(
-        json.dumps({"checks": {"release_banned_terms_file": "scrub-terms.txt"}}), encoding="utf-8"
+        json.dumps({"checks": {"release_banned_terms": "scrub-terms.txt"}}), encoding="utf-8"
     )
     body = "\n".join(["# private names, one per line", "", *terms]) + "\n"
     (repo / "scrub-terms.txt").write_text(body, encoding="utf-8")
@@ -2478,7 +2478,7 @@ def test_coder_model_takes_the_control_path_tier_from_the_config(repo: Path) -> 
     outcome = train_runner.coder_model(repo, "U1")
     assert outcome.lines == ["opus", "coder U1: opus (control path hooks/pre_commit.py)"]
     config = repo / ".claude" / "daedalus" / "config.json"
-    config.write_text(json.dumps({"models": {"coder_on_plugin_files": "fable"}}))
+    config.write_text(json.dumps({"models": {"plugin_file_coder": "fable"}}))
     assert train_runner.coder_model(repo, "U1").lines[0] == "fable"
     assert train_runner.coder_model(repo, "U2").lines == ["sonnet", "coder U2: sonnet (default)"]
 

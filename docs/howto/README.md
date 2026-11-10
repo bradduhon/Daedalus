@@ -365,7 +365,7 @@ With no argument, it pushes the newest build run in `docs/.tmp/daedalus/`. To pu
 The train stops, with a `Next:` line, when any of these fails:
 
 - You are not on the `daedalus/<train-id>` branch the summary names.
-- The service manifest turns the secret scan on (`checks.secret_scan_on_push` is `true`) and `gitleaks` is not installed. Install it (https://github.com/gitleaks/gitleaks#installing) and rerun. With the scan on, the train never pushes without it. With the scan off, the train neither runs nor needs gitleaks.
+- The service manifest turns the secret scan on (`checks.secret_scan` is `true`) and `gitleaks` is not installed. Install it (https://github.com/gitleaks/gitleaks#installing) and rerun. With the scan on, the train never pushes without it. With the scan off, the train neither runs nor needs gitleaks.
 - `gh auth status` fails. Run `gh auth login` and rerun. The push agent opens the pull request with gh.
 - The working tree has unstaged or untracked changes. Staged changes are fine, because the push agent commits them.
 - This session's hooks are not writing the audit log. The train marks itself running before this check, since the log records only during a train. Run `/daedalus:doctor`.

@@ -13,7 +13,7 @@
   "models": {
     "agents": {"planner": "sonnet"},
     "coder": "sonnet",
-    "coder_on_plugin_files": "opus",
+    "plugin_file_coder": "opus",
     "coder_after_rejection": "opus",
     "fable_available": false
   },
