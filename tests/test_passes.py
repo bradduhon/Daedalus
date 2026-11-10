@@ -11,7 +11,11 @@ from typing import Any
 import pytest
 from lib import audit, jail, passes, train_summary
 
-from tests.adversarial.corpus import S2B_PASS_ONCE, S3B_CODER_PASS_ONCE
+from tests.adversarial.corpus import (
+    S2B_PASS_ONCE,
+    S3B_CODER_PASS_DATA_FOLDER,
+    S3B_CODER_PASS_ONCE,
+)
 from tests.conftest import CFG, SCRIPTS_DIR, run_cli
 from tests.helpers import phase_text
 from tests.hook_chain import first_deny
@@ -385,6 +389,8 @@ def test_the_build_phase_routes_a_grant_yield() -> None:
     assert row.startswith("| `[STATUS: YIELD_GRANT] <exact command> \\| <why>` |")
     for part in ("`Grant once`", "`Refuse`", "`Add a table row instead`"):
         assert part in row, part
+    # 266, 0240: a granted command is judged by its folder alone, so the operator checks it.
+    assert "look in the command for the plugin's data folder, .claude/daedalus." in row
     assert (
         "`python3 <plugin root>/scripts/daedalus_train.py grant --repo <repo> --agent coder "
         '--cwd <repo> --reason "<why>" --ledger-id <ID> --command-file <that file>`'
@@ -460,6 +466,24 @@ def test_a_coder_pass_admits_only_its_folder(marked_repo: Path) -> None:
     moved["cwd"] = str(marked_repo / ".claude")
     assert first_deny(moved, CFG) is not None
     assert _coder(marked_repo, command) is None
+
+
+def test_a_passed_data_folder_write_is_judged_by_its_folder_alone(marked_repo: Path) -> None:
+    # 266, 0240: grant is the check.
+    agent, form = S3B_CODER_PASS_DATA_FOLDER
+    command = form.format(repo=marked_repo)
+    inside = marked_repo / ".claude" / "daedalus"
+    _run(marked_repo)
+    assert jail.integrity_reason("Bash", {"command": command}, str(marked_repo), agent) is None
+    _grant(marked_repo, command, agent=agent)
+    assert _coder(marked_repo, command) is None
+    assert len(_consumed(marked_repo)) == 1
+    got = jail.integrity_reason("Bash", {"command": command}, str(inside), agent)
+    assert got == jail.R_DATA_DIR
+    passes.write_pass(marked_repo, agent, command, str(inside), REASON, LEDGER, 300)
+    hook = _hook(marked_repo, command, agent_type="daedalus:coder")
+    hook["cwd"] = str(inside)
+    assert first_deny(hook, CFG) == ("workspace_integrity", jail.R_DATA_DIR)
 
 
 def test_a_grant_yield_names_the_main_session_as_its_answerer() -> None:
