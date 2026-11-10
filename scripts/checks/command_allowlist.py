@@ -281,25 +281,21 @@ def _role(allowed: frozenset[str]) -> Role:
     return Role("command_allowlist")
 
 
-def _refusal(script: Script, refused: Refusal, allowed: frozenset[str], cwd: str) -> str:
-    # 228 S3: the grammar's refusal under the constant this check showed for its class (SA-7).
-    cmd = jail.refused_command(script, refused)
-    tokens = jail.literal_tokens(cmd)
-    name = shell.command_family(tokens[0]) if tokens else ""
+def _refusal(refused: Refusal, allowed: frozenset[str]) -> str:
+    # 228 S3, 266: the grammar's refusal under the constant this check showed for its class
+    # (SA-7), picked from the Refusal's own typed fields; the refused text is never reread.
+    name = shell.command_family(refused.word) if refused.word else ""
     constant = _reason(allowed)
-    if name == "gh" and "gh" in allowed and cmd is not None and refused.span == cmd.span:
+    if name == "gh" and "gh" in allowed and refused.whole:
         return refused.reason  # 0028: the gh class table's own text, as gh_classes shows it.
-    push = name == "git" and _role(allowed).push and shell._git_subcommand(tokens) == "push"
-    if push and os.path.isabs(cwd):
-        charter = hook_io.hook_charter(cwd)
-        constant = jail._conductor_push_reason(tokens, cwd, charter) or constant
-    elif "append_ledger" in allowed and tokens and shell._is_append_ledger(tokens):
+    if refused.family == "git" and _role(allowed).push and refused.subcommand == "push":
+        constant = jail.R_CONDUCTOR_PUSH  # 266: as git_push names a refused push (228 tail).
+    elif "append_ledger" in allowed and shell._is_append_ledger([refused.word, refused.script]):
         constant = jail.R_LEDGER_ARGS
     elif "gitleaks" in allowed and name == "gitleaks":
         constant = jail.R_GITLEAKS
-    elif "inspect" in allowed and name in shell.READ_ONLY_WRITE_OPTS:
-        if jail.rewritten(jail.refused_word(cmd, refused)):
-            constant = shell.R_READ_EXPANSION
+    elif "inspect" in allowed and name in shell.READ_ONLY_WRITE_OPTS and refused.rewritten:
+        constant = shell.R_READ_EXPANSION
     return jail.refusal_text(refused, constant)
 
 
@@ -340,7 +336,7 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     ):
         return None  # 233: a sealed pass for this exact call, consumed and recorded.
     if isinstance(got, Refusal):
-        return _refusal(script, got, allowed, cwd)
+        return _refusal(got, allowed)
     return _later(script, command, got, allowed, cwd)
 
 

@@ -266,6 +266,8 @@ def test_only_the_switched_consumers_import_admit() -> None:
         REPO_ROOT / "tests" / "adversarial" / "corpus.py",
         REPO_ROOT / "tests" / "adversarial" / "test_env_expansion.py",
         REPO_ROOT / "tests" / "test_tail_hunt.py",
+        # 266: the pack verify reader reads the auditor's admission of a verify.
+        REPO_ROOT / "scripts" / "lib" / "packs.py",
     }
     users: list[str] = []
     for path in [*REPO_ROOT.glob("scripts/**/*.py"), *REPO_ROOT.glob("tests/**/*.py")]:
@@ -388,6 +390,31 @@ def test_the_exit_echo_admits_only_dollar_question() -> None:
     assert refused("coder", "echo exit=${?}").text == "${?}"
     assert refused("coder", "echo exit=$$").text == "$$"
     assert refused("auditor", "echo exit=$?").text == "$?"
+
+
+@pytest.mark.parametrize(
+    ("agent", "command", "want"),
+    [
+        # (word, script, whole, rewritten) of the refused command.
+        ("orchestrator", "uniq a {b,c}", ("uniq", "a", False, True)),
+        ("releaser", "gh repo delete x", ("gh", "repo", True, False)),
+        (
+            "charter-docs",
+            "python3 /x/append_ledger.py $X",
+            ("python3", "/x/append_ledger.py", False, True),
+        ),
+        ("auditor", "nice cat x", ("nice", "cat", False, False)),
+        ("auditor", "$X cat", ("", "cat", False, True)),
+        ("auditor", "ls && cd /tmp", ("cd", "/tmp", False, False)),
+        ("auditor", "cat x; cat 'y", ("", "", False, False)),
+    ],
+)
+def test_a_refusal_carries_its_commands_typed_head(
+    agent: str, command: str, want: tuple[str, str, bool, bool]
+) -> None:
+    # 266: the allowlist refusal reader picks its constant from these fields, never the text.
+    got = refused(agent, command)
+    assert (got.word, got.script, got.whole, got.rewritten) == want, got
 
 
 @pytest.mark.usefixtures("jail_fakes")

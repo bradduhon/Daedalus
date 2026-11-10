@@ -48,6 +48,8 @@ _PROGRAM_STOPS: dict[str, frozenset[str]] = {"python": frozenset({"-m", "-c"})}
 # 228 S2: the push shape the conductor push check reads (jail._conductor_push_reason).
 _PUSH_OPTIONS = frozenset({"-u", "--set-upstream"})
 _ICASE_GLOBALS = frozenset({"--icase-pathspecs", "--glob-pathspecs"})
+# 266: git log's count options; the next word is their value, never a pathspec.
+_LOG_VALUED = frozenset({"-n", "--max-count"})
 # 228 S2: scheduling wrappers an agent may put inside the kernel wrapper, never bare (8.5 A).
 _CONFINED_WRAPPERS = frozenset({"timeout", "nice", "nohup", "stdbuf", "ionice", "taskset", "chrt"})
 _REFUSED_GIT_GLOBALS = frozenset({"-c", "--config-env", "--exec-path="})
@@ -115,6 +117,12 @@ class Refusal:
     family: str = ""
     # 228 tail: a refused git command's literal subcommand; "" before it is read.
     subcommand: str = ""
+    # 266: the refused command's first two words as literals ("" where the shell rewrites one),
+    # whether the refusal spans that whole command, and whether its word is one bash rewrites.
+    word: str = ""
+    script: str = ""
+    whole: bool = False
+    rewritten: bool = False
 
 
 @dataclass(frozen=True)
@@ -285,7 +293,30 @@ def admit_role(script: Script, role: Role, cwd: str, *, text: str) -> Admitted |
     except _Off as off:
         start, end = off.span
         digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
-        return Refusal(off.span, text[start:end], off.reason, digest, judge.family, judge.sub)
+        held = judge.held
+        if held is None or not (held.span[0] <= start and end <= held.span[1]):
+            return Refusal(off.span, text[start:end], off.reason, digest, judge.family, judge.sub)
+        heads = [w.literal or "" for w in held.words[:2]] + ["", ""]
+        word = next((w for w in held.words if _overlaps(w.span, off.span)), None)
+        return Refusal(
+            off.span,
+            text[start:end],
+            off.reason,
+            digest,
+            judge.family,
+            judge.sub,
+            heads[0],
+            heads[1],
+            off.span == held.span,
+            word is not None and jail.rewritten(word),
+        )
+
+
+def _overlaps(word: Span, span: Span) -> bool:
+    # 266: the word holds the refused span, or the refused span holds the word.
+    return (word[0] <= span[0] and span[1] <= word[1]) or (
+        span[0] <= word[0] and word[1] <= span[1]
+    )
 
 
 def _word_text(word: Word) -> Typed:
@@ -392,6 +423,8 @@ class _Judge:
         # 228 S4, tail: the family and git subcommand under judgment, carried onto a Refusal.
         self.family = ""
         self.sub = ""
+        # 266: the parsed command under judgment, which a Refusal reads its typed head from.
+        self.held: Command | None = None
 
     # -- script and pipelines ----------------------------------------------------------------
     def script(self, script: Script) -> list[AdmittedCommand]:
@@ -467,6 +500,7 @@ class _Judge:
     def command(self, cmd: Command, piped: bool) -> AdmittedCommand:
         c = _Cmd(cmd.span, piped)
         self.family = self.sub = ""
+        self.held = cmd
         for assign in cmd.assignments:
             self.assignment(assign, c)
         # 228 S3c: the coder's echo admits $? in an operand, the exit echo, and no other parameter.
@@ -1201,7 +1235,7 @@ class _Judge:
         for word, tok in zip(args, toks, strict=True):
             if skip:
                 skip = False
-                types = shell.OPTION_VALUE_TYPES.get("git commit", {}).get(prev, ("text",))
+                types = shell.OPTION_VALUE_TYPES.get(f"git {sub}", {}).get(prev, ("text",))
                 c.add(types[0], _word_text(word))
                 continue
             if not after and tok == "--":
@@ -1216,6 +1250,10 @@ class _Judge:
                 name, eq, attached = tok.partition("=")
                 if sub == "commit" and name in valued and not eq:
                     skip, prev = True, name
+                elif sub == "log" and name in _LOG_VALUED and not eq:
+                    skip, prev = True, name
+                elif sub == "log" and tok[:2] == "-n" and len(tok) > 2:
+                    c.add("text", Typed(tok[2:], word.span))  # 266: the joined -n<count>.
                 elif eq:
                     types = shell.OPTION_VALUE_TYPES.get("git commit", {}).get(name, ("text",))
                     c.add(types[0] if sub == "commit" else "text", Typed(attached, word.span))

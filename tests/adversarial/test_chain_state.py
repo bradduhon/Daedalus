@@ -21,6 +21,7 @@ from tests.adversarial.corpus import (
     S4_ISSUE_ROWS,
     S4_MAIN_TYPED_PASS,
     S4_PARAM_IN_PATHSPEC,
+    S4_PARAM_IN_PATHSPEC_REFUSAL,
     S4_TYPED_PASS_225,
     assert_denied,
 )
@@ -63,7 +64,7 @@ def test_a_chain_state_row_is_refused(
         assert_denied(coder)
         assert _reason(form, repo, "notes", "coder") is None, form
     elif form in S4_PARAM_IN_PATHSPEC:
-        assert_denied(coder, jail.R_CREDENTIAL_PARAM.split("{path}")[1])
+        assert_denied(coder, S4_PARAM_IN_PATHSPEC_REFUSAL)
     else:
         assert_denied(coder, CODER_REFUSED)
     got = _reason(form, repo, "notes")

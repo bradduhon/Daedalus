@@ -321,6 +321,36 @@ def test_command_allowlist_judges_the_hook_alone() -> None:
     assert evaluate(HOOK, _b("x", "git status")) is not None
 
 
+@pytest.mark.parametrize(
+    ("allow", "command", "want"),
+    [
+        ("git,gh,gitleaks", "git push --force origin b", jail.R_CONDUCTOR_PUSH),
+        ("git,gh,gitleaks", "git push origin main:b", jail.R_CONDUCTOR_PUSH),
+        ("git,gh,gitleaks", "gitleaks detect", jail.R_GITLEAKS),
+        ("git,gh,gitleaks", "nice gitleaks detect", jail.R_CONDUCTOR_BASH),
+        ("append_ledger,git,read", f"python3 {REPO_ROOT}/scripts/append_ledger.py $X", None),
+        ("append_ledger,git,read", "python3 /tmp/other.py --cwd /x", jail.R_DOCS_BASH),
+        ("train,inspect", "uniq a {b,c}", shell.R_READ_EXPANSION),
+        ("train,inspect", "uniq a b c d", None),
+    ],
+)
+def test_refusal_constant_comes_from_the_typed_refusal(
+    allow: str, command: str, want: str | None
+) -> None:
+    # 266: the constant is picked from the Refusal's family, subcommand, head words, span and
+    # rewritten flag; the refusal still names the word, option or construct off the table.
+    got = evaluate(HOOK, _b("x", command), "--allow", allow)
+    lead = want or (jail.R_LEDGER_ARGS if "ledger" in command else load(HOOK).R_ORCHESTRATOR_BASH)
+    assert _starts(got, lead), got
+    assert got is not None and " Refused: " in got and ", at `" in got, got
+
+
+def test_a_whole_gh_call_refusal_shows_the_class_table_text() -> None:
+    # 0028, 266: a refusal spanning the whole gh call is shown as the class table words it.
+    got = evaluate(HOOK, _b("x", "gh repo delete x"), "--allow", "git,gh,gitleaks")
+    assert got is not None and not got.startswith(jail.R_CONDUCTOR_BASH), got
+
+
 def test_command_allowlist_fixture_decisions() -> None:
     mover = ("--allow", "git,gh,gitleaks")
     ls = payload("Bash", agent="releaser", command="ls")

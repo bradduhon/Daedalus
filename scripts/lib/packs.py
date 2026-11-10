@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from lib import jail
+from lib import jail, shparse
+from lib.admit import Admitted, admit
 from lib.config import PACKS_DIR
 from lib.controls import ControlsError, _unique
 from lib.manifest import load as load_manifest
@@ -255,11 +256,15 @@ def _control_problems(
             out.append(f"{where} {key} must be one printable line of 1 to {limit} characters")
     verify = item.get("verify")
     # 0192: a path outside the tree is named beside any jail refusal of the same verify.
-    outside = _outside_paths(verify) if isinstance(verify, str) and _line(verify, LINE_MAX) else []
+    plain = isinstance(verify, str) and _line(verify, LINE_MAX)
+    outside, grammar = _outside_paths(str(verify), root) if plain else ([], None)
     refused = jail.rg_reason(verify, root) if isinstance(verify, str) else None
     if refused is not None and _line(verify, LINE_MAX):
         # 113, 0186: pack text is data; a verify the auditor's jail refuses never reaches it.
         out.append(f"{where} verify is refused by the auditor's jail: {refused}")
+    if grammar is not None and grammar != refused:
+        # 266: the grammar's refusal names the word, option or construct off the table.
+        out.append(f"{where} verify is off the auditor's grammar: {grammar}")
     out += [
         f"{where} verify searches {path!r} outside the project tree; name . or a relative "
         "path without .."
@@ -278,21 +283,22 @@ def _control_problems(
     return out
 
 
-def _outside_paths(verify: str) -> list[str]:
-    # prepush2-2026-10-27: a verify path stays under the project root; no /, ~ or .. part.
-    segments = jail._shell_words(verify)
-    words = segments[0] if len(segments) == 1 else []
-    _, _, paths = jail._path_positions(words)
+def _outside_paths(verify: str, root: str) -> tuple[list[str], str | None]:
+    # prepush2-2026-10-27, 266: each typed path of the verify the auditor's grammar admits stays
+    # under the project root; a refused verify has none, only the refusal naming its word.
+    got = admit(shparse.parse(verify), "auditor", root, text=verify)
+    if not isinstance(got, Admitted):
+        return [], jail.refusal_text(got)
     out: list[str] = []
-    for i in sorted(paths):
-        text = jail._clean(words[i])
-        if text.startswith("--"):
-            text = text.partition("=")[2]
-        elif text.startswith("-"):
-            text = text[text.index("f") + 1 :] if "f" in text else ""
-        if not text or text.startswith(("/", "~")) or ".." in text.split("/"):
-            out.append(text)
-    return out
+    for done in got.commands:
+        found = (*done.reads, *done.writes, *done.pathspecs)
+        found += tuple(t for t in (done.script, done.cd_target, done.git_dir) if t is not None)
+        out += [
+            t.text
+            for t in sorted(found, key=lambda t: t.span)
+            if not t.text or t.text.startswith(("/", "~")) or ".." in t.text.split("/")
+        ]
+    return out, None
 
 
 def content_problems(

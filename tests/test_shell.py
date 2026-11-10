@@ -89,7 +89,13 @@ RETIRED = (
     "_loop_union _opaque_values _opaque_targets _moved_base _tree_reader _gh_words "
     "_CREDENTIAL_PART _BINDERS _coder_write_targets "
     # 228 tail: the credential module's command-text readers no caller reached.
-    "dotglob_on expand_word _DOTS_QUALIFIER _DOTGLOB_WORDS"
+    "dotglob_on expand_word _DOTS_QUALIFIER _DOTGLOB_WORDS "
+    # 266: the data folder regexes, the pack verify reader's walkers and the env -S parser.
+    # admit.py keeps its own _expands, so the grep cannot list that name.
+    "_DATA_DIR_WRITE _CD_TARGET _GIT_INDEX_WRITE _DAEDALUS_WORD _DEVNULL _normalize_paths "
+    "_cd_into_claude _cd_data_dir_git _data_dir_write _data_dir_markers _shell_words "
+    "_shell_scan ScanSegment _command_at _path_positions _PATH_OPTION _opaque_words "
+    "_search_paths _PATH_CMDS _CONTROL_WORDS _OPAQUE env_split_values _env_split _unsingled"
 ).split()
 # 228 tail: names another module defines for its own use, so the grep above cannot list them;
 # the import test below proves no module reaches the retired lib.shell ones.
@@ -102,17 +108,10 @@ RE_SUBJECTS: dict[str, dict[str, str]] = {
         "_BRANCH_NAME": "the branch operand of an admitted conductor push",
         "_INTERPRETER": "a parsed command word, moved_relative (issue 188)",
         "_MODE": "a chmod mode operand of an admitted write",
-        "_PATH_OPTION": "an option word of a packs.py verify, _path_positions (gap: packs.py)",
         "_PIP": "an installer word of an admitted command",
         "_REMOTE_URL": "the output of git remote get-url",
         "_flags_ok": "an admitted git option against its grammar row pattern",
         "_gitleaks_ok": "an admitted gitleaks option",
-        "_CD_TARGET": "command text, the data folder check (gap: integrity_reason)",
-        "_DAEDALUS_WORD": "command text, the data folder check (gap: integrity_reason)",
-        "_DATA_DIR_WRITE": "command text, the data folder check (gap: integrity_reason)",
-        "_DEVNULL": "command text, the data folder check (gap: integrity_reason)",
-        "_GIT_INDEX_WRITE": "command text, the data folder check (gap: integrity_reason)",
-        "_normalize_paths": "command text, the data folder check (gap: integrity_reason)",
     },
     "lib/shell.py": {
         "DURATION": "a timeout duration word",
@@ -128,6 +127,16 @@ RE_SUBJECTS: dict[str, dict[str, str]] = {
     },
     "lib/admit.py": {},
     "checks/read_only_bash.py": {"_GREP_PERL": "a grep option word"},
+    # 266: the modules this unit moved onto the parse; the verify reader reads no command by re.
+    "lib/packs.py": {
+        "CONTROL_ID": "a control, ref or maps_to id in controls.json",
+        "DAY": "the pinned_on date in pack.json",
+        "PACK_ID": "the id in pack.json",
+        "SHA256": "the sha256 in pack.json",
+        "VERSION": "the version in pack.json",
+    },
+    "checks/command_allowlist.py": {},
+    "checks/workspace_integrity.py": {},
 }
 
 
@@ -248,7 +257,7 @@ def test_quote_walk_marks_spans_escapes_and_quote_marks() -> None:
 def test_no_quote_loop_outside_the_walker() -> None:
     # issue 76, 121, 228 tail: the loops that remain read quote_walk.
     tree = _tree("shell.py")
-    users = {"_quote_spans", "_unquoted_expansion", "_unsingled"}
+    users = {"_quote_spans", "_unquoted_expansion"}
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in users:
             source = ast.unparse(node)

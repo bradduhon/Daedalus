@@ -107,9 +107,13 @@ def test_workspace_integrity_judges_the_hook_alone() -> None:
 )
 def test_bash_plants_in_the_data_folder_are_refused(agent: str, command: str) -> None:
     # issue 75: a FIFO planted at a lock path hangs the next hook that opens it.
+    # 266, 0224: this hook names a plant its role admits; the role's own grammar refuses the rest.
     filled = command.format(data=f"{CWD}/.claude/daedalus", repo=CWD)
-    assert evaluate(HOOK, _b(agent, filled)) == jail.R_DATA_DIR
-    assert not decide(_b(agent, filled), CFG).allow
+    named = agent == "coder" and not command.startswith("echo")
+    assert evaluate(HOOK, _b(agent, filled)) == (jail.R_DATA_DIR if named else None)
+    denied = decide(_b(agent, filled), CFG)
+    assert not denied.allow
+    assert named or "Refused: " in str(denied.reason), denied.reason
 
 
 def test_workspace_integrity_fixture_decisions() -> None:
