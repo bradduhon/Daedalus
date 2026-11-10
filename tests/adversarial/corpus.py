@@ -1054,6 +1054,14 @@ TERRAFORM_MUTATIONS = (
     "terraform refresh",
 )
 # 0158, 0164: the coder's terraform is an allowlist; every other form names the operator.
+# 269: forms admit types for the auditor that its terraform class, read from the typed record,
+# refuses: a wrapper inside the kernel wrapper, an extra fmt flag, a fmt path, a relative -chdir.
+TERRAFORM_TYPED_269 = (
+    "{confine} --unit {wt} -- timeout 5 terraform validate",
+    "terraform fmt -check -recursive",
+    "terraform fmt -check infra",
+    "terraform -chdir=infra fmt -check",
+)
 TERRAFORM_OPERATOR_FORMS = (
     "terraform plan",
     "terraform init",
