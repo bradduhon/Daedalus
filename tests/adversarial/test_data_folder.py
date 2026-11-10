@@ -12,6 +12,7 @@ from lib.packs import pack_problems
 
 from tests.adversarial.corpus import (
     ANCESTOR_WRITES_266,
+    ANCESTOR_WRITES_269,
     DATA_FOLDER_HUNT_266,
     PACK_VERIFY_HUNT_266,
     WILDCARD_REACH_266,
@@ -30,13 +31,14 @@ def _named(name: str | None) -> str | None:
 
 
 @pytest.mark.parametrize(
-    ("cls", "form", "main", "coder"), DATA_FOLDER_HUNT_266 + ANCESTOR_WRITES_266
+    ("cls", "form", "main", "coder"),
+    DATA_FOLDER_HUNT_266 + ANCESTOR_WRITES_266 + ANCESTOR_WRITES_269,
 )
 def test_a_data_folder_hunt_form_meets_the_typed_check(
     cls: str, form: str, main: str | None, coder: str | None
 ) -> None:
     # 266, 0224: each role's admitted record is judged; a refused form by its folder alone.
-    command = form.format(repo=CWD)
+    command = form.format(repo=CWD, home=jail._HOME)
     for agent, want in (("main", main), ("coder", coder)):
         got = jail.integrity_reason("Bash", {"command": command}, CWD, agent)
         assert got == _named(want), (cls, agent, command, got)

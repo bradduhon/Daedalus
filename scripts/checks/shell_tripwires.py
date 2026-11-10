@@ -81,11 +81,9 @@ def _own_python(agent: str, tokens: list[str]) -> bool:
     return agent == "verifier" and shell.claims_ok(tokens)
 
 
-def _ledger_literal(script: Script, refused: Refusal, agent: str) -> str | None:
-    # F1, O7: charter-docs refused at ${CLAUDE_PLUGIN_ROOT}, which agent Bash leaves empty.
-    word = jail.refused_word(jail.refused_command(script, refused), refused)
-    parts = word.parts if word is not None and agent == "charter-docs" else []
-    named = any(isinstance(p, Param) and p.name == "CLAUDE_PLUGIN_ROOT" for p in parts)
+def _ledger_literal(refused: Refusal, agent: str) -> str | None:
+    # F1, O7, 269: charter-docs refused at ${CLAUDE_PLUGIN_ROOT}, which agent Bash leaves empty.
+    named = agent == "charter-docs" and "CLAUDE_PLUGIN_ROOT" in refused.params
     return shell.R_LEDGER_LITERAL if named else None
 
 
@@ -151,10 +149,10 @@ def _typed_hygiene(script: Script, done: AdmittedCommand, agent: str, base: str)
     return None
 
 
-def _worker_class(script: Script, refused: Refusal, agent: str, cwd: str) -> str | None:
+def _worker_class(refused: Refusal, agent: str, cwd: str) -> str | None:
     # 8.5, 228 tail: the shell classes this check names; an option-row class (find, rsync, a
     # network word) and a python call of a role with its own python row are its command check's.
-    constant = jail.refusal_constant(script, refused, cwd)
+    constant = jail.refusal_constant(None, refused, cwd)
     role = role_for(agent)
     python_row = role.ledger or role.train or role.claims or role.runner in ("audit", "unit")
     if constant == shell.R_INLINE and refused.family == "python" and python_row:
@@ -169,7 +167,7 @@ def _worker_reason(hook_input: dict[str, object], agent: str) -> str | None:
     cwd = hook_io.text(hook_input, "cwd")
     script, own = jail._admission(command, agent, cwd)
     if isinstance(own, Refusal):
-        constant = _ledger_literal(script, own, agent) or _worker_class(script, own, agent, cwd)
+        constant = _ledger_literal(own, agent) or _worker_class(own, agent, cwd)
         if constant:
             return jail.refusal_text(own, constant)
     got = jail.held_admission(hook_input)

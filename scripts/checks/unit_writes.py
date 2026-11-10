@@ -14,11 +14,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from checks.read_only_bash import _pytest_args  # noqa: E402
+from checks.read_only_bash import basetemp  # noqa: E402
 from lib import dispatch_binding, hook_io, jail, shell  # noqa: E402
 from lib.admit import Admitted, AdmittedCommand  # noqa: E402
 from lib.project_root import project_root  # noqa: E402
-from lib.shparse import walk  # noqa: E402
 from lib.train_state import active_train  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset(jail.WRITE_TOOLS | {"Bash"})
@@ -183,21 +182,12 @@ def _docs_command_reason(
     return next((r for t in targets if (r := _docs_reason(t, cwd))), None)
 
 
-def _basetemp(call: jail.CoderCall) -> bool:
-    # issue 56: read before admission, as read_only_bash reads it; a pass never admits it.
-    for cmd, _ in walk(call.script):
-        args = _pytest_args(jail.literal_tokens(cmd)) if cmd.words else None
-        if args is not None and any(a.startswith("--basetemp") for a in args):
-            return True
-    return False
-
-
 def _bash_reason(
     hook_input: dict[str, object], cwd: str, boundary: Boundary, docs: bool
 ) -> str | None:
     call = jail.coder_call(hook_input)
-    if _basetemp(call):
-        return jail.R_BASETEMP
+    if basetemp(call.script, call.got):
+        return jail.R_BASETEMP  # issue 56, 269: from the typed record, before any pass.
     got = call.got
     if not isinstance(got, Admitted):
         return jail.coder_refusal(call)

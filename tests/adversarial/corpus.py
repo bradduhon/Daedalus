@@ -1054,6 +1054,14 @@ TERRAFORM_MUTATIONS = (
     "terraform refresh",
 )
 # 0158, 0164: the coder's terraform is an allowlist; every other form names the operator.
+# 269: forms admit types for the auditor that its terraform class, read from the typed record,
+# refuses: a wrapper inside the kernel wrapper, an extra fmt flag, a fmt path, a relative -chdir.
+TERRAFORM_TYPED_269 = (
+    "{confine} --unit {wt} -- timeout 5 terraform validate",
+    "terraform fmt -check -recursive",
+    "terraform fmt -check infra",
+    "terraform -chdir=infra fmt -check",
+)
 TERRAFORM_OPERATOR_FORMS = (
     "terraform plan",
     "terraform init",
@@ -1542,8 +1550,82 @@ GIT_LOG_COUNT_266 = (
     "git log --max-count 3 -- {path}",
     "git log --max-count=3 -- {path}",
 )
+# issue 188, 269: (class, form, named) for a bound agent whose shell stands outside its run; the
+# admitted record is judged, a refused one by its standing folder; None means it passes.
+MOVED_RELATIVE_269 = (
+    ("relative write", "touch rel.txt", "rel.txt"),
+    ("relative redirect", "ls > out.txt", "out.txt"),
+    ("relative output option", "sort -o out /etc/hosts", "out"),
+    ("uniq output", "uniq - out", "out"),
+    ("relative read", "cat README.md", "README.md"),
+    ("relative pathspec", "git log -- src", "src"),
+    ("relative -C", "git -C rel status", "rel"),
+    ("relative wrapper chdir", "env -C rel ls", "rel"),
+    ("git write in the shell's folder", "git commit -m x", "git commit without -C"),
+    ("module run", "python3 -m pytest tests", "not a read"),
+    ("script program", "sed 'w out' /etc/hosts", "not a read"),
+    ("bare runner", "make", "not a read"),
+    ("refused word", "cd sub", "off the jail's table"),
+    ("refused path word", "./run.sh", "off the jail's table"),
+    ("refused glob write", "rm -rf .cl*", "off the jail's table"),
+    ("refused option", "git -C {wt} log --output=x", "off the jail's table"),
+    ("substitution", "cat $(pwd)/x", "off the jail's table"),
+    ("absolute glob", "ls {wt}/*.py", "*.py"),
+    ("unbound parameter", "cat $FOO/x", "$FOO/x"),
+    ("start in the run", "cd {wt} && python3 -m pytest tests -q", None),
+    ("start in the run, then ;", "cd {wt} && touch x ; touch y", None),
+    ("absolute -C read", "git -C {wt} status", None),
+    ("absolute writes", "touch {wt}/x 2>&1 > /dev/null", None),
+    ("bare read", "ls", None),
+    ("git read", "git status", None),
+    ("home tilde", "cat ~/x", None),
+    ("home parameter", "cat $HOME/x", None),
+    ("absolute folder first", "cd /tmp && cat x", None),
+)
 # 266: a path in the count slot is git's count, which git rejects; it is never a pathspec.
 GIT_LOG_COUNT_VALUE_266 = ("git log -n {path}", "git log --max-count {path}")
+# 269: git log's search options in the split form; the next word is their value, as text.
+GIT_LOG_SEARCH_269 = (
+    "git log -S token -- {path}",
+    "git log -G token -- {path}",
+    "git log --grep token -- {path}",
+)
+# 269 hunt: (class, agent, form, constant) against the readers moved onto the Refusal's typed
+# fields and the admitted docs read; the constant is a jail or shell name, None is admitted.
+REFUSED_FIELDS_HUNT_269 = (
+    ("basetemp after a newline", "coder", "pytest -q\npytest --basetemp=/tmp/x", "R_BASETEMP"),
+    ("basetemp quoted part", "coder", 'pytest --base"temp"=/tmp/x', "R_BASETEMP"),
+    ("basetemp rewritten", "coder", "pytest $'--basetemp'=/tmp/x", "R_HYGIENE"),
+    (
+        "ledger root parameter",
+        "charter-docs",
+        'python3 "${CLAUDE_PLUGIN_ROOT}"/x.py',
+        "R_LEDGER_LITERAL",
+    ),
+    ("rg program last", "auditor", "rg -n x . --pre /tmp/x", "R_RG_PROGRAM"),
+    ("rg program quoted part", "auditor", 'rg --p"re" /tmp/x x .', "R_RG_PROGRAM"),
+    ("rg program attached", "auditor", "rg --pre=/tmp/x x .", "R_RG_PROGRAM"),
+    ("prefix", "coder", "X=1 ls", "R_ENV"),
+    ("redirect", "coder", "ls > /tmp/x", "R_UNSUPPORTED"),
+    ("rewritten head", "coder", "$X ls", "R_VARIABLE"),
+    ("substitution", "coder", "ls $(pwd)", "R_UNSUPPORTED"),
+    ("git off the grammar", "coder", "git frob", "R_CODER_GIT"),
+    ("docs glob read", "charter-docs", "cat docs/*.md", "R_DOCS_BASH"),
+    ("docs tilde read", "charter-docs", "cat ~/docs/a.md", "R_DOCS_BASH"),
+    ("docs .. read", "charter-docs", "cat docs/../../etc/hostname", "R_DOCS_BASH"),
+    (
+        "docs read after a newline",
+        "charter-docs",
+        "cat docs/a.md\ncat /etc/hostname",
+        "R_DOCS_BASH",
+    ),
+    ("docs quoted glob", "charter-docs", "cat 'docs/*.md'", "R_DOCS_BASH"),
+    ("docs pattern only", "charter-docs", "cat docs/a.md | grep x", "R_DOCS_BASH"),
+    ("docs read", "charter-docs", "cat docs/a.md", None),
+    ("docs search", "charter-docs", "grep -n x docs/a.md", None),
+)
+# 269: a path in the search value slot is the search text; it is never a pathspec.
+GIT_LOG_SEARCH_VALUE_269 = ("git log -S {path}", "git log -G {path}", "git log --grep {path}")
 # 266 hunt: (class, form, main, coder) for the data folder check on each role's typed record;
 # None means the check names nothing: the role refuses the form, or it writes no data folder.
 DATA_FOLDER_HUNT_266 = (
@@ -1597,6 +1679,42 @@ ANCESTOR_WRITES_266 = (
     ("move into it with -t", "mv -t .claude /tmp/x", None, None),
     ("copy into it", "cp x .claude", None, None),
     ("link into it", "ln -s x .claude", None, None),
+)
+# 269 fix 1: (class, form, main, coder); a recursive cp is named where its tree lands on the path
+# to the data folder, else it makes a sibling; {home} is the hook's HOME. A mode or owner change
+# of / without -R is left unnamed.
+ANCESTOR_WRITES_269 = (
+    ("folder into the root", "cp -r src .", None, None),
+    ("folder into HOME", "cp -r proj {home}", None, None),
+    ("folder into HOME by ~", "cp -r proj ~", None, None),
+    ("contents into the root", "cp -a src/. .", "R_DATA_DIR", "R_DATA_DIR"),
+    ("contents into HOME", "cp -r proj/. {home}", "R_DATA_DIR", "R_DATA_DIR"),
+    ("contents by ./.", "cp -r src/./. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("a .claude onto the root", "cp -r /tmp/.claude .", "R_DATA_DIR", "R_DATA_DIR"),
+    ("a .claude/ onto the root", "cp -r /tmp/.claude/ .", "R_DATA_DIR", "R_DATA_DIR"),
+    ("a daedalus into .claude", "cp -r x/daedalus .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("a daedalus by -t", "cp -r -t .claude x/daedalus", "R_DATA_DIR", "R_DATA_DIR"),
+    ("another name into .claude", "cp -r x/other .claude", None, None),
+    ("glob source", "cp -r src/* .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("glob source beside it", "cp -r src/* .claude/x", None, None),
+    (".. source", "cp -r src/.. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("plain daedalus file", "cp x/daedalus .claude", None, None),
+    ("tree merge -r", "cp -r src/. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree merge -R", "cp -R src/. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree merge -a", "cp -a src/. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree merge --recursive", "cp --recursive src/. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree merge --archive", "cp --archive src/. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree merge in a cluster", "cp -rf src/. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree merge with -t", "cp -r -t .claude src/.", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree merge into the parent", "cp -r src/. ..", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree copy beside it", "cp -r src .claude/x", None, None),
+    ("plain copy with -t", "cp -t .claude x", None, None),
+    ("mode of the ancestor", "chmod 755 .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("mode of the root", "chmod 755 /", None, None),
+    ("owner of the root", "chown x /", None, None),
+    ("group of the root", "chgrp x /", None, None),
+    ("recursive mode of the root", "chmod -R 755 /", "R_DATA_DIR", "R_DATA_DIR"),
+    ("recursive owner of the root", "chown --recursive x /", "R_DATA_DIR", "R_DATA_DIR"),
 )
 # 266 fix 2: wildcard write operands; every grammar refuses a glob in a write operand, so the
 # data folder check has no typed path (0224) and the role's own refusal names the glob.

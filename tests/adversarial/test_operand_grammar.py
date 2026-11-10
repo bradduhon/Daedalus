@@ -26,6 +26,9 @@ from tests.adversarial.corpus import (
     CLAIMS_REFUSED,
     GIT_LOG_COUNT_266,
     GIT_LOG_COUNT_VALUE_266,
+    GIT_LOG_SEARCH_269,
+    GIT_LOG_SEARCH_VALUE_269,
+    REFUSED_FIELDS_HUNT_269,
     S3C_HUNT,
     S3C_HUNT_DECLARED,
     TRACKED_EXCLUDE_267,
@@ -39,7 +42,7 @@ from tests.adversarial.corpus import (
     tracked_checkouts,
 )
 from tests.conftest import CFG, CWD, SCRIPTS_DIR, WT
-from tests.hook_chain import decide, evaluate, first_deny
+from tests.hook_chain import CHAINS, decide, evaluate, first_deny
 from tests.jail_cases import _narrowed_repo
 from tests.payloads import _b, _cred, _cwd
 
@@ -199,6 +202,42 @@ def test_a_word_in_the_git_log_count_slot_is_never_a_pathspec(agent: str, form: 
     # 266: git reads that word as the count and rejects a path; the typed record agrees.
     texts, specs = _log_record(agent, form.format(path=".env"))
     assert ".env" in texts and specs == [], (form, texts, specs)
+
+
+@pytest.mark.parametrize("agent", ["main", "coder", "auditor"])
+@pytest.mark.parametrize("form", GIT_LOG_SEARCH_269)
+def test_a_git_log_search_value_is_text_and_the_path_after_it_a_pathspec(
+    agent: str, form: str
+) -> None:
+    # 269: -S, -G and --grep take the next word as their value; only the -- word is a pathspec.
+    texts, specs = _log_record(agent, form.format(path="src/a.py"))
+    assert "token" in texts and specs == ["src/a.py"], (form, texts, specs)
+    assert_denied(_b("coder", form.format(path=".env")), "is a .env file")
+
+
+@pytest.mark.parametrize("agent", ["main", "coder", "auditor"])
+@pytest.mark.parametrize("form", GIT_LOG_SEARCH_VALUE_269)
+def test_a_word_in_the_git_log_search_slot_is_never_a_pathspec(agent: str, form: str) -> None:
+    # 269: git searches for that word; the typed record and the tracked check's table agree.
+    texts, specs = _log_record(agent, form.format(path=".env"))
+    assert ".env" in texts and specs == [], (form, texts, specs)
+    flag = form.split()[2]
+    assert flag in jail._GIT_VALUED["log"], flag
+
+
+@pytest.mark.parametrize(("cls", "agent", "form", "constant"), REFUSED_FIELDS_HUNT_269)
+def test_a_refused_fields_hunt_form_names_its_class(
+    cls: str, agent: str, form: str, constant: str | None
+) -> None:
+    # 269 hunt: each check names its class from the typed Refusal, never the refused words.
+    if constant is None:
+        assert decide(_b(agent, form), CFG).allow, cls
+        return
+    want = str(getattr(jail, constant, None) or getattr(shell, constant))
+    assert_denied(_b(agent, form))
+    # 269: the check that owns the class names it, wherever it sits in the agent's chain.
+    reasons = [evaluate(script, _b(agent, form), *flags) for script, flags in CHAINS[agent]]
+    assert any(want in str(r) for r in reasons if r), (cls, reasons)
 
 
 # 267: the readers whose git grammar admits content reads; each meets the credential check first.

@@ -15,9 +15,9 @@ from typing import NamedTuple
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lib import hook_io, jail, passes, shell, train_state  # noqa: E402
-from lib.admit import Admitted, Refusal, Role, admit_role  # noqa: E402
+from lib.admit import Admitted, AdmittedCommand, Refusal, Role, admit_role  # noqa: E402
 from lib.audit import project_root  # noqa: E402
-from lib.shparse import Script, parse, walk  # noqa: E402
+from lib.shparse import Script, parse  # noqa: E402
 from lib.workspace import WORKTREES_DIR, audit_unit, worktree_path  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset({"Bash"})
@@ -187,13 +187,18 @@ def _test_run_ok(tokens: list[str], bound: Bound) -> bool:
 
 def _test_run_reason(tokens: list[str], runner: str, cwd: str) -> str | None:
     bounds = _bounds(runner, cwd)
-    if bounds is None:
-        return R_TEST_RUN_NO_TRAIN.format(runner=runner)
-    tree = _audit_tree(tokens, cwd) if runner == "unit" else None
+    tree = _audit_tree(tokens, cwd) if runner == "unit" and bounds is not None else None
     if tree is not None:
         return R_TEST_RUN_AUDIT.format(tree=tree)
-    if any(_test_run_ok(tokens, bound) for bound in bounds):
+    if bounds is not None and any(_test_run_ok(tokens, bound) for bound in bounds):
         return None
+    return _test_run_text(runner, bounds)
+
+
+def _test_run_text(runner: str, bounds: list[Bound] | None) -> str:
+    # 0109, 269: the test run's class text by the train's bounds alone, no word of the run read.
+    if bounds is None:
+        return R_TEST_RUN_NO_TRAIN.format(runner=runner)
     if runner == "audit" and bounds:
         where, rootdir = " or ".join(bounds[0].roots), bounds[0].rootdir
     else:
@@ -201,13 +206,22 @@ def _test_run_reason(tokens: list[str], runner: str, cwd: str) -> str | None:
     return R_TEST_RUN.format(runner=runner, where=where, rootdir=rootdir)
 
 
-def _terraform_reason(tokens: list[str], cwd: str) -> str | None:
-    # 0186, 0188: the command_allowlist terraform class verbatim; no other form widens.
-    from checks.command_allowlist import terraform_reason, wrapped_terraform_reason
+def _terraform_reason(done: AdmittedCommand, cwd: str) -> str | None:
+    # 0186, 0188, 269: the command_allowlist terraform class on the admitted form from its typed
+    # word, -chdir folder, subcommand, options and paths; wrapped, --unit names one unit worktree.
+    from checks.command_allowlist import R_TERRAFORM, terraform_reason
 
-    if tokens[:1] == ["terraform"]:
-        return terraform_reason(tokens, cwd)
-    return wrapped_terraform_reason(tokens, cwd)
+    unit = done.unit
+    if any(shell.command_family(w.text) != shell.CONFINE for w in done.wrappers):
+        return R_TERRAFORM  # 269: only the kernel wrapper may precede terraform (0164).
+    if unit is not None:
+        parts = jail._unit_parts(unit.text, cwd) if os.path.isabs(unit.text) else None
+        if parts is None or len(parts) != 1 or not os.path.isabs(cwd):
+            return R_TERRAFORM
+    chdir = [f"-chdir={done.cd_target.text}"] if done.cd_target is not None else []
+    sub = [done.subcommand.text] if done.subcommand is not None else []
+    rest = [o.text for o in done.options] + [r.text for r in done.reads if r is not unit]
+    return terraform_reason([done.word.text, *chdir, *sub, *rest], cwd, unit is not None)
 
 
 def _terraform_form(tokens: list[str]) -> bool:
@@ -231,25 +245,50 @@ def role(agent: str, grant: str | None, runner: str | None, terraform: bool) -> 
     )
 
 
+def _typed_head(refused: Refusal) -> list[str]:
+    # 269: the refused command's typed head words, which the runner forms are judged by.
+    return [refused.word, refused.script, refused.module]
+
+
+def basetemp(script: Script, got: Admitted | Refusal) -> bool:
+    # issue 56, 269: a pytest run's --basetemp, read from the admitted words or, for a refusal,
+    # from its typed head and the word it was refused at; never from the refused text.
+    if isinstance(got, Refusal):
+        args = _pytest_args(_typed_head(got)) if got.word else None
+        return args is not None and any(a.startswith("--basetemp") for a in [got.operand, *args])
+    for done in got.commands:
+        args = _pytest_args(jail.admitted_tokens(script, done))
+        if args is not None and any(a.startswith("--basetemp") for a in args):
+            return True
+    return False
+
+
+def _refused_terraform(refused: Refusal) -> str:
+    # 0186, 269: a refused terraform form is the class's own text; a refused wrapper form, the
+    # wrapper's. The manifest switch constants need the admitted form, so they are not shown.
+    from checks.command_allowlist import R_TERRAFORM
+
+    wrapper = shell._base(refused.word) == shell.CONFINE and not refused.family
+    return shell.R_CONFINE_FORM if wrapper else R_TERRAFORM
+
+
 def _refusal(
-    script: Script, refused: Refusal, grant: str | None, runner: str | None, flags: tuple[bool, str]
+    refused: Refusal, grant: str | None, runner: str | None, flags: tuple[bool, str]
 ) -> str:
-    # 228 S3: the grammar's refusal under the constant this check showed for its class (SA-7).
+    # 228 S3, 269: the grammar's refusal under the constant this check showed for its class
+    # (SA-7), picked from the Refusal's typed fields; the refused text is never reread.
     terraform, cwd = flags
-    cmd = jail.refused_command(script, refused)
-    tokens = jail.literal_tokens(cmd)
-    name = shell.command_family(tokens[0]) if tokens else ""
-    word = jail.refused_word(cmd, refused)
+    name = shell.command_family(refused.word) if refused.word else ""
     constant: str | None = None
-    if terraform and _terraform_form(tokens):
-        constant = _terraform_reason(tokens, cwd)
-    elif runner is not None and tokens and _pytest_args(tokens) is not None:
-        constant = _test_run_reason(tokens, runner, cwd)
-    elif name in shell.SEARCH_CMDS and jail.rewritten(word):
+    if terraform and _terraform_form([refused.word]):
+        constant = _refused_terraform(refused)
+    elif runner is not None and refused.word and _pytest_args(_typed_head(refused)) is not None:
+        constant = _test_run_text(runner, _bounds(runner, cwd))
+    elif name in shell.SEARCH_CMDS and refused.rewritten:
         constant = jail.R_RG_OPAQUE
-    elif name == "rg" and jail.rg_program(tokens[1:]):
+    elif name == "rg" and jail.rg_program([refused.operand, refused.option]):
         constant = jail.R_RG_PROGRAM
-    elif name in shell.READ_ONLY_WRITE_OPTS and jail.rewritten(word):
+    elif name in shell.READ_ONLY_WRITE_OPTS and refused.rewritten:
         constant = shell.R_READ_EXPANSION
     elif name in jail.DIR_CHANGE_CMDS:
         constant = R_CD_CHAIN
@@ -267,21 +306,21 @@ def _later(
     # the test run's train bounds and the terraform class's manifest gates.
     terraform, cwd = flags
     script, command = parsed
-    by_span = {cmd.span: cmd for cmd, _ in walk(script)}
     commands = list(got.commands)
     moved = bool(commands) and commands[0].family == "cd"
     for done in commands[1:] if moved else commands:
-        tokens = jail.literal_tokens(by_span.get(done.span))
         quoted = command[done.span[0] : done.span[1]]
         if moved and (done.family in {"git", "terraform"} or done.module or done.wrappers):
             return jail.refused_at(R_CD_CHAIN, f"{done.word.text} after a leading cd", quoted)
         options = [o.text for o in done.options]
         if done.family == "rg" and jail.rg_program(options):
             return jail.refused_at(jail.R_RG_PROGRAM, "an rg option runs a program", quoted)
-        if terraform and _terraform_form(tokens):
-            reason = _terraform_reason(tokens, cwd)
+        if terraform and (done.word.text == "terraform" or done.unit is not None):
+            reason = _terraform_reason(done, cwd)
         elif runner is not None and done.module is not None:
-            reason = _test_run_reason(tokens, runner, cwd)
+            # 269: a wrapper word leads the form, so a wrapped run never matches the one form.
+            wrappers = [w.text for w in done.wrappers]
+            reason = _test_run_reason([*wrappers, *jail.admitted_tokens(script, done)], runner, cwd)
         else:
             continue
         if reason is not None:
@@ -298,17 +337,15 @@ def judge(hook_input: dict[str, object], flags: argparse.Namespace) -> str | Non
     command = hook_io.text(hook_io.tool_input(hook_input), "command")
     agent = hook_io.agent(hook_input)
     script = parse(command)
-    for cmd, _ in walk(script):
-        args = _pytest_args(jail.literal_tokens(cmd)) if cmd.words else None
-        if args is not None and any(a.startswith("--basetemp") for a in args):
-            return jail.R_BASETEMP_AGENT.format(agent=agent)
     got = admit_role(script, role(agent, grant, runner, terraform), cwd, text=command)
+    if basetemp(script, got):
+        return jail.R_BASETEMP_AGENT.format(agent=agent)  # issue 56: before any pass.
     if isinstance(got, Refusal) and passes.pass_admits(
         project_root(cwd), agent, command, cwd, hook_input
     ):
         return None  # 233: a sealed pass for this exact call, consumed and recorded.
     if isinstance(got, Refusal):
-        return _refusal(script, got, grant, runner, (terraform, cwd))
+        return _refusal(got, grant, runner, (terraform, cwd))
     return _later((script, command), got, grant, runner, (terraform, cwd))
 
 
