@@ -217,7 +217,7 @@ def test_opening_check_ask_and_choices_run_in_order() -> None:
     order = ("Opening.", "Proposal. Check", "Plain check.", "One question.", "Choices.")
     assert [step6.index(part) for part in order] == sorted(step6.index(part) for part in order)
     head = _text().split("\n---", 1)[0]
-    assert "Holds a conversation with the operator, one question at a time" in head
+    assert "holds a conversation with the operator, one question at a time" in head
     assert "a spelled-out proposal to accept or an answer to type" in head
 
 
@@ -291,11 +291,20 @@ def test_hand_off_verifies_repository_receipts_then_resumes_the_same_planner() -
     assert step11.index("CLAIMS MODE.") < step11.index("`Mode: plan`")
 
 
-def test_skill_writes_no_file_and_names_its_stops() -> None:
+def test_skill_names_the_files_it_writes_and_its_stops() -> None:
+    # 0243: the board and the brief join the question files; the planner writes spec and plan.
     text = _text()
-    assert "writes no file but one question file per question" in text
+    assert (
+        "It writes three kinds of file in its folder: the idea board, the handoff brief, and one "
+        "question file per shaping question, which it checks for plain words." in text
+    )
+    assert "writes no file but" not in text and "Writes no file but" not in text
+    head = text.split("\n---", 1)[0]
+    assert "Writes the idea board, the handoff brief and the question files it checks." in head
     stops = flatten(text.split("\n12. ", 1)[1])
     for stop in (
+        "the operator stops while exploring, at the exit question or at the exploring cost pause",
+        "a brainstorm check exits 2 twice on the board or the brief",
         "the operator says stop",
         "misses its receipt or its nearest version twice",
         "a reply ends off contract",
@@ -338,3 +347,159 @@ def test_readme_names_the_brainstorm_skill_in_step_two() -> None:
     step2 = first.split("\n2. ", 1)[1].split("\n3. ", 1)[0]
     assert "With only an idea and no spec, type `/daedalus:brainstorm`" in step2
     assert "brainstorm/SKILL.md          # /daedalus:brainstorm" in text
+
+
+# 0243: spec 3 and 4, the exploring half that runs in this session before any planner.
+EXAMPLE_USER = (
+    "User: I want a planner agent that asks the user design questions until it has enough for a "
+    "spec."
+)
+EXAMPLE_SKILL = (
+    'Skill: The interesting part is "until it has enough": that is a gap-closing loop, and '
+    "gap-closing is what makes it feel like a form. Three framings: one, keep it but cap "
+    "questions per turn; two, flip it so the agent proposes a full draft design first and the "
+    "user corrects it; three, drop the planner-asks-user model entirely and have the agent argue "
+    "with a second agent while the user watches and intervenes. I like the second: people "
+    "correct a wrong draft far faster than they answer a blank question. What if the first thing "
+    "it ever shows you is a confident, wrong design?"
+)
+EXPLORING_HEADS = (
+    "#### Straight to shaping",
+    "#### How you think with the operator",
+    "#### The opening move",
+    "#### The board",
+    "#### Leaving exploring",
+    "#### The handoff brief",
+)
+RULES = (
+    "Reaction first.",
+    "No naked question, and at most one.",
+    "Build before critique.",
+    "Three framings at the opening",
+    "Challenge a fixed constraint when one shows up, never on a schedule.",
+    "Permission to be wrong.",
+    "Analogies from outside the operator's field are welcome",
+    "Short turns: two to five sentences.",
+    "The probe rule.",
+    "Keep the board",
+    "No spec.",
+    "Say why it is worth building.",
+)
+
+
+def _exploring() -> str:
+    return _text().split("\n### Exploring\n", 1)[1].split("\n### Dispatch\n", 1)[0]
+
+
+def test_exploring_sits_between_the_inputs_and_the_planner_dispatch() -> None:
+    text = _text()
+    assert text.index("\n### Inputs\n") < text.index("\n### Exploring\n")
+    assert text.index("\n### Exploring\n") < text.index("\n### Dispatch\n")
+    section = _exploring()
+    heads = [line for line in section.splitlines() if line.startswith("#### ")]
+    assert heads == list(EXPLORING_HEADS)
+    # the step parser reads `\n<n>. `; exploring numbers nothing, so steps 5 to 12 stay whole.
+    assert not re.search(r"\n\d+\. ", section)
+    assert "Agent(" not in section
+
+
+def test_exploring_carries_the_twelve_rules_in_order() -> None:
+    section = _exploring().split("#### How you think with the operator\n", 1)[1]
+    items = [line[2:] for line in section.split("\n#### ", 1)[0].splitlines() if line[:2] == "- "]
+    assert len(items) == len(RULES)
+    for item, rule in zip(items, RULES, strict=True):
+        assert item.startswith(rule), (rule, item)
+    flat = flatten(section)
+    assert "That turn holds no twist, no challenge and no question" in flat
+    assert "never re-asks an earlier fork" in flat
+    assert "A labelled guess needs no receipt while exploring" in flat
+
+
+def test_exploring_turns_are_prose_and_the_question_tool_waits_for_the_exit() -> None:
+    flat = flatten(_exploring())
+    assert "Every exploring turn is a plain reply in prose." in flat
+    assert (
+        "Make no question tool call while exploring except the exit question and the cost "
+        "pause below." in flat
+    )
+    assert "The goal the operator states is an input, never a contract, and it may move." in flat
+    assert '"We have explored for twenty turns. Keep going?"' in flat
+    assert flat.index("`Keep exploring (Recommended)`") < flat.index("`Stop here`")
+    assert "The pause never ends exploring by itself" in flat
+    assert "when one idea is live and no tension has stayed open for two turns" in flat
+
+
+def test_opening_move_keeps_the_worked_example_and_the_checker_reads_it() -> None:
+    import brainstorm_check
+
+    section = _exploring().split("#### The opening move\n", 1)[1].split("\n#### ", 1)[0]
+    assert f"> {EXAMPLE_USER}\n>\n> {EXAMPLE_SKILL}\n" in section
+    flat = flatten(section)
+    assert "Number them in words, one, two and three, each followed by a comma." in flat
+    assert "Start the framing that denies a premise with drop, deny or without" in flat
+    assert 'a closing "What if" question is the most the opening holds' in flat
+    log = (
+        f"### Turn 1: operator\n{EXAMPLE_USER.split(': ', 1)[1]}\n\n"
+        f"### Turn 2: session\n{EXAMPLE_SKILL.split(': ', 1)[1]}\n"
+    )
+    assert brainstorm_check.turns_problems(log) == []
+
+
+def test_straight_path_runs_the_opening_once_then_shapes() -> None:
+    flat = flatten(_exploring().split("#### Straight to shaping\n", 1)[1].split("\n#### ", 1)[0])
+    assert "When the notes file already states a design" in flat
+    assert '"just spec it"' in flat
+    assert "Run the opening move once anyway, so a wrong goal has one chance to be caught." in flat
+    assert "write no board and no brief, and go to step 5 with the notes file or the idea" in flat
+
+
+def _headings(block: str) -> tuple[str, ...]:
+    return tuple(re.findall(r"`## ([^`]+)`", block))
+
+
+def test_board_and_brief_headings_match_the_checker() -> None:
+    import brainstorm_check
+
+    section = _exploring()
+    board = section.split("#### The board\n", 1)[1].split("\n#### ", 1)[0]
+    brief = section.split("#### The handoff brief\n", 1)[1].split("Rewrite the board once", 1)[0]
+    assert "`<folder>/board.md`" in board and "rewrite the whole file with the Write tool" in board
+    assert "Show it only when the operator asks for it, or at the handoff." in board
+    assert _headings(board) == brainstorm_check.BOARD
+    assert "`<folder>/handoff.md`" in brief
+    assert _headings(brief) == brainstorm_check.HANDOFF
+    assert "`- <the idea>. Reason: <one line>`" in board
+    assert "`- <the premise> (turn <n>)`" in board
+    assert "or the word ASSUMED" in brief
+
+
+def test_handoff_runs_both_checks_then_asks_the_exit_question() -> None:
+    brief = flatten(_exploring().split("#### The handoff brief\n", 1)[1])
+    board = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/brainstorm_check.py board <folder>/board.md`"
+    handoff = (
+        "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/brainstorm_check.py handoff <folder>/handoff.md`"
+    )
+    assert brief.index(board) < brief.index("Then show the brief as written")
+    assert brief.index(handoff) < brief.index("Then show the brief as written")
+    assert "The problems are yours to fix, never the operator's" in brief
+    assert "show its problem lines to the operator as your own open fixes" in brief
+    assert '"Should the planner turn this direction into a design?"' in brief
+    order = (
+        "`Accept: <the chosen direction, cut to five words>`",
+        "`Keep exploring`",
+        "`Stop here`",
+    )
+    assert [brief.index(choice) for choice in order] == sorted(brief.index(c) for c in order)
+    assert "Accept runs step 5 with the brief as the planner's input." in brief
+
+
+def test_dispatch_names_the_brief_and_the_spec_meets_the_open_risk_gate() -> None:
+    text = _text()
+    step5, step6 = flatten(_step(text, 5)), flatten(_step(text, 6))
+    assert "`Brief file: <folder>/handoff.md` when the operator accepted a direction" in step5
+    gate = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/brainstorm_check.py risks <path>`"
+    assert step6.index(gate) < step6.index("Then print the line `Design draft: <path>`")
+    assert '`SendMessage(planner, "FIX n=<n>: <the check\'s risks: lines>")`' in step6
+    assert "The gate never runs on a SPEC that answers `WRITE SPEC`" in step6
+    assert "When the reply holds an `Answer:` paragraph" in step6
+    assert "It goes in no question file." in step6
