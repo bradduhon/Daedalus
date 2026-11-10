@@ -8,9 +8,11 @@ from lib.project_keys import (
     CONFIG_FILE,
     KEY_ROWS,
     MANIFEST_FILE,
+    OPERATOR_FILE_NAME,
     REFERENCE_HEADER,
     config_keys,
     manifest_keys,
+    operator_keys,
     reference_table,
 )
 
@@ -40,7 +42,11 @@ def _rows() -> list[tuple[str, str, list[str]]]:
 
 
 def _reader_pairs() -> set[tuple[str, str]]:
-    return {(MANIFEST_FILE, k) for k in manifest_keys()} | {(CONFIG_FILE, k) for k in config_keys()}
+    return (
+        {(MANIFEST_FILE, k) for k in manifest_keys()}
+        | {(CONFIG_FILE, k) for k in config_keys()}
+        | {(OPERATOR_FILE_NAME, k) for k in operator_keys()}
+    )
 
 
 def test_readme_key_reference_is_the_generated_table() -> None:
@@ -69,16 +75,16 @@ def test_reference_rows_name_their_file() -> None:
     rows = _rows()
     assert rows, "no key reference rows between the markers"
     for key, file, cells in rows:
-        assert file in (MANIFEST_FILE, CONFIG_FILE), key
+        assert file in (MANIFEST_FILE, CONFIG_FILE, OPERATOR_FILE_NAME), key
         # 0031, B7: what it governs, its type, values, default and an example, each in words.
         assert len(cells) == len(REFERENCE_HEADER) - 2 and all(cells), key
         assert not _VERSION.search(" ".join(cells)), key
 
 
 def test_agent_models_row_closes_the_config_section() -> None:
-    # 0110, spec 4: agent_models is the last config row; 0133 retired audit_round_budget.
+    # 0110, spec 4: agent_models closes the config rows but the 0235 operator override.
     keys = [key for key, file, _ in _rows() if file == CONFIG_FILE]
-    assert keys[-1] == "agent_models" and "audit_round_budget" not in keys
+    assert keys[-2:] == ["agent_models", "operator"] and "audit_round_budget" not in keys
     models = KEY_ROWS[(CONFIG_FILE, "agent_models")]
     assert models.kind == "object" and models.default.startswith("`{}`")
     assert '`"sonnet"`, `"opus"`, `"haiku"` or `"fable"`' in models.values

@@ -92,7 +92,8 @@ def test_setup_starter_files_carry_every_reader_key_at_its_default(repo_cwd: Pat
     wanted = [k for k in wanted if k.removeprefix("features.") not in SETUP_OMITS]
     assert [k for k in wanted if not _present(m_doc, k)] == [] and "priorities" not in m_doc
     assert "frameworks" not in m_doc
-    assert [k for k in config_keys() if not _present(c_doc, k)] == []
+    # 0235: the operator override is opt-in; the starter never writes it.
+    assert [k for k in config_keys() if k != "operator" and not _present(c_doc, k)] == []
     # 0072, 0076: the readers accept both files, and the config reads as the defaults.
     assert load_config(path=config) == Config()
     loaded = load_manifest(repo_cwd)

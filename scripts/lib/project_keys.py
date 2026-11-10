@@ -47,9 +47,12 @@ from lib.manifest import (
     Features,
     Manifest,
 )
+from lib.operator_file import MAIN_REFUSAL_CLASSES, OPERATOR_FILE, PROFILE_KEYS
 
 MANIFEST_FILE = MANIFEST_NAME
 CONFIG_FILE = ".claude/daedalus/config.json"
+# 0235: the user-scope operator file, shown as written in a shell.
+OPERATOR_FILE_NAME = "~/" + OPERATOR_FILE.as_posix()
 # 0054, 0073, B2, 0192: the JSON object each flat Manifest field is read from.
 _MANIFEST_PARENT = {key: "jail_narrowing" for key in NARROWING_KEYS} | {
     key: "stack" for key in STACK_KEYS
@@ -139,7 +142,17 @@ def starter_manifest() -> dict[str, object]:
 def starter_config() -> dict[str, object]:
     # 0072, 0076: every top-level key at the reader default; null means not declared.
     base = Config()
-    return {item.name: _json(getattr(base, item.name)) for item in fields(Config)}
+    # 0235: the operator override is opt-in and never written by setup.
+    return {
+        item.name: _json(getattr(base, item.name))
+        for item in fields(Config)
+        if item.name != "operator"
+    }
+
+
+def operator_keys() -> tuple[str, ...]:
+    # 0235: the operator file's keys as JSON paths, from operator_file's own tables.
+    return ("main_refusals", *(f"profile.{key}" for key in PROFILE_KEYS))
 
 
 def config_keys() -> tuple[str, ...]:
@@ -693,6 +706,43 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "started on it",
         "`true`",
     ),
+    (CONFIG_FILE, "operator"): KeyRow(
+        "A project's own values for the operator file's keys; a key set here replaces the "
+        "operator file's value for this project, and a key left out inherits it. Nothing acts on "
+        "the operator values yet",
+        "object",
+        "The same keys as the operator file: `main_refusals` and `profile`, checked the same way; "
+        "any other key is refused",
+        "Absent: the operator file's values stand",
+        '`{"profile": {"literacy": "plain"}}`',
+    ),
+    (OPERATOR_FILE_NAME, "main_refusals"): KeyRow(
+        "The warning classes your own session turns into refusals for itself. The file only "
+        "lists them; nothing acts on the list yet",
+        "list of strings",
+        "Each of "
+        + ", ".join(f"`{name}`" for name in MAIN_REFUSAL_CLASSES)
+        + " at most once; any other name is refused",
+        "`[]`: your session is warned and never refused",
+        '`["commit_on_main", "credential_read"]`',
+    ),
+    (OPERATOR_FILE_NAME, "profile.literacy"): KeyRow(
+        "How plainly Daedalus writes for you, for every project that does not set "
+        "`docs.literacy` itself. Nothing acts on it yet",
+        "string",
+        ", ".join(f"`{example}`" for example in LITERACY_EXAMPLES[:-1])
+        + f" or `{LITERACY_EXAMPLES[-1]}`, a project-relative path to the profile file without "
+        "a leading slash, `..` or glob characters; `null` is refused",
+        "Absent: no operator level is set",
+        f"`{LITERACY_EXAMPLES[0]}`",
+    ),
+    (OPERATOR_FILE_NAME, "profile.dash_ban"): KeyRow(
+        "Whether Daedalus text for you avoids long dashes. Nothing acts on it yet",
+        "boolean",
+        "`true` or `false`; any other value is refused",
+        "Absent: no operator choice is set",
+        "`true`",
+    ),
 }
 REFERENCE_HEADER = (
     "Key",
@@ -707,7 +757,8 @@ REFERENCE_HEADER = (
 
 def reference_keys() -> tuple[tuple[str, str], ...]:
     manifest = tuple((MANIFEST_FILE, key) for key in manifest_keys())
-    return manifest + tuple((CONFIG_FILE, key) for key in config_keys())
+    operator = tuple((OPERATOR_FILE_NAME, key) for key in operator_keys())
+    return manifest + tuple((CONFIG_FILE, key) for key in config_keys()) + operator
 
 
 def reference_table() -> str:
