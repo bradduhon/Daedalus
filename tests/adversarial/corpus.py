@@ -1576,6 +1576,14 @@ MOVED_RELATIVE_269 = (
 )
 # 266: a path in the count slot is git's count, which git rejects; it is never a pathspec.
 GIT_LOG_COUNT_VALUE_266 = ("git log -n {path}", "git log --max-count {path}")
+# 269: git log's search options in the split form; the next word is their value, as text.
+GIT_LOG_SEARCH_269 = (
+    "git log -S token -- {path}",
+    "git log -G token -- {path}",
+    "git log --grep token -- {path}",
+)
+# 269: a path in the search value slot is the search text; it is never a pathspec.
+GIT_LOG_SEARCH_VALUE_269 = ("git log -S {path}", "git log -G {path}", "git log --grep {path}")
 # 266 hunt: (class, form, main, coder) for the data folder check on each role's typed record;
 # None means the check names nothing: the role refuses the form, or it writes no data folder.
 DATA_FOLDER_HUNT_266 = (

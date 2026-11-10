@@ -26,6 +26,8 @@ from tests.adversarial.corpus import (
     CLAIMS_REFUSED,
     GIT_LOG_COUNT_266,
     GIT_LOG_COUNT_VALUE_266,
+    GIT_LOG_SEARCH_269,
+    GIT_LOG_SEARCH_VALUE_269,
     S3C_HUNT,
     S3C_HUNT_DECLARED,
     TRACKED_EXCLUDE_267,
@@ -199,6 +201,27 @@ def test_a_word_in_the_git_log_count_slot_is_never_a_pathspec(agent: str, form: 
     # 266: git reads that word as the count and rejects a path; the typed record agrees.
     texts, specs = _log_record(agent, form.format(path=".env"))
     assert ".env" in texts and specs == [], (form, texts, specs)
+
+
+@pytest.mark.parametrize("agent", ["main", "coder", "auditor"])
+@pytest.mark.parametrize("form", GIT_LOG_SEARCH_269)
+def test_a_git_log_search_value_is_text_and_the_path_after_it_a_pathspec(
+    agent: str, form: str
+) -> None:
+    # 269: -S, -G and --grep take the next word as their value; only the -- word is a pathspec.
+    texts, specs = _log_record(agent, form.format(path="src/a.py"))
+    assert "token" in texts and specs == ["src/a.py"], (form, texts, specs)
+    assert_denied(_b("coder", form.format(path=".env")), "is a .env file")
+
+
+@pytest.mark.parametrize("agent", ["main", "coder", "auditor"])
+@pytest.mark.parametrize("form", GIT_LOG_SEARCH_VALUE_269)
+def test_a_word_in_the_git_log_search_slot_is_never_a_pathspec(agent: str, form: str) -> None:
+    # 269: git searches for that word; the typed record and the tracked check's table agree.
+    texts, specs = _log_record(agent, form.format(path=".env"))
+    assert ".env" in texts and specs == [], (form, texts, specs)
+    flag = form.split()[2]
+    assert flag in jail._GIT_VALUED["log"], flag
 
 
 # 267: the readers whose git grammar admits content reads; each meets the credential check first.

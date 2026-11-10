@@ -54,8 +54,6 @@ _PROGRAM_STOPS: dict[str, frozenset[str]] = {"python": frozenset({"-m", "-c"})}
 # 228 S2: the push shape the conductor push check reads (jail._conductor_push_reason).
 _PUSH_OPTIONS = frozenset({"-u", "--set-upstream"})
 _ICASE_GLOBALS = frozenset({"--icase-pathspecs", "--glob-pathspecs"})
-# 266: git log's count options; the next word is their value, never a pathspec.
-_LOG_VALUED = frozenset({"-n", "--max-count"})
 # 228 S2: scheduling wrappers an agent may put inside the kernel wrapper, never bare (8.5 A).
 _CONFINED_WRAPPERS = frozenset({"timeout", "nice", "nohup", "stdbuf", "ionice", "taskset", "chrt"})
 _REFUSED_GIT_GLOBALS = frozenset({"-c", "--config-env", "--exec-path="})
@@ -1315,7 +1313,8 @@ class _Judge:
                 name, eq, attached = tok.partition("=")
                 if sub == "commit" and name in valued and not eq:
                     skip, prev = True, name
-                elif sub == "log" and name in _LOG_VALUED and not eq:
+                elif sub == "log" and name in jail._GIT_VALUED["log"] and not eq:
+                    # 266, 269: the grammar's and the tracked check's table; a value, never a path.
                     skip, prev = True, name
                 elif sub == "log" and tok[:2] == "-n" and len(tok) > 2:
                     c.add("text", Typed(tok[2:], word.span))  # 266: the joined -n<count>.
