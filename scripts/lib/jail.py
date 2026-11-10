@@ -7,6 +7,7 @@ import glob as _glob
 import itertools
 import os
 import re
+import shlex
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -2003,9 +2004,15 @@ class _Spec(NamedTuple):
     span: tuple[int, int] = (0, 0)
     blob: bool = False
     literal: bool = False
+    # 267: an exclude pathspec, and whether it is literal enough to rescue a tracked secret.
+    exclude: bool = False
+    rescue: bool = False
 
 
 _SPEC_SHORT = {"/": "top", "!": "exclude", "^": "exclude"}
+# 267: an exclude rescues only as a typed literal path, exclude and top magic at most.
+_RESCUE_MAGIC = frozenset({"exclude", "top"})
+_SPEC_WILD = frozenset("*?[\\")
 _SPEC_NOWILD = frozenset({"--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs"})
 _SPEC_LITERAL = frozenset({"--literal-pathspecs", "--noglob-pathspecs"})
 _REV_PATH_SUBS = frozenset({"show", "cat-file"})
@@ -2047,16 +2054,22 @@ def _git_specs(
             out.append(_Spec(None, typed.text, False, False, top, typed.span))
             continue
         magic, rest = _pathspec_magic(text)
-        if "exclude" in magic:
-            continue
         base = top if "top" in magic else folder
         wild = not (magic & {"literal", "glob"} or toks & _SPEC_NOWILD)
         fold = "icase" in magic or "--icase-pathspecs" in toks
         literal = "literal" in magic or bool(toks & _SPEC_LITERAL)
         path = os.path.normpath(_abs(rest, base))
-        out.append(_Spec(path, typed.text, fold, wild, top, typed.span, False, literal))
+        exclude = "exclude" in magic
+        # 267: --literal-pathspecs turns magic off, so the word is no exclude to git.
+        rescue = exclude and magic <= _RESCUE_MAGIC and not fold and not typed.glob
+        rescue = rescue and bool(rest) and not set(rest) & _SPEC_WILD
+        rescue = rescue and "--literal-pathspecs" not in toks
+        spec = _Spec(path, typed.text, fold, wild, top, typed.span, False, literal)
+        out.append(spec._replace(exclude=exclude, rescue=rescue))
     if (done.subcommand.text if done.subcommand else "") in _REV_PATH_SUBS:
         for typed in (*done.texts, *done.pathspecs):
+            if "exclude" in _pathspec_magic(typed.text)[0]:
+                continue  # 267: :(exclude)x and :!x leave a path out; neither names a blob.
             rev, colon, path = typed.text.partition(":")
             path = path[2:] if not rev and path[1:2] == ":" and path[:1] in "0123" else path
             if colon and path and not typed.text.startswith("-"):
@@ -2122,10 +2135,11 @@ class _GitRead(NamedTuple):
 
 # 267: options that make a read print file content or test it (pickaxe); log reads only by these.
 _PATCH_OPTS = frozenset(
-    {"-p", "--patch", "--stat", "--word-diff", "--check", "--pickaxe-regex", "--pickaxe-all"}
+    {"-p", "--patch", "--word-diff", "--check", "--pickaxe-regex", "--pickaxe-all"}
 )
 _PATCH_PREFIXES = ("-U", "-S", "-G")
-_NAMES_OPTS = frozenset({"--name-only", "--name-status"})
+# 267: names and line counts only; diff and show print no content with one and no patch option.
+_NAMES_OPTS = frozenset({"--name-only", "--name-status", "--stat", "--shortstat", "--numstat"})
 # 267: ls-files from the whole checkout; globals forwarded to it, any other global is dropped.
 _LS_FILES = ("ls-files", "-z", "-s", "--", ":/")
 _LS_GLOBALS = frozenset({"--git-dir", "--work-tree"})
@@ -2146,7 +2160,8 @@ def _git_tree_read(done: AdmittedCommand) -> tuple[bool, bool]:
     if sub == "log":
         return patch, False
     if sub == "stash":
-        return [t.text for t in done.texts[:1]] == ["show"], False
+        # 267: stash show prints a stat unless a patch option asks for content.
+        return patch and [t.text for t in done.texts[:1]] == ["show"], False
     if sub in ("diff", "show"):
         names = opts & (_NAMES_OPTS | ({"-s"} if sub == "show" else set()))
         return patch or not names, sub == "show"
@@ -2155,8 +2170,9 @@ def _git_tree_read(done: AdmittedCommand) -> tuple[bool, bool]:
 
 def _operand_slots(
     script: Script, done: AdmittedCommand
-) -> tuple[set[tuple[int, int]], set[tuple[int, int]]]:
-    # 267: the operand words that are an option's value or grep's pattern, and those after --.
+) -> tuple[set[tuple[int, int]], set[tuple[int, int]], bool]:
+    # 267: the operand words that are an option's value or grep's pattern, those after --, and
+    # whether a -- splits revisions from paths.
     sub = done.subcommand
     words = admitted_words(script, done)
     at = next((i for i, w in enumerate(words) if sub is not None and w.span == sub.span), None)
@@ -2183,15 +2199,16 @@ def _operand_slots(
         elif pattern:
             values.add(word.span)
             pattern = False
-    return values, after
+    return values, after, dashed
 
 
-def _path_operand(spec: _Spec, after: set[tuple[int, int]]) -> bool:
+def _path_operand(spec: _Spec, after: set[tuple[int, int]], dashed: bool) -> bool:
     # 267: after -- a word is a path; before it, a word on disk, or a wildcard no revision holds.
     assert spec.path is not None
     if spec.span in after:
         return True
-    if spec.raw.startswith(":"):
+    # 267: with a -- every word before it is a revision, a file of that name or not.
+    if dashed or spec.raw.startswith(":"):
         return False
     if os.path.lexists(spec.path):
         return True
@@ -2289,29 +2306,60 @@ def _tracked_reason(
             return R_TRACKED_UNKNOWN.format(path=read.folder)
         if not secrets:
             continue
-        values, after = _operand_slots(script, read.done)
+        values, after, dashed = _operand_slots(script, read.done)
         blob_spans = {s.span for s in blobs}
         paths: list[_Spec] = []
         revs = False
         for spec in read.specs:
-            if spec.blob or spec.span in values or spec.span in blob_spans:
+            if spec.blob or spec.exclude or spec.span in values or spec.span in blob_spans:
                 continue
-            if _path_operand(spec, after):
+            if _path_operand(spec, after, dashed):
                 paths.append(spec)
             else:
                 revs = True
         sub = read.done.subcommand.text if read.done.subcommand else ""
+        # 267: a <rev>:<path> blob of a secret prints it whatever the excludes say.
+        for spec in blobs:
+            secret = _spec_covers(spec, secrets)
+            if secret is not None:
+                return _tracked_text(secret, read.top, None)
         if sub == "grep" and not paths:
             # 267: git grep with no path searches the folder it runs in, not the whole checkout.
             paths = [_Spec(read.folder, ".", False, False, read.top, literal=True)]
         whole = tree and not paths and (sub != "show" or revs or not blobs)
-        if whole:
-            return R_TRACKED_SECRET.format(path=secrets[0])
-        for spec in [*(paths if tree else []), *blobs]:
-            secret = _spec_covers(spec, secrets)
-            if secret is not None:
-                return R_TRACKED_SECRET.format(path=secret)
+        reached = [s for s in secrets if whole or any(_spec_covers(p, [s]) for p in paths)]
+        reached = reached if tree else []
+        excludes = [os.path.realpath(s.path or "") for s in read.specs if s.rescue]
+        left = [s for s in reached if not any(_contains_path(e, s) for e in excludes)]
+        if left:
+            return _tracked_text(left[0], read.top, sub)
     return None
+
+
+# 267: the Next of R_TRACKED_SECRET; the exclude words where the agent grammar admits them.
+_TRACKED_NEXT_EXCLUDE = (
+    "add {word} after -- (add the -- first if the command has none) to leave the file out, or "
+    "ask the operator to untrack it"
+)
+_TRACKED_NEXT_PATHS = (
+    "name the paths you need after --, leaving out the file and any folder that holds it, or ask "
+    "the operator to untrack it"
+)
+
+
+def _contains_path(folder: str, path: str) -> bool:
+    return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
+
+
+def _tracked_text(secret: str, top: str, sub: str | None) -> str:
+    # 267: the exclude names the secret from the checkout top, the one top form 0225 admits.
+    from lib.admit import _EXCLUDE_SUBS  # 228 S3: admit imports this module.
+
+    if sub not in _EXCLUDE_SUBS:
+        return R_TRACKED_SECRET.format(path=secret, next=_TRACKED_NEXT_PATHS)
+    rel = os.path.relpath(secret, os.path.realpath(top))
+    word = shlex.quote(f":!/{rel}")
+    return R_TRACKED_SECRET.format(path=secret, next=_TRACKED_NEXT_EXCLUDE.format(word=word))
 
 
 def _typed_view(
@@ -2395,7 +2443,8 @@ def _bash_credential_reason(
         return None
 
     # 0192: the .env files beside every folder the command starts in or moves to.
-    env_files = tuple(env_roots(*dict.fromkeys([cwd, *bases, *(s.top for s in specs)])))
+    tops = [s.top for s in specs if not s.exclude]
+    env_files = tuple(env_roots(*dict.fromkeys([cwd, *bases, *tops])))
     # spec 8: spelled-out paths first, so the message names the path the command wrote.
     for cand in absolute:
         reason = hit(os.path.normpath(cand))
@@ -2410,6 +2459,8 @@ def _bash_credential_reason(
                 return reason
     # 228 tail: a git pathspec or <rev>:<path> names its store as a file operand does.
     for spec in specs:
+        if spec.exclude:
+            continue  # 267: an exclude names what git leaves out; only the tracked check reads it.
         if spec.path is None:
             return R_CREDENTIAL_PARAM.format(path=spec.raw)
         reason = hit(spec.path)

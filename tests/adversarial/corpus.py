@@ -1766,7 +1766,6 @@ S4_HUNT = (
 # cfg/.env, admitted where it tracks none or only .env.example files.
 TRACKED_JUDGED_267 = (
     "git log -p",
-    "git log --stat",
     "git log -S KEY",
     "git log -GKEY",
     "git log -p HEAD",
@@ -1781,9 +1780,7 @@ TRACKED_JUDGED_267 = (
     "git diff",
     "git diff HEAD",
     "git diff --cached",
-    "git diff --stat",
     "git blame -- cfg",
-    "git stash show",
     "git stash show -p",
     "git log -p -- cfg",
     "git grep KEY -- cfg",
@@ -1838,16 +1835,69 @@ TRACKED_HUNT_267 = (
     ("wildcard in a revision", "secret", "git log -p 'HEAD^{/[i]}'", "tracked"),
     ("stash show -p", "secret", "git stash show -p", "tracked"),
     ("cat-file a blob", "secret", "git cat-file -p HEAD:.env", "grammar"),
+    ("blob diff", "secret", "git diff HEAD:.env HEAD:src/a.py", "tracked"),
+)
+# 267 fix 1: (class, checkout, form, agents, main). "single" tracks cfg/.env alone and a file
+# named main. kept: admitted by the grammar and the tracked check; tracked: refused by that
+# check; grammar: refused by the role's grammar; named: an older credential check names it.
+TRACKED_EXCLUDE_267 = (
+    ("diff rescued", "single", "git diff -- ':(exclude)cfg/.env'", "kept", "kept"),
+    ("diff of a revision rescued", "single", "git diff HEAD -- ':!cfg/.env'", "kept", "kept"),
+    ("show rescued", "single", "git show HEAD -- ':(exclude)cfg/.env'", "kept", "kept"),
+    ("log -p rescued", "single", "git log -p -- ':(exclude)cfg/.env'", "kept", "kept"),
+    ("grep rescued", "single", "git grep KEY -- ':(exclude)cfg/.env'", "grammar", "kept"),
+    ("top form rescued", "single", "git log -p -- ':!/cfg/.env'", "kept", "kept"),
+    ("folder exclude", "single", "git log -p -- ':(exclude)cfg'", "kept", "kept"),
+    ("wildcard exclude", "single", "git log -p -- ':(exclude)cfg/*'", "tracked", "tracked"),
+    ("icase exclude", "single", "git log -p -- ':(exclude,icase)cfg/.env'", "grammar", "tracked"),
+    ("exclude the shell builds", "single", 'git log -p -- ":(exclude)$F"', "grammar", "named"),
+    ("folder and its exclude", "single", "git log -p -- cfg ':(exclude)cfg/.env'", "kept", "kept"),
     (
-        "exclude pathspec",
-        "secret",
-        "git log -p -- ':(exclude).env' ':(exclude)cfg/.env'",
+        "other file excluded",
+        "single",
+        "git log -p -- ':(exclude)cfg/app.txt'",
+        "tracked",
         "tracked",
     ),
-    ("blob diff", "secret", "git diff HEAD:.env HEAD:src/a.py", "tracked"),
+    ("blob, excluded", "single", "git show HEAD:cfg -- ':(exclude)cfg/.env'", "tracked", "tracked"),
+    ("revision before --, file of that name", "single", "git log -p main --", "tracked", "tracked"),
+    (
+        "literal pathspecs turn excludes off",
+        "single",
+        "git --literal-pathspecs log -p -- ':(exclude)cfg/.env'",
+        "grammar",
+        "tracked",
+    ),
+    ("two secrets, one excluded", "secret", "git log -p -- ':(exclude).env'", "tracked", "tracked"),
+    (
+        "two secrets, both excluded",
+        "secret",
+        "git log -p -- ':(exclude).env' ':(exclude)cfg/.env'",
+        "kept",
+        "kept",
+    ),
+    (
+        "blob of the secret, excluded",
+        "secret",
+        "git show HEAD:.env -- ':(exclude).env'",
+        "named",
+        "named",
+    ),
+)
+# 267 fix 2: (form, outcome) beside tracked secrets; a stat prints names and counts only.
+TRACKED_STAT_267 = (
+    ("git diff --stat", "kept"),
+    ("git show --stat", "kept"),
+    ("git show --stat HEAD", "kept"),
+    ("git log --stat", "kept"),
+    ("git stash show", "kept"),
+    ("git log --stat -p", "tracked"),
+    ("git diff --stat -U3", "tracked"),
+    ("git diff --stat -p", "grammar"),
 )
 TRACKED_SECRET_267 = "this repository tracks"
 TRACKED_UNKNOWN_267 = "could not list"
+TRACKED_NEXT_267 = "Next: add "
 
 
 def _commit(repo: Path, files: dict[str, str], message: str = "c") -> None:
@@ -1870,6 +1920,7 @@ def tracked_checkouts(root: Path) -> dict[str, Path]:
     src = {"src/a.py": "x\n", "cfg/app.txt": "a\n"}
     out = {
         "secret": _init(root / "secret", {**src, ".env": "KEY=1\n", "cfg/.env": "KEY=2\n"}),
+        "single": _init(root / "single", {**src, "cfg/.env": "KEY=2\n", "main": "m\n"}),
         "none": _init(root / "none", src),
         "example": _init(
             root / "example", {**src, ".env.example": "KEY=\n", "cfg/.env.example": "KEY=\n"}

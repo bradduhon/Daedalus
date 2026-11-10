@@ -59,10 +59,11 @@ R_ENV_FILE_TREE = (
     "the files you need"
 )
 # 267, 0239: a git read with no pathspec, or one that holds the file, prints a tracked secret.
+# 267: {next} is the exclude to add where the agent's grammar admits one, else the paths to name.
 R_TRACKED_SECRET = (
     "{path} is a .env or credential file this repository tracks, and this git read prints it: "
-    "it names no path, or a path that holds or matches the file (0239). Next: name the paths you "
-    "need after --, or ask the operator to untrack {path}"
+    "it names no path, or a path that holds or matches the file, and no exclude leaves it out "
+    "(0239). Next: {next}"
 )
 R_TRACKED_UNKNOWN = (
     "{path} is in a git checkout whose tracked files the jail could not list, so it cannot rule "

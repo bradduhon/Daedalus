@@ -307,6 +307,84 @@ def test_a_tracked_secret_hunt_form_meets_its_outcome(
     assert d.warn == (outcome not in ("kept", "gap")), (klass, d.reason)
 
 
+EXCLUDE_ROLES = ("coder", "auditor", "verifier")
+
+
+def _outcome(command: str, agent: str, repo: Path) -> tuple[str, str | None]:
+    # 267: the role's grammar first, then the credential check on that role's admission.
+    got = jail._admission(command, agent, str(repo))[1]
+    if isinstance(got, Refusal):
+        return "grammar", None
+    reason = jail._credential_reason("Bash", {"command": command}, str(repo), got)
+    if reason is None:
+        return "kept", None
+    if C.TRACKED_SECRET_267 in reason:
+        return "tracked", reason
+    return ("unknown" if C.TRACKED_UNKNOWN_267 in reason else "named"), reason
+
+
+@pytest.mark.parametrize(("klass", "checkout", "command", "agents", "main"), C.TRACKED_EXCLUDE_267)
+def test_a_literal_exclude_rescues_a_tracked_secret_and_nothing_else_does(
+    tracked: dict[str, Path], klass: str, checkout: str, command: str, agents: str, main: str
+) -> None:
+    # 267 fix 1: every reached secret must sit under a literal exclude; a blob never is.
+    repo = tracked[checkout]
+    for agent in EXCLUDE_ROLES:
+        assert _outcome(command, agent, repo)[0] == agents, (klass, agent)
+    assert _outcome(command, "main", repo)[0] == main, klass
+    d = jail.decide(_spec_payload(command, repo, None), CFG)
+    assert d.warn == (main != "kept"), (klass, d.reason)
+
+
+def test_two_tracked_secrets_with_one_excluded_name_the_other(tracked: dict[str, Path]) -> None:
+    repo = tracked["secret"]
+    reason = _outcome("git log -p -- ':(exclude).env'", "coder", repo)[1]
+    assert reason is not None and reason.startswith(f"{repo / 'cfg' / '.env'} is a "), reason
+    assert f"{C.TRACKED_NEXT_267}':!/cfg/.env' after --" in reason, reason
+
+
+@pytest.mark.parametrize(("command", "outcome"), C.TRACKED_STAT_267)
+def test_a_stat_is_names_and_counts_and_a_patch_beside_it_is_content(
+    tracked: dict[str, Path], command: str, outcome: str
+) -> None:
+    # 267 fix 2: --stat with no patch option prints no content; with -p or -U it does.
+    repo = tracked["secret"]
+    assert _outcome(command, "main", repo)[0] == outcome, command
+    for agent in EXCLUDE_ROLES:
+        got = _outcome(command, agent, repo)[0]
+        assert got in (outcome, "grammar"), (agent, command, got)
+
+
+def _with_word(command: str, reason: str) -> str:
+    word = reason.split(C.TRACKED_NEXT_267, 1)[1].split(" after --", 1)[0]
+    return f"{command} {word}" if "--" in command.split() else f"{command} -- {word}"
+
+
+@pytest.mark.parametrize("command", C.TRACKED_JUDGED_267)
+def test_the_suggested_exclude_words_are_admitted_and_pass_the_check(
+    tracked: dict[str, Path], command: str
+) -> None:
+    # 267 fix 1: each Next names the words to add; appended, every reader admits the command.
+    repo = tracked["secret"]
+    for agent in EXCLUDE_ROLES:
+        fixed, (outcome, reason) = command, _outcome(command, agent, repo)
+        if outcome == "grammar":
+            continue
+        assert outcome == "tracked" and reason is not None, (agent, command, outcome)
+        if C.TRACKED_NEXT_267 not in reason:
+            # 267: grep, blame, stash show and a blob take no exclude; the Next names paths.
+            sub = command.split()[1]
+            assert sub in ("grep", "blame", "stash") or ":" in command, (agent, command)
+            continue
+        for _ in range(3):
+            fixed = _with_word(fixed, reason)
+            outcome, reason = _outcome(fixed, agent, repo)
+            if outcome != "tracked":
+                break
+            assert reason is not None
+        assert outcome == "kept", (agent, fixed, outcome, reason)
+
+
 def _counting(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     calls: list[str] = []
     real = jail.tracked_secrets
