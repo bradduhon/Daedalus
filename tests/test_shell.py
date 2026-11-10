@@ -95,7 +95,14 @@ RETIRED = (
     "_DATA_DIR_WRITE _CD_TARGET _GIT_INDEX_WRITE _DAEDALUS_WORD _DEVNULL _normalize_paths "
     "_cd_into_claude _cd_data_dir_git _data_dir_write _data_dir_markers _shell_words "
     "_shell_scan ScanSegment _command_at _path_positions _PATH_OPTION _opaque_words "
-    "_search_paths _PATH_CMDS _CONTROL_WORDS _OPAQUE env_split_values _env_split _unsingled"
+    "_search_paths _PATH_CMDS _CONTROL_WORDS _OPAQUE env_split_values _env_split _unsingled "
+    # 269: the refused-token readers, the docs read text reader, the moved agent's word walkers
+    # and the credential module's dead marks. clean, _MODE and _basetemp are names other
+    # modules define for their own use, so the grep cannot list them.
+    "refused_command refused_word literal_tokens _parse_base docs_read_ok _docs_read_split "
+    "_unquoted_expansion _home_word _cd_relative_target _write_operands _in_place _short_taker "
+    "_VALUE_OPTS _PATH_OPTS _VALUE_LONG _INTERPRETER _option_values quoted_dollar LIT CUT "
+    "REDIRECT _LOG_VALUED"
 ).split()
 # 228 tail: names another module defines for its own use, so the grep above cannot list them;
 # the import test below proves no module reaches the retired lib.shell ones.
@@ -135,6 +142,10 @@ RE_SUBJECTS: dict[str, dict[str, str]] = {
     },
     "checks/command_allowlist.py": {},
     "checks/workspace_integrity.py": {},
+    # 269: the refused-token readers this unit switched onto the Refusal's typed fields.
+    "checks/confine.py": {},
+    "checks/unit_writes.py": {},
+    "checks/shell_tripwires.py": {},
 }
 
 
