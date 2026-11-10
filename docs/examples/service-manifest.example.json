@@ -1,0 +1,72 @@
+{
+  "jail_narrowing": {
+    "forbidden_paths": ["infra/", "scripts/release.sh"],
+    "forbidden_extensions": [".pem", ".tfstate"]
+  },
+  "features": {
+    "scope": "repository",
+    "secrets_scan": true,
+    "scrub_file": "docs/scrub-terms.txt",
+    "ledger": true,
+    "dependency_web_lookup": true,
+    "terraform_tools": true,
+    "terraform_validate": false
+  },
+  "trains_dir": "trains",
+  "stack": {
+    "unit_test_cmd": ["python3 -m pytest -q", "pnpm vitest run"],
+    "typecheck_cmd": "python3 -m mypy src",
+    "lint_cmd": "python3 -m ruff check .",
+    "package_manager": "pnpm"
+  },
+  "docs": {
+    "literacy": "plain"
+  },
+  "priorities": {
+    "drivers": ["security", "trust", "ops", "cost"],
+    "rules": [
+      {
+        "when": {"conflict": ["security", "cost"], "reason": ["certification"]},
+        "then": "surface",
+        "note": "a control a certification asks for wins over its running cost"
+      }
+    ],
+    "principles": [
+      {
+        "id": "P1",
+        "driver": "security",
+        "text": "Each tenant keeps its own key.",
+        "source": "docs/design.md"
+      }
+    ],
+    "agents": {
+      "coder": {"drivers": ["security", "ops", "trust", "cost"]}
+    }
+  },
+  "frameworks": {
+    "pack_dir": "compliance/packs",
+    "default_packs": true,
+    "packs": ["cost-tier"]
+  },
+  "assets": {
+    "roots": ["assets/"],
+    "extensions": [".glb", ".png"],
+    "max_bytes": 1048576
+  },
+  "dev_server": {
+    "url": "http://localhost:5173",
+    "check": "the home page loads and the sign-in form shows"
+  },
+  "dependencies": {
+    "installs": ["npm", "python"],
+    "minimum_release_age_days": 7,
+    "minimum_release_age_reason": null
+  },
+  "ledger": {
+    "path": "docs/decisions.md",
+    "format": "markdown-table-row",
+    "id_scheme": "{seq:04d}-{repo}-{type}",
+    "sequence_source": "last-row-id",
+    "branch": "main"
+  }
+}

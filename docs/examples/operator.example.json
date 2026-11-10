@@ -1,0 +1,7 @@
+{
+  "main_refusals": ["commit_on_main", "credential_read"],
+  "profile": {
+    "literacy": "plain",
+    "dash_ban": true
+  }
+}

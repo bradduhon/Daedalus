@@ -417,3 +417,62 @@ def test_day_one_keys_are_group_keys_with_readers() -> None:
         "features.terraform_tools",
         "docs.literacy",
     ]
+
+
+EXAMPLES = REPO_ROOT / "docs" / "examples"
+EXAMPLE_NAMES = {
+    "manifest": "service-manifest.example.json",
+    "config": "config.example.json",
+    "operator": "operator.example.json",
+}
+
+
+def _example(form: str) -> object:
+    return json.loads((EXAMPLES / EXAMPLE_NAMES[form]).read_text(encoding="utf-8"))
+
+
+def _holds(doc: object, key: str) -> bool:
+    # 0242: a [] segment looks in any list entry and a <name> segment in any named entry.
+    head, _, rest = key.partition(".")
+    if head.startswith("<"):
+        return isinstance(doc, dict) and any(_holds(v, rest) for v in doc.values())
+    name = head.removesuffix("[]")
+    if not isinstance(doc, dict) or name not in doc:
+        return False
+    child = doc[name]
+    if head.endswith("[]"):
+        return isinstance(child, list) and any(_holds(item, rest) for item in child)
+    return not rest or _holds(child, rest)
+
+
+def test_each_example_loads_through_its_own_reader(tmp_path: Path) -> None:
+    from lib.config import Config, load_config
+    from lib.ledger import resolve_ledger
+    from lib.manifest import load as load_manifest
+    from lib.operator_file import validate
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "service-manifest.json").write_bytes(
+        (EXAMPLES / EXAMPLE_NAMES["manifest"]).read_bytes()
+    )
+    loaded = load_manifest(repo)
+    assert loaded is not None and loaded.docs.literacy == "plain"
+    found = resolve_ledger(str(repo), Config())
+    assert found is not None and found.origin == "manifest"
+    config = load_config(path=EXAMPLES / EXAMPLE_NAMES["config"])
+    assert config.max_concurrent_builders == 3 and config.policy is not None
+    assert validate(_example("operator"), "operator.example.json")["dash_ban"] is True
+
+
+def test_each_example_sets_every_key_of_its_file() -> None:
+    for info in SETTINGS_FILES:
+        doc = _example(info.form)
+        missing = [k for f, k in KEY_ROWS if f == info.name and not _holds(doc, k)]
+        assert missing == [], info.form
+
+
+def test_examples_name_no_home_or_machine_path() -> None:
+    for name in EXAMPLE_NAMES.values():
+        text = (EXAMPLES / name).read_text(encoding="utf-8")
+        assert "/home/" not in text and "/Users/" not in text and "C:" not in text, name
