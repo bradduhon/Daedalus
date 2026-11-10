@@ -353,7 +353,7 @@ The operator file is a third file in the table. It lives at `~/.claude/daedalus/
 
 Outside a train, Daedalus leaves your session and your repository alone, with two exceptions. Daedalus's own agents keep their own checks. A read or search of a credential file meets one check, which warns your session in its context and refuses an agent.
 
-Outside a train, Daedalus writes no files and keeps no audit log in any repository, even one where a train ran before. The one exception is `/daedalus:setup`. It writes the settings files you agree to and changes the settings you answer.
+Outside a train, Daedalus writes no files and keeps no audit log in any repository, even one where a train ran before. The one exception is `/daedalus:setup`. It writes the settings files you agree to and changes the settings you answer. At the plain reading level it also saves each question under `docs/.tmp/daedalus/` to check its wording.
 
 Inside a train, the jail judges every tool call and the audit log records each step. A train works in three folders of your repository:
 

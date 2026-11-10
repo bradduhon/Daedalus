@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -485,6 +487,46 @@ def test_readme_section_carries_the_file_table_and_the_overlaps() -> None:
     for overlap in OVERLAPS:
         assert f"- {overlap.text}\n" in section, overlap.id
     assert "type `/daedalus:setup` again" in section and "docs/examples/" in section
+
+
+SKILL = REPO_ROOT / "skills" / "setup" / "SKILL.md"
+_COMMAND = re.compile(
+    r"`(python3 \$\{CLAUDE_SKILL_DIR\}/\.\./\.\./scripts/daedalus_setup\.py[^`]*)`"
+)
+_FILL = {'"<path>"': ".", "<file>": "manifest", "<key>": "features.ledger", "'<json>'": "true"}
+
+
+def test_skill_command_lines_parse_with_the_script_parser() -> None:
+    # 0242: each command line the skill gives, placeholders filled, is one the parser accepts.
+    import daedalus_setup
+
+    lines = _COMMAND.findall(SKILL.read_text(encoding="utf-8"))
+    forms = set()
+    for line in lines:
+        for placeholder, value in _FILL.items():
+            line = line.replace(placeholder, value)
+        args = daedalus_setup.build_parser().parse_args(shlex.split(line)[2:])
+        forms.add(
+            "describe"
+            if args.describe
+            else "create"
+            if args.create_operator
+            else "set"
+            if args.set
+            else "starter"
+        )
+        assert args.set is None or (args.set[0] in daedalus_setup.FORMS and args.value == "true")
+    assert forms == {"describe", "create", "set", "starter"}
+
+
+def test_skill_states_the_question_rules_and_never_asks_a_not_active_setting() -> None:
+    text = SKILL.read_text(encoding="utf-8")
+    fields = text.split("\n---\n", 1)[0]
+    assert "AskUserQuestion" in fields and "daedalus_setup.py *" in fields
+    assert "No key name, file path, ruling id or JSON goes in a question" in text
+    assert "Never ask it." in text and "not active" in text
+    heads = re.findall(r"^\d+\. \*\*(\w[\w ]*)\.\*\*", text, re.MULTILINE)
+    assert heads == ["Describe", "Create", "Day one", "More", "Close"]
 
 
 def test_examples_name_no_home_or_machine_path() -> None:
