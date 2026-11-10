@@ -11,7 +11,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import assets, git, packs, writer_mode  # noqa: E402
-from lib.agent_aliases import current as current_name  # noqa: E402
 from lib.agent_models import AgentModelError, resolve  # noqa: E402
 from lib.audit import DataDirError  # noqa: E402
 from lib.briefs import BriefError, ask_file_problems, brief_file_problems  # noqa: E402
@@ -308,7 +307,7 @@ def _writer_clear(repo: Path) -> Outcome:
 
 def _model(repo: Path, agent: str, override: str | None, unit: str | None = None) -> Outcome:
     if unit is not None:
-        if current_name(agent) != "coder" or override is not None:
+        if agent != "coder" or override is not None:
             return Outcome(
                 EXIT_STOP,
                 [

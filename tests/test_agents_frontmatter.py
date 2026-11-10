@@ -454,6 +454,15 @@ def test_old_specialist_agents_are_gone() -> None:
     assert [p.name for p in AGENTS.glob("*.md") if "refresh_frameworks.py" in p.read_text()] == []
 
 
+def test_no_script_maps_a_renamed_agent() -> None:
+    # 0241: the six names from before the rename are not read, mapped or refused by name.
+    old = ("repo-coder", "security-auditor", "pr-train-conductor", "docs-writer")
+    old += ("doc-deriver", "change-logger")
+    texts = [p.read_text(encoding="utf-8") for p in (REPO_ROOT / "scripts").rglob("*.py")]
+    assert [name for name in old if any(name in text for text in texts)] == []
+    assert not (REPO_ROOT / "scripts" / "lib" / "agent_aliases.py").exists()
+
+
 def test_conductor_lists_the_git_reads_the_jail_allows() -> None:
     # N9: matches TestLiveRunGrammar in tests/test_checks_git_grammar.py.
     text = (AGENTS / "releaser.md").read_text()

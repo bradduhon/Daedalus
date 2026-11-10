@@ -17,7 +17,6 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import unit_binding, writer_mode  # noqa: E402
-from lib.agent_aliases import current as current_name  # noqa: E402
 from lib.agent_models import MODELS  # noqa: E402
 from lib.audit import (  # noqa: E402
     SESSION_ID,
@@ -384,8 +383,7 @@ def load_agents(files: list[Path], types: dict[str, str]) -> list[Agent]:
         meta = _meta(path)
         agent_id = path.stem.removeprefix("agent-")
         raw_type = types.get(agent_id) or meta.get("agentType") or "unknown"
-        # 0190: a run from before the rename reports its agents under their new names.
-        agent_type = current_name(str(raw_type).removeprefix(PREFIX))
+        agent_type = str(raw_type).removeprefix(PREFIX)
         if not _AGENT_TYPE.fullmatch(agent_type):
             agent_type = "unknown"
         parent = meta.get("parentAgentId")
