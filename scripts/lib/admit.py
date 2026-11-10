@@ -115,6 +115,12 @@ class Refusal:
     family: str = ""
     # 228 tail: a refused git command's literal subcommand; "" before it is read.
     subcommand: str = ""
+    # 266: the refused command's first two words as literals ("" where the shell rewrites one),
+    # whether the refusal spans that whole command, and whether its word is one bash rewrites.
+    word: str = ""
+    script: str = ""
+    whole: bool = False
+    rewritten: bool = False
 
 
 @dataclass(frozen=True)
@@ -285,7 +291,30 @@ def admit_role(script: Script, role: Role, cwd: str, *, text: str) -> Admitted |
     except _Off as off:
         start, end = off.span
         digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
-        return Refusal(off.span, text[start:end], off.reason, digest, judge.family, judge.sub)
+        held = judge.held
+        if held is None or not (held.span[0] <= start and end <= held.span[1]):
+            return Refusal(off.span, text[start:end], off.reason, digest, judge.family, judge.sub)
+        heads = [w.literal or "" for w in held.words[:2]] + ["", ""]
+        word = next((w for w in held.words if _overlaps(w.span, off.span)), None)
+        return Refusal(
+            off.span,
+            text[start:end],
+            off.reason,
+            digest,
+            judge.family,
+            judge.sub,
+            heads[0],
+            heads[1],
+            off.span == held.span,
+            word is not None and jail.rewritten(word),
+        )
+
+
+def _overlaps(word: Span, span: Span) -> bool:
+    # 266: the word holds the refused span, or the refused span holds the word.
+    return (word[0] <= span[0] and span[1] <= word[1]) or (
+        span[0] <= word[0] and word[1] <= span[1]
+    )
 
 
 def _word_text(word: Word) -> Typed:
@@ -392,6 +421,8 @@ class _Judge:
         # 228 S4, tail: the family and git subcommand under judgment, carried onto a Refusal.
         self.family = ""
         self.sub = ""
+        # 266: the parsed command under judgment, which a Refusal reads its typed head from.
+        self.held: Command | None = None
 
     # -- script and pipelines ----------------------------------------------------------------
     def script(self, script: Script) -> list[AdmittedCommand]:
@@ -467,6 +498,7 @@ class _Judge:
     def command(self, cmd: Command, piped: bool) -> AdmittedCommand:
         c = _Cmd(cmd.span, piped)
         self.family = self.sub = ""
+        self.held = cmd
         for assign in cmd.assignments:
             self.assignment(assign, c)
         # 228 S3c: the coder's echo admits $? in an operand, the exit echo, and no other parameter.

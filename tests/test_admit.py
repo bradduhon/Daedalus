@@ -392,6 +392,31 @@ def test_the_exit_echo_admits_only_dollar_question() -> None:
     assert refused("auditor", "echo exit=$?").text == "$?"
 
 
+@pytest.mark.parametrize(
+    ("agent", "command", "want"),
+    [
+        # (word, script, whole, rewritten) of the refused command.
+        ("orchestrator", "uniq a {b,c}", ("uniq", "a", False, True)),
+        ("releaser", "gh repo delete x", ("gh", "repo", True, False)),
+        (
+            "charter-docs",
+            "python3 /x/append_ledger.py $X",
+            ("python3", "/x/append_ledger.py", False, True),
+        ),
+        ("auditor", "nice cat x", ("nice", "cat", False, False)),
+        ("auditor", "$X cat", ("", "cat", False, True)),
+        ("auditor", "ls && cd /tmp", ("cd", "/tmp", False, False)),
+        ("auditor", "cat x; cat 'y", ("", "", False, False)),
+    ],
+)
+def test_a_refusal_carries_its_commands_typed_head(
+    agent: str, command: str, want: tuple[str, str, bool, bool]
+) -> None:
+    # 266: the allowlist refusal reader picks its constant from these fields, never the text.
+    got = refused(agent, command)
+    assert (got.word, got.script, got.whole, got.rewritten) == want, got
+
+
 @pytest.mark.usefixtures("jail_fakes")
 def test_git_dash_c_restore_types_its_folder_and_pathspecs() -> None:
     # 228 S3c: the restore row resolves src/a.py under the -C folder, which git_dir carries.
