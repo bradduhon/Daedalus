@@ -28,10 +28,18 @@ from tests.adversarial.corpus import (
     GIT_LOG_COUNT_VALUE_266,
     S3C_HUNT,
     S3C_HUNT_DECLARED,
+    TRACKED_EXCLUDE_267,
+    TRACKED_HUNT_267,
+    TRACKED_JUDGED_267,
+    TRACKED_KEPT_267,
+    TRACKED_SECRET_267,
+    TRACKED_STAT_267,
+    TRACKED_UNKNOWN_267,
     assert_denied,
+    tracked_checkouts,
 )
 from tests.conftest import CFG, CWD, SCRIPTS_DIR, WT
-from tests.hook_chain import decide, evaluate
+from tests.hook_chain import decide, evaluate, first_deny
 from tests.jail_cases import _narrowed_repo
 from tests.payloads import _b, _cred, _cwd
 
@@ -191,3 +199,93 @@ def test_a_word_in_the_git_log_count_slot_is_never_a_pathspec(agent: str, form: 
     # 266: git reads that word as the count and rejects a path; the typed record agrees.
     texts, specs = _log_record(agent, form.format(path=".env"))
     assert ".env" in texts and specs == [], (form, texts, specs)
+
+
+# 267: the readers whose git grammar admits content reads; each meets the credential check first.
+TRACKED_READERS = ("coder", "auditor", "verifier")
+TRACKED_MARKERS = (TRACKED_SECRET_267, TRACKED_UNKNOWN_267, "is a .env file")
+
+
+@pytest.fixture(scope="module")
+def checkouts(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    return tracked_checkouts(tmp_path_factory.mktemp("tracked").resolve())
+
+
+def _not_by_credential(agent: str, command: str, repo: Path) -> None:
+    deny = first_deny(_cred(agent, "Bash", str(repo), command=command), CFG)
+    assert deny is None or deny[0] != "credential_paths", (agent, command, deny)
+
+
+@pytest.mark.parametrize("agent", TRACKED_READERS)
+@pytest.mark.parametrize("command", TRACKED_JUDGED_267)
+def test_a_content_read_over_a_tracked_secret_is_denied(
+    checkouts: dict[str, Path], agent: str, command: str
+) -> None:
+    # 267, 0239: the read names the tracked path, or the agent's grammar refuses the form.
+    assert_denied(_cred(agent, "Bash", str(checkouts["secret"]), command=command), *TRACKED_MARKERS)
+    for kind in ("none", "example"):
+        _not_by_credential(agent, command, checkouts[kind])
+
+
+@pytest.mark.parametrize("agent", TRACKED_READERS)
+@pytest.mark.parametrize("command", TRACKED_KEPT_267)
+def test_a_read_naming_no_tracked_secret_is_not_a_credential_deny(
+    checkouts: dict[str, Path], agent: str, command: str
+) -> None:
+    _not_by_credential(agent, command, checkouts["secret"])
+
+
+@pytest.mark.parametrize("agent", TRACKED_READERS)
+@pytest.mark.parametrize(("klass", "checkout", "command", "outcome"), TRACKED_HUNT_267)
+def test_a_tracked_secret_hunt_form_is_denied_or_a_named_gap(
+    checkouts: dict[str, Path], agent: str, klass: str, checkout: str, command: str, outcome: str
+) -> None:
+    # 267: kept and gap rows pass the credential check; gap rows are the index's blind spots.
+    repo = checkouts[checkout]
+    if outcome in ("kept", "gap"):
+        _not_by_credential(agent, command, repo)
+    else:
+        assert_denied(_cred(agent, "Bash", str(repo), command=command), *TRACKED_MARKERS)
+
+
+def _denied_by_grammar(agent: str, command: str, repo: Path) -> None:
+    # 267: the role refuses the form; main's wider grammar may still type it for the chain.
+    assert not jail.admitted(command, agent, str(repo)), (agent, command)
+    deny = first_deny(_cred(agent, "Bash", str(repo), command=command), CFG)
+    assert deny is not None, (agent, command)
+
+
+@pytest.mark.parametrize("agent", TRACKED_READERS)
+@pytest.mark.parametrize(("klass", "checkout", "command", "agents", "main"), TRACKED_EXCLUDE_267)
+def test_an_exclude_rescue_row_is_denied_or_passes_the_credential_check(
+    checkouts: dict[str, Path],
+    agent: str,
+    klass: str,
+    checkout: str,
+    command: str,
+    agents: str,
+    main: str,
+) -> None:
+    # 267 fix 1: only a literal exclude of every reached secret passes; the rest are denied.
+    repo = checkouts[checkout]
+    if agents == "kept":
+        _not_by_credential(agent, command, repo)
+    elif agents == "grammar":
+        _denied_by_grammar(agent, command, repo)
+    else:
+        assert_denied(_cred(agent, "Bash", str(repo), command=command), *TRACKED_MARKERS)
+
+
+@pytest.mark.parametrize("agent", TRACKED_READERS)
+@pytest.mark.parametrize(("command", "outcome"), TRACKED_STAT_267)
+def test_a_stat_row_beside_a_tracked_secret_meets_its_outcome(
+    checkouts: dict[str, Path], agent: str, command: str, outcome: str
+) -> None:
+    # 267 fix 2: a stat alone passes the credential check; a patch beside it is denied.
+    repo = checkouts["secret"]
+    if outcome == "kept":
+        _not_by_credential(agent, command, repo)
+    elif jail.admitted(command, agent, str(repo)):
+        assert_denied(_cred(agent, "Bash", str(repo), command=command), *TRACKED_MARKERS)
+    else:
+        _denied_by_grammar(agent, command, repo)
