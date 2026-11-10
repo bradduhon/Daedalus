@@ -10,6 +10,7 @@ import hashlib
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from typing import Literal as Kind
 
 from lib import gh_policy, jail, shell
 from lib.manifest import Manifest, declared_commands
@@ -39,6 +40,11 @@ from lib.train_scope import KNOWN_AGENTS
 
 Span = tuple[int, int]
 Grammar = Mapping[str, Callable[[list[str], str], bool]]
+# 269: where a refusal sits: outside any held command, in a redirect or an assignment, a word
+# with a construct or (past the command word) an expansion, no command word, a rewritten one.
+Node = Kind["", "outside", "redirect", "assignment", "construct", "hygiene", "bare", "head"]
+_CONSTRUCT_PARTS = (CommandSub, ProcSub, Arith, Opaque)
+_HYGIENE_PARTS = (Param, BraceList, Tilde)
 # 228 S2: the separators an admitted script may carry; & runs a command the hook never waits on.
 _SEPARATORS = frozenset({"", ";", "\n", "&&", "||"})
 _WRITE_KINDS = frozenset({"write", "script"})
@@ -48,8 +54,6 @@ _PROGRAM_STOPS: dict[str, frozenset[str]] = {"python": frozenset({"-m", "-c"})}
 # 228 S2: the push shape the conductor push check reads (jail._conductor_push_reason).
 _PUSH_OPTIONS = frozenset({"-u", "--set-upstream"})
 _ICASE_GLOBALS = frozenset({"--icase-pathspecs", "--glob-pathspecs"})
-# 266: git log's count options; the next word is their value, never a pathspec.
-_LOG_VALUED = frozenset({"-n", "--max-count"})
 # 228 S2: scheduling wrappers an agent may put inside the kernel wrapper, never bare (8.5 A).
 _CONFINED_WRAPPERS = frozenset({"timeout", "nice", "nohup", "stdbuf", "ionice", "taskset", "chrt"})
 _REFUSED_GIT_GLOBALS = frozenset({"-c", "--config-env", "--exec-path="})
@@ -123,6 +127,17 @@ class Refusal:
     script: str = ""
     whole: bool = False
     rewritten: bool = False
+    # 269: the refused word's literal ("" when none or rewritten), the module a `-m` second word
+    # names, the folder a leading cd moved the rest to, the refused node's class, and the
+    # parameter names in the refused word, and whether a search tool may read it as a flag.
+    operand: str = ""
+    module: str = ""
+    base: str = ""
+    node: Node = ""
+    params: tuple[str, ...] = ()
+    search_rewritten: bool = False
+    # 269: the option whose value the refusal sits at; "" for any other refusal.
+    option: str = ""
 
 
 @dataclass(frozen=True)
@@ -153,6 +168,8 @@ class _Off(Exception):
         super().__init__(reason)
         self.span = span
         self.reason = reason
+        # 269: the option whose value was refused; "" for any other refusal.
+        self.option = ""
 
 
 @dataclass
@@ -295,8 +312,18 @@ def admit_role(script: Script, role: Role, cwd: str, *, text: str) -> Admitted |
         digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
         held = judge.held
         if held is None or not (held.span[0] <= start and end <= held.span[1]):
-            return Refusal(off.span, text[start:end], off.reason, digest, judge.family, judge.sub)
-        heads = [w.literal or "" for w in held.words[:2]] + ["", ""]
+            return Refusal(
+                off.span,
+                text[start:end],
+                off.reason,
+                digest,
+                judge.family,
+                judge.sub,
+                base=judge.base,
+                node="outside",
+                option=off.option,
+            )
+        heads = [w.literal or "" for w in held.words[:3]] + ["", "", ""]
         word = next((w for w in held.words if _overlaps(w.span, off.span)), None)
         return Refusal(
             off.span,
@@ -309,7 +336,33 @@ def admit_role(script: Script, role: Role, cwd: str, *, text: str) -> Admitted |
             heads[1],
             off.span == held.span,
             word is not None and jail.rewritten(word),
+            (word.literal or "") if word is not None else "",
+            heads[2] if heads[1] == "-m" else "",
+            judge.base,
+            _node(held, off.span, word),
+            tuple(p.name for p in word.parts if isinstance(p, Param)) if word is not None else (),
+            word is not None and jail.search_rewritten(word),
+            off.option,
         )
+
+
+def _node(held: Command, span: Span, word: Word | None) -> Node:
+    # 269: the refused node's class, which each check names by its kept constant (SA-7).
+    start = span[0]
+    if any(r.span[0] <= start < r.span[1] for r in held.redirects):
+        return "redirect"
+    if any(a.span[0] <= start < a.span[1] for a in held.assignments):
+        return "assignment"
+    parts = word.parts if word is not None else []
+    if any(isinstance(p, _CONSTRUCT_PARTS) for p in parts):
+        return "construct"
+    dollar = any(isinstance(p, Literal) and p.quoted in ("$'", '$"') for p in parts)
+    hygiene = dollar or any(isinstance(p, _HYGIENE_PARTS) for p in parts)
+    if hygiene and word is not None and word is not held.words[0]:
+        return "hygiene"
+    if not held.words:
+        return "bare"
+    return "head" if held.words[0].literal is None else ""
 
 
 def _overlaps(word: Span, span: Span) -> bool:
@@ -455,6 +508,7 @@ class _Judge:
         # 228 S2 rule 4: one leading `cd <absolute path> &&`, nothing else on the cd.
         cmd = item.commands[0]
         assert isinstance(cmd, Command)
+        self.held = cmd  # 269: a refused cd carries its typed head as any command does.
         if item.negated or item.timed or cmd.assignments or cmd.redirects or len(cmd.words) != 2:
             raise _Off(cmd.span, "a leading cd takes one absolute path and nothing else")
         target = cmd.words[1]
@@ -1039,6 +1093,15 @@ class _Judge:
     def _values(
         self, c: _Cmd, key: str, name: str, words: list[Word], i: int, attached: str | None
     ) -> int:
+        try:
+            return self._valued(c, key, name, words, i, attached)
+        except _Off as off:
+            off.option = off.option or name  # 269: a refused value names its option, typed.
+            raise
+
+    def _valued(
+        self, c: _Cmd, key: str, name: str, words: list[Word], i: int, attached: str | None
+    ) -> int:
         types = shell.OPTION_VALUE_TYPES.get(key, {}).get(name, ("text",))
         for n, kind in enumerate(types):
             if n == 0 and attached is not None:
@@ -1250,7 +1313,8 @@ class _Judge:
                 name, eq, attached = tok.partition("=")
                 if sub == "commit" and name in valued and not eq:
                     skip, prev = True, name
-                elif sub == "log" and name in _LOG_VALUED and not eq:
+                elif sub == "log" and name in jail._GIT_VALUED["log"] and not eq:
+                    # 266, 269: the grammar's and the tracked check's table; a value, never a path.
                     skip, prev = True, name
                 elif sub == "log" and tok[:2] == "-n" and len(tok) > 2:
                     c.add("text", Typed(tok[2:], word.span))  # 266: the joined -n<count>.
@@ -1363,6 +1427,7 @@ class _Judge:
         from checks.read_only_bash import PYTEST, Bound, _test_run_ok
 
         toks = self._all_literal(words, literals)
+        _basetemp(words[1:])
         rootdir = toks[toks.index("--rootdir") + 1] if "--rootdir" in toks[:-1] else "/"
         if tuple(toks[:3]) != PYTEST or not _test_run_ok(toks, Bound(("/",), rootdir)):
             raise _Off(c.span, "the test run is python3 -m pytest <absolute paths> -q (0109)")
@@ -1385,6 +1450,7 @@ class _Judge:
         family = c.family
         toks[0] = "python3" if family == "python" else family
         npm_exec = self.role.coder and _npm_exec(toks)
+        _basetemp(words[1:])
         if not npm_exec and not shell._tester_runner_ok(family, toks, lambda _: True):
             raise _Off(c.span, f"{c.word.text if c.word else family} is not a test-runner form")
         reason = (
@@ -1411,6 +1477,15 @@ class _Judge:
         if family in shell._SHELLS or family in shell.INTERPRETERS or family in ("node", "bun"):
             if family not in shell.TEST_RUNNERS or not shell._tester_runner_ok(family, inner):
                 raise _Off(c.span, f"{c.family} runs {inner[0]} outside a test-runner form")
+
+
+def _basetemp(words: list[Word]) -> None:
+    # issue 56, 269: a runner's --basetemp is named at its own word, so a check reads it typed.
+    temp = next((w for w in words if (w.literal or "").startswith("--basetemp")), None)
+    if temp is not None:
+        raise _Off(
+            temp.span, "the option --basetemp names a temp folder the write checks never see"
+        )
 
 
 def _stream_path(text: str, base: str) -> bool:

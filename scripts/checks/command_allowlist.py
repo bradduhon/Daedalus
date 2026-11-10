@@ -12,11 +12,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lib import hook_io, jail, passes, shell  # noqa: E402
-from lib.admit import Admitted, Refusal, Role, admit_role, role_for  # noqa: E402
+from lib.admit import Admitted, AdmittedCommand, Refusal, Role, admit_role, role_for  # noqa: E402
 from lib.audit import project_root  # noqa: E402
 from lib.manifest import ManifestError, manifest_path  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
-from lib.shparse import Script, parse, walk  # noqa: E402
+from lib.shparse import Script, parse  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset({"Bash"})
 NAMES = frozenset({"append_ledger", "git", "gh", "gitleaks", "read", "train", "inspect"})
@@ -267,6 +267,21 @@ def _read_roots(cwd: str) -> tuple[list[str], str]:
     return roots, base
 
 
+def _docs_read_ok(done: AdmittedCommand, roots: list[str], cwd: str, base: str) -> bool:
+    # 0084, 269: the admitted read's typed paths, relative ones from the project root and from
+    # cwd, land under a root; a typed word the shell expands may split into unseen operands.
+    if any(t.glob for t in (*done.reads, *done.texts, *done.options)):
+        return False
+    paths = [r.text for r in done.reads] or ([cwd] if done.family == "ls" else [])
+    for path in paths:
+        if shell._READ_PATH_DENY & set(path):
+            return False
+        places = [path] if os.path.isabs(path) else [shell._abs(path, base), shell._abs(path, cwd)]
+        if not all(any(shell._under(p, root) for root in roots) for p in places):
+            return False
+    return bool(paths)
+
+
 def _role(allowed: frozenset[str]) -> Role:
     # 228 S3: the allow names select the admit Role whose tables they name, and no more.
     if allowed & {"train", "inspect"}:
@@ -304,9 +319,8 @@ def _later(
 ) -> str | None:
     # 228 S3: the checks that read the Admitted record: the train repo and map folders, the
     # charter-docs read roots and the inspect class's git -C bounds.
-    by_span = {cmd.span: cmd for cmd, _ in walk(script)}
     for done in got.commands:
-        tokens = jail.literal_tokens(by_span.get(done.span))
+        tokens = jail.admitted_tokens(script, done)
         quoted = command[done.span[0] : done.span[1]]
         if done.script is not None and train_script_ok(tokens):
             mismatch = train_repo_reason(tokens, cwd) or map_out_reason(tokens, cwd)
@@ -314,7 +328,7 @@ def _later(
                 return mismatch
         elif "read" in allowed and done.family in shell.DOCS_READS:
             roots, base = _read_roots(cwd)
-            if not shell.docs_read_ok(tokens, quoted, roots, cwd, base):
+            if not _docs_read_ok(done, roots, cwd, base):
                 return jail.refused_at(
                     _reason(allowed), "a read outside docs/ and the charter", quoted
                 )

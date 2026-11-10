@@ -15,11 +15,12 @@ from tests.adversarial.corpus import (
     INTERPRETER_BINS,
     TERRAFORM_MUTATIONS,
     TERRAFORM_OPERATOR_FORMS,
+    TERRAFORM_TYPED_269,
     assert_denied,
 )
 from tests.conftest import CFG, WT
 from tests.helpers import RULING_MARKERS
-from tests.hook_chain import load
+from tests.hook_chain import CHAINS, evaluate, load
 from tests.payloads import _b, _cred
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
@@ -164,3 +165,13 @@ def test_the_auditor_runs_no_other_terraform_form_bare_wrapped_or_after_a_cd(com
     wrapped = f"{shell.CONFINE_PATH} --unit {WT} -- {command}"
     for form in (command, wrapped, f"cd {WT} && {command}", f"cd {WT} && terraform validate"):
         assert_denied(_b("auditor", form))
+
+
+@pytest.mark.parametrize("form", TERRAFORM_TYPED_269)
+def test_the_auditor_terraform_class_reads_the_typed_form(form: str) -> None:
+    # 0186, 269: the class judges the admitted word, -chdir, subcommand, options and paths.
+    command = form.format(confine=shell.CONFINE_PATH, wt=WT)
+    assert jail.admitted(command, "auditor", WT), command
+    assert_denied(_b("auditor", command))
+    reasons = [evaluate(s, _b("auditor", command), *f) for s, f in CHAINS["auditor"]]
+    assert any("(0132)" in str(r) for r in reasons if r), reasons

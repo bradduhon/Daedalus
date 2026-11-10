@@ -1,6 +1,6 @@
 {
   "jail.R_EXCLUDED_STANDING": {
     "failure": "0224: a command off the jail's table carries no typed path, so a command run from inside an excluded root would reach it unjudged",
-    "premise_test": "tests/test_excluded_roots.py::test_a_refused_command_is_judged_by_its_folder_alone"
+    "premise_test": "tests/test_excluded_roots.py::test_a_command_off_the_table_is_judged_by_its_folder_alone"
   }
 }

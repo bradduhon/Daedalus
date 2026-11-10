@@ -95,7 +95,14 @@ RETIRED = (
     "_DATA_DIR_WRITE _CD_TARGET _GIT_INDEX_WRITE _DAEDALUS_WORD _DEVNULL _normalize_paths "
     "_cd_into_claude _cd_data_dir_git _data_dir_write _data_dir_markers _shell_words "
     "_shell_scan ScanSegment _command_at _path_positions _PATH_OPTION _opaque_words "
-    "_search_paths _PATH_CMDS _CONTROL_WORDS _OPAQUE env_split_values _env_split _unsingled"
+    "_search_paths _PATH_CMDS _CONTROL_WORDS _OPAQUE env_split_values _env_split _unsingled "
+    # 269: the refused-token readers, the docs read text reader, the moved agent's word walkers
+    # and the credential module's dead marks. clean, _MODE and _basetemp are names other
+    # modules define for their own use, so the grep cannot list them.
+    "refused_command refused_word literal_tokens _parse_base docs_read_ok _docs_read_split "
+    "_unquoted_expansion _home_word _cd_relative_target _write_operands _in_place _short_taker "
+    "_VALUE_OPTS _PATH_OPTS _VALUE_LONG _INTERPRETER _option_values quoted_dollar LIT CUT "
+    "REDIRECT _LOG_VALUED"
 ).split()
 # 228 tail: names another module defines for its own use, so the grep above cannot list them;
 # the import test below proves no module reaches the retired lib.shell ones.
@@ -106,8 +113,6 @@ RETIRED_SHELL_IMPORTS |= {"_normalize", "_unquoted", "_awaits"}
 RE_SUBJECTS: dict[str, dict[str, str]] = {
     "lib/jail.py": {
         "_BRANCH_NAME": "the branch operand of an admitted conductor push",
-        "_INTERPRETER": "a parsed command word, moved_relative (issue 188)",
-        "_MODE": "a chmod mode operand of an admitted write",
         "_PIP": "an installer word of an admitted command",
         "_REMOTE_URL": "the output of git remote get-url",
         "_flags_ok": "an admitted git option against its grammar row pattern",
@@ -137,6 +142,10 @@ RE_SUBJECTS: dict[str, dict[str, str]] = {
     },
     "checks/command_allowlist.py": {},
     "checks/workspace_integrity.py": {},
+    # 269: the refused-token readers this unit switched onto the Refusal's typed fields.
+    "checks/confine.py": {},
+    "checks/unit_writes.py": {},
+    "checks/shell_tripwires.py": {},
 }
 
 
@@ -257,7 +266,7 @@ def test_quote_walk_marks_spans_escapes_and_quote_marks() -> None:
 def test_no_quote_loop_outside_the_walker() -> None:
     # issue 76, 121, 228 tail: the loops that remain read quote_walk.
     tree = _tree("shell.py")
-    users = {"_quote_spans", "_unquoted_expansion"}
+    users = {"_quote_spans"}
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in users:
             source = ast.unparse(node)
@@ -266,19 +275,19 @@ def test_no_quote_loop_outside_the_walker() -> None:
 
 
 @pytest.mark.parametrize(
-    ("text", "spans", "expands"),
+    ("text", "spans"),
     [
-        ("a 'b c' d", "a Q d", False),
-        ('x "a\\"b" *', "x Q *", True),
-        ('"\\"" *', "Q *", True),
-        ("a;b|'c;d'", "a;b|Q", False),
-        ("e\\ f '$x'", "e\\ f Q", False),
-        ("'unclosed", "Q", False),
+        ("a 'b c' d", "a Q d"),
+        ('x "a\\"b" *', "x Q *"),
+        ('"\\"" *', "Q *"),
+        ("a;b|'c;d'", "a;b|Q"),
+        ("e\\ f '$x'", "e\\ f Q"),
+        ("'unclosed", "Q"),
     ],
 )
-def test_walker_consumers_share_one_quote_model(text: str, spans: str, expands: bool) -> None:
+def test_walker_consumers_share_one_quote_model(text: str, spans: str) -> None:
+    # 269: _unquoted_expansion went with the docs read text reader; _quote_spans keeps the model.
     assert shell._quote_spans(text) == spans
-    assert shell._unquoted_expansion(text) is expands
 
 
 def test_git_sets_name_the_moved_lists() -> None:

@@ -488,17 +488,24 @@ def test_unit_test_run_without_train_state_is_refused(tmp_path: Path) -> None:
 def test_basetemp_is_refused_by_name_for_every_agent(
     tmp_path: Path, agent: str, flags: tuple[str, ...]
 ) -> None:
-    # issue 56: the reason names the flag, the agent and the next action, before any grammar.
+    # issue 56, 269: the reason names the flag, the agent and the next action, before any pass.
     repo = _train_repo(tmp_path)
     audit, _ = _places(repo)
     name = agent.removeprefix("daedalus:")
     want = jail.R_BASETEMP_AGENT.format(agent=name)
+    runner = "--test-runner" in flags
     for command in (
         f"python3 -m pytest {audit}/x.py -q --basetemp=/tmp/x",
         "pytest --basetemp /tmp/x",
         "git log | python3 -m pytest -q --basetemp=x",
     ):
-        assert _starts(evaluate(HOOK, _rb(repo, agent, command), *flags), want), command
+        got = evaluate(HOOK, _rb(repo, agent, command), *flags)
+        if runner or command.startswith("pytest"):
+            assert _starts(got, want), command
+        else:
+            # 269: python3 or git is off this role's table; the refusal names that word, and the
+            # refused words after it are never read for --basetemp.
+            assert got is not None and "Refused: " in got and " is not on the " in got, got
     assert f"for {name}:" in want and "Next: drop --basetemp" in want
     grep = "grep -n -e --basetemp scripts/lib/jail.py"
     assert evaluate(HOOK, _rb(repo, agent, grep), *flags) is None

@@ -2193,9 +2193,10 @@ def test_fifo_plant_commands_are_coder_writes(command: str, target: str) -> None
 
 
 def test_mknod_judges_only_its_name() -> None:
-    # issue 75: mknod NAME TYPE [MAJOR MINOR]; TYPE and the numbers are not paths.
-    assert jail._write_operands("mknod", ["-m", "600", "n", "c", "1", "3"]) == ["n"]
-    assert jail._write_operands("mkfifo", ["-m", "600", "a", "b"]) == ["a", "b"]
+    # issue 75, 269: mknod NAME TYPE [MAJOR MINOR]; TYPE and the numbers are not paths.
+    for command, writes in (("mknod -m 600 n c 1 3", ["n"]), ("mkfifo -m 600 a b", ["a", "b"])):
+        got = jail._admission(command, "main", CWD)[1]
+        assert jail._passed(got) and [w.text for w in got.writes] == writes, command
 
 
 def test_a_foreign_agent_cannot_plant_a_fifo_in_a_marked_repo(
@@ -2403,6 +2404,6 @@ def test_the_releaser_gitleaks_form_with_the_asset_tail_is_admitted() -> None:
 
 
 def _parsed_words(command: str) -> list[str]:
-    # 228 tail: the one parse; tokenize is retired.
+    # 228 tail, 269: the one parse; tokenize and literal_tokens are retired.
     cmd = next(c for c, _ in shparse.walk(shparse.parse(command)))
-    return jail.literal_tokens(cmd)
+    return [w.literal for w in cmd.words if w.literal is not None]
