@@ -82,6 +82,15 @@ between Bash calls.
      that run passed in your worktree. A `Fix:` line in the brief is a suggestion you check
      against the test. To keep a test that names a bypass class, copy it into
      `tests/adversarial/` or the unit's own tests; the auditor's copy stays where it is.
+   - **Table diff** (0232): when your changed files include any of `scripts/lib/jail.py`,
+     `scripts/lib/admit.py`, `scripts/lib/shell.py`, `scripts/lib/shparse.py`,
+     `scripts/lib/credential_paths.py`, `scripts/enforce_agent_jail.py`, a path under
+     `scripts/checks/` or a path under `tests/adversarial/`, the body of your last commit
+     before `[STATUS: COMPLETE]` carries one line per row you added, widened, narrowed or
+     removed in an admission table,
+     `Table diff: <table> | <added, widened, narrowed or removed> | <row> | <corpus row that pins it>`,
+     or `Table diff: none`, written with a second `-m`. The auditor derives its own table and
+     checks yours against it.
    - `pytest --basetemp` is refused; the default temp folder works.
 6. Finish with receipts, not narrative (0127, 0128). The verifier judges your diff against
    your brief, never your report, so a COMPLETE reply holds no prose above its status line.
