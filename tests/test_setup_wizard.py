@@ -621,6 +621,18 @@ def test_a_block_member_the_table_does_not_list_is_refused_by_name(
     assert _config(wizard).read_bytes() == before
 
 
+def test_set_never_writes_an_unknown_top_level_config_key(wizard: Path, home: Path) -> None:
+    # 0242, 0241: the key table refuses the key, and the config reader refuses a file holding one.
+    path = _config(wizard)
+    assert "is not a setting" in _refused(_set(wizard, home, "config", "mystery", "1"))
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**doc, "mystery": 1}, indent=2) + "\n", encoding="utf-8")
+    before = path.read_bytes()
+    out = _refused(_set(wizard, home, "config", "max_concurrent_builders", "3"))
+    assert "has unknown keys ['mystery']" in out
+    assert path.read_bytes() == before
+
+
 def test_null_clears_a_block(wizard: Path, home: Path) -> None:
     path = _manifest(wizard)
     before = path.read_text(encoding="utf-8")
