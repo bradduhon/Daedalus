@@ -546,9 +546,9 @@ def test_ask_check_reads_the_fixed_words_of_the_brief(
 SETUP_SKILL = REPO_ROOT / "skills" / "setup" / "SKILL.md"
 SETUP_ASK = "\n".join(
     [
-        "Question: The reading level sets how plain the questions and docs are. It changes how "
-        "Daedalus writes to you. Nothing is set now. Pick an answer, or choose Other and type "
-        "your own.",
+        "Anchor: The reading level sets how plain the questions and docs are. It changes how "
+        "Daedalus writes to you. Nothing is set now.",
+        "Question: Which reading level should Daedalus write at for this project?",
         "Choices:",
         "A. Plain level: Short sentences in common words. The repository holds no setting yet.",
         "B. Standard level: Longer sentences, still with no file paths.",
@@ -559,6 +559,16 @@ SETUP_ASK = "\n".join(
 
 def test_setup_skill_states_the_label_rules_the_check_reads() -> None:
     flat = " ".join(SETUP_SKILL.read_text(encoding="utf-8").split())
+    assert (
+        "as an `Anchor:` line holding the sentences before the question sentence, then a "
+        "`Question:` line holding the question sentence alone, then a `Choices:` line" in flat
+    )
+    assert (
+        "It ends with one open question sentence about the setting that ends in a question mark, "
+        'such as "Which commands run the unit tests for this project?" No closing sentence says '
+        "how to answer (0251)." in flat
+    )
+    assert "Pick an answer" not in flat
     assert (
         "then a `Choices:` line and one `<letter>. <label>: <description>` line per choice. In "
         "the file, the first choice's label is written without its `Accept:` prefix, and every "
@@ -576,12 +586,16 @@ def test_setup_skill_states_the_label_rules_the_check_reads() -> None:
     assert "Choice B label has 1 word, not 2 to 5: Standard" in ask_problems(one_word)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="0251: the setup question text ends in an instruction sentence, never a question mark",
-)
 def test_a_setup_question_file_passes_ask_check_whole() -> None:
     assert ask_problems(SETUP_ASK) == []
+    statement = SETUP_ASK.replace(
+        "Question: Which reading level should Daedalus write at for this project?",
+        "Question: Pick an answer, or choose Other and type your own.",
+    )
+    assert ask_problems(statement) == [
+        "Question does not end in a question mark: Pick an answer, or choose Other and type "
+        "your own."
+    ]
 
 
 def test_recipes_name_the_check_and_the_literacy_rule() -> None:
