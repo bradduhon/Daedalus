@@ -114,7 +114,7 @@ Accept runs step 5 with the brief as the planner's input. Keep exploring goes ba
    - `Mode: challenge`;
    - `Brief file: <folder>/handoff.md` when the operator accepted a direction at the exit question. On the straight path, `Idea file: <notes>` when step 1 or step 4 set `<notes>`; otherwise `Idea:` on its own line, then the operator's `<idea>` verbatim, then a closing `Idea ends` line;
    - the standing-rules file path: `standing-rules.md` in the folder that holds the decisions file, the `local_docs_folder` of `<repo>/.claude/daedalus/config.json` when one is set, else the `docs.folder` of `<repo>/service-manifest.json` (0247); leave this line out when `docs.decisions_filename` names no file or that summary file is absent;
-   - the repository's file areas: the `entrypoints` block of `<repo>/service-manifest.json`, pasted as it stands, or `none declared` when the file or block is absent;
+   - the repository's file areas: the `code_areas` block of `<repo>/service-manifest.json`, pasted as it stands, or `none declared` when the file or block is absent;
    - `Write exactly one file: <folder>/spec.md`;
    - the grounding rules below, verbatim;
    - the conversation contract: each reply carries one question and ends with exactly one of `[STATUS: ASK] n=<n>`, `[STATUS: SPEC] n=<n> path=<path> open=<m>`, `[STATUS: NOT_VIABLE] n=<n> <the blocking fact in one line>` or `[STATUS: YIELD_WEB] <query>`; `[STATUS: QUESTION] <what the task leaves open>` stays for plan mode. After `Mode: plan` the plan reply `[STATUS: PLAN] path=<path> units=<n> critical_path=<k> width=<w>` ends the work.

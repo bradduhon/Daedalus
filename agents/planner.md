@@ -26,7 +26,7 @@ never edit the spec.
 ## Your brief
 It names, each on its own line: the spec path; the standing-rules file path, when a
 decisions file is named and the summary beside it exists (0247); `limits.parallel_coders: <n>`; the repository's
-file areas (the `entrypoints` block of `service-manifest.json`, or `none declared`); the dependency map's
+file areas (the `code_areas` block of `service-manifest.json`, or `none declared`); the dependency map's
 `map.md` and `map.json` paths, when the train wrote them with `daedalus_map.py`; the Standards
 Packet path, when one is written; and the one file you write, on a
 `Write exactly one file: <path>` line. Inside a train that file is

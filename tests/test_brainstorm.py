@@ -81,7 +81,7 @@ def test_dispatch_lists_every_prompt_line_and_reply_line() -> None:
         "`Idea ends` line",
         "the standing-rules file path: `standing-rules.md` in the folder that holds the "
         "decisions file",
-        "the `entrypoints` block of `<repo>/service-manifest.json`",
+        "the `code_areas` block of `<repo>/service-manifest.json`",
         "`none declared`",
         "`Write exactly one file: <folder>/spec.md`",
         "the grounding rules below, verbatim",

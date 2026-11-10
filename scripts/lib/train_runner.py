@@ -174,7 +174,7 @@ def reply_path(brief: Path) -> Path:
 
 
 def _definition_file(root: Path, plugin_root: Path, name: str) -> tuple[Path, Origin]:
-    # issue 52, 0245: the manifest's run_definitions_folder is searched before the plugin's own.
+    # issue 52, 0245: the manifest's custom_workflows_folder is searched before the plugin's own.
     loaded = manifest.load(root)
     folder = loaded.trains_dir if loaded is not None else None
     if folder is not None:

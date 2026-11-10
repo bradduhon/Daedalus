@@ -535,7 +535,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         ("scripts/lib/packs.py",),
         override=True,
     ),
-    (MANIFEST_FILE, "run_definitions_folder"): KeyRow(
+    (MANIFEST_FILE, "custom_workflows_folder"): KeyRow(
         "The project folder that holds its own run definitions; a run definition is looked up "
         "there first, as `<folder>/<name>.json`, and then in the plugin's own folder",
         "string or null",
@@ -547,7 +547,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         ("scripts/lib/train_runner.py",),
         override=True,
     ),
-    (MANIFEST_FILE, "entrypoints"): KeyRow(
+    (MANIFEST_FILE, "code_areas"): KeyRow(
         "The project's file areas by name; the plan phase pastes this object into the planner's "
         "prompt, and the planner cuts work along these areas",
         "object of strings",
@@ -957,7 +957,7 @@ GROUPS: tuple[Group, ...] = (
         "Your own run definitions and the project's named file areas",
         10,
         MANIFEST_FILE,
-        ("run_definitions_folder", "entrypoints"),
+        ("custom_workflows_folder", "code_areas"),
     ),
     Group(
         "folders",

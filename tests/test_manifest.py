@@ -73,6 +73,8 @@ def test_this_repos_manifest_loads(tmp_path: Path) -> None:
         "manifest_version",
         "service_name",
         "purpose",
+        "entrypoints",
+        "run_definitions_folder",
     ],
 )
 def test_an_old_top_level_key_is_refused_with_the_valid_names(tmp_path: Path, old: str) -> None:

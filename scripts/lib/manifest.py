@@ -77,8 +77,8 @@ TOP_KEYS = (
     "run_output_priority",
     "local_testing",
     "compliance_rules",
-    "run_definitions_folder",
-    "entrypoints",
+    "custom_workflows_folder",
+    "code_areas",
 )
 COMMAND_KEYS = {"unit_test": "unit_test_cmd", "typecheck": "typecheck_cmd", "lint": "lint_cmd"}
 DOCS_KEYS = ("folder", "decisions_filename", "reading_level", "git_branch")
@@ -587,13 +587,13 @@ def _priorities(target: Path, raw: dict[str, object]) -> Priorities | None:
 
 def _trains_dir(target: Path, raw: dict[str, object]) -> str | None:
     # 0245: the folder of the project's own run definitions, an override.
-    value = raw.get("run_definitions_folder")
+    value = raw.get("custom_workflows_folder")
     if value is None:
         return None
     if not isinstance(value, str) or not repo_relative(value):
         raise _key_error(
             target,
-            "run_definitions_folder",
+            "custom_workflows_folder",
             "must be a project-relative folder path without a leading slash, '..' or globs",
         )
     return value
@@ -757,11 +757,11 @@ def _dev_server(target: Path, raw: dict[str, object]) -> DevServer | None:
 
 def _entrypoints(target: Path, raw: dict[str, object]) -> None:
     # 0245: the project's file areas the planner reads; an object of names to paths.
-    value = raw.get("entrypoints")
+    value = raw.get("code_areas")
     if value is not None and not (
         isinstance(value, dict) and all(isinstance(v, str) for v in value.values())
     ):
-        raise _key_error(target, "entrypoints", "must be an object of area names to paths")
+        raise _key_error(target, "code_areas", "must be an object of area names to paths")
 
 
 def load(repo: Path) -> Manifest | None:

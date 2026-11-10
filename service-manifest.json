@@ -16,7 +16,7 @@
     "paths": [],
     "file_types": []
   },
-  "entrypoints": {
+  "code_areas": {
     "scripts": "scripts/",
     "lib": "scripts/lib/",
     "agents": "agents/",

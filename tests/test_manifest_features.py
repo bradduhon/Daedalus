@@ -144,8 +144,8 @@ def test_prohibited_writes_unchanged_beside_checks(tmp_path: Path) -> None:
     assert beside.features.secrets_scan is True
 
 
-def test_run_definitions_folder_is_read_from_the_manifest(tmp_path: Path) -> None:
-    write_manifest(tmp_path, {"run_definitions_folder": "ops/trains"})
+def test_custom_workflows_folder_is_read_from_the_manifest(tmp_path: Path) -> None:
+    write_manifest(tmp_path, {"custom_workflows_folder": "ops/trains"})
     loaded = load(tmp_path)
     assert loaded is not None and loaded.trains_dir == "ops/trains"
     write_manifest(tmp_path, {})
@@ -153,10 +153,10 @@ def test_run_definitions_folder_is_read_from_the_manifest(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize("value", ["/abs/trains", "../trains", "", 7, ["trains"]])
-def test_run_definitions_folder_outside_the_project_is_refused(
+def test_custom_workflows_folder_outside_the_project_is_refused(
     tmp_path: Path, value: object
 ) -> None:
-    _refused(tmp_path, {"run_definitions_folder": value})
+    _refused(tmp_path, {"custom_workflows_folder": value})
 
 
 def test_unit_test_command_is_read_from_the_commands_group(tmp_path: Path) -> None:
@@ -216,7 +216,7 @@ def test_project_files_resolve_from_the_project_root_only(
     for root, scan in ((project, True), (home, False), (plugin, False)):
         (root / ".claude" / "daedalus").mkdir(parents=True)
         body = {"checks": {"secret_scan": scan}}
-        write_manifest(root, body | {"run_definitions_folder": f"{root.name}-trains"})
+        write_manifest(root, body | {"custom_workflows_folder": f"{root.name}-trains"})
         config = {"local_docs_folder": str(root / "Charter")}
         (root / ".claude" / "daedalus" / "config.json").write_text(json.dumps(config))
     monkeypatch.setenv("HOME", str(home))

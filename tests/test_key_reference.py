@@ -208,6 +208,8 @@ OLD_TOP_NAMES = (
     "manifest_version",
     "service_name",
     "purpose",
+    "entrypoints",
+    "run_definitions_folder",
 )
 
 
@@ -286,6 +288,7 @@ OLD_DOTTED = re.compile(
     r"|priorities\.(?:drivers|rules|principles|agents)|max_concurrent_builders"
     r"|frameworks\.(?:pack_dir|default_packs|packs)|assets\.(?:roots|extensions|max_bytes)"
     r"|charter_root|excluded_roots|agent_models|fable_available|main_refusals|standing_rules"
+    r"|\bentrypoints\b|run_definitions_folder"
 )
 PROSE = ("README.md", "docs/howto/README.md", "docs/project-requirements.md")
 # 0245: a run definition's when condition names a recorded feature field, never a settings key.

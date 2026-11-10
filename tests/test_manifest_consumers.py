@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# issue 52, 0245: the readers of checks.secret_scan and run_definitions_folder.
+# issue 52, 0245: the readers of checks.secret_scan and custom_workflows_folder.
 from __future__ import annotations
 
 import json
@@ -33,7 +33,7 @@ PROJECT_TEMPLATE = "Project brief for train {train_id}.\n"
 
 def _project_train(root: Path, folder: str = "ops/trains") -> Path:
     # 0073: a project definition whose brief template sits beside it, under its folder.
-    (root / "service-manifest.json").write_text(json.dumps({"run_definitions_folder": folder}))
+    (root / "service-manifest.json").write_text(json.dumps({"custom_workflows_folder": folder}))
     defn = root / folder / "t.json"
     template = defn.parent / "trains" / "t" / "solo.md"
     template.parent.mkdir(parents=True)
@@ -61,7 +61,7 @@ def test_project_brief_resolves_beside_its_definition(repo: Path, plugin: Path) 
 
 def test_trains_dir_without_the_name_falls_back_to_the_plugin(repo: Path, plugin: Path) -> None:
     path = _write_train(plugin, [_code_stage()], ("repository",))
-    body = {"run_definitions_folder": "ops/trains"}
+    body = {"custom_workflows_folder": "ops/trains"}
     (repo / "service-manifest.json").write_text(json.dumps(body))
     subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "manifest"], check=True)
@@ -74,7 +74,7 @@ def test_trains_dir_definition_leaving_the_project_is_refused(
 ) -> None:
     outside = tmp_path / "outside.json"
     outside.write_text(json.dumps(_definition([_code_stage()], ("repository",))))
-    (repo / "service-manifest.json").write_text(json.dumps({"run_definitions_folder": "ops"}))
+    (repo / "service-manifest.json").write_text(json.dumps({"custom_workflows_folder": "ops"}))
     (repo / "ops").mkdir()
     (repo / "ops" / "t.json").symlink_to(outside)
     outcome = train_runner.start(repo, "t", None, plugin)
@@ -85,9 +85,9 @@ def test_trains_dir_definition_leaving_the_project_is_refused(
 
 def test_a_malformed_manifest_stops_start_before_the_lookup(repo: Path, plugin: Path) -> None:
     _write_train(plugin, [_code_stage()], ("repository",))
-    (repo / "service-manifest.json").write_text(json.dumps({"run_definitions_folder": "/abs"}))
+    (repo / "service-manifest.json").write_text(json.dumps({"custom_workflows_folder": "/abs"}))
     outcome = train_runner.start(repo, "t", None, plugin)
-    assert outcome.code == 1 and "run_definitions_folder" in outcome.lines[0]
+    assert outcome.code == 1 and "custom_workflows_folder" in outcome.lines[0]
 
 
 @pytest.fixture(autouse=True)

@@ -17,8 +17,8 @@ from tests.conftest import REPO_ROOT
 
 REQUIREMENTS = REPO_ROOT / "docs" / "project-requirements.md"
 _HAND_ROW = re.compile(r"^\| `([^`]+)` \|", re.MULTILINE)
-# 0069: entrypoints is a free map of area names, so the block itself is the key.
-_OPAQUE = frozenset({"entrypoints"})
+# 0069: code_areas is a free map of area names, so the block itself is the key.
+_OPAQUE = frozenset({"code_areas"})
 
 
 def _section(heading: str) -> str:
