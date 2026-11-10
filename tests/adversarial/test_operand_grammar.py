@@ -28,6 +28,7 @@ from tests.adversarial.corpus import (
     GIT_LOG_COUNT_VALUE_266,
     GIT_LOG_SEARCH_269,
     GIT_LOG_SEARCH_VALUE_269,
+    REFUSED_FIELDS_HUNT_269,
     S3C_HUNT,
     S3C_HUNT_DECLARED,
     TRACKED_EXCLUDE_267,
@@ -41,7 +42,7 @@ from tests.adversarial.corpus import (
     tracked_checkouts,
 )
 from tests.conftest import CFG, CWD, SCRIPTS_DIR, WT
-from tests.hook_chain import decide, evaluate, first_deny
+from tests.hook_chain import CHAINS, decide, evaluate, first_deny
 from tests.jail_cases import _narrowed_repo
 from tests.payloads import _b, _cred, _cwd
 
@@ -222,6 +223,21 @@ def test_a_word_in_the_git_log_search_slot_is_never_a_pathspec(agent: str, form:
     assert ".env" in texts and specs == [], (form, texts, specs)
     flag = form.split()[2]
     assert flag in jail._GIT_VALUED["log"], flag
+
+
+@pytest.mark.parametrize(("cls", "agent", "form", "constant"), REFUSED_FIELDS_HUNT_269)
+def test_a_refused_fields_hunt_form_names_its_class(
+    cls: str, agent: str, form: str, constant: str | None
+) -> None:
+    # 269 hunt: each check names its class from the typed Refusal, never the refused words.
+    if constant is None:
+        assert decide(_b(agent, form), CFG).allow, cls
+        return
+    want = str(getattr(jail, constant, None) or getattr(shell, constant))
+    assert_denied(_b(agent, form))
+    # 269: the check that owns the class names it, wherever it sits in the agent's chain.
+    reasons = [evaluate(script, _b(agent, form), *flags) for script, flags in CHAINS[agent]]
+    assert any(want in str(r) for r in reasons if r), (cls, reasons)
 
 
 # 267: the readers whose git grammar admits content reads; each meets the credential check first.

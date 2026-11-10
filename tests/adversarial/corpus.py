@@ -1582,6 +1582,40 @@ GIT_LOG_SEARCH_269 = (
     "git log -G token -- {path}",
     "git log --grep token -- {path}",
 )
+# 269 hunt: (class, agent, form, constant) against the readers moved onto the Refusal's typed
+# fields and the admitted docs read; the constant is a jail or shell name, None is admitted.
+REFUSED_FIELDS_HUNT_269 = (
+    ("basetemp after a newline", "coder", "pytest -q\npytest --basetemp=/tmp/x", "R_BASETEMP"),
+    ("basetemp quoted part", "coder", 'pytest --base"temp"=/tmp/x', "R_BASETEMP"),
+    ("basetemp rewritten", "coder", "pytest $'--basetemp'=/tmp/x", "R_HYGIENE"),
+    (
+        "ledger root parameter",
+        "charter-docs",
+        'python3 "${CLAUDE_PLUGIN_ROOT}"/x.py',
+        "R_LEDGER_LITERAL",
+    ),
+    ("rg program last", "auditor", "rg -n x . --pre /tmp/x", "R_RG_PROGRAM"),
+    ("rg program quoted part", "auditor", 'rg --p"re" /tmp/x x .', "R_RG_PROGRAM"),
+    ("rg program attached", "auditor", "rg --pre=/tmp/x x .", "R_RG_PROGRAM"),
+    ("prefix", "coder", "X=1 ls", "R_ENV"),
+    ("redirect", "coder", "ls > /tmp/x", "R_UNSUPPORTED"),
+    ("rewritten head", "coder", "$X ls", "R_VARIABLE"),
+    ("substitution", "coder", "ls $(pwd)", "R_UNSUPPORTED"),
+    ("git off the grammar", "coder", "git frob", "R_CODER_GIT"),
+    ("docs glob read", "charter-docs", "cat docs/*.md", "R_DOCS_BASH"),
+    ("docs tilde read", "charter-docs", "cat ~/docs/a.md", "R_DOCS_BASH"),
+    ("docs .. read", "charter-docs", "cat docs/../../etc/hostname", "R_DOCS_BASH"),
+    (
+        "docs read after a newline",
+        "charter-docs",
+        "cat docs/a.md\ncat /etc/hostname",
+        "R_DOCS_BASH",
+    ),
+    ("docs quoted glob", "charter-docs", "cat 'docs/*.md'", "R_DOCS_BASH"),
+    ("docs pattern only", "charter-docs", "cat docs/a.md | grep x", "R_DOCS_BASH"),
+    ("docs read", "charter-docs", "cat docs/a.md", None),
+    ("docs search", "charter-docs", "grep -n x docs/a.md", None),
+)
 # 269: a path in the search value slot is the search text; it is never a pathspec.
 GIT_LOG_SEARCH_VALUE_269 = ("git log -S {path}", "git log -G {path}", "git log --grep {path}")
 # 266 hunt: (class, form, main, coder) for the data folder check on each role's typed record;
