@@ -196,13 +196,13 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     report.add_argument("--gate", action="store_true")
     history = sub.add_parser("history", allow_abbrev=False)
     for each in (report, history):
-        each.add_argument("--cwd", "--repo", dest="cwd", default=os.getcwd())
+        each.add_argument("--repo", dest="cwd", default=os.getcwd())
     args = parser.parse_args(argv)
     args.cwd = os.path.abspath(args.cwd)
     if not os.path.isdir(args.cwd):
         parser.exit(
             1,
-            f"token_economy: --cwd {args.cwd} is not an existing directory. "
+            f"token_economy: --repo {args.cwd} is not an existing directory. "
             "Next: pass the repo directory whose runs you want to report.\n",
         )
     return args

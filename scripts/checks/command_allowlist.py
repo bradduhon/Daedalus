@@ -63,8 +63,8 @@ R_ORCHESTRATOR_BASH = (
 )
 # spec 7.1: date prints the clock in UTC; -s, --set and a bare MMDDhhmm operand would set it.
 DATE_UTC = frozenset({"-u", "--utc", "--universal"})
-# issue 63, pin C3 -> C4: a train script's --repo or --cwd is the project root of the hook cwd.
-REPO_FLAGS = ("--repo", "--cwd")
+# issue 63, pin C3 -> C4: a train script's --repo is the project root of the hook cwd.
+REPO_FLAGS = ("--repo",)
 R_TRAIN_REPO = (
     "{flag} {given} is not the project root of the working directory ({root}). "
     "Next: run the command from {given}, or pass {flag} {root}."
@@ -160,7 +160,7 @@ def _reason(allowed: frozenset[str]) -> str:
 
 
 def _repo_values(args: list[str]) -> list[tuple[str, str]] | None:
-    # issue 63: every --repo/--cwd value, joined or split; None for an abbreviation or no value.
+    # issue 63: every --repo value, joined or split; None for an abbreviation or no value.
     found: list[tuple[str, str]] = []
     for idx, arg in enumerate(args):
         flag, eq, value = arg.partition("=")
