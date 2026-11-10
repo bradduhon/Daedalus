@@ -95,18 +95,14 @@ def test_each_feature_key_reads_its_values(
     assert loaded is not None and loaded.features == want
 
 
-@pytest.mark.parametrize("value", [True, False, None, "yes", 1, {}])
-def test_retired_github_key_loads_and_is_ignored(tmp_path: Path, value: object) -> None:
-    # 0172: a manifest still carrying github loads with any value; the key changes nothing.
-    write_manifest(tmp_path, {"features": {"secrets_scan": True, "github": value}})
-    loaded = load(tmp_path)
-    assert loaded is not None and loaded.features == Features(secrets_scan=True)
-    assert manifest.retired_features(tmp_path) == ("github",)
-
-
 def test_unknown_feature_key_is_refused(tmp_path: Path) -> None:
     message = _refused(tmp_path, {"features": {"scope": "folder", "gitleaks": True}})
     assert "gitleaks" in message
+
+
+def test_the_dropped_github_key_is_an_unknown_key(tmp_path: Path) -> None:
+    # 0241: no dropped feature key loads; github meets the ordinary unknown-key refusal.
+    assert "github" in _refused(tmp_path, {"features": {"github": True}})
 
 
 @pytest.mark.parametrize(

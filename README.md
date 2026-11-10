@@ -78,8 +78,6 @@ The doctor checks every file and tool Daedalus needs. It prints one line per che
 
 In a new repository, the `config.json`, `service-manifest.json`, `contracts/` and `.gitleaks.toml` lines read `OPT`. These are files your project writes about itself. Type `/daedalus:setup` to write starter copies of the first two. A build run and a push run both work without any of them.
 
-If the features object of your `service-manifest.json` still has a `github` key, the doctor prints one `OPT` line saying the key does nothing.
-
 The `fable` line reads `OPT` until `fable_available` is `true` in `config.json` or a running train's audit log shows the session started on Fable. Until then the planner and the auditor run on their own model.
 
 If your project is a plain folder and not a git repository, Daedalus works in folder scope. Only a repository can be pushed, so the doctor marks the `git repository` line and the two gh lines `OPT`. When the secret scan is on, the gitleaks line reads `OPT` too.

@@ -34,7 +34,6 @@ from lib.manifest import (  # noqa: E402
     ManifestError,
     PrioritiesError,
     declared_commands,
-    retired_features,
     scope_kind,
 )
 from lib.manifest import features as manifest_features  # noqa: E402
@@ -50,7 +49,6 @@ TYPECHECK_TIMEOUT_S = 120
 GH_STUCK_NEXT = "run gh auth status from your own shell, then gh auth login if it asks"
 # 0074, 0172: gh, gitleaks and git lines are optional in folder scope, where no Push Train runs.
 FOLDER_OFF = ", and this is folder scope, where the Push Train never runs (0074)"
-RETIRED_DETAIL = "has no effect since 0172; gh is required in repository scope only"
 CLAUDE_TIMEOUT_S = 10
 # 0122: code.claude.com/docs/en/hooks, Command hook fields: onFailure needs v2.1.295 or later.
 ON_FAILURE_MIN = (2, 1, 295)
@@ -830,17 +828,6 @@ def _git_repo_check(repo: Path, is_repo: bool, scope_name: str) -> tuple[bool, s
     )
 
 
-def _retired_key_check(repo: Path) -> Iterator[tuple[bool, str]]:
-    # 0172: a dropped feature key loads and is ignored; one OPT line names it.
-    try:
-        retired = retired_features(repo)
-    except ManifestError:
-        return
-    for key in retired:
-        nxt = f"remove {key} from the features object of service-manifest.json"
-        yield _opt(False, f"{key} key", RETIRED_DETAIL, nxt)
-
-
 def _json_keys(path: Path, *keys: str) -> list[str]:
     # 0190: the keys of one nested object of a JSON file; unreadable or absent reads as none.
     try:
@@ -862,7 +849,6 @@ def _repo_checks(
     if is_repo:
         yield from _version_tag_check(repo)
     yield _manifest_check(repo)
-    yield from _retired_key_check(repo)
     yield from _priorities_check(repo)
     yield from _stack_check(repo)
     yield from _typecheck_check(repo, run_typecheck)
