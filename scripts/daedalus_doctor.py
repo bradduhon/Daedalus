@@ -40,6 +40,7 @@ from lib.manifest import (  # noqa: E402
 )
 from lib.manifest import features as manifest_features  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
+from lib.operator_file import OperatorError, load_user, operator_path  # noqa: E402
 from lib.plan_record import is_need  # noqa: E402
 from lib.workspace import _BARE_VERSION, UNMARK_NEXT, VERSION_FILE, train_marker  # noqa: E402
 
@@ -528,6 +529,7 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
     else:
         yield True, "OK   policy: not declared (optional)"
     yield _fable_check(data.parent.parent, config)
+    yield _operator_check(config)
 
 
 FABLE_NEXT = (
@@ -565,6 +567,26 @@ def _fable_check(root: Path, config: Config) -> tuple[bool, str]:
     if state in (fable.BY_CONFIG, fable.BY_SESSION):
         return True, f"OK   fable: {detail}"
     return _opt(False, "fable", detail, FABLE_NEXT)
+
+
+def _operator_check(config: Config) -> tuple[bool, str]:
+    # 0235: one line for the user-scope operator file; read only, never written or created.
+    path = operator_path()
+    try:
+        user = load_user()
+    except OperatorError as exc:
+        return False, f"MISS operator file: {exc}"
+    over = sorted(config.operator)
+    note = f"; this repository overrides {', '.join(over)}" if over else ""
+    if not path.exists():
+        return True, f"OK   operator file: none at {path}, defaults apply{note}"
+    profile = [k for k in ("literacy", "dash_ban") if getattr(user, k) is not None]
+    keys = ", ".join(profile) or "none"
+    return (
+        True,
+        f"OK   operator file: {path} (main_refusals {len(user.main_refusals)}; "
+        f"profile keys set: {keys}){note}",
+    )
 
 
 def _is_repo(repo: Path) -> bool:
