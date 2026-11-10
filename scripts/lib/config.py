@@ -15,6 +15,7 @@ from lib.agent_models import MODELS
 from lib.audit import check_project_data_dir
 from lib.coder_model import DEFAULT_CODER_MODELS, TIERS
 from lib.credential_paths import credential_roots
+from lib.operator_file import OperatorError, validate
 from lib.project_root import in_git_work_tree
 from lib.train_scope import KNOWN_AGENTS
 
@@ -95,6 +96,8 @@ class Config:
     # 0217: true or false settles Fable for the preferring agents; None leaves it to the session.
     fable_available: bool | None = None
     agent_models: dict[str, str] = field(default_factory=dict)
+    # 0235: the validated per-repository override of the operator file; {} sets nothing.
+    operator: dict[str, object] = field(default_factory=dict)
 
 
 def _require_str(raw: dict[str, object], key: str, where: str) -> str:
@@ -213,6 +216,17 @@ def _fable_available(raw: dict[str, object]) -> bool | None:
         "Next: set fable_available to true when your plan offers Fable, to false to keep "
         "the planner and the auditor on their default model, or remove it."
     )
+
+
+def _operator(raw: dict[str, object]) -> dict[str, object]:
+    # 0235: the operator object goes through operator_file's one validator, never a second schema.
+    value = raw.get("operator")
+    if value is None:
+        return {}
+    try:
+        return validate(value, "config.json", "operator.")
+    except OperatorError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 def _expand_root(entry: str) -> str:
@@ -536,4 +550,5 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
         coder_models=_coder_models(raw),
         fable_available=_fable_available(raw),
         agent_models=_agent_models(raw),
+        operator=_operator(raw),
     )
