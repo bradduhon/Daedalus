@@ -7,7 +7,7 @@ Daedalus is a Claude Code plugin. It gives your session a set of AI agents, each
 
 You start any piece of work with one command: `/daedalus:run` followed by your task. Daedalus sizes the task, tells you which phases it picked, and runs them. When the work is built and audited, `/daedalus:run push` pushes the branch and opens a pull request. No fixed recipe is required. You can run a phase on its own, and you can use the agents in any order.
 
-Daedalus calls a run that builds code a train. You will see that word in branch names, file names and messages. The old commands `/daedalus:build-train`, `/daedalus:push-train` and `/daedalus:doc-train` now only print the new command. The release after 5.1.0 removes them.
+Daedalus calls a run that builds code a train. You will see that word in branch names, file names and messages.
 
 Work moves through seven phases: brainstorm, plan, build, verify, audit, document and release. Each phase is a skill, and phases can overlap. Agent files name their phases with older words: context, clarification, plan, implementation, audit, and commit and release. The catalog maps each of those words to a phase skill.
 
@@ -727,14 +727,11 @@ Daedalus/
 │   ├── audit-report/SKILL.md        # /daedalus:audit-report
 │   ├── brainstorm/SKILL.md          # /daedalus:brainstorm, the brainstorm phase
 │   ├── build/SKILL.md               # /daedalus:build, the build phase
-│   ├── build-train/SKILL.md         # moved to /daedalus:run; prints the new command
 │   ├── catalog/SKILL.md             # /daedalus:catalog
-│   ├── doc-train/SKILL.md           # moved to /daedalus:run doc; prints the new command
 │   ├── document/SKILL.md            # the document phase, in two modes
 │   ├── document/kinds/              # the writer's kind skills: public docs and derived
 │   ├── doctor/SKILL.md              # /daedalus:doctor
 │   ├── plan/SKILL.md                # /daedalus:plan, the plan phase
-│   ├── push-train/SKILL.md          # moved to /daedalus:run push; prints the new command
 │   ├── release/SKILL.md             # the release phase, started by /daedalus:run push
 │   ├── round/SKILL.md               # /daedalus:round
 │   ├── run/SKILL.md                 # /daedalus:run, the one command that starts any run

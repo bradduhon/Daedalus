@@ -16,9 +16,8 @@ from lib.agent_files import Hook
 from tests.conftest import REPO_ROOT, write_folder_run, write_train_marker
 from tests.helpers import flatten_file
 
-# 0174: the doc-train skill is a stub; derived document mode of the document skill holds the recipe.
+# 0174: derived document mode of the document skill holds the recipe.
 DOCUMENT = REPO_ROOT / "skills" / "document" / "SKILL.md"
-DOC_TRAIN = REPO_ROOT / "skills" / "doc-train" / "SKILL.md"
 ROUND = REPO_ROOT / "skills" / "round" / "SKILL.md"
 WRITER = REPO_ROOT / "agents" / "writer.md"
 # 0190: the derived kind skill holds the method the doc-deriving agent body held.
@@ -60,7 +59,6 @@ def test_document_skill_holds_the_recipe_the_stub_dropped() -> None:
         text = (REPO_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
         assert "doc-train" not in text, name
     assert "The **State Block** of this mode holds:" in _derived()
-    assert "/daedalus:run doc" in DOC_TRAIN.read_text(encoding="utf-8")
 
 
 def test_recipe_dispatches_only_catalog_agents() -> None:
