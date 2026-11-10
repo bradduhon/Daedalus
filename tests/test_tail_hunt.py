@@ -4,13 +4,16 @@
 # credential-path check and main's typed tripwires; an admitted form is named, a refused one warned.
 from __future__ import annotations
 
+import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from lib import jail
 from lib.admit import Refusal
 
-from tests.conftest import CFG, CWD
+from tests.adversarial import corpus as C
+from tests.conftest import CFG, CWD, git
 from tests.hook_chain import CHAINS, decide, first_deny
 from tests.payloads import _b
 
@@ -128,7 +131,9 @@ ROLES = sorted({key.split(" (")[0] for key in CHAINS})
 @pytest.fixture
 def spec_repo(cred_home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     repo = cred_home / "repo"
-    (repo / ".git").mkdir(parents=True)
+    repo.mkdir()
+    # 267: a real checkout, so the index lookup reads it; the .env stays untracked.
+    git(repo, "init", "-q")
     (repo / ".env").write_text("KEY=1\n")
     (cred_home / ".ssh").mkdir()
     (cred_home / ".aws").mkdir()
@@ -214,3 +219,180 @@ def test_a_main_tripwire_hunt_form_is_warned_by_name(
     assert reason.startswith(f"{getattr(jail, warning)} The jail's finding: "), (klass, reason)
     # SA-5: a refusal names its span; a typed tripwire names its rule with its Next line.
     assert "Refused: " in reason or "Next:" in reason, (klass, reason)
+
+
+# 267: the three whole-tree reads the issue names, each refused beside a tracked .env.
+ISSUE_267 = ("git log -p", "git grep KEY", "git show HEAD")
+
+
+@pytest.fixture(scope="module")
+def checkouts(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    return C.tracked_checkouts(tmp_path_factory.mktemp("tracked").resolve())
+
+
+@pytest.fixture
+def tracked(checkouts: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
+    monkeypatch.setattr(jail, "_train_scoped", lambda cwd, tool, tool_input: True)
+    return checkouts
+
+
+def _admitted_everywhere(command: str, repo: Path) -> None:
+    assert jail._credential_reason("Bash", {"command": command}, str(repo)) is None, command
+    d = jail.decide(_spec_payload(command, repo, None), CFG)
+    assert d.allow and not d.warn, (command, d.reason)
+    for role in ROLES:
+        deny = first_deny(_spec_payload(command, repo, role), CFG)
+        assert deny is None or deny[0] != "credential_paths", (role, command, deny)
+
+
+def test_the_issue_reads_are_judged_rows() -> None:
+    assert set(ISSUE_267) <= set(C.TRACKED_JUDGED_267)
+
+
+@pytest.mark.parametrize("command", C.TRACKED_JUDGED_267)
+def test_a_content_read_over_a_tracked_secret_is_refused_and_warned(
+    tracked: dict[str, Path], command: str
+) -> None:
+    # 267, 0239: an agent is refused naming the tracked path; main is warned with that text.
+    repo = tracked["secret"]
+    reason = jail._credential_reason("Bash", {"command": command}, str(repo))
+    assert reason is not None and C.TRACKED_SECRET_267 in reason, (command, reason)
+    assert reason.split(" is a ", 1)[0] in {str(repo / ".env"), str(repo / "cfg" / ".env")}
+    d = jail.decide(_spec_payload(command, repo, None), CFG)
+    assert d.warn and not d.allow and reason in str(d.reason), (command, d.reason)
+    for role in ROLES:
+        deny = first_deny(_spec_payload(command, repo, role), CFG)
+        assert deny is not None, (role, command)
+        if deny[0] == "credential_paths":
+            assert C.TRACKED_SECRET_267 in deny[1], (role, command, deny)
+    if jail.admitted(command, "coder", str(repo)):
+        deny = first_deny(_spec_payload(command, repo, "coder"), CFG)
+        assert deny is not None and deny[0] == "credential_paths", (command, deny)
+
+
+@pytest.mark.parametrize("kind", ["none", "example"])
+@pytest.mark.parametrize("command", C.TRACKED_JUDGED_267)
+def test_a_content_read_beside_no_tracked_secret_is_admitted(
+    tracked: dict[str, Path], kind: str, command: str
+) -> None:
+    # 267: no tracked .env, or only .env.example files, so the read is admitted as before.
+    _admitted_everywhere(command, tracked[kind])
+
+
+@pytest.mark.parametrize("command", C.TRACKED_KEPT_267)
+def test_a_read_that_names_no_tracked_secret_is_admitted(
+    tracked: dict[str, Path], command: str
+) -> None:
+    _admitted_everywhere(command, tracked["secret"])
+
+
+@pytest.mark.parametrize(("klass", "checkout", "command", "outcome"), C.TRACKED_HUNT_267)
+def test_a_tracked_secret_hunt_form_meets_its_outcome(
+    tracked: dict[str, Path], klass: str, checkout: str, command: str, outcome: str
+) -> None:
+    # 267: gap rows are residuals the index lookup cannot see; they stay admitted and named.
+    repo = tracked[checkout]
+    got = jail._admission(command, "main", str(repo))[1]
+    reason = jail._credential_reason("Bash", {"command": command}, str(repo))
+    if outcome == "grammar":
+        assert isinstance(got, Refusal) and reason is None, (klass, got, reason)
+    elif outcome in ("kept", "gap"):
+        assert not isinstance(got, Refusal) and reason is None, (klass, got, reason)
+    elif outcome == "named":
+        assert reason is not None and C.TRACKED_SECRET_267 not in reason, (klass, reason)
+    else:
+        marker = C.TRACKED_SECRET_267 if outcome == "tracked" else C.TRACKED_UNKNOWN_267
+        assert reason is not None and marker in reason, (klass, reason)
+    d = jail.decide(_spec_payload(command, repo, None), CFG)
+    assert d.warn == (outcome not in ("kept", "gap")), (klass, d.reason)
+
+
+def _counting(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    calls: list[str] = []
+    real = jail.tracked_secrets
+
+    def count(
+        folder: str, globals_: list[str], hit: Callable[[str], str | None], roots: list[str]
+    ) -> list[str] | None:
+        calls.append(folder)
+        return real(folder, globals_, hit, roots)
+
+    monkeypatch.setattr(jail, "tracked_secrets", count)
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("command", "lookups"),
+    [
+        ("git log -p", 1),
+        ("git log -p -- src && git grep KEY src", 2),
+        ("git log -p -- src; git log -p -- src", 2),
+        ("git status && git log --oneline && git diff --name-only", 0),
+        ("ls src && cat src/a.py", 0),
+        ("grep -r KEY src", 0),
+    ],
+)
+def test_the_lookup_runs_once_per_judged_command_and_never_for_others(
+    tracked: dict[str, Path], monkeypatch: pytest.MonkeyPatch, command: str, lookups: int
+) -> None:
+    calls = _counting(monkeypatch)
+    jail._credential_reason("Bash", {"command": command}, str(tracked["none"]))
+    assert len(calls) == lookups, (command, calls)
+
+
+def _fake_ls(
+    monkeypatch: pytest.MonkeyPatch, outcome: subprocess.CompletedProcess[bytes] | Exception
+) -> None:
+    real = subprocess.run
+
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        if "ls-files" not in argv:
+            return real(argv, **kwargs)  # type: ignore[call-overload, no-any-return]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(jail.subprocess, "run", run)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        subprocess.TimeoutExpired(["git"], 5.0),
+        OSError("no git"),
+        subprocess.CompletedProcess(["git"], 128, b"", b"fatal"),
+        subprocess.CompletedProcess(["git"], 0, b"100644 x 0\tsrc/a.py", b""),
+        subprocess.CompletedProcess(["git"], 0, b"no tab\0", b""),
+    ],
+)
+def test_an_unread_index_inside_a_checkout_fails_closed(
+    tracked: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: subprocess.CompletedProcess[bytes] | Exception,
+) -> None:
+    # 267: a timeout, no git, an error exit or output not ended by NUL refuses inside a checkout.
+    _fake_ls(monkeypatch, outcome)
+    reason = jail._credential_reason("Bash", {"command": "git log -p"}, str(tracked["none"]))
+    assert reason is not None and C.TRACKED_UNKNOWN_267 in reason, reason
+    assert jail._credential_reason("Bash", {"command": "git log"}, str(tracked["none"])) is None
+
+
+def test_a_broken_checkout_fails_closed_and_no_checkout_has_no_answer(tmp_path: Path) -> None:
+    # 267: a .git git cannot read refuses; a folder outside any checkout runs no lookup.
+    broken = tmp_path.resolve() / "broken"
+    (broken / ".git").mkdir(parents=True)
+    reason = jail._credential_reason("Bash", {"command": "git log -p"}, str(broken))
+    assert reason is not None and C.TRACKED_UNKNOWN_267 in reason, reason
+    plain = tmp_path.resolve() / "plain"
+    plain.mkdir()
+    assert jail._credential_reason("Bash", {"command": "git log -p"}, str(plain)) is None
+
+
+def test_the_lookup_ignores_the_hooks_git_variables(
+    tracked: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 267: an index or git dir the hook inherited never hides the checkout's own index.
+    monkeypatch.setenv("GIT_INDEX_FILE", str(tracked["none"] / ".git" / "index"))
+    monkeypatch.setenv("GIT_DIR", str(tracked["none"] / ".git"))
+    reason = jail._credential_reason("Bash", {"command": "git log -p"}, str(tracked["secret"]))
+    assert reason is not None and C.TRACKED_SECRET_267 in reason, reason
