@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from lib.agent_aliases import current as current_name
 from lib.project_root import in_git_work_tree, project_root
 from lib.train_scope import KNOWN_AGENTS
 
@@ -49,8 +48,6 @@ class Features:
 
 # 0073: the one list of feature names; validator check 13 and the key reference import it.
 FEATURE_KEYS = tuple(f.name for f in fields(Features))
-# 0172: a dropped feature key still loads with any value and is ignored; the doctor names it.
-RETIRED_FEATURE_KEYS = ("github",)
 # 0134: a docs.literacy value is a level word or profile:<project-relative path>.
 LITERACY_LEVELS = ("plain", "standard", "expert")
 LITERACY_PROFILE = "profile:"
@@ -312,7 +309,7 @@ def _features(target: Path, raw: dict[str, object]) -> Features:
     block = raw.get("features", {})
     if not isinstance(block, dict):
         raise _key_error(target, "features", "must be an object")
-    unknown = sorted(str(key) for key in set(block) - set(FEATURE_KEYS) - set(RETIRED_FEATURE_KEYS))
+    unknown = sorted(str(key) for key in set(block) - set(FEATURE_KEYS))
     if unknown:
         known = ", ".join(FEATURE_KEYS)
         raise _key_error(target, "features", f"has unknown keys {unknown} (known: {known})")
@@ -528,14 +525,11 @@ def _overrides(target: Path, value: object) -> tuple[tuple[str, tuple[str, ...]]
         raise _bad(target, row, "agents must be an object keyed by agent name")
     out: list[tuple[str, tuple[str, ...]]] = []
     for raw_name, entry in value.items():
-        # 0190: an old agent name reads as its new name for one release; the doctor warns.
-        name = current_name(str(raw_name))
+        name = str(raw_name)
         if name == NOT_OVERRIDABLE:
             raise _bad(target, row, f"names {NOT_OVERRIDABLE}, whose ranking no project overrides")
         if name not in KNOWN_AGENTS - {"main"}:
             raise _bad(target, row, f"names {name!r}, which is not a Daedalus agent file name")
-        if name in {done for done, _ in out}:
-            raise _bad(target, row, f"names {name} twice, under its old and new names")
         body = _object(target, entry, row, {"drivers"}, {"drivers"})
         out.append((name, _ranking(target, body["drivers"], row)))
     return tuple(out)
@@ -795,13 +789,6 @@ def features(repo: Path) -> Features:
     # 0069: no manifest means every feature at its absent default.
     loaded = load(repo)
     return loaded.features if loaded is not None else Features()
-
-
-def retired_features(repo: Path) -> tuple[str, ...]:
-    # 0172: the dropped feature keys the manifest still carries, for the doctor's no-effect line.
-    raw = read_raw(repo)
-    block = raw.get("features") if isinstance(raw, dict) else None
-    return tuple(k for k in RETIRED_FEATURE_KEYS if isinstance(block, dict) and k in block)
 
 
 def scope_kind(root: Path, declared: Features) -> Literal["repository", "folder"]:

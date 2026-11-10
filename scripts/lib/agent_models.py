@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from lib import agent_files, fable
-from lib.agent_aliases import current as current_name
 
 if TYPE_CHECKING:
     from lib.config import Config
@@ -30,7 +29,6 @@ def resolve(
     agents_dir: Path = AGENTS_DIR,
     repo: Path | None = None,
 ) -> str:
-    name = current_name(name)  # 0190: an old agent name reads as its new name for one release.
     path = agents_dir / f"{name}.md"
     if not agent_files.AGENT_NAME.fullmatch(name) or not path.is_file():
         raise AgentModelError(

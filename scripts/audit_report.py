@@ -63,7 +63,7 @@ class _Parser(argparse.ArgumentParser):
 def _parse(argv: list[str]) -> argparse.Namespace:
     parser = _Parser(prog="audit_report.py", description=DESCRIPTION, allow_abbrev=False)
     parser.add_argument("--session")
-    parser.add_argument("--cwd", "--repo", dest="cwd", default=os.getcwd())
+    parser.add_argument("--repo", dest="cwd", default=os.getcwd())
     parser.add_argument("--out")
     # 6.2: the control cost table alone, after the same chain check.
     parser.add_argument("--controls", action="store_true")
@@ -72,7 +72,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     if not os.path.isdir(args.cwd):
         parser.exit(
             1,
-            f"audit_report: --cwd {args.cwd} is not an existing directory. "
+            f"audit_report: --repo {args.cwd} is not an existing directory. "
             "Next: pass the repo directory whose session you want to report.\n",
         )
     return args
