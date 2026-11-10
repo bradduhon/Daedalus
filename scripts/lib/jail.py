@@ -39,6 +39,7 @@ from lib.credential_paths import (
     R_REPLY_KEY_TREE,
     REPLY_KEY_NAME,
     env_file_hit,
+    env_name,
     env_roots,
     env_walk,
     env_whitelist_reason,
@@ -2082,6 +2083,71 @@ def _spec_reaches(spec: _Spec, stores: list[str]) -> str | None:
         if names is None or any(fnmatch.fnmatchcase(fold(n), pat) for n in names):
             return store
     return None
+
+
+# 267: ls-files from the whole checkout; globals forwarded to it, any other global is dropped.
+_LS_FILES = ("ls-files", "-z", "-s", "--", ":/")
+_LS_GLOBALS = frozenset({"--git-dir", "--work-tree"})
+_LS_TIMEOUT = 5.0
+_SYMLINK_MODE = b"120000"
+
+
+def _ls_globals(script: Script, done: AdmittedCommand) -> list[str]:
+    # 267: the typed --git-dir and --work-tree words before the subcommand, as git read them.
+    words = admitted_words(script, done)
+    out: list[str] = []
+    for i, word in enumerate(words[1:], 1):
+        if done.subcommand is not None and word.span == done.subcommand.span:
+            break
+        lit = word.literal or ""
+        name = lit.partition("=")[0]
+        if name in _LS_GLOBALS and "=" in lit:
+            out.append(lit)
+        elif name in _LS_GLOBALS and i + 1 < len(words):
+            out += [lit, words[i + 1].literal or ""]
+        elif lit == "--bare":
+            out.append(lit)
+    return out
+
+
+def tracked_secrets(
+    folder: str, globals_: list[str], hit: Callable[[str], str | None], roots: list[str]
+) -> list[str] | None:
+    # 267: the tracked paths hit refuses by name; [] outside any checkout, None when unread.
+    inside = bool(globals_) or (os.path.isabs(folder) and checkout_git_dir(folder) is not None)
+    if not inside:
+        return []
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    argv = ["git", "-c", "core.fsmonitor=false", *globals_, *_LS_FILES]
+    try:
+        done = subprocess.run(
+            argv,
+            cwd=folder,
+            capture_output=True,
+            timeout=_LS_TIMEOUT,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0 or (done.stdout and not done.stdout.endswith(b"\0")):
+        return None
+    base = os.path.realpath(folder)
+    found: list[str] = []
+    for entry in done.stdout.split(b"\0")[:-1]:
+        meta, tab, raw = entry.partition(b"\t")
+        if not tab or not raw:
+            return None
+        path = os.path.normpath(os.path.join(base, os.fsdecode(raw)))
+        name = os.path.basename(path)
+        # 267: hit judges each name; the cheap tests only skip names it cannot refuse.
+        maybe = env_name(name) or name == REPLY_KEY_NAME or meta.startswith(_SYMLINK_MODE)
+        maybe = maybe or any(path == r or path.startswith(r + os.sep) for r in roots)
+        if maybe and hit(path):
+            found.append(path)
+    return list(dict.fromkeys(found))
 
 
 def _typed_view(
