@@ -472,6 +472,21 @@ def test_each_example_sets_every_key_of_its_file() -> None:
         assert missing == [], info.form
 
 
+def _readme_section() -> str:
+    text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    return text.split("\n### The three settings files\n", 1)[1].split("\n### ", 1)[0]
+
+
+def test_readme_section_carries_the_file_table_and_the_overlaps() -> None:
+    section = _readme_section()
+    for info in SETTINGS_FILES:
+        row = f"| `{info.name}` | {info.where} | {info.whose} | {info.shared} | {info.holds} |"
+        assert row in section, info.form
+    for overlap in OVERLAPS:
+        assert f"- {overlap.text}\n" in section, overlap.id
+    assert "type `/daedalus:setup` again" in section and "docs/examples/" in section
+
+
 def test_examples_name_no_home_or_machine_path() -> None:
     for name in EXAMPLE_NAMES.values():
         text = (EXAMPLES / name).read_text(encoding="utf-8")

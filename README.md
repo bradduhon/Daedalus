@@ -212,7 +212,7 @@ Part of the output on 2026-10-26:
     <repo>/.claude/worktrees/<train-id>-<unit-slug> | scripts/lib/workspace.py:create | the Build Train starts a unit; removed when the train ends or stops
     refs/heads/daedalus/<train-id> | scripts/lib/workspace.py:_merge | a wave merges; one merge commit per unit branch
 
-`<repo>/.claude/daedalus/config.json` is optional. `/daedalus:setup` writes a starter copy when it is missing, and nothing else in Daedalus writes it. Configuration below lists its fields.
+`<repo>/.claude/daedalus/config.json` is optional. `/daedalus:setup` writes a starter copy when it is missing, and changes one setting at a time when you answer its questions. Nothing else in Daedalus writes it. Configuration below lists its fields.
 
 ### Control packs
 
@@ -248,15 +248,35 @@ CIS Benchmark text is licensed, so a CIS pack carries ids only. Write a CSV with
 
 [docs/project-requirements.md](docs/project-requirements.md) describes every file and setting Daedalus reads, each with a small working example. The [operator guide](docs/howto/README.md) covers each run step by step, how to read a block message, and how to read an audit report.
 
-To start both project files, type `/daedalus:setup`. It writes a starter `service-manifest.json` at the project root, with every feature off. It writes a starter `.claude/daedalus/config.json`, with every setting at its default. It writes only a file that is missing and never overwrites one. It prints one line per file: `written:` when it created the file, `kept:` when the file already existed. After writing a new manifest, it prints one more line with example values for the `docs.literacy` key. That key sets how plainly the docs writer writes, and the new manifest holds it as `null`.
+To start or change your settings, type `/daedalus:setup`. It is a short conversation in your session. It first tells you what the three settings files below are. It writes a starter `service-manifest.json` at the project root when that file is missing, with every feature off. It writes a starter `.claude/daedalus/config.json` when that file is missing, with every setting at its default. It asks you once before it creates your personal file in your home folder. It prints one line per file: `written:` when it created the file, `kept:` when the file already existed. After writing a new manifest, it prints one more line with example values for the `docs.literacy` key. That key sets how plainly the docs writer writes, and the new manifest holds it as `null`.
+
+Next it asks about the settings that change what Daedalus does on your first day, one question at a time. Each question says what the setting changes, shows its value now and offers a proposal. It skips a question your project already answers, such as the Terraform questions in a project with no Terraform files. Then it lists the other groups of settings and asks which one to walk, until you choose Done. A setting that nothing in Daedalus acts on yet is named as not active and is never asked.
+
+### The three settings files
+
+Daedalus reads three settings files. Each one has a different owner.
+
+| File | Where it lives | Whose it is | Shared by git | What it holds |
+|---|---|---|---|---|
+| `service-manifest.json` | the project root | the project | yes, git tracks it | what the project is and what it turns on |
+| `.claude/daedalus/config.json` | the .claude/daedalus folder in the project | this checkout on this machine | no, git ignores it | how Daedalus is wired up here |
+| `~/.claude/daedalus/operator.json` | the .claude/daedalus folder in your home folder | you, across every project | no, it sits outside every project | your personal preferences |
+
+Where two files overlap, this is which one wins:
+
+- When the project's manifest and this checkout's config both name a decision ledger, the manifest's ledger wins. The config's ledger is used only when the manifest names none.
+- Today only the project's reading level changes how Daedalus writes. Your personal reading level is checked but nothing reads it yet. Once it is read, it will apply only to a project that sets no reading level of its own.
+- A project's config can hold its own copy of any personal preference. A value set there replaces your personal value for that project only, and the rest still come from your personal file. Nothing acts on those values yet.
+
+To change a setting later, type `/daedalus:setup` again. It starts from the values your files hold now. It asks only the first-day settings still at their default, and offers every other group. Each answer changes one setting and leaves the rest of the file as it was, byte for byte. Before it writes, it checks the whole file with the same check Daedalus runs when it reads that file. A value that check refuses is not written, and you see the check's own message. Each change prints one line: `changed:`, then the file, the setting, its old value and its new value. You can also edit a file by hand. The [examples folder](docs/examples/) holds one filled-in copy of each file, and a test loads each one, so the examples always match what Daedalus accepts.
 
 ### Key reference
 
-The table has one row per key Daedalus reads. Each row says what the key controls, then its type, its allowed values, its default and an example value. The table is generated from `scripts/lib/project_keys.py`, and a test fails when this copy goes stale. Commit `service-manifest.json`, because everyone who works on the project shares it. `config.json` never leaves your machine. A dotted key is a key inside an object, and `[]` marks a key inside each entry of a list.
+The table has one row per key Daedalus reads. Each row says what the key controls and what changes for you, then its type, its allowed values, its default and an example value. The table is generated from `scripts/lib/project_keys.py`, and a test fails when this copy goes stale. Commit `service-manifest.json`, because everyone who works on the project shares it. `config.json` never leaves your machine. A dotted key is a key inside an object, and `[]` marks a key inside each entry of a list.
 
 Some keys and files have no row here, because no reader checks them: the unchecked manifest keys, `.gitleaks.toml`, `contracts/`, the standing-rules backfill file and a project train definition. [docs/project-requirements.md](docs/project-requirements.md) spells those out key by key.
 
-The operator file is a third file in the table. It lives at `~/.claude/daedalus/operator.json` and holds your own settings for every project. A project can override single values with an `operator` object in its `config.json`. Daedalus never writes the operator file. Nothing acts on its values yet.
+The operator file is a third file in the table. It lives at `~/.claude/daedalus/operator.json` and holds your own settings for every project. A project can override single values with an `operator` object in its `config.json`. `/daedalus:setup` creates the operator file when you agree, and changes one value at a time when you answer. Nothing else in Daedalus writes it. Nothing acts on its values yet.
 
 <!-- key reference -->
 | Key | File | What it governs | What changes for you | Type | Allowed values | Default | Example |
@@ -333,7 +353,7 @@ The operator file is a third file in the table. It lives at `~/.claude/daedalus/
 
 Outside a train, Daedalus leaves your session and your repository alone, with two exceptions. Daedalus's own agents keep their own checks. A read or search of a credential file meets one check, which warns your session in its context and refuses an agent.
 
-Outside a train, Daedalus writes no files and keeps no audit log in any repository, even one where a train ran before. The one exception is `/daedalus:setup`, which writes its two starter files when you run it.
+Outside a train, Daedalus writes no files and keeps no audit log in any repository, even one where a train ran before. The one exception is `/daedalus:setup`. It writes the settings files you agree to and changes the settings you answer.
 
 Inside a train, the jail judges every tool call and the audit log records each step. A train works in three folders of your repository:
 
