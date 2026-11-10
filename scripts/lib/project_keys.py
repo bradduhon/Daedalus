@@ -886,6 +886,174 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         (),
     ),
 }
+
+
+@dataclass(frozen=True)
+class Group:
+    id: str
+    title: str
+    order: int
+    file: str
+    keys: tuple[str, ...]
+    # 0242: asked on the first walk; every day-one key has a reader.
+    day_one: tuple[str, ...] = ()
+
+
+def _ledger_keys() -> tuple[str, ...]:
+    return tuple(f"ledger.{key}" for key in (*LEDGER_FIELDS, *LEDGER_OPTIONAL))
+
+
+_PRIORITY_KEYS = tuple(f"priorities.{row}" for row in PRIORITY_ROWS)
+_STACK = tuple(f"stack.{key}" for key in STACK_KEYS)
+# 0242: every key of the three files in exactly one group; tests/test_setup_wizard.py holds it.
+GROUPS: tuple[Group, ...] = (
+    Group(
+        "stack",
+        "The commands that test, type-check and lint the project, and its package manager",
+        1,
+        MANIFEST_FILE,
+        _STACK,
+        _STACK,
+    ),
+    Group(
+        "features",
+        "Switches that turn whole steps of a run on or off",
+        2,
+        MANIFEST_FILE,
+        tuple(f"features.{key}" for key in FEATURE_KEYS),
+        ("features.secrets_scan", "features.ledger", "features.terraform_tools"),
+    ),
+    Group(
+        "docs",
+        "How plainly Daedalus writes for people",
+        3,
+        MANIFEST_FILE,
+        tuple(f"docs.{key}" for key in DOCS_KEYS),
+        ("docs.literacy",),
+    ),
+    Group(
+        "jail",
+        "Files no coding agent may write",
+        4,
+        MANIFEST_FILE,
+        tuple(f"jail_narrowing.{key}" for key in NARROWING_KEYS),
+    ),
+    Group(
+        "dependencies",
+        "Package installs and how new a package may be",
+        5,
+        MANIFEST_FILE,
+        tuple(f"dependencies.{key}" for key in DEPENDENCIES_KEYS),
+    ),
+    Group(
+        "frameworks",
+        "Which control packs the audit judges each change against",
+        6,
+        MANIFEST_FILE,
+        tuple(f"frameworks.{key}" for key in FRAMEWORKS_KEYS),
+    ),
+    Group(
+        "assets",
+        "Asset files the checks and the secret scan skip",
+        7,
+        MANIFEST_FILE,
+        tuple(f"assets.{key}" for key in ASSETS_KEYS),
+    ),
+    Group(
+        "dev_server",
+        "The local site you open to check web changes",
+        8,
+        MANIFEST_FILE,
+        tuple(f"dev_server.{key}" for key in DEV_SERVER_KEYS),
+    ),
+    Group(
+        "priorities",
+        "Which concern wins when two clash",
+        9,
+        MANIFEST_FILE,
+        _PRIORITY_KEYS,
+    ),
+    Group(
+        "project_ledger",
+        "Where rulings are recorded, for everyone on the project",
+        10,
+        MANIFEST_FILE,
+        _ledger_keys(),
+    ),
+    Group(
+        "trains",
+        "A folder of your own run definitions",
+        11,
+        MANIFEST_FILE,
+        ("trains_dir",),
+    ),
+    Group(
+        "charter",
+        "Where your decisions and standing rules live",
+        12,
+        CONFIG_FILE,
+        ("charter_root", "standing_rules"),
+    ),
+    Group(
+        "local_ledger",
+        "Where rulings are recorded on this machine",
+        13,
+        CONFIG_FILE,
+        _ledger_keys(),
+    ),
+    Group(
+        "excluded",
+        "Folders whose files must never reach git or GitHub",
+        14,
+        CONFIG_FILE,
+        ("excluded_roots",),
+    ),
+    Group(
+        "standards",
+        "Your own standards and policy rules",
+        15,
+        CONFIG_FILE,
+        (
+            *(f"standards_sources[].{f.name}" for f in fields(StandardsSource)),
+            *(f"policy.{f.name}" for f in fields(PolicyDecl)),
+        ),
+    ),
+    Group(
+        "models",
+        "Which model each agent runs on",
+        16,
+        CONFIG_FILE,
+        ("coder_models", "agent_models", "fable_available"),
+    ),
+    Group(
+        "limits",
+        "How many coding agents run at once and how many tokens a unit may spend",
+        17,
+        CONFIG_FILE,
+        ("max_concurrent_builders", "unit_token_budget"),
+    ),
+    Group(
+        "machine",
+        "Audit log age, test wrapper folders and signing keys on this machine",
+        18,
+        CONFIG_FILE,
+        ("audit_retention_days", "wrapper_read_roots", "operator_signing_keys"),
+    ),
+    Group(
+        "project_operator",
+        "This project's own copy of your personal preferences",
+        19,
+        CONFIG_FILE,
+        ("operator",),
+    ),
+    Group(
+        "operator",
+        "Your personal preferences across every project",
+        20,
+        OPERATOR_FILE_NAME,
+        operator_keys(),
+    ),
+)
 REFERENCE_HEADER = (
     "Key",
     "File",
