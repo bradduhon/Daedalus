@@ -58,6 +58,17 @@ R_ENV_FILE_TREE = (
     "live keys (0192). Next: search without a hidden-file flag or a glob naming .env, or name "
     "the files you need"
 )
+# 267, 0239: a git read with no pathspec, or one that holds the file, prints a tracked secret.
+R_TRACKED_SECRET = (
+    "{path} is a .env or credential file this repository tracks, and this git read prints it: "
+    "it names no path, or a path that holds or matches the file (0239). Next: name the paths you "
+    "need after --, or ask the operator to untrack {path}"
+)
+R_TRACKED_UNKNOWN = (
+    "{path} is in a git checkout whose tracked files the jail could not list, so it cannot rule "
+    "out a tracked .env or credential file in this git read (0239). Next: run the read without "
+    "a GIT_ variable, or ask the operator why git ls-files fails there"
+)
 # 0192, issue 152: the walk for nested .env files; past either cap the read is refused.
 ENV_WALK_DEPTH = 24
 ENV_WALK_ENTRIES = 100_000
