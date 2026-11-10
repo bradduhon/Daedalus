@@ -7,7 +7,7 @@ import shlex
 from pathlib import Path
 
 import pytest
-from lib import jail, shell
+from lib import jail
 
 from tests.adversarial.corpus import (
     A2_ADMITTED,
@@ -88,7 +88,6 @@ def test_the_probe_rows_now_give_a_finding(marked_repo: Path) -> None:
     # issue 116, 228 S3: the probe gave None for these; each is refused and names its shape.
     for command in A2_PROBE:
         _refused_named(marked_repo, command)
-    assert shell.env_split_values(shlex.split(A2_PROBE[-1])) == ["touch y"]
 
 
 @pytest.mark.parametrize("levels", (1, 2, 3))

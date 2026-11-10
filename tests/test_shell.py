@@ -241,7 +241,7 @@ def test_quote_walk_marks_spans_escapes_and_quote_marks() -> None:
 def test_no_quote_loop_outside_the_walker() -> None:
     # issue 76, 121, 228 tail: the loops that remain read quote_walk.
     tree = _tree("shell.py")
-    users = {"_quote_spans", "_unquoted_expansion", "_unsingled"}
+    users = {"_quote_spans", "_unquoted_expansion"}
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in users:
             source = ast.unparse(node)

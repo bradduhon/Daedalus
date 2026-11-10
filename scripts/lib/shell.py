@@ -1257,47 +1257,6 @@ def _strip_wrappers(
     return tokens
 
 
-def env_split_values(tokens: list[str]) -> list[str]:
-    # issue 80: the value of each env -S or --split-string; 228 tail: no caller, guardrails row.
-    return [
-        v
-        for at, word in enumerate(tokens)
-        if _base(word) == "env"
-        for v in _env_split(tokens[at + 1 :])
-    ]
-
-
-def _env_split(args: list[str]) -> list[str]:
-    # issue 80, 116 (P8): getopt order past values and NAME=VALUE words; an unknown letter is
-    # read past, so -S behind it is found; an expanding word may be -S, so it is an unread body.
-    with_arg = WRAPPER_OPTS["env"][1]
-    i = 0
-    while i < len(args) and args[i] not in {"-", "--"}:
-        token = args[i]
-        later = args[i + 1 : i + 2] or [""]
-        if _expands(token):
-            return [""]
-        if _ASSIGN.match(token):
-            i += 1
-            continue
-        if not token.startswith("-"):
-            break
-        if token.startswith("--"):
-            key, eq, value = token.partition("=")
-            if "--split-string".startswith(key):
-                return [value if eq else later[0]]
-            i += 2 if not eq and _long_option(key, with_arg) in with_arg else 1
-            continue
-        for cut, letter in enumerate(token[1:], start=2):
-            if letter == "S":
-                return [token[cut:] or later[0]]
-            if "-" + letter in with_arg:
-                i += 0 if token[cut:] else 1
-                break
-        i += 1
-    return []
-
-
 def _git_reason(tokens: list[str], assigns: list[str]) -> str | None:
     # 228 tail: tokens are an admitted git command's parsed words, so every word is literal.
     sub, args, globals_ = _git_split(tokens)
@@ -1500,18 +1459,6 @@ def _unquoted_expansion(raw: str) -> bool:
     return any(
         lex.kind == CHAR and not lex.quote and lex.text in "*?[{~$" for lex in quote_walk(raw)
     )
-
-
-def _unsingled(word: str) -> str:
-    # O4: the characters of a raw word the shell may still expand; single-quoted spans drop out.
-    return "".join(
-        lex.text for lex in quote_walk(word) if lex.quote != "'" and lex.kind not in {OPEN, CLOSE}
-    )
-
-
-def _expands(word: str) -> bool:
-    # 0084: the shell may split this raw word or turn it into an option before the command runs.
-    return _unquoted_expansion(word) or bool(set("$`") & set(_unsingled(word)))
 
 
 def _docs_read_split(name: str, args: list[str]) -> tuple[set[str], list[str], list[str]] | None:
