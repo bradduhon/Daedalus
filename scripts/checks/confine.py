@@ -42,8 +42,10 @@ def _declared_tests(cwd: str) -> frozenset[tuple[str, ...]]:
     found: set[tuple[str, ...]] = set()
     for command in commands:
         for cmd, _ in walk(parse(command)):
-            tokens = jail.literal_tokens(cmd)
-            if tokens and shell.command_family(tokens[0]) not in jail.DIR_CHANGE_CMDS:
+            # 269: an operator's declared form as all-literal words, as admit reads one (B2).
+            tokens = [w.literal for w in cmd.words if w.literal is not None]
+            whole = bool(tokens) and len(tokens) == len(cmd.words)
+            if whole and shell.command_family(tokens[0]) not in jail.DIR_CHANGE_CMDS:
                 found.add(tuple(tokens))
     return frozenset(found)
 

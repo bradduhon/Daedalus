@@ -1929,29 +1929,45 @@ def _env_walk_reason(
 def rg_reason(command: str, cwd: str) -> str | None:
     # 113, 0186: the frameworks rulebook's rg judgement as one call; packs.py judges verifies by it.
     # 228 S3b: one plain command from the one parse; any construct, prefix or redirect is R_RG_ONE.
-    script = shparse.parse(command)
+    # 269: the shape is read from the parse nodes; the words only from the auditor's admission.
+    script, got = _admission(command, "auditor", cwd)
     item = script.items[0] if len(script.items) == 1 else None
     cmds = [cmd for cmd, _ in shparse.walk(script)]
     cmd = cmds[0] if len(cmds) == 1 and isinstance(item, Pipeline) else None
     plain = cmd is not None and not (cmd.assignments or cmd.redirects or shparse.opaque(script))
-    tokens = literal_tokens(cmd) if plain else []
-    if tokens[:1] != ["rg"] or (isinstance(item, Pipeline) and (item.negated or item.timed)):
+    if not plain or (isinstance(item, Pipeline) and (item.negated or item.timed)):
         return R_RG_ONE
+    refused = _refused(got)
+    if refused is not None:
+        return _rg_refused(refused)
+    done = got.commands[0] if _passed(got) and len(got.commands) == 1 else None
+    if done is None or done.wrappers or done.word.text != "rg":
+        return R_RG_ONE
+    words = admitted_words(script, done)
+    tokens = admitted_tokens(script, done)
     if rg_program(tokens[1:]):
         return R_RG_PROGRAM
-    if cmd is not None and any(search_rewritten(w) for w in cmd.words):
+    if any(search_rewritten(w) for w in words):
         return R_RG_OPAQUE
     if rg_reaches_hidden(tokens[1:], False):
         return R_RG_REACH
     # 113: judged against the reply key's fixed place, whether or not one exists yet.
     if glob_reaches(_rg_globs(tokens[1:]), [".claude", "daedalus", REPLY_KEY_NAME]):
         return R_REPLY_KEY_TREE.format(path=cwd)
-    # 228 tail: the auditor's own grammar; a verify it refuses has no typed path to judge.
-    got = _admission(command, "auditor", cwd)[1]
-    refused = _refused(got)
-    if refused is not None:
-        return refusal_text(refused)
     return _credential_reason("Bash", {"command": command}, cwd, got)
+
+
+def _rg_refused(refused: Refusal) -> str:
+    # 269: a verify the auditor's grammar refuses is named from the Refusal's typed fields.
+    if refused.word != "rg" or refused.node == "head":
+        return R_RG_ONE
+    if rg_program([refused.operand, refused.option]):
+        return R_RG_PROGRAM
+    if refused.search_rewritten:
+        return R_RG_OPAQUE
+    if rg_reaches_hidden([refused.operand, refused.option], False):
+        return R_RG_REACH
+    return refusal_text(refused)
 
 
 class _Typed(NamedTuple):
@@ -2503,9 +2519,8 @@ def _gh_gate(agent: str, cwd: str, command: str) -> str | None:
     refused = _refused(got)
     if refused is None or refused.family != "gh":
         return None  # 228 S4: no gh call the parse shows; the agent's own grammar refuses it.
-    cmd = refused_command(script, refused)
-    # 0028: a class refusal spans the whole call and is shown as the class table words it.
-    return refused.reason if cmd is not None and refused.span == cmd.span else refusal_text(refused)
+    # 0028, 269: a class refusal spans the whole call and is shown as the class table words it.
+    return refused.reason if refused.whole else refusal_text(refused)
 
 
 def _train_active(cwd: str) -> bool:
@@ -2560,25 +2575,6 @@ def refusal_text(refusal: Refusal, constant: str | None = None) -> str:
 def refused_at(constant: str, reason: str, quoted: str) -> str:
     # 228 S3: a check after admission names what it refused, as refusal_text does.
     return f"{constant} Refused: {reason}, at `{quoted}`."
-
-
-def refused_command(script: Script, refusal: Refusal) -> Command | None:
-    # 228 S3: the innermost parsed command holding the refused span.
-    start, end = refusal.span
-    for cmd, _ in shparse.walk(script):
-        if cmd.span[0] <= start and end <= cmd.span[1]:
-            return cmd
-    return None
-
-
-def refused_word(cmd: Command | None, refusal: Refusal) -> Word | None:
-    start, end = refusal.span
-    for word in cmd.words if cmd is not None else []:
-        if (word.span[0] <= start and end <= word.span[1]) or (
-            start <= word.span[0] and word.span[1] <= end
-        ):
-            return word
-    return None
 
 
 def rewritten(word: Word | None) -> bool:
@@ -2651,7 +2647,7 @@ def coder_refusal(call: CoderCall) -> str | None:
     refused = _refused(call.got)
     if refused is None or call.passed:
         return None
-    return refusal_text(refused, coder_constant(call.script, refused, call.cwd))
+    return refusal_text(refused, coder_constant(refused, call.cwd))
 
 
 # 228 S3b, SA-7: the constant each refused class showed the coder before, by command word.
@@ -2664,57 +2660,38 @@ _CODER_CONSTANTS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"find"}), shell.R_FIND_WRITE),
     (frozenset({"rsync"}), shell.R_RSYNC_REMOTE),
 )
-_CONSTRUCT_PARTS = (shparse.CommandSub, shparse.ProcSub, shparse.Arith, shparse.Opaque)
-_HYGIENE_PARTS = (Param, shparse.BraceList, Tilde)
+# 269: the kept constant for each node class the Refusal names; "" falls to the command word.
+_NODE_CONSTANTS = {
+    "outside": shell.R_UNSUPPORTED,
+    "redirect": shell.R_UNSUPPORTED,
+    "assignment": shell.R_ENV,
+    "construct": shell.R_UNSUPPORTED,
+    "hygiene": shell.R_HYGIENE,
+    "bare": shell.R_ENV,
+    "head": shell.R_VARIABLE,
+}
 
 
-def _parse_base(script: Script, cwd: str) -> str:
-    # 228 S3b: the folder a leading `cd <absolute path> &&` moves to, read from the parse.
-    first = script.items[0] if script.items else None
-    cmd = first.commands[0] if isinstance(first, Pipeline) and len(first.commands) == 1 else None
-    words = [w.literal for w in cmd.words] if isinstance(cmd, Command) else []
-    joined = script.separators[:1] == ["&&"] and len(script.items) > 1
-    if joined and len(words) == 2 and words[0] == "cd" and os.path.isabs(words[1] or ""):
-        return str(words[1])
-    return cwd if os.path.isabs(cwd) else "/"
-
-
-def coder_constant(script: Script, refused: Refusal, cwd: str) -> str | None:
-    constant = refusal_constant(script, refused, cwd)
+def coder_constant(refused: Refusal, cwd: str) -> str | None:
+    constant = refusal_constant(None, refused, cwd)
     if constant is not None or "Next:" in refused.reason:
         return constant
-    cmd = refused_command(script, refused)
-    head = cmd.words[0].literal if cmd is not None and cmd.words else None
-    git = head is not None and shell.command_family(head) == "git"
-    return R_CODER_GIT if git else R_CODER_TABLE
+    return R_CODER_GIT if shell.command_family(refused.word) == "git" else R_CODER_TABLE
 
 
-def refusal_constant(script: Script, refused: Refusal, cwd: str) -> str | None:
-    # 228 S3b, tail: the class of the refused node, read from the parse: a prefix, a redirect, a
-    # construct, an expansion, then the command word; never the command text. None: no class.
+def refusal_constant(script: Script | None, refused: Refusal, cwd: str) -> str | None:
+    # 228 S3b, 269: the refused node's class from the Refusal's typed fields, then its command
+    # word; script is never read (network_tools still passes it). None: no class.
     if "Next:" in refused.reason:
         return None  # 228 S3b: the grammar quoted a kept constant (0164, 0196) as its reason.
-    cmd = refused_command(script, refused)
-    start, _ = refused.span
-    if cmd is None or any(r.span[0] <= start < r.span[1] for r in cmd.redirects):
-        return shell.R_UNSUPPORTED
-    if any(a.span[0] <= start < a.span[1] for a in cmd.assignments):
-        return shell.R_ENV
-    word = refused_word(cmd, refused)
-    parts = word.parts if word is not None else []
-    if any(isinstance(p, _CONSTRUCT_PARTS) for p in parts):
-        return shell.R_UNSUPPORTED
-    dollar = any(isinstance(p, Literal) and p.quoted in ("$'", '$"') for p in parts)
-    hygiene = dollar or any(isinstance(p, _HYGIENE_PARTS) for p in parts)
-    if hygiene and word is not None and word is not cmd.words[0]:
-        return shell.R_HYGIENE
-    head = cmd.words[0].literal if cmd.words else None
-    if head is None:
-        return shell.R_VARIABLE if cmd.words else shell.R_ENV
+    if refused.node:
+        return _NODE_CONSTANTS[refused.node]
+    head = refused.word
     family = shell.command_family(head)
+    base = refused.base if os.path.isabs(refused.base) else cwd if os.path.isabs(cwd) else "/"
     # issue 55, 228 tail: the head, or the word refused after a wrapper, runs the claude binary.
-    words = [head] + ([word.literal] if word is not None and word.literal else [])
-    if family == "claude" or any(shell.runs_claude([w], _parse_base(script, cwd)) for w in words):
+    words = [head] + ([refused.operand] if refused.operand else [])
+    if family == "claude" or any(shell.runs_claude([w], base) for w in words):
         return shell.R_CLAUDE_PATH
     if family == shell.CONFINE:
         return shell.R_CONFINE_FORM

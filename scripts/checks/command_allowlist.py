@@ -16,7 +16,7 @@ from lib.admit import Admitted, Refusal, Role, admit_role, role_for  # noqa: E40
 from lib.audit import project_root  # noqa: E402
 from lib.manifest import ManifestError, manifest_path  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
-from lib.shparse import Script, parse, walk  # noqa: E402
+from lib.shparse import Script, parse  # noqa: E402
 
 TOOLS: frozenset[str] = frozenset({"Bash"})
 NAMES = frozenset({"append_ledger", "git", "gh", "gitleaks", "read", "train", "inspect"})
@@ -304,9 +304,8 @@ def _later(
 ) -> str | None:
     # 228 S3: the checks that read the Admitted record: the train repo and map folders, the
     # charter-docs read roots and the inspect class's git -C bounds.
-    by_span = {cmd.span: cmd for cmd, _ in walk(script)}
     for done in got.commands:
-        tokens = jail.literal_tokens(by_span.get(done.span))
+        tokens = jail.admitted_tokens(script, done)
         quoted = command[done.span[0] : done.span[1]]
         if done.script is not None and train_script_ok(tokens):
             mismatch = train_repo_reason(tokens, cwd) or map_out_reason(tokens, cwd)
