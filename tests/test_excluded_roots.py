@@ -226,7 +226,7 @@ UNADMITTED = (
 
 
 @pytest.mark.parametrize("command", UNADMITTED)
-def test_a_refused_command_is_judged_by_its_folder_alone(repo: Path, command: str) -> None:
+def test_a_command_off_the_table_is_judged_by_its_folder_alone(repo: Path, command: str) -> None:
     # 0224, 228 S4: no typed operand exists, so the root it names is never read from its text;
     # the same command run from inside the root is refused with the standing folder named.
     roots = _roots(str(repo / "private"))
