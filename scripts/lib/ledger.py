@@ -77,6 +77,11 @@ def _manifest_decl(repo_root: Path) -> LedgerDecl | None:
         raw: object = read_raw(repo_root)
     except ManifestError as exc:
         raise LedgerError(str(exc)) from exc
+    return manifest_ledger(raw, target)
+
+
+def manifest_ledger(raw: object, target: Path) -> LedgerDecl | None:
+    # 0242: the manifest ledger block's one check, run by setup on a changed document too.
     # 0076: a null ledger block is not declared, the same as an absent one.
     if not isinstance(raw, dict) or raw.get("ledger") is None:
         return None
@@ -94,6 +99,11 @@ def _manifest_decl(repo_root: Path) -> LedgerDecl | None:
     except ConfigError as exc:
         raise LedgerError(str(exc)) from exc
     return LedgerDecl(Path(path), format_, id_scheme, sequence_source, branch)
+
+
+def check_declared(decl: LedgerDecl, where: str) -> None:
+    # 0242: the format and sequence check resolve_ledger runs, for setup's whole-document check.
+    _validate(decl, where)
 
 
 def _validate(decl: LedgerDecl, where: str) -> None:

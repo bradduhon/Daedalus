@@ -3,6 +3,8 @@
 # 0242: the settings wizard's tables, overlaps, script forms, examples and skill.
 from __future__ import annotations
 
+import argparse
+import copy
 import json
 import os
 import re
@@ -17,10 +19,13 @@ import pytest
 from lib import settings_edit
 from lib.operator_file import Operator, load_user
 from lib.project_keys import (
+    BLOCKS,
     GROUPS,
     KEY_ROWS,
     OVERLAPS,
     SETTINGS_FILES,
+    Block,
+    SettingsFile,
     reference_keys,
     starter_operator,
 )
@@ -109,7 +114,7 @@ def test_describe_lists_every_key_once_with_its_text_and_state(wizard: Path, hom
     for entry in files.values():
         for field in ("path", "where", "whose", "shared", "holds", "groups"):
             assert entry[field], field
-    assert doc["overlaps"] == [{"id": o.id, "text": o.text} for o in OVERLAPS]
+    assert doc["overlaps"] == [{"id": o.id, "text": o.text, "wins": o.wins} for o in OVERLAPS]
     keys = _keys(doc)
     scan = keys[("manifest", "features.secrets_scan")]
     row = KEY_ROWS[("service-manifest.json", "features.secrets_scan")]
@@ -489,11 +494,201 @@ def test_readme_section_carries_the_file_table_and_the_overlaps() -> None:
     assert "type `/daedalus:setup` again" in section and "docs/examples/" in section
 
 
+_FORM_OF = {f.name: f.form for f in SETTINGS_FILES}
+
+
+@pytest.mark.parametrize("block", BLOCKS, ids=lambda b: f"{_FORM_OF[b.file]}-{b.key}")
+def test_each_block_reader_refuses_exactly_its_missing_required_members(
+    block: Block, tmp_path: Path
+) -> None:
+    # 0242: the block table is checked against the readers here, never found by trial in code.
+    import daedalus_setup
+
+    form = _FORM_OF[block.file]
+    members = [k for f, k in KEY_ROWS if f == block.file and k.startswith(block.key + ".")]
+    assert list(block.members) == members and set(block.required) <= set(members)
+    path = tmp_path / ".claude" / "daedalus" / "x.json"
+    doc = _example(form)
+    assert isinstance(doc, dict)
+    daedalus_setup._check(form, doc, path)
+    for member in block.members:
+        trimmed = copy.deepcopy(doc)
+        del trimmed[block.key][member.rsplit(".", 1)[1]]
+        if member in block.required:
+            with pytest.raises(ValueError):
+                daedalus_setup._check(form, trimmed, path)
+        else:
+            daedalus_setup._check(form, trimmed, path)
+    daedalus_setup._check(form, {**doc, block.key: None}, path)
+
+
+@pytest.mark.parametrize("info", SETTINGS_FILES, ids=lambda f: f.form)
+def test_no_other_object_block_refuses_a_lone_member(info: SettingsFile, tmp_path: Path) -> None:
+    import daedalus_setup
+
+    doc = _example(info.form)
+    assert isinstance(doc, dict)
+    blocks = {b.key for b in BLOCKS if b.file == info.name}
+    parents: dict[str, list[str]] = {}
+    for file, key in KEY_ROWS:
+        head, _, leaf = key.partition(".")
+        if file == info.name and leaf and "[]" not in key and "<" not in key:
+            parents.setdefault(head, []).append(leaf.split(".")[0])
+    for parent, leaves in parents.items():
+        if parent in blocks:
+            continue
+        for leaf in leaves:
+            lone = {**doc, parent: {leaf: doc[parent][leaf]}}
+            daedalus_setup._check(info.form, lone, tmp_path / "x.json")
+
+
+LEDGER = {
+    "path": "docs/decisions.md",
+    "format": "markdown-table-row",
+    "id_scheme": "{seq:04d}-{repo}-{type}",
+    "sequence_source": "last-row-id",
+}
+
+
+def _value_file(tmp_path: Path, value: object, name: str = "value.json") -> Path:
+    path = tmp_path / name
+    path.write_text(json.dumps(value), encoding="utf-8")
+    return path
+
+
+def test_describe_marks_each_block_with_its_members_in_asking_order(
+    wizard: Path, home: Path
+) -> None:
+    doc = _describe(wizard, home)
+    blocks = doc["blocks"]
+    assert isinstance(blocks, list)
+    assert [(b["file"], b["key"]) for b in blocks] == [
+        ("manifest", "ledger"),
+        ("manifest", "dev_server"),
+        ("config", "ledger"),
+        ("config", "policy"),
+    ]
+    ledger = blocks[0]
+    assert ledger["members"][0] == "ledger.path" and ledger["members"][-1] == "ledger.branch"
+    assert "ledger.branch" not in ledger["required"] and ledger["state"] == "absent"
+    keys = _keys(doc)
+    assert keys[("config", "policy.engine")]["block"] == "policy"
+    assert keys[("manifest", "features.ledger")]["block"] is None
+
+
+def test_a_block_set_passes_and_keeps_every_other_byte(
+    wizard: Path, home: Path, tmp_path: Path
+) -> None:
+    from lib.config import Config
+    from lib.ledger import resolve_ledger
+
+    path = _manifest(wizard)
+    before = path.read_text(encoding="utf-8")
+    value = _value_file(tmp_path, LEDGER)
+    result = _run(
+        ["--set", "manifest", "ledger", "--value-file", str(value), "--repo", str(wizard)], home
+    )
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.startswith(f"changed: {path} ledger: null -> {{")
+    assert path.read_text(encoding="utf-8") == before.replace(
+        '"ledger": null', '"ledger": ' + json.dumps(LEDGER)
+    )
+    found = resolve_ledger(str(wizard), Config())
+    assert found is not None and found.origin == "manifest"
+
+
+def test_a_block_missing_a_required_member_is_refused_by_its_reader(
+    wizard: Path, home: Path
+) -> None:
+    before = _manifest(wizard).read_bytes()
+    out = _refused(_set(wizard, home, "manifest", "ledger", '{"path": "docs/d.md"}'))
+    assert "ledger block needs non-empty string fields" in out
+    out = _refused(_set(wizard, home, "config", "policy", '{"engine": "conftest"}'))
+    assert "config.json policy needs engine and path" in out
+    # 0242: a lone member of a null block is refused the same way, by the ledger's reader.
+    out = _refused(_set(wizard, home, "manifest", "ledger.path", '"docs/d.md"'))
+    assert "ledger block needs non-empty string fields" in out
+    assert _manifest(wizard).read_bytes() == before
+
+
+def test_a_block_member_the_table_does_not_list_is_refused_by_name(
+    wizard: Path, home: Path
+) -> None:
+    before = _config(wizard).read_bytes()
+    value = '{"engine": "conftest", "path": "/work/policy", "shape": 1}'
+    assert "has no setting named shape" in _refused(_set(wizard, home, "config", "policy", value))
+    assert "takes an object" in _refused(_set(wizard, home, "manifest", "dev_server", "3"))
+    assert _config(wizard).read_bytes() == before
+
+
+def test_null_clears_a_block(wizard: Path, home: Path) -> None:
+    path = _manifest(wizard)
+    before = path.read_text(encoding="utf-8")
+    site = '{"url": "http://localhost:5173", "check": "the page loads"}'
+    assert _set(wizard, home, "manifest", "dev_server", site).returncode == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["dev_server"]["check"] == "the page loads"
+    cleared = _set(wizard, home, "manifest", "dev_server", "null")
+    assert cleared.returncode == 0 and "dev_server: {" in cleared.stdout
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_value_file_carries_text_a_command_line_would_need_to_escape(
+    wizard: Path, home: Path, tmp_path: Path
+) -> None:
+    command = "ruff check . > /dev/null && echo '$HOME'"
+    value = _value_file(tmp_path, command)
+    args = ["--set", "manifest", "stack.lint_cmd", "--value-file", str(value)]
+    result = _run([*args, "--repo", str(wizard)], home)
+    assert result.returncode == 0, result.stdout
+    assert json.loads(_manifest(wizard).read_text(encoding="utf-8"))["stack"]["lint_cmd"] == command
+
+
+def test_value_file_refusals(wizard: Path, home: Path, tmp_path: Path) -> None:
+    before = _manifest(wizard).read_bytes()
+    good = _value_file(tmp_path, True)
+    base = ["--set", "manifest", "features.ledger", "--repo", str(wizard)]
+    both = _refused(_run([*base, "--value", "true", "--value-file", str(good)], home))
+    assert "exactly one of --value and --value-file" in both
+    assert "exactly one" in _refused(_run(base, home))
+    alone = _refused(_run(["--value-file", str(good), "--repo", str(wizard)], home))
+    assert "go only with --set" in alone
+    link = tmp_path / "link.json"
+    link.symlink_to(good)
+    assert "is a symlink" in _refused(_run([*base, "--value-file", str(link)], home))
+    big = tmp_path / "big.json"
+    big.write_text('"' + "x" * settings_edit.MAX_BYTES + '"', encoding="utf-8")
+    assert "is larger than" in _refused(_run([*base, "--value-file", str(big)], home))
+    bad = tmp_path / "bad.json"
+    bad.write_text("yes please", encoding="utf-8")
+    assert "is not JSON" in _refused(_run([*base, "--value-file", str(bad)], home))
+    missing = str(tmp_path / "missing.json")
+    assert "could not be opened" in _refused(_run([*base, "--value-file", missing], home))
+    assert _manifest(wizard).read_bytes() == before
+
+
 SKILL = REPO_ROOT / "skills" / "setup" / "SKILL.md"
 _COMMAND = re.compile(
     r"`(python3 \$\{CLAUDE_SKILL_DIR\}/\.\./\.\./scripts/daedalus_setup\.py[^`]*)`"
 )
-_FILL = {'"<path>"': ".", "<file>": "manifest", "<key>": "features.ledger", "'<json>'": "true"}
+_FILL = {
+    '"<path>"': ".",
+    "<file>": "manifest",
+    "<key>": "features.ledger",
+    "<block>": "ledger",
+    "'<json>'": "true",
+    '"<value file>"': "value-1.json",
+}
+
+
+def _form(args: argparse.Namespace) -> str:
+    if args.describe:
+        return "describe"
+    if args.create_operator:
+        return "create"
+    if args.set is None:
+        return "starter"
+    kind = "block" if args.set[1] == "ledger" else "key"
+    return f"set {kind} by {'file' if args.value_file else 'value'}"
 
 
 def test_skill_command_lines_parse_with_the_script_parser() -> None:
@@ -506,17 +701,20 @@ def test_skill_command_lines_parse_with_the_script_parser() -> None:
         for placeholder, value in _FILL.items():
             line = line.replace(placeholder, value)
         args = daedalus_setup.build_parser().parse_args(shlex.split(line)[2:])
-        forms.add(
-            "describe"
-            if args.describe
-            else "create"
-            if args.create_operator
-            else "set"
-            if args.set
-            else "starter"
-        )
-        assert args.set is None or (args.set[0] in daedalus_setup.FORMS and args.value == "true")
-    assert forms == {"describe", "create", "set", "starter"}
+        forms.add(_form(args))
+        if args.set is not None:
+            assert args.set[0] in daedalus_setup.FORMS
+            assert (args.value, args.value_file) in (("true", None), (None, "value-1.json"))
+            if args.set[1] == "ledger":
+                assert daedalus_setup.block_of("service-manifest.json", "ledger") is not None
+    assert forms == {
+        "describe",
+        "create",
+        "starter",
+        "set key by value",
+        "set key by file",
+        "set block by file",
+    }
 
 
 def test_skill_states_the_question_rules_and_never_asks_a_not_active_setting() -> None:

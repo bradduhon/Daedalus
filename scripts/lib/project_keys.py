@@ -1102,11 +1102,40 @@ GROUPS: tuple[Group, ...] = (
 
 
 @dataclass(frozen=True)
+class Block:
+    file: str
+    key: str
+    # 0242: member keys in asking order, and those the block's reader refuses to see missing.
+    members: tuple[str, ...]
+    required: tuple[str, ...]
+
+
+def _block(file: str, key: str, members: tuple[str, ...], required: tuple[str, ...]) -> Block:
+    return Block(
+        file, key, tuple(f"{key}.{m}" for m in members), tuple(f"{key}.{m}" for m in required)
+    )
+
+
+_LEDGER_MEMBERS = (*LEDGER_FIELDS, *LEDGER_OPTIONAL)
+_POLICY_MEMBERS = tuple(f.name for f in fields(PolicyDecl))
+# 0242: object blocks whose reader refuses a lone member; setup's block form sets each whole.
+# Readers: ledger.py manifest_ledger, manifest.py _dev_server, config.py _ledger and _policy.
+BLOCKS: tuple[Block, ...] = (
+    _block(MANIFEST_FILE, MANIFEST_LEDGER, _LEDGER_MEMBERS, LEDGER_FIELDS),
+    _block(MANIFEST_FILE, "dev_server", DEV_SERVER_KEYS, DEV_SERVER_KEYS),
+    _block(CONFIG_FILE, "ledger", _LEDGER_MEMBERS, LEDGER_FIELDS),
+    _block(CONFIG_FILE, "policy", _POLICY_MEMBERS, _POLICY_MEMBERS),
+)
+
+
+@dataclass(frozen=True)
 class Overlap:
     id: str
     text: str
     # 0242: (path, line, words on that line) the answer rests on; a test rereads each line.
     sources: tuple[tuple[str, int, str], ...]
+    # 0242: the file form whose value wins, or None where no code decides yet.
+    wins: str | None
 
 
 # 0242: which file wins where two files overlap; the describe output and the README share these.
@@ -1116,7 +1145,8 @@ OVERLAPS: tuple[Overlap, ...] = (
         "When the project's manifest and this checkout's config both name a decision ledger, "
         "the manifest's ledger wins. The config's ledger is used only when the manifest names "
         "none.",
-        (("scripts/lib/ledger.py", 206, "manifest wins, then config"),),
+        (("scripts/lib/ledger.py", 216, "manifest wins, then config"),),
+        "manifest",
     ),
     Overlap(
         "literacy",
@@ -1127,6 +1157,7 @@ OVERLAPS: tuple[Overlap, ...] = (
             ("scripts/lib/briefs.py", 281, "manifest.docs.literacy"),
             ("scripts/lib/operator_file.py", 4, "no check or hook acts on it yet"),
         ),
+        None,
     ),
     Overlap(
         "operator",
@@ -1134,6 +1165,7 @@ OVERLAPS: tuple[Overlap, ...] = (
         "there replaces your personal value for that project only, and the rest still come "
         "from your personal file. Nothing acts on those values yet.",
         (("scripts/lib/operator_file.py", 138, "a key the override sets replaces the base value"),),
+        "config",
     ),
 )
 REFERENCE_HEADER = (

@@ -19,17 +19,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import atomic, settings_edit  # noqa: E402
 from lib.audit import DataDirError, check_project_data_dir, ensure_project_data_dir  # noqa: E402
 from lib.config import ConfigError, parse_config  # noqa: E402
+from lib.ledger import LedgerError, check_declared, manifest_ledger  # noqa: E402
 from lib.manifest import MANIFEST_NAME, ManifestError  # noqa: E402
 from lib.manifest import parse as parse_manifest  # noqa: E402
 from lib.operator_file import MAX_BYTES as OPERATOR_MAX_BYTES  # noqa: E402
 from lib.operator_file import OPERATOR_FILE, OperatorError  # noqa: E402
 from lib.operator_file import validate as validate_operator  # noqa: E402
 from lib.project_keys import (  # noqa: E402
+    BLOCKS,
     GROUPS,
     KEY_ROWS,
     LITERACY_EXAMPLES,
     OVERLAPS,
     SETTINGS_FILES,
+    Block,
     SettingsFile,
     starter_config,
     starter_manifest,
@@ -53,6 +56,7 @@ TERRAFORM_DEPTH = 6
 TERRAFORM_ENDINGS = (".tf", ".tfvars")
 _SKIPPED_FOLDERS = frozenset({"node_modules"})
 SET_NEXT = "Next: correct the command as the line above says, then run it again."
+FILE_NEXT = "Next: write the value file again as one JSON value, then run the same command again."
 VALUE_NEXT = "Next: choose a value the key reference in the README allows, then set it again."
 
 
@@ -208,11 +212,16 @@ def _path(form: str, root: Path) -> Path:
 
 
 def _check(form: str, doc: object, path: Path) -> None:
-    # 0242: each file's own reader judges the whole document; its message is shown as it is.
+    # 0242: each file's own readers judge the whole document; their message is shown as it is.
     if form == "manifest":
         parse_manifest(doc, path)
+        declared = manifest_ledger(doc, path)
+        if declared is not None:
+            check_declared(declared, str(path))
     elif form == "config":
-        parse_config(doc, path)
+        config = parse_config(doc, path)
+        if config.ledger is not None:
+            check_declared(config.ledger, str(path))
     else:
         validate_operator(doc, str(path))
 
@@ -259,7 +268,32 @@ def _form_of_name(name: str) -> str:
     return next(f.form for f in SETTINGS_FILES if f.name == name)
 
 
+def block_of(name: str, key: str) -> Block | None:
+    return next((b for b in BLOCKS if b.file == name and b.key == key), None)
+
+
+def _block_refusal(info: SettingsFile, block: Block, value: object) -> str | None:
+    # 0242: a block is set whole, as an object of its own members or as null to clear it.
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return (
+            f"set refused: {block.key} of the {info.form} file takes an object of its settings "
+            "or null. Next: write the value as one JSON object, or null to clear the block."
+        )
+    unknown = sorted(str(k) for k in value if f"{block.key}.{k}" not in block.members)
+    if unknown:
+        known = ", ".join(m.removeprefix(block.key + ".") for m in block.members)
+        return (
+            f"set refused: {block.key} of the {info.form} file has no setting named "
+            f"{', '.join(unknown)}. Next: use only the settings {known}."
+        )
+    return None
+
+
 def _key_refusal(info: SettingsFile, key: str) -> str | None:
+    if block_of(info.name, key) is not None:
+        return None
     if (info.name, key) in KEY_ROWS:
         if _addressable(key):
             return None
@@ -299,11 +333,15 @@ def set_key(form: str, key: str, raw: str, repo: Path) -> int:
         raise SetupStop(refusal)
     try:
         value: object = json.loads(raw)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise SetupStop(
-            f"set refused: the value {raw!r} is not JSON. Next: write the value as JSON, "
+            f"set refused: the value {raw[:80]!r} is not JSON. Next: write the value as JSON, "
             'such as true, 3, "text" or ["one", "two"].'
         ) from exc
+    block = block_of(info.name, key)
+    refusal = _block_refusal(info, block, value) if block is not None else None
+    if refusal is not None:
+        raise SetupStop(refusal)
     try:
         path = _path(form, project_root(repo))
     except DataDirError as exc:
@@ -333,7 +371,7 @@ def set_key(form: str, key: str, raw: str, repo: Path) -> int:
         ) from exc
     try:
         _check(form, changed, path)
-    except (ManifestError, ConfigError, OperatorError) as exc:
+    except (ManifestError, ConfigError, OperatorError, LedgerError) as exc:
         # 0242: the reader's own message, with a next step when the reader gave none.
         tail = "" if "Next:" in str(exc) else f" {VALUE_NEXT}"
         raise SetupStop(
@@ -495,6 +533,7 @@ def _key_entry(
         "default": row.default,
         "example": row.example,
         "readers": list(row.readers),
+        "block": next((b.key for b in BLOCKS if b.file == info.name and key in b.members), None),
     }
     has_default, default = settings_edit.lookup(_defaults(info.form), _segments(key))
     if has_default and _addressable(key):
@@ -515,6 +554,26 @@ def _key_entry(
     return entry
 
 
+def _block_entry(
+    info: SettingsFile, block: Block, doc: object, readable: bool
+) -> dict[str, object]:
+    # 0242: a block the skill asks member by member and writes once with the block form.
+    entry: dict[str, object] = {
+        "file": info.form,
+        "key": block.key,
+        "members": list(block.members),
+        "required": list(block.required),
+    }
+    if not readable:
+        entry["state"] = "unknown"
+        return entry
+    present, value = settings_edit.lookup(doc, (block.key,))
+    entry["state"] = "set" if present and value is not None else "absent"
+    if present and value is not None:
+        entry["value"] = value
+    return entry
+
+
 def _load(form: str, root: Path) -> tuple[Path | None, bool, object, str | None]:
     # 0242: (path, exists, document, why it is unreadable); one bad file never stops the rest.
     try:
@@ -530,7 +589,7 @@ def _load(form: str, root: Path) -> tuple[Path | None, bool, object, str | None]
         _check(form, doc, path)
     except (settings_edit.EditError, OSError) as exc:
         return path, True, None, f"{path} {exc}"
-    except (ManifestError, ConfigError, OperatorError) as exc:
+    except (ManifestError, ConfigError, OperatorError, LedgerError) as exc:
         return path, True, None, str(exc)
     return path, True, doc, None
 
@@ -539,6 +598,7 @@ def describe(repo: Path) -> int:
     root = project_root(repo)
     files: list[dict[str, object]] = []
     keys: list[dict[str, object]] = []
+    blocks: list[dict[str, object]] = []
     for info in SETTINGS_FILES:
         path, exists, doc, error = _load(info.form, root)
         groups = sorted((g for g in GROUPS if g.file == info.name), key=lambda g: g.order)
@@ -569,9 +629,13 @@ def describe(repo: Path) -> int:
             for key in group.keys:
                 day_one = key in group.day_one
                 keys.append(_key_entry(info, key, group.id, day_one, doc, error is None))
+        blocks.extend(
+            _block_entry(info, b, doc, error is None) for b in BLOCKS if b.file == info.name
+        )
     out = {
         "files": files,
-        "overlaps": [{"id": o.id, "text": o.text} for o in OVERLAPS],
+        "overlaps": [{"id": o.id, "text": o.text, "wins": o.wins} for o in OVERLAPS],
+        "blocks": blocks,
         "keys": keys,
         "detected": detect(root),
         "moot": moot(root),
@@ -605,23 +669,45 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"change one key of an existing file; FILE is one of {', '.join(FORMS)}",
     )
     parser.add_argument("--value", help="the new value of the --set key, written as JSON")
+    parser.add_argument(
+        "--value-file", help="a file holding the new value of the --set key, written as JSON"
+    )
     return parser
+
+
+def _value_text(value: str | None, value_file: str | None) -> str:
+    # 0242: a value file keeps the operator's text off the command line; exactly one form.
+    if (value is None) == (value_file is None):
+        raise SetupStop(
+            f"set refused: --set needs exactly one of --value and --value-file. {SET_NEXT}"
+        )
+    if value is not None:
+        return value
+    path = Path(str(value_file))
+    try:
+        return settings_edit.read_text(path, settings_edit.MAX_BYTES)
+    except atomic.LinkRefused as exc:
+        detail = "is a symlink"
+        raise SetupStop(f"set refused: the value file {path} {detail}. {FILE_NEXT}") from exc
+    except settings_edit.EditError as exc:
+        raise SetupStop(f"set refused: the value file {path} {exc}. {FILE_NEXT}") from exc
 
 
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     repo = Path(args.repo).resolve()
     try:
-        if args.value is not None and args.set is None:
-            raise SetupStop(f"setup stopped: --value goes only with --set. {SET_NEXT}")
+        if args.set is None and (args.value is not None or args.value_file is not None):
+            raise SetupStop(
+                f"setup stopped: --value and --value-file go only with --set. {SET_NEXT}"
+            )
         if args.describe:
             return describe(repo)
         if args.create_operator:
             return create_operator()
         if args.set is not None:
-            if args.value is None:
-                raise SetupStop(f"set refused: --set needs --value with the new value. {SET_NEXT}")
-            return set_key(args.set[0], args.set[1], args.value, repo)
+            raw = _value_text(args.value, args.value_file)
+            return set_key(args.set[0], args.set[1], raw, repo)
     except SetupStop as exc:
         print(exc)
         return 1
