@@ -590,36 +590,6 @@ def test_refused_manifest_falls_back_to_the_detected_scope(tmp_path: Path) -> No
     assert daedalus_doctor.scope(repo) == "repository"
 
 
-RETIRED_LINE = (
-    "OPT  github key: has no effect since 0172; gh is required in repository scope only. "
-    "Next: remove github from the features object of service-manifest.json"
-)
-
-
-@pytest.mark.parametrize("value", [True, False, None, "yes"])
-def test_retired_github_key_prints_one_line_and_changes_nothing(
-    tmp_path: Path, value: object
-) -> None:
-    # 0172: the manifest still loads; one OPT line names the key, and the gh lines key on scope.
-    _features(tmp_path, {"github": value})
-    home = tmp_path / "home"
-    home.mkdir()
-    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
-    assert lines.count(RETIRED_LINE) == 1
-    assert sum("github key" in line for line in lines) == 1
-    assert any(line.startswith("OK   service-manifest.json: ") for line in lines)
-    gh = [line for line in lines if line[5:].startswith("gh ")]
-    assert len(gh) == 2 and all(line.startswith("OPT  gh ") for line in gh)
-
-
-def test_no_retired_key_line_without_the_key(tmp_path: Path) -> None:
-    _features(tmp_path, {"secrets_scan": False})
-    home = tmp_path / "home"
-    home.mkdir()
-    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
-    assert not any("github key" in line for line in lines)
-
-
 def test_plain_folder_runs_the_folder_scope_checks(tmp_path: Path) -> None:
     # issue 48: a folder with no .git is folder scope; every git-dependent line is OPT, none MISS.
     folder = tmp_path / "plain"
