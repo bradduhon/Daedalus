@@ -76,7 +76,8 @@ When the dispatch carries a `Size: small` line, run these two commands right aft
 The change is small only when the stat shows at most 3 files and at most 150 changed lines
 (insertions plus deletions), and the name list holds no path under `scripts/checks/`,
 `agents/`, `skills/` or `hooks/`, none of `scripts/lib/jail.py`, `scripts/lib/shell.py` or
-`scripts/enforce_agent_jail.py`, and no protected path of step 4. When either check fails,
+`scripts/enforce_agent_jail.py`, no path of the table-diff list below, and no protected path
+of step 4. When either check fails,
 take the full procedure and say so in your paragraph. The excluded paths are `CONTROL_PATHS`
 in `scripts/lib/plan_record.py` (0182). With an `Assets:` line, the stat command ends with its
 tail, so asset files never count toward the size; the name list never carries the tail.
@@ -87,6 +88,37 @@ removed lines (step 1), the fixed class commands of step 2, scope (step 4) and c
 `Reachable:` and `Hunt:` lines, and the adversarial corpus run (Finding format item 5); a
 small change touches no jail check file. The short form is one round, round 1. A later round
 after a fix takes the full procedure.
+
+## Table-diff form (0232)
+When the dispatch carries a `Form: table diff` line, run
+`git diff --name-only <diff base>...<branch>` right after step 0. The table-diff list is any of
+`scripts/lib/jail.py`, `scripts/lib/admit.py`, `scripts/lib/shell.py`, `scripts/lib/shparse.py`,
+`scripts/lib/credential_paths.py`, `scripts/enforce_agent_jail.py`, a path under
+`scripts/checks/` or a path under `tests/adversarial/`. When the name list holds no path of
+it, take the full procedure and say so in your paragraph. Otherwise your method for the round:
+1. Run the adversarial corpus on `<tip>` (Finding format item 5). Every failing row is a
+   blocking finding.
+2. Derive the table diff yourself from the full diff of step 1: one line per row added,
+   widened, narrowed or removed in an admission table,
+   `Table diff: <table> | <added, widened, narrowed or removed> | <row> | <corpus row that pins it>`,
+   or `Table diff: none`. The admission tables are the role table and the option sets of
+   `scripts/lib/admit.py`, the command and git sets of `scripts/lib/shell.py`, the git grammars
+   (`_GIT_GRAMMAR` in `scripts/lib/jail.py`, `READ_GIT_GRAMMAR` in
+   `scripts/checks/read_only_bash.py`), and the check tables of `scripts/lib/jail.py` and of
+   each file under `scripts/checks/`. Find each pinning row with `git grep -n` over
+   `tests/adversarial` at `<branch>`.
+3. Read the coder's `Table diff:` lines from `git log <diff base>..<branch>` as a claim, never
+   as the table. A row only your table holds is judged like any other; name each disagreement
+   in your paragraph.
+4. Judge each added or widened row: what it now admits, and for a tool or a new form of one,
+   the tool surface method of step 2. Name each removed row. An added or widened row with no
+   corpus row is a blocking finding filed by Finding format item 1.
+5. Keep the judged tip, the full diff with its removed lines, the fixed class commands of
+   step 2, contract (step 3), scope (step 4), compliance (step 5), the Finding format and both
+   verdict lines. Run no free-form hunt: skip the rank by readers and the reachable scope, and
+   expect no `Reachable:` or `Hunt:` lines.
+Your reply carries the `Table diff:` lines right before the `## Compliance` section. Every
+later round of the run takes the same form while the name list holds a path of the list.
 
 ## Procedure
 Work through every step for every branch.
@@ -209,6 +241,10 @@ broken, not the one case. The test asserts it at every enforcement point that ho
    `python3 -m pytest <audit worktree>/tests/adversarial -q -p no:cacheprovider --rootdir <audit worktree>`.
    A new spelling of a known bypass class is filed first as an audit test in the round folder,
    named for that class; the coder's fix adds it as a row of the matching module.
+   Refutations become corpus (0229): every reproduction you or the operator record on a file
+   of the table-diff list lands in `tests/adversarial/` as a named row before the fix is
+   accepted. In the next round, check that the row exists at `<tip>` and passes; a fix with
+   no such row is a blocking finding in the class of the one it fixes.
 A suggested fix may follow a finding as `Fix: <one line>`; the coder checks it against the
 test before acting on it, so the test, not the suggestion, defines done.
 

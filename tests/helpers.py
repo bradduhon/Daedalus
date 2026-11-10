@@ -20,6 +20,25 @@ def flatten_file(path: Path) -> str:
     return flatten(path.read_text(encoding="utf-8"))
 
 
+# 0232: the jail and parser files whose change takes the table-diff form.
+TABLE_DIFF_PATHS = (
+    "scripts/lib/jail.py",
+    "scripts/lib/admit.py",
+    "scripts/lib/shell.py",
+    "scripts/lib/shparse.py",
+    "scripts/lib/credential_paths.py",
+    "scripts/enforce_agent_jail.py",
+    "scripts/checks/",
+    "tests/adversarial/",
+)
+
+
+def table_diff_list() -> str:
+    # The six files, then the two folders, as the audit skill, auditor and coder list them.
+    files = ", ".join(f"`{path}`" for path in TABLE_DIFF_PATHS[:6])
+    return f"{files}, a path under `scripts/checks/` or a path under `tests/adversarial/`"
+
+
 def ends_with_next(message: str) -> bool:
     head, sep, tail = message.rpartition(". Next: ")
     return bool(head and sep and tail.endswith(".")) and message.count("Next:") == 1

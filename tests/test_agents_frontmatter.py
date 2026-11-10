@@ -13,6 +13,7 @@ from lib.jail import WORKER_DENIED_TOOLS
 from lib.train_scope import KNOWN_AGENTS
 
 from tests.conftest import REPO_ROOT
+from tests.helpers import table_diff_list
 
 AGENTS = REPO_ROOT / "agents"
 EXPECTED_MODEL = {
@@ -601,6 +602,35 @@ def test_auditor_short_form_measures_first_and_keeps_the_gate() -> None:
     ):
         assert phrase in short, phrase
     assert text.index("## Short form (0166, 0175)") < text.index("## Procedure")
+
+
+def test_auditor_judges_a_jail_change_by_table_diff() -> None:
+    # 0232: the suite plus a re-derived table diff; no free-form hunt in that form.
+    text = " ".join(AUDITOR.read_text().split())
+    form = text.split("## Table-diff form (0232)", 1)[1].split("## Procedure", 1)[0]
+    for phrase in (
+        "When the dispatch carries a `Form: table diff` line",
+        f"The table-diff list is any of {table_diff_list()}.",
+        "When the name list holds no path of it, take the full procedure and say so",
+        "Run the adversarial corpus on `<tip>` (Finding format item 5). Every failing row is a "
+        "blocking finding.",
+        "Derive the table diff yourself from the full diff of step 1",
+        "`Table diff: <table> | <added, widened, narrowed or removed> | <row> | <corpus row "
+        "that pins it>`",
+        "the role table and the option sets of `scripts/lib/admit.py`",
+        "Read the coder's `Table diff:` lines from `git log <diff base>..<branch>` as a claim, "
+        "never as the table.",
+        "Judge each added or widened row",
+        "Name each removed row. An added or widened row with no corpus row is a blocking finding",
+        "Run no free-form hunt: skip the rank by readers and the reachable scope",
+    ):
+        assert phrase in form, phrase
+    short = text.split("## Short form (0166, 0175)", 1)[1].split("## Table-diff form", 1)[0]
+    assert "no path of the table-diff list below" in short
+    coder = " ".join((AGENTS / "coder.md").read_text().split())
+    table = coder.split("**Table diff** (0232):", 1)[1].split("**Refuted forms**", 1)[0]
+    assert f"include any of {table_diff_list()}, the body of your last commit" in table
+    assert "The auditor derives its own table and checks yours against it." in table
 
 
 def test_auditor_keeps_the_phrases_later_units_read() -> None:
