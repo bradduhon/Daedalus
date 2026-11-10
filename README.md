@@ -679,6 +679,7 @@ Daedalus/
 │   ├── lib/locks.py                 # the one FIFO-safe lock opener and bounded lock
 │   ├── lib/manifest.py              # the one reader of service-manifest.json
 │   ├── lib/narrow.py                # narrows parsed JSON values to typed values
+│   ├── lib/operator_file.py         # reads the user-level operator file and its project override
 │   ├── lib/packs.py                 # loads and checks framework control packs
 │   ├── lib/passes.py                # writes and checks the operator's one-time pass for a refused command
 │   ├── lib/plan_record.py           # loads and validates plan records

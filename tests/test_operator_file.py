@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -71,6 +72,13 @@ def test_symlink_refused(home: Path, tmp_path: Path) -> None:
 def test_dangling_symlink_refused(home: Path, tmp_path: Path) -> None:
     (home / ".claude" / "daedalus" / "operator.json").symlink_to(tmp_path / "gone.json")
     with pytest.raises(OperatorError, match="symlink"):
+        load_user()
+
+
+def test_fifo_refused_without_blocking(home: Path) -> None:
+    # 0235: O_NONBLOCK lets the open return, so fstat refuses the FIFO instead of hanging.
+    os.mkfifo(home / ".claude" / "daedalus" / "operator.json")
+    with pytest.raises(OperatorError, match="regular file"):
         load_user()
 
 

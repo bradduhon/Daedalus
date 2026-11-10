@@ -529,7 +529,6 @@ def _config_checks(data: Path) -> Iterator[tuple[bool, str]]:
     else:
         yield True, "OK   policy: not declared (optional)"
     yield _fable_check(data.parent.parent, config)
-    yield _operator_check(config)
 
 
 FABLE_NEXT = (
@@ -569,14 +568,24 @@ def _fable_check(root: Path, config: Config) -> tuple[bool, str]:
     return _opt(False, "fable", detail, FABLE_NEXT)
 
 
-def _operator_check(config: Config) -> tuple[bool, str]:
+def _repo_config(repo: Path) -> Config | None:
+    # 0235: the override note needs the config only when it loads; any failure reads as none.
+    if _trust_error(repo) is not None:
+        return None
+    try:
+        return load_config(path=project_data_dir(str(repo)) / "config.json")
+    except ConfigError:
+        return None
+
+
+def _operator_check(config: Config | None) -> tuple[bool, str]:
     # 0235: one line for the user-scope operator file; read only, never written or created.
     path = operator_path()
     try:
         user = load_user()
     except OperatorError as exc:
         return False, f"MISS operator file: {exc}"
-    over = sorted(config.operator)
+    over = sorted(config.operator) if config is not None else []
     note = f"; this repository overrides {', '.join(over)}" if over else ""
     if not path.exists():
         return True, f"OK   operator file: none at {path}, defaults apply{note}"
@@ -959,6 +968,7 @@ def checks(repo: Path, run_typecheck: bool = False) -> Iterator[tuple[bool, str]
     is_repo = _is_repo(repo)
     scope_name = scope(repo)
     yield from _data_checks(repo, is_repo)
+    yield _operator_check(_repo_config(repo))
     yield _marker_check(repo)
     yield _cache_check()
     yield _plugin_root_check()

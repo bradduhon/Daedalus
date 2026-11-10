@@ -109,7 +109,7 @@ def validate(raw: object, where: str, prefix: str = "") -> dict[str, object]:
 
 def _read(path: Path) -> object:
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     except OSError as exc:
         raise _fail(str(path), "file", f"could not be opened ({exc.strerror})") from exc
     if not stat.S_ISREG(os.fstat(fd).st_mode):
