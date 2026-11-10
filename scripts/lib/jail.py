@@ -1506,6 +1506,11 @@ _ANCESTOR_ALL = frozenset({"rm", "rmdir", "rsync", "chmod", "chown", "chgrp"})
 _ANCESTOR_SOURCES = frozenset({"mv", "cp", "ln", "install"})
 _WHOLE_TARGET = frozenset({"-T", "--no-target-directory", "--exchange"})
 _TARGET_DIR = frozenset({"-t", "--target-directory"})
+# 269: a recursive cp merges its source tree into its destination, so it takes that whole too.
+_TREE_COPY = frozenset({"-r", "-R", "-a", "--recursive", "--archive"})
+# 269: a mode or owner change of HOME or above takes the data folder only with -R.
+_MODE_CHANGES = frozenset({"chmod", "chown", "chgrp"})
+_RECURSIVE = frozenset({"-R", "--recursive"})
 
 
 def _ancestor_writes(done: AdmittedCommand) -> list[Typed]:
@@ -1516,7 +1521,7 @@ def _ancestor_writes(done: AdmittedCommand) -> list[Typed]:
     if done.family not in _ANCESTOR_SOURCES or not done.writes:
         return []
     names = {o.text.split("=", 1)[0] for o in done.options}
-    if names & _WHOLE_TARGET:
+    if names & _WHOLE_TARGET or (done.family == "cp" and names & _TREE_COPY):
         return list(done.writes)
     marks = [o.span for o in done.options if o.text.split("=", 1)[0] in _TARGET_DIR]
     writes = sorted(done.writes, key=lambda t: t.span)
@@ -1525,17 +1530,24 @@ def _ancestor_writes(done: AdmittedCommand) -> list[Typed]:
     return [w for w in writes if w is not dest]
 
 
-def _data_dir_holds(path: str | None, folder: str, cwd: str, whole: bool, family: str) -> bool:
+def _data_dir_holds(path: str | None, folder: str, cwd: str, whole: bool, home_named: bool) -> bool:
     # 266: a path in or reaching a data folder; when the write takes its folder whole, a literal
-    # proper ancestor too. A recursive rm of /, HOME or above is the delete tripwire's to name.
+    # proper ancestor too, bar /, HOME and above unless home_named (_home_unnamed).
     if _data_dir_reach(path, folder, cwd):
         return True
     full = os.path.normpath(_abs(path or "", folder))
     if not whole or (_GLOB_CHARS | _UNDECIDED) & set(full):
         return False
-    if family == "rm" and shell._rm_target_dangerous(full):
+    if not home_named and shell._rm_target_dangerous(full):
         return False
     return _data_dir_ancestor(full, folder, cwd)
+
+
+def _home_unnamed(done: AdmittedCommand) -> bool:
+    # 266: rm of /, HOME or above is the delete tripwire's to name. 269: a mode or owner change
+    # of one without -R has no tripwire sibling and changes that folder alone, so goes unnamed.
+    recursive = {o.text for o in done.options} & _RECURSIVE
+    return done.family == "rm" or (done.family in _MODE_CHANGES and not recursive)
 
 
 def _data_dir_bash(command: str, cwd: str, agent: str) -> str | None:
@@ -1555,11 +1567,12 @@ def _data_dir_bash(command: str, cwd: str, agent: str) -> str | None:
         here = _abs(done.cd_target.text, base) if done.cd_target is not None else base
         family = done.family
         wholes = _ancestor_writes(done)
+        home_named = not _home_unnamed(done)
         for write in done.writes:
             opens = [cwd, base] if write.span in redirects else [cwd, base, here]
             path = _typed_path(write, words, command, env)
             whole = any(write is w for w in wholes)
-            if any(_data_dir_holds(path, f, cwd, whole, family) for f in opens):
+            if any(_data_dir_holds(path, f, cwd, whole, home_named) for f in opens):
                 return R_DATA_DIR
         # 266: a link's source; a later write through the link lands in the data folder.
         links = [_abs(w.text, here) for w in done.writes] if family == "ln" else []
@@ -1567,7 +1580,7 @@ def _data_dir_bash(command: str, cwd: str, agent: str) -> str | None:
         for source in sources:
             path = _typed_path(source, words, command, env)
             folders = [here, *links, *(os.path.dirname(link) for link in links)]
-            if any(_data_dir_holds(path, f, cwd, True, family) for f in folders):
+            if any(_data_dir_holds(path, f, cwd, True, home_named) for f in folders):
                 return R_DATA_DIR
         sub = done.subcommand.text if done.subcommand is not None else ""
         if index is None and done.family == "git" and sub in _INDEX_WRITES:

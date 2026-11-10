@@ -1638,6 +1638,26 @@ ANCESTOR_WRITES_266 = (
     ("copy into it", "cp x .claude", None, None),
     ("link into it", "ln -s x .claude", None, None),
 )
+# 269: (class, form, main, coder); a recursive cp merges its tree into a proper ancestor of the
+# data folder whole, -T or not; a mode or owner change of / without -R is left unnamed.
+ANCESTOR_WRITES_269 = (
+    ("tree merge -r", "cp -r src/. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree merge -R", "cp -R src/. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree merge -a", "cp -a src/. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree merge --recursive", "cp --recursive src/. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree merge --archive", "cp --archive src/. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree merge in a cluster", "cp -rf src/. .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree merge with -t", "cp -r -t .claude src/.", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree merge into the parent", "cp -r src/. ..", "R_DATA_DIR", "R_DATA_DIR"),
+    ("tree copy beside it", "cp -r src .claude/x", None, None),
+    ("plain copy with -t", "cp -t .claude x", None, None),
+    ("mode of the ancestor", "chmod 755 .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("mode of the root", "chmod 755 /", None, None),
+    ("owner of the root", "chown x /", None, None),
+    ("group of the root", "chgrp x /", None, None),
+    ("recursive mode of the root", "chmod -R 755 /", "R_DATA_DIR", "R_DATA_DIR"),
+    ("recursive owner of the root", "chown --recursive x /", "R_DATA_DIR", "R_DATA_DIR"),
+)
 # 266 fix 2: wildcard write operands; every grammar refuses a glob in a write operand, so the
 # data folder check has no typed path (0224) and the role's own refusal names the glob.
 WILDCARD_WRITES_266 = (
