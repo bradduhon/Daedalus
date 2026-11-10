@@ -1524,20 +1524,68 @@ def _data_dir_target(path: str, cwd: str) -> bool:
     return any(_data_dir_path(p, cwd) or _under(p, default) for p in (norm, os.path.realpath(norm)))
 
 
-def _data_dir_reach(path: str | None, folder: str, cwd: str) -> bool:
-    # 266: a literal path under a data folder; a wildcard one whose fixed head could reach one.
+def _data_dirs(folder: str, cwd: str) -> list[str]:
+    # 266: the standing folder's project data folder, the command folder's where it exists, the
+    # default under HOME and CLAUDE_PLUGIN_DATA, each as spelled and through its links.
+    dirs = [str(project_data_dir(cwd))] if os.path.isabs(cwd) else []
+    there = project_data_dir(folder) if os.path.isabs(folder) else None
+    dirs += [str(there)] if there is not None and there.is_dir() else []
+    dirs += [f"{_HOME}{_DATA_DIR_DEFAULT}", os.environ.get("CLAUDE_PLUGIN_DATA") or ""]
+    dirs = [os.path.normpath(d) for d in dirs if os.path.isabs(d)]
+    return list(dict.fromkeys([*dirs, *(os.path.realpath(d) for d in dirs)]))
+
+
+_UNDECIDED = frozenset("[{")
+
+
+def _wild_reach(parts: list[str], at: int, dirs: list[str], dots: bool) -> bool:
+    # 266: by component: the fixed ones before the first wildcard lead a data folder's path,
+    # and that wildcard can match its next component; a [ or { form fails closed.
+    fixed = parts[:at]
+    wild = parts[at]
+    found = [d.split(os.sep) for d in dirs]
+    # 266: another project's data folder right below, where one exists.
+    below = [[*fixed, ".claude", "daedalus"], [*fixed, "daedalus"]]
+    found += [c for c in below if c[-2] == ".claude" and os.path.isdir(os.sep.join(c))]
+    for comps in found:
+        if comps[: len(fixed)] != fixed or len(comps) == len(fixed):
+            continue
+        name = comps[len(fixed)]
+        if _UNDECIDED & set(wild):
+            return True
+        lead = wild[: min((wild.index(c) for c in "*?" if c in wild), default=len(wild))]
+        if (lead or dots or not name.startswith(".")) and name.startswith(lead):
+            return True
+    return False
+
+
+def _data_dir_reach(path: str | None, folder: str, cwd: str, dots: bool = False) -> bool:
+    # 266: a literal path under a data folder, or a wildcard path that can match one or a path
+    # inside one; dots is True where a leading wildcard matches a dot name (a git pathspec).
     if path is None:
         return True  # 266: a part the hook cannot resolve fails closed.
     full = os.path.normpath(_abs(path, folder))
-    cut = min((full.index(c) for c in _GLOB_CHARS if c in full), default=-1)
-    if cut < 0:
+    parts = full.split(os.sep)
+    at = next((i for i, p in enumerate(parts) if (_GLOB_CHARS | _UNDECIDED) & set(p)), -1)
+    if at < 0:
         return _data_dir_target(full, cwd)
-    head = full[:cut]
-    dirs = [str(project_data_dir(d)) for d in (folder, cwd) if os.path.isabs(d)]
-    dirs += [f"{_HOME}{_DATA_DIR_DEFAULT}", os.environ.get("CLAUDE_PLUGIN_DATA") or ""]
-    dirs = [os.path.normpath(d) for d in dirs if os.path.isabs(d)]
-    named = _names_project_data(head.rsplit(os.sep, 1)[0])
-    return named or any(d.startswith(head) or head.startswith(d + os.sep) for d in dirs)
+    if _data_dir_target(os.sep.join(parts[:at]) or os.sep, cwd):
+        return True  # 266: the wildcard sits inside a data folder already.
+    real = os.path.realpath(os.sep.join(parts[:at]) or os.sep).split(os.sep)
+    dirs = _data_dirs(folder, cwd)
+    return any(
+        _wild_reach(p, len(p) - 1, dirs, dots) for p in ([*parts[: at + 1]], [*real, parts[at]])
+    )
+
+
+def _data_dir_ancestor(path: str, folder: str, cwd: str) -> bool:
+    # 266: a proper ancestor of a data folder, spelled or through its links; a write to it
+    # reaches the folder, since a removal, move, merge or recursive change takes the folder too.
+    norm = os.path.normpath(path)
+    heads = {norm, os.path.realpath(norm)}
+    return any(
+        d.startswith(h.rstrip(os.sep) + os.sep) for h in heads for d in _data_dirs(folder, cwd)
+    )
 
 
 def _git_dir_values(done: AdmittedCommand) -> list[str]:
@@ -1563,8 +1611,47 @@ def _index_reason(done: AdmittedCommand, here: str, cwd: str) -> str | None:
         return None
     if any(_data_dir_target(folder, cwd) for folder in moved):
         return R_DATA_DIR_GIT
-    reach = any(_data_dir_reach(p.text, git_cwd, cwd) for p in done.pathspecs)
+    # 266: git's * matches a dot name, so a leading wildcard reaches .claude.
+    reach = any(_data_dir_reach(p.text, git_cwd, cwd, dots=True) for p in done.pathspecs)
     return R_DATA_DIR_GIT if reach else None
+
+
+# 266: families whose write to a folder removes, moves or changes everything under it.
+_ANCESTOR_ALL = frozenset({"rm", "rmdir", "rsync", "chmod", "chown", "chgrp"})
+# 266: families that put a file inside their destination folder unless -T or --exchange.
+_ANCESTOR_SOURCES = frozenset({"mv", "cp", "ln", "install"})
+_WHOLE_TARGET = frozenset({"-T", "--no-target-directory", "--exchange"})
+_TARGET_DIR = frozenset({"-t", "--target-directory"})
+
+
+def _ancestor_writes(done: AdmittedCommand) -> list[Typed]:
+    # 266: the typed writes that take a folder whole: every write of a removing, moving or
+    # recursive family; for mv, cp, ln and install all but the destination they write into.
+    if done.family in _ANCESTOR_ALL:
+        return list(done.writes)
+    if done.family not in _ANCESTOR_SOURCES or not done.writes:
+        return []
+    names = {o.text.split("=", 1)[0] for o in done.options}
+    if names & _WHOLE_TARGET:
+        return list(done.writes)
+    marks = [o.span for o in done.options if o.text.split("=", 1)[0] in _TARGET_DIR]
+    writes = sorted(done.writes, key=lambda t: t.span)
+    after = [w for w in writes if marks and w.span >= marks[0]]
+    dest = after[0] if after else writes[-1]
+    return [w for w in writes if w is not dest]
+
+
+def _data_dir_holds(path: str | None, folder: str, cwd: str, whole: bool, family: str) -> bool:
+    # 266: a path in or reaching a data folder; when the write takes its folder whole, a literal
+    # proper ancestor too. A recursive rm of /, HOME or above is the delete tripwire's to name.
+    if _data_dir_reach(path, folder, cwd):
+        return True
+    full = os.path.normpath(_abs(path or "", folder))
+    if not whole or (_GLOB_CHARS | _UNDECIDED) & set(full):
+        return False
+    if family == "rm" and shell._rm_target_dangerous(full):
+        return False
+    return _data_dir_ancestor(full, folder, cwd)
 
 
 def _data_dir_bash(command: str, cwd: str, agent: str) -> str | None:
@@ -1582,17 +1669,21 @@ def _data_dir_bash(command: str, cwd: str, agent: str) -> str | None:
             base = _abs(done.cd_target.text, base)
             continue
         here = _abs(done.cd_target.text, base) if done.cd_target is not None else base
+        family = done.family
+        wholes = _ancestor_writes(done)
         for write in done.writes:
             opens = [cwd, base] if write.span in redirects else [cwd, base, here]
-            if any(_data_dir_reach(_typed_path(write, words, command, env), f, cwd) for f in opens):
+            path = _typed_path(write, words, command, env)
+            whole = any(write is w for w in wholes)
+            if any(_data_dir_holds(path, f, cwd, whole, family) for f in opens):
                 return R_DATA_DIR
         # 266: a link's source; a later write through the link lands in the data folder.
-        links = [_abs(w.text, here) for w in done.writes] if done.family == "ln" else []
-        sources = done.reads if done.family == "ln" else ()
+        links = [_abs(w.text, here) for w in done.writes] if family == "ln" else []
+        sources = done.reads if family == "ln" else ()
         for source in sources:
             path = _typed_path(source, words, command, env)
             folders = [here, *links, *(os.path.dirname(link) for link in links)]
-            if any(_data_dir_reach(path, f, cwd) for f in folders):
+            if any(_data_dir_holds(path, f, cwd, True, family) for f in folders):
                 return R_DATA_DIR
         sub = done.subcommand.text if done.subcommand is not None else ""
         if index is None and done.family == "git" and sub in _INDEX_WRITES:

@@ -10,7 +10,14 @@ import pytest
 from lib import jail
 from lib.packs import pack_problems
 
-from tests.adversarial.corpus import DATA_FOLDER_HUNT_266, PACK_VERIFY_HUNT_266, assert_denied
+from tests.adversarial.corpus import (
+    ANCESTOR_WRITES_266,
+    DATA_FOLDER_HUNT_266,
+    PACK_VERIFY_HUNT_266,
+    WILDCARD_REACH_266,
+    WILDCARD_WRITES_266,
+    assert_denied,
+)
 from tests.conftest import CFG, CWD
 from tests.payloads import _b
 from tests.test_framework_packs import _control, _make
@@ -22,7 +29,9 @@ def _named(name: str | None) -> str | None:
     return None if name is None else str(getattr(jail, name))
 
 
-@pytest.mark.parametrize(("cls", "form", "main", "coder"), DATA_FOLDER_HUNT_266)
+@pytest.mark.parametrize(
+    ("cls", "form", "main", "coder"), DATA_FOLDER_HUNT_266 + ANCESTOR_WRITES_266
+)
 def test_a_data_folder_hunt_form_meets_the_typed_check(
     cls: str, form: str, main: str | None, coder: str | None
 ) -> None:
@@ -37,6 +46,49 @@ def test_a_data_folder_hunt_form_meets_the_typed_check(
         # 0105: main is warned with the word its grammar refused, never refused.
         warned = jail.decide(_b(None, command), CFG)
         assert warned.warn and "Refused: " in str(warned.reason), (cls, warned.reason)
+
+
+@pytest.mark.parametrize("command", WILDCARD_WRITES_266)
+def test_a_wildcard_write_is_refused_by_the_grammar_before_the_check(command: str) -> None:
+    # 266, 0224: no typed path, so the check names nothing; each role's refusal names the glob.
+    for agent in ("main", "coder"):
+        assert jail.integrity_reason("Bash", {"command": command}, CWD, agent) is None
+    glob = "a glob or ~ in a "
+    assert_denied(_b("coder", command), glob)
+    warned = jail.decide(_b(None, command), CFG)
+    assert warned.warn and f"Refused: {glob}" in str(warned.reason), warned.reason
+
+
+@pytest.mark.parametrize(("path", "shell_glob", "git"), WILDCARD_REACH_266)
+def test_a_wildcard_path_reaches_the_data_folder_by_component(
+    path: str, shell_glob: bool, git: bool
+) -> None:
+    # 266: the fixed components lead a data folder's path and the wildcard can match its next.
+    assert jail._data_dir_reach(path, CWD, CWD) is shell_glob, path
+    assert jail._data_dir_reach(path, CWD, CWD, dots=True) is git, path
+
+
+def test_the_wildcard_rule_reaches_the_check_through_git_and_ln() -> None:
+    # 266: a quoted git pathspec and a link's glob source are typed, so the rule judges them.
+    for agent in ("main", "coder"):
+        named = (
+            ("git -C .claude add 'dae*'", jail.R_DATA_DIR_GIT),
+            ("git -C .claude add '*'", jail.R_DATA_DIR_GIT),
+            ("git -C src add '*.py'", None),
+            ("ln -s .cl* d", jail.R_DATA_DIR),
+            ("ln -s s* d", None),
+        )
+        for command, want in named:
+            got = jail.integrity_reason("Bash", {"command": command}, CWD, agent)
+            assert got == want, (agent, command, got)
+
+
+def test_a_recursive_delete_of_the_root_is_left_to_the_delete_tripwire() -> None:
+    # 266: / is an ancestor of every data folder; the delete tripwire names it more exactly.
+    assert jail.integrity_reason("Bash", {"command": "rm -r -f /"}, CWD, "coder") is None
+    warned = jail.decide(_b(None, "rm -r -f /"), CFG)
+    assert warned.warn and str(warned.reason).startswith(jail.WARN_DELETE), warned.reason
+    assert_denied(_b("coder", "rm -r -f /"), "destructive command")
 
 
 def test_a_refused_command_standing_in_the_data_folder_is_named() -> None:

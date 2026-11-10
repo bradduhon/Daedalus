@@ -1377,6 +1377,9 @@ P3_MEASURE_A3 = (
 # 228 S3b, 233: a coder write off its table a sealed pass admits exactly once; (agent, form).
 # 228 S3c: perl -i stays off the coder table while sed -i has a row.
 S3B_CODER_PASS_ONCE = ("coder", "perl -pi -e s/a/b/ {repo}/notes.txt")
+# 266, 0240: grant is the check. A passed coder write naming the data folder, judged by the
+# folder it stands in alone: none outside the data folder, R_DATA_DIR inside it.
+S3B_CODER_PASS_DATA_FOLDER = ("coder", "perl -pi -e s/a/b/ {repo}/.claude/daedalus/config.json")
 
 
 # 228 S3c hunt: (row, class, form) per coder table row S3c added, one refused form per class of
@@ -1573,6 +1576,53 @@ DATA_FOLDER_HUNT_266 = (
     ("read out of it", "cp .claude/daedalus/config.json /tmp/x", None, None),
     ("move out of it", "mv .claude/daedalus/x /tmp/x", "R_DATA_DIR", "R_DATA_DIR"),
     ("add from the root", "git add .claude/daedalus/x", None, None),
+)
+# 266 fix 1: (class, form, main, coder); a write that takes an ancestor of the data folder
+# whole (remove, move, merge, recursive change) takes the folder too; one into it does not.
+ANCESTOR_WRITES_266 = (
+    ("remove", "rm -r -f .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("remove the parent", "rm -r -f ..", "R_DATA_DIR", "R_DATA_DIR"),
+    ("remove an empty folder", "rmdir .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("move away", "mv .claude /tmp/x", "R_DATA_DIR", "R_DATA_DIR"),
+    ("replace with -T", "mv -T /tmp/x .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("merge with -T", "cp -r -T src .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("merge a tree", "rsync -a src/ .claude/", "R_DATA_DIR", "R_DATA_DIR"),
+    ("recursive mode", "chmod -R 000 .claude", "R_DATA_DIR", "R_DATA_DIR"),
+    ("link to it", "ln -s .claude d", "R_DATA_DIR", "R_DATA_DIR"),
+    ("sibling inside", "touch .claude/x", None, None),
+    ("touch the ancestor", "touch .claude", None, None),
+    ("make the ancestor", "mkdir -p .claude", None, None),
+    ("move into it", "mv /tmp/x .claude", None, None),
+    ("move into it with -t", "mv -t .claude /tmp/x", None, None),
+    ("copy into it", "cp x .claude", None, None),
+    ("link into it", "ln -s x .claude", None, None),
+)
+# 266 fix 2: wildcard write operands; every grammar refuses a glob in a write operand, so the
+# data folder check has no typed path (0224) and the role's own refusal names the glob.
+WILDCARD_WRITES_266 = (
+    "rm .*",
+    "touch .claude/dae*",
+    "rm -r -f .claude/*",
+    "rm -r -f .cl*",
+    "rm *.log",
+    "chmod 644 *",
+    "touch src/*.py",
+)
+# 266 fix 2: (path, shell glob named, git pathspec named) by component at the repo root.
+WILDCARD_REACH_266 = (
+    ("*.log", False, True),
+    ("*", False, True),
+    ("src/*.py", False, False),
+    ("?claude", False, True),
+    (".git/*", False, False),
+    ("src/[ab].py", False, False),
+    (".*", True, True),
+    (".claude/dae*", True, True),
+    (".claude/*", True, True),
+    (".cl*", True, True),
+    (".claude/[d]x", True, True),
+    ("{a,.claude}", True, True),
+    (".claude/daedalus/*", True, True),
 )
 # 266 hunt: (class, verify, outcome); "outside <path>" names the path, "refused <word>" fails the
 # pack with the word off the auditor's table, "ok" is no problem.
