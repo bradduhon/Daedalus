@@ -16,7 +16,7 @@ from lib.workspace import create, mark_train
 
 from tests.conftest import CWD, REPO_ROOT, TRAIN_BRANCH
 from tests.conftest import git as _git
-from tests.helpers import phase_text
+from tests.helpers import phase_text, table_diff_list
 from tests.hook_chain import evaluate, load
 from tests.hook_chain import judge as decide
 from tests.test_dispatch_binding import TRAIN, seed_plan
@@ -565,14 +565,14 @@ def test_entry_shapes_name_the_three_inputs_and_the_composition_line() -> None:
 SIZE_ROWS = (
     "| small | one unit; at most 3 files and about 150 changed lines expected; no file under "
     "`scripts/checks/`, `agents/`, `skills/` or `hooks/`, and not `scripts/lib/jail.py`, "
-    "`scripts/lib/shell.py` or `scripts/enforce_agent_jail.py`; no protected path; "
-    "`contract: skip` | build, verify, audit in the short form; document only when the change "
-    "touches what the four public docs describe |",
+    "`scripts/lib/shell.py` or `scripts/enforce_agent_jail.py`; no path of the table-diff list; "
+    "no protected path; `contract: skip` | build, verify, audit in the short form; document only "
+    "when the change touches what the four public docs describe |",
     "| medium | up to 4 units in one wave, or a small change that touches agent, skill or hook "
     "files; a contract may be needed | plan, build, verify, audit, document |",
     "| full | more than 4 units, more than one wave, any jail check file, a revised contract or a "
     "cross-module change | plan with the standards and contract stages, build, verify, audit "
-    "with the reachability pass, document |",
+    "with the reachability pass or in the table-diff form, document |",
 )
 
 
@@ -592,6 +592,10 @@ def test_sizing_table_carries_the_ruled_small_row() -> None:
     auditor = " ".join((REPO_ROOT / "agents" / "auditor.md").read_text().split())
     for path in ("`scripts/checks/`, `agents/`, `skills/` or `hooks/`", "`scripts/lib/shell.py`"):
         assert path in auditor and path in SIZE_ROWS[0], path
+    # 0232: the sizing names the same table-diff list as the audit skill, auditor and coder.
+    assert f"The table-diff list (audit by table diff, 0232) is any of {table_diff_list()}." in flat
+    assert "A change that names a path of it is never small." in flat
+    assert "the announce line's reason ends `, so the audit takes the table-diff form`" in flat
 
 
 ANNOUNCE_LINE = (
