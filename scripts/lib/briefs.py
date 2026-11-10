@@ -3,7 +3,7 @@
 # 0153, 0157 (12.5): a decision brief's operator text is checked at the manifest reading level.
 # brief_problems reads the Question:, Context: and option label text of a brief file's sections;
 # brief_file_problems resolves docs.reading_level and reads one brief under the scratch root.
-# 0199, 0200: ask_file_problems checks one brainstorm question's reader text, always at plain.
+# 0199, 0251: ask_file_problems checks one question's reader text and choices, always at plain.
 from __future__ import annotations
 
 import os
@@ -57,24 +57,25 @@ _LOCAL_URL = re.compile(
     r"(?:[/?#](?:(?!://|=[^\s=&#/]*\.[^\s=&#/]*/)[^\s`@])*)?"
 )
 _EDGE = ".,;:!?\"'()[]"
-# 0200: the reader text of one brainstorm question; Other ways lines are lettered A to C.
+# 0251: the reader text of one brainstorm or setup question, then its lettered Choices lines.
 ASK_FIELDS = (
     "What I take you to want:",
-    "Heard:",
-    "Context:",
+    "Anchor:",
+    "Topic:",
+    "Sides:",
+    "Case:",
     "Question:",
-    "Proposal:",
-    "Why:",
 )
-ASK_ALTERNATIVES = "Other ways:"
+ASK_CHOICES = "Choices:"
+# 0251: a question sentence may run longer than a decision brief's fifteen words.
+ASK_SENTENCE_LIMIT = 18
+# 0251: a choice label is two to five words, written whole.
+LABEL_WORDS = (2, 5)
 # 0200: only these end a field; any other label-shaped line is reader text and is checked.
 ASK_ENDS = ("Rests on:", "[STATUS:")
 _LETTERED = re.compile(r"([A-Z])[.)]\s+(.*)")
-# 0200: Context's quote of the operator is theirs; an apostrophe before a letter stays inside.
-_THEIR_WORDS = re.compile(
-    "You wrote:\\s*(?:\"[^\"]*\"|\u201c[^\u201d]*\u201d|'(?:[^']|'(?=\\w))*'"
-    "|\u2018(?:[^\u2019]|\u2019(?=\\w))*\u2019)\\.?"
-)
+# 0250: the handoff brief's section of words the operator settled on.
+FIXED_WORDS = "## Fixed words"
 
 
 class BriefError(ValueError):
@@ -120,7 +121,8 @@ def _fields(text: str) -> list[tuple[str, str]]:
     return [(where, " ".join(part for part in parts if part)) for where, parts in out]
 
 
-def _token_problems(where: str, text: str) -> list[str]:
+def _token_problems(where: str, text: str, fixed: frozenset[str] = frozenset()) -> list[str]:
+    # 0250: a word of a fixed word or phrase is the operator's, never plugin vocabulary.
     found: list[str] = []
     if "`" in text:
         found.append(f"{where} carries a backtick: {text}")
@@ -135,7 +137,7 @@ def _token_problems(where: str, text: str) -> list[str]:
         if _ISSUE.search(bare):
             found.append(f"{where} carries the issue number {bare}")
         runs = _NAME_RUN.findall(bare.lower())
-        if AGENT_NAMES & {*runs, *(part for run in runs for part in run.split("-"))}:
+        if (AGENT_NAMES - fixed) & {*runs, *(part for run in runs for part in run.split("-"))}:
             found.append(f"{where} carries the agent name {bare}")
     return found
 
@@ -190,7 +192,9 @@ def _safety_problems(text: str) -> list[str]:
     return problems
 
 
-def _value_problems(where: str, value: str, level: str, limit: int | None) -> list[str]:
+def _value_problems(
+    where: str, value: str, level: str, limit: int | None, fixed: frozenset[str] = frozenset()
+) -> list[str]:
     if not value:
         return [f"{where} is empty"]
     problems: list[str] = []
@@ -202,25 +206,25 @@ def _value_problems(where: str, value: str, level: str, limit: int | None) -> li
                     f"{where} sentence has {count} words, over {limit} at {level}: {sentence}"
                 )
     if level != EXPERT:
-        problems.extend(_token_problems(where, value))
+        problems.extend(_token_problems(where, value, fixed))
     return problems
 
 
 def _ask_fields(text: str) -> list[tuple[str, str]]:
-    # 0200: one (where, text) pair per reader field and per lettered Other ways line.
+    # 0251: one (where, text) pair per reader field and per lettered Choices line.
     out: list[tuple[str, list[str]]] = []
     mode = ""
     for raw in text.splitlines():
         line = raw.strip()
         field = next((name for name in ASK_FIELDS if line.startswith(name)), None)
-        if line.startswith(ASK_ALTERNATIVES):
-            mode, line = "ways", line[len(ASK_ALTERNATIVES) :].strip()
-        lettered = _LETTERED.fullmatch(line) if mode == "ways" else None
+        if line.startswith(ASK_CHOICES):
+            mode, line = "choices", line[len(ASK_CHOICES) :].strip()
+        lettered = _LETTERED.fullmatch(line) if mode == "choices" else None
         if field is not None:
             out.append((field.rstrip(":"), [line[len(field) :].strip()]))
             mode = "field"
         elif lettered is not None:
-            out.append((f"Other way {lettered[1]}", [lettered[2]]))
+            out.append((f"Choice {lettered[1]}", [lettered[2]]))
         elif line.startswith(ASK_ENDS):
             mode = ""
         elif line and out and mode:
@@ -228,21 +232,67 @@ def _ask_fields(text: str) -> list[tuple[str, str]]:
     return [(where, " ".join(" ".join(parts).split())) for where, parts in out]
 
 
-def ask_problems(text: str) -> list[str]:
-    # 0199, 0200: plain whatever docs.reading_level says; an empty list means the question passes.
-    fields = _ask_fields(text)
+def _choice_problems(where: str, value: str, fixed: frozenset[str]) -> list[str]:
+    # 0251: `<label>: <description>`; the label is two to five words and checked like the rest.
+    label, sep, description = value.partition(": ")
+    if not sep or not label.strip() or not description.strip():
+        return [f"{where} is not `<label>: <description>`: {value}"]
+    low, high = LABEL_WORDS
+    count = len(label.split())
     problems: list[str] = []
-    if not any(where == "Question" for where, _ in fields):
-        problems.append("the question holds no Question: line")
-    for where, value in fields:
-        if where == "Context":
-            mine = " ".join(_THEIR_WORDS.sub(" ", value).split())
-            if value and not mine:
-                problems.append("Context is only a quotation")
-                continue
-            value = mine
-        problems.extend(_value_problems(where, value, PLAIN, SENTENCE_LIMITS[PLAIN]))
+    if not low <= count <= high:
+        noun = "word" if count == 1 else "words"
+        problems.append(f"{where} label has {count} {noun}, not {low} to {high}: {label}")
+    problems.extend(_value_problems(f"{where} label", label, PLAIN, ASK_SENTENCE_LIMIT, fixed))
+    problems.extend(_value_problems(where, description, PLAIN, ASK_SENTENCE_LIMIT, fixed))
     return problems
+
+
+def _uses(phrase: str, text: str) -> bool:
+    # 0250: whole words, any case, a plural ending allowed.
+    pattern = r"(?<![\w-])" + re.escape(phrase) + r"(?:s|es)?(?![\w-])"
+    return re.search(pattern, text, re.IGNORECASE) is not None
+
+
+def ask_problems(text: str, fixed_words: tuple[str, ...] | None = None) -> list[str]:
+    # 0199, 0251: plain at eighteen words whatever docs.reading_level says; empty means it passes.
+    # 0250: fixed_words, when read from a handoff brief, are never vocabulary and must appear.
+    fields = _ask_fields(text)
+    runs = [run for phrase in fixed_words or () for run in _NAME_RUN.findall(phrase.lower())]
+    fixed = frozenset({*runs, *(part for run in runs for part in run.split("-"))})
+    problems: list[str] = []
+    questions = [value for where, value in fields if where == "Question"]
+    if not questions:
+        problems.append("the question holds no Question: line")
+    choices = [where for where, _ in fields if where.startswith("Choice ")]
+    if len(choices) < 2:
+        problems.append("the question holds no Choices: block of two or more lettered lines")
+    for value in questions:
+        if value and not value.rstrip("\"')]”’").endswith("?"):
+            problems.append(f"Question does not end in a question mark: {value}")
+    for where, value in fields:
+        if where.startswith("Choice "):
+            problems.extend(_choice_problems(where, value, fixed))
+        else:
+            problems.extend(_value_problems(where, value, PLAIN, ASK_SENTENCE_LIMIT, fixed))
+    if fixed_words and not any(
+        _uses(phrase, value) for phrase in fixed_words for _, value in fields
+    ):
+        problems.append("the question uses none of the fixed words: " + "; ".join(fixed_words))
+    return problems
+
+
+def fixed_words(text: str) -> tuple[str, ...] | None:
+    # 0250: the `- <word or phrase>: <meaning>` lines of a handoff brief; None when it lists none.
+    words: list[str] = []
+    inside = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("## "):
+            inside = line == FIXED_WORDS
+        elif inside and line.startswith("- ") and ": " in line:
+            words.append(line[2:].split(": ", 1)[0].strip())
+    return tuple(word for word in words if word) or None
 
 
 def _read(label: str, real: str, next_step: str) -> str:
@@ -256,7 +306,7 @@ def _read(label: str, real: str, next_step: str) -> str:
         ) from exc
 
 
-def ask_file_problems(question: Path) -> list[str]:
+def ask_file_problems(question: Path, brief: Path | None = None) -> list[str]:
     # 0199: a folder run's brainstorm folder may sit outside the repo, so no root check here.
     real = os.path.realpath(question)
     if not os.path.isfile(real):
@@ -264,7 +314,18 @@ def ask_file_problems(question: Path) -> list[str]:
             f"question file {question} is not a file. Next: write the question's reader text "
             "to the file and run ask-check again."
         )
-    return ask_problems(_read(f"question file {question}", real, "write one question per file."))
+    words = None
+    if brief is not None:
+        # 0250: the handoff brief's Fixed words; a named brief that is missing is a stop.
+        brief_real = os.path.realpath(brief)
+        if not os.path.isfile(brief_real):
+            raise BriefError(
+                f"handoff brief {brief} is not a file. Next: pass the brainstorm folder's "
+                "handoff.md, or run ask-check without --brief."
+            )
+        words = fixed_words(_read(f"handoff brief {brief}", brief_real, "pass the brief itself."))
+    text = _read(f"question file {question}", real, "write one question per file.")
+    return ask_problems(text, words)
 
 
 def brief_file_problems(repo: Path, brief: Path) -> tuple[str, list[str]]:

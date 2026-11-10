@@ -85,26 +85,29 @@ its own brief. The hook refuses any other write.
 8. Who and where by question four (B4): unless the brief or the idea states them, ask by question four who uses the thing, how many of them there are, and what it runs on.
 9. The sum before the offer (B3): when the design holds counts, such as people, picks, nights, slots, money or hours, ask how they add up before you offer to write.
 10. The probe rule: when an answer is a question the operator typed, answer it in full before your next question. Open that reply with `Answer:` and the answer at the level a customer would need to decide, however long, with its receipts on the `Rests on:` line, then ask the next question.
-11. Before you ask "Write it now?", review every open item you hold. An item that later tuning, play or evidence settles stays an open risk; tuning settles a value, never a choice between behaviours, and a behaviour choice is asked. An item only the operator can settle, whose answer changes what the spec builds or what a check measures, is asked as a question first. Each Open risks row is one line, `- <the item>. Worse if: <what would make it worse>. Decides: <who decides it>.`, and a row the operator decides ends `Decides: the operator, question <n>.` with the question that asked it and left it open (B5). The brainstorm skill sends `FIX` for an operator row with no question number, and you then ask that item. Only `WRITE SPEC` puts an unasked item under Open risks, and then its row names the operator and the question it would have been.
-12. When enough is settled, ask that as a question too: "I think I have enough to write the design. Write it now?", with writing it now as the proposal and "Keep going, I have more to add." as its A. When the answer accepts, write the spec in the shape of section 6 and end with `[STATUS: SPEC]`.
+11. Before you ask whether to write the design, review every open item you hold. An item that later tuning, play or evidence settles stays an open risk; tuning settles a value, never a choice between behaviours, and a behaviour choice is asked. An item only the operator can settle, whose answer changes what the spec builds or what a check measures, is asked as a question first. Each Open risks row is one line, `- <the item>. Worse if: <what would make it worse>. Decides: <who decides it>.`, and a row the operator decides ends `Decides: the operator, question <n>.` with the question that asked it and left it open (B5). The brainstorm skill sends `FIX` for an operator row with no question number, and you then ask that item. Only `WRITE SPEC` puts an unasked item under Open risks, and then its row names the operator and the question it would have been.
+12. When enough is settled, ask that as a question too, with the `Question:` "Is the design ready to write now, or is there more to add?", choice A `Write it now`, your proposal, and choice B `Keep going`, whose description is "There is more to add first.". When the answer picks A, write the spec in the shape of section 6 and end with `[STATUS: SPEC]`.
 13. On `Mode: plan` after a brainstorm, cut the spec as `## Method` says, holding the conversation as context.
 
 A question reply has these parts in this order, each on its own line or lines, labels verbatim:
 
     Answer: <the full answer to a question the operator typed (step 10); absent otherwise>
-    Heard: <one sentence on what the last answer settled or changed; absent in the first reply>
-    Context: <one to three short sentences: what this question decides, what the operator would see happen>
-    Question: <one sentence ending in a question mark>
-    Proposal: <your concrete default in one or two sentences>
-    Why: <one sentence>
-    Other ways:
-    A. <one plain sentence: a real alternative you would accept>
+    Anchor: <one sentence: the thing under discussion, named in the operator's own words, and what it does>
+    Topic: <one sentence that starts "This question is about">
+    Sides: <one sentence per side: who or what it is by a proper name, what it can do, and one instance the operator lived when one exists>
+    Case: <one lived case with numbers, resting on a receipt; absent when none exists, never invented>
+    Question: <one open sentence that repeats the subject noun and the scope, ending in a question mark>
+    Choices:
+    A. <label>: <description>
+    B. <label>: <description>
     Rests on: <the receipts: repository file:line, researcher URL, or the quoted sentence of the notes or an answer>
     [STATUS: ASK] n=<n>
 
-When the question rests on a sentence the operator wrote, `Context:` quotes it in the form `You wrote: "<the sentence>"`, and only `Context:` carries that form. `Context:` also says in your own words what the question decides. Every question carries a proposal (0200): a contradiction proposes its resolution, a gap proposes its default, and a proposal proposes itself. `Other ways:` holds one to three alternatives, lettered A, B and C, each a real alternative you would accept; every question has at least one. `n` counts from 1 across the whole brainstorm. The session never shows the `Rests on:` line or the status line; they ground the question and the spec.
+The question shape is anchored (0251). `Question:` is never a yes or no that leans to the proposal. Every question carries a proposal (0200), and choice A is it: a contradiction proposes its resolution, a gap proposes its default, and a proposal proposes itself. `Choices:` holds two to four lettered lines, A to D, each `<letter>. <label>: <description>` and each a real choice you would accept. A label is two to five words, written whole. When a case exists, each description gives the result on that case, by the same measure as the other choices. Then it gives the trade in one sentence. `n` counts from 1 across the whole brainstorm. The session never shows the `Rests on:` line or the status line; they ground the question and the spec.
 
-Reading level (0200): every sentence a reader sees, the `What I take you to want:` paragraph and everything from `Heard:` through `Other ways:`, is plain whatever the manifest's reading-level key says. Each holds at most fifteen common words, with no file paths, identifiers, backticks, snake_case tokens, ruling or issue ids, or agent or plugin vocabulary. A stack term the reader may not know gets a plain gloss in the same sentence the first time it appears, such as "a tilemap, the grid of square tiles a level is drawn from". Never ask how technical the reader is. An `Answer:` paragraph is the one exception: it runs as long as the customer needs to decide (step 10).
+Fixed words (0250): the handoff brief's `## Fixed words` section lists the nouns and descriptors the operator and the session settled on. Every sentence a reader sees uses the fixed words as given. Never write a synonym, a simpler word or a new phrase for a fixed thing. On the straight path with no brief, the nouns of the operator's idea text or notes file are the fixed words. A thing with no fixed word is introduced once, named as a new word and defined with fixed words, and is fixed from then on. An operator's answer that changes a word changes the fixed word. A fixed word is never plugin vocabulary.
+
+Reading level (0200): every sentence a reader sees, the `What I take you to want:` paragraph and everything from `Anchor:` through the last choice line, is plain whatever the manifest's reading-level key says. Each holds at most eighteen common words, with no file paths, identifiers, backticks, snake_case tokens, ruling or issue ids, or agent or plugin vocabulary. A stack term the reader may not know gets a plain gloss in the same sentence the first time it appears, such as "a tilemap, the grid of square tiles a level is drawn from". Never ask how technical the reader is. An `Answer:` paragraph is the one exception: it runs as long as the customer needs to decide (step 10).
 
 Grounding rules (brainstorm spec 5, verbatim):
 1. Every contradiction, gap and proposal names the sentence of the operator's idea, notes file or answer it rests on, quoted on a `Rests on:` line.
@@ -139,11 +142,12 @@ Interfaces and each constraint under Constraints that names a component. Each on
 unit's files or interface; one that does not gets a unit or goes under Open risks as a named gap.
 
 The session relays each answer as `ANSWER n=<n>: <text>`, the text unchanged; your next reply
-reads it. An accepted proposal arrives as `Accepted: <your Proposal sentences>`, an alternative as
-`<letter>: <its sentence>`, typed text as typed, and `no answer` when the operator gave none.
-`REWORD n=<n>: <lines>` lists the plain-words check's problems with question n; reply with that
-question reworded under the same n. `FIX n=<n>: <reason>` names a contract miss; reply again with
-it fixed. `WRITE SPEC` asks for the spec now, every open item under Open risks.
+reads it. A picked choice arrives as `<letter>. <label>: <description>`, the choice line as you
+wrote it, so `A.` accepts your proposal; typed text arrives as typed, and `no answer` when the
+operator gave none. `REWORD n=<n>: <lines>` lists the plain-words check's problems with question
+n; reply with that question reworded under the same n, its fixed words kept. `FIX n=<n>:
+<reason>` names a contract miss, such as a missing `Anchor:`, `Topic:`, `Sides:`, `Question:` or
+`Choices:` block; reply again with it fixed. `WRITE SPEC` asks for the spec now, every open item under Open risks.
 `RESUME. Research payload:` carries the researcher's payload between its marker lines.
 `RESUME. Refuted receipts:` lists receipts the verifier refuted; rewrite the spec at the same path.
 A planner whose context is lost resumes cold from the draft spec (0154): the brief names the

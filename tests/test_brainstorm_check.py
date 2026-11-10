@@ -78,6 +78,22 @@ BREAKS = (
         "faster than answers.",
         "Receipts owed item 2 carries no URL, no file:line and no ASSUMED",
     ),
+    # 0250: the brief's Fixed words, after Chosen direction, one `- <word>: <meaning>` line each.
+    ("handoff", "## Fixed words\n", "## Words\n", "the heading `## Fixed words` is missing"),
+    (
+        "handoff",
+        "- draft design: the full design the agent shows before any question.\n"
+        "- correct: what the user does to a wrong line of the draft.\n",
+        "None.\n",
+        "Fixed words holds no `- <word or phrase>: <its meaning>` line",
+    ),
+    (
+        "handoff",
+        "- correct: what the user does",
+        "- correct, what the user does",
+        "Fixed words item 2 is not `- <word or phrase>: <its meaning>`",
+    ),
+    ("handoff", "- draft design:", "draft design:", "Fixed words holds a line that is not a `- `"),
     # board: three framings in their fixed shapes, the denied premise quoted and not empty.
     ("board", "## Framings\n", "## Ideas\n", "the heading `## Framings` is missing"),
     ("board", "- Obvious: Keep", "- Plain: Keep", "Framings line 1 is not `- Obvious: <sentence>`"),
