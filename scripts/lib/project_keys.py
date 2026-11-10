@@ -174,6 +174,16 @@ class KeyRow:
     values: str
     default: str
     example: str
+    # 0242: one plain sentence on what changes for the user; no key name, path or id in it.
+    affects: str
+    # 0242: the files that act on the value, never its validator alone; () means not active.
+    readers: tuple[str, ...]
+
+
+# 0242: the opening of every affects sentence whose key no code acts on yet.
+NOT_ACTIVE = "Nothing acts on it yet"
+_LEDGER_READERS = ("scripts/lib/ledger.py", "scripts/append_ledger.py")
+_STANDARDS = "skills/plan/standards/SKILL.md"
 
 
 _LEDGER_PATH_VALUES = (
@@ -188,6 +198,8 @@ _LEDGER_FORMAT = KeyRow(
     "section per ruling)",
     "Required once the block exists",
     '`"markdown-table-row"`',
+    "Each new ruling is written to the ledger in this shape.",
+    _LEDGER_READERS,
 )
 _LEDGER_ID_SCHEME = KeyRow(
     "The pattern each new ruling id follows",
@@ -195,6 +207,8 @@ _LEDGER_ID_SCHEME = KeyRow(
     "A pattern such as `{seq:04d}-{repo}-{type}`; a heading ledger uses `{seq}`",
     "Required once the block exists",
     '`"{seq:04d}-{repo}-{type}"`',
+    "Each new ruling id follows this pattern.",
+    _LEDGER_READERS,
 )
 _LEDGER_SEQUENCE = KeyRow(
     "Where the next ruling number comes from",
@@ -202,6 +216,8 @@ _LEDGER_SEQUENCE = KeyRow(
     '`"last-row-id"` or `"frontmatter:<key>"`',
     "Required once the block exists",
     '`"last-row-id"`',
+    "The next ruling number is read from this place.",
+    _LEDGER_READERS,
 )
 _LEDGER_BRANCH = KeyRow(
     "The branch the ledger's checkout must be on; an append or a probe on any other branch, or "
@@ -211,6 +227,8 @@ _LEDGER_BRANCH = KeyRow(
     "because a run branches that repository as `daedalus/<train-id>`",
     "Absent or `null`: the ledger is written on whatever branch its checkout is on",
     '`"main"`',
+    "A ruling written while the ledger's checkout is on any other branch is refused.",
+    _LEDGER_READERS,
 )
 _COMMAND_VALUES = (
     "A non-empty command string, a non-empty list of non-empty command strings run one after "
@@ -233,6 +251,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "characters; a trailing slash covers the whole folder, and matching ignores case",
         "`[]`",
         '`["infra/", "scripts/release.sh"]`',
+        "A coding agent is refused every write to these paths, and the health check counts them.",
+        ("scripts/lib/manifest.py", "scripts/daedalus_doctor.py"),
     ),
     (MANIFEST_FILE, "jail_narrowing.forbidden_extensions"): KeyRow(
         "File endings no coding agent may write",
@@ -241,6 +261,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "ignores case",
         "`[]`",
         '`[".pem", ".tfstate"]`',
+        "A coding agent is refused every write to a file with one of these endings.",
+        ("scripts/lib/manifest.py", "scripts/daedalus_doctor.py"),
     ),
     (MANIFEST_FILE, "features.scope"): KeyRow(
         "Whether a train treats the project as a git repository or as a plain folder",
@@ -248,6 +270,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         '`"repository"`, `"folder"` or `null`',
         "`null`: a git work tree is a repository, anything else is a plain folder",
         '`"repository"`',
+        "A run works on the project as a git repository it can push, or as a plain folder.",
+        ("scripts/lib/workspace.py", "scripts/daedalus_doctor.py"),
     ),
     (MANIFEST_FILE, "features.secrets_scan"): KeyRow(
         "Turns on the Push Train's gitleaks scan of the commits a push sends; with the scan on, "
@@ -257,6 +281,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`true` or `false`",
         "`false`: no scan, and gitleaks need not be installed",
         "`true`",
+        "The push step scans the commits it sends for secrets and stops on a hit.",
+        ("scripts/daedalus_doctor.py", "skills/release/SKILL.md"),
     ),
     (MANIFEST_FILE, "features.scrub_file"): KeyRow(
         "A file of terms, one per line, that the release step checks the release notes against; "
@@ -265,6 +291,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "A project-relative path without a leading slash, `..` or glob characters, or `null`",
         "`null`: nothing is checked",
         '`"docs/scrub-terms.txt"`',
+        "The release step checks the release notes against your list of terms.",
+        ("scripts/lib/scrub.py",),
     ),
     (MANIFEST_FILE, "features.ledger"): KeyRow(
         "Turns the decision ledger steps on or off",
@@ -273,6 +301,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "step and no ledger question; `null`: the default",
         "`null`: a ledger the config declares or the probe finds is used, and none is created",
         "`true`",
+        "A run records each ruling in a decision ledger, or skips every ledger step.",
+        ("scripts/lib/workspace.py", "scripts/lib/train_runner.py"),
     ),
     (MANIFEST_FILE, "features.dependency_web_lookup"): KeyRow(
         "Lets the auditor ask for security advisories on the web; the train sends "
@@ -282,6 +312,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`true`, `false` or `null`; only `false` turns the lookup off",
         "`null`: the lookup is on",
         "`false`",
+        "The audit looks up security advisories on the web, or judges from the lockfile alone.",
+        ("skills/audit/SKILL.md", "agents/auditor.md"),
     ),
     (MANIFEST_FILE, "features.terraform_tools"): KeyRow(
         "Lets the auditor run `terraform fmt -check` and `terraform validate` on the "
@@ -292,6 +324,9 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`features.terraform_validate`",
         "`null`: `fmt -check` may run",
         "`false`",
+        "The audit may run the Terraform format check on changed Terraform files, or only reads "
+        "them.",
+        ("skills/audit/SKILL.md", "agents/auditor.md", "scripts/checks/command_allowlist.py"),
     ),
     (MANIFEST_FILE, "features.terraform_validate"): KeyRow(
         "Lets the auditor run `terraform validate`, which starts the provider "
@@ -301,6 +336,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`true` or `false`",
         "`false`: the auditor runs no validate and marks that check N/A",
         "`true`",
+        "The audit may also run the Terraform validate check, which starts provider programs.",
+        ("scripts/checks/command_allowlist.py", "packs/judges/terraform.md"),
     ),
     (MANIFEST_FILE, "trains_dir"): KeyRow(
         "The project folder that holds its own train definitions; a train is looked up there "
@@ -311,6 +348,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`null`",
         "`null`: only the plugin's trains are used",
         '`"trains"`',
+        "A run looks for its run definitions in this folder before the plugin's own.",
+        ("scripts/lib/train_runner.py",),
     ),
     (MANIFEST_FILE, "stack.unit_test_cmd"): KeyRow(
         "The commands that run the project's unit tests; a coding agent may run each exactly as "
@@ -319,6 +358,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         _COMMAND_VALUES,
         "`null`: no declared command",
         '`["pytest -q", "pnpm vitest run"]`',
+        "A coding agent may run these test commands as written, inside the test wrapper.",
+        ("agents/coder.md", "scripts/checks/confine.py", "scripts/daedalus_doctor.py"),
     ),
     (MANIFEST_FILE, "stack.typecheck_cmd"): KeyRow(
         "The commands that type-check the project; a coding agent may run each exactly as "
@@ -327,6 +368,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         _COMMAND_VALUES,
         "`null`: no declared command",
         '`["mypy src", "pnpm tsc --noEmit"]`',
+        "A coding agent may run these type-check commands as written.",
+        ("agents/coder.md", "scripts/daedalus_doctor.py"),
     ),
     (MANIFEST_FILE, "stack.lint_cmd"): KeyRow(
         "The commands that lint the project; a coding agent may run each exactly as written, as "
@@ -335,6 +378,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         _COMMAND_VALUES,
         "`null`: no declared command",
         '`"ruff check ."`',
+        "A coding agent may run these lint commands as written.",
+        ("agents/coder.md", "scripts/daedalus_doctor.py"),
     ),
     (MANIFEST_FILE, "stack.package_manager"): KeyRow(
         "The package manager the project installs with; the doctor prints it on its stack line",
@@ -343,6 +388,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         + f' or `"{PACKAGE_MANAGERS[-1]}"`, or `null`; any other name is refused',
         "`null`: none declared",
         '`"pnpm"`',
+        "The health check names this package manager on its stack line.",
+        ("scripts/daedalus_doctor.py",),
     ),
     (MANIFEST_FILE, "docs.literacy"): KeyRow(
         "How plainly Daedalus writes for people, as a reader level or a voice profile the "
@@ -359,6 +406,15 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "written and checked at `standard`, and the plan and verify questions are written at "
         "`standard`",
         f"`{LITERACY_EXAMPLES[0]}`",
+        "The public docs, the decision briefs and the questions a run asks you are written at "
+        "this reading level.",
+        (
+            "scripts/lib/briefs.py",
+            "skills/document/kinds/public-docs/SKILL.md",
+            "skills/plan/SKILL.md",
+            "skills/verify/SKILL.md",
+            "agents/orchestrator.md",
+        ),
     ),
     (MANIFEST_FILE, "priorities.drivers"): KeyRow(
         "Which concern wins when two conflict and no rule below matches, for every agent in "
@@ -368,6 +424,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"Each of {_DRIVER_NAMES} exactly once, highest first",
         "No `priorities` key: none declared, and agents follow no project ranking",
         '`["security", "trust", "ops", "cost"]`',
+        "Every agent in a run settles a clash between two concerns by this ranking.",
+        (_STANDARDS, "scripts/daedalus_doctor.py"),
     ),
     (MANIFEST_FILE, "priorities.rules[].when.conflict"): KeyRow(
         "The two concerns a rule settles; rules are tried in order and the first match decides",
@@ -375,6 +433,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"Two different names of {_DRIVER_NAMES}; at most {MAX_RULES} rules",
         "`rules` absent: no rule, so the ranking decides",
         '`["security", "cost"]`',
+        "A rule applies only to a clash between these two concerns.",
+        ("agents/orchestrator.md",),
     ),
     (MANIFEST_FILE, "priorities.rules[].when.reason"): KeyRow(
         "Why the conflict arises; the rule matches only these reasons",
@@ -382,6 +442,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "One or more of " + ", ".join(f"`{reason}`" for reason in REASONS) + ", each once",
         "Required in each rule",
         '`["certification", "framework"]`',
+        "A rule applies only when the clash arises for one of these reasons.",
+        (_STANDARDS, "agents/orchestrator.md"),
     ),
     (MANIFEST_FILE, "priorities.rules[].then"): KeyRow(
         f"What a matching rule does: a concern named here wins and the agent decides alone; "
@@ -390,6 +452,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"One of {_DRIVER_NAMES}, or `{SURFACE}`",
         "Required in each rule",
         f'`"{SURFACE}"`',
+        "A matching rule lets the agent decide alone, or puts the choice to you.",
+        (_STANDARDS, "scripts/lib/train_summary.py"),
     ),
     (MANIFEST_FILE, "priorities.rules[].note"): KeyRow(
         "The one line a choice record or a decision brief quotes when the rule applies",
@@ -397,6 +461,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"One printable line of 1 to {NOTE_MAX} characters",
         "Required in each rule",
         '`"a control a certification asks for wins over its running cost"`',
+        "Choice records and decision briefs quote this line when the rule applies.",
+        (_STANDARDS,),
     ),
     (MANIFEST_FILE, "priorities.principles[].id"): KeyRow(
         "The name an agent cites when a decision rests on one of the project's principles",
@@ -404,6 +470,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"`P` followed by digits, unique in the block; at most {MAX_PRINCIPLES} principles",
         "`principles` absent: none declared",
         '`"P1"`',
+        "Agents cite the principle by this name when a decision rests on it.",
+        (_STANDARDS,),
     ),
     (MANIFEST_FILE, "priorities.principles[].driver"): KeyRow(
         "The concern a principle serves",
@@ -411,6 +479,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"One of {_DRIVER_NAMES}",
         "Required in each principle",
         '`"security"`',
+        "The run's standards list the principle under this concern.",
+        (_STANDARDS,),
     ),
     (MANIFEST_FILE, "priorities.principles[].text"): KeyRow(
         "The principle itself, as one sentence a decision brief quotes",
@@ -418,6 +488,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"One printable line of 1 to {TEXT_MAX} characters",
         "Required in each principle",
         '`"Each tenant keeps its own key."`',
+        "Decision briefs quote this sentence when a decision rests on the principle.",
+        (_STANDARDS,),
     ),
     (MANIFEST_FILE, "priorities.principles[].source"): KeyRow(
         "Where the principle is written down, so a reader can follow it",
@@ -426,6 +498,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "slash, `..` or glob characters",
         "Absent: no source named",
         '`"docs/design.md"`',
+        f"{NOT_ACTIVE}: the run's standards list each principle without its source.",
+        (),
     ),
     (MANIFEST_FILE, "priorities.agents.<name>.drivers"): KeyRow(
         "A different ranking for one agent; rules and principles still apply to it",
@@ -434,6 +508,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"than `{NOT_OVERRIDABLE}`, which is refused",
         "Absent: the agent follows `priorities.drivers`",
         '`{"coder": {"drivers": ["cost", "security", "ops", "trust"]}}`',
+        "That one agent ranks the concerns in this order instead.",
+        (_STANDARDS,),
     ),
     (MANIFEST_FILE, "frameworks.pack_dir"): KeyRow(
         "The project folder that holds its own control packs; each subfolder holding a "
@@ -444,6 +520,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`null`",
         "No `frameworks` key: only the packs Daedalus ships are read",
         '`"compliance/packs"`',
+        "The audit also judges each change against the control packs in this folder.",
+        ("scripts/lib/packs.py",),
     ),
     (MANIFEST_FILE, "frameworks.default_packs"): KeyRow(
         "Whether the packs Daedalus ships are read beside the project's own packs",
@@ -452,6 +530,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "packs named in `frameworks.packs`",
         "`true`: the shipped packs that are on by default are read",
         "`false`",
+        "The audit reads the control packs Daedalus ships, or only your own and the named ones.",
+        ("scripts/lib/packs.py",),
     ),
     (MANIFEST_FILE, "frameworks.packs"): KeyRow(
         "Shipped packs that are off until a project names them, such as the cost-tier pack; "
@@ -460,6 +540,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "Pack ids of lowercase letters, digits and hyphens, each named once",
         "`[]`: only the shipped packs that are on by default are read",
         '`["cost-tier"]`',
+        "The audit also reads these shipped control packs that are off by default.",
+        ("scripts/lib/packs.py",),
     ),
     (MANIFEST_FILE, "assets.roots"): KeyRow(
         "Folders of asset files, such as models, textures, sounds and shaders, kept out of the "
@@ -471,6 +553,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "slashes, without a leading slash, `..` or glob characters",
         "`[]`: no folder is kept out",
         '`["assets/", "public/models/"]`',
+        "The checks and the secret scan skip asset files in these folders.",
+        ("scripts/lib/assets.py",),
     ),
     (MANIFEST_FILE, "assets.extensions"): KeyRow(
         "File endings kept out of those diffs and the secret scan wherever the file sits; "
@@ -480,6 +564,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "underscores; a source ending such as `.py`, `.ts`, `.json` or `.env` is refused",
         "`[]`: no ending is kept out",
         '`[".glb", ".png", ".wav"]`',
+        "The checks and the secret scan skip files with these endings.",
+        ("scripts/lib/assets.py",),
     ),
     (MANIFEST_FILE, "assets.max_bytes"): KeyRow(
         "The size above which a kept-out asset file is listed by name and size, so the judges "
@@ -488,6 +574,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "A whole number of at least 1, or `null`",
         "`null`: no asset file is listed by size",
         "`1048576`",
+        "The checks list each skipped asset file above this size by name and size.",
+        ("scripts/lib/assets.py",),
     ),
     (MANIFEST_FILE, "dependencies.installs"): KeyRow(
         "The ecosystems whose frozen, scripts-off install a coding agent may run, such as "
@@ -500,6 +588,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         + " at most once; `npm` covers npm, pnpm, yarn and bun, `python` covers pip and uv",
         "`[]`: no agent runs any install",
         '`["npm", "python"]`',
+        "A coding agent may run a locked, scripts-off install for these ecosystems.",
+        ("scripts/lib/admit.py", "agents/coder.md"),
     ),
     (MANIFEST_FILE, "dependencies.minimum_release_age_days"): KeyRow(
         "The youngest a package version a change adds or updates may be, in days since it was "
@@ -510,6 +600,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`dependencies.minimum_release_age_reason`, else the manifest is refused",
         f"`{RELEASE_AGE_DEFAULT}`",
         "`14`",
+        "The audit fails a package version published fewer than this many days ago.",
+        ("skills/audit/SKILL.md",),
     ),
     (MANIFEST_FILE, "dependencies.minimum_release_age_reason"): KeyRow(
         f"Why the project sets the release age below {RELEASE_AGE_DEFAULT} days; the doctor "
@@ -518,6 +610,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"One printable line of at least {RELEASE_AGE_REASON_MIN} characters, or `null`",
         "`null`: no reason, so the age may not go below the default",
         '`"internal registry mirrors with its own quarantine"`',
+        "The health check prints this reason beside a lowered package age.",
+        ("scripts/daedalus_doctor.py",),
     ),
     (MANIFEST_FILE, "dev_server.url"): KeyRow(
         "The address of the site you host on your own machine for testing; the verify step "
@@ -528,6 +622,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "port; any other host is refused",
         "`dev_server: null`: no site is named",
         '`"http://localhost:5173"`',
+        "The verify step asks you to open this address after a change to web code.",
+        ("skills/verify/SKILL.md",),
     ),
     (MANIFEST_FILE, "dev_server.check"): KeyRow(
         "What you check on that site after a unit that changes web code; your answer of pass, "
@@ -536,6 +632,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "One printable line of plain words",
         "Required once the block exists",
         '`"the scene loads and the player can move"`',
+        "The verify step asks you to check this on your site and records your answer.",
+        ("skills/verify/SKILL.md",),
     ),
     (MANIFEST_FILE, "ledger.path"): KeyRow(
         "Where rulings are appended, declared for everyone who works on the project; it wins "
@@ -544,6 +642,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         _LEDGER_PATH_VALUES,
         "No block, or `ledger: null`: the config's ledger block or the ledger probe is used",
         '`"docs/decisions.md"`',
+        "Rulings are appended to this file for everyone who works on the project.",
+        _LEDGER_READERS,
     ),
     (MANIFEST_FILE, "ledger.format"): _LEDGER_FORMAT,
     (MANIFEST_FILE, "ledger.id_scheme"): _LEDGER_ID_SCHEME,
@@ -557,6 +657,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`null`: those agents write only inside the project, and the contract lives in "
         "`contracts/`",
         '`"/work/decisions"`',
+        "The contract and ledger agents may write in this repository, and a run branches it.",
+        ("scripts/lib/jail.py", "scripts/lib/workspace.py", "scripts/lib/ledger.py"),
     ),
     (CONFIG_FILE, "standing_rules"): KeyRow(
         "The standing-rules file the planner reads as the rules every plan must satisfy, "
@@ -567,6 +669,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "else from the project root",
         "`null`: the repository has no standing-rules file",
         '`"standing-rules.md"`',
+        "The planner holds every plan to the rules in this file.",
+        ("skills/plan/SKILL.md", "agents/planner.md"),
     ),
     (CONFIG_FILE, "excluded_roots"): KeyRow(
         "Folders whose files must never reach git, GitHub or a redirect. A Daedalus agent is "
@@ -580,6 +684,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         '`"match": "all"` (every ignored path); a folder holding a linked worktree is skipped',
         "`[]`: no folder is excluded",
         '`[{"kind": "path", "path": "<repo_root>/private/"}]`',
+        "Agents are refused any command that sends these folders to git, GitHub or a file.",
+        ("scripts/checks/excluded_roots.py", "scripts/lib/jail.py", "scripts/freeze_sources.py"),
     ),
     (CONFIG_FILE, "ledger.path"): KeyRow(
         "Where rulings are appended on this machine, used when the manifest declares no ledger",
@@ -587,6 +693,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         _LEDGER_PATH_VALUES,
         "`null`: the ledger probe looks for one",
         '`"<charter_root>/decision-log.md"`',
+        "Rulings are appended to this file on this machine when the project names no ledger.",
+        _LEDGER_READERS,
     ),
     (CONFIG_FILE, "ledger.format"): _LEDGER_FORMAT,
     (CONFIG_FILE, "ledger.id_scheme"): _LEDGER_ID_SCHEME,
@@ -598,6 +706,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         '`"cfn-guard"` or `"conftest"`',
         "`policy: null`: none declared",
         '`"conftest"`',
+        "A run's opening lines name this tool; no check runs it yet.",
+        ("scripts/lib/workspace.py",),
     ),
     (CONFIG_FILE, "policy.path"): KeyRow(
         "The folder that holds your policy rules; no train reads it yet",
@@ -605,6 +715,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "A non-empty path",
         "Required once the block exists",
         '`"/work/decisions/policy"`',
+        "A run's opening lines name this folder; no check reads the rules in it yet.",
+        ("scripts/lib/workspace.py",),
     ),
     (CONFIG_FILE, "standards_sources[].kind"): KeyRow(
         "What one source of your standards is; the run reads only these "
@@ -614,6 +726,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "shipped inside the plugin)",
         "`[]`: the Standards Packet is empty",
         '`"rules-dir"`',
+        "A run reads your standards only from the entries you list.",
+        ("scripts/lib/workspace.py", _STANDARDS),
     ),
     (CONFIG_FILE, "standards_sources[].path"): KeyRow(
         "Where a rules folder or rules file lives",
@@ -621,6 +735,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "A non-empty path, written absolute; a pack entry carries none",
         "Required for a `rules-dir` or `file` entry",
         '`"/work/rules"`',
+        "A run reads the rules folder or rules file at this place.",
+        ("scripts/lib/workspace.py", _STANDARDS),
     ),
     (CONFIG_FILE, "standards_sources[].name"): KeyRow(
         "Which pack shipped with Daedalus to use",
@@ -629,6 +745,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "name is refused",
         "Required for a `pack` entry",
         '`"baseline"`',
+        "A run reads this pack of rules that ships with Daedalus.",
+        ("scripts/lib/workspace.py",),
     ),
     (CONFIG_FILE, "operator_signing_keys"): KeyRow(
         "Reserved for the key fingerprints allowed to sign merges; no check reads it yet",
@@ -636,6 +754,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "Non-empty strings",
         "`[]`",
         '`["ABCD1234EF567890"]`',
+        f"{NOT_ACTIVE}: no check compares a signature against this list.",
+        (),
     ),
     (CONFIG_FILE, "max_concurrent_builders"): KeyRow(
         "How many coding agents a parallel stage runs at once, and the cap on the plan width "
@@ -644,6 +764,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "A whole number of at least 1; `true` and `false` are refused",
         "`5`",
         "`3`",
+        "A run starts at most this many coding agents at once.",
+        ("scripts/lib/train_runner.py", "skills/build/SKILL.md"),
     ),
     (CONFIG_FILE, "audit_retention_days"): KeyRow(
         "How many days a session's audit log is kept after its last record. When a new session "
@@ -654,6 +776,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"A whole number of at least {AUDIT_RETENTION_FLOOR_DAYS}, or `null`",
         "`null`: every log is kept",
         "`365`",
+        "Session audit logs older than this are deleted when a new session starts writing.",
+        ("scripts/lib/audit.py",),
     ),
     (CONFIG_FILE, "wrapper_read_roots"): KeyRow(
         "Folders outside the project that a test runner under the kernel wrapper may read and "
@@ -664,6 +788,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "credential store, such as `~/.ssh`, is refused",
         "`[]`: the wrapper reads only the project, the system folders and Python",
         '`["~/.local/share/pnpm/store", "~/.nvm"]`',
+        "Tests run inside the test wrapper may read and run programs from these folders.",
+        ("scripts/daedalus_confine.py",),
     ),
     (CONFIG_FILE, "unit_token_budget"): KeyRow(
         "The most tokens one unit may spend, its coding and checking agents together. The token "
@@ -672,6 +798,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "A whole number of at least 1, or `null`; `true` and `false` are refused",
         "`null`: no budget, and the gate never fails",
         "`4000000`",
+        "The token report flags each unit over this budget, and the audit's budget check fails.",
+        ("scripts/token_economy.py", "skills/audit/SKILL.md"),
     ),
     (CONFIG_FILE, "coder_models"): KeyRow(
         "Which model a coding agent runs on for one unit. `default` is for most units. "
@@ -685,6 +813,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "its default",
         '`{"default": "sonnet", "control_path": "opus", "escalated": "opus"}`',
         '`{"default": "opus"}`',
+        "Each coding agent runs on the model named for its kind of unit.",
+        ("scripts/lib/coder_model.py", "scripts/daedalus_train.py"),
     ),
     (CONFIG_FILE, "agent_models"): KeyRow(
         "Which model each catalog agent runs on, in place of the `model:` line of its agent "
@@ -696,6 +826,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         + f' or `"{MODELS[-1]}"`; any other name or value is refused',
         "`{}`: every agent runs on its agent file's model",
         '`{"planner": "sonnet"}`',
+        "Each agent you name runs on the model you give it instead of its own.",
+        ("scripts/lib/agent_models.py", "scripts/daedalus_train.py"),
     ),
     (CONFIG_FILE, "fable_available"): KeyRow(
         "Whether your plan offers the Fable model. When it does, the planner and the auditor run "
@@ -705,6 +837,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`null`: Fable is used only when a running train's audit log shows this session "
         "started on it",
         "`true`",
+        "The planner and the auditor run on the Fable model when your plan offers it.",
+        ("scripts/lib/fable.py",),
     ),
     (CONFIG_FILE, "operator"): KeyRow(
         "A project's own values for the operator file's keys; a key set here replaces the "
@@ -715,6 +849,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "any other key is refused",
         "Absent: the operator file's values stand",
         '`{"profile": {"literacy": "plain"}}`',
+        f"{NOT_ACTIVE}: the personal values are checked and kept for later.",
+        (),
     ),
     (OPERATOR_FILE_NAME, "main_refusals"): KeyRow(
         "The warning classes your own session turns into refusals for itself. The file only "
@@ -725,6 +861,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         + " at most once; any other name is refused",
         "`[]`: your session is warned and never refused",
         '`["commit_on_main", "credential_read"]`',
+        f"{NOT_ACTIVE}: your own session is still only warned.",
+        (),
     ),
     (OPERATOR_FILE_NAME, "profile.literacy"): KeyRow(
         "How plainly Daedalus writes for you, for every project that does not set "
@@ -735,6 +873,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "a leading slash, `..` or glob characters; `null` is refused",
         "Absent: no operator level is set",
         f"`{LITERACY_EXAMPLES[0]}`",
+        f"{NOT_ACTIVE}: Daedalus writes for you at the project's level.",
+        (),
     ),
     (OPERATOR_FILE_NAME, "profile.dash_ban"): KeyRow(
         "Whether Daedalus text for you avoids long dashes. Nothing acts on it yet",
@@ -742,12 +882,15 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`true` or `false`; any other value is refused",
         "Absent: no operator choice is set",
         "`true`",
+        f"{NOT_ACTIVE}: Daedalus text keeps whatever dashes it has.",
+        (),
     ),
 }
 REFERENCE_HEADER = (
     "Key",
     "File",
     "What it governs",
+    "What changes for you",
     "Type",
     "Allowed values",
     "Default",
@@ -773,6 +916,7 @@ def reference_table() -> str:
             f"`{key}`",
             f"`{file}`",
             row.governs,
+            row.affects,
             row.kind,
             row.values,
             row.default,

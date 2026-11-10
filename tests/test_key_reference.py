@@ -8,6 +8,7 @@ from lib.project_keys import (
     CONFIG_FILE,
     KEY_ROWS,
     MANIFEST_FILE,
+    NOT_ACTIVE,
     OPERATOR_FILE_NAME,
     REFERENCE_HEADER,
     config_keys,
@@ -135,9 +136,37 @@ def test_reader_keys_follow_the_reader_dataclasses() -> None:
     assert {f.name for f in fields(Manifest)} - nested <= leaves
 
 
+def test_every_named_reader_exists_and_names_the_key() -> None:
+    # 0242: a reader is a real file whose text names the key's last segment.
+    bad = []
+    for (file, key), row in KEY_ROWS.items():
+        leaf = key.rsplit(".", 1)[-1].removesuffix("[]")
+        for reader in row.readers:
+            path = REPO_ROOT / reader
+            if not path.is_file() or leaf not in path.read_text(encoding="utf-8"):
+                bad.append(f"{file} {key}: {reader}")
+    assert bad == []
+
+
+def test_every_affects_is_one_plain_sentence() -> None:
+    # 0242: the wizard puts affects into a question, so it holds no key name, path or id.
+    for (file, key), row in KEY_ROWS.items():
+        text = row.affects
+        assert text and text.endswith(".") and text[0].isupper(), (file, key)
+        assert not set(text) & set("`_/<>"), (file, key, text)
+        assert text.count(". ") == 0, (file, key, text)
+
+
+def test_a_key_without_readers_says_it_is_not_active() -> None:
+    # 0242: readers=() and the not-active opening go together, both ways.
+    for (file, key), row in KEY_ROWS.items():
+        assert (row.readers == ()) == row.affects.startswith(NOT_ACTIVE), (file, key)
+
+
 def test_standing_rules_key_has_its_reference_row() -> None:
     # 0090: the planner's locator key is documented in the config section of the README table.
     assert "standing_rules" in config_keys()
     rows = {(file, key): cells for key, file, cells in _rows()}
     cells = rows[(CONFIG_FILE, "standing_rules")]
-    assert "charter_root" in cells[2] and cells[3].startswith("`null`")
+    # 0242: the affects column sits after what it governs, so values and default move one right.
+    assert "charter_root" in cells[3] and cells[4].startswith("`null`")
