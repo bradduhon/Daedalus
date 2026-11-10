@@ -1,7 +1,7 @@
 <!-- Copyright (c) 2026 Brad Duhon. SPDX-License-Identifier: GPL-3.0-or-later -->
 # Daedalus baseline pack
 
-Opt-in: these rules apply only to a project that declares `{"kind": "pack", "name": "baseline"}` in `standards_sources`.
+Opt-in: these rules apply only to a project that declares `{"builtin": "baseline"}` in `coding_rules`.
 Written in Daedalus's own words; each `Maps:` cites NIST SP 800-53 rev5 control ids and OWASP ASVS 5.0.0 requirement ids, never their text.
 CIS section numbers are cited only after a check against a licensed CIS copy; none are cited yet.
 

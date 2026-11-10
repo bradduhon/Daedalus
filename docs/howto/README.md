@@ -49,11 +49,11 @@ Here is the output of a real run in a new repository with one empty commit, no `
     OK   project data dir: <repo>/.claude/daedalus (not created yet; a train's start creates it)
     OK   audit log: off until a train runs here
     OPT  config.json: not present, defaults in use. Next: run the Daedalus setup skill (/daedalus:setup) to write a starter config.json
-    OK   ledger: none found (the Build Train asks before creating docs/decisions.md)
+    OK   decisions: no decisions file named in docs.decisions_filename, none recorded
     OPT  standing_rules: not declared. Next: set standing_rules in .claude/daedalus/config.json to the standing-rules file, so the planner reads it
-    OPT  standards_sources: no standards file or pack is declared. Next: to adopt the shipped baseline pack, add {"kind": "pack", "name": "baseline"} to standards_sources in .claude/daedalus/config.json
+    OPT  coding_rules: no rules folder, file or built-in set is declared. Next: to adopt the shipped baseline rules, add {"builtin": "baseline"} to coding_rules in .claude/daedalus/config.json
     OK   policy: not declared (optional)
-    OPT  fable: not seen in this session, so auditor and planner run on opus. Next: set fable_available to true in .claude/daedalus/config.json when your plan offers Fable
+    OPT  fable: not seen in this session, so auditor and planner run on opus. Next: set models.fable_available to true in .claude/daedalus/config.json when your plan offers Fable
     OK   train marker: none
     OK   cache dir: CLAUDE_PLUGIN_DATA=<cache>
     OK   plugin root: <plugin>
@@ -85,8 +85,8 @@ Some lines need a word of explanation:
 
 - In a new repository, the `config.json`, `service-manifest.json`, `contracts/` and `.gitleaks.toml` lines read `OPT` until you add those files. The `Next:` lines for the first two say to run `/daedalus:setup`, which writes a starter copy of each. `docs/project-requirements.md` has an example of every file.
 - The `standing_rules` line reads `OPT` until `config.json` names a standing-rules file, the rules every plan must satisfy, which the planner reads.
-- The `standards_sources` line reads `OPT` until you declare a standards source. Its `Next:` offers the baseline pack that ships with Daedalus. Taking it is your choice.
-- The `fable` line says which model the planner and the auditor run on: Fable when `fable_available` is `true` in `config.json` or a running train's audit log shows this session started on Fable, and their own model otherwise.
+- The `coding_rules` line reads `OPT` until you declare your coding rules. Its `Next:` offers the baseline rules that ship with Daedalus. Taking it is your choice.
+- The `fable` line says which model the planner and the auditor run on: Fable when `models.fable_available` is `true` in `config.json` or a running train's audit log shows this session started on Fable, and their own model otherwise.
 - `train marker: none` means no train is running in this repository.
 - `priorities: none declared` means the manifest has no `priorities` block. With one, the line prints the ranking and the number of rules.
 - The `kernel rules` line says whether this kernel can hold the kernel wrapper's rules, which keep a coder's test command inside its worktree and off the network. On a kernel that cannot, the line is a `MISS` that names the cause and gives a `Next:` step, and the doctor fails. Coder test commands are refused on that kernel, wrapped or bare.
@@ -96,7 +96,7 @@ Some lines need a word of explanation:
 - Once the `.claude/daedalus/` directory exists, the doctor also checks that `.claude/daedalus/.gitignore` holds a `*` line and that git ignores the directory.
 - The `cache dir` and `plugin root` lines are for your information and never a `MISS`. When more than one `~/.claude/plugins/data/daedalus*` directory exists, the cache dir line names each one. The plugin root is the directory the commands in this guide call `<plugin>`.
 - Once a framework cache holds a `manifest.json`, one line per family follows the plugin root line, as `OK   frameworks nist: pinned 2026-10-19` does in the example. When the oldest file in that family was pinned more than 90 days ago, the line reads `OLD  frameworks nist: pinned 2026-06-01 (137 days). Next: refresh the framework caches with python3 <plugin>/scripts/refresh_frameworks.py`. For CIS, the `Next:` says instead to build a CIS id-map pack with `import_pack.py cis-map` per docs/project-requirements.md.
-- After those lines comes one line per control pack the next train reads. A control pack is a list of security controls a change is judged against. A pack that loads prints `OK   framework pack <id>: <version>, <n> controls`, like the two shipped packs in the example. Each problem prints `MISS framework pack <id>: <problem>. Next: <action>`. A missing or linked `frameworks.pack_dir` folder prints `MISS framework packs: <problem>`. A pack more than 90 days old prints `OLD  framework pack <id>: pinned <date> (<days> days). Next: <action>`. A `MISS` pack line fails the doctor.
+- After those lines comes one line per control pack the next train reads. A control pack is a list of security controls a change is judged against. A pack that loads prints `OK   framework pack <id>: <version>, <n> controls`, like the two shipped packs in the example. Each problem prints `MISS framework pack <id>: <problem>. Next: <action>`. A missing or linked `compliance_rules.folder` folder prints `MISS framework packs: <problem>`. A pack more than 90 days old prints `OLD  framework pack <id>: pinned <date> (<days> days). Next: <action>`. A `MISS` pack line fails the doctor.
 
 Outside a git repository, the project is in folder scope. Only a repository can be pushed, so the `git repository` line and the two gh lines read `OPT`. With the secret scan on, the gitleaks line reads `OPT` too.
 
@@ -107,7 +107,7 @@ Outside a git repository, the project is in folder scope. Only a repository can 
 | Audit logs, one per session | `<repo>/.claude/daedalus/audit/<session_id>.jsonl` | hooks only, and the jail refuses tool writes there |
 | Plugin config, optional | `<repo>/.claude/daedalus/config.json` | you, from your own shell, when you need it |
 | Machine caches (NIST, OWASP) | `${CLAUDE_PLUGIN_DATA}`, under `~/.claude/plugins/data/` | the plugin's refresh scripts |
-| Your own control packs, optional | each subfolder of the `frameworks.pack_dir` folder in `service-manifest.json` | you, with `scripts/import_pack.py` from your own shell |
+| Your own control packs, optional | each subfolder of the `compliance_rules.folder` folder in `service-manifest.json` | you, with `scripts/import_pack.py` from your own shell |
 | Build run working files and summary | `<repo>/docs/.tmp/daedalus/` | the build run; a `*` marker inside keeps it out of git |
 | Running-train marker | `<repo>/.claude/daedalus/train.active` | each train, removed when it ends or stops |
 | Train state, unit bindings and writer kinds | `<repo>/.claude/daedalus/trains/<train-id>.json`, `<train-id>.bindings.json` and `<train-id>.writers.json` | the train's scripts and hooks only, under a lock |
@@ -168,7 +168,7 @@ For an intact log it prints `OK: <n> records, chain intact, head=<hash>`. Otherw
 
 ### Saving the report
 
-When the optional `<repo>/.claude/daedalus/config.json` sets `charter_root`, the skill asks whether to render the report again and save it to `<charter_root>/audit/<session>.md`. A live session gains a few records between the two renders, so the saved file can hold more than the screen showed. If `<charter_root>/audit` does not exist yet, the skill offers to create it. Say yes, and the file is written there for the charter-docs agent to commit in a later build run. Say no, or leave `charter_root` unset, and the digest stays on screen only.
+When the optional `<repo>/.claude/daedalus/config.json` sets `local_docs_folder` (the `<charter_root>` below), the skill asks whether to render the report again and save it to `<charter_root>/audit/<session>.md`. A live session gains a few records between the two renders, so the saved file can hold more than the screen showed. If `<charter_root>/audit` does not exist yet, the skill offers to create it. Say yes, and the file is written there for the charter-docs agent to commit in a later build run. Say no, or leave `charter_root` unset, and the digest stays on screen only.
 
 You can also write the report yourself, from the repository directory. Create the folder first:
 
@@ -191,7 +191,7 @@ To see what a run cost in tokens, type `/daedalus:token-report <run id>` with a 
 
 Each run ends with a totals row, a mean per unit and a mean per audit round. The mean per unit counts the coding agents only, as the earlier hand counts did. The checking agents stay in the totals row. Under the table, a line such as `turns per coder unit: 49 (target 24)` shows how many turns the coding agents took per unit and the most they should take, so you can see whether they kept to it. A session report ends with a `session` group: the agents the main session started outside any run, one row each with its own totals. A coding, checking, audit, contract or ledger agent the main session started for a train counts in that train's rows instead. The main session's own tokens are left out, so the totals cover the agents only. No column is in dollars. A value a run type does not have prints `none`. Every run type uses the same columns, so a build run, a push run and a plan run compare side by side.
 
-After a run's table, the skill offers to save it: to `<charter_root>/reports/<date>-tokens-<run id>.md` when `charter_root` is set, and to `docs/.tmp/daedalus/<run id>/tokens.md` otherwise. `/daedalus:token-report history` prints the totals row of every saved run. The audit report prints the same totals rows after its own totals.
+After a run's table, the skill offers to save it: to `<charter_root>/reports/<date>-tokens-<run id>.md` when `local_docs_folder` is set, and to `docs/.tmp/daedalus/<run id>/tokens.md` otherwise. `/daedalus:token-report history` prints the totals row of every saved run. The audit report prints the same totals rows after its own totals.
 
 ## Running a build
 
@@ -225,7 +225,7 @@ Your session hands the file to the orchestrator as the train's plan. The orchest
 
 Your session checks the conditions in the next section, then starts one orchestrator agent and passes messages between it and you. The orchestrator never asks you anything itself. After each phase you see a progress note that names the phase, its weight and the state of each unit. Before each choice the train makes, you see one line: `Chose <what> over <alternative>: <cost>`.
 
-When the train needs a decision from you, the orchestrator writes a decision brief. Your session asks you each question through Claude Code's question prompt. Each question has a question line ending in a question mark, the context you need to decide, and its options, with the recommended option first. Each option says what breaks if you pick it. An option may end with one `Ref:` line that holds its ids and file paths, and the check does not read that line. Each question is written at the reading level the `docs.literacy` key of `service-manifest.json` names, `standard` when the key is absent. At `plain` a sentence holds at most 15 words, and at `standard` at most 22. Some questions are about who may reach what, or the order changes apply in, such as a policy, a permission, a role or a grant. Such a question also carries three lines in its context. `Access impact:` says who or what gains or loses access. `Change nature:` says what kind of change it is. `Rollback:` says how to undo it. The check refuses such a question when any of the three lines is missing. The orchestrator checks each brief with `daedalus_train.py brief-check` before you see it.
+When the train needs a decision from you, the orchestrator writes a decision brief. Your session asks you each question through Claude Code's question prompt. Each question has a question line ending in a question mark, the context you need to decide, and its options, with the recommended option first. Each option says what breaks if you pick it. An option may end with one `Ref:` line that holds its ids and file paths, and the check does not read that line. Each question is written at the reading level the `docs.reading_level` key of `service-manifest.json` names, `standard` when the key is absent. At `plain` a sentence holds at most 15 words, and at `standard` at most 22. Some questions are about who may reach what, or the order changes apply in, such as a policy, a permission, a role or a grant. Such a question also carries three lines in its context. `Access impact:` says who or what gains or loses access. `Change nature:` says what kind of change it is. `Rollback:` says how to undo it. The check refuses such a question when any of the three lines is missing. The orchestrator checks each brief with `daedalus_train.py brief-check` before you see it.
 
 The orchestrator ends each reply with one of four status lines, and your session acts on it:
 
@@ -240,9 +240,9 @@ The train runs these checks and stops with a `Next:` line when one fails:
 
 - The working tree must be clean. Commit or stash first.
 - `config.json` is optional. When it exists, it must be valid JSON.
-- A decision ledger must exist. The train runs `append_ledger.py --probe` to look for one. If no ledger is declared and none is found, it asks: "This repo has no decision ledger. Options: name an existing file, or let Daedalus create docs/decisions.md as a table. Which?" To name a file, add a `ledger` block for it to config.json from your own shell. Choosing create writes `docs/decisions.md` holding only the table header and separator, which the probe reads as `seq=0`. You review and commit it, then start the train again.
+- A decisions file is optional. The train records decisions only in the file `docs.decisions_filename` names in `service-manifest.json`, in the project's docs folder, or in the docs folder `local_docs_folder` names in `config.json`. It never looks for one by a usual name and never asks. With no file named, the run records no decision. A named file that does not exist yet is created as a table with the first decision; its folder must exist.
 - The hooks must be writing this session's audit log. The train's start creates `<repo>/.claude/daedalus/`. The next check reads the newest log in `<repo>/.claude/daedalus/audit/` and looks for its own probe command as the last Bash record. If it is not there, the jail is not enforcing, and the train stops; run `/daedalus:doctor`. When it is there, the check prints `OK hooks live: session <id>, chain intact (<n> records)`. It also marks where this train's audit begins. The push run reads the security verdict only from records after that mark.
-- Before the first compliance question, the orchestrator finds the control packs: your `frameworks.pack_dir` packs, then the shipped packs unless `frameworks.default_packs` is `false`. A pack that fails its check stops the train. Run `/daedalus:doctor` and fix the pack it names.
+- Before the first compliance question, the orchestrator finds the control packs: your `compliance_rules.folder` packs, then the shipped packs unless `compliance_rules.use_builtin` is `false`. A pack that fails its check stops the train. Run `/daedalus:doctor` and fix the pack it names.
 
 The train creates `docs/.tmp/daedalus/` with a `*` marker, so git ignores its working files and summary. It writes `<repo>/.claude/daedalus/train.active` while it runs and removes it when it ends or stops. While that file exists, agents from Claude Code itself or from other plugins are refused every checked tool except reads and searches.
 
@@ -251,7 +251,7 @@ The train creates `docs/.tmp/daedalus/` with a `*` marker, so git ignores its wo
 After the checks, your session prints the first six lines of the State Block, the train's status record. The orchestrator keeps the full block and prints it only at a stop, at a resume and in the summary. After each phase you see the progress note instead. The first lines, with example values:
 
     train: 20261014-153000  base: main @ 3f329dc  audit session: <session>
-    ledger: /work/my-service/docs/decisions.md (probe, markdown-table-row, seq=12)
+    ledger: /work/my-service/docs/decisions.md (manifest, markdown-table-row, seq=12)
     charter_root: none  charter base: none
     policy: none declared  standards: 0 sources
     cache: unresolved
@@ -261,11 +261,11 @@ The start command prints the `cache:` line. In the block it keeps, the orchestra
 
 The train id is the UTC start time. The audit session id is the name of the newest log in `<repo>/.claude/daedalus/audit/`, without `.jsonl`. Keep it for the audit report. `seq` is the last ledger entry number. The codes on the full block's `codes:` line are the `--repo` and `--type` parts of the next ledger id. The train takes them from the first ledger id the Standards Packet cites. If it cites none, or its ids disagree, the train asks you once. A heading-entry ledger ignores the codes.
 
-The build run saves the Locked Contract Packet to a file, and the lock command commits it. Without `charter_root`, the file is `contracts/<name>.md`, committed on the integration branch `daedalus/<train-id>` before any coder starts. With `charter_root`, the file is `<charter_root>/specs/<name>.md`, committed on the Charter branch `daedalus/<train-id>` that the train creates in its checks. The Charter is a separate repository for your decisions and specs. Every contract revision is saved and committed again. Without `charter_root`, nothing is written to a Charter repository, and the ledger entry goes to this repository's own ledger.
+The build run saves the Locked Contract Packet to a file, and the lock command commits it. Without `local_docs_folder`, the file is `contracts/<name>.md`, committed on the integration branch `daedalus/<train-id>` before any coder starts. With `local_docs_folder`, the file is `<charter_root>/specs/<name>.md`, committed on the Charter branch `daedalus/<train-id>` that the train creates in its checks. The Charter is a separate repository for your decisions and specs. Every contract revision is saved and committed again. Without `charter_root`, nothing is written to a Charter repository, and the ledger entry goes to this repository's own ledger.
 
 ### Standards and contract first
 
-The orchestrator reads the sources you declared in `standards_sources`, and your ledger. It writes a Standards Packet: the rules that apply to this task. If your task contradicts one of your own standards, the train asks you about it as a decision. The question quotes both sides: your words, and the rule with its file and line. When the rule comes from your global Claude environment, you get three options:
+The orchestrator reads the rules you declared in `coding_rules`, and your decisions file when the manifest names one. It writes a Standards Packet: the rules that apply to this task. If your task contradicts one of your own standards, the train asks you about it as a decision. The question quotes both sides: your words, and the rule with its file and line. When the rule comes from your global Claude environment, you get three options:
 
 - Follow Global: the plan or the plugin changes to comply.
 - Follow Plugin: the plugin's way stands, recorded as a deviation.
@@ -298,15 +298,15 @@ The verifier checks each finished unit against its brief. A unit can also fail a
 
     python3 <plugin>/scripts/daedalus_train.py refuted --repo <repo> --unit <unit id>
 
-For a check you failed, it adds `--operator-check "<check text>"`. The command prints `refuted <unit id>: <count>`, the number of rejections the unit has had. A repeated call on the same rejection counts it once. The first rejection goes back to the unit's coding agent for one fix. The second goes to a fresh coding agent on the `escalated` model of the `coder_models` setting, and the run goes on. The coding agent that held the unit can no longer take any unit freed this way. The third rejection comes to you as a question. A non-zero exit stops the run and shows the command's `Next:` line.
+For a check you failed, it adds `--operator-check "<check text>"`. The command prints `refuted <unit id>: <count>`, the number of rejections the unit has had. A repeated call on the same rejection counts it once. The first rejection goes back to the unit's coding agent for one fix. The second goes to a fresh coding agent on the model the `models.coder_after_rejection` setting names, and the run goes on. The coding agent that held the unit can no longer take any unit freed this way. The third rejection comes to you as a question. A non-zero exit stops the run and shows the command's `Next:` line.
 
 ### The security gate
 
 Once every unit is complete, the train merges each unit into the local integration branch `daedalus/<train-id>` with `--no-ff`, so each unit stays visible in the history. A merge conflict stops the train. The merge is aborted, and the repository stays on `daedalus/<train-id>` with the merges that completed. The stop names the conflicting files. Merge that unit there by hand and run the merge step again, which skips units already merged. Or rerun the train with units that do not share files.
 
-The summary records the policy gate as `[POLICY: none declared]` or `[POLICY: declared, gate not yet shipped]`. A later Daedalus release adds the gate itself. The security auditor always checks the merged diff against the control packs. Those are your `frameworks.pack_dir` packs, and the shipped AWS and NIST packs unless `frameworks.default_packs` is `false`. The shipped Stripe pack joins only for a change to a Stripe file, a `.env` file, `package.json` or an npm lockfile. The cost-tier pack joins only when `frameworks.packs` names it.
+The summary records the policy gate as `[POLICY: none declared]` or `[POLICY: declared, gate not yet shipped]`. A later Daedalus release adds the gate itself. The security auditor always checks the merged diff against the control packs. Those are your `compliance_rules.folder` packs, and the shipped AWS and NIST packs unless `compliance_rules.use_builtin` is `false`. The shipped Stripe pack joins only for a change to a Stripe file, a `.env` file, `package.json` or an npm lockfile. The cost-tier pack joins only when `compliance_rules.extra_builtin` names it.
 
-When the change touches a `.tf` or `.tfvars` file, the train looks for `terraform` on your session's PATH. If it is missing and `features.terraform_tools` is not `false`, the auditor files a blocking finding. To clear it, put terraform on your PATH, or set `features.terraform_tools` to `false` in `service-manifest.json`. The kernel wrapper runs the terraform your PATH names. A terraform script shim outside the folders the wrapper already grants, such as one in your home folder, is refused with one line. Put the real binary's folder first on your PATH instead.
+When the change touches a `.tf` or `.tfvars` file, the train looks for `terraform` on your session's PATH. If it is missing and `checks.terraform_format` is not `false`, the auditor files a blocking finding. To clear it, put terraform on your PATH, or set `checks.terraform_format` to `false` in `service-manifest.json`. The kernel wrapper runs the terraform your PATH names. A terraform script shim outside the folders the wrapper already grants, such as one in your home folder, is refused with one line. Put the real binary's folder first on your PATH instead.
 
 Then the security auditor judges the merged integration tip against the train's base, so its verdict names the commit the push run pushes. It judges against the contract, your standards and the compliance reports. It treats anything a coder can commit or a project ships as attacker input, so a finding that needs a planted file still counts. Besides its pattern searches, it lists every option, config file and environment setting of each tool a jail rule allows. It feeds each new parser or loader wrong types, nested lists, and unreadable or linked folders. It reads every change to an agent or skill file in full, removed lines included.
 
@@ -322,7 +322,7 @@ A `[VERDICT: REJECTED]` names the tip it judged and writes each blocking finding
 
 The same questions follow every later rejected round. No fix round starts without your pick, and there is no limit on the number of rounds. The train never runs a fix round or stops on its own. The push run's verdict check accepts a rejected round once every finding in its findings file carries an exemption.
 
-On `[VERDICT: APPROVED]`, or once you exempted every finding, the charter-docs agent appends the ledger entries through `append_ledger.py` and commits them. When the ledger lives in your Charter repository, the Charter working tree must be clean first. The train creates the Charter's `daedalus/<train-id>` branch in its checks, for the contract and ledger commits, then switches the Charter back to the branch it was on. Nothing is pushed.
+On `[VERDICT: APPROVED]`, or once you exempted every finding, the charter-docs agent appends the ledger entries through `append_ledger.py` and commits them. With no decisions file named, this step is skipped and nothing is asked. When the ledger lives in your Charter repository, the Charter working tree must be clean first. The train creates the Charter's `daedalus/<train-id>` branch in its checks, for the contract and ledger commits, then switches the Charter back to the branch it was on. Nothing is pushed.
 
 Each agent ends its reply with one of its set status lines or sections. A reply that does not stops the train and shows you the reply's last 10 lines. The security auditor writes its verdict line as both the first line and the last line of every reply.
 
@@ -365,7 +365,7 @@ With no argument, it pushes the newest build run in `docs/.tmp/daedalus/`. To pu
 The train stops, with a `Next:` line, when any of these fails:
 
 - You are not on the `daedalus/<train-id>` branch the summary names.
-- The service manifest turns the secret scan on (`features.secrets_scan` is `true`) and `gitleaks` is not installed. Install it (https://github.com/gitleaks/gitleaks#installing) and rerun. With the scan on, the train never pushes without it. With the scan off, the train neither runs nor needs gitleaks.
+- The service manifest turns the secret scan on (`checks.secret_scan_on_push` is `true`) and `gitleaks` is not installed. Install it (https://github.com/gitleaks/gitleaks#installing) and rerun. With the scan on, the train never pushes without it. With the scan off, the train neither runs nor needs gitleaks.
 - `gh auth status` fails. Run `gh auth login` and rerun. The push agent opens the pull request with gh.
 - The working tree has unstaged or untracked changes. Staged changes are fine, because the push agent commits them.
 - This session's hooks are not writing the audit log. The train marks itself running before this check, since the log records only during a train. Run `/daedalus:doctor`.

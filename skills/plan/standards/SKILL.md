@@ -13,21 +13,26 @@ follows it; outside a run the main session does. You read with Read, Grep and Gl
 command is the `find` of item 6. This method writes no file; the phase that loaded it writes
 the packet.
 
-1. Sources: only the entries in `standards_sources[]` of `<repo>/.claude/daedalus/config.json`,
-   plus the resolved ledger (§6.6), named on the State Block `ledger:` line when the run has
-   one. Cite each rule as `source:line`. A `pack` entry has no path there; read it at the path
-   the State Block `standards packs:` line names (0019).
+1. Sources: only the entries in `coding_rules[]` of `<repo>/.claude/daedalus/config.json`
+   (each a `folder`, a `file` or a `builtin` rule set), plus the decisions file the State Block
+   `ledger:` line names, when the run has one (§6.6, 0247). Cite each rule as `source:line`. A
+   `builtin` entry has no path there; read it at the path the State Block
+   `standards packs:` line names (0019).
 2. Phase 1: write `## Standards Packet`: active rules relevant to the task, governing
    ledger ids, current ledger sequence, and the declared `policy` pack (or "none declared").
    Its fifth part, in every train kind (Build, Push and document trains), is a
-   `## Priorities` section read from the `priorities` block of the project's
-   `service-manifest.json` (0129, 0137), in exactly these lines:
-   - `ranking: <driver> > <driver> > <driver> > <driver>` from `drivers`;
+   `## Priorities` section read from the `run_output_priority` group of the project's
+   `service-manifest.json` (0129, 0137), in exactly these lines, where the file's
+   priority word `operations` is written `ops` and its outcome `ask_me` is written `surface`:
+   - `ranking: <driver> > <driver> > <driver> > <driver>` from `order`;
    - one `rule <n>: <driver> vs <driver> for <reason>[,<reason>...] then <driver or surface>: <note>`
-     line per rule, numbered from 1 in the block's order;
-   - one `principle <id> (<driver>): <text>` line per principle;
-   - one `agent <name>: <driver> > <driver> > <driver> > <driver>` line per override;
-   - or, when the manifest has no `priorities` key, the single line `priorities: none declared`.
+     line per rule, from its `between`, `reasons`, `outcome` and `note`, numbered from 1 in
+     the group's order;
+   - one `principle <id> (<driver>): <text>` line per principle, from its `name`, `priority`
+     and `text`;
+   - one `agent <name>: <driver> > <driver> > <driver> > <driver>` line per `agent_order` entry;
+   - or, when the manifest has no `run_output_priority` group, the single line
+     `priorities: none declared`.
    The section binds the train's agents, never the operator's own session.
 3. Flag every contradiction between the task, spec, or Contract Packet and a standard as
    `[STANDARDS: CONTRADICTION] <spec ref> vs <source:line>`. Never resolve it yourself; the
@@ -37,7 +42,7 @@ the packet.
    An auditor brief ends with the rule list, nothing after it.
 6. Later reads: before a re-check, a `YIELD_STANDARDS` answer or the auditor brief, read again
    the rule files changed since the State Block `standards last read:` time: every file an
-   amend-global pick edited, and every file under a `standards_sources` path in config.json
+   amend-global pick edited, and every file under a `coding_rules` path in config.json
    that `find <source path> -type f -newermt '<last read>'` prints. Then set that time to now.
 
 Never write U+2013 or U+2014 (en or em dash) in the packet, an answer or a brief; use a hyphen.

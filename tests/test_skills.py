@@ -150,12 +150,25 @@ def test_build_train_dispatches_existing_agents() -> None:
     assert "${CLAUDE_PLUGIN_ROOT}" not in _orchestrator().split("\n---\n", 1)[1]
 
 
-def test_build_train_probes_the_ledger_and_asks() -> None:
-    # 0004: begin probes; test_begin_asks_the_ledger_question_with_exit_three holds the rest.
+def test_begin_never_asks_about_decisions() -> None:
+    # 0247: no name, no decisions; begin reads the named file or none and never asks.
     pre = _section(_run_skill(), "## Preconditions", "## Phase 1")
-    exit3 = next(line for line in pre.splitlines() if "Exit 3" in line)
-    assert "ask the operator the question it prints, exactly" in exit3
-    assert "append_ledger.py --probe" in pre
+    assert "Exit 3" not in _run_skill() and "append_ledger.py --probe" not in pre
+    assert "Begin never asks about decisions (0247)." in pre
+    assert "reads the decisions file the service manifest names, or none (0004, 0247)" in pre
+
+
+def test_audit_with_no_decisions_file_named_skips_the_ledger_step() -> None:
+    # 0247: the audit phase ends with no ledger step, no ledger question and no error.
+    audit = _flat(REPO_ROOT / "skills" / "audit" / "SKILL.md")
+    step = audit.split("9. `[VERDICT: APPROVED] tip=<sha>`", 1)[1].split("### Recovery", 1)[0]
+    rule = step.split("- No decisions file named (0247):", 1)[1].split(" - Codes:", 1)[0]
+    for part in (
+        "Skip the codes, the Charter ledger check, the charter-docs dispatch and the ledger record",
+        "ask the operator nothing about decisions",
+        "the verdict record follows the approved verdict directly",
+    ):
+        assert part in rule, part
 
 
 def test_build_train_hands_the_pack_path_to_the_standards_skill() -> None:
@@ -196,10 +209,10 @@ def test_build_train_resolves_the_packs_for_the_frameworks_rulebook() -> None:
     # 0157, 0186: Read and Glob resolve the pack folders; no cache path reaches the auditor.
     text = _recipe()
     assert "Glob `<plugin root>/packs/frameworks/*/pack.json`" in text
-    assert "Glob `<repo>/<pack_dir>/*/pack.json`" in text
+    assert "Glob `<repo>/<folder>/*/pack.json`" in text
     assert "`Packs: <absolute pack folder>[, <absolute pack folder>...]`" in text
     assert "<that path>/frameworks" not in text and "CACHE_INVALID" not in text
-    assert "Unless `frameworks.default_packs` is `false`" in text
+    assert "Unless `compliance_rules.use_builtin` is `false`" in text
     # prepush2-2026-10-27 item 5: the packs step runs before every compliance question.
     # 0165: the build phase's pack check runs for the yield route and the audit's merged diff.
     assert (
@@ -446,9 +459,12 @@ def test_build_train_summary_carries_rulings_and_deviations() -> None:
 def test_build_train_records_picks_before_any_coder() -> None:
     # 0057, C9: both ledger locations record picks before a coder starts.
     step1 = _phase_step("plan", 12)
-    assert "With the ledger under `charter_root`, record the picks right after the last pick" in (
-        step1
-    )
+    assert (
+        "With the decisions file in the local docs folder (`local_docs_folder`, the "
+        "`<charter_root>` of the commands), record the picks right after the last pick"
+    ) in step1
+    # 0247: with no decisions file named, nothing records the picks and nothing is asked.
+    assert "No decisions file named (0247): when the ledger line reads `decisions: none`" in step1
     assert "With a repo-local ledger, record the picks right after the step 14 lock" in step1
     assert "No coder starts before `[STATUS: COMMITTED]`." in step1
     step3 = _phase_step("plan", 14)
@@ -480,7 +496,7 @@ def _escalation(text: str) -> str:
 
 
 def test_build_train_has_no_unit_cap_or_warm_roster_line() -> None:
-    # B5, row 17: the planner and max_concurrent_builders govern; warm dispatch replaces the roster.
+    # B5, row 17: the planner and limits.parallel_coders govern; warm dispatch replaces the roster.
     text = _recipe()
     for gone in (
         "at most 5 work units",
@@ -490,7 +506,7 @@ def test_build_train_has_no_unit_cap_or_warm_roster_line() -> None:
     ):
         assert gone not in text, gone
     phase2 = phase_text("build")
-    assert "`max_concurrent_builders`" in phase2
+    assert "`limits.parallel_coders`" in phase2
     assert "one per unit line of its plan block" in phase2
 
 
@@ -2299,7 +2315,7 @@ def test_verify_skill_dispatches_one_verifier_per_unit() -> None:
         " model --repo <repo> --agent verifier`",
         "One verifier per unit (0231, amends 0086): a later unit never goes to an earlier unit's"
         " verifier.",
-        "The verifiers run in parallel, up to `max_concurrent_builders` coders plus verifiers at"
+        "The verifiers run in parallel, up to `limits.parallel_coders` coders plus verifiers at"
         " once, the same cap the build phase's step 1 uses.",
         "The verifier stays warm only for a fix pass on the same unit: after a `FIX.` round, the"
         " unit's next verdict goes to the verifier that refuted it, by the orchestrator's message"
@@ -2336,11 +2352,11 @@ def test_verify_skill_keeps_stays_warm_only_in_the_fix_pass_sentence() -> None:
 
 
 def test_build_schedule_shares_the_cap_with_verifiers() -> None:
-    # 0231: coders and verifiers share max_concurrent_builders.
+    # 0231, 0245: coders and verifiers share limits.parallel_coders.
     text = _flat(REPO_ROOT / "skills" / "build" / "SKILL.md")
     step1 = text.split("1. Schedule.", 1)[1].split("2. ", 1)[0]
     assert (
-        "At most `max_concurrent_builders` coders plus verifiers run at once (the config setting,"
+        "At most `limits.parallel_coders` coders plus verifiers run at once (the config setting,"
         " default 5, 0231). A verifier counts from its dispatch to its verdict."
     ) in step1
     hand = text.split("- Then hand the unit to the verify phase", 1)[1].split("8. ", 1)[0]

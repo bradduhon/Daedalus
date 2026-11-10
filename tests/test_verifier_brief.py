@@ -416,12 +416,13 @@ def test_the_verify_step_asks_the_operator_each_check_and_never_fetches_the_site
     checks = route.split("- Operator checks (0164, 0192).", 1)[1]
     for part in (
         "one operator check per entry of its plan line's `operator_checks:` field",
-        "the manifest's `dev_server` check, when `dev_server` is set and the unit touches web "
-        "code: the stack declares a `vitest` or `tsc` command, or the unit's files include a "
-        "`.ts`, `.tsx` or `.html` file",
+        "the manifest's `local_testing` check, when `local_testing` is set and the unit touches "
+        "web code: the `commands` group declares a `vitest` or `tsc` command, or the unit's "
+        "files include a `.ts`, `.tsx` or `.html` file",
         "in the shape of the per-finding audit prompt of the catalog",
         "with the options `Pass`, `Fail` and `Skip`",
-        "A dev server question names its url and its check text",
+        "A local site question names its `local_testing.url` and its "
+        "`local_testing.instructions` text",
         "`Fail` is a refuted `code` row routed like a verifier refutation",
         "`Skip` records the operator's reason.",
         # L1: the second and third steps live in the REFUTED bullet below this one.

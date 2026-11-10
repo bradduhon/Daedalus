@@ -288,7 +288,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "`false`: the auditor runs no validate and marks that check N/A",
         "`true`",
         "The audit may also run the Terraform validate check, which starts provider programs.",
-        ("skills/audit/SKILL.md", "packs/judges/terraform.md"),
+        ("packs/judges/terraform.md",),
     ),
     (MANIFEST_FILE, "checks.release_banned_terms_file"): KeyRow(
         "A file of terms, one per line, that the release step checks the release notes against; "

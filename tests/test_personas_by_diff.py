@@ -276,12 +276,12 @@ def test_the_auditor_files_each_unjudged_row_as_a_failing_test() -> None:
         "Each N/A on DEP-5 or DEP-8 in your own section is a blocking compliance finding",
         "`round<n>/test_compliance_<row>_unjudged.py`, never a `no-test:` line",
         "names the row, the reason and the two ways to clear it",
-        "turn on `features.dependency_web_lookup`",
+        "turn on `checks.online_advisory_lookup`",
         "name an `Advisory export:` file in the task",
         "clears only when a later round no longer marks the row N/A",
         # 184: a TF-0 FAIL blocks the same way and names its own two ways to clear it.
         "`round<n>/test_compliance_tf0_unjudged.py`",
-        "put terraform on the session PATH, or set `features.terraform_tools` to false",
+        "put terraform on the session PATH, or set `checks.terraform_format` to false",
         "clears only when a later round no longer marks TF-0 FAIL (184)",
     ):
         assert phrase in step, phrase
@@ -293,14 +293,14 @@ def test_audit_dispatch_carries_the_release_age_and_blocks_an_unjudged_row() -> 
     # 0196, 0197: an N/A on DEP-5 or DEP-8 is a failing test put to the operator, never a pass.
     text = " ".join(_phase("audit").split())
     assert "`Minimum release age: <days>` with the manifest's" in text
-    assert "`dependencies.minimum_release_age_days` (`7` when absent, 0197)" in text
+    assert "`packages.minimum_age_days` (`7` when absent, 0197)" in text
     gate = text.split("Unjudged advisories or release age (0196, 0197).", 1)[1].split(" - ", 1)[0]
     for phrase in (
         "An N/A on DEP-5 or DEP-8 is never a pass",
         "it is a blocking finding",
         "The auditor files it in its own round",
         "test_compliance_<row>_unjudged.py",
-        "turn on `features.dependency_web_lookup`",
+        "turn on `checks.online_advisory_lookup`",
         "name an `Advisory export:` file",
         "one question per row",
     ):
@@ -331,7 +331,7 @@ def test_terraform_rulebook_checks_the_binary_before_any_tool_run() -> None:
     assert "read the dispatch's `Terraform binary:` line" in check
     for phrase in (
         "write TF-0 as `FAIL terraform binary missing: fmt -check and validate not run; put "
-        "terraform on the session PATH, or set features.terraform_tools to false in "
+        "terraform on the session PATH, or set checks.terraform_format to false in "
         "service-manifest.json`",
         "`round<n>/test_compliance_tf0_unjudged.py`, whose failure message names those two ways",
     ):
@@ -382,7 +382,7 @@ def test_public_docs_writer_edits_only_the_four_docs_and_claims_each_passage() -
     scope = text[text.index("## Scope") : text.index("## Method")]
     for doc in FOUR_DOCS:
         assert doc in scope, doc
-    assert "`docs.literacy`" in text and "unless the brief overrides it" in text
+    assert "`docs.reading_level`" in text and "unless the brief overrides it" in text
     assert "`Claim: <doc path>:<line> <what the passage now says> | receipt: <command>`" in text
     assert "hand-back summary" in text and "diff" in text
 
@@ -444,8 +444,8 @@ def test_audit_step_1_adds_each_rulebook_by_diff_content() -> None:
         DEPENDENCIES_LINE,
         "add `Rulebook: ${CLAUDE_PLUGIN_ROOT}/packs/judges/terraform.md`",
         "`.tf` or `.tfvars`",
-        "`features.dependency_web_lookup` is `false`",
-        "`features.terraform_tools` is `false`",
+        "`checks.online_advisory_lookup` is `false`",
+        "`checks.terraform_format` is `false`",
         # 184: the session PATH lookup feeds the auditor's binary line.
         "daedalus_doctor.py --check-tools terraform --repo <repo>`",
         "add `Terraform binary: present` when it prints `OK`",
@@ -474,7 +474,7 @@ def test_documentation_stage_sits_directly_before_recovery() -> None:
         "the line `Worktree: <docs worktree path>`",
         "the first line `CLAIMS MODE.`",
         "`Claim: <doc path>:<line> <claim>`",
-        "`docs.literacy`",
+        "`docs.reading_level`",
         f"one decision question per refuted claim with the options {PER_FINDING_RUN}",
     ):
         assert phrase in flat, phrase

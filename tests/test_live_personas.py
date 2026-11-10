@@ -35,15 +35,8 @@ LEDGER_SCRIPT = REPO_ROOT / "scripts" / "append_ledger.py"
 CHARTER_STATUS = re.compile(
     r"^\[STATUS: (?:LEDGER_PROBED|LEDGER_APPENDED|LEDGER_MISMATCH|COMMITTED|BLOCKED)\]"
 )
-CONFIG = {
-    "ledger": {
-        "path": "docs/decisions.md",
-        "format": "markdown-table-row",
-        "id_scheme": "{seq:04d}-TST-{type}",
-        "sequence_source": "last-row-id",
-    },
-    "standards_sources": [{"kind": "file", "path": "docs/STANDARDS.md"}],
-}
+# 0245, 0247: the coding rules file; the manifest the fixture writes names docs/decisions.md.
+CONFIG = {"coding_rules": [{"file": "docs/STANDARDS.md"}]}
 STANDARDS = (
     "# Standards\n\n"
     "1. Every function carries type hints.\n"
@@ -156,6 +149,8 @@ def live_repo(tmp_path: Path) -> Path:
     (repo / "tests" / "test_hello.py").write_text(HELLO_TEST, encoding="utf-8")
     (repo / "README.md").write_text("# demo\n\nA demo repo.\n", encoding="utf-8")
     (repo / ".gitignore").write_text("__pycache__/\n*.pyc\n", encoding="utf-8")
+    named = {"docs": {"decisions_filename": "decisions.md"}}
+    (repo / "service-manifest.json").write_text(json.dumps(named), encoding="utf-8")
     data = repo / ".claude" / "daedalus"
     data.mkdir(parents=True)
     (data / ".gitignore").write_text("*\n", encoding="utf-8")

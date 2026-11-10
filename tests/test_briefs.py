@@ -449,7 +449,7 @@ def test_ask_check_command_is_plain_whatever_the_manifest_says(
 
 
 def test_recipes_name_the_check_and_the_literacy_rule() -> None:
-    # 0153: the orchestrator checks each brief; every question writer reads docs.literacy.
+    # 0153: the orchestrator checks each brief; every question writer reads docs.reading_level.
     orchestrator = (REPO_ROOT / "agents" / "orchestrator.md").read_text(encoding="utf-8")
     decisions = next(ln for ln in orchestrator.splitlines() if "Operator decisions (0060" in ln)
     check = (
@@ -468,7 +468,7 @@ def test_recipes_name_the_check_and_the_literacy_rule() -> None:
         REPO_ROOT / "skills" / "plan" / "SKILL.md",
     ):
         flat = " ".join(path.read_text(encoding="utf-8").split())
-        assert "`docs.literacy` from `<repo>/service-manifest.json`" in flat, path
+        assert "`docs.reading_level` from `<repo>/service-manifest.json`" in flat, path
         assert "`standard` when the file or key is absent" in flat, path
     # 0211: the main session carries the three safety lines and each Ref: line.
     run = " ".join((REPO_ROOT / "skills" / "run" / "SKILL.md").read_text("utf-8").split())

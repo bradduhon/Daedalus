@@ -294,6 +294,8 @@ OLD_DOTTED = re.compile(
     r"|frameworks\.(?:pack_dir|default_packs|packs)|assets\.(?:roots|extensions|max_bytes)"
 )
 PROSE = ("README.md", "docs/howto/README.md", "docs/project-requirements.md")
+# 0245: a run definition's when condition names a recorded feature field, never a settings key.
+DEFINITION_SYNTAX = "| `when` | A condition that skips the stage"
 
 
 def test_no_doc_skill_or_agent_names_an_old_key() -> None:
@@ -304,5 +306,7 @@ def test_no_doc_skill_or_agent_names_an_old_key() -> None:
     found = []
     for path in paths:
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if line.startswith(DEFINITION_SYNTAX):
+                continue
             found += [f"{path.relative_to(REPO_ROOT)}:{n}: {m}" for m in OLD_DOTTED.findall(line)]
     assert found == []
