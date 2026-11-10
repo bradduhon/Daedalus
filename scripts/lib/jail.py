@@ -1088,6 +1088,14 @@ _FORMAT = ("--format=", "--pretty=")
 _STATUS_FLAGS = frozenset(
     {"--short", "--branch", "--porcelain", "--porcelain=v1", "--porcelain=v2", "--show-stash"}
 )
+# 267: the read options whose next word is their value; the grammar and the tracked check share it.
+_GIT_VALUED: dict[str, frozenset[str]] = {
+    # 228 S3: --grep <value> as two words, beside the --grep=<value> prefix.
+    # 266: --max-count in both forms, as -n is; admit types its value as text.
+    "log": frozenset({"-n", "-S", "-G", "--grep", "--max-count"}),
+    "grep": frozenset({"-e", "-A", "-B", "-C", "--max-depth"}),
+    "blame": frozenset({"-L"}),
+}
 _GIT_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
     "status": lambda a, _: _flags_ok(a, _STATUS_FLAGS, (), (r"-[sb]+",)),
     "log": lambda a, _: _flags_ok(
@@ -1096,9 +1104,7 @@ _GIT_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
         | {"--pickaxe-regex", "--pickaxe-all"},
         (*_FORMAT, "--grep=", "--author=", "--max-count="),
         (r"-\d+", r"-n\d+", r"-[SG].+"),
-        # 228 S3: --grep <value> as two words, beside the --grep=<value> prefix.
-        # 266: --max-count in both forms, as -n is; admit types its value as text.
-        frozenset({"-n", "-S", "-G", "--grep", "--max-count"}),
+        _GIT_VALUED["log"],
     ),
     "diff": lambda a, _: _flags_ok(
         a,
@@ -1118,14 +1124,14 @@ _GIT_GRAMMAR: dict[str, Callable[[list[str], str], bool]] = {
         frozenset({"--cached", "--untracked", "--heading", "--break"}),
         (),
         (r"-[nilLwvcEFIhH]+", r"-[ABC]\d+"),
-        frozenset({"-e", "-A", "-B", "-C", "--max-depth"}),
+        _GIT_VALUED["grep"],
     ),
     "blame": lambda a, _: _flags_ok(
         a,
         frozenset({"-w", "-s", "-e", "-l", "--porcelain", "--line-porcelain"}),
         (),
         (r"-[CM]\d*", r"-L.+"),
-        frozenset({"-L"}),
+        _GIT_VALUED["blame"],
     ),
     "merge-base": lambda a, _: _flags_ok(
         a, frozenset({"--is-ancestor", "--all", "--octopus", "--independent", "--fork-point"})
@@ -2083,6 +2089,65 @@ def _spec_reaches(spec: _Spec, stores: list[str]) -> str | None:
         if names is None or any(fnmatch.fnmatchcase(fold(n), pat) for n in names):
             return store
     return None
+
+
+# 267: options that make a read print file content or test it (pickaxe); log reads only by these.
+_PATCH_OPTS = frozenset(
+    {"-p", "--patch", "--stat", "--word-diff", "--check", "--pickaxe-regex", "--pickaxe-all"}
+)
+_PATCH_PREFIXES = ("-U", "-S", "-G")
+_NAMES_OPTS = frozenset({"--name-only", "--name-status"})
+
+
+def _git_tree_read(done: AdmittedCommand) -> tuple[bool, bool]:
+    # 267: (prints tree content under its paths, may print a <rev>:<path> blob); a built option
+    # could be -p, so it counts as one.
+    sub = done.subcommand.text if done.subcommand else ""
+    opts = {o.text for o in done.options}
+    patch = any(o.glob for o in done.options) or any(
+        t in _PATCH_OPTS or t.startswith(_PATCH_PREFIXES) for t in opts
+    )
+    if sub == "log":
+        return patch, False
+    if sub == "stash":
+        return [t.text for t in done.texts[:1]] == ["show"], False
+    if sub in ("diff", "show"):
+        names = opts & (_NAMES_OPTS | ({"-s"} if sub == "show" else set()))
+        return patch or not names, sub == "show"
+    return sub in ("grep", "blame"), False
+
+
+def _operand_slots(
+    script: Script, done: AdmittedCommand
+) -> tuple[set[tuple[int, int]], set[tuple[int, int]]]:
+    # 267: the operand words that are an option's value or grep's pattern, and those after --.
+    sub = done.subcommand
+    words = admitted_words(script, done)
+    at = next((i for i, w in enumerate(words) if sub is not None and w.span == sub.span), None)
+    name = sub.text if sub is not None else ""
+    valued = _GIT_VALUED.get(name, frozenset())
+    # 267: git grep takes its first operand as the pattern unless -e names one.
+    pattern = name == "grep" and "-e" not in {o.text for o in done.options}
+    values: set[tuple[int, int]] = set()
+    after: set[tuple[int, int]] = set()
+    dashed = skip = opts_done = False
+    for word in words[at + 1 :] if at is not None else []:
+        lit = word.literal
+        if dashed:
+            after.add(word.span)
+        elif skip:
+            values.add(word.span)
+            skip = False
+        elif lit == "--" and pattern and not opts_done:
+            opts_done = True  # 267: grep drops one -- before its pattern; the next word is it.
+        elif lit == "--":
+            dashed = True
+        elif not opts_done and lit is not None and lit.startswith("-") and lit != "-":
+            skip = lit in valued
+        elif pattern:
+            values.add(word.span)
+            pattern = False
+    return values, after
 
 
 # 267: ls-files from the whole checkout; globals forwarded to it, any other global is dropped.
