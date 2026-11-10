@@ -29,6 +29,7 @@ from lib.ledger import (  # noqa: E402
     read_sequence,
     resolve_ledger,
     split_row,
+    uses_codes,
 )
 from lib.project_root import project_root  # noqa: E402
 from lib.repo_root import checkout_git_dir  # noqa: E402
@@ -41,8 +42,11 @@ DESCRIPTION = (
     "An append checks --expected-seq against the file under the lock and exits 2 on a "
     "mismatch, 1 on any other error. A table row's Supersedes and Ruling cells are checked when "
     "the header has the column (0090, 0094); rows already in the file are never re-checked. The "
-    "next id follows the highest id of any Id table, and an id already in the file is refused. "
-    "A docs.git_branch refuses the append and the probe on any other branch (issue 186)."
+    "next id follows the highest id of any Id table, in the shape of the last id: a plain "
+    "number keeps its width, and a number with a repository code and a type takes --repo and "
+    "--type, which a plain-number file refuses. An empty table or a new file starts at 0001. An "
+    "id already in the file is refused. A docs.git_branch refuses the append and the probe on "
+    "any other branch (issue 186)."
 )
 NONE_FOUND = (
     "decisions: no decisions file is named, so no decision is recorded. "
@@ -93,15 +97,13 @@ def _parse(argv: list[str]) -> argparse.Namespace:
             for flag, value in (
                 ("--expected-seq", args.expected_seq),
                 ("--entry-file", args.entry_file),
-                ("--repo", args.repo),
-                ("--type", args.type_),
             )
             if value is None
         ]
         if missing:
             parser.error(f"an append needs {', '.join(missing)}")
         for flag, value in (("--repo", args.repo), ("--type", args.type_)):
-            if not _CODE.fullmatch(value):
+            if value is not None and not _CODE.fullmatch(value):
                 parser.error(f"{flag} must match [A-Za-z0-9_-]+")
     args.cwd = os.path.abspath(args.cwd)
     if not os.path.isdir(args.cwd):
@@ -263,6 +265,26 @@ def _require_branch(ledger: ResolvedLedger) -> None:
     )
 
 
+def _require_codes(args: argparse.Namespace, ledger: ResolvedLedger) -> None:
+    # 0247: --repo and --type go only with ids that carry a repository code and a type.
+    given = [flag for flag, value in (("--repo", args.repo), ("--type", args.type_)) if value]
+    if uses_codes(ledger):
+        missing = sorted({"--repo", "--type"} - set(given))
+        if missing:
+            raise AppendError(
+                f"the ids of {ledger.path} carry a repository code and a type, so an append "
+                f"needs {' and '.join(missing)}. Next: pass both, as in --repo SVC --type PLT."
+            )
+        return
+    if given:
+        flags = " and ".join(given)
+        raise AppendError(
+            f"{flags} {'name' if len(given) > 1 else 'names'} a part of a three-part id, but the "
+            f"ids of {ledger.path} are plain numbers. Next: append again without {flags}, "
+            "since the next id is a plain number too."
+        )
+
+
 def _require_git(path: str) -> None:
     # M6, 0077: the owner resolves as the jail resolves it; a non-git root is refused.
     if root_info(str(project_root(Path(path))))[1] != "git":
@@ -329,7 +351,7 @@ def _append(args: argparse.Namespace, ledger: ResolvedLedger) -> str:
                 f"sequence mismatch: ledger={current} expected={args.expected_seq}. "
                 "Next: re-read the ledger and retry with the current id."
             )
-        ids = _Ids(current + 1, args.repo, args.type_, date)
+        ids = _Ids(current + 1, args.repo or "", args.type_ or "", date)
         try:
             with open(ledger.path, encoding="utf-8", newline="") as fh:
                 raw = fh.read()
@@ -367,6 +389,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if ledger is None:
             raise AppendError(NONE_FOUND)
+        _require_codes(args, ledger)
         _require_git(args.cwd)
         print(f"appended {_append(args, ledger)}")
         return 0

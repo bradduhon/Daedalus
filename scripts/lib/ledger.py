@@ -15,7 +15,11 @@ from lib.manifest import Docs, ManifestError
 from lib.manifest import load as load_manifest
 
 TABLE_SCHEME = "{seq:04d}-{repo}-{type}"
+# 0247: an empty table or a new file numbers its rows as plain four-digit numbers.
+PLAIN_SCHEME = "{seq:04d}"
 HEADING_SCHEME = "{seq}"
+_PLAIN_ID = re.compile(r"[0-9]+")
+_THREE_PART_ID = re.compile(r"[0-9]+-[A-Za-z0-9_]+-[A-Za-z0-9_]+")
 _SEPARATOR = re.compile(r"^\|(\s*:?-+:?\s*\|)+\s*$")
 _ENTRY_HEADING = re.compile(r"^## Entry ([0-9]+)\b")
 _LEADING_INT = re.compile(r"[0-9]+")
@@ -147,13 +151,36 @@ def highest_id_table(lines: list[str]) -> tuple[Span, int] | None:
     return best
 
 
+def table_scheme(lines: list[str], path: Path) -> str:
+    # 0247: the id pattern follows the shape of the main table's last id, else plain numbers.
+    found = highest_id_table(lines)
+    filled = [span for span in id_table_spans(lines) if _span_rows(lines, span)]
+    if found is None and not filled:
+        return PLAIN_SCHEME
+    span = found[0] if found is not None else filled[0]
+    rows = _span_rows(lines, span)
+    cells = split_row(rows[-1])
+    last = cells[span[1]].strip() if span[1] < len(cells) else ""
+    if _PLAIN_ID.fullmatch(last):
+        return f"{{seq:0{len(last)}d}}"
+    if _THREE_PART_ID.fullmatch(last):
+        return TABLE_SCHEME
+    raise LedgerError(
+        f"decisions file {path}: the last id {last!r} is neither a plain number such as 0007 nor "
+        "a number, a repository code and a type such as 0007-SVC-PLT, so the next id cannot be "
+        "worked out. Next: renumber that row in one of those two shapes."
+    )
+
+
 def _infer(path: Path) -> ResolvedLedger | None:
     try:
         text = path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
         return None
-    if _id_table(text.splitlines()) is not None:
-        return ResolvedLedger(path, "markdown-table-row", TABLE_SCHEME, "last-row-id", "probe")
+    lines = text.splitlines()
+    if _id_table(lines) is not None:
+        scheme = table_scheme(lines, path)
+        return ResolvedLedger(path, "markdown-table-row", scheme, "last-row-id", "probe")
     if "sequence_id" in _frontmatter(text, path):
         return ResolvedLedger(
             path, "heading-entry", HEADING_SCHEME, "frontmatter:sequence_id", "probe"
@@ -180,7 +207,7 @@ def resolve_ledger(cwd: str, config: Config) -> ResolvedLedger | None:
             f"decisions file {path} could not be read. Next: make it a readable UTF-8 file."
         )
     # 0247: a named file not yet written takes the default table layout on its first decision.
-    layout = found or ResolvedLedger(path, "markdown-table-row", TABLE_SCHEME, "last-row-id", "")
+    layout = found or ResolvedLedger(path, "markdown-table-row", PLAIN_SCHEME, "last-row-id", "")
     return replace(layout, origin="manifest", branch=docs.git_branch)
 
 
@@ -253,6 +280,11 @@ def read_sequence(ledger: ResolvedLedger) -> int:
         f"ledger sequence_source {source!r} is not supported. "
         "Next: use last-row-id or frontmatter:<key>."
     )
+
+
+def uses_codes(ledger: ResolvedLedger) -> bool:
+    # 0247: only a file whose ids carry a repository code and a type takes --repo and --type.
+    return "{repo}" in ledger.id_scheme or "{type}" in ledger.id_scheme
 
 
 def next_id(ledger: ResolvedLedger, seq: int, repo: str, type_: str) -> str:

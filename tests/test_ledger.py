@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from lib.config import Config
 from lib.ledger import (
+    PLAIN_SCHEME,
     TABLE_SCHEME,
     LedgerError,
     ResolvedLedger,
@@ -86,8 +87,49 @@ def test_a_named_file_not_yet_written_takes_the_default_table(repo: Path) -> Non
     _name(repo, "decisions.md")
     led = resolve_ledger(str(repo), Config())
     assert led is not None and not led.path.exists()
-    assert led.format == "markdown-table-row" and led.id_scheme == TABLE_SCHEME
+    assert led.format == "markdown-table-row" and led.id_scheme == PLAIN_SCHEME
     assert read_sequence(led) == 0
+    assert next_id(led, 1, "", "") == "0001"
+
+
+@pytest.mark.parametrize(
+    ("last", "scheme", "made"),
+    [
+        ("0007", "{seq:04d}", "0008"),
+        ("12", "{seq:02d}", "13"),
+        ("000099", "{seq:06d}", "000100"),
+        ("0007-SVC-PLT", TABLE_SCHEME, "0008-SVC-PLT"),
+    ],
+)
+def test_the_id_pattern_follows_the_last_row(repo: Path, last: str, scheme: str, made: str) -> None:
+    # 0247: digits keep their width; the three-part shape keeps the code and the type.
+    (repo / "docs").mkdir()
+    rows = f"| Id | Date |\n|---|---|\n| 0001 | d |\n| {last} | d |\n"
+    (repo / "docs" / "decisions.md").write_text(rows, encoding="utf-8")
+    _name(repo, "decisions.md")
+    led = resolve_ledger(str(repo), Config())
+    assert led is not None and led.id_scheme == scheme
+    assert next_id(led, read_sequence(led) + 1, "SVC", "PLT") == made
+
+
+@pytest.mark.parametrize("last", ["ADR-7", "0007-SVC", "7a", "0007-SVC-PLT-X", ""])
+def test_an_id_of_any_other_shape_is_refused_with_the_id(repo: Path, last: str) -> None:
+    (repo / "docs").mkdir()
+    rows = f"| Id | Date |\n|---|---|\n| {last} | d |\n"
+    (repo / "docs" / "decisions.md").write_text(rows, encoding="utf-8")
+    _name(repo, "decisions.md")
+    with pytest.raises(LedgerError) as info:
+        resolve_ledger(str(repo), Config())
+    assert f"the last id {last!r} is neither a plain number" in str(info.value)
+    assert "Next: renumber that row" in str(info.value)
+
+
+def test_an_empty_table_numbers_plain(repo: Path) -> None:
+    (repo / "docs").mkdir()
+    (repo / "docs" / "decisions.md").write_text("| Id | Date |\n|---|---|\n", encoding="utf-8")
+    _name(repo, "decisions.md")
+    led = resolve_ledger(str(repo), Config())
+    assert led is not None and led.id_scheme == PLAIN_SCHEME and read_sequence(led) == 0
 
 
 def test_nothing_named_is_none(repo: Path) -> None:
@@ -146,7 +188,7 @@ def test_table_rows_stop_at_first_non_pipe_line(tmp_path: Path, text: str, expec
 @pytest.mark.parametrize("header", ["|Id|Date|", "| ID | Date |"])
 def test_compact_and_upper_id_header_inferred_as_table(repo: Path, header: str) -> None:
     (repo / "docs").mkdir()
-    (repo / "docs" / "LEDGER.md").write_text(f"{header}\n|---|---|\n|0005-A|d|\n", encoding="utf-8")
+    (repo / "docs" / "LEDGER.md").write_text(f"{header}\n|---|---|\n|0005|d|\n", encoding="utf-8")
     _name(repo, "LEDGER.md")
     led = resolve_ledger(str(repo), Config())
     assert led is not None and led.format == "markdown-table-row"
@@ -261,7 +303,7 @@ def test_read_sequence_unknown_source_raises(tmp_path: Path) -> None:
         ),
         (
             "| Field | Type |\n|---|---|\n| id | int |\n| 2 | example |\n\n"
-            "| Id | Date |\n|---|---|\n| 0041-A | d |\n",
+            "| Id | Date |\n|---|---|\n| 0041 | d |\n",
             41,
         ),
     ],

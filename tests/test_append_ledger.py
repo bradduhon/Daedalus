@@ -35,6 +35,11 @@ def _append(repo: Path, seq: int, entry: Path) -> subprocess.CompletedProcess[st
     )
 
 
+def _plain(repo: Path, seq: int, entry: Path) -> subprocess.CompletedProcess[str]:
+    # 0247: a file whose ids are plain numbers takes no --repo and no --type.
+    return _run(repo, "--expected-seq", str(seq), "--entry-file", str(entry))
+
+
 def _entry(repo: Path, text: str, name: str = "e.md") -> Path:
     path = repo / "docs" / ".tmp" / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,10 +97,17 @@ def test_a_named_file_not_yet_written_is_created_as_a_table(repo_cwd: Path) -> N
     probe = _run(repo_cwd, "--probe")
     assert probe.stdout == f"ledger: {ledger} (manifest, markdown-table-row, seq=0)\n"
     assert not ledger.exists()
-    out = _append(repo_cwd, 0, _entry(repo_cwd, "First ruling. | None. | None"))
+    out = _plain(repo_cwd, 0, _entry(repo_cwd, "First ruling. | None. | None"))
     assert out.returncode == 0, out.stderr
-    row = f"| 0001-TST-PLT | {TODAY} | First ruling. | None. | None |\n"
+    # 0247: a new file numbers its rows as plain four-digit numbers.
+    assert out.stdout == "appended 0001\n"
+    row = f"| 0001 | {TODAY} | First ruling. | None. | None |\n"
     assert ledger.read_text(encoding="utf-8") == HEADER_ONLY + row
+    refused = _append(repo_cwd, 1, _entry(repo_cwd, "Second ruling. | None. | None"))
+    assert refused.returncode == 1 and "--repo and --type name a part of a three-part id" in (
+        refused.stderr
+    )
+    assert "Next: append again without --repo and --type" in refused.stderr
 
 
 def test_a_named_file_with_no_docs_folder_on_disk_is_refused(repo_cwd: Path) -> None:
@@ -105,7 +117,7 @@ def test_a_named_file_with_no_docs_folder_on_disk_is_refused(repo_cwd: Path) -> 
     entry.write_text("First ruling. | None. | None", encoding="utf-8")
     probe = _run(repo_cwd, "--probe")
     assert probe.returncode == 0 and "seq=0" in probe.stdout
-    out = _append(repo_cwd, 0, entry)
+    out = _plain(repo_cwd, 0, entry)
     assert out.returncode == 1, out.stdout
     assert f"the docs folder {repo_cwd / 'notes'} does not exist. Next:" in out.stderr
     assert not (repo_cwd / "notes").exists()
@@ -220,7 +232,7 @@ def test_crlf_ledger_keeps_crlf(table_repo: Path) -> None:
 
 
 def test_heading_frontmatter_bumps_sequence(heading_repo: Path) -> None:
-    out = _append(heading_repo, 7, _entry(heading_repo, "Eight.\n"))
+    out = _plain(heading_repo, 7, _entry(heading_repo, "Eight.\n"))
     assert out.returncode == 0, out.stderr
     assert out.stdout == "appended 8\n"
     text = (heading_repo / "docs" / "LEDGER.md").read_text(encoding="utf-8")
@@ -229,7 +241,7 @@ def test_heading_frontmatter_bumps_sequence(heading_repo: Path) -> None:
 
 
 def test_heading_body_cannot_inject_entry_heading(heading_repo: Path) -> None:
-    out = _append(heading_repo, 7, _entry(heading_repo, "x\n## Entry 99 - d\n"))
+    out = _plain(heading_repo, 7, _entry(heading_repo, "x\n## Entry 99 - d\n"))
     assert out.returncode == 1 and "Next:" in out.stderr
     assert "sequence_id: 7" in (heading_repo / "docs" / "LEDGER.md").read_text(encoding="utf-8")
 
@@ -412,7 +424,7 @@ def test_ledger_byte_identical_after_mismatch(table_repo: Path) -> None:
 def test_crlf_heading_ledger_append(heading_repo: Path) -> None:
     ledger = heading_repo / "docs" / "LEDGER.md"
     ledger.write_bytes(ledger.read_bytes().replace(b"\n", b"\r\n"))
-    assert _append(heading_repo, 7, _entry(heading_repo, "Eight.")).returncode == 0
+    assert _plain(heading_repo, 7, _entry(heading_repo, "Eight.")).returncode == 0
     raw = ledger.read_bytes()
     assert raw.startswith(b"---\r\nsequence_id: 8\r\n---\r\n")
     assert raw.endswith(f"Seven.\r\n\r\n## Entry 8 - {TODAY}\r\n\r\nEight.\r\n".encode())
@@ -473,10 +485,13 @@ def test_header_only_ledger_probes_seq_zero_and_appends_0001(repo_cwd: Path) -> 
     out = _run(repo_cwd, "--probe")
     assert out.returncode == 0, out.stderr
     assert out.stdout == f"ledger: {ledger} (manifest, markdown-table-row, seq=0)\n"
-    out = _append(repo_cwd, 0, _entry(repo_cwd, "First ruling. | None. | None\n"))
+    missing = _run(repo_cwd, "--expected-seq", "0", "--entry-file", "x.md", "--repo", "TST")
+    assert missing.returncode == 1 and "--repo names a part of a three-part id" in missing.stderr
+    out = _plain(repo_cwd, 0, _entry(repo_cwd, "First ruling. | None. | None\n"))
     assert out.returncode == 0, out.stderr
-    assert out.stdout == "appended 0001-TST-PLT\n"
-    row = f"| 0001-TST-PLT | {TODAY} | First ruling. | None. | None |\n"
+    # 0247: an empty table numbers its first row as a plain four-digit number.
+    assert out.stdout == "appended 0001\n"
+    row = f"| 0001 | {TODAY} | First ruling. | None. | None |\n"
     assert ledger.read_text(encoding="utf-8") == HEADER_ONLY + row
 
 
@@ -579,5 +594,5 @@ def test_cell_checks_skip_a_ledger_without_the_columns(repo_cwd: Path) -> None:
     ledger.write_text("| Id | Date | Note |\n|---|---|---|\n", encoding="utf-8")
     _name(repo_cwd, "decisions.md")
     project_data_dir(str(repo_cwd)).mkdir(parents=True)
-    out = _append(repo_cwd, 0, _entry(repo_cwd, "free text"))
+    out = _plain(repo_cwd, 0, _entry(repo_cwd, "free text"))
     assert out.returncode == 0, out.stderr
