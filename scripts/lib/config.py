@@ -6,7 +6,7 @@ import json
 import os
 import re
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 from lib import git
@@ -24,8 +24,6 @@ EXCLUDED_ROOT_KINDS = ("path", "gitignore")
 GITIGNORE_MATCHES = ("directories", "all")
 # 0072: how many coders a parallel stage runs at once when the config names no number.
 DEFAULT_MAX_CONCURRENT_BUILDERS = 5
-# 0133: the audit round budget is retired; a config that still sets it is refused.
-RETIRED_ROUND_BUDGET = "audit_round_budget"
 # AU-11, AU-6: a declared audit retention keeps at least this many days of session logs.
 AUDIT_RETENTION_FLOOR_DAYS = 90
 LEDGER_FORMATS = ("markdown-table-row", "heading-entry")
@@ -99,6 +97,10 @@ class Config:
     operator: dict[str, object] = field(default_factory=dict)
 
 
+# 0241: the top-level config.json keys; project_keys.config_keys derives from the same fields.
+CONFIG_KEYS = tuple(item.name for item in fields(Config))
+
+
 def _require_str(raw: dict[str, object], key: str, where: str) -> str:
     name = f"{where}.{key}" if where else key
     value = raw.get(key)
@@ -160,13 +162,13 @@ def _unit_budget(raw: dict[str, object]) -> int | None:
     return value
 
 
-def _refuse_round_budget(raw: dict[str, object]) -> None:
-    # 0133: every failing gate goes to the operator, so no number of rounds is configured.
-    if RETIRED_ROUND_BUDGET in raw:
+def _refuse_unknown_keys(target: Path, raw: dict[str, object]) -> None:
+    # 0241: a top-level key off the Config fields (project_keys.config_keys) is refused.
+    unknown = sorted(str(key) for key in set(raw) - set(CONFIG_KEYS))
+    if unknown:
         raise ConfigError(
-            f"config.json sets {RETIRED_ROUND_BUDGET}, which Daedalus removed: the operator now "
-            "decides each audit finding, with no round budget. "
-            f"Next: delete the {RETIRED_ROUND_BUDGET} line from .claude/daedalus/config.json."
+            f"{target} has unknown keys {unknown} (known: {', '.join(CONFIG_KEYS)}). "
+            f"Next: delete or correct those keys in {target}, then rerun."
         )
 
 
@@ -521,7 +523,7 @@ def load_config(cwd: str | None = None, path: Path | None = None) -> Config:
             f"{target} must contain a JSON object. "
             "Next: make the file one JSON object, as docs/project-requirements.md shows."
         )
-    _refuse_round_budget(raw)
+    _refuse_unknown_keys(target, raw)
     # 0076: null is not declared, the same as an absent key; the setup starter writes null.
     charter = _require_str(raw, "charter_root", "") if raw.get("charter_root") is not None else None
     rules = (

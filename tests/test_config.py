@@ -225,12 +225,6 @@ def _load(project_data: Path, doc: dict[str, object]) -> Config:
     return load_config(str(project_data.parents[1]))
 
 
-def test_retired_audit_round_budget_is_refused(project_data: Path) -> None:
-    # 0133: the key is gone; tests/test_operator_gates.py covers its refusal text.
-    with pytest.raises(ConfigError):
-        _load(project_data, {"audit_round_budget": 5})
-
-
 def test_agent_models_absent_or_null_is_empty(project_data: Path) -> None:
     # spec 4: with no map, every agent runs on its agent file's model.
     assert Config().agent_models == {}
