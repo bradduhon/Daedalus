@@ -50,11 +50,7 @@ from lib.credential_paths import (
     reply_key_hit,
     whitelists_env,
 )
-from lib.credential_paths import CUT as _CUT
-from lib.credential_paths import LIT as _LIT
-from lib.credential_paths import REDIRECT as _REDIRECT
 from lib.credential_paths import anchor as _anchor
-from lib.credential_paths import clean as _clean
 from lib.credential_paths import credential_hit as _credential_hit
 from lib.credential_paths import credential_roots as _credential_roots
 from lib.credential_paths import store_rest as _store_rest
@@ -71,7 +67,6 @@ from lib.manifest import Manifest, ManifestError, extension_hit, path_hit
 from lib.manifest import load as load_manifest
 from lib.repo_root import checkout_git_dir, git_root
 from lib.shell import (
-    _ASSIGN,
     _DEFAULT_BRANCHES,
     _GLOB_CHARS,
     _HOME,
@@ -84,7 +79,6 @@ from lib.shell import (
     R_DESTRUCTIVE,
     R_FORCE_PUSH,
     R_STASH_UNTRACKED,
-    READ_ONLY_CMDS,
     READ_ONLY_GIT,
     WRAPPER_CHDIR,
     WrapperOption,
@@ -843,11 +837,6 @@ R_CREDENTIAL_PARAM = (
     "{path} could be a credential path; the jail cannot resolve its variable. "
     "Next: spell the path out"
 )
-# issue 76: time is not here; its WRAPPER_OPTS row reads its options.
-# A2 fix round 4: a brace group's { and } are read past, so its inner command word is read.
-_CONTROL_WORDS = frozenset({"!", "do", "then", "else", "elif", "while", "until", "if", "{", "}"})
-# issue 76: _command_at's answer when a wrapper option is off shell.WRAPPER_OPTS.
-_OPAQUE = -1
 _GREPS = frozenset({"grep", "egrep", "fgrep"})
 # spec 8: short options whose value is the next word (or the rest of the cluster).
 _SEARCH_VALUES: dict[str, frozenset[str]] = {
@@ -858,15 +847,6 @@ _SEARCH_LONGS = frozenset(
     {"--regexp", "--file", "--max-count", "--context", "--after-context", "--before-context"}
     | {"--glob", "--type", "--type-not", "--threads", "--replace", "--encoding"}
 )
-_PATH_CMDS = (
-    READ_ONLY_CMDS
-    | CODER_WRITE_CMDS
-    | {"cd", "pushd", "source", ".", "less", "more", "base64", "xxd", "od", "strings"}
-    | {"tar", "zip", "unzip", "scp", "gzip", "gunzip", "zcat", "openssl", "ssh-keygen", "gpg"}
-    | {"egrep", "fgrep", "nl", "tac", "diff", "cmp"}
-    | {"bsdtar", "7z", "7za", "7zr", "7zz", "pax"}
-)
-_PATH_OPTION = re.compile(r"--?[\w-]*(?:dir|file|path|target|output|input|config|key|root)", re.I)
 _DATA_DIR_DEFAULT = "/.claude/plugins/data/daedalus"
 UNIT_WORKTREES = ".claude/worktrees"
 # issue 188: the moved bound agent rule; module runs, fd words and the cd start form.
@@ -1661,104 +1641,6 @@ def _gitleaks_ok(tokens: list[str]) -> bool:
     return redacted
 
 
-def _shell_words(command: str) -> list[list[str]]:
-    return [segment.words for segment in _shell_scan(command)]
-
-
-class ScanSegment(NamedTuple):
-    # issue 116: a segment's words, the indices a <<< here-string feeds, and whether a pipe or a
-    # < redirect on fd 0 feeds its stdin (fix round 3).
-    words: list[str]
-    heres: frozenset[int]
-    fed: bool
-    # fix round 4: every here-string on any fd, and whether a < redirect on fd 0 is attached.
-    strings: frozenset[int] = frozenset()
-    redirected: bool = False
-
-
-def _shell_scan(command: str) -> list[ScanSegment]:
-    # spec 8: single-quoted or escaped $ is literal; quote edges end a variable name.
-    segments: list[ScanSegment] = []
-    words: list[str] = []
-    heres: set[int] = set()
-    strings: set[int] = set()
-    cur: list[str] = []
-    started, redirect, quote, op, fd_in, fed = False, False, "", "", True, False
-    redirected = False
-    i, n = 0, len(command)
-
-    def end_word() -> None:
-        nonlocal cur, started, redirect, op
-        if cur or started:
-            if redirect and op == "<<<":
-                strings.add(len(words))
-            if redirect and op == "<<<" and fd_in:
-                heres.add(len(words))
-            words.append((_REDIRECT if redirect else "") + "".join(cur))
-            redirect, op = False, ""
-        cur, started = [], False
-
-    while i < n:
-        c = command[i]
-        if quote == "'":
-            if c == "'":
-                quote = ""
-                cur.append(_CUT)
-            else:
-                cur.append(_LIT if c == "$" else c)
-        elif quote == '"':
-            if c == '"':
-                quote = ""
-                cur.append(_CUT)
-            elif c == "\\" and i + 1 < n:
-                i += 1
-                cur.append(_LIT if command[i] == "$" else command[i])
-            else:
-                cur.append(c)
-        elif c in "'\"":
-            quote, started = c, True
-            cur.append(_CUT)
-        elif c == "\\" and i + 1 < n:
-            i += 1
-            cur.append(_LIT if command[i] == "$" else command[i])
-            started = True
-        elif c in "<>":
-            fd = "".join(cur) if not redirect else ""
-            if fd.isdigit():
-                # issue 116 (fix round 1, row 1): a digit word glued to < or > is its fd.
-                cur, started = [], False
-            end_word()
-            if not redirect:
-                op, fd_in = "", fd in {"", "0"} or not fd.isdigit()
-                redirected = redirected or (c == "<" and fd_in)
-                fed = fed or redirected
-            op += c
-            redirect = True
-            while i + 1 < n and command[i + 1] in "&>":
-                i += 1
-                op += command[i]
-        elif c.isspace() or c in ";&|()`":
-            end_word()
-            if c not in " \t" and words:
-                segments.append(
-                    ScanSegment(list(words), frozenset(heres), fed, frozenset(strings), redirected)
-                )
-                words.clear()
-                heres.clear()
-                strings.clear()
-                fed = redirected = False
-            if c == "|" and "|" not in command[i - 1 : i] + command[i + 1 : i + 2]:
-                fed = True  # fix round 3: a pipe (never ||) feeds the next segment's stdin.
-        else:
-            cur.append(c)
-            started = True
-        i += 1
-    end_word()
-    if words:
-        segments.append(ScanSegment(words, frozenset(heres), fed, frozenset(strings), redirected))
-    return segments
-
-
 def _base_env() -> dict[str, list[str]]:
     # spec 8: the hook's own environment, HOME real, the plugin folders defaulted.
     env = {k: [v] for k, v in os.environ.items()}
@@ -1768,98 +1650,10 @@ def _base_env() -> dict[str, list[str]]:
     return env
 
 
-def _command_at(
-    clean: list[str], skip: set[int], options: list[WrapperOption] | None = None
-) -> int | None:
-    # spec 8, issue 76: past control words and assignments, then shell.unwrap; options collects.
-    places = [i for i, word in enumerate(clean) if word and i not in skip]
-    k = 0
-    while k < len(places):
-        word = clean[places[k]]
-        if word in _CONTROL_WORDS or _ASSIGN.match(word):
-            k += 1
-            continue
-        unwrapped = unwrap([clean[i] for i in places[k:]])
-        if unwrapped is None:
-            return _OPAQUE
-        rest, found = unwrapped
-        if options is not None:
-            options += [o._replace(at=places[k + o.at]) for o in found]
-        if not rest:
-            return None
-        if len(places) - len(rest) == k:
-            return places[k]
-        k = len(places) - len(rest)
-    return None
-
-
-def _opaque_words(clean: list[str], skip: set[int]) -> set[int]:
-    # issue 76: past an unknown wrapper option the command word is unknown; these words remain.
-    return {i for i, word in enumerate(clean) if word and i not in skip}
-
-
 def _option_values(
     texts: list[str], options: list[WrapperOption], kinds: frozenset[tuple[str, str]]
 ) -> list[str]:
     return [texts[o.at][len(o.prefix) :] for o in options if (o.wrapper, o.option) in kinds]
-
-
-def _search_paths(name: str, clean: list[str], args: list[int]) -> set[int]:
-    # spec 8: grep and rg take the first operand as the pattern unless -e or -f names it.
-    letters = _SEARCH_VALUES["rg" if name == "rg" else "grep"] if name != "jq" else frozenset()
-    paths: set[int] = set()
-    operands: list[int] = []
-    explicit, pending = False, ""
-    for i in args:
-        word = clean[i]
-        if pending:
-            if pending in {"f", "--file"}:
-                paths.add(i)
-            pending = ""
-        elif word.startswith("--"):
-            opt = word.split("=", 1)[0]
-            # prepush2-2026-10-27: rg --files takes no pattern, so every operand is a path.
-            explicit = explicit or opt in {"--regexp", "--file", "--files"}
-            if opt == "--file" and "=" in word:
-                paths.add(i)
-            elif "=" not in word and opt in _SEARCH_LONGS:
-                pending = opt
-        elif word.startswith("-") and len(word) > 1:
-            for j, ch in enumerate(word[1:]):
-                if ch in letters:
-                    explicit = explicit or ch in "ef"
-                    if j == len(word) - 2:
-                        pending = ch
-                    elif ch == "f":
-                        paths.add(i)
-                    break
-        else:
-            operands.append(i)
-    return paths | set(operands if explicit else operands[1:])
-
-
-def _path_positions(words: list[str]) -> tuple[str, int, set[int]]:
-    # spec 8: where an unresolved variable could name a file for a modeled reader or writer.
-    clean = [_clean(w) for w in words]
-    paths = {i for i, w in enumerate(words) if w.startswith(_REDIRECT)}
-    at = _command_at(clean, paths)
-    if at == _OPAQUE:
-        return "", -1, paths | _opaque_words(clean, paths)
-    if at is None:
-        return "", -1, paths
-    name = _base(clean[at])
-    args = [i for i in range(at + 1, len(clean)) if i not in paths]
-    if name in _GREPS or name in {"rg", "jq"}:
-        return name, at, paths | _search_paths(name, clean, args)
-    if name == "find":
-        for i in args:
-            if clean[i].startswith(("-", "(", "!")):
-                break
-            paths.add(i)
-        return name, at, paths
-    if name in _PATH_CMDS:
-        paths |= {i for i in args if not clean[i].startswith("-") or _PATH_OPTION.match(clean[i])}
-    return name, at, paths
 
 
 def _typed_tree(

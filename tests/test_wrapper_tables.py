@@ -154,24 +154,6 @@ def test_strip_wrappers_refuses_an_option_off_the_table(command: str) -> None:
     assert shell.strip_wrappers(shlex.split(command)) is None
 
 
-@pytest.mark.parametrize(
-    ("command", "at"),
-    [
-        ("env -C /tmp rm -rf x", 3),
-        ("timeout --signal KILL 5 rm x", 4),
-        ("sudo -h host rm x", 3),
-        ("stdbuf -o L rm x", 3),
-        ("if ! env -u X rm x", 5),
-        ("FOO=1 time rm x", 2),
-        ("command -v rm", None),
-        ("env --frobnicate /tmp rm x", -1),
-    ],
-)
-def test_jail_command_at_follows_the_shared_stripper(command: str, at: int | None) -> None:
-    # issue 76: lib.jail finds the command word through shell.unwrap.
-    assert jail._command_at(command.split(), set()) == at
-
-
 def test_unwrap_reports_the_options_it_passed() -> None:
     # issue 76: each value sits at tokens[at][len(prefix):], so jail can move the folder.
     tokens = shlex.split("env -C /a --chdir=/b -C/c sudo -D d -u root time -o t rm x")

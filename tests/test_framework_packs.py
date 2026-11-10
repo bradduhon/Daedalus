@@ -385,8 +385,6 @@ def test_a_verify_the_specialists_jail_refuses_is_a_pack_problem(
 # prepush2-2026-10-27 item 4: verify paths that leave the project tree.
 OUTSIDE_VERIFY = (
     ("rg -n x /", "/"),
-    ("rg -n x ~", "~"),
-    ("rg --files /srv/someone", "/srv/someone"),
     ("rg -n x /srv/someone/.claude", "/srv/someone/.claude"),
     ("rg -n x ..", ".."),
     ("rg -n x src/../..", "src/../.."),
@@ -403,6 +401,26 @@ def test_a_verify_searching_outside_the_tree_is_a_pack_problem(
     folder = _make(tmp_path / "p", [_control(verify=command)])
     want = f"control X-1 verify searches {path!r} outside the project tree"
     assert want in _problems(folder)
+
+
+@pytest.mark.parametrize(
+    ("command", "word"),
+    [
+        ("rg -n x ~", "`~`"),
+        ("rg --files /srv/someone", "--files"),
+        ("rg -n x $HOME", "$HOME"),
+    ],
+)
+def test_a_verify_the_grammar_refuses_names_the_word_and_fails_to_load(
+    tmp_path: Path, command: str, word: str
+) -> None:
+    # 266: a refused verify has no typed path to judge; its refusal names the word off the table.
+    folder = _make(tmp_path / "p", [_control(verify=command)])
+    found = _problems(folder)
+    assert "outside the project tree" not in found, found
+    assert "verify is refused by the auditor's jail: " in found and word in found, found
+    with pytest.raises(PackError):
+        load_pack(folder, known=())
 
 
 def test_a_verify_inside_the_tree_is_no_problem(tmp_path: Path) -> None:
