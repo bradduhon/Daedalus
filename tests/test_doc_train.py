@@ -54,7 +54,7 @@ def test_recipe_runs_the_stages_in_order() -> None:
 
 
 def test_document_skill_holds_the_recipe_the_stub_dropped() -> None:
-    # 0174: no shipped skill points at the doc-train text the stub dropped.
+    # 0174: the document and run skills never name doc-train; derived mode holds the State Block.
     for name in ("document", "run"):
         text = (REPO_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
         assert "doc-train" not in text, name

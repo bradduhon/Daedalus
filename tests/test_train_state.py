@@ -170,13 +170,12 @@ def test_mark_start_moves_the_bound_once_per_new_session(data_repo: Path) -> Non
     assert load(data_repo, TRAIN)[train_state.AUDIT_SESSION] == "build"
 
 
-def test_mark_start_keeps_a_bound_written_before_audit_session(data_repo: Path) -> None:
-    # issue 60: a train started before audit_session keeps its one bound for every session.
+def test_a_bound_written_before_audit_session_is_not_read(data_repo: Path) -> None:
+    # 0241: a start_seq with no audit_session bounds no session; hooks-live writes a new bound.
     save(data_repo, TRAIN, {"train_id": TRAIN, train_state.START_SEQ: 12})
-    assert train_state.mark_start(data_repo, TRAIN, 3, "later") == 12
-    state = load(data_repo, TRAIN)
-    assert train_state.AUDIT_SESSION not in state
-    assert train_state.session_bound(state, "any") == 12
+    assert train_state.session_bound(load(data_repo, TRAIN), "any") is None
+    assert train_state.mark_start(data_repo, TRAIN, 3, "later") == 3
+    assert load(data_repo, TRAIN)[train_state.AUDIT_BOUNDS] == {"later": 3}
 
 
 @pytest.mark.parametrize("bounds", [None, "x", {"s": True}, {"s": -1}, {"s": "3"}], ids=str)

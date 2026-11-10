@@ -377,7 +377,7 @@ def test_model_word_reads_a_transcript_model_id() -> None:
 def test_a_root_writer_roots_a_document_run_only_in_its_derived_kind(
     home: Path, kind: str, run_type: str
 ) -> None:
-    # 0190: the bound kind in the writer record decides, as doc-deriver and docs-writer did.
+    # 0190: the writer's bound kind decides the run type: derived roots a doc run, public a session.
     repo = home.parents[2] / "repo"
     path = writer_mode.records_path(repo, TRAIN)
     path.parent.mkdir(parents=True)
