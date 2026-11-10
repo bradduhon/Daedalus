@@ -164,6 +164,15 @@ In rows mode the first and last line is `[ROWS] n=<count>`, where `<count>` is t
 rows between the key line and the closing line, and the reply carries no verdict and no
 `corrected=<k>` line.
 
+## Refuted forms (0229)
+A message carrying a `Refuted forms:` line, after your refutation of the same unit, adds one
+claim per form you refuted to the claims of step 2. A named row under `tests/adversarial/` holds the
+form with its expected verdict. Its commit comes before the fix commit in
+`git -C <unit worktree> log <diff base>..<branch>`. The coder's `- test` receipt for that
+commit shows it failing, and your one test run, with that row's file added to its paths,
+shows it passing. Your own refutation on the earlier head is the proof the form was admitted
+there. A missing row, or a row first committed with the fix, is a `code` row.
+
 ## What the jail passes and refuses
 The jail passes these for the verifier:
 - The inspection commands `cat`, `rg`, `grep`, `ls`, `find`, `jq`, `head`, `tail`, `wc`,
