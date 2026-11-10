@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 from lib import jail
-from lib.config import Config, LedgerDecl
+from lib.config import Config
 
 from tests.conftest import CFG, CWD, WT
 from tests.hook_chain import (
@@ -233,17 +233,16 @@ def test_coder_bash_writes_to_builtin_protected_paths_are_refused(command: str) 
 
 
 def test_coder_repo_local_ledger_in_worktree_is_refused() -> None:
-    # 0054: the ledger begin resolves, mapped into the worktree, is a built-in protected path.
-    decl = LedgerDecl(Path("docs/decisions.md"), "markdown-table-row", "{seq:04d}", "last-row-id")
-    cfg = Config(ledger=decl)
-    target = f"{WT}/docs/decisions.md"
+    # 0054, 0247: the named file in the project's own docs folder, mapped into the worktree.
+    cfg = Config()
+    target = f"{WT}/docs/decision-log.md"
     d = decide(_w("coder", target), cfg)
     assert not d.allow and str(d.reason).startswith(f"protected path (built in): {target}.")
     d = decide(_b("coder", f"rm -r {WT}/docs"), cfg)
     assert not d.allow and str(d.reason).startswith("protected path (built in):")
     assert decide(_w("coder", f"{WT}/docs/other.md"), cfg).allow
-    # 0054: a ledger outside the repo has no worktree copy to protect.
-    assert decide(_w("coder", f"{WT}/docs/decisions.md"), CFG).allow
+    # 0054: a decisions file in the local docs folder has no worktree copy to protect.
+    assert decide(_w("coder", f"{WT}/docs/decision-log.md"), CFG).allow
 
 
 def test_coder_restores_paths_inside_its_unit_worktree() -> None:

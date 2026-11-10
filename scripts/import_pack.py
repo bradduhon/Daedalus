@@ -71,7 +71,7 @@ def out_folder(out: str, repo: Path) -> Path:
     try:
         roots = resolve_excluded_roots(load_config(str(repo)), repo)
     except (ConfigError, DataDirError) as exc:
-        raise PackImportError(f"excluded_roots could not be resolved: {exc}") from exc
+        raise PackImportError(f"git_excluded_folders could not be resolved: {exc}") from exc
     for root in roots:
         if _under(str(path), root.path):
             raise PackImportError(R_EXCLUDED.format(out=out, root=root.path))

@@ -32,7 +32,8 @@ def repo(git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     data = git_repo / ".claude" / "daedalus"
     data.mkdir(parents=True)
     roots = [{"kind": "path", "path": "<repo_root>/private/"}]
-    (data / "config.json").write_text(json.dumps({"excluded_roots": roots}), encoding="utf-8")
+    config = {"git_excluded_folders": roots}
+    (data / "config.json").write_text(json.dumps(config), encoding="utf-8")
     monkeypatch.chdir(git_repo)
     return git_repo
 
@@ -212,7 +213,7 @@ def test_verify_exits_3_when_the_project_metadata_is_unreadable(
     # 99: the output folder check fails closed on bad project metadata.
     assert _freeze(*SOURCES) == 0
     config = repo / ".claude" / "daedalus" / "config.json"
-    config.write_text(json.dumps({"excluded_roots": "private/"}), encoding="utf-8")
+    config.write_text(json.dumps({"git_excluded_folders": "private/"}), encoding="utf-8")
     capsys.readouterr()
     assert freeze_sources.main(["--verify", str(freeze_sources.manifest_path(repo, TRAIN))]) == 3
     assert "project metadata could not be read" in capsys.readouterr().err
@@ -287,14 +288,10 @@ def test_an_unbounded_output_folder_exits_1(
 def test_an_output_folder_holding_the_ledger_exits_1(repo: Path) -> None:
     # 0054: an output folder over a protected path is refused, the ledger included.
     (repo / "private" / "package" / "decisions.md").write_text("| a |\n|---|\n")
-    ledger = {
-        "path": "private/package/decisions.md",
-        "format": "markdown-table-row",
-        "id_scheme": "{seq:04d}",
-        "sequence_source": "last-row-id",
-    }
+    docs = {"folder": "private/package", "decisions_filename": "decisions.md"}
+    (repo / "service-manifest.json").write_text(json.dumps({"docs": docs}))
     roots = [{"kind": "path", "path": "<repo_root>/private/"}]
-    config = {"excluded_roots": roots, "ledger": ledger}
+    config = {"git_excluded_folders": roots}
     (repo / ".claude" / "daedalus" / "config.json").write_text(json.dumps(config))
     assert _freeze_to("private/package") == 1
     assert _freeze_to("private/source/../other") == 0

@@ -1,23 +1,11 @@
 {
-  "manifest_version": 1,
-  "service_name": "greetings",
-  "purpose": "A plain folder with one design spec and no git repository, used by the Daedalus golden set.",
-  "stack": {
-    "language": "python",
-    "runtime": "python3",
-    "unit_test_cmd": null,
-    "typecheck_cmd": null,
-    "lint_cmd": null
+  "commands": { "unit_test": null, "typecheck": null, "lint": null },
+  "docs": { "folder": "docs", "decisions_filename": null, "reading_level": null },
+  "checks": {
+    "secret_scan_on_push": false,
+    "online_advisory_lookup": false,
+    "terraform_format": false,
+    "terraform_validate": false
   },
-  "features": {
-    "scope": "folder",
-    "secrets_scan": false,
-    "scrub_file": null,
-    "ledger": false,
-    "dependency_web_lookup": false,
-    "terraform_tools": false
-  },
-  "jail_narrowing": { "forbidden_paths": [], "forbidden_extensions": [] },
-  "docs": { "literacy": null },
-  "ledger": null
+  "prohibited_writes": { "paths": [], "file_types": [] }
 }

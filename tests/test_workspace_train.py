@@ -33,6 +33,8 @@ from tests.helpers import strip_unit_audit
 # 0020: a temp HOME and git identity for every test here.
 pytestmark = pytest.mark.usefixtures("isolated_env")
 LEDGER = "| Id | Date | Ruling | Supersedes | Follow-ups |\n|---|---|---|---|---|\n"
+# 0247: the manifest names the decisions file; nothing is found by its conventional name.
+NAMED = {"docs": {"decisions_filename": "decisions.md"}}
 _git = partial(git, check=False)
 
 
@@ -57,6 +59,7 @@ def repo(project_data: Path) -> Path:
     (project_data / ".gitignore").write_text("*\n")
     (root / "docs").mkdir()
     (root / "docs" / "decisions.md").write_text(LEDGER)
+    (root / "service-manifest.json").write_text(json.dumps(NAMED))
     _commit_all(root, "init")
     return root
 
@@ -69,7 +72,7 @@ def charter(tmp_path: Path, repo: Path) -> Path:
     (root / "README.md").write_text("charter\n")
     _commit_all(root, "init")
     config = repo / ".claude" / "daedalus" / "config.json"
-    config.write_text(json.dumps({"charter_root": str(root)}))
+    config.write_text(json.dumps({"local_docs_folder": str(root)}))
     return root
 
 
@@ -87,7 +90,8 @@ def test_begin_prints_the_state_block_seed(repo: Path) -> None:
     sha = _ok(repo, "rev-parse", "HEAD")
     assert lines[0] == f"train: {train}  base: main @ {sha}  audit session: pending"
     assert (
-        lines[1] == f"ledger: {repo / 'docs' / 'decisions.md'} (probe, markdown-table-row, seq=0)"
+        lines[1]
+        == f"ledger: {repo / 'docs' / 'decisions.md'} (manifest, markdown-table-row, seq=0)"
     )
     assert lines[2] == "charter_root: none  charter base: none"
     assert lines[3] == "policy: none declared  standards: 0 sources"
@@ -178,20 +182,15 @@ def test_begin_refuses_a_detached_head(repo: Path) -> None:
     _nothing_written(repo)
 
 
-def test_begin_asks_the_ledger_question_with_exit_three(repo: Path) -> None:
-    _ok(repo, "rm", "-q", "docs/decisions.md")
-    _ok(repo, "commit", "-q", "-m", "drop ledger")
+def test_begin_with_no_decisions_file_named_asks_nothing(repo: Path) -> None:
+    # 0247: no name, no decisions; begin never asks and a run goes on without a ledger step.
+    (repo / "service-manifest.json").write_text("{}")
+    _commit_all(repo, "name no decisions file")
     result = _cli("begin", "--repo", str(repo))
-    assert result.returncode == 3, result.stderr
-    assert result.stdout.splitlines() == [
-        "ledger: none declared and none found.",
-        "This repo has no decision ledger. Options: name an existing file, or let Daedalus "
-        "create docs/decisions.md as a table. Which?",
-        "| Id | Date | Ruling | Supersedes | Follow-ups |",
-        "|---|---|---|---|---|",
-    ]
-    _nothing_written(repo)
-    assert not (repo / "docs" / ".tmp").exists()
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[1] == workspace.LEDGER_NONE
+    assert "Which?" not in result.stdout and len(lines) == 6
 
 
 def test_begin_branches_a_clean_charter(repo: Path, charter: Path) -> None:
@@ -241,7 +240,7 @@ def test_begin_reports_policy_and_cache(
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(cache))
     config = {
         "policy": {"engine": "conftest", "path": "policy/"},
-        "standards_sources": [{"kind": "file", "path": "STANDARDS.md"}],
+        "coding_rules": [{"file": "STANDARDS.md"}],
     }
     (repo / ".claude" / "daedalus" / "config.json").write_text(json.dumps(config))
     lines = begin(repo)
@@ -252,7 +251,7 @@ def test_begin_reports_policy_and_cache(
 
 def test_begin_prints_the_declared_pack_path(repo: Path) -> None:
     # 0019, 0026: the standards skill reads a pack at the path begin resolves.
-    config = {"standards_sources": [{"kind": "pack", "name": "baseline"}]}
+    config = {"coding_rules": [{"builtin": "baseline"}]}
     (repo / ".claude" / "daedalus" / "config.json").write_text(json.dumps(config))
     lines = begin(repo)
     assert lines[3] == "policy: none declared  standards: 1 sources"
@@ -1077,7 +1076,7 @@ def test_release_writes_no_changelog_file(repo: Path) -> None:
 
 def _scrub(repo: Path, *terms: str) -> None:
     (repo / "service-manifest.json").write_text(
-        json.dumps({"features": {"scrub_file": "scrub-terms.txt"}}), encoding="utf-8"
+        json.dumps({"checks": {"release_banned_terms_file": "scrub-terms.txt"}}), encoding="utf-8"
     )
     body = "\n".join(["# private names, one per line", "", *terms]) + "\n"
     (repo / "scrub-terms.txt").write_text(body, encoding="utf-8")
@@ -1973,7 +1972,7 @@ def test_folder_begin_cli_records_the_scope_and_the_output_folder(
     assert len(lines) == 7
     train = lines[0].split()[1]
     assert lines[0] == f"train: {train}  folder: {plain}  audit session: pending"
-    assert lines[1] == "ledger: none declared and none found."
+    assert lines[1] == workspace.LEDGER_NONE
     assert lines[2] == "charter_root: none  charter base: none"
     assert lines[-1] == f"scope: folder  out: {out}"
     assert out.is_dir() and not (plain / ".git").exists()
@@ -2044,16 +2043,16 @@ def test_folder_begin_refuses_repository_scope(repo: Path, tmp_path: Path) -> No
     _nothing_written(repo)
 
 
-def test_folder_begin_ledger_question_leaves_no_output_folder(plain: Path, tmp_path: Path) -> None:
-    # 0004, issue 48: exit 3 writes nothing, so the output folder begin made is removed.
-    manifest = {"features": {"ledger": True}}
+def test_folder_begin_with_a_named_decisions_file_asks_nothing(plain: Path, tmp_path: Path) -> None:
+    # 0247: a named file not written yet is created on the first decision; begin never asks.
+    manifest = {"docs": {"decisions_filename": "decisions.md"}}
     (plain / "service-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    out = tmp_path / "asked"
+    out = tmp_path / "outputs"
     result = _cli("begin", "--repo", str(plain), "--scope", "folder", "--out", str(out))
-    assert result.returncode == 3, result.stderr
-    assert "This repo has no decision ledger." in result.stdout
-    assert not out.exists()
-    _nothing_written(plain)
+    assert result.returncode == 0, result.stderr
+    want = f"ledger: {plain / 'docs' / 'decisions.md'} (manifest, markdown-table-row, seq=0)"
+    assert result.stdout.splitlines()[1] == want
+    assert out.is_dir() and not (plain / "docs" / "decisions.md").exists()
 
 
 def test_folder_stop_cli_clears_the_marker_with_no_git_step(plain: Path, tmp_path: Path) -> None:
@@ -2479,7 +2478,7 @@ def test_coder_model_takes_the_control_path_tier_from_the_config(repo: Path) -> 
     outcome = train_runner.coder_model(repo, "U1")
     assert outcome.lines == ["opus", "coder U1: opus (control path hooks/pre_commit.py)"]
     config = repo / ".claude" / "daedalus" / "config.json"
-    config.write_text(json.dumps({"coder_models": {"control_path": "fable"}}))
+    config.write_text(json.dumps({"models": {"coder_on_plugin_files": "fable"}}))
     assert train_runner.coder_model(repo, "U1").lines[0] == "fable"
     assert train_runner.coder_model(repo, "U2").lines == ["sonnet", "coder U2: sonnet (default)"]
 

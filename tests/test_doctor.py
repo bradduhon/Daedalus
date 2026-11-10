@@ -15,6 +15,7 @@ import daedalus_confine
 import pytest
 from lib import packs
 
+from tests.conftest import REPO_ROOT as REPO_ROOT_FOR_TESTS
 from tests.conftest import fake_bin, git, run_cli
 from tests.test_framework_packs import _control, _make, _manifest
 
@@ -75,8 +76,8 @@ def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: P
     names = " ".join(lines)
     for expected in (
         "config.json",
-        "ledger",
-        "standards_sources",
+        "decisions",
+        "coding_rules",
         "policy",
         "gitleaks",
         "gh on PATH",
@@ -96,7 +97,7 @@ def test_empty_setup_reports_every_miss_with_next(plugin_data: Path, tmp_path: P
     # 0069, issue 52: no manifest means the secret scan is off, so a missing gitleaks is optional.
     gitleaks = next(line for line in lines if "gitleaks on PATH" in line)
     assert gitleaks.startswith("OPT  gitleaks on PATH: not found, and the secret scan is off.")
-    assert "set secrets_scan to true in the features object" in gitleaks
+    assert "set secret_scan_on_push to true in the checks object" in gitleaks
     # 0172: a plain folder is folder scope, so both gh lines are optional.
     gh = [line for line in lines if line[5:].startswith("gh ")]
     assert len(gh) == 2 and all(line.startswith("OPT  gh ") for line in gh)
@@ -148,7 +149,9 @@ def _data(repo: Path, marker: bool = True) -> Path:
 def test_complete_setup_is_all_ok(plugin_data: Path, tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _git_repo(repo)
-    (repo / "service-manifest.json").write_text("{}")
+    (repo / "service-manifest.json").write_text('{"docs": {"decisions_filename": "decisions.md"}}')
+    (repo / "docs").mkdir()
+    (repo / "docs" / "standing-rules.md").write_text("# Decisions in force\n")
     (repo / "contracts").mkdir()
     (repo / "contracts" / "openapi.yaml").write_text("")
     (repo / ".gitleaks.toml").write_text("")
@@ -156,14 +159,8 @@ def test_complete_setup_is_all_ok(plugin_data: Path, tmp_path: Path) -> None:
     (data / "config.json").write_text(
         json.dumps(
             {
-                "ledger": {
-                    "path": str(repo / "docs" / "decisions.md"),
-                    "format": "markdown-table-row",
-                    "id_scheme": "{seq:04d}-DAE-PLT",
-                    "sequence_source": "last-row-id",
-                },
                 "policy": {"engine": "conftest", "path": str(repo / "policy")},
-                "standards_sources": [{"kind": "rules-dir", "path": str(repo / "docs")}],
+                "coding_rules": [{"folder": str(repo / "docs")}],
             }
         )
     )
@@ -176,7 +173,12 @@ def test_complete_setup_is_all_ok(plugin_data: Path, tmp_path: Path) -> None:
     assert not any(line.startswith("MISS") for line in result.stdout.splitlines())
     lines = result.stdout.splitlines()
     assert f"OK   project data dir: {data} (exists)" in lines
-    assert "OK   standards_sources declared" in lines and "OK   policy declared" in lines
+    assert "OK   coding_rules declared" in lines and "OK   policy declared" in lines
+    decisions = repo / "docs" / "decisions.md"
+    assert (
+        f"OK   decisions: {decisions} (markdown-table-row, created with the first decision)"
+        in lines
+    )
 
 
 def _tree_line(repo: Path, tmp_path: Path) -> str:
@@ -247,8 +249,7 @@ def test_absent_scaffolds_are_opt_and_pass(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout
     assert [line.split(":")[0][5:] for line in lines if line.startswith("OPT  ")] == [
         "config.json",
-        "standing_rules",
-        "standards_sources",
+        "coding_rules",
         "fable",
         "service-manifest.json",
         "contracts/",
@@ -459,21 +460,23 @@ def test_print_files_one_line_per_row_and_exit_zero(tmp_path: Path) -> None:
 
 
 def _features(repo: Path, block: dict[str, object] | None) -> None:
-    # 0172: a manifest holding only a features block, or no features key for None.
-    body = {} if block is None else {"features": block}
+    # 0172, 0245: a manifest holding only a checks group, or no checks key for None.
+    body = {} if block is None else {"checks": block}
     (repo / "service-manifest.json").write_text(json.dumps(body), encoding="utf-8")
 
 
 def _repository(repo: Path) -> None:
-    # 0074: a declared repository scope stands in for a git work tree.
-    _features(repo, {"scope": "repository"})
+    # 0245: scope is detected only, so repository scope needs a git work tree.
+    _git_repo(repo)
 
 
 def test_gh_absent_is_two_misses_with_next(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
-    _repository(tmp_path)
-    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
+    _repository(tmp_path / "repo")
+    lines = _run(
+        None, tmp_path / "repo", path_env=_bins_with_git(tmp_path), home=home
+    ).stdout.splitlines()
     assert (
         "MISS gh on PATH: not found. Next: install gh (https://cli.github.com); "
         "the Push Train opens pull requests with it"
@@ -530,9 +533,9 @@ def test_minor_7_gh_auth_oserror_names_the_error(
 def test_gh_signed_out_is_a_miss(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
-    bins = _bins(tmp_path, "gh", exit_codes={"gh": 1})
-    _repository(tmp_path)
-    lines = _run(None, tmp_path, path_env=bins, home=home).stdout.splitlines()
+    bins = _bins_with_git(tmp_path, "gh", exit_codes={"gh": 1})
+    _repository(tmp_path / "repo")
+    lines = _run(None, tmp_path / "repo", path_env=bins, home=home).stdout.splitlines()
     assert "OK   gh on PATH" in lines
     assert ("MISS gh authenticated: gh auth status exited 1. Next: run gh auth login") in lines
 
@@ -540,7 +543,7 @@ def test_gh_signed_out_is_a_miss(tmp_path: Path) -> None:
 FOLDER_OFF = ", and this is folder scope, where the Push Train never runs (0074)"
 
 
-@pytest.mark.parametrize("block", [None, {"scope": "folder"}])
+@pytest.mark.parametrize("block", [None, {"secret_scan_on_push": False}])
 def test_gh_lines_are_opt_in_folder_scope(tmp_path: Path, block: dict[str, object] | None) -> None:
     # 0172: in folder scope a missing or signed-out gh never fails the doctor.
     import daedalus_doctor
@@ -582,11 +585,11 @@ def test_refused_manifest_falls_back_to_the_detected_scope(tmp_path: Path) -> No
     # 0074: a manifest the reader refuses leaves scope to detection; its own line is the MISS.
     import daedalus_doctor
 
-    _features(tmp_path, {"scope": "repo"})
+    _features(tmp_path, {"secret_scan_on_push": "yes"})
     assert daedalus_doctor.scope(tmp_path) == "folder"
     repo = tmp_path / "repo"
     _git_repo(repo)
-    _features(repo, {"scope": "repo"})
+    _features(repo, {"secret_scan_on_push": "yes"})
     assert daedalus_doctor.scope(repo) == "repository"
 
 
@@ -594,7 +597,7 @@ def test_plain_folder_runs_the_folder_scope_checks(tmp_path: Path) -> None:
     # issue 48: a folder with no .git is folder scope; every git-dependent line is OPT, none MISS.
     folder = tmp_path / "plain"
     folder.mkdir()
-    _features(folder, {"secrets_scan": True})
+    _features(folder, {"secret_scan_on_push": True})
     assert not (folder / ".git").exists()
     result = _run(None, folder, path_env=_bins(tmp_path), home=tmp_path / "home")
     lines = result.stdout.splitlines()
@@ -612,16 +615,6 @@ def test_plain_folder_runs_the_folder_scope_checks(tmp_path: Path) -> None:
     assert result.returncode == 0 and lines[-1] == "daedalus doctor: all checks passed"
 
 
-def test_declared_repository_scope_without_git_is_a_miss(tmp_path: Path) -> None:
-    # 0074: a declared repository scope keeps the git repository line a MISS.
-    _repository(tmp_path)
-    lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=tmp_path / "home").stdout
-    assert (
-        f"MISS git repository: {tmp_path} is not a git repository. "
-        "Next: run git init or point --repo at a clone"
-    ) in lines.splitlines()
-
-
 def test_print_scope_names_the_scope_and_root(tmp_path: Path) -> None:
     # issue 48: the plan skill reads this line instead of running git.
     folder = tmp_path / "plain"
@@ -632,66 +625,67 @@ def test_print_scope_names_the_scope_and_root(tmp_path: Path) -> None:
     _git_repo(repo)
     out = run_cli("daedalus_doctor.py", "--print-scope", "--repo", str(repo))
     assert out.stdout == f"scope: repository  root: {repo}\n"
-    _features(folder, {"scope": "bad"})
+    # 0245: scope is detected only; an old scope key is the ordinary unknown-key refusal.
+    (folder / "service-manifest.json").write_text('{"features": {"scope": "repository"}}')
     out = run_cli("daedalus_doctor.py", "--print-scope", "--repo", str(folder))
-    assert out.returncode == 1 and "features.scope" in out.stderr and "Next:" in out.stderr
+    assert out.returncode == 1 and "unknown keys ['features']" in out.stderr
+    assert "Next:" in out.stderr
 
 
-def test_absent_config_runs_the_ledger_probe_none_found(tmp_path: Path) -> None:
+def test_absent_config_with_no_named_file_records_no_decisions(tmp_path: Path) -> None:
+    # 0247: no decisions file named means no decisions; a file found by its name is never used.
     repo = tmp_path / "repo"
     _git_repo(repo)
+    (repo / "docs").mkdir()
+    fixture = REPO_ROOT_FOR_TESTS / "tests" / "fixtures" / "ledgers" / "table.md"
+    (repo / "docs" / "decisions.md").write_text(fixture.read_text())
     bins = _bins_with_git(tmp_path)
     lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
     i = lines.index(NO_CONFIG)
     assert lines[i + 1] == (
-        "OK   ledger: none found (the Build Train asks before creating docs/decisions.md)"
+        "OK   decisions: no decisions file named in docs.decisions_filename, none recorded"
     )
     assert not any(line.startswith("MISS config.json") for line in lines)
-    assert not any("ledger declared" in line for line in lines)
+    assert not any("decisions in force" in line for line in lines)
 
 
-def test_absent_config_runs_the_ledger_probe_found(tmp_path: Path) -> None:
-    from tests.conftest import REPO_ROOT
-
+@pytest.mark.parametrize("summary", [False, True])
+def test_a_named_decisions_file_reports_its_layout_and_summary(
+    tmp_path: Path, summary: bool
+) -> None:
+    # 0247: the layout is read from the named file; the summary beside it is used when present.
     repo = tmp_path / "repo"
     _git_repo(repo)
     (repo / "docs").mkdir()
-    fixture = REPO_ROOT / "tests" / "fixtures" / "ledgers" / "table.md"
+    fixture = REPO_ROOT_FOR_TESTS / "tests" / "fixtures" / "ledgers" / "table.md"
     (repo / "docs" / "decisions.md").write_text(fixture.read_text())
+    if summary:
+        (repo / "docs" / "standing-rules.md").write_text("# Decisions in force\n")
+    named = {"docs": {"decisions_filename": "decisions.md"}}
+    (repo / "service-manifest.json").write_text(json.dumps(named))
     bins = _bins_with_git(tmp_path)
-    lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
+    result = _run(None, repo, path_env=bins, home=tmp_path / "home")
+    lines = result.stdout.splitlines()
     ledger = repo.resolve() / "docs" / "decisions.md"
-    i = lines.index(NO_CONFIG)
-    assert lines[i + 1] == f"OK   ledger: {ledger} (probe, markdown-table-row)"
+    i = lines.index(f"OK   decisions: {ledger} (markdown-table-row)")
+    if summary:
+        assert lines[i + 1] == f"OK   decisions in force: {ledger.parent / 'standing-rules.md'}"
+    else:
+        assert lines[i + 1].startswith("OPT  decisions in force: no standing-rules.md. Next: ")
 
 
-def test_minor_8_manifest_ledger_block_reports_manifest_origin(tmp_path: Path) -> None:
-    from tests.conftest import REPO_ROOT
-
+def test_manifest_line_reports_prohibited_write_counts(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _git_repo(repo)
-    fixture = REPO_ROOT / "tests" / "fixtures" / "ledgers" / "manifest-override.json"
-    (repo / "service-manifest.json").write_text(fixture.read_text())
-    (_data(repo) / "config.json").write_text("{}")
+    writes = {"paths": ["infra/", "Makefile"], "file_types": [".pem"]}
+    (repo / "service-manifest.json").write_text(json.dumps({"prohibited_writes": writes}))
     bins = _bins_with_git(tmp_path)
     lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
-    i = lines.index("OK   config.json")
-    ledger = repo.resolve() / "docs" / "decisions.md"
-    assert lines[i + 1] == f"OK   ledger: {ledger} (manifest, markdown-table-row)"
-
-
-def test_manifest_line_reports_jail_narrowing_counts(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    _git_repo(repo)
-    narrowing = {"forbidden_paths": ["infra/", "Makefile"], "forbidden_extensions": [".pem"]}
-    (repo / "service-manifest.json").write_text(json.dumps({"jail_narrowing": narrowing}))
-    bins = _bins_with_git(tmp_path)
-    lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
-    want = "OK   service-manifest.json: jail_narrowing 2 paths, 1 extensions"
+    want = "OK   service-manifest.json: prohibited_writes 2 paths, 1 file types"
     assert want in lines
 
 
-@pytest.mark.parametrize("body", ["{ not json", '{"jail_narrowing": {"forbidden_paths": "x"}}'])
+@pytest.mark.parametrize("body", ["{ not json", '{"prohibited_writes": {"paths": "x"}}'])
 def test_unusable_manifest_is_a_miss_with_next(tmp_path: Path, body: str) -> None:
     repo = tmp_path / "repo"
     _git_repo(repo)
@@ -703,8 +697,8 @@ def test_unusable_manifest_is_a_miss_with_next(tmp_path: Path, body: str) -> Non
     assert result.returncode != 0
 
 
-def test_undeclared_standards_and_policy_are_optional(tmp_path: Path) -> None:
-    # spec 5: absent standards_sources and policy are OK with or without config.json.
+def test_undeclared_coding_rules_and_policy_are_optional(tmp_path: Path) -> None:
+    # spec 5: absent coding_rules and policy are OK with or without config.json.
     repo = tmp_path / "repo"
     _git_repo(repo)
     bins = _bins_with_git(tmp_path)
@@ -714,17 +708,15 @@ def test_undeclared_standards_and_policy_are_optional(tmp_path: Path) -> None:
         lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
         assert PACK_OFFER in lines
         assert "OK   policy: not declared (optional)" in lines
-        assert not any(line.startswith(("MISS standards", "MISS policy")) for line in lines)
+        assert not any(line.startswith(("MISS coding", "MISS policy")) for line in lines)
 
 
 def test_plugin_root_follows_the_cache_dir_line(tmp_path: Path) -> None:
-    from tests.conftest import REPO_ROOT
-
     home = tmp_path / "home"
     home.mkdir()
     lines = _run(None, tmp_path, path_env=_bins(tmp_path), home=home).stdout.splitlines()
     i = next(n for n, line in enumerate(lines) if line.startswith("OK   cache dir"))
-    assert lines[i + 1] == f"OK   plugin root: {REPO_ROOT}"
+    assert lines[i + 1] == f"OK   plugin root: {REPO_ROOT_FOR_TESTS}"
 
 
 def test_first_run_without_config_is_all_ok(tmp_path: Path) -> None:
@@ -745,94 +737,16 @@ def test_first_run_without_config_is_all_ok(tmp_path: Path) -> None:
     assert not any(line.startswith("MISS") for line in result.stdout.splitlines())
 
 
-def test_config_without_ledger_runs_the_probe_found(tmp_path: Path) -> None:
-    from tests.conftest import REPO_ROOT
-
+@pytest.mark.parametrize("old", ["ledger", "standing_rules", "charter_root", "coder_models"])
+def test_an_old_config_key_is_the_config_miss(tmp_path: Path, old: str) -> None:
+    # 0245, 0241: no alias; the config line names the unknown key and every valid name.
     repo = tmp_path / "repo"
     _git_repo(repo)
-    (_data(repo) / "config.json").write_text("{}")
-    (repo / "docs").mkdir()
-    fixture = REPO_ROOT / "tests" / "fixtures" / "ledgers" / "table.md"
-    (repo / "docs" / "decisions.md").write_text(fixture.read_text())
-    bins = _bins_with_git(tmp_path)
-    lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
-    i = lines.index("OK   config.json")
-    ledger = repo.resolve() / "docs" / "decisions.md"
-    assert lines[i + 1] == f"OK   ledger: {ledger} (probe, markdown-table-row)"
-    assert not any(line.startswith("MISS ledger") for line in lines)
-
-
-def test_config_without_ledger_runs_the_probe_none_found(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    _git_repo(repo)
-    (_data(repo) / "config.json").write_text("{}")
-    bins = _bins_with_git(tmp_path)
-    lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
-    i = lines.index("OK   config.json")
-    assert lines[i + 1] == (
-        "OK   ledger: none found (the Build Train asks before creating docs/decisions.md)"
-    )
-    assert not any(line.startswith("MISS ledger") for line in lines)
-
-
-def _declared_ledger(repo: Path, sequence_source: str) -> Path:
-    path = repo / "docs" / "decisions.md"
-    ledger = {
-        "path": str(path),
-        "format": "markdown-table-row",
-        "id_scheme": "{seq:04d}-DAE-PLT",
-        "sequence_source": sequence_source,
-    }
-    (_data(repo) / "config.json").write_text(json.dumps({"ledger": ledger}))
-    return path
-
-
-def test_config_ledger_with_bad_sequence_source_is_a_miss(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    _git_repo(repo)
-    _declared_ledger(repo, "row-count")
-    bins = _bins_with_git(tmp_path)
-    lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
-    miss = [line for line in lines if line.startswith("MISS ledger: ")]
-    assert len(miss) == 1 and "sequence_source" in miss[0] and "Next:" in miss[0]
-
-
-def test_config_ledger_valid_is_ok_with_config_origin(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    _git_repo(repo)
-    path = _declared_ledger(repo, "last-row-id")
-    bins = _bins_with_git(tmp_path)
-    lines = _run(None, repo, path_env=bins, home=tmp_path / "home").stdout.splitlines()
-    assert f"OK   ledger: {path} (config, markdown-table-row)" in lines
-    assert not any(line.startswith("MISS ledger") for line in lines)
-
-
-@pytest.mark.parametrize(
-    ("doc", "write", "prefix"),
-    [
-        ({}, False, "OPT  standing_rules: not declared. Next: set standing_rules"),
-        ({"standing_rules": "docs/standing-rules.md"}, True, "OK   standing_rules: "),
-        ({"standing_rules": "docs/standing-rules.md"}, False, "MISS standing_rules: "),
-    ],
-)
-def test_config_standing_rules_line(
-    tmp_path: Path, doc: dict[str, str], write: bool, prefix: str
-) -> None:
-    # 0090: one line for the key; absent is OPT, a declared path with no file a MISS.
-    repo = tmp_path / "repo"
-    _git_repo(repo)
-    (_data(repo) / "config.json").write_text(json.dumps(doc))
-    if write:
-        (repo / "docs").mkdir()
-        (repo / "docs" / "standing-rules.md").write_text("# Standing rules\n")
+    (_data(repo) / "config.json").write_text(json.dumps({old: None}))
     bins = _bins_with_git(tmp_path)
     result = _run(None, repo, path_env=bins, home=tmp_path / "home")
-    lines = [line for line in result.stdout.splitlines() if line[5:].startswith("standing_rules:")]
-    assert len(lines) == 1 and lines[0].startswith(prefix), result.stdout
-    if prefix.startswith("MISS"):
-        assert "Next:" in lines[0] and result.returncode == 1
-    if write:
-        assert lines[0].endswith(str(repo.resolve() / "docs" / "standing-rules.md"))
+    (miss,) = [line for line in result.stdout.splitlines() if line.startswith("MISS config.json")]
+    assert f"unknown keys ['{old}']" in miss and "local_docs_folder" in miss and "Next:" in miss
 
 
 @pytest.mark.parametrize(
@@ -840,18 +754,21 @@ def test_config_standing_rules_line(
     [
         ({}, []),
         (
-            {"coder_models": {"default": "haiku"}},
-            ["OK   coder_models: default haiku, control_path opus, escalated opus"],
+            {"models": {"coder": "haiku"}},
+            [
+                "OK   coder models: coder haiku, coder_on_plugin_files opus, "
+                "coder_after_rejection opus"
+            ],
         ),
     ],
 )
 def test_config_coder_models_line(tmp_path: Path, doc: dict[str, object], want: list[str]) -> None:
-    # 0187: one line naming the three tiers, only when the key is set.
+    # 0187: one line naming the three coder keys, only when one of them is set.
     repo = tmp_path / "repo"
     _git_repo(repo)
     (_data(repo) / "config.json").write_text(json.dumps(doc))
     result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
-    lines = [line for line in result.stdout.splitlines() if line[5:].startswith("coder_models:")]
+    lines = [line for line in result.stdout.splitlines() if line[5:].startswith("coder models:")]
     assert lines == want, result.stdout
 
 
@@ -994,7 +911,7 @@ def test_no_manifest_no_line(plugin_data: Path, tmp_path: Path) -> None:
 
 # 0157, Plan 10 spec 2.6: the framework pack lines (F3 requirements 1 to 5).
 PACK_DAY = date(2026, 10, 26)
-PACK_DIR_ONLY = {"pack_dir": "packs", "default_packs": False}
+PACK_DIR_ONLY = {"folder": "packs", "use_builtin": False}
 OTHER_NEXT = (
     "Next: fix the pack files or rebuild the pack with python3 <plugin>/scripts/import_pack.py "
     "per docs/project-requirements.md"
@@ -1013,9 +930,9 @@ def _break_hash(folder: Path) -> None:
 
 def test_pack_line_ok_for_each_folder_after_the_declared_ones(repo_cwd: Path) -> None:
     _make(repo_cwd / "packs" / "one")
-    _manifest(repo_cwd, {"pack_dir": "packs"})
+    _manifest(repo_cwd, {"folder": "packs"})
     every = [packs.load_pack(f) for f in sorted(packs.FRAMEWORKS_DIR.iterdir())]
-    # 0192: a pack that is off by default gets no line until frameworks.packs names it.
+    # 0192: a pack off by default gets no line until compliance_rules.extra_builtin names it.
     shipped = [p for p in every if p.default]
     assert {p.id for p in every if not p.default} == {"cost-tier"}
     day = max(date.fromisoformat(p.pinned_on) for p in every)
@@ -1026,12 +943,13 @@ def test_pack_line_ok_for_each_folder_after_the_declared_ones(repo_cwd: Path) ->
             for p in shipped
         ],
     ]
-    _manifest(repo_cwd, {"pack_dir": "packs", "packs": ["cost-tier", "no-such-pack"]})
+    _manifest(repo_cwd, {"folder": "packs", "extra_builtin": ["cost-tier", "no-such-pack"]})
     lines = _pack_lines_at(repo_cwd, day)
     assert lines[0] == (
         False,
-        "MISS framework packs: frameworks.packs names no-such-pack, which Daedalus does not "
-        "ship. Next: name a pack listed in the README section on control packs, or remove the id",
+        "MISS framework packs: compliance_rules.extra_builtin names no-such-pack, which Daedalus "
+        "does not ship. Next: name a pack listed in the README section on control packs, or "
+        "remove the id",
     )
     assert (True, "OK   framework pack cost-tier: 1.0.0, 8 controls") in lines
 
@@ -1123,7 +1041,9 @@ def test_unreadable_pack_dir_is_a_miss_line_not_a_crash(repo_cwd: Path) -> None:
     finally:
         (repo_cwd / "packs").chmod(0o755)
     assert not ok and line.startswith("MISS framework packs: [Errno 13] Permission denied")
-    assert line.endswith("Next: make the pack folders readable to you, or fix frameworks.pack_dir")
+    assert line.endswith(
+        "Next: make the pack folders readable to you, or fix compliance_rules.folder"
+    )
 
 
 def test_a_nist_ref_holding_a_list_is_a_miss_line_not_a_crash(repo_cwd: Path) -> None:
@@ -1156,7 +1076,7 @@ def test_declared_pack_dir_that_is_not_a_folder_fails(repo_cwd: Path, kind: str)
     assert _pack_lines_at(repo_cwd) == [
         (
             False,
-            f"MISS framework packs: {problem}. Next: create it or remove frameworks.pack_dir "
+            f"MISS framework packs: {problem}. Next: create it or remove compliance_rules.folder "
             "from service-manifest.json",
         )
     ]
@@ -1205,7 +1125,7 @@ def _pack_cli_repo(
     folder = _make(repo / "packs" / "own", pinned_on=pinned_on)
     if broken:
         _break_hash(folder)
-    _manifest(repo, {"pack_dir": "packs"})
+    _manifest(repo, {"folder": "packs"})
     (repo / "contracts").mkdir()
     (repo / "contracts" / "openapi.yaml").write_text("")
     (repo / ".gitleaks.toml").write_text("")
@@ -1234,9 +1154,9 @@ def test_cli_pack_problem_fails_the_run(tmp_path: Path) -> None:
 
 
 PACK_OFFER = (
-    "OPT  standards_sources: no standards file or pack is declared. "
-    "Next: to adopt the shipped baseline pack, add "
-    '{"kind": "pack", "name": "baseline"} to standards_sources in .claude/daedalus/config.json'
+    "OPT  coding_rules: no rules folder, file or built-in set is declared. "
+    'Next: to adopt the shipped baseline rules, add {"builtin": "baseline"} '
+    "to coding_rules in .claude/daedalus/config.json"
 )
 
 
@@ -1256,10 +1176,10 @@ def test_doctor_offers_the_baseline_pack(tmp_path: Path) -> None:
     assert PACK_OFFER in result.stdout.splitlines()
     assert result.returncode == 0, result.stdout
     (_data(repo) / "config.json").write_text(
-        json.dumps({"standards_sources": [{"kind": "pack", "name": "baseline"}]})
+        json.dumps({"coding_rules": [{"builtin": "baseline"}]})
     )
     lines = _run(None, repo, path_env=bins, home=home).stdout.splitlines()
-    assert "OK   standards_sources declared" in lines
+    assert "OK   coding_rules declared" in lines
 
 
 SETUP_NEXT = "Next: run the Daedalus setup skill (/daedalus:setup) to write a starter "
@@ -1285,8 +1205,10 @@ def test_doctor_opt_lines_name_the_setup_skill(tmp_path: Path) -> None:
 def _typecheck_lines(repo: Path, command: str | None, run: bool = True) -> list[str]:
     import daedalus_doctor
 
-    stack = {"typecheck_cmd": command}
-    (repo / "service-manifest.json").write_text(json.dumps({"stack": stack}), encoding="utf-8")
+    commands = {"typecheck": command}
+    (repo / "service-manifest.json").write_text(
+        json.dumps({"commands": commands}), encoding="utf-8"
+    )
     return [line for _, line in daedalus_doctor._typecheck_check(repo, run)]
 
 
@@ -1300,7 +1222,7 @@ def test_default_run_prints_the_typecheck_command_and_never_runs_it(
         raise AssertionError(f"the default doctor run executed {cmd}")
 
     monkeypatch.setattr(daedalus_doctor.subprocess, "run", refuse)
-    manifest = {"stack": {"typecheck_cmd": "mypy scripts"}}
+    manifest = {"commands": {"typecheck": "mypy scripts"}}
     (tmp_path / "service-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     assert list(daedalus_doctor._typecheck_check(tmp_path)) == [
         (
@@ -1324,14 +1246,14 @@ def test_a_newline_in_typecheck_cmd_is_refused_by_the_reader(tmp_path: Path) -> 
     # 93: the reader refuses the manifest, so the doctor prints its MISS and never the forgery.
     repo = tmp_path / "repo"
     _git_repo(repo)
-    manifest = {"stack": {"typecheck_cmd": f"mypy\n{FORGED}"}}
+    manifest = {"commands": {"typecheck": f"mypy\n{FORGED}"}}
     (repo / "service-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     lines = result.stdout.splitlines()
     assert not any(line.startswith(FORGED) for line in lines), result.stdout
     (miss,) = [line for line in lines if line.startswith("MISS service-manifest.json:")]
-    assert "stack.typecheck_cmd holds a control character" in miss
-    assert "Next: correct the stack.typecheck_cmd value" in miss and result.returncode == 1
+    assert "commands.typecheck holds a control character" in miss
+    assert "Next: correct the commands.typecheck value" in miss and result.returncode == 1
 
 
 def test_the_typecheck_line_escapes_a_newline_in_the_command(tmp_path: Path) -> None:
@@ -1355,7 +1277,7 @@ def test_default_cli_run_leaves_the_declared_command_unrun(tmp_path: Path) -> No
     _git_repo(repo)
     marker = tmp_path / "ran"
     command = f"{sys.executable} -c \"open({str(marker)!r}, 'w').write('ran')\""
-    manifest = {"stack": {"typecheck_cmd": command}}
+    manifest = {"commands": {"typecheck": command}}
     (repo / "service-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     bins = _bins_with_git(tmp_path)
     result = _run(None, repo, path_env=bins, home=tmp_path / "home")
@@ -1410,9 +1332,9 @@ def _manifest_lines(repo: Path, manifest: dict[str, object], check: str) -> list
 
 
 def test_each_typecheck_command_of_a_list_gets_its_own_line(tmp_path: Path) -> None:
-    # 0192: a Python and TypeScript stack declares two typecheck commands; neither runs.
-    stack = {"typecheck_cmd": ["mypy src", "pnpm tsc --noEmit"]}
-    assert _manifest_lines(tmp_path, {"stack": stack}, "_typecheck_check") == [
+    # 0192: a Python and TypeScript project declares two typecheck commands; neither runs.
+    commands = {"typecheck": ["mypy src", "pnpm tsc --noEmit"]}
+    assert _manifest_lines(tmp_path, {"commands": commands}, "_typecheck_check") == [
         "OPT  typecheck (mypy src): not run. Next: run mypy src by hand from your own shell at "
         "the repo root",
         "OPT  typecheck (pnpm tsc --noEmit): not run. Next: run pnpm tsc --noEmit by hand from "
@@ -1421,7 +1343,7 @@ def test_each_typecheck_command_of_a_list_gets_its_own_line(tmp_path: Path) -> N
     ok = f"{sys.executable} -c \"print('clean')\""
     bad = f"{sys.executable} -c \"print('Found 1 error'); raise SystemExit(1)\""
     (tmp_path / "service-manifest.json").write_text(
-        json.dumps({"stack": {"typecheck_cmd": [ok, bad]}}), encoding="utf-8"
+        json.dumps({"commands": {"typecheck": [ok, bad]}}), encoding="utf-8"
     )
     import daedalus_doctor
 
@@ -1430,59 +1352,52 @@ def test_each_typecheck_command_of_a_list_gets_its_own_line(tmp_path: Path) -> N
     assert lines[1][0] is False and lines[1][1].startswith(f"MISS typecheck ({bad}): exited 1")
 
 
-def test_the_stack_line_names_the_package_manager_and_the_command_counts(tmp_path: Path) -> None:
-    # 0192: one stack line when any stack key is declared; none for an empty stack.
-    stack = {
-        "package_manager": "pnpm",
-        "unit_test_cmd": ["pytest -q", "pnpm vitest run"],
-        "lint_cmd": "ruff check .",
-    }
-    assert _manifest_lines(tmp_path, {"stack": stack}, "_stack_check") == [
-        "OK   stack: package manager pnpm; commands: 2 unit test, 0 typecheck, 1 lint"
+def test_the_commands_line_names_the_command_counts(tmp_path: Path) -> None:
+    # 0192, 0245: one line when any command is declared; none when none is.
+    commands = {"unit_test": ["pytest -q", "pnpm vitest run"], "lint": "ruff check ."}
+    assert _manifest_lines(tmp_path, {"commands": commands}, "_stack_check") == [
+        "OK   commands: 2 unit test, 0 typecheck, 1 lint"
     ]
-    assert _manifest_lines(tmp_path, {"stack": {"lint_cmd": "ruff check ."}}, "_stack_check") == [
-        "OK   stack: package manager none declared; commands: 0 unit test, 0 typecheck, 1 lint"
-    ]
-    assert _manifest_lines(tmp_path, {"stack": {"language": "python"}}, "_stack_check") == []
+    assert _manifest_lines(tmp_path, {"commands": {"lint": None}}, "_stack_check") == []
 
 
-def test_the_dev_server_line_names_the_url_and_the_check(tmp_path: Path) -> None:
+def test_the_local_testing_line_names_the_url_and_the_instructions(tmp_path: Path) -> None:
     # 0164: printed only when set; the doctor never starts or fetches the site.
-    server = {"url": "http://localhost:5173", "check": "the scene loads"}
-    assert _manifest_lines(tmp_path, {"dev_server": server}, "_dev_server_check") == [
-        "OK   dev server: http://localhost:5173; the verify step asks you to open it and check: "
-        "the scene loads"
+    server = {"url": "http://localhost:5173", "instructions": "the scene loads"}
+    assert _manifest_lines(tmp_path, {"local_testing": server}, "_dev_server_check") == [
+        "OK   local_testing: http://localhost:5173; the verify step asks you to open it and "
+        "check: the scene loads"
     ]
-    assert _manifest_lines(tmp_path, {"dev_server": None}, "_dev_server_check") == []
+    assert _manifest_lines(tmp_path, {"local_testing": None}, "_dev_server_check") == []
 
 
 @pytest.mark.parametrize(
     ("block", "line"),
     [
-        ({}, "OK   dependencies: frozen installs none; minimum release age 7 days"),
+        ({}, "OK   packages: allowed installers none; minimum age 7 days"),
         (
-            {"installs": ["npm", "python"], "minimum_release_age_days": 14},
-            "OK   dependencies: frozen installs npm, python; minimum release age 14 days",
+            {"allowed_installers": ["npm", "python"], "minimum_age_days": 14},
+            "OK   packages: allowed installers npm, python; minimum age 14 days",
         ),
         (
-            {"minimum_release_age_days": 1, "minimum_release_age_reason": "x" * 20},
-            "OK   dependencies: frozen installs none; minimum release age 1 day, lowered from "
-            "7: " + "x" * 20,
+            {"minimum_age_days": 1, "minimum_age_reason": "x" * 20},
+            "OK   packages: allowed installers none; minimum age 1 day, lowered from 7: "
+            + "x" * 20,
         ),
     ],
 )
-def test_the_dependencies_line_names_installs_and_the_release_age(
+def test_the_packages_line_names_installers_and_the_minimum_age(
     tmp_path: Path, block: dict[str, object], line: str
 ) -> None:
     # 0196, 0197: one line; a lowered age prints its reason.
-    assert _manifest_lines(tmp_path, {"dependencies": block}, "_dependencies_check") == [line]
+    assert _manifest_lines(tmp_path, {"packages": block}, "_dependencies_check") == [line]
 
 
-def test_a_lowered_release_age_without_a_reason_is_the_manifest_miss(tmp_path: Path) -> None:
+def test_a_lowered_package_age_without_a_reason_is_the_manifest_miss(tmp_path: Path) -> None:
     import daedalus_doctor
 
-    block = {"minimum_release_age_days": 3, "minimum_release_age_reason": "too short"}
-    (tmp_path / "service-manifest.json").write_text(json.dumps({"dependencies": block}))
+    block = {"minimum_age_days": 3, "minimum_age_reason": "too short"}
+    (tmp_path / "service-manifest.json").write_text(json.dumps({"packages": block}))
     ok, line = daedalus_doctor._manifest_check(tmp_path)
     assert not ok and line.startswith("MISS service-manifest.json:") and "(0197)" in line
     assert list(daedalus_doctor._dependencies_check(tmp_path)) == []
@@ -1492,16 +1407,19 @@ def test_the_doctor_lists_the_new_manifest_lines_in_a_full_run(tmp_path: Path) -
     repo = tmp_path / "repo"
     _git_repo(repo)
     manifest = {
-        "stack": {"package_manager": "pnpm", "unit_test_cmd": ["pytest -q", "pnpm vitest run"]},
-        "dev_server": {"url": "http://127.0.0.1:5173/", "check": "the player can move"},
-        "assets": {"roots": ["assets/"], "extensions": [".glb"]},
+        "commands": {"unit_test": ["pytest -q", "pnpm vitest run"]},
+        "local_testing": {"url": "http://127.0.0.1:5173/", "instructions": "the player can move"},
+        "code_review_exemptions": {"folders": ["assets/"], "file_types": [".glb"]},
     }
     (repo / "service-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     result = _run(None, repo, path_env=_bins_with_git(tmp_path), home=tmp_path / "home")
     lines = result.stdout.splitlines()
-    assert "OK   stack: package manager pnpm; commands: 2 unit test, 0 typecheck, 0 lint" in lines
-    assert any(line.startswith("OK   dev server: http://127.0.0.1:5173/;") for line in lines)
-    assert any(line.startswith("OK   assets: 1 root, 1 ending, kept out") for line in lines)
+    assert "OK   commands: 2 unit test, 0 typecheck, 0 lint" in lines
+    assert any(line.startswith("OK   local_testing: http://127.0.0.1:5173/;") for line in lines)
+    assert any(
+        line.startswith("OK   code_review_exemptions: 1 folder, 1 file type, kept out")
+        for line in lines
+    )
 
 
 def test_no_typecheck_line_when_undeclared(tmp_path: Path) -> None:
@@ -1667,7 +1585,7 @@ def _operator_lines(
     data.mkdir(parents=True)
     (data / ".gitignore").write_text("*\n", encoding="utf-8")
     if config == "":
-        config = json.dumps({} if override is None else {"operator": override})
+        config = json.dumps({} if override is None else {"personal_overrides": override})
     if config is not None:
         (data / "config.json").write_text(config)
     result = _run(None, repo, path_env=_bins_with_git(tmp_path, "gitleaks", "gh"), home=home)
@@ -1681,39 +1599,44 @@ def test_operator_file_absent_line_names_the_path(tmp_path: Path) -> None:
     ]
 
 
-def test_operator_file_valid_line_counts_refusals_and_profile_keys(tmp_path: Path) -> None:
+def test_operator_file_valid_line_counts_stops_and_choices(tmp_path: Path) -> None:
     path = tmp_path / "home" / ".claude" / "daedalus" / "operator.json"
-    body = json.dumps({"main_refusals": ["commit_on_main"], "profile": {"dash_ban": True}})
+    body = json.dumps({"hard_stops": ["commit_on_main"], "no_long_dashes": True})
     assert _operator_lines(tmp_path, body) == [
-        f"OK   operator file: {path} (main_refusals 1; profile keys set: dash_ban)"
+        f"OK   operator file: {path} (hard_stops 1; guidance_source claude; "
+        "choices set: no_long_dashes)"
     ]
 
 
 def test_operator_file_malformed_line_is_a_miss_with_next(tmp_path: Path) -> None:
-    (line,) = _operator_lines(tmp_path, '{"profile": {"dash_ban": "yes"}}')
-    assert line.startswith("MISS operator file: ") and "profile.dash_ban" in line
+    (line,) = _operator_lines(tmp_path, '{"no_long_dashes": "yes"}')
+    assert line.startswith("MISS operator file: ") and "no_long_dashes" in line
     assert "Next: " in line
 
 
 def test_operator_file_line_prints_when_config_is_absent(tmp_path: Path) -> None:
     path = tmp_path / "home" / ".claude" / "daedalus" / "operator.json"
     lines = _operator_lines(tmp_path, "{}", config=None)
-    assert lines == [f"OK   operator file: {path} (main_refusals 0; profile keys set: none)"]
+    assert lines == [
+        f"OK   operator file: {path} (hard_stops 0; guidance_source claude; choices set: none)"
+    ]
 
 
 def test_operator_file_line_prints_when_config_is_malformed(tmp_path: Path) -> None:
     path = tmp_path / "home" / ".claude" / "daedalus" / "operator.json"
     lines = _operator_lines(tmp_path, "{}", config="{nope")
-    assert lines == [f"OK   operator file: {path} (main_refusals 0; profile keys set: none)"]
+    assert lines == [
+        f"OK   operator file: {path} (hard_stops 0; guidance_source claude; choices set: none)"
+    ]
 
 
 def test_operator_file_line_prints_with_bad_config_operator_block(tmp_path: Path) -> None:
-    (line,) = _operator_lines(tmp_path, None, {"profile": {"dash_ban": "yes"}})
+    (line,) = _operator_lines(tmp_path, None, {"no_long_dashes": "yes"})
     assert line.startswith("OK   operator file: none at ") and "overrides" not in line
 
 
 def test_operator_file_line_names_repository_overrides(tmp_path: Path) -> None:
-    override = {"main_refusals": [], "profile": {"literacy": "plain"}}
+    override = {"hard_stops": [], "reading_level": "plain"}
     (line,) = _operator_lines(tmp_path, "{}", override)
-    tail = "(main_refusals 0; profile keys set: none); this repository overrides literacy, "
-    assert line.endswith(tail + "main_refusals")
+    tail = "choices set: none); this repository overrides hard_stops, reading_level"
+    assert line.endswith(tail)

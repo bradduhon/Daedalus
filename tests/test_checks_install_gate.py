@@ -32,12 +32,12 @@ CODER_OFF_TABLE = frozenset(
 
 
 def _repo(tmp_path: Path, installs: list[str] | None) -> Path:
-    # 0196: a project root whose manifest lists installs, or carries no dependencies block.
+    # 0196, 0245: a project root whose manifest lists allowed installers, or no packages group.
     repo = tmp_path / "repo"
     repo.mkdir(parents=True)
-    doc: dict[str, Any] = {"manifest_version": 1}
+    doc: dict[str, Any] = {}
     if installs is not None:
-        doc["dependencies"] = {"installs": installs}
+        doc["packages"] = {"allowed_installers": installs}
     (repo / "service-manifest.json").write_text(json.dumps(doc), encoding="utf-8")
     return repo
 
@@ -144,24 +144,31 @@ def test_a_yarn_refusal_names_the_script_form() -> None:
 def test_an_unusable_manifest_enables_no_install(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "service-manifest.json").write_text('{"dependencies": {"installs": ["ruby"]}}')
-    with pytest.raises(ManifestError, match="dependencies.installs"):
+    (repo / "service-manifest.json").write_text('{"packages": {"allowed_installers": ["ruby"]}}')
+    with pytest.raises(ManifestError, match="packages.allowed_installers"):
         load_manifest(repo)
     assert _judge("coder", "npm ci --ignore-scripts", repo) is not None
 
 
 @pytest.mark.parametrize(
     "block",
-    [[], {"installs": "npm"}, {"installs": ["npm", "npm"]}, {"installs": [1]}, {"install": []}],
+    [
+        [],
+        {"allowed_installers": "npm"},
+        {"allowed_installers": ["npm", "npm"]},
+        {"allowed_installers": [1]},
+        {"installs": []},
+    ],
 )
-def test_the_installs_key_refuses_a_bad_shape(block: object, tmp_path: Path) -> None:
-    (tmp_path / "service-manifest.json").write_text(json.dumps({"dependencies": block}))
-    with pytest.raises(ManifestError, match="dependencies"):
+def test_the_installers_key_refuses_a_bad_shape(block: object, tmp_path: Path) -> None:
+    (tmp_path / "service-manifest.json").write_text(json.dumps({"packages": block}))
+    with pytest.raises(ManifestError, match="packages"):
         load_manifest(tmp_path)
 
 
-def test_the_installs_key_reads_in_order(tmp_path: Path) -> None:
-    (tmp_path / "service-manifest.json").write_text('{"dependencies": {"installs": ["go", "npm"]}}')
+def test_the_installers_key_reads_in_order(tmp_path: Path) -> None:
+    body = '{"packages": {"allowed_installers": ["go", "npm"]}}'
+    (tmp_path / "service-manifest.json").write_text(body)
     loaded = load_manifest(tmp_path)
     assert loaded is not None and loaded.dependencies.installs == ("go", "npm")
 

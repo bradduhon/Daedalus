@@ -525,15 +525,13 @@ def test_approved_refuses_a_hand_back_message_that_is_not_text(
 LEDGER = "docs/decisions.md"
 
 
-def _repo_ledger(project_data: Path, repo: Path, path: str = LEDGER) -> None:
-    # spec 3.5: a repo-local ledger, so its commit lands on the integration branch.
-    decl = {
-        "path": path,
-        "format": "markdown-table-row",
-        "id_scheme": "{seq:04d}-{repo}-{type}",
-        "sequence_source": "last-row-id",
-    }
-    (project_data / "config.json").write_text(json.dumps({"ledger": decl}), encoding="utf-8")
+def _repo_ledger(project_data: Path, repo: Path, elsewhere: str | None = None) -> None:
+    # spec 3.5, 0247: a repo-local decisions file, so its commit lands on the integration branch.
+    named = {"docs": {"decisions_filename": "decisions.md"}}
+    (repo / "service-manifest.json").write_text(json.dumps(named), encoding="utf-8")
+    if elsewhere is not None:
+        config = {"local_docs_folder": elsewhere}
+        (project_data / "config.json").write_text(json.dumps(config), encoding="utf-8")
     (repo / "docs").mkdir(exist_ok=True)
 
 
@@ -658,7 +656,7 @@ def test_a_ledger_commit_refuses_when_the_ledger_is_not_in_the_repo(
     project_data: Path, hook_input: Any, repo_cwd: Path
 ) -> None:
     # spec 3.5: a ledger under a Charter outside the repo leaves no commit that may pass.
-    _repo_ledger(project_data, repo_cwd, str(repo_cwd.parent / "charter" / "decisions.md"))
+    _repo_ledger(project_data, repo_cwd, str(repo_cwd.parent / "charter"))
     tip = _judged(repo_cwd)
     _train(hook_input, repo_cwd, f"[VERDICT: APPROVED] tip={tip}")
     _commit(repo_cwd, LEDGER)

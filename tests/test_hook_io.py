@@ -272,7 +272,7 @@ def test_agent_matches_the_jail_normalizer(hook_input: dict[str, object], want: 
 def test_hook_config_reads_the_project_config(tmp_path: Path) -> None:
     data = tmp_path / ".claude" / "daedalus"
     data.mkdir(parents=True)
-    (data / "config.json").write_text('{"charter_root": "/c"}', encoding="utf-8")
+    (data / "config.json").write_text('{"local_docs_folder": "/c"}', encoding="utf-8")
     assert hook_io.hook_config(str(tmp_path)).charter_root == Path("/c")
     (data / "config.json").write_text("{bad", encoding="utf-8")
     with pytest.raises(ConfigError):

@@ -287,7 +287,8 @@ def test_route_of_a_red_rows_file_records_a_fix_pass_and_no_refutation(tmp_path:
 @pytest.mark.usefixtures("fixed")
 def test_route_verified_lists_the_operator_checks(tmp_path: Path) -> None:
     root = _fixture(tmp_path / "repo")
-    manifest = {"dev_server": {"url": "http://localhost:5173", "check": "The scene loads"}}
+    site = {"url": "http://localhost:5173", "instructions": "The scene loads"}
+    manifest = {"local_testing": site}
     (root / "service-manifest.json").write_text(json.dumps(manifest))
     _ok(train_runner.dispatch_unit(root, "U2"))
     _verdict(root, _built(root, "U2"), VERIFIED_REPLY)

@@ -124,7 +124,8 @@ def _parser() -> argparse.ArgumentParser:
     model.add_argument("--repo", type=Path, required=True)
     model.add_argument("--agent", required=True)
     model.add_argument("--override")
-    # 0187: --unit picks the coder's model from coder_models and records it on the unit.
+    # 0187, 0245: --unit picks the coder's model from models.coder, coder_on_plugin_files or
+    # coder_after_rejection, and records it on the unit; models.agents is the fallback.
     model.add_argument("--unit")
     # issue 187: one REFUTED verifier reply recorded on the unit the model command reads.
     refute = sub.add_parser("refuted")
@@ -221,7 +222,8 @@ def _packs(repo: Path, diff: str | None = None) -> Outcome:
     except (ManifestError, OSError) as exc:
         return Outcome(EXIT_STOP, [f"packs: {exc}", PACKS_NEXT])
     problems += [
-        f"pack {ident}: frameworks.packs names {ident}, which is not a pack Daedalus ships"
+        f"pack {ident}: compliance_rules.extra_builtin names {ident}, which is not a pack "
+        "Daedalus ships"
         for ident in unknown
     ]
     if not folders and diff is not None and not problems:

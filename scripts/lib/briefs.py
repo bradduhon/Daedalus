@@ -1,8 +1,8 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 0153, 0157 (12.5): a decision brief's operator text is checked at the manifest literacy level.
+# 0153, 0157 (12.5): a decision brief's operator text is checked at the manifest reading level.
 # brief_problems reads the Question:, Context: and option label text of a brief file's sections;
-# brief_file_problems resolves docs.literacy and reads one brief under the repo's scratch root.
+# brief_file_problems resolves docs.reading_level and reads one brief under the scratch root.
 # 0199, 0200: ask_file_problems checks one brainstorm question's reader text, always at plain.
 from __future__ import annotations
 
@@ -229,7 +229,7 @@ def _ask_fields(text: str) -> list[tuple[str, str]]:
 
 
 def ask_problems(text: str) -> list[str]:
-    # 0199, 0200: plain whatever docs.literacy says; an empty list means the question passes.
+    # 0199, 0200: plain whatever docs.reading_level says; an empty list means the question passes.
     fields = _ask_fields(text)
     problems: list[str] = []
     if not any(where == "Question" for where, _ in fields):
@@ -268,7 +268,7 @@ def ask_file_problems(question: Path) -> list[str]:
 
 
 def brief_file_problems(repo: Path, brief: Path) -> tuple[str, list[str]]:
-    # 0153, 0211: the level from docs.literacy (absent reads standard) and the problem lines.
+    # 0153, 0211: the level from docs.reading_level (absent reads standard) and the problem lines.
     root = os.path.realpath(repo / SCRATCH)
     real = os.path.realpath(brief)
     if os.path.commonpath([root, real]) != root or not os.path.isfile(real):

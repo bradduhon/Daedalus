@@ -1,0 +1,30 @@
+{
+  "local_docs_folder": null,
+  "git_excluded_folders": [
+    {"kind": "path", "path": "<repo_root>/private/"},
+    {"kind": "gitignore", "match": "directories"}
+  ],
+  "coding_rules": [
+    {"folder": "/work/rules"},
+    {"file": "/work/rules/python.md"},
+    {"builtin": "baseline"}
+  ],
+  "personal_overrides": {"reading_level": "plain"},
+  "models": {
+    "agents": {"planner": "sonnet"},
+    "coder": "sonnet",
+    "coder_on_plugin_files": "opus",
+    "coder_after_rejection": "opus",
+    "fable_available": false
+  },
+  "limits": {
+    "parallel_coders": 3,
+    "task_tokens": 4000000,
+    "log_retention_days": 365
+  },
+  "test_readable_folders": ["~/.local/share/pnpm/store"],
+  "policy": {
+    "engine": "conftest",
+    "path": "/work/decisions/policy"
+  }
+}

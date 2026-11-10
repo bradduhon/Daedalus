@@ -208,7 +208,7 @@ def _tf(repo: Path, command: str) -> dict[str, Any]:
 def test_terraform_class_admits_the_two_checks(repo_cwd: Path, command: str) -> None:
     # 0158: validate needs its own switch on.
     manifest = repo_cwd / "service-manifest.json"
-    manifest.write_text(json.dumps({"features": {"terraform_validate": True}}), encoding="utf-8")
+    manifest.write_text(json.dumps({"checks": {"terraform_validate": True}}), encoding="utf-8")
     payload = _tf(repo_cwd, command.format(repo=repo_cwd))
     assert evaluate(READS, payload, *ALLOW) is None
     assert first_deny(payload, Config()) is None
@@ -238,12 +238,12 @@ def test_terraform_class_refuses_every_other_form(repo_cwd: Path, command: str) 
 
 def test_terraform_class_refuses_both_checks_when_the_switch_is_off(repo_cwd: Path) -> None:
     manifest = repo_cwd / "service-manifest.json"
-    manifest.write_text(json.dumps({"features": {"terraform_tools": False}}), encoding="utf-8")
+    manifest.write_text(json.dumps({"checks": {"terraform_format": False}}), encoding="utf-8")
     for command in ("terraform fmt -check", "terraform validate"):
         reason = evaluate(READS, _tf(repo_cwd, command), *ALLOW)
         assert reason is not None and reason.startswith("features.terraform_tools is false")
-    on = {"terraform_tools": True, "terraform_validate": True}
-    manifest.write_text(json.dumps({"features": on}), encoding="utf-8")
+    on = {"terraform_format": True, "terraform_validate": True}
+    manifest.write_text(json.dumps({"checks": on}), encoding="utf-8")
     assert evaluate(READS, _tf(repo_cwd, "terraform validate"), *ALLOW) is None
 
 
@@ -271,7 +271,7 @@ def test_terraform_needs_its_class(repo_cwd: Path) -> None:
 def test_terraform_after_a_cd_is_refused(repo_cwd: Path, command: str) -> None:
     # 0188: the terraform folder is judged against the hook cwd, so no cd may move it first.
     manifest = repo_cwd / "service-manifest.json"
-    manifest.write_text(json.dumps({"features": {"terraform_validate": True}}), encoding="utf-8")
+    manifest.write_text(json.dumps({"checks": {"terraform_validate": True}}), encoding="utf-8")
     (repo_cwd / "infra").mkdir(exist_ok=True)
     reason = evaluate(READS, _tf(repo_cwd, command.format(repo=repo_cwd)), *ALLOW)
     assert reason is not None and "terraform check follows it" in reason, reason

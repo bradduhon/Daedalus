@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 0192: the manifest assets block as a git pathspec tail the judges and the secret scan copy.
+# 0192, 0245: code_review_exemptions (folders, file_types, report_over_bytes) as a git
+# pathspec tail the judges and the secret scan copy.
 # 0128: a file with a source ending is never excluded, by root, by ending or by size.
 from __future__ import annotations
 

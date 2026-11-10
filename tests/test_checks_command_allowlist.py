@@ -212,7 +212,7 @@ class TestRound4Conductor:
 class TestFixWaveLedgerResolution:
     def test_append_ledger_cli_still_allowed(self, tmp_path: Path) -> None:
         repo = _git_init(tmp_path / "repo")
-        (repo / "service-manifest.json").write_text(json.dumps({"ledger": _MANIFEST_LEDGER}))
+        (repo / "service-manifest.json").write_text(json.dumps(_MANIFEST_LEDGER))
         args = "--expected-seq 1 --entry-file docs/.tmp/e.md --repo BO --type PLT"
         hook_input = _b("charter-docs", f"python3 {REPO_ROOT}/scripts/append_ledger.py {args}")
         hook_input["cwd"] = str(repo)
@@ -988,7 +988,7 @@ def _plant_provider(repo: Path) -> Path:
 def _features(repo: Path, block: dict[str, object] | None) -> None:
     if block is not None:
         manifest = repo / "service-manifest.json"
-        manifest.write_text(json.dumps({"features": block}), encoding="utf-8")
+        manifest.write_text(json.dumps({"checks": block}), encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -997,8 +997,8 @@ def _features(repo: Path, block: dict[str, object] | None) -> None:
         None,
         {},
         {"terraform_validate": False},
-        {"terraform_tools": True},
-        {"terraform_tools": None, "terraform_validate": False},
+        {"terraform_format": True},
+        {"terraform_format": None, "terraform_validate": False},
     ],
 )
 def test_terraform_validate_refused_unless_the_switch_is_true(
@@ -1020,7 +1020,7 @@ def test_terraform_validate_admitted_when_the_switch_is_true(repo_cwd: Path) -> 
     module = _plant_provider(repo_cwd)
     for block in (
         {"terraform_validate": True},
-        {"terraform_tools": True, "terraform_validate": True},
+        {"terraform_format": True, "terraform_validate": True},
     ):
         _features(repo_cwd, block)
         for command in ("terraform validate", f"terraform -chdir={module} validate"):
@@ -1030,7 +1030,7 @@ def test_terraform_validate_admitted_when_the_switch_is_true(repo_cwd: Path) -> 
 
 def test_terraform_tools_off_outranks_the_validate_switch(repo_cwd: Path) -> None:
     module = _plant_provider(repo_cwd)
-    _features(repo_cwd, {"terraform_tools": False, "terraform_validate": True})
+    _features(repo_cwd, {"terraform_format": False, "terraform_validate": True})
     for command in ("terraform validate", f"terraform -chdir={module} fmt -check"):
         reason = _tf_call(repo_cwd, command)
         assert reason is not None and reason.startswith("features.terraform_tools is false")

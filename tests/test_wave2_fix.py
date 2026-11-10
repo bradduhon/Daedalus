@@ -37,7 +37,7 @@ from tests.test_docs_stage import (
     _train,
 )
 from tests.test_persona_jails import _bound_writer, _dispatch, _writer, trees
-from tests.test_train_runner import _config, _integration, _state
+from tests.test_train_runner import _integration, _state
 from tests.test_train_state_print import RECORDS, _section, _stop, _text
 
 # 0131: the runner tests' fixtures, a temp HOME, a plugin root and a one-commit repository.
@@ -48,12 +48,12 @@ __all__ = ["trees"]
 
 CODER = "daedalus:coder"
 LEDGER = "docs/decisions.md"
-LEDGER_DECL = {
-    "path": LEDGER,
-    "format": "markdown-table-row",
-    "id_scheme": "{seq:04d}-{repo}-{type}",
-    "sequence_source": "last-row-id",
-}
+# 0247: the manifest names the decisions file in the project's docs folder.
+NAMED = {"docs": {"decisions_filename": "decisions.md"}}
+
+
+def _name_decisions(repo: Path) -> None:
+    (repo / "service-manifest.json").write_text(json.dumps(NAMED), encoding="utf-8")
 
 
 # Requirement 1: the docs stage worktree is <train-id>-docstage everywhere.
@@ -194,7 +194,7 @@ def test_a_docs_path_type_or_mode_change_is_refused(repo: Path, plugin: Path, ch
 
 
 def _ledger(repo: Path, *extra: str) -> str:
-    _config(repo, {"ledger": LEDGER_DECL})
+    _name_decisions(repo)
     return _commit(repo, LEDGER, *extra)
 
 
@@ -286,7 +286,7 @@ def test_a_merge_onto_an_older_first_parent_is_refused(repo: Path, plugin: Path)
 def test_the_no_ff_docs_merge_onto_the_judged_tip_still_passes(repo: Path, plugin: Path) -> None:
     judged = _exempted_security(repo, plugin)
     train = _train(repo)
-    _config(repo, {"ledger": LEDGER_DECL})
+    _name_decisions(repo)
     side = _commit(repo, "docs/howto/README.md")
     _git(repo, "reset", "-q", "--hard", judged)
     merged = _merge(repo, judged, side, "README.md")
@@ -370,14 +370,15 @@ def test_the_yield_table_routes_priorities_rule_yields_to_the_operator() -> None
     assert "put it to the operator as a `then surface` decision brief" in rules
 
 
-# Requirement 9: "priorities": null reads as no block declared.
+# Requirement 9: "run_output_priority": null reads as no group declared (0245).
 
 
 def test_a_null_priorities_block_is_none_declared(tmp_path: Path) -> None:
-    (tmp_path / "service-manifest.json").write_text(json.dumps({"priorities": None}))
+    (tmp_path / "service-manifest.json").write_text(json.dumps({"run_output_priority": None}))
     loaded = load_manifest(tmp_path)
     assert loaded is not None and loaded.priorities is None
-    (tmp_path / "service-manifest.json").write_text(json.dumps({"priorities": "security"}))
+    body = json.dumps({"run_output_priority": "security"})
+    (tmp_path / "service-manifest.json").write_text(body)
     with pytest.raises(ManifestError):
         load_manifest(tmp_path)
 
@@ -400,7 +401,7 @@ def test_the_orchestrator_bash_rules_name_the_new_train_scripts() -> None:
 def test_setup_step_two_covers_the_literacy_line() -> None:
     step = flatten_file(REPO_ROOT / "skills/setup/SKILL.md").split(" 2. ", 1)[1].split(" 3. ", 1)[0]
     assert "Each line names one file" in step
-    assert "`docs.literacy: null; examples: <examples>`" in step
+    assert "`docs.reading_level: null; examples: <examples>`" in step
 
 
 def test_the_verified_line_comment_points_at_the_verifier_contract() -> None:

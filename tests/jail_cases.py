@@ -38,12 +38,8 @@ SEPARATORS = [
 ]
 WORKERS_WITH_SHELL = [a for a in BASH_AGENTS]
 DATA = "/tmp/daedalus-test-data/daedalus-inline"
-_MANIFEST_LEDGER = {
-    "path": "docs/adr.md",
-    "format": "markdown-table-row",
-    "id_scheme": "{seq:04d}",
-    "sequence_source": "last-row-id",
-}
+# 0247: a service manifest that names docs/adr.md as its decisions file.
+_MANIFEST_LEDGER = {"docs": {"decisions_filename": "adr.md"}}
 BUILTIN_REL = [
     "contracts/openapi.yaml",
     "contracts/events/x.schema.json",
@@ -57,9 +53,7 @@ BUILTIN_REL = [
     "Service-Manifest.JSON",
     "CONTRACTS/openapi.yaml",
 ]
-NARROWING = {
-    "jail_narrowing": {"forbidden_paths": ["infra/", "Makefile"], "forbidden_extensions": [".pem"]}
-}
+NARROWING = {"prohibited_writes": {"paths": ["infra/", "Makefile"], "file_types": [".pem"]}}
 # issue 2: conductor commits that reach past the index; each draws R_CONDUCTOR_COMMIT_ALL.
 CONDUCTOR_COMMIT_ALL = [
     "git commit -a",
@@ -180,15 +174,9 @@ def audited_train(repo: Path, train: str) -> None:
 
 
 def _ledger_commit(repo: Path, *paths: str) -> str:
-    # spec 3.5: a repo-local ledger declared in config, then one commit touching the paths.
-    decl = {
-        "path": LEDGER,
-        "format": "markdown-table-row",
-        "id_scheme": "{seq:04d}-{repo}-{type}",
-        "sequence_source": "last-row-id",
-    }
-    config = repo / ".claude" / "daedalus" / "config.json"
-    config.write_text(json.dumps({"ledger": decl}), encoding="utf-8")
+    # spec 3.5, 0247: a decisions file the manifest names, then one commit touching the paths.
+    named = {"docs": {"decisions_filename": LEDGER.rsplit("/", 1)[1]}}
+    (repo / "service-manifest.json").write_text(json.dumps(named), encoding="utf-8")
     for name in paths:
         target = repo / name
         target.parent.mkdir(parents=True, exist_ok=True)

@@ -37,6 +37,11 @@ FILES: tuple[Entry, ...] = (
     ),
     Entry(
         "<ledger file>",
+        "scripts/append_ledger.py:_create_named",
+        "the first decision is appended to a named decisions file that does not exist yet",
+    ),
+    Entry(
+        "<ledger file>",
         "scripts/append_ledger.py:_append",
         "an approved Build Train appends one row per ruling",
     ),

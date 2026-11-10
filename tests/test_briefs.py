@@ -252,7 +252,8 @@ def _repo(tmp_path: Path, literacy: object = None, manifest: bool = True) -> Pat
     (repo / "docs" / ".tmp" / "daedalus" / "t" / "decisions").mkdir(parents=True)
     (repo / ".claude" / "daedalus").mkdir(parents=True)
     if manifest:
-        body: dict[str, object] = {} if literacy is None else {"docs": {"literacy": literacy}}
+        docs = {"reading_level": literacy}
+        body: dict[str, object] = {} if literacy is None else {"docs": docs}
         (repo / "service-manifest.json").write_text(json.dumps(body), encoding="utf-8")
     return repo
 
@@ -310,7 +311,7 @@ def test_brief_check_command(
     bad = _write(repo, _brief("Should lock_sha move?", LONGER))
     assert daedalus_train.main(["brief-check", "--repo", str(repo), "--brief", str(bad)]) == 1
     out = capsys.readouterr().out.splitlines()
-    # 0211: an absent docs.literacy checks at standard.
+    # 0211: an absent docs.reading_level checks at standard.
     assert out == [
         "brief: Question carries the snake_case token lock_sha",
         f"brief: Context sentence has 27 words, over 22 at standard: {LONGER}",
@@ -330,7 +331,7 @@ def test_brief_check_stops_on_a_bad_manifest(
     monkeypatch.chdir(repo)
     good = _write(repo, GOOD)
     assert daedalus_train.main(["brief-check", "--repo", str(repo), "--brief", str(good)]) == 1
-    assert "docs.literacy" in capsys.readouterr().out
+    assert "docs.reading_level" in capsys.readouterr().out
 
 
 # 0199, 0200: one brainstorm question's reader text; the quoted notes sentence is the operator's.

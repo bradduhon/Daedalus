@@ -173,7 +173,7 @@ def reply_path(brief: Path) -> Path:
 
 
 def _definition_file(root: Path, plugin_root: Path, name: str) -> tuple[Path, Origin]:
-    # issue 52, 0073: the manifest's trains_dir is searched before the plugin's own trains folder.
+    # issue 52, 0245: the manifest's run_definitions_folder is searched before the plugin's own.
     loaded = manifest.load(root)
     folder = loaded.trains_dir if loaded is not None else None
     if folder is not None:
@@ -221,10 +221,10 @@ def _stages(defn: Definition) -> list[dict[str, object]]:
 
 
 def _feature_on(state: dict[str, object], key: str) -> bool:
-    # 0069: an absent ledger switch runs the ledger stages only when start found a ledger.
+    # 0247: the ledger stages run only when start resolved a named decisions file.
     value = _obj(state, "features").get(key)
     if key == "ledger" and value is None:
-        return _text(state, "ledger_line") not in ("", workspace.LEDGER_NONE, workspace.LEDGER_OFF)
+        return _text(state, "ledger_line") not in ("", workspace.LEDGER_NONE)
     return bool(value)
 
 
@@ -1112,8 +1112,8 @@ def start(cwd: Path, train: str, output: str | None, plugin_root: Path = PLUGIN_
             EXIT_STOP,
             [
                 f"train {defn.name} runs only in {' or '.join(scopes)} scope, and {root} is "
-                f"{kind} scope. Next: run it in a {scopes[0]} project, or set the scope key in "
-                "the features object of service-manifest.json."
+                f"{kind} scope. Next: run it in a {scopes[0]} project, a git repository for "
+                "repository scope and a plain folder for folder scope."
             ],
         )
     try:
@@ -1126,10 +1126,9 @@ def start(cwd: Path, train: str, output: str | None, plugin_root: Path = PLUGIN_
                 return Outcome(EXIT_ASK, [line.format(docs=docs) for line in OUTPUT_QUESTION])
             repo = root
             lines = workspace.begin_folder(root, features.ledger)
-    except workspace.LedgerQuestion as exc:
-        return Outcome(EXIT_ASK, str(exc).splitlines())
     except workspace.WorkspaceError as exc:
         return Outcome(EXIT_STOP, [str(exc)])
+    # 0072, 0245: config.json limits.parallel_coders caps the coders a stage runs at once.
     return _record_start(repo, defn, kind, features, output, config.max_concurrent_builders, lines)
 
 

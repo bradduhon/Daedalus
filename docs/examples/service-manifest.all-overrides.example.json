@@ -1,0 +1,65 @@
+{
+  "commands": {
+    "unit_test": ["python3 -m pytest -q", "pnpm vitest run"],
+    "typecheck": ["python3 -m mypy src"],
+    "lint": ["python3 -m ruff check ."]
+  },
+  "docs": {
+    "folder": "docs",
+    "decisions_filename": "decisions.md",
+    "reading_level": "plain",
+    "git_branch": "main"
+  },
+  "checks": {
+    "secret_scan_on_push": true,
+    "online_advisory_lookup": true,
+    "terraform_format": true,
+    "terraform_validate": true,
+    "release_banned_terms_file": "docs/banned-terms.txt"
+  },
+  "prohibited_writes": {
+    "paths": ["infra/", "scripts/release.sh"],
+    "file_types": [".pem", ".tfstate"]
+  },
+  "code_review_exemptions": {
+    "folders": ["assets/"],
+    "file_types": [".glb", ".png"],
+    "report_over_bytes": 1048576
+  },
+  "packages": {
+    "allowed_installers": ["npm", "python"],
+    "minimum_age_days": 14,
+    "minimum_age_reason": "the internal registry mirror keeps its own quarantine"
+  },
+  "run_output_priority": {
+    "order": ["security", "trust", "operations", "cost"],
+    "rules": [
+      {
+        "between": ["security", "cost"],
+        "reasons": ["certification"],
+        "outcome": "ask_me",
+        "note": "a control a certification asks for wins over its running cost"
+      }
+    ],
+    "principles": [
+      {"name": "P1", "priority": "security", "text": "Each tenant keeps its own key."}
+    ],
+    "agent_order": {
+      "coder": ["security", "operations", "trust", "cost"]
+    }
+  },
+  "local_testing": {
+    "url": "http://localhost:5173",
+    "instructions": "The home page loads and the sign-in form shows."
+  },
+  "compliance_rules": {
+    "folder": "compliance/rules",
+    "use_builtin": true,
+    "extra_builtin": ["cost-tier"]
+  },
+  "run_definitions_folder": "runs",
+  "entrypoints": {
+    "handlers": "src/handlers/",
+    "infra": "infra/"
+  }
+}

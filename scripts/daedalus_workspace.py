@@ -10,7 +10,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.project_root import repo_refusal  # noqa: E402
 from lib.workspace import (  # noqa: E402
-    LedgerQuestion,
     WorkspaceError,
     begin,
     begin_folder_run,
@@ -34,7 +33,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Daedalus worktrees and train state: create, remove, refresh, mark, unmark, "
         "begin, lock, stop, finish, merge, resume, release, pr-body. Exit 0 done, 1 stopped with "
-        "a Next line, 3 ledger question."
+        "a Next line."
     )
     sub = parser.add_subparsers(dest="action", required=True)
     make = sub.add_parser("create")
@@ -130,10 +129,6 @@ def main(argv: list[str]) -> int:
             print("\n".join(release(repo, args.merge_sha, notes, args.base or "main")))
         elif args.action == "pr-body":
             print("\n".join(pr_body(repo, args.train)))
-    except LedgerQuestion as exc:
-        # 0004: exit 3 hands the ledger question to the operator; nothing was written.
-        print(exc)
-        return 3
     except WorkspaceError as exc:
         print(f"daedalus-workspace: {exc}", file=sys.stderr)
         return 1

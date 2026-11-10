@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import atomic, settings_edit  # noqa: E402
 from lib.audit import DataDirError, check_project_data_dir, ensure_project_data_dir  # noqa: E402
 from lib.config import ConfigError, parse_config  # noqa: E402
-from lib.ledger import LedgerError, check_declared, manifest_ledger  # noqa: E402
+from lib.ledger import LedgerError  # noqa: E402
 from lib.manifest import MANIFEST_NAME, ManifestError  # noqa: E402
 from lib.manifest import parse as parse_manifest  # noqa: E402
 from lib.operator_file import MAX_BYTES as OPERATOR_MAX_BYTES  # noqa: E402
@@ -75,23 +75,23 @@ class Marker:
 # 0242: the marker files the stack proposals read; no command is run to detect anything.
 STACK_MARKERS: tuple[Marker, ...] = (
     Marker(
-        "stack.unit_test_cmd",
+        "commands.unit_test",
         "pyproject.toml",
         ("tool", "pytest", "ini_options"),
         "python3 -m pytest -q",
     ),
-    Marker("stack.typecheck_cmd", "pyproject.toml", ("tool", "mypy"), "python3 -m mypy ."),
-    Marker("stack.lint_cmd", "pyproject.toml", ("tool", "ruff"), "python3 -m ruff check ."),
-    Marker("stack.unit_test_cmd", "package.json", ("scripts", "test"), "{pm} test"),
-    Marker("stack.typecheck_cmd", "package.json", ("scripts", "typecheck"), "{pm} run typecheck"),
-    Marker("stack.lint_cmd", "package.json", ("scripts", "lint"), "{pm} run lint"),
-    Marker("stack.unit_test_cmd", "go.mod", (), "go test ./..."),
-    Marker("stack.lint_cmd", "go.mod", (), "go vet ./..."),
-    Marker("stack.unit_test_cmd", "Cargo.toml", (), "cargo test"),
-    Marker("stack.typecheck_cmd", "Cargo.toml", (), "cargo check"),
-    Marker("stack.lint_cmd", "Cargo.toml", (), "cargo clippy"),
+    Marker("commands.typecheck", "pyproject.toml", ("tool", "mypy"), "python3 -m mypy ."),
+    Marker("commands.lint", "pyproject.toml", ("tool", "ruff"), "python3 -m ruff check ."),
+    Marker("commands.unit_test", "package.json", ("scripts", "test"), "{pm} test"),
+    Marker("commands.typecheck", "package.json", ("scripts", "typecheck"), "{pm} run typecheck"),
+    Marker("commands.lint", "package.json", ("scripts", "lint"), "{pm} run lint"),
+    Marker("commands.unit_test", "go.mod", (), "go test ./..."),
+    Marker("commands.lint", "go.mod", (), "go vet ./..."),
+    Marker("commands.unit_test", "Cargo.toml", (), "cargo test"),
+    Marker("commands.typecheck", "Cargo.toml", (), "cargo check"),
+    Marker("commands.lint", "Cargo.toml", (), "cargo clippy"),
 )
-# 0242: the lockfile that names the package manager, first match wins.
+# 0242, 0245: the lockfile that picks the runner in a package.json proposal, first match wins.
 LOCKFILES: tuple[tuple[str, str], ...] = (
     ("pnpm-lock.yaml", "pnpm"),
     ("yarn.lock", "yarn"),
@@ -171,7 +171,7 @@ def setup(repo: Path) -> int:
         _report(manifest, written)
         if written:
             # 0134: JSON holds no comments, so the literacy examples are printed beside the file.
-            print(f"docs.literacy: null; examples: {', '.join(LITERACY_EXAMPLES)}")
+            print(f"docs.reading_level: null; examples: {', '.join(LITERACY_EXAMPLES)}")
         config = data / CONFIG_NAME
         if os.path.lexists(config):
             _report(config, False)
@@ -212,16 +212,11 @@ def _path(form: str, root: Path) -> Path:
 
 
 def _check(form: str, doc: object, path: Path) -> None:
-    # 0242: each file's own readers judge the whole document; their message is shown as it is.
+    # 0242: each file's own reader judges the whole document; its message is shown as it is.
     if form == "manifest":
         parse_manifest(doc, path)
-        declared = manifest_ledger(doc, path)
-        if declared is not None:
-            check_declared(declared, str(path))
     elif form == "config":
-        config = parse_config(doc, path)
-        if config.ledger is not None:
-            check_declared(config.ledger, str(path))
+        parse_config(doc, path)
     else:
         validate_operator(doc, str(path))
 
@@ -437,8 +432,6 @@ def detect(root: Path) -> dict[str, dict[str, object]]:
         sources.setdefault(marker.key, []).append(" ".join((marker.file, *marker.section)))
     for key, listed in commands.items():
         found[key] = {"value": listed[0] if len(listed) == 1 else listed, "from": sources[key]}
-    if manager is not None:
-        found["stack.package_manager"] = {"value": manager[0], "from": [manager[1]]}
     return found
 
 
@@ -485,22 +478,17 @@ def moot(root: Path) -> dict[str, str]:
     # 0242: a question the repository already answers is skipped, with the reason shown.
     if _terraform_files(root) is False:
         why = "the project holds no Terraform files, so the Terraform tools are not asked"
-        return {"features.terraform_tools": why, "features.terraform_validate": why}
+        return {"checks.terraform_format": why, "checks.terraform_validate": why}
     return {}
 
 
 def _defaults(form: str) -> dict[str, object]:
-    # 0242: setup's off values, plus the reader defaults of keys the starter leaves out.
+    # 0242, 0245: the starter values; an override left out reads as absent, its reader default.
     if form == "operator":
         return starter_operator()
     if form == "config":
         return starter_config()
-    doc = starter_manifest()
-    features = doc["features"]
-    if isinstance(features, dict):
-        features["terraform_validate"] = False
-    doc["frameworks"] = {"pack_dir": None, "default_packs": True, "packs": []}
-    return doc
+    return starter_manifest()
 
 
 def _prefix(key: str) -> tuple[str, ...]:
@@ -524,6 +512,7 @@ def _key_entry(
         "key": key,
         "group": group,
         "day_one": day_one,
+        "override": row.override,
         "active": bool(row.readers),
         "settable": _addressable(key),
         "governs": row.governs,

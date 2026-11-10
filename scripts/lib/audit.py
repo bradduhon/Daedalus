@@ -642,6 +642,7 @@ def rotate_logs(cwd: str, current: Path) -> list[str]:
     try:
         from lib.config import load_config
 
+        # 0245: the config's limits.log_retention_days; None keeps every log.
         days = load_config(cwd=cwd).audit_retention_days
         if days is None:
             return []

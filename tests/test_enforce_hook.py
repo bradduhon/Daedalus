@@ -555,10 +555,10 @@ def test_config_in_project_data_dir_is_loaded(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
     _in_train(project_data)
-    (project_data / "config.json").write_text('{"ledger": {"path": "/x"}}')
+    (project_data / "config.json").write_text('{"limits": {"parallel_coders": 0}}')
     result = run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "ls"}))
     assert result.returncode == 0, result.stderr
-    assert "config.json is missing ledger.format" in main_warning(result.stdout)
+    assert "limits.parallel_coders must be a whole number" in main_warning(result.stdout)
 
 
 def _git_commit_all(repo: Path) -> None:

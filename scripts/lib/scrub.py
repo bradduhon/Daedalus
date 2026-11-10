@@ -13,7 +13,7 @@ class ScrubError(RuntimeError):
 
 
 def declared_terms(repo: Path) -> list[str] | None:
-    # 0069: None when no scrub_file is declared; a declared but unreadable file fails closed.
+    # 0069, 0245: None when no checks.release_banned_terms_file is set; an unreadable one fails.
     try:
         rel = manifest.features(repo).scrub_file
     except manifest.ManifestError as exc:

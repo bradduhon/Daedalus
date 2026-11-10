@@ -142,8 +142,8 @@ def test_a_hunt_form_beside_a_declared_or_install_row_is_refused(
 ) -> None:
     # 228 S3c: the manifest declares the command and enables every install ecosystem.
     doc = {
-        "stack": {"unit_test_cmd": "bash scripts/test.sh"},
-        "dependencies": {"installs": ["npm", "python", "cargo", "go"]},
+        "commands": {"unit_test": "bash scripts/test.sh"},
+        "packages": {"allowed_installers": ["npm", "python", "cargo", "go"]},
     }
     repo, wt = _narrowed_repo(tmp_path, json.dumps(doc))
     assert decide(_cwd(_b("coder", "bash scripts/test.sh"), repo), CFG).allow

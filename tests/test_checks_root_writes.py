@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from lib import jail
-from lib.config import Config, LedgerDecl
+from lib.config import Config
 
 from tests.conftest import CFG, CWD, write_folder_run, write_train_marker
 from tests.hook_chain import (
@@ -21,6 +21,8 @@ from tests.hook_chain import (
 )
 from tests.jail_cases import _MANIFEST_LEDGER, _git_init
 from tests.payloads import _b, _w, _wr
+
+NAMED = {"decisions_filename": "decisions.md"}
 
 pytestmark = pytest.mark.usefixtures("jail_fakes")
 HOOK = "root_writes"
@@ -52,14 +54,14 @@ class TestFixWaveLedgerResolution:
     @pytest.mark.parametrize("tool", ["Write", "Edit"])
     def test_manifest_ledger_blocked(self, tmp_path: Path, tool: str) -> None:
         repo = _git_init(tmp_path / "repo")
-        manifest = {"ledger": _MANIFEST_LEDGER}
-        (repo / "service-manifest.json").write_text(json.dumps(manifest))
+        (repo / "service-manifest.json").write_text(json.dumps(_MANIFEST_LEDGER))
         d = decide(_wr(repo, repo / "docs" / "adr.md", tool), Config())
         assert not d.allow and d.reason is not None and "append_ledger.py" in d.reason
         assert decide(_wr(repo, repo / "docs" / "notes.md", tool), Config()).allow
 
     @pytest.mark.parametrize("tool", ["Write", "Edit"])
     def test_probed_ledger_blocked(self, tmp_path: Path, tool: str) -> None:
+        # 0247: the jail still guards an unnamed docs/decisions.md by name; it fails safe.
         repo = _git_init(tmp_path / "repo")
         (repo / "docs").mkdir()
         (repo / "docs" / "decisions.md").write_text("| Id | Date |\n|---|---|\n")
@@ -67,17 +69,24 @@ class TestFixWaveLedgerResolution:
         assert not d.allow and d.reason is not None and "append_ledger.py" in d.reason
 
     def test_default_ledger_protected_beside_a_declared_one(self, tmp_path: Path) -> None:
+        # 0247: a named file is protected before it exists; the first append creates it.
         repo = _git_init(tmp_path / "repo")
         (repo / "docs").mkdir()
         (repo / "docs" / "decisions.md").write_text("| Id | Date |\n|---|---|\n")
-        cfg = Config(ledger=LedgerDecl(repo / "LEDGER.md", "heading-entry", "{seq}", "last-row-id"))
-        assert not decide(_wr(repo, repo / "docs" / "decisions.md"), cfg).allow
-        assert not decide(_wr(repo, repo / "LEDGER.md"), cfg).allow
+        manifest = {"docs": {"folder": "notes", "decisions_filename": "log.md"}}
+        (repo / "service-manifest.json").write_text(json.dumps(manifest))
+        assert not decide(_wr(repo, repo / "docs" / "decisions.md"), Config()).allow
+        assert not decide(_wr(repo, repo / "notes" / "log.md"), Config()).allow
 
     def test_config_ledger_still_blocked(self, tmp_path: Path) -> None:
+        # 0245: a decisions file in the local docs folder the config names is blocked.
         repo = _git_init(tmp_path / "repo")
-        decl = LedgerDecl(repo / "docs" / "log.md", "markdown-table-row", "{seq}", "last-row-id")
-        assert not decide(_wr(repo, repo / "docs" / "log.md"), Config(ledger=decl)).allow
+        (repo / "service-manifest.json").write_text(
+            json.dumps({"docs": {"decisions_filename": "log.md"}})
+        )
+        elsewhere = (tmp_path / "docs-elsewhere").resolve()
+        cfg = Config(charter_root=elsewhere)
+        assert not decide(_wr(repo, elsewhere / "log.md"), cfg).allow
 
     def test_no_ledger_nothing_protected(self, tmp_path: Path) -> None:
         repo = _git_init(tmp_path / "repo")
@@ -88,6 +97,7 @@ class TestFixWaveLedgerResolution:
         repo = _git_init(tmp_path / "repo")
         (repo / "docs" / ".tmp").mkdir(parents=True)
         (repo / "docs" / "decisions.md").write_text("| Id | Date |\n|---|---|\n")
+        (repo / "service-manifest.json").write_text(json.dumps({"docs": NAMED}))
         return repo
 
     def test_case_variant_spelling_blocked(self, tmp_path: Path) -> None:

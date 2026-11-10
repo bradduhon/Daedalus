@@ -200,7 +200,7 @@ def test_table_with_a_config_prints_the_effective_model() -> None:
 
 
 def test_catalog_cli_table_reads_the_repo_config(repo_cwd: Path, project_data: Path) -> None:
-    doc = {"agent_models": {"planner": "haiku"}}
+    doc = {"models": {"agents": {"planner": "haiku"}}}
     (project_data / "config.json").write_text(json.dumps(doc), encoding="utf-8")
     script = str(SCRIPTS_DIR / "catalog.py")
     argv = [sys.executable, script, "table", "--repo", str(repo_cwd)]
@@ -211,12 +211,13 @@ def test_catalog_cli_table_reads_the_repo_config(repo_cwd: Path, project_data: P
 
 
 def test_catalog_cli_table_reports_a_bad_config(repo_cwd: Path, project_data: Path) -> None:
-    (project_data / "config.json").write_text('{"agent_models": {"x": "opus"}}', encoding="utf-8")
+    body = '{"models": {"agents": {"x": "opus"}}}'
+    (project_data / "config.json").write_text(body, encoding="utf-8")
     script = str(SCRIPTS_DIR / "catalog.py")
     argv = [sys.executable, script, "table", "--repo", str(repo_cwd)]
     done = subprocess.run(argv, capture_output=True, text=True, check=False)
     assert done.returncode == 1 and done.stdout == ""
-    assert "agent_models" in done.stderr and "Next: " in done.stderr
+    assert "models.agents" in done.stderr and "Next: " in done.stderr
 
 
 def test_catalog_cli_prints_the_table() -> None:

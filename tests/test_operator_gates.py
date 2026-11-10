@@ -133,7 +133,7 @@ def test_the_round_budget_is_an_unknown_config_key(tmp_path: Path, value: object
         load_config(path=path)
     text = str(info.value)
     assert f"{path} has unknown keys ['audit_round_budget']" in text and "Next: " in text
-    path.write_text(json.dumps({"max_concurrent_builders": 2}), encoding="utf-8")
+    path.write_text(json.dumps({"limits": {"parallel_coders": 2}}), encoding="utf-8")
     assert load_config(path=path).max_concurrent_builders == 2
 
 

@@ -28,33 +28,31 @@ from tests.test_train_state_print import NOTES, STATE, TRAIN, _section
 
 AGENTS = REPO_ROOT / "agents"
 BLOCK: dict[str, Any] = {
-    "drivers": ["security", "trust", "ops", "cost"],
+    "order": ["security", "trust", "operations", "cost"],
     "rules": [
         {
-            "when": {"conflict": ["security", "cost"], "reason": ["certification", "framework"]},
-            "then": "security",
+            "between": ["security", "cost"],
+            "reasons": ["certification", "framework"],
+            "outcome": "security",
             "note": "a control a certification asks for wins over its running cost",
         },
         {
-            "when": {"conflict": ["security", "cost"], "reason": ["shape", "ownership"]},
-            "then": "surface",
+            "between": ["security", "cost"],
+            "reasons": ["shape", "ownership"],
+            "outcome": "ask_me",
             "note": "separation for its own sake is the operator's call when it costs money",
         },
     ],
     "principles": [
-        {
-            "id": "P1",
-            "driver": "security",
-            "text": "Each tenant keeps its own key.",
-            "source": "docs/d.md",
-        }
+        {"name": "P1", "priority": "security", "text": "Each tenant keeps its own key."}
     ],
-    "agents": {"coder": {"drivers": ["cost", "security", "ops", "trust"]}},
+    "agent_order": {"coder": ["cost", "security", "operations", "trust"]},
 }
 
 
 def _write(repo: Path, block: object) -> None:
-    (repo / "service-manifest.json").write_text(json.dumps({"priorities": block}), "utf-8")
+    body = json.dumps({"run_output_priority": block})
+    (repo / "service-manifest.json").write_text(body, "utf-8")
 
 
 def _edited(path: str, value: object) -> dict[str, Any]:
@@ -71,12 +69,14 @@ def _edited(path: str, value: object) -> dict[str, Any]:
 
 
 _DROP = object()
+WORDS = ["security", "trust", "operations", "cost"]
 
 
 # Requirement 1: the reader.
 
 
 def test_reader_reads_the_f2_example(tmp_path: Path) -> None:
+    # 0245: the file's words translate to the internal drivers; ask_me is the surface outcome.
     _write(tmp_path, BLOCK)
     loaded = load_manifest(tmp_path)
     assert loaded is not None and loaded.priorities == Priorities(
@@ -92,7 +92,7 @@ def test_reader_reads_the_f2_example(tmp_path: Path) -> None:
                 ("security", "cost"), ("shape", "ownership"), "surface", BLOCK["rules"][1]["note"]
             ),
         ),
-        (Principle("P1", "security", "Each tenant keeps its own key.", "docs/d.md"),),
+        (Principle("P1", "security", "Each tenant keeps its own key."),),
         (("coder", ("cost", "security", "ops", "trust")),),
     )
     assert loaded.priorities.ranking("coder")[0] == "cost"
@@ -109,47 +109,38 @@ def test_absent_block_is_none_declared(tmp_path: Path) -> None:
     ("block", "row", "needle"),
     [
         ("security", "", "must be an object"),
-        ({"rules": []}, "", "lacks drivers"),
+        ({"rules": []}, "", "lacks order"),
         ({**BLOCK, "weights": {}}, "", "unknown keys"),
+        ({**BLOCK, "drivers": WORDS}, "", "unknown keys"),
+        (_edited("order", ["security", "security", "operations", "cost"]), "order", "repeats"),
+        (_edited("order", ["security", "trust", "operations"]), "order", "each of"),
+        (_edited("order", ["security", "trust", "ops", "cost"]), "order", "each of"),
+        (_edited("rules/0/reasons", ["certifcation"]), "rules[].reasons", "outside the reason"),
+        (_edited("rules/0/reasons", []), "rules[].reasons", "one or more"),
         (
-            _edited("drivers", ["security", "security", "ops", "cost"]),
-            "drivers",
-            "repeats the driver",
+            _edited("rules/0/between", ["security", "security"]),
+            "rules[].between",
+            "two different",
         ),
-        (_edited("drivers", ["security", "trust", "ops"]), "drivers", "each of"),
-        (_edited("drivers", ["security", "trust", "ops", "speed"]), "drivers", "each of"),
-        (
-            _edited("rules/0/when/reason", ["certifcation"]),
-            "rules[].when.reason",
-            "outside the reason",
-        ),
-        (_edited("rules/0/when/reason", []), "rules[].when.reason", "one or more"),
-        (
-            _edited("rules/0/when/conflict", ["security", "security"]),
-            "rules[].when.conflict",
-            "two distinct",
-        ),
-        (_edited("rules/0/then", "always"), "rules[].then", "or 'surface'"),
+        (_edited("rules/0/outcome", "always"), "rules[].outcome", "or 'ask_me'"),
+        (_edited("rules/0/outcome", "surface"), "rules[].outcome", "or 'ask_me'"),
         (_edited("rules/0/note", ""), "rules[].note", "1 to 200"),
         (_edited("rules/0/note", "x" * 201), "rules[].note", "1 to 200"),
-        (_edited("rules/0/note", _DROP), "rules[].then", "lacks note"),
-        (_edited("rules", [BLOCK["rules"][0]] * 33), "rules[].then", "at most 32"),
-        (_edited("principles/0/id", "p1"), "principles[].id", "P followed by digits"),
-        (_edited("principles", [BLOCK["principles"][0]] * 2), "principles[].id", "unique"),
-        (_edited("principles/0/driver", "speed"), "principles[].driver", "a driver"),
+        (_edited("rules/0/note", _DROP), "rules[].outcome", "lacks note"),
+        (_edited("rules/0/then", "security"), "rules[].outcome", "unknown keys"),
+        (_edited("rules", [BLOCK["rules"][0]] * 33), "rules[].outcome", "at most 32"),
+        (_edited("principles/0/name", "p1"), "principles[].name", "P followed by digits"),
+        (_edited("principles", [BLOCK["principles"][0]] * 2), "principles[].name", "unique"),
+        (_edited("principles/0/priority", "speed"), "principles[].priority", "one of"),
         (_edited("principles/0/text", "x" * 301), "principles[].text", "1 to 300"),
-        (_edited("principles/0/source", "/etc/x"), "principles[].source", "repo-relative"),
+        (_edited("principles/0/source", "docs/d.md"), "principles[].name", "unknown keys"),
+        (_edited("agent_order", {"auditor": WORDS}), "agent_order.<name>", "no project overrides"),
         (
-            _edited("agents", {"auditor": {"drivers": DRIVERS}}),
-            "agents.<name>.drivers",
-            "no project overrides",
-        ),
-        (
-            _edited("agents", {"ghost": {"drivers": list(DRIVERS)}}),
-            "agents.<name>.drivers",
+            _edited("agent_order", {"ghost": WORDS}),
+            "agent_order.<name>",
             "not a Daedalus agent",
         ),
-        (_edited("agents/coder/drivers", ["cost"]), "agents.<name>.drivers", "each of"),
+        (_edited("agent_order/coder", ["cost"]), "agent_order.<name>", "each of"),
     ],
 )
 def test_reader_refuses_each_malformed_block(
@@ -164,7 +155,7 @@ def test_reader_refuses_each_malformed_block(
 
 
 def test_every_reason_word_is_accepted(tmp_path: Path) -> None:
-    _write(tmp_path, _edited("rules/0/when/reason", list(REASONS)))
+    _write(tmp_path, _edited("rules/0/reasons", list(REASONS)))
     loaded = load_manifest(tmp_path)
     assert loaded is not None and loaded.priorities is not None
     assert loaded.priorities.rules[0].reason == REASONS
@@ -173,23 +164,23 @@ def test_every_reason_word_is_accepted(tmp_path: Path) -> None:
 # Requirement 2: key reference rows and the starter manifest.
 
 
-def test_one_key_reference_row_per_field_and_no_starter_key() -> None:
-    keys = [k for k in manifest_keys() if k.startswith("priorities.")]
+def test_one_key_reference_row_per_field() -> None:
+    keys = [k for k in manifest_keys() if k.startswith("run_output_priority.")]
     assert keys == [
-        "priorities.drivers",
-        "priorities.rules[].when.conflict",
-        "priorities.rules[].when.reason",
-        "priorities.rules[].then",
-        "priorities.rules[].note",
-        "priorities.principles[].id",
-        "priorities.principles[].driver",
-        "priorities.principles[].text",
-        "priorities.principles[].source",
-        "priorities.agents.<name>.drivers",
+        "run_output_priority.order",
+        "run_output_priority.rules[].between",
+        "run_output_priority.rules[].reasons",
+        "run_output_priority.rules[].outcome",
+        "run_output_priority.rules[].note",
+        "run_output_priority.principles[].name",
+        "run_output_priority.principles[].priority",
+        "run_output_priority.principles[].text",
+        "run_output_priority.agent_order.<name>",
     ]
     assert all((MANIFEST_FILE, key) in KEY_ROWS for key in keys)
-    assert manifest_keys().index("priorities.drivers") == manifest_keys().index("docs.literacy") + 1
-    assert "priorities" not in starter_manifest()
+    assert KEY_ROWS[(MANIFEST_FILE, "run_output_priority.agent_order.<name>")].override
+    # 0245: the starter writes the group as null; the operator fills it in setup.
+    assert starter_manifest()["run_output_priority"] is None
 
 
 # Requirement 3: the doctor line.
@@ -203,16 +194,17 @@ def _doctor_lines(repo: Path) -> list[str]:
 
 def test_doctor_prints_the_ranking_and_rule_count(tmp_path: Path) -> None:
     _write(tmp_path, BLOCK)
-    assert _doctor_lines(tmp_path) == ["OK   priorities: security > trust > ops > cost, 2 rules"]
+    want = ["OK   run_output_priority: security > trust > operations > cost, 2 rules"]
+    assert _doctor_lines(tmp_path) == want
     (tmp_path / "service-manifest.json").write_text("{}", encoding="utf-8")
-    assert _doctor_lines(tmp_path) == ["OK   priorities: none declared"]
+    assert _doctor_lines(tmp_path) == ["OK   run_output_priority: none declared"]
 
 
 def test_doctor_names_the_row_a_malformed_block_broke(tmp_path: Path) -> None:
-    _write(tmp_path, _edited("rules/1/when/reason", ["speed"]))
+    _write(tmp_path, _edited("rules/1/reasons", ["speed"]))
     [line] = _doctor_lines(tmp_path)
-    assert line.startswith("MISS priorities: the block breaks key reference row ")
-    assert "priorities.rules[].when.reason" in line and "Next:" in line
+    assert line.startswith("MISS run_output_priority: the group breaks key reference row ")
+    assert "run_output_priority.rules[].reasons" in line and "Next:" in line
 
 
 # Requirement 4: choice fields.

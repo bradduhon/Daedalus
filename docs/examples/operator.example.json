@@ -1,7 +1,7 @@
 {
-  "main_refusals": ["commit_on_main", "credential_read"],
-  "profile": {
-    "literacy": "plain",
-    "dash_ban": true
-  }
+  "hard_stops": [],
+  "reading_level": null,
+  "no_long_dashes": null,
+  "guidance_source": "claude",
+  "script_language": null
 }

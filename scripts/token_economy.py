@@ -192,7 +192,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     where = report.add_mutually_exclusive_group()
     where.add_argument("--out")
     where.add_argument("--save", action="store_true")
-    # 0209: exit 1 when a unit is over the unit_token_budget of config.json.
+    # 0209, 0245: exit 1 when a unit is over the limits.task_tokens of config.json.
     report.add_argument("--gate", action="store_true")
     history = sub.add_parser("history", allow_abbrev=False)
     for each in (report, history):
@@ -740,7 +740,7 @@ LEGEND = (
     "started outside any run; its rows carry the agent id. The model cell is the model the "
     "agent's transcript names, - on a total or mean row. A refuted line counts, per coder model, "
     "the units a verifier refuted while a coder on that model held them. With "
-    "unit_token_budget set, an over budget line names each unit whose coder and verifier "
+    "limits.task_tokens set, an over budget line names each unit whose coder and verifier "
     "tokens together pass it, and a budget line counts them."
 )
 

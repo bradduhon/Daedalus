@@ -1,72 +1,38 @@
 {
-  "jail_narrowing": {
-    "forbidden_paths": ["infra/", "scripts/release.sh"],
-    "forbidden_extensions": [".pem", ".tfstate"]
-  },
-  "features": {
-    "scope": "repository",
-    "secrets_scan": true,
-    "scrub_file": "docs/scrub-terms.txt",
-    "ledger": true,
-    "dependency_web_lookup": true,
-    "terraform_tools": true,
-    "terraform_validate": false
-  },
-  "trains_dir": "trains",
-  "stack": {
-    "unit_test_cmd": ["python3 -m pytest -q", "pnpm vitest run"],
-    "typecheck_cmd": "python3 -m mypy src",
-    "lint_cmd": "python3 -m ruff check .",
-    "package_manager": "pnpm"
+  "commands": {
+    "unit_test": ["python3 -m pytest -q"],
+    "typecheck": ["python3 -m mypy ."],
+    "lint": ["python3 -m ruff check ."]
   },
   "docs": {
-    "literacy": "plain"
+    "folder": "docs",
+    "decisions_filename": null,
+    "reading_level": "standard"
   },
-  "priorities": {
-    "drivers": ["security", "trust", "ops", "cost"],
-    "rules": [
-      {
-        "when": {"conflict": ["security", "cost"], "reason": ["certification"]},
-        "then": "surface",
-        "note": "a control a certification asks for wins over its running cost"
-      }
-    ],
-    "principles": [
-      {
-        "id": "P1",
-        "driver": "security",
-        "text": "Each tenant keeps its own key.",
-        "source": "docs/design.md"
-      }
-    ],
-    "agents": {
-      "coder": {"drivers": ["security", "ops", "trust", "cost"]}
-    }
+  "checks": {
+    "secret_scan_on_push": false,
+    "online_advisory_lookup": true,
+    "terraform_format": true,
+    "terraform_validate": false
   },
-  "frameworks": {
-    "pack_dir": "compliance/packs",
-    "default_packs": true,
-    "packs": ["cost-tier"]
+  "prohibited_writes": {
+    "paths": ["infra/"],
+    "file_types": [".pem"]
   },
-  "assets": {
-    "roots": ["assets/"],
-    "extensions": [".glb", ".png"],
-    "max_bytes": 1048576
+  "code_review_exemptions": {
+    "folders": [],
+    "file_types": []
   },
-  "dev_server": {
+  "packages": {
+    "allowed_installers": []
+  },
+  "run_output_priority": {
+    "order": ["security", "trust", "operations", "cost"],
+    "rules": [],
+    "principles": []
+  },
+  "local_testing": {
     "url": "http://localhost:5173",
-    "check": "the home page loads and the sign-in form shows"
-  },
-  "dependencies": {
-    "installs": ["npm", "python"],
-    "minimum_release_age_days": 7,
-    "minimum_release_age_reason": null
-  },
-  "ledger": {
-    "path": "docs/decisions.md",
-    "format": "markdown-table-row",
-    "id_scheme": "{seq:04d}-{repo}-{type}",
-    "sequence_source": "last-row-id",
-    "branch": "main"
+    "instructions": "The level loads and the player can move."
   }
 }

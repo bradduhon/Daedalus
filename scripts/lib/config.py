@@ -6,13 +6,13 @@ import json
 import os
 import re
 import subprocess
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from lib import git
 from lib.agent_models import MODELS
 from lib.audit import check_project_data_dir
-from lib.coder_model import DEFAULT_CODER_MODELS, TIERS
+from lib.coder_model import DEFAULT_CODER_MODELS
 from lib.credential_paths import credential_roots
 from lib.operator_file import OperatorError, validate
 from lib.project_root import in_git_work_tree
@@ -26,25 +26,40 @@ GITIGNORE_MATCHES = ("directories", "all")
 DEFAULT_MAX_CONCURRENT_BUILDERS = 5
 # AU-11, AU-6: a declared audit retention keeps at least this many days of session logs.
 AUDIT_RETENTION_FLOOR_DAYS = 90
-LEDGER_FORMATS = ("markdown-table-row", "heading-entry")
-LEDGER_FIELDS = ("path", "format", "id_scheme", "sequence_source")
-# issue 186: the ledger block's optional keys; absent or null reads as not declared.
-LEDGER_OPTIONAL = ("branch",)
 PACKS_DIR = Path(__file__).resolve().parents[2] / "packs"
 _PACK_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+# 0245: the JSON names of config.json, in key-table order; the reader maps them onto Config.
+CONFIG_KEYS = (
+    "local_docs_folder",
+    "git_excluded_folders",
+    "coding_rules",
+    "personal_overrides",
+    "models",
+    "limits",
+    "test_readable_folders",
+    "policy",
+)
+MODEL_KEYS = (
+    "agents",
+    "coder",
+    "coder_on_plugin_files",
+    "coder_after_rejection",
+    "fable_available",
+)
+# 0245: each coder model key and the coder tier it sets.
+CODER_KEYS = {
+    "coder": "default",
+    "coder_on_plugin_files": "control_path",
+    "coder_after_rejection": "escalated",
+}
+LIMIT_KEYS = ("parallel_coders", "task_tokens", "log_retention_days")
+# 0245: a coding rules entry's one key and the standards source kind it names.
+RULE_SOURCE_KEYS = {"folder": "rules-dir", "file": "file", "builtin": "pack"}
+EXCLUDED_KEYS = ("kind", "path", "match")
 
 
 class ConfigError(ValueError):
     pass
-
-
-@dataclass(frozen=True)
-class LedgerDecl:
-    path: Path
-    format: str
-    id_scheme: str
-    sequence_source: str
-    branch: str | None = None
 
 
 @dataclass(frozen=True)
@@ -76,13 +91,11 @@ class ExcludedRoot:
 
 @dataclass(frozen=True)
 class Config:
+    # 0245: read from local_docs_folder, a docs folder kept elsewhere on this machine.
     charter_root: Path | None = None
-    standing_rules: str | None = None
     excluded_roots: tuple[ExcludedRootDecl, ...] = field(default_factory=tuple)
-    ledger: LedgerDecl | None = None
     policy: PolicyDecl | None = None
     standards_sources: tuple[StandardsSource, ...] = field(default_factory=tuple)
-    operator_signing_keys: tuple[str, ...] = field(default_factory=tuple)
     max_concurrent_builders: int = DEFAULT_MAX_CONCURRENT_BUILDERS
     audit_retention_days: int | None = None
     wrapper_read_roots: tuple[str, ...] = field(default_factory=tuple)
@@ -97,10 +110,6 @@ class Config:
     operator: dict[str, object] = field(default_factory=dict)
 
 
-# 0241: the top-level config.json keys; project_keys.config_keys derives from the same fields.
-CONFIG_KEYS = tuple(item.name for item in fields(Config))
-
-
 def _require_str(raw: dict[str, object], key: str, where: str) -> str:
     name = f"{where}.{key}" if where else key
     value = raw.get(key)
@@ -111,25 +120,26 @@ def _require_str(raw: dict[str, object], key: str, where: str) -> str:
     return value
 
 
-def _signing_keys(raw: dict[str, object]) -> tuple[str, ...]:
-    if "operator_signing_keys" not in raw:
-        return ()
-    keys = raw["operator_signing_keys"]
-    if not isinstance(keys, list) or not all(isinstance(k, str) and k for k in keys):
-        raise ConfigError(
-            "config.json operator_signing_keys must be a list of non-empty strings. "
-            'Next: write it as ["KEYID", ...].'
-        )
-    return tuple(str(k) for k in keys)
+def _group(
+    target: Path, raw: dict[str, object], name: str, keys: tuple[str, ...]
+) -> dict[str, object]:
+    # 0245: a group is an object of its own keys; null reads as absent; an unknown key is refused.
+    block = raw.get(name)
+    if block is None:
+        return {}
+    if not isinstance(block, dict):
+        raise ConfigError(f"config.json {name} must be an object. Next: write {name} as an object.")
+    _refuse_unknown_keys(target, block, keys, f"{name} ")
+    return block
 
 
 def _max_builders(raw: dict[str, object]) -> int:
     # 0072: a whole number of at least 1; bool is refused, though Python counts it an int.
-    value = raw.get("max_concurrent_builders", DEFAULT_MAX_CONCURRENT_BUILDERS)
+    value = raw.get("parallel_coders", DEFAULT_MAX_CONCURRENT_BUILDERS)
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ConfigError(
-            f"config.json max_concurrent_builders must be a whole number of at least 1 "
-            f"(got {value!r}). Next: set max_concurrent_builders to 1 or more, or remove it "
+            f"config.json limits.parallel_coders must be a whole number of at least 1 "
+            f"(got {value!r}). Next: set limits.parallel_coders to 1 or more, or remove it "
             "to run five coders at once."
         )
     return value
@@ -137,12 +147,12 @@ def _max_builders(raw: dict[str, object]) -> int:
 
 def _retention_days(raw: dict[str, object]) -> int | None:
     # issue 50, AU-11: null keeps every log; a number is whole and at least the floor.
-    value = raw.get("audit_retention_days")
+    value = raw.get("log_retention_days")
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int) or value < AUDIT_RETENTION_FLOOR_DAYS:
         raise ConfigError(
-            f"config.json audit_retention_days must be a whole number of at least "
+            f"config.json limits.log_retention_days must be a whole number of at least "
             f"{AUDIT_RETENTION_FLOOR_DAYS} (got {value!r}). Next: set it to "
             f"{AUDIT_RETENTION_FLOOR_DAYS} or more, or to null to keep every audit log."
         )
@@ -151,50 +161,53 @@ def _retention_days(raw: dict[str, object]) -> int | None:
 
 def _unit_budget(raw: dict[str, object]) -> int | None:
     # 0209: null or absent leaves the token budget gate off; a number is whole and positive.
-    value = raw.get("unit_token_budget")
+    value = raw.get("task_tokens")
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ConfigError(
-            f"config.json unit_token_budget must be a whole number of at least 1 (got {value!r}). "
-            "Next: set it to a token count, or to null to leave the budget gate off."
+            f"config.json limits.task_tokens must be a whole number of at least 1 "
+            f"(got {value!r}). Next: set it to a token count, or to null to leave the budget "
+            "gate off."
         )
     return value
 
 
-def _refuse_unknown_keys(target: Path, raw: dict[str, object]) -> None:
-    # 0241: a top-level key off the Config fields (project_keys.config_keys) is refused.
-    unknown = sorted(str(key) for key in set(raw) - set(CONFIG_KEYS))
+def _refuse_unknown_keys(
+    target: Path, raw: dict[str, object], keys: tuple[str, ...] = CONFIG_KEYS, where: str = ""
+) -> None:
+    # 0241, 0245: a key off the key table, an old name included, is refused with the valid names.
+    unknown = sorted(str(key) for key in set(raw) - set(keys))
     if unknown:
         raise ConfigError(
-            f"{target} has unknown keys {unknown} (known: {', '.join(CONFIG_KEYS)}). "
+            f"{target} {where}has unknown keys {unknown} (known: {', '.join(keys)}). "
             f"Next: delete or correct those keys in {target}, then rerun."
         )
 
 
 def _agent_models(raw: dict[str, object]) -> dict[str, str]:
     # spec 4: names come from agents/*.md through KNOWN_AGENTS, so no name is hard-coded here.
-    value = raw.get("agent_models")
+    value = raw.get("agents")
     if value is None:
         return {}
     if not isinstance(value, dict):
         raise ConfigError(
-            "config.json agent_models must be an object. "
-            'Next: write agent_models as {"<agent>": "<model>"}, or remove it.'
+            "config.json models.agents must be an object. "
+            'Next: write models.agents as {"<agent>": "<model>"}, or remove it.'
         )
     agents = KNOWN_AGENTS - {"main"}
     out: dict[str, str] = {}
     for name, model in value.items():
         if name not in agents:
             raise ConfigError(
-                f"config.json agent_models names {name!r}, which is not a catalog agent. "
-                "Next: key agent_models by an agent name the catalog lists, one of "
+                f"config.json models.agents names {name!r}, which is not a catalog agent. "
+                "Next: key models.agents by an agent name the catalog lists, one of "
                 f"{', '.join(sorted(agents))}."
             )
         if model not in MODELS:
             raise ConfigError(
-                f"config.json agent_models.{name} is {model!r}. "
-                f"Next: set agent_models.{name} to one of {', '.join(MODELS)}."
+                f"config.json models.agents.{name} is {model!r}. "
+                f"Next: set models.agents.{name} to one of {', '.join(MODELS)}."
             )
         out[str(name)] = str(model)
     return out
@@ -206,21 +219,40 @@ def _fable_available(raw: dict[str, object]) -> bool | None:
     if value is None or isinstance(value, bool):
         return value
     raise ConfigError(
-        f"config.json fable_available must be true, false or null (got {value!r}). "
-        "Next: set fable_available to true when your plan offers Fable, to false to keep "
-        "the planner and the auditor on their default model, or remove it."
+        f"config.json models.fable_available must be true, false or null (got {value!r}). "
+        "Next: set models.fable_available to true when your plan offers Fable, to false to "
+        "keep the planner and the auditor on their default model, or remove it."
     )
 
 
 def _operator(raw: dict[str, object]) -> dict[str, object]:
-    # 0235: the operator object goes through operator_file's one validator, never a second schema.
-    value = raw.get("operator")
+    # 0235: the personal overrides go through operator_file's one validator, never a second schema.
+    value = raw.get("personal_overrides")
     if value is None:
         return {}
     try:
-        return validate(value, "config.json", "operator.")
+        return validate(value, "config.json", "personal_overrides.")
     except OperatorError as exc:
         raise ConfigError(str(exc)) from exc
+
+
+def _local_docs_folder(raw: dict[str, object]) -> Path | None:
+    # 0245: an absolute folder path, never a link; it keeps charter_root's rules.
+    value = raw.get("local_docs_folder")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value or not os.path.isabs(value):
+        raise ConfigError(
+            f"config.json local_docs_folder must be an absolute folder path (got {value!r}). "
+            "Next: write the full path of the docs folder kept on this machine, or null."
+        )
+    if os.path.islink(value.rstrip(os.sep) or os.sep):
+        raise ConfigError(
+            f"config.json local_docs_folder {value} is a symlink. Next: name the real folder "
+            "the link points at, or null."
+        )
+    # 0245: a folder inside the project is kept, as charter_root allowed it: a git-ignored clone.
+    return Path(value)
 
 
 def _expand_root(entry: str) -> str:
@@ -237,12 +269,12 @@ def overlaps(first: str, second: str) -> bool:
 def _wrapper_read_roots(raw: dict[str, object], dot_claude: Path) -> tuple[str, ...]:
     # 0164: folders the kernel wrapper lets a runner row read and run; never a credential store
     # and never the project's .claude folder, which holds the train's reply key.
-    value = raw.get("wrapper_read_roots")
+    value = raw.get("test_readable_folders")
     if value is None:
         return ()
     if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
         raise ConfigError(
-            "config.json wrapper_read_roots must be a list of non-empty strings. "
+            "config.json test_readable_folders must be a list of non-empty strings. "
             'Next: write it as ["~/.local/share/pnpm/store"], or remove it.'
         )
     guarded = [*credential_roots(), str(dot_claude)]
@@ -251,13 +283,13 @@ def _wrapper_read_roots(raw: dict[str, object], dot_claude: Path) -> tuple[str, 
         path = _expand_root(entry)
         if not os.path.isabs(path):
             raise ConfigError(
-                f"config.json wrapper_read_roots entry {entry!r} is not an absolute path. "
+                f"config.json test_readable_folders entry {entry!r} is not an absolute path. "
                 "Next: write it as an absolute path or a path starting with ~/."
             )
         for store in guarded:
             if overlaps(path, store):
                 raise ConfigError(
-                    f"config.json wrapper_read_roots entry {entry!r} holds or sits inside "
+                    f"config.json test_readable_folders entry {entry!r} holds or sits inside "
                     f"{store}, a credential store or the project's .claude folder, and the "
                     "kernel wrapper never grants either. Next: name a folder that holds "
                     "neither, such as ~/.local/share/pnpm/store, or remove the entry."
@@ -267,69 +299,19 @@ def _wrapper_read_roots(raw: dict[str, object], dot_claude: Path) -> tuple[str, 
 
 
 def _coder_models(raw: dict[str, object]) -> dict[str, str]:
-    # 0187: a tier left out keeps its default; an unknown tier or model is refused.
-    value = raw.get("coder_models")
-    if value is None:
-        return dict(DEFAULT_CODER_MODELS)
-    if not isinstance(value, dict):
-        raise ConfigError(
-            "config.json coder_models must be an object. "
-            'Next: write coder_models as {"default": "sonnet", "control_path": "opus", '
-            '"escalated": "opus"}, or remove it.'
-        )
+    # 0187, 0245: each coder model key sets one coder tier; a key left out keeps its default.
     out = dict(DEFAULT_CODER_MODELS)
-    for tier, model in value.items():
-        if tier not in TIERS:
-            raise ConfigError(
-                f"config.json coder_models names {tier!r}, which is not a coder tier. "
-                f"Next: name only the coder tiers in coder_models, which are {', '.join(TIERS)}."
-            )
+    for key, tier in CODER_KEYS.items():
+        model = raw.get(key)
+        if model is None:
+            continue
         if model not in MODELS:
             raise ConfigError(
-                f"config.json coder_models.{tier} is {model!r}. "
-                f"Next: set coder_models.{tier} to one of {', '.join(MODELS)}."
+                f"config.json models.{key} is {model!r}. "
+                f"Next: set models.{key} to one of {', '.join(MODELS)}, or remove it."
             )
-        out[str(tier)] = str(model)
+        out[tier] = str(model)
     return out
-
-
-def ledger_branch(block: dict[str, object], path: str, where: str) -> str | None:
-    # issue 186: one reader for both files; a run branches the Charter, so no pin under it.
-    value = block.get("branch")
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.isprintable() or value.split() != [value]:
-        raise ConfigError(
-            f"{where} ledger.branch must be a branch name with no spaces (got {value!r}). "
-            "Next: set ledger.branch to a branch such as main, or remove it."
-        )
-    if "<charter_root>" in path:
-        raise ConfigError(
-            f"{where} sets ledger.branch beside a ledger path under <charter_root>. A run "
-            "branches the Charter repository to daedalus/<train-id>, so every append would be "
-            "refused. Next: remove ledger.branch, or name a ledger outside <charter_root>."
-        )
-    return value
-
-
-def _ledger(raw: object) -> LedgerDecl:
-    if not isinstance(raw, dict):
-        raise ConfigError(
-            "config.json ledger must be an object. "
-            "Next: write the ledger block as an object, as docs/project-requirements.md shows."
-        )
-    missing = [key for key in LEDGER_FIELDS if key not in raw]
-    if missing:
-        names = ", ".join(f"ledger.{key}" for key in missing)
-        raise ConfigError(f"config.json is missing {names}. Next: declare all four ledger fields.")
-    path, fmt, id_scheme, sequence_source = (_require_str(raw, k, "ledger") for k in LEDGER_FIELDS)
-    if fmt not in LEDGER_FORMATS:
-        raise ConfigError(
-            f"config.json ledger.format must be one of {LEDGER_FORMATS}. "
-            "Next: pick the one matching your ledger file."
-        )
-    branch = ledger_branch(raw, path, "config.json")
-    return LedgerDecl(Path(path), fmt, id_scheme, sequence_source, branch)
 
 
 def _policy(raw: object) -> PolicyDecl:
@@ -337,6 +319,12 @@ def _policy(raw: object) -> PolicyDecl:
         raise ConfigError(
             "config.json policy needs engine and path. "
             "Next: add the engine and path keys, as docs/project-requirements.md shows."
+        )
+    unknown = sorted(str(key) for key in set(raw) - {"engine", "path"})
+    if unknown:
+        raise ConfigError(
+            f"config.json policy has unknown keys {unknown} (known: engine, path). "
+            "Next: delete or correct those keys, then rerun."
         )
     engine = _require_str(raw, "engine", "policy")
     path = _require_str(raw, "path", "policy")
@@ -349,24 +337,27 @@ def _policy(raw: object) -> PolicyDecl:
 
 
 def _sources(raw: object) -> tuple[StandardsSource, ...]:
+    # 0245: each coding rules entry is an object with exactly one of folder, file or builtin.
     if raw is None:
         return ()
     if not isinstance(raw, list):
-        raise ConfigError(
-            "config.json standards_sources must be a list. Next: wrap the entry in [ ]."
-        )
+        raise ConfigError("config.json coding_rules must be a list. Next: wrap the entry in [ ].")
     out: list[StandardsSource] = []
+    known = ", ".join(RULE_SOURCE_KEYS)
     for item in raw:
-        if isinstance(item, dict) and item.get("kind") == "pack":
-            out.append(_pack(item.get("name")))
-            continue
-        if not isinstance(item, dict) or "kind" not in item or "path" not in item:
+        if not isinstance(item, dict) or len(item) != 1 or next(iter(item)) not in RULE_SOURCE_KEYS:
             raise ConfigError(
-                "each standards_sources entry needs kind and path. "
-                "Next: add both the kind and path keys."
+                f"each coding_rules entry must be an object with exactly one of {known} "
+                f"(got {item!r}). Next: write the entry as one key, such as "
+                '{"folder": "/work/rules"}.'
             )
-        kind = _require_str(item, "kind", "standards_sources[]")
-        out.append(StandardsSource(kind, Path(_require_str(item, "path", "standards_sources[]"))))
+        key, value = next(iter(item.items()))
+        if key == "builtin":
+            out.append(_pack(value))
+            continue
+        out.append(
+            StandardsSource(RULE_SOURCE_KEYS[key], Path(_require_str(item, key, "coding_rules[]")))
+        )
     return tuple(out)
 
 
@@ -377,8 +368,8 @@ def _pack(name: object) -> StandardsSource:
         if (path / "rules.md").is_file():
             return StandardsSource("pack", path, name)
     raise ConfigError(
-        f"config.json standards_sources[] pack {name!r} is not a pack Daedalus ships. "
-        'Next: name the shipped baseline pack, "baseline".'
+        f"config.json coding_rules[].builtin {name!r} is not a rule set Daedalus ships. "
+        'Next: name the shipped baseline rules, "baseline".'
     )
 
 
@@ -388,7 +379,7 @@ def _excluded_roots(raw: object) -> tuple[ExcludedRootDecl, ...]:
         return ()
     if not isinstance(raw, list):
         raise ConfigError(
-            "config.json excluded_roots must be a list. "
+            "config.json git_excluded_folders must be a list. "
             'Next: write it as [{"kind": "path", "path": "<repo_root>/private/"}], or remove it.'
         )
     out: list[ExcludedRootDecl] = []
@@ -396,16 +387,25 @@ def _excluded_roots(raw: object) -> tuple[ExcludedRootDecl, ...]:
         kind = item.get("kind") if isinstance(item, dict) else None
         if not isinstance(item, dict) or kind not in EXCLUDED_ROOT_KINDS:
             raise ConfigError(
-                f"each excluded_roots entry needs a kind of {' or '.join(EXCLUDED_ROOT_KINDS)} "
-                f"(got {item!r}). Next: give the entry a kind of path or gitignore."
+                f"each git_excluded_folders entry needs a kind of "
+                f"{' or '.join(EXCLUDED_ROOT_KINDS)} (got {item!r}). Next: give the entry a "
+                "kind of path or gitignore."
+            )
+        unknown = sorted(str(key) for key in set(item) - set(EXCLUDED_KEYS))
+        if unknown:
+            raise ConfigError(
+                f"config.json git_excluded_folders[] has unknown keys {unknown} (known: "
+                f"{', '.join(EXCLUDED_KEYS)}). Next: delete or correct those keys, then rerun."
             )
         if kind == "path":
-            out.append(ExcludedRootDecl("path", _require_str(item, "path", "excluded_roots[]")))
+            out.append(
+                ExcludedRootDecl("path", _require_str(item, "path", "git_excluded_folders[]"))
+            )
             continue
         match = item.get("match", "directories")
         if match not in GITIGNORE_MATCHES:
             raise ConfigError(
-                f"config.json excluded_roots[].match must be one of {GITIGNORE_MATCHES} "
+                f"config.json git_excluded_folders[].match must be one of {GITIGNORE_MATCHES} "
                 f"(got {match!r}). Next: set match to directories or all, or remove it."
             )
         out.append(ExcludedRootDecl("gitignore", None, str(match)))
@@ -416,21 +416,13 @@ def _root_path(raw: str, repo_root: Path, charter_root: Path | None) -> str:
     if "<charter_root>" in raw:
         if charter_root is None:
             raise ConfigError(
-                f"excluded root {raw} uses <charter_root> but no charter_root is set. "
-                "Next: set charter_root in .claude/daedalus/config.json, or write the path."
+                f"excluded folder {raw} uses <charter_root> but no local_docs_folder is set. "
+                "Next: set local_docs_folder in .claude/daedalus/config.json, or write the path."
             )
         raw = raw.replace("<charter_root>", str(charter_root))
     path = Path(raw.replace("<repo_root>", str(repo_root)))
     # D.2.1: a relative root is read against the project root, never the process cwd.
     return os.path.normpath(path if path.is_absolute() else repo_root / path)
-
-
-def standing_rules_path(config: Config, repo_root: Path) -> Path | None:
-    # 0090: relative to charter_root when one is declared, else to the project root.
-    if config.standing_rules is None:
-        return None
-    base = repo_root / config.charter_root if config.charter_root else repo_root
-    return Path(os.path.normpath(base / config.standing_rules))
 
 
 def _git_lines(args: list[str], repo_root: Path) -> list[str]:
@@ -529,25 +521,20 @@ def parse_config(raw: object, target: Path) -> Config:
             "Next: make the file one JSON object, as docs/project-requirements.md shows."
         )
     _refuse_unknown_keys(target, raw)
+    models = _group(target, raw, "models", MODEL_KEYS)
+    limits = _group(target, raw, "limits", LIMIT_KEYS)
     # 0076: null is not declared, the same as an absent key; the setup starter writes null.
-    charter = _require_str(raw, "charter_root", "") if raw.get("charter_root") is not None else None
-    rules = (
-        _require_str(raw, "standing_rules", "") if raw.get("standing_rules") is not None else None
-    )
     return Config(
-        charter_root=Path(charter) if charter is not None else None,
-        standing_rules=rules,
-        excluded_roots=_excluded_roots(raw.get("excluded_roots")),
-        ledger=_ledger(raw["ledger"]) if raw.get("ledger") is not None else None,
+        charter_root=_local_docs_folder(raw),
+        excluded_roots=_excluded_roots(raw.get("git_excluded_folders")),
         policy=_policy(raw["policy"]) if raw.get("policy") is not None else None,
-        standards_sources=_sources(raw.get("standards_sources")),
-        operator_signing_keys=_signing_keys(raw),
-        max_concurrent_builders=_max_builders(raw),
-        audit_retention_days=_retention_days(raw),
+        standards_sources=_sources(raw.get("coding_rules")),
+        max_concurrent_builders=_max_builders(limits),
+        audit_retention_days=_retention_days(limits),
         wrapper_read_roots=_wrapper_read_roots(raw, target.parent.parent),
-        unit_token_budget=_unit_budget(raw),
-        coder_models=_coder_models(raw),
-        fable_available=_fable_available(raw),
-        agent_models=_agent_models(raw),
+        unit_token_budget=_unit_budget(limits),
+        coder_models=_coder_models(models),
+        fable_available=_fable_available(models),
+        agent_models=_agent_models(models),
         operator=_operator(raw),
     )

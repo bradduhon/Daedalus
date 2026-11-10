@@ -415,7 +415,7 @@ def test_budget_lines_sum_coder_and_verifier_tokens_per_unit() -> None:
 def _gate(tmp_path: Path, budget: object) -> subprocess.CompletedProcess[str]:
     data = tmp_path / "repo" / ".claude" / "daedalus"
     data.mkdir(parents=True, exist_ok=True)
-    (data / "config.json").write_text(json.dumps({"unit_token_budget": budget}))
+    (data / "config.json").write_text(json.dumps({"limits": {"task_tokens": budget}}))
     return subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "token_economy.py"), "report"]
         + ["--session", SESSION, "--gate"],
@@ -440,7 +440,7 @@ def test_the_gate_exits_one_only_when_a_unit_is_over_budget(home: Path, tmp_path
     off = _gate(tmp_path, None)
     assert off.returncode == 0 and "budget:" not in off.stdout
     bad = _gate(tmp_path, 0)
-    assert bad.returncode == 1 and "unit_token_budget must be a whole number" in bad.stderr
+    assert bad.returncode == 1 and "limits.task_tokens must be a whole number" in bad.stderr
 
 
 def _main_session(home: Path) -> Path:

@@ -29,7 +29,7 @@ def repo(project_data: Path) -> Path:
 
 def _retain(repo: Path, days: int | None) -> None:
     data = repo / ".claude" / "daedalus"
-    (data / "config.json").write_text(json.dumps({"audit_retention_days": days}))
+    (data / "config.json").write_text(json.dumps({"limits": {"log_retention_days": days}}))
 
 
 def _append(repo: Path, session: str) -> dict[str, Any]:

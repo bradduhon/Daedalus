@@ -2,33 +2,24 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import os
 import re
 import string
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from lib.agent_files import FRONTMATTER_KEY, parse_frontmatter
+from lib.agent_files import parse_frontmatter
 from lib.audit import project_root
-from lib.config import (
-    LEDGER_FIELDS,
-    LEDGER_FORMATS,
-    Config,
-    ConfigError,
-    LedgerDecl,
-    ledger_branch,
-)
-from lib.manifest import MANIFEST_NAME, ManifestError, read_raw
+from lib.config import Config
+from lib.manifest import Docs, ManifestError
+from lib.manifest import load as load_manifest
 
-# 0004: convention probe order, tried under repo_root then charter_root.
-PROBE_NAMES = ("decision-log.md", "docs/decisions.md", "LEDGER.md")
 TABLE_SCHEME = "{seq:04d}-{repo}-{type}"
 HEADING_SCHEME = "{seq}"
 _SEPARATOR = re.compile(r"^\|(\s*:?-+:?\s*\|)+\s*$")
 _ENTRY_HEADING = re.compile(r"^## Entry ([0-9]+)\b")
 _LEADING_INT = re.compile(r"[0-9]+")
 _DIGITS = re.compile(r"[0-9]+")
-# W1.3: the key form the shared frontmatter reader accepts.
-_FRONTMATTER_SOURCE = re.compile("frontmatter:" + FRONTMATTER_KEY.pattern)
 _UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 _CODE_CLASS = "[A-Za-z0-9_-]+"
 _SCHEME_FIELDS = {"seq": "[0-9]+", "repo": _CODE_CLASS, "type": _CODE_CLASS}
@@ -58,66 +49,26 @@ class ResolvedLedger:
     branch: str | None = None
 
 
-def _resolve_path(raw: str, repo_root: Path, charter_root: Path | None) -> Path:
-    if "<charter_root>" in raw:
-        if charter_root is None:
-            raise LedgerError(
-                f"ledger path {raw} uses <charter_root> but no charter_root is set. "
-                "Next: set the Charter repo path (charter_root) in .claude/daedalus/config.json."
-            )
-        raw = raw.replace("<charter_root>", str(charter_root))
-    path = Path(raw.replace("<repo_root>", str(repo_root)))
-    # 0004: a relative ledger path is read against repo_root, never the process cwd.
-    return path if path.is_absolute() else repo_root / path
-
-
-def _manifest_decl(repo_root: Path) -> LedgerDecl | None:
-    target = repo_root / MANIFEST_NAME
+def _docs(repo_root: Path) -> Docs | None:
     try:
-        raw: object = read_raw(repo_root)
+        loaded = load_manifest(repo_root)
     except ManifestError as exc:
         raise LedgerError(str(exc)) from exc
-    return manifest_ledger(raw, target)
+    return loaded.docs if loaded is not None else None
 
 
-def manifest_ledger(raw: object, target: Path) -> LedgerDecl | None:
-    # 0242: the manifest ledger block's one check, run by setup on a changed document too.
-    # 0076: a null ledger block is not declared, the same as an absent one.
-    if not isinstance(raw, dict) or raw.get("ledger") is None:
-        return None
-    block: object = raw["ledger"]
-    fields = [block.get(k) for k in LEDGER_FIELDS] if isinstance(block, dict) else [None]
-    strings = [v for v in fields if isinstance(v, str) and v]
-    if len(strings) != len(LEDGER_FIELDS):
-        raise LedgerError(
-            f"{target} ledger block needs non-empty string fields {', '.join(LEDGER_FIELDS)}. "
-            "Next: declare all four ledger fields in the manifest."
-        )
-    path, format_, id_scheme, sequence_source = strings
-    try:
-        branch = ledger_branch(block, path, str(target)) if isinstance(block, dict) else None
-    except ConfigError as exc:
-        raise LedgerError(str(exc)) from exc
-    return LedgerDecl(Path(path), format_, id_scheme, sequence_source, branch)
+def decisions_folder(repo_root: Path, config: Config, docs: Docs) -> Path:
+    # 0245: the docs folder kept elsewhere on this machine wins over the project's own.
+    return config.charter_root if config.charter_root is not None else repo_root / docs.folder
 
 
-def check_declared(decl: LedgerDecl, where: str) -> None:
-    # 0242: the format and sequence check resolve_ledger runs, for setup's whole-document check.
-    _validate(decl, where)
+# 0247: the summary of decisions in force, read beside the decisions file when it exists.
+RULES_SUMMARY_NAME = "standing-rules.md"
 
 
-def _validate(decl: LedgerDecl, where: str) -> None:
-    if decl.format not in LEDGER_FORMATS:
-        raise LedgerError(
-            f"{where} ledger.format must be one of {LEDGER_FORMATS}. "
-            "Next: pick the one matching your ledger file."
-        )
-    source = decl.sequence_source
-    if source != "last-row-id" and not _FRONTMATTER_SOURCE.fullmatch(source):
-        raise LedgerError(
-            f"{where} ledger.sequence_source {source!r} is not supported. "
-            "Next: use last-row-id or frontmatter:<key>."
-        )
+def rules_summary(ledger: ResolvedLedger) -> Path | None:
+    path = ledger.path.parent / RULES_SUMMARY_NAME
+    return path if path.is_file() else None
 
 
 # 0004, W1.3: a heading ledger must start with a `---` line to use a frontmatter sequence.
@@ -211,29 +162,26 @@ def _infer(path: Path) -> ResolvedLedger | None:
 
 
 def resolve_ledger(cwd: str, config: Config) -> ResolvedLedger | None:
+    # 0247: only a named file; no name means no decisions, and nothing is searched for.
     repo_root = project_root(cwd)
-    charter_root = config.charter_root
-    # 0004: manifest wins, then config, then the convention probe.
-    declared = (
-        (_manifest_decl(repo_root), "manifest", f"{repo_root / 'service-manifest.json'}"),
-        (config.ledger, "config", "config.json"),
-    )
-    for decl, origin, where in declared:
-        if decl is not None:
-            _validate(decl, where)
-            path = _resolve_path(str(decl.path), repo_root, charter_root)
-            return ResolvedLedger(
-                path, decl.format, decl.id_scheme, decl.sequence_source, origin, decl.branch
-            )
-    roots = [repo_root] + ([charter_root] if charter_root is not None else [])
-    for root in roots:
-        for name in PROBE_NAMES:
-            candidate = root / name
-            if candidate.is_file():
-                found = _infer(candidate)
-                if found is not None:
-                    return found
-    return None
+    docs = _docs(repo_root)
+    if docs is None or docs.decisions_filename is None:
+        return None
+    if docs.git_branch is not None and config.charter_root is not None:
+        raise LedgerError(
+            "docs.git_branch is set while local_docs_folder names a docs folder a run branches "
+            "as daedalus/<run id>, so every decision write would be refused. Next: remove "
+            "docs.git_branch from the service manifest, or set local_docs_folder to null."
+        )
+    path = decisions_folder(repo_root, config, docs) / docs.decisions_filename
+    found = _infer(path) if os.path.lexists(path) else None
+    if found is None and os.path.lexists(path):
+        raise LedgerError(
+            f"decisions file {path} could not be read. Next: make it a readable UTF-8 file."
+        )
+    # 0247: a named file not yet written takes the default table layout on its first decision.
+    layout = found or ResolvedLedger(path, "markdown-table-row", TABLE_SCHEME, "last-row-id", "")
+    return replace(layout, origin="manifest", branch=docs.git_branch)
 
 
 def _last_table_id(lines: list[str], ledger: ResolvedLedger) -> int:
@@ -275,12 +223,13 @@ def _last_heading_id(lines: list[str], ledger: ResolvedLedger) -> int:
 
 
 def read_sequence(ledger: ResolvedLedger) -> int:
+    # 0247: a named file not yet written holds no decisions, so its sequence is 0.
+    if not os.path.lexists(ledger.path):
+        return 0
     try:
         text = ledger.path.read_text(encoding="utf-8-sig")
-    except FileNotFoundError as exc:
-        raise LedgerError(
-            f"ledger {ledger.path} does not exist. Next: create it or fix the declared path."
-        ) from exc
+    except FileNotFoundError:
+        return 0
     except (OSError, UnicodeDecodeError) as exc:
         raise LedgerError(
             f"ledger {ledger.path} could not be read ({exc}). Next: make it a readable UTF-8 file."

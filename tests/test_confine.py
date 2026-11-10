@@ -414,7 +414,7 @@ def test_a_dev_server_is_refused_on_an_unusable_kernel_too(
 
 
 def _terraform_repo(tmp_path: Path, features: dict[str, object]) -> tuple[Path, Path, Path]:
-    repo, wt = _narrowed_repo(tmp_path, json.dumps({"features": features}))
+    repo, wt = _narrowed_repo(tmp_path, json.dumps({"checks": features}))
     module = wt / "infra"
     module.mkdir()
     return repo, wt, module
@@ -447,7 +447,7 @@ def test_terraform_checks_need_the_wrapper_and_validate_its_switch(tmp_path: Pat
     for command in ("terraform validate", f"{wrap} terraform validate", f"{wrap} {init}"):
         reason = str(evaluate("confine", _cwd(_b("coder", f"cd {wt} && {command}"), repo)))
         assert reason.startswith("features.terraform_validate is not true"), command
-    off = {"features": {"terraform_tools": False}}
+    off = {"checks": {"terraform_format": False}}
     (repo / "service-manifest.json").write_text(json.dumps(off), encoding="utf-8")
     reason = str(
         evaluate("confine", _cwd(_b("coder", f"cd {wt} && {wrap} terraform fmt -check"), repo))
@@ -458,7 +458,7 @@ def test_terraform_checks_need_the_wrapper_and_validate_its_switch(tmp_path: Pat
 def _read_roots_repo(tmp_path: Path, roots: list[str]) -> tuple[Path, Path]:
     repo, unit = _unit(tmp_path)
     config = repo / ".claude" / "daedalus" / "config.json"
-    config.write_text(json.dumps({"wrapper_read_roots": roots}), encoding="utf-8")
+    config.write_text(json.dumps({"test_readable_folders": roots}), encoding="utf-8")
     return repo, unit
 
 
@@ -476,7 +476,7 @@ def _read_roots_repo(tmp_path: Path, roots: list[str]) -> tuple[Path, Path]:
         ("python3 -c 1", False),
     ],
 )
-def test_wrapper_read_roots_reach_the_rule_set_for_a_runner_row_only(
+def test_test_readable_folders_reach_the_rule_set_for_a_runner_row_only(
     tmp_path: Path, command: str, granted: bool
 ) -> None:
     # 0164: read and execute for a runner row, never write, never for another command.
@@ -489,7 +489,7 @@ def test_wrapper_read_roots_reach_the_rule_set_for_a_runner_row_only(
     assert all(not shell._under(path, str(store.resolve())) for path in rules.rw)
 
 
-def test_wrapper_read_roots_expand_the_home_folder(
+def test_test_readable_folders_expand_the_home_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = tmp_path / "home"
@@ -503,16 +503,16 @@ def test_wrapper_read_roots_expand_the_home_folder(
 @pytest.mark.parametrize(
     "entry", ["~/.ssh", "~/.ssh/keys", "~", "~/.config/gh", "~/.aws/sso", "~/.config", "store"]
 )
-def test_a_credential_store_in_wrapper_read_roots_is_refused_at_config_load(
+def test_a_credential_store_in_test_readable_folders_is_refused_at_config_load(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
 ) -> None:
     # 0164: a root holding or inside a credential store, or a relative one, refuses the config.
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     repo, _ = _read_roots_repo(tmp_path, [entry])
-    with pytest.raises(ConfigError, match="wrapper_read_roots entry") as caught:
+    with pytest.raises(ConfigError, match="test_readable_folders entry") as caught:
         load_config(cwd=str(repo))
     assert "Next:" in str(caught.value)
-    with pytest.raises(daedalus_confine.Refusal, match="wrapper_read_roots entry"):
+    with pytest.raises(daedalus_confine.Refusal, match="test_readable_folders entry"):
         daedalus_confine.read_roots(str(repo), ["pnpm", "test"])
     assert daedalus_confine.read_roots(str(repo), ["git", "status"]) == ()
 
@@ -527,8 +527,8 @@ def test_a_root_holding_a_credential_store_or_the_data_folder_is_refused(
     repo, _ = _read_roots_repo(tmp_path, ["placeholder"])
     value = entry.format(home=Path.home(), repo=repo)
     config = repo / ".claude" / "daedalus" / "config.json"
-    config.write_text(json.dumps({"wrapper_read_roots": [value]}), encoding="utf-8")
-    with pytest.raises(ConfigError, match="wrapper_read_roots entry"):
+    config.write_text(json.dumps({"test_readable_folders": [value]}), encoding="utf-8")
+    with pytest.raises(ConfigError, match="test_readable_folders entry"):
         load_config(cwd=str(repo))
 
 
@@ -585,7 +585,7 @@ def test_a_runner_name_without_its_test_verb_needs_no_wrapper(command: str) -> N
 @pytest.mark.usefixtures("kernel")
 def test_every_frozen_install_runs_bare_with_its_ecosystem_enabled(tmp_path: Path) -> None:
     # 228 S3d, 0196: a frozen install needs the network, so the wrapper never takes it.
-    doc = {"dependencies": {"installs": list(INSTALL_ECOSYSTEMS)}}
+    doc = {"packages": {"allowed_installers": list(INSTALL_ECOSYSTEMS)}}
     repo, wt = _narrowed_repo(tmp_path, json.dumps(doc))
     for form in jail.FROZEN_EXAMPLES.values():
         bare = _cwd(_b("coder", f"cd {wt} && {form}"), repo)
@@ -595,9 +595,9 @@ def test_every_frozen_install_runs_bare_with_its_ecosystem_enabled(tmp_path: Pat
 
 @pytest.mark.usefixtures("kernel")
 def test_a_declared_typecheck_command_runs_bare(tmp_path: Path) -> None:
-    # 228 S3d: a declared stack command that is no unit_test_cmd entry is no test command.
-    stack = {"unit_test_cmd": "pytest -q", "typecheck_cmd": "python3 -X dev -m mypy scripts"}
-    repo, wt = _narrowed_repo(tmp_path, json.dumps({"stack": stack}))
+    # 228 S3d: a declared command that is no commands.unit_test entry is no test command.
+    commands = {"unit_test": "pytest -q", "typecheck": "python3 -X dev -m mypy scripts"}
+    repo, wt = _narrowed_repo(tmp_path, json.dumps({"commands": commands}))
     bare = _cwd(_b("coder", f"cd {wt} && python3 -X dev -m mypy scripts"), repo)
     assert evaluate("confine", bare) is None
     assert decide(bare, CFG).allow, decide(bare, CFG).reason
@@ -824,7 +824,7 @@ def test_the_wrapped_form_passes_the_whole_coder_chain(command: str) -> None:
 def test_a_declared_non_runner_test_command_needs_the_wrapper(
     tmp_path: Path, declared: str
 ) -> None:
-    repo, wt = _narrowed_repo(tmp_path, json.dumps({"stack": {"unit_test_cmd": declared}}))
+    repo, wt = _narrowed_repo(tmp_path, json.dumps({"commands": {"unit_test": declared}}))
     bare = _cwd(_b("coder", f"cd {wt} && {declared}"), repo)
     assert evaluate("confine", bare) == load("confine").R_CONFINE
     command = f"cd {wt} && {shell.CONFINE_PATH} --unit {wt} -- {declared}"
@@ -837,7 +837,7 @@ def test_a_declared_non_runner_test_command_needs_the_wrapper(
 def test_each_entry_of_a_declared_test_command_list_needs_the_wrapper(tmp_path: Path) -> None:
     # 0048, 0192: a Python and TypeScript stack lists two test commands; both are test commands.
     declared = ["make test", "tox -e py312"]
-    repo, wt = _narrowed_repo(tmp_path, json.dumps({"stack": {"unit_test_cmd": declared}}))
+    repo, wt = _narrowed_repo(tmp_path, json.dumps({"commands": {"unit_test": declared}}))
     for entry in declared:
         bare = _cwd(_b("coder", f"cd {wt} && {entry}"), repo)
         assert evaluate("confine", bare) == load("confine").R_CONFINE, entry

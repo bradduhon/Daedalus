@@ -1,32 +1,9 @@
 {
-  "charter_root": "/work/decisions",
-  "standing_rules": "standing-rules.md",
-  "excluded_roots": [
-    {"kind": "path", "path": "<repo_root>/private/"},
-    {"kind": "gitignore", "match": "directories"}
+  "local_docs_folder": null,
+  "git_excluded_folders": [],
+  "coding_rules": [
+    {"folder": "/work/rules"},
+    {"builtin": "baseline"}
   ],
-  "ledger": {
-    "path": "<repo_root>/docs/decisions.md",
-    "format": "markdown-table-row",
-    "id_scheme": "{seq:04d}-{repo}-{type}",
-    "sequence_source": "last-row-id",
-    "branch": "main"
-  },
-  "policy": {
-    "engine": "conftest",
-    "path": "/work/decisions/policy"
-  },
-  "standards_sources": [
-    {"kind": "rules-dir", "path": "/work/rules"},
-    {"kind": "pack", "name": "baseline"}
-  ],
-  "operator_signing_keys": [],
-  "max_concurrent_builders": 3,
-  "audit_retention_days": 365,
-  "wrapper_read_roots": ["~/.local/share/pnpm/store"],
-  "unit_token_budget": 4000000,
-  "coder_models": {"default": "sonnet", "control_path": "opus", "escalated": "opus"},
-  "fable_available": false,
-  "agent_models": {"planner": "opus"},
-  "operator": {"profile": {"literacy": "standard"}}
+  "personal_overrides": {}
 }

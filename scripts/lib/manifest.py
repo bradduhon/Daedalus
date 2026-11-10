@@ -14,7 +14,6 @@ from lib.project_root import in_git_work_tree, project_root
 from lib.train_scope import KNOWN_AGENTS
 
 MANIFEST_NAME = "service-manifest.json"
-NARROWING_KEYS = ("forbidden_paths", "forbidden_extensions")
 SCOPE_KINDS = ("repository", "folder")
 _GLOB = frozenset("*?[]")
 _PATHSPEC_WORD = re.compile(r"[A-Za-z0-9._/-]+")
@@ -37,7 +36,8 @@ class Features:
     scope: Literal["repository", "folder"] | None = None
     secrets_scan: bool = False
     scrub_file: str | None = None
-    ledger: bool | None = None
+    # 0247: true exactly when docs.decisions_filename names a file.
+    ledger: bool = False
     # 0132: true, false or null; only false turns the auditor's dependency web lookup off.
     dependency_web_lookup: bool | None = None
     # 0132: true, false or null; only false turns off terraform fmt -check and validate.
@@ -48,7 +48,7 @@ class Features:
 
 # 0073: the one list of feature names; validator check 13 and the key reference import it.
 FEATURE_KEYS = tuple(f.name for f in fields(Features))
-# 0134: a docs.literacy value is a level word or profile:<project-relative path>.
+# 0134, 0245: a docs.reading_level value is a level word or profile:<project-relative path>.
 LITERACY_LEVELS = ("plain", "standard", "expert")
 LITERACY_PROFILE = "profile:"
 
@@ -57,9 +57,46 @@ LITERACY_PROFILE = "profile:"
 class Docs:
     # 0134: null lets the docs writer keep the register the public docs already use.
     literacy: str | None = None
+    # 0245: the project's docs folder, relative to its root.
+    folder: str = "docs"
+    # 0247: the decisions file's name in the docs folder; null records no decisions.
+    decisions_filename: str | None = None
+    # 0245: the branch the decisions file's checkout must be on, when one is named.
+    git_branch: str | None = None
 
 
-DOCS_KEYS = tuple(f.name for f in fields(Docs))
+DOCS_DEFAULT_FOLDER = "docs"
+# 0245: the JSON names of each manifest group, in key-table order; tests hold the table to them.
+TOP_KEYS = (
+    "commands",
+    "docs",
+    "checks",
+    "prohibited_writes",
+    "code_review_exemptions",
+    "packages",
+    "run_output_priority",
+    "local_testing",
+    "compliance_rules",
+    "run_definitions_folder",
+    "entrypoints",
+)
+COMMAND_KEYS = {"unit_test": "unit_test_cmd", "typecheck": "typecheck_cmd", "lint": "lint_cmd"}
+DOCS_KEYS = ("folder", "decisions_filename", "reading_level", "git_branch")
+CHECK_KEYS = {
+    "secret_scan_on_push": "secrets_scan",
+    "online_advisory_lookup": "dependency_web_lookup",
+    "terraform_format": "terraform_tools",
+    "terraform_validate": "terraform_validate",
+    "release_banned_terms_file": "scrub_file",
+}
+PROHIBITED_KEYS = ("paths", "file_types")
+EXEMPTION_KEYS = ("folders", "file_types", "report_over_bytes")
+PACKAGE_KEYS = ("allowed_installers", "minimum_age_days", "minimum_age_reason")
+PRIORITY_KEYS = ("order", "rules", "principles", "agent_order")
+RULE_KEYS = ("between", "reasons", "outcome", "note")
+PRINCIPLE_KEYS = ("name", "priority", "text")
+LOCAL_TESTING_KEYS = ("url", "instructions")
+COMPLIANCE_KEYS = ("folder", "use_builtin", "extra_builtin")
 
 
 @dataclass(frozen=True)
@@ -71,11 +108,13 @@ class Frameworks:
     packs: tuple[str, ...] = ()
 
 
-FRAMEWORKS_KEYS = tuple(f.name for f in fields(Frameworks))
 # 0192: the shape of a pack id, as lib.packs.PACK_ID checks it.
 _PACK_ID = re.compile(r"[a-z0-9-]{1,40}")
 # 0129, Addendum F.2: the four drivers, the closed reason vocabulary and the surface outcome.
 DRIVERS = ("security", "trust", "ops", "cost")
+# 0245: the file's words for the drivers and the surface outcome, translated here only.
+PRIORITY_WORDS = {"security": "security", "trust": "trust", "operations": "ops", "cost": "cost"}
+ASK_ME = "ask_me"
 REASONS = (
     "certification",
     "framework",
@@ -92,16 +131,15 @@ REASONS = (
 SURFACE = "surface"
 # 0129, F.6: one key reference row per field, in table order, and each field's limits.
 PRIORITY_ROWS = (
-    "drivers",
-    "rules[].when.conflict",
-    "rules[].when.reason",
-    "rules[].then",
+    "order",
+    "rules[].between",
+    "rules[].reasons",
+    "rules[].outcome",
     "rules[].note",
-    "principles[].id",
-    "principles[].driver",
+    "principles[].name",
+    "principles[].priority",
     "principles[].text",
-    "principles[].source",
-    "agents.<name>.drivers",
+    "agent_order.<name>",
 )
 MAX_RULES, MAX_PRINCIPLES, NOTE_MAX, TEXT_MAX = 32, 64, 200, 300
 PRINCIPLE_ID = re.compile(r"P[0-9]+")
@@ -148,7 +186,6 @@ class Assets:
     max_bytes: int | None = None
 
 
-ASSETS_KEYS = tuple(f.name for f in fields(Assets))
 # 0128, 0192: endings the judges always read; never an asset ending, never excluded.
 SOURCE_EXTENSIONS = (
     *(".sh", ".bash", ".zsh", ".mjs", ".cjs", ".ts", ".tsx", ".js", ".jsx", ".html", ".css"),
@@ -170,10 +207,7 @@ class DevServer:
     check: str
 
 
-DEV_SERVER_KEYS = tuple(f.name for f in fields(DevServer))
 DEV_SERVER_HOSTS = ("localhost", "127.0.0.1")
-# 0192: the package managers a stack may name; anything else is refused.
-PACKAGE_MANAGERS = ("pnpm", "npm", "yarn", "pip", "uv")
 # 0196: the ecosystems whose frozen, scripts-off install a coder may run when listed.
 INSTALL_ECOSYSTEMS = ("npm", "python", "cargo", "go")
 
@@ -192,9 +226,6 @@ class Dependencies:
     minimum_release_age_reason: str | None = None
 
 
-DEPENDENCIES_KEYS = tuple(f.name for f in fields(Dependencies))
-
-
 @dataclass(frozen=True)
 class Manifest:
     forbidden_paths: tuple[str, ...] = ()
@@ -205,7 +236,6 @@ class Manifest:
     unit_test_cmd: tuple[str, ...] | None = None
     typecheck_cmd: tuple[str, ...] | None = None
     lint_cmd: tuple[str, ...] | None = None
-    package_manager: str | None = None
     docs: Docs = field(default_factory=Docs)
     priorities: Priorities | None = None
     frameworks: Frameworks = field(default_factory=Frameworks)
@@ -214,10 +244,8 @@ class Manifest:
     dependencies: Dependencies = field(default_factory=Dependencies)
 
 
-# 0073, B2: the stack keys that hold a command the coder may run verbatim.
-STACK_COMMANDS = ("unit_test_cmd", "typecheck_cmd", "lint_cmd")
-# 0192: the stack keys the reader checks, the commands and the package manager.
-STACK_KEYS = (*STACK_COMMANDS, "package_manager")
+# 0073, B2: the Manifest fields that hold a command the coder may run verbatim.
+STACK_COMMANDS = tuple(COMMAND_KEYS.values())
 
 
 def declared_commands(manifest: Manifest) -> tuple[str, ...]:
@@ -244,13 +272,6 @@ def read_raw(repo: Path) -> object:
     return parsed
 
 
-def _shape_error(target: Path, detail: str) -> ManifestError:
-    return ManifestError(
-        f"{target} jail_narrowing {detail}. Next: fix jail_narrowing to match the example "
-        "in docs/project-requirements.md."
-    )
-
-
 def _key_error(target: Path, key: str, detail: str) -> ManifestError:
     return ManifestError(
         f"{target} {key} {detail}. Next: correct the {key} value in the service manifest, "
@@ -271,83 +292,83 @@ def _extension_ok(entry: str) -> bool:
     return entry.startswith(".") and bool(entry.strip(".")) and not banned & set(entry)
 
 
-def _strings(target: Path, block: dict[str, object], key: str) -> tuple[str, ...]:
+def _group(
+    target: Path, raw: dict[str, object], name: str, keys: tuple[str, ...] | dict[str, str]
+) -> dict[str, object]:
+    # 0245: a group is an object of its own keys; null reads as absent; anything else is refused.
+    block = raw.get(name)
+    if block is None:
+        return {}
+    if not isinstance(block, dict):
+        raise _key_error(target, name, "must be an object")
+    unknown = sorted(str(key) for key in set(block) - set(keys))
+    if unknown:
+        raise _key_error(target, name, f"has unknown keys {unknown} (known: {', '.join(keys)})")
+    return block
+
+
+def _strings(target: Path, block: dict[str, object], group: str, key: str) -> tuple[str, ...]:
     value = block.get(key, [])
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise _shape_error(target, f"{key} must be a list of strings")
+        raise _key_error(target, f"{group}.{key}", "must be a list of strings")
     return tuple(str(item) for item in value)
 
 
 def _narrowing(target: Path, raw: dict[str, object]) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    block = raw.get("jail_narrowing", {})
-    if not isinstance(block, dict):
-        raise _shape_error(target, "must be an object")
-    unknown = sorted(set(block) - set(NARROWING_KEYS))
-    if unknown:
-        raise _shape_error(target, f"has unknown keys {', '.join(unknown)}")
-    paths = _strings(target, block, "forbidden_paths")
-    extensions = _strings(target, block, "forbidden_extensions")
+    block = _group(target, raw, "prohibited_writes", PROHIBITED_KEYS)
+    paths = _strings(target, block, "prohibited_writes", "paths")
+    extensions = _strings(target, block, "prohibited_writes", "file_types")
     bad_paths = [p for p in paths if not repo_relative(p)]
     if bad_paths:
-        raise _shape_error(
+        raise _key_error(
             target,
-            f"forbidden_paths entries {bad_paths} are not repo-relative forward-slash paths "
+            "prohibited_writes.paths",
+            f"entries {bad_paths} are not repo-relative forward-slash paths "
             "without a leading slash, '..' or glob characters",
         )
     bad_ext = [e for e in extensions if not _extension_ok(e)]
     if bad_ext:
-        raise _shape_error(
+        raise _key_error(
             target,
-            f"forbidden_extensions entries {bad_ext} must each start with a dot and hold no "
-            "slash or glob characters",
+            "prohibited_writes.file_types",
+            f"entries {bad_ext} must each start with a dot and hold no slash or glob characters",
         )
     return paths, extensions
 
 
-def _features(target: Path, raw: dict[str, object]) -> Features:
-    # 0073: an unknown key or a value outside its field's type is refused, never ignored.
-    block = raw.get("features", {})
-    if not isinstance(block, dict):
-        raise _key_error(target, "features", "must be an object")
-    unknown = sorted(str(key) for key in set(block) - set(FEATURE_KEYS))
-    if unknown:
-        known = ", ".join(FEATURE_KEYS)
-        raise _key_error(target, "features", f"has unknown keys {unknown} (known: {known})")
-    scope = block.get("scope")
-    if scope is not None and scope not in SCOPE_KINDS:
-        raise _key_error(target, "features.scope", f"must be one of {SCOPE_KINDS} or null")
-    secrets = block.get("secrets_scan", False)
+def _features(target: Path, raw: dict[str, object], docs: Docs) -> Features:
+    # 0073, 0245: the checks group; a value outside its type is refused, never ignored.
+    block = _group(target, raw, "checks", CHECK_KEYS)
+    secrets = block.get("secret_scan_on_push", False)
     if not isinstance(secrets, bool):
-        raise _key_error(target, "features.secrets_scan", "must be true or false")
-    scrub = block.get("scrub_file")
+        raise _key_error(target, "checks.secret_scan_on_push", "must be true or false")
+    scrub = block.get("release_banned_terms_file")
     if scrub is not None and not (isinstance(scrub, str) and repo_relative(scrub)):
         raise _key_error(
             target,
-            "features.scrub_file",
+            "checks.release_banned_terms_file",
             "must be null or a project-relative path without a leading slash, '..' or globs",
         )
     validate = block.get("terraform_validate", False)
     if not isinstance(validate, bool):
-        raise _key_error(target, "features.terraform_validate", "must be true or false")
-    kind: Literal["repository", "folder"] | None = (
-        "repository" if scope == "repository" else "folder" if scope == "folder" else None
-    )
+        raise _key_error(target, "checks.terraform_validate", "must be true or false")
+    # 0247: naming a decisions file is the switch; scope is detected, never declared (0245).
     return Features(
-        kind,
+        None,
         secrets,
         scrub,
-        _switch(target, block, "ledger", None),
-        _switch(target, block, "dependency_web_lookup", None),
-        _switch(target, block, "terraform_tools", None),
+        docs.decisions_filename is not None,
+        _switch(target, block, "online_advisory_lookup"),
+        _switch(target, block, "terraform_format"),
         validate,
     )
 
 
-def _switch(target: Path, block: dict[str, object], key: str, absent: bool | None) -> bool | None:
-    # 0069, 0132: a true, false or null feature; absent reads as the field's default.
-    value = block.get(key, absent)
+def _switch(target: Path, block: dict[str, object], key: str) -> bool | None:
+    # 0069, 0132: a true, false or null check; absent reads as null, and only false is off.
+    value = block.get(key)
     if value is not None and not isinstance(value, bool):
-        raise _key_error(target, f"features.{key}", "must be true, false or null")
+        raise _key_error(target, f"checks.{key}", "must be true, false or null")
     return value
 
 
@@ -359,51 +380,73 @@ def _literacy_ok(value: object) -> bool:
     return repo_relative(value.removeprefix(LITERACY_PROFILE))
 
 
+def file_name_ok(value: object) -> bool:
+    # 0247: a plain file name, never a path, a glob or a dot name.
+    return (
+        isinstance(value, str)
+        and bool(value.strip())
+        and value.isprintable()
+        and not ({"/", "\\"} | _GLOB) & set(value)
+        and value not in {".", ".."}
+    )
+
+
+def branch_ok(value: object) -> bool:
+    # issue 186: a branch name with no spaces or control characters.
+    return isinstance(value, str) and value.isprintable() and value.split() == [value]
+
+
 def _docs(target: Path, raw: dict[str, object]) -> Docs:
-    # 0134: the docs block holds the docs writer's literacy; unknown keys are refused.
-    block = raw.get("docs", {})
-    if not isinstance(block, dict):
-        raise _key_error(target, "docs", "must be an object")
-    unknown = sorted(str(key) for key in set(block) - set(DOCS_KEYS))
-    if unknown:
-        raise _key_error(
-            target, "docs", f"has unknown keys {unknown} (known: {', '.join(DOCS_KEYS)})"
-        )
-    literacy = block.get("literacy")
+    # 0134, 0245: the docs group; unknown keys are refused.
+    block = _group(target, raw, "docs", DOCS_KEYS)
+    literacy = block.get("reading_level")
     if not _literacy_ok(literacy):
         levels = ", ".join(f'"{level}"' for level in LITERACY_LEVELS)
         raise _key_error(
             target,
-            "docs.literacy",
+            "docs.reading_level",
             f"must be null, one of {levels}, or {LITERACY_PROFILE}<project-relative path to a "
             "voice profile without a leading slash, '..' or globs>",
         )
-    return Docs(literacy if isinstance(literacy, str) else None)
+    folder = block.get("folder", DOCS_DEFAULT_FOLDER)
+    if folder is None:
+        folder = DOCS_DEFAULT_FOLDER
+    if not (isinstance(folder, str) and repo_relative(folder)):
+        raise _key_error(
+            target,
+            "docs.folder",
+            "must be a project-relative folder path without a leading slash, '..' or globs",
+        )
+    name = block.get("decisions_filename")
+    if name is not None and not file_name_ok(name):
+        raise _key_error(
+            target, "docs.decisions_filename", "must be null or a plain file name, not a path"
+        )
+    branch = block.get("git_branch")
+    if branch is not None and not branch_ok(branch):
+        raise _key_error(target, "docs.git_branch", "must be null or a branch name with no spaces")
+    return Docs(
+        literacy if isinstance(literacy, str) else None,
+        folder.removesuffix("/"),
+        name if isinstance(name, str) else None,
+        branch if isinstance(branch, str) else None,
+    )
 
 
 def _frameworks(target: Path, raw: dict[str, object]) -> Frameworks:
-    # 0157: the frameworks block names the project's pack folder; unknown keys are refused.
-    block = raw.get("frameworks", {})
-    if not isinstance(block, dict):
-        raise _key_error(target, "frameworks", "must be an object")
-    unknown = sorted(str(key) for key in set(block) - set(FRAMEWORKS_KEYS))
-    if unknown:
-        raise _key_error(
-            target,
-            "frameworks",
-            f"has unknown keys {unknown} (known: {', '.join(FRAMEWORKS_KEYS)})",
-        )
-    pack_dir = block.get("pack_dir")
+    # 0157, 0245: the compliance rules group; unknown keys are refused.
+    block = _group(target, raw, "compliance_rules", COMPLIANCE_KEYS)
+    pack_dir = block.get("folder")
     if pack_dir is not None and not (isinstance(pack_dir, str) and repo_relative(pack_dir)):
         raise _key_error(
             target,
-            "frameworks.pack_dir",
+            "compliance_rules.folder",
             "must be null or a project-relative folder path without a leading slash, '..' or globs",
         )
-    default_packs = block.get("default_packs", True)
+    default_packs = block.get("use_builtin", True)
     if not isinstance(default_packs, bool):
-        raise _key_error(target, "frameworks.default_packs", "must be true or false")
-    named = block.get("packs", [])
+        raise _key_error(target, "compliance_rules.use_builtin", "must be true or false")
+    named = block.get("extra_builtin", [])
     if not (
         isinstance(named, list)
         and all(isinstance(n, str) and _PACK_ID.fullmatch(n) for n in named)
@@ -411,14 +454,15 @@ def _frameworks(target: Path, raw: dict[str, object]) -> Frameworks:
     ):
         raise _key_error(
             target,
-            "frameworks.packs",
-            "must be a list of distinct pack ids, each of lowercase letters, digits and hyphens",
+            "compliance_rules.extra_builtin",
+            "must be a list of distinct built-in rule set ids, each of lowercase letters, digits "
+            "and hyphens",
         )
     return Frameworks(pack_dir, default_packs, tuple(named))
 
 
 def _bad(target: Path, row: str, detail: str) -> PrioritiesError:
-    key = f"priorities.{row}" if row else "priorities"
+    key = f"run_output_priority.{row}" if row else "run_output_priority"
     return PrioritiesError(R_PRIORITIES.format(target=target, key=key, detail=detail), row)
 
 
@@ -443,86 +487,68 @@ def _line(target: Path, value: object, row: str, limit: int) -> str:
     return value
 
 
+_WORDS = list(PRIORITY_WORDS)
+
+
+def _priority(value: object) -> str | None:
+    # 0245: the file's priority word to the internal driver name, or None when it is not one.
+    return PRIORITY_WORDS.get(value) if isinstance(value, str) else None
+
+
 def _ranking(target: Path, value: object, row: str) -> tuple[str, ...]:
-    # 0129, F.6: exactly the four driver names, each once.
+    # 0129, F.6: exactly the four priority words, each once.
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise _bad(target, row, f"must be a list of the driver names {list(DRIVERS)}")
+        raise _bad(target, row, f"must be a list of the priority words {_WORDS}")
     repeated = sorted({item for item in value if value.count(item) > 1})
     if repeated:
-        raise _bad(target, row, f"repeats the driver {repeated[0]!r}")
-    if sorted(value) != sorted(DRIVERS):
-        raise _bad(target, row, f"must name each of {list(DRIVERS)} once, in rank order")
-    return tuple(str(item) for item in value)
+        raise _bad(target, row, f"repeats {repeated[0]!r}")
+    if sorted(value) != sorted(_WORDS):
+        raise _bad(target, row, f"must name each of {_WORDS} once, in rank order")
+    return tuple(PRIORITY_WORDS[str(item)] for item in value)
 
 
 def _rule(target: Path, value: object) -> Rule:
-    rule = _object(
-        target, value, "rules[].then", {"when", "then", "note"}, {"when", "then", "note"}
-    )
-    when = _object(
-        target,
-        rule["when"],
-        "rules[].when.conflict",
-        {"conflict", "reason"},
-        {"conflict", "reason"},
-    )
-    conflict = when["conflict"]
-    if not (
-        isinstance(conflict, list)
-        and len(conflict) == 2
-        and all(item in DRIVERS for item in conflict)
-        and conflict[0] != conflict[1]
-    ):
-        raise _bad(
-            target, "rules[].when.conflict", f"must name two distinct drivers of {list(DRIVERS)}"
-        )
-    reason = when["reason"]
+    rule = _object(target, value, "rules[].outcome", set(RULE_KEYS), set(RULE_KEYS))
+    between = rule["between"]
+    pair = [_priority(item) for item in between] if isinstance(between, list) else []
+    if len(pair) != 2 or None in pair or pair[0] == pair[1]:
+        raise _bad(target, "rules[].between", f"must name two different priorities of {_WORDS}")
+    reason = rule["reasons"]
     if not isinstance(reason, list) or not reason or len(set(map(str, reason))) != len(reason):
-        raise _bad(target, "rules[].when.reason", "must list one or more reasons, each once")
+        raise _bad(target, "rules[].reasons", "must list one or more reasons, each once")
     outside = [item for item in reason if item not in REASONS]
     if outside:
         raise _bad(
             target,
-            "rules[].when.reason",
+            "rules[].reasons",
             f"names {outside[0]!r}, outside the reason vocabulary {list(REASONS)}",
         )
-    then = rule["then"]
-    if then not in (*DRIVERS, SURFACE):
-        raise _bad(target, "rules[].then", f"must be a driver of {list(DRIVERS)} or {SURFACE!r}")
+    outcome = rule["outcome"]
+    then = SURFACE if outcome == ASK_ME else _priority(outcome)
+    if then is None:
+        raise _bad(target, "rules[].outcome", f"must be a priority of {_WORDS} or {ASK_ME!r}")
     note = _line(target, rule["note"], "rules[].note", NOTE_MAX)
-    return Rule((str(conflict[0]), str(conflict[1])), tuple(map(str, reason)), str(then), note)
+    return Rule((str(pair[0]), str(pair[1])), tuple(map(str, reason)), then, note)
 
 
 def _principle(target: Path, value: object, seen: set[str]) -> Principle:
-    item = _object(
-        target,
-        value,
-        "principles[].id",
-        {"id", "driver", "text", "source"},
-        {"id", "driver", "text"},
-    )
-    ident = item["id"]
+    item = _object(target, value, "principles[].name", set(PRINCIPLE_KEYS), set(PRINCIPLE_KEYS))
+    ident = item["name"]
     if not isinstance(ident, str) or not PRINCIPLE_ID.fullmatch(ident) or ident in seen:
-        raise _bad(target, "principles[].id", "must be P followed by digits, unique in the block")
+        raise _bad(target, "principles[].name", "must be P followed by digits, unique in the list")
     seen.add(ident)
-    if item["driver"] not in DRIVERS:
-        raise _bad(target, "principles[].driver", f"must be a driver of {list(DRIVERS)}")
+    driver = _priority(item["priority"])
+    if driver is None:
+        raise _bad(target, "principles[].priority", f"must be one of {_WORDS}")
     text = _line(target, item["text"], "principles[].text", TEXT_MAX)
-    source = item.get("source")
-    if source is not None and not (isinstance(source, str) and repo_relative(source)):
-        raise _bad(
-            target,
-            "principles[].source",
-            "must be a repo-relative path or a ledger id without a leading slash, '..' or globs",
-        )
-    return Principle(ident, str(item["driver"]), text, source)
+    return Principle(ident, driver, text)
 
 
 def _overrides(target: Path, value: object) -> tuple[tuple[str, tuple[str, ...]], ...]:
     # 0129, F.2: the security auditor's ranking is never overridable.
-    row = "agents.<name>.drivers"
+    row = "agent_order.<name>"
     if not isinstance(value, dict):
-        raise _bad(target, row, "agents must be an object keyed by agent name")
+        raise _bad(target, row, "agent_order must be an object keyed by agent name")
     out: list[tuple[str, tuple[str, ...]]] = []
     for raw_name, entry in value.items():
         name = str(raw_name)
@@ -530,8 +556,7 @@ def _overrides(target: Path, value: object) -> tuple[tuple[str, tuple[str, ...]]
             raise _bad(target, row, f"names {NOT_OVERRIDABLE}, whose ranking no project overrides")
         if name not in KNOWN_AGENTS - {"main"}:
             raise _bad(target, row, f"names {name!r}, which is not a Daedalus agent file name")
-        body = _object(target, entry, row, {"drivers"}, {"drivers"})
-        out.append((name, _ranking(target, body["drivers"], row)))
+        out.append((name, _ranking(target, entry, row)))
     return tuple(out)
 
 
@@ -543,32 +568,32 @@ def _bounded_list(target: Path, value: object, row: str, limit: int) -> list[obj
 
 def _priorities(target: Path, raw: dict[str, object]) -> Priorities | None:
     # 0129, F.6, 0076: absent or null is none declared; anything off the field table is refused.
-    if raw.get("priorities") is None:
+    if raw.get("run_output_priority") is None:
         return None
-    keys = {"drivers", "rules", "principles", "agents"}
-    block = _object(target, raw["priorities"], "", keys, {"drivers"})
-    drivers = _ranking(target, block["drivers"], "drivers")
-    rules = _bounded_list(target, block.get("rules", []), "rules[].then", MAX_RULES)
+    block = _object(target, raw["run_output_priority"], "", set(PRIORITY_KEYS), {"order"})
+    drivers = _ranking(target, block["order"], "order")
+    rules = _bounded_list(target, block.get("rules", []), "rules[].outcome", MAX_RULES)
     principles = _bounded_list(
-        target, block.get("principles", []), "principles[].id", MAX_PRINCIPLES
+        target, block.get("principles", []), "principles[].name", MAX_PRINCIPLES
     )
     seen: set[str] = set()
     return Priorities(
         drivers,
         tuple(_rule(target, rule) for rule in rules),
         tuple(_principle(target, item, seen) for item in principles),
-        _overrides(target, block.get("agents", {})),
+        _overrides(target, block.get("agent_order", {})),
     )
 
 
 def _trains_dir(target: Path, raw: dict[str, object]) -> str | None:
-    value = raw.get("trains_dir")
+    # 0245: the folder of the project's own run definitions, an override.
+    value = raw.get("run_definitions_folder")
     if value is None:
         return None
     if not isinstance(value, str) or not repo_relative(value):
         raise _key_error(
             target,
-            "trains_dir",
+            "run_definitions_folder",
             "must be a project-relative folder path without a leading slash, '..' or globs",
         )
     return value
@@ -585,36 +610,29 @@ def _command_list(value: object) -> tuple[str, ...] | None:
     return tuple(str(item) for item in value)
 
 
-def _stack_commands(
-    target: Path, raw: dict[str, object]
-) -> tuple[dict[str, tuple[str, ...] | None], str | None]:
-    stack = raw.get("stack", {})
-    if not isinstance(stack, dict):
-        raise _key_error(target, "stack", "must be an object")
+def _stack_commands(target: Path, raw: dict[str, object]) -> dict[str, tuple[str, ...] | None]:
+    # 0192, 0245: the commands group, each JSON name read onto its Manifest field.
+    group = _group(target, raw, "commands", COMMAND_KEYS)
     out: dict[str, tuple[str, ...] | None] = {}
-    for key in STACK_COMMANDS:
-        value = stack.get(key)
+    for key, attr in COMMAND_KEYS.items():
+        value = group.get(key)
         commands = None if value is None else _command_list(value)
         if value is not None and commands is None:
             raise _key_error(
                 target,
-                f"stack.{key}",
+                f"commands.{key}",
                 "must be null, a non-empty string, or a non-empty list of non-empty strings",
             )
         # 93: a line break or other control character could forge a line wherever it prints.
         if commands is not None and not all(cmd.isprintable() for cmd in commands):
             raise _key_error(
                 target,
-                f"stack.{key}",
+                f"commands.{key}",
                 "holds a control character, such as a line break; each command must be one "
                 "printable line (93)",
             )
-        out[key] = commands
-    manager = stack.get("package_manager")
-    if manager is not None and manager not in PACKAGE_MANAGERS:
-        names = ", ".join(f'"{name}"' for name in PACKAGE_MANAGERS)
-        raise _key_error(target, "stack.package_manager", f"must be null or one of {names}")
-    return out, manager if isinstance(manager, str) else None
+        out[attr] = commands
+    return out
 
 
 def pathspec_safe(entry: str) -> bool:
@@ -623,31 +641,25 @@ def pathspec_safe(entry: str) -> bool:
 
 
 def _assets(target: Path, raw: dict[str, object]) -> Assets:
-    # 0192: roots and extensions as jail_narrowing checks them, in words a pathspec can carry.
-    block = raw.get("assets", {})
-    if not isinstance(block, dict):
-        raise _key_error(target, "assets", "must be an object")
-    unknown = sorted(str(key) for key in set(block) - set(ASSETS_KEYS))
-    if unknown:
-        known = ", ".join(ASSETS_KEYS)
-        raise _key_error(target, "assets", f"has unknown keys {unknown} (known: {known})")
-    roots = block.get("roots", [])
+    # 0192, 0245: folders and file types as prohibited writes checks them, as pathspec words.
+    block = _group(target, raw, "code_review_exemptions", EXEMPTION_KEYS)
+    roots = block.get("folders", [])
     if not isinstance(roots, list) or not all(
         isinstance(r, str) and repo_relative(r) and pathspec_safe(r) for r in roots
     ):
         raise _key_error(
             target,
-            "assets.roots",
+            "code_review_exemptions.folders",
             "must be a list of project-relative folder paths of letters, digits, dots, dashes, "
             "underscores and slashes, without a leading slash, '..' or globs",
         )
-    extensions = block.get("extensions", [])
+    extensions = block.get("file_types", [])
     if not isinstance(extensions, list) or not all(
         isinstance(e, str) and _extension_ok(e) and pathspec_safe(e) for e in extensions
     ):
         raise _key_error(
             target,
-            "assets.extensions",
+            "code_review_exemptions.file_types",
             "must be a list of endings that each start with a dot and hold only letters, "
             "digits, dots, dashes and underscores",
         )
@@ -655,26 +667,24 @@ def _assets(target: Path, raw: dict[str, object]) -> Assets:
     if sources:
         raise _key_error(
             target,
-            "assets.extensions",
+            "code_review_exemptions.file_types",
             f"names the source endings {sources}, which the judges always read and the secret "
             "scan always covers",
         )
-    size = block.get("max_bytes")
+    size = block.get("report_over_bytes")
     if size is not None and (isinstance(size, bool) or not isinstance(size, int) or size < 1):
-        raise _key_error(target, "assets.max_bytes", "must be null or a whole number of at least 1")
+        raise _key_error(
+            target,
+            "code_review_exemptions.report_over_bytes",
+            "must be null or a whole number of at least 1",
+        )
     return Assets(tuple(map(str, roots)), tuple(map(str, extensions)), size)
 
 
 def _dependencies(target: Path, raw: dict[str, object]) -> Dependencies:
-    # 0196, 0197: unknown keys are refused; each ecosystem named once; a lowered age has a reason.
-    block = raw.get("dependencies", {})
-    if not isinstance(block, dict):
-        raise _key_error(target, "dependencies", "must be an object")
-    unknown = sorted(str(key) for key in set(block) - set(DEPENDENCIES_KEYS))
-    if unknown:
-        known = ", ".join(DEPENDENCIES_KEYS)
-        raise _key_error(target, "dependencies", f"has unknown keys {unknown} (known: {known})")
-    installs = block.get("installs", [])
+    # 0196, 0197, 0245: the packages group; each installer named once; a lowered age has a reason.
+    block = _group(target, raw, "packages", PACKAGE_KEYS)
+    installs = block.get("allowed_installers", [])
     if (
         not isinstance(installs, list)
         or not all(isinstance(e, str) and e in INSTALL_ECOSYSTEMS for e in installs)
@@ -683,26 +693,23 @@ def _dependencies(target: Path, raw: dict[str, object]) -> Dependencies:
         names = ", ".join(INSTALL_ECOSYSTEMS)
         raise _key_error(
             target,
-            "dependencies.installs",
+            "packages.allowed_installers",
             f"must be a list naming each of {names} at most once (0196)",
         )
-    days = block.get("minimum_release_age_days", RELEASE_AGE_DEFAULT)
+    days = block.get("minimum_age_days", RELEASE_AGE_DEFAULT)
     if isinstance(days, bool) or not isinstance(days, int) or days < 0:
-        raise _key_error(
-            target, "dependencies.minimum_release_age_days", "must be a whole number of 0 or more"
-        )
-    reason = block.get("minimum_release_age_reason")
+        raise _key_error(target, "packages.minimum_age_days", "must be a whole number of 0 or more")
+    reason = block.get("minimum_age_reason")
     if reason is not None and (not isinstance(reason, str) or not reason.isprintable()):
         raise _key_error(
-            target, "dependencies.minimum_release_age_reason", "must be null or one printable line"
+            target, "packages.minimum_age_reason", "must be null or one printable line"
         )
     if days < RELEASE_AGE_DEFAULT and len((reason or "").strip()) < RELEASE_AGE_REASON_MIN:
         raise _key_error(
             target,
-            "dependencies.minimum_release_age_days",
-            f"is below {RELEASE_AGE_DEFAULT} days, which needs a "
-            f"dependencies.minimum_release_age_reason of at least {RELEASE_AGE_REASON_MIN} "
-            "characters (0197)",
+            "packages.minimum_age_days",
+            f"is below {RELEASE_AGE_DEFAULT} days, which needs a packages.minimum_age_reason "
+            f"of at least {RELEASE_AGE_REASON_MIN} characters (0197)",
         )
     return Dependencies(tuple(map(str, installs)), days, reason)
 
@@ -727,28 +734,34 @@ def _local_url(url: object) -> bool:
 
 def _dev_server(target: Path, raw: dict[str, object]) -> DevServer | None:
     # 0164: the plugin names the operator's local site; it never starts or fetches it.
-    block = raw.get("dev_server")
-    if block is None:
+    if raw.get("local_testing") is None:
         return None
-    if not isinstance(block, dict):
-        raise _key_error(target, "dev_server", "must be null or an object")
-    unknown = sorted(str(key) for key in set(block) - set(DEV_SERVER_KEYS))
-    missing = sorted(set(DEV_SERVER_KEYS) - set(block))
-    if unknown or missing:
-        detail = f"has unknown keys {unknown}" if unknown else f"lacks {', '.join(missing)}"
-        raise _key_error(target, "dev_server", f"{detail} (known: {', '.join(DEV_SERVER_KEYS)})")
+    block = _group(target, raw, "local_testing", LOCAL_TESTING_KEYS)
+    missing = sorted(set(LOCAL_TESTING_KEYS) - set(block))
+    if missing:
+        known = ", ".join(LOCAL_TESTING_KEYS)
+        raise _key_error(target, "local_testing", f"lacks {', '.join(missing)} (known: {known})")
     url = block["url"]
     if not _local_url(url):
         hosts = " or ".join(DEV_SERVER_HOSTS)
-        raise _key_error(target, "dev_server.url", f"must be an http or https url on {hosts}")
-    check = block["check"]
+        raise _key_error(target, "local_testing.url", f"must be an http or https url on {hosts}")
+    check = block["instructions"]
     if not isinstance(check, str) or not check.strip() or not check.isprintable() or "`" in check:
         raise _key_error(
             target,
-            "dev_server.check",
+            "local_testing.instructions",
             "must be one printable line of plain words without backticks",
         )
     return DevServer(str(url), check)
+
+
+def _entrypoints(target: Path, raw: dict[str, object]) -> None:
+    # 0245: the project's file areas the planner reads; an object of names to paths.
+    value = raw.get("entrypoints")
+    if value is not None and not (
+        isinstance(value, dict) and all(isinstance(v, str) for v in value.values())
+    ):
+        raise _key_error(target, "entrypoints", "must be an object of area names to paths")
 
 
 def load(repo: Path) -> Manifest | None:
@@ -765,18 +778,26 @@ def parse(raw: object, target: Path) -> Manifest:
             f"{target} is not a JSON object. Next: start from the example in "
             "docs/project-requirements.md."
         )
+    # 0245: an unknown top-level key, an old name included, is refused with the valid names.
+    unknown = sorted(str(key) for key in set(raw) - set(TOP_KEYS))
+    if unknown:
+        raise ManifestError(
+            f"{target} has unknown keys {unknown} (known: {', '.join(TOP_KEYS)}). "
+            "Next: delete or rename those keys in the service manifest, then rerun."
+        )
+    _entrypoints(target, raw)
     paths, extensions = _narrowing(target, raw)
-    commands, manager = _stack_commands(target, raw)
+    commands = _stack_commands(target, raw)
+    docs = _docs(target, raw)
     return Manifest(
         paths,
         extensions,
-        features=_features(target, raw),
+        features=_features(target, raw, docs),
         trains_dir=_trains_dir(target, raw),
         unit_test_cmd=commands["unit_test_cmd"],
         typecheck_cmd=commands["typecheck_cmd"],
         lint_cmd=commands["lint_cmd"],
-        package_manager=manager,
-        docs=_docs(target, raw),
+        docs=docs,
         priorities=_priorities(target, raw),
         frameworks=_frameworks(target, raw),
         assets=_assets(target, raw),

@@ -17,7 +17,7 @@ import pytest
 from lib.audit import project_data_dir
 
 from tests.conftest import SCRIPTS_DIR, git, run_cli
-from tests.test_ledger import FIX
+from tests.test_ledger import FIX, _name
 
 SCRIPT = SCRIPTS_DIR / "append_ledger.py"
 TODAY = datetime.now(UTC).date().isoformat()
@@ -46,13 +46,16 @@ def _entry(repo: Path, text: str, name: str = "e.md") -> Path:
 def table_repo(repo_cwd: Path) -> Path:
     (repo_cwd / "docs").mkdir()
     shutil.copy(FIX / "table.md", repo_cwd / "docs" / "decisions.md")
+    _name(repo_cwd, "decisions.md")
     project_data_dir(str(repo_cwd)).mkdir(parents=True)
     return repo_cwd
 
 
 @pytest.fixture
 def heading_repo(repo_cwd: Path) -> Path:
-    shutil.copy(FIX / "heading.md", repo_cwd / "LEDGER.md")
+    (repo_cwd / "docs").mkdir()
+    shutil.copy(FIX / "heading.md", repo_cwd / "docs" / "LEDGER.md")
+    _name(repo_cwd, "LEDGER.md")
     project_data_dir(str(repo_cwd)).mkdir(parents=True)
     return repo_cwd
 
@@ -61,13 +64,51 @@ def test_probe_reports_table_ledger(table_repo: Path) -> None:
     out = _run(table_repo, "--probe")
     ledger = table_repo / "docs" / "decisions.md"
     assert out.returncode == 0, out.stderr
-    assert out.stdout == f"ledger: {ledger} (probe, markdown-table-row, seq=2)\n"
+    assert out.stdout == f"ledger: {ledger} (manifest, markdown-table-row, seq=2)\n"
 
 
 def test_probe_reports_none(repo_cwd: Path) -> None:
     out = _run(repo_cwd, "--probe")
     assert out.returncode == 0, out.stderr
-    assert out.stdout.startswith("ledger: none declared and none found. Next: declare a ledger")
+    assert out.stdout.startswith("decisions: no decisions file is named, so no decision is")
+
+
+def test_a_conventional_file_never_named_takes_no_append(repo_cwd: Path) -> None:
+    # 0247: no probe by conventional name; the append refuses and the file is untouched.
+    (repo_cwd / "docs").mkdir()
+    ledger = repo_cwd / "docs" / "decisions.md"
+    shutil.copy(FIX / "table.md", ledger)
+    before = ledger.read_bytes()
+    out = _append(repo_cwd, 2, _entry(repo_cwd, "Third ruling. | None. | None"))
+    assert out.returncode == 1 and "Next: set docs.decisions_filename" in out.stderr
+    assert ledger.read_bytes() == before
+
+
+def test_a_named_file_not_yet_written_is_created_as_a_table(repo_cwd: Path) -> None:
+    # 0247: the first decision creates the named file with the default table.
+    (repo_cwd / "docs").mkdir()
+    _name(repo_cwd, "decisions.md")
+    ledger = repo_cwd / "docs" / "decisions.md"
+    probe = _run(repo_cwd, "--probe")
+    assert probe.stdout == f"ledger: {ledger} (manifest, markdown-table-row, seq=0)\n"
+    assert not ledger.exists()
+    out = _append(repo_cwd, 0, _entry(repo_cwd, "First ruling. | None. | None"))
+    assert out.returncode == 0, out.stderr
+    row = f"| 0001-TST-PLT | {TODAY} | First ruling. | None. | None |\n"
+    assert ledger.read_text(encoding="utf-8") == HEADER_ONLY + row
+
+
+def test_a_named_file_with_no_docs_folder_on_disk_is_refused(repo_cwd: Path) -> None:
+    # 0247: the docs folder is never created for the operator; the append names it.
+    _name(repo_cwd, "decisions.md", folder="notes")
+    entry = repo_cwd / "e.md"
+    entry.write_text("First ruling. | None. | None", encoding="utf-8")
+    probe = _run(repo_cwd, "--probe")
+    assert probe.returncode == 0 and "seq=0" in probe.stdout
+    out = _append(repo_cwd, 0, entry)
+    assert out.returncode == 1, out.stdout
+    assert f"the docs folder {repo_cwd / 'notes'} does not exist. Next:" in out.stderr
+    assert not (repo_cwd / "notes").exists()
 
 
 def test_append_writes_last_table_row(table_repo: Path) -> None:
@@ -140,32 +181,28 @@ def test_append_of_an_id_already_in_the_file_refused(table_repo: Path, extra: st
 
 @pytest.mark.parametrize(
     ("worktree", "branch", "code"),
-    [(False, "main", 0), (False, "release", 1), (True, "side", 0), (True, "main", 1)],
+    [(False, "main", 0), (False, "release", 1), (True, "main", 0), (True, "side", 1)],
 )
 def test_branch_pinned_ledger_writes_only_on_its_branch(
     table_repo: Path, tmp_path: Path, worktree: bool, branch: str, code: int
 ) -> None:
-    # issue 186: HEAD is read from the checkout holding the ledger, a linked worktree included.
-    checkout = table_repo
+    # issue 186: HEAD is read from the checkout holding the file, never the caller's worktree.
+    _name(table_repo, "decisions.md", git_branch=branch)
+    cwd = table_repo
     if worktree:
-        git(table_repo, "add", "docs")
+        git(table_repo, "add", "docs", "service-manifest.json")
         git(table_repo, "commit", "-q", "-m", "ledger")
-        checkout = tmp_path.resolve() / "side"
-        git(table_repo, "worktree", "add", "-q", "-b", "side", str(checkout))
-    ledger = checkout / "docs" / "decisions.md"
-    decl = {"path": str(ledger), "format": "markdown-table-row", "branch": branch}
-    decl |= {"id_scheme": "{seq:04d}-{repo}-{type}", "sequence_source": "last-row-id"}
-    config = project_data_dir(str(table_repo)) / "config.json"
-    config.write_text(json.dumps({"ledger": decl}), "utf-8")
+        cwd = tmp_path.resolve() / "side"
+        git(table_repo, "worktree", "add", "-q", "-b", "side", str(cwd))
+    ledger = table_repo / "docs" / "decisions.md"
     before = ledger.read_bytes()
-    probe = _run(table_repo, "--probe")
-    out = _append(table_repo, 2, _entry(table_repo, "Third ruling. | None. | None"))
+    probe = _run(cwd, "--probe")
+    out = _append(cwd, 2, _entry(cwd, "Third ruling. | None. | None"))
     assert (probe.returncode, out.returncode) == (code, code), out.stderr
     if code:
-        have = "side" if worktree else "main"
         for done in (probe, out):
             assert (
-                f"Next: switch the checkout {checkout} from branch {have} to branch {branch}"
+                f"Next: switch the checkout {table_repo} from branch main to branch {branch}"
                 in (done.stderr)
             )
         assert ledger.read_bytes() == before
@@ -186,7 +223,7 @@ def test_heading_frontmatter_bumps_sequence(heading_repo: Path) -> None:
     out = _append(heading_repo, 7, _entry(heading_repo, "Eight.\n"))
     assert out.returncode == 0, out.stderr
     assert out.stdout == "appended 8\n"
-    text = (heading_repo / "LEDGER.md").read_text(encoding="utf-8")
+    text = (heading_repo / "docs" / "LEDGER.md").read_text(encoding="utf-8")
     assert text.startswith("---\nsequence_id: 8\n---\n")
     assert text.endswith(f"Seven.\n\n## Entry 8 - {TODAY}\n\nEight.\n")
 
@@ -194,7 +231,7 @@ def test_heading_frontmatter_bumps_sequence(heading_repo: Path) -> None:
 def test_heading_body_cannot_inject_entry_heading(heading_repo: Path) -> None:
     out = _append(heading_repo, 7, _entry(heading_repo, "x\n## Entry 99 - d\n"))
     assert out.returncode == 1 and "Next:" in out.stderr
-    assert "sequence_id: 7" in (heading_repo / "LEDGER.md").read_text(encoding="utf-8")
+    assert "sequence_id: 7" in (heading_repo / "docs" / "LEDGER.md").read_text(encoding="utf-8")
 
 
 def test_missing_entry_file_exits_1(table_repo: Path) -> None:
@@ -268,7 +305,9 @@ def test_shared_charter_ledger_locks_in_owning_repo(tmp_path: Path) -> None:
         subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
         data = project_data_dir(str(repo))
         data.mkdir(parents=True)
-        (data / "config.json").write_text(json.dumps({"charter_root": str(charter)}), "utf-8")
+        config = {"local_docs_folder": str(charter)}
+        (data / "config.json").write_text(json.dumps(config), "utf-8")
+        _name(repo, "decision-log.md")
         repos.append(repo)
     ids = _race(repos, charter / "decision-log.md")
     assert ids == ["0003-TST-PLT", "0004-TST-PLT", "0005-TST-PLT", "0006-TST-PLT"]
@@ -277,12 +316,13 @@ def test_shared_charter_ledger_locks_in_owning_repo(tmp_path: Path) -> None:
 
 
 def test_symlink_and_real_path_share_one_lock(table_repo: Path) -> None:
-    os.symlink("docs/decisions.md", table_repo / "decision-log.md")
+    os.symlink("decisions.md", table_repo / "docs" / "decision-log.md")
+    _name(table_repo, "decision-log.md")
     assert "decision-log.md" in _run(table_repo, "--probe").stdout
     assert (
         _append(table_repo, 2, _entry(table_repo, "Third ruling. | None. | None")).returncode == 0
     )
-    (table_repo / "decision-log.md").unlink()
+    _name(table_repo, "decisions.md")
     assert "docs/decisions.md" in _run(table_repo, "--probe").stdout
     assert (
         _append(table_repo, 3, _entry(table_repo, "Fourth ruling. | None. | None")).returncode == 0
@@ -352,6 +392,7 @@ def test_symlinked_ledger_locks_rejected(table_repo: Path, tmp_path: Path) -> No
 def test_symlinked_data_dir_rejected(repo_cwd: Path, tmp_path: Path) -> None:
     (repo_cwd / "docs").mkdir()
     shutil.copy(FIX / "table.md", repo_cwd / "docs" / "decisions.md")
+    _name(repo_cwd, "decisions.md")
     (tmp_path / "elsewhere").mkdir()
     (repo_cwd / ".claude").mkdir()
     os.symlink(tmp_path / "elsewhere", repo_cwd / ".claude" / "daedalus")
@@ -369,7 +410,7 @@ def test_ledger_byte_identical_after_mismatch(table_repo: Path) -> None:
 
 
 def test_crlf_heading_ledger_append(heading_repo: Path) -> None:
-    ledger = heading_repo / "LEDGER.md"
+    ledger = heading_repo / "docs" / "LEDGER.md"
     ledger.write_bytes(ledger.read_bytes().replace(b"\n", b"\r\n"))
     assert _append(heading_repo, 7, _entry(heading_repo, "Eight.")).returncode == 0
     raw = ledger.read_bytes()
@@ -382,6 +423,7 @@ def test_non_git_cwd_refused(tmp_path: Path) -> None:
     plain = tmp_path.resolve() / "plain"
     (plain / "docs").mkdir(parents=True)
     shutil.copy(FIX / "table.md", plain / "docs" / "decisions.md")
+    _name(plain, "decisions.md")
     entry = tmp_path / "e.md"
     entry.write_text("Third ruling. | None. | None", encoding="utf-8")
     out = _append(plain, 2, entry)
@@ -395,7 +437,8 @@ def test_non_git_charter_root_refused(repo_cwd: Path, tmp_path: Path) -> None:
     shutil.copy(FIX / "table.md", charter / "decision-log.md")
     data = project_data_dir(str(repo_cwd))
     data.mkdir(parents=True)
-    (data / "config.json").write_text(json.dumps({"charter_root": str(charter)}), "utf-8")
+    (data / "config.json").write_text(json.dumps({"local_docs_folder": str(charter)}), "utf-8")
+    _name(repo_cwd, "decision-log.md")
     out = _append(repo_cwd, 2, _entry(repo_cwd, "Third ruling. | None. | None"))
     assert out.returncode == 1 and f"{charter} is not inside a git repository" in out.stderr
     assert not (charter / ".claude").exists()
@@ -407,13 +450,9 @@ def test_non_git_cwd_refused_with_a_git_owned_ledger(table_repo: Path, tmp_path:
     data = plain / ".claude" / "daedalus"
     data.mkdir(parents=True)
     ledger = table_repo / "docs" / "decisions.md"
-    decl = {
-        "path": str(ledger),
-        "format": "markdown-table-row",
-        "id_scheme": "{seq:04d}-{repo}-{type}",
-        "sequence_source": "last-row-id",
-    }
-    (data / "config.json").write_text(json.dumps({"ledger": decl}), "utf-8")
+    config = {"local_docs_folder": str(table_repo / "docs")}
+    (data / "config.json").write_text(json.dumps(config), "utf-8")
+    _name(plain, "decisions.md")
     before = ledger.read_bytes()
     out = _append(plain, 2, _entry(plain, "Third ruling. | None. | None"))
     assert out.returncode == 1, out.stdout + out.stderr
@@ -429,10 +468,11 @@ def test_header_only_ledger_probes_seq_zero_and_appends_0001(repo_cwd: Path) -> 
     (repo_cwd / "docs").mkdir()
     ledger = repo_cwd / "docs" / "decisions.md"
     ledger.write_text(HEADER_ONLY, encoding="utf-8")
+    _name(repo_cwd, "decisions.md")
     project_data_dir(str(repo_cwd)).mkdir(parents=True)
     out = _run(repo_cwd, "--probe")
     assert out.returncode == 0, out.stderr
-    assert out.stdout == f"ledger: {ledger} (probe, markdown-table-row, seq=0)\n"
+    assert out.stdout == f"ledger: {ledger} (manifest, markdown-table-row, seq=0)\n"
     out = _append(repo_cwd, 0, _entry(repo_cwd, "First ruling. | None. | None\n"))
     assert out.returncode == 0, out.stderr
     assert out.stdout == "appended 0001-TST-PLT\n"
@@ -445,6 +485,7 @@ def test_empty_table_above_populated_one_exits_1(repo_cwd: Path) -> None:
     (repo_cwd / "docs").mkdir()
     text = HEADER_ONLY + "\n" + (FIX / "table.md").read_text(encoding="utf-8")
     (repo_cwd / "docs" / "decisions.md").write_text(text, encoding="utf-8")
+    _name(repo_cwd, "decisions.md")
     project_data_dir(str(repo_cwd)).mkdir(parents=True)
     out = _run(repo_cwd, "--probe")
     assert out.returncode == 1
@@ -456,6 +497,7 @@ def test_two_empty_id_tables_exit_1(repo_cwd: Path) -> None:
     (repo_cwd / "docs").mkdir()
     text = HEADER_ONLY + "\n" + HEADER_ONLY
     (repo_cwd / "docs" / "decisions.md").write_text(text, encoding="utf-8")
+    _name(repo_cwd, "decisions.md")
     project_data_dir(str(repo_cwd)).mkdir(parents=True)
     out = _run(repo_cwd, "--probe")
     assert out.returncode == 1
@@ -535,6 +577,7 @@ def test_cell_checks_skip_a_ledger_without_the_columns(repo_cwd: Path) -> None:
     (repo_cwd / "docs").mkdir()
     ledger = repo_cwd / "docs" / "decisions.md"
     ledger.write_text("| Id | Date | Note |\n|---|---|---|\n", encoding="utf-8")
+    _name(repo_cwd, "decisions.md")
     project_data_dir(str(repo_cwd)).mkdir(parents=True)
     out = _append(repo_cwd, 0, _entry(repo_cwd, "free text"))
     assert out.returncode == 0, out.stderr

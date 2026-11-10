@@ -1412,7 +1412,7 @@ def _conductor_decide(repo_cwd: Path, project_data: Path, command: str) -> Any:
         subprocess.run(["git", "init", "-q", str(charter)], check=True)
         url = "https://github.com/acme/charter.git"
         subprocess.run(["git", "-C", str(charter), "remote", "add", "origin", url], check=True)
-    config = json.dumps({"charter_root": str(charter)})
+    config = json.dumps({"local_docs_folder": str(charter)})
     (project_data / "config.json").write_text(config, encoding="utf-8")
     for name, value in (
         ("<repo>", str(repo_cwd)),

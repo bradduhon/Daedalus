@@ -35,18 +35,21 @@ from lib.repo_root import checkout_git_dir  # noqa: E402
 
 # 22: the --help text, kept below the future import as a plain string.
 DESCRIPTION = (
-    "Append one entry to the declared or probed ledger under a lock (0004). "
-    "--probe prints the resolved ledger and its sequence. An append checks --expected-seq "
-    "against the ledger under the lock and exits 2 on a mismatch, 1 on any other error. "
-    "A table row's Supersedes and Ruling cells are checked when the header has the column "
-    "(0090, 0094); rows already in the ledger are never re-checked. The next id follows the "
-    "highest id of any Id table, and an id already in the ledger is refused. A declared "
-    "ledger.branch refuses the append and the probe on any other branch (issue 186)."
+    "Append one entry to the decisions file the service manifest names under a lock (0004, "
+    "0247). --probe prints the named decisions file, its layout and its sequence, and appends "
+    "nothing. A named file that does not exist yet is created as a table on the first append. "
+    "An append checks --expected-seq against the file under the lock and exits 2 on a "
+    "mismatch, 1 on any other error. A table row's Supersedes and Ruling cells are checked when "
+    "the header has the column (0090, 0094); rows already in the file are never re-checked. The "
+    "next id follows the highest id of any Id table, and an id already in the file is refused. "
+    "A docs.git_branch refuses the append and the probe on any other branch (issue 186)."
 )
 NONE_FOUND = (
-    "ledger: none declared and none found. "
-    "Next: declare a ledger block or create one (docs/project-requirements.md)"
+    "decisions: no decisions file is named, so no decision is recorded. "
+    "Next: set docs.decisions_filename in service-manifest.json to record decisions"
 )
+# 0247: the header a named decisions file is created with on its first decision.
+DEFAULT_TABLE = "| Id | Date | Ruling | Supersedes | Follow-ups |\n|---|---|---|---|---|\n"
 _CODE = re.compile(r"[A-Za-z0-9_-]+")
 _ENTRY_LINE = re.compile(r"^## Entry [0-9]")
 LOCK_TIMEOUT_S = 5.0
@@ -264,16 +267,33 @@ def _require_git(path: str) -> None:
     # M6, 0077: the owner resolves as the jail resolves it; a non-git root is refused.
     if root_info(str(project_root(Path(path))))[1] != "git":
         raise AppendError(
-            f"{path} is not inside a git repository. Next: run from the repo that declares "
-            "the ledger, or initialize the charter repo."
+            f"{path} is not inside a git repository. Next: run from the repo that names the "
+            "decisions file, or initialize the docs folder's own repository."
         )
+
+
+def _create_named(ledger: ResolvedLedger) -> None:
+    # 0247: the named file is created at its path with the default table, never a folder.
+    if os.path.lexists(ledger.path):
+        return
+    if not ledger.path.parent.is_dir():
+        raise AppendError(
+            f"the docs folder {ledger.path.parent} does not exist. Next: create the folder, or "
+            "correct docs.folder or local_docs_folder, then record the decision again."
+        )
+    _require_git(os.path.realpath(ledger.path.parent))
+    try:
+        atomic.create_once(ledger.path, DEFAULT_TABLE, 0o644)
+    except FileExistsError:
+        return
 
 
 def _lock_path(ledger: ResolvedLedger) -> Path:
     real = os.path.realpath(ledger.path)
     if not os.path.isfile(real):
         raise AppendError(
-            f"ledger {ledger.path} does not exist. Next: create it or fix the declared path."
+            f"decisions file {ledger.path} is not a file. Next: correct "
+            "docs.decisions_filename or move what sits at that path."
         )
     owner = str(project_root(Path(real).parent))
     _require_git(owner)
@@ -290,6 +310,7 @@ def _lock_path(ledger: ResolvedLedger) -> Path:
 def _append(args: argparse.Namespace, ledger: ResolvedLedger) -> str:
     entry = _read_entry(Path(args.cwd, args.entry_file))
     date = datetime.now(UTC).date().isoformat()
+    _create_named(ledger)
     lock = _lock_path(ledger)
     with ExitStack() as stack:
         try:
@@ -345,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"ledger: {ledger.path} ({ledger.origin}, {ledger.format}, seq={seq})")
             return 0
         if ledger is None:
-            raise AppendError(NONE_FOUND.removeprefix("ledger: "))
+            raise AppendError(NONE_FOUND)
         _require_git(args.cwd)
         print(f"appended {_append(args, ledger)}")
         return 0

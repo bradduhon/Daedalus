@@ -289,17 +289,8 @@ def clear_train(repo: Path) -> Path:
 DIRTY_LIMIT = 10
 RERUN = "start the Build Train again (/daedalus:run)."
 CLEAN_NEXT = f"Next: commit or stash your changes from your own shell, then {RERUN}"
-LEDGER_NONE = "ledger: none declared and none found."
-LEDGER_OFF = "ledger: off in the service manifest."
-LEDGER_QUESTION = (
-    "This repo has no decision ledger. Options: name an existing file, or let Daedalus "
-    "create docs/decisions.md as a table. Which?"
-)
-LEDGER_TABLE = "| Id | Date | Ruling | Supersedes | Follow-ups |\n|---|---|---|---|---|"
-
-
-class LedgerQuestion(WorkspaceError):
-    pass
+# 0247: with no decisions file named, a run records no decisions and asks nothing about it.
+LEDGER_NONE = "decisions: none, no decisions file is named in the service manifest."
 
 
 def _out(repo: Path, *args: str) -> str:
@@ -349,15 +340,13 @@ def repo_root(cwd: Path) -> Path:
 
 
 def _ledger_line(repo: Path, config: Config, ledger_feature: bool | None) -> str:
-    # 0069: off resolves nothing; absent uses a found ledger and never asks; on asks when none.
+    # 0247: a named decisions file or none; nothing is searched for and nothing is asked.
     if ledger_feature is False:
-        return LEDGER_OFF
+        return LEDGER_NONE
     try:
         ledger = resolve_ledger(str(repo), config)
-        if ledger is None and ledger_feature is None:
-            return LEDGER_NONE
         if ledger is None:
-            raise LedgerQuestion(f"{LEDGER_NONE}\n{LEDGER_QUESTION}\n{LEDGER_TABLE}")
+            return LEDGER_NONE
         seq = read_sequence(ledger)
     except LedgerError as exc:
         raise WorkspaceError(str(exc)) from exc
@@ -437,7 +426,8 @@ def _open_train(repo: Path, train_id: str, state: dict[str, object]) -> None:
 
 def _config_lines(config: Config, cache: str | None) -> list[str]:
     policy = f"{config.policy.engine} {config.policy.path}" if config.policy else "none declared"
-    # 0019: a pack has no path in config.json; the standards skill reads it from this line.
+    # 0019, 0245: a coding_rules builtin has no path in config.json, unlike a folder or file
+    # entry; the standards skill reads its path from this line.
     packs = [f"{s.name} at {s.path}" for s in config.standards_sources if s.kind == "pack"]
     return [
         f"policy: {policy}  standards: {len(config.standards_sources)} sources",
