@@ -845,7 +845,7 @@ def saved_dir(root: Path, create: bool) -> Path | None:
         if create:
             raise TokenError(
                 f"no folder to save the table in ({exc}). "
-                "Next: run python3 <plugin>/scripts/daedalus_doctor.py and read its data folder line."
+                "Next: run python3 <plugin>/scripts/daedalus_doctor.py for the data folder."
             ) from exc
         return None
 
