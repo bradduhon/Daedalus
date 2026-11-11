@@ -696,6 +696,7 @@ Daedalus/
 │   ├── lib/packs.py                 # loads and checks framework control packs
 │   ├── lib/passes.py                # writes and checks the operator's one-time pass for a refused command
 │   ├── lib/plan_record.py           # loads and validates plan records
+│   ├── lib/plugin_approvals.py      # the plugin's own approval list the jail hook reads
 │   ├── lib/project_keys.py          # every manifest and config key, its reference row, and the starter files
 │   ├── lib/project_root.py          # finds the project root
 │   ├── lib/redact.py                # secret masking for audit records

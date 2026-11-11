@@ -527,6 +527,25 @@ def test_a_symlinked_tmp_root_is_not_approved(
     same_as_today(_write(env, self_assessment.handover_dir(env) / target.name))
 
 
+def test_any_folder_check_refusal_is_not_approved(
+    env: Path, home: Path, monkeypatch: pytest.MonkeyPatch, same_as_today: Any
+) -> None:
+    # Every reason check_dirs gives, a foreign owner of TMP_ROOT included, withholds the approval.
+    _mode(home, True)
+    target = _handover(env)
+    monkeypatch.setattr(storage, "check_tmp_dirs", lambda *_: "belongs to another user")
+    same_as_today(_write(env, target))
+
+
+def test_a_tmp_root_that_is_a_file_is_not_approved(
+    env: Path, home: Path, same_as_today: Any
+) -> None:
+    _mode(home, True)
+    storage.TMP_ROOT.write_text("", encoding="utf-8")
+    target = self_assessment.handover_dir(env) / self_assessment.handover_name(STAMP)
+    same_as_today(_write(env, target))
+
+
 def test_a_symlinked_target_is_not_approved(
     env: Path, home: Path, tmp_path: Path, same_as_today: Any
 ) -> None:
