@@ -782,6 +782,11 @@ WARN_DISPATCH = (
     "This dispatch skips a train invariant ({reason}). The agent starts without it; "
     "the audit log records the warning."
 )
+# 150: the main session's resume of a bound coder that the rebind refused.
+WARN_RESUME = (
+    "This resume skips a train invariant ({reason}). The message goes out and the coder's "
+    "unit binding is unchanged; the audit log records the warning."
+)
 WARN_NO_CWD = (
     "The hook received no working folder, so the plugin cannot tell which repository this "
     "call touches."
@@ -2967,6 +2972,11 @@ def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision
         if reason:
             # Main never prompted (amends 0106): the dispatch runs with the skipped invariant named.
             return _warn(WARN_DISPATCH.format(reason=reason))
+    if tool in dispatch_binding.RESUME_TOOLS:
+        reason = dispatch_binding.main_resume_reason(tool_input, cwd)
+        if reason:
+            # 150, amends 0106: the resume runs; a refused rebind is warned, never asked.
+            return _warn(WARN_RESUME.format(reason=reason))
     return _allow()
 
 

@@ -19,8 +19,8 @@ from tests.conftest import git as _git
 from tests.helpers import phase_text, table_diff_list
 from tests.hook_chain import evaluate, load
 from tests.hook_chain import judge as decide
+from tests.skill_helpers import HAND_WRITES
 from tests.test_dispatch_binding import TRAIN, seed_plan
-from tests.test_skills import HAND_WRITES
 
 ORCHESTRATOR = "daedalus:orchestrator"
 AGENT_FILE = REPO_ROOT / "agents" / "orchestrator.md"
