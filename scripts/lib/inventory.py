@@ -317,6 +317,31 @@ FILES: tuple[Entry, ...] = (
         "daedalus_path.py ratify, next, record, fact or regenerate; one line is appended",
     ),
     Entry(
+        "<cache>/developer-profile/",
+        "scripts/lib/storage.py:make_data_dir",
+        "daedalus_profile.py rule or tally with the mode on; mode 0700",
+    ),
+    Entry(
+        "<cache>/developer-profile/rules/",
+        "scripts/lib/developer_profile.py:_make_rules_dir",
+        "daedalus_profile.py rule or tally naming a rule; mode 0700",
+    ),
+    Entry(
+        "<cache>/developer-profile/rules/<kind>-<fingerprint>.json",
+        "scripts/lib/developer_profile.py:_save_rule",
+        "daedalus_profile.py rule or tally naming a rule; written whole, mode 0600",
+    ),
+    Entry(
+        "<cache>/developer-profile/tallies.json",
+        "scripts/lib/developer_profile.py:_save_tallies",
+        "daedalus_profile.py tally; written whole, mode 0600",
+    ),
+    Entry(
+        "/tmp/.daedalus/<uid>/developer-profile/<project key>/",
+        "scripts/lib/storage.py:make_tmp_dir",
+        "daedalus_profile.py status, rule or tally with the mode on; mode 0700",
+    ),
+    Entry(
         "<cache>/<feature>/<project key>/",
         "scripts/lib/storage.py:make_data_dir",
         "a feature's first persistent write; the plugin's uninstall removes the data folder",

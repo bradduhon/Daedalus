@@ -338,9 +338,10 @@ The operator file is a third file in the table. It lives at `~/.claude/daedalus/
 | `guidance_source` | `~/.claude/daedalus/operator.json` | Where your working guidance is read from: Claude Code's own memory files, or a guidance folder Daedalus keeps beside this file. Nothing acts on it yet | Nothing acts on it yet: guidance is read where Claude Code reads it. | starter | string | `"claude"` or `"daedalus"` | `"claude"` | `"daedalus"` |
 | `script_language` | `~/.claude/daedalus/operator.json` | The language you want new scripts written in, told to every agent as guidance. Nothing acts on it yet | Nothing acts on it yet: agents choose the language for each script. | starter | string or null | A lowercase language name such as `python`, or `null` | `null`: no language is preferred | `"python"` |
 | `self_assessment` | `~/.claude/daedalus/operator.json` | Whether Self-Assessment mode is on. When it is on, Daedalus records its findings about its own skills, each a bug or a feature, and shows them at the close | Daedalus saves each finding outside your project. | starter | boolean | `true` or `false`; any other value is refused | `false`: Self-Assessment mode is off | `true` |
+| `developer_profile` | `~/.claude/daedalus/operator.json` | Whether Daedalus keeps a Developer Profile of your past answers and choices, to propose better answers later | Daedalus saves your stated rules and answer tallies on your machine only. | starter | boolean | `true` or `false`; any other value is refused | `false`: no Developer Profile is kept | `true` |
 <!-- end key reference -->
 
-Uninstalling the plugin deletes its data folder by default. The findings that `self_assessment` saves live in that folder and go with it. An uninstall run with the `--keep-data` option keeps the data folder.
+Uninstalling the plugin deletes its data folder by default. The findings that `self_assessment` saves live in that folder and go with it. The Developer Profile that `developer_profile` keeps lives in that folder too. It goes with the folder on an uninstall unless you use `--keep-data`. An uninstall run with the `--keep-data` option keeps the data folder.
 
 ## Safety model
 
@@ -680,6 +681,7 @@ Daedalus/
 │   ├── lib/config.py                # config.json loading and validation
 │   ├── lib/controls.py              # loads the controls fragments
 │   ├── lib/credential_paths.py      # the credential-path deny every agent meets
+│   ├── lib/developer_profile.py     # keeps the Developer Profile rules and tallies
 │   ├── lib/dispatch_binding.py      # coder dispatch, warm rebind and first-write claim
 │   ├── lib/fable.py                 # whether Fable is available: config first, then the session record
 │   ├── lib/fetch.py                 # GitHub-only download, size cap and cache lock for refreshes
@@ -733,6 +735,7 @@ Daedalus/
 │   ├── daedalus_findings.py         # start, save and show for Self-Assessment findings
 │   ├── daedalus_map.py              # the dependency map: imports, coverage, record readers, ownership, duplicates
 │   ├── daedalus_path.py             # the question path store's open, check, ask and regenerate commands
+│   ├── daedalus_profile.py          # the Developer Profile store's status, rule, tally, list and forget commands
 │   ├── daedalus_setup.py            # the settings wizard's describe, create and set forms
 │   ├── daedalus_train.py            # the train runner: progress, choice, plan, verdict, exception
 │   ├── daedalus_workspace.py        # begin, lock, create, remove, finish, stop, resume, mark, unmark, release, pr-body

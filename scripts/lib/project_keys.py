@@ -780,6 +780,16 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "Daedalus saves each finding outside your project.",
         ("scripts/lib/self_assessment.py",),
     ),
+    (OPERATOR_FILE_NAME, "developer_profile"): KeyRow(
+        "Whether Daedalus keeps a Developer Profile of your past answers and choices, to propose "
+        "better answers later",
+        "boolean",
+        "`true` or `false`; any other value is refused",
+        "`false`: no Developer Profile is kept",
+        "`true`",
+        "Daedalus saves your stated rules and answer tallies on your machine only.",
+        ("scripts/lib/developer_profile.py",),
+    ),
 }
 
 
@@ -836,6 +846,7 @@ def starter_operator() -> dict[str, object]:
         "guidance_source": GUIDANCE_SOURCES[0],
         "script_language": None,
         "self_assessment": False,
+        "developer_profile": False,
     }
 
 
@@ -1081,7 +1092,7 @@ OVERLAPS: tuple[Overlap, ...] = (
         "A project's config can hold its own copy of any personal preference. A value set "
         "there replaces your personal value for that project only, and the rest still come "
         "from your personal file. Nothing acts on those values yet.",
-        (("scripts/lib/operator_file.py", 168, "a key the override sets replaces the base value"),),
+        (("scripts/lib/operator_file.py", 175, "a key the override sets replaces the base value"),),
         "config",
     ),
 )
