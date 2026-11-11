@@ -25,6 +25,21 @@ def repo(tmp_path: Path) -> Path:
     return folder
 
 
+def _foreign_inner_owner(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
+    # Every folder below the root reports another owner; the root keeps its real one.
+    real = Path.lstat
+
+    def fake(self: Path) -> os.stat_result:
+        info = real(self)
+        if self == root:
+            return info
+        fields = list(info)
+        fields[4] = info.st_uid + 1
+        return os.stat_result(fields)
+
+    monkeypatch.setattr(Path, "lstat", fake)
+
+
 def test_project_key_is_16_hex_of_the_resolved_root_and_subfolders_share_it(repo: Path) -> None:
     sub = repo / "a" / "b"
     sub.mkdir(parents=True)
@@ -43,7 +58,7 @@ def test_tmp_dir_layout_and_modes(tmp_root: Path, repo: Path) -> None:
     got = storage.make_tmp_dir("self-assessment", repo)
     uid = str(os.getuid())
     assert got == tmp_root / uid / "self-assessment" / storage.project_key(repo)
-    assert stat.S_IMODE(tmp_root.stat().st_mode) == 0o1777
+    assert stat.S_IMODE(tmp_root.stat().st_mode) == 0o700
     for folder in (tmp_root / uid, tmp_root / uid / "self-assessment", got):
         assert stat.S_IMODE(folder.stat().st_mode) == 0o700
     assert storage.check_tmp_dirs("self-assessment", repo) is None
@@ -83,9 +98,8 @@ def test_a_folder_others_can_write_is_refused(tmp_root: Path, repo: Path) -> Non
 def test_a_folder_owned_by_another_user_is_refused(
     tmp_root: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    real = storage._uid()
-    monkeypatch.setattr(storage, "_uid", lambda: real + 1)
-    storage.tmp_dir("self-assessment", repo).mkdir(parents=True, mode=0o700)
+    storage.make_tmp_dir("self-assessment", repo)
+    _foreign_inner_owner(monkeypatch, tmp_root)
     assert "not owned" in str(storage.check_tmp_dirs("self-assessment", repo))
 
 
@@ -132,3 +146,20 @@ def test_make_data_dir_creates_each_folder_with_mode_0700(
     assert keyed == plain / storage.project_key(repo)
     for folder in (plain, keyed):
         assert stat.S_IMODE(folder.stat().st_mode) == 0o700
+
+
+def test_a_root_owned_by_another_user_is_refused_before_any_folder_is_made(
+    tmp_root: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tmp_root.mkdir(mode=0o700)
+    me = storage._uid()
+    monkeypatch.setattr(storage, "_uid", lambda: me + 1)
+    with pytest.raises(RuntimeError, match="belongs to another user of this machine"):
+        storage.make_tmp_dir("self-assessment", repo)
+    assert list(tmp_root.iterdir()) == []
+
+
+def test_a_root_owned_by_the_user_passes(tmp_root: Path, repo: Path) -> None:
+    tmp_root.mkdir(mode=0o700)
+    assert storage.check_tmp_dirs("self-assessment", repo) is None
+    assert storage.make_tmp_dir("self-assessment", repo).is_dir()

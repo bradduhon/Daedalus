@@ -12,7 +12,6 @@ from lib.operator_file import load
 from lib.project_root import project_root
 
 FEATURE = "self-assessment"
-TMP_ROOT = storage.TMP_ROOT
 MAX_HANDOVER_BYTES = 8192
 _STAMP = re.compile(r"[0-9]{8}T[0-9]{6}Z")
 HANDOVER_NAME = re.compile(r"handover-[0-9]{8}T[0-9]{6}Z\.json")
