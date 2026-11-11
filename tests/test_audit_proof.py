@@ -907,6 +907,19 @@ def test_live_summary_and_the_anchor_share_one_spelling(
     assert live_summary(repo_cwd).stem == "sess-test"
 
 
+def test_live_summary_names_a_piped_call_and_carries_its_own_next(
+    project_data: Path, hook_input: Any, repo_cwd: Path
+) -> None:
+    # 215: a piped call is refused in the summary's words, not the hooks check's.
+    _bash(hook_input, f"{_summary_cmd(repo_cwd)} | tail -3")
+    with pytest.raises(ProofError) as info:
+        live_summary(repo_cwd)
+    text = str(info.value)
+    assert "was piped or redirected" in text and "needs a direct call" in text
+    assert "Next: run `python3" in text and "no pipe or redirect" in text
+    assert "hooks are not writing" not in text
+
+
 def test_a_reply_with_both_verdict_kinds_refuses(project_data: Path, repo_cwd: Path) -> None:
     # spec 3.6, pin D3 -> D1: the full-reply verdict lines carry both kinds.
     tip = _judged(repo_cwd)

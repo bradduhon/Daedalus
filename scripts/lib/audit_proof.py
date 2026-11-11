@@ -143,10 +143,19 @@ def live_summary(repo: Path) -> Path:
     # W3.2: the summary command checks its own record with the predicate the proof anchors on.
     log, _, newest = _newest_bash(repo)
     if newest is None or not summary_call(newest, repo):
+        # 215: its own refusal, not the hooks check's; names a piped or redirected call.
+        tool_input = newest.get("tool_input") if newest else None
+        command = str(tool_input.get("command") or "") if isinstance(tool_input, dict) else ""
+        did = (
+            "the call was piped or redirected"
+            if "daedalus_train.py" in command and re.search(r"[|<>]", command)
+            else "the call was not the exact summary command"
+        )
         raise ProofError(
             f"NOT LIVE: the newest Bash record in {log.name} is not the summary command the "
-            f"push proof anchors on. Next: run `python3 {PLUGIN_SCRIPT} summary --repo {repo}` "
-            "exactly, single-spaced, from the orchestrator or the main session."
+            f"push proof anchors on ({did}). The summary needs a direct call, so nothing was "
+            f"written. Next: run `python3 {PLUGIN_SCRIPT} summary --repo {repo}` alone, "
+            "single-spaced, with no pipe or redirect, from the orchestrator or the main session."
         )
     return log
 
