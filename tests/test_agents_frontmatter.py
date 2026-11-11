@@ -993,3 +993,17 @@ def test_coder_builds_until_every_row_passes() -> None:
         " receipts; a row you believe wrong is a `YIELD_STANDARDS` question with the row"
         " quoted, never a change."
     ) in section
+
+
+def test_charter_docs_names_the_full_sha_and_a_command_its_allowlist_admits() -> None:
+    # 213: the ledger record command refuses a short sha; the read form must pass the hook chain.
+    from tests.conftest import CFG
+    from tests.hook_chain import decide
+    from tests.payloads import _b
+
+    text = (REPO_ROOT / "agents" / "charter-docs.md").read_text(encoding="utf-8")
+    assert "<40-character sha>" in text
+    assert "<sha>" not in text and "short sha" not in text.replace("refuses a short sha", "")
+    command = "git -C /work/Charter log -1 --format=%H"
+    assert "`git -C <charter_root> log -1 --format=%H`" in text
+    assert decide(_b("charter-docs", command), CFG).allow
