@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from lib import jail, shparse
+from lib import jail, shell, shparse
 from lib.admit import Admitted, admit
 from lib.config import PACKS_DIR
 from lib.controls import ControlsError, _unique
@@ -457,6 +457,16 @@ def _meta(folder: Path) -> dict[str, object]:
     return meta if isinstance(meta, dict) else {}
 
 
+def declared_folder(repo: Path, pack_dir: str) -> Path:
+    # 123: the one join of compliance_rules.folder to the project root.
+    return project_root(repo) / pack_dir
+
+
+def inside_project(repo: Path, folder: Path) -> bool:
+    # 123: allow rule; only a folder whose realpath sits inside the project root's realpath.
+    return shell._under(str(folder), str(project_root(repo)))
+
+
 def pack_folders(repo: Path) -> list[Path]:
     # 0157, 0245: compliance_rules.folder's packs, then the shipped ones unless use_builtin is off.
     # 0192: a shipped pack whose pack.json says default false is read only via extra_builtin.
@@ -466,7 +476,8 @@ def pack_folders(repo: Path) -> list[Path]:
     on = frameworks is None or frameworks.default_packs
     out: list[Path] = []
     if frameworks is not None and frameworks.pack_dir is not None:
-        out += _pack_subfolders(project_root(repo) / frameworks.pack_dir)
+        folder = declared_folder(repo, frameworks.pack_dir)
+        out += _pack_subfolders(folder) if inside_project(repo, folder) else []
     for folder in _pack_subfolders(FRAMEWORKS_DIR):
         if folder.name in named or (on and _meta(folder).get("default", True) is not False):
             out.append(folder)

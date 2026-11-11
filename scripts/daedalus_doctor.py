@@ -168,6 +168,11 @@ def _framework_lines() -> Iterator[tuple[bool, str]]:
 
 
 PACK_DIR_NEXT = "create it or remove compliance_rules.folder from service-manifest.json"
+# 123: a pack folder reached through a link out of the project is never read.
+PACK_OUTSIDE_NEXT = (
+    "point compliance_rules.folder at a real folder inside the project, or remove it from "
+    "service-manifest.json"
+)
 # 0192: a compliance_rules.extra_builtin id must be a folder under <plugin>/packs/frameworks.
 PACK_NAMED_NEXT = "name a pack listed in the README section on control packs, or remove the id"
 # prepush-2026-10-27: an unreadable pack folder is a MISS line, never a crash.
@@ -227,14 +232,18 @@ def _pack_dir_check(repo: Path) -> Iterator[tuple[bool, str]]:
     pack_dir = manifest.frameworks.pack_dir if manifest is not None else None
     if pack_dir is None:
         return
-    path = project_root(str(repo)) / pack_dir
+    path = packs.declared_folder(repo, pack_dir)
+    nxt = PACK_DIR_NEXT
     if path.is_symlink():
         problem = f"{pack_dir} is a symlink, which the pack reader never follows"
+    elif not packs.inside_project(repo, path):
+        problem = f"{pack_dir} leads outside the project through a link, so no pack is read"
+        nxt = PACK_OUTSIDE_NEXT
     elif not path.is_dir():
         problem = f"{pack_dir} is not a folder"
     else:
         return
-    yield False, _printable(f"MISS framework packs: {problem}. Next: {PACK_DIR_NEXT}")
+    yield False, _printable(f"MISS framework packs: {problem}. Next: {nxt}")
 
 
 def _pack_checks(repo: Path, today: date) -> Iterator[tuple[bool, str]]:

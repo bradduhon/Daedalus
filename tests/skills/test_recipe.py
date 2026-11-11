@@ -87,7 +87,10 @@ def test_build_train_resolves_the_packs_for_the_frameworks_rulebook() -> None:
     # 0157, 0186: Read and Glob resolve the pack folders; no cache path reaches the auditor.
     text = _recipe()
     assert "Glob `<plugin root>/packs/frameworks/*/pack.json`" in text
-    assert "Glob `<repo>/<folder>/*/pack.json`" in text
+    assert (
+        "When `compliance_rules.folder` is set, take the project's packs only from the `Packs:` "
+        "line the pack check prints. Never Glob that folder yourself."
+    ) in text
     assert "`Packs: <absolute pack folder>[, <absolute pack folder>...]`" in text
     assert "<that path>/frameworks" not in text and "CACHE_INVALID" not in text
     assert "Unless `compliance_rules.use_builtin` is `false`" in text

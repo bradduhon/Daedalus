@@ -517,6 +517,53 @@ def test_pack_folders_with_a_missing_declared_folder(repo_cwd: Path) -> None:
     assert pack_folders(repo_cwd) == _shipped()
 
 
+def _linked_case(repo: Path, case: str) -> tuple[Path, str, list[Path]]:
+    # 123: (the folder pack_folders reads, compliance_rules.folder, the packs it must return).
+    outside = repo.parent / "outside"
+    _make(outside / "packs" / "p1")
+    if case == "middle":
+        (repo / "c").mkdir()
+        (repo / "c" / "mid").symlink_to(outside)
+        return repo, "c/mid/packs", []
+    if case == "first":
+        (repo / "mid").symlink_to(outside)
+        return repo, "mid/packs", []
+    if case == "self":
+        (repo / "packs").symlink_to(outside / "packs")
+        return repo, "packs", []
+    if case == "inside":
+        _make(repo / "real" / "packs" / "p1")
+        (repo / "mid").symlink_to(repo / "real")
+        return repo, "mid/packs", [repo / "mid" / "packs" / "p1"]
+    if case == "root-link":
+        _make(repo / "packs" / "one")
+        alias = repo.parent / "alias"
+        alias.symlink_to(repo)
+        return alias, "packs", [alias / "packs" / "one"]
+    return repo, "absent/packs", []
+
+
+@pytest.mark.parametrize("case", ["middle", "first", "self", "inside", "root-link", "absent"])
+def test_pack_folders_reads_only_a_folder_inside_the_project(repo_cwd: Path, case: str) -> None:
+    # 123: a linked folder on the way out of the project reads no packs; inside links still load.
+    read_at, folder, expected = _linked_case(repo_cwd, case)
+    _manifest(repo_cwd, {"folder": folder, "use_builtin": False})
+    assert pack_folders(read_at) == expected
+
+
+def test_train_packs_reads_no_pack_through_a_link_out_of_the_project(
+    repo_cwd: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 123: the train's pack step reaches packs only through pack_folders.
+    import daedalus_train
+
+    monkeypatch.chdir(repo_cwd)
+    _, folder, _ = _linked_case(repo_cwd, "middle")
+    _manifest(repo_cwd, {"folder": folder, "use_builtin": False})
+    assert daedalus_train.main(["packs", "--repo", str(repo_cwd)]) == 1
+    assert capsys.readouterr().out.startswith("No control pack was found")
+
+
 # prepush-2026-10-27 finding 6: the train step that runs pack_problems before the specialist.
 
 
