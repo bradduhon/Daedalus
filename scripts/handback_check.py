@@ -41,14 +41,39 @@ SHAPE = (
     "but for ` hunt=<n>` directly before its closing ` turns=<n>`"
 )
 SHOWN_CHARS = 120
+# 209: a files= refusal leads with this text and takes FILES_NEXT as its one Next line.
+FILES_LEAD = "the COMPLETE line's `files=` entry"
+FILES_NEXT = (
+    "list every file in `files=` relative to the unit worktree root, as `scripts/lib/jail.py`, "
+    "with no leading `/` or `~`, no `..` part and no link out of the worktree"
+)
 
 
 def _kind(line: str) -> str | None:
     return next((kind for kind, shape in SHAPES.items() if shape.fullmatch(line)), None)
 
 
-def receipts_problem(reply: str) -> str | None:
+def files_problem(status: str, root: Path) -> str | None:
+    # 209: the summary's own files= reader and path judge; a line it cannot read is not judged.
+    from lib.train_summary import _COMPLETE, _PATH_LIKE, _TOKEN, plain_path
+
+    done = _COMPLETE.search(status)
+    if done is None:
+        return None
+    for match in _TOKEN.finditer(done.group(3)):
+        token = match.group(0)
+        if (_PATH_LIKE.search(token) or token == "..") and not plain_path(token, root, None):
+            shown = token if len(token) <= SHOWN_CHARS else token[:SHOWN_CHARS] + "..."
+            return (
+                f"{FILES_LEAD} {shown!r} is absolute, has a `..` part or leaves the unit "
+                "worktree; files= paths are relative to the worktree root"
+            )
+    return None
+
+
+def receipts_problem(reply: str, root: Path | None = None) -> str | None:
     # Pin RCP -> VER: None when the reply's last line is no COMPLETE line or its block is whole.
+    # 209: root is the unit worktree files= is judged under; None judges under the process cwd.
     from lib.train_runner import COMPLETE_LINE
 
     lines = [line.rstrip() for line in reply.rstrip().splitlines()]
@@ -78,7 +103,7 @@ def receipts_problem(reply: str) -> str | None:
             f"the COMPLETE line carries hunt={int(tail.group(1))} "
             f"but the receipts block holds {kinds.count('hunt')} hunt lines"
         )
-    return None
+    return files_problem(status, root if root is not None else Path.cwd())
 
 
 def _agent(hook_input: dict[str, object]) -> str:
@@ -110,14 +135,36 @@ def _reply(hook_input: dict[str, object]) -> object:
     return None
 
 
+def _unit_root(hook_input: dict[str, object]) -> Path | None:
+    # 209: the worktree of the unit this coder is bound to (issue 29), else the hook cwd.
+    from lib import train_state, unit_binding
+    from lib.project_root import project_root
+
+    cwd = hook_input.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        return None
+    agent_id, session = hook_input.get("agent_id"), hook_input.get("session_id")
+    coder = agent_id if isinstance(agent_id, str) and agent_id else f"session:{session}"
+    try:
+        repo = project_root(Path(cwd))
+        train = train_state.active_train(repo) if Path(cwd).is_absolute() else None
+        unit = unit_binding.bound_units(repo, train).get(coder) if train else None
+        units = train_state.units(train_state.load(repo, train)) if train and unit else []
+    except (OSError, train_state.TrainStateError):
+        units, unit = [], None
+    path = next((u.get("path") for u in units if u.get("name") == unit), None)
+    return Path(path) if isinstance(path, str) and Path(path).is_absolute() else Path(cwd)
+
+
 def judge(hook_input: dict[str, object]) -> str | None:
     reply = _reply(hook_input)
     if not isinstance(reply, str) or not reply or _agent(hook_input) != CODER:
         return None
-    problem = receipts_problem(reply)
+    problem = receipts_problem(reply, _unit_root(hook_input))
     if problem is None:
         return None
-    return f"Daedalus hand-back check: {problem}. Next: end the reply with {SHAPE}."
+    fix = FILES_NEXT if problem.startswith(FILES_LEAD) else f"end the reply with {SHAPE}"
+    return f"Daedalus hand-back check: {problem}. Next: {fix}."
 
 
 def digest_output(hook_input: dict[str, object]) -> dict[str, object] | None:
