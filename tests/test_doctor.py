@@ -1056,6 +1056,35 @@ def test_a_nist_ref_holding_a_list_is_a_miss_line_not_a_crash(repo_cwd: Path) ->
     )
 
 
+@pytest.mark.parametrize("folder", ["mid/packs", "c/mid/packs", "mid/absent"])
+def test_declared_pack_dir_through_a_link_out_of_the_project_fails(
+    repo_cwd: Path, folder: str
+) -> None:
+    # 123: a linked first or middle folder that leaves the project is a MISS; no pack is read.
+    outside = repo_cwd.parent / "outside"
+    _make(outside / "packs" / "p1")
+    link = repo_cwd / folder.rsplit("/", 1)[0]
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(outside)
+    _manifest(repo_cwd, {"folder": folder, "use_builtin": False})
+    assert _pack_lines_at(repo_cwd) == [
+        (
+            False,
+            f"MISS framework packs: {folder} leads outside the project through a link, so no "
+            "pack is read. Next: point compliance_rules.folder at a real folder inside the "
+            "project, or remove it from service-manifest.json",
+        )
+    ]
+
+
+def test_declared_pack_dir_through_a_link_inside_the_project_loads(repo_cwd: Path) -> None:
+    # 123: a link that stays inside the project is read as before.
+    _make(repo_cwd / "real" / "packs" / "one")
+    (repo_cwd / "mid").symlink_to(repo_cwd / "real")
+    _manifest(repo_cwd, {"folder": "mid/packs", "use_builtin": False})
+    assert _pack_lines_at(repo_cwd) == [(True, "OK   framework pack one: 1.0.0, 1 controls")]
+
+
 @pytest.mark.parametrize("kind", ["absent", "file", "link"])
 def test_declared_pack_dir_that_is_not_a_folder_fails(repo_cwd: Path, kind: str) -> None:
     target = repo_cwd / "packs"
