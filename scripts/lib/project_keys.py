@@ -770,6 +770,16 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"{NOT_ACTIVE}: agents choose the language for each script.",
         (),
     ),
+    (OPERATOR_FILE_NAME, "self_assessment"): KeyRow(
+        "Whether Daedalus notes the bugs and missing features it finds in its own skills while "
+        "you work, and shows them to you at the close",
+        "boolean",
+        "`true` or `false`; any other value is refused",
+        "`false`: nothing is noted",
+        "`true`",
+        "Daedalus keeps short notes about its own faults outside your project.",
+        ("scripts/lib/self_assessment.py",),
+    ),
 }
 
 
@@ -825,6 +835,7 @@ def starter_operator() -> dict[str, object]:
         "no_long_dashes": None,
         "guidance_source": GUIDANCE_SOURCES[0],
         "script_language": None,
+        "self_assessment": False,
     }
 
 
@@ -1070,7 +1081,7 @@ OVERLAPS: tuple[Overlap, ...] = (
         "A project's config can hold its own copy of any personal preference. A value set "
         "there replaces your personal value for that project only, and the rest still come "
         "from your personal file. Nothing acts on those values yet.",
-        (("scripts/lib/operator_file.py", 155, "a key the override sets replaces the base value"),),
+        (("scripts/lib/operator_file.py", 168, "a key the override sets replaces the base value"),),
         "config",
     ),
 )

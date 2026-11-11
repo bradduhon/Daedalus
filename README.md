@@ -337,7 +337,10 @@ The operator file is a third file in the table. It lives at `~/.claude/daedalus/
 | `no_long_dashes` | `~/.claude/daedalus/operator.json` | Whether Daedalus text for you avoids long dashes. Nothing acts on it yet | Nothing acts on it yet: Daedalus text keeps whatever dashes it has. | starter | boolean or null | `true`, `false` or `null`; any other value is refused | `null`: no personal choice is set | `true` |
 | `guidance_source` | `~/.claude/daedalus/operator.json` | Where your working guidance is read from: Claude Code's own memory files, or a guidance folder Daedalus keeps beside this file. Nothing acts on it yet | Nothing acts on it yet: guidance is read where Claude Code reads it. | starter | string | `"claude"` or `"daedalus"` | `"claude"` | `"daedalus"` |
 | `script_language` | `~/.claude/daedalus/operator.json` | The language you want new scripts written in, told to every agent as guidance. Nothing acts on it yet | Nothing acts on it yet: agents choose the language for each script. | starter | string or null | A lowercase language name such as `python`, or `null` | `null`: no language is preferred | `"python"` |
+| `self_assessment` | `~/.claude/daedalus/operator.json` | Whether Daedalus notes the bugs and missing features it finds in its own skills while you work, and shows them to you at the close | Daedalus keeps short notes about its own faults outside your project. | starter | boolean | `true` or `false`; any other value is refused | `false`: nothing is noted | `true` |
 <!-- end key reference -->
+
+Uninstalling the plugin deletes its data folder by default. The findings that `self_assessment` saves live in that folder and go with it.
 
 ## Safety model
 
@@ -700,9 +703,11 @@ Daedalus/
 │   ├── lib/repo_root.py             # finds a train marker before other lib modules load
 │   ├── lib/router.py                # runs each agent's calls through its hooks
 │   ├── lib/scrub.py                 # reads the declared scrub file's terms
+│   ├── lib/self_assessment.py       # the Self-Assessment flag and its two folders
 │   ├── lib/settings_edit.py         # changes one key of a settings file in place
 │   ├── lib/shell.py                 # the shell model the jail and checks share
 │   ├── lib/shparse.py               # parses one Bash command into nodes with spans
+│   ├── lib/storage.py               # the temporary and persistent folders every feature uses
 │   ├── lib/train_definition.py      # loads and validates train definitions
 │   ├── lib/train_runner.py          # the train state machine behind daedalus_train.py
 │   ├── lib/train_scope.py           # the train scope the jail's entry script reads first

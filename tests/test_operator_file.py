@@ -141,6 +141,9 @@ def test_not_an_object_refused(home: Path, body: object) -> None:
         ({"no_long_dashes": 1}, "no_long_dashes"),
         ({"guidance_source": "mine"}, "guidance_source"),
         ({"script_language": "Python 3"}, "script_language"),
+        ({"self_assessment": "yes"}, "self_assessment"),
+        ({"self_assessment": 1}, "self_assessment"),
+        ({"self_assessment": None}, "self_assessment"),
     ],
 )
 def test_each_refusal_names_the_file_and_key(home: Path, body: object, key: str) -> None:
@@ -201,6 +204,16 @@ def test_load_replaces_per_key_and_lists_replace(home: Path, tmp_path: Path) -> 
     assert load(repo) == Operator(("redirect_to_file",), "expert", True)
 
 
+def test_self_assessment_defaults_false_and_a_project_override_replaces_it(
+    home: Path, tmp_path: Path
+) -> None:
+    # A1: the personal value is replaced for one project through personal_overrides.
+    assert Operator().self_assessment is False
+    _write(home, {"self_assessment": True})
+    assert load(_repo(tmp_path / "a", None)).self_assessment is True
+    assert load(_repo(tmp_path / "b", {"self_assessment": False})).self_assessment is False
+
+
 def test_load_override_error_names_config_json_and_key(home: Path, tmp_path: Path) -> None:
     repo = _repo(tmp_path, {"no_long_dashes": "yes"})
     with pytest.raises(ConfigError, match=r"config\.json personal_overrides\.no_long_dashes"):
@@ -236,6 +249,8 @@ def test_only_the_named_modules_mention_operator_file() -> None:
     allowed = {"config.py", "daedalus_doctor.py", "project_keys.py", "operator_file.py"}
     # 0242: setup creates the file and checks a changed one with its validator; it acts on no value.
     allowed.add("daedalus_setup.py")
+    # A1: the flag reader loads the file through load().
+    allowed.add("self_assessment.py")
     found = {
         path.name
         for path in (REPO_ROOT / "scripts").rglob("*.py")
