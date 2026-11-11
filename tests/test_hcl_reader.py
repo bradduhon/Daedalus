@@ -310,7 +310,10 @@ def _principal_doc(body: str) -> str:
 
 
 def test_not_principals_only_statement_carries_principals_of_that_kind() -> None:
-    body = '    not_principals {\n      type = "AWS"\n      identifiers = ["arn:aws:iam::1:root"]\n    }\n'
+    body = (
+        '    not_principals {\n      type = "AWS"\n'
+        '      identifiers = ["arn:aws:iam::1:root"]\n    }\n'
+    )
     (stmt,) = policy_statements(parse(_principal_doc(body)))
     assert stmt.principals == ()
     assert [(p.type, p.identifiers) for p in stmt.not_principals] == [
