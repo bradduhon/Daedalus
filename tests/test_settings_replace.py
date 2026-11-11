@@ -153,7 +153,8 @@ def test_plan_writes_nothing_and_names_the_backup(wizard: Path, home: Path) -> N
     assert not _backup(out).exists()
     assert out.splitlines()[0].startswith(f"plan: replace {path}, a settings file from an older")
     assert out.splitlines()[-1] == (
-        "nothing was written. Next: run the same command with --write to replace the file."
+        "This plan wrote nothing, and the file is unchanged. Next: run the same command with "
+        "--write to replace the file."
     )
 
 

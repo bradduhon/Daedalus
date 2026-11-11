@@ -545,7 +545,10 @@ def replace(form: str, repo: Path, write: bool) -> int:
     print("\n".join(_moved_lines(outcome)))
     if not write:
         print(f"backup: {_backup_path(form, root, before)} (the old file is copied here first)")
-        print("nothing was written. Next: run the same command with --write to replace the file.")
+        print(
+            "This plan wrote nothing, and the file is unchanged. Next: run the same command "
+            "with --write to replace the file."
+        )
         return 0
     backup = _write_backup(form, root, before, _LIMITS[form])
     print(f"backup: {backup} (a byte-for-byte copy of the old file)")
