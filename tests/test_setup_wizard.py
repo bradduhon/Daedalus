@@ -130,7 +130,9 @@ def test_describe_lists_every_key_once_with_its_text_and_state(wizard: Path, hom
     assert keys[("config", "limits.parallel_coders")]["override"] is True
     assert keys[("operator", "reading_level")]["state"] == "absent"
     assert keys[("operator", "reading_level")]["active"] is False
-    assert keys[("manifest", "run_output_priority.rules[].note")]["settable"] is False
+    # 0257: a key inside a list entry is set as the whole list that holds it.
+    note = keys[("manifest", "run_output_priority.rules[].note")]
+    assert note["settable"] is True and note["set_as"] == "run_output_priority.rules"
 
 
 def test_describe_still_describes_two_files_when_one_is_malformed(wizard: Path, home: Path) -> None:
@@ -322,7 +324,7 @@ def test_set_refuses_an_old_key_name(wizard: Path, home: Path, form: str, key: s
 
 def test_set_refuses_a_key_inside_a_list_entry(wizard: Path, home: Path) -> None:
     out = _refused(_set(wizard, home, "manifest", "run_output_priority.rules[].note", '"x"'))
-    assert "cannot be set alone" in out
+    assert "cannot be set alone" in out and "--set manifest run_output_priority.rules" in out
 
 
 def test_set_refuses_a_value_that_breaks_another_key(wizard: Path, home: Path) -> None:
@@ -787,6 +789,8 @@ def _form(args: argparse.Namespace) -> str:
         return "describe"
     if args.create_operator:
         return "create"
+    if args.replace is not None:
+        return "replace write" if args.write else "replace plan"
     if args.set is None:
         return "starter"
     kind = "block" if args.set[1] == "local_testing" else "key"
@@ -816,6 +820,7 @@ def test_skill_command_lines_parse_with_the_script_parser() -> None:
         "set key by value",
         "set key by file",
         "set block by file",
+        "replace plan",
     }
 
 
