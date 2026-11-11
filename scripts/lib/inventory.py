@@ -307,6 +307,16 @@ FILES: tuple[Entry, ...] = (
         "a feature's first persistent write; the plugin's uninstall removes the data folder",
     ),
     Entry(
+        "<cache>/self-assessment/findings/",
+        "scripts/lib/findings.py:_findings_folder",
+        "the first Self-Assessment finding is saved; uninstalling the plugin removes the folder",
+    ),
+    Entry(
+        "<cache>/self-assessment/findings/<stamp>-<fingerprint>.json",
+        "scripts/lib/findings.py:_store",
+        "you run daedalus_findings.py save with Self-Assessment mode on and a passing finding",
+    ),
+    Entry(
         f"{_TRAINS}/<train-id>.bindings.lock",
         "scripts/lib/train_state.py:locked_file",
         "each unit binding change",
