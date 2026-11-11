@@ -56,9 +56,9 @@ FILES: tuple[Entry, ...] = (
         "you run token_economy.py report --save and config.json sets local_docs_folder",
     ),
     Entry(
-        f"{_SCRATCH}/<run id>/tokens.md",
+        "<charter_root>/audit/<session>.md",
         "scripts/audit_report.py:_write_report",
-        "you run token_economy.py report --save with no local_docs_folder set",
+        "you run audit_report.py --save and config.json sets local_docs_folder",
     ),
     Entry(
         f"{_CONFINE}/",

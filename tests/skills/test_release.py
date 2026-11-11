@@ -27,6 +27,16 @@ from tests.skill_helpers import (
 )
 
 
+def test_release_step_finds_the_merge_commit_and_keeps_the_fallback_question() -> None:
+    # 0252: the merge commit comes from a git read; the old question stays as the fallback.
+    text = _release()
+    assert "ask for the merge commit sha on `<base branch>` and run" not in text
+    assert "fetch origin <base branch>`" in text
+    assert "--grep='\\(#<pr number>\\)$'" in text
+    assert "whose second parent is the tip the releaser pushed" in text
+    assert "ask the operator for the merge commit sha on `<base branch>` instead" in text
+
+
 def test_push_train_proof_names_the_exemption_path() -> None:
     # issue 62, 0133: --approved passes on an approved verdict or every finding exempted.
     step = _release().split("\n9. ", 1)[1].split("\n10. ", 1)[0]

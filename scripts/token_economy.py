@@ -829,12 +829,12 @@ def _charter(root: Path) -> Path | None:
     return (root / config.charter_root).resolve() if config.charter_root else None
 
 
-def saved_path(root: Path, run_id: str) -> Path:
-    # Plan 11 A item 2: the Charter reports folder when declared, else the run's scratch folder.
+def saved_path(root: Path, run_id: str) -> Path | None:
+    # 0252: a save lands only in a folder the settings name; none named or present means no save.
     charter = _charter(root)
-    if charter is not None:
-        return charter / "reports" / f"{date.today().isoformat()}-tokens-{run_id}.md"
-    return root / "docs" / ".tmp" / "daedalus" / run_id / "tokens.md"
+    if charter is None or not charter.is_dir():
+        return None
+    return charter / "reports" / f"{date.today().isoformat()}-tokens-{run_id}.md"
 
 
 def saved_files(root: Path) -> list[Path]:
@@ -914,9 +914,16 @@ def main(argv: list[str]) -> int:
         runs, source = report_runs(root, args.session, args.run)
         budget = _budget(root)
         text = render(runs, source, budget)
-        out = str(saved_path(root, args.run)) if args.save else args.out
+        out = args.out
+        if args.save:
+            target = saved_path(root, args.run)
+            if target is not None:
+                target.parent.mkdir(exist_ok=True)  # 0252: one subfolder.
+                out = str(target)
         if out is None:
             sys.stdout.write(text)
+            if args.save:
+                print("not saved: no docs folder is set (local_docs_folder in config.json).")
         else:
             print(f"wrote {_write(text, out, args.cwd)}")
         # 0209: the gate fails on any unit over budget; a budget left off never fails it.
