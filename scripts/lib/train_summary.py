@@ -8,6 +8,7 @@ import html
 import json
 import os
 import re
+import string
 import unicodedata
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -57,6 +58,8 @@ WITHHELD = "[path withheld]"
 _TRAILING = ".,:;!?"
 # 88: categories a renderer draws with no glyph, so a stand-in there may read as nothing.
 _GLYPHLESS = ("Cc", "Cf", "Cn")
+# 89: the only characters a run-state header value may hold; any other prints as WITHHELD.
+_HEADER_CHARS = frozenset(string.ascii_letters + string.digits + "._/-+@, ")
 _MD_ESCAPED = re.compile(r"\\(.)")
 _COMPLETE = re.compile(
     r"\[STATUS: COMPLETE\] branch=(\S+) packet_version=(\S+) files=(.*?) tests=(.*?) ledger_notes="
@@ -480,8 +483,9 @@ def _ledger_lines(
 
 
 def _state_value(value: str, repo: Path, charter: Path | None) -> str:
-    # 89: a header value is checked and escaped as a body cell is; the last pass reads one form.
-    return _cell(value, repo, charter, "the train state")
+    # 89: printed as written, never escaped - the release step copies these values into commands.
+    shown = public(value, repo, charter, "the train state", withhold=True)
+    return value if shown == value and set(value) <= _HEADER_CHARS else WITHHELD
 
 
 def _header(

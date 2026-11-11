@@ -694,8 +694,7 @@ def test_a_lookalike_path_in_a_state_value_never_prints(
     state = {**copy.deepcopy(STATE), "base_branch": form(token)}
     text = _text(tmp_path, state)
     _no_lookalike(text, token)
-    if form is not _entities:
-        assert text.splitlines()[2].startswith("Base: \\[path withheld\\] @ ")
+    assert text.splitlines()[2].startswith("Base: [path withheld] @ ")
 
 
 @pytest.mark.parametrize("form", FORMS.values(), ids=FORMS.keys())
@@ -727,11 +726,38 @@ def test_a_non_ascii_folder_name_stays_outside_the_ascii_allow_list() -> None:
     assert public(f"see {path}", REPO, CHARTER, "w", withhold=True) == "see [path withheld]"
 
 
+HEADER_REFUSED = {
+    "entity slash": "&#x2f;etc&#x2f;passwd",
+    "markdown-escaped slash": "\\/etc\\/passwd",
+    "backtick": "main`x",
+    "hash": "main#x",
+    "parenthesis": "main(x)",
+    "newline": "main\nSession evil: x",
+}
+
+
+@pytest.mark.parametrize("value", HEADER_REFUSED.values(), ids=HEADER_REFUSED.keys())
 @pytest.mark.parametrize("key", ["base_branch", "base_sha", "charter_base"])
-def test_an_entity_slash_in_a_state_value_prints_inert(tmp_path: Path, key: str) -> None:
-    # 89: header values are escaped like body cells, so the last pass never decodes a new slash.
-    state = {**copy.deepcopy(STATE), key: "&#x2f;etc&#x2f;passwd"}
+def test_a_state_value_outside_the_header_set_is_withheld(
+    tmp_path: Path, key: str, value: str
+) -> None:
+    # 89: a header value prints as written or as the marker; the summary is never refused.
+    state = {**copy.deepcopy(STATE), key: value}
     text = _text(tmp_path, state)
-    assert "&amp;\\#x2f;etc&amp;\\#x2f;passwd" in "\n".join(text.splitlines()[2:4])
+    header = "\n".join(text.splitlines()[2:4])
+    assert "[path withheld]" in header and value not in text
+    assert "\\" not in header and "&" not in header
     assert _path_tokens(text) == []
     assert "/etc" not in html.unescape(text)
+
+
+def test_header_values_with_an_underscore_print_as_written(tmp_path: Path) -> None:
+    # 89: the release step copies these values into commands, so no escape backslash appears.
+    state = {
+        **copy.deepcopy(STATE),
+        "base_branch": "feature/foo_bar",
+        "contract_path": f"{CHARTER}/specs/my_api.md",
+    }
+    lines = _text(tmp_path, state).splitlines()
+    assert lines[2] == f"Base: feature/foo_bar @ {'a' * 40}. Integration branch: daedalus/{TRAIN}."
+    assert lines[5] == "Contract: private/specs/my_api.md v3"
