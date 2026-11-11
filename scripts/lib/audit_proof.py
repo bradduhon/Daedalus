@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shlex
+import string
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -824,19 +825,27 @@ def push_proof(repo: Path, train_id: str) -> str:
 
 
 CHARTER_RERUN = "then run `/daedalus:run push` again."
+# 221: the punctuation a Charter base may hold, each with its word for the refusal text.
+CHARTER_BASE_PUNCT = {".": "dots", "_": "underscores", "/": "slashes", "-": "hyphens"}
+_ALNUM = frozenset(string.ascii_letters + string.digits)
+CHARTER_BASE_CHARS = _ALNUM | frozenset(CHARTER_BASE_PUNCT)
+_PUNCT_WORDS = list(CHARTER_BASE_PUNCT.values())
+CHARTER_BASE_NAMED = f"letters, digits, {', '.join(_PUNCT_WORDS[:-1])} and {_PUNCT_WORDS[-1]}"
+
+
+def charter_base_name_ok(base: str) -> bool:
+    return bool(base) and base[0] in _ALNUM and all(c in CHARTER_BASE_CHARS for c in base)
 
 
 def charter_base_problem(charter_root: str | None, base: str | None) -> str | None:
     # 221: the Charter pull request's --base must be a branch on the Charter's origin.
-    from lib.jail import _BRANCH_NAME
-
     if not charter_root or not base:
         return None
-    if not _BRANCH_NAME.fullmatch(base):
+    if not charter_base_name_ok(base):
         return (
             f"NOT READY: the recorded Charter base {base!r} is not a plain branch name. Next: "
-            "switch the Charter to a branch named with letters, digits, dots, slashes, "
-            f"underscores and hyphens, then start the work again with `/daedalus:run`."
+            f"switch the Charter to a branch whose name starts with a letter or digit and holds "
+            f"only {CHARTER_BASE_NAMED}, then start the work again with `/daedalus:run`."
         )
     ref = f"refs/heads/{base}"
     try:

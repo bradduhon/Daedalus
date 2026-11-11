@@ -5,6 +5,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import string
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -1013,10 +1014,11 @@ def charter_pair(tmp_path: Path) -> Path:
 ABSENT = "is not on the Charter's remote origin"
 
 
-def test_charter_base_on_the_remote_passes(charter_pair: Path) -> None:
-    _git(charter_pair, "branch", "charter/topic")
-    _git(charter_pair, "push", "-q", "origin", "charter/topic")
-    assert charter_base_problem(str(charter_pair), "charter/topic") is None
+@pytest.mark.parametrize("name", ["charter/topic", "charter/self_assessment", "release_2"])
+def test_charter_base_on_the_remote_passes(charter_pair: Path, name: str) -> None:
+    _git(charter_pair, "branch", name)
+    _git(charter_pair, "push", "-q", "origin", name)
+    assert charter_base_problem(str(charter_pair), name) is None
 
 
 def test_charter_default_branch_as_base_passes(charter_pair: Path) -> None:
@@ -1068,12 +1070,14 @@ def test_no_charter_configured_skips_without_git(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.parametrize(
-    "name", ["-x", "--upload-pack=touch /tmp/x", "a b", "main\n", "\tmain", "/main", ".main"]
+    "name",
+    ["-x", "--upload-pack=touch /tmp/x", "a b", "main\n", "\tmain", "/main", ".main"]
+    + ["fix+x", "fix#12"],
 )
 def test_charter_base_not_a_branch_name_refuses_before_git(
     monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
-    # 221: jail._BRANCH_NAME, the name the releaser's push admits, is checked before any git call.
+    # 221: the Charter base name rule is checked before any git call.
     from lib import git as git_lib
 
     def no_git(*args: object, **kwargs: object) -> None:
@@ -1083,3 +1087,13 @@ def test_charter_base_not_a_branch_name_refuses_before_git(
     problem = charter_base_problem("/nonexistent/charter", name) or ""
     assert problem.startswith(f"NOT READY: the recorded Charter base {name!r} is not a plain")
     assert problem.endswith("then start the work again with `/daedalus:run`.")
+
+
+def test_charter_base_refusal_names_exactly_the_admitted_characters() -> None:
+    # 221: the refusal's character list and the admitted set come from one constant.
+    from lib.audit_proof import CHARTER_BASE_CHARS, CHARTER_BASE_PUNCT
+
+    problem = charter_base_problem("/nonexistent/charter", "a+b") or ""
+    assert "holds only letters, digits, dots, underscores, slashes and hyphens," in problem
+    punct = set(CHARTER_BASE_CHARS) - set(string.ascii_letters + string.digits)
+    assert punct == set(CHARTER_BASE_PUNCT) == {".", "_", "/", "-"}
