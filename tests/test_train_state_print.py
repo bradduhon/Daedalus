@@ -730,8 +730,8 @@ def test_a_non_ascii_folder_name_stays_outside_the_ascii_allow_list() -> None:
 @pytest.mark.parametrize("key", ["base_branch", "base_sha", "charter_base"])
 def test_an_entity_slash_in_a_state_value_prints_inert(tmp_path: Path, key: str) -> None:
     # 89: header values are escaped like body cells, so the last pass never decodes a new slash.
-    state = {**copy.deepcopy(STATE), key: "&#47;etc&#47;passwd"}
+    state = {**copy.deepcopy(STATE), key: "&#x2f;etc&#x2f;passwd"}
     text = _text(tmp_path, state)
-    assert "&amp;\\#47;etc&amp;\\#47;passwd" in "\n".join(text.splitlines()[2:4])
+    assert "&amp;\\#x2f;etc&amp;\\#x2f;passwd" in "\n".join(text.splitlines()[2:4])
     assert _path_tokens(text) == []
     assert "/etc" not in html.unescape(text)
