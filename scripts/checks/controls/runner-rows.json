@@ -18,9 +18,5 @@
   "shell.R_TERRAFORM_OPERATOR": {
     "failure": "0164: a coder runs a terraform subcommand other than validate, fmt -check and the one init form `terraform -chdir=<folder> init -backend=false -input=false -lockfile=readonly` (184), such as plan, console or any other init, which reaches providers, state or the network",
     "premise_test": "tests/test_confine.py::test_any_other_terraform_form_is_the_operators"
-  },
-  "shell.R_WATCH": {
-    "failure": "0164: a coder passes a watch option to node --test or a package script, and the command never exits",
-    "premise_test": "tests/test_confine.py::test_a_watch_mode_is_refused_bare_and_wrapped"
   }
 }

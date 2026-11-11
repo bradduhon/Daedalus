@@ -94,6 +94,7 @@ REFUSED: list[Row] = [
     *_rows(
         "RUNNERS_WRAPPED", ("coder",), (f"cd {WT} && {WRAP} {c}" for c in _RUNNER_REFUSED), False
     ),
+    *_rows("RESPELT_258", ("coder",), (f"cd {WT} && {WRAP} {c}" for c in C.RESPELT_258), False),
     *_rows(
         "TERRAFORM_AUDITOR",
         ("auditor",),
@@ -189,6 +190,12 @@ ADMITTED: list[Row] = [
     *_rows("PREPUSH_IGNORE_SEARCHES", ("auditor",), C.PREPUSH_IGNORE_SEARCHES[:2], False),
     *_rows("GAME_RUNNERS", ("coder",), (f"cd {WT} && {WRAP} {c}" for c in C.GAME_RUNNERS), False),
     *_rows(
+        "RUNNER_OPTIONS_258",
+        ("coder",),
+        (f"cd {WT} && {WRAP} {c}" for c in C.RUNNER_OPTIONS_258),
+        False,
+    ),
+    *_rows(
         "TERRAFORM_INIT_FORM", ("coder",), (f"cd {WT} && {WRAP} {C.TERRAFORM_INIT_FORM}",), True
     ),
     *_rows("A3_ISSUE_121_ADMITTED", ("main",), C.A3_ISSUE_121_ADMITTED, False),
@@ -222,3 +229,38 @@ def test_every_admitted_row_is_admitted_or_a_named_table_gap() -> None:
 def test_a_table_gap_is_still_refused(agent: str, command: str) -> None:
     # 228 S2: a gap the main session rules on stays listed only while admit refuses it.
     assert isinstance(judge(agent, command), Refusal), (agent, command)
+
+
+# 258: the rows the unit added or narrowed; each option on them has an admitted corpus row.
+RUNNER_VERB_ROWS = ("vitest run", "node --test", "bun test", "npm exec", "tsc")
+
+
+def _hunt_id(family: str, form: str) -> str:
+    return f"{family}-{form}".replace(" ", "_").replace(",", "")
+
+
+@pytest.mark.parametrize(
+    "command", [pytest.param(c, id=_hunt_id(f, h)) for f, h, c in C.RUNNER_HUNT_258]
+)
+def test_each_runner_hiding_form_is_refused(command: str) -> None:
+    # 258: a respelt, moved or relaunched watch or inline-code option never admits.
+    got = judge("coder", f"cd {WT} && {command.format(wrap=WRAP)}")
+    assert isinstance(got, Refusal), command
+
+
+def test_every_option_on_a_runner_verb_row_has_an_admitted_row() -> None:
+    # 258: a row option with no admitted corpus row is a row no test reaches.
+    used = {w.partition("=")[0] for c in C.RUNNER_OPTIONS_258 for w in c.split()}
+    for key in RUNNER_VERB_ROWS:
+        plain, valued = shell.OPTION_TABLE[key]
+        assert plain | valued <= used, (key, sorted((plain | valued) - used))
+
+
+def test_no_runner_row_lists_a_watch_server_or_inline_option() -> None:
+    # 258, 0164: these never go on a runner row, so an absent row refuses them.
+    banned = {"--watch", "--hot", "--ui", "--open", "--port", "--host", "--inspect"}
+    banned |= {"-e", "--eval", "--print", "--require", "--config"}
+    keys = {*RUNNER_VERB_ROWS, "vite build", "pnpm", "yarn", "bun", "npm", "npx", "vite", "vitest"}
+    for key in keys:
+        plain, valued = shell.OPTION_TABLE[key]
+        assert not (plain | valued) & banned, (key, sorted((plain | valued) & banned))

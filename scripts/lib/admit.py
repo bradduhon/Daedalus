@@ -846,6 +846,7 @@ class _Judge:
         )
         if reason is not None:
             raise _Off(c.span, reason)
+        _runner_options(words, toks)
         c.word = Typed(toks[0], words[0].span)
         c.family = shell.command_family(toks[0])
         for word in words[1:]:
@@ -1462,6 +1463,7 @@ class _Judge:
             raise _Off(c.span, reason)
         if family in shell.JS_LAUNCHERS:
             self._js_inner(c, toks)
+        _runner_options(words, toks)
         self.plain(c, words, stop=family != "pytest")
 
     def _js_inner(self, c: _Cmd, toks: list[str]) -> None:
@@ -1477,6 +1479,13 @@ class _Judge:
         if family in shell._SHELLS or family in shell.INTERPRETERS or family in ("node", "bun"):
             if family not in shell.TEST_RUNNERS or not shell._tester_runner_ok(family, inner):
                 raise _Off(c.span, f"{c.family} runs {inner[0]} outside a test-runner form")
+
+
+def _runner_options(words: list[Word], toks: list[str]) -> None:
+    # 258: a JS runner option off its verb's row refuses at its own word (0221).
+    miss = shell.runner_options(toks)
+    if miss is not None:
+        raise _Off(words[miss[0]].span, miss[1])
 
 
 def _basetemp(words: list[Word]) -> None:

@@ -274,25 +274,9 @@ ELSEWHERE: dict[str, str] = {
 }
 
 
-R258 = "258: respelt watch and eval flags on wrapped runners"
-_F2 = (
-    "vite build --watch",
-    "vitest run --watch",
-    "vitest run --watch=true",
-    "pnpm test --watch",
-    "pnpm test -- --watch",
-    "npm test -- --watch",
-    "pnpm run test -w",
-    "yarn test --watch",
-    "yarn test -- --watch",
-    "bun test --watch",
-    "pnpm exec bun -e 1",
-)
 # line 70: (operator, source, row command): the reason; each pair runs alone as a strict xfail.
-# 257 closed by unit S4: its empty_parameter pair now runs as a plain case.
-XFAIL: dict[tuple[str, str, str], str] = {
-    **{("option_case", "RUNNERS_WRAPPED", f"cd {WT} && {AC.WRAP} {c}"): R258 for c in _F2},
-}
+# 257 closed by unit S4, 258 by the runner option rows: their pairs now run as plain cases.
+XFAIL: dict[tuple[str, str, str], str] = {}
 
 
 def _params() -> list[object]:
