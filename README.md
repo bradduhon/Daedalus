@@ -337,10 +337,10 @@ The operator file is a third file in the table. It lives at `~/.claude/daedalus/
 | `no_long_dashes` | `~/.claude/daedalus/operator.json` | Whether Daedalus text for you avoids long dashes. Nothing acts on it yet | Nothing acts on it yet: Daedalus text keeps whatever dashes it has. | starter | boolean or null | `true`, `false` or `null`; any other value is refused | `null`: no personal choice is set | `true` |
 | `guidance_source` | `~/.claude/daedalus/operator.json` | Where your working guidance is read from: Claude Code's own memory files, or a guidance folder Daedalus keeps beside this file. Nothing acts on it yet | Nothing acts on it yet: guidance is read where Claude Code reads it. | starter | string | `"claude"` or `"daedalus"` | `"claude"` | `"daedalus"` |
 | `script_language` | `~/.claude/daedalus/operator.json` | The language you want new scripts written in, told to every agent as guidance. Nothing acts on it yet | Nothing acts on it yet: agents choose the language for each script. | starter | string or null | A lowercase language name such as `python`, or `null` | `null`: no language is preferred | `"python"` |
-| `self_assessment` | `~/.claude/daedalus/operator.json` | Whether Daedalus notes the bugs and missing features it finds in its own skills while you work, and shows them to you at the close | Daedalus keeps short notes about its own faults outside your project. | starter | boolean | `true` or `false`; any other value is refused | `false`: nothing is noted | `true` |
+| `self_assessment` | `~/.claude/daedalus/operator.json` | Whether Self-Assessment mode is on. When it is on, Daedalus records its findings about its own skills, each a bug or a feature, and shows them at the close | Daedalus saves each finding outside your project. | starter | boolean | `true` or `false`; any other value is refused | `false`: Self-Assessment mode is off | `true` |
 <!-- end key reference -->
 
-Uninstalling the plugin deletes its data folder by default. The findings that `self_assessment` saves live in that folder and go with it.
+Uninstalling the plugin deletes its data folder by default. The findings that `self_assessment` saves live in that folder and go with it. An uninstall run with the `--keep-data` option keeps the data folder.
 
 ## Safety model
 

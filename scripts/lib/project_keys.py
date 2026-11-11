@@ -771,13 +771,13 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         (),
     ),
     (OPERATOR_FILE_NAME, "self_assessment"): KeyRow(
-        "Whether Daedalus notes the bugs and missing features it finds in its own skills while "
-        "you work, and shows them to you at the close",
+        "Whether Self-Assessment mode is on. When it is on, Daedalus records its findings about "
+        "its own skills, each a bug or a feature, and shows them at the close",
         "boolean",
         "`true` or `false`; any other value is refused",
-        "`false`: nothing is noted",
+        "`false`: Self-Assessment mode is off",
         "`true`",
-        "Daedalus keeps short notes about its own faults outside your project.",
+        "Daedalus saves each finding outside your project.",
         ("scripts/lib/self_assessment.py",),
     ),
 }
