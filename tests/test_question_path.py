@@ -348,6 +348,37 @@ def test_control_characters_are_refused_in_every_text_field(conv: Conv) -> None:
     assert conv.run("fact", hand={"fact": "plain fact", "kind": "web"})[0] == 0
 
 
+def test_describe_prints_exactly_what_describe_data_returns(
+    env: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    import daedalus_setup
+
+    repo = Path(env["repo"])
+    assert daedalus_setup.describe(repo) == 0
+    printed = capsys.readouterr().out
+    data = daedalus_setup.describe_data(repo)
+    assert printed == json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
+
+def test_every_reference_key_is_listed_by_describe_data(env: dict[str, Any]) -> None:
+    import daedalus_setup
+    from lib.project_keys import reference_keys
+
+    listed = {k["key"] for k in daedalus_setup.describe_data(Path(env["repo"]))["keys"]}  # type: ignore[attr-defined]
+    missing = sorted({key for _file, key in reference_keys()} - listed)
+    assert not missing, f"keys no describe group lists: {missing}"
+
+
+def test_setting_key_the_reader_does_not_list_is_refused_as_unchecked(
+    conv: Conv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import daedalus_setup
+
+    monkeypatch.setattr(daedalus_setup, "describe_data", lambda repo: {"keys": []})
+    got = conv.check([row(1, "format", source="setting", source_ref="docs.reading_level")])
+    assert got[0] == 1 and "the key 'docs.reading_level' cannot be checked" in got[1]
+
+
 def test_record_text_fields_hold_no_control_characters(conv: Conv) -> None:
     conv.check(walk_rows())
     conv.run("ratify")

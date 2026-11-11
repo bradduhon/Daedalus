@@ -583,7 +583,7 @@ def _load(form: str, root: Path) -> tuple[Path | None, bool, object, str | None]
     return path, True, doc, None
 
 
-def describe(repo: Path) -> int:
+def describe_data(repo: Path) -> dict[str, object]:
     root = project_root(repo)
     files: list[dict[str, object]] = []
     keys: list[dict[str, object]] = []
@@ -621,7 +621,7 @@ def describe(repo: Path) -> int:
         blocks.extend(
             _block_entry(info, b, doc, error is None) for b in BLOCKS if b.file == info.name
         )
-    out = {
+    return {
         "files": files,
         "overlaps": [{"id": o.id, "text": o.text, "wins": o.wins} for o in OVERLAPS],
         "blocks": blocks,
@@ -629,7 +629,10 @@ def describe(repo: Path) -> int:
         "detected": detect(root),
         "moot": moot(root),
     }
-    print(json.dumps(out, indent=2, ensure_ascii=False))
+
+
+def describe(repo: Path) -> int:
+    print(json.dumps(describe_data(repo), indent=2, ensure_ascii=False))
     return 0
 
 

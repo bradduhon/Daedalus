@@ -6,8 +6,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
-import io
 import json
 import os
 import stat
@@ -454,20 +452,20 @@ def _rule_ids(path: Path) -> set[str]:
     return out
 
 
-def _set_keys(repo: str) -> set[str]:
-    # Reuses daedalus_setup.describe, the settings wizard's reader of all three files; a key
-    # counts as set when its entry is set or default and holds a value other than null.
+def _set_keys(repo: str) -> tuple[set[str], set[str]]:
+    # Reads daedalus_setup.describe_data, the settings wizard's reader of all three files. A key
+    # is set when its entry is set or default with a value other than null; also returns every
+    # key the reader lists, so an unlisted key is refused as unchecked, not as unset.
     import daedalus_setup
 
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        daedalus_setup.describe(Path(repo))
-    keys = json.loads(buf.getvalue())["keys"]
-    return {
+    entries: Any = daedalus_setup.describe_data(Path(repo))["keys"]
+    listed = {k["key"] for k in entries}
+    found = {
         k["key"]
-        for k in keys
+        for k in entries
         if k.get("state") in ("set", "default") and not ("value" in k and k["value"] is None)
     }
+    return found, listed
 
 
 def _sources(
@@ -475,7 +473,8 @@ def _sources(
 ) -> list[str]:
     problems: list[str] = []
     keys = {key for _file, key in reference_keys()}
-    set_keys = _set_keys(repo) if any(r.source == "setting" for r in rows) else set()
+    wants = any(r.source == "setting" for r in rows)
+    set_keys, listed_keys = _set_keys(repo) if wants else (set(), set())
     heard = [_norm(a) for a in answers]
     if brief is not None:
         heard.append(_norm(_read_text(brief, "brief")))
@@ -484,6 +483,8 @@ def _sources(
         ref = row.source_ref
         if row.source == "setting" and ref not in keys:
             problems.append(f"path: row {row.id}: {ref!r} is not a settings key")
+        elif row.source == "setting" and ref not in listed_keys:
+            problems.append(f"path: row {row.id}: the key {ref!r} cannot be checked")
         elif row.source == "setting" and ref not in set_keys:
             problems.append(f"path: row {row.id}: the key {ref!r} has no value set in any file")
         elif row.source == "stated" and (
