@@ -201,6 +201,10 @@ def test_save_names_missing_and_extra_keys(env: Path, repo: Path) -> None:
         ("happened", "a\r", "line break"),
         ("model_did", "x" * 501, "500"),
         ("step", 7, "text"),
+        ("step", "a\x1b[31mred", "control character"),
+        ("happened", "a\tb", "control character"),
+        ("model_did", "a​b", "control character"),
+        ("text_said", "a‮b", "control character"),
     ],
 )
 def test_save_refuses_each_broken_field(
@@ -266,6 +270,23 @@ def test_show_deletes_old_findings_and_handovers(env: Path, repo: Path) -> None:
     assert f"{old}-aaaaaaaaaaaa.json" not in names
     assert f"{young}-bbbbbbbbbbbb.json" in names and "notes.txt" in names
     assert not left.exists()
+
+
+@pytest.mark.parametrize("bad", ["a\x1b[31mb", "a\tb", "a​b", "a‮b", 5, ""])
+def test_show_skips_a_stored_finding_with_unprintable_fields(
+    env: Path, repo: Path, bad: object
+) -> None:
+    _mode(env, True)
+    _handover(repo, GOOD)
+    assert findings.save(str(repo), SINCE)[0] == 0
+    folder = _saved(env)[0].parent
+    record = json.loads(_saved(env)[0].read_text(encoding="utf-8"))
+    stamp = findings.utc_stamp()
+    (folder / f"{stamp}-cccccccccccc.json").write_text(
+        json.dumps(record | {"happened": bad}), encoding="utf-8"
+    )
+    lines = findings.show(str(repo), SINCE)[1]
+    assert lines == ["Bugs (1)", "setup: step 3: the model asked two", "Features (0)"]
 
 
 def test_show_off(env: Path, repo: Path) -> None:

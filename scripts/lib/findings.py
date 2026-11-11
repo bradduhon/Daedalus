@@ -78,6 +78,8 @@ def check_text(value: object, paths: set[str]) -> str | None:
         return "is empty"
     if value.splitlines() != [value]:
         return "holds a line break"
+    if not value.isprintable():
+        return "holds a control character"
     if len(value) > MAX_TEXT:
         return f"runs over {MAX_TEXT} characters"
     if any(p in value for p in paths):
@@ -247,7 +249,10 @@ def show(repo: str, since: str) -> tuple[int, list[str]]:
         elif hit.group(1) >= since:
             obj, why = read_json(entry)
             if obj is not None and set(KEYS) <= set(obj) and obj["kind"] in KINDS:
-                shown[str(obj["kind"])].append(f"{obj['skill']}: {obj['step']}: {obj['happened']}")
+                parts = [obj["skill"], obj["step"], obj["happened"]]
+                # A stored file is read back as untrusted: only printable text is shown.
+                if all(isinstance(p, str) and p and p.isprintable() for p in parts):
+                    shown[str(obj["kind"])].append(": ".join(str(p) for p in parts))
     out = [f"Bugs ({len(shown['bug'])})", *shown["bug"]]
     out += [f"Features ({len(shown['feature'])})", *shown["feature"]]
     return 0, out
