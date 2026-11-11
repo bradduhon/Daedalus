@@ -35,7 +35,6 @@ def _personal(home: Path, body: object) -> None:
 
 def test_constants() -> None:
     assert self_assessment.MAX_HANDOVER_BYTES == 8192
-    assert self_assessment.TMP_ROOT == Path("/tmp/.daedalus")
 
 
 def test_enabled_true_and_false(home: Path, repo: Path) -> None:
@@ -93,7 +92,7 @@ def test_handover_dir_modes_and_check(home: Path, repo: Path) -> None:
     root = storage.TMP_ROOT
     assert got == root / str(os.getuid()) / "self-assessment" / self_assessment.project_key(repo)
     assert self_assessment.handover_dir(repo) == got
-    assert stat.S_IMODE(root.stat().st_mode) == 0o1777
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
     assert stat.S_IMODE(got.stat().st_mode) == 0o700
     assert self_assessment.check_dirs(repo) is None
 
@@ -105,11 +104,17 @@ def test_check_dirs_refuses_a_symlink_a_wide_mode_and_a_foreign_owner(
     got.chmod(0o707)
     assert "group or others" in str(self_assessment.check_dirs(repo))
     got.chmod(0o700)
-    real = storage._uid()
-    monkeypatch.setattr(storage, "_uid", lambda: real + 1)
-    self_assessment.handover_dir(repo).mkdir(parents=True, mode=0o700)
-    assert "not owned" in str(self_assessment.check_dirs(repo))
-    monkeypatch.setattr(storage, "_uid", lambda: real)
+    with monkeypatch.context() as patch:
+        real = Path.lstat
+
+        def fake(self: Path) -> os.stat_result:
+            info = real(self)
+            if self == storage.TMP_ROOT:
+                return info
+            return os.stat_result([*list(info)[:4], info.st_uid + 1, *list(info)[5:]])
+
+        patch.setattr(Path, "lstat", fake)
+        assert "not owned" in str(self_assessment.check_dirs(repo))
     got.rmdir()
     got.symlink_to(tmp_path)
     assert "symlink" in str(self_assessment.check_dirs(repo))

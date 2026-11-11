@@ -50,6 +50,17 @@ def check_tmp_dirs(feature: str, repo_root: str | Path) -> str | None:
     if TMP_ROOT.is_symlink():
         return f"{TMP_ROOT} is a symlink"
     uid = _uid()
+    try:
+        root = TMP_ROOT.lstat()
+    except FileNotFoundError:
+        root = None
+    except OSError as exc:
+        return f"{TMP_ROOT} could not be read ({exc.strerror})"
+    if root is not None:
+        if not stat.S_ISDIR(root.st_mode):
+            return f"{TMP_ROOT} is not a folder"
+        if root.st_uid not in (uid, 0):
+            return f"{TMP_ROOT} belongs to another user of this machine"
     for folder in _chain(feature, repo_root):
         try:
             info = folder.lstat()
@@ -70,8 +81,12 @@ def check_tmp_dirs(feature: str, repo_root: str | Path) -> str | None:
 
 def make_tmp_dir(feature: str, repo_root: str | Path) -> Path:
     if not os.path.lexists(TMP_ROOT):
-        TMP_ROOT.mkdir(parents=True, exist_ok=True)
-        TMP_ROOT.chmod(0o1777)
+        TMP_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
+        TMP_ROOT.chmod(0o700)
+    # The root is judged before anything is made below it, and again after.
+    reason = check_tmp_dirs(feature, repo_root)
+    if reason is not None:
+        raise RuntimeError(reason)
     for folder in _chain(feature, repo_root):
         if not os.path.lexists(folder):
             os.mkdir(folder, 0o700)
