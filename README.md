@@ -683,6 +683,7 @@ Daedalus/
 │   ├── lib/dispatch_binding.py      # coder dispatch, warm rebind and first-write claim
 │   ├── lib/fable.py                 # whether Fable is available: config first, then the session record
 │   ├── lib/fetch.py                 # GitHub-only download, size cap and cache lock for refreshes
+│   ├── lib/findings.py              # the finding store: start, save and show for Self-Assessment
 │   ├── lib/gh_policy.py             # the gh commands each agent may run
 │   ├── lib/hcl_reader.py            # the built-in Terraform reader finding tests import
 │   ├── lib/git.py                   # the one git runner: timeout and redirect scrub
@@ -729,6 +730,7 @@ Daedalus/
 │   ├── daedalus_claims.py           # prints the verifier's claim ranges from a branch in one call (0230)
 │   ├── daedalus_confine.py          # kernel wrapper: a coder's test command stays in its worktree, no network
 │   ├── daedalus_doctor.py           # first-run check behind /daedalus:doctor
+│   ├── daedalus_findings.py         # start, save and show for Self-Assessment findings
 │   ├── daedalus_map.py              # the dependency map: imports, coverage, record readers, ownership, duplicates
 │   ├── daedalus_path.py             # the question path store's open, check, ask and regenerate commands
 │   ├── daedalus_setup.py            # the settings wizard's describe, create and set forms
