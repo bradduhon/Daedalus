@@ -53,18 +53,19 @@ def test_release_reads_find_exactly_one_merge_commit(tmp_path: Path) -> None:
 
     from tests.conftest import SCRIPTS_DIR, git
 
+    pr, other = "12", "14"
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")
     git(repo, "commit", "-q", "--allow-empty", "-m", "Start")
-    git(repo, "commit", "-q", "--allow-empty", "-m", "Mention (#12) in the middle of a subject")
-    git(repo, "commit", "-q", "--allow-empty", "-m", "Other change (#123)")
-    git(repo, "commit", "-q", "--allow-empty", "-m", "Squashed feature (#12)")
+    git(repo, "commit", "-q", "--allow-empty", "-m", f"Mention (#{pr}) in the middle of a subject")
+    git(repo, "commit", "-q", "--allow-empty", "-m", f"Other change (#{pr}3)")
+    git(repo, "commit", "-q", "--allow-empty", "-m", f"Squashed feature (#{pr})")
     git(repo, "switch", "-q", "-c", "unit")
     git(repo, "commit", "-q", "--allow-empty", "-m", "Unit work")
     tip = git(repo, "rev-parse", "HEAD").stdout.strip()
     git(repo, "switch", "-q", "main")
-    git(repo, "merge", "-q", "--no-ff", "unit", "-m", "Merge pull request #13 from unit")
+    git(repo, "merge", "-q", "--no-ff", "unit", "-m", f"Merge pull request #{pr}4 from unit")
     git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     squash_sha = git(repo, "log", "--format=%H", "--grep=Squashed").stdout.strip()
     merge_sha = git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -88,8 +89,8 @@ def test_release_reads_find_exactly_one_merge_commit(tmp_path: Path) -> None:
         out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout
         return out.split("\n")[:-1]
 
-    assert run(squash_cmd.replace("<pr number>", "12")) == [squash_sha]
-    assert run(squash_cmd.replace("<pr number>", "13")) == []
+    assert run(squash_cmd.replace("<pr number>", pr)) == [squash_sha]
+    assert run(squash_cmd.replace("<pr number>", other)) == []
     merges = [line.split() for line in run(merge_cmd)]
     assert [m[0] for m in merges if len(m) > 2 and m[2] == tip] == [merge_sha]
 
