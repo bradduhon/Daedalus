@@ -1962,17 +1962,51 @@ def test_ledger_records_the_commit_and_refuses_bad_values(repo: Path, plugin: Pa
     sha = "c" * 40
     done = train_runner.record_ledger(repo, sha, "0120-DAE-PLT,0121-DAE-PLT")
     assert done.lines == [f"ledger recorded sha={sha} ids=0120-DAE-PLT,0121-DAE-PLT"]
-    assert _state(repo)["ledger"] == {"sha": sha, "ids": ["0120-DAE-PLT", "0121-DAE-PLT"]}
-    for bad_sha, ids in (
+    ids = ["0120-DAE-PLT", "0121-DAE-PLT"]
+    recorded = {"sha": sha, "ids": ids, "commits": [{"sha": sha, "ids": ids}]}
+    assert _state(repo)["ledger"] == recorded
+    for bad_sha, given in (
         ("C" * 40, "0120-DAE-PLT"),
         ("c" * 39, "0120-DAE-PLT"),
         (sha, ""),
         (sha, "0120-DAE-PLT,0120-DAE-PLT"),
         (sha, "--x"),
     ):
-        refused = train_runner.record_ledger(repo, bad_sha, ids)
-        assert refused.code == 1 and "Next:" in refused.lines[0], (bad_sha, ids)
-    assert _state(repo)["ledger"] == {"sha": sha, "ids": ["0120-DAE-PLT", "0121-DAE-PLT"]}
+        refused = train_runner.record_ledger(repo, bad_sha, given)
+        assert refused.code == 1 and "Next:" in refused.lines[0], (bad_sha, given)
+    assert _state(repo)["ledger"] == recorded
+
+
+def test_ledger_records_each_commit_with_its_own_ids(repo: Path, plugin: Path) -> None:
+    # 124: the issue's two charter-docs commits; the summary prints one line per commit.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    first, second = "246ebfc" + "1" * 33, "40b01d1" + "2" * 33
+    assert train_runner.record_ledger(repo, first, "0160-DAE-PLT,0161-DAE-PLT").code == 0
+    done = train_runner.record_ledger(repo, second, "0162-DAE-PLT")
+    assert done.lines == [f"ledger recorded sha={second} ids=0162-DAE-PLT"]
+    commits = [
+        {"sha": first, "ids": ["0160-DAE-PLT", "0161-DAE-PLT"]},
+        {"sha": second, "ids": ["0162-DAE-PLT"]},
+    ]
+    assert _state(repo)["ledger"] == {"sha": second, "ids": ["0162-DAE-PLT"], "commits": commits}
+    # A rerun on a sha or an id replaces the entry it named, never adds a second one.
+    assert train_runner.record_ledger(repo, second, "0162-DAE-PLT").code == 0
+    fixed = "3" * 40
+    assert train_runner.record_ledger(repo, fixed, "0161-DAE-PLT").code == 0
+    assert _state(repo)["ledger"]["commits"] == [  # type: ignore[index]
+        {"sha": first, "ids": ["0160-DAE-PLT"]},
+        {"sha": second, "ids": ["0162-DAE-PLT"]},
+        {"sha": fixed, "ids": ["0161-DAE-PLT"]},
+    ]
+    _record(repo, tool_input={"command": _summary_cmd(repo)})
+    assert train_runner.summary(repo).code == 0
+    text = _summary_file(repo).read_text(encoding="utf-8")
+    assert (
+        f"\nLedger ids: 0160-DAE-PLT in commit {first}.\n"
+        f"Ledger ids: 0162-DAE-PLT in commit {second}.\n"
+        f"Ledger ids: 0161-DAE-PLT in commit {fixed}.\n"
+    ) in text
 
 
 @pytest.mark.parametrize(

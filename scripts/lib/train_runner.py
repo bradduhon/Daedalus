@@ -2416,7 +2416,18 @@ def record_ledger(cwd: Path, sha: str, ids: str) -> Outcome:
             )
 
         def change(state: dict[str, object]) -> None:
-            state[LEDGER] = {"sha": sha, "ids": names}
+            # 124: one entry per commit; a rerun on a sha or an id replaces the entry it named.
+            prior = train_state.record(state, LEDGER)
+            kept = [
+                {
+                    "sha": _text(c, "sha"),
+                    "ids": [i for i in _strings(c.get("ids")) if i not in names],
+                }
+                for c in _objects(prior, "commits") or ([prior] if prior else [])
+                if _text(c, "sha") != sha
+            ]
+            commits = [*(c for c in kept if c["ids"]), {"sha": sha, "ids": names}]
+            state[LEDGER] = {"sha": sha, "ids": names, "commits": commits}
             if train_state.record(state, RESUME):
                 _close_consult(state, ORCHESTRATOR_AGENT)
 

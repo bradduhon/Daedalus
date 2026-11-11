@@ -265,10 +265,13 @@ def _agent(record: Record) -> str:
 
 def replies(records: Sequence[Record]) -> list[Reply]:
     # issue 57: a reply is a hand-back call or a stop's tail; a stop relaying the same line is one.
+    # 124: only the stop right after the same agent's hand-back is a relay; a later turn counts.
     found: list[Reply] = []
-    last: dict[str, str] = {}
+    handed: dict[str, str | None] = {}
     for record in records:
         event, tool = record.get("event"), record.get("tool_name")
+        agent_id = _text(record, "agent_id")
+        relayed, handed[agent_id] = handed.get(agent_id), None
         if event == "PostToolUse" and tool == HANDBACK:
             raw = handback_message(record)
         elif event == "SubagentStop":
@@ -277,11 +280,11 @@ def replies(records: Sequence[Record]) -> list[Reply]:
             continue
         if not isinstance(raw, str) or not raw.strip():
             continue
-        agent_id = _text(record, "agent_id")
         reply = Reply(_seq(record), _agent(record), agent_id, raw)
-        if agent_id and last.get(agent_id) == reply.last:
+        if event == "SubagentStop" and agent_id and relayed == reply.last:
             continue
-        last[agent_id] = reply.last
+        if event == "PostToolUse":
+            handed[agent_id] = reply.last
         found.append(reply)
     return found
 
@@ -424,19 +427,23 @@ def _located(path: str, repo: Path, charter: Path | None, prefix_repo: bool) -> 
     return target.name
 
 
-def _ledger_lines(state: dict[str, object], notes: Notes) -> str:
+def _ledger_lines(state: dict[str, object], notes: Notes) -> list[str]:
     ledger = train_state.record(state, LEDGER)
     if not ledger:
         codes = notes.fields.get("Codes")
-        return f"{LEDGER_PENDING}." + (f" Codes: {codes}." if codes else "")
-    sha, ids = ledger.get("sha"), _strings(ledger.get("ids"))
-    if not isinstance(sha, str) or not TIP.fullmatch(sha) or not ids:
-        raise SummaryError(
-            "the train's ledger record names no commit sha or no ids. Next: rerun "
-            "daedalus_train.py ledger with the sha and ids of charter-docs' COMMITTED line, then "
-            "rerun summary."
-        )
-    return f"Ledger ids: {','.join(ids)} in commit {sha}."
+        return [f"{LEDGER_PENDING}." + (f" Codes: {codes}." if codes else "")]
+    # 124: one line per ledger commit with its own ids; a record older than the list is one.
+    lines: list[str] = []
+    for commit in _objects(ledger, "commits") or [ledger]:
+        sha, ids = commit.get("sha"), _strings(commit.get("ids"))
+        if not isinstance(sha, str) or not TIP.fullmatch(sha) or not ids:
+            raise SummaryError(
+                "the train's ledger record names no commit sha or no ids. Next: rerun "
+                "daedalus_train.py ledger with the sha and ids of charter-docs' COMMITTED line, "
+                "then rerun summary."
+            )
+        lines.append(f"Ledger ids: {','.join(ids)} in commit {sha}.")
+    return lines
 
 
 def _header(
@@ -477,7 +484,7 @@ def _header(
         lines.append(CONTRACT_SKIPPED)
     else:
         lines.append(CONTRACT_NOT_LOCKED)
-    lines.append(_ledger_lines(state, notes))
+    lines += _ledger_lines(state, notes)
     # W3.2: the train state lines above withhold a path; the Task line already passed the check.
     lines = [public(line, repo, charter, "the train state", withhold=True) for line in lines]
     lines.append(
@@ -571,19 +578,46 @@ def _priorities(
     return lines if len(lines) > 1 else [*lines, "none"]
 
 
+def _git_out(repo: Path, *args: str) -> str | None:
+    from lib import git
+
+    try:
+        done = git.run(args, repo)
+    except (OSError, git.GitTimeout):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def _unit_files(repo: Path, train_id: str, branch: str) -> str | None:
+    # 124: the files the branch changed since its fork from the integration branch; the base
+    # is the first parent of the merge that took the branch tip, else the integration branch.
+    tip = _git_out(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}")
+    integration = f"refs/heads/daedalus/{train_id}"
+    merges = _git_out(repo, "log", "--first-parent", "--merges", "--format=%H %P", integration)
+    if not tip or merges is None:
+        return None
+    parents = (line.split() for line in merges.splitlines())
+    base = next((p[1] for p in parents if len(p) > 2 and p[2] == tip.strip()), integration)
+    raw = _git_out(repo, "diff", "--name-only", "--no-renames", "-z", f"{base}...{tip.strip()}")
+    return None if raw is None else ", ".join(name for name in raw.split("\0") if name)
+
+
 def _units(
     repo: Path, train_id: str, units: Sequence[dict[str, object]], facts: _Facts
 ) -> list[str]:
     lines = ["## Units", "| Unit | Branch | Packet | Files | Tests |", "|---|---|---|---|---|"]
     for unit in units:
         branch = _text(unit, "branch")
-        packet, files, tests, where = facts.complete.get(branch, ("", "", "", ""))
+        packet, said, tests, where = facts.complete.get(branch, ("", "", "", ""))
+        # 124: the coder's files= list stands only where git cannot read the branch.
+        diffed = _unit_files(repo, train_id, branch) if branch else None
+        files, where_files = (said, where) if diffed is None else (diffed, f"git diff of {branch}")
         state = f"the train state unit {_text(unit, 'name')}"
         cells = [
             _cell(_text(unit, "name").removeprefix(f"{train_id}-"), repo, None, state),
             _cell(branch, repo, None, state),
             _cell(f"v{packet}" if packet else "", repo, None, where),
-            _cell(files, repo, None, where),
+            _cell(files, repo, None, where_files),
             _cell(tests, repo, None, where),
         ]
         lines.append(f"| {' | '.join(cells)} |")
