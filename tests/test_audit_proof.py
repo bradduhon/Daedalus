@@ -5,6 +5,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import string
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from lib.audit_proof import (
     VERDICT_REJECTED,
     ProofError,
     approved,
+    charter_base_problem,
     hooks_live,
     live_summary,
     newest_log,
@@ -993,3 +995,105 @@ def test_stop_verdict_reads_verdict_lines_and_falls_back() -> None:
     assert stop_verdict({**base, "verdict_lines": [reject]}) == VERDICT_REJECTED
     assert stop_verdict({**base, "verdict_lines": [approve, reject]}) == VERDICT_BOTH
     assert stop_verdict({**base, "verdict_lines": "x"}) is None
+
+
+@pytest.fixture
+def charter_pair(tmp_path: Path) -> Path:
+    # 221: a Charter clone on main whose origin is a local bare repository, no network.
+    remote = tmp_path / "charter-remote.git"
+    _git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
+    charter = tmp_path / "charter"
+    charter.mkdir()
+    _git(charter, "init", "-q", "-b", "main")
+    _git(charter, "commit", "-q", "--allow-empty", "-m", "init")
+    _git(charter, "remote", "add", "origin", str(remote))
+    _git(charter, "push", "-q", "origin", "main")
+    return charter
+
+
+ABSENT = "is not on the Charter's remote origin"
+
+
+@pytest.mark.parametrize("name", ["charter/topic", "charter/self_assessment", "release_2"])
+def test_charter_base_on_the_remote_passes(charter_pair: Path, name: str) -> None:
+    _git(charter_pair, "branch", name)
+    _git(charter_pair, "push", "-q", "origin", name)
+    assert charter_base_problem(str(charter_pair), name) is None
+
+
+def test_charter_default_branch_as_base_passes(charter_pair: Path) -> None:
+    assert charter_base_problem(str(charter_pair), "main") is None
+
+
+def test_charter_base_absent_everywhere_refuses_with_both_fixes(charter_pair: Path) -> None:
+    problem = charter_base_problem(str(charter_pair), "charter/gone") or ""
+    assert problem.startswith("NOT READY: the Charter base branch charter/gone " + ABSENT)
+    assert "push -u origin charter/gone`, or open the" in problem
+    assert "against the Charter's default branch, then run `/daedalus:run push` again." in problem
+
+
+def test_charter_base_only_local_refuses(charter_pair: Path) -> None:
+    # 221: run 20261107-012956 had its Charter base in the local clone only.
+    _git(charter_pair, "branch", "charter/plugin-bugs-183-189")
+    problem = charter_base_problem(str(charter_pair), "charter/plugin-bugs-183-189") or ""
+    assert ABSENT in problem and "Next: push it from your own shell" in problem
+
+
+def test_charter_base_tail_match_on_the_remote_is_not_the_base(charter_pair: Path) -> None:
+    # 221: ls-remote matches refs/heads/x/topic for the pattern topic; only the exact ref counts.
+    _git(charter_pair, "branch", "x/topic")
+    _git(charter_pair, "push", "-q", "origin", "x/topic")
+    assert ABSENT in (charter_base_problem(str(charter_pair), "topic") or "")
+
+
+def test_charter_remote_unreachable_is_not_reported_absent(
+    charter_pair: Path, tmp_path: Path
+) -> None:
+    _git(charter_pair, "remote", "set-url", "origin", str(tmp_path / "no-such-remote.git"))
+    problem = charter_base_problem(str(charter_pair), "main") or ""
+    assert problem.startswith("NOT READY: the Charter's remote origin could not be reached")
+    assert ABSENT not in problem and "(git ls-remote exit 128)" in problem
+    assert str(tmp_path / "no-such-remote.git") not in problem
+    assert problem.endswith("then run `/daedalus:run push` again.")
+
+
+def test_no_charter_configured_skips_without_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lib import git as git_lib
+
+    def no_git(*args: object, **kwargs: object) -> None:
+        raise AssertionError("no git call without a Charter")
+
+    monkeypatch.setattr(git_lib, "run", no_git)
+    assert charter_base_problem(None, None) is None
+    assert charter_base_problem(None, "main") is None
+    assert charter_base_problem("/nonexistent/charter", None) is None
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["-x", "--upload-pack=touch /tmp/x", "a b", "main\n", "\tmain", "/main", ".main"]
+    + ["fix+x", "fix#x"],
+)
+def test_charter_base_not_a_branch_name_refuses_before_git(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    # 221: the Charter base name rule is checked before any git call.
+    from lib import git as git_lib
+
+    def no_git(*args: object, **kwargs: object) -> None:
+        raise AssertionError("git ran on a refused name")
+
+    monkeypatch.setattr(git_lib, "run", no_git)
+    problem = charter_base_problem("/nonexistent/charter", name) or ""
+    assert problem.startswith(f"NOT READY: the recorded Charter base {name!r} is not a plain")
+    assert problem.endswith("then start the work again with `/daedalus:run`.")
+
+
+def test_charter_base_refusal_names_exactly_the_admitted_characters() -> None:
+    # 221: the refusal's character list and the admitted set come from one constant.
+    from lib.audit_proof import CHARTER_BASE_CHARS, CHARTER_BASE_PUNCT
+
+    problem = charter_base_problem("/nonexistent/charter", "a+b") or ""
+    assert "holds only letters, digits, dots, underscores, slashes and hyphens," in problem
+    punct = set(CHARTER_BASE_CHARS) - set(string.ascii_letters + string.digits)
+    assert punct == set(CHARTER_BASE_PUNCT) == {".", "_", "/", "-"}

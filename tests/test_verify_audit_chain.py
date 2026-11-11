@@ -20,6 +20,7 @@ from tests.conftest import (
     SCRIPTS_DIR,
     append_handback,
     audit_records,
+    git,
     replay_auditor,
 )
 from tests.test_operator_gates import GATE_KEY, exempt_round
@@ -406,6 +407,34 @@ def test_cli_approved_round_trip(marked_data: Path, hook_input: Any, repo_cwd: P
         "OK approved: approved verdict, train 20261016-120000, session sess-test, "
         f"auditor record seq 2, judged tip {tip[:12]}\n"
     )
+
+
+def test_cli_approved_refuses_a_charter_base_missing_on_the_remote(
+    marked_data: Path, hook_input: Any, repo_cwd: Path, tmp_path: Path
+) -> None:
+    # 221: an approved verdict still exits 1 until the Charter base is on the Charter's origin.
+    remote, charter = tmp_path / "charter-remote.git", tmp_path / "charter"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
+    charter.mkdir()
+    git(charter, "init", "-q", "-b", "main")
+    git(charter, "commit", "-q", "--allow-empty", "-m", "init")
+    git(charter, "remote", "add", "origin", str(remote))
+    git(charter, "push", "-q", "origin", "main")
+    git(charter, "branch", "charter/base")
+    tip = _tip(repo_cwd)
+    _approved_train(hook_input, repo_cwd, f"[VERDICT: APPROVED] tip={tip} ok")
+    _judge(repo_cwd, tip, seq=2)
+    train_state.update(
+        repo_cwd, APPROVED_TRAIN, charter_root=str(charter), charter_base="charter/base"
+    )
+    refused = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
+    assert refused.returncode == 1
+    assert refused.stdout.startswith("NOT READY: the Charter base branch charter/base is not on")
+    assert "OK approved" not in refused.stdout and "Next: push it" in refused.stdout
+    git(charter, "push", "-q", "origin", "charter/base")
+    passed = _verify("--approved", APPROVED_TRAIN, "--repo", repo_cwd)
+    assert passed.returncode == 0, passed.stdout
+    assert passed.stdout.startswith("OK approved: approved verdict")
 
 
 def test_cli_approved_prints_the_exemption_path(
