@@ -154,7 +154,7 @@ To see what a run cost in tokens, type the command below. It counts the agents o
 
     /daedalus:token-report <run id or session id>
 
-`/daedalus:token-report history` prints the totals row of every saved run.
+When your settings name a docs folder (`local_docs_folder`), the skill saves a run's table there under `reports/` without asking and prints the path; with none named it saves the table in the `reports` folder of the plugin data folder and prints that path; `history` reads whichever folder applies. `/daedalus:audit-report` follows the same rule and saves under `audit/`. `/daedalus:token-report history` prints the totals row of every saved run.
 
 ## The agents
 

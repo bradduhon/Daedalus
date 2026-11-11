@@ -501,3 +501,80 @@ def test_bindings_name_a_unit_no_prompt_names(home: Path) -> None:
     repo = _main_session(home)
     assert te.unit_binding.bound_units(repo, TRAIN) == {"mc2": f"{TRAIN}-a2", "old": f"{TRAIN}-a9"}
     assert te.unit_binding.bound_units(repo, "20261016-120000") == {}
+
+
+def _save(
+    repo: Path, capsys: pytest.CaptureFixture[str], folder: Path | None, *args: str
+) -> tuple[int, str]:
+    # 0252: --save goes to the named docs folder, else to the plugin data folder.
+    data = repo / ".claude" / "daedalus"
+    data.mkdir(parents=True, exist_ok=True)
+    if folder is not None:
+        (data / "config.json").write_text(json.dumps({"local_docs_folder": str(folder)}))
+    runs = te.session_runs(SESSION, repo, [])[0]
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(te, "report_runs", lambda *_: (te._merge(runs), "run"))
+        code = te.main(["report", "--run", TRAIN, "--save", "--repo", str(repo), *args])
+    return code, capsys.readouterr().out
+
+
+def test_save_folder_named_and_present(
+    home: Path, repo_cwd: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _train(home)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    code, out = _save(repo_cwd, capsys, docs)
+    assert code == 0 and out.startswith(f"wrote {docs}/reports/")
+    assert len(list((docs / "reports").glob(f"*-tokens-{TRAIN}.md"))) == 1
+
+
+def test_save_folder_named_and_reports_subfolder_missing_is_created(
+    home: Path, repo_cwd: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _train(home)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    code, out = _save(repo_cwd, capsys, docs)
+    assert code == 0 and (docs / "reports").is_dir() and "wrote " in out
+
+
+def test_save_no_folder_named_goes_to_the_data_folder_and_history_reads_it(
+    home: Path,
+    repo_cwd: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _train(home)
+    plugin_data = tmp_path / "plugin-data"
+    plugin_data.mkdir()
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(plugin_data))
+    code, out = _save(repo_cwd, capsys, None)
+    saved = Path(out.split("wrote ", 1)[1].strip())
+    assert code == 0 and saved.parent.parent == plugin_data.resolve() / "reports"
+    assert saved.name.endswith(f"-tokens-{TRAIN}.md") and saved.is_file()
+    assert not (repo_cwd / "docs").exists()
+    assert f"| {TRAIN} | total |" in te.history(repo_cwd)
+
+
+def test_history_still_reads_the_old_scratch_place_and_save_never_writes_there(
+    home: Path,
+    repo_cwd: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _train(home)
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "pd"))
+    (tmp_path / "pd").mkdir()
+    old = repo_cwd / "docs" / ".tmp" / "daedalus" / "20261014-120000" / "tokens.md"
+    old.parent.mkdir(parents=True)
+    old.write_text(
+        "| Build Train | 20261014-120000 | total | 1 agents | 1 units, 0 rounds | 2 |"
+        " 1 | 1 | 1 | 1 | 9s |\n",
+        encoding="utf-8",
+    )
+    assert "20261014-120000" in te.history(repo_cwd)
+    _save(repo_cwd, capsys, None)
+    assert [p.name for p in old.parent.parent.iterdir()] == ["20261014-120000"]

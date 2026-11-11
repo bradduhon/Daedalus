@@ -56,9 +56,24 @@ FILES: tuple[Entry, ...] = (
         "you run token_economy.py report --save and config.json sets local_docs_folder",
     ),
     Entry(
-        f"{_SCRATCH}/<run id>/tokens.md",
+        "<charter_root>/reports/",
+        "scripts/token_economy.py:saved_dir",
+        "you run token_economy.py report --save and the reports subfolder is missing (0252)",
+    ),
+    Entry(
+        "<cache>/reports/<project key>/<date>-tokens-<run id>.md",
         "scripts/audit_report.py:_write_report",
-        "you run token_economy.py report --save with no local_docs_folder set",
+        "you run token_economy.py report --save and no docs folder exists (0252)",
+    ),
+    Entry(
+        "<charter_root>/audit/",
+        "scripts/audit_report.py:main",
+        "you run audit_report.py --save and the audit subfolder is missing (0252)",
+    ),
+    Entry(
+        "<charter_root>/audit/<session>.md",
+        "scripts/audit_report.py:_write_report",
+        "you run audit_report.py --save and config.json sets local_docs_folder",
     ),
     Entry(
         f"{_CONFINE}/",
