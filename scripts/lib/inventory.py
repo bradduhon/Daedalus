@@ -104,7 +104,7 @@ FILES: tuple[Entry, ...] = (
     Entry(
         f"{_MIRROR}/mirror/",
         "scripts/lib/provider_mirror.py:make_mirror",
-        "daedalus_train.py providers runs; terraform providers mirror fills it, outside the wrapper",
+        "daedalus_train.py providers runs; terraform fills it, outside the wrapper",
     ),
     Entry(
         f"{_MIRROR}/tf-data/",

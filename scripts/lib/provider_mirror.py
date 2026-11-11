@@ -29,13 +29,15 @@ PASS_NAMES = frozenset(
     | {"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"}
 )
 PASS_PREFIXES = ("TF_TOKEN_",)
+PATH_VARS = ("HOME", "TF_CLI_CONFIG_FILE", "SSL_CERT_FILE", "SSL_CERT_DIR")
 FIXED_ENV = {"CHECKPOINT_DISABLE": "1", "TF_IN_AUTOMATION": "1", "TF_INPUT": "0"}
 # 0256: the characters a mirror path may hold, so the CLI config string needs no escaping.
 PATH_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-")
 WITHHELD = "[withheld]"
 R_MIRROR_OUTSIDE = "{path} resolves outside the run's temporary folder"
 R_MIRROR_NOT_GRANTED = (
-    "not granted: {reason}. Next: remove {run} from your own shell, then rerun "
+    "the run's provider mirror is not granted, because {reason}. Next: remove {run} from your "
+    "own shell, then rerun "
     "daedalus_train.py providers from the main session."
 )
 R_PROVIDERS_NO_RUN = (
@@ -138,6 +140,10 @@ def make_mirror(repo: str | Path, train_id: str) -> Path:
         if not os.path.lexists(folder):
             os.mkdir(folder, 0o700)
             os.chmod(folder, 0o700)
+        # 0256: a planted run folder link is refused before anything is made through it.
+        reason = _folder_problem(run)
+        if reason is not None:
+            raise RuntimeError(reason)
     reason = mirror_problem(repo, train_id) or _folder_problem(run / DATA)
     if reason is not None:
         raise RuntimeError(reason)
@@ -200,9 +206,21 @@ def find_roots(repo: str, excluded: tuple[str, ...] = ()) -> tuple[list[str], li
     return roots, unread
 
 
-def fetch_env(data: Path, source: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+def _inside(path: str, top: str) -> bool:
+    real = _resolved(path)
+    return real == top or real.startswith(top + os.sep)
+
+
+def fetch_env(data: Path, source: dict[str, str], top: str) -> tuple[dict[str, str], list[str]]:
     # 0256: (the environment terraform gets, the caller values never echoed back).
     passed = {k: v for k, v in source.items() if k in PASS_NAMES or k.startswith(PASS_PREFIXES)}
+    # 0256: a file or PATH folder the project holds, or a relative one, never reaches terraform.
+    for name in PATH_VARS:
+        if name in passed and (not os.path.isabs(passed[name]) or _inside(passed[name], top)):
+            del passed[name]
+    if "PATH" in passed:
+        kept = [p for p in passed["PATH"].split(os.pathsep) if os.path.isabs(p)]
+        passed["PATH"] = os.pathsep.join(p for p in kept if not _inside(p, top))
     env = {**passed, **FIXED_ENV, "TF_DATA_DIR": str(data)}
     secrets = [v for v in passed.values() if len(v) >= 4]
     for value in passed.values():
@@ -293,7 +311,7 @@ def fetch(
             roots = []
     tried: list[dict[str, str]] = []
     if roots and binary is not None:
-        env, secrets = fetch_env(mirror.parent / DATA, source)
+        env, secrets = fetch_env(mirror.parent / DATA, source, top)
         argv = [binary, "providers", "mirror", "-no-color", str(mirror)]
         for root in roots:
             name = _rel(root, top)

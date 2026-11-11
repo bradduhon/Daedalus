@@ -77,7 +77,8 @@ TF_DATA = "tf-data"
 TF_CLI_CONFIG = "terraformrc"
 TF_DROPPED = ("TF_PLUGIN_CACHE_DIR",)
 R_MIRROR_STORE = (
-    "not granted: {path} holds or sits inside a credential store. Next: remove that folder "
+    "the run's provider mirror is not granted, because {path} holds or sits inside a "
+    "credential store. Next: remove that folder "
     "from your own shell, then rerun daedalus_train.py providers from the main session."
 )
 HIDDEN = (".claude/daedalus", f"{UNIT_WORKTREES}")

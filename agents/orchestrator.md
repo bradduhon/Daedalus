@@ -133,7 +133,7 @@ A resume message whose last line starts `CHANGE. ` carries the operator's words 
 Run each phase by its phase skill, in the order you announced. Each skill says how to do the phase well, what evidence ends it, which agents it uses and which phase may come next (its `## Suggested next` block). Never start a phase whose evidence its predecessor has not produced; the hooks refuse the cases they check. A phase skill names the plugin root by its variable; in every command write `<plugin root>` out in full in its place, because your hook refuses `$`, `~` and braces. Where a phase skill says the orchestrator records a value, record it on your State Block.
 
 - Plan, which settles the standards, cuts the plan and locks the contract: Read and run `<plugin root>/skills/plan/SKILL.md` (`/daedalus:plan <spec path>`), the cut of its steps 3 to 9 beside its steps 11 to 15.
-- Build, which runs the work units and routes their yields: Read and run `<plugin root>/skills/build/SKILL.md`.
+- Build, which runs the work units and routes their yields: Read and run `<plugin root>/skills/build/SKILL.md`. Its provider fetch (step 3, run fetches providers, 0256) is `python3 <plugin root>/scripts/daedalus_train.py providers --repo <repo>`, once before the first coder dispatch; a `warning:` line it prints never stops the run.
 - Verify, the verifier step for each unit: Read and run `<plugin root>/skills/verify/SKILL.md` in unit mode.
 - Audit, which merges, runs compliance and the adversarial security gate: Read and run `<plugin root>/skills/audit/SKILL.md`, after the build phase's step 10 merge records the tip.
 - Document, the documentation stage: Read and run `<plugin root>/skills/document/SKILL.md` in public docs mode.

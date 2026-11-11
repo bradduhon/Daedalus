@@ -31,7 +31,10 @@ ON = daedalus_confine.Support("x86_64", 3, True)
 LIVE = daedalus_confine.kernel_support()
 needs_kernel = pytest.mark.skipif(not LIVE.ok, reason="this kernel cannot hold the rules")
 PROVIDERS = f"python3 {REPO_ROOT / 'scripts'}/daedalus_train.py providers --repo {CWD}"
-TF = 'terraform {\n  required_providers {\n    null = {\n      source = "hashicorp/null"\n    }\n  }\n}\n'
+TF = (
+    "terraform {\n  required_providers {\n"
+    '    null = {\n      source = "hashicorp/null"\n    }\n  }\n}\n'
+)
 PINNED = (
     "provider_installation {\n"
     "  filesystem_mirror {\n"
@@ -350,6 +353,63 @@ def test_a_terraform_inside_the_project_or_off_path_is_never_run(
     assert "Next:" in lines[0]
     rel = provider_mirror.fetch(str(repo), TRAIN, (), {})
     assert rel == lines
+    dotted = provider_mirror.fetch(str(repo), TRAIN, (), {"PATH": "tools"})
+    assert dotted == lines and _calls(planted) == []
+
+
+def test_a_config_ca_home_or_path_folder_inside_the_project_never_reaches_terraform(
+    tmp_path: Path, tmp_root: Path
+) -> None:
+    # 0256 self-hunt: a committed CLI config could name a credentials helper run as the user.
+    repo = _project(tmp_path)
+    bin_dir = tmp_path / "bin"
+    _stand_in(bin_dir)
+    source = {
+        "PATH": f"{repo / 'tools'}:relative:{bin_dir}:/usr/bin",
+        "HOME": str(repo),
+        "TF_CLI_CONFIG_FILE": str(repo / "infra" / ".terraformrc"),
+        "SSL_CERT_FILE": "ca.pem",
+        "SSL_CERT_DIR": str(tmp_path / "certs"),
+    }
+    provider_mirror.fetch(str(repo), TRAIN, (), source)
+    [call] = _calls(bin_dir)
+    env = call["env"]
+    assert isinstance(env, dict)
+    assert env["PATH"] == f"{bin_dir}:/usr/bin" and env["SSL_CERT_DIR"] == str(tmp_path / "certs")
+    for name in ("HOME", "TF_CLI_CONFIG_FILE", "SSL_CERT_FILE"):
+        assert name not in env, name
+
+
+def test_a_planted_run_folder_link_stops_the_fetch_before_terraform_writes(
+    tmp_path: Path, tmp_root: Path
+) -> None:
+    # 0256 self-hunt: a run folder swapped for a link never receives the mirror.
+    repo = _project(tmp_path)
+    run = provider_mirror.run_folder(repo, TRAIN)
+    storage.make_tmp_dir(provider_mirror.FEATURE, repo)
+    target = tmp_path / "victim"
+    (target / provider_mirror.MIRROR).mkdir(parents=True, mode=0o700)
+    target.chmod(0o700)
+    run.symlink_to(target, target_is_directory=True)
+    bin_dir = tmp_path / "bin"
+    _stand_in(bin_dir)
+    lines = provider_mirror.fetch(str(repo), TRAIN, (), {"PATH": str(bin_dir)})
+    assert lines[0].startswith("warning: providers: the mirror folder could not be made (")
+    assert "is a symlink" in lines[0] and _calls(bin_dir) == []
+    assert sorted(p.name for p in target.rglob("*")) == [provider_mirror.MIRROR]
+
+
+def test_a_fifo_or_oversized_tf_file_is_never_opened_or_read(
+    tmp_path: Path, tmp_root: Path
+) -> None:
+    # 0256 self-hunt: a named pipe would block the walk; a huge file is skipped unread.
+    repo = _project(tmp_path)
+    (repo / "pipe").mkdir()
+    os.mkfifo(repo / "pipe" / "main.tf")
+    (repo / "big").mkdir()
+    (repo / "big" / "main.tf").write_text(TF + " " * provider_mirror.MAX_TF_BYTES)
+    roots, unread = provider_mirror.find_roots(str(repo))
+    assert roots == [str(repo / "infra")] and unread == []
 
 
 def _grant_line(repo: Path, unit: Path, mirror: Grant) -> str:
@@ -431,9 +491,9 @@ def test_a_bad_mirror_folder_is_not_granted_and_the_line_says_so(
     line = _grant_line(repo, unit, grant)
     assert line.endswith(f" tf_mirror={grant.reason}") and "tf_cli_config" not in line
     assert str(run) not in line.split(" tf_mirror=")[0]
-    assert grant.reason.startswith("not granted: ") and grant.reason.endswith(
-        "then rerun daedalus_train.py providers from the main session."
-    )
+    assert grant.reason.startswith(
+        "the run's provider mirror is not granted, because "
+    ) and grant.reason.endswith("then rerun daedalus_train.py providers from the main session.")
 
 
 def test_a_mirror_that_resolves_elsewhere_is_not_granted(
@@ -445,7 +505,7 @@ def test_a_mirror_that_resolves_elsewhere_is_not_granted(
     mirror = str(provider_mirror.mirror_folder(repo, TRAIN))
     real = provider_mirror._resolved
     monkeypatch.setattr(
-        provider_mirror, "_resolved", lambda p: "/home/x/.ssh" if p == mirror else real(p)
+        provider_mirror, "_resolved", lambda p: "/elsewhere/.ssh" if p == mirror else real(p)
     )
     grant = provider_mirror.granted_mirror(str(repo))
     want = provider_mirror.R_MIRROR_OUTSIDE.format(path=mirror)
