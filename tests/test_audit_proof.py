@@ -1072,7 +1072,7 @@ def test_no_charter_configured_skips_without_git(monkeypatch: pytest.MonkeyPatch
 @pytest.mark.parametrize(
     "name",
     ["-x", "--upload-pack=touch /tmp/x", "a b", "main\n", "\tmain", "/main", ".main"]
-    + ["fix+x", "fix#12"],
+    + ["fix+x", "fix#x"],
 )
 def test_charter_base_not_a_branch_name_refuses_before_git(
     monkeypatch: pytest.MonkeyPatch, name: str
