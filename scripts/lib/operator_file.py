@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0235: the operator file, ~/.claude/daedalus/operator.json, and its per-repository override;
-# 0234, 0237: defined and read here only, no check or hook acts on it yet.
+# 0234, 0237: defined and read here; apart from self_assessment, no check or hook acts on it yet.
 from __future__ import annotations
 
 import json
@@ -25,7 +25,14 @@ MAIN_REFUSAL_CLASSES: tuple[str, ...] = (
     "credential_read",
 )
 # 0245: the JSON names of the personal file, in key-table order.
-TOP_KEYS = ("hard_stops", "reading_level", "no_long_dashes", "guidance_source", "script_language")
+TOP_KEYS = (
+    "hard_stops",
+    "reading_level",
+    "no_long_dashes",
+    "guidance_source",
+    "script_language",
+    "self_assessment",
+)
 # 0244: where the guidance layer is read from; claude is the default.
 GUIDANCE_SOURCES = ("claude", "daedalus")
 _LANGUAGE = re.compile(r"[a-z][a-z0-9+#-]{0,31}")
@@ -43,6 +50,7 @@ class Operator:
     dash_ban: bool | None = None
     guidance_source: str = "claude"
     script_language: str | None = None
+    self_assessment: bool = False
 
 
 OPERATOR_KEYS = tuple(f.name for f in fields(Operator))
@@ -103,6 +111,11 @@ def _choices(raw: dict[str, object], where: str, prefix: str) -> dict[str, objec
                 where, f"{prefix}script_language", "must be null or a lowercase language name"
             )
         out["script_language"] = language
+    if "self_assessment" in raw:
+        # A1: true or false only; null is refused, the default is false.
+        if not isinstance(raw["self_assessment"], bool):
+            raise _fail(where, f"{prefix}self_assessment", "must be true or false")
+        out["self_assessment"] = raw["self_assessment"]
     return out
 
 
