@@ -48,7 +48,9 @@ def _hook_scripts() -> set[str]:
     for groups in hooks["hooks"].values():
         for group in groups:
             for hook in group["hooks"]:
-                names |= set(_HOOK_SCRIPT.findall(hook.get("command", "")))
+                # issue 84: exec form carries the script path in args.
+                for part in (hook.get("command", ""), *hook.get("args", [])):
+                    names |= set(_HOOK_SCRIPT.findall(part))
     return {f"{controls.HOOK_PREFIX}{n}" for n in names}
 
 
