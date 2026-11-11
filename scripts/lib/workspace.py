@@ -1341,8 +1341,12 @@ _MIGRATION_LINE = re.compile(r"Migration: \S.*")
 _CLOSES = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?) #([0-9]+)\b", re.IGNORECASE)
 # Work-order line 24: a `Refs #N` or `partial #N` reference marks the issue as partly done.
 _REFS = re.compile(r"\b(?:refs?|partial(?:ly)?|part of) #([0-9]+)\b", re.IGNORECASE)
+# 220: a range needs `#`, `issue(s) ` or `(` before it; a reversed or over-50 span is ignored.
+MAX_ISSUE_RANGE = 50
 _TASK_ISSUES = re.compile(
-    r"#([0-9]+)\b|\bissues? ((?:[0-9]+(?:, and |, | and ))*[0-9]+)\b", re.IGNORECASE
+    r"(?:#|\bissues? |\()([0-9]+)\s*(?:to|through|-)\s*#?([0-9]+)\b"
+    r"|#([0-9]+)\b|\bissues? ((?:[0-9]+(?:, and |, | and ))*[0-9]+)\b",
+    re.IGNORECASE,
 )
 RELEASE_NOTES = "release-notes.md"
 PR_BODY = "pr-body.md"
@@ -1617,8 +1621,13 @@ def release(
 def _task_issues(summary: str) -> list[str]:
     task = next((ln.strip() for ln in summary.splitlines() if ln.startswith("Task: ")), "")
     found: list[str] = []
-    for hashed, words in _TASK_ISSUES.findall(task):
-        found += [hashed] if hashed else re.findall(r"[0-9]+", words)
+    for low, high, hashed, words in _TASK_ISSUES.findall(task):
+        if low:
+            first, last = int(low), int(high)
+            if first <= last < first + MAX_ISSUE_RANGE:
+                found += [str(n) for n in range(first, last + 1)]
+        else:
+            found += [hashed] if hashed else re.findall(r"[0-9]+", words)
     return found
 
 

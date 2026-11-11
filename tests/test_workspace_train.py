@@ -1242,6 +1242,14 @@ def test_plain_release_skips_an_unchanged_version_and_takes_base_only_with_notes
         ("fix issue 9", (f"Refs {HASH}40", f"Closes {HASH}9"), ["Closes 9", "Refs 40"]),
         ("tidy the wording", (f"Fixes {HASH}7", f"partial {HASH}7"), ["Refs 7"]),
         ("tidy the wording", (), []),
+        ("fix the seven issues (183 to 186)", (), ["Refs 183", "Refs 184", "Refs 185", "Refs 186"]),
+        ("cover #183-#185", (), ["Refs 183", "Refs 184", "Refs 185"]),
+        ("fix issues 7 to 8 and #20", (), ["Refs 7", "Refs 8", "Refs 20"]),
+        ("cover #5 to #4", (), []),
+        ("fix issues 1 to 52", (), []),
+        ("fix issues 1 to 50", (), [f"Refs {n}" for n in range(1, 51)]),
+        ("step 1 to 3 of the plan", (), []),
+        ("fix (183 to 185)", (f"Closes {HASH}184",), ["Closes 184", "Refs 183", "Refs 185"]),
     ],
 )
 def test_issue_lines_close_landed_work_and_refer_partial_work(
@@ -2532,3 +2540,15 @@ def test_model_unit_flag_takes_the_coder_only(repo: Path) -> None:
         cwd=repo,
     )
     assert (ok.returncode, ok.stdout) == (0, "sonnet\ncoder U1: sonnet (default)\n"), ok.stderr
+
+
+def test_pr_body_rebuild_keeps_the_range_lines(repo: Path) -> None:
+    # 220: the rebuild reads the same Task line, so a second pr-body call keeps the range.
+    _summary(repo)
+    path = repo / "docs" / ".tmp" / "daedalus" / f"{TRAIN}-summary.md"
+    text = path.read_text("utf-8").replace("Task: add the release step", "Task: cover (183 to 185)")
+    path.write_text(text.replace(f"Closes {HASH}12. ", ""), encoding="utf-8")
+    want = f"Refs {HASH}183, Refs {HASH}184, Refs {HASH}185"
+    for _ in range(2):
+        done = _cli("pr-body", "--repo", str(repo), "--train", TRAIN)
+        assert want in done.stdout.splitlines()[1], done.stdout
