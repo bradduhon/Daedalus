@@ -3,12 +3,16 @@
 # issue 188: each dispatched agent is judged against the run that started it.
 from __future__ import annotations
 
+import io
 import json
+import os
 import stat
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import enforce_agent_jail
 import pytest
 from lib import audit, dispatch_binding, jail, train_state
 from lib.workspace import mark_train
@@ -331,3 +335,155 @@ def test_the_audit_record_carries_null_binding_fields() -> None:
     moved = audit.build_record({"cwd": "/w", "payload_cwd": "/s", "binding": {"claim": "path"}})
     assert (moved["payload_cwd"], moved["binding"]) == ("/s", {"claim": "path"})
     assert json.loads(audit.canonical(moved))["payload_cwd"] == "/s"
+
+
+def _session_folder(root: Path, kind: str) -> Path:
+    # 218: a plain folder, or a second repository that holds no run.
+    if kind == "other-repo":
+        repo = _git_init(root / "other")
+        git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+        return repo
+    folder = root / "neutral"
+    folder.mkdir()
+    return folder
+
+
+def _entries(plugin_data: Path) -> list[dict[str, Any]] | None:
+    store = _store(plugin_data)
+    if not store.exists():
+        return None
+    return list(json.loads(store.read_text(encoding="utf-8"))["entries"])
+
+
+@pytest.mark.parametrize("kind", ["neutral", "other-repo"])
+def test_a_dispatch_from_a_folder_with_no_run_binds_the_named_run(
+    tmp_path: Path, plugin_data: Path, run_script: Run, kind: str
+) -> None:
+    # 218: the fast path records a dispatch whose Worktree: line names a marked run's unit.
+    repo, wt, brief = _run_repo(tmp_path / "a")
+    away = _session_folder(tmp_path.resolve(), kind)
+    _dispatch(run_script, away, wt, brief)
+    pending = [(e["repo"], e["worktree"], e["agent_id"]) for e in _entries(plugin_data) or []]
+    assert pending == [(str(repo), str(wt), None)]
+    # 218, issue 29: the unit gate of the bound run judges; no unit binding is recorded here.
+    result = _write(run_script, away, "agent-a", wt / "x.py")
+    assert result.returncode == 2 and f"never dispatched in train {TRAIN}" in result.stderr
+    rows = [r for r in audit_records(audit.log_path(SESSION, str(wt))) if r["agent_id"]]
+    assert [(r["cwd"], r["payload_cwd"]) for r in rows] == [(str(wt), str(away))], rows
+    assert rows[0]["binding"]["train_id"] == TRAIN
+
+
+def _no_record_seam(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    calls: list[object] = []
+    monkeypatch.setattr(dispatch_binding, "record_run_dispatch", calls.append)
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("tool", "tool_input"),
+    [
+        ("Agent", {"subagent_type": "daedalus:coder", "prompt": "Build unit u1.\n"}),
+        ("Read", {"file_path": "/etc/hostname"}),
+        ("Bash", {"command": "ls"}),
+    ],
+)
+def test_a_call_from_a_folder_with_no_run_and_no_worktree_line_writes_nothing(
+    tmp_path: Path,
+    plugin_data: Path,
+    run_script: Run,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tool: str,
+    tool_input: dict[str, Any],
+) -> None:
+    # 218, 0035: no Worktree: line keeps the fast path as it was; no file and no run lookup.
+    _run_repo(tmp_path / "a")
+    away = _session_folder(tmp_path.resolve(), "neutral")
+    before = sorted(tmp_path.rglob("*"))
+    result = run_script("enforce_agent_jail.py", _call(away, tool, **tool_input))
+    assert result.returncode == 0 and not result.stderr, result.stderr
+    assert sorted(tmp_path.rglob("*")) == before
+    calls = _no_record_seam(monkeypatch)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_call(away, tool, **tool_input))))
+    assert enforce_agent_jail.main() == 0
+    assert calls == [] and capsys.readouterr().err == ""
+
+
+def _link(at: Path, to: Path) -> Path:
+    at.symlink_to(to, target_is_directory=True)
+    return at
+
+
+# 218: (case, Worktree: text from tmp_path, wt, away, repo; recorded worktree or "none" or "root").
+_LINES: list[tuple[str, Callable[[Path, Path, Path, Path], str], str]] = [
+    ("no-run", lambda root, wt, away, repo: str(_git_init(root / "other")), "none"),
+    ("missing", lambda root, wt, away, repo: str(root / "nowhere" / "x"), "none"),
+    ("missing-in-run", lambda root, wt, away, repo: str(repo / "gone"), "root"),
+    ("relative", lambda root, wt, away, repo: os.path.relpath(wt, away), "none"),
+    ("dotdot-in", lambda root, wt, away, repo: f"{away}/../{wt.relative_to(root)}", "wt"),
+    ("dotdot-out", lambda root, wt, away, repo: f"{wt}/../../../../neutral", "none"),
+    ("link-in", lambda root, wt, away, repo: str(_link(away / "in", wt)), "wt"),
+    ("link-out", lambda root, wt, away, repo: str(_link(repo / ".claude" / "out", away)), "none"),
+    ("two-lines", lambda root, wt, away, repo: f"{wt}\nWorktree: {wt}", "none"),
+]
+
+
+@pytest.mark.parametrize(("case", "line", "expected"), _LINES, ids=[c[0] for c in _LINES])
+def test_the_worktree_line_binds_only_the_run_its_real_folder_is_in(
+    tmp_path: Path,
+    plugin_data: Path,
+    run_script: Run,
+    case: str,
+    line: Callable[[Path, Path, Path, Path], str],
+    expected: str,
+) -> None:
+    # 218, issue 188: the dispatch reader's realpath decides; .. and links never borrow a run.
+    root = tmp_path.resolve()
+    repo, wt, _ = _run_repo(root / "a")
+    away = _session_folder(root, "neutral")
+    prompt = f"Worktree: {line(root, wt, away, repo)}\n"
+    payload = _call(away, "Agent", subagent_type="daedalus:coder", prompt=prompt)
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 0 and not result.stderr, (case, result.stderr)
+    entries = _entries(plugin_data)
+    if expected == "none":
+        assert entries is None, case
+        return
+    worktree = str(wt) if expected == "wt" else None
+    assert [(e["repo"], e["worktree"]) for e in entries or []] == [(str(repo), worktree)], case
+
+
+@pytest.mark.parametrize("text", MALFORMED)
+def test_a_malformed_store_survives_a_dispatch_from_a_folder_with_no_run(
+    tmp_path: Path, plugin_data: Path, run_script: Run, text: str
+) -> None:
+    # 218, issue 188: the fast path notes a malformed store, never rewrites it, binds nothing.
+    _, wt, brief = _run_repo(tmp_path / "a")
+    away = _session_folder(tmp_path.resolve(), "neutral")
+    store = _store(plugin_data)
+    store.parent.mkdir(mode=0o700)
+    store.write_text(text, encoding="utf-8")
+    payload = _call(away, "Agent", subagent_type="daedalus:coder", prompt=f"Worktree: {wt}\n")
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 0 and "the operator deletes" in result.stderr, result.stderr
+    assert store.read_text(encoding="utf-8") == text
+    assert dispatch_binding.bound_run(_call(away, "Read", "agent-a", file_path=str(brief))) is None
+
+
+def test_a_warned_dispatch_is_recorded_and_still_only_warned(
+    tmp_path: Path, plugin_data: Path, run_script: Run
+) -> None:
+    # 218, 0105, 0130: the warned coder runs, so it binds; the main session gets the same warning.
+    repo, _, _ = _run_repo(tmp_path / "a")
+    away = _session_folder(tmp_path.resolve(), "neutral")
+    payload = _call(repo, "Agent", subagent_type="daedalus:coder", prompt="Build unit u1.\n")
+    result = run_script("enforce_agent_jail.py", payload)
+    warning = jail.WARN_DISPATCH.format(reason=dispatch_binding.R_WORKTREE_LINE)
+    out = {"hookEventName": "PreToolUse", "additionalContext": warning}
+    expected = json.dumps({"systemMessage": warning, "hookSpecificOutput": out})
+    assert (result.returncode, result.stdout.strip(), result.stderr) == (0, expected, "")
+    pending = [(e["repo"], e["worktree"], e["agent_id"]) for e in _entries(plugin_data) or []]
+    assert pending == [(str(repo), None, None)]
+    hook = _call(away, "Bash", "agent-w", command="ls")
+    bound = dispatch_binding.bound_run(hook)
+    assert bound is not None and (bound.repo, bound.claim) == (str(repo), "sole")

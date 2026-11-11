@@ -164,7 +164,12 @@ def _fast_path(payload: dict[str, object], agent: str, cwd: str) -> int:
     if reason and _bare_main(payload):
         # Main never prompted (amends 0106): allow with context, never ask; IA-5, the text literal.
         return _warn(_CREDENTIAL_WARN + reason)
-    return _block(agent, reason) if reason else _approved(payload)
+    if reason:
+        return _block(agent, reason)
+    if tool in ("Agent", "Task") and "Worktree:" in str(tool_input.get("prompt") or ""):
+        # 218: a necessary condition only; record_run_dispatch reads the line and finds the run.
+        _record_run(payload, agent)
+    return _approved(payload)
 
 
 def _approved(payload: dict[str, object]) -> int:
@@ -335,9 +340,10 @@ def _moved_reason(payload: dict[str, object], cwd: str, judged: str, repo: str) 
 
 def _record_run(payload: dict[str, object], agent: str) -> None:
     # issue 188: best effort; an unrecorded dispatch leaves its agent judged by the payload cwd.
-    from lib.dispatch_binding import record_run_dispatch
-
     try:
+        # 218: imported inside the try, so the fast path's allow survives a broken lib.
+        from lib.dispatch_binding import record_run_dispatch
+
         record_run_dispatch(payload)
     except Exception as exc:  # noqa: BLE001
         _note(agent, f"the run binding was not recorded ({exc}).")
@@ -402,6 +408,8 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         # 0253: a fallback note is output, so that allow is not clean and gets no approval.
         return 0 if fell_back else _approved(payload)
     if warn:
+        if payload.get("tool_name") in ("Agent", "Task"):
+            _record_run(payload, agent)  # 218: a warned dispatch runs, so its agent binds.
         # Main never prompted (amends 0105, 0106): allow with context, never ask, for main.
         return _warn(str(finding))
     return _block(agent, str(reason))
