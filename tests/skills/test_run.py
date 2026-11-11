@@ -159,3 +159,58 @@ def test_run_skill_carries_the_build_train_preconditions_and_relay() -> None:
     assert run.index(BEGIN) < run.index("--hooks-live") < run.index("Agent(`orchestrator`)")
     assert STOP_CMD in run
     assert "git push" not in run
+
+
+def test_run_skill_reads_each_argument_shape() -> None:
+    # 0173, spec 4.1: words, a plan or spec path, brainstorm, and a leading composition name.
+    args = " ".join(_run_step(2).split())
+    assert args.startswith("Read the first word of `$ARGUMENTS` (spec 4.1):")
+    brainstorm = args.split("- `brainstorm`: ", 1)[1].split(" - `build`: ", 1)[0]
+    # 0179: brainstorm runs in the main session, never in the orchestrator.
+    assert "in the main session, never in the orchestrator (brainstorm stays in main, 0179)" in (
+        brainstorm
+    )
+    assert "`${CLAUDE_PLUGIN_ROOT}/skills/brainstorm/SKILL.md`" in brainstorm
+    assert "go on with that file as a plan path" in brainstorm
+    assert "the orchestrator prompt carries the line `Composition: build`" in args
+    push = args.split("- `push`: ", 1)[1].split(" - `doc`: ", 1)[0]
+    assert "never start the orchestrator for it" in push
+    assert "`${CLAUDE_PLUGIN_ROOT}/skills/release/SKILL.md`" in push
+    doc = args.split("- `doc`: ", 1)[1].split(" - Anything else", 1)[0]
+    assert "`${CLAUDE_PLUGIN_ROOT}/skills/document/SKILL.md` in derived document mode" in doc
+    assert "the verify phase in claims mode" in doc
+    effort = args.split("- Anything else is the effort itself.", 1)[1]
+    validate = "`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate_plan.py <path>` exits 0"
+    assert validate in effort and "so the prompt carries `Plan: <path>`" in effort
+    assert "so it carries `Spec: <path>`" in effort
+    assert "so it carries `Task: <the words>`" in effort
+    assert "Nothing at all: stop. Next: run /daedalus:run again with a task in words" in effort
+    relay = _run_step(6)
+    assert "the effort line of step 2" in relay and "`Composition: build` when step 2 set it" in (
+        relay
+    )
+
+
+def test_run_skill_starts_a_folder_run_with_the_folder_begin() -> None:
+    # issue 48, 0178: ask the output folder, begin with --out, hooks check, phases, then stop.
+    assert "run as the Folder run section below says" in " ".join(_run_step(1).split())
+    section = " ".join(_run_skill().split("\n## Folder run\n", 1)[1].split())
+    plugin = "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/"
+    asked = section.index("1) the project's docs folder `<repo>/docs`, 2) a new folder under /tmp")
+    begin = section.index(
+        f"`{plugin}daedalus_workspace.py begin --repo <repo> --scope folder --out <out>`"
+    )
+    live = section.index(f"`{plugin}verify_audit_chain.py --hooks-live --repo <repo>`")
+    phases = section.index("- Phases.")
+    end = section.index(
+        f'`{plugin}daedalus_workspace.py stop --repo <repo> --reason "run complete"'
+    )
+    assert asked < begin < live < phases < end
+    assert "the last one `scope: folder out: <out>`" in section
+    assert "never starts the orchestrator (no audit in a folder, 0178)" in section
+    for skill in ("brainstorm", "plan", "verify"):
+        assert f"`${{CLAUDE_PLUGIN_ROOT}}/skills/{skill}/SKILL.md`" in section
+    assert "`${CLAUDE_PLUGIN_ROOT}/skills/document/SKILL.md` in derived document mode" in section
+    assert "The phase agents write their finished files straight into `<out>`" in section
+    assert "Build, audit and release never run here." in section
+    assert "with Read and Write" not in section

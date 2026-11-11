@@ -10,6 +10,7 @@ import pytest
 from tests.conftest import REPO_ROOT
 from tests.skill_helpers import (
     _AGENT_REF,
+    _SKILL_SCRIPT,
     ASSETS_CMD,
     MAIN,
     MARK,
@@ -20,6 +21,7 @@ from tests.skill_helpers import (
     _conductor_commands,
     _conductor_decide,
     _release,
+    _run_skill,
     _section,
     _split,
 )
@@ -385,3 +387,50 @@ def test_release_scans_for_secrets_without_the_asset_files() -> None:
     assert '`"<base>..<branch> -- . :(exclude)assets/"`, run it exactly as given (0192)' in (
         releaser
     )
+
+
+def test_push_train_validates_the_train_id_against_run_skill() -> None:
+    # Ruling M11: the format comes from build-train Preconditions step 6.
+    assert "`<train-id>` to the UTC time as `YYYYMMDD-HHMMSS`" in _run_skill()
+    text = _release()
+    assert "`^[0-9]{8}-[0-9]{6}$`, the UTC `YYYYMMDD-HHMMSS` form" in text
+    assert "No match: stop." in text
+
+
+def test_skill_script_commands_are_allowed_for_main() -> None:
+    # M4: every plugin script command in the trains passes the jail as the main session.
+    from lib.config import Config
+    from lib.jail import decide
+
+    root = str(REPO_ROOT)
+    commands = [
+        re.sub(r"<[^>]+>", "x", m.replace("${CLAUDE_PLUGIN_ROOT}", root).replace("<repo>", root))
+        for path in (REPO_ROOT / "skills" / n for n in ("release",))
+        for m in _SKILL_SCRIPT.findall((path / "SKILL.md").read_text(encoding="utf-8"))
+    ]
+    assert len(commands) >= 4
+    for command in commands:
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": root}
+        d = decide(payload, Config())
+        assert d.allow, (command, d.reason)
+
+
+def test_issue30_skill_script_commands_pass_for_main_during_a_train(
+    repo_cwd: Path, project_data: Path
+) -> None:
+    # issue 30: every skill script command passes the jail for the main session in a train.
+    from lib.config import Config
+    from lib.jail import decide
+
+    (project_data / "train.active").write_text("20261015-120000\n")
+    root, repo = str(REPO_ROOT), str(repo_cwd)
+    commands = [
+        re.sub(r"<[^>]+>", "x", m.replace("${CLAUDE_PLUGIN_ROOT}", root).replace("<repo>", repo))
+        for path in (REPO_ROOT / "skills" / n for n in ("release",))
+        for m in _SKILL_SCRIPT.findall((path / "SKILL.md").read_text(encoding="utf-8"))
+    ]
+    assert len(commands) >= 4
+    for command in commands:
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": repo}
+        d = decide(payload, Config())
+        assert d.allow, (command, d.reason)
