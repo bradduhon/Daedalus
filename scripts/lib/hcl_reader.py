@@ -93,6 +93,7 @@ class Statement:
     not_resources: tuple[str, ...]
     unresolved_not_resources: tuple[str, ...]
     principals: tuple[Principal, ...]
+    not_principals: tuple[Principal, ...]
     conditions: tuple[Condition, ...]
     dynamic: bool
     line: int
@@ -107,11 +108,15 @@ class Statement:
             ("resources", self.unresolved_resources),
             ("not_resources", self.unresolved_not_resources),
         ]
-        for p in self.principals:
-            fields += [
-                ("principals.type", p.unresolved_type),
-                ("principals.identifiers", p.unresolved_identifiers),
-            ]
+        for kind, group in (
+            ("principals", self.principals),
+            ("not_principals", self.not_principals),
+        ):
+            for p in group:
+                fields += [
+                    (f"{kind}.type", p.unresolved_type),
+                    (f"{kind}.identifiers", p.unresolved_identifiers),
+                ]
         for c in self.conditions:
             fields += [
                 ("condition.test", c.unresolved_test),
@@ -595,9 +600,13 @@ def policy_statements(blocks: Sequence[Block], name: str | None = None) -> list[
         if name is not None and block.labels[1] != name:
             continue
         for stmt, dynamic in _children(block, "statement"):
-            principals = tuple(
-                Principal(*_optional(p, "type"), *_listed(p, "identifiers"), dyn)
-                for p, dyn in _children(stmt, "principals")
+            # 205: not_principals blocks are read like principals, kept apart.
+            principals, not_principals = (
+                tuple(
+                    Principal(*_optional(p, "type"), *_listed(p, "identifiers"), dyn)
+                    for p, dyn in _children(stmt, kind)
+                )
+                for kind in ("principals", "not_principals")
             )
             conditions = tuple(
                 Condition(
@@ -624,6 +633,7 @@ def policy_statements(blocks: Sequence[Block], name: str | None = None) -> list[
                     not_resources=not_resources[0],
                     unresolved_not_resources=not_resources[1],
                     principals=principals,
+                    not_principals=not_principals,
                     conditions=conditions,
                     dynamic=dynamic,
                     line=stmt.line,
