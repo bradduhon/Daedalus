@@ -1002,8 +1002,7 @@ def test_charter_docs_names_the_full_sha_and_a_command_its_allowlist_admits() ->
     from tests.payloads import _b
 
     text = (REPO_ROOT / "agents" / "charter-docs.md").read_text(encoding="utf-8")
-    assert "<40-character sha>" in text
-    assert "<sha>" not in text and "short sha" not in text.replace("refuses a short sha", "")
+    assert "full 40-character commit sha" in text and "never abbreviate it" in text
     command = "git -C /work/Charter log -1 --format=%H"
     assert "`git -C <charter_root> log -1 --format=%H`" in text
     assert decide(_b("charter-docs", command), CFG).allow

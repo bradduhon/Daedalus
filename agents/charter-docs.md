@@ -57,5 +57,5 @@ Your reply ends with exactly one of these, nothing after it.
 - `[STATUS: LEDGER_PROBED] <probe line>`
 - `[STATUS: LEDGER_APPENDED] <id>`
 - `[STATUS: LEDGER_MISMATCH] expected=<n> ledger=<m>`
-- `[STATUS: COMMITTED] <40-character sha> ids=<id>[,<id>]`
+- `[STATUS: COMMITTED] <sha> ids=<id>[,<id>]`
 - `[STATUS: BLOCKED] <detail>`
