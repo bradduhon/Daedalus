@@ -103,14 +103,11 @@ def test_one_life_of_a_rule(env: dict[str, Any], capsys: pytest.CaptureFixture[s
     assert not path.exists()
     hand(env, rule_hand(rule="  the PLANNER writes   the findings.  "))
     assert call(capsys, env, "rule") == (0, f"rule unchanged {fp} kind=who\n")
-    listed = f"{fp} kind=who usable=no contested=no applied=0: {TEXT}\n"
+    listed = f"{fp} kind=who usable=yes contested=no applied=0: {TEXT}\n"
     assert call(capsys, env, "list") == (0, listed)
     for _ in range(3):
         hand(env, {"kind": "who", "outcome": "hit", "rule": None})
         assert call(capsys, env, "tally")[0] == 0
-    assert (
-        call(capsys, env, "list")[1] == f"{fp} kind=who usable=yes contested=no applied=0: {TEXT}\n"
-    )
     hand(env, {"kind": "who", "outcome": "hit", "rule": fp})
     assert call(capsys, env, "tally") == (0, "tally kind=who outcome=hit streak=4\n")
     hand(env, {"kind": "who", "outcome": "typed", "rule": fp})
@@ -127,8 +124,48 @@ def test_one_life_of_a_rule(env: dict[str, Any], capsys: pytest.CaptureFixture[s
     fp2 = dp.fingerprint("who", new)
     assert out == f"rule saved {fp2} kind=who\n"
     assert call(capsys, env, "list")[1].startswith(f"{fp2} kind=who usable=no contested=no")
+    for _ in range(3):
+        hand(env, {"kind": "who", "outcome": "hit", "rule": None})
+        assert call(capsys, env, "tally")[0] == 0
+    assert call(capsys, env, "list")[1].startswith(f"{fp2} kind=who usable=yes contested=no")
     assert call(capsys, env, "forget", "--fingerprint", fp2) == (0, f"rule forgotten {fp2}\n")
     assert call(capsys, env, "list")[1] == "developer-profile: on, no rules saved\n"
+
+
+def test_a_stated_rule_is_usable_at_streak_zero_and_a_ratified_one_after_three_hits(
+    env: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    turn(env, True)
+    other = "The orchestrator writes the findings."
+    for text, how in ((TEXT, "stated"), (other, "ratified")):
+        hand(env, rule_hand(rule=text, how=how))
+        call(capsys, env, "rule")
+    stated, ratified = dp.fingerprint("who", TEXT), dp.fingerprint("who", other)
+    rules, tallies = dp.load_rules(), dp.load_tallies()
+    assert dp.is_usable(rules[stated], tallies) and not dp.is_usable(rules[ratified], tallies)
+    for _ in range(2):
+        hand(env, {"kind": "who", "outcome": "hit", "rule": None})
+        call(capsys, env, "tally")
+    assert not dp.is_usable(dp.load_rules()[ratified], dp.load_tallies())
+    hand(env, {"kind": "who", "outcome": "hit", "rule": None})
+    call(capsys, env, "tally")
+    assert dp.is_usable(dp.load_rules()[ratified], dp.load_tallies())
+
+
+def test_a_miss_contests_a_stated_rule_and_restating_it_makes_it_usable_again(
+    env: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    turn(env, True)
+    fp = dp.fingerprint("who", TEXT)
+    hand(env, rule_hand())
+    call(capsys, env, "rule")
+    hand(env, {"kind": "who", "outcome": "miss", "rule": fp})
+    call(capsys, env, "tally")
+    assert not dp.is_usable(dp.load_rules()[fp], dp.load_tallies())
+    assert "is contested" in str(dp.unusable_reason(dp.load_rules()[fp], dp.load_tallies()))
+    hand(env, rule_hand(replaces=fp))
+    call(capsys, env, "rule")
+    assert dp.is_usable(dp.load_rules()[fp], dp.load_tallies())
 
 
 def test_the_rule_file_holds_exactly_its_keys_and_the_modes_are_private(

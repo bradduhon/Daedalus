@@ -178,8 +178,19 @@ def streak(tallies: dict[str, dict[str, int]], kind: str) -> int:
     return tallies.get(kind, {}).get("streak", 0)
 
 
+def unusable_reason(rule: dict[str, Any], tallies: dict[str, dict[str, int]]) -> str | None:
+    # 0252: stated is usable at once; ratified needs the kind's streak; contested never.
+    fp = fingerprint(rule["kind"], rule["rule"])
+    if rule["contested"]:
+        return f"rule {fp} is contested and must be restated first"
+    have = streak(tallies, rule["kind"])
+    if rule["how"] == "ratified" and have < MIN_STREAK:
+        return f"rule {fp} is not usable yet: kind {rule['kind']} streak is {have} of {MIN_STREAK}"
+    return None
+
+
 def is_usable(rule: dict[str, Any], tallies: dict[str, dict[str, int]]) -> bool:
-    return not rule["contested"] and streak(tallies, rule["kind"]) >= MIN_STREAK
+    return unusable_reason(rule, tallies) is None
 
 
 def source_problem(repo_root: str | Path, kind: str, fp: str) -> str | None:
@@ -198,12 +209,7 @@ def source_problem(repo_root: str | Path, kind: str, fp: str) -> str | None:
         return f"{fp!r} is not a rule in the Developer Profile"
     if rule["kind"] != kind:
         return f"rule {fp} is of kind {rule['kind']}, not {kind}"
-    if rule["contested"]:
-        return f"rule {fp} is contested and must be restated first"
-    if streak(tallies, kind) < MIN_STREAK:
-        have = streak(tallies, kind)
-        return f"rule {fp} is not usable yet: kind {kind} streak is {have} of {MIN_STREAK}"
-    return None
+    return unusable_reason(rule, tallies)
 
 
 def _make_rules_dir() -> Path:

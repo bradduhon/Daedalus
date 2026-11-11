@@ -434,10 +434,15 @@ def test_a_profile_source_needs_a_usable_rule_of_the_rows_kind(
     fp = dp.fingerprint("who", text)
     assert f"rule saved {fp}" in _profile(capsys, repo, "rule", hand)
     mine = row(1, "who", source="profile", source_ref=fp)
-    assert "not usable yet: kind who streak is 0 of 3" in _judged(env, mine)
-    for _ in range(dp.MIN_STREAK):
-        _profile(capsys, repo, "tally", {"kind": "who", "outcome": "hit", "rule": fp})
     assert _judged(env, mine) == ""
+    ratified = "The orchestrator writes findings."
+    _profile(capsys, repo, "rule", {**hand, "rule": ratified, "how": "ratified"})
+    fp2 = dp.fingerprint("who", ratified)
+    soon = row(1, "who", source="profile", source_ref=fp2)
+    assert "not usable yet: kind who streak is 0 of 3" in _judged(env, soon)
+    for _ in range(dp.MIN_STREAK):
+        _profile(capsys, repo, "tally", {"kind": "who", "outcome": "hit", "rule": fp2})
+    assert _judged(env, soon) == ""
     other = row(1, "scope", source="profile", source_ref=fp)
     assert f"rule {fp} is of kind who, not scope" in _judged(env, other)
     _profile(capsys, repo, "tally", {"kind": "who", "outcome": "miss", "rule": fp})
