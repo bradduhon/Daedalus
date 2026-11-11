@@ -183,7 +183,7 @@ def test_check_refusals_name_the_bad_value(conv: Conv) -> None:
     cases: list[tuple[dict[str, Any], str]] = [
         (row(1, "weird"), "kind 'weird' is not one of storage"),
         (row(1, "who", source="telepathy"), "source 'telepathy' is not one of setting"),
-        (row(1, "who", source="profile"), "path: row 1: the profile source is not available yet"),
+        (row(1, "who", source="profile"), "path: row 1: the Developer Profile is off"),
         (
             row(1, "who", source="setting", source_ref="nope.key"),
             "'nope.key' is not a settings key",
@@ -388,3 +388,59 @@ def test_record_text_fields_hold_no_control_characters(conv: Conv) -> None:
         out = conv.run("record", hand={**hand, **bad})[1]
         assert "holds a control character" in out, bad
     assert conv.run("record", hand={**hand, "response": "line one\r\nline two"})[0] == 0
+
+
+def _profile_on(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 0252: the personal flag on, the data folder in the temporary tree.
+    folder = Path(os.environ["HOME"]) / ".claude" / "daedalus"
+    folder.mkdir(parents=True)
+    (folder / "operator.json").write_text('{"developer_profile": true}', encoding="utf-8")
+    (tmp_path / "data").mkdir()
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
+
+
+def _profile(capsys: pytest.CaptureFixture[str], repo: str, cmd: str, hand: Any) -> str:
+    from lib import developer_profile as dp
+
+    folder = storage.make_tmp_dir(dp.FEATURE, repo)
+    (folder / dp.HANDOVER).write_text(json.dumps(hand), encoding="utf-8")
+    assert dp.main([cmd, "--repo", repo]) == 0
+    return capsys.readouterr().out
+
+
+def _judged(env: dict[str, Any], one: dict[str, Any]) -> str:
+    return "\n".join(question_path.judge({"rows": [one]}, None, None, [], env["repo"])[1])
+
+
+def test_a_profile_source_is_refused_when_the_mode_is_off(env: dict[str, Any]) -> None:
+    out = _judged(env, row(1, "who", source="profile", source_ref="0123456789ab"))
+    assert "path: row 1: the Developer Profile is off" in out
+
+
+def test_a_profile_source_needs_a_usable_rule_of_the_rows_kind(
+    env: dict[str, Any],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lib import developer_profile as dp
+
+    _profile_on(tmp_path, monkeypatch)
+    repo = env["repo"]
+    unknown = row(1, "who", source="profile", source_ref="0123456789ab")
+    assert "'0123456789ab' is not a rule in the Developer Profile" in _judged(env, unknown)
+    text = "The planner writes findings."
+    hand = {"kind": "who", "rule": text, "how": "stated", "replaces": None}
+    fp = dp.fingerprint("who", text)
+    assert f"rule saved {fp}" in _profile(capsys, repo, "rule", hand)
+    mine = row(1, "who", source="profile", source_ref=fp)
+    assert "not usable yet: kind who streak is 0 of 3" in _judged(env, mine)
+    for _ in range(dp.MIN_STREAK):
+        _profile(capsys, repo, "tally", {"kind": "who", "outcome": "hit", "rule": fp})
+    assert _judged(env, mine) == ""
+    other = row(1, "scope", source="profile", source_ref=fp)
+    assert f"rule {fp} is of kind who, not scope" in _judged(env, other)
+    _profile(capsys, repo, "tally", {"kind": "who", "outcome": "miss", "rule": fp})
+    for _ in range(dp.MIN_STREAK):
+        _profile(capsys, repo, "tally", {"kind": "who", "outcome": "hit", "rule": None})
+    assert f"rule {fp} is contested" in _judged(env, mine)

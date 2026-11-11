@@ -144,6 +144,8 @@ def test_not_an_object_refused(home: Path, body: object) -> None:
         ({"self_assessment": "yes"}, "self_assessment"),
         ({"self_assessment": 1}, "self_assessment"),
         ({"self_assessment": None}, "self_assessment"),
+        ({"developer_profile": "yes"}, "developer_profile"),
+        ({"developer_profile": None}, "developer_profile"),
     ],
 )
 def test_each_refusal_names_the_file_and_key(home: Path, body: object, key: str) -> None:
@@ -214,6 +216,16 @@ def test_self_assessment_defaults_false_and_a_project_override_replaces_it(
     assert load(_repo(tmp_path / "b", {"self_assessment": False})).self_assessment is False
 
 
+def test_developer_profile_defaults_false_and_a_project_override_replaces_it(
+    home: Path, tmp_path: Path
+) -> None:
+    # 0252: same shape as self_assessment.
+    assert Operator().developer_profile is False
+    _write(home, {"developer_profile": True})
+    assert load(_repo(tmp_path / "a", None)).developer_profile is True
+    assert load(_repo(tmp_path / "b", {"developer_profile": False})).developer_profile is False
+
+
 def test_load_override_error_names_config_json_and_key(home: Path, tmp_path: Path) -> None:
     repo = _repo(tmp_path, {"no_long_dashes": "yes"})
     with pytest.raises(ConfigError, match=r"config\.json personal_overrides\.no_long_dashes"):
@@ -251,6 +263,7 @@ def test_only_the_named_modules_mention_operator_file() -> None:
     allowed.add("daedalus_setup.py")
     # A1: the flag reader loads the file through load().
     allowed.add("self_assessment.py")
+    allowed.add("developer_profile.py")
     found = {
         path.name
         for path in (REPO_ROOT / "scripts").rglob("*.py")

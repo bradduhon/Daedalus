@@ -468,6 +468,13 @@ def _set_keys(repo: str) -> tuple[set[str], set[str]]:
     return found, listed
 
 
+def _profile_problem(repo: str, row: Row) -> str | None:
+    # Imported here: developer_profile imports KINDS and OUTCOMES from this module.
+    from lib import developer_profile
+
+    return developer_profile.source_problem(repo, row.kind, row.source_ref)
+
+
 def _sources(
     rows: list[Row], brief: Path | None, rules: Path | None, answers: list[str], repo: str
 ) -> list[str]:
@@ -501,8 +508,8 @@ def _sources(
         elif row.source == "rule" and (rule_ids is None or ref not in rule_ids):
             where = "no rules file was given" if rule_ids is None else "it is not in the rules file"
             problems.append(f"path: row {row.id}: rule {ref!r} not found ({where})")
-        elif row.source == "profile":
-            problems.append(f"path: row {row.id}: the profile source is not available yet")
+        elif row.source == "profile" and (why := _profile_problem(repo, row)) is not None:
+            problems.append(f"path: row {row.id}: {why}")
         elif row.source == "default" and not ref:
             problems.append(f"path: row {row.id}: a default needs a source_ref")
         elif row.source == "none" and (row.predicted or ref or row.is_rule):
