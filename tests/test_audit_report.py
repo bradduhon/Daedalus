@@ -145,8 +145,8 @@ def test_report_renders_every_section(marked_data: Path, hook_input: Any) -> Non
     assert "- seq 27 verifier: \\[STATUS: YIELD\\_WEB\\] x\n" in out
     assert "- seq 29 auditor: \\[VERDICT: APPROVED\\]\n" in out
     assert "| a1 | coder | 2 | 14 | Built it \\| twice. \\[STATUS: COMPLETE\\] |" in out
-    assert "| coder | Bash | 2 | 1 |" in out
-    assert "| coder | Write | 2 | 0 |" in out
+    assert "| coder | Bash | 2 | 0 | 1 |" in out
+    assert "| coder | Write | 2 | 0 | 0 |" in out
     assert "| PreToolUse | 12 |" in out
     assert "| PostToolUse | 10 |" in out
 
@@ -309,7 +309,7 @@ def test_no_subagent_stop_renders_open(marked_data: Path, hook_input: Any) -> No
     result = _report("--repo", hook_input()["cwd"])
     assert result.returncode == 0, result.stderr
     assert "| a1 | coder | 1 | open |  |" in result.stdout
-    assert "| coder | Edit | 1 | 0 |" in result.stdout
+    assert "| coder | Edit | 1 | 0 | 0 |" in result.stdout
 
 
 def test_totals_count_skipped_fork_stops(
@@ -553,9 +553,9 @@ def test_controls_counts_blocks_per_hook(
     assert result.returncode == 0, result.stderr
     out = result.stdout
     assert "## Control cost" in out and "## Subagent timeline" not in out
-    assert "| git\\_push | coder | 1 |" in out
-    assert "| jail | main | 1 |" in out
-    assert "| shell\\_tripwires | auditor | 1 |" in out
+    assert "| git\\_push | coder | 1 | 0 |" in out
+    assert "| jail | main | 1 | 0 |" in out
+    assert "| shell\\_tripwires | auditor | 1 | 0 |" in out
     assert "mean judge time: 8.0 ms over 7 calls" in out
     # Auditor check: no reply text and no reason body enters the controls table.
     assert "SECRET" not in out and "no remote" not in out and "pipes" not in out
@@ -610,8 +610,96 @@ def test_controls_shows_ask_as_its_own_row(marked_data: Path, hook_input: Any) -
             hook_input(tool_use_id=f"k{i}"), decision, "jail: needs the operator. Next: x"
         )
     out = _report("--repo", hook_input()["cwd"]).stdout
-    assert "| jail \\(ask\\) | main | 2 |" in out and "| jail | main | 1 |" in out
+    assert "| jail \\(ask\\) | main | 2 | 0 |" in out and "| jail | main | 1 | 0 |" in out
     assert "- seq 1 main Bash (ask): jail: needs the operator. Next: x" in out
+
+
+WARNING = "jail: Daedalus flagged this call. The jail's finding: x"
+
+
+def _warned_chain(hook_input: Any) -> str:
+    # 92: a coder block, a warned main call, a plain allow, and an old-format allow with a reason.
+    a1 = {"agent_id": "a1", "agent_type": "coder"}
+    audit.audit_append(hook_input(tool_use_id="w0", **a1), "block", "git_push: no. Next: x")
+    audit.audit_append(hook_input(tool_use_id="w1"), "warn", WARNING)
+    audit.audit_append(hook_input(tool_use_id="w2"), "allow", None)
+    audit.audit_append(hook_input(tool_use_id="w3"), "allow", WARNING)
+    return str(hook_input()["cwd"])
+
+
+def test_blocks_and_controls_count_warned_calls_beside_blocks(
+    marked_data: Path, hook_input: Any
+) -> None:
+    # 92: warn is listed and counted; an allow, with or without a reason, never is.
+    out = _report("--repo", _warned_chain(hook_input)).stdout
+    blocks = out.split("## Blocks\n\n")[1].split("\n\n")[0].splitlines()
+    assert blocks == [
+        "- seq 1 coder Bash: git\\_push: no. Next: x",
+        f"- seq 2 main Bash (warn): {md_escape(WARNING)}",
+    ]
+    assert "| git\\_push | coder | 1 | 0 |" in out and "| jail | main | 0 | 1 |" in out
+    assert "| main | Bash | 2 | 1 | 0 |" in out
+    assert "warned main-session calls: 1\n" in out
+    failing = out.split("### Failure behind each blocking hook\n\n")[1].split("\n\n")[0]
+    assert "- jail" not in failing.splitlines()
+
+
+def test_zero_warnings_print_zero_in_totals_and_controls(
+    marked_data: Path, hook_input: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 92: the totals line prints 0 as skipped fork stops does; a block row prints a 0 warned cell.
+    out = _report("--repo", _controls_chain(hook_input, monkeypatch)).stdout
+    assert "warned main-session calls: 0\n" in out and "| jail | main | 1 | 0 |" in out
+    assert "(warn)" not in out
+
+
+def test_a_warned_main_call_through_the_jail_is_counted_in_all_three_outputs(
+    run_script: Any, marked_data: Path, hook_input: Any
+) -> None:
+    # 92: the hook writes warn and still exits 0; report, summary and digest totals each count it.
+    from lib.train_summary import SessionLog, parse_notes, render
+
+    from tests.test_train_state_print import NOTES, REPO, STATE, TRAIN, _section
+
+    result = run_script(
+        "enforce_agent_jail.py", hook_input(tool_input={"command": "git clean -fdx"})
+    )
+    assert result.returncode == 0, result.stderr
+    run_script("enforce_agent_jail.py", hook_input(tool_input={"command": "git status"}))
+    path = audit.log_path("sess-test", str(hook_input()["cwd"]))
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [r["decision"] for r in records] == ["warn", "allow"]
+    assert records[1]["reason"] is None
+    out = _report("--repo", hook_input()["cwd"]).stdout
+    assert "| jail | main | 0 | 1 |" in out and "warned main-session calls: 1\n" in out
+    assert "- seq 1 main Bash (warn): jail: " in out and "- seq 2" not in out
+    log = SessionLog("sess-test", path, records)
+    text = render(REPO, TRAIN, STATE, [log], parse_notes(NOTES, "notes"), False, None)
+    assert _section(text, "Blocks")[-3:] == [
+        "- none",
+        "Recorded warnings per hook:",
+        "- jail, main: 1",
+    ]
+    assert "warned main-session calls: 1" in _section(text, "Audit log")
+
+
+def test_a_warn_record_rewritten_to_allow_fails_chain_verification(
+    marked_data: Path, hook_input: Any
+) -> None:
+    # 92: the decision word is inside the hashed body, so the rewrite breaks the chain.
+    from verify_audit_chain import verify_lines
+
+    _warned_chain(hook_input)
+    path = audit.log_path("sess-test", hook_input()["cwd"])
+    lines = path.read_text().splitlines(keepends=True)
+    assert verify_lines(lines)[0]
+    assert '"decision":"warn"' in lines[1]
+    lines[1] = lines[1].replace('"decision":"warn"', '"decision":"allow"')
+    ok, message = verify_lines(lines)
+    assert (ok, message) == (False, "BROKEN line 2: hash mismatch")
+    path.write_text("".join(lines))
+    result = _report("--repo", hook_input()["cwd"])
+    assert result.returncode == 1 and "warned main-session calls" not in result.stdout
 
 
 def test_summary_carries_the_controls_table(
@@ -620,7 +708,7 @@ def test_summary_carries_the_controls_table(
     repo = _controls_chain(hook_input, monkeypatch)
     out = _report("--repo", repo).stdout
     assert "## Subagent timeline" in out and "## Control cost" in out
-    assert "| jail | main | 1 |" in out and "| a1 | coder | 9.0 |" in out
+    assert "| jail | main | 1 | 0 |" in out and "| a1 | coder | 9.0 |" in out
 
 
 def test_containment_error_names_the_matched_path(

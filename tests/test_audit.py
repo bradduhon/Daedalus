@@ -362,10 +362,10 @@ def test_main_block_reason_carries_a_prefix(
     result = run_script("enforce_agent_jail.py", payload)
     rec = _last_record(marked_data)
     if agent is None:
-        # Main never prompted (amends 0106): allowed with the warning, recorded as allow.
+        # Main never prompted (amends 0106): allowed with the warning, recorded as warn (92).
         assert result.returncode == 0, result.stderr
         warning = main_warning(result.stdout)
-        assert rec["decision"] == "allow" and rec["reason"] == f"{prefix}{warning}", rec["reason"]
+        assert rec["decision"] == "warn" and rec["reason"] == f"{prefix}{warning}", rec["reason"]
         return
     assert result.returncode == 2, result.stderr
     assert rec["decision"] == "block" and rec["reason"].startswith(prefix), rec["reason"]

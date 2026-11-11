@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from lib import audit, train_state
 from lib.audit_proof import (
+    R_NO_SUMMARY_WRITE,
     VERDICT_APPROVED,
     VERDICT_BOTH,
     VERDICT_REJECTED,
@@ -860,6 +861,33 @@ def test_a_refused_summary_command_never_anchors(decision: str) -> None:
     done = {**command, "seq": 3, "event": "PostToolUse", "result_head": json.dumps(_written())}
     assert summary_anchor([command, done], 1) is None
     assert summary_anchor([{**command, "decision": "allow"}, done], 1) == 2
+    # 92: a warned main-session call ran, so it anchors as an allow does.
+    assert summary_anchor([{**command, "decision": "warn"}, done], 1) == 2
+
+
+@pytest.mark.parametrize("decision", ["warn", "block"])
+def test_push_proof_passes_with_warn_records_and_fails_on_a_refusal(
+    project_data: Path, hook_input: Any, repo_cwd: Path, decision: str
+) -> None:
+    # 92: warn records anywhere in the chain admit the proof; a refused summary call still fails.
+    tip = _judged(repo_cwd, seq=1)
+    _stop(hook_input, f"[VERDICT: APPROVED] tip={tip}")
+    flagged = hook_input(tool_use_id="toolu_w1")
+    audit.audit_append(flagged, "warn", "jail: flagged. The jail's finding: x")
+    use, tool_input = "toolu_w2", {"command": _summary_cmd(repo_cwd)}
+    audit.audit_append(hook_input(tool_input=tool_input, tool_use_id=use), decision, "jail: x")
+    done = hook_input(
+        hook_event_name="PostToolUse",
+        tool_input=tool_input,
+        tool_use_id=use,
+        tool_response=_written(),
+    )
+    audit.audit_append(done)
+    _summary(repo_cwd)
+    if decision == "warn":
+        assert approved(repo_cwd, TRAIN) == _ok(1, tip)
+    else:
+        assert _refused(repo_cwd) == f"NOT APPROVED: {R_NO_SUMMARY_WRITE.format(seq=1)}"
 
 
 def test_summary_anchor_returns_the_first_written_call_after_the_verdict() -> None:

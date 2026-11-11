@@ -356,10 +356,11 @@ class _Facts:
     yields: list[tuple[str, str, str, str, str]] = field(default_factory=list)
     compliance: list[tuple[str, str, str]] = field(default_factory=list)
     blocks: Counter[tuple[str, str]] = field(default_factory=Counter)
+    warned: Counter[tuple[str, str]] = field(default_factory=Counter)
 
 
 def _gather(logs: Sequence[SessionLog], units: Sequence[dict[str, object]]) -> _Facts:
-    from audit_report import _hook_of
+    from audit_report import _WARNED, _hook_of
 
     facts = _Facts()
     paths = _unit_paths(units)
@@ -390,6 +391,8 @@ def _gather(logs: Sequence[SessionLog], units: Sequence[dict[str, object]]) -> _
         for record in records:
             if record.get("event") == "PreToolUse" and record.get("decision") in _REFUSALS:
                 facts.blocks[(_hook_of(dict(record)), _agent(record) or "main")] += 1
+            if record.get("event") == "PreToolUse" and record.get("decision") == _WARNED:
+                facts.warned[(_hook_of(dict(record)), _agent(record) or "main")] += 1
     # 0186: the latest judged round's rulebook rows, after every compliance-question answer.
     if rulebooks is not None:
         facts.compliance.append(rulebooks)
@@ -573,11 +576,14 @@ def _choice_agents(logs: Sequence[SessionLog]) -> dict[tuple[str, str], str]:
     # 0129: the agent whose allowed Bash call ran `daedalus_train.py choice --chose X --rule R`.
     import shlex
 
+    from audit_report import _RAN
+
     found: dict[tuple[str, str], str] = {}
     for log in logs:
         for record in log.records:
             command = _text(_obj(record, "tool_input"), "command")
-            if record.get("decision") != "allow" or "daedalus_train.py" not in command:
+            # 92: a warned main-session choice call ran, as an allowed one did.
+            if record.get("decision") not in _RAN or "daedalus_train.py" not in command:
                 continue
             try:
                 words = shlex.split(command)
@@ -856,6 +862,12 @@ def render(
     lines += [
         f"- {md_escape(hook)}, {_cell(agent, repo, charter, 'an audit record agent type')}: {n}"
         for (hook, agent), n in sorted(facts.blocks.items())
+    ] or ["- none"]
+    # 92: warned main-session calls beside the blocks, in the same line shape.
+    lines.append("Recorded warnings per hook:")
+    lines += [
+        f"- {md_escape(hook)}, {_cell(agent, repo, charter, 'an audit record agent type')}: {n}"
+        for (hook, agent), n in sorted(facts.warned.items())
     ] or ["- none"]
     lines.append("## Audit log")
     lines += [

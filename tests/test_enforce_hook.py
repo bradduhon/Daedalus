@@ -49,10 +49,10 @@ def test_allow_exits_zero_and_logs_allow(
     assert rec["decision"] == "allow" and rec["reason"] is None
 
 
-def test_main_write_in_a_train_exits_zero_with_context_and_logs_allow(
+def test_main_write_in_a_train_exits_zero_with_context_and_logs_warn(
     run_script: Any, project_data: Path, repo_cwd: Path, hook_input: Any
 ) -> None:
-    # Main never prompted (amends 0105): allowed, the warning in context, recorded as allow.
+    # Main never prompted (amends 0105): allowed, the warning in context, recorded as warn (92).
     _in_train(project_data)
     payload = hook_input(tool_name="Write", tool_input={"file_path": "README.md", "content": "x"})
     result = run_script("enforce_agent_jail.py", payload)
@@ -61,7 +61,7 @@ def test_main_write_in_a_train_exits_zero_with_context_and_logs_allow(
     assert reason.startswith("Build Train 20261015-120000 is active in this repository")
     assert f"Writing {repo_cwd}/README.md here" in reason
     rec = audit_records(project_data / "audit" / "sess-test.jsonl")[-1]
-    assert rec["decision"] == "allow" and rec["reason"] == f"jail: {reason}"
+    assert rec["decision"] == "warn" and rec["reason"] == f"jail: {reason}"
     # 0105, 6.1: the record names the deciding hook; the session's warning text does not.
     assert rec["reason"].startswith("jail: ") and not reason.startswith("jail: ")
 
@@ -211,7 +211,7 @@ def test_oversized_int_config_blocks_and_records(
     assert rec["decision"] == "block" and "not valid JSON" in rec["reason"]
 
 
-def test_malformed_config_alerts_the_operator_and_records_allow(
+def test_malformed_config_alerts_the_operator_and_records_warn(
     run_script: Any, project_data: Path, hook_input: Any
 ) -> None:
     # Main never prompted (amends 0106), SI-4: main is alerted with the exception text.
@@ -223,7 +223,7 @@ def test_malformed_config_alerts_the_operator_and_records_allow(
     assert reason.startswith(enforce_agent_jail._CONFIG_WARN.format(tool="Bash") + " (")
     assert "not valid JSON" in reason and "Next:" in reason and reason in result.stderr
     rec = _last_record(project_data)
-    assert rec["decision"] == "allow" and rec["reason"] == f"config: {reason}"
+    assert rec["decision"] == "warn" and rec["reason"] == f"config: {reason}"
 
 
 def test_config_failure_with_no_audit_record_alerts_the_operator_unrecorded(
@@ -519,7 +519,7 @@ def test_routed_agent_judge_exception_blocks_and_records(
     assert _last_record(project_data)["decision"] == "block"
 
 
-def test_judge_exception_alerts_the_operator_and_records_allow(
+def test_judge_exception_alerts_the_operator_and_records_warn(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     project_data: Path,
@@ -539,7 +539,7 @@ def test_judge_exception_alerts_the_operator_and_records_allow(
     assert reason.startswith(f"{lead} (decide exploded).") and reason in out.err
     assert enforce_agent_jail._REPORT_NEXT.strip() in reason
     rec = _last_record(project_data)
-    assert rec["decision"] == "allow" and rec["reason"] == f"jail: {reason}"
+    assert rec["decision"] == "warn" and rec["reason"] == f"jail: {reason}"
 
 
 @pytest.mark.parametrize("cwd", [None, "relative"])
@@ -928,7 +928,7 @@ def test_main_retired_ask_is_allowed_with_the_warning_in_context(
     hook_input: Any,
     case: str,
 ) -> None:
-    # Main never prompted (amends 0105, 0106): allow, the warning in context, an allow record.
+    # Main never prompted (amends 0105, 0106): allow, the warning in context, a warn record (92).
     _in_train(project_data)
     tool, tool_input, lead = _retired_ask(case, repo_cwd, temp_home)
     result = _run_home(hook_input(tool_name=tool, tool_input=tool_input), temp_home, plugin_data)
@@ -936,7 +936,7 @@ def test_main_retired_ask_is_allowed_with_the_warning_in_context(
     warning = main_warning(result.stdout)
     assert warning.startswith(lead) and "Approve" not in warning, warning
     rec = _last_record(project_data)
-    assert rec["decision"] == "allow" and rec["reason"] == f"jail: {warning}", rec
+    assert rec["decision"] == "warn" and rec["reason"] == f"jail: {warning}", rec
 
 
 @pytest.mark.parametrize("case", _RETIRED_ASKS)
