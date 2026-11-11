@@ -7,20 +7,23 @@ import re
 from pathlib import Path
 from typing import Any
 
+import pytest
 from lib import agent_files
 from lib.jail import CREDENTIAL_TOOLS, WEB_TOOLS, WORKER_DENIED_TOOLS, WRITE_TOOLS
 
 from tests.conftest import REPO_ROOT
 
+PLACEHOLDER = "${CLAUDE_PLUGIN_ROOT}"
 JAIL_SCRIPT = "scripts/enforce_agent_jail.py"
 HANDBACK_SCRIPT = "scripts/handback_check.py"
 # RCP, train 20261026-002310 pick 4: the hand-back tool's message gets the receipts check too.
-HANDBACK_ENTRY = {
+HANDBACK_ENTRY: dict[str, Any] = {
     "matcher": "^SubagentHandback$",
     "hooks": [
         {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/" + HANDBACK_SCRIPT,
+            "command": "python3",
+            "args": [f"{PLACEHOLDER}/{HANDBACK_SCRIPT}"],
             "timeout": 10,
         }
     ],
@@ -55,6 +58,15 @@ def _commands(event: str) -> list[dict[str, Any]]:
     return [hook for entry in _load()["hooks"][event] for hook in entry["hooks"]]
 
 
+def _script(hook: dict[str, Any]) -> str:
+    # issue 84: exec form; the one args element is the placeholder-rooted script path.
+    return str(hook["args"][0]).removeprefix(f"{PLACEHOLDER}/")
+
+
+def _every_hook() -> list[dict[str, Any]]:
+    return [hook for event in sorted(_load()["hooks"]) for hook in _commands(event)]
+
+
 def test_every_event_is_bound() -> None:
     assert set(_load()["hooks"]) == EXPECTED_EVENTS
 
@@ -63,16 +75,24 @@ def test_every_command_points_at_an_existing_python_script() -> None:
     for event in EXPECTED_EVENTS:
         for hook in _commands(event):
             assert hook["type"] == "command"
-            prefix = "python3 ${CLAUDE_PLUGIN_ROOT}/"
-            assert hook["command"].startswith(prefix), hook["command"]
-            rel = hook["command"][len(prefix) :]
-            assert (REPO_ROOT / rel).exists(), rel
-            assert rel.endswith(".py")
+            assert hook["command"] == "python3", hook
+            assert hook["args"] == [f"{PLACEHOLDER}/{_script(hook)}"], hook
+            assert (REPO_ROOT / _script(hook)).exists(), hook
+            assert _script(hook).endswith(".py")
+
+
+@pytest.mark.parametrize("hook", _every_hook())
+def test_the_plugin_root_never_reaches_a_shell(hook: dict[str, Any]) -> None:
+    # issue 84: a root holding a space splits a shell-form command; the placeholder lives in args.
+    assert "args" in hook, hook
+    outside = {key: value for key, value in hook.items() if key != "args"}
+    assert "CLAUDE_PLUGIN_ROOT" not in json.dumps(outside), hook
+    assert all(isinstance(arg, str) for arg in hook["args"]), hook
 
 
 def _jail_entries() -> list[dict[str, Any]]:
     entries = _load()["hooks"]["PreToolUse"]
-    return [e for e in entries if e["hooks"][0]["command"].endswith(JAIL_SCRIPT)]
+    return [e for e in entries if _script(e["hooks"][0]) == JAIL_SCRIPT]
 
 
 def test_pretooluse_mutating_matcher_runs_the_jail_synchronously() -> None:
@@ -111,7 +131,7 @@ def test_jail_matcher_covers_every_jail_policed_tool() -> None:
 
 def test_jail_is_bound_under_pretooluse_only() -> None:
     for event in EXPECTED_EVENTS:
-        jailed = [h for h in _commands(event) if h["command"].endswith(JAIL_SCRIPT)]
+        jailed = [h for h in _commands(event) if _script(h) == JAIL_SCRIPT]
         assert bool(jailed) == (event == "PreToolUse"), event
 
 
@@ -152,11 +172,8 @@ def test_hooks_register_only_in_hooks_json() -> None:
     assert skills
     for path in skills:
         assert not any(line.startswith("hooks:") for line in _frontmatter_lines(path)), path
-    pre = [h["command"] for e in _load()["hooks"]["PreToolUse"] for h in e["hooks"]]
-    assert pre == [
-        "python3 ${CLAUDE_PLUGIN_ROOT}/" + JAIL_SCRIPT,
-        "python3 ${CLAUDE_PLUGIN_ROOT}/" + HANDBACK_SCRIPT,
-    ]
+    pre = [_script(h) for e in _load()["hooks"]["PreToolUse"] for h in e["hooks"]]
+    assert pre == [JAIL_SCRIPT, HANDBACK_SCRIPT]
 
 
 def test_agent_hooks_blocks_name_only_router_checks() -> None:
@@ -170,9 +187,9 @@ def test_agent_hooks_blocks_name_only_router_checks() -> None:
 
 def test_subagent_stop_runs_the_audit_and_the_handback_check() -> None:
     # RCP, 0128: the hand-back receipts check binds beside the audit, synchronous with a timeout.
-    assert [hook["command"] for hook in _commands("SubagentStop")] == [
-        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py",
-        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/handback_check.py",
+    assert [_script(hook) for hook in _commands("SubagentStop")] == [
+        "scripts/audit_log.py",
+        HANDBACK_SCRIPT,
     ]
 
 
@@ -187,6 +204,4 @@ def test_the_handback_tool_runs_the_handback_check_synchronously() -> None:
 
 def test_session_start_runs_only_the_audit() -> None:
     # 0037: no session start notice; the audit hook is the only SessionStart command.
-    assert [hook["command"] for hook in _commands("SessionStart")] == [
-        "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/audit_log.py",
-    ]
+    assert [_script(hook) for hook in _commands("SessionStart")] == ["scripts/audit_log.py"]
