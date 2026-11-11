@@ -1506,18 +1506,18 @@ def _scrub_check(repo: Path, text: str, source: _Source = _SUMMARY) -> None:
 
 def _write_scratch(repo: Path, folders: tuple[str, ...], name: str, text: str) -> Path:
     chain = [repo / "docs", repo / "docs" / ".tmp", repo / SUMMARY_DIR]
-    for part in folders:
-        chain.append(chain[-1] / part)
+    for folder in folders:
+        chain.append(chain[-1] / folder)
     try:
-        for part in chain:
-            atomic.refuse_links(part)
+        for link in chain:
+            atomic.refuse_links(link)
     except atomic.LinkRefused as exc:
         raise WorkspaceError(str(exc)) from exc
     _scratch(repo)
     target = chain[-1] / name
     try:
-        for part in chain[3:]:
-            part.mkdir(exist_ok=True)
+        for link in chain[3:]:
+            link.mkdir(exist_ok=True)
         atomic.write_atomic(target, text, 0o644)
     except OSError as exc:
         raise WorkspaceError(
@@ -1578,13 +1578,13 @@ def release(
         state = train_state.load(repo, train_id)
     except train_state.TrainStateError as exc:
         raise WorkspaceError(str(exc)) from exc
-    base, base_sha = state.get("base_branch"), state.get("base_sha")
-    if state.get("scope_kind") == "folder" or not isinstance(base, str) or not base_sha:
+    state_base, base_sha = state.get("base_branch"), state.get("base_sha")
+    if state.get("scope_kind") == "folder" or not isinstance(state_base, str) or not base_sha:
         raise WorkspaceError(
             f"train {train_id} did not run in repository scope, and a release needs a merged "
             "pull request. Next: run the release step only after a Push Train pull request merges."
         )
-    sha = _merge_commit(repo, merge_sha, base)
+    sha = _merge_commit(repo, merge_sha, state_base)
     version = _merged_version(repo, sha)
     # issue 47: the squash commit's first parent is the pull request base, even when main moved.
     before = _version_at(repo, f"{sha}^1")
