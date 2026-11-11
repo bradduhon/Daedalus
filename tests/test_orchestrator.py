@@ -267,6 +267,8 @@ MAIN_ONLY = (
     "daedalus_doctor.py --print-scope",
     # 0209: the token budget gate; the main session runs it in unattended mode.
     "token_economy.py report",
+    # 0252: the standing rule's findings calls bind the model in the user's session only.
+    "daedalus_findings.py",
 )
 
 

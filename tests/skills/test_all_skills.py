@@ -118,3 +118,67 @@ def test_operator_line_scanner_flags_bare_ids() -> None:
     assert len(_words("run the Daedalus health check (/daedalus:doctor).")) >= MIN_WORDS
     lines = _skill_lines(SKILLS[0])
     assert all(kind in {"next", "stop"} for _, kind, _ in lines)
+
+
+ALL_SKILLS = sorted((REPO_ROOT / "skills").rglob("SKILL.md"))
+RULE_START = "Self-Assessment mode (standing rule"
+# 0252: the only two allowed-tools lines in the skills; neither names the findings script.
+ALLOWED_TOOLS_LINES = {
+    "doctor": "Bash(python3 ${CLAUDE_SKILL_DIR}/../../scripts/daedalus_doctor.py *)",
+    "setup": (
+        "Bash(python3 ${CLAUDE_SKILL_DIR}/../../scripts/daedalus_setup.py *), "
+        "Bash(python3 ${CLAUDE_SKILL_DIR}/../../scripts/daedalus_train.py ask-check *), "
+        "AskUserQuestion"
+    ),
+}
+
+
+def _rule(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    found = [line for line in text.splitlines() if line.startswith(RULE_START)]
+    assert len(found) == 1, path
+    return found[0]
+
+
+def test_all_skill_files_are_globbed() -> None:
+    assert len(ALL_SKILLS) >= len(SKILLS)
+    assert STANDARDS_SKILL in ALL_SKILLS
+
+
+@pytest.mark.parametrize("path", ALL_SKILLS, ids=lambda p: p.parent.name)
+def test_standing_rule_is_identical_in_every_skill(path: Path) -> None:
+    assert _rule(path) == _rule(ALL_SKILLS[0])
+
+
+@pytest.mark.parametrize("path", ALL_SKILLS, ids=lambda p: p.parent.name)
+def test_standing_rule_sits_after_the_opening_paragraph(path: Path) -> None:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    at = lines.index(_rule(path))
+    assert lines[at - 1] == "" and lines[at + 1] == ""
+    before = lines[at - 2]
+    assert before.startswith("Human-facing text (0031)") or before.startswith("# ")
+
+
+def test_standing_rule_calls_match_the_approval_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lib import plugin_approvals
+
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(REPO_ROOT))
+    calls = [part for part in _rule(ALL_SKILLS[0]).split("`") if part.startswith("python3 ")]
+    assert len(calls) == 3
+    expected = ["findings-start", "findings-save", "findings-show"]
+    for call, name in zip(calls, expected, strict=True):
+        command = (
+            call.replace("${CLAUDE_PLUGIN_ROOT}", str(REPO_ROOT))
+            .replace("<path>", "/tmp/project")
+            .replace("<stamp>", "20261111T000000Z")
+        )
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": "/tmp/project"}
+        assert plugin_approvals.approve(payload) == name, call
+
+
+@pytest.mark.parametrize("path", ALL_SKILLS, ids=lambda p: p.parent.name)
+def test_no_skill_pre_approves_the_findings_script(path: Path) -> None:
+    fields, _ = _split(path)
+    line = fields.get("allowed-tools")
+    assert line == ALLOWED_TOOLS_LINES.get(path.parent.name)
+    assert "daedalus_findings.py" not in (line or "")
