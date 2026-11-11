@@ -5,16 +5,17 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import assets, git, packs, writer_mode  # noqa: E402
+from lib import assets, git, packs, provider_mirror, writer_mode  # noqa: E402
 from lib.agent_models import AgentModelError, resolve  # noqa: E402
 from lib.audit import DataDirError  # noqa: E402
 from lib.briefs import BriefError, ask_file_problems, brief_file_problems  # noqa: E402
-from lib.config import ConfigError, load_config  # noqa: E402
+from lib.config import ConfigError, load_config, resolve_excluded_roots  # noqa: E402
 from lib.git import GitTimeout  # noqa: E402
 from lib.manifest import Assets, ManifestError  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
@@ -56,7 +57,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
         "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
         "brief-check, ask-check, packs, writer-clear, assets, refuted, grant, dispatch, route, "
-        "finish-unit. "
+        "finish-unit, providers. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -181,7 +182,33 @@ def _parser() -> argparse.ArgumentParser:
     done.add_argument("--next", dest="next_unit")
     done.add_argument("--warm")
     done.add_argument("--note", action="append", default=[])
+    # 0256: the run fetches Terraform providers once, outside the kernel wrapper.
+    sub.add_parser("providers").add_argument("--repo", type=Path, required=True)
     return parser
+
+
+def _providers(repo: Path) -> Outcome:
+    # 0256: only with checks.terraform_validate true; a fetch failure warns and never stops.
+    root = project_root(repo).resolve()
+    train = active_train(root)
+    if train is None:
+        return Outcome(EXIT_STOP, [provider_mirror.R_PROVIDERS_NO_RUN.format(root=root)])
+    try:
+        loaded = load_manifest(root)
+        excluded = tuple(r.path for r in resolve_excluded_roots(load_config(cwd=str(root)), root))
+    except (ManifestError, ConfigError) as exc:
+        rerun = provider_mirror.NEXT_RERUN.format(repo=root)
+        return Outcome(EXIT_OK, [f"warning: providers: nothing was fetched ({exc}). {rerun}"])
+    features = loaded.features if loaded is not None else None
+    if (
+        features is None
+        or features.terraform_validate is not True
+        or (features.terraform_tools is False)
+    ):
+        return Outcome(
+            EXIT_OK, ["providers: skipped; the Terraform validate check is off for this project."]
+        )
+    return Outcome(EXIT_OK, provider_mirror.fetch(str(root), train, excluded, dict(os.environ)))
 
 
 def _grant(repo: Path, args: argparse.Namespace) -> Outcome:
@@ -436,6 +463,8 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return route_unit(repo, args.unit, args.verdict, args.rows)
     if args.action == "finish-unit":
         return finish_unit(repo, args.unit, args.next_unit, args.note, args.warm)
+    if args.action == "providers":
+        return _providers(repo)
     if args.action == "check-reply":
         return check_reply(repo, args.stage)
     if args.action == "state":

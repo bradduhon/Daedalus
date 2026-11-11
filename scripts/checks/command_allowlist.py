@@ -41,6 +41,8 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"refuted"}
         # 0230: the composed record calls, each no wider than the calls this table admits.
         | {"dispatch", "route", "finish-unit"}
+        # 0256: the provider fetch the build phase runs before the first coder dispatch.
+        | {"providers"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir", "--check-tools"}),

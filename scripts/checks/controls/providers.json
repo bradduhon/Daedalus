@@ -1,0 +1,14 @@
+{
+  "provider_mirror.R_MIRROR_OUTSIDE": {
+    "failure": "issue 200: a provider mirror path that resolves outside the run's temporary folder is granted to the kernel wrapper, so a coder reads a folder the run never made",
+    "premise_test": "tests/test_provider_mirror.py::test_a_mirror_that_resolves_elsewhere_is_not_granted"
+  },
+  "provider_mirror.R_MIRROR_NOT_GRANTED": {
+    "failure": "issue 200: a provider mirror that is a link, not owned by the user or writable by group or others is granted read-only, so another user or a link widens what a wrapped coder reads",
+    "premise_test": "tests/test_provider_mirror.py::test_a_bad_mirror_folder_is_not_granted_and_the_line_says_so"
+  },
+  "provider_mirror.R_PROVIDERS_NO_RUN": {
+    "failure": "0256: the provider fetch runs with no marked run, so it writes a mirror no wrapper will ever grant and records nothing",
+    "premise_test": "tests/test_provider_mirror.py::test_the_fetch_stops_with_a_next_line_when_no_run_is_marked"
+  }
+}
