@@ -167,7 +167,7 @@ For an intact log it prints `OK: <n> records, chain intact, head=<hash>`. Otherw
 
 ### Saving the report
 
-When the optional `<repo>/.claude/daedalus/config.json` sets `local_docs_folder` (the `<charter_root>` below), the skill asks whether to render the report again and save it to `<charter_root>/audit/<session>.md`. A live session gains a few records between the two renders, so the saved file can hold more than the screen showed. If `<charter_root>/audit` does not exist yet, the skill offers to create it. Say yes, and the file is written there for the charter-docs agent to commit in a later build run. Say no, or leave `local_docs_folder` unset, and the digest stays on screen only.
+When the optional `<repo>/.claude/daedalus/config.json` sets `local_docs_folder` (the `<charter_root>` below), the skill renders the report again and saves it to `<charter_root>/audit/<session>.md` without asking. A live session gains a few records between the two renders, so the saved file can hold more than the screen showed. If `<charter_root>/audit` does not exist yet, the skill creates it; it never creates `<charter_root>` itself. The file is written there for the charter-docs agent to commit in a later build run. Leave `local_docs_folder` unset, or name a folder that does not exist, and the digest stays on screen with one line saying no docs folder is set.
 
 You can also write the report yourself, from the repository directory. Create the folder first:
 
@@ -190,7 +190,7 @@ To see what a run cost in tokens, type `/daedalus:token-report <run id>` with a 
 
 Each run ends with a totals row, a mean per unit and a mean per audit round. The mean per unit counts the coding agents only, as the earlier hand counts did. The checking agents stay in the totals row. Under the table, a line such as `turns per coder unit: 49 (target 24)` shows how many turns the coding agents took per unit and the most they should take, so you can see whether they kept to it. A session report ends with a `session` group: the agents the main session started outside any run, one row each with its own totals. A coding, checking, audit, contract or ledger agent the main session started for a train counts in that train's rows instead. The main session's own tokens are left out, so the totals cover the agents only. No column is in dollars. A value a run type does not have prints `none`. Every run type uses the same columns, so a build run, a push run and a plan run compare side by side.
 
-After a run's table, the skill offers to save it: to `<charter_root>/reports/<date>-tokens-<run id>.md` when `local_docs_folder` is set, and to `docs/.tmp/daedalus/<run id>/tokens.md` otherwise. `/daedalus:token-report history` prints the totals row of every saved run. The audit report prints the same totals rows after its own totals.
+After a run's table, the skill saves it without asking: to `<charter_root>/reports/<date>-tokens-<run id>.md` when `local_docs_folder` is set (it makes the `reports` subfolder if it is missing), and to the `reports` folder of the plugin data folder otherwise. The skill prints the path it wrote. `history` reads that folder, and still reads tables an older version saved under `docs/.tmp/daedalus/`. `/daedalus:token-report history` prints the totals row of every saved run. The audit report prints the same totals rows after its own totals.
 
 ## Running a build
 
