@@ -140,11 +140,11 @@ The report checks the log's hash chain first. Only an intact chain gets a digest
 
 - Header: the session id, the number of records, the hash of the last record (`head=`), and the repository the session ran in.
 - Subagent timeline: one row per agent, with the record number where it started and stopped. `open` in the stop column means the log holds no stop record for that agent.
-- Write, Edit and Bash calls: per agent type and tool, how many calls the jail allowed and how many it blocked.
-- Blocks: every refused action, one line each.
-- Control cost: blocks per check and agent type, the failure each blocking check prevents, the seconds each block cost the agent, the seconds each agent took to its first write, and the mean time the jail took to judge a call.
+- Write, Edit and Bash calls: per agent type and tool, how many calls the jail allowed, how many it let run with a warning, and how many it blocked.
+- Blocks: every refused action, one line each. A call of your own session that ran with a warning is listed too, marked `(warn)`.
+- Control cost: blocks and warned calls per check and agent type, the failure each blocking check prevents, the seconds each block cost the agent, the seconds each agent took to its first write, and the mean time the jail took to judge a call.
 - Status lines: every `[STATUS: ...]`, `[VERDICT: ...]` and `[STANDARDS: ...]` line an agent reported.
-- Totals by event: how many records of each hook event the log holds.
+- Totals by event: how many records of each hook event the log holds. A line below counts the calls of your own session that ran with a warning.
 - Token economy: for each run the session holds, its token totals row and its mean per unit, the same rows `/daedalus:token-report` prints. The last group, run type `session`, holds the agents the main session started outside any run. A session whose agent transcripts are gone shows one line saying so.
 
 A block line reads like this:
