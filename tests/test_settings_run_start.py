@@ -12,20 +12,34 @@ import pytest
 from lib import train_state, workspace
 from lib.workspace import WorkspaceError, begin, finish, resume, stop
 
-from tests.test_workspace_train import (  # noqa: F401
+from tests.test_workspace_train import (
     LEDGER,
     NAMED,
     _built,
+    _commit_all,
     _head,
     _locked_train,
     _merges,
     _nothing_written,
     _ok,
     _verified,
-    repo,
 )
 
 pytestmark = pytest.mark.usefixtures("isolated_env")
+
+
+@pytest.fixture
+def repo(project_data: Path) -> Path:
+    # The same repository the workspace train tests start from.
+    root = project_data.parent.parent
+    (project_data / ".gitignore").write_text("*\n")
+    (root / "docs").mkdir()
+    (root / "docs" / "decisions.md").write_text(LEDGER)
+    (root / "service-manifest.json").write_text(json.dumps(NAMED))
+    _commit_all(root, "init")
+    return root
+
+
 SETTINGS = {"docs": {"decisions_filename": "decisions.md", "folder": "docs"}}
 MANIFEST = "service-manifest.json"
 CONFIG = ".claude/daedalus/config.json"
