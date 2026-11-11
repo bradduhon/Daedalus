@@ -915,7 +915,8 @@ def test_live_summary_names_a_piped_call_and_carries_its_own_next(
     with pytest.raises(ProofError) as info:
         live_summary(repo_cwd)
     text = str(info.value)
-    assert "was piped or redirected" in text and "needs a direct call" in text
+    assert "A call that is piped, redirected or joined to another command is not that" in text
+    assert "The summary needs a direct call, so nothing was written." in text
     assert "Next: run `python3" in text and "no pipe or redirect" in text
     assert "hooks are not writing" not in text
 
