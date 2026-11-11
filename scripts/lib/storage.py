@@ -13,7 +13,7 @@ from lib.project_root import project_root
 
 TMP_ROOT = Path("/tmp/.daedalus")
 # 0221: the allow list of feature folder names; a name outside it is refused.
-FEATURES: tuple[str, ...] = ("self-assessment",)
+FEATURES: tuple[str, ...] = ("self-assessment", "question-path")
 
 
 def _uid() -> int:
