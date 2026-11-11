@@ -434,7 +434,7 @@ def test_cli_prints_the_version_line_after_the_ok_line(tmp_path: Path) -> None:
 
 
 def test_planner_and_plan_skill_name_the_version_line() -> None:
-    # Plan Choices: these assertions live here, not in tests/test_skills.py, which D5 owns.
+    # Plan Choices: these assertions live here, not in tests/skills/, which D5 owns.
     planner = " ".join((REPO_ROOT / "agents" / "planner.md").read_text(encoding="utf-8").split())
     block = planner.split("```plan", 1)[1].split("```", 1)[0]
     assert VERSION_SHAPE in block

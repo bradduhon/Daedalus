@@ -383,3 +383,79 @@ def test_the_script_steps_aside_on_a_handback_outside_a_train(tmp_path: Path) ->
     (tmp_path / ".git").mkdir()
     got = _run(json.dumps(_handback(_reply("done", COMPLETE), cwd=str(tmp_path))))
     assert (got.returncode, got.stdout) == (0, "")
+
+
+def _files(value: str) -> str:
+    # 209: a whole reply whose COMPLETE line carries this files= value.
+    line = COMPLETE.replace("files=a.py ", f"files={value} ")
+    return _reply("## Receipts", COMMIT, TEST, line)
+
+
+@pytest.mark.parametrize(
+    ("value", "entry"),
+    [
+        ("/work/repo/.claude/worktrees/u1/a.py", "/work/repo/.claude/worktrees/u1/a.py"),
+        ("a.py,/etc/passwd", "/etc/passwd"),
+        ("a.py, scripts/../../b.py", "scripts/../../b.py"),
+        ("../b.py", "../b.py"),
+        ("..", ".."),
+        ("~/b.py", "~/b.py"),
+        ("scripts/a.py,//host/b.py", "//host/b.py"),
+        ("C:\\x\\b.py", "C:\\x\\b.py"),
+        ("$HOME/b.py", "$HOME/b.py"),
+    ],
+)
+def test_a_files_entry_outside_the_worktree_is_refused(
+    tmp_path: Path, value: str, entry: str
+) -> None:
+    # 209: absolute, dotted or expanded entries are refused by name, under any root.
+    got = handback_check.receipts_problem(_files(value), tmp_path)
+    assert got is not None and got.startswith(handback_check.FILES_LEAD), got
+    assert repr(entry) in got and "relative to the worktree root" in got, got
+    said = handback_check.judge(_stop(_files(value)))
+    assert said is not None and said.count("Next:") == 1, said
+    assert said.endswith(f"Next: {handback_check.FILES_NEXT}."), said
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "a.py",
+        "scripts/lib/jail.py,tests/test_jail.py,README.md",
+        "agents/orchestrator.md, scripts/lib/train_summary.py, skills/catalog/SKILL.md",
+        "agents/framework-specialist.md,agents/cis-specialist.md(deleted),README.md",
+        "(21 files, see diff)",
+        "46 changed vs bbcfd30: 3 new (tests/payloads.py, tests/live.py), tests/conftest.py",
+        "tests/test_jail.py::test_a, scripts/lib/jail.py:2965",
+        ".claude-plugin/plugin.json,VERSION",
+    ],
+)
+def test_relative_files_entries_pass(tmp_path: Path, value: str) -> None:
+    # 209: every relative list, prose and annotations included, passes unchanged.
+    assert handback_check.receipts_problem(_files(value), tmp_path) is None
+    assert handback_check.judge(_stop(_files(value))) is None
+
+
+def test_a_link_out_of_the_bound_unit_worktree_is_refused(tmp_path: Path) -> None:
+    # 209, issue 29: the root is the worktree of the coder's bound unit, not the hook cwd.
+    from lib import train_state
+    from lib.unit_binding import claim, record_dispatch
+
+    repo, train = tmp_path / "repo", "20261026-002310"
+    worktree = repo / ".claude" / "worktrees" / "u1"
+    worktree.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / TRAIN_MARKER).parent.mkdir(parents=True)
+    (repo / TRAIN_MARKER).write_text(f"{train}\n", encoding="utf-8")
+    train_state.save(
+        repo, train, {"train_id": train, "units": [{"name": "u1", "path": str(worktree)}]}
+    )
+    assert record_dispatch(repo, train, "u1") is None and claim(repo, train, "a1", "u1") is None
+    (tmp_path / "outside").mkdir()
+    (worktree / "out").symlink_to(tmp_path / "outside")
+    got = handback_check.judge(_stop(_files("a.py,out/b.py"), cwd=str(repo)))
+    assert got is not None and "'out/b.py'" in got, got
+    assert (
+        handback_check.judge(_stop(_files("a.py,out/b.py"), cwd=str(repo), agent_id="a2")) is None
+    )
+    assert handback_check.judge(_stop(_files("a.py,in/b.py"), cwd=str(repo))) is None

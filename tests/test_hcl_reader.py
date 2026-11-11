@@ -300,3 +300,35 @@ def test_auditor_guidance_sits_in_finding_format_item_one() -> None:
         text.split("1. **One test per blocking finding**", 1)[1].split("\n2. **", 1)[0].split()
     )
     assert "`lib.hcl_reader`" in item and "Never extract HCL blocks with a regex" in item
+
+
+def _principal_doc(body: str) -> str:
+    return (
+        'data "aws_iam_policy_document" "p" {\n  statement {\n    effect = "Deny"\n'
+        f'    actions = ["s3:*"]\n{body}  }}\n}}\n'
+    )
+
+
+def test_not_principals_only_statement_carries_principals_of_that_kind() -> None:
+    body = (
+        '    not_principals {\n      type = "AWS"\n'
+        '      identifiers = ["arn:aws:iam::1:root"]\n    }\n'
+    )
+    (stmt,) = policy_statements(parse(_principal_doc(body)))
+    assert stmt.principals == ()
+    assert [(p.type, p.identifiers) for p in stmt.not_principals] == [
+        ("AWS", ("arn:aws:iam::1:root",))
+    ]
+
+
+def test_statement_with_both_principal_kinds_keeps_them_apart() -> None:
+    body = (
+        '    principals {\n      type = "AWS"\n      identifiers = ["a"]\n    }\n'
+        '    not_principals {\n      type = "Service"\n      identifiers = [var.svc]\n    }\n'
+    )
+    (stmt,) = policy_statements(parse(_principal_doc(body)))
+    assert [p.type for p in stmt.principals] == ["AWS"]
+    assert [p.type for p in stmt.not_principals] == ["Service"]
+    assert stmt.unresolved_fields() == [("not_principals.identifiers", ("var.svc",))]
+    with pytest.raises(HclError, match="not_principals.identifiers of statement"):
+        require_literal(stmt)
