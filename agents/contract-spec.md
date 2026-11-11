@@ -4,6 +4,7 @@ description: Reads and updates service handshake contracts, API schemas, and spe
 tools: Read, Grep, Glob, Write, Edit
 disallowedTools: Agent, Task, SendMessage
 model: sonnet
+autoCompactWindow: 250000
 shape: producer
 phases: [clarification, plan]
 # 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).

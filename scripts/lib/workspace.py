@@ -1026,7 +1026,7 @@ def _merge_all(
 
 
 VERIFIED = "[VERDICT: VERIFIED] claims=<n>"
-# 0121, agents/verifier.md:159: the verifier's closing line, after its corrected=<k> line.
+# 0121, agents/verifier.md:160: the verifier's closing line, after its corrected=<k> line.
 VERIFIED_LINE = re.compile(r"\[VERDICT: VERIFIED\] claims=[0-9]+")
 VERIFIER = "verifier"
 _VERDICT_OPEN = "[VERDICT: "
@@ -1103,7 +1103,7 @@ def unit_refutations(records: list[dict[str, object]], worktree: Path) -> int:
 
 
 def refuted_rows(line: str) -> list[str] | None:
-    # 229, agents/verifier.md:158: rows joined by "; "; a bare ";" leaves the row count unknown.
+    # 229, agents/verifier.md:159: rows joined by "; "; a bare ";" leaves the row count unknown.
     if not line.startswith(REFUTED_PREFIX):
         return None
     body = line.removeprefix(REFUTED_PREFIX).strip()
@@ -1133,7 +1133,7 @@ def newest_reply(
 
 
 def _reply_key(text: str) -> str | None:
-    # 0231, agents/verifier.md:149: the key is the line directly after the opening line.
+    # 0231, agents/verifier.md:150: the key is the line directly after the opening line.
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     return lines[1] if len(lines) > 1 else None
 
@@ -1171,7 +1171,7 @@ def _pick(
         if prior[1] == "PostToolUse" and isinstance(agent_id, str) and prior[2] == agent_id:
             seq, text = prior[0], prior[3]
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    # 222, agents/verifier.md:148: the first and last lines are one verdict line, else none.
+    # 222, agents/verifier.md:149: the first and last lines are one verdict line, else none.
     if len(lines) < 2 or lines[0] != lines[-1] or not lines[-1].startswith(_VERDICT_OPEN):
         return seq, None, text
     return seq, lines[-1], text

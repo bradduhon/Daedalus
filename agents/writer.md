@@ -4,6 +4,7 @@ description: Writes documents with a rerunnable receipt on every claim, in the o
 tools: Read, Write, Edit, Bash, Glob, Grep
 disallowedTools: WebSearch, WebFetch, Agent, Task, SendMessage
 model: opus
+autoCompactWindow: 250000
 shape: producer
 phases: [implementation, audit]
 # 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).

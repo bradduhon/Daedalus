@@ -49,6 +49,13 @@ def test_parser_reads_every_agent_file() -> None:
     assert Hook("git_grammar", ("--allow", "coder")) in coder.hooks
 
 
+def test_every_agent_file_carries_the_compaction_window() -> None:
+    for path in sorted((REPO_ROOT / "agents").glob("*.md")):
+        raw = agent_files.frontmatter(path)["autoCompactWindow"]
+        assert raw == str(agent_files.AUTO_COMPACT_WINDOW), path.name
+        assert raw.isdigit() and int(raw) == agent_files.AUTO_COMPACT_WINDOW == 250000
+
+
 def test_parser_accepts_comments_and_a_file_without_hooks(tmp_path: Path) -> None:
     comment = "# 0044: a full-line comment anywhere in the frontmatter is ignored."
     lines = [*HEAD, comment, *BLOCK[:3], "      # nested comment", *BLOCK[3:], *BODY]

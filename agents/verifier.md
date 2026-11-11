@@ -4,6 +4,7 @@ description: Adversarial read-only verifier of one unit's diff against its brief
 tools: Read, Grep, Glob, Bash
 disallowedTools: Write, Edit, MultiEdit, NotebookEdit, WebFetch, WebSearch, Agent, Task, SendMessage
 model: opus
+autoCompactWindow: 250000
 shape: judge
 phases: [implementation]
 # 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).

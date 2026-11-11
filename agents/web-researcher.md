@@ -4,6 +4,7 @@ description: Fast external documentation lookup on Haiku. Returns dense, injecta
 tools: WebSearch, WebFetch, Read
 disallowedTools: Agent, Task, SendMessage
 model: haiku
+autoCompactWindow: 250000
 shape: finder
 phases: [context]
 # 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).

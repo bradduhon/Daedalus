@@ -4,6 +4,7 @@ description: Runs one Build Train from its plan to the audited integration tip. 
 tools: Agent, SendMessage, Read, Write, Edit, Bash, Glob, Grep
 disallowedTools: MultiEdit, NotebookEdit, WebFetch, WebSearch
 model: opus
+autoCompactWindow: 250000
 shape: dispatcher
 phases: [context, clarification, plan, implementation, audit]
 # 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).

@@ -4,6 +4,7 @@ description: Produces the change gate between a baseline and a derived document,
 tools: Read, Grep, Glob, Write, Bash
 disallowedTools: Edit, MultiEdit, NotebookEdit, WebFetch, WebSearch, Agent, Task, SendMessage
 model: opus
+autoCompactWindow: 250000
 shape: producer
 phases: [implementation]
 # 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).

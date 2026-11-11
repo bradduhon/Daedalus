@@ -158,7 +158,7 @@ When your settings name a docs folder (`local_docs_folder`), the skill saves a r
 
 ## The agents
 
-Each agent's file lists the only tools it may use, the status lines it ends its replies with, and the phases it suits: context, clarification, plan, implementation, audit, and commit and release. The phases help your session pick an agent. They never limit the choice. The table below is generated from the agent files by `python3 scripts/catalog.py table`. `/daedalus:catalog` shows your session the same table, and a test fails when this copy goes stale.
+Each agent's file lists the only tools it may use, the status lines it ends its replies with, and the phases it suits: context, clarification, plan, implementation, audit, and commit and release. The phases help your session pick an agent. They never limit the choice. Each agent file sets `autoCompactWindow: 250000`, which tells Claude Code to compact that agent's context at 250,000 tokens. It is a compaction point, not a hard limit. Your own `CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable wins over it. It needs Claude Code 2.1.296 or later, and the doctor notes an older version. The table below is generated from the agent files by `python3 scripts/catalog.py table`. `/daedalus:catalog` shows your session the same table, and a test fails when this copy goes stale.
 
 <!-- generated: catalog.py table -->
 | Agent | Shape | Model | Tools | Job | Reply lines | Phases |

@@ -17,12 +17,15 @@ _TOP_KEYS = (
     "tools",
     "disallowedTools",
     "model",
+    "autoCompactWindow",
     "shape",
     "phases",
     "hooks",
     "modes",
     "prefer",
 )
+# Compaction point in tokens for every agent; Claude Code 2.1.296 or later reads it.
+AUTO_COMPACT_WINDOW = 250000
 # 0217: the one model an agent file may prefer over its model line when the session has it.
 PREFERRED = ("fable",)
 # 0190: the two indented blocks; modes holds per-mode hooks the router adds to the hooks block.

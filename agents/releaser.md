@@ -4,6 +4,7 @@ description: GitHub specialist for the Push Train. Commits, pushes verified bran
 tools: Bash, Read, Glob, Grep
 disallowedTools: Write, Edit, MultiEdit, NotebookEdit, WebFetch, WebSearch, Agent, Task, SendMessage
 model: opus
+autoCompactWindow: 250000
 shape: mover
 phases: [commit, release]
 # 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).

@@ -4,6 +4,7 @@ description: Scoped implementation worker. Writes application code and unit test
 tools: Read, Write, Edit, Bash, Glob, Grep
 disallowedTools: WebSearch, WebFetch, Agent, Task, SendMessage
 model: opus
+autoCompactWindow: 250000
 shape: producer
 phases: [implementation]
 # 0044: run by the Daedalus router; Claude Code ignores hooks on plugin agents (sub-agents.md:239).

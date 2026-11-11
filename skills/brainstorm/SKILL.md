@@ -183,7 +183,7 @@ Grounding rules (carried verbatim to the planner):
 
 - Exploring ends when the operator accepts a direction at the exit question, after the board and handoff checks ran (scripts/brainstorm_check.py), or keeps their goal on the straight path.
 - The operator says the spec stands, the verifier checks its repository receipts, and the warm planner cuts the plan (step 11).
-- No hook checks the hand-off. The planner's one-file write grant is a hook (agents/planner.md:17).
+- No hook checks the hand-off. The planner's one-file write grant is a hook (agents/planner.md:18).
 
 ## Agents it uses
 

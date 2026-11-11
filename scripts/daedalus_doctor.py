@@ -52,6 +52,8 @@ FOLDER_OFF = ", and this is folder scope, where the Push Train never runs (0074)
 CLAUDE_TIMEOUT_S = 10
 # 0122: code.claude.com/docs/en/hooks, Command hook fields: onFailure needs v2.1.295 or later.
 ON_FAILURE_MIN = (2, 1, 295)
+# code.claude.com/docs/en/sub-agents: frontmatter autoCompactWindow needs v2.1.296 or later.
+AUTO_COMPACT_MIN = (2, 1, 296)
 # 0247: no decisions file named means no decisions, and nothing asks to create one.
 NO_LEDGER = "OK   decisions: no decisions file named in docs.decisions_filename, none recorded"
 PROJECT_DATA_NEXT = "write a single line * to {marker}"
@@ -363,6 +365,16 @@ def _hook_failure_check() -> Iterator[tuple[bool, str]]:
     found = _BARE_VERSION.search(done.stdout)
     if done.returncode != 0 or found is None:
         return
+    if tuple(int(part) for part in found.groups()) < AUTO_COMPACT_MIN:
+        least = ".".join(str(part) for part in AUTO_COMPACT_MIN)
+        yield (
+            True,
+            (
+                f"OPT  agent compaction: Claude Code {found.group(0)} ignores autoCompactWindow; "
+                f"agents compact at Claude Code's default, not at 250,000 tokens; "
+                f"{least} or later applies it"
+            ),
+        )
     if tuple(int(part) for part in found.groups()) < ON_FAILURE_MIN:
         least = ".".join(str(part) for part in ON_FAILURE_MIN)
         yield (

@@ -1502,6 +1502,19 @@ def test_old_claude_code_gets_the_hook_failure_line(fake_claude: Path, tmp_path:
     ]
 
 
+def test_claude_code_below_the_compaction_floor_gets_the_opt_line(
+    fake_claude: Path, tmp_path: Path
+) -> None:
+    fake_claude.write_text("#!/bin/sh\necho '2.1.295 (Claude Code)'\n", encoding="utf-8")
+    bins = _bins(tmp_path)
+    out = _run(None, tmp_path, path_env=bins, home=tmp_path / "home").stdout.splitlines()
+    assert [ln for ln in out if "agent compaction" in ln] == [
+        "OPT  agent compaction: Claude Code 2.1.295 ignores autoCompactWindow; "
+        "agents compact at Claude Code's default, not at 250,000 tokens; "
+        "2.1.296 or later applies it"
+    ]
+
+
 @pytest.mark.parametrize("printed", ["2.1.295 (Claude Code)", "2.2.0", "3.0.1 (Claude Code)"])
 def test_current_claude_code_gets_no_hook_failure_line(
     fake_claude: Path, tmp_path: Path, printed: str
