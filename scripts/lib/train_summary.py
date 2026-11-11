@@ -8,6 +8,7 @@ import html
 import json
 import os
 import re
+import unicodedata
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -54,6 +55,8 @@ _LINE_SUFFIX = re.compile(r"(?::[0-9]+)+$")
 # W3.2: the one marker a refused path from the audit log or train state prints as.
 WITHHELD = "[path withheld]"
 _TRAILING = ".,:;!?"
+# 88: categories a renderer draws with no glyph, so a stand-in there may read as nothing.
+_GLYPHLESS = ("Cc", "Cf", "Cn")
 _MD_ESCAPED = re.compile(r"\\(.)")
 _COMPLETE = re.compile(
     r"\[STATUS: COMPLETE\] branch=(\S+) packet_version=(\S+) files=(.*?) tests=(.*?) ledger_notes="
@@ -218,6 +221,34 @@ def plain_path(token: str, repo: Path, charter: Path | None) -> bool:
     return _under(repo / path, repo)
 
 
+def _admitted(char: str) -> bool:
+    # 88: ASCII, or a Unicode letter, mark or decimal digit; any other character may stand for `/`.
+    kind = unicodedata.category(char)
+    return char.isascii() or kind[0] in "LM" or kind == "Nd"
+
+
+def _shown(token: str, repo: Path, charter: Path | None) -> bool:
+    # A lone `/` is a prose separator ("pass / fail"), not a path; `//` and longer are paths.
+    return token == "/" or not _PATH_LIKE.search(token) or plain_path(token, repo, charter)
+
+
+def _read_as(char: str, blank: str) -> str:
+    if _admitted(char):
+        return char
+    return blank if unicodedata.category(char) in _GLYPHLESS else "/"
+
+
+def _read(token: str, blank: str) -> str:
+    # 88: each non-admitted character read as `/`, a glyphless one (Cc, Cf, Cn) read as `blank`.
+    return "".join(_read_as(char, blank) for char in token)
+
+
+def _printable(token: str, repo: Path, charter: Path | None) -> bool:
+    # 88: the token prints only when it passes as written and in both readings of `_read`.
+    readings = {token, _read(token, "/"), _read(token, "")}
+    return all(_shown(reading, repo, charter) for reading in readings)
+
+
 def _relative(text: str, root: Path, label: str) -> str:
     text = text.replace(f"{root}/", f"{label}/" if label else "")
     return re.sub(re.escape(str(root)) + r"(?![\w./-])", label or ".", text)
@@ -240,8 +271,7 @@ def public(
     start = 0
     for match in _TOKEN.finditer(text):
         token = match.group(0)
-        # A lone `/` is a prose separator ("pass / fail"), not a path; `//` and longer are paths.
-        if token == "/" or not _PATH_LIKE.search(token) or plain_path(token, repo, charter):
+        if _printable(token, repo, charter):
             continue
         if not withhold:
             raise SummaryError(
@@ -427,7 +457,9 @@ def _located(path: str, repo: Path, charter: Path | None, prefix_repo: bool) -> 
     return target.name
 
 
-def _ledger_lines(state: dict[str, object], notes: Notes) -> list[str]:
+def _ledger_lines(
+    state: dict[str, object], notes: Notes, repo: Path, charter: Path | None
+) -> list[str]:
     ledger = train_state.record(state, LEDGER)
     if not ledger:
         codes = notes.fields.get("Codes")
@@ -442,8 +474,14 @@ def _ledger_lines(state: dict[str, object], notes: Notes) -> list[str]:
                 "daedalus_train.py ledger with the sha and ids of charter-docs' COMMITTED line, "
                 "then rerun summary."
             )
-        lines.append(f"Ledger ids: {','.join(ids)} in commit {sha}.")
+        ids_shown = _state_value(",".join(ids), repo, charter)
+        lines.append(f"Ledger ids: {ids_shown} in commit {sha}.")
     return lines
+
+
+def _state_value(value: str, repo: Path, charter: Path | None) -> str:
+    # 89: a header value is checked and escaped as a body cell is; the last pass reads one form.
+    return _cell(value, repo, charter, "the train state")
 
 
 def _header(
@@ -459,7 +497,8 @@ def _header(
     ledger_match = _LEDGER_PATH.match(_text(state, "ledger_line"))
     ledger = ledger_match.group(1) if ledger_match else ""
     under = charter is not None and bool(ledger) and Path(ledger).is_relative_to(charter)
-    base = f"{_text(state, 'base_branch') or 'unknown'} @ {_text(state, 'base_sha') or 'unknown'}"
+    branch = _state_value(_text(state, "base_branch") or "unknown", repo, charter)
+    base = f"{branch} @ {_state_value(_text(state, 'base_sha') or 'unknown', repo, charter)}"
     # 0169: the heading says run; the release skill's pull request title is `Run <train-id>`.
     lines = [
         f"# Run {train_id}",
@@ -470,23 +509,25 @@ def _header(
         lines.append("charter: none (repo-local ledger)")
     else:
         where = "ledger under local_docs_folder" if under else "ledger repo-local"
+        name = _state_value(charter.name, repo, charter)
+        charter_base = _state_value(_text(state, "charter_base") or "none", repo, charter)
         lines.append(
-            f"charter: {charter.name}, branch daedalus/{train_id}, charter base: "
-            f"{_text(state, 'charter_base') or 'none'} ({where})"
+            f"charter: {name}, branch daedalus/{train_id}, charter base: {charter_base} ({where})"
         )
     packet = _int(state, "packet_version", 0)
-    shown = _located(ledger, repo, charter, True) if ledger else "not recorded"
+    shown = "not recorded"
+    if ledger:
+        shown = _state_value(_located(ledger, repo, charter, True), repo, charter)
     lines.append(f"Packet: {f'v{packet}' if packet else 'not locked'}. Ledger: {shown}.")
     contract = _text(state, "contract_path")
     if contract:
-        lines.append(f"Contract: {_located(contract, repo, charter, False)} v{packet}")
+        located = _located(contract, repo, charter, False)
+        lines.append(f"Contract: {_state_value(located, repo, charter)} v{packet}")
     elif state.get(train_state.CONTRACT_SKIP) is True:
         lines.append(CONTRACT_SKIPPED)
     else:
         lines.append(CONTRACT_NOT_LOCKED)
-    lines += _ledger_lines(state, notes)
-    # W3.2: the train state lines above withhold a path; the Task line already passed the check.
-    lines = [public(line, repo, charter, "the train state", withhold=True) for line in lines]
+    lines += _ledger_lines(state, notes, repo, charter)
     lines.append(
         f"[POLICY: {'declared, gate not yet shipped' if policy_declared else 'none declared'}]"
     )
