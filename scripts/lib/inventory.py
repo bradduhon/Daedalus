@@ -57,8 +57,13 @@ FILES: tuple[Entry, ...] = (
     ),
     Entry(
         "<charter_root>/reports/",
-        "scripts/token_economy.py:main",
+        "scripts/token_economy.py:saved_dir",
         "you run token_economy.py report --save and the reports subfolder is missing (0252)",
+    ),
+    Entry(
+        "<cache>/reports/<project key>/<date>-tokens-<run id>.md",
+        "scripts/audit_report.py:_write_report",
+        "you run token_economy.py report --save and no docs folder exists (0252)",
     ),
     Entry(
         "<charter_root>/audit/",

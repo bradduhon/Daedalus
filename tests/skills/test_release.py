@@ -37,6 +37,63 @@ def test_release_step_finds_the_merge_commit_and_keeps_the_fallback_question() -
     assert "ask the operator for the merge commit sha on `<base branch>` instead" in text
 
 
+def _skill_log_commands(text: str) -> tuple[str, str]:
+    squash = re.search(r"`(git -C <repo> log origin/<base branch> -E --grep=[^`]+)`", text)
+    merge = re.search(r"`(git -C <repo> log origin/<base branch> --merges[^`]+)`", text)
+    assert squash and merge
+    return squash.group(1), merge.group(1)
+
+
+def test_release_reads_find_exactly_one_merge_commit(tmp_path: Path) -> None:
+    # 0252: run the skill's two git reads, as written, against a real squash and merge history.
+    import json
+    import shlex
+    import subprocess
+    import sys
+
+    from tests.conftest import SCRIPTS_DIR, git
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "Start")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "Mention (#12) in the middle of a subject")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "Other change (#123)")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "Squashed feature (#12)")
+    git(repo, "switch", "-q", "-c", "unit")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "Unit work")
+    tip = git(repo, "rev-parse", "HEAD").stdout.strip()
+    git(repo, "switch", "-q", "main")
+    git(repo, "merge", "-q", "--no-ff", "unit", "-m", "Merge pull request #13 from unit")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    squash_sha = git(repo, "log", "--format=%H", "--grep=Squashed").stdout.strip()
+    merge_sha = git(repo, "rev-parse", "HEAD").stdout.strip()
+    squash_cmd, merge_cmd = _skill_log_commands(_release())
+    for command in (squash_cmd, merge_cmd):
+        payload = {"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": str(repo)}
+        payload["tool_input"] = {"command": command.replace("<repo>", str(repo))}
+        payload["session_id"] = "sess-main"
+        hook = subprocess.run(
+            [sys.executable, str(SCRIPTS_DIR / "enforce_agent_jail.py")],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=repo,
+        )
+        assert hook.returncode == 0 and "daedalus-jail" not in hook.stderr, hook.stderr
+
+    def run(command: str) -> list[str]:
+        argv = shlex.split(command.replace("<repo>", str(repo)).replace("<base branch>", "main"))
+        out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout
+        return out.split("\n")[:-1]
+
+    assert run(squash_cmd.replace("<pr number>", "12")) == [squash_sha]
+    assert run(squash_cmd.replace("<pr number>", "13")) == []
+    merges = [line.split() for line in run(merge_cmd)]
+    assert [m[0] for m in merges if len(m) > 2 and m[2] == tip] == [merge_sha]
+
+
 def test_push_train_proof_names_the_exemption_path() -> None:
     # issue 62, 0133: --approved passes on an approved verdict or every finding exempted.
     step = _release().split("\n9. ", 1)[1].split("\n10. ", 1)[0]

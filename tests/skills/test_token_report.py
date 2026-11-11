@@ -11,4 +11,4 @@ def test_token_report_saves_without_asking() -> None:
     assert "report --run <id> --save" in text
     assert "Save this run's token table" not in text
     assert "(yes/no)" not in text and "offer to create it" not in text
-    assert "no docs folder is set" in text
+    assert "in the plugin data folder" in text and "`history` reads that folder" in text

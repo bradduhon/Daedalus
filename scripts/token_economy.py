@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import unit_binding, writer_mode  # noqa: E402
+from lib import storage, unit_binding, writer_mode  # noqa: E402
 from lib.agent_models import MODELS  # noqa: E402
 from lib.audit import (  # noqa: E402
     SESSION_ID,
@@ -829,17 +829,37 @@ def _charter(root: Path) -> Path | None:
     return (root / config.charter_root).resolve() if config.charter_root else None
 
 
-def saved_path(root: Path, run_id: str) -> Path | None:
-    # 0252: a save lands only in a folder the settings name; none named or present means no save.
+def saved_dir(root: Path, create: bool) -> Path | None:
+    # 0252: the named docs folder's reports subfolder, else the plugin data folder; no scratch.
     charter = _charter(root)
-    if charter is None or not charter.is_dir():
+    if charter is not None and charter.is_dir():
+        folder = charter / "reports"
+        if create:
+            folder.mkdir(exist_ok=True)
+        return folder
+    try:
+        return (
+            storage.make_data_dir("reports", root) if create else storage.data_dir("reports", root)
+        )
+    except (RuntimeError, OSError) as exc:
+        if create:
+            raise TokenError(
+                f"no folder to save the table in ({exc}). "
+                "Next: run python3 <plugin>/scripts/daedalus_doctor.py and read its data folder line."
+            ) from exc
         return None
-    return charter / "reports" / f"{date.today().isoformat()}-tokens-{run_id}.md"
+
+
+def saved_path(root: Path, run_id: str) -> Path:
+    folder = saved_dir(root, True)
+    assert folder is not None
+    return folder / f"{date.today().isoformat()}-tokens-{run_id}.md"
 
 
 def saved_files(root: Path) -> list[Path]:
-    charter = _charter(root)
-    files = sorted((charter / "reports").glob("*-tokens-*.md")) if charter else []
+    # History: the folder saves go to now, plus tables an older version saved in the scratch place.
+    folder = saved_dir(root, False)
+    files = sorted(folder.glob("*-tokens-*.md")) if folder is not None else []
     return files + sorted((root / "docs" / ".tmp" / "daedalus").glob("*/tokens.md"))
 
 
@@ -914,16 +934,9 @@ def main(argv: list[str]) -> int:
         runs, source = report_runs(root, args.session, args.run)
         budget = _budget(root)
         text = render(runs, source, budget)
-        out = args.out
-        if args.save:
-            target = saved_path(root, args.run)
-            if target is not None:
-                target.parent.mkdir(exist_ok=True)  # 0252: one subfolder.
-                out = str(target)
+        out = str(saved_path(root, args.run)) if args.save else args.out
         if out is None:
             sys.stdout.write(text)
-            if args.save:
-                print("not saved: no docs folder is set (local_docs_folder in config.json).")
         else:
             print(f"wrote {_write(text, out, args.cwd)}")
         # 0209: the gate fails on any unit over budget; a budget left off never fails it.
