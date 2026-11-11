@@ -1724,15 +1724,9 @@ def _off_row(word: str, row: str, key: str) -> str:
             f"the option {word} on the {row} row takes a next word that is not an option, {tail}. "
             f"Next: give it a value that does not start with -, or drop it, and {once}."
         )
-    # 258: a script's own entry in package.json is never read, so `<launcher> <script>` admits.
-    body = (
-        "; an option the script needs belongs in its own entry in the project's package.json"
-        if row.endswith(" script")
-        else ""
-    )
     return (
         f"the option {word} is not on the {row} row{why}, {tail}. Next: drop the option and "
-        f"{once}{body}, or yield the command to the operator if the work needs that option."
+        f"{once}, or yield the command to the operator if the work needs that option."
     )
 
 
