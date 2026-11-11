@@ -83,9 +83,9 @@ def test_a_folder_others_can_write_is_refused(tmp_root: Path, repo: Path) -> Non
 def test_a_folder_owned_by_another_user_is_refused(
     tmp_root: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    storage.make_tmp_dir("self-assessment", repo)
-    real = os.geteuid
-    monkeypatch.setattr(os, "geteuid", lambda: real() + 1)
+    real = storage._uid()
+    monkeypatch.setattr(storage, "_uid", lambda: real + 1)
+    storage.tmp_dir("self-assessment", repo).mkdir(parents=True, mode=0o700)
     assert "not owned" in str(storage.check_tmp_dirs("self-assessment", repo))
 
 

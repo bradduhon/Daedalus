@@ -297,6 +297,16 @@ FILES: tuple[Entry, ...] = (
         "each Daedalus agent dispatch during a run, and each agent's first call",
     ),
     Entry(
+        "/tmp/.daedalus/<uid>/<feature>/<project key>/",
+        "scripts/lib/storage.py:make_tmp_dir",
+        "a feature's first temporary write for a project; nothing in the plugin removes the folder",
+    ),
+    Entry(
+        "<cache>/<feature>/<project key>/",
+        "scripts/lib/storage.py:make_data_dir",
+        "a feature's first persistent write; the plugin's uninstall removes the data folder",
+    ),
+    Entry(
         f"{_TRAINS}/<train-id>.bindings.lock",
         "scripts/lib/train_state.py:locked_file",
         "each unit binding change",

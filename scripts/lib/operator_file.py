@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0235: the operator file, ~/.claude/daedalus/operator.json, and its per-repository override;
-# 0234, 0237: defined and read here only, no check or hook acts on it yet.
+# 0234, 0237: defined and read here; apart from self_assessment, no check or hook acts on it yet.
 from __future__ import annotations
 
 import json

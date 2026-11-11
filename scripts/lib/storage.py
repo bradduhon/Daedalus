@@ -16,6 +16,11 @@ TMP_ROOT = Path("/tmp/.daedalus")
 FEATURES: tuple[str, ...] = ("self-assessment",)
 
 
+def _uid() -> int:
+    # One user id source for the folder name and the ownership check.
+    return os.geteuid()
+
+
 def _feature(feature: str) -> str:
     if feature not in FEATURES:
         raise ValueError(f"feature {feature!r} is not one of {', '.join(FEATURES)}")
@@ -31,7 +36,7 @@ def project_key(path: str | Path) -> str:
 
 def _chain(feature: str, repo_root: str | Path) -> list[Path]:
     # The uid folder and each folder below it, top first.
-    uid_dir = TMP_ROOT / str(os.getuid())
+    uid_dir = TMP_ROOT / str(_uid())
     feature_dir = uid_dir / _feature(feature)
     return [uid_dir, feature_dir, feature_dir / project_key(repo_root)]
 
@@ -44,7 +49,7 @@ def check_tmp_dirs(feature: str, repo_root: str | Path) -> str | None:
     # A1: refuse a link on the path, or a folder not ours or open to group or others.
     if TMP_ROOT.is_symlink():
         return f"{TMP_ROOT} is a symlink"
-    uid = os.geteuid()
+    uid = _uid()
     for folder in _chain(feature, repo_root):
         try:
             info = folder.lstat()
