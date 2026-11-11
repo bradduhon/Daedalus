@@ -310,7 +310,8 @@ def test_brief_check_command(
     assert out == [
         f"brief: Context carries the issue number {ISSUE}. {ID_HELP}",
         "Next: fix each named line, giving an id's label or a short excerpt of what it is about "
-        "in its place, keep the standard level, then run brief-check again.",
+        "in its place and naming only a site on this machine, keep the standard level, then run "
+        "brief-check again.",
     ]
     outside = repo / "x.md"
     outside.write_text(GOOD, encoding="utf-8")
@@ -463,7 +464,7 @@ def test_ask_check_command_refuses_ids_at_every_level(
     assert capsys.readouterr().out.splitlines() == [
         *ASK_BAD_LINES,
         "Next: fix each named line, giving an id's label or a short excerpt of what it is about "
-        "in its place, then run ask-check again.",
+        "in its place and naming only a site on this machine, then run ask-check again.",
     ]
     missing = folder / "ask-3.md"
     assert daedalus_train.main(["ask-check", "--repo", str(repo), "--file", str(missing)]) == 1

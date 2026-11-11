@@ -269,7 +269,8 @@ def _brief_check(repo: Path, brief: Path) -> Outcome:
     # 0255: the level stays in the line; it changes no refusal.
     lines.append(
         "Next: fix each named line, giving an id's label or a short excerpt of what it is about "
-        f"in its place, keep the {level} level, then run brief-check again."
+        "in its place and naming only a site on this machine, keep the "
+        f"{level} level, then run brief-check again."
     )
     return Outcome(EXIT_STOP, lines)
 
@@ -284,7 +285,7 @@ def _ask_check(question: Path, brief: Path | None) -> Outcome:
     lines = [f"question: {problem}" for problem in problems]
     lines.append(
         "Next: fix each named line, giving an id's label or a short excerpt of what it is about "
-        "in its place, then run ask-check again."
+        "in its place and naming only a site on this machine, then run ask-check again."
     )
     return Outcome(EXIT_STOP, lines)
 

@@ -349,7 +349,7 @@ Outside a train, Daedalus leaves your session and your repository alone, with th
 
 Daedalus's hook approves four of the plugin's own calls by itself, inside a train and outside one, so Claude Code does not ask you about them. Three are the calls to the findings script that start, save and show Self-Assessment findings. The fourth is the write of one hand-over file under `/tmp/.daedalus/`. That write is approved only while Self-Assessment mode is on. Nothing is approved when any Daedalus check refuses or warns about the call. A call that is not exactly one of those four shapes is handled as before. Your own ask and deny rules in Claude Code still win over this approval.
 
-Outside a train, Daedalus writes no files and keeps no audit log in any repository, even one where a train ran before. The one exception is `/daedalus:setup`. It writes the settings files you agree to and changes the settings you answer. It also saves each question under `docs/.tmp/daedalus/` and checks it for ids before you see it.
+Outside a train, Daedalus writes no files and keeps no audit log in any repository, even one where a train ran before. The one exception is `/daedalus:setup`. It writes the settings files you agree to and changes the settings you answer. It also saves each question under `docs/.tmp/daedalus/` and checks it before you see it. The check refuses an id, and a web address that is not a site on your own machine.
 
 Inside a train, the jail judges every tool call and the audit log records each step. A train works in three folders of your repository:
 

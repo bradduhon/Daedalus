@@ -523,20 +523,40 @@ def test_refuted_jail_forms_become_corpus_rows_in_every_routing_place() -> None:
     )
 
 
-def test_the_brief_check_no_longer_reads_urls() -> None:
-    # 0254: the slash refusal is gone; the manifest alone limits local_testing.url to the host.
-    from lib.briefs import brief_problems
+def test_a_local_url_is_the_one_web_address_a_decision_brief_may_carry() -> None:
+    # 0164: the dev server question names the site; any other web address is still refused.
+    from lib.briefs import SITE_HELP, ask_problems, brief_problems
 
     good = "Question: Open http://localhost:5173 in your browser. Does the scene load?"
     assert brief_problems(good) == []
+    assert brief_problems("Question: Open http://localhost:5173/x?y#z now?") == []
+    assert brief_problems("Question: Open http://localhost:5173/play?v=1.2 now?") == []
+    assert brief_problems("Question: Open https://127.0.0.1:8080/a/b now?") == []
+    assert brief_problems("Question: Open `http://localhost:5173` now?") == []
+    # 0254: a path with no :// is the project's own name and passes.
+    assert brief_problems("Question: Should src/map/loader.py and a/b change?") == []
+    # L3: the path or query never carries another url, a host and path, or a user part.
     for url in (
-        "http://localhost:5173/x?y#z",
-        "http://localhost:5173/play?v=1.2",
         "http://example.com",
         "file:///tmp/x",
+        "http://localhost.evil.com/a",
         "http://localhost:5173/?u=https://evil.com",
+        "http://localhost:5173/a@evil.com",
+        "http://localhost:5173?u=evil.com/x",
+        "`https://example.com/x`",
     ):
-        assert brief_problems(f"Question: Open {url} now?") == [], url
+        bare = url.strip("`")
+        want = f"Question carries the web address {bare}. {SITE_HELP}"
+        assert brief_problems(f"Question: Open {url} now?") == [want], url
+        context = f"Question: Ready?\nContext: The site is at {url} today."
+        assert brief_problems(context) == [want.replace("Question", "Context", 1)], url
+        label = f"Question: Ready?\nOptions:\n- Open {url}: opens it."
+        assert brief_problems(label) == [want.replace("Question", "Option label", 1)], url
+        ask = f"Anchor: The site is {url}.\nQuestion: Ready\nChoices:\nA. Open it: at {url}."
+        assert ask_problems(ask) == [
+            want.replace("Question", "Anchor", 1),
+            want.replace("Question", "Choice A", 1),
+        ], url
 
 
 def test_the_verifier_prints_its_claims_in_one_call_and_runs_in_the_foreground() -> None:

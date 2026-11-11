@@ -4,6 +4,7 @@
 # brief_file_problems reads one brief under the scratch root and names docs.reading_level.
 # 0199, 0251: ask_problems reads one question's reader text and any lettered choice lines.
 # 0254, 0255: both refuse an id at every level; the level changes no refusal and is only printed.
+# 0164: both refuse a web address other than the local site, at every level.
 # The project's own names (backticks, underscores, slashes, agent names) and sentence length pass.
 from __future__ import annotations
 
@@ -39,11 +40,20 @@ _SECURITY = re.compile(
 MAX_BRIEF_BYTES = 64 * 1024
 SCRATCH = Path("docs") / ".tmp" / "daedalus"
 _LABEL = re.compile(r"[A-Z][A-Za-z ]*:(\s|$)")
+_LABEL_END = re.compile(r":(?:\s|$)")
 _RULING_ID = re.compile(r"[0-9]{4}-[A-Z]{3}")
 _ISSUE = re.compile(r"#[0-9]+")
+# 0164: an allow list; a word holding :// must be the local site. Its rest holds no :// or @,
+# and no query value shaped like a host and path, such as ?u=evil.com/x.
+_LOCAL_URL = re.compile(
+    r"https?://(?:localhost|127\.0\.0\.1)(?::[0-9]{1,5})?"
+    r"(?:[/?#](?:(?!://|=[^\s=&#/]*\.[^\s=&#/]*/)[^\s`@])*)?"
+)
 _EDGE = ".,;:!?\"'()[]"
 # 0255: the plain-words sentence an id refusal carries.
 ID_HELP = "Give its label or a short excerpt of what it is about instead."
+# 0164: the plain-words sentence a web address refusal carries.
+SITE_HELP = "A question may only ask the operator to open a site on this machine."
 # 0251: the reader text of one brainstorm or setup question, then its lettered Choices lines.
 ASK_FIELDS = (
     "What I take you to want:",
@@ -84,8 +94,9 @@ def _fields(text: str) -> list[tuple[str, str]]:
         elif line.startswith(OPTIONS):
             mode = "options"
         elif mode in ("options", "option", "ref") and line.startswith("- "):
-            # 0153: ids may trail in the description after the label's first colon.
-            out.append(("Option label", [line[2:].split(":", 1)[0].strip()]))
+            # 0153: ids may trail in the description; 0164: a label ends at a colon and a space,
+            # so a web address in the label is read whole.
+            out.append(("Option label", [_LABEL_END.split(line[2:], 1)[0].strip()]))
             mode = "option"
         elif mode == "option" and line.startswith(REF):
             mode = "ref"
@@ -102,11 +113,15 @@ def _fields(text: str) -> list[tuple[str, str]]:
 
 def _value_problems(where: str, value: str) -> list[str]:
     # 0255: no ruling id or issue number in text the operator reads, at any level.
+    # 0164: a web address is the local site or refused; a path with no :// passes.
     if not value:
         return [f"{where} is empty"]
     found: list[str] = []
     for word in value.split():
         bare = word.strip(_EDGE)
+        address = bare.strip("`" + _EDGE)
+        if "://" in address and not _LOCAL_URL.fullmatch(address):
+            found.append(f"{where} carries the web address {address}. {SITE_HELP}")
         if _RULING_ID.search(bare):
             found.append(f"{where} carries the ruling id {bare}. {ID_HELP}")
         if _ISSUE.search(bare):
