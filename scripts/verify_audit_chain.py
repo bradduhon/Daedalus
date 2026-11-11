@@ -13,6 +13,7 @@ from lib.audit import AuditLockError, read_log  # noqa: E402
 from lib.audit_proof import (  # noqa: E402
     NOT_UTF8,
     ProofError,
+    charter_base,
     hooks_live,
     newest_log,
     push_proof,
@@ -71,7 +72,9 @@ def _mode(argv: list[str]) -> int:
                 print(f"stale agents: {', '.join(stale)}")
         else:
             # 62, 0133: prints which path passed, the approved verdict or every finding exempted.
-            print(push_proof(repo, args.approved))
+            proof = push_proof(repo, args.approved)
+            charter_base(repo, args.approved)
+            print(proof)
     except ProofError as exc:
         print(exc)
         return 1

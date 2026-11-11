@@ -821,3 +821,54 @@ def push_proof(repo: Path, train_id: str) -> str:
             f"OK approved: every finding exempted, train {train_id}, round {verdict['round']}, "
             f"integration tip {current[:12]}{_docs_note(repo, train_id, state, current)}"
         )
+
+
+CHARTER_RERUN = "then run `/daedalus:run push` again."
+
+
+def charter_base_problem(charter_root: str | None, base: str | None) -> str | None:
+    # 221: the Charter pull request's --base must be a branch on the Charter's origin.
+    from lib.jail import _BRANCH_NAME
+
+    if not charter_root or not base:
+        return None
+    if not _BRANCH_NAME.fullmatch(base):
+        return (
+            f"NOT READY: the recorded Charter base {base!r} is not a plain branch name. Next: "
+            "switch the Charter to a branch named with letters, digits, dots, slashes, "
+            f"underscores and hyphens, then start the work again with `/daedalus:run`."
+        )
+    ref = f"refs/heads/{base}"
+    try:
+        found = git.run(["ls-remote", "--exit-code", "--heads", "origin", ref], charter_root, 60)
+    except (OSError, git.GitTimeout):
+        found = None
+    if found is not None and found.returncode in (0, 2):
+        # 221: ls-remote matches a pattern by its tail, so only the exact ref counts.
+        refs = {line.partition("\t")[2] for line in found.stdout.splitlines()}
+        if ref in refs:
+            return None
+        return (
+            f"NOT READY: the Charter base branch {base} is not on the Charter's remote origin, "
+            "so the Charter pull request has no base to open against. Next: push it from "
+            f"your own shell with `git -C {charter_root} push -u origin {base}`, or open the "
+            f"Charter pull request against the Charter's default branch, {CHARTER_RERUN}"
+        )
+    code = "did not finish" if found is None else f"exit {found.returncode}"
+    return (
+        f"NOT READY: the Charter's remote origin could not be reached from {charter_root} "
+        f"(git ls-remote {code}), so the Charter base branch {base} is unchecked. Next: check "
+        f"the Charter's origin remote, network and credentials from your own shell, "
+        f"{CHARTER_RERUN}"
+    )
+
+
+def charter_base(repo: Path, train_id: str) -> None:
+    # 221: runs after push_proof, before any push; no Charter recorded skips it.
+    state = _state(repo, train_id)
+    root, base = state.get("charter_root"), state.get("charter_base")
+    problem = charter_base_problem(
+        root if isinstance(root, str) else None, base if isinstance(base, str) else None
+    )
+    if problem is not None:
+        raise ProofError(problem)
