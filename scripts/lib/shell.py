@@ -171,7 +171,9 @@ OPTION_TABLE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         "hivc",
         "eprC",
         "test check interactive inspect inspect-brk watch" + _HELP,
-        "eval print require import loader experimental-loader conditions input-type title env-file",
+        "eval print require import loader experimental-loader conditions input-type title env-file"
+        # 258: node --test's name filter, read before its row "node --test" judges it.
+        " test-name-pattern",
     ),
     "php": _row("aCFhHilmnqsvwe", "rBREcdzftS", _HELP),
     # pin A1 -> A3: shell variable builtins and git commit, stripped before a pathspec scan.
@@ -311,11 +313,21 @@ OPTION_TABLE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "cargo": _row("qv", "Z", "quiet verbose offline frozen locked" + _HELP, "color"),
     "pnpm": _row("rs", "CF", "recursive silent" + _HELP, "dir filter"),
     "yarn": _row("", "", "silent" + _HELP, "cwd"),
-    "bun": _row("", "", "watch hot silent" + _HELP, "cwd"),
+    "bun": _row("", "", "silent" + _HELP, "cwd"),
     "npm": _row("", "w", "silent" + _HELP, "prefix workspace"),
     "vitest": _row("", ""),
     "vite": _row("", ""),
     "tsc": (frozenset({"--noEmit", "--pretty", "--incremental"}), frozenset({"-p", "--project"})),
+    # 258: a JS runner verb's row, read by runner_options; a script or other bin has no row.
+    "vite build": _row("", ""),
+    "vitest run": _row("", "t", "coverage", "testNamePattern"),
+    "node --test": _row("", "", "", "test-name-pattern"),
+    "bun test": _row("", "t", "coverage", "test-name-pattern"),
+    "npm exec": _row("", "", "no-install"),
+    **{f"{pm} {verb}": _row("", "") for pm in ("pnpm", "yarn") for verb in ("exec", "dlx", "run")},
+    **{f"npm {verb}": _row("", "") for verb in ("x", "run", "run-script", "rum", "urn")},
+    **{f"bun {verb}": _row("", "") for verb in ("exec", "x", "run")},
+    "pnpm run-script": _row("", ""),
     # 228 S2 ruling: the main session's builtins; [ takes no options, its words are operands.
     "unset": _row("fvn", ""),
     "[": (frozenset(), frozenset()),
@@ -1493,8 +1505,25 @@ _JS_TOOLS = frozenset({"vite", "vitest", "tsc", "node"})
 # 0164: package managers that run a project script or a bin, and their exec verbs.
 JS_LAUNCHERS = frozenset({"pnpm", "npm", "npx", "yarn", "bun"})
 _JS_EXEC = frozenset({"exec", "x", "dlx"})
-# 0164: bun's eval options and the subcommands that are never a file to run.
-_BUN_EVAL = frozenset({"-e", "--eval", "-p", "--print"})
+# 258: the JS runners whose every option word meets an OPTION_TABLE row (0221).
+JS_RUNNERS = JS_LAUNCHERS | _JS_TOOLS
+# 258: per launcher, the verbs whose next word is a bin, and those whose next word is a script.
+_JS_EXEC_VERBS: dict[str, frozenset[str]] = {
+    "pnpm": frozenset({"exec", "dlx"}),
+    "yarn": frozenset({"exec", "dlx"}),
+    "npm": frozenset({"exec", "x"}),
+    "bun": frozenset({"exec", "x"}),
+}
+_JS_RUN_VERBS: dict[str, frozenset[str]] = {
+    "pnpm": frozenset({"run", "run-script"}),
+    "yarn": frozenset({"run"}),
+    "npm": NPM_RUN,
+    "bun": frozenset({"run"}),
+}
+# 258: a JS tool admitted only with this second word; its row is "<tool> <word>".
+_JS_TOOL_VERB = {"vite": "build", "vitest": "run", "node": "--test"}
+_NO_ROW: tuple[frozenset[str], frozenset[str]] = (frozenset(), frozenset())
+# 0164: the subcommands bun never reads as a file to run.
 _BUN_COMMANDS = frozenset(
     {"run", "test", "x", "exec", "install", "i", "add", "a", "remove", "rm", "update", "build"}
     | {"init", "create", "pm", "link", "unlink", "upgrade", "outdated", "publish", "patch"}
@@ -1528,20 +1557,6 @@ R_TERRAFORM_OPERATOR = (
     "with the operator (0158, 0164). Next: send one of those three forms, or yield the command "
     "to the operator."
 )
-R_WATCH = (
-    "a watch option keeps the command running and never exits (0164). "
-    "Next: drop the watch option and run the command once, under the kernel wrapper."
-)
-
-
-def _watch(arg: str) -> bool:
-    # 0164: -w and every --watch spelling, with a value or a suffix (--watch=true, --watch-path).
-    return arg == "-w" or arg.startswith("--watch")
-
-
-def _tsc_option(arg: str) -> str:
-    # 0164: tsc reads -watch, --watch and --Watch alike; the bare lowercase name, or "".
-    return arg.lstrip("-").lower() if arg.startswith("-") else ""
 
 
 def _first_positional(args: list[str], valued: frozenset[str] = frozenset()) -> int | None:
@@ -1558,10 +1573,8 @@ def _first_positional(args: list[str], valued: frozenset[str] = frozenset()) -> 
 
 
 def bun_inline(tokens: list[str]) -> bool:
-    # 0164: bun is a runtime too; -e, -p, repl and a file operand run code like node -e.
+    # 0164: bun is a runtime too; repl and a file operand run code (258: -e is off bun's row).
     args = tokens[1:]
-    if any(arg in _BUN_EVAL or arg.startswith(("--eval=", "--print=")) for arg in args):
-        return True
     first = _first_positional(args, _JS_VALUED)
     word = args[first] if first is not None else ""
     return word == "repl" or (word not in _BUN_COMMANDS and ("/" in word or "." in word))
@@ -1670,32 +1683,20 @@ def runner_refusal(tokens: list[str]) -> str | None:
         return None
     name, args = _base(inner[0]), inner[1:]
     if name in JS_LAUNCHERS:
-        # 0164: a dev script anywhere, -- included; a tool it runs; a watch flag after the verb.
+        # 0164: a dev script anywhere, -- included; a tool it runs. 258: runner_options reads flags.
         if name != "npx" and DEV_SCRIPTS & set(args):
             return R_DEV_SERVER
         tool = next((i for i, arg in enumerate(args) if _base(arg) in _JS_TOOLS), None)
-        refused = None if tool is None else runner_refusal(args[tool:])
-        first = _first_positional(args, _JS_VALUED)
-        # 0164: bun's own --watch and --hot sit before its verb; yarn, pnpm and npm pass it on.
-        flags = args if name == "bun" else args[first + 1 :] if first is not None else []
-        if refused is None and name != "npx":
-            refused = R_WATCH if any(_watch(a) or a == "--hot" for a in flags) else None
-        return refused
+        return None if tool is None else runner_refusal(args[tool:])
     head = args[: args.index("--")] if "--" in args else args
-    watch = any(_watch(arg) for arg in head)
-    if name == "node":
-        return R_WATCH if watch else None
     if name == "vite":
-        return None if head[:1] == ["build"] and not watch else R_DEV_SERVER
+        return None if head[:1] == ["build"] else R_DEV_SERVER
     if name == "vitest":
-        return None if head[:1] == ["run"] and not watch else R_VITEST_WATCH
+        return None if head[:1] == ["run"] else R_VITEST_WATCH
     if name == "tsc":
-        options = [_tsc_option(arg) for arg in head]
         # 0164: the last --noEmit decides; a following false turns emitting back on.
-        last = len(options) - 1 - options[::-1].index("noemit") if "noemit" in options else -1
-        emit = last < 0 or head[last + 1 :][:1] == ["false"]
-        watching = any(opt == "w" or opt.startswith("watch") for opt in options)
-        return R_TSC if emit or watching else None
+        last = len(head) - 1 - head[::-1].index("--noEmit") if "--noEmit" in head else -1
+        return R_TSC if last < 0 or head[last + 1 :][:1] == ["false"] else None
     if name == "terraform":
         if terraform_check(args) is not None:
             return None
@@ -1706,6 +1707,131 @@ def runner_refusal(tokens: list[str]) -> str | None:
             else (R_TERRAFORM_OPERATOR)
         )
     return None
+
+
+Miss = tuple[int, str] | None
+
+
+def _off_row(word: str, row: str, key: str) -> str:
+    # 258: names the option and the row it is off, then the runner-row class phrase.
+    why = "" if key in OPTION_TABLE else ", which takes no option since its tool is unknown"
+    tail = "so it is not a test-runner form (258, 0164)"
+    once = "run the command once, under the kernel wrapper"
+    plain, valued = OPTION_TABLE.get(key, _NO_ROW)
+    short = not word.startswith("--") and all(f"-{c}" in plain for c in word[1:-1])
+    if word in valued or (short and f"-{word[-1:]}" in valued):
+        return (
+            f"the option {word} on the {row} row takes a next word that is not an option, {tail}. "
+            f"Next: give it a value that does not start with -, or drop it, and {once}."
+        )
+    return (
+        f"the option {word} is not on the {row} row{why}, {tail}. Next: drop the option and "
+        f"{once}, or yield the command to the operator if the work needs that option."
+    )
+
+
+def runner_options(tokens: list[str]) -> Miss:
+    # 258, 0221: the index of the first JS runner option word off its verb's row, with the reason.
+    if not tokens or command_family(tokens[0]) not in JS_RUNNERS:
+        return None
+    return _js_tool(tokens, 0)
+
+
+def _js_tool(toks: list[str], at: int) -> Miss:
+    # 258: a launcher by its verb, a JS tool by its one verb, tsc by its row, any other bin by none.
+    name = command_family(toks[at])
+    if name in JS_LAUNCHERS:
+        return _js_launcher(toks, at, name)
+    if name == "tsc":
+        return _js_options(toks, at + 1, "tsc", "tsc")
+    verb = _JS_TOOL_VERB.get(name)
+    if verb is None:
+        return _js_options(toks, at + 1, "", f"{toks[at]} bin")
+    if toks[at + 1 : at + 2] != [verb]:
+        return (
+            at,
+            f"{name} runs only as `{name} {verb}`, so it is not a test-runner form (258, 0164). "
+            f"Next: run `{name} {verb}`, under the kernel wrapper.",
+        )
+    return _js_options(toks, at + 2, f"{name} {verb}", f"{name} {verb}")
+
+
+def _js_launcher(toks: list[str], at: int, name: str) -> Miss:
+    # 258: the launcher's options, then its verb names the row every later word meets.
+    i, miss = _js_lead(toks, at + 1, name)
+    if miss is not None or i >= len(toks):
+        return miss
+    verb = toks[i]
+    if name == "npx":
+        return _js_tool(toks, i)
+    if name == "bun" and verb == "test":
+        return _js_options(toks, i + 1, "bun test", "bun test")
+    exec_verb = verb in _JS_EXEC_VERBS[name]
+    if exec_verb or verb in _JS_RUN_VERBS[name]:
+        j, miss = _js_lead(toks, i + 1, f"{name} {verb}")
+        if miss is not None or j >= len(toks):
+            return miss
+        if exec_verb or command_family(toks[j]) in JS_RUNNERS:
+            return _js_tool(toks, j)
+        return _js_script(toks, j, f"{name} {verb} {toks[j]}")
+    if name != "npm" and command_family(verb) in JS_RUNNERS:
+        return _js_tool(toks, i)
+    return _js_script(toks, i, f"{name} {verb}")
+
+
+def _js_lead(toks: list[str], i: int, key: str) -> tuple[int, Miss]:
+    # 258: options on row key up to the first other word; a -- there ends them and is skipped.
+    while i < len(toks) and toks[i].startswith("-") and toks[i] != "-":
+        if toks[i] == "--":
+            return i + 1, None
+        after = _js_option(toks, i, key)
+        if after is None:
+            return i, (i, _off_row(toks[i], key, key))
+        i = after
+    return i, None
+
+
+def _js_script(toks: list[str], at: int, label: str) -> Miss:
+    # 258: a project script's tool is unknown from the command, so no option word reaches it.
+    return _js_options(toks, at + 1, "", f"{label} script")
+
+
+def _js_options(toks: list[str], i: int, key: str, label: str) -> Miss:
+    # 258: every option word from i meets row key; a -- ends nothing, so later words meet it too.
+    while i < len(toks):
+        word = toks[i]
+        if word == "--" or word == "-" or not word.startswith("-"):
+            i += 1
+            continue
+        after = _js_option(toks, i, key)
+        if after is None:
+            return i, _off_row(word, label, key)
+        i = after
+    return None
+
+
+def _js_option(toks: list[str], i: int, key: str) -> int | None:
+    # 258: the index after one option and its value on row key, case-sensitive, never a prefix;
+    # a cluster's letters are all rows, and only its last letter may take the next word.
+    plain, valued = OPTION_TABLE.get(key, _NO_ROW)
+    word = toks[i]
+    if word.startswith("--"):
+        name, eq, _ = word.partition("=")
+        if word in plain or (eq and name in valued):
+            return i + 1
+        return _js_value(toks, i) if word in valued else None
+    letters = [f"-{c}" for c in word[1:]]
+    if not all(letter in plain for letter in letters[:-1]):
+        return None
+    if letters[-1] in plain:
+        return i + 1
+    return _js_value(toks, i) if letters[-1] in valued else None
+
+
+def _js_value(toks: list[str], i: int) -> int | None:
+    # 258: a valued option takes the next word, never one a JS parser reads as an option.
+    value = toks[i + 1] if i + 1 < len(toks) else "-"
+    return None if value.startswith("-") else i + 2
 
 
 def _exempt_indices(tokens: list[str]) -> set[int]:

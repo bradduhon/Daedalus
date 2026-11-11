@@ -490,18 +490,9 @@ def test_node_is_the_one_runner_that_is_a_worker_wrapper() -> None:
         ("pnpm exec vitest", shell.R_VITEST_WATCH),
         ("vitest bench", shell.R_VITEST_WATCH),
         ("tsc -b", shell.R_TSC),
-        ("pnpm exec tsc --noEmit -w", shell.R_TSC),
         ("terraform -chdir=/x apply", shell.R_TERRAFORM_MUTATE),
         ("terraform state list", shell.R_TERRAFORM_MUTATE),
-        ("node --test --watch", shell.R_WATCH),
-        ("node --test --watch-path=.", shell.R_WATCH),
-        ("vitest run --watch=true", shell.R_VITEST_WATCH),
-        ("tsc --noEmit -watch", shell.R_TSC),
-        ("tsc --noEmit --Watch", shell.R_TSC),
         ("tsc --noEmit false", shell.R_TSC),
-        ("pnpm test --watch", shell.R_WATCH),
-        ("pnpm test -- --watch", shell.R_WATCH),
-        ("npm test -- --watch", shell.R_WATCH),
         ("pnpm run -- dev", shell.R_DEV_SERVER),
         ("pnpm -- dev", shell.R_DEV_SERVER),
         ("npm run -- dev", shell.R_DEV_SERVER),
@@ -510,7 +501,7 @@ def test_node_is_the_one_runner_that_is_a_worker_wrapper() -> None:
         ("terraform untaint a.b", shell.R_TERRAFORM_MUTATE),
         ("vite build", None),
         ("vitest run -t name", None),
-        ("tsc -NoEmit", None),
+        ("tsc -NoEmit", shell.R_TSC),
         ("pnpm -w test", None),
         ("terraform -chdir=/x fmt -recursive -check", None),
         ("npm test", None),
@@ -520,6 +511,54 @@ def test_runner_refusal_names_the_server_watch_or_state_change(
     command: str, want: str | None
 ) -> None:
     assert shell.runner_refusal(shlex.split(command)) == want
+
+
+@pytest.mark.parametrize(
+    ("command", "at"),
+    [
+        ("pnpm exec tsc --noEmit -w", 4),
+        ("node --test --watch", 2),
+        ("node --test --watch-path=.", 2),
+        ("vitest run --watch=true", 2),
+        ("tsc --noEmit -watch", 2),
+        ("tsc --noEmit --Watch", 2),
+        ("pnpm test --watch", 2),
+        ("pnpm test -- --watch", 3),
+        ("npm test -- --watch", 3),
+        ("vitest run -t name --coverage -- -- --watch", 7),
+        ("vitest run -tw name", 2),
+        ("vitest run -t --watch", 2),
+        ("vitest run --test", 2),
+        ("pnpm -w test", 1),
+        ("pnpm exec -c vitest run", 2),
+        ("bun --watch run x.ts", 1),
+        ("bun -e 1", 1),
+        ("pnpm exec eslint --fix .", 3),
+        ("pnpm vite", 1),
+    ],
+)
+def test_runner_options_name_the_first_word_off_its_row(command: str, at: int) -> None:
+    # 258: the index of the option off its verb's row, an unknown script or bin taking none.
+    miss = shell.runner_options(shlex.split(command))
+    assert miss is not None and miss[0] == at, (command, miss)
+    assert "is not a test-runner form (258, 0164)" in miss[1], miss
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "vitest run -t name --testNamePattern=x --coverage src/a.test.ts",
+        "pnpm exec vitest run -- -t name",
+        "node --test --test-name-pattern x tests/a.test.js",
+        "bun test -t name --test-name-pattern=x --coverage",
+        "tsc -p tsconfig.json --noEmit --pretty",
+        "npm exec --no-install -- vitest run --coverage",
+        "pnpm exec eslint .",
+        "make test",
+    ],
+)
+def test_runner_options_admit_each_word_on_its_row(command: str) -> None:
+    assert shell.runner_options(shlex.split(command)) is None, command
 
 
 @pytest.mark.parametrize(

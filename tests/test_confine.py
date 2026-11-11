@@ -376,7 +376,8 @@ def test_a_dev_server_is_refused_bare_and_wrapped(command: str) -> None:
 def test_a_watch_mode_is_refused_bare_and_wrapped(command: str) -> None:
     # 0164: bare vitest watches; tsc runs only as --noEmit; any other watch flag never exits.
     tool = next((w for w in command.split() if w in WATCH_REASONS), None)
-    reason = getattr(shell, WATCH_REASONS[tool]) if tool else shell.R_WATCH
+    # 258: a watch option is off its runner's row, refused as a word off the runner rows.
+    reason = getattr(shell, WATCH_REASONS[tool]) if tool else OFF_ROWS
     _refused_bare_and_wrapped(command, reason)
     assert "`vitest run`" in shell.R_VITEST_WATCH and "`tsc --noEmit`" in shell.R_TSC
 
