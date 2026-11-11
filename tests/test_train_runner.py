@@ -1962,17 +1962,85 @@ def test_ledger_records_the_commit_and_refuses_bad_values(repo: Path, plugin: Pa
     sha = "c" * 40
     done = train_runner.record_ledger(repo, sha, "0120-DAE-PLT,0121-DAE-PLT")
     assert done.lines == [f"ledger recorded sha={sha} ids=0120-DAE-PLT,0121-DAE-PLT"]
-    assert _state(repo)["ledger"] == {"sha": sha, "ids": ["0120-DAE-PLT", "0121-DAE-PLT"]}
-    for bad_sha, ids in (
+    ids = ["0120-DAE-PLT", "0121-DAE-PLT"]
+    recorded = {"sha": sha, "ids": ids, "commits": [{"sha": sha, "ids": ids}]}
+    assert _state(repo)["ledger"] == recorded
+    for bad_sha, given in (
         ("C" * 40, "0120-DAE-PLT"),
         ("c" * 39, "0120-DAE-PLT"),
         (sha, ""),
         (sha, "0120-DAE-PLT,0120-DAE-PLT"),
         (sha, "--x"),
     ):
-        refused = train_runner.record_ledger(repo, bad_sha, ids)
-        assert refused.code == 1 and "Next:" in refused.lines[0], (bad_sha, ids)
-    assert _state(repo)["ledger"] == {"sha": sha, "ids": ["0120-DAE-PLT", "0121-DAE-PLT"]}
+        refused = train_runner.record_ledger(repo, bad_sha, given)
+        assert refused.code == 1 and "Next:" in refused.lines[0], (bad_sha, given)
+    assert _state(repo)["ledger"] == recorded
+
+
+def test_ledger_records_each_commit_with_its_own_ids(repo: Path, plugin: Path) -> None:
+    # 124: the issue's two charter-docs commits; the summary prints one line per commit.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    first, second = "246ebfc" + "1" * 33, "40b01d1" + "2" * 33
+    assert train_runner.record_ledger(repo, first, "0160-DAE-PLT,0161-DAE-PLT").code == 0
+    done = train_runner.record_ledger(repo, second, "0162-DAE-PLT")
+    assert done.lines == [f"ledger recorded sha={second} ids=0162-DAE-PLT"]
+    commits = [
+        {"sha": first, "ids": ["0160-DAE-PLT", "0161-DAE-PLT"]},
+        {"sha": second, "ids": ["0162-DAE-PLT"]},
+    ]
+    assert _state(repo)["ledger"] == {"sha": second, "ids": ["0162-DAE-PLT"], "commits": commits}
+    # A rerun on a sha or an id replaces the entry it named, never adds a second one.
+    assert train_runner.record_ledger(repo, second, "0162-DAE-PLT").code == 0
+    fixed = "3" * 40
+    assert train_runner.record_ledger(repo, fixed, "0161-DAE-PLT").code == 0
+    assert _state(repo)["ledger"]["commits"] == [  # type: ignore[index]
+        {"sha": first, "ids": ["0160-DAE-PLT"]},
+        {"sha": second, "ids": ["0162-DAE-PLT"]},
+        {"sha": fixed, "ids": ["0161-DAE-PLT"]},
+    ]
+    _record(repo, tool_input={"command": _summary_cmd(repo)})
+    assert train_runner.summary(repo).code == 0
+    text = _summary_file(repo).read_text(encoding="utf-8")
+    assert (
+        f"\nLedger ids: 0160-DAE-PLT in commit {first}.\n"
+        f"Ledger ids: 0162-DAE-PLT in commit {second}.\n"
+        f"Ledger ids: 0161-DAE-PLT in commit {fixed}.\n"
+    ) in text
+
+
+@pytest.mark.parametrize(
+    ("fields", "owed"),
+    [
+        ({"features": {"ledger": True}}, True),
+        ({"features": None, "ledger_line": "ledger: /r/docs/decisions.md (config, seq=1)"}, True),
+        ({"features": None, "ledger_line": workspace.LEDGER_NONE}, False),
+        ({"features": {"ledger": False}}, False),
+    ],
+)
+def test_approved_verdict_waits_for_an_owed_ledger_record(
+    repo: Path, plugin: Path, fields: dict[str, object], owed: bool
+) -> None:
+    # 214, 0247: a named decisions file owes the ledger record first; a rejection never waits.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    train_state.update(repo, str(_state(repo)["train_id"]), **fields)
+    _marked(repo)
+    tip = _integration(repo)
+    _agent_stop(repo, "auditor", _verdict("REJECTED", tip), "aud-1")
+    rejected = _verdict_call(repo, "rejected", None, tip=tip, findings=_findings(repo, 1, A))
+    assert rejected.lines == ["recorded rejected round=1 findings=1"]
+    _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-1")
+    first = _verdict_call(repo, "approved", None, tip=tip)
+    if not owed:
+        assert first.lines == [f"Verdict approved recorded on tip {tip[:12]} (round 2)"]
+        return
+    assert first.code == 1 and "records no ledger commit yet" in first.lines[0]
+    assert "Next: run daedalus_train.py ledger" in first.lines[0]
+    assert _state(repo)["verdict"]["status"] == "rejected"  # type: ignore[index]
+    assert train_runner.record_ledger(repo, "c" * 40, "0120-DAE-PLT").code == 0
+    again = _verdict_call(repo, "approved", None, tip=tip)
+    assert again.lines == [f"Verdict approved recorded on tip {tip[:12]} (round 2)"]
 
 
 def _summary_cmd(repo: Path) -> str:
@@ -2069,3 +2137,59 @@ def test_summary_cli_and_stop_write_the_summary(repo: Path, plugin: Path) -> Non
     assert stopped.lines[0].startswith(f"summary written train={train}"), stopped.lines
     assert f"\nSession {SESSION}: " in summary.read_text(encoding="utf-8")
     assert train_runner.summary(repo).code == 1
+
+
+def test_a_unit_dispatch_moves_the_progress_phase_off_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 192: a run that skipped the build choice reads build after its first unit dispatch.
+    from tests.test_records_in_one_call import _Clock, _fixture
+
+    monkeypatch.setattr(workspace, "datetime", _Clock)
+    root = _fixture(tmp_path / "repo")
+    assert train_runner.choice(root, "small: plan, build", "medium", "none", phase="plan").code == 0
+    assert train_runner.progress(root).lines[0] == "Phase: plan (weight: small: plan, build)"
+    assert train_runner.dispatch_unit(root, "U2").code == 0
+    assert train_runner.progress(root).lines[0] == "Phase: build (weight: not chosen)"
+    # A later phase's choice holds; a later dispatch never pulls it back to build.
+    assert train_runner.choice(root, "one verifier", "two", "none", phase="verify").code == 0
+    assert train_runner.dispatch_unit(root, "U1").code == 0
+    assert train_runner.progress(root).lines[0] == "Phase: verify (weight: one verifier)"
+
+
+@pytest.mark.parametrize(
+    ("current", "phase", "after"),
+    [
+        (None, "build", "build"),
+        ("plan", "build", "build"),
+        ("build", "verify", "verify"),
+        ("verify", "audit", "audit"),
+        ("audit", "document", "document"),
+        ("verify", "build", "verify"),
+        ("document", "audit", "document"),
+        ("implementation", "build", "implementation"),
+    ],
+)
+def test_each_phase_record_moves_the_progress_phase_forward_only(
+    current: str | None, phase: str, after: str
+) -> None:
+    # 192: a record moves the phase forward, never back, never over an unknown phase name.
+    state: dict[str, object] = {} if current is None else {"phase": current, "weight": "w"}
+    train_runner._reach_phase(state, phase)
+    assert state.get("phase") == after
+    assert state.get("weight") == ("w" if after == current else train_runner.NOT_CHOSEN)
+    defined: dict[str, object] = {"mode": train_runner.MODE_DEFINED, "phase": "plan"}
+    train_runner._reach_phase(defined, "build")
+    assert defined["phase"] == "plan"
+
+
+def test_the_approved_verdict_record_moves_the_phase_to_audit(repo: Path, plugin: Path) -> None:
+    # 192: the audit phase's first record moves a composed run off build.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    train_state.update(repo, str(_state(repo)["train_id"]), mode=None, phase="build")
+    _marked(repo)
+    tip = _integration(repo)
+    _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-1")
+    assert _verdict_call(repo, "approved", None, tip=tip).code == 0
+    assert train_runner.progress(repo).lines[0] == "Phase: audit (weight: not chosen)"

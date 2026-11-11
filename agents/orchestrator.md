@@ -209,6 +209,7 @@ Summary notes. The summary lives at `<repo>/docs/.tmp/daedalus/<train-id>-summar
        Contract: contracts/<name>.md v<packet_version>
          or, when local_docs_folder is set: Contract: <charter name>/specs/<name>.md v<packet_version>
        Ledger ids: <ids> in commit <sha>.
+         one such line per ledger commit, each naming only the ids that commit added
          or, until charter-docs commits: Ledger ids: pending. Codes: --repo <R> --type <T>.
        [POLICY: none declared] or [POLICY: declared, gate not yet shipped]
        Version class: <x.y.z> <class>: <reason>
