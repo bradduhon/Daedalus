@@ -1,9 +1,10 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 0153, 0157 (12.5): a decision brief's operator text is checked at the manifest reading level.
-# brief_problems reads the Question:, Context: and option label text of a brief file's sections;
-# brief_file_problems resolves docs.reading_level and reads one brief under the scratch root.
-# 0199, 0251: ask_file_problems checks one question's reader text and choices, always at plain.
+# 0157 (12.5), 0211: brief_problems reads a decision brief's Question:, Context: and option labels;
+# brief_file_problems reads one brief under the scratch root and names docs.reading_level.
+# 0199, 0251: ask_problems reads one question's reader text and any lettered choice lines.
+# 0254, 0255: both refuse an id at every level; the level changes no refusal and is only printed.
+# The project's own names (backticks, underscores, slashes, agent names) and sentence length pass.
 from __future__ import annotations
 
 import os
@@ -11,11 +12,8 @@ import re
 from pathlib import Path
 
 from lib.manifest import load
-from lib.train_scope import KNOWN_AGENTS
 
-PLAIN, STANDARD, EXPERT = "plain", "standard", "expert"
-# 0153: words per sentence; expert has no limit.
-SENTENCE_LIMITS: dict[str, int | None] = {PLAIN: 15, STANDARD: 22, EXPERT: None}
+STANDARD, EXPERT = "standard", "expert"
 FIELDS = ("Question:", "Context:")
 OPTIONS = "Options:"
 # 0211: one Ref: line directly under an option holds its ids and paths, never checked.
@@ -40,23 +38,12 @@ _SECURITY = re.compile(
 # 0153: a brief file is a few short sections; a larger file is refused, not read.
 MAX_BRIEF_BYTES = 64 * 1024
 SCRATCH = Path("docs") / ".tmp" / "daedalus"
-# 0031: "main" names the main session, not an agent file, and is an everyday word.
-AGENT_NAMES = KNOWN_AGENTS - {"main"}
 _LABEL = re.compile(r"[A-Z][A-Za-z ]*:(\s|$)")
-# 0153: an ellipsis never ends a sentence, so a quoted "..." cannot split one in two.
-_SENTENCE_END = re.compile(r"(?<=[^.][.?!])\s+")
-# 0153: every name-shaped run in a word, so a possessive or a daedalus: prefix still matches.
-_NAME_RUN = re.compile(r"[a-z]+(?:-[a-z]+)*")
-_SNAKE = re.compile(r"[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+")
 _RULING_ID = re.compile(r"[0-9]{4}-[A-Z]{3}")
 _ISSUE = re.compile(r"#[0-9]+")
-# 0164: the local site to open is the one slash word allowed; its rest holds no :// or @,
-# and no query value shaped like a host and path, such as ?u=evil.com/x.
-_LOCAL_URL = re.compile(
-    r"https?://(?:localhost|127\.0\.0\.1)(?::[0-9]{1,5})?"
-    r"(?:[/?#](?:(?!://|=[^\s=&#/]*\.[^\s=&#/]*/)[^\s`@])*)?"
-)
 _EDGE = ".,;:!?\"'()[]"
+# 0255: the plain-words sentence an id refusal carries.
+ID_HELP = "Give its label or a short excerpt of what it is about instead."
 # 0251: the reader text of one brainstorm or setup question, then its lettered Choices lines.
 ASK_FIELDS = (
     "What I take you to want:",
@@ -67,10 +54,6 @@ ASK_FIELDS = (
     "Question:",
 )
 ASK_CHOICES = "Choices:"
-# 0251: a question sentence may run longer than a decision brief's fifteen words.
-ASK_SENTENCE_LIMIT = 18
-# 0251: a choice label is two to five words, written whole.
-LABEL_WORDS = (2, 5)
 # 0200: only these end a field; any other label-shaped line is reader text and is checked.
 ASK_ENDS = ("Rests on:", "[STATUS:")
 _LETTERED = re.compile(r"([A-Z])[.)]\s+(.*)")
@@ -83,12 +66,8 @@ class BriefError(ValueError):
 
 
 def level_of(literacy: str | None) -> str:
-    # 0211: absent reads standard; 0153: a profile: value and an unknown word read plain.
-    if literacy is None:
-        return STANDARD
-    if literacy in (STANDARD, EXPERT):
-        return literacy
-    return PLAIN
+    # 0255: two levels; absent, plain, a profile: value and any other word read standard.
+    return EXPERT if literacy == EXPERT else STANDARD
 
 
 def _fields(text: str) -> list[tuple[str, str]]:
@@ -121,31 +100,22 @@ def _fields(text: str) -> list[tuple[str, str]]:
     return [(where, " ".join(part for part in parts if part)) for where, parts in out]
 
 
-def _token_problems(where: str, text: str, fixed: frozenset[str] = frozenset()) -> list[str]:
-    # 0250: a word of a fixed word or phrase is the operator's, never plugin vocabulary.
+def _value_problems(where: str, value: str) -> list[str]:
+    # 0255: no ruling id or issue number in text the operator reads, at any level.
+    if not value:
+        return [f"{where} is empty"]
     found: list[str] = []
-    if "`" in text:
-        found.append(f"{where} carries a backtick: {text}")
-    for word in text.split():
+    for word in value.split():
         bare = word.strip(_EDGE)
-        if _SNAKE.search(bare):
-            found.append(f"{where} carries the snake_case token {bare}")
-        if "/" in bare and not _LOCAL_URL.fullmatch(bare):
-            found.append(f"{where} carries the word {bare} with a slash")
         if _RULING_ID.search(bare):
-            found.append(f"{where} carries the ruling id {bare}")
+            found.append(f"{where} carries the ruling id {bare}. {ID_HELP}")
         if _ISSUE.search(bare):
-            found.append(f"{where} carries the issue number {bare}")
-        runs = _NAME_RUN.findall(bare.lower())
-        if (AGENT_NAMES - fixed) & {*runs, *(part for run in runs for part in run.split("-"))}:
-            found.append(f"{where} carries the agent name {bare}")
+            found.append(f"{where} carries the issue number {bare}. {ID_HELP}")
     return found
 
 
-def brief_problems(text: str, level: str) -> list[str]:
-    # 0153: one problem line per breach; an empty list means the brief passes at that level.
-    level = level_of(level)
-    limit = SENTENCE_LIMITS[level]
+def brief_problems(text: str) -> list[str]:
+    # 0153: one problem line per breach; an empty list means the brief passes.
     fields = _fields(text)
     problems: list[str] = []
     if not any(where == "Question" for where, _ in fields):
@@ -154,7 +124,7 @@ def brief_problems(text: str, level: str) -> list[str]:
         if where == "Ref":
             problems.append(f"Option label {value} has a second Ref: line; keep one per option")
             continue
-        problems.extend(_value_problems(where, value, level, limit))
+        problems.extend(_value_problems(where, value))
     problems.extend(_safety_problems(text))
     return problems
 
@@ -192,24 +162,6 @@ def _safety_problems(text: str) -> list[str]:
     return problems
 
 
-def _value_problems(
-    where: str, value: str, level: str, limit: int | None, fixed: frozenset[str] = frozenset()
-) -> list[str]:
-    if not value:
-        return [f"{where} is empty"]
-    problems: list[str] = []
-    if limit is not None:
-        for sentence in _SENTENCE_END.split(value):
-            count = len(sentence.split())
-            if count > limit:
-                problems.append(
-                    f"{where} sentence has {count} words, over {limit} at {level}: {sentence}"
-                )
-    if level != EXPERT:
-        problems.extend(_token_problems(where, value, fixed))
-    return problems
-
-
 def _ask_fields(text: str) -> list[tuple[str, str]]:
     # 0251: one (where, text) pair per reader field and per lettered Choices line.
     out: list[tuple[str, list[str]]] = []
@@ -232,22 +184,6 @@ def _ask_fields(text: str) -> list[tuple[str, str]]:
     return [(where, " ".join(" ".join(parts).split())) for where, parts in out]
 
 
-def _choice_problems(where: str, value: str, fixed: frozenset[str]) -> list[str]:
-    # 0251: `<label>: <description>`; the label is two to five words and checked like the rest.
-    label, sep, description = value.partition(": ")
-    if not sep or not label.strip() or not description.strip():
-        return [f"{where} is not `<label>: <description>`: {value}"]
-    low, high = LABEL_WORDS
-    count = len(label.split())
-    problems: list[str] = []
-    if not low <= count <= high:
-        noun = "word" if count == 1 else "words"
-        problems.append(f"{where} label has {count} {noun}, not {low} to {high}: {label}")
-    problems.extend(_value_problems(f"{where} label", label, PLAIN, ASK_SENTENCE_LIMIT, fixed))
-    problems.extend(_value_problems(where, description, PLAIN, ASK_SENTENCE_LIMIT, fixed))
-    return problems
-
-
 def _uses(phrase: str, text: str) -> bool:
     # 0250: whole words, any case, a plural ending allowed.
     pattern = r"(?<![\w-])" + re.escape(phrase) + r"(?:s|es)?(?![\w-])"
@@ -255,26 +191,14 @@ def _uses(phrase: str, text: str) -> bool:
 
 
 def ask_problems(text: str, fixed_words: tuple[str, ...] | None = None) -> list[str]:
-    # 0199, 0251: plain at eighteen words whatever docs.reading_level says; empty means it passes.
-    # 0250: fixed_words, when read from a handoff brief, are never vocabulary and must appear.
+    # 0199, 0255: a Question: line, no id anywhere; empty means it passes; choices are optional.
+    # 0250: fixed_words, when read from a handoff brief, must appear.
     fields = _ask_fields(text)
-    runs = [run for phrase in fixed_words or () for run in _NAME_RUN.findall(phrase.lower())]
-    fixed = frozenset({*runs, *(part for run in runs for part in run.split("-"))})
     problems: list[str] = []
-    questions = [value for where, value in fields if where == "Question"]
-    if not questions:
+    if not any(where == "Question" for where, _ in fields):
         problems.append("the question holds no Question: line")
-    choices = [where for where, _ in fields if where.startswith("Choice ")]
-    if len(choices) < 2:
-        problems.append("the question holds no Choices: block of two or more lettered lines")
-    for value in questions:
-        if value and not value.rstrip("\"')]”’").endswith("?"):
-            problems.append(f"Question does not end in a question mark: {value}")
     for where, value in fields:
-        if where.startswith("Choice "):
-            problems.extend(_choice_problems(where, value, fixed))
-        else:
-            problems.extend(_value_problems(where, value, PLAIN, ASK_SENTENCE_LIMIT, fixed))
+        problems.extend(_value_problems(where, value))
     if fixed_words and not any(
         _uses(phrase, value) for phrase in fixed_words for _, value in fields
     ):
@@ -329,7 +253,7 @@ def ask_file_problems(question: Path, brief: Path | None = None) -> list[str]:
 
 
 def brief_file_problems(repo: Path, brief: Path) -> tuple[str, list[str]]:
-    # 0153, 0211: the level from docs.reading_level (absent reads standard) and the problem lines.
+    # 0255: the level from docs.reading_level (absent reads standard), printed, never judged.
     root = os.path.realpath(repo / SCRATCH)
     real = os.path.realpath(brief)
     if os.path.commonpath([root, real]) != root or not os.path.isfile(real):
@@ -340,4 +264,4 @@ def brief_file_problems(repo: Path, brief: Path) -> tuple[str, list[str]]:
     text = _read(f"brief {brief}", real, "write at most four short questions per brief file.")
     manifest = load(repo)
     level = level_of(manifest.docs.literacy if manifest is not None else None)
-    return level, brief_problems(text, level)
+    return level, brief_problems(text)

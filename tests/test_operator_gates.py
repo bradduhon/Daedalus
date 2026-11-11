@@ -562,7 +562,9 @@ def test_the_prompt_uses_the_operators_plain_labels() -> None:
         places = [head.index(choice) for choice in choices]
         assert places == sorted(places)
         assert "the how of a fix stays out of the option text and lives in the finding file" in head
-        assert "the first line states what is at stake in one plain sentence, then asks" in head
+        assert "the first line states what is at stake in one sentence, then asks" in head
+        # 0255: the project's own names stay; only an id is replaced by its label.
+        assert "ending in a question mark" not in head and "name no mechanism" not in head
         for label, stored in (
             ("Skip it", "dropped"),
             ("Track it", "issue"),

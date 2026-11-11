@@ -122,8 +122,8 @@ Paths here are relative to the plugin root.
 
 Every rejected round puts each finding in its findings file to the operator as one decision question, plus the tracking question on an exemption (0133). The verdict command only records the round; no round budget applies, and no fix round starts without the operator's pick. In a Build Train the orchestrator writes it as a decision brief and the session asks it.
 Put it to the operator with AskUserQuestion, in the decision-brief shape (0103), one question per finding:
-- Question: the first line states what is at stake in one plain sentence, then asks, ending in a question mark, such as "A ledger write can land outside the ledger file. What do we do with this finding?"
-- Context: Two or three short sentences in the operator's words on what breaks and what happened in the test, and, for a finding that came back after its fix, what the fix missed. They name no mechanism: no ruling ids, agent names, script names or snake_case keys.
+- Question: the first line states what is at stake in one sentence, then asks, such as "A ledger write can land outside the ledger file. What do we do with this finding?"
+- Context: Two or three short sentences in the operator's words on what breaks and what happened in the test, and, for a finding that came back after its fix, what the fix missed. They use the names the project already uses, as written. No ruling id or issue number goes in them: give its label or a short excerpt of what it is about in its place.
 - Choices, exactly these three labels in this order, each with what it does; the how of a fix stays out of the option text and lives in the finding file:
   - `Fix it now (Recommended)`: runs a fix round. The responsible coder resumes warm with this finding's failing test, and the audit runs again on the new tip.
   - `Skip, track or exempt it`: exempts the finding. It stays in the merged work, a second question asks how the exemption is tracked, charter-docs records the exemption as a ruling that names the finding, and the main session records it with the train runner's exception command.

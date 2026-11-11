@@ -523,25 +523,20 @@ def test_refuted_jail_forms_become_corpus_rows_in_every_routing_place() -> None:
     )
 
 
-def test_a_local_url_is_the_one_slash_word_a_decision_brief_may_carry() -> None:
-    # 0164: the dev server question names the site; any other slash word is still refused.
+def test_the_brief_check_no_longer_reads_urls() -> None:
+    # 0254: the slash refusal is gone; the manifest alone limits local_testing.url to the host.
     from lib.briefs import brief_problems
 
     good = "Question: Open http://localhost:5173 in your browser. Does the scene load?"
-    assert brief_problems(good, "plain") == []
-    assert brief_problems("Question: Open http://localhost:5173/x?y#z now?", "plain") == []
-    assert brief_problems("Question: Open http://localhost:5173/play?v=1.2 now?", "plain") == []
-    # L3: the path or query never carries another url, a host and path, or a user part.
+    assert brief_problems(good) == []
     for url in (
+        "http://localhost:5173/x?y#z",
+        "http://localhost:5173/play?v=1.2",
         "http://example.com",
         "file:///tmp/x",
-        "http://localhost.evil.com/a",
         "http://localhost:5173/?u=https://evil.com",
-        "http://localhost:5173/a@evil.com",
-        "http://localhost:5173?u=evil.com/x",
     ):
-        problems = brief_problems(f"Question: Open {url} now?", "plain")
-        assert any("with a slash" in p for p in problems), url
+        assert brief_problems(f"Question: Open {url} now?") == [], url
 
 
 def test_the_verifier_prints_its_claims_in_one_call_and_runs_in_the_foreground() -> None:
