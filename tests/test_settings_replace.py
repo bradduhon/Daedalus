@@ -331,6 +331,30 @@ def test_replace_refuses_an_accepted_or_missing_file_and_a_bad_form(
     )
 
 
+def test_a_linked_backup_folder_stops_the_write_before_any_change(
+    wizard: Path,
+    home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # 0257, self-hunt: the backup never lands through a link, and no backup means no replace.
+    import daedalus_setup
+    from lib import storage
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / "tmproot").symlink_to(elsewhere)
+    monkeypatch.setattr(storage, "TMP_ROOT", tmp_path / "tmproot")
+    monkeypatch.setenv("HOME", str(home))
+    path = _manifest(wizard)
+    before = _old(path, OLD_SHAPE)
+    assert daedalus_setup.main(["--replace", "manifest", "--write", "--repo", str(wizard)]) == 1
+    out = capsys.readouterr().out
+    assert "the backup of the old file could not be written" in out and "is a symlink" in out
+    assert path.read_bytes() == before and list(elsewhere.iterdir()) == []
+
+
 def test_a_second_replace_of_the_result_finds_nothing_to_replace(wizard: Path, home: Path) -> None:
     _old(_manifest(wizard), MIXED)
     assert _replace(wizard, home, "manifest", "--write")[0] == 0

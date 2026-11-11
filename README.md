@@ -115,7 +115,7 @@ The train creates each worktree itself and removes it when the train ends. The b
 Before you start, you need:
 
 - optionally, a decisions file, where your project records its design decisions. Name it in `docs.decisions_filename` of `service-manifest.json`. With no file named, a run records no decision and asks nothing about one. A named file that does not exist yet is created as a table with the first decision.
-- a clean working tree.
+- a clean working tree. The one exception is your settings files, `service-manifest.json` and `.claude/daedalus/config.json`. Each may be changed or new, as long as it is not staged. The pull request does not carry them unless you commit them.
 - optionally, `<repo>/.claude/daedalus/config.json` (see [docs/project-requirements.md](docs/project-requirements.md)). Without it the defaults apply.
 
 Then type the command and your task:
@@ -267,6 +267,12 @@ Where two files overlap, this is which one wins:
 - A project's config can hold its own copy of any personal preference. A value set there replaces your personal value for that project only, and the rest still come from your personal file. Nothing acts on those values yet.
 
 To change a setting later, type `/daedalus:setup` again. It starts from the values your files hold now. It asks only the first-day settings still at their default, and offers every other group. Each answer changes one setting and leaves the rest of the file as it was, byte for byte. Before it writes, it checks the whole file with the same check Daedalus runs when it reads that file. A value that check refuses is not written, and you see the check's own message. Each change prints one line: `changed:`, then the file, the setting, its old value and its new value. You can also edit a file by hand. The [examples folder](docs/examples/) holds the three files a new project gets, filled in, and one manifest and config pair with every override set. A test loads each one, so the examples always match what Daedalus accepts.
+
+Every setting a file accepts can be set from the wizard. A setting inside a list, such as one coding rules entry, is set as the whole list that holds it.
+
+A settings file written for an older version of Daedalus may hold names this version no longer reads. This version then refuses the whole file. The wizard shows a plan for that file and writes nothing yet. The plan has one `carry:` line for each value a new file would keep. A value is kept only when this version still has a setting of that name at the same place, and its check accepts the value. Old names are never renamed or guessed at. The plan has one `drop:` line for each old entry the new file would leave out, with its old value and the reason. A value that looks like a secret shows as `<value withheld>`, since a settings file should hold no secrets. The plan names the backup path too. The wizard asks you once whether to replace the file. When you say yes, it copies the old file byte for byte to that backup path under `/tmp/.daedalus/`. Then it builds the new file from the starter file and the kept values, checks it, and writes it. It prints a `replaced:` line. A file that is not valid JSON, or that is a link, is never replaced. Move such a file out of the project, and the wizard writes a new starter file. Your personal file is changed only when the wizard is on that file and you say yes.
+
+The wizard never commits a settings file. A run can still start when `service-manifest.json` and `.claude/daedalus/config.json` are the only uncommitted changes. The run reads them from your working tree. Its pull request does not carry them unless you commit them yourself.
 
 ### Key reference
 
@@ -502,7 +508,7 @@ Exit 0 prints `OK approved: approved verdict, ...` or `OK approved: every findin
 
 ### One train, end to end
 
-1. Start. Your session runs `daedalus_workspace.py begin`. That command refuses a working tree with uncommitted changes. It writes the data folder and its `.gitignore`, the train state file and the train marker, then prints the first status lines. Next, `verify_audit_chain.py --hooks-live` finds its own command as the newest Bash record of this session's log and records the point the push proof reads. Your session starts one orchestrator agent and passes messages between it and you.
+1. Start. Your session runs `daedalus_workspace.py begin`. That command refuses a working tree with uncommitted changes. Only the two settings files may be changed or new, and not staged. Their contents are recorded, and each later merge step refuses them once they change. It writes the data folder and its `.gitignore`, the train state file and the train marker, then prints the first status lines. Next, `verify_audit_chain.py --hooks-live` finds its own command as the newest Bash record of this session's log and records the point the push proof reads. Your session starts one orchestrator agent and passes messages between it and you.
 2. Standards and the map. The orchestrator writes the Standards Packet from your declared sources. Its fifth part is a `## Priorities` section, holding your `run_output_priority` group or the line `priorities: none declared`. The orchestrator runs `daedalus_map.py --repo <repo> --out <repo>/docs/.tmp/daedalus/<train-id>/map` to build a dependency map of your code, and records the sha256 of `map.json`. The jail refuses an `--out` outside that folder. The map skips every folder the `git_excluded_folders` key of `config.json` names, and exits 2 when those folders cannot be resolved.
 3. Plan. The planner cuts the work into units. Each unit has a line in the plan block and a requirement section below it. `validate_plan.py` checks the file, and `daedalus_train.py plan` records its path and sha256 in train state.
 4. Contract lock. The orchestrator first runs `daedalus_train.py contract --repo <repo>`. It prints `contract: skip` when the recorded plan has one unit and that unit meets every condition below. Otherwise it prints `contract: required (<reason>)`.
@@ -712,6 +718,7 @@ Daedalus/
 │   ├── lib/scrub.py                 # reads the declared scrub file's terms
 │   ├── lib/self_assessment.py       # the Self-Assessment flag and its two folders
 │   ├── lib/settings_edit.py         # changes one key of a settings file in place
+│   ├── lib/settings_replace.py      # carries an older settings file's still-valid values forward
 │   ├── lib/shell.py                 # the shell model the jail and checks share
 │   ├── lib/shparse.py               # parses one Bash command into nodes with spans
 │   ├── lib/storage.py               # the temporary and persistent folders every feature uses
@@ -736,7 +743,7 @@ Daedalus/
 │   ├── daedalus_map.py              # the dependency map: imports, coverage, record readers, ownership, duplicates
 │   ├── daedalus_path.py             # the question path store's open, check, ask and regenerate commands
 │   ├── daedalus_profile.py          # the Developer Profile store's status, rule, tally, list and forget commands
-│   ├── daedalus_setup.py            # the settings wizard's describe, create and set forms
+│   ├── daedalus_setup.py            # the settings wizard's describe, create, set and replace forms
 │   ├── daedalus_train.py            # the train runner: progress, choice, plan, verdict, exception
 │   ├── daedalus_workspace.py        # begin, lock, create, remove, finish, stop, resume, mark, unmark, release, pr-body
 │   ├── enforce_agent_jail.py        # PreToolUse policy
