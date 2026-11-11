@@ -2519,8 +2519,21 @@ def record_verdict(
                 f"verdict status {status!r} is neither approved nor rejected. "
                 "Next: rerun verdict with the status the auditor's verdict line names."
             )
+        state = train_state.load(repo, train_id)
+        # 214, 0247: a run with a named decisions file owes its ledger record before approval.
+        if (
+            status == train_state.APPROVED
+            and _feature_on(state, "ledger")
+            and not train_state.record(state, LEDGER)
+        ):
+            raise RunnerError(
+                f"train {train_id} names a decisions file and records no ledger commit yet, so "
+                "an approved verdict cannot be recorded. Next: run daedalus_train.py ledger "
+                f"--repo {repo} --sha <sha> --ids <ids> from charter-docs' COMMITTED line, then "
+                "rerun verdict."
+            )
         # 67: the round comes from train state; --round stays accepted and must agree.
-        round_ = derived_round(train_state.load(repo, train_id))
+        round_ = derived_round(state)
         if given_round is not None and given_round != round_:
             raise RunnerError(
                 f"--round {given_round} is not round {round_}, one more than the highest round "

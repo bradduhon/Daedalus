@@ -1975,6 +1975,40 @@ def test_ledger_records_the_commit_and_refuses_bad_values(repo: Path, plugin: Pa
     assert _state(repo)["ledger"] == {"sha": sha, "ids": ["0120-DAE-PLT", "0121-DAE-PLT"]}
 
 
+@pytest.mark.parametrize(
+    ("fields", "owed"),
+    [
+        ({"features": {"ledger": True}}, True),
+        ({"features": None, "ledger_line": "ledger: /r/docs/decisions.md (config, seq=1)"}, True),
+        ({"features": None, "ledger_line": workspace.LEDGER_NONE}, False),
+        ({"features": {"ledger": False}}, False),
+    ],
+)
+def test_approved_verdict_waits_for_an_owed_ledger_record(
+    repo: Path, plugin: Path, fields: dict[str, object], owed: bool
+) -> None:
+    # 214, 0247: a named decisions file owes the ledger record first; a rejection never waits.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    train_state.update(repo, str(_state(repo)["train_id"]), **fields)
+    _marked(repo)
+    tip = _integration(repo)
+    _agent_stop(repo, "auditor", _verdict("REJECTED", tip), "aud-1")
+    rejected = _verdict_call(repo, "rejected", None, tip=tip, findings=_findings(repo, 1, A))
+    assert rejected.lines == ["recorded rejected round=1 findings=1"]
+    _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-1")
+    first = _verdict_call(repo, "approved", None, tip=tip)
+    if not owed:
+        assert first.lines == [f"Verdict approved recorded on tip {tip[:12]} (round 2)"]
+        return
+    assert first.code == 1 and "records no ledger commit yet" in first.lines[0]
+    assert "Next: run daedalus_train.py ledger" in first.lines[0]
+    assert _state(repo)["verdict"]["status"] == "rejected"  # type: ignore[index]
+    assert train_runner.record_ledger(repo, "c" * 40, "0120-DAE-PLT").code == 0
+    again = _verdict_call(repo, "approved", None, tip=tip)
+    assert again.lines == [f"Verdict approved recorded on tip {tip[:12]} (round 2)"]
+
+
 def _summary_cmd(repo: Path) -> str:
     return f"python3 {SCRIPTS_DIR / 'daedalus_train.py'} summary --repo {repo}"
 
