@@ -518,3 +518,104 @@ def test_notes_refuse_lines_outside_their_shape(text: str, needle: str) -> None:
     with pytest.raises(SummaryError, match=re.escape(needle)) as info:
         parse_notes(text, "summary-notes.md")
     assert "Next:" in str(info.value)
+
+
+def test_ledger_ids_print_each_commit_with_its_own_ids(tmp_path: Path) -> None:
+    # 124: the issue's two ledger commits; each id prints beside the commit that added it.
+    first, second = "246ebfc" + "1" * 33, "40b01d1" + "2" * 33
+    state = copy.deepcopy(STATE)
+    state["ledger"] = {
+        "sha": second,
+        "ids": ["0162-DAE-PLT"],
+        "commits": [
+            {"sha": first, "ids": ["0160-DAE-PLT", "0161-DAE-PLT"]},
+            {"sha": second, "ids": ["0162-DAE-PLT"]},
+        ],
+    }
+    lines = _text(tmp_path, state).splitlines()
+    assert lines[6:9] == [
+        f"Ledger ids: 0160-DAE-PLT,0161-DAE-PLT in commit {first}.",
+        f"Ledger ids: 0162-DAE-PLT in commit {second}.",
+        "[POLICY: none declared]",
+    ]
+
+
+def test_verification_keeps_a_warm_verifier_turn_with_the_same_line(tmp_path: Path) -> None:
+    # 124: one warm verifier says the same verdict line for two units in two turns.
+    line = "[VERDICT: VERIFIED] claims=11"
+    records = [
+        _pre(1, "orchestrator", "Agent", "o1", prompt=f"Check.\nUnit worktree: {U1}\n"),
+        _stop(2, "verifier", line, "v1"),
+        _pre(3, "orchestrator", "SendMessage", "o1", message=f"Again.\nUnit worktree: {U2}\n"),
+        _stop(4, "verifier", line, "v1"),
+    ]
+    assert _section(_text(tmp_path, records=records), "Verification") == [
+        "- u1: \\[VERDICT: VERIFIED\\] claims=11",
+        "- u2: \\[VERDICT: VERIFIED\\] claims=11",
+    ]
+
+
+def test_a_stop_relaying_the_hand_back_before_it_is_one_reply() -> None:
+    # issue 57: the stop right after a hand-back with the same last line repeats it.
+    from lib.train_summary import replies
+
+    line = "[VERDICT: VERIFIED] claims=11"
+    records = [
+        _handback(1, "verifier", line, "v1"),
+        _stop(2, "verifier", line, "v1"),
+        _pre(3, "orchestrator", "SendMessage", "o1", message="Again."),
+        _pre(4, "verifier", "Read", "v1", file_path="x"),
+        _stop(5, "verifier", line, "v1"),
+    ]
+    assert [r.seq for r in replies(records)] == [1, 5]
+
+
+def _unit_repo(repo: Path) -> list[dict[str, object]]:
+    # 124: b1 changes two files and merges; b2 forks from the integration branch after it.
+    from tests.conftest import git
+
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    (repo / "README.md").write_text("r\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "init")
+    integration = f"daedalus/{TRAIN}"
+    git(repo, "branch", integration)
+    units: list[dict[str, object]] = []
+    for name, files in (
+        ("b1", ["scripts/checks/root_writes.py", "tests/test_checks_root_writes.py"]),
+        ("b2", ["scripts/b2.py"]),
+    ):
+        branch = f"daedalus-unit/{TRAIN}-{name}"
+        git(repo, "switch", "-q", "-c", branch, integration)
+        for rel in files:
+            (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / rel).write_text(f"{rel}\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", rel)
+        units.append(_unit(name, f"{repo}/.claude/worktrees/{TRAIN}-{name}"))
+        if name == "b1":
+            git(repo, "switch", "-q", integration)
+            git(repo, "merge", "-q", "--no-ff", branch, "-m", "Merge b1")
+    git(repo, "switch", "-q", "main")
+    return units
+
+
+def test_units_files_come_from_the_branch_diff_not_the_coder_line(tmp_path: Path) -> None:
+    # 124: b1's fix turn names one file under its worktree; its branch changed two.
+    repo = tmp_path.resolve() / "repo"
+    units = _unit_repo(repo)
+    narrow = (
+        f"[STATUS: COMPLETE] branch=daedalus-unit/{TRAIN}-b1 packet_version=3 files="
+        f"{repo}/.claude/worktrees/{TRAIN}-b1/tests/test_checks_root_writes.py "
+        "tests=pytest 1 passed ledger_notes=none contract=aaaaaaaaaaaa standards=bbbbbbbbbbbb"
+    )
+    state = {**copy.deepcopy(STATE), "units": units}
+    log = SessionLog("sess-a", tmp_path / "sess-a.jsonl", [_handback(1, "coder", narrow, "c1")])
+    text = render(repo, TRAIN, state, [log], parse_notes(NOTES, "notes"), False, None)
+    rows = _section(text, "Units")
+    assert rows[2] == (
+        f"| b1 | daedalus-unit/{TRAIN}-b1 | v3 | scripts/checks/root\\_writes.py, "
+        "tests/test\\_checks\\_root\\_writes.py | pytest 1 passed |"
+    )
+    assert rows[3] == f"| b2 | daedalus-unit/{TRAIN}-b2 | - | scripts/b2.py | - |"

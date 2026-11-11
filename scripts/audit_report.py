@@ -25,6 +25,7 @@ from lib.audit import (  # noqa: E402
     root_info,
     skipped_count,
 )
+from lib.config import ConfigError, load_config  # noqa: E402
 from lib.controls import Control, ControlsError, failure_line  # noqa: E402
 from lib.controls import load as load_controls  # noqa: E402
 from token_economy import audit_lines  # noqa: E402
@@ -65,6 +66,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--session")
     parser.add_argument("--repo", dest="cwd", default=os.getcwd())
     parser.add_argument("--out")
+    # 0252: save under the settings' docs folder; print only when none is named or present.
+    parser.add_argument("--save", action="store_true")
     # 6.2: the control cost table alone, after the same chain check.
     parser.add_argument("--controls", action="store_true")
     args = parser.parse_args(argv)
@@ -390,6 +393,14 @@ def _out_target(out: str, cwd: str) -> Path:
     return write_path
 
 
+def _docs_folder(cwd: str) -> Path | None:
+    try:
+        folder = load_config(cwd).charter_root
+    except ConfigError as exc:
+        raise ReportError(str(exc)) from exc
+    return Path(folder).resolve() if folder and Path(folder).is_dir() else None
+
+
 def _write_report(target: Path, text: str) -> None:
     parent = target.parent
     if parent.exists() and not parent.is_dir():
@@ -405,10 +416,18 @@ def main(argv: list[str]) -> int:
     args = _parse(argv)
     try:
         path = _session_path(args.cwd, args.session)
-        target = None if args.out is None else _out_target(args.out, args.cwd)
+        out = args.out
+        if args.save:
+            docs = _docs_folder(args.cwd)
+            if docs is not None:
+                (docs / "audit").mkdir(exist_ok=True)  # 0252: one subfolder.
+                out = str(docs / "audit" / f"{path.stem}.md")
+        target = None if out is None else _out_target(out, args.cwd)
         report = render(path, args.controls)
         if target is None:
             sys.stdout.write(report)
+            if args.save:
+                print("not saved: no docs folder is set (local_docs_folder in config.json).")
         else:
             _write_report(target, report)
             print(f"wrote {target}")

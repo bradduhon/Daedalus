@@ -27,6 +27,74 @@ from tests.skill_helpers import (
 )
 
 
+def test_release_step_finds_the_merge_commit_and_keeps_the_fallback_question() -> None:
+    # 0252: the merge commit comes from a git read; the old question stays as the fallback.
+    text = _release()
+    assert "ask for the merge commit sha on `<base branch>` and run" not in text
+    assert "fetch origin <base branch>`" in text
+    assert "--grep='\\(#<pr number>\\)$'" in text
+    assert "whose second parent is the tip the releaser pushed" in text
+    assert "ask the operator for the merge commit sha on `<base branch>` instead" in text
+
+
+def _skill_log_commands(text: str) -> tuple[str, str]:
+    squash = re.search(r"`(git -C <repo> log origin/<base branch> -E --grep=[^`]+)`", text)
+    merge = re.search(r"`(git -C <repo> log origin/<base branch> --merges[^`]+)`", text)
+    assert squash and merge
+    return squash.group(1), merge.group(1)
+
+
+def test_release_reads_find_exactly_one_merge_commit(tmp_path: Path) -> None:
+    # 0252: run the skill's two git reads, as written, against a real squash and merge history.
+    import json
+    import shlex
+    import subprocess
+    import sys
+
+    from tests.conftest import SCRIPTS_DIR, git
+
+    pr, other = "12", "14"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "Start")
+    git(repo, "commit", "-q", "--allow-empty", "-m", f"Mention (#{pr}) in the middle of a subject")
+    git(repo, "commit", "-q", "--allow-empty", "-m", f"Other change (#{pr}3)")
+    git(repo, "commit", "-q", "--allow-empty", "-m", f"Squashed feature (#{pr})")
+    git(repo, "switch", "-q", "-c", "unit")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "Unit work")
+    tip = git(repo, "rev-parse", "HEAD").stdout.strip()
+    git(repo, "switch", "-q", "main")
+    git(repo, "merge", "-q", "--no-ff", "unit", "-m", f"Merge pull request #{pr}4 from unit")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    squash_sha = git(repo, "log", "--format=%H", "--grep=Squashed").stdout.strip()
+    merge_sha = git(repo, "rev-parse", "HEAD").stdout.strip()
+    squash_cmd, merge_cmd = _skill_log_commands(_release())
+    for command in (squash_cmd, merge_cmd):
+        payload = {"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": str(repo)}
+        payload["tool_input"] = {"command": command.replace("<repo>", str(repo))}
+        payload["session_id"] = "sess-main"
+        hook = subprocess.run(
+            [sys.executable, str(SCRIPTS_DIR / "enforce_agent_jail.py")],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=repo,
+        )
+        assert hook.returncode == 0 and "daedalus-jail" not in hook.stderr, hook.stderr
+
+    def run(command: str) -> list[str]:
+        argv = shlex.split(command.replace("<repo>", str(repo)).replace("<base branch>", "main"))
+        out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout
+        return out.split("\n")[:-1]
+
+    assert run(squash_cmd.replace("<pr number>", pr)) == [squash_sha]
+    assert run(squash_cmd.replace("<pr number>", other)) == []
+    merges = [line.split() for line in run(merge_cmd)]
+    assert [m[0] for m in merges if len(m) > 2 and m[2] == tip] == [merge_sha]
+
+
 def test_push_train_proof_names_the_exemption_path() -> None:
     # issue 62, 0133: --approved passes on an approved verdict or every finding exempted.
     step = _release().split("\n9. ", 1)[1].split("\n10. ", 1)[0]
@@ -235,6 +303,11 @@ def test_push_train_reads_the_ledger_sha_from_the_ledger_ids_line() -> None:
     # N5-M1: the summary's `Ledger:` line is the path; the sha is on `Ledger ids:`.
     step = _release().split("\n3. ", 1)[1].split("\n4. ", 1)[0]
     assert "the ledger commit sha from the `Ledger ids:` line," in step
+    # 124: one Ledger ids line per ledger commit; step 10 checks each recorded sha.
+    assert "one sha from each line" in step and "step 10 checks every one" in step
+    check = _release().split("\n10. ", 1)[1].split("\n", 1)[0]
+    assert check.startswith("Confirm each ledger commit is on the branch")
+    assert "once per sha step 3 recorded" in check
 
 
 def test_push_train_hands_the_charter_push_to_the_conductor() -> None:

@@ -56,9 +56,24 @@ FILES: tuple[Entry, ...] = (
         "you run token_economy.py report --save and config.json sets local_docs_folder",
     ),
     Entry(
-        f"{_SCRATCH}/<run id>/tokens.md",
+        "<charter_root>/reports/",
+        "scripts/token_economy.py:saved_dir",
+        "you run token_economy.py report --save and the reports subfolder is missing (0252)",
+    ),
+    Entry(
+        "<cache>/reports/<project key>/<date>-tokens-<run id>.md",
         "scripts/audit_report.py:_write_report",
-        "you run token_economy.py report --save with no local_docs_folder set",
+        "you run token_economy.py report --save and no docs folder exists (0252)",
+    ),
+    Entry(
+        "<charter_root>/audit/",
+        "scripts/audit_report.py:main",
+        "you run audit_report.py --save and the audit subfolder is missing (0252)",
+    ),
+    Entry(
+        "<charter_root>/audit/<session>.md",
+        "scripts/audit_report.py:_write_report",
+        "you run audit_report.py --save and config.json sets local_docs_folder",
     ),
     Entry(
         f"{_CONFINE}/",
@@ -302,9 +317,59 @@ FILES: tuple[Entry, ...] = (
         "a feature's first temporary write for a project; nothing in the plugin removes the folder",
     ),
     Entry(
+        "/tmp/.daedalus/<uid>/question-path/<project key>/<conv>/",
+        "scripts/lib/question_path.py:make_conv",
+        "you run daedalus_path.py open; <conv> is a UTC stamp, mode 0700",
+    ),
+    Entry(
+        "/tmp/.daedalus/<uid>/question-path/<project key>/<conv>/path-v<n>.json",
+        "scripts/lib/question_path.py:_write_version",
+        "daedalus_path.py check or regenerate passes; a version is never rewritten",
+    ),
+    Entry(
+        "/tmp/.daedalus/<uid>/question-path/<project key>/<conv>/log.jsonl",
+        "scripts/lib/question_path.py:_append_log",
+        "daedalus_path.py ratify, next, record, fact or regenerate; one line is appended",
+    ),
+    Entry(
+        "<cache>/developer-profile/",
+        "scripts/lib/storage.py:make_data_dir",
+        "daedalus_profile.py rule or tally with the mode on; mode 0700",
+    ),
+    Entry(
+        "<cache>/developer-profile/rules/",
+        "scripts/lib/developer_profile.py:_make_rules_dir",
+        "daedalus_profile.py rule or tally naming a rule; mode 0700",
+    ),
+    Entry(
+        "<cache>/developer-profile/rules/<kind>-<fingerprint>.json",
+        "scripts/lib/developer_profile.py:_save_rule",
+        "daedalus_profile.py rule or tally naming a rule; written whole, mode 0600",
+    ),
+    Entry(
+        "<cache>/developer-profile/tallies.json",
+        "scripts/lib/developer_profile.py:_save_tallies",
+        "daedalus_profile.py tally; written whole, mode 0600",
+    ),
+    Entry(
+        "/tmp/.daedalus/<uid>/developer-profile/<project key>/",
+        "scripts/lib/storage.py:make_tmp_dir",
+        "daedalus_profile.py status, rule or tally with the mode on; mode 0700",
+    ),
+    Entry(
         "<cache>/<feature>/<project key>/",
         "scripts/lib/storage.py:make_data_dir",
         "a feature's first persistent write; the plugin's uninstall removes the data folder",
+    ),
+    Entry(
+        "<cache>/self-assessment/findings/",
+        "scripts/lib/findings.py:_findings_folder",
+        "the first Self-Assessment finding is saved; uninstalling the plugin removes the folder",
+    ),
+    Entry(
+        "<cache>/self-assessment/findings/<stamp>-<fingerprint>.json",
+        "scripts/lib/findings.py:_store",
+        "you run daedalus_findings.py save with Self-Assessment mode on and a passing finding",
     ),
     Entry(
         f"{_TRAINS}/<train-id>.bindings.lock",

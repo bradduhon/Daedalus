@@ -691,3 +691,71 @@ def test_the_cwd_synonym_of_repo_is_refused(argv: list[str], tmp_path: Path) -> 
     cmd = [sys.executable, str(SCRIPTS_DIR / argv[0]), *argv[1:]]
     result = subprocess.run(cmd, capture_output=True, text=True, check=False, cwd=tmp_path)
     assert result.returncode != 0 and "--cwd" in result.stderr
+
+
+def _save(repo: Path, folder: Path | None, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
+    import audit_report
+
+    if folder is not None:
+        cfg = repo / ".claude" / "daedalus" / "config.json"
+        cfg.write_text(json.dumps({"local_docs_folder": str(folder)}))
+    code = audit_report.main(["--repo", str(repo), "--session", "sess-test", "--save"])
+    return code, capsys.readouterr().out
+
+
+def test_save_folder_named_and_present(
+    marked_data: Path,
+    hook_input: Any,
+    repo_cwd: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _synthetic_chain(hook_input)
+    docs = tmp_path / "docs"
+    (docs / "audit").mkdir(parents=True)
+    code, out = _save(repo_cwd, docs, capsys)
+    assert code == 0 and out == f"wrote {docs}/audit/sess-test.md\n"
+    assert "records: 30\n" in (docs / "audit" / "sess-test.md").read_text()
+
+
+def test_save_folder_named_and_audit_subfolder_missing_is_created(
+    marked_data: Path,
+    hook_input: Any,
+    repo_cwd: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _synthetic_chain(hook_input)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    code, _ = _save(repo_cwd, docs, capsys)
+    assert code == 0 and (docs / "audit" / "sess-test.md").is_file()
+
+
+def test_save_no_folder_named_prints_and_writes_nothing(
+    marked_data: Path,
+    hook_input: Any,
+    repo_cwd: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _synthetic_chain(hook_input)
+    code, out = _save(repo_cwd, None, capsys)
+    assert code == 0 and "records: 30\n" in out
+    assert out.rstrip().endswith(
+        "not saved: no docs folder is set (local_docs_folder in config.json)."
+    )
+    assert not (tmp_path / "docs").exists()
+
+
+def test_save_folder_named_but_missing_never_creates_it(
+    marked_data: Path,
+    hook_input: Any,
+    repo_cwd: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _synthetic_chain(hook_input)
+    docs = tmp_path / "nodocs"
+    code, out = _save(repo_cwd, docs, capsys)
+    assert code == 0 and "not saved: no docs folder is set" in out and not docs.exists()
