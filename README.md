@@ -341,7 +341,7 @@ The operator file is a third file in the table. It lives at `~/.claude/daedalus/
 | `developer_profile` | `~/.claude/daedalus/operator.json` | Whether Daedalus keeps a Developer Profile of your past answers and choices, to propose better answers later | Daedalus saves your stated rules and answer tallies on your machine only. | starter | boolean | `true` or `false`; any other value is refused | `false`: no Developer Profile is kept | `true` |
 <!-- end key reference -->
 
-Uninstalling the plugin deletes its data folder by default. The findings that `self_assessment` saves live in that folder and go with it. An uninstall run with the `--keep-data` option keeps the data folder.
+Uninstalling the plugin deletes its data folder by default. The findings that `self_assessment` saves live in that folder and go with it. The Developer Profile that `developer_profile` keeps lives in that folder too. It goes with the folder on an uninstall unless you use `--keep-data`. An uninstall run with the `--keep-data` option keeps the data folder.
 
 ## Safety model
 
