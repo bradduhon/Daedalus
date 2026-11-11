@@ -779,7 +779,7 @@ def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
 @pytest.mark.parametrize("name", sorted(EXPECTED_MODEL))
 def test_every_agent_carries_the_human_text_rule(name: str) -> None:
     # 0031: verbatim in every agent file; the status contract stays the last section.
-    from tests.test_skills import HUMAN_TEXT_RULE
+    from tests.skill_helpers import HUMAN_TEXT_RULE
 
     text = (AGENTS / f"{name}.md").read_text()
     assert HUMAN_TEXT_RULE in text
