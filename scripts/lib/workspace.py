@@ -1341,10 +1341,10 @@ _MIGRATION_LINE = re.compile(r"Migration: \S.*")
 _CLOSES = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?) #([0-9]+)\b", re.IGNORECASE)
 # Work-order line 24: a `Refs #N` or `partial #N` reference marks the issue as partly done.
 _REFS = re.compile(r"\b(?:refs?|partial(?:ly)?|part of) #([0-9]+)\b", re.IGNORECASE)
-# 220: a range needs `#`, `issue(s) ` or `(` before it; a reversed or over-50 span is ignored.
+# 220: a range needs `#` or `issue(s) ` before it; a reversed or over-50 span is ignored.
 MAX_ISSUE_RANGE = 50
 _TASK_ISSUES = re.compile(
-    r"(?:#|\bissues? |\()([0-9]+)\s*(?:to|through|-)\s*#?([0-9]+)\b"
+    r"(?:#|\bissues? )([0-9]+)\s*(?:to|through|-)\s*#?([0-9]+)\b"
     r"|#([0-9]+)\b|\bissues? ((?:[0-9]+(?:, and |, | and ))*[0-9]+)\b",
     re.IGNORECASE,
 )
