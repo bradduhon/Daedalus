@@ -1192,6 +1192,11 @@ def test_push_train_reads_the_ledger_sha_from_the_ledger_ids_line() -> None:
     # N5-M1: the summary's `Ledger:` line is the path; the sha is on `Ledger ids:`.
     step = _release().split("\n3. ", 1)[1].split("\n4. ", 1)[0]
     assert "the ledger commit sha from the `Ledger ids:` line," in step
+    # 124: one Ledger ids line per ledger commit; step 10 checks each recorded sha.
+    assert "one sha from each line" in step and "step 10 checks every one" in step
+    check = _release().split("\n10. ", 1)[1].split("\n", 1)[0]
+    assert check.startswith("Confirm each ledger commit is on the branch")
+    assert "once per sha step 3 recorded" in check
 
 
 def test_push_train_hands_the_charter_push_to_the_conductor() -> None:
