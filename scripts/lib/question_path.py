@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import stat
@@ -24,6 +26,8 @@ MAX_HANDOVER_BYTES = 64 * 1024
 MAX_BRIEF_BYTES = 1024 * 1024
 MAX_LINE = 300
 MAX_RESPONSE = 4000
+MIN_STATED_WORDS = 4
+MIN_STATED_CHARS = 20
 
 KINDS: tuple[str, ...] = (
     "storage",
@@ -295,8 +299,22 @@ def _text_problem(value: object, label: str, low: int, high: int) -> str | None:
         return f"{label} must be text, not {value!r}"
     if "\n" in value or "\r" in value:
         return f"{label} must be one line"
+    if not value.isprintable():
+        return f"{label} holds a control character"
     if not low <= len(value) <= high:
         return f"{label} must be {low} to {high} characters, not {len(value)}"
+    return None
+
+
+def _response_problem(value: object) -> str | None:
+    # Line breaks stay; every line must be printable (a bare CR is not a line break here).
+    if not isinstance(value, str):
+        return f"response must be text, not {value!r}"
+    lines = value.replace("\r\n", "\n").split("\n")
+    if not all(line.isprintable() for line in lines):
+        return "response holds a control character"
+    if not 1 <= len(value) <= MAX_RESPONSE:
+        return f"response must be 1 to {MAX_RESPONSE} characters, not {len(value)}"
     return None
 
 
@@ -436,11 +454,28 @@ def _rule_ids(path: Path) -> set[str]:
     return out
 
 
+def _set_keys(repo: str) -> set[str]:
+    # Reuses daedalus_setup.describe, the settings wizard's reader of all three files; a key
+    # counts as set when its entry is set or default and holds a value other than null.
+    import daedalus_setup
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        daedalus_setup.describe(Path(repo))
+    keys = json.loads(buf.getvalue())["keys"]
+    return {
+        k["key"]
+        for k in keys
+        if k.get("state") in ("set", "default") and not ("value" in k and k["value"] is None)
+    }
+
+
 def _sources(
-    rows: list[Row], brief: Path | None, rules: Path | None, answers: list[str]
+    rows: list[Row], brief: Path | None, rules: Path | None, answers: list[str], repo: str
 ) -> list[str]:
     problems: list[str] = []
     keys = {key for _file, key in reference_keys()}
+    set_keys = _set_keys(repo) if any(r.source == "setting" for r in rows) else set()
     heard = [_norm(a) for a in answers]
     if brief is not None:
         heard.append(_norm(_read_text(brief, "brief")))
@@ -449,7 +484,16 @@ def _sources(
         ref = row.source_ref
         if row.source == "setting" and ref not in keys:
             problems.append(f"path: row {row.id}: {ref!r} is not a settings key")
-        elif row.source == "stated" and not (ref.strip() and any(_norm(ref) in h for h in heard)):
+        elif row.source == "setting" and ref not in set_keys:
+            problems.append(f"path: row {row.id}: the key {ref!r} has no value set in any file")
+        elif row.source == "stated" and (
+            len(_norm(ref)) < MIN_STATED_CHARS or len(_norm(ref).split()) < MIN_STATED_WORDS
+        ):
+            problems.append(
+                f"path: row {row.id}: a stated sentence needs at least {MIN_STATED_WORDS} words "
+                f"and {MIN_STATED_CHARS} characters"
+            )
+        elif row.source == "stated" and not any(_norm(ref) in h for h in heard):
             problems.append(
                 f"path: row {row.id}: the sentence {ref!r} is not in the brief or an answer"
             )
@@ -484,7 +528,7 @@ def _status(row: Row, confidence: str) -> str:
 
 
 def judge(
-    handover: object, brief: Path | None, rules: Path | None, answers: list[str]
+    handover: object, brief: Path | None, rules: Path | None, answers: list[str], repo: str
 ) -> tuple[list[Row], list[str]]:
     if (
         not isinstance(handover, dict)
@@ -506,7 +550,7 @@ def judge(
     problems = _structure(rows)
     if problems:
         return [], problems
-    problems = _shape(rows) + _sources(rows, brief, rules, answers)
+    problems = _shape(rows) + _sources(rows, brief, rules, answers, repo)
     done = [
         replace(r, confidence=CONFIDENCE[r.source], status=_status(r, CONFIDENCE[r.source]))
         for r in sorted(rows, key=lambda r: r.id)
@@ -593,7 +637,7 @@ def _cmd_check(ctx: Ctx, args: argparse.Namespace) -> list[str]:
         )
     _bad_handover(ctx, problem, "check")
     answers = [e["response"] for e in _events(ctx.folder) if e["ev"] == "response"]
-    rows, problems = judge(data, args.brief, args.rules, answers)
+    rows, problems = judge(data, args.brief, args.rules, answers, ctx.repo)
     if problems:
         raise Refusal(
             problems,
@@ -676,8 +720,8 @@ def _record_problems(data: object, state: State) -> list[str]:
     out: list[str] = []
     if not _is_int(data["id"]):
         out.append(f"path: id must be a row id, not {data['id']!r}")
-    found = _text_problem(data["response"], "response", 1, MAX_RESPONSE)
-    if found and "one line" not in found:
+    found = _response_problem(data["response"])
+    if found:
         out.append(f"path: {found}")
     found = _text_problem(data["chosen"], "chosen", 0, MAX_LINE)
     if found:
@@ -742,10 +786,22 @@ def _cmd_fact(ctx: Ctx, args: argparse.Namespace) -> list[str]:
     return ["fact recorded shift=yes"]
 
 
+def _answered_ok(row: Row, response: str) -> bool:
+    # An answered row stays asked, or is decided only by a sentence its own answer holds.
+    if row.status == "ask":
+        return True
+    return (
+        row.status == "decide"
+        and row.source == "stated"
+        and _norm(row.source_ref) in _norm(response)
+    )
+
+
 def _regen_problems(rows: list[Row], state: State) -> list[str]:
     new = {r.id: r for r in rows}
     out: list[str] = []
-    for ident in sorted(_responses(state.events)):
+    replies = _responses(state.events)
+    for ident in sorted(replies):
         old = next((r for r in state.rows if r.id == ident), None)
         if old is None:
             continue
@@ -754,6 +810,11 @@ def _regen_problems(rows: list[Row], state: State) -> list[str]:
             out.append(f"path: row {ident} was answered and cannot be dropped")
         elif (got.kind, got.gap) != (old.kind, old.gap):
             out.append(f"path: row {ident} was answered; its kind and gap must stay as they were")
+        elif not _answered_ok(got, replies[ident]["response"]):
+            out.append(
+                f"path: row {ident} has a recorded answer; it stays asked, or is decided only "
+                "from a stated sentence found in that answer"
+            )
     return out
 
 
@@ -783,7 +844,7 @@ def _cmd_regenerate(ctx: Ctx, args: argparse.Namespace) -> list[str]:
         )
     _bad_handover(ctx, problem, "regenerate")
     answers = [e["response"] for e in state.events if e["ev"] == "response"]
-    rows, problems = judge(data, args.brief, args.rules, answers)
+    rows, problems = judge(data, args.brief, args.rules, answers, ctx.repo)
     if not problems:
         problems = _regen_problems(rows, state)
     if problems:

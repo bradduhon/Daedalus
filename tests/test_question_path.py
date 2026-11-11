@@ -17,8 +17,12 @@ BRIEF_SENTENCE = "Finding files are kept for thirty days."
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(storage, "TMP_ROOT", tmp_path / "tmproot")
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
+    (repo / "service-manifest.json").write_text('{"docs": {"reading_level": "plain"}}')
     brief = tmp_path / "brief.md"
     brief.write_text(f"Intro.\n{BRIEF_SENTENCE}  Other words.\n", encoding="utf-8")
     rules = tmp_path / "rules.md"
@@ -184,7 +188,10 @@ def test_check_refusals_name_the_bad_value(conv: Conv) -> None:
             row(1, "who", source="setting", source_ref="nope.key"),
             "'nope.key' is not a settings key",
         ),
-        (row(1, "who", source="stated", source_ref="Never said."), "is not in the brief"),
+        (
+            row(1, "who", source="stated", source_ref="Nobody ever said this."),
+            "is not in the brief",
+        ),
         (row(1, "who", source="rule", source_ref="9999"), "rule '9999' not found"),
         (row(1, "who", source="none"), "source none needs empty"),
         (row(1, "who", gap=""), "gap must be 1 to 300 characters"),
@@ -283,3 +290,70 @@ def test_stated_source_may_quote_an_earlier_answer(conv: Conv) -> None:
     rows = walk_rows()
     rows.append(row(11, "other", source="stated", source_ref=said))
     assert conv.check(rows, "regenerate")[0] == 0
+
+
+def test_stated_source_needs_four_words_and_twenty_characters(conv: Conv) -> None:
+    for short in ("the", "kept for days", "a b c d e f g h"):
+        got = conv.check([row(1, "other", source="stated", source_ref=short)])
+        assert got[0] == 1 and "needs at least 4 words and 20 characters" in got[1], short
+    nearest = row(1, "other", source="stated", source_ref="Finding files are kept")
+    assert conv.check([nearest])[0] == 0
+
+
+def test_setting_source_must_have_a_value_in_a_settings_file(
+    conv: Conv, env: dict[str, Any]
+) -> None:
+    unset = row(1, "format", source="setting", source_ref="checks.terraform_format")
+    code, out = conv.check([unset])
+    assert code == 1 and "the key 'checks.terraform_format' has no value set in any file" in out
+    manifest = Path(env["repo"]) / "service-manifest.json"
+    manifest.write_text('{"docs": {"reading_level": null}}')
+    nulled = row(1, "format", source="setting", source_ref="docs.reading_level")
+    assert "has no value set" in conv.check([nulled])[1]
+    manifest.write_text('{"docs": {"reading_level": "plain"}}')
+    assert conv.check([nulled])[0] == 0
+
+
+def _answer_six(conv: Conv) -> list[dict[str, Any]]:
+    rows = walk_rows()
+    conv.check(rows)
+    conv.run("ratify")
+    conv.run("next")
+    said = "Keep the files for seven days."
+    hand = {"id": 6, "response": said, "chosen": "x", "typed": True, "touches": []}
+    assert "shift=yes" in conv.run("record", hand=hand)[1]
+    return rows
+
+
+def test_answered_row_is_not_rewritten_against_its_answer(conv: Conv) -> None:
+    rows = _answer_six(conv)
+    via_setting = [dict(r) for r in rows]
+    via_setting[5].update(source="setting", source_ref="docs.reading_level", predicted="plain")
+    code, out = conv.check(via_setting, "regenerate")
+    assert code == 1 and "path: row 6 has a recorded answer" in out
+    unrelated = [dict(r) for r in rows]
+    unrelated[5].update(source="stated", source_ref=BRIEF_SENTENCE, predicted="thirty days")
+    assert "path: row 6 has a recorded answer" in conv.check(unrelated, "regenerate")[1]
+    own = [dict(r) for r in rows]
+    own[5].update(source="stated", source_ref="Keep the files for seven days.", predicted="seven")
+    assert conv.check(own, "regenerate")[0] == 0
+
+
+def test_control_characters_are_refused_in_every_text_field(conv: Conv) -> None:
+    for key in ("gap", "predicted", "source_ref"):
+        assert "holds a control character" in conv.check([row(1, "other", **{key: "a\x07b"})])[1]
+    _answer_six(conv)
+    bad = conv.run("fact", hand={"fact": "x\x1by", "kind": "web"})
+    assert bad[0] == 1 and "fact holds a control character" in bad[1]
+    assert conv.run("fact", hand={"fact": "plain fact", "kind": "web"})[0] == 0
+
+
+def test_record_text_fields_hold_no_control_characters(conv: Conv) -> None:
+    conv.check(walk_rows())
+    conv.run("ratify")
+    conv.run("next")
+    hand = {"id": 6, "response": "a\nb", "chosen": "c", "typed": False, "touches": []}
+    for bad in ({"chosen": "c\x00"}, {"response": "a\nb\x00c"}, {"response": "a\rb"}):
+        out = conv.run("record", hand={**hand, **bad})[1]
+        assert "holds a control character" in out, bad
+    assert conv.run("record", hand={**hand, "response": "line one\r\nline two"})[0] == 0
