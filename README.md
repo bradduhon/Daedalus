@@ -337,11 +337,16 @@ The operator file is a third file in the table. It lives at `~/.claude/daedalus/
 | `no_long_dashes` | `~/.claude/daedalus/operator.json` | Whether Daedalus text for you avoids long dashes. Nothing acts on it yet | Nothing acts on it yet: Daedalus text keeps whatever dashes it has. | starter | boolean or null | `true`, `false` or `null`; any other value is refused | `null`: no personal choice is set | `true` |
 | `guidance_source` | `~/.claude/daedalus/operator.json` | Where your working guidance is read from: Claude Code's own memory files, or a guidance folder Daedalus keeps beside this file. Nothing acts on it yet | Nothing acts on it yet: guidance is read where Claude Code reads it. | starter | string | `"claude"` or `"daedalus"` | `"claude"` | `"daedalus"` |
 | `script_language` | `~/.claude/daedalus/operator.json` | The language you want new scripts written in, told to every agent as guidance. Nothing acts on it yet | Nothing acts on it yet: agents choose the language for each script. | starter | string or null | A lowercase language name such as `python`, or `null` | `null`: no language is preferred | `"python"` |
+| `self_assessment` | `~/.claude/daedalus/operator.json` | Whether Self-Assessment mode is on. When it is on, Daedalus records its findings about its own skills, each a bug or a feature, and shows them at the close | Daedalus saves each finding outside your project. | starter | boolean | `true` or `false`; any other value is refused | `false`: Self-Assessment mode is off | `true` |
 <!-- end key reference -->
+
+Uninstalling the plugin deletes its data folder by default. The findings that `self_assessment` saves live in that folder and go with it. An uninstall run with the `--keep-data` option keeps the data folder.
 
 ## Safety model
 
-Outside a train, Daedalus leaves your session and your repository alone, with two exceptions. Daedalus's own agents keep their own checks. A read or search of a credential file meets one check, which warns your session in its context and refuses an agent.
+Outside a train, Daedalus leaves your session and your repository alone, with three exceptions. Daedalus's own agents keep their own checks. A read or search of a credential file meets one check, which warns your session in its context and refuses an agent. Four of the plugin's own calls are approved by its hook, as the next paragraph says.
+
+Daedalus's hook approves four of the plugin's own calls by itself, inside a train and outside one, so Claude Code does not ask you about them. Three are the calls to the findings script that start, save and show Self-Assessment findings. The fourth is the write of one hand-over file under `/tmp/.daedalus/`. That write is approved only while Self-Assessment mode is on. Nothing is approved when any Daedalus check refuses or warns about the call. A call that is not exactly one of those four shapes is handled as before. Your own ask and deny rules in Claude Code still win over this approval.
 
 Outside a train, Daedalus writes no files and keeps no audit log in any repository, even one where a train ran before. The one exception is `/daedalus:setup`. It writes the settings files you agree to and changes the settings you answer. At the plain reading level it also saves each question under `docs/.tmp/daedalus/` to check its wording.
 
@@ -693,6 +698,7 @@ Daedalus/
 │   ├── lib/packs.py                 # loads and checks framework control packs
 │   ├── lib/passes.py                # writes and checks the operator's one-time pass for a refused command
 │   ├── lib/plan_record.py           # loads and validates plan records
+│   ├── lib/plugin_approvals.py      # the plugin's own approval list the jail hook reads
 │   ├── lib/project_keys.py          # every manifest and config key, its reference row, and the starter files
 │   ├── lib/project_root.py          # finds the project root
 │   ├── lib/redact.py                # secret masking for audit records
@@ -700,9 +706,11 @@ Daedalus/
 │   ├── lib/repo_root.py             # finds a train marker before other lib modules load
 │   ├── lib/router.py                # runs each agent's calls through its hooks
 │   ├── lib/scrub.py                 # reads the declared scrub file's terms
+│   ├── lib/self_assessment.py       # the Self-Assessment flag and its two folders
 │   ├── lib/settings_edit.py         # changes one key of a settings file in place
 │   ├── lib/shell.py                 # the shell model the jail and checks share
 │   ├── lib/shparse.py               # parses one Bash command into nodes with spans
+│   ├── lib/storage.py               # the temporary and persistent folders every feature uses
 │   ├── lib/train_definition.py      # loads and validates train definitions
 │   ├── lib/train_runner.py          # the train state machine behind daedalus_train.py
 │   ├── lib/train_scope.py           # the train scope the jail's entry script reads first
