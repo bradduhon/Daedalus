@@ -143,6 +143,8 @@ def _parser() -> argparse.ArgumentParser:
     ask = sub.add_parser("ask-check")
     ask.add_argument("--repo", type=Path, required=True)
     ask.add_argument("--file", type=Path, required=True)
+    # 0250: the handoff brief whose Fixed words are the operator's and must appear.
+    ask.add_argument("--brief", type=Path)
     # prepush-2026-10-27 finding 6, 0157: the pack check before any frameworks rulebook runs.
     packs_cmd = sub.add_parser("packs")
     packs_cmd.add_argument("--repo", type=Path, required=True)
@@ -271,9 +273,9 @@ def _brief_check(repo: Path, brief: Path) -> Outcome:
     return Outcome(EXIT_STOP, lines)
 
 
-def _ask_check(question: Path) -> Outcome:
+def _ask_check(question: Path, brief: Path | None) -> Outcome:
     try:
-        problems = ask_file_problems(question)
+        problems = ask_file_problems(question, brief)
     except BriefError as exc:
         return Outcome(EXIT_STOP, [str(exc)])
     if not problems:
@@ -419,7 +421,7 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "brief-check":
         return _brief_check(repo, args.brief)
     if args.action == "ask-check":
-        return _ask_check(args.file)
+        return _ask_check(args.file, args.brief)
     if args.action == "packs":
         return _packs(repo, args.diff)
     if args.action == "writer-clear":

@@ -17,6 +17,7 @@ from lib.briefs import (
     ask_problems,
     brief_file_problems,
     brief_problems,
+    fixed_words,
     level_of,
 )
 
@@ -334,87 +335,148 @@ def test_brief_check_stops_on_a_bad_manifest(
     assert "docs.reading_level" in capsys.readouterr().out
 
 
-# 0199, 0200: one brainstorm question's reader text; the quoted notes sentence is the operator's.
-ASK_GOOD = "\n".join(
+# 0251: the target reply of the first live shaping conversation; it must pass every check.
+ASK_FIXTURE = "\n".join(
     [
-        "Heard: You want the level to scroll sideways.",
-        "Context: This decides how the player moves between screens.",
-        'You wrote: "the hero should run left to right across a big world with lots of secrets '
-        'hidden in the walls".',
-        "Question: Should the camera follow the player smoothly?",
-        "Proposal: The camera follows the player and keeps the hero in the middle.",
-        "Why: Players expect this in side-scrolling games.",
-        "Other ways:",
-        "A. The screen flips one full screen at a time.",
-        "B. The camera stays still and each level fits on one screen.",
-        "Rests on: notes file and src/game/camera_rig.ts:12",
+        "Anchor: In Self-Assessment mode the plugin diagnoses itself in a live run and collects "
+        "its findings.",
+        "Topic: This question is about who notices that something is a finding.",
+        "Sides: A script can count fixed events, such as you passing over the offered answer. "
+        "Claude can also notice when it had to work around a skill's text to get through.",
+        "Case: This morning's wizard walk produced seven findings. A script alone would have "
+        "caught two of them.",
+        "Question: Who should notice a finding in the first version of Self-Assessment mode?",
+        "Choices:",
+        "A. Script only: Catches 2 of this morning's 7 findings. Every finding is a counted fact, "
+        "so none is a guess.",
+        "B. Script, plus Claude's own findings: Catches all 7. Claude's findings are marked "
+        "unconfirmed, and some will be wrong.",
+        "C. Claude only: Catches the most, with no counted facts to check its findings against.",
+    ]
+)
+ASK_REPLY = ASK_FIXTURE + "\nRests on: <receipts, never shown>\n[STATUS: ASK] n=1"
+FIXTURE_WORDS = (
+    "Self-Assessment mode",
+    "finding",
+    "script",
+    "Claude",
+    "live run",
+    "wizard",
+    "skill",
+)
+HANDOFF = "\n".join(
+    [
+        "## Chosen direction",
+        "The plugin diagnoses itself in a live run.",
+        "",
+        "## Fixed words",
+        *(f"- {word}: a word the operator settled on." for word in FIXTURE_WORDS),
+        "",
+        "## Why this over the alternatives",
+        "- A form. Reason: it reads like paperwork.",
     ]
 )
 ASK_LONG = (
-    "The planner found that the tilemap loader reads every chunk at start, which is slow on phones."
+    "The planner found that the tilemap loader reads every chunk at the start of the game, "
+    "which is slow."
 )
 ASK_BAD = "\n".join(
     [
-        f"Context: {ASK_LONG}",
+        f"Topic: {ASK_LONG}",
         "Question: Should load_chunks stream?",
-        "Proposal: Stream the chunks from src/map as the player walks.",
-        "Why: It is faster.",
-        "Other ways:",
-        "A. Keep `load_chunks` as it is.",
+        "Choices:",
+        "A. Stream the chunks: Read them from src/map as the player walks.",
+        "B. Keep `load_chunks` just as it is: Nothing changes.",
     ]
 )
 ASK_BAD_LINES = [
-    f"question: Context sentence has 17 words, over 15 at plain: {ASK_LONG}",
-    "question: Context carries the agent name planner",
+    f"question: Topic sentence has 19 words, over 18 at plain: {ASK_LONG}",
+    "question: Topic carries the agent name planner",
     "question: Question carries the snake_case token load_chunks",
-    "question: Proposal carries the word src/map with a slash",
-    "question: Other way A carries a backtick: Keep `load_chunks` as it is.",
-    "question: Other way A carries the snake_case token `load_chunks`",
+    "question: Choice A carries the word src/map with a slash",
+    "question: Choice B label has 6 words, not 2 to 5: Keep `load_chunks` just as it is",
+    "question: Choice B label carries a backtick: Keep `load_chunks` just as it is",
+    "question: Choice B label carries the snake_case token `load_chunks`",
 ]
 
 
+def test_the_target_question_passes_with_and_without_its_fixed_words() -> None:
+    # 0250, 0251: the fixture is the shape the check exists for.
+    assert ask_problems(ASK_FIXTURE) == []
+    assert ask_problems(ASK_REPLY) == []
+    assert fixed_words(HANDOFF) == FIXTURE_WORDS
+    assert ask_problems(ASK_FIXTURE, FIXTURE_WORDS) == []
+
+
 def test_ask_problems_reads_every_reader_field_at_plain() -> None:
-    assert ask_problems(ASK_GOOD) == []
-    assert ask_problems("What I take you to want: A game about load_chunks.\nQuestion: Ok?") == [
+    assert [f"question: {line}" for line in ask_problems(ASK_BAD)] == ASK_BAD_LINES
+    opening = "What I take you to want: A game about load_chunks.\n"
+    assert ask_problems(opening + ASK_FIXTURE) == [
         "What I take you to want carries the snake_case token load_chunks"
     ]
-    assert [f"question: {line}" for line in ask_problems(ASK_BAD)] == ASK_BAD_LINES
-    assert ask_problems("Heard: Nothing yet.") == ["the question holds no Question: line"]
-    assert ask_problems("Question: Ready?\nWhy:") == ["Why is empty"]
+    assert ask_problems(ASK_FIXTURE.replace("Case: This", "Case:\nThis")) == []
 
 
-QUOTE = "a big map with secrets hidden in every single wall of the whole wide world"
-
-
-@pytest.mark.parametrize(
-    "quoted",
-    [f'"{QUOTE}"', f"\u201c{QUOTE}\u201d", f"'I don't want {QUOTE}'", f"\u2018{QUOTE}\u2019"],
+# (old text of the fixture, new text, the expected problem line)
+ASK_BREAKS = (
+    (
+        "A. Script only:",
+        "A. Script plus Claude plus a person:",
+        "Choice A label has 6 words, not 2 to 5: Script plus Claude plus a person",
+    ),
+    ("A. Script only:", "A. Script:", "Choice A label has 1 word, not 2 to 5: Script"),
+    (
+        "C. Claude only: Catches",
+        "C. Claude only, catches",
+        "Choice C is not `<label>: <description>`: Claude only, catches the most, with no "
+        "counted facts to check its findings against.",
+    ),
+    (
+        "Question: Who should notice a finding in the first version of Self-Assessment mode?",
+        "Question: A script notices every finding in Self-Assessment mode.",
+        "Question does not end in a question mark: A script notices every finding in "
+        "Self-Assessment mode.",
+    ),
+    (
+        "Topic: This question is about who notices that something is a finding.",
+        "Topic: This question is about who notices that something is a finding in the plugin "
+        "while it runs right now.",
+        "Topic sentence has 19 words, over 18 at plain: This question is about who notices that "
+        "something is a finding in the plugin while it runs right now.",
+    ),
 )
-def test_context_skips_the_operators_quote_only_beside_its_own_text(quoted: str) -> None:
-    # 0200: the quote is theirs; a Context of nothing but the quote reports it.
-    own = f"Question: Ready?\nContext: This picks the map size. You wrote: {quoted}."
-    assert ask_problems(own) == []
-    only = f"Question: Ready?\nContext: You wrote: {quoted}."
-    assert ask_problems(only) == ["Context is only a quotation"]
 
 
-def test_a_quote_outside_context_is_checked_like_any_text() -> None:
-    text = f'Question: Ready?\nWhy: You wrote: "{QUOTE}".'
-    assert [line.split(" over")[0] for line in ask_problems(text)] == ["Why sentence has 17 words,"]
+@pytest.mark.parametrize(("old", "new", "want"), ASK_BREAKS)
+def test_each_shape_rule_fails_on_its_break(old: str, new: str, want: str) -> None:
+    assert old in ASK_FIXTURE, old
+    assert ask_problems(ASK_FIXTURE.replace(old, new, 1)) == [want]
 
 
-def test_a_label_shaped_line_inside_context_is_checked() -> None:
-    # 0200: only Rests on and the status line end a field in a question file.
-    text = "\n".join(
-        [
-            "Context: This picks the map size.",
-            "Note: the load_chunks call is slow.",
-            "Question: Ready?",
-            "Rests on: src/map/load.py:12",
-            "[STATUS: ASK] n=1",
-        ]
-    )
-    assert ask_problems(text) == ["Context carries the snake_case token load_chunks"]
+def test_a_question_needs_a_question_line_and_two_choices() -> None:
+    no_choices = ASK_FIXTURE.split("\nChoices:", 1)[0]
+    assert ask_problems(no_choices) == [
+        "the question holds no Choices: block of two or more lettered lines"
+    ]
+    one = ASK_FIXTURE.split("\nB. ", 1)[0]
+    assert ask_problems(one) == [
+        "the question holds no Choices: block of two or more lettered lines"
+    ]
+    assert ask_problems(
+        "Topic: Nothing yet.\nChoices:\nA. Yes please: Go.\nB. No thanks: Stop."
+    ) == ["the question holds no Question: line"]
+
+
+def test_fixed_words_are_never_vocabulary_and_one_must_appear() -> None:
+    # 0250: a fixed word that is also an agent name is the operator's word.
+    text = ASK_FIXTURE.replace("A script alone", "The writer alone")
+    assert ask_problems(text) == ["Case carries the agent name writer"]
+    assert ask_problems(text, (*FIXTURE_WORDS, "the writer")) == []
+    assert ask_problems(ASK_FIXTURE, ("game board", "tilemap")) == [
+        "the question uses none of the fixed words: game board; tilemap"
+    ]
+    assert fixed_words("## Fixed words\nNone.\n") is None
+    assert fixed_words("## Chosen direction\n- script: a program.\n") is None
 
 
 @pytest.mark.parametrize("literacy", ["expert", "standard", None])
@@ -430,7 +492,7 @@ def test_ask_check_command_is_plain_whatever_the_manifest_says(
     folder = tmp_path / "out" / "brainstorm-20261101"
     folder.mkdir(parents=True)
     good, bad = folder / "ask-1.md", folder / "ask-2.md"
-    good.write_text(ASK_GOOD, encoding="utf-8")
+    good.write_text(ASK_FIXTURE, encoding="utf-8")
     bad.write_text(ASK_BAD, encoding="utf-8")
     assert daedalus_train.main(["ask-check", "--repo", str(repo), "--file", str(good)]) == 0
     assert capsys.readouterr().out == "question ok\n"
@@ -446,6 +508,94 @@ def test_ask_check_command_is_plain_whatever_the_manifest_says(
     big.write_text("Question: Ready?\n" + "x" * MAX_BRIEF_BYTES, encoding="utf-8")
     with pytest.raises(BriefError, match="bytes. Next:"):
         ask_file_problems(big)
+
+
+def test_ask_check_reads_the_fixed_words_of_the_brief(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 0250: --brief names the handoff brief; its Fixed words must appear in the question.
+    repo = _repo(tmp_path)
+    monkeypatch.chdir(repo)
+    folder = tmp_path / "brainstorm-20261110"
+    folder.mkdir()
+    question, brief = folder / "ask-1.md", folder / "handoff.md"
+    question.write_text(ASK_FIXTURE, encoding="utf-8")
+    brief.write_text(HANDOFF, encoding="utf-8")
+    args = ["ask-check", "--repo", str(repo), "--file", str(question), "--brief", str(brief)]
+    assert daedalus_train.main(args) == 0
+    assert capsys.readouterr().out == "question ok\n"
+    question.write_text(
+        "Topic: This picks the size.\nQuestion: How big is it?\nChoices:\n"
+        "A. Keep it small: Fast.\nB. Make it big: Slow.",
+        encoding="utf-8",
+    )
+    assert daedalus_train.main(args) == 1
+    assert (
+        capsys.readouterr()
+        .out.splitlines()[0]
+        .startswith(
+            "question: the question uses none of the fixed words: Self-Assessment mode; finding"
+        )
+    )
+    brief.unlink()
+    assert daedalus_train.main(args) == 1
+    assert "handoff brief" in capsys.readouterr().out
+
+
+# 0251: a setup question file in the layout the setup skill states; the skill and the check agree.
+SETUP_SKILL = REPO_ROOT / "skills" / "setup" / "SKILL.md"
+SETUP_ASK = "\n".join(
+    [
+        "Anchor: The reading level sets how plain the questions and docs are. It changes how "
+        "Daedalus writes to you. Nothing is set now.",
+        "Question: Which reading level should Daedalus write at for this project?",
+        "Choices:",
+        "A. Plain level: Short sentences in common words. The repository holds no setting yet.",
+        "B. Standard level: Longer sentences, still with no file paths.",
+        "C. Expert level: No limit on sentence length.",
+    ]
+)
+
+
+def test_setup_skill_states_the_label_rules_the_check_reads() -> None:
+    flat = " ".join(SETUP_SKILL.read_text(encoding="utf-8").split())
+    assert (
+        "as an `Anchor:` line holding the sentences before the question sentence, then a "
+        "`Question:` line holding the question sentence alone, then a `Choices:` line" in flat
+    )
+    assert (
+        "It ends with one open question sentence about the setting that ends in a question mark, "
+        'such as "Which commands run the unit tests for this project?" No closing sentence says '
+        "how to answer (0251)." in flat
+    )
+    assert "Pick an answer" not in flat
+    assert (
+        "then a `Choices:` line and one `<letter>. <label>: <description>` line per choice. In "
+        "the file, the first choice's label is written without its `Accept:` prefix, and every "
+        "label is two to five words, written whole (0251)." in flat
+    )
+    assert (
+        "Each choice label is two to five words; for a one-word value, write the value and its "
+        'noun, such as "Plain level" (0251).' in flat
+    )
+    labels = [p for p in ask_problems(SETUP_ASK) if p.startswith("Choice ")]
+    assert labels == []
+    accept = SETUP_ASK.replace("A. Plain level:", "A. Accept: plain level:")
+    assert "Choice A label has 1 word, not 2 to 5: Accept" in ask_problems(accept)
+    one_word = SETUP_ASK.replace("B. Standard level:", "B. Standard:")
+    assert "Choice B label has 1 word, not 2 to 5: Standard" in ask_problems(one_word)
+
+
+def test_a_setup_question_file_passes_ask_check_whole() -> None:
+    assert ask_problems(SETUP_ASK) == []
+    statement = SETUP_ASK.replace(
+        "Question: Which reading level should Daedalus write at for this project?",
+        "Question: Pick an answer, or choose Other and type your own.",
+    )
+    assert ask_problems(statement) == [
+        "Question does not end in a question mark: Pick an answer, or choose Other and type "
+        "your own."
+    ]
 
 
 def test_recipes_name_the_check_and_the_literacy_rule() -> None:

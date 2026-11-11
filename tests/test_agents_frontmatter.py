@@ -153,46 +153,67 @@ def test_planner_challenge_mode_section_holds_the_steps_and_grounding_rules() ->
         "ask how they add up before you offer to write.",
         "10. The probe rule: when an answer is a question the operator typed, answer it in full "
         "before your next question.",
-        '11. Before you ask "Write it now?", review every open item you hold.',
+        "11. Before you ask whether to write the design, review every open item you hold.",
         "is asked as a question first.",
         "`- <the item>. Worse if: <what would make it worse>. Decides: <who decides it>.`",
         "`Decides: the operator, question <n>.`",
         "The brainstorm skill sends `FIX` for an operator row with no question number",
         "Only `WRITE SPEC` puts an unasked item under Open risks",
-        '12. When enough is settled, ask that as a question too: "I think I have enough to write '
-        'the design. Write it now?"',
+        "12. When enough is settled, ask that as a question too, with the `Question:` "
+        '"Is the design ready to write now, or is there more to add?", choice A `Write it now`, '
+        "your proposal, and choice B `Keep going`",
         "13. On `Mode: plan` after a brainstorm, cut the spec as `## Method` says, holding the "
         "conversation as context.",
     ):
         assert step in section, step
-    # 0199, 0200: the question reply's labels in order, the plain rule and the relay lines.
+    # 0199, 0251: the question reply's labels in order, the plain rule and the relay lines.
     labels = (
         "Answer:",
-        "Heard:",
-        "Context:",
+        "Anchor:",
+        "Topic:",
+        "Sides:",
+        "Case:",
         "Question:",
-        "Proposal:",
-        "Why:",
-        "Other ways:",
+        "Choices:",
+        "A. <label>: <description>",
+        "B. <label>: <description>",
         "Rests on:",
     )
     shape = section.split("labels verbatim:", 1)[1].split("[STATUS: ASK] n=<n>", 1)[0]
     assert [shape.index(f"    {label}") for label in labels] == sorted(
         shape.index(f"    {label}") for label in labels
     )
+    for gone in ("Heard:", "Context:", "Proposal:", "Why:", "Other ways:", "Accepted:"):
+        assert gone not in section, gone
     for rule in (
-        "Every question carries a proposal (0200)",
-        "`Other ways:` holds one to three alternatives, lettered A, B and C",
-        "every question has at least one.",
-        '"Keep going, I have more to add." as its A.',
-        'quotes it in the form `You wrote: "<the sentence>"`, and only `Context:` carries',
-        "the `What I take you to want:` paragraph and everything from `Heard:` through",
+        'Topic: <one sentence that starts "This question is about">',
+        "absent when none exists, never invented",
+        "`Question:` is never a yes or no that leans to the proposal.",
+        "Every question carries a proposal (0200), and choice A is it",
+        "`Choices:` holds two to four lettered lines, A to D, each `<letter>. <label>: "
+        "<description>`",
+        "A label is two to five words, written whole.",
+        "each description gives the result on that case, by the same measure as the other choices.",
+        "Then it gives the trade in one sentence.",
+        "Fixed words (0250): the handoff brief's `## Fixed words` section lists the nouns",
+        "Every sentence a reader sees uses the fixed words as given.",
+        "Never write a synonym, a simpler word or a new phrase for a fixed thing.",
+        "On the straight path with no brief, the nouns of the operator's idea text or notes file "
+        "are the fixed words.",
+        "A thing with no fixed word is introduced once, named as a new word and defined with "
+        "fixed words, and is fixed from then on.",
+        "An operator's answer that changes a word changes the fixed word.",
+        "the `What I take you to want:` paragraph and everything from `Anchor:` through the last "
+        "choice line",
         "is plain whatever the manifest's reading-level key says",
-        "at most fifteen common words",
+        "at most eighteen common words",
         "gets a plain gloss in the same sentence the first time it appears",
         "Never ask how technical the reader is.",
         "The session relays each answer as `ANSWER n=<n>: <text>`",
+        "A picked choice arrives as `<letter>. <label>: <description>`, the choice line as you "
+        "wrote it, so `A.` accepts your proposal",
         "`REWORD n=<n>: <lines>`",
+        "reworded under the same n, its fixed words kept.",
         "`FIX n=<n>: <reason>`",
         "`WRITE SPEC` asks for the spec now",
         "Before you write the units, list every thing the spec requires",

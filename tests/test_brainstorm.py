@@ -158,14 +158,16 @@ ASK_LOOP = (
     "The question tool is the channel, never a paraphrase.",
     "Do not summarise, reorder or reword the planner's text.",
     "When the reply holds a `What I take you to want:` paragraph, print it once, as written",
-    "Check that the reply holds a `Proposal:` line and at least one `Other ways:` line.",
-    '`SendMessage(planner, "FIX n=<n>: every question carries a proposal and at least one other '
-    'way")` once',
-    "A second reply that misses either stops the skill. Next: rerun `/daedalus:brainstorm`",
+    "Check that the reply holds an `Anchor:` line, a `Topic:` line, a `Sides:` line, a "
+    "`Question:` line and a `Choices:` block of two to four lettered lines (0251).",
+    '`SendMessage(planner, "FIX n=<n>: <the missing parts>; every question has an Anchor, a '
+    'Topic, Sides, a Question and two to four Choices")` once',
+    "A second reply that misses any stops the skill. Next: rerun `/daedalus:brainstorm`",
     "to `<folder>/ask-<n>.md` with the Write tool: the `What I take you to want:` paragraph when "
-    "the reply holds one, then the planner's `Heard:` line through its `Other ways:` lines",
+    "the reply holds one, then the planner's `Anchor:` line through its last choice line, as "
+    "written.",
     "Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/daedalus_train.py ask-check --repo <repo> "
-    "--file <folder>/ask-<n>.md`.",
+    "--file <folder>/ask-<n>.md`, adding `--brief <folder>/handoff.md` when that file exists",
     "Exit 0 prints `question ok`.",
     '`SendMessage(planner, "REWORD n=<n>: <the check\'s question: lines>")` once',
     "A second failure on the same question asks it anyway.",
@@ -175,14 +177,15 @@ ASK_LOOP = (
     "The check runs in the main session only and reads any file the session names.",
     "One AskUserQuestion call with exactly one question, multiSelect false.",
     "The header is `Question <n>`.",
-    '"Pick an answer, or choose Other and type your own."',
+    "the `Anchor:` and `Topic:` sentences as one paragraph, the `Sides:` sentences as the next, "
+    "the `Case:` sentences as the next when the reply holds them, then the `Question:` sentence.",
+    "No labels and no closing instruction sentence.",
     "Never the `Rests on:` line, never the status line.",
-    "The first choice is `Accept: <the proposal's first clause, cut to five words>`, whose "
-    "description is the `Proposal:` and `Why:` sentences verbatim.",
-    "Then one choice per `Other ways:` line, in the planner's order: the label is the letter and "
-    "the line's first clause, cut to five words, and the description is the line's sentence "
-    "verbatim.",
-    "Two to four choices, so one to three alternatives",
+    "One choice per lettered line, in the planner's order: the label is the line's label as "
+    "written, and the description is the text after the label's colon, as written.",
+    "The first choice's label gains ` (proposed)`.",
+    "No label is cut or rewritten.",
+    "Two to four choices; past four, the first four are the choices.",
     "No other generic choice of any kind: the tool's own Other box is the only way to type an "
     "answer.",
     '"The design draft is at <path>. Does it say what you want?"',
@@ -194,9 +197,8 @@ ASK_LOOP = (
 )
 ANSWER_LOOP = (
     'Relay each answer as one message: `SendMessage(planner, "ANSWER n=<n>: <text>")`',
-    "The text is `Accepted: <the Proposal sentences verbatim>` for the Accept choice, "
-    "`<letter>: <the alternative's sentence verbatim>` for an alternative, or the operator's "
-    "typed text as typed.",
+    "The text is `<letter>. <label>: <description>` for a picked choice, the choice line as the "
+    "planner wrote it, without ` (proposed)`, or the operator's typed text as typed.",
     "Never paraphrase an answer and never answer for the operator.",
     "An empty pick asks the same question once more, alone, with the same choices and the "
     "framing sentence "
@@ -216,6 +218,13 @@ GONE = (
     "round=<k>",
     "At most four questions go in one AskUserQuestion call",
     "Split the reply text above the status line",
+    # 0251: the old question shape and its relay forms.
+    "Other ways",
+    "Proposal:",
+    "Heard:",
+    "Accepted:",
+    "Pick an answer, or choose Other",
+    "cut to five words>`, whose description is the `Proposal:`",
 )
 
 
@@ -237,7 +246,7 @@ def test_the_round_shape_is_gone(phrase: str) -> None:
 
 def test_opening_check_ask_and_choices_run_in_order() -> None:
     step6 = flatten(_step(_text(), 6))
-    order = ("Opening.", "Proposal. Check", "Plain check.", "One question.", "Choices.")
+    order = ("Opening.", "Shape. Check", "Plain check.", "One question.", "Choices.")
     assert [step6.index(part) for part in order] == sorted(step6.index(part) for part in order)
     head = _text().split("\n---", 1)[0]
     assert "holds a conversation with the operator, one question at a time" in head
@@ -250,7 +259,7 @@ GENERIC = re.compile(r"Reply|own words|Skip|Accept as proposed|Type my own")
 
 def test_choices_paragraph_offers_no_generic_choice() -> None:
     choices = flatten(_step(_text(), 6)).split("- Choices.", 1)[1].split("Then relay", 1)[0]
-    assert "`Accept: <the proposal's first clause" in choices
+    assert "The first choice's label gains ` (proposed)`." in choices
     assert not GENERIC.search(choices), GENERIC.search(choices)
     assert GENERIC.search("`Reply in my words`") and GENERIC.search("`Skip this item`")
 
@@ -331,7 +340,7 @@ def test_skill_names_the_files_it_writes_and_its_stops() -> None:
         "the operator says stop",
         "misses its receipt or its nearest version twice",
         "a reply ends off contract",
-        "a question reply misses its `Proposal:` line or its `Other ways:` line twice",
+        "a question reply misses a part of its shape twice",
         "the plain check fails on the question file itself twice",
         "a hook refuses the planner's write",
         "the plan validator fails twice at hand-off",
@@ -514,6 +523,12 @@ def test_board_and_brief_headings_match_the_checker() -> None:
     assert "`- <the idea>. Reason: <one line>`" in board
     assert "`- <the premise> (turn <n>)`" in board
     assert "or the word ASSUMED" in brief
+    # 0250: the brief lists the settled words, and the planner keeps them as given.
+    assert (
+        "`## Fixed words`: one `- <word or phrase>: <its meaning in one sentence>` line per noun "
+        "or descriptor the operator and you settled on, in the operator's wording (0250)."
+        in flatten(brief)
+    )
 
 
 def test_handoff_runs_both_checks_then_asks_the_exit_question() -> None:

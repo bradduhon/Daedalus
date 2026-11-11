@@ -10,6 +10,10 @@ An agent that shows a confident first draft and lets the user correct it.
 ## Chosen direction
 Show a full draft design first, "confident and wrong is fine", and let the user correct it line by line.
 
+## Fixed words
+- draft design: the full design the agent shows before any question.
+- correct: what the user does to a wrong line of the draft.
+
 ## Why this over the alternatives
 - Cap the questions per turn. Reason: it still feels like a form, only shorter.
 - Two agents argue while the user watches. Reason: the user wanted to steer, not watch.

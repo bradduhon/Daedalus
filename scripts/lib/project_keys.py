@@ -1060,7 +1060,7 @@ OVERLAPS: tuple[Overlap, ...] = (
         "reading level is checked but nothing reads it yet. Once it is read, it will apply "
         "only to a project that sets no reading level of its own.",
         (
-            ("scripts/lib/briefs.py", 281, "manifest.docs.literacy"),
+            ("scripts/lib/briefs.py", 342, "manifest.docs.literacy"),
             ("scripts/lib/operator_file.py", 4, "no check or hook acts on it yet"),
         ),
         None,

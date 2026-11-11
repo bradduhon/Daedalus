@@ -34,6 +34,7 @@ HANDOFF = (
     "Goal as first stated",
     "Goal now",
     "Chosen direction",
+    "Fixed words",
     "Why this over the alternatives",
     "Confirmed constraints",
     "Soft constraints",
@@ -75,6 +76,8 @@ _OPEN_RISKS = re.compile(r"##\s+(?:\d+\.\s*)?Open risks\s*")
 _DECIDES = re.compile(r"\bDecides:\s*(.*)")
 _OPERATOR = re.compile(r"\boperator\b", re.IGNORECASE)
 _QUESTION_REF = re.compile(r"\bquestion \d+\b", re.IGNORECASE)
+# 0250: one fixed word or phrase, then its meaning.
+_FIXED_WORD = re.compile(r"[^:\s][^:]*: \S.*")
 
 
 class CheckError(Exception):
@@ -171,12 +174,29 @@ def board_problems(text: str) -> list[str]:
     return problems
 
 
+def _fixed_word_problems(sections: dict[str, list[str]]) -> list[str]:
+    # 0250: at least one `- <word or phrase>: <its meaning>` line; the planner keeps them as given.
+    name = "Fixed words"
+    if name not in sections:
+        return []
+    items, problems = _items(name, sections[name])
+    if not items:
+        problems.append(f"{name} holds no `- <word or phrase>: <its meaning>` line")
+    problems += [
+        f"{name} item {n} is not `- <word or phrase>: <its meaning>`: {item}"
+        for n, item in enumerate(items, 1)
+        if _FIXED_WORD.fullmatch(item) is None
+    ]
+    return problems
+
+
 def handoff_problems(text: str) -> list[str]:
     # 0243: spec 4 and 7, the brief's fixed headings, reasons, tested turns and receipts.
     parsed = _sections(text)
     problems = _heading_problems([name for name, _ in parsed], HANDOFF)
     sections = dict(parsed)
     problems += _goal_problems(sections)
+    problems += _fixed_word_problems(sections)
     why = "Why this over the alternatives"
     problems += _per_item(sections, why, _has_reason, "gives no `Reason:`")
     problems += _per_item(sections, "Confirmed constraints", _has_turn, "names no `turn <n>`")
