@@ -554,6 +554,7 @@ def test_each_example_loads_through_its_own_reader(tmp_path: Path) -> None:
     assert validate(_example("operator"), "operator.example.json") == {
         "main_refusals": (),
         "guidance_source": "claude",
+        "self_assessment": False,
     }
 
 

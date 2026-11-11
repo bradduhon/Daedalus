@@ -3,5 +3,6 @@
   "reading_level": null,
   "no_long_dashes": null,
   "guidance_source": "claude",
-  "script_language": null
+  "script_language": null,
+  "self_assessment": false
 }
