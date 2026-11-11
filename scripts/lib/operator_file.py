@@ -32,6 +32,7 @@ TOP_KEYS = (
     "guidance_source",
     "script_language",
     "self_assessment",
+    "developer_profile",
 )
 # 0244: where the guidance layer is read from; claude is the default.
 GUIDANCE_SOURCES = ("claude", "daedalus")
@@ -51,6 +52,7 @@ class Operator:
     guidance_source: str = "claude"
     script_language: str | None = None
     self_assessment: bool = False
+    developer_profile: bool = False
 
 
 OPERATOR_KEYS = tuple(f.name for f in fields(Operator))
@@ -116,6 +118,11 @@ def _choices(raw: dict[str, object], where: str, prefix: str) -> dict[str, objec
         if not isinstance(raw["self_assessment"], bool):
             raise _fail(where, f"{prefix}self_assessment", "must be true or false")
         out["self_assessment"] = raw["self_assessment"]
+    if "developer_profile" in raw:
+        # 0252: true or false only; null is refused, the default is false.
+        if not isinstance(raw["developer_profile"], bool):
+            raise _fail(where, f"{prefix}developer_profile", "must be true or false")
+        out["developer_profile"] = raw["developer_profile"]
     return out
 
 

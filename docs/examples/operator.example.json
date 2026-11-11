@@ -4,5 +4,6 @@
   "no_long_dashes": null,
   "guidance_source": "claude",
   "script_language": null,
-  "self_assessment": false
+  "self_assessment": false,
+  "developer_profile": false
 }
