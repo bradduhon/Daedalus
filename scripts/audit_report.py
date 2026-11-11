@@ -46,6 +46,9 @@ _STATUS = (
 _TOOLS = ("Write", "Edit", "Bash")
 _EDIT_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 _REFUSALS = ("block", "ask")
+# 92: a warned main-session call ran; logs written before the word hold allow and are not counted.
+_WARNED = "warn"
+_RAN = ("allow", _WARNED)
 _HOOK_PREFIX = re.compile(r"([A-Za-z][A-Za-z0-9_.-]{0,63}): ")
 _MD_SPECIAL = re.compile(r"([\\`*_\[\]()!#|~])")
 TIMELINE_CHARS = 120
@@ -182,19 +185,22 @@ def _tool_table(records: list[dict[str, object]]) -> list[str]:
     lines = [
         "## Write, Edit and Bash calls",
         "",
-        "| agent_type | tool | allow | block |",
-        "|---|---|---|---|",
+        "| agent_type | tool | allow | warn | block |",
+        "|---|---|---|---|---|",
     ]
     for (agent_type, tool), tally in sorted(counts.items()):
-        lines.append(f"| {md_escape(agent_type)} | {tool} | {tally['allow']} | {tally['block']} |")
+        cells = f"{tally['allow']} | {tally[_WARNED]} | {tally['block']}"
+        lines.append(f"| {md_escape(agent_type)} | {tool} | {cells} |")
     return lines
 
 
 def _blocks(records: list[dict[str, object]]) -> list[str]:
     lines = ["## Blocks", ""]
     for rec in records:
-        if rec.get("decision") in _REFUSALS:
-            ask = " (ask)" if rec.get("decision") == "ask" else ""
+        decision = rec.get("decision")
+        if decision in (*_REFUSALS, _WARNED):
+            # 92: a warned call is listed with its word, as an ask is.
+            ask = f" ({decision})" if decision in ("ask", _WARNED) else ""
             lines.append(
                 f"- seq {rec.get('seq')} {md_escape(rec.get('agent_type'))} "
                 f"{md_escape(rec.get('tool_name'))}{ask}: {md_escape(rec.get('reason'))}"
@@ -230,7 +236,8 @@ def _totals(records: list[dict[str, object]], path: Path) -> list[str]:
         skipped = skipped_count(path)
     except AuditCorruptError as exc:
         raise ReportError(str(exc)) from exc
-    lines += ["", f"skipped fork stops: {skipped}"]
+    warned = sum(1 for rec in records if rec.get("decision") == _WARNED)
+    lines += ["", f"skipped fork stops: {skipped}", f"warned main-session calls: {warned}"]
     return lines
 
 
@@ -270,7 +277,7 @@ def _until_allowed(
     for rec in pre:
         if _seq_of(rec) <= seq or rec.get("agent_id") != origin.get("agent_id"):
             continue
-        if rec.get("decision") == "allow" and (tools is None or rec.get("tool_name") in tools):
+        if rec.get("decision") in _RAN and (tools is None or rec.get("tool_name") in tools):
             return _fmt(_seconds(origin.get("ts"), rec.get("ts")))
     return "none"
 
@@ -287,9 +294,15 @@ def _controls(records: list[dict[str, object]]) -> list[str]:
     pre = [r for r in records if r.get("event") == "PreToolUse"]
     blocks = [r for r in pre if r.get("decision") in _REFUSALS]
     tally = Counter((_hook_of(r), str(r.get("agent_type"))) for r in blocks)
+    warned = Counter(
+        (_hook_of(r), str(r.get("agent_type"))) for r in pre if r.get("decision") == _WARNED
+    )
     lines = ["## Control cost", "", "### Blocks per hook", ""]
-    lines += ["| hook | agent_type | blocks |", "|---|---|---|"]
-    lines += [f"| {md_escape(h)} | {md_escape(a)} | {n} |" for (h, a), n in sorted(tally.items())]
+    lines += ["| hook | agent_type | blocks | warned |", "|---|---|---|---|"]
+    lines += [
+        f"| {md_escape(h)} | {md_escape(a)} | {tally[(h, a)]} | {warned[(h, a)]} |"
+        for h, a in sorted(set(tally) | set(warned))
+    ]
     lines += ["", "### Failure behind each blocking hook", ""]
     rows = _control_rows()
     for hook in sorted({h.removesuffix(" (ask)") for h, _ in tally}):

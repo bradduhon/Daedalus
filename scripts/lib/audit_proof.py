@@ -48,6 +48,7 @@ SUMMARY_SCRIPT, SUMMARY_ACTION = "daedalus_train.py", "summary"
 PLUGIN_SCRIPT = Path(__file__).resolve().parents[1] / SUMMARY_SCRIPT
 _PLUGIN_VARS = ("${CLAUDE_PLUGIN_ROOT}", "$CLAUDE_PLUGIN_ROOT")
 _SUMMARY_AGENTS = ("main", "daedalus:orchestrator")
+# 92: warn is absent on purpose; a warned main-session call ran, as an allow did.
 _REFUSED = ("block", "ask")
 _PYTHONS = ("python3", "python")
 # pin D1 -> E4: the D1 refusal texts; only their Next: action names the summary command.

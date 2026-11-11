@@ -316,13 +316,32 @@ def test_blocks_carry_the_notes_lists_and_the_recorded_tally(tmp_path: Path) -> 
         "Habit: coder, workspace_integrity, a read of the plugin data folder",
         "Recorded blocks per hook:",
         "- unprefixed, orchestrator: 1",
+        "Recorded warnings per hook:",
+        "- none",
     ]
     assert _section(_text(tmp_path, notes=Notes(), records=RECORDS[:1]), "Blocks") == [
         f"Friction: {NO_NOTES}",
         f"Habit: {NO_NOTES}",
         "Recorded blocks per hook:",
         "- none",
+        "Recorded warnings per hook:",
+        "- none",
     ]
+
+
+def test_blocks_count_warned_main_calls_per_hook(tmp_path: Path) -> None:
+    # 92: a warn record is counted beside the blocks; an allow with a reason, old format, is not.
+    main = {"event": "PreToolUse", "tool_name": "Bash", "agent_type": "main", "agent_id": None}
+    warned = {**main, "seq": 10, "decision": "warn", "reason": "jail: flagged. Finding: x"}
+    old = {**main, "seq": 11, "decision": "allow", "reason": "jail: flagged. Finding: x"}
+    text = _text(tmp_path, records=[*RECORDS, warned, old])
+    assert _section(text, "Blocks")[-4:] == [
+        "Recorded blocks per hook:",
+        "- unprefixed, orchestrator: 1",
+        "Recorded warnings per hook:",
+        "- jail, main: 1",
+    ]
+    assert "warned main-session calls: 1" in _section(text, "Audit log")
 
 
 def test_audit_log_names_the_running_session_first_and_its_totals(tmp_path: Path) -> None:

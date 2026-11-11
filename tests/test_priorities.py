@@ -364,3 +364,26 @@ def test_summary_lists_settled_and_surfaced_decisions(tmp_path: Path) -> None:
     ]
     assert text.index("\n## Priorities\n") > text.index("\n## Rulings\n")
     assert text.index("\n## Priorities\n") < text.index("\n## Units\n")
+
+
+@pytest.mark.parametrize(("decision", "who"), [("warn", "main"), ("block", "unknown agent")])
+def test_summary_names_a_warned_choice_call_and_never_a_refused_one(
+    tmp_path: Path, decision: str, who: str
+) -> None:
+    # 92: a warned main-session choice call ran, so it names its agent; a refused one does not.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write(repo, BLOCK)
+    choice = {"chose": "one key", "over": "two", "cost": "c", "driver": "security", "rule": "1"}
+    command = (
+        f"python3 /p/scripts/daedalus_train.py choice --repo {repo} --chose 'one key' "
+        "--over two --cost c --driver security --rule 1"
+    )
+    record = {"seq": 1, "event": "PreToolUse", "tool_name": "Bash", "agent_type": "main"}
+    record.update(tool_input={"command": command}, decision=decision)
+    log = SessionLog("sess-a", tmp_path / "sess-a.jsonl", [record])
+    state = {**STATE, "choices": [choice]}
+    text = render(repo, TRAIN, state, [log], parse_notes(NOTES, "notes"), False, None)
+    assert _section(text, "Priorities") == [
+        f"- settled alone by rule 1, driver security, {who}: one key over two"
+    ]

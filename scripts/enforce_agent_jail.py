@@ -282,8 +282,8 @@ def _hook_failed(
     if "Next:" not in text:
         text += next_step
     try:
-        # AU-3, AU-12: the row records the decision taken, allow, with the warning as reason.
-        audit_append(payload, "allow", f"{hook}: {text}")
+        # 92, AU-3: the row records the decision taken, warn, with the warning as reason.
+        audit_append(payload, "warn", f"{hook}: {text}")
     except Exception as audit_exc:  # noqa: BLE001
         warning = f"{_AUDIT_WARN.format(tool=tool)} ({audit_exc}). The jail's finding: {text}"
         return _alert(agent, warning)
@@ -374,8 +374,8 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         # 0105, 6.1: the record carries the hook prefix; the main session's warning does not.
         reason = f"{_JAIL_HOOK}: {finding}" if finding else None
     try:
-        # Main never prompted (amends 0105, 0106): a warned call is recorded as allow, AU-3.
-        record = audit_append(payload, "allow" if allow or warn else "block", reason)
+        # 92, amends 0105, 0106: a warned main-session call runs and is recorded as warn, AU-3.
+        record = audit_append(payload, "allow" if allow else "warn" if warn else "block", reason)
     except Exception as exc:  # noqa: BLE001
         if read and allow:
             # spec 8: an allowed read is non-blocking on a failed record, as audit_log.py is.
