@@ -164,7 +164,25 @@ def _fast_path(payload: dict[str, object], agent: str, cwd: str) -> int:
     if reason and _bare_main(payload):
         # Main never prompted (amends 0106): allow with context, never ask; IA-5, the text literal.
         return _warn(_CREDENTIAL_WARN + reason)
-    return _block(agent, reason) if reason else 0
+    return _block(agent, reason) if reason else _approved(payload)
+
+
+def _approved(payload: dict[str, object]) -> int:
+    # 0253: asked only at a clean allow; an approval error leaves that allow as it was.
+    try:
+        from lib.plugin_approvals import approve
+
+        row = approve(payload)
+        if row is not None:
+            out = {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": f"Daedalus approval list: {row} (0253)",
+            }
+            print(json.dumps({"hookSpecificOutput": out}))
+    except Exception:  # noqa: BLE001, S110
+        pass
+    return 0
 
 
 def _bare_main(payload: dict[str, object]) -> bool:
@@ -374,12 +392,15 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         if "Next:" not in detail:
             detail += " Next: fix the project data dir (<repo>/.claude/daedalus) and retry."
         return _block(agent, detail)
-    if record is not None and record.get("root_source") == "cwd-fallback":
+    fell_back = record is not None and record.get("root_source") == "cwd-fallback"
+    if fell_back:
         _warn_fallback(str(payload.get("cwd")))
     if allow:
         if payload.get("tool_name") in ("Agent", "Task"):
             _record_run(payload, agent)
-        return 0
+            return 0
+        # 0253: a fallback note is output, so that allow is not clean and gets no approval.
+        return 0 if fell_back else _approved(payload)
     if warn:
         # Main never prompted (amends 0105, 0106): allow with context, never ask, for main.
         return _warn(str(finding))

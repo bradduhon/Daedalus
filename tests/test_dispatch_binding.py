@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -374,3 +375,128 @@ def test_a_worktree_line_inside_a_research_payload_keeps_the_coder_bound(
     plain = {"to": "c1", "message": f"RESUME.\nWorktree: {u2}"}
     assert dispatch_binding._resume_reason(plain, str(repo_cwd)) is None
     assert bindings_path(repo_cwd, TRAIN).read_bytes() != before, "the control line rebinds"
+
+
+def _send(repo: Path, to: str, message: str) -> dict[str, Any]:
+    # 150: the main session's SendMessage, fields as the audit logs record them.
+    tool_input = {"to": to, "recipient": to, "message": message, "summary": "resume"}
+    return {
+        "tool_name": "SendMessage",
+        "tool_input": tool_input,
+        "cwd": str(repo),
+        "session_id": "s",
+    }
+
+
+def _coder_write(repo: Path, agent_id: str, path: Path) -> dict[str, Any]:
+    tool_input = {"file_path": str(path), "content": "x\n"}
+    payload = {"tool_name": "Write", "tool_input": tool_input, "cwd": str(repo)}
+    return {**payload, "agent_type": CODER, "agent_id": agent_id, "session_id": "s"}
+
+
+def _bound_coder(repo: Path, unit: Path) -> tuple[Path, Path]:
+    # 150: coder c1 holds u1 by its first write; u2 and u3 are recorded units no coder holds.
+    seed_plan(repo, TRAIN)
+    _ok(repo, unit)
+    assert decide(_coder_write(repo, "c1", unit / "a.py"), Config()).allow
+    made = (create(repo, "u2", f"daedalus/{TRAIN}"), create(repo, "u3", f"daedalus/{TRAIN}"))
+    jail._registered_worktrees.cache_clear()
+    return made
+
+
+def test_a_main_session_resume_rebinds_the_coder_and_its_first_write_lands(
+    repo_cwd: Path, unit: Path
+) -> None:
+    # 150, 0086: the main session's resume records the rebind the orchestrator's would.
+    u2, u3 = _bound_coder(repo_cwd, unit)
+    d = decide(_send(repo_cwd, "c1", f"RESUME on unit u2.\nWorktree: {u2}"), Config())
+    assert (d.allow, d.warn, d.reason) == (True, False, None)
+    units = json.loads(bindings_path(repo_cwd, TRAIN).read_text(encoding="utf-8"))
+    assert units["units"] == {
+        "u1": {"agent_id": None, "retired_to": "u2"},
+        "u2": {"agent_id": "c1"},
+    }
+    assert decide(_coder_write(repo_cwd, "c1", u2 / "b.py"), Config()).allow
+    for path, needle in (
+        (unit / "a.py", "moved on to unit u2"),
+        (u3 / "c.py", "never dispatched"),
+        (repo_cwd / "c.py", "Next:"),
+    ):
+        refused = decide(_coder_write(repo_cwd, "c1", path), Config())
+        assert not refused.allow and needle in str(refused.reason), (path, refused.reason)
+    again = decide(_send(repo_cwd, "c1", f"RESUME.\nWorktree: {u2}"), Config())
+    assert (again.allow, again.warn) == (True, False), "a resume onto its own unit is a no-op"
+
+
+@pytest.mark.parametrize(
+    ("message", "needle"),
+    [
+        ("Worktree: {stray}", "is not a unit worktree"),
+        ("Worktree: {repo}", "is not a unit worktree"),
+        ("Worktree: relative/u2", "exactly one line"),
+        ("Worktree: {u2}\nWorktree: {u3}", "exactly one line"),
+        ("Worktree: {audit}", "is the audit worktree"),
+        ("Worktree: {held}", "already dispatched"),
+    ],
+)
+def test_a_main_session_resume_never_widens_the_coder(
+    repo_cwd: Path, unit: Path, message: str, needle: str
+) -> None:
+    # 150: a refused rebind is warned, records nothing, and the coder stays on its own unit.
+    u2, u3 = _bound_coder(repo_cwd, unit)
+    audit = _audit_tree(repo_cwd, flagged=True)
+    held = create(repo_cwd, "u4", f"daedalus/{TRAIN}")
+    jail._registered_worktrees.cache_clear()
+    assert (
+        dispatch_binding._dispatch_reason(_dispatch(repo_cwd, held)["tool_input"], str(repo_cwd))
+        is None
+    )
+    stray = repo_cwd / ".claude" / "worktrees" / "u9"
+    before = bindings_path(repo_cwd, TRAIN).read_bytes()
+    text = message.format(stray=stray, repo=repo_cwd, u2=u2, u3=u3, audit=audit, held=held)
+    d = decide(_send(repo_cwd, "c1", f"RESUME.\n{text}"), Config())
+    assert d.allow is False and d.warn is True, d
+    assert str(d.reason).startswith("This resume skips a train invariant (") and needle in str(
+        d.reason
+    )
+    assert bindings_path(repo_cwd, TRAIN).read_bytes() == before
+    assert decide(_coder_write(repo_cwd, "c1", unit / "a2.py"), Config()).allow
+    for path in (u2 / "b.py", stray / "b.py", audit / "b.py", held / "b.py", repo_cwd / "b.py"):
+        assert not decide(_coder_write(repo_cwd, "c1", path), Config()).allow, path
+
+
+@pytest.mark.parametrize("to", ["", "verifier-1", "coder", "daedalus:coder"])
+def test_a_main_session_resume_of_an_unbound_agent_records_nothing(
+    repo_cwd: Path, unit: Path, to: str
+) -> None:
+    # 150: no unit binding for the target in this run, so no record and no changed decision.
+    u2, _ = _bound_coder(repo_cwd, unit)
+    before = bindings_path(repo_cwd, TRAIN).read_bytes()
+    d = decide(_send(repo_cwd, to, f"RESUME.\nWorktree: {u2}"), Config())
+    assert (d.allow, d.warn, d.reason) == (True, False, None)
+    assert bindings_path(repo_cwd, TRAIN).read_bytes() == before
+
+
+def test_a_main_session_resume_with_no_bindings_file_records_nothing(
+    repo_cwd: Path, unit: Path
+) -> None:
+    # 150: before any coder is dispatched there is no bindings file, and none is created.
+    seed_plan(repo_cwd, TRAIN)
+    d = decide(_send(repo_cwd, "c1", f"RESUME.\nWorktree: {unit}"), Config())
+    assert (d.allow, d.warn, d.reason) == (True, False, None)
+    assert not bindings_path(repo_cwd, TRAIN).exists()
+
+
+def test_a_main_session_resume_is_warned_never_blocked_by_the_hook(
+    repo_cwd: Path, unit: Path, run_script: Callable[[str, dict[str, Any]], Any]
+) -> None:
+    # 150, amends 0106: the hook exits 0 with a warning in context, and 0 silent on a rebind.
+    u2, _ = _bound_coder(repo_cwd, unit)
+    stray = repo_cwd / ".claude" / "worktrees" / "u9"
+    warned = run_script("enforce_agent_jail.py", _send(repo_cwd, "c1", f"Worktree: {stray}"))
+    assert warned.returncode == 0, warned.stderr
+    assert "This resume skips a train invariant" in main_warning(warned.stdout)
+    moved = run_script("enforce_agent_jail.py", _send(repo_cwd, "c1", f"Worktree: {u2}"))
+    assert (moved.returncode, moved.stdout) == (0, ""), moved.stderr
+    assert claim(repo_cwd, TRAIN, "c1", "u2") is None, "the hook process recorded the rebind"
+    assert claim(repo_cwd, TRAIN, "c1", "u1") is not None

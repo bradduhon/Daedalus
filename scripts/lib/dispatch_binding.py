@@ -372,6 +372,26 @@ def _resume_reason(tool_input: dict[str, object], cwd: str) -> str | None:
     return rebind(repo, train, coder, held[0], unit)
 
 
+def main_resume_reason(tool_input: dict[str, object], cwd: str) -> str | None:
+    # 150, 0086: the main session's resume of a coder bound in this run meets the same rebind.
+    from lib.jail import _train_active
+
+    coder = str(tool_input.get("to") or "")
+    if not coder or not os.path.isabs(cwd) or not _train_active(cwd):
+        return None
+    repo = project_root(Path(cwd))
+    train = active_train(repo)
+    if train is None:
+        return None
+    try:
+        bound = unit_binding._read(unit_binding.bindings_path(repo, train))
+    except TrainStateError:
+        return _resume_reason(tool_input, cwd)  # 150: unreadable bindings; that gate reports it.
+    if not any(record.get("agent_id") == coder for record in bound.values()):
+        return None  # 150: an agent with no unit binding in this run records nothing.
+    return _resume_reason(tool_input, cwd)
+
+
 def _binding_reason(hook_input: dict[str, object], cwd: str, units: set[str]) -> str | None:
     # issue 29: the first write claims the dispatched unit; every later write stays in it.
     if not units:
