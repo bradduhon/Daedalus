@@ -302,6 +302,21 @@ FILES: tuple[Entry, ...] = (
         "a feature's first temporary write for a project; nothing in the plugin removes the folder",
     ),
     Entry(
+        "/tmp/.daedalus/<uid>/question-path/<project key>/<conv>/",
+        "scripts/lib/question_path.py:make_conv",
+        "you run daedalus_path.py open; <conv> is a UTC stamp, mode 0700",
+    ),
+    Entry(
+        "/tmp/.daedalus/<uid>/question-path/<project key>/<conv>/path-v<n>.json",
+        "scripts/lib/question_path.py:_write_version",
+        "daedalus_path.py check or regenerate passes; a version is never rewritten",
+    ),
+    Entry(
+        "/tmp/.daedalus/<uid>/question-path/<project key>/<conv>/log.jsonl",
+        "scripts/lib/question_path.py:_append_log",
+        "daedalus_path.py ratify, next, record, fact or regenerate; one line is appended",
+    ),
+    Entry(
         "<cache>/<feature>/<project key>/",
         "scripts/lib/storage.py:make_data_dir",
         "a feature's first persistent write; the plugin's uninstall removes the data folder",

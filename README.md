@@ -702,6 +702,7 @@ Daedalus/
 │   ├── lib/plugin_approvals.py      # the plugin's own approval list the jail hook reads
 │   ├── lib/project_keys.py          # every manifest and config key, its reference row, and the starter files
 │   ├── lib/project_root.py          # finds the project root
+│   ├── lib/question_path.py         # stores and checks a conversation's path of questions
 │   ├── lib/redact.py                # secret masking for audit records
 │   ├── lib/reply_digest.py          # saves a hand-back as a report file and builds its digest
 │   ├── lib/repo_root.py             # finds a train marker before other lib modules load
@@ -731,6 +732,7 @@ Daedalus/
 │   ├── daedalus_doctor.py           # first-run check behind /daedalus:doctor
 │   ├── daedalus_findings.py         # start, save and show for Self-Assessment findings
 │   ├── daedalus_map.py              # the dependency map: imports, coverage, record readers, ownership, duplicates
+│   ├── daedalus_path.py             # the question path store's open, check, ask and regenerate commands
 │   ├── daedalus_setup.py            # the settings wizard's describe, create and set forms
 │   ├── daedalus_train.py            # the train runner: progress, choice, plan, verdict, exception
 │   ├── daedalus_workspace.py        # begin, lock, create, remove, finish, stop, resume, mark, unmark, release, pr-body
