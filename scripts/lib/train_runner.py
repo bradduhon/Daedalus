@@ -1283,6 +1283,21 @@ def choice(
     return _recorded(cwd, edit)
 
 
+# 192: the composed run's phases in order; a phase's own record moves the progress phase forward.
+PHASE_ORDER = ("brainstorm", "plan", "build", "verify", "audit", "document", "release")
+
+
+def _reach_phase(state: dict[str, object], phase: str) -> None:
+    # 192: never back, never over an unknown phase name, never in a defined train (its gates).
+    current = _text(state, train_state.PHASE)
+    if state.get("mode") == MODE_DEFINED or current not in ("", *PHASE_ORDER):
+        return
+    if current and PHASE_ORDER.index(current) >= PHASE_ORDER.index(phase):
+        return
+    state[train_state.PHASE] = phase
+    state[train_state.WEIGHT] = NOT_CHOSEN
+
+
 def record_plan(cwd: Path, path: Path) -> Outcome:
     # 0086, 0088: the plan gate reads this record; a changed file no longer matches its hash.
     def edit(repo: Path, train_id: str) -> list[str]:
@@ -1458,6 +1473,8 @@ def coder_model(cwd: Path, unit_id: str) -> Outcome:
             for each in raw if isinstance(raw, list) else []:
                 if isinstance(each, dict) and each.get("name") == unit["name"]:
                     each[CODERS] = [*_objects(each, CODERS), entry]
+            # 192: the model record is a unit dispatch's, so the run is in build from here.
+            _reach_phase(state, "build")
 
         train_state.change(repo, train_id, add)
         return [models[tier], _coder_line(unit_id, entry)]
@@ -1527,6 +1544,7 @@ def refuted(cwd: Path, unit_id: str, operator_check: str | None = None) -> Outco
                     seqs = _refutation_seqs(each)
                     # issue 187: a repeated call on the same reply or Fail records nothing new.
                     each[REFUTATIONS] = seqs if key in seqs else [*seqs, key]
+            _reach_phase(state, "verify")
 
         after = train_state.change(repo, train_id, add)
         count = len(_refutation_seqs(_unit_record(after, train_id, unit_id)))
@@ -2548,6 +2566,7 @@ def record_verdict(
                     "Next: rerun verdict with no --round."
                 )
             state[train_state.VERDICT] = _verdict_record(status, judged, round_, found)
+            _reach_phase(state, "audit")
             # 73: the recovery round's auditor consult closes with its verdict.
             if train_state.record(state, REAUDIT):
                 _close_consult(state, AUDITOR_AGENT)
@@ -2692,7 +2711,12 @@ def record_docs_verdict(
             record["judged"] = judged
         if claims:
             record["findings"] = claims
-        train_state.update(repo, train_id, **{train_state.DOCS_VERDICT: record})
+
+        def change(fresh: dict[str, object]) -> None:
+            fresh[train_state.DOCS_VERDICT] = record
+            _reach_phase(fresh, "document")
+
+        train_state.change(repo, train_id, change)
         return [f"docs verdict recorded status={status} tip={current[:12]}"]
 
     return _recorded(cwd, edit)

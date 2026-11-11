@@ -2069,3 +2069,59 @@ def test_summary_cli_and_stop_write_the_summary(repo: Path, plugin: Path) -> Non
     assert stopped.lines[0].startswith(f"summary written train={train}"), stopped.lines
     assert f"\nSession {SESSION}: " in summary.read_text(encoding="utf-8")
     assert train_runner.summary(repo).code == 1
+
+
+def test_a_unit_dispatch_moves_the_progress_phase_off_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 192: a run that skipped the build choice reads build after its first unit dispatch.
+    from tests.test_records_in_one_call import _Clock, _fixture
+
+    monkeypatch.setattr(workspace, "datetime", _Clock)
+    root = _fixture(tmp_path / "repo")
+    assert train_runner.choice(root, "small: plan, build", "medium", "none", phase="plan").code == 0
+    assert train_runner.progress(root).lines[0] == "Phase: plan (weight: small: plan, build)"
+    assert train_runner.dispatch_unit(root, "U2").code == 0
+    assert train_runner.progress(root).lines[0] == "Phase: build (weight: not chosen)"
+    # A later phase's choice holds; a later dispatch never pulls it back to build.
+    assert train_runner.choice(root, "one verifier", "two", "none", phase="verify").code == 0
+    assert train_runner.dispatch_unit(root, "U1").code == 0
+    assert train_runner.progress(root).lines[0] == "Phase: verify (weight: one verifier)"
+
+
+@pytest.mark.parametrize(
+    ("current", "phase", "after"),
+    [
+        (None, "build", "build"),
+        ("plan", "build", "build"),
+        ("build", "verify", "verify"),
+        ("verify", "audit", "audit"),
+        ("audit", "document", "document"),
+        ("verify", "build", "verify"),
+        ("document", "audit", "document"),
+        ("implementation", "build", "implementation"),
+    ],
+)
+def test_each_phase_record_moves_the_progress_phase_forward_only(
+    current: str | None, phase: str, after: str
+) -> None:
+    # 192: a record moves the phase forward, never back, never over an unknown phase name.
+    state: dict[str, object] = {} if current is None else {"phase": current, "weight": "w"}
+    train_runner._reach_phase(state, phase)
+    assert state.get("phase") == after
+    assert state.get("weight") == ("w" if after == current else train_runner.NOT_CHOSEN)
+    defined: dict[str, object] = {"mode": train_runner.MODE_DEFINED, "phase": "plan"}
+    train_runner._reach_phase(defined, "build")
+    assert defined["phase"] == "plan"
+
+
+def test_the_approved_verdict_record_moves_the_phase_to_audit(repo: Path, plugin: Path) -> None:
+    # 192: the audit phase's first record moves a composed run off build.
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    train_state.update(repo, str(_state(repo)["train_id"]), mode=None, phase="build")
+    _marked(repo)
+    tip = _integration(repo)
+    _agent_stop(repo, "auditor", _verdict("APPROVED", tip), "aud-1")
+    assert _verdict_call(repo, "approved", None, tip=tip).code == 0
+    assert train_runner.progress(repo).lines[0] == "Phase: audit (weight: not chosen)"
