@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import copy
+import html
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -619,3 +621,143 @@ def test_units_files_come_from_the_branch_diff_not_the_coder_line(tmp_path: Path
         "tests/test\\_checks\\_root\\_writes.py | pytest 1 passed |"
     )
     assert rows[3] == f"| b2 | daedalus-unit/{TRAIN}-b2 | - | scripts/b2.py | - |"
+
+
+# 88: a path outside the repo spelled with Unicode stand-ins for `/`, `\` or `.`.
+LOOKALIKES = {
+    "fraction slash": "\u2044etc\u2044passwd",
+    "division slash": "..\u2215..\u2215etc\u2215passwd",
+    "fullwidth solidus": "\uff0fopt\uff0fu\uff0f.claude\uff0frules",
+    "fullwidth reverse solidus": "C:\uff3cUsers\uff3cu\uff3cx.json",
+    "reverse solidus operator": "\u29f5\u29f5wsl.localhost\u29f5x",
+    "two dot leader as parent": "docs\u2044\u2025\u2044\u2025\u2044outside",
+    "one dot leaders as parent": "\u2024\u2024\u2215\u2024\u2024\u2215secret",
+    "zero width space inside ../": "docs/.\u200b./.\u200b./x.md",
+    "fullwidth full stops as parent": "\uff0e\uff0e\u2044etc\u2044x",
+    "byte order mark inside ..": ".\ufeff.\u2044etc\u2044x",
+    "word joiner inside ..": ".\u2060.\u2215.\u2060.\u2215x",
+    "c1 control inside ..": ".\x81.\u2044etc\u2044x",
+    "combining mark after a slash": "docs/\u0338../\u0338../x.md",
+    "ascii slash with a look-alike": "docs/..\u2044..\u2044outside",
+}
+
+
+def _entities(token: str) -> str:
+    return "".join(c if c.isascii() else f"&#x{ord(c):x};" for c in token)
+
+
+def _md_escaped(token: str) -> str:
+    return "".join(c if c.isascii() else f"\\{c}" for c in token)
+
+
+FORMS: dict[str, Callable[[str], str]] = {
+    "as typed": str,
+    "entity-encoded": _entities,
+    "markdown-escaped": _md_escaped,
+}
+
+
+def _no_lookalike(text: str, token: str) -> None:
+    # A renderer decodes one level of entities; the decoded text holds no stand-in either.
+    rendered = html.unescape(text)
+    assert _path_tokens(text) == []
+    assert not [c for c in token if not c.isascii() and c in rendered]
+
+
+@pytest.mark.parametrize("token", LOOKALIKES.values(), ids=LOOKALIKES.keys())
+def test_a_lookalike_path_is_withheld_or_refused(token: str) -> None:
+    assert public(f"at {token} now", REPO, CHARTER, "w", withhold=True) == (
+        "at [path withheld] now"
+    )
+    with pytest.raises(SummaryError, match="carries the path"):
+        public(f"at {token} now", REPO, CHARTER, "the Task line of summary-notes.md")
+
+
+@pytest.mark.parametrize("form", FORMS.values(), ids=FORMS.keys())
+@pytest.mark.parametrize("token", LOOKALIKES.values(), ids=LOOKALIKES.keys())
+def test_a_lookalike_path_in_a_reply_never_prints(
+    tmp_path: Path, token: str, form: Callable[[str], str]
+) -> None:
+    spelled = form(token)
+    hostile = _stop(10, "auditor", f"[STATUS: COMPLIANCE] AU-9 PASS at {spelled}", "k1")
+    text = _text(tmp_path, records=[*RECORDS, hostile])
+    _no_lookalike(text, token)
+    if form is not _entities:
+        assert _section(text, "Compliance")[1] == "- auditor: AU-9 PASS at \\[path withheld\\]"
+
+
+@pytest.mark.parametrize("form", FORMS.values(), ids=FORMS.keys())
+@pytest.mark.parametrize("token", LOOKALIKES.values(), ids=LOOKALIKES.keys())
+def test_a_lookalike_path_in_a_state_value_never_prints(
+    tmp_path: Path, token: str, form: Callable[[str], str]
+) -> None:
+    state = {**copy.deepcopy(STATE), "base_branch": form(token)}
+    text = _text(tmp_path, state)
+    _no_lookalike(text, token)
+    assert text.splitlines()[2].startswith("Base: [path withheld] @ ")
+
+
+@pytest.mark.parametrize("form", FORMS.values(), ids=FORMS.keys())
+@pytest.mark.parametrize("token", LOOKALIKES.values(), ids=LOOKALIKES.keys())
+def test_a_lookalike_path_in_the_notes_refuses(
+    tmp_path: Path, token: str, form: Callable[[str], str]
+) -> None:
+    # 88: notes print unescaped, so the last pass reads an entity as the character it encodes.
+    notes = parse_notes(NOTES.replace("## Blocks", f"A ruling: see {form(token)}\n## Blocks"), "n")
+    with pytest.raises(SummaryError, match="carries the path"):
+        _text(tmp_path, notes=notes)
+
+
+def test_typed_prose_and_a_non_ascii_word_still_print(tmp_path: Path) -> None:
+    # 88: an apostrophe, ellipsis, no-break space and dash read as `/` form no refused path.
+    task = "fix the planner\u2019s brief\u2026 caf\u00e9\u00a0menu \u2014 then ship"
+    notes = parse_notes(NOTES.replace("build the summary command", task), "n")
+    unit = {"name": f"{TRAIN}-don\u2019t-split", "branch": f"daedalus-unit/{TRAIN}-u1", "path": U1}
+    state = {**copy.deepcopy(STATE), "units": [unit]}
+    text = _text(tmp_path, state, notes)
+    assert text.splitlines()[1] == f"Task: {task}"
+    assert _section(text, "Units")[2].startswith("| don\u2019t-split | ")
+    assert "withheld" not in text
+
+
+def test_a_non_ascii_folder_name_stays_outside_the_ascii_allow_list() -> None:
+    # W3.2: path components are plain ASCII names; 88 leaves that allow-list as it stood.
+    path = "docs/caf\u00e9/menu.md"
+    assert public(f"see {path}", REPO, CHARTER, "w", withhold=True) == "see [path withheld]"
+
+
+HEADER_REFUSED = {
+    "entity slash": "&#x2f;etc&#x2f;passwd",
+    "markdown-escaped slash": "\\/etc\\/passwd",
+    "backtick": "main`x",
+    "hash": "main#x",
+    "parenthesis": "main(x)",
+    "newline": "main\nSession evil: x",
+}
+
+
+@pytest.mark.parametrize("value", HEADER_REFUSED.values(), ids=HEADER_REFUSED.keys())
+@pytest.mark.parametrize("key", ["base_branch", "base_sha", "charter_base"])
+def test_a_state_value_outside_the_header_set_is_withheld(
+    tmp_path: Path, key: str, value: str
+) -> None:
+    # 89: a header value prints as written or as the marker; the summary is never refused.
+    state = {**copy.deepcopy(STATE), key: value}
+    text = _text(tmp_path, state)
+    header = "\n".join(text.splitlines()[2:4])
+    assert "[path withheld]" in header and value not in text
+    assert "\\" not in header and "&" not in header
+    assert _path_tokens(text) == []
+    assert "/etc" not in html.unescape(text)
+
+
+def test_header_values_with_an_underscore_print_as_written(tmp_path: Path) -> None:
+    # 89: the release step copies these values into commands, so no escape backslash appears.
+    state = {
+        **copy.deepcopy(STATE),
+        "base_branch": "feature/foo_bar",
+        "contract_path": f"{CHARTER}/specs/my_api.md",
+    }
+    lines = _text(tmp_path, state).splitlines()
+    assert lines[2] == f"Base: feature/foo_bar @ {'a' * 40}. Integration branch: daedalus/{TRAIN}."
+    assert lines[5] == "Contract: private/specs/my_api.md v3"
