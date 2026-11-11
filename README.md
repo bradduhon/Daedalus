@@ -344,7 +344,9 @@ Uninstalling the plugin deletes its data folder by default. The findings that `s
 
 ## Safety model
 
-Outside a train, Daedalus leaves your session and your repository alone, with two exceptions. Daedalus's own agents keep their own checks. A read or search of a credential file meets one check, which warns your session in its context and refuses an agent.
+Outside a train, Daedalus leaves your session and your repository alone, with three exceptions. Daedalus's own agents keep their own checks. A read or search of a credential file meets one check, which warns your session in its context and refuses an agent. Four of the plugin's own calls are approved by its hook, as the next paragraph says.
+
+Daedalus's hook approves four of the plugin's own calls by itself, inside a train and outside one, so Claude Code does not ask you about them. Three are the calls to the findings script that start, save and show Self-Assessment findings. The fourth is the write of one hand-over file under `/tmp/.daedalus/`. That write is approved only while Self-Assessment mode is on. Nothing is approved when any Daedalus check refuses or warns about the call. A call that is not exactly one of those four shapes is handled as before. Your own ask and deny rules in Claude Code still win over this approval.
 
 Outside a train, Daedalus writes no files and keeps no audit log in any repository, even one where a train ran before. The one exception is `/daedalus:setup`. It writes the settings files you agree to and changes the settings you answer. At the plain reading level it also saves each question under `docs/.tmp/daedalus/` to check its wording.
 

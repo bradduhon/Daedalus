@@ -555,6 +555,18 @@ def test_a_symlinked_target_is_not_approved(
     same_as_today(_write(env, target))
 
 
+def test_a_hard_linked_target_is_not_approved(
+    env: Path, home: Path, tmp_path: Path, same_as_today: Any
+) -> None:
+    _mode(home, True)
+    target = _handover(env)
+    target.write_text("{}", encoding="utf-8")
+    assert plugin_approvals.approve(_write(env, target)) == "handover-write"
+    os.link(target, tmp_path / "second-name.json")
+    assert plugin_approvals.approve(_write(env, target)) is None
+    same_as_today(_write(env, target))
+
+
 def test_a_target_that_is_a_folder_is_not_approved(
     env: Path, home: Path, same_as_today: Any
 ) -> None:

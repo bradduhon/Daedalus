@@ -171,4 +171,5 @@ def _write(tool_input: dict[str, object], cwd: str) -> bool:
         target = os.lstat(file_path)
     except FileNotFoundError:
         return True
-    return stat.S_ISREG(target.st_mode)
+    # One link only: a second name would let the write change a file kept elsewhere.
+    return stat.S_ISREG(target.st_mode) and target.st_nlink == 1
