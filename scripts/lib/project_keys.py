@@ -271,7 +271,8 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "checks.terraform_format"): KeyRow(
         "Lets the auditor run `terraform fmt -check` on the Terraform files a change touches. "
-        "With it off, the auditor judges by reading the files, and validate is off too",
+        "With it off, the auditor judges by reading the files, "
+        "and validate and its init are off too",
         "boolean or null",
         "`true`, `false` or `null`; only `false` turns it off",
         "`true`: `fmt -check` may run",
@@ -282,12 +283,14 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     ),
     (MANIFEST_FILE, "checks.terraform_validate"): KeyRow(
         "Lets the auditor run `terraform validate`, which starts the provider programs in a "
-        "module's `.terraform` folder; `checks.terraform_format` set to `false` still turns it off",
+        "module's `.terraform` folder, and, only under the kernel wrapper, `terraform "
+        "-chdir=<folder> init -backend=false -input=false -lockfile=readonly`; "
+        "`checks.terraform_format` set to `false` still turns both off",
         "boolean",
         "`true` or `false`",
-        "`false`: the auditor runs no validate and marks that check N/A",
+        "`false`: the auditor runs no validate or init and marks that check N/A",
         "`true`",
-        "The audit may also run the Terraform validate check, which starts provider programs.",
+        "The audit may also run the Terraform validate check and its offline setup step.",
         ("packs/judges/terraform.md",),
     ),
     (MANIFEST_FILE, "checks.release_banned_terms"): KeyRow(
