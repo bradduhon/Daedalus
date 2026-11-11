@@ -1716,11 +1716,24 @@ def _off_row(word: str, row: str, key: str) -> str:
     # 258: names the option and the row it is off, then the runner-row class phrase.
     why = "" if key in OPTION_TABLE else ", which takes no option since its tool is unknown"
     tail = "so it is not a test-runner form (258, 0164)"
+    once = "run the command once, under the kernel wrapper"
     plain, valued = OPTION_TABLE.get(key, _NO_ROW)
     short = not word.startswith("--") and all(f"-{c}" in plain for c in word[1:-1])
     if word in valued or (short and f"-{word[-1:]}" in valued):
-        return f"the option {word} on the {row} row takes a next word that is not an option, {tail}"
-    return f"the option {word} is not on the {row} row{why}, {tail}"
+        return (
+            f"the option {word} on the {row} row takes a next word that is not an option, {tail}. "
+            f"Next: give it a value that does not start with -, or drop it, and {once}."
+        )
+    # 258: a script's own entry in package.json is never read, so `<launcher> <script>` admits.
+    body = (
+        "; an option the script needs belongs in its own entry in the project's package.json"
+        if row.endswith(" script")
+        else ""
+    )
+    return (
+        f"the option {word} is not on the {row} row{why}, {tail}. Next: drop the option and "
+        f"{once}{body}, or yield the command to the operator if the work needs that option."
+    )
 
 
 def runner_options(tokens: list[str]) -> Miss:
@@ -1743,7 +1756,8 @@ def _js_tool(toks: list[str], at: int) -> Miss:
     if toks[at + 1 : at + 2] != [verb]:
         return (
             at,
-            f"{name} runs only as `{name} {verb}`, so it is not a test-runner form (258, 0164)",
+            f"{name} runs only as `{name} {verb}`, so it is not a test-runner form (258, 0164). "
+            f"Next: run `{name} {verb}`, under the kernel wrapper.",
         )
     return _js_options(toks, at + 2, f"{name} {verb}", f"{name} {verb}")
 
