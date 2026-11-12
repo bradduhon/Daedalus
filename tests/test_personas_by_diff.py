@@ -94,7 +94,9 @@ def test_persona_switch_refuses_a_value_outside_its_type(
 
 
 @pytest.mark.parametrize(
-    "value", [None, *LITERACY_LEVELS, "profile:docs/voice.md", "profile:voice.md"]
+    # 0255: the retired word plain still loads, so a project that set it keeps working.
+    "value",
+    [None, *LITERACY_LEVELS, "plain", "profile:docs/voice.md", "profile:voice.md"],
 )
 def test_docs_reading_level_reads_a_level_a_profile_or_null(
     tmp_path: Path, value: str | None

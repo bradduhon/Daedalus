@@ -40,10 +40,12 @@ def _denied(hook_input: dict[str, object], marker: str) -> None:
 
 
 def _main_warned(command: str, marker: str) -> None:
-    # 228 tail, 0105: main is warned, by the store's name or by its grammar's refusal.
+    # 228 tail, 0259: main is noted, with the store's name on the audit row where the typed
+    # check found it, or by the note reading where main's grammar types no path.
     d = jail.decide(_b(None, command), CFG)
-    reason = str(d.reason)
-    assert not d.allow and d.warn and (marker in reason or "Refused: " in reason), command
+    reason = str(d.record)
+    assert not d.allow and d.warn and d.note == "credential_read", command
+    assert marker in reason or "Detail:" not in reason, command
 
 
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
@@ -81,7 +83,9 @@ def test_reply_key_is_refused_to_every_agent(tmp_path: Path, agent: str | None) 
         cat,
     ):
         d = judge(hook_input, CFG)
-        assert not d.allow and "is the train's reply key. Next:" in str(d.reason), hook_input
+        assert not d.allow and "is the train's reply key. Next:" in str(d.record or d.reason), (
+            hook_input
+        )
     other = data / "config.json"
     other.write_text("{}")
     assert judge(_cred(agent, "Read", cwd=str(repo), file_path=str(other)), CFG).allow
@@ -131,7 +135,7 @@ def test_grep_tool_on_the_data_folder_is_refused(tmp_path: Path) -> None:
     for path in (repo / ".claude" / "daedalus", repo / ".claude"):
         hook_input = _cred("auditor", "Grep", cwd=str(repo), pattern=".", path=str(path))
         d = decide(hook_input, CFG)
-        assert not d.allow and "contains the train's reply key. Next:" in str(d.reason)
+        assert not d.allow and "contains the train's reply key. Next:" in str(d.record or d.reason)
     config = repo / ".claude" / "daedalus" / "config.json"
     read = _cred("auditor", "Read", cwd=str(repo), file_path=str(config))
     assert decide(read, CFG).allow
@@ -155,7 +159,9 @@ def test_grep_glob_that_overrides_the_marker_is_refused(tmp_path: Path, glob: st
         tool_input = {"pattern": ".", "glob": glob} | ({"path": path} if path else {})
         case = {"tool_name": "Grep", "tool_input": tool_input, "cwd": str(repo)}
         d = decide({**case, "agent_type": "auditor"}, CFG)
-        assert not d.allow and "contains the train's reply key. Next:" in str(d.reason), glob
+        assert not d.allow and "contains the train's reply key. Next:" in str(
+            d.record or d.reason
+        ), glob
 
 
 def test_grep_glob_beside_the_reply_key_is_allowed(tmp_path: Path) -> None:
@@ -221,7 +227,7 @@ def test_glob_tool_re_rooted_brace_alternative_is_refused(
     judge = decide if agent else jail_decide
     for pattern in (f"{{{cred_home}/.ssh,x}}/*", f"{{{cred_home}/.aws/credentials,x}}"):
         d = judge(_cred(agent, "Glob", pattern=pattern), CFG)
-        assert not d.allow and "is a credential path" in str(d.reason), (agent, pattern)
+        assert not d.allow and "is a credential path" in str(d.record or d.reason), (agent, pattern)
 
 
 @pytest.mark.parametrize("agent", [None, *CREDENTIAL_AGENTS])
@@ -239,12 +245,12 @@ def test_unexpanded_brace_with_a_rooted_alternative_is_refused(
         _cred(agent, "Glob", pattern=f"{{{many},{cred_home}/.ssh}}/*"),
     ):
         d = judge(case, CFG)
-        reason = str(d.reason)
+        reason = str(d.record or d.reason)
         # 228 tail: a Bash brace list is refused by every grammar, which names it.
         named = ("does not expand", "credential path", "brace expansion { , } is not admitted")
         assert not d.allow and any(n in reason for n in named), case
     d = judge(_cred(agent, "Glob", pattern=f"{{x,{cred_home}/.s{{s..s}}h}}/*"), CFG)
-    assert not d.allow and "does not expand" in str(d.reason)
+    assert not d.allow and "does not expand" in str(d.record or d.reason)
 
 
 # audit B4 round 3: the auditor's brace class table, each form against the store match.
@@ -311,7 +317,7 @@ def test_glob_tool_sequence_brace_naming_a_store_is_refused(
     judge = decide if agent else jail_decide
     for pattern in (f"{cred_home}/.{{s..s}}sh/*", "~/.{a..z}ws/credentials"):
         d = judge(_cred(agent, "Glob", pattern=pattern), CFG)
-        assert not d.allow and "is a credential path" in str(d.reason), (agent, pattern)
+        assert not d.allow and "is a credential path" in str(d.record or d.reason), (agent, pattern)
 
 
 def test_grep_sequence_glob_naming_the_reply_key_is_refused(tmp_path: Path) -> None:
@@ -388,7 +394,7 @@ def test_glob_and_grep_into_credentials_are_refused(cred_home: Path, agent: str 
         _cred(agent, "Grep", pattern="~/.ssh/id_ed25519"),
     ):
         d = decide(hook_input, CFG)
-        assert not d.allow and "is a credential path" in str(d.reason), hook_input
+        assert not d.allow and "is a credential path" in str(d.record or d.reason), hook_input
 
 
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
@@ -478,7 +484,7 @@ def test_grep_rooted_at_home_or_an_ancestor_is_refused(cred_home: Path, agent: s
         _cred(agent, "Grep", pattern="BEGIN", path="~", glob="*.pub", type="py"),
     ):
         d = decide(hook_input, CFG)
-        assert not d.allow and "credential path" in str(d.reason), hook_input
+        assert not d.allow and "credential path" in str(d.record or d.reason), hook_input
     ok = _cred(agent, "Grep", pattern="BEGIN", path=str(cred_home / "project"))
     assert decide(ok, CFG).allow
 
@@ -577,7 +583,7 @@ def test_env_files_are_refused_to_every_agent(tmp_path: Path, agent: str | None)
     repo = _env_repo(tmp_path)
     for rel in (".env", ".env.local", "apps/web/.env", "notes.txt"):
         d = judge(_cred(agent, "Read", cwd=str(repo), file_path=str(repo / rel)), CFG)
-        assert not d.allow and ENV_DENY in str(d.reason), rel
+        assert not d.allow and ENV_DENY in str(d.record or d.reason), rel
     example = _cred(agent, "Read", cwd=str(repo), file_path=str(repo / ".env.example"))
     assert judge(example, CFG).allow
     # 0192: Glob lists names only, so a pattern naming .env files stays open.
@@ -835,7 +841,7 @@ def test_writing_an_env_whitelist_into_an_ignore_file_is_refused(tmp_path: Path,
     # 228 tail: main's grammar admits the heredoc and here-string forms and types their text.
     for command in (f"cat >> {name} <<EOF\n!**/.env\nEOF", f"tee {name} <<< '!.env'"):
         d = jail.decide({**_bash_in(repo, "main", command), "agent_type": "main"}, CFG)
-        assert d.warn and WHITELIST_WRITE in str(d.reason), command
+        assert d.warn and WHITELIST_WRITE in str(d.record), command
 
 
 ESCAPED = ["!\\.env", "!\\.e*", "!\\.env\\.local"]

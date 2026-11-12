@@ -57,7 +57,9 @@ class Features:
 # 0073: the one list of feature names; validator check 13 and the key reference import it.
 FEATURE_KEYS = tuple(f.name for f in fields(Features))
 # 0134, 0245: a docs.reading_level value is a level word or profile:<project-relative path>.
-LITERACY_LEVELS = ("plain", "standard", "expert")
+LITERACY_LEVELS = ("standard", "expert")
+# 0255: the retired level word still loads, so a set project keeps working; it reads standard.
+LITERACY_RETIRED = "plain"
 LITERACY_PROFILE = "profile:"
 
 
@@ -386,7 +388,7 @@ def _switch(target: Path, block: dict[str, object], key: str) -> bool | None:
 
 
 def _literacy_ok(value: object) -> bool:
-    if value is None or value in LITERACY_LEVELS:
+    if value is None or value in (*LITERACY_LEVELS, LITERACY_RETIRED):
         return True
     if not isinstance(value, str) or not value.startswith(LITERACY_PROFILE):
         return False

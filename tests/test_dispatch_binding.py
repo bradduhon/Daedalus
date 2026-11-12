@@ -71,9 +71,10 @@ def _ok(repo: Path, worktree: Path) -> None:
 
 
 def _refused(repo: Path, worktree: Path, *needles: str) -> str:
+    # 0259: a main dispatch is noted; the skipped rule rides the audit row beside the note.
     d = decide(_dispatch(repo, worktree), Config())
-    assert not d.allow
-    reason = str(d.reason)
+    assert not d.allow and d.note == "dispatch_rule" and "Refused" not in str(d.reason)
+    reason = str(d.record)
     assert NEXT in reason and all(n in reason for n in needles), reason
     assert not bindings_path(repo, TRAIN).exists(), "a refused dispatch is never recorded"
     return reason
@@ -320,7 +321,7 @@ def test_a_coder_dispatch_naming_the_audit_worktree_is_refused(
     tool_input = _dispatch(repo_cwd, tree)["tool_input"]
     assert dispatch_binding._dispatch_reason(tool_input, str(repo_cwd)) == want
     d = decide(_dispatch(repo_cwd, tree), Config())
-    assert not d.allow and want in str(d.reason)
+    assert not d.allow and want in str(d.record or d.reason)
     assert f"{tree} is the audit worktree" in want and "Next: name the coder's own unit" in want
     assert not bindings_path(repo_cwd, TRAIN).exists(), "a refused dispatch is never recorded"
     _ok(repo_cwd, unit)
@@ -423,7 +424,10 @@ def test_a_main_session_resume_rebinds_the_coder_and_its_first_write_lands(
         (repo_cwd / "c.py", "Next:"),
     ):
         refused = decide(_coder_write(repo_cwd, "c1", path), Config())
-        assert not refused.allow and needle in str(refused.reason), (path, refused.reason)
+        assert not refused.allow and needle in str(refused.record or refused.reason), (
+            path,
+            refused.reason,
+        )
     again = decide(_send(repo_cwd, "c1", f"RESUME.\nWorktree: {u2}"), Config())
     assert (again.allow, again.warn) == (True, False), "a resume onto its own unit is a no-op"
 
@@ -456,9 +460,7 @@ def test_a_main_session_resume_never_widens_the_coder(
     text = message.format(stray=stray, repo=repo_cwd, u2=u2, u3=u3, audit=audit, held=held)
     d = decide(_send(repo_cwd, "c1", f"RESUME.\n{text}"), Config())
     assert d.allow is False and d.warn is True, d
-    assert str(d.reason).startswith("This resume skips a train invariant (") and needle in str(
-        d.reason
-    )
+    assert d.note == "resume_rule" and needle in str(d.record), d
     assert bindings_path(repo_cwd, TRAIN).read_bytes() == before
     assert decide(_coder_write(repo_cwd, "c1", unit / "a2.py"), Config()).allow
     for path in (u2 / "b.py", stray / "b.py", audit / "b.py", held / "b.py", repo_cwd / "b.py"):
@@ -495,7 +497,7 @@ def test_a_main_session_resume_is_warned_never_blocked_by_the_hook(
     stray = repo_cwd / ".claude" / "worktrees" / "u9"
     warned = run_script("enforce_agent_jail.py", _send(repo_cwd, "c1", f"Worktree: {stray}"))
     assert warned.returncode == 0, warned.stderr
-    assert "This resume skips a train invariant" in main_warning(warned.stdout)
+    assert "This resume skips the run's unit binding check" in main_warning(warned.stdout)
     moved = run_script("enforce_agent_jail.py", _send(repo_cwd, "c1", f"Worktree: {u2}"))
     assert (moved.returncode, moved.stdout) == (0, ""), moved.stderr
     assert claim(repo_cwd, TRAIN, "c1", "u2") is None, "the hook process recorded the rebind"

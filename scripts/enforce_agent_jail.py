@@ -34,18 +34,20 @@ _ROOT_CAP = 16
 # 6.1: the reason prefix for blocks this hook decides itself, main and foreign agents alike.
 _JAIL_HOOK = "jail"
 _CONFIG_HOOK = "config"
-# Main never prompted (amends 0106): context warnings for the main session; IA-5, AU-5, SI-4.
-_CREDENTIAL_WARN = (
-    "This path holds credentials; reading it puts the secret into the session transcript. "
-    "The jail's finding: "
-)
+# Main never prompted (amends 0106), 0259: alerts for the main session; AU-5, SI-4.
 _LOAD_WARN = (
-    "auditing is down: the jail's library failed to load, so this {tool} call runs unjudged "
-    "and unrecorded during a train"
+    "Warning: auditing is down. The jail's library failed to load, so this {tool} call runs "
+    "unjudged and unrecorded during a run"
 )
-_AUDIT_WARN = "auditing is down: the audit log cannot be written, so this {tool} call is unrecorded"
-_CONFIG_WARN = "the project config failed to load, so this {tool} call runs unjudged during a train"
-_JUDGE_WARN = "the jail failed while judging this {tool} call, so it runs unjudged during a train"
+_AUDIT_WARN = (
+    "Warning: auditing is down. The audit log cannot be written, so this {tool} call is unrecorded"
+)
+_CONFIG_WARN = (
+    "Warning: the project config failed to load, so this {tool} call runs unjudged during a run"
+)
+_JUDGE_WARN = (
+    "Warning: the jail failed while judging this {tool} call, so it runs unjudged during a run"
+)
 R_RELATIVE = (
     "this agent's run is in {repo}, while its shell and search tools still start in {cwd}, so "
     "{path} would resolve outside the run (issue 188). Next: name every path as an absolute "
@@ -155,6 +157,7 @@ def _names_marked_repo(tool: str, tool_input: dict[str, object], cwd: str) -> bo
 
 def _fast_path(payload: dict[str, object], agent: str, cwd: str) -> int:
     # 0023, 0035: outside a train, main and foreign agents meet only the credential read deny.
+    from lib import session_notes as notes
     from lib.credential_paths import CREDENTIAL_TOOLS, path_reason
 
     tool = str(payload.get("tool_name"))
@@ -162,8 +165,8 @@ def _fast_path(payload: dict[str, object], agent: str, cwd: str) -> int:
     tool_input: dict[str, object] = raw_input if isinstance(raw_input, dict) else {}
     reason = path_reason(tool, tool_input, cwd) if tool in CREDENTIAL_TOOLS else None
     if reason and _bare_main(payload):
-        # Main never prompted (amends 0106): allow with context, never ask; IA-5, the text literal.
-        return _warn(_CREDENTIAL_WARN + reason)
+        # 0259: ruled class 1, the one note outside a run; no audit log exists here.
+        return _warn(notes.CREDENTIAL_READ.text(notes.tool_what(tool, tool_input, cwd)))
     if reason:
         return _block(agent, reason)
     if tool in ("Agent", "Task") and "Worktree:" in str(tool_input.get("prompt") or ""):
@@ -276,9 +279,9 @@ def _hook_failed(
     next_step: str = _REPORT_NEXT,
 ) -> int:
     # Main never prompted (amends 0106): a hook failure alerts the main session, never asks.
-    # 0010: no absolute cwd names no repository to record in, so that call stays blocked.
+    # 0010, 0277: no absolute cwd names no log; an agent's call stays blocked, main is alerted.
     cwd = payload.get("cwd")
-    if not _bare_main(payload) or not (isinstance(cwd, str) and os.path.isabs(cwd)):
+    if not _bare_main(payload):
         return _record_and_block(payload, agent, f"{hook}: {exc}", next_step)
     from lib.audit import audit_append
 
@@ -286,11 +289,13 @@ def _hook_failed(
     text = f"{warn_lead.format(tool=tool)} ({exc})."
     if "Next:" not in text:
         text += next_step
+    if not (isinstance(cwd, str) and os.path.isabs(cwd)):
+        return _alert(agent, text)
     try:
         # 92, AU-3: the row records the decision taken, warn, with the warning as reason.
         audit_append(payload, "warn", f"{hook}: {text}")
     except Exception as audit_exc:  # noqa: BLE001
-        warning = f"{_AUDIT_WARN.format(tool=tool)} ({audit_exc}). The jail's finding: {text}"
+        warning = f"{_AUDIT_WARN.format(tool=tool)} ({audit_exc}). {text}"
         return _alert(agent, warning)
     return _alert(agent, text)
 
@@ -359,8 +364,10 @@ def _judge(payload: dict[str, object], agent: str) -> int:
     # 0023: reads carry only the credential deny, so a broken data dir never closes them.
     read = payload.get("tool_name") in CREDENTIAL_TOOLS and isinstance(cwd, str)
     read = read and Path(str(cwd)).is_absolute()
+    # 0277: no working folder names no config.json; main's call is judged on the defaults.
+    homeless = _bare_main(payload) and not (isinstance(cwd, str) and os.path.isabs(cwd))
     try:
-        config = load_config(cwd if isinstance(cwd, str) else None)
+        config = Config() if homeless else load_config(cwd if isinstance(cwd, str) else None)
     except Exception as exc:  # noqa: BLE001
         if not read:
             # Main never prompted (amends 0106): main is alerted, never asked; agents stay blocked.
@@ -377,8 +384,9 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         decision = decide(payload, config)
         allow, finding, warn = decision.allow, decision.reason, decision.warn
         agent = decision.agent or agent
-        # 0105, 6.1: the record carries the hook prefix; the main session's warning does not.
-        reason = f"{_JAIL_HOOK}: {finding}" if finding else None
+        # 0105, 6.1, 0259: the record carries the hook prefix and a note's class; the note does not.
+        recorded = decision.record if warn and decision.record else finding
+        reason = f"{_JAIL_HOOK}: {recorded}" if recorded else None
     try:
         # 92, amends 0105, 0106: a warned main-session call runs and is recorded as warn, AU-3.
         record = audit_append(payload, "allow" if allow else "warn" if warn else "block", reason)
@@ -390,9 +398,7 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         if (allow or warn) and _bare_main(payload):
             # Main never prompted (amends 0106): AU-5 alert on every unrecorded call, never ask.
             unrecorded = f"{_AUDIT_WARN.format(tool=payload.get('tool_name'))} ({exc})."
-            return _alert(
-                agent, f"{unrecorded} The jail's finding: {finding}" if warn else unrecorded
-            )
+            return _alert(agent, f"{unrecorded} {finding}" if warn else unrecorded)
         # 8.5: no record, no action. The jail fails closed when the chain cannot be written.
         detail = f"audit log unavailable ({exc})."
         if "Next:" not in detail:

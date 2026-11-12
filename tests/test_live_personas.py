@@ -376,7 +376,7 @@ def test_public_docs_writer(live_repo: Path) -> None:
         "Diff base: HEAD~1\nIntegration branch: daedalus/20261015-000000\n"
         "Hand-back summary: unit u1 added src/hello.py with hello(name) returning hello <name>.\n"
         "Public docs: README.md, docs/howto/README.md, docs/guardrails.md, "
-        "docs/project-requirements.md\nLiteracy: plain\n"
+        "docs/project-requirements.md\nLiteracy: standard\n"
         "Make README.md describe hello(name), commit, and end with your status line."
     )
     tools = ["Read", "Edit", "Write", "Bash", "Glob", "Grep"]

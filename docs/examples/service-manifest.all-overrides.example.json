@@ -8,7 +8,7 @@
   "docs": {
     "folder": "docs",
     "decisions_filename": "decisions.md",
-    "reading_level": "plain",
+    "reading_level": "expert",
     "git_branch": "main"
   },
   "checks": {
