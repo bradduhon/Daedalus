@@ -21,6 +21,7 @@ FEATURES: tuple[str, ...] = (
     "provider-mirror",
     "terraform-validate",
     "settings-backup",
+    "handback-pass",
 )
 
 

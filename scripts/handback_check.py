@@ -4,10 +4,13 @@
 # RCP, 0128: the check on a coder's COMPLETE reply, before any verifier runs. It reads the
 # SubagentStop reply and, by the operator's pick 4 of train 20261026-002310, the message of a
 # PreToolUse SubagentHandback call. Pin RCP -> VER: the receipts block sits directly above the
-# COMPLETE line. A yield, another agent's reply and an empty reply pass; a check that cannot run
-# never blocks.
+# COMPLETE line. 0281: a verifier's REFUTED or an auditor's REJECTED reply carries the rule,
+# places and search cells on every finding. A yield, another agent's reply and an empty reply
+# pass; a check that cannot run never blocks.
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import re
 import sys
@@ -106,6 +109,142 @@ def receipts_problem(reply: str, root: Path | None = None) -> str | None:
     return files_problem(status, root if root is not None else Path.cwd())
 
 
+VERIFIER, AUDITOR = "verifier", "auditor"
+COMPLIANCE = "## Compliance"
+
+
+def _judge_next(agent: str) -> str:
+    from lib.audit_rounds import CELLS
+
+    if agent == VERIFIER:
+        return (
+            f"end each row of the REFUTED line with {CELLS}, rows joined by `; ` and no other `;`"
+        )
+    return (
+        "write one line per finding, `<node id> <severity> <class>: <one line>` or "
+        f"`no-test: <branch> <file>:<line> <severity> <class>: <what is wrong>`, each ending with "
+        f"{CELLS}"
+    )
+
+
+def findings_problem(agent: str, reply: str, listed: tuple[int, int] | None = None) -> str | None:
+    # 0281: a failing verdict whose finding lacks its rule, a place or its search is refused;
+    # listed is the (round, count) of the round's findings file, None when it cannot be read.
+    from lib.audit_proof import VERDICT_REJECTED
+    from lib.audit_rounds import cell_problems, reply_finding
+    from lib.coder_model import REFUTED_PREFIX
+    from lib.workspace import refuted_rows
+
+    lines = [line.strip() for line in reply.splitlines() if line.strip()]
+    last = lines[-1] if lines else ""
+    if agent == VERIFIER and last.startswith(REFUTED_PREFIX):
+        rows = refuted_rows(last)
+        if not rows:
+            return "the REFUTED line holds no row, or a row with a `;` of its own"
+        named = [(f"row {n}", row) for n, row in enumerate(rows, start=1)]
+    elif agent == AUDITOR and last.startswith(VERDICT_REJECTED):
+        body = lines[1:-1]
+        body = body[: body.index(COMPLIANCE)] if COMPLIANCE in body else body
+        found = [line.removeprefix("- ") for line in body if reply_finding(line)]
+        if not found:
+            return "the REJECTED reply lists no finding line"
+        named = [(f"finding {n}", line) for n, line in enumerate(found, start=1)]
+    else:
+        return None
+    problems: list[str] = []
+    # 0281: the count binds only a reply whose own node ids name the file's round.
+    tied = listed is not None and any(_names_round(row, listed[0]) for _, row in named)
+    if agent == AUDITOR and listed is not None and tied and len(named) < listed[1]:
+        problems.append(
+            f"the REJECTED reply lists {len(named)} finding lines but the round {listed[0]} "
+            f"findings file lists {listed[1]}"
+        )
+    for name, row in named:
+        lacks = cell_problems(row)
+        if lacks:
+            shown = row if len(row) <= SHOWN_CHARS else row[:SHOWN_CHARS] + "..."
+            problems.append(f"{name} {shown!r} has {' and '.join(lacks)}")
+    return "; ".join(problems) or None
+
+
+def _names_round(line: str, round_: int) -> bool:
+    # 0281: a test finding's node id holds the parts `audit`, `round<n>` of its round folder.
+    parts = Path(line.split(maxsplit=1)[0].split("::", 1)[0]).parts
+    want = ("audit", f"round{round_}")
+    return any(parts[i : i + 2] == want for i in range(len(parts) - 1))
+
+
+def round_findings(cwd: object) -> tuple[int, int] | None:
+    # 0281: the round and count of the round's findings file, by the verdict command's readers.
+    from lib import train_state
+    from lib.audit_proof import ProofError, findings_path, read_findings
+    from lib.project_root import project_root
+    from lib.train_runner import derived_round
+
+    if not isinstance(cwd, str) or not Path(cwd).is_absolute():
+        return None
+    try:
+        repo = project_root(Path(cwd))
+        train = train_state.active_train(repo)
+        if train is None:
+            return None
+        round_ = derived_round(train_state.load(repo, train))
+        return round_, len(read_findings(findings_path(repo, train, round_)))
+    except (OSError, ValueError, ProofError, train_state.TrainStateError):
+        return None
+
+
+PASS_FEATURE = "handback-pass"
+MAX_ID = 64
+
+
+def _marker_id(agent_id: object) -> str | None:
+    # 0281: the tree has no agent id shape; ASCII letters, digits and hyphen, 1 to 64 long.
+    if not isinstance(agent_id, str) or not 1 <= len(agent_id) <= MAX_ID:
+        return None
+    ok = all(ch.isascii() and (ch.isalnum() or ch == "-") for ch in agent_id)
+    return agent_id if ok else None
+
+
+def _last_line_sha(reply: str) -> str:
+    lines = [line.strip() for line in reply.splitlines() if line.strip()]
+    last = lines[-1] if lines else ""
+    return hashlib.sha256(last.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def write_pass(hook_input: dict[str, object], reply: str) -> None:
+    # 0281: the marker is evidence of a pass by this same check only; nothing else reads it.
+    from lib import atomic, storage
+
+    agent, cwd = _marker_id(hook_input.get("agent_id")), hook_input.get("cwd")
+    if agent is None or not isinstance(cwd, str) or not Path(cwd).is_absolute():
+        return
+    try:
+        folder = storage.make_tmp_dir(PASS_FEATURE, cwd)
+        atomic.write_atomic(folder / agent, _last_line_sha(reply) + "\n", 0o600)
+    except (OSError, RuntimeError, ValueError):
+        return
+
+
+def relayed(hook_input: dict[str, object], reply: str) -> bool:
+    # 0281: a stop whose last line hashes to this agent's pass marker relays a judged reply.
+    from lib import storage
+
+    agent, cwd = _marker_id(hook_input.get("agent_id")), hook_input.get("cwd")
+    if agent is None or not isinstance(cwd, str) or not Path(cwd).is_absolute():
+        return False
+    try:
+        if storage.check_tmp_dirs(PASS_FEATURE, cwd) is not None:
+            return False
+        path = storage.tmp_dir(PASS_FEATURE, cwd) / agent
+        if path.is_symlink() or not path.is_file():
+            return False
+        marker = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError, ValueError):
+        return False
+    return hmac.compare_digest(marker, _last_line_sha(reply))
+
+
 def _agent(hook_input: dict[str, object]) -> str:
     # 6.1: a stop without agent_type takes the newest SubagentStart type for its agent_id.
     from lib import audit, hook_io
@@ -158,7 +297,19 @@ def _unit_root(hook_input: dict[str, object]) -> Path | None:
 
 def judge(hook_input: dict[str, object]) -> str | None:
     reply = _reply(hook_input)
-    if not isinstance(reply, str) or not reply or _agent(hook_input) != CODER:
+    agent = _agent(hook_input) if isinstance(reply, str) and reply else ""
+    if agent in (VERIFIER, AUDITOR):
+        stop = hook_input.get("hook_event_name") == "SubagentStop"
+        if stop and relayed(hook_input, str(reply)):
+            return None
+        listed = round_findings(hook_input.get("cwd")) if agent == AUDITOR else None
+        found = findings_problem(agent, str(reply), listed)
+        if found is None:
+            if not stop:
+                write_pass(hook_input, str(reply))
+            return None
+        return f"Daedalus hand-back check: {found}. Next: {_judge_next(agent)}."
+    if not isinstance(reply, str) or not reply or agent != CODER:
         return None
     problem = receipts_problem(reply, _unit_root(hook_input))
     if problem is None:
