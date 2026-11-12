@@ -19,12 +19,17 @@ from lib import hcl_reader, provider_mirror, storage, train_state
 FEATURE = "terraform-validate"
 STATE_KEY = "validate"
 TIMEOUT_S = 300
+# 0265: file("/dev/zero") in a .tf file grew validate to 28 GB in 27 s; the aws provider needs
+# between 2 and 4 GiB of address space, so each process gets 8 GiB at most.
+MEMORY_CAP = 8 << 30
 TREE, DATA, HOME, RC = "tree", "data", "home", "terraformrc"
 # 0265: -get=false keeps every module getter (git, hg, http) from running; no -lockfile mode,
 # because the staged lock is a hash-free copy written here and init may rewrite it.
 INIT_ARGS = ("init", "-backend=false", "-input=false", "-get=false", "-no-color", "-json")
 VALIDATE_ARGS = ("validate", "-no-color", "-json")
 MAX_ROOTS, MAX_FOLDERS, MAX_FILES, MAX_DEPTH = 32, 64, 256, 16
+# 0265: the most one root stages, its local modules included.
+MAX_ROOT_BYTES = 16 << 20
 NAME_MAX, PATH_MAX = 255, 4096
 DIAG_SHOWN, SUMMARY_MAX = 5, 160
 LOCAL_PREFIXES = ("./", "../")
@@ -67,6 +72,7 @@ class Root:
     modules: list[dict[str, str]] = field(default_factory=list)
     providers: dict[str, str] = field(default_factory=dict)
     reason: str = ""
+    size: int = 0
 
 
 @dataclass
@@ -243,9 +249,13 @@ def _read_folder(
     blocks: list[hcl_reader.Block] = []
     # 0265: override files last, so their module source wins as it does in Terraform.
     ordered = sorted(listing, key=lambda f: (f[0] == OVERRIDE or f[0].endswith("_" + OVERRIDE), f))
-    for name, blob, _ in ordered:
+    for name, blob, size in ordered:
         path = _join(folder, name)
         if path not in texts:
+            root.size += size
+            if root.size > MAX_ROOT_BYTES:
+                root.reason = f"its Terraform files and modules pass {MAX_ROOT_BYTES} bytes"
+                return
             text = provider_mirror._git_text(tip.top, ["cat-file", "blob", blob])
             if text is None:
                 root.reason = f"{_shown(path)} could not be read as text"
@@ -493,12 +503,7 @@ def _run_root(
     provider_mirror._write_new(data / "modules" / "modules.json", json.dumps({"Modules": manifest}))
     env, secrets = tf_env(stage, data, source, top)
     cwd = str(_staged(stage, root.folder))
-    try:
-        code, out, err = provider_mirror.run_terraform(
-            [binary, *INIT_ARGS], cwd, env, timeout, True
-        )
-    except OSError as exc:
-        code, out, err = -1, "", f"Error: terraform could not start ({exc.strerror})"
+    code, out, err = _terraform([binary, *INIT_ARGS], cwd, env, timeout)
     if code != 0:
         diags = _init_diagnostics(out)
         errors = _errors(diags or [], root.folder, stage, secrets)
@@ -522,12 +527,7 @@ def _run_root(
                 ],
             )
         return _failed(name, "terraform init", errors)
-    try:
-        code, out, err = provider_mirror.run_terraform(
-            [binary, *VALIDATE_ARGS], cwd, env, timeout, True
-        )
-    except OSError as exc:
-        code, out, err = -1, "", f"Error: terraform could not start ({exc.strerror})"
+    code, out, err = _terraform([binary, *VALIDATE_ARGS], cwd, env, timeout)
     result = _validate_result(out)
     if result is None:
         why = _clean_summary(provider_mirror.first_error(err, secrets), stage, secrets)
@@ -544,6 +544,15 @@ def _run_root(
         return Outcome(name, CLEAN, [f"validate: {name}: validated clean."])
     errors = _errors(diags, root.folder, stage, secrets) or [("", "invalid, with no error listed")]
     return _failed(name, "terraform validate", errors)
+
+
+def _terraform(
+    argv: list[str], cwd: str, env: dict[str, str], timeout: float
+) -> tuple[int, str, str]:
+    try:
+        return provider_mirror.run_terraform(argv, cwd, env, timeout, True, MEMORY_CAP)
+    except OSError as exc:
+        return -1, "", f"Error: terraform could not start ({exc.strerror})"
 
 
 def _skip(name: str, result: str, why: str, next_line: str = "") -> Outcome:

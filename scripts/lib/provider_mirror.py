@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import resource
 import shutil
 import signal
 import stat
@@ -362,12 +363,23 @@ def first_error(stderr: str, secrets: list[str]) -> str:
     return _printable(pick)[:ERROR_MAX] or "no error text"
 
 
+def _address_cap(limit: int) -> None:
+    # 0265: the child and every provider it starts inherit one address-space ceiling.
+    resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+
+
 def run_terraform(
-    argv: list[str], cwd: str, env: dict[str, str], timeout: float, keep_stdout: bool = False
+    argv: list[str],
+    cwd: str,
+    env: dict[str, str],
+    timeout: float,
+    keep_stdout: bool = False,
+    memory: int = 0,
 ) -> tuple[int, str, str]:
     # 0256: argv as a list, no shell; on a timeout the whole process group is killed.
     proc = subprocess.Popen(
         argv,
+        preexec_fn=(lambda: _address_cap(memory)) if memory else None,
         cwd=cwd,
         env=env,
         stdin=subprocess.DEVNULL,

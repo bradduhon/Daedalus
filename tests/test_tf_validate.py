@@ -31,7 +31,7 @@ VALIDATE = f"python3 {REPO_ROOT / 'scripts'}/daedalus_train.py validate --repo {
 # by starting any program under its folder's .terraform/providers, and answers by its mode file.
 STAND_IN = "\n".join(
     [
-        "import json, os, pathlib, subprocess, sys, time",
+        "import json, os, pathlib, resource, subprocess, sys, time",
         "here = pathlib.Path(__file__).resolve().parent",
         'mode = (here / "mode").read_text().strip()',
         "cwd = pathlib.Path.cwd()",
@@ -44,6 +44,7 @@ STAND_IN = "\n".join(
         'manifest = pathlib.Path(os.environ["TF_DATA_DIR"], "modules", "modules.json")',
         'call = {"argv": sys.argv, "cwd": str(cwd), "env": dict(os.environ), "files": files,',
         '        "stage": str(stage), "rc": (stage / "terraformrc").read_text(),',
+        '        "limit": list(resource.getrlimit(resource.RLIMIT_AS)),',
         '        "modules": manifest.read_text() if manifest.is_file() else None}',
         'with open(here / "calls.jsonl", "a", encoding="utf-8") as log:',
         '    log.write(json.dumps(call) + "\\n")',
@@ -51,6 +52,12 @@ STAND_IN = "\n".join(
         'for prog in sorted(planted.rglob("*")) if planted.exists() else []:',
         "    if prog.is_file() and os.access(prog, os.X_OK):",
         "        subprocess.run([str(prog)])",
+        'if mode == "eat":',
+        "    try:",
+        "        block = bytearray(9 << 30)",
+        '        (here / "ate").write_text("yes")',
+        "    except MemoryError:",
+        "        sys.exit(2)",
         'if mode == "hang":',
         '    child = subprocess.Popen(["/bin/sleep", "60"])',
         '    (here / "child").write_text(str(child.pid))',
@@ -407,6 +414,23 @@ def test_a_local_module_is_staged_in_place_and_listed_so_init_downloads_nothing(
     ]
 
 
+def test_a_root_whose_files_pass_the_byte_cap_is_not_staged(
+    tmp_path: Path, tmp_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, unit = _project(tmp_path)
+    _mirror(repo)
+    monkeypatch.setattr(tf_validate, "MAX_ROOT_BYTES", 100)
+    (unit / "infra" / "a.tf").write_text("#" * 60, encoding="utf-8")
+    (unit / "infra" / "b.tf").write_text("#" * 60, encoding="utf-8")
+    _commit(unit, "big")
+    bin_dir = tmp_path / "bin"
+    _stand_in(bin_dir)
+    unit_record = tf_validate.Unit(UNIT, f"{TRAIN}-{UNIT}", BRANCH)
+    lines, _ = tf_validate.validate(str(repo), TRAIN, unit_record, (), {"PATH": str(bin_dir)})
+    assert "its Terraform files and modules pass 100 bytes" in lines[0]
+    assert _calls(bin_dir) == []
+
+
 def test_a_module_cycle_stops_at_the_depth_cap(tmp_path: Path, tmp_root: Path) -> None:
     repo, unit = _project(tmp_path)
     mirror = _mirror(repo)
@@ -518,6 +542,7 @@ def test_the_environment_holds_no_caller_config_args_cache_token_or_path(
             "TF_DATA_DIR",
         }
         assert env["PATH"] == ""
+        assert call["limit"] == [tf_validate.MEMORY_CAP, tf_validate.MEMORY_CAP]
         assert env["HOME"] == f"{stage}/home" and env["TF_DATA_DIR"] == f"{stage}/data"
         assert env["TF_CLI_CONFIG_FILE"] == f"{stage}/terraformrc"
         assert not any(k.startswith(("TF_CLI_ARGS", "TF_TOKEN_")) for k in env)
@@ -597,6 +622,27 @@ def test_a_hang_is_killed_with_its_process_group(tmp_path: Path, tmp_root: Path)
         time.sleep(0.05)
     else:
         pytest.fail("the hung child kept running")
+
+
+def test_a_file_read_that_grows_without_end_meets_the_memory_cap(
+    tmp_path: Path, tmp_root: Path
+) -> None:
+    # 0265: file("/dev/zero") grew real validate to 28 GB; the cap ends the process instead.
+    repo, unit = _project(tmp_path)
+    _mirror(repo)
+    (unit / "infra" / "main.tf").write_text(
+        NULL + 'locals {\n  z = file("/dev/zero")\n}\n', encoding="utf-8"
+    )
+    _commit(unit, "zero")
+    bin_dir = tmp_path / "bin"
+    _stand_in(bin_dir, "eat")
+    unit_record = tf_validate.Unit(UNIT, f"{TRAIN}-{UNIT}", BRANCH)
+    lines, outcomes = tf_validate.validate(
+        str(repo), TRAIN, unit_record, (), {"PATH": str(bin_dir)}
+    )
+    assert not (bin_dir / "ate").exists()
+    assert [o.result for o in outcomes] == [tf_validate.NOT_VALIDATED]
+    assert lines[0].startswith("validate: infra: not validated, because terraform init gave no")
 
 
 def test_a_provider_the_mirror_lacks_asks_the_operator_before_any_run(
