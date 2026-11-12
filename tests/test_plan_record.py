@@ -447,7 +447,7 @@ def test_planner_and_plan_skill_name_the_version_line() -> None:
     assert "`OK version: unit=<unit id> Version class: <x.y.z> <class>: <reason>`" in step7
     step8 = skill.split("\n8. ", 1)[1].split("\n9. ", 1)[0]
     header = (
-        "| Unit | What it builds | Starts from | Waits on | Shares files with | Needs "
+        "| Unit | What it builds | Class | Starts from | Waits on | Shares files with | Needs "
         "| Version line |"
     )
     assert header in step8
