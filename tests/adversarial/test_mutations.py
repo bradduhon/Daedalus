@@ -339,6 +339,8 @@ def test_the_admit_screen_holds(world: World, monkeypatch: pytest.MonkeyPatch) -
     _setup(monkeypatch, world)
     leaks: list[str] = []
     for row in ROWS[::SAMPLE]:
+        if row.agent == "main":
+            continue  # 0259: main's grammar no longer screens main; its note table does.
         cwd, original = _place(world, row, row.command)
         for op in OPERATORS:
             for mutant, text in _mutants(world, op, row):

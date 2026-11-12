@@ -192,7 +192,7 @@ def test_planner_challenge_mode_section_holds_the_steps_and_grounding_rules() ->
         "Every question carries a proposal (0200), and choice A is it",
         "`Choices:` holds two to four lettered lines, A to D, each `<letter>. <label>: "
         "<description>`",
-        "A label is two to five words, written whole.",
+        "A label is written whole.",
         "each description gives the result on that case, by the same measure as the other choices.",
         "Then it gives the trade in one sentence.",
         "Fixed words (0250): the handoff brief's `## Fixed words` section lists the nouns",
@@ -205,8 +205,12 @@ def test_planner_challenge_mode_section_holds_the_steps_and_grounding_rules() ->
         "An operator's answer that changes a word changes the fixed word.",
         "the `What I take you to want:` paragraph and everything from `Anchor:` through the last "
         "choice line",
-        "is plain whatever the manifest's reading-level key says",
-        "at most eighteen common words",
+        "is written at the level the manifest's reading-level key names, `standard` when it is "
+        "unset or holds any value but `expert`.",
+        "use the names the project and the operator's input already use, as written, and never "
+        "invent a new word or a new meaning for a term already in use.",
+        "No ruling id or issue number goes in that text: give its label or a short excerpt of "
+        "what it is about in its place.",
         "gets a plain gloss in the same sentence the first time it appears",
         "Never ask how technical the reader is.",
         "The session relays each answer as `ANSWER n=<n>: <text>`",
@@ -225,6 +229,10 @@ def test_planner_challenge_mode_section_holds_the_steps_and_grounding_rules() ->
     ):
         assert rule in " ".join(section.split()), rule
     assert "ANSWERS round=" not in section and "Round <k>" not in section
+    # 0254: no word count, question-mark rule or ban on the project's own names remains.
+    for gone in ("eighteen", "two to five words", "plugin vocabulary", "snake_case tokens"):
+        assert gone not in section, gone
+    assert "ending in a question mark" not in section
     from tests.test_brainstorm import GROUNDING
 
     # 0152: spec 5 rule 5 ends "(3.5)"; the planner keeps it verbatim, the skill's copy drops it.

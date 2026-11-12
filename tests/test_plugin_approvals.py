@@ -14,6 +14,7 @@ from typing import Any
 import enforce_agent_jail
 import pytest
 from lib import plugin_approvals, self_assessment, storage
+from lib import session_notes as notes
 
 from tests.conftest import SCRIPTS_DIR, write_train_marker
 
@@ -621,11 +622,11 @@ def test_write_input_off_the_shape_is_not_approved(
 
 
 def _credential_outcomes(hook: Any, main: dict[str, Any], row: str) -> None:
-    # Main is warned with the credential text and no decision; a helper is refused, same text.
+    # 0259: main gets the credential note and no decision; a helper is refused by name.
     assert plugin_approvals.approve(main) == row
     today = hook(main, False)
     assert hook(main) == today
-    assert today[0] == 0 and "credential path" in today[1]
+    assert today[0] == 0 and "Warning: This " in today[1] and "a credential file" in today[1]
     assert "permissionDecision" not in today[1]
     helper = {**main, "agent_id": "a1", "agent_type": "general-purpose"}
     today = hook(helper, False)
@@ -662,7 +663,8 @@ def test_a_warned_call_in_a_run_gets_no_approval(
 
     write_train_marker(env)
     payload = _bash(env, _calls(plugin_root, env)["findings-start"])
-    monkeypatch.setattr(jail, "_main_bash", lambda command, cwd: jail._warn("warned"))
+    warned = notes.note(notes.PUSH_OR_MERGE, "warned")
+    monkeypatch.setattr(jail, "_main_bash", lambda command, cwd: jail._noted(warned))
     assert hook(payload) == hook(payload, False)
     code, out, _err = hook(payload)
     assert code == 0 and "warned" in out and "permissionDecision" not in out

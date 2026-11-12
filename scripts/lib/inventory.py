@@ -188,17 +188,20 @@ FILES: tuple[Entry, ...] = (
     Entry(
         "<repo>/service-manifest.json",
         "scripts/lib/settings_edit.py:write",
-        "you answer a /daedalus:setup question; one setting changes and the rest stay",
+        "you answer a /daedalus:setup question, and one setting changes while the rest stay; "
+        "or you agree to replace a file from an older version, after its backup",
     ),
     Entry(
         f"{_DATA}/config.json",
         "scripts/lib/settings_edit.py:write",
-        "you answer a /daedalus:setup question; one setting changes and the rest stay",
+        "you answer a /daedalus:setup question, and one setting changes while the rest stay; "
+        "or you agree to replace a file from an older version, after its backup",
     ),
     Entry(
         "~/.claude/daedalus/operator.json",
         "scripts/lib/settings_edit.py:write",
-        "you answer a /daedalus:setup question; one setting changes and the rest stay",
+        "you answer a /daedalus:setup question, and one setting changes while the rest stay; "
+        "or you agree to replace a file from an older version, after its backup",
     ),
     Entry(
         f"{_TRAINS}/",
@@ -375,6 +378,12 @@ FILES: tuple[Entry, ...] = (
         "/tmp/.daedalus/<uid>/<feature>/<project key>/",
         "scripts/lib/storage.py:make_tmp_dir",
         "a feature's first temporary write for a project; nothing in the plugin removes the folder",
+    ),
+    Entry(
+        "/tmp/.daedalus/<uid>/settings-backup/<project key>/<file>-<16 hex>.json",
+        "scripts/daedalus_setup.py:_write_backup",
+        "you agree in /daedalus:setup to replace a settings file from an older version; a "
+        "byte-for-byte copy of the old file, written before the new one, mode 0600",
     ),
     Entry(
         "/tmp/.daedalus/<uid>/question-path/<project key>/<conv>/",

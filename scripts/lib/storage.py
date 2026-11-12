@@ -20,6 +20,7 @@ FEATURES: tuple[str, ...] = (
     "reports",
     "provider-mirror",
     "terraform-validate",
+    "settings-backup",
 )
 
 

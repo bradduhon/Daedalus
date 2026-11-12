@@ -40,7 +40,13 @@ from lib.manifest import features as manifest_features  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
 from lib.operator_file import JSON_NAMES, OperatorError, load_user, operator_path  # noqa: E402
 from lib.plan_record import is_need  # noqa: E402
-from lib.workspace import _BARE_VERSION, UNMARK_NEXT, VERSION_FILE, train_marker  # noqa: E402
+from lib.workspace import (  # noqa: E402
+    _BARE_VERSION,
+    UNMARK_NEXT,
+    VERSION_FILE,
+    split_settings,
+    train_marker,
+)
 
 REQ_DOC = "docs/project-requirements.md"
 GH_NEXT = "install gh (https://cli.github.com); the Push Train opens pull requests with it"
@@ -616,7 +622,13 @@ def _clean_tree_check(repo: Path) -> tuple[bool, str]:
         return _check(
             False, "clean working tree", f"git status exited {code}", "fix the repository"
         )
-    paths = [line[3:].split(" -> ")[-1] for line in status.stdout.splitlines() if line.strip()]
+    # 0257: a run starts with only the settings files uncommitted, so this check admits them too.
+    paths, settings = split_settings(repo, status.stdout)
+    if not paths and settings:
+        return True, (
+            f"OK   clean working tree apart from the settings files {', '.join(settings)}, "
+            "which are not committed, so a pull request will not carry them"
+        )
     if not paths:
         return True, "OK   clean working tree"
     shown = ", ".join(paths[:DIRTY_LIMIT])

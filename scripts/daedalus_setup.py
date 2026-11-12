@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0076: writes whichever starter project file is missing, behind /daedalus:setup.
 # 0242: also describes the three settings files, creates the personal file and sets one key.
+# 0257: replaces a file the current reader refuses, carrying every value it still accepts.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -16,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import atomic, settings_edit  # noqa: E402
+from lib import atomic, settings_edit, settings_replace, shell, storage  # noqa: E402
 from lib.audit import DataDirError, check_project_data_dir, ensure_project_data_dir  # noqa: E402
 from lib.config import ConfigError, parse_config  # noqa: E402
 from lib.ledger import LedgerError  # noqa: E402
@@ -32,8 +34,10 @@ from lib.project_keys import (  # noqa: E402
     LITERACY_EXAMPLES,
     OVERLAPS,
     SETTINGS_FILES,
+    UNSETTABLE,
     Block,
     SettingsFile,
+    reference_keys,
     starter_config,
     starter_manifest,
     starter_operator,
@@ -58,6 +62,8 @@ _SKIPPED_FOLDERS = frozenset({"node_modules"})
 SET_NEXT = "Next: correct the command as the line above says, then run it again."
 FILE_NEXT = "Next: write the value file again as one JSON value, then run the same command again."
 VALUE_NEXT = "Next: choose a value the key reference in the README allows, then set it again."
+# 0257: the storage feature that holds the old file before a replace writes the new one.
+BACKUP_FEATURE = "settings-backup"
 
 
 class SetupStop(Exception):
@@ -286,7 +292,22 @@ def _block_refusal(info: SettingsFile, block: Block, value: object) -> str | Non
     return None
 
 
+def set_as(key: str) -> str:
+    # 0257: a key inside a list or a named entry is set as the whole list or object holding it.
+    return key if _addressable(key) else ".".join(_prefix(key))
+
+
+def unsettable(name: str, key: str) -> str | None:
+    return next((u.why for u in UNSETTABLE if u.file == name and u.key == key), None)
+
+
 def _key_refusal(info: SettingsFile, key: str) -> str | None:
+    why = unsettable(info.name, key)
+    if why is not None:
+        return (
+            f"set refused: {key} of the {info.form} file is not set by this wizard. {why} "
+            "Next: edit it by hand, as the key reference in the README shows."
+        )
     if block_of(info.name, key) is not None:
         return None
     if (info.name, key) in KEY_ROWS:
@@ -294,9 +315,11 @@ def _key_refusal(info: SettingsFile, key: str) -> str | None:
             return None
         return (
             f"set refused: {key} sits inside a list or a named entry of {info.name}, so it "
-            "cannot be set alone. Next: edit that block by hand, as the key reference in the "
-            "README shows."
+            f"cannot be set alone. Next: set the whole {set_as(key)} instead, as in --set "
+            f"{info.form} {set_as(key)}."
         )
+    if any(f == info.name and set_as(k) == key for f, k in KEY_ROWS):
+        return None
     owners = sorted({_form_of_name(f) for f, k in KEY_ROWS if k == key})
     if owners:
         return (
@@ -386,6 +409,165 @@ def set_key(form: str, key: str, raw: str, repo: Path) -> int:
         ) from exc
     old_text = _show(old) if present else "absent"
     print(f"changed: {path} {key}: {old_text} -> {_show(value)}")
+    return 0
+
+
+def _accepts(form: str, path: Path) -> Callable[[object], bool]:
+    def accepts(doc: object) -> bool:
+        try:
+            _check(form, doc, path)
+        except (ValueError, TypeError):
+            # 0257: every reader error is a ValueError; a type slip in a reader also refuses.
+            return False
+        return True
+
+    return accepts
+
+
+def _owner(form: str, root: Path) -> Path:
+    return _home() if form == "operator" else root
+
+
+def _backup_path(form: str, root: Path, text: str) -> Path:
+    # 0257: named by the old bytes, so the plan names the very path the write form fills.
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    return storage.tmp_dir(BACKUP_FEATURE, root) / f"{form}-{digest}.json"
+
+
+def _write_backup(form: str, root: Path, text: str, limit: int) -> Path:
+    target = _backup_path(form, root, text)
+    try:
+        storage.make_tmp_dir(BACKUP_FEATURE, root)
+        atomic.create_once(target, text, 0o600)
+    except FileExistsError:
+        # 0257: a backup from an earlier try holds these same bytes; anything else stops.
+        try:
+            same = settings_edit.read_text(target, limit) == text
+        except settings_edit.EditError:
+            same = False
+        if not same:
+            raise SetupStop(
+                f"replace refused: the backup {target} already exists and holds other bytes. "
+                "Next: move that file away from your own shell, then run the same command again."
+            ) from None
+    except (OSError, RuntimeError) as exc:
+        raise SetupStop(
+            f"replace refused: the backup of the old file could not be written ({exc}), so "
+            "nothing was replaced. Next: make /tmp/.daedalus a folder only you can write, "
+            "then run the same command again."
+        ) from exc
+    return target
+
+
+def _old_file(form: str, info: SettingsFile, root: Path) -> tuple[Path, str, dict[str, object]]:
+    # 0257: the old file as read and parsed, or a refusal that names why nothing is carried.
+    try:
+        path = _path(form, root)
+    except DataDirError as exc:
+        raise SetupStop(f"replace refused, the project data folder failed a check: {exc}") from exc
+    _refuse_links(path)
+    if not os.path.lexists(path):
+        raise SetupStop(
+            f"replace refused: {path} does not exist. Next: run the Daedalus setup skill, which "
+            "writes a new starter file."
+        )
+    owner = _owner(form, root)
+    if not shell._under(str(path), str(owner)):
+        raise SetupStop(
+            f"replace refused: {path} resolves outside {owner}, and setup never writes there. "
+            "Next: replace the link on that path with a real folder from your own shell, then "
+            "run setup again."
+        )
+    try:
+        before = settings_edit.read_text(path, _LIMITS[form])
+    except settings_edit.EditError as exc:
+        raise SetupStop(
+            f"replace refused: {path} {exc}. Next: fix the file from your own shell, then run "
+            "setup again."
+        ) from exc
+    try:
+        old = settings_edit.parse(before)
+    except settings_edit.EditError as exc:
+        old = exc
+    if not isinstance(old, dict):
+        detail = old if isinstance(old, settings_edit.EditError) else "is not one JSON object"
+        raise SetupStop(
+            f"replace refused: {path} {detail}, so no value can be carried forward and nothing "
+            "was written. Next: move the file out of the project from your own shell, then run "
+            f"the Daedalus setup skill again; it writes a new starter {info.form} file with "
+            "nothing carried."
+        )
+    if _accepts(form, path)(old):
+        raise SetupStop(
+            f"replace refused: {path} already passes its own check, so there is nothing to "
+            "replace. Next: change single settings with the setup skill's questions."
+        )
+    return path, before, old
+
+
+def _moved_lines(outcome: settings_replace.Outcome) -> list[str]:
+    show = settings_replace.shown_path
+    value = settings_replace.shown_value
+    lines = [f"carry: {show(m.path)} = {value(m.path, m.value)}" for m in outcome.carried]
+    lines += [f"drop: {show(m.path)} = {value(m.path, m.value)} ({m.why})" for m in outcome.dropped]
+    withheld = sum(
+        settings_replace.secret_like(m.path, m.value) for m in outcome.carried + outcome.dropped
+    )
+    if withheld:
+        lines.append(
+            f"note: {withheld} value(s) look like secrets and are not shown; a settings file "
+            "should hold no secrets."
+        )
+    return lines or ["carry: nothing, and drop: nothing"]
+
+
+def replace(form: str, repo: Path, write: bool) -> int:
+    # 0257: the old file's still-valid values over the starter shape, checked before any write.
+    info = _BY_FORM.get(form)
+    if info is None:
+        raise SetupStop(
+            f"replace refused: {form!r} is not one of the settings files. "
+            f"Next: name one of {', '.join(FORMS)} as the file to replace."
+        )
+    root = project_root(repo)
+    path, before, old = _old_file(form, info, root)
+    keys = tuple(k for f, k in reference_keys() if f == info.name)
+    accepts = _accepts(form, path)
+    outcome = settings_replace.carry(old, _defaults(form), keys, accepts)
+    text = json.dumps(outcome.doc, indent=2) + "\n"
+    if not accepts(settings_edit.parse(text)):
+        raise SetupStop(
+            f"replace refused: the new {info.form} file failed its own check, so nothing was "
+            "written. Next: report this with the plan's lines; the old file is unchanged."
+        )
+    verb = "replacing" if write else "plan: replace"
+    print(f"{verb} {path}, a settings file from an older version that this version refuses.")
+    print("\n".join(_moved_lines(outcome)))
+    if not write:
+        print(f"backup: {_backup_path(form, root, before)} (the old file is copied here first)")
+        print(
+            "This plan wrote nothing, and the file is unchanged. Next: run the same command "
+            "with --write to replace the file."
+        )
+        return 0
+    backup = _write_backup(form, root, before, _LIMITS[form])
+    print(f"backup: {backup} (a byte-for-byte copy of the old file)")
+    try:
+        settings_edit.write(path, before, text, _LIMITS[form])
+    except settings_edit.EditError as exc:
+        raise SetupStop(
+            f"replace refused: {path} {exc}. Next: run the same command again, so it reads the "
+            "file as it is now."
+        ) from exc
+    except OSError as exc:
+        raise SetupStop(
+            f"replace refused: {path} could not be written ({exc}). Next: make that folder "
+            "writable for you, then run the same command again."
+        ) from exc
+    print(
+        f"replaced: {path}, {len(outcome.carried)} value(s) carried, "
+        f"{len(outcome.dropped)} entry(ies) dropped"
+    )
     return 0
 
 
@@ -514,7 +696,9 @@ def _key_entry(
         "day_one": day_one,
         "override": row.override,
         "active": bool(row.readers),
-        "settable": _addressable(key),
+        "settable": unsettable(info.name, key) is None,
+        "set_as": set_as(key),
+        "unsettable": unsettable(info.name, key),
         "governs": row.governs,
         "affects": row.affects,
         "kind": row.kind,
@@ -533,6 +717,8 @@ def _key_entry(
     if not _addressable(key):
         present, value = settings_edit.lookup(doc, _prefix(key))
         entry["state"] = "set" if present and value is not None else "absent"
+        if present:
+            entry["value"] = value
         return entry
     present, value = settings_edit.lookup(doc, _segments(key))
     if not present:
@@ -639,8 +825,9 @@ def describe(repo: Path) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Write the missing starter service-manifest.json and config.json, describe "
-        "the three settings files, create the personal settings file, or set one key of one "
-        "file. Never overwrites a whole file."
+        "the three settings files, create the personal settings file, set one key of one "
+        "file, or replace a file this version refuses. Only --replace --write rewrites a "
+        "whole file, after a backup."
     )
     parser.add_argument(
         "--repo", default=".", help="target project folder (default: current directory)"
@@ -659,6 +846,17 @@ def build_parser() -> argparse.ArgumentParser:
         nargs=2,
         metavar=("FILE", "KEY"),
         help=f"change one key of an existing file; FILE is one of {', '.join(FORMS)}",
+    )
+    forms.add_argument(
+        "--replace",
+        metavar="FILE",
+        help="print the plan to replace a file this version refuses, carrying every value it "
+        f"still accepts; FILE is one of {', '.join(FORMS)}",
+    )
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="with --replace, back up the old file and write the new one",
     )
     parser.add_argument("--value", help="the new value of the --set key, written as JSON")
     parser.add_argument(
@@ -693,6 +891,10 @@ def main(argv: list[str]) -> int:
             raise SetupStop(
                 f"setup stopped: --value and --value-file go only with --set. {SET_NEXT}"
             )
+        if args.write and args.replace is None:
+            raise SetupStop(f"setup stopped: --write goes only with --replace. {SET_NEXT}")
+        if args.replace is not None:
+            return replace(args.replace, repo, args.write)
         if args.describe:
             return describe(repo)
         if args.create_operator:

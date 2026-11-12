@@ -11,6 +11,7 @@ from pathlib import Path
 import enforce_agent_jail
 import pytest
 from lib import hook_io, jail, router, writer_mode
+from lib import session_notes as notes
 from lib.config import (
     Config,
     ConfigError,
@@ -344,7 +345,10 @@ def test_main_session_is_warned_and_never_refused(repo: Path) -> None:
     payload = _payload("main", repo, "git add notes/a.md")
     got = jail.decide(payload, _config(repo))
     assert got.warn and not got.allow and got.reason is not None
-    assert got.reason.startswith(jail.WARN_EXCLUDED) and str(repo / "notes") in got.reason
+    assert got.note == "excluded_folder" and got.reason == notes.EXCLUDED_FOLDER.text(
+        "This command"
+    )
+    assert str(repo / "notes") in str(got.record)
     assert jail.decide(_payload("main", repo, "git add src/a.md"), _config(repo)).allow
     write_train_marker(repo)
     assert jail.decide(payload, _config(repo)).warn
@@ -371,7 +375,7 @@ def test_hook_warns_the_main_session_during_a_train(
     code, out = _hook(repo, "git add notes/a.md", monkeypatch, capsys)
     assert code == 0
     warning = main_warning(out)
-    assert warning.startswith(jail.WARN_EXCLUDED) and str(repo / "notes") in warning
+    assert warning == notes.EXCLUDED_FOLDER.text("This command"), warning
     assert _hook(repo, "git add src/a.md", monkeypatch, capsys) == (0, "")
 
 
@@ -423,7 +427,7 @@ def test_a_judged_git_call_fed_unseen_paths_is_refused(
     checked = load("excluded_roots").decide(_payload("daedalus:coder", repo, command), [])
     assert not checked.allow and unseen in str(checked.reason), command
     warned = jail.decide(_payload("main", repo, command), _config(repo))
-    assert warned.warn and unseen in str(warned.reason), command
+    assert warned.warn and unseen in str(warned.record), command
 
 
 @pytest.mark.parametrize("command", A3_UNSEEN)
@@ -449,4 +453,5 @@ def test_case_exact_pathspecs_and_reads_still_pass(repo: Path) -> None:
 def test_main_session_is_warned_when_roots_cannot_resolve(repo: Path) -> None:
     config = Config(excluded_roots=(ExcludedRootDecl("path", "<charter_root>/x"),))
     got = jail.decide(_payload("main", repo, "git add notes/a.md"), config)
-    assert got.warn and str(got.reason).startswith(jail.WARN_EXCLUDED_FAILED)
+    assert got.warn and got.note == "excluded_folder_unchecked", got
+    assert str(got.reason).startswith("Warning: The project's excluded folders could not be")

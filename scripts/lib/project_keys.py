@@ -215,15 +215,15 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
     (MANIFEST_FILE, "docs.reading_level"): KeyRow(
         "How plainly Daedalus writes for people, as a reading level or a voice profile the "
         "project declares. The docs writer writes the public docs at the end of a run at this "
-        "level, and a brief may override it. Decision briefs and the questions the plan and "
-        "verify phases put to you are written at this level, and the decision brief check holds "
-        "each brief to it, reading a voice profile as `plain`. Brainstorm questions are always "
-        "plain, whatever this key says",
+        "level, and a brief may override it. Every question Daedalus puts to you is written at "
+        "this level. At `standard`, simple sentences a high schooler with no background in the "
+        "project can follow. At `expert`, text that assumes you know the project. A voice "
+        "profile, the old word `plain` and an unset key all read as `standard` for questions",
         "string or null",
         _LEVELS,
-        "`null`: the writer keeps the register the public docs already use; decision briefs and "
-        "the plan and verify questions are written at `standard`",
-        f"`{LITERACY_EXAMPLES[1]}`",
+        "`null`: the writer keeps the register the public docs already use; every question is "
+        "written at `standard`",
+        f"`{LITERACY_EXAMPLES[0]}`",
         "The public docs, the decision briefs and the questions a run asks you are written at "
         "this reading level.",
         (
@@ -628,7 +628,7 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "object",
         "The keys of the personal file, checked the same way; any other key is refused",
         "`{}`: the personal file's values stand",
-        '`{"reading_level": "plain"}`',
+        '`{"reading_level": "expert"}`',
         f"{NOT_ACTIVE}: the personal values are checked and kept for later.",
         (),
     ),
@@ -1065,6 +1065,18 @@ BLOCKS: tuple[Block, ...] = (
 
 
 @dataclass(frozen=True)
+class Unsettable:
+    file: str
+    key: str
+    # 0257: one plain sentence the wizard prints on why the key is left to a hand edit.
+    why: str
+
+
+# 0257: keys the set form deliberately refuses; every other key is settable, and a test holds it.
+UNSETTABLE: tuple[Unsettable, ...] = ()
+
+
+@dataclass(frozen=True)
 class Overlap:
     id: str
     text: str
@@ -1089,7 +1101,7 @@ OVERLAPS: tuple[Overlap, ...] = (
         "reading level is checked but nothing reads it yet. Once it is read, it will apply "
         "only to a project that sets no reading level of its own.",
         (
-            ("scripts/lib/briefs.py", 342, "manifest.docs.literacy"),
+            ("scripts/lib/briefs.py", 281, "manifest.docs.literacy"),
             ("scripts/lib/operator_file.py", 4, "no check or hook acts on it yet"),
         ),
         None,

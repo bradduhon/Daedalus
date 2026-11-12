@@ -16,6 +16,7 @@ from typing import Any
 import enforce_agent_jail
 import pytest
 from lib import jail
+from lib import session_notes as notes
 
 from tests.conftest import audit_records, main_warning, write_train_marker
 
@@ -58,10 +59,11 @@ def test_main_write_in_a_train_exits_zero_with_context_and_logs_warn(
     result = run_script("enforce_agent_jail.py", payload)
     assert result.returncode == 0 and result.stderr == "", result.stderr
     reason = main_warning(result.stdout)
-    assert reason.startswith("Build Train 20261015-120000 is active in this repository")
-    assert f"Writing {repo_cwd}/README.md here" in reason
+    assert reason == notes.MAIN_CHECKOUT_WRITE.text(
+        f"This Write of {repo_cwd}/README.md", train="20261015-120000"
+    )
     rec = audit_records(project_data / "audit" / "sess-test.jsonl")[-1]
-    assert rec["decision"] == "warn" and rec["reason"] == f"jail: {reason}"
+    assert rec["decision"] == "warn" and rec["reason"] == f"jail: main_checkout_write: {reason}"
     # 0105, 6.1: the record names the deciding hook; the session's warning text does not.
     assert rec["reason"].startswith("jail: ") and not reason.startswith("jail: ")
 
@@ -154,7 +156,7 @@ def test_unwritable_audit_dir_alerts_main_and_fails_closed_for_an_agent(
         assert code == 0
         alert = main_warning(out.out)
         assert alert.startswith(enforce_agent_jail._AUDIT_WARN.format(tool="Bash")), alert
-        assert alert.startswith("auditing is down") and alert in out.err
+        assert alert.startswith("Warning: auditing is down") and alert in out.err
 
 
 def test_unwritable_audit_dir_outside_a_train_lets_main_proceed(
@@ -546,9 +548,15 @@ def test_judge_exception_alerts_the_operator_and_records_warn(
 def test_missing_cwd_blocks_even_for_read(run_script: Any, hook_input: Any, cwd: Any) -> None:
     # 0010: the project data dir is located from cwd; without it there is no record, so no action.
     payload = hook_input(tool_name="Read", tool_input={"file_path": "/etc/hosts"}, cwd=cwd)
-    result = run_script("enforce_agent_jail.py", payload)
+    agent = {**payload, "agent_type": "general-purpose", "agent_id": "a-1"}
+    result = run_script("enforce_agent_jail.py", agent)
     assert result.returncode == 2
-    assert "absolute cwd" in result.stderr and "Next:" in result.stderr
+    assert "absolute" in result.stderr and "Next:" in result.stderr
+    # 0277: the main session is never refused; it runs with the unrecorded alert.
+    result = run_script("enforce_agent_jail.py", payload)
+    assert result.returncode == 0, result.stderr
+    alert = main_warning(result.stdout)
+    assert alert.startswith(enforce_agent_jail._AUDIT_WARN.format(tool="Read")), alert
 
 
 def test_config_in_project_data_dir_is_loaded(
@@ -662,7 +670,9 @@ def test_main_grep_rooted_at_home_is_warned_and_an_agent_refused(
         assert result.stderr.startswith(f"daedalus-jail[{agent}]:"), result.stderr
     else:
         assert result.returncode == 0, result.stderr
-        assert main_warning(result.stdout).startswith(enforce_agent_jail._CREDENTIAL_WARN)
+        assert main_warning(result.stdout) == notes.CREDENTIAL_READ.text(
+            f"This Grep of {temp_home}"
+        )
 
 
 def test_main_glob_over_the_repo_is_allowed(
@@ -724,7 +734,7 @@ def test_bad_config_still_refuses_an_ssh_key_read(
     result = _run_home(payload, temp_home, plugin_data)
     # Main never prompted (amends 0106): outside a train the operator's session is warned.
     assert result.returncode == 0, result.stderr
-    assert "credential path" in main_warning(result.stdout)
+    assert main_warning(result.stdout) == notes.CREDENTIAL_READ.text(f"This Read of {key}")
 
 
 def test_bad_config_still_blocks_bash(
@@ -818,11 +828,8 @@ def test_credential_read_warns_main_and_refuses_an_agent_outside_a_train(
     else:
         assert result.returncode == 0, result.stderr
         reason = main_warning(result.stdout)
-        assert reason.startswith(
-            "This path holds credentials; reading it puts the secret into the session "
-            "transcript. The jail's finding: "
-        )
-        assert "is a credential path" in reason
+        assert reason == notes.CREDENTIAL_READ.text(f"This Read of {key}")
+        assert "Refused" not in reason and "is a credential path" not in reason
     assert not (repo_cwd / ".claude").exists()
 
 
@@ -900,22 +907,18 @@ def _retired_ask(case: str, repo: Path, home: Path) -> tuple[str, dict[str, str]
     # Main never prompted (amends 0105, 0106): each class that asked before, with its warning.
     dotgit = f"{repo}/.git/config"
     return {
-        "repo write": ("Write", {"file_path": f"{repo}/src/a.py"}, "Build Train 20261015-120000"),
+        "repo write": ("Write", {"file_path": f"{repo}/src/a.py"}, "main_checkout_write"),
         "data folder write": (
             "Write",
             {"file_path": f"{repo}/.claude/daedalus/config.json"},
-            jail.WARN_DATA_DIR,
+            "protected_folder_write",
         ),
-        "git write": ("Write", {"file_path": dotgit}, jail.WARN_DOTGIT.format(path=dotgit)),
-        "credential read": ("Read", {"file_path": f"{home}/.ssh/id_ed25519"}, jail.WARN_CREDENTIAL),
-        # 228 tail: a push off main's grammar is warned with the refusal at its span.
-        "force push": ("Bash", {"command": "git push --force origin f/x"}, jail.WARN_COMMAND),
-        "recursive delete": ("Bash", {"command": "rm -rf /"}, jail.WARN_DELETE),
-        "push during a train": (
-            "Bash",
-            {"command": "git push -u origin f/x"},
-            jail.WARN_TRAIN_PUSH,
-        ),
+        "git write": ("Write", {"file_path": dotgit}, "git_metadata_write"),
+        "credential read": ("Read", {"file_path": f"{home}/.ssh/id_ed25519"}, "credential_read"),
+        # 0259: a push off main's grammar is found by the note reading.
+        "force push": ("Bash", {"command": "git push --force origin f/x"}, "push_or_merge"),
+        "recursive delete": ("Bash", {"command": "rm -rf /"}, "destructive_delete"),
+        "push during a train": ("Bash", {"command": "git push -u origin f/x"}, "push_or_merge"),
     }[case]
 
 
@@ -930,13 +933,15 @@ def test_main_retired_ask_is_allowed_with_the_warning_in_context(
 ) -> None:
     # Main never prompted (amends 0105, 0106): allow, the warning in context, a warn record (92).
     _in_train(project_data)
-    tool, tool_input, lead = _retired_ask(case, repo_cwd, temp_home)
+    tool, tool_input, klass = _retired_ask(case, repo_cwd, temp_home)
     result = _run_home(hook_input(tool_name=tool, tool_input=tool_input), temp_home, plugin_data)
     assert result.returncode == 0 and result.stderr == "", result.stderr
     warning = main_warning(result.stdout)
-    assert warning.startswith(lead) and "Approve" not in warning, warning
+    assert warning.startswith("Warning: ") and "Approve" not in warning, warning
+    assert "Refused" not in warning and "refused" not in warning, warning
     rec = _last_record(project_data)
-    assert rec["decision"] == "warn" and rec["reason"] == f"jail: {warning}", rec
+    assert rec["decision"] == "warn", rec
+    assert str(rec["reason"]).startswith(f"jail: {klass}: {warning}"), rec
 
 
 @pytest.mark.parametrize("case", _RETIRED_ASKS)

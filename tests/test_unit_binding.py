@@ -70,7 +70,7 @@ def _ok(payload: dict[str, Any]) -> None:
 def _refused(payload: dict[str, Any], *needles: str) -> str:
     d = decide(payload, Config())
     assert not d.allow
-    reason = str(d.reason)
+    reason = str(d.record or d.reason)  # 0259: a main note keeps the rule on its audit row.
     assert "Next:" in reason and all(n in reason for n in needles), reason
     return reason
 

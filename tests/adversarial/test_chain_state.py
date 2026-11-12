@@ -75,8 +75,10 @@ def test_a_chain_state_row_is_refused(
         return
     assert got is None, (form, got)
     write_train_marker(repo)
+    # 0259: main is never refused and its grammar no longer notes it; a note class may.
     warned = jail.decide(_payload("main", repo, form), _config(repo))
-    assert warned.warn and "Refused: " in str(warned.reason), (form, warned.reason)
+    assert warned.allow or warned.warn, (form, warned)
+    assert "Refused" not in str(warned.reason), (form, warned.reason)
 
 
 @pytest.mark.parametrize(("root", "command", "outcome"), OUTCOMES)

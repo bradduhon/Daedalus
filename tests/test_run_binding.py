@@ -15,6 +15,7 @@ from typing import Any
 import enforce_agent_jail
 import pytest
 from lib import audit, dispatch_binding, jail, train_state
+from lib import session_notes as notes
 from lib.workspace import mark_train
 
 from tests.conftest import CFG, audit_records, git
@@ -478,7 +479,8 @@ def test_a_warned_dispatch_is_recorded_and_still_only_warned(
     away = _session_folder(tmp_path.resolve(), "neutral")
     payload = _call(repo, "Agent", subagent_type="daedalus:coder", prompt="Build unit u1.\n")
     result = run_script("enforce_agent_jail.py", payload)
-    warning = jail.WARN_DISPATCH.format(reason=dispatch_binding.R_WORKTREE_LINE)
+    step = notes.rule_step(dispatch_binding.R_WORKTREE_LINE)
+    warning = notes.DISPATCH_RULE.text("This dispatch", step)
     out = {"hookEventName": "PreToolUse", "additionalContext": warning}
     expected = json.dumps({"systemMessage": warning, "hookSpecificOutput": out})
     assert (result.returncode, result.stdout.strip(), result.stderr) == (0, expected, "")
