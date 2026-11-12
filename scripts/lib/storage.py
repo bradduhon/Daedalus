@@ -19,6 +19,7 @@ FEATURES: tuple[str, ...] = (
     "developer-profile",
     "reports",
     "provider-mirror",
+    "settings-backup",
 )
 
 

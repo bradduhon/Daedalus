@@ -38,6 +38,16 @@ from tests.test_operator_gates import exempt_round
 
 # 0044: coder's chain refuses gh and git push in network_tools and git_push first.
 AGENTS = ("main", "releaser", "general-purpose")
+AGENT_ONLY = AGENTS[1:]
+# 0277: the forms below that delete a remote branch or may run an unseen merge stay noted.
+MAIN_PUSH_LIKE = frozenset(
+    {
+        "gh api -X DELETE repos/o/r/git/refs/heads/x",
+        "gh pr close 5 --delete-branch",
+        "gh co 5",
+        "gh api graphql -F query=@q.graphql",
+    }
+)
 MERGE = [
     "gh pr merge 5",
     "gh pr merge --auto 5",
@@ -108,9 +118,12 @@ def _bash(repo: Path, agent: str, command: str) -> dict[str, Any]:
 
 
 def _reason(repo: Path, agent: str, command: str) -> str:
+    # 0259: main's note keeps the check's finding on its audit row, an agent's in its refusal.
     d = decide(_bash(repo, agent, command), Config())
     assert not d.allow, (agent, command)
-    return str(d.reason)
+    if agent == "main":
+        assert d.warn and str(d.reason).startswith("Warning: ") and "Refused" not in str(d.reason)
+    return str(d.record or d.reason)
 
 
 def _classify(command: str) -> tuple[str, str]:
@@ -138,25 +151,35 @@ def test_merge_class_refused(train_repo: Path, agent: str, command: str) -> None
     _class_refused(train_repo, agent, command, "merge", MERGE_NEXT)
 
 
-@pytest.mark.parametrize("agent", AGENTS)
+@pytest.mark.parametrize("agent", AGENT_ONLY)
 @pytest.mark.parametrize("command", DELETE)
 def test_delete_class_refused(train_repo: Path, agent: str, command: str) -> None:
     nxt = "delete from your own shell if you mean it"
     _class_refused(train_repo, agent, command, "delete", nxt)
 
 
-@pytest.mark.parametrize("agent", AGENTS)
+@pytest.mark.parametrize("agent", AGENT_ONLY)
 @pytest.mark.parametrize("command", ADMIN)
 def test_admin_class_refused(train_repo: Path, agent: str, command: str) -> None:
     nxt = "change repository settings from your own shell"
     _class_refused(train_repo, agent, command, "admin", nxt)
 
 
-@pytest.mark.parametrize("agent", AGENTS)
+@pytest.mark.parametrize("agent", AGENT_ONLY)
 @pytest.mark.parametrize("command", DEFAULT_DENY)
 def test_default_deny(train_repo: Path, agent: str, command: str) -> None:
     nxt = "only the Push Train's releaser runs gh"
     _class_refused(train_repo, agent, command, "default-deny", nxt)
+
+
+@pytest.mark.parametrize("command", DELETE + ADMIN + DEFAULT_DENY)
+def test_main_is_noted_only_for_a_gh_push_or_merge(train_repo: Path, command: str) -> None:
+    # 0277: a gh write that is neither a push nor a merge runs with no note for main.
+    d = decide(_bash(train_repo, "main", command), Config())
+    if command in MAIN_PUSH_LIKE:
+        assert d.warn and d.note == "push_or_merge", (command, d)
+    else:
+        assert d.allow and not d.warn and d.note is None, (command, d)
 
 
 @pytest.mark.parametrize("command", CONDUCTOR_OK)
@@ -241,10 +264,11 @@ def test_main_may_view_issues_and_prs_during_a_train(train_repo: Path, command: 
     "command",
     ["gh pr create --title t --body-file docs/.tmp/pr.md", "gh pr edit 3 --body-file x.md"],
 )
-def test_main_pr_create_is_refused(train_repo: Path, command: str) -> None:
-    # B7: pull request writes stay with the Push Train's releaser.
-    reason = _reason(train_repo, "main", command)
-    assert "not on the main gh list (0028)" in reason and "Next:" in reason
+def test_main_pr_create_runs_with_no_note(train_repo: Path, command: str) -> None:
+    # B7: off main's gh list; 0277: neither a push nor a merge, so main runs it unnoted.
+    assert not jail.admitted(command, "main", str(train_repo)), command
+    d = decide(_bash(train_repo, "main", command), Config())
+    assert d.allow and not d.warn and d.note is None, d
 
 
 def test_pr_create_follows_the_same_gate(repo_cwd: Path) -> None:
@@ -355,7 +379,6 @@ def test_git_push_only_for_the_conductor(train_repo: Path) -> None:
         "cd x && gh pr merge 5",
         "sudo -u root gh pr merge 5",
         "find . -exec gh pr merge 5 ;",
-        'python3 -c \'import subprocess; subprocess.run(["gh", "pr", "merge", "5"])\'',
         "echo `date`; gh pr merge 5",
         "eval 'gh pr merge 5'",
     ],
@@ -363,11 +386,10 @@ def test_git_push_only_for_the_conductor(train_repo: Path) -> None:
 def test_main_hidden_gh_is_warned_by_class_or_by_its_grammar(
     train_repo: Path, command: str
 ) -> None:
-    # 228 S4: a wrapper main admits reaches the gh class; any other form is off main's table
-    # and warns with the grammar's refusal naming its word; no text fallback reads it.
+    # 228 S4, 0259: a wrapper main admits reaches the gh class; any other form meets the note
+    # reading, which walks bodies, find -exec and wrappers to the same merge class.
     reason = _reason(train_repo, "main", command)
-    assert "(0028" in reason or "Refused: " in reason, reason
-    assert "Next:" in reason or "at `" in reason, reason
+    assert reason.startswith("push_or_merge: ") and "(0028" in reason, reason
 
 
 def test_gh_reason_reads_the_admitted_record(train_repo: Path) -> None:
@@ -576,10 +598,11 @@ def test_main_issue_writes_pass_without_a_warning(train_repo: Path, command: str
 
 
 @pytest.mark.parametrize("command", ["gh issue comment 3 --delete-last", "gh issue delete 3"])
-def test_main_issue_delete_keeps_its_warning(train_repo: Path, command: str) -> None:
-    # P12: only create and comment are admitted; the delete class stays.
+def test_main_issue_delete_runs_with_no_note(train_repo: Path, command: str) -> None:
+    # P12: only create and comment are admitted; 0277: a delete off the list runs unnoted.
+    assert not jail.admitted(command, "main", str(train_repo)), command
     d = decide(_bash(train_repo, "main", command), Config())
-    assert d.warn and "delete command" in str(d.reason), d
+    assert d.allow and not d.warn and d.note is None, d
 
 
 @pytest.mark.parametrize(

@@ -45,9 +45,10 @@ def test_a_data_folder_hunt_form_meets_the_typed_check(
     if not jail.admitted(command, "coder", CWD):
         assert_denied(_b("coder", command))
     if not jail.admitted(command, "main", CWD):
-        # 0105: main is warned with the word its grammar refused, never refused.
+        # 0259: main's note reading finds the data folder or the store, never refused.
         warned = jail.decide(_b(None, command), CFG)
-        assert warned.warn and "Refused: " in str(warned.reason), (cls, warned.reason)
+        assert warned.warn and str(warned.reason).startswith("Warning: "), (cls, warned)
+        assert "Refused" not in str(warned.reason), (cls, warned.reason)
 
 
 @pytest.mark.parametrize("command", WILDCARD_WRITES_266)
@@ -57,8 +58,12 @@ def test_a_wildcard_write_is_refused_by_the_grammar_before_the_check(command: st
         assert jail.integrity_reason("Bash", {"command": command}, CWD, agent) is None
     glob = "a glob or ~ in a "
     assert_denied(_b("coder", command), glob)
+    # 0259: main is noted only where the glob can reach a data folder; the rest run silent.
     warned = jail.decide(_b(None, command), CFG)
-    assert warned.warn and f"Refused: {glob}" in str(warned.reason), warned.reason
+    operands = [w for w in command.split()[1:] if not w.startswith("-")]
+    reaches = any(jail._data_dir_reach(w, CWD, CWD) for w in operands)
+    assert (warned.note == "protected_folder_write") is reaches, (command, warned)
+    assert warned.allow is not reaches and "Refused" not in str(warned.reason), warned
 
 
 @pytest.mark.parametrize(("path", "shell_glob", "git"), WILDCARD_REACH_266)
@@ -89,7 +94,7 @@ def test_a_recursive_delete_of_the_root_is_left_to_the_delete_tripwire() -> None
     # 266: / is an ancestor of every data folder; the delete tripwire names it more exactly.
     assert jail.integrity_reason("Bash", {"command": "rm -r -f /"}, CWD, "coder") is None
     warned = jail.decide(_b(None, "rm -r -f /"), CFG)
-    assert warned.warn and str(warned.reason).startswith(jail.WARN_DELETE), warned.reason
+    assert warned.warn and warned.note == "destructive_delete", warned
     assert_denied(_b("coder", "rm -r -f /"), "destructive command")
 
 

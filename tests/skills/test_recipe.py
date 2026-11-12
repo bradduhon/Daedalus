@@ -262,7 +262,8 @@ def test_build_train_asks_each_contradiction_as_a_brief() -> None:
         "`Follow Plugin + amend global`",
         "(Recommended)",
         "re-checks by the standards skill, with one line per pick",
-        "a plain question ending in `?`",
+        "asks the decision in the names the task and the rule already use",
+        "No ruling id or issue number goes in those sentences",
         "No tracked-risk issue is filed.",
         "A plugin agent never makes this edit.",
         'The word "Global" appears in a label only when one side is the operator\'s global',
@@ -434,7 +435,7 @@ def test_build_train_carries_the_escalation_prompt() -> None:
     # 0060: the orchestrator returns the prompt as a decision brief; the session asks it.
     assert "into a decision brief and return `[STATUS: DECISION]`" in step4
     order = [
-        "states what is at stake in one plain sentence, then asks, ending in a question mark",
+        "states what is at stake in one sentence, then asks",
         "Two or three short sentences in the operator's words",
         "on what breaks and what happened in the test",
         "`Fix it now (Recommended)`:",

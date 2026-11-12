@@ -241,6 +241,8 @@ def test_only_the_switched_consumers_import_admit() -> None:
     allowed = {
         REPO_ROOT / "scripts" / "lib" / "admit.py",
         REPO_ROOT / "scripts" / "lib" / "jail.py",
+        # 0259: the main session's note reading reads the lookup variable table.
+        REPO_ROOT / "scripts" / "lib" / "session_reading.py",
         REPO_ROOT / "scripts" / "checks" / "read_only_bash.py",
         REPO_ROOT / "scripts" / "checks" / "command_allowlist.py",
         REPO_ROOT / "tests" / "test_admit.py",

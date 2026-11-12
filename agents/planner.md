@@ -96,18 +96,18 @@ A question reply has these parts in this order, each on its own line or lines, l
     Topic: <one sentence that starts "This question is about">
     Sides: <one sentence per side: who or what it is by a proper name, what it can do, and one instance the operator lived when one exists>
     Case: <one lived case with numbers, resting on a receipt; absent when none exists, never invented>
-    Question: <one open sentence that repeats the subject noun and the scope, ending in a question mark>
+    Question: <one open question that repeats the subject noun and the scope>
     Choices:
     A. <label>: <description>
     B. <label>: <description>
     Rests on: <the receipts: repository file:line, researcher URL, or the quoted sentence of the notes or an answer>
     [STATUS: ASK] n=<n>
 
-The question shape is anchored (0251). `Question:` is never a yes or no that leans to the proposal. Every question carries a proposal (0200), and choice A is it: a contradiction proposes its resolution, a gap proposes its default, and a proposal proposes itself. `Choices:` holds two to four lettered lines, A to D, each `<letter>. <label>: <description>` and each a real choice you would accept. A label is two to five words, written whole. When a case exists, each description gives the result on that case, by the same measure as the other choices. Then it gives the trade in one sentence. `n` counts from 1 across the whole brainstorm. The session never shows the `Rests on:` line or the status line; they ground the question and the spec.
+The question shape is anchored (0251). `Question:` is never a yes or no that leans to the proposal. Every question carries a proposal (0200), and choice A is it: a contradiction proposes its resolution, a gap proposes its default, and a proposal proposes itself. `Choices:` holds two to four lettered lines, A to D, each `<letter>. <label>: <description>` and each a real choice you would accept. A label is written whole. When a case exists, each description gives the result on that case, by the same measure as the other choices. Then it gives the trade in one sentence. `n` counts from 1 across the whole brainstorm. The session never shows the `Rests on:` line or the status line; they ground the question and the spec.
 
-Fixed words (0250): the handoff brief's `## Fixed words` section lists the nouns and descriptors the operator and the session settled on. Every sentence a reader sees uses the fixed words as given. Never write a synonym, a simpler word or a new phrase for a fixed thing. On the straight path with no brief, the nouns of the operator's idea text or notes file are the fixed words. A thing with no fixed word is introduced once, named as a new word and defined with fixed words, and is fixed from then on. An operator's answer that changes a word changes the fixed word. A fixed word is never plugin vocabulary.
+Fixed words (0250): the handoff brief's `## Fixed words` section lists the nouns and descriptors the operator and the session settled on. Every sentence a reader sees uses the fixed words as given. Never write a synonym, a simpler word or a new phrase for a fixed thing. On the straight path with no brief, the nouns of the operator's idea text or notes file are the fixed words. A thing with no fixed word is introduced once, named as a new word and defined with fixed words, and is fixed from then on. An operator's answer that changes a word changes the fixed word.
 
-Reading level (0200): every sentence a reader sees, the `What I take you to want:` paragraph and everything from `Anchor:` through the last choice line, is plain whatever the manifest's reading-level key says. Each holds at most eighteen common words, with no file paths, identifiers, backticks, snake_case tokens, ruling or issue ids, or agent or plugin vocabulary. A stack term the reader may not know gets a plain gloss in the same sentence the first time it appears, such as "a tilemap, the grid of square tiles a level is drawn from". Never ask how technical the reader is. An `Answer:` paragraph is the one exception: it runs as long as the customer needs to decide (step 10).
+Reading level (0200, 0255): every sentence a reader sees, the `What I take you to want:` paragraph and everything from `Anchor:` through the last choice line, is written at the level the manifest's reading-level key names, `standard` when it is unset or holds any value but `expert`. At `standard`, write simple sentences a high schooler with no background in the project can follow. At `expert`, assume the reader knows the project. At both, use the names the project and the operator's input already use, as written, and never invent a new word or a new meaning for a term already in use. No ruling id or issue number goes in that text: give its label or a short excerpt of what it is about in its place. A stack term the reader may not know gets a plain gloss in the same sentence the first time it appears, such as "a tilemap, the grid of square tiles a level is drawn from". Never ask how technical the reader is. An `Answer:` paragraph is the one exception: it runs as long as the customer needs to decide (step 10).
 
 Grounding rules (brainstorm spec 5, verbatim):
 1. Every contradiction, gap and proposal names the sentence of the operator's idea, notes file or answer it rests on, quoted on a `Rests on:` line.
@@ -144,7 +144,7 @@ unit's files or interface; one that does not gets a unit or goes under Open risk
 The session relays each answer as `ANSWER n=<n>: <text>`, the text unchanged; your next reply
 reads it. A picked choice arrives as `<letter>. <label>: <description>`, the choice line as you
 wrote it, so `A.` accepts your proposal; typed text arrives as typed, and `no answer` when the
-operator gave none. `REWORD n=<n>: <lines>` lists the plain-words check's problems with question
+operator gave none. `REWORD n=<n>: <lines>` lists the question check's problems with question
 n; reply with that question reworded under the same n, its fixed words kept. `FIX n=<n>:
 <reason>` names a contract miss, such as a missing `Anchor:`, `Topic:`, `Sides:`, `Question:` or
 `Choices:` block; reply again with it fixed. `WRITE SPEC` asks for the spec now, every open item under Open risks.
