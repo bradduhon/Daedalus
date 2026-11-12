@@ -11,8 +11,13 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from lib.train_state import DOCS_SUFFIX
+from lib.work_classes import MIDDLE_MODEL, PLUMBING, above_middle
+
+if TYPE_CHECKING:
+    from lib.operator_file import Operator
 
 INTEGRATION = "integration"
 SERIAL = "serial"
@@ -27,7 +32,18 @@ _PAIR = re.compile(r"(\S+) (->|~) (\S+)")
 _MERGE = re.compile(r"(\S+) then (\S+)")
 _GRAPH = re.compile(r"graph: units=(\d+) critical_path=(\d+) width=(\d+) overlap_only=(\S*)")
 _SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
-_UNIT_KEYS = ("title", "files", "base", "needs", "operator_checks")
+_UNIT_KEYS = (
+    "title",
+    "files",
+    "base",
+    "needs",
+    "operator_checks",
+    "class",
+    "place",
+    "class_reason",
+)
+# 0274, 0280: a file and the named part of it, a function in code or a section in a document.
+PLACE_SHAPE = "place: <file>:<named part>"
 # 0164, 0192: GPU, browser and running-server checks the operator makes; never a coder test.
 MAX_OPERATOR_CHECKS = 10
 OPERATOR_CHECKS_SHAPE = "write operator_checks: <plain-words check>[; ...]"
@@ -70,6 +86,21 @@ class Unit:
     base: str
     needs: tuple[str, ...] = ()
     operator_checks: tuple[str, ...] = ()
+    # 0267, 0274: None when the line has no class field; the work is then Plumbing.
+    work_class: str | None = None
+    place: str | None = None
+    class_reason: str | None = None
+
+    @property
+    def effective_class(self) -> str:
+        return PLUMBING if self.work_class is None else self.work_class
+
+
+def split_place(place: str) -> tuple[str, str] | None:
+    # 0274: partition on the first colon; both sides non-empty, the part may hold more colons.
+    file, colon, part = place.partition(":")
+    file, part = file.strip(), part.strip()
+    return (file, part) if colon and file and part else None
 
 
 @dataclass(frozen=True)
@@ -179,6 +210,9 @@ def _unit(line: str, number: int, out: list[str]) -> Unit | None:
         fields.get("base", ""),
         needs,
         checks,
+        fields.get("class"),
+        fields.get("place"),
+        fields.get("class_reason"),
     )
 
 
@@ -764,11 +798,65 @@ def _graph_defects(plan: Plan, max_concurrent: int) -> list[str]:
     return out
 
 
-def validate(plan: Plan, max_concurrent: int) -> list[str]:
+def has_class_fields(plan: Plan) -> bool:
+    return any(u.work_class is not None or u.place is not None for u in plan.units)
+
+
+def _place_defects(u: Unit) -> list[str]:
+    if u.place is None:
+        return []
+    split = split_place(u.place)
+    if split is None:
+        return [
+            f"unit {u.id} has the place {u.place!r}, which is not a file and the named part of "
+            f"it. Next: write unit {u.id}'s {PLACE_SHAPE}, both sides filled in."
+        ]
+    if not any(_covers(entry, split[0]) for entry in u.files):
+        return [
+            f"unit {u.id} names the place file {split[0]}, which is not in its files list. "
+            f"Next: name a file from unit {u.id}'s files list, or add that file to it."
+        ]
+    return []
+
+
+def class_defects(plan: Plan, operator: Operator) -> list[str]:
+    """0267, 0274, 0280: the class, place and class_reason checks against the work classes."""
+    listed = {name for name, _ in operator.work_classes}
+    out: list[str] = []
+    for u in plan.units:
+        out.extend(_place_defects(u))
+        if u.work_class is None:
+            continue
+        if u.work_class not in listed:
+            out.append(
+                f"unit {u.id} names the class {u.work_class or '(none)'}, which the work "
+                f"classes list does not hold. Next: give unit {u.id} a class from the list "
+                "validate_plan.py --classes prints, or add the class to work_classes."
+            )
+            continue
+        if u.place is None and above_middle(u.work_class, operator):
+            out.append(
+                f"unit {u.id} has the class {u.work_class}, whose model ranks above "
+                f"{MIDDLE_MODEL}, and names no place. Next: give unit {u.id} a {PLACE_SHAPE}: a "
+                "file from its files list and the named part of it where the work happens."
+            )
+        # 0280: the plan table shows a reason for every class but Plumbing.
+        if not u.class_reason and u.work_class != PLUMBING:
+            out.append(
+                f"unit {u.id} has the class {u.work_class}, which is not {PLUMBING}, and gives "
+                f"no class_reason. Next: give unit {u.id} a class_reason field, one line saying "
+                "why the work has that class."
+            )
+    return out
+
+
+def validate(plan: Plan, max_concurrent: int, operator: Operator | None = None) -> list[str]:
+    # 0280: with an operator the class checks run too; the dispatch gate passes none.
     defects = list(plan.defects)
     if not plan.units:
         return defects or ["the plan block declares no units."]
     defects += _unit_defects(plan) + _edge_defects(plan) + _pin_defects(plan)
+    defects += class_defects(plan, operator) if operator is not None else []
     defects += _version_defects(plan) + _section_defects(plan)
     after = _serial(plan)
     cycle = _cycle(after)

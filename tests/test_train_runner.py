@@ -16,6 +16,7 @@ from lib import audit, gh_policy, plan_record, train_runner, train_state, worksp
 from lib.audit_proof import ProofError, live_log
 from lib.config import Config
 from lib.jail import decide
+from lib.operator_file import Operator
 from lib.train_runner import STEP_NEEDLE
 
 from tests.conftest import REPO_ROOT, SCRIPTS_DIR, replay_auditor
@@ -971,6 +972,73 @@ def test_a_new_plan_is_refused_after_a_no_contract_lock(repo: Path, plugin: Path
     train_state.update(repo, train, packet_version=1)
     assert train_runner.record_plan(repo, wide).code == 0
     assert _state(repo)["plan"]["path"] == str(wide.resolve())  # type: ignore[index]
+
+
+# 0280: the record step checks a classed plan against the run's work classes.
+CLASSED_UNIT = (
+    "unit: U1 | title: one | files: a.py | base: integration | class: AuthN | "
+    "place: a.py:login | class_reason: it proves who calls\n"
+)
+
+
+def _classed_run(repo: Path, plugin: Path, text: str) -> tuple[Path, train_runner.Outcome]:
+    if train_state.active_train(repo) is None:
+        _write_train(plugin, [_probe_stage()], ("repository",))
+        _started(repo, plugin)
+    path = repo / "plan.md"
+    path.write_text(text, encoding="utf-8")
+    return path, train_runner.record_plan(repo, path)
+
+
+def test_plan_record_refuses_a_misspelt_class_with_the_validator_lines(
+    repo: Path, plugin: Path
+) -> None:
+    path, good = _classed_run(repo, plugin, _skip_plan(CLASSED_UNIT))
+    assert good.code == 0, good.lines
+    recorded = _state(repo)["plan"]
+    assert recorded == {"path": str(path.resolve()), "sha256": sha256_hex(path)}
+    _, refused = _classed_run(repo, plugin, _skip_plan(CLASSED_UNIT.replace("AuthN", "AuthM")))
+    lines = refused.lines[0].splitlines()
+    assert refused.code == 1
+    assert lines[:-1] == plan_record.class_defects(plan_record.load(path), Operator())
+    assert lines[0].startswith("unit U1 names the class AuthM, which the work classes list")
+    assert lines[-1].startswith("Next: fix each defect above in the plan block")
+    assert _state(repo)["plan"] == recorded
+    _, unreasoned = _classed_run(
+        repo, plugin, _skip_plan(CLASSED_UNIT.replace(" | class_reason: it proves who calls", ""))
+    )
+    assert unreasoned.code == 1 and "gives no class_reason" in unreasoned.lines[0]
+
+
+def test_plan_record_honours_a_project_override_that_removes_the_class(
+    repo: Path, plugin: Path
+) -> None:
+    _write_train(plugin, [_probe_stage()], ("repository",))
+    _started(repo, plugin)
+    config = repo / ".claude" / "daedalus" / "config.json"
+    body = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}
+    rows = [{"name": "Plumbing", "definition": "Any other work."}]
+    body["personal_overrides"] = {"work_classes": rows, "class_models": {"Plumbing": "sonnet"}}
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps(body), encoding="utf-8")
+    _, refused = _classed_run(repo, plugin, _skip_plan(CLASSED_UNIT))
+    assert refused.code == 1
+    assert refused.lines[0].startswith("unit U1 names the class AuthN, which the work classes")
+    assert "plan" not in _state(repo)
+
+
+def test_plan_record_reads_no_settings_for_a_plan_with_no_class_field(
+    repo: Path, plugin: Path, tmp_path: Path
+) -> None:
+    operator = tmp_path / "home" / ".claude" / "daedalus" / "operator.json"
+    operator.parent.mkdir(parents=True, exist_ok=True)
+    operator.write_text(json.dumps({"work_classes": "not a list"}), encoding="utf-8")
+    _, plain = _classed_run(repo, plugin, _skip_plan())
+    assert plain.code == 0, plain.lines
+    _, classed = _classed_run(repo, plugin, _skip_plan(CLASSED_UNIT))
+    assert classed.code == 1
+    assert "work_classes" in classed.lines[0]
+    assert classed.lines[0].splitlines()[-1].startswith("Next: correct the work_classes")
 
 
 def _files(names: str) -> str:
