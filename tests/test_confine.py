@@ -115,7 +115,10 @@ def test_the_first_line_is_the_rule_set_applied(tmp_path: Path) -> None:
     assert first == daedalus_confine.rule_set(real, repo, tmp, support).line()
     assert first.startswith(f"daedalus_confine: abi={support.abi} arch={support.arch} rw={real},")
     assert f"ro={repo}(-.claude/daedalus,-.claude/worktrees)," in first
-    assert "refused=socket(AF_INET,AF_INET6,AF_UNIX,any family but AF_NETLINK),io_uring" in first
+    # 0048: Landlock TCP rules join from ABI 4; the seccomp socket and io_uring refusals never drop.
+    net = "landlock-tcp," if support.abi >= daedalus_confine.NET_ABI else ""
+    sockets = "socket(AF_INET,AF_INET6,AF_UNIX,any family but AF_NETLINK),io_uring"
+    assert f"refused={net}{sockets} " in first
     assert second == "ran"
     assert f"git_config={tmp}/gitconfig xdg_config={tmp}/config" in first
     assert f"{Path.home()}/.gitconfig" not in first and f"{Path.home()}/.config" not in first
@@ -530,14 +533,16 @@ def test_a_credential_store_in_test_readable_folders_is_refused_at_config_load(
 
 
 @pytest.mark.parametrize(
-    "entry", ["/", "/home", "{home}", "{repo}", "{repo}/.claude", "{repo}/.claude/daedalus"]
+    "entry", ["/", "{users}", "{home}", "{repo}", "{repo}/.claude", "{repo}/.claude/daedalus"]
 )
 def test_a_root_holding_a_credential_store_or_the_data_folder_is_refused(
-    tmp_path: Path, entry: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
 ) -> None:
     # 0164: the filesystem root, a home ancestor and the project's .claude folder (reply key).
+    home = tmp_path / "users" / "u"
+    monkeypatch.setenv("HOME", str(home))
     repo, _ = _read_roots_repo(tmp_path, ["placeholder"])
-    value = entry.format(home=Path.home(), repo=repo)
+    value = entry.format(users=home.parent, home=home, repo=repo)
     config = repo / ".claude" / "daedalus" / "config.json"
     config.write_text(json.dumps({"test_readable_folders": [value]}), encoding="utf-8")
     with pytest.raises(ConfigError, match="test_readable_folders entry"):

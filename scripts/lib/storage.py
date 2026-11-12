@@ -108,7 +108,9 @@ def data_dir(feature: str, repo_root: str | Path | None = None) -> Path:
     # A1: imported here so the module loads no audit code at import time.
     from lib.audit import cache_dir_or_probe
 
-    base = cache_dir_or_probe() / _feature(feature)
+    # The allow-list check runs before the folder lookup, so a bad name is refused on any machine.
+    name = _feature(feature)
+    base = cache_dir_or_probe() / name
     return base if repo_root is None else base / project_key(repo_root)
 
 
