@@ -256,6 +256,32 @@ def test_meta_model_as_full_id(tree: Tree) -> None:
     assert tree.read() == Measured(300000)
 
 
+def test_meta_alias_with_a_suffix_falls_back(tree: Tree) -> None:
+    tree.set_meta("opus[1m]")
+    tree.write(_usage(300000), _usage(300500))
+    assert tree.read() == Measured(300500)
+
+
+def test_meta_model_matching_no_entry_falls_back(tree: Tree) -> None:
+    tree.set_meta("somethingelse")
+    tree.write(_usage(300000), _usage(300500), _usage(800, model="claude-haiku-5-5"))
+    assert tree.read() == Measured(300500)
+
+
+def test_only_synthetic_entries_are_never_measured(tree: Tree) -> None:
+    tree.set_meta("opus")
+    tree.write(_usage(30, model="<synthetic>"))
+    assert _reason(tree.read()) is Reason.NO_USAGE_IN_CAP
+    tree.meta.unlink()
+    assert _reason(tree.read()) is Reason.NO_USAGE_IN_CAP
+
+
+def test_synthetic_never_wins_most_common(tree: Tree) -> None:
+    lines = [_usage(30, model="<synthetic>")] * 3
+    tree.write(_usage(300000), *lines)
+    assert tree.read() == Measured(300000)
+
+
 def test_without_meta_the_most_common_model_wins(tree: Tree) -> None:
     tree.write(_usage(300000), _usage(300500), _usage(800, model="claude-haiku-5-5"))
     assert tree.read() == Measured(300500)

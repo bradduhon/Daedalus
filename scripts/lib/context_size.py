@@ -19,6 +19,8 @@ from lib.narrow import integer, obj
 FIRST_WINDOW = 64 * 1024
 WINDOW_CAP = 4 * 1024 * 1024
 META_CAP = 64 * 1024
+# 0273: the client's own stand-in reply, all-zero usage; never measured or counted.
+SYNTHETIC = "<synthetic>"
 AGENT_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789")
 USAGE_KEYS = (
     "input_tokens",
@@ -290,11 +292,12 @@ def _scan(lines: list[bytes], main_model: str | None) -> tuple[SizeResult | None
             usage = message.get("usage")
             if isinstance(usage, dict):
                 entries.append(("usage", message.get("model"), count(usage)))
-    if main_model is None:
-        models = Counter(
-            m for kind, m, _ in entries if kind == "usage" and isinstance(m, str) and m
-        )
-        main_model = models.most_common(1)[0][0] if models else None
+    models = [m for kind, m, _ in entries if kind == "usage" and isinstance(m, str) and m]
+    models = [m for m in models if m != SYNTHETIC]
+    # 0273: a meta model matching no entry of the window falls back like an absent meta file.
+    if main_model is None or not any(same_model(m, main_model) for m in models):
+        common = Counter(models).most_common(1)
+        main_model = common[0][0] if common else None
     for kind, model, tokens in entries:
         if kind == "boundary":
             # 0273: a boundary newer than every usable entry; unusable postTokens is no count.
@@ -302,6 +305,8 @@ def _scan(lines: list[bytes], main_model: str | None) -> tuple[SizeResult | None
                 return Unmeasured(Reason.NO_USAGE_IN_CAP), True
             return Measured(tokens), True
         if not isinstance(model, str) or main_model is None or tokens is None:
+            continue
+        if model == SYNTHETIC:
             continue
         if not same_model(model, main_model):
             continue
