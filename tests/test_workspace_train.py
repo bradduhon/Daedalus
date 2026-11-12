@@ -294,7 +294,12 @@ def test_lock_skips_an_unchanged_contract(repo: Path) -> None:
     _contract(repo)
     first = lock(repo, "contracts/api.md", 1)
     again = lock(repo, "contracts/api.md", 2)
-    assert again == [first[0], "contract unchanged, no commit"]
+    digest = hashlib.sha256(b"packet v1\n").hexdigest()[:12]
+    assert again == [
+        first[0],
+        "contract unchanged, no commit",
+        f"briefs refreshed: none hold an older contract than {digest}",
+    ]
     assert train_state.load(repo, train)["packet_version"] == 2
 
 
@@ -414,6 +419,121 @@ def _locked_train(repo: Path) -> str:
 
 def _unit(repo: Path, train: str, slug: str) -> Path:
     return create(repo, f"{train}-{slug}", f"daedalus/{train}")
+
+
+V2 = "packet v2\n"
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _brief(repo: Path, train: str, name: str, contract_line: str) -> Path:
+    # 0261: the dispatch brief shape, packet lines first, then the unit's own text.
+    path = train_runner._scratch(repo, train) / "briefs" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{contract_line}\nStandards: s.md sha256={_sha('s')}\n\nWork here.\n")
+    return path
+
+
+def _contract_line(repo: Path, text: str = "packet v1\n") -> str:
+    return f"Contract: {repo / 'contracts' / 'api.md'} sha256={_sha(text)}"
+
+
+def test_lock_revise_rewrites_open_briefs_and_leaves_merged_ones(repo: Path) -> None:
+    # 0261: a revise rewrites each open unit's Contract line; a finished unit's brief stays.
+    train = _locked_train(repo)
+    _unit(repo, train, "u1")
+    _unit(repo, train, "u2")
+    old = _contract_line(repo)
+    open_brief, merged_brief = _brief(repo, train, "u1.md", old), _brief(repo, train, "u2.md", old)
+    assert unit_binding.mark_finished(repo, train, f"{train}-u2") is None
+    _contract(repo, text="packet v2\n")
+    lines = lock(repo, "contracts/api.md", 2)
+    new = _contract_line(repo, V2)
+    assert lines[2:] == [f"brief refreshed: {open_brief} contract={_sha(V2)[:12]}"]
+    assert open_brief.read_text() == merged_brief.read_text().replace(old, new)
+    assert merged_brief.read_text().startswith(f"{old}\n")
+
+
+def test_lock_refresh_twice_rewrites_nothing_the_second_time(repo: Path) -> None:
+    # 0261: a second revise over the same packet bytes finds every open brief current.
+    train = _locked_train(repo)
+    _unit(repo, train, "u1")
+    brief = _brief(repo, train, "u1.md", _contract_line(repo))
+    _contract(repo, text="packet v2\n")
+    assert lock(repo, "contracts/api.md", 2)[2].startswith(f"brief refreshed: {brief}")
+    after = brief.read_text()
+    again = lock(repo, "contracts/api.md", 3)
+    digest = _sha(V2)[:12]
+    assert again[1:] == [
+        "contract unchanged, no commit",
+        f"briefs refreshed: none hold an older contract than {digest}",
+    ]
+    assert brief.read_text() == after
+
+
+def test_lock_refresh_rewrites_a_stage_brief_and_its_recorded_hash(repo: Path) -> None:
+    # 0261: a runner stage brief follows the contract, and its dispatch hash follows the brief.
+    train = _locked_train(repo)
+    _unit(repo, train, "u1")
+    brief = _brief(repo, train, "build-1.md", _contract_line(repo))
+    item = {"stage": "build", "n": 1, "unit": f"{train}-u1", "brief": str(brief)}
+    other = {"stage": "plan", "n": 1, "unit": None, "brief": "elsewhere.md"}
+    train_state.update(
+        repo, train, dispatches=[{**item, "contract_sha256": _sha("packet v1\n")}, other]
+    )
+    _contract(repo, text="packet v2\n")
+    assert lock(repo, "contracts/api.md", 2)[2].startswith(f"brief refreshed: {brief}")
+    assert brief.read_text().startswith(f"{_contract_line(repo, V2)}\n")
+    dispatches = train_state.load(repo, train)["dispatches"]
+    assert dispatches == [{**item, "contract_sha256": _sha(V2)}, other]
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["Contract: none\n", "no packet line\n", "Contract: a sha256=1\nContract: b sha256=2\n"],
+)
+def test_lock_refuses_an_unparsable_brief_and_changes_nothing(repo: Path, body: str) -> None:
+    # 0261: a brief without one Contract line with a sha256 is a refusal before any commit.
+    train = _locked_train(repo)
+    _unit(repo, train, "u1")
+    brief = train_runner._scratch(repo, train) / "briefs" / "u1.md"
+    brief.parent.mkdir(parents=True, exist_ok=True)
+    brief.write_text(body)
+    _contract(repo, text="packet v2\n")
+    with pytest.raises(WorkspaceError) as info:
+        lock(repo, "contracts/api.md", 2)
+    assert f"the brief {brief} holds" in str(info.value) and "Next: put back" in str(info.value)
+    assert train_state.load(repo, train)["packet_version"] == 1
+    assert _subject(repo) == "Lock contract api v1" and brief.read_text() == body
+
+
+def test_lock_refuses_an_unreadable_brief(repo: Path) -> None:
+    # 0261: a brief that is not a readable regular file is a refusal, never a silent skip.
+    train = _locked_train(repo)
+    _unit(repo, train, "u1")
+    brief = train_runner._scratch(repo, train) / "briefs" / "u1.md"
+    brief.mkdir(parents=True)
+    _contract(repo, text="packet v2\n")
+    with pytest.raises(WorkspaceError) as info:
+        lock(repo, "contracts/api.md", 2)
+    assert f"the brief {brief} could not be read" in str(info.value)
+    assert "Next: restore it" in str(info.value)
+    assert train_state.load(repo, train)["packet_version"] == 1
+
+
+def test_lock_no_contract_leaves_a_skipped_brief_alone(repo: Path) -> None:
+    # 0261, 0156: a skipped contract records no version, so no brief is refreshed.
+    train = _train(repo)
+    base = _ok(repo, "rev-parse", "HEAD")
+    train_state.update(repo, train, contract_skip=True)
+    assert lock(repo, None) == [f"lock: {base}"]
+    _unit(repo, train, "u1")
+    brief = _brief(repo, train, "u1.md", "Contract: none")
+    before = brief.read_text()
+    assert lock(repo, None) == [f"lock: {base}"]
+    assert brief.read_text() == before
 
 
 def test_stop_without_a_train_says_nothing_to_stop(repo: Path) -> None:

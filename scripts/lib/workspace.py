@@ -737,6 +737,10 @@ def lock(repo: Path, contract: str | None, version: int | None = None) -> list[s
         )
     if not path.is_file():
         raise WorkspaceError(f"contract-spec did not save the packet at {path}. Next: {RERUN}")
+    # 0261: a revise reads every open brief before it commits, so a refusal changes nothing.
+    refresh = (
+        _brief_refresh(repo, train_id, state, str(path)) if isinstance(recorded, int) else None
+    )
     _on_branch(repo, integration, str(state["base_sha"]))
     if root != repo:
         _on_branch(root, integration)
@@ -766,7 +770,25 @@ def lock(repo: Path, contract: str | None, version: int | None = None) -> list[s
         if unchanged.returncode == 1
         else "contract unchanged, no commit"
     )
-    return [f"lock: {sha}", detail]
+    if refresh is None:
+        return [f"lock: {sha}", detail]
+    from lib import train_runner  # 0261: the brief writer owns the Contract line format.
+
+    try:
+        return [f"lock: {sha}", detail, *train_runner.write_refresh(repo, train_id, *refresh)]
+    except train_runner.RunnerError as exc:
+        raise WorkspaceError(str(exc)) from exc
+
+
+def _brief_refresh(
+    repo: Path, train_id: str, state: dict[str, object], contract: str
+) -> tuple[str, list[tuple[Path, str]]]:
+    from lib import train_runner  # 0261: train_runner imports this module, so it loads here.
+
+    try:
+        return train_runner.contract_refresh(repo, train_id, state, contract)
+    except train_runner.RunnerError as exc:
+        raise WorkspaceError(str(exc)) from exc
 
 
 STOP_NEXT = "start the Build Train again (/daedalus:run)"

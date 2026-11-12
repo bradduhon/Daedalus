@@ -1642,12 +1642,112 @@ def _section_verbatim(text: str, uid: str) -> str | None:
     return None if start is None else "\n".join(lines[start:]).rstrip()
 
 
+CONTRACT_PREFIX = "Contract: "
+
+
+def _contract_packet_line(contract: str) -> str:
+    # 0083: a brief's Contract line, the sha256 of the packet bytes read once.
+    digest = _sha256(_read_packet(Path(contract), "Locked Contract Packet"))
+    return f"{CONTRACT_PREFIX}{contract} sha256={digest}"
+
+
+def _is_contract_line(line: str) -> bool:
+    head, sep, digest = line.rpartition(" sha256=")
+    hex_ok = len(digest) == 64 and all(c in "0123456789abcdef" for c in digest)
+    return bool(sep) and head.startswith(CONTRACT_PREFIX) and hex_ok
+
+
+def _open_briefs(repo: Path, train_id: str, state: dict[str, object]) -> list[Path]:
+    # 0261: a brief is open while its unit is recorded, not the audit unit, and not finished.
+    try:
+        bound = unit_binding._read(unit_binding.bindings_path(repo, train_id))
+    except train_state.TrainStateError as exc:
+        raise RunnerError(str(exc)) from exc
+    names = {
+        _text(u, "name")
+        for u in train_state.units(state)
+        if not train_state.is_audit_unit(u) and not bound.get(_text(u, "name"), {}).get("finished")
+    }
+    folder = _scratch(repo, train_id) / "briefs"
+    found = [folder / f"{name.removeprefix(f'{train_id}-')}.md" for name in sorted(names)]
+    found += [
+        Path(_text(item, "brief"))
+        for item in _objects(state, "dispatches")
+        if _text(item, "unit") in names and _text(item, "brief")
+    ]
+    return [p for p in dict.fromkeys(found) if os.path.lexists(p)]
+
+
+def contract_refresh(
+    repo: Path, train_id: str, state: dict[str, object], contract: str
+) -> tuple[str, list[tuple[Path, str]]]:
+    # 0261: every open brief's one Contract line, rewritten to the new packet; reads before writes.
+    line = _contract_packet_line(contract)
+    pending: list[tuple[Path, str]] = []
+    rerun = "then rerun the same lock command"
+    for brief in _open_briefs(repo, train_id, state):
+        try:
+            if brief.is_symlink() or not brief.is_file():
+                raise OSError("not a regular file")
+            text = brief.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise RunnerError(
+                f"the brief {brief} could not be read ({exc}). Next: restore it as the "
+                f"dispatch wrote it, {rerun}."
+            ) from exc
+        rows = text.splitlines(keepends=True)
+        at = [i for i, row in enumerate(rows) if row.startswith(CONTRACT_PREFIX)]
+        if len(at) != 1 or not _is_contract_line(rows[at[0]].rstrip("\r\n")):
+            raise RunnerError(
+                f"the brief {brief} holds {len(at)} Contract lines, and it needs exactly one "
+                f"`Contract: <path> sha256=<hex>` line. Next: put back the one Contract line "
+                f"the dispatch wrote, {rerun}."
+            )
+        old = rows[at[0]]
+        if old.rstrip("\r\n") == line:
+            continue
+        rows[at[0]] = line + old[len(old.rstrip("\r\n")) :]
+        pending.append((brief, "".join(rows)))
+    return line.rpartition(" sha256=")[2], pending
+
+
+def write_refresh(
+    repo: Path, train_id: str, digest: str, pending: list[tuple[Path, str]]
+) -> list[str]:
+    # 0261: one line per rewritten brief, one line when none; a stage brief's hash follows it.
+    for brief, text in pending:
+        try:
+            atomic.write_atomic(brief, text)
+        except OSError as exc:
+            raise RunnerError(
+                f"cannot rewrite the brief {brief} ({exc}). Next: make it writable, then set "
+                f"its Contract line to sha256={digest} by hand."
+            ) from exc
+    written = {str(brief) for brief, _ in pending}
+
+    def edit(state: dict[str, object]) -> None:
+        items = _objects(state, "dispatches")
+        if any(_text(item, "brief") in written for item in items):
+            state["dispatches"] = [
+                {**item, "contract_sha256": digest} if _text(item, "brief") in written else item
+                for item in items
+            ]
+
+    if written:
+        try:
+            train_state.change(repo, train_id, edit)
+        except train_state.TrainStateError as exc:
+            raise RunnerError(str(exc)) from exc
+    if not pending:
+        return [f"briefs refreshed: none hold an older contract than {digest[:12]}"]
+    return [f"brief refreshed: {brief} contract={digest[:12]}" for brief, _ in pending]
+
+
 def _brief_packets(repo: Path, train_id: str, state: dict[str, object]) -> tuple[list[str], Path]:
     # 0083, plan step 15: Contract (or none on a skip), Standards, then the pick line.
     contract = _text(state, "contract_path")
     if contract:
-        digest = _sha256(_read_packet(Path(contract), "Locked Contract Packet"))
-        first = f"Contract: {contract} sha256={digest}"
+        first = _contract_packet_line(contract)
     elif state.get(train_state.CONTRACT_SKIP) is True:
         first = "Contract: none"
     else:
