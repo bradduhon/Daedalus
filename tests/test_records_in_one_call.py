@@ -187,6 +187,19 @@ def _built(root: Path, uid: str) -> Path:
     (path / f"{uid.lower()}.txt").write_text("x\n")
     git(path, "add", "-A")
     git(path, "commit", "-q", "-m", f"build {uid}")
+    # 0271: the coder's COMPLETE line names the locked contract, as the merge gate reads it.
+    contract = hashlib.sha256(CONTRACT.encode()).hexdigest()[:12]
+    line = (
+        f"[STATUS: COMPLETE] branch=daedalus-unit/{TRAIN}-{uid.lower()} packet_version=1 "
+        f"files={uid.lower()}.txt tests=1 passed ledger_notes=none contract={contract}"
+    )
+    _hook(
+        root,
+        hook_event_name="SubagentStop",
+        agent_id=f"agent-coder-{uid.lower()}",
+        agent_type="daedalus:coder",
+        last_assistant_message=line,
+    )
     return path
 
 
