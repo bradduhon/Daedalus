@@ -1,7 +1,8 @@
 # Copyright (c) 2026 Brad Duhon.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 0256: the run fetches Terraform providers once, outside the kernel wrapper, into a mirror under
-# the run's temporary folder; the wrapper grants that one folder read-only (issue 200).
+# the run's temporary folder; the wrapper grants that one folder read-only (issue 200). Only the
+# run's base commit, or an address the operator allowed, decides which provider is downloaded.
 from __future__ import annotations
 
 import os
@@ -9,20 +10,26 @@ import shutil
 import signal
 import stat
 import subprocess
-from dataclasses import dataclass
+import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from lib import hcl_reader, storage, train_state
+from lib import git, hcl_reader, storage, train_state
 
 FEATURE = "provider-mirror"
 MIRROR, DATA = "mirror", "tf-data"
 # 0256: the train state key the fetch records under; roots tried, ok or failed, never an env.
 STATE_KEY = "providers"
 FETCH_TIMEOUT_S = 600
+GIT_TIMEOUT_S = 30.0
 MAX_TF_BYTES = 1 << 20
 ERROR_MAX = 200
-# 0256: folders the root walk never enters; a symlinked folder is never entered either.
+LOCK_FILE = ".terraform.lock.hcl"
+STAGED_TF = "providers.tf"
+# 0256: path parts the base-tree walk never enters; links and submodules are never read.
 SKIP_DIRS = frozenset({".git", ".terraform", ".claude"})
+BLOB_MODES = frozenset({"100644", "100755"})
+HEX = frozenset("0123456789abcdef")
 # 0256: the caller variables terraform may need for a fetch; every other one is dropped.
 PASS_NAMES = frozenset(
     {"HOME", "PATH", "TF_CLI_CONFIG_FILE", "SSL_CERT_FILE", "SSL_CERT_DIR"}
@@ -33,6 +40,13 @@ PATH_VARS = ("HOME", "TF_CLI_CONFIG_FILE", "SSL_CERT_FILE", "SSL_CERT_DIR")
 FIXED_ENV = {"CHECKPOINT_DISABLE": "1", "TF_IN_AUTOMATION": "1", "TF_INPUT": "0"}
 # 0256: the characters a mirror path may hold, so the CLI config string needs no escaping.
 PATH_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-")
+# 0256: the typed parts of an --allow address, host/namespace/type, and its version constraint.
+_LOWER = "abcdefghijklmnopqrstuvwxyz0123456789"
+HOST_CHARS = frozenset(_LOWER + ".-")
+NAME_CHARS = frozenset(_LOWER + "-")
+CONSTRAINT_CHARS = frozenset(_LOWER + "ABCDEFGHIJKLMNOPQRSTUVWXYZ.,<>=!~ -")
+LOCAL_NAME_CHARS = frozenset(_LOWER + "ABCDEFGHIJKLMNOPQRSTUVWXYZ_-")
+HOST_MAX, NAME_MAX, CONSTRAINT_MAX = 253, 64, 64
 WITHHELD = "[withheld]"
 R_MIRROR_OUTSIDE = "{path} resolves outside the run's temporary folder"
 R_MIRROR_NOT_GRANTED = (
@@ -43,6 +57,12 @@ R_MIRROR_NOT_GRANTED = (
 R_PROVIDERS_NO_RUN = (
     "providers: no run is marked in {root}. Next: start a run first; the build phase runs this "
     "command after the plan is recorded."
+)
+R_ALLOW_ADDRESS = (
+    "providers: --allow {given!r} is not <host>/<namespace>/<type>[=<version constraint>], with "
+    "a lowercase host holding a dot, a lowercase namespace and type of letters, digits and "
+    "dashes, and a constraint of at most 64 version characters. Next: copy the full source "
+    "address from the unit's files, such as registry.terraform.io/hashicorp/aws=~> 5.0."
 )
 NEXT_RERUN = (
     "Next: fix the cause, then run daedalus_train.py providers --repo {repo} again; until then "
@@ -55,6 +75,15 @@ class Grant:
     # 0256: path is the granted mirror; reason is why an existing mirror was not granted.
     path: str = ""
     reason: str = ""
+
+
+@dataclass
+class Root:
+    # 0256: one base-commit folder; required is local name to its source text at base.
+    folder: str
+    required: dict[str, str] = field(default_factory=dict)
+    labels: list[str] = field(default_factory=list)
+    lock: str = ""
 
 
 def run_folder(repo: str | Path, train_id: str) -> Path:
@@ -150,60 +179,141 @@ def make_mirror(repo: str | Path, train_id: str) -> Path:
     return run / MIRROR
 
 
-def _defines_providers(text: str) -> bool:
-    # 0256: a top-level provider block, or terraform { required_providers { ... } }.
-    for block in hcl_reader.parse(text):
-        if block.type == "provider":
-            return True
-        if block.type == "terraform" and any(b.type == "required_providers" for b in block.blocks):
-            return True
-    return False
+def _hex(value: str, size: int) -> bool:
+    return len(value) == size and set(value) <= HEX
 
 
-def _tf_file(path: str) -> str | None:
-    # 0256: a regular .tf file of at most MAX_TF_BYTES, never followed through a link.
+def _git_text(top: str, args: list[str]) -> str | None:
+    # 0256: argv to lib.git, never a shell; None on any git failure or undecodable output.
     try:
-        info = os.lstat(path)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_TF_BYTES:
-            return None
-        with open(path, "rb") as handle:
-            return handle.read(MAX_TF_BYTES).decode("utf-8")
-    except (OSError, UnicodeDecodeError):
+        done = git.run(args, top, GIT_TIMEOUT_S)
+    except (OSError, UnicodeDecodeError, git.GitTimeout):
         return None
+    return done.stdout if done.returncode == 0 else None
 
 
-def _excluded(path: str, excluded: tuple[str, ...]) -> bool:
-    return any(path == e or path.startswith(e.rstrip(os.sep) + os.sep) for e in excluded)
-
-
-def find_roots(repo: str, excluded: tuple[str, ...] = ()) -> tuple[list[str], list[str]]:
-    # 0256: (root folders, unreadable files), absolute and sorted; the walk follows no link.
-    top = _resolved(repo)
-    roots: list[str] = []
-    unread: list[str] = []
-    for folder, dirs, files in os.walk(top, followlinks=False):
-        dirs[:] = sorted(
-            d
-            for d in dirs
-            if d not in SKIP_DIRS
-            and not os.path.islink(os.path.join(folder, d))
-            and not _excluded(os.path.join(folder, d), excluded)
-        )
-        if _excluded(folder, excluded) or _resolved(folder) != folder:
+def _tree(top: str, base: str) -> list[tuple[str, str, int]] | None:
+    # 0256: (path, blob id, size) of each regular file at base; links and submodules are dropped.
+    out = _git_text(top, ["ls-tree", "-r", "-z", "-l", "--full-tree", base])
+    if out is None:
+        return None
+    found: list[tuple[str, str, int]] = []
+    for record in out.split("\0"):
+        meta, tab, path = record.partition("\t")
+        parts = meta.split()
+        if not tab or len(parts) != 4 or parts[0] not in BLOB_MODES or parts[1] != "blob":
             continue
-        if not (folder == top or folder.startswith(top + os.sep)):
+        if not _hex(parts[2], 40) or not parts[3].isdigit():
             continue
-        for name in sorted(f for f in files if f.endswith(".tf")):
-            text = _tf_file(os.path.join(folder, name))
-            try:
-                found = text is not None and _defines_providers(text)
-            except hcl_reader.HclError:
-                unread.append(os.path.join(folder, name))
+        found.append((path, parts[2], int(parts[3])))
+    return found
+
+
+def _skipped(path: str, top: str, excluded: tuple[str, ...]) -> bool:
+    if any(part in SKIP_DIRS for part in path.split("/")[:-1]):
+        return True
+    full = os.path.normpath(os.path.join(top, path))
+    return any(full == e or full.startswith(e.rstrip(os.sep) + os.sep) for e in excluded)
+
+
+def _read_root(root: Root, text: str) -> bool:
+    # 0256: a top-level provider block, or terraform { required_providers { ... } }.
+    found = False
+    for block in hcl_reader.parse(text):
+        if block.type == "provider" and block.labels:
+            found = True
+            if set(block.labels[0]) <= LOCAL_NAME_CHARS and block.labels[0] not in root.labels:
+                root.labels.append(block.labels[0])
+        if block.type != "terraform":
+            continue
+        for inner in block.blocks:
+            if inner.type != "required_providers":
                 continue
-            if found:
-                roots.append(folder)
-                break
+            found = True
+            for name, source in inner.attributes.items():
+                if set(name) <= LOCAL_NAME_CHARS:
+                    root.required.setdefault(name, source)
+    return found
+
+
+def find_roots(
+    top: str, base: str, excluded: tuple[str, ...] = ()
+) -> tuple[list[Root], list[str]] | None:
+    # 0256: the roots of the base commit's tree, never the disk; None when git cannot list it.
+    entries = _tree(top, base)
+    if entries is None:
+        return None
+    folders: dict[str, Root] = {}
+    locks: dict[str, str] = {}
+    unread: list[str] = []
+    for path, blob, size in sorted(entries):
+        if size > MAX_TF_BYTES or _skipped(path, top, excluded):
+            continue
+        folder, _, name = path.rpartition("/")
+        if name == LOCK_FILE:
+            locks[folder] = blob
+        if not name.endswith(".tf"):
+            continue
+        text = _git_text(top, ["cat-file", "blob", blob])
+        root = folders.setdefault(folder, Root(folder))
+        try:
+            if text is None:
+                raise hcl_reader.HclError(0, "unreadable")
+            _read_root(root, text)
+        except hcl_reader.HclError:
+            unread.append(path)
+    roots = [r for r in folders.values() if r.required or r.labels]
+    for root in roots:
+        root.lock = locks.get(root.folder, "")
     return roots, unread
+
+
+def staged_text(root: Root) -> str:
+    # 0256: the base commit's required_providers entries and the provider names, nothing else.
+    lines = ["terraform {", "  required_providers {"]
+    lines += [f"    {name} = {source}" for name, source in root.required.items()]
+    lines += ["  }", "}"]
+    lines += [f'provider "{label}" {{}}' for label in root.labels if label not in root.required]
+    return "\n".join(lines) + "\n"
+
+
+def parse_allow(given: str) -> tuple[str, str] | None:
+    # 0256: (host/namespace/type, constraint) by typed parts; None refuses the value.
+    address, eq, constraint = given.partition("=")
+    parts = address.split("/")
+    if len(parts) != 3:
+        return None
+    host, namespace, kind = parts
+    labels = host.split(".")
+    if not (0 < len(host) <= HOST_MAX and set(host) <= HOST_CHARS and len(labels) > 1):
+        return None
+    if any(not label or label[0] == "-" or label[-1] == "-" for label in labels):
+        return None
+    for name in (namespace, kind):
+        if not (0 < len(name) <= NAME_MAX and set(name) <= NAME_CHARS and name[0] != "-"):
+            return None
+    constraint = constraint.strip()
+    if eq and not (0 < len(constraint) <= CONSTRAINT_MAX and set(constraint) <= CONSTRAINT_CHARS):
+        return None
+    return address, constraint
+
+
+def allowed_text(allowed: list[tuple[str, str]]) -> str:
+    # 0256: one required_providers entry per operator-allowed address, and nothing else.
+    lines = ["terraform {", "  required_providers {"]
+    for index, (address, constraint) in enumerate(allowed, start=1):
+        lines += [f"    allowed-{index} = {{", f'      source = "{address}"']
+        lines += [f'      version = "{constraint}"'] if constraint else []
+        lines.append("    }")
+    lines += ["  }", "}"]
+    return "\n".join(lines) + "\n"
+
+
+def _write_new(path: Path, text: str) -> None:
+    # 0256: a new file in the fetch's own staging folder, never through a link.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
 
 
 def _inside(path: str, top: str) -> bool:
@@ -230,14 +340,17 @@ def fetch_env(data: Path, source: dict[str, str], top: str) -> tuple[dict[str, s
     return env, sorted(set(secrets), key=len, reverse=True)
 
 
+def _printable(text: str) -> str:
+    return "".join(ch for ch in text if ch.isprintable())
+
+
 def first_error(stderr: str, secrets: list[str]) -> str:
     # 0256: the first "Error:" line, else the first non-empty one; caller values withheld.
     lines = [line.strip() for line in stderr.splitlines() if line.strip()]
     pick = next((line for line in lines if line.startswith("Error:")), lines[0] if lines else "")
     for secret in secrets:
         pick = pick.replace(secret, WITHHELD)
-    text = "".join(ch for ch in pick if ch.isprintable())
-    return text[:ERROR_MAX] or "no error text"
+    return _printable(pick)[:ERROR_MAX] or "no error text"
 
 
 def _run(argv: list[str], cwd: str, env: dict[str, str], timeout: float) -> tuple[int, str]:
@@ -272,8 +385,34 @@ def terraform_path(repo: str, search: str) -> str | None:
     return real
 
 
-def _rel(folder: str, top: str) -> str:
-    return os.path.relpath(folder, top)
+def _base(top: str, train_id: str) -> str:
+    # 0256: the run's recorded base commit, 40 hex, or "" when the state holds none.
+    try:
+        value = train_state.load(Path(top), train_id).get("base_sha")
+    except train_state.TrainStateError:
+        return ""
+    return value if isinstance(value, str) and _hex(value, 40) else ""
+
+
+def _stage(top: str, run: Path, roots: list[Root]) -> list[tuple[str, Path]]:
+    # 0256: one fresh folder per root holding the generated file and the base lock file.
+    stage = Path(tempfile.mkdtemp(prefix="source-", dir=run))
+    staged: list[tuple[str, Path]] = []
+    for index, root in enumerate(roots):
+        folder = stage / str(index)
+        os.mkdir(folder, 0o700)
+        _write_new(folder / STAGED_TF, staged_text(root))
+        lock = _git_text(top, ["cat-file", "blob", root.lock]) if root.lock else None
+        if lock is not None:
+            _write_new(folder / LOCK_FILE, lock)
+        staged.append((_printable(root.folder) or ".", folder))
+    return staged
+
+
+def _stage_allowed(run: Path, allowed: list[tuple[str, str]]) -> list[tuple[str, Path]]:
+    folder = Path(tempfile.mkdtemp(prefix="allowed-", dir=run))
+    _write_new(folder / STAGED_TF, allowed_text(allowed))
+    return [(", ".join(a for a, _ in allowed), folder)]
 
 
 def fetch(
@@ -282,41 +421,51 @@ def fetch(
     excluded: tuple[str, ...],
     source: dict[str, str],
     timeout: float | None = None,
+    allowed: list[tuple[str, str]] | None = None,
 ) -> list[str]:
     # 0256: one plain line per root; a failure is a warning with a Next line, never a stop.
     timeout = FETCH_TIMEOUT_S if timeout is None else timeout
     top = _resolved(repo)
     rerun = NEXT_RERUN.format(repo=top)
-    record: dict[str, object] = {}
     lines: list[str] = []
-    roots, unread = find_roots(top, excluded)
-    lines += [
-        f"providers: {_rel(path, top)} was not read; the Terraform reader could not parse it."
-        for path in unread
-    ]
+    roots: list[Root] = []
+    base = _base(top, train_id)
+    if not allowed:
+        found = find_roots(top, base, excluded) if base else None
+        if found is None:
+            lines.append(
+                "warning: providers: the run's base commit could not be read, so nothing was "
+                f"fetched. {rerun}"
+            )
+        else:
+            roots, unread = found
+            lines += [
+                f"providers: {_printable(p)} was not read; the Terraform reader could not parse it."
+                for p in unread
+            ]
+    work = bool(roots or allowed)
     binary = terraform_path(top, source.get("PATH", ""))
+    staged: list[tuple[str, Path]] = []
     try:
         mirror = make_mirror(top, train_id)
+        if work and binary is not None:
+            staged = _stage_allowed(mirror.parent, allowed) if allowed else []
+            staged = staged or _stage(top, mirror.parent, roots)
     except (OSError, RuntimeError) as exc:
-        record["error"] = first_error(str(exc), [])
         lines.append(f"warning: providers: the mirror folder could not be made ({exc}). {rerun}")
-        roots = []
-    else:
-        if binary is None and roots:
-            record["error"] = "terraform is not on PATH, or is inside the project"
-            lines.append(
-                "warning: providers: no terraform outside the project is on PATH, so nothing "
-                f"was fetched. {rerun}"
-            )
-            roots = []
+        work = False
+    if work and binary is None:
+        lines.append(
+            "warning: providers: no terraform outside the project is on PATH, so nothing "
+            f"was fetched. {rerun}"
+        )
     tried: list[dict[str, str]] = []
-    if roots and binary is not None:
+    if staged:
         env, secrets = fetch_env(mirror.parent / DATA, source, top)
-        argv = [binary, "providers", "mirror", "-no-color", str(mirror)]
-        for root in roots:
-            name = _rel(root, top)
+        argv = [str(binary), "providers", "mirror", "-no-color", str(mirror)]
+        for name, folder in staged:
             try:
-                code, err = _run(argv, root, env, timeout)
+                code, err = _run(argv, str(folder), env, timeout)
             except OSError as exc:
                 code, err = -1, f"Error: terraform could not start ({exc.strerror})"
             if code == 0:
@@ -328,9 +477,37 @@ def fetch(
             lines.append(f"warning: providers: {name}: not fetched ({error}). {rerun}")
     if not lines and not tried:
         lines.append("providers: no Terraform root folder was found, so nothing was fetched.")
-    record["roots"] = tried
+    _record(top, train_id, base, tried, allowed, lines)
+    return lines
+
+
+def _record(
+    top: str,
+    train_id: str,
+    base: str,
+    tried: list[dict[str, str]],
+    allowed: list[tuple[str, str]] | None,
+    lines: list[str],
+) -> None:
+    # 0256: a base fetch replaces roots; an allowed fetch appends each address the operator gave.
+    result = tried[0]["result"] if tried else "not fetched"
+
+    def edit(state: dict[str, object]) -> None:
+        old = state.get(STATE_KEY)
+        record: dict[str, object] = dict(old) if isinstance(old, dict) else {}
+        if allowed:
+            prior = record.get("allowed")
+            entries = list(prior) if isinstance(prior, list) else []
+            entries += [
+                {"address": a, "constraint": c, "allowed_by": "operator", "result": result}
+                for a, c in allowed
+            ]
+            record["allowed"] = entries
+        else:
+            record.update({"base": base, "roots": tried})
+        state[STATE_KEY] = record
+
     try:
-        train_state.update(Path(top), train_id, **{STATE_KEY: record})
+        train_state.change(Path(top), train_id, edit)
     except train_state.TrainStateError as exc:
         lines.append(f"warning: providers: the run state was not updated ({exc})")
-    return lines

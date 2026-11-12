@@ -65,6 +65,16 @@ R_ORCHESTRATOR_BASH = (
 )
 # spec 7.1: date prints the clock in UTC; -s, --set and a bare MMDDhhmm operand would set it.
 DATE_UTC = frozenset({"-u", "--utc", "--universal"})
+# 0256: (script, subcommand) to the flags only the main session passes, after the operator's yes.
+MAIN_ONLY_FLAGS: dict[tuple[str, str], frozenset[str]] = {
+    ("daedalus_train.py", "providers"): frozenset({"--allow"}),
+}
+R_TRAIN_MAIN_ONLY = (
+    "{flag} on {script} {action} downloads a provider no base commit names, so only the main "
+    "session passes it, after the operator says yes (0256). Next: stop the unit and write a "
+    "decision brief naming the provider's full source address and version constraint; the main "
+    "session asks it and runs the command."
+)
 # issue 63, pin C3 -> C4: a train script's --repo is the project root of the hook cwd.
 REPO_FLAGS = ("--repo",)
 R_TRAIN_REPO = (
@@ -186,6 +196,20 @@ def train_repo_reason(segment: list[str], cwd: str) -> str | None:
     for flag, given in values:
         if not root or os.path.realpath(os.path.join(cwd, given)) != root:
             return R_TRAIN_REPO.format(flag=flag, given=given, root=root or cwd)
+    return None
+
+
+def main_only_reason(segment: list[str]) -> str | None:
+    # 0256: a MAIN_ONLY_FLAGS flag, joined, split or as the unique prefix argparse would expand.
+    if len(segment) < 3:
+        return None
+    script, action = os.path.basename(os.path.realpath(segment[1])), segment[2]
+    flags = MAIN_ONLY_FLAGS.get((script, action), frozenset())
+    for arg in segment[3:]:
+        head = arg.partition("=")[0]
+        prefix = head.startswith("--") and len(head) > 2
+        if head in flags or (prefix and any(f.startswith(head) for f in flags)):
+            return R_TRAIN_MAIN_ONLY.format(flag=sorted(flags)[0], script=script, action=action)
     return None
 
 
@@ -325,7 +349,11 @@ def _later(
         tokens = jail.admitted_tokens(script, done)
         quoted = command[done.span[0] : done.span[1]]
         if done.script is not None and train_script_ok(tokens):
-            mismatch = train_repo_reason(tokens, cwd) or map_out_reason(tokens, cwd)
+            mismatch = (
+                main_only_reason(tokens)
+                or train_repo_reason(tokens, cwd)
+                or map_out_reason(tokens, cwd)
+            )
             if mismatch is not None:
                 return mismatch
         elif "read" in allowed and done.family in shell.DOCS_READS:

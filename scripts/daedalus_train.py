@@ -183,16 +183,25 @@ def _parser() -> argparse.ArgumentParser:
     done.add_argument("--warm")
     done.add_argument("--note", action="append", default=[])
     # 0256: the run fetches Terraform providers once, outside the kernel wrapper.
-    sub.add_parser("providers").add_argument("--repo", type=Path, required=True)
+    fetch = sub.add_parser("providers", allow_abbrev=False)
+    fetch.add_argument("--repo", type=Path, required=True)
+    # 0256: main session only, after the operator said yes; the agents' hook refuses it.
+    fetch.add_argument("--allow", action="append", default=[])
     return parser
 
 
-def _providers(repo: Path) -> Outcome:
+def _providers(repo: Path, given: list[str]) -> Outcome:
     # 0256: only with checks.terraform_validate true; a fetch failure warns and never stops.
     root = project_root(repo).resolve()
     train = active_train(root)
     if train is None:
         return Outcome(EXIT_STOP, [provider_mirror.R_PROVIDERS_NO_RUN.format(root=root)])
+    allowed: list[tuple[str, str]] = []
+    for value in given:
+        parsed = provider_mirror.parse_allow(value)
+        if parsed is None:
+            return Outcome(EXIT_STOP, [provider_mirror.R_ALLOW_ADDRESS.format(given=value)])
+        allowed.append(parsed)
     try:
         loaded = load_manifest(root)
         excluded = tuple(r.path for r in resolve_excluded_roots(load_config(cwd=str(root)), root))
@@ -208,7 +217,10 @@ def _providers(repo: Path) -> Outcome:
         return Outcome(
             EXIT_OK, ["providers: skipped; the Terraform validate check is off for this project."]
         )
-    return Outcome(EXIT_OK, provider_mirror.fetch(str(root), train, excluded, dict(os.environ)))
+    environ = dict(os.environ)
+    return Outcome(
+        EXIT_OK, provider_mirror.fetch(str(root), train, excluded, environ, None, allowed)
+    )
 
 
 def _grant(repo: Path, args: argparse.Namespace) -> Outcome:
@@ -464,7 +476,7 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "finish-unit":
         return finish_unit(repo, args.unit, args.next_unit, args.note, args.warm)
     if args.action == "providers":
-        return _providers(repo)
+        return _providers(repo, args.allow)
     if args.action == "check-reply":
         return check_reply(repo, args.stage)
     if args.action == "state":

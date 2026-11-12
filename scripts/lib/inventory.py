@@ -107,6 +107,21 @@ FILES: tuple[Entry, ...] = (
         "daedalus_train.py providers runs; terraform fills it, outside the wrapper",
     ),
     Entry(
+        f"{_MIRROR}/source-<random>/<n>/",
+        "scripts/lib/provider_mirror.py:_stage",
+        "daedalus_train.py providers runs; one folder per root found at the run's base commit",
+    ),
+    Entry(
+        f"{_MIRROR}/allowed-<random>/",
+        "scripts/lib/provider_mirror.py:_stage_allowed",
+        "daedalus_train.py providers --allow runs from the main session after the operator's yes",
+    ),
+    Entry(
+        f"{_MIRROR}/<staged folder>/providers.tf and .terraform.lock.hcl",
+        "scripts/lib/provider_mirror.py:_write_new",
+        "daedalus_train.py providers runs; written once, mode 0600, never through a link",
+    ),
+    Entry(
         f"{_MIRROR}/tf-data/",
         "scripts/lib/provider_mirror.py:make_mirror",
         "daedalus_train.py providers runs; the fetch's TF_DATA_DIR, never inside the project",

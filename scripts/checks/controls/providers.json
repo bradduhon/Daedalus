@@ -7,6 +7,14 @@
     "failure": "issue 200: a provider mirror that is a link, not owned by the user or writable by group or others is granted read-only, so another user or a link widens what a wrapped coder reads",
     "premise_test": "tests/test_provider_mirror.py::test_a_bad_mirror_folder_is_not_granted_and_the_line_says_so"
   },
+  "provider_mirror.R_ALLOW_ADDRESS": {
+    "failure": "0256: an --allow value outside host/namespace/type with fixed character sets reaches the generated required_providers file, so a quote or newline rewrites what the fetch downloads",
+    "premise_test": "tests/test_provider_mirror.py::test_a_malformed_allow_address_is_refused_with_a_next_line"
+  },
+  "command_allowlist.R_TRAIN_MAIN_ONLY": {
+    "failure": "0256: an agent passes --allow to the provider fetch, so a provider no base commit names and no operator approved is downloaded outside the jail and runs on this machine",
+    "premise_test": "tests/test_provider_mirror.py::test_allow_is_refused_for_every_agent_by_its_typed_row"
+  },
   "provider_mirror.R_PROVIDERS_NO_RUN": {
     "failure": "0256: the provider fetch runs with no marked run, so it writes a mirror no wrapper will ever grant and records nothing",
     "premise_test": "tests/test_provider_mirror.py::test_the_fetch_stops_with_a_next_line_when_no_run_is_marked"

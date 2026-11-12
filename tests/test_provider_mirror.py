@@ -23,9 +23,10 @@ from lib import provider_mirror, shell, storage, train_state
 from lib.provider_mirror import Grant
 
 from tests.conftest import CFG, CWD, REPO_ROOT, git, write_train_marker
-from tests.hook_chain import decide
+from tests.hook_chain import decide, load
 from tests.payloads import _b
 
+allowlist = load("command_allowlist")
 TRAIN = "20261111-120000"
 ON = daedalus_confine.Support("x86_64", 3, True)
 LIVE = daedalus_confine.kernel_support()
@@ -52,7 +53,9 @@ STAND_IN = "\n".join(
         "here = pathlib.Path(__file__).resolve().parent",
         'mode = (here / "mode").read_text().strip()',
         'with open(here / "calls.jsonl", "a", encoding="utf-8") as log:',
-        '    call = {"argv": sys.argv, "cwd": os.getcwd(), "env": dict(os.environ)}',
+        "    cwd = pathlib.Path.cwd()",
+        "    files = {p.name: p.read_text() for p in cwd.iterdir() if p.is_file()}",
+        '    call = {"argv": sys.argv, "cwd": str(cwd), "env": dict(os.environ), "files": files}',
         '    log.write(json.dumps(call) + "\\n")',
         'if mode == "ok":',
         '    pathlib.Path(sys.argv[-1], "fetched").write_text("x")',
@@ -100,7 +103,14 @@ def tmp_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
+def _commit(repo: Path, message: str = "c") -> str:
+    git(repo, "add", "-A")
+    git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", message)
+    return git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
 def _project(tmp_path: Path, checks: dict[str, object] | None = None) -> Path:
+    # 0256: the base commit is recorded as the run's base_sha, as workspace begin records it.
     repo = (tmp_path / "proj").resolve()
     (repo / "infra").mkdir(parents=True)
     (repo / "infra" / "main.tf").write_text(TF, encoding="utf-8")
@@ -108,11 +118,17 @@ def _project(tmp_path: Path, checks: dict[str, object] | None = None) -> Path:
     (repo / "service-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     (repo / ".gitignore").write_text(".claude/\n", encoding="utf-8")
     git(repo, "init", "-q", "-b", "main")
-    git(repo, "add", "-A")
-    git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", "i")
+    base = _commit(repo, "i")
     write_train_marker(repo, TRAIN)
-    train_state.save(repo, TRAIN, {"train_id": TRAIN, "repo": str(repo)})
+    train_state.save(repo, TRAIN, {"train_id": TRAIN, "repo": str(repo), "base_sha": base})
     return repo
+
+
+def _rebase(repo: Path) -> str:
+    # 0256: commit the tree as it is now and record that commit as the run's base.
+    base = _commit(repo, "b")
+    train_state.update(repo, TRAIN, base_sha=base)
+    return base
 
 
 def _stand_in(folder: Path, mode: str = "ok", error: str = "Provider not available") -> Path:
@@ -132,15 +148,35 @@ def _calls(folder: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
 
 
-def _run_train(repo: Path, monkeypatch: pytest.MonkeyPatch, bin_dir: Path) -> tuple[int, str]:
+def _files(call: dict[str, object]) -> dict[str, str]:
+    files = call["files"]
+    assert isinstance(files, dict)
+    return files
+
+
+def _run_train(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, bin_dir: Path, *extra: str
+) -> tuple[int, str]:
     monkeypatch.chdir(repo)
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
-    code = daedalus_train.main(["providers", "--repo", str(repo)])
+    code = daedalus_train.main(["providers", "--repo", str(repo), *extra])
     return code, ""
 
 
 def _mirror(repo: Path) -> Path:
     return Path(os.path.realpath(provider_mirror.mirror_folder(repo, TRAIN)))
+
+
+def _staged(repo: Path, call: dict[str, object]) -> bool:
+    run = str(_mirror(repo).parent)
+    return str(call["cwd"]).startswith(run + os.sep)
+
+
+def _required(text: str) -> str:
+    return f"terraform {{\n  required_providers {{\n    null = {text}\n  }}\n}}\n"
+
+
+NULL_ENTRY = '{\n      source = "hashicorp/null"\n    }'
 
 
 @pytest.mark.parametrize(
@@ -183,13 +219,15 @@ def test_the_fetch_stops_with_a_next_line_when_no_run_is_marked(
     assert "Next:" in out and _calls(bin_dir) == []
 
 
-def test_a_fetch_mirrors_each_root_and_records_it_without_touching_the_project(
+def test_a_fetch_mirrors_each_base_root_from_a_staged_copy_and_never_touches_the_project(
     tmp_path: Path,
     tmp_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     repo = _project(tmp_path)
+    (repo / "infra" / provider_mirror.LOCK_FILE).write_text("# lock\n", encoding="utf-8")
+    base = _rebase(repo)
     before = git(repo, "status", "--porcelain", "--ignored").stdout
     bin_dir = tmp_path / "bin"
     tool = _stand_in(bin_dir)
@@ -199,22 +237,136 @@ def test_a_fetch_mirrors_each_root_and_records_it_without_touching_the_project(
     mirror = _mirror(repo)
     [call] = _calls(bin_dir)
     assert call["argv"] == [str(tool.resolve()), "providers", "mirror", "-no-color", str(mirror)]
-    assert call["cwd"] == str(repo / "infra") and (mirror / "fetched").is_file()
+    assert _staged(repo, call) and (mirror / "fetched").is_file()
+    assert _files(call) == {
+        provider_mirror.STAGED_TF: _required(NULL_ENTRY),
+        provider_mirror.LOCK_FILE: "# lock\n",
+    }
     record = train_state.load(repo, TRAIN)[provider_mirror.STATE_KEY]
-    assert record == {"roots": [{"folder": "infra", "result": "ok"}]}
+    assert record == {"base": base, "roots": [{"folder": "infra", "result": "ok"}]}
     assert git(repo, "status", "--porcelain", "--ignored").stdout == before
     assert not any(p.name == "fetched" for p in repo.rglob("*"))
     for folder in (mirror.parent, mirror, mirror.parent / provider_mirror.DATA):
         assert stat.S_IMODE(folder.stat().st_mode) == 0o700
 
 
+def test_changes_after_base_in_the_tree_a_branch_or_a_unit_never_change_the_fetch(
+    tmp_path: Path, tmp_root: Path
+) -> None:
+    # 0256: only the base commit names providers; agent-written .tf files are never read.
+    repo = _project(tmp_path)
+    evil = _required('{\n      source = "evil.example.com/x/backdoor"\n    }')
+    (repo / "infra" / "main.tf").write_text(evil, encoding="utf-8")
+    (repo / "added").mkdir()
+    (repo / "added" / "main.tf").write_text(evil, encoding="utf-8")
+    git(repo, "switch", "-q", "-c", f"daedalus/{TRAIN}")
+    _commit(repo, "integration")
+    unit = repo / ".claude" / "worktrees" / "u1"
+    git(repo, "worktree", "add", "-q", "-b", "daedalus-unit/u1", str(unit))
+    (unit / "infra" / "main.tf").write_text(evil, encoding="utf-8")
+    (repo / "infra" / "main.tf").write_text(evil + "\n", encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    _stand_in(bin_dir)
+    lines = provider_mirror.fetch(str(repo), TRAIN, (), {"PATH": str(bin_dir)})
+    assert lines == ["providers: infra: fetched into the run's mirror."]
+    [call] = _calls(bin_dir)
+    assert _files(call) == {provider_mirror.STAGED_TF: _required(NULL_ENTRY)}
+    assert "evil" not in json.dumps(_calls(bin_dir))
+
+
+def test_a_provider_added_after_base_is_fetched_only_with_the_operators_allow(
+    tmp_path: Path,
+    tmp_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = _project(tmp_path)
+    (repo / "infra" / "aws.tf").write_text(
+        'terraform {\n  required_providers {\n    aws = { source = "hashicorp/aws" }\n  }\n}\n'
+    )
+    _commit(repo, "after base")
+    bin_dir = tmp_path / "bin"
+    _stand_in(bin_dir)
+    assert _run_train(repo, monkeypatch, bin_dir)[0] == 0
+    assert "aws" not in json.dumps(_calls(bin_dir))
+    address = "registry.terraform.io/hashicorp/aws"
+    code, _ = _run_train(
+        repo, monkeypatch, bin_dir, "--allow", f"{address}=~> 5.0", "--allow", "a.io/b/c"
+    )
+    assert code == 0
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        f"providers: {address}, a.io/b/c: fetched into the run's mirror."
+    )
+    allowed = _calls(bin_dir)[-1]
+    assert _staged(repo, allowed) and _files(allowed) == {
+        provider_mirror.STAGED_TF: (
+            "terraform {\n  required_providers {\n"
+            f'    allowed-1 = {{\n      source = "{address}"\n      version = "~> 5.0"\n    }}\n'
+            '    allowed-2 = {\n      source = "a.io/b/c"\n    }\n'
+            "  }\n}\n"
+        )
+    }
+    record = train_state.load(repo, TRAIN)[provider_mirror.STATE_KEY]
+    assert record["allowed"] == [
+        {"address": address, "constraint": "~> 5.0", "allowed_by": "operator", "result": "ok"},
+        {"address": "a.io/b/c", "constraint": "", "allowed_by": "operator", "result": "ok"},
+    ]
+    assert record["roots"] == [{"folder": "infra", "result": "ok"}]
+
+
+@pytest.mark.parametrize(
+    "given",
+    [
+        "hashicorp/aws",
+        "registry.terraform.io/hashicorp/aws/extra",
+        "Registry.terraform.io/hashicorp/aws",
+        "localhost/hashicorp/aws",
+        "-x.io/hashicorp/aws",
+        "a.io/-h/aws",
+        "a.io/h/aws_x",
+        "a.io/h/",
+        'a.io/h/aws=1.0"\n}',
+        "a.io/h/aws=",
+        "a.io/h/aws=$(id)",
+        "a.io/h/aws=" + "1" * 65,
+        "a.io/../aws",
+        "a.io/h/aws\n",
+    ],
+)
+def test_a_malformed_allow_address_is_refused_with_a_next_line(
+    tmp_path: Path,
+    tmp_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    given: str,
+) -> None:
+    repo = _project(tmp_path)
+    bin_dir = tmp_path / "bin"
+    _stand_in(bin_dir)
+    assert provider_mirror.parse_allow(given) is None
+    code, _ = _run_train(repo, monkeypatch, bin_dir, f"--allow={given}")
+    out = capsys.readouterr().out.strip()
+    assert code == 1 and out == provider_mirror.R_ALLOW_ADDRESS.format(given=given)
+    assert "Next:" in out and _calls(bin_dir) == []
+
+
 @pytest.mark.parametrize("name", ["a b", "-rf", "$(touch pwned);`id`", "-chdir=x"])
-def test_a_root_folder_name_cannot_change_the_command(
+def test_the_base_read_runs_no_shell_and_a_root_name_cannot_change_any_command(
     tmp_path: Path, tmp_root: Path, monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
-    # 0256: the folder is the working directory, never an argument; argv is a list, no shell.
+    # 0256: git gets argv lists naming only the base sha and blob ids, never a path.
     repo = _project(tmp_path)
     (repo / "infra").rename(repo / name)
+    base = _rebase(repo)
+    seen: list[list[str]] = []
+    real = provider_mirror.git.run
+
+    def logged(args: list[str], cwd: str, timeout: float = 30.0) -> object:
+        assert isinstance(args, list)
+        seen.append(list(args))
+        return real(args, cwd, timeout)
+
+    monkeypatch.setattr(provider_mirror.git, "run", logged)
     bin_dir = tmp_path / "bin"
     tool = _stand_in(bin_dir)
     lines = provider_mirror.fetch(str(repo), TRAIN, (), {"PATH": str(bin_dir)})
@@ -222,13 +374,13 @@ def test_a_root_folder_name_cannot_change_the_command(
     assert lines == [f"providers: {name}: fetched into the run's mirror."]
     [call] = _calls(bin_dir)
     assert call["argv"] == [str(tool.resolve()), "providers", "mirror", "-no-color", str(mirror)]
-    assert call["cwd"] == str(repo / name)
-    assert not list(tmp_path.rglob("pwned"))
+    assert _staged(repo, call) and not list(tmp_path.rglob("pwned"))
+    assert seen[0] == ["ls-tree", "-r", "-z", "-l", "--full-tree", base]
+    assert all(a[:2] == ["cat-file", "blob"] and len(a) == 3 for a in seen[1:])
+    assert not any(name in arg for args in seen for arg in args)
 
 
-def test_a_root_reached_through_a_link_or_outside_the_checkout_is_skipped(
-    tmp_path: Path, tmp_root: Path
-) -> None:
+def test_a_linked_folder_or_file_at_base_is_never_read(tmp_path: Path, tmp_root: Path) -> None:
     repo = _project(tmp_path)
     (repo / "infra" / "main.tf").write_text("# no providers\n", encoding="utf-8")
     outside = tmp_path / "outside"
@@ -236,17 +388,20 @@ def test_a_root_reached_through_a_link_or_outside_the_checkout_is_skipped(
     (outside / "main.tf").write_text(TF, encoding="utf-8")
     (repo / "linked").symlink_to(outside, target_is_directory=True)
     (repo / "infra" / "providers.tf").symlink_to(outside / "main.tf")
-    roots, unread = provider_mirror.find_roots(str(repo))
-    assert roots == [] and unread == []
+    base = _rebase(repo)
+    found = provider_mirror.find_roots(str(repo), base)
+    assert found == ([], [])
 
 
-def test_skipped_and_excluded_folders_are_never_roots(
+def test_skipped_and_excluded_folders_at_base_are_never_roots(
     tmp_path: Path, tmp_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo = _project(tmp_path)
-    for rel in (".terraform/modules/m", ".claude/worktrees/u1/infra", ".git/x", "private/infra"):
+    for rel in (".terraform/modules/m", ".claude/worktrees/u1/infra", "private/infra"):
         (repo / rel).mkdir(parents=True, exist_ok=True)
         (repo / rel / "main.tf").write_text(TF, encoding="utf-8")
+    git(repo, "add", "-f", ".claude/worktrees/u1/infra/main.tf")
+    _rebase(repo)
     config = repo / ".claude" / "daedalus" / "config.json"
     entry = {"kind": "path", "path": "<repo_root>/private/"}
     config.write_text(json.dumps({"git_excluded_folders": [entry]}), encoding="utf-8")
@@ -255,7 +410,8 @@ def test_skipped_and_excluded_folders_are_never_roots(
     monkeypatch.chdir(repo)
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
     assert daedalus_train.main(["providers", "--repo", str(repo)]) == 0
-    assert [c["cwd"] for c in _calls(bin_dir)] == [str(repo / "infra")]
+    record = train_state.load(repo, TRAIN)[provider_mirror.STATE_KEY]
+    assert record["roots"] == [{"folder": "infra", "result": "ok"}]
 
 
 def test_a_provider_block_or_required_providers_makes_a_root_and_bad_hcl_is_named(
@@ -268,9 +424,27 @@ def test_a_provider_block_or_required_providers_makes_a_root_and_bad_hcl_is_name
     (repo / "plain" / "x.tf").write_text('resource "null_resource" "a" {}\n')
     (repo / "broken").mkdir()
     (repo / "broken" / "x.tf").write_text("terraform {\n")
-    roots, unread = provider_mirror.find_roots(str(repo))
-    assert roots == [str(repo / "infra"), str(repo / "p")]
-    assert unread == [str(repo / "broken" / "x.tf")]
+    base = _rebase(repo)
+    found = provider_mirror.find_roots(str(repo), base)
+    assert found is not None
+    roots, unread = found
+    assert [r.folder for r in roots] == ["infra", "p"] and unread == ["broken/x.tf"]
+    assert provider_mirror.staged_text(roots[1]) == (
+        'terraform {\n  required_providers {\n  }\n}\nprovider "aws" {}\n'
+    )
+
+
+def test_a_missing_or_unreadable_base_commit_fetches_nothing(
+    tmp_path: Path, tmp_root: Path
+) -> None:
+    repo = _project(tmp_path)
+    bin_dir = tmp_path / "bin"
+    _stand_in(bin_dir)
+    for value in (None, "HEAD", "--output=/tmp/x", "0" * 40):
+        train_state.update(repo, TRAIN, base_sha=value)
+        lines = provider_mirror.fetch(str(repo), TRAIN, (), {"PATH": str(bin_dir)})
+        assert lines[0].startswith("warning: providers: the run's base commit could not be read")
+        assert "Next:" in lines[0] and _calls(bin_dir) == []
 
 
 def test_a_failing_terraform_warns_records_and_does_not_stop_the_run(
@@ -289,9 +463,9 @@ def test_a_failing_terraform_warns_records_and_does_not_stop_the_run(
         "warning: providers: infra: not fetched (Error: Provider not available). Next: "
     )
     record = train_state.load(repo, TRAIN)[provider_mirror.STATE_KEY]
-    assert record == {
-        "roots": [{"folder": "infra", "result": "failed", "error": "Error: Provider not available"}]
-    }
+    assert record["roots"] == [
+        {"folder": "infra", "result": "failed", "error": "Error: Provider not available"}
+    ]
 
 
 def test_a_hanging_terraform_is_killed_with_its_children_and_recorded(
@@ -399,17 +573,19 @@ def test_a_planted_run_folder_link_stops_the_fetch_before_terraform_writes(
     assert sorted(p.name for p in target.rglob("*")) == [provider_mirror.MIRROR]
 
 
-def test_a_fifo_or_oversized_tf_file_is_never_opened_or_read(
+def test_a_fifo_on_disk_is_never_opened_and_an_oversized_base_file_is_skipped(
     tmp_path: Path, tmp_root: Path
 ) -> None:
-    # 0256 self-hunt: a named pipe would block the walk; a huge file is skipped unread.
+    # 0256 self-hunt: the walk reads no disk file; a base blob over the cap is never read.
     repo = _project(tmp_path)
-    (repo / "pipe").mkdir()
-    os.mkfifo(repo / "pipe" / "main.tf")
     (repo / "big").mkdir()
     (repo / "big" / "main.tf").write_text(TF + " " * provider_mirror.MAX_TF_BYTES)
-    roots, unread = provider_mirror.find_roots(str(repo))
-    assert roots == [str(repo / "infra")] and unread == []
+    base = _rebase(repo)
+    (repo / "pipe").mkdir()
+    os.mkfifo(repo / "pipe" / "main.tf")
+    found = provider_mirror.find_roots(str(repo), base)
+    assert found is not None
+    assert [r.folder for r in found[0]] == ["infra"] and found[1] == []
 
 
 def _grant_line(repo: Path, unit: Path, mirror: Grant) -> str:
@@ -692,3 +868,30 @@ def test_the_orchestrator_runs_the_fetch_and_no_other_agent_or_prefix_does() -> 
         assert not decide(_b(agent, PROVIDERS), CFG).allow, agent
     for prefix in ("TF_CLI_ARGS=-chdir=/etc ", "PATH=/tmp/x ", "env PATH=/tmp/x "):
         assert not decide(_b("orchestrator", prefix + PROVIDERS), CFG).allow, prefix
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "--allow a.io/b/c",
+        "--allow=a.io/b/c",
+        "--allo a.io/b/c",
+        "--al=a.io/b/c",
+        "--allow a.io/b/c --allow d.io/e/f",
+    ],
+)
+@pytest.mark.usefixtures("jail_fakes")
+def test_allow_is_refused_for_every_agent_by_its_typed_row(tail: str) -> None:
+    # 0256: only the main session passes --allow, after the operator says yes.
+    command = f"{PROVIDERS} {tail}"
+    got = decide(_b("orchestrator", command), CFG)
+    want = allowlist.R_TRAIN_MAIN_ONLY.format(
+        flag="--allow", script="daedalus_train.py", action="providers"
+    )
+    assert not got.allow and got.reason == want
+    for agent in ("coder", "auditor", "verifier", "releaser", "charter-docs"):
+        assert not decide(_b(agent, command), CFG).allow, agent
+    tokens = ["python3", f"{REPO_ROOT}/scripts/daedalus_train.py", "providers", *tail.split()]
+    assert allowlist.main_only_reason(tokens) == want
+    assert allowlist.main_only_reason(tokens[:3] + ["--repo", CWD]) is None
+    assert allowlist.MAIN_ONLY_FLAGS[("daedalus_train.py", "providers")] == {"--allow"}
