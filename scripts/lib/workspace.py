@@ -1023,6 +1023,7 @@ def finish(repo: Path) -> list[str]:
     records = _audit_records(repo, state) if pending else []
     for unit in pending:
         require_verified(repo, train_id, records, unit, _unit_label(train_id, str(unit["name"])))
+        require_contract(state, records, unit, _unit_label(train_id, str(unit["name"])))
     _git(repo, "switch", "-q", integration)
     lines = _merge_all(repo, state, train_id, merging)
     _finished(repo, train_id, merging)
@@ -1334,6 +1335,7 @@ def _wave(
             )
         records = _audit_records(repo, state) if records is None else records
         require_verified(repo, train_id, records, unit, uid)
+        require_contract(state, records, unit, uid)
         wave.append(unit)
     return wave
 
@@ -1354,6 +1356,20 @@ def require_verified(
             f"unit {uid} has no recorded verifier verdict {VERIFIED} for its worktree "
             f"{unit['path']}. Next: {VERIFY_NEXT}"
         )
+
+
+def require_contract(
+    state: dict[str, object], records: list[dict[str, object]], unit: dict[str, object], uid: str
+) -> None:
+    # 0271: a locked contract only; a skipped one keeps the _skip_scope rule.
+    contract = state.get("contract_path")
+    if not isinstance(contract, str) or not contract:
+        return
+    from lib import train_runner  # 0271: train_runner imports this module, so it loads here.
+
+    refusal = train_runner.completion_contract_refusal(contract, records, str(unit["branch"]), uid)
+    if refusal is not None:
+        raise WorkspaceError(refusal)
 
 
 def merge(repo: Path, ids: list[str]) -> list[str]:

@@ -82,6 +82,7 @@ from lib.train_definition import (
     DefinitionError,
     Origin,
 )
+from lib.train_summary import _COMPLETE as _COMPLETE_STATUS
 from lib.train_summary import (
     LEDGER,
     LEDGER_PENDING,
@@ -92,6 +93,7 @@ from lib.train_summary import (
     parse_notes,
     write_summary,
 )
+from lib.train_summary import replies as agent_replies
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 MODE_DEFINED = "defined"
@@ -1001,6 +1003,41 @@ def _verdict_record(status: str, tip: str, round_: int, seq: object) -> dict[str
     return {"status": status, "tip": tip, "round": round_, "seq": seq}
 
 
+def _completion_value(line: str, name: str) -> str | None:
+    # 0083: the last `<name>=<12 hex>` field of a COMPLETE line, else None.
+    found = re.findall(rf"(?<![A-Za-z0-9_]){name}=([0-9a-f]{{12}})\b", line)
+    return found[-1] if found else None
+
+
+def completion_contract_refusal(
+    contract: str, records: list[dict[str, object]], branch: str, uid: str
+) -> str | None:
+    # 0271: the newest coder COMPLETE line for the branch carries the contract's current hash.
+    done = [
+        reply.last
+        for reply in agent_replies(records)
+        if reply.agent == "coder"
+        and reply.last.startswith(COMPLETE_LINE)
+        and (match := _COMPLETE_STATUS.search(reply.last)) is not None
+        and match.group(1) == branch
+    ]
+    if not done:
+        return None
+    try:
+        current = _sha256(_read_packet(Path(contract), "Locked Contract Packet"))[:12]
+    except RunnerError as exc:
+        return str(exc)
+    got = _completion_value(done[-1], "contract")
+    if got is not None and hmac.compare_digest(got, current):
+        return None
+    return (
+        f"unit {uid} completed against contract={got or 'missing'}, and the contract "
+        f"{contract} is now at {current}. Next: resume the unit's coder with its brief's "
+        "Contract line, have it rebuild against that contract and return a new COMPLETE "
+        "line, then rerun the merge."
+    )
+
+
 def _packet_refusal(item: dict[str, object], text: str, line: str) -> str | None:
     # 0083, 0091: on the keyed reply, a COMPLETE line echoes the packet hashes its brief named.
     want = {name: _text(item, f"{name}_sha256") for name in PACKETS}
@@ -1010,9 +1047,9 @@ def _packet_refusal(item: dict[str, object], text: str, line: str) -> str | None
     status = [row.strip() for row in text.splitlines() if row.strip().startswith(COMPLETE_LINE)]
     got: dict[str, str] = {}
     for name in want:
-        found = re.findall(rf"(?<![A-Za-z0-9_]){name}=([0-9a-f]{{12}})\b", status[-1])
-        if found:
-            got[name] = found[-1]
+        found = _completion_value(status[-1], name)
+        if found is not None:
+            got[name] = found
     if all(hmac.compare_digest(got.get(name, ""), value[:12]) for name, value in want.items()):
         return None
     shown = " ".join(f"{name}={got.get(name, 'missing')}" for name in want)

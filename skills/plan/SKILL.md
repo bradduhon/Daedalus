@@ -101,7 +101,7 @@ The orchestrator runs these steps (0060). Step 11 comes before the step 5 dispat
 ## Evidence that ends it
 
 - A validated plan recorded in the run's state (steps 7 and 9). Hook: the dispatch gate refuses a coder before the recorded plan validates (scripts/lib/dispatch_binding.py:48-52, :130).
-- Inside a run, the contract lock of step 14 or the `contract: skip` line of step 13. No hook checks it. The coder's `[STATUS: COMPLETE]` line echoes the packet hashes, and the orchestrator compares them in the build phase.
+- Inside a run, the contract lock of step 14 or the `contract: skip` line of step 13. No hook checks it. The coder's `[STATUS: COMPLETE]` line echoes the packet hashes; the orchestrator compares `standards=` in the build phase, and the merge script compares `contract=` with the contract's current hash (0271).
 
 ## Agents it uses
 

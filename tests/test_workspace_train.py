@@ -421,7 +421,7 @@ def _unit(repo: Path, train: str, slug: str) -> Path:
     return create(repo, f"{train}-{slug}", f"daedalus/{train}")
 
 
-V2 = "packet v2\n"
+V1, V2 = "packet v1\n", "packet v2\n"
 
 
 def _sha(text: str) -> str:
@@ -1658,6 +1658,70 @@ def test_finish_merges_a_skipped_train_writing_only_its_one_file(repo: Path) -> 
     _verified(repo, train, _built(repo, train, "u1"))
     assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
     assert (repo / "u1.txt").is_file()
+
+
+def _completed(repo: Path, train: str, slug: str, contract: str) -> None:
+    # 0271: the coder's COMPLETE line, as the audit log holds its stop tail.
+    line = (
+        f"[STATUS: COMPLETE] branch=daedalus-unit/{train}-{slug} packet_version=1 "
+        f"files=u1.txt tests=1 passed ledger_notes=none {contract} standards={_sha('s')[:12]}"
+    )
+    _verifier_stop(repo, f"done\n{line}\n", None, "daedalus:coder", f"agent-coder-{slug}")
+
+
+def test_finish_of_a_skipped_train_takes_a_contract_none_line(repo: Path) -> None:
+    # 0271: a skipped contract keeps its own rule; the merge compares no fingerprint.
+    train = _skipped_train(repo)
+    unit = _built(repo, train, "u1")
+    _verified(repo, train, unit)
+    _completed(repo, train, "u1", "contract=none")
+    assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
+
+
+def test_merge_refuses_a_unit_completed_against_an_older_contract(repo: Path) -> None:
+    # 0271: the merge compares the COMPLETE line's contract with the contract's current hash.
+    train, u1, _ = _wave_train(repo)
+    _completed(repo, train, "u1", f"contract={_sha(V1)[:12]}")
+    _contract(repo, text=V2)
+    lock(repo, "contracts/api.md", 2)
+    _dispatch(repo, u1)
+    _verifier_stop(repo, VERIFIED_REPLY, u1)
+    with pytest.raises(WorkspaceError) as info:
+        workspace.merge(repo, ["U1"])
+    assert str(info.value) == (
+        f"unit U1 completed against contract={_sha(V1)[:12]}, and the contract "
+        f"{repo / 'contracts' / 'api.md'} is now at {_sha(V2)[:12]}. Next: resume the unit's "
+        "coder with its brief's Contract line, have it rebuild against that contract and "
+        "return a new COMPLETE line, then rerun the merge."
+    )
+    assert u1.exists() and _merges(repo, f"daedalus/{train}") == []
+    _completed(repo, train, "u1", f"contract={_sha(V2)[:12]}")
+    assert workspace.merge(repo, ["U1"])[0] == f"merged 1 units into daedalus/{train}"
+
+
+def test_finish_refuses_a_complete_line_with_no_contract_field(repo: Path) -> None:
+    # 0271: a locked contract with contract=none or no field on the line is a mismatch.
+    train = _locked_train(repo)
+    unit = _built(repo, train, "u1")
+    _verified(repo, train, unit)
+    _completed(repo, train, "u1", "contract=none")
+    with pytest.raises(WorkspaceError, match="completed against contract=missing") as info:
+        finish(repo)
+    assert "Next: resume the unit's coder" in str(info.value)
+    assert unit.exists() and _merges(repo, f"daedalus/{train}") == []
+
+
+def test_finish_reads_only_the_coder_line_of_the_units_own_branch(repo: Path) -> None:
+    # 0271: another unit's line and a non-coder's line never stand in for this unit's line.
+    train = _locked_train(repo)
+    current = f"contract={_sha(V1)[:12]}"
+    unit = _built(repo, train, "u1")
+    _verified(repo, train, unit)
+    _completed(repo, train, "u1", current)
+    _completed(repo, train, "u2", "contract=000000000000")
+    line = f"[STATUS: COMPLETE] branch=daedalus-unit/{train}-u1 packet_version=1 files=x "
+    _verifier_stop(repo, f"{line}tests=0 ledger_notes=none contract=000000000000\n", None)
+    assert finish(repo)[0] == f"merged 1 units into daedalus/{train}"
 
 
 @pytest.mark.parametrize(
