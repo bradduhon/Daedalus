@@ -23,6 +23,7 @@ from lib import (
     audit_rounds,
     git,
     manifest,
+    operator_file,
     plan_record,
     train_definition,
     train_state,
@@ -1337,6 +1338,31 @@ def _reach_phase(state: dict[str, object], phase: str) -> None:
     state[train_state.WEIGHT] = NOT_CHOSEN
 
 
+_CLASS_NEXT = (
+    "Next: fix each defect above in the plan block, rerun validate_plan.py on it, then rerun plan."
+)
+_SETTINGS_NEXT = (
+    "Next: correct the work_classes or class_models setting named above, then rerun plan."
+)
+
+
+def _class_refusal(repo: Path, data: bytes) -> str | None:
+    # 0280: the hashed bytes are checked against the run's work classes; no class field reads none.
+    try:
+        plan = plan_record.loads(data.decode("utf-8"))
+    except UnicodeDecodeError:
+        # 0086: a plan that is not UTF-8 holds no class field; the plan gate refuses it.
+        return None
+    if not plan_record.has_class_fields(plan):
+        return None
+    try:
+        operator = operator_file.load(repo)
+    except (operator_file.OperatorError, ConfigError) as exc:
+        return f"{exc}\n{_SETTINGS_NEXT}"
+    defects = plan_record.class_defects(plan, operator)
+    return "\n".join([*defects, _CLASS_NEXT]) if defects else None
+
+
 def record_plan(cwd: Path, path: Path) -> Outcome:
     # 0086, 0088: the plan gate reads this record; a changed file no longer matches its hash.
     def edit(repo: Path, train_id: str) -> list[str]:
@@ -1347,12 +1373,16 @@ def record_plan(cwd: Path, path: Path) -> Outcome:
                 "Next: write the plan with the plan skill (/daedalus:plan), then rerun plan."
             )
         try:
-            sha = _sha256(target.read_bytes())
+            data = target.read_bytes()
         except OSError as exc:
             raise RunnerError(
                 f"cannot read the plan {target} ({exc}). "
                 "Next: make the plan file readable, then rerun plan."
             ) from exc
+        sha = _sha256(data)
+        refusal = _class_refusal(repo, data)
+        if refusal is not None:
+            raise RunnerError(refusal)
 
         def change(state: dict[str, object]) -> None:
             record = {"path": str(target), "sha256": sha}

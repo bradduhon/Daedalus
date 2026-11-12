@@ -160,6 +160,15 @@ def model_for(name: str, operator: Operator) -> str:
     return dict(operator.class_models).get(name, MIDDLE_MODEL)
 
 
+# 0280: the one ordering of the accepted models, smallest to largest; no other module orders them.
+MODEL_RANK = ("haiku", "sonnet", "opus", "fable")
+
+
+def above_middle(name: str, operator: Operator) -> bool:
+    # 0274: a class whose model ranks above the middle model needs a place and a reason.
+    return MODEL_RANK.index(model_for(name, operator)) > MODEL_RANK.index(MIDDLE_MODEL)
+
+
 def classes_json(rows: tuple[tuple[str, str], ...] = DEFAULT_CLASSES) -> list[dict[str, str]]:
     return [{"name": name, "definition": definition} for name, definition in rows]
 
