@@ -2783,42 +2783,31 @@ def test_the_second_verifier_reply_reader_is_gone() -> None:
     assert hits == []
 
 
-def test_coder_model_records_the_default_then_escalates_on_the_second_refutation(
+def test_coder_model_records_the_class_model_and_keeps_it_through_two_refutations(
     repo: Path,
 ) -> None:
     train, u1, _ = _model_train(repo)
     name = f"{train}-u1"
     assert unit_binding.record_dispatch(repo, train, name) is None
     assert unit_binding.claim(repo, train, "agent-sonnet", name) is None
-    first = train_runner.coder_model(repo, "U1")
-    assert (first.code, first.lines) == (0, ["sonnet", "coder U1: sonnet (default)"])
-    _refute(repo, u1, 1)
-    # 0187: the first refutation goes back warm, so the tier and the binding stay.
-    assert train_runner.coder_model(repo, "u1").lines[0] == "sonnet"
-    assert _bindings(repo, train)[name] == {"agent_id": "agent-sonnet"}
-    _refute(repo, u1, 1)
-    second = train_runner.coder_model(repo, "U1")
-    assert second.lines == ["opus", "coder U1: opus (second refutation)"]
-    freed = {"agent_id": None, "released": True, "retired": ["agent-sonnet"]}
-    assert _bindings(repo, train)[name] == freed
-    assert train_runner.coder_model(repo, "U1").lines == second.lines
-    assert [c["reason"] for c in _coders(repo, train, name)] == ["default", "second refutation"]
-    # issue 115: one fresh coder takes the unit; the retired coder can no longer write in it.
-    assert unit_binding.record_dispatch(repo, train, name) is None
-    assert unit_binding.record_dispatch(repo, train, name) is not None
-    refused = unit_binding.claim(repo, train, "agent-sonnet", name)
-    assert refused is not None and "second refutation" in refused
-    assert unit_binding.claim(repo, train, "agent-opus", name) is None
+    first = train_runner.unit_model(repo, "coder", "U1")
+    assert (first.code, first.lines) == (0, ["sonnet", "coder U1: sonnet | class: Plumbing"])
+    # 0267: the first and the second refutation go back warm; the model and the binding stay.
+    for _ in range(2):
+        _refute(repo, u1, 1)
+        assert train_runner.unit_model(repo, "coder", "u1").lines == first.lines
+        assert _bindings(repo, train)[name] == {"agent_id": "agent-sonnet"}
+    assert _coders(repo, train, name) == [{"model": "sonnet", "class": "Plumbing"}]
 
 
-def test_coder_model_takes_the_control_path_tier_from_the_config(repo: Path) -> None:
-    train, _, _ = _model_train(repo, "u1.txt, hooks/pre_commit.py")
-    outcome = train_runner.coder_model(repo, "U1")
-    assert outcome.lines == ["opus", "coder U1: opus (control path hooks/pre_commit.py)"]
+def test_coder_model_ignores_a_control_path_and_the_coder_model_keys(repo: Path) -> None:
+    # 0267: the class alone picks the model; a control path file or a models key raises nothing.
+    _model_train(repo, "u1.txt, hooks/pre_commit.py")
+    plumbing = ["sonnet", "coder U1: sonnet | class: Plumbing"]
+    assert train_runner.unit_model(repo, "coder", "U1").lines == plumbing
     config = repo / ".claude" / "daedalus" / "config.json"
-    config.write_text(json.dumps({"models": {"plugin_file_coder": "fable"}}))
-    assert train_runner.coder_model(repo, "U1").lines[0] == "fable"
-    assert train_runner.coder_model(repo, "U2").lines == ["sonnet", "coder U2: sonnet (default)"]
+    config.write_text(json.dumps({"models": {"plugin_file_coder": "fable", "coder": "haiku"}}))
+    assert train_runner.unit_model(repo, "coder", "U1").lines == plumbing
 
 
 @pytest.mark.parametrize(
@@ -2832,11 +2821,11 @@ def test_coder_model_refuses_a_unit_the_train_does_not_hold(
     three = "unit: U3 | title: three | files: u3.txt | base: integration\n```\n\n"
     block = PLAN_BLOCK.replace("```\n\n", three, 1) + "\n### U3: three\n\nRequirements:\n1. Go.\n"
     _model_train(repo, block=block)
-    outcome = train_runner.coder_model(repo, unit)
+    outcome = train_runner.unit_model(repo, "coder", unit)
     assert outcome.code == 1 and text in outcome.lines[0] and "Next:" in outcome.lines[0]
 
 
-def test_model_unit_flag_takes_the_coder_only(repo: Path) -> None:
+def test_model_unit_flag_takes_the_coder_and_the_verifier_only(repo: Path) -> None:
     _model_train(repo)
     argv = [sys.executable, str(SCRIPTS_DIR / "daedalus_train.py"), "model", "--repo", str(repo)]
     done = subprocess.run(
@@ -2846,7 +2835,7 @@ def test_model_unit_flag_takes_the_coder_only(repo: Path) -> None:
         check=False,
         cwd=repo,
     )
-    assert done.returncode == 1 and "model --unit picks a coder's model" in done.stdout
+    assert done.returncode == 1 and "model --unit picks a coder's or a verifier's" in done.stdout
     ok = subprocess.run(
         [*argv, "--agent", "coder", "--unit", "U1"],
         capture_output=True,
@@ -2854,7 +2843,8 @@ def test_model_unit_flag_takes_the_coder_only(repo: Path) -> None:
         check=False,
         cwd=repo,
     )
-    assert (ok.returncode, ok.stdout) == (0, "sonnet\ncoder U1: sonnet (default)\n"), ok.stderr
+    want = "sonnet\ncoder U1: sonnet | class: Plumbing\n"
+    assert (ok.returncode, ok.stdout) == (0, want), ok.stderr
 
 
 def test_pr_body_rebuild_keeps_the_range_lines(repo: Path) -> None:

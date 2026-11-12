@@ -249,7 +249,8 @@ def test_both_keys_have_rows_that_name_the_project_winner() -> None:
     for key in ("work_classes", "class_models"):
         row = KEY_ROWS[(OPERATOR_FILE_NAME, key)]
         assert "`personal_overrides`" in row.governs and "wins for that project" in row.governs
-        assert row.readers == () and not row.override
+        # 0267: the model command reads both, so both are active.
+        assert "scripts/lib/train_runner.py" in row.readers and not row.override
 
 
 def _setup(args: list[str], home: Path) -> subprocess.CompletedProcess[str]:
@@ -271,7 +272,7 @@ def test_the_wizard_describes_creates_and_refuses_a_bad_set(tmp_path: Path) -> N
     for key in ("work_classes", "class_models"):
         entry = keys[("operator", key)]
         assert entry["affects"] == KEY_ROWS[(OPERATOR_FILE_NAME, key)].affects
-        assert entry["group"] == "personal" and entry["active"] is False
+        assert entry["group"] == "personal" and entry["active"] is True
     assert _setup(["--create-operator", "--repo", str(repo)], home).returncode == 0
     path = home / ".claude" / "daedalus" / "operator.json"
     assert json.loads(path.read_text(encoding="utf-8")) == starter_operator()
