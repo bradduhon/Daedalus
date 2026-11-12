@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from lib import audit, train_state
+from lib import session_notes as notes
 from lib.audit_proof import (
     R_NO_SUMMARY_WRITE,
     VERDICT_APPROVED,
@@ -875,7 +876,9 @@ def test_push_proof_passes_with_warn_records_and_fails_on_a_refusal(
     tip = _judged(repo_cwd, seq=1)
     _stop(hook_input, f"[VERDICT: APPROVED] tip={tip}")
     flagged = hook_input(tool_use_id="toolu_w1")
-    audit.audit_append(flagged, "warn", "jail: flagged. The jail's finding: x")
+    # 0259: the warn row as the jail writes it now, class name and note first.
+    noted = notes.note(notes.PUSH_OR_MERGE, "This git push publishes work", "x")
+    audit.audit_append(flagged, "warn", f"jail: {notes.record_reason(noted)}")
     use, tool_input = "toolu_w2", {"command": _summary_cmd(repo_cwd)}
     audit.audit_append(hook_input(tool_input=tool_input, tool_use_id=use), decision, "jail: x")
     done = hook_input(

@@ -95,7 +95,7 @@ If your project is a plain folder and not a git repository, Daedalus works in fo
 
 The build run and the push run below are the usual way to use Daedalus, not the only way. A piece of work can use any agents from the catalog in any order.
 
-Outside a train, Daedalus's own agents keep their own checks. Your session, and agents from Claude Code itself or from other plugins, meet only one check outside a train: a read or search of a credential file. That check warns your session in its context and refuses an agent (see Safety model below).
+Outside a train, Daedalus's own agents keep their own checks. Your session, and agents from Claude Code itself or from other plugins, meet only one check outside a train: a read or search of a credential file. That check gives your session a note in its context and refuses an agent (see Safety model below).
 
 ### Build run
 
@@ -351,7 +351,7 @@ Uninstalling the plugin deletes its data folder by default. The findings that `s
 
 ## Safety model
 
-Outside a train, Daedalus leaves your session and your repository alone, with three exceptions. Daedalus's own agents keep their own checks. A read or search of a credential file meets one check, which warns your session in its context and refuses an agent. Four of the plugin's own calls are approved by its hook, as the next paragraph says.
+Outside a train, Daedalus leaves your session and your repository alone, with three exceptions. Daedalus's own agents keep their own checks. A read or search of a credential file meets one check, which gives your session a note in its context and refuses an agent. Four of the plugin's own calls are approved by its hook, as the next paragraph says.
 
 Daedalus's hook approves four of the plugin's own calls by itself, inside a train and outside one, so Claude Code does not ask you about them. Three are the calls to the findings script that start, save and show Self-Assessment findings. The fourth is the write of one hand-over file under `/tmp/.daedalus/`. That write is approved only while Self-Assessment mode is on. Nothing is approved when any Daedalus check refuses or warns about the call. A call that is not exactly one of those four shapes is handled as before. Your own ask and deny rules in Claude Code still win over this approval.
 
@@ -369,11 +369,27 @@ Each agent gets a short list of allowed tools. A tool not on its list is never o
 
 A coding agent may write only inside its own unit worktree. Even there it may never write to `contracts/`, `.github/`, `.claude/`, `service-manifest.json`, the decisions file, or the paths and file endings your repository lists under `prohibited_writes` in `service-manifest.json`.
 
-At all times, every agent is refused a read or search of `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh` or `~/.claude/.credentials.json`. When your own session does it, the call runs with a warning in its context and its transcript. The check follows links before it judges a path, so a link into one of those folders is refused the same way. Daedalus's own agents are always refused writing those paths with a file tool or naming them in Bash. While a train runs, your session is warned in its context when it does either.
+At all times, every agent is refused a read or search of `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh` or `~/.claude/.credentials.json`. When your own session does it, the call runs with a note in its context and its transcript. The check follows links before it judges a path, so a link into one of those folders is refused the same way. Daedalus's own agents are always refused writing those paths with a file tool or naming them in Bash. While a train runs, your session is warned in its context when it does either.
 
 An agent is also refused a read or write of a `.env` file, because such a file holds live keys such as a Stripe secret key. That covers `.env` and every `.env.<name>` in any letter case, such as `.env.local`. `.env.example` stays open, because it holds the variable names only. Listing files by name stays open. The check also refuses a folder-wide read when it finds a `.env` file anywhere under the folder, up to 24 folder levels down, skipping `.git` and `node_modules`. That covers a recursive grep, `rg --hidden`, an rg glob that names `.env`, `tar` and `cp -r`. It also covers the Grep tool when its glob names a `.env` file, or when it has no glob and git does not report the `.env` file as ignored. A folder with more than 100000 entries or more than 24 levels is refused too, because the check cannot rule out a `.env` file inside it.
 
-A train never stops your session with a permission prompt. A call the jail flags in your own session runs, and the warning names what the call touches and what can go wrong.
+A train never stops your session with a permission prompt. Every call of your own session runs. Your session is not held to the command tables that fence the agents. It gets a note only for these thirteen kinds of call:
+
+- reading or searching a credential file, a `.env` file or the run's reply key;
+- writing into the run's protected folder, `.claude/daedalus/` or the plugin's data folder;
+- a push or a merge while a run is active, outside its release phase, by git or by gh;
+- writing a credential file or a `.env` file;
+- writing inside `.git`;
+- writing into the main checkout while a run works in unit worktrees;
+- starting an agent in a way that skips a rule the run checks;
+- resuming an agent in a way that skips the run's unit check;
+- sending a file from a folder the project excludes to git, GitHub or a file write;
+- a command that could not be checked against the excluded folders, because their setting could not be read;
+- signing a commit or a tag with your key;
+- a git option that can run another program;
+- a recursive delete from the root folder, your home folder or a folder above home.
+
+The release phase records that it has started. A push or a merge after that runs with no note. Any other call runs with no note too. That includes a nested Claude session, a change on GitHub that is neither a push nor a merge, and a change to a variable such as `PATH`. It also includes a call that reaches the hook with no working folder; only the credential checks judge that call. A note starts with `Warning:`, says what the call does and why it matters, and ends with a `Next:` step. It never says the call was refused, because it was not.
 
 While a train runs, agents from Claude Code itself or from other plugins may only read and search. Every other checked tool is refused, both in the train's repository and when they write into it from another one.
 
@@ -397,12 +413,12 @@ Claude Code runs the hooks that `hooks/hooks.json` binds. Before a Bash, file, s
 
 The script first decides whether the call belongs to a train. It walks up from the call's working folder to the project root. The root is the first folder holding `service-manifest.json` or `.claude/daedalus/`, or the main checkout when that folder is a linked worktree. With neither, the root is the git root. The script then looks for the train marker, `.claude/daedalus/train.active`, in that root. `scripts/lib/train_scope.py` names who meets the jail without a marker: every Daedalus agent, which arrives as `daedalus:<name>`. Your session, and agents from Claude Code itself or other plugins, meet the full jail only during a train.
 
-With no marker, a call from your session or an outside agent takes a fast path, unless a path it names lies in a repository that has a marker. The fast path loads none of the jail's other code and runs one check: a read or search of a credential store refuses an agent and warns your session. Some Bash commands go to the full jail instead: one the script cannot split, one with more than 256 words, and one naming more than 16 repositories.
+With no marker, a call from your session or an outside agent takes a fast path, unless a path it names lies in a repository that has a marker. The fast path loads none of the jail's other code and runs one check: a read or search of a credential store refuses an agent and gives your session a note. Some Bash commands go to the full jail instead: one the script cannot split, one with more than 256 words, and one naming more than 16 repositories.
 
 Otherwise the script loads the config and the jail code and judges the call:
 
 - A Daedalus agent's call goes to the router, `scripts/lib/router.py`. The router reads the agent's file under `agents/` and runs each check its hooks block names. Then it runs the excluded-folders check that every routed agent meets.
-- Your session's call goes to `scripts/lib/jail.py`. The jail never refuses your own session. A call it flags runs, with a warning in the session's context.
+- Your session's call goes to `scripts/lib/jail.py`. The jail never refuses your own session. It checks the call against the note table in `scripts/lib/session_notes.py`. A call that a row names runs with that note in the session's context. A command the jail's tables cannot read is read word by word for those rows alone, shell bodies and `find -exec` included.
 - An outside agent's call also goes to `scripts/lib/jail.py`. During a train it may read and search in the train's repository, and every other checked tool there is refused. Some commands carry another command inside a string: an `env -S` value, or the body of `bash -c`, `sh -c` or `flock -c`. The jail does not walk that string. It judges the command by the repositories the string writes into, and refuses it when it reaches the train's repository.
 
 The script then appends its decision to the session's audit log as a PreToolUse record. A refusal's reason starts with the name of the check that refused. If the record cannot be written, an agent's call is refused unless it is an allowed read, and your session's call runs with an alert. A refusal exits 2 and prints `daedalus-jail[<agent>]: <reason> Next: <what to do>` on stderr, which Claude Code shows the agent. An allowed call exits 0. After the tool runs, `scripts/audit_log.py` records the PostToolUse or PostToolUseFailure event in the background, with a hash and the start of the tool's output.
@@ -426,7 +442,7 @@ The train marker is the file `<repo>/.claude/daedalus/train.active`. Its first l
 
 - The full jail for your session and for outside agents. Without a marker they meet only the credential check.
 - The refusal of every checked tool except reads and searches, for outside agents.
-- Warnings in your session's context when it writes into `.git` or `.claude/daedalus/`, writes into the repository outside the train's working folder, names a credential store, trips a shell tripwire, skips a dispatch rule, or runs a git, gh or redirect command that names an excluded folder.
+- Notes in your session's context for the calls the note table names, as the Safety model section lists them.
 - The audit log. Without a marker no hook writes a record. The first record in a new session log also runs log retention.
 - The reply key, created with the first record that carries an agent's reply.
 - The receipts check on a coding agent's report.
@@ -442,7 +458,7 @@ Each session gets one log, `<repo>/.claude/daedalus/audit/<session_id>.jsonl`, a
 | Event | What the record holds | Who reads it |
 |---|---|---|
 | `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd` | The event, the session and its working folder, and for a prompt the redacted prompt text | The audit report |
-| `PreToolUse` | The tool and its redacted input (a Read records only its path), the jail's decision (`allow`, `block`, or `warn` for a main-session call that ran with a warning), the refusal or warning with its check name, and the jail's own time in milliseconds | The hooks check, the summary's Blocks section, the control cost report, the push proof's summary anchor, and the wave merge and summary, which find each verifier dispatch by its `Unit worktree:` line |
+| `PreToolUse` | The tool and its redacted input (a Read records only its path), the jail's decision (`allow`, `block`, or `warn` for a main-session call that ran with a note), the refusal, or for a note its check name, its class name, the note and the check's own finding, and the jail's own time in milliseconds | The hooks check, the summary's Blocks section, the control cost report, the push proof's summary anchor, and the wave merge and summary, which find each verifier dispatch by its `Unit worktree:` line |
 | `PostToolUse`, `PostToolUseFailure` | A sha256 of the tool's output and its first 4096 characters, redacted, or the error | The push proof, which reads the summary command's own output line; the audit report |
 | `SubagentStart` | The agent's id and type | The stop record, which takes its agent type from here when Claude Code omits it |
 | `SubagentStop` | The redacted head and tail of the agent's last reply, 2048 characters each, a keyed digest of the whole reply, and every `[VERDICT: ...]` line of the reply | The push proof, the wave merge's verifier check, the docs verdict record, the summary, the reply check of project train definitions |
@@ -717,6 +733,8 @@ Daedalus/
 │   ├── lib/router.py                # runs each agent's calls through its hooks
 │   ├── lib/scrub.py                 # reads the declared scrub file's terms
 │   ├── lib/self_assessment.py       # the Self-Assessment flag and its two folders
+│   ├── lib/session_notes.py         # the note table: what earns your session a note
+│   ├── lib/session_reading.py       # reads an untyped command's words for the note table
 │   ├── lib/settings_edit.py         # changes one key of a settings file in place
 │   ├── lib/settings_replace.py      # carries an older settings file's still-valid values forward
 │   ├── lib/shell.py                 # the shell model the jail and checks share
