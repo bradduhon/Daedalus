@@ -712,6 +712,7 @@ Daedalus/
 │   ├── lib/briefs.py                # decision briefs checked at the manifest literacy level
 │   ├── lib/coder_model.py           # the coder's model tier for a unit: default, control path, escalated
 │   ├── lib/config.py                # config.json loading and validation
+│   ├── lib/context_size.py          # reads a subagent's context size from its own transcript
 │   ├── lib/controls.py              # loads the controls fragments
 │   ├── lib/credential_paths.py      # the credential-path deny every agent meets
 │   ├── lib/developer_profile.py     # keeps the Developer Profile rules and tallies
