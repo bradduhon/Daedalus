@@ -597,8 +597,22 @@ def test_a_rejected_reply_listing_fewer_findings_than_its_file_is_refused(tmp_pa
     reply = _rejected(NODE + CELLS, "**a.py:3** the contract drifts")
     got = handback_check.judge(_handback(reply, "daedalus:auditor", cwd=str(repo)))
     assert got is not None
-    assert "lists 1 finding lines but the round's findings file lists 2" in got
-    assert handback_check.round_findings(str(repo)) == 2
+    assert "lists 1 finding lines but the round 1 findings file lists 2" in got
+    assert handback_check.round_findings(str(repo)) == (1, 2)
+
+
+def test_a_reply_not_tied_to_the_files_round_leaves_the_count_unjudged(tmp_path: Path) -> None:
+    # 0281: round 1 is unrecorded, so the state derives round 1 while the auditor runs round 2.
+    repo = _train_repo(
+        tmp_path, ["audit/round1/test_a.py::test_a", "audit/round1/test_b.py::test_b"]
+    )
+    later = "audit/round2/test_scope_x.py::test_y high scope: the write lands" + CELLS
+    assert handback_check.judge(_handback(_rejected(later), "auditor", cwd=str(repo))) is None
+    no_test = "no-test: daedalus/t a.py:3 medium contract: drift; reason: prose" + CELLS
+    assert handback_check.judge(_handback(_rejected(no_test), "auditor", cwd=str(repo))) is None
+    absolute = f"{repo}/docs/.tmp/daedalus/t/audit/round1/test_x.py::test_y low scope: x" + CELLS
+    got = handback_check.judge(_handback(_rejected(absolute), "auditor", cwd=str(repo)))
+    assert got is not None and "round 1 findings file lists 2" in got
 
 
 def test_a_rejected_reply_matching_its_file_passes(tmp_path: Path) -> None:

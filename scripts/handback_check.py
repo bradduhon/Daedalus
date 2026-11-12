@@ -127,9 +127,9 @@ def _judge_next(agent: str) -> str:
     )
 
 
-def findings_problem(agent: str, reply: str, listed: int | None = None) -> str | None:
+def findings_problem(agent: str, reply: str, listed: tuple[int, int] | None = None) -> str | None:
     # 0281: a failing verdict whose finding lacks its rule, a place or its search is refused;
-    # listed is the round's findings file count, None when it cannot be read.
+    # listed is the (round, count) of the round's findings file, None when it cannot be read.
     from lib.audit_proof import VERDICT_REJECTED
     from lib.audit_rounds import cell_problems, reply_finding
     from lib.coder_model import REFUTED_PREFIX
@@ -152,10 +152,12 @@ def findings_problem(agent: str, reply: str, listed: int | None = None) -> str |
     else:
         return None
     problems: list[str] = []
-    if agent == AUDITOR and listed is not None and len(named) < listed:
+    # 0281: the count binds only a reply whose own node ids name the file's round.
+    tied = listed is not None and any(_names_round(row, listed[0]) for _, row in named)
+    if agent == AUDITOR and listed is not None and tied and len(named) < listed[1]:
         problems.append(
-            f"the REJECTED reply lists {len(named)} finding lines but the round's findings file "
-            f"lists {listed}"
+            f"the REJECTED reply lists {len(named)} finding lines but the round {listed[0]} "
+            f"findings file lists {listed[1]}"
         )
     for name, row in named:
         lacks = cell_problems(row)
@@ -165,8 +167,15 @@ def findings_problem(agent: str, reply: str, listed: int | None = None) -> str |
     return "; ".join(problems) or None
 
 
-def round_findings(cwd: object) -> int | None:
-    # 0281: the count in the round's findings file, by the verdict command's own readers.
+def _names_round(line: str, round_: int) -> bool:
+    # 0281: a test finding's node id holds the parts `audit`, `round<n>` of its round folder.
+    parts = Path(line.split(maxsplit=1)[0].split("::", 1)[0]).parts
+    want = ("audit", f"round{round_}")
+    return any(parts[i : i + 2] == want for i in range(len(parts) - 1))
+
+
+def round_findings(cwd: object) -> tuple[int, int] | None:
+    # 0281: the round and count of the round's findings file, by the verdict command's readers.
     from lib import train_state
     from lib.audit_proof import ProofError, findings_path, read_findings
     from lib.project_root import project_root
@@ -179,8 +188,8 @@ def round_findings(cwd: object) -> int | None:
         train = train_state.active_train(repo)
         if train is None:
             return None
-        path = findings_path(repo, train, derived_round(train_state.load(repo, train)))
-        return len(read_findings(path))
+        round_ = derived_round(train_state.load(repo, train))
+        return round_, len(read_findings(findings_path(repo, train, round_)))
     except (OSError, ValueError, ProofError, train_state.TrainStateError):
         return None
 
