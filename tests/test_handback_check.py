@@ -28,6 +28,16 @@ HUNT = "- hunt a leading option => refused"
 HUNT_FIXED = "- hunt a here-string => admitted, fixed in 0123abc"
 
 
+@pytest.fixture(autouse=True)
+def _tmp_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    # 0281: pass markers land under a temp root, never the real /tmp/.daedalus.
+    from lib import storage
+
+    root = tmp_path / "tmproot"
+    monkeypatch.setattr(storage, "TMP_ROOT", root)
+    return root
+
+
 def _reply(*lines: str) -> str:
     return "\n".join(lines)
 
@@ -459,3 +469,241 @@ def test_a_link_out_of_the_bound_unit_worktree_is_refused(tmp_path: Path) -> Non
         handback_check.judge(_stop(_files("a.py,out/b.py"), cwd=str(repo), agent_id="a2")) is None
     )
     assert handback_check.judge(_stop(_files("a.py,in/b.py"), cwd=str(repo))) is None
+
+
+# 0281: a failing judge verdict whose finding lacks its rule, a place or its search is refused.
+CELLS = " | rule: a refusal names its rule | places: scripts/x.py:4 | search: git grep -n refuse"
+TIP = "tip=" + "a" * 40
+VERIFIER_KEY = "Unit worktree: /work/repo/.claude/worktrees/u1"
+
+
+def _refuted(*rows: str) -> str:
+    line = "[VERDICT: REFUTED] " + "; ".join(rows)
+    return _reply(line, VERIFIER_KEY, "| claim | verdict |", "corrected=0", line)
+
+
+def _rejected(*findings: str) -> str:
+    head = f"[VERDICT: REJECTED] {TIP}"
+    return _reply(head, *findings, "## Compliance", "none", head)
+
+
+ROW = "code | req 1 | MISSING | none | req 1"
+NODE = "audit/round1/test_scope_x.py::test_y high scope: the write lands"
+
+
+@pytest.mark.parametrize("event", [_stop, _handback])
+def test_a_finding_with_one_place_and_its_search_passes(event: object) -> None:
+    assert callable(event)
+    assert handback_check.judge(event(_refuted(ROW + CELLS), "daedalus:verifier")) is None
+    assert handback_check.judge(event(_rejected(NODE + CELLS), "daedalus:auditor")) is None
+    doc = " | rule: a step names its command | places: docs/guide.md:Install | search: rg -n step"
+    assert handback_check.judge(event(_refuted(ROW + doc), "verifier")) is None
+
+
+@pytest.mark.parametrize(
+    ("cells", "field"),
+    [
+        (" | rule: r | places: scripts/x.py:4", "no search cell"),
+        (" | rule: r | search: git grep -n r", "no places cell"),
+        (" | places: scripts/x.py:4 | search: git grep -n r", "no rule cell"),
+    ],
+)
+def test_a_verifier_row_without_a_cell_is_refused(cells: str, field: str) -> None:
+    reply = _refuted(ROW + CELLS, ROW + cells)
+    got = handback_check.judge(_handback(reply, "daedalus:verifier"))
+    assert got is not None and "\n" not in got
+    assert got.startswith(f"Daedalus hand-back check: row 2 '{ROW + cells}' has {field}.")
+    assert got.count("Next:") == 1
+    assert got.endswith("rows joined by `; ` and no other `;`.")
+    assert "row 1" not in got
+
+
+@pytest.mark.parametrize(
+    ("cells", "field"),
+    [
+        (" | rule: r | places: scripts/x.py:4", "no search cell"),
+        (" | rule: r | search: git grep -n r", "no places cell"),
+        (" | places: scripts/x.py:4 | search: git grep -n r", "no rule cell"),
+    ],
+)
+def test_an_auditor_finding_without_a_cell_is_refused(cells: str, field: str) -> None:
+    no_test = "no-test: daedalus/t a.py:3 medium contract: drift; reason: prose" + cells
+    got = handback_check.judge(_stop(_rejected(NODE + CELLS, no_test), "daedalus:auditor"))
+    assert got is not None
+    assert f"finding 2 '{no_test}' has {field}." in got
+    assert "finding 1" not in got and got.count("Next:") == 1
+
+
+def test_every_finding_lacking_a_cell_is_named() -> None:
+    got = handback_check.judge(_stop(_refuted(ROW, ROW + CELLS, ROW), "verifier"))
+    assert got is not None
+    assert "row 1 " in got and "row 3 " in got and "row 2 " not in got
+    assert "no rule cell and no places cell and no search cell" in got
+
+
+def test_a_failing_verdict_with_no_readable_finding_is_refused() -> None:
+    bare = "[VERDICT: REFUTED]"
+    got = handback_check.judge(_stop(_reply(bare, VERIFIER_KEY, bare), "verifier"))
+    assert got is not None and "holds no row" in got
+    semi = handback_check.judge(_stop(_refuted(ROW + CELLS.replace("refuse", "a;b")), "verifier"))
+    assert semi is not None and "holds no row" in semi
+    prose = handback_check.judge(_stop(_rejected("The write lands."), "auditor"))
+    assert prose is not None and "lists no finding line" in prose
+
+
+def test_passing_verdicts_and_other_replies_are_unchanged() -> None:
+    verified = "[VERDICT: VERIFIED] claims=3"
+    assert handback_check.judge(_stop(_reply(verified, VERIFIER_KEY, verified), "verifier")) is None
+    approved = f"[VERDICT: APPROVED] {TIP}"
+    reply = _reply(approved, "Clean.", "## Compliance", "none", approved)
+    assert handback_check.judge(_stop(reply, "auditor")) is None
+    assert (
+        handback_check.judge(_stop(_reply("[ROWS] n=1", "row", "[ROWS] n=1"), "verifier")) is None
+    )
+    # 0281: the cells bind judges only; a coder's REFUTED-looking text is judged by its receipts.
+    assert handback_check.judge(_stop(_refuted(ROW), "orchestrator")) is None
+
+
+def test_the_script_blocks_a_judge_in_a_train(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / TRAIN_MARKER).parent.mkdir(parents=True)
+    (tmp_path / TRAIN_MARKER).write_text("20261026-002310\n", encoding="utf-8")
+    stop = _stop(_refuted(ROW), "daedalus:verifier", cwd=str(tmp_path))
+    out = json.loads(_run(json.dumps(stop)).stdout)
+    assert out["decision"] == "block" and out["reason"] == handback_check.judge(stop)
+    whole = _stop(_rejected(NODE + CELLS), "daedalus:auditor", cwd=str(tmp_path))
+    assert _run(json.dumps(whole)).stdout == ""
+
+
+def _train_repo(tmp_path: Path, listed: list[str] | None) -> Path:
+    # 0281: a train whose round 1 findings file lists the given keys, or no file at all.
+    from lib import train_state
+    from lib.audit_proof import findings_path
+
+    repo, train = tmp_path / "repo", "20261026-002310"
+    (repo / ".git").mkdir(parents=True)
+    (repo / TRAIN_MARKER).parent.mkdir(parents=True)
+    (repo / TRAIN_MARKER).write_text(f"{train}\n", encoding="utf-8")
+    train_state.save(repo, train, {"train_id": train})
+    if listed is not None:
+        path = findings_path(repo, train, 1)
+        path.parent.mkdir(parents=True)
+        path.write_text("".join(f"{key} | high | scope\n" for key in listed), encoding="utf-8")
+    return repo
+
+
+def test_a_rejected_reply_listing_fewer_findings_than_its_file_is_refused(tmp_path: Path) -> None:
+    repo = _train_repo(tmp_path, ["audit/round1/test_scope_x.py::test_y", "a.py:3 contract"])
+    reply = _rejected(NODE + CELLS, "**a.py:3** the contract drifts")
+    got = handback_check.judge(_handback(reply, "daedalus:auditor", cwd=str(repo)))
+    assert got is not None
+    assert "lists 1 finding lines but the round 1 findings file lists 2" in got
+    assert handback_check.round_findings(str(repo)) == (1, 2)
+
+
+def test_a_reply_not_tied_to_the_files_round_leaves_the_count_unjudged(tmp_path: Path) -> None:
+    # 0281: round 1 is unrecorded, so the state derives round 1 while the auditor runs round 2.
+    repo = _train_repo(
+        tmp_path, ["audit/round1/test_a.py::test_a", "audit/round1/test_b.py::test_b"]
+    )
+    later = "audit/round2/test_scope_x.py::test_y high scope: the write lands" + CELLS
+    assert handback_check.judge(_handback(_rejected(later), "auditor", cwd=str(repo))) is None
+    no_test = "no-test: daedalus/t a.py:3 medium contract: drift; reason: prose" + CELLS
+    assert handback_check.judge(_handback(_rejected(no_test), "auditor", cwd=str(repo))) is None
+    absolute = f"{repo}/docs/.tmp/daedalus/t/audit/round1/test_x.py::test_y low scope: x" + CELLS
+    got = handback_check.judge(_handback(_rejected(absolute), "auditor", cwd=str(repo)))
+    assert got is not None and "round 1 findings file lists 2" in got
+
+
+def test_a_rejected_reply_matching_its_file_passes(tmp_path: Path) -> None:
+    repo = _train_repo(tmp_path, ["audit/round1/test_scope_x.py::test_y"])
+    reply = _rejected(NODE + CELLS)
+    assert handback_check.judge(_handback(reply, "daedalus:auditor", cwd=str(repo))) is None
+
+
+def test_an_unreadable_findings_file_leaves_the_count_unjudged(tmp_path: Path) -> None:
+    repo = _train_repo(tmp_path, None)
+    assert handback_check.round_findings(str(repo)) is None
+    assert handback_check.round_findings("relative/path") is None
+    reply = _rejected(NODE + CELLS)
+    assert handback_check.judge(_handback(reply, "daedalus:auditor", cwd=str(repo))) is None
+
+
+# 0281: a judge's passing hand-back leaves a pass marker; its relay stop is not judged again.
+REJECTED_LINE = f"[VERDICT: REJECTED] {TIP}"
+JUDGES = [
+    (
+        "daedalus:auditor",
+        _rejected(NODE + CELLS),
+        REJECTED_LINE,
+        f"[VERDICT: REJECTED] tip={'b' * 40}",
+    ),
+    (
+        "daedalus:verifier",
+        _refuted(ROW + CELLS),
+        f"[VERDICT: REFUTED] {ROW + CELLS}",
+        f"[VERDICT: REFUTED] {ROW}",
+    ),
+]
+
+
+def _marker(agent_id: str = "a1") -> Path:
+    from lib import storage
+
+    return storage.tmp_dir(handback_check.PASS_FEATURE, "/work/repo") / agent_id
+
+
+@pytest.mark.parametrize(("agent", "reply", "last", "other"), JUDGES)
+def test_a_passing_handback_writes_a_marker_and_its_relay_stop_passes(
+    monkeypatch: pytest.MonkeyPatch, agent: str, reply: str, last: str, other: str
+) -> None:
+    import hashlib
+
+    assert handback_check.judge(_handback(reply, agent)) is None
+    want = hashlib.sha256(last.encode("utf-8")).hexdigest()
+    assert _marker().read_text(encoding="utf-8") == want + "\n"
+    assert _marker().stat().st_mode & 0o777 == 0o600
+
+    def judged(*args: object) -> str:
+        raise AssertionError("a relay stop was judged again")
+
+    monkeypatch.setattr(handback_check, "findings_problem", judged)
+    assert handback_check.judge(_stop(f"\n{last}\n", agent)) is None
+
+
+@pytest.mark.parametrize(("agent", "reply", "last", "other"), JUDGES)
+def test_a_stop_with_no_marker_is_judged_in_full(
+    agent: str, reply: str, last: str, other: str
+) -> None:
+    assert not _marker().exists()
+    got = handback_check.judge(_stop(other if "verifier" in agent else last, agent))
+    assert got is not None and got.startswith("Daedalus hand-back check: ")
+
+
+@pytest.mark.parametrize(("agent", "reply", "last", "other"), JUDGES)
+def test_a_stop_whose_last_line_differs_from_the_marker_is_judged(
+    agent: str, reply: str, last: str, other: str
+) -> None:
+    assert handback_check.judge(_handback(reply, agent)) is None
+    assert _marker().is_file()
+    got = handback_check.judge(_stop(other, agent))
+    assert got is not None and got.startswith("Daedalus hand-back check: ")
+
+
+@pytest.mark.parametrize("agent_id", ["", "../x", "a b", "a_1", "été", "a" * 65, None])
+def test_an_agent_id_outside_the_shape_writes_no_marker(
+    _tmp_root: Path, agent_id: str | None
+) -> None:
+    payload = _handback(_rejected(NODE + CELLS), "daedalus:auditor", agent_id=agent_id)
+    assert handback_check.judge(payload) is None
+    assert not (_tmp_root.exists() and any(p.is_file() for p in _tmp_root.rglob("*")))
+    longest = _handback(_rejected(NODE + CELLS), "auditor", agent_id="a-" * 32)
+    assert handback_check.judge(longest) is None and _marker("a-" * 32).is_file()
+
+
+def test_an_unwritable_temp_root_does_not_block_the_handback(_tmp_root: Path) -> None:
+    _tmp_root.parent.mkdir(parents=True, exist_ok=True)
+    _tmp_root.write_text("not a folder", encoding="utf-8")
+    assert handback_check.judge(_handback(_rejected(NODE + CELLS), "daedalus:auditor")) is None
+    got = handback_check.judge(_stop(REJECTED_LINE, "daedalus:auditor"))
+    assert got is not None and "lists no finding line" in got

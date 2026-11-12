@@ -5,7 +5,16 @@
 from __future__ import annotations
 
 import pytest
-from lib.audit_rounds import SEVERITIES, Finding, FindingsError, next_round, parse
+from lib.audit_rounds import (
+    SEVERITIES,
+    Finding,
+    FindingsError,
+    cell_problems,
+    finding_cells,
+    next_round,
+    parse,
+    reply_finding,
+)
 
 LOW = "low"
 
@@ -60,3 +69,68 @@ def test_next_round_is_one_more_than_the_highest_recorded(
     rounds: dict[str, object], want: int
 ) -> None:
     assert next_round(rounds) == want
+
+
+# 0281: the rule, places and search cells that end every judge finding row.
+CELLS = (
+    " | rule: every reader keeps the row whole"
+    " | places: a.py:3, guide.md:Install | search: git grep -n row"
+)
+
+
+def test_finding_cells_read_each_named_cell() -> None:
+    row = "code | claim 2 | MISSING | `a | b` | req 2" + CELLS
+    assert finding_cells(row) == {
+        "rule": "every reader keeps the row whole",
+        "places": "a.py:3, guide.md:Install",
+        "search": "git grep -n row",
+    }
+    assert cell_problems(row) == []
+
+
+def test_a_search_with_a_pipe_stays_whole() -> None:
+    row = "code | c | MISSING | x | y | rule: r | places: a.py:1 | search: git grep -n x | sort"
+    assert finding_cells(row)["search"] == "git grep -n x | sort"
+    assert cell_problems(row) == []
+
+
+@pytest.mark.parametrize(
+    ("row", "want"),
+    [
+        ("code | c | MISSING | x | y | rule: r | places: a.py:1 | search: grep -n x a.py", []),
+        ("code | c | MISSING | x | y | rule: r | places: a.py:1", ["no search cell"]),
+        ("code | c | MISSING | x | y | rule: r | search: grep -n x a.py", ["no places cell"]),
+        ("code | c | MISSING | x | y | places: a.py:1 | search: grep -n x", ["no rule cell"]),
+        (
+            "code | c | MISSING | x | y | rule:  | places:  | search: g",
+            ["no rule cell", "no places cell"],
+        ),
+        ("code | c | MISSING | x | y", ["no rule cell", "no places cell", "no search cell"]),
+        (
+            "code | c | MISSING | x | y | rule: r | places: a.py, b.py:2 | search: g",
+            ["a place that is not `<file>:<line or named part>`"],
+        ),
+        (
+            "code | c | MISSING | x | y | rule: r | places: :4 | search: g",
+            ["a place that is not `<file>:<line or named part>`"],
+        ),
+    ],
+)
+def test_cell_problems_name_each_missing_cell(row: str, want: list[str]) -> None:
+    assert cell_problems(row) == want
+
+
+@pytest.mark.parametrize(
+    ("line", "want"),
+    [
+        ("audit/round1/test_scope_x.py::test_y high scope: the write lands" + CELLS, True),
+        ("- audit/round1/test_scope_x.py::test_y low scope: the write lands", True),
+        ("no-test: daedalus/t a.py:3 medium contract: field drift; reason: prose", True),
+        ("Fix: guard the write", False),
+        ("The high risk is the write.", False),
+        ("Table diff: none", False),
+        ("", False),
+    ],
+)
+def test_reply_finding_admits_the_two_finding_line_shapes(line: str, want: bool) -> None:
+    assert reply_finding(line) is want
