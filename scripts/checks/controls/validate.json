@@ -2,5 +2,9 @@
   "tf_validate.R_VALIDATE_NO_RUN": {
     "failure": "0265: the run's Terraform validate runs with no marked run, so it reads no unit from the state, names no base commit and records nothing a fix round could route",
     "premise_test": "tests/test_tf_validate.py::test_validate_stops_with_a_next_line_when_no_run_is_marked"
+  },
+  "tf_validate.R_VALIDATE_TARGET": {
+    "failure": "0265: the run's Terraform validate is called with no target or with both a unit and the merged tip, so the result lands on the wrong record and the auditor or the coder reads a check that never ran",
+    "premise_test": "tests/test_tf_validate.py::test_validate_takes_exactly_one_target"
   }
 }

@@ -31,7 +31,7 @@ MAX_ROOTS, MAX_FOLDERS, MAX_FILES, MAX_DEPTH = 32, 64, 256, 16
 # 0265: the most one root stages, its local modules included.
 MAX_ROOT_BYTES = 16 << 20
 NAME_MAX, PATH_MAX = 255, 4096
-DIAG_SHOWN, SUMMARY_MAX = 5, 160
+DIAG_SHOWN, SUMMARY_MAX, PLANTED_SHOWN = 5, 160, 10
 LOCAL_PREFIXES = ("./", "../")
 OVERRIDE = "override.tf"
 TYPED_BLOCKS = frozenset({"resource", "data", "ephemeral"})
@@ -44,7 +44,11 @@ R_VALIDATE_NO_RUN = (
     "validate: no run is marked in {root}. Next: start a run first; the build phase runs this "
     "command on a unit after its coder hands it in."
 )
-NEXT_RERUN = "Next: fix the cause, then run daedalus_train.py validate --repo {repo} --unit {unit}."
+R_VALIDATE_TARGET = (
+    "validate takes exactly one of --unit <unit id> and --merged. Next: pass --unit after a "
+    "coder hands a unit in, or --merged before the auditor starts."
+)
+NEXT_RERUN = "Next: fix the cause, then run daedalus_train.py validate --repo {repo} {target}."
 NO_BINARY = "no terraform outside the project is on PATH. {rerun}"
 NO_MIRROR = (
     "the run has no provider mirror. Next: run daedalus_train.py providers from the main "
@@ -593,10 +597,47 @@ def _root_stage(stage: Path, index: int, mirror: str) -> Path:
 
 @dataclass
 class Unit:
-    # 0265: the unit as the run's state records it; nothing here comes from an argument path.
+    # 0265: the unit as the run's state records it, or the merged tip; never an argument path.
     label: str
     name: str
     branch: str
+    merged: bool = False
+
+    @property
+    def flag(self) -> str:
+        return "--merged" if self.merged else f"--unit {self.label}"
+
+    @property
+    def who(self) -> str:
+        return "run" if self.merged else "unit"
+
+
+def merged_target(train_id: str) -> Unit:
+    # 0265: the run's integration branch, every unit merged so far.
+    return Unit("merged", "", f"daedalus/{train_id}", merged=True)
+
+
+def planted_paths(tip: Tip) -> list[str]:
+    # 0265, issue 118: tree paths in a folder Terraform starts programs from.
+    found: list[str] = []
+    for path in sorted(set(tip.files) | tip.other):
+        parts = path.split("/")
+        pairs = list(zip(parts, parts[1:], strict=False))
+        if ".terraform" in parts[:-1] or ("terraform.d", "plugins") in pairs:
+            found.append(path)
+    return found
+
+
+def _planted_lines(paths: list[str]) -> list[str]:
+    lines = [
+        f"warning: validate: the tree holds {_shown(path)}, inside a folder Terraform starts "
+        "programs from; the run never copies or runs it. Next: tell the operator, and remove it "
+        "from the branch unless the operator put it there."
+        for path in paths[:PLANTED_SHOWN]
+    ]
+    if len(paths) > PLANTED_SHOWN:
+        lines.append(f"warning: validate: and {len(paths) - PLANTED_SHOWN} more such paths.")
+    return lines
 
 
 def unit_tip(top: str, branch: str) -> str:
@@ -619,37 +660,42 @@ def validate(
     source: dict[str, str],
     timeout: float | None = None,
 ) -> tuple[list[str], list[Outcome]]:
-    # 0265: one plain line per root; never runs in or reads from the unit worktree on disk.
+    # 0265: one plain line per root; never runs in or reads from a worktree on disk.
     top = provider_mirror._resolved(repo)
-    rerun = NEXT_RERUN.format(repo=top, unit=unit.label)
+    rerun = NEXT_RERUN.format(repo=top, target=unit.flag)
     base = provider_mirror._base(top, train_id)
     tip = unit_tip(top, unit.branch)
     if not base or not tip:
         return [
-            f"warning: validate: the run's base or the unit's branch could not be read. {rerun}"
+            f"warning: validate: the run's base or the {unit.who}'s branch could not be read. "
+            f"{rerun}"
         ], []
     folders = changed_roots(top, base, tip, excluded)
     files = _tip_files(top, tip) if folders is not None else None
     if folders is None or files is None:
-        return [f"warning: validate: git could not list the unit's changes. {rerun}"], []
+        return [f"warning: validate: git could not list the {unit.who}'s changes. {rerun}"], []
+    planted = planted_paths(files)
+    lines = _planted_lines(planted)
     # 0265: a folder whose .tf files the unit deleted, all of them, is no root.
     roots = [f for f in folders if any(_listing(files, f))]
     if not roots:
-        lines = ["validate: the unit changes no Terraform file, so nothing was validated."]
-        _record(top, train_id, unit, tip, [], lines)
+        lines.append(
+            f"validate: the {unit.who} changes no Terraform file, so nothing was validated."
+        )
+        _record(top, train_id, unit, tip, [], planted, lines)
         return lines, []
     grant = provider_mirror.granted_mirror(top)
     binary = provider_mirror.terraform_path(top, source.get("PATH", ""))
     if binary is None or not grant.path:
         why = NO_BINARY.format(rerun=rerun) if binary is None else grant.reason
-        lines = [f"warning: validate: nothing was validated, because {why or NO_MIRROR}"]
-        _record(top, train_id, unit, tip, [], lines)
+        lines.append(f"warning: validate: nothing was validated, because {why or NO_MIRROR}")
+        _record(top, train_id, unit, tip, [], planted, lines)
         return lines, []
     outcomes = _stage_and_run(top, train_id, roots, files, grant.path, binary, source, timeout)
-    lines = [line for o in outcomes for line in o.lines]
-    if any(o.result == FAILED for o in outcomes):
+    lines += [line for o in outcomes for line in o.lines]
+    if any(o.result == FAILED for o in outcomes) and not unit.merged:
         lines.append(NEXT_ROUTE)
-    _record(top, train_id, unit, tip, outcomes, lines)
+    _record(top, train_id, unit, tip, outcomes, planted, lines)
     return lines, outcomes
 
 
@@ -671,7 +717,7 @@ def _stage_and_run(
                 name,
                 NOT_VALIDATED,
                 [
-                    f"validate: {name}: not validated, because the unit changes more than "
+                    f"validate: {name}: not validated, because the change touches more than "
                     f"{MAX_ROOTS} Terraform folders."
                 ],
             )
@@ -729,15 +775,28 @@ def _one_root(
 
 
 def _record(
-    top: str, train_id: str, unit: Unit, tip: str, outcomes: list[Outcome], lines: list[str]
+    top: str,
+    train_id: str,
+    unit: Unit,
+    tip: str,
+    outcomes: list[Outcome],
+    planted: list[str],
+    lines: list[str],
 ) -> None:
-    # 0265: per root its result and printed lines, with the unit tip they judged.
-    record = {
+    # 0265: per root its result and printed lines, with the tip they judged; the merged tip's
+    # record sits under the run's validate entry, a unit's on the unit.
+    record: dict[str, object] = {
         "tip": tip,
         "roots": [{"folder": o.folder, "result": o.result, "lines": o.lines} for o in outcomes],
     }
+    if planted:
+        record["planted"] = [_shown(p) for p in planted]
 
     def edit(state: dict[str, object]) -> None:
+        if unit.merged:
+            old = state.get(STATE_KEY)
+            state[STATE_KEY] = {**(old if isinstance(old, dict) else {}), "merged": record}
+            return
         raw = state.get("units")
         for item in raw if isinstance(raw, list) else []:
             if isinstance(item, dict) and item.get("name") == unit.name:

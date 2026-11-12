@@ -300,6 +300,12 @@ def test_a_planted_provider_and_project_config_in_the_worktree_are_never_copied_
     assert _files(init) == {"infra/main.tf": NULL + "# changed\n"}
     assert not marker.exists() and not list(tmp_path.rglob("pwned"))
     assert _status(repo, unit) == before
+    # 0265: a committed provider program is named to the operator and recorded, never run.
+    planted = "infra/.terraform/providers/registry.terraform.io/hashicorp/null/3.2.3/linux_amd64"
+    warned = [line for line in out if line.startswith("warning: validate: the tree holds")]
+    assert len(warned) == 2 and planted in warned[0] and "Next:" in warned[0]
+    assert any("terraform.d/plugins/x.tf" in line for line in warned)
+    assert len(_record(repo)["planted"]) == 2  # type: ignore[arg-type]
 
 
 def test_a_lock_with_other_platforms_hashes_is_staged_without_hashes(
@@ -753,9 +759,115 @@ def test_a_terraform_inside_the_project_is_never_run(
 
 def test_only_the_orchestrator_may_run_the_command() -> None:
     # 0265: the orchestrator's train class admits validate by name; no other agent runs it.
-    assert decide(_b("orchestrator", VALIDATE), CFG).allow
-    for agent in ("coder", "auditor", "verifier", "releaser", "charter-docs", "writer"):
-        assert not decide(_b(agent, VALIDATE), CFG).allow, agent
+    merged = VALIDATE.replace("--unit u1", "--merged")
+    for command in (VALIDATE, merged):
+        assert decide(_b("orchestrator", command), CFG).allow, command
+        for agent in ("coder", "auditor", "verifier", "releaser", "charter-docs", "writer"):
+            assert not decide(_b(agent, command), CFG).allow, (agent, command)
+
+
+@pytest.mark.parametrize("given", [[], ["--unit", UNIT, "--merged"]])
+def test_validate_takes_exactly_one_target(
+    tmp_path: Path,
+    tmp_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    given: list[str],
+) -> None:
+    repo, _ = _project(tmp_path)
+    monkeypatch.chdir(repo)
+    code = daedalus_train.main(["validate", "--repo", str(repo), *given])
+    out = capsys.readouterr().out.strip()
+    assert code == 1 and out == tf_validate.R_VALIDATE_TARGET and "Next:" in out
+
+
+def _integration(repo: Path, text: str) -> str:
+    # 0265: the run's integration branch, as workspace begin makes it, holding text in infra.
+    git(repo, "switch", "-q", "-c", f"daedalus/{TRAIN}")
+    (repo / "infra" / "main.tf").write_text(text, encoding="utf-8")
+    return _commit(repo, "merged")
+
+
+def test_the_merged_form_validates_the_integration_tip_and_never_the_working_tree(
+    tmp_path: Path,
+    tmp_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo, unit = _project(tmp_path)
+    _mirror(repo)
+    tip = _integration(repo, NULL + "# merged\n")
+    (repo / "infra" / "main.tf").write_text(NULL + "# DISK ONLY\n", encoding="utf-8")
+    (repo / "infra" / "extra.tf").write_text("# DISK ONLY\n", encoding="utf-8")
+    before = _status(repo, unit)
+    bin_dir = tmp_path / "bin"
+    _stand_in(bin_dir)
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    code = daedalus_train.main(["validate", "--repo", str(repo), "--merged"])
+    out = capsys.readouterr().out.splitlines()
+    assert (code, out) == (0, ["validate: infra: validated clean."])
+    init = _calls(bin_dir)[0]
+    assert _files(init) == {"infra/main.tf": NULL + "# merged\n"}
+    assert "DISK ONLY" not in json.dumps(_calls(bin_dir))
+    record = train_state.load(repo, TRAIN)[tf_validate.STATE_KEY]
+    assert record == {
+        "merged": {"tip": tip, "roots": [{"folder": "infra", "result": "clean", "lines": out}]}
+    }
+    assert _status(repo, unit) == before
+
+
+def test_a_failed_merged_root_is_stated_for_the_auditor_and_routes_nothing(
+    tmp_path: Path,
+    tmp_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo, _ = _project(tmp_path)
+    _mirror(repo)
+    _integration(repo, NULL + "# merged\n")
+    diag = {"severity": "error", "summary": "Unsupported argument", "detail": "TOPSECRET"}
+    bin_dir = tmp_path / "bin"
+    _stand_in(bin_dir, "fail", json.dumps({"valid": False, "diagnostics": [diag]}))
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    code = daedalus_train.main(["validate", "--repo", str(repo), "--merged"])
+    out = capsys.readouterr().out.splitlines()
+    assert code == 0
+    assert out == [
+        "validate: infra: failed; terraform validate reported:",
+        "validate:   Unsupported argument",
+    ]
+    assert tf_validate.NEXT_ROUTE not in out
+
+
+def test_a_committed_provider_program_on_the_integration_tip_is_never_run_and_is_named(
+    tmp_path: Path,
+    tmp_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # 0265, issue 118: the auditor's old bare validate would have started this program.
+    repo, _ = _project(tmp_path)
+    _mirror(repo)
+    marker = tmp_path / "marker"
+    git(repo, "switch", "-q", "-c", f"daedalus/{TRAIN}")
+    _plant(repo, marker)
+    (repo / "infra" / "main.tf").write_text(NULL + "# merged\n", encoding="utf-8")
+    git(repo, "add", "-f", "infra")
+    _commit(repo, "merged with a planted program")
+    bin_dir = tmp_path / "bin"
+    _stand_in(bin_dir)
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    code = daedalus_train.main(["validate", "--repo", str(repo), "--merged"])
+    out = capsys.readouterr().out.splitlines()
+    assert code == 0 and not marker.exists()
+    assert out[0].startswith("warning: validate: the tree holds infra/.terraform/providers/")
+    assert out[-1] == "validate: infra: validated clean."
+    assert _files(_calls(bin_dir)[0]) == {"infra/main.tf": NULL + "# merged\n"}
+    merged = train_state.load(repo, TRAIN)[tf_validate.STATE_KEY]["merged"]  # type: ignore[index]
+    assert len(merged["planted"]) == 1
 
 
 @pytest.mark.parametrize(

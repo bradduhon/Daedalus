@@ -195,7 +195,9 @@ def _parser() -> argparse.ArgumentParser:
     # 0265: the run validates one unit's Terraform outside the wrapper, after its hand-in.
     check_tf = sub.add_parser("validate", allow_abbrev=False)
     check_tf.add_argument("--repo", type=Path, required=True)
-    check_tf.add_argument("--unit", required=True)
+    check_tf.add_argument("--unit")
+    # 0265: the run's integration tip, before the auditor is dispatched.
+    check_tf.add_argument("--merged", action="store_true")
     return parser
 
 
@@ -223,8 +225,10 @@ def _terraform_on(root: Path, verb: str) -> tuple[tuple[str, ...], Outcome | Non
     return excluded, None
 
 
-def _validate(repo: Path, unit_id: str) -> Outcome:
+def _validate(repo: Path, unit_id: str | None, merged: bool) -> Outcome:
     # 0265: the unit and its branch come from the run's state, never from an argument path.
+    if (unit_id is None) == (not merged):
+        return Outcome(EXIT_STOP, [tf_validate.R_VALIDATE_TARGET])
     root = project_root(repo).resolve()
     train = active_train(root)
     if train is None:
@@ -232,12 +236,18 @@ def _validate(repo: Path, unit_id: str) -> Outcome:
     excluded, off = _terraform_on(root, "validate")
     if off is not None:
         return off
-    try:
-        record = _unit_record(load_state(root, train), train, unit_id)
-    except RunnerError as exc:
-        return Outcome(EXIT_STOP, [str(exc)])
-    unit = tf_validate.Unit(unit_id, str(record.get("name")), str(record.get("branch") or ""))
+    if unit_id is None:
+        unit = tf_validate.merged_target(train)
+    else:
+        try:
+            record = _unit_record(load_state(root, train), train, unit_id)
+        except RunnerError as exc:
+            return Outcome(EXIT_STOP, [str(exc)])
+        unit = tf_validate.Unit(unit_id, str(record.get("name")), str(record.get("branch") or ""))
     lines, outcomes = tf_validate.validate(str(root), train, unit, excluded, dict(os.environ))
+    if merged:
+        # 0265: the merged result goes to the auditor as a script's result; it routes nothing.
+        return Outcome(EXIT_OK, lines)
     results = {o.result for o in outcomes}
     if tf_validate.FAILED in results:
         return Outcome(EXIT_ROUTED, lines)
@@ -522,7 +532,7 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
     if args.action == "providers":
         return _providers(repo, args.allow)
     if args.action == "validate":
-        return _validate(repo, args.unit)
+        return _validate(repo, args.unit, args.merged)
     if args.action == "check-reply":
         return check_reply(repo, args.stage)
     if args.action == "state":
