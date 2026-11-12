@@ -139,7 +139,13 @@ def test_every_plan_fixture_validates_as_before_with_any_settings(name: str) -> 
         ),
         (
             f"{BASE} | class: AuthN | place: app/auth.py:check_login",
-            "unit U1 has the class AuthN, whose model ranks above sonnet, and gives no "
+            "unit U1 has the class AuthN, which is not Plumbing, and gives no class_reason. "
+            "Next: give unit U1 a class_reason field, one line saying why the work has that "
+            "class.",
+        ),
+        (
+            f"{BASE} | class: Mechanical",
+            "unit U1 has the class Mechanical, which is not Plumbing, and gives no "
             "class_reason. Next: give unit U1 a class_reason field, one line saying why the "
             "work has that class.",
         ),
@@ -153,7 +159,7 @@ def test_the_four_refusals(tmp_path: Path, line: str, defect: str) -> None:
     "line",
     [
         f"{BASE} | class: Plumbing",
-        f"{BASE} | class: Mechanical",
+        f"{BASE} | class: Plumbing | class_reason: it only serves a file",
         f"{BASE} | class: Mechanical | class_reason: a rename only",
         f"{BASE} | class: AuthN | place: docs/guide.md:Section 2: scope | class_reason: login doc",
     ],
@@ -163,9 +169,14 @@ def test_plumbing_and_mechanical_need_no_place(tmp_path: Path, line: str) -> Non
 
 
 def test_a_user_class_on_haiku_needs_no_place_and_on_fable_needs_one(tmp_path: Path) -> None:
-    line = f"{BASE} | class: Legal"
+    line = f"{BASE} | class: Legal | class_reason: it drafts a clause"
     assert _defects(tmp_path, line, operator=_mapped("Legal", "haiku")) == []
     refused = _defects(tmp_path, line, operator=_mapped("Legal", "fable"))
+    assert len(refused) == 1 and "names no place" in refused[0]
+    bare = f"{BASE} | class: Legal"
+    refused = _defects(tmp_path, bare, operator=_mapped("Legal", "haiku"))
+    assert len(refused) == 1 and "gives no class_reason" in refused[0]
+    refused = _defects(tmp_path, bare, operator=_mapped("Legal", "fable"))
     assert len(refused) == 2
     assert "names no place" in refused[0] and "gives no class_reason" in refused[1]
 

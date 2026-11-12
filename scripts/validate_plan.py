@@ -87,7 +87,7 @@ def _operator(repo: Path) -> Operator | str:
 
 
 def _print_classes(repo: Path) -> int:
-    # 0280: the planner's copy of the work classes; a required place means a class_reason too.
+    # 0280: the planner's copy of the work classes; the place column states the place rule only.
     operator = _operator(repo)
     if isinstance(operator, str):
         print(operator)

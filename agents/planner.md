@@ -201,7 +201,8 @@ from the unit's own `files:` list and the named part of it where the work happen
 code or a section in a document. Give every unit whose class is not `Plumbing` a `class_reason:`,
 one line saying why the work has that class; the plan table shows it to the operator. The
 validator refuses a class the list does not hold, a place whose file is not in the unit's list,
-and a class marked `place: required` with no place or no reason.
+a class marked `place: required` with no place, and a class other than `Plumbing` with no
+reason.
 
 Below the block, every unit has one requirement section in this shape (pin REQ -> VER):
 

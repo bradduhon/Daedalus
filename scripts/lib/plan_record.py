@@ -834,18 +834,18 @@ def class_defects(plan: Plan, operator: Operator) -> list[str]:
                 "validate_plan.py --classes prints, or add the class to work_classes."
             )
             continue
-        if not above_middle(u.work_class, operator):
-            continue
-        where = f"unit {u.id} has the class {u.work_class}, whose model ranks above {MIDDLE_MODEL}"
-        if u.place is None:
+        if u.place is None and above_middle(u.work_class, operator):
             out.append(
-                f"{where}, and names no place. Next: give unit {u.id} a {PLACE_SHAPE}: a file "
-                "from its files list and the named part of it where the work happens."
+                f"unit {u.id} has the class {u.work_class}, whose model ranks above "
+                f"{MIDDLE_MODEL}, and names no place. Next: give unit {u.id} a {PLACE_SHAPE}: a "
+                "file from its files list and the named part of it where the work happens."
             )
-        if not u.class_reason:
+        # 0280: the plan table shows a reason for every class but Plumbing.
+        if not u.class_reason and u.work_class != PLUMBING:
             out.append(
-                f"{where}, and gives no class_reason. Next: give unit {u.id} a class_reason "
-                "field, one line saying why the work has that class."
+                f"unit {u.id} has the class {u.work_class}, which is not {PLUMBING}, and gives "
+                f"no class_reason. Next: give unit {u.id} a class_reason field, one line saying "
+                "why the work has that class."
             )
     return out
 
