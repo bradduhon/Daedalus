@@ -7,6 +7,10 @@ Every file and setting daedalus reads, with the smallest example that works. `/d
 
 `<repo>` is the main working tree of the git repository you run Claude Code in; every worktree shares it (0010-DAE-PLT). The Build Train's start creates `<repo>/.claude/daedalus/` (mode 0700) and a `.gitignore` inside it holding `*`; until then no hook writes anything into the repository (0035-DAE-PLT). `config.json` is optional. Without it the defaults apply: no `local_docs_folder`, no `coding_rules`, no `policy`, and the decisions file, when the manifest names one, lives in the project's docs folder. Create it there from your own shell when you need any of those.
 
+### The schema number in each settings file
+
+Each of the three settings files may hold a top-level `schema` number. It says which layout the file was written in. The number is 1 today. A file with no number is read as it always was. A number below 1, a number that is not whole, or a number above the current one is refused with a plain message. A higher number means a newer plugin wrote the file, so update the plugin. When a release changes a layout, it carries a map from every earlier layout, not only the last one. The setup wizard reads the number, shows the plan to bring an older file up to date, and writes the file only after you agree.
+
 ### config.json, optional **(checked)**
 
 ```json
