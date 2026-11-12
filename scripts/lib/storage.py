@@ -18,6 +18,7 @@ FEATURES: tuple[str, ...] = (
     "question-path",
     "developer-profile",
     "reports",
+    "provider-mirror",
     "settings-backup",
 )
 

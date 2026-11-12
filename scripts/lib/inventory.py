@@ -19,6 +19,7 @@ _AUDIT = f"{_DATA}/audit"
 _SCRATCH = "<repo>/docs/.tmp/daedalus"
 _FRAMEWORKS = "<cache>/frameworks/<family>"
 _CONFINE = "$TMPDIR/daedalus-confine-<uid>/<16 hex>"
+_MIRROR = "/tmp/.daedalus/<uid>/provider-mirror/<project key>/<train-id>"
 _BRANCH = "refs/heads/daedalus/<train-id>"
 _UNIT = "refs/heads/daedalus-unit/<train-id>-<unit-slug>"
 _AUDIT_UNIT = "refs/heads/daedalus-unit/<train-id>-audit"
@@ -89,6 +90,41 @@ FILES: tuple[Entry, ...] = (
         f"{_CONFINE}/config/",
         "scripts/daedalus_confine.py:_tool_env",
         "a command runs under the kernel wrapper; an empty config home",
+    ),
+    Entry(
+        f"{_CONFINE}/terraformrc",
+        "scripts/daedalus_confine.py:_cli_config",
+        "a command runs under the kernel wrapper while the run's provider mirror is granted",
+    ),
+    Entry(
+        f"{_MIRROR}/",
+        "scripts/lib/provider_mirror.py:make_mirror",
+        "daedalus_train.py providers runs with checks.terraform_validate true; mode 0700",
+    ),
+    Entry(
+        f"{_MIRROR}/mirror/",
+        "scripts/lib/provider_mirror.py:make_mirror",
+        "daedalus_train.py providers runs; terraform fills it, outside the wrapper",
+    ),
+    Entry(
+        f"{_MIRROR}/source-<random>/<n>/",
+        "scripts/lib/provider_mirror.py:_stage",
+        "daedalus_train.py providers runs; one folder per root found at the run's base commit",
+    ),
+    Entry(
+        f"{_MIRROR}/allowed-<random>/",
+        "scripts/lib/provider_mirror.py:_stage_allowed",
+        "daedalus_train.py providers --allow runs from the main session after the operator's yes",
+    ),
+    Entry(
+        f"{_MIRROR}/<staged folder>/providers.tf and .terraform.lock.hcl",
+        "scripts/lib/provider_mirror.py:_write_new",
+        "daedalus_train.py providers runs; written once, mode 0600, never through a link",
+    ),
+    Entry(
+        f"{_MIRROR}/tf-data/",
+        "scripts/lib/provider_mirror.py:make_mirror",
+        "daedalus_train.py providers runs; the fetch's TF_DATA_DIR, never inside the project",
     ),
     Entry(
         f"{_CONFINE}/tf-data/<16 hex>/",

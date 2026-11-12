@@ -269,6 +269,8 @@ MAIN_ONLY = (
     "token_economy.py report",
     # 0252: the standing rule's findings calls bind the model in the user's session only.
     "daedalus_findings.py",
+    # 0256: the provider fetch for an address the operator allowed; the hook refuses it to agents.
+    "providers --repo <repo> --allow",
 )
 
 
