@@ -4,6 +4,7 @@
 # own name tables; the starter files, the setup wizard, the README table and the tests read it.
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
 from lib.agent_models import MODELS
@@ -46,6 +47,7 @@ from lib.manifest import (
 )
 from lib.operator_file import GUIDANCE_SOURCES, MAIN_REFUSAL_CLASSES, OPERATOR_FILE
 from lib.operator_file import TOP_KEYS as OPERATOR_TOP_KEYS
+from lib.settings_maps import SCHEMA_KEY, current
 
 MANIFEST_FILE = MANIFEST_NAME
 CONFIG_FILE = ".claude/daedalus/config.json"
@@ -161,6 +163,28 @@ def _coder_row(key: str) -> KeyRow:
 
 # 0076, B7, 0245: one row per key; tests hold the README table equal to reference_table().
 KEY_ROWS: dict[tuple[str, str], KeyRow] = {
+    **{
+        (file, SCHEMA_KEY): KeyRow(
+            f"The layout number of the {name} file; it tells Daedalus which version of the file "
+            "layout the file was written in",
+            "whole number",
+            "A whole number from 1 to the current layout number, which is 1",
+            "no number: read as today",
+            "`1`",
+            "Daedalus can upgrade an older file to the current layout, after it shows you the "
+            "plan, and refuses a file written for a newer plugin.",
+            readers,
+        )
+        for file, name, readers in (
+            (MANIFEST_FILE, "project", ("scripts/lib/manifest.py", "scripts/daedalus_setup.py")),
+            (CONFIG_FILE, "checkout", ("scripts/lib/config.py", "scripts/daedalus_setup.py")),
+            (
+                OPERATOR_FILE_NAME,
+                "personal",
+                ("scripts/lib/operator_file.py", "scripts/daedalus_setup.py"),
+            ),
+        )
+    },
     (MANIFEST_FILE, "commands.unit_test"): KeyRow(
         "The commands that run the project's unit tests; a coding agent may run each exactly as "
         "written, as one command",
@@ -808,6 +832,7 @@ def _json(value: object) -> object:
 
 # 0245: the starter value of every starter key; a test holds this to the starter rows.
 _STARTER_MANIFEST: dict[str, object] = {
+    SCHEMA_KEY: current("manifest"),
     "commands": {key: None for key in COMMAND_KEYS},
     "docs": {"folder": DOCS_DEFAULT_FOLDER, "decisions_filename": None, "reading_level": None},
     "checks": {
@@ -823,6 +848,7 @@ _STARTER_MANIFEST: dict[str, object] = {
     "local_testing": None,
 }
 _STARTER_CONFIG: dict[str, object] = {
+    SCHEMA_KEY: current("config"),
     "local_docs_folder": None,
     "git_excluded_folders": [],
     "coding_rules": [],
@@ -843,6 +869,7 @@ def starter_config() -> dict[str, object]:
 def starter_operator() -> dict[str, object]:
     # 0242, 0245: every personal choice unset; the guidance source at its default.
     return {
+        SCHEMA_KEY: current("operator"),
         "hard_stops": [],
         "reading_level": None,
         "no_long_dashes": None,
@@ -982,14 +1009,14 @@ GROUPS: tuple[Group, ...] = (
         "Your own run definitions and the project's named file areas",
         10,
         MANIFEST_FILE,
-        ("custom_workflows_folder", "code_areas"),
+        (SCHEMA_KEY, "custom_workflows_folder", "code_areas"),
     ),
     Group(
         "folders",
         "A docs folder kept elsewhere, folders git never takes and folders tests may read",
         11,
         CONFIG_FILE,
-        ("local_docs_folder", "git_excluded_folders", "test_readable_folders"),
+        (SCHEMA_KEY, "local_docs_folder", "git_excluded_folders", "test_readable_folders"),
     ),
     Group(
         "coding_rules",
@@ -1069,7 +1096,15 @@ class Unsettable:
 
 
 # 0257: keys the set form deliberately refuses; every other key is settable, and a test holds it.
-UNSETTABLE: tuple[Unsettable, ...] = ()
+_SCHEMA_WHY = (
+    "The schema number says which layout the file was written in, and only the upgrade map "
+    "changes it."
+)
+UNSETTABLE: tuple[Unsettable, ...] = (
+    Unsettable(MANIFEST_FILE, SCHEMA_KEY, _SCHEMA_WHY),
+    Unsettable(CONFIG_FILE, SCHEMA_KEY, _SCHEMA_WHY),
+    Unsettable(OPERATOR_FILE_NAME, SCHEMA_KEY, _SCHEMA_WHY),
+)
 
 
 @dataclass(frozen=True)
@@ -1107,7 +1142,7 @@ OVERLAPS: tuple[Overlap, ...] = (
         "A project's config can hold its own copy of any personal preference. A value set "
         "there replaces your personal value for that project only, and the rest still come "
         "from your personal file. Nothing acts on those values yet.",
-        (("scripts/lib/operator_file.py", 175, "a key the override sets replaces the base value"),),
+        (("scripts/lib/operator_file.py", 182, "a key the override sets replaces the base value"),),
         "config",
     ),
 )
@@ -1151,3 +1186,13 @@ def reference_table() -> str:
         )
         lines.append("| " + " | ".join(cell.replace("|", "\\|") for cell in cells) + " |")
     return "\n".join(lines) + "\n"
+
+
+def fingerprint(form: str) -> str:
+    # 0264: a hash of the file's sorted key paths and each key's value kind; the guard test holds
+    # it equal to the one recorded for the current schema number.
+    info = next(f for f in SETTINGS_FILES if f.form == form)
+    rows = sorted(
+        f"{key}\t{KEY_ROWS[(f, key)].kind}" for f, key in reference_keys() if f == info.name
+    )
+    return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()

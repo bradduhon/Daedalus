@@ -12,6 +12,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 
 from lib.manifest import LITERACY_LEVELS, LITERACY_PROFILE, _literacy_ok
+from lib.settings_maps import SCHEMA_KEY, current, number_problem
 
 OPERATOR_FILE = Path(".claude") / "daedalus" / "operator.json"
 MAX_BYTES = 64 * 1024
@@ -26,6 +27,7 @@ MAIN_REFUSAL_CLASSES: tuple[str, ...] = (
 )
 # 0245: the JSON names of the personal file, in key-table order.
 TOP_KEYS = (
+    SCHEMA_KEY,
     "hard_stops",
     "reading_level",
     "no_long_dashes",
@@ -57,7 +59,7 @@ class Operator:
 
 OPERATOR_KEYS = tuple(f.name for f in fields(Operator))
 # 0245: each Operator field's JSON name, for lines a person reads.
-JSON_NAMES = dict(zip(OPERATOR_KEYS, TOP_KEYS, strict=True))
+JSON_NAMES = dict(zip(OPERATOR_KEYS, TOP_KEYS[1:], strict=True))
 
 
 def operator_path() -> Path:
@@ -130,13 +132,18 @@ def validate(raw: object, where: str, prefix: str = "") -> dict[str, object]:
     # 0235: the one validator; returns only the Operator fields the object sets.
     if not isinstance(raw, dict):
         raise _fail(where, prefix.rstrip(".") or "the file", "must be a JSON object")
-    unknown = sorted(str(k) for k in set(raw) - set(TOP_KEYS))
+    # 0264: the schema number belongs to the file itself, never to a personal_overrides copy.
+    known = TOP_KEYS if not prefix else TOP_KEYS[1:]
+    unknown = sorted(str(k) for k in set(raw) - set(known))
     if unknown:
         raise _fail(
             where,
             prefix.rstrip(".") or "the file",
-            f"has unknown keys {unknown} (known: {', '.join(TOP_KEYS)})",
+            f"has unknown keys {unknown} (known: {', '.join(known)})",
         )
+    problem = number_problem(raw[SCHEMA_KEY], current("operator")) if SCHEMA_KEY in raw else None
+    if problem is not None:
+        raise OperatorError(f"{where} {problem}")
     out: dict[str, object] = {}
     if raw.get("hard_stops") is not None:
         out["main_refusals"] = _refusals(raw["hard_stops"], where, f"{prefix}hard_stops")
