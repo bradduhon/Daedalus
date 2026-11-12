@@ -9,6 +9,8 @@
 # pass; a check that cannot run never blocks.
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import re
 import sys
@@ -183,6 +185,57 @@ def round_findings(cwd: object) -> int | None:
         return None
 
 
+PASS_FEATURE = "handback-pass"
+MAX_ID = 64
+
+
+def _marker_id(agent_id: object) -> str | None:
+    # 0281: the tree has no agent id shape; ASCII letters, digits and hyphen, 1 to 64 long.
+    if not isinstance(agent_id, str) or not 1 <= len(agent_id) <= MAX_ID:
+        return None
+    ok = all(ch.isascii() and (ch.isalnum() or ch == "-") for ch in agent_id)
+    return agent_id if ok else None
+
+
+def _last_line_sha(reply: str) -> str:
+    lines = [line.strip() for line in reply.splitlines() if line.strip()]
+    last = lines[-1] if lines else ""
+    return hashlib.sha256(last.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def write_pass(hook_input: dict[str, object], reply: str) -> None:
+    # 0281: the marker is evidence of a pass by this same check only; nothing else reads it.
+    from lib import atomic, storage
+
+    agent, cwd = _marker_id(hook_input.get("agent_id")), hook_input.get("cwd")
+    if agent is None or not isinstance(cwd, str) or not Path(cwd).is_absolute():
+        return
+    try:
+        folder = storage.make_tmp_dir(PASS_FEATURE, cwd)
+        atomic.write_atomic(folder / agent, _last_line_sha(reply) + "\n", 0o600)
+    except (OSError, RuntimeError, ValueError):
+        return
+
+
+def relayed(hook_input: dict[str, object], reply: str) -> bool:
+    # 0281: a stop whose last line hashes to this agent's pass marker relays a judged reply.
+    from lib import storage
+
+    agent, cwd = _marker_id(hook_input.get("agent_id")), hook_input.get("cwd")
+    if agent is None or not isinstance(cwd, str) or not Path(cwd).is_absolute():
+        return False
+    try:
+        if storage.check_tmp_dirs(PASS_FEATURE, cwd) is not None:
+            return False
+        path = storage.tmp_dir(PASS_FEATURE, cwd) / agent
+        if path.is_symlink() or not path.is_file():
+            return False
+        marker = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError, ValueError):
+        return False
+    return hmac.compare_digest(marker, _last_line_sha(reply))
+
+
 def _agent(hook_input: dict[str, object]) -> str:
     # 6.1: a stop without agent_type takes the newest SubagentStart type for its agent_id.
     from lib import audit, hook_io
@@ -237,9 +290,14 @@ def judge(hook_input: dict[str, object]) -> str | None:
     reply = _reply(hook_input)
     agent = _agent(hook_input) if isinstance(reply, str) and reply else ""
     if agent in (VERIFIER, AUDITOR):
+        stop = hook_input.get("hook_event_name") == "SubagentStop"
+        if stop and relayed(hook_input, str(reply)):
+            return None
         listed = round_findings(hook_input.get("cwd")) if agent == AUDITOR else None
         found = findings_problem(agent, str(reply), listed)
         if found is None:
+            if not stop:
+                write_pass(hook_input, str(reply))
             return None
         return f"Daedalus hand-back check: {found}. Next: {_judge_next(agent)}."
     if not isinstance(reply, str) or not reply or agent != CODER:

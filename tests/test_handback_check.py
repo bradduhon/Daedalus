@@ -28,6 +28,16 @@ HUNT = "- hunt a leading option => refused"
 HUNT_FIXED = "- hunt a here-string => admitted, fixed in 0123abc"
 
 
+@pytest.fixture(autouse=True)
+def _tmp_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    # 0281: pass markers land under a temp root, never the real /tmp/.daedalus.
+    from lib import storage
+
+    root = tmp_path / "tmproot"
+    monkeypatch.setattr(storage, "TMP_ROOT", root)
+    return root
+
+
 def _reply(*lines: str) -> str:
     return "\n".join(lines)
 
@@ -603,3 +613,83 @@ def test_an_unreadable_findings_file_leaves_the_count_unjudged(tmp_path: Path) -
     assert handback_check.round_findings("relative/path") is None
     reply = _rejected(NODE + CELLS)
     assert handback_check.judge(_handback(reply, "daedalus:auditor", cwd=str(repo))) is None
+
+
+# 0281: a judge's passing hand-back leaves a pass marker; its relay stop is not judged again.
+REJECTED_LINE = f"[VERDICT: REJECTED] {TIP}"
+JUDGES = [
+    (
+        "daedalus:auditor",
+        _rejected(NODE + CELLS),
+        REJECTED_LINE,
+        f"[VERDICT: REJECTED] tip={'b' * 40}",
+    ),
+    (
+        "daedalus:verifier",
+        _refuted(ROW + CELLS),
+        f"[VERDICT: REFUTED] {ROW + CELLS}",
+        f"[VERDICT: REFUTED] {ROW}",
+    ),
+]
+
+
+def _marker(agent_id: str = "a1") -> Path:
+    from lib import storage
+
+    return storage.tmp_dir(handback_check.PASS_FEATURE, "/work/repo") / agent_id
+
+
+@pytest.mark.parametrize(("agent", "reply", "last", "other"), JUDGES)
+def test_a_passing_handback_writes_a_marker_and_its_relay_stop_passes(
+    monkeypatch: pytest.MonkeyPatch, agent: str, reply: str, last: str, other: str
+) -> None:
+    import hashlib
+
+    assert handback_check.judge(_handback(reply, agent)) is None
+    want = hashlib.sha256(last.encode("utf-8")).hexdigest()
+    assert _marker().read_text(encoding="utf-8") == want + "\n"
+    assert _marker().stat().st_mode & 0o777 == 0o600
+
+    def judged(*args: object) -> str:
+        raise AssertionError("a relay stop was judged again")
+
+    monkeypatch.setattr(handback_check, "findings_problem", judged)
+    assert handback_check.judge(_stop(f"\n{last}\n", agent)) is None
+
+
+@pytest.mark.parametrize(("agent", "reply", "last", "other"), JUDGES)
+def test_a_stop_with_no_marker_is_judged_in_full(
+    agent: str, reply: str, last: str, other: str
+) -> None:
+    assert not _marker().exists()
+    got = handback_check.judge(_stop(other if "verifier" in agent else last, agent))
+    assert got is not None and got.startswith("Daedalus hand-back check: ")
+
+
+@pytest.mark.parametrize(("agent", "reply", "last", "other"), JUDGES)
+def test_a_stop_whose_last_line_differs_from_the_marker_is_judged(
+    agent: str, reply: str, last: str, other: str
+) -> None:
+    assert handback_check.judge(_handback(reply, agent)) is None
+    assert _marker().is_file()
+    got = handback_check.judge(_stop(other, agent))
+    assert got is not None and got.startswith("Daedalus hand-back check: ")
+
+
+@pytest.mark.parametrize("agent_id", ["", "../x", "a b", "a_1", "été", "a" * 65, None])
+def test_an_agent_id_outside_the_shape_writes_no_marker(
+    _tmp_root: Path, agent_id: str | None
+) -> None:
+    payload = _handback(_rejected(NODE + CELLS), "daedalus:auditor", agent_id=agent_id)
+    assert handback_check.judge(payload) is None
+    assert not (_tmp_root.exists() and any(p.is_file() for p in _tmp_root.rglob("*")))
+    longest = _handback(_rejected(NODE + CELLS), "auditor", agent_id="a-" * 32)
+    assert handback_check.judge(longest) is None and _marker("a-" * 32).is_file()
+
+
+def test_an_unwritable_temp_root_does_not_block_the_handback(_tmp_root: Path) -> None:
+    _tmp_root.parent.mkdir(parents=True, exist_ok=True)
+    _tmp_root.write_text("not a folder", encoding="utf-8")
+    assert handback_check.judge(_handback(_rejected(NODE + CELLS), "daedalus:auditor")) is None
+    got = handback_check.judge(_stop(REJECTED_LINE, "daedalus:auditor"))
+    assert got is not None and "lists no finding line" in got

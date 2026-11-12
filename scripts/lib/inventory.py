@@ -380,6 +380,12 @@ FILES: tuple[Entry, ...] = (
         "a feature's first temporary write for a project; nothing in the plugin removes the folder",
     ),
     Entry(
+        "/tmp/.daedalus/<uid>/handback-pass/<project key>/<agent id>",
+        "scripts/handback_check.py:write_pass",
+        "a verifier's or auditor's hand-back passes the hand-back check during a train; one "
+        "line, the sha256 of the reply's last line, mode 0600",
+    ),
+    Entry(
         "/tmp/.daedalus/<uid>/settings-backup/<project key>/<file>-<16 hex>.json",
         "scripts/daedalus_setup.py:_write_backup",
         "you agree in /daedalus:setup to replace a settings file from an older version; a "
