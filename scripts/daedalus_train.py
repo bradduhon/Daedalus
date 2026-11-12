@@ -5,16 +5,17 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import assets, git, packs, writer_mode  # noqa: E402
+from lib import assets, git, packs, provider_mirror, tf_validate, writer_mode  # noqa: E402
 from lib.agent_models import AgentModelError, resolve  # noqa: E402
 from lib.audit import DataDirError  # noqa: E402
 from lib.briefs import BriefError, ask_file_problems, brief_file_problems  # noqa: E402
-from lib.config import ConfigError, load_config  # noqa: E402
+from lib.config import ConfigError, load_config, resolve_excluded_roots  # noqa: E402
 from lib.git import GitTimeout  # noqa: E402
 from lib.manifest import Assets, ManifestError  # noqa: E402
 from lib.manifest import load as load_manifest  # noqa: E402
@@ -22,9 +23,13 @@ from lib.passes import PassError, write_pass  # noqa: E402
 from lib.passes import load as load_pass  # noqa: E402
 from lib.project_root import project_root, repo_refusal  # noqa: E402
 from lib.train_runner import (  # noqa: E402
+    EXIT_ASK,
     EXIT_OK,
+    EXIT_ROUTED,
     EXIT_STOP,
     Outcome,
+    RunnerError,
+    _unit_record,
     check_reply,
     choice,
     coder_model,
@@ -49,6 +54,7 @@ from lib.train_runner import (  # noqa: E402
     summary,
 )
 from lib.train_state import TrainStateError, active_train  # noqa: E402
+from lib.train_state import load as load_state  # noqa: E402
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -56,7 +62,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Daedalus train runner: start, step, check-reply, state, stop, progress, "
         "choice, plan, contract, exception, verdict, reaudit, resume, ledger, summary, model, "
         "brief-check, ask-check, packs, writer-clear, assets, refuted, grant, dispatch, route, "
-        "finish-unit. "
+        "finish-unit, providers, validate. "
         "Exit 0 action "
         "taken, 1 stopped with a Next line, 2 routed failure, 3 operator question, 4 waiting."
     )
@@ -181,7 +187,94 @@ def _parser() -> argparse.ArgumentParser:
     done.add_argument("--next", dest="next_unit")
     done.add_argument("--warm")
     done.add_argument("--note", action="append", default=[])
+    # 0256: the run fetches Terraform providers once, outside the kernel wrapper.
+    fetch = sub.add_parser("providers", allow_abbrev=False)
+    fetch.add_argument("--repo", type=Path, required=True)
+    # 0256: main session only, after the operator said yes; the agents' hook refuses it.
+    fetch.add_argument("--allow", action="append", default=[])
+    # 0265: the run validates one unit's Terraform outside the wrapper, after its hand-in.
+    check_tf = sub.add_parser("validate", allow_abbrev=False)
+    check_tf.add_argument("--repo", type=Path, required=True)
+    check_tf.add_argument("--unit")
+    # 0265: the run's integration tip, before the auditor is dispatched.
+    check_tf.add_argument("--merged", action="store_true")
     return parser
+
+
+def _terraform_on(root: Path, verb: str) -> tuple[tuple[str, ...], Outcome | None]:
+    # 0256, 0265: the excluded roots, or the outcome when the validate check is off or unreadable.
+    try:
+        loaded = load_manifest(root)
+        excluded = tuple(r.path for r in resolve_excluded_roots(load_config(cwd=str(root)), root))
+    except (ManifestError, ConfigError) as exc:
+        if verb == "providers":
+            rerun = provider_mirror.NEXT_RERUN.format(repo=root)
+            return (), Outcome(
+                EXIT_OK, [f"warning: providers: nothing was fetched ({exc}). {rerun}"]
+            )
+        return (), Outcome(EXIT_OK, [f"warning: validate: nothing was validated ({exc})."])
+    features = loaded.features if loaded is not None else None
+    if (
+        features is None
+        or features.terraform_validate is not True
+        or (features.terraform_tools is False)
+    ):
+        return (), Outcome(
+            EXIT_OK, [f"{verb}: skipped; the Terraform validate check is off for this project."]
+        )
+    return excluded, None
+
+
+def _validate(repo: Path, unit_id: str | None, merged: bool) -> Outcome:
+    # 0265: the unit and its branch come from the run's state, never from an argument path.
+    if (unit_id is None) == (not merged):
+        return Outcome(EXIT_STOP, [tf_validate.R_VALIDATE_TARGET])
+    root = project_root(repo).resolve()
+    train = active_train(root)
+    if train is None:
+        return Outcome(EXIT_STOP, [tf_validate.R_VALIDATE_NO_RUN.format(root=root)])
+    excluded, off = _terraform_on(root, "validate")
+    if off is not None:
+        return off
+    if unit_id is None:
+        unit = tf_validate.merged_target(train)
+    else:
+        try:
+            record = _unit_record(load_state(root, train), train, unit_id)
+        except RunnerError as exc:
+            return Outcome(EXIT_STOP, [str(exc)])
+        unit = tf_validate.Unit(unit_id, str(record.get("name")), str(record.get("branch") or ""))
+    lines, outcomes = tf_validate.validate(str(root), train, unit, excluded, dict(os.environ))
+    if merged:
+        # 0265: the merged result goes to the auditor as a script's result; it routes nothing.
+        return Outcome(EXIT_OK, lines)
+    results = {o.result for o in outcomes}
+    if tf_validate.FAILED in results:
+        return Outcome(EXIT_ROUTED, lines)
+    if tf_validate.NEEDS_PROVIDER in results:
+        return Outcome(EXIT_ASK, lines)
+    return Outcome(EXIT_OK, lines)
+
+
+def _providers(repo: Path, given: list[str]) -> Outcome:
+    # 0256: only with checks.terraform_validate true; a fetch failure warns and never stops.
+    root = project_root(repo).resolve()
+    train = active_train(root)
+    if train is None:
+        return Outcome(EXIT_STOP, [provider_mirror.R_PROVIDERS_NO_RUN.format(root=root)])
+    allowed: list[tuple[str, str]] = []
+    for value in given:
+        parsed = provider_mirror.parse_allow(value)
+        if parsed is None:
+            return Outcome(EXIT_STOP, [provider_mirror.R_ALLOW_ADDRESS.format(given=value)])
+        allowed.append(parsed)
+    excluded, off = _terraform_on(root, "providers")
+    if off is not None:
+        return off
+    environ = dict(os.environ)
+    return Outcome(
+        EXIT_OK, provider_mirror.fetch(str(root), train, excluded, environ, None, allowed)
+    )
 
 
 def _grant(repo: Path, args: argparse.Namespace) -> Outcome:
@@ -441,6 +534,10 @@ def _dispatch(args: argparse.Namespace) -> Outcome:
         return route_unit(repo, args.unit, args.verdict, args.rows)
     if args.action == "finish-unit":
         return finish_unit(repo, args.unit, args.next_unit, args.note, args.warm)
+    if args.action == "providers":
+        return _providers(repo, args.allow)
+    if args.action == "validate":
+        return _validate(repo, args.unit, args.merged)
     if args.action == "check-reply":
         return check_reply(repo, args.stage)
     if args.action == "state":

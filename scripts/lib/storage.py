@@ -18,6 +18,8 @@ FEATURES: tuple[str, ...] = (
     "question-path",
     "developer-profile",
     "reports",
+    "provider-mirror",
+    "terraform-validate",
     "settings-backup",
 )
 

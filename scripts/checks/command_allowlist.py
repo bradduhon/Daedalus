@@ -41,6 +41,10 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"refuted"}
         # 0230: the composed record calls, each no wider than the calls this table admits.
         | {"dispatch", "route", "finish-unit"}
+        # 0256: the provider fetch the build phase runs before the first coder dispatch.
+        | {"providers"}
+        # 0265: the run's validate of one unit, after its coder hands it in.
+        | {"validate"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir", "--check-tools"}),
@@ -63,6 +67,16 @@ R_ORCHESTRATOR_BASH = (
 )
 # spec 7.1: date prints the clock in UTC; -s, --set and a bare MMDDhhmm operand would set it.
 DATE_UTC = frozenset({"-u", "--utc", "--universal"})
+# 0256: (script, subcommand) to the flags only the main session passes, after the operator's yes.
+MAIN_ONLY_FLAGS: dict[tuple[str, str], frozenset[str]] = {
+    ("daedalus_train.py", "providers"): frozenset({"--allow"}),
+}
+R_TRAIN_MAIN_ONLY = (
+    "{flag} on {script} {action} downloads a provider no base commit names, so only the main "
+    "session passes it, after the operator says yes (0256). Next: stop the unit and write a "
+    "decision brief naming the provider's full source address and version constraint; the main "
+    "session asks it and runs the command."
+)
 # issue 63, pin C3 -> C4: a train script's --repo is the project root of the hook cwd.
 REPO_FLAGS = ("--repo",)
 R_TRAIN_REPO = (
@@ -78,17 +92,24 @@ R_MAP_OUT = (
 )
 
 
-# 0132, 0186: the terraform class, `terraform [-chdir=<folder in the project>] fmt -check |
-# validate`; the auditor's read_only_bash --terraform judges by it (0188).
-TERRAFORM_FORMS = (("fmt", "-check"), ("validate",))
+# 0132, 0186, 0265: the terraform class, `terraform [-chdir=<folder in the project>] fmt -check`;
+# the auditor's read_only_bash --terraform judges by it (0188).
+TERRAFORM_FORMS = (("fmt", "-check"),)
+# 0265, issue 118: subcommands that can start a program from a .terraform folder of the tree.
+TERRAFORM_PROVIDER_VERBS = frozenset({"validate", "init"})
 R_TERRAFORM = (
-    "the terraform class runs only `terraform fmt -check` and `terraform validate`, each with an "
-    "optional -chdir=<absolute folder inside the project> (0132), and validate only while "
-    "checks.terraform_validate is true (0158); either may run under the kernel wrapper with "
-    "--unit naming a unit worktree (0164). Under that wrapper alone, and only while validate "
-    "is on, `terraform -chdir=<that folder> init -backend=false -input=false "
-    "-lockfile=readonly` runs too (184). Next: send one of those forms; "
-    "every other init, plan, apply and every other subcommand stay with the operator."
+    "the terraform class runs only `terraform fmt -check`, with an optional -chdir=<absolute "
+    "folder inside the project> (0132), bare or under the kernel wrapper with --unit naming a "
+    "unit worktree (0164). Next: send that form; plan, apply and every other subcommand stay "
+    "with the operator."
+)
+R_TERRAFORM_RUN_VALIDATES = (
+    "the auditor runs no `terraform validate` and no `terraform init`, bare or under the kernel "
+    "wrapper, because either can start a program from a .terraform folder of the checked-out "
+    "tree as the operator (0265, issue 118). The run validates the Terraform itself, outside "
+    "the wrapper, on a staged copy of the merged tip, and its printed result is in your brief. "
+    "Next: read that result block, judge the files by reading them, and run `terraform fmt "
+    "-check` for the format check."
 )
 R_TERRAFORM_VALIDATE_OFF = (
     "checks.terraform_validate is not true in {manifest}, so the terraform class refuses "
@@ -106,16 +127,21 @@ R_TERRAFORM_MANIFEST = (
 )
 
 
-def terraform_reason(segment: list[str], cwd: str, wrapped: bool = False) -> str | None:
+def terraform_reason(
+    segment: list[str], cwd: str, wrapped: bool = False, coder: bool = False
+) -> str | None:
     # 0132: None admits the segment; a refusal names the form or the manifest switch.
     if segment[:1] != ["terraform"]:
         return R_TERRAFORM  # 0132: the binary on PATH only, never a path to another binary.
-    # 184: the init form only under the kernel wrapper, which keeps its data folder in tmp.
-    init = wrapped and shell.terraform_init(segment[1:])
+    # 184, 0265: the coder's init form only under the kernel wrapper, its data folder in tmp.
+    init = coder and wrapped and shell.terraform_init(segment[1:])
     rest = segment[1:]
     chdir = rest[0].removeprefix("-chdir=") if rest[:1] and rest[0].startswith("-chdir=") else None
     if chdir is not None:
         rest = rest[1:]
+    verbs = [arg for arg in rest if not arg.startswith("-")]
+    if not coder and verbs[:1] and verbs[0] in TERRAFORM_PROVIDER_VERBS:
+        return R_TERRAFORM_RUN_VALIDATES
     if (tuple(rest) not in TERRAFORM_FORMS and not init) or not os.path.isabs(cwd):
         return R_TERRAFORM
     root = os.path.realpath(project_root(cwd))
@@ -123,6 +149,17 @@ def terraform_reason(segment: list[str], cwd: str, wrapped: bool = False) -> str
         real = os.path.realpath(chdir)
         if not os.path.isabs(chdir) or ".." in chdir.split("/") or not shell._under(real, root):
             return R_TERRAFORM
+    return _manifest_reason(root, init)
+
+
+def validate_gate(cwd: str) -> str | None:
+    # 0265: the manifest switches a coder's validate meets before its own refusal.
+    if not os.path.isabs(cwd):
+        return R_TERRAFORM
+    return _manifest_reason(os.path.realpath(project_root(cwd)), True)
+
+
+def _manifest_reason(root: str, validate: bool) -> str | None:
     try:
         loaded = load_manifest(Path(root))
     except ManifestError as exc:
@@ -130,7 +167,6 @@ def terraform_reason(segment: list[str], cwd: str, wrapped: bool = False) -> str
     if loaded is not None and loaded.features.terraform_tools is False:
         return R_TERRAFORM_OFF.format(manifest=manifest_path(Path(root)))
     # 0159-DAE-PLT: validate off by default - deviation from the global Terraform rule
-    validate = rest == ["validate"] or init
     if validate and (loaded is None or loaded.features.terraform_validate is not True):
         return R_TERRAFORM_VALIDATE_OFF.format(manifest=manifest_path(Path(root)))
     return None
@@ -184,6 +220,20 @@ def train_repo_reason(segment: list[str], cwd: str) -> str | None:
     for flag, given in values:
         if not root or os.path.realpath(os.path.join(cwd, given)) != root:
             return R_TRAIN_REPO.format(flag=flag, given=given, root=root or cwd)
+    return None
+
+
+def main_only_reason(segment: list[str]) -> str | None:
+    # 0256: a MAIN_ONLY_FLAGS flag, joined, split or as the unique prefix argparse would expand.
+    if len(segment) < 3:
+        return None
+    script, action = os.path.basename(os.path.realpath(segment[1])), segment[2]
+    flags = MAIN_ONLY_FLAGS.get((script, action), frozenset())
+    for arg in segment[3:]:
+        head = arg.partition("=")[0]
+        prefix = head.startswith("--") and len(head) > 2
+        if head in flags or (prefix and any(f.startswith(head) for f in flags)):
+            return R_TRAIN_MAIN_ONLY.format(flag=sorted(flags)[0], script=script, action=action)
     return None
 
 
@@ -323,7 +373,11 @@ def _later(
         tokens = jail.admitted_tokens(script, done)
         quoted = command[done.span[0] : done.span[1]]
         if done.script is not None and train_script_ok(tokens):
-            mismatch = train_repo_reason(tokens, cwd) or map_out_reason(tokens, cwd)
+            mismatch = (
+                main_only_reason(tokens)
+                or train_repo_reason(tokens, cwd)
+                or map_out_reason(tokens, cwd)
+            )
             if mismatch is not None:
                 return mismatch
         elif "read" in allowed and done.family in shell.DOCS_READS:

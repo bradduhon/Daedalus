@@ -30,6 +30,7 @@ from lib.config import ConfigError, load_config  # noqa: E402
 from lib.credential_paths import credential_roots  # noqa: E402
 from lib.jail import UNIT_WORKTREES  # noqa: E402
 from lib.project_root import project_root  # noqa: E402
+from lib.provider_mirror import Grant, cli_config, granted_mirror  # noqa: E402
 from lib.shell import CONFINE, CONFINE_NEXT, confine_split  # noqa: E402
 
 # x86_64/asm/unistd_64.h:359-361 and asm-generic/unistd.h:801-806 carry the same three.
@@ -72,6 +73,14 @@ DEVICES_RW = ("/dev/null",)
 GIT_CONFIG = "gitconfig"
 XDG_CONFIG = "config"
 TF_DATA = "tf-data"
+# 0256: terraform reads only this CLI config, which installs from the run's mirror alone.
+TF_CLI_CONFIG = "terraformrc"
+TF_DROPPED = ("TF_PLUGIN_CACHE_DIR",)
+R_MIRROR_STORE = (
+    "the run's provider mirror is not granted, because {path} holds or sits inside a "
+    "credential store. Next: remove that folder "
+    "from your own shell, then rerun daedalus_train.py providers from the main session."
+)
 HIDDEN = (".claude/daedalus", f"{UNIT_WORKTREES}")
 NEXT_FORM = CONFINE_NEXT
 KERNEL_NEED = (
@@ -134,16 +143,22 @@ class RuleSet:
     rw: tuple[str, ...]
     ro: tuple[str, ...]
     tmp: str
+    # 0256: the run's provider mirror, granted read-only and never followed through a link.
+    mirror: str = ""
+    mirror_refused: str = ""
 
     def line(self) -> str:
         net = "landlock-tcp," if self.abi >= NET_ABI else ""
         hidden = ",".join(f"-{h}" for h in HIDDEN)
+        ro = ",".join([*self.ro, *([self.mirror] if self.mirror else [])])
+        tf = f" tf_cli_config={os.path.join(self.tmp, TF_CLI_CONFIG)}" if self.mirror else ""
+        refused = f" tf_mirror={self.mirror_refused}" if self.mirror_refused else ""
         return (
             f"daedalus_confine: abi={self.abi} arch={self.arch} rw={','.join(self.rw)} "
-            f"ro={self.repo}({hidden}),{','.join(self.ro)} "
+            f"ro={self.repo}({hidden}),{ro} "
             f"refused={net}socket(AF_INET,AF_INET6,AF_UNIX,any family but AF_NETLINK),io_uring "
             f"tmpdir={self.tmp} git_config={os.path.join(self.tmp, GIT_CONFIG)} "
-            f"xdg_config={os.path.join(self.tmp, XDG_CONFIG)}"
+            f"xdg_config={os.path.join(self.tmp, XDG_CONFIG)}{tf}{refused}"
         )
 
 
@@ -370,9 +385,15 @@ def rule_set(
     support: Support,
     extra: tuple[str, ...] = (),
     binary: str | None = None,
+    mirror: Grant | None = None,
 ) -> RuleSet:
     assert support.arch is not None
     stores = credential_roots()
+    grant = mirror or Grant()
+    # 0256: the mirror alone, never its parent; a store never enters through it.
+    held = bool(grant.path) and any(
+        shell._under(grant.path, s) or shell._under(s, grant.path) for s in stores
+    )
     dot = os.path.join(repo, ".claude")
     ro: list[str] = []
     # 184: a resolved binary is one file, never its folder.
@@ -386,7 +407,11 @@ def rule_set(
             continue
         if os.path.exists(real) and real not in ro:
             ro.append(real)
-    return RuleSet(support.abi, support.arch, repo, (unit, tmp, *DEVICES_RW), tuple(ro), tmp)
+    granted = "" if held else grant.path
+    refused = grant.reason or (R_MIRROR_STORE.format(path=grant.path) if held else "")
+    return RuleSet(
+        support.abi, support.arch, repo, (unit, tmp, *DEVICES_RW), tuple(ro), tmp, granted, refused
+    )
 
 
 def _add_rule(libc: ctypes.CDLL, ruleset: int, path: str, rights: int, follow: bool) -> None:
@@ -417,6 +442,8 @@ def apply(rules: RuleSet) -> None:
             _add_rule(libc, ruleset, path, handled, follow=path in DEVICES_RW)
         for path in [*_repo_entries(rules.repo), *rules.ro]:
             _add_rule(libc, ruleset, path, READ_ONLY & handled, follow=path in rules.ro)
+        if rules.mirror:
+            _add_rule(libc, ruleset, rules.mirror, READ_ONLY & handled, follow=False)
         _check(_call(libc.syscall, NR_RESTRICT_SELF, ruleset, 0), "landlock restrict")
     finally:
         os.close(ruleset)
@@ -431,12 +458,23 @@ def tf_data_dir(tmp: str, command: list[str]) -> str:
     return os.path.join(tmp, TF_DATA, digest)
 
 
-def _tool_env(tmp: str, command: list[str]) -> dict[str, str]:
+def _cli_config(tmp: str, mirror: str) -> str:
+    # 0256: the terraform CLI config, rewritten each run in the private tmp folder.
+    path = os.path.join(tmp, TF_CLI_CONFIG)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(cli_config(mirror))
+    return path
+
+
+def _tool_env(tmp: str, command: list[str], mirror: str = "") -> dict[str, str]:
     # 0048: an empty git config written fresh each run and an empty config home, both in tmp.
     config = os.path.join(tmp, GIT_CONFIG)
     os.close(os.open(config, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600))
     xdg = os.path.join(tmp, XDG_CONFIG)
     env = {"TMPDIR": tmp, "GIT_CONFIG_GLOBAL": config, "XDG_CONFIG_HOME": xdg}
+    if mirror:
+        env["TF_CLI_CONFIG_FILE"] = _cli_config(tmp, mirror)
     folders = [xdg]
     # 184: the caller's TF_DATA_DIR never holds; the init form starts from an empty folder.
     data = tf_data_dir(tmp, command) if command[:1] == ["terraform"] else ""
@@ -470,7 +508,8 @@ def main(argv: list[str]) -> int:
         unit, repo = _unit(split[0])
         extra = read_roots(repo, split[1])
         binary = terraform_binary(split[1], repo, extra)
-        rules = rule_set(unit, repo, _private_tmp(unit), support, extra, binary)
+        mirror = granted_mirror(repo)
+        rules = rule_set(unit, repo, _private_tmp(unit), support, extra, binary, mirror)
         apply(rules)
     except Refusal as exc:
         return _refuse(str(exc))
@@ -478,7 +517,9 @@ def main(argv: list[str]) -> int:
         return _refuse(f"the kernel refused a rule ({exc}); {KERNEL_NEED}. {NEXT_PROBE}")
     command = split[1]
     try:
-        os.environ.update(_tool_env(rules.tmp, command))
+        os.environ.update(_tool_env(rules.tmp, command, rules.mirror))
+        for name in TF_DROPPED if rules.mirror else ():
+            os.environ.pop(name, None)
     except OSError as exc:
         return _refuse(
             f"the tool folders in {rules.tmp} could not be prepared ({exc}). {NEXT_PROBE}"

@@ -18,6 +18,7 @@ from tests.conftest import REPO_ROOT
 from tests.conftest import git as _git
 from tests.hook_chain import evaluate, first_deny
 from tests.hook_chain import judge as decide
+from tests.hook_chain import load as load_hook
 from tests.test_dispatch_binding import TRAIN, seed_plan
 
 DOCS = f"{TRAIN}-docstage"
@@ -199,14 +200,12 @@ def _tf(repo: Path, command: str) -> dict[str, Any]:
     "command",
     [
         "terraform fmt -check",
-        "terraform validate",
         "terraform -chdir={repo}/infra fmt -check",
-        "terraform -chdir={repo}/infra validate",
         "find /usr/local/bin /usr/bin -maxdepth 1 -name terraform",
     ],
 )
-def test_terraform_class_admits_the_two_checks(repo_cwd: Path, command: str) -> None:
-    # 0158: validate needs its own switch on.
+def test_terraform_class_admits_the_format_check(repo_cwd: Path, command: str) -> None:
+    # 0158, 0265: the format check only; the run validates outside the wrapper.
     manifest = repo_cwd / "service-manifest.json"
     manifest.write_text(json.dumps({"checks": {"terraform_validate": True}}), encoding="utf-8")
     payload = _tf(repo_cwd, command.format(repo=repo_cwd))
@@ -226,30 +225,38 @@ def test_terraform_class_admits_the_two_checks(repo_cwd: Path, command: str) -> 
         "terraform -chdir=/etc validate",
         "terraform -chdir=infra validate",
         "terraform -chdir={repo}/../x validate",
+        "terraform validate",
+        "terraform -chdir={repo}/infra validate",
         "/tmp/terraform fmt -check",
     ],
 )
 def test_terraform_class_refuses_every_other_form(repo_cwd: Path, command: str) -> None:
     reason = evaluate(READS, _tf(repo_cwd, command.format(repo=repo_cwd)), *ALLOW)
     assert reason is not None, command
+    run_validates = load_hook("command_allowlist").R_TERRAFORM_RUN_VALIDATES
+    if command.startswith("terraform") and command.split()[-1] == "validate":
+        # 0265: every validate the class's parser admits meets the run's-validate refusal.
+        assert reason.startswith(run_validates), command
+        return
     # 0132: a path to a binary is no terraform segment, so the read check refuses it.
     assert "(0132)" in reason if command.startswith("terraform") else "Next:" in reason, reason
 
 
-def test_terraform_class_refuses_both_checks_when_the_switch_is_off(repo_cwd: Path) -> None:
+def test_terraform_class_refuses_validate_whatever_the_switch(repo_cwd: Path) -> None:
     manifest = repo_cwd / "service-manifest.json"
     manifest.write_text(json.dumps({"checks": {"terraform_format": False}}), encoding="utf-8")
-    for command in ("terraform fmt -check", "terraform validate"):
-        reason = evaluate(READS, _tf(repo_cwd, command), *ALLOW)
-        assert reason is not None and reason.startswith("checks.terraform_format is false")
-    on = {"terraform_format": True, "terraform_validate": True}
-    manifest.write_text(json.dumps({"checks": on}), encoding="utf-8")
-    assert evaluate(READS, _tf(repo_cwd, "terraform validate"), *ALLOW) is None
+    reason = evaluate(READS, _tf(repo_cwd, "terraform fmt -check"), *ALLOW)
+    assert reason is not None and reason.startswith("checks.terraform_format is false")
+    run_validates = load_hook("command_allowlist").R_TERRAFORM_RUN_VALIDATES
+    for block in ({"terraform_format": False}, {"terraform_validate": True}):
+        manifest.write_text(json.dumps({"checks": block}), encoding="utf-8")
+        got = evaluate(READS, _tf(repo_cwd, "terraform validate"), *ALLOW)
+        assert got is not None and got.startswith(run_validates)
 
 
 def test_terraform_class_fails_closed_on_an_unreadable_manifest(repo_cwd: Path) -> None:
     (repo_cwd / "service-manifest.json").write_text("{not json", encoding="utf-8")
-    reason = evaluate(READS, _tf(repo_cwd, "terraform validate"), *ALLOW)
+    reason = evaluate(READS, _tf(repo_cwd, "terraform fmt -check"), *ALLOW)
     assert reason is not None and reason.startswith("the service manifest could not be read")
 
 

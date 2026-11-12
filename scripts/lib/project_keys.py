@@ -306,16 +306,20 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         ("skills/audit/SKILL.md", "agents/auditor.md"),
     ),
     (MANIFEST_FILE, "checks.terraform_validate"): KeyRow(
-        "Lets the auditor run `terraform validate`, which starts the provider programs in a "
-        "module's `.terraform` folder, and, only under the kernel wrapper, `terraform "
-        "-chdir=<folder> init -backend=false -input=false -lockfile=readonly`; "
-        "`checks.terraform_format` set to `false` still turns both off",
+        "Turns on the run's Terraform validate. The build phase downloads the providers once, "
+        "outside the kernel wrapper, into a private folder the wrapper lets coders read, so "
+        "that a coder's `terraform -chdir=<folder> init -backend=false -input=false "
+        "-lockfile=readonly` needs no network. The run then validates each unit after its "
+        "coder hands it in, and the merged result before the auditor starts, outside the "
+        "wrapper, on a copy of the Terraform files; the auditor reads that result and runs no "
+        "validate itself; `checks.terraform_format` set to `false` still turns all of it off",
         "boolean",
         "`true` or `false`",
-        "`false`: the auditor runs no validate or init and marks that check N/A",
+        "`false`: nothing validates and the auditor marks that check N/A",
         "`true`",
-        "The audit may also run the Terraform validate check and its offline setup step.",
-        ("packs/judges/terraform.md",),
+        "The run downloads the providers, validates each unit's Terraform before its verifier "
+        "starts, and gives the auditor the merged result.",
+        ("packs/judges/terraform.md", "scripts/daedalus_train.py"),
     ),
     (MANIFEST_FILE, "checks.release_banned_terms"): KeyRow(
         "A file of terms, one per line, that the release step checks the release notes against; "
