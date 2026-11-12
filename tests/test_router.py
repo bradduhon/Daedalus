@@ -12,6 +12,7 @@ from typing import Any
 import enforce_agent_jail
 import pytest
 from lib import audit, dispatch_binding, jail, router, writer_mode
+from lib import session_notes as notes
 
 from tests.conftest import CFG, CWD, REPO_ROOT, WT, write_train_marker
 
@@ -210,11 +211,11 @@ def test_main_session_duties_unchanged(monkeypatch: pytest.MonkeyPatch, jail_fak
     assert jail.decide(main, CFG).allow
     push = {**main, "tool_input": {"command": "git push --force origin main"}}
     pushed = jail.decide(push, CFG)
-    assert not pushed.allow and pushed.warn and "The jail's finding: " in str(pushed.reason)
+    assert not pushed.allow and pushed.warn and pushed.note == "push_or_merge", pushed
     write = {"tool_name": "Write", "tool_input": {"file_path": f"{WT}/src/a.py"}, "cwd": CWD}
     # Main never prompted (amends 0105): the code write is a finding the hook warns about.
     warned = jail.decide(write, CFG)
-    assert warned.warn and not warned.allow and "Build Train" in str(warned.reason)
+    assert warned.warn and not warned.allow and warned.note == "main_checkout_write"
     seen: list[dict[str, object]] = []
 
     def dispatch(tool_input: dict[str, object], cwd: str, main: bool = False) -> str:
@@ -225,8 +226,8 @@ def test_main_session_duties_unchanged(monkeypatch: pytest.MonkeyPatch, jail_fak
     monkeypatch.setattr(dispatch_binding, "_dispatch_reason", dispatch)
     agent_call = {"tool_name": "Agent", "tool_input": {"prompt": "x"}, "cwd": CWD}
     d = jail.decide(agent_call, CFG)
-    # Main never prompted (amends 0106): the dispatch is warned with the skipped invariant named.
-    want = jail.WARN_DISPATCH.format(reason="dispatch refused. Next: name one unit.")
+    # 0106, 0259: the dispatch is noted; the rule's own next step leads the note.
+    want = notes.DISPATCH_RULE.text("This dispatch", "name one unit.")
     assert (d.allow, d.warn, d.reason) == (False, True, want)
     assert seen == [{"prompt": "x"}]
 

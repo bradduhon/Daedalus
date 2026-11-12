@@ -315,10 +315,6 @@
     "failure": "0100: a foreign agent writes, dispatches or fetches while a train runs",
     "premise_test": "tests/test_jail.py::test_unknown_agent_fails_closed"
   },
-  "jail.R_MAIN_TRAIN_WARN": {
-    "failure": "0105: a main-session write in a repository with an active train leaves a dirty tree or lands on the integration branch",
-    "premise_test": "tests/test_jail.py::test_main_write_to_readme_in_the_train_repo_warns"
-  },
   "jail.R_ROUTED": {
     "failure": "0058: a Daedalus agent judged outside its own hooks gets a verdict its agent file never declared",
     "premise_test": "tests/test_jail.py::test_known_agent_is_sent_to_the_router"

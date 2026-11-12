@@ -15,7 +15,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, TypeGuard
 
-from lib import dispatch_binding, hook_io, passes, shell, shparse
+from lib import dispatch_binding, hook_io, passes, session_reading, shell, shparse, train_state
+from lib import session_notes as notes
 from lib.audit import _git_env, project_data_dir, project_root
 from lib.audit_proof import SUMMARY_DIR
 from lib.config import (
@@ -62,7 +63,6 @@ from lib.gh_policy import (
     CONDUCTOR_GH,
     GhArgs,
     GhFlag,
-    _push_reason,
     allowlist_applies,
     gh_reason,
 )
@@ -76,12 +76,7 @@ from lib.shell import (
     _HOME,
     _REPO_SCRIPTS,
     GIT_PLUMBING_REMOTE,
-    R_CLEAN,
     R_DATA_DIR_GIT,
-    R_DEFAULT_BRANCH,
-    R_DESTRUCTIVE,
-    R_FORCE_PUSH,
-    R_STASH_UNTRACKED,
     READ_ONLY_GIT,
     _abs,
     _git_split,
@@ -747,66 +742,6 @@ R_UNKNOWN_TRAIN = (
     "inspection and git reads, pipes allowed; Write, Edit, dispatch and web tools are refused "
     "(0100).\n" + UNMARK_NEXT
 )
-# Main never prompted (amends 0106): the plain-words warnings sent into the main session's context.
-WARN_DOTGIT = (
-    "Writing {path} edits the repository's own metadata; a wrong write corrupts the clone."
-)
-WARN_DATA_DIR = (
-    "This touches the plugin data folder. It holds the audit log, train state and coder "
-    "bindings; a hand edit breaks the hash chain that proves the audit happened."
-)
-WARN_CREDENTIAL = (
-    "This path holds credentials; reading it puts the secret into the session transcript."
-)
-WARN_CREDENTIAL_WRITE = (
-    "This path holds credentials; writing it can replace a key or leave a secret behind."
-)
-WARN_FORCE_PUSH = (
-    "A force, delete or mirror push rewrites the remote branch; commits that exist only there "
-    "are lost."
-)
-WARN_DEFAULT_BRANCH = "Pushing to the default branch skips the pull request the operator merges."
-WARN_DELETE = (
-    "This recursive or raw-device delete removes files that neither git nor the plugin can restore."
-)
-WARN_CLEAN = (
-    "git clean deletes untracked files, the plugin data folder included; nothing restores them."
-)
-WARN_TRAIN_PUSH = "Pushing during a train publishes a branch before the audit approves its tip."
-WARN_COMMAND = "This command matches a pattern the plugin guards against."
-WARN_NESTED_CLAUDE = (
-    "This starts a nested Claude session; the jail judges its calls as yours, with no agent's "
-    "limits."
-)
-WARN_DISPATCH = (
-    "This dispatch skips a train invariant ({reason}). The agent starts without it; "
-    "the audit log records the warning."
-)
-# 150: the main session's resume of a bound coder that the rebind refused.
-WARN_RESUME = (
-    "This resume skips a train invariant ({reason}). The message goes out and the coder's "
-    "unit binding is unchanged; the audit log records the warning."
-)
-WARN_NO_CWD = (
-    "The hook received no working folder, so the plugin cannot tell which repository this "
-    "call touches."
-)
-# 0106: tripwire findings with their own consequence; any other finding gets WARN_COMMAND.
-_TRIPWIRE_WARNINGS = {
-    R_FORCE_PUSH: WARN_FORCE_PUSH,
-    R_DEFAULT_BRANCH: WARN_DEFAULT_BRANCH,
-    R_DESTRUCTIVE: WARN_DELETE,
-    R_CLEAN: WARN_CLEAN,
-    R_DATA_DIR_GIT: WARN_DATA_DIR,
-    R_STASH_UNTRACKED: WARN_DATA_DIR,
-    R_NESTED_CLAUDE: WARN_NESTED_CLAUDE,
-}
-# Main never prompted (amends 0105, 0106): allow with context, never ask, for the main session.
-R_MAIN_TRAIN_WARN = (
-    "Build Train {train} is active in this repository and works in unit worktrees. "
-    "Writing {path} here can leave a dirty tree that finish refuses, conflict with a unit "
-    "branch, or land on the integration branch."
-)
 R_ROUTED = (
     "{agent} is judged by the router, not lib.jail.decide. "
     "Next: route the call through scripts/enforce_agent_jail.py."
@@ -838,6 +773,9 @@ class Decision:
     agent: str | None = None
     # Main never prompted (amends 0105, 0106): a main-session finding the hook allows with context.
     warn: bool = False
+    # 0259: the note class a warned main-session call met, and the audit row's text for it.
+    note: str | None = None
+    record: str | None = None
 
 
 def _allow() -> Decision:
@@ -848,24 +786,10 @@ def _block(reason: str) -> Decision:
     return Decision(False, reason)
 
 
-def _warn(reason: str) -> Decision:
-    # Main never prompted (amends 0105, 0106): allow with context, never ask, for the main session.
-    return Decision(False, reason, warn=True)
-
-
-def _main_warn(warning: str, finding: str) -> Decision:
-    # Main never prompted (amends 0106): allow with context, never ask, for the main session.
-    # The warning first, then the jail's finding verbatim so the audit log keeps it whole.
-    return _warn(f"{warning} The jail's finding: {finding}")
-
-
-def _tripwire_warn(finding: str) -> Decision:
-    # Main never prompted (amends 0106): allow with context, never ask, for the main session.
-    # Git push during a train carries the gh policy's push finding.
-    warning = _TRIPWIRE_WARNINGS.get(finding, WARN_COMMAND)
-    if finding == _push_reason("main"):
-        warning = WARN_TRAIN_PUSH
-    return _main_warn(warning, finding)
+def _noted(found: notes.Note) -> Decision:
+    # 0259: allow with the note in context, never ask; only a note class row reaches here.
+    reason = notes.record_reason(found)
+    return Decision(False, found.text, warn=True, note=found.klass.name, record=reason)
 
 
 def _flags_ok(
@@ -2894,8 +2818,11 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
     if tool in CREDENTIAL_TOOLS:
         reason = path_reason(tool, tool_input, cwd)
         if reason and operator:
-            # Main never prompted (amends 0106): allow with context, never ask, for main.
-            return _with_agent(_main_warn(WARN_CREDENTIAL, reason), agent)
+            # 0259: ruled class 1; the note names the tool and the path it reached.
+            found = notes.note(
+                notes.CREDENTIAL_READ, notes.tool_what(tool, tool_input, cwd), reason
+            )
+            return _with_agent(_noted(found), agent)
         return Decision(reason is None, reason, agent)
     # 0035: outside a train, main and foreign agents carry only the read deny above.
     if not policed_outside_train(raw_agent) and not _train_scoped(cwd, tool, tool_input):
@@ -2904,9 +2831,10 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
         return _with_agent(roots, agent)
     credential = _credential_reason(tool, tool_input, cwd)
     if credential and operator:
-        warning = WARN_CREDENTIAL_WRITE if tool in WRITE_TOOLS else WARN_CREDENTIAL
-        # Main never prompted (amends 0106): allow with context, never ask, for the main session.
-        return _with_agent(_main_warn(warning, credential), agent)
+        # 0259: a file tool write awaits a ruling; a read, search or Bash call is ruled class 1.
+        klass = notes.CREDENTIAL_WRITE if tool in WRITE_TOOLS else notes.CREDENTIAL_READ
+        found = notes.note(klass, notes.tool_what(tool, tool_input, cwd), credential)
+        return _with_agent(_noted(found), agent)
     if credential:
         return Decision(False, credential, agent)
     if agent == "main" and raw_agent != "main":
@@ -2930,7 +2858,7 @@ def decide(hook_input: dict[str, object], config: Config) -> Decision:
 
 
 def _with_agent(decision: Decision, agent: str) -> Decision:
-    return Decision(decision.allow, decision.reason, agent, decision.warn)
+    return replace(decision, agent=agent)
 
 
 def integrity_reason(tool: str, tool_input: dict[str, object], cwd: str, agent: str) -> str | None:
@@ -2950,60 +2878,102 @@ def integrity_reason(tool: str, tool_input: dict[str, object], cwd: str, agent: 
 
 
 def _decide_main(tool: str, cwd: str, tool_input: dict[str, object]) -> Decision:
-    # Main never prompted (amends 0105, 0106): allow with context, never ask, for the main session.
+    # 0259: the main session meets the note classes alone, never the agents' command tables.
     command = str(tool_input.get("command") or "")
     raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
     is_write = tool in WRITE_TOOLS
     path = _abs(raw_path, cwd)
+    what = notes.tool_what(tool, tool_input, cwd)
     integrity = integrity_reason(tool, tool_input, cwd, "main")
     if integrity == R_NO_CWD:
-        return _main_warn(WARN_NO_CWD, R_NO_CWD)
+        return _noted(notes.note(notes.NO_WORKING_FOLDER, "this call", R_NO_CWD))
     if integrity == R_DOTGIT:
-        return _main_warn(WARN_DOTGIT.format(path=path), R_DOTGIT)
+        return _noted(notes.note(notes.GIT_METADATA_WRITE, what, R_DOTGIT))
     if integrity is not None:
-        return _main_warn(WARN_DATA_DIR, integrity)
+        lead = "This command writes into" if tool == "Bash" else f"{what} lands in"
+        return _noted(notes.note(notes.PROTECTED_WRITE, lead, integrity))
     if tool == "Bash":
         return _main_bash(command, cwd)
     train = _main_write_train(path, cwd) if is_write else None
     if train is not None:
-        return _warn(R_MAIN_TRAIN_WARN.format(train=train, path=path))
+        return _noted(notes.note(notes.MAIN_CHECKOUT_WRITE, what, train=train))
     if tool in dispatch_binding.DISPATCH_TOOLS:
         reason = dispatch_binding._dispatch_reason(tool_input, cwd, main=True)
         if reason:
-            # Main never prompted (amends 0106): the dispatch runs with the skipped invariant named.
-            return _warn(WARN_DISPATCH.format(reason=reason))
+            # 0259: the dispatch runs; the skipped rule rides the audit row, its next step the note.
+            return _noted(
+                notes.note(notes.DISPATCH_RULE, "This dispatch", reason, notes.rule_step(reason))
+            )
     if tool in dispatch_binding.RESUME_TOOLS:
         reason = dispatch_binding.main_resume_reason(tool_input, cwd)
         if reason:
-            # 150, amends 0106: the resume runs; a refused rebind is warned, never asked.
-            return _warn(WARN_RESUME.format(reason=reason))
+            # 150, 0259: the resume runs; the rebind it skipped rides the audit row.
+            return _noted(
+                notes.note(notes.RESUME_RULE, "This resume", reason, notes.rule_step(reason))
+            )
     return _allow()
 
 
 def _main_bash(command: str, cwd: str) -> Decision:
-    # 0105, 0106, 228 tail: main is admitted by its own grammar and warned, never refused; a
-    # tripwire reads the typed record, a refused command is warned with the grammar's refusal.
+    # 0259: typed checks where main's grammar types the command, else the note reading of its
+    # parsed words; a command off every table with nothing in a note class runs with no note.
     script, got = _admission(command, "main", cwd)
-    commands = got.commands if _passed(got) else ()
-    base = admitted_base(script, got, cwd) if _passed(got) else cwd
-    for done in commands:
-        # audit A7-1, issue 55: the typed command word, its wrappers and node's script.
-        reason = R_NESTED_CLAUDE if claude_word(done, base) else admitted_tripwire(script, done)
-        if reason:
-            return _tripwire_warn(reason)
-    reason = _gh_gate("main", cwd, command)
-    if reason:
-        return _tripwire_warn(reason)
+    released = _release_check(cwd)
+    if _passed(got):
+        base = admitted_base(script, got, cwd)
+        for done in got.commands:
+            found = _admitted_note(script, done, base, released)
+            if found is not None:
+                return _noted(found)
+        return _allow()
     refused = _refused(got)
     # audit A7-1, issue 55: the refused word runs the claude binary by name, link or path.
-    claude = refused is not None and (
+    if refused is not None and (
         refused.family == "claude" or refusal_constant(script, refused, cwd) == shell.R_CLAUDE_PATH
-    )
-    if refused is not None and claude:
-        return _main_warn(WARN_NESTED_CLAUDE, refusal_text(refused, R_NESTED_CLAUDE))
-    if refused is not None:
-        return _main_warn(WARN_COMMAND, refusal_text(refused))
-    return _allow()
+    ):
+        detail = refusal_text(refused, R_NESTED_CLAUDE)
+        return _noted(notes.note(notes.NESTED_SESSION, "This command", detail))
+    found = session_reading.unread_note(command, cwd, released)
+    return _noted(found) if found is not None else _allow()
+
+
+def _admitted_note(
+    script: Script, done: AdmittedCommand, base: str, released: Callable[[], bool]
+) -> notes.Note | None:
+    # 0259: one typed command's note: a nested session, a git or rm tripwire, a push or a gh call.
+    if claude_word(done, base):
+        return notes.note(notes.NESTED_SESSION, "This command", R_NESTED_CLAUDE)
+    sub = done.subcommand.text if done.subcommand is not None else ""
+    tripwire = admitted_tripwire(script, done)
+    if tripwire == shell.R_DESTRUCTIVE:
+        return notes.note(notes.DESTRUCTIVE_DELETE, "This command", tripwire)
+    if tripwire is not None:
+        found = session_reading.tripwire_note(tripwire, sub, released)
+        if found is not None or tripwire in (shell.R_FORCE_PUSH, shell.R_DEFAULT_BRANCH):
+            return found
+    if done.family == "git" and sub in ("push", "merge") and not released():
+        return session_reading.push_note(sub)
+    if done.family == "gh" and done.gh is not None:
+        return session_reading.gh_note(done.gh, released)
+    return None
+
+
+def _release_check(cwd: str) -> Callable[[], bool]:
+    # 0259: a push or merge earns no note in the release phase the run's state records.
+    def released() -> bool:
+        if not os.path.isabs(cwd):
+            return False
+        repo = project_root(cwd)
+        train = active_train(repo)
+        if train is None:
+            return False
+        try:
+            state = train_state.load(repo, train)
+        except train_state.TrainStateError:
+            return False
+        return state.get(train_state.PHASE) == "release"
+
+    return released
 
 
 def admitted_tripwire(script: Script, done: AdmittedCommand) -> str | None:
@@ -3025,10 +2995,6 @@ R_EXCLUDED_TREE = (
     "{what} would take in the excluded root {root}, which git does not ignore (D.5). "
     "Next: name the paths to stage, or add the root to .gitignore."
 )
-WARN_EXCLUDED = (
-    "This command would put a file from a folder the project excludes into git, GitHub or a "
-    "file write."
-)
 R_EXCLUDED_ICASE = (
     "{spec} makes git match paths in any letter case, so it can name a file in an excluded "
     "root under another spelling (issue 97). Next: spell each path in its exact case, without "
@@ -3045,7 +3011,6 @@ R_EXCLUDED_STANDING = (
     "a command off the jail's table runs from {path}, inside the excluded root {root} (0224, "
     "D.5). Next: run it from a folder outside that root."
 )
-WARN_EXCLUDED_FAILED = "The excluded folders could not be resolved, so this command went unchecked."
 # issue 121 (design 6): git options that read their paths from a file or stdin, with the
 # shortest abbreviation git accepts for each.
 _UNSEEN_OPTIONS = (("--pathspec-from-file", 11), ("--stdin", 3), ("--index-info", 7))
@@ -3291,7 +3256,13 @@ def _main_excluded(tool: str, tool_input: dict[str, object], cwd: str, config: C
         return _allow()
     try:
         got = _admission(command, "main", cwd)[1]
-        reason = excluded_root_reason(got, cwd, excluded_roots_for(cwd, lambda: config))
+        roots = excluded_roots_for(cwd, lambda: config)
+        reason = excluded_root_reason(got, cwd, roots)
+        if reason is None and not _passed(got):
+            # 0259: main's grammar typed no path, so the note reading judges the parsed words.
+            reason = session_reading.excluded_reason(command, cwd, roots)
     except (ConfigError, OSError, subprocess.SubprocessError) as exc:
-        return _main_warn(WARN_EXCLUDED_FAILED, str(exc))
-    return _main_warn(WARN_EXCLUDED, reason) if reason else _allow()
+        return _noted(notes.note(notes.EXCLUDED_UNCHECKED, "this command", str(exc)))
+    if reason is None:
+        return _allow()
+    return _noted(notes.note(notes.EXCLUDED_FOLDER, "This command", reason))

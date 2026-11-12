@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from lib import dispatch_binding, jail, shell, shparse
+from lib import session_notes as notes
 from lib.config import Config
 from lib.jail import KNOWN_AGENTS, decide
 from lib.workspace import train_marker
@@ -41,39 +42,37 @@ pytestmark = pytest.mark.usefixtures("jail_fakes")
 
 
 def _warns(d: jail.Decision, path: str) -> bool:
-    # Main never prompted (amends 0105): a finding the hook allows with context; train from marker.
-    want = jail.R_MAIN_TRAIN_WARN.format(train=UNIT_TRAIN, path=path)
-    return d.warn and not d.allow and d.reason == want
+    # 0105, 0259: a main-session write in the train repo is noted; train from marker.
+    lead = f"of {os.path.normpath(path)} lands in the main checkout while run {UNIT_TRAIN} works"
+    return _main_warns(d, notes.MAIN_CHECKOUT_WRITE) and lead in str(d.reason)
 
 
 def _runs(d: jail.Decision) -> bool:
-    # 228 S3, 0105, 0106: main is never blocked; a command off its table runs with a warning.
-    return d.allow or (d.warn and "The jail's finding: " in str(d.reason))
+    # 0105, 0106, 0259: main is never blocked; a call in a note class runs with its note.
+    return d.allow or _main_warns(d)
 
 
 def _main_flagged(d: jail.Decision, *named: str) -> bool:
-    # 228 tail, 0105: main is warned by a tripwire its typed record meets, or by its grammar's
-    # refusal naming the word, option or construct off its table; never refused.
-    reason = str(d.reason)
-    flagged = any(n in reason for n in named) if named else "Next:" in reason
-    return d.warn and not d.allow and (flagged or "Refused: " in reason)
+    # 0259: main is noted by a note class; a named finding rides the audit row, never the note.
+    found = any(n in str(d.record) for n in named) if named else True
+    return _main_warns(d) and found
 
 
 def _store_judged(
     d: jail.Decision, command: str, cwd: str = CWD, marker: str = "credential"
 ) -> bool:
-    # 228 tail, 0224: a typed path names the store; a form main's grammar refuses carries none,
-    # so main is warned with the refusal and a foreign agent's train scoping refuses it.
-    if marker in str(d.reason):
+    # 228 tail, 0224, 0259: a typed path names the store; a form main's grammar refuses carries
+    # none, so main's note reading judges it and a foreign agent's train scoping refuses it.
+    if marker in str(d.record or d.reason):
         return not d.allow
     return not jail.admitted(command, "main", cwd) and not jail.admitted(command, "foreign", cwd)
 
 
-def _main_warns(d: jail.Decision, warning: str | None = None) -> bool:
-    # Main never prompted (amends 0106): warned, never blocked; the warning leads the text.
+def _main_warns(d: jail.Decision, klass: notes.NoteClass | None = None) -> bool:
+    # 0259: noted, never blocked; the note opens with Warning and names its class.
     reason = str(d.reason)
-    lead = warning is None or reason.startswith(f"{warning} The jail's finding: ")
-    return d.warn and not d.allow and "The jail's finding: " in reason and lead
+    named = klass is None or d.note == klass.name
+    return d.warn and not d.allow and reason.startswith("Warning: ") and named
 
 
 def test_known_agents_match_spec_matrix() -> None:
@@ -137,18 +136,37 @@ def test_unknown_agent_refusal_names_the_marker_and_unmark(tmp_path: Path) -> No
         "git push origin --delete x",
         "git push --force-with-lease",
         "rm -rf /",
-        "sudo mkfs.ext4 /dev/sda",
-        "dd if=/dev/zero of=/dev/sda",
         "git clean -fd",
         "git commit -S -m x",
-        "gpg --sign x",
-        "ssh-keygen -Y sign -f k x",
     ],
 )
 def test_universal_tripwires_block_everyone(command: str) -> None:
     # 0044, 0106: workers' copies run in tests/test_checks_*; the operator's session is warned.
     for agent in (None, "main"):
         assert _main_warns(decide(_b(agent, command), CFG)), (agent, command)
+
+
+# 0259: off every note class; the agent tables refused these, and main runs them with no note.
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo mkfs.ext4 /dev/sda",
+        "dd if=/dev/zero of=/dev/sda",
+        "gpg --sign x",
+        "gpg2 --sign x",
+        "ssh-keygen -Y sign -f k x",
+        "mkfs.ext4 /dev/sda > log",
+        "python3 -c 'import os; os.system(\"git push --force\")'",
+        "perl -e 'system(\"git push -f\")'",
+        "ruby -e 'system(\"git clean -fd\")'",
+        'node -e \'require("child_process").execSync("git push --force")\'',
+    ],
+)
+def test_main_runs_a_command_no_note_class_names(command: str) -> None:
+    d = decide(_b(None, command), CFG)
+    assert d.allow and not d.warn and d.reason is None, (command, d.reason)
+    coder = hook_chain.decide(_b("coder", command), CFG)
+    assert not coder.allow and not coder.warn, command
 
 
 def test_main_may_dispatch_and_message() -> None:
@@ -279,8 +297,6 @@ def test_main_cannot_write_application_code() -> None:
         "git tag -s v1 -m x",
         "git tag -u K v1",
         "git merge -S b",
-        "gpg2 --sign x",
-        "ssh-keygen -Ysign -f k x",
         "bash -c 'git push --force'",
         "sh -c 'git clean -fd'",
     ],
@@ -302,15 +318,13 @@ def test_universal_tripwire_regressions(command: str) -> None:
         ("touch a.md b.md{1,2}", False),
     ],
 )
-def test_main_warns_naming_the_refusal_of_an_unadmitted_command(
+def test_main_runs_a_command_off_the_agent_tables_with_no_note(
     command: str, admitted: bool
 ) -> None:
-    # 228 S3, 0105, 0106: main meets the same grammar; off its table it runs with the warning.
+    # 0259: main is never judged against the agents' command table; no note class, no note.
+    assert jail.admitted(command, "main", CWD) is admitted, command
     d = decide(_b(None, command), CFG)
-    if admitted:
-        assert d.allow and not d.warn, (command, d.reason)
-    else:
-        assert _main_warns(d, jail.WARN_COMMAND) and "Refused: " in str(d.reason), d.reason
+    assert d.allow and not d.warn and d.reason is None, (command, d.reason)
 
 
 def test_main_ordinary_commands_still_allowed() -> None:
@@ -337,15 +351,15 @@ def test_main_ordinary_commands_still_allowed() -> None:
 def test_main_git_push_refused_during_a_train(marked_repo: Path, command: str) -> None:
     # 0028, 0035, 0106: while a train runs only the conductor pushes; main is warned.
     d = decide(_cred(None, "Bash", str(marked_repo), command=command), CFG)
-    assert _main_warns(d, jail.WARN_TRAIN_PUSH), (command, d.reason)
-    assert "(0028, 0030)" in str(d.reason), command
+    assert _main_warns(d, notes.PUSH_OR_MERGE), (command, d.reason)
+    assert "This git push publishes work" in str(d.reason), command
 
 
-def test_main_unadmitted_push_is_warned_with_the_grammar_refusal(marked_repo: Path) -> None:
-    # 228 S4: no text fallback; the refused push warns main naming the word off its table.
+def test_main_unadmitted_push_is_noted(marked_repo: Path) -> None:
+    # 0259: the note reading finds the push in a form main's grammar does not type.
     d = decide(_cred(None, "Bash", str(marked_repo), command="git push origin $REF"), CFG)
-    assert d.warn and not d.allow and str(d.reason).startswith(jail.WARN_COMMAND), d.reason
-    assert "at `$REF`" in str(d.reason), d.reason
+    assert _main_warns(d, notes.PUSH_OR_MERGE), d.reason
+    assert "Refused" not in str(d.reason), d.reason
 
 
 @pytest.mark.parametrize(
@@ -381,7 +395,7 @@ def test_main_and_foreign_agents_carry_only_the_read_deny_outside_a_train(
     for payload in payloads:
         assert decide(payload, CFG).allow, payload
     read = decide(_cred(agent, "Read", cwd, file_path=f"{cred_home}/.ssh/id_ed25519"), CFG)
-    assert not read.allow and "credential path" in str(read.reason)
+    assert not read.allow and "credential path" in str(read.record or read.reason)
     _train(other_repo)
     for payload in payloads:
         assert not decide(payload, CFG).allow, payload
@@ -425,13 +439,9 @@ def test_main_exempt_from_construct_limits(command: str) -> None:
         "git -C . clean -fd > log",
         "rm -rf / > /dev/null",
         "rm -r -f $HOME 2>&1",
-        "dd if=/dev/zero of=x > log",
-        "mkfs.ext4 /dev/sda > log",
         'git commit -S -m "$(cat m)"',
         'git -c commit.gpgsign=true commit -m "$(cat m)"',
         'git tag -s v1 -m "$(cat m)"',
-        "gpg --sign x > out",
-        "ssh-keygen -Y sign -f k x > out",
         "bash -c 'git push --force > /dev/null'",
     ],
 )
@@ -457,8 +467,8 @@ class TestRegressionToolsAndCwd:
             for payload in (_b(agent, "git status"), _w(agent, f"{CWD}/src/a.py")):
                 payload["cwd"] = cwd
                 d = decide(payload, CFG)
-                assert _main_warns(d, jail.WARN_NO_CWD), (agent, cwd)
-                assert "no absolute cwd" in str(d.reason), (agent, cwd)
+                assert _main_warns(d, notes.NO_WORKING_FOLDER), (agent, cwd)
+                assert "no absolute cwd" in str(d.record), (agent, cwd)
 
 
 # Fix round 3: worker grammars, quote-aware tokenizer, hardened main fallback.
@@ -469,7 +479,7 @@ class TestRound3DotGitWrites:
     @pytest.mark.parametrize(("agent", "path"), [(None, f"{CWD}/.git/hooks/pre-commit")])
     def test_blocked(self, agent: str | None, path: str) -> None:
         d = decide(_w(agent, path), CFG)
-        assert _main_warns(d, jail.WARN_DOTGIT.format(path=path)) and ".git/" in str(d.reason)
+        assert _main_warns(d, notes.GIT_METADATA_WRITE) and ".git/" in str(d.reason)
 
     def test_gitignore_is_not_dotgit(self) -> None:
         # 0105: warned as a non-scratch write during a train, never refused as .git/.
@@ -495,11 +505,6 @@ class TestRound3MainHardened:
             "bash --norc -c 'git clean -fd'",
             "bash -c -- 'git clean -fd'",
             "sh -xc 'git push -f origin x'",
-            "python3 -c 'import os; os.system(\"git push --force\")'",
-            'python3 -c \'import subprocess; subprocess.run(["git", "push", "--force"])\'',
-            "perl -e 'system(\"git push -f\")'",
-            "ruby -e 'system(\"git clean -fd\")'",
-            'node -e \'require("child_process").execSync("git push --force")\'',
             "sudo --unknown-opt git push --force",
             "env -S 'git push --force'",
             "echo x | xargs git push",
@@ -726,8 +731,8 @@ class TestFinalDataDir:
     @pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
     def test_tool_writes_block_for_every_agent(self, agent: str | None, tool: str) -> None:
         d = decide(_w(agent, f"{DATA}/config.json", tool), CFG)
-        assert _main_warns(d, jail.WARN_DATA_DIR), (agent, tool)
-        assert "written by hooks only" in str(d.reason), (agent, tool)
+        assert _main_warns(d, notes.PROTECTED_WRITE), (agent, tool)
+        assert "written by hooks only" in str(d.record or d.reason), (agent, tool)
 
     def test_notebook_edit_blocks(self) -> None:
         payload: dict[str, Any] = {
@@ -735,7 +740,7 @@ class TestFinalDataDir:
             "tool_input": {"notebook_path": f"{DATA}/n.ipynb"},
             "cwd": CWD,
         }
-        assert _main_warns(decide(payload, CFG), jail.WARN_DATA_DIR)
+        assert _main_warns(decide(payload, CFG), notes.PROTECTED_WRITE)
 
     def test_main_still_writes_elsewhere(self) -> None:
         # 0099: during a train elsewhere means the scratch folder.
@@ -756,27 +761,26 @@ class TestFinalDataDir:
     )
     def test_main_bash_writes_block(self, command: str) -> None:
         d = decide(_b(None, command), CFG)
-        assert _main_warns(d, jail.WARN_DATA_DIR), command
-        assert "written by hooks only" in str(d.reason), command
+        assert _main_warns(d, notes.PROTECTED_WRITE), command
+        assert "written by hooks only" in str(d.record), command
 
     @pytest.mark.parametrize(
         ("command", "word"),
         [
-            ("echo {} > ~/.claude/plugins/data/daedalus-inline/config.json", "a redirect"),
+            ("echo {} > ~/.claude/plugins/data/daedalus/config.json", "a redirect"),
             ("tee $CLAUDE_PLUGIN_DATA/config.json", "$CLAUDE_PLUGIN_DATA"),
             ("sed -i s/a/b/ ~/.claude/plugins/data/daedalus/config.json", "-i"),
-            ("rm ~/.claude/plugins/data/daedalus-inline/audit/s.jsonl", "a glob or ~"),
+            ("rm ~/.claude/plugins/data/daedalus/audit/s.jsonl", "a glob or ~"),
             ("cp /tmp/f ${CLAUDE_PLUGIN_DATA}/config.json", "a leading expansion"),
             ("python3 -c 'open(1)' ~/.claude/plugins/data/daedalus", "a glob or ~"),
         ],
     )
-    def test_main_bash_writes_off_its_grammar_warn_the_refusal(
-        self, command: str, word: str
-    ) -> None:
-        # 266, 0224: no typed operand to judge, so main is warned with the word off its table.
+    def test_main_bash_writes_off_its_grammar_are_noted(self, command: str, word: str) -> None:
+        # 266, 0259: main's grammar types no operand here, so the note reading finds the write.
+        assert not jail.admitted(command, "main", CWD), (command, word)
         d = decide(_b(None, command), CFG)
-        assert _main_warns(d, jail.WARN_COMMAND), (command, d.reason)
-        assert "Refused: " in str(d.reason) and word in str(d.reason), (command, d.reason)
+        assert _main_warns(d, notes.PROTECTED_WRITE), (command, d.reason)
+        assert "Refused" not in str(d.reason), (command, d.reason)
 
     @pytest.mark.parametrize(
         "command",
@@ -800,14 +804,14 @@ class TestProjectDataDir:
     @pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
     def test_tool_writes_block_for_every_agent(self, agent: str | None, tool: str) -> None:
         d = decide(_w(agent, f"{self.P}/config.json", tool), CFG)
-        assert _main_warns(d, jail.WARN_DATA_DIR)
-        assert "<repo>/.claude/daedalus/config.json" in str(d.reason)
+        assert _main_warns(d, notes.PROTECTED_WRITE)
+        assert "<repo>/.claude/daedalus/config.json" in str(d.record or d.reason)
 
     @pytest.mark.parametrize(
         "path", [".claude/daedalus/config.json", "/elsewhere/wt/.claude/daedalus/audit/s.jsonl"]
     )
     def test_relative_and_other_worktree_paths_block(self, path: str) -> None:
-        assert _main_warns(decide(_w(None, path), CFG), jail.WARN_DATA_DIR), path
+        assert _main_warns(decide(_w(None, path), CFG), notes.PROTECTED_WRITE), path
 
     def test_sibling_claude_dir_write_allowed_for_main(self) -> None:
         # 0105: not the data-dir refusal; during a train the operator is warned.
@@ -826,8 +830,8 @@ class TestProjectDataDir:
     )
     def test_main_bash_writes_block(self, command: str) -> None:
         d = decide(_b(None, command), CFG)
-        assert _main_warns(d, jail.WARN_DATA_DIR), command
-        assert "written by hooks only" in str(d.reason), command
+        assert _main_warns(d, notes.PROTECTED_WRITE), command
+        assert "written by hooks only" in str(d.record), command
 
     @pytest.mark.parametrize(
         ("command", "word"),
@@ -840,13 +844,12 @@ class TestProjectDataDir:
             ("cd /work/repo/.claude; rm daedalus/audit/s.jsonl", "cd"),
         ],
     )
-    def test_main_bash_writes_off_its_grammar_warn_the_refusal(
-        self, command: str, word: str
-    ) -> None:
-        # 266, 0224: no typed operand to judge, so main is warned with the word off its table.
+    def test_main_bash_writes_off_its_grammar_are_noted(self, command: str, word: str) -> None:
+        # 266, 0259: main's grammar types no operand here, so the note reading finds the write.
+        assert not jail.admitted(command, "main", CWD), (command, word)
         d = decide(_b(None, command), CFG)
-        assert _main_warns(d, jail.WARN_COMMAND), (command, d.reason)
-        assert "Refused: " in str(d.reason) and word in str(d.reason), (command, d.reason)
+        assert _main_warns(d, notes.PROTECTED_WRITE), (command, d.reason)
+        assert "Refused" not in str(d.reason), (command, d.reason)
 
     @pytest.mark.parametrize(
         "command",
@@ -880,8 +883,8 @@ class TestProjectDataDir:
     def test_git_add_commit_of_data_dir_blocks(self, agent: str | None, command: str) -> None:
         d = decide(_b(agent, command), CFG)
         # 228 tail: a form main's grammar admits meets the typed tripwire; the rest its refusal.
-        assert _main_flagged(d, "never committed"), (agent, command)
-        assert "Refused: " in str(d.reason) or _main_warns(d, jail.WARN_DATA_DIR), command
+        assert _main_warns(d, notes.PROTECTED_WRITE), (agent, command)
+        assert _main_warns(d, notes.PROTECTED_WRITE), command
 
     @pytest.mark.parametrize(
         "command",
@@ -889,7 +892,7 @@ class TestProjectDataDir:
     )
     def test_main_forced_add_of_ancestor_or_glob_blocks(self, command: str) -> None:
         d = decide(_b(None, command), CFG)
-        assert _main_flagged(d, "never committed"), command
+        assert _main_warns(d, notes.PROTECTED_WRITE), command
 
     @pytest.mark.parametrize(
         "command",
@@ -918,7 +921,7 @@ class TestProjectDataDir:
     )
     def test_review_write_probes_block_for_main(self, command: str) -> None:
         d = decide(_b(None, command), CFG)
-        assert not d.allow and "written by hooks only" in str(d.reason), command
+        assert not d.allow and "written by hooks only" in str(d.record or d.reason), command
 
     @pytest.mark.parametrize(
         "command",
@@ -938,7 +941,7 @@ class TestProjectDataDir:
     )
     def test_review_git_probes_block_for_main(self, command: str) -> None:
         d = decide(_b(None, command), CFG)
-        assert _main_flagged(d, "never committed"), command
+        assert _main_warns(d, notes.PROTECTED_WRITE), command
 
     @pytest.mark.parametrize(
         "command",
@@ -960,7 +963,7 @@ class TestProjectDataDir:
     )
     def test_stash_of_untracked_blocks_for_main(self, command: str) -> None:
         d = decide(_b(None, command), CFG)
-        assert _main_flagged(d, "stash tracked changes only"), command
+        assert _main_warns(d, notes.PROTECTED_WRITE), command
 
     @pytest.mark.parametrize(
         "command",
@@ -1018,12 +1021,14 @@ def _mark(cwd: Path) -> None:
 
 
 def _judged(
-    d: jail.Decision, agent: str | None, finding: str, warning: str = jail.WARN_CREDENTIAL
+    d: jail.Decision,
+    agent: str | None,
+    finding: str,
+    klass: notes.NoteClass = notes.CREDENTIAL_READ,
 ) -> bool:
-    # Main never prompted (amends 0106): main is warned; every agent is denied.
+    # 0259: main gets the class's note with the finding on its audit row; every agent is denied.
     if agent is None:
-        want = f"{warning} The jail's finding: {finding}"
-        return d.warn and not d.allow and d.reason == want
+        return _main_warns(d, klass) and d.record == f"{klass.name}: {d.reason} Detail: {finding}"
     return not d.warn and not d.allow and d.reason == finding
 
 
@@ -1052,7 +1057,7 @@ def test_glob_and_grep_into_credentials_are_refused(cred_home: Path, agent: str 
         _cred(agent, "Grep", pattern="~/.ssh/id_ed25519"),
     ):
         d = decide(payload, CFG)
-        assert not d.allow and "is a credential path" in str(d.reason), payload
+        assert not d.allow and "is a credential path" in str(d.record or d.reason), payload
 
 
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
@@ -1100,7 +1105,7 @@ def test_bash_absolute_and_parent_glob_credential_paths_are_refused(cred_home: P
         f"cat {cred_home}/x/../.aws/config",
     ):
         d = decide(_b(None, command), CFG)
-        assert not d.allow and "is a credential path" in str(d.reason), command
+        assert not d.allow and "is a credential path" in str(d.record or d.reason), command
 
 
 @pytest.mark.parametrize("agent", CREDENTIAL_AGENTS)
@@ -1152,13 +1157,13 @@ def test_write_into_a_credential_store_is_refused(
         ("~/.aws/credentials", cred_home / ".aws" / "credentials"),
     ):
         d = decide(_w(agent, path, tool), CFG)
-        assert _judged(d, agent, _refusal(str(shown)), jail.WARN_CREDENTIAL_WRITE), (tool, path)
+        assert _judged(d, agent, _refusal(str(shown)), notes.CREDENTIAL_WRITE), (tool, path)
 
 
 def test_notebook_edit_into_a_credential_store_is_refused(cred_home: Path) -> None:
     path = str(cred_home / ".gnupg" / "x.ipynb")
     d = decide(_cred(None, "NotebookEdit", notebook_path=path), CFG)
-    assert _judged(d, None, _refusal(path), jail.WARN_CREDENTIAL_WRITE)
+    assert _judged(d, None, _refusal(path), notes.CREDENTIAL_WRITE)
 
 
 def test_unknown_agent_reads_freely_outside_credentials(cred_home: Path, train_cwd: Path) -> None:
@@ -1224,7 +1229,7 @@ def test_grep_rooted_at_home_or_an_ancestor_is_refused(cred_home: Path, agent: s
         _cred(agent, "Grep", pattern="BEGIN", path="~", glob="*.pub", type="py"),
     ):
         d = decide(payload, CFG)
-        assert not d.allow and "credential path" in str(d.reason), payload
+        assert not d.allow and "credential path" in str(d.record or d.reason), payload
     ok = _cred(agent, "Grep", pattern="BEGIN", path=str(cred_home / "project"))
     assert decide(ok, CFG).allow
 
@@ -1306,7 +1311,7 @@ def test_refusal_names_the_resolved_target(cred_home: Path) -> None:
     d = decide(_b(None, f"cd {cred_home}/.ssh && cat id_ed25519"), CFG)
     assert _judged(d, None, _refusal(str(cred_home / ".ssh")))
     d = decide(_b(None, "cd ~/.aws; cat credentials"), CFG)
-    assert _main_flagged(d, "Refused: a leading cd takes one absolute path"), d.reason
+    assert _main_warns(d, notes.CREDENTIAL_READ), d.reason
 
 
 def test_unknown_agent_writes_the_data_dir_only_outside_a_train(train_cwd: Path) -> None:
@@ -1327,7 +1332,7 @@ def test_unknown_agent_writes_the_data_dir_only_outside_a_train(train_cwd: Path)
         payloads, ("data", "data", "Refused: tee", "Refused: rm"), strict=True
     ):
         d = decide(payload, CFG)
-        assert not d.allow and named in str(d.reason), payload
+        assert not d.allow and named in str(d.record or d.reason), payload
 
 
 def test_unknown_agent_dotgit_write_is_refused_only_during_a_train(train_cwd: Path) -> None:
@@ -1411,7 +1416,7 @@ def test_patterns_and_find_predicates_are_not_paths(
     _train(plain_repo)
     for command in ("grep -r '' ~", "grep -r -e x ~", "grep -rf pats ~"):
         d = decide(_cred(agent, "Bash", cwd, command=command), CFG)
-        assert not d.allow and "credential path" in str(d.reason), command
+        assert not d.allow and "credential path" in str(d.record or d.reason), command
 
 
 @pytest.mark.parametrize("agent", [None, "Explore"])
@@ -1608,8 +1613,12 @@ def test_issue30_unmodelled_copiers_reading_home_are_refused(
 def test_issue30_git_init_in_the_data_dir_is_refused(
     marked_repo: Path, agent: str | None, command: str, word: str
 ) -> None:
-    # 266, 0224: no grammar admits git init, so the refusal names the word off the table.
+    # 266, 0224, 0259: no grammar admits git init; an agent is refused naming the word off
+    # the table, and main's note reading finds the data folder.
     d = decide(_cred(agent, "Bash", str(marked_repo), command=command), CFG)
+    if agent is None:
+        assert _main_warns(d, notes.PROTECTED_WRITE), (command, d.reason)
+        return
     assert not d.allow and f"Refused: {word}" in str(d.reason), (command, d.reason)
 
 
@@ -1676,11 +1685,10 @@ def test_main_write_to_readme_in_the_train_repo_warns(marked_repo: Path, other_r
     for cwd in (marked_repo, other_repo):
         d = decide(_cred(None, "Write", str(cwd), file_path=path), CFG)
         assert _warns(d, path), (cwd, d)
-    reason = jail.R_MAIN_TRAIN_WARN.format(train=UNIT_TRAIN, path=path)
-    assert reason == (
-        f"Build Train {UNIT_TRAIN} is active in this repository and works in unit worktrees. "
-        f"Writing {path} here can leave a dirty tree that finish refuses, conflict with a unit "
-        "branch, or land on the integration branch."
+    assert d.reason == (
+        f"Warning: This Write of {path} lands in the main checkout while run {UNIT_TRAIN} works "
+        "in unit worktrees. It can leave a dirty tree that stops the run's finish step, or clash "
+        "with a unit branch. Next: make the change in a unit worktree, or after the run."
     )
 
 
@@ -1702,7 +1710,7 @@ def test_main_write_anywhere_is_allowed_without_a_train(other_repo: Path) -> Non
 def test_main_dotgit_write_warns_and_the_coder_is_denied() -> None:
     path = f"{CWD}/.git/config"
     d = decide(_w(None, path), CFG)
-    assert _main_warns(d, jail.WARN_DOTGIT.format(path=path)), d
+    assert _main_warns(d, notes.GIT_METADATA_WRITE), d
     coder = hook_chain.decide(_w("coder", f"{WT}/.git/config"), CFG)
     assert not coder.allow and not coder.warn, coder
 
@@ -1710,7 +1718,7 @@ def test_main_dotgit_write_warns_and_the_coder_is_denied() -> None:
 def test_main_data_dir_write_warns_and_the_coder_is_denied() -> None:
     path = f"{CWD}/.claude/daedalus/config.json"
     d = decide(_w(None, path), CFG)
-    assert _main_warns(d, jail.WARN_DATA_DIR), d
+    assert _main_warns(d, notes.PROTECTED_WRITE), d
     for payload in (_w("coder", path), _b("coder", f"rm {path}")):
         coder = hook_chain.decide(payload, CFG)
         assert not coder.allow and not coder.warn, coder
@@ -1720,7 +1728,9 @@ def test_main_credential_read_warns_and_the_coder_is_denied(cred_home: Path) -> 
     path = str(cred_home / ".ssh" / "id_ed25519")
     for payload in (_cred(None, "Read", file_path=path), _b(None, f"cat {path}")):
         d = decide(payload, CFG)
-        assert _main_warns(d, jail.WARN_CREDENTIAL) and _refusal(path) in str(d.reason), d
+        assert _main_warns(d, notes.CREDENTIAL_READ) and _refusal(path) in str(
+            d.record or d.reason
+        ), d
     for payload in (_cred("coder", "Read", file_path=path), _b("coder", f"cat {path}")):
         coder = hook_chain.decide(payload, CFG)
         assert not coder.allow and not coder.warn, coder
@@ -1729,17 +1739,17 @@ def test_main_credential_read_warns_and_the_coder_is_denied(cred_home: Path) -> 
 @pytest.mark.parametrize(
     ("command", "warning"),
     [
-        # 228 tail: a push or clean off main's grammar is warned with the refusal at its span.
-        ("git push --force origin feature/x", "WARN_COMMAND"),
-        ("git push origin main", "WARN_DEFAULT_BRANCH"),
-        ("rm -rf /", "WARN_DELETE"),
-        ("git clean -fdx", "WARN_COMMAND"),
-        ("git commit -S -m x", "WARN_COMMAND"),
+        # 0259: a push, clean or signing off main's grammar is found by the note reading.
+        ("git push --force origin feature/x", "PUSH_OR_MERGE"),
+        ("git push origin main", "PUSH_OR_MERGE"),
+        ("rm -rf /", "DESTRUCTIVE_DELETE"),
+        ("git clean -fdx", "PROTECTED_WRITE"),
+        ("git commit -S -m x", "SIGNING"),
     ],
 )
 def test_main_tripwire_warns_and_the_coder_is_denied(command: str, warning: str) -> None:
     d = decide(_b(None, command), CFG)
-    assert _main_warns(d, getattr(jail, warning)), (command, d.reason)
+    assert _main_warns(d, getattr(notes, warning)), (command, d.reason)
     coder = hook_chain.decide(_b("coder", command), CFG)
     assert not coder.allow and not coder.warn, command
 
@@ -1747,22 +1757,28 @@ def test_main_tripwire_warns_and_the_coder_is_denied(command: str, warning: str)
 def test_main_push_during_a_train_warns_and_the_coder_is_denied(marked_repo: Path) -> None:
     command = "git push -u origin feature/x"
     d = decide(_cred(None, "Bash", str(marked_repo), command=command), CFG)
-    assert _main_warns(d, jail.WARN_TRAIN_PUSH), d
+    assert _main_warns(d, notes.PUSH_OR_MERGE), d
     coder = hook_chain.decide(_cred("coder", "Bash", str(marked_repo), command=command), CFG)
     assert not coder.allow and not coder.warn, coder
 
 
 def test_main_warnings_name_the_consequence() -> None:
-    # 0106: the ruled wording for the three named classes, verbatim.
-    assert "edits the repository's own metadata; a wrong write corrupts the clone" in (
-        jail.WARN_DOTGIT
+    # 0106, 0259: the three ruled classes' wording, verbatim.
+    assert notes.CREDENTIAL_READ.text("This command") == (
+        "Warning: This command reaches a credential file, a .env file or the run's reply key, "
+        "or a path the plugin cannot rule out as one, so a secret can land in this transcript. "
+        "Next: leave the file unread here, and read it from your own shell if the work needs it."
     )
-    assert jail.WARN_DATA_DIR.endswith(
-        "It holds the audit log, train state and coder bindings; a hand edit breaks the hash "
-        "chain that proves the audit happened."
+    assert notes.PROTECTED_WRITE.text("This command writes into") == (
+        "Warning: This command writes into the run's protected folder (.claude/daedalus or the "
+        "plugin's data folder). That folder holds the audit log, the run state and the reply "
+        "key. A change made by hand breaks the record that proves the audit happened. "
+        "Next: leave that folder to the plugin's own scripts."
     )
-    assert jail.WARN_CREDENTIAL == (
-        "This path holds credentials; reading it puts the secret into the session transcript."
+    assert notes.PUSH_OR_MERGE.text("This git push publishes work") == (
+        "Warning: This git push publishes work. A run is active and is not in its release "
+        "phase, so work can reach the remote before the run's audit approves it. "
+        "Next: let the release phase push and open the pull request; the operator merges."
     )
 
 
@@ -1781,14 +1797,14 @@ def test_foreign_agent_claude_is_refused_during_a_train(marked_repo: Path) -> No
 @pytest.mark.parametrize("command", ["claude -p hi", "nohup claude -p hi", "/usr/bin/claude"])
 def test_main_claude_is_warned(command: str) -> None:
     d = decide(_b(None, command), CFG)
-    assert _main_warns(d, jail.WARN_NESTED_CLAUDE), (command, d.reason)
+    assert _main_warns(d, notes.NESTED_SESSION), (command, d.reason)
 
 
 @pytest.mark.parametrize("command", ["bash -c 'claude -p hi'", "echo `x`; claude"])
-def test_main_claude_in_a_body_is_warned_by_the_refusal(command: str) -> None:
-    # 228 tail: a body or substitution is refused before its words; the text is never read.
+def test_main_claude_in_a_body_is_noted(command: str) -> None:
+    # 0259: the note reading walks a shell body and every command after a substitution.
     d = decide(_b(None, command), CFG)
-    assert _main_warns(d, jail.WARN_COMMAND) and "Refused: " in str(d.reason), (command, d.reason)
+    assert _main_warns(d, notes.NESTED_SESSION), (command, d.reason)
 
 
 def test_main_mentions_of_claude_pass() -> None:
@@ -1799,7 +1815,7 @@ def test_main_mentions_of_claude_pass() -> None:
 def test_main_versioned_claude_path_is_warned(fake_claude: Path) -> None:
     # issue 55: the versioned file the PATH link resolves to is the same nested session.
     for command in (f"{fake_claude} -p hi", f"nohup {fake_claude} -p hi"):
-        assert _main_warns(decide(_b(None, command), CFG), jail.WARN_NESTED_CLAUDE), command
+        assert _main_warns(decide(_b(None, command), CFG), notes.NESTED_SESSION), command
     assert decide(_b(None, f"ls {fake_claude.parent}"), CFG).allow
 
 
@@ -1856,10 +1872,10 @@ def test_main_coder_dispatch_without_worktree_line_warns(tmp_path: Path) -> None
     tool_input = {"subagent_type": "daedalus:coder", "prompt": "build it"}
     payload: dict[str, Any] = {"tool_name": "Agent", "tool_input": tool_input, "cwd": str(repo)}
     d = decide(payload, CFG)
-    want = jail.WARN_DISPATCH.format(reason=dispatch_binding.R_WORKTREE_LINE)
-    assert d.warn and not d.allow and d.reason == want, d
-    assert d.reason.startswith("This dispatch skips a train invariant (a coder dispatched")
-    assert d.reason.endswith("The agent starts without it; the audit log records the warning.")
+    assert _main_warns(d, notes.DISPATCH_RULE), d
+    step = notes.rule_step(dispatch_binding.R_WORKTREE_LINE)
+    assert step and d.reason == notes.DISPATCH_RULE.text("This dispatch", step), d
+    assert d.record == f"dispatch_rule: {d.reason} Detail: {dispatch_binding.R_WORKTREE_LINE}"
     d = decide({**payload, "agent_id": "sub-1"}, CFG)
     assert not d.allow and not d.warn and d.reason == jail.R_SUBAGENT_MAIN, d
     d = decide({**payload, "agent_type": "daedalus:main"}, CFG)

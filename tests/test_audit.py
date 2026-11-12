@@ -342,7 +342,7 @@ def _last_record(marked_data: Path) -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("agent", "tool", "tool_input", "prefix"),
     [
-        (None, "Bash", {"command": "git clean -fdx"}, "jail: "),
+        (None, "Bash", {"command": "git clean -fdx"}, "jail: protected_folder_write: "),
         ("Explore", "Write", {"file_path": "notes.md", "content": "x"}, "jail: "),
     ],
 )
@@ -365,7 +365,8 @@ def test_main_block_reason_carries_a_prefix(
         # Main never prompted (amends 0106): allowed with the warning, recorded as warn (92).
         assert result.returncode == 0, result.stderr
         warning = main_warning(result.stdout)
-        assert rec["decision"] == "warn" and rec["reason"] == f"{prefix}{warning}", rec["reason"]
+        assert rec["decision"] == "warn", rec
+        assert str(rec["reason"]).startswith(f"{prefix}{warning} Detail: "), rec["reason"]
         return
     assert result.returncode == 2, result.stderr
     assert rec["decision"] == "block" and rec["reason"].startswith(prefix), rec["reason"]

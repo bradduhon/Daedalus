@@ -95,7 +95,7 @@ def test_two_refutations_in_one_window_escalate_and_free_the_unit(
     tool_input = {"description": "unit", "prompt": prompt, "subagent_type": "daedalus:coder"}
     dispatch = {"tool_name": "Agent", "tool_input": tool_input, "cwd": str(repo)}
     warned = judge({**dispatch, "session_id": SESSION}, Config())
-    assert warned.warn and "did not print a dispatch of coder" in str(warned.reason)
+    assert warned.warn and "did not print a dispatch of coder" in str(warned.record)
     assert unit_binding._read(unit_binding.bindings_path(repo, train))[name] == freed
     _ok(_write(repo, "agent-opus", unit / "u1.txt"))
     _refused(_write(repo, "agent-sonnet", unit / "u1.txt"), "second refutation")

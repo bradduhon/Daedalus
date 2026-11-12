@@ -34,7 +34,8 @@ def test_main_is_warned_naming_the_lookup_variable(form: str) -> None:
     assert isinstance(got, Refusal) and "changes which program" in got.reason, (form, got)
     assert any(name in got.reason for name in LOOKUP_VARS), (form, got.reason)
     d = jail.decide(_b(None, form), CFG)
-    assert d.allow is False and d.warn and got.reason in str(d.reason), (form, d.reason)
+    assert d.allow is False and d.warn and d.note == "lookup_variable", (form, d)
+    assert any(name in str(d.record) for name in LOOKUP_VARS), (form, d.record)
 
 
 @pytest.mark.parametrize("agent", (*LOOKUP_AGENTS, "foreign"))

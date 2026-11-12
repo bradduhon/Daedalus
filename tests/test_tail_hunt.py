@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from lib import jail
+from lib import session_notes as notes
 from lib.admit import Refusal
 
 from tests.adversarial import corpus as C
@@ -58,30 +59,33 @@ CREDENTIAL_HUNT = (
     ("tree read, rg hidden", "rg --hidden key ~"),
     ("tree read, cp -r", "cp -r ~ /tmp/x"),
 )
-# (hunt class, form, warning constant name); main is warned, never refused.
+# 0259: hunt classes main's note reading cannot see: a path read from stdin, and a
+# secret tracked only under an earlier name in history.
+MAIN_NOTE_GAPS = frozenset({"SS-1 read builtin", "rename, --follow"})
+# (hunt class, form, note class name); main is noted, never refused.
 MAIN_HUNT = (
-    ("default branch", "git push origin main", "WARN_DEFAULT_BRANCH"),
-    ("quoted branch", 'git push origin "main"', "WARN_DEFAULT_BRANCH"),
-    ("escaped branch", "git push origin ma\\in", "WARN_DEFAULT_BRANCH"),
-    ("NAME=value prefix", "TZ=UTC git push origin main", "WARN_DEFAULT_BRANCH"),
-    ("wrapper", "nohup git push origin main", "WARN_DEFAULT_BRANCH"),
-    ("separator", "ls; git push -u origin master", "WARN_DEFAULT_BRANCH"),
-    ("newline separator", "ls\ngit push origin main", "WARN_DEFAULT_BRANCH"),
-    ("$ in the branch", "git push origin $B", "WARN_COMMAND"),
-    ("brace in the branch", "git push origin ma{in,}", "WARN_COMMAND"),
-    ("force flag", "git push --force origin x", "WARN_COMMAND"),
-    ("recursive delete of /", "rm -rf /", "WARN_DELETE"),
-    ("split flags", "rm -r -f /", "WARN_DELETE"),
-    ("long option", "rm --recursive /", "WARN_DELETE"),
-    ("--", "rm -rf -- /", "WARN_DELETE"),
-    ("tilde target", "rm -rf ~", "WARN_COMMAND"),
-    ("config key on a read", "git -c core.pager=x log", "WARN_COMMAND"),
-    ("signing config on a read", "git -c commit.gpgsign=true log", "WARN_COMMAND"),
-    ("data folder add", "git add .claude/daedalus/config.json", "WARN_DATA_DIR"),
-    ("claude by name", "claude -p hi", "WARN_NESTED_CLAUDE"),
-    ("claude under a wrapper", "timeout 5 claude -p hi", "WARN_NESTED_CLAUDE"),
-    ("claude by path", "/usr/bin/claude", "WARN_NESTED_CLAUDE"),
-    ("claude in a body", "bash -c 'claude -p hi'", "WARN_COMMAND"),
+    ("default branch", "git push origin main", "PUSH_OR_MERGE"),
+    ("quoted branch", 'git push origin "main"', "PUSH_OR_MERGE"),
+    ("escaped branch", "git push origin ma\\in", "PUSH_OR_MERGE"),
+    ("NAME=value prefix", "TZ=UTC git push origin main", "PUSH_OR_MERGE"),
+    ("wrapper", "nohup git push origin main", "PUSH_OR_MERGE"),
+    ("separator", "ls; git push -u origin master", "PUSH_OR_MERGE"),
+    ("newline separator", "ls\ngit push origin main", "PUSH_OR_MERGE"),
+    ("$ in the branch", "git push origin $B", "PUSH_OR_MERGE"),
+    ("brace in the branch", "git push origin ma{in,}", "PUSH_OR_MERGE"),
+    ("force flag", "git push --force origin x", "PUSH_OR_MERGE"),
+    ("recursive delete of /", "rm -rf /", "DESTRUCTIVE_DELETE"),
+    ("split flags", "rm -r -f /", "DESTRUCTIVE_DELETE"),
+    ("long option", "rm --recursive /", "DESTRUCTIVE_DELETE"),
+    ("--", "rm -rf -- /", "DESTRUCTIVE_DELETE"),
+    ("tilde target", "rm -rf ~", "DESTRUCTIVE_DELETE"),
+    ("config key on a read", "git -c core.pager=x log", "GIT_CONFIG_KEY"),
+    ("signing config on a read", "git -c commit.gpgsign=true log", "SIGNING"),
+    ("data folder add", "git add .claude/daedalus/config.json", "PROTECTED_WRITE"),
+    ("claude by name", "claude -p hi", "NESTED_SESSION"),
+    ("claude under a wrapper", "timeout 5 claude -p hi", "NESTED_SESSION"),
+    ("claude by path", "/usr/bin/claude", "NESTED_SESSION"),
+    ("claude in a body", "bash -c 'claude -p hi'", "NESTED_SESSION"),
 )
 
 
@@ -161,8 +165,8 @@ def test_a_store_named_as_a_git_pathspec_is_warned_for_main_and_refused_for_agen
     assert isinstance(got, Refusal) == (named_by == "grammar"), (command, got)
     assert (reason is not None) == (named_by == "credential"), (command, reason)
     d = jail.decide(_spec_payload(command, spec_repo, None), CFG)
-    assert d.warn and not d.allow, (command, d.reason)
-    assert (reason or "Refused: ") in str(d.reason), (command, d.reason)
+    assert d.warn and not d.allow and d.note == "credential_read", (command, d.reason)
+    assert reason is None or reason in str(d.record), (command, d.record)
     for role in ROLES:
         deny = first_deny(_spec_payload(command, spec_repo, role), CFG)
         assert deny is not None, (role, command)
@@ -201,7 +205,8 @@ def test_a_credential_hunt_form_is_named_or_refused(
     else:
         assert reason is not None and "credential" in reason, (klass, command, reason)
     d = jail.decide(_b(None, command), CFG)
-    assert d.warn and not d.allow, (klass, command, d.reason)
+    # 0259: a variable read from stdin hides its path from the note reading too.
+    assert (d.warn and not d.allow) != (klass in MAIN_NOTE_GAPS), (klass, command, d)
     for agent in ("coder", "auditor"):
         chain = decide(_b(agent, command), CFG)
         assert not chain.allow and not chain.warn, (klass, agent, command)
@@ -211,14 +216,13 @@ def test_a_credential_hunt_form_is_named_or_refused(
 def test_a_main_tripwire_hunt_form_is_warned_by_name(
     fake_claude: Path, klass: str, command: str, warning: str
 ) -> None:
-    # 0105, 0106, 228 tail: an admitted form meets the typed tripwire; a refused one is warned
-    # with the grammar's refusal at its span. Main is never refused.
+    # 0105, 0106, 0259: an admitted form meets the typed tripwire, a refused one the note
+    # reading; both name the note class. Main is never refused.
     d = jail.decide(_b(None, command), CFG)
     reason = str(d.reason)
     assert d.warn and not d.allow, (klass, command, reason)
-    assert reason.startswith(f"{getattr(jail, warning)} The jail's finding: "), (klass, reason)
-    # SA-5: a refusal names its span; a typed tripwire names its rule with its Next line.
-    assert "Refused: " in reason or "Next:" in reason, (klass, reason)
+    assert d.note == getattr(notes, warning).name and reason.startswith("Warning: "), (klass, d)
+    assert "Refused" not in reason and "Next:" in reason, (klass, reason)
 
 
 # 267: the three whole-tree reads the issue names, each refused beside a tracked .env.
@@ -259,7 +263,7 @@ def test_a_content_read_over_a_tracked_secret_is_refused_and_warned(
     assert reason is not None and C.TRACKED_SECRET_267 in reason, (command, reason)
     assert reason.split(" is a ", 1)[0] in {str(repo / ".env"), str(repo / "cfg" / ".env")}
     d = jail.decide(_spec_payload(command, repo, None), CFG)
-    assert d.warn and not d.allow and reason in str(d.reason), (command, d.reason)
+    assert d.warn and not d.allow and reason in str(d.record), (command, d.record)
     for role in ROLES:
         deny = first_deny(_spec_payload(command, repo, role), CFG)
         assert deny is not None, (role, command)
@@ -304,7 +308,8 @@ def test_a_tracked_secret_hunt_form_meets_its_outcome(
         marker = C.TRACKED_SECRET_267 if outcome == "tracked" else C.TRACKED_UNKNOWN_267
         assert reason is not None and marker in reason, (klass, reason)
     d = jail.decide(_spec_payload(command, repo, None), CFG)
-    assert d.warn == (outcome not in ("kept", "gap")), (klass, d.reason)
+    noted = outcome not in ("kept", "gap") and klass not in MAIN_NOTE_GAPS
+    assert d.warn == noted, (klass, d.reason)
 
 
 EXCLUDE_ROLES = ("coder", "auditor", "verifier")

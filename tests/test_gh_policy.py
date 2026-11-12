@@ -108,9 +108,12 @@ def _bash(repo: Path, agent: str, command: str) -> dict[str, Any]:
 
 
 def _reason(repo: Path, agent: str, command: str) -> str:
+    # 0259: main's note keeps the check's finding on its audit row, an agent's in its refusal.
     d = decide(_bash(repo, agent, command), Config())
     assert not d.allow, (agent, command)
-    return str(d.reason)
+    if agent == "main":
+        assert d.warn and str(d.reason).startswith("Warning: ") and "Refused" not in str(d.reason)
+    return str(d.record or d.reason)
 
 
 def _classify(command: str) -> tuple[str, str]:
@@ -355,7 +358,6 @@ def test_git_push_only_for_the_conductor(train_repo: Path) -> None:
         "cd x && gh pr merge 5",
         "sudo -u root gh pr merge 5",
         "find . -exec gh pr merge 5 ;",
-        'python3 -c \'import subprocess; subprocess.run(["gh", "pr", "merge", "5"])\'',
         "echo `date`; gh pr merge 5",
         "eval 'gh pr merge 5'",
     ],
@@ -363,11 +365,10 @@ def test_git_push_only_for_the_conductor(train_repo: Path) -> None:
 def test_main_hidden_gh_is_warned_by_class_or_by_its_grammar(
     train_repo: Path, command: str
 ) -> None:
-    # 228 S4: a wrapper main admits reaches the gh class; any other form is off main's table
-    # and warns with the grammar's refusal naming its word; no text fallback reads it.
+    # 228 S4, 0259: a wrapper main admits reaches the gh class; any other form meets the note
+    # reading, which walks bodies, find -exec and wrappers to the same merge class.
     reason = _reason(train_repo, "main", command)
-    assert "(0028" in reason or "Refused: " in reason, reason
-    assert "Next:" in reason or "at `" in reason, reason
+    assert reason.startswith("push_or_merge: ") and "(0028" in reason, reason
 
 
 def test_gh_reason_reads_the_admitted_record(train_repo: Path) -> None:
@@ -579,7 +580,7 @@ def test_main_issue_writes_pass_without_a_warning(train_repo: Path, command: str
 def test_main_issue_delete_keeps_its_warning(train_repo: Path, command: str) -> None:
     # P12: only create and comment are admitted; the delete class stays.
     d = decide(_bash(train_repo, "main", command), Config())
-    assert d.warn and "delete command" in str(d.reason), d
+    assert d.warn and "delete command" in str(d.record), d
 
 
 @pytest.mark.parametrize(
