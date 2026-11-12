@@ -286,14 +286,17 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "module's `.terraform` folder, and, only under the kernel wrapper, `terraform "
         "-chdir=<folder> init -backend=false -input=false -lockfile=readonly`; "
         "with it on, the build phase downloads the providers once, outside the kernel wrapper, "
-        "into a private folder the wrapper lets coders read, so that init needs no network; "
-        "`checks.terraform_format` set to `false` still turns both off",
+        "into a private folder the wrapper lets coders read, so that init needs no network, and "
+        "validates each unit after its coder hands it in, outside the wrapper, on a copy of the "
+        "unit's Terraform files; `checks.terraform_format` set to `false` still turns all of "
+        "it off",
         "boolean",
         "`true` or `false`",
         "`false`: the auditor runs no validate or init and marks that check N/A",
         "`true`",
-        "The audit may also run the Terraform validate check and its offline setup step, and the "
-        "run downloads the providers that step installs.",
+        "The audit may also run the Terraform validate check and its offline setup step, the "
+        "run downloads the providers that step installs, and each unit's Terraform is validated "
+        "before its verifier starts.",
         ("packs/judges/terraform.md", "scripts/daedalus_train.py"),
     ),
     (MANIFEST_FILE, "checks.release_banned_terms"): KeyRow(
