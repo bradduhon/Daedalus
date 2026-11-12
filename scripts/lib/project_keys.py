@@ -55,7 +55,7 @@ from lib.work_classes import (
     MECHANICAL,
     MIDDLE_MODEL,
     NAME_MAX,
-    ORDINARY,
+    PLUMBING,
     SMALLEST_MODEL,
     TOP_MODEL,
     classes_json,
@@ -844,9 +844,9 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         f"case and not starting with an underscore; a definition is one line of 1 to "
         f"{DEFINITION_MAX} characters",
         "Absent or `null`: the shipped classes, fourteen kinds of security work plus "
-        f"`{ORDINARY}` and `{MECHANICAL}`; `[]` means no classes, so all work runs on "
+        f"`{PLUMBING}` and `{MECHANICAL}`; `[]` means no classes, so all work runs on "
         f'`"{MIDDLE_MODEL}"`',
-        f'`[{{"name": "{ORDINARY}", "definition": "{dict(DEFAULT_CLASSES)[ORDINARY]}"}}]`',
+        f'`[{{"name": "{PLUMBING}", "definition": "{dict(DEFAULT_CLASSES)[PLUMBING]}"}}]`',
         f"{NOT_ACTIVE}: no run picks a model by the class of its work.",
         (),
     ),
@@ -858,9 +858,9 @@ KEY_ROWS: dict[tuple[str, str], KeyRow] = {
         "object",
         f"Keys are names the classes list holds; values are {_MODEL_NAMES}; any other name or "
         "value is refused",
-        f'Absent or `null`: the fourteen security classes on `"{TOP_MODEL}"`, `{ORDINARY}` on '
+        f'Absent or `null`: the fourteen security classes on `"{TOP_MODEL}"`, `{PLUMBING}` on '
         f'`"{MIDDLE_MODEL}"` and `{MECHANICAL}` on `"{SMALLEST_MODEL}"`',
-        f'`{{"{ORDINARY}": "{MIDDLE_MODEL}", "Tokens": "{TOP_MODEL}"}}`',
+        f'`{{"{PLUMBING}": "{MIDDLE_MODEL}", "Tokens": "{TOP_MODEL}"}}`',
         f"{NOT_ACTIVE}: every agent keeps the model it runs on today.",
         (),
     ),

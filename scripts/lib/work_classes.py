@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 TOP_MODEL, MIDDLE_MODEL, SMALLEST_MODEL = "opus", "sonnet", "haiku"
 NAME_MAX, DEFINITION_MAX, MAX_CLASSES = 40, 300, 64
 ROW_KEYS = ("name", "definition")
-ORDINARY, MECHANICAL = "Ordinary work", "Mechanical work"
+PLUMBING, MECHANICAL = "Plumbing", "Mechanical"
 _BUILDS = "The work builds or changes "
 # 0280: every name and definition fits a document or an investigation as well as code.
 DEFAULT_CLASSES: tuple[tuple[str, str], ...] = (
@@ -65,16 +65,20 @@ DEFAULT_CLASSES: tuple[tuple[str, str], ...] = (
     ),
     ("Audit trail", _BUILDS + "the security log itself and what keeps it tamper-evident."),
     (
-        "Security rules",
+        "Policy as code",
         _BUILDS + "the rules a security scanner or guard enforces, the scanner's "
         "configuration, and any exception to or skip of a rule.",
     ),
-    (ORDINARY, _BUILDS + "none of the things another class names."),
+    (
+        PLUMBING,
+        _BUILDS + "none of the things another class names, including work that only uses one "
+        "of them.",
+    ),
     (MECHANICAL, "The work needs no judgement: a rename, a move, a copy or a format pass."),
 )
 DEFAULT_MODELS: tuple[tuple[str, str], ...] = (
-    *((name, TOP_MODEL) for name, _ in DEFAULT_CLASSES if name not in (ORDINARY, MECHANICAL)),
-    (ORDINARY, MIDDLE_MODEL),
+    *((name, TOP_MODEL) for name, _ in DEFAULT_CLASSES if name not in (PLUMBING, MECHANICAL)),
+    (PLUMBING, MIDDLE_MODEL),
     (MECHANICAL, SMALLEST_MODEL),
 )
 

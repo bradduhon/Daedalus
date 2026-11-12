@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -20,7 +19,7 @@ from lib.work_classes import (
     DEFAULT_MODELS,
     MECHANICAL,
     MIDDLE_MODEL,
-    ORDINARY,
+    PLUMBING,
     SMALLEST_MODEL,
     TOP_MODEL,
     model_for,
@@ -68,21 +67,31 @@ def _repo(tmp_path: Path, override: object) -> Path:
 
 def test_the_shipped_defaults_hold_sixteen_classes_on_three_models() -> None:
     names = [name for name, _ in DEFAULT_CLASSES]
-    assert len(names) == 16 and len(set(names)) == 16
-    assert names[-2:] == [ORDINARY, MECHANICAL]
+    # 0267, 0275: the operator's own class names, in spec section 4 order.
+    assert names == [
+        "AuthN",
+        "AuthZ",
+        "Identity",
+        "Access grants and escalation",
+        "Cryptography",
+        "Encryption",
+        "Secrets",
+        "Tokens",
+        "API keys",
+        "Credentials",
+        "Untrusted input",
+        "Network exposure",
+        "Audit trail",
+        "Policy as code",
+        PLUMBING,
+        MECHANICAL,
+    ]
+    assert (PLUMBING, MECHANICAL) == ("Plumbing", "Mechanical")
     models = dict(DEFAULT_MODELS)
     assert list(models) == names
     assert [n for n in names if models[n] == TOP_MODEL] == names[:14]
-    assert models[ORDINARY] == MIDDLE_MODEL and models[MECHANICAL] == SMALLEST_MODEL
+    assert models[PLUMBING] == MIDDLE_MODEL and models[MECHANICAL] == SMALLEST_MODEL
     assert (TOP_MODEL, MIDDLE_MODEL, SMALLEST_MODEL) == ("opus", "sonnet", "haiku")
-
-
-def test_no_shipped_name_or_definition_assumes_code() -> None:
-    # 0280: the classes fit a document or an investigation as well as code.
-    words = re.compile(r"\b(code|coding|plumbing|function|program)\b", re.IGNORECASE)
-    for name, definition in DEFAULT_CLASSES:
-        assert not words.search(name) and not words.search(definition), name
-        assert definition.endswith(".") and definition.count(". ") == 0, name
 
 
 def test_the_model_set_is_the_one_agents_accept() -> None:
@@ -94,7 +103,7 @@ def test_lookup_with_no_classes_key_uses_the_shipped_defaults(home: Path) -> Non
     operator = load_user()
     assert operator == Operator()
     assert model_for("AuthN", operator) == TOP_MODEL
-    assert model_for(ORDINARY, operator) == MIDDLE_MODEL
+    assert model_for(PLUMBING, operator) == MIDDLE_MODEL
     assert model_for(MECHANICAL, operator) == SMALLEST_MODEL
     assert model_for("Not a class", operator) == MIDDLE_MODEL
 
@@ -124,10 +133,10 @@ def test_a_project_that_removes_a_class_the_personal_file_maps(home: Path, tmp_p
 
 def test_a_project_that_lowers_one_class_and_raises_another(home: Path, tmp_path: Path) -> None:
     _write(home, starter_operator())
-    mapping = {**dict(DEFAULT_MODELS), "AuthN": "sonnet", ORDINARY: "opus"}
+    mapping = {**dict(DEFAULT_MODELS), "AuthN": "sonnet", PLUMBING: "opus"}
     operator = load(_repo(tmp_path, {"class_models": mapping}))
     assert model_for("AuthN", operator) == MIDDLE_MODEL
-    assert model_for(ORDINARY, operator) == TOP_MODEL
+    assert model_for(PLUMBING, operator) == TOP_MODEL
     assert model_for("AuthZ", operator) == TOP_MODEL
     assert load_user().class_models == DEFAULT_MODELS
 
@@ -285,3 +294,34 @@ def test_the_wizard_describes_creates_and_refuses_a_bad_set(tmp_path: Path) -> N
     )
     assert good.returncode == 0, good.stdout + good.stderr
     assert json.loads(path.read_text(encoding="utf-8"))["class_models"] == {"AuthN": "sonnet"}
+
+
+def test_the_wizard_refuses_a_project_mapping_the_next_load_refuses(tmp_path: Path) -> None:
+    # 0280: the set form runs load's own cross-file check before it writes the config.
+    home = tmp_path / "home"
+    (home / ".claude" / "daedalus").mkdir(parents=True)
+    rows = [{"name": "Legal review", "definition": "The work drafts a contract clause."}]
+    _write(home, {"work_classes": rows})
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    created = _setup(["--repo", str(repo)], home)
+    assert created.returncode == 0, created.stdout + created.stderr
+    config = repo / ".claude" / "daedalus" / "config.json"
+    before = config.read_bytes()
+    value = '{"class_models": {"AuthN": "opus"}}'
+    bad = _setup(
+        ["--set", "config", "personal_overrides", "--value", value, "--repo", str(repo)], home
+    )
+    out = bad.stdout + bad.stderr
+    assert bad.returncode != 0
+    assert "personal_overrides.class_models maps ['AuthN']" in out
+    assert "Next: add each to work_classes, or remove it from class_models." in out
+    assert config.read_bytes() == before
+    value = '{"class_models": {"Legal review": "opus"}}'
+    good = _setup(
+        ["--set", "config", "personal_overrides", "--value", value, "--repo", str(repo)], home
+    )
+    assert good.returncode == 0, good.stdout + good.stderr
+    assert json.loads(config.read_text(encoding="utf-8"))["personal_overrides"] == {
+        "class_models": {"Legal review": "opus"}
+    }

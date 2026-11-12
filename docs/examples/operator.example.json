@@ -61,15 +61,15 @@
       "definition": "The work builds or changes the security log itself and what keeps it tamper-evident."
     },
     {
-      "name": "Security rules",
+      "name": "Policy as code",
       "definition": "The work builds or changes the rules a security scanner or guard enforces, the scanner's configuration, and any exception to or skip of a rule."
     },
     {
-      "name": "Ordinary work",
-      "definition": "The work builds or changes none of the things another class names."
+      "name": "Plumbing",
+      "definition": "The work builds or changes none of the things another class names, including work that only uses one of them."
     },
     {
-      "name": "Mechanical work",
+      "name": "Mechanical",
       "definition": "The work needs no judgement: a rename, a move, a copy or a format pass."
     }
   ],
@@ -87,8 +87,8 @@
     "Untrusted input": "opus",
     "Network exposure": "opus",
     "Audit trail": "opus",
-    "Security rules": "opus",
-    "Ordinary work": "sonnet",
-    "Mechanical work": "haiku"
+    "Policy as code": "opus",
+    "Plumbing": "sonnet",
+    "Mechanical": "haiku"
   }
 }

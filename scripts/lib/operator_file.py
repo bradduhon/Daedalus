@@ -231,10 +231,14 @@ def load(repo_root: Path) -> Operator:
     from lib.config import load_config
 
     base, override = load_user(), load_config(cwd=str(repo_root)).operator
+    check_override(base, override)
+    return overlay(base, override)
+
+
+def check_override(base: Operator, override: dict[str, object]) -> None:
+    # 0280: a project's own mapping names only classes of the list it inherits; setup calls it too.
     models = override.get("class_models")
     if isinstance(models, tuple) and "work_classes" not in override:
-        # 0280: the project's own mapping names only classes of the list it inherits.
         names = unlisted(base.work_classes, models)
         if names:
             raise _unlisted_error("config.json", "personal_overrides.class_models", names)
-    return overlay(base, override)
