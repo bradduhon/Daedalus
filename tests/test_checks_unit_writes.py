@@ -754,8 +754,8 @@ def test_a_document_agent_in_a_folder_run_writes_no_marker_outside_its_output_fo
 
 @pytest.mark.xfail(
     strict=True,
-    reason="0281: scripts/checks/doc_outputs.py:50 admits any file under a folder run's "
-    "output folder, and scripts/lib/workspace.py:602-607 lets that folder be the marker folder",
+    reason="a folder run's output folder may sit inside the plugin's temporary root, so a "
+    "document agent can write a hand-back pass marker there",
 )
 @pytest.mark.parametrize("agent", ["writer", "comparer"])
 def test_a_folder_run_output_folder_on_the_marker_folder_writes_no_marker(
