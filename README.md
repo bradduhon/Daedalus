@@ -367,13 +367,23 @@ At all times, every agent is refused a read or search of `~/.ssh`, `~/.aws`, `~/
 
 An agent is also refused a read or write of a `.env` file, because such a file holds live keys such as a Stripe secret key. That covers `.env` and every `.env.<name>` in any letter case, such as `.env.local`. `.env.example` stays open, because it holds the variable names only. Listing files by name stays open. The check also refuses a folder-wide read when it finds a `.env` file anywhere under the folder, up to 24 folder levels down, skipping `.git` and `node_modules`. That covers a recursive grep, `rg --hidden`, an rg glob that names `.env`, `tar` and `cp -r`. It also covers the Grep tool when its glob names a `.env` file, or when it has no glob and git does not report the `.env` file as ignored. A folder with more than 100000 entries or more than 24 levels is refused too, because the check cannot rule out a `.env` file inside it.
 
-A train never stops your session with a permission prompt. Every call of your own session runs. Your session is not held to the command tables that fence the agents. It gets a note only for a short list of things worth knowing:
+A train never stops your session with a permission prompt. Every call of your own session runs. Your session is not held to the command tables that fence the agents. It gets a note only for these thirteen kinds of call:
 
 - reading or searching a credential file, a `.env` file or the run's reply key;
 - writing into the run's protected folder, `.claude/daedalus/` or the plugin's data folder;
-- a push or a merge while a run is active, outside its release phase.
+- a push or a merge while a run is active, outside its release phase, by git or by gh;
+- writing a credential file or a `.env` file;
+- writing inside `.git`;
+- writing into the main checkout while a run works in unit worktrees;
+- starting an agent in a way that skips a rule the run checks;
+- resuming an agent in a way that skips the run's unit check;
+- sending a file from a folder the project excludes to git, GitHub or a file write;
+- a command that could not be checked against the excluded folders, because their setting could not be read;
+- signing a commit or a tag with your key;
+- a git option that can run another program;
+- a recursive delete from the root folder, your home folder or a folder above home.
 
-A few more kinds of call keep the note they had, until you rule on them. They are a write inside `.git`, a write into the main checkout while a run works in unit worktrees, a dispatch or a resume that skips a run rule, a command that sends an excluded folder to git, a nested Claude session, signing with your key, a git option that runs another program, another change on GitHub, a recursive delete from the root or home folder, and a change to a variable such as `PATH` that decides which program runs. Any other call runs with no note. A note starts with `Warning:`, says what the call does and why it matters, and ends with a `Next:` step. It never says the call was refused, because it was not.
+The release phase records that it has started. A push or a merge after that runs with no note. Any other call runs with no note too. That includes a nested Claude session, a change on GitHub that is neither a push nor a merge, and a change to a variable such as `PATH`. It also includes a call that reaches the hook with no working folder; only the credential checks judge that call. A note starts with `Warning:`, says what the call does and why it matters, and ends with a `Next:` step. It never says the call was refused, because it was not.
 
 While a train runs, agents from Claude Code itself or from other plugins may only read and search. Every other checked tool is refused, both in the train's repository and when they write into it from another one.
 
