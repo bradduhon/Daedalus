@@ -22,6 +22,7 @@ FEATURES: tuple[str, ...] = (
     "terraform-validate",
     "settings-backup",
     "handback-pass",
+    "handoffs",
 )
 
 

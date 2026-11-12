@@ -154,6 +154,7 @@ def test_wrong_receipts_are_corrected_and_counted_above_the_closing_line() -> No
         "[VERDICT: VERIFIED] claims=<n>",
         "[VERDICT: REFUTED] <rows>",
         "[ROWS] n=<count>",
+        "[STATUS: HANDOFF] inline",
     )
     lines = VERIFIER.read_text(encoding="utf-8").splitlines()
     shapes = [ln for ln in lines if ln.startswith("- `[VERDICT: ")]

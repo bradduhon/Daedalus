@@ -1,0 +1,22 @@
+{
+  "handoff.R_PAST_LIMIT": {
+    "failure": "0284: an agent in a run keeps working with a context past the limit, so its calls run on a context the operator capped and nothing hands the work to a fresh agent",
+    "premise_test": "tests/test_handoff.py::test_the_refusal_names_the_path_the_five_things_and_one_next_line"
+  },
+  "handoff.R_HANDOFF_WRITTEN": {
+    "failure": "0284: an agent past the limit whose hand-off is written goes on reading or writing, so the hand-off it wrote no longer matches the work it hands on",
+    "premise_test": "tests/test_handoff.py::test_once_written_the_only_call_left_is_the_handback"
+  },
+  "handoff.R_PAST_LIMIT_INLINE": {
+    "failure": "0284: an agent without the Write tool past the limit keeps working, because no file write can stop it",
+    "premise_test": "tests/test_handoff.py::test_an_agent_without_write_is_refused_every_call_with_the_inline_text"
+  },
+  "handoff.R_NO_HANDOFF_FILE": {
+    "failure": "0284: a link or a folder planted at the hand-off path turns the one admitted write into a write somewhere else",
+    "premise_test": "tests/test_handoff.py::test_a_link_planted_at_the_handoff_path_is_refused"
+  },
+  "handoff.R_UNMEASURED": {
+    "failure": "0284: an agent whose context size cannot be read runs unchecked during a run, so a forged or broken transcript path turns the limit off",
+    "premise_test": "tests/test_handoff.py::test_each_unmeasured_reason_warns_or_refuses_by_its_handling"
+  }
+}

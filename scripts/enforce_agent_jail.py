@@ -21,6 +21,7 @@ _LIBS = (
     "lib.router",
     "lib.agent_files",
     "lib.dispatch_binding",
+    "lib.handoff",
 )
 _LOAD_NEXT = "Next: run the plugin with Python 3.12 and an intact scripts/lib directory."
 _CONFIG_NEXT = (
@@ -374,11 +375,24 @@ def _judge(payload: dict[str, object], agent: str) -> int:
             return _hook_failed(payload, agent, _CONFIG_HOOK, exc, _CONFIG_WARN, _CONFIG_NEXT)
         config = Config()
     warn = False
+    # 0284: a routed allow the context check warned on is recorded as warn.
+    noted = False
     finding: str | None = None
+    reason: str | None
     if routed(agent):
-        # 0044: a Daedalus agent's call runs the hooks its agent file names.
-        allow, reason, hook = route(payload, Path(__file__).resolve().parents[1])
-        reason = f"{hook}: {reason}" if reason else None
+        from lib import handoff
+
+        plugin_root = Path(__file__).resolve().parents[1]
+        # 0284: the context limit decides first; past it only the hand-off write is admitted.
+        limit = handoff.check(payload, normalize_agent(agent), config, plugin_root)
+        if limit.step in (handoff.Step.ADMIT, handoff.Step.REFUSE):
+            allow, reason = limit.step is handoff.Step.ADMIT, f"{_JAIL_HOOK}: {limit.text}"
+        else:
+            # 0044: a Daedalus agent's call runs the hooks its agent file names.
+            allow, reason, hook = route(payload, plugin_root)
+            reason = f"{hook}: {reason}" if reason else None
+            if allow and limit.step is handoff.Step.WARN:
+                noted, reason = True, f"{_JAIL_HOOK}: {limit.text}"
         agent = normalize_agent(agent)
     else:
         decision = decide(payload, config)
@@ -389,7 +403,8 @@ def _judge(payload: dict[str, object], agent: str) -> int:
         reason = f"{_JAIL_HOOK}: {recorded}" if recorded else None
     try:
         # 92, amends 0105, 0106: a warned main-session call runs and is recorded as warn, AU-3.
-        record = audit_append(payload, "allow" if allow else "warn" if warn else "block", reason)
+        word = "warn" if noted else "allow" if allow else "warn" if warn else "block"
+        record = audit_append(payload, word, reason)
     except Exception as exc:  # noqa: BLE001
         if read and allow:
             # spec 8: an allowed read is non-blocking on a failed record, as audit_log.py is.
@@ -412,7 +427,7 @@ def _judge(payload: dict[str, object], agent: str) -> int:
             _record_run(payload, agent)
             return 0
         # 0253: a fallback note is output, so that allow is not clean and gets no approval.
-        return 0 if fell_back else _approved(payload)
+        return 0 if fell_back or noted else _approved(payload)
     if warn:
         if payload.get("tool_name") in ("Agent", "Task"):
             _record_run(payload, agent)  # 218: a warned dispatch runs, so its agent binds.

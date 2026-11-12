@@ -45,7 +45,10 @@ TOP_KEYS = (
     "developer_profile",
     "work_classes",
     "class_models",
+    "context_limit",
 )
+# 0284: tokens an agent in a run may hold before it must hand off; 0 or null turns it off.
+CONTEXT_LIMIT = 250_000
 # 0244: where the guidance layer is read from; claude is the default.
 GUIDANCE_SOURCES = ("claude", "daedalus")
 _LANGUAGE = re.compile(r"[a-z][a-z0-9+#-]{0,31}")
@@ -68,6 +71,7 @@ class Operator:
     # 0270: absent reads as the shipped defaults; an empty list means no classes.
     work_classes: tuple[tuple[str, str], ...] = DEFAULT_CLASSES
     class_models: tuple[tuple[str, str], ...] = DEFAULT_MODELS
+    context_limit: int | None = CONTEXT_LIMIT
 
 
 OPERATOR_KEYS = tuple(f.name for f in fields(Operator))
@@ -138,6 +142,14 @@ def _choices(raw: dict[str, object], where: str, prefix: str) -> dict[str, objec
         if not isinstance(raw["developer_profile"], bool):
             raise _fail(where, f"{prefix}developer_profile", "must be true or false")
         out["developer_profile"] = raw["developer_profile"]
+    if "context_limit" in raw:
+        # 0284: null is kept, not dropped, because it turns the check off over a set value.
+        limit = raw["context_limit"]
+        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int)):
+            raise _fail(where, f"{prefix}context_limit", "must be a whole number of tokens or null")
+        if limit is not None and limit < 0:
+            raise _fail(where, f"{prefix}context_limit", "must be 0 or more")
+        out["context_limit"] = limit
     return out
 
 

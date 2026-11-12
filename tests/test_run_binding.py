@@ -29,6 +29,14 @@ SESSION = "s188"
 Run = Callable[[str, dict[str, Any]], Any]
 
 
+@pytest.fixture(autouse=True)
+def _context_limit_off(cred_home: Path) -> None:
+    # 0284: these cases judge the run binding; tests/test_handoff.py judges the context limit.
+    path = cred_home / ".claude" / "daedalus" / "operator.json"
+    path.parent.mkdir(parents=True)
+    path.write_text('{"context_limit": 0}\n', encoding="utf-8")
+
+
 def _run_units(path: Path, names: tuple[str, ...]) -> tuple[Path, list[tuple[Path, Path]]]:
     # issue 188: a repo with recorded units, a recorded plan and one coder brief per unit.
     repo = _git_init(path)

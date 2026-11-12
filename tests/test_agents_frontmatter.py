@@ -93,6 +93,8 @@ def test_planner_frontmatter_and_reply_lines() -> None:
         "[STATUS: SPEC] n=<n> path=<path> open=<m>",
         "[STATUS: NOT_VIABLE] n=<n> <the blocking fact in one line>",
         "[STATUS: YIELD_WEB] <query>",
+        # 0284: the hand-off when the context limit stops the work.
+        "[STATUS: HANDOFF] path=<path>",
     )
     disallowed = _list(frontmatter(PLANNER)["disallowedTools"], PLANNER)
     assert {"Edit", "Bash", "WebFetch", "WebSearch", "Agent", "Task", "SendMessage"} <= disallowed
@@ -249,7 +251,7 @@ def test_planner_challenge_mode_section_holds_the_steps_and_grounding_rules() ->
 def test_planner_status_contract_names_each_modes_lines() -> None:
     # 0152: brainstorm spec 4.2, the mode line sits outside the bullets the parser reads.
     contract = PLANNER.read_text(encoding="utf-8").split("## Status contract\n", 1)[1]
-    assert contract.count("\n- `") == 6 and contract.startswith("Your reply ends")
+    assert contract.count("\n- `") == 7 and contract.startswith("Your reply ends")
     assert (
         "Plan mode ends with PLAN, QUESTION or YIELD_WEB; challenge mode ends with ASK, SPEC, "
         "NOT_VIABLE or YIELD_WEB, and every question it asks is an ASK." in contract.splitlines()
@@ -500,7 +502,9 @@ def test_auditor_status_contract_carries_the_compliance_question_mode() -> None:
     # 0186: the verdict lines stay first; the question mode answers with no verdict line.
     text = (AGENTS / "auditor.md").read_text()
     contract = text.split("## Status contract\n", 1)[1]
-    assert contract.endswith(QUESTION_LINE)
+    # 0284: the hand-off paragraph follows the list; the question line closes the list.
+    items = [line for line in contract.splitlines(keepends=True) if line.startswith("- `")]
+    assert items[-1] == QUESTION_LINE
     assert "`Mode: compliance-question`" in text and "## Compliance" in contract
 
 
@@ -729,6 +733,7 @@ def test_verifier_body_names_the_seven_verdicts_and_its_reply_lines() -> None:
         "[VERDICT: VERIFIED] claims=<n>",
         "[VERDICT: REFUTED] <rows>",
         "[ROWS] n=<count>",
+        "[STATUS: HANDOFF] inline",
     )
     contract = text.split("## Status contract", 1)[1]
     assert "starts with exactly one of these verdict lines as its first line" in contract
@@ -754,6 +759,8 @@ def test_auditor_grep_commands_pass_the_jail(monkeypatch: pytest.MonkeyPatch) ->
 # Train 10 audit-miss diagnosis S3: the tool surface help fallback.
 YIELD = "[STATUS: YIELD_WEB] <query>"
 ANSWER = "[STATUS: COMPLIANCE] <control ids with pack ids and refs ids>"
+# 0284: the hand-off line of an agent that holds the Write tool.
+HANDOFF = "[STATUS: HANDOFF] path=<path>"
 
 
 def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
@@ -763,9 +770,9 @@ def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
     assert contract == (
         "Your reply starts with exactly one of these verdict lines as its first line and ends with"
         " the\nsame verdict line, alone, as its last line. This holds for every reply, fix rounds"
-        " included,\nexcept the web yield and the compliance-question mode below. The `tip=` value"
-        " is the 40\nlowercase hex step 0 printed. The `## Compliance` section sits right before"
-        " the closing line.\n"
+        " included,\nexcept the web yield, the hand-off and the compliance-question mode below."
+        " The `tip=` value is\nthe 40 lowercase hex step 0 printed. The `## Compliance` section"
+        " sits right before the closing\nline.\n"
         f"- `[VERDICT: APPROVED] {tip}` then `<paragraph>` and `## Compliance`"
         f" then `[VERDICT: APPROVED] {tip}`\n"
         f"- `[VERDICT: REJECTED] {tip}` then `<itemized findings>` and `## Compliance`"
@@ -773,13 +780,19 @@ def test_auditor_verdict_first_line_contract_carries_the_tip() -> None:
         f"- `{YIELD}` as both the first and the last line, `<tool> options and config files` or a"
         " dependencies rulebook advisory query: a question, not a verdict; the next prompt resumes"
         " the round.\n"
+        f"- `{HANDOFF}` when the context limit stops the work.\n"
         f"- `{ANSWER}` as the last line in compliance-question mode only: an answer to a coder's"
         " question, not a verdict.\n"
+        "\nIf a call is refused because the context is past its limit, stop the work. Write the"
+        " hand-off to the path the refusal names with the Write tool, holding what is done, what"
+        " is left, the files touched, the next step and any open question. Then hand back with"
+        f" the last line `{HANDOFF}`, nothing after it.\n"
     )
     assert load(AUDITOR).status_lines == (
         f"[VERDICT: APPROVED] {tip}",
         f"[VERDICT: REJECTED] {tip}",
         YIELD,
+        HANDOFF,
         ANSWER,
     )
 
