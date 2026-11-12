@@ -13,6 +13,7 @@ from pathlib import Path
 
 from lib.manifest import LITERACY_LEVELS, LITERACY_PROFILE, _literacy_ok
 from lib.settings_maps import SCHEMA_KEY, current, number_problem
+from lib.user_keys import USER_KEY_CLAUSE, unknown_keys
 
 OPERATOR_FILE = Path(".claude") / "daedalus" / "operator.json"
 MAX_BYTES = 64 * 1024
@@ -134,12 +135,12 @@ def validate(raw: object, where: str, prefix: str = "") -> dict[str, object]:
         raise _fail(where, prefix.rstrip(".") or "the file", "must be a JSON object")
     # 0264: the schema number belongs to the file itself, never to a personal_overrides copy.
     known = TOP_KEYS if not prefix else TOP_KEYS[1:]
-    unknown = sorted(str(k) for k in set(raw) - set(known))
+    unknown = unknown_keys(raw, known)
     if unknown:
         raise _fail(
             where,
             prefix.rstrip(".") or "the file",
-            f"has unknown keys {unknown} (known: {', '.join(known)})",
+            f"has unknown keys {unknown} (known: {', '.join(known)}); {USER_KEY_CLAUSE}",
         )
     problem = number_problem(raw[SCHEMA_KEY], current("operator")) if SCHEMA_KEY in raw else None
     if problem is not None:

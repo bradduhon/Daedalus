@@ -13,6 +13,13 @@ from urllib.parse import urlsplit
 from lib.project_root import in_git_work_tree, project_root
 from lib.settings_maps import SCHEMA_KEY, current, number_problem
 from lib.train_scope import KNOWN_AGENTS
+from lib.user_keys import (
+    USER_KEY_CLAUSE,
+    USER_KEY_NOTE,
+    is_user_key,
+    unknown_keys,
+    without_user_keys,
+)
 
 MANIFEST_NAME = "service-manifest.json"
 SCOPE_KINDS = ("repository", "folder")
@@ -303,10 +310,14 @@ def _group(
         return {}
     if not isinstance(block, dict):
         raise _key_error(target, name, "must be an object")
-    unknown = sorted(str(key) for key in set(block) - set(keys))
+    unknown = unknown_keys(block, keys)
     if unknown:
-        raise _key_error(target, name, f"has unknown keys {unknown} (known: {', '.join(keys)})")
-    return block
+        raise _key_error(
+            target,
+            name,
+            f"has unknown keys {unknown} (known: {', '.join(keys)}); {USER_KEY_CLAUSE}",
+        )
+    return without_user_keys(block)
 
 
 def _strings(target: Path, block: dict[str, object], group: str, key: str) -> tuple[str, ...]:
@@ -474,13 +485,14 @@ def _object(
     # 0129, F.6: an object with only its table's keys and every required one.
     if not isinstance(value, dict):
         raise _bad(target, row, "must be an object")
-    unknown = sorted(str(key) for key in set(value) - keys)
+    unknown = unknown_keys(value, keys)
     if unknown:
-        raise _bad(target, row, f"has unknown keys {unknown} (known: {', '.join(sorted(keys))})")
+        known = ", ".join(sorted(keys))
+        raise _bad(target, row, f"has unknown keys {unknown} (known: {known}); {USER_KEY_CLAUSE}")
     missing = sorted(need - set(value))
     if missing:
         raise _bad(target, row, f"lacks {', '.join(missing)}")
-    return {str(key): item for key, item in value.items()}
+    return {str(key): item for key, item in value.items() if not is_user_key(key)}
 
 
 def _line(target: Path, value: object, row: str, limit: int) -> str:
@@ -552,7 +564,7 @@ def _overrides(target: Path, value: object) -> tuple[tuple[str, tuple[str, ...]]
     if not isinstance(value, dict):
         raise _bad(target, row, "agent_order must be an object keyed by agent name")
     out: list[tuple[str, tuple[str, ...]]] = []
-    for raw_name, entry in value.items():
+    for raw_name, entry in without_user_keys(value).items():
         name = str(raw_name)
         if name == NOT_OVERRIDABLE:
             raise _bad(target, row, f"names {NOT_OVERRIDABLE}, whose ranking no project overrides")
@@ -761,7 +773,8 @@ def _entrypoints(target: Path, raw: dict[str, object]) -> None:
     # 0245: the project's file areas the planner reads; an object of names to paths.
     value = raw.get("code_areas")
     if value is not None and not (
-        isinstance(value, dict) and all(isinstance(v, str) for v in value.values())
+        isinstance(value, dict)
+        and all(isinstance(v, str) for v in without_user_keys(value).values())
     ):
         raise _key_error(target, "code_areas", "must be an object of area names to paths")
 
@@ -781,10 +794,11 @@ def parse(raw: object, target: Path) -> Manifest:
             "docs/project-requirements.md."
         )
     # 0245: an unknown top-level key, an old name included, is refused with the valid names.
-    unknown = sorted(str(key) for key in set(raw) - set(TOP_KEYS))
+    unknown = unknown_keys(raw, TOP_KEYS)
     if unknown:
         raise ManifestError(
             f"{target} has unknown keys {unknown} (known: {', '.join(TOP_KEYS)}). "
+            f"{USER_KEY_NOTE} "
             "Next: delete or rename those keys in the service manifest, then rerun."
         )
     # 0264: no schema number reads as today; one outside 1 to the current number is refused.

@@ -11,6 +11,10 @@ Every file and setting daedalus reads, with the smallest example that works. `/d
 
 Each of the three settings files may hold a top-level `schema` number. It says which layout the file was written in. The number is 1 today. A file with no number is read as it always was. A number below 1, a number that is not whole, or a number above the current one is refused with a plain message. A higher number means a newer plugin wrote the file, so update the plugin. When a release changes a layout, it carries a map from every earlier layout, not only the last one. The setup wizard reads the number, shows the plan to bring an older file up to date, and writes the file only after you agree.
 
+### Your own keys in a settings file
+
+A key that starts with an underscore is yours, in all three settings files. JSON has no comments, so use such a key to hold a note, for example a copyright line your project asks for in every JSON file. Write it at any level, with any JSON value. Daedalus never reads it, and the setup wizard keeps it when it changes or replaces the file. A key with any other unknown name is still refused.
+
 ### config.json, optional **(checked)**
 
 ```json
