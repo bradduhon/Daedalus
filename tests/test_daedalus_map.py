@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import daedalus_map
 import pytest
+from lib import train_state
+from lib.workspace import begin, lock
 
-from tests.conftest import REPO_ROOT, run_cli
+from tests.conftest import REPO_ROOT, git, run_cli, write_train_marker
 
 _BODY = "\n".join(
     [
@@ -297,3 +300,146 @@ def test_plugin_tree_maps_its_own_plan_loader() -> None:
     assert (
         "tests/test_checks_command_allowlist.py" in coverage["scripts/checks/command_allowlist.py"]
     )
+
+
+# 0261: the map check inside a run rebuilds a stale map itself and goes on.
+TRAIN = "20261112-120000"
+
+
+def _run_out(root: Path, train: str = TRAIN) -> Path:
+    return root / "docs" / ".tmp" / "daedalus" / train / "map"
+
+
+@pytest.fixture
+def run_repo(repo: Path, isolated_env: None) -> Path:
+    # 0261: the map fixture as a git checkout whose marked run recorded docs/plan.md.
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "init")
+    write_train_marker(repo, TRAIN)
+    plan = {"path": str(repo / "docs" / "plan.md"), "sha256": "0" * 64}
+    train_state.save(repo, TRAIN, {"train_id": TRAIN, train_state.PLAN: plan})
+    return repo
+
+
+def _run_map(root: Path, *extra: str, train: str = TRAIN) -> tuple[int, list[str]]:
+    out = str(_run_out(root, train))
+    done = run_cli("daedalus_map.py", "--repo", str(root), "--out", out, *extra)
+    return done.returncode, (done.stdout + done.stderr).splitlines()
+
+
+def _bytes(out: Path) -> dict[str, bytes]:
+    return {n: (out / n).read_bytes() for n in ("map.json", "map.md")}
+
+
+def _rebuilt_line(root: Path, train: str = TRAIN) -> str:
+    path = _run_out(root, train) / "map.json"
+    sha = daedalus_map._sha256(path.read_text(encoding="utf-8"))
+    tip = git(root, "rev-parse", "HEAD").stdout.strip()
+    return f"map rebuilt: {path} from tip {tip} sha256={sha}"
+
+
+def test_run_check_rebuilds_a_stale_map_once_and_the_next_check_finds_it_current(
+    run_repo: Path,
+) -> None:
+    assert (run_repo / ".git").is_dir()
+    plan = str(run_repo / "docs" / "plan.md")
+    assert _run_map(run_repo, "--plan", plan)[0] == 0
+    _write(run_repo, "scripts/d.py", 'from lib import a\nprint("[STATUS: NEWLY]")\n')
+    code, lines = _run_map(run_repo, "--plan", plan, "--check")
+    assert code == 0 and lines == [_rebuilt_line(run_repo)], lines
+    assert "[STATUS: NEWLY]" in (_run_out(run_repo) / "map.json").read_text(encoding="utf-8")
+    code, lines = _run_map(run_repo, "--plan", plan, "--check")
+    assert (
+        code == 0
+        and len(lines) == 1
+        and lines[0].endswith(
+            f"is current sha256={_rebuilt_line(run_repo).rpartition('sha256=')[2]}"
+        )
+    ), lines
+
+
+def test_run_check_on_a_current_map_rebuilds_nothing(run_repo: Path) -> None:
+    plan = str(run_repo / "docs" / "plan.md")
+    assert _run_map(run_repo, "--plan", plan)[0] == 0
+    out = _run_out(run_repo)
+    before = _bytes(out)
+    stamps = {n: (out / n).stat().st_mtime_ns for n in before}
+    code, lines = _run_map(run_repo, "--plan", plan, "--check")
+    assert code == 0 and len(lines) == 1 and "is current" in lines[0], lines
+    assert _bytes(out) == before
+    assert {n: (out / n).stat().st_mtime_ns for n in before} == stamps
+
+
+def test_run_check_without_a_plan_uses_the_plan_the_run_recorded(run_repo: Path) -> None:
+    assert _run_map(run_repo, "--plan", str(run_repo / "docs" / "plan.md"))[0] == 0
+    before = _bytes(_run_out(run_repo))
+    code, lines = _run_map(run_repo, "--check")
+    assert code == 0 and "is current" in lines[0], lines
+    assert _bytes(_run_out(run_repo)) == before
+
+
+def test_run_check_refuses_when_the_rebuild_cannot_write(run_repo: Path) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root writes through a read-only folder")
+    assert _run_map(run_repo)[0] == 0
+    out = _run_out(run_repo)
+    before = _bytes(out)
+    _write(run_repo, "scripts/d.py", "from lib import a\n")
+    out.chmod(0o500)
+    try:
+        code, lines = _run_map(run_repo, "--check")
+    finally:
+        out.chmod(0o700)
+    assert code == 2 and len(lines) == 1, lines
+    assert lines[0].startswith(f"The map could not be written to {out} (") and "Next:" in lines[0]
+    assert _bytes(out) == before
+
+
+def test_run_check_refuses_when_the_recorded_plan_is_gone(run_repo: Path) -> None:
+    assert _run_map(run_repo, "--plan", str(run_repo / "docs" / "plan.md"))[0] == 0
+    before = _bytes(_run_out(run_repo))
+    (run_repo / "docs" / "plan.md").unlink()
+    code, lines = _run_map(run_repo, "--check")
+    assert code == 2 and lines[0].startswith("The map could not read the plan"), lines
+    assert lines[-1].startswith("Next:")
+    assert _bytes(_run_out(run_repo)) == before
+
+
+def test_check_outside_the_run_map_folder_still_stops_on_a_stale_map(run_repo: Path) -> None:
+    # 0261: only the run's own map folder is rebuilt; any other --out keeps exit 1.
+    assert _map(run_repo)[0] == 0
+    _write(run_repo, "scripts/d.py", "from lib import a\n")
+    before = (run_repo / "out" / "map.json").read_bytes()
+    code, out = _map(run_repo, "--check")
+    assert code == 1 and "STALE map" in out and "rebuilt" not in out, out
+    assert (run_repo / "out" / "map.json").read_bytes() == before
+
+
+@pytest.fixture
+def lock_repo(project_data: Path, isolated_env: None) -> Path:
+    # 0261: the smallest repository the real begin and lock accept.
+    root = project_data.parent.parent
+    (project_data / ".gitignore").write_text("*\n")
+    _write(root, "docs/decisions.md", "| Id | Date | Ruling | Supersedes | Follow-ups |\n")
+    _write(root, "service-manifest.json", json.dumps({"docs": {"decisions_filename": "x.md"}}))
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "init")
+    return root
+
+
+def test_a_contract_revise_then_the_map_check_rebuilds_and_goes_on(lock_repo: Path) -> None:
+    train = begin(lock_repo)[0].split()[1]
+    _write(lock_repo, "contracts/api.md", "Reply `[STATUS: COMPLETE]` when done.\n")
+    lock(lock_repo, "contracts/api.md", 1)
+    assert _run_map(lock_repo, train=train)[0] == 0
+    _write(lock_repo, "contracts/api.md", "Reply `[STATUS: REVISED]` when done.\n")
+    lock(lock_repo, "contracts/api.md", 2)
+    code, lines = _run_map(lock_repo, "--check", train=train)
+    assert code == 0 and lines == [_rebuilt_line(lock_repo, train)], lines
+    tip = git(lock_repo, "rev-parse", f"daedalus/{train}").stdout.strip()
+    assert f"from tip {tip} " in lines[0]
+    text = (_run_out(lock_repo, train) / "map.json").read_text(encoding="utf-8")
+    assert "[STATUS: REVISED]" in text and "[STATUS: COMPLETE]" not in text
+    code, lines = _run_map(lock_repo, "--check", train=train)
+    assert code == 0 and len(lines) == 1 and "is current" in lines[0], lines
