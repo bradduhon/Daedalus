@@ -142,7 +142,7 @@ def test_two_waiting_dispatches_refuse_both_writers(repo_cwd: Path, run: Path) -
     second = _derived_dispatch(repo_cwd, "main")
     # Main never prompted: a warned main call is not allowed outright, yet it runs.
     assert not second.allow and second.warn, second.reason
-    assert "2 writer dispatches now wait" in str(second.reason)
+    assert "2 writer dispatches now wait" in str(second.record)
     readme = run / "README.md"
     before = readme.read_bytes() if readme.exists() else None
     for writer in ("w-derived", "w-public"):
@@ -184,7 +184,7 @@ def test_a_writer_refused_as_ambiguous_never_takes_a_later_entry(
 def test_a_dispatch_whose_kind_cannot_be_read_queues_as_none(repo_cwd: Path, run: Path) -> None:
     # 0190: a warned main dispatch with two Worktree: lines still queues, as kind none.
     d = decide(_dispatch(repo_cwd, f"Worktree: {run}\nWorktree: {repo_cwd}\n", "main"), Config())
-    assert not d.allow and d.warn and "(0134)" in str(d.reason), d.reason
+    assert not d.allow and d.warn and "(0134)" in str(d.record), d.reason
     assert _queue(repo_cwd)[0] == [writer_mode.NONE]
     allow, reason = _call(repo_cwd, "w-odd", "Read", file_path=f"{run}/README.md")
     assert not allow and reason.startswith("writer w-odd holds no kind"), reason

@@ -413,7 +413,7 @@ def test_dispatch_the_runner_did_not_print_is_refused(repo: Path, plugin: Path) 
     _step(repo, plugin)
     refused = decide(_agent_call(repo, "daedalus:contract-spec"), Config())
     assert not refused.allow
-    assert "the train runner did not print a dispatch of contract-spec" in str(refused.reason)
+    assert "the train runner did not print a dispatch of contract-spec" in str(refused.record)
     assert "Next:" in str(refused.reason)
     assert not decide(_agent_call(repo, "general-purpose"), Config()).allow
 

@@ -828,7 +828,9 @@ def test_skill_states_the_question_rules_and_never_asks_a_not_active_setting() -
     text = SKILL.read_text(encoding="utf-8")
     fields = text.split("\n---\n", 1)[0]
     assert "AskUserQuestion" in fields and "daedalus_setup.py *" in fields
-    assert "No key name, file path, ruling id or JSON goes in a question" in text
+    assert "No ruling id, issue number or JSON goes in a question" in text
+    assert "use the names the project and the operator's input already use, as written" in text
+    assert "No key name, file path" not in text and "else plain" not in text
     assert "Never ask it." in text and "not active" in text
     heads = re.findall(r"^\d+\. \*\*(\w[\w ]*)\.\*\*", text, re.MULTILINE)
     assert heads == ["Describe", "Create", "Day one", "More", "Close"]

@@ -10,7 +10,7 @@
     {"file": "/work/rules/python.md"},
     {"builtin": "baseline"}
   ],
-  "personal_overrides": {"reading_level": "plain"},
+  "personal_overrides": {"reading_level": "expert"},
   "models": {
     "agents": {"planner": "sonnet"},
     "coder": "sonnet",
