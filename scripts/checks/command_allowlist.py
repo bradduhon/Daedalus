@@ -43,6 +43,8 @@ TRAIN_SCRIPTS: dict[str, frozenset[str] | None] = {
         | {"dispatch", "route", "finish-unit"}
         # 0256: the provider fetch the build phase runs before the first coder dispatch.
         | {"providers"}
+        # 0265: the run's validate of one unit, after its coder hands it in.
+        | {"validate"}
     ),
     "daedalus_workspace.py": frozenset({"create", "lock", "refresh", "finish"}),
     "daedalus_doctor.py": frozenset({"--print-cache-dir", "--check-tools"}),

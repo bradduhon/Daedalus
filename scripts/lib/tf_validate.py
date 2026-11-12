@@ -316,7 +316,7 @@ def _lock_text(text: str) -> str:
 
 
 def changed_roots(top: str, base: str, tip: str, excluded: tuple[str, ...]) -> list[str] | None:
-    # 0265: folders of the .tf files the unit changed, base..tip, by argv to git; None on failure.
+    # 0265: folders of the .tf and lock files the unit changed, base..tip; None on a git failure.
     out = provider_mirror._git_text(
         top,
         ["diff", "--name-only", "--no-renames", "--no-ext-diff", "--no-textconv", "-z", base, tip],
@@ -325,7 +325,8 @@ def changed_roots(top: str, base: str, tip: str, excluded: tuple[str, ...]) -> l
         return None
     folders: list[str] = []
     for path in sorted(p for p in out.split("\0") if p):
-        if not path.endswith(".tf") or provider_mirror._skipped(path, top, excluded):
+        changed = path.endswith(".tf") or path.rpartition("/")[2] == provider_mirror.LOCK_FILE
+        if not changed or provider_mirror._skipped(path, top, excluded):
             continue
         folder = _folder_of(path)
         if folder not in folders:

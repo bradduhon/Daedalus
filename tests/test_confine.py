@@ -423,19 +423,14 @@ def _terraform_repo(tmp_path: Path, features: dict[str, object]) -> tuple[Path, 
 
 @pytest.mark.usefixtures("kernel")
 def test_terraform_checks_need_the_wrapper_and_validate_its_switch(tmp_path: Path) -> None:
-    # 0158, 0159: fmt -check and validate are runner rows; validate waits for its switch.
+    # 0158, 0159: fmt -check is a runner row; validate waits for its switch.
     repo, wt, module = _terraform_repo(tmp_path, {"terraform_validate": True})
     wrap = f"{shell.CONFINE_PATH} --unit {wt} --"
-    for inner in (
-        "terraform validate",
-        f"terraform -chdir={module} validate",
-        "terraform fmt -check",
-    ):
-        bare = _cwd(_b("coder", f"cd {wt} && {inner}"), repo)
-        assert evaluate("confine", bare) == load("confine").R_CONFINE, inner
-        wrapped = _cwd(_b("coder", f"cd {wt} && {wrap} {inner}"), repo)
-        assert evaluate("confine", wrapped) is None, inner
-        assert decide(wrapped, CFG).allow, decide(wrapped, CFG).reason
+    bare = _cwd(_b("coder", f"cd {wt} && terraform fmt -check"), repo)
+    assert evaluate("confine", bare) == load("confine").R_CONFINE
+    wrapped = _cwd(_b("coder", f"cd {wt} && {wrap} terraform fmt -check"), repo)
+    assert evaluate("confine", wrapped) is None
+    assert decide(wrapped, CFG).allow, decide(wrapped, CFG).reason
     # 184: the init form runs wrapped only; bare it meets the terraform class's refusal.
     init = TERRAFORM_INIT_FORM.format(module=module)
     bare = _cwd(_b("coder", f"cd {wt} && {init}"), repo)
@@ -454,6 +449,22 @@ def test_terraform_checks_need_the_wrapper_and_validate_its_switch(tmp_path: Pat
         evaluate("confine", _cwd(_b("coder", f"cd {wt} && {wrap} terraform fmt -check"), repo))
     )
     assert reason.startswith("checks.terraform_format is false")
+
+
+@pytest.mark.usefixtures("kernel")
+def test_a_coder_never_runs_validate_because_the_run_validates_after_hand_in(
+    tmp_path: Path,
+) -> None:
+    # 0265: under the wrapper validate cannot reach a provider; the run validates the unit.
+    repo, wt, module = _terraform_repo(tmp_path, {"terraform_validate": True})
+    wrap = f"{shell.CONFINE_PATH} --unit {wt} --"
+    for inner in ("terraform validate", f"terraform -chdir={module} validate"):
+        for form in (inner, f"{wrap} {inner}"):
+            call = _cwd(_b("coder", f"cd {wt} && {form}"), repo)
+            assert evaluate("confine", call) == shell.R_TERRAFORM_VALIDATE_RUN, form
+            assert not decide(call, CFG).allow, form
+    assert "after you hand it in" in shell.R_TERRAFORM_VALIDATE_RUN
+    assert "Next:" in shell.R_TERRAFORM_VALIDATE_RUN
 
 
 def _read_roots_repo(tmp_path: Path, roots: list[str]) -> tuple[Path, Path]:
