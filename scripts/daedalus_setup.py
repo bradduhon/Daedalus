@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import atomic, settings_edit, settings_replace, shell, storage  # noqa: E402
+from lib import atomic, settings_edit, settings_maps, settings_replace, shell, storage  # noqa: E402
 from lib.audit import DataDirError, check_project_data_dir, ensure_project_data_dir  # noqa: E402
 from lib.config import ConfigError, parse_config  # noqa: E402
 from lib.ledger import LedgerError  # noqa: E402
@@ -497,12 +497,30 @@ def _old_file(form: str, info: SettingsFile, root: Path) -> tuple[Path, str, dic
             f"the Daedalus setup skill again; it writes a new starter {info.form} file with "
             "nothing carried."
         )
-    if _accepts(form, path)(old):
+    if _accepts(form, path)(old) and _older(form, old) is None:
         raise SetupStop(
             f"replace refused: {path} already passes its own check, so there is nothing to "
             "replace. Next: change single settings with the setup skill's questions."
         )
     return path, before, old
+
+
+def _older(form: str, doc: object) -> int | None:
+    # 0264: the schema number of a file written before the current one; None for no number.
+    number = doc.get(settings_maps.SCHEMA_KEY) if isinstance(doc, dict) else None
+    if isinstance(number, bool) or not isinstance(number, int):
+        return None
+    return number if 1 <= number < settings_maps.current(form) else None
+
+
+def _upgrade_lines(result: settings_maps.Upgrade, start: int, form: str) -> list[str]:
+    # 0264: one line per map row applied, grouped by step; a step with no row still shows.
+    lines: list[str] = []
+    for step in range(start, settings_maps.current(form)):
+        lines.append(f"schema {step} to {step + 1}:")
+        done = [a for a in result.actions if a.start == step]
+        lines += [f"  {a.verb}: {a.text}" for a in done] or ["  nothing in the file changes"]
+    return lines
 
 
 def _moved_lines(outcome: settings_replace.Outcome) -> list[str]:
@@ -533,6 +551,9 @@ def replace(form: str, repo: Path, write: bool) -> int:
     path, before, old = _old_file(form, info, root)
     keys = tuple(k for f, k in reference_keys() if f == info.name)
     accepts = _accepts(form, path)
+    behind = _older(form, old)
+    if behind is not None:
+        return _upgrade(form, path, before, old, behind, root, accepts, write)
     outcome = settings_replace.carry(old, _defaults(form), keys, accepts)
     text = json.dumps(outcome.doc, indent=2) + "\n"
     if not accepts(settings_edit.parse(text)):
@@ -568,6 +589,51 @@ def replace(form: str, repo: Path, write: bool) -> int:
         f"replaced: {path}, {len(outcome.carried)} value(s) carried, "
         f"{len(outcome.dropped)} entry(ies) dropped"
     )
+    return 0
+
+
+def _upgrade(
+    form: str,
+    path: Path,
+    before: str,
+    old: dict[str, object],
+    behind: int,
+    root: Path,
+    accepts: Callable[[object], bool],
+    write: bool,
+) -> int:
+    # 0264: the file's own schema number picks the map steps; no value is matched by name.
+    try:
+        result = settings_maps.upgrade(old, form, accepts)
+    except settings_maps.SchemaError as exc:
+        raise SetupStop(f"upgrade refused: {path} {exc}") from exc
+    target = settings_maps.current(form)
+    text = json.dumps(result.doc, indent=2) + "\n"
+    verb = "upgrading" if write else "plan: upgrade"
+    print(f"{verb} {path}, a settings file in schema {behind}; this version reads schema {target}.")
+    print("\n".join(_upgrade_lines(result, behind, form)))
+    if not write:
+        print(f"backup: {_backup_path(form, root, before)} (the old file is copied here first)")
+        print(
+            "This plan wrote nothing, and the file is unchanged. Next: run the same command "
+            "with --write to upgrade the file."
+        )
+        return 0
+    backup = _write_backup(form, root, before, _LIMITS[form])
+    print(f"backup: {backup} (a byte-for-byte copy of the old file)")
+    try:
+        settings_edit.write(path, before, text, _LIMITS[form])
+    except settings_edit.EditError as exc:
+        raise SetupStop(
+            f"upgrade refused: {path} {exc}. Next: run the same command again, so it reads the "
+            "file as it is now."
+        ) from exc
+    except OSError as exc:
+        raise SetupStop(
+            f"upgrade refused: {path} could not be written ({exc}). Next: make that folder "
+            "writable for you, then run the same command again."
+        ) from exc
+    print(f"upgraded: {path}, from schema {behind} to schema {target}")
     return 0
 
 
@@ -787,6 +853,9 @@ def describe_data(repo: Path) -> dict[str, object]:
                 "shared": info.shared,
                 "holds": info.holds,
                 "exists": exists,
+                "schema": doc.get(settings_maps.SCHEMA_KEY) if isinstance(doc, dict) else None,
+                "schema_behind": _older(info.form, doc) is not None,
+                "schema_current": settings_maps.current(info.form),
                 "malformed": error,
                 "groups": [
                     {

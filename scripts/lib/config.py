@@ -16,6 +16,7 @@ from lib.coder_model import DEFAULT_CODER_MODELS
 from lib.credential_paths import credential_roots
 from lib.operator_file import OperatorError, validate
 from lib.project_root import in_git_work_tree
+from lib.settings_maps import SCHEMA_KEY, current, number_problem
 from lib.train_scope import KNOWN_AGENTS
 
 POLICY_ENGINES = ("cfn-guard", "conftest")
@@ -30,6 +31,7 @@ PACKS_DIR = Path(__file__).resolve().parents[2] / "packs"
 _PACK_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 # 0245: the JSON names of config.json, in key-table order; the reader maps them onto Config.
 CONFIG_KEYS = (
+    SCHEMA_KEY,
     "local_docs_folder",
     "git_excluded_folders",
     "coding_rules",
@@ -521,6 +523,10 @@ def parse_config(raw: object, target: Path) -> Config:
             "Next: make the file one JSON object, as docs/project-requirements.md shows."
         )
     _refuse_unknown_keys(target, raw)
+    # 0264: no schema number reads as today; one outside 1 to the current number is refused.
+    problem = number_problem(raw[SCHEMA_KEY], current("config")) if SCHEMA_KEY in raw else None
+    if problem is not None:
+        raise ConfigError(f"{target} {problem}")
     models = _group(target, raw, "models", MODEL_KEYS)
     limits = _group(target, raw, "limits", LIMIT_KEYS)
     # 0076: null is not declared, the same as an absent key; the setup starter writes null.

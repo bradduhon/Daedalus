@@ -11,6 +11,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from lib.project_root import in_git_work_tree, project_root
+from lib.settings_maps import SCHEMA_KEY, current, number_problem
 from lib.train_scope import KNOWN_AGENTS
 
 MANIFEST_NAME = "service-manifest.json"
@@ -70,6 +71,7 @@ class Docs:
 DOCS_DEFAULT_FOLDER = "docs"
 # 0245: the JSON names of each manifest group, in key-table order; tests hold the table to them.
 TOP_KEYS = (
+    SCHEMA_KEY,
     "commands",
     "docs",
     "checks",
@@ -787,6 +789,10 @@ def parse(raw: object, target: Path) -> Manifest:
             f"{target} has unknown keys {unknown} (known: {', '.join(TOP_KEYS)}). "
             "Next: delete or rename those keys in the service manifest, then rerun."
         )
+    # 0264: no schema number reads as today; one outside 1 to the current number is refused.
+    problem = number_problem(raw[SCHEMA_KEY], current("manifest")) if SCHEMA_KEY in raw else None
+    if problem is not None:
+        raise ManifestError(f"{target} {problem}")
     _entrypoints(target, raw)
     paths, extensions = _narrowing(target, raw)
     commands = _stack_commands(target, raw)
